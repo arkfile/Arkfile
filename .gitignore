@@ -1,0 +1,15 @@
+bin/
+obj/
+*.out
+*.so
+go.sum
+vendor/
+*_test.go
+*_test
+*.tmp
+*.swp
+.vscode/
+.idea/
+*.bak
+*.old
+.env

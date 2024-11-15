@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure File Sharing</title>
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Secure File Sharing</h1>
+        </header>
+
+        <div class="auth-section" id="auth-section">
+            <div class="login-form" id="login-form">
+                <h2>Login</h2>
+                <input type="email" id="login-email" placeholder="Email">
+                <input type="password" id="login-password" placeholder="Password">
+                <button onclick="login()">Login</button>
+                <p>Don't have an account? <a href="#" onclick="toggleAuthForm()">Register</a></p>
+            </div>
+
+            <div class="register-form hidden" id="register-form">
+                <h2>Register</h2>
+                <input type="email" id="register-email" placeholder="Email">
+                <input type="password" id="register-password" placeholder="Password">
+                <input type="password" id="register-password-confirm" placeholder="Confirm Password">
+                <button onclick="register()">Register</button>
+                <p>Already have an account? <a href="#" onclick="toggleAuthForm()">Login</a></p>
+            </div>
+        </div>
+
+        <div class="file-section hidden" id="file-section">
+            <div class="upload-section">
+                <h2>Upload File</h2>
+                <input type="file" id="fileInput">
+                <input type="password" id="filePassword" placeholder="File Password">
+                <input type="text" id="passwordHint" placeholder="Password Hint (optional)">
+                <button onclick="uploadFile()">Upload</button>
+            </div>
+
+            <div class="files-list">
+                <h2>Your Files</h2>
+                <div id="filesList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/wasm_exec.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>
