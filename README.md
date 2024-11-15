@@ -29,63 +29,6 @@
 - TLS encryption for all traffic
 - Secure key derivation (PBKDF2)
 
-## Directory Structure
-
-```
-arkfile/
-│
-├── main.go                 # Application entry point
-├── .env                    # Environment variables
-├── go.mod                  # Go module file
-├── go.sum                  # Go module checksum
-├── Caddyfile               # Caddy server configuration
-│
-├── client/                 # Client-side code
-│   ├── main.go             # WASM source code
-│   ├── main.wasm           # Compiled WASM binary
-│   ├── wasm_exec.js        # Go WASM support code
-│   └── static/             # Static web assets
-│       ├── index.html      # Main web interface
-│       ├── css/            # Stylesheets
-│       └── js/             # Client-side JavaScript
-│
-├── auth/                   # Authentication package
-│   └── jwt.go              # JWT implementation
-│
-├── database/               # Database package
-│   ├── database.go         # Database initialization and connection
-│   └── migrations/         # Database migrations
-│
-├── handlers/               # HTTP handlers
-│   └── handlers.go         # Request handlers implementation
-│
-├── storage/                # Storage package
-│   └── minio.go            # MinIO/Backblaze integration
-│
-├── logging/                # Logging package
-│   └── logging.go          # Logging implementation
-│
-├── models/                 # Data models
-│   ├── user.go             # User model
-│   └── file.go             # File metadata model
-│
-├── config/                 # Configuration
-│   └── config.go           # Configuration loading
-│
-├── scripts/                # Utility scripts
-│   ├── build.sh            # Build script
-│   └── deploy.sh           # Deployment script
-│
-├── systemd/                # Systemd service files
-│   ├── arkfile.service
-│   └── caddy.service
-│
-└── docs/                   # Documentation
-    ├── api.md              # API documentation
-    ├── setup.md            # Setup instructions
-    └── security.md         # Security documentation
-```
-
 ## Key Files and Their Purposes
 
 1. **`main.go`**
@@ -121,14 +64,14 @@ arkfile/
    ```
    Client → Client-side Encryption (WASM)
    → Server (Echo) → Backblaze B2
-                  → SQLite (metadata)
+                   → SQLite (metadata)
    ```
 
 2. **File Download**
    ```
    Client → Server Request
    → Server (Echo) → Backblaze B2 (encrypted file)
-                  → SQLite (password hint)
+                   → SQLite (password hint)
    → Client → Client-side Decryption (WASM)
    ```
 
@@ -147,6 +90,9 @@ VULTR_API_KEY=...
 1. **Build Process**
    - Compile server-side Go code
    - Compile client-side Go code to WASM
+     - `cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" client/`
+     - `cd client/`
+     - `GOOS=js GOARCH=wasm go build -o main.wasm`
    - Bundle static assets
 
 2. **Deployment**
