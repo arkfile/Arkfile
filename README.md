@@ -32,7 +32,7 @@
 ## Directory Structure
 
 ```
-friend-file-share/
+arkfile/
 │
 ├── main.go                 # Application entry point
 ├── .env                    # Environment variables
@@ -77,7 +77,7 @@ friend-file-share/
 │   └── deploy.sh           # Deployment script
 │
 ├── systemd/                # Systemd service files
-│   ├── friend-file-share.service
+│   ├── arkfile.service
 │   └── caddy.service
 │
 └── docs/                   # Documentation
@@ -119,14 +119,14 @@ friend-file-share/
 
 1. **File Upload**
    ```
-   Client → Client-side Encryption (WASM) 
+   Client → Client-side Encryption (WASM)
    → Server (Echo) → Backblaze B2
                   → SQLite (metadata)
    ```
 
 2. **File Download**
    ```
-   Client → Server Request 
+   Client → Server Request
    → Server (Echo) → Backblaze B2 (encrypted file)
                   → SQLite (password hint)
    → Client → Client-side Decryption (WASM)
