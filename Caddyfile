@@ -3,16 +3,8 @@
     acme_dns vultr {env.VULTR_API_KEY}
 }
 
-# Main site configuration
-arkfile.net {
-    encode gzip
-
-    # TLS configuration
-    tls {
-        dns vultr {env.VULTR_API_KEY}
-    }
-
-    # Headers for security
+# Shared security header configuration
+(security_headers) {
     header {
         # Enable HSTS
         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
@@ -25,31 +17,63 @@ arkfile.net {
         # CSP
         Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline';"
     }
+}
 
-    # Reverse proxy to your Go application
-    reverse_proxy localhost:8080 {
-        # Health checks
-        health_uri /health
-        health_interval 30s
-        health_timeout 10s
-        health_status 200
+# Shared reverse proxy configuration
+(proxy_config) {
+    health_uri /health
+    health_interval 30s
+    health_timeout 10s
+    health_status 200
+    timeout 30s
+    header_up X-Real-IP {remote_host}
+    header_up X-Forwarded-Proto {scheme}
+    header_up X-Forwarded-For {remote_host}
+}
 
-        # Timeouts
-        timeout 30s
+# Production site
+arkfile.net {
+    encode gzip
 
-        # Headers
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-        header_up X-Forwarded-For {remote_host}
+    tls {
+        dns vultr {env.VULTR_API_KEY}
     }
 
-    # Access logging
+    import security_headers
+
+    reverse_proxy localhost:{env.PROD_PORT} {
+        import proxy_config
+    }
+
     log {
-        output file /var/log/caddy/access.log
+        output file /var/log/caddy/prod-access.log
         format json
     }
 
-    # Error handling
+    handle_errors {
+        respond "{http.error.status_code} {http.error.status_text}"
+    }
+}
+
+# Test site
+test.arkfile.net {
+    encode gzip
+
+    tls {
+        dns vultr {env.VULTR_API_KEY}
+    }
+
+    import security_headers
+
+    reverse_proxy localhost:{env.TEST_PORT} {
+        import proxy_config
+    }
+
+    log {
+        output file /var/log/caddy/test-access.log
+        format json
+    }
+
     handle_errors {
         respond "{http.error.status_code} {http.error.status_text}"
     }

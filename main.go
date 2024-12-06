@@ -7,13 +7,30 @@ import (
     "github.com/joho/godotenv"
     "github.com/labstack/echo/v4"
     "github.com/labstack/echo/v4/middleware"
-    
+
     "github.com/84adam/arkfile/auth"
     "github.com/84adam/arkfile/database"
     "github.com/84adam/arkfile/handlers"
     "github.com/84adam/arkfile/logging"
     "github.com/84adam/arkfile/storage"
 )
+
+func setupRoutes(g *echo.Group) {
+    // Auth routes
+    g.POST("/register", handlers.Register)
+    g.POST("/login", handlers.Login)
+
+    // File routes (protected)
+    fileGroup := g.Group("/api")
+    fileGroup.Use(auth.JWTMiddleware())
+    fileGroup.POST("/upload", handlers.UploadFile)
+    fileGroup.GET("/download/:filename", handlers.DownloadFile)
+
+    // Static and WASM files
+    g.Static("/", "client/static")
+    g.File("/wasm_exec.js", "client/wasm_exec.js")
+    g.File("/main.wasm", "client/main.wasm")
+}
 
 func main() {
     // Load environment variables
@@ -42,34 +59,34 @@ func main() {
         XSSProtection:         "1; mode=block",
         ContentTypeNosniff:    "nosniff",
         XFrameOptions:         "SAMEORIGIN",
-        HSTSMaxAge:           31536000,
+        HSTSMaxAge:            31536000,
         ContentSecurityPolicy: "default-src 'self'",
     }))
 
-    // Serve static files for the web client
-    e.Static("/", "client/static")
+    // Production routes
+    prod := e.Group("", middleware.HostWithConfig(middleware.HostConfig{
+        Host: os.Getenv("PROD_DOMAIN"),
+    }))
+    setupRoutes(prod)
 
-    // Serve WebAssembly files
-    e.File("/wasm_exec.js", "client/wasm_exec.js")
-    e.File("/main.wasm", "client/main.wasm")
+    // Test routes
+    test := e.Group("", middleware.HostWithConfig(middleware.HostConfig{
+        Host: os.Getenv("TEST_DOMAIN"),
+    }))
+    setupRoutes(test)
 
-    // Routes
-    // Auth routes
-    e.POST("/register", handlers.Register)
-    e.POST("/login", handlers.Login)
-
-    // File routes (protected)
-    fileGroup := e.Group("/api")
-    fileGroup.Use(auth.JWTMiddleware())
-    fileGroup.POST("/upload", handlers.UploadFile)
-    fileGroup.GET("/download/:filename", handlers.DownloadFile)
-
-    // Start server
-    port := os.Getenv("PORT")
+    // Get port based on domain
+    port := os.Getenv("PROD_PORT")
+    testDomain := os.Getenv("TEST_DOMAIN")
+    host := os.Getenv("HOST")
+    if host == testDomain {
+       port = os.Getenv("TEST_PORT")
+    }
     if port == "" {
-        port = "8080"
+       port = "8080" // Default fallback
     }
 
+    // Start server
     if err := e.Start(":" + port); err != nil {
         logging.ErrorLogger.Printf("Failed to start server: %v", err)
     }
