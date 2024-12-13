@@ -1,7 +1,7 @@
 [Unit]
 Description=Caddy Web Server
 After=network.target
-Wants=arkfile.service
+Wants=arkfile.service arkfile-test.service
 
 [Service]
 Type=simple

@@ -1,5 +1,5 @@
 [Unit]
-Description=Arkfile Service
+Description=Arkfile Service (Test Instance)
 After=network.target
 Wants=caddy.service
 
@@ -7,15 +7,15 @@ Wants=caddy.service
 Type=simple
 User=app
 Group=app
-WorkingDirectory=/opt/arkfile
-ExecStart=/opt/arkfile/arkfile
-Environment=HOST=arkfile.net
-Environment=PROD_PORT=8080
+WorkingDirectory=/opt/arkfile-test
+ExecStart=/opt/arkfile-test/arkfile
+Environment=HOST=test.arkfile.net
+Environment=TEST_PORT=8081
 Environment=BACKBLAZE_ENDPOINT=your_endpoint
 Environment=BACKBLAZE_KEY_ID=your_key_id
 Environment=BACKBLAZE_APPLICATION_KEY=your_app_key
-Environment=BACKBLAZE_BUCKET_NAME=your_bucket
-Environment=JWT_SECRET=your_jwt_secret
+Environment=BACKBLAZE_BUCKET_NAME=your_test_bucket
+Environment=JWT_SECRET=your_test_jwt_secret
 
 # Security measures
 NoNewPrivileges=yes
