@@ -13,10 +13,10 @@ import (
 
 var (
     // Number of PBKDF2 iterations
-    iterations = 500000
+    iterations = 1000000
     /* Expected time to compute:
-     * - 1250ms for an Intel Core i3-5005U 5th Gen 2-Core 2.0 GHz CPU
-     * - 500ms for an Intel Core i5-8600T 8th Gen 6-core 3.70 GHz CPU
+     * - 2500ms for an Intel Core i3-5005U 5th Gen 2-Core 2.0 GHz CPU
+     * - 1000ms for an Intel Core i5-8600T 8th Gen 6-core 3.70 GHz CPU
     */ 
     // Key length in bytes
     keyLength = 32
