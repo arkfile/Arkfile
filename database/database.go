@@ -12,7 +12,19 @@ var DB *sql.DB
 
 func InitDB() {
     var err error
-    dbPath := os.Getenv("DB_PATH")
+    
+    // Get database path based on environment
+    host := os.Getenv("HOST")
+    testDomain := os.Getenv("TEST_DOMAIN")
+    
+    var dbPath string
+    if host == testDomain {
+        dbPath = os.Getenv("TEST_DB_PATH")
+    } else {
+        dbPath = os.Getenv("PROD_DB_PATH")
+    }
+
+    // Fallback if env vars aren't set
     if dbPath == "" {
         dbPath = "./arkfile.db"
     }
