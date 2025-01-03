@@ -8,6 +8,7 @@ import (
 
     "github.com/labstack/echo/v4"
     "golang.org/x/crypto/bcrypt"
+    "github.com/minio/minio-go/v7"
 
     "github.com/84adam/arkfile/auth"
     "github.com/84adam/arkfile/database"
