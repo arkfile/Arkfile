@@ -83,6 +83,9 @@ BACKBLAZE_APPLICATION_KEY=...
 BACKBLAZE_BUCKET_NAME=...
 JWT_SECRET=...
 VULTR_API_KEY=...
+PROD_PORT=... # e.g. 8080
+TEST_PORT=... # e.g. 8081
+CADDY_EMAIL=...
 ```
 
 ## Build and Deployment
@@ -96,10 +99,14 @@ VULTR_API_KEY=...
    - Bundle static assets
 
 2. **Deployment**
-   - Set up Vultr server with Rocky Linux
+   - Set up Vultr server with Rocky Linux (expect RAM to be the bottleneck on max file upload size)
+   - Configure firewall
+   - Configure Backblaze bucket, API keys
+   - `git clone` this repo down into `/opt/arkfile-test/` or `/opt/arkfile/`
+   - Copy .env.example to .env, generate JWT secret, fill in any missing secrets/credentials
+   - Add `export MY_ENV_VAR=<SOME VALUE>` for each variable required to `~/.bashrc`, then run `source ~/.bashrc`
    - Configure Caddy for TLS
    - Set up systemd services
-   - Configure firewall
 
 ## Security Layers
 
@@ -121,3 +128,12 @@ VULTR_API_KEY=...
    - User permissions
 
 The application follows a clean architecture pattern with clear separation of concerns, making it maintainable and scalable. Each component has a single responsibility, and dependencies flow inward from external services to the core business logic.
+
+For questions/comments/support, either file an issue on GitHub, or during alpha testing stage, you can email `arkfile [at] pm [dot] me`.
+
+(Do not include sensitive or personal information in any public GitHub issue.)
+
+---
+
+*make yourself an ark of cypress wood*
+
