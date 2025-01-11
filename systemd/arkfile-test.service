@@ -7,8 +7,8 @@ Wants=caddy.service
 Type=simple
 User=app
 Group=app
-WorkingDirectory=/opt/arkfile-test
-ExecStart=/opt/arkfile-test/arkfile
+WorkingDirectory=/opt/arkfile-test/arkfile/build
+ExecStart=/opt/arkfile-test/arkfile/build/arkfile
 Environment=HOST=test.arkfile.net
 Environment=TEST_PORT=8081
 Environment=BACKBLAZE_ENDPOINT=your_endpoint

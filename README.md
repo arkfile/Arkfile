@@ -106,7 +106,13 @@ CADDY_EMAIL=...
    - Copy .env.example to .env, generate JWT secret, fill in any missing secrets/credentials
    - Add `export MY_ENV_VAR=<SOME VALUE>` for each variable required to `~/.bashrc`, then run `source ~/.bashrc`
    - Configure Caddy for TLS
+   - Create log directory and set permissions: `mkdir -p /var/log/caddy` ; `chown -R caddy:caddy /var/log/caddy`
+   - Other Caddy stuff: `mkdir -p /var/lib/caddy/.local/share` ; `mkdir -p /var/lib/caddy/.config/caddy` ; `chown -R caddy:caddy /var/lib/caddy`
    - Set up systemd services
+   - Create the app user and group: `useradd -r -s /sbin/nologin app`
+   - Set ownership: `chown -R app:app /opt/arkfile(-test)`
+   - Set the service file permissions: `chmod 644 /etc/systemd/system/arkfile(-test).service`
+   - Set ownership for build/binary: `chown -R app:app /opt/arkfile-test/arkfile/build` ; `chmod 755 /opt/arkfile-test/arkfile/build/arkfile`
 
 ## Security Layers
 
