@@ -103,7 +103,7 @@ CADDY_EMAIL=...
    - Configure firewall
    - Configure Backblaze bucket, API keys
    - `git clone` this repo down into `/opt/arkfile-test/` or `/opt/arkfile/`
-   - Copy .env.example to .env, generate JWT secret, fill in any missing secrets/credentials
+   - Copy .env.example to build/.env, generate JWT secret, fill in any missing secrets/credentials
    - Add `export MY_ENV_VAR=<SOME VALUE>` for each variable required to `~/.bashrc`, then run `source ~/.bashrc`
    - Configure Caddy for TLS
    - Create log directory and set permissions: `mkdir -p /var/log/caddy` ; `chown -R caddy:caddy /var/log/caddy`
@@ -112,7 +112,7 @@ CADDY_EMAIL=...
    - Create the app user and group: `useradd -r -s /sbin/nologin app`
    - Set ownership: `chown -R app:app /opt/arkfile(-test)`
    - Set the service file permissions: `chmod 644 /etc/systemd/system/arkfile(-test).service`
-   - Set ownership for build/binary: `chown -R app:app /opt/arkfile-test/arkfile/build` ; `chmod 755 /opt/arkfile-test/arkfile/build/arkfile`
+   - Check/set ownership for build/binary: `chown -R app:app /opt/arkfile-test/arkfile/build` ; `chmod 755 /opt/arkfile-test/arkfile/build/arkfile`
 
 ## Security Layers
 

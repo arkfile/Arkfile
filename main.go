@@ -2,6 +2,7 @@ package main
 
 import (
     "log"
+    "net/http"
     "os"
 
     "github.com/joho/godotenv"
@@ -16,12 +17,12 @@ import (
 )
 
 func setupRoutes(e *echo.Echo) {
-    // Serve static files for the web client
-    e.Static("/", "client/static")
-
-    // Serve WebAssembly files
-    e.File("/wasm_exec.js", "client/wasm_exec.js")
-    e.File("/main.wasm", "client/main.wasm")
+    // Health check endpoint
+    e.GET("/health", func(c echo.Context) error {
+        return c.JSON(http.StatusOK, map[string]string{
+            "status": "ok",
+        })
+    })
 
     // Auth routes
     e.POST("/register", handlers.Register)
@@ -32,6 +33,13 @@ func setupRoutes(e *echo.Echo) {
     fileGroup.Use(auth.JWTMiddleware())
     fileGroup.POST("/upload", handlers.UploadFile)
     fileGroup.GET("/download/:filename", handlers.DownloadFile)
+
+    // Serve static files for the web client
+    e.Static("/", "static")
+
+    // Serve WebAssembly files
+    e.File("/wasm_exec.js", "client/wasm_exec.js")
+    e.File("/main.wasm", "client/main.wasm")
 }
 
 func main() {
