@@ -29,6 +29,35 @@
 - TLS encryption for all traffic
 - Secure key derivation (PBKDF2)
 
+## Directory Structure
+
+```
+/opt/arkfile/
+├── bin/                    # Application binaries
+├── etc/                    # Configuration
+│   ├── prod/              # Production configuration
+│   └── test/              # Test configuration
+├── var/
+│   ├── lib/               # Application data
+│   │   ├── prod/         # Production data
+│   │   └── test/         # Test data
+│   ├── log/              # Log files
+│   └── run/              # Runtime files
+├── webroot/               # Static files and WASM
+└── releases/              # Versioned releases
+    ├── YYYYMMDD_HHMMSS/  # Timestamped releases
+    └── current -> ...     # Symlink to current release
+```
+
+## Service Users
+
+The application uses dedicated service accounts for improved security:
+
+- **arkadmin**: Main service account for application management
+- **arkprod**: Production environment service account
+- **arktest**: Test environment service account
+- **arkfile**: Primary service group
+
 ## Key Files and Their Purposes
 
 1. **`main.go`**
@@ -58,24 +87,10 @@
    - Schema creation
    - File metadata storage
 
-## Data Flow
-
-1. **File Upload**
-   ```
-   Client → Client-side Encryption (WASM)
-   → Server (Echo) → Backblaze B2
-                   → SQLite (metadata)
-   ```
-
-2. **File Download**
-   ```
-   Client → Server Request
-   → Server (Echo) → Backblaze B2 (encrypted file)
-                   → SQLite (password hint)
-   → Client → Client-side Decryption (WASM)
-   ```
-
 ## Environment Variables
+
+Environment-specific variables are stored in `/opt/arkfile/etc/<env>/secrets.env`:
+
 ```
 BACKBLAZE_ENDPOINT=...
 BACKBLAZE_KEY_ID=...
@@ -90,29 +105,44 @@ CADDY_EMAIL=...
 
 ## Build and Deployment
 
-1. **Build Process**
-   - Compile server-side Go code
-   - Compile client-side Go code to WASM
-     - `cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" client/`
-     - `cd client/`
-     - `GOOS=js GOARCH=wasm go build -o main.wasm`
-   - Bundle static assets
+1. **Initial Setup**
+   ```bash
+   # Setup service users and directories
+   ./scripts/setup-users.sh
+   ./scripts/setup-directories.sh
+   ```
 
-2. **Deployment**
-   - Set up Vultr server with Rocky Linux (expect RAM to be the bottleneck on max file upload size)
-   - Configure firewall
-   - Configure Backblaze bucket, API keys
-   - `git clone` this repo down into `/opt/arkfile-test/` or `/opt/arkfile/`
-   - Copy .env.example to build/.env, generate JWT secret, fill in any missing secrets/credentials
-   - Add `export MY_ENV_VAR=<SOME VALUE>` for each variable required to `~/.bashrc`, then run `source ~/.bashrc`
-   - Configure Caddy for TLS
-   - Create log directory and set permissions: `mkdir -p /var/log/caddy` ; `chown -R caddy:caddy /var/log/caddy`
-   - Other Caddy stuff: `mkdir -p /var/lib/caddy/.local/share` ; `mkdir -p /var/lib/caddy/.config/caddy` ; `chown -R caddy:caddy /var/lib/caddy`
-   - Set up systemd services
-   - Create the app user and group: `useradd -r -s /sbin/nologin app`
-   - Set ownership: `chown -R app:app /opt/arkfile(-test)`
-   - Set the service file permissions: `chmod 644 /etc/systemd/system/arkfile(-test).service`
-   - Check/set ownership for build/binary: `chown -R app:app /opt/arkfile-test/arkfile/build` ; `chmod 755 /opt/arkfile-test/arkfile/build/arkfile`
+2. **Build Process**
+   ```bash
+   # Build for all environments
+   ./scripts/build.sh
+   ```
+
+3. **Deployment**
+   ```bash
+   # Deploy to production
+   ./scripts/deploy.sh prod
+
+   # Deploy to test environment
+   ./scripts/deploy.sh test
+   ```
+
+4. **Rollback (if needed)**
+   ```bash
+   # Rollback production
+   ./scripts/rollback.sh prod
+
+   # Rollback test environment
+   ./scripts/rollback.sh test
+   ```
+
+## Deployment Features
+
+- **Versioned Releases**: Each deployment creates a timestamped release
+- **Zero-Downtime Deployments**: Smooth service transitions
+- **Easy Rollbacks**: Quick recovery from problematic deployments
+- **Environment Isolation**: Separate prod/test configurations
+- **Release Management**: Maintains last 5 releases for safety
 
 ## Security Layers
 
@@ -133,6 +163,30 @@ CADDY_EMAIL=...
    - File access control
    - User permissions
 
+5. **Service Security**
+   - Dedicated service accounts
+   - Principle of least privilege
+   - Systemd security directives
+   - Environment isolation
+
+## Monitoring and Maintenance
+
+1. **Service Management**
+   ```bash
+   # Check service status
+   systemctl status arkfile@prod
+   systemctl status arkfile@test
+
+   # View logs
+   journalctl -u arkfile@prod -f
+   journalctl -u arkfile@test -f
+   ```
+
+2. **Release Management**
+   - Releases are automatically cleaned up (keeping last 5)
+   - Each release is versioned and timestamped
+   - Rollback markers track deployment history
+
 The application follows a clean architecture pattern with clear separation of concerns, making it maintainable and scalable. Each component has a single responsibility, and dependencies flow inward from external services to the core business logic.
 
 For questions/comments/support, either file an issue on GitHub, or during alpha testing stage, you can email `arkfile [at] pm [dot] me`.
@@ -142,4 +196,3 @@ For questions/comments/support, either file an issue on GitHub, or during alpha 
 ---
 
 *make yourself an ark of cypress wood*
-
