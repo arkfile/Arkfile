@@ -43,6 +43,11 @@ go build -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" -
 echo "Copying static files..."
 cp -r client/static ${BUILD_DIR}/static
 
+# Setup error pages in webroot
+echo "Setting up error pages..."
+mkdir -p ${BUILD_DIR}/webroot/errors
+cp client/static/errors/* ${BUILD_DIR}/webroot/errors/
+
 # Create version file
 echo "Creating version file..."
 cat > ${BUILD_DIR}/version.json <<EOF

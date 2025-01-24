@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Service Maintenance - Arkfile</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 650px;
+            margin: 0 auto;
+            padding: 2rem;
+            text-align: center;
+        }
+        .container {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-top: 2rem;
+        }
+        h1 {
+            color: #2d3748;
+            margin-bottom: 1rem;
+        }
+        .message {
+            color: #4a5568;
+            margin-bottom: 2rem;
+        }
+        .alternative {
+            background: #edf2f7;
+            padding: 1rem;
+            border-radius: 4px;
+            margin-top: 2rem;
+        }
+        a {
+            color: #4299e1;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .status {
+            font-size: 0.9rem;
+            color: #718096;
+            margin-top: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Service Maintenance</h1>
+        <div class="message">
+            The requested environment is currently undergoing maintenance or is temporarily unavailable.
+        </div>
+        <div class="alternative" id="alternative-env">
+            <!-- This will be populated by Caddy's response handler -->
+        </div>
+        <div class="status">
+            <p>Status: Maintenance Mode</p>
+            <p>If you believe this is an error, please contact support at: arkfile [at] pm [dot] me</p>
+        </div>
+    </div>
+</body>
+</html>

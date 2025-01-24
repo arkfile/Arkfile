@@ -1,7 +1,7 @@
 [Unit]
 Description=Caddy Web Server
 After=network.target
-Wants=arkfile.service arkfile-test.service
+Wants=arkfile@prod.service arkfile@test.service
 
 [Service]
 Type=simple
@@ -10,17 +10,23 @@ Group=caddy
 ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
 ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile
 
+# Environment configuration
 Environment=VULTR_API_KEY=your_vultr_api_key
 Environment=XDG_DATA_HOME=/var/lib/caddy/.local/share
 Environment=XDG_CONFIG_HOME=/var/lib/caddy/.config
 
 # Security measures
 NoNewPrivileges=yes
-ProtectSystem=full
+ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
-ReadWritePaths=/etc/caddy /var/lib/caddy
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ReadWritePaths=/etc/caddy /var/lib/caddy /var/log/caddy
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 # Restart configuration

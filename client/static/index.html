@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="x-tls-version" content="">  <!-- Will be populated by server middleware -->
     <title>Secure File Sharing</title>
     <link rel="stylesheet" href="/css/styles.css">
 </head>
@@ -48,6 +49,18 @@
     </div>
 
     <script src="/wasm_exec.js"></script>
+    <script src="/js/security.js"></script>
     <script src="/js/app.js"></script>
+    
+    <script>
+        // Update TLS version meta tag from response header
+        document.addEventListener('DOMContentLoaded', () => {
+            const tlsVersionMeta = document.querySelector('meta[name="x-tls-version"]');
+            const tlsVersion = document.querySelector('header')?.getAttribute('x-tls-version');
+            if (tlsVersion) {
+                tlsVersionMeta.content = tlsVersion;
+            }
+        });
+    </script>
 </body>
 </html>

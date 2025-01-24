@@ -14,7 +14,7 @@
 2. **Server-Side**
    - Go HTTP server (Echo framework)
    - JWT authentication
-   - SQLite database for user data and file metadata
+   - SQLite database with at-rest encryption
    - Integration with Backblaze B2 (via MinIO client) for file storage
 
 3. **External Services**
@@ -24,6 +24,7 @@
 ### Security Features
 
 - Client-side encryption using user passwords
+- Database encryption at rest
 - Password hints stored separately from encrypted files
 - JWT-based authentication
 - TLS encryption for all traffic
@@ -86,6 +87,12 @@ The application uses dedicated service accounts for improved security:
    - Database connection setup
    - Schema creation
    - File metadata storage
+   - Database encryption handling
+
+7. **`crypto/database.go`**
+   - Database encryption/decryption
+   - NaCl/SecretBox implementation
+   - Key management utilities
 
 ## Environment Variables
 
@@ -97,6 +104,7 @@ BACKBLAZE_KEY_ID=...
 BACKBLAZE_APPLICATION_KEY=...
 BACKBLAZE_BUCKET_NAME=...
 JWT_SECRET=...
+DB_ENCRYPTION_KEY=...
 VULTR_API_KEY=...
 PROD_PORT=... # e.g. 8080
 TEST_PORT=... # e.g. 8081
@@ -110,6 +118,9 @@ CADDY_EMAIL=...
    # Setup service users and directories
    ./scripts/setup-users.sh
    ./scripts/setup-directories.sh
+
+   # Generate encryption keys for environments
+   ./scripts/generate-keys.sh
    ```
 
 2. **Build Process**
@@ -151,9 +162,11 @@ CADDY_EMAIL=...
    - HTTPS enforcement
 
 2. **Data Security**
-   - Client-side encryption
+   - Client-side encryption for files
+   - Database encryption at rest using NaCl/SecretBox
    - Secure key derivation
    - Password hints
+   - Automatic encryption/decryption during service lifecycle
 
 3. **Authentication**
    - JWT-based auth
@@ -168,6 +181,28 @@ CADDY_EMAIL=...
    - Principle of least privilege
    - Systemd security directives
    - Environment isolation
+
+## Key Management
+
+1. **Encryption Keys**
+   - Each environment requires unique encryption keys
+   - Generate keys using `./scripts/generate-keys.sh`
+   - Store keys securely in environment-specific config files
+   - Keys are 32-byte hex-encoded strings
+   - Database automatically encrypted at shutdown and decrypted at startup
+
+2. **Key Security**
+   - Never reuse keys between environments
+   - Store backups of keys securely
+   - Rotate keys periodically (requires database re-encryption)
+   - Keys are required for database access
+   - Loss of keys makes database unrecoverable
+
+3. **Environment Separation**
+   - Production and test environments use separate keys
+   - Each environment has its own encrypted database
+   - Keys stored in environment-specific secret files
+   - Different service users for different environments
 
 ## Monitoring and Maintenance
 
@@ -186,6 +221,12 @@ CADDY_EMAIL=...
    - Releases are automatically cleaned up (keeping last 5)
    - Each release is versioned and timestamped
    - Rollback markers track deployment history
+
+3. **Database Management**
+   - Databases are automatically encrypted at shutdown
+   - Only decrypted while service is running
+   - Encrypted databases have .enc extension
+   - Each environment maintains separate encrypted database
 
 The application follows a clean architecture pattern with clear separation of concerns, making it maintainable and scalable. Each component has a single responsibility, and dependencies flow inward from external services to the core business logic.
 

@@ -1,13 +1,27 @@
 {
 	email youractualemail@example.com
 	acme_dns vultr {$VULTR_API_KEY}
+
+	# Global TLS preferences
+	servers {
+		protocol {
+			experimental_http3     # Better performance on modern clients
+			strict_sni_host       # Require valid SNI
+			protocols tls1.3 tls1.2  # Prefer 1.3, allow 1.2
+			cipher_suites {
+				tls1.3 TLS_AES_256_GCM_SHA384 TLS_CHACHA20_POLY1305_SHA256
+				tls1.2 TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+			}
+			curves x25519 secp384r1
+		}
+	}
 }
 
 # Shared security header configuration
 (security_headers) {
 	header {
-		# Enable HSTS
-		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		# Enable HSTS with longer max-age
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"  # 2 years
 		# Prevent clickjacking
 		X-Frame-Options "SAMEORIGIN"
 		# Prevent XSS attacks
@@ -16,6 +30,8 @@
 		X-Content-Type-Options "nosniff"
 		# CSP
 		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline';"
+		# Restrict referrer information
+		Referrer-Policy "strict-origin-when-cross-origin"
 	}
 }
 
@@ -27,18 +43,61 @@
 	health_status 200
 }
 
+# TLS configuration snippet
+(tls_config) {
+	tls {
+		dns vultr {$VULTR_API_KEY}
+		protocols tls1.3 tls1.2  # Prefer 1.3, allow 1.2
+		must_staple              # Enable OCSP stapling
+		key_type p384           # Use stronger elliptic curve
+	}
+}
+
+# Custom error pages
+(error_pages) {
+	handle_errors {
+		@maintenance expression `{http.error.status_code} == 503`
+		handle @maintenance {
+			root * /opt/arkfile/webroot/errors
+			try_files /maintenance.html
+			file_server
+		}
+
+		@not_found expression `{http.error.status_code} == 404`
+		handle @not_found {
+			root * /opt/arkfile/webroot/errors
+			try_files /404.html
+			file_server
+		}
+
+		# Default error response
+		respond "{http.error.status_code} {http.error.status_text}"
+	}
+}
+
 # Production site
 arkfile.net {
 	encode gzip
-
-	tls {
-		dns vultr {$VULTR_API_KEY}
-	}
-
+	import tls_config
 	import security_headers
 
+	# Try production service first
 	reverse_proxy localhost:{$PROD_PORT} {
 		import proxy_config
+		@unavailable expression `{upstream.status} == 503`
+		handle_response @unavailable {
+			# If prod is down but test is up, suggest test environment
+			reverse_proxy localhost:{$TEST_PORT} {
+				import proxy_config
+				@test_up expression `{upstream.status} != 503`
+				handle_response @test_up {
+					respond `Production environment is currently unavailable. 
+                            Test environment is available at: https://test.arkfile.net` 307 {
+						header Location https://test.arkfile.net
+					}
+				}
+			}
+		}
 	}
 
 	log {
@@ -46,23 +105,31 @@ arkfile.net {
 		format json
 	}
 
-	handle_errors {
-		respond "{http.error.status_code} {http.error.status_text}"
-	}
+	import error_pages
 }
 
 # Test site
 test.arkfile.net {
 	encode gzip
-
-	tls {
-		dns vultr {$VULTR_API_KEY}
-	}
-
+	import tls_config
 	import security_headers
 
 	reverse_proxy localhost:{$TEST_PORT} {
 		import proxy_config
+		@unavailable expression `{upstream.status} == 503`
+		handle_response @unavailable {
+			# If test is down but prod is up, suggest prod environment
+			reverse_proxy localhost:{$PROD_PORT} {
+				import proxy_config
+				@prod_up expression `{upstream.status} != 503`
+				handle_response @prod_up {
+					respond `Test environment is currently unavailable. 
+                            Production environment is available at: https://arkfile.net` 307 {
+						header Location https://arkfile.net
+					}
+				}
+			}
+		}
 	}
 
 	log {
@@ -70,7 +137,5 @@ test.arkfile.net {
 		format json
 	}
 
-	handle_errors {
-		respond "{http.error.status_code} {http.error.status_text}"
-	}
+	import error_pages
 }
