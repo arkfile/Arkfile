@@ -1,6 +1,6 @@
 # Arkfile
 
-*s3-style encrypted file backup*
+*s3-style encrypted file sharing and backup*
 
 ## High-Level Architecture
 
@@ -15,10 +15,10 @@
    - Go HTTP server (Echo framework)
    - JWT authentication
    - SQLite database with at-rest encryption
-   - Integration with Backblaze B2 (via MinIO client) for file storage
+   - S3-compatible object storage (via MinIO client)
 
 3. **External Services**
-   - Backblaze B2 for encrypted file storage
+   - S3-compatible storage providers (Backblaze B2, Wasabi, or Vultr)
    - Caddy web server for TLS and reverse proxy
 
 ### Security Features
@@ -34,20 +34,20 @@
 
 ```
 /opt/arkfile/
-├── bin/                    # Application binaries
-├── etc/                    # Configuration
-│   ├── prod/              # Production configuration
-│   └── test/              # Test configuration
+├── bin/                  # Application binaries
+├── etc/                  # Configuration
+│   ├── prod/             # Production configuration
+│   └── test/             # Test configuration
 ├── var/
-│   ├── lib/               # Application data
+│   ├── lib/              # Application data
 │   │   ├── prod/         # Production data
 │   │   └── test/         # Test data
 │   ├── log/              # Log files
 │   └── run/              # Runtime files
-├── webroot/               # Static files and WASM
-└── releases/              # Versioned releases
+├── webroot/              # Static files and WASM
+└── releases/             # Versioned releases
     ├── YYYYMMDD_HHMMSS/  # Timestamped releases
-    └── current -> ...     # Symlink to current release
+    └── current -> ...    # Symlink to current release
 ```
 
 ## Service Users
@@ -76,8 +76,8 @@ The application uses dedicated service accounts for improved security:
    - User authentication handlers
 
 4. **`storage/minio.go`**
-   - Backblaze B2 integration
-   - File storage operations
+   - S3-compatible storage integration
+   - File storage operations with multiple provider support
 
 5. **`auth/jwt.go`**
    - JWT token generation and validation
@@ -99,17 +99,43 @@ The application uses dedicated service accounts for improved security:
 Environment-specific variables are stored in `/opt/arkfile/etc/<env>/secrets.env`:
 
 ```
-BACKBLAZE_ENDPOINT=...
-BACKBLAZE_KEY_ID=...
-BACKBLAZE_APPLICATION_KEY=...
-BACKBLAZE_BUCKET_NAME=...
+# S3-Compatible Storage Configuration
+STORAGE_PROVIDER=...  # backblaze, wasabi, or vultr
+S3_ENDPOINT=...       # Required for Backblaze
+S3_REGION=...         # Required for Wasabi/Vultr
+S3_ACCESS_KEY_ID=... 
+S3_SECRET_KEY=...
+S3_BUCKET_NAME=...
+
+# Other Configuration
 JWT_SECRET=...
 DB_ENCRYPTION_KEY=...
-VULTR_API_KEY=...
-PROD_PORT=... # e.g. 8080
-TEST_PORT=... # e.g. 8081
+VULTR_API_KEY=...    # For Caddy DNS challenges
+PROD_PORT=...        # e.g. 8080
+TEST_PORT=...        # e.g. 8081
 CADDY_EMAIL=...
 ```
+
+## Storage Provider Support
+
+The application supports multiple S3-compatible storage providers:
+
+1. **Backblaze B2**
+   - Set `STORAGE_PROVIDER=backblaze`
+   - Requires manual endpoint configuration
+   - Server-side encryption included
+
+2. **Wasabi**
+   - Set `STORAGE_PROVIDER=wasabi`
+   - Requires region configuration
+   - Server-side encryption included
+   - Note: 90-day minimum storage duration policy
+
+3. **Vultr Object Storage**
+   - Set `STORAGE_PROVIDER=vultr`
+   - Requires region configuration
+   - Server-side encryption included
+   - Potential cost benefits when used with Vultr hosting
 
 ## Build and Deployment
 
@@ -228,9 +254,13 @@ CADDY_EMAIL=...
    - Encrypted databases have .enc extension
    - Each environment maintains separate encrypted database
 
-The application follows a clean architecture pattern with clear separation of concerns, making it maintainable and scalable. Each component has a single responsibility, and dependencies flow inward from external services to the core business logic.
+---
 
-For questions/comments/support, either file an issue on GitHub, or during alpha testing stage, you can email `arkfile [at] pm [dot] me`.
+## Support & Security
+
+For questions, comments or support, either file an issue on GitHub, or during alpha testing stage, you can email `arkfile [at] pm [dot] me`.
+
+For security issues, please email first and allow time to review the findings before creating a GitHub issue: `arkfile [at] pm [dot] me`.
 
 (Do not include sensitive or personal information in any public GitHub issue.)
 
