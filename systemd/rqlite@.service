@@ -1,0 +1,37 @@
+[Unit]
+Description=rqlite distributed database %i
+Documentation=https://github.com/rqlite/rqlite
+After=network.target
+PartOf=rqlite.target
+
+[Service]
+Type=simple
+User=arkfile
+Group=arkfile
+EnvironmentFile=/opt/arkfile/etc/%i/secrets.env
+WorkingDirectory=/opt/arkfile/var/lib/%i
+ExecStart=/usr/local/bin/rqlited \
+    -auth username=${RQLITE_USERNAME}:${RQLITE_PASSWORD} \
+    -node-id %i \
+    -http-addr ${RQLITE_NODES} \
+    -raft-addr localhost:4002 \
+    -raft-snap-threshold 50 \
+    -raft-snap-interval 60s \
+    -raft-timeout 10s \
+    data
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

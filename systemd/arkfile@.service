@@ -1,7 +1,8 @@
 [Unit]
 Description=Arkfile Service (%i instance)
-After=network.target
+After=network.target rqlite.target
 Wants=caddy.service
+Requires=rqlite.target
 
 [Service]
 Type=simple

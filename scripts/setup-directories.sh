@@ -36,6 +36,14 @@ for env in "${ENVIRONMENTS[@]}"; do
     sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/etc/${env}"
     sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/var/lib/${env}"
     sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/var/log/${env}"
+    
+    # rqlite data directories
+    sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/var/lib/${env}/rqlite"
+    sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/var/lib/${env}/rqlite/data"
+    
+    # MinIO data directories
+    sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/var/lib/${env}/minio"
+    sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/var/lib/${env}/minio/data"
 done
 
 # Create the configs directory for environment-specific configurations

@@ -2,115 +2,56 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"path/filepath"
-	"syscall"
+	"strings"
 
-	"github.com/84adam/arkfile/crypto"
-	_ "modernc.org/sqlite"
+	_ "github.com/rqlite/gorqlite/stdlib"
 )
 
 var (
-	DB       *sql.DB
-	dbCrypto *crypto.DatabaseCrypto
+	DB *sql.DB
 )
 
 func InitDB() {
 	var err error
 
-	// Get database path based on environment
-	dbPath := getDBPath()
-	encryptedPath := dbPath + ".enc"
+	// Get rqlite connection details from environment
+	nodes := os.Getenv("RQLITE_NODES")
+	username := os.Getenv("RQLITE_USERNAME")
+	password := os.Getenv("RQLITE_PASSWORD")
 
-	// Initialize crypto with key from environment
-	dbKey := os.Getenv("DB_ENCRYPTION_KEY")
-	if dbKey == "" {
-		log.Fatal("DB_ENCRYPTION_KEY not set")
+	if nodes == "" {
+		nodes = "localhost:4001"
 	}
 
-	dbCrypto, err = crypto.NewDatabaseCrypto(dbKey)
-	if err != nil {
-		log.Fatal("Failed to initialize database encryption:", err)
+	if username == "" || password == "" {
+		log.Fatal("RQLITE_USERNAME and RQLITE_PASSWORD must be set")
 	}
 
-	// If encrypted database exists, decrypt it
-	if _, err := os.Stat(encryptedPath); err == nil {
-		log.Println("Decrypting database...")
-		if err := dbCrypto.Decrypt(encryptedPath, dbPath); err != nil {
-			log.Fatal("Failed to decrypt database:", err)
+	// Build connection string with authentication
+	nodeList := strings.Split(nodes, ",")
+	dsn := fmt.Sprintf("http://%s:%s@%s", username, password, nodeList[0])
+	if len(nodeList) > 1 {
+		dsn += "?disableClusterDiscovery=false"
+		for i := 1; i < len(nodeList); i++ {
+			dsn += fmt.Sprintf("&node=%s", nodeList[i])
 		}
-		log.Println("Database decrypted successfully")
 	}
 
-	// Open database
-	DB, err = sql.Open("sqlite", dbPath)
+	// Open connection to rqlite cluster
+	DB, err = sql.Open("rqlite", dsn)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to connect to rqlite:", err)
 	}
 
+	// Test connection
 	if err = DB.Ping(); err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to ping rqlite:", err)
 	}
 
 	createTables()
-	registerShutdownHandler(dbPath, encryptedPath)
-}
-
-func getDBPath() string {
-	// Get database path based on environment
-	host := os.Getenv("HOST")
-	testDomain := os.Getenv("TEST_DOMAIN")
-
-	var dbPath string
-	if host == testDomain {
-		dbPath = os.Getenv("TEST_DB_PATH")
-	} else {
-		dbPath = os.Getenv("PROD_DB_PATH")
-	}
-
-	// Fallback if env vars aren't set
-	if dbPath == "" {
-		dbPath = "./arkfile.db"
-	}
-
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0750); err != nil {
-		log.Fatal("Failed to create database directory:", err)
-	}
-
-	return dbPath
-}
-
-func registerShutdownHandler(dbPath, encryptedPath string) {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-
-	go func() {
-		<-c
-		log.Println("Shutting down, encrypting database...")
-
-		// Close database connection
-		if err := DB.Close(); err != nil {
-			log.Printf("Error closing database: %v", err)
-		}
-
-		// Encrypt the database
-		if err := dbCrypto.Encrypt(dbPath, encryptedPath); err != nil {
-			log.Printf("Failed to encrypt database: %v", err)
-			os.Exit(1)
-		}
-
-		// Remove unencrypted database
-		if err := os.Remove(dbPath); err != nil {
-			log.Printf("Failed to remove unencrypted database: %v", err)
-			os.Exit(1)
-		}
-
-		log.Println("Database encrypted successfully")
-		os.Exit(0)
-	}()
 }
 
 func createTables() {

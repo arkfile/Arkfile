@@ -14,19 +14,20 @@
 2. **Server-Side**
    - Go HTTP server (Echo framework)
    - JWT authentication
-   - SQLite database with at-rest encryption
+   - rqlite distributed database
    - S3-compatible object storage (via MinIO client)
 
 3. **External Services**
    - S3-compatible storage providers (Backblaze B2, Wasabi, or Vultr)
    - Caddy web server for TLS and reverse proxy
+   - rqlite database cluster
 
 ### Security Features
 
 - Client-side encryption using quantum-resistant SHAKE-256 for key derivation
 - Choice between account password or file-specific password for encryption
 - SHA-256 checksums for file integrity verification
-- Database encryption at rest
+- Distributed database with authentication and TLS
 - Password hints stored separately from encrypted files
 - JWT-based authentication
 - TLS encryption for all traffic
@@ -86,15 +87,10 @@ The application uses dedicated service accounts for improved security:
    - Authentication middleware
 
 6. **`database/database.go`**
-   - Database connection setup
-   - Schema creation
+   - rqlite cluster connection setup
+   - Schema creation and management
    - File metadata storage
-   - Database encryption handling
-
-7. **`crypto/database.go`**
-   - Database encryption/decryption
-   - NaCl/SecretBox implementation
-   - Key management utilities
+   - Distributed query handling
 
 ## Environment Variables
 
@@ -109,9 +105,13 @@ S3_ACCESS_KEY_ID=...
 S3_SECRET_KEY=...
 S3_BUCKET_NAME=...
 
+# Database Configuration
+RQLITE_NODES=...      # Comma-separated list of rqlite nodes
+RQLITE_USERNAME=...   # rqlite authentication username
+RQLITE_PASSWORD=...   # rqlite authentication password
+
 # Other Configuration
 JWT_SECRET=...
-DB_ENCRYPTION_KEY=...
 VULTR_API_KEY=...    # For Caddy DNS challenges
 PROD_PORT=...        # e.g. 8080
 TEST_PORT=...        # e.g. 8081
@@ -147,8 +147,8 @@ The application supports multiple S3-compatible storage providers:
    ./scripts/setup-users.sh
    ./scripts/setup-directories.sh
 
-   # Generate encryption keys for environments
-   ./scripts/generate-keys.sh
+   # Setup rqlite cluster
+   ./scripts/setup-rqlite.sh
    ```
 
 2. **Build Process**
@@ -195,9 +195,9 @@ The application supports multiple S3-compatible storage providers:
      - Version byte for future cryptographic agility
      - SHA-256 checksums for integrity verification
    - Choice between account-based or file-specific passwords
-   - Database encryption at rest using NaCl/SecretBox
+   - Distributed database with authentication and TLS
+   - Data replication across cluster nodes
    - Password hints stored separately from encrypted files
-   - Automatic encryption/decryption during service lifecycle
 
 3. **Authentication**
    - JWT-based auth
@@ -220,32 +220,38 @@ The application supports multiple S3-compatible storage providers:
    - Generate keys using `./scripts/generate-keys.sh`
    - Store keys securely in environment-specific config files
    - Keys are 32-byte hex-encoded strings
-   - Database automatically encrypted at shutdown and decrypted at startup
 
-2. **Key Security**
-   - Never reuse keys between environments
-   - Store backups of keys securely
-   - Rotate keys periodically (requires database re-encryption)
-   - Keys are required for database access
-   - Loss of keys makes database unrecoverable
-
-3. **Environment Separation**
-   - Production and test environments use separate keys
-   - Each environment has its own encrypted database
-   - Keys stored in environment-specific secret files
+2. **Environment Separation**
+   - Production and test environments use separate services
+   - Each environment has its own rqlite cluster
+   - Secrets stored in environment-specific files
    - Different service users for different environments
+
+3. **Database Security**
+   - rqlite authentication required for all operations
+   - Separate credentials per environment
+   - TLS encryption for database communication
+   - Automatic leader election and failover
 
 ## Monitoring and Maintenance
 
 1. **Service Management**
    ```bash
-   # Check service status
+   # Check application status
    systemctl status arkfile@prod
    systemctl status arkfile@test
 
-   # View logs
+   # Check database cluster status
+   systemctl status rqlite@prod
+   systemctl status rqlite@test
+
+   # View application logs
    journalctl -u arkfile@prod -f
    journalctl -u arkfile@test -f
+
+   # View database logs
+   journalctl -u rqlite@prod -f
+   journalctl -u rqlite@test -f
    ```
 
 2. **Release Management**
@@ -254,10 +260,10 @@ The application supports multiple S3-compatible storage providers:
    - Rollback markers track deployment history
 
 3. **Database Management**
-   - Databases are automatically encrypted at shutdown
-   - Only decrypted while service is running
-   - Encrypted databases have .enc extension
-   - Each environment maintains separate encrypted database
+   - rqlite cluster with automatic leader election
+   - Data replicated across cluster nodes
+   - Automatic failover and recovery
+   - Each environment has separate cluster nodes
 
 ---
 

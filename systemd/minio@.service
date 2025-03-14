@@ -1,0 +1,38 @@
+[Unit]
+Description=MinIO Server %i
+Documentation=https://docs.min.io
+After=network.target
+PartOf=minio.target
+
+[Service]
+Type=simple
+User=ark%i
+Group=arkfile
+WorkingDirectory=/opt/arkfile/var/lib/%i/minio
+EnvironmentFile=/opt/arkfile/etc/%i/secrets.env
+
+# Environment variables for MinIO server
+Environment=MINIO_ROOT_USER=${MINIO_CLUSTER_ACCESS_KEY}
+Environment=MINIO_ROOT_PASSWORD=${MINIO_CLUSTER_SECRET_KEY}
+
+# Server setup
+ExecStart=/usr/local/bin/minio server \
+    --address ${MINIO_CLUSTER_NODES} \
+    --console-address :9001 \
+    ${LOCAL_STORAGE_PATH}
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

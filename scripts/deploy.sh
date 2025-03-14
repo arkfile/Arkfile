@@ -69,20 +69,57 @@ ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo cp ${RELEASE_DIR}/${APP_NAME} ${BASE_DIR
     sudo chown arkadmin:arkfile ${BASE_DIR}/bin/${APP_NAME} && \
     sudo chmod 755 ${BASE_DIR}/bin/${APP_NAME}"
 
+# Set up storage and database services
+echo "Setting up rqlite..."
+ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo ${BASE_DIR}/scripts/setup-rqlite.sh"
+echo "Setting up MinIO..."
+ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo ${BASE_DIR}/scripts/setup-minio.sh"
+
 # Copy and update service files
-echo "Setting up systemd service..."
+echo "Setting up systemd services..."
 ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo cp ${RELEASE_DIR}/systemd/arkfile@.service /etc/systemd/system/ && \
+    sudo cp ${RELEASE_DIR}/systemd/rqlite@.service /etc/systemd/system/ && \
+    sudo cp ${RELEASE_DIR}/systemd/rqlite.target /etc/systemd/system/ && \
+    sudo cp ${RELEASE_DIR}/systemd/minio@.service /etc/systemd/system/ && \
+    sudo cp ${RELEASE_DIR}/systemd/minio.target /etc/systemd/system/ && \
     sudo systemctl daemon-reload"
 
-# Restart services
+# Start and enable infrastructure services
+echo "Starting infrastructure services..."
+# Start rqlite services
+ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo systemctl enable rqlite@${ENVIRONMENT} && \
+    sudo systemctl start rqlite@${ENVIRONMENT} || true && \
+    sudo systemctl enable rqlite.target && \
+    sudo systemctl start rqlite.target"
+
+# Start MinIO services if using local/cluster storage
+if [[ $(ssh ${REMOTE_USER}@${REMOTE_HOST} "grep '^STORAGE_PROVIDER=\(local\|cluster\)' ${BASE_DIR}/etc/${ENVIRONMENT}/secrets.env") ]]; then
+    echo "Starting MinIO services..."
+    ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo systemctl enable minio@${ENVIRONMENT} && \
+        sudo systemctl start minio@${ENVIRONMENT} || true && \
+        sudo systemctl enable minio.target && \
+        sudo systemctl start minio.target"
+fi
+
+# Wait for services to be ready
+echo "Waiting for services to be ready..."
+ssh ${REMOTE_USER}@${REMOTE_HOST} "sleep 5"
+
+# Restart application services
 echo "Restarting services..."
 ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo systemctl restart arkfile@${ENVIRONMENT} && \
     sudo systemctl restart caddy"
 
 # Verify deployment
 echo "Verifying deployment..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "systemctl status arkfile@${ENVIRONMENT} --no-pager && \
+ssh ${REMOTE_USER}@${REMOTE_HOST} "systemctl status rqlite@${ENVIRONMENT} --no-pager && \
+    systemctl status arkfile@${ENVIRONMENT} --no-pager && \
     systemctl status caddy --no-pager"
+
+# Verify MinIO if using local/cluster storage
+if [[ $(ssh ${REMOTE_USER}@${REMOTE_HOST} "grep '^STORAGE_PROVIDER=\(local\|cluster\)' ${BASE_DIR}/etc/${ENVIRONMENT}/secrets.env") ]]; then
+    ssh ${REMOTE_USER}@${REMOTE_HOST} "systemctl status minio@${ENVIRONMENT} --no-pager"
+fi
 
 # Clean up old releases (keep last 5)
 echo "Cleaning up old releases..."
@@ -90,8 +127,16 @@ ssh ${REMOTE_USER}@${REMOTE_HOST} "cd ${BASE_DIR}/releases && \
     ls -t | tail -n +6 | xargs -I {} sudo rm -rf {}"
 
 echo -e "${GREEN}Deployment complete!${NC}"
+echo -e "${YELLOW}Service Stack:${NC}"
+echo "  1. rqlite: Distributed database cluster"
+echo "  2. arkfile: Main application service"
+echo "  3. Caddy: Web server and reverse proxy"
+
 echo -e "${YELLOW}Useful commands:${NC}"
+echo "  View database logs: sudo journalctl -u rqlite@${ENVIRONMENT} -f"
 echo "  View application logs: sudo journalctl -u arkfile@${ENVIRONMENT} -f"
 echo "  View Caddy logs: sudo journalctl -u caddy -f"
-echo "  Check service status: systemctl status arkfile@${ENVIRONMENT}"
+echo "  Check rqlite status: systemctl status rqlite@${ENVIRONMENT}"
+echo "  Check app status: systemctl status arkfile@${ENVIRONMENT}"
+echo "  Check full stack: systemctl status rqlite@${ENVIRONMENT} arkfile@${ENVIRONMENT} caddy"
 echo "  Rollback to previous version: ${BASE_DIR}/scripts/rollback.sh ${ENVIRONMENT}"
