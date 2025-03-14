@@ -1,4 +1,4 @@
-// security.js - TLS version checking and security notifications
+// security.js - Common security functions and TLS version checking
 
 // Styles for the security banner
 const bannerStyles = `
@@ -64,6 +64,66 @@ const styleSheet = document.createElement('style');
 styleSheet.textContent = bannerStyles;
 document.head.appendChild(styleSheet);
 
+// Common password validation function
+function validatePassword(password) {
+    if (!password || password.length < 12) {
+        return {
+            valid: false,
+            message: 'Password must be at least 12 characters long'
+        };
+    }
+
+    const hasUppercase = /[A-Z]/.test(password);
+    const hasLowercase = /[a-z]/.test(password);
+    const hasNumber = /[0-9]/.test(password);
+    const hasSymbol = /[^A-Za-z0-9]/.test(password);
+
+    if (!hasUppercase || !hasLowercase || !hasNumber || !hasSymbol) {
+        return {
+            valid: false,
+            message: 'Password must contain uppercase, lowercase, numbers, and symbols'
+        };
+    }
+
+    return { valid: true };
+}
+
+// Update password strength UI for any password field
+function updatePasswordStrengthUI(password, container) {
+    if (!container) return;
+
+    const requirements = {
+        length: password.length >= 12,
+        uppercase: /[A-Z]/.test(password),
+        lowercase: /[a-z]/.test(password),
+        number: /[0-9]/.test(password),
+        symbol: /[^A-Za-z0-9]/.test(password)
+    };
+
+    // Update strength meter
+    const strengthMeter = container.querySelector('.strength-meter');
+    if (strengthMeter) {
+        const strength = Object.values(requirements).filter(Boolean).length;
+        const colors = ['#ff4d4d', '#ffaa00', '#ffdd00', '#00cc44', '#00aa44'];
+        const labels = ['Very Weak', 'Weak', 'Moderate', 'Strong', 'Very Strong'];
+        
+        strengthMeter.style.width = `${(strength + 1) * 20}%`;
+        strengthMeter.style.backgroundColor = colors[strength];
+        strengthMeter.textContent = labels[strength];
+    }
+
+    // Update requirement indicators
+    const requirementsList = container.querySelector('.requirements-list');
+    if (requirementsList) {
+        const items = requirementsList.getElementsByTagName('li');
+        if (items[0]) items[0].classList.toggle('met', requirements.length);
+        if (items[1]) items[1].classList.toggle('met', requirements.uppercase);
+        if (items[2]) items[2].classList.toggle('met', requirements.lowercase);
+        if (items[3]) items[3].classList.toggle('met', requirements.number);
+        if (items[4]) items[4].classList.toggle('met', requirements.symbol);
+    }
+}
+
 // Check TLS version from response headers
 const checkTLSVersion = () => {
     const tlsVersion = document.querySelector('meta[name="x-tls-version"]')?.content ||
@@ -127,5 +187,7 @@ document.addEventListener('DOMContentLoaded', checkTLSVersion);
 // Export functions for use in other modules
 window.securityUtils = {
     checkTLSVersion,
-    showSecurityBanner
+    showSecurityBanner,
+    validatePassword,
+    updatePasswordStrengthUI
 };

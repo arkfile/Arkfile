@@ -5,6 +5,9 @@
     --text-color: #2c3e50;
     --error-color: #e74c3c;
     --success-color: #27ae60;
+    --weak-password: #ff4d4d;
+    --moderate-password: #ffdd00;
+    --strong-password: #00cc44;
 }
 
 * {
@@ -39,6 +42,12 @@ h1 {
 h2 {
     color: var(--primary-color);
     margin-bottom: 1.5rem;
+}
+
+h3 {
+    color: var(--primary-color);
+    margin: 1.5rem 0 1rem;
+    font-size: 1.1rem;
 }
 
 .auth-section, .file-section {
@@ -77,14 +86,39 @@ button:hover {
     display: none;
 }
 
-.error {
-    color: var(--error-color);
-    margin-bottom: 1rem;
+.error-message {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background-color: var(--error-color);
+    color: white;
+    padding: 1rem;
+    border-radius: 4px;
+    z-index: 1000;
+    animation: slideIn 0.3s ease-out;
 }
 
-.success {
-    color: var(--success-color);
-    margin-bottom: 1rem;
+.success-message {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background-color: var(--success-color);
+    color: white;
+    padding: 1rem;
+    border-radius: 4px;
+    z-index: 1000;
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
 }
 
 .files-list {
@@ -104,4 +138,182 @@ button:hover {
 .file-item button {
     width: auto;
     margin-left: 1rem;
+}
+
+.file-info {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-grow: 1;
+}
+
+.file-size {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.file-date {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.encryption-type {
+    background-color: #eee;
+    padding: 0.3rem 0.6rem;
+    border-radius: 12px;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+/* Password Options Styles */
+.password-options {
+    background-color: #f8f9fa;
+    padding: 1.5rem;
+    border-radius: 4px;
+    margin: 1rem 0;
+}
+
+.option {
+    margin-bottom: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.option input[type="radio"] {
+    width: auto;
+    margin: 0;
+}
+
+.option label {
+    margin-bottom: 0;
+    cursor: pointer;
+}
+
+/* Password Requirements Styles */
+.password-requirements {
+    background-color: #f8f9fa;
+    padding: 1rem;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+}
+
+.strength-meter {
+    height: 8px;
+    background-color: #ddd;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+    overflow: hidden;
+    transition: all 0.3s ease;
+    width: 0;
+    color: white;
+    font-size: 0.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 20px;
+}
+
+.requirements-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-size: 0.9rem;
+    color: #666;
+}
+
+.requirements-list li {
+    margin-bottom: 0.3rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.requirements-list li::before {
+    content: "•";
+    color: #999;
+}
+
+.requirements-list li.met::before {
+    content: "✓";
+    color: var(--success-color);
+}
+
+/* Storage Info Styles */
+.storage-info {
+    margin-top: 2rem;
+    padding: 1rem;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+}
+
+.storage-bar {
+    height: 8px;
+    background-color: #ddd;
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+    overflow: hidden;
+}
+
+.storage-bar .used {
+    height: 100%;
+    background-color: var(--secondary-color);
+    transition: width 0.3s ease;
+}
+
+.storage-text {
+    font-size: 0.9rem;
+    color: #666;
+    text-align: right;
+}
+
+/* File Actions */
+.file-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.file-actions button {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+}
+
+/* Custom Password Section */
+#customPasswordSection {
+    border: 1px solid #ddd;
+    padding: 1rem;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+}
+
+#customPasswordSection.hidden {
+    display: none;
+}
+
+/* Password Strength Colors */
+.strength-meter.very-weak {
+    background-color: var(--weak-password);
+    width: 20%;
+}
+
+.strength-meter.weak {
+    background-color: #ffaa00;
+    width: 40%;
+}
+
+.strength-meter.moderate {
+    background-color: var(--moderate-password);
+    width: 60%;
+}
+
+.strength-meter.strong {
+    background-color: #00cc44;
+    width: 80%;
+}
+
+.strength-meter.very-strong {
+    background-color: var(--strong-password);
+    width: 100%;
 }

@@ -23,12 +23,14 @@
 
 ### Security Features
 
-- Client-side encryption using user passwords
+- Client-side encryption using quantum-resistant SHAKE-256 for key derivation
+- Choice between account password or file-specific password for encryption
+- SHA-256 checksums for file integrity verification
 - Database encryption at rest
 - Password hints stored separately from encrypted files
 - JWT-based authentication
 - TLS encryption for all traffic
-- Secure key derivation (PBKDF2)
+- Strong password requirements with real-time strength validation
 
 ## Directory Structure
 
@@ -188,10 +190,13 @@ The application supports multiple S3-compatible storage providers:
    - HTTPS enforcement
 
 2. **Data Security**
-   - Client-side encryption for files
+   - Zero-knowledge client-side encryption for files using:
+     - Quantum-resistant SHAKE-256 for key derivation (10,000 iterations)
+     - Version byte for future cryptographic agility
+     - SHA-256 checksums for integrity verification
+   - Choice between account-based or file-specific passwords
    - Database encryption at rest using NaCl/SecretBox
-   - Secure key derivation
-   - Password hints
+   - Password hints stored separately from encrypted files
    - Automatic encryption/decryption during service lifecycle
 
 3. **Authentication**

@@ -34,6 +34,26 @@ async function login() {
         if (response.ok) {
             const data = await response.json();
             localStorage.setItem('token', data.token);
+            
+            // Generate session key for future file encryption
+            if (!wasmReady) {
+                await initWasm(); // Make sure WASM is ready
+            }
+            
+            // Generate a random salt for the session key
+            const sessionSalt = generateSalt();
+            
+            // Derive session key using SHAKE-256
+            const sessionKey = deriveSessionKey(password, sessionSalt);
+            
+            // Store session key and salt securely in memory
+            window.arkfileSecurityContext = {
+                sessionKey: sessionKey,
+                sessionSalt: sessionSalt,
+                // Add expiration timestamp (1 hour)
+                expiresAt: Date.now() + (60 * 60 * 1000)
+            };
+            
             showFileSection();
             loadFiles();
         } else {
@@ -51,6 +71,13 @@ async function register() {
 
     if (password !== confirmPassword) {
         showError('Passwords do not match.');
+        return;
+    }
+
+    // Validate password using common validation function
+    const validation = securityUtils.validatePassword(password);
+    if (!validation.valid) {
+        showError(validation.message);
         return;
     }
 
@@ -74,6 +101,52 @@ async function register() {
     }
 }
 
+// Password validation functions
+function validatePassword(password) {
+    if (!password || password.length < 12) {
+        return {
+            valid: false,
+            message: 'Password must be at least 12 characters long'
+        };
+    }
+
+    const hasUppercase = /[A-Z]/.test(password);
+    const hasLowercase = /[a-z]/.test(password);
+    const hasNumber = /[0-9]/.test(password);
+    const hasSymbol = /[^A-Za-z0-9]/.test(password);
+
+    if (!hasUppercase || !hasLowercase || !hasNumber || !hasSymbol) {
+        return {
+            valid: false,
+            message: 'Password must contain uppercase, lowercase, numbers, and symbols'
+        };
+    }
+
+    return { valid: true };
+}
+
+function updatePasswordStrengthUI(password) {
+    const strengthIndicator = document.getElementById('password-strength');
+    if (!strengthIndicator) return;
+
+    const requirements = {
+        length: password.length >= 12,
+        uppercase: /[A-Z]/.test(password),
+        lowercase: /[a-z]/.test(password),
+        number: /[0-9]/.test(password),
+        symbol: /[^A-Za-z0-9]/.test(password)
+    };
+
+    let strength = Object.values(requirements).filter(Boolean).length;
+    
+    const colors = ['#ff4d4d', '#ffaa00', '#ffdd00', '#00cc44', '#00aa44'];
+    const labels = ['Very Weak', 'Weak', 'Moderate', 'Strong', 'Very Strong'];
+
+    strengthIndicator.style.width = `${(strength + 1) * 20}%`;
+    strengthIndicator.style.backgroundColor = colors[strength];
+    strengthIndicator.textContent = labels[strength];
+}
+
 // File handling functions
 async function uploadFile() {
     if (!wasmReady) {
@@ -88,23 +161,55 @@ async function uploadFile() {
         return;
     }
 
-    const password = document.getElementById('filePassword').value;
-    if (!password) {
-        showError('Please enter a password for the file.');
-        return;
+    const useCustomPassword = document.getElementById('useCustomPassword').checked;
+    let password;
+    let keyType;
+
+    if (useCustomPassword) {
+        password = document.getElementById('filePassword').value;
+        const passwordValidation = validatePassword(password);
+        if (!passwordValidation.valid) {
+            showError(passwordValidation.message);
+            return;
+        }
+        keyType = 'custom';
+    } else {
+        // Use the session key
+        const securityContext = window.arkfileSecurityContext;
+        
+        if (!securityContext || Date.now() > securityContext.expiresAt) {
+            showError('Your session has expired. Please log in again.');
+            localStorage.removeItem('token');
+            showAuthSection();
+            return;
+        }
+        
+        password = securityContext.sessionKey;
+        keyType = 'account';
     }
 
     const passwordHint = document.getElementById('passwordHint').value;
 
     try {
+        // Read file as ArrayBuffer
         const fileData = await file.arrayBuffer();
-        const encryptedData = encryptFile(new Uint8Array(fileData), password);
+        const fileBytes = new Uint8Array(fileData);
+        
+        // Calculate SHA-256 hash of original file
+        const sha256sum = calculateSHA256(fileBytes);
+        
+        // Encrypt the file
+        const encryptedData = encryptFile(fileBytes, password, keyType);
 
+        // Prepare form data
         const formData = new FormData();
         formData.append('filename', file.name);
         formData.append('data', encryptedData);
         formData.append('passwordHint', passwordHint);
+        formData.append('passwordType', keyType);
+        formData.append('sha256sum', sha256sum);
 
+        // Upload to server
         const response = await fetch('/api/upload', {
             method: 'POST',
             headers: {
@@ -120,11 +225,12 @@ async function uploadFile() {
             showError('Failed to upload file.');
         }
     } catch (error) {
+        console.error('Upload error:', error);
         showError('An error occurred during file upload.');
     }
 }
 
-async function downloadFile(filename, hint) {
+async function downloadFile(filename, hint, expectedHash, passwordType) {
     if (!wasmReady) {
         showError('WASM not ready. Please try again.');
         return;
@@ -134,8 +240,23 @@ async function downloadFile(filename, hint) {
         alert(`Password Hint: ${hint}`);
     }
 
-    const password = prompt('Enter the file password:');
-    if (!password) return;
+    let password;
+    
+    if (passwordType === 'account') {
+        // For account-encrypted files, use the session key
+        const securityContext = window.arkfileSecurityContext;
+        
+        if (!securityContext || Date.now() > securityContext.expiresAt) {
+            showError('Your session has expired. Please log in again to decrypt account-encrypted files.');
+            return;
+        }
+        
+        password = securityContext.sessionKey;
+    } else {
+        // For custom password-encrypted files
+        password = prompt('Enter the file password:');
+        if (!password) return;
+    }
 
     try {
         const response = await fetch(`/api/download/${filename}`, {
@@ -149,11 +270,22 @@ async function downloadFile(filename, hint) {
             const decryptedData = decryptFile(data.data, password);
 
             if (decryptedData === 'Failed to decrypt data') {
-                showError('Incorrect password.');
+                showError('Incorrect password or corrupted file.');
                 return;
             }
 
-            const blob = new Blob([Uint8Array.from(atob(decryptedData), c => c.charCodeAt(0))]);
+            // Convert base64 to Uint8Array for hash verification
+            const decryptedBytes = Uint8Array.from(atob(decryptedData), c => c.charCodeAt(0));
+            
+            // Verify file integrity
+            const calculatedHash = calculateSHA256(decryptedBytes);
+            if (calculatedHash !== expectedHash) {
+                showError('File integrity check failed. The file may be corrupted.');
+                return;
+            }
+
+            // Create and download the file
+            const blob = new Blob([decryptedBytes]);
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -168,6 +300,60 @@ async function downloadFile(filename, hint) {
     }
 }
 
+async function loadFiles() {
+    try {
+        const response = await fetch('/api/files', {
+            headers: {
+                'Authorization': `Bearer ${localStorage.getItem('token')}`,
+            },
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            const filesList = document.getElementById('filesList');
+            filesList.innerHTML = '';
+
+            data.files.forEach(file => {
+                const fileElement = document.createElement('div');
+                fileElement.className = 'file-item';
+                fileElement.innerHTML = `
+                    <div class="file-info">
+                        <strong>${file.filename}</strong>
+                        <span class="file-size">${file.size_readable}</span>
+                        <span class="file-date">${new Date(file.uploadDate).toLocaleString()}</span>
+                        <span class="encryption-type">${file.passwordType === 'account' ? '🔑 Account Password' : '🔒 Custom Password'}</span>
+                    </div>
+                    <div class="file-actions">
+                        <button onclick="downloadFile('${file.filename}', '${file.passwordHint}', '${file.sha256sum}', '${file.passwordType}')">Download</button>
+                    </div>
+                `;
+                filesList.appendChild(fileElement);
+            });
+
+            // Update storage info
+            updateStorageInfo(data.storage);
+        } else {
+            showError('Failed to load files.');
+        }
+    } catch (error) {
+        showError('An error occurred while loading files.');
+    }
+}
+
+function updateStorageInfo(storage) {
+    const storageInfo = document.getElementById('storageInfo');
+    if (!storageInfo) return;
+
+    storageInfo.innerHTML = `
+        <div class="storage-bar">
+            <div class="used" style="width: ${storage.usage_percent}%"></div>
+        </div>
+        <div class="storage-text">
+            Used: ${storage.total_readable} of ${storage.limit_readable} (${storage.usage_percent.toFixed(1)}%)
+        </div>
+    `;
+}
+
 // UI helper functions
 function toggleAuthForm() {
     document.getElementById('login-form').classList.toggle('hidden');
@@ -179,16 +365,25 @@ function showFileSection() {
     document.getElementById('file-section').classList.remove('hidden');
 }
 
+function showAuthSection() {
+    document.getElementById('auth-section').classList.remove('hidden');
+    document.getElementById('file-section').classList.add('hidden');
+}
+
 function showError(message) {
-    // Implement error display logic
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'error-message';
+    errorDiv.textContent = message;
+    document.body.appendChild(errorDiv);
+    setTimeout(() => errorDiv.remove(), 5000);
 }
 
 function showSuccess(message) {
-    // Implement success display logic
-}
-
-async function loadFiles() {
-    // Implement file listing logic
+    const successDiv = document.createElement('div');
+    successDiv.className = 'success-message';
+    successDiv.textContent = message;
+    document.body.appendChild(successDiv);
+    setTimeout(() => successDiv.remove(), 5000);
 }
 
 // Event listeners
@@ -197,4 +392,39 @@ window.addEventListener('load', () => {
         showFileSection();
         loadFiles();
     }
+    
+    // Set up password type toggle handling
+    const passwordTypeRadios = document.querySelectorAll('input[name="passwordType"]');
+    const customPasswordSection = document.getElementById('customPasswordSection');
+    const filePassword = document.getElementById('filePassword');
+    
+    passwordTypeRadios.forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            const useCustomPassword = e.target.value === 'custom';
+            customPasswordSection.classList.toggle('hidden', !useCustomPassword);
+            if (!useCustomPassword) {
+                filePassword.value = ''; // Clear password field when switching to account password
+            }
+        });
+    });
+
+    // Setup password strength monitoring for registration
+    const registerPassword = document.getElementById('register-password');
+    const registerContainer = document.querySelector('.register-form .password-section');
+    registerPassword?.addEventListener('input', (e) => {
+        securityUtils.updatePasswordStrengthUI(e.target.value, registerContainer);
+    });
+
+    // Setup password strength monitoring for file upload
+    filePassword?.addEventListener('input', (e) => {
+        securityUtils.updatePasswordStrengthUI(e.target.value, customPasswordSection);
+    });
 });
+
+// Check session validity periodically
+setInterval(() => {
+    const securityContext = window.arkfileSecurityContext;
+    if (securityContext && Date.now() > securityContext.expiresAt) {
+        delete window.arkfileSecurityContext;
+    }
+}, 60000); // Check every minute

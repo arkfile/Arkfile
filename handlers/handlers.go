@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode"
 
 	"github.com/labstack/echo/v4"
 	"github.com/minio/minio-go/v7"
@@ -16,6 +17,16 @@ import (
 	"github.com/84adam/arkfile/models"
 	"github.com/84adam/arkfile/storage"
 )
+
+// isHexString checks if a string contains only hexadecimal characters
+func isHexString(s string) bool {
+	for _, r := range s {
+		if !unicode.Is(unicode.ASCII_Hex_Digit, r) {
+			return false
+		}
+	}
+	return true
+}
 
 // Register handles user registration
 func Register(c echo.Context) error {
@@ -28,9 +39,36 @@ func Register(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
 	}
 
-	// Validate email and password
-	if !strings.Contains(request.Email, "@") || len(request.Password) < 8 {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid email or password")
+	// Validate email
+	if !strings.Contains(request.Email, "@") {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid email format")
+	}
+
+	// Validate password complexity
+	if len(request.Password) < 12 {
+		return echo.NewHTTPError(http.StatusBadRequest, "Password must be at least 12 characters long")
+	}
+
+	hasUppercase := false
+	hasLowercase := false
+	hasNumber := false
+	hasSymbol := false
+
+	for _, r := range request.Password {
+		switch {
+		case unicode.IsUpper(r):
+			hasUppercase = true
+		case unicode.IsLower(r):
+			hasLowercase = true
+		case unicode.IsNumber(r):
+			hasNumber = true
+		case unicode.IsPunct(r) || unicode.IsSymbol(r):
+			hasSymbol = true
+		}
+	}
+
+	if !hasUppercase || !hasLowercase || !hasNumber || !hasSymbol {
+		return echo.NewHTTPError(http.StatusBadRequest, "Password must contain uppercase, lowercase, numbers, and symbols")
 	}
 
 	// Create user
@@ -117,10 +155,22 @@ func UploadFile(c echo.Context) error {
 		Filename     string `json:"filename"`
 		Data         string `json:"data"`
 		PasswordHint string `json:"passwordHint"`
+		PasswordType string `json:"passwordType"`
+		SHA256Sum    string `json:"sha256sum"`
 	}
 
 	if err := c.Bind(&request); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+	}
+
+	// Validate SHA-256 hash format
+	if len(request.SHA256Sum) != 64 || !isHexString(request.SHA256Sum) {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid SHA-256 hash")
+	}
+
+	// Validate password type
+	if request.PasswordType != "account" && request.PasswordType != "custom" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid password type")
 	}
 
 	// Check if file size would exceed user's limit
@@ -136,7 +186,7 @@ func UploadFile(c echo.Context) error {
 	}
 	defer tx.Rollback() // Rollback if not committed
 
-	// Store file in Backblaze
+	// Store file in object storage backend
 	_, err = storage.MinioClient.PutObject(
 		c.Request().Context(),
 		storage.BucketName,
@@ -152,8 +202,8 @@ func UploadFile(c echo.Context) error {
 
 	// Store metadata in database
 	_, err = tx.Exec(
-		"INSERT INTO file_metadata (filename, owner_email, password_hint, size_bytes) VALUES (?, ?, ?, ?)",
-		request.Filename, email, request.PasswordHint, fileSize,
+		"INSERT INTO file_metadata (filename, owner_email, password_hint, password_type, sha256sum, size_bytes) VALUES (?, ?, ?, ?, ?, ?)",
+		request.Filename, email, request.PasswordHint, request.PasswordType, request.SHA256Sum, fileSize,
 	)
 	if err != nil {
 		// If metadata storage fails, delete the uploaded file
@@ -210,14 +260,18 @@ func DownloadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
-	// Get password hint
-	var passwordHint string
-	database.DB.QueryRow(
-		"SELECT password_hint FROM file_metadata WHERE filename = ?",
+	// Get file metadata
+	var fileMetadata struct {
+		PasswordHint string
+		PasswordType string
+		SHA256Sum    string
+	}
+	err = database.DB.QueryRow(
+		"SELECT password_hint, password_type, sha256sum FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&passwordHint)
+	).Scan(&fileMetadata.PasswordHint, &fileMetadata.PasswordType, &fileMetadata.SHA256Sum)
 
-	// Get file from Backblaze
+	// Get file from object storage backend
 	object, err := storage.MinioClient.GetObject(
 		c.Request().Context(),
 		storage.BucketName,
@@ -241,7 +295,9 @@ func DownloadFile(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"data":         string(data),
-		"passwordHint": passwordHint,
+		"passwordHint": fileMetadata.PasswordHint,
+		"passwordType": fileMetadata.PasswordType,
+		"sha256sum":    fileMetadata.SHA256Sum,
 	})
 }
 
@@ -250,7 +306,7 @@ func ListFiles(c echo.Context) error {
 	email := auth.GetEmailFromToken(c)
 
 	rows, err := database.DB.Query(`
-		SELECT filename, password_hint, size_bytes, upload_date 
+		SELECT filename, password_hint, password_type, sha256sum, size_bytes, upload_date 
 		FROM file_metadata 
 		WHERE owner_email = ?
 		ORDER BY upload_date DESC
@@ -266,11 +322,13 @@ func ListFiles(c echo.Context) error {
 		var file struct {
 			Filename     string
 			PasswordHint string
+			PasswordType string
+			SHA256Sum    string
 			SizeBytes    int64
 			UploadDate   string
 		}
 
-		if err := rows.Scan(&file.Filename, &file.PasswordHint, &file.SizeBytes, &file.UploadDate); err != nil {
+		if err := rows.Scan(&file.Filename, &file.PasswordHint, &file.PasswordType, &file.SHA256Sum, &file.SizeBytes, &file.UploadDate); err != nil {
 			logging.ErrorLogger.Printf("Error scanning file row: %v", err)
 			continue
 		}
@@ -278,6 +336,8 @@ func ListFiles(c echo.Context) error {
 		files = append(files, map[string]interface{}{
 			"filename":      file.Filename,
 			"passwordHint":  file.PasswordHint,
+			"passwordType":  file.PasswordType,
+			"sha256sum":     file.SHA256Sum,
 			"size_bytes":    file.SizeBytes,
 			"size_readable": formatBytes(file.SizeBytes),
 			"uploadDate":    file.UploadDate,

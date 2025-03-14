@@ -134,10 +134,16 @@ func createTables() {
         filename TEXT UNIQUE NOT NULL,
         owner_email TEXT NOT NULL,
         password_hint TEXT,
+        password_type TEXT NOT NULL DEFAULT 'custom',
+        sha256sum CHAR(64) NOT NULL,
         size_bytes BIGINT NOT NULL DEFAULT 0,
         upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (owner_email) REFERENCES users(email)
-    );`
+    );
+    
+    -- Create index for faster lookups by hash
+    CREATE INDEX IF NOT EXISTS idx_file_metadata_sha256sum ON file_metadata(sha256sum);
+    `
 
 	// Access logs table
 	accessLogsTable := `CREATE TABLE IF NOT EXISTS access_logs (

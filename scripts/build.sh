@@ -32,7 +32,7 @@ mkdir -p ${BUILD_DIR}
 
 # Build WebAssembly
 echo "Building WebAssembly..."
-GOOS=js GOARCH=wasm go build -o ${BUILD_DIR}/${WASM_DIR}/main.wasm ./${WASM_DIR}
+GOOS=js GOARCH=wasm go build -o ${BUILD_DIR}/${WASM_DIR}/main.wasm ./${WASM_DIR}/main.go
 cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" ${BUILD_DIR}/${WASM_DIR}/
 
 # Build main application with version information

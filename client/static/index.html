@@ -25,8 +25,20 @@
             <div class="register-form hidden" id="register-form">
                 <h2>Register</h2>
                 <input type="email" id="register-email" placeholder="Email">
-                <input type="password" id="register-password" placeholder="Password">
-                <input type="password" id="register-password-confirm" placeholder="Confirm Password">
+                <div class="password-section">
+                    <input type="password" id="register-password" placeholder="Password (min. 12 characters)">
+                    <div class="password-requirements">
+                        <div id="register-password-strength" class="strength-meter"></div>
+                        <ul class="requirements-list">
+                            <li>At least 12 characters</li>
+                            <li>At least one uppercase letter</li>
+                            <li>At least one lowercase letter</li>
+                            <li>At least one number</li>
+                            <li>At least one special character</li>
+                        </ul>
+                    </div>
+                    <input type="password" id="register-password-confirm" placeholder="Confirm Password">
+                </div>
                 <button onclick="register()">Register</button>
                 <p>Already have an account? <a href="#" onclick="toggleAuthForm()">Login</a></p>
             </div>
@@ -36,7 +48,35 @@
             <div class="upload-section">
                 <h2>Upload File</h2>
                 <input type="file" id="fileInput">
-                <input type="password" id="filePassword" placeholder="File Password">
+                
+                <div class="password-options">
+                    <h3>Encryption Password</h3>
+                    
+                    <div class="option">
+                        <input type="radio" name="passwordType" id="useAccountPassword" value="account" checked>
+                        <label for="useAccountPassword">Use my account password (recommended)</label>
+                    </div>
+                    
+                    <div class="option">
+                        <input type="radio" name="passwordType" id="useCustomPassword" value="custom">
+                        <label for="useCustomPassword">Use a custom password for this file</label>
+                    </div>
+                </div>
+                
+                <div id="customPasswordSection" class="hidden">
+                    <input type="password" id="filePassword" placeholder="Custom File Password (min. 12 characters)">
+                    <div class="password-requirements">
+                        <div id="password-strength" class="strength-meter"></div>
+                        <ul class="requirements-list">
+                            <li>At least 12 characters</li>
+                            <li>At least one uppercase letter</li>
+                            <li>At least one lowercase letter</li>
+                            <li>At least one number</li>
+                            <li>At least one special character</li>
+                        </ul>
+                    </div>
+                </div>
+                
                 <input type="text" id="passwordHint" placeholder="Password Hint (optional)">
                 <button onclick="uploadFile()">Upload</button>
             </div>
