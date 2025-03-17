@@ -4,22 +4,22 @@ import (
     "os"
     "time"
 
-    "github.com/golang-jwt/jwt"
+    "github.com/golang-jwt/jwt/v5"
     "github.com/labstack/echo/v4"
-    "github.com/labstack/echo/v4/middleware"
+    echojwt "github.com/labstack/echo-jwt/v4"
 )
 
 type Claims struct {
     Email string `json:"email"`
-    jwt.StandardClaims
+    jwt.RegisteredClaims
 }
 
 func GenerateToken(email string) (string, error) {
     claims := &Claims{
         Email: email,
-        StandardClaims: jwt.StandardClaims{
-            ExpiresAt: time.Now().Add(time.Hour * 72).Unix(), // Token expires in 72 hours
-            IssuedAt:  time.Now().Unix(),
+        RegisteredClaims: jwt.RegisteredClaims{
+            ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 72)), // Token expires in 72 hours
+            IssuedAt:  jwt.NewNumericDate(time.Now()),
         },
     }
 
@@ -28,14 +28,16 @@ func GenerateToken(email string) (string, error) {
 }
 
 func JWTMiddleware() echo.MiddlewareFunc {
-    config := middleware.JWTConfig{
-        Claims:     &Claims{},
+    config := echojwt.Config{
+        NewClaimsFunc: func(c echo.Context) jwt.Claims {
+            return new(Claims)
+        },
         SigningKey: []byte(os.Getenv("JWT_SECRET")),
-        ErrorHandler: func(err error) error {
+        ErrorHandler: func(c echo.Context, err error) error {
             return echo.NewHTTPError(401, "Unauthorized")
         },
     }
-    return middleware.JWTWithConfig(config)
+    return echojwt.WithConfig(config)
 }
 
 func GetEmailFromToken(c echo.Context) string {
