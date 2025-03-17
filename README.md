@@ -15,7 +15,10 @@
    - Go HTTP server (Echo framework)
    - JWT authentication
    - rqlite distributed database
-   - S3-compatible object storage (via MinIO client)
+   - S3-compatible object storage via:
+     - External providers (Backblaze B2, Wasabi, or Vultr), or
+     - Local MinIO storage, or
+     - MinIO distributed cluster
 
 3. **External Services**
    - S3-compatible storage providers (Backblaze B2, Wasabi, or Vultr)
@@ -97,13 +100,26 @@ The application uses dedicated service accounts for improved security:
 Environment-specific variables are stored in `/opt/arkfile/etc/<env>/secrets.env`:
 
 ```
-# S3-Compatible Storage Configuration
-STORAGE_PROVIDER=...  # backblaze, wasabi, or vultr
+# Storage Provider Configuration
+STORAGE_PROVIDER=...  # backblaze, wasabi, vultr, local, or cluster
+
+# For S3-Compatible Providers (backblaze, wasabi, vultr)
 S3_ENDPOINT=...       # Required for Backblaze
 S3_REGION=...         # Required for Wasabi/Vultr
 S3_ACCESS_KEY_ID=... 
 S3_SECRET_KEY=...
 S3_BUCKET_NAME=...
+
+# For Local MinIO Storage (when STORAGE_PROVIDER=local)
+LOCAL_STORAGE_PATH=... # Path to store data (e.g., /opt/arkfile/var/lib/prod/minio/data)
+MINIO_ROOT_USER=...    # Override default MinIO credentials if needed
+MINIO_ROOT_PASSWORD=... # Override default MinIO credentials if needed
+
+# For MinIO Cluster (when STORAGE_PROVIDER=cluster)
+MINIO_CLUSTER_NODES=...        # Comma-separated list of node addresses
+MINIO_CLUSTER_ACCESS_KEY=...   # Cluster authentication
+MINIO_CLUSTER_SECRET_KEY=...   # Cluster authentication
+MINIO_CLUSTER_BUCKET=...       # Default bucket name (defaults to "arkfile")
 
 # Database Configuration
 RQLITE_NODES=...      # Comma-separated list of rqlite nodes
@@ -120,7 +136,7 @@ CADDY_EMAIL=...
 
 ## Storage Provider Support
 
-The application supports multiple S3-compatible storage providers:
+The application supports multiple storage providers:
 
 1. **Backblaze B2**
    - Set `STORAGE_PROVIDER=backblaze`
@@ -139,6 +155,21 @@ The application supports multiple S3-compatible storage providers:
    - Server-side encryption included
    - Potential cost benefits when used with Vultr hosting
 
+4. **Local MinIO Storage**
+   - Set `STORAGE_PROVIDER=local`
+   - Uses MinIO in filesystem mode for local data storage
+   - Requires `LOCAL_STORAGE_PATH` to specify storage location
+   - Ideal for testing, development, or self-hosted environments
+   - Configured with `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` (defaults to minioadmin/minioadmin)
+
+5. **MinIO Cluster**
+   - Set `STORAGE_PROVIDER=cluster`
+   - Uses MinIO in distributed mode across multiple nodes
+   - Requires `MINIO_CLUSTER_NODES` (comma-separated list of node addresses)
+   - Authentication via `MINIO_CLUSTER_ACCESS_KEY` and `MINIO_CLUSTER_SECRET_KEY`
+   - Custom bucket name configurable via `MINIO_CLUSTER_BUCKET` (defaults to "arkfile")
+   - Provides high-availability and scale-out object storage solution
+
 ## Build and Deployment
 
 1. **Initial Setup**
@@ -149,15 +180,40 @@ The application supports multiple S3-compatible storage providers:
 
    # Setup rqlite cluster
    ./scripts/setup-rqlite.sh
+   
+   # Setup MinIO (for local or cluster storage options)
+   ./scripts/setup-minio.sh
    ```
 
-2. **Build Process**
+2. **Storage Configuration**
+   ```bash
+   # For local storage:
+   # Edit /opt/arkfile/etc/<env>/secrets.env and set:
+   # STORAGE_PROVIDER=local
+   # LOCAL_STORAGE_PATH=/opt/arkfile/var/lib/<env>/minio/data
+   # Optional: MINIO_ROOT_USER and MINIO_ROOT_PASSWORD if not using defaults
+
+   # For cluster storage:
+   # Edit /opt/arkfile/etc/<env>/secrets.env and set:
+   # STORAGE_PROVIDER=cluster
+   # MINIO_CLUSTER_NODES=node1:9000,node2:9000,node3:9000
+   # MINIO_CLUSTER_ACCESS_KEY and MINIO_CLUSTER_SECRET_KEY
+   # Optional: MINIO_CLUSTER_BUCKET if not using default "arkfile"
+   
+   # Start MinIO service
+   sudo systemctl start minio@<env>
+   
+   # Enable MinIO service
+   sudo systemctl enable minio@<env>
+   ```
+
+3. **Build Process**
    ```bash
    # Build for all environments
    ./scripts/build.sh
    ```
 
-3. **Deployment**
+4. **Deployment**
    ```bash
    # Deploy to production
    ./scripts/deploy.sh prod
@@ -166,7 +222,7 @@ The application supports multiple S3-compatible storage providers:
    ./scripts/deploy.sh test
    ```
 
-4. **Rollback (if needed)**
+5. **Rollback (if needed)**
    ```bash
    # Rollback production
    ./scripts/rollback.sh prod
@@ -244,6 +300,10 @@ The application supports multiple S3-compatible storage providers:
    # Check database cluster status
    systemctl status rqlite@prod
    systemctl status rqlite@test
+   
+   # Check MinIO storage status (when using local or cluster storage)
+   systemctl status minio@prod
+   systemctl status minio@test
 
    # View application logs
    journalctl -u arkfile@prod -f
@@ -252,6 +312,10 @@ The application supports multiple S3-compatible storage providers:
    # View database logs
    journalctl -u rqlite@prod -f
    journalctl -u rqlite@test -f
+   
+   # View MinIO logs
+   journalctl -u minio@prod -f
+   journalctl -u minio@test -f
    ```
 
 2. **Release Management**
