@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ArkFile - File Sharing</title>
+    <link rel="stylesheet" href="/css/styles.css">
+    <style>
+        .hidden { display: none; }
+        .card {
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            padding: 20px;
+        }
+        .key-item {
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            padding: 10px;
+        }
+        .primary-key { background-color: #f0f9ff; }
+        .key-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .share-link {
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+            word-break: break-all;
+        }
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+        }
+        .tab.active {
+            border-bottom: 2px solid #007bff;
+            font-weight: bold;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top: 4px solid #007bff;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .security-notice {
+            background-color: #fff8e1;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>ArkFile</h1>
+            <nav>
+                <a href="/">Home</a>
+                <a href="#" id="logoutBtn">Logout</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container">
+        <h2>File Sharing</h2>
+        <p>Manage encryption keys and share files securely</p>
+
+        <div class="tabs">
+            <div class="tab active" data-tab="keys">Encryption Keys</div>
+            <div class="tab" data-tab="shares">Active Shares</div>
+        </div>
+
+        <div id="keysTab" class="tab-content active">
+            <div class="card">
+                <h3>File Information</h3>
+                <p id="fileInfo"></p>
+                <div id="fileEncryption"></div>
+            </div>
+
+            <div id="encryptionKeys" class="card">
+                <h3>Encryption Keys</h3>
+                <div id="keysList"></div>
+                
+                <div class="security-notice" id="accountKeyNotice">
+                    <strong>Note:</strong> This file is encrypted with your account password. 
+                    To share it, add a custom password key below.
+                </div>
+                
+                <button id="addKeyBtn" class="btn primary">Add Custom Key</button>
+            </div>
+
+            <div id="addKeyForm" class="card hidden">
+                <h3>Add New Encryption Key</h3>
+                <form id="keyForm">
+                    <div class="form-group">
+                        <label for="keyLabel">Key Label:</label>
+                        <input type="text" id="keyLabel" placeholder="e.g., Sharing Key" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="customPassword">Password:</label>
+                        <input type="password" id="customPassword" required>
+                        <p class="helper-text">Must be at least 12 characters with uppercase, lowercase, numbers and symbols</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="confirmPassword">Confirm Password:</label>
+                        <input type="password" id="confirmPassword" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="passwordHint">Password Hint (Optional):</label>
+                        <input type="text" id="passwordHint" placeholder="Hint to help remember the password">
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" id="cancelAddKey" class="btn secondary">Cancel</button>
+                        <button type="submit" class="btn primary">Add Key</button>
+                    </div>
+                </form>
+            </div>
+
+            <div id="createShareForm" class="card hidden">
+                <h3>Create Share Link</h3>
+                <form id="shareForm">
+                    <div class="form-group">
+                        <label for="shareKeySelect">Encryption Key:</label>
+                        <select id="shareKeySelect" required></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="expiryHours">Expire After (Optional):</label>
+                        <select id="expiryHours">
+                            <option value="0">Never</option>
+                            <option value="24">1 Day</option>
+                            <option value="72">3 Days</option>
+                            <option value="168">1 Week</option>
+                            <option value="720">30 Days</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <p><strong>Note:</strong> The recipient will need the selected encryption key's password to decrypt the file.</p>
+                        <label>
+                            <input type="checkbox" id="addPassword"> 
+                            Add extra share link password
+                        </label>
+                        <p class="helper-text">This adds an additional password that the recipient must enter <em>before</em> they can access the download page. The file encryption password will still be required for decryption.</p>
+                    </div>
+                    <div id="extraPasswordFields" class="hidden">
+                        <div class="form-group">
+                            <label for="sharePassword">Share Password:</label>
+                            <input type="password" id="sharePassword">
+                        </div>
+                        <div class="form-group">
+                            <label for="confirmSharePassword">Confirm Password:</label>
+                            <input type="password" id="confirmSharePassword">
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button type="button" id="cancelCreateShare" class="btn secondary">Cancel</button>
+                        <button type="submit" class="btn primary">Create Share Link</button>
+                    </div>
+                </form>
+            </div>
+
+            <div id="shareResult" class="card hidden">
+                <h3>Share Link Created</h3>
+                <p>Your file is now shared with the following link:</p>
+                <div class="share-link" id="shareUrl"></div>
+                
+                <div id="sharePasswordDisplay" class="hidden">
+                    <p><strong>Decryption Password:</strong> <span id="decryptPassword"></span></p>
+                    <p class="helper-text">Make sure to provide this password to the recipient so they can decrypt the file.</p>
+                </div>
+                
+                <p>
+                    <button id="copyShareLink" class="btn secondary">Copy Link</button>
+                    <button id="doneSharing" class="btn primary">Done</button>
+                </p>
+            </div>
+            
+            <div class="actions">
+                <button id="shareFileBtn" class="btn primary">Share File</button>
+                <a href="/" class="btn secondary">Back to Files</a>
+            </div>
+        </div>
+
+        <div id="sharesTab" class="tab-content">
+            <div class="card">
+                <h3>Active Share Links</h3>
+                <div id="sharesList">
+                    <p>Loading...</p>
+                </div>
+            </div>
+            
+            <div class="actions">
+                <button id="createNewShare" class="btn primary">Create New Share</button>
+                <a href="/" class="btn secondary">Back to Files</a>
+            </div>
+        </div>
+    </main>
+
+    <script src="/js/security.js"></script>
+    <script src="/js/multi-key-encryption.js"></script>
+    <script>
+        // Constants and globals
+        const fileId = new URLSearchParams(window.location.search).get('file');
+        let fileData = null;
+        let fileKeys = [];
+        let activeShares = [];
+        
+        // DOM ready handler
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (!fileId) {
+                window.location.href = '/';
+                return;
+            }
+            
+            // Initialize UI
+            setupEventListeners();
+            await loadFileData();
+            await loadFileKeys();
+            await loadShares();
+            
+            // Update UI based on file data
+            updateFileInfo();
+            updateKeysList();
+            updateShareKeySelect();
+            updateShareButtons();
+        });
+        
+        // Load file data
+        async function loadFileData() {
+            try {
+                const response = await fetch(`/api/files/${fileId}`, {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to load file data');
+                }
+                
+                fileData = await response.json();
+            } catch (error) {
+                showError('Error loading file data: ' + error.message);
+            }
+        }
+        
+        // Load file encryption keys
+        async function loadFileKeys() {
+            try {
+                const response = await fetch(`/api/files/${fileId}/keys`, {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to load encryption keys');
+                }
+                
+                const data = await response.json();
+                fileKeys = data.keys || [];
+                
+                // Show/hide account key notice based on file encryption type
+                const accountKeyNotice = document.getElementById('accountKeyNotice');
+                if (data.isMultiKey || fileData?.passwordType === 'custom') {
+                    accountKeyNotice.classList.add('hidden');
+                } else {
+                    accountKeyNotice.classList.remove('hidden');
+                }
+            } catch (error) {
+                showError('Error loading encryption keys: ' + error.message);
+            }
+        }
+        
+        // Load active shares
+        async function loadShares() {
+            try {
+                const response = await fetch('/api/user/shares', {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to load shares');
+                }
+                
+                const data = await response.json();
+                activeShares = data.shares || [];
+                
+                // Filter shares for current file
+                activeShares = activeShares.filter(share => share.fileId === fileId);
+                
+                // Update shares list
+                updateSharesList();
+            } catch (error) {
+                showError('Error loading shares: ' + error.message);
+            }
+        }
+        
+        // Setup event listeners
+        function setupEventListeners() {
+            // Tab switching
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.addEventListener('click', (e) => {
+                    const tabId = e.currentTarget.getAttribute('data-tab');
+                    activateTab(tabId);
+                });
+            });
+            
+            // Add key form
+            document.getElementById('addKeyBtn').addEventListener('click', () => {
+                document.getElementById('addKeyForm').classList.remove('hidden');
+            });
+            
+            document.getElementById('cancelAddKey').addEventListener('click', () => {
+                document.getElementById('addKeyForm').classList.add('hidden');
+                document.getElementById('keyForm').reset();
+            });
+            
+            document.getElementById('keyForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                await addEncryptionKey();
+            });
+            
+            // Share file functionality
+            document.getElementById('shareFileBtn').addEventListener('click', () => {
+                document.getElementById('createShareForm').classList.remove('hidden');
+            });
+            
+            document.getElementById('cancelCreateShare').addEventListener('click', () => {
+                document.getElementById('createShareForm').classList.add('hidden');
+                document.getElementById('shareForm').reset();
+            });
+            
+            document.getElementById('addPassword').addEventListener('change', (e) => {
+                if (e.target.checked) {
+                    document.getElementById('extraPasswordFields').classList.remove('hidden');
+                } else {
+                    document.getElementById('extraPasswordFields').classList.add('hidden');
+                }
+            });
+            
+            document.getElementById('shareForm').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                await createShareLink();
+            });
+            
+            // Copy share link button
+            document.getElementById('copyShareLink').addEventListener('click', () => {
+                const shareLink = document.getElementById('shareUrl').textContent;
+                navigator.clipboard.writeText(shareLink)
+                    .then(() => alert('Share link copied to clipboard'))
+                    .catch(err => console.error('Failed to copy link', err));
+            });
+            
+            // Done sharing button
+            document.getElementById('doneSharing').addEventListener('click', () => {
+                document.getElementById('shareResult').classList.add('hidden');
+                loadShares(); // Reload shares list
+            });
+            
+            // Create new share button (in shares tab)
+            document.getElementById('createNewShare').addEventListener('click', () => {
+                activateTab('keys');
+                document.getElementById('createShareForm').classList.remove('hidden');
+            });
+            
+            // Logout button
+            document.getElementById('logoutBtn').addEventListener('click', () => {
+                localStorage.removeItem('token');
+                window.location.href = '/';
+            });
+        }
+        
+        // Add a new encryption key
+        async function addEncryptionKey() {
+            const keyLabel = document.getElementById('keyLabel').value;
+            const customPassword = document.getElementById('customPassword').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+            const passwordHint = document.getElementById('passwordHint').value;
+            
+            // Validate password
+            if (customPassword !== confirmPassword) {
+                alert('Passwords do not match');
+                return;
+            }
+            
+            const validation = securityUtils.validatePassword(customPassword);
+            if (!validation.valid) {
+                alert(validation.message);
+                return;
+            }
+            
+            try {
+                // Show loading state
+                const submitBtn = document.querySelector('#keyForm button[type="submit"]');
+                const originalText = submitBtn.textContent;
+                submitBtn.innerHTML = '<span class="spinner"></span> Processing...';
+                submitBtn.disabled = true;
+                
+                // Add the key
+                const result = await window.arkfileEncryption.addSharingKey(
+                    fileId,
+                    customPassword,
+                    keyLabel,
+                    passwordHint
+                );
+                
+                if (result.success) {
+                    // Reset form and hide it
+                    document.getElementById('keyForm').reset();
+                    document.getElementById('addKeyForm').classList.add('hidden');
+                    
+                    // Reload keys
+                    await loadFileKeys();
+                    updateKeysList();
+                    updateShareKeySelect();
+                    
+                    alert('Encryption key added successfully');
+                } else {
+                    throw new Error(result.error || 'Failed to add key');
+                }
+            } catch (error) {
+                showError('Error adding encryption key: ' + error.message);
+            } finally {
+                // Restore button state
+                submitBtn.innerHTML = originalText;
+                submitBtn.disabled = false;
+            }
+        }
+        
+        // Create a share link
+        async function createShareLink() {
+            const keySelect = document.getElementById('shareKeySelect');
+            const expiryHours = parseInt(document.getElementById('expiryHours').value, 10);
+            const addPassword = document.getElementById('addPassword').checked;
+            
+            // Get selected key data
+            const selectedKeyId = keySelect.value;
+            const selectedKey = fileKeys.find(key => key.keyId === selectedKeyId);
+            
+            if (!selectedKey) {
+                alert('Please select an encryption key');
+                return;
+            }
+            
+            // Check if additional password protection is needed
+            let sharePassword = null;
+            if (addPassword) {
+                const password = document.getElementById('sharePassword').value;
+                const confirmPassword = document.getElementById('confirmSharePassword').value;
+                
+                if (!password) {
+                    alert('Please enter a share password');
+                    return;
+                }
+                
+                if (password !== confirmPassword) {
+                    alert('Share passwords do not match');
+                    return;
+                }
+                
+                sharePassword = password;
+            }
+            
+            try {
+                // Show loading state
+                const submitBtn = document.querySelector('#shareForm button[type="submit"]');
+                const originalText = submitBtn.textContent;
+                submitBtn.innerHTML = '<span class="spinner"></span> Processing...';
+                submitBtn.disabled = true;
+                
+                // Create the share
+                const result = await window.arkfileEncryption.createShareLink(
+                    fileId,
+                    null,  // Custom password is already in the key
+                    selectedKey.keyLabel,
+                    selectedKey.passwordHint,
+                    expiryHours
+                );
+                
+                if (result.success) {
+                    // Display the share URL
+                    document.getElementById('shareUrl').textContent = result.shareUrl;
+                    
+                    // Show password if it's a custom key
+                    if (selectedKey.keyType === 'custom') {
+                        document.getElementById('decryptPassword').textContent = selectedKey.password || 'Stored in system';
+                        document.getElementById('sharePasswordDisplay').classList.remove('hidden');
+                    } else {
+                        document.getElementById('sharePasswordDisplay').classList.add('hidden');
+                    }
+                    
+                    // Show the result panel and hide the form
+                    document.getElementById('createShareForm').classList.add('hidden');
+                    document.getElementById('shareResult').classList.remove('hidden');
+                    document.getElementById('shareForm').reset();
+                    
+                    // Reset extra password fields
+                    document.getElementById('extraPasswordFields').classList.add('hidden');
+                } else {
+                    throw new Error(result.error || 'Failed to create share link');
+                }
+            } catch (error) {
+                showError('Error creating share link: ' + error.message);
+            } finally {
+                // Restore button state
+                submitBtn.innerHTML = originalText;
+                submitBtn.disabled = false;
+            }
+        }
+        
+        // Delete a share
+        async function deleteShare(shareId) {
+            if (!confirm('Are you sure you want to delete this share link?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/share/${shareId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to delete share');
+                }
+                
+                // Reload shares
+                await loadShares();
+                
+                alert('Share link deleted successfully');
+            } catch (error) {
+                showError('Error deleting share: ' + error.message);
+            }
+        }
+        
+        // Set a key as primary
+        async function setPrimaryKey(keyId) {
+            if (!confirm('Set this key as the primary key for the file?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/files/${fileId}/keys/${keyId}/set-primary`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to set primary key');
+                }
+                
+                // Reload keys
+                await loadFileKeys();
+                updateKeysList();
+                
+                alert('Primary key updated successfully');
+            } catch (error) {
+                showError('Error setting primary key: ' + error.message);
+            }
+        }
+        
+        // Delete a key
+        async function deleteKey(keyId) {
+            if (!confirm('Are you sure you want to delete this encryption key?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/files/${fileId}/keys/${keyId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to delete key');
+                }
+                
+                // Reload keys
+                await loadFileKeys();
+                updateKeysList();
+                updateShareKeySelect();
+                
+                alert('Encryption key deleted successfully');
+            } catch (error) {
+                showError('Error deleting key: ' + error.message);
+            }
+        }
+        
+        // Update file info display
+        function updateFileInfo() {
+            if (!fileData) return;
+            
+            const fileInfoEl = document.getElementById('fileInfo');
+            const fileEncryptionEl = document.getElementById('fileEncryption');
+            
+            fileInfoEl.innerHTML = `
+                <strong>Filename:</strong> ${fileData.filename}<br>
+                <strong>Size:</strong> ${fileData.size_readable}<br>
+                <strong>Uploaded:</strong> ${formatDate(fileData.uploadDate)}
+            `;
+            
+            fileEncryptionEl.innerHTML = `
+                <strong>Encryption Type:</strong> ${fileData.passwordType === 'account' ? 'Account Password' : 'Custom Password'}<br>
+                ${fileData.passwordHint ? `<strong>Password Hint:</strong> ${fileData.passwordHint}<br>` : ''}
+                <strong>Multi-Key Enabled:</strong> ${fileData.multiKey ? 'Yes' : 'No'}
+            `;
+        }
+        
+        // Update keys list display
+        function updateKeysList() {
+            const keysListEl = document.getElementById('keysList');
+            
+            if (!fileKeys || fileKeys.length === 0) {
+                keysListEl.innerHTML = '<p>No encryption keys found for this file.</p>';
+                return;
+            }
+            
+            let html = '';
+            
+            fileKeys.forEach(key => {
+                const isPrimary = key.isPrimary;
+                
+                html += `
+                    <div class="key-item ${isPrimary ? 'primary-key' : ''}">
+                        <h4>${escapeHtml(key.keyLabel)} ${isPrimary ? '(Primary)' : ''}</h4>
+                        <div>
+                            <strong>Type:</strong> ${key.keyType === 'account' ? 'Account Password' : 'Custom Password'}<br>
+                            ${key.passwordHint ? `<strong>Hint:</strong> ${escapeHtml(key.passwordHint)}<br>` : ''}
+                            <strong>Created:</strong> ${formatDate(key.createdAt)}
+                        </div>
+                        <div class="key-actions">
+                            ${!isPrimary ? `<button class="btn secondary sm" onclick="setPrimaryKey('${key.keyId}')">Set as Primary</button>` : ''}
+                            ${key.keyType !== 'account' ? `<button class="btn warning sm" onclick="deleteKey('${key.keyId}')">Delete</button>` : ''}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            keysListEl.innerHTML = html;
+        }
+        
+        // Update shares list display
+        function updateSharesList() {
+            const sharesListEl = document.getElementById('sharesList');
+            
+            if (!activeShares || activeShares.length === 0) {
+                sharesListEl.innerHTML = '<p>No active shares for this file.</p>';
+                return;
+            }
+            
+            let html = '';
+            
+            activeShares.forEach(share => {
+                html += `
+                    <div class="key-item">
+                        <h4>Share Link</h4>
+                        <div class="share-link">${share.shareUrl}</div>
+                        <div>
+                            <strong>Created:</strong> ${formatDate(share.createdAt)}<br>
+                            ${share.expiresAt ? `<strong>Expires:</strong> ${formatDate(share.expiresAt)}<br>` : ''}
+                            ${share.lastAccessed ? `<strong>Last Accessed:</strong> ${formatDate(share.lastAccessed)}<br>` : ''}
+                            <strong>Password Protected:</strong> ${share.isPasswordProtected ? 'Yes' : 'No'}
+                        </div>
+                        <div class="key-actions">
+                            <button class="btn secondary sm" onclick="navigator.clipboard.writeText('${share.shareUrl}')">Copy Link</button>
+                            <button class="btn warning sm" onclick="deleteShare('${share.id}')">Delete</button>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            sharesListEl.innerHTML = html;
+        }
+        
+        // Update share key select dropdown
+        function updateShareKeySelect() {
+            const selectEl = document.getElementById('shareKeySelect');
+            selectEl.innerHTML = '';
+            
+            if (!fileKeys || fileKeys.length === 0) {
+                return;
+            }
+            
+            // Filter for custom keys (not account keys)
+            const customKeys = fileKeys.filter(key => key.keyType === 'custom');
+            
+            customKeys.forEach(key => {
+                const option = document.createElement('option');
+                option.value = key.keyId;
+                option.text = `${key.keyLabel}${key.isPrimary ? ' (Primary)' : ''}`;
+                selectEl.appendChild(option);
+            });
+            
+            // Disable share button if no custom keys
+            updateShareButtons();
+        }
+        
+        // Update share buttons based on available keys
+        function updateShareButtons() {
+            const shareBtn = document.getElementById('shareFileBtn');
+            const createNewBtn = document.getElementById('createNewShare');
+            
+            const hasCustomKeys = fileKeys.some(key => key.keyType === 'custom');
+            
+            shareBtn.disabled = !hasCustomKeys;
+            createNewBtn.disabled = !hasCustomKeys;
+            
+            if (!hasCustomKeys) {
+                shareBtn.title = "Add a custom key first to enable sharing";
+                createNewBtn.title = "Add a custom key first to enable sharing";
+            } else {
+                shareBtn.title = "";
+                createNewBtn.title = "";
+            }
+        }
+        
+        // Activate a tab
+        function activateTab(tabId) {
+            // Deactivate all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            
+            // Activate selected tab
+            document.querySelector(`.tab[data-tab="${tabId}"]`).classList.add('active');
+            document.getElementById(`${tabId}Tab`).classList.add('active');
+        }
+        
+        // Format date
+        function formatDate(dateString) {
+            if (!dateString) return 'N/A';
+            
+            const date = new Date(dateString);
+            return date.toLocaleString();
+        }
+        
+        // Show error message
+        function showError(message) {
+            alert(message);
+            console.error(message);
+        }
+        
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>

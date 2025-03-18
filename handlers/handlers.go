@@ -18,6 +18,9 @@ import (
 	"github.com/84adam/arkfile/storage"
 )
 
+// Echo is the global echo instance used for routing
+var Echo *echo.Echo
+
 // isHexString checks if a string contains only hexadecimal characters
 func isHexString(s string) bool {
 	for _, r := range s {

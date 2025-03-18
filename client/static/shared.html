@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ArkFile - Shared File</title>
+    <link rel="stylesheet" href="/css/styles.css">
+    <style>
+        .card {
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            padding: 20px;
+        }
+        .hidden { display: none; }
+        .file-info {
+            margin-bottom: 20px;
+        }
+        .password-form {
+            margin: 20px 0;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top: 4px solid #007bff;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .progress-bar {
+            width: 100%;
+            background-color: #e0e0e0;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .progress-bar-fill {
+            height: 10px;
+            background-color: #4CAF50;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+        .file-icon {
+            font-size: 48px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>ArkFile</h1>
+            <nav>
+                <a href="/">Home</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="container">
+        <div class="card">
+            <h2>Shared File</h2>
+            <div class="file-info">
+                <div class="file-icon">📄</div>
+                <h3 id="fileName">Loading...</h3>
+                <p id="fileDetails"></p>
+                <p id="passwordHint" class="hidden"></p>
+            </div>
+
+            <div id="passwordForm" class="password-form hidden">
+                <h4>This file is password protected</h4>
+                <p>Enter the password provided by the file owner to access this file.</p>
+                <form id="sharePasswordForm">
+                    <div class="form-group">
+                        <label for="password">Password:</label>
+                        <input type="password" id="password" placeholder="Enter file password" required>
+                    </div>
+                    <button type="submit" class="btn primary">Verify Password</button>
+                </form>
+            </div>
+
+            <div id="extraPasswordForm" class="password-form hidden">
+                <h4>Share Link Password Required</h4>
+                <p>This share link requires an additional password.</p>
+                <form id="shareAccessForm">
+                    <div class="form-group">
+                        <label for="accessPassword">Access Password:</label>
+                        <input type="password" id="accessPassword" placeholder="Enter share access password" required>
+                    </div>
+                    <button type="submit" class="btn primary">Access File</button>
+                </form>
+            </div>
+
+            <div id="downloadSection" class="hidden">
+                <div class="progress-container hidden">
+                    <div class="progress-bar">
+                        <div class="progress-bar-fill" id="progressBar"></div>
+                    </div>
+                    <p id="progressText">0%</p>
+                </div>
+                <button id="downloadBtn" class="btn primary">Download File</button>
+            </div>
+
+            <div id="statusMessage" class="hidden"></div>
+        </div>
+    </main>
+
+    <script src="/js/security.js"></script>
+    <script>
+        // Parse share ID from URL path
+        const pathSegments = window.location.pathname.split('/');
+        const shareId = pathSegments[pathSegments.length - 1];
+        
+        // State variables
+        let shareData = null;
+        let fileData = null;
+        let isSharePasswordVerified = false;
+        let isFilePasswordVerified = false;
+        
+        // DOM ready handler
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (!shareId) {
+                showError('Invalid share link');
+                return;
+            }
+            
+            try {
+                // Load share data
+                const response = await fetch(`/api/shared/${shareId}`);
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        showError('This share link does not exist or has been deleted.');
+                    } else if (response.status === 403) {
+                        showError('This share link has expired.');
+                    } else {
+                        showError('Failed to load shared file.');
+                    }
+                    return;
+                }
+                
+                shareData = await response.json();
+                
+                // Display file info
+                document.getElementById('fileName').textContent = shareData.fileName || 'Shared File';
+                
+                const fileDetailsEl = document.getElementById('fileDetails');
+                fileDetailsEl.innerHTML = `
+                    <strong>Shared by:</strong> ${shareData.ownerName || 'Anonymous'}<br>
+                    ${shareData.expiryDate ? `<strong>Expires:</strong> ${new Date(shareData.expiryDate).toLocaleString()}<br>` : ''}
+                `;
+                
+                // Handle password hint if present
+                if (shareData.passwordHint) {
+                    const hintEl = document.getElementById('passwordHint');
+                    hintEl.textContent = `Password Hint: ${shareData.passwordHint}`;
+                    hintEl.classList.remove('hidden');
+                }
+                
+                // Check if share link itself requires a password
+                if (shareData.passwordProtected && !isSharePasswordVerified) {
+                    document.getElementById('extraPasswordForm').classList.remove('hidden');
+                    document.getElementById('downloadSection').classList.add('hidden');
+                    document.getElementById('passwordForm').classList.add('hidden');
+                    
+                    // Add submit handler for share password form
+                    document.getElementById('shareAccessForm').addEventListener('submit', async (e) => {
+                        e.preventDefault();
+                        await verifySharePassword();
+                    });
+                } else {
+                    // Show file password form if needed, or download button
+                    if (shareData.isMultiKey) {
+                        document.getElementById('passwordForm').classList.remove('hidden');
+                        document.getElementById('downloadSection').classList.add('hidden');
+                        
+                        // Add submit handler for file password form
+                        document.getElementById('sharePasswordForm').addEventListener('submit', async (e) => {
+                            e.preventDefault();
+                            await decryptAndDownload();
+                        });
+                    } else {
+                        document.getElementById('passwordForm').classList.add('hidden');
+                        document.getElementById('downloadSection').classList.remove('hidden');
+                        
+                        // Add click handler for download button
+                        document.getElementById('downloadBtn').addEventListener('click', async () => {
+                            await downloadFile();
+                        });
+                    }
+                }
+                
+            } catch (error) {
+                showError('Error loading shared file: ' + error.message);
+            }
+        });
+        
+        // Verify share password (for password-protected share links)
+        async function verifySharePassword() {
+            const password = document.getElementById('accessPassword').value;
+            
+            if (!password) {
+                showStatus('Please enter the access password', 'error');
+                return;
+            }
+            
+            try {
+                // Show loading state
+                const submitBtn = document.querySelector('#shareAccessForm button');
+                submitBtn.innerHTML = '<span class="spinner"></span> Verifying...';
+                submitBtn.disabled = true;
+                
+                // Verify password
+                const response = await fetch(`/api/shared/${shareId}/auth`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ password })
+                });
+                
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        showStatus('Incorrect password. Please try again.', 'error');
+                    } else {
+                        showStatus('Failed to verify password. Please try again.', 'error');
+                    }
+                    submitBtn.innerHTML = 'Access File';
+                    submitBtn.disabled = false;
+                    return;
+                }
+                
+                // Password verified, show file password form or download button
+                isSharePasswordVerified = true;
+                document.getElementById('extraPasswordForm').classList.add('hidden');
+                
+                if (shareData.isMultiKey) {
+                    document.getElementById('passwordForm').classList.remove('hidden');
+                    
+                    // Add submit handler for file password form if not already added
+                    const fileForm = document.getElementById('sharePasswordForm');
+                    if (!fileForm.hasAttribute('data-initialized')) {
+                        fileForm.addEventListener('submit', async (e) => {
+                            e.preventDefault();
+                            await decryptAndDownload();
+                        });
+                        fileForm.setAttribute('data-initialized', 'true');
+                    }
+                } else {
+                    document.getElementById('downloadSection').classList.remove('hidden');
+                    
+                    // Add click handler for download button if not already added
+                    const downloadBtn = document.getElementById('downloadBtn');
+                    if (!downloadBtn.hasAttribute('data-initialized')) {
+                        downloadBtn.addEventListener('click', async () => {
+                            await downloadFile();
+                        });
+                        downloadBtn.setAttribute('data-initialized', 'true');
+                    }
+                }
+                
+            } catch (error) {
+                showStatus('Error verifying password: ' + error.message, 'error');
+                const submitBtn = document.querySelector('#shareAccessForm button');
+                submitBtn.innerHTML = 'Access File';
+                submitBtn.disabled = false;
+            }
+        }
+        
+        // Download file with password decryption
+        async function decryptAndDownload() {
+            const password = document.getElementById('password').value;
+            
+            if (!password) {
+                showStatus('Please enter the file password', 'error');
+                return;
+            }
+            
+            try {
+                // Show loading state
+                const submitBtn = document.querySelector('#sharePasswordForm button');
+                submitBtn.innerHTML = '<span class="spinner"></span> Processing...';
+                submitBtn.disabled = true;
+                
+                // First download the encrypted file
+                await downloadFile(password);
+                
+            } catch (error) {
+                showStatus('Error downloading file: ' + error.message, 'error');
+                const submitBtn = document.querySelector('#sharePasswordForm button');
+                submitBtn.innerHTML = 'Verify Password';
+                submitBtn.disabled = false;
+            }
+        }
+        
+        // Download file
+        async function downloadFile(password = null) {
+            try {
+                // Show progress UI
+                const progressContainer = document.querySelector('.progress-container');
+                progressContainer.classList.remove('hidden');
+                const progressBar = document.getElementById('progressBar');
+                const progressText = document.getElementById('progressText');
+                const downloadBtn = document.getElementById('downloadBtn');
+                
+                if (downloadBtn) {
+                    downloadBtn.innerHTML = '<span class="spinner"></span> Downloading...';
+                    downloadBtn.disabled = true;
+                }
+                
+                // Fetch the file data
+                const response = await fetch(`/api/shared/${shareId}/download`);
+                
+                if (!response.ok) {
+                    throw new Error('Failed to download file');
+                }
+                
+                fileData = await response.json();
+                
+                progressBar.style.width = '50%';
+                progressText.textContent = 'Decrypting...';
+                
+                // Decrypt the file - this would normally happen with WebAssembly
+                // For demonstration, we'll simulate the decryption with a timeout
+                setTimeout(() => {
+                    try {
+                        let decryptedData;
+                        
+                        if (fileData.isMultiKey && password) {
+                            // Decrypt with custom password for multi-key files
+                            decryptedData = window.securityUtils.decryptFileMultiKey(fileData.data, password);
+                        } else {
+                            // For non-multi-key files or when using the shared key
+                            decryptedData = window.securityUtils.decryptFile(fileData.data, password);
+                        }
+                        
+                        if (!decryptedData || decryptedData.startsWith('Failed')) {
+                            showStatus('Failed to decrypt file. Please check the password and try again.', 'error');
+                            resetDownloadButton();
+                            return;
+                        }
+                        
+                        // Verify file integrity with SHA-256 hash
+                        // This would normally be implemented in the security.js file
+                        
+                        progressBar.style.width = '100%';
+                        progressText.textContent = 'Complete!';
+                        
+                        // Create a download link
+                        const blob = new Blob([decryptedData]);
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = fileData.filename || shareData.fileName || 'downloaded-file';
+                        document.body.appendChild(a);
+                        a.click();
+                        
+                        // Clean up
+                        setTimeout(() => {
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                            resetDownloadButton();
+                            showStatus('File downloaded successfully!', 'success');
+                        }, 100);
+                        
+                    } catch (error) {
+                        showStatus('Error decrypting file: ' + error.message, 'error');
+                        resetDownloadButton();
+                    }
+                }, 1000); // Simulate decryption time
+                
+            } catch (error) {
+                showStatus('Error downloading file: ' + error.message, 'error');
+                resetDownloadButton();
+            }
+        }
+        
+        // Reset download button
+        function resetDownloadButton() {
+            const progressContainer = document.querySelector('.progress-container');
+            progressContainer.classList.add('hidden');
+            
+            const downloadBtn = document.getElementById('downloadBtn');
+            if (downloadBtn) {
+                downloadBtn.innerHTML = 'Download File';
+                downloadBtn.disabled = false;
+            }
+            
+            const submitBtn = document.querySelector('#sharePasswordForm button');
+            if (submitBtn) {
+                submitBtn.innerHTML = 'Verify Password';
+                submitBtn.disabled = false;
+            }
+        }
+        
+        // Show status message
+        function showStatus(message, type = 'info') {
+            const statusEl = document.getElementById('statusMessage');
+            statusEl.textContent = message;
+            statusEl.className = ''; // Reset classes
+            statusEl.classList.add(type, 'message');
+            statusEl.classList.remove('hidden');
+            
+            // For errors, also log to console
+            if (type === 'error') {
+                console.error(message);
+            }
+        }
+        
+        // Show error message
+        function showError(message) {
+            const fileNameEl = document.getElementById('fileName');
+            const fileDetailsEl = document.getElementById('fileDetails');
+            
+            fileNameEl.textContent = 'Error';
+            fileDetailsEl.innerHTML = `<p class="error">${message}</p>`;
+            
+            // Hide all forms
+            document.getElementById('passwordForm').classList.add('hidden');
+            document.getElementById('extraPasswordForm').classList.add('hidden');
+            document.getElementById('downloadSection').classList.add('hidden');
+            
+            // Show status message
+            showStatus(message, 'error');
+        }
+    </script>

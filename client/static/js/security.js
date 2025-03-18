@@ -1,193 +1,276 @@
-// security.js - Common security functions and TLS version checking
+/**
+ * Security utilities for ArkFile
+ * Provides interfaces to Go/WASM cryptographic functions
+ */
 
-// Styles for the security banner
-const bannerStyles = `
-.security-banner {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    padding: 12px;
-    background-color: #fff3cd;
-    border-bottom: 1px solid #ffeeba;
-    color: #856404;
-    z-index: 1000;
-    font-family: system-ui, -apple-system, sans-serif;
-    display: none;
-}
+// Create a namespace for security utilities
+window.securityUtils = (function() {
+    'use strict';
 
-.security-banner.warning {
-    background-color: #fff3cd;
-    border-color: #ffeeba;
-    color: #856404;
-}
-
-.banner-content {
-    max-width: 1200px;
-    margin: 0 auto;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.banner-icon {
-    flex-shrink: 0;
-}
-
-.banner-message {
-    flex-grow: 1;
-}
-
-.banner-learn-more {
-    color: inherit;
-    text-decoration: underline;
-    margin-left: 12px;
-}
-
-.banner-dismiss {
-    background: none;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    padding: 0 8px;
-    font-size: 20px;
-    opacity: 0.7;
-}
-
-.banner-dismiss:hover {
-    opacity: 1;
-}
-`;
-
-// Add styles to document
-const styleSheet = document.createElement('style');
-styleSheet.textContent = bannerStyles;
-document.head.appendChild(styleSheet);
-
-// Common password validation function
-function validatePassword(password) {
-    if (!password || password.length < 12) {
-        return {
-            valid: false,
-            message: 'Password must be at least 12 characters long'
-        };
-    }
-
-    const hasUppercase = /[A-Z]/.test(password);
-    const hasLowercase = /[a-z]/.test(password);
-    const hasNumber = /[0-9]/.test(password);
-    const hasSymbol = /[^A-Za-z0-9]/.test(password);
-
-    if (!hasUppercase || !hasLowercase || !hasNumber || !hasSymbol) {
-        return {
-            valid: false,
-            message: 'Password must contain uppercase, lowercase, numbers, and symbols'
-        };
-    }
-
-    return { valid: true };
-}
-
-// Update password strength UI for any password field
-function updatePasswordStrengthUI(password, container) {
-    if (!container) return;
-
-    const requirements = {
-        length: password.length >= 12,
-        uppercase: /[A-Z]/.test(password),
-        lowercase: /[a-z]/.test(password),
-        number: /[0-9]/.test(password),
-        symbol: /[^A-Za-z0-9]/.test(password)
+    // Flag to track WASM initialization
+    let wasmInitialized = false;
+    
+    // This will be populated with functions from WASM
+    const wasmFunctions = {
+        encryptFile: null,
+        decryptFile: null,
+        encryptFileMultiKey: null,
+        decryptFileMultiKey: null,
+        addKeyToEncryptedFile: null,
+        calculateSHA256: null
     };
 
-    // Update strength meter
-    const strengthMeter = container.querySelector('.strength-meter');
-    if (strengthMeter) {
-        const strength = Object.values(requirements).filter(Boolean).length;
-        const colors = ['#ff4d4d', '#ffaa00', '#ffdd00', '#00cc44', '#00aa44'];
-        const labels = ['Very Weak', 'Weak', 'Moderate', 'Strong', 'Very Strong'];
+    /**
+     * Ensures WASM is initialized before operations
+     * @returns {Promise<void>}
+     */
+    async function ensureWasmInitialized() {
+        if (!wasmInitialized) {
+            // Wait for WASM to be fully initialized
+            if (typeof window.arkfileWasm !== 'undefined' && 
+                typeof window.arkfileWasm.ready === 'function') {
+                
+                await window.arkfileWasm.ready();
+                
+                // Map WASM functions to our interface
+                wasmFunctions.encryptFile = window.arkfileWasm.encryptFile;
+                wasmFunctions.decryptFile = window.arkfileWasm.decryptFile;
+                wasmFunctions.encryptFileMultiKey = window.arkfileWasm.encryptFileMultiKey;
+                wasmFunctions.decryptFileMultiKey = window.arkfileWasm.decryptFileMultiKey;
+                wasmFunctions.addKeyToEncryptedFile = window.arkfileWasm.addKeyToEncryptedFile;
+                wasmFunctions.calculateSHA256 = window.arkfileWasm.calculateSHA256;
+                
+                wasmInitialized = true;
+            } else {
+                throw new Error('WASM module not available');
+            }
+        }
         
-        strengthMeter.style.width = `${(strength + 1) * 20}%`;
-        strengthMeter.style.backgroundColor = colors[strength];
-        strengthMeter.textContent = labels[strength];
+        return Promise.resolve();
     }
 
-    // Update requirement indicators
-    const requirementsList = container.querySelector('.requirements-list');
-    if (requirementsList) {
-        const items = requirementsList.getElementsByTagName('li');
-        if (items[0]) items[0].classList.toggle('met', requirements.length);
-        if (items[1]) items[1].classList.toggle('met', requirements.uppercase);
-        if (items[2]) items[2].classList.toggle('met', requirements.lowercase);
-        if (items[3]) items[3].classList.toggle('met', requirements.number);
-        if (items[4]) items[4].classList.toggle('met', requirements.symbol);
-    }
-}
+    /**
+     * Validates password complexity
+     * @param {string} password - Password to validate
+     * @returns {Object} - Validation result {valid: boolean, message: string}
+     */
+    function validatePassword(password) {
+        if (!password) {
+            return { valid: false, message: 'Password is required' };
+        }
 
-// Check TLS version from response headers
-const checkTLSVersion = () => {
-    const tlsVersion = document.querySelector('meta[name="x-tls-version"]')?.content ||
-                      document.head.querySelector('[name="x-tls-version"]')?.content;
+        if (password.length < 12) {
+            return { valid: false, message: 'Password must be at least 12 characters long' };
+        }
 
-    // Show warning for TLS 1.2
-    if (tlsVersion === '1.2' && !localStorage.getItem('tls-warning-dismissed')) {
-        showSecurityBanner({
-            message: 'Your connection is using TLS 1.2. For better security, ' +
-                    'please use a modern browser with TLS 1.3 support.',
-            level: 'warning',
-            dismissible: true,
-            learnMoreLink: '/docs/security#tls'
-        });
-    }
-};
+        const hasUppercase = /[A-Z]/.test(password);
+        const hasLowercase = /[a-z]/.test(password);
+        const hasNumber = /[0-9]/.test(password);
+        const hasSymbol = /[^A-Za-z0-9]/.test(password);
 
-// Show security banner with provided options
-const showSecurityBanner = (options) => {
-    // Remove any existing banner
-    const existingBanner = document.querySelector('.security-banner');
-    if (existingBanner) {
-        existingBanner.remove();
+        if (!hasUppercase || !hasLowercase || !hasNumber || !hasSymbol) {
+            return { 
+                valid: false, 
+                message: 'Password must contain uppercase, lowercase, numbers, and symbols' 
+            };
+        }
+
+        return { valid: true, message: 'Password meets requirements' };
     }
 
-    const banner = document.createElement('div');
-    banner.className = `security-banner ${options.level}`;
-    banner.innerHTML = `
-        <div class="banner-content">
-            <span class="banner-icon">⚠️</span>
-            <span class="banner-message">${options.message}</span>
-            ${options.learnMoreLink ? 
-                `<a href="${options.learnMoreLink}" class="banner-learn-more">
-                    Learn More
-                </a>` : 
-                ''
+    /**
+     * Converts an ArrayBuffer to a Base64 string
+     * @param {ArrayBuffer} buffer - The ArrayBuffer to convert
+     * @returns {string} - Base64 string
+     */
+    function arrayBufferToBase64(buffer) {
+        const bytes = new Uint8Array(buffer);
+        let binary = '';
+        for (let i = 0; i < bytes.byteLength; i++) {
+            binary += String.fromCharCode(bytes[i]);
+        }
+        return btoa(binary);
+    }
+
+    /**
+     * Converts a Base64 string to an ArrayBuffer
+     * @param {string} base64 - The Base64 string to convert
+     * @returns {ArrayBuffer} - Converted ArrayBuffer
+     */
+    function base64ToArrayBuffer(base64) {
+        const binaryString = atob(base64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        return bytes.buffer;
+    }
+
+    /**
+     * Encrypts a file using a password via WASM
+     * @param {ArrayBuffer|Uint8Array} fileData - File data to encrypt
+     * @param {string} password - Password for encryption
+     * @returns {Promise<string>} - Base64 encoded encrypted data
+     */
+    async function encryptFile(fileData, password) {
+        try {
+            await ensureWasmInitialized();
+            
+            // Ensure fileData is in the right format for WASM
+            const fileBytes = fileData instanceof ArrayBuffer ? 
+                new Uint8Array(fileData) : fileData;
+            
+            // Call the WASM encryption function
+            const encryptedData = await wasmFunctions.encryptFile(fileBytes, password);
+            
+            return encryptedData; // WASM already returns a base64 string
+        } catch (error) {
+            console.error('File encryption error:', error);
+            throw new Error('Failed to encrypt file: ' + error.message);
+        }
+    }
+
+    /**
+     * Decrypts a file using a password via WASM
+     * @param {string} encryptedData - Base64 encoded encrypted data
+     * @param {string} password - Password for decryption
+     * @returns {Promise<ArrayBuffer>} - Decrypted file data
+     */
+    async function decryptFile(encryptedData, password) {
+        try {
+            await ensureWasmInitialized();
+            
+            // Call the WASM decryption function
+            const result = await wasmFunctions.decryptFile(encryptedData, password);
+            
+            // The WASM function might return either a Uint8Array or an error message
+            if (typeof result === 'string' && result.startsWith('Failed')) {
+                return result; // Return error message
             }
-            ${options.dismissible ? 
-                '<button class="banner-dismiss" aria-label="Dismiss">×</button>' : 
-                ''
-            }
-        </div>
-    `;
-    
-    if (options.dismissible) {
-        banner.querySelector('.banner-dismiss').onclick = () => {
-            banner.style.display = 'none';
-            if (options.level === 'warning') {
-                localStorage.setItem('tls-warning-dismissed', 'true');
-            }
-        };
+            
+            return result.buffer; // Convert Uint8Array to ArrayBuffer
+        } catch (error) {
+            console.error('File decryption error:', error);
+            return 'Failed: ' + error.message;
+        }
     }
 
-    document.body.insertBefore(banner, document.body.firstChild);
-    banner.style.display = 'block';
-};
+    /**
+     * Encrypts a file with multiple encryption keys via WASM
+     * @param {ArrayBuffer|Uint8Array} fileData - File data to encrypt
+     * @param {string} primaryPassword - Primary password for encryption
+     * @param {string} primaryType - Primary password type ('account' or 'custom')
+     * @param {Array} additionalKeys - Array of {password, id} objects for additional keys
+     * @returns {Promise<string>} - Base64 encoded encrypted data with multi-key metadata
+     */
+    async function encryptFileMultiKey(fileData, primaryPassword, primaryType, additionalKeys = []) {
+        try {
+            await ensureWasmInitialized();
+            
+            // Ensure fileData is in the right format for WASM
+            const fileBytes = fileData instanceof ArrayBuffer ? 
+                new Uint8Array(fileData) : fileData;
+            
+            // Call the WASM multi-key encryption function
+            const encryptedData = await wasmFunctions.encryptFileMultiKey(
+                fileBytes, 
+                primaryPassword, 
+                primaryType, 
+                additionalKeys
+            );
+            
+            return encryptedData; // WASM already returns a base64 string
+        } catch (error) {
+            console.error('Multi-key file encryption error:', error);
+            throw new Error('Failed to encrypt file with multiple keys: ' + error.message);
+        }
+    }
 
-// Check TLS version when page loads
-document.addEventListener('DOMContentLoaded', checkTLSVersion);
+    /**
+     * Decrypts a multi-key encrypted file via WASM
+     * @param {string} encryptedData - Base64 encoded encrypted data
+     * @param {string} password - Password for decryption (any of the keys)
+     * @returns {Promise<ArrayBuffer>} - Decrypted file data
+     */
+    async function decryptFileMultiKey(encryptedData, password) {
+        try {
+            await ensureWasmInitialized();
+            
+            // Call the WASM multi-key decryption function
+            const result = await wasmFunctions.decryptFileMultiKey(encryptedData, password);
+            
+            // The WASM function might return either a Uint8Array or an error message
+            if (typeof result === 'string' && result.startsWith('Failed')) {
+                return result; // Return error message
+            }
+            
+            return result.buffer; // Convert Uint8Array to ArrayBuffer
+        } catch (error) {
+            console.error('Multi-key file decryption error:', error);
+            return 'Failed: ' + error.message;
+        }
+    }
 
-// Export functions for use in other modules
-window.securityUtils = {
-    checkTLSVersion,
-    showSecurityBanner,
-    validatePassword,
-    updatePasswordStrengthUI
-};
+    /**
+     * Adds an additional key to an existing encrypted file via WASM
+     * @param {string} encryptedData - Base64 encoded encrypted data
+     * @param {string} currentPassword - Current password that can decrypt the file
+     * @param {string} newPassword - New password to add as an additional key
+     * @param {string} newKeyId - ID for the new key
+     * @returns {Promise<string>} - Updated encrypted data with the new key
+     */
+    async function addKeyToEncryptedFile(encryptedData, currentPassword, newPassword, newKeyId) {
+        try {
+            await ensureWasmInitialized();
+            
+            // Call the WASM function to add a key
+            const updatedData = await wasmFunctions.addKeyToEncryptedFile(
+                encryptedData, 
+                currentPassword, 
+                newPassword, 
+                newKeyId
+            );
+            
+            return updatedData; // WASM already returns a base64 string
+        } catch (error) {
+            console.error('Error adding key to encrypted file:', error);
+            throw new Error('Failed to add key: ' + error.message);
+        }
+    }
+
+    /**
+     * Calculate SHA-256 hash of a file via WASM
+     * @param {ArrayBuffer|Uint8Array} fileData - File data to hash
+     * @returns {Promise<string>} - Hex encoded SHA-256 hash
+     */
+    async function calculateSHA256(fileData) {
+        try {
+            await ensureWasmInitialized();
+            
+            // Ensure fileData is in the right format for WASM
+            const fileBytes = fileData instanceof ArrayBuffer ? 
+                new Uint8Array(fileData) : fileData;
+            
+            // Call the WASM hash function
+            const hash = await wasmFunctions.calculateSHA256(fileBytes);
+            
+            return hash; // WASM returns a hex string
+        } catch (error) {
+            console.error('Hash calculation error:', error);
+            return null;
+        }
+    }
+
+    // Public API
+    return {
+        validatePassword,
+        encryptFile,
+        decryptFile,
+        encryptFileMultiKey,
+        decryptFileMultiKey,
+        addKeyToEncryptedFile,
+        calculateSHA256,
+        arrayBufferToBase64,
+        base64ToArrayBuffer
+    };
+})();

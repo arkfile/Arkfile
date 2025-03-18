@@ -55,6 +55,9 @@ func InitDB() {
 }
 
 func createTables() {
+	// Read schema extensions if available
+	createExtendedSchema()
+	
 	// Users table
 	userTable := `CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,6 +119,42 @@ func createTables() {
 			log.Fatal(err)
 		}
 	}
+}
+
+// createExtendedSchema reads and executes the schema extensions SQL file
+func createExtendedSchema() {
+	// Check if schema_extensions.sql exists
+	extensionsPath := "database/schema_extensions.sql"
+	if _, err := os.Stat(extensionsPath); os.IsNotExist(err) {
+		// File doesn't exist, no extensions to create
+		return
+	}
+
+	// Read the file
+	extensionsSQL, err := os.ReadFile(extensionsPath)
+	if err != nil {
+		log.Printf("Warning: Failed to read schema extensions: %v", err)
+		return
+	}
+
+	// Split the file into individual statements
+	statements := strings.Split(string(extensionsSQL), ";")
+	
+	// Execute each statement
+	for _, stmt := range statements {
+		// Skip empty statements
+		trimmed := strings.TrimSpace(stmt)
+		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		
+		_, err := DB.Exec(trimmed)
+		if err != nil {
+			log.Printf("Warning: Failed to execute schema extension: %v", err)
+		}
+	}
+	
+	log.Println("Applied schema extensions for chunked uploads and sharing")
 }
 
 // Log user actions

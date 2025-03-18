@@ -1,0 +1,455 @@
+/* CSS styles for the chunked upload/download UI */
+
+#chunked-upload-container {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    color: #333;
+}
+
+/* Section styling */
+.upload-section, .files-section {
+    background-color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    margin-bottom: 30px;
+}
+
+h2 {
+    margin-top: 0;
+    color: #2c3e50;
+    font-size: 1.5rem;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+
+/* Upload form */
+.upload-form {
+    display: grid;
+    grid-gap: 15px;
+}
+
+#file-input {
+    border: 2px dashed #ddd;
+    padding: 20px;
+    border-radius: 5px;
+    text-align: center;
+    cursor: pointer;
+    background-color: #f9f9f9;
+    transition: border-color 0.3s;
+}
+
+#file-input:hover {
+    border-color: #3498db;
+}
+
+#password-type {
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    background-color: #fff;
+}
+
+#custom-password-section {
+    padding: 10px;
+    border: 1px solid #eee;
+    border-radius: 5px;
+    background-color: #f9f9f9;
+}
+
+.strength-meter {
+    height: 6px;
+    width: 0%;
+    background-color: #ff4d4d;
+    margin-top: 10px;
+    border-radius: 3px;
+    transition: width 0.3s, background-color 0.3s;
+}
+
+#custom-password, #password-hint {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    box-sizing: border-box;
+}
+
+#upload-button, #refresh-button {
+    background-color: #3498db;
+    color: white;
+    border: none;
+    padding: 12px 20px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background-color 0.3s;
+}
+
+#upload-button:hover, #refresh-button:hover {
+    background-color: #2980b9;
+}
+
+#refresh-button {
+    background-color: #7f8c8d;
+    padding: 8px 15px;
+    margin-bottom: 15px;
+}
+
+#refresh-button:hover {
+    background-color: #6c7a7d;
+}
+
+/* Progress indicators */
+#upload-progress, #download-progress {
+    margin-top: 20px;
+}
+
+.upload-item, .download-item {
+    background-color: #f9f9f9;
+    border-radius: 5px;
+    padding: 15px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.item-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.name {
+    font-weight: bold;
+    color: #2c3e50;
+    word-break: break-all;
+}
+
+.status {
+    color: #7f8c8d;
+    font-size: 0.9rem;
+}
+
+.progress-container {
+    height: 10px;
+    background-color: #ecf0f1;
+    border-radius: 5px;
+    overflow: hidden;
+    margin-bottom: 10px;
+}
+
+.progress-bar {
+    height: 100%;
+    width: 0%;
+    background-color: #2ecc71;
+    transition: width 0.3s;
+}
+
+.progress-bar.complete {
+    background-color: #27ae60;
+}
+
+.progress-bar.error {
+    background-color: #e74c3c;
+}
+
+.actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.pause-button, .cancel-button, .close-button {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.pause-button {
+    background-color: #f39c12;
+    color: white;
+}
+
+.cancel-button {
+    background-color: #e74c3c;
+    color: white;
+}
+
+.close-button {
+    background-color: #7f8c8d;
+    color: white;
+}
+
+/* Files list */
+.files-list {
+    display: grid;
+    grid-gap: 15px;
+}
+
+.file-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px;
+    background-color: #f9f9f9;
+    border-radius: 5px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.file-info {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    flex-grow: 1;
+}
+
+.file-name {
+    font-weight: bold;
+    color: #2c3e50;
+    word-break: break-all;
+}
+
+.file-size {
+    color: #7f8c8d;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
+.file-encryption {
+    font-size: 1.2rem;
+}
+
+.file-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.download-button, .share-button {
+    padding: 8px 15px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    color: white;
+}
+
+.download-button {
+    background-color: #3498db;
+}
+
+.share-button {
+    background-color: #9b59b6;
+}
+
+/* Message box */
+#message-box {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 15px 20px;
+    border-radius: 5px;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+    max-width: 400px;
+    z-index: 1000;
+    animation: fadeIn 0.3s, fadeOut 0.3s 4.7s;
+}
+
+.message.info {
+    background-color: #3498db;
+    color: white;
+}
+
+.message.error {
+    background-color: #e74c3c;
+    color: white;
+}
+
+.message.success {
+    background-color: #2ecc71;
+    color: white;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeOut {
+    from { opacity: 1; transform: translateY(0); }
+    to { opacity: 0; transform: translateY(20px); }
+}
+
+/* Modal styles */
+.modal {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+    justify-content: center;
+    align-items: center;
+}
+
+.modal-content {
+    background-color: white;
+    padding: 25px;
+    border-radius: 8px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    width: 90%;
+    max-width: 500px;
+    position: relative;
+}
+
+.close-modal {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    font-size: 24px;
+    cursor: pointer;
+    color: #7f8c8d;
+}
+
+.close-modal:hover {
+    color: #34495e;
+}
+
+.modal h3 {
+    margin-top: 0;
+    color: #2c3e50;
+    font-size: 1.3rem;
+    margin-bottom: 15px;
+}
+
+.modal p {
+    margin-bottom: 20px;
+    color: #7f8c8d;
+}
+
+.modal .form-group {
+    margin-bottom: 15px;
+}
+
+.modal label {
+    display: block;
+    margin-bottom: 5px;
+    color: #34495e;
+}
+
+.modal .checkbox-label {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+.modal .checkbox-label input {
+    margin-right: 10px;
+}
+
+.modal .password-input, .modal select, .modal #share-link {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    box-sizing: border-box;
+}
+
+.modal .password-strength-container {
+    height: 6px;
+    background-color: #ecf0f1;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 5px;
+}
+
+.password-hint {
+    background-color: #f9f9f9;
+    padding: 10px;
+    border-radius: 5px;
+    border-left: 3px solid #f39c12;
+    margin: 10px 0;
+    color: #7f8c8d;
+}
+
+.share-link-container {
+    display: flex;
+    gap: 10px;
+}
+
+.share-link-container input {
+    flex-grow: 1;
+}
+
+.share-link-container button {
+    background-color: #3498db;
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.modal-actions button {
+    padding: 10px 15px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.modal-actions .cancel-button {
+    background-color: #ecf0f1;
+    color: #34495e;
+}
+
+.modal-actions .submit-button {
+    background-color: #3498db;
+    color: white;
+}
+
+.modal-actions .submit-button:disabled {
+    background-color: #bdc3c7;
+    cursor: not-allowed;
+}
+
+/* Download progress section */
+#download-progress {
+    margin-top: 20px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 600px) {
+    .upload-form {
+        grid-gap: 10px;
+    }
+    
+    .file-item {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .file-info {
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+    }
+    
+    .file-actions {
+        width: 100%;
+        justify-content: flex-end;
+    }
+    
+    .modal-content {
+        width: 95%;
+        padding: 15px;
+    }
+}

@@ -24,29 +24,17 @@ func setupRoutes(e *echo.Echo) {
 		})
 	})
 
-	// Auth routes
-	e.POST("/register", handlers.Register)
-	e.POST("/login", handlers.Login)
-
-	// File routes (protected)
-	fileGroup := e.Group("/api")
-	fileGroup.Use(auth.JWTMiddleware())
-	fileGroup.Use(handlers.RequireApproved) // Only approved users can use file operations
-	fileGroup.POST("/upload", handlers.UploadFile)
-	fileGroup.GET("/download/:filename", handlers.DownloadFile)
-	fileGroup.GET("/files", handlers.ListFiles)
-
-	// Admin routes (protected)
-	adminGroup := e.Group("/api/admin")
-	adminGroup.Use(auth.JWTMiddleware())
-	adminGroup.Use(handlers.RequireAdmin)
-	adminGroup.GET("/users/pending", handlers.GetPendingUsers)
-	adminGroup.POST("/users/:email/approve", handlers.ApproveUser)
-	adminGroup.POST("/users/:email/storage", handlers.UpdateUserStorageLimit)
-
-	// Serve static files for the web client
-	e.Static("/", "static")
-
+	// Set the global Echo instance for handlers
+	handlers.Echo = e
+	
+	// Set up auth Echo instance
+	auth.Echo = e.Group("")
+	auth.Echo.Use(auth.JWTMiddleware())
+	auth.Echo.Use(handlers.RequireApproved)
+	
+	// Register all routes
+	handlers.RegisterRoutes()
+	
 	// Serve WebAssembly files
 	e.File("/wasm_exec.js", "client/wasm_exec.js")
 	e.File("/main.wasm", "client/main.wasm")

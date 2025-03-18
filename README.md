@@ -29,7 +29,14 @@
 
 - Client-side encryption using quantum-resistant SHAKE-256 for key derivation
 - Choice between account password or file-specific password for encryption
+- Multi-key encryption allowing files to be decrypted with multiple passwords without duplication
+- Ability to add, update, or remove custom file passwords at any time
+- Create secure shareable download links that can be password-protected
+- Granular password controls with optional link expiration dates
 - SHA-256 checksums for file integrity verification
+- Chunked file uploads and downloads for reliable transfer of large files
+- Memory-efficient streaming directly to storage backends
+- Resume capability for interrupted transfers
 - Distributed database with authentication and TLS
 - Password hints stored separately from encrypted files
 - JWT-based authentication
@@ -85,7 +92,15 @@ The application uses dedicated service accounts for improved security:
    - S3-compatible storage integration
    - File storage operations with multiple provider support
 
-5. **`auth/jwt.go`**
+5. **`client/static/js/chunked-uploader.js`**
+   - Client-side implementation for chunked file uploads
+   - Handles file splitting, encryption, and progress tracking
+  
+6. **`client/static/js/chunked-downloader.js`**
+   - Client-side implementation for chunked file downloads
+   - Handles chunk reassembly, decryption, and integrity verification
+
+7. **`auth/jwt.go`**
    - JWT token generation and validation
    - Authentication middleware
 
@@ -250,7 +265,21 @@ The application supports multiple storage providers:
      - Quantum-resistant SHAKE-256 for key derivation (10,000 iterations)
      - Version byte for future cryptographic agility
      - SHA-256 checksums for integrity verification
-   - Choice between account-based or file-specific passwords
+   - Advanced file encryption features:
+     - Choice between account-based or file-specific passwords
+     - Multi-key encryption allowing multiple passwords to decrypt the same file
+     - Add, update, or remove custom file passwords without recreating files
+     - Password hints to help remember custom passwords
+   - Secure file sharing:
+     - Create shareable download links with required password protection
+     - Optional additional link-specific password protection
+     - Configurable expiration dates for links
+     - Storage-efficient implementation (no file duplication)
+     - Files can be securely shared with non-users
+   - Large file handling through chunked uploads:
+     - Files split into 16MB chunks for efficient transfer
+     - Each chunk individually encrypted before upload
+     - Support for pausing and resuming transfers
    - Distributed database with authentication and TLS
    - Data replication across cluster nodes
    - Password hints stored separately from encrypted files
