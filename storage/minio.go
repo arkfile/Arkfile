@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"time"
@@ -13,6 +14,7 @@ import (
 
 var (
 	MinioClient *minio.Client
+	MinioCore   *minio.Core
 	BucketName  string
 )
 
@@ -135,6 +137,9 @@ func InitMinio() error {
 		return fmt.Errorf("failed to create MinIO client: %w", err)
 	}
 
+	// Initialize MinioCore with the client
+	MinioCore = &minio.Core{Client: MinioClient}
+
 	// Ensure bucket exists
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -220,50 +225,53 @@ func InitiateMultipartUpload(ctx context.Context, objectName string, metadata ma
 	uploadOptions := minio.PutObjectOptions{
 		ContentType: "application/octet-stream",
 	}
-	
+
 	// Add user metadata if provided
 	if metadata != nil {
 		uploadOptions.UserMetadata = metadata
 	}
-	
-	result, err := MinioClient.NewMultipartUpload(ctx, BucketName, objectName, uploadOptions)
+
+	uploadID, err := MinioCore.NewMultipartUpload(ctx, BucketName, objectName, uploadOptions)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize multipart upload: %w", err)
 	}
-	
-	return result.UploadID, nil
+
+	return uploadID, nil
 }
 
 // UploadPart uploads a single part of a multipart upload
 func UploadPart(ctx context.Context, objectName, uploadID string, partNumber int, reader io.Reader, size int64) (minio.CompletePart, error) {
 	// Upload the part
-	part, err := MinioClient.PutObjectPart(ctx, BucketName, objectName, uploadID, partNumber, reader, size, minio.PutObjectPartOptions{})
+	part, err := MinioCore.PutObjectPart(ctx, BucketName, objectName, uploadID, partNumber, reader, size, minio.PutObjectPartOptions{})
 	if err != nil {
 		return minio.CompletePart{}, fmt.Errorf("failed to upload part %d: %w", partNumber, err)
 	}
-	
-	return part, nil
+
+	return minio.CompletePart{
+		PartNumber: partNumber,
+		ETag:       part.ETag,
+	}, nil
 }
 
 // CompleteMultipartUpload finalizes a multipart upload
 func CompleteMultipartUpload(ctx context.Context, objectName, uploadID string, parts []minio.CompletePart) error {
 	// Complete the multipart upload
-	_, err := MinioClient.CompleteMultipartUpload(ctx, BucketName, objectName, uploadID, parts, minio.PutObjectOptions{})
+	_, err := MinioCore.CompleteMultipartUpload(ctx, BucketName, objectName, uploadID, parts, minio.PutObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to complete multipart upload: %w", err)
 	}
-	
+
 	return nil
 }
 
 // AbortMultipartUpload cancels a multipart upload
 func AbortMultipartUpload(ctx context.Context, objectName, uploadID string) error {
 	// Abort the multipart upload
-	err := MinioClient.AbortMultipartUpload(ctx, BucketName, objectName, uploadID)
+	err := MinioCore.AbortMultipartUpload(ctx, BucketName, objectName, uploadID)
 	if err != nil {
 		return fmt.Errorf("failed to abort multipart upload: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -276,27 +284,27 @@ func RemoveChunkedFile(ctx context.Context, filename string, sessionID string) e
 		// Log error but continue - we still want to try removing chunks
 		log.Printf("Warning: Failed to remove complete file %s: %v", filename, err)
 	}
-	
+
 	// List any incomplete uploads for this file (in case upload was never completed)
 	multipartUploads := MinioClient.ListIncompleteUploads(ctx, BucketName, filename, true)
-	
+
 	for upload := range multipartUploads {
 		if upload.Err != nil {
 			continue
 		}
-		
+
 		// If sessionID is provided, only remove the specific upload
 		if sessionID != "" && upload.UploadID != sessionID {
 			continue
 		}
-		
+
 		// Abort the multipart upload to clean up all chunks
-		err := MinioClient.AbortMultipartUpload(ctx, BucketName, filename, upload.UploadID)
+		err := MinioCore.AbortMultipartUpload(ctx, BucketName, filename, upload.UploadID)
 		if err != nil {
 			log.Printf("Warning: Failed to abort multipart upload %s: %v", upload.UploadID, err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -308,12 +316,12 @@ func GetObjectChunk(ctx context.Context, objectName string, offset, length int64
 	if err != nil {
 		return nil, fmt.Errorf("failed to set byte range: %w", err)
 	}
-	
+
 	// Get the object with specified range
 	object, err := MinioClient.GetObject(ctx, BucketName, objectName, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get object chunk: %w", err)
 	}
-	
+
 	return object, nil
 }

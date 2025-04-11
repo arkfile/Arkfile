@@ -16,20 +16,11 @@ import (
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
 	"github.com/84adam/arkfile/storage"
+	"github.com/84adam/arkfile/utils"
 )
 
 // Echo is the global echo instance used for routing
 var Echo *echo.Echo
-
-// isHexString checks if a string contains only hexadecimal characters
-func isHexString(s string) bool {
-	for _, r := range s {
-		if !unicode.Is(unicode.ASCII_Hex_Digit, r) {
-			return false
-		}
-	}
-	return true
-}
 
 // Register handles user registration
 func Register(c echo.Context) error {
@@ -167,7 +158,7 @@ func UploadFile(c echo.Context) error {
 	}
 
 	// Validate SHA-256 hash format
-	if len(request.SHA256Sum) != 64 || !isHexString(request.SHA256Sum) {
+	if len(request.SHA256Sum) != 64 || !utils.IsHexString(request.SHA256Sum) {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid SHA-256 hash")
 	}
 
@@ -380,4 +371,82 @@ func formatBytes(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// DeleteFile handles file deletion
+func DeleteFile(c echo.Context) error {
+	email := auth.GetEmailFromToken(c)
+	filename := c.Param("filename")
+
+	// Begin transaction
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to start transaction")
+	}
+	defer tx.Rollback() // Rollback if not committed
+
+	// Verify file ownership and get file size
+	var ownerEmail string
+	var fileSize int64
+	err = tx.QueryRow(
+		"SELECT owner_email, size_bytes FROM file_metadata WHERE filename = ?",
+		filename,
+	).Scan(&ownerEmail, &fileSize)
+
+	if err == sql.ErrNoRows {
+		return echo.NewHTTPError(http.StatusNotFound, "File not found")
+	} else if err != nil {
+		logging.ErrorLogger.Printf("Database error checking file ownership: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+	}
+
+	// Verify ownership
+	if ownerEmail != email {
+		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to delete this file")
+	}
+
+	// Remove from object storage
+	err = storage.RemoveFile(filename)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to remove file from storage: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete file from storage")
+	}
+
+	// Delete metadata from database
+	_, err = tx.Exec("DELETE FROM file_metadata WHERE filename = ?", filename)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to delete file metadata: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete file metadata")
+	}
+
+	// Update user's storage usage (reduce by file size)
+	user, err := models.GetUserByEmail(database.DB, email)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get user: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage usage")
+	}
+
+	// Use negative value to reduce storage usage
+	if err := user.UpdateStorageUsage(tx, -fileSize); err != nil {
+		logging.ErrorLogger.Printf("Failed to update storage usage: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage usage")
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		logging.ErrorLogger.Printf("Failed to commit transaction: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete file deletion")
+	}
+
+	database.LogUserAction(email, "deleted", filename)
+	logging.InfoLogger.Printf("File deleted: %s by %s", filename, email)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message": "File deleted successfully",
+		"storage": map[string]interface{}{
+			"total_bytes":     user.TotalStorage - fileSize,
+			"limit_bytes":     user.StorageLimit,
+			"available_bytes": user.StorageLimit - (user.TotalStorage - fileSize),
+		},
+	})
 }
