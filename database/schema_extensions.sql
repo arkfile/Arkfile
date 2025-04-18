@@ -80,3 +80,35 @@ CREATE INDEX IF NOT EXISTS idx_file_encryption_keys_key ON file_encryption_keys(
 
 -- Add multi-key support column to upload_sessions
 ALTER TABLE upload_sessions ADD COLUMN multi_key BOOLEAN DEFAULT FALSE;
+
+-- Table for refresh tokens
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id TEXT PRIMARY KEY,
+    user_email TEXT NOT NULL,
+    token_hash TEXT NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_revoked BOOLEAN DEFAULT FALSE,
+    is_used BOOLEAN DEFAULT FALSE,
+    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+);
+
+-- Indexes for refresh tokens
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_email);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token_hash);
+
+-- Table for revoked JWT tokens
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_id TEXT NOT NULL UNIQUE,  -- the jti claim value
+    user_email TEXT NOT NULL,
+    revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    reason TEXT,
+    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+);
+
+-- Indexes for revoked tokens
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_jti ON revoked_tokens(token_id);
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_user ON revoked_tokens(user_email);
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_at);

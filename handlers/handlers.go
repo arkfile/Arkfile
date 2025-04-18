@@ -119,11 +119,19 @@ func Login(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Login failed")
 	}
 
+	// Generate refresh token
+	refreshToken, err := models.CreateRefreshToken(database.DB, request.Email)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to generate refresh token: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Login failed")
+	}
+
 	database.LogUserAction(request.Email, "logged in", "")
 	logging.InfoLogger.Printf("User logged in: %s", request.Email)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"token": token,
+		"token":        token,
+		"refreshToken": refreshToken,
 		"user": map[string]interface{}{
 			"email":           user.Email,
 			"is_approved":     user.IsApproved,

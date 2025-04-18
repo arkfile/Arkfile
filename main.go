@@ -26,15 +26,16 @@ func setupRoutes(e *echo.Echo) {
 
 	// Set the global Echo instance for handlers
 	handlers.Echo = e
-	
+
 	// Set up auth Echo instance
 	auth.Echo = e.Group("")
 	auth.Echo.Use(auth.JWTMiddleware())
+	auth.Echo.Use(auth.TokenRevocationMiddleware(database.DB))
 	auth.Echo.Use(handlers.RequireApproved)
-	
+
 	// Register all routes
 	handlers.RegisterRoutes()
-	
+
 	// Serve WebAssembly files
 	e.File("/wasm_exec.js", "client/wasm_exec.js")
 	e.File("/main.wasm", "client/main.wasm")

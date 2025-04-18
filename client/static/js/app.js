@@ -17,6 +17,73 @@ async function initWasm() {
 
 initWasm();
 
+// Token management functions
+async function refreshToken() {
+    try {
+        // Get the current refresh token from localStorage
+        const refreshToken = localStorage.getItem('refreshToken');
+        if (!refreshToken) {
+            // If no refresh token, force login
+            localStorage.removeItem('token');
+            showAuthSection();
+            return false;
+        }
+
+        const response = await fetch('/api/refresh', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ refreshToken }),
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            localStorage.setItem('token', data.token);
+            localStorage.setItem('refreshToken', data.refreshToken);
+            return true;
+        } else {
+            // Token refresh failed, force login
+            localStorage.removeItem('token');
+            localStorage.removeItem('refreshToken');
+            showAuthSection();
+            return false;
+        }
+    } catch (error) {
+        console.error('Token refresh error:', error);
+        return false;
+    }
+}
+
+async function revokeAllSessions() {
+    try {
+        const response = await fetch('/api/revoke-all', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                'Content-Type': 'application/json',
+            }
+        });
+
+        if (response.ok) {
+            showSuccess('All sessions have been revoked. Please log in again.');
+            // Clear local storage and force login
+            localStorage.removeItem('token');
+            localStorage.removeItem('refreshToken');
+            delete window.arkfileSecurityContext;
+            showAuthSection();
+            return true;
+        } else {
+            showError('Failed to revoke sessions.');
+            return false;
+        }
+    } catch (error) {
+        console.error('Revoke sessions error:', error);
+        showError('An error occurred while revoking sessions.');
+        return false;
+    }
+}
+
 // Authentication functions
 async function login() {
     const email = document.getElementById('login-email').value;
@@ -34,6 +101,11 @@ async function login() {
         if (response.ok) {
             const data = await response.json();
             localStorage.setItem('token', data.token);
+            
+            // Store refresh token
+            if (data.refreshToken) {
+                localStorage.setItem('refreshToken', data.refreshToken);
+            }
             
             // Generate session key for future file encryption
             if (!wasmReady) {
@@ -352,6 +424,51 @@ function updateStorageInfo(storage) {
             Used: ${storage.total_readable} of ${storage.limit_readable} (${storage.usage_percent.toFixed(1)}%)
         </div>
     `;
+}
+
+// Logout function
+async function logout() {
+    try {
+        // Get the current refresh token
+        const refreshToken = localStorage.getItem('refreshToken');
+        
+        if (refreshToken) {
+            // Call the logout API to revoke the refresh token
+            await fetch('/api/logout', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ refreshToken }),
+            });
+        }
+        
+        // Clear local storage
+        localStorage.removeItem('token');
+        localStorage.removeItem('refreshToken');
+        
+        // Clear session key from memory
+        delete window.arkfileSecurityContext;
+        
+        // Show auth section
+        showAuthSection();
+        
+        showSuccess('Logged out successfully.');
+    } catch (error) {
+        console.error('Logout error:', error);
+        // Still clear local storage and redirect
+        localStorage.removeItem('token');
+        localStorage.removeItem('refreshToken');
+        showAuthSection();
+    }
+}
+
+// Function to toggle security settings panel
+function toggleSecuritySettings() {
+    const securityPanel = document.getElementById('security-settings');
+    if (securityPanel) {
+        securityPanel.classList.toggle('hidden');
+    }
 }
 
 // UI helper functions

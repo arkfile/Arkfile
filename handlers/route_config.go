@@ -12,6 +12,10 @@ func RegisterRoutes() {
 	// Authentication
 	Echo.POST("/api/register", Register)
 	Echo.POST("/api/login", Login)
+	Echo.POST("/api/refresh", RefreshToken)
+	Echo.POST("/api/logout", Logout)
+	auth.Echo.POST("/api/revoke-token", RevokeToken)
+	auth.Echo.POST("/api/revoke-all", RevokeAllTokens)
 
 	// Files - require authentication
 	auth.Echo.GET("/api/files", ListFiles)

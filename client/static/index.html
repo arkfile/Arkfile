@@ -45,6 +45,23 @@
         </div>
 
         <div class="file-section hidden" id="file-section">
+            <!-- User navigation bar -->
+            <div class="user-nav">
+                <div class="user-controls">
+                    <button onclick="toggleSecuritySettings()" class="icon-button" title="Security Settings">🔐</button>
+                    <button onclick="logout()" class="icon-button" title="Logout">🚪</button>
+                </div>
+                
+                <!-- Security settings panel (hidden by default) -->
+                <div id="security-settings" class="security-panel hidden">
+                    <h3>Security Settings</h3>
+                    <div class="setting-item">
+                        <p><strong>Session Security:</strong> For maximum security, you can revoke access from all devices. This will sign you out everywhere.</p>
+                        <button onclick="revokeAllSessions()" class="danger-button">Revoke All Sessions</button>
+                    </div>
+                </div>
+            </div>
+            
             <div class="upload-section">
                 <h2>Upload File</h2>
                 <input type="file" id="fileInput">

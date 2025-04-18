@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	echojwt "github.com/labstack/echo-jwt/v4"
 	"github.com/labstack/echo/v4"
 )
@@ -18,11 +19,18 @@ type Claims struct {
 }
 
 func GenerateToken(email string) (string, error) {
+	// Generate a unique token ID
+	tokenID := uuid.New().String()
+
 	claims := &Claims{
 		Email: email,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 72)), // Token expires in 72 hours
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24)), // Token expires in 24 hours
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			Issuer:    "arkfile-auth",          // Add issuer claim
+			Audience:  []string{"arkfile-api"}, // Add audience claim
+			ID:        tokenID,                 // Add jti claim
 		},
 	}
 

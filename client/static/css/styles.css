@@ -317,3 +317,72 @@ button:hover {
     background-color: var(--strong-password);
     width: 100%;
 }
+
+/* User Navigation Bar */
+.user-nav {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 1.5rem;
+    position: relative;
+}
+
+.user-controls {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.icon-button {
+    background-color: var(--primary-color);
+    color: white;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 1.2rem;
+    transition: background-color 0.3s ease;
+    padding: 0;
+}
+
+.icon-button:hover {
+    background-color: #435c73;
+}
+
+/* Security Settings Panel */
+.security-panel {
+    position: absolute;
+    top: 45px;
+    right: 0;
+    background-color: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    width: 350px;
+    z-index: 10;
+}
+
+.security-panel h3 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    font-size: 1.2rem;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 0.5rem;
+}
+
+.setting-item {
+    margin-bottom: 1rem;
+}
+
+.danger-button {
+    background-color: var(--error-color);
+    color: white;
+    padding: 0.6rem 1rem;
+    margin-top: 0.5rem;
+    font-size: 0.9rem;
+}
+
+.danger-button:hover {
+    background-color: #c0392b;
+}
