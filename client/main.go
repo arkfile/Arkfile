@@ -8,7 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"strings"
-	"syscall/js"
+	"syscall/js" // specifically for WASM build
 
 	"golang.org/x/crypto/sha3"
 )
