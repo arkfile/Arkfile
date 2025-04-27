@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -17,6 +18,132 @@ import (
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/storage"
 )
+
+// ShareDetails contains common data for file shares
+type ShareDetails struct {
+	FileID            string
+	OwnerEmail        string
+	PasswordProtected bool
+	PasswordHash      string
+	ExpiresAt         *time.Time
+}
+
+// FileMetadata contains common metadata about shared files
+type FileMetadata struct {
+	Filename     string
+	PasswordHint string
+	SHA256Sum    string
+	MultiKey     bool
+	Size         int64
+	PasswordType string
+}
+
+// validateShareAccess checks if a share exists, isn't expired, and returns share details
+func validateShareAccess(shareID string) (*ShareDetails, int, string, error) {
+	var share ShareDetails
+
+	err := database.DB.QueryRow(`
+		SELECT file_id, owner_email, is_password_protected, password_hash, expires_at
+		FROM file_shares 
+		WHERE id = ?
+	`, shareID).Scan(
+		&share.FileID,
+		&share.OwnerEmail,
+		&share.PasswordProtected,
+		&share.PasswordHash,
+		&share.ExpiresAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, http.StatusNotFound, "Share not found", err
+	} else if err != nil {
+		logging.ErrorLogger.Printf("Database error checking share: %v", err)
+		return nil, http.StatusInternalServerError, "Failed to process request", err
+	}
+
+	// Check if share has expired
+	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
+		return nil, http.StatusForbidden, "Share link has expired", fmt.Errorf("share expired")
+	}
+
+	// Update last accessed time
+	_, err = database.DB.Exec(
+		"UPDATE file_shares SET last_accessed = CURRENT_TIMESTAMP WHERE id = ?",
+		shareID,
+	)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to update last accessed time: %v", err)
+		// Continue anyway, as this is not critical
+	}
+
+	return &share, http.StatusOK, "", nil
+}
+
+// getFileMetadata retrieves metadata for a file
+func getFileMetadata(fileID string) (*FileMetadata, int, string, error) {
+	var metadata FileMetadata
+	var size sql.NullInt64
+
+	err := database.DB.QueryRow(`
+		SELECT filename, password_hint, sha256sum, multi_key, size_bytes, password_type
+		FROM file_metadata
+		WHERE filename = ?
+	`, fileID).Scan(
+		&metadata.Filename,
+		&metadata.PasswordHint,
+		&metadata.SHA256Sum,
+		&metadata.MultiKey,
+		&size,
+		&metadata.PasswordType,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, http.StatusNotFound, "File metadata not found", err
+	} else if err != nil {
+		logging.ErrorLogger.Printf("Failed to get file metadata: %v", err)
+		return nil, http.StatusInternalServerError, "Failed to retrieve file metadata", err
+	}
+
+	if size.Valid {
+		metadata.Size = size.Int64
+	}
+
+	return &metadata, http.StatusOK, "", nil
+}
+
+// verifySharePassword compares the provided password with the stored hash
+func verifySharePassword(shareDetails *ShareDetails, password string) (bool, error) {
+	if !shareDetails.PasswordProtected || shareDetails.PasswordHash == "" {
+		return true, nil // No password required
+	}
+
+	if password == "" {
+		return false, nil // Password required but not provided
+	}
+
+	// Verify password using bcrypt
+	err := bcrypt.CompareHashAndPassword([]byte(shareDetails.PasswordHash), []byte(password))
+	if err != nil {
+		// Add a small delay to mitigate timing attacks
+		// QA / TODO: review this mitigation approach: are there any better ways to do this?
+		time.Sleep(100 * time.Millisecond)
+		return false, err
+	}
+
+	return true, nil
+}
+
+// getErrorTitle returns an appropriate error title based on HTTP status code
+func getErrorTitle(status int) string {
+	switch status {
+	case http.StatusNotFound:
+		return "Share Not Found"
+	case http.StatusForbidden:
+		return "Share Link Expired"
+	default:
+		return "Server Error"
+	}
+}
 
 // ShareRequest represents a file sharing request
 type ShareRequest struct {
@@ -276,85 +403,33 @@ func DeleteShare(c echo.Context) error {
 func GetSharedFile(c echo.Context) error {
 	shareID := c.Param("id")
 
-	// Check if share exists and is valid
-	var share struct {
-		FileID            string
-		PasswordProtected bool
-		ExpiresAt         sql.NullString
-	}
-
-	err := database.DB.QueryRow(`
-		SELECT file_id, is_password_protected, expires_at
-		FROM file_shares 
-		WHERE id = ?
-	`, shareID).Scan(&share.FileID, &share.PasswordProtected, &share.ExpiresAt)
-
-	if err == sql.ErrNoRows {
-		return c.Render(http.StatusNotFound, "error", map[string]interface{}{
-			"title":   "Share Not Found",
-			"message": "The share link you are trying to access does not exist or has been deleted.",
-		})
-	} else if err != nil {
-		logging.ErrorLogger.Printf("Database error checking share: %v", err)
-		return c.Render(http.StatusInternalServerError, "error", map[string]interface{}{
-			"title":   "Server Error",
-			"message": "An error occurred while processing your request.",
-		})
-	}
-
-	// Check if share has expired
-	if share.ExpiresAt.Valid {
-		expiryTime, err := time.Parse(time.RFC3339, share.ExpiresAt.String)
-		if err == nil && time.Now().After(expiryTime) {
-			return c.Render(http.StatusForbidden, "error", map[string]interface{}{
-				"title":   "Share Link Expired",
-				"message": "This share link has expired and is no longer valid.",
-			})
-		}
-	}
-
-	// Update last accessed time
-	_, err = database.DB.Exec(
-		"UPDATE file_shares SET last_accessed = CURRENT_TIMESTAMP WHERE id = ?",
-		shareID,
-	)
+	// Validate share access using the helper function
+	shareDetails, status, message, err := validateShareAccess(shareID)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to update last accessed time: %v", err)
-	}
-
-	// Get file metadata
-	var fileMetadata struct {
-		Filename     string
-		PasswordHint string
-		SHA256Sum    string
-		MultiKey     bool
-	}
-
-	err = database.DB.QueryRow(`
-		SELECT filename, password_hint, sha256sum, multi_key
-		FROM file_metadata
-		WHERE filename = ?
-	`, share.FileID).Scan(
-		&fileMetadata.Filename,
-		&fileMetadata.PasswordHint,
-		&fileMetadata.SHA256Sum,
-		&fileMetadata.MultiKey,
-	)
-
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get file metadata: %v", err)
-		return c.Render(http.StatusInternalServerError, "error", map[string]interface{}{
-			"title":   "Server Error",
-			"message": "An error occurred while processing your request.",
+		return c.Render(status, "error", map[string]interface{}{
+			"title":   getErrorTitle(status),
+			"message": message,
 		})
 	}
+
+	// Get file metadata using the helper function
+	fileMetadata, status, message, err := getFileMetadata(shareDetails.FileID)
+	if err != nil {
+		return c.Render(status, "error", map[string]interface{}{
+			"title":   getErrorTitle(status),
+			"message": message,
+		})
+	}
+
+	// Log access
+	logging.InfoLogger.Printf("Shared file access: %s, file: %s", shareID, shareDetails.FileID)
 
 	// Render share page with file info
 	return c.Render(http.StatusOK, "share", map[string]interface{}{
 		"title":             "Download Shared File",
 		"shareId":           shareID,
 		"fileName":          fileMetadata.Filename,
-		"passwordProtected": share.PasswordProtected,
+		"passwordProtected": shareDetails.PasswordProtected,
 		"passwordHint":      fileMetadata.PasswordHint,
 		"sha256Sum":         fileMetadata.SHA256Sum,
 		"isMultiKey":        fileMetadata.MultiKey,
@@ -373,27 +448,23 @@ func AuthenticateShare(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
 	}
 
-	// Get share password hash
-	var passwordHash string
-	err := database.DB.QueryRow(
-		"SELECT password_hash FROM file_shares WHERE id = ?",
-		shareID,
-	).Scan(&passwordHash)
-
-	if err == sql.ErrNoRows {
-		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
-	} else if err != nil {
-		logging.ErrorLogger.Printf("Database error during share authentication: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+	// Validate share access using the helper function
+	shareDetails, status, message, err := validateShareAccess(shareID)
+	if err != nil {
+		return echo.NewHTTPError(status, message)
 	}
 
-	// Verify password using bcrypt with work factor 14
-	err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(request.Password))
-	if err != nil {
-		// Add a small delay to mitigate timing attacks
-		time.Sleep(100 * time.Millisecond)
+	// Verify password using helper function
+	valid, err := verifySharePassword(shareDetails, request.Password)
+	if !valid {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid password")
 	}
+	if err != nil {
+		logging.ErrorLogger.Printf("Error verifying password: %v", err)
+	}
+
+	// Log successful authentication
+	logging.InfoLogger.Printf("Share authentication successful: %s", shareID)
 
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Authentication successful",
@@ -404,58 +475,23 @@ func AuthenticateShare(c echo.Context) error {
 func DownloadSharedFile(c echo.Context) error {
 	shareID := c.Param("id")
 
-	// Check if share exists and is valid
-	var share struct {
-		FileID            string
-		PasswordProtected bool
-		ExpiresAt         sql.NullString
-	}
-
-	err := database.DB.QueryRow(`
-		SELECT file_id, is_password_protected, expires_at
-		FROM file_shares 
-		WHERE id = ?
-	`, shareID).Scan(&share.FileID, &share.PasswordProtected, &share.ExpiresAt)
-
-	if err == sql.ErrNoRows {
-		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
-	} else if err != nil {
-		logging.ErrorLogger.Printf("Database error checking share: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
-	}
-
-	// Check if share has expired
-	if share.ExpiresAt.Valid {
-		expiryTime, err := time.Parse(time.RFC3339, share.ExpiresAt.String)
-		if err == nil && time.Now().After(expiryTime) {
-			return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
-		}
-	}
-
-	// Get file metadata
-	var fileMetadata struct {
-		Filename     string
-		SHA256Sum    string
-		PasswordHint string
-		MultiKey     bool
-	}
-
-	err = database.DB.QueryRow(`
-		SELECT filename, sha256sum, password_hint, multi_key
-		FROM file_metadata
-		WHERE filename = ?
-	`, share.FileID).Scan(&fileMetadata.Filename, &fileMetadata.SHA256Sum, &fileMetadata.PasswordHint, &fileMetadata.MultiKey)
-
+	// Validate share access using the helper function
+	shareDetails, status, message, err := validateShareAccess(shareID)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get file metadata: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
+		return echo.NewHTTPError(status, message)
+	}
+
+	// Get file metadata using the helper function
+	fileMetadata, status, message, err := getFileMetadata(shareDetails.FileID)
+	if err != nil {
+		return echo.NewHTTPError(status, message)
 	}
 
 	// Get file from object storage
 	object, err := storage.MinioClient.GetObject(
 		c.Request().Context(),
 		storage.BucketName,
-		share.FileID,
+		shareDetails.FileID,
 		minio.GetObjectOptions{},
 	)
 	if err != nil {
@@ -470,14 +506,10 @@ func DownloadSharedFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read file")
 	}
 
-	// Update last accessed time
-	_, err = database.DB.Exec(
-		"UPDATE file_shares SET last_accessed = CURRENT_TIMESTAMP WHERE id = ?",
-		shareID,
-	)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to update last accessed time: %v", err)
-	}
+	// QA / TODO: Should we update last accessed time at this point?
+
+	// Log access
+	logging.InfoLogger.Printf("Downloaded shared file: %s, file: %s", shareID, shareDetails.FileID)
 
 	// Return file data along with metadata for client-side decryption
 	return c.JSON(http.StatusOK, map[string]interface{}{

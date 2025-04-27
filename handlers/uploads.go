@@ -125,95 +125,85 @@ func GetSharedFileByShareID(c echo.Context) error {
 	shareID := c.Param("shareId")
 	password := c.FormValue("password")
 
-	// Get share details
-	var (
-		fileID              string
-		ownerEmail          string
-		isPasswordProtected bool
-		passwordHash        string
-		expiresAt           *time.Time
-	)
-
-	err := database.DB.QueryRow(
-		"SELECT file_id, owner_email, is_password_protected, password_hash, expires_at FROM file_shares WHERE id = ?",
-		shareID,
-	).Scan(&fileID, &ownerEmail, &isPasswordProtected, &passwordHash, &expiresAt)
-
-	if err == sql.ErrNoRows {
-		return echo.NewHTTPError(http.StatusNotFound, "Shared file not found")
-	} else if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get share details")
-	}
-
-	// Check if share has expired
-	if expiresAt != nil && time.Now().After(*expiresAt) {
-		return echo.NewHTTPError(http.StatusGone, "This share link has expired")
+	// Validate share access using the helper function
+	shareDetails, status, message, err := validateShareAccess(shareID)
+	if err != nil {
+		return echo.NewHTTPError(status, message)
 	}
 
 	// Check password if required
-	if isPasswordProtected {
-		if password == "" {
-			return echo.NewHTTPError(http.StatusUnauthorized, "Password required")
-		}
-
-		// Verify password using bcrypt
-		err = bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password))
-		if err != nil {
+	if shareDetails.PasswordProtected {
+		valid, err := verifySharePassword(shareDetails, password)
+		if !valid {
+			if password == "" {
+				return echo.NewHTTPError(http.StatusUnauthorized, "Password required")
+			}
 			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid password")
+		}
+		if err != nil {
+			logging.ErrorLogger.Printf("Error verifying password: %v", err)
 		}
 	}
 
-	// Get file metadata to prepare for download
-	var (
-		filename     string
-		size         int64
-		passwordHint string
-		passwordType string
-		originalHash string
-	)
+	// Get file metadata using the helper function
+	fileMetadata, status, message, err := getFileMetadata(shareDetails.FileID)
+	if err != nil {
+		// Try checking in completed uploads if not found in file_metadata
+		if status == http.StatusNotFound {
+			var (
+				filename     string
+				size         int64
+				passwordHint string
+				passwordType string
+				originalHash string
+			)
 
-	// Try in file_metadata first
-	err = database.DB.QueryRow(
-		"SELECT filename, size_bytes, password_hint, password_type, sha256sum FROM file_metadata WHERE filename = ?",
-		fileID,
-	).Scan(&filename, &size, &passwordHint, &passwordType, &originalHash)
+			err = database.DB.QueryRow(
+				"SELECT filename, total_size, password_hint, password_type, original_hash FROM upload_sessions WHERE filename = ? AND status = 'completed'",
+				shareDetails.FileID,
+			).Scan(&filename, &size, &passwordHint, &passwordType, &originalHash)
 
-	if err == sql.ErrNoRows {
-		// Check in completed uploads
-		err = database.DB.QueryRow(
-			"SELECT filename, total_size, password_hint, password_type, original_hash FROM upload_sessions WHERE filename = ? AND status = 'completed'",
-			fileID,
-		).Scan(&filename, &size, &passwordHint, &passwordType, &originalHash)
+			if err == sql.ErrNoRows {
+				return echo.NewHTTPError(http.StatusNotFound, "File no longer exists")
+			} else if err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get file details")
+			}
 
-		if err == sql.ErrNoRows {
-			return echo.NewHTTPError(http.StatusNotFound, "File no longer exists")
-		} else if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get file details")
+			// Create a FileMetadata object from the upload_sessions data
+			fileMetadata = &FileMetadata{
+				Filename:     filename,
+				Size:         size,
+				PasswordHint: passwordHint,
+				PasswordType: passwordType,
+				SHA256Sum:    originalHash,
+				// MultiKey isn't available in this table, so we default to false
+				MultiKey: false,
+			}
+		} else {
+			return echo.NewHTTPError(status, message)
 		}
-	} else if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get file details")
 	}
 
 	// Generate download URL
 	expiry := time.Hour // 1 hour expiry for the actual download link
-	downloadURL, err := storage.GetPresignedURL(fileID, expiry)
+	downloadURL, err := storage.GetPresignedURL(shareDetails.FileID, expiry)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download URL")
 	}
 
 	// Log file access
-	database.LogUserAction(ownerEmail, "shared", fileID)
-	logging.InfoLogger.Printf("Shared file access: %s, file: %s", shareID, fileID)
+	database.LogUserAction(shareDetails.OwnerEmail, "shared", shareDetails.FileID)
+	logging.InfoLogger.Printf("Shared file access: %s, file: %s", shareID, shareDetails.FileID)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"fileId":       fileID,
-		"filename":     filename,
-		"size":         size,
+		"fileId":       shareDetails.FileID,
+		"filename":     fileMetadata.Filename,
+		"size":         fileMetadata.Size,
 		"downloadUrl":  downloadURL,
-		"owner":        ownerEmail,
-		"hash":         originalHash,
-		"passwordHint": passwordHint,
-		"passwordType": passwordType,
+		"owner":        shareDetails.OwnerEmail,
+		"hash":         fileMetadata.SHA256Sum,
+		"passwordHint": fileMetadata.PasswordHint,
+		"passwordType": fileMetadata.PasswordType,
 	})
 }
 
