@@ -96,7 +96,7 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Database.Path = "./arkfile.db"
 	cfg.Security.JWTExpiryHours = 72
 	cfg.Security.PasswordMinLength = 8
-	cfg.Security.BcryptCost = 12
+	cfg.Security.BcryptCost = 13                 // Set default cost to 13
 	cfg.Security.MaxFileSize = 100 * 1024 * 1024 // 100MB
 	cfg.Security.AllowedFileTypes = []string{".jpg", ".jpeg", ".png", ".pdf", ".iso"}
 	cfg.Logging.Directory = "logs"
@@ -166,4 +166,12 @@ func GetConfig() *Config {
 		panic("Configuration not loaded")
 	}
 	return config
+}
+
+// Testing helper - DO NOT USE IN PRODUCTION
+// ResetConfigForTest resets the sync.Once and config variable for testing purposes.
+// This allows LoadConfig to be called again with potentially different env vars in tests.
+func ResetConfigForTest() {
+	configOnce = sync.Once{}
+	config = nil
 }

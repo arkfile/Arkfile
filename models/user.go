@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/84adam/arkfile/config" // Import config package
 )
 
 type User struct {
@@ -29,7 +31,8 @@ const (
 
 // CreateUser creates a new user in the database
 func CreateUser(db *sql.DB, email, password string) (*User, error) {
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	// Use cost from configuration
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), config.GetConfig().Security.BcryptCost)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +97,8 @@ func (u *User) VerifyPassword(password string) bool {
 
 // UpdatePassword updates the user's password
 func (u *User) UpdatePassword(db *sql.DB, newPassword string) error {
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), 12)
+	// Use cost from configuration
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), config.GetConfig().Security.BcryptCost)
 	if err != nil {
 		return err
 	}

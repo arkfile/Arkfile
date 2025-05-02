@@ -1,9 +1,9 @@
 package auth
 
 import (
-	"os"
 	"time"
 
+	"github.com/84adam/arkfile/config" // Import config package
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	echojwt "github.com/labstack/echo-jwt/v4"
@@ -35,7 +35,8 @@ func GenerateToken(email string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(os.Getenv("JWT_SECRET")))
+	// Use JWTSecret from loaded config
+	return token.SignedString([]byte(config.GetConfig().Security.JWTSecret))
 }
 
 func JWTMiddleware() echo.MiddlewareFunc {
@@ -43,7 +44,8 @@ func JWTMiddleware() echo.MiddlewareFunc {
 		NewClaimsFunc: func(c echo.Context) jwt.Claims {
 			return new(Claims)
 		},
-		SigningKey: []byte(os.Getenv("JWT_SECRET")),
+		// Use JWTSecret from loaded config
+		SigningKey: []byte(config.GetConfig().Security.JWTSecret),
 		ErrorHandler: func(c echo.Context, err error) error {
 			return echo.NewHTTPError(401, "Unauthorized")
 		},

@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/84adam/arkfile/auth"
+	"github.com/84adam/arkfile/config"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/storage"
@@ -221,8 +222,8 @@ func ShareFile(c echo.Context) error {
 	// Hash the password if share is password protected
 	var passwordHash string
 	if request.PasswordProtected && request.PasswordHash != "" {
-		// Generate bcrypt hash with work factor 14
-		hash, err := bcrypt.GenerateFromPassword([]byte(request.PasswordHash), 14)
+		// Generate bcrypt hash with cost from configuration
+		hash, err := bcrypt.GenerateFromPassword([]byte(request.PasswordHash), config.GetConfig().Security.BcryptCost) // Use config value
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to hash password: %v", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process password")

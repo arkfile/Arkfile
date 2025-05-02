@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -10,7 +11,55 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/84adam/arkfile/config" // Import config package
 )
+
+// TestMain sets up necessary environment variables for config loading before running tests
+// and cleans them up afterwards.
+func TestMain(m *testing.M) {
+	// --- Test Config Setup ---
+	config.ResetConfigForTest()
+
+	// Store original env vars and set test values
+	originalEnv := map[string]string{}
+	testEnv := map[string]string{
+		"JWT_SECRET":                "test-jwt-secret-for-models", // Use a different secret to avoid potential clashes if tests run concurrently later
+		"BACKBLAZE_ENDPOINT":        "test-endpoint-models",
+		"BACKBLAZE_KEY_ID":          "test-key-id-models",
+		"BACKBLAZE_APPLICATION_KEY": "test-app-key-models",
+		"BACKBLAZE_BUCKET_NAME":     "test-bucket-models",
+	}
+
+	for key, testValue := range testEnv {
+		originalEnv[key] = os.Getenv(key)
+		os.Setenv(key, testValue)
+	}
+
+	// Load config with test env vars
+	_, err := config.LoadConfig()
+	if err != nil {
+		// Use fmt.Printf for logging in TestMain as log package might not be initialized
+		fmt.Printf("FATAL: Failed to load config for models tests: %v\n", err)
+		os.Exit(1) // Exit if config fails, tests cannot run
+	}
+
+	// Run tests
+	exitCode := m.Run()
+
+	// --- Cleanup ---
+	// Restore original env vars
+	for key, originalValue := range originalEnv {
+		if originalValue == "" {
+			os.Unsetenv(key)
+		} else {
+			os.Setenv(key, originalValue)
+		}
+	}
+	config.ResetConfigForTest() // Ensure clean state after the package tests run
+
+	os.Exit(exitCode)
+}
 
 // setupTestDB_User creates an in-memory SQLite DB for user model tests.
 func setupTestDB_User(t *testing.T) *sql.DB {
@@ -143,9 +192,12 @@ func TestGetUserByEmail(t *testing.T) {
 }
 
 func TestVerifyPassword(t *testing.T) {
+	// Config is loaded in TestMain now
+
 	// No DB needed, just need a User struct with a valid password hash
 	password := "CorrectPassword123?"
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	// Use cost from configuration
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), config.GetConfig().Security.BcryptCost) // Use config value
 	require.NoError(t, err)
 
 	user := &User{Password: string(hashedPassword)}

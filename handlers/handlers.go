@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"errors" // Import errors package
 	"fmt"
 	"io"
 	"net/http"
@@ -78,15 +79,19 @@ func Login(c echo.Context) error {
 
 	// Get user
 	user, err := models.GetUserByEmail(database.DB, request.Email)
-	if err == sql.ErrNoRows {
+	// Check for sql.ErrNoRows OR the specific error string from GetUserByEmail
+	if errors.Is(err, sql.ErrNoRows) || (err != nil && err.Error() == "user not found") {
+		// Optional: time.Sleep(100 * time.Millisecond) // Mitigate timing attacks
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
 	} else if err != nil {
 		logging.ErrorLogger.Printf("Database error during login: %v", err)
+		// Do not reveal specific internal errors for failed login
 		return echo.NewHTTPError(http.StatusInternalServerError, "Login failed")
 	}
 
 	// Verify password
 	if !user.VerifyPassword(request.Password) {
+		// Optional: time.Sleep(100 * time.Millisecond)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
 	}
 

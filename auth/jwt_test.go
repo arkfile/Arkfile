@@ -1,22 +1,65 @@
 package auth
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/84adam/arkfile/config" // Import config
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 )
 
+// TestMain sets up necessary environment variables for config loading before running tests
+// and cleans them up afterwards.
+func TestMain(m *testing.M) {
+	// --- Test Config Setup ---
+	config.ResetConfigForTest()
+
+	// Store original env vars and set test values
+	originalEnv := map[string]string{}
+	testEnv := map[string]string{
+		"JWT_SECRET":                "test-jwt-secret-for-auth", // Unique secret for this package's tests
+		"BACKBLAZE_ENDPOINT":        "test-endpoint-auth",       // Provide dummy values for all required fields
+		"BACKBLAZE_KEY_ID":          "test-key-id-auth",
+		"BACKBLAZE_APPLICATION_KEY": "test-app-key-auth",
+		"BACKBLAZE_BUCKET_NAME":     "test-bucket-auth",
+	}
+
+	for key, testValue := range testEnv {
+		originalEnv[key] = os.Getenv(key)
+		os.Setenv(key, testValue)
+	}
+
+	// Load config with test env vars
+	_, err := config.LoadConfig()
+	if err != nil {
+		fmt.Printf("FATAL: Failed to load config for auth tests: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Run tests
+	exitCode := m.Run()
+
+	// --- Cleanup ---
+	for key, originalValue := range originalEnv {
+		if originalValue == "" {
+			os.Unsetenv(key)
+		} else {
+			os.Setenv(key, originalValue)
+		}
+	}
+	config.ResetConfigForTest()
+
+	os.Exit(exitCode)
+}
+
 func TestGenerateToken(t *testing.T) {
-	// Setup: Use a known secret for testing
-	originalSecret := os.Getenv("JWT_SECRET")
-	os.Setenv("JWT_SECRET", "test-secret-key")
-	defer os.Setenv("JWT_SECRET", originalSecret) // Restore original secret after test
+	// Config with JWT_SECRET is loaded in TestMain
 
 	testCases := []struct {
 		name  string
@@ -42,7 +85,8 @@ func TestGenerateToken(t *testing.T) {
 				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 					return nil, jwt.ErrSignatureInvalid // Use standard error
 				}
-				return []byte("test-secret-key"), nil
+				// Validate using the secret loaded from config by TestMain
+				return []byte(config.GetConfig().Security.JWTSecret), nil
 			})
 
 			assert.NoError(t, err)
@@ -94,10 +138,7 @@ func TestGetEmailFromToken(t *testing.T) {
 }
 
 func TestJWTMiddleware(t *testing.T) {
-	// Setup: Use a known secret for testing
-	originalSecret := os.Getenv("JWT_SECRET")
-	os.Setenv("JWT_SECRET", "test-secret-key")
-	defer os.Setenv("JWT_SECRET", originalSecret)
+	// Config with JWT_SECRET is loaded in TestMain
 
 	// Setup: Create Echo instance and test handler
 	e := echo.New()
@@ -132,7 +173,8 @@ func TestJWTMiddleware(t *testing.T) {
 					},
 				}
 				token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-				tokenString, _ := token.SignedString([]byte("test-secret-key"))
+				// Sign with the secret loaded from config by TestMain
+				tokenString, _ := token.SignedString([]byte(config.GetConfig().Security.JWTSecret))
 				return tokenString
 			},
 			expectedStatus: http.StatusOK,
@@ -150,7 +192,8 @@ func TestJWTMiddleware(t *testing.T) {
 					},
 				}
 				token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-				tokenString, _ := token.SignedString([]byte("test-secret-key"))
+				// Sign with the secret loaded from config by TestMain
+				tokenString, _ := token.SignedString([]byte(config.GetConfig().Security.JWTSecret))
 				return tokenString
 			},
 			expectedStatus: http.StatusUnauthorized,

@@ -14,16 +14,13 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/84adam/arkfile/auth"
+	"github.com/84adam/arkfile/config" // Import config package
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
 	"github.com/84adam/arkfile/storage"
 	"github.com/84adam/arkfile/utils"
 )
-
-// BCRYPT_COST sets the work factor for bcrypt password hashing
-// Higher values are more secure but slower
-const BCRYPT_COST = 14
 
 // CreateUploadSession initializes a new chunked upload
 func CreateUploadSession(c echo.Context) error {
@@ -262,8 +259,8 @@ func CreateShareLink(c echo.Context) error {
 	// Handle password if provided
 	var passwordHash string
 	if request.PasswordProtected && request.Password != "" {
-		// Use bcrypt with high work factor (14) for secure password hashing
-		hashedBytes, err := bcrypt.GenerateFromPassword([]byte(request.Password), BCRYPT_COST)
+		// Use bcrypt with cost from configuration
+		hashedBytes, err := bcrypt.GenerateFromPassword([]byte(request.Password), config.GetConfig().Security.BcryptCost) // Use config value
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process share password")
 		}
