@@ -11,16 +11,16 @@ import (
 )
 
 type User struct {
-	ID           int64      `json:"id"`
-	Email        string     `json:"email"`
-	Password     string     `json:"-"` // Never send password in JSON
-	CreatedAt    time.Time  `json:"created_at"`
-	TotalStorage int64      `json:"total_storage_bytes"`
-	StorageLimit int64      `json:"storage_limit_bytes"`
-	IsApproved   bool       `json:"is_approved"`
-	ApprovedBy   string     `json:"approved_by,omitempty"`
-	ApprovedAt   *time.Time `json:"approved_at,omitempty"`
-	IsAdmin      bool       `json:"is_admin"`
+	ID           int64          `json:"id"`
+	Email        string         `json:"email"`
+	Password     string         `json:"-"` // Never send password in JSON
+	CreatedAt    time.Time      `json:"created_at"`
+	TotalStorage int64          `json:"total_storage_bytes"`
+	StorageLimit int64          `json:"storage_limit_bytes"`
+	IsApproved   bool           `json:"is_approved"`
+	ApprovedBy   sql.NullString `json:"approved_by,omitempty"` // Handle NULL
+	ApprovedAt   sql.NullTime   `json:"approved_at,omitempty"` // Handle NULL
+	IsAdmin      bool           `json:"is_admin"`
 }
 
 const (
@@ -65,7 +65,7 @@ func CreateUser(db *sql.DB, email, password string) (*User, error) {
 func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 	user := &User{}
 	err := db.QueryRow(`
-		SELECT id, email, password, created_at, 
+		SELECT id, email, password, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`,
@@ -73,7 +73,7 @@ func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 	).Scan(
 		&user.ID, &user.Email, &user.Password, &user.CreatedAt,
 		&user.TotalStorage, &user.StorageLimit,
-		&user.IsApproved, &user.ApprovedBy, &user.ApprovedAt, &user.IsAdmin,
+		&user.IsApproved, &user.ApprovedBy, &user.ApprovedAt, &user.IsAdmin, // Scan directly into sql.Null* types
 	)
 
 	if err == sql.ErrNoRows {
@@ -121,7 +121,7 @@ func (u *User) ApproveUser(db *sql.DB, adminEmail string) error {
 	_, err := db.Exec(`
 		UPDATE users 
 		SET is_approved = true, 
-		    approved_by = ?, 
+		approved_by = ?,
 		    approved_at = ?
 		WHERE id = ?`,
 		adminEmail, now, u.ID,
@@ -130,9 +130,10 @@ func (u *User) ApproveUser(db *sql.DB, adminEmail string) error {
 		return err
 	}
 
+	// Update struct fields using sql.Null* types
 	u.IsApproved = true
-	u.ApprovedBy = adminEmail
-	u.ApprovedAt = &now
+	u.ApprovedBy = sql.NullString{String: adminEmail, Valid: true}
+	u.ApprovedAt = sql.NullTime{Time: now, Valid: true}
 
 	return nil
 }

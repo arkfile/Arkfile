@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"unicode"
 
 	"github.com/labstack/echo/v4"
 	"github.com/minio/minio-go/v7"
@@ -38,31 +37,10 @@ func Register(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid email format")
 	}
 
-	// Validate password complexity
-	if len(request.Password) < 12 {
-		return echo.NewHTTPError(http.StatusBadRequest, "Password must be at least 12 characters long")
-	}
-
-	hasUppercase := false
-	hasLowercase := false
-	hasNumber := false
-	hasSymbol := false
-
-	for _, r := range request.Password {
-		switch {
-		case unicode.IsUpper(r):
-			hasUppercase = true
-		case unicode.IsLower(r):
-			hasLowercase = true
-		case unicode.IsNumber(r):
-			hasNumber = true
-		case unicode.IsPunct(r) || unicode.IsSymbol(r):
-			hasSymbol = true
-		}
-	}
-
-	if !hasUppercase || !hasLowercase || !hasNumber || !hasSymbol {
-		return echo.NewHTTPError(http.StatusBadRequest, "Password must contain uppercase, lowercase, numbers, and symbols")
+	// Validate password complexity using the centralized function
+	if err := utils.ValidatePasswordComplexity(request.Password); err != nil {
+		// Return the specific error message from the validator
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	// Create user

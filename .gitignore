@@ -4,8 +4,7 @@ obj/
 *.so
 go.sum
 vendor/
-*_test.go
-*_test
+
 *.tmp
 *.swp
 .vscode/
