@@ -488,15 +488,14 @@ func DownloadSharedFile(c echo.Context) error {
 		return echo.NewHTTPError(status, message)
 	}
 
-	// Get file from object storage
-	object, err := storage.MinioClient.GetObject(
+	// Get file from object storage using storage.Provider
+	object, err := storage.Provider.GetObject(
 		c.Request().Context(),
-		storage.BucketName,
-		shareDetails.FileID,
+		shareDetails.FileID, // bucketName is handled by the provider
 		minio.GetObjectOptions{},
 	)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to retrieve file from storage: %v", err)
+		logging.ErrorLogger.Printf("Failed to retrieve file from storage via provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file")
 	}
 	defer object.Close()

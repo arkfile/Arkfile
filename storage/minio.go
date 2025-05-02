@@ -12,12 +12,17 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
-var (
-	MinioClient *minio.Client
-	MinioCore   *minio.Core
-	BucketName  string
-)
+// MinioStorage implements the ObjectStorageProvider interface using Minio.
+type MinioStorage struct {
+	client     *minio.Client
+	core       *minio.Core // Needed for multipart uploads
+	bucketName string
+}
 
+// Ensure MinioStorage implements ObjectStorageProvider (will fail compilation initially)
+var _ ObjectStorageProvider = (*MinioStorage)(nil)
+
+// Constants for storage provider types (used for config only)
 type StorageProvider string
 
 const (
@@ -126,10 +131,8 @@ func InitMinio() error {
 		return fmt.Errorf("failed to determine endpoint for provider %s", provider)
 	}
 
-	BucketName = config.BucketName
-
-	var err error
-	MinioClient, err = minio.New(config.Endpoint, &minio.Options{
+	// Create the Minio client instance locally
+	client, err := minio.New(config.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(config.AccessKeyID, config.SecretAccessKey, ""),
 		Secure: config.UseSSL,
 	})
@@ -137,27 +140,35 @@ func InitMinio() error {
 		return fmt.Errorf("failed to create MinIO client: %w", err)
 	}
 
-	// Initialize MinioCore with the client
-	MinioCore = &minio.Core{Client: MinioClient}
+	// Initialize core locally
+	core := &minio.Core{Client: client}
 
-	// Ensure bucket exists
+	// Assign the concrete implementation to the global interface variable
+	Provider = &MinioStorage{
+		client:     client,
+		core:       core,
+		bucketName: config.BucketName, // Store bucket name in the struct
+	}
+
+	// Ensure bucket exists using the local client variable
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	exists, err := MinioClient.BucketExists(ctx, config.BucketName)
+	exists, err := client.BucketExists(ctx, config.BucketName)
 	if err != nil {
 		return fmt.Errorf("failed to check bucket existence: %w", err)
 	}
 
 	if !exists {
-		err = createBucket(ctx, config.BucketName)
+		// Pass local client explicitly
+		err = createBucket(ctx, client, config.BucketName)
 		if err != nil {
 			return fmt.Errorf("failed to create bucket: %w", err)
 		}
 	}
 
-	// Set bucket policy for private access
-	err = setBucketPolicy(ctx, config.BucketName)
+	// Set bucket policy for private access using local client
+	err = setBucketPolicy(ctx, client, config.BucketName)
 	if err != nil {
 		return fmt.Errorf("failed to set bucket policy: %w", err)
 	}
@@ -165,8 +176,9 @@ func InitMinio() error {
 	return nil
 }
 
-func createBucket(ctx context.Context, bucketName string) error {
-	err := MinioClient.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
+// Update helper to accept client
+func createBucket(ctx context.Context, client *minio.Client, bucketName string) error {
+	err := client.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to create bucket: %w", err)
 	}
@@ -174,7 +186,8 @@ func createBucket(ctx context.Context, bucketName string) error {
 	return nil
 }
 
-func setBucketPolicy(ctx context.Context, bucketName string) error {
+// Update helper to accept client
+func setBucketPolicy(ctx context.Context, client *minio.Client, bucketName string) error {
 	// Set a private policy
 	policy := `{
         "Version": "2012-10-17",
@@ -192,36 +205,44 @@ func setBucketPolicy(ctx context.Context, bucketName string) error {
     }`
 	policy = fmt.Sprintf(policy, bucketName, bucketName)
 
-	err := MinioClient.SetBucketPolicy(ctx, bucketName, policy)
+	// Use the passed client
+	err := client.SetBucketPolicy(ctx, bucketName, policy)
 	if err != nil {
 		return fmt.Errorf("failed to set bucket policy: %w", err)
 	}
 	return nil
 }
 
+// --- ObjectStorageProvider Interface Implementation ---
+
+func (m *MinioStorage) PutObject(ctx context.Context, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
+	// Re-add "io" import if needed
+	return m.client.PutObject(ctx, m.bucketName, objectName, reader, objectSize, opts)
+}
+
+func (m *MinioStorage) GetObject(ctx context.Context, objectName string, opts minio.GetObjectOptions) (*minio.Object, error) {
+	return m.client.GetObject(ctx, m.bucketName, objectName, opts)
+}
+
+func (m *MinioStorage) RemoveObject(ctx context.Context, objectName string, opts minio.RemoveObjectOptions) error {
+	return m.client.RemoveObject(ctx, m.bucketName, objectName, opts)
+}
+
+// --- Other Helper Methods on MinioStorage ---
+
 // GetPresignedURL generates a temporary URL for file download
-func GetPresignedURL(filename string, expiry time.Duration) (string, error) {
-	ctx := context.Background()
-	url, err := MinioClient.PresignedGetObject(ctx, BucketName, filename, expiry, nil)
+func (m *MinioStorage) GetPresignedURL(ctx context.Context, objectName string, expiry time.Duration) (string, error) {
+	// Use context passed in if appropriate, or background if not time-sensitive
+	url, err := m.client.PresignedGetObject(ctx, m.bucketName, objectName, expiry, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
 	}
 	return url.String(), nil
 }
 
-// RemoveFile deletes a file from storage
-func RemoveFile(filename string) error {
-	ctx := context.Background()
-	err := MinioClient.RemoveObject(ctx, BucketName, filename, minio.RemoveObjectOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to remove file: %w", err)
-	}
-	return nil
-}
-
 // InitiateMultipartUpload starts a new multipart upload
-func InitiateMultipartUpload(ctx context.Context, objectName string, metadata map[string]string) (string, error) {
-	// Initialize multipart upload
+func (m *MinioStorage) InitiateMultipartUpload(ctx context.Context, objectName string, metadata map[string]string) (string, error) {
+	// Initialize multipart upload using the core client
 	uploadOptions := minio.PutObjectOptions{
 		ContentType: "application/octet-stream",
 	}
@@ -231,7 +252,7 @@ func InitiateMultipartUpload(ctx context.Context, objectName string, metadata ma
 		uploadOptions.UserMetadata = metadata
 	}
 
-	uploadID, err := MinioCore.NewMultipartUpload(ctx, BucketName, objectName, uploadOptions)
+	uploadID, err := m.core.NewMultipartUpload(ctx, m.bucketName, objectName, uploadOptions)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize multipart upload: %w", err)
 	}
@@ -240,9 +261,9 @@ func InitiateMultipartUpload(ctx context.Context, objectName string, metadata ma
 }
 
 // UploadPart uploads a single part of a multipart upload
-func UploadPart(ctx context.Context, objectName, uploadID string, partNumber int, reader io.Reader, size int64) (minio.CompletePart, error) {
-	// Upload the part
-	part, err := MinioCore.PutObjectPart(ctx, BucketName, objectName, uploadID, partNumber, reader, size, minio.PutObjectPartOptions{})
+func (m *MinioStorage) UploadPart(ctx context.Context, objectName, uploadID string, partNumber int, reader io.Reader, size int64) (minio.CompletePart, error) {
+	// Upload the part using the core client
+	part, err := m.core.PutObjectPart(ctx, m.bucketName, objectName, uploadID, partNumber, reader, size, minio.PutObjectPartOptions{})
 	if err != nil {
 		return minio.CompletePart{}, fmt.Errorf("failed to upload part %d: %w", partNumber, err)
 	}
@@ -254,9 +275,9 @@ func UploadPart(ctx context.Context, objectName, uploadID string, partNumber int
 }
 
 // CompleteMultipartUpload finalizes a multipart upload
-func CompleteMultipartUpload(ctx context.Context, objectName, uploadID string, parts []minio.CompletePart) error {
-	// Complete the multipart upload
-	_, err := MinioCore.CompleteMultipartUpload(ctx, BucketName, objectName, uploadID, parts, minio.PutObjectOptions{})
+func (m *MinioStorage) CompleteMultipartUpload(ctx context.Context, objectName, uploadID string, parts []minio.CompletePart) error {
+	// Complete the multipart upload using the core client
+	_, err := m.core.CompleteMultipartUpload(ctx, m.bucketName, objectName, uploadID, parts, minio.PutObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to complete multipart upload: %w", err)
 	}
@@ -265,9 +286,9 @@ func CompleteMultipartUpload(ctx context.Context, objectName, uploadID string, p
 }
 
 // AbortMultipartUpload cancels a multipart upload
-func AbortMultipartUpload(ctx context.Context, objectName, uploadID string) error {
-	// Abort the multipart upload
-	err := MinioCore.AbortMultipartUpload(ctx, BucketName, objectName, uploadID)
+func (m *MinioStorage) AbortMultipartUpload(ctx context.Context, objectName, uploadID string) error {
+	// Abort the multipart upload using the core client
+	err := m.core.AbortMultipartUpload(ctx, m.bucketName, objectName, uploadID)
 	if err != nil {
 		return fmt.Errorf("failed to abort multipart upload: %w", err)
 	}
@@ -275,22 +296,23 @@ func AbortMultipartUpload(ctx context.Context, objectName, uploadID string) erro
 	return nil
 }
 
-// RemoveChunkedFile properly cleans up a chunked file
-// It will look up and remove any chunks associated with the file
-func RemoveChunkedFile(ctx context.Context, filename string, sessionID string) error {
-	// First, remove the completed file if it exists
-	err := MinioClient.RemoveObject(ctx, BucketName, filename, minio.RemoveObjectOptions{})
+// RemoveChunkedFile properly cleans up a chunked file, including any associated multipart uploads.
+func (m *MinioStorage) RemoveChunkedFile(ctx context.Context, filename string, sessionID string) error {
+	// First, remove the completed file if it exists using the interface method
+	// Use RemoveObjectOptions{} for default behavior
+	err := m.RemoveObject(ctx, filename, minio.RemoveObjectOptions{})
 	if err != nil {
 		// Log error but continue - we still want to try removing chunks
-		log.Printf("Warning: Failed to remove complete file %s: %v", filename, err)
+		log.Printf("Warning: Failed to remove complete file %s during chunked removal: %v", filename, err)
 	}
 
 	// List any incomplete uploads for this file (in case upload was never completed)
-	multipartUploads := MinioClient.ListIncompleteUploads(ctx, BucketName, filename, true)
+	multipartUploads := m.client.ListIncompleteUploads(ctx, m.bucketName, filename, true)
 
 	for upload := range multipartUploads {
 		if upload.Err != nil {
-			continue
+			log.Printf("Warning: Error listing incomplete uploads for %s: %v", filename, upload.Err)
+			continue // Skip this problematic listing
 		}
 
 		// If sessionID is provided, only remove the specific upload
@@ -298,18 +320,23 @@ func RemoveChunkedFile(ctx context.Context, filename string, sessionID string) e
 			continue
 		}
 
-		// Abort the multipart upload to clean up all chunks
-		err := MinioCore.AbortMultipartUpload(ctx, BucketName, filename, upload.UploadID)
+		// Abort the multipart upload to clean up all chunks using the method
+		err := m.AbortMultipartUpload(ctx, filename, upload.UploadID)
 		if err != nil {
-			log.Printf("Warning: Failed to abort multipart upload %s: %v", upload.UploadID, err)
+			// Log error but continue, try to abort others if any
+			log.Printf("Warning: Failed to abort multipart upload %s for %s: %v", upload.UploadID, filename, err)
+		} else {
+			log.Printf("Aborted incomplete multipart upload %s for %s", upload.UploadID, filename)
 		}
 	}
 
-	return nil
+	// Errors from the ListIncompleteUploads channel are handled within the loop via upload.Err
+
+	return nil // Return nil even if some aborts failed, as the main object removal was attempted.
 }
 
 // GetObjectChunk downloads a specific byte range of an object
-func GetObjectChunk(ctx context.Context, objectName string, offset, length int64) (io.ReadCloser, error) {
+func (m *MinioStorage) GetObjectChunk(ctx context.Context, objectName string, offset, length int64) (io.ReadCloser, error) {
 	// Create opts with byte range
 	opts := minio.GetObjectOptions{}
 	err := opts.SetRange(offset, offset+length-1)
@@ -317,8 +344,8 @@ func GetObjectChunk(ctx context.Context, objectName string, offset, length int64
 		return nil, fmt.Errorf("failed to set byte range: %w", err)
 	}
 
-	// Get the object with specified range
-	object, err := MinioClient.GetObject(ctx, BucketName, objectName, opts)
+	// Get the object with specified range using the interface method
+	object, err := m.GetObject(ctx, objectName, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get object chunk: %w", err)
 	}

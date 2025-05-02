@@ -71,11 +71,10 @@ func UpdateEncryption(c echo.Context) error {
 	reader := strings.NewReader(request.EncryptedData)
 	contentType := "application/octet-stream"
 
-	// Upload the updated encrypted file
-	_, err = storage.MinioClient.PutObject(
+	// Upload the updated encrypted file using storage.Provider
+	_, err = storage.Provider.PutObject(
 		c.Request().Context(),
-		storage.BucketName,
-		objectName,
+		objectName, // bucketName is handled by the provider
 		reader,
 		int64(len(request.EncryptedData)),
 		minio.PutObjectOptions{ContentType: contentType},

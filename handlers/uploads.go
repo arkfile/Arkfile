@@ -84,8 +84,17 @@ func CreateUploadSession(c echo.Context) error {
 		"session-id":  sessionID,
 		"owner-email": email,
 	}
-	uploadID, err := storage.InitiateMultipartUpload(c.Request().Context(), request.Filename, metadata)
+
+	// Get the concrete MinioStorage implementation via type assertion
+	minioProvider, ok := storage.Provider.(*storage.MinioStorage)
+	if !ok {
+		logging.ErrorLogger.Print("Storage provider is not the expected Minio implementation for multipart upload")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Storage system configuration error")
+	}
+
+	uploadID, err := minioProvider.InitiateMultipartUpload(c.Request().Context(), request.Filename, metadata)
 	if err != nil {
+		logging.ErrorLogger.Printf("Failed to initiate multipart upload for %s via provider: %v", request.Filename, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to initialize storage upload")
 	}
 
@@ -95,14 +104,19 @@ func CreateUploadSession(c echo.Context) error {
 		uploadID, sessionID,
 	)
 	if err != nil {
-		// Abort the multipart upload if we can't update the database
-		storage.AbortMultipartUpload(c.Request().Context(), request.Filename, uploadID)
+		// Abort the multipart upload if we can't update the database (using minioProvider)
+		// Note: minioProvider should still be in scope here from the assertion above.
+		if minioProvider != nil {
+			minioProvider.AbortMultipartUpload(c.Request().Context(), request.Filename, uploadID)
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update upload session")
 	}
 
 	if err := tx.Commit(); err != nil {
-		// Attempt to abort the storage upload if we can't commit
-		storage.AbortMultipartUpload(c.Request().Context(), request.Filename, uploadID)
+		// Attempt to abort the storage upload if we can't commit (using minioProvider)
+		if minioProvider != nil {
+			minioProvider.AbortMultipartUpload(c.Request().Context(), request.Filename, uploadID)
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
 	}
 
@@ -181,10 +195,18 @@ func GetSharedFileByShareID(c echo.Context) error {
 		}
 	}
 
-	// Generate download URL
+	// Get the concrete MinioStorage implementation via type assertion
+	minioProvider, ok := storage.Provider.(*storage.MinioStorage)
+	if !ok {
+		logging.ErrorLogger.Print("Storage provider is not the expected Minio implementation for presigned URL")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Storage system configuration error")
+	}
+
+	// Generate download URL using method
 	expiry := time.Hour // 1 hour expiry for the actual download link
-	downloadURL, err := storage.GetPresignedURL(shareDetails.FileID, expiry)
+	downloadURL, err := minioProvider.GetPresignedURL(c.Request().Context(), shareDetails.FileID, expiry)
 	if err != nil {
+		logging.ErrorLogger.Printf("Failed to generate presigned URL for %s via provider: %v", shareDetails.FileID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download URL")
 	}
 
@@ -360,9 +382,17 @@ func DownloadFileChunk(c echo.Context) error {
 		endByte = size - 1
 	}
 
-	// Retrieve chunk from storage
-	reader, err := storage.GetObjectChunk(c.Request().Context(), fileID, startByte, endByte-startByte+1)
+	// Get the concrete MinioStorage implementation via type assertion
+	minioProvider, ok := storage.Provider.(*storage.MinioStorage)
+	if !ok {
+		logging.ErrorLogger.Print("Storage provider is not the expected Minio implementation for getting chunk")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Storage system configuration error")
+	}
+
+	// Retrieve chunk from storage using method
+	reader, err := minioProvider.GetObjectChunk(c.Request().Context(), fileID, startByte, endByte-startByte+1)
 	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get chunk for %s via provider: %v", fileID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file chunk from storage")
 	}
 	defer reader.Close()
@@ -434,11 +464,19 @@ func CancelUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update session status")
 	}
 
-	// Abort the multipart upload in storage
-	if storageUploadID != "" {
-		err = storage.AbortMultipartUpload(c.Request().Context(), filename, storageUploadID)
+	// Get the concrete MinioStorage implementation via type assertion
+	minioProvider, ok := storage.Provider.(*storage.MinioStorage)
+	if !ok {
+		logging.ErrorLogger.Print("Storage provider is not the expected Minio implementation for aborting upload")
+		// Proceed with DB update even if storage isn't asserted correctly? Or return error?
+		// For now, log and proceed with DB update.
+	}
+
+	// Abort the multipart upload in storage (using minioProvider if available)
+	if storageUploadID != "" && minioProvider != nil {
+		err = minioProvider.AbortMultipartUpload(c.Request().Context(), filename, storageUploadID)
 		if err != nil {
-			logging.ErrorLogger.Printf("Failed to abort storage upload: %v", err)
+			logging.ErrorLogger.Printf("Failed to abort storage upload via provider: %v", err)
 			// Continue anyway - we still want to mark the session as canceled in the database
 		}
 	}
@@ -586,11 +624,18 @@ func UploadChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk hash format")
 	}
 
+	// Get the concrete MinioStorage implementation via type assertion
+	minioProvider, ok := storage.Provider.(*storage.MinioStorage)
+	if !ok {
+		logging.ErrorLogger.Print("Storage provider is not the expected Minio implementation for uploading part")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Storage system configuration error")
+	}
+
 	// Minio part numbers are 1-based
 	minioPartNumber := chunkNumber + 1
 
-	// Stream chunk directly to storage (no buffering in memory)
-	part, err := storage.UploadPart(
+	// Stream chunk directly to storage using method
+	part, err := minioProvider.UploadPart(
 		c.Request().Context(),
 		filename,
 		storageUploadID,
@@ -599,6 +644,7 @@ func UploadChunk(c echo.Context) error {
 		-1, // Unknown size, will read until EOF
 	)
 	if err != nil {
+		logging.ErrorLogger.Printf("Failed to upload chunk %d via provider: %v", minioPartNumber, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to upload chunk to storage")
 	}
 
@@ -717,9 +763,17 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error reading chunk data")
 	}
 
-	// Complete the multipart upload in storage
-	err = storage.CompleteMultipartUpload(c.Request().Context(), filename, storageUploadID, parts)
+	// Get the concrete MinioStorage implementation via type assertion
+	minioProvider, ok := storage.Provider.(*storage.MinioStorage)
+	if !ok {
+		logging.ErrorLogger.Print("Storage provider is not the expected Minio implementation for completing upload")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Storage system configuration error")
+	}
+
+	// Complete the multipart upload in storage using method
+	err = minioProvider.CompleteMultipartUpload(c.Request().Context(), filename, storageUploadID, parts)
 	if err != nil {
+		logging.ErrorLogger.Printf("Failed to complete storage upload via provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
 	}
 

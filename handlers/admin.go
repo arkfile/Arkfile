@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/minio/minio-go/v7" // Import minio for options
 
 	"github.com/84adam/arkfile/auth"
 	"github.com/84adam/arkfile/database"
@@ -365,10 +366,10 @@ func DeleteUser(c echo.Context) error {
 
 	// Delete user's files
 	for _, filename := range filenames {
-		// Remove from storage
-		if err := storage.RemoveFile(filename); err != nil {
-			logging.ErrorLogger.Printf("Failed to remove file %s from storage: %v", filename, err)
-			// Continue anyway - we want to delete the user even if some files can't be removed
+		// Remove from storage using storage.Provider
+		if err := storage.Provider.RemoveObject(c.Request().Context(), filename, minio.RemoveObjectOptions{}); err != nil {
+			logging.ErrorLogger.Printf("Failed to remove file %s from storage via provider: %v", filename, err)
+			// Continue anyway - we want to delete the user even if some files can't be removed (Unchanged logic)
 		}
 
 		// Delete file metadata

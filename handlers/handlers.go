@@ -171,11 +171,10 @@ func UploadFile(c echo.Context) error {
 	}
 	defer tx.Rollback() // Rollback if not committed
 
-	// Store file in object storage backend
-	_, err = storage.MinioClient.PutObject(
+	// Store file in object storage backend using storage.Provider
+	_, err = storage.Provider.PutObject(
 		c.Request().Context(),
-		storage.BucketName,
-		request.Filename,
+		request.Filename, // bucketName is handled by the provider
 		strings.NewReader(request.Data),
 		fileSize,
 		minio.PutObjectOptions{ContentType: "application/octet-stream"},
@@ -191,8 +190,8 @@ func UploadFile(c echo.Context) error {
 		request.Filename, email, request.PasswordHint, request.PasswordType, request.SHA256Sum, fileSize,
 	)
 	if err != nil {
-		// If metadata storage fails, delete the uploaded file
-		storage.MinioClient.RemoveObject(c.Request().Context(), storage.BucketName, request.Filename, minio.RemoveObjectOptions{})
+		// If metadata storage fails, delete the uploaded file using storage.Provider
+		storage.Provider.RemoveObject(c.Request().Context(), request.Filename, minio.RemoveObjectOptions{})
 		logging.ErrorLogger.Printf("Failed to store file metadata: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process file")
 	}
@@ -256,15 +255,14 @@ func DownloadFile(c echo.Context) error {
 		filename,
 	).Scan(&fileMetadata.PasswordHint, &fileMetadata.PasswordType, &fileMetadata.SHA256Sum)
 
-	// Get file from object storage backend
-	object, err := storage.MinioClient.GetObject(
+	// Get file from object storage backend using storage.Provider
+	object, err := storage.Provider.GetObject(
 		c.Request().Context(),
-		storage.BucketName,
-		filename,
+		filename, // bucketName is handled by the provider
 		minio.GetObjectOptions{},
 	)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to retrieve file: %v", err)
+		logging.ErrorLogger.Printf("Failed to retrieve file via provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file")
 	}
 	defer object.Close()
@@ -396,10 +394,10 @@ func DeleteFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to delete this file")
 	}
 
-	// Remove from object storage
-	err = storage.RemoveFile(filename)
+	// Remove from object storage using storage.Provider
+	err = storage.Provider.RemoveObject(c.Request().Context(), filename, minio.RemoveObjectOptions{})
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to remove file from storage: %v", err)
+		logging.ErrorLogger.Printf("Failed to remove file from storage via provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete file from storage")
 	}
 
@@ -435,9 +433,11 @@ func DeleteFile(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "File deleted successfully",
 		"storage": map[string]interface{}{
-			"total_bytes":     user.TotalStorage - fileSize,
-			"limit_bytes":     user.StorageLimit,
-			"available_bytes": user.StorageLimit - (user.TotalStorage - fileSize),
+			// Use the user.TotalStorage already updated in memory by UpdateStorageUsage
+			"total_bytes": user.TotalStorage,
+			"limit_bytes": user.StorageLimit,
+			// Calculate available based on the updated total
+			"available_bytes": user.StorageLimit - user.TotalStorage,
 		},
 	})
 }
