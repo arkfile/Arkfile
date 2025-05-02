@@ -58,4 +58,4 @@ echo "Created directories for environments: ${ENVIRONMENTS[*]}"
 
 # Display directory structure
 echo -e "${YELLOW}Directory structure:${NC}"
-tree -L 4 --dirsfirst ${BASE_DIR}
+sudo tree -L 4 --dirsfirst ${BASE_DIR}
