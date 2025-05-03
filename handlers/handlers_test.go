@@ -16,6 +16,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	jwt "github.com/golang-jwt/jwt/v5" // Use alias for clarity
 	"github.com/labstack/echo/v4"
+	"github.com/minio/minio-go/v7" // Import minio
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock" // Import testify/mock
 	"github.com/stretchr/testify/require"
@@ -457,9 +458,481 @@ func TestLogin_RefreshTokenDBError(t *testing.T) {
 }
 
 // --- Test UploadFile ---
-// ... TODO: Add UploadFile tests using setupTestEnv and sqlmock ...
-// Requires mocks for GetUserByEmail, DB transaction (Begin, Exec, Commit/Rollback)
-// Also requires mocking Minio client interactions
+
+// TestUploadFile_Success tests successful file upload
+func TestUploadFile_Success(t *testing.T) {
+	email := "uploader@example.com"
+	filename := "my-test-file.dat"
+	fileData := "This is the test file content."
+	passwordHint := "test hint"
+	passwordType := "account"                                                       // or "custom"
+	sha256sum := "f2ca1bb6c7e907d06dafe4687e579fce76b37e4e93b7605022da52e6ccc26fd2" // Example hash for "This is the test file content."
+	fileSize := int64(len(fileData))
+	initialStorage := int64(0)
+	expectedFinalStorage := initialStorage + fileSize
+
+	reqBodyMap := map[string]string{
+		"filename":     filename,
+		"data":         fileData,
+		"passwordHint": passwordHint,
+		"passwordType": passwordType,
+		"sha256sum":    sha256sum,
+	}
+	jsonBody, _ := json.Marshal(reqBodyMap)
+
+	// Setup test environment
+	c, rec, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody)) // Assuming POST /files is the route
+
+	// Add Authentication context
+	claims := &auth.Claims{Email: email}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// --- Mock GetUserByEmail (for storage check) ---
+	// Uses the *non-transactional* GetUserByEmail outside the transaction
+	getUserSQL := `
+		SELECT id, email, password, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE email = ?`
+	userID := int64(5) // Assume some user ID
+	userRows := sqlmock.NewRows([]string{
+		"id", "email", "password", "created_at",
+		"total_storage_bytes", "storage_limit_bytes",
+		"is_approved", "approved_by", "approved_at", "is_admin",
+	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+
+	// --- Transactional and Storage Expectations (Order based on handler logic) ---
+	mockDB.ExpectBegin()
+
+	// 1. Expect PutObject call first (as per handler logic)
+	mockStorage.On("PutObject",
+		mock.Anything, // context
+		filename,
+		mock.AnythingOfType("*strings.Reader"), // Handler wraps data
+		fileSize,
+		mock.AnythingOfType("minio.PutObjectOptions"),
+	).Return(minio.UploadInfo{}, nil).Once() // Simulate successful upload
+
+	// 2. Expect Metadata Insertion (after PutObject)
+	insertMetaSQL := "INSERT INTO file_metadata (filename, owner_email, password_hint, password_type, sha256sum, size_bytes) VALUES (?, ?, ?, ?, ?, ?)"
+	mockDB.ExpectExec(insertMetaSQL).
+		WithArgs(filename, email, passwordHint, passwordType, sha256sum, fileSize).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// 3. Expect Storage Usage Update (inside user.UpdateStorageUsage)
+	updateStorageSQL := "UPDATE users SET total_storage_bytes = ? WHERE id = ?"
+	mockDB.ExpectExec(updateStorageSQL).
+		WithArgs(expectedFinalStorage, userID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// 4. Expect Commit
+	mockDB.ExpectCommit()
+
+	// --- Mock LogUserAction (after commit) ---
+	logActionSQL := `INSERT INTO access_logs (user_email, action, filename) VALUES (?, ?, ?)`
+	mockDB.ExpectExec(logActionSQL).WithArgs(email, "uploaded", filename).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// --- Execute Handler ---
+	err := UploadFile(c)
+
+	// --- Assertions ---
+	require.NoError(t, err, "UploadFile handler failed")
+	assert.Equal(t, http.StatusOK, rec.Code, "Expected status OK")
+
+	// Check response body
+	var resp map[string]interface{}
+	err = json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err, "Failed to unmarshal response")
+	assert.Equal(t, "File uploaded successfully", resp["message"])
+
+	// Check updated storage in response (using handler's upload response logic)
+	storageInfo, ok := resp["storage"].(map[string]interface{})
+	require.True(t, ok, "Storage info missing in response")
+	// Uses initial value + fileSize for response calculation
+	assert.Equal(t, float64(initialStorage+fileSize), storageInfo["total_bytes"], "Storage total bytes mismatch in response")
+	assert.Equal(t, float64(models.DefaultStorageLimit), storageInfo["limit_bytes"], "Storage limit bytes mismatch in response")
+	assert.Equal(t, float64(models.DefaultStorageLimit-(initialStorage+fileSize)), storageInfo["available_bytes"], "Storage available bytes mismatch in response")
+
+	// Verify all DB and Storage expectations were met
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "DB expectations not met")
+	mockStorage.AssertExpectations(t)
+}
+
+// TestUploadFile_StorageLimitExceeded tests attempting to upload when storage is insufficient
+func TestUploadFile_StorageLimitExceeded(t *testing.T) {
+	email := "limit-exceeder@example.com"
+	filename := "too-big-file.dat"
+	fileData := "Some data"
+	fileSize := int64(len(fileData)) // e.g., 9 bytes
+	// Set initial storage to be very close to the limit
+	initialStorage := models.DefaultStorageLimit - (fileSize / 2) // e.g., 10GB - 4 bytes
+	// Uploading fileSize (9 bytes) would exceed the limit (10GB)
+
+	reqBodyMap := map[string]string{
+		"filename":     filename,
+		"data":         fileData,
+		"passwordHint": "hint",
+		"passwordType": "account",
+		"sha256sum":    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // Valid 64 hex chars
+	}
+	jsonBody, _ := json.Marshal(reqBodyMap)
+
+	// Setup test environment
+	c, _, mockDB, _ := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody)) // Storage mock not used here
+
+	// Add Authentication context
+	claims := &auth.Claims{Email: email}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// --- Mock GetUserByEmail (for storage check) ---
+	getUserSQL := `
+		SELECT id, email, password, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE email = ?`
+	userID := int64(6)
+	userRows := sqlmock.NewRows([]string{
+		"id", "email", "password", "created_at",
+		"total_storage_bytes", "storage_limit_bytes",
+		"is_approved", "approved_by", "approved_at", "is_admin",
+	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+
+	// Handler should check storage and fail BEFORE starting transaction or calling storage
+
+	// --- Execute Handler ---
+	err := UploadFile(c)
+
+	// --- Assertions ---
+	require.Error(t, err, "Expected an error for storage limit exceeded")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "Error should be an echo.HTTPError")
+	assert.Equal(t, http.StatusForbidden, httpErr.Code, "Expected status Forbidden")
+	assert.Equal(t, "Storage limit would be exceeded", httpErr.Message.(string))
+
+	// Verify all DB expectations were met (only the GetUser query)
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "DB expectations not met")
+	// No storage expectations to assert
+}
+
+// TestUploadFile_StoragePutError tests failure during storage PutObject
+func TestUploadFile_StoragePutError(t *testing.T) {
+	email := "uploader-stor-err@example.com"
+	filename := "fail-on-put.dat"
+	fileData := "This data won't make it."
+	fileSize := int64(len(fileData))
+	initialStorage := int64(0)
+
+	reqBodyMap := map[string]string{
+		"filename":     filename,
+		"data":         fileData,
+		"passwordHint": "hint",
+		"passwordType": "account",
+		"sha256sum":    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // Valid hash
+	}
+	jsonBody, _ := json.Marshal(reqBodyMap)
+
+	// Setup test environment
+	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody))
+
+	// Add Authentication context
+	claims := &auth.Claims{Email: email}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// --- Mock GetUserByEmail (for storage check) ---
+	getUserSQL := `
+		SELECT id, email, password, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE email = ?`
+	userID := int64(7)
+	userRows := sqlmock.NewRows([]string{
+		"id", "email", "password", "created_at",
+		"total_storage_bytes", "storage_limit_bytes",
+		"is_approved", "approved_by", "approved_at", "is_admin",
+	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+
+	// --- Transactional and Storage Expectations ---
+	mockDB.ExpectBegin()
+
+	// 1. Expect PutObject call to FAIL
+	storageError := fmt.Errorf("simulated storage PutObject error")
+	mockStorage.On("PutObject",
+		mock.Anything, // context
+		filename,
+		mock.AnythingOfType("*strings.Reader"),
+		fileSize,
+		mock.AnythingOfType("minio.PutObjectOptions"),
+	).Return(minio.UploadInfo{}, storageError).Once() // Return the error
+
+	// 2. Expect Rollback because PutObject failed
+	mockDB.ExpectRollback()
+
+	// --- Execute Handler ---
+	err := UploadFile(c)
+
+	// --- Assertions ---
+	require.Error(t, err, "Expected an error for storage PutObject failure")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "Error should be an echo.HTTPError")
+	assert.Equal(t, http.StatusInternalServerError, httpErr.Code, "Expected status InternalServerError")
+	// The handler returns a generic message for PutObject errors
+	assert.Equal(t, "Failed to upload file", httpErr.Message.(string))
+
+	// Verify all DB and Storage expectations were met
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "DB expectations not met")
+	mockStorage.AssertExpectations(t)
+}
+
+// TestUploadFile_MetadataInsertError tests failure during DB metadata insertion
+func TestUploadFile_MetadataInsertError(t *testing.T) {
+	email := "uploader-meta-err@example.com"
+	filename := "fail-on-meta-insert.dat"
+	fileData := "This data makes it to storage, but not DB."
+	fileSize := int64(len(fileData))
+	initialStorage := int64(0)
+
+	reqBodyMap := map[string]string{
+		"filename":     filename,
+		"data":         fileData,
+		"passwordHint": "hint",
+		"passwordType": "account",
+		"sha256sum":    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // Valid hash
+	}
+	jsonBody, _ := json.Marshal(reqBodyMap)
+
+	// Setup test environment
+	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody))
+
+	// Add Authentication context
+	claims := &auth.Claims{Email: email}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// --- Mock GetUserByEmail (for storage check) ---
+	getUserSQL := `
+		SELECT id, email, password, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE email = ?`
+	userID := int64(8)
+	userRows := sqlmock.NewRows([]string{
+		"id", "email", "password", "created_at",
+		"total_storage_bytes", "storage_limit_bytes",
+		"is_approved", "approved_by", "approved_at", "is_admin",
+	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+
+	// --- Transactional and Storage Expectations ---
+	mockDB.ExpectBegin()
+
+	// 1. Expect PutObject call to SUCCEED
+	mockStorage.On("PutObject",
+		mock.Anything, filename, mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("minio.PutObjectOptions"),
+	).Return(minio.UploadInfo{}, nil).Once()
+
+	// 2. Expect Metadata Insertion to FAIL
+	dbError := fmt.Errorf("simulated DB metadata insert error")
+	insertMetaSQL := "INSERT INTO file_metadata (filename, owner_email, password_hint, password_type, sha256sum, size_bytes) VALUES (?, ?, ?, ?, ?, ?)"
+	mockDB.ExpectExec(insertMetaSQL).
+		WithArgs(filename, email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize).
+		WillReturnError(dbError)
+
+	// 3. Expect Storage Cleanup (RemoveObject) because metadata insert failed
+	mockStorage.On("RemoveObject",
+		mock.Anything, filename, mock.AnythingOfType("minio.RemoveObjectOptions"),
+	).Return(nil).Once() // Simulate successful cleanup
+
+	// 4. Expect Rollback
+	mockDB.ExpectRollback()
+
+	// --- Execute Handler ---
+	err := UploadFile(c)
+
+	// --- Assertions ---
+	require.Error(t, err, "Expected an error for metadata insert failure")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "Error should be an echo.HTTPError")
+	assert.Equal(t, http.StatusInternalServerError, httpErr.Code, "Expected status InternalServerError")
+	// Corrected: Handler returns this for metadata insert failure
+	assert.Equal(t, "Failed to process file", httpErr.Message.(string))
+
+	// Verify all DB and Storage expectations were met
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "DB expectations not met")
+	mockStorage.AssertExpectations(t)
+}
+
+// TestUploadFile_UpdateStorageError tests failure during DB user storage update
+func TestUploadFile_UpdateStorageError(t *testing.T) {
+	email := "uploader-upd-stor-err@example.com"
+	filename := "fail-on-update-storage.dat"
+	fileData := "This data is in storage & meta, but user total is wrong."
+	fileSize := int64(len(fileData))
+	initialStorage := int64(0)
+
+	reqBodyMap := map[string]string{
+		"filename":     filename,
+		"data":         fileData,
+		"passwordHint": "hint",
+		"passwordType": "account",
+		"sha256sum":    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // Valid hash
+	}
+	jsonBody, _ := json.Marshal(reqBodyMap)
+
+	// Setup test environment
+	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody))
+
+	// Add Authentication context
+	claims := &auth.Claims{Email: email}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// --- Mock GetUserByEmail (for storage check) ---
+	getUserSQL := `
+		SELECT id, email, password, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE email = ?`
+	userID := int64(9)
+	userRows := sqlmock.NewRows([]string{
+		"id", "email", "password", "created_at",
+		"total_storage_bytes", "storage_limit_bytes",
+		"is_approved", "approved_by", "approved_at", "is_admin",
+	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+
+	// --- Transactional and Storage Expectations ---
+	mockDB.ExpectBegin()
+
+	// 1. Expect PutObject call to SUCCEED
+	mockStorage.On("PutObject",
+		mock.Anything, filename, mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("minio.PutObjectOptions"),
+	).Return(minio.UploadInfo{}, nil).Once()
+
+	// 2. Expect Metadata Insertion to SUCCEED
+	insertMetaSQL := "INSERT INTO file_metadata (filename, owner_email, password_hint, password_type, sha256sum, size_bytes) VALUES (?, ?, ?, ?, ?, ?)"
+	mockDB.ExpectExec(insertMetaSQL).
+		WithArgs(filename, email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// 3. Expect Storage Usage Update to FAIL
+	dbError := fmt.Errorf("simulated DB update storage error")
+	updateStorageSQL := "UPDATE users SET total_storage_bytes = ? WHERE id = ?"
+	mockDB.ExpectExec(updateStorageSQL).
+		WithArgs(initialStorage+fileSize, userID). // Correct expected args
+		WillReturnError(dbError)
+
+	// 4. Expect Rollback because storage update failed
+	mockDB.ExpectRollback()
+
+	// No storage cleanup (RemoveObject) should be called here. The failed DB transaction
+	// means the file technically exists in storage and metadata, but the user's total wasn't updated.
+	// Rollback handles the DB consistency.
+
+	// --- Execute Handler ---
+	err := UploadFile(c)
+
+	// --- Assertions ---
+	require.Error(t, err, "Expected an error for update storage failure")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "Error should be an echo.HTTPError")
+	assert.Equal(t, http.StatusInternalServerError, httpErr.Code, "Expected status InternalServerError")
+	// Corrected: Handler returns this for storage update failure
+	assert.Equal(t, "Failed to update storage usage", httpErr.Message.(string))
+
+	// Verify all DB and Storage expectations were met
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "DB expectations not met")
+	mockStorage.AssertExpectations(t) // Check PutObject was called
+}
+
+// TestUploadFile_CommitError tests failure during the final DB transaction commit
+func TestUploadFile_CommitError(t *testing.T) {
+	email := "uploader-commit-err@example.com"
+	filename := "fail-on-commit.dat"
+	fileData := "This data is almost committed."
+	fileSize := int64(len(fileData))
+	initialStorage := int64(0)
+	expectedFinalStorage := initialStorage + fileSize
+
+	reqBodyMap := map[string]string{
+		"filename":     filename,
+		"data":         fileData,
+		"passwordHint": "hint",
+		"passwordType": "account",
+		"sha256sum":    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // Valid hash
+	}
+	jsonBody, _ := json.Marshal(reqBodyMap)
+
+	// Setup test environment
+	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody))
+
+	// Add Authentication context
+	claims := &auth.Claims{Email: email}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// --- Mock GetUserByEmail (for storage check) ---
+	getUserSQL := `
+		SELECT id, email, password, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE email = ?`
+	userID := int64(10)
+	userRows := sqlmock.NewRows([]string{
+		"id", "email", "password", "created_at",
+		"total_storage_bytes", "storage_limit_bytes",
+		"is_approved", "approved_by", "approved_at", "is_admin",
+	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+
+	// --- Transactional and Storage Expectations ---
+	mockDB.ExpectBegin()
+
+	// 1. Expect PutObject call to SUCCEED
+	mockStorage.On("PutObject",
+		mock.Anything, filename, mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("minio.PutObjectOptions"),
+	).Return(minio.UploadInfo{}, nil).Once()
+
+	// 2. Expect Metadata Insertion to SUCCEED
+	insertMetaSQL := "INSERT INTO file_metadata (filename, owner_email, password_hint, password_type, sha256sum, size_bytes) VALUES (?, ?, ?, ?, ?, ?)"
+	mockDB.ExpectExec(insertMetaSQL).
+		WithArgs(filename, email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// 3. Expect Storage Usage Update to SUCCEED
+	updateStorageSQL := "UPDATE users SET total_storage_bytes = ? WHERE id = ?"
+	mockDB.ExpectExec(updateStorageSQL).
+		WithArgs(expectedFinalStorage, userID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// 4. Expect Commit to FAIL
+	dbError := fmt.Errorf("simulated DB commit error")
+	mockDB.ExpectCommit().WillReturnError(dbError)
+
+	// Rollback is not explicitly called by the handler if commit fails,
+	// but the transaction state is effectively rolled back. sqlmock doesn't track implicit rollbacks.
+	// No storage cleanup should be called here either.
+
+	// --- Execute Handler ---
+	err := UploadFile(c)
+
+	// --- Assertions ---
+	require.Error(t, err, "Expected an error for commit failure")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "Error should be an echo.HTTPError")
+	assert.Equal(t, http.StatusInternalServerError, httpErr.Code, "Expected status InternalServerError")
+	// Corrected: Handler returns this for commit failure
+	assert.Equal(t, "Failed to complete upload", httpErr.Message.(string))
+
+	// Verify all DB and Storage expectations were met
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "DB expectations not met")
+	mockStorage.AssertExpectations(t) // Check PutObject was called
+}
 
 // --- Test DownloadFile ---
 // ... TODO: Add DownloadFile tests using setupTestEnv and sqlmock ...
@@ -584,4 +1057,143 @@ func TestDeleteFile_Success(t *testing.T) {
 	mockStorage.AssertExpectations(t) // Verify storage mock expectations
 }
 
-// TODO: Add more DeleteFile tests (e.g., file not found, not owner, storage remove error, DB errors)
+// TestDeleteFile_NotFound tests deleting a file that doesn't exist
+func TestDeleteFile_NotFound(t *testing.T) {
+	email := "user-delete@example.com"
+	filename := "non-existent-file.txt"
+
+	// Setup test environment - storage mock not strictly needed but harmless
+	c, _, mockDB, _ := setupTestEnv(t, http.MethodDelete, "/files/:filename", nil)
+
+	// Set path parameter
+	c.SetParamNames("filename")
+	c.SetParamValues(filename)
+
+	// Add Authentication context
+	claims := &auth.Claims{Email: email}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// --- DB Expectations ---
+	mockDB.ExpectBegin() // Expect transaction start
+
+	// Expect ownership check query to return sql.ErrNoRows
+	ownerCheckSQL := "SELECT owner_email, size_bytes FROM file_metadata WHERE filename = ?"
+	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnError(sql.ErrNoRows)
+
+	// Expect Rollback because handler should error out before commit
+	mockDB.ExpectRollback()
+
+	// --- Execute Handler ---
+	err := DeleteFile(c)
+
+	// --- Assertions ---
+	require.Error(t, err, "Expected an error for file not found")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "Error should be an echo.HTTPError")
+	assert.Equal(t, http.StatusNotFound, httpErr.Code, "Expected status NotFound")
+	assert.Equal(t, "File not found", httpErr.Message.(string))
+
+	// Verify all DB expectations were met
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "DB expectations not met")
+}
+
+// TestDeleteFile_NotOwner tests deleting a file owned by someone else
+func TestDeleteFile_NotOwner(t *testing.T) {
+	requestingUserEmail := "user-trying-delete@example.com"
+	ownerEmail := "actual-owner@example.com" // Different user
+	filename := "someone-elses-file.txt"
+	fileSize := int64(512)
+
+	// Setup test environment
+	c, _, mockDB, _ := setupTestEnv(t, http.MethodDelete, "/files/:filename", nil)
+
+	// Set path parameter
+	c.SetParamNames("filename")
+	c.SetParamValues(filename)
+
+	// Add Authentication context for the requesting user
+	claims := &auth.Claims{Email: requestingUserEmail}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// --- DB Expectations ---
+	mockDB.ExpectBegin() // Expect transaction start
+
+	// Expect ownership check query returns the actual owner's email
+	ownerCheckSQL := "SELECT owner_email, size_bytes FROM file_metadata WHERE filename = ?"
+	ownerRows := sqlmock.NewRows([]string{"owner_email", "size_bytes"}).AddRow(ownerEmail, fileSize)
+	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnRows(ownerRows)
+
+	// Expect Rollback because handler should error out before commit
+	mockDB.ExpectRollback()
+
+	// --- Execute Handler ---
+	err := DeleteFile(c)
+
+	// --- Assertions ---
+	require.Error(t, err, "Expected an error for not owner")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "Error should be an echo.HTTPError")
+	assert.Equal(t, http.StatusForbidden, httpErr.Code, "Expected status Forbidden")
+	assert.Equal(t, "Not authorized to delete this file", httpErr.Message.(string))
+
+	// Verify all DB expectations were met
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "DB expectations not met")
+}
+
+// TestDeleteFile_StorageError tests failure during storage object removal
+func TestDeleteFile_StorageError(t *testing.T) {
+	email := "user-delete@example.com"
+	filename := "file-stor-err.txt"
+	fileSize := int64(1024)
+	// No need for initialStorage here as the handler errors before user update
+
+	// Setup test environment
+	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodDelete, "/files/:filename", nil)
+
+	// Set path parameter
+	c.SetParamNames("filename")
+	c.SetParamValues(filename)
+
+	// Add Authentication context
+	claims := &auth.Claims{Email: email}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// --- DB Expectations ---
+	mockDB.ExpectBegin() // Expect transaction start
+
+	// Expect ownership check query (successful check)
+	ownerCheckSQL := "SELECT owner_email, size_bytes FROM file_metadata WHERE filename = ?"
+	ownerRows := sqlmock.NewRows([]string{"owner_email", "size_bytes"}).AddRow(email, fileSize)
+	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnRows(ownerRows)
+
+	// Expect Rollback because storage error should trigger it
+	mockDB.ExpectRollback()
+
+	// --- Storage Expectations ---
+	// Expect RemoveObject call to return an error
+	storageError := fmt.Errorf("simulated storage layer error")
+	mockStorage.On("RemoveObject",
+		mock.Anything, // context
+		filename,
+		mock.AnythingOfType("minio.RemoveObjectOptions"),
+	).Return(storageError).Once() // Return the simulated error
+
+	// --- Execute Handler ---
+	err := DeleteFile(c)
+
+	// --- Assertions ---
+	require.Error(t, err, "Expected an error for storage failure")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok, "Error should be an echo.HTTPError")
+	assert.Equal(t, http.StatusInternalServerError, httpErr.Code, "Expected status InternalServerError")
+	assert.Equal(t, "Failed to delete file from storage", httpErr.Message.(string))
+
+	// Verify all DB and Storage expectations were met
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "DB expectations not met")
+	mockStorage.AssertExpectations(t)
+}
+
+// TODO: Add DeleteFile tests for DB errors during transaction (metadata delete, user get, user update, commit)

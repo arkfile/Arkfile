@@ -214,9 +214,11 @@ func UploadFile(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "File uploaded successfully",
 		"storage": map[string]interface{}{
-			"total_bytes":     user.TotalStorage + fileSize,
-			"limit_bytes":     user.StorageLimit,
-			"available_bytes": user.StorageLimit - (user.TotalStorage + fileSize),
+			// Use the user.TotalStorage which was updated in memory by UpdateStorageUsage
+			"total_bytes": user.TotalStorage,
+			"limit_bytes": user.StorageLimit,
+			// Calculate available based on the updated total
+			"available_bytes": user.StorageLimit - user.TotalStorage,
 		},
 	})
 }
