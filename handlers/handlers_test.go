@@ -935,9 +935,88 @@ func TestUploadFile_CommitError(t *testing.T) {
 }
 
 // --- Test DownloadFile ---
-// ... TODO: Add DownloadFile tests using setupTestEnv and sqlmock ...
-// Requires mocks for DB queries (owner check, metadata)
-// Also requires mocking Minio client GetObject
+
+// TestDownloadFile_Success tests successful file download
+func TestDownloadFile_Success(t *testing.T) {
+	email := "downloader@example.com"
+	filename := "download-test.txt"
+	fileContent := "This is the content to be downloaded."
+	fileSize := int64(len(fileContent))
+	passwordHint := "download hint"
+	passwordType := "account"
+	sha256sum := "hash123..." // Precise hash not critical for this test path
+
+	// Setup test environment
+	c, rec, mockDB, mockStorage := setupTestEnv(t, http.MethodGet, "/files/:filename", nil) // GET request
+
+	// Set path parameter
+	c.SetParamNames("filename")
+	c.SetParamValues(filename)
+
+	// Add Authentication context
+	claims := &auth.Claims{Email: email}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// --- DB Expectations (Non-transactional) ---
+
+	// 1. Expect Ownership Check (assuming it uses QueryRow)
+	ownerCheckSQL := "SELECT owner_email FROM file_metadata WHERE filename = ?"
+	ownerRows := sqlmock.NewRows([]string{"owner_email"}).AddRow(email) // File belongs to the user
+	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnRows(ownerRows)
+
+	// 2. Expect Metadata Retrieval - CORRECTED QUERY AND ROWS based on handler code
+	metadataSQL := "SELECT password_hint, password_type, sha256sum FROM file_metadata WHERE filename = ?"
+	metaRows := sqlmock.NewRows([]string{
+		"password_hint", "password_type", "sha256sum",
+	}).AddRow(passwordHint, passwordType, sha256sum) // Only these columns are returned
+	mockDB.ExpectQuery(metadataSQL).WithArgs(filename).WillReturnRows(metaRows) // Only filename arg
+
+	// --- Storage Expectations ---
+	// 3. Expect GetObject call
+	mockStorageObject := new(storage.MockMinioObject) // Use the mock object
+	mockStorageObject.SetContent(fileContent)         // Use helper to set content
+	// Use the new helper to set the stat info directly on the mock object
+	mockStorageObject.SetStatInfo(minio.ObjectInfo{Size: fileSize}, nil)
+	// mockStorageObject.On("Stat")... // REMOVED - Stat() now returns the directly set info
+	mockStorageObject.On("Close").Return(nil) // Still expect Close to be called using testify mock
+
+	mockStorage.On("GetObject",
+		mock.Anything, // context
+		filename,
+		mock.AnythingOfType("minio.GetObjectOptions"),
+	).Return(mockStorageObject, nil).Once() // Return the mock object
+
+	// 4. Expect LogUserAction - CORRECTED ACTION
+	logActionSQL := `INSERT INTO access_logs (user_email, action, filename) VALUES (?, ?, ?)`
+	mockDB.ExpectExec(logActionSQL).WithArgs(email, "downloaded", filename).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// --- Execute Handler ---
+	err := DownloadFile(c) // This IS the correct handler function
+
+	// --- Assertions ---
+	require.NoError(t, err, "DownloadFile handler failed")
+	assert.Equal(t, http.StatusOK, rec.Code, "Expected status OK")
+
+	// Check response body (it returns a map) - CORRECTED ASSERTIONS
+	var resp map[string]interface{}
+	err = json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err, "Failed to unmarshal response")
+	assert.Equal(t, fileContent, resp["data"])          // Check actual file data
+	assert.Equal(t, passwordHint, resp["passwordHint"]) // Check hint from metadata query
+	assert.Equal(t, passwordType, resp["passwordType"]) // Check type from metadata query
+	assert.Equal(t, sha256sum, resp["sha256sum"])       // Check sum from metadata query
+
+	// Headers are not explicitly set by this handler for JSON response
+	// (A streaming download endpoint would set Content-Disposition etc.)
+
+	// Verify all DB and Storage expectations were met
+	assert.NoError(t, mockDB.ExpectationsWereMet(), "DB expectations not met")
+	mockStorage.AssertExpectations(t)       // Check GetObject call
+	mockStorageObject.AssertExpectations(t) // Check Close call
+}
+
+// TODO: Add more DownloadFile tests (not found, not owner, metadata query error, storage get error)
 
 // --- Test ListFiles ---
 // ... TODO: Add ListFiles tests using setupTestEnv and sqlmock ...

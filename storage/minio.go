@@ -220,7 +220,9 @@ func (m *MinioStorage) PutObject(ctx context.Context, objectName string, reader 
 	return m.client.PutObject(ctx, m.bucketName, objectName, reader, objectSize, opts)
 }
 
-func (m *MinioStorage) GetObject(ctx context.Context, objectName string, opts minio.GetObjectOptions) (*minio.Object, error) {
+// GetObject retrieves an object satisfying the ReadableStoredObject interface.
+func (m *MinioStorage) GetObject(ctx context.Context, objectName string, opts minio.GetObjectOptions) (ReadableStoredObject, error) {
+	// *minio.Object implicitly satisfies ReadableStoredObject
 	return m.client.GetObject(ctx, m.bucketName, objectName, opts)
 }
 

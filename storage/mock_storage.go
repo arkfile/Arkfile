@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes" //
 	"context"
 	"io"
 	"time"
@@ -27,10 +28,18 @@ func (m *MockObjectStorageProvider) PutObject(ctx context.Context, objectName st
 }
 
 // GetObject mocks the GetObject method
-func (m *MockObjectStorageProvider) GetObject(ctx context.Context, objectName string, opts minio.GetObjectOptions) (*minio.Object, error) {
+// IMPORTANT: Changed return type to ReadableStoredObject to match the interface
+func (m *MockObjectStorageProvider) GetObject(ctx context.Context, objectName string, opts minio.GetObjectOptions) (ReadableStoredObject, error) {
 	args := m.Called(ctx, objectName, opts)
-	// Assuming it returns *minio.Object and error
-	obj, _ := args.Get(0).(*minio.Object)
+	// Assert the type we are actually returning in the test setup (*MockMinioObject),
+	// which satisfies the ReadableStoredObject interface.
+	obj, _ := args.Get(0).(*MockMinioObject)
+	// Need to handle the case where args.Get(0) is nil or not *MockMinioObject
+	if obj == nil {
+		// If the test didn't provide a MockMinioObject (e.g., returning an error),
+		// return nil for the interface value.
+		return nil, args.Error(1)
+	}
 	return obj, args.Error(1)
 }
 
@@ -85,4 +94,53 @@ func (m *MockObjectStorageProvider) GetObjectChunk(ctx context.Context, objectNa
 	args := m.Called(ctx, objectName, offset, length)
 	reader, _ := args.Get(0).(io.ReadCloser)
 	return reader, args.Error(1)
+}
+
+// --- Mock Minio Object ---
+// MockMinioObject mocks the *minio.Object returned by GetObject
+type MockMinioObject struct {
+	mock.Mock
+	Content *bytes.Reader    // Use bytes.Reader to simulate readable content
+	Info    minio.ObjectInfo // Store ObjectInfo directly
+	StatErr error            // Optional error for Stat
+}
+
+// Ensure MockMinioObject implements necessary interfaces (io.ReadCloser, potentially others)
+var _ io.ReadCloser = (*MockMinioObject)(nil)
+
+// Read mocks the Read method of *minio.Object
+// It prioritizes reading from the internal Content buffer if set.
+func (m *MockMinioObject) Read(p []byte) (n int, err error) {
+	// If Content is set, use its Read method directly. This simulates reading the actual data.
+	if m.Content != nil {
+		return m.Content.Read(p)
+	}
+	// Otherwise, fall back to the standard testify/mock behavior.
+	// This allows testing scenarios where Read might error without setting content.
+	args := m.Called(p)
+	return args.Int(0), args.Error(1)
+}
+
+// Close mocks the Close method of *minio.Object
+func (m *MockMinioObject) Close() error {
+	args := m.Called()
+	return args.Error(0)
+}
+
+// Stat mocks the Stat method of *minio.Object, returning stored info/error
+func (m *MockMinioObject) Stat() (minio.ObjectInfo, error) {
+	// No need for testify's .Called() here, return directly
+	return m.Info, m.StatErr
+}
+
+// --- Helpers to set content and stat info for MockMinioObject ---
+
+// SetStatInfo sets the ObjectInfo and error to be returned by Stat()
+func (m *MockMinioObject) SetStatInfo(info minio.ObjectInfo, err error) {
+	m.Info = info
+	m.StatErr = err
+}
+
+func (m *MockMinioObject) SetContent(content string) {
+	m.Content = bytes.NewReader([]byte(content))
 }
