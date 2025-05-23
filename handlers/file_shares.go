@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -14,7 +15,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/84adam/arkfile/auth"
-	"github.com/84adam/arkfile/config"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/storage"
@@ -146,20 +146,22 @@ func getErrorTitle(status int) string {
 	}
 }
 
-// ShareRequest represents a file sharing request
+// ShareRequest represents a file sharing request.
+// PasswordHash is expected to be hashed client-side.
 type ShareRequest struct {
 	FileID            string `json:"fileId"`
 	PasswordProtected bool   `json:"passwordProtected"`
-	PasswordHash      string `json:"passwordHash"`
+	PasswordHash      string `json:"passwordHash,omitempty"` // Client-side hashed password
 	ExpiresAfterHours int    `json:"expiresAfterHours"`
 }
 
-// ShareResponse represents a file share response
+// ShareResponse represents a file share creation response payload.
 type ShareResponse struct {
-	ID        string `json:"id"`
-	ShareURL  string `json:"shareUrl"`
-	Expiry    string `json:"expiry,omitempty"`
-	CreatedAt string `json:"createdAt"`
+	ShareID             string     `json:"shareId"`
+	ShareURL            string     `json:"shareUrl"`
+	IsPasswordProtected bool       `json:"isPasswordProtected"`
+	ExpiresAt           *time.Time `json:"expiresAt,omitempty"`
+	CreatedAt           time.Time  `json:"createdAt"`
 }
 
 // ShareFile creates a sharing link for a file
@@ -168,112 +170,146 @@ func ShareFile(c echo.Context) error {
 
 	var request ShareRequest
 	if err := c.Bind(&request); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body: "+err.Error())
 	}
 
-	// Validate expiry (if set)
+	if request.FileID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "File ID is required.")
+	}
+
+	// Validate file ownership and get metadata
+	var ownerEmail string
+	var multiKey bool       // From file_metadata or upload_sessions
+	var passwordType string // Password type from file_metadata or upload_sessions
+	var foundInMetadata, foundInUploadSessions bool
+
+	// Try file_metadata first
+	err := database.DB.QueryRow(
+		"SELECT owner_email, multi_key, password_type FROM file_metadata WHERE filename = ?",
+		request.FileID,
+	).Scan(&ownerEmail, &multiKey, &passwordType)
+
+	if err == nil {
+		foundInMetadata = true
+	} else if err != sql.ErrNoRows {
+		logging.ErrorLogger.Printf("Database error checking file_metadata for file %s: %v", request.FileID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file ownership.")
+	}
+
+	// If not found in file_metadata, or to confirm details, try upload_sessions (for completed uploads)
+	if !foundInMetadata {
+		// These will store values from upload_sessions if found
+		var usOwnerEmail string
+		var usPasswordType string
+		var usMultiKey sql.NullBool // Use sql.NullBool for potentially NULL multi_key column
+
+		err = database.DB.QueryRow(
+			"SELECT owner_email, password_type, multi_key FROM upload_sessions WHERE filename = ? AND status = 'completed'",
+			request.FileID,
+		).Scan(&usOwnerEmail, &usPasswordType, &usMultiKey)
+
+		if err == nil {
+			foundInUploadSessions = true
+			ownerEmail = usOwnerEmail // Overwrite if found here
+			passwordType = usPasswordType
+			multiKey = usMultiKey.Valid && usMultiKey.Bool // Default to false if NULL
+		} else if err != sql.ErrNoRows {
+			logging.ErrorLogger.Printf("Database error checking upload_sessions for file %s: %v", request.FileID, err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file ownership.")
+		}
+	}
+
+	if !foundInMetadata && !foundInUploadSessions {
+		return echo.NewHTTPError(http.StatusNotFound, "File not found or not yet fully processed.")
+	}
+
+	if ownerEmail != email {
+		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to share this file.")
+	}
+
+	// If the file is account-encrypted but not multi-key enabled, require re-encryption first.
+	if !multiKey && passwordType == "account" {
+		return echo.NewHTTPError(http.StatusBadRequest,
+			"This file is encrypted with your account password. To share it, first add a custom password or enable multi-key access for this file.")
+	}
+
+	// Generate unique share ID
+	shareID := generateShareID()
+
+	// Calculate expiration time
 	var expiresAt *time.Time
 	if request.ExpiresAfterHours > 0 {
 		expiry := time.Now().Add(time.Duration(request.ExpiresAfterHours) * time.Hour)
 		expiresAt = &expiry
 	}
 
-	// Check if the file exists and user owns it
-	var ownerEmail string
-	var multiKey bool
-	err := database.DB.QueryRow(
-		"SELECT owner_email, multi_key FROM file_metadata WHERE filename = ?",
-		request.FileID,
-	).Scan(&ownerEmail, &multiKey)
-
-	if err == sql.ErrNoRows {
-		return echo.NewHTTPError(http.StatusNotFound, "File not found")
-	} else if err != nil {
-		logging.ErrorLogger.Printf("Database error during share creation: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+	// Use client-provided hash directly. No server-side hashing for share password.
+	finalPasswordHash := request.PasswordHash
+	if request.PasswordProtected && finalPasswordHash == "" {
+		// Password protection is enabled, but no hash was provided by client.
+		return echo.NewHTTPError(http.StatusBadRequest, "Password hash is required when password protection is enabled.")
+	}
+	if !request.PasswordProtected {
+		finalPasswordHash = "" // Ensure no hash is stored if not password protected
 	}
 
-	if ownerEmail != email {
-		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
-	}
-
-	// If the file is account-encrypted but not multi-key enabled, require re-encryption first
-	if !multiKey {
-		var passwordType string
-		err = database.DB.QueryRow(
-			"SELECT password_type FROM file_metadata WHERE filename = ?",
-			request.FileID,
-		).Scan(&passwordType)
-
-		if err != nil {
-			logging.ErrorLogger.Printf("Database error checking password type: %v", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file encryption type")
-		}
-
-		if passwordType == "account" {
-			return echo.NewHTTPError(http.StatusBadRequest,
-				"This file is encrypted with your account password. To share it, first add a custom password using the file's sharing options.")
-		}
-	}
-
-	// Generate a random share ID
-	shareID := generateShareID()
-
-	// Hash the password if share is password protected
-	var passwordHash string
-	if request.PasswordProtected && request.PasswordHash != "" {
-		// Generate bcrypt hash with cost from configuration
-		hash, err := bcrypt.GenerateFromPassword([]byte(request.PasswordHash), config.GetConfig().Security.BcryptCost) // Use config value
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to hash password: %v", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process password")
-		}
-		passwordHash = string(hash)
-	}
-
-	// Create share record
-	insertStmt := `
-		INSERT INTO file_shares 
-		(id, file_id, owner_email, is_password_protected, password_hash, created_at, expires_at) 
-		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
-	`
-
+	// Create file share record
 	_, err = database.DB.Exec(
-		insertStmt,
-		shareID,
-		request.FileID,
-		email,
-		request.PasswordProtected,
-		passwordHash,
-		expiresAt,
+		"INSERT INTO file_shares (id, file_id, owner_email, is_password_protected, password_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)",
+		shareID, request.FileID, email, request.PasswordProtected, finalPasswordHash, expiresAt,
 	)
-
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to create share record: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create share")
+		logging.ErrorLogger.Printf("Failed to create file share record for file %s: %v", request.FileID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create file share.")
 	}
 
-	// Build share URL
-	baseURL := c.Request().Header.Get("Origin")
-	if baseURL == "" {
-		baseURL = "https://" + c.Request().Host
+	// Construct the share URL
+	host := c.Request().Host
+	scheme := "https"
+	// For local development, allow http
+	if c.Request().Header.Get("X-Forwarded-Proto") == "http" || (c.Echo().Debug && c.Request().TLS == nil) {
+		// Check if TLS is available on the connection for debug scenarios. For production, X-Forwarded-Proto is more reliable behind a proxy.
+		isHTTP := c.Request().Header.Get("X-Forwarded-Proto") == "http"
+		isHTTPS := c.Request().Header.Get("X-Forwarded-Proto") == "https"
+
+		if c.Echo().Debug && !isHTTPS { // if debug and not explicitly https
+			scheme = "http"
+		} else if isHTTP { // if explicitly http
+			scheme = "http"
+		}
+		// Default remains https if neither case is met or if isHTTPS is true
 	}
 
+	// Prefer Origin header if available and sensible, otherwise construct from Host
+	origin := c.Request().Header.Get("Origin")
+	var baseURL string
+	// Basic check that origin matches scheme+host to prevent open redirector type issues by crafting Origin header
+	// More robust validation might be needed depending on security requirements
+	if origin != "" {
+		expectedOriginPrefixHttp := "http://" + host
+		expectedOriginPrefixHttps := "https://" + host
+		if strings.HasPrefix(origin, expectedOriginPrefixHttp) || strings.HasPrefix(origin, expectedOriginPrefixHttps) {
+			baseURL = origin
+		} else {
+			// Origin doesn't match expected, fall back to constructing from scheme and host
+			baseURL = scheme + "://" + host
+		}
+	} else {
+		baseURL = scheme + "://" + host
+	}
 	shareURL := baseURL + "/shared/" + shareID
 
-	var response ShareResponse
-	response.ID = shareID
-	response.ShareURL = shareURL
-	response.CreatedAt = time.Now().Format(time.RFC3339)
+	createdAt := time.Now()
+	logging.InfoLogger.Printf("File shared: %s by %s, share ID: %s", request.FileID, email, shareID)
+	database.LogUserAction(email, "created_share", fmt.Sprintf("file:%s, share:%s", request.FileID, shareID))
 
-	if expiresAt != nil {
-		response.Expiry = expiresAt.Format(time.RFC3339)
-	}
-
-	database.LogUserAction(email, "shared", request.FileID)
-	logging.InfoLogger.Printf("File shared: %s by %s", request.FileID, email)
-
-	return c.JSON(http.StatusOK, response)
+	return c.JSON(http.StatusOK, ShareResponse{
+		ShareID:             shareID,
+		ShareURL:            shareURL,
+		IsPasswordProtected: request.PasswordProtected,
+		ExpiresAt:           expiresAt,
+		CreatedAt:           createdAt,
+	})
 }
 
 // ListShares returns all shares created by a user

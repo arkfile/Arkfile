@@ -11,10 +11,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/minio/minio-go/v7"
-	"golang.org/x/crypto/bcrypt"
 
-	"github.com/84adam/arkfile/auth"
-	"github.com/84adam/arkfile/config" // Import config package
+	"github.com/84adam/arkfile/auth" // Import config package
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
@@ -195,18 +193,11 @@ func GetSharedFileByShareID(c echo.Context) error {
 		}
 	}
 
-	// Get the concrete MinioStorage implementation via type assertion
-	minioProvider, ok := storage.Provider.(*storage.MinioStorage)
-	if !ok {
-		logging.ErrorLogger.Print("Storage provider is not the expected Minio implementation for presigned URL")
-		return echo.NewHTTPError(http.StatusInternalServerError, "Storage system configuration error")
-	}
-
-	// Generate download URL using method
+	// Generate download URL using storage provider interface
 	expiry := time.Hour // 1 hour expiry for the actual download link
-	downloadURL, err := minioProvider.GetPresignedURL(c.Request().Context(), shareDetails.FileID, expiry)
+	downloadURL, err := storage.Provider.GetPresignedURL(c.Request().Context(), shareDetails.FileID, expiry)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate presigned URL for %s via provider: %v", shareDetails.FileID, err)
+		logging.ErrorLogger.Printf("Failed to generate presigned URL for %s via storage provider: %v", shareDetails.FileID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download URL")
 	}
 
@@ -223,97 +214,6 @@ func GetSharedFileByShareID(c echo.Context) error {
 		"hash":         fileMetadata.SHA256Sum,
 		"passwordHint": fileMetadata.PasswordHint,
 		"passwordType": fileMetadata.PasswordType,
-	})
-}
-
-// CreateShareLink creates a shareable link for a file with optional password and expiration
-func CreateShareLink(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
-
-	var request struct {
-		FileID            string `json:"fileId"`
-		PasswordProtected bool   `json:"passwordProtected"`
-		Password          string `json:"password,omitempty"`
-		ExpiresAfterHours int    `json:"expiresAfterHours"`
-	}
-
-	if err := c.Bind(&request); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
-	}
-
-	// Validate file ownership
-	var ownerEmail string
-	err := database.DB.QueryRow(
-		"SELECT owner_email FROM file_metadata WHERE filename = ?",
-		request.FileID,
-	).Scan(&ownerEmail)
-
-	if err == sql.ErrNoRows {
-		// Check in upload_sessions table
-		err = database.DB.QueryRow(
-			"SELECT owner_email FROM upload_sessions WHERE filename = ? AND status = 'completed'",
-			request.FileID,
-		).Scan(&ownerEmail)
-
-		if err == sql.ErrNoRows {
-			return echo.NewHTTPError(http.StatusNotFound, "File not found")
-		} else if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file ownership")
-		}
-	} else if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file ownership")
-	}
-
-	if ownerEmail != email {
-		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to share this file")
-	}
-
-	// Generate unique share ID
-	shareID := uuid.New().String()
-
-	// Calculate expiration time
-	var expiresAt *time.Time
-	if request.ExpiresAfterHours > 0 {
-		expiry := time.Now().Add(time.Duration(request.ExpiresAfterHours) * time.Hour)
-		expiresAt = &expiry
-	}
-
-	// Handle password if provided
-	var passwordHash string
-	if request.PasswordProtected && request.Password != "" {
-		// Use bcrypt with cost from configuration
-		hashedBytes, err := bcrypt.GenerateFromPassword([]byte(request.Password), config.GetConfig().Security.BcryptCost) // Use config value
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process share password")
-		}
-		passwordHash = string(hashedBytes)
-	}
-
-	// Create file share record
-	_, err = database.DB.Exec(
-		"INSERT INTO file_shares (id, file_id, owner_email, is_password_protected, password_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)",
-		shareID, request.FileID, email, request.PasswordProtected, passwordHash, expiresAt,
-	)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create file share")
-	}
-
-	logging.InfoLogger.Printf("File shared: %s by %s, share ID: %s", request.FileID, email, shareID)
-
-	// Base path for the share URL
-	host := c.Request().Host
-	scheme := "https"
-	if strings.Contains(host, "localhost") {
-		scheme = "http"
-	}
-
-	shareURL := fmt.Sprintf("%s://%s/shared/%s", scheme, host, shareID)
-
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"shareId":             shareID,
-		"shareUrl":            shareURL,
-		"isPasswordProtected": request.PasswordProtected,
-		"expiresAt":           expiresAt,
 	})
 }
 
@@ -382,17 +282,10 @@ func DownloadFileChunk(c echo.Context) error {
 		endByte = size - 1
 	}
 
-	// Get the concrete MinioStorage implementation via type assertion
-	minioProvider, ok := storage.Provider.(*storage.MinioStorage)
-	if !ok {
-		logging.ErrorLogger.Print("Storage provider is not the expected Minio implementation for getting chunk")
-		return echo.NewHTTPError(http.StatusInternalServerError, "Storage system configuration error")
-	}
-
-	// Retrieve chunk from storage using method
-	reader, err := minioProvider.GetObjectChunk(c.Request().Context(), fileID, startByte, endByte-startByte+1)
+	// Retrieve chunk from storage using storage provider interface
+	reader, err := storage.Provider.GetObjectChunk(c.Request().Context(), fileID, startByte, endByte-startByte+1)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get chunk for %s via provider: %v", fileID, err)
+		logging.ErrorLogger.Printf("Failed to get chunk for %s via storage provider: %v", fileID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file chunk from storage")
 	}
 	defer reader.Close()
@@ -464,19 +357,11 @@ func CancelUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update session status")
 	}
 
-	// Get the concrete MinioStorage implementation via type assertion
-	minioProvider, ok := storage.Provider.(*storage.MinioStorage)
-	if !ok {
-		logging.ErrorLogger.Print("Storage provider is not the expected Minio implementation for aborting upload")
-		// Proceed with DB update even if storage isn't asserted correctly? Or return error?
-		// For now, log and proceed with DB update.
-	}
-
-	// Abort the multipart upload in storage (using minioProvider if available)
-	if storageUploadID != "" && minioProvider != nil {
-		err = minioProvider.AbortMultipartUpload(c.Request().Context(), filename, storageUploadID)
+	// Abort the multipart upload in storage using storage provider interface
+	if storageUploadID != "" {
+		err = storage.Provider.AbortMultipartUpload(c.Request().Context(), filename, storageUploadID)
 		if err != nil {
-			logging.ErrorLogger.Printf("Failed to abort storage upload via provider: %v", err)
+			logging.ErrorLogger.Printf("Failed to abort storage upload via storage provider: %v", err)
 			// Continue anyway - we still want to mark the session as canceled in the database
 		}
 	}
@@ -624,18 +509,11 @@ func UploadChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk hash format")
 	}
 
-	// Get the concrete MinioStorage implementation via type assertion
-	minioProvider, ok := storage.Provider.(*storage.MinioStorage)
-	if !ok {
-		logging.ErrorLogger.Print("Storage provider is not the expected Minio implementation for uploading part")
-		return echo.NewHTTPError(http.StatusInternalServerError, "Storage system configuration error")
-	}
-
-	// Minio part numbers are 1-based
+	// Minio part numbers are 1-based (consistent with Minio SDK, assuming provider implements this detail)
 	minioPartNumber := chunkNumber + 1
 
-	// Stream chunk directly to storage using method
-	part, err := minioProvider.UploadPart(
+	// Stream chunk directly to storage using storage provider interface
+	part, err := storage.Provider.UploadPart(
 		c.Request().Context(),
 		filename,
 		storageUploadID,
@@ -644,7 +522,7 @@ func UploadChunk(c echo.Context) error {
 		-1, // Unknown size, will read until EOF
 	)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to upload chunk %d via provider: %v", minioPartNumber, err)
+		logging.ErrorLogger.Printf("Failed to upload chunk %d via storage provider: %v", minioPartNumber, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to upload chunk to storage")
 	}
 
@@ -763,17 +641,10 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error reading chunk data")
 	}
 
-	// Get the concrete MinioStorage implementation via type assertion
-	minioProvider, ok := storage.Provider.(*storage.MinioStorage)
-	if !ok {
-		logging.ErrorLogger.Print("Storage provider is not the expected Minio implementation for completing upload")
-		return echo.NewHTTPError(http.StatusInternalServerError, "Storage system configuration error")
-	}
-
-	// Complete the multipart upload in storage using method
-	err = minioProvider.CompleteMultipartUpload(c.Request().Context(), filename, storageUploadID, parts)
+	// Complete the multipart upload in storage using storage provider interface
+	err = storage.Provider.CompleteMultipartUpload(c.Request().Context(), filename, storageUploadID, parts)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to complete storage upload via provider: %v", err)
+		logging.ErrorLogger.Printf("Failed to complete storage upload via storage provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
 	}
 

@@ -49,9 +49,6 @@ func (m *MockObjectStorageProvider) RemoveObject(ctx context.Context, objectName
 	return args.Error(0) // Only error is returned
 }
 
-// --- Mocking additional methods specific to MinioStorage (if needed for handler tests) ---
-// These are not part of the interface but might be called via type assertion in handlers.
-
 // GetPresignedURL mocks the GetPresignedURL method (example)
 func (m *MockObjectStorageProvider) GetPresignedURL(ctx context.Context, objectName string, expiry time.Duration) (string, error) {
 	args := m.Called(ctx, objectName, expiry)

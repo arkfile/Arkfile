@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 )
@@ -23,6 +24,12 @@ type ObjectStorageProvider interface {
 	// GetObject retrieves an object satisfying the ReadableStoredObject interface.
 	GetObject(ctx context.Context, objectName string, opts minio.GetObjectOptions) (ReadableStoredObject, error)
 	RemoveObject(ctx context.Context, objectName string, opts minio.RemoveObjectOptions) error
+	GetPresignedURL(ctx context.Context, objectName string, expiry time.Duration) (string, error)
+	InitiateMultipartUpload(ctx context.Context, objectName string, metadata map[string]string) (string, error)
+	UploadPart(ctx context.Context, objectName, uploadID string, partNumber int, reader io.Reader, size int64) (minio.CompletePart, error)
+	CompleteMultipartUpload(ctx context.Context, objectName, uploadID string, parts []minio.CompletePart) error
+	AbortMultipartUpload(ctx context.Context, objectName, uploadID string) error
+	GetObjectChunk(ctx context.Context, objectName string, offset, length int64) (io.ReadCloser, error)
 	// Add other storage methods used by the application here if needed,
 	// e.g., ListObjects, StatObject, etc.
 }

@@ -31,7 +31,7 @@ func RegisterRoutes() {
 	auth.Echo.DELETE("/api/uploads/:sessionId", CancelUpload)
 
 	// Share file
-	auth.Echo.POST("/api/share", CreateShareLink)
+	auth.Echo.POST("/api/share", ShareFile) // Create a share link (changed from CreateShareLink)
 	auth.Echo.GET("/api/user/shares", ListShares)
 	auth.Echo.DELETE("/api/share/:id", DeleteShare)
 
@@ -41,6 +41,9 @@ func RegisterRoutes() {
 	Echo.GET("/shared/:id/download", DownloadSharedFile)
 	// API endpoint for accessing shared file
 	Echo.GET("/api/shared/:shareId", GetSharedFileByShareID)
+	// Additional API endpoints for shared.html
+	Echo.POST("/api/shared/:shareId/auth", AuthenticateShare)
+	Echo.GET("/api/shared/:shareId/download", DownloadSharedFile)
 
 	// File encryption key management
 	auth.Echo.POST("/api/files/:filename/update-encryption", UpdateEncryption)
