@@ -2072,6 +2072,114 @@ func TestUpdateUser_Error_InvalidJSON(t *testing.T) {
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
+// TestUpdateUser_Error_EmptyBody tests request body with no updatable fields.
+func TestUpdateUser_Error_EmptyBody(t *testing.T) {
+	adminEmail := "admin@example.com"
+	targetUserEmail := "target-user@example.com"
+	// Empty JSON body - valid JSON but no updatable fields
+	emptyJSONBody := `{}`
+
+	c, _, mockDB, _ := setupTestEnv(t, http.MethodPut, "/admin/users/:email/update", bytes.NewReader([]byte(emptyJSONBody)))
+	c.SetParamNames("email")
+	c.SetParamValues(targetUserEmail)
+
+	adminClaims := &auth.Claims{Email: adminEmail}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	// Mock GetUserByEmail for admin (this is called before field validation)
+	mockDB.ExpectQuery(`
+		SELECT id, email, password, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE email = ?`).WithArgs(adminEmail).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "email", "password", "is_admin", "is_approved"}).
+			AddRow(1, adminEmail, "adminpass", true, true))
+
+	// No transaction should begin if no updatable fields are provided.
+
+	err := UpdateUser(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Equal(t, "No updatable fields provided", httpErr.Message) // Message from handler validation
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+// TestUpdateUser_Error_AdminDetailsFetchError tests error when fetching admin user details.
+func TestUpdateUser_Error_AdminDetailsFetchError(t *testing.T) {
+	adminEmail := "admin@example.com"
+	targetUserEmail := "target-user@example.com"
+	isAdminTrue := true
+	reqBodyMap := map[string]interface{}{"isAdmin": &isAdminTrue}
+	jsonBody, _ := json.Marshal(reqBodyMap)
+
+	c, _, mockDB, _ := setupTestEnv(t, http.MethodPut, "/admin/users/:email/update", bytes.NewReader(jsonBody))
+	c.SetParamNames("email")
+	c.SetParamValues(targetUserEmail)
+
+	adminClaims := &auth.Claims{Email: adminEmail}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	// Mock GetUserByEmail for admin to return an error
+	mockDB.ExpectQuery(`
+		SELECT id, email, password, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE email = ?`).WithArgs(adminEmail).WillReturnError(fmt.Errorf("DB error fetching admin"))
+
+	// No transaction should begin if admin fetch fails.
+
+	err := UpdateUser(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
+	assert.Equal(t, "Failed to get admin user", httpErr.Message)
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+// TestUpdateUser_Error_InvalidTargetEmailParam tests error when target email parameter is missing.
+func TestUpdateUser_Error_InvalidTargetEmailParam(t *testing.T) {
+	adminEmail := "admin@example.com"
+	isAdminTrue := true
+	reqBodyMap := map[string]interface{}{"isAdmin": &isAdminTrue}
+	jsonBody, _ := json.Marshal(reqBodyMap)
+
+	c, _, mockDB, _ := setupTestEnv(t, http.MethodPut, "/admin/users//update", bytes.NewReader(jsonBody)) // Empty email param
+	// Explicitly do NOT set param values to simulate missing email parameter
+	// c.SetParamNames("email")
+	// c.SetParamValues("") // or omit entirely
+
+	adminClaims := &auth.Claims{Email: adminEmail}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	// Mock GetUserByEmail for admin (this is called before the param check)
+	mockDB.ExpectQuery(`
+		SELECT id, email, password, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE email = ?`).WithArgs(adminEmail).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "email", "password", "is_admin", "is_approved"}).
+			AddRow(1, adminEmail, "adminpass", true, true))
+
+	// No transaction should begin if email param is missing.
+
+	err := UpdateUser(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Equal(t, "Email parameter required", httpErr.Message)
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
 // TestUpdateUser_RevokeAccess_Success_Admin tests successful access revocation via UpdateUser.
 func TestUpdateUser_RevokeAccess_Success_Admin(t *testing.T) {
 	adminEmail := "admin@example.com"
