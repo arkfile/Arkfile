@@ -37,11 +37,12 @@ func CreateRefreshToken(db *sql.DB, userEmail string) (string, error) {
 	id := uuid.New().String()
 
 	// Insert token into database
+	createdAt := time.Now() // Explicitly set created_at
 	_, err := db.Exec(
 		`INSERT INTO refresh_tokens (
-			id, user_email, token_hash, expires_at
-		) VALUES (?, ?, ?, ?)`,
-		id, userEmail, tokenHash, expiresAt,
+			id, user_email, token_hash, expires_at, created_at, is_revoked, is_used
+		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, userEmail, tokenHash, expiresAt, createdAt, false, false, // Add created_at, is_revoked, is_used
 	)
 	if err != nil {
 		return "", err

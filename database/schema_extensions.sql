@@ -85,7 +85,7 @@ ALTER TABLE upload_sessions ADD COLUMN multi_key BOOLEAN DEFAULT FALSE;
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     id TEXT PRIMARY KEY,
     user_email TEXT NOT NULL,
-    token_hash TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
     expires_at TIMESTAMP NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_revoked BOOLEAN DEFAULT FALSE,

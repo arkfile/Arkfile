@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -34,12 +36,15 @@ type Config struct {
 	} `json:"storage"`
 
 	Security struct {
-		JWTSecret         string   `json:"jwt_secret"`
-		JWTExpiryHours    int      `json:"jwt_expiry_hours"`
-		PasswordMinLength int      `json:"password_min_length"`
-		BcryptCost        int      `json:"bcrypt_cost"`
-		MaxFileSize       int64    `json:"max_file_size"`
-		AllowedFileTypes  []string `json:"allowed_file_types"`
+		JWTSecret               string        `json:"jwt_secret"`
+		JWTExpiryHours          int           `json:"jwt_expiry_hours"`
+		RefreshTokenDuration    time.Duration `json:"refresh_token_duration"`
+		RefreshTokenCookieName  string        `json:"refresh_token_cookie_name"`
+		RevokeUsedRefreshTokens bool          `json:"revoke_used_refresh_tokens"`
+		PasswordMinLength       int           `json:"password_min_length"`
+		BcryptCost              int           `json:"bcrypt_cost"`
+		MaxFileSize             int64         `json:"max_file_size"`
+		AllowedFileTypes        []string      `json:"allowed_file_types"`
 	} `json:"security"`
 
 	Logging struct {
@@ -95,6 +100,9 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Server.Host = "localhost"
 	cfg.Database.Path = "./arkfile.db"
 	cfg.Security.JWTExpiryHours = 72
+	cfg.Security.RefreshTokenDuration = 24 * 7 * time.Hour // Default to 7 days
+	cfg.Security.RefreshTokenCookieName = "refreshToken"
+	cfg.Security.RevokeUsedRefreshTokens = true
 	cfg.Security.PasswordMinLength = 8
 	cfg.Security.BcryptCost = 13                 // Set default cost to 13
 	cfg.Security.MaxFileSize = 100 * 1024 * 1024 // 100MB
@@ -126,6 +134,19 @@ func loadEnvConfig(cfg *Config) error {
 
 	// Security configuration
 	cfg.Security.JWTSecret = os.Getenv("JWT_SECRET")
+	if rtExpiryStr := os.Getenv("REFRESH_TOKEN_EXPIRY_HOURS"); rtExpiryStr != "" {
+		if rtExpiryInt, err := strconv.Atoi(rtExpiryStr); err == nil {
+			cfg.Security.RefreshTokenDuration = time.Duration(rtExpiryInt) * time.Hour
+		}
+	}
+	if rtCookieName := os.Getenv("REFRESH_TOKEN_COOKIE_NAME"); rtCookieName != "" {
+		cfg.Security.RefreshTokenCookieName = rtCookieName
+	}
+	if revokeStr := os.Getenv("REVOKE_USED_REFRESH_TOKENS"); revokeStr != "" {
+		if revokeBool, err := strconv.ParseBool(revokeStr); err == nil {
+			cfg.Security.RevokeUsedRefreshTokens = revokeBool
+		}
+	}
 
 	return nil
 }
