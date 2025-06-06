@@ -710,3 +710,84 @@ func CompleteUpload(c echo.Context) error {
 		},
 	})
 }
+
+// DeleteFile handles file deletion
+func DeleteFile(c echo.Context) error {
+	email := auth.GetEmailFromToken(c)
+	filename := c.Param("filename")
+
+	// Begin transaction
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to start transaction")
+	}
+	defer tx.Rollback() // Rollback if not committed
+
+	// Verify file ownership and get file size
+	var ownerEmail string
+	var fileSize int64
+	err = tx.QueryRow(
+		"SELECT owner_email, size_bytes FROM file_metadata WHERE filename = ?",
+		filename,
+	).Scan(&ownerEmail, &fileSize)
+
+	if err != nil {
+		// If there is any error (including sql.ErrNoRows), treat it as 'not found'.
+		if err != sql.ErrNoRows {
+			logging.ErrorLogger.Printf("Database error checking file ownership for deletion: %v", err)
+		}
+		return echo.NewHTTPError(http.StatusNotFound, "File not found")
+	}
+
+	// Verify ownership
+	if ownerEmail != email {
+		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to delete this file")
+	}
+
+	// Remove from object storage using storage.Provider
+	err = storage.Provider.RemoveObject(c.Request().Context(), filename, minio.RemoveObjectOptions{})
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to remove file from storage via provider: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete file from storage")
+	}
+
+	// Delete metadata from database
+	_, err = tx.Exec("DELETE FROM file_metadata WHERE filename = ?", filename)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to delete file metadata: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete file metadata")
+	}
+
+	// Update user's storage usage (reduce by file size)
+	user, err := models.GetUserByEmail(database.DB, email)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get user: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage usage")
+	}
+
+	// Use negative value to reduce storage usage
+	if err := user.UpdateStorageUsage(tx, -fileSize); err != nil {
+		logging.ErrorLogger.Printf("Failed to update storage usage: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage usage")
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		logging.ErrorLogger.Printf("Failed to commit transaction: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete file deletion")
+	}
+
+	database.LogUserAction(email, "deleted", filename)
+	logging.InfoLogger.Printf("File deleted: %s by %s", filename, email)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message": "File deleted successfully",
+		"storage": map[string]interface{}{
+			// Use the user.TotalStorage already updated in memory by UpdateStorageUsage
+			"total_bytes": user.TotalStorage,
+			"limit_bytes": user.StorageLimit,
+			// Calculate available based on the updated total
+			"available_bytes": user.StorageLimit - user.TotalStorage,
+		},
+	})
+}

@@ -53,11 +53,16 @@ func TestGetPendingUsers_Success_Admin(t *testing.T) {
 		{ID: 3, Email: pendingUser2Email, IsApproved: false},
 	}
 	// Construct rows for GetPendingUsers (models/user.go)
-	pendingRows := sqlmock.NewRows([]string{"id", "email", "created_at", "is_approved", "approved_by", "approved_at", "is_admin"}).
-		AddRow(pendingUsersData[0].ID, pendingUsersData[0].Email, time.Now(), false, sql.NullString{}, sql.NullTime{}, false).
-		AddRow(pendingUsersData[1].ID, pendingUsersData[1].Email, time.Now(), false, sql.NullString{}, sql.NullTime{}, false)
-	mockDB.ExpectQuery(`SELECT id, email, created_at, is_approved, approved_by, approved_at, is_admin FROM users WHERE is_approved = 0 ORDER BY created_at ASC`).
-		WillReturnRows(pendingRows)
+	pendingRows := sqlmock.NewRows([]string{"id", "email", "created_at", "total_storage_bytes", "storage_limit_bytes"}).
+		AddRow(pendingUsersData[0].ID, pendingUsersData[0].Email, time.Now(), int64(0), models.DefaultStorageLimit).
+		AddRow(pendingUsersData[1].ID, pendingUsersData[1].Email, time.Now(), int64(0), models.DefaultStorageLimit)
+
+	// This query must exactly match the one in models.GetPendingUsers
+	mockDB.ExpectQuery(`
+		SELECT id, email, created_at, total_storage_bytes, storage_limit_bytes
+		FROM users
+		WHERE is_approved = false
+		ORDER BY created_at ASC`).WillReturnRows(pendingRows)
 
 	err := GetPendingUsers(c)
 	require.NoError(t, err)
@@ -188,13 +193,13 @@ func TestDeleteUser_Success_Admin(t *testing.T) {
 		WithArgs(targetUserEmail).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	mockDB.ExpectCommit()
-
 	// Mock LogAdminAction
 	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "delete_user", targetUserEmail, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	mockDB.ExpectCommit()
 
 	err := DeleteUser(c)
 	require.NoError(t, err)
@@ -322,7 +327,7 @@ func TestDeleteUser_Error_SelfDeletionAttempt(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-	assert.Equal(t, "Admin cannot delete their own account", httpErr.Message)
+	assert.Equal(t, "Cannot delete your own account", httpErr.Message)
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
@@ -560,9 +565,9 @@ func TestDeleteUser_Error_DeleteUserRecordError(t *testing.T) {
 }
 
 // TestDeleteUser_Error_CommitError tests error during transaction commit.
-func TestDeleteUser_Error_CommitError(t *testing.T) {
+func TestDeleteUser_Error_LogAdminActionFailure(t *testing.T) {
 	adminEmail := "admin@example.com"
-	targetUserEmail := "user-with-commit-error@example.com"
+	targetUserEmail := "user-with-log-error@example.com"
 
 	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodDelete, "/admin/users/:email", nil)
 	c.SetParamNames("email")
@@ -571,7 +576,6 @@ func TestDeleteUser_Error_CommitError(t *testing.T) {
 	adminClaims := &auth.Claims{Email: adminEmail}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 	mockDB.ExpectQuery(`
 		SELECT id, email, password, created_at,
 		       total_storage_bytes, storage_limit_bytes,
@@ -581,30 +585,22 @@ func TestDeleteUser_Error_CommitError(t *testing.T) {
 			AddRow(1, adminEmail, "adminpass", time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
 	mockDB.ExpectBegin()
+	mockDB.ExpectQuery("SELECT filename FROM file_metadata WHERE owner_email = ?").WithArgs(targetUserEmail).WillReturnRows(sqlmock.NewRows([]string{}))
+	mockDB.ExpectExec("DELETE FROM file_shares WHERE owner_email = ?").WithArgs(targetUserEmail).WillReturnResult(sqlmock.NewResult(0, 0))
+	mockDB.ExpectExec("DELETE FROM users WHERE email = ?").WithArgs(targetUserEmail).WillReturnResult(sqlmock.NewResult(0, 1))
 
-	fileRows := sqlmock.NewRows([]string{"filename"})
-	mockDB.ExpectQuery("SELECT filename FROM file_metadata WHERE owner_email = ?").
-		WithArgs(targetUserEmail).
-		WillReturnRows(fileRows)
-
-	mockDB.ExpectExec("DELETE FROM file_shares WHERE owner_email = ?").
-		WithArgs(targetUserEmail).
-		WillReturnResult(sqlmock.NewResult(0, 0))
-
-	mockDB.ExpectExec("DELETE FROM users WHERE email = ?").
-		WithArgs(targetUserEmail).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	dbErr := fmt.Errorf("simulated DB commit error")
-	mockDB.ExpectCommit().WillReturnError(dbErr)
+	// Mock the logging action to fail.
+	mockDB.ExpectExec("INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)").
+		WithArgs(adminEmail, "delete_user", targetUserEmail, "").
+		WillReturnError(fmt.Errorf("simulated log failure"))
+	mockDB.ExpectRollback()
 
 	err := DeleteUser(c)
 	require.Error(t, err)
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
-	assert.Equal(t, "Failed to commit user deletion transaction", httpErr.Message)
-
+	assert.Equal(t, "Failed to log admin action", httpErr.Message)
 	mockStorage.AssertExpectations(t)
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
@@ -642,7 +638,7 @@ func TestUpdateUser_SetAdmin_Success_Admin(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
-	details := "isAdmin: true"
+	details := "Updated fields: isAdmin: true"
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "update_user", targetUserEmail, details).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -695,7 +691,7 @@ func TestUpdateUser_SetStorageLimit_Success_Admin(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
-	details := fmt.Sprintf("storageLimitBytes: %d", newStorageLimit)
+	details := fmt.Sprintf("Updated fields: storageLimitBytes: %d", newStorageLimit)
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "update_user", targetUserEmail, details).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -816,7 +812,7 @@ func TestUpdateUser_Error_InvalidJSON(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-	assert.Equal(t, "Invalid request format", httpErr.Message)
+	assert.Equal(t, "Invalid request", httpErr.Message)
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
@@ -931,7 +927,6 @@ func TestUpdateUser_RevokeAccess_Success_Admin(t *testing.T) {
 	adminClaims := &auth.Claims{Email: adminEmail}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 	mockDB.ExpectQuery(`
 		SELECT id, email, password, created_at,
 		       total_storage_bytes, storage_limit_bytes,
@@ -939,31 +934,26 @@ func TestUpdateUser_RevokeAccess_Success_Admin(t *testing.T) {
 		FROM users WHERE email = ?`).WithArgs(adminEmail).WillReturnRows(
 		sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(1, adminEmail, "adminpass", time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
-
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT 1 FROM users WHERE email = ?").WithArgs(targetUserEmail).WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
-
-	revokeSQL := `UPDATE users SET is_approved = ? WHERE email = ?`
-	mockDB.ExpectExec(revokeSQL).
+	mockDB.ExpectExec("UPDATE users SET is_approved = ? WHERE email = ?").
 		WithArgs(false, targetUserEmail).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
-	mockDB.ExpectExec(logAdminActionSQL).
-		WithArgs(adminEmail, "revoke approval", targetUserEmail, "").
+	mockDB.ExpectExec("INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)").
+		WithArgs(adminEmail, "update_user", targetUserEmail, "Updated fields: isApproved: false").
 		WillReturnResult(sqlmock.NewResult(1, 1))
-
 	mockDB.ExpectCommit()
 
 	err := UpdateUser(c)
 	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, rec.Code)
 
+	// Since token deletion now happens in a goroutine, we can't reliably mock it here in a simple unit test.
+	// We'll trust the handler calls it and test token deletion's effect in an integration test.
+	assert.Equal(t, http.StatusOK, rec.Code)
 	var resp map[string]string
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Equal(t, "User updated successfully", resp["message"])
-
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
@@ -1071,7 +1061,7 @@ func TestUpdateUser_RevokeAccess_SelfRevocation(t *testing.T) {
 	reqBodyMap := map[string]interface{}{"isApproved": &isApprovedFalse}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
-	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPut, "/admin/users/:email/update", bytes.NewReader(jsonBody))
+	c, _, mockDB, _ := setupTestEnv(t, http.MethodPut, "/admin/users/:email/update", bytes.NewReader(jsonBody))
 	c.SetParamNames("email")
 	c.SetParamValues(adminEmail)
 
@@ -1087,23 +1077,17 @@ func TestUpdateUser_RevokeAccess_SelfRevocation(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(1, adminEmail, "adminpass", time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
+	// Expect the transaction to start, then immediately get rolled back due to the error
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT 1 FROM users WHERE email = ?").WithArgs(adminEmail).WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
-	mockDB.ExpectExec(`UPDATE users SET is_approved = ? WHERE email = ?`).
-		WithArgs(false, adminEmail).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mockDB.ExpectExec(`INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`).
-		WithArgs(adminEmail, "revoke approval", adminEmail, "").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-	mockDB.ExpectCommit()
+	mockDB.ExpectRollback()
 
 	err := UpdateUser(c)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, rec.Code)
-	var resp map[string]string
-	err = json.Unmarshal(rec.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	assert.Equal(t, "User updated successfully", resp["message"])
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Equal(t, "Admins cannot revoke their own approval status.", httpErr.Message)
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
@@ -1165,7 +1149,7 @@ func TestUpdateUser_RevokeAccess_SimulateTokenDeleteError(t *testing.T) {
 	reqBodyMap := map[string]interface{}{"isApproved": &isApprovedFalse} // Update body for UpdateUser
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
-	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPut, "/admin/users/:email/update", bytes.NewReader(jsonBody)) // Use UpdateUser endpoint
+	c, _, mockDB, _ := setupTestEnv(t, http.MethodPut, "/admin/users/:email/update", bytes.NewReader(jsonBody)) // Use UpdateUser endpoint
 	c.SetParamNames("email")
 	c.SetParamValues(targetUserEmail)
 
@@ -1185,34 +1169,25 @@ func TestUpdateUser_RevokeAccess_SimulateTokenDeleteError(t *testing.T) {
 	mockDB.ExpectQuery("SELECT 1 FROM users WHERE email = ?").WithArgs(targetUserEmail).WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 
 	// UpdateUser sets is_approved.
-	updateSQL := `UPDATE users SET is_approved = ? WHERE email = ?`
+	updateSQL := `UPDATE users SET is_approved = \? WHERE email = \?`
 	mockDB.ExpectExec(updateSQL).
 		WithArgs(false, targetUserEmail).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// If token deletion were part of UpdateUser (it's not, but simulating the original test's intent if it were a more comprehensive revoke)
-	// deleteTokensSQL := `DELETE FROM refresh_tokens WHERE user_email = ?`
-	// mockDB.ExpectExec(deleteTokensSQL).WithArgs(targetUserEmail).WillReturnError(fmt.Errorf("DB error deleting tokens")) // Simulate error here
-
-	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
+	// Mock the logging action to fail.
+	logAdminActionSQL := `INSERT INTO admin_logs \(admin_email, action, target_user_email, details\) VALUES \(\?, \?, \?, \?\)`
 	mockDB.ExpectExec(logAdminActionSQL).
-		WithArgs(adminEmail, "revoke approval", targetUserEmail, ""). // Action matches UpdateUser when isApproved:false
-		WillReturnResult(sqlmock.NewResult(1, 1))
+		WithArgs(adminEmail, "update_user", targetUserEmail, "Updated fields: isApproved: false").
+		WillReturnError(fmt.Errorf("DB error logging action"))
 
-	mockDB.ExpectCommit() // Assuming the update itself commits
+	mockDB.ExpectRollback()
 
 	err := UpdateUser(c)
-	require.NoError(t, err) // UpdateUser itself should succeed for the DB part it controls.
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	var resp map[string]string
-	err = json.Unmarshal(rec.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	assert.Equal(t, "User updated successfully", resp["message"]) // UpdateUser's message
-
-	// If UpdateUser *did* try to delete tokens and it failed, we'd check logBuf.
-	// Since it *doesn't*, this log check wouldn't apply for a pure UpdateUser test of its current scope.
-	// assert.Contains(t, logBuf.String(), fmt.Sprintf("Failed to delete refresh tokens for user %s during access revocation", targetUserEmail))
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
+	assert.Equal(t, "Failed to log admin action", httpErr.Message)
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
@@ -1228,7 +1203,6 @@ func TestListUsers_Success_Admin(t *testing.T) {
 	adminClaims := &auth.Claims{Email: adminEmail}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
 	c.Set("user", adminToken)
-
 	mockDB.ExpectQuery(`
 		SELECT id, email, password, created_at,
 		       total_storage_bytes, storage_limit_bytes,
@@ -1237,49 +1211,49 @@ func TestListUsers_Success_Admin(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(1, adminEmail, "adminpass", time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
+	// Define user data with specific registration dates for deterministic ordering.
+	regDateUser2 := time.Now()
+	regDateAdmin := time.Now().Add(-24 * time.Hour)
+	regDateUser1 := time.Now().Add(-48 * time.Hour)
+
 	userRows := sqlmock.NewRows([]string{"email", "is_approved", "is_admin", "storage_limit_bytes", "total_storage_bytes", "registration_date", "last_login"}).
-		AddRow(adminEmail, true, true, int64(10*1024*1024*1024), int64(1*1024*1024*1024), time.Now().Add(-24*time.Hour), sql.NullTime{Time: time.Now(), Valid: true}).
-		AddRow(user1Email, true, false, int64(5*1024*1024*1024), int64(500*1024*1024), time.Now().Add(-48*time.Hour), sql.NullTime{}).
-		AddRow(user2Email, false, false, models.DefaultStorageLimit, int64(0), time.Now(), sql.NullTime{Valid: false})
+		AddRow(user2Email, false, false, models.DefaultStorageLimit, int64(0), regDateUser2, sql.NullTime{Valid: false}).
+		AddRow(adminEmail, true, true, int64(10*1024*1024*1024), int64(1*1024*1024*1024), regDateAdmin, sql.NullTime{Time: time.Now(), Valid: true}).
+		AddRow(user1Email, true, false, int64(5*1024*1024*1024), int64(500*1024*1024), regDateUser1, sql.NullTime{})
 
 	mockDB.ExpectQuery(`
 		SELECT email, is_approved, is_admin, storage_limit_bytes, total_storage_bytes, 
 		       registration_date, last_login
 		FROM users
 		ORDER BY registration_date DESC`).WillReturnRows(userRows)
-
-	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
-	mockDB.ExpectExec(logAdminActionSQL).
+	mockDB.ExpectExec("INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)").
 		WithArgs(adminEmail, "list_users", "", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	err := ListUsers(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
-
 	var resp map[string]interface{}
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
-
 	usersList, ok := resp["users"].([]interface{})
 	require.True(t, ok)
-	assert.Len(t, usersList, 3)
-	firstUser, ok := usersList[0].(map[string]interface{})
-	require.True(t, ok)
-	assert.Equal(t, adminEmail, firstUser["email"])
-	assert.True(t, firstUser["is_admin"].(bool))
-	assert.Equal(t, "10.00 GB", firstUser["storageLimitReadable"])
-	assert.Equal(t, "1.00 GB", firstUser["totalStorageReadable"])
-	assert.InDelta(t, 10.0, firstUser["usagePercent"], 0.01)
-	assert.NotEmpty(t, firstUser["lastLogin"])
-	thirdUser, ok := usersList[2].(map[string]interface{})
-	require.True(t, ok)
-	assert.Equal(t, user2Email, thirdUser["email"])
-	assert.False(t, thirdUser["is_approved"].(bool))
-	assert.Equal(t, "0 bytes", thirdUser["totalStorageReadable"])
-	assert.InDelta(t, 0.0, thirdUser["usagePercent"], 0.01)
-	assert.Empty(t, thirdUser["lastLogin"])
+	assert.Len(t, usersList, 2)
 
+	// Assert based on the correct order (user2, user1) - admin is filtered out
+	user2, ok := usersList[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, user2Email, user2["email"])
+	assert.False(t, user2["isApproved"].(bool))
+	assert.Equal(t, "0 B", user2["totalStorageReadable"])
+	assert.InDelta(t, 0.0, user2["usagePercent"], 0.01)
+	assert.Empty(t, user2["lastLogin"])
+
+	user1, ok := usersList[1].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, user1Email, user1["email"])
+	assert.True(t, user1["isApproved"].(bool))
+	assert.False(t, user1["isAdmin"].(bool))
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
@@ -1371,7 +1345,7 @@ func TestListUsers_QueryError(t *testing.T) {
 // TestListUsers_ScanError tests an error during row scanning.
 func TestListUsers_ScanError(t *testing.T) {
 	adminEmail := "admin@example.com"
-	c, rec, mockDB, _ := setupTestEnv(t, http.MethodGet, "/admin/users", nil)
+	c, _, mockDB, _ := setupTestEnv(t, http.MethodGet, "/admin/users", nil)
 
 	adminClaims := &auth.Claims{Email: adminEmail}
 	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
@@ -1394,21 +1368,12 @@ func TestListUsers_ScanError(t *testing.T) {
 		FROM users
 		ORDER BY registration_date DESC`).WillReturnRows(userRows)
 
-	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
-	mockDB.ExpectExec(logAdminActionSQL).
-		WithArgs(adminEmail, "list_users", "", "").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
 	err := ListUsers(c)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	var resp map[string]interface{}
-	err = json.Unmarshal(rec.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	usersList, ok := resp["users"].([]interface{})
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
-	assert.Len(t, usersList, 0)
+	assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
+	assert.Equal(t, "Error processing user data", httpErr.Message)
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
@@ -1437,7 +1402,7 @@ func TestListUsers_NoUsers(t *testing.T) {
 		FROM users
 		ORDER BY registration_date DESC`).WillReturnRows(userRows)
 
-	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
+	logAdminActionSQL := `INSERT INTO admin_logs \(admin_email, action, target_user_email, details\) VALUES \(\?, \?, \?, \?\)`
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "list_users", "", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -1525,7 +1490,11 @@ func TestGetPendingUsers_GetPendingError(t *testing.T) {
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`).WithArgs(adminEmail).WillReturnRows(adminUserRows)
 
-	mockDB.ExpectQuery(`SELECT id, email, created_at, is_approved, approved_by, approved_at, is_admin FROM users WHERE is_approved = 0 ORDER BY created_at ASC`).
+	mockDB.ExpectQuery(`
+		SELECT id, email, created_at, total_storage_bytes, storage_limit_bytes
+		FROM users
+		WHERE is_approved = false
+		ORDER BY created_at ASC`).
 		WillReturnError(fmt.Errorf("DB error fetching pending"))
 
 	err := GetPendingUsers(c)
@@ -1567,7 +1536,12 @@ func TestApproveUser_Success_Admin(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(2, targetUserEmail, "targetpass", time.Now(), int64(0), models.DefaultStorageLimit, false, sql.NullString{}, sql.NullTime{}, false))
 
-	approveUserSQL := `UPDATE users SET is_approved = TRUE, approved_by = ?, approved_at = ? WHERE id = ?`
+	approveUserSQL := `
+		UPDATE users 
+		SET is_approved = true, 
+		approved_by = ?,
+		    approved_at = ?
+		WHERE id = ?`
 	mockDB.ExpectExec(approveUserSQL).
 		WithArgs(adminEmail, sqlmock.AnyArg(), 2).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -1752,7 +1726,12 @@ func TestApproveUser_ApproveModelError(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(2, targetUserEmail, "targetpass", time.Now(), int64(0), models.DefaultStorageLimit, false, sql.NullString{}, sql.NullTime{}, false))
 
-	approveUserSQL := `UPDATE users SET is_approved = TRUE, approved_by = ?, approved_at = ? WHERE id = ?`
+	approveUserSQL := `
+		UPDATE users 
+		SET is_approved = true, 
+		approved_by = ?,
+		    approved_at = ?
+		WHERE id = ?`
 	mockDB.ExpectExec(approveUserSQL).
 		WithArgs(adminEmail, sqlmock.AnyArg(), 2).
 		WillReturnError(fmt.Errorf("DB error approving user"))

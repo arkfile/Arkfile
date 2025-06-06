@@ -154,6 +154,11 @@ func CleanupExpiredTokens(db *sql.DB) error {
 	return nil
 }
 
+func DeleteAllRefreshTokensForUser(db *sql.DB, userEmail string) error {
+	_, err := db.Exec("DELETE FROM refresh_tokens WHERE user_email = ?", userEmail)
+	return err
+}
+
 // TokenRevocationMiddleware creates a middleware that checks tokens against the revocation list
 func TokenRevocationMiddleware(db *sql.DB) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {

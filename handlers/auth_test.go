@@ -595,15 +595,15 @@ func TestRefreshToken_Success(t *testing.T) {
 		IsAdmin:    false,
 	}
 
-	// Create a refresh token string (this would be the actual token from a cookie)
+	// Use setupTestEnv to get context and mock DB first, which loads config
+	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/refresh", nil)
+
+	// Now that config is loaded, create a refresh token string (this would be the actual token from a cookie)
 	refreshTokenVal, genErr := auth.GenerateRefreshToken() // Generate a new one just for the test
 	require.NoError(t, genErr, "GenerateRefreshToken failed")
 	hashedRefreshToken, hashErr := auth.HashToken(refreshTokenVal)
 	require.NoError(t, hashErr, "HashToken failed")
 	tokenExpiry := time.Now().Add(config.GetConfig().Security.RefreshTokenDuration)
-
-	// Use setupTestEnv to get context and mock DB
-	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/refresh", nil)
 
 	// Minimal config for JWT key - directly modify global config for test
 	originalSecret := config.GetConfig().Security.JWTSecret
@@ -746,13 +746,14 @@ func TestRefreshToken_TokenExpired(t *testing.T) {
 
 func TestRefreshToken_UserNotFoundForToken(t *testing.T) {
 	userEmail := "usergone@example.com" // User associated with token but no longer exists
+
+	c, _ /*rec*/, mock, _ := setupTestEnv(t, http.MethodPost, "/refresh", nil) // rec not used
+
 	refreshTokenVal, genErr := auth.GenerateRefreshToken()
 	require.NoError(t, genErr, "GenerateRefreshToken failed")
 	hashedRefreshToken, hashErr := auth.HashToken(refreshTokenVal)
 	require.NoError(t, hashErr, "HashToken failed")
 	tokenExpiry := time.Now().Add(config.GetConfig().Security.RefreshTokenDuration)
-
-	c, _ /*rec*/, mock, _ := setupTestEnv(t, http.MethodPost, "/refresh", nil) // rec not used
 	originalSecret := config.GetConfig().Security.JWTSecret
 	if len(config.GetConfig().Security.JWTSecret) < 32 {
 		config.GetConfig().Security.JWTSecret = "testsecretkey12345678901234567890"
@@ -789,13 +790,14 @@ func TestRefreshToken_UserNotFoundForToken(t *testing.T) {
 func TestRefreshToken_CreateJWTError(t *testing.T) {
 	userEmail := "jwtcreatefail@example.com"
 	mockUser := &models.User{ID: 1, Email: userEmail, IsApproved: true}
+
+	c, _ /*rec*/, mock, _ := setupTestEnv(t, http.MethodPost, "/refresh", nil) // rec not used
+
 	refreshTokenVal, genErr := auth.GenerateRefreshToken()
 	require.NoError(t, genErr, "GenerateRefreshToken failed")
 	hashedRefreshToken, hashErr := auth.HashToken(refreshTokenVal)
 	require.NoError(t, hashErr, "HashToken failed")
 	tokenExpiry := time.Now().Add(config.GetConfig().Security.RefreshTokenDuration)
-
-	c, _ /*rec*/, mock, _ := setupTestEnv(t, http.MethodPost, "/refresh", nil) // rec not used
 
 	originalSecret := config.GetConfig().Security.JWTSecret
 	config.GetConfig().Security.JWTSecret = "" // Invalid: too short
@@ -852,7 +854,10 @@ func TestLogout_Success(t *testing.T) {
 	c.Request().AddCookie(cookie)
 
 	user := &models.User{Email: "logout@example.com"}
-	c.Set("user", &auth.Claims{Email: user.Email, RegisteredClaims: jwt.RegisteredClaims{}})
+	// Create a valid JWT token to put in the context, as middleware would.
+	claims := &auth.Claims{Email: user.Email}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
 
 	deleteTokenSQL := `DELETE FROM refresh_tokens WHERE token_hash = ?`
 	mock.ExpectExec(deleteTokenSQL).
@@ -888,9 +893,11 @@ func TestLogout_Success(t *testing.T) {
 }
 
 func TestLogout_NoCookie(t *testing.T) {
-	c, _ /*rec*/, mock, _ := setupTestEnv(t, http.MethodPost, "/logout", nil) // rec not used
+	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/logout", nil)
 	user := &models.User{Email: "nocookie@example.com"}
-	c.Set("user", &auth.Claims{Email: user.Email, RegisteredClaims: jwt.RegisteredClaims{}})
+	claims := &auth.Claims{Email: user.Email}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
 
 	logActionSQL := `INSERT INTO access_logs (user_email, action, filename) VALUES (?, ?, ?)`
 	mock.ExpectExec(logActionSQL).
@@ -898,8 +905,8 @@ func TestLogout_NoCookie(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	logoutErr := Logout(c)
-	require.NoError(t, logoutErr) // Handler returns OK even if no cookie
-	// assert.Equal(t, http.StatusOK, rec.Code) // rec is commented out
+	require.NoError(t, logoutErr)
+	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -909,12 +916,14 @@ func TestLogout_DeleteTokenDBError(t *testing.T) {
 	hashedRefreshToken, hashErr := auth.HashToken(refreshTokenVal)
 	require.NoError(t, hashErr, "HashToken failed")
 
-	c, _ /*rec*/, mock, _ := setupTestEnv(t, http.MethodPost, "/logout", nil) // rec not used
+	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/logout", nil)
 	user := &models.User{Email: "dberror@example.com"}
-	c.Set("user", &auth.Claims{Email: user.Email, RegisteredClaims: jwt.RegisteredClaims{}})
+	claims := &auth.Claims{Email: user.Email}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
 
 	cookie := new(http.Cookie)
-	cookie.Name = config.GetConfig().Security.RefreshTokenCookieName // Correct cookie name
+	cookie.Name = config.GetConfig().Security.RefreshTokenCookieName
 	cookie.Value = refreshTokenVal
 	c.Request().AddCookie(cookie)
 
@@ -923,6 +932,7 @@ func TestLogout_DeleteTokenDBError(t *testing.T) {
 		WithArgs(hashedRefreshToken).
 		WillReturnError(fmt.Errorf("database error on delete"))
 
+	// Since token deletion fails, LogUserAction will still be called.
 	logActionSQL := `INSERT INTO access_logs (user_email, action, filename) VALUES (?, ?, ?)`
 	mock.ExpectExec(logActionSQL).
 		WithArgs(user.Email, "logged out", "").

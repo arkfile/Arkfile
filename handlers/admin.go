@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -16,6 +17,10 @@ import (
 	"github.com/84adam/arkfile/models"
 	"github.com/84adam/arkfile/storage"
 )
+
+func CsvString(slice []string) string {
+	return strings.Join(slice, ", ")
+}
 
 // GetPendingUsers returns a list of users pending approval
 func GetPendingUsers(c echo.Context) error {
@@ -177,7 +182,7 @@ func ListUsers(c echo.Context) error {
 		if err := rows.Scan(&email, &isApproved, &isAdmin, &storageLimit, &totalStorage,
 			&registrationDate, &lastLogin); err != nil {
 			logging.ErrorLogger.Printf("Error scanning user row: %v", err)
-			continue
+			return echo.NewHTTPError(http.StatusInternalServerError, "Error processing user data")
 		}
 
 		lastLoginStr := ""
@@ -185,18 +190,25 @@ func ListUsers(c echo.Context) error {
 			lastLoginStr = lastLogin.Time.Format(time.RFC3339)
 		}
 
-		users = append(users, map[string]interface{}{
-			"email":                email,
-			"isApproved":           isApproved,
-			"isAdmin":              isAdmin,
-			"storageLimit":         storageLimit,
-			"storageLimitReadable": formatBytes(storageLimit),
-			"totalStorage":         totalStorage,
-			"totalStorageReadable": formatBytes(totalStorage),
-			"usagePercent":         float64(totalStorage) / float64(storageLimit) * 100,
-			"registrationDate":     registrationDate.Format(time.RFC3339),
-			"lastLogin":            lastLoginStr,
-		})
+		usagePercent := 0.0
+		if storageLimit > 0 {
+			usagePercent = float64(totalStorage) / float64(storageLimit) * 100
+		}
+
+		if email != adminEmail {
+			users = append(users, map[string]interface{}{
+				"email":                email,
+				"isApproved":           isApproved,
+				"isAdmin":              isAdmin,
+				"storageLimit":         storageLimit,
+				"storageLimitReadable": formatBytes(storageLimit),
+				"totalStorage":         totalStorage,
+				"totalStorageReadable": formatBytes(totalStorage),
+				"usagePercent":         usagePercent,
+				"registrationDate":     registrationDate.Format(time.RFC3339),
+				"lastLogin":            lastLoginStr,
+			})
+		}
 	}
 
 	if err = rows.Err(); err != nil {
@@ -232,12 +244,17 @@ func UpdateUser(c echo.Context) error {
 
 	// Parse update data
 	var request struct {
-		IsApproved   *bool  `json:"isApproved"`
-		IsAdmin      *bool  `json:"isAdmin"`
-		StorageLimit *int64 `json:"storageLimit"`
+		IsApproved        *bool  `json:"isApproved"`
+		IsAdmin           *bool  `json:"isAdmin"`
+		StorageLimitBytes *int64 `json:"storageLimitBytes"`
 	}
+
 	if err := c.Bind(&request); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+	}
+
+	if request.IsApproved == nil && request.IsAdmin == nil && request.StorageLimitBytes == nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "No updatable fields provided")
 	}
 
 	// Update user fields
@@ -251,60 +268,69 @@ func UpdateUser(c echo.Context) error {
 	var exists bool
 	err = tx.QueryRow("SELECT 1 FROM users WHERE email = ?", targetEmail).Scan(&exists)
 	if err == sql.ErrNoRows {
-		return echo.NewHTTPError(http.StatusNotFound, "User not found")
+		return echo.NewHTTPError(http.StatusNotFound, "Target user not found")
 	} else if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to verify user")
 	}
 
+	var logDetails []string
+
 	// Update approval status if provided
 	if request.IsApproved != nil {
+		if targetEmail == adminEmail && !*request.IsApproved {
+			return echo.NewHTTPError(http.StatusBadRequest, "Admins cannot revoke their own approval status.")
+		}
 		_, err = tx.Exec("UPDATE users SET is_approved = ? WHERE email = ?", *request.IsApproved, targetEmail)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to update approval status: %v", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update approval status")
 		}
-
-		action := "approve"
+		logDetails = append(logDetails, fmt.Sprintf("isApproved: %t", *request.IsApproved))
 		if !*request.IsApproved {
-			action = "revoke approval"
+			// Asynchronously revoke tokens
+			go auth.DeleteAllRefreshTokensForUser(database.DB, targetEmail)
 		}
-		database.LogAdminAction(adminEmail, action, targetEmail, "")
 	}
 
 	// Update admin status if provided
 	if request.IsAdmin != nil {
+		if targetEmail == adminEmail && !*request.IsAdmin {
+			return echo.NewHTTPError(http.StatusBadRequest, "Admins cannot revoke their own admin status.")
+		}
 		_, err = tx.Exec("UPDATE users SET is_admin = ? WHERE email = ?", *request.IsAdmin, targetEmail)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to update admin status: %v", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update admin status")
 		}
-
-		action := "grant admin"
-		if !*request.IsAdmin {
-			action = "revoke admin"
-		}
-		database.LogAdminAction(adminEmail, action, targetEmail, "")
+		logDetails = append(logDetails, fmt.Sprintf("isAdmin: %t", *request.IsAdmin))
 	}
 
 	// Update storage limit if provided
-	if request.StorageLimit != nil {
-		if *request.StorageLimit <= 0 {
+	if request.StorageLimitBytes != nil {
+		if *request.StorageLimitBytes <= 0 {
 			return echo.NewHTTPError(http.StatusBadRequest, "Storage limit must be positive")
 		}
-
-		_, err = tx.Exec("UPDATE users SET storage_limit_bytes = ? WHERE email = ?", *request.StorageLimit, targetEmail)
+		_, err = tx.Exec("UPDATE users SET storage_limit_bytes = ? WHERE email = ?", *request.StorageLimitBytes, targetEmail)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to update storage limit: %v", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage limit")
 		}
+		logDetails = append(logDetails, fmt.Sprintf("storageLimitBytes: %d", *request.StorageLimitBytes))
+	}
 
-		database.LogAdminAction(adminEmail, "update_storage_limit", targetEmail,
-			fmt.Sprintf("New limit: %d bytes", *request.StorageLimit))
+	detailsStr := ""
+	if len(logDetails) > 0 {
+		detailsStr = fmt.Sprintf("Updated fields: %s", CsvString(logDetails))
+	}
+
+	if err := database.LogAdminActionWithTx(tx, adminEmail, "update_user", targetEmail, detailsStr); err != nil {
+		logging.ErrorLogger.Printf("Failed to log admin action: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to log admin action")
 	}
 
 	if err := tx.Commit(); err != nil {
 		logging.ErrorLogger.Printf("Failed to commit transaction: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update user")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit user update")
 	}
 
 	logging.InfoLogger.Printf("User updated: %s by %s", targetEmail, adminEmail)
@@ -350,7 +376,7 @@ func DeleteUser(c echo.Context) error {
 	rows, err := tx.Query("SELECT filename FROM file_metadata WHERE owner_email = ?", targetEmail)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to query user files: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process user files")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve user's files")
 	}
 
 	var filenames []string
@@ -366,17 +392,14 @@ func DeleteUser(c echo.Context) error {
 
 	// Delete user's files
 	for _, filename := range filenames {
-		// Remove from storage using storage.Provider
 		if err := storage.Provider.RemoveObject(c.Request().Context(), filename, minio.RemoveObjectOptions{}); err != nil {
 			logging.ErrorLogger.Printf("Failed to remove file %s from storage via provider: %v", filename, err)
-			// Continue anyway - we want to delete the user even if some files can't be removed (Unchanged logic)
+			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to delete user's file from storage: %s", filename))
 		}
-
-		// Delete file metadata
 		_, err = tx.Exec("DELETE FROM file_metadata WHERE filename = ?", filename)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to delete file metadata for %s: %v", filename, err)
-			// Continue anyway
+			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to delete file metadata for: %s", filename))
 		}
 	}
 
@@ -384,27 +407,31 @@ func DeleteUser(c echo.Context) error {
 	_, err = tx.Exec("DELETE FROM file_shares WHERE owner_email = ?", targetEmail)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to delete user shares: %v", err)
-		// Continue anyway
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete user's file shares")
 	}
 
 	// Delete user record
 	result, err := tx.Exec("DELETE FROM users WHERE email = ?", targetEmail)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to delete user record: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete user")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete user record")
 	}
 
 	rowsAffected, _ := result.RowsAffected()
 	if rowsAffected == 0 {
-		return echo.NewHTTPError(http.StatusNotFound, "User not found")
+		// This path is taken if the user does not exist.
+		return echo.NewHTTPError(http.StatusNotFound, "User not found for deletion")
+	}
+
+	if err := database.LogAdminActionWithTx(tx, adminEmail, "delete_user", targetEmail, ""); err != nil {
+		logging.ErrorLogger.Printf("Failed to log admin action: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to log admin action")
 	}
 
 	if err := tx.Commit(); err != nil {
 		logging.ErrorLogger.Printf("Failed to commit transaction: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete user deletion")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit user deletion transaction")
 	}
-
-	database.LogAdminAction(adminEmail, "delete_user", targetEmail, "")
 	logging.InfoLogger.Printf("User deleted: %s by %s", targetEmail, adminEmail)
 
 	return c.JSON(http.StatusOK, map[string]string{

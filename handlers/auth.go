@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -20,27 +21,31 @@ type RefreshTokenRequest struct {
 func RefreshToken(c echo.Context) error {
 	var request RefreshTokenRequest
 	if err := c.Bind(&request); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request: malformed body")
+	}
+
+	if request.RefreshToken == "" {
+		return echo.NewHTTPError(http.StatusUnauthorized, "Refresh token not found")
 	}
 
 	// Validate the refresh token
 	userEmail, err := models.ValidateRefreshToken(database.DB, request.RefreshToken)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid refresh token")
+		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid or expired refresh token")
 	}
 
 	// Generate new JWT token
 	token, err := auth.GenerateToken(userEmail)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate token: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate token")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Could not create new access token")
 	}
 
 	// Generate new refresh token
 	refreshToken, err := models.CreateRefreshToken(database.DB, userEmail)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate refresh token: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate refresh token")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Could not create new refresh token")
 	}
 
 	// Log the token refresh
@@ -72,10 +77,21 @@ func Logout(c echo.Context) error {
 	if request.RefreshToken != "" {
 		err := models.RevokeRefreshToken(database.DB, request.RefreshToken)
 		if err != nil {
-			// Log the error but don't fail the request
 			logging.ErrorLogger.Printf("Failed to revoke refresh token: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke refresh token")
 		}
 	}
+
+	// Clear the refresh token cookie
+	cookie := &http.Cookie{
+		Name:     "refreshToken",
+		Value:    "",
+		Expires:  time.Unix(0, 0),
+		HttpOnly: true,
+		Path:     "/",
+		SameSite: http.SameSiteStrictMode,
+	}
+	c.SetCookie(cookie)
 
 	// Log the logout
 	if email != "" {

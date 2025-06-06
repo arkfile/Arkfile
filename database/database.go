@@ -57,7 +57,7 @@ func InitDB() {
 func createTables() {
 	// Read schema extensions if available
 	createExtendedSchema()
-	
+
 	// Users table
 	userTable := `CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,7 +139,7 @@ func createExtendedSchema() {
 
 	// Split the file into individual statements
 	statements := strings.Split(string(extensionsSQL), ";")
-	
+
 	// Execute each statement
 	for _, stmt := range statements {
 		// Skip empty statements
@@ -147,13 +147,13 @@ func createExtendedSchema() {
 		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
 			continue
 		}
-		
+
 		_, err := DB.Exec(trimmed)
 		if err != nil {
 			log.Printf("Warning: Failed to execute schema extension: %v", err)
 		}
 	}
-	
+
 	log.Println("Applied schema extensions for chunked uploads and sharing")
 }
 
@@ -169,7 +169,15 @@ func LogUserAction(email, action, filename string) error {
 // Log admin actions
 func LogAdminAction(adminEmail, action, targetEmail, details string) error {
 	_, err := DB.Exec(
-		"INSERT INTO admin_logs (admin_email, action, target_email, details) VALUES (?, ?, ?, ?)",
+		"INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)",
+		adminEmail, action, targetEmail, details,
+	)
+	return err
+}
+
+func LogAdminActionWithTx(tx *sql.Tx, adminEmail, action, targetEmail, details string) error {
+	_, err := tx.Exec(
+		"INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)",
 		adminEmail, action, targetEmail, details,
 	)
 	return err
