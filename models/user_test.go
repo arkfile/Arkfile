@@ -119,7 +119,7 @@ func TestCreateUser(t *testing.T) {
 
 			// Assert User Properties
 			assert.Equal(t, tc.email, user.Email, "Email should match")
-			assert.Equal(t, DefaultStorageLimit, user.StorageLimit, "Storage limit should be default")
+			assert.Equal(t, DefaultStorageLimit, user.StorageLimitBytes, "Storage limit should be default")
 			assert.Equal(t, tc.expectAdmin, user.IsAdmin, "Admin status mismatch")
 			assert.Equal(t, tc.expectApproved, user.IsApproved, "Approved status mismatch")
 			assert.NotZero(t, user.ID, "User ID should be populated") // Check if ID is generated
@@ -170,7 +170,7 @@ func TestGetUserByEmail(t *testing.T) {
 	// Assert: Check properties match the created user
 	assert.Equal(t, createdUser.ID, retrievedUser.ID)
 	assert.Equal(t, createdUser.Email, retrievedUser.Email)
-	assert.Equal(t, createdUser.StorageLimit, retrievedUser.StorageLimit)
+	assert.Equal(t, createdUser.StorageLimitBytes, retrievedUser.StorageLimitBytes)
 	assert.Equal(t, createdUser.IsAdmin, retrievedUser.IsAdmin)
 	assert.Equal(t, createdUser.IsApproved, retrievedUser.IsApproved) // Initially false unless admin
 	// Check nullable fields for initial non-approved user
@@ -317,8 +317,8 @@ func TestApproveUser(t *testing.T) {
 
 func TestCheckStorageAvailable(t *testing.T) {
 	user := User{
-		TotalStorage: 5 * 1024 * 1024,  // 5 MB used
-		StorageLimit: 10 * 1024 * 1024, // 10 MB limit
+		TotalStorageBytes: 5 * 1024 * 1024,  // 5 MB used
+		StorageLimitBytes: 10 * 1024 * 1024, // 10 MB limit
 	}
 
 	assert.True(t, user.CheckStorageAvailable(1*1024*1024), "Should allow adding 1MB when 5MB free")
@@ -337,7 +337,7 @@ func TestUpdateStorageUsage(t *testing.T) {
 	initialStorage := int64(1024 * 1024) // 1MB initial
 	_, err = db.Exec("UPDATE users SET total_storage_bytes = ? WHERE id = ?", initialStorage, user.ID)
 	require.NoError(t, err)
-	user.TotalStorage = initialStorage // Update struct to match
+	user.TotalStorageBytes = initialStorage // Update struct to match
 
 	// Begin transaction for testing
 	tx, err := db.Begin()
@@ -347,19 +347,19 @@ func TestUpdateStorageUsage(t *testing.T) {
 	addBytes := int64(2 * 1024 * 1024) // Add 2MB
 	err = user.UpdateStorageUsage(tx, addBytes)
 	assert.NoError(t, err, "Adding storage should succeed")
-	assert.Equal(t, initialStorage+addBytes, user.TotalStorage, "User struct total storage should be updated after adding")
+	assert.Equal(t, initialStorage+addBytes, user.TotalStorageBytes, "User struct total storage should be updated after adding")
 
 	// Test subtracting storage
 	subtractBytes := int64(-1 * 1024 * 1024) // Subtract 1MB
 	err = user.UpdateStorageUsage(tx, subtractBytes)
 	assert.NoError(t, err, "Subtracting storage should succeed")
-	assert.Equal(t, initialStorage+addBytes+subtractBytes, user.TotalStorage, "User struct total storage should be updated after subtracting")
+	assert.Equal(t, initialStorage+addBytes+subtractBytes, user.TotalStorageBytes, "User struct total storage should be updated after subtracting")
 
 	// Test subtracting more than available (should result in 0)
 	subtractTooMuch := int64(-5 * 1024 * 1024) // Subtract 5MB (more than current 2MB)
 	err = user.UpdateStorageUsage(tx, subtractTooMuch)
 	assert.NoError(t, err, "Subtracting too much storage should succeed")
-	assert.Equal(t, int64(0), user.TotalStorage, "User struct total storage should be 0 after subtracting too much")
+	assert.Equal(t, int64(0), user.TotalStorageBytes, "User struct total storage should be 0 after subtracting too much")
 
 	// Commit transaction to check DB state
 	err = tx.Commit()

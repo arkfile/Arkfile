@@ -13,16 +13,16 @@ import (
 )
 
 type User struct {
-	ID           int64          `json:"id"`
-	Email        string         `json:"email"`
-	Password     string         `json:"-"` // Never send password in JSON
-	CreatedAt    time.Time      `json:"created_at"`
-	TotalStorage int64          `json:"total_storage_bytes"`
-	StorageLimit int64          `json:"storage_limit_bytes"`
-	IsApproved   bool           `json:"is_approved"`
-	ApprovedBy   sql.NullString `json:"approved_by,omitempty"` // Handle NULL
-	ApprovedAt   sql.NullTime   `json:"approved_at,omitempty"` // Handle NULL
-	IsAdmin      bool           `json:"is_admin"`
+	ID                int64          `json:"id"`
+	Email             string         `json:"email"`
+	Password          string         `json:"-"` // Never send password in JSON
+	CreatedAt         time.Time      `json:"created_at"`
+	TotalStorageBytes int64          `json:"total_storage_bytes"`
+	StorageLimitBytes int64          `json:"storage_limit_bytes"`
+	IsApproved        bool           `json:"is_approved"`
+	ApprovedBy        sql.NullString `json:"approved_by,omitempty"` // Handle NULL
+	ApprovedAt        sql.NullTime   `json:"approved_at,omitempty"` // Handle NULL
+	IsAdmin           bool           `json:"is_admin"`
 }
 
 const (
@@ -55,12 +55,12 @@ func CreateUser(db *sql.DB, email, password string) (*User, error) {
 	}
 
 	return &User{
-		ID:           id,
-		Email:        email,
-		StorageLimit: DefaultStorageLimit,
-		CreatedAt:    time.Now(),
-		IsApproved:   isAdmin,
-		IsAdmin:      isAdmin,
+		ID:                id,
+		Email:             email,
+		StorageLimitBytes: DefaultStorageLimit,
+		CreatedAt:         time.Now(),
+		IsApproved:        isAdmin,
+		IsAdmin:           isAdmin,
 	}, nil
 }
 
@@ -75,7 +75,7 @@ func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 		email,
 	).Scan(
 		&user.ID, &user.Email, &user.Password, &user.CreatedAt,
-		&user.TotalStorage, &user.StorageLimit,
+		&user.TotalStorageBytes, &user.StorageLimitBytes,
 		&user.IsApproved, &user.ApprovedBy, &user.ApprovedAt, &user.IsAdmin, // Scan directly into sql.Null* types
 	)
 
@@ -144,13 +144,13 @@ func (u *User) ApproveUser(db *sql.DB, adminEmail string) error {
 
 // CheckStorageAvailable checks if a file of the given size can be stored
 func (u *User) CheckStorageAvailable(size int64) bool {
-	return (u.TotalStorage + size) <= u.StorageLimit
+	return (u.TotalStorageBytes + size) <= u.StorageLimitBytes
 }
 
 // UpdateStorageUsage updates the user's total storage (should be called in a transaction)
 func (u *User) UpdateStorageUsage(tx *sql.Tx, deltaBytes int64) error {
 	// deltaBytes can be positive (for additions) or negative (for deletions)
-	newTotal := u.TotalStorage + deltaBytes
+	newTotal := u.TotalStorageBytes + deltaBytes
 	if newTotal < 0 {
 		newTotal = 0
 	}
@@ -163,8 +163,16 @@ func (u *User) UpdateStorageUsage(tx *sql.Tx, deltaBytes int64) error {
 		return err
 	}
 
-	u.TotalStorage = newTotal
+	u.TotalStorageBytes = newTotal
 	return nil
+}
+
+// GetStorageUsagePercent returns the user's storage usage as a percentage
+func (u *User) GetStorageUsagePercent() float64 {
+	if u.StorageLimitBytes == 0 {
+		return 0.0
+	}
+	return (float64(u.TotalStorageBytes) / float64(u.StorageLimitBytes)) * 100
 }
 
 // GetPendingUsers retrieves users pending approval (admin only)
@@ -185,7 +193,7 @@ func GetPendingUsers(db *sql.DB) ([]*User, error) {
 		user := &User{}
 		err := rows.Scan(
 			&user.ID, &user.Email, &user.CreatedAt,
-			&user.TotalStorage, &user.StorageLimit,
+			&user.TotalStorageBytes, &user.StorageLimitBytes,
 		)
 		if err != nil {
 			return nil, err

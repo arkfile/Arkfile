@@ -74,6 +74,9 @@ func ApproveUser(c echo.Context) error {
 
 	// Approve user
 	if err := user.ApproveUser(database.DB, adminEmail); err != nil {
+		if strings.Contains(err.Error(), "user already approved") {
+			return echo.NewHTTPError(http.StatusBadRequest, "User is already approved")
+		}
 		logging.ErrorLogger.Printf("Failed to approve user: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to approve user")
 	}
@@ -162,6 +165,9 @@ func ListUsers(c echo.Context) error {
 		ORDER BY registration_date DESC
 	`)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return c.JSON(http.StatusOK, map[string]interface{}{"users": []interface{}{}})
+		}
 		logging.ErrorLogger.Printf("Failed to query users: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve users")
 	}

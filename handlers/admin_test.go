@@ -1169,13 +1169,13 @@ func TestUpdateUser_RevokeAccess_SimulateTokenDeleteError(t *testing.T) {
 	mockDB.ExpectQuery("SELECT 1 FROM users WHERE email = ?").WithArgs(targetUserEmail).WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 
 	// UpdateUser sets is_approved.
-	updateSQL := `UPDATE users SET is_approved = \? WHERE email = \?`
+	updateSQL := `UPDATE users SET is_approved = ? WHERE email = ?`
 	mockDB.ExpectExec(updateSQL).
 		WithArgs(false, targetUserEmail).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Mock the logging action to fail.
-	logAdminActionSQL := `INSERT INTO admin_logs \(admin_email, action, target_user_email, details\) VALUES \(\?, \?, \?, \?\)`
+	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "update_user", targetUserEmail, "Updated fields: isApproved: false").
 		WillReturnError(fmt.Errorf("DB error logging action"))
@@ -1402,8 +1402,7 @@ func TestListUsers_NoUsers(t *testing.T) {
 		FROM users
 		ORDER BY registration_date DESC`).WillReturnRows(userRows)
 
-	logAdminActionSQL := `INSERT INTO admin_logs \(admin_email, action, target_user_email, details\) VALUES \(\?, \?, \?, \?\)`
-	mockDB.ExpectExec(logAdminActionSQL).
+	mockDB.ExpectExec("INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)").
 		WithArgs(adminEmail, "list_users", "", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 

@@ -10,6 +10,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// Pre-defined errors for token validation
+var (
+	ErrRefreshTokenExpired  = errors.New("refresh token has expired")
+	ErrUserNotFound         = errors.New("user not found for token")
+	ErrRefreshTokenNotFound = errors.New("refresh token not found")
+)
+
 // RefreshToken represents a refresh token in the database
 type RefreshToken struct {
 	ID        string
@@ -123,7 +130,7 @@ func RevokeRefreshToken(db *sql.DB, tokenString string) error {
 	}
 
 	if rowsAffected == 0 {
-		return errors.New("token not found")
+		return ErrRefreshTokenNotFound
 	}
 
 	return nil

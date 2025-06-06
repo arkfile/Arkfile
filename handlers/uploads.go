@@ -704,9 +704,9 @@ func CompleteUpload(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "File uploaded successfully",
 		"storage": map[string]interface{}{
-			"total_bytes":     user.TotalStorage + totalSize,
-			"limit_bytes":     user.StorageLimit,
-			"available_bytes": user.StorageLimit - (user.TotalStorage + totalSize),
+			"total_bytes":     user.TotalStorageBytes + totalSize,
+			"limit_bytes":     user.StorageLimitBytes,
+			"available_bytes": user.StorageLimitBytes - (user.TotalStorageBytes + totalSize),
 		},
 	})
 }
@@ -783,11 +783,11 @@ func DeleteFile(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "File deleted successfully",
 		"storage": map[string]interface{}{
-			// Use the user.TotalStorage already updated in memory by UpdateStorageUsage
-			"total_bytes": user.TotalStorage,
-			"limit_bytes": user.StorageLimit,
+			// Use the user.TotalStorageBytes already updated in memory by UpdateStorageUsage
+			"total_bytes": user.TotalStorageBytes,
+			"limit_bytes": user.StorageLimitBytes,
 			// Calculate available based on the updated total
-			"available_bytes": user.StorageLimit - user.TotalStorage,
+			"available_bytes": user.StorageLimitBytes - user.TotalStorageBytes,
 		},
 	})
 }

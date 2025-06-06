@@ -31,6 +31,12 @@ func RefreshToken(c echo.Context) error {
 	// Validate the refresh token
 	userEmail, err := models.ValidateRefreshToken(database.DB, request.RefreshToken)
 	if err != nil {
+		if err == models.ErrRefreshTokenExpired {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Refresh token expired")
+		}
+		if err == models.ErrUserNotFound {
+			return echo.NewHTTPError(http.StatusUnauthorized, "User not found for token")
+		}
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid or expired refresh token")
 	}
 
@@ -38,7 +44,7 @@ func RefreshToken(c echo.Context) error {
 	token, err := auth.GenerateToken(userEmail)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate token: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Could not create new access token")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create new token")
 	}
 
 	// Generate new refresh token
@@ -77,8 +83,11 @@ func Logout(c echo.Context) error {
 	if request.RefreshToken != "" {
 		err := models.RevokeRefreshToken(database.DB, request.RefreshToken)
 		if err != nil {
-			logging.ErrorLogger.Printf("Failed to revoke refresh token: %v", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke refresh token")
+			// If the token is not found, it might already be revoked, which is not a failure for the user.
+			if err != models.ErrRefreshTokenNotFound {
+				logging.ErrorLogger.Printf("Failed to revoke refresh token: %v", err)
+				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke refresh token")
+			}
 		}
 	}
 

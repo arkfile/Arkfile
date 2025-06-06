@@ -124,9 +124,9 @@ func Login(c echo.Context) error {
 			"email":           user.Email,
 			"is_approved":     user.IsApproved,
 			"is_admin":        user.IsAdmin,
-			"total_storage":   user.TotalStorage,
-			"storage_limit":   user.StorageLimit,
-			"storage_used_pc": float64(user.TotalStorage) / float64(user.StorageLimit) * 100,
+			"total_storage":   user.TotalStorageBytes,
+			"storage_limit":   user.StorageLimitBytes,
+			"storage_used_pc": user.GetStorageUsagePercent(),
 		},
 	})
 }
@@ -219,11 +219,11 @@ func UploadFile(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "File uploaded successfully",
 		"storage": map[string]interface{}{
-			// Use the user.TotalStorage which was updated in memory by UpdateStorageUsage
-			"total_bytes": user.TotalStorage,
-			"limit_bytes": user.StorageLimit,
+			// Use the user.TotalStorageBytes which was updated in memory by UpdateStorageUsage
+			"total_bytes": user.TotalStorageBytes,
+			"limit_bytes": user.StorageLimitBytes,
 			// Calculate available based on the updated total
-			"available_bytes": user.StorageLimit - user.TotalStorage,
+			"available_bytes": user.StorageLimitBytes - user.TotalStorageBytes,
 		},
 	})
 }
@@ -344,13 +344,13 @@ func ListFiles(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"files": files,
 		"storage": map[string]interface{}{
-			"total_bytes":        user.TotalStorage,
-			"total_readable":     formatBytes(user.TotalStorage),
-			"limit_bytes":        user.StorageLimit,
-			"limit_readable":     formatBytes(user.StorageLimit),
-			"available_bytes":    user.StorageLimit - user.TotalStorage,
-			"available_readable": formatBytes(user.StorageLimit - user.TotalStorage),
-			"usage_percent":      float64(user.TotalStorage) / float64(user.StorageLimit) * 100,
+			"total_bytes":        user.TotalStorageBytes,
+			"total_readable":     formatBytes(user.TotalStorageBytes),
+			"limit_bytes":        user.StorageLimitBytes,
+			"limit_readable":     formatBytes(user.StorageLimitBytes),
+			"available_bytes":    user.StorageLimitBytes - user.TotalStorageBytes,
+			"available_readable": formatBytes(user.StorageLimitBytes - user.TotalStorageBytes),
+			"usage_percent":      user.GetStorageUsagePercent(),
 		},
 	})
 }

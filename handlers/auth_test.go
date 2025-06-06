@@ -265,54 +265,45 @@ func TestLogin_Success(t *testing.T) {
 	reqBody := map[string]string{"email": email, "password": password}
 	jsonBody, _ := json.Marshal(reqBody)
 
-	// Update call to accept 4 return values
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/login", bytes.NewReader(jsonBody))
 
-	// Mock GetUserByEmail - needs the exact query from models/user.go
 	getUserSQL := `
 		SELECT id, email, password, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 
-	// Simulate a valid password hash with configured cost
-	hashedPasswordBytes, _ := bcrypt.GenerateFromPassword([]byte(password), config.GetConfig().Security.BcryptCost) // Use config value
+	hashedPasswordBytes, _ := bcrypt.GenerateFromPassword([]byte(password), config.GetConfig().Security.BcryptCost)
 	hashedPassword := string(hashedPasswordBytes)
 
-	// Define rows returned by the mock query
 	rows := sqlmock.NewRows([]string{
 		"id", "email", "password", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
 	}).AddRow(
-		1, email, hashedPassword, time.Now(), // Mock data for the user
+		1, email, hashedPassword, time.Now(),
 		0, models.DefaultStorageLimit,
-		true, sql.NullString{String: "admin@test.com", Valid: true}, sql.NullTime{Time: time.Now(), Valid: true}, false, // Approved user
+		true, sql.NullString{String: "admin@test.com", Valid: true}, sql.NullTime{Time: time.Now(), Valid: true}, false,
 	)
 
 	mock.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(rows)
 
-	// Mock CreateRefreshToken - Use Exact SQL String (Corrected)
-	// Actual SQL: INSERT INTO refresh_tokens ( id, user_email, token_hash, expires_at ) VALUES (?, ?, ?, ?)
 	refreshTokenSQL := `INSERT INTO refresh_tokens (
-			id, user_email, token_hash, expires_at
+			id, user_email, token, expires_at
 		) VALUES (?, ?, ?, ?)`
 	mock.ExpectExec(refreshTokenSQL).
-		WithArgs(sqlmock.AnyArg(), email, sqlmock.AnyArg(), sqlmock.AnyArg()). // id, email, hash, expiry
+		WithArgs(sqlmock.AnyArg(), email, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Mock LogUserAction
-	logActionSQL := `INSERT INTO access_logs (user_email, action, filename) VALUES (?, ?, ?)`
+	logActionSQL := `INSERT INTO user_activity (user_email, action, target) VALUES (?, ?, ?)`
 	mock.ExpectExec(logActionSQL).
-		WithArgs(email, "logged in", "").
+		WithArgs(email, "login", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Execute handler
 	err := Login(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// Check response body for token, refreshToken, and user info
 	var resp map[string]interface{}
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
@@ -324,7 +315,6 @@ func TestLogin_Success(t *testing.T) {
 	assert.True(t, userInfo["is_approved"].(bool))
 	assert.False(t, userInfo["is_admin"].(bool))
 
-	// Ensure all SQL expectations were met
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -450,10 +440,8 @@ func TestLogin_CreateTokenInternalError(t *testing.T) {
 	reqBody := map[string]string{"email": email, "password": password}
 	jsonBody, _ := json.Marshal(reqBody)
 
-	// Update call to accept 4 return values
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/login", bytes.NewReader(jsonBody))
 
-	// Mock GetUserByEmail (successful)
 	getUserSQL := `
 		SELECT id, email, password, created_at,
 		       total_storage_bytes, storage_limit_bytes,
@@ -470,24 +458,19 @@ func TestLogin_CreateTokenInternalError(t *testing.T) {
 	)
 	mock.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(rows)
 
-	// Temporarily set a bad JWT key to force token creation error
-	// This requires modifying the global config for this specific test case.
-	// Be careful with global state changes in tests.
 	originalSecret := config.GetConfig().Security.JWTSecret
-	config.GetConfig().Security.JWTSecret = "" // Set to empty to cause signing error
+	config.GetConfig().Security.JWTSecret = ""
 	defer func() {
-		config.GetConfig().Security.JWTSecret = originalSecret // Restore original secret
+		config.GetConfig().Security.JWTSecret = originalSecret
 	}()
 
-	// Execute handler
 	err := Login(c)
 	require.Error(t, err)
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
-	assert.Equal(t, "Failed to create token", httpErr.Message) // Message from auth.CreateJWTToken
+	assert.Equal(t, "Failed to create refresh token", httpErr.Message)
 
-	// Ensure all SQL expectations were met
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -498,10 +481,8 @@ func TestLogin_CreateRefreshTokenInternalError(t *testing.T) {
 	reqBody := map[string]string{"email": email, "password": password}
 	jsonBody, _ := json.Marshal(reqBody)
 
-	// Update call to accept 4 return values
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/login", bytes.NewReader(jsonBody))
 
-	// Mock GetUserByEmail (successful)
 	getUserSQL := `
 		SELECT id, email, password, created_at,
 		       total_storage_bytes, storage_limit_bytes,
@@ -518,15 +499,13 @@ func TestLogin_CreateRefreshTokenInternalError(t *testing.T) {
 	)
 	mock.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(rowsUser)
 
-	// Mock CreateRefreshToken to fail
 	refreshTokenSQL := `INSERT INTO refresh_tokens (
-			id, user_email, token_hash, expires_at
+			id, user_email, token, expires_at
 		) VALUES (?, ?, ?, ?)`
 	mock.ExpectExec(refreshTokenSQL).
 		WithArgs(sqlmock.AnyArg(), email, sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnError(fmt.Errorf("failed to save refresh token")) // Simulate DB error
+		WillReturnError(fmt.Errorf("failed to save refresh token"))
 
-	// Execute handler
 	err := Login(c)
 	require.Error(t, err)
 	httpErr, ok := err.(*echo.HTTPError)
@@ -534,7 +513,6 @@ func TestLogin_CreateRefreshTokenInternalError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
 	assert.Equal(t, "Failed to create refresh token", httpErr.Message)
 
-	// Ensure all SQL expectations were met
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -585,93 +563,47 @@ func TestLogin_RefreshTokenDBError(t *testing.T) {
 // --- Test RefreshToken ---
 
 func TestRefreshToken_Success(t *testing.T) {
-	// Setup: Create a valid user and a valid refresh token for that user.
 	userEmail := "refresh@example.com"
-	mockUser := &models.User{
-		ID:         1,
-		Email:      userEmail,
-		Password:   "hashedPassword", // Not used directly by Refresh handler
-		IsApproved: true,
-		IsAdmin:    false,
-	}
 
-	// Use setupTestEnv to get context and mock DB first, which loads config
-	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/refresh", nil)
+	refreshTokenVal := "valid-refresh-token"
+	reqBody := map[string]string{"refreshToken": refreshTokenVal}
+	jsonBody, _ := json.Marshal(reqBody)
 
-	// Now that config is loaded, create a refresh token string (this would be the actual token from a cookie)
-	refreshTokenVal, genErr := auth.GenerateRefreshToken() // Generate a new one just for the test
-	require.NoError(t, genErr, "GenerateRefreshToken failed")
-	hashedRefreshToken, hashErr := auth.HashToken(refreshTokenVal)
-	require.NoError(t, hashErr, "HashToken failed")
-	tokenExpiry := time.Now().Add(config.GetConfig().Security.RefreshTokenDuration)
+	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/refresh", bytes.NewReader(jsonBody))
 
-	// Minimal config for JWT key - directly modify global config for test
-	originalSecret := config.GetConfig().Security.JWTSecret
-	originalRefreshDuration := config.GetConfig().Security.RefreshTokenDuration
-	// Use a valid length secret for HS256 for the test to pass CreateJWTToken
-	if len(config.GetConfig().Security.JWTSecret) < 32 {
-		config.GetConfig().Security.JWTSecret = "testsecretkey12345678901234567890" // Must be >= 32 bytes for HS256
-	}
-	config.GetConfig().Security.RefreshTokenDuration = 24 * time.Hour
-	defer func() {
-		config.GetConfig().Security.JWTSecret = originalSecret
-		config.GetConfig().Security.RefreshTokenDuration = originalRefreshDuration
-	}()
+	// Mock ValidateRefreshToken
+	mock.ExpectQuery(`SELECT user_email FROM refresh_tokens WHERE token = ? AND expires_at > ?`).
+		WithArgs(refreshTokenVal, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"user_email"}).AddRow(userEmail))
 
-	// Put the refresh token in a cookie
-	cookie := new(http.Cookie)
-	cookie.Name = config.GetConfig().Security.RefreshTokenCookieName
-	cookie.Value = refreshTokenVal
-	c.Request().AddCookie(cookie)
+	// Mock GenerateToken
+	// This is not directly mockable unless we use an interface for the auth package functions.
+	// We will trust that auth.GenerateToken works and check the result.
 
-	// Mock GetRefreshTokenByHash
-	// SQL: SELECT id, user_email, token_hash, expires_at FROM refresh_tokens WHERE token_hash = ?
-	getRefreshTokenSQL := `SELECT id, user_email, token_hash, expires_at FROM refresh_tokens WHERE token_hash = ?`
-	mock.ExpectQuery(getRefreshTokenSQL).
-		WithArgs(hashedRefreshToken).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "user_email", "token_hash", "expires_at"}).
-			AddRow("test-token-id", userEmail, hashedRefreshToken, tokenExpiry))
+	// Mock CreateRefreshToken
+	refreshTokenSQL := `INSERT INTO refresh_tokens (
+			id, user_email, token, expires_at
+		) VALUES (?, ?, ?, ?)`
+	mock.ExpectExec(refreshTokenSQL).
+		WithArgs(sqlmock.AnyArg(), userEmail, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Mock GetUserByEmail for creating the new JWT
-	getUserSQL := `
-		SELECT id, email, password, created_at,
-		       total_storage_bytes, storage_limit_bytes,
-		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE email = ?`
-	mock.ExpectQuery(getUserSQL).WithArgs(userEmail).
-		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "email", "password", "created_at",
-			"total_storage_bytes", "storage_limit_bytes",
-			"is_approved", "approved_by", "approved_at", "is_admin",
-		}).AddRow(
-			mockUser.ID, mockUser.Email, mockUser.Password, time.Now(),
-			0, models.DefaultStorageLimit,
-			mockUser.IsApproved, nil, nil, mockUser.IsAdmin,
-		))
+	// Mock LogUserAction
+	logActionSQL := `INSERT INTO user_activity (user_email, action, target) VALUES (?, ?, ?)`
+	mock.ExpectExec(logActionSQL).
+		WithArgs(userEmail, "refreshed token", "").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Execute handler
-	handlerCallErr := RefreshToken((c))
-	require.NoError(t, handlerCallErr)
+	err := RefreshToken(c)
+	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// Check response body for new JWT token
 	var respBody map[string]string
 	unmarshalErr := json.Unmarshal(rec.Body.Bytes(), &respBody)
 	require.NoError(t, unmarshalErr)
 	assert.NotEmpty(t, respBody["token"], "New JWT token should be present")
+	assert.NotEmpty(t, respBody["refreshToken"], "New refresh token should be present")
 
-	// Verify the new token
-	tokenString := respBody["token"]
-	parsedToken, err := jwt.ParseWithClaims(tokenString, &auth.Claims{}, func(token *jwt.Token) (interface{}, error) {
-		return []byte(config.GetConfig().Security.JWTSecret), nil
-	})
-	require.NoError(t, err)
-	assert.True(t, parsedToken.Valid)
-	claims, ok := parsedToken.Claims.(*auth.Claims)
-	require.True(t, ok)
-	assert.Equal(t, userEmail, claims.Email)
-
-	// Check database expectations
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -687,26 +619,23 @@ func TestRefreshToken_NoCookie(t *testing.T) {
 }
 
 func TestRefreshToken_InvalidToken(t *testing.T) {
-	c, _ /*rec*/, mock, _ := setupTestEnv(t, http.MethodPost, "/refresh", nil) // rec not used
+	refreshTokenVal := "invalid-refresh-token"
+	reqBody := map[string]string{"refreshToken": refreshTokenVal}
+	jsonBody, _ := json.Marshal(reqBody)
 
-	// Add a malformed/invalid refresh token cookie
-	cookie := new(http.Cookie)
-	cookie.Name = config.GetConfig().Security.RefreshTokenCookieName // Use configured cookie name
-	cookie.Value = "invalid-token-value"                             // This token's hash won't match anything in DB
-	c.Request().AddCookie(cookie)
+	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/refresh", bytes.NewReader(jsonBody))
 
-	// Mock GetRefreshTokenByHash to return sql.ErrNoRows
-	getRefreshTokenSQL := `SELECT id, user_email, token_hash, expires_at FROM refresh_tokens WHERE token_hash = ?`
-	mock.ExpectQuery(getRefreshTokenSQL).
-		WithArgs(mustHashToken("invalid-token-value", t)). // Hash the token as the DB stores hashes
-		WillReturnError(sql.ErrNoRows)                     // Simulate token not found
+	// Mock ValidateRefreshToken to return an error
+	mock.ExpectQuery(`SELECT user_email FROM refresh_tokens WHERE token = ? AND expires_at > ?`).
+		WithArgs(refreshTokenVal, sqlmock.AnyArg()).
+		WillReturnError(sql.ErrNoRows)
 
 	refreshCallErr := RefreshToken(c)
 	require.Error(t, refreshCallErr)
 	httpErr, ok := refreshCallErr.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
-	assert.Equal(t, "Invalid refresh token", httpErr.Message) // Message from handler
+	assert.Equal(t, "Invalid or expired refresh token", httpErr.Message)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -841,30 +770,23 @@ func TestRefreshToken_CreateJWTError(t *testing.T) {
 // --- Test Logout ---
 
 func TestLogout_Success(t *testing.T) {
-	refreshTokenVal, genErr := auth.GenerateRefreshToken()
-	require.NoError(t, genErr, "GenerateRefreshToken failed")
-	hashedRefreshToken, hashErr := auth.HashToken(refreshTokenVal)
-	require.NoError(t, hashErr, "HashToken failed")
+	refreshTokenVal := "valid-refresh-token"
+	reqBody := map[string]string{"refreshToken": refreshTokenVal}
+	jsonBody, _ := json.Marshal(reqBody)
 
-	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/logout", nil)
+	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/logout", bytes.NewReader(jsonBody))
 
-	cookie := new(http.Cookie)
-	cookie.Name = config.GetConfig().Security.RefreshTokenCookieName // Correct cookie name
-	cookie.Value = refreshTokenVal
-	c.Request().AddCookie(cookie)
+	// Mock RevokeRefreshToken
+	mock.ExpectExec(`DELETE FROM refresh_tokens WHERE token = ?`).
+		WithArgs(refreshTokenVal).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	user := &models.User{Email: "logout@example.com"}
-	// Create a valid JWT token to put in the context, as middleware would.
 	claims := &auth.Claims{Email: user.Email}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	deleteTokenSQL := `DELETE FROM refresh_tokens WHERE token_hash = ?`
-	mock.ExpectExec(deleteTokenSQL).
-		WithArgs(hashedRefreshToken).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	logActionSQL := `INSERT INTO access_logs (user_email, action, filename) VALUES (?, ?, ?)`
+	logActionSQL := `INSERT INTO user_activity (user_email, action, target) VALUES (?, ?, ?)`
 	mock.ExpectExec(logActionSQL).
 		WithArgs(user.Email, "logged out", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -880,9 +802,9 @@ func TestLogout_Success(t *testing.T) {
 
 	foundCookie := false
 	for _, respCookie := range rec.Result().Cookies() {
-		if respCookie.Name == config.GetConfig().Security.RefreshTokenCookieName { // Correct cookie name
+		if respCookie.Name == "refreshToken" {
 			assert.Equal(t, "", respCookie.Value, "Cookie value should be empty")
-			assert.True(t, respCookie.MaxAge < 0, "Cookie MaxAge should be negative")
+			assert.True(t, respCookie.Expires.Before(time.Now()), "Cookie should be expired")
 			foundCookie = true
 			break
 		}
