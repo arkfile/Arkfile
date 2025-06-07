@@ -1531,15 +1531,9 @@ func TestApproveUser_Success_Admin(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(2, targetUserEmail, "targetpass", time.Now(), int64(0), models.DefaultStorageLimit, false, sql.NullString{}, sql.NullTime{}, false))
 
-	approveUserSQL := `
-		UPDATE users
-		SET is_approved = ?,
-		    approved_by = ?,
-		    approved_at = ?
-		WHERE id = ?`
-	mockDB.ExpectExec(approveUserSQL).
-		WithArgs(true, adminEmail, sqlmock.AnyArg(), 2).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	mockDB.ExpectExec("UPDATE users SET is_approved = true, approved_by = ?, approved_at = ? WHERE id = ?").
+		WithArgs(adminEmail, sqlmock.AnyArg(), 2).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
 	mockDB.ExpectExec(logAdminActionSQL).
@@ -1721,14 +1715,8 @@ func TestApproveUser_ApproveModelError(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(2, targetUserEmail, "targetpass", time.Now(), int64(0), models.DefaultStorageLimit, false, sql.NullString{}, sql.NullTime{}, false))
 
-	approveUserSQL := `
-		UPDATE users
-		SET is_approved = ?,
-		    approved_by = ?,
-		    approved_at = ?
-		WHERE id = ?`
-	mockDB.ExpectExec(approveUserSQL).
-		WithArgs(true, adminEmail, sqlmock.AnyArg(), 2).
+	mockDB.ExpectExec("UPDATE users SET is_approved = true, approved_by = ?, approved_at = ? WHERE id = ?").
+		WithArgs(adminEmail, sqlmock.AnyArg(), 2).
 		WillReturnError(fmt.Errorf("DB error approving user"))
 
 	err := ApproveUser(c)
