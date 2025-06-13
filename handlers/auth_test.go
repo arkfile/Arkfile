@@ -77,8 +77,8 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	// Setup Mock DB
-	mockDB, mockSQL, err := sqlmock.New()
+	// Setup Mock DB with regex matching like other working tests
+	mockDB, mockSQL, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	require.NoError(t, err)
 	originalDB := dbSetup.DB
 	dbSetup.DB = mockDB
@@ -256,22 +256,27 @@ func TestRegister_CreateUserInternalError(t *testing.T) {
 func TestLogin_Success(t *testing.T) {
 	email := "login@example.com"
 	password := "password123"
-	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 
-	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPost, "/login", nil)
 	body := map[string]string{"email": email, "password": password}
-	jsonBody, _ := json.Marshal(body)
-	c.Request().Body = io.NopCloser(bytes.NewBuffer(jsonBody))
-	c.Request().Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	jsonBody, err := json.Marshal(body)
+	require.NoError(t, err)
 
-	rows := sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-		AddRow(1, email, string(hashedPassword), time.Now(), int64(0), models.DefaultStorageLimit, true, nil, nil, false)
-	mockDB.ExpectQuery(`
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPost, "/login", bytes.NewReader(jsonBody))
+
+	// Hash password *after* config is loaded by setupTestEnv
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), config.GetConfig().Security.BcryptCost)
+	require.NoError(t, err)
+
+	// Consistent query definition with other tests
+	getUserSQL := `
 		SELECT id, email, password, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE email = ?`).
-		WithArgs(email).WillReturnRows(rows)
+		FROM users WHERE email = ?`
+
+	rows := sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+		AddRow(1, email, string(hashedPassword), time.Now(), int64(0), models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(rows)
 
 	mockDB.ExpectExec(`(?s).*INSERT INTO refresh_tokens.*VALUES.*`).
 		WithArgs(sqlmock.AnyArg(), email, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), false, false).
@@ -281,15 +286,16 @@ func TestLogin_Success(t *testing.T) {
 		WithArgs(email, "logged in", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	err := Login(c)
+	err = Login(c)
 	require.NoError(t, err)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	var resp map[string]interface{}
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
-	require.NoError(t, err)
+	require.NoError(t, err) // Check for unmarshal error
 	assert.NotEmpty(t, resp["token"])
 	assert.NotEmpty(t, resp["refreshToken"])
+
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 

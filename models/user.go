@@ -79,10 +79,10 @@ func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 		&user.IsApproved, &user.ApprovedBy, &user.ApprovedAt, &user.IsAdmin, // Scan directly into sql.Null* types
 	)
 
-	if err == sql.ErrNoRows {
-		return nil, errors.New("user not found")
-	}
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, err // Return sql.ErrNoRows directly
+		}
 		return nil, err
 	}
 

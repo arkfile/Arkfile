@@ -185,10 +185,7 @@ func TestGetUserByEmail(t *testing.T) {
 	// Test getting a non-existent user
 	_, err = GetUserByEmail(db, "nosuchuser@example.com")
 	assert.Error(t, err, "Should return an error for non-existent user")
-	// Check specific error type if possible, otherwise message content
-	if err != nil { // Avoid panicking if err is nil
-		assert.Contains(t, err.Error(), "user not found", "Error message should indicate user not found")
-	}
+	assert.Equal(t, sql.ErrNoRows, err, "Error should be sql.ErrNoRows")
 }
 
 func TestVerifyPassword(t *testing.T) {

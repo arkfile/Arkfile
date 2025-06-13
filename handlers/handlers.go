@@ -79,13 +79,13 @@ func Login(c echo.Context) error {
 
 	// Get user
 	user, err := models.GetUserByEmail(database.DB, request.Email)
-	// Check for sql.ErrNoRows OR the specific error string from GetUserByEmail
-	if errors.Is(err, sql.ErrNoRows) || (err != nil && err.Error() == "user not found") {
-		// Optional: time.Sleep(100 * time.Millisecond) // Mitigate timing attacks
-		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
-	} else if err != nil {
-		logging.ErrorLogger.Printf("Database error during login: %v", err)
-		// Do not reveal specific internal errors for failed login
+	if err != nil {
+		// If the user is not found, return a generic "Invalid credentials" error to prevent username enumeration.
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
+		}
+		// For any other database error, log it and return a generic server error.
+		logging.ErrorLogger.Printf("Database error during login for user %s: %v", request.Email, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Login failed")
 	}
 
