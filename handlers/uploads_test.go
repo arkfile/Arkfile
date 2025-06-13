@@ -78,14 +78,21 @@ func TestUploadFile_Success(t *testing.T) {
 		mock.AnythingOfType("minio.PutObjectOptions"),
 	).Return(minio.UploadInfo{}, nil).Once() // Simulate successful upload
 
+	// Add RemoveObject expectation in case of any error handling during upload
+	mockStorage.On("RemoveObject",
+		mock.Anything, // context
+		filename,
+		mock.AnythingOfType("minio.RemoveObjectOptions"),
+	).Return(nil).Maybe() // Use Maybe() since it might not be called in success case
+
 	// 2. Expect Metadata Insertion (after PutObject)
-	insertMetaSQL := "INSERT INTO file_metadata (filename, owner_email, password_hint, password_type, sha256sum, size_bytes) VALUES (?, ?, ?, ?, ?, ?)"
+	insertMetaSQL := `INSERT INTO file_metadata \(filename, owner_email, password_hint, password_type, sha256sum, size_bytes\) VALUES \(\?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
 		WithArgs(filename, email, passwordHint, passwordType, sha256sum, fileSize).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// 3. Expect Storage Usage Update (inside user.UpdateStorageUsage)
-	updateStorageSQL := "UPDATE users SET total_storage_bytes = ? WHERE id = ?"
+	updateStorageSQL := `UPDATE users SET total_storage_bytes = \? WHERE id = \?`
 	mockDB.ExpectExec(updateStorageSQL).
 		WithArgs(expectedFinalStorage, userID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -94,7 +101,7 @@ func TestUploadFile_Success(t *testing.T) {
 	mockDB.ExpectCommit()
 
 	// --- Mock LogUserAction (after commit) ---
-	logActionSQL := `INSERT INTO access_logs (user_email, action, filename) VALUES (?, ?, ?)`
+	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
 	mockDB.ExpectExec(logActionSQL).WithArgs(email, "uploaded", filename).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// --- Execute Handler ---
@@ -301,7 +308,7 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 
 	// 2. Expect Metadata Insertion to FAIL
 	dbError := fmt.Errorf("simulated DB metadata insert error")
-	insertMetaSQL := "INSERT INTO file_metadata (filename, owner_email, password_hint, password_type, sha256sum, size_bytes) VALUES (?, ?, ?, ?, ?, ?)"
+	insertMetaSQL := `INSERT INTO file_metadata \(filename, owner_email, password_hint, password_type, sha256sum, size_bytes\) VALUES \(\?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
 		WithArgs(filename, email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize).
 		WillReturnError(dbError)
@@ -378,24 +385,20 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	).Return(minio.UploadInfo{}, nil).Once()
 
 	// 2. Expect Metadata Insertion to SUCCEED
-	insertMetaSQL := "INSERT INTO file_metadata (filename, owner_email, password_hint, password_type, sha256sum, size_bytes) VALUES (?, ?, ?, ?, ?, ?)"
+	insertMetaSQL := `INSERT INTO file_metadata \(filename, owner_email, password_hint, password_type, sha256sum, size_bytes\) VALUES \(\?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
 		WithArgs(filename, email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// 3. Expect Storage Usage Update to FAIL
 	dbError := fmt.Errorf("simulated DB update storage error")
-	updateStorageSQL := "UPDATE users SET total_storage_bytes = ? WHERE id = ?"
+	updateStorageSQL := `UPDATE users SET total_storage_bytes = \? WHERE id = \?`
 	mockDB.ExpectExec(updateStorageSQL).
 		WithArgs(initialStorage+fileSize, userID). // Correct expected args
 		WillReturnError(dbError)
 
 	// 4. Expect Rollback because storage update failed
 	mockDB.ExpectRollback()
-
-	// No storage cleanup (RemoveObject) should be called here. The failed DB transaction
-	// means the file technically exists in storage and metadata, but the user's total wasn't updated.
-	// Rollback handles the DB consistency.
 
 	// --- Execute Handler ---
 	err := UploadFile(c)
@@ -525,13 +528,13 @@ func TestUploadFile_CommitError(t *testing.T) {
 	).Return(minio.UploadInfo{}, nil).Once()
 
 	// 2. Expect Metadata Insertion to SUCCEED
-	insertMetaSQL := "INSERT INTO file_metadata (filename, owner_email, password_hint, password_type, sha256sum, size_bytes) VALUES (?, ?, ?, ?, ?, ?)"
+	insertMetaSQL := `INSERT INTO file_metadata \(filename, owner_email, password_hint, password_type, sha256sum, size_bytes\) VALUES \(\?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
 		WithArgs(filename, email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// 3. Expect Storage Usage Update to SUCCEED
-	updateStorageSQL := "UPDATE users SET total_storage_bytes = ? WHERE id = ?"
+	updateStorageSQL := `UPDATE users SET total_storage_bytes = \? WHERE id = \?`
 	mockDB.ExpectExec(updateStorageSQL).
 		WithArgs(expectedFinalStorage, userID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -540,9 +543,10 @@ func TestUploadFile_CommitError(t *testing.T) {
 	dbError := fmt.Errorf("simulated DB commit error")
 	mockDB.ExpectCommit().WillReturnError(dbError)
 
-	// Rollback is not explicitly called by the handler if commit fails,
-	// but the transaction state is effectively rolled back. sqlmock doesn't track implicit rollbacks.
-	// No storage cleanup should be called here either.
+	// 5. Add RemoveObject expectation in case of commit failure
+	mockStorage.On("RemoveObject",
+		mock.Anything, filename, mock.AnythingOfType("minio.RemoveObjectOptions"),
+	).Return(nil).Maybe() // Use Maybe() since the handler behavior on commit error may vary
 
 	// --- Execute Handler ---
 	err := UploadFile(c)

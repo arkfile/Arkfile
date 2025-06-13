@@ -53,7 +53,7 @@ func TestDownloadFile_Success(t *testing.T) {
 	mockStorageObject.On("Close").Return(nil)
 	mockStorage.On("GetObject", mock.Anything, filename, mock.AnythingOfType("minio.GetObjectOptions")).Return(mockStorageObject, nil).Once()
 
-	logActionSQL := `INSERT INTO access_logs (user_email, action, filename) VALUES (?, ?, ?)`
+	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
 	mockDB.ExpectExec(logActionSQL).WithArgs(email, "downloaded", filename).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	err := DownloadFile(c)
@@ -94,7 +94,7 @@ func TestDeleteFile_Success(t *testing.T) {
 	ownerRows := sqlmock.NewRows([]string{"owner_email", "size_bytes"}).AddRow(email, fileSize)
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnRows(ownerRows)
 
-	deleteMetaSQL := "DELETE FROM file_metadata WHERE filename = ?"
+	deleteMetaSQL := `DELETE FROM file_metadata WHERE filename = \?`
 	mockDB.ExpectExec(deleteMetaSQL).WithArgs(filename).WillReturnResult(sqlmock.NewResult(0, 1))
 
 	getUserSQL := `
@@ -110,12 +110,12 @@ func TestDeleteFile_Success(t *testing.T) {
 	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
-	updateStorageSQL := "UPDATE users SET total_storage_bytes = ? WHERE id = ?"
+	updateStorageSQL := `UPDATE users SET total_storage_bytes = \? WHERE id = \?`
 	expectedStorage := initialStorage - fileSize
 	mockDB.ExpectExec(updateStorageSQL).WithArgs(expectedStorage, userID).WillReturnResult(sqlmock.NewResult(0, 1))
 	mockDB.ExpectCommit()
 
-	logActionSQL := `INSERT INTO access_logs (user_email, action, filename) VALUES (?, ?, ?)`
+	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
 	mockDB.ExpectExec(logActionSQL).WithArgs(email, "deleted", filename).WillReturnResult(sqlmock.NewResult(1, 1))
 	mockStorage.On("RemoveObject", mock.Anything, filename, mock.AnythingOfType("minio.RemoveObjectOptions")).Return(nil).Once()
 

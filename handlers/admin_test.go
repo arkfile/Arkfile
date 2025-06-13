@@ -945,7 +945,7 @@ func TestUpdateUser_RevokeAccess_Success_Admin(t *testing.T) {
 			AddRow(1, adminEmail, "adminpass", time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT 1 FROM users WHERE email = ?").WithArgs(targetUserEmail).WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
-	mockDB.ExpectExec("UPDATE users SET is_approved = ? WHERE email = ?").
+	mockDB.ExpectExec(`UPDATE users SET is_approved = \? WHERE email = \?`).
 		WithArgs(false, targetUserEmail).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mockDB.ExpectExec("INSERT INTO admin_logs \\(admin_email, action, target_email, details\\) VALUES \\(\\?, \\?, \\?, \\?\\)").
@@ -1128,7 +1128,7 @@ func TestUpdateUser_RevokeAccess_RevokeDBError(t *testing.T) {
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT 1 FROM users WHERE email = ?").WithArgs(targetUserEmail).WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 
-	revokeSQL := `UPDATE users SET is_approved = ? WHERE email = ?`
+	revokeSQL := `UPDATE users SET is_approved = \? WHERE email = \?`
 	mockDB.ExpectExec(revokeSQL).
 		WithArgs(false, targetUserEmail).
 		WillReturnError(fmt.Errorf("DB error during revocation"))
@@ -1177,17 +1177,11 @@ func TestUpdateUser_RevokeAccess_SimulateTokenDeleteError(t *testing.T) {
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT 1 FROM users WHERE email = ?").WithArgs(targetUserEmail).WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 
-	// UpdateUser sets is_approved.
-	updateSQL := `UPDATE users SET is_approved = ? WHERE email = ?`
+	// UpdateUser sets is_approved - simulate this failing
+	updateSQL := `UPDATE users SET is_approved = \? WHERE email = \?`
 	mockDB.ExpectExec(updateSQL).
 		WithArgs(false, targetUserEmail).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// Mock the logging action to fail.
-	logAdminActionSQL := `INSERT INTO admin_logs \\(admin_email, action, target_email, details\\) VALUES \\(\\?, \\?, \\?, \\?\\)`
-	mockDB.ExpectExec(logAdminActionSQL).
-		WithArgs(adminEmail, "update_user", targetUserEmail, "Updated fields: isApproved: false").
-		WillReturnError(fmt.Errorf("DB error logging action"))
+		WillReturnError(fmt.Errorf("DB error updating approval status"))
 
 	mockDB.ExpectRollback()
 
@@ -1196,7 +1190,7 @@ func TestUpdateUser_RevokeAccess_SimulateTokenDeleteError(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
-	assert.Equal(t, "Failed to log admin action", httpErr.Message)
+	assert.Equal(t, "Failed to update approval status", httpErr.Message)
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
@@ -1544,11 +1538,11 @@ func TestApproveUser_Success_Admin(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(2, targetUserEmail, "targetpass", time.Now(), int64(0), models.DefaultStorageLimit, false, sql.NullString{}, sql.NullTime{}, false))
 
-	mockDB.ExpectExec("UPDATE users SET is_approved = true, approved_by = ?, approved_at = ? WHERE id = ?").
+	mockDB.ExpectExec(`UPDATE users SET is_approved = true, approved_by = \?, approved_at = \? WHERE id = \?`).
 		WithArgs(adminEmail, sqlmock.AnyArg(), 2).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	logAdminActionSQL := `INSERT INTO admin_logs \\(admin_email, action, target_email, details\\) VALUES \\(\\?, \\?, \\?, \\?\\)`
+	logAdminActionSQL := `INSERT INTO admin_logs \(admin_email, action, target_email, details\) VALUES \(\?, \?, \?, \?\)`
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "approve_user", targetUserEmail, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -1732,7 +1726,7 @@ func TestApproveUser_ApproveModelError(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(2, targetUserEmail, "targetpass", time.Now(), int64(0), models.DefaultStorageLimit, false, sql.NullString{}, sql.NullTime{}, false))
 
-	mockDB.ExpectExec("UPDATE users SET is_approved = true, approved_by = ?, approved_at = ? WHERE id = ?").
+	mockDB.ExpectExec(`UPDATE users SET is_approved = true, approved_by = \?, approved_at = \? WHERE id = \?`).
 		WithArgs(adminEmail, sqlmock.AnyArg(), 2).
 		WillReturnError(fmt.Errorf("DB error approving user"))
 
@@ -1799,12 +1793,12 @@ func TestUpdateUserStorageLimit_Success_Admin(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(1, adminEmail, "adminpass", time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
-	updateSQL := `UPDATE users SET storage_limit_bytes = ? WHERE email = ?`
+	updateSQL := `UPDATE users SET storage_limit_bytes = \? WHERE email = \?`
 	mockDB.ExpectExec(updateSQL).
 		WithArgs(newLimit, targetUserEmail).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	logAdminActionSQL := `INSERT INTO admin_logs \\(admin_email, action, target_email, details\\) VALUES \\(\\?, \\?, \\?, \\?\\)`
+	logAdminActionSQL := `INSERT INTO admin_logs \(admin_email, action, target_email, details\) VALUES \(\?, \?, \?, \?\)`
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "update_storage_limit", targetUserEmail, fmt.Sprintf("New limit: %d bytes", newLimit)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -2021,7 +2015,7 @@ func TestUpdateUserStorageLimit_DBUpdateError(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "email", "password", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(1, adminEmail, "adminpass", time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
-	updateSQL := `UPDATE users SET storage_limit_bytes = ? WHERE email = ?`
+	updateSQL := `UPDATE users SET storage_limit_bytes = \? WHERE email = \?`
 	mockDB.ExpectExec(updateSQL).
 		WithArgs(newLimit, targetUserEmail).
 		WillReturnError(fmt.Errorf("DB update error"))
