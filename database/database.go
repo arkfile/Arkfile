@@ -89,7 +89,17 @@ func createTables() {
     CREATE INDEX IF NOT EXISTS idx_file_metadata_sha256sum ON file_metadata(sha256sum);
     `
 
-	// Access logs table
+	// User activity table
+	userActivityTable := `CREATE TABLE IF NOT EXISTS user_activity (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_email TEXT NOT NULL,
+        action TEXT NOT NULL,
+        target TEXT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_email) REFERENCES users(email)
+    );`
+
+	// Access logs table (keep for backwards compatibility)
 	accessLogsTable := `CREATE TABLE IF NOT EXISTS access_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_email TEXT NOT NULL,
@@ -111,7 +121,7 @@ func createTables() {
         FOREIGN KEY (target_email) REFERENCES users(email)
     );`
 
-	tables := []string{userTable, fileMetadataTable, accessLogsTable, adminLogsTable}
+	tables := []string{userTable, fileMetadataTable, userActivityTable, accessLogsTable, adminLogsTable}
 
 	for _, table := range tables {
 		_, err := DB.Exec(table)
@@ -158,10 +168,10 @@ func createExtendedSchema() {
 }
 
 // Log user actions
-func LogUserAction(email, action, filename string) error {
+func LogUserAction(email, action, target string) error {
 	_, err := DB.Exec(
-		"INSERT INTO access_logs (user_email, action, filename) VALUES (?, ?, ?)",
-		email, action, filename,
+		"INSERT INTO user_activity (user_email, action, target) VALUES (?, ?, ?)",
+		email, action, target,
 	)
 	return err
 }
@@ -169,7 +179,7 @@ func LogUserAction(email, action, filename string) error {
 // Log admin actions
 func LogAdminAction(adminEmail, action, targetEmail, details string) error {
 	_, err := DB.Exec(
-		"INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)",
+		"INSERT INTO admin_logs (admin_email, action, target_email, details) VALUES (?, ?, ?, ?)",
 		adminEmail, action, targetEmail, details,
 	)
 	return err
@@ -177,7 +187,7 @@ func LogAdminAction(adminEmail, action, targetEmail, details string) error {
 
 func LogAdminActionWithTx(tx *sql.Tx, adminEmail, action, targetEmail, details string) error {
 	_, err := tx.Exec(
-		"INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)",
+		"INSERT INTO admin_logs (admin_email, action, target_email, details) VALUES (?, ?, ?, ?)",
 		adminEmail, action, targetEmail, details,
 	)
 	return err

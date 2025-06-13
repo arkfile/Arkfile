@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -20,8 +21,16 @@ import (
 	"github.com/84adam/arkfile/auth"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
-	// "github.com/84adam/arkfile/utils" // Not used by admin tests directly, but could be if there were input validation specific to admin actions
 )
+
+// setupAdminEnv sets up the ADMIN_EMAILS environment variable for tests
+func setupAdminEnv(adminEmail string) func() {
+	oldAdminEmails := os.Getenv("ADMIN_EMAILS")
+	os.Setenv("ADMIN_EMAILS", adminEmail)
+	return func() {
+		os.Setenv("ADMIN_EMAILS", oldAdminEmails)
+	}
+}
 
 // --- Admin Handler Tests ---
 
@@ -194,7 +203,7 @@ func TestDeleteUser_Success_Admin(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Mock LogAdminAction
-	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
+	logAdminActionSQL := `INSERT INTO admin_logs \(admin_email, action, target_email, details\) VALUES \(\?, \?, \?, \?\)`
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "delete_user", targetUserEmail, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -590,7 +599,7 @@ func TestDeleteUser_Error_LogAdminActionFailure(t *testing.T) {
 	mockDB.ExpectExec("DELETE FROM users WHERE email = ?").WithArgs(targetUserEmail).WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Mock the logging action to fail.
-	mockDB.ExpectExec("INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)").
+	mockDB.ExpectExec("INSERT INTO admin_logs \\(admin_email, action, target_email, details\\) VALUES \\(\\?, \\?, \\?, \\?\\)").
 		WithArgs(adminEmail, "delete_user", targetUserEmail, "").
 		WillReturnError(fmt.Errorf("simulated log failure"))
 	mockDB.ExpectRollback()
@@ -632,12 +641,12 @@ func TestUpdateUser_SetAdmin_Success_Admin(t *testing.T) {
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT 1 FROM users WHERE email = ?").WithArgs(targetUserEmail).WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 
-	updateSQL := `UPDATE users SET is_admin = ? WHERE email = ?`
+	updateSQL := `UPDATE users SET is_admin = \? WHERE email = \?`
 	mockDB.ExpectExec(updateSQL).
 		WithArgs(true, targetUserEmail).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
+	logAdminActionSQL := `INSERT INTO admin_logs \(admin_email, action, target_email, details\) VALUES \(\?, \?, \?, \?\)`
 	details := "Updated fields: isAdmin: true"
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "update_user", targetUserEmail, details).
@@ -685,12 +694,12 @@ func TestUpdateUser_SetStorageLimit_Success_Admin(t *testing.T) {
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT 1 FROM users WHERE email = ?").WithArgs(targetUserEmail).WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 
-	updateSQL := `UPDATE users SET storage_limit_bytes = ? WHERE email = ?`
+	updateSQL := `UPDATE users SET storage_limit_bytes = \? WHERE email = \?`
 	mockDB.ExpectExec(updateSQL).
 		WithArgs(newStorageLimit, targetUserEmail).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
+	logAdminActionSQL := `INSERT INTO admin_logs \(admin_email, action, target_email, details\) VALUES \(\?, \?, \?, \?\)`
 	details := fmt.Sprintf("Updated fields: storageLimitBytes: %d", newStorageLimit)
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "update_user", targetUserEmail, details).
@@ -939,7 +948,7 @@ func TestUpdateUser_RevokeAccess_Success_Admin(t *testing.T) {
 	mockDB.ExpectExec("UPDATE users SET is_approved = ? WHERE email = ?").
 		WithArgs(false, targetUserEmail).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mockDB.ExpectExec("INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)").
+	mockDB.ExpectExec("INSERT INTO admin_logs \\(admin_email, action, target_email, details\\) VALUES \\(\\?, \\?, \\?, \\?\\)").
 		WithArgs(adminEmail, "update_user", targetUserEmail, "Updated fields: isApproved: false").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mockDB.ExpectCommit()
@@ -1175,7 +1184,7 @@ func TestUpdateUser_RevokeAccess_SimulateTokenDeleteError(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Mock the logging action to fail.
-	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
+	logAdminActionSQL := `INSERT INTO admin_logs \\(admin_email, action, target_email, details\\) VALUES \\(\\?, \\?, \\?, \\?\\)`
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "update_user", targetUserEmail, "Updated fields: isApproved: false").
 		WillReturnError(fmt.Errorf("DB error logging action"))
@@ -1226,7 +1235,7 @@ func TestListUsers_Success_Admin(t *testing.T) {
 		       registration_date, last_login
 		FROM users
 		ORDER BY registration_date DESC`).WillReturnRows(userRows)
-	mockDB.ExpectExec("INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)").
+	mockDB.ExpectExec("INSERT INTO admin_logs \\(admin_email, action, target_email, details\\) VALUES \\(\\?, \\?, \\?, \\?\\)").
 		WithArgs(adminEmail, "list_users", "", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
@@ -1505,6 +1514,10 @@ func TestGetPendingUsers_GetPendingError(t *testing.T) {
 // TestApproveUser_Success_Admin tests successful user approval by an admin.
 func TestApproveUser_Success_Admin(t *testing.T) {
 	adminEmail := "admin@example.com"
+
+	// Set admin email in environment for isAdminEmail check
+	cleanup := setupAdminEnv(adminEmail)
+	defer cleanup()
 	targetUserEmail := "target@example.com"
 
 	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPost, "/admin/users/approve/:email", nil)
@@ -1535,7 +1548,7 @@ func TestApproveUser_Success_Admin(t *testing.T) {
 		WithArgs(adminEmail, sqlmock.AnyArg(), 2).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
+	logAdminActionSQL := `INSERT INTO admin_logs \\(admin_email, action, target_email, details\\) VALUES \\(\\?, \\?, \\?, \\?\\)`
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "approve_user", targetUserEmail, "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -1689,6 +1702,10 @@ func TestApproveUser_TargetUserDBError(t *testing.T) {
 // TestApproveUser_ApproveModelError tests error during user.ApproveUser model method.
 func TestApproveUser_ApproveModelError(t *testing.T) {
 	adminEmail := "admin@example.com"
+
+	// Set admin email in environment for isAdminEmail check
+	cleanup := setupAdminEnv(adminEmail)
+	defer cleanup()
 	targetUserEmail := "target@example.com"
 
 	c, _, mockDB, _ := setupTestEnv(t, http.MethodPost, "/admin/users/approve/:email", nil)
@@ -1787,7 +1804,7 @@ func TestUpdateUserStorageLimit_Success_Admin(t *testing.T) {
 		WithArgs(newLimit, targetUserEmail).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	logAdminActionSQL := `INSERT INTO admin_logs (admin_email, action, target_user_email, details) VALUES (?, ?, ?, ?)`
+	logAdminActionSQL := `INSERT INTO admin_logs \\(admin_email, action, target_email, details\\) VALUES \\(\\?, \\?, \\?, \\?\\)`
 	mockDB.ExpectExec(logAdminActionSQL).
 		WithArgs(adminEmail, "update_storage_limit", targetUserEmail, fmt.Sprintf("New limit: %d bytes", newLimit)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
