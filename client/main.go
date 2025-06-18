@@ -508,6 +508,131 @@ func decryptFileMultiKey(this js.Value, args []js.Value) interface{} {
 	return base64.StdEncoding.EncodeToString(plaintext)
 }
 
+// Helper functions for character validation
+func isUpper(r rune) bool {
+	return r >= 'A' && r <= 'Z'
+}
+
+func isLower(r rune) bool {
+	return r >= 'a' && r <= 'z'
+}
+
+func isDigit(r rune) bool {
+	return r >= '0' && r <= '9'
+}
+
+func containsRune(s string, r rune) bool {
+	for _, char := range s {
+		if char == r {
+			return true
+		}
+	}
+	return false
+}
+
+// validatePasswordComplexity validates password complexity using the same rules as the server
+// This function will be exported to WASM and used by all frontend validation
+func validatePasswordComplexity(this js.Value, args []js.Value) interface{} {
+	if len(args) != 1 {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Invalid number of arguments",
+		}
+	}
+
+	password := args[0].String()
+
+	// Check minimum length (14 characters)
+	if len(password) < 14 {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Password must be at least 14 characters long",
+		}
+	}
+
+	var (
+		hasUpper   bool
+		hasLower   bool
+		hasDigit   bool
+		hasSpecial bool
+	)
+
+	// Use the exact same special characters as utils/validator.go
+	specialChars := "`~!@#$%^&*()-_=+[]{}|;:,.<>?"
+
+	for _, char := range password {
+		switch {
+		case isUpper(char):
+			hasUpper = true
+		case isLower(char):
+			hasLower = true
+		case isDigit(char):
+			hasDigit = true
+		case containsRune(specialChars, char):
+			hasSpecial = true
+		}
+	}
+
+	if !hasUpper {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Password must contain at least one uppercase letter",
+		}
+	}
+	if !hasLower {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Password must contain at least one lowercase letter",
+		}
+	}
+	if !hasDigit {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Password must contain at least one digit",
+		}
+	}
+	if !hasSpecial {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Password must contain at least one special character: `~!@#$%^&*()-_=+[]{}|;:,.<>?",
+		}
+	}
+
+	return map[string]interface{}{
+		"valid":   true,
+		"message": "Password meets all requirements",
+	}
+}
+
+// hashPasswordArgon2ID hashes a password using Argon2ID with the same parameters as the server
+func hashPasswordArgon2ID(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 {
+		return "Invalid number of arguments"
+	}
+
+	password := args[0].String()
+	encodedSalt := args[1].String()
+
+	// Decode salt
+	saltBytes, err := base64.StdEncoding.DecodeString(encodedSalt)
+	if err != nil {
+		return "Failed to decode salt"
+	}
+
+	// Use Argon2ID with same parameters as server: 4 iterations, 128MB, 4 threads
+	hash := deriveKeyArgon2ID([]byte(password), saltBytes)
+	return base64.StdEncoding.EncodeToString(hash)
+}
+
+// generatePasswordSalt generates a secure salt for password hashing
+func generatePasswordSalt(this js.Value, args []js.Value) interface{} {
+	salt := make([]byte, saltLength) // 32 bytes
+	if _, err := rand.Read(salt); err != nil {
+		return "Failed to generate salt"
+	}
+	return base64.StdEncoding.EncodeToString(salt)
+}
+
 // main function to register WASM functions
 func main() {
 	js.Global().Set("encryptFile", js.FuncOf(encryptFile))
@@ -517,6 +642,9 @@ func main() {
 	js.Global().Set("calculateSHA256", js.FuncOf(calculateSHA256))
 	js.Global().Set("encryptFileMultiKey", js.FuncOf(encryptFileMultiKey))
 	js.Global().Set("decryptFileMultiKey", js.FuncOf(decryptFileMultiKey))
+	js.Global().Set("validatePasswordComplexity", js.FuncOf(validatePasswordComplexity))
+	js.Global().Set("hashPasswordArgon2ID", js.FuncOf(hashPasswordArgon2ID))
+	js.Global().Set("generatePasswordSalt", js.FuncOf(generatePasswordSalt))
 
 	// Keep the program running
 	select {}

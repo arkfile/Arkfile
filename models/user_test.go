@@ -72,6 +72,7 @@ func setupTestDB_User(t *testing.T) *sql.DB {
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		email TEXT NOT NULL UNIQUE,
 		password TEXT NOT NULL,
+		salt TEXT,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		total_storage_bytes INTEGER DEFAULT 0,
 		storage_limit_bytes INTEGER NOT NULL,

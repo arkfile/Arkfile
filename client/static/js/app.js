@@ -90,12 +90,37 @@ async function login() {
     const password = document.getElementById('login-password').value;
 
     try {
-        const response = await fetch('/login', {
+        // First, get the user's salt
+        const saltResponse = await fetch('/api/salt', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ email, password }),
+            body: JSON.stringify({ email }),
+        });
+
+        if (!saltResponse.ok) {
+            showError('Login failed. Please check your credentials.');
+            return;
+        }
+
+        const saltData = await saltResponse.json();
+        const salt = saltData.salt;
+
+        // Hash the password using the salt
+        if (!wasmReady) {
+            await initWasm(); // Make sure WASM is ready
+        }
+
+        const passwordHash = hashPasswordArgon2ID(password, salt);
+
+        // Now attempt login with the hashed password
+        const response = await fetch('/api/login', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ email, passwordHash }),
         });
 
         if (response.ok) {
@@ -105,11 +130,6 @@ async function login() {
             // Store refresh token
             if (data.refreshToken) {
                 localStorage.setItem('refreshToken', data.refreshToken);
-            }
-            
-            // Generate session key for future file encryption
-            if (!wasmReady) {
-                await initWasm(); // Make sure WASM is ready
             }
             
             // Generate a random salt for the session key
@@ -154,12 +174,21 @@ async function register() {
     }
 
     try {
-        const response = await fetch('/register', {
+        // Make sure WASM is ready
+        if (!wasmReady) {
+            await initWasm();
+        }
+
+        // Generate salt and hash password client-side
+        const salt = generatePasswordSalt();
+        const passwordHash = hashPasswordArgon2ID(password, salt);
+
+        const response = await fetch('/api/register', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ email, password }),
+            body: JSON.stringify({ email, passwordHash, salt }),
         });
 
         if (response.ok) {
@@ -173,29 +202,6 @@ async function register() {
     }
 }
 
-// Password validation functions
-function validatePassword(password) {
-    if (!password || password.length < 12) {
-        return {
-            valid: false,
-            message: 'Password must be at least 12 characters long'
-        };
-    }
-
-    const hasUppercase = /[A-Z]/.test(password);
-    const hasLowercase = /[a-z]/.test(password);
-    const hasNumber = /[0-9]/.test(password);
-    const hasSymbol = /[^A-Za-z0-9]/.test(password);
-
-    if (!hasUppercase || !hasLowercase || !hasNumber || !hasSymbol) {
-        return {
-            valid: false,
-            message: 'Password must contain uppercase, lowercase, numbers, and symbols'
-        };
-    }
-
-    return { valid: true };
-}
 
 function updatePasswordStrengthUI(password) {
     const strengthIndicator = document.getElementById('password-strength');
@@ -239,7 +245,7 @@ async function uploadFile() {
 
     if (useCustomPassword) {
         password = document.getElementById('filePassword').value;
-        const passwordValidation = validatePassword(password);
+        const passwordValidation = securityUtils.validatePassword(password);
         if (!passwordValidation.valid) {
             showError(passwordValidation.message);
             return;

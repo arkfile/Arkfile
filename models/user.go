@@ -14,6 +14,7 @@ type User struct {
 	ID                int64          `json:"id"`
 	Email             string         `json:"email"`
 	Password          string         `json:"-"` // Never send password in JSON
+	Salt              string         `json:"-"` // Never send salt in JSON
 	CreatedAt         time.Time      `json:"created_at"`
 	TotalStorageBytes int64          `json:"total_storage_bytes"`
 	StorageLimitBytes int64          `json:"storage_limit_bytes"`
@@ -62,17 +63,48 @@ func CreateUser(db *sql.DB, email, password string) (*User, error) {
 	}, nil
 }
 
+// CreateUserWithHash creates a new user with pre-hashed password and salt
+func CreateUserWithHash(db *sql.DB, email, passwordHash, salt string) (*User, error) {
+	isAdmin := isAdminEmail(email)
+	result, err := db.Exec(
+		`INSERT INTO users (
+			email, password, salt, storage_limit_bytes, is_admin, is_approved
+		) VALUES (?, ?, ?, ?, ?, ?)`,
+		email, passwordHash, salt, DefaultStorageLimit,
+		isAdmin, isAdmin, // Auto-approve admin emails
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, err
+	}
+
+	return &User{
+		ID:                id,
+		Email:             email,
+		Salt:              salt,
+		StorageLimitBytes: DefaultStorageLimit,
+		CreatedAt:         time.Now(),
+		IsApproved:        isAdmin,
+		IsAdmin:           isAdmin,
+	}, nil
+}
+
 // GetUserByEmail retrieves a user by email
 func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 	user := &User{}
+	var salt sql.NullString
 	err := db.QueryRow(`
-		SELECT id, email, password, created_at,
+		SELECT id, email, password, salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`,
 		email,
 	).Scan(
-		&user.ID, &user.Email, &user.Password, &user.CreatedAt,
+		&user.ID, &user.Email, &user.Password, &salt, &user.CreatedAt,
 		&user.TotalStorageBytes, &user.StorageLimitBytes,
 		&user.IsApproved, &user.ApprovedBy, &user.ApprovedAt, &user.IsAdmin, // Scan directly into sql.Null* types
 	)
@@ -82,6 +114,11 @@ func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 			return nil, err // Return sql.ErrNoRows directly
 		}
 		return nil, err
+	}
+
+	// Convert nullable salt to string
+	if salt.Valid {
+		user.Salt = salt.String
 	}
 
 	return user, nil

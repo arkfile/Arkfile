@@ -11,6 +11,7 @@ func RegisterRoutes() {
 
 	// Authentication
 	Echo.POST("/api/register", Register)
+	Echo.POST("/api/salt", GetUserSalt)
 	Echo.POST("/api/login", Login)
 	Echo.POST("/api/refresh", RefreshToken)
 	Echo.POST("/api/logout", Logout)

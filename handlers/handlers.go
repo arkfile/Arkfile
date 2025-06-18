@@ -25,8 +25,9 @@ var Echo *echo.Echo
 // Register handles user registration
 func Register(c echo.Context) error {
 	var request struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email        string `json:"email"`
+		PasswordHash string `json:"passwordHash"`
+		Salt         string `json:"salt"`
 	}
 
 	if err := c.Bind(&request); err != nil {
@@ -38,14 +39,13 @@ func Register(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid email format")
 	}
 
-	// Validate password complexity using the centralized function
-	if err := utils.ValidatePasswordComplexity(request.Password); err != nil {
-		// Return the specific error message from the validator
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	// Validate that password hash and salt are provided
+	if request.PasswordHash == "" || request.Salt == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Password hash and salt are required")
 	}
 
-	// Create user
-	user, err := models.CreateUser(database.DB, request.Email, request.Password)
+	// Create user with pre-hashed password
+	user, err := models.CreateUserWithHash(database.DB, request.Email, request.PasswordHash, request.Salt)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return echo.NewHTTPError(http.StatusConflict, "Email already registered")
@@ -63,6 +63,37 @@ func Register(c echo.Context) error {
 			"is_approved": user.IsApproved,
 			"is_admin":    user.IsAdmin,
 		},
+	})
+}
+
+// GetUserSalt returns the salt for a user (for client-side password hashing)
+func GetUserSalt(c echo.Context) error {
+	var request struct {
+		Email string `json:"email"`
+	}
+
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+	}
+
+	// Validate email
+	if !strings.Contains(request.Email, "@") {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid email format")
+	}
+
+	// Get user salt
+	var salt string
+	err := database.DB.QueryRow("SELECT salt FROM users WHERE email = ?", request.Email).Scan(&salt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
+		}
+		logging.ErrorLogger.Printf("Database error during salt lookup for user %s: %v", request.Email, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Login failed")
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"salt": salt,
 	})
 }
 
@@ -89,9 +120,8 @@ func Login(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Login failed")
 	}
 
-	// Verify password
+	// Verify password using the user's VerifyPassword method (handles both hashed and plain password scenarios)
 	if !user.VerifyPassword(request.Password) {
-		// Optional: time.Sleep(100 * time.Millisecond)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
 	}
 
@@ -104,7 +134,7 @@ func Login(c echo.Context) error {
 	token, err := auth.GenerateToken(request.Email)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate token: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create token")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create refresh token")
 	}
 
 	// Generate refresh token

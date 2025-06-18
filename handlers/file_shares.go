@@ -12,7 +12,6 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/minio/minio-go/v7"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/84adam/arkfile/auth"
 	"github.com/84adam/arkfile/database"
@@ -112,23 +111,21 @@ func getFileMetadata(fileID string) (*FileMetadata, int, string, error) {
 	return &metadata, http.StatusOK, "", nil
 }
 
-// verifySharePassword compares the provided password with the stored hash
-func verifySharePassword(shareDetails *ShareDetails, password string) (bool, error) {
+// verifySharePassword compares the provided password hash with the stored hash
+func verifySharePassword(shareDetails *ShareDetails, passwordHash string) (bool, error) {
 	if !shareDetails.PasswordProtected || shareDetails.PasswordHash == "" {
 		return true, nil // No password required
 	}
 
-	if password == "" {
+	if passwordHash == "" {
 		return false, nil // Password required but not provided
 	}
 
-	// Verify password using bcrypt
-	err := bcrypt.CompareHashAndPassword([]byte(shareDetails.PasswordHash), []byte(password))
-	if err != nil {
+	// Compare hashes directly (both are Argon2ID hashes)
+	if shareDetails.PasswordHash != passwordHash {
 		// Add a small delay to mitigate timing attacks
-		// QA / TODO: review this mitigation approach: are there any better ways to do this?
 		time.Sleep(100 * time.Millisecond)
-		return false, err
+		return false, nil
 	}
 
 	return true, nil
@@ -147,11 +144,12 @@ func getErrorTitle(status int) string {
 }
 
 // ShareRequest represents a file sharing request.
-// PasswordHash is expected to be hashed client-side.
+// PasswordHash and Salt are expected to be provided by client-side validation and hashing.
 type ShareRequest struct {
 	FileID            string `json:"fileId"`
 	PasswordProtected bool   `json:"passwordProtected"`
 	PasswordHash      string `json:"passwordHash,omitempty"` // Client-side hashed password
+	PasswordSalt      string `json:"passwordSalt,omitempty"` // Client-side generated salt
 	ExpiresAfterHours int    `json:"expiresAfterHours"`
 }
 
