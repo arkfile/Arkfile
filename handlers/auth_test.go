@@ -120,7 +120,7 @@ func TestRegister_Success(t *testing.T) {
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/register", bytes.NewReader(jsonBody))
 
 	// Mock CreateUserWithHash call's DB interaction: INSERT user with hash and salt
-	createUserSQL := `INSERT INTO users \(\s*email, password, salt, storage_limit_bytes, is_admin, is_approved\s*\) VALUES \(\?, \?, \?, \?, \?, \?\)`
+	createUserSQL := `INSERT INTO users \(\s*email, password_hash, password_salt, storage_limit_bytes, is_admin, is_approved\s*\) VALUES \(\?, \?, \?, \?, \?, \?\)`
 	mock.ExpectExec(createUserSQL).
 		WithArgs(email, passwordHash, salt, models.DefaultStorageLimit, false, false). // Args: email, hash, salt, limit, isAdmin, isApproved
 		WillReturnResult(sqlmock.NewResult(1, 1))                                      // Mock LastInsertId = 1, RowsAffected = 1
@@ -197,7 +197,7 @@ func TestRegister_DuplicateEmail(t *testing.T) {
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/register", bytes.NewReader(jsonBody)) // Ignore recorder
 
 	// Mock CreateUserWithHash call inside the database exec to return a UNIQUE constraint error
-	createUserSQL := `INSERT INTO users \(\s*email, password, salt, storage_limit_bytes, is_admin, is_approved\s*\) VALUES \(\?, \?, \?, \?, \?, \?\)`
+	createUserSQL := `INSERT INTO users \(\s*email, password_hash, password_salt, storage_limit_bytes, is_admin, is_approved\s*\) VALUES \(\?, \?, \?, \?, \?, \?\)`
 	mock.ExpectExec(createUserSQL).
 		WithArgs(email, passwordHash, salt, models.DefaultStorageLimit, false, false).
 		WillReturnError(fmt.Errorf("UNIQUE constraint failed: users.email")) // Simulate specific DB error string
@@ -230,7 +230,7 @@ func TestRegister_CreateUserInternalError(t *testing.T) {
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/register", bytes.NewReader(jsonBody)) // Ignore recorder
 
 	// Mock a generic DB error during user creation
-	createUserSQL := `INSERT INTO users \(\s*email, password, salt, storage_limit_bytes, is_admin, is_approved\s*\) VALUES \(\?, \?, \?, \?, \?, \?\)`
+	createUserSQL := `INSERT INTO users \(\s*email, password_hash, password_salt, storage_limit_bytes, is_admin, is_approved\s*\) VALUES \(\?, \?, \?, \?, \?, \?\)`
 	mock.ExpectExec(createUserSQL).
 		WithArgs(email, passwordHash, salt, models.DefaultStorageLimit, false, false).
 		WillReturnError(fmt.Errorf("some generic database error"))
@@ -262,12 +262,12 @@ func TestLogin_Success(t *testing.T) {
 
 	// Consistent query definition with other tests
 	getUserSQL := `
-		SELECT id, email, password, salt, created_at,
+		SELECT id, email, password_hash, password_salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 
-	rows := sqlmock.NewRows([]string{"id", "email", "password", "salt", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+	rows := sqlmock.NewRows([]string{"id", "email", "password_hash", "password_salt", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 		AddRow(1, email, passwordHash, salt, time.Now(), int64(0), models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(rows)
 
@@ -303,7 +303,7 @@ func TestLogin_UserNotFound(t *testing.T) {
 
 	// Mock GetUserByEmail to return sql.ErrNoRows
 	getUserSQL := `
-		SELECT id, email, password, salt, created_at,
+		SELECT id, email, password_hash, password_salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
@@ -335,12 +335,12 @@ func TestLogin_WrongPassword(t *testing.T) {
 
 	// Mock GetUserByEmail - return user with the *correct* hashed password
 	getUserSQL := `
-		SELECT id, email, password, salt, created_at,
+		SELECT id, email, password_hash, password_salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 	rows := sqlmock.NewRows([]string{
-		"id", "email", "password", "salt", "created_at",
+		"id", "email", "password_hash", "password_salt", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
 	}).AddRow(
@@ -376,12 +376,12 @@ func TestLogin_UserNotApproved(t *testing.T) {
 
 	// Mock GetUserByEmail to return an unapproved user
 	getUserSQL := `
-		SELECT id, email, password, salt, created_at,
+		SELECT id, email, password_hash, password_salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 	rows := sqlmock.NewRows([]string{
-		"id", "email", "password", "salt", "created_at",
+		"id", "email", "password_hash", "password_salt", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
 	}).AddRow(
@@ -414,13 +414,13 @@ func TestLogin_CreateTokenInternalError(t *testing.T) {
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/login", bytes.NewReader(jsonBody))
 
 	rows := sqlmock.NewRows([]string{
-		"id", "email", "password", "salt", "created_at",
+		"id", "email", "password_hash", "password_salt", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
 	}).AddRow(
 		1, email, passwordHash, salt, time.Now(), 0, models.DefaultStorageLimit, true, nil, nil, false,
 	)
-	mock.ExpectQuery(`SELECT id, email, password, salt, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE email = \?`).WithArgs(email).WillReturnRows(rows)
+	mock.ExpectQuery(`SELECT id, email, password_hash, password_salt, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE email = \?`).WithArgs(email).WillReturnRows(rows)
 
 	originalSecret := config.GetConfig().Security.JWTSecret
 	config.GetConfig().Security.JWTSecret = ""
@@ -449,12 +449,12 @@ func TestLogin_CreateRefreshTokenInternalError(t *testing.T) {
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/login", bytes.NewReader(jsonBody))
 
 	getUserSQL := `
-		SELECT id, email, password, salt, created_at,
+		SELECT id, email, password_hash, password_salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 	rowsUser := sqlmock.NewRows([]string{
-		"id", "email", "password", "salt", "created_at",
+		"id", "email", "password_hash", "password_salt", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
 	}).AddRow(
@@ -488,12 +488,12 @@ func TestLogin_RefreshTokenDBError(t *testing.T) {
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/login", bytes.NewReader(jsonBody))
 
 	getUserSQL := `
-		SELECT id, email, password, salt, created_at,
+		SELECT id, email, password_hash, password_salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 	rows := sqlmock.NewRows([]string{
-		"id", "email", "password", "salt", "created_at",
+		"id", "email", "password_hash", "password_salt", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
 	}).AddRow(

@@ -26,8 +26,18 @@ During the login process, the system derives session keys from user passwords us
 
 Authorization is enforced at the application level, ensuring that users can only access their own files and perform actions that they are permitted to. The system uses the principle of least privilege, granting users only the permissions they need to perform their tasks, with comprehensive rate limiting implemented across all endpoints to prevent brute force attacks against both authentication and file access.
 
+## Client-Side Password Hashing
+
+Plain-text passwords are never sent to the server. Arkfile performs password hashing on the client side before transmitting any credentials to the server. When a user enters their password, it is processed through Argon2ID hashing directly in the browser using WebAssembly.
+
+This approach means that network-level attackers cannot capture plain-text passwords even if they intercept HTTPS traffic through compromised certificates or other TLS vulnerabilities.
+
+The implementation uses the same Argon2ID parameters for client-side authentication hashing as for file encryption key derivation, ensuring consistent security levels across the system. However, different salt values and domain separation prevent key reuse between authentication and encryption contexts, maintaining cryptographic isolation between these two functions.
+
+Only password hashes and password salts are stored in the database.
+
 ## Service and Infrastructure Security
 
-The Arkfile application is designed to be deployed in a secure environment. It runs as a set of systemd services under dedicated, unprivileged user accounts (`arkprod` and `arktest`) to limit its access to the underlying system. The use of separate environments for production and testing further isolates the application and reduces the risk of accidental data exposure.
+Arkfile is designed to run as a set of systemd services under dedicated, unprivileged user accounts (`arkprod` and `arktest`) to limit its access to the underlying system. The use of separate environments for production and testing further isolates the application and reduces the risk of accidental data exposure.
 
 All communication between the client, server, and external services is encrypted using TLS, which is managed by a Caddy web server. The distributed rqlite database cluster also uses TLS for communication between nodes and requires authentication for all operations, protecting the metadata from unauthorized access. The system is designed with high availability in mind, with automatic failover and recovery mechanisms for both the database and storage backends.

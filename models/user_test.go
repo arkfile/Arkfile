@@ -71,8 +71,8 @@ func setupTestDB_User(t *testing.T) *sql.DB {
 	CREATE TABLE users (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		email TEXT NOT NULL UNIQUE,
-		password TEXT NOT NULL,
-		salt TEXT,
+		password_hash TEXT NOT NULL,
+		password_salt TEXT,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		total_storage_bytes INTEGER DEFAULT 0,
 		storage_limit_bytes INTEGER NOT NULL,
@@ -127,7 +127,7 @@ func TestCreateUser(t *testing.T) {
 
 			// Assert Password Hashing in DB
 			var dbPasswordHash string
-			err = db.QueryRow("SELECT password FROM users WHERE email = ?", tc.email).Scan(&dbPasswordHash)
+			err = db.QueryRow("SELECT password_hash FROM users WHERE email = ?", tc.email).Scan(&dbPasswordHash)
 			assert.NoError(t, err, "Failed to retrieve password hash from DB")
 			// Verify the stored hash corresponds to the provided password using Argon2ID
 			assert.True(t, auth.VerifyPassword(tc.password, dbPasswordHash), "Stored password hash should match the provided password")
@@ -178,8 +178,8 @@ func TestGetUserByEmail(t *testing.T) {
 	assert.False(t, retrievedUser.ApprovedAt.Valid, "ApprovedAt should initially be invalid/NULL")
 
 	// Compare password hash directly from DB as the struct field might be empty or different
-	assert.NotEmpty(t, retrievedUser.Password, "Password hash should be populated in retrieved user")
-	assert.True(t, auth.VerifyPassword(password, retrievedUser.Password), "Retrieved password hash should match original password")
+	assert.NotEmpty(t, retrievedUser.PasswordHash, "Password hash should be populated in retrieved user")
+	assert.True(t, auth.VerifyPassword(password, retrievedUser.PasswordHash), "Retrieved password hash should match original password")
 
 	// Test getting a non-existent user
 	_, err = GetUserByEmail(db, "nosuchuser@example.com")
@@ -196,7 +196,7 @@ func TestVerifyPassword(t *testing.T) {
 	hashedPassword, err := auth.HashPassword(password)
 	require.NoError(t, err)
 
-	user := &User{Password: hashedPassword}
+	user := &User{PasswordHash: hashedPassword}
 
 	// Assert: Correct password should verify
 	assert.True(t, user.VerifyPassword(password), "Correct password should verify successfully")
@@ -210,7 +210,7 @@ func TestVerifyPasswordHash(t *testing.T) {
 	correctHash := "fake-argon2id-hash-for-testing"
 	wrongHash := "wrong-hash-value"
 
-	user := &User{Password: correctHash}
+	user := &User{PasswordHash: correctHash}
 
 	// Assert: Correct hash should verify
 	assert.True(t, user.VerifyPasswordHash(correctHash), "Correct password hash should verify successfully")
@@ -246,7 +246,7 @@ func TestUpdatePassword(t *testing.T) {
 
 	// Assert: Verify the new password in the database
 	var updatedHash string
-	err = db.QueryRow("SELECT password FROM users WHERE id = ?", user.ID).Scan(&updatedHash)
+	err = db.QueryRow("SELECT password_hash FROM users WHERE id = ?", user.ID).Scan(&updatedHash)
 	assert.NoError(t, err, "Failed to retrieve updated password hash from DB")
 
 	// Check if the new hash matches the new password using Argon2ID

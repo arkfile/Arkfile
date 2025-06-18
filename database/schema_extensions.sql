@@ -113,8 +113,6 @@ CREATE INDEX IF NOT EXISTS idx_revoked_tokens_jti ON revoked_tokens(token_id);
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_user ON revoked_tokens(user_email);
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_at);
 
--- Add salt column to users table for client-side password hashing
-ALTER TABLE users ADD COLUMN salt TEXT;
-
--- Add salt column to file_shares table for share password hashing
-ALTER TABLE file_shares ADD COLUMN password_salt TEXT;
+-- Note: password_salt columns are now part of the base schema
+-- Users table: password_hash, password_salt
+-- File_shares table: password_hash, password_salt

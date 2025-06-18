@@ -13,14 +13,14 @@ import (
 type User struct {
 	ID                int64          `json:"id"`
 	Email             string         `json:"email"`
-	Password          string         `json:"-"` // Never send password in JSON
-	Salt              string         `json:"-"` // Never send salt in JSON
+	PasswordHash      string         `json:"-"` // Never send password hash in JSON
+	PasswordSalt      string         `json:"-"` // Never send password salt in JSON
 	CreatedAt         time.Time      `json:"created_at"`
 	TotalStorageBytes int64          `json:"total_storage_bytes"`
 	StorageLimitBytes int64          `json:"storage_limit_bytes"`
 	IsApproved        bool           `json:"is_approved"`
-	ApprovedBy        sql.NullString `json:"approved_by,omitempty"` // Handle NULL
-	ApprovedAt        sql.NullTime   `json:"approved_at,omitempty"` // Handle NULL
+	ApprovedBy        sql.NullString `json:"approved_by,omitempty"`
+	ApprovedAt        sql.NullTime   `json:"approved_at,omitempty"`
 	IsAdmin           bool           `json:"is_admin"`
 }
 
@@ -39,7 +39,7 @@ func CreateUser(db *sql.DB, email, password string) (*User, error) {
 	isAdmin := isAdminEmail(email)
 	result, err := db.Exec(
 		`INSERT INTO users (
-			email, password, storage_limit_bytes, is_admin, is_approved
+			email, password_hash, storage_limit_bytes, is_admin, is_approved
 		) VALUES (?, ?, ?, ?, ?)`,
 		email, hashedPassword, DefaultStorageLimit,
 		isAdmin, isAdmin, // Auto-approve admin emails
@@ -68,7 +68,7 @@ func CreateUserWithHash(db *sql.DB, email, passwordHash, salt string) (*User, er
 	isAdmin := isAdminEmail(email)
 	result, err := db.Exec(
 		`INSERT INTO users (
-			email, password, salt, storage_limit_bytes, is_admin, is_approved
+			email, password_hash, password_salt, storage_limit_bytes, is_admin, is_approved
 		) VALUES (?, ?, ?, ?, ?, ?)`,
 		email, passwordHash, salt, DefaultStorageLimit,
 		isAdmin, isAdmin, // Auto-approve admin emails
@@ -85,7 +85,7 @@ func CreateUserWithHash(db *sql.DB, email, passwordHash, salt string) (*User, er
 	return &User{
 		ID:                id,
 		Email:             email,
-		Salt:              salt,
+		PasswordSalt:      salt,
 		StorageLimitBytes: DefaultStorageLimit,
 		CreatedAt:         time.Now(),
 		IsApproved:        isAdmin,
@@ -98,13 +98,13 @@ func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 	user := &User{}
 	var salt sql.NullString
 	err := db.QueryRow(`
-		SELECT id, email, password, salt, created_at,
+		SELECT id, email, password_hash, password_salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`,
 		email,
 	).Scan(
-		&user.ID, &user.Email, &user.Password, &salt, &user.CreatedAt,
+		&user.ID, &user.Email, &user.PasswordHash, &salt, &user.CreatedAt,
 		&user.TotalStorageBytes, &user.StorageLimitBytes,
 		&user.IsApproved, &user.ApprovedBy, &user.ApprovedAt, &user.IsAdmin, // Scan directly into sql.Null* types
 	)
@@ -118,7 +118,7 @@ func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 
 	// Convert nullable salt to string
 	if salt.Valid {
-		user.Salt = salt.String
+		user.PasswordSalt = salt.String
 	}
 
 	return user, nil
@@ -126,12 +126,12 @@ func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 
 // VerifyPassword checks if the provided password matches the stored hash
 func (u *User) VerifyPassword(password string) bool {
-	return auth.VerifyPassword(password, u.Password)
+	return auth.VerifyPassword(password, u.PasswordHash)
 }
 
 // VerifyPasswordHash compares a client-provided hash with stored hash
 func (u *User) VerifyPasswordHash(providedHash string) bool {
-	return providedHash == u.Password
+	return providedHash == u.PasswordHash
 }
 
 // UpdatePassword updates the user's password
@@ -143,7 +143,7 @@ func (u *User) UpdatePassword(db *sql.DB, newPassword string) error {
 	}
 
 	_, err = db.Exec(
-		"UPDATE users SET password = ? WHERE id = ?",
+		"UPDATE users SET password_hash = ? WHERE id = ?",
 		hashedPassword, u.ID,
 	)
 	return err
