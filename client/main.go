@@ -10,64 +10,29 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"strings"
 	"syscall/js" // specifically for WASM build
 
-	"golang.org/x/crypto/sha3"
+	"golang.org/x/crypto/argon2"
 )
 
 var (
-	// SHAKE-256 iterations for key stretching
-	iterations = 10000
-	/* Expected time to compute:
-	 * - ~1700ms for an Intel Core i3-5005U 5th Gen 2-Core 2.0 GHz CPU
-	 * - ~650ms for an Intel Core i5-8600T 8th Gen 6-core 3.70 GHz CPU
-	 * - ~1200ms for an Apple M1 CPU
-	 */
+	// Argon2ID parameters for client-side encryption
+	argon2Time    = 4
+	argon2Memory  = 128 * 1024 // 128MB in KB
+	argon2Threads = 4
+	argon2KeyLen  = 32
+
+	// Salt length in bytes (increased for Argon2ID)
+	saltLength = 32
 
 	// Key length in bytes
 	keyLength = 32
 )
 
-// deriveKey generates a cryptographic key from a password using SHAKE-256
-// This is quantum-resistant and provides sufficient computational cost
-// to protect against brute force attacks
-func deriveKey(password []byte, salt []byte) []byte {
-	// Final key that will be returned
-	output := make([]byte, keyLength)
-
-	// Initial hash combines password and salt
-	combinedInput := append([]byte{}, password...)
-	combinedInput = append(combinedInput, salt...)
-
-	// Working buffer that will be repeatedly hashed
-	buffer := make([]byte, 64) // 512-bit buffer
-
-	// First hash to initialize buffer
-	d := sha3.NewShake256()
-	d.Write(combinedInput)
-	d.Read(buffer)
-
-	// Iterative hashing to increase computational cost
-	for i := 0; i < iterations; i++ {
-		// Add iteration counter to prevent rainbow table attacks
-		counterBytes := []byte{
-			byte(i >> 24), byte(i >> 16), byte(i >> 8), byte(i),
-		}
-
-		d.Reset()
-		d.Write(buffer)
-		d.Write(counterBytes)
-		d.Read(buffer)
-	}
-
-	// Final hash to derive output key
-	d.Reset()
-	d.Write(buffer)
-	d.Write([]byte("key")) // Domain separation
-	d.Read(output)
-
-	return output
+// deriveKeyArgon2ID generates a cryptographic key from a password using Argon2ID
+// This provides memory-hard protection against GPU and ASIC-based attacks
+func deriveKeyArgon2ID(password []byte, salt []byte) []byte {
+	return argon2.IDKey(password, salt, uint32(argon2Time), uint32(argon2Memory), uint8(argon2Threads), uint32(argon2KeyLen))
 }
 
 // deriveSessionKey derives a session key for account-based encryption
@@ -85,16 +50,9 @@ func deriveSessionKey(this js.Value, args []js.Value) interface{} {
 		return "Failed to decode salt"
 	}
 
-	// Use SHAKE-256 for key derivation with domain separation for session keys
-	output := make([]byte, keyLength)
-	combinedInput := append([]byte(password), saltBytes...)
-
-	d := sha3.NewShake256()
-	d.Write(combinedInput)
-	d.Write([]byte("sessionkey")) // Domain separation for session keys
-	d.Read(output)
-
-	return base64.StdEncoding.EncodeToString(output)
+	// Use Argon2ID for session key derivation
+	sessionKey := deriveKeyArgon2ID([]byte(password), saltBytes)
+	return base64.StdEncoding.EncodeToString(sessionKey)
 }
 
 // calculateSHA256 calculates the SHA-256 hash of input data
@@ -126,10 +84,10 @@ func encryptFile(this js.Value, args []js.Value) interface{} {
 		return "Failed to generate salt"
 	}
 
-	// Format version 0x02 = SHAKE256 KDF
+	// Format version 0x04 = Argon2ID KDF
 	// We'll use the first byte as version, and the second byte as key type
 	// 0x00 = custom password, 0x01 = account-derived session key
-	result := []byte{0x02}
+	result := []byte{0x04}
 
 	var keyTypeByte byte = 0x00
 	if keyType == "account" {
@@ -149,8 +107,8 @@ func encryptFile(this js.Value, args []js.Value) interface{} {
 			return "Failed to decode session key"
 		}
 	} else {
-		// For custom password, derive key using SHAKE-256
-		key = deriveKey([]byte(password), salt)
+		// For custom password, derive key using Argon2ID
+		key = deriveKeyArgon2ID([]byte(password), salt)
 	}
 
 	// Create cipher block
@@ -213,8 +171,8 @@ func decryptFile(this js.Value, args []js.Value) interface{} {
 	// Derive key based on version and key type
 	var key []byte
 
-	if version == 0x02 {
-		// Use quantum-resistant SHAKE-256 KDF
+	if version == 0x04 {
+		// Use Argon2ID KDF
 		if keyType == 0x01 {
 			// This is an account-password encrypted file
 			var err error
@@ -224,7 +182,7 @@ func decryptFile(this js.Value, args []js.Value) interface{} {
 			}
 		} else {
 			// This is a custom password, derive key normally
-			key = deriveKey([]byte(password), salt)
+			key = deriveKeyArgon2ID([]byte(password), salt)
 		}
 	} else {
 		return "Unsupported encryption version"
@@ -262,7 +220,7 @@ func decryptFile(this js.Value, args []js.Value) interface{} {
 }
 
 func generateSalt(this js.Value, args []js.Value) interface{} {
-	salt := make([]byte, 16)
+	salt := make([]byte, saltLength) // Use the configured salt length (32 bytes)
 	if _, err := rand.Read(salt); err != nil {
 		return "Failed to generate salt"
 	}
@@ -280,20 +238,20 @@ func generateFileEncryptionKey() []byte {
 
 // Encrypt a FEK with a password-derived key
 func encryptFEK(fek []byte, password []byte, keyType byte, keyID string) []byte {
-	// Generate salt
-	salt := make([]byte, 16)
+	// Generate salt (use the same salt length as elsewhere for consistency)
+	salt := make([]byte, saltLength)
 	if _, err := rand.Read(salt); err != nil {
 		panic("Failed to generate salt")
 	}
 
-	// Derive KEK using SHAKE-256 (keeping existing algorithm)
+	// Derive KEK using Argon2ID
 	var kek []byte
 	if keyType == 0x01 {
 		// For account password (session key), it's already derived
 		kek = password
 	} else {
-		// For custom password, derive using SHAKE-256
-		kek = deriveKey(password, salt)
+		// For custom password, derive using Argon2ID
+		kek = deriveKeyArgon2ID(password, salt)
 	}
 
 	// Encrypt the FEK using AES-GCM with the derived KEK
@@ -330,8 +288,8 @@ func encryptFileMultiKey(this js.Value, args []js.Value) interface{} {
 	// Generate a random FEK for this file
 	fek := generateFileEncryptionKey()
 
-	// Format version 0x03 = multi-key encryption
-	result := []byte{0x03}
+	// Format version 0x05 = multi-key Argon2ID encryption
+	result := []byte{0x05}
 
 	// Add number of keys
 	numKeys := 1 // Start with primary key
@@ -412,7 +370,7 @@ func decryptFileMultiKey(this js.Value, args []js.Value) interface{} {
 		return "Invalid data format"
 	}
 
-	if data[0] != 0x03 {
+	if data[0] != 0x05 {
 		return "Not a multi-key encrypted file"
 	}
 
@@ -446,13 +404,13 @@ func decryptFileMultiKey(this js.Value, args []js.Value) interface{} {
 		// Skip the key ID and null terminator
 		data = data[j+1:] // Skip null terminator
 
-		if len(data) < 16 {
+		if len(data) < saltLength {
 			return "Corrupted key entry: salt too short"
 		}
 
-		// Extract salt (16 bytes)
-		salt := data[:16]
-		data = data[16:]
+		// Extract salt (32 bytes for Argon2ID)
+		salt := data[:saltLength]
+		data = data[saltLength:]
 
 		// Minimum size check for encrypted FEK
 		if len(data) < 12+keyLength+16 { // nonce + key + tag
@@ -478,14 +436,10 @@ func decryptFileMultiKey(this js.Value, args []js.Value) interface{} {
 			keyToTry = decodedKey
 		} else {
 			// This is a custom key - derive from password and salt
-			keyToTry = deriveKey([]byte(password), salt)
+			keyToTry = deriveKeyArgon2ID([]byte(password), salt)
 		}
 
-		// Extract nonce and ciphertext
-		nonce := encryptedFEK[:12]
-		ciphertext := encryptedFEK[12:]
-
-		// Try to decrypt
+		// Try to decrypt the FEK
 		block, err := aes.NewCipher(keyToTry)
 		if err != nil {
 			continue
@@ -496,15 +450,23 @@ func decryptFileMultiKey(this js.Value, args []js.Value) interface{} {
 			continue
 		}
 
+		// Extract nonce and ciphertext from encrypted FEK
+		nonceSize := gcm.NonceSize()
+		if len(encryptedFEK) < nonceSize {
+			continue
+		}
+
+		nonce := encryptedFEK[:nonceSize]
+		ciphertext := encryptedFEK[nonceSize:]
+
 		// Try to decrypt the FEK
 		decryptedFEK, err := gcm.Open(nil, nonce, ciphertext, nil)
-		if err == nil {
-			// This password worked!
+		if err == nil && !decryptionSuccessful {
+			// This password worked and we haven't found a working key yet!
 			fek = decryptedFEK
 			decryptionSuccessful = true
-			break
 		}
-		// If we get here, this key didn't work - try the next one
+		// Continue processing ALL key entries to consume the data properly
 	}
 
 	if !decryptionSuccessful {
@@ -517,20 +479,20 @@ func decryptFileMultiKey(this js.Value, args []js.Value) interface{} {
 		return "Corrupted file data: too short"
 	}
 
+	// Decrypt the file data using the FEK
 	block, err := aes.NewCipher(fek)
 	if err != nil {
-		return "Failed to create cipher with FEK"
+		return "Failed to create cipher block for file decryption"
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return "Failed to create GCM with FEK"
+		return "Failed to create GCM for file decryption"
 	}
 
 	nonceSize := gcm.NonceSize()
-
 	if len(data) < nonceSize {
-		return "Data too short for nonce"
+		return "Corrupted file data: nonce too short"
 	}
 
 	nonce := data[:nonceSize]
@@ -546,77 +508,16 @@ func decryptFileMultiKey(this js.Value, args []js.Value) interface{} {
 	return base64.StdEncoding.EncodeToString(plaintext)
 }
 
-// Add a new key to an existing encrypted file
-func addKeyToEncryptedFile(this js.Value, args []js.Value) interface{} {
-	// Args: encrypted data, current password, new password, new key ID
-	if len(args) != 4 {
-		return "Invalid number of arguments"
-	}
-
-	encodedData := args[0].String()
-	currentPassword := args[1].String()
-	newPassword := args[2].String()
-	newKeyID := args[3].String()
-
-	// First decrypt the file with current password to get FEK and data
-	decryptedBase64 := decryptFileMultiKey(this, []js.Value{
-		js.ValueOf(encodedData),
-		js.ValueOf(currentPassword),
-	})
-
-	// Check if decryption failed
-	if str, ok := decryptedBase64.(string); ok {
-		if strings.HasPrefix(str, "Failed") {
-			return decryptedBase64
-		}
-	}
-
-	decryptedStr, ok := decryptedBase64.(string)
-	if !ok {
-		return "Failed to decrypt with current password"
-	}
-
-	// Decode the decrypted data
-	decoded, err := base64.StdEncoding.DecodeString(decryptedStr)
-	if err != nil {
-		return "Failed to decode decrypted data"
-	}
-
-	// Create an array of the decoded data for re-encryption
-	dataArray := js.Global().Get("Uint8Array").New(len(decoded))
-	js.CopyBytesToJS(dataArray, decoded)
-
-	// Prepare additional key info
-	additionalKeys := js.Global().Get("Array").New(1)
-	keyInfo := js.Global().Get("Object").New()
-	keyInfo.Set("password", newPassword)
-	keyInfo.Set("id", newKeyID)
-	additionalKeys.SetIndex(0, keyInfo)
-
-	// Re-encrypt with both the current and new passwords
-	return encryptFileMultiKey(this, []js.Value{
-		dataArray,
-		js.ValueOf(currentPassword),
-		js.ValueOf("custom"), // Always use custom for re-encryption
-		additionalKeys,
-	})
-}
-
+// main function to register WASM functions
 func main() {
-	c := make(chan struct{})
-
-	// Register JavaScript functions
 	js.Global().Set("encryptFile", js.FuncOf(encryptFile))
 	js.Global().Set("decryptFile", js.FuncOf(decryptFile))
 	js.Global().Set("generateSalt", js.FuncOf(generateSalt))
 	js.Global().Set("deriveSessionKey", js.FuncOf(deriveSessionKey))
 	js.Global().Set("calculateSHA256", js.FuncOf(calculateSHA256))
-
-	// Register new multi-key encryption functions
 	js.Global().Set("encryptFileMultiKey", js.FuncOf(encryptFileMultiKey))
 	js.Global().Set("decryptFileMultiKey", js.FuncOf(decryptFileMultiKey))
-	js.Global().Set("addKeyToEncryptedFile", js.FuncOf(addKeyToEncryptedFile))
 
-	// Keep the Go program running
-	<-c
+	// Keep the program running
+	select {}
 }

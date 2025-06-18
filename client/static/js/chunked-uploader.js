@@ -163,30 +163,47 @@ class ChunkedUploader {
         }
     }
 
-    // Generate random initialization vector
-    generateIV() {
-        const iv = new Uint8Array(16);
-        window.crypto.getRandomValues(iv);
-        return btoa(String.fromCharCode.apply(null, iv));
-    }
-
-    // Encrypt a chunk using the WASM encryption function
-    async encryptChunk(chunkData) {
+    // Derive file-level encryption key once per file
+    async deriveFileKey() {
         if (!wasmReady) {
-            await initWasm(); // Make sure WASM is ready
+            await initWasm();
         }
         
-        // Generate IV for this chunk
-        const ivBase64 = this.generateIV();
+        if (!this.fileKey) {
+            // Generate file salt once per file
+            this.fileSalt = generateSalt();
+            
+            // Derive file-level key using Argon2ID
+            if (this.passwordType === 'account') {
+                // For account passwords, use the session key directly
+                this.fileKey = this.password;
+            } else {
+                // For custom passwords, derive key using Argon2ID
+                // The WASM encryptFile function will handle this
+                this.fileKey = this.password;
+            }
+        }
+        
+        return this.fileKey;
+    }
+
+    // Encrypt a chunk using the file-level key
+    async encryptChunk(chunkData) {
+        if (!wasmReady) {
+            await initWasm();
+        }
+        
+        // Ensure we have the file key
+        await this.deriveFileKey();
         
         // Encrypt the chunk using WASM's encryptFile function
-        // This uses SHAKE-256 for key derivation and AES-GCM for encryption
+        // This now uses Argon2ID for key derivation (file-level)
         const dataBytes = new Uint8Array(chunkData);
-        const encryptedBase64 = encryptFile(dataBytes, this.password, this.passwordType);
+        const encryptedBase64 = encryptFile(dataBytes, this.fileKey, this.passwordType);
         
         return {
             data: encryptedBase64,
-            iv: ivBase64
+            iv: this.fileSalt // Return file salt instead of per-chunk IV
         };
     }
 

@@ -142,8 +142,13 @@ class ChunkedDownloader {
                 await initWasm();
             }
             
-            // Decrypt the chunk data
+            // Decrypt the chunk data using file-level key derivation
             const decryptedData = decryptFile(data.data, this.password);
+            
+            // Check for decryption errors
+            if (typeof decryptedData === 'string' && decryptedData.startsWith('Failed')) {
+                throw new Error('Failed to decrypt chunk: ' + decryptedData);
+            }
             
             // Convert base64 to Uint8Array
             const binaryString = atob(decryptedData);

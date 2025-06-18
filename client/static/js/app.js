@@ -115,7 +115,7 @@ async function login() {
             // Generate a random salt for the session key
             const sessionSalt = generateSalt();
             
-            // Derive session key using SHAKE-256
+            // Derive session key using Argon2ID
             const sessionKey = deriveSessionKey(password, sessionSalt);
             
             // Store session key and salt securely in memory
