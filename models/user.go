@@ -7,9 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
-
-	"github.com/84adam/arkfile/config" // Import config package
+	"github.com/84adam/arkfile/auth"
 )
 
 type User struct {
@@ -31,8 +29,8 @@ const (
 
 // CreateUser creates a new user in the database
 func CreateUser(db *sql.DB, email, password string) (*User, error) {
-	// Use cost from configuration
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), config.GetConfig().Security.BcryptCost)
+	// Use Argon2ID for password hashing
+	hashedPassword, err := auth.HashPassword(password)
 	if err != nil {
 		return nil, err
 	}
@@ -91,14 +89,13 @@ func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 
 // VerifyPassword checks if the provided password matches the stored hash
 func (u *User) VerifyPassword(password string) bool {
-	err := bcrypt.CompareHashAndPassword([]byte(u.Password), []byte(password))
-	return err == nil
+	return auth.VerifyPassword(password, u.Password)
 }
 
 // UpdatePassword updates the user's password
 func (u *User) UpdatePassword(db *sql.DB, newPassword string) error {
-	// Use cost from configuration
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), config.GetConfig().Security.BcryptCost)
+	// Use Argon2ID for password hashing
+	hashedPassword, err := auth.HashPassword(newPassword)
 	if err != nil {
 		return err
 	}

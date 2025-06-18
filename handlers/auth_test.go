@@ -14,13 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
-	jwt "github.com/golang-jwt/jwt/v5"
-	"github.com/labstack/echo/v4"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
-
 	"github.com/84adam/arkfile/auth"
 	"github.com/84adam/arkfile/config"
 	dbSetup "github.com/84adam/arkfile/database"
@@ -28,6 +21,11 @@ import (
 	"github.com/84adam/arkfile/models"
 	"github.com/84adam/arkfile/storage"
 	"github.com/84adam/arkfile/utils"
+	"github.com/DATA-DOG/go-sqlmock"
+	jwt "github.com/golang-jwt/jwt/v5"
+	"github.com/labstack/echo/v4"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func mustHashToken(token string, t *testing.T) string {
@@ -264,7 +262,7 @@ func TestLogin_Success(t *testing.T) {
 	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPost, "/login", bytes.NewReader(jsonBody))
 
 	// Hash password *after* config is loaded by setupTestEnv
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), config.GetConfig().Security.BcryptCost)
+	hashedPassword, err := auth.HashPassword(password)
 	require.NoError(t, err)
 
 	// Consistent query definition with other tests
@@ -345,9 +343,8 @@ func TestLogin_WrongPassword(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
-	// Hash the *correct* password with configured cost for the mock DB row
-	hashedCorrectPasswordBytes, _ := bcrypt.GenerateFromPassword([]byte(correctPassword), config.GetConfig().Security.BcryptCost) // Use config value
-	hashedCorrectPassword := string(hashedCorrectPasswordBytes)
+	// Hash the *correct* password with auth package for the mock DB row
+	hashedCorrectPassword, _ := auth.HashPassword(correctPassword)
 	rows := sqlmock.NewRows([]string{
 		"id", "email", "password", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
@@ -388,9 +385,8 @@ func TestLogin_UserNotApproved(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
-	// Hash the password with configured cost for the mock DB row since check happens after fetching
-	hashedPasswordBytes, _ := bcrypt.GenerateFromPassword([]byte(password), config.GetConfig().Security.BcryptCost)
-	hashedPassword := string(hashedPasswordBytes)
+	// Hash the password with auth package for the mock DB row since check happens after fetching
+	hashedPassword, _ := auth.HashPassword(password)
 	rows := sqlmock.NewRows([]string{
 		"id", "email", "password", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
@@ -423,8 +419,7 @@ func TestLogin_CreateTokenInternalError(t *testing.T) {
 
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/login", bytes.NewReader(jsonBody))
 
-	hashedPasswordBytes, _ := bcrypt.GenerateFromPassword([]byte(password), config.GetConfig().Security.BcryptCost)
-	hashedPassword := string(hashedPasswordBytes)
+	hashedPassword, _ := auth.HashPassword(password)
 	rows := sqlmock.NewRows([]string{
 		"id", "email", "password", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
@@ -464,8 +459,7 @@ func TestLogin_CreateRefreshTokenInternalError(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
-	hashedPasswordBytes, _ := bcrypt.GenerateFromPassword([]byte(password), config.GetConfig().Security.BcryptCost)
-	hashedPassword := string(hashedPasswordBytes)
+	hashedPassword, _ := auth.HashPassword(password)
 	rowsUser := sqlmock.NewRows([]string{
 		"id", "email", "password", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
@@ -503,8 +497,7 @@ func TestLogin_RefreshTokenDBError(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
-	hashedPasswordBytes, _ := bcrypt.GenerateFromPassword([]byte(password), config.GetConfig().Security.BcryptCost)
-	hashedPassword := string(hashedPasswordBytes)
+	hashedPassword, _ := auth.HashPassword(password)
 	rows := sqlmock.NewRows([]string{
 		"id", "email", "password", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",

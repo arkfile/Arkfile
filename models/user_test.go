@@ -10,8 +10,8 @@ import (
 	_ "github.com/mattn/go-sqlite3" // Import SQLite driver
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 
+	"github.com/84adam/arkfile/auth"
 	"github.com/84adam/arkfile/config" // Import config package
 )
 
@@ -128,9 +128,8 @@ func TestCreateUser(t *testing.T) {
 			var dbPasswordHash string
 			err = db.QueryRow("SELECT password FROM users WHERE email = ?", tc.email).Scan(&dbPasswordHash)
 			assert.NoError(t, err, "Failed to retrieve password hash from DB")
-			// Verify the stored hash corresponds to the provided password
-			err = bcrypt.CompareHashAndPassword([]byte(dbPasswordHash), []byte(tc.password))
-			assert.NoError(t, err, "Stored password hash should match the provided password")
+			// Verify the stored hash corresponds to the provided password using Argon2ID
+			assert.True(t, auth.VerifyPassword(tc.password, dbPasswordHash), "Stored password hash should match the provided password")
 		})
 	}
 
@@ -179,8 +178,7 @@ func TestGetUserByEmail(t *testing.T) {
 
 	// Compare password hash directly from DB as the struct field might be empty or different
 	assert.NotEmpty(t, retrievedUser.Password, "Password hash should be populated in retrieved user")
-	err = bcrypt.CompareHashAndPassword([]byte(retrievedUser.Password), []byte(password))
-	assert.NoError(t, err, "Retrieved password hash should match original password")
+	assert.True(t, auth.VerifyPassword(password, retrievedUser.Password), "Retrieved password hash should match original password")
 
 	// Test getting a non-existent user
 	_, err = GetUserByEmail(db, "nosuchuser@example.com")
@@ -193,11 +191,11 @@ func TestVerifyPassword(t *testing.T) {
 
 	// No DB needed, just need a User struct with a valid password hash
 	password := "CorrectPassword123?"
-	// Use cost from configuration
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), config.GetConfig().Security.BcryptCost) // Use config value
+	// Use Argon2ID for password hashing
+	hashedPassword, err := auth.HashPassword(password)
 	require.NoError(t, err)
 
-	user := &User{Password: string(hashedPassword)}
+	user := &User{Password: hashedPassword}
 
 	// Assert: Correct password should verify
 	assert.True(t, user.VerifyPassword(password), "Correct password should verify successfully")
@@ -233,13 +231,11 @@ func TestUpdatePassword(t *testing.T) {
 	err = db.QueryRow("SELECT password FROM users WHERE id = ?", user.ID).Scan(&updatedHash)
 	assert.NoError(t, err, "Failed to retrieve updated password hash from DB")
 
-	// Check if the new hash matches the new password
-	err = bcrypt.CompareHashAndPassword([]byte(updatedHash), []byte(newPassword))
-	assert.NoError(t, err, "New password hash in DB should match the new password")
+	// Check if the new hash matches the new password using Argon2ID
+	assert.True(t, auth.VerifyPassword(newPassword, updatedHash), "New password hash in DB should match the new password")
 
 	// Check if the new hash DOES NOT match the old password
-	err = bcrypt.CompareHashAndPassword([]byte(updatedHash), []byte(initialPassword))
-	assert.Error(t, err, "New password hash should NOT match the old password")
+	assert.False(t, auth.VerifyPassword(initialPassword, updatedHash), "New password hash should NOT match the old password")
 }
 
 func TestHasAdminPrivileges(t *testing.T) {
