@@ -100,8 +100,8 @@ func GetUserSalt(c echo.Context) error {
 // Login handles user authentication
 func Login(c echo.Context) error {
 	var request struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email        string `json:"email"`
+		PasswordHash string `json:"passwordHash"`
 	}
 
 	if err := c.Bind(&request); err != nil {
@@ -120,8 +120,8 @@ func Login(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Login failed")
 	}
 
-	// Verify password using the user's VerifyPassword method (handles both hashed and plain password scenarios)
-	if !user.VerifyPassword(request.Password) {
+	// Verify password hash using direct comparison with stored hash
+	if !user.VerifyPasswordHash(request.PasswordHash) {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
 	}
 

@@ -98,16 +98,16 @@ func TestDeleteFile_Success(t *testing.T) {
 	mockDB.ExpectExec(deleteMetaSQL).WithArgs(filename).WillReturnResult(sqlmock.NewResult(0, 1))
 
 	getUserSQL := `
-		SELECT id, email, password, created_at,
+		SELECT id, email, password, salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 	userID := int64(1)
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "password", "created_at",
+		"id", "email", "password", "salt", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, "hashed", nil, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	updateStorageSQL := `UPDATE users SET total_storage_bytes = \? WHERE id = \?`

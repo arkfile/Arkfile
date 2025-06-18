@@ -205,6 +205,23 @@ func TestVerifyPassword(t *testing.T) {
 	assert.False(t, user.VerifyPassword("WrongPassword!"), "Incorrect password should fail verification")
 }
 
+func TestVerifyPasswordHash(t *testing.T) {
+	// Test the new VerifyPasswordHash method for client-side hashed passwords
+	correctHash := "fake-argon2id-hash-for-testing"
+	wrongHash := "wrong-hash-value"
+
+	user := &User{Password: correctHash}
+
+	// Assert: Correct hash should verify
+	assert.True(t, user.VerifyPasswordHash(correctHash), "Correct password hash should verify successfully")
+
+	// Assert: Incorrect hash should fail verification
+	assert.False(t, user.VerifyPasswordHash(wrongHash), "Incorrect password hash should fail verification")
+
+	// Assert: Empty hash should fail verification
+	assert.False(t, user.VerifyPasswordHash(""), "Empty password hash should fail verification")
+}
+
 func TestUpdatePassword(t *testing.T) {
 	db := setupTestDB_User(t)
 	defer db.Close()

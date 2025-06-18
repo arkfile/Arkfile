@@ -50,11 +50,42 @@ node test-runner.js
 # Capture exit code
 TEST_EXIT_CODE=$?
 
-echo
 if [ $TEST_EXIT_CODE -eq 0 ]; then
-    echo -e "${GREEN}🎉 All WASM tests passed!${NC}"
+    echo
+    echo -e "${BLUE}🔐 Running password function tests...${NC}"
+    echo
+    
+    # Run password function tests
+    node password-functions-test.js
+    
+    # Capture password test exit code
+    PASSWORD_TEST_EXIT_CODE=$?
+    
+    if [ $PASSWORD_TEST_EXIT_CODE -eq 0 ]; then
+        echo
+        echo -e "${BLUE}🔐 Running login integration tests...${NC}"
+        echo
+        
+        # Run login integration tests
+        node login-integration-test.js
+        
+        # Capture login integration test exit code
+        LOGIN_TEST_EXIT_CODE=$?
+        
+        if [ $LOGIN_TEST_EXIT_CODE -eq 0 ]; then
+            echo
+            echo -e "${GREEN}🎉 All WASM tests passed!${NC}"
+            exit 0
+        else
+            echo -e "${RED}❌ Some login integration tests failed${NC}"
+            exit $LOGIN_TEST_EXIT_CODE
+        fi
+    else
+        echo -e "${RED}❌ Some password function tests failed${NC}"
+        exit $PASSWORD_TEST_EXIT_CODE
+    fi
 else
+    echo
     echo -e "${RED}❌ Some WASM tests failed${NC}"
+    exit $TEST_EXIT_CODE
 fi
-
-exit $TEST_EXIT_CODE

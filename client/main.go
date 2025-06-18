@@ -36,6 +36,7 @@ func deriveKeyArgon2ID(password []byte, salt []byte) []byte {
 }
 
 // deriveSessionKey derives a session key for account-based encryption
+// Uses domain separation to ensure session keys are different from password hashes
 func deriveSessionKey(this js.Value, args []js.Value) interface{} {
 	if len(args) != 2 {
 		return "Invalid number of arguments"
@@ -50,8 +51,12 @@ func deriveSessionKey(this js.Value, args []js.Value) interface{} {
 		return "Failed to decode salt"
 	}
 
-	// Use Argon2ID for session key derivation
-	sessionKey := deriveKeyArgon2ID([]byte(password), saltBytes)
+	// Domain separation: prepend a context string to the password for session key derivation
+	// This ensures session keys are cryptographically different from password hashes
+	contextualPassword := "ARKFILE_SESSION_KEY:" + password
+
+	// Use Argon2ID for session key derivation with domain separation
+	sessionKey := deriveKeyArgon2ID([]byte(contextualPassword), saltBytes)
 	return base64.StdEncoding.EncodeToString(sessionKey)
 }
 

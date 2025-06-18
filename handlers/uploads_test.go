@@ -54,16 +54,16 @@ func TestUploadFile_Success(t *testing.T) {
 	// --- Mock GetUserByEmail (for storage check) ---
 	// Uses the *non-transactional* GetUserByEmail outside the transaction
 	getUserSQL := `
-		SELECT id, email, password, created_at,
+		SELECT id, email, password, salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 	userID := int64(5) // Assume some user ID
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "password", "created_at",
+		"id", "email", "password", "salt", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, "hashed", nil, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations (Order based on handler logic) ---
@@ -159,16 +159,16 @@ func TestUploadFile_StorageLimitExceeded(t *testing.T) {
 
 	// --- Mock GetUserByEmail (for storage check) ---
 	getUserSQL := `
-		SELECT id, email, password, created_at,
+		SELECT id, email, password, salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 	userID := int64(6)
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "password", "created_at",
+		"id", "email", "password", "salt", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, "hashed", nil, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	// Handler should check storage and fail BEFORE starting transaction or calling storage
@@ -215,16 +215,16 @@ func TestUploadFile_StoragePutError(t *testing.T) {
 
 	// --- Mock GetUserByEmail (for storage check) ---
 	getUserSQL := `
-		SELECT id, email, password, created_at,
+		SELECT id, email, password, salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 	userID := int64(7)
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "password", "created_at",
+		"id", "email", "password", "salt", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, "hashed", nil, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations ---
@@ -286,16 +286,16 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 
 	// --- Mock GetUserByEmail (for storage check) ---
 	getUserSQL := `
-		SELECT id, email, password, created_at,
+		SELECT id, email, password, salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 	userID := int64(8)
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "password", "created_at",
+		"id", "email", "password", "salt", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, "hashed", nil, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations ---
@@ -364,16 +364,16 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 
 	// --- Mock GetUserByEmail (for storage check) ---
 	getUserSQL := `
-		SELECT id, email, password, created_at,
+		SELECT id, email, password, salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 	userID := int64(9)
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "password", "created_at",
+		"id", "email", "password", "salt", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, "hashed", nil, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations ---
@@ -507,16 +507,16 @@ func TestUploadFile_CommitError(t *testing.T) {
 
 	// --- Mock GetUserByEmail (for storage check) ---
 	getUserSQL := `
-		SELECT id, email, password, created_at,
+		SELECT id, email, password, salt, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE email = ?`
 	userID := int64(10)
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "password", "created_at",
+		"id", "email", "password", "salt", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, "hashed", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, "hashed", nil, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations ---

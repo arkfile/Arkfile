@@ -251,10 +251,20 @@ func ShareFile(c echo.Context) error {
 		finalPasswordHash = "" // Ensure no hash is stored if not password protected
 	}
 
-	// Create file share record
+	// Create file share record with salt if password protected
+	var finalPasswordSalt string
+	if request.PasswordProtected {
+		finalPasswordSalt = request.PasswordSalt
+		if finalPasswordSalt == "" {
+			// If no salt provided by client, generate one
+			// This should not happen with proper client implementation
+			return echo.NewHTTPError(http.StatusBadRequest, "Password salt is required when password protection is enabled.")
+		}
+	}
+
 	_, err = database.DB.Exec(
-		"INSERT INTO file_shares (id, file_id, owner_email, is_password_protected, password_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)",
-		shareID, request.FileID, email, request.PasswordProtected, finalPasswordHash, expiresAt,
+		"INSERT INTO file_shares (id, file_id, owner_email, is_password_protected, password_hash, password_salt, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)",
+		shareID, request.FileID, email, request.PasswordProtected, finalPasswordHash, finalPasswordSalt, expiresAt,
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create file share record for file %s: %v", request.FileID, err)
@@ -471,12 +481,50 @@ func GetSharedFile(c echo.Context) error {
 	})
 }
 
+// GetShareSalt returns the salt for a password-protected share
+func GetShareSalt(c echo.Context) error {
+	shareID := c.Param("id")
+
+	// Validate share access using the helper function
+	shareDetails, status, message, err := validateShareAccess(shareID)
+	if err != nil {
+		return echo.NewHTTPError(status, message)
+	}
+
+	// Check if share is password protected
+	if !shareDetails.PasswordProtected {
+		return echo.NewHTTPError(http.StatusBadRequest, "Share is not password protected")
+	}
+
+	// Get the salt for this share from the database
+	var salt string
+	err = database.DB.QueryRow(
+		"SELECT password_salt FROM file_shares WHERE id = ?",
+		shareID,
+	).Scan(&salt)
+
+	if err == sql.ErrNoRows {
+		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
+	} else if err != nil {
+		logging.ErrorLogger.Printf("Database error retrieving share salt: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve share salt")
+	}
+
+	if salt == "" {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Share salt not available")
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"salt": salt,
+	})
+}
+
 // AuthenticateShare handles share password verification
 func AuthenticateShare(c echo.Context) error {
 	shareID := c.Param("id")
 
 	var request struct {
-		Password string `json:"password"`
+		PasswordHash string `json:"passwordHash"`
 	}
 
 	if err := c.Bind(&request); err != nil {
@@ -489,8 +537,8 @@ func AuthenticateShare(c echo.Context) error {
 		return echo.NewHTTPError(status, message)
 	}
 
-	// Verify password using helper function
-	valid, err := verifySharePassword(shareDetails, request.Password)
+	// Verify password hash using helper function
+	valid, err := verifySharePassword(shareDetails, request.PasswordHash)
 	if !valid {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid password")
 	}

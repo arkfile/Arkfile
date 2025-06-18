@@ -129,6 +129,11 @@ func (u *User) VerifyPassword(password string) bool {
 	return auth.VerifyPassword(password, u.Password)
 }
 
+// VerifyPasswordHash compares a client-provided hash with stored hash
+func (u *User) VerifyPasswordHash(providedHash string) bool {
+	return providedHash == u.Password
+}
+
 // UpdatePassword updates the user's password
 func (u *User) UpdatePassword(db *sql.DB, newPassword string) error {
 	// Use Argon2ID for password hashing

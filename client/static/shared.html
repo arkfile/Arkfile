@@ -217,13 +217,23 @@
                 submitBtn.innerHTML = '<span class="spinner"></span> Verifying...';
                 submitBtn.disabled = true;
                 
-                // Verify password
+                // First get the salt for this share
+                const saltResponse = await fetch(`/api/shared/${shareId}/salt`);
+                if (!saltResponse.ok) {
+                    throw new Error('Failed to get share salt');
+                }
+                const { salt } = await saltResponse.json();
+                
+                // Hash the password with the share's salt
+                const passwordHash = window.hashPasswordArgon2ID(password, salt);
+                
+                // Verify password hash
                 const response = await fetch(`/api/shared/${shareId}/auth`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ password })
+                    body: JSON.stringify({ passwordHash })
                 });
                 
                 if (!response.ok) {
