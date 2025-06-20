@@ -65,6 +65,25 @@ type Config struct {
 		MaxSize    int64  `json:"max_size"`
 		MaxBackups int    `json:"max_backups"`
 	} `json:"logging"`
+
+	KeyManagement struct {
+		KeyDirectory     string `json:"key_directory"`
+		OPAQUEKeyPath    string `json:"opaque_key_path"`
+		JWTKeyPath       string `json:"jwt_key_path"`
+		TLSCertPath      string `json:"tls_cert_path"`
+		UseSystemdCreds  bool   `json:"use_systemd_creds"`
+		BackupDirectory  string `json:"backup_directory"`
+		RotationSchedule string `json:"rotation_schedule"`
+	} `json:"key_management"`
+
+	Deployment struct {
+		Environment       string `json:"environment"`
+		DataDirectory     string `json:"data_directory"`
+		LogDirectory      string `json:"log_directory"`
+		AdminContact      string `json:"admin_contact"`
+		MaintenanceWindow string `json:"maintenance_window"`
+		BackupRetention   int    `json:"backup_retention_days"`
+	} `json:"deployment"`
 }
 
 // LoadConfig loads the configuration from environment variables and optional JSON file
@@ -129,9 +148,25 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Security.ClientArgon2ID.Time = 4
 	cfg.Security.ClientArgon2ID.Memory = 131072 // 128MB
 	cfg.Security.ClientArgon2ID.Threads = 4
+
 	cfg.Logging.Directory = "logs"
 	cfg.Logging.MaxSize = 10 * 1024 * 1024 // 10MB
 	cfg.Logging.MaxBackups = 5
+
+	// Key management defaults
+	cfg.KeyManagement.KeyDirectory = "/opt/arkfile/etc/keys"
+	cfg.KeyManagement.OPAQUEKeyPath = "opaque/server_private.key"
+	cfg.KeyManagement.JWTKeyPath = "jwt/current/signing.key"
+	cfg.KeyManagement.TLSCertPath = "tls/server.crt"
+	cfg.KeyManagement.UseSystemdCreds = true
+	cfg.KeyManagement.BackupDirectory = "/opt/arkfile/etc/keys/backups"
+	cfg.KeyManagement.RotationSchedule = "30d"
+
+	// Deployment defaults
+	cfg.Deployment.Environment = "development"
+	cfg.Deployment.DataDirectory = "/opt/arkfile/var/lib"
+	cfg.Deployment.LogDirectory = "/opt/arkfile/var/log"
+	cfg.Deployment.BackupRetention = 30
 
 	return nil
 }
@@ -202,6 +237,30 @@ func loadEnvConfig(cfg *Config) error {
 		if threadsInt, err := strconv.ParseUint(clientThreads, 10, 8); err == nil {
 			cfg.Security.ClientArgon2ID.Threads = uint8(threadsInt)
 		}
+	}
+
+	// Key management environment overrides
+	if keyDir := os.Getenv("ARKFILE_KEY_DIRECTORY"); keyDir != "" {
+		cfg.KeyManagement.KeyDirectory = keyDir
+	}
+	if useSystemdCreds := os.Getenv("ARKFILE_USE_SYSTEMD_CREDS"); useSystemdCreds != "" {
+		if useCreds, err := strconv.ParseBool(useSystemdCreds); err == nil {
+			cfg.KeyManagement.UseSystemdCreds = useCreds
+		}
+	}
+
+	// Deployment environment overrides
+	if env := os.Getenv("ARKFILE_ENV"); env != "" {
+		cfg.Deployment.Environment = env
+	}
+	if dataDir := os.Getenv("ARKFILE_DATA_DIRECTORY"); dataDir != "" {
+		cfg.Deployment.DataDirectory = dataDir
+	}
+	if logDir := os.Getenv("ARKFILE_LOG_DIRECTORY"); logDir != "" {
+		cfg.Deployment.LogDirectory = logDir
+	}
+	if adminContact := os.Getenv("ARKFILE_ADMIN_CONTACT"); adminContact != "" {
+		cfg.Deployment.AdminContact = adminContact
 	}
 
 	return nil

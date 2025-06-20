@@ -1,6 +1,11 @@
 {
 	email youractualemail@example.com
-	acme_dns vultr {$VULTR_API_KEY}
+	# DNS challenge configuration - configure based on your DNS provider
+	# Examples:
+	# acme_dns cloudflare {$CLOUDFLARE_API_TOKEN}
+	# acme_dns route53 {$AWS_ACCESS_KEY_ID} {$AWS_SECRET_ACCESS_KEY}
+	# acme_dns namecheap {$NAMECHEAP_API_USER} {$NAMECHEAP_API_KEY}
+	# Or use HTTP challenge for simple setups (requires port 80 accessible)
 
 	# Global TLS preferences
 	servers {
@@ -46,7 +51,11 @@
 # TLS configuration snippet
 (tls_config) {
 	tls {
-		dns vultr {$VULTR_API_KEY}
+		# Configure DNS challenge based on your provider or use HTTP challenge
+		# Examples:
+		# dns cloudflare {$CLOUDFLARE_API_TOKEN}
+		# dns route53 {$AWS_ACCESS_KEY_ID} {$AWS_SECRET_ACCESS_KEY}
+		# Or comment out DNS line to use HTTP challenge (requires port 80)
 		protocols tls1.3 tls1.2  # Prefer 1.3, allow 1.2
 		must_staple              # Enable OCSP stapling
 		key_type p384           # Use stronger elliptic curve

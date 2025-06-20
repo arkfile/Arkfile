@@ -28,7 +28,7 @@ The `RQLITE_NODES` variable should contain a comma-separated list of the rqlite 
 
 ### Other Configuration
 
-Other important settings include the `JWT_SECRET` for signing authentication tokens, `VULTR_API_KEY` if you are using Vultr for DNS challenges with Caddy, the `PROD_PORT` and `TEST_PORT` for the application to run on, and a `CADDY_EMAIL` for TLS certificate registration.
+Other important settings include the `JWT_SECRET` for signing authentication tokens, DNS provider API credentials if you are using DNS challenges with Caddy (such as `CLOUDFLARE_API_TOKEN` for Cloudflare), the `PROD_PORT` and `TEST_PORT` for the application to run on, and a `CADDY_EMAIL` for TLS certificate registration.
 
 ## Build and Deployment
 

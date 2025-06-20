@@ -9,53 +9,62 @@ NC='\033[0m'
 
 # Configuration
 BASE_DIR="/opt/arkfile"
-GROUP_NAME="arkfile"
-ADMIN_USER="arkadmin"
-ENVIRONMENTS=("prod" "test")
+USER="arkfile"
+GROUP="arkfile"
 
 echo -e "${GREEN}Setting up Arkfile directory structure...${NC}"
 
-# Create base directory structure
+# Create main directory structure
 echo "Creating main directories..."
-sudo install -d -m 755 -o ${ADMIN_USER} -g ${GROUP_NAME} ${BASE_DIR}
-sudo install -d -m 755 -o ${ADMIN_USER} -g ${GROUP_NAME} "${BASE_DIR}/bin"
-sudo install -d -m 750 -o ${ADMIN_USER} -g ${GROUP_NAME} "${BASE_DIR}/etc"
-sudo install -d -m 750 -o ${ADMIN_USER} -g ${GROUP_NAME} "${BASE_DIR}/var"
-sudo install -d -m 750 -o ${ADMIN_USER} -g ${GROUP_NAME} "${BASE_DIR}/var/lib"
-sudo install -d -m 750 -o ${ADMIN_USER} -g ${GROUP_NAME} "${BASE_DIR}/var/log"
-sudo install -d -m 755 -o ${ADMIN_USER} -g ${GROUP_NAME} "${BASE_DIR}/var/run"
-sudo install -d -m 755 -o ${ADMIN_USER} -g ${GROUP_NAME} "${BASE_DIR}/webroot"
-sudo install -d -m 755 -o ${ADMIN_USER} -g ${GROUP_NAME} "${BASE_DIR}/releases"
+sudo install -d -m 755 -o ${USER} -g ${GROUP} ${BASE_DIR}
+sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/bin"
+sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc"
+sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys"
+sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var"
+sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/lib"
+sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/log"
+sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/run"
+sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/webroot"
 
-# Create environment-specific directories
-for env in "${ENVIRONMENTS[@]}"; do
-    echo "Creating ${env} environment directories..."
-    user="ark${env}"
-    
-    # Configuration directories
-    sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/etc/${env}"
-    sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/var/lib/${env}"
-    sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/var/log/${env}"
-    
-    # rqlite data directories
-    sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/var/lib/${env}/rqlite"
-    sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/var/lib/${env}/rqlite/data"
-    
-    # MinIO data directories
-    sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/var/lib/${env}/minio"
-    sudo install -d -m 750 -o ${user} -g ${GROUP_NAME} "${BASE_DIR}/var/lib/${env}/minio/data"
-done
+# Create key management subdirectories
+echo "Creating key management directories..."
+sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/opaque"
+sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/jwt"
+sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/jwt/current"
+sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/jwt/backup"
+sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls"
+sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/ca"
+sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/rqlite"
+sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/minio"
+sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/backups"
 
-# Create the configs directory for environment-specific configurations
-sudo install -d -m 750 -o ${ADMIN_USER} -g ${GROUP_NAME} "${BASE_DIR}/configs"
-for env in "${ENVIRONMENTS[@]}"; do
-    sudo install -d -m 750 -o "ark${env}" -g ${GROUP_NAME} "${BASE_DIR}/configs/${env}"
-done
+# Create application data directories
+echo "Creating application data directories..."
+sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/lib/database"
+sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/lib/storage"
+
+# Create a releases directory for deployment
+sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/releases"
 
 echo -e "${GREEN}Directory setup complete!${NC}"
 echo "Base directory: ${BASE_DIR}"
-echo "Created directories for environments: ${ENVIRONMENTS[*]}"
+echo "User: ${USER} (group: ${GROUP})"
 
 # Display directory structure
-echo -e "${YELLOW}Directory structure:${NC}"
-sudo tree -L 4 --dirsfirst ${BASE_DIR}
+echo -e "${YELLOW}Directory structure created:${NC}"
+if command -v tree >/dev/null 2>&1; then
+    sudo tree -L 4 --dirsfirst ${BASE_DIR}
+else
+    echo "Install 'tree' command to see directory structure visualization"
+    echo "Main structure:"
+    echo "  ${BASE_DIR}/"
+    echo "  ├── bin/              # Application binaries"
+    echo "  ├── etc/              # Configuration files"
+    echo "  │   └── keys/         # Cryptographic keys (700 permissions)"
+    echo "  ├── var/              # Variable data"
+    echo "  │   ├── lib/          # Application data"
+    echo "  │   ├── log/          # Log files"
+    echo "  │   └── run/          # Runtime files"
+    echo "  ├── webroot/          # Static web assets"
+    echo "  └── releases/         # Deployment releases"
+fi

@@ -1,33 +1,42 @@
 [Unit]
-Description=Arkfile Service
+Description=Arkfile Secure File Sharing Service
+Documentation=https://github.com/84adam/arkfile
 After=network.target
-Wants=caddy.service
+Wants=network.target
 
 [Service]
 Type=simple
-User=app
-Group=app
-WorkingDirectory=/opt/arkfile/arkfile/build
-ExecStart=/opt/arkfile/arkfile/build/arkfile
-Environment=HOST=arkfile.net
-Environment=PROD_PORT=8080
-Environment=BACKBLAZE_ENDPOINT=your_endpoint
-Environment=BACKBLAZE_KEY_ID=your_key_id
-Environment=BACKBLAZE_APPLICATION_KEY=your_app_key
-Environment=BACKBLAZE_BUCKET_NAME=your_bucket
-Environment=JWT_SECRET=your_jwt_secret
+User=arkfile
+Group=arkfile
+WorkingDirectory=/opt/arkfile
+ExecStart=/opt/arkfile/bin/arkfile
 
-# Security measures
+# Configuration
+EnvironmentFile=-/opt/arkfile/etc/arkfile.env
+
+# Systemd credentials for sensitive keys
+LoadCredential=opaque_server_key:/opt/arkfile/etc/keys/opaque/server_private.key
+LoadCredential=jwt_signing_key:/opt/arkfile/etc/keys/jwt/current/signing.key
+
+# Security hardening
 NoNewPrivileges=yes
-ProtectSystem=full
+ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
 
-# Restart configuration
+# Allow writes to application directories
+ReadWritePaths=/opt/arkfile/var
+
+# Restart policies
 Restart=always
 RestartSec=5
-StartLimitInterval=60s
+StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Install]
