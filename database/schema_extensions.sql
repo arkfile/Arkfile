@@ -116,3 +116,26 @@ CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_
 -- Note: password_salt columns are now part of the base schema
 -- Users table: password_hash, password_salt
 -- File_shares table: password_hash, password_salt
+
+-- OPAQUE Authentication Tables
+CREATE TABLE IF NOT EXISTS opaque_server_keys (
+    id INTEGER PRIMARY KEY,
+    server_secret_key BLOB NOT NULL,
+    server_public_key BLOB NOT NULL,
+    oprf_seed BLOB NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS opaque_user_data (
+    user_email TEXT PRIMARY KEY,
+    client_argon_salt BLOB NOT NULL,
+    server_argon_salt BLOB NOT NULL,
+    hardened_envelope BLOB NOT NULL,
+    device_profile TEXT NOT NULL,
+    created_at DATETIME NOT NULL,
+    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+);
+
+-- Indexes for OPAQUE tables
+CREATE INDEX IF NOT EXISTS idx_opaque_user_data_email ON opaque_user_data(user_email);
+CREATE INDEX IF NOT EXISTS idx_opaque_user_data_device_profile ON opaque_user_data(device_profile);

@@ -15,24 +15,98 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-var (
-	// Argon2ID parameters for client-side encryption
-	argon2Time    = 4
-	argon2Memory  = 128 * 1024 // 128MB in KB
-	argon2Threads = 4
-	argon2KeyLen  = 32
+// Device capability types - matching the server-side crypto package
+type DeviceCapability int
 
-	// Salt length in bytes (increased for Argon2ID)
+const (
+	DeviceMinimal DeviceCapability = iota
+	DeviceInteractive
+	DeviceBalanced
+	DeviceMaximum
+)
+
+// ArgonProfile defines Argon2ID parameters for different device capabilities
+type ArgonProfile struct {
+	Time    uint32 // iterations
+	Memory  uint32 // KB
+	Threads uint8  // parallelism
+	KeyLen  uint32 // output length in bytes
+}
+
+// Predefined profiles matching the server-side crypto package
+var (
+	// ArgonInteractive - for client-side pre-OPAQUE hardening (mobile-friendly)
+	ArgonInteractive = ArgonProfile{
+		Time:    1,
+		Memory:  32 * 1024, // 32MB
+		Threads: 2,
+		KeyLen:  32,
+	}
+
+	// ArgonBalanced - for mid-range devices
+	ArgonBalanced = ArgonProfile{
+		Time:    2,
+		Memory:  64 * 1024, // 64MB
+		Threads: 2,
+		KeyLen:  32,
+	}
+
+	// ArgonMaximum - for server-side post-OPAQUE hardening (maximum security)
+	ArgonMaximum = ArgonProfile{
+		Time:    4,
+		Memory:  128 * 1024, // 128MB
+		Threads: 4,
+		KeyLen:  32,
+	}
+
+	// Salt length in bytes
 	saltLength = 32
 
 	// Key length in bytes
 	keyLength = 32
 )
 
+// detectDeviceCapability detects device performance tier for adaptive Argon2ID parameters
+func detectDeviceCapability() DeviceCapability {
+	// Simple heuristic based on available memory and hardware concurrency
+	// In a real implementation, this would include performance benchmarking
+
+	// For WASM, we'll default to balanced but allow override
+	// This can be enhanced with actual performance testing in the future
+	return DeviceBalanced
+}
+
+// getProfileForCapability returns the ArgonProfile for a given device capability
+func getProfileForCapability(capability DeviceCapability) ArgonProfile {
+	switch capability {
+	case DeviceMinimal:
+		return ArgonProfile{
+			Time:    1,
+			Memory:  16 * 1024, // 16MB
+			Threads: 1,
+			KeyLen:  32,
+		}
+	case DeviceInteractive:
+		return ArgonInteractive
+	case DeviceBalanced:
+		return ArgonBalanced
+	case DeviceMaximum:
+		return ArgonMaximum
+	default:
+		return ArgonInteractive // Safe default
+	}
+}
+
 // deriveKeyArgon2ID generates a cryptographic key from a password using Argon2ID
 // This provides memory-hard protection against GPU and ASIC-based attacks
-func deriveKeyArgon2ID(password []byte, salt []byte) []byte {
-	return argon2.IDKey(password, salt, uint32(argon2Time), uint32(argon2Memory), uint8(argon2Threads), uint32(argon2KeyLen))
+func deriveKeyArgon2ID(password []byte, salt []byte, profile ArgonProfile) []byte {
+	return argon2.IDKey(password, salt, profile.Time, profile.Memory, profile.Threads, profile.KeyLen)
+}
+
+// deriveKeyWithDeviceCapability derives a key using adaptive device parameters
+func deriveKeyWithDeviceCapability(password []byte, salt []byte, capability DeviceCapability) []byte {
+	profile := getProfileForCapability(capability)
+	return deriveKeyArgon2ID(password, salt, profile)
 }
 
 // deriveSessionKey derives a session key for account-based encryption
@@ -56,7 +130,9 @@ func deriveSessionKey(this js.Value, args []js.Value) interface{} {
 	contextualPassword := "ARKFILE_SESSION_KEY:" + password
 
 	// Use Argon2ID for session key derivation with domain separation
-	sessionKey := deriveKeyArgon2ID([]byte(contextualPassword), saltBytes)
+	// Use device capability detection for adaptive parameters
+	capability := detectDeviceCapability()
+	sessionKey := deriveKeyWithDeviceCapability([]byte(contextualPassword), saltBytes, capability)
 	return base64.StdEncoding.EncodeToString(sessionKey)
 }
 
@@ -113,7 +189,8 @@ func encryptFile(this js.Value, args []js.Value) interface{} {
 		}
 	} else {
 		// For custom password, derive key using Argon2ID
-		key = deriveKeyArgon2ID([]byte(password), salt)
+		capability := detectDeviceCapability()
+		key = deriveKeyWithDeviceCapability([]byte(password), salt, capability)
 	}
 
 	// Create cipher block
@@ -187,7 +264,8 @@ func decryptFile(this js.Value, args []js.Value) interface{} {
 			}
 		} else {
 			// This is a custom password, derive key normally
-			key = deriveKeyArgon2ID([]byte(password), salt)
+			capability := detectDeviceCapability()
+			key = deriveKeyWithDeviceCapability([]byte(password), salt, capability)
 		}
 	} else {
 		return "Unsupported encryption version"
@@ -256,7 +334,8 @@ func encryptFEK(fek []byte, password []byte, keyType byte, keyID string) []byte 
 		kek = password
 	} else {
 		// For custom password, derive using Argon2ID
-		kek = deriveKeyArgon2ID(password, salt)
+		capability := detectDeviceCapability()
+		kek = deriveKeyWithDeviceCapability(password, salt, capability)
 	}
 
 	// Encrypt the FEK using AES-GCM with the derived KEK
@@ -441,7 +520,8 @@ func decryptFileMultiKey(this js.Value, args []js.Value) interface{} {
 			keyToTry = decodedKey
 		} else {
 			// This is a custom key - derive from password and salt
-			keyToTry = deriveKeyArgon2ID([]byte(password), salt)
+			capability := detectDeviceCapability()
+			keyToTry = deriveKeyWithDeviceCapability([]byte(password), salt, capability)
 		}
 
 		// Try to decrypt the FEK
@@ -625,7 +705,9 @@ func hashPasswordArgon2ID(this js.Value, args []js.Value) interface{} {
 	}
 
 	// Use Argon2ID with same parameters as server: 4 iterations, 128MB, 4 threads
-	hash := deriveKeyArgon2ID([]byte(password), saltBytes)
+	// For password hashing, we use maximum security parameters
+	capability := DeviceMaximum
+	hash := deriveKeyWithDeviceCapability([]byte(password), saltBytes, capability)
 	return base64.StdEncoding.EncodeToString(hash)
 }
 

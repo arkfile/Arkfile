@@ -74,8 +74,28 @@ if [ $TEST_EXIT_CODE -eq 0 ]; then
         
         if [ $LOGIN_TEST_EXIT_CODE -eq 0 ]; then
             echo
-            echo -e "${GREEN}🎉 All WASM tests passed!${NC}"
-            exit 0
+            echo -e "${BLUE}🔐 Running OPAQUE crypto tests...${NC}"
+            echo
+            
+            # Run OPAQUE WASM tests (if available)
+            if [ -f "opaque_wasm_test.js" ]; then
+                node opaque_wasm_test.js
+                OPAQUE_TEST_EXIT_CODE=$?
+                
+                if [ $OPAQUE_TEST_EXIT_CODE -eq 0 ]; then
+                    echo
+                    echo -e "${GREEN}🎉 All WASM tests passed including OPAQUE crypto!${NC}"
+                    exit 0
+                else
+                    echo -e "${RED}❌ Some OPAQUE crypto tests failed${NC}"
+                    exit $OPAQUE_TEST_EXIT_CODE
+                fi
+            else
+                echo -e "${YELLOW}⚠️  OPAQUE crypto tests not found - skipping${NC}"
+                echo
+                echo -e "${GREEN}🎉 All WASM tests passed!${NC}"
+                exit 0
+            fi
         else
             echo -e "${RED}❌ Some login integration tests failed${NC}"
             exit $LOGIN_TEST_EXIT_CODE

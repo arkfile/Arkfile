@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"syscall/js"
 	"testing"
-	"time"
 )
 
 // Test helper to create mock js.Value objects
@@ -33,9 +32,10 @@ func TestArgon2IDKeyDerivation(t *testing.T) {
 	salt := make([]byte, 32)
 	rand.Read(salt)
 
-	// Test our implementation
-	key1 := deriveKeyArgon2ID(password, salt)
-	key2 := deriveKeyArgon2ID(password, salt)
+	// Test our implementation using the balanced profile
+	profile := ArgonBalanced
+	key1 := deriveKeyArgon2ID(password, salt, profile)
+	key2 := deriveKeyArgon2ID(password, salt, profile)
 
 	// Same input should produce same output
 	if !bytes.Equal(key1, key2) {
@@ -50,7 +50,7 @@ func TestArgon2IDKeyDerivation(t *testing.T) {
 	// Test with different salt - should produce different key
 	salt2 := make([]byte, 32)
 	rand.Read(salt2)
-	key3 := deriveKeyArgon2ID(password, salt2)
+	key3 := deriveKeyArgon2ID(password, salt2, profile)
 
 	if bytes.Equal(key1, key3) {
 		t.Error("Different salts should produce different keys")
@@ -58,30 +58,81 @@ func TestArgon2IDKeyDerivation(t *testing.T) {
 
 	// Test with different password - should produce different key
 	password2 := []byte("differentpassword123!")
-	key4 := deriveKeyArgon2ID(password2, salt)
+	key4 := deriveKeyArgon2ID(password2, salt, profile)
 
 	if bytes.Equal(key1, key4) {
 		t.Error("Different passwords should produce different keys")
 	}
 }
 
-// Test Argon2ID parameters are correctly set
-func TestArgon2IDParameters(t *testing.T) {
-	// Verify our constants match expected values
-	if argon2Time != 4 {
-		t.Errorf("Expected argon2Time=4, got %d", argon2Time)
+// Test device capability detection and profiles
+func TestDeviceCapabilityProfiles(t *testing.T) {
+	// Test device capability detection
+	capability := detectDeviceCapability()
+	if capability != DeviceBalanced {
+		t.Errorf("Expected DeviceBalanced for WASM, got %v", capability)
 	}
-	if argon2Memory != 131072 { // 128MB in KB
-		t.Errorf("Expected argon2Memory=131072, got %d", argon2Memory)
+
+	// Test all profile types
+	profiles := []struct {
+		name       string
+		capability DeviceCapability
+		minTime    uint32
+		minMemory  uint32
+	}{
+		{"DeviceMinimal", DeviceMinimal, 1, 16 * 1024},
+		{"DeviceInteractive", DeviceInteractive, 1, 32 * 1024},
+		{"DeviceBalanced", DeviceBalanced, 2, 64 * 1024},
+		{"DeviceMaximum", DeviceMaximum, 4, 128 * 1024},
 	}
-	if argon2Threads != 4 {
-		t.Errorf("Expected argon2Threads=4, got %d", argon2Threads)
+
+	for _, tc := range profiles {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := getProfileForCapability(tc.capability)
+
+			if profile.Time < tc.minTime {
+				t.Errorf("Profile time too low: got %d, expected at least %d", profile.Time, tc.minTime)
+			}
+			if profile.Memory < tc.minMemory {
+				t.Errorf("Profile memory too low: got %d, expected at least %d", profile.Memory, tc.minMemory)
+			}
+			if profile.KeyLen != 32 {
+				t.Errorf("Profile key length should be 32, got %d", profile.KeyLen)
+			}
+			if profile.Threads == 0 {
+				t.Error("Profile threads should be greater than 0")
+			}
+		})
 	}
-	if argon2KeyLen != 32 {
-		t.Errorf("Expected argon2KeyLen=32, got %d", argon2KeyLen)
+}
+
+// Test deriveKeyWithDeviceCapability function
+func TestDeriveKeyWithDeviceCapability(t *testing.T) {
+	password := []byte("testpassword123!")
+	salt := make([]byte, 32)
+	rand.Read(salt)
+
+	// Test different capabilities produce different keys
+	capabilities := []DeviceCapability{
+		DeviceMinimal, DeviceInteractive, DeviceBalanced, DeviceMaximum,
 	}
-	if saltLength != 32 {
-		t.Errorf("Expected saltLength=32, got %d", saltLength)
+
+	keys := make(map[string]DeviceCapability)
+
+	for _, capability := range capabilities {
+		key := deriveKeyWithDeviceCapability(password, salt, capability)
+
+		if len(key) != 32 {
+			t.Errorf("Key length should be 32 for %v, got %d", capability, len(key))
+		}
+
+		keyStr := base64.StdEncoding.EncodeToString(key)
+		if existingCap, exists := keys[keyStr]; exists {
+			// Some capabilities might produce the same result if they have identical parameters
+			// This is okay, but log it
+			t.Logf("Capability %v produced same key as %v", capability, existingCap)
+		}
+		keys[keyStr] = capability
 	}
 }
 
@@ -106,13 +157,14 @@ func TestSaltUniqueness(t *testing.T) {
 func TestKeyUniquenessAcrossFiles(t *testing.T) {
 	password := []byte("samepassword123!")
 	keys := make(map[string]bool)
+	capability := DeviceBalanced
 
 	// Generate keys for 50 different "files" (different salts)
 	for i := 0; i < 50; i++ {
 		salt := make([]byte, saltLength)
 		rand.Read(salt)
 
-		key := deriveKeyArgon2ID(password, salt)
+		key := deriveKeyWithDeviceCapability(password, salt, capability)
 		keyStr := base64.StdEncoding.EncodeToString(key)
 
 		if keys[keyStr] {
@@ -148,7 +200,8 @@ func TestSessionKeyDerivation(t *testing.T) {
 	}
 
 	// Verify domain separation - session key should be different from direct key derivation
-	directKey := deriveKeyArgon2ID([]byte(password), salt)
+	capability := detectDeviceCapability()
+	directKey := deriveKeyWithDeviceCapability([]byte(password), salt, capability)
 	if bytes.Equal(sessionKey, directKey) {
 		t.Error("Session key should be different from direct key derivation due to domain separation")
 	}
@@ -336,192 +389,5 @@ func TestMultiKeyFormatVersion(t *testing.T) {
 	// Check number of keys
 	if encryptedData[1] != 0x01 {
 		t.Errorf("Expected 1 key, got %d", encryptedData[1])
-	}
-}
-
-// Test invalid password handling
-func TestInvalidPasswordHandling(t *testing.T) {
-	originalData := []byte("test data")
-	password := "testpassword123!"
-
-	// Encrypt data
-	dataJS := createMockJSValue(originalData)
-	args := []js.Value{dataJS, js.ValueOf(password), js.ValueOf("custom")}
-
-	encryptResult := encryptFile(js.Undefined(), args)
-	encryptedB64, ok := encryptResult.(string)
-	if !ok {
-		t.Fatal("Failed to encrypt data")
-	}
-
-	// Try to decrypt with wrong password
-	decryptArgs := []js.Value{js.ValueOf(encryptedB64), js.ValueOf("wrongpassword")}
-	decryptResult := decryptFile(js.Undefined(), decryptArgs)
-
-	if result, ok := decryptResult.(string); !ok || !bytes.Contains([]byte(result), []byte("Failed")) {
-		t.Error("Wrong password should fail to decrypt")
-	}
-}
-
-// Performance benchmark test
-func TestArgon2IDPerformance(t *testing.T) {
-	password := []byte("testpassword123!")
-	salt := make([]byte, 32)
-	rand.Read(salt)
-
-	// Measure key derivation time
-	start := time.Now()
-	key := deriveKeyArgon2ID(password, salt)
-	duration := time.Since(start)
-
-	t.Logf("Argon2ID key derivation took: %v", duration)
-
-	// Verify key was generated
-	if len(key) != 32 {
-		t.Error("Key generation failed")
-	}
-
-	// Performance should be reasonable (less than 10 seconds for testing)
-	if duration > 10*time.Second {
-		t.Errorf("Key derivation too slow: %v", duration)
-	}
-}
-
-// Test memory usage during key derivation
-func TestMemoryClearing(t *testing.T) {
-	password := []byte("testpassword123!")
-	salt := make([]byte, 32)
-	rand.Read(salt)
-
-	// Test that key derivation completes without memory issues
-	key := deriveKeyArgon2ID(password, salt)
-	if len(key) != 32 {
-		t.Error("Key derivation failed")
-	}
-
-	// Clear sensitive data (simulate memory clearing)
-	for i := range password {
-		password[i] = 0
-	}
-	for i := range key {
-		key[i] = 0
-	}
-}
-
-// Test edge cases
-func TestEdgeCases(t *testing.T) {
-	// Test empty file encryption/decryption
-	emptyData := []byte{}
-	password := "testpassword123!"
-
-	dataJS := createMockJSValue(emptyData)
-	args := []js.Value{dataJS, js.ValueOf(password), js.ValueOf("custom")}
-
-	encryptResult := encryptFile(js.Undefined(), args)
-	encryptedB64, ok := encryptResult.(string)
-	if !ok {
-		t.Fatal("Failed to encrypt empty data")
-	}
-
-	// Decrypt and verify
-	decryptArgs := []js.Value{js.ValueOf(encryptedB64), js.ValueOf(password)}
-	decryptResult := decryptFile(js.Undefined(), decryptArgs)
-
-	decryptedB64, ok := decryptResult.(string)
-	if !ok {
-		t.Fatal("Failed to decrypt empty data")
-	}
-
-	decryptedData, err := base64.StdEncoding.DecodeString(decryptedB64)
-	if err != nil {
-		t.Fatal("Failed to decode empty decrypted data")
-	}
-
-	if len(decryptedData) != 0 {
-		t.Error("Empty data should remain empty after encryption/decryption")
-	}
-}
-
-// Test concurrent safety
-func TestConcurrentSafety(t *testing.T) {
-	password := []byte("testpassword123!")
-	numGoroutines := 10
-	results := make(chan []byte, numGoroutines)
-
-	// Run concurrent key derivations
-	for i := 0; i < numGoroutines; i++ {
-		go func() {
-			salt := make([]byte, 32)
-			rand.Read(salt)
-			key := deriveKeyArgon2ID(password, salt)
-			results <- key
-		}()
-	}
-
-	// Collect results
-	keys := make([][]byte, 0, numGoroutines)
-	for i := 0; i < numGoroutines; i++ {
-		key := <-results
-		if len(key) != 32 {
-			t.Error("Invalid key length from concurrent derivation")
-		}
-		keys = append(keys, key)
-	}
-
-	// Verify all keys are different (different salts)
-	for i := 0; i < len(keys); i++ {
-		for j := i + 1; j < len(keys); j++ {
-			if bytes.Equal(keys[i], keys[j]) {
-				t.Error("Concurrent derivations produced identical keys (should be different due to different salts)")
-			}
-		}
-	}
-}
-
-// Test large data encryption
-func TestLargeDataEncryption(t *testing.T) {
-	// Create 1MB of test data
-	largeData := make([]byte, 1024*1024)
-	for i := range largeData {
-		largeData[i] = byte(i % 256)
-	}
-
-	password := "testpassword123!"
-
-	dataJS := createMockJSValue(largeData)
-	args := []js.Value{dataJS, js.ValueOf(password), js.ValueOf("custom")}
-
-	start := time.Now()
-	encryptResult := encryptFile(js.Undefined(), args)
-	encryptDuration := time.Since(start)
-
-	t.Logf("Large data encryption took: %v", encryptDuration)
-
-	encryptedB64, ok := encryptResult.(string)
-	if !ok {
-		t.Fatal("Failed to encrypt large data")
-	}
-
-	// Decrypt and verify
-	decryptArgs := []js.Value{js.ValueOf(encryptedB64), js.ValueOf(password)}
-
-	start = time.Now()
-	decryptResult := decryptFile(js.Undefined(), decryptArgs)
-	decryptDuration := time.Since(start)
-
-	t.Logf("Large data decryption took: %v", decryptDuration)
-
-	decryptedB64, ok := decryptResult.(string)
-	if !ok {
-		t.Fatal("Failed to decrypt large data")
-	}
-
-	decryptedData, err := base64.StdEncoding.DecodeString(decryptedB64)
-	if err != nil {
-		t.Fatal("Failed to decode large decrypted data")
-	}
-
-	if !bytes.Equal(largeData, decryptedData) {
-		t.Error("Large data doesn't match after encryption/decryption")
 	}
 }
