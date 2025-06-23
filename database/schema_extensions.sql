@@ -139,3 +139,85 @@ CREATE TABLE IF NOT EXISTS opaque_user_data (
 -- Indexes for OPAQUE tables
 CREATE INDEX IF NOT EXISTS idx_opaque_user_data_email ON opaque_user_data(user_email);
 CREATE INDEX IF NOT EXISTS idx_opaque_user_data_device_profile ON opaque_user_data(device_profile);
+
+-- Phase 3: Security Hardening and Operational Infrastructure Tables
+
+-- Security events with privacy-preserving entity identification
+CREATE TABLE IF NOT EXISTS security_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    event_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,           -- HMAC-based, privacy-preserving
+    time_window TEXT NOT NULL,         -- "2025-06-20"
+    user_email TEXT,                   -- Only for authenticated events
+    device_profile TEXT,               -- Argon2ID profile
+    severity TEXT NOT NULL DEFAULT 'INFO',
+    details JSON,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    INDEX idx_events_window (time_window, event_type),
+    INDEX idx_events_entity (entity_id, time_window),
+    INDEX idx_events_severity (severity, timestamp),
+    INDEX idx_events_type (event_type, timestamp)
+);
+
+-- Rate limiting state with entity ID privacy protection
+CREATE TABLE IF NOT EXISTS rate_limit_state (
+    entity_id TEXT NOT NULL,
+    time_window TEXT NOT NULL,         -- "2025-06-20"
+    endpoint TEXT NOT NULL,
+    device_profile TEXT,
+    request_count INTEGER NOT NULL DEFAULT 0,
+    last_request DATETIME NOT NULL,
+    violation_count INTEGER NOT NULL DEFAULT 0,
+    penalty_until DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    PRIMARY KEY (entity_id, time_window, endpoint),
+    INDEX idx_rate_limit_cleanup (time_window),
+    INDEX idx_rate_limit_entity (entity_id, time_window),
+    INDEX idx_rate_limit_penalties (penalty_until)
+);
+
+-- Entity ID configuration and master secret storage
+CREATE TABLE IF NOT EXISTS entity_id_config (
+    id INTEGER PRIMARY KEY,
+    master_secret_hash TEXT NOT NULL,  -- Hash of master secret for health checks
+    rotation_schedule TEXT NOT NULL,   -- "daily"
+    last_rotation DATETIME,
+    next_rotation DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Key health monitoring status
+CREATE TABLE IF NOT EXISTS key_health_status (
+    component TEXT PRIMARY KEY,
+    status TEXT NOT NULL,              -- "healthy", "warning", "critical"
+    last_checked DATETIME NOT NULL,
+    next_check DATETIME NOT NULL,
+    details JSON,
+    alert_level TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Security alerts and escalation
+CREATE TABLE IF NOT EXISTS security_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_type TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    entity_id TEXT,                    -- Optional entity association
+    time_window TEXT,
+    message TEXT NOT NULL,
+    details JSON,
+    acknowledged BOOLEAN DEFAULT FALSE,
+    acknowledged_by TEXT,
+    acknowledged_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    INDEX idx_alerts_severity (severity, created_at),
+    INDEX idx_alerts_unack (acknowledged, created_at),
+    INDEX idx_alerts_entity (entity_id, time_window)
+);
