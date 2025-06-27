@@ -21,3 +21,101 @@ arkfile-test.db
 client/main.wasm
 client/static/*.wasm
 *.wasm
+
+# Test artifacts and generated files
+test/
+integration_tests/
+*.arkfile
+performance_*.txt
+performance_*.json
+benchmark_*.log
+benchmark_*.json
+benchmark_*.csv
+*_benchmark_results.*
+load_test_*
+stress_test_*
+
+# Golden test vectors (format compatibility files)
+test/golden/
+*/golden/
+golden/
+
+# Temporary test files
+*_test_output.*
+*_benchmark.*
+*_performance.*
+
+# Log files (all types)
+logging/logs/*.log
+logs/
+*.log
+audit_*.log
+security_*.log
+access_*.log
+error_*.log
+debug_*.log
+trace_*.log
+
+# Test reports and coverage
+coverage.out
+coverage.html
+test_results/
+test_reports/
+junit.xml
+test-output/
+htmlcov/
+.coverage
+coverage/
+
+# Temporary and generated files
+tmp/
+temp/
+*.tmp
+*.temp
+*_temp.*
+*_tmp.*
+.cache/
+cache/
+
+# Test certificates and keys (not production ones)
+test_certs/
+test_keys/
+*.pem.test
+*.key.test
+*.crt.test
+cert_test_*
+key_test_*
+
+# Test databases and storage
+test.db
+*.test.db
+test_data/
+mock_data/
+fixtures/
+test_uploads/
+
+# Integration test artifacts
+integration_test_*
+e2e_test_*
+test_artifacts/
+test_downloads/
+
+# Monitoring and health check data
+health_check_*.json
+monitor_*.log
+metrics_*.json
+status_*.json
+
+# Build and deployment testing
+dist/
+build_test/
+deploy_test/
+package_test/
+release_test/
+
+# Runtime artifacts
+pid/
+*.pid
+*.lock
+core.*
+dump.*

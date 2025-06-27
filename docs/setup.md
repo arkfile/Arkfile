@@ -12,6 +12,24 @@ For security and organization, Arkfile uses a standardized directory structure a
 
 ## Initial Setup
 
+### Quick Setup (Recommended)
+
+The fastest way to set up Arkfile is with the comprehensive integration test script:
+
+```bash
+./scripts/integration-test.sh
+```
+
+When prompted, type "YES" to perform full system setup. This single command will:
+- Run complete test suite to validate functionality
+- Create system users and directory structure
+- Generate all required cryptographic keys
+- Configure services and validate deployment
+
+### Manual Setup
+
+For more control, run individual setup scripts:
+
 Before deploying the application, several setup scripts must be run to prepare the environment. The `scripts/setup-users.sh` and `scripts/setup-directories.sh` scripts create the necessary user accounts and directory structure. The `scripts/setup-rqlite.sh` script sets up the distributed database cluster, and `scripts/setup-minio.sh` configures the local or cluster storage if you are not using an external provider. These scripts are designed to be run once to initialize the system.
 
 ## Configuration
