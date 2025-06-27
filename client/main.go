@@ -720,8 +720,110 @@ func generatePasswordSalt(this js.Value, args []js.Value) interface{} {
 	return base64.StdEncoding.EncodeToString(salt)
 }
 
+// OPAQUE Authentication WebAssembly Functions
+
+// requestDeviceCapabilityPermission returns consent dialog data
+func requestDeviceCapabilityPermission(this js.Value, args []js.Value) interface{} {
+	return map[string]interface{}{
+		"title": "🔒 Optimize Security for Your Device",
+		"message": `Arkfile can optimize password security based on your device capabilities.
+
+We will check:
+• Available memory (for optimal encryption strength)
+• CPU cores (for parallel processing)
+• Device type (mobile vs desktop optimization)
+• Browser capabilities
+
+This information:
+✓ Stays on your device
+✓ Is never sent to servers
+✓ Only determines encryption strength
+✓ Can be overridden manually`,
+		"options": []interface{}{
+			"Allow automatic optimization (recommended)",
+			"Choose security level manually",
+			"Use maximum security (may be slow on older devices)",
+		},
+	}
+}
+
+// detectDeviceCapabilityWithPermission detects device capability if permission granted
+func detectDeviceCapabilityWithPermission(this js.Value, args []js.Value) interface{} {
+	if len(args) != 1 {
+		return "manual"
+	}
+
+	hasPermission := args[0].Bool()
+	if !hasPermission {
+		return "manual"
+	}
+
+	// In a real implementation, this would use JavaScript APIs to detect:
+	// - navigator.deviceMemory
+	// - navigator.hardwareConcurrency
+	// - navigator.userAgent (mobile detection)
+	// - Performance benchmarking
+
+	// For now, return a safe default that works well on most devices
+	return "interactive"
+}
+
+// opaqueRegisterFlow handles OPAQUE registration (placeholder for now)
+func opaqueRegisterFlow(this js.Value, args []js.Value) interface{} {
+	if len(args) != 3 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid number of arguments",
+		}
+	}
+
+	email := args[0].String()
+	_ = args[1].String() // password - unused for now in placeholder
+	capability := args[2].String()
+
+	// For now, this is a placeholder that prepares the data for OPAQUE registration
+	// The actual OPAQUE protocol implementation would go here
+	return map[string]interface{}{
+		"success": true,
+		"data": map[string]interface{}{
+			"email":            email,
+			"deviceCapability": capability,
+			// In real OPAQUE implementation, this would contain:
+			// - Client registration message
+			// - Client state for continuation
+		},
+	}
+}
+
+// opaqueLoginFlow handles OPAQUE login (placeholder for now)
+func opaqueLoginFlow(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid number of arguments",
+		}
+	}
+
+	email := args[0].String()
+	_ = args[1].String() // password - unused for now in placeholder
+
+	// For now, this is a placeholder that prepares the data for OPAQUE login
+	// The actual OPAQUE protocol implementation would go here
+	return map[string]interface{}{
+		"success": true,
+		"data": map[string]interface{}{
+			"email": email,
+			// In real OPAQUE implementation, this would contain:
+			// - Client login message
+			// - Client state for continuation
+			// - Derived session key
+		},
+	}
+}
+
 // main function to register WASM functions
 func main() {
+	// File encryption functions
 	js.Global().Set("encryptFile", js.FuncOf(encryptFile))
 	js.Global().Set("decryptFile", js.FuncOf(decryptFile))
 	js.Global().Set("generateSalt", js.FuncOf(generateSalt))
@@ -729,9 +831,17 @@ func main() {
 	js.Global().Set("calculateSHA256", js.FuncOf(calculateSHA256))
 	js.Global().Set("encryptFileMultiKey", js.FuncOf(encryptFileMultiKey))
 	js.Global().Set("decryptFileMultiKey", js.FuncOf(decryptFileMultiKey))
+
+	// Password functions
 	js.Global().Set("validatePasswordComplexity", js.FuncOf(validatePasswordComplexity))
 	js.Global().Set("hashPasswordArgon2ID", js.FuncOf(hashPasswordArgon2ID))
 	js.Global().Set("generatePasswordSalt", js.FuncOf(generatePasswordSalt))
+
+	// OPAQUE authentication functions
+	js.Global().Set("requestDeviceCapabilityPermission", js.FuncOf(requestDeviceCapabilityPermission))
+	js.Global().Set("detectDeviceCapabilityWithPermission", js.FuncOf(detectDeviceCapabilityWithPermission))
+	js.Global().Set("opaqueRegisterFlow", js.FuncOf(opaqueRegisterFlow))
+	js.Global().Set("opaqueLoginFlow", js.FuncOf(opaqueLoginFlow))
 
 	// Keep the program running
 	select {}

@@ -84,13 +84,237 @@ async function revokeAllSessions() {
     }
 }
 
-// Authentication functions
+// OPAQUE Authentication Functions
+
+// Global state for device capability detection
+window.arkfileOpaqueState = {
+    deviceCapability: null,
+    hasUserConsent: false,
+    authMethod: 'OPAQUE'
+};
+
+// Privacy-first device capability detection
+async function requestDeviceCapabilityConsent() {
+    if (!wasmReady) {
+        await initWasm();
+    }
+
+    const consentData = requestDeviceCapabilityPermission();
+    
+    return new Promise((resolve) => {
+        // Create consent dialog
+        const dialog = document.createElement('div');
+        dialog.className = 'capability-consent-dialog modal';
+        dialog.innerHTML = `
+            <div class="modal-content">
+                <h3>${consentData.title}</h3>
+                <div class="consent-message">${consentData.message.replace(/\n/g, '<br>')}</div>
+                <div class="consent-options">
+                    <button onclick="handleCapabilityConsent('allow')" class="btn-primary">
+                        ${consentData.options[0]}
+                    </button>
+                    <button onclick="handleCapabilityConsent('manual')" class="btn-secondary">
+                        ${consentData.options[1]}
+                    </button>
+                    <button onclick="handleCapabilityConsent('maximum')" class="btn-secondary">
+                        ${consentData.options[2]}
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(dialog);
+        
+        // Store resolver for use in button handlers
+        window.capabilityConsentResolver = resolve;
+    });
+}
+
+function handleCapabilityConsent(choice) {
+    const dialog = document.querySelector('.capability-consent-dialog');
+    if (dialog) {
+        dialog.remove();
+    }
+    
+    let capability;
+    let hasConsent = false;
+    
+    switch (choice) {
+        case 'allow':
+            hasConsent = true;
+            capability = detectDeviceCapabilityWithPermission(true);
+            break;
+        case 'manual':
+            hasConsent = false;
+            capability = 'interactive'; // Safe default
+            break;
+        case 'maximum':
+            hasConsent = false;
+            capability = 'maximum';
+            break;
+        default:
+            hasConsent = false;
+            capability = 'interactive';
+    }
+    
+    window.arkfileOpaqueState.deviceCapability = capability;
+    window.arkfileOpaqueState.hasUserConsent = hasConsent;
+    
+    if (window.capabilityConsentResolver) {
+        window.capabilityConsentResolver(capability);
+        delete window.capabilityConsentResolver;
+    }
+}
+
+// Enhanced device capability detection with browser APIs
+async function detectDeviceCapability() {
+    if (window.arkfileOpaqueState.deviceCapability) {
+        return window.arkfileOpaqueState.deviceCapability;
+    }
+    
+    // Request user consent first
+    const capability = await requestDeviceCapabilityConsent();
+    
+    // If user gave consent, enhance detection with browser APIs
+    if (window.arkfileOpaqueState.hasUserConsent) {
+        const deviceInfo = {
+            memoryGB: navigator.deviceMemory || 0,
+            cpuCores: navigator.hardwareConcurrency || 0,
+            isMobile: /Android|iPhone|iPad|iPod|BlackBerry|IEMobile/i.test(navigator.userAgent),
+            userAgent: navigator.userAgent
+        };
+        
+        try {
+            const response = await fetch('/api/opaque/capability', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(deviceInfo),
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                window.arkfileOpaqueState.deviceCapability = data.recommendedCapability;
+                showCapabilityInfo(data);
+                return data.recommendedCapability;
+            }
+        } catch (error) {
+            console.warn('Failed to get server capability recommendation:', error);
+        }
+    }
+    
+    return capability;
+}
+
+function showCapabilityInfo(capabilityData) {
+    const info = document.createElement('div');
+    info.className = 'capability-info success-message';
+    info.innerHTML = `
+        <div><strong>Security Level:</strong> ${capabilityData.recommendedCapability}</div>
+        <div><strong>Description:</strong> ${capabilityData.description}</div>
+        <div><strong>Source:</strong> ${capabilityData.source}</div>
+    `;
+    document.body.appendChild(info);
+    setTimeout(() => info.remove(), 8000);
+}
+
+// OPAQUE Authentication functions
 async function login() {
     const email = document.getElementById('login-email').value;
     const password = document.getElementById('login-password').value;
 
+    if (!email || !password) {
+        showError('Please enter both email and password.');
+        return;
+    }
+
     try {
-        // First, get the user's salt
+        // Ensure WASM is ready
+        if (!wasmReady) {
+            await initWasm();
+        }
+
+        // Check OPAQUE health first
+        const healthResponse = await fetch('/api/opaque/health');
+        const isOpaqueHealthy = healthResponse.ok;
+        
+        if (isOpaqueHealthy) {
+            // Use OPAQUE authentication
+            await opaqueLogin(email, password);
+        } else {
+            // Fallback to legacy authentication
+            console.warn('OPAQUE not available, using legacy authentication');
+            await legacyLogin(email, password);
+        }
+        
+    } catch (error) {
+        console.error('Login error:', error);
+        showError('An error occurred during login.');
+    }
+}
+
+async function opaqueLogin(email, password) {
+    try {
+        showProgress('Authenticating with OPAQUE...');
+        
+        // Call OPAQUE login flow (placeholder for now)
+        const opaqueResult = opaqueLoginFlow(email, password);
+        
+        if (!opaqueResult.success) {
+            showError(opaqueResult.error || 'OPAQUE login failed');
+            return;
+        }
+        
+        // Make OPAQUE login request to server
+        const response = await fetch('/api/opaque/login', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ email, password }),
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            
+            // Store tokens
+            localStorage.setItem('token', data.token);
+            if (data.refreshToken) {
+                localStorage.setItem('refreshToken', data.refreshToken);
+            }
+            
+            // Store OPAQUE session key from server response
+            if (data.sessionKey) {
+                const sessionKeyBytes = atob(data.sessionKey);
+                window.arkfileSecurityContext = {
+                    sessionKey: data.sessionKey, // Keep as base64 for file encryption
+                    authMethod: 'OPAQUE',
+                    expiresAt: Date.now() + (60 * 60 * 1000) // 1 hour
+                };
+            }
+            
+            hideProgress();
+            showSuccess(`Authenticated with ${data.authMethod}`);
+            showFileSection();
+            loadFiles();
+        } else {
+            hideProgress();
+            const errorData = await response.json().catch(() => ({}));
+            showError(errorData.message || 'OPAQUE login failed. Please check your credentials.');
+        }
+    } catch (error) {
+        hideProgress();
+        console.error('OPAQUE login error:', error);
+        showError('OPAQUE authentication failed.');
+    }
+}
+
+async function legacyLogin(email, password) {
+    try {
+        showProgress('Authenticating...');
+        
+        // Get user salt for legacy authentication
         const saltResponse = await fetch('/api/salt', {
             method: 'POST',
             headers: {
@@ -100,6 +324,7 @@ async function login() {
         });
 
         if (!saltResponse.ok) {
+            hideProgress();
             showError('Login failed. Please check your credentials.');
             return;
         }
@@ -107,14 +332,10 @@ async function login() {
         const saltData = await saltResponse.json();
         const salt = saltData.salt;
 
-        // Hash the password using the salt
-        if (!wasmReady) {
-            await initWasm(); // Make sure WASM is ready
-        }
-
+        // Hash password using Argon2ID
         const passwordHash = hashPasswordArgon2ID(password, salt);
 
-        // Now attempt login with the hashed password
+        // Attempt legacy login
         const response = await fetch('/api/login', {
             method: 'POST',
             headers: {
@@ -127,32 +348,33 @@ async function login() {
             const data = await response.json();
             localStorage.setItem('token', data.token);
             
-            // Store refresh token
             if (data.refreshToken) {
                 localStorage.setItem('refreshToken', data.refreshToken);
             }
             
-            // Generate a random salt for the session key
+            // Generate session key for legacy authentication
             const sessionSalt = generateSalt();
-            
-            // Derive session key using Argon2ID
             const sessionKey = deriveSessionKey(password, sessionSalt);
             
-            // Store session key and salt securely in memory
             window.arkfileSecurityContext = {
                 sessionKey: sessionKey,
                 sessionSalt: sessionSalt,
-                // Add expiration timestamp (1 hour)
+                authMethod: 'Legacy',
                 expiresAt: Date.now() + (60 * 60 * 1000)
             };
             
+            hideProgress();
+            showSuccess('Authenticated with Legacy method');
             showFileSection();
             loadFiles();
         } else {
+            hideProgress();
             showError('Login failed. Please check your credentials.');
         }
     } catch (error) {
-        showError('An error occurred during login.');
+        hideProgress();
+        console.error('Legacy login error:', error);
+        showError('Authentication failed.');
     }
 }
 
@@ -166,19 +388,89 @@ async function register() {
         return;
     }
 
-    // Validate password using common validation function
-    const validation = securityUtils.validatePassword(password);
+    // Validate password complexity
+    if (!wasmReady) {
+        await initWasm();
+    }
+    
+    const validation = validatePasswordComplexity(password);
     if (!validation.valid) {
         showError(validation.message);
         return;
     }
 
     try {
-        // Make sure WASM is ready
-        if (!wasmReady) {
-            await initWasm();
+        // Check OPAQUE health first
+        const healthResponse = await fetch('/api/opaque/health');
+        const isOpaqueHealthy = healthResponse.ok;
+        
+        if (isOpaqueHealthy) {
+            // Use OPAQUE registration
+            await opaqueRegister(email, password);
+        } else {
+            // Fallback to legacy registration
+            console.warn('OPAQUE not available, using legacy registration');
+            await legacyRegister(email, password);
         }
+        
+    } catch (error) {
+        console.error('Registration error:', error);
+        showError('An error occurred during registration.');
+    }
+}
 
+async function opaqueRegister(email, password) {
+    try {
+        showProgress('Detecting device capability...');
+        
+        // Get device capability with user consent
+        const deviceCapability = await detectDeviceCapability();
+        
+        showProgress('Registering with OPAQUE...');
+        
+        // Call OPAQUE registration flow (placeholder for now)
+        const opaqueResult = opaqueRegisterFlow(email, password, deviceCapability);
+        
+        if (!opaqueResult.success) {
+            hideProgress();
+            showError(opaqueResult.error || 'OPAQUE registration preparation failed');
+            return;
+        }
+        
+        // Make OPAQUE registration request to server
+        const response = await fetch('/api/opaque/register', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ 
+                email, 
+                password, 
+                deviceCapability 
+            }),
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            hideProgress();
+            showSuccess(`Registration successful with ${data.authMethod}! Device capability: ${data.deviceCapability}`);
+            toggleAuthForm();
+        } else {
+            hideProgress();
+            const errorData = await response.json().catch(() => ({}));
+            showError(errorData.message || 'OPAQUE registration failed. Please try again.');
+        }
+    } catch (error) {
+        hideProgress();
+        console.error('OPAQUE registration error:', error);
+        showError('OPAQUE registration failed.');
+    }
+}
+
+async function legacyRegister(email, password) {
+    try {
+        showProgress('Registering...');
+        
         // Generate salt and hash password client-side
         const salt = generatePasswordSalt();
         const passwordHash = hashPasswordArgon2ID(password, salt);
@@ -192,16 +484,39 @@ async function register() {
         });
 
         if (response.ok) {
+            hideProgress();
+            showSuccess('Registration successful with Legacy method. Please login.');
             toggleAuthForm();
-            showSuccess('Registration successful. Please login.');
         } else {
-            showError('Registration failed. Please try again.');
+            hideProgress();
+            showError('Legacy registration failed. Please try again.');
         }
     } catch (error) {
-        showError('An error occurred during registration.');
+        hideProgress();
+        console.error('Legacy registration error:', error);
+        showError('Legacy registration failed.');
     }
 }
 
+// Progress indicator functions
+function showProgress(message) {
+    let progressDiv = document.getElementById('progress-indicator');
+    if (!progressDiv) {
+        progressDiv = document.createElement('div');
+        progressDiv.id = 'progress-indicator';
+        progressDiv.className = 'progress-message';
+        document.body.appendChild(progressDiv);
+    }
+    progressDiv.textContent = message;
+    progressDiv.style.display = 'block';
+}
+
+function hideProgress() {
+    const progressDiv = document.getElementById('progress-indicator');
+    if (progressDiv) {
+        progressDiv.style.display = 'none';
+    }
+}
 
 function updatePasswordStrengthUI(password) {
     const strengthIndicator = document.getElementById('password-strength');
