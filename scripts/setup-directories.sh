@@ -34,6 +34,7 @@ sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/jwt/current"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/jwt/backup"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/ca"
+sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/arkfile"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/rqlite"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/minio"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/backups"
@@ -42,6 +43,14 @@ sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/backups"
 echo "Creating application data directories..."
 sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/lib/database"
 sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/lib/storage"
+
+# Create cache directory for downloads
+echo "Creating cache directories..."
+sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/cache"
+sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/cache/downloads"
+
+# Create state tracking directory
+sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/setup-state"
 
 # Create a releases directory for deployment
 sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/releases"

@@ -48,6 +48,11 @@ echo "Setting up error pages..."
 mkdir -p ${BUILD_DIR}/webroot/errors
 cp client/static/errors/* ${BUILD_DIR}/webroot/errors/
 
+# Copy systemd service files
+echo "Copying systemd service files..."
+mkdir -p ${BUILD_DIR}/systemd
+cp systemd/* ${BUILD_DIR}/systemd/
+
 # Create version file
 echo "Creating version file..."
 cat > ${BUILD_DIR}/version.json <<EOF

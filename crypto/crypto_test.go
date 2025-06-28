@@ -64,7 +64,7 @@ func TestDeviceCapabilityString(t *testing.T) {
 		{DeviceInteractive, "interactive"},
 		{DeviceBalanced, "balanced"},
 		{DeviceMaximum, "maximum"},
-		{DeviceCapability(999), "unknown"},
+		{999, "unknown"},
 	}
 
 	for _, tt := range tests {
@@ -86,7 +86,7 @@ func TestDeviceCapabilityGetProfile(t *testing.T) {
 		{DeviceInteractive, "interactive"},
 		{DeviceBalanced, "balanced"},
 		{DeviceMaximum, "maximum"},
-		{DeviceCapability(999), "unknown"},
+		{999, "unknown"},
 	}
 
 	for _, tt := range tests {

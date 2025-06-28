@@ -14,15 +14,22 @@ MINIO_DOWNLOAD_URL="https://dl.min.io/server/minio/release/linux-amd64/archive/m
 
 echo -e "${GREEN}Setting up MinIO Server ${MINIO_VERSION}...${NC}"
 
-# Download and install MinIO
-echo "Downloading MinIO..."
-curl -L ${MINIO_DOWNLOAD_URL} -o /tmp/minio
-
-echo "Installing MinIO..."
-sudo install -m 755 /tmp/minio /usr/local/bin/minio
-
-# Clean up temporary files
-rm -f /tmp/minio
+# Download and install MinIO using secure download script
+echo "Downloading and installing MinIO securely..."
+if [ -x "./scripts/download-minio.sh" ]; then
+    # Use our secure download script
+    ./scripts/download-minio.sh --version "${MINIO_VERSION}"
+else
+    echo -e "${YELLOW}⚠️  Secure download script not found, falling back to direct download${NC}"
+    echo "Downloading MinIO..."
+    curl -L ${MINIO_DOWNLOAD_URL} -o /tmp/minio
+    
+    echo "Installing MinIO..."
+    sudo install -m 755 /tmp/minio /usr/local/bin/minio
+    
+    # Clean up temporary files
+    rm -f /tmp/minio
+fi
 
 # Copy systemd service files
 echo "Installing systemd service files..."

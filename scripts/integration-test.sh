@@ -19,12 +19,32 @@ START_TIME=$(date +%s)
 echo -e "${BLUE}🚀 Starting Arkfile Comprehensive Integration Tests${NC}"
 echo
 
+# Parse environment variables for skip options
+SKIP_TESTS="${SKIP_TESTS:-false}"
+SKIP_WASM="${SKIP_WASM:-false}"
+SKIP_PERFORMANCE="${SKIP_PERFORMANCE:-false}"
+SKIP_GOLDEN="${SKIP_GOLDEN:-false}"
+SKIP_BUILD="${SKIP_BUILD:-false}"
+SKIP_TLS="${SKIP_TLS:-false}"
+SKIP_DOWNLOAD="${SKIP_DOWNLOAD:-false}"
+FORCE_REBUILD="${FORCE_REBUILD:-false}"
+
 # Ask user if they want to perform full system setup
 echo -e "${YELLOW}⚠️  SYSTEM SETUP OPTION${NC}"
 echo "This script can run in three modes:"
 echo "1. Testing only (default) - Run tests without modifying system"
 echo "2. Foundation setup - Create user, directories, keys, certificates"
 echo "3. Complete setup - Foundation + MinIO + rqlite + Caddy + start services"
+echo
+echo -e "${BLUE}📋 Environment Variables for Customization:${NC}"
+echo "• SKIP_TESTS=1        - Skip all test execution"
+echo "• SKIP_WASM=1         - Skip WebAssembly tests"
+echo "• SKIP_PERFORMANCE=1  - Skip performance benchmarks"
+echo "• SKIP_GOLDEN=1       - Skip golden test preservation"
+echo "• SKIP_BUILD=1        - Skip application build"
+echo "• SKIP_TLS=1          - Skip TLS certificate generation"
+echo "• SKIP_DOWNLOAD=1     - Skip MinIO downloads (use cached)"
+echo "• FORCE_REBUILD=1     - Force rebuild all components"
 echo
 echo -e "${RED}WARNING: Full/Complete setup will make system changes including:${NC}"
 echo "• Creating 'arkfile' system user and group"
@@ -58,6 +78,20 @@ elif [ "$SETUP_CONFIRM" = "FOUNDATION" ]; then
     echo -e "${YELLOW}You will be prompted for sudo password as needed${NC}"
 else
     echo -e "${BLUE}ℹ️  Running in testing-only mode${NC}"
+fi
+
+# Display active skip options
+if [ "$SKIP_TESTS" = "1" ] || [ "$SKIP_WASM" = "1" ] || [ "$SKIP_PERFORMANCE" = "1" ] || [ "$SKIP_GOLDEN" = "1" ] || [ "$SKIP_BUILD" = "1" ] || [ "$SKIP_TLS" = "1" ] || [ "$SKIP_DOWNLOAD" = "1" ] || [ "$FORCE_REBUILD" = "1" ]; then
+    echo -e "${YELLOW}🔧 Active Environment Variables:${NC}"
+    [ "$SKIP_TESTS" = "1" ] && echo "  • SKIP_TESTS=1 - Test execution disabled"
+    [ "$SKIP_WASM" = "1" ] && echo "  • SKIP_WASM=1 - WebAssembly tests disabled"
+    [ "$SKIP_PERFORMANCE" = "1" ] && echo "  • SKIP_PERFORMANCE=1 - Performance benchmarks disabled"
+    [ "$SKIP_GOLDEN" = "1" ] && echo "  • SKIP_GOLDEN=1 - Golden test preservation disabled"
+    [ "$SKIP_BUILD" = "1" ] && echo "  • SKIP_BUILD=1 - Application build disabled"
+    [ "$SKIP_TLS" = "1" ] && echo "  • SKIP_TLS=1 - TLS certificate generation disabled"
+    [ "$SKIP_DOWNLOAD" = "1" ] && echo "  • SKIP_DOWNLOAD=1 - Will use cached downloads"
+    [ "$FORCE_REBUILD" = "1" ] && echo "  • FORCE_REBUILD=1 - Force rebuild all components"
+    echo
 fi
 echo
 
@@ -383,6 +417,121 @@ if [ "$FULL_SETUP" = true ]; then
             echo -e "${GREEN}✅ rqlite health check passed${NC}"
         else
             echo -e "${YELLOW}⚠️  rqlite health check failed - may need configuration${NC}"
+        fi
+        
+        # Enhanced: Test with cryptocli administrative tool
+        echo
+        echo -e "${BLUE}🔧 Running cryptocli system health validation...${NC}"
+        if [ -f "./cryptocli" ] || command -v go &> /dev/null; then
+            # Build cryptocli if not already built
+            if [ ! -f "./cryptocli" ]; then
+                echo -e "${YELLOW}Building cryptocli administrative tool...${NC}"
+                go build -o cryptocli ./cmd/cryptocli
+            fi
+            
+            if [ -f "./cryptocli" ]; then
+                echo -e "${YELLOW}Running comprehensive OPAQUE system health check...${NC}"
+                ./cryptocli health
+                
+                echo
+                echo -e "${YELLOW}Testing device capability detection...${NC}"
+                ./cryptocli capability
+                
+                echo
+                echo -e "${YELLOW}Checking post-quantum migration readiness...${NC}"
+                ./cryptocli pq-status
+                
+                echo -e "${GREEN}✅ cryptocli administrative tool validation completed${NC}"
+            else
+                echo -e "${YELLOW}⚠️  cryptocli build failed - skipping admin tool validation${NC}"
+            fi
+        else
+            echo -e "${YELLOW}⚠️  Go not available - skipping cryptocli validation${NC}"
+        fi
+        
+        # NEW: Offer interactive admin validation
+        echo
+        echo -e "${GREEN}🎯 SYSTEM DEPLOYED - READY FOR ADMIN VALIDATION${NC}"
+        echo "=================================================="
+        echo
+        echo -e "${BLUE}Your complete Arkfile system is now deployed and ready for testing!${NC}"
+        echo
+        echo -e "${CYAN}📋 Quick System Status:${NC}"
+        echo "• Arkfile Web Interface: http://localhost:8080"
+        echo "• HTTPS Interface: https://localhost (with certificate warnings)"
+        echo "• Health Dashboard: http://localhost:8080/health"
+        echo "• All services configured and started"
+        echo
+        echo -e "${YELLOW}🧪 NEXT STEP: Interactive Admin Validation${NC}"
+        echo
+        echo "The system is set up, but you should validate that everything works"
+        echo "with real user interactions. Our interactive guide will walk you through:"
+        echo
+        echo "✓ Understanding TLS certificate warnings (normal behavior)"
+        echo "✓ Testing user registration with OPAQUE protocol"
+        echo "✓ Testing user login and authentication"
+        echo "✓ Testing file upload, encryption, and download"
+        echo "✓ Testing file sharing functionality"
+        echo "✓ Backend verification of all operations"
+        echo
+        echo -e "${GREEN}Would you like to run the interactive admin validation guide?${NC}"
+        echo
+        read -p "Run guided validation? (y/N): " RUN_VALIDATION
+        
+        if [[ "$RUN_VALIDATION" =~ ^[Yy]$ ]]; then
+            echo
+            echo -e "${BLUE}🚀 STARTING INTERACTIVE ADMIN VALIDATION${NC}"
+            echo "==========================================="
+            echo
+            echo "The validation guide will walk you through testing your deployment"
+            echo "with real browser interactions and backend verification."
+            echo
+            echo "Press Enter to start the validation guide..."
+            read
+            
+            # Run the interactive validation guide
+            if [ -x "./scripts/admin-validation-guide.sh" ]; then
+                ./scripts/admin-validation-guide.sh
+                VALIDATION_EXIT_CODE=$?
+                
+                echo
+                if [ $VALIDATION_EXIT_CODE -eq 0 ]; then
+                    echo -e "${GREEN}🎉 VALIDATION COMPLETED SUCCESSFULLY!${NC}"
+                    echo -e "${GREEN}Your Arkfile deployment is fully validated and ready for use.${NC}"
+                else
+                    echo -e "${YELLOW}⚠️  Validation completed with some issues.${NC}"
+                    echo -e "${YELLOW}Review the validation results above and address any failures.${NC}"
+                fi
+            else
+                echo -e "${RED}❌ Admin validation guide not found or not executable${NC}"
+                echo -e "${YELLOW}You can still test manually using the admin testing guide:${NC}"
+                echo -e "${YELLOW}docs/admin-testing-guide.md${NC}"
+            fi
+        else
+            echo
+            echo -e "${BLUE}📋 MANUAL VALIDATION INSTRUCTIONS${NC}"
+            echo "================================="
+            echo
+            echo -e "${CYAN}Your system is ready! To validate it manually:${NC}"
+            echo
+            echo "1. 🌐 Open browser to: http://localhost:8080"
+            echo "   (or https://localhost - accept certificate warning)"
+            echo
+            echo "2. 👤 Register test user:"
+            echo "   Email: admin@test.local"
+            echo "   Password: AdminTest123!@# (or your choice)"
+            echo
+            echo "3. 🔐 Login with same credentials"
+            echo
+            echo "4. 📁 Upload a test file and verify encryption works"
+            echo
+            echo "5. 🔗 Test file sharing in incognito window"
+            echo
+            echo -e "${YELLOW}📖 For detailed step-by-step instructions, see:${NC}"
+            echo "   docs/admin-testing-guide.md"
+            echo
+            echo -e "${YELLOW}🔧 To run interactive validation later:${NC}"
+            echo "   ./scripts/admin-validation-guide.sh"
         fi
         
     else
