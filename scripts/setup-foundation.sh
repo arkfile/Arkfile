@@ -200,13 +200,13 @@ echo -e "${BLUE}🔍 Validating foundation setup...${NC}"
 # Check key files exist
 echo -e "${YELLOW}Checking cryptographic keys...${NC}"
 key_files=(
-    "${BASE_DIR}/etc/keys/opaque/server-private-key.key"
-    "${BASE_DIR}/etc/keys/jwt/current/private-key.pem"
+    "${BASE_DIR}/etc/keys/opaque/server_private.key"
+    "${BASE_DIR}/etc/keys/jwt/current/signing.key"
 )
 
 all_keys_present=true
 for key_file in "${key_files[@]}"; do
-    if [ -f "${key_file}" ]; then
+    if sudo test -f "${key_file}"; then
         echo -e "${GREEN}✅ ${key_file}${NC}"
     else
         echo -e "${RED}❌ Missing: ${key_file}${NC}"
@@ -231,9 +231,9 @@ key_dirs=(
 
 all_perms_correct=true
 for dir in "${key_dirs[@]}"; do
-    if [ -d "${dir}" ]; then
-        owner=$(stat -c '%U:%G' "${dir}")
-        perms=$(stat -c '%a' "${dir}")
+    if sudo test -d "${dir}"; then
+        owner=$(sudo stat -c '%U:%G' "${dir}")
+        perms=$(sudo stat -c '%a' "${dir}")
         echo -e "${GREEN}✅ ${dir} (${owner}, ${perms})${NC}"
     else
         echo -e "${RED}❌ Missing directory: ${dir}${NC}"
@@ -312,56 +312,22 @@ echo "• Build system: ✅ Application compiled and deployed"
 echo "• Permissions: ✅ Production-ready security"
 
 echo
-echo -e "${GREEN}🚀 NEXT STEPS FOR COMPLETE SYSTEM${NC}"
+echo -e "${GREEN}🚀 NEXT STEP - GET ARKFILE RUNNING${NC}"
 echo "========================================"
-echo -e "${YELLOW}1. Configure External Services:${NC}"
-echo "   # Set up MinIO object storage"
-echo "   sudo ./scripts/setup-minio.sh"
-echo "   "
-echo "   # Set up rqlite database cluster"
-echo "   sudo ./scripts/setup-rqlite.sh"
+echo -e "${YELLOW}To get a complete working Arkfile system:${NC}"
 echo
-echo -e "${YELLOW}2. Or use the services setup script:${NC}"
-echo "   sudo ./scripts/setup-services.sh"
+echo -e "${GREEN}  ./scripts/quick-start.sh${NC}"
 echo
-echo -e "${YELLOW}3. Or run complete integration setup:${NC}"
-echo "   ./scripts/integration-test.sh"
-echo "   # Type 'COMPLETE' when prompted"
+echo "This single command will:"
+echo "• Set up MinIO object storage"
+echo "• Set up rqlite database"
+echo "• Start all services"
+echo "• Give you the web interface URL"
 echo
-echo -e "${YELLOW}4. Configure Application:${NC}"
-echo "   # Edit configuration file"
-echo "   sudo nano /opt/arkfile/etc/prod/config.yaml"
-echo "   "
-echo "   # Set up environment variables"
-echo "   sudo nano /opt/arkfile/etc/prod/secrets.env"
-echo
-echo -e "${YELLOW}5. Start Services:${NC}"
-echo "   # Enable and start Arkfile"
-echo "   sudo systemctl enable arkfile"
-echo "   sudo systemctl start arkfile"
-
-echo
-echo -e "${GREEN}📚 DOCUMENTATION REFERENCES${NC}"
-echo "========================================"
-echo "• Production Deployment: docs/deployment-guide.md"
-echo "• Security Operations: docs/security-operations.md"
-echo "• API Documentation: docs/api.md"
-echo "• Admin Testing Guide: docs/admin-testing-guide.md"
-
-echo
-echo -e "${BLUE}🔧 FOUNDATION VALIDATION${NC}"
-echo "========================================"
-echo "Your foundation is ready! To validate:"
-echo
-echo "1. Check key health:"
-echo "   ./scripts/health-check.sh --foundation"
-echo
-echo "2. Run security audit:"
-echo "   ./scripts/security-audit.sh --foundation"
-echo
-echo "3. Test key generation:"
-echo "   ./scripts/backup-keys.sh --test"
-
+echo -e "${BLUE}OR, for manual setup:${NC}"
+echo "1. Set up services: sudo ./scripts/setup-minio.sh && sudo ./scripts/setup-rqlite.sh"
+echo "2. Start services: sudo systemctl start arkfile"
+echo "3. Visit: http://localhost:8080"
 echo
 echo -e "${GREEN}✅ Foundation setup complete!${NC}"
 echo -e "${BLUE}Your Arkfile foundation is ready for service configuration.${NC}"

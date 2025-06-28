@@ -103,8 +103,9 @@ create_certificate() {
     
     echo "Creating certificate for ${description}..."
     
-    # Create temporary config file
+    # Create temporary config file with proper permissions
     local config_file=$(mktemp)
+    chmod 644 "${config_file}"
     cat > "${config_file}" << EOF
 [req]
 distinguished_name = req_distinguished_name
@@ -135,6 +136,7 @@ EOF
     if [ -n "${ca_cert}" ] && [ -n "${ca_key}" ]; then
         # Create signed certificate
         local csr_file=$(mktemp)
+        chmod 644 "${csr_file}"
         sudo -u ${USER} openssl req -new -key "${key_path}" -out "${csr_file}" -config "${config_file}"
         sudo -u ${USER} openssl x509 -req -in "${csr_file}" -CA "${ca_cert}" -CAkey "${ca_key}" \
             -CAcreateserial -out "${cert_path}" -days ${VALIDITY_DAYS} -sha384 \

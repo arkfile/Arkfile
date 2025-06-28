@@ -18,6 +18,12 @@ START_TIME=$(date +%s)
 
 echo -e "${BLUE}🚀 Starting Arkfile Comprehensive Integration Tests${NC}"
 echo
+echo -e "${YELLOW}💡 NEW TO ARKFILE? Looking for a quick setup?${NC}"
+echo -e "${GREEN}   Try: ./scripts/quick-start.sh${NC}"
+echo -e "${BLUE}   (Sets up everything in one command)${NC}"
+echo
+echo -e "${BLUE}This script provides comprehensive testing and setup options.${NC}"
+echo
 
 # Parse environment variables for skip options
 SKIP_TESTS="${SKIP_TESTS:-false}"

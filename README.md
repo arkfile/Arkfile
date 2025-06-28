@@ -14,11 +14,36 @@ The platform is open-source to allow security audits and customization. It suppo
 
 ## Quick Start
 
-For detailed instructions on setup, configuration, and deployment, please refer to our comprehensive documentation:
+**Want to try Arkfile immediately?** Run this single command:
 
-- **[Setup Guide](docs/setup.md)**: A complete guide for administrators on installing and configuring Arkfile.
-- **[Security Details](docs/security.md)**: An in-depth look at the cryptographic design and security architecture.
-- **[API Reference](docs/api.md)**: Information for developers on integrating with the Arkfile API.
+```bash
+./scripts/quick-start.sh
+```
+
+This will set up a complete working Arkfile system with:
+- Local MinIO storage
+- Single-node rqlite database  
+- Web interface at http://localhost:8080
+
+**For production deployment**, see the detailed guides below:
+
+- **[Setup Guide](docs/setup.md)**: Complete administrator installation guide
+- **[Security Details](docs/security.md)**: Cryptographic design and security architecture
+- **[API Reference](docs/api.md)**: Developer integration documentation
+
+## For System Administrators
+
+### 🆕 New to Arkfile?
+**[📖 Newcomer Guide](docs/newcomer-guide.md)** - Which script should I run?
+
+### Essential Scripts (Start Here)
+- `./scripts/quick-start.sh` - **One-command setup** for testing/development
+- `./scripts/setup-foundation.sh` - Set up users, directories, and keys only
+- `./scripts/integration-test.sh` - Full system testing (choose COMPLETE mode)
+- `./scripts/health-check.sh` - Verify system health
+
+### All Available Scripts
+For a complete list of available setup and maintenance scripts, see [scripts/README.md](scripts/README.md).
 
 ## Support & Security
 
