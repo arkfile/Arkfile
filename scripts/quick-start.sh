@@ -24,8 +24,8 @@ if [ "$EUID" -eq 0 ]; then
 fi
 
 # Step 1: Foundation setup
-echo -e "${YELLOW}Step 1: Setting up foundation (users, directories, keys)...${NC}"
-./scripts/setup-foundation.sh --skip-tests --skip-tls
+echo -e "${YELLOW}Step 1: Setting up foundation (users, directories, keys, TLS)...${NC}"
+./scripts/setup-foundation.sh --skip-tests
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ Foundation setup failed${NC}"
     exit 1
@@ -76,22 +76,43 @@ echo "  MinIO: ${minio_status}"
 echo "  rqlite: ${rqlite_status}"
 echo "  Arkfile: ${arkfile_status}"
 
+# Validate TLS certificates
+echo -e "${YELLOW}Validating TLS certificates for secure local network access...${NC}"
+if ./scripts/validate-certificates.sh >/dev/null 2>&1; then
+    echo -e "${GREEN}✅ TLS certificates validated successfully${NC}"
+    TLS_STATUS="✅ Available"
+else
+    echo -e "${YELLOW}⚠️  TLS certificate validation had warnings (non-critical)${NC}"
+    TLS_STATUS="⚠️  Available with warnings"
+fi
+
 if [ "$arkfile_status" = "active" ]; then
     echo -e "${GREEN}✅ Arkfile is running!${NC}"
     
     # Get the port from config or use default
     arkfile_port=$(grep -o 'PORT=[0-9]*' /opt/arkfile/releases/current/.env 2>/dev/null | cut -d= -f2 || echo "8080")
     
+    # Get local IP for network access
+    local_ip=$(hostname -I | awk '{print $1}' 2>/dev/null || echo "192.168.x.x")
+    
     echo
     echo -e "${GREEN}🎉 SETUP COMPLETE! 🎉${NC}"
     echo "================================"
     echo
     echo -e "${BLUE}Your Arkfile system is now running at:${NC}"
-    echo -e "${GREEN}  📱 Web Interface: http://localhost:${arkfile_port}${NC}"
+    echo -e "${GREEN}  📱 HTTP Interface: http://localhost:${arkfile_port}${NC}"
+    echo -e "${GREEN}  🔒 HTTPS Interface: https://localhost:${arkfile_port}${NC}"
+    echo -e "${BLUE}     (Accept self-signed certificate warning)${NC}"
+    echo
+    echo -e "${BLUE}🌐 Local Network Access:${NC}"
+    echo -e "${GREEN}  📱 HTTP: http://${local_ip}:${arkfile_port}${NC}"
+    echo -e "${GREEN}  🔒 HTTPS: https://${local_ip}:${arkfile_port}${NC}"
+    echo -e "${BLUE}     (TLS Status: ${TLS_STATUS})${NC}"
     echo
     echo -e "${BLUE}Next Steps - Test Your System:${NC}"
     echo "1. Open your web browser"
-    echo "2. Go to: http://localhost:${arkfile_port}"
+    echo "2. Go to: https://localhost:${arkfile_port} (recommended) or http://localhost:${arkfile_port}"
+    echo "   • For HTTPS: Accept the self-signed certificate warning"
     echo "3. Register a new account (e.g., admin@example.com)"
     echo "4. Upload a test file to verify encryption works"
     echo "5. Create a file share to test sharing functionality"

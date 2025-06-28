@@ -22,10 +22,11 @@ This directory contains all the setup, maintenance, and testing scripts for Arkf
 
 | Script | Purpose | When to Use |
 |--------|---------|-------------|
-| `quick-start.sh` | **Complete one-command setup** | First time trying Arkfile |
+| `quick-start.sh` | **Complete one-command setup with TLS** | First time trying Arkfile |
 | `setup-foundation.sh` | Set up users, directories, keys only | Manual step-by-step setup |
 | `integration-test.sh` | Full system testing with options | Validating deployment |
 | `health-check.sh` | System health verification | Troubleshooting issues |
+| `uninstall.sh` | **Interactive system removal** | Safely removing Arkfile |
 
 ### Infrastructure Setup Scripts
 
@@ -121,6 +122,12 @@ sudo journalctl -u arkfile -f
 ./scripts/backup-keys.sh
 ./scripts/rotate-jwt-keys.sh
 ```
+
+### I Want to Remove Arkfile
+```bash
+sudo ./scripts/uninstall.sh
+```
+**Note:** Interactive script with prompts for each component. Offers key backup before removal.
 
 ## 🔧 Script Options
 
