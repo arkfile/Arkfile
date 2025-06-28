@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/84adam/arkfile/database"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 func setupTestDB(t *testing.T) *sql.DB {

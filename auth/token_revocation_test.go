@@ -10,7 +10,6 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
-	_ "github.com/mattn/go-sqlite3" // Import SQLite driver
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

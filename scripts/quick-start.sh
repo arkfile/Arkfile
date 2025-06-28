@@ -51,7 +51,7 @@ echo "Starting MinIO..."
 sudo systemctl start minio@node1
 sudo systemctl enable minio@node1
 
-echo "Starting rqlite..."
+echo "Starting rqlite database..."
 sudo systemctl start rqlite@node1
 sudo systemctl enable rqlite@node1
 
@@ -68,7 +68,7 @@ echo -e "${YELLOW}Step 4: Verifying system health...${NC}"
 
 # Check service status
 minio_status=$(sudo systemctl is-active minio@node1 || echo "failed")
-rqlite_status=$(sudo systemctl is-active rqlite@node1 || echo "failed") 
+rqlite_status=$(sudo systemctl is-active rqlite@node1 || echo "failed")
 arkfile_status=$(sudo systemctl is-active arkfile || echo "failed")
 
 echo "Service Status:"
@@ -105,7 +105,7 @@ if [ "$arkfile_status" = "active" ]; then
     echo -e "${BLUE}Configuration Files:${NC}"
     echo "• Main config: /opt/arkfile/releases/current/.env"
     echo "• Service logs: /opt/arkfile/var/log/"
-    echo "• Database: /opt/arkfile/var/lib/prod/rqlite/"
+    echo "• Database: rqlite cluster (port 4001)"
     echo "• Object storage: /opt/arkfile/var/lib/prod/minio/"
     echo
     echo -e "${GREEN}✅ System is ready for use!${NC}"

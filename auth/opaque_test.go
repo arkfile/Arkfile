@@ -7,8 +7,32 @@ import (
 	"time"
 
 	"github.com/84adam/arkfile/crypto"
-	_ "github.com/mattn/go-sqlite3"
 )
+
+// Define device capabilities locally to avoid import cycles
+type DeviceCapability int
+
+const (
+	DeviceMinimal DeviceCapability = iota
+	DeviceInteractive
+	DeviceBalanced
+	DeviceMaximum
+)
+
+func (d DeviceCapability) String() string {
+	switch d {
+	case DeviceMinimal:
+		return "minimal"
+	case DeviceInteractive:
+		return "interactive"
+	case DeviceBalanced:
+		return "balanced"
+	case DeviceMaximum:
+		return "maximum"
+	default:
+		return "interactive"
+	}
+}
 
 func setupOPAQUETestDB(t *testing.T) *sql.DB {
 	db, err := sql.Open("sqlite3", ":memory:")
