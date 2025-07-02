@@ -9,7 +9,7 @@ NC='\033[0m'
 
 # Configuration
 BASE_DIR="/opt/arkfile"
-MINIO_VERSION="RELEASE.2024-03-10T02-53-48Z"  # Latest stable version
+MINIO_VERSION="RELEASE.2025-06-13T11-33-47Z"  # Latest stable version
 MINIO_DOWNLOAD_URL="https://dl.min.io/server/minio/release/linux-amd64/archive/minio.${MINIO_VERSION}"
 
 echo -e "${GREEN}Setting up MinIO Server ${MINIO_VERSION}...${NC}"

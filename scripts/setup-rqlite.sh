@@ -9,9 +9,10 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Configuration
-VERSION="7.21.1"  # Latest stable version of rqlite
+VERSION="8.38.2"  # Latest stable version of rqlite
 BASE_DIR="/opt/arkfile"
 CACHE_DIR="/opt/arkfile/var/cache/downloads"
+DEPENDENCY_HASHES_FILE="${BASE_DIR}/../config/dependency-hashes.json"
 
 # Parse command line arguments
 FORCE_DOWNLOAD=false
@@ -65,12 +66,20 @@ if [ -f "$CACHED_FILE" ] && [ -f "$CACHED_SHA256" ] && [ "$FORCE_DOWNLOAD" != tr
 else
     echo -e "${YELLOW}📥 Downloading rqlite v${VERSION} with security verification...${NC}"
     
-    # Download SHA256 checksum first
-    echo "Downloading SHA256 checksum..."
-    if ! curl -L "${RQLITE_SHA256_URL}" -o "${CACHED_SHA256}"; then
-        echo -e "${RED}❌ Failed to download SHA256 checksum${NC}"
-        echo -e "${YELLOW}⚠️  This is a security risk - cannot verify download integrity${NC}"
-        exit 1
+    # Try to download SHA256 checksum first (likely to fail for rqlite)
+    echo "Attempting to download SHA256 checksum..."
+    CHECKSUM_AVAILABLE=false
+    if curl -L "${RQLITE_SHA256_URL}" -o "${CACHED_SHA256}" 2>/dev/null; then
+        # Check if we got a real checksum or a 404 page
+        if [ -s "${CACHED_SHA256}" ] && ! grep -q "Not Found" "${CACHED_SHA256}"; then
+            echo -e "${GREEN}✅ SHA256 checksum downloaded from upstream${NC}"
+            CHECKSUM_AVAILABLE=true
+        else
+            echo -e "${YELLOW}⚠️  Upstream SHA256 checksum not available${NC}"
+            rm -f "${CACHED_SHA256}"
+        fi
+    else
+        echo -e "${YELLOW}⚠️  Upstream SHA256 checksum not available${NC}"
     fi
     
     # Download the binary
@@ -80,29 +89,89 @@ else
         exit 1
     fi
     
-    echo -e "${GREEN}✅ Downloads completed${NC}"
+    echo -e "${GREEN}✅ Binary download completed${NC}"
 fi
 
-# Verify SHA256 checksum
+# Verify SHA256 checksum using fallback methods
 echo -e "${BLUE}🔐 Verifying download integrity...${NC}"
 cd "${CACHE_DIR}"
 
-# Extract expected checksum
-EXPECTED_SHA256=$(cat "${CACHED_SHA256}" | awk '{print $1}')
-ACTUAL_SHA256=$(sha256sum "$(basename "${CACHED_FILE}")" | awk '{print $1}')
+VERIFICATION_PASSED=false
+VERIFICATION_METHOD=""
 
-echo "Expected SHA256: ${EXPECTED_SHA256}"
-echo "Actual SHA256:   ${ACTUAL_SHA256}"
-
-if [ "$EXPECTED_SHA256" != "$ACTUAL_SHA256" ]; then
-    echo -e "${RED}❌ SHA256 verification FAILED!${NC}"
-    echo -e "${RED}❌ This indicates the download may be corrupted or tampered with${NC}"
-    echo -e "${YELLOW}⚠️  Removing potentially compromised files...${NC}"
-    rm -f "${CACHED_FILE}" "${CACHED_SHA256}"
-    exit 1
+# Method 1: Use upstream checksum if available
+if [ -f "${CACHED_SHA256}" ] && [ -s "${CACHED_SHA256}" ]; then
+    echo "Verifying with upstream SHA256 checksum..."
+    EXPECTED_SHA256=$(cat "${CACHED_SHA256}" | awk '{print $1}')
+    ACTUAL_SHA256=$(sha256sum "$(basename "${CACHED_FILE}")" | awk '{print $1}')
+    
+    echo "Expected SHA256: ${EXPECTED_SHA256}"
+    echo "Actual SHA256:   ${ACTUAL_SHA256}"
+    
+    if [ "$EXPECTED_SHA256" = "$ACTUAL_SHA256" ]; then
+        echo -e "${GREEN}✅ Upstream SHA256 verification passed${NC}"
+        VERIFICATION_PASSED=true
+        VERIFICATION_METHOD="upstream_checksum"
+    else
+        echo -e "${RED}❌ Upstream SHA256 verification failed${NC}"
+        exit 1
+    fi
 fi
 
-echo -e "${GREEN}✅ SHA256 verification passed${NC}"
+# Method 2: Use local dependency hash database if upstream not available
+if [ "$VERIFICATION_PASSED" = false ]; then
+    echo "Falling back to local dependency hash database..."
+    
+    if [ -f "$DEPENDENCY_HASHES_FILE" ] && command -v jq &> /dev/null; then
+        EXPECTED_SHA256=$(jq -r ".dependencies.rqlite.\"v${VERSION}\".\"linux-amd64\".sha256" "$DEPENDENCY_HASHES_FILE" 2>/dev/null)
+        
+        if [ "$EXPECTED_SHA256" != "null" ] && [ -n "$EXPECTED_SHA256" ]; then
+            ACTUAL_SHA256=$(sha256sum "$(basename "${CACHED_FILE}")" | awk '{print $1}')
+            
+            echo "Expected SHA256 (local database): ${EXPECTED_SHA256}"
+            echo "Actual SHA256:                    ${ACTUAL_SHA256}"
+            
+            if [ "$EXPECTED_SHA256" = "$ACTUAL_SHA256" ]; then
+                echo -e "${GREEN}✅ Local database SHA256 verification passed${NC}"
+                VERIFICATION_PASSED=true
+                VERIFICATION_METHOD="local_database"
+            else
+                echo -e "${RED}❌ Local database SHA256 verification failed${NC}"
+                echo -e "${RED}❌ This indicates the download may be corrupted or tampered with${NC}"
+                rm -f "${CACHED_FILE}"
+                exit 1
+            fi
+        else
+            echo -e "${YELLOW}⚠️  No SHA256 found in local database for v${VERSION}${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠️  Local dependency database not available or jq not installed${NC}"
+    fi
+fi
+
+# Method 3: Manual verification prompt (last resort)
+if [ "$VERIFICATION_PASSED" = false ]; then
+    ACTUAL_SHA256=$(sha256sum "$(basename "${CACHED_FILE}")" | awk '{print $1}')
+    echo -e "${YELLOW}⚠️  WARNING: Unable to verify download automatically${NC}"
+    echo -e "${YELLOW}⚠️  Computed SHA256: ${ACTUAL_SHA256}${NC}"
+    echo
+    echo -e "${RED}🔒 SECURITY WARNING: No automatic verification available${NC}"
+    echo "rqlite does not provide SHA256 checksums, and no local database entry exists."
+    echo "Please manually verify this SHA256 against a trusted source."
+    echo
+    echo "Options:"
+    echo "1. Continue with unverified download (NOT RECOMMENDED for production)"
+    echo "2. Exit and manually verify the checksum"
+    echo
+    read -p "Continue with unverified download? [y/N]: " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Exiting for manual verification..."
+        exit 1
+    fi
+    VERIFICATION_METHOD="manual_override"
+    echo -e "${YELLOW}⚠️  Proceeding with unverified download${NC}"
+fi
 
 # TODO: PGP signature verification would go here
 # Note: rqlite releases don't currently provide PGP signatures
