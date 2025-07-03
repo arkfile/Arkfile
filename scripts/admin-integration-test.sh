@@ -17,7 +17,7 @@ NC='\033[0m'
 ARKFILE_PORT=${ARKFILE_PORT:-8080}
 MINIO_PORT=${MINIO_PORT:-9000}
 TEST_EMAIL="admin@example.com"
-TEST_PASSWORD="TestPassword123!"
+TEST_PASSWORD="TestPassword123_Secure"
 TEST_FILE_CONTENT="Hello World - Arkfile Integration Test"
 TEST_FILE_NAME="integration-test.txt"
 
@@ -133,9 +133,9 @@ validate_environment() {
     fi
     
     # Check MinIO service
-    if ! check_service_status "minio@node1"; then
+    if ! check_service_status "minio@demo"; then
         validation_passed=false
-        echo -e "${YELLOW}💡 To start MinIO: sudo systemctl start minio@node1${NC}"
+        echo -e "${YELLOW}💡 To start MinIO: sudo systemctl start minio@demo${NC}"
     fi
     
     echo
@@ -150,7 +150,7 @@ validate_environment() {
     # Check MinIO port
     if ! check_port_available "$MINIO_PORT" "MinIO Object Storage"; then
         validation_passed=false
-        echo -e "${YELLOW}💡 Check MinIO status: sudo systemctl status minio@node1${NC}"
+        echo -e "${YELLOW}💡 Check MinIO status: sudo systemctl status minio@demo${NC}"
     fi
     
     echo
@@ -265,7 +265,7 @@ run_guided_web_test() {
     echo
     echo -e "${GREEN}✅ Expected: File appears in your file list with an encrypted/lock icon${NC}"
     echo -e "${RED}❌ If upload fails:${NC}"
-    echo "   • Check MinIO service is running: sudo systemctl status minio@node1"
+    echo "   • Check MinIO service is running: sudo systemctl status minio@demo"
     echo "   • Verify file permissions in /opt/arkfile/var/lib/"
     echo "   • Check browser console for upload errors"
     
@@ -352,7 +352,7 @@ generate_test_report() {
     echo -e "${BLUE}📋 Administrative Commands:${NC}"
     echo "• Monitor logs: sudo journalctl -u arkfile -f"
     echo "• Restart services: sudo systemctl restart arkfile"
-    echo "• Check status: sudo systemctl status arkfile minio@node1"
+    echo "• Check status: sudo systemctl status arkfile minio@demo"
     echo "• Security audit: ./scripts/security-audit.sh"
     echo "• Performance test: ./scripts/performance-benchmark.sh"
     echo

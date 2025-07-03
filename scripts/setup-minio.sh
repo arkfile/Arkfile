@@ -36,14 +36,10 @@ echo "Installing systemd service files..."
 sudo cp ${BASE_DIR}/releases/current/systemd/minio@.service /etc/systemd/system/
 sudo cp ${BASE_DIR}/releases/current/systemd/minio.target /etc/systemd/system/
 
-# Create directory structure for both environments
-for env in prod test; do
-    echo "Setting up ${env} environment directories..."
-    
-    # Create MinIO data directory
-    sudo install -d -m 750 -o "ark${env}" -g arkfile "${BASE_DIR}/var/lib/${env}/minio"
-    sudo install -d -m 750 -o "ark${env}" -g arkfile "${BASE_DIR}/var/lib/${env}/minio/data"
-done
+# Create simplified directory structure for single-node deployment
+echo "Setting up MinIO directories..."
+sudo install -d -m 750 -o arkfile -g arkfile "${BASE_DIR}/var/lib/minio"
+sudo install -d -m 750 -o arkfile -g arkfile "${BASE_DIR}/var/lib/minio/data"
 
 # Reload systemd
 echo "Reloading systemd..."

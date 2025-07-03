@@ -15,6 +15,23 @@ NC='\033[0m'
 echo -e "${BLUE}🚀 Arkfile Quick Start${NC}"
 echo -e "${BLUE}Setting up a complete working system...${NC}"
 echo
+echo -e "${RED}⚠️  SECURITY WARNING - DEMO CONFIGURATION ⚠️${NC}"
+echo -e "${YELLOW}This quick-start creates a demo system with default credentials.${NC}"
+echo -e "${YELLOW}This is NOT suitable for production use without security hardening.${NC}"
+echo -e "${YELLOW}For production, regenerate ALL credentials and certificates.${NC}"
+echo
+echo -e "${BLUE}Demo credentials will be created:${NC}"
+echo -e "${YELLOW}  • MinIO: arkfile-demo / TestPassword123_SecureMinIO${NC}"
+echo -e "${YELLOW}  • JWT: demo-jwt-secret-change-for-production-use${NC}"
+echo -e "${YELLOW}  • Admin: admin@arkfile.demo${NC}"
+echo
+read -p "Continue with demo setup? [y/N]: " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Exiting. For production setup, see ./scripts/setup-foundation.sh"
+    exit 0
+fi
+echo
 
 # Check if running as root
 if [ "$EUID" -eq 0 ]; then
@@ -47,13 +64,77 @@ fi
 
 # Step 3: Start services
 echo -e "${YELLOW}Step 3: Starting services...${NC}"
+echo "Creating demo environment configuration..."
+sudo tee /opt/arkfile/etc/secrets.env > /dev/null << 'EOF'
+# ⚠️  DEMO CONFIGURATION - NOT FOR PRODUCTION ⚠️
+#
+# This file contains demo credentials for quick-start testing.
+# 
+# 🔒 SECURITY WARNING: 
+# These are DEFAULT DEMO VALUES and MUST be changed for production use!
+#
+# Before production deployment, run:
+#   ./scripts/security-audit.sh
+#   ./scripts/rotate-jwt-keys.sh
+#   ./scripts/setup-tls-certs.sh --production
+
+# MinIO Object Storage Configuration
+MINIO_ROOT_USER=arkfile-demo
+MINIO_ROOT_PASSWORD=TestPassword123_SecureMinIO
+LOCAL_STORAGE_PATH=/opt/arkfile/var/lib/minio/data
+
+# Database Configuration
+DATABASE_TYPE=rqlite
+RQLITE_ADDRESS=http://localhost:4001
+RQLITE_USERNAME=demo-user
+RQLITE_PASSWORD=TestPassword123_Secure
+
+# Arkfile Application Configuration
+JWT_SECRET=demo-jwt-secret-change-for-production-use
+BACKBLAZE_ENDPOINT=demo-endpoint
+BACKBLAZE_KEY_ID=demo-key-id
+BACKBLAZE_APPLICATION_KEY=demo-app-key
+BACKBLAZE_BUCKET_NAME=demo-bucket
+
+# Admin Configuration (comma-separated list)
+ADMIN_EMAILS=admin@arkfile.demo
+
+# Security Settings for Demo
+REQUIRE_APPROVAL=false
+ENABLE_REGISTRATION=true
+
+# Development/Demo Settings
+DEBUG_MODE=true
+LOG_LEVEL=info
+EOF
+
+sudo chown arkfile:arkfile /opt/arkfile/etc/secrets.env
+sudo chmod 640 /opt/arkfile/etc/secrets.env
+
+echo "Creating rqlite authentication file..."
+sudo tee /opt/arkfile/etc/rqlite-auth.json > /dev/null << 'EOF'
+[
+  {
+    "username": "demo-user",
+    "password": "TestPassword123_Secure",
+    "perms": ["all"]
+  }
+]
+EOF
+sudo chown arkfile:arkfile /opt/arkfile/etc/rqlite-auth.json
+sudo chmod 640 /opt/arkfile/etc/rqlite-auth.json
+
+echo "Installing arkfile systemd service..."
+sudo cp /opt/arkfile/releases/current/systemd/arkfile.service /etc/systemd/system/
+sudo systemctl daemon-reload
+
 echo "Starting MinIO..."
-sudo systemctl start minio@node1
-sudo systemctl enable minio@node1
+sudo systemctl start minio@demo
+sudo systemctl enable minio@demo
 
 echo "Starting rqlite database..."
-sudo systemctl start rqlite@node1
-sudo systemctl enable rqlite@node1
+sudo systemctl start rqlite@demo
+sudo systemctl enable rqlite@demo
 
 echo "Starting Arkfile application..."
 sudo systemctl start arkfile
@@ -67,8 +148,8 @@ sleep 5
 echo -e "${YELLOW}Step 4: Verifying system health...${NC}"
 
 # Check service status
-minio_status=$(sudo systemctl is-active minio@node1 || echo "failed")
-rqlite_status=$(sudo systemctl is-active rqlite@node1 || echo "failed")
+minio_status=$(sudo systemctl is-active minio@demo || echo "failed")
+rqlite_status=$(sudo systemctl is-active rqlite@demo || echo "failed")
 arkfile_status=$(sudo systemctl is-active arkfile || echo "failed")
 
 echo "Service Status:"
@@ -138,8 +219,8 @@ else
     echo "1. Check logs: sudo journalctl -u arkfile --no-pager"
     echo "2. Check service status: sudo systemctl status arkfile"
     echo "3. Verify dependencies are running:"
-    echo "   - MinIO: sudo systemctl status minio@node1"
-    echo "   - rqlite: sudo systemctl status rqlite@node1"
+    echo "   - MinIO: sudo systemctl status minio@demo"
+    echo "   - rqlite: sudo systemctl status rqlite@demo"
     echo
     echo "Configuration check:"
     echo "4. Verify config file: cat /opt/arkfile/releases/current/.env"

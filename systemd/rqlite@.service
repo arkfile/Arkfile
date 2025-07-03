@@ -8,16 +8,13 @@ PartOf=rqlite.target
 Type=simple
 User=arkfile
 Group=arkfile
-EnvironmentFile=/opt/arkfile/etc/%i/secrets.env
-WorkingDirectory=/opt/arkfile/var/lib/%i
+EnvironmentFile=/opt/arkfile/etc/secrets.env
+WorkingDirectory=/opt/arkfile/var/lib/database
 ExecStart=/usr/local/bin/rqlited \
-    -auth username=${RQLITE_USERNAME}:${RQLITE_PASSWORD} \
-    -node-id %i \
-    -http-addr ${RQLITE_NODES} \
-    -raft-addr localhost:4002 \
-    -raft-snap-threshold 50 \
-    -raft-snap-interval 60s \
-    -raft-timeout 10s \
+    -http-addr :4001 \
+    -raft-addr :4002 \
+    -node-id demo \
+    -auth /opt/arkfile/etc/rqlite-auth.json \
     data
 Restart=on-failure
 RestartSec=5

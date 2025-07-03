@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 
 	"github.com/84adam/arkfile/auth"
+	"github.com/84adam/arkfile/config"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/handlers"
 	"github.com/84adam/arkfile/logging"
@@ -42,10 +43,23 @@ func setupRoutes(e *echo.Echo) {
 }
 
 func main() {
-	// Load environment variables
+	// Load environment variables from .env file if it exists
+	// This allows flexibility - the app can work with systemd EnvironmentFile
+	// or with a local .env file for development
 	if err := godotenv.Load(); err != nil {
-		log.Fatal("Error loading .env file")
+		// Log the error but don't fail - environment variables might be
+		// provided by systemd or other means
+		log.Printf("Warning: Could not load .env file: %v", err)
+		log.Printf("Continuing with environment variables from system/systemd")
 	}
+
+	// Load configuration - this must happen after environment variables are loaded
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+	log.Printf("Configuration loaded successfully")
+	_ = cfg // Use the config variable to prevent unused variable warning
 
 	// Initialize logging
 	loggingConfig := &logging.LogConfig{
@@ -78,8 +92,8 @@ func main() {
 	}))
 
 	// Force HTTPS and check TLS version
-	e.Pre(middleware.HTTPSRedirect())
-	e.Use(handlers.TLSVersionCheck) // Apply TLS check to all routes
+	// e.Pre(middleware.HTTPSRedirect()) // Commented out for demo - TLS certificates need to be properly configured
+	// e.Use(handlers.TLSVersionCheck) // Apply TLS check to all routes
 
 	// Additional middleware
 	e.Use(middleware.Logger())

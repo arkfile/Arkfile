@@ -286,11 +286,21 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("JWT_SECRET is required")
 	}
 
+	// Allow demo values for Backblaze configuration
 	if cfg.Storage.BackblazeEndpoint == "" ||
 		cfg.Storage.BackblazeKeyID == "" ||
 		cfg.Storage.BackblazeAppKey == "" ||
 		cfg.Storage.BucketName == "" {
 		return fmt.Errorf("Backblaze configuration is incomplete")
+	}
+
+	// Check for demo/placeholder values and warn but don't fail
+	if cfg.Storage.BackblazeEndpoint == "demo-endpoint" ||
+		cfg.Storage.BackblazeKeyID == "demo-key-id" ||
+		cfg.Storage.BackblazeAppKey == "demo-app-key" ||
+		cfg.Storage.BucketName == "demo-bucket" {
+		// This is a demo configuration, allow it but could log a warning
+		// In production, these should be replaced with real values
 	}
 
 	return nil

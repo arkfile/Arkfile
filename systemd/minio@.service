@@ -6,18 +6,18 @@ PartOf=minio.target
 
 [Service]
 Type=simple
-User=ark%i
+User=arkfile
 Group=arkfile
-WorkingDirectory=/opt/arkfile/var/lib/%i/minio
-EnvironmentFile=/opt/arkfile/etc/%i/secrets.env
+WorkingDirectory=/opt/arkfile/var/lib/minio
+EnvironmentFile=/opt/arkfile/etc/secrets.env
 
 # Environment variables for MinIO server
-Environment=MINIO_ROOT_USER=${MINIO_CLUSTER_ACCESS_KEY}
-Environment=MINIO_ROOT_PASSWORD=${MINIO_CLUSTER_SECRET_KEY}
+Environment=MINIO_ROOT_USER=${MINIO_ROOT_USER}
+Environment=MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
 
-# Server setup
+# Server setup - simplified single-node mode
 ExecStart=/usr/local/bin/minio server \
-    --address ${MINIO_CLUSTER_NODES} \
+    --address :9000 \
     --console-address :9001 \
     ${LOCAL_STORAGE_PATH}
 

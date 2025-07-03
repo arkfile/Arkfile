@@ -15,6 +15,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/google/uuid v1.6.0
 	github.com/labstack/echo-jwt/v4 v4.3.0
+	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/rqlite/gorqlite v0.0.0-20250128004930-114c7828b55a
 	github.com/stretchr/testify v1.10.0
 )

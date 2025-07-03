@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/84adam/arkfile/database"
+	_ "github.com/mattn/go-sqlite3" // SQLite driver for tests
 )
 
 func setupTestDB(t *testing.T) *sql.DB {

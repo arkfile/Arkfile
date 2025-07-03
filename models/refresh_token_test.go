@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3" // SQLite driver for tests
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

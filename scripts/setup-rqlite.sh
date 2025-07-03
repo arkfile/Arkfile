@@ -50,6 +50,31 @@ echo "This will download and install rqlite binaries for distributed database cl
 echo "Suitable for both development and production deployments."
 echo
 
+# Check if rqlite is already installed
+if command -v rqlited &> /dev/null && command -v rqlite &> /dev/null && [ "$FORCE_DOWNLOAD" != true ]; then
+    INSTALLED_VERSION=$(rqlited -version 2>/dev/null | head -n1 | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' || echo "unknown")
+    echo -e "${GREEN}✅ rqlite binaries already installed${NC}"
+    echo "Installed version: ${INSTALLED_VERSION}"
+    echo "Skipping download and installation..."
+    
+    # Still need to install systemd service files
+    echo -e "${BLUE}⚙️  Installing systemd service files...${NC}"
+    sudo cp "${BASE_DIR}/releases/current/systemd/rqlite@.service" /etc/systemd/system/
+    sudo cp "${BASE_DIR}/releases/current/systemd/rqlite.target" /etc/systemd/system/
+    
+    # Create simplified data directory for single-node deployment
+    echo "Setting up database directory..."
+    sudo install -d -m 750 -o arkfile -g arkfile "${BASE_DIR}/var/lib/database"
+    
+    # Reload systemd
+    echo "Reloading systemd..."
+    sudo systemctl daemon-reload
+    
+    echo -e "${GREEN}🎉 rqlite cluster database setup complete!${NC}"
+    echo -e "${BLUE}Binaries were already installed, systemd services configured.${NC}"
+    exit 0
+fi
+
 # Security verification setup
 RQLITE_DOWNLOAD_URL="https://github.com/rqlite/rqlite/releases/download/v${VERSION}/rqlite-v${VERSION}-linux-amd64.tar.gz"
 RQLITE_SHA256_URL="https://github.com/rqlite/rqlite/releases/download/v${VERSION}/rqlite-v${VERSION}-linux-amd64.tar.gz.sha256"
@@ -205,6 +230,10 @@ fi
 echo -e "${BLUE}⚙️  Installing systemd service files...${NC}"
 sudo cp "${BASE_DIR}/releases/current/systemd/rqlite@.service" /etc/systemd/system/
 sudo cp "${BASE_DIR}/releases/current/systemd/rqlite.target" /etc/systemd/system/
+
+# Create simplified data directory for single-node deployment
+echo "Setting up database directory..."
+sudo install -d -m 750 -o arkfile -g arkfile "${BASE_DIR}/var/lib/database"
 
 # Reload systemd
 echo "Reloading systemd..."

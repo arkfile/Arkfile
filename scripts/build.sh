@@ -90,6 +90,12 @@ sudo cp "${RELEASE_DIR}/${APP_NAME}" "${BASE_DIR}/bin/"
 sudo chown arkadmin:arkfile "${BASE_DIR}/bin/${APP_NAME}"
 sudo chmod 755 "${BASE_DIR}/bin/${APP_NAME}"
 
+# Copy client files to working directory for runtime access
+echo "Copying client files to working directory..."
+sudo mkdir -p "${BASE_DIR}/client"
+sudo cp -r client/* "${BASE_DIR}/client/"
+sudo chown -R arkfile:arkfile "${BASE_DIR}/client"
+
 # Clean up temporary build directory
 rm -rf ${BUILD_DIR}
 

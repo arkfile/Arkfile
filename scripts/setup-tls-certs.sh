@@ -14,7 +14,7 @@ USER="arkfile"
 GROUP="arkfile"
 DOMAIN="${ARKFILE_DOMAIN:-localhost}"
 VALIDITY_DAYS=365
-PREFERRED_ALGORITHM="${ARKFILE_TLS_ALGORITHM:-ecdsa}"  # ecdsa or rsa
+PREFERRED_ALGORITHM="${ARKFILE_TLS_ALGORITHM:-ecdsa}"
 
 echo -e "${GREEN}Setting up TLS certificates with modern cryptography...${NC}"
 
@@ -91,11 +91,11 @@ generate_private_key() {
     return 1
 }
 
-# Function to create certificate with proper extensions
+# Function to create certificate with proper extensions and shorter subject fields
 create_certificate() {
     local key_path="$1"
     local cert_path="$2"
-    local subject="$3"
+    local cn="$3"
     local alt_names="$4"
     local ca_cert="${5:-}"
     local ca_key="${6:-}"
@@ -103,24 +103,24 @@ create_certificate() {
     
     echo "Creating certificate for ${description}..."
     
-    # Create temporary config file with proper permissions
-    local config_file=$(mktemp)
-    chmod 644 "${config_file}"
-    cat > "${config_file}" << EOF
+    # Create temporary config file with proper permissions and shorter subject fields
+    local config_file=$(sudo -u ${USER} mktemp --tmpdir=/tmp)
+    sudo -u ${USER} bash -c "cat > '${config_file}'" << EOF
 [req]
 distinguished_name = req_distinguished_name
 req_extensions = v3_req
 prompt = no
 
 [req_distinguished_name]
-${subject}
+CN=${cn}
+O=Arkfile
+C=US
 
 [v3_req]
 basicConstraints = CA:FALSE
 keyUsage = critical, digitalSignature, keyEncipherment, keyAgreement
 extendedKeyUsage = serverAuth, clientAuth
 subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid,issuer:always
 subjectAltName = @alt_names
 
 [alt_names]
@@ -130,27 +130,37 @@ ${alt_names}
 basicConstraints = critical, CA:TRUE, pathlen:0
 keyUsage = critical, keyCertSign, cRLSign, digitalSignature
 subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always,issuer:always
 EOF
 
     if [ -n "${ca_cert}" ] && [ -n "${ca_key}" ]; then
         # Create signed certificate
-        local csr_file=$(mktemp)
-        chmod 644 "${csr_file}"
-        sudo -u ${USER} openssl req -new -key "${key_path}" -out "${csr_file}" -config "${config_file}"
+        local csr_file=$(sudo -u ${USER} mktemp)
+        sudo chmod 644 "${csr_file}"
+        
+        # Generate CSR
+        sudo -u ${USER} openssl req -new -key "${key_path}" -out "${csr_file}" -config "${config_file}" -extensions v3_req
+        if [ $? -ne 0 ]; then
+            echo -e "  ${RED}✗ Failed to create certificate request${NC}"
+            rm -f "${config_file}" "${csr_file}"
+            return 1
+        fi
+        
+        # Sign the certificate
         sudo -u ${USER} openssl x509 -req -in "${csr_file}" -CA "${ca_cert}" -CAkey "${ca_key}" \
             -CAcreateserial -out "${cert_path}" -days ${VALIDITY_DAYS} -sha384 \
             -extensions v3_req -extfile "${config_file}"
+        local sign_result=$?
         rm -f "${csr_file}"
     else
         # Create self-signed certificate (for CA)
         sudo -u ${USER} openssl req -new -x509 -key "${key_path}" -out "${cert_path}" \
             -days ${VALIDITY_DAYS} -sha384 -config "${config_file}" -extensions v3_ca
+        local sign_result=$?
     fi
     
     rm -f "${config_file}"
     
-    if [ $? -eq 0 ]; then
+    if [ $sign_result -eq 0 ]; then
         echo -e "  ${GREEN}✓ Certificate created successfully${NC}"
         return 0
     else
@@ -209,21 +219,6 @@ if [ -f "${TLS_DIR}/ca/ca-cert.pem" ]; then
     echo -e "${YELLOW}TLS certificates already exist. Skipping generation.${NC}"
     echo "To regenerate certificates, remove existing files first:"
     echo "  sudo rm -rf ${TLS_DIR}/ca/* ${TLS_DIR}/*/server-* ${TLS_DIR}/*/client-*"
-    echo ""
-    echo "Current certificates:"
-    for service in ca arkfile rqlite minio; do
-        if [ -d "${TLS_DIR}/${service}" ]; then
-            cert_file=""
-            case "${service}" in
-                ca) cert_file="${TLS_DIR}/ca/ca-cert.pem" ;;
-                *) cert_file="${TLS_DIR}/${service}/server-cert.pem" ;;
-            esac
-            if [ -f "${cert_file}" ]; then
-                expires=$(sudo -u ${USER} openssl x509 -in "${cert_file}" -noout -enddate 2>/dev/null | cut -d= -f2 || echo "unknown")
-                echo "  ${service}: expires ${expires}"
-            fi
-        fi
-    done
     exit 0
 fi
 
@@ -242,12 +237,12 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Create CA certificate
-ca_subject="CN=Arkfile Internal CA/O=Arkfile/OU=Certificate Authority/L=Internal/C=US"
-ca_alt_names="DNS.1=ca.internal.arkfile/DNS.2=ca.${DOMAIN}"
+# Create CA certificate with shorter subject
+ca_cn="Arkfile-CA"
+ca_alt_names="DNS.1=ca.internal.arkfile,DNS.2=ca.${DOMAIN}"
 
 if create_certificate "${TLS_DIR}/ca/ca-key.pem" "${TLS_DIR}/ca/ca-cert.pem" \
-    "${ca_subject}" "${ca_alt_names}" "" "" "Certificate Authority"; then
+    "${ca_cn}" "${ca_alt_names}" "" "" "Certificate Authority"; then
     echo -e "${GREEN}✓ Certificate Authority created successfully${NC}"
 else
     echo -e "${RED}✗ Failed to create Certificate Authority${NC}"
@@ -263,11 +258,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-arkfile_subject="CN=arkfile.${DOMAIN}/O=Arkfile/OU=Application Server/L=Internal/C=US"
-arkfile_alt_names="DNS.1=arkfile.${DOMAIN}/DNS.2=${DOMAIN}/DNS.3=localhost/DNS.4=arkfile.internal/IP.1=127.0.0.1/IP.2=::1"
+arkfile_cn="arkfile.${DOMAIN}"
+arkfile_alt_names="DNS.1=arkfile.${DOMAIN},DNS.2=${DOMAIN},DNS.3=localhost,DNS.4=arkfile.internal,IP.1=127.0.0.1,IP.2=::1"
 
 if create_certificate "${TLS_DIR}/arkfile/server-key.pem" "${TLS_DIR}/arkfile/server-cert.pem" \
-    "${arkfile_subject}" "${arkfile_alt_names}" "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "Arkfile Application"; then
+    "${arkfile_cn}" "${arkfile_alt_names}" "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "Arkfile Application"; then
     echo -e "${GREEN}✓ Arkfile certificate created successfully${NC}"
 else
     echo -e "${RED}✗ Failed to create Arkfile certificate${NC}"
@@ -283,11 +278,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-rqlite_subject="CN=rqlite.${DOMAIN}/O=Arkfile/OU=Database Server/L=Internal/C=US"
-rqlite_alt_names="DNS.1=rqlite.${DOMAIN}/DNS.2=rqlite.internal/DNS.3=localhost/IP.1=127.0.0.1/IP.2=::1"
+rqlite_cn="rqlite.${DOMAIN}"
+rqlite_alt_names="DNS.1=rqlite.${DOMAIN},DNS.2=rqlite.internal,DNS.3=localhost,IP.1=127.0.0.1,IP.2=::1"
 
 if create_certificate "${TLS_DIR}/rqlite/server-key.pem" "${TLS_DIR}/rqlite/server-cert.pem" \
-    "${rqlite_subject}" "${rqlite_alt_names}" "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "rqlite Database"; then
+    "${rqlite_cn}" "${rqlite_alt_names}" "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "rqlite Database"; then
     echo -e "${GREEN}✓ rqlite certificate created successfully${NC}"
 else
     echo -e "${RED}✗ Failed to create rqlite certificate${NC}"
@@ -303,11 +298,11 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-minio_subject="CN=minio.${DOMAIN}/O=Arkfile/OU=Storage Server/L=Internal/C=US"
-minio_alt_names="DNS.1=minio.${DOMAIN}/DNS.2=minio.internal/DNS.3=localhost/IP.1=127.0.0.1/IP.2=::1"
+minio_cn="minio.${DOMAIN}"
+minio_alt_names="DNS.1=minio.${DOMAIN},DNS.2=minio.internal,DNS.3=localhost,IP.1=127.0.0.1,IP.2=::1"
 
 if create_certificate "${TLS_DIR}/minio/server-key.pem" "${TLS_DIR}/minio/server-cert.pem" \
-    "${minio_subject}" "${minio_alt_names}" "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "MinIO Storage"; then
+    "${minio_cn}" "${minio_alt_names}" "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "MinIO Storage"; then
     echo -e "${GREEN}✓ MinIO certificate created successfully${NC}"
 else
     echo -e "${RED}✗ Failed to create MinIO certificate${NC}"
@@ -351,55 +346,6 @@ done
 
 echo -e "  ${GREEN}✓ File permissions set securely${NC}"
 
-# Create certificate metadata
-echo ""
-echo -e "${BLUE}=== Creating Certificate Metadata ===${NC}"
-sudo -u ${USER} bash -c "cat > '${TLS_DIR}/metadata.json' << EOF
-{
-  \"generated\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
-  \"domain\": \"${DOMAIN}\",
-  \"validity_days\": ${VALIDITY_DAYS},
-  \"openssl_version\": \"$(detect_openssl_version)\",
-  \"preferred_algorithm\": \"${PREFERRED_ALGORITHM}\",
-  \"certificates\": {
-    \"ca\": {
-      \"subject\": \"CN=Arkfile Internal CA,O=Arkfile,OU=Certificate Authority,L=Internal,C=US\",
-      \"algorithm\": \"${ca_algorithm}\",
-      \"key_file\": \"ca/ca-key.pem\",
-      \"cert_file\": \"ca/ca-cert.pem\",
-      \"expires\": \"$(sudo -u ${USER} openssl x509 -in '${TLS_DIR}/ca/ca-cert.pem' -noout -enddate | cut -d= -f2)\"
-    },
-    \"arkfile\": {
-      \"subject\": \"CN=arkfile.${DOMAIN},O=Arkfile,OU=Application Server,L=Internal,C=US\",
-      \"algorithm\": \"${arkfile_algorithm}\",
-      \"key_file\": \"arkfile/server-key.pem\",
-      \"cert_file\": \"arkfile/server-cert.pem\",
-      \"bundle_file\": \"arkfile/server-bundle.pem\",
-      \"expires\": \"$(sudo -u ${USER} openssl x509 -in '${TLS_DIR}/arkfile/server-cert.pem' -noout -enddate | cut -d= -f2)\"
-    },
-    \"rqlite\": {
-      \"subject\": \"CN=rqlite.${DOMAIN},O=Arkfile,OU=Database Server,L=Internal,C=US\",
-      \"algorithm\": \"${rqlite_algorithm}\",
-      \"key_file\": \"rqlite/server-key.pem\",
-      \"cert_file\": \"rqlite/server-cert.pem\",
-      \"bundle_file\": \"rqlite/server-bundle.pem\",
-      \"expires\": \"$(sudo -u ${USER} openssl x509 -in '${TLS_DIR}/rqlite/server-cert.pem' -noout -enddate | cut -d= -f2)\"
-    },
-    \"minio\": {
-      \"subject\": \"CN=minio.${DOMAIN},O=Arkfile,OU=Storage Server,L=Internal,C=US\",
-      \"algorithm\": \"${minio_algorithm}\",
-      \"key_file\": \"minio/server-key.pem\",
-      \"cert_file\": \"minio/server-cert.pem\",
-      \"bundle_file\": \"minio/server-bundle.pem\",
-      \"expires\": \"$(sudo -u ${USER} openssl x509 -in '${TLS_DIR}/minio/server-cert.pem' -noout -enddate | cut -d= -f2)\"
-    }
-  }
-}
-EOF"
-
-sudo chmod 644 ${TLS_DIR}/metadata.json
-echo -e "  ${GREEN}✓ Certificate metadata created${NC}"
-
 # Validate all certificates
 echo ""
 echo -e "${BLUE}=== Validating Certificates ===${NC}"
@@ -416,6 +362,84 @@ if [ $? -ne 0 ]; then all_valid=false; fi
 
 validate_certificate "${TLS_DIR}/minio/server-cert.pem" "${TLS_DIR}/minio/server-key.pem" "MinIO Storage"
 if [ $? -ne 0 ]; then all_valid=false; fi
+
+# Create certificate metadata AFTER all certificates are generated
+echo ""
+echo -e "${BLUE}=== Creating Certificate Metadata ===${NC}"
+
+# Extract certificate expiration dates safely
+ca_expires=""
+arkfile_expires=""
+rqlite_expires=""
+minio_expires=""
+
+if [ -f "${TLS_DIR}/ca/ca-cert.pem" ]; then
+    ca_expires=$(sudo -u ${USER} openssl x509 -in "${TLS_DIR}/ca/ca-cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2 || echo "Unknown")
+fi
+
+if [ -f "${TLS_DIR}/arkfile/server-cert.pem" ]; then
+    arkfile_expires=$(sudo -u ${USER} openssl x509 -in "${TLS_DIR}/arkfile/server-cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2 || echo "Unknown")
+fi
+
+if [ -f "${TLS_DIR}/rqlite/server-cert.pem" ]; then
+    rqlite_expires=$(sudo -u ${USER} openssl x509 -in "${TLS_DIR}/rqlite/server-cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2 || echo "Unknown")
+fi
+
+if [ -f "${TLS_DIR}/minio/server-cert.pem" ]; then
+    minio_expires=$(sudo -u ${USER} openssl x509 -in "${TLS_DIR}/minio/server-cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2 || echo "Unknown")
+fi
+
+# Create metadata.json with proper variable expansion
+sudo -u ${USER} cat > "${TLS_DIR}/metadata.json" << EOF
+{
+  "generated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "domain": "${DOMAIN}",
+  "validity_days": ${VALIDITY_DAYS},
+  "openssl_version": "$(detect_openssl_version)",
+  "preferred_algorithm": "${PREFERRED_ALGORITHM}",
+  "certificates": {
+    "ca": {
+      "subject": "CN=Arkfile-CA,O=Arkfile,C=US",
+      "algorithm": "${ca_algorithm}",
+      "key_file": "ca/ca-key.pem",
+      "cert_file": "ca/ca-cert.pem",
+      "expires": "${ca_expires}"
+    },
+    "arkfile": {
+      "subject": "CN=${arkfile_cn},O=Arkfile,C=US",
+      "algorithm": "${arkfile_algorithm}",
+      "key_file": "arkfile/server-key.pem",
+      "cert_file": "arkfile/server-cert.pem",
+      "bundle_file": "arkfile/server-bundle.pem",
+      "expires": "${arkfile_expires}"
+    },
+    "rqlite": {
+      "subject": "CN=${rqlite_cn},O=Arkfile,C=US",
+      "algorithm": "${rqlite_algorithm}",
+      "key_file": "rqlite/server-key.pem",
+      "cert_file": "rqlite/server-cert.pem",
+      "bundle_file": "rqlite/server-bundle.pem",
+      "expires": "${rqlite_expires}"
+    },
+    "minio": {
+      "subject": "CN=${minio_cn},O=Arkfile,C=US",
+      "algorithm": "${minio_algorithm}",
+      "key_file": "minio/server-key.pem",
+      "cert_file": "minio/server-cert.pem",
+      "bundle_file": "minio/server-bundle.pem",
+      "expires": "${minio_expires}"
+    }
+  }
+}
+EOF
+
+# Validate metadata creation
+if [ -f "${TLS_DIR}/metadata.json" ] && [ -s "${TLS_DIR}/metadata.json" ]; then
+    sudo chmod 644 "${TLS_DIR}/metadata.json"
+    echo -e "  ${GREEN}✓ Certificate metadata created successfully${NC}"
+else
+    echo -e "  ${YELLOW}⚠ Certificate metadata creation failed, continuing without metadata${NC}"
+fi
 
 # Final summary
 echo ""
@@ -467,7 +491,9 @@ echo ""
 echo -e "${YELLOW}⏰ Certificate Lifecycle:${NC}"
 echo "========================================"
 echo "• Validity: ${VALIDITY_DAYS} days"
-echo "• Renewal needed before: $(date -d '+$((VALIDITY_DAYS-30)) days' '+%Y-%m-%d')"
+renewal_days=$((VALIDITY_DAYS - 30))
+renewal_date=$(date -d "+${renewal_days} days" '+%Y-%m-%d' 2>/dev/null || echo "N/A")
+echo "• Renewal needed before: ${renewal_date}"
 echo "• Use ./scripts/renew-certificates.sh for renewal"
 echo "• Monitor expiration with ./scripts/validate-certificates.sh"
 echo ""

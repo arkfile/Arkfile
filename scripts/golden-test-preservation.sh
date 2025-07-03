@@ -59,7 +59,7 @@ EOF
         "formats": ["0x04", "0x05"]
     },
     "test_data": {
-        "passwords": ["TestPassword123!", "AnotherSecurePass456@"],
+        "passwords": ["TestPassword123_Secure", "AnotherSecurePass456_Safe"],
         "device_profiles": ["minimal", "interactive", "balanced", "maximum"],
         "file_sizes": ["small", "medium", "large"]
     },

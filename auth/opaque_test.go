@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/84adam/arkfile/crypto"
+	_ "github.com/mattn/go-sqlite3" // SQLite driver for tests
 )
 
 // Define device capabilities locally to avoid import cycles
