@@ -78,11 +78,6 @@ sudo tee /opt/arkfile/etc/secrets.env > /dev/null << 'EOF'
 #   ./scripts/rotate-jwt-keys.sh
 #   ./scripts/setup-tls-certs.sh --production
 
-# MinIO Object Storage Configuration
-MINIO_ROOT_USER=arkfile-demo
-MINIO_ROOT_PASSWORD=TestPassword123_SecureMinIO
-LOCAL_STORAGE_PATH=/opt/arkfile/var/lib/minio/data
-
 # Database Configuration
 DATABASE_TYPE=rqlite
 RQLITE_ADDRESS=http://localhost:4001
@@ -91,10 +86,12 @@ RQLITE_PASSWORD=TestPassword123_Secure
 
 # Arkfile Application Configuration
 JWT_SECRET=demo-jwt-secret-change-for-production-use
-BACKBLAZE_ENDPOINT=demo-endpoint
-BACKBLAZE_KEY_ID=demo-key-id
-BACKBLAZE_APPLICATION_KEY=demo-app-key
-BACKBLAZE_BUCKET_NAME=demo-bucket
+
+# Storage Configuration (Local MinIO for demo)
+STORAGE_PROVIDER=local
+MINIO_ROOT_USER=arkfile-demo
+MINIO_ROOT_PASSWORD=TestPassword123_SecureMinIO
+LOCAL_STORAGE_PATH=/opt/arkfile/var/lib/minio/data
 
 # Admin Configuration (comma-separated list)
 ADMIN_EMAILS=admin@arkfile.demo

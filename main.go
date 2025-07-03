@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
@@ -122,20 +123,58 @@ func main() {
 	// Common routes setup
 	setupRoutes(e)
 
-	// Start server
-	port := os.Getenv("PROD_PORT")
-	testDomain := os.Getenv("TEST_DOMAIN")
-	host := os.Getenv("HOST")
+	// Start server with TLS support
+	port := cfg.Server.Port
+	tlsPort := cfg.Server.TLSPort
+	tlsEnabled := cfg.Server.TLSEnabled
 
-	if host == testDomain {
-		port = os.Getenv("TEST_PORT")
+	// Override with legacy environment variables if present
+	if prodPort := os.Getenv("PROD_PORT"); prodPort != "" {
+		port = prodPort
+	}
+	if testPort := os.Getenv("TEST_PORT"); testPort != "" {
+		testDomain := os.Getenv("TEST_DOMAIN")
+		host := os.Getenv("HOST")
+		if host == testDomain {
+			port = testPort
+		}
 	}
 
 	if port == "" {
 		port = "8080" // Default fallback
 	}
 
+	if tlsEnabled {
+		// Get TLS certificate paths
+		certFile := os.Getenv("TLS_CERT_FILE")
+		keyFile := os.Getenv("TLS_KEY_FILE")
+
+		if certFile == "" || keyFile == "" {
+			log.Printf("TLS enabled but certificate files not specified, falling back to HTTP only")
+			tlsEnabled = false
+		}
+
+		if tlsEnabled {
+			if tlsPort == "" {
+				tlsPort = "4443" // Default HTTPS port for demo
+			}
+
+			// Start HTTPS server in goroutine
+			go func() {
+				log.Printf("Starting HTTPS server on port %s", tlsPort)
+				if err := e.StartTLS(":"+tlsPort, certFile, keyFile); err != nil {
+					logging.ErrorLogger.Printf("Failed to start HTTPS server: %v", err)
+				}
+			}()
+
+			// Add a small delay to let HTTPS server start
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	// Start HTTP server
+	log.Printf("Starting HTTP server on port %s", port)
 	if err := e.Start(":" + port); err != nil {
-		logging.ErrorLogger.Printf("Failed to start server: %v", err)
+		logging.ErrorLogger.Printf("Failed to start HTTP server: %v", err)
 	}
 }

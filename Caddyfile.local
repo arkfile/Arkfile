@@ -1,0 +1,102 @@
+# Local Development Caddyfile for Arkfile
+# This is a simplified configuration for local development and testing
+
+# Local development site
+localhost:8443 {
+	# Use local TLS certificates
+	tls /opt/arkfile/etc/keys/tls/arkfile/server-cert.pem /opt/arkfile/etc/keys/tls/arkfile/server-key.pem
+	
+	# Basic security headers
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Frame-Options "SAMEORIGIN"
+		X-XSS-Protection "1; mode=block"
+		X-Content-Type-Options "nosniff"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline';"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+	
+	# Reverse proxy to local arkfile service
+	reverse_proxy localhost:4443 {
+		# Skip TLS verification for local development
+		transport http {
+			tls
+			tls_insecure_skip_verify
+		}
+		
+		# Health check
+		health_uri /health
+		health_interval 30s
+		health_timeout 10s
+		health_status 200
+	}
+	
+	# Custom error pages
+	handle_errors {
+		@maintenance expression `{http.error.status_code} == 503`
+		handle @maintenance {
+			respond "Service temporarily unavailable" 503
+		}
+		
+		@not_found expression `{http.error.status_code} == 404`
+		handle @not_found {
+			respond "Not found" 404
+		}
+	}
+	
+	# Enable gzip compression
+	encode gzip
+	
+	# Logging for development
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}
+
+# HTTP to HTTPS redirect for local development
+localhost:8080 {
+	redir https://localhost:8443{uri} permanent
+}
+
+# Alternative localhost names
+127.0.0.1:8443 {
+	# Use local TLS certificates
+	tls /opt/arkfile/etc/keys/tls/arkfile/server-cert.pem /opt/arkfile/etc/keys/tls/arkfile/server-key.pem
+	
+	# Basic security headers
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Frame-Options "SAMEORIGIN"
+		X-XSS-Protection "1; mode=block"
+		X-Content-Type-Options "nosniff"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline';"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+	
+	# Reverse proxy to local arkfile service
+	reverse_proxy localhost:4443 {
+		# Skip TLS verification for local development
+		transport http {
+			tls
+			tls_insecure_skip_verify
+		}
+		
+		# Health check
+		health_uri /health
+		health_interval 30s
+		health_timeout 10s
+		health_status 200
+	}
+	
+	# Enable gzip compression
+	encode gzip
+	
+	# Logging for development
+	log {
+		output stdout
+		format console
+		level INFO
+	}
+}

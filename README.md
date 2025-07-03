@@ -25,6 +25,18 @@ This will set up a complete working Arkfile system with:
 - Single-node rqlite database  
 - Web interface at http://localhost:8080
 
+## Storage Providers
+
+Arkfile supports multiple storage backends:
+
+- **Local MinIO** (Default for demo) - Uses MinIO in filesystem mode
+- **Backblaze B2** - Cost-effective cloud storage with global CDN
+- **Wasabi** - High-performance S3-compatible storage
+- **Vultr Object Storage** - Developer-friendly with simple pricing
+- **MinIO Cluster** - Self-hosted distributed storage
+
+Configure your preferred provider by setting `STORAGE_PROVIDER` in your environment configuration. See `.env.example` for provider-specific settings.
+
 **For production deployment**, see the detailed guides below:
 
 - **[Setup Guide](docs/setup.md)**: Complete administrator installation guide

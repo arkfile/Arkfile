@@ -14,21 +14,57 @@ MINIO_DOWNLOAD_URL="https://dl.min.io/server/minio/release/linux-amd64/archive/m
 
 echo -e "${GREEN}Setting up MinIO Server ${MINIO_VERSION}...${NC}"
 
-# Download and install MinIO using secure download script
-echo "Downloading and installing MinIO securely..."
-if [ -x "./scripts/download-minio.sh" ]; then
-    # Use our secure download script
-    ./scripts/download-minio.sh --version "${MINIO_VERSION}"
+# Check if MinIO is already installed
+if command -v minio >/dev/null 2>&1; then
+    INSTALLED_VERSION=$(minio --version 2>/dev/null | head -1 || echo "unknown")
+    echo -e "${GREEN}✅ MinIO is already installed${NC}"
+    echo "Installed version: ${INSTALLED_VERSION}"
+    echo "Location: $(which minio)"
+    
+    # Check if the version matches what we expect
+    if echo "${INSTALLED_VERSION}" | grep -q "${MINIO_VERSION}"; then
+        echo -e "${GREEN}✅ Version matches expected version ${MINIO_VERSION}${NC}"
+        echo "Skipping download and installation"
+    else
+        echo -e "${YELLOW}⚠️  Installed version doesn't match expected version ${MINIO_VERSION}${NC}"
+        echo "Proceeding with download to update..."
+        
+        # Download and install MinIO using secure download script
+        echo "Downloading and installing MinIO securely..."
+        if [ -x "./scripts/download-minio.sh" ]; then
+            # Use our secure download script
+            ./scripts/download-minio.sh --version "${MINIO_VERSION}"
+        else
+            echo -e "${YELLOW}⚠️  Secure download script not found, falling back to direct download${NC}"
+            echo "Downloading MinIO..."
+            curl -L ${MINIO_DOWNLOAD_URL} -o /tmp/minio
+            
+            echo "Installing MinIO..."
+            sudo install -m 755 /tmp/minio /usr/local/bin/minio
+            
+            # Clean up temporary files
+            rm -f /tmp/minio
+        fi
+    fi
 else
-    echo -e "${YELLOW}⚠️  Secure download script not found, falling back to direct download${NC}"
-    echo "Downloading MinIO..."
-    curl -L ${MINIO_DOWNLOAD_URL} -o /tmp/minio
+    echo "MinIO not found, downloading and installing..."
     
-    echo "Installing MinIO..."
-    sudo install -m 755 /tmp/minio /usr/local/bin/minio
-    
-    # Clean up temporary files
-    rm -f /tmp/minio
+    # Download and install MinIO using secure download script
+    echo "Downloading and installing MinIO securely..."
+    if [ -x "./scripts/download-minio.sh" ]; then
+        # Use our secure download script
+        ./scripts/download-minio.sh --version "${MINIO_VERSION}"
+    else
+        echo -e "${YELLOW}⚠️  Secure download script not found, falling back to direct download${NC}"
+        echo "Downloading MinIO..."
+        curl -L ${MINIO_DOWNLOAD_URL} -o /tmp/minio
+        
+        echo "Installing MinIO..."
+        sudo install -m 755 /tmp/minio /usr/local/bin/minio
+        
+        # Clean up temporary files
+        rm -f /tmp/minio
+    fi
 fi
 
 # Copy systemd service files

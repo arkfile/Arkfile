@@ -339,15 +339,16 @@ func (s *StorageHealthCheck) Check() HealthCheck {
 
 	// Check storage configuration
 	storage := s.config.Storage
-	if storage.BackblazeEndpoint == "" || storage.BackblazeKeyID == "" {
+	if storage.Endpoint == "" || storage.AccessKeyID == "" || storage.SecretAccessKey == "" {
 		check.Status = StatusDegraded
 		check.Message = "Storage backend not fully configured"
 		check.Details["configuration"] = "incomplete"
 	} else {
 		check.Status = StatusHealthy
-		check.Message = "Storage backend configured"
+		check.Message = fmt.Sprintf("Storage backend configured (%s)", storage.Provider)
 		check.Details["configuration"] = "complete"
-		check.Details["endpoint"] = storage.BackblazeEndpoint
+		check.Details["provider"] = storage.Provider
+		check.Details["endpoint"] = storage.Endpoint
 		check.Details["bucket"] = storage.BucketName
 	}
 

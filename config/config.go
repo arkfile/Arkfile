@@ -18,10 +18,12 @@ var (
 
 type Config struct {
 	Server struct {
-		Port     string `json:"port"`
-		Host     string `json:"host"`
-		BaseURL  string `json:"base_url"`
-		LogLevel string `json:"log_level"`
+		Port       string `json:"port"`
+		TLSPort    string `json:"tls_port"`
+		Host       string `json:"host"`
+		BaseURL    string `json:"base_url"`
+		LogLevel   string `json:"log_level"`
+		TLSEnabled bool   `json:"tls_enabled"`
 	} `json:"server"`
 
 	Database struct {
@@ -29,10 +31,14 @@ type Config struct {
 	} `json:"database"`
 
 	Storage struct {
-		BackblazeEndpoint string `json:"backblaze_endpoint"`
-		BackblazeKeyID    string `json:"backblaze_key_id"`
-		BackblazeAppKey   string `json:"backblaze_app_key"`
-		BucketName        string `json:"bucket_name"`
+		Provider        string `json:"provider"` // "local", "backblaze", "wasabi", "vultr", "cluster"
+		Endpoint        string `json:"endpoint"`
+		AccessKeyID     string `json:"access_key_id"`
+		SecretAccessKey string `json:"secret_access_key"`
+		BucketName      string `json:"bucket_name"`
+		Region          string `json:"region"`
+		UseSSL          bool   `json:"use_ssl"`
+		LocalPath       string `json:"local_path"` // For local provider
 	} `json:"storage"`
 
 	Security struct {
@@ -176,18 +182,78 @@ func loadEnvConfig(cfg *Config) error {
 	if port := os.Getenv("PORT"); port != "" {
 		cfg.Server.Port = port
 	}
+	if tlsPort := os.Getenv("TLS_PORT"); tlsPort != "" {
+		cfg.Server.TLSPort = tlsPort
+	}
 	if host := os.Getenv("HOST"); host != "" {
 		cfg.Server.Host = host
 	}
 	if baseURL := os.Getenv("BASE_URL"); baseURL != "" {
 		cfg.Server.BaseURL = baseURL
 	}
+	if tlsEnabled := os.Getenv("TLS_ENABLED"); tlsEnabled != "" {
+		if enabled, err := strconv.ParseBool(tlsEnabled); err == nil {
+			cfg.Server.TLSEnabled = enabled
+		}
+	}
 
 	// Storage configuration
-	cfg.Storage.BackblazeEndpoint = os.Getenv("BACKBLAZE_ENDPOINT")
-	cfg.Storage.BackblazeKeyID = os.Getenv("BACKBLAZE_KEY_ID")
-	cfg.Storage.BackblazeAppKey = os.Getenv("BACKBLAZE_APPLICATION_KEY")
-	cfg.Storage.BucketName = os.Getenv("BACKBLAZE_BUCKET_NAME")
+	cfg.Storage.Provider = os.Getenv("STORAGE_PROVIDER")
+	if cfg.Storage.Provider == "" {
+		cfg.Storage.Provider = "local" // Default to local storage
+	}
+
+	// Map environment variables based on provider
+	switch cfg.Storage.Provider {
+	case "local":
+		cfg.Storage.AccessKeyID = os.Getenv("MINIO_ROOT_USER")
+		cfg.Storage.SecretAccessKey = os.Getenv("MINIO_ROOT_PASSWORD")
+		cfg.Storage.LocalPath = os.Getenv("LOCAL_STORAGE_PATH")
+		cfg.Storage.BucketName = "arkfile" // Default bucket name for local
+		cfg.Storage.UseSSL = false
+		cfg.Storage.Endpoint = "localhost:9000"
+	case "backblaze":
+		cfg.Storage.Endpoint = os.Getenv("BACKBLAZE_ENDPOINT")
+		cfg.Storage.AccessKeyID = os.Getenv("BACKBLAZE_KEY_ID")
+		cfg.Storage.SecretAccessKey = os.Getenv("BACKBLAZE_APPLICATION_KEY")
+		cfg.Storage.BucketName = os.Getenv("BACKBLAZE_BUCKET_NAME")
+		cfg.Storage.UseSSL = true
+	case "wasabi":
+		cfg.Storage.Region = os.Getenv("WASABI_REGION")
+		cfg.Storage.AccessKeyID = os.Getenv("WASABI_ACCESS_KEY_ID")
+		cfg.Storage.SecretAccessKey = os.Getenv("WASABI_SECRET_ACCESS_KEY")
+		cfg.Storage.BucketName = os.Getenv("WASABI_BUCKET_NAME")
+		cfg.Storage.UseSSL = true
+	case "vultr":
+		cfg.Storage.Region = os.Getenv("VULTR_REGION")
+		cfg.Storage.AccessKeyID = os.Getenv("VULTR_ACCESS_KEY_ID")
+		cfg.Storage.SecretAccessKey = os.Getenv("VULTR_SECRET_ACCESS_KEY")
+		cfg.Storage.BucketName = os.Getenv("VULTR_BUCKET_NAME")
+		cfg.Storage.UseSSL = true
+	case "cluster":
+		cfg.Storage.Endpoint = os.Getenv("MINIO_CLUSTER_NODES")
+		cfg.Storage.AccessKeyID = os.Getenv("MINIO_CLUSTER_ACCESS_KEY")
+		cfg.Storage.SecretAccessKey = os.Getenv("MINIO_CLUSTER_SECRET_KEY")
+		cfg.Storage.BucketName = os.Getenv("MINIO_CLUSTER_BUCKET")
+		cfg.Storage.UseSSL = true
+	}
+
+	// Generic overrides
+	if endpoint := os.Getenv("STORAGE_ENDPOINT"); endpoint != "" {
+		cfg.Storage.Endpoint = endpoint
+	}
+	if accessKey := os.Getenv("STORAGE_ACCESS_KEY_ID"); accessKey != "" {
+		cfg.Storage.AccessKeyID = accessKey
+	}
+	if secretKey := os.Getenv("STORAGE_SECRET_ACCESS_KEY"); secretKey != "" {
+		cfg.Storage.SecretAccessKey = secretKey
+	}
+	if bucketName := os.Getenv("STORAGE_BUCKET_NAME"); bucketName != "" {
+		cfg.Storage.BucketName = bucketName
+	}
+	if region := os.Getenv("STORAGE_REGION"); region != "" {
+		cfg.Storage.Region = region
+	}
 
 	// Security configuration
 	cfg.Security.JWTSecret = os.Getenv("JWT_SECRET")
@@ -286,21 +352,32 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("JWT_SECRET is required")
 	}
 
-	// Allow demo values for Backblaze configuration
-	if cfg.Storage.BackblazeEndpoint == "" ||
-		cfg.Storage.BackblazeKeyID == "" ||
-		cfg.Storage.BackblazeAppKey == "" ||
-		cfg.Storage.BucketName == "" {
-		return fmt.Errorf("Backblaze configuration is incomplete")
-	}
-
-	// Check for demo/placeholder values and warn but don't fail
-	if cfg.Storage.BackblazeEndpoint == "demo-endpoint" ||
-		cfg.Storage.BackblazeKeyID == "demo-key-id" ||
-		cfg.Storage.BackblazeAppKey == "demo-app-key" ||
-		cfg.Storage.BucketName == "demo-bucket" {
-		// This is a demo configuration, allow it but could log a warning
-		// In production, these should be replaced with real values
+	// Validate storage configuration based on provider
+	switch cfg.Storage.Provider {
+	case "local":
+		if cfg.Storage.AccessKeyID == "" || cfg.Storage.SecretAccessKey == "" {
+			return fmt.Errorf("local storage requires MINIO_ROOT_USER and MINIO_ROOT_PASSWORD")
+		}
+		if cfg.Storage.LocalPath == "" {
+			return fmt.Errorf("local storage requires LOCAL_STORAGE_PATH")
+		}
+	case "backblaze":
+		if cfg.Storage.Endpoint == "" || cfg.Storage.AccessKeyID == "" ||
+			cfg.Storage.SecretAccessKey == "" || cfg.Storage.BucketName == "" {
+			return fmt.Errorf("Backblaze storage requires endpoint, access key, secret key, and bucket name")
+		}
+	case "wasabi", "vultr":
+		if cfg.Storage.AccessKeyID == "" || cfg.Storage.SecretAccessKey == "" ||
+			cfg.Storage.BucketName == "" || cfg.Storage.Region == "" {
+			return fmt.Errorf("%s storage requires access key, secret key, bucket name, and region", cfg.Storage.Provider)
+		}
+	case "cluster":
+		if cfg.Storage.Endpoint == "" || cfg.Storage.AccessKeyID == "" ||
+			cfg.Storage.SecretAccessKey == "" || cfg.Storage.BucketName == "" {
+			return fmt.Errorf("cluster storage requires endpoint, access key, secret key, and bucket name")
+		}
+	default:
+		return fmt.Errorf("unsupported storage provider: %s", cfg.Storage.Provider)
 	}
 
 	return nil

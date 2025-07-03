@@ -231,7 +231,7 @@ echo "OpenSSL version: $(detect_openssl_version)"
 # Create Certificate Authority
 echo ""
 echo -e "${BLUE}=== Creating Certificate Authority ===${NC}"
-ca_algorithm=$(generate_private_key "${TLS_DIR}/ca/ca-key.pem" "Certificate Authority" 4096)
+ca_algorithm=$(generate_private_key "${TLS_DIR}/ca/ca.key" "Certificate Authority" 4096)
 if [ $? -ne 0 ]; then
     echo -e "${RED}Failed to generate CA private key${NC}"
     exit 1
@@ -241,9 +241,14 @@ fi
 ca_cn="Arkfile-CA"
 ca_alt_names="DNS.1=ca.internal.arkfile,DNS.2=ca.${DOMAIN}"
 
-if create_certificate "${TLS_DIR}/ca/ca-key.pem" "${TLS_DIR}/ca/ca-cert.pem" \
+if create_certificate "${TLS_DIR}/ca/ca.key" "${TLS_DIR}/ca/ca.crt" \
     "${ca_cn}" "${ca_alt_names}" "" "" "Certificate Authority"; then
     echo -e "${GREEN}✓ Certificate Authority created successfully${NC}"
+    
+    # Create legacy filename copies for backward compatibility
+    sudo -u ${USER} cp "${TLS_DIR}/ca/ca.crt" "${TLS_DIR}/ca/ca-cert.pem"
+    sudo -u ${USER} cp "${TLS_DIR}/ca/ca.key" "${TLS_DIR}/ca/ca-key.pem"
+    echo -e "${GREEN}✓ Legacy CA filenames created for compatibility${NC}"
 else
     echo -e "${RED}✗ Failed to create Certificate Authority${NC}"
     exit 1
@@ -282,8 +287,13 @@ rqlite_cn="rqlite.${DOMAIN}"
 rqlite_alt_names="DNS.1=rqlite.${DOMAIN},DNS.2=rqlite.internal,DNS.3=localhost,IP.1=127.0.0.1,IP.2=::1"
 
 if create_certificate "${TLS_DIR}/rqlite/server-key.pem" "${TLS_DIR}/rqlite/server-cert.pem" \
-    "${rqlite_cn}" "${rqlite_alt_names}" "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "rqlite Database"; then
+    "${rqlite_cn}" "${rqlite_alt_names}" "${TLS_DIR}/ca/ca.crt" "${TLS_DIR}/ca/ca.key" "rqlite Database"; then
     echo -e "${GREEN}✓ rqlite certificate created successfully${NC}"
+    
+    # Create health-check compatible filenames
+    sudo -u ${USER} cp "${TLS_DIR}/rqlite/server-cert.pem" "${TLS_DIR}/rqlite/server.crt"
+    sudo -u ${USER} cp "${TLS_DIR}/rqlite/server-key.pem" "${TLS_DIR}/rqlite/server.key"
+    echo -e "${GREEN}✓ Health-check compatible rqlite filenames created${NC}"
 else
     echo -e "${RED}✗ Failed to create rqlite certificate${NC}"
     exit 1
@@ -302,8 +312,13 @@ minio_cn="minio.${DOMAIN}"
 minio_alt_names="DNS.1=minio.${DOMAIN},DNS.2=minio.internal,DNS.3=localhost,IP.1=127.0.0.1,IP.2=::1"
 
 if create_certificate "${TLS_DIR}/minio/server-key.pem" "${TLS_DIR}/minio/server-cert.pem" \
-    "${minio_cn}" "${minio_alt_names}" "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "MinIO Storage"; then
+    "${minio_cn}" "${minio_alt_names}" "${TLS_DIR}/ca/ca.crt" "${TLS_DIR}/ca/ca.key" "MinIO Storage"; then
     echo -e "${GREEN}✓ MinIO certificate created successfully${NC}"
+    
+    # Create health-check compatible filenames
+    sudo -u ${USER} cp "${TLS_DIR}/minio/server-cert.pem" "${TLS_DIR}/minio/server.crt"
+    sudo -u ${USER} cp "${TLS_DIR}/minio/server-key.pem" "${TLS_DIR}/minio/server.key"
+    echo -e "${GREEN}✓ Health-check compatible MinIO filenames created${NC}"
 else
     echo -e "${RED}✗ Failed to create MinIO certificate${NC}"
     exit 1
@@ -331,16 +346,23 @@ echo "Setting secure file permissions..."
 # Set ownership
 sudo chown -R ${USER}:${GROUP} ${TLS_DIR}
 
-# Set permissions for CA files
-sudo chmod 600 ${TLS_DIR}/ca/ca-key.pem
-sudo chmod 644 ${TLS_DIR}/ca/ca-cert.pem
+# Set permissions for CA files (both naming conventions)
+sudo chmod 600 ${TLS_DIR}/ca/ca.key ${TLS_DIR}/ca/ca-key.pem
+sudo chmod 644 ${TLS_DIR}/ca/ca.crt ${TLS_DIR}/ca/ca-cert.pem
 
-# Set permissions for service certificates
+# Set permissions for service certificates (both naming conventions)
 for service in arkfile rqlite minio; do
     if [ -d "${TLS_DIR}/${service}" ]; then
+        # Original .pem files
         sudo chmod 600 ${TLS_DIR}/${service}/server-key.pem
         sudo chmod 644 ${TLS_DIR}/${service}/server-cert.pem
         sudo chmod 644 ${TLS_DIR}/${service}/server-bundle.pem
+        
+        # Health-check compatible files (only for rqlite and minio)
+        if [ "$service" = "rqlite" ] || [ "$service" = "minio" ]; then
+            [ -f "${TLS_DIR}/${service}/server.key" ] && sudo chmod 600 ${TLS_DIR}/${service}/server.key
+            [ -f "${TLS_DIR}/${service}/server.crt" ] && sudo chmod 644 ${TLS_DIR}/${service}/server.crt
+        fi
     fi
 done
 
