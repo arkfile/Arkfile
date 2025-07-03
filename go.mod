@@ -25,9 +25,9 @@ require (
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	filippo.io/nistec v0.0.3 // indirect
-	github.com/bytemare/crypto v0.4.3 // indirect
-	github.com/bytemare/hash v0.1.5 // indirect
-	github.com/bytemare/hash2curve v0.1.3 // indirect
+	github.com/bytemare/crypto v0.4.3 // indirect; indirect - compatible version for OPAQUE v0.10.0
+	github.com/bytemare/hash v0.1.5 // indirect; indirect - compatible version for OPAQUE v0.10.0
+	github.com/bytemare/hash2curve v0.1.3 // indirect; indirect - compatible version for OPAQUE v0.10.0
 	github.com/bytemare/ksf v0.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

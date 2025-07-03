@@ -23,11 +23,11 @@ func TestMain(m *testing.M) {
 	// Store original env vars and set test values
 	originalEnv := map[string]string{}
 	testEnv := map[string]string{
-		"JWT_SECRET":                "test-jwt-secret-for-auth", // Unique secret for this package's tests
-		"BACKBLAZE_ENDPOINT":        "test-endpoint-auth",       // Provide dummy values for all required fields
-		"BACKBLAZE_KEY_ID":          "test-key-id-auth",
-		"BACKBLAZE_APPLICATION_KEY": "test-app-key-auth",
-		"BACKBLAZE_BUCKET_NAME":     "test-bucket-auth",
+		"JWT_SECRET":          "test-jwt-secret-for-auth", // Unique secret for this package's tests
+		"STORAGE_PROVIDER":    "local",                    // Set storage provider to local (supports MinIO)
+		"MINIO_ROOT_USER":     "test-user-auth",           // Provide dummy values for all required fields
+		"MINIO_ROOT_PASSWORD": "test-password-auth",
+		"LOCAL_STORAGE_PATH":  "/tmp/test-storage-auth", // Required for local storage
 	}
 
 	for key, testValue := range testEnv {

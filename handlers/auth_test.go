@@ -42,6 +42,7 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 	originalEnv := map[string]string{}
 	testEnv := map[string]string{
 		"JWT_SECRET":                "test-jwt-secret-for-handlers", // Consistent secret
+		"STORAGE_PROVIDER":          "backblaze",                    // Set provider to backblaze
 		"BACKBLAZE_ENDPOINT":        "test-endpoint",
 		"BACKBLAZE_KEY_ID":          "test-key-id",
 		"BACKBLAZE_APPLICATION_KEY": "test-app-key",
