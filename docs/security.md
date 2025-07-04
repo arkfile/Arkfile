@@ -240,8 +240,8 @@ Root Security
 ```bash
 # Directory structure
 /opt/arkfile/etc/keys/
-├── opaque/                # OPAQUE server keys (never rotated)
-├── jwt/                   # JWT signing keys (rotatable)
+├── opaque/               # OPAQUE server keys (never rotated)
+├── jwt/                  # JWT signing keys (rotatable)
 └── backup/               # Encrypted key backups
 ```
 
