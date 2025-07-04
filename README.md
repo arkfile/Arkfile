@@ -10,7 +10,7 @@ Encrypted files are then stored on any one of the multiple S3-type storage backe
 
 Arkfile includes a multi-key system that allows you to create additional decryption keys for specific files. This enables secure file sharing without revealing your primary password. You can generate sharing links with independent passwords, set expiration dates, and add password hints while avoiding file duplication.
 
-The platform is open-source to allow security audits and customization. It supports distributed deployments for organizations requiring scalable file storage and sharing capabilities.
+The platform is open-source to allow security audits and customization. It supports distributed deployments for organizations requiring scalable file storage and sharing capabilities. Arkfile uses rqlite for database redundancy and scaling, automatically providing distributed consensus across nodes. When using MinIO as a storage backend, you can add as many nodes as needed, with each node automatically getting its own rqlite instance for high availability.
 
 ## Quick Start
 
@@ -39,23 +39,23 @@ Configure your preferred provider by setting `STORAGE_PROVIDER` in your environm
 
 **For production deployment**, see the detailed guides below:
 
-- **[Setup Guide](docs/setup.md)**: Complete administrator installation guide
-- **[Security Details](docs/security.md)**: Cryptographic design and security architecture
+- **[Setup Guide](docs/setup.md)**: Complete installation and deployment guide
+- **[Security Guide](docs/security.md)**: Cryptographic design and security operations
 - **[API Reference](docs/api.md)**: Developer integration documentation
 
 ## For System Administrators
 
 ### 🆕 New to Arkfile?
-**[📖 Newcomer Guide](docs/newcomer-guide.md)** - Which script should I run?
+The [Setup Guide](docs/setup.md) includes a quick start section and decision tree for choosing the right approach.
 
 ### Essential Scripts (Start Here)
 - `./scripts/quick-start.sh` - **One-command setup** for testing/development
-- `./scripts/setup-foundation.sh` - Set up users, directories, and keys only
 - `./scripts/integration-test.sh` - Full system testing (choose COMPLETE mode)
+- `./scripts/setup-foundation.sh` - Set up users, directories, and keys only
 - `./scripts/health-check.sh` - Verify system health
 
 ### All Available Scripts
-For a complete list of available setup and maintenance scripts, see [scripts/README.md](scripts/README.md).
+For complete setup instructions and all available scripts, see the [Setup Guide](docs/setup.md).
 
 ## Support & Security
 
