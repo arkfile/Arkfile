@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 
 	"golang.org/x/crypto/argon2"
@@ -140,4 +141,9 @@ func SecureCompare(a, b []byte) bool {
 	}
 
 	return result == 0
+}
+
+// DecodeBase64 decodes a base64 string to bytes
+func DecodeBase64(encoded string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(encoded)
 }

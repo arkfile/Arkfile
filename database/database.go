@@ -134,12 +134,27 @@ func createTables() {
 
 // createExtendedSchema reads and executes the schema extensions SQL file
 func createExtendedSchema() {
-	// Check if schema_extensions.sql exists
-	extensionsPath := "database/schema_extensions.sql"
-	if _, err := os.Stat(extensionsPath); os.IsNotExist(err) {
-		// File doesn't exist, no extensions to create
+	// Check if schema_extensions.sql exists - try multiple locations
+	possiblePaths := []string{
+		"database/schema_extensions.sql",              // Development/source directory
+		"/opt/arkfile/database/schema_extensions.sql", // Production deployment
+		"./database/schema_extensions.sql",            // Current working directory
+	}
+
+	var extensionsPath string
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			extensionsPath = path
+			break
+		}
+	}
+
+	if extensionsPath == "" {
+		log.Printf("Warning: No schema extensions file found, skipping extended schema creation")
 		return
 	}
+
+	log.Printf("Loading schema extensions from: %s", extensionsPath)
 
 	// Read the file
 	extensionsSQL, err := os.ReadFile(extensionsPath)

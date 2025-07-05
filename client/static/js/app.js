@@ -219,7 +219,7 @@ function showCapabilityInfo(capabilityData) {
     setTimeout(() => info.remove(), 8000);
 }
 
-// OPAQUE Authentication functions
+// OPAQUE Authentication functions (OPAQUE-only)
 async function login() {
     const email = document.getElementById('login-email').value;
     const password = document.getElementById('login-password').value;
@@ -237,16 +237,13 @@ async function login() {
 
         // Check OPAQUE health first
         const healthResponse = await fetch('/api/opaque/health');
-        const isOpaqueHealthy = healthResponse.ok;
-        
-        if (isOpaqueHealthy) {
-            // Use OPAQUE authentication
-            await opaqueLogin(email, password);
-        } else {
-            // Fallback to legacy authentication
-            console.warn('OPAQUE not available, using legacy authentication');
-            await legacyLogin(email, password);
+        if (!healthResponse.ok) {
+            showError('Authentication system unavailable. Please try again in a few moments.');
+            return;
         }
+        
+        // Use OPAQUE authentication only
+        await opaqueLogin(email, password);
         
     } catch (error) {
         console.error('Login error:', error);
@@ -402,16 +399,13 @@ async function register() {
     try {
         // Check OPAQUE health first
         const healthResponse = await fetch('/api/opaque/health');
-        const isOpaqueHealthy = healthResponse.ok;
-        
-        if (isOpaqueHealthy) {
-            // Use OPAQUE registration
-            await opaqueRegister(email, password);
-        } else {
-            // Fallback to legacy registration
-            console.warn('OPAQUE not available, using legacy registration');
-            await legacyRegister(email, password);
+        if (!healthResponse.ok) {
+            showError('Authentication system unavailable. Please try again in a few moments.');
+            return;
         }
+        
+        // Use OPAQUE registration only
+        await opaqueRegister(email, password);
         
     } catch (error) {
         console.error('Registration error:', error);

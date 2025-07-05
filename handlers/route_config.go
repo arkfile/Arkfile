@@ -9,18 +9,13 @@ func RegisterRoutes() {
 	// Static files
 	Echo.Static("/", "client/static")
 
-	// Legacy Authentication (for backward compatibility)
-	Echo.POST("/api/register", Register)
-	Echo.POST("/api/salt", GetUserSalt)
-	Echo.POST("/api/login", Login)
-
-	// OPAQUE Authentication (Primary)
+	// OPAQUE Authentication (Only)
 	Echo.POST("/api/opaque/register", OpaqueRegister)
 	Echo.POST("/api/opaque/login", OpaqueLogin)
 	Echo.POST("/api/opaque/capability", DetectDeviceCapability)
 	Echo.GET("/api/opaque/health", OpaqueHealthCheck)
 
-	// Session management (works with both auth methods)
+	// Session management (OPAQUE sessions)
 	Echo.POST("/api/refresh", RefreshToken)
 	Echo.POST("/api/logout", Logout)
 	auth.Echo.POST("/api/revoke-token", RevokeToken)

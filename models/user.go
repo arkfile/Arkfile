@@ -6,15 +6,11 @@ import (
 	"os"
 	"strings"
 	"time"
-
-	"github.com/84adam/arkfile/auth"
 )
 
 type User struct {
 	ID                int64          `json:"id"`
 	Email             string         `json:"email"`
-	PasswordHash      string         `json:"-"` // Never send password hash in JSON
-	PasswordSalt      string         `json:"-"` // Never send password salt in JSON
 	CreatedAt         time.Time      `json:"created_at"`
 	TotalStorageBytes int64          `json:"total_storage_bytes"`
 	StorageLimitBytes int64          `json:"storage_limit_bytes"`
@@ -28,21 +24,14 @@ const (
 	DefaultStorageLimit int64 = 10737418240 // 10GB in bytes
 )
 
-// CreateUser creates a new user in the database
-func CreateUser(db *sql.DB, email, password string) (*User, error) {
-	// Use Argon2ID for password hashing
-	hashedPassword, err := auth.HashPassword(password)
-	if err != nil {
-		return nil, err
-	}
-
+// CreateUser creates a new user in the database for OPAQUE authentication
+func CreateUser(db *sql.DB, email, passwordPlaceholder string) (*User, error) {
 	isAdmin := isAdminEmail(email)
 	result, err := db.Exec(
 		`INSERT INTO users (
 			email, password_hash, storage_limit_bytes, is_admin, is_approved
 		) VALUES (?, ?, ?, ?, ?)`,
-		email, hashedPassword, DefaultStorageLimit,
-		isAdmin, isAdmin, // Auto-approve admin emails
+		email, passwordPlaceholder, DefaultStorageLimit, isAdmin, isAdmin, // Auto-approve admin emails
 	)
 	if err != nil {
 		return nil, err
@@ -63,90 +52,80 @@ func CreateUser(db *sql.DB, email, password string) (*User, error) {
 	}, nil
 }
 
-// CreateUserWithHash creates a new user with pre-hashed password and salt
-func CreateUserWithHash(db *sql.DB, email, passwordHash, salt string) (*User, error) {
-	isAdmin := isAdminEmail(email)
-	result, err := db.Exec(
-		`INSERT INTO users (
-			email, password_hash, password_salt, storage_limit_bytes, is_admin, is_approved
-		) VALUES (?, ?, ?, ?, ?, ?)`,
-		email, passwordHash, salt, DefaultStorageLimit,
-		isAdmin, isAdmin, // Auto-approve admin emails
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, err
-	}
-
-	return &User{
-		ID:                id,
-		Email:             email,
-		PasswordSalt:      salt,
-		StorageLimitBytes: DefaultStorageLimit,
-		CreatedAt:         time.Now(),
-		IsApproved:        isAdmin,
-		IsAdmin:           isAdmin,
-	}, nil
-}
-
-// GetUserByEmail retrieves a user by email
+// GetUserByEmail retrieves a user by email (OPAQUE-only)
 func GetUserByEmail(db *sql.DB, email string) (*User, error) {
+	// Add debug logging
+	// Note: We'll import logging package at the top if needed
 	user := &User{}
-	var salt sql.NullString
-	err := db.QueryRow(`
-		SELECT id, email, password_hash, password_salt, created_at,
+	var createdAtStr string
+	var approvedAtStr sql.NullString
+	var totalStorageInterface interface{}
+	var storageLimitInterface interface{}
+
+	// Debug: Log the database query attempt
+	query := `SELECT id, email, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE email = ?`,
-		email,
-	).Scan(
-		&user.ID, &user.Email, &user.PasswordHash, &salt, &user.CreatedAt,
-		&user.TotalStorageBytes, &user.StorageLimitBytes,
-		&user.IsApproved, &user.ApprovedBy, &user.ApprovedAt, &user.IsAdmin, // Scan directly into sql.Null* types
+		FROM users WHERE email = ?`
+
+	err := db.QueryRow(query, email).Scan(
+		&user.ID, &user.Email, &createdAtStr,
+		&totalStorageInterface, &storageLimitInterface,
+		&user.IsApproved, &user.ApprovedBy, &approvedAtStr, &user.IsAdmin,
 	)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
+			// Debug: Log when user not found
 			return nil, err // Return sql.ErrNoRows directly
 		}
+		// Debug: Log other database errors
 		return nil, err
 	}
 
-	// Convert nullable salt to string
-	if salt.Valid {
-		user.PasswordSalt = salt.String
+	// Debug: Log successful user retrieval
+
+	// Parse the timestamp strings
+	if createdAtStr != "" {
+		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", createdAtStr); parseErr == nil {
+			user.CreatedAt = parsedTime
+		} else if parsedTime, parseErr := time.Parse(time.RFC3339, createdAtStr); parseErr == nil {
+			user.CreatedAt = parsedTime
+		}
+	}
+
+	if approvedAtStr.Valid && approvedAtStr.String != "" {
+		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", approvedAtStr.String); parseErr == nil {
+			user.ApprovedAt = sql.NullTime{Time: parsedTime, Valid: true}
+		} else if parsedTime, parseErr := time.Parse(time.RFC3339, approvedAtStr.String); parseErr == nil {
+			user.ApprovedAt = sql.NullTime{Time: parsedTime, Valid: true}
+		}
+	}
+
+	// Handle numeric fields that might come as float64 from rqlite
+	if totalStorageInterface != nil {
+		switch v := totalStorageInterface.(type) {
+		case int64:
+			user.TotalStorageBytes = v
+		case float64:
+			user.TotalStorageBytes = int64(v)
+		default:
+			user.TotalStorageBytes = 0
+		}
+	}
+
+	if storageLimitInterface != nil {
+		switch v := storageLimitInterface.(type) {
+		case int64:
+			user.StorageLimitBytes = v
+		case float64:
+			user.StorageLimitBytes = int64(v)
+		default:
+			user.StorageLimitBytes = DefaultStorageLimit
+		}
 	}
 
 	return user, nil
-}
-
-// VerifyPassword checks if the provided password matches the stored hash
-func (u *User) VerifyPassword(password string) bool {
-	return auth.VerifyPassword(password, u.PasswordHash)
-}
-
-// VerifyPasswordHash compares a client-provided hash with stored hash
-func (u *User) VerifyPasswordHash(providedHash string) bool {
-	return providedHash == u.PasswordHash
-}
-
-// UpdatePassword updates the user's password
-func (u *User) UpdatePassword(db *sql.DB, newPassword string) error {
-	// Use Argon2ID for password hashing
-	hashedPassword, err := auth.HashPassword(newPassword)
-	if err != nil {
-		return err
-	}
-
-	_, err = db.Exec(
-		"UPDATE users SET password_hash = ? WHERE id = ?",
-		hashedPassword, u.ID,
-	)
-	return err
 }
 
 // HasAdminPrivileges checks if a user has admin privileges

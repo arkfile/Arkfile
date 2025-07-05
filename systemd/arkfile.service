@@ -32,7 +32,8 @@ ProtectControlGroups=yes
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 
-# Allow writes to application directories
+# Allow reads to configuration and writes to application directories
+ReadOnlyPaths=/opt/arkfile/etc
 ReadWritePaths=/opt/arkfile/var
 
 # Restart policies

@@ -90,6 +90,12 @@ sudo cp "${RELEASE_DIR}/${APP_NAME}" "${BASE_DIR}/bin/"
 sudo chown arkadmin:arkfile "${BASE_DIR}/bin/${APP_NAME}"
 sudo chmod 755 "${BASE_DIR}/bin/${APP_NAME}"
 
+# Copy database files to working directory for runtime access
+echo "Copying database files to working directory..."
+sudo mkdir -p "${BASE_DIR}/database"
+sudo cp -r database/* "${BASE_DIR}/database/"
+sudo chown -R arkfile:arkfile "${BASE_DIR}/database"
+
 # Copy client files to working directory for runtime access
 echo "Copying client files to working directory..."
 sudo mkdir -p "${BASE_DIR}/client"

@@ -232,13 +232,23 @@ func ListUsers(c echo.Context) error {
 func UpdateUser(c echo.Context) error {
 	adminEmail := auth.GetEmailFromToken(c)
 
+	if logging.InfoLogger != nil {
+		logging.InfoLogger.Printf("DEBUG: UpdateUser called by admin: %s", adminEmail)
+	}
+
 	// Check admin privileges
 	admin, err := models.GetUserByEmail(database.DB, adminEmail)
 	if err != nil {
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("DEBUG: Failed to get admin user %s: %v", adminEmail, err)
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get admin user")
 	}
 
 	if !admin.HasAdminPrivileges() {
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("DEBUG: User %s does not have admin privileges", adminEmail)
+		}
 		return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
 	}
 
@@ -246,6 +256,10 @@ func UpdateUser(c echo.Context) error {
 	targetEmail := c.Param("email")
 	if targetEmail == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "Email parameter required")
+	}
+
+	if logging.InfoLogger != nil {
+		logging.InfoLogger.Printf("DEBUG: Attempting to update user: %s", targetEmail)
 	}
 
 	// Parse update data
@@ -256,7 +270,15 @@ func UpdateUser(c echo.Context) error {
 	}
 
 	if err := c.Bind(&request); err != nil {
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("DEBUG: Failed to bind request: %v", err)
+		}
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+	}
+
+	if logging.InfoLogger != nil {
+		logging.InfoLogger.Printf("DEBUG: Request data - IsApproved: %v, IsAdmin: %v, StorageLimit: %v",
+			request.IsApproved, request.IsAdmin, request.StorageLimitBytes)
 	}
 
 	if request.IsApproved == nil && request.IsAdmin == nil && request.StorageLimitBytes == nil {
@@ -266,17 +288,52 @@ func UpdateUser(c echo.Context) error {
 	// Update user fields
 	tx, err := database.DB.Begin()
 	if err != nil {
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("DEBUG: Failed to start transaction: %v", err)
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to start transaction")
 	}
 	defer tx.Rollback()
 
-	// Check user exists
-	var exists bool
-	err = tx.QueryRow("SELECT 1 FROM users WHERE email = ?", targetEmail).Scan(&exists)
+	// Check user exists - handle rqlite type conversion issues
+	var existsInterface interface{}
+	err = tx.QueryRow("SELECT 1 FROM users WHERE email = ?", targetEmail).Scan(&existsInterface)
 	if err == sql.ErrNoRows {
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("DEBUG: Target user not found: %s", targetEmail)
+		}
 		return echo.NewHTTPError(http.StatusNotFound, "Target user not found")
 	} else if err != nil {
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("DEBUG: Failed to verify user %s: %v", targetEmail, err)
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to verify user")
+	}
+
+	// Convert the result to bool (rqlite returns 1 as float64)
+	var exists bool
+	switch v := existsInterface.(type) {
+	case bool:
+		exists = v
+	case int:
+		exists = v != 0
+	case int64:
+		exists = v != 0
+	case float64:
+		exists = v != 0
+	default:
+		exists = existsInterface != nil
+	}
+
+	if !exists {
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("DEBUG: Target user not found: %s", targetEmail)
+		}
+		return echo.NewHTTPError(http.StatusNotFound, "Target user not found")
+	}
+
+	if logging.InfoLogger != nil {
+		logging.InfoLogger.Printf("DEBUG: Target user %s exists, proceeding with update", targetEmail)
 	}
 
 	var logDetails []string

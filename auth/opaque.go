@@ -125,15 +125,32 @@ func SetupServerKeys(db *sql.DB) error {
 
 // loadServerKeys loads existing server keys from database
 func loadServerKeys(db *sql.DB, server *OPAQUEServer) error {
-	var serverSecret, serverPublic, oprfSeed []byte
+	// rqlite returns BLOB data as base64-encoded strings
+	var serverSecretStr, serverPublicStr, oprfSeedStr string
 
 	err := db.QueryRow(`
 		SELECT server_secret_key, server_public_key, oprf_seed
 		FROM opaque_server_keys WHERE id = 1
-	`).Scan(&serverSecret, &serverPublic, &oprfSeed)
+	`).Scan(&serverSecretStr, &serverPublicStr, &oprfSeedStr)
 
 	if err != nil {
 		return fmt.Errorf("failed to load server keys: %w", err)
+	}
+
+	// Decode base64 strings to bytes
+	serverSecret, err := crypto.DecodeBase64(serverSecretStr)
+	if err != nil {
+		return fmt.Errorf("failed to decode server secret key: %w", err)
+	}
+
+	serverPublic, err := crypto.DecodeBase64(serverPublicStr)
+	if err != nil {
+		return fmt.Errorf("failed to decode server public key: %w", err)
+	}
+
+	oprfSeed, err := crypto.DecodeBase64(oprfSeedStr)
+	if err != nil {
+		return fmt.Errorf("failed to decode OPRF seed: %w", err)
 	}
 
 	// Set key material in server
@@ -267,18 +284,44 @@ func storeOPAQUEUserData(db *sql.DB, userData OPAQUEUserData) error {
 func loadOPAQUEUserData(db *sql.DB, email string) (*OPAQUEUserData, error) {
 	userData := &OPAQUEUserData{}
 
+	// rqlite returns BLOB data as base64-encoded strings
+	var clientSaltStr, serverSaltStr, envelopeStr string
+	var createdAtStr string
+
 	err := db.QueryRow(`
 		SELECT user_email, client_argon_salt, server_argon_salt,
 		       hardened_envelope, device_profile, created_at
 		FROM opaque_user_data WHERE user_email = ?`,
 		email,
 	).Scan(
-		&userData.UserEmail, &userData.ClientArgonSalt, &userData.ServerArgonSalt,
-		&userData.HardenedEnvelope, &userData.DeviceProfile, &userData.CreatedAt,
+		&userData.UserEmail, &clientSaltStr, &serverSaltStr,
+		&envelopeStr, &userData.DeviceProfile, &createdAtStr,
 	)
 
 	if err != nil {
 		return nil, err
+	}
+
+	// Decode base64 strings to bytes
+	userData.ClientArgonSalt, err = crypto.DecodeBase64(clientSaltStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode client salt: %w", err)
+	}
+
+	userData.ServerArgonSalt, err = crypto.DecodeBase64(serverSaltStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode server salt: %w", err)
+	}
+
+	userData.HardenedEnvelope, err = crypto.DecodeBase64(envelopeStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode hardened envelope: %w", err)
+	}
+
+	// Parse timestamp
+	userData.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse created_at: %w", err)
 	}
 
 	return userData, nil

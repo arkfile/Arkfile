@@ -259,7 +259,9 @@ func OpaqueRegister(c echo.Context) error {
 	// Perform OPAQUE registration with comprehensive error handling
 	err = auth.RegisterUser(database.DB, request.Email, request.Password, deviceCapability)
 	if err != nil {
-		logging.ErrorLogger.Printf("OPAQUE registration failed for %s: %v", request.Email, err)
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("OPAQUE registration failed for %s: %v", request.Email, err)
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
 	}
 
