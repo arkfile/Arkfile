@@ -333,8 +333,8 @@ sudo ./scripts/setup-letsencrypt.sh
 ```bash
 # Check service status
 sudo systemctl status arkfile
-sudo systemctl status rqlite@arkfile
-sudo systemctl status minio@arkfile
+sudo systemctl status rqlite
+sudo systemctl status minio
 
 # Verify health endpoint
 curl -s http://localhost:8080/health | jq '.'
@@ -483,10 +483,10 @@ curl http://localhost:8080/metrics
 sudo journalctl -u arkfile -f
 
 # Database logs
-sudo journalctl -u rqlite@arkfile -f
+sudo journalctl -u rqlite -f
 
 # Storage logs
-sudo journalctl -u minio@arkfile -f
+sudo journalctl -u minio -f
 ```
 
 ## Troubleshooting
@@ -512,7 +512,7 @@ sudo netstat -tlnp | grep :8080
 rqlite -H localhost:4001 'SELECT 1'
 
 # Check database service
-sudo systemctl status rqlite@arkfile
+sudo systemctl status rqlite
 
 # Verify database permissions
 sudo -u arkfile ls -la /opt/arkfile/var/lib/rqlite/
@@ -533,7 +533,7 @@ openssl s_client -connect localhost:443 -servername yourdomain.com
 **File Upload/Download Issues:**
 ```bash
 # Check MinIO service
-sudo systemctl status minio@arkfile
+sudo systemctl status minio
 
 # Verify storage permissions
 sudo -u arkfile ls -la /opt/arkfile/var/lib/storage/

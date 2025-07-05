@@ -1,8 +1,0 @@
-[Unit]
-Description=MinIO Storage Cluster
-Documentation=https://docs.min.io
-Requires=minio@prod.service
-After=network.target
-
-[Install]
-WantedBy=multi-user.target

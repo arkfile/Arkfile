@@ -178,8 +178,8 @@ sudo systemctl status arkfile
 ### Logs
 ```bash
 sudo journalctl -u arkfile -f
-sudo journalctl -u minio@node1 -f  
-sudo journalctl -u rqlite@node1 -f
+sudo journalctl -u minio -f  
+sudo journalctl -u rqlite -f
 ```
 
 ### Documentation

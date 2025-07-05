@@ -345,18 +345,18 @@ if [ "$FULL_SETUP" = true ]; then
         echo -e "${YELLOW}Starting all services...${NC}"
         
         # Start MinIO
-        sudo systemctl enable minio@arkfile
-        sudo systemctl start minio@arkfile
-        if systemctl is-active --quiet minio@arkfile; then
+        sudo systemctl enable minio
+        sudo systemctl start minio
+        if systemctl is-active --quiet minio; then
             echo -e "${GREEN}✅ MinIO service started${NC}"
         else
             echo -e "${YELLOW}⚠️  MinIO service may need manual configuration${NC}"
         fi
         
         # Start rqlite
-        sudo systemctl enable rqlite@arkfile
-        sudo systemctl start rqlite@arkfile
-        if systemctl is-active --quiet rqlite@arkfile; then
+        sudo systemctl enable rqlite
+        sudo systemctl start rqlite
+        if systemctl is-active --quiet rqlite; then
             echo -e "${GREEN}✅ rqlite service started${NC}"
         else
             echo -e "${YELLOW}⚠️  rqlite service may need manual configuration${NC}"
@@ -703,13 +703,13 @@ if [ "$FULL_SETUP" = true ]; then
             echo "• Arkfile: ⚠️  STOPPED (may need configuration)"
         fi
         
-        if systemctl is-active --quiet minio@arkfile; then
+        if systemctl is-active --quiet minio; then
             echo "• MinIO: ✅ RUNNING"
         else
             echo "• MinIO: ⚠️  STOPPED (may need configuration)"
         fi
         
-        if systemctl is-active --quiet rqlite@arkfile; then
+        if systemctl is-active --quiet rqlite; then
             echo "• rqlite: ✅ RUNNING"  
         else
             echo "• rqlite: ⚠️  STOPPED (may need configuration)"

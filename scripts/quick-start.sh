@@ -40,6 +40,66 @@ if [ "$EUID" -eq 0 ]; then
     exit 1
 fi
 
+# Step 0: Stop any running Arkfile services
+echo -e "${YELLOW}Step 0: Stopping any running Arkfile services...${NC}"
+
+# Function to safely stop a service if it exists and is running
+stop_service_if_running() {
+    local service_name="$1"
+    if sudo systemctl is-active --quiet "$service_name" 2>/dev/null; then
+        echo "  Stopping $service_name..."
+        sudo systemctl stop "$service_name" || {
+            echo -e "${YELLOW}    Warning: Failed to stop $service_name gracefully, trying force stop...${NC}"
+            sudo systemctl kill "$service_name" 2>/dev/null || true
+            sleep 2
+        }
+    else
+        echo "  $service_name is not running or doesn't exist"
+    fi
+}
+
+# Function to safely disable a service if it exists
+disable_service_if_exists() {
+    local service_name="$1"
+    if sudo systemctl is-enabled --quiet "$service_name" 2>/dev/null; then
+        echo "  Disabling $service_name..."
+        sudo systemctl disable "$service_name" || echo -e "${YELLOW}    Warning: Failed to disable $service_name${NC}"
+    fi
+}
+
+echo "Stopping Arkfile-related services..."
+
+# Stop main Arkfile application
+stop_service_if_running "arkfile"
+
+# Stop MinIO and rqlite services
+stop_service_if_running "minio"
+stop_service_if_running "rqlite"
+
+# Stop Caddy if it's running (reverse proxy)
+stop_service_if_running "caddy"
+
+echo "Waiting for services to fully stop..."
+sleep 3
+
+# Kill any remaining arkfile processes that might be lingering
+echo "Checking for lingering arkfile processes..."
+if pgrep -f "arkfile" > /dev/null; then
+    echo "  Found running arkfile processes, terminating..."
+    sudo pkill -f "arkfile" 2>/dev/null || true
+    sleep 2
+    
+    # Force kill if still running
+    if pgrep -f "arkfile" > /dev/null; then
+        echo "  Force killing remaining arkfile processes..."
+        sudo pkill -9 -f "arkfile" 2>/dev/null || true
+        sleep 1
+    fi
+fi
+
+echo -e "${GREEN}✅ Service cleanup completed${NC}"
+echo
+
 # Step 1: Foundation setup
 echo -e "${YELLOW}Step 1: Setting up foundation (users, directories, keys, TLS)...${NC}"
 ./scripts/setup-foundation.sh --skip-tests
@@ -126,27 +186,73 @@ sudo cp /opt/arkfile/releases/current/systemd/arkfile.service /etc/systemd/syste
 sudo systemctl daemon-reload
 
 echo "Starting MinIO..."
-sudo systemctl start minio@demo
-sudo systemctl enable minio@demo
+sudo systemctl start minio
+sudo systemctl enable minio
 
 echo "Starting rqlite database..."
-sudo systemctl start rqlite@demo
-sudo systemctl enable rqlite@demo
+sudo systemctl start rqlite
+sudo systemctl enable rqlite
+
+# Wait for rqlite to be ready and establish leadership
+echo "Waiting for rqlite to establish leadership..."
+max_attempts=30
+attempt=0
+while [ $attempt -lt $max_attempts ]; do
+    if curl -u demo-user:TestPassword123_Secure http://localhost:4001/status 2>/dev/null | grep -q '"ready":true'; then
+        echo "  ✅ rqlite is ready and established as leader"
+        break
+    fi
+    echo "  ⏳ Waiting for rqlite to be ready... (attempt $((attempt + 1))/$max_attempts)"
+    sleep 2
+    attempt=$((attempt + 1))
+done
+
+if [ $attempt -eq $max_attempts ]; then
+    echo -e "${RED}❌ rqlite failed to become ready within timeout${NC}"
+    echo "Check rqlite status: sudo systemctl status rqlite"
+    echo "Check rqlite logs: sudo journalctl -u rqlite -n 20"
+    exit 1
+fi
+
+# Set up the database schema
+echo "Setting up database schema..."
+sudo ./scripts/setup-database.sh
+if [ $? -ne 0 ]; then
+    echo -e "${RED}❌ Database setup failed${NC}"
+    exit 1
+fi
 
 echo "Starting Arkfile application..."
 sudo systemctl start arkfile
 sudo systemctl enable arkfile
 
-# Wait a moment for services to start
-echo "Waiting for services to initialize..."
-sleep 5
+# Wait for Arkfile to be ready
+echo "Waiting for Arkfile to start and be ready..."
+max_attempts=15
+attempt=0
+while [ $attempt -lt $max_attempts ]; do
+    if curl -s http://localhost:8080/health 2>/dev/null | grep -q '"status":"ok"'; then
+        echo "  ✅ Arkfile is running and responding"
+        break
+    fi
+    echo "  ⏳ Waiting for Arkfile to be ready... (attempt $((attempt + 1))/$max_attempts)"
+    sleep 3
+    attempt=$((attempt + 1))
+done
+
+if [ $attempt -eq $max_attempts ]; then
+    echo -e "${RED}❌ Arkfile failed to start or respond within timeout${NC}"
+    echo "Check Arkfile status: sudo systemctl status arkfile"
+    echo "Check Arkfile logs: sudo journalctl -u arkfile -n 20"
+    exit 1
+fi
 
 # Step 4: Verify everything is working
 echo -e "${YELLOW}Step 4: Verifying system health...${NC}"
 
 # Check service status
-minio_status=$(sudo systemctl is-active minio@demo || echo "failed")
-rqlite_status=$(sudo systemctl is-active rqlite@demo || echo "failed")
+minio_status=$(sudo systemctl is-active minio || echo "failed")
+rqlite_status=$(sudo systemctl is-active rqlite || echo "failed")
 arkfile_status=$(sudo systemctl is-active arkfile || echo "failed")
 
 echo "Service Status:"
@@ -216,8 +322,8 @@ else
     echo "1. Check logs: sudo journalctl -u arkfile --no-pager"
     echo "2. Check service status: sudo systemctl status arkfile"
     echo "3. Verify dependencies are running:"
-    echo "   - MinIO: sudo systemctl status minio@demo"
-    echo "   - rqlite: sudo systemctl status rqlite@demo"
+    echo "   - MinIO: sudo systemctl status minio"
+    echo "   - rqlite: sudo systemctl status rqlite"
     echo
     echo "Configuration check:"
     echo "4. Verify config file: cat /opt/arkfile/releases/current/.env"

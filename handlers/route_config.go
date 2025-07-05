@@ -2,12 +2,18 @@ package handlers
 
 import (
 	"github.com/84adam/arkfile/auth"
+	"github.com/labstack/echo/v4"
 )
 
 // RegisterRoutes initializes all routes for the application
 func RegisterRoutes() {
+	// Explicitly serve index.html at root
+	Echo.GET("/", func(c echo.Context) error {
+		return c.File("static/index.html")
+	})
+
 	// Static files
-	Echo.Static("/", "client/static")
+	Echo.Static("/", "static")
 
 	// OPAQUE Authentication (Only)
 	Echo.POST("/api/opaque/register", OpaqueRegister)

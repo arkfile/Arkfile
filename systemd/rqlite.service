@@ -1,8 +1,7 @@
 [Unit]
-Description=rqlite distributed database %i
+Description=rqlite distributed database
 Documentation=https://github.com/rqlite/rqlite
 After=network.target
-PartOf=rqlite.target
 
 [Service]
 Type=simple
@@ -13,7 +12,8 @@ WorkingDirectory=/opt/arkfile/var/lib/database
 ExecStart=/usr/local/bin/rqlited \
     -http-addr :4001 \
     -raft-addr :4002 \
-    -node-id demo \
+    -node-id arkfile \
+    -bootstrap-expect 1 \
     -auth /opt/arkfile/etc/rqlite-auth.json \
     data
 Restart=on-failure

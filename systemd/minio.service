@@ -1,8 +1,7 @@
 [Unit]
-Description=MinIO Server %i
+Description=MinIO Server
 Documentation=https://docs.min.io
 After=network.target
-PartOf=minio.target
 
 [Service]
 Type=simple
@@ -15,7 +14,7 @@ EnvironmentFile=/opt/arkfile/etc/secrets.env
 Environment=MINIO_ROOT_USER=${MINIO_ROOT_USER}
 Environment=MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
 
-# Server setup - simplified single-node mode
+# Server setup - single-node mode
 ExecStart=/usr/local/bin/minio server \
     --address :9000 \
     --console-address :9001 \

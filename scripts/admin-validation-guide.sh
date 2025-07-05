@@ -126,7 +126,7 @@ echo
 
 # Test 2: Service status
 echo -e "${PURPLE}🔍 Checking service status...${NC}"
-services=("arkfile" "caddy" "minio@arkfile" "rqlite@arkfile")
+services=("arkfile" "caddy" "minio" "rqlite")
 services_ok=0
 
 for service in "${services[@]}"; do
@@ -401,7 +401,7 @@ else
     echo
     echo -e "${BLUE}🛠️  TROUBLESHOOTING STEPS:${NC}"
     echo "1. Review all failed tests above"
-    echo "2. Check service status: sudo systemctl status arkfile caddy minio@arkfile rqlite@arkfile"
+    echo "2. Check service status: sudo systemctl status arkfile caddy minio rqlite"
     echo "3. Review service logs: sudo journalctl -u arkfile"
     echo "4. Run health check: ./scripts/health-check.sh"
     echo "5. Validate deployment: ./scripts/validate-deployment.sh"

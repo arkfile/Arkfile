@@ -1,8 +1,0 @@
-[Unit]
-Description=rqlite cluster target
-Documentation=https://github.com/rqlite/rqlite
-Requires=rqlite@prod.service
-After=network.target
-
-[Install]
-WantedBy=multi-user.target

@@ -10,7 +10,7 @@ StartLimitBurst=3
 Type=simple
 User=arkfile
 Group=arkfile
-WorkingDirectory=/opt/arkfile
+WorkingDirectory=/opt/arkfile/releases/current
 ExecStart=/opt/arkfile/bin/arkfile
 
 # Configuration

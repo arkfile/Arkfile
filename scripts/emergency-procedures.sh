@@ -104,7 +104,7 @@ emergency_shutdown() {
         fi
         
         # Stop supporting services
-        for service in "minio@primary" "rqlite@primary"; do
+        for service in "minio" "rqlite"; do
             if systemctl is-active --quiet "$service"; then
                 log_action "Stopping $service..."
                 systemctl stop "$service"
@@ -441,8 +441,8 @@ create_forensic_snapshot() {
     # System journal for arkfile services
     log_action "Capturing systemd journal..."
     journalctl -u arkfile --since "7 days ago" > "$snapshot_dir/arkfile_journal.log" 2>/dev/null || true
-    journalctl -u "minio@*" --since "7 days ago" > "$snapshot_dir/minio_journal.log" 2>/dev/null || true
-    journalctl -u "rqlite@*" --since "7 days ago" > "$snapshot_dir/rqlite_journal.log" 2>/dev/null || true
+    journalctl -u "minio*" --since "7 days ago" > "$snapshot_dir/minio_journal.log" 2>/dev/null || true
+    journalctl -u "rqlite*" --since "7 days ago" > "$snapshot_dir/rqlite_journal.log" 2>/dev/null || true
     
     # Database snapshot (if accessible)
     if [[ -f "$ARKFILE_HOME/data/arkfile.db" ]]; then

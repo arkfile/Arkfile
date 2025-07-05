@@ -22,8 +22,8 @@ if ! id arkfile >/dev/null 2>&1; then
 fi
 
 # Check if rqlite is running
-if ! systemctl is-active --quiet rqlite@demo; then
-    echo -e "${RED}rqlite service is not running. Start it first with: sudo systemctl start rqlite@demo${NC}"
+if ! systemctl is-active --quiet rqlite; then
+    echo -e "${RED}rqlite service is not running. Start it first with: sudo systemctl start rqlite${NC}"
     exit 1
 fi
 

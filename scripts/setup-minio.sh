@@ -69,8 +69,7 @@ fi
 
 # Copy systemd service files
 echo "Installing systemd service files..."
-sudo cp ${BASE_DIR}/releases/current/systemd/minio@.service /etc/systemd/system/
-sudo cp ${BASE_DIR}/releases/current/systemd/minio.target /etc/systemd/system/
+sudo cp ${BASE_DIR}/releases/current/systemd/minio.service /etc/systemd/system/
 
 # Create simplified directory structure for single-node deployment
 echo "Setting up MinIO directories..."
@@ -86,21 +85,16 @@ echo "MinIO binary installed:"
 echo "- minio: $(which minio)"
 echo "- version: $(minio --version)"
 echo "Systemd services installed:"
-echo "- minio@.service"
-echo "- minio.target"
+echo "- minio.service"
 
 echo -e "${YELLOW}Next steps:${NC}"
-echo "1. Configure the MINIO_* environment variables in /opt/arkfile/etc/[env]/secrets.env:"
+echo "1. Configure the MINIO_* environment variables in /opt/arkfile/etc/secrets.env:"
 echo "   - MINIO_ROOT_USER: MinIO root user (default: minioadmin)"
 echo "   - MINIO_ROOT_PASSWORD: MinIO root password (default: minioadmin)"
-echo "   - LOCAL_STORAGE_PATH: Path to store data (e.g., /opt/arkfile/var/lib/prod/minio/data)"
-echo "   For cluster mode also set:"
-echo "   - MINIO_CLUSTER_NODES: Comma-separated list of node addresses"
-echo "   - MINIO_CLUSTER_ACCESS_KEY: Cluster access key"
-echo "   - MINIO_CLUSTER_SECRET_KEY: Cluster secret key"
-echo "2. Start MinIO service: sudo systemctl start minio@prod"
-echo "3. Enable MinIO service: sudo systemctl enable minio@prod"
-echo "4. Check status: sudo systemctl status minio@prod"
+echo "   - LOCAL_STORAGE_PATH: Path to store data (e.g., /opt/arkfile/var/lib/minio/data)"
+echo "2. Start MinIO service: sudo systemctl start minio"
+echo "3. Enable MinIO service: sudo systemctl enable minio"
+echo "4. Check status: sudo systemctl status minio"
 echo
 echo "Console access:"
 echo "- Local mode: http://localhost:9001"

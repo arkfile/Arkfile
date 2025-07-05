@@ -49,55 +49,55 @@ sudo chmod 755 "${BASE_DIR}/bin/${APP_NAME}"
 
 # Update service files
 echo "Updating service files..."
-sudo cp "${PREVIOUS_RELEASE}/systemd/arkfile@.service" /etc/systemd/system/
-sudo cp "${PREVIOUS_RELEASE}/systemd/rqlite@.service" /etc/systemd/system/
-sudo cp "${PREVIOUS_RELEASE}/systemd/rqlite.target" /etc/systemd/system/
-sudo cp "${PREVIOUS_RELEASE}/systemd/minio@.service" /etc/systemd/system/
-sudo cp "${PREVIOUS_RELEASE}/systemd/minio.target" /etc/systemd/system/
+sudo cp "${PREVIOUS_RELEASE}/systemd/arkfile.service" /etc/systemd/system/
+sudo cp "${PREVIOUS_RELEASE}/systemd/rqlite.service" /etc/systemd/system/
+sudo cp "${PREVIOUS_RELEASE}/systemd/rqlite" /etc/systemd/system/
+sudo cp "${PREVIOUS_RELEASE}/systemd/minio.service" /etc/systemd/system/
+sudo cp "${PREVIOUS_RELEASE}/systemd/minio" /etc/systemd/system/
 sudo systemctl daemon-reload
 
 # Restart infrastructure services
 echo "Restarting infrastructure services..."
-sudo systemctl restart "rqlite@${ENVIRONMENT}"
+sudo systemctl restart "rqlite${ENVIRONMENT}"
 sleep 5  # Wait for rqlite to be ready
 
 # Check if using MinIO local/cluster storage
 if grep -q '^STORAGE_PROVIDER=\(local\|cluster\)' "${BASE_DIR}/etc/${ENVIRONMENT}/secrets.env"; then
     echo "Restarting MinIO service..."
-    sudo systemctl restart "minio@${ENVIRONMENT}"
+    sudo systemctl restart "minio${ENVIRONMENT}"
     sleep 5  # Wait for MinIO to be ready
 fi
 
 # Restart application
 echo "Restarting application..."
-sudo systemctl restart "arkfile@${ENVIRONMENT}"
+sudo systemctl restart "arkfile${ENVIRONMENT}"
 
 # Verify rollback
 echo "Verifying rollback..."
 echo "Database cluster status:"
-systemctl status "rqlite@${ENVIRONMENT}" --no-pager
+systemctl status "rqlite${ENVIRONMENT}" --no-pager
 
 # Check MinIO status if using local/cluster storage
 if grep -q '^STORAGE_PROVIDER=\(local\|cluster\)' "${BASE_DIR}/etc/${ENVIRONMENT}/secrets.env"; then
     echo "Storage service status:"
-    systemctl status "minio@${ENVIRONMENT}" --no-pager
+    systemctl status "minio${ENVIRONMENT}" --no-pager
 fi
 
 echo "Application status:"
-systemctl status "arkfile@${ENVIRONMENT}" --no-pager
+systemctl status "arkfile${ENVIRONMENT}" --no-pager
 
 echo -e "${GREEN}Rollback complete!${NC}"
 echo "Previous version: $(basename ${CURRENT_RELEASE})"
 echo "Current version: $(basename ${PREVIOUS_RELEASE})"
 echo -e "${YELLOW}Service Stack Status:${NC}"
-echo "  1. rqlite: systemctl status rqlite@${ENVIRONMENT}"
-echo "  2. arkfile: systemctl status arkfile@${ENVIRONMENT}"
+echo "  1. rqlite: systemctl status rqlite${ENVIRONMENT}"
+echo "  2. arkfile: systemctl status arkfile${ENVIRONMENT}"
 echo "  3. caddy: systemctl status caddy"
 
 echo -e "${YELLOW}Monitor the logs:${NC}"
-echo "  Database logs: sudo journalctl -u rqlite@${ENVIRONMENT} -f"
-echo "  Application logs: sudo journalctl -u arkfile@${ENVIRONMENT} -f"
-echo "  Full stack logs: sudo journalctl -u rqlite@${ENVIRONMENT} -u arkfile@${ENVIRONMENT} -u caddy -f"
+echo "  Database logs: sudo journalctl -u rqlite${ENVIRONMENT} -f"
+echo "  Application logs: sudo journalctl -u arkfile${ENVIRONMENT} -f"
+echo "  Full stack logs: sudo journalctl -u rqlite${ENVIRONMENT} -u arkfile${ENVIRONMENT} -u caddy -f"
 
 # Optional: Mark the current release as a rollback
 ROLLBACK_MARKER="${PREVIOUS_RELEASE}/ROLLBACK"

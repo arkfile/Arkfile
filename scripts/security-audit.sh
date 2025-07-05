@@ -354,7 +354,7 @@ audit_service_configuration() {
     log_header "Service Configuration Audit"
     
     # Check systemd service files
-    for service in "arkfile" "rqlite@primary" "minio@primary"; do
+    for service in "arkfile" "rqlite" "minio"; do
         service_file="/etc/systemd/system/${service}.service"
         if [[ -f "$service_file" ]]; then
             log_success "Systemd service file exists: $service"
@@ -529,7 +529,7 @@ audit_logging_monitoring() {
     fi
     
     # Check journald for systemd services
-    for service in "arkfile" "rqlite@primary" "minio@primary"; do
+    for service in "arkfile" "rqlite" "minio"; do
         if journalctl -u "$service" --since "1 day ago" -q --no-pager >/dev/null 2>&1; then
             log_success "Systemd journal available for service: $service"
         else

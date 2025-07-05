@@ -27,6 +27,30 @@ fi
 
 echo -e "${GREEN}Building ${APP_NAME} version ${VERSION}${NC}"
 
+# Stop arkfile service if it's running to avoid "text file busy" errors
+if systemctl is-active --quiet arkfile 2>/dev/null; then
+    echo -e "${YELLOW}Stopping arkfile service for rebuild...${NC}"
+    sudo systemctl stop arkfile
+    # Wait a moment for the service to fully stop
+    sleep 2
+    
+    # Kill any remaining arkfile processes
+    if pgrep -f "arkfile" > /dev/null; then
+        echo "Terminating remaining arkfile processes..."
+        sudo pkill -f "arkfile" 2>/dev/null || true
+        sleep 1
+        
+        # Force kill if still running
+        if pgrep -f "arkfile" > /dev/null; then
+            echo "Force killing remaining arkfile processes..."
+            sudo pkill -9 -f "arkfile" 2>/dev/null || true
+            sleep 1
+        fi
+    fi
+    
+    echo -e "${GREEN}Service stopped successfully${NC}"
+fi
+
 # Create temporary build directory
 mkdir -p ${BUILD_DIR}
 

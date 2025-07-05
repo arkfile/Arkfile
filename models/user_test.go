@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/84adam/arkfile/auth"
 	"github.com/84adam/arkfile/config" // Import config package
 )
 
@@ -125,12 +124,12 @@ func TestCreateUser(t *testing.T) {
 			assert.Equal(t, tc.expectApproved, user.IsApproved, "Approved status mismatch")
 			assert.NotZero(t, user.ID, "User ID should be populated") // Check if ID is generated
 
-			// Assert Password Hashing in DB
+			// Assert Password Storage in DB - For OPAQUE, we store a placeholder
 			var dbPasswordHash string
 			err = db.QueryRow("SELECT password_hash FROM users WHERE email = ?", tc.email).Scan(&dbPasswordHash)
 			assert.NoError(t, err, "Failed to retrieve password hash from DB")
-			// Verify the stored hash corresponds to the provided password using Argon2ID
-			assert.True(t, auth.VerifyPassword(tc.password, dbPasswordHash), "Stored password hash should match the provided password")
+			// With OPAQUE authentication, password hash should be the placeholder
+			assert.Equal(t, tc.password, dbPasswordHash, "Password hash should be stored as provided (placeholder for OPAQUE)")
 		})
 	}
 
@@ -177,9 +176,12 @@ func TestGetUserByEmail(t *testing.T) {
 	assert.False(t, retrievedUser.ApprovedBy.Valid, "ApprovedBy should initially be invalid/NULL")
 	assert.False(t, retrievedUser.ApprovedAt.Valid, "ApprovedAt should initially be invalid/NULL")
 
-	// Compare password hash directly from DB as the struct field might be empty or different
-	assert.NotEmpty(t, retrievedUser.PasswordHash, "Password hash should be populated in retrieved user")
-	assert.True(t, auth.VerifyPassword(password, retrievedUser.PasswordHash), "Retrieved password hash should match original password")
+	// Verify password hash stored in database directly (User struct doesn't expose PasswordHash anymore)
+	var dbPasswordHash string
+	err = db.QueryRow("SELECT password_hash FROM users WHERE email = ?", email).Scan(&dbPasswordHash)
+	require.NoError(t, err)
+	// With OPAQUE authentication, password hash should be the placeholder
+	assert.Equal(t, password, dbPasswordHash, "Password hash should be stored as provided (placeholder for OPAQUE)")
 
 	// Test getting a non-existent user
 	_, err = GetUserByEmail(db, "nosuchuser@example.com")
@@ -187,74 +189,9 @@ func TestGetUserByEmail(t *testing.T) {
 	assert.Equal(t, sql.ErrNoRows, err, "Error should be sql.ErrNoRows")
 }
 
-func TestVerifyPassword(t *testing.T) {
-	// Config is loaded in TestMain now
-
-	// No DB needed, just need a User struct with a valid password hash
-	password := "CorrectPassword123?"
-	// Use Argon2ID for password hashing
-	hashedPassword, err := auth.HashPassword(password)
-	require.NoError(t, err)
-
-	user := &User{PasswordHash: hashedPassword}
-
-	// Assert: Correct password should verify
-	assert.True(t, user.VerifyPassword(password), "Correct password should verify successfully")
-
-	// Assert: Incorrect password should fail verification
-	assert.False(t, user.VerifyPassword("WrongPassword!"), "Incorrect password should fail verification")
-}
-
-func TestVerifyPasswordHash(t *testing.T) {
-	// Test the new VerifyPasswordHash method for client-side hashed passwords
-	correctHash := "fake-argon2id-hash-for-testing"
-	wrongHash := "wrong-hash-value"
-
-	user := &User{PasswordHash: correctHash}
-
-	// Assert: Correct hash should verify
-	assert.True(t, user.VerifyPasswordHash(correctHash), "Correct password hash should verify successfully")
-
-	// Assert: Incorrect hash should fail verification
-	assert.False(t, user.VerifyPasswordHash(wrongHash), "Incorrect password hash should fail verification")
-
-	// Assert: Empty hash should fail verification
-	assert.False(t, user.VerifyPasswordHash(""), "Empty password hash should fail verification")
-}
-
-func TestUpdatePassword(t *testing.T) {
-	db := setupTestDB_User(t)
-	defer db.Close()
-
-	// Create user
-	email := "updatepass@example.com"
-	initialPassword := "InitialPass1!def" // Make password valid complex
-	user, err := CreateUser(db, email, initialPassword)
-	require.NoError(t, err)
-
-	newPassword := "NewSecurePass?789xyz" // Make new password valid complex
-
-	// Execute UpdatePassword
-	err = user.UpdatePassword(db, newPassword)
-	assert.NoError(t, err, "Updating password should not produce an error")
-
-	// Refresh user data from DB to ensure password hash is correct for further checks if needed
-	// Although not strictly necessary for *this* test's assertions, it's good practice
-	refreshedUser, err := GetUserByEmail(db, user.Email)
-	require.NoError(t, err, "Failed to refresh user after password update")
-	user = refreshedUser // Update the user variable
-
-	// Assert: Verify the new password in the database
-	var updatedHash string
-	err = db.QueryRow("SELECT password_hash FROM users WHERE id = ?", user.ID).Scan(&updatedHash)
-	assert.NoError(t, err, "Failed to retrieve updated password hash from DB")
-
-	// Check if the new hash matches the new password using Argon2ID
-	assert.True(t, auth.VerifyPassword(newPassword, updatedHash), "New password hash in DB should match the new password")
-
-	// Check if the new hash DOES NOT match the old password
-	assert.False(t, auth.VerifyPassword(initialPassword, updatedHash), "New password hash should NOT match the old password")
-}
+// Note: TestVerifyPassword, TestVerifyPasswordHash, and TestUpdatePassword have been removed
+// as these methods are no longer available in the User struct with OPAQUE authentication.
+// Password verification is now handled through the OPAQUE protocol.
 
 func TestHasAdminPrivileges(t *testing.T) {
 	// Set admin emails

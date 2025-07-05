@@ -54,15 +54,12 @@ func CreateUser(db *sql.DB, email, passwordPlaceholder string) (*User, error) {
 
 // GetUserByEmail retrieves a user by email (OPAQUE-only)
 func GetUserByEmail(db *sql.DB, email string) (*User, error) {
-	// Add debug logging
-	// Note: We'll import logging package at the top if needed
 	user := &User{}
 	var createdAtStr string
 	var approvedAtStr sql.NullString
 	var totalStorageInterface interface{}
 	var storageLimitInterface interface{}
 
-	// Debug: Log the database query attempt
 	query := `SELECT id, email, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
@@ -76,14 +73,10 @@ func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			// Debug: Log when user not found
 			return nil, err // Return sql.ErrNoRows directly
 		}
-		// Debug: Log other database errors
 		return nil, err
 	}
-
-	// Debug: Log successful user retrieval
 
 	// Parse the timestamp strings
 	if createdAtStr != "" {

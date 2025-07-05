@@ -59,8 +59,7 @@ if command -v rqlited &> /dev/null && command -v rqlite &> /dev/null && [ "$FORC
     
     # Still need to install systemd service files
     echo -e "${BLUE}⚙️  Installing systemd service files...${NC}"
-    sudo cp "${BASE_DIR}/releases/current/systemd/rqlite@.service" /etc/systemd/system/
-    sudo cp "${BASE_DIR}/releases/current/systemd/rqlite.target" /etc/systemd/system/
+    sudo cp "${BASE_DIR}/releases/current/systemd/rqlite.service" /etc/systemd/system/
     
     # Create simplified data directory for single-node deployment
     echo "Setting up database directory..."
@@ -228,8 +227,7 @@ fi
 
 # Copy systemd service files
 echo -e "${BLUE}⚙️  Installing systemd service files...${NC}"
-sudo cp "${BASE_DIR}/releases/current/systemd/rqlite@.service" /etc/systemd/system/
-sudo cp "${BASE_DIR}/releases/current/systemd/rqlite.target" /etc/systemd/system/
+sudo cp "${BASE_DIR}/releases/current/systemd/rqlite.service" /etc/systemd/system/
 
 # Create simplified data directory for single-node deployment
 echo "Setting up database directory..."
@@ -257,10 +255,10 @@ echo "   RQLITE_ADDRESS=http://localhost:4001"
 echo "   # For clusters, add multiple RQLITE_NODES"
 echo
 echo "2. Start rqlite service:"
-echo "   sudo systemctl enable rqlite@prod"
-echo "   sudo systemctl start rqlite@prod"
+echo "   sudo systemctl enable rqlite"
+echo "   sudo systemctl start rqlite"
 echo
 echo "3. Check status:"
-echo "   sudo systemctl status rqlite@prod"
+echo "   sudo systemctl status rqlite"
 echo "   rqlite -H localhost:4001 'SELECT 1'"
 echo

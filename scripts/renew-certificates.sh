@@ -165,9 +165,9 @@ restart_services() {
     fi
     
     # Restart MinIO service
-    if systemctl is-active --quiet minio@arkfile; then
+    if systemctl is-active --quiet minio; then
         echo -e "${YELLOW}Restarting minio service...${NC}"
-        if sudo systemctl restart minio@arkfile; then
+        if sudo systemctl restart minio; then
             echo -e "  ${GREEN}✓ minio service restarted${NC}"
             services_restarted=$((services_restarted + 1))
         else
@@ -176,9 +176,9 @@ restart_services() {
     fi
     
     # Restart rqlite service
-    if systemctl is-active --quiet rqlite@arkfile; then
+    if systemctl is-active --quiet rqlite; then
         echo -e "${YELLOW}Restarting rqlite service...${NC}"
-        if sudo systemctl restart rqlite@arkfile; then
+        if sudo systemctl restart rqlite; then
             echo -e "  ${GREEN}✓ rqlite service restarted${NC}"
             services_restarted=$((services_restarted + 1))
         else
@@ -211,11 +211,11 @@ restart_services() {
             services_healthy=$((services_healthy + 1))
         fi
         
-        if systemctl is-active --quiet minio@arkfile; then
+        if systemctl is-active --quiet minio; then
             services_healthy=$((services_healthy + 1))
         fi
         
-        if systemctl is-active --quiet rqlite@arkfile; then
+        if systemctl is-active --quiet rqlite; then
             services_healthy=$((services_healthy + 1))
         fi
         
@@ -427,7 +427,7 @@ if systemctl is-active --quiet arkfile; then
     fi
 fi
 
-if systemctl is-active --quiet minio@arkfile; then
+if systemctl is-active --quiet minio; then
     echo -e "${YELLOW}Testing MinIO health endpoint...${NC}"
     if curl -f http://localhost:9000/minio/health/ready >/dev/null 2>&1; then
         echo -e "  ${GREEN}✓ MinIO: Health check passed${NC}"
@@ -436,7 +436,7 @@ if systemctl is-active --quiet minio@arkfile; then
     fi
 fi
 
-if systemctl is-active --quiet rqlite@arkfile; then
+if systemctl is-active --quiet rqlite; then
     echo -e "${YELLOW}Testing rqlite health endpoint...${NC}"
     if curl -f http://localhost:4001/status >/dev/null 2>&1; then
         echo -e "  ${GREEN}✓ rqlite: Health check passed${NC}"
@@ -462,7 +462,7 @@ echo -e "${BLUE}📋 Renewal Summary:${NC}"
 echo "========================================"
 echo "• Certificates renewed: ${#certificates_to_renew[@]}"
 echo "• Backup created: ${BACKUP_DIR}"
-echo "• Services restarted: $(systemctl is-active arkfile minio@arkfile rqlite@arkfile 2>/dev/null | grep -c "^active" || echo "0")"
+echo "• Services restarted: $(systemctl is-active arkfile minio rqlite 2>/dev/null | grep -c "^active" || echo "0")"
 echo "• Next renewal check: $(date -d "+$((VALIDITY_DAYS - WARNING_DAYS)) days" "+%Y-%m-%d")"
 
 echo ""

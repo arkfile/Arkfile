@@ -123,16 +123,16 @@ else
     print_status "NOT_FOUND" "arkfile.service not found"
 fi
 
-if systemctl list-unit-files | grep -q "minio@.service"; then
-    print_status "FOUND" "minio@.service found"
+if systemctl list-unit-files | grep -q "minio.service"; then
+    print_status "FOUND" "minio.service found"
 else
-    print_status "NOT_FOUND" "minio@.service not found"
+    print_status "NOT_FOUND" "minio.service not found"
 fi
 
-if systemctl list-unit-files | grep -q "rqlite@.service"; then
-    print_status "FOUND" "rqlite@.service found"
+if systemctl list-unit-files | grep -q "rqlite.service"; then
+    print_status "FOUND" "rqlite.service found"
 else
-    print_status "NOT_FOUND" "rqlite@.service not found"
+    print_status "NOT_FOUND" "rqlite.service not found"
 fi
 
 # Check for user and group
@@ -235,11 +235,11 @@ SERVICES_TO_STOP=()
 if systemctl is-active --quiet arkfile 2>/dev/null; then
     SERVICES_TO_STOP+=("arkfile")
 fi
-if systemctl is-active --quiet minio@node1 2>/dev/null; then
-    SERVICES_TO_STOP+=("minio@node1")
+if systemctl is-active --quiet minio 2>/dev/null; then
+    SERVICES_TO_STOP+=("minio")
 fi
-if systemctl is-active --quiet rqlite@node1 2>/dev/null; then
-    SERVICES_TO_STOP+=("rqlite@node1")
+if systemctl is-active --quiet rqlite 2>/dev/null; then
+    SERVICES_TO_STOP+=("rqlite")
 fi
 
 if [ ${#SERVICES_TO_STOP[@]} -gt 0 ]; then
@@ -263,11 +263,11 @@ SERVICES_TO_DISABLE=()
 if systemctl is-enabled --quiet arkfile 2>/dev/null; then
     SERVICES_TO_DISABLE+=("arkfile")
 fi
-if systemctl is-enabled --quiet minio@node1 2>/dev/null; then
-    SERVICES_TO_DISABLE+=("minio@node1")
+if systemctl is-enabled --quiet minio 2>/dev/null; then
+    SERVICES_TO_DISABLE+=("minio")
 fi
-if systemctl is-enabled --quiet rqlite@node1 2>/dev/null; then
-    SERVICES_TO_DISABLE+=("rqlite@node1")
+if systemctl is-enabled --quiet rqlite 2>/dev/null; then
+    SERVICES_TO_DISABLE+=("rqlite")
 fi
 
 if [ ${#SERVICES_TO_DISABLE[@]} -gt 0 ]; then
@@ -293,10 +293,10 @@ echo "========================"
 
 SERVICE_FILES=(
     "/etc/systemd/system/arkfile.service"
-    "/etc/systemd/system/minio@.service"
-    "/etc/systemd/system/rqlite@.service"
-    "/etc/systemd/system/minio.target"
-    "/etc/systemd/system/rqlite.target"
+    "/etc/systemd/system/minio.service"
+    "/etc/systemd/system/rqlite.service"
+    "/etc/systemd/system/minio"
+    "/etc/systemd/system/rqlite"
 )
 
 FOUND_SERVICE_FILES=()

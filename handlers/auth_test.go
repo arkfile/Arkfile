@@ -251,6 +251,10 @@ func TestOpaqueLogin_Success(t *testing.T) {
 	// which involves complex cryptographic operations. For now, we'll skip the actual execution
 	// and focus on input validation tests.
 
+	// Suppress unused variable warnings for variables we set up but don't use due to test skip
+	_ = c
+	_ = rec
+
 	t.Skip("OPAQUE authentication requires mocking complex cryptographic operations")
 }
 
@@ -321,6 +325,11 @@ func TestOpaqueHealthCheck_Success(t *testing.T) {
 
 	// Note: This test would require mocking OPAQUE server initialization
 	// For now, we'll skip the actual execution and focus on testing the endpoint exists
+
+	// Suppress unused variable warnings for variables we set up but don't use due to test skip
+	_ = c
+	_ = rec
+
 	t.Skip("OPAQUE health check requires mocking OPAQUE server initialization")
 }
 
