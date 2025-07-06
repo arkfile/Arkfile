@@ -145,7 +145,14 @@ RQLITE_USERNAME=demo-user
 RQLITE_PASSWORD=TestPassword123_Secure
 
 # Arkfile Application Configuration
+PORT=8080
 JWT_SECRET=demo-jwt-secret-change-for-production-use
+
+# TLS Configuration
+TLS_ENABLED=true
+TLS_PORT=4443
+TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server-cert.pem
+TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server-key.pem
 
 # Storage Configuration (Local MinIO for demo)
 STORAGE_PROVIDER=local
@@ -274,7 +281,20 @@ if [ "$arkfile_status" = "active" ]; then
     echo -e "${GREEN}✅ Arkfile is running!${NC}"
     
     # Get the port from config or use default
-    arkfile_port=$(grep -o 'PORT=[0-9]*' /opt/arkfile/releases/current/.env 2>/dev/null | cut -d= -f2 || echo "8080")
+    arkfile_port=$(sudo grep -o 'PORT=[0-9]*' /opt/arkfile/etc/secrets.env 2>/dev/null | cut -d= -f2)
+    if [ -z "$arkfile_port" ]; then
+        # Check if PORT is set in environment or use default
+        arkfile_port=$(echo $PORT 2>/dev/null || echo "8080")
+    fi
+    
+    # Get the TLS port from config or use default
+    arkfile_tls_port=$(sudo grep -o 'TLS_PORT=[0-9]*' /opt/arkfile/etc/secrets.env 2>/dev/null | cut -d= -f2)
+    if [ -z "$arkfile_tls_port" ]; then
+        arkfile_tls_port="4443"
+    fi
+    
+    # Check if TLS is enabled
+    tls_enabled=$(sudo grep -o 'TLS_ENABLED=true' /opt/arkfile/etc/secrets.env 2>/dev/null)
     
     # Get local IP for network access
     local_ip=$(hostname -I | awk '{print $1}' 2>/dev/null || echo "192.168.x.x")
@@ -285,18 +305,30 @@ if [ "$arkfile_status" = "active" ]; then
     echo
     echo -e "${BLUE}Your Arkfile system is now running at:${NC}"
     echo -e "${GREEN}  📱 HTTP Interface: http://localhost:${arkfile_port}${NC}"
-    echo -e "${GREEN}  🔒 HTTPS Interface: https://localhost:${arkfile_port}${NC}"
-    echo -e "${BLUE}     (Accept self-signed certificate warning)${NC}"
+    if [ -n "$tls_enabled" ]; then
+        echo -e "${GREEN}  🔒 HTTPS Interface: https://localhost:${arkfile_tls_port}${NC}"
+        echo -e "${BLUE}     (Accept self-signed certificate warning)${NC}"
+    else
+        echo -e "${YELLOW}  🔒 HTTPS Interface: Disabled${NC}"
+    fi
     echo
     echo -e "${BLUE}🌐 Local Network Access:${NC}"
     echo -e "${GREEN}  📱 HTTP: http://${local_ip}:${arkfile_port}${NC}"
-    echo -e "${GREEN}  🔒 HTTPS: https://${local_ip}:${arkfile_port}${NC}"
-    echo -e "${BLUE}     (TLS Status: ${TLS_STATUS})${NC}"
+    if [ -n "$tls_enabled" ]; then
+        echo -e "${GREEN}  🔒 HTTPS: https://${local_ip}:${arkfile_tls_port}${NC}"
+        echo -e "${BLUE}     (TLS Status: ${TLS_STATUS})${NC}"
+    else
+        echo -e "${YELLOW}  🔒 HTTPS: Disabled${NC}"
+    fi
     echo
     echo -e "${BLUE}Next Steps - Test Your System:${NC}"
     echo "1. Open your web browser"
-    echo "2. Go to: https://localhost:${arkfile_port} (recommended) or http://localhost:${arkfile_port}"
-    echo "   • For HTTPS: Accept the self-signed certificate warning"
+    if [ -n "$tls_enabled" ]; then
+        echo "2. Go to: https://localhost:${arkfile_tls_port} (recommended) or http://localhost:${arkfile_port}"
+        echo "   • For HTTPS: Accept the self-signed certificate warning"
+    else
+        echo "2. Go to: http://localhost:${arkfile_port}"
+    fi
     echo "3. Register a new account (e.g., admin@example.com)"
     echo "4. Upload a test file to verify encryption works"
     echo "5. Create a file share to test sharing functionality"

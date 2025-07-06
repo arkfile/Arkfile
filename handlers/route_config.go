@@ -21,6 +21,9 @@ func RegisterRoutes() {
 	Echo.POST("/api/opaque/capability", DetectDeviceCapability)
 	Echo.GET("/api/opaque/health", OpaqueHealthCheck)
 
+	// Admin contacts (public - no auth required)
+	Echo.GET("/api/admin-contacts", AdminContactsHandler)
+
 	// Session management (OPAQUE sessions)
 	Echo.POST("/api/refresh", RefreshToken)
 	Echo.POST("/api/logout", Logout)

@@ -99,7 +99,7 @@ func main() {
 		XFrameOptions:         "SAMEORIGIN",
 		HSTSMaxAge:            63072000, // 2 years
 		HSTSPreloadEnabled:    true,
-		ContentSecurityPolicy: "default-src 'self'",
+		ContentSecurityPolicy: "default-src 'self' 'unsafe-inline' 'unsafe-eval'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';",
 	}))
 
 	// Force HTTPS and check TLS version

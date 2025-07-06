@@ -11,6 +11,7 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/arkfile/auth"
+	"github.com/84adam/arkfile/config"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
@@ -257,4 +258,30 @@ func formatBytes(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// AdminContactsHandler returns admin contact information for user support
+func AdminContactsHandler(c echo.Context) error {
+	// Get admin emails from configuration system
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to load config for admin contacts: %v", err)
+		// Fallback to default
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"adminEmails": []string{"admin@arkfile.demo"},
+			"message":     "Contact information for administrators",
+		})
+	}
+
+	adminEmails := cfg.Deployment.AdminEmails
+
+	// Fallback if no admin emails configured
+	if len(adminEmails) == 0 {
+		adminEmails = []string{"admin@arkfile.demo"}
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"adminEmails": adminEmails,
+		"message":     "Contact information for administrators",
+	})
 }

@@ -273,6 +273,106 @@ window.securityUtils = (function() {
         }
     }
 
+    /**
+     * Updates password strength UI indicator
+     * @param {string} password - Password to analyze
+     * @param {HTMLElement} container - Container element with strength meter
+     */
+    function updatePasswordStrengthUI(password, container) {
+        if (!container) return;
+        
+        const strengthMeter = container.querySelector('.strength-meter');
+        if (!strengthMeter) return;
+
+        // Clear any existing extra warnings
+        const existingWarning = container.querySelector('.extra-weak-warning');
+        if (existingWarning) {
+            existingWarning.remove();
+        }
+
+        if (!password) {
+            strengthMeter.className = 'strength-meter';
+            strengthMeter.textContent = '';
+            strengthMeter.style.width = '0%';
+            return;
+        }
+
+        const requirements = {
+            length: password.length >= 14,
+            uppercase: /[A-Z]/.test(password),
+            lowercase: /[a-z]/.test(password),
+            number: /[0-9]/.test(password),
+            symbol: /[`~!@#$%^&*()\-_=+\[\]{}|;:,.<>?]/.test(password)
+        };
+
+        const metRequirements = Object.values(requirements).filter(Boolean).length;
+        
+        const strengthLevels = [
+            { threshold: 0, class: 'very-weak', label: 'Very Weak!', color: '#ff4d4d', width: 10 },
+            { threshold: 1, class: 'very-weak', label: 'Very Weak!', color: '#ff4d4d', width: 15 },
+            { threshold: 2, class: 'weak', label: 'Weak', color: '#ff8c00', width: 35 },
+            { threshold: 3, class: 'moderate', label: 'Moderate', color: '#ffd700', width: 60 },
+            { threshold: 4, class: 'strong', label: 'Strong', color: '#90ee90', width: 80 },
+            { threshold: 5, class: 'very-strong', label: 'Very Strong', color: '#32cd32', width: 100 }
+        ];
+
+        const level = strengthLevels[metRequirements] || strengthLevels[0];
+        
+        strengthMeter.className = `strength-meter ${level.class}`;
+        strengthMeter.textContent = level.label;
+        strengthMeter.style.width = `${level.width}%`;
+        strengthMeter.style.backgroundColor = level.color;
+        strengthMeter.style.color = '#fff';
+        strengthMeter.style.textAlign = 'center';
+        strengthMeter.style.padding = '4px 8px';
+        strengthMeter.style.borderRadius = '4px';
+        strengthMeter.style.fontSize = '12px';
+        strengthMeter.style.fontWeight = 'bold';
+        strengthMeter.style.transition = 'all 0.3s ease';
+
+        // Show extra warning for very weak passwords
+        if (metRequirements <= 1) {
+            const warning = document.createElement('div');
+            warning.className = 'extra-weak-warning';
+            warning.style.cssText = `
+                color: #ff4d4d;
+                font-size: 12px;
+                font-weight: bold;
+                margin-top: 5px;
+                padding: 5px;
+                background-color: #fff5f5;
+                border: 1px solid #fed7d7;
+                border-radius: 4px;
+            `;
+            warning.textContent = '⚠️ This password is very weak and easily guessable. Please use a stronger password.';
+            
+            const requirementsList = container.querySelector('.requirements-list');
+            if (requirementsList) {
+                requirementsList.parentNode.insertBefore(warning, requirementsList.nextSibling);
+            }
+        }
+
+        // Update individual requirements styling
+        const requirementItems = container.querySelectorAll('.requirements-list li');
+        const requirementKeys = ['length', 'uppercase', 'lowercase', 'number', 'symbol'];
+        
+        requirementItems.forEach((item, index) => {
+            if (index < requirementKeys.length) {
+                const isMet = requirements[requirementKeys[index]];
+                item.style.color = isMet ? '#32cd32' : '#666';
+                item.style.fontWeight = isMet ? 'bold' : 'normal';
+                const checkmark = isMet ? '✓ ' : '';
+                if (!item.textContent.startsWith('✓') && !item.textContent.startsWith('At least')) {
+                    item.textContent = checkmark + item.textContent;
+                } else if (isMet && !item.textContent.startsWith('✓')) {
+                    item.textContent = checkmark + item.textContent;
+                } else if (!isMet && item.textContent.startsWith('✓')) {
+                    item.textContent = item.textContent.substring(2);
+                }
+            }
+        });
+    }
+
     // Public API
     return {
         validatePassword,
@@ -283,6 +383,7 @@ window.securityUtils = (function() {
         addKeyToEncryptedFile,
         calculateSHA256,
         arrayBufferToBase64,
-        base64ToArrayBuffer
+        base64ToArrayBuffer,
+        updatePasswordStrengthUI
     };
 })();

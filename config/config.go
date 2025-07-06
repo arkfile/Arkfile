@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -83,12 +84,14 @@ type Config struct {
 	} `json:"key_management"`
 
 	Deployment struct {
-		Environment       string `json:"environment"`
-		DataDirectory     string `json:"data_directory"`
-		LogDirectory      string `json:"log_directory"`
-		AdminContact      string `json:"admin_contact"`
-		MaintenanceWindow string `json:"maintenance_window"`
-		BackupRetention   int    `json:"backup_retention_days"`
+		Environment       string   `json:"environment"`
+		DataDirectory     string   `json:"data_directory"`
+		LogDirectory      string   `json:"log_directory"`
+		AdminContact      string   `json:"admin_contact"`
+		AdminEmails       []string `json:"admin_emails"`
+		RequireApproval   bool     `json:"require_approval"`
+		MaintenanceWindow string   `json:"maintenance_window"`
+		BackupRetention   int      `json:"backup_retention_days"`
 	} `json:"deployment"`
 }
 
@@ -327,6 +330,25 @@ func loadEnvConfig(cfg *Config) error {
 	}
 	if adminContact := os.Getenv("ARKFILE_ADMIN_CONTACT"); adminContact != "" {
 		cfg.Deployment.AdminContact = adminContact
+	}
+
+	// Admin emails configuration
+	if adminEmails := os.Getenv("ADMIN_EMAILS"); adminEmails != "" {
+		// Parse comma-separated list of admin emails
+		emails := strings.Split(adminEmails, ",")
+		cfg.Deployment.AdminEmails = make([]string, 0, len(emails))
+		for _, email := range emails {
+			if trimmed := strings.TrimSpace(email); trimmed != "" {
+				cfg.Deployment.AdminEmails = append(cfg.Deployment.AdminEmails, trimmed)
+			}
+		}
+	}
+
+	// Require approval configuration
+	if requireApproval := os.Getenv("REQUIRE_APPROVAL"); requireApproval != "" {
+		if approval, err := strconv.ParseBool(requireApproval); err == nil {
+			cfg.Deployment.RequireApproval = approval
+		}
 	}
 
 	return nil

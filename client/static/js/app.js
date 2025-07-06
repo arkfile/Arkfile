@@ -298,7 +298,34 @@ async function opaqueLogin(email, password) {
         } else {
             hideProgress();
             const errorData = await response.json().catch(() => ({}));
-            showError(errorData.message || 'OPAQUE login failed. Please check your credentials.');
+            
+            // Check if this is an approval-related error
+            if (errorData.message && errorData.message.includes('not approved')) {
+                // Fetch admin emails for contact info
+                await fetchAdminEmails();
+                
+                const adminContactList = adminEmails.length > 0 
+                    ? adminEmails.join('\n• ') 
+                    : 'admin@arkfile.demo';
+                
+                createModal({
+                    title: "Account Approval Required",
+                    message: `🔒 Your account status: ${errorData.userStatus || 'Pending Approval'}
+
+Your account is registered but requires administrator approval before you can log in.
+
+📧 Contact an administrator for approval or status updates:
+• ${adminContactList}
+
+📅 Registration Date: ${errorData.registrationDate ? new Date(errorData.registrationDate).toLocaleDateString() : 'Unknown'}
+
+💡 Tip: Include your registered email address (${email}) when contacting support.
+
+⏰ Account approvals are typically processed within 1-2 business days.`
+                });
+            } else {
+                showError(errorData.message || 'OPAQUE login failed. Please check your credentials.');
+            }
         }
     } catch (error) {
         hideProgress();
@@ -447,12 +474,44 @@ async function opaqueRegister(email, password) {
         if (response.ok) {
             const data = await response.json();
             hideProgress();
-            showSuccess(`Registration successful with ${data.authMethod}! Device capability: ${data.deviceCapability}`);
+            
+            // Fetch admin emails for contact info
+            await fetchAdminEmails();
+            
+            // Show registration success modal with approval information
+            const adminContactList = adminEmails.length > 0 
+                ? adminEmails.join('\n• ') 
+                : 'admin@arkfile.demo';
+                
+            createModal({
+                title: "Registration Successful!",
+                message: `Your account has been created successfully with ${data.authMethod}.
+
+📋 Next Steps:
+• An administrator must approve your account before you can log in
+• You will receive an email notification when approved
+• This usually takes 1-2 business days
+
+📧 Need help or want to check your status?
+Contact an administrator:
+• ${adminContactList}
+
+💡 Tip: Include your registered email address (${email}) when contacting support.`
+            });
+            
             toggleAuthForm();
         } else {
             hideProgress();
             const errorData = await response.json().catch(() => ({}));
-            showError(errorData.message || 'OPAQUE registration failed. Please try again.');
+            
+            createModal({
+                title: "Registration Failed",
+                message: `Registration was unsuccessful.
+
+Error: ${errorData.message || 'OPAQUE registration failed. Please try again.'}
+
+Please check your information and try again. If the problem persists, contact an administrator.`
+            });
         }
     } catch (error) {
         hideProgress();
@@ -512,27 +571,8 @@ function hideProgress() {
     }
 }
 
-function updatePasswordStrengthUI(password) {
-    const strengthIndicator = document.getElementById('password-strength');
-    if (!strengthIndicator) return;
-
-    const requirements = {
-        length: password.length >= 12,
-        uppercase: /[A-Z]/.test(password),
-        lowercase: /[a-z]/.test(password),
-        number: /[0-9]/.test(password),
-        symbol: /[^A-Za-z0-9]/.test(password)
-    };
-
-    let strength = Object.values(requirements).filter(Boolean).length;
-    
-    const colors = ['#ff4d4d', '#ffaa00', '#ffdd00', '#00cc44', '#00aa44'];
-    const labels = ['Very Weak', 'Weak', 'Moderate', 'Strong', 'Very Strong'];
-
-    strengthIndicator.style.width = `${(strength + 1) * 20}%`;
-    strengthIndicator.style.backgroundColor = colors[strength];
-    strengthIndicator.textContent = labels[strength];
-}
+// This function is now handled by securityUtils.updatePasswordStrengthUI
+// Remove the old broken implementation
 
 // File handling functions
 async function uploadFile() {
@@ -786,6 +826,99 @@ function toggleSecuritySettings() {
     }
 }
 
+// Modal utility functions
+function createModal(options) {
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: rgba(0, 0, 0, 0.5);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+    `;
+
+    const modalContent = document.createElement('div');
+    modalContent.className = 'modal-content';
+    modalContent.style.cssText = `
+        background: white;
+        padding: 30px;
+        border-radius: 8px;
+        max-width: 500px;
+        width: 90%;
+        max-height: 80vh;
+        overflow-y: auto;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    `;
+
+    const title = document.createElement('h3');
+    title.style.cssText = `
+        margin-top: 0;
+        margin-bottom: 15px;
+        color: #333;
+        text-align: center;
+    `;
+    title.textContent = options.title;
+
+    const message = document.createElement('div');
+    message.style.cssText = `
+        margin-bottom: 20px;
+        line-height: 1.5;
+        color: #666;
+        white-space: pre-line;
+    `;
+    message.textContent = options.message;
+
+    const closeButton = document.createElement('button');
+    closeButton.textContent = 'Close';
+    closeButton.style.cssText = `
+        width: 100%;
+        padding: 10px;
+        background-color: #007bff;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 16px;
+    `;
+    closeButton.onclick = () => modal.remove();
+
+    modalContent.appendChild(title);
+    modalContent.appendChild(message);
+    modalContent.appendChild(closeButton);
+    modal.appendChild(modalContent);
+
+    // Close modal when clicking outside
+    modal.onclick = (e) => {
+        if (e.target === modal) {
+            modal.remove();
+        }
+    };
+
+    document.body.appendChild(modal);
+    return modal;
+}
+
+// Get admin emails from server
+let adminEmails = [];
+async function fetchAdminEmails() {
+    try {
+        const response = await fetch('/api/admin-contacts');
+        if (response.ok) {
+            const data = await response.json();
+            adminEmails = data.adminEmails || [];
+        }
+    } catch (error) {
+        console.warn('Could not fetch admin emails:', error);
+        adminEmails = ['admin@arkfile.demo']; // Fallback
+    }
+}
+
 // UI helper functions
 function toggleAuthForm() {
     document.getElementById('login-form').classList.toggle('hidden');
@@ -843,14 +976,18 @@ window.addEventListener('load', () => {
     // Setup password strength monitoring for registration
     const registerPassword = document.getElementById('register-password');
     const registerContainer = document.querySelector('.register-form .password-section');
-    registerPassword?.addEventListener('input', (e) => {
-        securityUtils.updatePasswordStrengthUI(e.target.value, registerContainer);
-    });
+    if (registerPassword && registerContainer) {
+        registerPassword.addEventListener('input', (e) => {
+            securityUtils.updatePasswordStrengthUI(e.target.value, registerContainer);
+        });
+    }
 
     // Setup password strength monitoring for file upload
-    filePassword?.addEventListener('input', (e) => {
-        securityUtils.updatePasswordStrengthUI(e.target.value, customPasswordSection);
-    });
+    if (filePassword && customPasswordSection) {
+        filePassword.addEventListener('input', (e) => {
+            securityUtils.updatePasswordStrengthUI(e.target.value, customPasswordSection);
+        });
+    }
 });
 
 // Check session validity periodically

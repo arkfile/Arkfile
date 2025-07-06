@@ -87,25 +87,23 @@ class ChunkedUploadUI {
     
     // Update password strength meter
     updatePasswordStrength(password) {
-        if (!password) {
-            this.customPasswordSection.querySelector('.strength-meter').style.width = '0%';
-            return;
+        if (window.securityUtils && window.securityUtils.updatePasswordStrengthUI) {
+            window.securityUtils.updatePasswordStrengthUI(password, this.customPasswordSection);
+        } else {
+            // Fallback if securityUtils not available
+            const meter = this.customPasswordSection.querySelector('.strength-meter');
+            if (meter) {
+                if (!password) {
+                    meter.style.width = '0%';
+                    meter.textContent = '';
+                    return;
+                }
+                // Very basic fallback - just show "Very Weak!"
+                meter.style.width = '15%';
+                meter.style.backgroundColor = '#ff4d4d';
+                meter.textContent = 'Very Weak!';
+            }
         }
-        
-        let strength = 0;
-        if (password.length >= 12) strength++;
-        if (/[A-Z]/.test(password)) strength++;
-        if (/[a-z]/.test(password)) strength++;
-        if (/[0-9]/.test(password)) strength++;
-        if (/[^A-Za-z0-9]/.test(password)) strength++;
-        
-        const percent = (strength / 5) * 100;
-        const meter = this.customPasswordSection.querySelector('.strength-meter');
-        meter.style.width = `${percent}%`;
-        
-        // Color based on strength
-        const colors = ['#ff4d4d', '#ffaa00', '#ffdd00', '#00cc44', '#00aa44'];
-        meter.style.backgroundColor = colors[strength];
     }
     
     // Start file upload process
@@ -599,7 +597,47 @@ class ChunkedUploadUI {
         
         // Password strength meter
         passwordInput.addEventListener('input', (e) => {
-            this.updatePasswordStrength(e.target.value);
+            const password = e.target.value;
+            if (window.securityUtils && window.securityUtils.updatePasswordStrengthUI) {
+                // Create a temporary container for the password section
+                window.securityUtils.updatePasswordStrengthUI(password, passwordSection);
+            } else {
+                // Fallback basic strength meter
+                if (!password) {
+                    strengthMeter.style.width = '0%';
+                    strengthMeter.textContent = '';
+                    return;
+                }
+                
+                let strength = 0;
+                if (password.length >= 12) strength++;
+                if (/[A-Z]/.test(password)) strength++;
+                if (/[a-z]/.test(password)) strength++;
+                if (/[0-9]/.test(password)) strength++;
+                if (/[^A-Za-z0-9]/.test(password)) strength++;
+                
+                if (strength <= 1) {
+                    strengthMeter.style.width = '15%';
+                    strengthMeter.style.backgroundColor = '#ff4d4d';
+                    strengthMeter.textContent = 'Very Weak!';
+                } else if (strength === 2) {
+                    strengthMeter.style.width = '35%';
+                    strengthMeter.style.backgroundColor = '#ff8c00';
+                    strengthMeter.textContent = 'Weak';
+                } else if (strength === 3) {
+                    strengthMeter.style.width = '60%';
+                    strengthMeter.style.backgroundColor = '#ffd700';
+                    strengthMeter.textContent = 'Moderate';
+                } else if (strength === 4) {
+                    strengthMeter.style.width = '80%';
+                    strengthMeter.style.backgroundColor = '#90ee90';
+                    strengthMeter.textContent = 'Strong';
+                } else {
+                    strengthMeter.style.width = '100%';
+                    strengthMeter.style.backgroundColor = '#32cd32';
+                    strengthMeter.textContent = 'Very Strong';
+                }
+            }
         });
         
         // Copy link button

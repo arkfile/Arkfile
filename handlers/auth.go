@@ -319,7 +319,11 @@ func OpaqueLogin(c echo.Context) error {
 
 	// Check user approval status
 	if !user.IsApproved {
-		return echo.NewHTTPError(http.StatusForbidden, "User account not approved")
+		return c.JSON(http.StatusForbidden, map[string]interface{}{
+			"message":          "User account not approved",
+			"userStatus":       "pending_approval",
+			"registrationDate": user.CreatedAt,
+		})
 	}
 
 	// Perform OPAQUE authentication
