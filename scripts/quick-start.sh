@@ -108,6 +108,67 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+# Step 1.5: Check Go version and resolve dependencies
+echo -e "${YELLOW}Step 1.5: Checking Go version and resolving dependencies...${NC}"
+
+# Function to check Go version requirements from go.mod
+check_go_version() {
+    local required_version=$(grep '^go [0-9]' go.mod | awk '{print $2}')
+    
+    if [ -z "$required_version" ]; then
+        echo -e "${YELLOW}⚠️  Cannot determine Go version requirement from go.mod${NC}"
+        return 0
+    fi
+    
+    local current_version=$(go version | grep -o 'go[0-9]\+\.[0-9]\+\.[0-9]\+' | sed 's/go//')
+    
+    if [ -z "$current_version" ]; then
+        echo -e "${RED}❌ Cannot determine Go version${NC}"
+        exit 1
+    fi
+    
+    # Convert versions to comparable format (remove dots and compare as integers)
+    local current_num=$(echo $current_version | awk -F. '{printf "%d%02d%02d", $1, $2, $3}')
+    local required_num=$(echo $required_version | awk -F. '{printf "%d%02d%02d", $1, $2, $3}')
+    
+    if [ "$current_num" -lt "$required_num" ]; then
+        echo -e "${RED}❌ Go version $current_version is too old${NC}"
+        echo -e "${YELLOW}Required: Go $required_version or later (from go.mod)${NC}"
+        echo -e "${YELLOW}Current:  Go $current_version${NC}"
+        echo
+        echo -e "${BLUE}To update Go:${NC}"
+        echo "1. Visit https://golang.org/dl/"
+        echo "2. Download and install Go $required_version or later"
+        echo "3. Or use your system's package manager"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✅ Go version $current_version meets requirements (>= $required_version)${NC}"
+}
+
+# Check if Go is installed
+if ! command -v go >/dev/null 2>&1; then
+    echo -e "${RED}❌ Go is required but not installed${NC}"
+    echo -e "${BLUE}To install Go:${NC}"
+    echo "1. Visit https://golang.org/dl/"
+    echo "2. Download and install the latest Go version"
+    echo "3. Or use your system's package manager"
+    exit 1
+fi
+
+check_go_version
+
+# Ensure Go dependencies are resolved
+if ! go mod download; then
+    echo -e "${YELLOW}Dependencies need updating, running go mod tidy...${NC}"
+    go mod tidy
+    if ! go mod download; then
+        echo -e "${RED}❌ Failed to resolve Go dependencies${NC}"
+        exit 1
+    fi
+fi
+echo -e "${GREEN}✅ Go dependencies resolved${NC}"
+
 # Step 2: Set up services (MinIO and rqlite)
 echo -e "${YELLOW}Step 2: Setting up storage and database services...${NC}"
 sudo ./scripts/setup-minio.sh

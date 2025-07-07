@@ -12,7 +12,6 @@ This document provides a comprehensive overview of Arkfile's security architectu
 6. [Security Operations](#security-operations)
 7. [Monitoring and Alerting](#monitoring-and-alerting)
 8. [Incident Response](#incident-response)
-9. [Compliance and Auditing](#compliance-and-auditing)
 10. [Threat Detection](#threat-detection)
 
 ## Architecture Overview
@@ -342,7 +341,7 @@ MESSAGE="$2"
 
 case "$ALERT_TYPE" in
     "critical")
-        echo "$MESSAGE" | mail -s "CRITICAL: Arkfile Security Alert" admin@company.com
+        # echo "$MESSAGE" | mail -s "CRITICAL: Arkfile Security Alert" admin@example.invalid
         curl -X POST "$SLACK_WEBHOOK" -d "{\"text\":\"CRITICAL: $MESSAGE\"}"
         ;;
     "warning")
@@ -454,7 +453,9 @@ rqlite -H localhost:4001 \
 echo "ALL USERS MUST RE-REGISTER - OPAQUE KEY ROTATED DUE TO SECURITY INCIDENT"
 ```
 
-## Compliance and Auditing
+## Audit Trails  
+Arkfile is pre-release software and **has no formal security certifications**.  
+The features below describe on-disk logging and in-app event tracking only.
 
 ### Audit Trail Requirements
 
@@ -474,23 +475,8 @@ echo "ALL USERS MUST RE-REGISTER - OPAQUE KEY ROTATED DUE TO SECURITY INCIDENT"
 
 ### Compliance Frameworks
 
-**SOC 2 Type II:**
-- Continuous monitoring implementation
-- Quarterly security assessments
-- Annual penetration testing
-- Vendor security assessments
 
-**ISO 27001:**
-- Risk assessment documentation
-- Security policy implementation
-- Regular security reviews
-- Incident response procedures
 
-**NIST Cybersecurity Framework:**
-- Asset inventory maintenance
-- Vulnerability management
-- Access control implementation
-- Security awareness training
 
 ### Regular Audit Procedures
 
@@ -656,9 +642,6 @@ rqlite -H localhost:4001 \
 ## Emergency Contacts and Escalation
 
 ### Security Team Contacts
-- **Security Operations**: security@company.com
-- **Incident Response**: incidents@company.com
-- **On-Call Security**: oncall-security@company.com
 
 ### Escalation Matrix
 1. **Level 1**: System Administrator (Response: 30 minutes)
@@ -667,10 +650,6 @@ rqlite -H localhost:4001 \
 4. **Level 4**: Executive Team (Response: 24 hours)
 
 ### External Resources
-- **Legal Counsel**: legal@company.com
-- **Public Relations**: pr@company.com
-- **Regulatory Affairs**: compliance@company.com
-- **Cyber Insurance**: insurance@company.com
 
 ---
 
@@ -697,7 +676,6 @@ rqlite -H localhost:4001 \
 ```
 
 ### Security Properties
-- **Quantum Resistance**: Argon2ID memory-hard functions
 - **Forward Secrecy**: Ephemeral session keys
 - **Server Impersonation Protection**: OPAQUE mutual authentication
 - **Replay Attack Prevention**: Protocol-level nonce handling
