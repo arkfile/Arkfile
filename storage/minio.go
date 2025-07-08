@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"log"
@@ -353,4 +354,105 @@ func (m *MinioStorage) GetObjectChunk(ctx context.Context, objectName string, of
 	}
 
 	return object, nil
+}
+
+// PutObjectWithPadding stores an object with padding applied
+func (m *MinioStorage) PutObjectWithPadding(ctx context.Context, storageID string, reader io.Reader, originalSize, paddedSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
+	// Create a padded reader that adds padding bytes after the original content
+	paddingSize := paddedSize - originalSize
+	paddedReader := io.MultiReader(reader, &paddingReader{size: paddingSize})
+
+	// Store with padded size
+	return m.PutObject(ctx, storageID, paddedReader, paddedSize, opts)
+}
+
+// GetObjectWithoutPadding retrieves an object and strips padding
+func (m *MinioStorage) GetObjectWithoutPadding(ctx context.Context, storageID string, originalSize int64, opts minio.GetObjectOptions) (io.ReadCloser, error) {
+	// Get the full object
+	object, err := m.GetObject(ctx, storageID, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Wrap in a limited reader to strip padding
+	return &limitedReadCloser{
+		ReadCloser: object,
+		limit:      originalSize,
+	}, nil
+}
+
+// CompleteMultipartUploadWithPadding completes a multipart upload with padding
+func (m *MinioStorage) CompleteMultipartUploadWithPadding(ctx context.Context, storageID, uploadID string, parts []minio.CompletePart, originalSize, paddedSize int64) error {
+	// If padding is needed, we need to upload a final padding part
+	paddingSize := paddedSize - originalSize
+	if paddingSize > 0 {
+		// Create padding reader
+		paddingReader := &paddingReader{size: paddingSize}
+
+		// Upload padding as the final part
+		finalPartNumber := len(parts) + 1
+		paddingPart, err := m.UploadPart(ctx, storageID, uploadID, finalPartNumber, paddingReader, paddingSize)
+		if err != nil {
+			return fmt.Errorf("failed to upload padding part: %w", err)
+		}
+
+		// Add padding part to parts list
+		parts = append(parts, paddingPart)
+	}
+
+	// Complete the upload with all parts including padding
+	return m.CompleteMultipartUpload(ctx, storageID, uploadID, parts)
+}
+
+// paddingReader generates padding bytes on demand
+type paddingReader struct {
+	size int64
+	read int64
+}
+
+func (r *paddingReader) Read(p []byte) (n int, err error) {
+	if r.read >= r.size {
+		return 0, io.EOF
+	}
+
+	toRead := int64(len(p))
+	if toRead > r.size-r.read {
+		toRead = r.size - r.read
+	}
+
+	// Generate random padding bytes
+	n = int(toRead)
+	if _, err := rand.Read(p[:n]); err != nil {
+		return 0, fmt.Errorf("failed to generate padding: %w", err)
+	}
+
+	r.read += toRead
+	return n, nil
+}
+
+// limitedReadCloser wraps a ReadCloser and limits reading to a specific size
+type limitedReadCloser struct {
+	io.ReadCloser
+	limit int64
+	read  int64
+}
+
+func (l *limitedReadCloser) Read(p []byte) (n int, err error) {
+	if l.read >= l.limit {
+		return 0, io.EOF
+	}
+
+	toRead := int64(len(p))
+	if toRead > l.limit-l.read {
+		toRead = l.limit - l.read
+	}
+
+	n, err = l.ReadCloser.Read(p[:toRead])
+	l.read += int64(n)
+
+	if l.read >= l.limit && err == nil {
+		err = io.EOF
+	}
+
+	return n, err
 }

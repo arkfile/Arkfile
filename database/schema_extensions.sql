@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     password_hint TEXT,
     password_type TEXT NOT NULL DEFAULT 'custom',
     storage_upload_id TEXT,
+    storage_id VARCHAR(36),  -- UUID v4 for storage backend
+    padded_size BIGINT,      -- Size after padding
     status TEXT NOT NULL DEFAULT 'in_progress',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -221,3 +223,25 @@ CREATE TABLE IF NOT EXISTS security_alerts (
     INDEX idx_alerts_unack (acknowledged, created_at),
     INDEX idx_alerts_entity (entity_id, time_window)
 );
+
+-- Update file_metadata table to include storage_id and padded_size
+CREATE TABLE IF NOT EXISTS file_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT NOT NULL,
+    storage_id VARCHAR(36) UNIQUE NOT NULL,  -- UUID v4 for storage backend
+    owner_email TEXT NOT NULL,
+    password_hint TEXT,
+    password_type TEXT NOT NULL DEFAULT 'custom',
+    sha256sum CHAR(64) NOT NULL,
+    size_bytes BIGINT NOT NULL,             -- Original file size
+    padded_size BIGINT NOT NULL,            -- Size after padding
+    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    multi_key BOOLEAN DEFAULT FALSE,
+    FOREIGN KEY (owner_email) REFERENCES users(email) ON DELETE CASCADE,
+    UNIQUE(filename, owner_email)
+);
+
+-- Indexes for file_metadata
+CREATE INDEX IF NOT EXISTS idx_file_metadata_owner ON file_metadata(owner_email);
+CREATE INDEX IF NOT EXISTS idx_file_metadata_upload_date ON file_metadata(upload_date);
+CREATE INDEX IF NOT EXISTS idx_file_metadata_storage_id ON file_metadata(storage_id);

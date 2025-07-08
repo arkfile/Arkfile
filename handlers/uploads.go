@@ -68,10 +68,19 @@ func CreateUploadSession(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	// Create upload session record
+	// Generate storage ID and calculate padded size
+	storageID := models.GenerateStorageID()
+	paddingCalculator := utils.NewPaddingCalculator()
+	paddedSize, err := paddingCalculator.CalculatePaddedSize(request.TotalSize)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to calculate padding: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process file")
+	}
+
+	// Create upload session record with storage_id
 	_, err = tx.Exec(
-		"INSERT INTO upload_sessions (id, filename, owner_email, total_size, chunk_size, total_chunks, original_hash, password_hint, password_type, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		sessionID, request.Filename, email, request.TotalSize, request.ChunkSize, totalChunks, request.OriginalHash, request.PasswordHint, request.PasswordType, "in_progress", time.Now().Add(24*time.Hour),
+		"INSERT INTO upload_sessions (id, filename, owner_email, total_size, chunk_size, total_chunks, original_hash, password_hint, password_type, storage_id, padded_size, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		sessionID, request.Filename, email, request.TotalSize, request.ChunkSize, totalChunks, request.OriginalHash, request.PasswordHint, request.PasswordType, storageID, paddedSize, "in_progress", time.Now().Add(24*time.Hour),
 	)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create upload session")
@@ -90,9 +99,9 @@ func CreateUploadSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Storage system configuration error")
 	}
 
-	uploadID, err := minioProvider.InitiateMultipartUpload(c.Request().Context(), request.Filename, metadata)
+	uploadID, err := minioProvider.InitiateMultipartUpload(c.Request().Context(), storageID, metadata)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to initiate multipart upload for %s via provider: %v", request.Filename, err)
+		logging.ErrorLogger.Printf("Failed to initiate multipart upload for %s (storage_id: %s) via provider: %v", request.Filename, storageID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to initialize storage upload")
 	}
 
@@ -105,7 +114,7 @@ func CreateUploadSession(c echo.Context) error {
 		// Abort the multipart upload if we can't update the database (using minioProvider)
 		// Note: minioProvider should still be in scope here from the assertion above.
 		if minioProvider != nil {
-			minioProvider.AbortMultipartUpload(c.Request().Context(), request.Filename, uploadID)
+			minioProvider.AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update upload session")
 	}
@@ -113,7 +122,7 @@ func CreateUploadSession(c echo.Context) error {
 	if err := tx.Commit(); err != nil {
 		// Attempt to abort the storage upload if we can't commit (using minioProvider)
 		if minioProvider != nil {
-			minioProvider.AbortMultipartUpload(c.Request().Context(), request.Filename, uploadID)
+			minioProvider.AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
 	}
@@ -316,14 +325,15 @@ func CancelUpload(c echo.Context) error {
 	var (
 		ownerEmail      string
 		filename        string
+		storageID       string
 		storageUploadID string
 		status          string
 	)
 
 	err := database.DB.QueryRow(
-		"SELECT owner_email, filename, storage_upload_id, status FROM upload_sessions WHERE id = ?",
+		"SELECT owner_email, filename, storage_id, storage_upload_id, status FROM upload_sessions WHERE id = ?",
 		sessionID,
-	).Scan(&ownerEmail, &filename, &storageUploadID, &status)
+	).Scan(&ownerEmail, &filename, &storageID, &storageUploadID, &status)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
@@ -358,8 +368,8 @@ func CancelUpload(c echo.Context) error {
 	}
 
 	// Abort the multipart upload in storage using storage provider interface
-	if storageUploadID != "" {
-		err = storage.Provider.AbortMultipartUpload(c.Request().Context(), filename, storageUploadID)
+	if storageUploadID != "" && storageID != "" {
+		err = storage.Provider.AbortMultipartUpload(c.Request().Context(), storageID, storageUploadID)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to abort storage upload via storage provider: %v", err)
 			// Continue anyway - we still want to mark the session as canceled in the database
@@ -465,15 +475,16 @@ func UploadChunk(c echo.Context) error {
 	var (
 		ownerEmail      string
 		filename        string
+		storageID       string
 		storageUploadID string
 		status          string
 		totalChunks     int
 	)
 
 	err = database.DB.QueryRow(
-		"SELECT owner_email, filename, storage_upload_id, status, total_chunks FROM upload_sessions WHERE id = ?",
+		"SELECT owner_email, filename, storage_id, storage_upload_id, status, total_chunks FROM upload_sessions WHERE id = ?",
 		sessionID,
-	).Scan(&ownerEmail, &filename, &storageUploadID, &status, &totalChunks)
+	).Scan(&ownerEmail, &filename, &storageID, &storageUploadID, &status, &totalChunks)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
@@ -515,7 +526,7 @@ func UploadChunk(c echo.Context) error {
 	// Stream chunk directly to storage using storage provider interface
 	part, err := storage.Provider.UploadPart(
 		c.Request().Context(),
-		filename,
+		storageID, // Use storage ID instead of filename
 		storageUploadID,
 		minioPartNumber,
 		c.Request().Body,
@@ -564,7 +575,9 @@ func CompleteUpload(c echo.Context) error {
 	var (
 		ownerEmail      string
 		filename        string
+		storageID       string
 		storageUploadID string
+		paddedSize      int64
 		status          string
 		totalChunks     int
 		totalSize       int64
@@ -574,10 +587,10 @@ func CompleteUpload(c echo.Context) error {
 	)
 
 	err = tx.QueryRow(
-		"SELECT owner_email, filename, storage_upload_id, status, total_chunks, total_size, original_hash, password_hint, password_type FROM upload_sessions WHERE id = ?",
+		"SELECT owner_email, filename, storage_id, storage_upload_id, padded_size, status, total_chunks, total_size, original_hash, password_hint, password_type FROM upload_sessions WHERE id = ?",
 		sessionID,
 	).Scan(
-		&ownerEmail, &filename, &storageUploadID, &status, &totalChunks,
+		&ownerEmail, &filename, &storageID, &storageUploadID, &paddedSize, &status, &totalChunks,
 		&totalSize, &originalHash, &passwordHint, &passwordType,
 	)
 
@@ -641,8 +654,15 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error reading chunk data")
 	}
 
-	// Complete the multipart upload in storage using storage provider interface
-	err = storage.Provider.CompleteMultipartUpload(c.Request().Context(), filename, storageUploadID, parts)
+	// Complete the multipart upload in storage with padding
+	err = storage.Provider.CompleteMultipartUploadWithPadding(
+		c.Request().Context(),
+		storageID,
+		storageUploadID,
+		parts,
+		totalSize,
+		paddedSize,
+	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to complete storage upload via storage provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
@@ -667,10 +687,10 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update session status")
 	}
 
-	// Create file metadata record
+	// Create file metadata record with storage_id and padded_size
 	_, err = tx.Exec(
-		"INSERT INTO file_metadata (filename, owner_email, password_hint, password_type, sha256sum, size_bytes) VALUES (?, ?, ?, ?, ?, ?)",
-		filename, email, passwordHint, passwordType, originalHash, totalSize,
+		"INSERT INTO file_metadata (filename, storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes, padded_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		filename, storageID, email, passwordHint, passwordType, originalHash, totalSize, paddedSize,
 	)
 	if err != nil {
 		// Handle duplicate filenames
@@ -723,13 +743,14 @@ func DeleteFile(c echo.Context) error {
 	}
 	defer tx.Rollback() // Rollback if not committed
 
-	// Verify file ownership and get file size
+	// Verify file ownership and get file size and storage_id
 	var ownerEmail string
+	var storageID string
 	var fileSize int64
 	err = tx.QueryRow(
-		"SELECT owner_email, size_bytes FROM file_metadata WHERE filename = ?",
+		"SELECT owner_email, storage_id, size_bytes FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&ownerEmail, &fileSize)
+	).Scan(&ownerEmail, &storageID, &fileSize)
 
 	if err != nil {
 		// If there is any error (including sql.ErrNoRows), treat it as 'not found'.
@@ -744,8 +765,8 @@ func DeleteFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to delete this file")
 	}
 
-	// Remove from object storage using storage.Provider
-	err = storage.Provider.RemoveObject(c.Request().Context(), filename, minio.RemoveObjectOptions{})
+	// Remove from object storage using storage ID
+	err = storage.Provider.RemoveObject(c.Request().Context(), storageID, minio.RemoveObjectOptions{})
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to remove file from storage via provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete file from storage")

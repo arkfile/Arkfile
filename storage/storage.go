@@ -30,8 +30,11 @@ type ObjectStorageProvider interface {
 	CompleteMultipartUpload(ctx context.Context, objectName, uploadID string, parts []minio.CompletePart) error
 	AbortMultipartUpload(ctx context.Context, objectName, uploadID string) error
 	GetObjectChunk(ctx context.Context, objectName string, offset, length int64) (io.ReadCloser, error)
-	// Add other storage methods used by the application here if needed,
-	// e.g., ListObjects, StatObject, etc.
+
+	// Padding-aware storage methods
+	PutObjectWithPadding(ctx context.Context, storageID string, reader io.Reader, originalSize, paddedSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
+	GetObjectWithoutPadding(ctx context.Context, storageID string, originalSize int64, opts minio.GetObjectOptions) (io.ReadCloser, error)
+	CompleteMultipartUploadWithPadding(ctx context.Context, storageID, uploadID string, parts []minio.CompletePart, originalSize, paddedSize int64) error
 }
 
 // Global object storage provider instance (will be initialized with Minio or mock)

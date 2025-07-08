@@ -60,6 +60,15 @@ func UploadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Storage limit would be exceeded")
 	}
 
+	// Generate storage ID and calculate padded size
+	storageID := models.GenerateStorageID()
+	paddingCalculator := utils.NewPaddingCalculator()
+	paddedSize, err := paddingCalculator.CalculatePaddedSize(fileSize)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to calculate padding: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process file")
+	}
+
 	// Start transaction for atomic storage update
 	tx, err := database.DB.Begin()
 	if err != nil {
@@ -67,12 +76,13 @@ func UploadFile(c echo.Context) error {
 	}
 	defer tx.Rollback() // Rollback if not committed
 
-	// Store file in object storage backend using storage.Provider
-	_, err = storage.Provider.PutObject(
+	// Store file in object storage backend using storage ID and padding
+	_, err = storage.Provider.PutObjectWithPadding(
 		c.Request().Context(),
-		request.Filename, // bucketName is handled by the provider
+		storageID, // Use UUID instead of filename
 		strings.NewReader(request.Data),
 		fileSize,
+		paddedSize,
 		minio.PutObjectOptions{ContentType: "application/octet-stream"},
 	)
 	if err != nil {
@@ -80,14 +90,14 @@ func UploadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to upload file")
 	}
 
-	// Store metadata in database
+	// Store metadata in database with storage_id and padded_size
 	_, err = tx.Exec(
-		"INSERT INTO file_metadata (filename, owner_email, password_hint, password_type, sha256sum, size_bytes) VALUES (?, ?, ?, ?, ?, ?)",
-		request.Filename, email, request.PasswordHint, request.PasswordType, request.SHA256Sum, fileSize,
+		"INSERT INTO file_metadata (filename, storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes, padded_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		request.Filename, storageID, email, request.PasswordHint, request.PasswordType, request.SHA256Sum, fileSize, paddedSize,
 	)
 	if err != nil {
 		// If metadata storage fails, delete the uploaded file using storage.Provider
-		storage.Provider.RemoveObject(c.Request().Context(), request.Filename, minio.RemoveObjectOptions{})
+		storage.Provider.RemoveObject(c.Request().Context(), storageID, minio.RemoveObjectOptions{})
 		logging.ErrorLogger.Printf("Failed to store file metadata: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process file")
 	}
@@ -105,10 +115,12 @@ func UploadFile(c echo.Context) error {
 	}
 
 	database.LogUserAction(email, "uploaded", request.Filename)
-	logging.InfoLogger.Printf("File uploaded: %s by %s (size: %d bytes)", request.Filename, email, fileSize)
+	logging.InfoLogger.Printf("File uploaded: %s (storage_id: %s) by %s (size: %d bytes, padded: %d bytes)",
+		request.Filename, storageID, email, fileSize, paddedSize)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"message": "File uploaded successfully",
+		"message":    "File uploaded successfully",
+		"storage_id": storageID,
 		"storage": map[string]interface{}{
 			// Use the user.TotalStorageBytes which was updated in memory by UpdateStorageUsage
 			"total_bytes": user.TotalStorageBytes,
@@ -124,12 +136,20 @@ func DownloadFile(c echo.Context) error {
 	email := auth.GetEmailFromToken(c)
 	filename := c.Param("filename")
 
-	// Verify file ownership
-	var ownerEmail string
+	// Get file metadata including storage_id and original size
+	var fileMetadata struct {
+		StorageID    string
+		OwnerEmail   string
+		PasswordHint string
+		PasswordType string
+		SHA256Sum    string
+		SizeBytes    int64
+	}
 	err := database.DB.QueryRow(
-		"SELECT owner_email FROM file_metadata WHERE filename = ?",
+		"SELECT storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&ownerEmail)
+	).Scan(&fileMetadata.StorageID, &fileMetadata.OwnerEmail, &fileMetadata.PasswordHint,
+		&fileMetadata.PasswordType, &fileMetadata.SHA256Sum, &fileMetadata.SizeBytes)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "File not found")
@@ -138,41 +158,32 @@ func DownloadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
 	}
 
-	if ownerEmail != email {
+	// Verify ownership
+	if fileMetadata.OwnerEmail != email {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
-	// Get file metadata
-	var fileMetadata struct {
-		PasswordHint string
-		PasswordType string
-		SHA256Sum    string
-	}
-	err = database.DB.QueryRow(
-		"SELECT password_hint, password_type, sha256sum FROM file_metadata WHERE filename = ?",
-		filename,
-	).Scan(&fileMetadata.PasswordHint, &fileMetadata.PasswordType, &fileMetadata.SHA256Sum)
-
-	// Get file from object storage backend using storage.Provider
-	object, err := storage.Provider.GetObject(
+	// Get file from object storage backend using storage ID and remove padding
+	reader, err := storage.Provider.GetObjectWithoutPadding(
 		c.Request().Context(),
-		filename, // bucketName is handled by the provider
+		fileMetadata.StorageID, // Use storage ID instead of filename
+		fileMetadata.SizeBytes, // Original size to strip padding
 		minio.GetObjectOptions{},
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to retrieve file via provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file")
 	}
-	defer object.Close()
+	defer reader.Close()
 
-	data, err := io.ReadAll(object)
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to read file: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read file")
 	}
 
 	database.LogUserAction(email, "downloaded", filename)
-	logging.InfoLogger.Printf("File downloaded: %s by %s", filename, email)
+	logging.InfoLogger.Printf("File downloaded: %s (storage_id: %s) by %s", filename, fileMetadata.StorageID, email)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"data":         string(data),
@@ -187,7 +198,7 @@ func ListFiles(c echo.Context) error {
 	email := auth.GetEmailFromToken(c)
 
 	rows, err := database.DB.Query(`
-		SELECT filename, password_hint, password_type, sha256sum, size_bytes, upload_date 
+		SELECT filename, storage_id, password_hint, password_type, sha256sum, size_bytes, upload_date 
 		FROM file_metadata 
 		WHERE owner_email = ?
 		ORDER BY upload_date DESC
@@ -202,6 +213,7 @@ func ListFiles(c echo.Context) error {
 	for rows.Next() {
 		var file struct {
 			Filename     string
+			StorageID    string
 			PasswordHint string
 			PasswordType string
 			SHA256Sum    string
@@ -209,13 +221,14 @@ func ListFiles(c echo.Context) error {
 			UploadDate   string
 		}
 
-		if err := rows.Scan(&file.Filename, &file.PasswordHint, &file.PasswordType, &file.SHA256Sum, &file.SizeBytes, &file.UploadDate); err != nil {
+		if err := rows.Scan(&file.Filename, &file.StorageID, &file.PasswordHint, &file.PasswordType, &file.SHA256Sum, &file.SizeBytes, &file.UploadDate); err != nil {
 			logging.ErrorLogger.Printf("Error scanning file row: %v", err)
 			continue
 		}
 
 		files = append(files, map[string]interface{}{
 			"filename":      file.Filename,
+			"storage_id":    file.StorageID,
 			"passwordHint":  file.PasswordHint,
 			"passwordType":  file.PasswordType,
 			"sha256sum":     file.SHA256Sum,

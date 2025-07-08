@@ -93,6 +93,26 @@ func (m *MockObjectStorageProvider) GetObjectChunk(ctx context.Context, objectNa
 	return reader, args.Error(1)
 }
 
+// PutObjectWithPadding mocks the PutObjectWithPadding method
+func (m *MockObjectStorageProvider) PutObjectWithPadding(ctx context.Context, storageID string, reader io.Reader, originalSize, paddedSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
+	args := m.Called(ctx, storageID, reader, originalSize, paddedSize, opts)
+	info, _ := args.Get(0).(minio.UploadInfo)
+	return info, args.Error(1)
+}
+
+// GetObjectWithoutPadding mocks the GetObjectWithoutPadding method
+func (m *MockObjectStorageProvider) GetObjectWithoutPadding(ctx context.Context, storageID string, originalSize int64, opts minio.GetObjectOptions) (io.ReadCloser, error) {
+	args := m.Called(ctx, storageID, originalSize, opts)
+	reader, _ := args.Get(0).(io.ReadCloser)
+	return reader, args.Error(1)
+}
+
+// CompleteMultipartUploadWithPadding mocks the CompleteMultipartUploadWithPadding method
+func (m *MockObjectStorageProvider) CompleteMultipartUploadWithPadding(ctx context.Context, storageID, uploadID string, parts []minio.CompletePart, originalSize, paddedSize int64) error {
+	args := m.Called(ctx, storageID, uploadID, parts, originalSize, paddedSize)
+	return args.Error(0)
+}
+
 // --- Mock Minio Object ---
 // MockMinioObject mocks the *minio.Object returned by GetObject
 type MockMinioObject struct {

@@ -34,14 +34,12 @@ Once it finishes, open the URL and create your first account.
 
 ## 4. Key Concepts (Glossary)
 
-| Term | Plain-English Meaning |
-|------|-----------------------|
-| **Zero-knowledge** | The server never learns your files or passwords because everything is encrypted before upload. |
-| **Encryption (AES-256-GCM)** | A modern algorithm that scrambles data and checks its integrity at the same time. |
-| **Argon2id** | A “memory-hard” function that turns your password into a strong key and slows down attackers. |
-| **OPAQUE** | A login method where the server never sees your password, even in scrambled form. |
-| **rqlite** | A small database that keeps data in sync across nodes without extra setup. |
-| **MinIO** | An open-source S3-compatible storage server that works as a single node or in a cluster. |
+- **Zero-knowledge:** The server never learns your files or passwords because everything is encrypted before upload.
+- **Encryption (AES-256-GCM):** A modern algorithm that scrambles data and checks its integrity at the same time.
+- **Argon2id:** A “memory-hard” function that turns your password into a strong key and slows down attackers.
+- **OPAQUE:** A login method where the server never sees your password, even in scrambled form.
+- **rqlite:** A small database that keeps data in sync across nodes without extra setup.
+- **MinIO:** An open-source S3-compatible storage server that works as a single node or in a cluster.
 
 ## 5. Need More Details?
 
