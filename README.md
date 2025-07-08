@@ -4,8 +4,10 @@
 
 ## 1. What Is Arkfile?
 
-Arkfile is an open-source service that lets you store and share files while keeping them private.  
-Before any file leaves your computer it is **encrypted**, so the Arkfile server never sees the readable version or your secret keys.  
+Arkfile is an open-source service that lets you store and share files while keeping them private.
+
+Before any file leaves your computer it is **encrypted**, so the Arkfile server never sees the readable version or your secret keys.
+
 Because of this “zero-knowledge” design, only you – and anyone you choose to share a special key with – can open your files.
 
 ## 2. Why People Use It
@@ -46,13 +48,14 @@ Once it finishes, open the URL and create your first account.
 * **Deployment & Ops Guide** – see `docs/setup.md`  
 * **API Reference** – see `docs/api.md`  
 * **Security Architecture** – see `docs/security.md`
+* **Privacy** - see `docs/privacy.md`
 
 ---
 
 ## Support
 
-Questions or bug reports?  
-Email **arkfile [at] pm [dot] me** or open an issue on GitHub.  
+Questions, comments or bug reports? Email **arkfile [at] pm [dot] me** or open an issue on GitHub.  
+
 Please avoid posting sensitive information in public issues.
 
 ---

@@ -669,10 +669,6 @@ For setup instructions, see [Setup Guide](setup.md). For API integration, see [A
 
 ## Support
 
-Questions or bug reports?  
-Email **arkfile [at] pm [dot] me** or open an issue on GitHub.  
+Questions, comments or bug reports? Email **arkfile [at] pm [dot] me** or open an issue on GitHub.  
+
 Please avoid posting sensitive information in public issues.
-
----
-
-*make yourself an ark of cypress wood*
