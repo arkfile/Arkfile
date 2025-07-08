@@ -190,7 +190,7 @@ Arkfile implements OPAQUE (Oblivious Pseudorandom Functions for Key Exchange), a
 **Rate Limiting Features:**
 - Adaptive thresholds based on device profiles
 - Brute force attack prevention
-- Account-based and IP-based limiting
+- Account-based and IP-based limiting (with entity ID anonymization)
 - Graduated response to violation patterns
 
 ## Infrastructure Security
@@ -283,6 +283,8 @@ curl -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" \
 
 ## Monitoring and Alerting
 
+Arkfile records security events without storing client IP addresses. Instead, each log entry contains an anonymised *entity ID* derived daily from a server-side HMAC key (see `logging/entity_id.go`). Events are written to the `security_events` table in the rqlite database and to structured JSON logs under `/var/log/arkfile/`. Administrators can stream or export these records into any external monitoring or alerting system as needed.
+
 ### Security Event Categories
 
 **Critical Events (Immediate Response):**
@@ -329,33 +331,12 @@ rqlite -H localhost:4001 \
    HAVING attempts > 10;"
 ```
 
-### Automated Alerting
-
-**Alert Configuration:**
+### Logs and Event Access
 ```bash
-# Setup alert handler
-cat > /opt/arkfile/scripts/security-alert.sh << 'EOF'
-#!/bin/bash
-ALERT_TYPE="$1"
-MESSAGE="$2"
-
-case "$ALERT_TYPE" in
-    "critical")
-        # echo "$MESSAGE" | mail -s "CRITICAL: Arkfile Security Alert" admin@example.invalid
-        curl -X POST "$SLACK_WEBHOOK" -d "{\"text\":\"CRITICAL: $MESSAGE\"}"
-        ;;
-    "warning")
-        logger -p user.warning "Arkfile Security Warning: $MESSAGE"
-        ;;
-esac
-EOF
-```
-
-**Monitoring Automation:**
-```bash
-# Add to crontab for automated monitoring
-# Check for authentication failures every 15 minutes
-*/15 * * * * /opt/arkfile/scripts/security-monitor.sh
+# Show critical events from the last hour
+rqlite -H localhost:4001 \
+  "SELECT * FROM security_events WHERE severity='CRITICAL' \
+   AND timestamp > datetime('now', '-1 hour');"
 ```
 
 ## Incident Response
@@ -472,11 +453,6 @@ The features below describe on-disk logging and in-app event tracking only.
 - Authentication Logs: 1 year
 - Key Management: 7 years
 - Emergency Procedures: Permanent
-
-### Compliance Frameworks
-
-
-
 
 ### Regular Audit Procedures
 
@@ -639,7 +615,7 @@ rqlite -H localhost:4001 \
    LIMIT 10;"
 ```
 
-## Emergency Contacts and Escalation
+## Example Emergency Contacts and Escalation
 
 ### Security Team Contacts
 
@@ -648,8 +624,6 @@ rqlite -H localhost:4001 \
 2. **Level 2**: Security Team Lead (Response: 2 hours)
 3. **Level 3**: Security Director (Response: 4 hours)
 4. **Level 4**: Executive Team (Response: 24 hours)
-
-### External Resources
 
 ---
 
@@ -690,3 +664,15 @@ rqlite -H localhost:4001 \
 This security guide should be reviewed quarterly and updated based on emerging threats, security research, and operational experience.
 
 For setup instructions, see [Setup Guide](setup.md). For API integration, see [API Reference](api.md).
+
+---
+
+## Support
+
+Questions or bug reports?  
+Email **arkfile [at] pm [dot] me** or open an issue on GitHub.  
+Please avoid posting sensitive information in public issues.
+
+---
+
+*make yourself an ark of cypress wood*

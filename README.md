@@ -47,7 +47,9 @@ Once it finishes, open the URL and create your first account.
 * **API Reference** – see `docs/api.md`  
 * **Security Architecture** – see `docs/security.md`
 
-## 6. Support
+---
+
+## Support
 
 Questions or bug reports?  
 Email **arkfile [at] pm [dot] me** or open an issue on GitHub.  

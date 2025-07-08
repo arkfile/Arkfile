@@ -128,3 +128,15 @@ curl -H "Authorization: Bearer $TOK" \
 
 The current API is **v1**.  
 Breaking changes will be announced in release notes; clients should pin a minor version via the `X-Arkfile-Version` header when that becomes available in future releases.
+
+---
+
+## Support
+
+Questions or bug reports?  
+Email **arkfile [at] pm [dot] me** or open an issue on GitHub.  
+Please avoid posting sensitive information in public issues.
+
+---
+
+*make yourself an ark of cypress wood*
