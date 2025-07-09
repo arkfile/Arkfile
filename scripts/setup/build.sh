@@ -69,8 +69,8 @@ echo -e "${GREEN}✅ Go dependencies resolved${NC}"
 # Run user and directory setup if needed
 if [ ! -d "${BASE_DIR}" ]; then
     echo -e "${YELLOW}Setting up initial directory structure...${NC}"
-    ./scripts/setup-users.sh
-    ./scripts/setup-directories.sh
+    ./scripts/setup/01-setup-users.sh
+    ./scripts/setup/02-setup-directories.sh
 fi
 
 echo -e "${GREEN}Building ${APP_NAME} version ${VERSION}${NC}"

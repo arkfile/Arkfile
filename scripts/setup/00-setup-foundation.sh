@@ -75,8 +75,8 @@ is_completed() {
 if [ "$SKIP_TESTS" = false ]; then
     echo -e "${BLUE}🧪 Running tests before foundation setup...${NC}"
     
-    if [ -x "./scripts/test-only.sh" ]; then
-        ./scripts/test-only.sh --skip-performance --skip-golden
+    if [ -x "./scripts/testing/test-only.sh" ]; then
+        ./scripts/testing/test-only.sh --skip-performance --skip-golden
         if [ $? -ne 0 ]; then
             echo -e "${RED}❌ Tests failed, aborting foundation setup${NC}"
             exit 1
@@ -96,7 +96,7 @@ echo -e "${YELLOW}Step 1: Creating system user and group...${NC}"
 if is_completed "users" && [ "$FORCE_REBUILD" = false ]; then
     echo -e "${GREEN}✅ Users already created (use --force-rebuild to recreate)${NC}"
 else
-    sudo -E ./scripts/setup-users.sh
+    sudo -E ./scripts/setup/01-setup-users.sh
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✅ User and group creation completed${NC}"
         mark_completed "users"
@@ -111,7 +111,7 @@ echo -e "${YELLOW}Step 2: Creating directory structure...${NC}"
 if is_completed "directories" && [ "$FORCE_REBUILD" = false ]; then
     echo -e "${GREEN}✅ Directories already created (use --force-rebuild to recreate)${NC}"
 else
-    sudo -E ./scripts/setup-directories.sh
+    sudo -E ./scripts/setup/02-setup-directories.sh
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✅ Directory structure creation completed${NC}"
         mark_completed "directories"
@@ -126,7 +126,7 @@ echo -e "${YELLOW}Step 3: Building application...${NC}"
 if is_completed "build" && [ "$FORCE_REBUILD" = false ]; then
     echo -e "${GREEN}✅ Application already built (use --force-rebuild to rebuild)${NC}"
 else
-    ./scripts/build.sh
+    ./scripts/setup/build.sh
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✅ Application build completed${NC}"
         mark_completed "build"
@@ -141,7 +141,7 @@ echo -e "${YELLOW}Step 4: Generating OPAQUE server keys...${NC}"
 if is_completed "opaque-keys" && [ "$FORCE_REBUILD" = false ]; then
     echo -e "${GREEN}✅ OPAQUE keys already generated (use --force-rebuild to regenerate)${NC}"
 else
-    sudo -E ./scripts/setup-opaque-keys.sh
+    sudo -E ./scripts/setup/03-setup-opaque-keys.sh
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✅ OPAQUE key generation completed${NC}"
         mark_completed "opaque-keys"
@@ -156,7 +156,7 @@ echo -e "${YELLOW}Step 5: Generating JWT signing keys...${NC}"
 if is_completed "jwt-keys" && [ "$FORCE_REBUILD" = false ]; then
     echo -e "${GREEN}✅ JWT keys already generated (use --force-rebuild to regenerate)${NC}"
 else
-    sudo -E ./scripts/setup-jwt-keys.sh
+    sudo -E ./scripts/setup/04-setup-jwt-keys.sh
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✅ JWT key generation completed${NC}"
         mark_completed "jwt-keys"
@@ -172,13 +172,13 @@ if [ "$SKIP_TLS" = false ]; then
     if is_completed "tls-certs" && [ "$FORCE_REBUILD" = false ]; then
         echo -e "${GREEN}✅ TLS certificates already generated (use --force-rebuild to regenerate)${NC}"
     else
-        if sudo -E ./scripts/setup-tls-certs.sh; then
+        if sudo -E ./scripts/setup/05-setup-tls-certs.sh; then
             echo -e "${GREEN}✅ TLS certificate generation completed${NC}"
             mark_completed "tls-certs"
             
             # Validate certificates
             echo -e "${YELLOW}Validating TLS certificates...${NC}"
-            if ./scripts/validate-certificates.sh >/dev/null 2>&1; then
+            if ./scripts/maintenance/validate-certificates.sh >/dev/null 2>&1; then
                 echo -e "${GREEN}✅ TLS certificate validation passed${NC}"
             else
                 echo -e "${YELLOW}⚠️  TLS certificate validation had warnings (non-critical)${NC}"
@@ -263,7 +263,7 @@ fi
 
 # Run health check
 echo -e "${YELLOW}Running foundation health check...${NC}"
-if ./scripts/health-check.sh --foundation >/dev/null 2>&1; then
+if ./scripts/maintenance/health-check.sh --foundation >/dev/null 2>&1; then
     echo -e "${GREEN}✅ Foundation health check passed${NC}"
 else
     echo -e "${YELLOW}⚠️  Foundation health check had warnings (non-critical)${NC}"
@@ -325,7 +325,7 @@ echo "• Start all services"
 echo "• Give you the web interface URL"
 echo
 echo -e "${BLUE}OR, for manual setup:${NC}"
-echo "1. Set up services: sudo ./scripts/setup-minio.sh && sudo ./scripts/setup-rqlite.sh"
+echo "1. Set up services: sudo ./scripts/setup/07-setup-minio.sh && sudo ./scripts/setup/08-setup-rqlite.sh"
 echo "2. Start services: sudo systemctl start arkfile"
 echo "3. Visit: http://localhost:8080"
 echo

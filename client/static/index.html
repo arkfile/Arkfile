@@ -48,8 +48,8 @@
             <!-- User navigation bar -->
             <div class="user-nav">
                 <div class="user-controls">
-                    <button onclick="toggleSecuritySettings()" class="icon-button" title="Security Settings">🔐</button>
-                    <button onclick="logout()" class="icon-button" title="Logout">🚪</button>
+                    <a href="#" onclick="toggleSecuritySettings(); return false;" class="nav-link">Security Settings</a>
+                    <a href="#" onclick="logout(); return false;" class="nav-link logout-link">Logout</a>
                 </div>
                 
                 <!-- Security settings panel (hidden by default) -->

@@ -30,11 +30,11 @@ echo -e "${GREEN}Deploying ${APP_NAME} to ${ENVIRONMENT} environment on ${REMOTE
 
 # Build the application first
 echo "Building application..."
-./scripts/build.sh
+./scripts/setup/build.sh
 
 # Ensure remote directory structure exists
 echo "Checking remote directory structure..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo /opt/arkfile/scripts/setup-directories.sh"
+ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo /opt/arkfile/scripts/setup/02-setup-directories.sh"
 
 # Copy deployment scripts first
 echo "Copying setup scripts..."
@@ -71,9 +71,9 @@ ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo cp ${RELEASE_DIR}/${APP_NAME} ${BASE_DIR
 
 # Set up storage and database services
 echo "Setting up rqlite..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo ${BASE_DIR}/scripts/setup-rqlite.sh"
+ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo ${BASE_DIR}/scripts/setup/08-setup-rqlite.sh"
 echo "Setting up MinIO..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo ${BASE_DIR}/scripts/setup-minio.sh"
+ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo ${BASE_DIR}/scripts/setup/07-setup-minio.sh"
 
 # Copy and update service files
 echo "Setting up systemd services..."
@@ -139,4 +139,4 @@ echo "  View Caddy logs: sudo journalctl -u caddy -f"
 echo "  Check rqlite status: systemctl status rqlite${ENVIRONMENT}"
 echo "  Check app status: systemctl status arkfile${ENVIRONMENT}"
 echo "  Check full stack: systemctl status rqlite${ENVIRONMENT} arkfile${ENVIRONMENT} caddy"
-echo "  Rollback to previous version: ${BASE_DIR}/scripts/rollback.sh ${ENVIRONMENT}"
+echo "  Rollback to previous version: ${BASE_DIR}/scripts/setup/rollback.sh ${ENVIRONMENT}"

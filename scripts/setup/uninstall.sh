@@ -545,7 +545,38 @@ else
 fi
 
 echo
+echo -e "${RED}🔥 IMPORTANT SECURITY NOTICE 🔥${NC}"
+echo -e "${RED}═══════════════════════════════════════════════════════════${NC}"
+echo
+echo -e "${YELLOW}BROWSER STORAGE CLEANUP REQUIRED${NC}"
+echo
+echo -e "${RED}Users must clear their browser storage to prevent old tokens from working:${NC}"
+echo
+echo -e "${BLUE}For Chrome/Edge/Brave:${NC}"
+echo "1. Open Developer Tools (F12)"
+echo "2. Go to Application tab"
+echo "3. Select 'Local Storage' → 'https://localhost:4443'"
+echo "4. Delete 'token' and 'refreshToken' entries"
+echo "5. Refresh the page"
+echo
+echo -e "${BLUE}For Firefox:${NC}"
+echo "1. Open Developer Tools (F12)"
+echo "2. Go to Storage tab"
+echo "3. Select 'Local Storage' → 'https://localhost:4443'"
+echo "4. Delete 'token' and 'refreshToken' entries"
+echo "5. Refresh the page"
+echo
+echo -e "${BLUE}Alternative (clears all site data):${NC}"
+echo "1. Go to your browser settings"
+echo "2. Find 'Site Settings' or 'Privacy and Security'"
+echo "3. Search for 'localhost' or your domain"
+echo "4. Click 'Clear data' or 'Remove all data'"
+echo
+echo -e "${RED}OR USE INCOGNITO/PRIVATE BROWSING MODE${NC}"
+echo
 echo -e "${BLUE}🔄 To reinstall Arkfile:${NC}"
 echo "./scripts/quick-start.sh"
+echo
+echo -e "${GREEN}New installations will generate fresh secrets automatically.${NC}"
 
 exit 0

@@ -22,13 +22,13 @@ echo -e "${YELLOW}For production, regenerate ALL credentials and certificates.${
 echo
 echo -e "${BLUE}Demo credentials will be created:${NC}"
 echo -e "${YELLOW}  • MinIO: arkfile-demo / TestPassword123_SecureMinIO${NC}"
-echo -e "${YELLOW}  • JWT: demo-jwt-secret-change-for-production-use${NC}"
+echo -e "${YELLOW}  • JWT: Random secret (generated automatically)${NC}"
 echo -e "${YELLOW}  • Admin: admin@arkfile.demo${NC}"
 echo
 read -p "Continue with demo setup? [y/N]: " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Exiting. For production setup, see ./scripts/setup-foundation.sh"
+    echo "Exiting. For production setup, see ./scripts/setup/00-setup-foundation.sh"
     exit 0
 fi
 echo
@@ -102,7 +102,7 @@ echo
 
 # Step 1: Foundation setup
 echo -e "${YELLOW}Step 1: Setting up foundation (users, directories, keys, TLS)...${NC}"
-./scripts/setup-foundation.sh --skip-tests
+./scripts/setup/00-setup-foundation.sh --skip-tests
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ Foundation setup failed${NC}"
     exit 1
@@ -171,13 +171,13 @@ echo -e "${GREEN}✅ Go dependencies resolved${NC}"
 
 # Step 2: Set up services (MinIO and rqlite)
 echo -e "${YELLOW}Step 2: Setting up storage and database services...${NC}"
-sudo ./scripts/setup-minio.sh
+sudo ./scripts/setup/07-setup-minio.sh
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ MinIO setup failed${NC}"
     exit 1
 fi
 
-sudo ./scripts/setup-rqlite.sh
+sudo ./scripts/setup/08-setup-rqlite.sh
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ rqlite setup failed${NC}"
     exit 1
@@ -186,7 +186,12 @@ fi
 # Step 3: Start services
 echo -e "${YELLOW}Step 3: Starting services...${NC}"
 echo "Creating demo environment configuration..."
-sudo tee /opt/arkfile/etc/secrets.env > /dev/null << 'EOF'
+
+# Generate random JWT secret for security
+JWT_SECRET=$(openssl rand -hex 32)
+echo "Generated random JWT secret: ${JWT_SECRET:0:16}... (truncated for security)"
+
+sudo tee /opt/arkfile/etc/secrets.env > /dev/null << EOF
 # ⚠️  DEMO CONFIGURATION - NOT FOR PRODUCTION ⚠️
 #
 # This file contains demo credentials for quick-start testing.
@@ -195,9 +200,9 @@ sudo tee /opt/arkfile/etc/secrets.env > /dev/null << 'EOF'
 # These are DEFAULT DEMO VALUES and MUST be changed for production use!
 #
 # Before production deployment, run:
-#   ./scripts/security-audit.sh
-#   ./scripts/rotate-jwt-keys.sh
-#   ./scripts/setup-tls-certs.sh --production
+#   ./scripts/maintenance/security-audit.sh
+#   ./scripts/maintenance/rotate-jwt-keys.sh
+#   ./scripts/setup/05-setup-tls-certs.sh --production
 
 # Database Configuration
 DATABASE_TYPE=rqlite
@@ -207,7 +212,7 @@ RQLITE_PASSWORD=TestPassword123_Secure
 
 # Arkfile Application Configuration
 PORT=8080
-JWT_SECRET=demo-jwt-secret-change-for-production-use
+JWT_SECRET=${JWT_SECRET}
 
 # TLS Configuration
 TLS_ENABLED=true
@@ -284,7 +289,7 @@ fi
 
 # Set up the database schema
 echo "Setting up database schema..."
-sudo ./scripts/setup-database.sh
+sudo ./scripts/setup/06-setup-database.sh
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ Database setup failed${NC}"
     exit 1
@@ -330,7 +335,7 @@ echo "  Arkfile: ${arkfile_status}"
 
 # Validate TLS certificates
 echo -e "${YELLOW}Validating TLS certificates for secure local network access...${NC}"
-if ./scripts/validate-certificates.sh >/dev/null 2>&1; then
+if ./scripts/maintenance/validate-certificates.sh >/dev/null 2>&1; then
     echo -e "${GREEN}✅ TLS certificates validated successfully${NC}"
     TLS_STATUS="✅ Available"
 else
@@ -398,7 +403,7 @@ if [ "$arkfile_status" = "active" ]; then
     echo "• View logs: sudo journalctl -u arkfile -f"
     echo "• Restart services: sudo systemctl restart arkfile"
     echo "• Check status: sudo systemctl status arkfile"
-    echo "• Security audit: ./scripts/security-audit.sh"
+    echo "• Security audit: ./scripts/maintenance/security-audit.sh"
     echo
     echo -e "${BLUE}Configuration Files:${NC}"
     echo "• Main config: /opt/arkfile/releases/current/.env"

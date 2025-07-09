@@ -228,7 +228,7 @@ restart_services() {
 # Check if TLS directory exists
 if [ ! -d "${TLS_DIR}" ]; then
     echo -e "${RED}Error: TLS directory ${TLS_DIR} does not exist${NC}"
-    echo "Run ./scripts/setup-tls-certs.sh to generate certificates first"
+    echo "Run ./scripts/setup/05-setup-tls-certs.sh to generate certificates first"
     exit 1
 fi
 
@@ -328,7 +328,7 @@ if [[ " ${certificates_to_renew[@]} " =~ " ca " ]]; then
     done
     
     # Regenerate all certificates
-    if sudo -E ./scripts/setup-tls-certs.sh; then
+    if sudo -E ./scripts/setup/05-setup-tls-certs.sh; then
         echo -e "${GREEN}✅ All certificates renewed successfully${NC}"
     else
         echo -e "${RED}❌ Certificate renewal failed${NC}"
@@ -349,7 +349,7 @@ else
             # This is a simplified approach - in practice, you might want to
             # implement individual certificate renewal without regenerating all
             # For now, we'll call the full setup script
-            if sudo -E ./scripts/setup-tls-certs.sh; then
+            if sudo -E ./scripts/setup/05-setup-tls-certs.sh; then
                 echo -e "${GREEN}✅ ${service} certificate renewed${NC}"
             else
                 echo -e "${RED}❌ ${service} certificate renewal failed${NC}"
@@ -364,7 +364,7 @@ fi
 # Validate renewed certificates
 echo ""
 echo -e "${BLUE}🔍 Validating renewed certificates...${NC}"
-if ./scripts/validate-certificates.sh >/dev/null 2>&1; then
+if ./scripts/maintenance/validate-certificates.sh >/dev/null 2>&1; then
     echo -e "${GREEN}✅ Certificate validation passed${NC}"
 else
     echo -e "${RED}❌ Certificate validation failed${NC}"
@@ -498,11 +498,11 @@ echo "• Certificate expiry: $(date -d "+${VALIDITY_DAYS} days" "+%Y-%m-%d")"
 echo ""
 echo -e "${BLUE}📞 Support Commands:${NC}"
 echo "========================================"
-echo "• Validate certificates: ./scripts/validate-certificates.sh"
-echo "• View certificate details: ./scripts/validate-certificates.sh --details"
+echo "• Validate certificates: ./scripts/maintenance/validate-certificates.sh"
+echo "• View certificate details: ./scripts/maintenance/validate-certificates.sh --details"
 echo "• Rollback if needed: Restore from ${BACKUP_DIR}"
-echo "• Emergency procedures: ./scripts/emergency-procedures.sh"
-echo "• Next renewal: ./scripts/renew-certificates.sh"
+echo "• Emergency procedures: ./scripts/maintenance/emergency-procedures.sh"
+echo "• Next renewal: ./scripts/maintenance/renew-certificates.sh"
 
 echo ""
 echo -e "${GREEN}✅ Certificate renewal process completed successfully!${NC}"

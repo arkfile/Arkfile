@@ -350,6 +350,59 @@ button:hover {
     background-color: #435c73;
 }
 
+/* Specific styling for logout button */
+.logout-btn {
+    background-color: #e74c3c !important;
+    color: white !important;
+    font-size: 0.9rem !important;
+    width: auto !important;
+    padding: 8px 12px !important;
+    border-radius: 4px !important;
+    height: auto !important;
+    min-width: 80px;
+}
+
+.logout-btn:hover {
+    background-color: #c0392b !important;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* Navigation link styling */
+.nav-link {
+    display: inline-block;
+    padding: 8px 12px;
+    margin: 0 4px;
+    text-decoration: none;
+    color: var(--primary-color);
+    background-color: #f8f9fa;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.nav-link:hover {
+    background-color: #e9ecef;
+    border-color: #adb5bd;
+    text-decoration: none;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.logout-link {
+    background-color: #f8d7da !important;
+    color: #721c24 !important;
+    border-color: #f5c6cb !important;
+}
+
+.logout-link:hover {
+    background-color: #f1b0b7 !important;
+    border-color: #ed969e !important;
+    color: #491217 !important;
+}
+
 /* Security Settings Panel */
 .security-panel {
     position: absolute;

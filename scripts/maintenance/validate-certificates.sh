@@ -147,7 +147,7 @@ validate_certificate_chain() {
 # Check if TLS directory exists
 if [ ! -d "${TLS_DIR}" ]; then
     echo -e "${RED}Error: TLS directory ${TLS_DIR} does not exist${NC}"
-    echo "Run ./scripts/setup-tls-certs.sh to generate certificates"
+    echo "Run ./scripts/setup/05-setup-tls-certs.sh to generate certificates"
     exit 1
 fi
 
@@ -288,7 +288,7 @@ echo ""
 if [ ${failed_checks} -gt 0 ]; then
     echo -e "${RED}❌ Certificate validation failed!${NC}"
     echo -e "${YELLOW}Recommendations:${NC}"
-    echo "• Regenerate failed certificates: sudo ./scripts/setup-tls-certs.sh"
+    echo "• Regenerate failed certificates: sudo ./scripts/setup/05-setup-tls-certs.sh"
     echo "• Check file permissions and ownership"
     echo "• Verify certificate authority integrity"
     exit 1
@@ -310,9 +310,9 @@ fi
 echo ""
 echo -e "${BLUE}📞 Support Commands:${NC}"
 echo "========================================"
-echo "• Regenerate certificates: sudo ./scripts/setup-tls-certs.sh"
-echo "• Detailed validation: ./scripts/validate-certificates.sh --details"
-echo "• Certificate renewal: ./scripts/renew-certificates.sh (when available)"
-echo "• Emergency help: ./scripts/emergency-procedures.sh"
+echo "• Regenerate certificates: sudo ./scripts/setup/05-setup-tls-certs.sh"
+echo "• Detailed validation: ./scripts/maintenance/validate-certificates.sh --details"
+echo "• Certificate renewal: ./scripts/maintenance/renew-certificates.sh (when available)"
+echo "• Emergency help: ./scripts/maintenance/emergency-procedures.sh"
 
 exit 0

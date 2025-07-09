@@ -189,7 +189,7 @@ fi
 # Run WebAssembly tests
 echo
 echo -e "${BLUE}🌐 Running WebAssembly tests...${NC}"
-./scripts/test-wasm.sh
+./scripts/testing/test-wasm.sh
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✅ WebAssembly tests passed${NC}"
@@ -203,7 +203,7 @@ echo
 echo -e "${BLUE}⚡ Running comprehensive performance benchmarks...${NC}"
 
 echo -e "${YELLOW}Running full performance benchmark suite...${NC}"
-./scripts/performance-benchmark.sh
+./scripts/testing/performance-benchmark.sh
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✅ Performance benchmarks completed successfully${NC}"
@@ -217,7 +217,7 @@ echo
 echo -e "${BLUE}🏆 Running golden test preservation (format compatibility)...${NC}"
 
 echo -e "${YELLOW}Testing backward compatibility and format preservation...${NC}"
-./scripts/golden-test-preservation.sh --validate
+./scripts/testing/golden-test-preservation.sh --validate
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✅ Golden test preservation passed (100% format compatibility)${NC}"
@@ -229,7 +229,7 @@ fi
 # Test build process
 echo
 echo -e "${BLUE}🏗️  Testing build process...${NC}"
-./scripts/build.sh
+./scripts/setup/build.sh
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✅ Build process completed successfully${NC}"
@@ -245,7 +245,7 @@ if [ "$FULL_SETUP" = true ]; then
     
     # Create arkfile user and group
     echo -e "${YELLOW}Creating arkfile system user and group...${NC}"
-    sudo -E ./scripts/setup-users.sh
+    sudo -E ./scripts/setup/01-setup-users.sh
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✅ User setup completed${NC}"
@@ -256,7 +256,7 @@ if [ "$FULL_SETUP" = true ]; then
     
     # Setup directories with proper ownership
     echo -e "${YELLOW}Setting up deployment directories...${NC}"
-    sudo -E ./scripts/setup-directories.sh
+    sudo -E ./scripts/setup/02-setup-directories.sh
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✅ Directory setup completed${NC}"
@@ -267,7 +267,7 @@ if [ "$FULL_SETUP" = true ]; then
     
     # Generate all keys
     echo -e "${YELLOW}Generating OPAQUE server keys...${NC}"
-    sudo -E ./scripts/setup-opaque-keys.sh
+    sudo -E ./scripts/setup/03-setup-opaque-keys.sh
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✅ OPAQUE key generation completed${NC}"
@@ -277,7 +277,7 @@ if [ "$FULL_SETUP" = true ]; then
     fi
     
     echo -e "${YELLOW}Generating JWT signing keys...${NC}"
-    sudo -E ./scripts/setup-jwt-keys.sh
+    sudo -E ./scripts/setup/04-setup-jwt-keys.sh
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✅ JWT key generation completed${NC}"
@@ -287,12 +287,12 @@ if [ "$FULL_SETUP" = true ]; then
     fi
     
     echo -e "${YELLOW}Setting up TLS certificates...${NC}"
-    if sudo -E ./scripts/setup-tls-certs.sh; then
+    if sudo -E ./scripts/setup/05-setup-tls-certs.sh; then
         echo -e "${GREEN}✅ TLS certificate setup completed${NC}"
         
         # Validate certificates
         echo -e "${YELLOW}Validating TLS certificates...${NC}"
-        if ./scripts/validate-certificates.sh >/dev/null 2>&1; then
+        if ./scripts/maintenance/validate-certificates.sh >/dev/null 2>&1; then
             echo -e "${GREEN}✅ TLS certificate validation passed${NC}"
         else
             echo -e "${YELLOW}⚠️  TLS certificate validation had warnings (non-critical)${NC}"
@@ -310,7 +310,7 @@ if [ "$FULL_SETUP" = true ]; then
         
         # Setup MinIO
         echo -e "${YELLOW}Setting up MinIO object storage...${NC}"
-        sudo -E ./scripts/setup-minio.sh
+        sudo -E ./scripts/setup/07-setup-minio.sh
         
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}✅ MinIO setup completed${NC}"
@@ -321,7 +321,7 @@ if [ "$FULL_SETUP" = true ]; then
         
         # Setup rqlite
         echo -e "${YELLOW}Setting up rqlite database cluster...${NC}"
-        sudo -E ./scripts/setup-rqlite.sh
+        sudo -E ./scripts/setup/08-setup-rqlite.sh
         
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}✅ rqlite setup completed${NC}"
@@ -332,7 +332,7 @@ if [ "$FULL_SETUP" = true ]; then
         
         # Deploy the application
         echo -e "${YELLOW}Deploying Arkfile application...${NC}"
-        sudo -E ./scripts/deploy.sh prod
+        sudo -E ./scripts/setup/deploy.sh prod
         
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}✅ Application deployment completed${NC}"
@@ -374,8 +374,8 @@ if [ "$FULL_SETUP" = true ]; then
         # Setup Caddy (optional - only if not already configured)
         if ! systemctl is-active --quiet caddy; then
             echo -e "${YELLOW}Setting up Caddy reverse proxy...${NC}"
-            if [ -f "./scripts/setup-caddy.sh" ]; then
-                sudo -E ./scripts/setup-caddy.sh
+            if [ -f "./scripts/setup/setup-caddy.sh" ]; then
+                sudo -E ./scripts/setup/setup-caddy.sh
                 if [ $? -eq 0 ]; then
                     echo -e "${GREEN}✅ Caddy setup completed${NC}"
                     sudo systemctl enable caddy
@@ -496,8 +496,8 @@ if [ "$FULL_SETUP" = true ]; then
             read
             
             # Run the interactive validation guide
-            if [ -x "./scripts/admin-validation-guide.sh" ]; then
-                ./scripts/admin-validation-guide.sh
+            if [ -x "./scripts/maintenance/admin-validation-guide.sh" ]; then
+                ./scripts/maintenance/admin-validation-guide.sh
                 VALIDATION_EXIT_CODE=$?
                 
                 echo
@@ -537,7 +537,7 @@ if [ "$FULL_SETUP" = true ]; then
             echo "   docs/admin-testing-guide.md"
             echo
             echo -e "${YELLOW}🔧 To run interactive validation later:${NC}"
-            echo "   ./scripts/admin-validation-guide.sh"
+            echo "   ./scripts/maintenance/admin-validation-guide.sh"
         fi
         
     else
@@ -550,7 +550,7 @@ else
     
     # Setup directories first (required for key generation tests)
     echo -e "${YELLOW}Setting up deployment directories for testing...${NC}"
-    sudo -E ./scripts/setup-directories.sh
+    sudo -E ./scripts/setup/02-setup-directories.sh
     
     # Note: Directory setup may fail in test environment due to missing arkfile user
     # This is expected and doesn't affect core functionality testing
@@ -559,7 +559,7 @@ else
         
         # Test key generation (only if directory setup succeeded)
         echo -e "${YELLOW}Testing key generation...${NC}"
-        sudo -E ./scripts/setup-opaque-keys.sh --dry-run
+        sudo -E ./scripts/setup/03-setup-opaque-keys.sh --dry-run
     
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}✅ OPAQUE key generation test passed${NC}"
@@ -567,7 +567,7 @@ else
             echo -e "${YELLOW}⚠️  OPAQUE key generation test had warnings${NC}"
         fi
     
-        sudo -E ./scripts/setup-jwt-keys.sh --dry-run
+        sudo -E ./scripts/setup/04-setup-jwt-keys.sh --dry-run
     
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}✅ JWT key generation test passed${NC}"
@@ -582,7 +582,7 @@ fi
 
 # Test health checks
 echo -e "${YELLOW}Testing health check scripts...${NC}"
-./scripts/health-check.sh --pre-install
+./scripts/maintenance/health-check.sh --pre-install
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✅ Health check test passed${NC}"
@@ -723,7 +723,7 @@ if [ "$FULL_SETUP" = true ]; then
         
         echo
         echo -e "${BLUE}📊 System Health Check:${NC}"
-        if ./scripts/health-check.sh --quick >/dev/null 2>&1; then
+        if ./scripts/maintenance/health-check.sh --quick >/dev/null 2>&1; then
             echo "• Health monitoring: ✅ Operational"
         else
             echo "• Health monitoring: ⚠️  Configure services for full health checks"
@@ -752,7 +752,7 @@ if [ "$FULL_SETUP" = true ]; then
         echo "• Configure firewall rules"
         echo "• Set up monitoring and alerting"
         echo "• Configure automated backups"
-        echo "• Run security audit: ./scripts/security-audit.sh"
+        echo "• Run security audit: ./scripts/maintenance/security-audit.sh"
         
     else
         echo -e "${GREEN}🚀 FOUNDATION SYSTEM READY${NC}"
@@ -774,7 +774,7 @@ if [ "$FULL_SETUP" = true ]; then
         
         echo
         echo -e "${BLUE}📊 System Health Check:${NC}"
-        if ./scripts/health-check.sh --quick >/dev/null 2>&1; then
+        if ./scripts/maintenance/health-check.sh --quick >/dev/null 2>&1; then
             echo "• Health monitoring: ✅ Operational"
         else
             echo "• Health monitoring: ⚠️  Available (configure services for full health checks)"
@@ -788,10 +788,10 @@ if [ "$FULL_SETUP" = true ]; then
         echo "========================================"
         echo -e "${YELLOW}1. Configure External Services:${NC}"
         echo "   # Set up MinIO object storage"
-        echo "   sudo ./scripts/setup-minio.sh"
+        echo "   sudo ./scripts/setup/07-setup-minio.sh"
         echo "   "
         echo "   # Set up rqlite database cluster"
-        echo "   sudo ./scripts/setup-rqlite.sh"
+        echo "   sudo ./scripts/setup/08-setup-rqlite.sh"
         echo
         echo -e "${YELLOW}2. Configure Application:${NC}"
         echo "   # Edit configuration file"
@@ -810,7 +810,7 @@ if [ "$FULL_SETUP" = true ]; then
         echo
         echo -e "${YELLOW}4. Configure Reverse Proxy:${NC}"
         echo "   # Install and configure Caddy (recommended)"
-        echo "   sudo ./scripts/setup-caddy.sh"
+        echo "   sudo ./scripts/setup/setup-caddy.sh"
         echo "   "
         echo "   # Or configure nginx/Apache manually"
         echo "   # See docs/deployment-guide.md for details"
@@ -820,10 +820,10 @@ if [ "$FULL_SETUP" = true ]; then
         echo "   curl http://localhost:8080/health"
         echo "   "
         echo "   # Validate with real MinIO/rqlite"
-        echo "   ./scripts/validate-deployment.sh --production"
+        echo "   ./scripts/maintenance/validate-deployment.sh --production"
         echo "   "
         echo "   # Run security audit"
-        echo "   ./scripts/security-audit.sh"
+        echo "   ./scripts/maintenance/security-audit.sh"
     fi
     
     echo
@@ -832,7 +832,7 @@ if [ "$FULL_SETUP" = true ]; then
     echo "• Production Deployment: docs/deployment-guide.md"
     echo "• Security Operations: docs/security-operations.md"
     echo "• API Documentation: docs/api.md"
-    echo "• Emergency Procedures: scripts/emergency-procedures.sh"
+    echo "• Emergency Procedures: scripts/maintenance/emergency-procedures.sh"
     echo
     echo -e "${BLUE}🔧 MAINTENANCE SCHEDULE${NC}"
     echo "========================================"
@@ -857,21 +857,21 @@ else
     echo
     echo -e "${BLUE}Option 1: Quick Setup (Recommended)${NC}"
     echo "Run this script again with full setup:"
-    echo "  ./scripts/integration-test.sh"
+    echo "  ./scripts/complete-setup-test.sh"
     echo "  # Type 'YES' when prompted"
     echo
     echo -e "${BLUE}Option 2: Manual Setup${NC}"
     echo "Use individual setup scripts:"
-    echo "  1. sudo ./scripts/setup-users.sh"
-    echo "  2. sudo ./scripts/setup-directories.sh"
-    echo "  3. sudo ./scripts/setup-opaque-keys.sh"
-    echo "  4. sudo ./scripts/setup-jwt-keys.sh"
-    echo "  5. sudo ./scripts/setup-tls-certs.sh"
+    echo "  1. sudo ./scripts/setup/01-setup-users.sh"
+    echo "  2. sudo ./scripts/setup/02-setup-directories.sh"
+    echo "  3. sudo ./scripts/setup/03-setup-opaque-keys.sh"
+    echo "  4. sudo ./scripts/setup/04-setup-jwt-keys.sh"
+    echo "  5. sudo ./scripts/setup/05-setup-tls-certs.sh"
     echo
     echo -e "${BLUE}Option 3: Development Environment${NC}"
     echo "For development and testing:"
-    echo "  1. Configure MinIO: ./scripts/setup-minio.sh"
-    echo "  2. Configure rqlite: ./scripts/setup-rqlite.sh"
+    echo "  1. Configure MinIO: ./scripts/setup/07-setup-minio.sh"
+    echo "  2. Configure rqlite: ./scripts/setup/08-setup-rqlite.sh"
     echo "  3. Run application: go run main.go"
     echo
     echo -e "${GREEN}📋 PRE-PRODUCTION CHECKLIST${NC}"
@@ -892,9 +892,9 @@ echo -e "${GREEN}📞 SUPPORT & RESOURCES${NC}"
 echo "========================================"
 echo "• Documentation: docs/ directory"
 echo "• Health monitoring: curl http://localhost:8080/health"
-echo "• Security audit: ./scripts/security-audit.sh"
-echo "• Emergency help: ./scripts/emergency-procedures.sh"
-echo "• Performance testing: ./scripts/performance-benchmark.sh"
+echo "• Security audit: ./scripts/maintenance/security-audit.sh"
+echo "• Emergency help: ./scripts/maintenance/emergency-procedures.sh"
+echo "• Performance testing: ./scripts/testing/performance-benchmark.sh"
 echo "• Issues & support: GitHub issues or arkfile [at] pm [dot] me"
 
 echo

@@ -253,13 +253,13 @@ Root Security
 **Key Rotation Procedures:**
 ```bash
 # JWT key rotation (weekly)
-./scripts/rotate-jwt-keys.sh
+./scripts/maintenance/rotate-jwt-keys.sh
 
 # Emergency rotation (immediate)
-./scripts/rotate-jwt-keys.sh --force
+./scripts/maintenance/rotate-jwt-keys.sh --force
 
 # OPAQUE key backup (monthly)
-./scripts/backup-keys.sh
+./scripts/maintenance/backup-keys.sh
 ```
 
 ### Authentication Security
@@ -371,7 +371,7 @@ rqlite -H localhost:4001 \
 sudo systemctl stop arkfile
 
 # Backup current state
-./scripts/backup-keys.sh
+./scripts/maintenance/backup-keys.sh
 
 # Capture logs
 sudo journalctl -u arkfile --since "1 hour ago" > incident-logs.txt
@@ -380,7 +380,7 @@ sudo journalctl -u arkfile --since "1 hour ago" > incident-logs.txt
 **Assessment Phase:**
 ```bash
 # Run security audit
-./scripts/security-audit.sh
+./scripts/maintenance/security-audit.sh
 
 # Check file integrity
 find /opt/arkfile/etc/keys -type f -exec sha256sum {} \; > file-hashes.txt
@@ -424,7 +424,7 @@ sudo tar -czf /opt/arkfile/backups/emergency-backup-$(date +%Y%m%d-%H%M%S).tar.g
   /opt/arkfile/var/lib /opt/arkfile/etc/keys
 
 # 3. Generate new OPAQUE server key
-./scripts/setup-opaque-keys.sh --force
+./scripts/setup/03-setup-opaque-keys.sh --force
 
 # 4. Clear all user authentication data
 rqlite -H localhost:4001 \
@@ -459,10 +459,10 @@ The features below describe on-disk logging and in-app event tracking only.
 **Weekly Tasks:**
 ```bash
 # Security event review
-./scripts/security-audit.sh
+./scripts/maintenance/security-audit.sh
 
 # Key health verification
-./scripts/health-check.sh
+./scripts/maintenance/health-check.sh
 
 # Authentication pattern analysis
 rqlite -H localhost:4001 \
@@ -475,13 +475,13 @@ rqlite -H localhost:4001 \
 **Monthly Tasks:**
 ```bash
 # Comprehensive security assessment
-./scripts/security-audit.sh --comprehensive
+./scripts/maintenance/security-audit.sh --comprehensive
 
 # Key backup verification
-./scripts/backup-keys.sh --verify
+./scripts/maintenance/backup-keys.sh --verify
 
 # Performance security baseline
-./scripts/performance-benchmark.sh
+./scripts/testing/performance-benchmark.sh
 ```
 
 ## Threat Detection
@@ -635,7 +635,7 @@ rqlite -H localhost:4001 \
 sudo systemctl stop arkfile
 
 # Emergency key rotation
-./scripts/rotate-jwt-keys.sh --force
+./scripts/maintenance/rotate-jwt-keys.sh --force
 
 # Security audit
 ./scripts/security-audit.sh

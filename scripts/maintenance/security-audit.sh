@@ -543,7 +543,7 @@ audit_backup_recovery() {
     log_header "Backup and Recovery Audit"
     
     # Check backup script
-    backup_script="$ARKFILE_HOME/scripts/backup-keys.sh"
+    backup_script="$ARKFILE_HOME/scripts/maintenance/backup-keys.sh"
     if [[ -f "$backup_script" ]]; then
         log_success "Backup script exists"
         

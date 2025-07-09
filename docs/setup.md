@@ -35,7 +35,7 @@ This guide provides comprehensive instructions for installing, configuring, and 
 
 For full system setup with complete validation:
 ```bash
-./scripts/integration-test.sh
+./scripts/complete-setup-test.sh
 ```
 
 When prompted, choose "COMPLETE" for full system setup. This will:
@@ -119,15 +119,15 @@ curl http://localhost:8080/health
 
 ```bash
 # Foundation setup (users, directories, keys)
-./scripts/setup-foundation.sh
+./scripts/setup/00-setup-foundation.sh
 
 # Add services manually
-sudo ./scripts/setup-minio.sh
-sudo ./scripts/setup-rqlite.sh
+sudo ./scripts/setup/07-setup-minio.sh
+sudo ./scripts/setup/08-setup-rqlite.sh
 
 # Build and deploy
-./scripts/build.sh
-./scripts/deploy.sh prod
+./scripts/setup/build.sh
+./scripts/setup/deploy.sh prod
 ```
 
 ## Production Deployment
@@ -155,9 +155,9 @@ NOTE: Storage needs vary based on storage backend; minio local/cluster modes req
 
 **Go Installation:**
 ```bash
-# Install Go 1.24.4 or later
-wget https://go.dev/dl/go1.24.4.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.24.4.linux-amd64.tar.gz
+# Install Go 1.24.2 or later
+wget https://go.dev/dl/go1.24.2.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.24.2.linux-amd64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
@@ -183,7 +183,7 @@ sudo -u arkfile git clone https://github.com/84adam/arkfile.git src
 cd src
 
 # Run comprehensive setup
-sudo ./scripts/integration-test.sh
+sudo ./scripts/complete-setup-test.sh
 # Type "COMPLETE" when prompted for full system setup
 ```
 
@@ -194,14 +194,14 @@ sudo ./scripts/integration-test.sh
 cd /opt/arkfile
 sudo -u arkfile git clone https://github.com/84adam/arkfile.git src
 cd src
-sudo -u arkfile ./scripts/build.sh
+sudo -u arkfile ./scripts/setup/build.sh
 
 # Install binary
 sudo cp arkfile /opt/arkfile/bin/
 sudo chown arkfile:arkfile /opt/arkfile/bin/arkfile
 
 # Run setup
-sudo -u arkfile ./scripts/first-time-setup.sh
+sudo -u arkfile ./scripts/deprecated/first-time-setup.sh
 ```
 
 ### Configuration
@@ -260,7 +260,7 @@ storage:
 **Development Certificates:**
 ```bash
 # Generate self-signed certificates
-sudo ./scripts/setup-tls-certs.sh
+sudo ./scripts/setup/05-setup-tls-certs.sh
 
 # Validate certificates
 ./scripts/validate-certificates.sh
@@ -270,10 +270,10 @@ sudo ./scripts/setup-tls-certs.sh
 ```bash
 # Set domain for production
 export ARKFILE_DOMAIN=yourdomain.com
-sudo -E ./scripts/setup-tls-certs.sh
+sudo -E ./scripts/setup/05-setup-tls-certs.sh
 
 # For Let's Encrypt (when available)
-sudo ./scripts/setup-letsencrypt.sh
+sudo ./scripts/setup/setup-letsencrypt.sh
 ```
 
 ### Certificate Architecture
@@ -299,19 +299,19 @@ sudo ./scripts/setup-letsencrypt.sh
 **Certificate Renewal:**
 ```bash
 # Automatic renewal (checks expiration)
-./scripts/renew-certificates.sh
+./scripts/maintenance/renew-certificates.sh
 
 # Force renewal of all certificates
-./scripts/renew-certificates.sh --force
+./scripts/maintenance/renew-certificates.sh --force
 ```
 
 **Certificate Validation:**
 ```bash
 # Comprehensive validation
-./scripts/validate-certificates.sh
+./scripts/maintenance/validate-certificates.sh
 
 # Detailed certificate information
-./scripts/validate-certificates.sh --details
+./scripts/maintenance/validate-certificates.sh --details
 ```
 
 ## Administrative Validation
@@ -321,10 +321,10 @@ sudo ./scripts/setup-letsencrypt.sh
 **Automated Validation:**
 ```bash
 # Run comprehensive admin testing
-./scripts/admin-integration-test.sh
+./scripts/testing/admin-integration-test.sh
 
 # Quick health check
-./scripts/health-check.sh
+./scripts/maintenance/health-check.sh
 ```
 
 **Manual Validation Steps:**
@@ -425,13 +425,13 @@ sudo journalctl -u arkfile --since "24 hours ago"
 **Weekly:**
 ```bash
 # Security audit
-./scripts/security-audit.sh
+./scripts/maintenance/security-audit.sh
 
 # Key rotation (automated via systemd timer)
 sudo systemctl status arkfile-key-rotation.timer
 
 # Backup keys
-./scripts/backup-keys.sh
+./scripts/maintenance/backup-keys.sh
 ```
 
 **Monthly:**
@@ -440,10 +440,10 @@ sudo systemctl status arkfile-key-rotation.timer
 sudo apt update && sudo apt upgrade
 
 # Performance benchmark
-./scripts/performance-benchmark.sh
+./scripts/testing/performance-benchmark.sh
 
 # Certificate validation
-./scripts/validate-certificates.sh
+./scripts/maintenance/validate-certificates.sh
 ```
 
 ### Backup Procedures
@@ -454,13 +454,13 @@ sudo apt update && sudo apt upgrade
 rqlite -H localhost:4001 '.backup /opt/arkfile/backups/db-backup-$(date +%Y%m%d).db'
 
 # Automated backup (add to crontab)
-0 2 * * * /opt/arkfile/scripts/backup-keys.sh
+0 2 * * * /opt/arkfile/scripts/maintenance/backup-keys.sh
 ```
 
 **Key Backup:**
 ```bash
 # Secure key backup
-./scripts/backup-keys.sh
+./scripts/maintenance/backup-keys.sh
 
 # Verify backup integrity
 tar -tzf /opt/arkfile/backups/keys-backup-$(date +%Y%m%d).tar.gz
@@ -593,10 +593,10 @@ sudo systemctl start arkfile
 **Key Compromise Response:**
 ```bash
 # Execute emergency procedures
-./scripts/emergency-procedures.sh
+./scripts/maintenance/emergency-procedures.sh
 
 # Rotate JWT keys immediately
-./scripts/rotate-jwt-keys.sh --force
+./scripts/maintenance/rotate-jwt-keys.sh --force
 ```
 
 ### Getting Help
@@ -607,7 +607,7 @@ sudo systemctl start arkfile
 ./scripts/health-check.sh --debug
 
 # Check system configuration
-./scripts/validate-deployment.sh
+./scripts/maintenance/validate-deployment.sh
 
 # Review logs
 sudo journalctl -u arkfile --since "1 hour ago"
@@ -615,8 +615,8 @@ sudo journalctl -u arkfile --since "1 hour ago"
 
 **Support Resources:**
 - **Health Dashboard**: `http://localhost:8080/health`
-- **Security Audit**: `./scripts/security-audit.sh`
-- **Performance Testing**: `./scripts/performance-benchmark.sh`
+- **Security Audit**: `./scripts/maintenance/security-audit.sh`
+- **Performance Testing**: `./scripts/testing/performance-benchmark.sh`
 - **Log Files**: `/var/log/arkfile/` and `sudo journalctl -u arkfile`
 
 **File Locations:**
@@ -640,7 +640,7 @@ curl http://localhost:8080/health
 ./scripts/health-check.sh
 
 # Administrative testing
-./scripts/admin-integration-test.sh
+./scripts/testing/admin-integration-test.sh
 
 # Security operations
 ./scripts/security-audit.sh

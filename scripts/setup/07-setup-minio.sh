@@ -31,9 +31,9 @@ if command -v minio >/dev/null 2>&1; then
         
         # Download and install MinIO using secure download script
         echo "Downloading and installing MinIO securely..."
-        if [ -x "./scripts/download-minio.sh" ]; then
+        if [ -x "./scripts/maintenance/download-minio.sh" ]; then
             # Use our secure download script
-            ./scripts/download-minio.sh --version "${MINIO_VERSION}"
+            ./scripts/maintenance/download-minio.sh --version "${MINIO_VERSION}"
         else
             echo -e "${YELLOW}⚠️  Secure download script not found, falling back to direct download${NC}"
             echo "Downloading MinIO..."
@@ -51,9 +51,9 @@ else
     
     # Download and install MinIO using secure download script
     echo "Downloading and installing MinIO securely..."
-    if [ -x "./scripts/download-minio.sh" ]; then
+    if [ -x "./scripts/maintenance/download-minio.sh" ]; then
         # Use our secure download script
-        ./scripts/download-minio.sh --version "${MINIO_VERSION}"
+        ./scripts/maintenance/download-minio.sh --version "${MINIO_VERSION}"
     else
         echo -e "${YELLOW}⚠️  Secure download script not found, falling back to direct download${NC}"
         echo "Downloading MinIO..."
