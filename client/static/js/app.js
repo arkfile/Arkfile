@@ -210,6 +210,21 @@ async function detectDeviceCapability() {
 function showCapabilityInfo(capabilityData) {
     const info = document.createElement('div');
     info.className = 'capability-info success-message';
+    info.style.cssText = `
+        position: fixed;
+        top: 80px;
+        right: 20px;
+        background-color: #d1ecf1;
+        border: 1px solid #bee5eb;
+        color: #0c5460;
+        padding: 1rem;
+        border-radius: 6px;
+        font-size: 0.9rem;
+        z-index: 1050;
+        max-width: 350px;
+        word-wrap: break-word;
+        animation: slideIn 0.3s ease-out;
+    `;
     info.innerHTML = `
         <div><strong>Security Level:</strong> ${capabilityData.recommendedCapability}</div>
         <div><strong>Description:</strong> ${capabilityData.description}</div>
@@ -475,31 +490,21 @@ async function opaqueRegister(email, password) {
             const data = await response.json();
             hideProgress();
             
-            // Fetch admin emails for contact info
-            await fetchAdminEmails();
+            // Store registration data for TOTP setup
+            window.registrationData = {
+                email: email,
+                password: password,
+                tempToken: data.tempToken,
+                sessionKey: data.sessionKey,
+                authMethod: data.authMethod
+            };
             
-            // Show registration success modal with approval information
-            const adminContactList = adminEmails.length > 0 
-                ? adminEmails.join('\n• ') 
-                : 'admin@arkfile.demo';
-                
-            createModal({
-                title: "Registration Successful!",
-                message: `Your account has been created successfully with ${data.authMethod}.
-
-📋 Next Steps:
-• An administrator must approve your account before you can log in
-• You will receive an email notification when approved
-• This usually takes 1-2 business days
-
-📧 Need help or want to check your status?
-Contact an administrator:
-• ${adminContactList}
-
-💡 Tip: Include your registered email address (${email}) when contacting support.`
-            });
+            // Hide registration form and show TOTP setup
+            document.getElementById('register-form').classList.add('hidden');
+            document.getElementById('totp-setup-form').classList.remove('hidden');
             
-            toggleAuthForm();
+            showSuccess('Registration successful! Please set up two-factor authentication.');
+            
         } else {
             hideProgress();
             const errorData = await response.json().catch(() => ({}));
@@ -767,6 +772,32 @@ async function loadFiles() {
     }
 }
 
+// Helper function to display files in the UI
+function displayFiles(data) {
+    const filesList = document.getElementById('filesList');
+    filesList.innerHTML = '';
+
+    data.files.forEach(file => {
+        const fileElement = document.createElement('div');
+        fileElement.className = 'file-item';
+        fileElement.innerHTML = `
+            <div class="file-info">
+                <strong>${file.filename}</strong>
+                <span class="file-size">${file.size_readable}</span>
+                <span class="file-date">${new Date(file.uploadDate).toLocaleString()}</span>
+                <span class="encryption-type">${file.passwordType === 'account' ? '🔑 Account Password' : '🔒 Custom Password'}</span>
+            </div>
+            <div class="file-actions">
+                <button onclick="downloadFile('${file.filename}', '${file.passwordHint}', '${file.sha256sum}', '${file.passwordType}')">Download</button>
+            </div>
+        `;
+        filesList.appendChild(fileElement);
+    });
+
+    // Update storage info
+    updateStorageInfo(data.storage);
+}
+
 function updateStorageInfo(storage) {
     const storageInfo = document.getElementById('storageInfo');
     if (!storageInfo) return;
@@ -951,11 +982,63 @@ function showSuccess(message) {
     setTimeout(() => successDiv.remove(), 5000);
 }
 
+// Password confirmation validation function
+function updatePasswordConfirmationStatus(password, confirmPassword) {
+    const statusElement = document.getElementById('password-match-status');
+    if (!statusElement) return;
+
+    // Use the Go-WASM function for validation
+    if (!wasmReady) {
+        statusElement.textContent = 'Validation not ready...';
+        statusElement.className = 'match-status empty';
+        return;
+    }
+
+    const validation = validatePasswordConfirmation(password, confirmPassword);
+    statusElement.textContent = validation.message;
+    statusElement.className = `match-status ${validation.status}`;
+}
+
 // Event listeners
-window.addEventListener('load', () => {
-    if (localStorage.getItem('token')) {
-        showFileSection();
-        loadFiles();
+window.addEventListener('load', async () => {
+    // Check if we have a token, but validate it before showing the file interface
+    const token = localStorage.getItem('token');
+    if (token) {
+        try {
+            // Validate the token by making a simple API call
+            const response = await fetch('/api/files', {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                },
+            });
+            
+            if (response.ok) {
+                // Token is valid, show the file section and load files
+                showFileSection();
+                const data = await response.json();
+                displayFiles(data);
+            } else {
+                // Token is invalid, clear storage and show auth
+                console.warn('Stored token is invalid, clearing and showing auth');
+                localStorage.removeItem('token');
+                localStorage.removeItem('refreshToken');
+                delete window.arkfileSecurityContext;
+                showAuthSection();
+                
+                // Show a user-friendly message
+                showError('Your session has expired. Please log in again.');
+            }
+        } catch (error) {
+            // Network error or other issue, clear storage and show auth
+            console.error('Error validating token:', error);
+            localStorage.removeItem('token');
+            localStorage.removeItem('refreshToken');
+            delete window.arkfileSecurityContext;
+            showAuthSection();
+        }
+    } else {
+        // No token, show auth section
+        showAuthSection();
     }
     
     // Set up password type toggle handling
@@ -975,10 +1058,22 @@ window.addEventListener('load', () => {
 
     // Setup password strength monitoring for registration
     const registerPassword = document.getElementById('register-password');
+    const registerPasswordConfirm = document.getElementById('register-password-confirm');
     const registerContainer = document.querySelector('.register-form .password-section');
     if (registerPassword && registerContainer) {
         registerPassword.addEventListener('input', (e) => {
             securityUtils.updatePasswordStrengthUI(e.target.value, registerContainer);
+            // Also update confirmation status when main password changes
+            if (registerPasswordConfirm.value) {
+                updatePasswordConfirmationStatus(registerPassword.value, registerPasswordConfirm.value);
+            }
+        });
+    }
+
+    // Setup password confirmation monitoring
+    if (registerPasswordConfirm) {
+        registerPasswordConfirm.addEventListener('input', (e) => {
+            updatePasswordConfirmationStatus(registerPassword.value, e.target.value);
         });
     }
 
@@ -989,6 +1084,246 @@ window.addEventListener('load', () => {
         });
     }
 });
+
+// TOTP Setup Functions
+async function generateTOTPSetup() {
+    if (!window.registrationData) {
+        showError('Registration data not found. Please restart registration.');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/totp/setup', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${window.registrationData.tempToken}`
+            },
+            body: JSON.stringify({ 
+                sessionKey: window.registrationData.sessionKey 
+            })
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            
+            // Store TOTP setup data
+            window.totpSetupData = data;
+            
+            // Show QR code
+            const qrDisplay = document.getElementById('qr-code-display');
+            qrDisplay.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(data.qrCodeUrl)}" alt="TOTP QR Code">`;
+            
+            // Show manual entry code
+            document.getElementById('manual-entry-code').textContent = data.manualEntry;
+            
+            // Show backup codes
+            const backupList = document.getElementById('backup-codes-list');
+            backupList.innerHTML = '';
+            data.backupCodes.forEach(code => {
+                const li = document.createElement('li');
+                li.textContent = code;
+                backupList.appendChild(li);
+            });
+            
+            // Show sections
+            document.getElementById('qr-code-section').classList.remove('hidden');
+            document.getElementById('backup-codes-section').classList.remove('hidden');
+            
+            // Enable verification button and add event listener
+            const verifyButton = document.getElementById('verify-totp-btn');
+            verifyButton.disabled = false;
+            
+            // Add event listener for TOTP input
+            const totpInput = document.getElementById('totp-verify-code');
+            totpInput.addEventListener('input', function() {
+                this.value = this.value.replace(/[^0-9]/g, '');
+                verifyButton.disabled = this.value.length !== 6;
+            });
+            
+            // Add Enter key support
+            totpInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter' && this.value.length === 6) {
+                    verifyTOTPSetup();
+                }
+            });
+            
+            showSuccess('TOTP setup generated! Scan the QR code and enter the verification code.');
+            
+        } else {
+            const errorData = await response.json().catch(() => ({}));
+            showError(`TOTP setup failed: ${errorData.message || 'Unknown error'}`);
+        }
+    } catch (error) {
+        console.error('TOTP setup error:', error);
+        showError('Failed to generate TOTP setup.');
+    }
+}
+
+async function verifyTOTPSetup() {
+    const code = document.getElementById('totp-verify-code').value;
+    
+    if (!code || code.length !== 6) {
+        showError('Please enter a 6-digit verification code.');
+        return;
+    }
+
+    if (!window.registrationData || !window.totpSetupData) {
+        showError('Setup data not found. Please restart the process.');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/totp/verify', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${window.registrationData.tempToken}`
+            },
+            body: JSON.stringify({ 
+                code: code,
+                sessionKey: window.registrationData.sessionKey 
+            })
+        });
+
+        if (response.ok) {
+            showSuccess('TOTP verification successful! Your registration is complete.');
+            
+            // Show completion message
+            await showRegistrationComplete();
+            
+        } else {
+            const errorData = await response.json().catch(() => ({}));
+            showError(`TOTP verification failed: ${errorData.message || 'Invalid code'}`);
+        }
+    } catch (error) {
+        console.error('TOTP verification error:', error);
+        showError('Failed to verify TOTP code.');
+    }
+}
+
+async function showRegistrationComplete() {
+    // Fetch admin emails for contact info
+    await fetchAdminEmails();
+    
+    const adminContactList = adminEmails.length > 0 
+        ? adminEmails.join('\n• ') 
+        : 'admin@arkfile.demo';
+        
+    createModal({
+        title: "Registration Complete!",
+        message: `🎉 Your account has been successfully created with ${window.registrationData.authMethod} and TOTP 2FA!
+
+📋 Next Steps:
+• An administrator must approve your account before you can log in
+• You will receive an email notification when approved
+• This usually takes 1-2 business days
+
+🔐 Security Features Enabled:
+• OPAQUE password authentication
+• Two-factor authentication (TOTP)
+• Encrypted file storage
+
+📧 Need help or want to check your status?
+Contact an administrator:
+• ${adminContactList}
+
+💡 Tip: Include your registered email address (${window.registrationData.email}) when contacting support.
+
+⚠️ Important: Make sure you've saved your backup codes in a secure location!`
+    });
+    
+    // Clear registration data
+    delete window.registrationData;
+    delete window.totpSetupData;
+    
+    // Return to login form
+    setTimeout(() => {
+        document.getElementById('totp-setup-form').classList.add('hidden');
+        document.getElementById('login-form').classList.remove('hidden');
+        document.getElementById('register-form').classList.add('hidden');
+    }, 3000);
+}
+
+function downloadBackupCodes() {
+    if (!window.totpSetupData || !window.totpSetupData.backupCodes) {
+        showError('Backup codes not available.');
+        return;
+    }
+    
+    const codes = window.totpSetupData.backupCodes;
+    const content = `Arkfile TOTP Backup Codes
+Generated: ${new Date().toISOString()}
+Account: ${window.registrationData.email}
+
+⚠️ IMPORTANT: Keep these codes secure and confidential!
+⚠️ Each code can only be used once.
+⚠️ Use these codes if you lose access to your authenticator app.
+
+Backup Codes:
+${codes.map((code, index) => `${index + 1}. ${code}`).join('\n')}
+
+Instructions:
+1. Store these codes in a secure location (password manager, encrypted file, etc.)
+2. Never share these codes with anyone
+3. If you use a backup code, generate new ones immediately
+4. Contact an administrator if you lose both your authenticator and backup codes
+
+Support Contact: ${adminEmails.join(', ')}`;
+    
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `arkfile-backup-codes-${window.registrationData.email}-${new Date().toISOString().split('T')[0]}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    showSuccess('Backup codes downloaded successfully!');
+}
+
+function cancelRegistration() {
+    createModal({
+        title: "Cancel Registration?",
+        message: "Are you sure you want to cancel the registration process? Your account will not be created and you'll need to start over."
+    });
+    
+    // Add custom buttons to modal
+    const modal = document.querySelector('.modal-overlay');
+    const modalContent = modal.querySelector('.modal-content');
+    const closeButton = modalContent.querySelector('button');
+    
+    closeButton.textContent = 'Keep Setting Up';
+    
+    const cancelButton = document.createElement('button');
+    cancelButton.textContent = 'Yes, Cancel Registration';
+    cancelButton.style.cssText = `
+        width: 100%;
+        padding: 10px;
+        background-color: #dc3545;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 16px;
+        margin-top: 10px;
+    `;
+    cancelButton.onclick = () => {
+        // Clear registration data
+        delete window.registrationData;
+        delete window.totpSetupData;
+        
+        // Return to login form
+        document.getElementById('totp-setup-form').classList.add('hidden');
+        document.getElementById('login-form').classList.remove('hidden');
+        document.getElementById('register-form').classList.add('hidden');
+        
+        modal.remove();
+        showSuccess('Registration cancelled.');
+    };
+    
+    modalContent.appendChild(cancelButton);
+}
 
 // Check session validity periodically
 setInterval(() => {

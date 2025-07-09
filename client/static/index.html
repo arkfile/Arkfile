@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="x-tls-version" content="">  <!-- Will be populated by server middleware -->
-    <title>Secure File Sharing</title>
+    <title>Arkfile - Secure File Sharing</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
@@ -38,9 +39,68 @@
                         </ul>
                     </div>
                     <input type="password" id="register-password-confirm" placeholder="Confirm Password">
+                    <div class="password-confirmation">
+                        <div id="password-match-status" class="match-status"></div>
+                    </div>
                 </div>
                 <button onclick="register()">Register</button>
                 <p>Already have an account? <a href="#" onclick="toggleAuthForm()">Login</a></p>
+            </div>
+
+            <!-- TOTP Setup Section -->
+            <div class="totp-setup-form hidden" id="totp-setup-form">
+                <h2>Setup Two-Factor Authentication</h2>
+                <div class="totp-info">
+                    <p><strong>🔐 Enhanced Security Required</strong></p>
+                    <p>Two-factor authentication (2FA) is required for all accounts. Please set up your authenticator app.</p>
+                </div>
+                
+                <div class="totp-step">
+                    <h3>📱 Step 1: Install an Authenticator App</h3>
+                    <p>Download one of these apps if you don't have one:</p>
+                    <ul>
+                        <li>Google Authenticator</li>
+                        <li>Authy</li>
+                        <li>Microsoft Authenticator</li>
+                        <li>1Password</li>
+                    </ul>
+                </div>
+
+                <div class="totp-step">
+                    <h3>📲 Step 2: Scan QR Code</h3>
+                    <button onclick="generateTOTPSetup()" id="generate-totp-btn">Generate Setup Code</button>
+                    <div id="qr-code-section" class="hidden">
+                        <div class="qr-code-container">
+                            <div id="qr-code-display"></div>
+                            <div class="manual-entry">
+                                <p><strong>Can't scan? Enter this code manually:</strong></p>
+                                <code id="manual-entry-code"></code>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="totp-step">
+                    <h3>🔢 Step 3: Enter Verification Code</h3>
+                    <input type="text" id="totp-verify-code" placeholder="000000" maxlength="6" class="totp-input">
+                    <button onclick="verifyTOTPSetup()" id="verify-totp-btn" disabled>Verify & Complete Registration</button>
+                    <div id="totp-verification-status"></div>
+                </div>
+
+                <div class="backup-codes-section hidden" id="backup-codes-section">
+                    <h3>🔑 Backup Codes</h3>
+                    <div class="backup-warning">
+                        <p><strong>⚠️ Important:</strong> Save these backup codes in a secure location. You can use them to access your account if you lose your authenticator device.</p>
+                    </div>
+                    <div class="backup-codes-container">
+                        <ul id="backup-codes-list"></ul>
+                        <button onclick="downloadBackupCodes()" class="secondary-button">Download Backup Codes</button>
+                    </div>
+                </div>
+
+                <div class="totp-navigation">
+                    <button onclick="cancelRegistration()" class="secondary-button">Cancel Registration</button>
+                </div>
             </div>
         </div>
 

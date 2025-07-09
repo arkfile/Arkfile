@@ -10,7 +10,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"strings"
 	"syscall/js" // specifically for WASM build
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -689,6 +692,41 @@ func validatePasswordComplexity(this js.Value, args []js.Value) interface{} {
 	}
 }
 
+// validatePasswordConfirmation validates that two passwords match
+func validatePasswordConfirmation(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Invalid number of arguments",
+		}
+	}
+
+	password := args[0].String()
+	confirmPassword := args[1].String()
+
+	if password == "" && confirmPassword == "" {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Please enter confirmation password",
+			"status":  "empty",
+		}
+	}
+
+	if password != confirmPassword {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Passwords do not match",
+			"status":  "not-matching",
+		}
+	}
+
+	return map[string]interface{}{
+		"valid":   true,
+		"message": "Passwords match",
+		"status":  "matching",
+	}
+}
+
 // hashPasswordArgon2ID hashes a password using Argon2ID with the same parameters as the server
 func hashPasswordArgon2ID(this js.Value, args []js.Value) interface{} {
 	if len(args) != 2 {
@@ -821,6 +859,95 @@ func opaqueLoginFlow(this js.Value, args []js.Value) interface{} {
 	}
 }
 
+// validateTokenStructure validates JWT token structure and basic claims
+func validateTokenStructure(this js.Value, args []js.Value) interface{} {
+	if len(args) != 1 {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Invalid number of arguments",
+		}
+	}
+
+	token := args[0].String()
+	if token == "" {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Token is empty",
+		}
+	}
+
+	// Basic JWT structure validation (3 parts separated by dots)
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Invalid JWT structure",
+		}
+	}
+
+	// Try to decode the payload (middle part)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Invalid JWT payload encoding",
+		}
+	}
+
+	// Basic validation - check if it's valid JSON and has required fields
+	var claims map[string]interface{}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Invalid JWT payload JSON",
+		}
+	}
+
+	// Check for required claims
+	if email, exists := claims["email"]; !exists || email == "" {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Missing or empty email claim",
+		}
+	}
+
+	// Check expiration if present
+	if exp, exists := claims["exp"]; exists {
+		if expFloat, ok := exp.(float64); ok {
+			if time.Now().Unix() > int64(expFloat) {
+				return map[string]interface{}{
+					"valid":   false,
+					"message": "Token has expired",
+				}
+			}
+		}
+	}
+
+	return map[string]interface{}{
+		"valid":   true,
+		"message": "Token structure is valid",
+		"email":   claims["email"],
+	}
+}
+
+// sanitizeAPIResponse sanitizes API response data
+func sanitizeAPIResponse(this js.Value, args []js.Value) interface{} {
+	if len(args) != 1 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid number of arguments",
+		}
+	}
+
+	// This would contain logic to sanitize API responses
+	// For now, we'll just pass through, but in a real implementation
+	// this would validate and sanitize all response data
+	return map[string]interface{}{
+		"success": true,
+		"data":    args[0],
+	}
+}
+
 // main function to register WASM functions
 func main() {
 	// File encryption functions
@@ -834,6 +961,7 @@ func main() {
 
 	// Password functions
 	js.Global().Set("validatePasswordComplexity", js.FuncOf(validatePasswordComplexity))
+	js.Global().Set("validatePasswordConfirmation", js.FuncOf(validatePasswordConfirmation))
 	js.Global().Set("hashPasswordArgon2ID", js.FuncOf(hashPasswordArgon2ID))
 	js.Global().Set("generatePasswordSalt", js.FuncOf(generatePasswordSalt))
 
@@ -842,6 +970,10 @@ func main() {
 	js.Global().Set("detectDeviceCapabilityWithPermission", js.FuncOf(detectDeviceCapabilityWithPermission))
 	js.Global().Set("opaqueRegisterFlow", js.FuncOf(opaqueRegisterFlow))
 	js.Global().Set("opaqueLoginFlow", js.FuncOf(opaqueLoginFlow))
+
+	// Authentication and security functions
+	js.Global().Set("validateTokenStructure", js.FuncOf(validateTokenStructure))
+	js.Global().Set("sanitizeAPIResponse", js.FuncOf(sanitizeAPIResponse))
 
 	// Keep the program running
 	select {}
