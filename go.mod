@@ -23,6 +23,11 @@ require (
 )
 
 require (
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
+	github.com/pquerna/otp v1.5.0 // indirect
+)
+
+require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	filippo.io/nistec v0.0.3 // indirect
 	github.com/bytemare/crypto v0.4.3 // indirect; indirect - compatible version for OPAQUE v0.10.0

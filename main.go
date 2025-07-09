@@ -85,6 +85,21 @@ func main() {
 	}
 	logging.InfoLogger.Printf("OPAQUE server keys initialized successfully")
 
+	// Start TOTP cleanup routine
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute) // Clean every 5 minutes
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				if err := auth.CleanupTOTPLogs(database.DB); err != nil {
+					logging.ErrorLogger.Printf("Failed to cleanup TOTP logs: %v", err)
+				}
+			}
+		}
+	}()
+
 	// Initialize storage
 	storage.InitMinio()
 

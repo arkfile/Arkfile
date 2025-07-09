@@ -333,10 +333,48 @@ func OpaqueLogin(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
 	}
 
+	// Check if user has TOTP enabled
+	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, request.Email)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", request.Email, err)
+		crypto.SecureZeroSessionKey(sessionKey)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
+	}
+
+	if totpEnabled {
+		// Generate temporary token that requires TOTP completion
+		tempToken, err := auth.GenerateTemporaryTOTPToken(request.Email)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Email, err)
+			crypto.SecureZeroSessionKey(sessionKey)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
+		}
+
+		// Encode session key for secure transmission
+		sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
+
+		// Clear session key from memory immediately
+		crypto.SecureZeroSessionKey(sessionKey)
+
+		// Log partial authentication
+		database.LogUserAction(request.Email, "OPAQUE auth completed, awaiting TOTP", "")
+		logging.InfoLogger.Printf("OPAQUE user authenticated, TOTP required: %s", request.Email)
+
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"requiresTOTP": true,
+			"tempToken":    tempToken,
+			"sessionKey":   sessionKeyB64,
+			"authMethod":   "OPAQUE",
+			"message":      "OPAQUE authentication successful. TOTP code required.",
+		})
+	}
+
+	// No TOTP required - complete authentication
 	// Generate JWT token for session management
 	token, err := auth.GenerateToken(request.Email)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate JWT token for %s: %v", request.Email, err)
+		crypto.SecureZeroSessionKey(sessionKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication succeeded but session creation failed")
 	}
 
@@ -344,6 +382,7 @@ func OpaqueLogin(c echo.Context) error {
 	refreshToken, err := models.CreateRefreshToken(database.DB, request.Email)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", request.Email, err)
+		crypto.SecureZeroSessionKey(sessionKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication succeeded but session creation failed")
 	}
 
@@ -510,4 +549,291 @@ func getCapabilityDescription(capability string) string {
 		return desc
 	}
 	return "Unknown capability profile"
+}
+
+// TOTP Authentication Endpoints
+
+// TOTPSetupRequest represents the request for TOTP setup
+type TOTPSetupRequest struct {
+	SessionKey string `json:"sessionKey"`
+}
+
+// TOTPSetupResponse represents the response for TOTP setup
+type TOTPSetupResponse struct {
+	Secret      string   `json:"secret"`
+	QRCodeURL   string   `json:"qrCodeUrl"`
+	BackupCodes []string `json:"backupCodes"`
+	ManualEntry string   `json:"manualEntry"`
+}
+
+// TOTPSetup initializes TOTP setup for a user
+func TOTPSetup(c echo.Context) error {
+	var request TOTPSetupRequest
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+	}
+
+	// Get user email from JWT token
+	email := auth.GetEmailFromToken(c)
+
+	// Decode session key
+	sessionKey, err := base64.StdEncoding.DecodeString(request.SessionKey)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid session key format")
+	}
+	defer crypto.SecureZeroSessionKey(sessionKey)
+
+	// Check if user already has TOTP enabled
+	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, email)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", email, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check TOTP status")
+	}
+
+	if totpEnabled {
+		return echo.NewHTTPError(http.StatusConflict, "TOTP already enabled for this user")
+	}
+
+	// Generate TOTP setup
+	setup, err := auth.GenerateTOTPSetup(email, sessionKey)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to generate TOTP setup for %s: %v", email, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate TOTP setup")
+	}
+
+	// Store TOTP setup in database
+	if err := auth.StoreTOTPSetup(database.DB, email, setup, sessionKey); err != nil {
+		logging.ErrorLogger.Printf("Failed to store TOTP setup for %s: %v", email, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to store TOTP setup")
+	}
+
+	// Log TOTP setup initiation
+	database.LogUserAction(email, "initiated TOTP setup", "")
+	logging.InfoLogger.Printf("TOTP setup initiated for user: %s", email)
+
+	return c.JSON(http.StatusOK, TOTPSetupResponse{
+		Secret:      setup.Secret,
+		QRCodeURL:   setup.QRCodeURL,
+		BackupCodes: setup.BackupCodes,
+		ManualEntry: setup.ManualEntry,
+	})
+}
+
+// TOTPVerifyRequest represents the request for TOTP verification
+type TOTPVerifyRequest struct {
+	Code       string `json:"code"`
+	SessionKey string `json:"sessionKey"`
+}
+
+// TOTPVerify completes TOTP setup by verifying a test code
+func TOTPVerify(c echo.Context) error {
+	var request TOTPVerifyRequest
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+	}
+
+	// Get user email from JWT token
+	email := auth.GetEmailFromToken(c)
+
+	// Validate input
+	if request.Code == "" || len(request.Code) != 6 {
+		return echo.NewHTTPError(http.StatusBadRequest, "TOTP code must be 6 digits")
+	}
+
+	// Decode session key
+	sessionKey, err := base64.StdEncoding.DecodeString(request.SessionKey)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid session key format")
+	}
+	defer crypto.SecureZeroSessionKey(sessionKey)
+
+	// Complete TOTP setup
+	if err := auth.CompleteTOTPSetup(database.DB, email, request.Code, sessionKey); err != nil {
+		logging.ErrorLogger.Printf("Failed to complete TOTP setup for %s: %v", email, err)
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid TOTP code")
+	}
+
+	// Log successful TOTP setup
+	database.LogUserAction(email, "completed TOTP setup", "")
+	logging.InfoLogger.Printf("TOTP setup completed for user: %s", email)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message": "TOTP setup completed successfully",
+		"enabled": true,
+	})
+}
+
+// TOTPAuthRequest represents the request for TOTP authentication
+type TOTPAuthRequest struct {
+	Code       string `json:"code"`
+	SessionKey string `json:"sessionKey"`
+	IsBackup   bool   `json:"isBackup,omitempty"`
+}
+
+// TOTPAuth validates a TOTP code and completes authentication
+func TOTPAuth(c echo.Context) error {
+	var request TOTPAuthRequest
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+	}
+
+	// Get user email from JWT token
+	email := auth.GetEmailFromToken(c)
+
+	// Check if token requires TOTP
+	if !auth.RequiresTOTPFromToken(c) {
+		return echo.NewHTTPError(http.StatusBadRequest, "Token does not require TOTP")
+	}
+
+	// Validate input
+	if request.Code == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "TOTP code is required")
+	}
+
+	if !request.IsBackup && len(request.Code) != 6 {
+		return echo.NewHTTPError(http.StatusBadRequest, "TOTP code must be 6 digits")
+	}
+
+	// Decode session key
+	sessionKey, err := base64.StdEncoding.DecodeString(request.SessionKey)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid session key format")
+	}
+	defer crypto.SecureZeroSessionKey(sessionKey)
+
+	// Validate TOTP code or backup code
+	if request.IsBackup {
+		if err := auth.ValidateBackupCode(database.DB, email, request.Code, sessionKey); err != nil {
+			logging.ErrorLogger.Printf("Failed backup code validation for %s: %v", email, err)
+			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid backup code")
+		}
+		database.LogUserAction(email, "used backup code", "")
+	} else {
+		if err := auth.ValidateTOTPCode(database.DB, email, request.Code, sessionKey); err != nil {
+			logging.ErrorLogger.Printf("Failed TOTP code validation for %s: %v", email, err)
+			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid TOTP code")
+		}
+		database.LogUserAction(email, "authenticated with TOTP", "")
+	}
+
+	// Get user record
+	user, err := models.GetUserByEmail(database.DB, email)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get user record for %s: %v", email, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
+	}
+
+	// Generate full access token
+	token, err := auth.GenerateFullAccessToken(email)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", email, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create session")
+	}
+
+	// Generate refresh token
+	refreshToken, err := models.CreateRefreshToken(database.DB, email)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", email, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create session")
+	}
+
+	// Encode session key for response
+	sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
+
+	// Log successful authentication
+	database.LogUserAction(email, "completed TOTP authentication", "")
+	logging.InfoLogger.Printf("TOTP authentication completed for user: %s", email)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"token":        token,
+		"refreshToken": refreshToken,
+		"sessionKey":   sessionKeyB64,
+		"authMethod":   "OPAQUE+TOTP",
+		"user": map[string]interface{}{
+			"email":           user.Email,
+			"is_approved":     user.IsApproved,
+			"is_admin":        user.IsAdmin,
+			"total_storage":   user.TotalStorageBytes,
+			"storage_limit":   user.StorageLimitBytes,
+			"storage_used_pc": user.GetStorageUsagePercent(),
+		},
+	})
+}
+
+// TOTPDisableRequest represents the request for TOTP disabling
+type TOTPDisableRequest struct {
+	CurrentCode string `json:"currentCode"`
+	SessionKey  string `json:"sessionKey"`
+}
+
+// TOTPDisable disables TOTP for a user
+func TOTPDisable(c echo.Context) error {
+	var request TOTPDisableRequest
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+	}
+
+	// Get user email from JWT token
+	email := auth.GetEmailFromToken(c)
+
+	// Validate input
+	if request.CurrentCode == "" || len(request.CurrentCode) != 6 {
+		return echo.NewHTTPError(http.StatusBadRequest, "Current TOTP code is required")
+	}
+
+	// Decode session key
+	sessionKey, err := base64.StdEncoding.DecodeString(request.SessionKey)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid session key format")
+	}
+	defer crypto.SecureZeroSessionKey(sessionKey)
+
+	// Disable TOTP (this validates the current code)
+	if err := auth.DisableTOTP(database.DB, email, request.CurrentCode, sessionKey); err != nil {
+		logging.ErrorLogger.Printf("Failed to disable TOTP for %s: %v", email, err)
+		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid TOTP code")
+	}
+
+	// Log TOTP disabling
+	database.LogUserAction(email, "disabled TOTP", "")
+	logging.InfoLogger.Printf("TOTP disabled for user: %s", email)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message": "TOTP disabled successfully",
+		"enabled": false,
+	})
+}
+
+// TOTPStatusResponse represents the TOTP status response
+type TOTPStatusResponse struct {
+	Enabled       bool       `json:"enabled"`
+	SetupRequired bool       `json:"setupRequired"`
+	LastUsed      *time.Time `json:"lastUsed,omitempty"`
+	CreatedAt     *time.Time `json:"createdAt,omitempty"`
+}
+
+// TOTPStatus returns the TOTP status for a user
+func TOTPStatus(c echo.Context) error {
+	// Get user email from JWT token
+	email := auth.GetEmailFromToken(c)
+
+	// Check TOTP status
+	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, email)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", email, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check TOTP status")
+	}
+
+	response := TOTPStatusResponse{
+		Enabled:       totpEnabled,
+		SetupRequired: !totpEnabled,
+	}
+
+	// If TOTP is enabled, get additional details
+	if totpEnabled {
+		// Note: We don't expose the actual TOTP data, just metadata
+		response.SetupRequired = false
+	}
+
+	return c.JSON(http.StatusOK, response)
 }

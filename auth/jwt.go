@@ -18,7 +18,8 @@ import (
 var Echo *echo.Group
 
 type Claims struct {
-	Email string `json:"email"`
+	Email        string `json:"email"`
+	RequiresTOTP bool   `json:"requires_totp,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -83,4 +84,67 @@ func HashToken(token string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// GenerateTemporaryTOTPToken creates a temporary JWT token that requires TOTP completion
+func GenerateTemporaryTOTPToken(email string) (string, error) {
+	tokenID := uuid.New().String()
+
+	claims := &Claims{
+		Email:        email,
+		RequiresTOTP: true,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(5 * time.Minute)), // 5 minute expiry
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			Issuer:    "arkfile-auth",
+			Audience:  []string{"arkfile-totp"},
+			ID:        tokenID,
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(config.GetConfig().Security.JWTSecret))
+}
+
+// GenerateFullAccessToken creates a full access JWT token after TOTP validation
+func GenerateFullAccessToken(email string) (string, error) {
+	tokenID := uuid.New().String()
+
+	claims := &Claims{
+		Email:        email,
+		RequiresTOTP: false,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24)), // 24 hour expiry
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			Issuer:    "arkfile-auth",
+			Audience:  []string{"arkfile-api"},
+			ID:        tokenID,
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(config.GetConfig().Security.JWTSecret))
+}
+
+// RequiresTOTPFromToken checks if the token requires TOTP completion
+func RequiresTOTPFromToken(c echo.Context) bool {
+	user := c.Get("user").(*jwt.Token)
+	claims := user.Claims.(*Claims)
+	return claims.RequiresTOTP
+}
+
+// TOTPJWTMiddleware creates middleware that only allows TOTP-related operations
+func TOTPJWTMiddleware() echo.MiddlewareFunc {
+	config := echojwt.Config{
+		NewClaimsFunc: func(c echo.Context) jwt.Claims {
+			return new(Claims)
+		},
+		SigningKey: []byte(config.GetConfig().Security.JWTSecret),
+		ErrorHandler: func(c echo.Context, err error) error {
+			return echo.NewHTTPError(401, "Unauthorized")
+		},
+	}
+	return echojwt.WithConfig(config)
 }

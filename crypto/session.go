@@ -12,6 +12,7 @@ const (
 	SessionKeyContext     = "ARKFILE_SESSION_KEY"
 	FileEncryptionContext = "ARKFILE_FILE_ENCRYPTION"
 	JWTSigningContext     = "ARKFILE_JWT_SIGNING"
+	TOTPEncryptionContext = "ARKFILE_TOTP_ENCRYPTION"
 )
 
 // DeriveSessionKey derives a session key from OPAQUE export key with domain separation

@@ -245,3 +245,41 @@ CREATE TABLE IF NOT EXISTS file_metadata (
 CREATE INDEX IF NOT EXISTS idx_file_metadata_owner ON file_metadata(owner_email);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_upload_date ON file_metadata(upload_date);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_storage_id ON file_metadata(storage_id);
+
+-- TOTP Authentication Tables
+CREATE TABLE IF NOT EXISTS user_totp (
+    user_email TEXT PRIMARY KEY,
+    secret_encrypted BLOB NOT NULL,           -- AES-GCM encrypted with session key
+    backup_codes_encrypted BLOB,              -- JSON array of codes, encrypted
+    enabled BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_used TIMESTAMP,
+    setup_completed BOOLEAN DEFAULT FALSE,    -- Two-phase setup
+    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+);
+
+-- TOTP Usage Log for Replay Protection (90-second window)
+CREATE TABLE IF NOT EXISTS totp_usage_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_email TEXT NOT NULL,
+    code_hash TEXT NOT NULL,                  -- SHA-256 hash of used code
+    used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    window_start INTEGER NOT NULL,            -- Unix timestamp of 30s window
+    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+);
+
+-- Backup Code Usage Log
+CREATE TABLE IF NOT EXISTS totp_backup_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_email TEXT NOT NULL,
+    code_hash TEXT NOT NULL,                  -- SHA-256 hash of used backup code
+    used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+);
+
+-- Indexes for TOTP tables
+CREATE INDEX IF NOT EXISTS idx_user_totp_email ON user_totp(user_email);
+CREATE INDEX IF NOT EXISTS idx_totp_usage_cleanup ON totp_usage_log(used_at);
+CREATE INDEX IF NOT EXISTS idx_totp_usage_user_window ON totp_usage_log(user_email, window_start);
+CREATE INDEX IF NOT EXISTS idx_totp_backup_user ON totp_backup_usage(user_email);
+CREATE INDEX IF NOT EXISTS idx_totp_backup_cleanup ON totp_backup_usage(used_at);

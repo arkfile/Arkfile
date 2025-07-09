@@ -21,6 +21,17 @@ func RegisterRoutes() {
 	Echo.POST("/api/opaque/capability", DetectDeviceCapability)
 	Echo.GET("/api/opaque/health", OpaqueHealthCheck)
 
+	// TOTP Authentication - requires authentication
+	auth.Echo.POST("/api/totp/setup", TOTPSetup)
+	auth.Echo.POST("/api/totp/verify", TOTPVerify)
+	auth.Echo.GET("/api/totp/status", TOTPStatus)
+	auth.Echo.POST("/api/totp/disable", TOTPDisable)
+
+	// TOTP Authentication completion - requires temporary TOTP token
+	totpGroup := Echo.Group("/api/totp")
+	totpGroup.Use(auth.TOTPJWTMiddleware())
+	totpGroup.POST("/auth", TOTPAuth)
+
 	// Admin contacts (public - no auth required)
 	Echo.GET("/api/admin-contacts", AdminContactsHandler)
 
