@@ -18,14 +18,12 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/labstack/echo-jwt/v4 v4.3.1
 	github.com/mattn/go-sqlite3 v1.14.28
+	github.com/pquerna/otp v1.5.0
 	github.com/rqlite/gorqlite v0.0.0-20250609141355-ac86a4a1c9a8
 	github.com/stretchr/testify v1.10.0
 )
 
-require (
-	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
-	github.com/pquerna/otp v1.5.0 // indirect
-)
+require github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect

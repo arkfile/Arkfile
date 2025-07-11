@@ -130,17 +130,13 @@ CREATE TABLE IF NOT EXISTS opaque_server_keys (
 
 CREATE TABLE IF NOT EXISTS opaque_user_data (
     user_email TEXT PRIMARY KEY,
-    client_argon_salt BLOB NOT NULL,
-    server_argon_salt BLOB NOT NULL,
-    hardened_envelope BLOB NOT NULL,
-    device_profile TEXT NOT NULL,
+    serialized_record BLOB NOT NULL,
     created_at DATETIME NOT NULL,
     FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
 );
 
 -- Indexes for OPAQUE tables
 CREATE INDEX IF NOT EXISTS idx_opaque_user_data_email ON opaque_user_data(user_email);
-CREATE INDEX IF NOT EXISTS idx_opaque_user_data_device_profile ON opaque_user_data(device_profile);
 
 -- Phase 3: Security Hardening and Operational Infrastructure Tables
 

@@ -222,7 +222,8 @@ func OpaqueRegister(c echo.Context) error {
 		request.DeviceCapability = "interactive" // Safe default
 	}
 
-	// Validate device capability
+	// Note: DeviceCapability parameter is retained for backward compatibility
+	// but no longer used in pure OPAQUE implementation
 	validCapabilities := []string{"minimal", "interactive", "balanced", "maximum"}
 	isValidCapability := false
 	for _, valid := range validCapabilities {
@@ -235,21 +236,6 @@ func OpaqueRegister(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid device capability")
 	}
 
-	// Parse device capability
-	var deviceCapability crypto.DeviceCapability
-	switch request.DeviceCapability {
-	case "minimal":
-		deviceCapability = crypto.DeviceMinimal
-	case "interactive":
-		deviceCapability = crypto.DeviceInteractive
-	case "balanced":
-		deviceCapability = crypto.DeviceBalanced
-	case "maximum":
-		deviceCapability = crypto.DeviceMaximum
-	default:
-		deviceCapability = crypto.DeviceInteractive
-	}
-
 	// Check if user already exists
 	_, err := models.GetUserByEmail(database.DB, request.Email)
 	if err == nil {
@@ -257,7 +243,7 @@ func OpaqueRegister(c echo.Context) error {
 	}
 
 	// Perform OPAQUE registration with comprehensive error handling
-	err = auth.RegisterUser(database.DB, request.Email, request.Password, deviceCapability)
+	err = auth.RegisterUser(database.DB, request.Email, request.Password)
 	if err != nil {
 		if logging.ErrorLogger != nil {
 			logging.ErrorLogger.Printf("OPAQUE registration failed for %s: %v", request.Email, err)

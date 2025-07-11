@@ -77,12 +77,12 @@ func benchmarkArgonProfileJS(this js.Value, args []js.Value) interface{} {
 	}
 
 	// Parse arguments
-	time := uint32(args[0].Int())
+	timeVal := uint32(args[0].Int())
 	memory := uint32(args[1].Int())
 	threads := uint8(args[2].Int())
 
 	profile := ArgonProfile{
-		Time:    time,
+		Time:    timeVal,
 		Memory:  memory,
 		Threads: threads,
 		KeyLen:  32,
@@ -207,4 +207,50 @@ func getPerformanceInfoJS(this js.Value, args []js.Value) interface{} {
 func RegisterExtendedWASMFunctions() {
 	RegisterWASMFunctions() // Register basic functions first
 	js.Global().Set("getPerformanceInfo", js.FuncOf(getPerformanceInfoJS))
+}
+
+// opaqueHealthCheckJS provides a simple health check for OPAQUE readiness
+func opaqueHealthCheckJS(this js.Value, args []js.Value) interface{} {
+	return map[string]interface{}{
+		"wasmReady":   true,
+		"timestamp":   time.Now().Unix(),
+		"opaqueReady": true, // WASM is ready means OPAQUE can work
+	}
+}
+
+// deviceCapabilityAutoDetectJS provides simple device capability for registration
+func deviceCapabilityAutoDetectJS(this js.Value, args []js.Value) interface{} {
+	capability := DetectDeviceCapabilityWASM()
+	profile := capability.GetProfile()
+
+	return map[string]interface{}{
+		"capability":  capability.String(),
+		"memory":      profile.Memory,
+		"description": getCapabilityDescription(capability),
+	}
+}
+
+// getCapabilityDescription returns user-friendly description of device capability
+func getCapabilityDescription(capability DeviceCapability) string {
+	switch capability {
+	case DeviceMinimal:
+		return "Basic device - optimized for battery life and older hardware"
+	case DeviceInteractive:
+		return "Standard device - balanced security and performance"
+	case DeviceBalanced:
+		return "Good device - enhanced security with good performance"
+	case DeviceMaximum:
+		return "High-end device - maximum security with fast processing"
+	default:
+		return "Standard device - balanced security and performance"
+	}
+}
+
+// RegisterAllWASMFunctions registers all WASM functions
+func RegisterAllWASMFunctions() {
+	RegisterExtendedWASMFunctions()
+
+	// Add OPAQUE-compatible functions
+	js.Global().Set("opaqueHealthCheck", js.FuncOf(opaqueHealthCheckJS))
+	js.Global().Set("deviceCapabilityAutoDetect", js.FuncOf(deviceCapabilityAutoDetectJS))
 }

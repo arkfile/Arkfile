@@ -93,6 +93,47 @@ window.arkfileOpaqueState = {
     authMethod: 'OPAQUE'
 };
 
+// Helper function for device capability consent
+function requestDeviceCapabilityPermission() {
+    return {
+        title: "Performance Optimization",
+        message: `To optimize security for your device, we can analyze performance characteristics.
+
+This helps us choose the best security settings for your hardware without compromising your privacy.
+
+We only collect:
+• Available memory (if supported)
+• CPU core count (if supported)
+• Basic device type detection
+
+No personal information or browsing data is collected.`,
+        options: [
+            "Allow Performance Detection",
+            "Use Standard Settings",
+            "Use Maximum Security"
+        ]
+    };
+}
+
+function detectDeviceCapabilityWithPermission(hasPermission) {
+    if (!hasPermission) {
+        return 'interactive'; // Safe default
+    }
+    
+    // Use the WASM function to detect capability
+    if (wasmReady) {
+        try {
+            const result = deviceCapabilityAutoDetect();
+            return result.capability || 'interactive';
+        } catch (error) {
+            console.warn('WASM device detection failed:', error);
+            return 'interactive';
+        }
+    }
+    
+    return 'interactive';
+}
+
 // Privacy-first device capability detection
 async function requestDeviceCapabilityConsent() {
     if (!wasmReady) {
@@ -234,7 +275,7 @@ function showCapabilityInfo(capabilityData) {
     setTimeout(() => info.remove(), 8000);
 }
 
-// OPAQUE Authentication functions (OPAQUE-only)
+// OPAQUE Authentication functions (Direct server implementation)
 async function login() {
     const email = document.getElementById('login-email').value;
     const password = document.getElementById('login-password').value;
@@ -250,170 +291,61 @@ async function login() {
             await initWasm();
         }
 
-        // Check OPAQUE health first
-        const healthResponse = await fetch('/api/opaque/health');
-        if (!healthResponse.ok) {
-            showError('Authentication system unavailable. Please try again in a few moments.');
+        // Check OPAQUE health first (use actual WASM function)
+        const healthCheck = opaqueHealthCheck();
+        if (!healthCheck.wasmReady) {
+            showError('Authentication system not ready. Please try again in a few moments.');
             return;
         }
-        
-        // Use OPAQUE authentication only
-        await opaqueLogin(email, password);
-        
-    } catch (error) {
-        console.error('Login error:', error);
-        showError('An error occurred during login.');
-    }
-}
 
-async function opaqueLogin(email, password) {
-    try {
-        showProgress('Authenticating with OPAQUE...');
-        
-        // Call OPAQUE login flow (placeholder for now)
-        const opaqueResult = opaqueLoginFlow(email, password);
-        
-        if (!opaqueResult.success) {
-            showError(opaqueResult.error || 'OPAQUE login failed');
-            return;
-        }
-        
-        // Make OPAQUE login request to server
+        showProgress('Authenticating...');
+
+        // Direct call to server OPAQUE endpoint (no client-side protocol)
         const response = await fetch('/api/opaque/login', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ email, password }),
+            body: JSON.stringify({
+                email: email,
+                password: password  // Send directly - OPAQUE handles protocol internally
+            }),
         });
 
         if (response.ok) {
             const data = await response.json();
             
-            // Store tokens
-            localStorage.setItem('token', data.token);
-            if (data.refreshToken) {
-                localStorage.setItem('refreshToken', data.refreshToken);
+            // Handle TOTP if required
+            if (data.requiresTOTP) {
+                hideProgress();
+                handleTOTPFlow(data);
+                return;
             }
             
-            // Store OPAQUE session key from server response
-            if (data.sessionKey) {
-                const sessionKeyBytes = atob(data.sessionKey);
-                window.arkfileSecurityContext = {
-                    sessionKey: data.sessionKey, // Keep as base64 for file encryption
-                    authMethod: 'OPAQUE',
-                    expiresAt: Date.now() + (60 * 60 * 1000) // 1 hour
-                };
-            }
+            // Complete authentication
+            localStorage.setItem('token', data.token);
+            localStorage.setItem('refreshToken', data.refreshToken);
+            
+            // Store session context
+            window.arkfileSecurityContext = {
+                sessionKey: data.sessionKey,
+                authMethod: 'OPAQUE',
+                expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 hours
+            };
             
             hideProgress();
-            showSuccess(`Authenticated with ${data.authMethod}`);
+            showSuccess('Login successful');
             showFileSection();
             loadFiles();
         } else {
             hideProgress();
             const errorData = await response.json().catch(() => ({}));
-            
-            // Check if this is an approval-related error
-            if (errorData.message && errorData.message.includes('not approved')) {
-                // Fetch admin emails for contact info
-                await fetchAdminEmails();
-                
-                const adminContactList = adminEmails.length > 0 
-                    ? adminEmails.join('\n• ') 
-                    : 'admin@arkfile.demo';
-                
-                createModal({
-                    title: "Account Approval Required",
-                    message: `🔒 Your account status: ${errorData.userStatus || 'Pending Approval'}
-
-Your account is registered but requires administrator approval before you can log in.
-
-📧 Contact an administrator for approval or status updates:
-• ${adminContactList}
-
-📅 Registration Date: ${errorData.registrationDate ? new Date(errorData.registrationDate).toLocaleDateString() : 'Unknown'}
-
-💡 Tip: Include your registered email address (${email}) when contacting support.
-
-⏰ Account approvals are typically processed within 1-2 business days.`
-                });
-            } else {
-                showError(errorData.message || 'OPAQUE login failed. Please check your credentials.');
-            }
+            showError(errorData.message || 'Login failed');
         }
     } catch (error) {
         hideProgress();
-        console.error('OPAQUE login error:', error);
-        showError('OPAQUE authentication failed.');
-    }
-}
-
-async function legacyLogin(email, password) {
-    try {
-        showProgress('Authenticating...');
-        
-        // Get user salt for legacy authentication
-        const saltResponse = await fetch('/api/salt', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ email }),
-        });
-
-        if (!saltResponse.ok) {
-            hideProgress();
-            showError('Login failed. Please check your credentials.');
-            return;
-        }
-
-        const saltData = await saltResponse.json();
-        const salt = saltData.salt;
-
-        // Hash password using Argon2ID
-        const passwordHash = hashPasswordArgon2ID(password, salt);
-
-        // Attempt legacy login
-        const response = await fetch('/api/login', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ email, passwordHash }),
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            localStorage.setItem('token', data.token);
-            
-            if (data.refreshToken) {
-                localStorage.setItem('refreshToken', data.refreshToken);
-            }
-            
-            // Generate session key for legacy authentication
-            const sessionSalt = generateSalt();
-            const sessionKey = deriveSessionKey(password, sessionSalt);
-            
-            window.arkfileSecurityContext = {
-                sessionKey: sessionKey,
-                sessionSalt: sessionSalt,
-                authMethod: 'Legacy',
-                expiresAt: Date.now() + (60 * 60 * 1000)
-            };
-            
-            hideProgress();
-            showSuccess('Authenticated with Legacy method');
-            showFileSection();
-            loadFiles();
-        } else {
-            hideProgress();
-            showError('Login failed. Please check your credentials.');
-        }
-    } catch (error) {
-        hideProgress();
-        console.error('Legacy login error:', error);
-        showError('Authentication failed.');
+        console.error('Login error:', error);
+        showError('Authentication failed');
     }
 }
 
@@ -439,120 +371,46 @@ async function register() {
     }
 
     try {
-        // Check OPAQUE health first
-        const healthResponse = await fetch('/api/opaque/health');
-        if (!healthResponse.ok) {
-            showError('Authentication system unavailable. Please try again in a few moments.');
-            return;
-        }
-        
-        // Use OPAQUE registration only
-        await opaqueRegister(email, password);
-        
-    } catch (error) {
-        console.error('Registration error:', error);
-        showError('An error occurred during registration.');
-    }
-}
+        showProgress('Registering...');
 
-async function opaqueRegister(email, password) {
-    try {
-        showProgress('Detecting device capability...');
-        
-        // Get device capability with user consent
-        const deviceCapability = await detectDeviceCapability();
-        
-        showProgress('Registering with OPAQUE...');
-        
-        // Call OPAQUE registration flow (placeholder for now)
-        const opaqueResult = opaqueRegisterFlow(email, password, deviceCapability);
-        
-        if (!opaqueResult.success) {
-            hideProgress();
-            showError(opaqueResult.error || 'OPAQUE registration preparation failed');
-            return;
-        }
-        
-        // Make OPAQUE registration request to server
+        // Direct call to server OPAQUE endpoint (no client-side protocol)
         const response = await fetch('/api/opaque/register', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ 
-                email, 
-                password, 
-                deviceCapability 
+            body: JSON.stringify({
+                email: email,
+                password: password  // Send directly - OPAQUE handles protocol internally
             }),
         });
 
         if (response.ok) {
             const data = await response.json();
-            hideProgress();
             
-            // Store registration data for TOTP setup
+            // Store temporary token for TOTP setup
             window.registrationData = {
                 email: email,
-                password: password,
                 tempToken: data.tempToken,
                 sessionKey: data.sessionKey,
-                authMethod: data.authMethod
+                authMethod: 'OPAQUE'
             };
             
-            // Hide registration form and show TOTP setup
+            // Proceed to TOTP setup
             document.getElementById('register-form').classList.add('hidden');
             document.getElementById('totp-setup-form').classList.remove('hidden');
             
-            showSuccess('Registration successful! Please set up two-factor authentication.');
-            
+            hideProgress();
+            showSuccess('Registration successful! Setting up TOTP...');
         } else {
             hideProgress();
             const errorData = await response.json().catch(() => ({}));
-            
-            createModal({
-                title: "Registration Failed",
-                message: `Registration was unsuccessful.
-
-Error: ${errorData.message || 'OPAQUE registration failed. Please try again.'}
-
-Please check your information and try again. If the problem persists, contact an administrator.`
-            });
+            showError(errorData.message || 'Registration failed');
         }
     } catch (error) {
         hideProgress();
-        console.error('OPAQUE registration error:', error);
-        showError('OPAQUE registration failed.');
-    }
-}
-
-async function legacyRegister(email, password) {
-    try {
-        showProgress('Registering...');
-        
-        // Generate salt and hash password client-side
-        const salt = generatePasswordSalt();
-        const passwordHash = hashPasswordArgon2ID(password, salt);
-
-        const response = await fetch('/api/register', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ email, passwordHash, salt }),
-        });
-
-        if (response.ok) {
-            hideProgress();
-            showSuccess('Registration successful with Legacy method. Please login.');
-            toggleAuthForm();
-        } else {
-            hideProgress();
-            showError('Legacy registration failed. Please try again.');
-        }
-    } catch (error) {
-        hideProgress();
-        console.error('Legacy registration error:', error);
-        showError('Legacy registration failed.');
+        console.error('Registration error:', error);
+        showError('Registration failed');
     }
 }
 
@@ -1323,6 +1181,144 @@ function cancelRegistration() {
     };
     
     modalContent.appendChild(cancelButton);
+}
+
+// Handle TOTP flow during login
+function handleTOTPFlow(data) {
+    // Store the partial login data
+    window.totpLoginData = {
+        partialToken: data.partialToken,
+        email: data.email
+    };
+    
+    // Show TOTP input
+    const totpModal = createModal({
+        title: "Two-Factor Authentication",
+        message: "Please enter your 6-digit TOTP code from your authenticator app:"
+    });
+    
+    // Replace the close button with TOTP input form
+    const modalContent = totpModal.querySelector('.modal-content');
+    const closeButton = modalContent.querySelector('button');
+    closeButton.remove();
+    
+    const totpForm = document.createElement('div');
+    totpForm.innerHTML = `
+        <input type="text" id="totp-login-code" maxlength="6" placeholder="000000" style="
+            width: 100%;
+            padding: 10px;
+            font-size: 18px;
+            text-align: center;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            letter-spacing: 0.2em;
+        ">
+        <button id="verify-totp-login" disabled style="
+            width: 100%;
+            padding: 10px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-bottom: 10px;
+        ">Verify</button>
+        <button onclick="this.closest('.modal-overlay').remove(); delete window.totpLoginData;" style="
+            width: 100%;
+            padding: 10px;
+            background-color: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        ">Cancel</button>
+    `;
+    
+    modalContent.appendChild(totpForm);
+    
+    // Add event listeners
+    const totpInput = document.getElementById('totp-login-code');
+    const verifyButton = document.getElementById('verify-totp-login');
+    
+    totpInput.addEventListener('input', function() {
+        this.value = this.value.replace(/[^0-9]/g, '');
+        verifyButton.disabled = this.value.length !== 6;
+    });
+    
+    totpInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter' && this.value.length === 6) {
+            verifyTOTPLogin();
+        }
+    });
+    
+    verifyButton.addEventListener('click', verifyTOTPLogin);
+    
+    // Focus the input
+    setTimeout(() => totpInput.focus(), 100);
+}
+
+async function verifyTOTPLogin() {
+    const code = document.getElementById('totp-login-code').value;
+    
+    if (!code || code.length !== 6) {
+        showError('Please enter a 6-digit code.');
+        return;
+    }
+    
+    if (!window.totpLoginData) {
+        showError('Login session expired. Please try again.');
+        return;
+    }
+    
+    try {
+        showProgress('Verifying TOTP...');
+        
+        const response = await fetch('/api/opaque/login-totp', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                partialToken: window.totpLoginData.partialToken,
+                totpCode: code
+            }),
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            
+            // Complete authentication
+            localStorage.setItem('token', data.token);
+            localStorage.setItem('refreshToken', data.refreshToken);
+            
+            // Store session context
+            window.arkfileSecurityContext = {
+                sessionKey: data.sessionKey,
+                authMethod: 'OPAQUE',
+                expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 hours
+            };
+            
+            // Clean up
+            delete window.totpLoginData;
+            document.querySelector('.modal-overlay').remove();
+            
+            hideProgress();
+            showSuccess('Login successful');
+            showFileSection();
+            loadFiles();
+        } else {
+            hideProgress();
+            const errorData = await response.json().catch(() => ({}));
+            showError(errorData.message || 'TOTP verification failed');
+        }
+    } catch (error) {
+        hideProgress();
+        console.error('TOTP verification error:', error);
+        showError('TOTP verification failed');
+    }
 }
 
 // Check session validity periodically

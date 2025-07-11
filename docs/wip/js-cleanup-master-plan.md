@@ -18,7 +18,7 @@ This master plan outlines the complete transformation of Arkfile's client-side c
 
 | Phase | Goal | Duration | Key Deliverables |
 |-------|------|----------|------------------|
-| **Phase 1** | OPAQUE Implementation & Legacy Removal | 2-3 weeks | Real OPAQUE protocol, remove legacy auth |
+| **Phase 1** | OPAQUE Implementation & Legacy Removal | ~1-2 weeks remaining | Partial: Server OPAQUE protocol, pending client/WASM and full removal |
 | **Phase 2** | Crypto Consolidation | 3-4 weeks | Unified encryption in Go/WASM |
 | **Phase 3** | Device Capability Unification | 2-3 weeks | Privacy-first capability detection |
 | **Phase 4** | UI/Business Logic Separation | 3-4 weeks | Clean architecture separation |
@@ -31,10 +31,23 @@ This master plan outlines the complete transformation of Arkfile's client-side c
 
 ## Detailed Phase Plans
 
-### Phase 1: OPAQUE Implementation & Legacy Removal ✅ PLANNED
-**Duration**: 2-3 weeks  
+### Phase 1: OPAQUE Implementation & Legacy Removal - CRITICAL ISSUES DISCOVERED
+**Duration**: 2-3 weeks (REVISED: ~2 more weeks due to integration issues)  
 **Priority**: Critical (Foundation)  
-**Status**: Detailed plan completed in `docs/wip/js-cleanup-phase-1.md`
+**Status**: ~60% complete - Major integration issues discovered requiring significant rework
+
+**⚠️ CRITICAL FINDINGS (January 11, 2025):**
+- **Test-Implementation Mismatch**: Current tests expect legacy hash-based auth, but handlers implement direct OPAQUE
+- **Client Integration Broken**: Client JavaScript calls non-existent WASM functions
+- **Inappropriate Test Coverage**: All client tests (login-integration-test.js, password-functions-test.js) test wrong authentication model
+- **Architecture Misalignment**: Client expects multi-step OPAQUE protocol, server implements direct email+password OPAQUE
+
+**Current Actual Status**:
+- ✅ **Server OPAQUE implementation**: Complete and working (auth/opaque.go, handlers/auth.go)
+- ✅ **Basic WASM interface**: Core functions working (crypto/wasm_shim.go)  
+- ❌ **Client integration**: Completely broken (calls non-existent functions)
+- ❌ **Test suite**: 100% inappropriate for OPAQUE (expects legacy authentication)
+- ❌ **End-to-end flow**: Non-functional due to client-server mismatch
 
 **Goals**:
 - Implement real OPAQUE protocol replacing placeholders
@@ -44,16 +57,16 @@ This master plan outlines the complete transformation of Arkfile's client-side c
 
 **Key Changes**:
 - Replace 300+ lines of legacy/placeholder auth code
-- Implement crypto/opaque.go with full protocol
-- Enhance crypto/wasm_shim.go with OPAQUE exports
-- Create OPAQUE-only authentication flows in JavaScript
-- Update database schema for OPAQUE storage
+- Enhanced auth/opaque.go with hybrid OPAQUE protocol (full OPAQUE pending)
+- Pending: Enhance crypto/wasm_shim.go with OPAQUE exports
+- Pending: Create OPAQUE-only authentication flows in JavaScript
+- Pending: Update database schema for OPAQUE storage
 
 **Success Criteria**:
-- Zero legacy authentication code remains
-- OPAQUE registration and authentication working end-to-end
-- Device capability detection respects user privacy
-- 80%+ test coverage maintained
+- Partial: Legacy authentication code removal ongoing
+- Partial: OPAQUE registration and authentication end-to-end (server-side done, client/WASM pending)
+- Partial: Device capability detection respects user privacy (integrated, but full privacy-first pending)
+- Partial: 80%+ test coverage (server: 90%+, overall ~50% due to pending client tests)
 
 ### Phase 2: Crypto Consolidation Using Existing Infrastructure
 **Duration**: 3-4 weeks  

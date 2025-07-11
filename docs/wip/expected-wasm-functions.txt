@@ -1,0 +1,20 @@
+2:let wasmReady = false;
+8:            fetch("/main.wasm"),
+12:        wasmReady = true;
+14:        console.error('Failed to load WASM:', err);
+98:    if (!wasmReady) {
+248:        // Ensure WASM is ready
+249:        if (!wasmReady) {
+272:        const initResult = opaqueClientLoginInitWASM(password);
+295:        const finalizeResult = opaqueClientLoginFinalizeWASM(serverData.ke2, initResult.ke1);
+317:        const deriveResult = deriveOpaqueSessionKeyWASM(finalizeResult.exportKey);
+322:        const validateResult = validateOpaqueSessionKeyWASM(deriveResult.sessionKey);
+428:    if (!wasmReady) {
+458:        const initResult = opaqueClientRegistrationInitWASM(password, deviceCapability, 'RistrettoSha512');
+483:        const finalizeResult = opaqueClientRegistrationFinalizeWASM(serverData.response, initResult.request);
+583:    if (!wasmReady) {
+584:        showError('WASM not ready. Please try again.');
+665:    if (!wasmReady) {
+666:        showError('WASM not ready. Please try again.');
+989:    // Use the Go-WASM function for validation
+990:    if (!wasmReady) {
