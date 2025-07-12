@@ -1,0 +1,3 @@
+[submodule "vendor/aldenml/ecc"]
+	path = vendor/aldenml/ecc
+	url = https://github.com/aldenml/ecc

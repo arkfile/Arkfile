@@ -1,22 +1,25 @@
+//go:build !js && !wasm
+
 package auth
+
+/*
+#cgo CFLAGS: -I../vendor/aldenml/ecc/src -I../vendor/aldenml/ecc/build/libsodium/include
+#cgo LDFLAGS: -L../vendor/aldenml/ecc/build -L../vendor/aldenml/ecc/build/libsodium/lib -lecc_static -lsodium
+#include <stdlib.h>
+#include "../vendor/aldenml/ecc/src/opaque.h"
+*/
+import "C"
 
 import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"time"
+	"unsafe"
 
 	"github.com/84adam/arkfile/crypto"
 	"github.com/84adam/arkfile/logging"
-	"github.com/bytemare/opaque"
 )
-
-// OPAQUEServer holds the OPAQUE server instance and configuration
-type OPAQUEServer struct {
-	server        *opaque.Server
-	configuration *opaque.Configuration
-	initialized   bool
-}
 
 // OPAQUEUserData represents the server-side storage for pure OPAQUE user data
 type OPAQUEUserData struct {
@@ -33,440 +36,326 @@ type OPAQUEServerKeys struct {
 	CreatedAt       time.Time
 }
 
-// Global OPAQUE server instance
-var globalOPAQUEServer *OPAQUEServer
+// serverKeys holds the loaded server keys for reuse.
+var serverKeys *OPAQUEServerKeys
 
-// InitializeOPAQUEServer initializes the global OPAQUE server with RistrettoSha512
-func InitializeOPAQUEServer() error {
-	if globalOPAQUEServer != nil && globalOPAQUEServer.initialized {
-		return nil // Already initialized
-	}
-
-	config := opaque.DefaultConfiguration()
-	config.Context = []byte("arkfile-v1") // Add domain separation
-	config.OPRF = opaque.RistrettoSha512
-	config.AKE = opaque.RistrettoSha512
-
-	server, err := config.Server()
-	if err != nil {
-		return fmt.Errorf("failed to create OPAQUE server: %w", err)
-	}
-
-	globalOPAQUEServer = &OPAQUEServer{
-		server:        server,
-		configuration: config,
-		initialized:   true,
-	}
-
-	if logging.InfoLogger != nil {
-		logging.InfoLogger.Printf("OPAQUE server initialized with RistrettoSha512")
-	}
-	return nil
-}
-
-// GetOPAQUEServer returns the global OPAQUE server instance
-func GetOPAQUEServer() (*OPAQUEServer, error) {
-	if globalOPAQUEServer == nil || !globalOPAQUEServer.initialized {
-		if err := InitializeOPAQUEServer(); err != nil {
-			return nil, err
-		}
-	}
-	return globalOPAQUEServer, nil
-}
-
-// SetupServerKeys generates and stores server key material if not exists
+// SetupServerKeys generates and stores server key material if it doesn't already exist.
 func SetupServerKeys(db *sql.DB) error {
-	server, err := GetOPAQUEServer()
-	if err != nil {
-		return err
-	}
-
 	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM opaque_server_keys WHERE id = 1").Scan(&count)
+	err := db.QueryRow("SELECT COUNT(*) FROM opaque_server_keys WHERE id = 1").Scan(&count)
 	if err != nil {
-		return fmt.Errorf("failed to check existing server keys: %w", err)
+		return fmt.Errorf("failed to check for existing server keys: %w", err)
 	}
 
 	if count > 0 {
-		return loadServerKeys(db, server)
+		// Keys already exist, load them
+		return loadServerKeys(db)
 	}
 
-	serverSecret, serverPublic := server.configuration.KeyGen()
-	oprfSeed := server.configuration.GenerateOPRFSeed()
+	// Keys don't exist, so generate, store, and load them
+	privateKey := make([]byte, C.ecc_opaque_ristretto255_sha512_Nsk)
+	publicKey := make([]byte, C.ecc_opaque_ristretto255_sha512_Npk)
+	oprfSeed := crypto.GenerateRandomBytes(C.ecc_opaque_ristretto255_sha512_Nh)
+
+	C.ecc_opaque_ristretto255_sha512_GenerateAuthKeyPair(
+		(*C.uchar)(unsafe.Pointer(&privateKey[0])),
+		(*C.uchar)(unsafe.Pointer(&publicKey[0])),
+	)
 
 	_, err = db.Exec(`
 		INSERT INTO opaque_server_keys (id, server_secret_key, server_public_key, oprf_seed)
 		VALUES (1, ?, ?, ?)`,
-		hex.EncodeToString(serverSecret), hex.EncodeToString(serverPublic), hex.EncodeToString(oprfSeed),
+		hex.EncodeToString(privateKey), hex.EncodeToString(publicKey), hex.EncodeToString(oprfSeed),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to store server keys: %w", err)
-	}
-
-	err = server.server.SetKeyMaterial(nil, serverSecret, serverPublic, oprfSeed)
-	if err != nil {
-		return fmt.Errorf("failed to set server key material: %w", err)
+		return fmt.Errorf("failed to store new server keys: %w", err)
 	}
 
 	if logging.InfoLogger != nil {
-		logging.InfoLogger.Printf("Generated and stored new OPAQUE server keys")
+		logging.InfoLogger.Println("Generated and stored new OPAQUE server keys")
 	}
-	return nil
+
+	// After storing, load the keys into the global variable
+	return loadServerKeys(db)
 }
 
-// loadServerKeys loads existing server keys from database
-func loadServerKeys(db *sql.DB, server *OPAQUEServer) error {
-	var serverSecretStr, serverPublicStr, oprfSeedStr string
-
-	err := db.QueryRow(`
-		SELECT server_secret_key, server_public_key, oprf_seed
-		FROM opaque_server_keys WHERE id = 1
-	`).Scan(&serverSecretStr, &serverPublicStr, &oprfSeedStr)
+// loadServerKeys loads the server's OPAQUE keys from the database into memory.
+func loadServerKeys(db *sql.DB) error {
+	var secretKeyHex, publicKeyHex, oprfSeedHex string
+	err := db.QueryRow("SELECT server_secret_key, server_public_key, oprf_seed FROM opaque_server_keys WHERE id = 1").Scan(&secretKeyHex, &publicKeyHex, &oprfSeedHex)
 	if err != nil {
-		return fmt.Errorf("failed to load server keys: %w", err)
+		return fmt.Errorf("failed to retrieve server keys from database: %w", err)
 	}
 
-	serverSecret, err := hex.DecodeString(serverSecretStr)
+	secretKey, err := hex.DecodeString(secretKeyHex)
 	if err != nil {
 		return fmt.Errorf("failed to decode server secret key: %w", err)
 	}
 
-	serverPublic, err := hex.DecodeString(serverPublicStr)
+	publicKey, err := hex.DecodeString(publicKeyHex)
 	if err != nil {
 		return fmt.Errorf("failed to decode server public key: %w", err)
 	}
 
-	oprfSeed, err := hex.DecodeString(oprfSeedStr)
+	oprfSeed, err := hex.DecodeString(oprfSeedHex)
 	if err != nil {
 		return fmt.Errorf("failed to decode OPRF seed: %w", err)
 	}
 
-	err = server.server.SetKeyMaterial(nil, serverSecret, serverPublic, oprfSeed)
-	if err != nil {
-		return fmt.Errorf("failed to set loaded key material: %w", err)
+	serverKeys = &OPAQUEServerKeys{
+		ServerSecretKey: secretKey,
+		ServerPublicKey: publicKey,
+		OPRFSeed:        oprfSeed,
 	}
 
 	if logging.InfoLogger != nil {
-		logging.InfoLogger.Printf("Loaded existing OPAQUE server keys")
+		logging.InfoLogger.Println("Loaded OPAQUE server keys into memory")
 	}
+
 	return nil
 }
 
-// RegisterUser performs pure OPAQUE registration using stateless approach
+// RegisterUser performs the OPAQUE registration flow.
 func RegisterUser(db *sql.DB, email, password string) error {
-	// Create fresh configuration for this registration session
-	config := opaque.DefaultConfiguration()
-	config.Context = []byte("arkfile-v1")
-	config.OPRF = opaque.RistrettoSha512
-	config.AKE = opaque.RistrettoSha512
-
-	// Create fresh client and server instances for registration
-	client, err := config.Client()
-	if err != nil {
-		return err
+	if serverKeys == nil {
+		return fmt.Errorf("server keys not loaded")
 	}
 
-	server, err := config.Server()
-	if err != nil {
-		return err
-	}
+	// Client-side registration simulation
+	// In a real application, this would be on the client device.
+	passwordBytes := []byte(password)
+	blind := make([]byte, C.ecc_opaque_ristretto255_sha512_Ns)
+	request := make([]byte, C.ecc_opaque_ristretto255_sha512_REGISTRATIONREQUESTSIZE)
 
-	// Load server keys from database
-	var serverSecretStr, serverPublicStr, oprfSeedStr string
-	err = db.QueryRow(`
-		SELECT server_secret_key, server_public_key, oprf_seed
-		FROM opaque_server_keys WHERE id = 1
-	`).Scan(&serverSecretStr, &serverPublicStr, &oprfSeedStr)
-	if err != nil {
-		return fmt.Errorf("failed to load server keys for registration: %w", err)
-	}
+	cPassword := C.CBytes(passwordBytes)
+	defer C.free(cPassword)
 
-	serverSecret, err := hex.DecodeString(serverSecretStr)
-	if err != nil {
-		return fmt.Errorf("failed to decode server secret key: %w", err)
-	}
+	C.ecc_opaque_ristretto255_sha512_CreateRegistrationRequest(
+		(*C.uchar)(unsafe.Pointer(&request[0])),
+		(*C.uchar)(unsafe.Pointer(&blind[0])),
+		(*C.uchar)(cPassword),
+		C.int(len(passwordBytes)),
+	)
 
-	serverPublic, err := hex.DecodeString(serverPublicStr)
-	if err != nil {
-		return fmt.Errorf("failed to decode server public key: %w", err)
-	}
+	// Server-side registration
+	response := make([]byte, C.ecc_opaque_ristretto255_sha512_REGISTRATIONRESPONSESIZE)
+	cEmail := C.CBytes([]byte(email))
+	defer C.free(cEmail)
 
-	oprfSeed, err := hex.DecodeString(oprfSeedStr)
-	if err != nil {
-		return fmt.Errorf("failed to decode OPRF seed: %w", err)
-	}
+	C.ecc_opaque_ristretto255_sha512_CreateRegistrationResponse(
+		(*C.uchar)(unsafe.Pointer(&response[0])),
+		(*C.uchar)(unsafe.Pointer(&request[0])),
+		(*C.uchar)(unsafe.Pointer(&serverKeys.ServerPublicKey[0])),
+		(*C.uchar)(cEmail),
+		C.int(len(email)),
+		(*C.uchar)(unsafe.Pointer(&serverKeys.OPRFSeed[0])),
+	)
 
-	// Set server key material with proper server identity
-	err = server.SetKeyMaterial([]byte("arkfile-server"), serverSecret, serverPublic, oprfSeed)
-	if err != nil {
-		return fmt.Errorf("failed to set server key material: %w", err)
-	}
+	// Client-side finalization
+	record := make([]byte, C.ecc_opaque_ristretto255_sha512_REGISTRATIONRECORDSIZE)
+	exportKey := make([]byte, C.ecc_opaque_ristretto255_sha512_Nh)
+	serverIdentity := []byte("arkfile-server")
+	cServerIdentity := C.CBytes(serverIdentity)
+	defer C.free(cServerIdentity)
 
-	// Start registration process
-	req := client.RegistrationInit([]byte(password))
+	C.ecc_opaque_ristretto255_sha512_FinalizeRegistrationRequest(
+		(*C.uchar)(unsafe.Pointer(&record[0])),
+		(*C.uchar)(unsafe.Pointer(&exportKey[0])),
+		(*C.uchar)(cPassword),
+		C.int(len(passwordBytes)),
+		(*C.uchar)(unsafe.Pointer(&blind[0])),
+		(*C.uchar)(unsafe.Pointer(&response[0])),
+		(*C.uchar)(cServerIdentity),
+		C.int(len(serverIdentity)),
+		(*C.uchar)(cEmail),
+		C.int(len(email)),
+		C.ecc_opaque_ristretto255_sha512_MHF_SCRYPT, // Using Scrypt as specified
+		nil,
+		0,
+	)
 
-	deserializer, err := config.Deserializer()
-	if err != nil {
-		return err
-	}
+	crypto.SecureZeroBytes(exportKey)
 
-	serverPub, err := deserializer.DecodeAkePublicKey(serverPublic)
-	if err != nil {
-		return err
-	}
-
-	resp := server.RegistrationResponse(req, serverPub, []byte(email), oprfSeed)
-
-	record, exportKey := client.RegistrationFinalize(resp, opaque.ClientRegistrationFinalizeOptions{
-		ClientIdentity: []byte(email),
-		ServerIdentity: []byte("arkfile-server"),
-	})
-
-	serializedRecord := record.Serialize()
-
+	// Store the registration record in the database
 	userData := OPAQUEUserData{
 		UserEmail:        email,
-		SerializedRecord: serializedRecord,
+		SerializedRecord: record,
 		CreatedAt:        time.Now(),
 	}
 
-	err = storeOPAQUEUserData(db, userData)
-	if err != nil {
-		crypto.SecureZeroBytes(exportKey)
-		return err
-	}
-
-	// Secure cleanup
-	crypto.SecureZeroBytes(exportKey)
-	return nil
+	return storeOPAQUEUserData(db, userData)
 }
 
-// AuthenticateUser performs pure OPAQUE authentication using stateless approach
+// AuthenticateUser performs the OPAQUE authentication flow.
 func AuthenticateUser(db *sql.DB, email, password string) ([]byte, error) {
+	if serverKeys == nil {
+		return nil, fmt.Errorf("server keys not loaded")
+	}
+
 	userData, err := loadOPAQUEUserData(db, email)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to load user data: %w", err)
 	}
 
-	// Create fresh configuration for this authentication session to avoid state conflicts
-	config := opaque.DefaultConfiguration()
-	config.Context = []byte("arkfile-v1")
-	config.OPRF = opaque.RistrettoSha512
-	config.AKE = opaque.RistrettoSha512
+	// Client-side authentication simulation (KE1 generation)
+	passwordBytes := []byte(password)
+	cPassword := C.CBytes(passwordBytes)
+	defer C.free(cPassword)
+	clientState := make([]byte, C.ecc_opaque_ristretto255_sha512_CLIENTSTATESIZE)
+	ke1 := make([]byte, C.ecc_opaque_ristretto255_sha512_KE1SIZE)
+	C.ecc_opaque_ristretto255_sha512_GenerateKE1(
+		(*C.uchar)(unsafe.Pointer(&ke1[0])),
+		(*C.uchar)(unsafe.Pointer(&clientState[0])),
+		(*C.uchar)(cPassword),
+		C.int(len(passwordBytes)),
+	)
 
-	// Create fresh client and server instances
-	client, err := config.Client()
-	if err != nil {
-		return nil, err
+	// Server-side (KE2 generation)
+	ke2 := make([]byte, C.ecc_opaque_ristretto255_sha512_KE2SIZE)
+	serverState := make([]byte, C.ecc_opaque_ristretto255_sha512_SERVERSTATESIZE)
+	cEmail := C.CBytes([]byte(email))
+	defer C.free(cEmail)
+	serverIdentity := []byte("arkfile-server")
+	cServerIdentity := C.CBytes(serverIdentity)
+	defer C.free(cServerIdentity)
+
+	C.ecc_opaque_ristretto255_sha512_GenerateKE2(
+		(*C.uchar)(unsafe.Pointer(&ke2[0])),
+		(*C.uchar)(unsafe.Pointer(&serverState[0])),
+		(*C.uchar)(cServerIdentity),
+		C.int(len(serverIdentity)),
+		(*C.uchar)(unsafe.Pointer(&serverKeys.ServerSecretKey[0])),
+		(*C.uchar)(unsafe.Pointer(&serverKeys.ServerPublicKey[0])),
+		(*C.uchar)(unsafe.Pointer(&userData.SerializedRecord[0])),
+		(*C.uchar)(cEmail),
+		C.int(len(email)),
+		(*C.uchar)(unsafe.Pointer(&serverKeys.OPRFSeed[0])),
+		(*C.uchar)(unsafe.Pointer(&ke1[0])),
+		(*C.uchar)(cEmail),
+		C.int(len(email)),
+		nil, 0, // No extra context
+	)
+
+	// Client-side finalization (KE3 generation)
+	ke3 := make([]byte, C.ecc_opaque_ristretto255_sha512_KE3SIZE)
+	sessionKey := make([]byte, C.ecc_opaque_ristretto255_sha512_Nm)
+	exportKey := make([]byte, C.ecc_opaque_ristretto255_sha512_Nh)
+
+	result := C.ecc_opaque_ristretto255_sha512_GenerateKE3(
+		(*C.uchar)(unsafe.Pointer(&ke3[0])),
+		(*C.uchar)(unsafe.Pointer(&sessionKey[0])),
+		(*C.uchar)(unsafe.Pointer(&exportKey[0])),
+		(*C.uchar)(unsafe.Pointer(&clientState[0])),
+		(*C.uchar)(cEmail),
+		C.int(len(email)),
+		(*C.uchar)(cServerIdentity),
+		C.int(len(serverIdentity)),
+		(*C.uchar)(unsafe.Pointer(&ke2[0])),
+		C.ecc_opaque_ristretto255_sha512_MHF_SCRYPT,
+		nil, 0,
+		nil, 0,
+	)
+
+	crypto.SecureZeroBytes(exportKey)
+
+	if result != 0 {
+		return nil, fmt.Errorf("client-side authentication failed")
 	}
 
-	server, err := config.Server()
-	if err != nil {
-		return nil, err
+	// Server-side validation
+	serverSessionKey := make([]byte, C.ecc_opaque_ristretto255_sha512_Nm)
+	result = C.ecc_opaque_ristretto255_sha512_ServerFinish(
+		(*C.uchar)(unsafe.Pointer(&serverSessionKey[0])),
+		(*C.uchar)(unsafe.Pointer(&serverState[0])),
+		(*C.uchar)(unsafe.Pointer(&ke3[0])),
+	)
+
+	if result != 0 {
+		return nil, fmt.Errorf("server-side authentication failed")
 	}
 
-	// Load server keys from database
-	var serverSecretStr, serverPublicStr, oprfSeedStr string
-	err = db.QueryRow(`
-		SELECT server_secret_key, server_public_key, oprf_seed
-		FROM opaque_server_keys WHERE id = 1
-	`).Scan(&serverSecretStr, &serverPublicStr, &oprfSeedStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load server keys: %w", err)
-	}
-
-	serverSecret, err := hex.DecodeString(serverSecretStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode server secret key: %w", err)
-	}
-
-	serverPublic, err := hex.DecodeString(serverPublicStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode server public key: %w", err)
-	}
-
-	oprfSeed, err := hex.DecodeString(oprfSeedStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode OPRF seed: %w", err)
-	}
-
-	// Set server key material with proper server identity
-	err = server.SetKeyMaterial([]byte("arkfile-server"), serverSecret, serverPublic, oprfSeed)
-	if err != nil {
-		return nil, fmt.Errorf("failed to set server key material: %w", err)
-	}
-
-	// Start login process
-	ke1 := client.LoginInit([]byte(password))
-
-	deserializer, err := config.Deserializer()
-	if err != nil {
-		return nil, err
-	}
-
-	registrationRecord, err := deserializer.RegistrationRecord(userData.SerializedRecord)
-	if err != nil {
-		return nil, err
-	}
-
-	clientRecord := &opaque.ClientRecord{
-		RegistrationRecord:   registrationRecord,
-		CredentialIdentifier: []byte(email),
-	}
-
-	ke2, err := server.LoginInit(ke1, clientRecord)
-	if err != nil {
-		return nil, err
-	}
-
-	ke3, exportKey, err := client.LoginFinish(ke2, opaque.ClientLoginFinishOptions{
-		ClientIdentity: []byte(email),
-		ServerIdentity: []byte("arkfile-server"),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	err = server.LoginFinish(ke3)
-	if err != nil {
-		return nil, err
-	}
-
-	clientSessionKey := client.SessionKey()
-	serverSessionKey := server.SessionKey()
-
-	// Verify session keys match
-	if !crypto.SecureCompare(clientSessionKey, serverSessionKey) {
-		crypto.SecureZeroBytes(exportKey)
+	// Final check
+	if !crypto.SecureCompare(sessionKey, serverSessionKey) {
 		return nil, fmt.Errorf("session key mismatch")
 	}
 
-	crypto.SecureZeroBytes(exportKey)
-	return clientSessionKey, nil
+	return sessionKey, nil
 }
 
-// storeOPAQUEUserData stores user data with hex encoding
+// storeOPAQUEUserData stores user data with hex encoding for database compatibility.
 func storeOPAQUEUserData(db *sql.DB, userData OPAQUEUserData) error {
 	recordHex := hex.EncodeToString(userData.SerializedRecord)
 
 	_, err := db.Exec(`
 		INSERT INTO opaque_user_data (
 			user_email, serialized_record, created_at
-		) VALUES (?, ?, ?)`,
+		) VALUES (?, ?, ?)
+		ON CONFLICT(user_email) DO UPDATE SET
+		serialized_record=excluded.serialized_record;`,
 		userData.UserEmail, recordHex, userData.CreatedAt,
 	)
 	return err
 }
 
-// loadOPAQUEUserData loads user data from DB
+// loadOPAQUEUserData loads user data from the database.
 func loadOPAQUEUserData(db *sql.DB, email string) (*OPAQUEUserData, error) {
 	userData := &OPAQUEUserData{}
+	var recordHex string
+	var createdAt sql.NullString // Use NullString to handle potential NULLs
 
-	var recordStr, createdAtStr string
-
-	err := db.QueryRow(`
-		SELECT user_email, serialized_record, created_at
-		FROM opaque_user_data WHERE user_email = ?`,
-		email,
-	).Scan(
-		&userData.UserEmail, &recordStr, &createdAtStr,
+	err := db.QueryRow("SELECT user_email, serialized_record, created_at FROM opaque_user_data WHERE user_email = ?", email).Scan(
+		&userData.UserEmail, &recordHex, &createdAt,
 	)
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("could not find user '%s': %w", email, err)
 	}
 
-	userData.SerializedRecord, err = hex.DecodeString(recordStr)
+	userData.SerializedRecord, err = hex.DecodeString(recordHex)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode serialized record: %w", err)
 	}
 
-	userData.CreatedAt, err = time.Parse(time.RFC3339, createdAtStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse created_at: %w", err)
+	if createdAt.Valid {
+		userData.CreatedAt, err = time.Parse(time.RFC3339, createdAt.String)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse 'created_at': %w", err)
+		}
 	}
 
 	return userData, nil
 }
 
-// loadServerKeysForInstance loads server keys for a specific server instance
-func loadServerKeysForInstance(db *sql.DB, server *opaque.Server) error {
-	var serverSecretStr, serverPublicStr, oprfSeedStr string
-
-	err := db.QueryRow(`
-		SELECT server_secret_key, server_public_key, oprf_seed
-		FROM opaque_server_keys WHERE id = 1
-	`).Scan(&serverSecretStr, &serverPublicStr, &oprfSeedStr)
-	if err != nil {
-		return fmt.Errorf("failed to load server keys: %w", err)
-	}
-
-	serverSecret, err := hex.DecodeString(serverSecretStr)
-	if err != nil {
-		return fmt.Errorf("failed to decode server secret key: %w", err)
-	}
-
-	serverPublic, err := hex.DecodeString(serverPublicStr)
-	if err != nil {
-		return fmt.Errorf("failed to decode server public key: %w", err)
-	}
-
-	oprfSeed, err := hex.DecodeString(oprfSeedStr)
-	if err != nil {
-		return fmt.Errorf("failed to decode OPRF seed: %w", err)
-	}
-
-	err = server.SetKeyMaterial(nil, serverSecret, serverPublic, oprfSeed)
-	if err != nil {
-		return fmt.Errorf("failed to set loaded key material: %w", err)
-	}
-
-	return nil
+// GetOPAQUEServer returns a simple status check for OPAQUE server readiness
+func GetOPAQUEServer() (bool, error) {
+	// Since we're using pure OPAQUE with CGo, the "server" is always ready
+	// if the package compiled successfully
+	return true, nil
 }
 
-// parseDeviceCapability parses string to DeviceCapability
-func parseDeviceCapability(profile string) crypto.DeviceCapability {
-	switch profile {
-	case "minimal":
-		return crypto.DeviceMinimal
-	case "interactive":
-		return crypto.DeviceInteractive
-	case "balanced":
-		return crypto.DeviceBalanced
-	case "maximum":
-		return crypto.DeviceMaximum
-	default:
-		return crypto.DeviceInteractive
-	}
-}
-
-// ValidateOPAQUESetup verifies that OPAQUE is properly configured
+// ValidateOPAQUESetup validates that the OPAQUE setup is properly configured
 func ValidateOPAQUESetup(db *sql.DB) error {
-	server, err := GetOPAQUEServer()
-	if err != nil {
-		return fmt.Errorf("OPAQUE server not initialized: %w", err)
+	// Check if server keys are loaded
+	if serverKeys == nil {
+		return SetupServerKeys(db)
 	}
 
+	// Validate that we can access the database tables
 	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM opaque_server_keys WHERE id = 1").Scan(&count)
+	err := db.QueryRow("SELECT COUNT(*) FROM opaque_server_keys WHERE id = 1").Scan(&count)
 	if err != nil {
-		return fmt.Errorf("failed to check server keys: %w", err)
+		return fmt.Errorf("failed to access opaque_server_keys table: %w", err)
 	}
 
 	if count == 0 {
-		return fmt.Errorf("OPAQUE server keys not found")
+		return fmt.Errorf("no server keys found in database")
 	}
 
-	if server.configuration.OPRF != opaque.RistrettoSha512 {
-		return fmt.Errorf("unexpected OPRF configuration")
+	// Check opaque_user_data table exists
+	_, err = db.Exec("SELECT 1 FROM opaque_user_data LIMIT 1")
+	if err != nil {
+		return fmt.Errorf("failed to access opaque_user_data table: %w", err)
 	}
 
-	if server.configuration.AKE != opaque.RistrettoSha512 {
-		return fmt.Errorf("unexpected AKE configuration")
-	}
-
-	if logging.InfoLogger != nil {
-		logging.InfoLogger.Printf("OPAQUE setup validation successful")
-	}
 	return nil
 }

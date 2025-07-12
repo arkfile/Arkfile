@@ -5,7 +5,7 @@ go 1.24.2
 toolchain go1.24.4
 
 require (
-	github.com/bytemare/opaque v0.10.0
+	github.com/bytemare/opaque v0.10.1-0.20250508205515-fabe5d72a34b
 	github.com/joho/godotenv v1.5.1
 	github.com/labstack/echo/v4 v4.13.4
 	github.com/minio/minio-go/v7 v7.0.94
@@ -23,14 +23,17 @@ require (
 	github.com/stretchr/testify v1.10.0
 )
 
-require github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
+require (
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
+	github.com/bytemare/ecc v0.9.0 // indirect
+	github.com/bytemare/secp256k1 v0.3.0 // indirect
+)
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
 	filippo.io/nistec v0.0.3 // indirect
-	github.com/bytemare/crypto v0.4.3 // indirect; indirect - compatible version for OPAQUE v0.10.0
-	github.com/bytemare/hash v0.1.5 // indirect; indirect - compatible version for OPAQUE v0.10.0
-	github.com/bytemare/hash2curve v0.1.3 // indirect; indirect - compatible version for OPAQUE v0.10.0
+	github.com/bytemare/hash v0.5.2 // indirect; indirect - compatible version for OPAQUE v0.10.0
+	github.com/bytemare/hash2curve v0.5.4 // indirect; indirect - compatible version for OPAQUE v0.10.0
 	github.com/bytemare/ksf v0.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect

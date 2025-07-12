@@ -121,14 +121,6 @@ func CreateSessionKeyInfo(userEmail, context string, sessionKey []byte) SessionK
 	return info
 }
 
-// SecureZeroBytes securely zeros out a byte slice to prevent key material from
-// remaining in memory longer than necessary
-func SecureZeroBytes(data []byte) {
-	for i := range data {
-		data[i] = 0
-	}
-}
-
 // SecureZeroSessionKey securely clears session key material
 func SecureZeroSessionKey(sessionKey []byte) {
 	if sessionKey != nil {

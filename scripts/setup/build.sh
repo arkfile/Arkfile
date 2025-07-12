@@ -66,6 +66,17 @@ if ! go mod download; then
 fi
 echo -e "${GREEN}✅ Go dependencies resolved${NC}"
 
+# Initialize and build C dependencies
+echo -e "${YELLOW}Initializing and building C dependencies...${NC}"
+if [ -f "vendor/aldenml/ecc/CMakeLists.txt" ]; then
+    echo "Found aldenml/ecc submodule..."
+    (cd vendor/aldenml/ecc && git submodule update --init --recursive && mkdir -p build && cd build && cmake .. && make)
+    echo -e "${GREEN}✅ C dependencies built successfully${NC}"
+else
+    echo -e "${RED}❌ aldenml/ecc submodule not found. Please run 'git submodule update --init --recursive'${NC}"
+    exit 1
+fi
+
 # Run user and directory setup if needed
 if [ ! -d "${BASE_DIR}" ]; then
     echo -e "${YELLOW}Setting up initial directory structure...${NC}"

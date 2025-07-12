@@ -6,6 +6,8 @@ bin/
 obj/
 *.out
 *.so
+*.o
+*.a
 go.sum
 vendor/
 *.tmp

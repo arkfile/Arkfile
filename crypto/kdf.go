@@ -129,20 +129,6 @@ func ValidateProfile(profile ArgonProfile) error {
 	return nil
 }
 
-// SecureCompare performs constant-time comparison of two byte slices
-func SecureCompare(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-
-	var result byte
-	for i := 0; i < len(a); i++ {
-		result |= a[i] ^ b[i]
-	}
-
-	return result == 0
-}
-
 // DecodeBase64 decodes a base64 string to bytes
 func DecodeBase64(encoded string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(encoded)
