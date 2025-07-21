@@ -9,7 +9,21 @@ obj/
 *.o
 *.a
 go.sum
-vendor/
+vendor/*
+!vendor/stef/
+!vendor/stef/libopaque/
+!vendor/stef/liboprf/
+
+# But ignore compiled artifacts in vendor libraries
+vendor/stef/libopaque/src/*.so
+vendor/stef/libopaque/src/*.o
+vendor/stef/libopaque/src/*.a
+vendor/stef/liboprf/src/*.so
+vendor/stef/liboprf/src/*.o
+vendor/stef/liboprf/src/*.a
+vendor/stef/liboprf/src/noise_xk/*.so
+vendor/stef/liboprf/src/noise_xk/*.o
+vendor/stef/liboprf/src/noise_xk/*.a
 *.tmp
 *.swp
 .vscode/
@@ -38,6 +52,11 @@ benchmark_*.csv
 *_benchmark_results.*
 load_test_*
 stress_test_*
+
+# libopaque test artifacts
+auth/libopaque_test/test_basic
+auth/libopaque_test/test_full_protocol
+auth/libopaque_test/test_simple_opaque
 
 # Golden test vectors (format compatibility files)
 test/golden/
