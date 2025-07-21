@@ -98,12 +98,10 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 func TestOpaqueRegister_Success(t *testing.T) {
 	email := "test@example.com"
 	password := "ValidPassword123!@#"
-	deviceCapability := "interactive"
 
 	reqBody := map[string]interface{}{
-		"email":            email,
-		"password":         password,
-		"deviceCapability": deviceCapability,
+		"email":    email,
+		"password": password,
 	}
 	jsonBody, _ := json.Marshal(reqBody)
 
@@ -140,7 +138,6 @@ func TestOpaqueRegister_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "Account created successfully with OPAQUE authentication", resp["message"])
 	assert.Equal(t, "OPAQUE", resp["authMethod"])
-	assert.Equal(t, deviceCapability, resp["deviceCapability"])
 
 	statusMap, ok := resp["status"].(map[string]interface{})
 	require.True(t, ok)
@@ -153,9 +150,8 @@ func TestOpaqueRegister_Success(t *testing.T) {
 
 func TestOpaqueRegister_InvalidEmail(t *testing.T) {
 	reqBody := map[string]interface{}{
-		"email":            "invalid-email",
-		"password":         "ValidPassword123!@#",
-		"deviceCapability": "interactive",
+		"email":    "invalid-email",
+		"password": "ValidPassword123!@#",
 	}
 	jsonBody, _ := json.Marshal(reqBody)
 
@@ -171,9 +167,8 @@ func TestOpaqueRegister_InvalidEmail(t *testing.T) {
 
 func TestOpaqueRegister_WeakPassword(t *testing.T) {
 	reqBody := map[string]interface{}{
-		"email":            "test@example.com",
-		"password":         "weak",
-		"deviceCapability": "interactive",
+		"email":    "test@example.com",
+		"password": "weak",
 	}
 	jsonBody, _ := json.Marshal(reqBody)
 
@@ -190,9 +185,8 @@ func TestOpaqueRegister_WeakPassword(t *testing.T) {
 func TestOpaqueRegister_UserAlreadyExists(t *testing.T) {
 	email := "existing@example.com"
 	reqBody := map[string]interface{}{
-		"email":            email,
-		"password":         "ValidPassword123!@#",
-		"deviceCapability": "interactive",
+		"email":    email,
+		"password": "ValidPassword123!@#",
 	}
 	jsonBody, _ := json.Marshal(reqBody)
 
@@ -301,23 +295,6 @@ func TestOpaqueLogin_UserNotApproved(t *testing.T) {
 	assert.Equal(t, "User account not approved", httpErr.Message)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestDetectDeviceCapability_Default(t *testing.T) {
-	reqBody := map[string]interface{}{}
-	jsonBody, _ := json.Marshal(reqBody)
-
-	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/opaque/capability", bytes.NewReader(jsonBody))
-
-	err := DetectDeviceCapability(c)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	var resp map[string]interface{}
-	err = json.Unmarshal(rec.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	assert.Equal(t, "interactive", resp["recommendedCapability"])
-	assert.Equal(t, "default_safe", resp["source"])
 }
 
 func TestOpaqueHealthCheck_Success(t *testing.T) {

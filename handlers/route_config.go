@@ -18,7 +18,6 @@ func RegisterRoutes() {
 	// OPAQUE Authentication (Only)
 	Echo.POST("/api/opaque/register", OpaqueRegister)
 	Echo.POST("/api/opaque/login", OpaqueLogin)
-	Echo.POST("/api/opaque/capability", DetectDeviceCapability)
 	Echo.GET("/api/opaque/health", OpaqueHealthCheck)
 
 	// TOTP Authentication - requires authentication

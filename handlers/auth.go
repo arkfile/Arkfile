@@ -172,24 +172,14 @@ func RevokeAllTokens(c echo.Context) error {
 
 // OpaqueRegisterRequest represents the request for OPAQUE registration
 type OpaqueRegisterRequest struct {
-	Email            string `json:"email"`
-	Password         string `json:"password"`
-	DeviceCapability string `json:"deviceCapability"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 // OpaqueLoginRequest represents the request for OPAQUE login
 type OpaqueLoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
-}
-
-// DeviceCapabilityRequest represents a request for device capability detection
-type DeviceCapabilityRequest struct {
-	MemoryGB        float64 `json:"memoryGB"`
-	CPUCores        int     `json:"cpuCores"`
-	IsMobile        bool    `json:"isMobile"`
-	UserAgent       string  `json:"userAgent"`
-	ForceCapability string  `json:"forceCapability,omitempty"`
 }
 
 // OpaqueHealthCheckResponse represents the health status of OPAQUE system
@@ -218,24 +208,6 @@ func OpaqueRegister(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Password must be at least 12 characters long")
 	}
 
-	if request.DeviceCapability == "" {
-		request.DeviceCapability = "interactive" // Safe default
-	}
-
-	// Note: DeviceCapability parameter is retained for backward compatibility
-	// but no longer used in pure OPAQUE implementation
-	validCapabilities := []string{"minimal", "interactive", "balanced", "maximum"}
-	isValidCapability := false
-	for _, valid := range validCapabilities {
-		if request.DeviceCapability == valid {
-			isValidCapability = true
-			break
-		}
-	}
-	if !isValidCapability {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid device capability")
-	}
-
 	// Check if user already exists
 	_, err := models.GetUserByEmail(database.DB, request.Email)
 	if err == nil {
@@ -261,12 +233,11 @@ func OpaqueRegister(c echo.Context) error {
 
 	// Log successful registration
 	database.LogUserAction(request.Email, "registered with OPAQUE", "")
-	logging.InfoLogger.Printf("OPAQUE user registered: %s with capability %s", request.Email, request.DeviceCapability)
+	logging.InfoLogger.Printf("OPAQUE user registered: %s", request.Email)
 
 	return c.JSON(http.StatusCreated, map[string]interface{}{
-		"message":          "Account created successfully with OPAQUE authentication",
-		"authMethod":       "OPAQUE",
-		"deviceCapability": request.DeviceCapability,
+		"message":    "Account created successfully with OPAQUE authentication",
+		"authMethod": "OPAQUE",
 		"status": map[string]interface{}{
 			"is_approved": user.IsApproved,
 			"is_admin":    user.IsAdmin,
@@ -398,92 +369,6 @@ func OpaqueLogin(c echo.Context) error {
 	})
 }
 
-// DetectDeviceCapability suggests an appropriate device capability profile
-func DetectDeviceCapability(c echo.Context) error {
-	var request DeviceCapabilityRequest
-	if err := c.Bind(&request); err != nil {
-		// If no request body, try to detect from headers
-		userAgent := c.Request().Header.Get("User-Agent")
-		request.UserAgent = userAgent
-	}
-
-	// If user forced a specific capability, respect it
-	if request.ForceCapability != "" {
-		validCapabilities := []string{"minimal", "interactive", "balanced", "maximum"}
-		for _, valid := range validCapabilities {
-			if request.ForceCapability == valid {
-				return c.JSON(http.StatusOK, map[string]interface{}{
-					"recommendedCapability": request.ForceCapability,
-					"source":                "user_override",
-					"description":           getCapabilityDescription(request.ForceCapability),
-				})
-			}
-		}
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid forced capability")
-	}
-
-	// Auto-detect based on provided information
-	var recommendedCapability string
-	var source string
-
-	if request.MemoryGB > 0 || request.CPUCores > 0 || request.UserAgent != "" {
-		// Browser-based detection
-		if request.IsMobile || strings.Contains(strings.ToLower(request.UserAgent), "mobile") {
-			recommendedCapability = "interactive"
-			source = "mobile_device_detected"
-		} else if request.MemoryGB >= 8 && request.CPUCores >= 4 {
-			recommendedCapability = "maximum"
-			source = "high_performance_detected"
-		} else if request.MemoryGB >= 4 && request.CPUCores >= 2 {
-			recommendedCapability = "balanced"
-			source = "mid_range_detected"
-		} else {
-			recommendedCapability = "interactive"
-			source = "conservative_estimate"
-		}
-	} else {
-		// Conservative default when no information available
-		recommendedCapability = "interactive"
-		source = "default_safe"
-	}
-
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"recommendedCapability": recommendedCapability,
-		"source":                source,
-		"description":           getCapabilityDescription(recommendedCapability),
-		"profiles": map[string]interface{}{
-			"minimal": map[string]interface{}{
-				"memory":      "16MB",
-				"iterations":  1,
-				"threads":     1,
-				"time":        "~50ms",
-				"description": "Fastest, lowest security - for very old devices",
-			},
-			"interactive": map[string]interface{}{
-				"memory":      "32MB",
-				"iterations":  1,
-				"threads":     2,
-				"time":        "~100ms",
-				"description": "Fast and compatible - recommended for mobile",
-			},
-			"balanced": map[string]interface{}{
-				"memory":      "64MB",
-				"iterations":  2,
-				"threads":     2,
-				"time":        "~200ms",
-				"description": "Good security and performance balance",
-			},
-			"maximum": map[string]interface{}{
-				"memory":      "128MB",
-				"iterations":  4,
-				"threads":     4,
-				"time":        "~400ms",
-				"description": "Maximum security - for high-end devices",
-			},
-		},
-	})
-}
-
 // OpaqueHealthCheck verifies that the OPAQUE system is functioning properly
 func OpaqueHealthCheck(c echo.Context) error {
 	response := OpaqueHealthCheckResponse{
@@ -521,20 +406,6 @@ func OpaqueHealthCheck(c echo.Context) error {
 	response.Message = "OPAQUE authentication system fully operational"
 
 	return c.JSON(http.StatusOK, response)
-}
-
-// Helper function to get capability description
-func getCapabilityDescription(capability string) string {
-	descriptions := map[string]string{
-		"minimal":     "16MB memory, 1 iteration, 1 thread - fastest but lowest security",
-		"interactive": "32MB memory, 1 iteration, 2 threads - fast and compatible",
-		"balanced":    "64MB memory, 2 iterations, 2 threads - good balance",
-		"maximum":     "128MB memory, 4 iterations, 4 threads - maximum security",
-	}
-	if desc, exists := descriptions[capability]; exists {
-		return desc
-	}
-	return "Unknown capability profile"
 }
 
 // TOTP Authentication Endpoints

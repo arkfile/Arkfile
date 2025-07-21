@@ -86,194 +86,6 @@ async function revokeAllSessions() {
 
 // OPAQUE Authentication Functions
 
-// Global state for device capability detection
-window.arkfileOpaqueState = {
-    deviceCapability: null,
-    hasUserConsent: false,
-    authMethod: 'OPAQUE'
-};
-
-// Helper function for device capability consent
-function requestDeviceCapabilityPermission() {
-    return {
-        title: "Performance Optimization",
-        message: `To optimize security for your device, we can analyze performance characteristics.
-
-This helps us choose the best security settings for your hardware without compromising your privacy.
-
-We only collect:
-• Available memory (if supported)
-• CPU core count (if supported)
-• Basic device type detection
-
-No personal information or browsing data is collected.`,
-        options: [
-            "Allow Performance Detection",
-            "Use Standard Settings",
-            "Use Maximum Security"
-        ]
-    };
-}
-
-function detectDeviceCapabilityWithPermission(hasPermission) {
-    if (!hasPermission) {
-        return 'interactive'; // Safe default
-    }
-    
-    // Use the WASM function to detect capability
-    if (wasmReady) {
-        try {
-            const result = deviceCapabilityAutoDetect();
-            return result.capability || 'interactive';
-        } catch (error) {
-            console.warn('WASM device detection failed:', error);
-            return 'interactive';
-        }
-    }
-    
-    return 'interactive';
-}
-
-// Privacy-first device capability detection
-async function requestDeviceCapabilityConsent() {
-    if (!wasmReady) {
-        await initWasm();
-    }
-
-    const consentData = requestDeviceCapabilityPermission();
-    
-    return new Promise((resolve) => {
-        // Create consent dialog
-        const dialog = document.createElement('div');
-        dialog.className = 'capability-consent-dialog modal';
-        dialog.innerHTML = `
-            <div class="modal-content">
-                <h3>${consentData.title}</h3>
-                <div class="consent-message">${consentData.message.replace(/\n/g, '<br>')}</div>
-                <div class="consent-options">
-                    <button onclick="handleCapabilityConsent('allow')" class="btn-primary">
-                        ${consentData.options[0]}
-                    </button>
-                    <button onclick="handleCapabilityConsent('manual')" class="btn-secondary">
-                        ${consentData.options[1]}
-                    </button>
-                    <button onclick="handleCapabilityConsent('maximum')" class="btn-secondary">
-                        ${consentData.options[2]}
-                    </button>
-                </div>
-            </div>
-        `;
-        
-        document.body.appendChild(dialog);
-        
-        // Store resolver for use in button handlers
-        window.capabilityConsentResolver = resolve;
-    });
-}
-
-function handleCapabilityConsent(choice) {
-    const dialog = document.querySelector('.capability-consent-dialog');
-    if (dialog) {
-        dialog.remove();
-    }
-    
-    let capability;
-    let hasConsent = false;
-    
-    switch (choice) {
-        case 'allow':
-            hasConsent = true;
-            capability = detectDeviceCapabilityWithPermission(true);
-            break;
-        case 'manual':
-            hasConsent = false;
-            capability = 'interactive'; // Safe default
-            break;
-        case 'maximum':
-            hasConsent = false;
-            capability = 'maximum';
-            break;
-        default:
-            hasConsent = false;
-            capability = 'interactive';
-    }
-    
-    window.arkfileOpaqueState.deviceCapability = capability;
-    window.arkfileOpaqueState.hasUserConsent = hasConsent;
-    
-    if (window.capabilityConsentResolver) {
-        window.capabilityConsentResolver(capability);
-        delete window.capabilityConsentResolver;
-    }
-}
-
-// Enhanced device capability detection with browser APIs
-async function detectDeviceCapability() {
-    if (window.arkfileOpaqueState.deviceCapability) {
-        return window.arkfileOpaqueState.deviceCapability;
-    }
-    
-    // Request user consent first
-    const capability = await requestDeviceCapabilityConsent();
-    
-    // If user gave consent, enhance detection with browser APIs
-    if (window.arkfileOpaqueState.hasUserConsent) {
-        const deviceInfo = {
-            memoryGB: navigator.deviceMemory || 0,
-            cpuCores: navigator.hardwareConcurrency || 0,
-            isMobile: /Android|iPhone|iPad|iPod|BlackBerry|IEMobile/i.test(navigator.userAgent),
-            userAgent: navigator.userAgent
-        };
-        
-        try {
-            const response = await fetch('/api/opaque/capability', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(deviceInfo),
-            });
-            
-            if (response.ok) {
-                const data = await response.json();
-                window.arkfileOpaqueState.deviceCapability = data.recommendedCapability;
-                showCapabilityInfo(data);
-                return data.recommendedCapability;
-            }
-        } catch (error) {
-            console.warn('Failed to get server capability recommendation:', error);
-        }
-    }
-    
-    return capability;
-}
-
-function showCapabilityInfo(capabilityData) {
-    const info = document.createElement('div');
-    info.className = 'capability-info success-message';
-    info.style.cssText = `
-        position: fixed;
-        top: 80px;
-        right: 20px;
-        background-color: #d1ecf1;
-        border: 1px solid #bee5eb;
-        color: #0c5460;
-        padding: 1rem;
-        border-radius: 6px;
-        font-size: 0.9rem;
-        z-index: 1050;
-        max-width: 350px;
-        word-wrap: break-word;
-        animation: slideIn 0.3s ease-out;
-    `;
-    info.innerHTML = `
-        <div><strong>Security Level:</strong> ${capabilityData.recommendedCapability}</div>
-        <div><strong>Description:</strong> ${capabilityData.description}</div>
-        <div><strong>Source:</strong> ${capabilityData.source}</div>
-    `;
-    document.body.appendChild(info);
-    setTimeout(() => info.remove(), 8000);
-}
 
 // OPAQUE Authentication functions (Direct server implementation)
 async function login() {
@@ -326,12 +138,13 @@ async function login() {
             localStorage.setItem('token', data.token);
             localStorage.setItem('refreshToken', data.refreshToken);
             
-            // Store session context
-            window.arkfileSecurityContext = {
-                sessionKey: data.sessionKey,
-                authMethod: 'OPAQUE',
-                expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 hours
-            };
+            // Create secure session in WASM (NEVER store session key in JavaScript)
+            const sessionResult = createSecureSessionFromOpaqueExport(data.sessionKey, email);
+            if (!sessionResult.success) {
+                hideProgress();
+                showError('Failed to create secure session: ' + sessionResult.error);
+                return;
+            }
             
             hideProgress();
             showSuccess('Login successful');
@@ -434,8 +247,6 @@ function hideProgress() {
     }
 }
 
-// This function is now handled by securityUtils.updatePasswordStrengthUI
-// Remove the old broken implementation
 
 // File handling functions
 async function uploadFile() {
@@ -464,17 +275,26 @@ async function uploadFile() {
         }
         keyType = 'custom';
     } else {
-        // Use the session key
-        const securityContext = window.arkfileSecurityContext;
+        // Use secure session for account-encrypted files
+        const userEmail = getUserEmailFromToken(); // Need to extract email from token
+        if (!userEmail) {
+            showError('Cannot determine user email. Please log in again.');
+            localStorage.removeItem('token');
+            showAuthSection();
+            return;
+        }
         
-        if (!securityContext || Date.now() > securityContext.expiresAt) {
+        // Validate secure session exists
+        const sessionValidation = validateSecureSession(userEmail);
+        if (!sessionValidation.valid) {
             showError('Your session has expired. Please log in again.');
             localStorage.removeItem('token');
             showAuthSection();
             return;
         }
         
-        password = securityContext.sessionKey;
+        // File will be encrypted using secure session in WASM
+        password = null; // Not needed - will use secure session directly
         keyType = 'account';
     }
 
@@ -489,7 +309,19 @@ async function uploadFile() {
         const sha256sum = calculateSHA256(fileBytes);
         
         // Encrypt the file
-        const encryptedData = encryptFile(fileBytes, password, keyType);
+        let encryptedData;
+        if (keyType === 'account') {
+            // Use secure session encryption (no password exposed to JavaScript)
+            const encryptResult = encryptFileWithSecureSession(fileBytes, userEmail);
+            if (!encryptResult.success) {
+                showError('Failed to encrypt file: ' + encryptResult.error);
+                return;
+            }
+            encryptedData = encryptResult.data;
+        } else {
+            // Use custom password encryption
+            encryptedData = encryptFile(fileBytes, password, keyType);
+        }
 
         // Prepare form data
         const formData = new FormData();
@@ -530,64 +362,96 @@ async function downloadFile(filename, hint, expectedHash, passwordType) {
         alert(`Password Hint: ${hint}`);
     }
 
-    let password;
+    let decryptedData;
     
     if (passwordType === 'account') {
-        // For account-encrypted files, use the session key
-        const securityContext = window.arkfileSecurityContext;
+        // For account-encrypted files, use secure session decryption
+        const userEmail = getUserEmailFromToken();
+        if (!userEmail) {
+            showError('Cannot determine user email. Please log in again.');
+            return;
+        }
         
-        if (!securityContext || Date.now() > securityContext.expiresAt) {
+        // Validate secure session exists
+        const sessionValidation = validateSecureSession(userEmail);
+        if (!sessionValidation.valid) {
             showError('Your session has expired. Please log in again to decrypt account-encrypted files.');
             return;
         }
         
-        password = securityContext.sessionKey;
+        try {
+            const response = await fetch(`/api/download/${filename}`, {
+                headers: {
+                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                },
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                
+                // Use secure session decryption (no password exposed to JavaScript)
+                const decryptResult = decryptFileWithSecureSession(data.data, userEmail);
+                if (!decryptResult.success) {
+                    showError('Failed to decrypt file: ' + decryptResult.error);
+                    return;
+                }
+                decryptedData = decryptResult.data;
+            } else {
+                showError('Failed to download file.');
+                return;
+            }
+        } catch (error) {
+            showError('An error occurred during file download.');
+            return;
+        }
     } else {
         // For custom password-encrypted files
-        password = prompt('Enter the file password:');
+        const password = prompt('Enter the file password:');
         if (!password) return;
-    }
 
-    try {
-        const response = await fetch(`/api/download/${filename}`, {
-            headers: {
-                'Authorization': `Bearer ${localStorage.getItem('token')}`,
-            },
-        });
+        try {
+            const response = await fetch(`/api/download/${filename}`, {
+                headers: {
+                    'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                },
+            });
 
-        if (response.ok) {
-            const data = await response.json();
-            const decryptedData = decryptFile(data.data, password);
+            if (response.ok) {
+                const data = await response.json();
+                decryptedData = decryptFile(data.data, password);
 
-            if (decryptedData === 'Failed to decrypt data') {
-                showError('Incorrect password or corrupted file.');
+                if (decryptedData === 'Failed to decrypt data') {
+                    showError('Incorrect password or corrupted file.');
+                    return;
+                }
+            } else {
+                showError('Failed to download file.');
                 return;
             }
-
-            // Convert base64 to Uint8Array for hash verification
-            const decryptedBytes = Uint8Array.from(atob(decryptedData), c => c.charCodeAt(0));
-            
-            // Verify file integrity
-            const calculatedHash = calculateSHA256(decryptedBytes);
-            if (calculatedHash !== expectedHash) {
-                showError('File integrity check failed. The file may be corrupted.');
-                return;
-            }
-
-            // Create and download the file
-            const blob = new Blob([decryptedBytes]);
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            a.click();
-            URL.revokeObjectURL(url);
-        } else {
-            showError('Failed to download file.');
+        } catch (error) {
+            showError('An error occurred during file download.');
+            return;
         }
-    } catch (error) {
-        showError('An error occurred during file download.');
     }
+
+    // Convert base64 to Uint8Array for hash verification
+    const decryptedBytes = Uint8Array.from(atob(decryptedData), c => c.charCodeAt(0));
+    
+    // Verify file integrity
+    const calculatedHash = calculateSHA256(decryptedBytes);
+    if (calculatedHash !== expectedHash) {
+        showError('File integrity check failed. The file may be corrupted.');
+        return;
+    }
+
+    // Create and download the file
+    const blob = new Blob([decryptedBytes]);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
 }
 
 async function loadFiles() {
@@ -673,6 +537,9 @@ function updateStorageInfo(storage) {
 // Logout function
 async function logout() {
     try {
+        // Get user email for secure session cleanup
+        const userEmail = getUserEmailFromToken();
+        
         // Get the current refresh token
         const refreshToken = localStorage.getItem('refreshToken');
         
@@ -687,11 +554,16 @@ async function logout() {
             });
         }
         
+        // Clear secure session from WASM memory
+        if (userEmail) {
+            clearSecureSession(userEmail);
+        }
+        
         // Clear local storage
         localStorage.removeItem('token');
         localStorage.removeItem('refreshToken');
         
-        // Clear session key from memory
+        // Clear any remaining session context (legacy)
         delete window.arkfileSecurityContext;
         
         // Show auth section
@@ -703,6 +575,17 @@ async function logout() {
         // Still clear local storage and redirect
         localStorage.removeItem('token');
         localStorage.removeItem('refreshToken');
+        
+        // Try to clear secure session even on error
+        const userEmail = getUserEmailFromToken();
+        if (userEmail) {
+            try {
+                clearSecureSession(userEmail);
+            } catch (e) {
+                console.warn('Failed to clear secure session on logout error:', e);
+            }
+        }
+        
         showAuthSection();
     }
 }
@@ -838,6 +721,25 @@ function showSuccess(message) {
     successDiv.textContent = message;
     document.body.appendChild(successDiv);
     setTimeout(() => successDiv.remove(), 5000);
+}
+
+// Helper function to extract user email from JWT token
+function getUserEmailFromToken() {
+    const token = localStorage.getItem('token');
+    if (!token) return null;
+    
+    try {
+        // JWT tokens have 3 parts separated by dots
+        const parts = token.split('.');
+        if (parts.length !== 3) return null;
+        
+        // Decode the payload (middle part)
+        const payload = JSON.parse(atob(parts[1]));
+        return payload.email || null;
+    } catch (error) {
+        console.error('Error extracting email from token:', error);
+        return null;
+    }
 }
 
 // Password confirmation validation function
