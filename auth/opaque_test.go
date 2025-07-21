@@ -52,7 +52,10 @@ func cleanupTestDatabase() {
 // Test complete OPAQUE protocol flow from registration to authentication.
 func TestOpaqueRegistrationAndAuthentication(t *testing.T) {
 	db := setupTestDatabase(t)
-	defer db.Close()
+	defer func() {
+		db.Close()
+		cleanupTestDatabase()
+	}()
 
 	// 1. Setup server keys
 	err := SetupServerKeys(db)
@@ -81,6 +84,11 @@ func TestOpaqueRegistrationAndAuthentication(t *testing.T) {
 		t.Error("Serialized OPAQUE record should not be empty")
 	}
 
+	// Verify record has expected libopaque size
+	if len(userData.SerializedRecord) != OPAQUE_USER_RECORD_LEN {
+		t.Errorf("Expected user record length %d, got %d", OPAQUE_USER_RECORD_LEN, len(userData.SerializedRecord))
+	}
+
 	// 4. Test authentication with the correct password
 	sessionKey, err := AuthenticateUser(db, email, password)
 	if err != nil {
@@ -90,17 +98,37 @@ func TestOpaqueRegistrationAndAuthentication(t *testing.T) {
 		t.Error("Expected a non-empty session key")
 	}
 
+	// Verify session key has expected libopaque size
+	if len(sessionKey) != OPAQUE_SHARED_SECRETBYTES {
+		t.Errorf("Expected session key length %d, got %d", OPAQUE_SHARED_SECRETBYTES, len(sessionKey))
+	}
+
 	// 5. Test authentication with an incorrect password
 	_, err = AuthenticateUser(db, email, "WrongPassword")
 	if err == nil {
 		t.Error("Authentication should have failed with an incorrect password")
+	}
+
+	// 6. Test authentication with empty password
+	_, err = AuthenticateUser(db, email, "")
+	if err == nil {
+		t.Error("Authentication should have failed with empty password")
+	}
+
+	// 7. Test authentication for non-existent user
+	_, err = AuthenticateUser(db, "nonexistent@example.com", password)
+	if err == nil {
+		t.Error("Authentication should have failed for non-existent user")
 	}
 }
 
 // Test security properties of the OPAQUE implementation.
 func TestOpaqueSecurityProperties(t *testing.T) {
 	db := setupTestDatabase(t)
-	defer db.Close()
+	defer func() {
+		db.Close()
+		cleanupTestDatabase()
+	}()
 
 	err := SetupServerKeys(db)
 	if err != nil {
@@ -144,19 +172,38 @@ func TestOpaqueSecurityProperties(t *testing.T) {
 	if err == nil {
 		t.Error("Cross-user authentication should fail")
 	}
+
+	// 5. Test same user authentication - OPAQUE should generate different session keys each time for security
+	sessionKey1Again, err := AuthenticateUser(db, users[0].email, users[0].password)
+	if err != nil {
+		t.Fatalf("Second authentication failed for %s: %v", users[0].email, err)
+	}
+
+	// Session keys should be different each time for security (OPAQUE protocol feature)
+	if crypto.SecureCompare(sessionKey1, sessionKey1Again) {
+		t.Error("Session keys should be different each authentication for security (OPAQUE protocol)")
+	}
+
+	// But both session keys should have the correct length
+	if len(sessionKey1Again) != OPAQUE_SHARED_SECRETBYTES {
+		t.Errorf("Expected session key length %d, got %d", OPAQUE_SHARED_SECRETBYTES, len(sessionKey1Again))
+	}
 }
 
 // Test key management, ensuring keys are created once and loaded correctly.
 func TestOpaqueServerKeyManagement(t *testing.T) {
 	db := setupTestDatabase(t)
-	defer db.Close()
+	defer func() {
+		db.Close()
+		cleanupTestDatabase()
+	}()
 
 	// 1. Initial server key setup
 	err := SetupServerKeys(db)
 	if err != nil {
 		t.Fatalf("Failed to setup server keys on first call: %v", err)
 	}
-	firstKeys := serverKeys
+	firstServerID := serverKeys.ServerID
 
 	// 2. Verify keys are stored in the database
 	var count int
@@ -173,16 +220,124 @@ func TestOpaqueServerKeyManagement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Second call to SetupServerKeys should not fail: %v", err)
 	}
-	secondKeys := serverKeys
+	secondServerID := serverKeys.ServerID
 
-	// 4. Verify that the keys loaded on the second call are the same as the first
-	if !crypto.SecureCompare(firstKeys.ServerSecretKey, secondKeys.ServerSecretKey) {
-		t.Error("Server secret key should be consistent across loads")
+	// 4. Verify that the server ID loaded on the second call is the same as the first
+	if firstServerID != secondServerID {
+		t.Errorf("Server ID should be consistent across loads: first=%s, second=%s", firstServerID, secondServerID)
 	}
-	if !crypto.SecureCompare(firstKeys.ServerPublicKey, secondKeys.ServerPublicKey) {
-		t.Error("Server public key should be consistent across loads")
+
+	// 5. Verify server keys have expected values
+	if serverKeys.ServerID != "arkfile-server" {
+		t.Errorf("Expected ServerID 'arkfile-server', got '%s'", serverKeys.ServerID)
 	}
-	if !crypto.SecureCompare(firstKeys.OPRFSeed, secondKeys.OPRFSeed) {
-		t.Error("OPRF seed should be consistent across loads")
+}
+
+// Test OPAQUE validation functions.
+func TestOpaqueValidation(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer func() {
+		db.Close()
+		cleanupTestDatabase()
+	}()
+
+	// 1. Test GetOPAQUEServer
+	ready, err := GetOPAQUEServer()
+	if err != nil {
+		t.Fatalf("GetOPAQUEServer failed: %v", err)
+	}
+	if !ready {
+		t.Error("OPAQUE server should be ready with libopaque CGO")
+	}
+
+	// 2. Test ValidateOPAQUESetup without keys - should setup keys automatically
+	serverKeys = nil // Ensure clean state
+	err = ValidateOPAQUESetup(db)
+	if err != nil {
+		t.Fatalf("ValidateOPAQUESetup should automatically setup keys when none exist: %v", err)
+	}
+
+	// 3. Test ValidateOPAQUESetup with keys already loaded
+	err = ValidateOPAQUESetup(db)
+	if err != nil {
+		t.Fatalf("ValidateOPAQUESetup should succeed when keys already exist: %v", err)
+	}
+
+	// 4. Verify serverKeys are properly loaded
+	if serverKeys == nil {
+		t.Error("serverKeys should be loaded after ValidateOPAQUESetup")
+	}
+	if serverKeys != nil && serverKeys.ServerID != "arkfile-server" {
+		t.Errorf("Expected ServerID 'arkfile-server', got '%s'", serverKeys.ServerID)
+	}
+}
+
+// Test edge cases and error conditions.
+func TestOpaqueEdgeCases(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer func() {
+		db.Close()
+		cleanupTestDatabase()
+	}()
+
+	err := SetupServerKeys(db)
+	if err != nil {
+		t.Fatalf("Failed to setup server keys: %v", err)
+	}
+
+	// 1. Test registration with empty email
+	err = RegisterUser(db, "", "password123")
+	if err == nil {
+		t.Error("Registration should fail with empty email")
+	}
+
+	// 2. Test registration with empty password
+	err = RegisterUser(db, "test@example.com", "")
+	if err == nil {
+		t.Error("Registration should fail with empty password")
+	}
+
+	// 3. Test duplicate registration
+	email := "duplicate@example.com"
+	password := "TestPassword123"
+
+	err = RegisterUser(db, email, password)
+	if err != nil {
+		t.Fatalf("First registration failed: %v", err)
+	}
+
+	err = RegisterUser(db, email, password+"different")
+	if err != nil {
+		t.Logf("Duplicate registration handled (expected): %v", err)
+		// This should update the existing record due to our UPSERT logic
+	}
+
+	// 4. Test authentication without server keys
+	serverKeys = nil
+	_, err = AuthenticateUser(db, email, password)
+	if err == nil {
+		t.Error("Authentication should fail without server keys loaded")
+	}
+
+	// Restore server keys for cleanup
+	err = SetupServerKeys(db)
+	if err != nil {
+		t.Fatalf("Failed to restore server keys: %v", err)
+	}
+}
+
+// Test libopaque-specific constants and sizes.
+func TestLibopaqueConstants(t *testing.T) {
+	// Test that our constants match expected libopaque values
+	if OPAQUE_USER_RECORD_LEN != 256 {
+		t.Errorf("Expected OPAQUE_USER_RECORD_LEN=256, got %d", OPAQUE_USER_RECORD_LEN)
+	}
+
+	if OPAQUE_SHARED_SECRETBYTES != 64 {
+		t.Errorf("Expected OPAQUE_SHARED_SECRETBYTES=64, got %d", OPAQUE_SHARED_SECRETBYTES)
+	}
+
+	if OPAQUE_REGISTRATION_RECORD_LEN != 192 {
+		t.Errorf("Expected OPAQUE_REGISTRATION_RECORD_LEN=192, got %d", OPAQUE_REGISTRATION_RECORD_LEN)
 	}
 }

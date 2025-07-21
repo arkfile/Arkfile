@@ -68,12 +68,19 @@ echo -e "${GREEN}✅ Go dependencies resolved${NC}"
 
 # Initialize and build C dependencies
 echo -e "${YELLOW}Initializing and building C dependencies...${NC}"
-if [ -f "vendor/aldenml/ecc/CMakeLists.txt" ]; then
-    echo "Found aldenml/ecc submodule..."
-    (cd vendor/aldenml/ecc && git submodule update --init --recursive && mkdir -p build && cd build && cmake .. && make)
+if [ -d "vendor/stef/libopaque" ] && [ -d "vendor/stef/liboprf" ]; then
+    echo "Found libopaque and liboprf submodules..."
+    
+    # Use specialized build script with proper error handling and optimizations
+    echo "Building libopaque and liboprf with optimized configuration..."
+    if ! ./scripts/setup/build-libopaque.sh; then
+        echo -e "${RED}❌ Failed to build libopaque/liboprf dependencies${NC}"
+        exit 1
+    fi
+    
     echo -e "${GREEN}✅ C dependencies built successfully${NC}"
 else
-    echo -e "${RED}❌ aldenml/ecc submodule not found. Please run 'git submodule update --init --recursive'${NC}"
+    echo -e "${RED}❌ libopaque/liboprf submodules not found. Please run 'git submodule update --init --recursive'${NC}"
     exit 1
 fi
 
@@ -149,6 +156,26 @@ cp client/static/errors/* ${BUILD_DIR}/webroot/errors/
 echo "Copying systemd service files..."
 mkdir -p ${BUILD_DIR}/systemd
 cp systemd/* ${BUILD_DIR}/systemd/
+
+# Copy C library dependencies
+echo "Copying C library dependencies..."
+mkdir -p ${BUILD_DIR}/vendor/stef/libopaque/src
+mkdir -p ${BUILD_DIR}/vendor/stef/liboprf/src
+mkdir -p ${BUILD_DIR}/vendor/stef/liboprf/src/noise_xk
+
+# Copy libopaque shared library
+if [ -f "vendor/stef/libopaque/src/libopaque.so" ]; then
+    cp vendor/stef/libopaque/src/libopaque.so* ${BUILD_DIR}/vendor/stef/libopaque/src/
+fi
+
+# Copy liboprf shared libraries
+if [ -f "vendor/stef/liboprf/src/liboprf.so" ]; then
+    cp vendor/stef/liboprf/src/liboprf.so* ${BUILD_DIR}/vendor/stef/liboprf/src/
+fi
+
+if [ -f "vendor/stef/liboprf/src/noise_xk/liboprf-noiseXK.so" ]; then
+    cp vendor/stef/liboprf/src/noise_xk/liboprf-noiseXK.so* ${BUILD_DIR}/vendor/stef/liboprf/src/noise_xk/
+fi
 
 # Create version file
 echo "Creating version file..."

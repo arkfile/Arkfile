@@ -1,6 +1,3 @@
-[submodule "vendor/aldenml/ecc"]
-	path = vendor/aldenml/ecc
-	url = https://github.com/aldenml/ecc
 [submodule "vendor/stef/libopaque"]
 	path = vendor/stef/libopaque
 	url = https://github.com/stef/libopaque.git

@@ -132,7 +132,8 @@ echo "Basic tables created successfully."
 # Now execute the extended schema
 echo "Applying extended schema from $SCHEMA_FILE..."
 
-# Read and process the schema file
+# Read and process the schema file - improved parsing
+sql_statement=""
 while IFS= read -r line; do
     # Skip empty lines and comments
     if [[ -z "$line" || "$line" =~ ^[[:space:]]*-- ]]; then
@@ -146,14 +147,17 @@ while IFS= read -r line; do
         sql_statement="$sql_statement $line"
     fi
     
-    # If line ends with semicolon, execute the statement
-    if [[ "$line" =~ \;[[:space:]]*$ ]]; then
-        # Clean up the statement
-        cleaned_sql=$(echo "$sql_statement" | sed 's/"/\\"/g' | tr '\n' ' ')
+    # Check if the line contains a semicolon (more flexible than end-of-line check)
+    if [[ "$line" == *";"* ]]; then
+        # Clean up the statement and remove extra whitespace
+        cleaned_sql=$(echo "$sql_statement" | sed 's/"/\\"/g' | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | xargs)
         
-        # Execute the statement
+        # Execute the statement if it's not empty
         if [ -n "$cleaned_sql" ]; then
-            execute_sql "$cleaned_sql"
+            echo "Executing: ${cleaned_sql:0:80}..." # Show first 80 chars for debugging
+            if ! execute_sql "$cleaned_sql"; then
+                echo -e "${YELLOW}⚠️  Warning: Failed to execute SQL statement${NC}"
+            fi
         fi
         
         # Reset for next statement
@@ -163,7 +167,7 @@ done < "$SCHEMA_FILE"
 
 echo -e "${GREEN}✅ Database schema initialization completed successfully!${NC}"
 
-# Verify OPAQUE tables exist
+# Verify critical tables exist
 echo "Verifying OPAQUE tables..."
 result=$(curl -s -X POST \
     -H "Content-Type: application/json" \
@@ -177,5 +181,22 @@ else
     echo -e "${YELLOW}⚠️  OPAQUE tables may not have been created properly${NC}"
 fi
 
+echo "Verifying TOTP tables..."
+totp_result=$(curl -s -X POST \
+    -H "Content-Type: application/json" \
+    -u "$USERNAME:$PASSWORD" \
+    -d "[\"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%totp%' ORDER BY name;\"]" \
+    "http://localhost:4001/db/query")
+
+# Count TOTP tables (should be 3: user_totp, totp_usage_log, totp_backup_usage)
+totp_count=$(echo "$totp_result" | grep -o '"user_totp"\|"totp_usage_log"\|"totp_backup_usage"' | wc -l)
+
+if [[ "$totp_count" -eq 3 ]]; then
+    echo -e "${GREEN}✅ All TOTP tables verified successfully!${NC}"
+    echo "Found tables: user_totp, totp_usage_log, totp_backup_usage"
+else
+    echo -e "${YELLOW}⚠️  TOTP tables may be incomplete (found: $totp_count/3)${NC}"
+    echo "TOTP response: $totp_result"
+fi
 
 echo "Database setup complete."

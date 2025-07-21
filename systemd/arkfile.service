@@ -16,6 +16,9 @@ ExecStart=/opt/arkfile/bin/arkfile
 # Configuration
 EnvironmentFile=-/opt/arkfile/etc/secrets.env
 
+# Library path for libopaque and liboprf shared libraries
+Environment="LD_LIBRARY_PATH=/opt/arkfile/releases/current/vendor/stef/libopaque/src:/opt/arkfile/releases/current/vendor/stef/liboprf/src:/opt/arkfile/releases/current/vendor/stef/liboprf/src/noise_xk"
+
 # Systemd credentials for sensitive keys
 LoadCredential=opaque_server_key:/opt/arkfile/etc/keys/opaque/server_private.key
 LoadCredential=jwt_signing_key:/opt/arkfile/etc/keys/jwt/current/signing.key

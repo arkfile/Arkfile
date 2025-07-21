@@ -63,7 +63,7 @@ echo "Owner: ${USER}:${GROUP}"
 echo -e "${YELLOW}Note: Generated placeholder keys for development.${NC}"
 echo "Production deployment requires implementing OPAQUE key generation in main.go:"
 echo "  - Add CLI command: arkfile generate-opaque-keys"
-echo "  - Use bytemare/opaque library to generate real keys"
+echo "  - Use libopaque library to generate real keys"
 echo "  - Replace placeholders with actual cryptographic material"
 
 # Validate key files exist and have correct permissions

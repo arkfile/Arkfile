@@ -462,18 +462,65 @@ else
 fi
 
 # Clean up any remaining build artifacts in project directory
-if [ -f "./arkfile" ] || [ -f "./cryptocli" ] || [ -d "./client/static/wasm/" ]; then
+LIBOPAQUE_ARTIFACTS=(
+    "./vendor/stef/libopaque/src/*.o"
+    "./vendor/stef/libopaque/src/*.so"
+    "./vendor/stef/libopaque/src/*.so.*"
+    "./vendor/stef/liboprf/src/*.o"
+    "./vendor/stef/liboprf/src/*.so"
+    "./vendor/stef/liboprf/src/*.so.*"
+    "./vendor/stef/liboprf/src/noise_xk/*.so"
+    "./vendor/stef/liboprf/src/noise_xk/*.so.*"
+    "./vendor/stef/liboprf/src/oprf/"
+    "./auth/libopaque_test/test_basic"
+    "./auth/libopaque_test/test_full_protocol"
+    "./auth/libopaque_test/test_simple_opaque"
+)
+
+PROJECT_ARTIFACTS=(
+    "./arkfile"
+    "./cryptocli"
+    "./client/static/wasm/"
+)
+
+BUILD_ARTIFACTS_FOUND=false
+
+# Check for libopaque build artifacts
+for pattern in "${LIBOPAQUE_ARTIFACTS[@]}"; do
+    if ls $pattern 2>/dev/null | head -1 >/dev/null 2>&1; then
+        print_status "FOUND" "libopaque build artifacts: $pattern"
+        BUILD_ARTIFACTS_FOUND=true
+    fi
+done
+
+# Check for project build artifacts
+for item in "${PROJECT_ARTIFACTS[@]}"; do
+    if [ -f "$item" ] || [ -d "$item" ]; then
+        print_status "FOUND" "Project build artifact: $item"
+        BUILD_ARTIFACTS_FOUND=true
+    fi
+done
+
+if [ "$BUILD_ARTIFACTS_FOUND" = true ]; then
     echo "Build artifacts found in project directory"
     
-    if ask_yes_no "Remove build artifacts from project directory?"; then
-        rm -f ./arkfile ./cryptocli 2>/dev/null || true
-        rm -rf ./client/static/wasm/ 2>/dev/null || true
-        print_status "REMOVED" "Project build artifacts cleaned"
+    if ask_yes_no "Remove all build artifacts (libopaque libraries, binaries, WASM)?"; then
+        # Clean libopaque artifacts
+        for pattern in "${LIBOPAQUE_ARTIFACTS[@]}"; do
+            rm -rf $pattern 2>/dev/null || true
+        done
+        
+        # Clean project artifacts
+        for item in "${PROJECT_ARTIFACTS[@]}"; do
+            rm -rf "$item" 2>/dev/null || true
+        done
+        
+        print_status "REMOVED" "All build artifacts cleaned"
     else
-        print_status "SKIPPED" "Project build artifacts preserved"
+        print_status "SKIPPED" "Build artifacts preserved"
     fi
 else
-    print_status "NOT_FOUND" "No project build artifacts found"
+    print_status "NOT_FOUND" "No build artifacts found"
 fi
 echo
 
