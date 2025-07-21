@@ -4,6 +4,8 @@
 
 This document provides a detailed mapping between the aldenml/ecc OPAQUE API and Stef's libopaque API, including function signatures, parameter mappings, and implementation notes.
 
+**NOTE**: This is a supplemental reference document. For the complete implementation plan and step-by-step instructions, see `use-libopaque-migration-guide.md`.
+
 **UPDATE (7/21/2025)**: This mapping has been validated through comprehensive testing. The libopaque API is simpler and more straightforward than aldenml/ecc, making migration easier than initially anticipated.
 
 ## Core Types and Constants
@@ -384,49 +386,43 @@ libopaque returns error codes while aldenml/ecc uses void functions:
 3. **Cryptographic Parameters**: Verify group, hash, and KDF selections match
 4. **State Serialization**: Test that state can be properly saved/restored
 
-## Next Steps (Updated 7/21/2025)
+## Implementation Reference
 
-### ✅ Completed Steps
-1. ~~Clone and examine libopaque source code~~ - DONE (vendor/stef/libopaque)
-2. ~~Create minimal test program to verify basic functionality~~ - DONE (auth/libopaque_test/)
-3. ~~Test registration and authentication flows~~ - DONE (all tests passing)
-4. ~~Compare outputs with current implementation~~ - DONE (confirmed compatibility)
+**For detailed implementation steps and progress tracking, see: `use-libopaque-migration-guide.md`**
 
-### 📋 Remaining Steps
+### Key Takeaways from API Analysis
 
-1. **Implement Go wrapper functions** (Priority 1)
-   - Create `/auth/opaque_wrapper.c` with C wrapper functions
-   - Update `/auth/opaque_cgo.go` with proper CGO bindings
-   - Map error codes to Go errors
-   - Handle memory management properly
+1. **Simplified API**: libopaque is much simpler than aldenml/ecc
+   - No KE1/KE2/KE3 complexity 
+   - Cleaner function signatures
+   - Built-in state management
 
-2. **Update existing auth package** (Priority 2)
-   - Replace aldenml/ecc function calls in `/auth/opaque.go`
-   - Update state management to match libopaque's approach
-   - Implement proper identity handling with `Opaque_Ids`
-   - Maintain backward compatibility where possible
+2. **Database Compatibility**: ✅ No schema changes needed
+   - Existing BLOB fields work with libopaque data
+   - No migration required for existing users (none exist)
 
-3. **Migrate test suite** (Priority 3)
-   - Update `/auth/opaque_test.go` to use new functions
-   - Port test patterns from C test programs
-   - Add new tests for libopaque-specific features
-   - Verify all edge cases still covered
+3. **Memory Management**: Fixed-size buffers (easier than aldenml/ecc)
 
-4. **WASM compilation testing** (Priority 4)
-   - Test libopaque compilation to WASM
-   - Update `/auth/opaque_wasm.go` if needed
-   - Verify client-side JavaScript integration
-   - Test browser compatibility
+4. **Error Handling**: Consistent return codes (0 = success)
 
-5. **Integration and deployment** (Priority 5)
-   - Update build scripts and Makefiles
-   - Test full registration/login flow end-to-end
-   - Performance benchmarking vs aldenml/ecc
-   - Update deployment documentation
+5. **WASM Critical**: Early testing required for client-side crypto
 
-### 🔧 Technical Tasks
+### Function Summary
 
-- **Build System**: Update CGO flags and library paths
-- **CI/CD**: Add libopaque build steps
-- **Documentation**: Update API documentation with new signatures
-- **Migration**: Plan for existing user data compatibility
+| Purpose | aldenml/ecc | libopaque | Complexity |
+|---------|-------------|-----------|------------|
+| Registration | KE-style multi-step | Simple request/response/finalize | Simpler |
+| Authentication | KE1/KE2/KE3 flow | request/response/recover/validate | Much Simpler |
+| State Management | Manual KE state | Internal handling | Much Simpler |
+| Error Handling | Void functions | Return codes | More Consistent |
+
+### Next Steps Summary
+
+See `use-libopaque-migration-guide.md` for:
+- [ ] Complete step-by-step implementation plan
+- [ ] Detailed technical specifications  
+- [ ] Progress tracking checklists
+- [ ] Build system configuration
+- [ ] Testing strategies
+
+This document serves as an API reference during implementation.

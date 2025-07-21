@@ -206,48 +206,242 @@ This document outlines the step-by-step process for migrating Arkfile's OPAQUE i
 4. **Test Suite Created**: Comprehensive C tests demonstrating all functionality
 5. **Documentation Updated**: Analysis and recommendations documented
 
-## Next Steps - Phase 2
+## Next Steps - Phase 2 (Updated Implementation Plan)
 
 ### Immediate Tasks
 
-1. **Create Go Bindings** (Priority 1)
+1. **Remove aldenml/ecc + Create Go Bindings** (Priority 1)
+   - **REMOVE**: Complete removal of all aldenml/ecc code and references
    - Update `/auth/opaque_cgo.go` with libopaque bindings
    - Create wrapper functions in `/auth/opaque_wrapper.c`
    - Update build tags and CGO flags
+   - Remove aldenml/ecc from vendor directory and build scripts
 
-2. **Implement Core Functions** (Priority 2)
-   - Replace aldenml/ecc calls with libopaque equivalents
-   - Update state management to match libopaque's approach
+2. **WASM Compilation Testing** (Priority 2 - CRITICAL)
+   - Test libopaque compilation to WASM immediately
+   - Ensure client-side crypto compatibility early
+   - Update `/auth/opaque_wasm.go` as needed
+   - Verify browser integration with new library
+
+3. **Core Go Implementation** (Priority 3)
+   - Replace aldenml/ecc calls with libopaque equivalents in `/auth/opaque.go`
+   - Update state management to match libopaque's simpler approach
    - Implement identity handling using `Opaque_Ids`
+   - Maintain existing function signatures for compatibility
 
-3. **Update Test Suite** (Priority 3)
+4. **Test Migration** (Priority 4)
    - Migrate existing Go tests to use libopaque
    - Add new tests for libopaque-specific features
-   - Ensure backward compatibility where needed
+   - Use C test patterns as reference for Go test implementation
 
-4. **WASM Compilation** (Priority 4)
-   - Test libopaque compilation to WASM
-   - Update client-side code if needed
-   - Verify browser compatibility
+5. **Build System Integration** (Priority 5)
+   - Integrate libopaque compilation into `/scripts/setup/build.sh`
+   - Update all build scripts to include libopaque
+   - Remove aldenml/ecc build steps
 
-### Technical Considerations
+### Detailed Implementation Steps
 
-1. **Memory Management**:
-   - libopaque uses fixed-size buffers
-   - Need careful memory handling in CGO layer
-   - Consider using defer for cleanup
+#### Priority 1: Remove aldenml/ecc + Create Go Bindings
 
-2. **Error Handling**:
-   - libopaque returns error codes (0 = success)
-   - Map to Go errors appropriately
-   - Preserve error context
+**Step 1.1: Complete aldenml/ecc Removal**
+- [ ] Remove aldenml/ecc submodule from vendor directory
+- [ ] Delete all references in `/auth/opaque.go`
+- [ ] Remove aldenml/ecc CGO flags from `/auth/opaque_cgo.go`
+- [ ] Clean up any remaining imports or references
+- [ ] Update go.mod if needed
 
-3. **State Management**:
-   - libopaque state differs from aldenml/ecc
-   - May need to adjust database schema
-   - Consider migration path for existing users
+**Step 1.2: Create libopaque C Wrapper**
+- [ ] Update `/auth/opaque_wrapper.c` with libopaque functions:
+  ```c
+  // Registration functions
+  int arkfile_opaque_register_user(const char* password, size_t pwd_len, 
+                                   uint8_t* user_record, uint8_t* export_key);
+  
+  // Authentication functions  
+  int arkfile_opaque_authenticate_user(const char* password, size_t pwd_len,
+                                       const uint8_t* user_record, uint8_t* session_key);
+  ```
 
-4. **Build Configuration**:
-   - Update Makefile/build scripts
-   - Set proper library paths
-   - Handle dynamic linking correctly
+**Step 1.3: Update Go CGO Bindings**
+- [ ] Update `/auth/opaque_cgo.go` with new CGO directives:
+  ```go
+  /*
+  #cgo CFLAGS: -I../vendor/stef/libopaque/src -I../vendor/stef/liboprf/src
+  #cgo LDFLAGS: -L../vendor/stef/libopaque/src -L../vendor/stef/liboprf/src 
+  #cgo LDFLAGS: -lopaque -loprf -loprf-noiseXK
+  #include "opaque_wrapper.h"
+  */
+  import "C"
+  ```
+
+**Step 1.4: Error Code Mapping**
+- [ ] Create Go error mapping for libopaque return codes
+- [ ] Implement proper error context preservation
+- [ ] Add logging for debugging CGO interface
+
+#### Priority 2: WASM Compilation Testing (CRITICAL)
+
+**Step 2.1: Test Basic WASM Compilation**
+- [ ] Attempt to compile libopaque to WASM:
+  ```bash
+  cd vendor/stef/libopaque
+  emcc src/*.c -o libopaque.wasm -s EXPORTED_FUNCTIONS='[...]'
+  ```
+
+**Step 2.2: Update WASM Go Build**
+- [ ] Update `/auth/opaque_wasm.go` for libopaque compatibility
+- [ ] Test Go WASM compilation with new library
+- [ ] Verify WASM file size and performance
+
+**Step 2.3: Browser Integration Testing**
+- [ ] Test WASM loading in browser
+- [ ] Verify JavaScript/Go bridge functions work
+- [ ] Test registration and login flows in browser
+- [ ] Check for any WASM-specific issues
+
+#### Priority 3: Core Go Implementation
+
+**Step 3.1: Update RegisterUser Function**
+- [ ] Replace aldenml/ecc calls with libopaque in `RegisterUser()`
+- [ ] Implement simplified registration flow:
+  - `opaque_CreateRegistrationRequest` (client simulation)
+  - `opaque_CreateRegistrationResponse` (server)
+  - `opaque_FinalizeRequest` (client simulation)
+  - `opaque_StoreUserRecord` (server storage)
+
+**Step 3.2: Update AuthenticateUser Function**  
+- [ ] Replace aldenml/ecc calls with libopaque in `AuthenticateUser()`
+- [ ] Implement simplified authentication flow:
+  - `opaque_CreateCredentialRequest` (client simulation)
+  - `opaque_CreateCredentialResponse` (server)
+  - `opaque_RecoverCredentials` (client simulation)
+  - `opaque_UserAuth` (server validation)
+
+**Step 3.3: Update Server Key Management**
+- [ ] Update `SetupServerKeys()` for libopaque key format
+- [ ] Update `loadServerKeys()` for new key structure
+- [ ] Ensure key storage/loading compatibility
+
+**Step 3.4: Identity Handling**
+- [ ] Implement `Opaque_Ids` structure usage
+- [ ] Handle client/server identity management
+- [ ] Test with and without identities (libopaque supports NULL)
+
+#### Priority 4: Test Migration
+
+**Step 4.1: Update Unit Tests**
+- [ ] Update `/auth/opaque_test.go` with new function calls
+- [ ] Port test patterns from successful C tests
+- [ ] Test error conditions and edge cases
+- [ ] Verify memory management (no leaks)
+
+**Step 4.2: Integration Tests**  
+- [ ] Update `/handlers/auth_test.go` for new implementation
+- [ ] Test full registration/login HTTP flows
+- [ ] Test session key consistency
+- [ ] Verify database interactions work correctly
+
+**Step 4.3: New libopaque-specific Tests**
+- [ ] Test `opaque_Register` one-step registration
+- [ ] Test identity handling (with and without IDs)
+- [ ] Test libopaque error conditions
+- [ ] Performance comparison vs baseline
+
+#### Priority 5: Build System Integration
+
+**Step 5.1: Update Build Scripts**
+- [ ] Modify `/scripts/setup/build.sh` to compile libopaque
+- [ ] Add libopaque build steps to `/scripts/setup/03-setup-opaque-keys.sh`
+- [ ] Update `/scripts/quick-start.sh` for new dependencies
+- [ ] Remove all aldenml/ecc build steps
+
+**Step 5.2: Create New Build Scripts**
+- [ ] Create `/scripts/setup/compile-libopaque.sh`:
+  ```bash
+  #!/bin/bash
+  cd vendor/stef/libopaque && make
+  cd ../liboprf && make
+  ```
+- [ ] Create `/scripts/maintenance/update-libopaque.sh`
+- [ ] Update deployment scripts
+
+**Step 5.3: Final Integration Testing**
+- [ ] Test complete build from scratch
+- [ ] Verify all dependencies are satisfied
+- [ ] Test on clean system
+- [ ] Performance benchmarking vs aldenml/ecc baseline
+
+### Technical Implementation Details
+
+#### Database Schema Compatibility ✅
+- **CONFIRMED**: No schema changes needed
+- `opaque_server_keys` BLOB fields work with libopaque keys
+- `opaque_user_data.serialized_record` BLOB works with libopaque user records
+- Existing users: N/A (no existing users to migrate)
+
+#### Build System Configuration
+**CGO Flags Update:**
+```go
+/*
+#cgo CFLAGS: -I../vendor/stef/libopaque/src -I../vendor/stef/liboprf/src -I../vendor/stef/liboprf/src/noise_xk
+#cgo LDFLAGS: -L../vendor/stef/libopaque/src -L../vendor/stef/liboprf/src -L../vendor/stef/liboprf/src/noise_xk
+#cgo LDFLAGS: -lopaque -loprf -loprf-noiseXK -lsodium
+*/
+```
+
+**Library Requirements:**
+- `libopaque.so` - Main OPAQUE implementation
+- `liboprf.so` - OPRF dependency  
+- `liboprf-noiseXK.so` - Noise protocol support
+- `libsodium` - Crypto primitives
+
+#### Memory Management Strategy
+- **Fixed-size Buffers**: libopaque uses constants (simpler than aldenml/ecc)
+- **Buffer Sizes**: Use libopaque constants from opaque.h
+- **Cleanup Pattern**: 
+  ```go
+  defer func() {
+      crypto.SecureZeroBytes(sessionKey)
+      crypto.SecureZeroBytes(exportKey)
+  }()
+  ```
+
+#### State Management Simplification
+**Before (aldenml/ecc)**: Complex KE1/KE2/KE3 flow with separate state management
+**After (libopaque)**: Simplified flow with internal state handling
+- Registration: Request → Response → Finalize → Store
+- Authentication: Request → Response → Recover → Validate
+
+#### Error Handling Pattern
+```go
+func libopaqueWrapper(/* params */) error {
+    ret := C.opaque_function(/* C params */)
+    if ret != 0 {
+        return fmt.Errorf("libopaque operation failed: error code %d", ret)
+    }
+    return nil
+}
+```
+
+### Progress Tracking Checklist
+
+#### Phase 1 ✅ COMPLETED
+- [x] Library selection and validation
+- [x] Build system setup
+- [x] API compatibility testing
+- [x] C test programs created and passing
+
+#### Phase 2 - Implementation (Current)
+- [ ] Priority 1: aldenml/ecc removal + Go bindings
+- [ ] Priority 2: WASM compilation testing
+- [ ] Priority 3: Core Go implementation
+- [ ] Priority 4: Test migration
+- [ ] Priority 5: Build system integration
+
+#### Success Criteria
+- [ ] All tests pass with libopaque
+- [ ] WASM compilation works in browser
+- [ ] No memory leaks detected
+- [ ] Performance equal or better than aldenml/ecc
+- [ ] Clean build from scratch
+- [ ] Complete removal of aldenml/ecc dependencies
