@@ -33,6 +33,7 @@ scripts/
 │   ├── test-only.sh                  # Run test suite
 │   ├── test-wasm.sh                  # WebAssembly tests
 │   ├── test-totp.sh                  # TOTP implementation tests
+│   ├── test-typescript.sh            # TypeScript testing suite
 │   ├── performance-benchmark.sh      # Performance testing
 │   ├── golden-test-preservation.sh   # Format compatibility tests
 │   └── admin-integration-test.sh     # Admin integration tests
@@ -158,6 +159,19 @@ The setup scripts are numbered to show their logical dependency order:
 **Purpose**: Test TOTP implementation  
 **Usage**: `./scripts/testing/test-totp.sh`  
 **Tests**: TOTP generation, validation, backup codes
+
+#### `test-typescript.sh`
+**Purpose**: Comprehensive TypeScript testing suite  
+**Usage**: `./scripts/testing/test-typescript.sh [option]`  
+**Options**:
+- `type-check` - Run TypeScript type checking only
+- `build` - Run build tests only
+- `unit` - Run unit tests only
+- `integration` - Run integration tests only
+- `wasm` - Run WASM tests only
+- `help` - Show help message
+**Tests**: TypeScript compilation, Bun testing, WASM integration, build validation
+**Prerequisites**: Bun runtime installed for client-side testing
 
 #### `performance-benchmark.sh`
 **Purpose**: Performance testing and benchmarking  

@@ -172,6 +172,17 @@ sudo apt install -y curl wget git build-essential sqlite3 openssl
 sudo dnf install -y curl wget git gcc make sqlite openssl
 ```
 
+**Development Dependencies (Optional):**
+For development and TypeScript compilation, install additional dependencies:
+```bash
+# Install Bun (JavaScript runtime and bundler)
+curl -fsSL https://bun.sh/install | bash
+source ~/.bashrc
+
+# Verify Bun installation
+bun --version
+```
+
 ### Production Installation
 
 **Option 1: Integration Test Script (Recommended)**
@@ -379,6 +390,13 @@ echo "Hello Arkfile! Test file for validation." > ~/test-file.txt
    - Copy generated share link
    - Open incognito browser window
    - Visit share link and verify file downloads
+
+5. **TOTP Multi-Factor Authentication Test:**
+   - Navigate to user settings or account page
+   - Enable TOTP by scanning QR code with authenticator app
+   - Complete TOTP setup by entering verification code
+   - Log out and log back in to verify TOTP requirement
+   - Test backup codes for account recovery
 
 ### Backend Verification
 

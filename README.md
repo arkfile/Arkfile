@@ -13,10 +13,11 @@ Because of this “zero-knowledge” design, only you – and anyone you choose 
 ## 2. Why People Use It
 
 1. **Privacy first** – files are encrypted on your device.  
-2. **Share safely** – you can create extra “one-time” keys for friends or co-workers without giving them your main password.  
-3. **Pick your storage** – use the built-in MinIO server for quick tests or point Arkfile at Backblaze B2, Wasabi, Vultr Object Storage, and other S3-compatible back-ends.  
-4. **Runs anywhere** – one binary, no external database. (Arkfile uses the lightweight rqlite engine under the hood.)  
-5. **Open source** – anyone can inspect or improve the code.
+2. **Share safely** – you can create extra "one-time" keys for friends or co-workers without giving them your main password.  
+3. **Multi-factor security** – TOTP authentication adds an extra layer of protection beyond your password.  
+4. **Pick your storage** – use the built-in MinIO server for quick tests or point Arkfile at Backblaze B2, Wasabi, Vultr Object Storage, and other S3-compatible back-ends.  
+5. **Runs anywhere** – one binary, no external database. (Arkfile uses the lightweight rqlite engine under the hood.)  
+6. **Open source** – anyone can inspect or improve the code.
 
 ## 3. One-Minute Quick Start
 
@@ -36,8 +37,8 @@ Once it finishes, open the URL and create your first account.
 
 - **Zero-knowledge:** The server never learns your files or passwords because everything is encrypted before upload.
 - **Encryption (AES-256-GCM):** A modern algorithm that scrambles data and checks its integrity at the same time.
-- **Argon2id:** A “memory-hard” function that turns your password into a strong key and slows down attackers.
 - **OPAQUE:** A login method where the server never sees your password, even in scrambled form.
+- **TOTP:** Time-based One-Time Password - generates temporary codes on your phone for extra security.
 - **rqlite:** A small database that keeps data in sync across nodes without extra setup.
 - **MinIO:** An open-source S3-compatible storage server that works as a single node or in a cluster.
 

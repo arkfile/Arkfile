@@ -28,7 +28,29 @@ The tables below list every current HTTP endpoint exposed by Arkfile v1.
 | POST | `/api/revoke-token` | Revoke an arbitrary token (self-service) | Access | `curl -X POST -H "Authorization: Bearer $TOK" -d '{"token":"…"}' http://localhost:8080/api/revoke-token` |
 | POST | `/api/revoke-all` | Revoke **all** tokens belonging to the user | Access | `curl -X POST -H "Authorization: Bearer $TOK" http://localhost:8080/api/revoke-all` |
 
-### 2 • Files
+### 2 • Multi-Factor Authentication (TOTP)
+
+Arkfile supports Time-based One-Time Password (TOTP) as a second factor of authentication. When TOTP is enabled, users must complete both OPAQUE authentication and provide a valid TOTP code to access their account.
+
+| Method | Path | Purpose | Auth | Example |
+|--------|------|---------|------|---------|
+| POST | `/api/totp/setup` | Initialize TOTP setup for user account | Access | `curl -X POST -H "Authorization: Bearer $TOK" -d '{"sessionKey":"..."}' http://localhost:8080/api/totp/setup` |
+| POST | `/api/totp/verify` | Complete TOTP setup by verifying a test code | Access | `curl -X POST -H "Authorization: Bearer $TOK" -d '{"code":"123456","sessionKey":"..."}' http://localhost:8080/api/totp/verify` |
+| GET  | `/api/totp/status` | Check TOTP enablement status for user | Access | `curl -H "Authorization: Bearer $TOK" http://localhost:8080/api/totp/status` |
+| POST | `/api/totp/disable` | Disable TOTP for user account | Access | `curl -X POST -H "Authorization: Bearer $TOK" -d '{"currentCode":"123456","sessionKey":"..."}' http://localhost:8080/api/totp/disable` |
+| POST | `/api/totp/auth` | Complete TOTP authentication flow | TOTP Token | `curl -X POST -H "Authorization: Bearer $TOTP_TOK" -d '{"code":"123456","sessionKey":"..."}' http://localhost:8080/api/totp/auth` |
+
+#### TOTP Authentication Flow
+
+When TOTP is enabled for a user account, the authentication process involves two steps. First, the user performs OPAQUE authentication via `/api/opaque/login`. If TOTP is enabled, this endpoint returns a temporary token and session key instead of a full access token. The response includes `requiresTOTP: true` to indicate that additional authentication is required.
+
+Second, the user must provide a TOTP code via `/api/totp/auth` using the temporary token. Upon successful verification, this endpoint returns the full access token and refresh token needed for subsequent API calls. The system also supports backup codes for recovery when the TOTP device is unavailable.
+
+#### TOTP Setup Process
+
+Setting up TOTP requires an existing authenticated session. The `/api/totp/setup` endpoint generates a secret key, QR code URL, and backup codes. The user must scan the QR code with their authenticator app and then verify the setup by providing a test code via `/api/totp/verify`. This two-step process ensures the TOTP configuration is working correctly before enabling it for the account.
+
+### 3 • Files
 
 | Method | Path | Purpose | Auth | Example |
 |--------|------|---------|------|---------|
@@ -47,7 +69,7 @@ The tables below list every current HTTP endpoint exposed by Arkfile v1.
 | GET  | `/api/uploads/:sessionId/status` | Check progress | Access |
 | DELETE | `/api/uploads/:sessionId` | Cancel and discard the session | Access |
 
-### 3 • Sharing
+### 4 • Sharing
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
@@ -66,7 +88,7 @@ Public endpoints for the recipients of a share:
 | POST | `/api/shared/:shareId/auth` | Same as `/shared/:id/auth` but JSON | Public |
 | GET  | `/api/shared/:shareId/download` | File download via API | Public |
 
-### 4 • File Keys (Encryption Management)
+### 5 • File Keys (Encryption Management)
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
@@ -76,7 +98,7 @@ Public endpoints for the recipients of a share:
 | PATCH | `/api/files/:filename/keys/:keyId` | Edit key metadata | Access |
 | POST | `/api/files/:filename/keys/:keyId/set-primary` | Mark a key as primary | Access |
 
-### 5 • Administration (Requires **Admin Token**)
+### 6 • Administration (Requires **Admin Token**)
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -86,7 +108,7 @@ Public endpoints for the recipients of a share:
 | GET  | `/api/admin/stats` | System statistics |
 | GET  | `/api/admin/activity` | Security & activity logs |
 
-### 6 • Miscellaneous
+### 7 • Miscellaneous
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|

@@ -27,11 +27,12 @@ This separation ensures that compromise of one system does not affect the securi
 Arkfile implements multiple layers of security:
 
 1. **Transport Layer**: TLS 1.3 encryption for all communications
-2. **Authentication**: OPAQUE password-authenticated key exchange (PAKE)
-3. **File Encryption**: AES-256-GCM with independent key derivation
+2. **Authentication**: OPAQUE password-authenticated key exchange (PAKE) with optional TOTP multi-factor authentication
+3. **File Encryption**: AES-256-GCM with independent key derivation and multi-key support
 4. **Key Management**: Secure key generation, storage, and rotation
 5. **Access Control**: Role-based access with JWT token validation
-6. **Audit Logging**: Comprehensive security event tracking
+6. **Client-Side Security**: TypeScript-based architecture with WebAssembly cryptographic operations
+7. **Audit Logging**: Comprehensive security event tracking
 
 ### Cryptographic Domain Separation
 
@@ -60,13 +61,13 @@ Arkfile implements multiple layers of security:
 
 ### Cryptographic Implementation
 
-The file encryption system uses a two-layer approach combining Argon2ID for key derivation with AES-256-GCM for file encryption.
+The file encryption system uses secure key generation combined with AES-256-GCM for file encryption.
 
-**Argon2ID Key Derivation:**
-- Memory-hard key derivation function
-- Protection against brute-force attacks
-- GPU and ASIC-resistant design
-- Parameters: 4 iterations, 128MB memory usage, 4 threads of parallelism
+**Key Generation:**
+- Cryptographically secure random key generation for each file
+- Independent keys prevent cross-file compromise
+- No password-derived keys that require salt storage
+- Session-based key derivation from OPAQUE authentication
 
 **AES-256-GCM Encryption:**
 - 256-bit Advanced Encryption Standard
@@ -136,32 +137,39 @@ Arkfile implements OPAQUE (Oblivious Pseudorandom Functions for Key Exchange), a
    - Independent from file encryption keys
    - Ephemeral keys for forward secrecy
 
-### Hybrid Argon2ID-OPAQUE Architecture
+### OPAQUE Security Properties
 
-**Client-Side Hardening:**
-- Argon2ID applied before OPAQUE processing
-- Adaptive parameters based on device capabilities
-- Protection against ASIC and GPU attacks
-- Maintains usability across device types
+**Protocol Security:**
+- Password-blind key exchange prevents server learning passwords
+- Mutual authentication ensures both parties are legitimate
+- Forward secrecy through ephemeral session keys
+- No password-derived salts stored server-side
 
-**Server-Side Hardening:**
-- Additional Argon2ID applied to OPAQUE envelopes
-- Maximum parameters (128MB memory, 4 iterations, 4 threads)
-- Prevents credential stuffing attacks
-- Establishes minimum computational costs
+**Resistance Properties:**
+- Offline dictionary attack resistance
+- Server compromise protection
+- Pre-computation attack immunity
+- Side-channel attack mitigation
 
-### Device-Adaptive Security Parameters
+### Time-Based One-Time Password (TOTP) Multi-Factor Authentication
 
-**Device Profiles:**
-- **Interactive**: 32MB memory, 1 iteration, 2 threads (mobile devices)
-- **Balanced**: 64MB memory, 2 iterations, 2 threads (mid-range hardware)
-- **Maximum**: 128MB memory, 4 iterations, 4 threads (high-end systems)
+Arkfile provides optional TOTP-based multi-factor authentication as an additional security layer beyond OPAQUE. When enabled, users must complete both OPAQUE authentication and provide a valid TOTP code to access their accounts.
 
-**Capability Detection:**
-- Performance benchmarking during authentication
-- Automatic profile selection based on hardware
-- Minimum security thresholds enforced
-- Reasonable authentication times maintained
+**TOTP Security Features:**
+- RFC 6238 compliant implementation using HMAC-SHA1
+- 30-second time windows with one-step tolerance for clock skew
+- Cryptographically secure secret generation (32 bytes entropy)
+- Backup codes for account recovery (10 codes, single use)
+- Session key integration for enhanced security
+
+**Authentication Flow Enhancement:**
+When TOTP is enabled, the OPAQUE login process returns a temporary token instead of full access credentials. This temporary token permits only TOTP verification operations and expires after 10 minutes if unused. Upon successful TOTP verification, the system issues full access and refresh tokens for normal operation.
+
+**Recovery Mechanisms:**
+The system generates cryptographically secure backup codes during TOTP setup. Each backup code is a 12-character alphanumeric string that can be used once in place of a TOTP code. Used backup codes are immediately invalidated and logged as security events. Backup codes provide essential account recovery when the primary TOTP device is unavailable.
+
+**Integration Security:**
+TOTP secrets are encrypted using the user's OPAQUE-derived session key, ensuring that TOTP data remains cryptographically bound to the user's password. This approach prevents TOTP bypass attacks even in scenarios where database access is compromised but user passwords remain secure.
 
 ## Session Management
 
@@ -265,9 +273,9 @@ Root Security
 ### Authentication Security
 
 **OPAQUE Protocol Security:**
-- Registration flow with client-side Argon2ID
+- Pure OPAQUE registration and authentication flow
 - OPAQUE blinding prevents password transmission
-- Server-side hardening of stored envelopes
+- No client-side password hardening needed
 - Mutual authentication with replay protection
 
 **Session Validation:**

@@ -6,13 +6,13 @@ This document explains, in plain language, how Arkfile keeps user data private.
 
 Arkfile is designed so the server never sees unencrypted content or user passwords.
 
-All sensitive processing happens on the client (browser or desktop app) before any data leaves the user’s device.
+All sensitive processing happens on the client (browser or desktop app) before any data leaves the user's device.
 
 ## 2. Password Protection
 
-Arkfile uses the **OPAQUE** protocol – a modern “password-authenticated key exchange”.  
+Arkfile uses the **OPAQUE** protocol – a modern "password-authenticated key exchange".  
 - Your password is never sent to the server, not even in hashed form.  
-- Before OPAQUE runs, the client strengthens the password with **Argon2id** (128 MB memory, 4 iterations by default).  
+- OPAQUE handles password authentication without requiring additional password hardening.
 
 This combination defends against offline guessing if server data is ever stolen.
 
@@ -23,7 +23,7 @@ Every file is encrypted **client-side** via WebAssembly code compiled from the G
 | Step | Detail |
 |------|--------|
 | Key generation | A fresh 256-bit random key is created for **each file**. |
-| Key derivation | The key is wrapped with Argon2id using the user’s master password so only that user can decrypt it. |
+| Key derivation | The key is wrapped using session keys derived from OPAQUE authentication so only that user can decrypt it. |
 | Encryption | File chunks (16 MB) are sealed with **AES-256-GCM**, providing confidentiality and integrity. |
 | Upload | Only the ciphertext is transmitted and stored on the server or S3-compatible back-ends. |
 
@@ -74,10 +74,16 @@ WHERE event_type = 'opaque_login_failure'
 
 ## 7. File Size Padding
 
-To prevent attackers from identifying files by their exact size, Arkfile adds random padding to uploaded files:
-- Files are padded to the nearest size tier (64KB, 1MB, 10MB, or 100MB blocks)
-- An additional 0-10% random padding is added within each tier
-- **Important:** Users are not penalized for this privacy-enhancing padding in their total storage utilization. The padding exists only at the storage layer for privacy protection, while all user-facing metrics and limits are based on the original file sizes.
+To prevent attackers from identifying files by their exact size, Arkfile implements a sophisticated file size padding system that obscures the true size of uploaded files while maintaining storage efficiency.
+
+**Padding Methodology:**
+Files are padded using a tiered approach that balances privacy protection with storage efficiency. The system applies padding to the nearest size tier, with tiers defined as 64KB, 1MB, 10MB, and 100MB blocks. Within each tier, an additional random padding of 0-10% is applied to prevent exact size correlation attacks.
+
+**Storage Layer Implementation:**
+The padding occurs exclusively at the storage backend level, meaning that encrypted file data stored in MinIO or other S3-compatible services includes this privacy-enhancing padding. However, all user-facing interfaces, storage quotas, and utilization calculations operate on the original file sizes, ensuring users are not penalized for privacy protection.
+
+**Privacy Benefits:**
+This approach prevents several classes of attacks including file fingerprinting based on exact byte counts, correlation attacks across multiple uploads of the same file, and metadata inference attacks that attempt to determine file types or contents based on size patterns. The random component within each tier ensures that even identical files do not produce identical storage footprints.
 
 ## 8. Storage Back-Ends
 
@@ -89,15 +95,14 @@ Encrypted file data is opaque to the storage provider; none of them receive decr
 
 - **Zero-knowledge:** The server never possesses the information needed to decrypt user data.
 - **OPAQUE:** A protocol that lets users prove they know their password without revealing it.
-- **Argon2id:** A CPU- and memory-intensive function that turns a password into a strong cryptographic key.
 - **AES-256-GCM:** An encryption mode that hides data and detects tampering in one step.
 - **HMAC:** A keyed hash that turns input (e.g., an IP address) into an irreversible digest.
-- **Entity ID:** A short, daily-rotating code derived from the user’s IP; used in logs instead of raw IP or email.
+- **Entity ID:** A short, daily-rotating code derived from the user's IP; used in logs instead of raw IP or email.
 - **Ciphertext:** The scrambled output of an encryption algorithm.
 
 ---
 
-Arkfile’s architecture ensures that even if servers or storage providers are compromised, attackers cannot read user files or passwords without access to client-side secrets.
+Arkfile's architecture ensures that even if servers or storage providers are compromised, attackers cannot read user files or passwords without access to client-side secrets.
 
 ---
 
