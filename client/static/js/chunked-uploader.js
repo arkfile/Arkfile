@@ -44,13 +44,19 @@ class ChunkedUploader {
             this.passwordHint = passwordOptions.hint || '';
             
             if (this.passwordType === 'account') {
-                const securityContext = window.arkfileSecurityContext;
+                // Use secure session validation via WASM
+                const userEmail = getUserEmailFromToken();
+                if (!userEmail) {
+                    throw new Error('Cannot determine user email. Please log in again.');
+                }
                 
-                if (!securityContext || Date.now() > securityContext.expiresAt) {
+                const sessionValidation = validateSecureSession(userEmail);
+                if (!sessionValidation.valid) {
                     throw new Error('Your session has expired. Please log in again.');
                 }
                 
-                this.password = securityContext.sessionKey;
+                this.password = null; // Use secure session in WASM - no password exposed to JavaScript
+                this.userEmail = userEmail; // Store user email for secure session operations
             } else {
                 // For custom password
                 this.password = passwordOptions.password;
@@ -193,17 +199,24 @@ class ChunkedUploader {
             await initWasm();
         }
         
-        // Ensure we have the file key
-        await this.deriveFileKey();
-        
-        // Encrypt the chunk using WASM's encryptFile function
-        // This now uses Argon2ID for key derivation (file-level)
         const dataBytes = new Uint8Array(chunkData);
-        const encryptedBase64 = encryptFile(dataBytes, this.fileKey, this.passwordType);
+        let encryptedBase64;
+        
+        if (this.passwordType === 'account') {
+            // Use secure session encryption for account-encrypted files
+            const encryptResult = encryptFileWithSecureSession(dataBytes, this.userEmail);
+            if (!encryptResult.success) {
+                throw new Error('Failed to encrypt chunk: ' + encryptResult.error);
+            }
+            encryptedBase64 = encryptResult.data;
+        } else {
+            // Use custom password encryption
+            encryptedBase64 = encryptFile(dataBytes, this.password, this.passwordType);
+        }
         
         return {
             data: encryptedBase64,
-            iv: this.fileSalt // Return file salt instead of per-chunk IV
+            iv: this.fileSalt || 'secure-session' // Return file salt or indicate secure session
         };
     }
 

@@ -50,7 +50,7 @@ window.securityUtils = (function() {
     }
 
     /**
-     * Validates password complexity using WASM
+     * Validates password complexity using WASM ONLY
      * @param {string} password - Password to validate
      * @returns {Object} - Validation result {valid: boolean, message: string}
      */
@@ -60,34 +60,11 @@ window.securityUtils = (function() {
             return result; // Returns {valid: boolean, message: string}
         }
         
-        // Fallback validation if WASM is not available
-        if (!password) {
-            return { valid: false, message: 'Password is required' };
-        }
-
-        if (password.length < 14) {
-            return { valid: false, message: 'Password must be at least 14 characters long' };
-        }
-
-        const hasUppercase = /[A-Z]/.test(password);
-        const hasLowercase = /[a-z]/.test(password);
-        const hasNumber = /[0-9]/.test(password);
-        const hasSymbol = /[`~!@#$%^&*()-_=+\[\]{}|;:,.<>?]/.test(password);
-
-        if (!hasUppercase) {
-            return { valid: false, message: 'Password must contain at least one uppercase letter' };
-        }
-        if (!hasLowercase) {
-            return { valid: false, message: 'Password must contain at least one lowercase letter' };
-        }
-        if (!hasNumber) {
-            return { valid: false, message: 'Password must contain at least one digit' };
-        }
-        if (!hasSymbol) {
-            return { valid: false, message: 'Password must contain at least one special character: `~!@#$%^&*()-_=+[]{}|;:,.<>?' };
-        }
-
-        return { valid: true, message: 'Password meets requirements' };
+        // SECURITY: No fallback validation - WASM ONLY
+        return { 
+            valid: false, 
+            message: 'Password validation requires WASM. Please refresh the page and try again.' 
+        };
     }
 
     /**

@@ -136,6 +136,17 @@ deploy_test/
 package_test/
 release_test/
 
+# Node.js / Bun / TypeScript artifacts
+node_modules/
+client/static/js/node_modules/
+*.lockb
+bun.lockb
+package-lock.json
+yarn.lock
+client/static/js/dist/
+dist/
+.tsbuildinfo
+
 # Runtime artifacts
 pid/
 *.pid

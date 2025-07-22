@@ -34,7 +34,7 @@ async function uploadFileWithMultiKey(file, options) {
         const passwordOptions = {
             type: useAccountPassword ? 'account' : 'custom',
             password: useAccountPassword ? 
-                window.arkfileSecurityContext?.sessionKey : 
+                null : // Use secure session in WASM - no password exposed to JavaScript
                 customPassword,
             hint: passwordHint
         };
@@ -67,9 +67,14 @@ async function addSharingKey(filename, customPassword, keyLabel = "Sharing Key",
         throw new Error(validation.message);
     }
     
-    // Check session
-    const securityContext = window.arkfileSecurityContext;
-    if (!securityContext || Date.now() > securityContext.expiresAt) {
+    // Check secure session via WASM
+    const userEmail = getUserEmailFromToken();
+    if (!userEmail) {
+        throw new Error('Cannot determine user email. Please log in again.');
+    }
+    
+    const sessionValidation = validateSecureSession(userEmail);
+    if (!sessionValidation.valid) {
         throw new Error('Your session has expired. Please log in again.');
     }
     
@@ -93,37 +98,48 @@ async function addSharingKey(filename, customPassword, keyLabel = "Sharing Key",
     let updatedEncryptedData;
     
     if (data.multiKey) {
-        // Already a multi-key file, just add a new key
-        updatedEncryptedData = addKeyToEncryptedFile(
+        // Already a multi-key file, just add a new key - use secure session
+        const addKeyResult = addKeyToEncryptedFileWithSecureSession(
             data.data, 
-            securityContext.sessionKey,
+            userEmail,
             customPassword,
             keyId
         );
+        if (!addKeyResult.success) {
+            throw new Error('Failed to add key: ' + addKeyResult.error);
+        }
+        updatedEncryptedData = addKeyResult.data;
     } else {
         // First-time conversion from single-key to multi-key
-        // 1. Decrypt with current key
-        const decryptedData = decryptFile(data.data, securityContext.sessionKey);
+        // 1. Decrypt with secure session
+        const decryptResult = decryptFileWithSecureSession(data.data, userEmail);
+        if (!decryptResult.success) {
+            throw new Error('Failed to decrypt file for key addition: ' + decryptResult.error);
+        }
         
         // 2. Convert base64 to binary
-        const binary = atob(decryptedData);
+        const binary = atob(decryptResult.data);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) {
             bytes[i] = binary.charCodeAt(i);
         }
         
-        // 3. Re-encrypt with multi-key format (both keys)
+        // 3. Re-encrypt with multi-key format using secure session
         const additionalKeys = [{ 
             password: customPassword, 
             id: keyId 
         }];
         
-        updatedEncryptedData = encryptFileMultiKey(
+        const encryptResult = encryptFileMultiKeyWithSecureSession(
             bytes, 
-            securityContext.sessionKey,
+            userEmail,
             "account",
             additionalKeys
         );
+        if (!encryptResult.success) {
+            throw new Error('Failed to convert to multi-key format: ' + encryptResult.error);
+        }
+        updatedEncryptedData = encryptResult.data;
     }
     
     // Save the updated file encryption
@@ -265,15 +281,20 @@ window.downloadFile = async function(filename, hint, expectedHash, passwordType,
     let password;
     
     if (passwordType === 'account') {
-        // For account-encrypted files, use the session key
-        const securityContext = window.arkfileSecurityContext;
+        // For account-encrypted files, use secure session
+        const userEmail = getUserEmailFromToken();
+        if (!userEmail) {
+            alert('Cannot determine user email. Please log in again.');
+            return;
+        }
         
-        if (!securityContext || Date.now() > securityContext.expiresAt) {
+        const sessionValidation = validateSecureSession(userEmail);
+        if (!sessionValidation.valid) {
             alert('Your session has expired. Please log in again to decrypt account-encrypted files.');
             return;
         }
         
-        password = securityContext.sessionKey;
+        password = null; // Will use secure session in WASM
     } else {
         // For custom password-encrypted files
         password = prompt('Enter the file password:');
@@ -296,10 +317,25 @@ window.downloadFile = async function(filename, hint, expectedHash, passwordType,
         
         // Use appropriate decryption function based on file type
         let decryptedData;
-        if (isMultiKey) {
-            decryptedData = decryptFileMultiKey(data.data, password);
+        if (passwordType === 'account') {
+            // Use secure session decryption for account-encrypted files
+            const userEmail = getUserEmailFromToken();
+            const decryptResult = isMultiKey 
+                ? decryptFileMultiKeyWithSecureSession(data.data, userEmail)
+                : decryptFileWithSecureSession(data.data, userEmail);
+            
+            if (!decryptResult.success) {
+                alert('Failed to decrypt file: ' + decryptResult.error);
+                return;
+            }
+            decryptedData = decryptResult.data;
         } else {
-            decryptedData = decryptFile(data.data, password);
+            // Use password decryption for custom password-encrypted files
+            if (isMultiKey) {
+                decryptedData = decryptFileMultiKey(data.data, password);
+            } else {
+                decryptedData = decryptFile(data.data, password);
+            }
         }
 
         if (typeof decryptedData === 'string' && decryptedData.startsWith('Failed')) {

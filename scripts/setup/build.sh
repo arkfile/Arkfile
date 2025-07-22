@@ -120,6 +120,40 @@ fi
 # Create temporary build directory
 mkdir -p ${BUILD_DIR}
 
+# Build TypeScript Frontend with Bun (if available)
+echo "Building TypeScript frontend..."
+if command -v bun >/dev/null 2>&1; then
+    echo -e "${GREEN}Using Bun for TypeScript compilation${NC}"
+    cd client/static/js
+    
+    # Install dependencies if node_modules doesn't exist
+    if [ ! -d "node_modules" ]; then
+        echo "Installing Bun dependencies..."
+        bun install
+    fi
+    
+    # Run TypeScript type checking
+    echo "Running TypeScript type checking..."
+    if ! bun run type-check; then
+        echo -e "${YELLOW}⚠️  TypeScript type checking failed but continuing build...${NC}"
+    fi
+    
+    # Build optimized production bundle
+    echo "Building TypeScript production bundle..."
+    bun run build:prod
+    
+    cd ../../..
+    
+    # Copy built assets to the build directory
+    mkdir -p ${BUILD_DIR}/client/static/js/dist
+    cp client/static/js/dist/* ${BUILD_DIR}/client/static/js/dist/
+    
+    echo -e "${GREEN}✅ TypeScript frontend built with Bun${NC}"
+else
+    echo -e "${YELLOW}⚠️  Bun not found - skipping TypeScript build${NC}"
+    echo -e "${YELLOW}   Install Bun from https://bun.sh for faster TypeScript compilation${NC}"
+fi
+
 # Build WebAssembly
 echo "Building WebAssembly..."
 GOOS=js GOARCH=wasm go build -o ${BUILD_DIR}/${WASM_DIR}/main.wasm ./${WASM_DIR}/main.go

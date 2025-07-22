@@ -1,0 +1,27 @@
+{
+  "name": "arkfile-client",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "bun build src/app.ts --outdir dist --target browser",
+    "build:watch": "bun build src/app.ts --outdir dist --target browser --watch",
+    "type-check": "bun tsc --noEmit",
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "test:integration": "bun run tests/integration/test-runner.ts",
+    "test:wasm": "bun run tests/wasm/opaque-wasm.test.ts",
+    "dev": "bun build src/app.ts --outdir dist --target browser --watch",
+    "clean": "rm -rf dist/*",
+    "lint": "bun tsc --noEmit && echo '✅ TypeScript checks passed'",
+    "test:unit": "bun test tests/unit/",
+    "test:all": "bun test",
+    "build:dev": "bun build src/app.ts --outdir dist --target browser --sourcemap",
+    "build:prod": "bun build src/app.ts --outdir dist --target browser --minify --sourcemap=external"
+  },
+  "devDependencies": {
+    "@types/node": "^24.1.0",
+    "bun-types": "^1.2.19",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {}
+}

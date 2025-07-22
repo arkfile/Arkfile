@@ -1196,12 +1196,12 @@ async function verifyTOTPLogin() {
             localStorage.setItem('token', data.token);
             localStorage.setItem('refreshToken', data.refreshToken);
             
-            // Store session context
-            window.arkfileSecurityContext = {
-                sessionKey: data.sessionKey,
-                authMethod: 'OPAQUE',
-                expiresAt: Date.now() + (24 * 60 * 60 * 1000) // 24 hours
-            };
+            // Create secure session in WASM (NEVER store session key in JavaScript)
+            const sessionResult = createSecureSessionFromOpaqueExport(data.sessionKey, window.totpLoginData.email);
+            if (!sessionResult.success) {
+                showError('Failed to create secure session: ' + sessionResult.error);
+                return;
+            }
             
             // Clean up
             delete window.totpLoginData;
@@ -1223,10 +1223,5 @@ async function verifyTOTPLogin() {
     }
 }
 
-// Check session validity periodically
-setInterval(() => {
-    const securityContext = window.arkfileSecurityContext;
-    if (securityContext && Date.now() > securityContext.expiresAt) {
-        delete window.arkfileSecurityContext;
-    }
-}, 60000); // Check every minute
+// Legacy session check removed - now using secure WASM session management
+// Session validation is handled by validateSecureSession() WASM function

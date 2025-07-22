@@ -55,13 +55,19 @@ class ChunkedDownloader {
 
             // Set password based on type
             if (this.passwordType === 'account') {
-                const securityContext = window.arkfileSecurityContext;
+                // Use secure session validation via WASM
+                const userEmail = getUserEmailFromToken();
+                if (!userEmail) {
+                    throw new Error('Cannot determine user email. Please log in again.');
+                }
                 
-                if (!securityContext || Date.now() > securityContext.expiresAt) {
+                const sessionValidation = validateSecureSession(userEmail);
+                if (!sessionValidation.valid) {
                     throw new Error('Your session has expired. Please log in again.');
                 }
                 
-                this.password = securityContext.sessionKey;
+                this.password = null; // Use secure session in WASM - no password exposed to JavaScript
+                this.userEmail = userEmail; // Store user email for secure session operations
             } else {
                 // For custom password
                 if (!passwordOptions.password) {
@@ -142,12 +148,23 @@ class ChunkedDownloader {
                 await initWasm();
             }
             
-            // Decrypt the chunk data using file-level key derivation
-            const decryptedData = decryptFile(data.data, this.password);
-            
-            // Check for decryption errors
-            if (typeof decryptedData === 'string' && decryptedData.startsWith('Failed')) {
-                throw new Error('Failed to decrypt chunk: ' + decryptedData);
+            // Decrypt the chunk data 
+            let decryptedData;
+            if (this.passwordType === 'account') {
+                // Use secure session decryption for account-encrypted files
+                const decryptResult = decryptFileWithSecureSession(data.data, this.userEmail);
+                if (!decryptResult.success) {
+                    throw new Error('Failed to decrypt chunk: ' + decryptResult.error);
+                }
+                decryptedData = decryptResult.data;
+            } else {
+                // Use custom password decryption
+                decryptedData = decryptFile(data.data, this.password);
+                
+                // Check for decryption errors
+                if (typeof decryptedData === 'string' && decryptedData.startsWith('Failed')) {
+                    throw new Error('Failed to decrypt chunk: ' + decryptedData);
+                }
             }
             
             // Convert base64 to Uint8Array
