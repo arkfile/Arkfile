@@ -64,7 +64,7 @@ run_integration_tests() {
     echo -e "\n${BLUE}🔗 Running Integration Tests...${NC}"
     cd client/static/js
     
-    if bun run tests/integration/test-runner.ts; then
+    if bun test tests/integration/test-runner.test.ts; then
         echo -e "${GREEN}✅ Integration tests passed${NC}"
         cd ../../..
         return 0
@@ -79,31 +79,32 @@ run_integration_tests() {
 run_wasm_tests() {
     echo -e "\n${BLUE}🌐 Running WASM Tests...${NC}"
     
-    # Check if WASM file exists
+    # Check if WASM file exists (informational only)
     if [ ! -f "client/static/main.wasm" ]; then
-        echo -e "${YELLOW}⚠️  WASM file not found - skipping WASM tests${NC}"
-        echo -e "${YELLOW}   Build WASM first with: cd client && GOOS=js GOARCH=wasm go build -o static/main.wasm .${NC}"
-        return 0
+        echo -e "${YELLOW}⚠️  WASM file not found - tests will use mocks${NC}"
+        echo -e "${YELLOW}   Build WASM with: cd client && GOOS=js GOARCH=wasm go build -o static/main.wasm .${NC}"
+    else
+        echo -e "${GREEN}✅ WASM file found - tests will use real WASM functions${NC}"
     fi
     
     cd client/static/js
     
     echo "Running WASM integration tests..."
-    if bun run tests/utils/test-runner.ts; then
+    if bun test tests/utils/test-runner.test.ts; then
         echo -e "${GREEN}✅ WASM tests passed${NC}"
     else
         echo -e "${YELLOW}⚠️  WASM tests encountered issues${NC}"
     fi
     
     echo "Running OPAQUE WASM tests..."
-    if bun run tests/wasm/opaque-wasm.test.ts; then
+    if bun test tests/wasm/opaque-wasm.test.ts; then
         echo -e "${GREEN}✅ OPAQUE WASM tests passed${NC}"
     else
         echo -e "${YELLOW}⚠️  OPAQUE WASM tests encountered issues${NC}"
     fi
     
     echo "Running multi-key debug tests..."
-    if bun run tests/debug/multi-key-test.ts; then
+    if bun test tests/debug/multi-key-test.test.ts; then
         echo -e "${GREEN}✅ Multi-key debug tests passed${NC}"
     else
         echo -e "${YELLOW}⚠️  Multi-key debug tests encountered issues${NC}"

@@ -226,66 +226,19 @@ export class AuthManager {
   }
 }
 
-// Utility functions
-export function getToken(): string | null {
-  return AuthManager.getToken();
-}
-
-export function getRefreshToken(): string | null {
-  return AuthManager.getRefreshToken();
-}
-
-export function setTokens(token: string, refreshToken: string): void {
-  AuthManager.setTokens(token, refreshToken);
-}
-
-export function clearTokens(): void {
-  AuthManager.clearTokens();
-}
-
-export function isAuthenticated(): boolean {
-  return AuthManager.isAuthenticated();
-}
-
-export function getUserEmailFromToken(): string | null {
-  return AuthManager.getUserEmailFromToken();
-}
-
-export function isTokenExpired(): boolean {
-  return AuthManager.isTokenExpired();
-}
-
-export async function refreshToken(): Promise<boolean> {
-  return AuthManager.refreshToken();
-}
-
-export async function revokeAllSessions(): Promise<boolean> {
-  return AuthManager.revokeAllSessions();
-}
-
-export async function logout(): Promise<boolean> {
-  return AuthManager.logout();
-}
-
-export async function validateToken(): Promise<boolean> {
-  return AuthManager.validateToken();
-}
-
-export async function authenticatedFetch(
-  url: string, 
-  options: RequestInit = {}
-): Promise<Response> {
-  return AuthManager.authenticatedFetch(url, options);
-}
-
-export function clearAllSessionData(): void {
-  AuthManager.clearAllSessionData();
-}
-
-export async function fetchAdminEmails(): Promise<string[]> {
-  return AuthManager.fetchAdminEmails();
-}
-
-export function getAdminEmails(): string[] {
-  return AuthManager.getAdminEmails();
-}
+// Optimized utility function exports - direct references to reduce bundle size
+export const getToken = AuthManager.getToken.bind(AuthManager);
+export const getRefreshToken = AuthManager.getRefreshToken.bind(AuthManager);
+export const setTokens = AuthManager.setTokens.bind(AuthManager);
+export const clearTokens = AuthManager.clearTokens.bind(AuthManager);
+export const isAuthenticated = AuthManager.isAuthenticated.bind(AuthManager);
+export const getUserEmailFromToken = AuthManager.getUserEmailFromToken.bind(AuthManager);
+export const isTokenExpired = AuthManager.isTokenExpired.bind(AuthManager);
+export const refreshToken = AuthManager.refreshToken.bind(AuthManager);
+export const revokeAllSessions = AuthManager.revokeAllSessions.bind(AuthManager);
+export const logout = AuthManager.logout.bind(AuthManager);
+export const validateToken = AuthManager.validateToken.bind(AuthManager);
+export const authenticatedFetch = AuthManager.authenticatedFetch.bind(AuthManager);
+export const clearAllSessionData = AuthManager.clearAllSessionData.bind(AuthManager);
+export const fetchAdminEmails = AuthManager.fetchAdminEmails.bind(AuthManager);
+export const getAdminEmails = AuthManager.getAdminEmails.bind(AuthManager);

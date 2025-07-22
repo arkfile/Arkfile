@@ -8,8 +8,8 @@
  */
 
 import { describe, test, beforeAll, afterAll } from "bun:test";
-import { testRunner } from "../utils/test-runner";
-import { runDebugTest } from "../debug/multi-key-test";
+import { runWasmTests } from "../utils/test-runner.test";
+import { runDebugTest } from "../debug/multi-key-test.test";
 import { runOpaqueWASMTests } from "../wasm/opaque-wasm.test";
 
 console.log(`
@@ -32,7 +32,7 @@ describe('ArkFile Integration Test Suite', () => {
     test('WASM Cryptographic Functions', async () => {
         console.log('\n📋 Running WASM Integration Tests...');
         try {
-            await testRunner.runWasmTests();
+            await runWasmTests();
         } catch (error) {
             // Handle WASM test failures gracefully
             const errorMessage = error instanceof Error ? error.message : String(error);
@@ -75,7 +75,7 @@ export async function runAllTests(): Promise<void> {
     // Run WASM tests
     try {
         console.log('1️⃣ Running WASM Integration Tests...');
-        await testRunner.runWasmTests();
+        await runWasmTests();
         results.wasm.passed = true;
         console.log('✅ WASM tests completed successfully\n');
     } catch (error) {

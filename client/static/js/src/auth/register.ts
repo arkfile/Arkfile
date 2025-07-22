@@ -107,26 +107,22 @@ export class RegistrationManager {
   }
 
   private static highlightPasswordRequirements(requirements: string[], missing: string[]): void {
-    // Clear previous highlights
-    const requirementsList = document.getElementById('password-requirements');
-    if (requirementsList) {
-      const items = requirementsList.querySelectorAll('li');
-      items.forEach(item => {
-        item.classList.remove('met', 'missing');
-      });
+    this.updatePasswordRequirementsDisplay({ requirements, missing });
+  }
 
-      // Highlight missing requirements
-      requirements.forEach(req => {
-        const item = Array.from(items).find(li => li.textContent?.includes(req));
-        if (item) {
-          if (missing.includes(req)) {
-            item.classList.add('missing');
-          } else {
-            item.classList.add('met');
-          }
-        }
-      });
-    }
+  public static updatePasswordRequirementsDisplay(validation: { requirements: string[], missing: string[] }): void {
+    const requirementsList = document.getElementById('password-requirements');
+    if (!requirementsList) return;
+    
+    const items = requirementsList.querySelectorAll('li');
+    items.forEach(item => item.classList.remove('met', 'missing'));
+
+    validation.requirements.forEach(req => {
+      const item = Array.from(items).find(li => li.textContent?.includes(req));
+      if (item) {
+        item.classList.add(validation.missing.includes(req) ? 'missing' : 'met');
+      }
+    });
   }
 
   private static async completeRegistration(data: RegistrationResponse, email: string): Promise<void> {
@@ -233,24 +229,8 @@ async function validatePasswordRealTime(password: string): Promise<void> {
       passwordInput.classList.add('error');
     }
 
-    // Update requirements display
-    if (requirementsList) {
-      const items = requirementsList.querySelectorAll('li');
-      items.forEach(item => {
-        item.classList.remove('met', 'missing');
-      });
-
-      validation.requirements.forEach(req => {
-        const item = Array.from(items).find(li => li.textContent?.includes(req));
-        if (item) {
-          if (validation.missing.includes(req)) {
-            item.classList.add('missing');
-          } else {
-            item.classList.add('met');
-          }
-        }
-      });
-    }
+    // Update requirements display using the consolidated helper
+    RegistrationManager.updatePasswordRequirementsDisplay(validation);
   } catch (error) {
     console.warn('Real-time password validation error:', error);
   }

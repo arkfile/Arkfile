@@ -1,183 +1,128 @@
 /**
- * Progress indicator utilities
+ * Progress indicator utilities - Optimized for performance and bundle size
  */
 
 import { ProgressOptions, ProgressState } from '../types/dom';
+
+// Optimized CSS constants to reduce inline styles and bundle size
+const STYLES = {
+  PROGRESS_MODAL: `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;padding:30px;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.3);z-index:1500;min-width:300px;text-align:center;border:1px solid #ddd`,
+  TITLE: `margin:0 0 15px 0;color:#333;font-size:18px`,
+  MESSAGE: `margin-bottom:20px;color:#666;font-size:14px;line-height:1.4`,
+  PROGRESS_CONTAINER: `width:100%;height:8px;background-color:#f0f0f0;border-radius:4px;overflow:hidden;margin-bottom:15px`,
+  PROGRESS_BAR: `height:100%;background-color:#007bff;border-radius:4px;transition:width 0.3s ease`,
+  PROGRESS_INDETERMINATE: `background:linear-gradient(90deg,transparent 0%,#007bff 50%,transparent 100%);background-size:200% 100%;animation:indeterminate 1.5s infinite;width:100%`,
+  PERCENTAGE: `font-size:12px;color:#888;margin-bottom:15px`,
+  CANCEL_BUTTON: `background-color:#6c757d;color:white;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:14px`,
+  INFO: `font-size:11px;color:#999;margin-top:10px;line-height:1.3`,
+  ERROR: `color:#dc3545;font-size:13px;margin-top:10px;padding:8px;background-color:#f8d7da;border-radius:4px;border:1px solid #f5c6cb`,
+  BACKDROP: `position:fixed;top:0;left:0;width:100%;height:100%;background-color:rgba(0,0,0,0.3);z-index:1400`
+} as const;
+
+const KEYFRAMES_ID = 'progress-keyframes';
 
 export class ProgressManager {
   private static activeProgress: HTMLElement | null = null;
   private static progressState: ProgressState | null = null;
 
   public static showProgress(options: ProgressOptions): HTMLElement {
-    // Remove existing progress indicator
     this.hideProgress();
 
     const progressDiv = document.createElement('div');
     progressDiv.id = 'progress-indicator';
     progressDiv.className = 'progress-message';
-    progressDiv.style.cssText = `
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: white;
-      padding: 30px;
-      border-radius: 8px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-      z-index: 1500;
-      min-width: 300px;
-      text-align: center;
-      border: 1px solid #ddd;
-    `;
+    progressDiv.style.cssText = STYLES.PROGRESS_MODAL;
 
-    // Title
-    const title = document.createElement('h4');
-    title.textContent = options.title;
-    title.style.cssText = `
-      margin: 0 0 15px 0;
-      color: #333;
-      font-size: 18px;
-    `;
+    // Build UI components efficiently
+    this.addTitle(progressDiv, options.title);
+    if (options.message) this.addMessage(progressDiv, options.message);
+    
+    const progressBar = this.addProgressBar(progressDiv, options);
+    if (options.percentage !== undefined) this.addPercentageText(progressDiv, options.percentage);
+    if (options.allowCancel && options.onCancel) this.addCancelButton(progressDiv, options.onCancel);
 
-    // Message
-    const message = document.createElement('div');
-    message.className = 'progress-message-text';
-    if (options.message) {
-      message.textContent = options.message;
-    }
-    message.style.cssText = `
-      margin-bottom: 20px;
-      color: #666;
-      font-size: 14px;
-      line-height: 1.4;
-    `;
+    this.addBackdrop();
+    document.body.appendChild(progressDiv);
 
-    // Progress bar container
+    // Set internal state
+    this.activeProgress = progressDiv;
+    this.progressState = {
+      title: options.title,
+      percentage: options.percentage || 0,
+      stage: 'processing',
+      ...(options.message !== undefined && { message: options.message })
+    };
+
+    return progressDiv;
+  }
+
+  private static addTitle(container: HTMLElement, title: string): void {
+    const titleEl = document.createElement('h4');
+    titleEl.textContent = title;
+    titleEl.style.cssText = STYLES.TITLE;
+    container.appendChild(titleEl);
+  }
+
+  private static addMessage(container: HTMLElement, message: string): void {
+    const messageEl = document.createElement('div');
+    messageEl.className = 'progress-message-text';
+    messageEl.textContent = message;
+    messageEl.style.cssText = STYLES.MESSAGE;
+    container.appendChild(messageEl);
+  }
+
+  private static addProgressBar(container: HTMLElement, options: ProgressOptions): HTMLElement {
     const progressContainer = document.createElement('div');
-    progressContainer.style.cssText = `
-      width: 100%;
-      height: 8px;
-      background-color: #f0f0f0;
-      border-radius: 4px;
-      overflow: hidden;
-      margin-bottom: 15px;
-    `;
+    progressContainer.style.cssText = STYLES.PROGRESS_CONTAINER;
 
-    // Progress bar
     const progressBar = document.createElement('div');
     progressBar.className = 'progress-bar';
-    progressBar.style.cssText = `
-      height: 100%;
-      background-color: #007bff;
-      border-radius: 4px;
-      transition: width 0.3s ease;
-      width: ${options.percentage || 0}%;
-    `;
+    progressBar.style.cssText = STYLES.PROGRESS_BAR;
 
-    // Indeterminate animation if percentage not provided
     if (options.indeterminate || options.percentage === undefined) {
-      progressBar.style.cssText += `
-        background: linear-gradient(90deg, 
-          transparent 0%, 
-          #007bff 50%, 
-          transparent 100%
-        );
-        background-size: 200% 100%;
-        animation: indeterminate 1.5s infinite;
-        width: 100%;
-      `;
-
-      // Add keyframes for indeterminate animation
-      if (!document.getElementById('progress-keyframes')) {
-        const style = document.createElement('style');
-        style.id = 'progress-keyframes';
-        style.textContent = `
-          @keyframes indeterminate {
-            0% { background-position: -200% 0; }
-            100% { background-position: 200% 0; }
-          }
-        `;
-        document.head.appendChild(style);
-      }
+      progressBar.style.cssText += `;${STYLES.PROGRESS_INDETERMINATE}`;
+      this.ensureKeyframes();
+    } else {
+      progressBar.style.width = `${Math.max(0, Math.min(100, options.percentage))}%`;
     }
 
     progressContainer.appendChild(progressBar);
+    container.appendChild(progressContainer);
+    return progressBar;
+  }
 
-    // Percentage text
+  private static addPercentageText(container: HTMLElement, percentage: number): void {
     const percentageText = document.createElement('div');
     percentageText.className = 'progress-percentage';
-    if (options.percentage !== undefined) {
-      percentageText.textContent = `${Math.round(options.percentage)}%`;
-    }
-    percentageText.style.cssText = `
-      font-size: 12px;
-      color: #888;
-      margin-bottom: 15px;
-    `;
+    percentageText.textContent = `${Math.round(percentage)}%`;
+    percentageText.style.cssText = STYLES.PERCENTAGE;
+    container.appendChild(percentageText);
+  }
 
-    // Cancel button (if allowed)
-    const buttonsContainer = document.createElement('div');
-    if (options.allowCancel && options.onCancel) {
-      const cancelButton = document.createElement('button');
-      cancelButton.textContent = 'Cancel';
-      cancelButton.style.cssText = `
-        background-color: #6c757d;
-        color: white;
-        border: none;
-        padding: 8px 16px;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 14px;
-      `;
-      cancelButton.onclick = () => {
-        if (options.onCancel) {
-          options.onCancel();
-        }
-        this.hideProgress();
-      };
-      buttonsContainer.appendChild(cancelButton);
-    }
-
-    // Assemble the progress indicator
-    progressDiv.appendChild(title);
-    if (options.message) {
-      progressDiv.appendChild(message);
-    }
-    progressDiv.appendChild(progressContainer);
-    if (options.percentage !== undefined) {
-      progressDiv.appendChild(percentageText);
-    }
-    if (buttonsContainer.children.length > 0) {
-      progressDiv.appendChild(buttonsContainer);
-    }
-
-    // Add backdrop
-    const backdrop = document.createElement('div');
-    backdrop.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background-color: rgba(0, 0, 0, 0.3);
-      z-index: 1400;
-    `;
-
-    document.body.appendChild(backdrop);
-    document.body.appendChild(progressDiv);
-
-    this.activeProgress = progressDiv;
-    const progressState: ProgressState = {
-      title: options.title,
-      percentage: options.percentage || 0,
-      stage: 'processing'
+  private static addCancelButton(container: HTMLElement, onCancel: () => void): void {
+    const cancelButton = document.createElement('button');
+    cancelButton.textContent = 'Cancel';
+    cancelButton.style.cssText = STYLES.CANCEL_BUTTON;
+    cancelButton.onclick = () => {
+      onCancel();
+      this.hideProgress();
     };
-    if (options.message !== undefined) {
-      progressState.message = options.message;
-    }
-    this.progressState = progressState;
+    container.appendChild(cancelButton);
+  }
 
-    return progressDiv;
+  private static addBackdrop(): void {
+    const backdrop = document.createElement('div');
+    backdrop.style.cssText = STYLES.BACKDROP;
+    document.body.appendChild(backdrop);
+  }
+
+  private static ensureKeyframes(): void {
+    if (!document.getElementById(KEYFRAMES_ID)) {
+      const style = document.createElement('style');
+      style.id = KEYFRAMES_ID;
+      style.textContent = '@keyframes indeterminate{0%{background-position:-200% 0}100%{background-position:200% 0}}';
+      document.head.appendChild(style);
+    }
   }
 
   public static updateProgress(state: Partial<ProgressState>): void {
@@ -227,12 +172,7 @@ export class ProgressManager {
       if (!infoElement) {
         infoElement = document.createElement('div');
         infoElement.className = 'progress-info';
-        infoElement.style.cssText = `
-          font-size: 11px;
-          color: #999;
-          margin-top: 10px;
-          line-height: 1.3;
-        `;
+        infoElement.style.cssText = STYLES.INFO;
         this.activeProgress.appendChild(infoElement);
       }
 
@@ -253,15 +193,7 @@ export class ProgressManager {
       progressDiv.style.borderColor = '#dc3545';
       
       const errorElement = document.createElement('div');
-      errorElement.style.cssText = `
-        color: #dc3545;
-        font-size: 13px;
-        margin-top: 10px;
-        padding: 8px;
-        background-color: #f8d7da;
-        border-radius: 4px;
-        border: 1px solid #f5c6cb;
-      `;
+      errorElement.style.cssText = STYLES.ERROR;
       errorElement.textContent = state.error;
       progressDiv.appendChild(errorElement);
     }
