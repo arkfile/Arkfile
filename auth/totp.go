@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/84adam/arkfile/crypto"
@@ -75,33 +76,36 @@ func GenerateTOTPSetup(userEmail string, sessionKey []byte) (*TOTPSetup, error) 
 	}, nil
 }
 
-// StoreTOTPSetup stores the TOTP setup data in the database (encrypted)
+// StoreTOTPSetup stores the TOTP setup data in the database (temporarily encrypted during setup)
 func StoreTOTPSetup(db *sql.DB, userEmail string, setup *TOTPSetup, sessionKey []byte) error {
-	// Derive TOTP-specific encryption key
-	totpKey, err := crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
-	if err != nil {
-		return fmt.Errorf("failed to derive TOTP key: %w", err)
-	}
-	defer crypto.SecureZeroSessionKey(totpKey)
+	// During setup, use a temporary encryption key derivable from session key
+	// This allows us to decrypt during verification, then re-encrypt with production key
 
-	// Encrypt the TOTP secret
-	secretEncrypted, err := crypto.EncryptGCM([]byte(setup.Secret), totpKey)
+	// Derive temporary TOTP setup key (different from production key)
+	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, "TOTP_SETUP_TEMP")
+	if err != nil {
+		return fmt.Errorf("failed to derive temporary TOTP key: %w", err)
+	}
+	defer crypto.SecureZeroSessionKey(tempTotpKey)
+
+	// Encrypt the TOTP secret with temporary key
+	secretEncrypted, err := crypto.EncryptGCM([]byte(setup.Secret), tempTotpKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
 	}
 
-	// Encrypt backup codes as JSON
+	// Convert backup codes to JSON and encrypt
 	backupCodesJSON, err := json.Marshal(setup.BackupCodes)
 	if err != nil {
 		return fmt.Errorf("failed to marshal backup codes: %w", err)
 	}
 
-	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
+	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, tempTotpKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt backup codes: %w", err)
 	}
 
-	// Store in database
+	// Store in database with temporarily encrypted data during setup
 	_, err = db.Exec(`
 		INSERT OR REPLACE INTO user_totp (
 			user_email, secret_encrypted, backup_codes_encrypted, 
@@ -130,23 +134,67 @@ func CompleteTOTPSetup(db *sql.DB, userEmail, testCode string, sessionKey []byte
 		return fmt.Errorf("TOTP setup already completed")
 	}
 
-	// Decrypt secret
-	secret, err := decryptTOTPSecret(totpData.SecretEncrypted, sessionKey)
+	// During setup, the secret is encrypted with temporary key
+	// Decrypt using the same temporary key from setup
+	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, "TOTP_SETUP_TEMP")
 	if err != nil {
-		return fmt.Errorf("failed to decrypt TOTP secret: %w", err)
+		return fmt.Errorf("failed to derive temporary TOTP key: %w", err)
 	}
+	defer crypto.SecureZeroSessionKey(tempTotpKey)
+
+	// Decrypt the secret from temporary encryption
+	secretBytes, err := crypto.DecryptGCM(totpData.SecretEncrypted, tempTotpKey)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt temporary TOTP secret: %w", err)
+	}
+	secret := string(secretBytes)
 
 	// Validate the test code
 	if !validateTOTPCodeInternal(secret, testCode) {
 		return fmt.Errorf("invalid TOTP code")
 	}
 
-	// Enable TOTP and mark setup as completed
+	// Now encrypt the secret for production use
+	totpKey, err := crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
+	if err != nil {
+		return fmt.Errorf("failed to derive TOTP key: %w", err)
+	}
+	defer crypto.SecureZeroSessionKey(totpKey)
+
+	// Encrypt the TOTP secret with production key
+	secretEncrypted, err := crypto.EncryptGCM([]byte(secret), totpKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
+	}
+
+	// Decrypt backup codes from temporary encryption
+	backupCodesBytes, err := crypto.DecryptGCM(totpData.BackupCodesEncrypted, tempTotpKey)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt temporary backup codes: %w", err)
+	}
+
+	var backupCodes []string
+	if err := json.Unmarshal(backupCodesBytes, &backupCodes); err != nil {
+		return fmt.Errorf("failed to unmarshal backup codes: %w", err)
+	}
+
+	// Re-encrypt backup codes with production key
+	backupCodesJSON, err := json.Marshal(backupCodes)
+	if err != nil {
+		return fmt.Errorf("failed to marshal backup codes: %w", err)
+	}
+
+	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt backup codes: %w", err)
+	}
+
+	// Update with encrypted data and enable TOTP
 	_, err = db.Exec(`
 		UPDATE user_totp 
-		SET enabled = true, setup_completed = true 
+		SET secret_encrypted = ?, backup_codes_encrypted = ?, enabled = true, setup_completed = true 
 		WHERE user_email = ?`,
-		userEmail,
+		secretEncrypted, backupCodesEncrypted, userEmail,
 	)
 
 	if err != nil {
@@ -179,12 +227,21 @@ func ValidateTOTPCode(db *sql.DB, userEmail, code string, sessionKey []byte) err
 		return fmt.Errorf("failed to decrypt TOTP secret: %w", err)
 	}
 
+	// Add padding if needed for base32 decoding (our secrets are stored without padding)
+	secretPadded := secret
+	if len(secret)%8 != 0 {
+		padding := 8 - (len(secret) % 8)
+		for i := 0; i < padding; i++ {
+			secretPadded += "="
+		}
+	}
+
 	// Validate code with time windows (90-second tolerance)
 	now := time.Now()
 	for i := -TOTPSkew; i <= TOTPSkew; i++ {
 		testTime := now.Add(time.Duration(i) * time.Duration(TOTPPeriod) * time.Second)
 
-		expectedCode, err := totp.GenerateCodeCustom(secret, testTime, totp.ValidateOpts{
+		expectedCode, err := totp.GenerateCodeCustom(secretPadded, testTime, totp.ValidateOpts{
 			Period:    TOTPPeriod,
 			Skew:      0, // We handle skew manually
 			Digits:    otp.DigitsSix,
@@ -381,7 +438,8 @@ func formatManualEntry(secret string) string {
 }
 
 func trimPadding(s string) string {
-	return s[:len(s)-len(s)%8+len(s)%8]
+	// Remove trailing '=' padding characters from base32 string
+	return strings.TrimRight(s, "=")
 }
 
 func hashString(s string) string {
@@ -390,7 +448,37 @@ func hashString(s string) string {
 }
 
 func validateTOTPCodeInternal(secret, code string) bool {
-	return totp.Validate(code, secret)
+	// Add padding if needed for base32 decoding (our secrets are stored without padding)
+	secretPadded := secret
+	if len(secret)%8 != 0 {
+		padding := 8 - (len(secret) % 8)
+		for i := 0; i < padding; i++ {
+			secretPadded += "="
+		}
+	}
+
+	// Use the same validation logic as the main TOTP validation
+	now := time.Now()
+
+	for i := -TOTPSkew; i <= TOTPSkew; i++ {
+		testTime := now.Add(time.Duration(i) * time.Duration(TOTPPeriod) * time.Second)
+
+		expectedCode, err := totp.GenerateCodeCustom(secretPadded, testTime, totp.ValidateOpts{
+			Period:    TOTPPeriod,
+			Skew:      0, // We handle skew manually
+			Digits:    otp.DigitsSix,
+			Algorithm: otp.AlgorithmSHA1,
+		})
+
+		if err != nil {
+			continue
+		}
+
+		if expectedCode == code {
+			return true
+		}
+	}
+	return false
 }
 
 func checkTOTPReplay(db *sql.DB, userEmail, code string, testTime time.Time) error {

@@ -160,6 +160,19 @@ The setup scripts are numbered to show their logical dependency order:
 **Usage**: `./scripts/testing/test-totp.sh`  
 **Tests**: TOTP generation, validation, backup codes
 
+#### `test-auth-flow-curl.sh`
+**Purpose**: Unified authentication flow testing with curl  
+**Usage**: `./scripts/test-auth-flow-curl.sh [options]`  
+**Options**:
+- `--help, -h` - Show help message
+- `--url URL` - Set base URL (default: https://localhost:4443)
+- `--email EMAIL` - Set test email
+- `--password PASS` - Set test password
+- `--skip-cleanup` - Skip final cleanup for debugging
+**Tests**: Complete OPAQUE + TOTP + JWT + Session Management flow
+**Flow**: Registration → TOTP Setup → Login → 2FA Auth → API Access → Logout → Cleanup
+**Features**: Real TOTP codes, database manipulation, comprehensive error handling
+
 #### `test-typescript.sh`
 **Purpose**: Comprehensive TypeScript testing suite  
 **Usage**: `./scripts/testing/test-typescript.sh [option]`  

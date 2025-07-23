@@ -21,7 +21,7 @@ export interface LoginResponse {
   sessionKey: string;
   authMethod: 'OPAQUE';
   requiresTOTP?: boolean;
-  partialToken?: string;
+  tempToken?: string;
 }
 
 export class LoginManager {
@@ -63,7 +63,8 @@ export class LoginManager {
         if (data.requiresTOTP) {
           hideProgress();
           handleTOTPFlow({
-            partialToken: data.partialToken!,
+            tempToken: data.tempToken!,
+            sessionKey: data.sessionKey,
             email: credentials.email
           });
           return;

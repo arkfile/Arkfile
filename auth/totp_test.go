@@ -85,8 +85,15 @@ func TestGenerateTOTPSetup_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, setup)
 
-	// Verify secret is base32 encoded
-	secretBytes, err := base32.StdEncoding.DecodeString(setup.Secret)
+	// Verify secret is base32 encoded (add padding if needed)
+	secretPadded := setup.Secret
+	if len(setup.Secret)%8 != 0 {
+		padding := 8 - (len(setup.Secret) % 8)
+		for i := 0; i < padding; i++ {
+			secretPadded += "="
+		}
+	}
+	secretBytes, err := base32.StdEncoding.DecodeString(secretPadded)
 	require.NoError(t, err)
 	assert.Equal(t, 32, len(secretBytes)) // 32 bytes = 256 bits
 
@@ -138,33 +145,31 @@ func TestCompleteTOTPSetup_Success(t *testing.T) {
 	sessionKey := generateTestSessionKey(t)
 	defer crypto.SecureZeroSessionKey(sessionKey)
 
-	// Mock getting TOTP data
-	totpData := &TOTPData{
-		SecretEncrypted:      []byte("encrypted-secret"),
-		BackupCodesEncrypted: []byte("encrypted-backup-codes"),
-		Enabled:              false,
-		SetupCompleted:       false,
-	}
-
-	// Encrypt the test secret for mocking
-	totpKey, err := crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
+	// Encrypt the test secret with TEMPORARY key (like during setup)
+	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, "TOTP_SETUP_TEMP")
 	require.NoError(t, err)
-	defer crypto.SecureZeroSessionKey(totpKey)
+	defer crypto.SecureZeroSessionKey(tempTotpKey)
 
-	secretEncrypted, err := crypto.EncryptGCM([]byte(testSecretB32), totpKey)
+	secretEncrypted, err := crypto.EncryptGCM([]byte(testSecretB32), tempTotpKey)
 	require.NoError(t, err)
 
-	totpData.SecretEncrypted = secretEncrypted
+	// Create some mock backup codes
+	backupCodes := []string{"TEST123456", "TEST234567"}
+	backupCodesJSON, err := json.Marshal(backupCodes)
+	require.NoError(t, err)
+
+	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, tempTotpKey)
+	require.NoError(t, err)
 
 	// Mock database queries
 	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE user_email = \?`).
 		WithArgs(testEmail).
 		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
-			AddRow(totpData.SecretEncrypted, totpData.BackupCodesEncrypted, totpData.Enabled, totpData.SetupCompleted, time.Now(), nil))
+			AddRow(secretEncrypted, backupCodesEncrypted, false, false, time.Now(), nil))
 
-	// Mock update query
-	mock.ExpectExec(`UPDATE user_totp SET enabled = true, setup_completed = true WHERE user_email = \?`).
-		WithArgs(testEmail).
+	// Mock update query with production encryption
+	mock.ExpectExec(`UPDATE user_totp SET secret_encrypted = \?, backup_codes_encrypted = \?, enabled = true, setup_completed = true WHERE user_email = \?`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), testEmail).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Generate valid TOTP code
@@ -183,18 +188,26 @@ func TestCompleteTOTPSetup_InvalidCode(t *testing.T) {
 	sessionKey := generateTestSessionKey(t)
 	defer crypto.SecureZeroSessionKey(sessionKey)
 
-	// Mock getting TOTP data
-	totpKey, err := crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
+	// Encrypt the test secret with TEMPORARY key (like during setup)
+	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, "TOTP_SETUP_TEMP")
 	require.NoError(t, err)
-	defer crypto.SecureZeroSessionKey(totpKey)
+	defer crypto.SecureZeroSessionKey(tempTotpKey)
 
-	secretEncrypted, err := crypto.EncryptGCM([]byte(testSecretB32), totpKey)
+	secretEncrypted, err := crypto.EncryptGCM([]byte(testSecretB32), tempTotpKey)
+	require.NoError(t, err)
+
+	// Create some mock backup codes
+	backupCodes := []string{"TEST123456", "TEST234567"}
+	backupCodesJSON, err := json.Marshal(backupCodes)
+	require.NoError(t, err)
+
+	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, tempTotpKey)
 	require.NoError(t, err)
 
 	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE user_email = \?`).
 		WithArgs(testEmail).
 		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
-			AddRow(secretEncrypted, []byte("encrypted-backup-codes"), false, false, time.Now(), nil))
+			AddRow(secretEncrypted, backupCodesEncrypted, false, false, time.Now(), nil))
 
 	// Use invalid code
 	err = CompleteTOTPSetup(db, testEmail, "000000", sessionKey)

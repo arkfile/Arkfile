@@ -12,29 +12,41 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Paths for libraries
-OPAQUE_LIB="$(pwd)/vendor/stef/libopaque/src"
-OPRF_LIB="$(pwd)/vendor/stef/liboprf/src"
-NOISE_LIB="$(pwd)/vendor/stef/liboprf/src/noise_xk"
+# Setup library paths automatically
+setup_library_paths() {
+    local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+    
+    # Check if libopaque exists, if not build it
+    local LIBOPAQUE_PATH="$PROJECT_ROOT/vendor/stef/libopaque/src/libopaque.so"
+    local LIBOPRF_PATH="$PROJECT_ROOT/vendor/stef/liboprf/src/liboprf.so"
+    
+    if [ ! -f "$LIBOPAQUE_PATH" ] || [ ! -f "$LIBOPRF_PATH" ]; then
+        echo -e "${YELLOW}⚠️  libopaque/liboprf not found, building...${NC}"
+        if [ -x "$PROJECT_ROOT/scripts/setup/build-libopaque.sh" ]; then
+            cd "$PROJECT_ROOT"
+            ./scripts/setup/build-libopaque.sh
+        else
+            echo -e "${RED}❌ Cannot find build-libopaque.sh script${NC}"
+            exit 1
+        fi
+    fi
+    
+    # Set up library path
+    export LD_LIBRARY_PATH="$PROJECT_ROOT/vendor/stef/libopaque/src:$PROJECT_ROOT/vendor/stef/liboprf/src:$PROJECT_ROOT/vendor/stef/liboprf/src/noise_xk${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    
+    # Verify libraries are accessible
+    if ! ldd "$LIBOPAQUE_PATH" >/dev/null 2>&1; then
+        echo -e "${RED}❌ libopaque.so cannot be loaded${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✅ Library paths configured successfully${NC}"
+    echo -e "${BLUE}   LD_LIBRARY_PATH: $LD_LIBRARY_PATH${NC}"
+}
 
-# Check if libraries exist
-echo -e "${BLUE}🔍 Checking OPAQUE library dependencies...${NC}"
-if [[ ! -f "$OPAQUE_LIB/libopaque.so" ]]; then
-    echo -e "${RED}❌ libopaque.so not found${NC}"
-    echo -e "${YELLOW}Run: ./scripts/setup/build-libopaque.sh${NC}"
-    exit 1
-fi
-
-if [[ ! -f "$OPRF_LIB/liboprf.so" ]]; then
-    echo -e "${RED}❌ liboprf.so not found${NC}" 
-    echo -e "${YELLOW}Run: ./scripts/setup/build-libopaque.sh${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}✅ All required libraries found${NC}"
-
-# Export library path
-export LD_LIBRARY_PATH="$OPAQUE_LIB:$OPRF_LIB:$NOISE_LIB"
+echo -e "${BLUE}🔍 Setting up OPAQUE library dependencies...${NC}"
+setup_library_paths
 
 echo
 echo -e "${BLUE}🧪 Running OPAQUE Integration Tests${NC}"

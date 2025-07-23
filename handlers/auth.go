@@ -225,23 +225,38 @@ func OpaqueRegister(c echo.Context) error {
 
 	// Create user record in the users table for JWT and application data
 	// For OPAQUE users, we use a placeholder password since authentication is handled by OPAQUE
-	user, err := models.CreateUser(database.DB, request.Email, "OPAQUE_AUTH_PLACEHOLDER")
+	_, err = models.CreateUser(database.DB, request.Email, "OPAQUE_AUTH_PLACEHOLDER")
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create user record for %s: %v", request.Email, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete registration")
 	}
 
+	// Generate temporary token for mandatory TOTP setup
+	tempToken, err := auth.GenerateTemporaryTOTPToken(request.Email)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Email, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Registration succeeded but setup token creation failed")
+	}
+
+	// For registration flow, we'll use a temporary approach where the TOTP secret
+	// is stored unencrypted initially, and then encrypted after the first successful verification
+	// This is a compromise for the registration flow where we don't have a real session key yet
+	sessionKey := []byte("REGISTRATION_TEMP_KEY_32_BYTES!!") // Exactly 32 bytes
+
+	// Encode session key for secure transmission
+	sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
+
 	// Log successful registration
-	database.LogUserAction(request.Email, "registered with OPAQUE", "")
-	logging.InfoLogger.Printf("OPAQUE user registered: %s", request.Email)
+	database.LogUserAction(request.Email, "registered with OPAQUE, TOTP setup required", "")
+	logging.InfoLogger.Printf("OPAQUE user registered, TOTP setup required: %s", request.Email)
 
 	return c.JSON(http.StatusCreated, map[string]interface{}{
-		"message":    "Account created successfully with OPAQUE authentication",
-		"authMethod": "OPAQUE",
-		"status": map[string]interface{}{
-			"is_approved": user.IsApproved,
-			"is_admin":    user.IsAdmin,
-		},
+		"message":           "Account created successfully. Two-factor authentication setup is required to complete registration.",
+		"requiresTOTPSetup": true,
+		"tempToken":         tempToken,
+		"sessionKey":        sessionKeyB64,
+		"authMethod":        "OPAQUE",
+		"email":             request.Email,
 	})
 }
 
@@ -298,49 +313,19 @@ func OpaqueLogin(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
 
-	if totpEnabled {
-		// Generate temporary token that requires TOTP completion
-		tempToken, err := auth.GenerateTemporaryTOTPToken(request.Email)
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Email, err)
-			crypto.SecureZeroSessionKey(sessionKey)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
-		}
-
-		// Encode session key for secure transmission
-		sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
-
-		// Clear session key from memory immediately
+	// MANDATORY TOTP: All users must have TOTP enabled to login
+	if !totpEnabled {
 		crypto.SecureZeroSessionKey(sessionKey)
-
-		// Log partial authentication
-		database.LogUserAction(request.Email, "OPAQUE auth completed, awaiting TOTP", "")
-		logging.InfoLogger.Printf("OPAQUE user authenticated, TOTP required: %s", request.Email)
-
-		return c.JSON(http.StatusOK, map[string]interface{}{
-			"requiresTOTP": true,
-			"tempToken":    tempToken,
-			"sessionKey":   sessionKeyB64,
-			"authMethod":   "OPAQUE",
-			"message":      "OPAQUE authentication successful. TOTP code required.",
-		})
+		logging.ErrorLogger.Printf("User %s attempted login without TOTP setup", request.Email)
+		return echo.NewHTTPError(http.StatusForbidden, "Two-factor authentication setup is required. Please complete TOTP setup before logging in.")
 	}
 
-	// No TOTP required - complete authentication
-	// Generate JWT token for session management
-	token, err := auth.GenerateToken(request.Email)
+	// Generate temporary token that requires TOTP completion
+	tempToken, err := auth.GenerateTemporaryTOTPToken(request.Email)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate JWT token for %s: %v", request.Email, err)
+		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Email, err)
 		crypto.SecureZeroSessionKey(sessionKey)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication succeeded but session creation failed")
-	}
-
-	// Generate refresh token
-	refreshToken, err := models.CreateRefreshToken(database.DB, request.Email)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", request.Email, err)
-		crypto.SecureZeroSessionKey(sessionKey)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication succeeded but session creation failed")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// Encode session key for secure transmission
@@ -349,23 +334,16 @@ func OpaqueLogin(c echo.Context) error {
 	// Clear session key from memory immediately
 	crypto.SecureZeroSessionKey(sessionKey)
 
-	// Log successful authentication
-	database.LogUserAction(request.Email, "logged in with OPAQUE", "")
-	logging.InfoLogger.Printf("OPAQUE user authenticated: %s", request.Email)
+	// Log partial authentication
+	database.LogUserAction(request.Email, "OPAQUE auth completed, awaiting TOTP", "")
+	logging.InfoLogger.Printf("OPAQUE user authenticated, TOTP required: %s", request.Email)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"token":        token,
-		"refreshToken": refreshToken,
+		"requiresTOTP": true,
+		"tempToken":    tempToken,
 		"sessionKey":   sessionKeyB64,
 		"authMethod":   "OPAQUE",
-		"user": map[string]interface{}{
-			"email":           user.Email,
-			"is_approved":     user.IsApproved,
-			"is_admin":        user.IsAdmin,
-			"total_storage":   user.TotalStorageBytes,
-			"storage_limit":   user.StorageLimitBytes,
-			"storage_used_pc": user.GetStorageUsagePercent(),
-		},
+		"message":      "OPAQUE authentication successful. TOTP code required.",
 	})
 }
 
