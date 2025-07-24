@@ -190,6 +190,36 @@ if (typeof window !== 'undefined') {
       showError('Failed to revoke sessions.');
     }
   };
+  
+  // TOTP-related functions for onclick handlers
+  (window as any).generateTOTPSetup = async () => {
+    const { initiateTOTPSetup } = await import('./auth/totp');
+    // This will need to be called with a session key during registration flow
+    showError('TOTP setup should be called during registration flow');
+  };
+  
+  (window as any).verifyTOTPSetup = async () => {
+    const { completeTOTPSetup } = await import('./auth/totp');
+    // This will need proper implementation during registration flow
+    showError('TOTP verification should be called during registration flow');
+  };
+  
+  (window as any).cancelRegistration = () => {
+    // Clear any registration state and return to login
+    showAuthSection();
+    toggleAuthForm(); // Switch back to login form
+  };
+  
+  (window as any).downloadBackupCodes = () => {
+    // This would need to be implemented to download backup codes
+    showError('Backup code download functionality needs to be implemented during TOTP setup');
+  };
+  
+  // File upload function
+  (window as any).uploadFile = async () => {
+    const { uploadFile } = await import('./files/upload');
+    await uploadFile();
+  };
 }
 
 // Export the app instance

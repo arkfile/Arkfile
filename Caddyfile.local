@@ -18,12 +18,10 @@ localhost:8443 {
 	
 	# Reverse proxy to local arkfile service
 	reverse_proxy localhost:4443 {
-		# Skip TLS verification for local development
 		transport http {
 			tls
-			tls_insecure_skip_verify
 		}
-		
+
 		# Health check
 		health_uri /health
 		health_interval 30s
@@ -74,15 +72,13 @@ localhost:8080 {
 		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline';"
 		Referrer-Policy "strict-origin-when-cross-origin"
 	}
-	
+
 	# Reverse proxy to local arkfile service
 	reverse_proxy localhost:4443 {
-		# Skip TLS verification for local development
 		transport http {
 			tls
-			tls_insecure_skip_verify
 		}
-		
+
 		# Health check
 		health_uri /health
 		health_interval 30s

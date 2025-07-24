@@ -24,7 +24,7 @@ check_go_version() {
         return 0
     fi
     
-    local current_version=$(go version | grep -o 'go[0-9]\+\.[0-9]\+\.[0-9]\+' | sed 's/go//')
+    local current_version=$(/usr/local/go/bin/go version | grep -o 'go[0-9]\+\.[0-9]\+\.[0-9]\+' | sed 's/go//')
     
     if [ -z "$current_version" ]; then
         echo -e "${RED}❌ Cannot determine Go version${NC}"
@@ -51,15 +51,15 @@ check_go_version() {
 }
 
 # Ensure required tools are installed
-command -v go >/dev/null 2>&1 || { echo -e "${RED}Go is required but not installed.${NC}" >&2; exit 1; }
+command -v /usr/local/go/bin/go >/dev/null 2>&1 || { echo -e "${RED}Go is required but not installed.${NC}" >&2; exit 1; }
 check_go_version
 
 # Ensure Go dependencies are properly resolved
 echo -e "${YELLOW}Checking Go module dependencies...${NC}"
-if ! go mod download; then
+if ! /usr/local/go/bin/go mod download; then
     echo -e "${YELLOW}Dependencies need updating, running go mod tidy...${NC}"
-    go mod tidy
-    if ! go mod download; then
+    /usr/local/go/bin/go mod tidy
+    if ! /usr/local/go/bin/go mod download; then
         echo -e "${RED}Failed to resolve Go dependencies${NC}" >&2
         exit 1
     fi
@@ -156,10 +156,10 @@ fi
 
 # Build WebAssembly
 echo "Building WebAssembly..."
-GOOS=js GOARCH=wasm go build -o ${BUILD_DIR}/${WASM_DIR}/main.wasm ./${WASM_DIR}/main.go
+GOOS=js GOARCH=wasm /usr/local/go/bin/go build -o ${BUILD_DIR}/${WASM_DIR}/main.wasm ./${WASM_DIR}/main.go
 
 # Find wasm_exec.js using Go's environment
-GOROOT=$(go env GOROOT)
+GOROOT=$(/usr/local/go/bin/go env GOROOT)
 WASM_EXEC_JS=""
 if [ -f "${GOROOT}/lib/wasm/wasm_exec.js" ]; then
     WASM_EXEC_JS="${GOROOT}/lib/wasm/wasm_exec.js"
@@ -175,7 +175,7 @@ cp "${WASM_EXEC_JS}" ${BUILD_DIR}/${WASM_DIR}/
 
 # Build main application with version information
 echo "Building main application..."
-go build -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" -o ${BUILD_DIR}/${APP_NAME}
+/usr/local/go/bin/go build -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" -o ${BUILD_DIR}/${APP_NAME}
 
 # Copy static files
 echo "Copying static files..."

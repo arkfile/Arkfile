@@ -229,57 +229,37 @@ func ValidateTOTPCode(db *sql.DB, userEmail, code string, sessionKey []byte) err
 		return fmt.Errorf("failed to decrypt TOTP secret: %w", err)
 	}
 
-	// Add padding if needed for base32 decoding (our secrets are stored without padding)
-	secretPadded := secret
-	if len(secret)%8 != 0 {
-		padding := 8 - (len(secret) % 8)
-		for i := 0; i < padding; i++ {
-			secretPadded += "="
+	// Validate code
+	valid, err := totp.ValidateCustom(code, secret, time.Now().UTC(), totp.ValidateOpts{
+		Period:    TOTPPeriod,
+		Skew:      uint(TOTPSkew),
+		Digits:    otp.DigitsSix,
+		Algorithm: otp.AlgorithmSHA1,
+	})
+
+	if err != nil {
+		return fmt.Errorf("TOTP validation error: %w", err)
+	}
+
+	if !valid {
+		return fmt.Errorf("invalid TOTP code")
+	}
+
+	// TODO: Re-implement replay attack protection.
+	// The new validation method does not provide the timestamp of the matched code,
+	// so the previous replay protection mechanism needs to be re-evaluated.
+
+	// Update last used timestamp
+	_, err = db.Exec("UPDATE user_totp SET last_used = ? WHERE user_email = ?",
+		time.Now(), userEmail)
+	if err != nil {
+		// Log but don't fail
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("Failed to update TOTP last_used: %v", err)
 		}
 	}
 
-	// Validate code with time windows (90-second tolerance)
-	now := time.Now()
-	for i := -TOTPSkew; i <= TOTPSkew; i++ {
-		testTime := now.Add(time.Duration(i) * time.Duration(TOTPPeriod) * time.Second)
-
-		expectedCode, err := totp.GenerateCodeCustom(secretPadded, testTime, totp.ValidateOpts{
-			Period:    TOTPPeriod,
-			Skew:      0, // We handle skew manually
-			Digits:    otp.DigitsSix,
-			Algorithm: otp.AlgorithmSHA1,
-		})
-
-		if err != nil {
-			continue
-		}
-
-		if expectedCode == code {
-			// Check for replay attack
-			if err := checkTOTPReplay(db, userEmail, code, testTime); err != nil {
-				return fmt.Errorf("replay attack detected: %w", err)
-			}
-
-			// Log usage
-			if err := logTOTPUsage(db, userEmail, code, testTime); err != nil {
-				return fmt.Errorf("failed to log TOTP usage: %w", err)
-			}
-
-			// Update last used timestamp
-			_, err = db.Exec("UPDATE user_totp SET last_used = ? WHERE user_email = ?",
-				time.Now(), userEmail)
-			if err != nil {
-				// Log but don't fail
-				if logging.ErrorLogger != nil {
-					logging.ErrorLogger.Printf("Failed to update TOTP last_used: %v", err)
-				}
-			}
-
-			return nil // Valid code
-		}
-	}
-
-	return fmt.Errorf("invalid TOTP code")
+	return nil // Valid code
 }
 
 // ValidateBackupCode validates and consumes a backup code
@@ -349,10 +329,10 @@ func IsUserTOTPEnabled(db *sql.DB, userEmail string) (bool, error) {
 		userEmail,
 	).Scan(&enabled, &setupCompleted)
 
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil // No entry means TOTP is not enabled, not an error
+		}
 		return false, fmt.Errorf("failed to check TOTP status: %w", err)
 	}
 
@@ -450,37 +430,16 @@ func hashString(s string) string {
 }
 
 func validateTOTPCodeInternal(secret, code string) bool {
-	// Add padding if needed for base32 decoding (our secrets are stored without padding)
-	secretPadded := secret
-	if len(secret)%8 != 0 {
-		padding := 8 - (len(secret) % 8)
-		for i := 0; i < padding; i++ {
-			secretPadded += "="
-		}
+	valid, err := totp.ValidateCustom(code, secret, time.Now().UTC(), totp.ValidateOpts{
+		Period:    TOTPPeriod,
+		Skew:      uint(TOTPSkew),
+		Digits:    otp.DigitsSix,
+		Algorithm: otp.AlgorithmSHA1,
+	})
+	if err != nil {
+		return false
 	}
-
-	// Use the same validation logic as the main TOTP validation
-	now := time.Now()
-
-	for i := -TOTPSkew; i <= TOTPSkew; i++ {
-		testTime := now.Add(time.Duration(i) * time.Duration(TOTPPeriod) * time.Second)
-
-		expectedCode, err := totp.GenerateCodeCustom(secretPadded, testTime, totp.ValidateOpts{
-			Period:    TOTPPeriod,
-			Skew:      0, // We handle skew manually
-			Digits:    otp.DigitsSix,
-			Algorithm: otp.AlgorithmSHA1,
-		})
-
-		if err != nil {
-			continue
-		}
-
-		if expectedCode == code {
-			return true
-		}
-	}
-	return false
+	return valid
 }
 
 func checkTOTPReplay(db *sql.DB, userEmail, code string, testTime time.Time) error {

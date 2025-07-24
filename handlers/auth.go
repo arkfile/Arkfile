@@ -406,7 +406,7 @@ func TOTPSetup(c echo.Context) error {
 
 	// Check if user already has TOTP enabled
 	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, email)
-	if err != nil {
+	if err != nil && err.Error() != "sql: no rows in result set" {
 		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", email, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check TOTP status")
 	}
