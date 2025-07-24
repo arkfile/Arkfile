@@ -348,6 +348,15 @@ func RequireApproved(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		email := auth.GetEmailFromToken(c)
 
+		// Allow TOTP setup/verify operations during registration flow
+		// These operations use temporary TOTP tokens and should bypass approval
+		if auth.RequiresTOTPFromToken(c) {
+			path := c.Request().URL.Path
+			if path == "/api/totp/setup" || path == "/api/totp/verify" {
+				return next(c)
+			}
+		}
+
 		// Get user details
 		user, err := models.GetUserByEmail(database.DB, email)
 		if err != nil {
@@ -377,6 +386,48 @@ func RequireAdmin(next echo.HandlerFunc) echo.HandlerFunc {
 		// Check if user has admin privileges
 		if !user.HasAdminPrivileges() {
 			return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
+		}
+
+		return next(c)
+	}
+}
+
+// RequireTOTP ensures the user has TOTP enabled before allowing access to protected resources
+func RequireTOTP(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		email := auth.GetEmailFromToken(c)
+
+		// Allow TOTP setup/verify operations during registration flow
+		// These operations use temporary TOTP tokens and should bypass this check
+		if auth.RequiresTOTPFromToken(c) {
+			path := c.Request().URL.Path
+			if path == "/api/totp/setup" || path == "/api/totp/verify" {
+				return next(c)
+			}
+		}
+
+		// Check if user has TOTP enabled
+		totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, email)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", email, err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to verify TOTP status")
+		}
+
+		if !totpEnabled {
+			// Log security event for TOTP bypass attempt
+			logging.LogSecurityEvent(
+				logging.EventUnauthorizedAccess,
+				parseIPAddress(c.RealIP()),
+				&email,
+				nil,
+				map[string]interface{}{
+					"reason":   "TOTP not enabled",
+					"endpoint": c.Request().URL.Path,
+					"method":   c.Request().Method,
+				},
+			)
+
+			return echo.NewHTTPError(http.StatusForbidden, "Two-factor authentication is required. Please complete TOTP setup.")
 		}
 
 		return next(c)

@@ -37,26 +37,33 @@ func RegisterRoutes() {
 	// Session management (OPAQUE sessions)
 	Echo.POST("/api/refresh", RefreshToken)
 	Echo.POST("/api/logout", Logout)
-	auth.Echo.POST("/api/revoke-token", RevokeToken)
-	auth.Echo.POST("/api/revoke-all", RevokeAllTokens)
 
-	// Files - require authentication
-	auth.Echo.GET("/api/files", ListFiles)
-	auth.Echo.POST("/api/upload", UploadFile)
-	auth.Echo.GET("/api/download/:filename", DownloadFile)
-	auth.Echo.DELETE("/api/files/:filename", DeleteFile)
+	// Create TOTP-protected group for all sensitive operations
+	totpProtectedGroup := auth.Echo.Group("")
+	totpProtectedGroup.Use(RequireTOTP)
 
-	// Chunked uploads
-	auth.Echo.POST("/api/uploads/init", CreateUploadSession)
-	auth.Echo.POST("/api/uploads/:sessionId/chunks/:chunkNumber", UploadChunk)
-	auth.Echo.POST("/api/uploads/:sessionId/complete", CompleteUpload)
-	auth.Echo.GET("/api/uploads/:sessionId/status", GetUploadStatus)
-	auth.Echo.DELETE("/api/uploads/:sessionId", CancelUpload)
+	// Token revocation - require TOTP
+	totpProtectedGroup.POST("/api/revoke-token", RevokeToken)
+	totpProtectedGroup.POST("/api/revoke-all", RevokeAllTokens)
 
-	// Share file
-	auth.Echo.POST("/api/share", ShareFile) // Create a share link (changed from CreateShareLink)
-	auth.Echo.GET("/api/user/shares", ListShares)
-	auth.Echo.DELETE("/api/share/:id", DeleteShare)
+	// Files - require authentication AND TOTP
+
+	totpProtectedGroup.GET("/api/files", ListFiles)
+	totpProtectedGroup.POST("/api/upload", UploadFile)
+	totpProtectedGroup.GET("/api/download/:filename", DownloadFile)
+	totpProtectedGroup.DELETE("/api/files/:filename", DeleteFile)
+
+	// Chunked uploads - require TOTP
+	totpProtectedGroup.POST("/api/uploads/init", CreateUploadSession)
+	totpProtectedGroup.POST("/api/uploads/:sessionId/chunks/:chunkNumber", UploadChunk)
+	totpProtectedGroup.POST("/api/uploads/:sessionId/complete", CompleteUpload)
+	totpProtectedGroup.GET("/api/uploads/:sessionId/status", GetUploadStatus)
+	totpProtectedGroup.DELETE("/api/uploads/:sessionId", CancelUpload)
+
+	// Share file - require TOTP
+	totpProtectedGroup.POST("/api/share", ShareFile) // Create a share link (changed from CreateShareLink)
+	totpProtectedGroup.GET("/api/user/shares", ListShares)
+	totpProtectedGroup.DELETE("/api/share/:id", DeleteShare)
 
 	// Access shared file
 	Echo.GET("/shared/:id", GetSharedFile)
@@ -68,19 +75,19 @@ func RegisterRoutes() {
 	Echo.POST("/api/shared/:shareId/auth", AuthenticateShare)
 	Echo.GET("/api/shared/:shareId/download", DownloadSharedFile)
 
-	// File encryption key management
-	auth.Echo.POST("/api/files/:filename/update-encryption", UpdateEncryption)
-	auth.Echo.GET("/api/files/:filename/keys", ListKeys)
-	auth.Echo.DELETE("/api/files/:filename/keys/:keyId", DeleteKey)
-	auth.Echo.PATCH("/api/files/:filename/keys/:keyId", UpdateKey)
-	auth.Echo.POST("/api/files/:filename/keys/:keyId/set-primary", SetPrimaryKey)
+	// File encryption key management - require TOTP
+	totpProtectedGroup.POST("/api/files/:filename/update-encryption", UpdateEncryption)
+	totpProtectedGroup.GET("/api/files/:filename/keys", ListKeys)
+	totpProtectedGroup.DELETE("/api/files/:filename/keys/:keyId", DeleteKey)
+	totpProtectedGroup.PATCH("/api/files/:filename/keys/:keyId", UpdateKey)
+	totpProtectedGroup.POST("/api/files/:filename/keys/:keyId/set-primary", SetPrimaryKey)
 
-	// User management (admin only)
-	auth.Echo.GET("/api/admin/users", ListUsers)
-	auth.Echo.PATCH("/api/admin/users/:email", UpdateUser)
-	auth.Echo.DELETE("/api/admin/users/:email", DeleteUser)
+	// User management (admin only) - require TOTP
+	totpProtectedGroup.GET("/api/admin/users", RequireAdmin(ListUsers))
+	totpProtectedGroup.PATCH("/api/admin/users/:email", RequireAdmin(UpdateUser))
+	totpProtectedGroup.DELETE("/api/admin/users/:email", RequireAdmin(DeleteUser))
 
-	// System statistics (admin only)
-	auth.Echo.GET("/api/admin/stats", GetSystemStats)
-	auth.Echo.GET("/api/admin/activity", GetActivityLogs)
+	// System statistics (admin only) - require TOTP
+	totpProtectedGroup.GET("/api/admin/stats", RequireAdmin(GetSystemStats))
+	totpProtectedGroup.GET("/api/admin/activity", RequireAdmin(GetActivityLogs))
 }

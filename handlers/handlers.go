@@ -26,10 +26,15 @@ var Echo *echo.Echo
 func UploadFile(c echo.Context) error {
 	email := auth.GetEmailFromToken(c)
 
-	// Get user for storage checks
+	// Get user for storage checks and approval status
 	user, err := models.GetUserByEmail(database.DB, email)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user details")
+	}
+
+	// Check if user is approved for file operations
+	if !user.IsApproved {
+		return echo.NewHTTPError(http.StatusForbidden, "Account pending approval. File uploads are restricted until your account is approved by an administrator. You can still access other features of your account.")
 	}
 
 	var request struct {
@@ -136,6 +141,16 @@ func DownloadFile(c echo.Context) error {
 	email := auth.GetEmailFromToken(c)
 	filename := c.Param("filename")
 
+	// Check if user is approved for file operations
+	user, err := models.GetUserByEmail(database.DB, email)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user details")
+	}
+
+	if !user.IsApproved {
+		return echo.NewHTTPError(http.StatusForbidden, "Account pending approval. File downloads are restricted until your account is approved by an administrator. You can still access other features of your account.")
+	}
+
 	// Get file metadata including storage_id and original size
 	var fileMetadata struct {
 		StorageID    string
@@ -145,7 +160,7 @@ func DownloadFile(c echo.Context) error {
 		SHA256Sum    string
 		SizeBytes    int64
 	}
-	err := database.DB.QueryRow(
+	err = database.DB.QueryRow(
 		"SELECT storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes FROM file_metadata WHERE filename = ?",
 		filename,
 	).Scan(&fileMetadata.StorageID, &fileMetadata.OwnerEmail, &fileMetadata.PasswordHint,

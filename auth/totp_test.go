@@ -146,7 +146,7 @@ func TestCompleteTOTPSetup_Success(t *testing.T) {
 	defer crypto.SecureZeroSessionKey(sessionKey)
 
 	// Encrypt the test secret with TEMPORARY key (like during setup)
-	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, "TOTP_SETUP_TEMP")
+	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, "ARKFILE_TOTP_SETUP_TEMP")
 	require.NoError(t, err)
 	defer crypto.SecureZeroSessionKey(tempTotpKey)
 
@@ -189,7 +189,7 @@ func TestCompleteTOTPSetup_InvalidCode(t *testing.T) {
 	defer crypto.SecureZeroSessionKey(sessionKey)
 
 	// Encrypt the test secret with TEMPORARY key (like during setup)
-	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, "TOTP_SETUP_TEMP")
+	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, "ARKFILE_TOTP_SETUP_TEMP")
 	require.NoError(t, err)
 	defer crypto.SecureZeroSessionKey(tempTotpKey)
 

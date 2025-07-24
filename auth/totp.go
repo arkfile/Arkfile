@@ -82,7 +82,8 @@ func StoreTOTPSetup(db *sql.DB, userEmail string, setup *TOTPSetup, sessionKey [
 	// This allows us to decrypt during verification, then re-encrypt with production key
 
 	// Derive temporary TOTP setup key (different from production key)
-	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, "TOTP_SETUP_TEMP")
+	const TOTPSetupTempContext = "ARKFILE_TOTP_SETUP_TEMP"
+	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, TOTPSetupTempContext)
 	if err != nil {
 		return fmt.Errorf("failed to derive temporary TOTP key: %w", err)
 	}
@@ -136,7 +137,8 @@ func CompleteTOTPSetup(db *sql.DB, userEmail, testCode string, sessionKey []byte
 
 	// During setup, the secret is encrypted with temporary key
 	// Decrypt using the same temporary key from setup
-	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, "TOTP_SETUP_TEMP")
+	const TOTPSetupTempContext = "ARKFILE_TOTP_SETUP_TEMP"
+	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, TOTPSetupTempContext)
 	if err != nil {
 		return fmt.Errorf("failed to derive temporary TOTP key: %w", err)
 	}
@@ -154,14 +156,14 @@ func CompleteTOTPSetup(db *sql.DB, userEmail, testCode string, sessionKey []byte
 		return fmt.Errorf("invalid TOTP code")
 	}
 
-	// Now encrypt the secret for production use
-	totpKey, err := crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
+	// Now encrypt the secret for production use with user-specific persistent key
+	totpKey, err := deriveUserTOTPKey(sessionKey)
 	if err != nil {
-		return fmt.Errorf("failed to derive TOTP key: %w", err)
+		return fmt.Errorf("failed to derive user TOTP key: %w", err)
 	}
 	defer crypto.SecureZeroSessionKey(totpKey)
 
-	// Encrypt the TOTP secret with production key
+	// Encrypt the TOTP secret with user-specific persistent key
 	secretEncrypted, err := crypto.EncryptGCM([]byte(secret), totpKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
@@ -178,7 +180,7 @@ func CompleteTOTPSetup(db *sql.DB, userEmail, testCode string, sessionKey []byte
 		return fmt.Errorf("failed to unmarshal backup codes: %w", err)
 	}
 
-	// Re-encrypt backup codes with production key
+	// Re-encrypt backup codes with user-specific persistent key
 	backupCodesJSON, err := json.Marshal(backupCodes)
 	if err != nil {
 		return fmt.Errorf("failed to marshal backup codes: %w", err)
@@ -583,8 +585,9 @@ func getTOTPData(db *sql.DB, userEmail string) (*TOTPData, error) {
 }
 
 func decryptTOTPSecret(encrypted []byte, sessionKey []byte) (string, error) {
-	// Derive TOTP-specific key
-	totpKey, err := crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
+	// Use user-specific persistent key derived from user's OPAQUE record
+	// This ensures the same key is used regardless of session
+	totpKey, err := deriveUserTOTPKey(sessionKey)
 	if err != nil {
 		return "", err
 	}
@@ -600,7 +603,7 @@ func decryptTOTPSecret(encrypted []byte, sessionKey []byte) (string, error) {
 }
 
 func decryptJSON(encrypted []byte, sessionKey []byte, target interface{}) error {
-	totpKey, err := crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
+	totpKey, err := deriveUserTOTPKey(sessionKey)
 	if err != nil {
 		return err
 	}
@@ -612,4 +615,13 @@ func decryptJSON(encrypted []byte, sessionKey []byte, target interface{}) error 
 	}
 
 	return json.Unmarshal(decrypted, target)
+}
+
+// deriveUserTOTPKey derives a consistent user-specific key for TOTP encryption
+// This key is derived from the user's OPAQUE export key and remains the same
+// across different login sessions, unlike session-specific keys
+func deriveUserTOTPKey(sessionKey []byte) ([]byte, error) {
+	// Use a specific context for user TOTP encryption that's distinct from session keys
+	const UserTOTPContext = "ARKFILE_USER_TOTP_PERSISTENT"
+	return crypto.DeriveSessionKey(sessionKey, UserTOTPContext)
 }

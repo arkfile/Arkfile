@@ -1,9 +1,8 @@
 package handlers
 
 import (
-	"database/sql"
+	"crypto/rand"
 	"encoding/base64"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
+	"github.com/84adam/arkfile/utils"
 )
 
 // RefreshTokenRequest represents the request structure for refreshing a token
@@ -204,8 +204,9 @@ func OpaqueRegister(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Valid email address is required")
 	}
 
-	if len(request.Password) < 12 {
-		return echo.NewHTTPError(http.StatusBadRequest, "Password must be at least 12 characters long")
+	// Use proper password complexity validation
+	if err := utils.ValidatePasswordComplexity(request.Password); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 
 	// Check if user already exists
@@ -238,10 +239,13 @@ func OpaqueRegister(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration succeeded but setup token creation failed")
 	}
 
-	// For registration flow, we'll use a temporary approach where the TOTP secret
-	// is stored unencrypted initially, and then encrypted after the first successful verification
-	// This is a compromise for the registration flow where we don't have a real session key yet
-	sessionKey := []byte("REGISTRATION_TEMP_KEY_32_BYTES!!") // Exactly 32 bytes
+	// Generate cryptographically secure session key for registration TOTP setup
+	// Each registration gets a unique session key to prevent cross-user decryption attacks
+	sessionKey := make([]byte, 32)
+	if _, err := rand.Read(sessionKey); err != nil {
+		logging.ErrorLogger.Printf("Failed to generate session key for registration %s: %v", request.Email, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
+	}
 
 	// Encode session key for secure transmission
 	sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
@@ -277,26 +281,8 @@ func OpaqueLogin(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Password is required")
 	}
 
-	// Get user record for approval status check
-	user, err := models.GetUserByEmail(database.DB, request.Email)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			// Consistent timing to prevent username enumeration
-			time.Sleep(100 * time.Millisecond)
-			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
-		}
-		logging.ErrorLogger.Printf("Database error during OPAQUE login for %s: %v", request.Email, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
-	}
-
-	// Check user approval status
-	if !user.IsApproved {
-		return c.JSON(http.StatusForbidden, map[string]interface{}{
-			"message":          "User account not approved",
-			"userStatus":       "pending_approval",
-			"registrationDate": user.CreatedAt,
-		})
-	}
+	// Note: We no longer check user approval status during login
+	// Users can complete OPAQUE + TOTP authentication but will be restricted from file operations if unapproved
 
 	// Perform OPAQUE authentication
 	sessionKey, err := auth.AuthenticateUser(database.DB, request.Email, request.Password)
@@ -458,6 +444,7 @@ func TOTPSetup(c echo.Context) error {
 type TOTPVerifyRequest struct {
 	Code       string `json:"code"`
 	SessionKey string `json:"sessionKey"`
+	IsBackup   bool   `json:"isBackup,omitempty"`
 }
 
 // TOTPVerify completes TOTP setup by verifying a test code
@@ -471,8 +458,16 @@ func TOTPVerify(c echo.Context) error {
 	email := auth.GetEmailFromToken(c)
 
 	// Validate input
-	if request.Code == "" || len(request.Code) != 6 {
+	if request.Code == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "TOTP code is required")
+	}
+
+	if !request.IsBackup && len(request.Code) != 6 {
 		return echo.NewHTTPError(http.StatusBadRequest, "TOTP code must be 6 digits")
+	}
+
+	if request.IsBackup && len(request.Code) != 10 {
+		return echo.NewHTTPError(http.StatusBadRequest, "Backup code must be 10 characters")
 	}
 
 	// Decode session key
@@ -488,10 +483,60 @@ func TOTPVerify(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid TOTP code")
 	}
 
+	// Check if this is a temporary TOTP token (registration flow)
+	isTemporaryToken := auth.RequiresTOTPFromToken(c)
+
 	// Log successful TOTP setup
 	database.LogUserAction(email, "completed TOTP setup", "")
 	logging.InfoLogger.Printf("TOTP setup completed for user: %s", email)
 
+	// If this is a temporary TOTP token from registration, provide full access tokens
+	if isTemporaryToken {
+		// Generate full access token
+		token, err := auth.GenerateFullAccessToken(email)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", email, err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create session")
+		}
+
+		// Generate refresh token
+		refreshToken, err := models.CreateRefreshToken(database.DB, email)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", email, err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create session")
+		}
+
+		// Get user record for response
+		user, err := models.GetUserByEmail(database.DB, email)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to get user record for %s: %v", email, err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user details")
+		}
+
+		// Encode session key for response
+		sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
+
+		logging.InfoLogger.Printf("Registration completed with TOTP setup for user: %s", email)
+
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"message":       "TOTP setup and registration completed successfully",
+			"enabled":       true,
+			"access_token":  token,
+			"refresh_token": refreshToken,
+			"session_key":   sessionKeyB64,
+			"auth_method":   "OPAQUE+TOTP",
+			"user": map[string]interface{}{
+				"email":           user.Email,
+				"is_approved":     user.IsApproved,
+				"is_admin":        user.IsAdmin,
+				"total_storage":   user.TotalStorageBytes,
+				"storage_limit":   user.StorageLimitBytes,
+				"storage_used_pc": user.GetStorageUsagePercent(),
+			},
+		})
+	}
+
+	// Regular TOTP setup completion (not during registration)
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "TOTP setup completed successfully",
 		"enabled": true,
@@ -527,6 +572,10 @@ func TOTPAuth(c echo.Context) error {
 
 	if !request.IsBackup && len(request.Code) != 6 {
 		return echo.NewHTTPError(http.StatusBadRequest, "TOTP code must be 6 digits")
+	}
+
+	if request.IsBackup && len(request.Code) != 10 {
+		return echo.NewHTTPError(http.StatusBadRequest, "Backup code must be 10 characters")
 	}
 
 	// Decode session key

@@ -47,10 +47,15 @@ func CreateUploadSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid password type")
 	}
 
-	// Check user's storage limit
+	// Check user's storage limit and approval status
 	user, err := models.GetUserByEmail(database.DB, email)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user")
+	}
+
+	// Check if user is approved for file operations
+	if !user.IsApproved {
+		return echo.NewHTTPError(http.StatusForbidden, "Account pending approval. File uploads are restricted until your account is approved by an administrator. You can still access other features of your account.")
 	}
 
 	if !user.CheckStorageAvailable(request.TotalSize) {

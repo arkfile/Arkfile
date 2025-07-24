@@ -5,11 +5,16 @@
 import { wasmManager } from '../utils/wasm';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
-import { showModal } from '../ui/modals';
+import { showModal, showTOTPAppsModal } from '../ui/modals';
 import { setTokens } from '../utils/auth';
 import { showFileSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { LoginManager } from './login';
+
+// Make showTOTPAppsModal available globally for inline onclick handlers
+if (typeof window !== 'undefined') {
+  (window as any).showTOTPAppsModal = showTOTPAppsModal;
+}
 
 export interface TOTPFlowData {
   tempToken: string;
@@ -413,7 +418,10 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData, sess
         <img src="${setupData.qrCodeUrl}" alt="TOTP QR Code" style="max-width: 200px;">
       </div>
       <p style="font-size: 14px; color: #666;">
-        Scan this QR code with your authenticator app (Google Authenticator, Authy, etc.)
+        Scan this QR code with your authenticator app 
+        <a href="#" onclick="event.preventDefault(); window.showTOTPAppsModal();" style="color: #007bff; text-decoration: none; font-size: 13px;">
+          Need a TOTP app?
+        </a>
       </p>
     </div>
     

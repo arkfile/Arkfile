@@ -14,7 +14,7 @@ Because of this “zero-knowledge” design, only you – and anyone you choose 
 
 1. **Privacy first** – files are encrypted on your device.  
 2. **Share safely** – you can create extra "one-time" keys for friends or co-workers without giving them your main password.  
-3. **Multi-factor security** – TOTP authentication adds an extra layer of protection beyond your password.  
+3. **Multi-factor security** – TOTP authentication provides mandatory two-factor protection for all accounts.
 4. **Pick your storage** – use the built-in MinIO server for quick tests or point Arkfile at Backblaze B2, Wasabi, Vultr Object Storage, and other S3-compatible back-ends.  
 5. **Runs anywhere** – one binary, no external database. (Arkfile uses the lightweight rqlite engine under the hood.)  
 6. **Open source** – anyone can inspect or improve the code.

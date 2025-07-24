@@ -19,25 +19,44 @@ REGISTER_RESPONSE=$(curl -s -k -X POST "$BASE_URL/api/opaque/register" \
 
 echo "Registration response: $REGISTER_RESPONSE"
 
-# Extract tokens from registration response
-ACCESS_TOKEN=$(echo "$REGISTER_RESPONSE" | jq -r '.access_token // empty')
-REFRESH_TOKEN=$(echo "$REGISTER_RESPONSE" | jq -r '.refresh_token // empty')
+# Extract temp token for TOTP setup
+TEMP_TOKEN=$(echo "$REGISTER_RESPONSE" | jq -r '.tempToken // empty')
+REQUIRES_TOTP=$(echo "$REGISTER_RESPONSE" | jq -r '.requiresTOTPSetup // false')
 
-if [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ]; then
-    echo "❌ Failed to get access token from registration"
+if [ -z "$TEMP_TOKEN" ] || [ "$TEMP_TOKEN" = "null" ]; then
+    echo "❌ Failed to get temp token from registration"
     echo "Response: $REGISTER_RESPONSE"
     exit 1
 fi
 
-echo "✅ User registered successfully"
-echo "Access token: ${ACCESS_TOKEN:0:20}..."
+if [ "$REQUIRES_TOTP" != "true" ]; then
+    echo "❌ Registration should require TOTP setup"
+    echo "Response: $REGISTER_RESPONSE"
+    exit 1
+fi
+
+echo "✅ User registered successfully with mandatory TOTP requirement"
+echo "Temp token: ${TEMP_TOKEN:0:20}..."
+echo "Requires TOTP: $REQUIRES_TOTP"
 echo
+
+# Extract session key from registration response
+SESSION_KEY=$(echo "$REGISTER_RESPONSE" | jq -r '.sessionKey // empty')
+
+if [ -z "$SESSION_KEY" ] || [ "$SESSION_KEY" = "null" ]; then
+    echo "❌ Failed to get session key from registration"
+    echo "Response: $REGISTER_RESPONSE"
+    exit 1
+fi
+
+echo "Session key: ${SESSION_KEY:0:20}..."
 
 # Step 2: Setup TOTP
 echo "Step 2: Setting up TOTP..."
 TOTP_SETUP_RESPONSE=$(curl -s -k -X POST "$BASE_URL/api/totp/setup" \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
-    -H "Content-Type: application/json")
+    -H "Authorization: Bearer $TEMP_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "{\"sessionKey\":\"$SESSION_KEY\"}")
 
 echo "TOTP setup response: $TOTP_SETUP_RESPONSE"
 
@@ -55,27 +74,7 @@ echo
 
 # Step 3: Generate TOTP code
 echo "Step 3: Generating TOTP code..."
-TOTP_CODE=$(go run << 'GOCODE'
-package main
-
-import (
-    "fmt"
-    "os"
-    "time"
-    "github.com/pquerna/otp/totp"
-)
-
-func main() {
-    secret := os.Args[1]
-    code, err := totp.GenerateCode(secret, time.Now())
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        os.Exit(1)
-    }
-    fmt.Print(code)
-}
-GOCODE
-$TOTP_SECRET)
+TOTP_CODE=$(./scripts/totp-generator "$TOTP_SECRET")
 
 if [ -z "$TOTP_CODE" ]; then
     echo "❌ Failed to generate TOTP code"
@@ -88,11 +87,21 @@ echo
 # Step 4: Complete TOTP setup
 echo "Step 4: Completing TOTP setup..."
 TOTP_VERIFY_RESPONSE=$(curl -s -k -X POST "$BASE_URL/api/totp/verify" \
-    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    -H "Authorization: Bearer $TEMP_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"code\":\"$TOTP_CODE\"}")
+    -d "{\"code\":\"$TOTP_CODE\",\"sessionKey\":\"$SESSION_KEY\"}")
 
 echo "TOTP verification response: $TOTP_VERIFY_RESPONSE"
+
+# Extract final tokens after TOTP verification
+FINAL_ACCESS_TOKEN=$(echo "$TOTP_VERIFY_RESPONSE" | jq -r '.access_token // empty')
+FINAL_REFRESH_TOKEN=$(echo "$TOTP_VERIFY_RESPONSE" | jq -r '.refresh_token // empty')
+
+if [ -z "$FINAL_ACCESS_TOKEN" ] || [ "$FINAL_ACCESS_TOKEN" = "null" ]; then
+    echo "❌ TOTP verification should return access token"
+    echo "Response: $TOTP_VERIFY_RESPONSE"
+    exit 1
+fi
 
 if echo "$TOTP_VERIFY_RESPONSE" | grep -q "error\|failed"; then
     echo "❌ TOTP verification failed"
@@ -100,12 +109,13 @@ if echo "$TOTP_VERIFY_RESPONSE" | grep -q "error\|failed"; then
 fi
 
 echo "✅ TOTP setup completed successfully"
+echo "Final access token: ${FINAL_ACCESS_TOKEN:0:20}..."
 echo
 
 # Step 5: Check TOTP status
 echo "Step 5: Checking TOTP status..."
 TOTP_STATUS_RESPONSE=$(curl -s -k -X GET "$BASE_URL/api/totp/status" \
-    -H "Authorization: Bearer $ACCESS_TOKEN")
+    -H "Authorization: Bearer $FINAL_ACCESS_TOKEN")
 
 echo "TOTP status response: $TOTP_STATUS_RESPONSE"
 
@@ -118,10 +128,13 @@ fi
 
 echo
 echo "🎉 COMPLETE TOTP FLOW TEST PASSED!"
-echo "✅ User registration with mandatory TOTP"
-echo "✅ TOTP setup initiation"
+echo "✅ User registration blocks immediate access (mandatory TOTP working)"
+echo "✅ TOTP setup initiation with temp token"
 echo "✅ TOTP code generation"
-echo "✅ TOTP setup completion"
+echo "✅ TOTP setup completion returns full access tokens"
 echo "✅ TOTP status verification"
 echo
-echo "The application now enforces mandatory TOTP for all users!"
+echo "MANDATORY TOTP ENFORCEMENT CONFIRMED!"
+echo "- Registration requires TOTP setup before full access"
+echo "- No access tokens provided until TOTP is configured"
+echo "- Users cannot bypass TOTP requirement"

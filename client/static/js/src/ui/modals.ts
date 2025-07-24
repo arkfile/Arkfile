@@ -238,6 +238,123 @@ export class ModalManager {
   }
 }
 
+// TOTP Apps Recommendation Modal
+export function showTOTPAppsModal(): HTMLElement {
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+  `;
+
+  const modalContent = document.createElement('div');
+  modalContent.className = 'modal-content totp-apps-modal';
+  modalContent.style.cssText = `
+    background: white;
+    padding: 30px;
+    border-radius: 8px;
+    max-width: 550px;
+    width: 90%;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  `;
+
+  const appsData = {
+    mobile: [
+      { name: "Aegis Authenticator", platform: "Android", desc: "Encrypted backups", url: "https://github.com/beemdevelopment/Aegis" },
+      { name: "FreeOTP+", platform: "Android/iOS", desc: "Simple & reliable", url: "https://github.com/helloworld1/FreeOTP-Plus" },
+      { name: "Tofu", platform: "iOS", desc: "Native iOS experience", url: "https://github.com/iKenndac/Tofu" }
+    ],
+    desktop: [
+      { name: "KeePassXC", desc: "Password manager with TOTP", url: "https://keepassxc.org" },
+      { name: "Authenticator", platform: "GNOME", desc: "Linux desktop app", url: "https://gitlab.gnome.org/World/Authenticator" }
+    ],
+    advanced: [
+      { name: "oath-toolkit", desc: "Command-line tool", url: "https://gitlab.com/oath-toolkit/oath-toolkit" }
+    ]
+  };
+
+  const createAppsList = (apps: any[], emoji: string, title: string) => {
+    return `
+      <div style="margin-bottom: 20px;">
+        <h4 style="margin: 0 0 10px 0; color: #333; font-size: 16px;">
+          ${emoji} ${title}
+        </h4>
+        ${apps.map(app => `
+          <div style="margin-bottom: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div style="flex: 1;">
+                <strong>${app.name}</strong>
+                ${app.platform ? ` (${app.platform})` : ''}
+                <div style="font-size: 12px; color: #666; margin-top: 2px;">
+                  ${app.desc}
+                </div>
+              </div>
+              <a href="${app.url}" target="_blank" rel="noopener" style="
+                color: #007bff;
+                text-decoration: none;
+                font-size: 12px;
+                padding: 4px 8px;
+                border: 1px solid #007bff;
+                border-radius: 3px;
+                margin-left: 10px;
+                white-space: nowrap;
+              " onmouseover="this.style.backgroundColor='#007bff'; this.style.color='white';" 
+                 onmouseout="this.style.backgroundColor='transparent'; this.style.color='#007bff';">
+                View →
+              </a>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  };
+
+  modalContent.innerHTML = `
+    <h3 style="margin: 0 0 20px 0; color: #333; text-align: center;">Recommended TOTP Apps</h3>
+    <div style="margin-bottom: 20px;">
+      ${createAppsList(appsData.mobile, '📱', 'Mobile (Recommended)')}
+      ${createAppsList(appsData.desktop, '💻', 'Desktop')}
+      ${createAppsList(appsData.advanced, '⌨️', 'Advanced')}
+      <div style="margin-top: 20px; padding: 15px; background: #e7f3ff; border-radius: 4px; font-size: 14px; color: #0066cc;">
+        <strong>💡 Tip:</strong> All listed apps are fully open source and respect your privacy.
+      </div>
+    </div>
+    <button onclick="this.closest('.modal-overlay').remove();" style="
+      width: 100%;
+      padding: 10px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+    ">Close</button>
+  `;
+
+  modal.appendChild(modalContent);
+
+  // Close modal when clicking outside
+  modal.onclick = (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  };
+
+  document.body.appendChild(modal);
+  
+  return modal;
+}
+
 // Export utility functions
 export function showModal(options: ModalOptions): HTMLElement {
   return ModalManager.createModal(options);
