@@ -22,7 +22,7 @@ TEST_PASSWORD="ThisIsAValidPassword14+"
 info() { echo -e "${CYAN}➜ $1${NC}"; }
 success() { echo -e "${GREEN}✓ $1${NC}"; }
 warn() { echo -e "${YELLOW}⚠️ $1${NC}"; }
-fail() { echo -e "${RED}❌ $1${NC}"; tee -a "$LOG_FILE"; exit 1; }
+fail() { echo -e "${RED}❌ $1${NC}"; echo "$1" | tee -a "$LOG_FILE" >/dev/null; exit 1; }
 prompt_confirm() { read -p "$1 [y/N] " -r answer; [[ "$answer" == "y" ]]; }
 
 # --- Phase 0: Pre-flight Checks ---
@@ -52,13 +52,13 @@ preflight_checks() {
 
 # --- Phase 1.5: Service Health Check ---
 check_service_health() {
-    info "Checking Arkfile service health at $API_BASE_URL/health..."
-    local health_response=$(curl -s -o /dev/null -w "%{http_code}" --insecure "$API_BASE_URL/health")
+    info "Checking Arkfile main service health at $API_BASE_URL/health..."
+    local health_response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "$API_BASE_URL/health")
     
     if [[ "$health_response" == "200" ]]; then
-        success "Arkfile service is up and running."
+        success "Arkfile main service is up and running."
     else
-        fail "Arkfile service is not responding correctly. HTTP status: $health_response"
+        fail "Arkfile main service is not responding correctly. HTTP status: $health_response"
     fi
 }
 
@@ -87,7 +87,11 @@ handle_test_user() {
     TEMP_TOKEN="" # Global variable to store the token
 
     if [[ "$1" == "--cleanup" ]]; then
-        # ... (cleanup logic remains the same)
+        info "Cleaning up test user '$TEST_EMAIL'..."
+        # Note: In a real cleanup, you'd need admin privileges to delete users
+        # For now, we'll just log that cleanup was requested
+        warn "User cleanup requires admin API access - skipping for demo"
+        success "Cleanup completed (or skipped due to permissions)"
         exit 0
     fi
 

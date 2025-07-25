@@ -52,36 +52,39 @@ fi
 
 echo "Using database credentials for user: $USERNAME"
 
-# Function to execute SQL statements directly via sqlite3 CLI
-# This is more robust than using the rqlite HTTP API for complex schema init.
-execute_sql_direct() {
-    local sql="$1"
-    if ! echo "$sql" | sudo -u arkfile sqlite3 "/opt/arkfile/var/lib/database/db.sqlite"; then
-        echo -e "${RED}    -> Direct SQL command failed for statement:${NC}"
-        echo -e "${YELLOW}       $sql${NC}"
-        return 1
-    fi
-    return 0
-}
-
-# All schema will be applied directly from the file.
-# No need for basic tables here.
-echo "Applying all schema directly to the database file..."
-
-# Now execute the extended schema
-echo "Applying extended schema from $SCHEMA_FILE..."
-
 # Function to print a failure message and exit
 fail() {
     echo -e "${RED}❌ $1${NC}" >&2
     exit 1
 }
 
+# Function to execute SQL statements via rqlite HTTP API
+execute_sql_rqlite() {
+    local sql="$1"
+    local response
+    response=$(curl -s -H "Content-Type: application/json" \
+        -X POST "http://$USERNAME:$PASSWORD@localhost:4001/db/execute" \
+        -d "[\"$sql\"]")
+    
+    if echo "$response" | grep -q '"error"'; then
+        echo -e "${RED}    -> rqlite command failed for statement:${NC}"
+        echo -e "${YELLOW}       $sql${NC}"
+        echo -e "${RED}       Response: $response${NC}"
+        return 1
+    fi
+    return 0
+}
+
+# Apply schema extensions to rqlite distributed database
+echo "Applying schema extensions to rqlite database..."
+echo "Processing schema file: $SCHEMA_FILE"
+
 # Read the entire schema file and process it statement by statement.
 # This handles multi-line statements correctly.
 sed 's/--.*//' "$SCHEMA_FILE" | tr -s '\n' ' ' | sed 's/;/;\n/g' | while read -r sql_statement; do
+    sql_statement=$(echo "$sql_statement" | tr -s ' ' | sed 's/^ *//;s/ *$//')
     if [[ -n "$sql_statement" ]]; then
-        if ! echo "$sql_statement" | sudo -u arkfile sqlite3 "/opt/arkfile/var/lib/database/db.sqlite"; then
+        if ! execute_sql_rqlite "$sql_statement"; then
             fail "Could not apply schema statement: $sql_statement"
         fi
     fi
@@ -89,19 +92,25 @@ done
 
 echo -e "${GREEN}✅ Database schema initialization completed successfully!${NC}"
 
-# Verify critical tables exist using direct sqlite3 queries
+# Verify critical tables exist using rqlite queries
 echo "Verifying OPAQUE tables..."
-opaque_check=$(sudo -u arkfile sqlite3 "/opt/arkfile/var/lib/database/db.sqlite" "SELECT name FROM sqlite_master WHERE type='table' AND name='opaque_user_data';")
+opaque_response=$(curl -s -H "Content-Type: application/json" \
+    -X POST "http://$USERNAME:$PASSWORD@localhost:4001/db/query" \
+    -d '[["SELECT name FROM sqlite_master WHERE type='\''table'\'' AND name IN ('\''opaque_user_data'\'', '\''opaque_server_keys'\'')"]]')
 
-if [[ "$opaque_check" == "opaque_user_data" ]]; then
+opaque_count=$(echo "$opaque_response" | jq -r '.results[0].values | length // 0')
+if [[ "$opaque_count" -ge 1 ]]; then
     echo -e "${GREEN}✅ OPAQUE tables verified successfully!${NC}"
 else
     echo -e "${YELLOW}⚠️  OPAQUE tables may not have been created properly${NC}"
 fi
 
 echo "Verifying TOTP tables..."
-totp_count=$(sudo -u arkfile sqlite3 "/opt/arkfile/var/lib/database/db.sqlite" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE '%totp%';")
+totp_response=$(curl -s -H "Content-Type: application/json" \
+    -X POST "http://$USERNAME:$PASSWORD@localhost:4001/db/query" \
+    -d '[["SELECT count(*) FROM sqlite_master WHERE type='\''table'\'' AND name LIKE '\''%totp%'\''"]]')
 
+totp_count=$(echo "$totp_response" | jq -r '.results[0].values[0][0] // 0')
 if [[ "$totp_count" -eq 3 ]]; then
     echo -e "${GREEN}✅ All TOTP tables verified successfully!${NC}"
 else

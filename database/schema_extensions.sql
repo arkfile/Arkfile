@@ -215,24 +215,14 @@ CREATE INDEX IF NOT EXISTS idx_alerts_severity ON security_alerts(severity, crea
 CREATE INDEX IF NOT EXISTS idx_alerts_unack ON security_alerts(acknowledged, created_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_entity ON security_alerts(entity_id, time_window);
 
--- Update file_metadata table to include storage_id and padded_size
-CREATE TABLE IF NOT EXISTS file_metadata (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    filename TEXT NOT NULL,
-    storage_id VARCHAR(36) UNIQUE NOT NULL,  -- UUID v4 for storage backend
-    owner_email TEXT NOT NULL,
-    password_hint TEXT,
-    password_type TEXT NOT NULL DEFAULT 'custom',
-    sha256sum CHAR(64) NOT NULL,
-    size_bytes BIGINT NOT NULL,             -- Original file size
-    padded_size BIGINT NOT NULL,            -- Size after padding
-    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    multi_key BOOLEAN DEFAULT FALSE,
-    FOREIGN KEY (owner_email) REFERENCES users(email) ON DELETE CASCADE,
-    UNIQUE(filename, owner_email)
-);
+-- Add missing columns to existing file_metadata table
+-- Note: SQLite doesn't support adding NOT NULL columns to existing tables easily
+-- So we'll add them as nullable and handle NULL values in the application
+ALTER TABLE file_metadata ADD COLUMN storage_id VARCHAR(36);
+ALTER TABLE file_metadata ADD COLUMN padded_size BIGINT;
+ALTER TABLE file_metadata ADD COLUMN multi_key BOOLEAN DEFAULT FALSE;
 
--- Indexes for file_metadata
+-- Create indexes for file_metadata (existing indexes will be ignored)
 CREATE INDEX IF NOT EXISTS idx_file_metadata_owner ON file_metadata(owner_email);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_upload_date ON file_metadata(upload_date);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_storage_id ON file_metadata(storage_id);
