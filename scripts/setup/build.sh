@@ -120,39 +120,73 @@ fi
 # Create temporary build directory
 mkdir -p ${BUILD_DIR}
 
-# Build TypeScript Frontend with Bun (if available)
+# Build TypeScript Frontend (Mandatory)
 echo "Building TypeScript frontend..."
-if command -v bun >/dev/null 2>&1; then
-    echo -e "${GREEN}Using Bun for TypeScript compilation${NC}"
-    cd client/static/js
-    
-    # Install dependencies if node_modules doesn't exist
-    if [ ! -d "node_modules" ]; then
-        echo "Installing Bun dependencies..."
-        bun install
-    fi
-    
-    # Run TypeScript type checking
-    echo "Running TypeScript type checking..."
-    if ! bun run type-check; then
-        echo -e "${YELLOW}⚠️  TypeScript type checking failed but continuing build...${NC}"
-    fi
-    
-    # Build optimized production bundle
-    echo "Building TypeScript production bundle..."
-    bun run build:prod
-    
-    cd ../../..
-    
-    # Copy built assets to the build directory
-    mkdir -p ${BUILD_DIR}/client/static/js/dist
-    cp client/static/js/dist/* ${BUILD_DIR}/client/static/js/dist/
-    
-    echo -e "${GREEN}✅ TypeScript frontend built with Bun${NC}"
-else
-    echo -e "${YELLOW}⚠️  Bun not found - skipping TypeScript build${NC}"
-    echo -e "${YELLOW}   Install Bun from https://bun.sh for faster TypeScript compilation${NC}"
+if ! command -v bun >/dev/null 2>&1; then
+    echo -e "${RED}❌ Bun is required for TypeScript compilation${NC}"
+    echo -e "${YELLOW}Install Bun using: source <(curl -fsSL https://bun.sh/install)${NC}"
+    exit 1
 fi
+
+echo -e "${GREEN}Using Bun $(bun --version) for TypeScript compilation${NC}"
+cd client/static/js
+
+# Install dependencies if node_modules doesn't exist
+if [ ! -d "node_modules" ]; then
+    echo "Installing Bun dependencies..."
+    bun install || {
+        echo -e "${RED}❌ Failed to install dependencies${NC}"
+        exit 1
+    }
+fi
+
+# Verify source files exist
+if [ ! -f "src/app.ts" ]; then
+    echo -e "${RED}❌ Missing TypeScript source files${NC}"
+    exit 1
+fi
+
+# Run TypeScript type checking
+echo "Running TypeScript type checking..."
+if ! bun run type-check; then
+    echo -e "${RED}❌ TypeScript type checking failed - aborting build${NC}"
+    exit 1
+fi
+
+# Check build cache
+CACHE_FILE=".buildcache"
+TS_HASH=$(find src -name "*.ts" -type f -exec sha256sum {} \; | sha256sum)
+BUILD_HASH=$(cat ${CACHE_FILE} 2>/dev/null || true)
+
+if [ "${TS_HASH}" = "${BUILD_HASH}" ] && [ -f "dist/app.js" ]; then
+    echo -e "${GREEN}✅ No TypeScript changes - skipping build${NC}"
+else
+    echo "Building TypeScript production bundle..."
+    bun run build:prod || {
+        echo -e "${RED}❌ TypeScript build failed${NC}"
+        exit 1
+    }
+    
+    # Verify build output
+    if [ ! -f "dist/app.js" ] || [ ! -s "dist/app.js" ]; then
+        echo -e "${RED}❌ Build output missing or empty${NC}"
+        exit 1
+    fi
+    
+    # Update build cache
+    echo "${TS_HASH}" > ${CACHE_FILE}
+fi
+
+cd ../../..
+
+# Validate final JS path
+JS_PATH="client/static/js/dist/app.js"
+if [ ! -f "${JS_PATH}" ]; then
+    echo -e "${RED}❌ Missing built JavaScript file at ${JS_PATH}${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✅ TypeScript frontend built successfully${NC}"
 
 # Build WebAssembly
 echo "Building WebAssembly..."

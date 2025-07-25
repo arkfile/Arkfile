@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     storage_id VARCHAR(36),  -- UUID v4 for storage backend
     padded_size BIGINT,      -- Size after padding
     status TEXT NOT NULL DEFAULT 'in_progress',
+    multi_key BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,
@@ -79,9 +80,6 @@ CREATE TABLE IF NOT EXISTS file_encryption_keys (
 CREATE INDEX IF NOT EXISTS idx_file_encryption_keys_file ON file_encryption_keys(file_id);
 -- Index for finding encryption keys by key ID
 CREATE INDEX IF NOT EXISTS idx_file_encryption_keys_key ON file_encryption_keys(key_id);
-
--- Add multi-key support column to upload_sessions
-ALTER TABLE upload_sessions ADD COLUMN multi_key BOOLEAN DEFAULT FALSE;
 
 -- Table for refresh tokens
 CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -151,13 +149,12 @@ CREATE TABLE IF NOT EXISTS security_events (
     device_profile TEXT,               -- Argon2ID profile
     severity TEXT NOT NULL DEFAULT 'INFO',
     details JSON,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    
-    INDEX idx_events_window (time_window, event_type),
-    INDEX idx_events_entity (entity_id, time_window),
-    INDEX idx_events_severity (severity, timestamp),
-    INDEX idx_events_type (event_type, timestamp)
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_events_window ON security_events(time_window, event_type);
+CREATE INDEX IF NOT EXISTS idx_events_entity ON security_events(entity_id, time_window);
+CREATE INDEX IF NOT EXISTS idx_events_severity ON security_events(severity, timestamp);
+CREATE INDEX IF NOT EXISTS idx_events_type ON security_events(event_type, timestamp);
 
 -- Rate limiting state with entity ID privacy protection
 CREATE TABLE IF NOT EXISTS rate_limit_state (
@@ -171,12 +168,11 @@ CREATE TABLE IF NOT EXISTS rate_limit_state (
     penalty_until DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    
-    PRIMARY KEY (entity_id, time_window, endpoint),
-    INDEX idx_rate_limit_cleanup (time_window),
-    INDEX idx_rate_limit_entity (entity_id, time_window),
-    INDEX idx_rate_limit_penalties (penalty_until)
+    PRIMARY KEY (entity_id, time_window, endpoint)
 );
+CREATE INDEX IF NOT EXISTS idx_rate_limit_cleanup ON rate_limit_state(time_window);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_entity ON rate_limit_state(entity_id, time_window);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_penalties ON rate_limit_state(penalty_until);
 
 -- Entity ID configuration and master secret storage
 CREATE TABLE IF NOT EXISTS entity_id_config (
@@ -213,12 +209,11 @@ CREATE TABLE IF NOT EXISTS security_alerts (
     acknowledged BOOLEAN DEFAULT FALSE,
     acknowledged_by TEXT,
     acknowledged_at DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    
-    INDEX idx_alerts_severity (severity, created_at),
-    INDEX idx_alerts_unack (acknowledged, created_at),
-    INDEX idx_alerts_entity (entity_id, time_window)
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_alerts_severity ON security_alerts(severity, created_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_unack ON security_alerts(acknowledged, created_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_entity ON security_alerts(entity_id, time_window);
 
 -- Update file_metadata table to include storage_id and padded_size
 CREATE TABLE IF NOT EXISTS file_metadata (

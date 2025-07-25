@@ -12,8 +12,11 @@ func RegisterRoutes() {
 		return c.File("static/index.html")
 	})
 
-	// Static files
-	Echo.Static("/", "static")
+	// Static assets
+	Echo.Static("/js/dist", "client/static/js/dist")
+	Echo.Static("/css", "client/static/css")
+	Echo.Static("/wasm", "client/static/wasm")
+	Echo.Static("/errors", "client/static/errors")
 
 	// OPAQUE Authentication (Only)
 	Echo.POST("/api/opaque/register", OpaqueRegister)

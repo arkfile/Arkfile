@@ -1042,6 +1042,38 @@ The approach emphasizes defense-in-depth security principles where TOTP requirem
 Once all Phase 1 security fixes are implemented, the TOTP system will provide robust mandatory two-factor authentication for all Arkfile users with no possible bypass methods.
 
 
+## Build System Fixes (Bun/TypeScript)
+
+### Analysis & Implementation Plan
+<plan content from previous response>
+
+## Build System Fixes (Bun/TypeScript)
+
+### Implementation Plan
+```markdown
+### Phase 1: Bun Auto-Installation
+- [x] Update `quick-start.sh` to auto-install Bun using official installer
+- [x] Add version compatibility checks for Bun 1.1.4+
+
+### Phase 2: Build Process Hardening
+- [ ] Modify `build.sh` to make TypeScript compilation mandatory
+- [ ] Add file verification for `dist/app.js`
+- [ ] Implement simple build caching using file timestamps
+
+### Phase 3: Path Consistency Fixes
+- [ ] Update `chunked-upload.html` JS path `/js/dist/app.js`
+- [ ] Audit all HTML files for path consistency
+
+### Phase 4: Testing Integration
+- [ ] Add call to `test-typescript.sh` in complete setup test
+- [ ] Add build validation checks to integration tests
+
+### Phase 5: Monitoring
+- [ ] Add JavaScript build status to health check endpoints
+- [ ] Create dashboard alert for failed builds
+```
+
+
 ---
 
 `NOTE: START FROM HERE`

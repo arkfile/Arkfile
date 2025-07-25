@@ -129,6 +129,8 @@ fi
 
 # Run comprehensive Go unit tests
 echo
+echo -e "\n${BLUE}🔧 Validating TypeScript build...${NC}"
+./scripts/testing/test-typescript.sh build
 echo -e "${BLUE}🧪 Running comprehensive Go unit test suite...${NC}"
 
 # Test crypto module

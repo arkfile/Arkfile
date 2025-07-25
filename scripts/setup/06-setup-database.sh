@@ -52,151 +52,60 @@ fi
 
 echo "Using database credentials for user: $USERNAME"
 
-# Function to execute SQL statements
-execute_sql() {
+# Function to execute SQL statements directly via sqlite3 CLI
+# This is more robust than using the rqlite HTTP API for complex schema init.
+execute_sql_direct() {
     local sql="$1"
-    curl -s -X POST \
-        -H "Content-Type: application/json" \
-        -u "$USERNAME:$PASSWORD" \
-        -d "[\"$sql\"]" \
-        "http://localhost:4001/db/execute" > /dev/null 2>&1
+    if ! echo "$sql" | sudo -u arkfile sqlite3 "/opt/arkfile/var/lib/database/db.sqlite"; then
+        echo -e "${RED}    -> Direct SQL command failed for statement:${NC}"
+        echo -e "${YELLOW}       $sql${NC}"
+        return 1
+    fi
+    return 0
 }
 
-# Create basic tables first
-echo "Creating basic database tables..."
-
-# Users table
-execute_sql "CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE NOT NULL,
-    password_hash TEXT NOT NULL,
-    password_salt TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    total_storage_bytes BIGINT NOT NULL DEFAULT 0,
-    storage_limit_bytes BIGINT NOT NULL DEFAULT 10737418240,
-    is_approved BOOLEAN NOT NULL DEFAULT false,
-    approved_by TEXT,
-    approved_at TIMESTAMP,
-    is_admin BOOLEAN NOT NULL DEFAULT false
-);"
-
-# File metadata table
-execute_sql "CREATE TABLE IF NOT EXISTS file_metadata (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    filename TEXT UNIQUE NOT NULL,
-    owner_email TEXT NOT NULL,
-    password_hint TEXT,
-    password_type TEXT NOT NULL DEFAULT 'custom',
-    sha256sum CHAR(64) NOT NULL,
-    size_bytes BIGINT NOT NULL DEFAULT 0,
-    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (owner_email) REFERENCES users(email)
-);"
-
-execute_sql "CREATE INDEX IF NOT EXISTS idx_file_metadata_sha256sum ON file_metadata(sha256sum);"
-
-# User activity table
-execute_sql "CREATE TABLE IF NOT EXISTS user_activity (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_email TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target TEXT,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_email) REFERENCES users(email)
-);"
-
-# Access logs table
-execute_sql "CREATE TABLE IF NOT EXISTS access_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_email TEXT NOT NULL,
-    action TEXT NOT NULL,
-    filename TEXT,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_email) REFERENCES users(email)
-);"
-
-# Admin logs table
-execute_sql "CREATE TABLE IF NOT EXISTS admin_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    admin_email TEXT NOT NULL,
-    action TEXT NOT NULL,
-    target_email TEXT NOT NULL,
-    details TEXT,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (admin_email) REFERENCES users(email),
-    FOREIGN KEY (target_email) REFERENCES users(email)
-);"
-
-echo "Basic tables created successfully."
+# All schema will be applied directly from the file.
+# No need for basic tables here.
+echo "Applying all schema directly to the database file..."
 
 # Now execute the extended schema
 echo "Applying extended schema from $SCHEMA_FILE..."
 
-# Read and process the schema file - improved parsing
-sql_statement=""
-while IFS= read -r line; do
-    # Skip empty lines and comments
-    if [[ -z "$line" || "$line" =~ ^[[:space:]]*-- ]]; then
-        continue
-    fi
-    
-    # Accumulate SQL statements until we hit a semicolon
-    if [[ -z "$sql_statement" ]]; then
-        sql_statement="$line"
-    else
-        sql_statement="$sql_statement $line"
-    fi
-    
-    # Check if the line contains a semicolon (more flexible than end-of-line check)
-    if [[ "$line" == *";"* ]]; then
-        # Clean up the statement and remove extra whitespace
-        cleaned_sql=$(echo "$sql_statement" | sed 's/"/\\"/g' | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | xargs)
-        
-        # Execute the statement if it's not empty
-        if [ -n "$cleaned_sql" ]; then
-            echo "Executing: ${cleaned_sql:0:80}..." # Show first 80 chars for debugging
-            if ! execute_sql "$cleaned_sql"; then
-                echo -e "${YELLOW}⚠️  Warning: Failed to execute SQL statement${NC}"
-            fi
+# Function to print a failure message and exit
+fail() {
+    echo -e "${RED}❌ $1${NC}" >&2
+    exit 1
+}
+
+# Read the entire schema file and process it statement by statement.
+# This handles multi-line statements correctly.
+sed 's/--.*//' "$SCHEMA_FILE" | tr -s '\n' ' ' | sed 's/;/;\n/g' | while read -r sql_statement; do
+    if [[ -n "$sql_statement" ]]; then
+        if ! echo "$sql_statement" | sudo -u arkfile sqlite3 "/opt/arkfile/var/lib/database/db.sqlite"; then
+            fail "Could not apply schema statement: $sql_statement"
         fi
-        
-        # Reset for next statement
-        sql_statement=""
     fi
-done < "$SCHEMA_FILE"
+done
 
 echo -e "${GREEN}✅ Database schema initialization completed successfully!${NC}"
 
-# Verify critical tables exist
+# Verify critical tables exist using direct sqlite3 queries
 echo "Verifying OPAQUE tables..."
-result=$(curl -s -X POST \
-    -H "Content-Type: application/json" \
-    -u "$USERNAME:$PASSWORD" \
-    -d "[\"SELECT name FROM sqlite_master WHERE type='table' AND name='opaque_user_data';\"]" \
-    "http://localhost:4001/db/query")
+opaque_check=$(sudo -u arkfile sqlite3 "/opt/arkfile/var/lib/database/db.sqlite" "SELECT name FROM sqlite_master WHERE type='table' AND name='opaque_user_data';")
 
-if [[ "$result" == *"opaque_user_data"* ]]; then
+if [[ "$opaque_check" == "opaque_user_data" ]]; then
     echo -e "${GREEN}✅ OPAQUE tables verified successfully!${NC}"
 else
     echo -e "${YELLOW}⚠️  OPAQUE tables may not have been created properly${NC}"
 fi
 
 echo "Verifying TOTP tables..."
-totp_result=$(curl -s -X POST \
-    -H "Content-Type: application/json" \
-    -u "$USERNAME:$PASSWORD" \
-    -d "[\"SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%totp%' ORDER BY name;\"]" \
-    "http://localhost:4001/db/query")
-
-# Count TOTP tables (should be 3: user_totp, totp_usage_log, totp_backup_usage)
-totp_count=$(echo "$totp_result" | grep -o '"user_totp"\|"totp_usage_log"\|"totp_backup_usage"' | wc -l)
+totp_count=$(sudo -u arkfile sqlite3 "/opt/arkfile/var/lib/database/db.sqlite" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE '%totp%';")
 
 if [[ "$totp_count" -eq 3 ]]; then
     echo -e "${GREEN}✅ All TOTP tables verified successfully!${NC}"
-    echo "Found tables: user_totp, totp_usage_log, totp_backup_usage"
 else
     echo -e "${YELLOW}⚠️  TOTP tables may be incomplete (found: $totp_count/3)${NC}"
-    echo "TOTP response: $totp_result"
 fi
 
 echo "Database setup complete."

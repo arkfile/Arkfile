@@ -7,10 +7,11 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Service]
-Type=simple
 User=arkfile
 Group=arkfile
 WorkingDirectory=/opt/arkfile/releases/current
+Restart=always
+RestartSec=5s
 ExecStart=/opt/arkfile/bin/arkfile
 
 # Configuration
@@ -34,14 +35,6 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
-
-# Allow reads to configuration and writes to application directories
-ReadOnlyPaths=/opt/arkfile/etc
-ReadWritePaths=/opt/arkfile/var
-
-# Restart policies
-Restart=always
-RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

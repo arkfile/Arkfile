@@ -144,6 +144,7 @@ bun.lockb
 package-lock.json
 yarn.lock
 client/static/js/dist/
+client/static/js/.buildcache
 dist/
 .tsbuildinfo
 
