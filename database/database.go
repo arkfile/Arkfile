@@ -55,9 +55,6 @@ func InitDB() {
 }
 
 func createTables() {
-	// Read schema extensions if available
-	createExtendedSchema()
-
 	// Users table
 	userTable := `CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,6 +127,9 @@ func createTables() {
 			log.Fatal(err)
 		}
 	}
+
+	// Now apply schema extensions after base tables are created
+	createExtendedSchema()
 }
 
 // createExtendedSchema reads and executes the schema extensions SQL file

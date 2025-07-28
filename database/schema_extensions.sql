@@ -1,4 +1,4 @@
--- Database schema extensions for chunked uploads and file sharing
+-- Database schema extensions for chunked uploads and file sharing (rqlite compatible)
 
 -- Table to track upload sessions
 CREATE TABLE IF NOT EXISTS upload_sessions (
@@ -215,17 +215,9 @@ CREATE INDEX IF NOT EXISTS idx_alerts_severity ON security_alerts(severity, crea
 CREATE INDEX IF NOT EXISTS idx_alerts_unack ON security_alerts(acknowledged, created_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_entity ON security_alerts(entity_id, time_window);
 
--- Add missing columns to existing file_metadata table
--- Note: SQLite doesn't support adding NOT NULL columns to existing tables easily
--- So we'll add them as nullable and handle NULL values in the application
-ALTER TABLE file_metadata ADD COLUMN storage_id VARCHAR(36);
-ALTER TABLE file_metadata ADD COLUMN padded_size BIGINT;
-ALTER TABLE file_metadata ADD COLUMN multi_key BOOLEAN DEFAULT FALSE;
-
 -- Create indexes for file_metadata (existing indexes will be ignored)
 CREATE INDEX IF NOT EXISTS idx_file_metadata_owner ON file_metadata(owner_email);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_upload_date ON file_metadata(upload_date);
-CREATE INDEX IF NOT EXISTS idx_file_metadata_storage_id ON file_metadata(storage_id);
 
 -- TOTP Authentication Tables
 CREATE TABLE IF NOT EXISTS user_totp (

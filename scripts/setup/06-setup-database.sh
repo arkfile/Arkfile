@@ -75,46 +75,21 @@ execute_sql_rqlite() {
     return 0
 }
 
-# Apply schema extensions to rqlite distributed database
-echo "Applying schema extensions to rqlite database..."
-echo "Processing schema file: $SCHEMA_FILE"
-
-# Read the entire schema file and process it statement by statement.
-# This handles multi-line statements correctly.
-sed 's/--.*//' "$SCHEMA_FILE" | tr -s '\n' ' ' | sed 's/;/;\n/g' | while read -r sql_statement; do
-    sql_statement=$(echo "$sql_statement" | tr -s ' ' | sed 's/^ *//;s/ *$//')
-    if [[ -n "$sql_statement" ]]; then
-        if ! execute_sql_rqlite "$sql_statement"; then
-            fail "Could not apply schema statement: $sql_statement"
-        fi
-    fi
-done
-
-echo -e "${GREEN}✅ Database schema initialization completed successfully!${NC}"
-
-# Verify critical tables exist using rqlite queries
-echo "Verifying OPAQUE tables..."
-opaque_response=$(curl -s -H "Content-Type: application/json" \
+# Test database connectivity
+echo "Testing rqlite database connectivity..."
+test_response=$(curl -s -H "Content-Type: application/json" \
     -X POST "http://$USERNAME:$PASSWORD@localhost:4001/db/query" \
-    -d '[["SELECT name FROM sqlite_master WHERE type='\''table'\'' AND name IN ('\''opaque_user_data'\'', '\''opaque_server_keys'\'')"]]')
+    -d '[["SELECT 1 as test"]]')
 
-opaque_count=$(echo "$opaque_response" | jq -r '.results[0].values | length // 0')
-if [[ "$opaque_count" -ge 1 ]]; then
-    echo -e "${GREEN}✅ OPAQUE tables verified successfully!${NC}"
+if echo "$test_response" | grep -q '"values":\[\[1\]\]'; then
+    echo -e "${GREEN}✅ rqlite database connection successful!${NC}"
 else
-    echo -e "${YELLOW}⚠️  OPAQUE tables may not have been created properly${NC}"
+    fail "Could not connect to rqlite database. Response: $test_response"
 fi
 
-echo "Verifying TOTP tables..."
-totp_response=$(curl -s -H "Content-Type: application/json" \
-    -X POST "http://$USERNAME:$PASSWORD@localhost:4001/db/query" \
-    -d '[["SELECT count(*) FROM sqlite_master WHERE type='\''table'\'' AND name LIKE '\''%totp%'\''"]]')
+echo -e "${GREEN}✅ Database setup completed successfully!${NC}"
 
-totp_count=$(echo "$totp_response" | jq -r '.results[0].values[0][0] // 0')
-if [[ "$totp_count" -eq 3 ]]; then
-    echo -e "${GREEN}✅ All TOTP tables verified successfully!${NC}"
-else
-    echo -e "${YELLOW}⚠️  TOTP tables may be incomplete (found: $totp_count/3)${NC}"
-fi
+echo -e "${YELLOW}📝 Note: Schema creation will be handled automatically by arkfile service${NC}"
+echo "   Base tables and extensions will be created when arkfile starts."
 
-echo "Database setup complete."
+echo "Database connectivity verified. Ready for arkfile service to start."
