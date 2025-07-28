@@ -32,7 +32,8 @@ scripts/
 ├── testing/                          # Testing and validation scripts
 │   ├── test-only.sh                  # Run test suite
 │   ├── test-wasm.sh                  # WebAssembly tests
-│   ├── test-totp.sh                  # TOTP implementation tests
+│   ├── test-auth-curl.sh             # Functional Auth tests using curl
+|   ├── totp-generator.go             # Helper utility for TOTP (2FA) testing
 │   ├── test-typescript.sh            # TypeScript testing suite
 │   ├── performance-benchmark.sh      # Performance testing
 │   ├── golden-test-preservation.sh   # Format compatibility tests
@@ -52,8 +53,6 @@ scripts/
 │   ├── download-minio.sh             # Download MinIO binaries
 │   └── emergency-procedures.sh       # Emergency response procedures
 └── deprecated/                       # Legacy scripts (preserved for safety)
-    ├── first-time-setup.sh           # Old setup script
-    └── generate-keys.sh               # Old key generation script
 ```
 
 ## Script Categories
@@ -155,23 +154,31 @@ The setup scripts are numbered to show their logical dependency order:
 **Usage**: `./scripts/testing/test-wasm.sh`  
 **Tests**: WASM crypto functions, browser compatibility
 
-#### `test-totp.sh`
-**Purpose**: Test TOTP implementation  
-**Usage**: `./scripts/testing/test-totp.sh`  
-**Tests**: TOTP generation, validation, backup codes
+#### `test-auth-curl.sh`
+**Purpose**: Comprehensive end-to-end authentication flow testing (consolidates all auth testing)  
+**Location**: `./scripts/testing/test-auth-curl.sh`  
+**Usage**: `./scripts/testing/test-auth-curl.sh [options]`  
 
-#### `test-auth-flow-curl.sh`
-**Purpose**: Unified authentication flow testing with curl  
-**Usage**: `./scripts/test-auth-flow-curl.sh [options]`  
-**Options**:
-- `--help, -h` - Show help message
-- `--url URL` - Set base URL (default: https://localhost:4443)
-- `--email EMAIL` - Set test email
-- `--password PASS` - Set test password
-- `--skip-cleanup` - Skip final cleanup for debugging
-**Tests**: Complete OPAQUE + TOTP + JWT + Session Management flow
-**Flow**: Registration → TOTP Setup → Login → 2FA Auth → API Access → Logout → Cleanup
-**Features**: Real TOTP codes, database manipulation, comprehensive error handling
+#### `totp-generator.go`
+**Purpose**: Generate production-compatible TOTP codes for automated testing  
+**Location**: `scripts/testing/totp-generator.go`  
+**Usage**: Compiled automatically by master authentication script when needed
+
+**Compilation & Command Line Usage**:
+```bash
+# Compile 
+cd scripts/testing
+go build -o totp-generator totp-generator.go
+
+# Generate TOTP code for current time
+./totp-generator JBSWY3DPEHPK3PXP
+
+# Generate TOTP code for specific timestamp  
+./totp-generator JBSWY3DPEHPK3PXP 1640995200
+
+# Example with production-style secret
+./totp-generator GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
+```
 
 #### `test-typescript.sh`
 **Purpose**: Comprehensive TypeScript testing suite  
@@ -222,6 +229,11 @@ The setup scripts are numbered to show their logical dependency order:
 **Purpose**: Rotate JWT signing keys  
 **Usage**: `./scripts/maintenance/rotate-jwt-keys.sh`  
 **Rotates**: JWT signing keys with graceful transition
+
+#### `rotate-opaque-keys.sh` **OPAQUE KEY ROTATION** (WIP)
+**Purpose**: Rotate OPAQUE server keys with user migration support  
+**Location**: `./scripts/maintenance/rotate-opaque-keys.sh`  
+**Rotates**: OPAQUE server keys; may require users to re-register(!)
 
 #### `renew-certificates.sh`
 **Purpose**: Renew TLS certificates  
