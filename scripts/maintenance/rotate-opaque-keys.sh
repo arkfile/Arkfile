@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# (WIP)
+
 # OPAQUE Server Key Rotation Script for Arkfile
 # WARNING: This script handles cryptographic key rotation which affects all users
 # IMPORTANT: Key rotation in OPAQUE requires careful user migration planning
