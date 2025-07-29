@@ -70,8 +70,6 @@ func setupTestDB_User(t *testing.T) *sql.DB {
 	CREATE TABLE users (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		email TEXT NOT NULL UNIQUE,
-		password_hash TEXT NOT NULL,
-		password_salt TEXT,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		total_storage_bytes INTEGER DEFAULT 0,
 		storage_limit_bytes INTEGER NOT NULL,
@@ -112,7 +110,7 @@ func TestCreateUser(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Execute CreateUser
-			user, err := CreateUser(db, tc.email, tc.password)
+			user, err := CreateUser(db, tc.email)
 
 			assert.NoError(t, err, "Did not expect an error for "+tc.name)
 			require.NotNil(t, user, "User object should not be nil for "+tc.name)
@@ -124,23 +122,19 @@ func TestCreateUser(t *testing.T) {
 			assert.Equal(t, tc.expectApproved, user.IsApproved, "Approved status mismatch")
 			assert.NotZero(t, user.ID, "User ID should be populated") // Check if ID is generated
 
-			// Assert Password Storage in DB - For OPAQUE, we store a placeholder
-			var dbPasswordHash string
-			err = db.QueryRow("SELECT password_hash FROM users WHERE email = ?", tc.email).Scan(&dbPasswordHash)
-			assert.NoError(t, err, "Failed to retrieve password hash from DB")
-			// With OPAQUE authentication, password hash should be the placeholder
-			assert.Equal(t, tc.password, dbPasswordHash, "Password hash should be stored as provided (placeholder for OPAQUE)")
+			// Note: With OPAQUE authentication, password hash is no longer stored in the users table
+			// This test section is removed as it's no longer applicable
 		})
 	}
 
 	// Test Duplicate Email specifically
 	t.Run("Duplicate Email", func(t *testing.T) {
 		// First creation should succeed
-		_, err := CreateUser(db, "duplicate@example.com", "PasswordOne!Valid14") // Use valid password
+		_, err := CreateUser(db, "duplicate@example.com") // Use valid password
 		require.NoError(t, err)
 
 		// Second creation with the same email should fail
-		_, err = CreateUser(db, "duplicate@example.com", "PasswordTwo?AlsoValid14") // Use different valid password
+		_, err = CreateUser(db, "duplicate@example.com") // Use different valid password
 		assert.Error(t, err, "Expected an error for duplicate email")
 		if err != nil {
 			assert.Contains(t, err.Error(), "UNIQUE constraint failed", "Error should be about uniqueness")
@@ -154,8 +148,7 @@ func TestGetUserByEmail(t *testing.T) {
 
 	// Create a test user first
 	email := "findme@example.com"
-	password := "PasswordToFind1!abc" // Make password valid complex
-	createdUser, err := CreateUser(db, email, password)
+	createdUser, err := CreateUser(db, email)
 	require.NoError(t, err)
 	require.NotNil(t, createdUser)
 
@@ -176,12 +169,8 @@ func TestGetUserByEmail(t *testing.T) {
 	assert.False(t, retrievedUser.ApprovedBy.Valid, "ApprovedBy should initially be invalid/NULL")
 	assert.False(t, retrievedUser.ApprovedAt.Valid, "ApprovedAt should initially be invalid/NULL")
 
-	// Verify password hash stored in database directly (User struct doesn't expose PasswordHash anymore)
-	var dbPasswordHash string
-	err = db.QueryRow("SELECT password_hash FROM users WHERE email = ?", email).Scan(&dbPasswordHash)
-	require.NoError(t, err)
-	// With OPAQUE authentication, password hash should be the placeholder
-	assert.Equal(t, password, dbPasswordHash, "Password hash should be stored as provided (placeholder for OPAQUE)")
+	// Note: With OPAQUE authentication, password hash is no longer stored in the users table
+	// This test section is removed as it's no longer applicable
 
 	// Test getting a non-existent user
 	_, err = GetUserByEmail(db, "nosuchuser@example.com")
@@ -227,7 +216,7 @@ func TestApproveUser(t *testing.T) {
 	defer os.Setenv("ADMIN_EMAILS", originalAdmins)
 
 	// Create a user to approve
-	userToApprove, err := CreateUser(db, "pending@example.com", "PendingPass1!uvw") // Make password valid complex
+	userToApprove, err := CreateUser(db, "pending@example.com")
 	require.NoError(t, err)
 	require.False(t, userToApprove.IsApproved, "User should initially be unapproved")
 
@@ -280,7 +269,7 @@ func TestUpdateStorageUsage(t *testing.T) {
 	defer db.Close()
 
 	// Create user with initial storage
-	user, err := CreateUser(db, "storage@example.com", "StoragePass1!")
+	user, err := CreateUser(db, "storage@example.com")
 	require.NoError(t, err)
 	initialStorage := int64(1024 * 1024) // 1MB initial
 	_, err = db.Exec("UPDATE users SET total_storage_bytes = ? WHERE id = ?", initialStorage, user.ID)
@@ -329,18 +318,18 @@ func TestGetPendingUsers(t *testing.T) {
 	os.Setenv("ADMIN_EMAILS", "admin@pending.com")
 	defer os.Setenv("ADMIN_EMAILS", originalAdmins)
 
-	// Create users: 2 pending, 1 approved, 1 admin (auto-approved) - Use valid passwords
-	_, err := CreateUser(db, "pending1@example.com", "Pass1!MoreCharsNeeded")
+	// Create users: 2 pending, 1 approved, 1 admin (auto-approved)
+	_, err := CreateUser(db, "pending1@example.com")
 	require.NoError(t, err)
-	_, err = CreateUser(db, "pending2@example.com", "Pass2!AlsoMoreChars")
+	_, err = CreateUser(db, "pending2@example.com")
 	require.NoError(t, err)
-	approvedUser, err := CreateUser(db, "approved@example.com", "Pass3!ComplexEnough")
+	approvedUser, err := CreateUser(db, "approved@example.com")
 	require.NoError(t, err)
 	// Manually approve this one
 	_, err = db.Exec("UPDATE users SET is_approved = TRUE WHERE email = ?", approvedUser.Email)
 	require.NoError(t, err)
-	// Admin email uses different password
-	_, err = CreateUser(db, "admin@pending.com", "Pass4!AdminIsComplex") // Should be auto-approved
+	// Admin email should be auto-approved
+	_, err = CreateUser(db, "admin@pending.com")
 	require.NoError(t, err)
 
 	// Execute GetPendingUsers

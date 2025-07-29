@@ -12,6 +12,7 @@ import (
 	"github.com/84adam/arkfile/auth"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
+	"github.com/84adam/arkfile/models"
 	"github.com/84adam/arkfile/storage"
 )
 
@@ -453,11 +454,14 @@ func RegisterCustomFilePassword(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
 	}
 
-	// Initialize OPAQUE password manager
-	opm := auth.NewOPAQUEPasswordManager()
+	// Get user object and use integrated OPAQUE method
+	user, err := models.GetUserByEmail(database.DB, email)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "User not found")
+	}
 
-	// Register custom password with OPAQUE
-	err = opm.RegisterCustomFilePassword(email, filename, request.Password, request.KeyLabel, request.PasswordHint)
+	// Register custom password using User model integration
+	err = user.RegisterFilePassword(database.DB, filename, request.Password, request.KeyLabel, request.PasswordHint)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to register custom file password: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to register custom password")
@@ -521,12 +525,14 @@ func GetFileDecryptionKey(c echo.Context) error {
 		}
 
 	case "custom":
-		// Initialize OPAQUE password manager
-		opm := auth.NewOPAQUEPasswordManager()
-		recordIdentifier := email + ":file:" + filename
+		// Get user object and use integrated OPAQUE method
+		user, err := models.GetUserByEmail(database.DB, email)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "User not found")
+		}
 
-		// Authenticate custom password via OPAQUE
-		exportKey, err := opm.AuthenticatePassword(recordIdentifier, request.Password)
+		// Authenticate custom password using User model integration
+		exportKey, err := user.AuthenticateFilePassword(database.DB, filename, request.Password)
 		if err != nil {
 			logging.ErrorLogger.Printf("Custom password authentication failed: %v", err)
 			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid custom password")

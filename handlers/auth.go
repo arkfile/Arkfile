@@ -215,21 +215,13 @@ func OpaqueRegister(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusConflict, "Email already registered")
 	}
 
-	// Perform OPAQUE registration with comprehensive error handling
-	err = auth.RegisterUser(database.DB, request.Email, request.Password)
+	// Create user record AND register OPAQUE account in single transaction
+	_, err = models.CreateUserWithOPAQUE(database.DB, request.Email, request.Password)
 	if err != nil {
 		if logging.ErrorLogger != nil {
-			logging.ErrorLogger.Printf("OPAQUE registration failed for %s: %v", request.Email, err)
+			logging.ErrorLogger.Printf("OPAQUE user registration failed for %s: %v", request.Email, err)
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
-	}
-
-	// Create user record in the users table for JWT and application data
-	// For OPAQUE users, we use a placeholder password since authentication is handled by OPAQUE
-	_, err = models.CreateUser(database.DB, request.Email, "OPAQUE_AUTH_PLACEHOLDER")
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to create user record for %s: %v", request.Email, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete registration")
 	}
 
 	// Generate temporary token for mandatory TOTP setup

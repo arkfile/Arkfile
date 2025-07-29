@@ -3,9 +3,12 @@ package models
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/84adam/arkfile/auth"
 )
 
 type User struct {
@@ -25,13 +28,13 @@ const (
 )
 
 // CreateUser creates a new user in the database for OPAQUE authentication
-func CreateUser(db *sql.DB, email, passwordPlaceholder string) (*User, error) {
+func CreateUser(db *sql.DB, email string) (*User, error) {
 	isAdmin := isAdminEmail(email)
 	result, err := db.Exec(
 		`INSERT INTO users (
-			email, password_hash, storage_limit_bytes, is_admin, is_approved
-		) VALUES (?, ?, ?, ?, ?)`,
-		email, passwordPlaceholder, DefaultStorageLimit, isAdmin, isAdmin, // Auto-approve admin emails
+			email, storage_limit_bytes, is_admin, is_approved
+		) VALUES (?, ?, ?, ?)`,
+		email, DefaultStorageLimit, isAdmin, isAdmin, // Auto-approve admin emails
 	)
 	if err != nil {
 		return nil, err
@@ -232,4 +235,224 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// OPAQUE Integration - Comprehensive OPAQUE lifecycle management
+
+// OPAQUEAccountStatus represents the OPAQUE authentication status for a user
+type OPAQUEAccountStatus struct {
+	HasAccountPassword bool       `json:"has_account_password"`
+	FilePasswordCount  int        `json:"file_password_count"`
+	SharePasswordCount int        `json:"share_password_count"`
+	LastOPAQUEAuth     *time.Time `json:"last_opaque_auth"`
+	OPAQUECreatedAt    *time.Time `json:"opaque_created_at"`
+}
+
+// CreateUserWithOPAQUE creates user AND registers OPAQUE account in single transaction
+func CreateUserWithOPAQUE(db *sql.DB, email, password string) (*User, error) {
+	// Start transaction to ensure atomicity
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Create user record first
+	isAdmin := isAdminEmail(email)
+	result, err := tx.Exec(
+		`INSERT INTO users (
+			email, storage_limit_bytes, is_admin, is_approved
+		) VALUES (?, ?, ?, ?)`,
+		email, DefaultStorageLimit, isAdmin, isAdmin,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create user: %w", err)
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user ID: %w", err)
+	}
+
+	// Register OPAQUE account
+	err = auth.RegisterUser(db, email, password)
+	if err != nil {
+		return nil, fmt.Errorf("failed to register OPAQUE account: %w", err)
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return &User{
+		ID:                id,
+		Email:             email,
+		StorageLimitBytes: DefaultStorageLimit,
+		CreatedAt:         time.Now(),
+		IsApproved:        isAdmin,
+		IsAdmin:           isAdmin,
+	}, nil
+}
+
+// RegisterOPAQUEAccount registers an OPAQUE account for an existing user
+func (u *User) RegisterOPAQUEAccount(db *sql.DB, password string) error {
+	return auth.RegisterUser(db, u.Email, password)
+}
+
+// AuthenticateOPAQUE authenticates the user's account password via OPAQUE
+func (u *User) AuthenticateOPAQUE(db *sql.DB, password string) ([]byte, error) {
+	sessionKey, err := auth.AuthenticateUser(db, u.Email, password)
+	if err != nil {
+		return nil, fmt.Errorf("OPAQUE authentication failed: %w", err)
+	}
+	return sessionKey, nil
+}
+
+// HasOPAQUEAccount checks if the user has an OPAQUE account registered
+func (u *User) HasOPAQUEAccount(db *sql.DB) (bool, error) {
+	var count int
+	err := db.QueryRow(`
+		SELECT COUNT(*) FROM opaque_password_records 
+		WHERE record_type = 'account' AND record_identifier = ? AND is_active = TRUE`,
+		u.Email).Scan(&count)
+
+	if err != nil {
+		return false, fmt.Errorf("failed to check OPAQUE account: %w", err)
+	}
+
+	return count > 0, nil
+}
+
+// DeleteOPAQUEAccount deactivates all OPAQUE records for this user
+func (u *User) DeleteOPAQUEAccount(db *sql.DB) error {
+	// Deactivate all OPAQUE records associated with this user
+	_, err := db.Exec(`
+		UPDATE opaque_password_records 
+		SET is_active = FALSE 
+		WHERE record_identifier = ? OR associated_user_email = ?`,
+		u.Email, u.Email)
+
+	if err != nil {
+		return fmt.Errorf("failed to delete OPAQUE account: %w", err)
+	}
+
+	return nil
+}
+
+// GetOPAQUEAccountStatus returns comprehensive OPAQUE status for the user
+func (u *User) GetOPAQUEAccountStatus(db *sql.DB) (*OPAQUEAccountStatus, error) {
+	status := &OPAQUEAccountStatus{}
+
+	// Check for account password
+	var accountCount int
+	var accountCreatedAt sql.NullString
+	var accountLastUsed sql.NullString
+
+	err := db.QueryRow(`
+		SELECT COUNT(*), MIN(created_at), MAX(last_used_at)
+		FROM opaque_password_records 
+		WHERE record_type = 'account' AND record_identifier = ? AND is_active = TRUE`,
+		u.Email).Scan(&accountCount, &accountCreatedAt, &accountLastUsed)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to check account status: %w", err)
+	}
+
+	status.HasAccountPassword = accountCount > 0
+
+	// Parse timestamps if available
+	if accountCreatedAt.Valid {
+		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", accountCreatedAt.String); parseErr == nil {
+			status.OPAQUECreatedAt = &parsedTime
+		}
+	}
+
+	if accountLastUsed.Valid {
+		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", accountLastUsed.String); parseErr == nil {
+			status.LastOPAQUEAuth = &parsedTime
+		}
+	}
+
+	// Count file passwords
+	err = db.QueryRow(`
+		SELECT COUNT(*) FROM opaque_password_records 
+		WHERE record_type = 'file_custom' AND associated_user_email = ? AND is_active = TRUE`,
+		u.Email).Scan(&status.FilePasswordCount)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to count file passwords: %w", err)
+	}
+
+	// Count share passwords
+	err = db.QueryRow(`
+		SELECT COUNT(*) FROM opaque_password_records 
+		WHERE record_type = 'share' AND associated_user_email = ? AND is_active = TRUE`,
+		u.Email).Scan(&status.SharePasswordCount)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to count share passwords: %w", err)
+	}
+
+	return status, nil
+}
+
+// RegisterFilePassword registers a custom password for a specific file
+func (u *User) RegisterFilePassword(db *sql.DB, fileID, password, keyLabel, passwordHint string) error {
+	opm := auth.NewOPAQUEPasswordManager()
+	return opm.RegisterCustomFilePassword(u.Email, fileID, password, keyLabel, passwordHint)
+}
+
+// GetFilePasswordRecords gets all password records for a specific file owned by this user
+func (u *User) GetFilePasswordRecords(db *sql.DB, fileID string) ([]*auth.OPAQUEPasswordRecord, error) {
+	opm := auth.NewOPAQUEPasswordManager()
+	return opm.GetFilePasswordRecords(fileID)
+}
+
+// AuthenticateFilePassword authenticates a file-specific password and returns the export key
+func (u *User) AuthenticateFilePassword(db *sql.DB, fileID, password string) ([]byte, error) {
+	recordIdentifier := fmt.Sprintf("%s:file:%s", u.Email, fileID)
+	opm := auth.NewOPAQUEPasswordManager()
+
+	exportKey, err := opm.AuthenticatePassword(recordIdentifier, password)
+	if err != nil {
+		return nil, fmt.Errorf("file password authentication failed: %w", err)
+	}
+
+	return exportKey, nil
+}
+
+// DeleteFilePassword removes a specific file password record
+func (u *User) DeleteFilePassword(db *sql.DB, fileID, keyLabel string) error {
+	recordIdentifier := fmt.Sprintf("%s:file:%s", u.Email, fileID)
+	opm := auth.NewOPAQUEPasswordManager()
+	return opm.DeletePasswordRecord(recordIdentifier)
+}
+
+// Delete removes the user and all associated OPAQUE records
+func (u *User) Delete(db *sql.DB) error {
+	// Start transaction for atomic deletion
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// First, clean up all OPAQUE records
+	if err := u.DeleteOPAQUEAccount(db); err != nil {
+		return fmt.Errorf("failed to clean up OPAQUE records: %w", err)
+	}
+
+	// Delete user record
+	_, err = tx.Exec("DELETE FROM users WHERE id = ?", u.ID)
+	if err != nil {
+		return fmt.Errorf("failed to delete user: %w", err)
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit deletion: %w", err)
+	}
+
+	return nil
 }

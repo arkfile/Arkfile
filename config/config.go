@@ -52,19 +52,7 @@ type Config struct {
 		MaxFileSize             int64         `json:"max_file_size"`
 		AllowedFileTypes        []string      `json:"allowed_file_types"`
 
-		// Server-side Argon2ID configuration (for user authentication)
-		ServerArgon2ID struct {
-			Time    uint32 `json:"time"`    // iterations
-			Memory  uint32 `json:"memory"`  // KB
-			Threads uint8  `json:"threads"` // parallelism
-		} `json:"server_argon2id"`
-
-		// Client-side Argon2ID configuration (for file encryption)
-		ClientArgon2ID struct {
-			Time    uint32 `json:"time"`    // iterations
-			Memory  uint32 `json:"memory"`  // KB
-			Threads uint8  `json:"threads"` // parallelism
-		} `json:"client_argon2id"`
+		// Argon2ID configuration removed - using OPAQUE-only authentication
 	} `json:"security"`
 
 	Logging struct {
@@ -148,15 +136,7 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Security.MaxFileSize = 100 * 1024 * 1024 // 100MB
 	cfg.Security.AllowedFileTypes = []string{".jpg", ".jpeg", ".png", ".pdf", ".iso"}
 
-	// Server-side Argon2ID defaults (optimized for server performance)
-	cfg.Security.ServerArgon2ID.Time = 4
-	cfg.Security.ServerArgon2ID.Memory = 131072 // 128MB
-	cfg.Security.ServerArgon2ID.Threads = 4
-
-	// Client-side Argon2ID defaults (optimized for broad device compatibility)
-	cfg.Security.ClientArgon2ID.Time = 4
-	cfg.Security.ClientArgon2ID.Memory = 131072 // 128MB
-	cfg.Security.ClientArgon2ID.Threads = 4
+	// Argon2ID defaults removed - using OPAQUE-only authentication
 
 	cfg.Logging.Directory = "logs"
 	cfg.Logging.MaxSize = 10 * 1024 * 1024 // 10MB
@@ -274,39 +254,7 @@ func loadEnvConfig(cfg *Config) error {
 		}
 	}
 
-	// Server-side Argon2ID overrides
-	if serverTime := os.Getenv("SERVER_ARGON2ID_TIME"); serverTime != "" {
-		if timeInt, err := strconv.ParseUint(serverTime, 10, 32); err == nil {
-			cfg.Security.ServerArgon2ID.Time = uint32(timeInt)
-		}
-	}
-	if serverMemory := os.Getenv("SERVER_ARGON2ID_MEMORY"); serverMemory != "" {
-		if memoryInt, err := strconv.ParseUint(serverMemory, 10, 32); err == nil {
-			cfg.Security.ServerArgon2ID.Memory = uint32(memoryInt)
-		}
-	}
-	if serverThreads := os.Getenv("SERVER_ARGON2ID_THREADS"); serverThreads != "" {
-		if threadsInt, err := strconv.ParseUint(serverThreads, 10, 8); err == nil {
-			cfg.Security.ServerArgon2ID.Threads = uint8(threadsInt)
-		}
-	}
-
-	// Client-side Argon2ID overrides
-	if clientTime := os.Getenv("CLIENT_ARGON2ID_TIME"); clientTime != "" {
-		if timeInt, err := strconv.ParseUint(clientTime, 10, 32); err == nil {
-			cfg.Security.ClientArgon2ID.Time = uint32(timeInt)
-		}
-	}
-	if clientMemory := os.Getenv("CLIENT_ARGON2ID_MEMORY"); clientMemory != "" {
-		if memoryInt, err := strconv.ParseUint(clientMemory, 10, 32); err == nil {
-			cfg.Security.ClientArgon2ID.Memory = uint32(memoryInt)
-		}
-	}
-	if clientThreads := os.Getenv("CLIENT_ARGON2ID_THREADS"); clientThreads != "" {
-		if threadsInt, err := strconv.ParseUint(clientThreads, 10, 8); err == nil {
-			cfg.Security.ClientArgon2ID.Threads = uint8(threadsInt)
-		}
-	}
+	// Argon2ID environment overrides removed - using OPAQUE-only authentication
 
 	// Key management environment overrides
 	if keyDir := os.Getenv("ARKFILE_KEY_DIRECTORY"); keyDir != "" {

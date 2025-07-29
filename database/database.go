@@ -59,8 +59,6 @@ func createTables() {
 	userTable := `CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         email TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        password_salt TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         total_storage_bytes BIGINT NOT NULL DEFAULT 0,
         storage_limit_bytes BIGINT NOT NULL DEFAULT 10737418240,
