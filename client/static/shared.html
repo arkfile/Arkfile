@@ -113,7 +113,12 @@
         </div>
     </main>
 
-    <script src="/js/security.js"></script>
+    <!-- WebAssembly loader -->
+    <script src="/wasm_exec.js"></script>
+    
+    <!-- Compiled TypeScript application -->
+    <script src="/js/dist/app.js"></script>
+    
     <script>
         // Parse share ID from URL path
         const pathSegments = window.location.pathname.split('/');
@@ -224,8 +229,8 @@
                 }
                 const { salt } = await saltResponse.json();
                 
-                // Hash the password with the share's salt
-                const passwordHash = window.hashPasswordArgon2ID(password, salt);
+                // Hash the password with the share's salt using the new auth utilities
+                const passwordHash = await window.arkfile.auth.hashPassword(password, salt);
                 
                 // Verify password hash
                 const response = await fetch(`/api/shared/${shareId}/auth`, {
@@ -339,16 +344,16 @@
                 
                 // Decrypt the file - this would normally happen with WebAssembly
                 // For demonstration, we'll simulate the decryption with a timeout
-                setTimeout(() => {
+                setTimeout(async () => {
                     try {
                         let decryptedData;
                         
                         if (fileData.isMultiKey && password) {
                             // Decrypt with custom password for multi-key files
-                            decryptedData = window.securityUtils.decryptFileMultiKey(fileData.data, password);
+                            decryptedData = await window.arkfile.files.decryptFile(fileData.data, password);
                         } else {
                             // For non-multi-key files or when using the shared key
-                            decryptedData = window.securityUtils.decryptFile(fileData.data, password);
+                            decryptedData = await window.arkfile.files.decryptFile(fileData.data, password);
                         }
                         
                         if (!decryptedData || decryptedData.startsWith('Failed')) {

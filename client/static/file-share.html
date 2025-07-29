@@ -223,8 +223,11 @@
         </div>
     </main>
 
-    <script src="/js/security.js"></script>
-    <script src="/js/multi-key-encryption.js"></script>
+    <!-- WebAssembly loader -->
+    <script src="/wasm_exec.js"></script>
+    
+    <!-- Compiled TypeScript application -->
+    <script src="/js/dist/app.js"></script>
     <script>
         // Constants and globals
         const fileId = new URLSearchParams(window.location.search).get('file');
@@ -413,7 +416,7 @@
                 return;
             }
             
-            const validation = securityUtils.validatePassword(customPassword);
+            const validation = await window.arkfile.auth.validatePassword(customPassword);
             if (!validation.valid) {
                 alert(validation.message);
                 return;
@@ -426,8 +429,8 @@
                 submitBtn.innerHTML = '<span class="spinner"></span> Processing...';
                 submitBtn.disabled = true;
                 
-                // Add the key
-                const result = await window.arkfileEncryption.addSharingKey(
+                // Add the key using the new TypeScript API
+                const result = await window.arkfile.files.addSharingKey(
                     fileId,
                     customPassword,
                     keyLabel,

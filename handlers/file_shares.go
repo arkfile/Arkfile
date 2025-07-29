@@ -1,15 +1,14 @@
 package handlers
 
 import (
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/minio/minio-go/v7"
 
@@ -603,12 +602,7 @@ func DownloadSharedFile(c echo.Context) error {
 	})
 }
 
-// generateShareID creates a random share ID
+// generateShareID creates a collision-resistant share ID using UUIDv4
 func generateShareID() string {
-	b := make([]byte, 16)
-	_, err := rand.Read(b)
-	if err != nil {
-		return time.Now().Format("20060102150405") + "fallback"
-	}
-	return hex.EncodeToString(b)
+	return uuid.New().String()
 }

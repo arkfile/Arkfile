@@ -256,3 +256,25 @@ CREATE INDEX IF NOT EXISTS idx_totp_usage_cleanup ON totp_usage_log(used_at);
 CREATE INDEX IF NOT EXISTS idx_totp_usage_user_window ON totp_usage_log(user_email, window_start);
 CREATE INDEX IF NOT EXISTS idx_totp_backup_user ON totp_backup_usage(user_email);
 CREATE INDEX IF NOT EXISTS idx_totp_backup_cleanup ON totp_backup_usage(used_at);
+
+-- Phase 2: Unified OPAQUE Password Records Table
+CREATE TABLE IF NOT EXISTS opaque_password_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    record_type TEXT NOT NULL,           -- 'account', 'file_custom', 'share'
+    record_identifier TEXT NOT NULL UNIQUE, -- email, 'user:file:filename', 'share:shareID'
+    opaque_user_record BLOB NOT NULL,    -- OPAQUE registration data
+    associated_file_id TEXT,             -- NULL for account, filename for file/share
+    associated_user_email TEXT,          -- User who created this record
+    key_label TEXT,                      -- Human-readable label
+    password_hint_encrypted BLOB,        -- Encrypted with export key
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP,
+    is_active BOOLEAN DEFAULT TRUE
+);
+
+-- Indexes for opaque_password_records
+CREATE INDEX IF NOT EXISTS idx_opaque_passwords_type ON opaque_password_records(record_type);
+CREATE INDEX IF NOT EXISTS idx_opaque_passwords_identifier ON opaque_password_records(record_identifier);
+CREATE INDEX IF NOT EXISTS idx_opaque_passwords_file ON opaque_password_records(associated_file_id);
+CREATE INDEX IF NOT EXISTS idx_opaque_passwords_user ON opaque_password_records(associated_user_email);
+CREATE INDEX IF NOT EXISTS idx_opaque_passwords_active ON opaque_password_records(is_active);
