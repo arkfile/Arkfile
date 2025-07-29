@@ -203,7 +203,8 @@ func TestOpaqueServerKeyManagement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to setup server keys on first call: %v", err)
 	}
-	firstServerID := serverKeys.ServerID
+	firstServerPrivateKey := make([]byte, len(serverKeys.ServerPrivateKey))
+	copy(firstServerPrivateKey, serverKeys.ServerPrivateKey)
 
 	// 2. Verify keys are stored in the database
 	var count int
@@ -220,16 +221,21 @@ func TestOpaqueServerKeyManagement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Second call to SetupServerKeys should not fail: %v", err)
 	}
-	secondServerID := serverKeys.ServerID
 
-	// 4. Verify that the server ID loaded on the second call is the same as the first
-	if firstServerID != secondServerID {
-		t.Errorf("Server ID should be consistent across loads: first=%s, second=%s", firstServerID, secondServerID)
+	// 4. Verify that the server private key loaded on the second call is the same as the first
+	if !crypto.SecureCompare(firstServerPrivateKey, serverKeys.ServerPrivateKey) {
+		t.Error("Server private key should be consistent across loads")
 	}
 
 	// 5. Verify server keys have expected values
-	if serverKeys.ServerID != "arkfile-server" {
-		t.Errorf("Expected ServerID 'arkfile-server', got '%s'", serverKeys.ServerID)
+	if len(serverKeys.ServerPrivateKey) != 32 {
+		t.Errorf("Expected ServerPrivateKey length 32, got %d", len(serverKeys.ServerPrivateKey))
+	}
+	if len(serverKeys.ServerPublicKey) != 32 {
+		t.Errorf("Expected ServerPublicKey length 32, got %d", len(serverKeys.ServerPublicKey))
+	}
+	if len(serverKeys.OPRFSeed) != 32 {
+		t.Errorf("Expected OPRFSeed length 32, got %d", len(serverKeys.OPRFSeed))
 	}
 }
 
@@ -267,8 +273,16 @@ func TestOpaqueValidation(t *testing.T) {
 	if serverKeys == nil {
 		t.Error("serverKeys should be loaded after ValidateOPAQUESetup")
 	}
-	if serverKeys != nil && serverKeys.ServerID != "arkfile-server" {
-		t.Errorf("Expected ServerID 'arkfile-server', got '%s'", serverKeys.ServerID)
+	if serverKeys != nil {
+		if len(serverKeys.ServerPrivateKey) != 32 {
+			t.Errorf("Expected ServerPrivateKey length 32, got %d", len(serverKeys.ServerPrivateKey))
+		}
+		if len(serverKeys.ServerPublicKey) != 32 {
+			t.Errorf("Expected ServerPublicKey length 32, got %d", len(serverKeys.ServerPublicKey))
+		}
+		if len(serverKeys.OPRFSeed) != 32 {
+			t.Errorf("Expected OPRFSeed length 32, got %d", len(serverKeys.OPRFSeed))
+		}
 	}
 }
 

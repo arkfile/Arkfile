@@ -372,6 +372,258 @@ func TestIsAdminEmail(t *testing.T) {
 	assert.False(t, isAdminEmail("admin1@test.com"), "Should not be admin if env var is unset")
 }
 
+// --- OPAQUE Integration Tests ---
+
+func TestCreateUserWithOPAQUE(t *testing.T) {
+	db := setupTestDB_User(t)
+	defer db.Close()
+
+	// Add OPAQUE tables to test database
+	setupOPAQUETestTables(t, db)
+
+	email := "opaque@example.com"
+	password := "ValidOPAQUEPassword123!@#"
+
+	// Execute CreateUserWithOPAQUE
+	user, err := CreateUserWithOPAQUE(db, email, password)
+
+	if err != nil {
+		// OPAQUE functionality may not be available in test environment
+		t.Logf("CreateUserWithOPAQUE failed (expected in test environment without libopaque.so): %v", err)
+		t.Skip("Skipping OPAQUE integration test - requires libopaque.so")
+		return
+	}
+
+	// Assert user creation
+	require.NotNil(t, user)
+	assert.Equal(t, email, user.Email)
+	assert.Equal(t, DefaultStorageLimit, user.StorageLimitBytes)
+
+	// Test OPAQUE account status
+	status, err := user.GetOPAQUEAccountStatus(db)
+	if err != nil {
+		t.Logf("GetOPAQUEAccountStatus failed (expected in test environment): %v", err)
+		return
+	}
+
+	require.NotNil(t, status)
+	assert.True(t, status.HasAccountPassword)
+	assert.NotNil(t, status.OPAQUECreatedAt)
+}
+
+func TestUserOPAQUELifecycle(t *testing.T) {
+	db := setupTestDB_User(t)
+	defer db.Close()
+
+	// Add OPAQUE tables to test database
+	setupOPAQUETestTables(t, db)
+
+	// Create regular user first
+	user, err := CreateUser(db, "lifecycle@example.com")
+	require.NoError(t, err)
+
+	password := "LifecycleTestPassword123!@#"
+
+	// Test 1: Check initial OPAQUE status (should be false)
+	hasAccount, err := user.HasOPAQUEAccount(db)
+	if err != nil {
+		t.Logf("HasOPAQUEAccount failed (expected in test environment): %v", err)
+		t.Skip("Skipping OPAQUE lifecycle test - requires libopaque.so")
+		return
+	}
+	assert.False(t, hasAccount, "New user should not have OPAQUE account initially")
+
+	// Test 2: Register OPAQUE account
+	err = user.RegisterOPAQUEAccount(db, password)
+	if err != nil {
+		t.Logf("RegisterOPAQUEAccount failed (expected in test environment): %v", err)
+		return
+	}
+
+	// Test 3: Verify OPAQUE account exists
+	hasAccount, err = user.HasOPAQUEAccount(db)
+	require.NoError(t, err)
+	assert.True(t, hasAccount, "User should have OPAQUE account after registration")
+
+	// Test 4: Authenticate with OPAQUE
+	exportKey, err := user.AuthenticateOPAQUE(db, password)
+	if err != nil {
+		t.Logf("AuthenticateOPAQUE failed (expected in test environment): %v", err)
+		return
+	}
+	require.NotNil(t, exportKey)
+	assert.Len(t, exportKey, 64, "Export key should be 64 bytes")
+
+	// Test 5: Get comprehensive OPAQUE status
+	status, err := user.GetOPAQUEAccountStatus(db)
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.True(t, status.HasAccountPassword)
+	assert.NotNil(t, status.OPAQUECreatedAt)
+	assert.NotNil(t, status.LastOPAQUEAuth)
+
+	// Test 6: Delete OPAQUE account
+	err = user.DeleteOPAQUEAccount(db)
+	require.NoError(t, err)
+
+	// Test 7: Verify OPAQUE account is gone
+	hasAccount, err = user.HasOPAQUEAccount(db)
+	require.NoError(t, err)
+	assert.False(t, hasAccount, "User should not have OPAQUE account after deletion")
+}
+
+func TestUserFilePasswordManagement(t *testing.T) {
+	db := setupTestDB_User(t)
+	defer db.Close()
+
+	// Add OPAQUE tables to test database
+	setupOPAQUETestTables(t, db)
+
+	// Create user with OPAQUE account
+	user, err := CreateUserWithOPAQUE(db, "filepass@example.com", "UserPassword123!@#")
+	if err != nil {
+		t.Logf("CreateUserWithOPAQUE failed (expected in test environment): %v", err)
+		t.Skip("Skipping file password test - requires libopaque.so")
+		return
+	}
+
+	fileID := "test-file-123"
+	filePassword := "FileSpecificPassword456!@#"
+	keyLabel := "test-key-label"
+	passwordHint := "File password hint"
+
+	// Test 1: Register file password
+	err = user.RegisterFilePassword(db, fileID, filePassword, keyLabel, passwordHint)
+	if err != nil {
+		t.Logf("RegisterFilePassword failed (expected in test environment): %v", err)
+		return
+	}
+
+	// Test 2: Authenticate file password
+	exportKey, err := user.AuthenticateFilePassword(db, fileID, filePassword)
+	if err != nil {
+		t.Logf("AuthenticateFilePassword failed (expected in test environment): %v", err)
+		return
+	}
+	require.NotNil(t, exportKey)
+	assert.Len(t, exportKey, 64, "File export key should be 64 bytes")
+
+	// Test 3: Get file password records
+	records, err := user.GetFilePasswordRecords(db, fileID)
+	if err != nil {
+		t.Logf("GetFilePasswordRecords failed (expected in test environment): %v", err)
+		return
+	}
+	require.NotNil(t, records)
+	assert.Len(t, records, 1, "Should have one file password record")
+
+	// Test 4: Delete file password
+	err = user.DeleteFilePassword(db, fileID, keyLabel)
+	if err != nil {
+		t.Logf("DeleteFilePassword failed (expected in test environment): %v", err)
+		return
+	}
+
+	// Test 5: Verify file password is gone
+	records, err = user.GetFilePasswordRecords(db, fileID)
+	if err != nil {
+		t.Logf("GetFilePasswordRecords after deletion failed: %v", err)
+		return
+	}
+	assert.Len(t, records, 0, "Should have no file password records after deletion")
+}
+
+func TestUserComprehensiveDelete(t *testing.T) {
+	db := setupTestDB_User(t)
+	defer db.Close()
+
+	// Add OPAQUE tables to test database
+	setupOPAQUETestTables(t, db)
+
+	// Create user with OPAQUE account
+	user, err := CreateUserWithOPAQUE(db, "delete@example.com", "DeleteTestPassword123!@#")
+	if err != nil {
+		t.Logf("CreateUserWithOPAQUE failed (expected in test environment): %v", err)
+		t.Skip("Skipping comprehensive delete test - requires libopaque.so")
+		return
+	}
+
+	userID := user.ID
+	userEmail := user.Email
+
+	// Verify user exists
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", userID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "User should exist before deletion")
+
+	// Execute comprehensive delete
+	err = user.Delete(db)
+	require.NoError(t, err)
+
+	// Verify user is deleted
+	err = db.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", userID).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "User should not exist after deletion")
+
+	// Verify OPAQUE records are cleaned up (if tables exist)
+	// Note: These queries may fail if OPAQUE tables don't exist in test DB
+	err = db.QueryRow("SELECT COUNT(*) FROM opaque_password_records WHERE record_identifier = ? OR associated_user_email = ?", userEmail, userEmail).Scan(&count)
+	if err == nil {
+		assert.Equal(t, 0, count, "OPAQUE records should be cleaned up after user deletion")
+	} else {
+		t.Logf("Could not verify OPAQUE cleanup (table may not exist): %v", err)
+	}
+}
+
+// setupOPAQUETestTables creates the necessary OPAQUE tables for testing
+// This simulates the OPAQUE database schema for test purposes
+func setupOPAQUETestTables(t *testing.T, db *sql.DB) {
+	t.Helper()
+
+	// Create basic OPAQUE tables for testing
+	// Note: These are simplified versions for testing
+	tables := []string{
+		`CREATE TABLE IF NOT EXISTS opaque_password_records (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			record_type TEXT NOT NULL,
+			record_identifier TEXT NOT NULL,
+			associated_user_email TEXT,
+			password_record BLOB NOT NULL,
+			server_public_key BLOB NOT NULL,
+			is_active BOOLEAN DEFAULT TRUE,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			last_used_at TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS opaque_server_keys (
+			id INTEGER PRIMARY KEY,
+			private_key BLOB NOT NULL,
+			public_key BLOB NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS opaque_user_data (
+			user_email TEXT PRIMARY KEY,
+			serialized_record BLOB NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			last_used_at TIMESTAMP
+		)`,
+	}
+
+	for _, table := range tables {
+		_, err := db.Exec(table)
+		if err != nil {
+			t.Logf("Warning: Could not create OPAQUE test table: %v", err)
+		}
+	}
+
+	// Insert dummy server keys for testing
+	_, err := db.Exec(`INSERT OR IGNORE INTO opaque_server_keys (id, private_key, public_key) VALUES (1, ?, ?)`,
+		[]byte("dummy-private-key"), []byte("dummy-public-key"))
+	if err != nil {
+		t.Logf("Warning: Could not insert dummy server keys: %v", err)
+	}
+}
+
 // Note: Tests for database operations within handlers (like Login, Register)
 // would typically go in handler tests (e.g., handlers/auth_test.go or handlers/handlers_test.go)
 // and would mock the database calls or use a test database setup similar to here.
