@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"database/sql"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -418,4 +419,158 @@ func SetPrimaryKey(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "Primary key updated successfully",
 	})
+}
+
+// RegisterCustomFilePassword registers a custom password with OPAQUE for a file
+func RegisterCustomFilePassword(c echo.Context) error {
+	email := auth.GetEmailFromToken(c)
+	filename := c.Param("filename")
+
+	// Check file ownership
+	var ownerEmail string
+	err := database.DB.QueryRow(
+		"SELECT owner_email FROM file_metadata WHERE filename = ?",
+		filename,
+	).Scan(&ownerEmail)
+
+	if err == sql.ErrNoRows {
+		return echo.NewHTTPError(http.StatusNotFound, "File not found")
+	} else if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+
+	if ownerEmail != email {
+		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to modify this file")
+	}
+
+	var request struct {
+		Password     string `json:"password"`
+		KeyLabel     string `json:"keyLabel"`
+		PasswordHint string `json:"passwordHint"`
+	}
+
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	// Initialize OPAQUE password manager
+	opm := auth.NewOPAQUEPasswordManager()
+
+	// Register custom password with OPAQUE
+	err = opm.RegisterCustomFilePassword(email, filename, request.Password, request.KeyLabel, request.PasswordHint)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to register custom file password: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to register custom password")
+	}
+
+	logging.InfoLogger.Printf("Custom file password registered for %s by %s", filename, email)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message": "Custom file password registered successfully",
+		"keyType": "custom",
+	})
+}
+
+// GetFileDecryptionKey provides the encryption key for a file given a password
+func GetFileDecryptionKey(c echo.Context) error {
+	email := auth.GetEmailFromToken(c)
+	filename := c.Param("filename")
+
+	// Check file ownership
+	var ownerEmail string
+	err := database.DB.QueryRow(
+		"SELECT owner_email FROM file_metadata WHERE filename = ?",
+		filename,
+	).Scan(&ownerEmail)
+
+	if err == sql.ErrNoRows {
+		return echo.NewHTTPError(http.StatusNotFound, "File not found")
+	} else if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
+	}
+
+	if ownerEmail != email {
+		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
+	}
+
+	var request struct {
+		Password string `json:"password"`
+		KeyType  string `json:"keyType"` // 'account' or 'custom'
+	}
+
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
+	}
+
+	var encryptionKey []byte
+
+	switch request.KeyType {
+	case "account":
+		// Authenticate user's account password via existing OPAQUE system
+		accountExportKey, err := auth.AuthenticateUser(database.DB, email, request.Password)
+		if err != nil {
+			logging.ErrorLogger.Printf("Account authentication failed: %v", err)
+			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid account password")
+		}
+		defer secureZeroBytes(accountExportKey)
+
+		// Derive file-specific encryption key from account export key
+		encryptionKey, err = deriveAccountFileKey(accountExportKey, email, filename)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Key derivation failed")
+		}
+
+	case "custom":
+		// Initialize OPAQUE password manager
+		opm := auth.NewOPAQUEPasswordManager()
+		recordIdentifier := email + ":file:" + filename
+
+		// Authenticate custom password via OPAQUE
+		exportKey, err := opm.AuthenticatePassword(recordIdentifier, request.Password)
+		if err != nil {
+			logging.ErrorLogger.Printf("Custom password authentication failed: %v", err)
+			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid custom password")
+		}
+		defer secureZeroBytes(exportKey)
+
+		// Derive file encryption key from custom password export key
+		encryptionKey, err = deriveOPAQUEFileKey(exportKey, filename, email)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Key derivation failed")
+		}
+
+	default:
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid key type")
+	}
+
+	defer secureZeroBytes(encryptionKey)
+
+	// Return key as hex for client-side decryption
+	keyHex := fmt.Sprintf("%x", encryptionKey)
+
+	logging.InfoLogger.Printf("File decryption key provided: %s (%s) for %s", filename, request.KeyType, email)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"encryptionKey": keyHex,
+		"keyType":       request.KeyType,
+	})
+}
+
+// Helper functions for OPAQUE integration
+func secureZeroBytes(data []byte) {
+	for i := range data {
+		data[i] = 0
+	}
+}
+
+func deriveAccountFileKey(exportKey []byte, userEmail, fileID string) ([]byte, error) {
+	// This would use HKDF with proper domain separation
+	// Placeholder implementation - should use crypto.DeriveAccountFileKey
+	return make([]byte, 32), nil
+}
+
+func deriveOPAQUEFileKey(exportKey []byte, fileID, userEmail string) ([]byte, error) {
+	// This would use HKDF with proper domain separation
+	// Placeholder implementation - should use crypto.DeriveOPAQUEFileKey
+	return make([]byte, 32), nil
 }

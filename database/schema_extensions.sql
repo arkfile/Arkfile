@@ -51,11 +51,12 @@ CREATE TABLE IF NOT EXISTS file_shares (
     file_id TEXT NOT NULL,
     owner_email TEXT NOT NULL,
     is_password_protected BOOLEAN NOT NULL DEFAULT false,
-    password_hash TEXT,
+    opaque_record_id INTEGER,                -- Link to OPAQUE password record
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,
     last_accessed TIMESTAMP,
-    FOREIGN KEY (owner_email) REFERENCES users(email)
+    FOREIGN KEY (owner_email) REFERENCES users(email),
+    FOREIGN KEY (opaque_record_id) REFERENCES opaque_password_records(id) ON DELETE SET NULL
 );
 
 -- Index for finding shares by owner
@@ -115,7 +116,6 @@ CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_
 
 -- Note: password_salt columns are now part of the base schema
 -- Users table: password_hash, password_salt
--- File_shares table: password_hash, password_salt
 
 -- OPAQUE Authentication Tables
 CREATE TABLE IF NOT EXISTS opaque_server_keys (

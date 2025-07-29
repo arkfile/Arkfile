@@ -13,6 +13,7 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/arkfile/auth" // Import config package
+	"github.com/84adam/arkfile/crypto"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
@@ -154,18 +155,21 @@ func GetSharedFileByShareID(c echo.Context) error {
 		return echo.NewHTTPError(status, message)
 	}
 
-	// Check password if required
+	// Check password if required using OPAQUE authentication
 	if shareDetails.PasswordProtected {
-		valid, err := verifySharePassword(shareDetails, password)
-		if !valid {
-			if password == "" {
-				return echo.NewHTTPError(http.StatusUnauthorized, "Password required")
-			}
+		if password == "" {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Password required")
+		}
+
+		// Initialize OPAQUE password manager and authenticate
+		opm := auth.NewOPAQUEPasswordManager()
+		recordIdentifier := fmt.Sprintf("share:%s", shareID)
+		exportKey, err := opm.AuthenticatePassword(recordIdentifier, password)
+		if err != nil {
+			logging.ErrorLogger.Printf("Share authentication failed for %s: %v", shareID, err)
 			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid password")
 		}
-		if err != nil {
-			logging.ErrorLogger.Printf("Error verifying password: %v", err)
-		}
+		defer crypto.SecureZeroBytes(exportKey) // Secure cleanup
 	}
 
 	// Get file metadata using the helper function

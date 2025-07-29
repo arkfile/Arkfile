@@ -13,6 +13,7 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/arkfile/auth"
+	"github.com/84adam/arkfile/crypto"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/storage"
@@ -23,7 +24,6 @@ type ShareDetails struct {
 	FileID            string
 	OwnerEmail        string
 	PasswordProtected bool
-	PasswordHash      string
 	ExpiresAt         *time.Time
 }
 
@@ -42,14 +42,13 @@ func validateShareAccess(shareID string) (*ShareDetails, int, string, error) {
 	var share ShareDetails
 
 	err := database.DB.QueryRow(`
-		SELECT file_id, owner_email, is_password_protected, password_hash, expires_at
+		SELECT file_id, owner_email, is_password_protected, expires_at
 		FROM file_shares 
 		WHERE id = ?
 	`, shareID).Scan(
 		&share.FileID,
 		&share.OwnerEmail,
 		&share.PasswordProtected,
-		&share.PasswordHash,
 		&share.ExpiresAt,
 	)
 
@@ -110,26 +109,6 @@ func getFileMetadata(fileID string) (*FileMetadata, int, string, error) {
 	return &metadata, http.StatusOK, "", nil
 }
 
-// verifySharePassword compares the provided password hash with the stored hash
-func verifySharePassword(shareDetails *ShareDetails, passwordHash string) (bool, error) {
-	if !shareDetails.PasswordProtected || shareDetails.PasswordHash == "" {
-		return true, nil // No password required
-	}
-
-	if passwordHash == "" {
-		return false, nil // Password required but not provided
-	}
-
-	// Compare hashes directly (both are Argon2ID hashes)
-	if shareDetails.PasswordHash != passwordHash {
-		// Add a small delay to mitigate timing attacks
-		time.Sleep(100 * time.Millisecond)
-		return false, nil
-	}
-
-	return true, nil
-}
-
 // getErrorTitle returns an appropriate error title based on HTTP status code
 func getErrorTitle(status int) string {
 	switch status {
@@ -143,12 +122,10 @@ func getErrorTitle(status int) string {
 }
 
 // ShareRequest represents a file sharing request.
-// PasswordHash and Salt are expected to be provided by client-side validation and hashing.
 type ShareRequest struct {
 	FileID            string `json:"fileId"`
 	PasswordProtected bool   `json:"passwordProtected"`
-	PasswordHash      string `json:"passwordHash,omitempty"` // Client-side hashed password
-	PasswordSalt      string `json:"passwordSalt,omitempty"` // Client-side generated salt
+	SharePassword     string `json:"sharePassword,omitempty"` // Plain text password for OPAQUE registration
 	ExpiresAfterHours int    `json:"expiresAfterHours"`
 }
 
@@ -161,7 +138,7 @@ type ShareResponse struct {
 	CreatedAt           time.Time  `json:"createdAt"`
 }
 
-// ShareFile creates a sharing link for a file
+// ShareFile creates a sharing link for a file using OPAQUE authentication
 func ShareFile(c echo.Context) error {
 	email := auth.GetEmailFromToken(c)
 
@@ -193,12 +170,11 @@ func ShareFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file ownership.")
 	}
 
-	// If not found in file_metadata, or to confirm details, try upload_sessions (for completed uploads)
+	// If not found in file_metadata, try upload_sessions (for completed uploads)
 	if !foundInMetadata {
-		// These will store values from upload_sessions if found
 		var usOwnerEmail string
 		var usPasswordType string
-		var usMultiKey sql.NullBool // Use sql.NullBool for potentially NULL multi_key column
+		var usMultiKey sql.NullBool
 
 		err = database.DB.QueryRow(
 			"SELECT owner_email, password_type, multi_key FROM upload_sessions WHERE filename = ? AND status = 'completed'",
@@ -207,9 +183,9 @@ func ShareFile(c echo.Context) error {
 
 		if err == nil {
 			foundInUploadSessions = true
-			ownerEmail = usOwnerEmail // Overwrite if found here
+			ownerEmail = usOwnerEmail
 			passwordType = usPasswordType
-			multiKey = usMultiKey.Valid && usMultiKey.Bool // Default to false if NULL
+			multiKey = usMultiKey.Valid && usMultiKey.Bool
 		} else if err != sql.ErrNoRows {
 			logging.ErrorLogger.Printf("Database error checking upload_sessions for file %s: %v", request.FileID, err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file ownership.")
@@ -224,7 +200,7 @@ func ShareFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to share this file.")
 	}
 
-	// If the file is account-encrypted but not multi-key enabled, require re-encryption first.
+	// If the file is account-encrypted but not multi-key enabled, require re-encryption first
 	if !multiKey && passwordType == "account" {
 		return echo.NewHTTPError(http.StatusBadRequest,
 			"This file is encrypted with your account password. To share it, first add a custom password or enable multi-key access for this file.")
@@ -240,30 +216,42 @@ func ShareFile(c echo.Context) error {
 		expiresAt = &expiry
 	}
 
-	// Use client-provided hash directly. No server-side hashing for share password.
-	finalPasswordHash := request.PasswordHash
-	if request.PasswordProtected && finalPasswordHash == "" {
-		// Password protection is enabled, but no hash was provided by client.
-		return echo.NewHTTPError(http.StatusBadRequest, "Password hash is required when password protection is enabled.")
-	}
-	if !request.PasswordProtected {
-		finalPasswordHash = "" // Ensure no hash is stored if not password protected
-	}
+	var opaqueRecordID *int64
 
-	// Create file share record with salt if password protected
-	var finalPasswordSalt string
-	if request.PasswordProtected {
-		finalPasswordSalt = request.PasswordSalt
-		if finalPasswordSalt == "" {
-			// If no salt provided by client, generate one
-			// This should not happen with proper client implementation
-			return echo.NewHTTPError(http.StatusBadRequest, "Password salt is required when password protection is enabled.")
+	// Handle password-protected shares with OPAQUE
+	if request.PasswordProtected && request.SharePassword != "" {
+		// Initialize OPAQUE password manager
+		opm := auth.NewOPAQUEPasswordManager()
+
+		// Register share password with OPAQUE
+		err = opm.RegisterSharePassword(shareID, request.FileID, email, request.SharePassword)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to register share password: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create password-protected share")
 		}
+
+		// Get the record ID for the foreign key
+		var recordID int64
+		err = database.DB.QueryRow(`
+			SELECT id FROM opaque_password_records 
+			WHERE record_identifier = ? AND is_active = TRUE`,
+			fmt.Sprintf("share:%s", shareID)).Scan(&recordID)
+
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to get OPAQUE record ID: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to link share password")
+		}
+
+		opaqueRecordID = &recordID
+	} else if request.PasswordProtected {
+		return echo.NewHTTPError(http.StatusBadRequest, "Password is required when password protection is enabled.")
 	}
 
-	_, err = database.DB.Exec(
-		"INSERT INTO file_shares (id, file_id, owner_email, is_password_protected, password_hash, password_salt, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)",
-		shareID, request.FileID, email, request.PasswordProtected, finalPasswordHash, finalPasswordSalt, expiresAt,
+	// Create file share record
+	_, err = database.DB.Exec(`
+		INSERT INTO file_shares (id, file_id, owner_email, is_password_protected, opaque_record_id, created_at, expires_at) 
+		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
+		shareID, request.FileID, email, request.PasswordProtected, opaqueRecordID, expiresAt,
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create file share record for file %s: %v", request.FileID, err)
@@ -273,32 +261,25 @@ func ShareFile(c echo.Context) error {
 	// Construct the share URL
 	host := c.Request().Host
 	scheme := "https"
-	// For local development, allow http
 	if c.Request().Header.Get("X-Forwarded-Proto") == "http" || (c.Echo().Debug && c.Request().TLS == nil) {
-		// Check if TLS is available on the connection for debug scenarios. For production, X-Forwarded-Proto is more reliable behind a proxy.
 		isHTTP := c.Request().Header.Get("X-Forwarded-Proto") == "http"
 		isHTTPS := c.Request().Header.Get("X-Forwarded-Proto") == "https"
 
-		if c.Echo().Debug && !isHTTPS { // if debug and not explicitly https
+		if c.Echo().Debug && !isHTTPS {
 			scheme = "http"
-		} else if isHTTP { // if explicitly http
+		} else if isHTTP {
 			scheme = "http"
 		}
-		// Default remains https if neither case is met or if isHTTPS is true
 	}
 
-	// Prefer Origin header if available and sensible, otherwise construct from Host
 	origin := c.Request().Header.Get("Origin")
 	var baseURL string
-	// Basic check that origin matches scheme+host to prevent open redirector type issues by crafting Origin header
-	// More robust validation might be needed depending on security requirements
 	if origin != "" {
 		expectedOriginPrefixHttp := "http://" + host
 		expectedOriginPrefixHttps := "https://" + host
 		if strings.HasPrefix(origin, expectedOriginPrefixHttp) || strings.HasPrefix(origin, expectedOriginPrefixHttps) {
 			baseURL = origin
 		} else {
-			// Origin doesn't match expected, fall back to constructing from scheme and host
 			baseURL = scheme + "://" + host
 		}
 	} else {
@@ -480,11 +461,19 @@ func GetSharedFile(c echo.Context) error {
 	})
 }
 
-// GetShareSalt returns the salt for a password-protected share
-func GetShareSalt(c echo.Context) error {
+// AuthenticateShare handles share password verification using OPAQUE
+func AuthenticateShare(c echo.Context) error {
 	shareID := c.Param("id")
 
-	// Validate share access using the helper function
+	var request struct {
+		Password string `json:"password"` // Plain text password for OPAQUE authentication
+	}
+
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+	}
+
+	// Validate share access
 	shareDetails, status, message, err := validateShareAccess(shareID)
 	if err != nil {
 		return echo.NewHTTPError(status, message)
@@ -495,61 +484,35 @@ func GetShareSalt(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Share is not password protected")
 	}
 
-	// Get the salt for this share from the database
-	var salt string
-	err = database.DB.QueryRow(
-		"SELECT password_salt FROM file_shares WHERE id = ?",
-		shareID,
-	).Scan(&salt)
-
-	if err == sql.ErrNoRows {
-		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
-	} else if err != nil {
-		logging.ErrorLogger.Printf("Database error retrieving share salt: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve share salt")
+	if request.Password == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Password is required")
 	}
 
-	if salt == "" {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Share salt not available")
-	}
+	// Initialize OPAQUE password manager
+	opm := auth.NewOPAQUEPasswordManager()
 
-	return c.JSON(http.StatusOK, map[string]string{
-		"salt": salt,
-	})
-}
-
-// AuthenticateShare handles share password verification
-func AuthenticateShare(c echo.Context) error {
-	shareID := c.Param("id")
-
-	var request struct {
-		PasswordHash string `json:"passwordHash"`
-	}
-
-	if err := c.Bind(&request); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
-	}
-
-	// Validate share access using the helper function
-	shareDetails, status, message, err := validateShareAccess(shareID)
+	// Authenticate with OPAQUE
+	recordIdentifier := fmt.Sprintf("share:%s", shareID)
+	exportKey, err := opm.AuthenticatePassword(recordIdentifier, request.Password)
 	if err != nil {
-		return echo.NewHTTPError(status, message)
-	}
-
-	// Verify password hash using helper function
-	valid, err := verifySharePassword(shareDetails, request.PasswordHash)
-	if !valid {
+		logging.ErrorLogger.Printf("Share authentication failed for %s: %v", shareID, err)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid password")
 	}
+	defer crypto.SecureZeroBytes(exportKey) // Secure cleanup
+
+	// Derive file access key from export key for client use
+	fileAccessKey, err := crypto.DeriveShareAccessKey(exportKey, shareID, shareDetails.FileID)
 	if err != nil {
-		logging.ErrorLogger.Printf("Error verifying password: %v", err)
+		logging.ErrorLogger.Printf("Failed to derive file access key: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// Log successful authentication
 	logging.InfoLogger.Printf("Share authentication successful: %s", shareID)
 
-	return c.JSON(http.StatusOK, map[string]string{
-		"message": "Authentication successful",
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message":       "Authentication successful",
+		"fileAccessKey": fmt.Sprintf("%x", fileAccessKey), // Hex-encoded for client
 	})
 }
 

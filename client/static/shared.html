@@ -222,23 +222,13 @@
                 submitBtn.innerHTML = '<span class="spinner"></span> Verifying...';
                 submitBtn.disabled = true;
                 
-                // First get the salt for this share
-                const saltResponse = await fetch(`/api/shared/${shareId}/salt`);
-                if (!saltResponse.ok) {
-                    throw new Error('Failed to get share salt');
-                }
-                const { salt } = await saltResponse.json();
-                
-                // Hash the password with the share's salt using the new auth utilities
-                const passwordHash = await window.arkfile.auth.hashPassword(password, salt);
-                
-                // Verify password hash
+                // Send plain text password for OPAQUE authentication
                 const response = await fetch(`/api/shared/${shareId}/auth`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ passwordHash })
+                    body: JSON.stringify({ password })
                 });
                 
                 if (!response.ok) {

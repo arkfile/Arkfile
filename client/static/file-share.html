@@ -460,7 +460,7 @@
             }
         }
         
-        // Create a share link
+        // Create a share link with OPAQUE authentication
         async function createShareLink() {
             const keySelect = document.getElementById('shareKeySelect');
             const expiryHours = parseInt(document.getElementById('expiryHours').value, 10);
@@ -501,37 +501,47 @@
                 submitBtn.innerHTML = '<span class="spinner"></span> Processing...';
                 submitBtn.disabled = true;
                 
-                // Create the share
-                const result = await window.arkfileEncryption.createShareLink(
-                    fileId,
-                    null,  // Custom password is already in the key
-                    selectedKey.keyLabel,
-                    selectedKey.passwordHint,
-                    expiryHours
-                );
+                // Create the share using the new OPAQUE-based API
+                const response = await fetch('/api/share', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                    },
+                    body: JSON.stringify({
+                        fileId: fileId,
+                        passwordProtected: addPassword,
+                        sharePassword: sharePassword, // Plain text password for OPAQUE registration
+                        expiresAfterHours: expiryHours || 0
+                    })
+                });
                 
-                if (result.success) {
-                    // Display the share URL
-                    document.getElementById('shareUrl').textContent = result.shareUrl;
-                    
-                    // Show password if it's a custom key
-                    if (selectedKey.keyType === 'custom') {
-                        document.getElementById('decryptPassword').textContent = selectedKey.password || 'Stored in system';
-                        document.getElementById('sharePasswordDisplay').classList.remove('hidden');
-                    } else {
-                        document.getElementById('sharePasswordDisplay').classList.add('hidden');
-                    }
-                    
-                    // Show the result panel and hide the form
-                    document.getElementById('createShareForm').classList.add('hidden');
-                    document.getElementById('shareResult').classList.remove('hidden');
-                    document.getElementById('shareForm').reset();
-                    
-                    // Reset extra password fields
-                    document.getElementById('extraPasswordFields').classList.add('hidden');
-                } else {
-                    throw new Error(result.error || 'Failed to create share link');
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.message || 'Failed to create share link');
                 }
+                
+                const result = await response.json();
+                
+                // Display the share URL
+                document.getElementById('shareUrl').textContent = result.shareUrl;
+                
+                // Show password information
+                if (selectedKey.keyType === 'custom') {
+                    document.getElementById('decryptPassword').textContent = 'Use the file encryption password you set';
+                    document.getElementById('sharePasswordDisplay').classList.remove('hidden');
+                } else {
+                    document.getElementById('sharePasswordDisplay').classList.add('hidden');
+                }
+                
+                // Show the result panel and hide the form
+                document.getElementById('createShareForm').classList.add('hidden');
+                document.getElementById('shareResult').classList.remove('hidden');
+                document.getElementById('shareForm').reset();
+                
+                // Reset extra password fields
+                document.getElementById('extraPasswordFields').classList.add('hidden');
+                
             } catch (error) {
                 showError('Error creating share link: ' + error.message);
             } finally {
