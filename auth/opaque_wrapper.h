@@ -11,6 +11,7 @@
 
 // Registration functions
 int arkfile_opaque_register_user(const uint8_t* password, uint16_t pwd_len, 
+                                 const uint8_t* server_private_key,
                                  uint8_t* user_record, uint8_t* export_key);
 
 int arkfile_opaque_create_registration_request(const uint8_t* password, uint16_t pwd_len,

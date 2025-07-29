@@ -26,16 +26,20 @@ const (
 )
 
 // libopaqueRegisterUser is a Go wrapper for the one-step registration
-func libopaqueRegisterUser(password []byte) ([]byte, []byte, error) {
+func libopaqueRegisterUser(password []byte, serverPrivateKey []byte) ([]byte, []byte, error) {
 	userRecord := make([]byte, OPAQUE_USER_RECORD_LEN)
 	exportKey := make([]byte, OPAQUE_SHARED_SECRETBYTES)
 
 	cPassword := C.CBytes(password)
 	defer C.free(cPassword)
 
+	cServerPrivateKey := C.CBytes(serverPrivateKey)
+	defer C.free(cServerPrivateKey)
+
 	ret := C.arkfile_opaque_register_user(
 		(*C.uint8_t)(cPassword),
 		C.uint16_t(len(password)),
+		(*C.uint8_t)(cServerPrivateKey),
 		(*C.uint8_t)(unsafe.Pointer(&userRecord[0])),
 		(*C.uint8_t)(unsafe.Pointer(&exportKey[0])),
 	)

@@ -19,17 +19,44 @@ type OPAQUEUserData struct {
 	CreatedAt        time.Time
 }
 
-// OPAQUEServerKeys represents the server's long-term key material (minimal for libopaque)
+// OPAQUEServerKeys represents the server's long-term key material for libopaque
 type OPAQUEServerKeys struct {
-	ServerID  string // Server identifier
-	CreatedAt time.Time
+	ServerPrivateKey []byte // 32-byte server private key (crypto_scalarmult_SCALARBYTES)
+	ServerPublicKey  []byte // 32-byte server public key (crypto_scalarmult_BYTES)
+	OPRFSeed         []byte // 32-byte OPRF seed (crypto_core_ristretto255_SCALARBYTES)
+	CreatedAt        time.Time
 }
 
 // serverKeys holds the loaded server keys for reuse
 var serverKeys *OPAQUEServerKeys
 
+// generateOPAQUEServerKeys generates cryptographically secure server keys for OPAQUE
+func generateOPAQUEServerKeys() (*OPAQUEServerKeys, error) {
+	// libsodium constants (32 bytes each)
+	const (
+		serverPrivateKeySize = 32 // crypto_scalarmult_SCALARBYTES
+		serverPublicKeySize  = 32 // crypto_scalarmult_BYTES
+		oprfSeedSize         = 32 // crypto_core_ristretto255_SCALARBYTES
+	)
+
+	// Generate server private key (32 bytes)
+	serverPrivateKey := crypto.GenerateRandomBytes(serverPrivateKeySize)
+
+	// Generate server public key (32 bytes)
+	serverPublicKey := crypto.GenerateRandomBytes(serverPublicKeySize)
+
+	// Generate OPRF seed (32 bytes)
+	oprfSeed := crypto.GenerateRandomBytes(oprfSeedSize)
+
+	return &OPAQUEServerKeys{
+		ServerPrivateKey: serverPrivateKey,
+		ServerPublicKey:  serverPublicKey,
+		OPRFSeed:         oprfSeed,
+		CreatedAt:        time.Now(),
+	}, nil
+}
+
 // SetupServerKeys generates and stores server key material if it doesn't already exist
-// libopaque handles keys internally, so this is simplified
 func SetupServerKeys(db *sql.DB) error {
 	var count int
 	err := db.QueryRow("SELECT COUNT(*) FROM opaque_server_keys WHERE id = 1").Scan(&count)
@@ -42,22 +69,26 @@ func SetupServerKeys(db *sql.DB) error {
 		return loadServerKeys(db)
 	}
 
-	// For libopaque, we only need a server identifier
-	serverID := "arkfile-server"
+	// Generate cryptographically secure server keys
+	serverKeys, err := generateOPAQUEServerKeys()
+	if err != nil {
+		return fmt.Errorf("failed to generate server keys: %w", err)
+	}
 
+	// Store the keys in the database
 	_, err = db.Exec(`
 		INSERT INTO opaque_server_keys (id, server_secret_key, server_public_key, oprf_seed)
 		VALUES (1, ?, ?, ?)`,
-		hex.EncodeToString([]byte(serverID)), // Store server ID in secret key field
-		hex.EncodeToString([]byte(serverID)), // Store server ID in public key field
-		hex.EncodeToString([]byte(serverID)), // Store server ID in oprf seed field
+		hex.EncodeToString(serverKeys.ServerPrivateKey),
+		hex.EncodeToString(serverKeys.ServerPublicKey),
+		hex.EncodeToString(serverKeys.OPRFSeed),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to store new server keys: %w", err)
 	}
 
 	if logging.InfoLogger != nil {
-		logging.InfoLogger.Println("Generated and stored new libopaque server configuration")
+		logging.InfoLogger.Println("Generated and stored new OPAQUE server keys")
 	}
 
 	return loadServerKeys(db)
@@ -71,19 +102,31 @@ func loadServerKeys(db *sql.DB) error {
 		return fmt.Errorf("failed to retrieve server keys from database: %w", err)
 	}
 
-	// For libopaque, we just need the server ID
-	serverIDBytes, err := hex.DecodeString(secretKeyHex)
+	// Decode the cryptographic keys
+	serverPrivateKey, err := hex.DecodeString(secretKeyHex)
 	if err != nil {
-		return fmt.Errorf("failed to decode server ID: %w", err)
+		return fmt.Errorf("failed to decode server private key: %w", err)
+	}
+
+	serverPublicKey, err := hex.DecodeString(publicKeyHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode server public key: %w", err)
+	}
+
+	oprfSeed, err := hex.DecodeString(oprfSeedHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode OPRF seed: %w", err)
 	}
 
 	serverKeys = &OPAQUEServerKeys{
-		ServerID:  string(serverIDBytes),
-		CreatedAt: time.Now(),
+		ServerPrivateKey: serverPrivateKey,
+		ServerPublicKey:  serverPublicKey,
+		OPRFSeed:         oprfSeed,
+		CreatedAt:        time.Now(),
 	}
 
 	if logging.InfoLogger != nil {
-		logging.InfoLogger.Println("Loaded libopaque server configuration into memory")
+		logging.InfoLogger.Println("Loaded OPAQUE server keys into memory")
 	}
 
 	return nil
@@ -105,8 +148,8 @@ func RegisterUser(db *sql.DB, email, password string) error {
 
 	passwordBytes := []byte(password)
 
-	// Use libopaque's one-step registration
-	userRecord, exportKey, err := libopaqueRegisterUser(passwordBytes)
+	// Use libopaque's one-step registration with server private key
+	userRecord, exportKey, err := libopaqueRegisterUser(passwordBytes, serverKeys.ServerPrivateKey)
 	if err != nil {
 		return fmt.Errorf("libopaque registration failed: %w", err)
 	}

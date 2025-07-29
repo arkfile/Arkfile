@@ -4,8 +4,9 @@
 
 // Arkfile OPAQUE wrapper functions for libopaque
 
-// One-step user registration (simplified interface)
+// One-step user registration with server key
 int arkfile_opaque_register_user(const uint8_t* password, uint16_t pwd_len, 
+                                 const uint8_t* server_private_key,
                                  uint8_t* user_record, uint8_t* export_key) {
     // Use simple identity structure - just usernames
     Opaque_Ids ids = {
@@ -15,8 +16,8 @@ int arkfile_opaque_register_user(const uint8_t* password, uint16_t pwd_len,
         .idS = (uint8_t*)"server"
     };
     
-    // Use libopaque's one-step registration (NULL skS means generate keypair)
-    return opaque_Register(password, pwd_len, NULL, &ids, user_record, export_key);
+    // Use libopaque's one-step registration with server private key
+    return opaque_Register(password, pwd_len, server_private_key, &ids, user_record, export_key);
 }
 
 // Step 1: Create registration request (client-side simulation)
