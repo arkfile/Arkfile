@@ -1,6 +1,183 @@
 # Go Utilities Migration Project
 
-## Overview
+## JWT Algorithm Migration to EdDSA/Ed25519
+
+### Overview
+
+Before implementing the Go utilities migration, Arkfile will undergo a critical security upgrade by migrating from HMAC-SHA256 (HS256) JWT tokens to EdDSA with Ed25519 signatures. This migration addresses fundamental security limitations of symmetric key JWT implementations and establishes a modern, auditable cryptographic foundation.
+
+### Current State Analysis
+
+**Current Implementation:**
+- **Algorithm**: `jwt.SigningMethodHS256` (HMAC-SHA256)
+- **Key Type**: Symmetric shared secret stored in `config.Security.JWTSecret`
+- **Key Material**: Environment variable string converted to byte array
+- **Security Issues**: Key distribution problems, algorithm confusion vulnerabilities, lack of proper key rotation
+
+**Target Implementation:**
+- **Algorithm**: `jwt.SigningMethodEdDSA` (Ed25519 signatures)
+- **Key Type**: Asymmetric Ed25519 keypairs (32-byte private + 32-byte public keys)
+- **Key Material**: PEM-encoded keys with 600 permissions, owned by `arkfile` user
+- **Security Benefits**: No key distribution issues, immune to timing attacks, smallest signature size, fastest verification
+
+### Migration Strategy
+
+#### Phase 1: Core JWT Infrastructure Migration
+
+**Key Generation System:**
+- Generate Ed25519 keypairs using `crypto/ed25519.GenerateKey(crypto/rand.Reader)` 
+- Leverage `/dev/urandom` through Go's `crypto/rand` package for cryptographically secure key generation
+- Store keys in PEM format at `/opt/arkfile/etc/keys/jwt/private.pem` and `public.pem`
+- Set file permissions to 600 for private keys, 644 for public keys, owned by `arkfile` user
+
+**Application Code Updates:**
+```go
+// Current implementation:
+token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+return token.SignedString([]byte(config.GetConfig().Security.JWTSecret))
+
+// New implementation:
+token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+return token.SignedString(privateKey) // Ed25519 private key
+```
+
+**Backward Compatibility:**
+- Dual-algorithm support during transition period
+- Token validation accepts both HS256 and EdDSA during migration
+- Gradual rollout with token refresh triggering algorithm migration
+- Complete cutover after all active tokens expire (24-hour window)
+
+#### Phase 2: Automated Key Rotation System
+
+**Rotation Schedule:**
+- **Recommended Interval**: 60 days (optimal balance of security and operational overhead)
+- **Alternative Options**: 30 days (high-security environments) or 90 days (lower-risk scenarios)
+- **Implementation**: Automated scheduling via systemd timers or Go-based cron system
+
+**Key Rotation Process:**
+1. **Pre-rotation Validation**: Verify current key integrity and system health
+2. **Backup Creation**: Create encrypted backup of current keys with separate master key
+3. **New Key Generation**: Generate fresh Ed25519 keypair using secure random generation
+4. **Atomic Replacement**: Replace keys with minimal service downtime (< 1 second)
+5. **Service Restart**: Graceful restart of arkfile service to load new keys
+6. **Validation**: Comprehensive post-rotation testing and health verification
+7. **Cleanup**: Archive old keys and update rotation logs
+
+**Dual-Key Transition Support:**
+- Maintain both old and new public keys during transition period
+- Sign new tokens with new private key
+- Validate existing tokens with appropriate public key (based on token metadata)
+- Automatic migration of user sessions during natural token refresh cycles
+
+#### Phase 3: Encrypted Backup and Recovery
+
+**Backup Encryption:**
+- Use `golang.org/x/crypto/nacl/secretbox` for authenticated encryption of key backups
+- Generate separate master key for backup encryption (stored securely outside key directory)
+- Create tamper-evident backup metadata with checksums and timestamps
+- Implement backup integrity verification procedures
+
+**Backup Storage:**
+- Local encrypted backups: `/opt/arkfile/backups/jwt-keys/`
+- Backup retention: 30 days of daily backups, 12 months of monthly backups
+- Compressed and encrypted backup archives with detailed manifest files
+- Support for remote backup destinations (S3-compatible storage)
+
+**Recovery Procedures:**
+- Emergency key restoration from encrypted backups
+- Rollback capabilities with service coordination
+- Key validation and health checking post-recovery
+- Detailed incident logging and audit trails
+
+#### Phase 4: Security Monitoring and Compliance
+
+**Key Health Monitoring:**
+- Automated key age monitoring with configurable alert thresholds
+- Cryptographic validation of key integrity (mathematical correctness)
+- File permission and ownership verification
+- Key usage analytics and anomaly detection
+
+**Audit and Compliance:**
+- Comprehensive logging of all key operations (generation, rotation, backup, recovery)
+- Tamper-resistant audit logs suitable for compliance requirements
+- Integration with existing security event logging system
+- Detailed reporting for security audits and compliance frameworks
+
+**Emergency Procedures:**
+- Immediate key rotation capabilities for security incidents
+- User session invalidation and forced re-authentication
+- Incident response documentation and communication templates
+- Post-incident key validation and system hardening verification
+
+### Implementation Dependencies
+
+**Required Packages (All FOSS):**
+- `crypto/ed25519` - Ed25519 key generation and operations (Go standard library)
+- `crypto/rand` - Cryptographically secure random number generation (uses `/dev/urandom`)
+- `crypto/x509` - PEM encoding/decoding for key storage (Go standard library)
+- `github.com/golang-jwt/jwt/v5` - JWT library with EdDSA support (already included)
+- `golang.org/x/crypto/nacl/secretbox` - Authenticated encryption for backups (already included)
+
+**No External Dependencies:**
+- Pure Go implementation using standard library and existing dependencies
+- No C libraries, external cryptographic tools, or proprietary components required
+- Compatible with existing build system and deployment processes
+
+### Integration with Go Utilities Migration
+
+**Setup Utility Integration:**
+- `cmd/arkfile-setup` will include Ed25519 key generation during initial installation
+- Migration detection and automatic upgrade from HMAC to EdDSA during system setup
+- Validation of key infrastructure as part of system health checks
+
+**Admin Utility Integration:**
+- `cmd/arkfile-admin` will provide comprehensive key rotation and management commands
+- Automated scheduling and monitoring of key rotation operations
+- Backup management and recovery procedures
+- Emergency key rotation capabilities
+
+**Cryptocli Integration:**
+- Extend existing `cmd/cryptocli` with Ed25519 key validation and diagnostic tools
+- Key health checking and cryptographic validation utilities
+- Integration with overall cryptographic infrastructure management
+
+### Timeline and Milestones
+
+**Week 1-2: JWT Migration Preparation**
+- Update `auth/jwt.go` to support dual-algorithm validation
+- Implement Ed25519 key generation and PEM storage utilities
+- Create backward compatibility layer for smooth transition
+
+**Week 3-4: Key Rotation Infrastructure**
+- Implement automated key rotation logic with atomic replacement
+- Create encrypted backup and recovery systems
+- Build key health monitoring and validation systems
+
+**Week 5-6: Integration and Testing**
+- Integrate JWT migration with Go utilities development
+- Comprehensive testing across all supported environments
+- Security validation and penetration testing of new key infrastructure
+
+**Week 7: Deployment and Migration**
+- Gradual rollout with dual-algorithm support
+- Monitor migration progress and system health
+- Complete cutover to EdDSA-only mode
+
+### Success Metrics
+
+**Security Improvements:**
+- Elimination of symmetric key distribution vulnerabilities
+- Reduction in JWT signature verification time (Ed25519 performance advantage)
+- Enhanced audit capabilities with asymmetric key operations
+- Improved compliance posture with modern cryptographic standards
+
+**Operational Benefits:**
+- Automated key rotation reducing manual security maintenance
+- Encrypted backup system providing disaster recovery capabilities
+- Comprehensive monitoring reducing security incident response time
+- Integration with Go utilities providing unified management interface
+
+## Bash Script Migration Overview
 
 This document outlines the plan to migrate Arkfile's bash-based setup and maintenance scripts to Go utilities, reducing script complexity while improving reliability, maintainability, and user experience.
 
@@ -159,9 +336,57 @@ Key functions:
 Implementation approach:
 The OPAQUE key generation will use the same libopaque library that the main application uses, ensuring consistency and eliminating the current placeholder approach. The implementation will properly generate the server private key, derive the public key, and create the OPRF seed using cryptographically secure random number generation.
 
-JWT key generation will use Go's crypto/rsa package to generate RSA keypairs with appropriate key sizes (minimum 2048 bits, preferably 4096 bits for long-term security). The keys will be stored in PEM format with proper file permissions (600 for private keys, 644 for public keys).
+JWT key generation will use Go's crypto/ed25519 package to generate Ed25519 keypairs (32-byte private keys, 32-byte public keys) for optimal security and performance. The keys will be stored in PEM format with proper file permissions (600 for private keys, 644 for public keys).
 
 Key validation will include cryptographic verification that keys are mathematically valid, properly formatted, and have correct file permissions and ownership. The system will also support key backup and restore operations for disaster recovery scenarios.
+
+#### OPAQUE Key Rotation System (crypto/rotation.go)
+
+Replaces: `scripts/maintenance/rotate-opaque-keys.sh`
+
+The OPAQUE key rotation component represents one of the most critical security operations in the system, as it affects all user authentication. The current bash script is only a template with TODO placeholders - the Go implementation will provide the complete functionality.
+
+Key functions:
+- `ValidateCurrentOPAQUESetup()` - Verify existing key integrity and system state
+- `AssessUserMigrationImpact()` - Analyze user base and estimate migration complexity
+- `GenerateRotationPlan()` - Create detailed migration plan with timeline estimates
+- `PerformKeyRotation()` - Execute rotation using selected strategy
+- `MonitorMigrationProgress()` - Track user migration during transition period
+- `RollbackRotation()` - Emergency rollback to previous key state
+
+Migration Strategies:
+The system will implement four distinct rotation strategies, each with different user impact and complexity levels:
+
+**Dual-Key Transition Strategy**: Maintains both old and new OPAQUE keys simultaneously, allowing existing users to continue authenticating with old keys while new registrations use new keys. This strategy requires database schema modifications to track key versions per user and application changes to support multiple active key sets. Users can be migrated gradually during password changes or through prompted re-authentication flows.
+
+**Versioned Migration Strategy**: Implements a comprehensive key versioning system where multiple key versions remain active with automatic migration triggers. This provides the smoothest user experience but requires the most complex implementation, including version compatibility checking, automatic migration during password changes, and comprehensive progress tracking.
+
+**Breaking Change Strategy**: Immediately replaces old keys with new keys, requiring all users to re-register. This is the simplest implementation but most disruptive to users. It includes comprehensive user notification systems, clear re-registration instructions, and temporary account suspension with recovery procedures.
+
+**Plan-Only Strategy**: Analyzes the current system state and generates detailed migration plans without making any changes. This allows administrators to understand the scope and complexity of rotation before committing to execution.
+
+Implementation approach:
+The rotation system will implement sophisticated state analysis that examines current key validity, user account states, recent authentication activity, and system health before recommending appropriate strategies. User impact assessment will query the database to count total registered users, identify recently active users (last 30 days), and calculate estimated migration timelines based on historical user activity patterns.
+
+The backup system will create comprehensive snapshots including current OPAQUE keys, complete database exports with user authentication data, application configuration files, and detailed restoration instructions. Backup integrity will be verified through cryptographic checksums and test restoration procedures.
+
+New key generation will use the same libopaque library as the main application, ensuring cryptographic compatibility and security standards. The implementation will generate cryptographically secure server private keys, derive corresponding public keys, create new OPRF seeds, and validate all generated keys through comprehensive testing procedures.
+
+The dual-key transition implementation will modify the authentication system to maintain multiple active key sets, update database schemas to track key versions per user account, implement intelligent key selection logic during authentication, and provide seamless migration paths for existing users.
+
+Database schema modifications will include new tables for key version tracking, user migration status, authentication attempt logging with key version information, and migration progress metrics. The system will support rollback of schema changes through comprehensive migration scripts.
+
+User communication systems will generate email templates for affected users explaining the rotation process, create in-app notification systems with clear instructions, prepare comprehensive FAQ documentation addressing common rotation questions, and establish support procedures for users experiencing migration issues.
+
+Migration monitoring will track user re-registration rates, authentication success/failure rates correlated with key versions, generate detailed progress reports for administrators, implement alerting for migration issues or performance problems, and provide completion estimates based on current migration velocity.
+
+The rollback system will provide emergency recovery capabilities including restoration of original key files from verified backups, reversion of database schema changes through tested rollback scripts, service restart procedures with original key configurations, comprehensive user notification of rollback events, and detailed incident reporting for post-mortem analysis.
+
+Testing procedures will include comprehensive validation of new keys through test authentication flows, performance impact assessment comparing old and new key operations, compatibility verification with the existing cryptographic stack, and extensive security testing to ensure rotation maintains system security properties.
+
+Error handling will provide detailed diagnostic information for rotation failures, automatic retry logic for transient errors during migration, comprehensive logging of all rotation operations and state changes, and clear remediation guidance for administrators when manual intervention is required.
+
+The system will maintain detailed audit logs throughout the rotation process, including all key generation and replacement operations, user migration events and status changes, authentication attempts during the transition period, and administrative actions taken during the rotation process. These logs will be tamper-resistant and suitable for security compliance requirements.
 
 #### TLS Certificate Management (crypto/certificates.go)
 
@@ -339,6 +564,269 @@ The configuration will be organized into logical sections:
 **Build Configuration**: Compiler options, build targets, optimization levels, and artifact locations.
 
 **Network Configuration**: Interface bindings, TLS settings, proxy configurations, and firewall integration.
+
+## Secondary Focus: cmd/arkfile-admin
+
+### Purpose and Scope
+
+The arkfile-admin utility will handle ongoing system administration, maintenance operations, and monitoring tasks that occur after initial installation. This utility will complement arkfile-setup by providing operational tools for running systems.
+
+### Core Architecture
+
+#### Main Entry Point
+File: `cmd/arkfile-admin/main.go`
+
+The admin utility will implement a CLI interface focused on operational tasks:
+
+```go
+// Main commands
+health        // System health monitoring and diagnostics
+backup        // Backup operations for keys, database, and configuration
+restore       // Restore operations from backups
+rotate-keys   // Cryptographic key rotation (OPAQUE and JWT)
+update        // System updates and dependency management
+monitor       // Real-time system monitoring and alerting
+audit         // Security auditing and compliance reporting
+clean         // System cleanup and maintenance tasks
+```
+
+#### Package Structure
+
+```
+cmd/arkfile-admin/
+├── main.go              // CLI interface and command routing
+├── health/
+│   ├── health.go        // System health checking
+│   ├── diagnostics.go   // Diagnostic reporting
+│   └── monitoring.go    // Real-time monitoring
+├── backup/
+│   ├── backup.go        // Backup orchestration
+│   ├── keys.go          // Key backup operations
+│   ├── database.go      // Database backup operations
+│   └── restore.go       // Restore operations
+├── rotation/
+│   ├── rotation.go      // Key rotation orchestration
+│   ├── opaque.go        // OPAQUE key rotation (from rotate-opaque-keys.sh)
+│   ├── jwt.go           // JWT key rotation
+│   └── certificates.go  // Certificate rotation
+├── maintenance/
+│   ├── update.go        // System updates
+│   ├── cleanup.go       // System cleanup
+│   └── optimization.go  // Performance optimization
+└── audit/
+    ├── audit.go         // Security auditing
+    ├── compliance.go    // Compliance reporting
+    └── logging.go       // Audit log management
+```
+
+### Key Administrative Components
+
+#### Key Rotation Management (rotation/)
+
+The rotation package will provide comprehensive key and certificate rotation capabilities for all cryptographic material used by Arkfile:
+
+##### OPAQUE Key Rotation (rotation/opaque.go)
+
+Replaces: `scripts/maintenance/rotate-opaque-keys.sh`
+
+This component implements the complete functionality outlined in the rotate-opaque-keys.sh script, providing a production-ready key rotation system:
+
+Key functions:
+- `ValidateCurrentSetup()` - Comprehensive validation of current OPAQUE key infrastructure
+- `AssessUserImpact()` - Database queries to count users and assess migration complexity
+- `CreateRotationBackup()` - Complete system backup before rotation begins
+- `GenerateNewKeys()` - Cryptographically secure new key generation
+- `ExecuteRotationStrategy()` - Implementation of selected rotation strategy
+- `MonitorProgress()` - Real-time migration progress tracking
+- `HandleRollback()` - Emergency rollback procedures
+
+The implementation will provide all four rotation strategies from the bash script with full functionality:
+
+**Dual-Key Transition**: Complete implementation including database schema modifications, application updates to support multiple key versions, gradual user migration with progress tracking, and seamless fallback to old keys during transition.
+
+**Versioned Migration**: Full key versioning system with automatic migration triggers, version compatibility checking, migration during password changes, and comprehensive progress tracking with completion estimates.
+
+**Breaking Change**: Immediate key replacement with user notification systems, comprehensive re-registration procedures, temporary account suspension with recovery mechanisms, and detailed user communication workflows.
+
+**Plan-Only**: Detailed analysis and planning without system changes, including user impact assessment, timeline estimation, resource requirement analysis, and comprehensive migration planning documentation.
+
+##### JWT Key Rotation (rotation/jwt.go)
+
+Replaces: `scripts/maintenance/rotate-jwt-keys.sh`
+
+The JWT key rotation component provides secure rotation of EdDSA/Ed25519 JWT signing keys with minimal service disruption:
+
+Key functions:
+- `CheckKeyStatus()` - Analyze current JWT key age and recommend rotation timeline
+- `CreateKeyBackup()` - Backup current JWT keys with timestamped archives
+- `GenerateNewJWTKeys()` - Generate new Ed25519 keypairs using secure random generation
+- `TestNewKeys()` - Validate new keys through test JWT signing operations
+- `PerformAtomicRotation()` - Replace keys with minimal service downtime
+- `RollbackKeys()` - Emergency rollback to previous key backup
+- `ValidateRotation()` - Post-rotation verification and health checks
+
+Implementation approach:
+The JWT rotation system will implement sophisticated timing analysis that recommends rotation schedules based on key age (60-day rotation recommended as optimal balance, with warnings at 45 days and errors at 90 days). The system will provide automatic backup creation with compressed archives and detailed manifests for recovery procedures.
+
+Key generation will use Ed25519 keypairs (32-byte private keys, 32-byte public keys) with comprehensive validation including cryptographic correctness verification, PEM format validation, and test JWT signing/verification to ensure keys work correctly before deployment.
+
+The atomic rotation process will minimize service disruption by stopping the arkfile service briefly during key replacement, implementing proper file permissions (600 for private keys, 644 for public keys) and arkfile user ownership, and providing detailed progress reporting throughout the rotation process.
+
+Rollback capabilities will support restoration from any timestamped backup, with automatic detection of the most recent backup if no specific timestamp is provided, and comprehensive verification that restored Ed25519 keys work correctly with the EdDSA JWT implementation.
+
+**Migration from HMAC to EdDSA:**
+The rotation system will include special migration logic to handle the transition from the current HMAC-SHA256 implementation to EdDSA/Ed25519, including dual-algorithm support during the transition period and automatic detection of which key type is currently in use.
+
+##### Certificate Rotation (rotation/certificates.go)
+
+Replaces: `scripts/maintenance/renew-certificates.sh`
+
+The certificate rotation component handles TLS certificate renewal for all services with automated expiration monitoring:
+
+Key functions:
+- `CheckCertificateExpiry()` - Monitor certificate expiration across all services
+- `PlanCertificateRenewal()` - Analyze which certificates need renewal and create execution plan
+- `BackupCertificates()` - Create comprehensive backup of current certificate infrastructure
+- `RenewCertificates()` - Generate new certificates using existing CA or create new CA if needed
+- `RestartAffectedServices()` - Coordinate service restarts to use new certificates
+- `ValidateRenewal()` - Post-renewal validation and health checking
+- `RollbackCertificates()` - Emergency restoration from backups
+
+Implementation approach:
+The certificate renewal system will implement intelligent expiration monitoring with configurable warning thresholds (30 days default), supporting both individual certificate renewal and complete CA rotation when the CA certificate is expiring.
+
+Certificate generation will support multiple algorithms (ECDSA preferred, RSA as fallback) with proper subject alternative names, key usage extensions, and validity periods. The system will maintain certificate metadata for tracking and provide detailed certificate information reporting.
+
+Service coordination will handle the complex dependencies between certificate renewal and service restarts, ensuring services are restarted in the correct order (database first, then storage, then application), with health checking to verify services start correctly with new certificates.
+
+Emergency rollback capabilities will restore entire certificate infrastructures from backups, with verification that all services can load the restored certificates correctly.
+
+##### Emergency Key Rotation (rotation/emergency.go)
+
+Replaces: Emergency rotation functionality from `scripts/maintenance/emergency-procedures.sh`
+
+The emergency rotation component provides rapid key rotation capabilities for security incidents:
+
+Key functions:
+- `ExecuteEmergencyRotation()` - Rotate all cryptographic keys immediately
+- `SuspendUserSessions()` - Invalidate all active user sessions and tokens
+- `NotifyEmergencyRotation()` - Send emergency notifications to administrators and users
+- `GenerateIncidentReport()` - Create detailed incident documentation
+- `VerifySecurityPosture()` - Validate system security after emergency rotation
+
+Implementation approach:
+Emergency rotation will provide rapid replacement of all cryptographic material (OPAQUE keys, JWT keys, and TLS certificates) in a coordinated sequence that maintains system security while minimizing service disruption.
+
+The system will implement automatic user session invalidation, requiring all users to re-authenticate after emergency rotation, with clear notification of the security event and instructions for users.
+
+Incident reporting will generate comprehensive documentation of the emergency rotation event, including timelines, actions taken, services affected, and post-incident verification results.
+
+### Complete Key Rotation Coverage Analysis
+
+Based on the analysis of existing scripts and the security requirements of Arkfile, the Go utilities plan provides comprehensive coverage of all necessary key rotation functions:
+
+#### Covered Key Types and Rotation Scenarios
+
+**1. OPAQUE Server Keys** - Fully covered with sophisticated migration strategies
+- Server private/public keypair rotation
+- OPRF seed rotation
+- User migration coordination
+- Database schema modifications for key versioning
+
+**2. JWT Signing Keys** - Complete implementation with production-ready features
+- RSA keypair rotation with configurable key sizes
+- Atomic rotation with minimal service downtime
+- Backup and rollback capabilities
+- Integration with service restart procedures
+
+**3. TLS Certificates** - Comprehensive certificate lifecycle management
+- Certificate Authority rotation
+- Service certificate renewal (arkfile, minio, rqlite)
+- Automated expiration monitoring
+- Service coordination for certificate deployment
+
+**4. Emergency Rotation** - Coordinated rotation of all cryptographic material
+- Simultaneous rotation of all key types
+- User session invalidation
+- Incident documentation and reporting
+
+#### Additional Key Types Considered
+
+After reviewing Arkfile's architecture and comparing with industry best practices, the following additional key types were evaluated but determined to be either not applicable or covered by existing categories:
+
+**Database Encryption Keys**: Not currently used by Arkfile as rqlite handles encryption at the transport layer via TLS certificates (already covered).
+
+**Storage Encryption Keys**: MinIO handles object encryption through its own key management system, with TLS certificates covering transport security (already covered).
+
+**Session Encryption Keys**: Handled through JWT tokens with regular JWT key rotation (already covered).
+
+**API Keys**: Not currently implemented in Arkfile's architecture, but would be covered by the general key rotation framework if added in the future.
+
+**TOTP Secrets**: Individual user TOTP secrets are managed per-user and don't require system-wide rotation. The TOTP validation system uses standard libraries without system-wide keys.
+
+#### Missing Components Identified and Added
+
+During this analysis, one critical component was identified as missing from the original bash scripts but essential for production deployments:
+
+**Automated Key Rotation Scheduling**: The Go utilities plan includes automated scheduling capabilities that are missing from the current bash script approach:
+- Configurable rotation schedules based on key age
+- Automated monitoring and alerting for key expiration
+- Integration with system cron or systemd timers
+- Automated backup verification and cleanup
+
+This will be implemented in `cmd/arkfile-admin` with a `schedule` subcommand that can configure and monitor automated rotation schedules for all key types.
+
+#### Security Best Practices Integration
+
+The Go utilities plan incorporates security best practices that are missing from the current bash implementation:
+
+**Key Derivation Function Updates**: While not requiring separate keys, the system should support updating KDF parameters (Argon2id settings) used for password hashing. This will be included in the security audit functionality.
+
+**Cryptographic Algorithm Migration**: Support for migrating between cryptographic algorithms (e.g., RSA to ECDSA for certificates) will be included in the certificate rotation system.
+
+**Hardware Security Module Integration**: Framework for future HSM integration for key storage, while maintaining compatibility with file-based key storage for development and smaller deployments.
+
+#### Validation of Complete Coverage
+
+The proposed Go utilities provide complete coverage of all cryptographic key rotation requirements for Arkfile:
+
+✅ **User Authentication Keys**: OPAQUE keys with sophisticated migration strategies
+✅ **Service Authentication Keys**: JWT keys with minimal-downtime rotation
+✅ **Transport Security Keys**: TLS certificates with automated renewal
+✅ **Emergency Security Response**: Coordinated rotation of all keys
+✅ **Operational Continuity**: Backup, rollback, and recovery procedures
+✅ **Compliance and Auditing**: Comprehensive logging and incident reporting
+✅ **Automated Management**: Scheduling and monitoring capabilities
+
+This represents a significant improvement over the current bash script approach, which has incomplete implementations (OPAQUE rotation is only a template) and lacks automation capabilities.
+
+#### System Health Monitoring (health/health.go)
+
+Comprehensive system health monitoring that goes beyond basic status checks:
+
+Key functions:
+- `CheckSystemHealth()` - Complete system health assessment
+- `ValidateServices()` - Service status and configuration validation
+- `TestConnectivity()` - Database and network connectivity testing
+- `MonitorPerformance()` - Performance metrics collection and analysis
+- `GenerateHealthReport()` - Detailed health reporting with recommendations
+- `AlertOnIssues()` - Automated alerting for critical issues
+
+The implementation will provide detailed diagnostics for all system components, performance monitoring with baseline comparisons, predictive maintenance recommendations, and integration with external monitoring systems.
+
+#### Backup and Restore Operations (backup/backup.go)
+
+Comprehensive backup and restore capabilities for operational continuity:
+
+Key functions:
+- `CreateSystemBackup()` - Complete system state backup
+- `BackupCryptographicKeys()` - Secure key backup with encryption
+- `BackupDatabase()` - Database backup with consistency verification
+- `BackupConfiguration()` - Configuration file backup and versioning
+- `RestoreFromBackup()` - Complete system restoration procedures
+- `ValidateBackups()` - Backup integrity verification
+
+The implementation will support automated backup scheduling, incremental backup strategies, encrypted backup storage, remote backup destinations, and comprehensive restore testing.
 
 ### Integration and Migration
 
