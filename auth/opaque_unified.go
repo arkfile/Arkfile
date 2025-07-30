@@ -10,15 +10,36 @@ import (
 	"github.com/84adam/arkfile/database"
 )
 
+// OPAQUEPasswordManagerInterface defines the interface for OPAQUE password management
+type OPAQUEPasswordManagerInterface interface {
+	RegisterCustomFilePassword(userEmail, fileID, password, keyLabel, passwordHint string) error
+	RegisterSharePassword(shareID, fileID, ownerEmail, password string) error
+	AuthenticatePassword(recordIdentifier, password string) ([]byte, error)
+	GetPasswordRecord(recordIdentifier string) (*OPAQUEPasswordRecord, error)
+	GetFilePasswordRecords(fileID string) ([]*OPAQUEPasswordRecord, error)
+	DeletePasswordRecord(recordIdentifier string) error
+	GetPasswordHint(recordIdentifier string, exportKey []byte) (string, error)
+}
+
 // OPAQUEPasswordManager handles all password authentication via OPAQUE
 type OPAQUEPasswordManager struct {
 	db *sql.DB
 }
 
+// Ensure OPAQUEPasswordManager implements the interface
+var _ OPAQUEPasswordManagerInterface = (*OPAQUEPasswordManager)(nil)
+
 // NewOPAQUEPasswordManager creates a new password manager instance
 func NewOPAQUEPasswordManager() *OPAQUEPasswordManager {
 	return &OPAQUEPasswordManager{
 		db: database.DB,
+	}
+}
+
+// NewOPAQUEPasswordManagerWithDB creates a new password manager instance with a specific database
+func NewOPAQUEPasswordManagerWithDB(db *sql.DB) *OPAQUEPasswordManager {
+	return &OPAQUEPasswordManager{
+		db: db,
 	}
 }
 
@@ -43,15 +64,20 @@ func (opm *OPAQUEPasswordManager) RegisterCustomFilePassword(
 
 	recordIdentifier := fmt.Sprintf("%s:file:%s", userEmail, fileID)
 
-	// Ensure server keys are loaded
-	if serverKeys == nil {
-		if err := SetupServerKeys(opm.db); err != nil {
-			return fmt.Errorf("failed to setup server keys: %w", err)
-		}
+	// Use provider interface
+	provider := GetOPAQUEProvider()
+	if !provider.IsAvailable() {
+		return fmt.Errorf("OPAQUE provider not available")
+	}
+
+	// Get server keys
+	_, serverPrivateKey, err := provider.GetServerKeys()
+	if err != nil {
+		return fmt.Errorf("failed to get server keys: %w", err)
 	}
 
 	// Register with OPAQUE
-	userRecord, exportKey, err := libopaqueRegisterUser([]byte(password), serverKeys.ServerPrivateKey)
+	userRecord, exportKey, err := provider.RegisterUser([]byte(password), serverPrivateKey)
 	if err != nil {
 		return fmt.Errorf("OPAQUE registration failed: %w", err)
 	}
@@ -83,8 +109,20 @@ func (opm *OPAQUEPasswordManager) RegisterSharePassword(
 
 	recordIdentifier := fmt.Sprintf("share:%s", shareID)
 
+	// Use provider interface for anonymous registration
+	provider := GetOPAQUEProvider()
+	if !provider.IsAvailable() {
+		return fmt.Errorf("OPAQUE provider not available")
+	}
+
+	// Get server keys
+	_, serverPrivateKey, err := provider.GetServerKeys()
+	if err != nil {
+		return fmt.Errorf("failed to get server keys: %w", err)
+	}
+
 	// Register with OPAQUE (anonymous)
-	userRecord, exportKey, err := libopaqueRegisterUser([]byte(password), serverKeys.ServerPrivateKey)
+	userRecord, exportKey, err := provider.RegisterUser([]byte(password), serverPrivateKey)
 	if err != nil {
 		return fmt.Errorf("OPAQUE registration failed: %w", err)
 	}
@@ -115,8 +153,14 @@ func (opm *OPAQUEPasswordManager) AuthenticatePassword(
 		return nil, fmt.Errorf("password record not found: %w", err)
 	}
 
+	// Use provider interface for authentication
+	provider := GetOPAQUEProvider()
+	if !provider.IsAvailable() {
+		return nil, fmt.Errorf("OPAQUE provider not available")
+	}
+
 	// Authenticate with OPAQUE
-	exportKey, err := libopaqueAuthenticateUser([]byte(password), userRecord)
+	exportKey, err := provider.AuthenticateUser([]byte(password), userRecord)
 	if err != nil {
 		return nil, fmt.Errorf("OPAQUE authentication failed: %w", err)
 	}

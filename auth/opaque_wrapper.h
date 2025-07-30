@@ -1,3 +1,6 @@
+//go:build !mock
+// +build !mock
+
 #ifndef OPAQUE_WRAPPER_H
 #define OPAQUE_WRAPPER_H
 

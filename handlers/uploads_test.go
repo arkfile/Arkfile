@@ -69,26 +69,27 @@ func TestUploadFile_Success(t *testing.T) {
 	// --- Transactional and Storage Expectations (Order based on handler logic) ---
 	mockDB.ExpectBegin()
 
-	// 1. Expect PutObject call first (as per handler logic)
-	mockStorage.On("PutObject",
-		mock.Anything, // context
-		filename,
+	// 1. Expect PutObjectWithPadding call first (as per actual handler logic)
+	mockStorage.On("PutObjectWithPadding",
+		mock.Anything,                          // context
+		mock.AnythingOfType("string"),          // storage ID (UUID)
 		mock.AnythingOfType("*strings.Reader"), // Handler wraps data
 		fileSize,
+		mock.AnythingOfType("int64"), // padded size
 		mock.AnythingOfType("minio.PutObjectOptions"),
 	).Return(minio.UploadInfo{}, nil).Once() // Simulate successful upload
 
-	// Add RemoveObject expectation in case of any error handling during upload
+	// Add RemoveObject expectation in case metadata insertion fails
 	mockStorage.On("RemoveObject",
-		mock.Anything, // context
-		filename,
+		mock.Anything,                 // context
+		mock.AnythingOfType("string"), // storage ID (UUID)
 		mock.AnythingOfType("minio.RemoveObjectOptions"),
-	).Return(nil).Maybe() // Use Maybe() since it might not be called in success case
+	).Return(nil).Maybe() // Use Maybe() since it should not be called in success case
 
-	// 2. Expect Metadata Insertion (after PutObject)
-	insertMetaSQL := `INSERT INTO file_metadata \(filename, owner_email, password_hint, password_type, sha256sum, size_bytes\) VALUES \(\?, \?, \?, \?, \?, \?\)`
+	// 2. Expect Metadata Insertion (after PutObject) - updated to match actual handler
+	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
-		WithArgs(filename, email, passwordHint, passwordType, sha256sum, fileSize).
+		WithArgs(filename, mock.AnythingOfType("string"), email, passwordHint, passwordType, sha256sum, fileSize, mock.AnythingOfType("int64")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// 3. Expect Storage Usage Update (inside user.UpdateStorageUsage)
@@ -230,13 +231,14 @@ func TestUploadFile_StoragePutError(t *testing.T) {
 	// --- Transactional and Storage Expectations ---
 	mockDB.ExpectBegin()
 
-	// 1. Expect PutObject call to FAIL
-	storageError := fmt.Errorf("simulated storage PutObject error")
-	mockStorage.On("PutObject",
-		mock.Anything, // context
-		filename,
+	// 1. Expect PutObjectWithPadding call to FAIL
+	storageError := fmt.Errorf("simulated storage PutObjectWithPadding error")
+	mockStorage.On("PutObjectWithPadding",
+		mock.Anything,                 // context
+		mock.AnythingOfType("string"), // storage ID
 		mock.AnythingOfType("*strings.Reader"),
 		fileSize,
+		mock.AnythingOfType("int64"), // padded size
 		mock.AnythingOfType("minio.PutObjectOptions"),
 	).Return(minio.UploadInfo{}, storageError).Once() // Return the error
 
@@ -301,21 +303,21 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 	// --- Transactional and Storage Expectations ---
 	mockDB.ExpectBegin()
 
-	// 1. Expect PutObject call to SUCCEED
-	mockStorage.On("PutObject",
-		mock.Anything, filename, mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("minio.PutObjectOptions"),
+	// 1. Expect PutObjectWithPadding call to SUCCEED
+	mockStorage.On("PutObjectWithPadding",
+		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("int64"), mock.AnythingOfType("minio.PutObjectOptions"),
 	).Return(minio.UploadInfo{}, nil).Once()
 
 	// 2. Expect Metadata Insertion to FAIL
 	dbError := fmt.Errorf("simulated DB metadata insert error")
-	insertMetaSQL := `INSERT INTO file_metadata \(filename, owner_email, password_hint, password_type, sha256sum, size_bytes\) VALUES \(\?, \?, \?, \?, \?, \?\)`
+	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
-		WithArgs(filename, email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize).
+		WithArgs(filename, mock.AnythingOfType("string"), email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize, mock.AnythingOfType("int64")).
 		WillReturnError(dbError)
 
 	// 3. Expect Storage Cleanup (RemoveObject) because metadata insert failed
 	mockStorage.On("RemoveObject",
-		mock.Anything, filename, mock.AnythingOfType("minio.RemoveObjectOptions"),
+		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("minio.RemoveObjectOptions"),
 	).Return(nil).Once() // Simulate successful cleanup
 
 	// 4. Expect Rollback
@@ -379,15 +381,20 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	// --- Transactional and Storage Expectations ---
 	mockDB.ExpectBegin()
 
-	// 1. Expect PutObject call to SUCCEED
-	mockStorage.On("PutObject",
-		mock.Anything, filename, mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("minio.PutObjectOptions"),
+	// 1. Expect PutObjectWithPadding call to SUCCEED
+	mockStorage.On("PutObjectWithPadding",
+		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("int64"), mock.AnythingOfType("minio.PutObjectOptions"),
 	).Return(minio.UploadInfo{}, nil).Once()
 
+	// Add RemoveObject expectation for error handling during storage update failure
+	mockStorage.On("RemoveObject",
+		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("minio.RemoveObjectOptions"),
+	).Return(nil).Once()
+
 	// 2. Expect Metadata Insertion to SUCCEED
-	insertMetaSQL := `INSERT INTO file_metadata \(filename, owner_email, password_hint, password_type, sha256sum, size_bytes\) VALUES \(\?, \?, \?, \?, \?, \?\)`
+	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
-		WithArgs(filename, email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize).
+		WithArgs(filename, mock.AnythingOfType("string"), email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize, mock.AnythingOfType("int64")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// 3. Expect Storage Usage Update to FAIL
@@ -522,15 +529,15 @@ func TestUploadFile_CommitError(t *testing.T) {
 	// --- Transactional and Storage Expectations ---
 	mockDB.ExpectBegin()
 
-	// 1. Expect PutObject call to SUCCEED
-	mockStorage.On("PutObject",
-		mock.Anything, filename, mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("minio.PutObjectOptions"),
+	// 1. Expect PutObjectWithPadding call to SUCCEED
+	mockStorage.On("PutObjectWithPadding",
+		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("int64"), mock.AnythingOfType("minio.PutObjectOptions"),
 	).Return(minio.UploadInfo{}, nil).Once()
 
 	// 2. Expect Metadata Insertion to SUCCEED
-	insertMetaSQL := `INSERT INTO file_metadata \(filename, owner_email, password_hint, password_type, sha256sum, size_bytes\) VALUES \(\?, \?, \?, \?, \?, \?\)`
+	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
-		WithArgs(filename, email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize).
+		WithArgs(filename, mock.AnythingOfType("string"), email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize, mock.AnythingOfType("int64")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// 3. Expect Storage Usage Update to SUCCEED
@@ -545,7 +552,7 @@ func TestUploadFile_CommitError(t *testing.T) {
 
 	// 5. Add RemoveObject expectation in case of commit failure
 	mockStorage.On("RemoveObject",
-		mock.Anything, filename, mock.AnythingOfType("minio.RemoveObjectOptions"),
+		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("minio.RemoveObjectOptions"),
 	).Return(nil).Maybe() // Use Maybe() since the handler behavior on commit error may vary
 
 	// --- Execute Handler ---

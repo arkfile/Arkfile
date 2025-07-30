@@ -510,8 +510,14 @@ func GetFileDecryptionKey(c echo.Context) error {
 
 	switch request.KeyType {
 	case "account":
-		// Authenticate user's account password via existing OPAQUE system
-		accountExportKey, err := auth.AuthenticateUser(database.DB, email, request.Password)
+		// Get user object and authenticate via user model
+		user, err := models.GetUserByEmail(database.DB, email)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "User not found")
+		}
+
+		// Authenticate user's account password via user model
+		accountExportKey, err := user.AuthenticateOPAQUE(database.DB, request.Password)
 		if err != nil {
 			logging.ErrorLogger.Printf("Account authentication failed: %v", err)
 			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid account password")

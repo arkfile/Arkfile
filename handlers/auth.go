@@ -276,8 +276,15 @@ func OpaqueLogin(c echo.Context) error {
 	// Note: We no longer check user approval status during login
 	// Users can complete OPAQUE + TOTP authentication but will be restricted from file operations if unapproved
 
-	// Perform OPAQUE authentication
-	sessionKey, err := auth.AuthenticateUser(database.DB, request.Email, request.Password)
+	// Get user to authenticate
+	user, err := models.GetUserByEmail(database.DB, request.Email)
+	if err != nil {
+		logging.ErrorLogger.Printf("User not found for %s: %v", request.Email, err)
+		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
+	}
+
+	// Perform OPAQUE authentication via user model
+	sessionKey, err := user.AuthenticateOPAQUE(database.DB, request.Password)
 	if err != nil {
 		logging.ErrorLogger.Printf("OPAQUE authentication failed for %s: %v", request.Email, err)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
@@ -335,10 +342,10 @@ func OpaqueHealthCheck(c echo.Context) error {
 		Message:           "OPAQUE system not ready",
 	}
 
-	// Check OPAQUE server initialization
-	_, err := auth.GetOPAQUEServer()
-	if err != nil {
-		response.Message = "OPAQUE server not initialized: " + err.Error()
+	// Check OPAQUE provider availability
+	provider := auth.GetOPAQUEProvider()
+	if !provider.IsAvailable() {
+		response.Message = "OPAQUE provider not available"
 		return c.JSON(http.StatusServiceUnavailable, response)
 	}
 	response.OpaqueReady = true
@@ -350,9 +357,10 @@ func OpaqueHealthCheck(c echo.Context) error {
 	}
 	response.DatabaseConnected = true
 
-	// Validate OPAQUE setup
-	if err := auth.ValidateOPAQUESetup(database.DB); err != nil {
-		response.Message = "OPAQUE setup validation failed: " + err.Error()
+	// Validate OPAQUE provider setup
+	_, _, err := provider.GetServerKeys()
+	if err != nil {
+		response.Message = "OPAQUE server keys not available: " + err.Error()
 		return c.JSON(http.StatusServiceUnavailable, response)
 	}
 	response.ServerKeysLoaded = true

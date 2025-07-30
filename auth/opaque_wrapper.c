@@ -1,3 +1,6 @@
+//go:build !mock
+// +build !mock
+
 #include "opaque_wrapper.h"
 #include <string.h>
 #include "../vendor/stef/libopaque/src/opaque.h"

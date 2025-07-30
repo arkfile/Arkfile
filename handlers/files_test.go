@@ -39,19 +39,24 @@ func TestDownloadFile_Success(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	ownerCheckSQL := "SELECT owner_email FROM file_metadata WHERE filename = ?"
-	ownerRows := sqlmock.NewRows([]string{"owner_email"}).AddRow(email)
-	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnRows(ownerRows)
+	// Check if user is approved - add user query
+	getUserSQL := `SELECT id, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE email = ?`
+	userRows := sqlmock.NewRows([]string{"id", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+		AddRow(1, email, time.Now(), 1000, 10000000, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
-	metadataSQL := "SELECT password_hint, password_type, sha256sum FROM file_metadata WHERE filename = ?"
-	metaRows := sqlmock.NewRows([]string{"password_hint", "password_type", "sha256sum"}).AddRow(passwordHint, passwordType, sha256sum)
+	// Updated query to match actual handler
+	metadataSQL := "SELECT storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes FROM file_metadata WHERE filename = ?"
+	storageID := "test-storage-id-123"
+	metaRows := sqlmock.NewRows([]string{"storage_id", "owner_email", "password_hint", "password_type", "sha256sum", "size_bytes"}).
+		AddRow(storageID, email, passwordHint, passwordType, sha256sum, fileSize)
 	mockDB.ExpectQuery(metadataSQL).WithArgs(filename).WillReturnRows(metaRows)
 
 	mockStorageObject := new(storage.MockMinioObject)
 	mockStorageObject.SetContent(fileContent)
 	mockStorageObject.SetStatInfo(minio.ObjectInfo{Size: fileSize}, nil)
 	mockStorageObject.On("Close").Return(nil)
-	mockStorage.On("GetObject", mock.Anything, filename, mock.AnythingOfType("minio.GetObjectOptions")).Return(mockStorageObject, nil).Once()
+	mockStorage.On("GetObjectWithoutPadding", mock.Anything, storageID, fileSize, mock.AnythingOfType("minio.GetObjectOptions")).Return(mockStorageObject, nil).Once()
 
 	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
 	mockDB.ExpectExec(logActionSQL).WithArgs(email, "downloaded", filename).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -90,8 +95,10 @@ func TestDeleteFile_Success(t *testing.T) {
 	c.Set("user", token)
 
 	mockDB.ExpectBegin()
-	ownerCheckSQL := "SELECT owner_email, size_bytes FROM file_metadata WHERE filename = ?"
-	ownerRows := sqlmock.NewRows([]string{"owner_email", "size_bytes"}).AddRow(email, fileSize)
+	// Updated query to match actual handler - includes storage_id
+	ownerCheckSQL := "SELECT owner_email, storage_id, size_bytes FROM file_metadata WHERE filename = ?"
+	storageID := "test-storage-id-456"
+	ownerRows := sqlmock.NewRows([]string{"owner_email", "storage_id", "size_bytes"}).AddRow(email, storageID, fileSize)
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnRows(ownerRows)
 
 	deleteMetaSQL := `DELETE FROM file_metadata WHERE filename = \?`
@@ -107,7 +114,7 @@ func TestDeleteFile_Success(t *testing.T) {
 		"id", "email", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, "hashed", nil, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	updateStorageSQL := `UPDATE users SET total_storage_bytes = \? WHERE id = \?`
@@ -117,7 +124,7 @@ func TestDeleteFile_Success(t *testing.T) {
 
 	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
 	mockDB.ExpectExec(logActionSQL).WithArgs(email, "deleted", filename).WillReturnResult(sqlmock.NewResult(1, 1))
-	mockStorage.On("RemoveObject", mock.Anything, filename, mock.AnythingOfType("minio.RemoveObjectOptions")).Return(nil).Once()
+	mockStorage.On("RemoveObject", mock.Anything, storageID, mock.AnythingOfType("minio.RemoveObjectOptions")).Return(nil).Once()
 
 	err := DeleteFile(c)
 	require.NoError(t, err)
@@ -148,7 +155,7 @@ func TestDeleteFile_NotFound(t *testing.T) {
 	c.Set("user", token)
 
 	mockDB.ExpectBegin()
-	ownerCheckSQL := "SELECT owner_email, size_bytes FROM file_metadata WHERE filename = ?"
+	ownerCheckSQL := "SELECT owner_email, storage_id, size_bytes FROM file_metadata WHERE filename = ?"
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnError(fmt.Errorf("sql: no rows in result set")) // Simulate sql.ErrNoRows
 
 	mockDB.ExpectRollback()
@@ -178,8 +185,9 @@ func TestDeleteFile_NotOwner(t *testing.T) {
 	c.Set("user", token)
 
 	mockDB.ExpectBegin()
-	ownerCheckSQL := "SELECT owner_email, size_bytes FROM file_metadata WHERE filename = ?"
-	ownerRows := sqlmock.NewRows([]string{"owner_email", "size_bytes"}).AddRow(ownerEmail, fileSize)
+	ownerCheckSQL := "SELECT owner_email, storage_id, size_bytes FROM file_metadata WHERE filename = ?"
+	storageID := "test-storage-id-789"
+	ownerRows := sqlmock.NewRows([]string{"owner_email", "storage_id", "size_bytes"}).AddRow(ownerEmail, storageID, fileSize)
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnRows(ownerRows)
 	mockDB.ExpectRollback()
 
@@ -207,13 +215,14 @@ func TestDeleteFile_StorageError(t *testing.T) {
 	c.Set("user", token)
 
 	mockDB.ExpectBegin()
-	ownerCheckSQL := "SELECT owner_email, size_bytes FROM file_metadata WHERE filename = ?"
-	ownerRows := sqlmock.NewRows([]string{"owner_email", "size_bytes"}).AddRow(email, fileSize)
+	ownerCheckSQL := "SELECT owner_email, storage_id, size_bytes FROM file_metadata WHERE filename = ?"
+	storageID := "test-storage-id-999"
+	ownerRows := sqlmock.NewRows([]string{"owner_email", "storage_id", "size_bytes"}).AddRow(email, storageID, fileSize)
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnRows(ownerRows)
 	mockDB.ExpectRollback()
 
 	storageError := fmt.Errorf("simulated storage layer error")
-	mockStorage.On("RemoveObject", mock.Anything, filename, mock.AnythingOfType("minio.RemoveObjectOptions")).Return(storageError).Once()
+	mockStorage.On("RemoveObject", mock.Anything, storageID, mock.AnythingOfType("minio.RemoveObjectOptions")).Return(storageError).Once()
 
 	err := DeleteFile(c)
 	require.Error(t, err)

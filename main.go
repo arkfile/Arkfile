@@ -79,11 +79,18 @@ func main() {
 	database.InitDB()
 	defer database.DB.Close()
 
-	// Initialize OPAQUE server keys
-	if err := auth.SetupServerKeys(database.DB); err != nil {
-		log.Fatalf("Failed to setup OPAQUE server keys: %v", err)
+	// Initialize OPAQUE provider
+	provider := auth.GetOPAQUEProvider()
+	if !provider.IsAvailable() {
+		log.Fatalf("OPAQUE provider not available")
 	}
-	logging.InfoLogger.Printf("OPAQUE server keys initialized successfully")
+
+	// Verify server keys are available
+	_, _, err = provider.GetServerKeys()
+	if err != nil {
+		log.Fatalf("Failed to get OPAQUE server keys: %v", err)
+	}
+	logging.InfoLogger.Printf("OPAQUE provider initialized successfully")
 
 	// Start TOTP cleanup routine
 	go func() {

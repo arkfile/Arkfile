@@ -12,40 +12,43 @@ import (
 
 // setupOPAQUEMocks sets up standardized mock expectations for OPAQUE database operations
 func setupOPAQUEMocks(mock sqlmock.Sqlmock, email string) {
-	// Mock OPAQUE server keys check/setup
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM opaque_server_keys WHERE id = 1`).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	// Mock expectations for unified OPAQUE password system
+	// These mocks align with our opaque_password_records table structure
+	recordIdentifier := email // For account passwords
 
-	// Mock OPAQUE user data retrieval for authentication
-	mock.ExpectQuery(`SELECT user_email, serialized_record FROM opaque_user_data WHERE user_email = \?`).
-		WithArgs(email).
-		WillReturnRows(sqlmock.NewRows([]string{"user_email", "serialized_record"}).
-			AddRow(email, "mock-opaque-record-data"))
+	// Mock OPAQUE password record retrieval for authentication
+	mock.ExpectQuery(`SELECT opaque_user_record FROM opaque_password_records WHERE record_identifier = \? AND is_active = TRUE`).
+		WithArgs(recordIdentifier).
+		WillReturnRows(sqlmock.NewRows([]string{"opaque_user_record"}).
+			AddRow("mock-opaque-user-record"))
 }
 
 // expectOPAQUERegistration sets up mock expectations for OPAQUE user registration
 func expectOPAQUERegistration(mock sqlmock.Sqlmock, email string) {
-	// Mock OPAQUE server keys check
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM opaque_server_keys WHERE id = 1`).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	// Mock expectations for account password registration in unified system
+	// Note: Account passwords use email as record_identifier
 
-	// Mock OPAQUE user registration
-	mock.ExpectExec(`INSERT OR REPLACE INTO opaque_user_data \(user_email, serialized_record\) VALUES \(\?, \?\)`).
-		WithArgs(email, sqlmock.AnyArg()).
+	// Mock OPAQUE password record insertion
+	mock.ExpectExec(`INSERT INTO opaque_password_records`).
+		WithArgs(sqlmock.AnyArg(), email, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 }
 
 // expectOPAQUEAuthentication sets up mock expectations for OPAQUE authentication
 func expectOPAQUEAuthentication(mock sqlmock.Sqlmock, email string) {
-	// Mock OPAQUE server keys check
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM opaque_server_keys WHERE id = 1`).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	// Mock expectations for unified OPAQUE password system authentication
+	recordIdentifier := email // For account passwords
 
-	// Mock OPAQUE user data retrieval
-	mock.ExpectQuery(`SELECT user_email, serialized_record FROM opaque_user_data WHERE user_email = \?`).
-		WithArgs(email).
-		WillReturnRows(sqlmock.NewRows([]string{"user_email", "serialized_record"}).
-			AddRow(email, "mock-opaque-record-data"))
+	// Mock OPAQUE password record retrieval
+	mock.ExpectQuery(`SELECT opaque_user_record FROM opaque_password_records WHERE record_identifier = \? AND is_active = TRUE`).
+		WithArgs(recordIdentifier).
+		WillReturnRows(sqlmock.NewRows([]string{"opaque_user_record"}).
+			AddRow("mock-opaque-user-record"))
+
+	// Mock updating last used timestamp
+	mock.ExpectExec(`UPDATE opaque_password_records SET last_used_at = CURRENT_TIMESTAMP WHERE record_identifier = \?`).
+		WithArgs(recordIdentifier).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 }
 
 // mockOPAQUESuccess simulates successful OPAQUE operations for testing handler logic
@@ -61,19 +64,21 @@ func mockOPAQUESuccess(t *testing.T, email, password string) {
 func validateOPAQUEHealthy(t *testing.T) {
 	t.Helper()
 
-	// Check that OPAQUE server availability can be determined
-	ready, err := auth.GetOPAQUEServer()
-	if err != nil {
-		t.Logf("OPAQUE server check returned error (expected in test environment): %v", err)
-		// In test environment without libopaque.so, this is expected
+	// Check OPAQUE provider availability
+	provider := auth.GetOPAQUEProvider()
+	if !provider.IsAvailable() {
+		t.Log("OPAQUE provider not available (expected in test environment)")
 		return
 	}
 
-	if ready {
-		t.Log("OPAQUE server reports ready")
-	} else {
-		t.Log("OPAQUE server reports not ready (expected in test environment)")
+	// Check if server keys are available
+	_, _, err := provider.GetServerKeys()
+	if err != nil {
+		t.Logf("OPAQUE server keys not available (expected in test environment): %v", err)
+		return
 	}
+
+	t.Log("OPAQUE provider reports ready")
 }
 
 // Integration Test Helpers (for when libopaque.so is available)
