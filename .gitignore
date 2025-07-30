@@ -2,6 +2,7 @@
 
 # Compiled binaries
 arkfile
+cryptocli
 bin/
 obj/
 *.out

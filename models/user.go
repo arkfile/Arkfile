@@ -409,6 +409,49 @@ func (u *User) AuthenticateOPAQUE(db *sql.DB, password string) ([]byte, error) {
 	return exportKey, nil
 }
 
+// GetOPAQUEExportKey retrieves the export key after successful authentication
+// This method should only be called immediately after successful AuthenticateOPAQUE
+func (u *User) GetOPAQUEExportKey(db *sql.DB, password string) ([]byte, error) {
+	// This method is essentially the same as AuthenticateOPAQUE but with clearer naming
+	// for Phase 5A export key integration
+	return u.AuthenticateOPAQUE(db, password)
+}
+
+// ValidateOPAQUEExportKey validates that an export key has the expected properties
+func (u *User) ValidateOPAQUEExportKey(exportKey []byte) error {
+	if len(exportKey) == 0 {
+		return fmt.Errorf("OPAQUE export key cannot be empty")
+	}
+
+	// OPAQUE export keys should be 64 bytes (512 bits) as per the protocol specification
+	if len(exportKey) != 64 {
+		return fmt.Errorf("OPAQUE export key must be exactly 64 bytes, got %d", len(exportKey))
+	}
+
+	// Check that the key is not all zeros
+	allZero := true
+	for _, b := range exportKey {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		return fmt.Errorf("OPAQUE export key cannot be all zeros")
+	}
+
+	return nil
+}
+
+// SecureZeroExportKey securely clears export key material from memory
+func (u *User) SecureZeroExportKey(exportKey []byte) {
+	if exportKey != nil {
+		for i := range exportKey {
+			exportKey[i] = 0
+		}
+	}
+}
+
 // HasOPAQUEAccount checks if the user has an OPAQUE account registered
 func (u *User) HasOPAQUEAccount(db *sql.DB) (bool, error) {
 	// Check if we're in mock mode

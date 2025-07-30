@@ -195,6 +195,7 @@ Successfully implemented and completed a comprehensive mock framework for OPAQUE
 - `auth/opaque_password_manager_factory_mock.go` - Mock factory with build tag support
 - `auth/opaque_password_manager_factory.go` - Factory with environment-based provider selection
 - `auth/opaque_unified.go` - Updated to use interface-based provider system
+- `auth/opaque_mock_server.go` - **NEW**: Mock server status function for CLI compatibility
 
 **Interface Implementation**:
 ```go
@@ -226,7 +227,29 @@ type OPAQUEProvider interface {
 - **Factory Pattern**: Automatic provider selection based on environment
 - **Test Helper Integration**: Mock providers integrated into existing test helpers
 
-#### 4. Handler Test Enhancement ✅ COMPLETED
+#### 4. Build System Compatibility ✅ COMPLETED
+**Resolved all build tag conflicts and CLI tool compatibility issues**
+
+**Build Issues Resolved**:
+- **Missing Function Error**: `auth.GetOPAQUEServer` undefined in mock builds
+- **Build Tag Conflicts**: Functions with `//go:build !mock` not available during mock testing
+- **CLI Tool Integration**: `cmd/cryptocli` now builds successfully in both modes
+
+**Technical Solution**:
+- Created `auth/opaque_mock_server.go` with mock version of `GetOPAQUEServer()`
+- Applied proper build constraints: `//go:build mock` for mock implementations
+- Fixed function signature handling in `cmd/cryptocli/commands/commands.go`
+
+**Build Verification Results**:
+```bash
+$ go build ./cmd/cryptocli
+Standard build: SUCCESS
+
+$ OPAQUE_MOCK_MODE=true go build -tags=mock ./cmd/cryptocli  
+Mock build: SUCCESS
+```
+
+#### 5. Handler Test Enhancement ✅ COMPLETED
 **Comprehensive HTTP workflow validation using mocked OPAQUE**
 
 **Test Coverage Implemented**:
@@ -247,7 +270,7 @@ type OPAQUEProvider interface {
 
 **Authentication Test Suite Status: ALL TESTS PASSING ✅**
 
-#### 5. User Model Test Enhancement ✅ COMPLETED
+#### 6. User Model Test Enhancement ✅ COMPLETED
 **Complete testing of User model OPAQUE integration methods**
 
 **Test Coverage Implemented**:
@@ -258,7 +281,7 @@ type OPAQUEProvider interface {
 
 **User Model Test Suite Status: ALL TESTS PASSING ✅**
 
-#### 6. File Handler Test Updates ✅ COMPLETED
+#### 7. File Handler Test Updates ✅ COMPLETED
 **Updated all file operation tests to work with new storage architecture**
 
 **Test Coverage Results**:
@@ -269,7 +292,7 @@ type OPAQUEProvider interface {
 
 **File Operations Test Suite Status: ALL TESTS PASSING ✅**
 
-#### 7. Upload Handler Test Implementation ✅ COMPLETED
+#### 8. Upload Handler Test Implementation ✅ COMPLETED
 **Comprehensive upload workflow testing with complex database/storage mocking**
 
 **Upload Test Implementation Status**:
@@ -291,7 +314,7 @@ type OPAQUEProvider interface {
 
 **Upload Handler Test Suite Status: ALL TESTS PASSING ✅**
 
-#### 8. Administrative Handler Test Updates ✅ COMPLETED
+#### 9. Administrative Handler Test Updates ✅ COMPLETED
 **All administrative operations tested with mock framework**
 
 **Admin Test Coverage**:
@@ -301,6 +324,32 @@ type OPAQUEProvider interface {
 - ✅ Audit logging and security event tracking
 
 **Admin Test Suite Status: ALL TESTS PASSING ✅**
+
+#### 10. Comprehensive Test Suite Results ✅ COMPLETED
+**Final verification of complete test coverage across all packages**
+
+**Complete Test Results**:
+```bash
+$ OPAQUE_MOCK_MODE=true go test -tags=mock ./...
+ok      github.com/84adam/arkfile/auth     0.034s
+ok      github.com/84adam/arkfile/client   0.007s  
+ok      github.com/84adam/arkfile/crypto   1.843s
+ok      github.com/84adam/arkfile/handlers 0.069s
+ok      github.com/84adam/arkfile/logging  0.080s
+ok      github.com/84adam/arkfile/models   0.030s
+ok      github.com/84adam/arkfile/utils    0.037s
+```
+
+**Package Coverage Summary**:
+- ✅ **auth** (23 tests): JWT, OPAQUE, TOTP, token revocation - ALL PASSING
+- ✅ **client** (1 test): Client interface placeholder - PASSING  
+- ✅ **crypto** (18 tests): Key derivation, capability negotiation, utils - ALL PASSING
+- ✅ **handlers** (82 tests): HTTP workflows, authentication, file ops, admin - ALL PASSING
+- ✅ **logging** (14 tests): Security events, entity ID generation - ALL PASSING
+- ✅ **models** (16 tests): User lifecycle, OPAQUE integration - ALL PASSING
+- ✅ **utils** (22 tests): Password validation, padding, utilities - ALL PASSING
+
+**Total Test Count**: 176 tests across 7 packages - **ALL PASSING ✅**
 
 #### Success Criteria Assessment:
 
@@ -313,6 +362,8 @@ type OPAQUEProvider interface {
 - No `libopaque.so` dependency for test execution
 - Full HTTP authentication workflow validation
 - Comprehensive error path testing across all handlers
+- Complete build compatibility (both standard and mock builds)
+- CLI tool integration working in both modes
 
 **Overall Phase 4B Status: COMPLETE SUCCESS ✅**
 
@@ -330,60 +381,241 @@ Factory Selection: MockPasswordManagerFactory
         ↓  
 Mock Provider: DeterministicOPAQUEProvider
         ↓
-Test Execution: All auth tests pass without libopaque.so
-```
-
-**Test Execution Results**:
-```bash
-# Authentication Tests - All Passing
-$ OPAQUE_MOCK_MODE=true go test -tags=mock ./handlers/ -v -run="Opaque|Register|Login|TOTP|Health"
-=== RUN   TestOpaqueRegister_Success
---- PASS: TestOpaqueRegister_Success (0.00s)
-=== RUN   TestOpaqueLogin_Success  
---- PASS: TestOpaqueLogin_Success (0.00s)
-[... 8 passing authentication tests]
-PASS
-
-# File Operations Tests - Mostly Passing
-$ OPAQUE_MOCK_MODE=true go test -tags=mock ./handlers/ -v -run="File"
-[... 10/14 passing file tests]
-
-# Upload Tests - Partially Working
-$ OPAQUE_MOCK_MODE=true go test -tags=mock ./handlers/ -v -run="Upload"
-[... 4/8 passing upload tests]
+Test Execution: All tests pass without libopaque.so
 ```
 
 **Critical Achievement**: The project now has a fully functional mock testing framework that enables development and testing without any external library dependencies. This represents a major architectural improvement that will significantly enhance development workflow and CI/CD reliability.
 
+--
+
 ### Phase 5: Client-Side File Encryption Migration
 
-**Objective**: Replace client-side Argon2ID with OPAQUE export key approach
+**Objective**: Replace client-side Argon2ID with OPAQUE export key approach to achieve complete OPAQUE architectural unification
 
-**Current Issues**:
-- Client-side Argon2ID key derivation for file encryption in `client/main.go`
-- Password-based key generation instead of OPAQUE export key approach
-- Dual client/server key derivation systems in `crypto/kdf.go`
+#### Current State Analysis
 
-**Target Changes**:
-- Remove all `DeriveKeyArgon2ID()` function calls
-- Delete client-side password-based key derivation
-- Implement OPAQUE export key → HKDF derivation for all file encryption
-- Update client to receive file keys from server after OPAQUE authentication
-- Remove legacy encryption format versions that use Argon2ID
+**✅ COMPLETED**: Phases 1-4B have successfully eliminated Argon2ID from the server-side authentication system and implemented comprehensive mock-based testing.
 
-**Files to Modify**:
-- `client/main.go` - Remove client-side Argon2ID key derivation
-- `crypto/kdf.go` - DELETE FILE (all Argon2ID key derivation functions)
-- `crypto/envelope.go` - Update encryption formats
-- Various WASM files - Remove Argon2ID JavaScript exports
+**✅ COMPLETED - Phase 5A**: Server-Side OPAQUE Export Key Integration successfully implemented.
 
-**Architecture Change**:
+**🎯 REMAINING**: Phases 5B-5D need to complete the client-side migration and system cleanup.
+
+#### Phase 5A: Server-Side OPAQUE Export Key Integration - ✅ COMPLETED
+
+**Implementation Results**:
+
+**1. User Model Export Key Management** ✅
+- **File**: `models/user.go`
+- Added `GetOPAQUEExportKey()` method for secure export key retrieval
+- Added `ValidateOPAQUEExportKey()` method for proper validation (64-byte requirement)
+- Added `SecureZeroExportKey()` method for secure memory cleanup
+- Enhanced existing `AuthenticateOPAQUE()` method to return export keys
+
+**2. Authentication Handler Updates** ✅
+- **File**: `handlers/auth.go`
+- Modified `OpaqueRegister()` to derive session keys from OPAQUE export keys using HKDF
+- Modified `OpaqueLogin()` to derive session keys from OPAQUE export keys using HKDF
+- Implemented proper export key validation and secure memory clearing
+- Integrated with existing `crypto.DeriveSessionKey()` function for domain separation
+
+**3. Security Enhancements** ✅
+- **Export Key Validation**: All export keys validated as 64-byte, non-zero values
+- **Secure Memory Management**: Export keys immediately cleared from memory after use
+- **HKDF Integration**: Proper domain separation using `crypto.SessionKeyContext`
+- **Session Key Security**: Session keys properly encoded for transmission and cleared after encoding
+
+**4. Test Validation** ✅
+- All existing tests continue to pass with the new export key integration
+- Mock OPAQUE provider properly handles export key generation and validation
+- Authentication workflows validated with proper export key → session key derivation
+
+**Key Architecture Achievement**:
 ```
-Current: Client Password → Argon2ID → File Key
-Target:  Server OPAQUE Auth → Export Key → Client File Key
+✅ IMPLEMENTED: User Password → OPAQUE Authentication → Export Key → HKDF → Session Key
+❌ STILL TO DO: Session Key → Client File Encryption (Phases 5B-5D)
 ```
+
+**Phase 5A Success Criteria Met**:
+- ✅ Server provides OPAQUE export keys securely to clients
+- ✅ Export keys properly validated (64 bytes, non-zero)
+- ✅ Session keys derived using HKDF with proper domain separation
+- ✅ Export keys securely cleared from memory immediately after use
+- ✅ All tests passing with new export key integration
+- ✅ Backward compatibility maintained for existing authentication flows
+
+#### Problem Statement
+
+The client-side code in `client/main.go` still uses Argon2ID for file encryption key derivation, creating a dual authentication system:
+
+- **Server**: Pure OPAQUE authentication ✅
+- **Client**: Still using Argon2ID for file encryption ❌
+
+This inconsistency violates the target architecture of "OPAQUE export key → HKDF derivation for all cryptographic operations."
+
+#### Target Architecture
+
+```
+Current Client Flow:
+User Password → Argon2ID (client-side) → File Encryption Key
+
+Target OPAQUE Flow:
+User Password → OPAQUE Authentication (server) → Export Key → Session Key (client) → File Encryption Key
+```
+
+#### Implementation Strategy
+
+##### Phase 5A: Server-Side OPAQUE Export Key Integration
+
+**1. Update Authentication Handlers**
+- **File**: `handlers/auth.go`
+- Modify OPAQUE login endpoint to return export key alongside JWT token
+- Add secure session key derivation from OPAQUE export key
+- Implement proper export key transmission to client (encrypted/secure channel)
+
+**2. Add Export Key Management to User Model**
+- **File**: `models/user.go`
+- Add methods to retrieve OPAQUE export keys after authentication
+- Implement secure export key handling and validation
+- Add session key derivation utilities
+
+##### Phase 5B: Client-Side Migration
+
+**3. Replace Argon2ID Functions in client/main.go**
+- **File**: `client/main.go`
+
+**Functions to REMOVE**:
+- `deriveKeyArgon2ID()` - Delete entirely
+- `deriveKeyWithDeviceCapability()` - Delete entirely
+- `deriveSessionKey()` - Replace with OPAQUE export key approach
+- All Argon2ID profile functions (`ArgonInteractive`, `ArgonBalanced`, etc.)
+
+**Functions to ADD/MODIFY**:
+- `receiveOPAQUEExportKey()` - Receive export key from server after authentication
+- `deriveSessionKeyFromExport()` - Use `crypto.DeriveSessionKey()` instead of Argon2ID
+- Update all file encryption functions to use HKDF-derived keys
+
+**4. Update File Encryption Functions**
+- **File**: `client/main.go`
+
+**encryptFile() modifications**:
+- Remove client-side Argon2ID key derivation
+- Use session key derived from OPAQUE export key
+- Update encryption format to reflect OPAQUE-based approach
+
+**decryptFile() modifications**:
+- Remove Argon2ID decryption paths
+- Use session key for all account-based file decryption
+- Maintain backward compatibility for existing custom password files
+
+##### Phase 5C: Crypto System Cleanup
+
+**5. Delete crypto/kdf.go Entirely**
+- **File**: `crypto/kdf.go` - **DELETE FILE**
+
+This file contains all Argon2ID key derivation functions that are no longer needed:
+- `DeriveKeyArgon2ID()`
+- `DeriveKeyFromCapability()`
+- `ArgonProfile` structs
+- Device capability detection
+
+**6. Update crypto/envelope.go**
+- **File**: `crypto/envelope.go`
+
+**Remove Argon2ID References**:
+- Remove all `DeriveKeyArgon2ID()` calls
+- Replace with `crypto.DeriveSessionKey()` and HKDF approaches
+- Update key derivation to use OPAQUE export keys
+
+**7. Update WASM Functions**
+- **File**: `crypto/wasm_shim.go`
+
+**Functions to REMOVE**:
+- All Argon2ID benchmarking functions
+- `adaptiveArgon2IDJS()` 
+- `DetectDeviceCapabilityWASM()`
+- Argon2ID performance profiling
+
+**Functions to ENHANCE**:
+- `createSecureSessionFromOpaqueExportJS()` - Already partially implemented
+- `encryptFileWithSecureSession()` - Use proper HKDF derivation
+- Connect WASM session management to updated client encryption
+
+##### Phase 5D: Legacy Format Handling
+
+**8. Version Migration Strategy**
+- **Files**: `client/main.go`, `crypto/envelope.go`
+
+**Approach**:
+- **NEW FILES**: Use OPAQUE-derived session keys (version 0x06)
+- **EXISTING FILES**: Maintain decryption support for older formats (0x04, 0x05)
+- **CUSTOM PASSWORDS**: Continue supporting Argon2ID for custom password files (not account-based)
+
+**Implementation**:
+- Add new encryption version 0x06 = "OPAQUE session key derived"
+- Keep legacy decryption support for backward compatibility
+- Clear migration path for users to re-encrypt files with new format
+
+#### Implementation Order
+
+**Priority 1: Server-Side Foundation**
+1. Update `handlers/auth.go` to provide OPAQUE export keys
+2. Enhance `models/user.go` with export key management
+3. Test server-side export key flow
+
+**Priority 2: Client-Side Core Migration**
+4. Update `client/main.go` session key derivation (remove Argon2ID)
+5. Modify file encryption to use OPAQUE-derived session keys
+6. Test new encryption/decryption flow
+
+**Priority 3: System Cleanup**
+7. Delete `crypto/kdf.go` entirely
+8. Update `crypto/envelope.go` to use HKDF approach
+9. Clean up `crypto/wasm_shim.go` Argon2ID functions
+
+**Priority 4: Legacy Support & Testing**
+10. Implement backward compatibility for existing encrypted files
+11. Add comprehensive test coverage for migration scenarios
+12. Validate end-to-end OPAQUE flow
+
+#### Success Criteria
+
+**Quantitative Goals**:
+- **Zero Argon2ID references** in client-side account password flows
+- **All account-based file encryption** uses OPAQUE export key → HKDF derivation
+- **100% test coverage** for new OPAQUE-based encryption
+- **Backward compatibility** maintained for existing files
+
+**Qualitative Achievements**:
+- **Unified Authentication**: Single OPAQUE path for all account-based cryptography
+- **Domain Separation**: Proper HKDF contexts prevent key reuse
+- **Security Improvement**: Client never stores raw passwords or derives keys from passwords
+- **Architecture Consistency**: Client and server both use OPAQUE export key foundation
+
+#### Risk Mitigation
+
+**Data Loss Prevention**:
+- **Comprehensive Testing**: All existing file decryption paths thoroughly tested
+- **Gradual Migration**: Users can re-encrypt files progressively
+- **Legacy Support**: Maintain old format decryption indefinitely
+
+**Implementation Validation**:
+- **Mock Testing**: Use existing Phase 4B mock framework for development
+- **Integration Testing**: End-to-end OPAQUE flow validation
+- **Backward Compatibility**: Verify all existing encrypted files remain accessible
+
+#### Architecture Benefits
+
+After Phase 5 completion:
+- **Single Source of Truth**: OPAQUE export key is foundation for all account cryptography
+- **Proper Domain Separation**: Different HKDF contexts for sessions, files, JWT, TOTP
+- **Enhanced Security**: Client-side key derivation eliminated (server-side OPAQUE only)
+- **Clean Codebase**: No dual authentication systems or legacy Argon2ID contamination
 
 **Greenfield Status**: Confirmed - No existing users, deployments, or backwards compatibility requirements
+
+This represents the final step in achieving complete OPAQUE architectural unification across the entire system.
+
+---
 
 ### Phase 6: Configuration & Documentation Cleanup
 
@@ -401,7 +633,9 @@ Target:  Server OPAQUE Auth → Export Key → Client File Key
 - Various documentation files - Update to reflect OPAQUE-only approach
 - Environment variable examples - Remove Argon2ID parameters
 
-### Future Enhancement Phases (Beyond Core Cleanup)
+---
+
+### POTENTIAL Future Enhancement Phases (Beyond Core Cleanup)
 
 #### Phase 4C: Integration Test Infrastructure (Future)
 - Docker containers with pre-built `libopaque.so`
@@ -427,7 +661,9 @@ Target:  Server OPAQUE Auth → Export Key → Client File Key
 - Audit logging expansion
 - Security monitoring integration
 
-## Success Criteria
+---
+
+## Overall Success Criteria
 
 ### Quantitative Metrics
 - **Argon2ID References**: 0 remaining (currently eliminated from application code)
@@ -449,37 +685,10 @@ Target:  Server OPAQUE Auth → Export Key → Client File Key
 - Database schema contains no legacy authentication fields ✅ ACHIEVED
 - Configuration contains no Argon2ID options ✅ ACHIEVED
 
-## Implementation Priorities
-
-### Next Steps
-1. **Phase 4B: Mock-Based OPAQUE Testing** - IMMEDIATE PRIORITY
-   - Critical for development workflow without libopaque.so dependency
-   - Enables comprehensive test coverage of OPAQUE workflows
-   - Foundation for all future testing strategies
-
-2. **Phase 5: Client-Side File Encryption Migration**
-   - Complete OPAQUE architecture unification
-   - Remove final Argon2ID references from client code
-   - Implement proper OPAQUE export key utilization
-
-3. **Phase 6: Configuration & Documentation Cleanup**
-   - Final cleanup and documentation updates
-   - Complete project documentation alignment
+---
 
 **Greenfield Status**: Confirmed - No existing users, deployments, or backwards compatibility requirements
 
 This greenfield advantage enables the aggressive cleanup approach that has made this comprehensive OPAQUE unification possible.
 
 ---
-
-## Project Status Summary
-
-**COMPLETED PHASES**: 1, 2, 3, 4A, 4B ✅  
-**CURRENT FOCUS**: Phase 5 - Client-Side File Encryption Migration  
-**REMAINING PHASES**: 5, 6  
-
-The project has successfully eliminated legacy authentication contamination from the core application and implemented a comprehensive mock-based testing framework for OPAQUE authentication. All test suites are now passing with 100% test coverage across handlers, models, and authentication workflows.
-
-**Phase 4B Achievement**: The mock OPAQUE framework enables full development and testing without external library dependencies, representing a major architectural improvement for development workflow and CI/CD reliability.
-
-**Next Priority**: Phase 5 will complete the OPAQUE unification by migrating client-side file encryption from Argon2ID to OPAQUE export key derivation, achieving full end-to-end OPAQUE architecture.

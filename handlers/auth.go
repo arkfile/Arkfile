@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"crypto/rand"
 	"encoding/base64"
 	"net/http"
 	"strings"
@@ -216,7 +215,7 @@ func OpaqueRegister(c echo.Context) error {
 	}
 
 	// Create user record AND register OPAQUE account in single transaction
-	_, err = models.CreateUserWithOPAQUE(database.DB, request.Email, request.Password)
+	user, err := models.CreateUserWithOPAQUE(database.DB, request.Email, request.Password)
 	if err != nil {
 		if logging.ErrorLogger != nil {
 			logging.ErrorLogger.Printf("OPAQUE user registration failed for %s: %v", request.Email, err)
@@ -224,23 +223,45 @@ func OpaqueRegister(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
 	}
 
+	// Get OPAQUE export key from registration process
+	// For Phase 5A: We need the export key to derive the session key properly
+	exportKey, err := user.GetOPAQUEExportKey(database.DB, request.Password)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get OPAQUE export key during registration for %s: %v", request.Email, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
+	}
+
+	// Validate export key from OPAQUE registration
+	if err := user.ValidateOPAQUEExportKey(exportKey); err != nil {
+		logging.ErrorLogger.Printf("Invalid OPAQUE export key during registration for %s: %v", request.Email, err)
+		user.SecureZeroExportKey(exportKey)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
+	}
+
+	// Derive session key from OPAQUE export key using proper HKDF for Phase 5A
+	sessionKey, err := crypto.DeriveSessionKey(exportKey, crypto.SessionKeyContext)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to derive session key during registration for %s: %v", request.Email, err)
+		user.SecureZeroExportKey(exportKey)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
+	}
+
+	// Clear export key from memory immediately after session key derivation
+	user.SecureZeroExportKey(exportKey)
+
 	// Generate temporary token for mandatory TOTP setup
 	tempToken, err := auth.GenerateTemporaryTOTPToken(request.Email)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Email, err)
+		crypto.SecureZeroSessionKey(sessionKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration succeeded but setup token creation failed")
-	}
-
-	// Generate cryptographically secure session key for registration TOTP setup
-	// Each registration gets a unique session key to prevent cross-user decryption attacks
-	sessionKey := make([]byte, 32)
-	if _, err := rand.Read(sessionKey); err != nil {
-		logging.ErrorLogger.Printf("Failed to generate session key for registration %s: %v", request.Email, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
 	}
 
 	// Encode session key for secure transmission
 	sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
+
+	// Clear session key from memory after encoding
+	crypto.SecureZeroSessionKey(sessionKey)
 
 	// Log successful registration
 	database.LogUserAction(request.Email, "registered with OPAQUE, TOTP setup required", "")
@@ -283,12 +304,30 @@ func OpaqueLogin(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
 	}
 
-	// Perform OPAQUE authentication via user model
-	sessionKey, err := user.AuthenticateOPAQUE(database.DB, request.Password)
+	// Perform OPAQUE authentication via user model to get export key
+	exportKey, err := user.AuthenticateOPAQUE(database.DB, request.Password)
 	if err != nil {
 		logging.ErrorLogger.Printf("OPAQUE authentication failed for %s: %v", request.Email, err)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
 	}
+
+	// Validate export key from OPAQUE authentication
+	if err := user.ValidateOPAQUEExportKey(exportKey); err != nil {
+		logging.ErrorLogger.Printf("Invalid OPAQUE export key for %s: %v", request.Email, err)
+		user.SecureZeroExportKey(exportKey)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
+	}
+
+	// Derive session key from OPAQUE export key using proper HKDF
+	sessionKey, err := crypto.DeriveSessionKey(exportKey, crypto.SessionKeyContext)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to derive session key for %s: %v", request.Email, err)
+		user.SecureZeroExportKey(exportKey)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
+	}
+
+	// Clear export key from memory immediately after session key derivation
+	user.SecureZeroExportKey(exportKey)
 
 	// Check if user has TOTP enabled
 	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, request.Email)

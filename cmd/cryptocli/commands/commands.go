@@ -409,7 +409,7 @@ EXAMPLES:
 	}
 
 	// Check OPAQUE server initialization
-	if _, err := auth.GetOPAQUEServer(); err == nil {
+	if available, err := auth.GetOPAQUEServer(); available && err == nil {
 		checks["OPAQUE server initialized"] = true
 		logVerbose("OPAQUE server check: PASS")
 	} else {
