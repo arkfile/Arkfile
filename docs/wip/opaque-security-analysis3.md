@@ -692,3 +692,347 @@ This represents the final step in achieving complete OPAQUE architectural unific
 This greenfield advantage enables the aggressive cleanup approach that has made this comprehensive OPAQUE unification possible.
 
 ---
+
+# TODO: INTEGRATE NEW PLAN BELOW INTO ABOVE DOCUMENT IN A COHERENT WAY
+
+## Updated Complete End-to-End Share System Flow Overview
+
+**Initial File Upload**: When the owner uploads "joeyphotos.zip", their client first derives a session key from their OPAQUE authentication (export key → HKDF → session key), generates a random File Encryption Key (FEK), encrypts the file using AES-GCM with the FEK, then encrypts the FEK using their session key. The client uploads the encrypted file blob to the server, which stores it immutably in S3/Backblaze under a GUID name, while the database contains only metadata (filename, size, storage ID, encrypted FEK) - the server never sees the plaintext file, session key, or raw FEK.
+
+**Adding Share Access**: Later, when the owner wants to create a share link, they provide an 18+ character share password (e.g., "MyVacation2025PhotosForFamily!"). The client generates a random salt, applies Argon2id with 128MB memory/4 iterations/4 threads to derive `share_key = Argon2id(share_password, salt)`, downloads and decrypts the stored FEK using the owner's session key, then encrypts the FEK with the derived share key: `encrypted_FEK_share = AES-GCM(FEK, share_key)`. The client sends only the salt and encrypted_FEK_share to the server, which stores these in a `file_share_keys` database table. The server generates a share link containing the file ID but never sees the share password, derived share key, or raw FEK.
+
+**Anonymous Access**: When a visitor receives the share link and password out-of-band, they enter the share password in their browser, which downloads the salt and encrypted_FEK_share from the server, applies the same Argon2id derivation client-side to recover the share key, decrypts the FEK, downloads the encrypted file blob from S3, and decrypts it entirely in the browser. The visitor never needs an account, and their password never leaves their browser in plaintext form.
+
+**Security Analysis**: This system maintains perfect zero-knowledge properties - even with complete server compromise, attackers gain access only to random salts and encrypted FEKs, requiring offline Argon2id attacks against 18+ character passwords to recover anything useful. Account-only files remain completely inaccessible since they depend on OPAQUE sessions that can't be derived from database contents. The trade-off is that shared files become vulnerable to dictionary attacks if users choose weak share passwords, but the Argon2id parameters (128MB memory requirement) make such attacks extremely expensive and slow. The key benefit is practical anonymous file sharing without compromising the core zero-knowledge architecture - shared files accept controlled risk in exchange for usability, while non-shared files maintain perfect security even under total server compromise.
+
+## Updated Complete End-to-End Share System Flow Implementation Details
+
+### Database Schema Changes
+
+**New Table: `file_share_keys`**
+```sql
+CREATE TABLE file_share_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER NOT NULL,
+    salt BLOB NOT NULL,                    -- 32-byte random salt for Argon2id
+    encrypted_fek BLOB NOT NULL,           -- FEK encrypted with Argon2id-derived share key
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME,                   -- Optional expiration
+    access_count INTEGER DEFAULT 0,       -- Track usage
+    last_accessed DATETIME,               -- Last access timestamp
+    FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_file_share_keys_file_id ON file_share_keys(file_id);
+CREATE INDEX idx_file_share_keys_expires_at ON file_share_keys(expires_at);
+```
+
+### API Endpoints
+
+**Create Share Access: `POST /api/files/{fileId}/share`**
+```json
+Request:
+{
+  "share_password": "MyVacation2025PhotosForFamily!",
+  "expires_in_days": 30,
+  "max_access_count": 100
+}
+
+Response:
+{
+  "success": true,
+  "share_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "share_url": "https://arkfile.example.com/share/f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "expires_at": "2025-08-30T16:21:48Z"
+}
+```
+
+**Access Shared File: `GET /api/share/{shareId}`**
+```json
+Request Headers:
+X-Share-Password: "MyVacation2025PhotosForFamily!"
+
+Response:
+{
+  "success": true,
+  "salt": "base64-encoded-32-byte-salt",
+  "encrypted_fek": "base64-encoded-encrypted-fek",
+  "file_info": {
+    "filename": "joeyphotos.zip",
+    "size": 15728640,
+    "content_type": "application/zip"
+  },
+  "download_url": "https://storage.example.com/files/uuid-blob-name"
+}
+```
+
+### Client-Side Implementation
+
+**New WASM Functions for Share Access**
+```javascript
+// Argon2id derivation with specific parameters for share passwords
+function deriveShareKey(sharePassword, salt) {
+    return argon2id({
+        password: sharePassword,
+        salt: salt,
+        memory: 128 * 1024,      // 128MB memory
+        iterations: 4,           // 4 iterations  
+        parallelism: 4,          // 4 threads
+        hashLength: 32           // 32-byte output
+    });
+}
+
+// Create share access (owner)
+function createShareAccess(fileId, sharePassword) {
+    // Generate random salt
+    const salt = crypto.getRandomValues(new Uint8Array(32));
+    
+    // Derive share key using Argon2id
+    const shareKey = deriveShareKey(sharePassword, salt);
+    
+    // Get owner's session key and decrypt FEK
+    const sessionKey = getSecureSessionKey();
+    const encryptedFEK = downloadFileFEK(fileId);
+    const fek = decryptWithAES_GCM(encryptedFEK, sessionKey);
+    
+    // Encrypt FEK with share key
+    const encryptedFEKShare = encryptWithAES_GCM(fek, shareKey);
+    
+    // Send to server
+    return uploadShareAccess(fileId, salt, encryptedFEKShare);
+}
+
+// Access shared file (anonymous visitor)
+function accessSharedFile(shareId, sharePassword) {
+    // Download share metadata
+    const shareData = downloadShareMetadata(shareId, sharePassword);
+    
+    // Derive share key using same parameters
+    const shareKey = deriveShareKey(sharePassword, shareData.salt);
+    
+    // Decrypt FEK
+    const fek = decryptWithAES_GCM(shareData.encrypted_fek, shareKey);
+    
+    // Download and decrypt file
+    const encryptedFile = downloadFileBlob(shareData.download_url);
+    const decryptedFile = decryptWithAES_GCM(encryptedFile, fek);
+    
+    return decryptedFile;
+}
+```
+
+**Password Validation for Share Passwords**
+```javascript
+function validateSharePassword(password) {
+    // Enhanced requirements for share passwords (18+ characters)
+    const requirements = {
+        minLength: 18,
+        requireUppercase: true,
+        requireLowercase: true, 
+        requireDigits: true,
+        requireSpecialChars: true,
+        specialCharSet: "`~!@#$%^&*()-_=+[]{}|;:,.<>?"
+    };
+    
+    return validatePasswordComplexity(password, requirements);
+}
+```
+
+### Server-Side Handler Implementation
+
+**File Share Handler: `handlers/file_shares.go`**
+```go
+// CreateFileShare creates a new share access for a file
+func (h *Handler) CreateFileShare(w http.ResponseWriter, r *http.Request) {
+    // Validate file ownership
+    fileID := getFileIDFromPath(r)
+    userID := getUserIDFromJWT(r)
+    
+    if !h.validateFileOwnership(fileID, userID) {
+        http.Error(w, "Unauthorized", http.StatusForbidden)
+        return
+    }
+    
+    // Parse request
+    var req CreateShareRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        http.Error(w, "Invalid request", http.StatusBadRequest)
+        return
+    }
+    
+    // Server never processes the share password - client sends only salt + encrypted FEK
+    shareID := generateUUID()
+    
+    // Store share metadata in database
+    share := FileShare{
+        ID:           shareID,
+        FileID:       fileID,
+        Salt:         req.Salt,         // Random salt from client
+        EncryptedFEK: req.EncryptedFEK, // FEK encrypted with Argon2id-derived key
+        ExpiresAt:    calculateExpiration(req.ExpiresInDays),
+        CreatedAt:    time.Now(),
+    }
+    
+    if err := h.db.CreateFileShare(share); err != nil {
+        http.Error(w, "Failed to create share", http.StatusInternalServerError)
+        return
+    }
+    
+    // Return share URL
+    response := CreateShareResponse{
+        Success:  true,
+        ShareID:  shareID,
+        ShareURL: fmt.Sprintf("%s/share/%s", h.config.BaseURL, shareID),
+        ExpiresAt: share.ExpiresAt,
+    }
+    
+    json.NewEncoder(w).Encode(response)
+}
+
+// AccessSharedFile provides share metadata for anonymous access
+func (h *Handler) AccessSharedFile(w http.ResponseWriter, r *http.Request) {
+    shareID := getShareIDFromPath(r)
+    sharePassword := r.Header.Get("X-Share-Password")
+    
+    if sharePassword == "" {
+        http.Error(w, "Share password required", http.StatusBadRequest)
+        return
+    }
+    
+    // Get share metadata from database
+    share, err := h.db.GetFileShare(shareID)
+    if err != nil {
+        http.Error(w, "Share not found", http.StatusNotFound)
+        return
+    }
+    
+    // Check expiration
+    if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
+        http.Error(w, "Share expired", http.StatusGone)
+        return
+    }
+    
+    // Get file metadata
+    file, err := h.db.GetFile(share.FileID)
+    if err != nil {
+        http.Error(w, "File not found", http.StatusNotFound)
+        return
+    }
+    
+    // Return share data (server never validates password - client does Argon2id derivation)
+    response := ShareAccessResponse{
+        Success:      true,
+        Salt:         base64.StdEncoding.EncodeToString(share.Salt),
+        EncryptedFEK: base64.StdEncoding.EncodeToString(share.EncryptedFEK),
+        FileInfo: FileInfo{
+            Filename:    file.Filename,
+            Size:        file.Size,
+            ContentType: file.ContentType,
+        },
+        DownloadURL: h.storage.GetFileURL(file.StorageID),
+    }
+    
+    // Update access tracking
+    h.db.IncrementShareAccess(shareID)
+    
+    json.NewEncoder(w).Encode(response)
+}
+```
+
+### File Format Compatibility
+
+**No Changes to Encrypted File Blobs**: The existing file encryption format remains unchanged. Files continue to be encrypted with FEKs and stored immutably in S3. Share access works by providing alternative decryption paths to the same FEK through the separate `file_share_keys` database table.
+
+**Encryption Flow**:
+1. **File Upload**: `File → AES-GCM(FEK) → Encrypted Blob → S3`
+2. **FEK Storage**: `FEK → AES-GCM(SessionKey) → Database`
+3. **Share Creation**: `FEK → AES-GCM(ShareKey) → file_share_keys table`
+
+### Argon2id Configuration
+
+**Production Parameters** (128MB memory, 4 iterations, 4 threads):
+- **Memory Cost**: 131,072 KB (128MB) - Provides strong ASIC resistance
+- **Time Cost**: 4 iterations - Balances security with usability (~500ms on modern hardware)
+- **Parallelism**: 4 threads - Utilizes multi-core processors efficiently
+- **Hash Length**: 32 bytes - Standard AES-256 key size
+- **Salt Length**: 32 bytes - Prevents rainbow table attacks
+
+**Client-Side Implementation**: Argon2id runs entirely in browser WASM, ensuring share passwords never leave the client in plaintext form.
+
+## Updated Complete End-to-End Share System Flow Implementation: Cost/Benefit Analysis: Security & Privacy
+
+### Security Benefits
+
+**Zero-Knowledge Architecture**: The server maintains complete zero-knowledge properties by never processing share passwords in plaintext. All Argon2id derivation occurs client-side, with the server storing only random salts and encrypted FEKs that are computationally indistinguishable from random data without knowledge of the share password.
+
+**ASIC-Resistant Protection**: Argon2id with 128MB memory requirements provides exceptional resistance to specialized hardware attacks. Unlike PBKDF2 or bcrypt, the memory-hard nature of Argon2id makes ASIC development prohibitively expensive, maintaining security advantages even against well-funded adversaries with custom silicon.
+
+**Strong Entropy Requirements**: 18+ character passwords with complexity requirements (uppercase, lowercase, digits, special characters from "`~!@#$%^&*()-_=+[]{}|;:,.<>?") provide approximately 65-70 bits of entropy for well-constructed passwords, remaining computationally infeasible to crack even with significant resources.
+
+**Perfect Forward Secrecy for Account Files**: Non-shared files remain perfectly secure even under complete server compromise because they depend on OPAQUE export keys that cannot be derived from any stored data. This creates a two-tier security model where the most sensitive files (account-only) have maximum protection.
+
+**Domain Separation**: Share keys use distinct Argon2id derivation contexts, preventing any cryptographic relationship between account passwords and share passwords, eliminating cross-contamination risks.
+
+### Security Costs
+
+**Offline Attack Vulnerability**: Shared files become susceptible to offline dictionary attacks if the database is compromised. Attackers with database access can attempt to crack share passwords by iteratively applying Argon2id to password candidates, though the 128MB memory requirement makes this computationally expensive.
+
+**User Password Dependency**: Security is fundamentally limited by user behavior in choosing share passwords. Despite 18+ character requirements, users may choose predictable patterns or reuse passwords, potentially undermining the cryptographic protections.
+
+**Computational Attack Economics**: While Argon2id provides strong protection, determined attackers with significant resources (estimated $100,000+ investment for specialized hardware) could potentially mount effective attacks against weaker share passwords within the 18-20 character range.
+
+### Privacy Benefits
+
+**Anonymous Access Model**: Recipients require no account creation, registration, or authentication with the service. This eliminates metadata collection about recipients and provides genuine anonymous file access that preserves recipient privacy completely.
+
+**Client-Side Decryption**: All cryptographic operations occur in the recipient's browser, ensuring file contents never transit the server in plaintext form. The server acts purely as an encrypted blob storage system with no visibility into file contents.
+
+**Out-of-Band Password Sharing**: Share passwords are communicated through separate channels (email, messaging, verbal), creating natural separation between access credentials and the storage system. This prevents the server from correlating access patterns with identity information.
+
+**Minimal Metadata Storage**: The server stores only cryptographically necessary information (salts, encrypted FEKs) plus basic access tracking. No personal information, IP addresses, or detailed access logs are required for functionality.
+
+### Privacy Costs
+
+**Access Pattern Correlation**: Database records contain creation timestamps and access counts that could enable correlation attacks if multiple files are shared with the same password or if access patterns are distinctive.
+
+**Browser Fingerprinting Risk**: Client-side Argon2id operations may create distinctive computational signatures that could potentially be used for device fingerprinting, though this risk is minimal compared to traditional web tracking.
+
+**Temporal Analysis Vulnerability**: Share creation and access times stored in the database could enable traffic analysis attacks if combined with network monitoring, potentially revealing usage patterns.
+
+### Operational Benefits
+
+**Storage Efficiency**: No file re-encryption required when adding share access, as encrypted blobs remain immutable in S3. This provides significant bandwidth and storage cost savings, especially for large files.
+
+**Scalable Share Management**: Multiple share passwords per file with independent expiration and access controls. Share revocation is instantaneous (database record deletion) without affecting file accessibility for other authorized users.
+
+**Performance Optimization**: Share access incurs computational cost only during initial key derivation. Subsequent file access uses standard AES-GCM operations with acceptable performance characteristics.
+
+**Infrastructure Simplicity**: No complex key escrow, secret sharing, or distributed key management required. The system maintains simplicity while providing robust security properties.
+
+### Operational Costs
+
+**Client Computation Burden**: Argon2id with 128MB memory requirement creates significant browser resource usage (500ms+ processing time, substantial memory allocation). This may impact user experience on low-end devices or slow connections.
+
+**Browser Compatibility Requirements**: WASM-based Argon2id implementation requires modern browser support and may exclude users on legacy systems or restrictive environments.
+
+**Support Complexity**: Users may experience confusion with computational delays, memory warnings, or device limitations when accessing shared files, potentially increasing support burden.
+
+### Quantified Risk Assessment
+
+**Database Breach + Weak Password Scenario**: 
+- **Probability**: Moderate (assume 10% chance of database compromise over 5 years)  
+- **Impact**: High for files with weak share passwords (<20 characters, common patterns)
+- **Attack Cost**: $10,000-50,000 for GPU cluster to crack weak passwords within weeks
+- **Mitigation**: 18+ character enforcement, password strength education, optional expiration
+
+**Database Breach + Strong Password Scenario**:
+- **Probability**: Same 10% database compromise risk
+- **Impact**: Minimal for files with strong share passwords (20+ characters, high entropy)
+- **Attack Cost**: $100,000+ for specialized hardware, months-to-years timeframe
+- **Mitigation**: Strong passwords make attacks economically unfeasible for most threat actors
+
+**Comparative Analysis**: This approach provides superior security to traditional shared link systems (which often use URL tokens vulnerable to log analysis) while maintaining zero-knowledge properties. The controlled risk exposure (opt-in per file, bounded by password strength) represents an optimal balance between security and usability for anonymous file sharing.
+
+**Recommended Risk Tolerance**: Appropriate for files
+
+---
