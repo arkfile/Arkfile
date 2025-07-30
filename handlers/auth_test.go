@@ -119,11 +119,11 @@ func TestOpaqueRegister_Success(t *testing.T) {
 		WithArgs(email, models.DefaultStorageLimit, false, false).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Mock OPAQUE password record creation (gracefully fails in mock mode)
+	// Mock OPAQUE password record creation (succeeds in mock mode)
 	opaqueRecordSQL := `INSERT INTO opaque_password_records`
 	mock.ExpectExec(opaqueRecordSQL).
-		WithArgs("account", email, sqlmock.AnyArg(), email, true).
-		WillReturnError(sql.ErrNoRows) // Simulate table not found in mock mode
+		WithArgs("account", email, sqlmock.AnyArg(), email, true, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectCommit()
 
