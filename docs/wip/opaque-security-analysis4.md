@@ -203,28 +203,91 @@
 - **Validation**: ✅ Clean compilation, all builds pass (standard, mock, WASM)
 - **Status**: ✅ COMPLETE - Pure OPAQUE architecture achieved
 
-**Phase 5D: ELIMINATED - No Backwards Compatibility**
-- **Target**: Fresh start with new encryption formats
-- **Implementation**: New versions 0x01 (account OPAQUE) and 0x02 (custom OPAQUE)
-- **No Legacy Support**: Clean break from old Argon2id-based formats
-- **Greenfield Advantage**: No migration complexity needed
+**Phase 5D: New File Format Implementation - ✅ COMPLETE**
+- **Target**: Fresh start with new encryption formats (greenfield deployment)
+- **Implementation**: ✅ New versions 0x01 (account OPAQUE) and 0x02 (custom OPAQUE)
+- **Files Created**: ✅ `crypto/envelope.go` with clean OPAQUE-based format system
+- **No Legacy Support**: ✅ Clean break from old Argon2id-based formats (by design)
+- **Client Integration**: ✅ `client/main.go` implements new format encryption/decryption
+- **Status**: ✅ COMPLETE - New file formats implemented and functional
+- **Validation**: ✅ All encrypted files now use versions 0x01/0x02 exclusively
 
 **Phase 5E: Share System Security Hardening - HIGH PRIORITY**
-- **Target**: Implement comprehensive security protections for share system
-- **Files to Modify**:
-  - Create `database/share_rate_limiting.sql` - Rate limiting table schema
-  - `handlers/file_shares.go` - Secure ID generation and rate limiting
-  - `handlers/middleware.go` - EntityID-based rate limiting implementation
-  - Client-side enhanced password validation with entropy scoring
-- **Security Enhancements**:
-  - Enhanced password validation (entropy scoring, dictionary checking)
-  - EntityID-based rate limiting with exponential backoff
-  - Crypto-secure 256-bit share identifiers
-  - Request body password transmission (POST instead of headers)
-  - 2-second minimum response time (timing attack mitigation)
-  - Rate limiting for 404 responses (share enumeration protection)
-- **Success Criteria**: All 6 security improvements implemented and tested
-- **Validation**: Rate limiting tests, timing attack tests, secure ID entropy tests, password validation tests
+- **Target**: Implement comprehensive security protections for share system with Go/WASM validation
+- **Core Security Specifications**:
+  - **Rate Limiting**: 3 attempts/5 minutes → exponential backoff (30s to 30min cap)
+  - **Share IDs**: Base64 URL-safe encoding (43 chars, 256-bit cryptographic security)
+  - **Password Requirements**: 14+ chars (account/custom), 18+ chars (shares), all 60+ bits entropy
+  - **Timing Protection**: 2-second minimum response time for anonymous endpoints
+  - **Pattern Detection**: Go/WASM entropy validation with dictionary/sequence detection
+  - **Responsive UI**: Real-time password feedback with 150ms debouncing
+
+**Files to Create/Modify**:
+  - **NEW**: `crypto/password_validation.go` - Go/WASM entropy validation with pattern detection
+  - `crypto/wasm_shim.go` - Add WASM exports for real-time password validation
+  - `handlers/file_shares.go` - Enhanced rate limiting + secure ID generation + timing protection
+  - `handlers/middleware.go` - Timing attack protection middleware
+  - Client HTML templates - Real-time Go/WASM validation integration
+
+**Security Enhancements Detailed**:
+  1. **Advanced Rate Limiting**: EntityID-based progressive penalties
+     - Attempts 1-3: Immediate access
+     - Attempt 4: 30 seconds delay
+     - Attempt 5: 60 seconds delay
+     - Attempt 6: 2 minutes delay
+     - Attempt 7: 4 minutes delay
+     - Attempt 8: 8 minutes delay
+     - Attempt 9: 15 minutes delay
+     - Attempts 10+: 30 minutes delay (final cap)
+  
+  2. **Crypto-Secure Share IDs**: 256-bit randomness with Base64 URL-safe encoding
+     ```go
+     func generateShareID() string {
+         randomBytes := make([]byte, 32) // 256 bits
+         if _, err := rand.Read(randomBytes); err != nil {
+             return uuid.New().String() // Fallback
+         }
+         return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(randomBytes)
+     }
+     ```
+  
+  3. **Go/WASM Password Validation**: Pattern detection with entropy penalties
+     - Base entropy calculation from character set analysis
+     - Pattern penalties: Repeating chars (90%), common patterns (70%), dictionary words (70%)
+     - Real-time validation: <0.5ms response time for immediate feedback
+     - Example: "Aaaaaaaaaaa1!" = 91.9 bits base → 2.8 bits after penalties (FAILS 60-bit requirement)
+  
+  4. **Timing Attack Protection**: Consistent response times
+     - `POST /api/share/{id}` (password auth): 2-second minimum
+     - `GET /shared/{id}` (share page): 2-second minimum
+     - Prevents enumeration timing attacks and brute force timing analysis
+  
+  5. **404 Response Rate Limiting**: Share enumeration protection
+     - Rate limit "not found" responses using same EntityID system
+     - Prevents attackers from discovering valid share IDs through timing
+  
+  6. **Enhanced Password Requirements**: Unified entropy standards
+     - Account/Custom passwords: 14+ characters + complexity rules + 60+ bits entropy
+     - Share passwords: 18+ characters + 60+ bits entropy
+     - Server-side enforcement during OPAQUE registration and share creation
+
+**Implementation Timeline**:
+  - **Week 1 (Core Security)**: Rate limiting, secure IDs, timing protection
+  - **Week 2 (Advanced Validation)**: Go/WASM entropy validation, real-time UI feedback
+
+**Success Criteria**: 
+  - All rate limiting functions with exponential backoff implemented and tested
+  - 256-bit share IDs generated with cryptographic randomness
+  - Go/WASM password validation achieving <0.5ms response times
+  - 2-second minimum response time enforced for targeted endpoints
+  - 60+ bits entropy requirement enforced for all password types
+  - Comprehensive pattern detection preventing weak passwords despite complexity rules
+
+**Validation Strategy**:
+  - Security testing: Rate limiting progression, timing attack resistance, share ID entropy analysis
+  - Performance testing: Go/WASM validation responsiveness under load
+  - Integration testing: End-to-end share creation → access → rate limiting → recovery flows
+  - Pattern detection testing: Verify entropy penalties for common weak password patterns
 
 **Phase 5F: Frontend Security & TypeScript Migration - MEDIUM PRIORITY**
 - **Target**: Secure frontend and migrate to TypeScript-based architecture
@@ -837,7 +900,7 @@ This document provides a comprehensive roadmap for completing the Arkfile OPAQUE
 - ✅ **Phase 5B COMPLETE**: Pure OPAQUE client-side implementation
 - ✅ **Phase 5C COMPLETE**: Complete crypto system cleanup
 
-**Phase 5B/5C Implementation Results (July 31, 2025)**:
+**Phase 5B/5C Implementation Results**:
 - **Files Deleted**: `crypto/kdf.go`, `crypto/crypto_test.go`, `crypto/capability_negotiation.go`
 - **Files Created**: `crypto/share_kdf.go` (isolated Argon2ID), `crypto/envelope.go` (OPAQUE-only)
 - **Client Rewrite**: Complete `client/main.go` migration to OPAQUE export keys
