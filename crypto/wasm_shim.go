@@ -827,6 +827,51 @@ func verifyTOTPSetupJS(this js.Value, args []js.Value) interface{} {
 	}
 }
 
+// validatePasswordEntropyJS validates password entropy from JavaScript
+func validatePasswordEntropyJS(this js.Value, args []js.Value) interface{} {
+	if len(args) < 2 {
+		return map[string]interface{}{
+			"valid":   false,
+			"message": "Invalid arguments",
+		}
+	}
+
+	password := args[0].String()
+	passwordType := args[1].String() // "account", "custom", or "share"
+
+	result := ValidatePasswordEntropy(password, passwordType)
+
+	return map[string]interface{}{
+		"valid":       result.Valid,
+		"entropy":     result.Entropy,
+		"message":     result.Message,
+		"suggestions": result.Suggestions,
+		"score":       result.Score,
+	}
+}
+
+// calculatePasswordScoreJS provides real-time entropy scoring for responsive UI
+func calculatePasswordScoreJS(this js.Value, args []js.Value) interface{} {
+	if len(args) < 1 {
+		return map[string]interface{}{
+			"entropy": 0,
+			"score":   0,
+			"level":   "Very Weak",
+		}
+	}
+
+	password := args[0].String()
+	entropy := calculateTrueEntropy(password)
+	score := calculateStrengthScore(entropy)
+	level := GetStrengthLevel(entropy)
+
+	return map[string]interface{}{
+		"entropy": entropy,
+		"score":   score,
+		"level":   level,
+	}
+}
+
 // RegisterAllWASMFunctions registers all WASM functions
 func RegisterAllWASMFunctions() {
 	RegisterExtendedWASMFunctions()
@@ -851,6 +896,10 @@ func RegisterAllWASMFunctions() {
 	js.Global().Set("validateBackupCodeWASM", js.FuncOf(validateBackupCodeJS))
 	js.Global().Set("generateTOTPSetupDataWASM", js.FuncOf(generateTOTPSetupDataJS))
 	js.Global().Set("verifyTOTPSetupWASM", js.FuncOf(verifyTOTPSetupJS))
+
+	// Add Phase 5E password validation functions
+	js.Global().Set("validatePasswordEntropy", js.FuncOf(validatePasswordEntropyJS))
+	js.Global().Set("calculatePasswordScore", js.FuncOf(calculatePasswordScoreJS))
 
 	// Add multi-key encryption with secure session functions
 	js.Global().Set("encryptFileMultiKeyWithSecureSession", js.FuncOf(encryptFileMultiKeyWithSecureSessionJS))

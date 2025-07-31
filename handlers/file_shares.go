@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -565,7 +567,16 @@ func DownloadSharedFile(c echo.Context) error {
 	})
 }
 
-// generateShareID creates a collision-resistant share ID using UUIDv4
+// generateShareID creates a cryptographically secure 256-bit share ID using Base64 URL-safe encoding
 func generateShareID() string {
-	return uuid.New().String()
+	// Generate 256-bit (32 bytes) of cryptographically secure randomness
+	randomBytes := make([]byte, 32)
+	if _, err := rand.Read(randomBytes); err != nil {
+		// Fallback to UUID if crypto/rand fails (should never happen in production)
+		logging.ErrorLogger.Printf("Failed to generate secure random bytes for share ID, falling back to UUID: %v", err)
+		return uuid.New().String()
+	}
+
+	// Use Base64 URL-safe encoding without padding for clean URLs (43 characters)
+	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(randomBytes)
 }

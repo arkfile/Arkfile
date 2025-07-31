@@ -98,7 +98,7 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 
 func TestOpaqueRegister_Success(t *testing.T) {
 	email := "test@example.com"
-	password := "ValidPassword123!@#"
+	password := "Xy8$mQ3#nP9@vK2!eR5&wL7*uT4%iO6^sA1+bC0-fG9~hJ3"
 
 	reqBody := map[string]interface{}{
 		"email":    email,
@@ -183,14 +183,14 @@ func TestOpaqueRegister_WeakPassword(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-	assert.Equal(t, "password must be at least 14 characters long", httpErr.Message)
+	assert.Equal(t, "Password must be at least 14 characters", httpErr.Message)
 }
 
 func TestOpaqueRegister_UserAlreadyExists(t *testing.T) {
 	email := "existing@example.com"
 	reqBody := map[string]interface{}{
 		"email":    email,
-		"password": "ValidPassword123!@#",
+		"password": "Xy8$mQ3#nP9@vK2!eR5&wL7*uT4%iO6^sA1+bC0-fG9~hJ3",
 	}
 	jsonBody, _ := json.Marshal(reqBody)
 

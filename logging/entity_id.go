@@ -230,3 +230,24 @@ func GetEntityIDForIP(ip net.IP) string {
 	}
 	return DefaultEntityIDService.GetEntityID(ip)
 }
+
+// GetOrCreateEntityID extracts the client IP from Echo context and returns an entity ID
+func GetOrCreateEntityID(c interface{}) string {
+	// Type assertion for Echo context - we use interface{} to avoid import cycle
+	type ContextWithRealIP interface {
+		RealIP() string
+	}
+
+	if ctx, ok := c.(ContextWithRealIP); ok {
+		clientIP := ctx.RealIP()
+		if clientIP != "" {
+			ip := net.ParseIP(clientIP)
+			if ip != nil {
+				return GetEntityIDForIP(ip)
+			}
+		}
+	}
+
+	// Fallback for unknown/invalid IPs
+	return "unknown"
+}

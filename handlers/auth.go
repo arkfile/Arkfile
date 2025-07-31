@@ -13,7 +13,6 @@ import (
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
-	"github.com/84adam/arkfile/utils"
 )
 
 // RefreshTokenRequest represents the request structure for refreshing a token
@@ -203,9 +202,10 @@ func OpaqueRegister(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Valid email address is required")
 	}
 
-	// Use proper password complexity validation
-	if err := utils.ValidatePasswordComplexity(request.Password); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	// Phase 5E: Enhanced password validation with entropy checking
+	result := crypto.ValidatePasswordEntropy(request.Password, "account")
+	if !result.Valid {
+		return echo.NewHTTPError(http.StatusBadRequest, result.Message)
 	}
 
 	// Check if user already exists

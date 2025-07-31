@@ -79,6 +79,12 @@ func main() {
 	database.InitDB()
 	defer database.DB.Close()
 
+	// Apply Phase 5E database schema for rate limiting
+	if err := database.ApplyRateLimitingSchema(); err != nil {
+		log.Fatalf("Failed to apply rate limiting schema: %v", err)
+	}
+	logging.InfoLogger.Printf("Rate limiting database schema applied successfully")
+
 	// Initialize OPAQUE provider
 	provider := auth.GetOPAQUEProvider()
 	if !provider.IsAvailable() {
@@ -107,6 +113,19 @@ func main() {
 		}
 	}()
 
+	// Initialize Entity ID service for rate limiting
+	entityIDConfig := logging.EntityIDConfig{
+		MasterSecretPath:  "",             // Will generate random secret
+		RotationPeriod:    24 * time.Hour, // Daily rotation
+		RetentionDays:     90,             // 90 days retention
+		CleanupInterval:   24 * time.Hour, // Daily cleanup
+		EmergencyRotation: true,           // Enable emergency rotation
+	}
+	if err := logging.InitializeEntityIDService(entityIDConfig); err != nil {
+		log.Fatalf("Failed to initialize Entity ID service: %v", err)
+	}
+	logging.InfoLogger.Printf("Entity ID service initialized successfully")
+
 	// Initialize storage
 	storage.InitMinio()
 
@@ -127,6 +146,10 @@ func main() {
 	// Force HTTPS and check TLS version
 	// e.Pre(middleware.HTTPSRedirect()) // Commented out for demo - TLS certificates need to be properly configured
 	// e.Use(handlers.TLSVersionCheck) // Apply TLS check to all routes
+
+	// Phase 5E: Rate limiting and timing protection middleware
+	e.Use(handlers.ShareRateLimitMiddleware)
+	e.Use(handlers.TimingProtectionMiddleware(2 * time.Second))
 
 	// Additional middleware
 	e.Use(middleware.Logger())
