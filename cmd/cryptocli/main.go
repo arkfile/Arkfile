@@ -96,8 +96,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-	case "capability":
-		if err := commands.CapabilityDetect(filteredArgs); err != nil {
+	case "opaque-status":
+		if err := commands.OPAQUEStatus(filteredArgs); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -125,7 +125,7 @@ COMMANDS:
     pq-status       Check post-quantum readiness status
     pq-prepare      Prepare system for post-quantum migration
     health          Check OPAQUE system health
-    capability      Detect and analyze device capabilities
+    opaque-status   Show OPAQUE system status and configuration
 
 EXAMPLES:
     # Inspect an OPAQUE envelope
@@ -143,8 +143,8 @@ EXAMPLES:
     # Check system health
     cryptocli health --detailed
 
-    # Detect device capabilities
-    cryptocli capability --auto-detect
+    # Show OPAQUE system status
+    cryptocli opaque-status --detailed
 
 Use 'cryptocli <command> -help' for command-specific help.
 

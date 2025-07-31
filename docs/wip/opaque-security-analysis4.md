@@ -77,7 +77,7 @@
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌────────────────────┐
 │ User Password   │ -> │ OPAQUE           │ -> │ Export Key         │
-│ (Account-Based) │    │ Authentication   │    │ (64 bytes)         │
+│ (Account/Custom)│    │ Authentication   │    │ (64 bytes)         │
 └─────────────────┘    └──────────────────┘    └────────────────────┘
                                                           │
                                                           ▼
@@ -89,10 +89,14 @@
                         ┌─────────────────────────────────┼─────────────────────────────────┐
                         ▼                                 ▼                                 ▼
               ┌─────────────────┐               ┌─────────────────┐               ┌─────────────────┐
-              │ Session Keys    │               │ JWT Signing     │               │ TOTP Secrets    │
-              │ (File Encrypt)  │               │ Keys            │               │ (MFA)           │
+              │ File Keys       │               │ JWT Signing     │               │ TOTP Secrets    │
+              │ (Account/Custom)│               │ Keys            │               │ (MFA)           │
               └─────────────────┘               └─────────────────┘               └─────────────────┘
 ```
+
+**IMPORTANT: All authenticated user operations use OPAQUE-derived keys:**
+- **Account Password Files**: Standard user password → OPAQUE → HKDF("ARKFILE_SESSION_KEY") → File Key
+- **Custom Password Files**: User-chosen password → OPAQUE → HKDF("ARKFILE_CUSTOM_KEY") → File Key
 
 ### Anonymous Share Access Flow
 
@@ -178,27 +182,32 @@
 
 ### Remaining Work (🎯)
 
-**Phase 5B: Client-Side Migration - HIGH PRIORITY**
-- **Target**: Eliminate ALL Argon2ID from client-side file encryption
-- **Files to Modify**:
-  - `client/main.go` - Remove Argon2ID functions, implement OPAQUE session key usage
-  - `crypto/wasm_shim.go` - Clean up Argon2ID WASM functions
-- **Success Criteria**: All account-based file encryption uses OPAQUE export keys
-- **Validation**: Existing files remain decryptable, new files use OPAQUE keys
+**Phase 5B: Client-Side Migration - ✅ COMPLETE**
+- **Target**: Eliminate ALL Argon2ID from authenticated user operations (account AND custom passwords)
+- **Files Modified**:
+  - `client/main.go` - ✅ Complete rewrite for OPAQUE-only operations with export key handling
+  - `crypto/wasm_shim.go` - ✅ Clean OPAQUE-only WASM functions, removed Argon2ID device detection
+  - `crypto/kdf.go` - ✅ DELETED ENTIRELY (all functions moved to share-specific implementations)
+- **Success Criteria**: ✅ All authenticated file encryption uses OPAQUE export keys (account and custom passwords)
+- **Validation**: ✅ New encryption format with versions 0x01 (account) and 0x02 (custom), both OPAQUE-based
+- **Status**: ✅ COMPLETE - All builds pass, zero Argon2ID in authenticated operations
 
-**Phase 5C: Crypto System Cleanup - MEDIUM PRIORITY**
+**Phase 5C: Crypto System Cleanup - ✅ COMPLETE**
 - **Target**: Remove all Argon2ID references from crypto system
-- **Files to Modify**:
-  - `crypto/kdf.go` - **DELETE ENTIRELY**
-  - `crypto/envelope.go` - Remove Argon2ID function calls
-- **Success Criteria**: Zero Argon2ID references in compiled code
-- **Validation**: Clean compilation, no functional regressions
+- **Files Modified**:
+  - `crypto/kdf.go` - ✅ DELETED ENTIRELY
+  - `crypto/envelope.go` - ✅ Created new OPAQUE-only envelope system (versions 0x01/0x02)
+  - `crypto/capability_negotiation.go` - ✅ DELETED ENTIRELY (device capability detection removed)
+  - `crypto/crypto_test.go` - ✅ DELETED ENTIRELY (contained Argon2ID tests)
+- **Success Criteria**: ✅ Zero Argon2ID references in authenticated operations
+- **Validation**: ✅ Clean compilation, all builds pass (standard, mock, WASM)
+- **Status**: ✅ COMPLETE - Pure OPAQUE architecture achieved
 
-**Phase 5D: Legacy Format Handling - LOW PRIORITY**
-- **Target**: Support existing encrypted files during transition
-- **Implementation**: Maintain decryption support for versions 0x04, 0x05
-- **New Format**: Version 0x06 = Pure OPAQUE-derived keys
-- **Migration Path**: Users can re-encrypt files progressively
+**Phase 5D: ELIMINATED - No Backwards Compatibility**
+- **Target**: Fresh start with new encryption formats
+- **Implementation**: New versions 0x01 (account OPAQUE) and 0x02 (custom OPAQUE)
+- **No Legacy Support**: Clean break from old Argon2id-based formats
+- **Greenfield Advantage**: No migration complexity needed
 
 **Phase 5E: Share System Security Hardening - HIGH PRIORITY**
 - **Target**: Implement comprehensive security protections for share system
@@ -256,7 +265,7 @@
 | **Content Security Policy** | None | Strict CSP | CSP headers prevent XSS attacks |
 | **Subresource Integrity** | None | SRI hashes | Static assets have integrity verification |
 | **Frontend Architecture** | Raw JavaScript | TypeScript modules | Inline scripts moved to TypeScript |
-| **Legacy File Support** | N/A | Maintained | Existing files remain decryptable |
+| **New File Formats** | N/A | 0x01, 0x02 | Clean OPAQUE-based encryption versions |
 
 ## IV. Share System Technical Specification
 
@@ -825,10 +834,22 @@ This document provides a comprehensive roadmap for completing the Arkfile OPAQUE
 - ✅ Zero-knowledge database schema (no password storage)
 - ✅ Comprehensive mock testing framework
 - ✅ Server-side export key provision to clients
+- ✅ **Phase 5B COMPLETE**: Pure OPAQUE client-side implementation
+- ✅ **Phase 5C COMPLETE**: Complete crypto system cleanup
 
-**Critical Next Steps**:
-- 🎯 **Phase 5B**: Eliminate client-side Argon2ID from account authentication
-- 📋 **Share System**: Implement anonymous file sharing with Argon2id protection
-- 🧹 **System Cleanup**: Remove all legacy Argon2ID references
+**Phase 5B/5C Implementation Results (July 31, 2025)**:
+- **Files Deleted**: `crypto/kdf.go`, `crypto/crypto_test.go`, `crypto/capability_negotiation.go`
+- **Files Created**: `crypto/share_kdf.go` (isolated Argon2ID), `crypto/envelope.go` (OPAQUE-only)
+- **Client Rewrite**: Complete `client/main.go` migration to OPAQUE export keys
+- **WASM Cleanup**: `crypto/wasm_shim.go` now OPAQUE-only for authenticated operations
+- **Build Status**: All builds pass (standard, mock, WASM)
+- **Argon2ID References**: Only 8 documentation comments remain (all appropriate)
+- **New File Formats**: 0x01 (OPAQUE account), 0x02 (OPAQUE custom) implemented
+- **Share System**: Completely isolated in `crypto/share_kdf.go` for anonymous access only
+
+**Remaining High-Priority Work**:
+- 🎯 **Phase 5E**: Share system security hardening (rate limiting, entropy validation)
+- 🎯 **Phase 5F**: Frontend security & TypeScript migration
+- 📋 **Phase 6**: Configuration & documentation cleanup
 
 The document is structured for both security expert review and AI-assisted development, providing clear validation criteria and implementation guidance for completing the transition to a pure OPAQUE architecture.

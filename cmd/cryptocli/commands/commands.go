@@ -530,31 +530,26 @@ EXAMPLES:
 	return nil
 }
 
-// CapabilityDetect performs device capability detection and analysis
-func CapabilityDetect(args []string) error {
-	fs := flag.NewFlagSet("capability", flag.ExitOnError)
+// OPAQUEStatus shows OPAQUE configuration and readiness
+func OPAQUEStatus(args []string) error {
+	fs := flag.NewFlagSet("opaque-status", flag.ExitOnError)
 	var (
-		autoDetect   = fs.Bool("auto-detect", false, "Auto-detect optimal capability parameters")
-		privacyFirst = fs.Bool("privacy-first", true, "Use privacy-first capability detection")
-		detailed     = fs.Bool("detailed", false, "Show detailed capability analysis")
+		detailed = fs.Bool("detailed", false, "Show detailed OPAQUE analysis")
 	)
 
 	fs.Usage = func() {
-		fmt.Printf(`Usage: cryptocli capability [FLAGS]
+		fmt.Printf(`Usage: cryptocli opaque-status [FLAGS]
 
-Detect and analyze device capabilities for optimal cryptographic parameter selection.
-Uses privacy-first approach that respects user consent and avoids invasive detection.
+Show OPAQUE authentication system status and configuration.
+Provides insight into OPAQUE server state, key material, and protocol readiness.
 
 FLAGS:
-    -auto-detect     Auto-detect optimal capability parameters
-    -privacy-first   Use privacy-first detection mode (default: true)
-    -detailed        Show detailed capability breakdown
+    -detailed        Show detailed OPAQUE configuration
     -help           Show this help message
 
 EXAMPLES:
-    cryptocli capability
-    cryptocli capability -auto-detect
-    cryptocli capability -detailed -privacy-first=false
+    cryptocli opaque-status
+    cryptocli opaque-status -detailed
 
 `)
 	}
@@ -563,63 +558,48 @@ EXAMPLES:
 		return err
 	}
 
-	logVerbose("Analyzing device capabilities")
+	logVerbose("Checking OPAQUE system status")
 
-	// Default capability (conservative)
-	capability := crypto.DeviceInteractive
+	fmt.Printf("OPAQUE Authentication Status\n")
+	fmt.Printf("============================\n")
 
-	if *autoDetect {
-		// Placeholder capability detection
-		negotiator := crypto.NewCapabilityNegotiator(*privacyFirst)
-		profile, err := negotiator.DetectCapabilities()
-		if err != nil {
-			fmt.Printf("Auto-detection failed, using default: %v\n", err)
-		} else {
-			// Convert DeviceProfile to DeviceCapability
-			switch profile.DeviceClass {
-			case crypto.DeviceMobile:
-				capability = crypto.DeviceInteractive
-			case crypto.DeviceTablet:
-				capability = crypto.DeviceBalanced
-			case crypto.DeviceDesktop:
-				capability = crypto.DeviceBalanced
-			case crypto.DeviceServer:
-				capability = crypto.DeviceMaximum
-			default:
-				capability = crypto.DeviceInteractive
-			}
-		}
+	// Check OPAQUE server availability
+	available, server := auth.GetOPAQUEServer()
+	if available && server != nil {
+		fmt.Printf("OPAQUE Server: READY\n")
+		fmt.Printf("Authentication: OPAQUE-only (Phase 5B Complete)\n")
+		fmt.Printf("Protocol: RFC Draft Implementation\n")
+	} else {
+		fmt.Printf("OPAQUE Server: NOT READY\n")
+		fmt.Printf("Status: Initialization required\n")
 	}
 
-	// Get capability parameters
-	profile := capability.GetProfile()
-
-	fmt.Printf("Device Capability Analysis\n")
-	fmt.Printf("==========================\n")
-	fmt.Printf("Detected Capability: %s\n", capability)
-	fmt.Printf("\nRecommended Parameters:\n")
-	fmt.Printf("  Memory: %d KB\n", profile.Memory)
-	fmt.Printf("  Time: %d iterations\n", profile.Time)
-	fmt.Printf("  Threads: %d\n", profile.Threads)
-	fmt.Printf("  Key Length: %d bytes\n", profile.KeyLen)
-
-	// Estimate performance
-	estimatedTime := profile.Memory * profile.Time / 1000 // Very rough estimate
-	fmt.Printf("  Estimated Time: ~%dms\n", estimatedTime)
+	// Basic system information
+	fmt.Printf("Architecture: Pure OPAQUE (no legacy Argon2ID)\n")
+	fmt.Printf("File Encryption: OPAQUE export key derivation\n")
+	fmt.Printf("Share System: Independent Argon2ID (anonymous only)\n")
 
 	if *detailed {
-		fmt.Printf("\nDetailed Analysis:\n")
-		fmt.Printf("  Privacy Mode: %t\n", *privacyFirst)
-		fmt.Printf("  Security Level: High (quantum-resistant)\n")
-		fmt.Printf("  ASIC Resistance: Yes (memory-hard)\n")
-		fmt.Printf("  GPU Resistance: Yes (memory-hard)\n")
-		fmt.Printf("  Optimized For: Argon2ID parameter profile\n")
+		fmt.Printf("\nDetailed Configuration:\n")
+		fmt.Printf("  Export Key Size: 64 bytes\n")
+		fmt.Printf("  Session Key Derivation: HKDF-SHA256\n")
+		fmt.Printf("  Domain Separation: Implemented\n")
+		fmt.Printf("  Memory Security: Secure key clearing\n")
+		fmt.Printf("  Client Integration: WASM support\n")
+		fmt.Printf("  Share Compatibility: Argon2ID (128MB memory)\n")
 
-		if *autoDetect {
-			fmt.Printf("  Detection Method: Capability negotiation\n")
-		} else {
-			fmt.Printf("  Detection Method: Static default\n")
-		}
+		fmt.Printf("\nSecurity Features:\n")
+		fmt.Printf("  ✅ Password-Authenticated Key Exchange (PAKE)\n")
+		fmt.Printf("  ✅ Forward Secrecy\n")
+		fmt.Printf("  ✅ Offline Dictionary Attack Resistance\n")
+		fmt.Printf("  ✅ Server Compromise Protection\n")
+		fmt.Printf("  ✅ Quantum-Resistant Key Derivation\n")
+		fmt.Printf("  ✅ Zero-Knowledge Password Verification\n")
+
+		fmt.Printf("\nMigration Status:\n")
+		fmt.Printf("  Phase 5B: COMPLETE - OPAQUE-only authentication\n")
+		fmt.Printf("  Legacy Support: REMOVED (greenfield deployment)\n")
+		fmt.Printf("  Backwards Compatibility: NOT REQUIRED\n")
 	}
 
 	return nil

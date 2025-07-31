@@ -62,7 +62,7 @@ type SecurityEvent struct {
 	EntityID      string                 `json:"entity_id"`      // HMAC-based, non-reversible
 	TimeWindow    string                 `json:"time_window"`    // "2025-06-20"
 	UserEmail     *string                `json:"user_email"`     // Only for authenticated events
-	DeviceProfile *string                `json:"device_profile"` // Argon2ID profile used
+	DeviceProfile *string                `json:"device_profile"` // OPAQUE export key context
 	Severity      SecurityEventSeverity  `json:"severity"`
 	Details       map[string]interface{} `json:"details"`
 	CreatedAt     time.Time              `json:"created_at"`
