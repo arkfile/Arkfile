@@ -212,6 +212,90 @@ func CreateFileShare(c echo.Context) error {
 	})
 }
 
+// GetShareInfo gets share metadata without password verification for frontend initialization
+func GetShareInfo(c echo.Context) error {
+	shareID := c.Param("id")
+	if shareID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Share ID is required")
+	}
+
+	// Get EntityID for rate limiting
+	entityID := logging.GetOrCreateEntityID(c)
+
+	// Check basic rate limiting for metadata requests
+	allowed, delay, rateLimitErr := checkRateLimit(shareID, entityID)
+	if rateLimitErr != nil {
+		logging.ErrorLogger.Printf("Rate limit check failed: %v", rateLimitErr)
+		// Continue on error to avoid blocking legitimate users
+	} else if !allowed {
+		c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", int(delay.Seconds())))
+		return echo.NewHTTPError(http.StatusTooManyRequests, "Too many requests")
+	}
+
+	// Query share data from database (no password required for metadata)
+	var share struct {
+		FileID     string
+		OwnerEmail string
+		ExpiresAt  *time.Time
+	}
+
+	err := database.DB.QueryRow(`
+		SELECT file_id, owner_email, expires_at
+		FROM file_share_keys 
+		WHERE share_id = ?
+	`, shareID).Scan(
+		&share.FileID,
+		&share.OwnerEmail,
+		&share.ExpiresAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
+	} else if err != nil {
+		logging.ErrorLogger.Printf("Database error accessing share %s: %v", shareID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+	}
+
+	// Check if share has expired
+	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
+		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
+	}
+
+	// Get file metadata for display
+	var fileInfo ShareFileInfo
+	var size sql.NullInt64
+
+	err = database.DB.QueryRow(`
+		SELECT filename, size_bytes, sha256sum
+		FROM file_metadata
+		WHERE filename = ?
+	`, share.FileID).Scan(
+		&fileInfo.Filename,
+		&size,
+		&fileInfo.SHA256Sum,
+	)
+
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
+		// Use fallback file info
+		fileInfo.Filename = share.FileID
+		fileInfo.Size = 0
+	} else if size.Valid {
+		fileInfo.Size = size.Int64
+	}
+
+	// Log metadata access
+	logging.InfoLogger.Printf("Share info accessed: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
+
+	// Return share metadata (no sensitive data like salt or encrypted FEK)
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"success":          true,
+		"shareId":          shareID,
+		"fileInfo":         &fileInfo,
+		"requiresPassword": true, // All Argon2id shares require password
+	})
+}
+
 // AccessSharedFile handles anonymous share access with Argon2id password verification
 func AccessSharedFile(c echo.Context) error {
 	shareID := c.Param("id")

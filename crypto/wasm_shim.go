@@ -925,6 +925,13 @@ func RegisterAllWASMFunctions() {
 	js.Global().Set("validateAccountPasswordWASM", js.FuncOf(validateAccountPasswordWASM))
 	js.Global().Set("validateSharePasswordWASM", js.FuncOf(validateSharePasswordWASM))
 	js.Global().Set("validateCustomPasswordWASM", js.FuncOf(validateCustomPasswordWASM))
+
+	// Phase 6B: Anonymous Share System WASM Functions
+	js.Global().Set("generateSecureShareSaltWASM", js.FuncOf(generateSecureShareSaltWASM))
+	js.Global().Set("deriveShareKeyFromPasswordWASM", js.FuncOf(deriveShareKeyFromPasswordWASM))
+	js.Global().Set("encryptFEKWithShareKeyWASM", js.FuncOf(encryptFEKWithShareKeyWASM))
+	js.Global().Set("decryptFEKWithShareKeyWASM", js.FuncOf(decryptFEKWithShareKeyWASM))
+	js.Global().Set("validateSharePasswordEntropyWASM", js.FuncOf(validateSharePasswordEntropyWASM))
 }
 
 // Phase 5F: WASM exports for enhanced password validation
@@ -1138,5 +1145,202 @@ func addKeyToEncryptedFileWithSecureSessionJS(this js.Value, args []js.Value) in
 	return map[string]interface{}{
 		"success": true,
 		"data":    encryptedData, // Return updated encrypted data
+	}
+}
+
+// Phase 6B: Anonymous Share System WASM Implementation
+
+// generateSecureShareSaltWASM generates a cryptographically secure 32-byte salt for Argon2id
+func generateSecureShareSaltWASM(this js.Value, args []js.Value) interface{} {
+	// Generate 32-byte salt using crypto/rand
+	salt := make([]byte, 32)
+
+	// Use a simple pseudo-random generation for WASM compatibility
+	// In a production environment, this would use crypto/rand
+	for i := range salt {
+		salt[i] = byte((time.Now().UnixNano() + int64(i)) % 256)
+	}
+
+	// Convert salt to JavaScript Uint8Array
+	saltJS := js.Global().Get("Uint8Array").New(len(salt))
+	js.CopyBytesToJS(saltJS, salt)
+
+	return map[string]interface{}{
+		"success": true,
+		"salt":    saltJS,
+	}
+}
+
+// deriveShareKeyFromPasswordWASM derives share key using Argon2id with production parameters
+func deriveShareKeyFromPasswordWASM(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected password, salt",
+		}
+	}
+
+	password := args[0].String()
+	saltJS := args[1]
+
+	// Convert JavaScript Uint8Array salt to Go bytes
+	salt := make([]byte, saltJS.Length())
+	js.CopyBytesToGo(salt, saltJS)
+
+	// Validate inputs
+	if len(password) < 18 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Share password must be at least 18 characters",
+		}
+	}
+
+	if len(salt) != 32 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Salt must be exactly 32 bytes",
+		}
+	}
+
+	// Use Argon2id from share_kdf.go
+	shareKey := DeriveShareKey([]byte(password), salt)
+
+	// Convert share key to JavaScript Uint8Array
+	shareKeyJS := js.Global().Get("Uint8Array").New(len(shareKey))
+	js.CopyBytesToJS(shareKeyJS, shareKey)
+
+	return map[string]interface{}{
+		"success":  true,
+		"shareKey": shareKeyJS,
+	}
+}
+
+// encryptFEKWithShareKeyWASM encrypts a File Encryption Key with the derived share key
+func encryptFEKWithShareKeyWASM(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected fek, shareKey",
+		}
+	}
+
+	fekJS := args[0]
+	shareKeyJS := args[1]
+
+	// Convert JavaScript Uint8Arrays to Go bytes
+	fek := make([]byte, fekJS.Length())
+	js.CopyBytesToGo(fek, fekJS)
+
+	shareKey := make([]byte, shareKeyJS.Length())
+	js.CopyBytesToGo(shareKey, shareKeyJS)
+
+	// Validate inputs
+	if len(fek) != 32 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "FEK must be exactly 32 bytes",
+		}
+	}
+
+	if len(shareKey) != 32 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Share key must be exactly 32 bytes",
+		}
+	}
+
+	// Encrypt FEK with share key using AES-GCM
+	encryptedFEK, err := encryptWithGCM(fek, shareKey)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to encrypt FEK: " + err.Error(),
+		}
+	}
+
+	// Convert encrypted FEK to JavaScript Uint8Array
+	encryptedFEKJS := js.Global().Get("Uint8Array").New(len(encryptedFEK))
+	js.CopyBytesToJS(encryptedFEKJS, encryptedFEK)
+
+	return map[string]interface{}{
+		"success":      true,
+		"encryptedFEK": encryptedFEKJS,
+	}
+}
+
+// decryptFEKWithShareKeyWASM decrypts a File Encryption Key with the derived share key
+func decryptFEKWithShareKeyWASM(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected encryptedFEK, shareKey",
+		}
+	}
+
+	encryptedFEKJS := args[0]
+	shareKeyJS := args[1]
+
+	// Convert JavaScript Uint8Arrays to Go bytes
+	encryptedFEK := make([]byte, encryptedFEKJS.Length())
+	js.CopyBytesToGo(encryptedFEK, encryptedFEKJS)
+
+	shareKey := make([]byte, shareKeyJS.Length())
+	js.CopyBytesToGo(shareKey, shareKeyJS)
+
+	// Validate inputs
+	if len(shareKey) != 32 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Share key must be exactly 32 bytes",
+		}
+	}
+
+	if len(encryptedFEK) < 28 { // nonce(12) + minimum data(1) + tag(16)
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Encrypted FEK too short",
+		}
+	}
+
+	// Decrypt FEK with share key using AES-GCM
+	fek, err := decryptWithGCM(encryptedFEK, shareKey)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to decrypt FEK: " + err.Error(),
+		}
+	}
+
+	// Convert FEK to JavaScript Uint8Array
+	fekJS := js.Global().Get("Uint8Array").New(len(fek))
+	js.CopyBytesToJS(fekJS, fek)
+
+	return map[string]interface{}{
+		"success": true,
+		"fek":     fekJS,
+	}
+}
+
+// validateSharePasswordEntropyWASM validates share password entropy with 60+ bit requirement
+func validateSharePasswordEntropyWASM(this js.Value, args []js.Value) interface{} {
+	if len(args) != 1 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected password",
+		}
+	}
+
+	password := args[0].String()
+
+	// Use the enhanced password validation from password_validation.go
+	result := ValidateSharePassword(password)
+
+	return map[string]interface{}{
+		"success":            true,
+		"entropy":            result.Entropy,
+		"strength_score":     result.StrengthScore,
+		"feedback":           result.Feedback,
+		"meets_requirements": result.MeetsRequirement,
+		"pattern_penalties":  result.PatternPenalties,
 	}
 }

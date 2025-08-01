@@ -70,6 +70,7 @@ func RegisterRoutes() {
 
 	// Anonymous share access (no authentication required)
 	Echo.GET("/shared/:id", GetSharedFile)                  // Share access page
+	Echo.GET("/api/share/:id", GetShareInfo)                // Get share metadata (no password required)
 	Echo.POST("/api/share/:id", AccessSharedFile)           // Anonymous share access with password
 	Echo.GET("/api/share/:id/download", DownloadSharedFile) // Download shared file
 
