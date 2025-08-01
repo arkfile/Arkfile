@@ -14,133 +14,54 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/arkfile/auth"
-	"github.com/84adam/arkfile/crypto"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/storage"
 )
 
-// ShareDetails contains common data for file shares
-type ShareDetails struct {
-	FileID            string
-	OwnerEmail        string
-	PasswordProtected bool
-	ExpiresAt         *time.Time
-}
-
-// FileMetadata contains common metadata about shared files
-type FileMetadata struct {
-	Filename     string
-	PasswordHint string
-	SHA256Sum    string
-	MultiKey     bool
-	Size         int64
-	PasswordType string
-}
-
-// validateShareAccess checks if a share exists, isn't expired, and returns share details
-func validateShareAccess(shareID string) (*ShareDetails, int, string, error) {
-	var share ShareDetails
-
-	err := database.DB.QueryRow(`
-		SELECT file_id, owner_email, is_password_protected, expires_at
-		FROM file_shares 
-		WHERE id = ?
-	`, shareID).Scan(
-		&share.FileID,
-		&share.OwnerEmail,
-		&share.PasswordProtected,
-		&share.ExpiresAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, http.StatusNotFound, "Share not found", err
-	} else if err != nil {
-		logging.ErrorLogger.Printf("Database error checking share: %v", err)
-		return nil, http.StatusInternalServerError, "Failed to process request", err
-	}
-
-	// Check if share has expired
-	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
-		return nil, http.StatusForbidden, "Share link has expired", fmt.Errorf("share expired")
-	}
-
-	// Update last accessed time
-	_, err = database.DB.Exec(
-		"UPDATE file_shares SET last_accessed = CURRENT_TIMESTAMP WHERE id = ?",
-		shareID,
-	)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to update last accessed time: %v", err)
-		// Continue anyway, as this is not critical
-	}
-
-	return &share, http.StatusOK, "", nil
-}
-
-// getFileMetadata retrieves metadata for a file
-func getFileMetadata(fileID string) (*FileMetadata, int, string, error) {
-	var metadata FileMetadata
-	var size sql.NullInt64
-
-	err := database.DB.QueryRow(`
-		SELECT filename, password_hint, sha256sum, multi_key, size_bytes, password_type
-		FROM file_metadata
-		WHERE filename = ?
-	`, fileID).Scan(
-		&metadata.Filename,
-		&metadata.PasswordHint,
-		&metadata.SHA256Sum,
-		&metadata.MultiKey,
-		&size,
-		&metadata.PasswordType,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, http.StatusNotFound, "File metadata not found", err
-	} else if err != nil {
-		logging.ErrorLogger.Printf("Failed to get file metadata: %v", err)
-		return nil, http.StatusInternalServerError, "Failed to retrieve file metadata", err
-	}
-
-	if size.Valid {
-		metadata.Size = size.Int64
-	}
-
-	return &metadata, http.StatusOK, "", nil
-}
-
-// getErrorTitle returns an appropriate error title based on HTTP status code
-func getErrorTitle(status int) string {
-	switch status {
-	case http.StatusNotFound:
-		return "Share Not Found"
-	case http.StatusForbidden:
-		return "Share Link Expired"
-	default:
-		return "Server Error"
-	}
-}
-
-// ShareRequest represents a file sharing request.
+// ShareRequest represents a file sharing request (Argon2id-based anonymous shares)
 type ShareRequest struct {
 	FileID            string `json:"fileId"`
-	PasswordProtected bool   `json:"passwordProtected"`
-	SharePassword     string `json:"sharePassword,omitempty"` // Plain text password for OPAQUE registration
-	ExpiresAfterHours int    `json:"expiresAfterHours"`
+	SharePassword     string `json:"sharePassword"`     // Share password for Argon2id derivation (client-side only)
+	Salt              string `json:"salt"`              // Base64-encoded 32-byte salt
+	EncryptedFEK      string `json:"encrypted_fek"`     // Base64-encoded FEK encrypted with Argon2id-derived key
+	ExpiresAfterHours int    `json:"expiresAfterHours"` // Optional expiration
 }
 
-// ShareResponse represents a file share creation response payload.
+// ShareResponse represents a file share creation response
 type ShareResponse struct {
-	ShareID             string     `json:"shareId"`
-	ShareURL            string     `json:"shareUrl"`
-	IsPasswordProtected bool       `json:"isPasswordProtected"`
-	ExpiresAt           *time.Time `json:"expiresAt,omitempty"`
-	CreatedAt           time.Time  `json:"createdAt"`
+	ShareID   string     `json:"shareId"`
+	ShareURL  string     `json:"shareUrl"`
+	CreatedAt time.Time  `json:"createdAt"`
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 
-// ShareFile creates a sharing link for a file using OPAQUE authentication
-func ShareFile(c echo.Context) error {
+// ShareAccessRequest represents an anonymous share access request
+type ShareAccessRequest struct {
+	Password string `json:"password"` // Share password for client-side Argon2id derivation
+}
+
+// ShareAccessResponse represents the response for anonymous share access
+type ShareAccessResponse struct {
+	Success      bool           `json:"success"`
+	Salt         string         `json:"salt,omitempty"`          // Base64-encoded salt for Argon2id
+	EncryptedFEK string         `json:"encrypted_fek,omitempty"` // Base64-encoded encrypted FEK
+	FileInfo     *ShareFileInfo `json:"file_info,omitempty"`
+	Error        string         `json:"error,omitempty"`
+	Message      string         `json:"message,omitempty"`
+	RetryAfter   int            `json:"retryAfter,omitempty"` // For rate limiting
+}
+
+// ShareFileInfo contains metadata about the shared file
+type ShareFileInfo struct {
+	Filename    string `json:"filename"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"content_type"`
+	SHA256Sum   string `json:"sha256sum,omitempty"`
+}
+
+// CreateFileShare creates a new Argon2id-based anonymous file share
+func CreateFileShare(c echo.Context) error {
 	email := auth.GetEmailFromToken(c)
 
 	var request ShareRequest
@@ -148,17 +69,24 @@ func ShareFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body: "+err.Error())
 	}
 
+	// Validate required fields
 	if request.FileID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "File ID is required.")
+		return echo.NewHTTPError(http.StatusBadRequest, "File ID is required")
+	}
+	if request.Salt == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Salt is required")
+	}
+	if request.EncryptedFEK == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Encrypted FEK is required")
 	}
 
-	// Validate file ownership and get metadata
+	// Validate that the user owns the file
 	var ownerEmail string
-	var multiKey bool       // From file_metadata or upload_sessions
-	var passwordType string // Password type from file_metadata or upload_sessions
+	var multiKey bool
+	var passwordType string
 	var foundInMetadata, foundInUploadSessions bool
 
-	// Try file_metadata first
+	// Check file_metadata first
 	err := database.DB.QueryRow(
 		"SELECT owner_email, multi_key, password_type FROM file_metadata WHERE filename = ?",
 		request.FileID,
@@ -168,10 +96,10 @@ func ShareFile(c echo.Context) error {
 		foundInMetadata = true
 	} else if err != sql.ErrNoRows {
 		logging.ErrorLogger.Printf("Database error checking file_metadata for file %s: %v", request.FileID, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file ownership.")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file ownership")
 	}
 
-	// If not found in file_metadata, try upload_sessions (for completed uploads)
+	// If not found in file_metadata, check upload_sessions
 	if !foundInMetadata {
 		var usOwnerEmail string
 		var usPasswordType string
@@ -189,28 +117,39 @@ func ShareFile(c echo.Context) error {
 			multiKey = usMultiKey.Valid && usMultiKey.Bool
 		} else if err != sql.ErrNoRows {
 			logging.ErrorLogger.Printf("Database error checking upload_sessions for file %s: %v", request.FileID, err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file ownership.")
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file ownership")
 		}
 	}
 
 	if !foundInMetadata && !foundInUploadSessions {
-		return echo.NewHTTPError(http.StatusNotFound, "File not found or not yet fully processed.")
+		return echo.NewHTTPError(http.StatusNotFound, "File not found or not yet fully processed")
 	}
 
 	if ownerEmail != email {
-		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to share this file.")
+		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to share this file")
 	}
 
-	// If the file is account-encrypted but not multi-key enabled, require re-encryption first
+	// For account-encrypted files that aren't multi-key, require re-encryption first
 	if !multiKey && passwordType == "account" {
 		return echo.NewHTTPError(http.StatusBadRequest,
 			"This file is encrypted with your account password. To share it, first add a custom password or enable multi-key access for this file.")
 	}
 
-	// Generate unique share ID
+	// Validate salt and encrypted FEK format
+	saltBytes, err := base64.StdEncoding.DecodeString(request.Salt)
+	if err != nil || len(saltBytes) != 32 {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid salt format (must be 32 bytes, base64-encoded)")
+	}
+
+	_, err = base64.StdEncoding.DecodeString(request.EncryptedFEK)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid encrypted FEK format (must be base64-encoded)")
+	}
+
+	// Generate cryptographically secure share ID
 	shareID, err := generateShareID()
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to create share ID: %v", err)
+		logging.ErrorLogger.Printf("Failed to generate share ID: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create share")
 	}
 
@@ -221,49 +160,18 @@ func ShareFile(c echo.Context) error {
 		expiresAt = &expiry
 	}
 
-	var opaqueRecordID *int64
-
-	// Handle password-protected shares with OPAQUE
-	if request.PasswordProtected && request.SharePassword != "" {
-		// Initialize OPAQUE password manager
-		opm := auth.NewOPAQUEPasswordManager()
-
-		// Register share password with OPAQUE
-		err = opm.RegisterSharePassword(shareID, request.FileID, email, request.SharePassword)
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to register share password: %v", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create password-protected share")
-		}
-
-		// Get the record ID for the foreign key
-		var recordID int64
-		err = database.DB.QueryRow(`
-			SELECT id FROM opaque_password_records 
-			WHERE record_identifier = ? AND is_active = TRUE`,
-			fmt.Sprintf("share:%s", shareID)).Scan(&recordID)
-
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to get OPAQUE record ID: %v", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to link share password")
-		}
-
-		opaqueRecordID = &recordID
-	} else if request.PasswordProtected {
-		return echo.NewHTTPError(http.StatusBadRequest, "Password is required when password protection is enabled.")
-	}
-
 	// Create file share record
 	_, err = database.DB.Exec(`
-		INSERT INTO file_shares (id, file_id, owner_email, is_password_protected, opaque_record_id, created_at, expires_at) 
+		INSERT INTO file_share_keys (share_id, file_id, owner_email, salt, encrypted_fek, created_at, expires_at)
 		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
-		shareID, request.FileID, email, request.PasswordProtected, opaqueRecordID, expiresAt,
+		shareID, request.FileID, email, saltBytes, request.EncryptedFEK, expiresAt,
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create file share record for file %s: %v", request.FileID, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create file share.")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create file share")
 	}
 
-	// Construct the share URL
+	// Construct share URL
 	host := c.Request().Host
 	scheme := "https"
 	if c.Request().Header.Get("X-Forwarded-Proto") == "http" || (c.Echo().Debug && c.Request().TLS == nil) {
@@ -293,15 +201,175 @@ func ShareFile(c echo.Context) error {
 	shareURL := baseURL + "/shared/" + shareID
 
 	createdAt := time.Now()
-	logging.InfoLogger.Printf("File shared: %s by %s, share ID: %s", request.FileID, email, shareID)
+	logging.InfoLogger.Printf("Anonymous share created: file=%s, share_id=%s, owner=%s", request.FileID, shareID, email)
 	database.LogUserAction(email, "created_share", fmt.Sprintf("file:%s, share:%s", request.FileID, shareID))
 
 	return c.JSON(http.StatusOK, ShareResponse{
-		ShareID:             shareID,
-		ShareURL:            shareURL,
-		IsPasswordProtected: request.PasswordProtected,
-		ExpiresAt:           expiresAt,
-		CreatedAt:           createdAt,
+		ShareID:   shareID,
+		ShareURL:  shareURL,
+		CreatedAt: createdAt,
+		ExpiresAt: expiresAt,
+	})
+}
+
+// AccessSharedFile handles anonymous share access with Argon2id password verification
+func AccessSharedFile(c echo.Context) error {
+	shareID := c.Param("id")
+
+	var request ShareAccessRequest
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+	}
+
+	if request.Password == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Password is required")
+	}
+
+	// Apply rate limiting wrapper
+	return RateLimitShareAccess(shareID, c, func() error {
+		return processShareAccess(shareID, request, c)
+	})
+}
+
+// processShareAccess processes the actual share access logic
+func processShareAccess(shareID string, request ShareAccessRequest, c echo.Context) error {
+	// Validate share exists and isn't expired
+	var share struct {
+		FileID       string
+		OwnerEmail   string
+		Salt         []byte
+		EncryptedFEK string
+		ExpiresAt    *time.Time
+	}
+
+	err := database.DB.QueryRow(`
+		SELECT file_id, owner_email, salt, encrypted_fek, expires_at
+		FROM file_share_keys 
+		WHERE share_id = ?
+	`, shareID).Scan(
+		&share.FileID,
+		&share.OwnerEmail,
+		&share.Salt,
+		&share.EncryptedFEK,
+		&share.ExpiresAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
+	} else if err != nil {
+		logging.ErrorLogger.Printf("Database error accessing share %s: %v", shareID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+	}
+
+	// Check if share has expired
+	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
+		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
+	}
+
+	// Get file metadata
+	var fileInfo ShareFileInfo
+	var size sql.NullInt64
+
+	err = database.DB.QueryRow(`
+		SELECT filename, size_bytes, sha256sum
+		FROM file_metadata
+		WHERE filename = ?
+	`, share.FileID).Scan(
+		&fileInfo.Filename,
+		&size,
+		&fileInfo.SHA256Sum,
+	)
+
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
+	}
+
+	if size.Valid {
+		fileInfo.Size = size.Int64
+	}
+
+	// NOTE: Password verification is done CLIENT-SIDE with Argon2id
+	// Server never sees the actual password, only provides salt + encrypted_fek
+	// Client must derive Argon2id key and attempt FEK decryption
+
+	// Log successful access
+	entityID := logging.GetOrCreateEntityID(c)
+	logging.InfoLogger.Printf("Share accessed: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
+
+	// Return salt and encrypted FEK for client-side Argon2id decryption
+	return c.JSON(http.StatusOK, ShareAccessResponse{
+		Success:      true,
+		Salt:         base64.StdEncoding.EncodeToString(share.Salt),
+		EncryptedFEK: share.EncryptedFEK,
+		FileInfo:     &fileInfo,
+	})
+}
+
+// GetSharedFile renders the share access page
+func GetSharedFile(c echo.Context) error {
+	shareID := c.Param("id")
+
+	// Validate share exists and get basic info (no password required for page display)
+	var share struct {
+		FileID     string
+		OwnerEmail string
+		ExpiresAt  *time.Time
+	}
+
+	err := database.DB.QueryRow(`
+		SELECT file_id, owner_email, expires_at
+		FROM file_share_keys 
+		WHERE share_id = ?
+	`, shareID).Scan(
+		&share.FileID,
+		&share.OwnerEmail,
+		&share.ExpiresAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return c.Render(http.StatusNotFound, "error", map[string]interface{}{
+			"title":   "Share Not Found",
+			"message": "The requested share link does not exist or has been removed.",
+		})
+	} else if err != nil {
+		logging.ErrorLogger.Printf("Database error checking share %s: %v", shareID, err)
+		return c.Render(http.StatusInternalServerError, "error", map[string]interface{}{
+			"title":   "Server Error",
+			"message": "Failed to process request. Please try again later.",
+		})
+	}
+
+	// Check if share has expired
+	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
+		return c.Render(http.StatusForbidden, "error", map[string]interface{}{
+			"title":   "Share Link Expired",
+			"message": "This share link has expired and is no longer accessible.",
+		})
+	}
+
+	// Get file metadata for display
+	var filename string
+	err = database.DB.QueryRow(`
+		SELECT filename
+		FROM file_metadata
+		WHERE filename = ?
+	`, share.FileID).Scan(&filename)
+
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get file metadata for share display %s: %v", share.FileID, err)
+		filename = share.FileID // Fallback to file ID
+	}
+
+	// Log page access (no password required)
+	entityID := logging.GetOrCreateEntityID(c)
+	logging.InfoLogger.Printf("Share page accessed: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
+
+	// Render share page with file info
+	return c.Render(http.StatusOK, "share", map[string]interface{}{
+		"title":    "Download Shared File",
+		"shareId":  shareID,
+		"fileName": filename,
 	})
 }
 
@@ -311,12 +379,12 @@ func ListShares(c echo.Context) error {
 
 	// Query shares
 	rows, err := database.DB.Query(`
-		SELECT s.id, s.file_id, s.is_password_protected, s.created_at, s.expires_at, s.last_accessed,
-			   f.password_hint, f.multi_key
-		FROM file_shares s
-		JOIN file_metadata f ON s.file_id = f.filename
-		WHERE s.owner_email = ?
-		ORDER BY s.created_at DESC
+		SELECT sk.share_id, sk.file_id, sk.created_at, sk.expires_at,
+			   fm.filename, fm.size_bytes
+		FROM file_share_keys sk
+		JOIN file_metadata fm ON sk.file_id = fm.filename
+		WHERE sk.owner_email = ?
+		ORDER BY sk.created_at DESC
 	`, email)
 
 	if err != nil {
@@ -328,25 +396,21 @@ func ListShares(c echo.Context) error {
 	var shares []map[string]interface{}
 	for rows.Next() {
 		var share struct {
-			ID                  string
-			FileID              string
-			IsPasswordProtected bool
-			CreatedAt           string
-			ExpiresAt           sql.NullString
-			LastAccessed        sql.NullString
-			PasswordHint        string
-			MultiKey            bool
+			ShareID   string
+			FileID    string
+			CreatedAt string
+			ExpiresAt sql.NullString
+			Filename  string
+			Size      sql.NullInt64
 		}
 
 		if err := rows.Scan(
-			&share.ID,
+			&share.ShareID,
 			&share.FileID,
-			&share.IsPasswordProtected,
 			&share.CreatedAt,
 			&share.ExpiresAt,
-			&share.LastAccessed,
-			&share.PasswordHint,
-			&share.MultiKey,
+			&share.Filename,
+			&share.Size,
 		); err != nil {
 			logging.ErrorLogger.Printf("Error scanning share row: %v", err)
 			continue
@@ -358,29 +422,25 @@ func ListShares(c echo.Context) error {
 			baseURL = "https://" + c.Request().Host
 		}
 
-		shareURL := baseURL + "/shared/" + share.ID
+		shareURL := baseURL + "/shared/" + share.ShareID
 
 		// Format response
 		shareData := map[string]interface{}{
-			"id":                  share.ID,
-			"fileId":              share.FileID,
-			"shareUrl":            shareURL,
-			"isPasswordProtected": share.IsPasswordProtected,
-			"createdAt":           share.CreatedAt,
-			"passwordHint":        share.PasswordHint,
-			"multiKey":            share.MultiKey,
+			"shareId":   share.ShareID,
+			"fileId":    share.FileID,
+			"filename":  share.Filename,
+			"shareUrl":  shareURL,
+			"createdAt": share.CreatedAt,
+		}
+
+		if share.Size.Valid {
+			shareData["size"] = share.Size.Int64
 		}
 
 		if share.ExpiresAt.Valid {
 			shareData["expiresAt"] = share.ExpiresAt.String
 		} else {
 			shareData["expiresAt"] = nil
-		}
-
-		if share.LastAccessed.Valid {
-			shareData["lastAccessed"] = share.LastAccessed.String
-		} else {
-			shareData["lastAccessed"] = nil
 		}
 
 		shares = append(shares, shareData)
@@ -399,7 +459,7 @@ func DeleteShare(c echo.Context) error {
 	// Check if share exists and belongs to user
 	var ownerEmail string
 	err := database.DB.QueryRow(
-		"SELECT owner_email FROM file_shares WHERE id = ?",
+		"SELECT owner_email FROM file_share_keys WHERE share_id = ?",
 		shareID,
 	).Scan(&ownerEmail)
 
@@ -415,13 +475,13 @@ func DeleteShare(c echo.Context) error {
 	}
 
 	// Delete share
-	_, err = database.DB.Exec("DELETE FROM file_shares WHERE id = ?", shareID)
+	_, err = database.DB.Exec("DELETE FROM file_share_keys WHERE share_id = ?", shareID)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to delete share: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete share")
 	}
 
-	database.LogUserAction(email, "deleted share", shareID)
+	database.LogUserAction(email, "deleted_share", shareID)
 	logging.InfoLogger.Printf("Share deleted: %s by %s", shareID, email)
 
 	return c.JSON(http.StatusOK, map[string]string{
@@ -429,122 +489,62 @@ func DeleteShare(c echo.Context) error {
 	})
 }
 
-// GetSharedFile handles shared file access
-func GetSharedFile(c echo.Context) error {
-	shareID := c.Param("id")
-
-	// Validate share access using the helper function
-	shareDetails, status, message, err := validateShareAccess(shareID)
-	if err != nil {
-		return c.Render(status, "error", map[string]interface{}{
-			"title":   getErrorTitle(status),
-			"message": message,
-		})
-	}
-
-	// Get file metadata using the helper function
-	fileMetadata, status, message, err := getFileMetadata(shareDetails.FileID)
-	if err != nil {
-		return c.Render(status, "error", map[string]interface{}{
-			"title":   getErrorTitle(status),
-			"message": message,
-		})
-	}
-
-	// Log access
-	logging.InfoLogger.Printf("Shared file access: %s, file: %s", shareID, shareDetails.FileID)
-
-	// Render share page with file info
-	return c.Render(http.StatusOK, "share", map[string]interface{}{
-		"title":             "Download Shared File",
-		"shareId":           shareID,
-		"fileName":          fileMetadata.Filename,
-		"passwordProtected": shareDetails.PasswordProtected,
-		"passwordHint":      fileMetadata.PasswordHint,
-		"sha256Sum":         fileMetadata.SHA256Sum,
-		"isMultiKey":        fileMetadata.MultiKey,
-	})
-}
-
-// AuthenticateShare handles share password verification using OPAQUE
-func AuthenticateShare(c echo.Context) error {
-	shareID := c.Param("id")
-
-	var request struct {
-		Password string `json:"password"` // Plain text password for OPAQUE authentication
-	}
-
-	if err := c.Bind(&request); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
-	}
-
-	// Validate share access
-	shareDetails, status, message, err := validateShareAccess(shareID)
-	if err != nil {
-		return echo.NewHTTPError(status, message)
-	}
-
-	// Check if share is password protected
-	if !shareDetails.PasswordProtected {
-		return echo.NewHTTPError(http.StatusBadRequest, "Share is not password protected")
-	}
-
-	if request.Password == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Password is required")
-	}
-
-	// Initialize OPAQUE password manager
-	opm := auth.NewOPAQUEPasswordManager()
-
-	// Authenticate with OPAQUE
-	recordIdentifier := fmt.Sprintf("share:%s", shareID)
-	exportKey, err := opm.AuthenticatePassword(recordIdentifier, request.Password)
-	if err != nil {
-		logging.ErrorLogger.Printf("Share authentication failed for %s: %v", shareID, err)
-		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid password")
-	}
-	defer crypto.SecureZeroBytes(exportKey) // Secure cleanup
-
-	// Derive file access key from export key for client use
-	fileAccessKey, err := crypto.DeriveShareAccessKey(exportKey, shareID, shareDetails.FileID)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to derive file access key: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
-	}
-
-	// Log successful authentication
-	logging.InfoLogger.Printf("Share authentication successful: %s", shareID)
-
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"message":       "Authentication successful",
-		"fileAccessKey": fmt.Sprintf("%x", fileAccessKey), // Hex-encoded for client
-	})
-}
-
-// DownloadSharedFile handles downloading a shared file
+// DownloadSharedFile handles downloading a shared file (after successful password verification)
 func DownloadSharedFile(c echo.Context) error {
 	shareID := c.Param("id")
 
-	// Validate share access using the helper function
-	shareDetails, status, message, err := validateShareAccess(shareID)
-	if err != nil {
-		return echo.NewHTTPError(status, message)
+	// Validate share exists and isn't expired
+	var share struct {
+		FileID     string
+		OwnerEmail string
+		ExpiresAt  *time.Time
 	}
 
-	// Get file metadata using the helper function
-	fileMetadata, status, message, err := getFileMetadata(shareDetails.FileID)
-	if err != nil {
-		return echo.NewHTTPError(status, message)
+	err := database.DB.QueryRow(`
+		SELECT file_id, owner_email, expires_at
+		FROM file_share_keys 
+		WHERE share_id = ?
+	`, shareID).Scan(
+		&share.FileID,
+		&share.OwnerEmail,
+		&share.ExpiresAt,
+	)
+
+	if err == sql.ErrNoRows {
+		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
+	} else if err != nil {
+		logging.ErrorLogger.Printf("Database error accessing share %s: %v", shareID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
 	}
 
-	// Get file from object storage using storage.Provider
+	// Check if share has expired
+	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
+		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
+	}
+
+	// Get file metadata
+	var filename string
+	var size sql.NullInt64
+
+	err = database.DB.QueryRow(`
+		SELECT filename, size_bytes
+		FROM file_metadata
+		WHERE filename = ?
+	`, share.FileID).Scan(&filename, &size)
+
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
+	}
+
+	// Get file from object storage
 	object, err := storage.Provider.GetObject(
 		c.Request().Context(),
-		shareDetails.FileID, // bucketName is handled by the provider
+		share.FileID, // bucketName is handled by the provider
 		minio.GetObjectOptions{},
 	)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to retrieve file from storage via provider: %v", err)
+		logging.ErrorLogger.Printf("Failed to retrieve file from storage: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file")
 	}
 	defer object.Close()
@@ -555,18 +555,15 @@ func DownloadSharedFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read file")
 	}
 
-	// QA / TODO: Should we update last accessed time at this point?
+	// Log download
+	entityID := logging.GetOrCreateEntityID(c)
+	logging.InfoLogger.Printf("Shared file downloaded: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
 
-	// Log access
-	logging.InfoLogger.Printf("Downloaded shared file: %s, file: %s", shareID, shareDetails.FileID)
-
-	// Return file data along with metadata for client-side decryption
+	// Return encrypted file data for client-side decryption
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"data":         string(data),
-		"filename":     fileMetadata.Filename,
-		"sha256sum":    fileMetadata.SHA256Sum,
-		"passwordHint": fileMetadata.PasswordHint,
-		"isMultiKey":   fileMetadata.MultiKey,
+		"data":     base64.StdEncoding.EncodeToString(data),
+		"filename": filename,
+		"size":     size.Int64,
 	})
 }
 

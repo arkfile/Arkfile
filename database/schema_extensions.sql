@@ -49,24 +49,25 @@ CREATE TABLE IF NOT EXISTS upload_chunks (
 -- Index for looking up chunks by session
 CREATE INDEX IF NOT EXISTS idx_upload_chunks_session ON upload_chunks(session_id);
 
--- Table to store file sharing information
-CREATE TABLE IF NOT EXISTS file_shares (
-    id TEXT PRIMARY KEY,
-    file_id TEXT NOT NULL,
-    owner_email TEXT NOT NULL,
-    is_password_protected BOOLEAN NOT NULL DEFAULT false,
-    opaque_record_id INTEGER,                -- Link to OPAQUE password record
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP,
-    last_accessed TIMESTAMP,
-    FOREIGN KEY (owner_email) REFERENCES users(email),
-    FOREIGN KEY (opaque_record_id) REFERENCES opaque_password_records(id) ON DELETE SET NULL
+-- New table for share access management (Argon2id-based anonymous shares)
+-- This replaces the incorrect OPAQUE-based file_shares table
+CREATE TABLE IF NOT EXISTS file_share_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    share_id TEXT NOT NULL UNIQUE,        -- 256-bit crypto-secure identifier
+    file_id TEXT NOT NULL,                -- Reference to the shared file
+    owner_email TEXT NOT NULL,            -- User who created the share
+    salt BLOB NOT NULL,                   -- 32-byte random salt for Argon2id
+    encrypted_fek BLOB NOT NULL,          -- FEK encrypted with Argon2id-derived share key
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME,                  -- Optional expiration
+    FOREIGN KEY (owner_email) REFERENCES users(email) ON DELETE CASCADE
 );
 
--- Index for finding shares by owner
-CREATE INDEX IF NOT EXISTS idx_file_shares_owner ON file_shares(owner_email);
--- Index for finding shares by file
-CREATE INDEX IF NOT EXISTS idx_file_shares_file ON file_shares(file_id);
+-- Indexes for file_share_keys
+CREATE INDEX IF NOT EXISTS idx_file_share_keys_share_id ON file_share_keys(share_id);
+CREATE INDEX IF NOT EXISTS idx_file_share_keys_file_id ON file_share_keys(file_id);
+CREATE INDEX IF NOT EXISTS idx_file_share_keys_owner ON file_share_keys(owner_email);
+CREATE INDEX IF NOT EXISTS idx_file_share_keys_expires_at ON file_share_keys(expires_at);
 
 -- Table to track encryption keys for files
 CREATE TABLE IF NOT EXISTS file_encryption_keys (
@@ -261,13 +262,14 @@ CREATE INDEX IF NOT EXISTS idx_totp_usage_user_window ON totp_usage_log(user_ema
 CREATE INDEX IF NOT EXISTS idx_totp_backup_user ON totp_backup_usage(user_email);
 CREATE INDEX IF NOT EXISTS idx_totp_backup_cleanup ON totp_backup_usage(used_at);
 
--- Phase 2: Unified OPAQUE Password Records Table
+-- Phase 2: OPAQUE Password Records Table (Account and File Custom passwords only)
+-- NOTE: Shares use Argon2id and are NOT stored in this table
 CREATE TABLE IF NOT EXISTS opaque_password_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    record_type TEXT NOT NULL,           -- 'account', 'file_custom', 'share'
-    record_identifier TEXT NOT NULL UNIQUE, -- email, 'user:file:filename', 'share:shareID'
+    record_type TEXT NOT NULL,           -- 'account', 'file_custom' (NO 'share' type)
+    record_identifier TEXT NOT NULL UNIQUE, -- email, 'user:file:filename'
     opaque_user_record BLOB NOT NULL,    -- OPAQUE registration data
-    associated_file_id TEXT,             -- NULL for account, filename for file/share
+    associated_file_id TEXT,             -- NULL for account, filename for file_custom
     associated_user_email TEXT,          -- User who created this record
     key_label TEXT,                      -- Human-readable label
     password_hint_encrypted BLOB,        -- Encrypted with export key
@@ -282,3 +284,22 @@ CREATE INDEX IF NOT EXISTS idx_opaque_passwords_identifier ON opaque_password_re
 CREATE INDEX IF NOT EXISTS idx_opaque_passwords_file ON opaque_password_records(associated_file_id);
 CREATE INDEX IF NOT EXISTS idx_opaque_passwords_user ON opaque_password_records(associated_user_email);
 CREATE INDEX IF NOT EXISTS idx_opaque_passwords_active ON opaque_password_records(is_active);
+
+-- Share access rate limiting table
+CREATE TABLE IF NOT EXISTS share_access_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    share_id TEXT NOT NULL,
+    entity_id TEXT NOT NULL,                    -- Privacy-preserving entity identifier
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    last_failed_attempt DATETIME,
+    next_allowed_attempt DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(share_id, entity_id)
+);
+
+-- Indexes for share_access_attempts
+CREATE INDEX IF NOT EXISTS idx_share_access_share_id ON share_access_attempts(share_id);
+CREATE INDEX IF NOT EXISTS idx_share_access_entity_id ON share_access_attempts(entity_id);
+CREATE INDEX IF NOT EXISTS idx_share_access_next_allowed ON share_access_attempts(next_allowed_attempt);
+CREATE INDEX IF NOT EXISTS idx_share_access_cleanup ON share_access_attempts(created_at);

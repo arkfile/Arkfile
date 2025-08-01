@@ -63,20 +63,15 @@ func RegisterRoutes() {
 	totpProtectedGroup.GET("/api/uploads/:sessionId/status", GetUploadStatus)
 	totpProtectedGroup.DELETE("/api/uploads/:sessionId", CancelUpload)
 
-	// Share file - require TOTP
-	totpProtectedGroup.POST("/api/share", ShareFile) // Create a share link (changed from CreateShareLink)
-	totpProtectedGroup.GET("/api/user/shares", ListShares)
-	totpProtectedGroup.DELETE("/api/share/:id", DeleteShare)
+	// File sharing - require TOTP for creation, anonymous access for usage
+	totpProtectedGroup.POST("/api/files/:fileId/share", CreateFileShare) // Create Argon2id-based anonymous share
+	totpProtectedGroup.GET("/api/user/shares", ListShares)               // List user's shares
+	totpProtectedGroup.DELETE("/api/share/:id", DeleteShare)             // Delete a share
 
-	// Access shared file
-	Echo.GET("/shared/:id", GetSharedFile)
-	Echo.POST("/shared/:id/auth", AuthenticateShare)
-	Echo.GET("/shared/:id/download", DownloadSharedFile)
-	// API endpoint for accessing shared file
-	Echo.GET("/api/shared/:shareId", GetSharedFileByShareID)
-	// Additional API endpoints for shared.html
-	Echo.POST("/api/shared/:shareId/auth", AuthenticateShare)
-	Echo.GET("/api/shared/:shareId/download", DownloadSharedFile)
+	// Anonymous share access (no authentication required)
+	Echo.GET("/shared/:id", GetSharedFile)                  // Share access page
+	Echo.POST("/api/share/:id", AccessSharedFile)           // Anonymous share access with password
+	Echo.GET("/api/share/:id/download", DownloadSharedFile) // Download shared file
 
 	// File encryption key management - require TOTP
 	totpProtectedGroup.POST("/api/files/:filename/update-encryption", UpdateEncryption)

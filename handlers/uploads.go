@@ -14,7 +14,6 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/arkfile/auth"
-	"github.com/84adam/arkfile/crypto"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
@@ -182,95 +181,10 @@ func CreateUploadSession(c echo.Context) error {
 	})
 }
 
-// GetSharedFileByShareID retrieves a shared file by its share ID, checking password if required
+// GetSharedFileByShareID is deprecated - use the new anonymous share system in file_shares.go
+// This function is kept temporarily for backwards compatibility but should not be used
 func GetSharedFileByShareID(c echo.Context) error {
-	shareID := c.Param("shareId")
-	password := c.FormValue("password")
-
-	// Validate share access using the helper function
-	shareDetails, status, message, err := validateShareAccess(shareID)
-	if err != nil {
-		return echo.NewHTTPError(status, message)
-	}
-
-	// Check password if required using OPAQUE authentication
-	if shareDetails.PasswordProtected {
-		if password == "" {
-			return echo.NewHTTPError(http.StatusUnauthorized, "Password required")
-		}
-
-		// Initialize OPAQUE password manager and authenticate
-		opm := auth.NewOPAQUEPasswordManager()
-		recordIdentifier := fmt.Sprintf("share:%s", shareID)
-		exportKey, err := opm.AuthenticatePassword(recordIdentifier, password)
-		if err != nil {
-			logging.ErrorLogger.Printf("Share authentication failed for %s: %v", shareID, err)
-			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid password")
-		}
-		defer crypto.SecureZeroBytes(exportKey) // Secure cleanup
-	}
-
-	// Get file metadata using the helper function
-	fileMetadata, status, message, err := getFileMetadata(shareDetails.FileID)
-	if err != nil {
-		// Try checking in completed uploads if not found in file_metadata
-		if status == http.StatusNotFound {
-			var (
-				filename     string
-				size         int64
-				passwordHint string
-				passwordType string
-				originalHash string
-			)
-
-			err = database.DB.QueryRow(
-				"SELECT filename, total_size, password_hint, password_type, original_hash FROM upload_sessions WHERE filename = ? AND status = 'completed'",
-				shareDetails.FileID,
-			).Scan(&filename, &size, &passwordHint, &passwordType, &originalHash)
-
-			if err == sql.ErrNoRows {
-				return echo.NewHTTPError(http.StatusNotFound, "File no longer exists")
-			} else if err != nil {
-				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get file details")
-			}
-
-			// Create a FileMetadata object from the upload_sessions data
-			fileMetadata = &FileMetadata{
-				Filename:     filename,
-				Size:         size,
-				PasswordHint: passwordHint,
-				PasswordType: passwordType,
-				SHA256Sum:    originalHash,
-				// MultiKey isn't available in this table, so we default to false
-				MultiKey: false,
-			}
-		} else {
-			return echo.NewHTTPError(status, message)
-		}
-	}
-
-	// Generate download URL using storage provider interface
-	expiry := time.Hour // 1 hour expiry for the actual download link
-	downloadURL, err := storage.Provider.GetPresignedURL(c.Request().Context(), shareDetails.FileID, expiry)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate presigned URL for %s via storage provider: %v", shareDetails.FileID, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download URL")
-	}
-
-	// Log file access
-	database.LogUserAction(shareDetails.OwnerEmail, "shared", shareDetails.FileID)
-	logging.InfoLogger.Printf("Shared file access: %s, file: %s", shareID, shareDetails.FileID)
-
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"fileId":       shareDetails.FileID,
-		"filename":     fileMetadata.Filename,
-		"size":         fileMetadata.Size,
-		"downloadUrl":  downloadURL,
-		"owner":        shareDetails.OwnerEmail,
-		"hash":         fileMetadata.SHA256Sum,
-		"passwordHint": fileMetadata.PasswordHint,
-		"passwordType": fileMetadata.PasswordType,
-	})
+	return echo.NewHTTPError(http.StatusNotImplemented, "This endpoint has been replaced by the new anonymous share system. Please use /api/share/:id instead.")
 }
 
 // DownloadFileChunk streams a specific chunk of a file to the client
