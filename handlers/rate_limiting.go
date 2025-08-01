@@ -92,13 +92,37 @@ func getOrCreateRateLimitEntry(shareID, entityID string) (*ShareRateLimitEntry, 
 
 // recordFailedAttempt records a failed share access attempt
 func recordFailedAttempt(shareID, entityID string) error {
-	entry, err := getOrCreateRateLimitEntry(shareID, entityID)
+	// Get current failure count from database
+	var currentFailureCount int
+	err := database.DB.QueryRow(`
+		SELECT failed_count FROM share_access_attempts 
+		WHERE share_id = ? AND entity_id = ?
+	`, shareID, entityID).Scan(&currentFailureCount)
+
 	if err != nil {
-		return err
+		// If entry doesn't exist, create it with failure count 1
+		if err == sql.ErrNoRows {
+			penalty := calculateSharePenalty(1)
+			nextAllowed := time.Now().Add(penalty)
+
+			_, err = database.DB.Exec(`
+				INSERT INTO share_access_attempts (share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt, created_at)
+				VALUES (?, ?, 1, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP)
+			`, shareID, entityID, nextAllowed)
+
+			if err != nil {
+				return fmt.Errorf("failed to create rate limit entry with failure: %w", err)
+			}
+
+			logging.InfoLogger.Printf("Rate limit created for share %s, entity %s: 1 failure, next allowed: %v",
+				shareID, entityID, nextAllowed)
+			return nil
+		}
+		return fmt.Errorf("failed to query current failure count: %w", err)
 	}
 
 	// Increment failure count
-	newFailureCount := entry.FailedCount + 1
+	newFailureCount := currentFailureCount + 1
 
 	// Calculate next allowed attempt time
 	penalty := calculateSharePenalty(newFailureCount)

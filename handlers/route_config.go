@@ -68,11 +68,13 @@ func RegisterRoutes() {
 	totpProtectedGroup.GET("/api/user/shares", ListShares)               // List user's shares
 	totpProtectedGroup.DELETE("/api/share/:id", DeleteShare)             // Delete a share
 
-	// Anonymous share access (no authentication required)
-	Echo.GET("/shared/:id", GetSharedFile)                  // Share access page
-	Echo.GET("/api/share/:id", GetShareInfo)                // Get share metadata (no password required)
-	Echo.POST("/api/share/:id", AccessSharedFile)           // Anonymous share access with password
-	Echo.GET("/api/share/:id/download", DownloadSharedFile) // Download shared file
+	// Anonymous share access (no authentication required) - with timing protection
+	shareGroup := Echo.Group("")
+	shareGroup.Use(TimingProtectionMiddleware)
+	shareGroup.GET("/shared/:id", GetSharedFile)                  // Share access page
+	shareGroup.GET("/api/share/:id", GetShareInfo)                // Get share metadata (no password required)
+	shareGroup.POST("/api/share/:id", AccessSharedFile)           // Anonymous share access with password
+	shareGroup.GET("/api/share/:id/download", DownloadSharedFile) // Download shared file
 
 	// File encryption key management - require TOTP
 	totpProtectedGroup.POST("/api/files/:filename/update-encryption", UpdateEncryption)

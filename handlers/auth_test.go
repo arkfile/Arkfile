@@ -59,12 +59,28 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 	logging.WarningLogger = log.New(io.Discard, "WARNING: ", log.Ldate|log.Ltime|log.LUTC)
 	logging.DebugLogger = log.New(io.Discard, "DEBUG: ", log.Ldate|log.Ltime|log.LUTC)
 
+	// --- Entity ID Service Setup ---
+	entityConfig := logging.EntityIDConfig{
+		MasterSecretPath:  "",
+		RotationPeriod:    24 * time.Hour,
+		RetentionDays:     90,
+		CleanupInterval:   24 * time.Hour,
+		EmergencyRotation: true,
+	}
+	err = logging.InitializeEntityIDService(entityConfig)
+	require.NoError(t, err, "Failed to initialize entity ID service")
+
 	// --- Echo Setup ---
 	e := echo.New()
 	req := httptest.NewRequest(method, path, body)
 	if body != nil {
 		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	}
+	// Set test IP address for entity ID generation
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("X-Real-IP", "127.0.0.1")
+	req.Header.Set("X-Forwarded-For", "127.0.0.1")
+
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 

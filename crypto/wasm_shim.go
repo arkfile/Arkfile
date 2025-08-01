@@ -426,7 +426,7 @@ func clearSecureSessionJS(this js.Value, args []js.Value) interface{} {
 	}
 }
 
-// validatePasswordComplexityJS provides password complexity validation from WASM
+// validatePasswordComplexityJS provides password complexity validation from WASM using zxcvbn
 func validatePasswordComplexityJS(this js.Value, args []js.Value) interface{} {
 	if len(args) != 1 {
 		return map[string]interface{}{
@@ -438,113 +438,45 @@ func validatePasswordComplexityJS(this js.Value, args []js.Value) interface{} {
 
 	password := args[0].String()
 
-	// Basic validation checks
-	if len(password) < 12 {
-		return map[string]interface{}{
-			"valid":   false,
-			"score":   0,
-			"message": "Password must be at least 12 characters long",
-		}
-	}
+	// Use our zxcvbn-based validation
+	result := ValidateAccountPassword(password)
 
-	score := 0
+	// Convert feedback to requirements/missing format for legacy compatibility
 	var requirements []string
 	var missing []string
 
-	// Check for uppercase letters
-	hasUpper := false
-	for _, r := range password {
-		if r >= 'A' && r <= 'Z' {
-			hasUpper = true
-			break
+	for _, feedback := range result.Feedback {
+		if result.MeetsRequirement {
+			requirements = append(requirements, "✓ "+feedback)
+		} else {
+			missing = append(missing, "• "+feedback)
 		}
 	}
-	if hasUpper {
-		score += 20
-		requirements = append(requirements, "✓ Contains uppercase letters")
-	} else {
-		missing = append(missing, "• Add uppercase letters")
+
+	// Calculate score out of 100 for legacy compatibility
+	score := result.StrengthScore * 20 // Convert 0-4 scale to 0-80, then add entropy bonus
+	if result.Entropy >= 60 {
+		score += 20 // Bonus for meeting entropy requirement
 	}
 
-	// Check for lowercase letters
-	hasLower := false
-	for _, r := range password {
-		if r >= 'a' && r <= 'z' {
-			hasLower = true
-			break
-		}
-	}
-	if hasLower {
-		score += 20
-		requirements = append(requirements, "✓ Contains lowercase letters")
-	} else {
-		missing = append(missing, "• Add lowercase letters")
-	}
-
-	// Check for numbers
-	hasNumbers := false
-	for _, r := range password {
-		if r >= '0' && r <= '9' {
-			hasNumbers = true
-			break
-		}
-	}
-	if hasNumbers {
-		score += 20
-		requirements = append(requirements, "✓ Contains numbers")
-	} else {
-		missing = append(missing, "• Add numbers")
-	}
-
-	// Check for special characters
-	hasSpecial := false
-	specialChars := "!@#$%^&*()_+-=[]{}|;:,.<>?"
-	for _, r := range password {
-		for _, s := range specialChars {
-			if r == s {
-				hasSpecial = true
-				break
-			}
-		}
-		if hasSpecial {
-			break
-		}
-	}
-	if hasSpecial {
-		score += 20
-		requirements = append(requirements, "✓ Contains special characters")
-	} else {
-		missing = append(missing, "• Add special characters (!@#$%^&* etc.)")
-	}
-
-	// Length bonus
-	if len(password) >= 16 {
-		score += 20
-		requirements = append(requirements, "✓ Good length (16+ characters)")
-	} else if len(password) >= 12 {
-		score += 10
-		requirements = append(requirements, "✓ Minimum length (12+ characters)")
-	}
-
-	// Determine overall message
+	// Determine message based on zxcvbn score
 	var message string
-	valid := score >= 80
+	valid := result.MeetsRequirement
 
 	if valid {
 		message = "Strong password"
-	} else if score >= 60 {
-		message = "Good password, but could be stronger"
-	} else if score >= 40 {
-		message = "Weak password, needs improvement"
 	} else {
-		message = "Very weak password"
-	}
-
-	// Add missing requirements to message
-	if len(missing) > 0 {
-		message += ". Missing: " + missing[0]
-		if len(missing) > 1 {
-			message += " and " + fmt.Sprintf("%d more", len(missing)-1)
+		switch result.StrengthScore {
+		case 0:
+			message = "Very weak password"
+		case 1:
+			message = "Weak password"
+		case 2:
+			message = "Fair password, needs improvement"
+		case 3:
+			message = "Good password, but could be stronger"
+		default:
+			message = "Password needs improvement"
 		}
 	}
 
@@ -554,6 +486,8 @@ func validatePasswordComplexityJS(this js.Value, args []js.Value) interface{} {
 		"message":      message,
 		"requirements": requirements,
 		"missing":      missing,
+		"entropy":      result.Entropy,
+		"feedback":     result.Feedback,
 	}
 }
 
