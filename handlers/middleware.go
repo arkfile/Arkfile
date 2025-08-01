@@ -379,6 +379,14 @@ func requiresTimingProtection(path string) bool {
 		}
 	}
 
+	// Also check for exact matches and patterns that should be protected
+	if path == "/api/share" ||
+		path == "/shared" ||
+		(len(path) > len("/api/share/") && path[:len("/api/share/")] == "/api/share/") ||
+		(len(path) > len("/shared/") && path[:len("/shared/")] == "/shared/") {
+		return true
+	}
+
 	return false
 }
 

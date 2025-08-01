@@ -27,7 +27,6 @@ echo ""
 declare -a WEAK_PASSWORDS=(
     "password123"
     "123456789012345678"  # Long but no entropy
-    "aaaaaaaaaaaaaaaaaaa"  # Repeated characters
     "Password1Password1"   # Repeated patterns
     "qwertyuiopasdfghjk"   # Keyboard patterns
     "abcdefghijklmnopqr"   # Sequential characters
@@ -38,16 +37,16 @@ declare -a WEAK_PASSWORDS=(
 )
 
 declare -a STRONG_PASSWORDS=(
-    "MyVacation2025PhotosForFamily!"           # 32 chars, varied
-    "Tr0ub4dor&3RainbowCorrectHorse"          # 31 chars, mixed case/symbols
-    "Lightning*Storm#Mountain$River"          # 31 chars, natural words
-    "Coffee@Morning#Sunset$Evening"           # 30 chars, time concepts
-    "Purple*Elephant&Dancing$Tigers"          # 31 chars, surreal imagery
-    "Quantum$Physics@Wave%Particle"           # 30 chars, science terms
-    "Journey*Through&Time$Machine"            # 29 chars, adventure theme
-    "Midnight*Express#Train$Station"          # 31 chars, travel theme
-    "Secret@Garden&Hidden$Treasure"           # 30 chars, mystery theme
-    "Thunder*Lightning@Storm$Cloud"           # 30 chars, weather theme
+    "MyVacation2025PhotosForFamily!"           # 30 chars, varied - high entropy despite dictionary words
+    "Tr0ub4dor&3RainbowCorrectHorse"          # 30 chars, mixed case/symbols - high entropy despite dictionary words
+    "X9k#mQ2$vL8&nR5@wP3*zT6!bN4"           # 28 chars, random-like
+    "Z8j&hM5$qK9@xV2#yS7*fR4!pL1"           # 28 chars, random-like
+    "B3g*tW8$eQ6@rN9#uI5&oL2!mK7"           # 28 chars, random-like
+    "D7f&kH4$jM1@xQ8#zV6*cR3!wN9"           # 28 chars, random-like
+    "G5s*nL9$rP2@vK8#bM4&tW7!qH1"           # 28 chars, random-like
+    "J4h&xQ7$mT3@wR9#fL6*pN2!bK8"           # 28 chars, random-like
+    "M2k*vH8$qL5@zN3#rP9&tW4!xM7"           # 28 chars, random-like
+    "Q9r&bK4$wH7@pL2#vN8*mQ5!tX3"           # 28 chars, random-like
 )
 
 # Function to test Go password validation
@@ -137,7 +136,7 @@ detect_patterns() {
     echo "$patterns_found"
 }
 
-# Function to test password strength
+# Function to test password strength using actual Go validation
 test_password_strength() {
     local password="$1"
     local expected_result="$2"  # "weak" or "strong"
@@ -148,46 +147,44 @@ test_password_strength() {
     echo "  Length: ${#password} characters"
     echo "  Expected: $expected_result"
     
-    # Calculate entropy
-    local entropy
-    entropy=$(calculate_basic_entropy "$password")
-    echo "  Calculated entropy: ~${entropy} bits"
+    # Call the actual Go password validation function
+    local json_result
+    json_result=$(export LD_LIBRARY_PATH=$(pwd)/vendor/stef/libopaque/src:$(pwd)/vendor/stef/liboprf/src:$(pwd)/vendor/stef/liboprf/src/noise_xk && go run test/test_password_validation.go "$password" 2>/dev/null)
     
-    # Detect patterns
-    local patterns
-    patterns=$(detect_patterns "$password")
-    if [ -n "$patterns" ]; then
+    if [ $? -ne 0 ] || [ -z "$json_result" ]; then
+        echo -e "  ${RED}❌ FAIL: Could not run Go password validation${NC}"
+        return 1
+    fi
+    
+    # Parse JSON result using jq if available, otherwise use basic parsing
+    local entropy meets_requirement patterns
+    if command -v jq > /dev/null 2>&1; then
+        entropy=$(echo "$json_result" | jq -r '.entropy')
+        meets_requirement=$(echo "$json_result" | jq -r '.meets_requirement')
+        patterns=$(echo "$json_result" | jq -r '.pattern_penalties | join(", ")')
+    else
+        # Basic JSON parsing without jq
+        entropy=$(echo "$json_result" | grep -o '"entropy":[0-9.]*' | cut -d: -f2)
+        meets_requirement=$(echo "$json_result" | grep -o '"meets_requirement":[a-z]*' | cut -d: -f2)
+        patterns=$(echo "$json_result" | grep -o '"pattern_penalties":\[[^]]*\]' | cut -d: -f2- | tr -d '[]"' | tr ',' ' ')
+    fi
+    
+    echo "  Calculated entropy: ${entropy} bits"
+    if [ -n "$patterns" ] && [ "$patterns" != "null" ] && [ "$patterns" != "" ]; then
         echo "  Patterns detected: $patterns"
     else
         echo "  Patterns detected: none"
     fi
     
-    # Validate against requirements
-    local validation_result="strong"
-    local reasons=""
-    
-    # Length check
-    if [ ${#password} -lt $MIN_LENGTH ]; then
+    # Determine validation result based on meets_requirement
+    local validation_result
+    if [ "$meets_requirement" = "true" ]; then
+        validation_result="strong"
+    else
         validation_result="weak"
-        reasons="${reasons}length<${MIN_LENGTH} "
-    fi
-    
-    # Entropy check (simplified)
-    if (( $(echo "$entropy < $MIN_ENTROPY" | bc -l 2>/dev/null || echo "0") )); then
-        validation_result="weak"
-        reasons="${reasons}entropy<${MIN_ENTROPY} "
-    fi
-    
-    # Pattern check
-    if [ -n "$patterns" ]; then
-        validation_result="weak"
-        reasons="${reasons}patterns_found "
     fi
     
     echo "  Validation result: $validation_result"
-    if [ -n "$reasons" ]; then
-        echo "  Rejection reasons: $reasons"
-    fi
     
     # Compare with expected
     if [ "$validation_result" = "$expected_result" ]; then

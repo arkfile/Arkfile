@@ -305,6 +305,11 @@ func OpaqueLogin(c echo.Context) error {
 	user, err := models.GetUserByEmail(database.DB, request.Email)
 	if err != nil {
 		logging.ErrorLogger.Printf("User not found for %s: %v", request.Email, err)
+		// Record failed login attempt
+		entityID := logging.GetOrCreateEntityID(c)
+		if recordErr := recordAuthFailedAttempt("login", entityID); recordErr != nil {
+			logging.ErrorLogger.Printf("Failed to record login failure: %v", recordErr)
+		}
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
 	}
 
@@ -312,6 +317,11 @@ func OpaqueLogin(c echo.Context) error {
 	exportKey, err := user.AuthenticateOPAQUE(database.DB, request.Password)
 	if err != nil {
 		logging.ErrorLogger.Printf("OPAQUE authentication failed for %s: %v", request.Email, err)
+		// Record failed login attempt
+		entityID := logging.GetOrCreateEntityID(c)
+		if recordErr := recordAuthFailedAttempt("login", entityID); recordErr != nil {
+			logging.ErrorLogger.Printf("Failed to record login failure: %v", recordErr)
+		}
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
 	}
 
@@ -523,6 +533,11 @@ func TOTPVerify(c echo.Context) error {
 	// Complete TOTP setup
 	if err := auth.CompleteTOTPSetup(database.DB, email, request.Code, sessionKey); err != nil {
 		logging.ErrorLogger.Printf("Failed to complete TOTP setup for %s: %v", email, err)
+		// Record failed TOTP verification attempt
+		entityID := logging.GetOrCreateEntityID(c)
+		if recordErr := recordAuthFailedAttempt("totp_verify", entityID); recordErr != nil {
+			logging.ErrorLogger.Printf("Failed to record TOTP verify failure: %v", recordErr)
+		}
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid TOTP code")
 	}
 
@@ -632,12 +647,22 @@ func TOTPAuth(c echo.Context) error {
 	if request.IsBackup {
 		if err := auth.ValidateBackupCode(database.DB, email, request.Code, sessionKey); err != nil {
 			logging.ErrorLogger.Printf("Failed backup code validation for %s: %v", email, err)
+			// Record failed TOTP auth attempt
+			entityID := logging.GetOrCreateEntityID(c)
+			if recordErr := recordAuthFailedAttempt("totp_auth", entityID); recordErr != nil {
+				logging.ErrorLogger.Printf("Failed to record TOTP auth failure: %v", recordErr)
+			}
 			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid backup code")
 		}
 		database.LogUserAction(email, "used backup code", "")
 	} else {
 		if err := auth.ValidateTOTPCode(database.DB, email, request.Code, sessionKey); err != nil {
 			logging.ErrorLogger.Printf("Failed TOTP code validation for %s: %v", email, err)
+			// Record failed TOTP auth attempt
+			entityID := logging.GetOrCreateEntityID(c)
+			if recordErr := recordAuthFailedAttempt("totp_auth", entityID); recordErr != nil {
+				logging.ErrorLogger.Printf("Failed to record TOTP auth failure: %v", recordErr)
+			}
 			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid TOTP code")
 		}
 		database.LogUserAction(email, "authenticated with TOTP", "")

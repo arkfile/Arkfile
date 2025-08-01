@@ -309,7 +309,7 @@ func AccessSharedFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Password is required")
 	}
 
-	// Apply rate limiting wrapper
+	// Use rate limiting wrapper to ensure failed attempts are recorded
 	return RateLimitShareAccess(shareID, c, func() error {
 		return processShareAccess(shareID, request, c)
 	})
@@ -412,24 +412,15 @@ func GetSharedFile(c echo.Context) error {
 	)
 
 	if err == sql.ErrNoRows {
-		return c.Render(http.StatusNotFound, "error", map[string]interface{}{
-			"title":   "Share Not Found",
-			"message": "The requested share link does not exist or has been removed.",
-		})
+		return c.File("client/static/errors/404.html")
 	} else if err != nil {
 		logging.ErrorLogger.Printf("Database error checking share %s: %v", shareID, err)
-		return c.Render(http.StatusInternalServerError, "error", map[string]interface{}{
-			"title":   "Server Error",
-			"message": "Failed to process request. Please try again later.",
-		})
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
 	}
 
 	// Check if share has expired
 	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
-		return c.Render(http.StatusForbidden, "error", map[string]interface{}{
-			"title":   "Share Link Expired",
-			"message": "This share link has expired and is no longer accessible.",
-		})
+		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
 	}
 
 	// Get file metadata for display
@@ -449,12 +440,8 @@ func GetSharedFile(c echo.Context) error {
 	entityID := logging.GetOrCreateEntityID(c)
 	logging.InfoLogger.Printf("Share page accessed: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
 
-	// Render share page with file info
-	return c.Render(http.StatusOK, "share", map[string]interface{}{
-		"title":    "Download Shared File",
-		"shareId":  shareID,
-		"fileName": filename,
-	})
+	// Serve the static shared.html file
+	return c.File("client/static/shared.html")
 }
 
 // ListShares returns all shares created by a user
