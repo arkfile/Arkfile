@@ -19,9 +19,8 @@ The tables below list every current HTTP endpoint exposed by Arkfile v1.
 
 | Method | Path | Purpose | Auth | Example |
 |--------|------|---------|------|---------|
-| POST | `/api/opaque/register` | Create a new user using the OPAQUE PAKE flow | Public | `curl -X POST -d @register.json http://localhost:8080/api/opaque/register` |
+| POST | `/api/opaque/register` | Create a new user using the OPAQUE PAKE flow with password validation | Public | `curl -X POST -d @register.json http://localhost:8080/api/opaque/register` |
 | POST | `/api/opaque/login` | Log in and receive access / refresh tokens | Public | `curl -X POST -d @login.json http://localhost:8080/api/opaque/login` |
-| POST | `/api/opaque/capability` | Device benchmark for Argon2id tuning | Public | `curl -X POST http://localhost:8080/api/opaque/capability` |
 | GET  | `/api/opaque/health` | Simple health probe for the OPAQUE service | Public | `curl http://localhost:8080/api/opaque/health` |
 | POST | `/api/refresh` | Exchange a refresh token for a new access token | Access | `curl -X POST --cookie "refresh=…" http://localhost:8080/api/refresh` |
 | POST | `/api/logout` | Invalidate current session refresh token | Access | `curl -X POST -H "Authorization: Bearer $TOK" http://localhost:8080/api/logout` |

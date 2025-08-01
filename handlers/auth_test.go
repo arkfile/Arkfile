@@ -183,7 +183,11 @@ func TestOpaqueRegister_WeakPassword(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-	assert.Equal(t, "Password must be at least 14 characters", httpErr.Message)
+
+	// Updated to match new enhanced password validation feedback
+	errorMessage := httpErr.Message.(string)
+	assert.Contains(t, errorMessage, "Consider using 14+ characters for better security")
+	assert.Contains(t, errorMessage, "Password entropy is too low")
 }
 
 func TestOpaqueRegister_UserAlreadyExists(t *testing.T) {

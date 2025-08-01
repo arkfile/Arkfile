@@ -1,21 +1,21 @@
 # Arkfile
 
-*s3-style encrypted file sharing and backup*
+*Zero-Knowledge Encrypted File Vault over S3*
 
 ## 1. What Is Arkfile?
 
 Arkfile is an open-source service that lets you store and share files while keeping them private.
 
-Before any file leaves your computer it is **encrypted**, so the Arkfile server never sees the readable version or your secret keys.
+Before any file leaves your computer it is **encrypted**, so the Arkfile server never sees your data.
 
-Because of this “zero-knowledge” design, only you – and anyone you choose to share a special key with – can open your files.
+Because of this “zero-knowledge” design, only you – and anyone with whom you choose to share – can access and open your files.
 
 ## 2. Why People Use It
 
 1. **Privacy first** – files are encrypted on your device.  
-2. **Share safely** – you can create extra "one-time" keys for friends or co-workers without giving them your main password.  
-3. **Multi-factor security** – TOTP authentication provides mandatory two-factor protection for all accounts.
-4. **Pick your storage** – use the built-in MinIO server for quick tests or point Arkfile at Backblaze B2, Wasabi, Vultr Object Storage, and other S3-compatible back-ends.  
+2. **Share safely** – you can create sharing links with share passwords for friends or co-workers without giving them your main password.
+3. **Multi-factor security** – Time-based One-Time Passwords (TOTP authentication) is used to provide two-factor protection for all accounts.
+4. **Pick your storage** – use the built-in MinIO server for single-node or self-hosted cluster deployments, or point Arkfile at Backblaze B2, Wasabi, Vultr Object Storage, and other S3-compatible storage back-ends.
 5. **Runs anywhere** – one binary, no external database. (Arkfile uses the lightweight rqlite engine under the hood.)  
 6. **Open source** – anyone can inspect or improve the code.
 
@@ -37,10 +37,11 @@ Once it finishes, open the URL and create your first account.
 
 - **Zero-knowledge:** The server never learns your files or passwords because everything is encrypted before upload.
 - **Encryption (AES-256-GCM):** A modern algorithm that scrambles data and checks its integrity at the same time.
-- **OPAQUE:** A login method where the server never sees your password, even in scrambled form.
+- **OPAQUE:** A password authentication protocol where the server never sees your password in any form, with built-in validation to ensure strong password security.
 - **TOTP:** Time-based One-Time Password - generates temporary codes on your phone for extra security.
 - **rqlite:** A small database that keeps data in sync across nodes without extra setup.
 - **MinIO:** An open-source S3-compatible storage server that works as a single node or in a cluster.
+- **S3-type Storage Backends:** Any number of redundant data backup solutions that use erasure coding to ensure extremely high availability of your data.
 
 ## 5. Need More Details?
 

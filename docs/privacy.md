@@ -6,15 +6,15 @@ This document explains, in plain language, how Arkfile keeps user data private.
 
 Arkfile is designed so the server never sees unencrypted content or user passwords.
 
-All sensitive processing happens on the client (browser or desktop app) before any data leaves the user's device.
+All sensitive processing happens on the client side before any data leaves the user's device.
 
 ## 2. Password Protection
 
-Arkfile uses the **OPAQUE** protocol – a modern "password-authenticated key exchange".  
-- Your password is never sent to the server, not even in hashed form.  
-- OPAQUE handles password authentication without requiring additional password hardening.
+Arkfile uses different password protection approaches depending on the type of access:
 
-This combination defends against offline guessing if server data is ever stolen.
+**Account and Custom Passwords** use the **OPAQUE** protocol – a modern "password-authenticated key exchange". Your password is never sent to the server in any form, and OPAQUE handles authentication with built-in validation requiring 14+ character passwords with strong entropy. This provides complete protection against offline attacks even if server data is compromised.
+
+**Share Passwords** use Argon2id for anonymous file access, requiring 18+ character passwords with strong entropy validation. While these passwords enable anonymous sharing without account creation, they are protected by memory-intensive hashing that makes offline attacks computationally expensive and limited to shared files only.
 
 ## 3. File Encryption
 

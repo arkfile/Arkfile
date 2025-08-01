@@ -497,6 +497,12 @@ func main() {
 	js.Global().Set("decryptFileOPAQUE", js.FuncOf(decryptFileOPAQUE))
 	js.Global().Set("clearOPAQUEExportKey", js.FuncOf(clearOPAQUEExportKey))
 
+	// Phase 1: Chunked upload encryption functions
+	js.Global().Set("encryptFileChunkedOPAQUE", js.FuncOf(encryptFileChunkedOPAQUE))
+	js.Global().Set("decryptFileChunkedOPAQUE", js.FuncOf(decryptFileChunkedOPAQUE))
+	js.Global().Set("createEnvelopeOPAQUE", js.FuncOf(createEnvelopeOPAQUE))
+	js.Global().Set("validateChunkFormat", js.FuncOf(validateChunkFormat))
+
 	// Utility functions
 	js.Global().Set("generateSalt", js.FuncOf(generateSalt))
 	js.Global().Set("calculateSHA256", js.FuncOf(calculateSHA256))
@@ -602,5 +608,381 @@ func sanitizeAPIResponse(this js.Value, args []js.Value) interface{} {
 	return map[string]interface{}{
 		"success": true,
 		"data":    args[0],
+	}
+}
+
+// Phase 1: Chunked Upload Functions
+
+// createEnvelopeOPAQUE creates a crypto envelope for chunked files
+func createEnvelopeOPAQUE(this js.Value, args []js.Value) interface{} {
+	if len(args) != 1 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected keyType",
+		}
+	}
+
+	keyType := args[0].String()
+
+	var version, keyTypeByte byte
+	switch keyType {
+	case "account":
+		version = 0x01     // VersionOPAQUEAccount
+		keyTypeByte = 0x01 // Account key type
+	case "custom":
+		version = 0x02     // VersionOPAQUECustom
+		keyTypeByte = 0x02 // Custom key type
+	default:
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid key type: must be 'account' or 'custom'",
+		}
+	}
+
+	// Create envelope: [version][keyType]
+	envelope := []byte{version, keyTypeByte}
+
+	return map[string]interface{}{
+		"success":  true,
+		"envelope": base64.StdEncoding.EncodeToString(envelope),
+		"version":  int(version),
+		"keyType":  int(keyTypeByte),
+	}
+}
+
+// validateChunkFormat validates that a chunk has the correct format
+func validateChunkFormat(this js.Value, args []js.Value) interface{} {
+	if len(args) != 1 {
+		return map[string]interface{}{
+			"valid": false,
+			"error": "Invalid arguments: expected chunkData",
+		}
+	}
+
+	chunkDataB64 := args[0].String()
+	chunkData, err := base64.StdEncoding.DecodeString(chunkDataB64)
+	if err != nil {
+		return map[string]interface{}{
+			"valid": false,
+			"error": "Failed to decode chunk data: " + err.Error(),
+		}
+	}
+
+	// Validate chunk format: [nonce:12][encrypted_data][tag:16]
+	// Minimum size: 12 (nonce) + 1 (data) + 16 (tag) = 29 bytes
+	if len(chunkData) < 29 {
+		return map[string]interface{}{
+			"valid": false,
+			"error": "Chunk too short: minimum 29 bytes required",
+		}
+	}
+
+	// Maximum size: 16MB + 28 bytes overhead
+	maxSize := 16*1024*1024 + 28
+	if len(chunkData) > maxSize {
+		return map[string]interface{}{
+			"valid": false,
+			"error": "Chunk too large: maximum " + string(rune(maxSize)) + " bytes allowed",
+		}
+	}
+
+	return map[string]interface{}{
+		"valid":     true,
+		"nonceSize": 12,
+		"tagSize":   16,
+		"dataSize":  len(chunkData) - 28,
+	}
+}
+
+// encryptFileChunkedOPAQUE encrypts a file for chunked upload
+func encryptFileChunkedOPAQUE(this js.Value, args []js.Value) interface{} {
+	if len(args) != 5 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected fileData, userEmail, keyType, fileID, chunkSize",
+		}
+	}
+
+	// Extract arguments
+	fileDataJS := args[0]
+	userEmail := args[1].String()
+	keyType := args[2].String()
+	fileID := args[3].String()
+	chunkSize := args[4].Int()
+
+	// Default chunk size to 16MB if not specified or invalid
+	if chunkSize <= 0 || chunkSize > 16*1024*1024 {
+		chunkSize = 16 * 1024 * 1024
+	}
+
+	// Convert file data from JavaScript Uint8Array to Go []byte
+	fileData := make([]byte, fileDataJS.Length())
+	js.CopyBytesToGo(fileData, fileDataJS)
+
+	// Get the OPAQUE export key for this user
+	exportKey, exists := opaqueExportKeys[userEmail]
+	if !exists {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "No OPAQUE export key found for user",
+		}
+	}
+
+	// Derive the file encryption key based on key type
+	var fileEncKey []byte
+	var err error
+	var version, keyTypeByte byte
+
+	if keyType == "account" {
+		version = 0x01
+		keyTypeByte = 0x01
+		fileEncKey, err = deriveAccountFileKey(exportKey, userEmail, fileID)
+	} else if keyType == "custom" {
+		version = 0x02
+		keyTypeByte = 0x02
+		fileEncKey, err = deriveCustomFileKey(exportKey, fileID, userEmail)
+	} else {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid key type: must be 'account' or 'custom'",
+		}
+	}
+
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to derive file encryption key: " + err.Error(),
+		}
+	}
+
+	// Create AES-GCM cipher
+	block, err := aes.NewCipher(fileEncKey)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to create cipher: " + err.Error(),
+		}
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to create GCM: " + err.Error(),
+		}
+	}
+
+	// Create envelope
+	envelope := []byte{version, keyTypeByte}
+
+	// Split file into chunks and encrypt each chunk
+	var chunks []map[string]interface{}
+	totalChunks := (len(fileData) + chunkSize - 1) / chunkSize
+
+	for i := 0; i < totalChunks; i++ {
+		start := i * chunkSize
+		end := start + chunkSize
+		if end > len(fileData) {
+			end = len(fileData)
+		}
+
+		chunkData := fileData[start:end]
+
+		// Generate unique nonce for this chunk
+		nonce := make([]byte, gcm.NonceSize())
+		if _, err := rand.Read(nonce); err != nil {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "Failed to generate nonce for chunk " + string(rune(i)) + ": " + err.Error(),
+			}
+		}
+
+		// Encrypt chunk: AES-GCM(chunk_data, FEK, nonce)
+		encryptedChunk := gcm.Seal(nonce, nonce, chunkData, nil)
+
+		// Calculate SHA-256 hash of encrypted chunk
+		hash := sha256.Sum256(encryptedChunk)
+
+		chunks = append(chunks, map[string]interface{}{
+			"data": base64.StdEncoding.EncodeToString(encryptedChunk),
+			"hash": hex.EncodeToString(hash[:]),
+			"size": len(encryptedChunk),
+		})
+	}
+
+	return map[string]interface{}{
+		"success":     true,
+		"envelope":    base64.StdEncoding.EncodeToString(envelope),
+		"chunks":      chunks,
+		"totalChunks": totalChunks,
+	}
+}
+
+// decryptFileChunkedOPAQUE decrypts a chunked file with envelope processing
+func decryptFileChunkedOPAQUE(this js.Value, args []js.Value) interface{} {
+	if len(args) != 3 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected encryptedData, userEmail, fileID",
+		}
+	}
+
+	encryptedDataB64 := args[0].String()
+	userEmail := args[1].String()
+	fileID := args[2].String()
+
+	// Get the OPAQUE export key for this user
+	exportKey, exists := opaqueExportKeys[userEmail]
+	if !exists {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "No OPAQUE export key found for user",
+		}
+	}
+
+	// Decode the encrypted data
+	encryptedData, err := base64.StdEncoding.DecodeString(encryptedDataB64)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to decode encrypted data: " + err.Error(),
+		}
+	}
+
+	// Check minimum length for envelope
+	if len(encryptedData) < 2 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Encrypted data too short: missing envelope",
+		}
+	}
+
+	// Read envelope: [version][keyType] from first 2 bytes
+	version := encryptedData[0]
+	keyType := encryptedData[1]
+	chunksData := encryptedData[2:]
+
+	// Derive the file encryption key based on envelope
+	var fileEncKey []byte
+
+	switch version {
+	case 0x01: // VersionOPAQUEAccount
+		if keyType != 0x01 {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "Key type mismatch for account version",
+			}
+		}
+		fileEncKey, err = deriveAccountFileKey(exportKey, userEmail, fileID)
+	case 0x02: // VersionOPAQUECustom
+		if keyType != 0x02 {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "Key type mismatch for custom version",
+			}
+		}
+		fileEncKey, err = deriveCustomFileKey(exportKey, fileID, userEmail)
+	default:
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Unsupported encryption version",
+		}
+	}
+
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to derive file encryption key: " + err.Error(),
+		}
+	}
+
+	// Create AES-GCM cipher
+	block, err := aes.NewCipher(fileEncKey)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to create cipher: " + err.Error(),
+		}
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to create GCM: " + err.Error(),
+		}
+	}
+
+	// Process remaining data as chunks: [nonce][encrypted_data][tag]
+	var plaintext []byte
+	offset := 0
+
+	for offset < len(chunksData) {
+		// Check if we have enough data for a chunk (minimum: nonce + tag)
+		if offset+gcm.NonceSize()+16 > len(chunksData) {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "Incomplete chunk data at offset " + string(rune(offset)),
+			}
+		}
+
+		// Find the end of this chunk by looking for the next valid nonce position
+		// For now, we'll assume chunks are properly formatted and parse sequentially
+
+		// Read nonce
+		nonce := chunksData[offset : offset+gcm.NonceSize()]
+		offset += gcm.NonceSize()
+
+		// Find the tag at the end of encrypted data
+		// We need to determine chunk size, but for now assume remaining data
+		remainingData := chunksData[offset:]
+
+		// The tag is the last 16 bytes of the remaining data for this chunk
+		// We need a better way to determine chunk boundaries
+		// For now, try to decrypt what we can
+		if len(remainingData) < 16 {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "Insufficient data for authentication tag",
+			}
+		}
+
+		// Try different chunk sizes to find valid decryption
+		// Start with maximum possible size and work down
+		maxPossibleSize := len(remainingData)
+
+		var decryptedChunk []byte
+		var chunkProcessed bool
+
+		// Try to decrypt starting from the maximum size down to minimum
+		for chunkSize := maxPossibleSize; chunkSize >= 16; chunkSize-- {
+			if chunkSize > len(remainingData) {
+				continue
+			}
+
+			testChunk := remainingData[:chunkSize]
+			testDecrypted, err := gcm.Open(nil, nonce, testChunk, nil)
+			if err == nil {
+				// Successfully decrypted with this chunk size
+				decryptedChunk = testDecrypted
+				offset += chunkSize
+				chunkProcessed = true
+				break
+			}
+		}
+
+		if !chunkProcessed {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "Failed to decrypt any chunk at offset " + string(rune(offset-gcm.NonceSize())),
+			}
+		}
+
+		plaintext = append(plaintext, decryptedChunk...)
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"data":    base64.StdEncoding.EncodeToString(plaintext),
 	}
 }

@@ -203,9 +203,13 @@ func OpaqueRegister(c echo.Context) error {
 	}
 
 	// Phase 5E: Enhanced password validation with entropy checking
-	result := crypto.ValidatePasswordEntropy(request.Password, "account")
-	if !result.Valid {
-		return echo.NewHTTPError(http.StatusBadRequest, result.Message)
+	result := crypto.ValidateAccountPassword(request.Password)
+	if !result.MeetsRequirement {
+		errorMsg := "Password does not meet security requirements"
+		if len(result.Feedback) > 0 {
+			errorMsg = strings.Join(result.Feedback, "; ")
+		}
+		return echo.NewHTTPError(http.StatusBadRequest, errorMsg)
 	}
 
 	// Check if user already exists

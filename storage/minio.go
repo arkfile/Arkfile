@@ -404,6 +404,75 @@ func (m *MinioStorage) CompleteMultipartUploadWithPadding(ctx context.Context, s
 	return m.CompleteMultipartUpload(ctx, storageID, uploadID, parts)
 }
 
+// Phase 3: CompleteMultipartUploadWithEnvelope completes a multipart upload and prepends envelope
+func (m *MinioStorage) CompleteMultipartUploadWithEnvelope(ctx context.Context, storageID, uploadID string, parts []minio.CompletePart, envelope []byte, originalSize, paddedSize int64) error {
+	// Step 1: Complete the multipart upload to get concatenated chunks
+	err := m.CompleteMultipartUpload(ctx, storageID, uploadID, parts)
+	if err != nil {
+		return fmt.Errorf("failed to complete multipart upload: %w", err)
+	}
+
+	// Step 2: Download the concatenated chunks
+	object, err := m.GetObject(ctx, storageID, minio.GetObjectOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get concatenated chunks: %w", err)
+	}
+	defer object.Close()
+
+	// Step 3: Create temporary object name for envelope-prefixed version
+	tempObjectName := storageID + ".tmp"
+
+	// Step 4: Create envelope-prefixed content with padding
+	envelopeReader := &envelopeReader{
+		envelope:     envelope,
+		chunksReader: object,
+		originalSize: originalSize,
+		paddedSize:   paddedSize,
+	}
+
+	// Step 5: Upload the envelope-prefixed content
+	finalSize := int64(len(envelope)) + paddedSize
+	_, err = m.PutObject(ctx, tempObjectName, envelopeReader, finalSize, minio.PutObjectOptions{
+		ContentType: "application/octet-stream",
+	})
+	if err != nil {
+		return fmt.Errorf("failed to upload envelope-prefixed content: %w", err)
+	}
+
+	// Step 6: Remove the original concatenated chunks file
+	err = m.RemoveObject(ctx, storageID, minio.RemoveObjectOptions{})
+	if err != nil {
+		// Try to clean up temp file
+		m.RemoveObject(ctx, tempObjectName, minio.RemoveObjectOptions{})
+		return fmt.Errorf("failed to remove original chunks file: %w", err)
+	}
+
+	// Step 7: Move temp file to final location
+	// Unfortunately MinIO doesn't have a native move/rename, so we copy and delete
+	src := minio.CopySrcOptions{
+		Bucket: m.bucketName,
+		Object: tempObjectName,
+	}
+	dst := minio.CopyDestOptions{
+		Bucket: m.bucketName,
+		Object: storageID,
+	}
+
+	_, err = m.client.CopyObject(ctx, dst, src)
+	if err != nil {
+		return fmt.Errorf("failed to copy temp file to final location: %w", err)
+	}
+
+	// Step 8: Clean up temp file
+	err = m.RemoveObject(ctx, tempObjectName, minio.RemoveObjectOptions{})
+	if err != nil {
+		// Log error but don't fail - the main operation succeeded
+		log.Printf("Warning: Failed to clean up temp file %s: %v", tempObjectName, err)
+	}
+
+	return nil
+}
+
 // paddingReader generates padding bytes on demand
 type paddingReader struct {
 	size int64
@@ -455,4 +524,81 @@ func (l *limitedReadCloser) Read(p []byte) (n int, err error) {
 	}
 
 	return n, err
+}
+
+// envelopeReader prepends envelope to chunks data and adds padding
+type envelopeReader struct {
+	envelope     []byte
+	chunksReader io.ReadCloser
+	originalSize int64
+	paddedSize   int64
+	envelopeRead bool
+	chunksRead   int64
+	paddingRead  int64
+	paddingSize  int64
+}
+
+func (e *envelopeReader) Read(p []byte) (n int, err error) {
+	// Calculate padding size once
+	if e.paddingSize == 0 {
+		e.paddingSize = e.paddedSize - e.originalSize
+	}
+
+	// Phase 1: Read envelope first
+	if !e.envelopeRead {
+		toCopy := len(e.envelope)
+		if toCopy > len(p) {
+			toCopy = len(p)
+		}
+		copy(p[:toCopy], e.envelope)
+		e.envelopeRead = true
+		return toCopy, nil
+	}
+
+	// Phase 2: Read chunks data
+	if e.chunksRead < e.originalSize {
+		remaining := e.originalSize - e.chunksRead
+		toRead := int64(len(p))
+		if toRead > remaining {
+			toRead = remaining
+		}
+
+		n, err = e.chunksReader.Read(p[:toRead])
+		e.chunksRead += int64(n)
+
+		// If we've read all chunks data, we might need padding
+		if e.chunksRead >= e.originalSize && err == nil && e.paddingSize > 0 {
+			// Don't return EOF yet if we need padding
+			return n, nil
+		}
+
+		return n, err
+	}
+
+	// Phase 3: Add padding if needed
+	if e.paddingRead < e.paddingSize {
+		remaining := e.paddingSize - e.paddingRead
+		toRead := int64(len(p))
+		if toRead > remaining {
+			toRead = remaining
+		}
+
+		// Generate random padding bytes
+		n = int(toRead)
+		if _, err := rand.Read(p[:n]); err != nil {
+			return 0, fmt.Errorf("failed to generate padding: %w", err)
+		}
+
+		e.paddingRead += toRead
+
+		// If we've finished padding, return EOF
+		if e.paddingRead >= e.paddingSize {
+			return n, io.EOF
+		}
+
+		return n, nil
+	}
+
+	// All done
+	return 0, io.EOF
 }

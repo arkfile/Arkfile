@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"github.com/minio/minio-go/v7"
 
@@ -209,7 +208,11 @@ func ShareFile(c echo.Context) error {
 	}
 
 	// Generate unique share ID
-	shareID := generateShareID()
+	shareID, err := generateShareID()
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to create share ID: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create share")
+	}
 
 	// Calculate expiration time
 	var expiresAt *time.Time
@@ -568,15 +571,13 @@ func DownloadSharedFile(c echo.Context) error {
 }
 
 // generateShareID creates a cryptographically secure 256-bit share ID using Base64 URL-safe encoding
-func generateShareID() string {
+func generateShareID() (string, error) {
 	// Generate 256-bit (32 bytes) of cryptographically secure randomness
 	randomBytes := make([]byte, 32)
 	if _, err := rand.Read(randomBytes); err != nil {
-		// Fallback to UUID if crypto/rand fails (should never happen in production)
-		logging.ErrorLogger.Printf("Failed to generate secure random bytes for share ID, falling back to UUID: %v", err)
-		return uuid.New().String()
+		return "", fmt.Errorf("failed to generate random bytes: %w", err)
 	}
 
 	// Use Base64 URL-safe encoding without padding for clean URLs (43 characters)
-	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(randomBytes)
+	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(randomBytes), nil
 }

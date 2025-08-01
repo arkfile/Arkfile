@@ -831,22 +831,22 @@ func verifyTOTPSetupJS(this js.Value, args []js.Value) interface{} {
 func validatePasswordEntropyJS(this js.Value, args []js.Value) interface{} {
 	if len(args) < 2 {
 		return map[string]interface{}{
-			"valid":   false,
-			"message": "Invalid arguments",
+			"meets_requirements": false,
+			"feedback":           []string{"Invalid arguments"},
 		}
 	}
 
 	password := args[0].String()
-	passwordType := args[1].String() // "account", "custom", or "share"
+	minEntropy := args[1].Float()
 
-	result := ValidatePasswordEntropy(password, passwordType)
+	result := ValidatePasswordEntropy(password, minEntropy)
 
 	return map[string]interface{}{
-		"valid":       result.Valid,
-		"entropy":     result.Entropy,
-		"message":     result.Message,
-		"suggestions": result.Suggestions,
-		"score":       result.Score,
+		"entropy":            result.Entropy,
+		"strength_score":     result.StrengthScore,
+		"feedback":           result.Feedback,
+		"meets_requirements": result.MeetsRequirement,
+		"pattern_penalties":  result.PatternPenalties,
 	}
 }
 
@@ -861,13 +861,27 @@ func calculatePasswordScoreJS(this js.Value, args []js.Value) interface{} {
 	}
 
 	password := args[0].String()
-	entropy := calculateTrueEntropy(password)
-	score := calculateStrengthScore(entropy)
-	level := GetStrengthLevel(entropy)
+	result := ValidateAccountPassword(password)
+
+	var level string
+	switch result.StrengthScore {
+	case 0:
+		level = "Very Weak"
+	case 1:
+		level = "Weak"
+	case 2:
+		level = "Fair"
+	case 3:
+		level = "Good"
+	case 4:
+		level = "Excellent"
+	default:
+		level = "Unknown"
+	}
 
 	return map[string]interface{}{
-		"entropy": entropy,
-		"score":   score,
+		"entropy": result.Entropy,
+		"score":   result.StrengthScore,
 		"level":   level,
 	}
 }
@@ -905,6 +919,96 @@ func RegisterAllWASMFunctions() {
 	js.Global().Set("encryptFileMultiKeyWithSecureSession", js.FuncOf(encryptFileMultiKeyWithSecureSessionJS))
 	js.Global().Set("decryptFileMultiKeyWithSecureSession", js.FuncOf(decryptFileMultiKeyWithSecureSessionJS))
 	js.Global().Set("addKeyToEncryptedFileWithSecureSession", js.FuncOf(addKeyToEncryptedFileWithSecureSessionJS))
+
+	// Phase 5F: Enhanced password validation WASM exports
+	js.Global().Set("validatePasswordEntropyWASM", js.FuncOf(validatePasswordEntropyWASM))
+	js.Global().Set("validateAccountPasswordWASM", js.FuncOf(validateAccountPasswordWASM))
+	js.Global().Set("validateSharePasswordWASM", js.FuncOf(validateSharePasswordWASM))
+	js.Global().Set("validateCustomPasswordWASM", js.FuncOf(validateCustomPasswordWASM))
+}
+
+// Phase 5F: WASM exports for enhanced password validation
+
+// validatePasswordEntropyWASM provides client-side password entropy validation
+func validatePasswordEntropyWASM(this js.Value, inputs []js.Value) interface{} {
+	if len(inputs) < 2 {
+		return map[string]interface{}{
+			"error": "Password and minimum entropy required",
+		}
+	}
+
+	password := inputs[0].String()
+	minEntropy := inputs[1].Float()
+
+	result := ValidatePasswordEntropy(password, minEntropy)
+
+	return map[string]interface{}{
+		"entropy":            result.Entropy,
+		"strength_score":     result.StrengthScore,
+		"feedback":           result.Feedback,
+		"meets_requirements": result.MeetsRequirement,
+		"pattern_penalties":  result.PatternPenalties,
+	}
+}
+
+// validateAccountPasswordWASM validates account passwords with 60+ bit entropy
+func validateAccountPasswordWASM(this js.Value, inputs []js.Value) interface{} {
+	if len(inputs) < 1 {
+		return map[string]interface{}{
+			"error": "Password required for validation",
+		}
+	}
+
+	password := inputs[0].String()
+	result := ValidateAccountPassword(password)
+
+	return map[string]interface{}{
+		"entropy":            result.Entropy,
+		"strength_score":     result.StrengthScore,
+		"feedback":           result.Feedback,
+		"meets_requirements": result.MeetsRequirement,
+		"pattern_penalties":  result.PatternPenalties,
+	}
+}
+
+// validateSharePasswordWASM validates share passwords with 60+ bit entropy
+func validateSharePasswordWASM(this js.Value, inputs []js.Value) interface{} {
+	if len(inputs) < 1 {
+		return map[string]interface{}{
+			"error": "Password required for validation",
+		}
+	}
+
+	password := inputs[0].String()
+	result := ValidateSharePassword(password)
+
+	return map[string]interface{}{
+		"entropy":            result.Entropy,
+		"strength_score":     result.StrengthScore,
+		"feedback":           result.Feedback,
+		"meets_requirements": result.MeetsRequirement,
+		"pattern_penalties":  result.PatternPenalties,
+	}
+}
+
+// validateCustomPasswordWASM validates custom passwords with 60+ bit entropy
+func validateCustomPasswordWASM(this js.Value, inputs []js.Value) interface{} {
+	if len(inputs) < 1 {
+		return map[string]interface{}{
+			"error": "Password required for validation",
+		}
+	}
+
+	password := inputs[0].String()
+	result := ValidateCustomPassword(password)
+
+	return map[string]interface{}{
+		"entropy":            result.Entropy,
+		"strength_score":     result.StrengthScore,
+		"feedback":           result.Feedback,
+		"meets_requirements": result.MeetsRequirement,
+		"pattern_penalties":  result.PatternPenalties,
+	}
 }
 
 // encryptFileMultiKeyWithSecureSessionJS encrypts file with multi-key using secure session (account password type)

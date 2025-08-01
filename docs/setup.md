@@ -358,8 +358,8 @@ curl -s http://localhost:8080/health | jq '.'
 
 3. **User Registration Test:**
    - Click "Register" on web interface
-   - Enter test credentials: `admin@test.local` / `AdminTest123!SecurePass`
-   - Verify registration success
+   - Enter test credentials: `admin@test.local` / `AdminTest123!SecurePassword2025`
+   - Verify registration success and password meets entropy requirements
 
 4. **File Operations Test:**
    - Upload a test file

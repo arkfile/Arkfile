@@ -171,6 +171,25 @@ The system generates cryptographically secure backup codes during TOTP setup. Ea
 **Integration Security:**
 TOTP secrets are encrypted using the user's OPAQUE-derived session key, ensuring that TOTP data remains cryptographically bound to the user's password. This approach prevents TOTP bypass attacks even in scenarios where database access is compromised but user passwords remain secure.
 
+### Password Validation and Security Requirements
+
+Arkfile enforces different password requirements based on the authentication context, with comprehensive entropy validation and pattern detection to ensure strong security.
+
+**Account and Custom Password Requirements:**
+- Minimum 14+ characters with 60+ bit entropy validation
+- Advanced pattern detection penalizes common weaknesses including repeating characters, sequential patterns, dictionary words, and predictable substitutions
+- Real-time validation provides immediate feedback during password creation
+- Uses OPAQUE protocol providing complete zero-knowledge authentication
+
+**Share Password Requirements:**
+- Minimum 18+ characters with 60+ bit entropy validation  
+- Same advanced pattern detection as account passwords
+- Uses Argon2id with 128MB memory requirement for anonymous access
+- Limited attack surface affecting only shared files
+
+**Entropy Calculation and Pattern Detection:**
+The system performs sophisticated analysis of password entropy that goes beyond simple character counting. Pattern penalties are applied for weak constructions such as repeated character sequences (90% penalty), common keyboard patterns like "qwerty" or sequential numbers (70% penalty), dictionary words and predictable substitutions (variable penalties), ensuring that passwords meet genuine randomness requirements rather than superficial complexity rules.
+
 ## Session Management
 
 ### JWT Token System
@@ -196,10 +215,10 @@ TOTP secrets are encrypted using the user's OPAQUE-derived session key, ensuring
 - Comprehensive rate limiting across all endpoints
 
 **Rate Limiting Features:**
-- Adaptive thresholds based on device profiles
-- Brute force attack prevention
-- Account-based and IP-based limiting (with entity ID anonymization)
-- Graduated response to violation patterns
+- Progressive penalty system with exponential backoff (30s → 60s → 2min → 4min → 8min → 15min → 30min cap)
+- Brute force attack prevention with EntityID-based privacy protection
+- Anonymous request tracking without storing IP addresses
+- Advanced pattern detection for abuse mitigation
 
 ## Infrastructure Security
 

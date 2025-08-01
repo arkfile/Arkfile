@@ -1,111 +1,96 @@
 package crypto
 
 import (
-	"fmt"
 	"math"
 	"regexp"
 	"strings"
 	"unicode"
 )
 
-// PasswordValidationResult contains validation results
+// PasswordValidationResult represents the result of password validation
 type PasswordValidationResult struct {
-	Valid       bool     `json:"valid"`
-	Entropy     float64  `json:"entropy"`
-	Message     string   `json:"message,omitempty"`
-	Suggestions []string `json:"suggestions,omitempty"`
-	Score       int      `json:"score"` // 0-4 strength score
+	Entropy          float64  `json:"entropy"`
+	StrengthScore    int      `json:"strength_score"`
+	Feedback         []string `json:"feedback"`
+	MeetsRequirement bool     `json:"meets_requirements"`
+	PatternPenalties []string `json:"pattern_penalties,omitempty"`
 }
 
-// ValidatePasswordEntropy calculates true entropy with pattern detection
-func ValidatePasswordEntropy(password string, passwordType string) PasswordValidationResult {
-	// Base requirements
-	minLength := 14
-	if passwordType == "share" {
-		minLength = 18
-	}
+// PatternPenalty represents a detected weak pattern and its entropy penalty
+type PatternPenalty struct {
+	Pattern     string  `json:"pattern"`
+	Penalty     float64 `json:"penalty"`
+	Description string  `json:"description"`
+}
 
-	if len(password) < minLength {
-		return PasswordValidationResult{
-			Valid:   false,
-			Message: fmt.Sprintf("Password must be at least %d characters", minLength),
-			Score:   0,
+// ValidatePasswordEntropy performs comprehensive password entropy validation with pattern detection
+func ValidatePasswordEntropy(password string, minEntropy float64) *PasswordValidationResult {
+	if password == "" {
+		return &PasswordValidationResult{
+			Entropy:          0,
+			StrengthScore:    0,
+			Feedback:         []string{"Password cannot be empty"},
+			MeetsRequirement: false,
 		}
 	}
 
-	// Calculate true entropy with pattern detection
-	entropy := calculateTrueEntropy(password)
-	score := calculateStrengthScore(entropy)
+	// Calculate base entropy from character set analysis
+	baseEntropy := calculateBaseEntropy(password)
 
-	if entropy < 60.0 {
-		return PasswordValidationResult{
-			Valid:       false,
-			Entropy:     entropy,
-			Message:     fmt.Sprintf("Password entropy too low (%.1f bits). Need 60+ bits.", entropy),
-			Suggestions: generateSuggestions(password, entropy),
-			Score:       score,
-		}
+	// Detect weak patterns and calculate penalties
+	penalties := detectWeakPatterns(password)
+	totalPenalty := calculateTotalPenalty(penalties)
+
+	// Apply penalties to base entropy
+	finalEntropy := math.Max(0, baseEntropy-totalPenalty)
+
+	// Generate feedback based on analysis
+	feedback := generatePasswordFeedback(password, penalties, finalEntropy, minEntropy)
+
+	// Calculate strength score (0-4 scale)
+	strengthScore := calculateStrengthScore(finalEntropy, minEntropy)
+
+	// Extract penalty descriptions for result
+	penaltyDescriptions := make([]string, len(penalties))
+	for i, p := range penalties {
+		penaltyDescriptions[i] = p.Description
 	}
 
-	return PasswordValidationResult{
-		Valid:   true,
-		Entropy: entropy,
-		Message: fmt.Sprintf("Strong password (%.1f bits entropy)", entropy),
-		Score:   score,
+	return &PasswordValidationResult{
+		Entropy:          finalEntropy,
+		StrengthScore:    strengthScore,
+		Feedback:         feedback,
+		MeetsRequirement: finalEntropy >= minEntropy,
+		PatternPenalties: penaltyDescriptions,
 	}
 }
 
-// calculateTrueEntropy computes entropy with pattern penalties
-func calculateTrueEntropy(password string) float64 {
-	baseEntropy := calculateCharsetEntropy(password)
-	penalty := 1.0
-
-	// Apply pattern detection penalties
-	if hasRepeatingChars(password, 3) {
-		penalty *= 0.1 // 90% penalty for extreme repetition (e.g., "aaa")
+// calculateBaseEntropy calculates password entropy based on character set diversity
+func calculateBaseEntropy(password string) float64 {
+	if len(password) == 0 {
+		return 0
 	}
 
-	if hasSequentialChars(password) {
-		penalty *= 0.3 // 70% penalty for sequences (e.g., "abc", "123")
-	}
-
-	if hasCommonPatterns(password) {
-		penalty *= 0.3 // 70% penalty for common patterns
-	}
-
-	if hasDictionaryWords(password) {
-		penalty *= 0.3 // 70% penalty for dictionary words
-	}
-
-	if hasKeyboardPatterns(password) {
-		penalty *= 0.5 // 50% penalty for keyboard patterns (e.g., "qwerty")
-	}
-
-	return baseEntropy * penalty
-}
-
-// calculateCharsetEntropy calculates base entropy from character set analysis
-func calculateCharsetEntropy(password string) float64 {
-	charsetSize := 0
-
-	// Determine character set size based on actual characters used
+	// Analyze character sets used
+	var charsetSize int
 	hasLower := false
 	hasUpper := false
 	hasDigit := false
 	hasSpecial := false
 
-	for _, char := range password {
-		if unicode.IsLower(char) {
+	for _, r := range password {
+		if unicode.IsLower(r) {
 			hasLower = true
-		} else if unicode.IsUpper(char) {
+		} else if unicode.IsUpper(r) {
 			hasUpper = true
-		} else if unicode.IsDigit(char) {
+		} else if unicode.IsDigit(r) {
 			hasDigit = true
 		} else {
 			hasSpecial = true
 		}
 	}
 
+	// Calculate charset size
 	if hasLower {
 		charsetSize += 26
 	}
@@ -116,181 +101,274 @@ func calculateCharsetEntropy(password string) float64 {
 		charsetSize += 10
 	}
 	if hasSpecial {
-		charsetSize += 32 // Estimate for common special characters
+		charsetSize += 32 // Approximate number of common special characters
 	}
 
 	if charsetSize == 0 {
 		return 0
 	}
 
-	// Base entropy: log2(charset^length)
+	// Calculate entropy: log2(charset^length)
 	return float64(len(password)) * math.Log2(float64(charsetSize))
 }
 
-// hasRepeatingChars detects repeated character sequences
-func hasRepeatingChars(password string, minRepeats int) bool {
-	if len(password) < minRepeats {
-		return false
+// detectWeakPatterns identifies common weak password patterns
+func detectWeakPatterns(password string) []PatternPenalty {
+	var penalties []PatternPenalty
+	lower := strings.ToLower(password)
+
+	// Pattern 1: Repeating characters (90% penalty)
+	if penalty := detectRepeatingChars(password); penalty.Penalty > 0 {
+		penalties = append(penalties, penalty)
 	}
 
-	for i := 0; i <= len(password)-minRepeats; i++ {
-		char := password[i]
-		count := 1
-
-		for j := i + 1; j < len(password) && password[j] == char; j++ {
-			count++
-		}
-
-		if count >= minRepeats {
-			return true
-		}
+	// Pattern 2: Sequential patterns (70% penalty)
+	if penalty := detectSequentialPatterns(lower); penalty.Penalty > 0 {
+		penalties = append(penalties, penalty)
 	}
 
-	return false
+	// Pattern 3: Dictionary words (70% penalty)
+	if penalty := detectDictionaryWords(lower); penalty.Penalty > 0 {
+		penalties = append(penalties, penalty)
+	}
+
+	// Pattern 4: Keyboard patterns (50% penalty)
+	if penalty := detectKeyboardPatterns(lower); penalty.Penalty > 0 {
+		penalties = append(penalties, penalty)
+	}
+
+	// Pattern 5: Common substitutions (30% penalty)
+	if penalty := detectCommonSubstitutions(lower); penalty.Penalty > 0 {
+		penalties = append(penalties, penalty)
+	}
+
+	return penalties
 }
 
-// hasSequentialChars detects sequential character patterns
-func hasSequentialChars(password string) bool {
-	sequences := []string{
-		"abcdefghijklmnopqrstuvwxyz",
-		"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-		"0123456789",
-		"9876543210",
-		"zyxwvutsrqponmlkjihgfedcba",
-		"ZYXWVUTSRQPONMLKJIHGFEDCBA",
+// detectRepeatingChars detects repeated character patterns
+func detectRepeatingChars(password string) PatternPenalty {
+	maxRepeat := 1
+	currentRepeat := 1
+
+	runes := []rune(password)
+	for i := 1; i < len(runes); i++ {
+		if runes[i] == runes[i-1] {
+			currentRepeat++
+			if currentRepeat > maxRepeat {
+				maxRepeat = currentRepeat
+			}
+		} else {
+			currentRepeat = 1
+		}
 	}
 
-	lowerPassword := strings.ToLower(password)
+	if maxRepeat >= 3 {
+		penalty := 0.9 // 90% penalty for significant repetition
+		return PatternPenalty{
+			Pattern:     "repeating_chars",
+			Penalty:     penalty * calculateBaseEntropy(password),
+			Description: "Contains repeated characters",
+		}
+	}
+
+	return PatternPenalty{}
+}
+
+// detectSequentialPatterns detects sequential character patterns
+func detectSequentialPatterns(password string) PatternPenalty {
+	sequences := []string{
+		"abc", "bcd", "cde", "def", "efg", "fgh", "ghi", "hij", "ijk", "jkl", "klm", "lmn", "mno", "nop", "opq", "pqr", "qrs", "rst", "stu", "tuv", "uvw", "vwx", "wxy", "xyz",
+		"123", "234", "345", "456", "567", "678", "789", "890",
+		"qwe", "wer", "ert", "rty", "tyu", "yui", "uio", "iop", "asd", "sdf", "dfg", "fgh", "ghj", "hjk", "jkl", "zxc", "xcv", "cvb", "vbn", "bnm",
+	}
 
 	for _, seq := range sequences {
-		for i := 0; i <= len(seq)-3; i++ {
-			if strings.Contains(lowerPassword, seq[i:i+3]) {
-				return true
+		if strings.Contains(password, seq) || strings.Contains(password, reverse(seq)) {
+			penalty := 0.7 // 70% penalty for sequential patterns
+			return PatternPenalty{
+				Pattern:     "sequential",
+				Penalty:     penalty * calculateBaseEntropy(password),
+				Description: "Contains sequential patterns",
 			}
 		}
 	}
 
-	return false
+	return PatternPenalty{}
 }
 
-// hasCommonPatterns detects common password patterns
-func hasCommonPatterns(password string) bool {
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?i)password`),
-		regexp.MustCompile(`(?i)admin`),
-		regexp.MustCompile(`(?i)login`),
-		regexp.MustCompile(`(?i)user`),
-		regexp.MustCompile(`\d{4}`),                                                 // 4 consecutive digits (years, etc.)
-		regexp.MustCompile(`(?i)(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)`), // Months
-		regexp.MustCompile(`(?i)(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)`), // Days
-	}
-
-	for _, pattern := range patterns {
-		if pattern.MatchString(password) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// hasDictionaryWords detects common dictionary words
-func hasDictionaryWords(password string) bool {
-	// Common weak passwords and dictionary words
+// detectDictionaryWords detects common dictionary words
+func detectDictionaryWords(password string) PatternPenalty {
 	commonWords := []string{
-		"password", "admin", "user", "login", "welcome", "hello", "world",
-		"test", "demo", "sample", "example", "default", "guest", "public",
-		"private", "secret", "key", "pass", "word", "code", "access",
-		"security", "system", "computer", "internet", "email", "website",
-		"server", "database", "network", "wireless", "router", "modem",
-		"love", "family", "friend", "home", "work", "school", "office",
-		"music", "movie", "book", "game", "sport", "food", "travel",
+		"password", "admin", "user", "login", "welcome", "hello", "world", "test", "demo", "sample",
+		"january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
+		"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+		"love", "hate", "good", "bad", "nice", "cool", "awesome", "great", "best", "worst",
 	}
-
-	lowerPassword := strings.ToLower(password)
 
 	for _, word := range commonWords {
-		if strings.Contains(lowerPassword, word) {
-			return true
+		if strings.Contains(password, word) {
+			penalty := 0.7 // 70% penalty for dictionary words
+			return PatternPenalty{
+				Pattern:     "dictionary",
+				Penalty:     penalty * calculateBaseEntropy(password),
+				Description: "Contains common dictionary words",
+			}
 		}
 	}
 
-	return false
+	return PatternPenalty{}
 }
 
-// hasKeyboardPatterns detects keyboard layout patterns
-func hasKeyboardPatterns(password string) bool {
+// detectKeyboardPatterns detects common keyboard patterns
+func detectKeyboardPatterns(password string) PatternPenalty {
 	patterns := []string{
-		"qwerty", "qwertyuiop", "asdfgh", "asdfghjkl", "zxcvbn", "zxcvbnm",
-		"123456", "1234567890", "098765", "0987654321",
-		"!@#$%^", "!@#$%^&*()",
+		"qwerty", "asdf", "zxcv", "1234", "abcd",
+		"qwertyuiop", "asdfghjkl", "zxcvbnm",
 	}
-
-	lowerPassword := strings.ToLower(password)
 
 	for _, pattern := range patterns {
-		if strings.Contains(lowerPassword, pattern) {
-			return true
+		if strings.Contains(password, pattern) || strings.Contains(password, reverse(pattern)) {
+			penalty := 0.5 // 50% penalty for keyboard patterns
+			return PatternPenalty{
+				Pattern:     "keyboard",
+				Penalty:     penalty * calculateBaseEntropy(password),
+				Description: "Contains keyboard patterns",
+			}
 		}
 	}
 
-	return false
+	return PatternPenalty{}
 }
 
-// calculateStrengthScore converts entropy to 0-4 strength score
-func calculateStrengthScore(entropy float64) int {
-	if entropy < 30 {
-		return 0 // Very Weak
-	} else if entropy < 50 {
+// detectCommonSubstitutions detects l33t speak substitutions
+func detectCommonSubstitutions(password string) PatternPenalty {
+	// Check for common substitutions that don't add real entropy
+	substitutions := map[string]string{
+		"@": "a", "3": "e", "1": "i", "0": "o", "5": "s", "7": "t", "4": "a",
+	}
+
+	hasSubstitutions := false
+	for sub := range substitutions {
+		if strings.Contains(password, sub) {
+			hasSubstitutions = true
+			break
+		}
+	}
+
+	if hasSubstitutions {
+		// Check if it's likely l33t speak (has both letters and number/symbol substitutions)
+		hasLetters := regexp.MustCompile(`[a-zA-Z]`).MatchString(password)
+		if hasLetters {
+			penalty := 0.3 // 30% penalty for predictable substitutions
+			return PatternPenalty{
+				Pattern:     "substitution",
+				Penalty:     penalty * calculateBaseEntropy(password),
+				Description: "Contains predictable character substitutions",
+			}
+		}
+	}
+
+	return PatternPenalty{}
+}
+
+// calculateTotalPenalty sums up all pattern penalties
+func calculateTotalPenalty(penalties []PatternPenalty) float64 {
+	total := 0.0
+	for _, p := range penalties {
+		total += p.Penalty
+	}
+	return total
+}
+
+// generatePasswordFeedback creates user-friendly feedback
+func generatePasswordFeedback(password string, penalties []PatternPenalty, entropy, minEntropy float64) []string {
+	var feedback []string
+
+	// Length feedback
+	if len(password) < 14 {
+		feedback = append(feedback, "Consider using 14+ characters for better security")
+	}
+
+	// Entropy feedback
+	if entropy < minEntropy {
+		feedback = append(feedback, "Password entropy is too low - add more varied characters")
+	}
+
+	// Character variety feedback
+	hasLower := regexp.MustCompile(`[a-z]`).MatchString(password)
+	hasUpper := regexp.MustCompile(`[A-Z]`).MatchString(password)
+	hasDigit := regexp.MustCompile(`[0-9]`).MatchString(password)
+	hasSpecial := regexp.MustCompile(`[^a-zA-Z0-9]`).MatchString(password)
+
+	if !hasLower || !hasUpper {
+		feedback = append(feedback, "Mix uppercase and lowercase letters")
+	}
+	if !hasDigit {
+		feedback = append(feedback, "Include numbers")
+	}
+	if !hasSpecial {
+		feedback = append(feedback, "Include special characters")
+	}
+
+	// Pattern-specific feedback
+	for _, penalty := range penalties {
+		switch penalty.Pattern {
+		case "repeating_chars":
+			feedback = append(feedback, "Avoid repeated characters")
+		case "sequential":
+			feedback = append(feedback, "Avoid sequential patterns like 'abc' or '123'")
+		case "dictionary":
+			feedback = append(feedback, "Avoid common words")
+		case "keyboard":
+			feedback = append(feedback, "Avoid keyboard patterns like 'qwerty'")
+		case "substitution":
+			feedback = append(feedback, "Simple character substitutions don't add much security")
+		}
+	}
+
+	// Positive feedback for strong passwords
+	if entropy >= minEntropy && len(feedback) == 0 {
+		feedback = append(feedback, "Strong password!")
+	}
+
+	return feedback
+}
+
+// calculateStrengthScore converts entropy to a 0-4 strength score
+func calculateStrengthScore(entropy, minEntropy float64) int {
+	if entropy < minEntropy*0.5 {
+		return 0 // Very weak
+	} else if entropy < minEntropy*0.75 {
 		return 1 // Weak
-	} else if entropy < 60 {
+	} else if entropy < minEntropy {
 		return 2 // Fair
-	} else if entropy < 80 {
+	} else if entropy < minEntropy*1.5 {
 		return 3 // Good
 	} else {
 		return 4 // Excellent
 	}
 }
 
-// generateSuggestions provides improvement suggestions based on password analysis
-func generateSuggestions(password string, entropy float64) []string {
-	suggestions := []string{}
-
-	if hasRepeatingChars(password, 3) {
-		suggestions = append(suggestions, "Avoid repeating the same character multiple times")
+// reverse reverses a string
+func reverse(s string) string {
+	runes := []rune(s)
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
 	}
-
-	if hasSequentialChars(password) {
-		suggestions = append(suggestions, "Avoid sequential characters like 'abc' or '123'")
-	}
-
-	if hasCommonPatterns(password) {
-		suggestions = append(suggestions, "Avoid common words and patterns")
-	}
-
-	if hasDictionaryWords(password) {
-		suggestions = append(suggestions, "Use less predictable words or combine multiple unrelated words")
-	}
-
-	if hasKeyboardPatterns(password) {
-		suggestions = append(suggestions, "Avoid keyboard patterns like 'qwerty' or '123456'")
-	}
-
-	if entropy < 60 {
-		suggestions = append(suggestions, "Consider using a longer password or more character variety")
-		suggestions = append(suggestions, "Mix uppercase, lowercase, numbers, and special characters")
-	}
-
-	if len(suggestions) == 0 {
-		suggestions = append(suggestions, "Consider adding more length or character variety for even better security")
-	}
-
-	return suggestions
+	return string(runes)
 }
 
-// GetStrengthLevel returns human-readable strength level
-func GetStrengthLevel(entropy float64) string {
-	score := calculateStrengthScore(entropy)
-	levels := []string{"Very Weak", "Weak", "Fair", "Good", "Excellent"}
-	return levels[score]
+// ValidateAccountPassword validates account passwords with 60+ bit entropy requirement
+func ValidateAccountPassword(password string) *PasswordValidationResult {
+	return ValidatePasswordEntropy(password, 60.0)
+}
+
+// ValidateSharePassword validates share passwords with 60+ bit entropy requirement
+func ValidateSharePassword(password string) *PasswordValidationResult {
+	return ValidatePasswordEntropy(password, 60.0)
+}
+
+// ValidateCustomPassword validates custom passwords with 60+ bit entropy requirement
+func ValidateCustomPassword(password string) *PasswordValidationResult {
+	return ValidatePasswordEntropy(password, 60.0)
 }

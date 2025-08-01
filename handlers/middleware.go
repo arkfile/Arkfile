@@ -307,6 +307,81 @@ func RateLimitMiddleware(endpointConfig config.EndpointConfig) echo.MiddlewareFu
 	}
 }
 
+// CSPMiddleware adds Content Security Policy headers with WASM support
+func CSPMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// CSP policy with WASM support and strict security
+		csp := "default-src 'self'; " +
+			"script-src 'self' 'wasm-unsafe-eval'; " + // Allow WASM execution
+			"style-src 'self'; " +
+			"img-src 'self' data:; " +
+			"connect-src 'self'; " +
+			"font-src 'self'; " +
+			"object-src 'none'; " +
+			"base-uri 'self'; " +
+			"form-action 'self'; " +
+			"frame-ancestors 'none'; " +
+			"upgrade-insecure-requests"
+
+		c.Response().Header().Set("Content-Security-Policy", csp)
+
+		// Additional security headers
+		c.Response().Header().Set("X-Content-Type-Options", "nosniff")
+		c.Response().Header().Set("X-Frame-Options", "DENY")
+		c.Response().Header().Set("X-XSS-Protection", "1; mode=block")
+		c.Response().Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		return next(c)
+	}
+}
+
+// TimingProtectionMiddleware enforces 1-second minimum response time for anonymous endpoints
+func TimingProtectionMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Only apply to share access endpoints (anonymous access)
+		path := c.Request().URL.Path
+		if !requiresTimingProtection(path) {
+			return next(c)
+		}
+
+		startTime := time.Now()
+
+		// Process the request
+		err := next(c)
+
+		// Calculate elapsed time
+		elapsed := time.Since(startTime)
+		minDelay := 1 * time.Second // 1-second minimum for good UX + security balance
+
+		// If response was faster than minimum, add delay
+		if elapsed < minDelay {
+			remainingDelay := minDelay - elapsed
+			time.Sleep(remainingDelay)
+
+			logging.InfoLogger.Printf("Timing protection applied: %v delay added to %s",
+				remainingDelay, path)
+		}
+
+		return err
+	}
+}
+
+// requiresTimingProtection checks if an endpoint requires timing protection
+func requiresTimingProtection(path string) bool {
+	protectedEndpoints := []string{
+		"/api/share/", // Share password authentication
+		"/shared/",    // Share page access
+	}
+
+	for _, endpoint := range protectedEndpoints {
+		if len(path) >= len(endpoint) && path[:len(endpoint)] == endpoint {
+			return true
+		}
+	}
+
+	return false
+}
+
 // TLSVersionCheck middleware adds TLS version information to response headers
 // and logs TLS version usage for analytics
 func TLSVersionCheck(next echo.HandlerFunc) echo.HandlerFunc {

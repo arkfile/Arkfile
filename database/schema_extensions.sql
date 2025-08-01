@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     padded_size BIGINT,      -- Size after padding
     status TEXT NOT NULL DEFAULT 'in_progress',
     multi_key BOOLEAN DEFAULT FALSE,
+    -- Phase 1: Chunked Upload Envelope Support
+    envelope_data BLOB,      -- Crypto envelope [version][keyType]
+    envelope_version TINYINT, -- Version byte from envelope
+    envelope_key_type TINYINT, -- Key type byte from envelope
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,

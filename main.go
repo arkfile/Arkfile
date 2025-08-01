@@ -147,9 +147,10 @@ func main() {
 	// e.Pre(middleware.HTTPSRedirect()) // Commented out for demo - TLS certificates need to be properly configured
 	// e.Use(handlers.TLSVersionCheck) // Apply TLS check to all routes
 
-	// Phase 5E: Rate limiting and timing protection middleware
+	// Phase 5F: Enhanced security middleware
+	e.Use(handlers.CSPMiddleware)
 	e.Use(handlers.ShareRateLimitMiddleware)
-	e.Use(handlers.TimingProtectionMiddleware(2 * time.Second))
+	e.Use(handlers.TimingProtectionMiddleware)
 
 	// Additional middleware
 	e.Use(middleware.Logger())

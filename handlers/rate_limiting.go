@@ -217,54 +217,6 @@ func isShareEndpoint(path string) bool {
 	return false
 }
 
-// TimingProtectionMiddleware enforces minimum response times for anonymous endpoints
-func TimingProtectionMiddleware(minDelay time.Duration) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			// Only apply to share access endpoints (anonymous access)
-			path := c.Request().URL.Path
-			if !requiresTimingProtection(path) {
-				return next(c)
-			}
-
-			startTime := time.Now()
-
-			// Process the request
-			err := next(c)
-
-			// Calculate elapsed time
-			elapsed := time.Since(startTime)
-
-			// If response was faster than minimum, add delay
-			if elapsed < minDelay {
-				remainingDelay := minDelay - elapsed
-				time.Sleep(remainingDelay)
-
-				logging.InfoLogger.Printf("Timing protection applied: %v delay added to %s",
-					remainingDelay, path)
-			}
-
-			return err
-		}
-	}
-}
-
-// requiresTimingProtection checks if an endpoint requires timing protection
-func requiresTimingProtection(path string) bool {
-	protectedEndpoints := []string{
-		"/api/share/", // Share password authentication
-		"/shared/",    // Share page access
-	}
-
-	for _, endpoint := range protectedEndpoints {
-		if len(path) >= len(endpoint) && path[:len(endpoint)] == endpoint {
-			return true
-		}
-	}
-
-	return false
-}
-
 // RateLimitShareAccess wraps share access functions with rate limiting logic
 func RateLimitShareAccess(shareID string, c echo.Context, accessFunc func() error) error {
 	entityID := logging.GetOrCreateEntityID(c)
