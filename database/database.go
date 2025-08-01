@@ -165,7 +165,7 @@ func createExtendedSchema() {
 	statements := strings.Split(string(extensionsSQL), ";")
 
 	// Execute each statement
-	for _, stmt := range statements {
+	for i, stmt := range statements {
 		// Skip empty statements
 		trimmed := strings.TrimSpace(stmt)
 		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
@@ -174,7 +174,8 @@ func createExtendedSchema() {
 
 		_, err := DB.Exec(trimmed)
 		if err != nil {
-			log.Printf("Warning: Failed to execute schema extension: %v", err)
+			log.Printf("Warning: Failed to execute schema extension statement %d: %v", i+1, err)
+			log.Printf("Failing statement: %s", trimmed)
 		}
 	}
 

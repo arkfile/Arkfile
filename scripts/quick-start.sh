@@ -287,9 +287,9 @@ if [ $attempt -eq $max_attempts ]; then
     exit 1
 fi
 
-# Set up the database schema
-echo "Setting up database schema..."
-sudo ./scripts/setup/06-setup-database.sh
+# Set up the database schema using the improved setup script
+echo "Setting up database schema with improved script..."
+sudo ./scripts/setup/06-setup-database-improved.sh
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ Database setup failed${NC}"
     exit 1

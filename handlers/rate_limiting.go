@@ -210,6 +210,12 @@ func ShareRateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		if !allowed {
+			// IMPORTANT: Record this as a failed attempt since they're hitting rate limit
+			// This ensures penalty escalation continues working
+			if recordErr := recordFailedAttempt(shareID, entityID); recordErr != nil {
+				logging.ErrorLogger.Printf("Failed to record rate limit violation: %v", recordErr)
+			}
+
 			logging.InfoLogger.Printf("Rate limit exceeded for share %s, entity %s: %v remaining",
 				shareID, entityID, delay)
 

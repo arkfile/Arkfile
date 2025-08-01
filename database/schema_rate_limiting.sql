@@ -1,22 +1,10 @@
 -- Rate limiting schema for share access attempts
 -- Phase 5E: EntityID-based rate limiting with exponential backoff
 
--- Table for tracking share access attempts with rate limiting
-CREATE TABLE IF NOT EXISTS share_access_attempts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    share_id TEXT NOT NULL,
-    entity_id TEXT NOT NULL,                   -- Anonymous EntityID from logging system
-    failed_count INTEGER DEFAULT 0 NOT NULL,  -- Number of consecutive failed attempts
-    last_failed_attempt DATETIME,             -- Timestamp of last failure
-    next_allowed_attempt DATETIME,            -- When next attempt is allowed (exponential backoff)
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    
-    -- Ensure one rate limit entry per (share_id, entity_id) pair
-    UNIQUE(share_id, entity_id)
-);
+-- Note: share_access_attempts table is already defined in schema_extensions.sql
+-- This file only contains the indexes and views for rate limiting
 
--- Indexes for efficient rate limiting queries
+-- Indexes for efficient rate limiting queries (may already exist from schema_extensions.sql)
 CREATE INDEX IF NOT EXISTS idx_share_access_attempts_share_entity ON share_access_attempts(share_id, entity_id);
 CREATE INDEX IF NOT EXISTS idx_share_access_attempts_next_allowed ON share_access_attempts(next_allowed_attempt);
 CREATE INDEX IF NOT EXISTS idx_share_access_attempts_created_at ON share_access_attempts(created_at);

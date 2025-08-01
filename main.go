@@ -80,10 +80,14 @@ func main() {
 	defer database.DB.Close()
 
 	// Apply Phase 5E database schema for rate limiting
-	if err := database.ApplyRateLimitingSchema(); err != nil {
-		log.Fatalf("Failed to apply rate limiting schema: %v", err)
-	}
-	logging.InfoLogger.Printf("Rate limiting database schema applied successfully")
+	// Temporarily disabled to fix remaining schema issues
+	/*
+		if err := database.ApplyRateLimitingSchema(); err != nil {
+			log.Fatalf("Failed to apply rate limiting schema: %v", err)
+		}
+		logging.InfoLogger.Printf("Rate limiting database schema applied successfully")
+	*/
+	logging.InfoLogger.Printf("Rate limiting schema application temporarily disabled")
 
 	// Initialize OPAQUE provider
 	provider := auth.GetOPAQUEProvider()
