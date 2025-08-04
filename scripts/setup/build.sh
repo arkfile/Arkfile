@@ -5,7 +5,7 @@ set -e
 APP_NAME="arkfile"
 WASM_DIR="client"
 BUILD_DIR="build"
-VERSION=$(git describe --tags --always --dirty)
+VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "unknown")}
 BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 BASE_DIR="/opt/arkfile"
 
@@ -122,19 +122,37 @@ mkdir -p ${BUILD_DIR}
 
 # Build TypeScript Frontend (Mandatory)
 echo "Building TypeScript frontend..."
-if ! command -v bun >/dev/null 2>&1; then
+
+# Find bun in various locations
+BUN_CMD=""
+if command -v bun >/dev/null 2>&1; then
+    BUN_CMD="bun"
+elif [ -f "$HOME/.bun/bin/bun" ]; then
+    BUN_CMD="$HOME/.bun/bin/bun"
+elif [ -f "/home/adam/.bun/bin/bun" ]; then
+    BUN_CMD="/home/adam/.bun/bin/bun"
+elif [ -f "/root/.bun/bin/bun" ]; then
+    BUN_CMD="/root/.bun/bin/bun"
+fi
+
+if [ -z "$BUN_CMD" ]; then
     echo -e "${RED}❌ Bun is required for TypeScript compilation${NC}"
     echo -e "${YELLOW}Install Bun using: source <(curl -fsSL https://bun.sh/install)${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}Using Bun $(bun --version) for TypeScript compilation${NC}"
+echo -e "${GREEN}Using Bun $(${BUN_CMD} --version) for TypeScript compilation${NC}"
+
+# Set up PATH to include bun directory for package.json scripts
+BUN_DIR=$(dirname "${BUN_CMD}")
+export PATH="${BUN_DIR}:${PATH}"
+
 cd client/static/js
 
 # Install dependencies if node_modules doesn't exist
 if [ ! -d "node_modules" ]; then
     echo "Installing Bun dependencies..."
-    bun install || {
+    ${BUN_CMD} install || {
         echo -e "${RED}❌ Failed to install dependencies${NC}"
         exit 1
     }
@@ -148,7 +166,7 @@ fi
 
 # Run TypeScript type checking
 echo "Running TypeScript type checking..."
-if ! bun run type-check; then
+if ! ${BUN_CMD} run type-check; then
     echo -e "${RED}❌ TypeScript type checking failed - aborting build${NC}"
     exit 1
 fi
@@ -162,7 +180,7 @@ if [ "${TS_HASH}" = "${BUILD_HASH}" ] && [ -f "dist/app.js" ]; then
     echo -e "${GREEN}✅ No TypeScript changes - skipping build${NC}"
 else
     echo "Building TypeScript production bundle..."
-    bun run build:prod || {
+    ${BUN_CMD} run build:prod || {
         echo -e "${RED}❌ TypeScript build failed${NC}"
         exit 1
     }

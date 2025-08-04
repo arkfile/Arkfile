@@ -208,52 +208,9 @@ func LogAdminActionWithTx(tx *sql.Tx, adminEmail, action, targetEmail, details s
 	return err
 }
 
-// ApplyRateLimitingSchema applies the Phase 5E rate limiting database schema
+// ApplyRateLimitingSchema is deprecated - rate limiting schema is now included in schema_extensions.sql
+// This function is kept for backwards compatibility but does nothing
 func ApplyRateLimitingSchema() error {
-	// Check if rate limiting schema file exists - try multiple locations
-	possiblePaths := []string{
-		"database/schema_rate_limiting.sql",              // Development/source directory
-		"/opt/arkfile/database/schema_rate_limiting.sql", // Production deployment
-		"./database/schema_rate_limiting.sql",            // Current working directory
-	}
-
-	var schemaPath string
-	for _, path := range possiblePaths {
-		if _, err := os.Stat(path); err == nil {
-			schemaPath = path
-			break
-		}
-	}
-
-	if schemaPath == "" {
-		return fmt.Errorf("rate limiting schema file not found")
-	}
-
-	log.Printf("Loading rate limiting schema from: %s", schemaPath)
-
-	// Read the schema file
-	schemaSQL, err := os.ReadFile(schemaPath)
-	if err != nil {
-		return fmt.Errorf("failed to read rate limiting schema: %w", err)
-	}
-
-	// Split the file into individual statements
-	statements := strings.Split(string(schemaSQL), ";")
-
-	// Execute each statement
-	for _, stmt := range statements {
-		// Skip empty statements and comments
-		trimmed := strings.TrimSpace(stmt)
-		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
-			continue
-		}
-
-		_, err := DB.Exec(trimmed)
-		if err != nil {
-			return fmt.Errorf("failed to execute rate limiting schema statement: %w", err)
-		}
-	}
-
-	log.Println("Applied Phase 5E rate limiting database schema successfully")
+	log.Println("Rate limiting schema is now included in main schema extensions - no separate application needed")
 	return nil
 }

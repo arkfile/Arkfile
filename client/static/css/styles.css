@@ -958,3 +958,204 @@ button:hover {
         opacity: 1;
     }
 }
+
+/* Share Form Styles */
+.share-form-container {
+    margin: 1rem 0;
+    animation: slideUp 0.3s ease-out;
+}
+
+.share-form-container .card {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-left: 2rem;
+    border-left: 4px solid var(--secondary-color);
+}
+
+.share-form-container h3 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    color: var(--primary-color);
+    font-size: 1.1rem;
+}
+
+.share-form-container .form-group {
+    margin-bottom: 1rem;
+}
+
+.share-form-container label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+    color: var(--primary-color);
+}
+
+.share-form-container input[type="password"] {
+    width: 100%;
+    padding: 0.8rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+}
+
+.share-form-container input[type="password"]:focus {
+    outline: none;
+    border-color: var(--secondary-color);
+    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+}
+
+.share-form-container .password-strength {
+    margin-bottom: 0.5rem;
+}
+
+.share-form-container .strength-meter {
+    padding: 0.3rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    margin-bottom: 0.3rem;
+}
+
+.share-form-container .feedback {
+    font-size: 0.8rem;
+    color: #666;
+    font-style: italic;
+}
+
+.share-form-container small {
+    color: #666;
+    font-size: 0.85rem;
+}
+
+.share-form-container .form-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+.share-form-container .btn {
+    padding: 0.6rem 1rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: all 0.3s ease;
+}
+
+.share-form-container .btn.primary {
+    background-color: var(--secondary-color);
+    color: white;
+}
+
+.share-form-container .btn.primary:hover:not(:disabled) {
+    background-color: #2980b9;
+}
+
+.share-form-container .btn.primary:disabled {
+    background-color: #adb5bd;
+    cursor: not-allowed;
+}
+
+.share-form-container .btn.secondary {
+    background-color: #6c757d;
+    color: white;
+}
+
+.share-form-container .btn.secondary:hover {
+    background-color: #5a6268;
+}
+
+.share-form-container .success-message {
+    background-color: #d4edda;
+    border: 1px solid #c3e6cb;
+    color: #155724;
+    padding: 1rem;
+    border-radius: 4px;
+    margin-top: 1rem;
+}
+
+.share-form-container .success-message h4 {
+    margin-top: 0;
+    margin-bottom: 0.8rem;
+    color: #155724;
+}
+
+.share-form-container .error-message {
+    background-color: #f8d7da;
+    border: 1px solid #f5c6cb;
+    color: #721c24;
+    padding: 1rem;
+    border-radius: 4px;
+    margin-top: 1rem;
+}
+
+.share-form-container .share-url-group {
+    margin-bottom: 1rem;
+}
+
+.share-form-container .share-url-group label {
+    margin-bottom: 0.3rem;
+    font-weight: 600;
+}
+
+.share-form-container .url-copy-container {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.share-form-container .url-copy-container input {
+    flex: 1;
+    font-family: monospace;
+    font-size: 0.9rem;
+    background-color: white;
+    border: 1px solid #ced4da;
+    margin-bottom: 0;
+}
+
+.share-form-container .url-copy-container button {
+    background-color: var(--success-color);
+    color: white;
+    border: none;
+    padding: 0.6rem 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    transition: background-color 0.3s ease;
+}
+
+.share-form-container .url-copy-container button:hover {
+    background-color: #219a52;
+}
+
+.share-form-container #share-progress {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--primary-color);
+    font-size: 0.9rem;
+    margin-top: 1rem;
+}
+
+.share-form-container #share-progress .progress-bar {
+    width: 100px;
+    height: 4px;
+    background-color: #e0e0e0;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.share-form-container #share-progress .progress-bar-fill {
+    height: 100%;
+    background-color: var(--secondary-color);
+    border-radius: 2px;
+    animation: progress-fill 2s ease-in-out infinite;
+}
+
+@keyframes progress-fill {
+    0% { width: 0%; }
+    50% { width: 100%; }
+    100% { width: 0%; }
+}

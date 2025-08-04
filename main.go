@@ -139,12 +139,12 @@ func main() {
 	// Basic security middleware first
 	e.Use(middleware.Recover())
 	e.Use(middleware.SecureWithConfig(middleware.SecureConfig{
-		XSSProtection:         "1; mode=block",
-		ContentTypeNosniff:    "nosniff",
-		XFrameOptions:         "SAMEORIGIN",
-		HSTSMaxAge:            63072000, // 2 years
-		HSTSPreloadEnabled:    true,
-		ContentSecurityPolicy: "default-src 'self' 'unsafe-inline' 'unsafe-eval'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';",
+		XSSProtection:      "1; mode=block",
+		ContentTypeNosniff: "nosniff",
+		XFrameOptions:      "SAMEORIGIN",
+		HSTSMaxAge:         63072000, // 2 years
+		HSTSPreloadEnabled: true,
+		// CSP is handled by CSPMiddleware below for WASM compatibility
 	}))
 
 	// Force HTTPS and check TLS version
@@ -153,8 +153,8 @@ func main() {
 
 	// Phase 5F: Enhanced security middleware
 	e.Use(handlers.CSPMiddleware)
-	e.Use(handlers.ShareRateLimitMiddleware)
-	e.Use(handlers.TimingProtectionMiddleware)
+	// Note: ShareRateLimitMiddleware and TimingProtectionMiddleware are applied
+	// specifically to share endpoints in route_config.go, not globally
 
 	// Additional middleware
 	e.Use(middleware.Logger())

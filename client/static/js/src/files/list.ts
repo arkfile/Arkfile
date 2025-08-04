@@ -57,6 +57,7 @@ export function displayFiles(data: FilesResponse): void {
       </div>
       <div class="file-actions">
         <button onclick="downloadFile('${escapeHtml(file.filename)}', '${escapeHtml(file.passwordHint || '')}', '${escapeHtml(file.sha256sum)}', '${escapeHtml(file.passwordType)}')">Download</button>
+        <button onclick="showShareForm('${escapeHtml(file.filename)}', '${escapeHtml(file.sha256sum)}')">Share</button>
       </div>
     `;
     filesList.appendChild(fileElement);
@@ -90,10 +91,11 @@ function escapeHtml(unsafe: string): string {
     .replace(/'/g, "&#039;");
 }
 
-// Make downloadFile available globally for onclick handlers
+// Make downloadFile and showShareForm available globally for onclick handlers
 // This is a temporary solution until we convert to proper event handling
 declare global {
   function downloadFile(filename: string, hint: string, expectedHash: string, passwordType: string): void;
+  function showShareForm(filename: string, fileId: string): void;
 }
 
 // Export for global access (temporary compatibility)
@@ -101,5 +103,10 @@ if (typeof window !== 'undefined') {
   (window as any).downloadFile = async (filename: string, hint: string, expectedHash: string, passwordType: string) => {
     const { downloadFile } = await import('./download');
     downloadFile(filename, hint, expectedHash, passwordType);
+  };
+
+  (window as any).showShareForm = async (filename: string, fileId: string) => {
+    const { showShareForm } = await import('./share-integration');
+    showShareForm(filename, fileId);
   };
 }

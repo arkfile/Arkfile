@@ -9,7 +9,7 @@ StartLimitBurst=3
 [Service]
 User=arkfile
 Group=arkfile
-WorkingDirectory=/opt/arkfile/releases/current
+WorkingDirectory=/opt/arkfile
 Restart=always
 RestartSec=5s
 ExecStart=/opt/arkfile/bin/arkfile

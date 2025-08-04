@@ -78,9 +78,9 @@ else
     exit 1
 fi
 
-echo -e "${YELLOW}=== Phase 1: Creating Base Tables ===${NC}"
+echo -e "${YELLOW}=== Phase 1: Applying Base Schema ===${NC}"
 
-# Create users table (base requirement)
+# Execute the base tables creation logic similar to database.go
 execute_sql "CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE NOT NULL,
@@ -93,7 +93,6 @@ execute_sql "CREATE TABLE IF NOT EXISTS users (
     is_admin BOOLEAN NOT NULL DEFAULT false
 )" "Create users table"
 
-# Create file_metadata table
 execute_sql "CREATE TABLE IF NOT EXISTS file_metadata (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     filename TEXT UNIQUE NOT NULL,
@@ -106,106 +105,43 @@ execute_sql "CREATE TABLE IF NOT EXISTS file_metadata (
     FOREIGN KEY (owner_email) REFERENCES users(email)
 )" "Create file_metadata table"
 
-# Create file_metadata index
 execute_sql "CREATE INDEX IF NOT EXISTS idx_file_metadata_sha256sum ON file_metadata(sha256sum)" "Create file_metadata hash index"
 
-echo -e "${YELLOW}=== Phase 2: Creating Essential Share System Tables ===${NC}"
-
-# Create file_share_keys table (essential for share system)
-execute_sql "CREATE TABLE IF NOT EXISTS file_share_keys (
+execute_sql "CREATE TABLE IF NOT EXISTS user_activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    share_id TEXT NOT NULL UNIQUE,
-    file_id TEXT NOT NULL,
-    owner_email TEXT NOT NULL,
-    salt BLOB NOT NULL,
-    encrypted_fek BLOB NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at DATETIME,
-    FOREIGN KEY (owner_email) REFERENCES users(email) ON DELETE CASCADE
-)" "Create file_share_keys table"
+    user_email TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_email) REFERENCES users(email)
+)" "Create user_activity table"
 
-# Create share access attempts table (required for rate limiting)
-execute_sql "CREATE TABLE IF NOT EXISTS share_access_attempts (
+execute_sql "CREATE TABLE IF NOT EXISTS access_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    share_id TEXT NOT NULL,
-    entity_id TEXT NOT NULL,
-    failed_count INTEGER DEFAULT 0 NOT NULL,
-    last_failed_attempt DATETIME,
-    next_allowed_attempt DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    UNIQUE(share_id, entity_id)
-)" "Create share_access_attempts table"
+    user_email TEXT NOT NULL,
+    action TEXT NOT NULL,
+    filename TEXT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_email) REFERENCES users(email)
+)" "Create access_logs table"
 
-echo -e "${YELLOW}=== Phase 3: Creating Security and Logging Tables ===${NC}"
-
-# Create security events table
-execute_sql "CREATE TABLE IF NOT EXISTS security_events (
+execute_sql "CREATE TABLE IF NOT EXISTS admin_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    event_type TEXT NOT NULL,
-    entity_id TEXT NOT NULL,
-    time_window TEXT NOT NULL,
-    user_email TEXT,
-    device_profile TEXT,
-    severity TEXT NOT NULL DEFAULT 'INFO',
-    details JSON,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)" "Create security_events table"
+    admin_email TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_email TEXT NOT NULL,
+    details TEXT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (admin_email) REFERENCES users(email),
+    FOREIGN KEY (target_email) REFERENCES users(email)
+)" "Create admin_logs table"
 
-# Create rate_limit_state table
-execute_sql "CREATE TABLE IF NOT EXISTS rate_limit_state (
-    entity_id TEXT NOT NULL,
-    time_window TEXT NOT NULL,
-    endpoint TEXT NOT NULL,
-    device_profile TEXT,
-    request_count INTEGER NOT NULL DEFAULT 0,
-    last_request DATETIME NOT NULL,
-    violation_count INTEGER NOT NULL DEFAULT 0,
-    penalty_until DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (entity_id, time_window, endpoint)
-)" "Create rate_limit_state table"
+echo -e "${YELLOW}=== Phase 2: Schema Extensions Will Be Applied by Application ===${NC}"
 
-echo -e "${YELLOW}=== Phase 4: Creating Authentication Tables ===${NC}"
-
-# Create OPAQUE server keys table
-execute_sql "CREATE TABLE IF NOT EXISTS opaque_server_keys (
-    id INTEGER PRIMARY KEY,
-    server_secret_key BLOB NOT NULL,
-    server_public_key BLOB NOT NULL,
-    oprf_seed BLOB NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)" "Create opaque_server_keys table"
-
-# Create OPAQUE user data table
-execute_sql "CREATE TABLE IF NOT EXISTS opaque_user_data (
-    user_email TEXT PRIMARY KEY,
-    serialized_record BLOB NOT NULL,
-    created_at DATETIME NOT NULL,
-    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
-)" "Create opaque_user_data table"
-
-echo -e "${YELLOW}=== Phase 5: Creating Indexes for Performance ===${NC}"
-
-# Create essential indexes
-execute_sql "CREATE INDEX IF NOT EXISTS idx_file_share_keys_share_id ON file_share_keys(share_id)" "Create share_id index"
-execute_sql "CREATE INDEX IF NOT EXISTS idx_share_access_share_entity ON share_access_attempts(share_id, entity_id)" "Create share access compound index"
-execute_sql "CREATE INDEX IF NOT EXISTS idx_security_events_window ON security_events(time_window, event_type)" "Create security events index"
-execute_sql "CREATE INDEX IF NOT EXISTS idx_rate_limit_cleanup ON rate_limit_state(time_window)" "Create rate limit cleanup index"
-
-echo -e "${YELLOW}=== Phase 6: Creating Triggers and Views ===${NC}"
-
-# Create update trigger for share_access_attempts
-execute_sql "CREATE TRIGGER IF NOT EXISTS update_share_access_attempts_updated_at
-    AFTER UPDATE ON share_access_attempts
-    FOR EACH ROW
-BEGIN
-    UPDATE share_access_attempts 
-    SET updated_at = CURRENT_TIMESTAMP 
-    WHERE id = NEW.id;
-END" "Create share access update trigger"
+echo -e "${BLUE}ℹ️  Extended schema creation delegated to arkfile application${NC}"
+echo "   The arkfile application will automatically apply the complete schema"
+echo "   from database/schema_extensions.sql when it starts up."
+echo "   This includes all tables, indexes, triggers, and views."
 
 echo -e "${YELLOW}=== Phase 7: Verifying Table Creation ===${NC}"
 
@@ -226,15 +162,13 @@ verify_table() {
     fi
 }
 
+# Only verify base tables that this script creates
 TABLES_TO_VERIFY=(
     "users"
     "file_metadata"
-    "file_share_keys"
-    "share_access_attempts"
-    "security_events"
-    "rate_limit_state"
-    "opaque_server_keys"
-    "opaque_user_data"
+    "user_activity"
+    "access_logs"
+    "admin_logs"
 )
 
 ALL_TABLES_OK=true
@@ -245,9 +179,10 @@ for table in "${TABLES_TO_VERIFY[@]}"; do
 done
 
 if [ "$ALL_TABLES_OK" = true ]; then
-    echo -e "${GREEN}✅ All critical tables verified successfully!${NC}"
+    echo -e "${GREEN}✅ Base tables verified successfully!${NC}"
+    echo -e "${BLUE}ℹ️  Extended tables will be created when arkfile application starts${NC}"
 else
-    echo -e "${RED}❌ Some tables are missing. Database setup incomplete.${NC}"
+    echo -e "${RED}❌ Some base tables are missing. Database setup incomplete.${NC}"
     exit 1
 fi
 
