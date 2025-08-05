@@ -7,20 +7,29 @@ import (
 
 // RegisterRoutes initializes all routes for the application
 func RegisterRoutes() {
-	// Explicitly serve index.html at root
+	// Explicitly serve index.html at root with HEAD support
 	Echo.GET("/", func(c echo.Context) error {
 		return c.File("client/static/index.html")
 	})
+	Echo.HEAD("/", func(c echo.Context) error {
+		return c.File("client/static/index.html")
+	})
 
-	// Static assets
+	// Static assets with HEAD support
 	Echo.Static("/js/dist", "client/static/js/dist")
 	Echo.Static("/css", "client/static/css")
 	Echo.Static("/wasm", "client/static/wasm")
 	Echo.Static("/errors", "client/static/errors")
 
-	// Individual static files needed by frontend
+	// Individual static files needed by frontend with HEAD support
 	Echo.File("/wasm_exec.js", "client/wasm_exec.js")
+	Echo.HEAD("/wasm_exec.js", func(c echo.Context) error {
+		return c.File("client/wasm_exec.js")
+	})
 	Echo.File("/main.wasm", "client/main.wasm")
+	Echo.HEAD("/main.wasm", func(c echo.Context) error {
+		return c.File("client/main.wasm")
+	})
 
 	// OPAQUE Authentication (Only) - with rate limiting protection
 	Echo.POST("/api/opaque/register", RegisterRateLimitMiddleware(OpaqueRegister))

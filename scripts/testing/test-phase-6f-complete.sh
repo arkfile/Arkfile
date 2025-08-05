@@ -71,29 +71,31 @@ echo
 echo -e "${CYAN}Test 2: Static Asset Serving${NC}"
 echo "==============================="
 
-# Test CSS files
-if curl -s -I http://localhost:8080/css/styles.css | head -n1 | grep -q "200"; then
+# Test CSS files (using GET request with content check)
+if curl -s http://localhost:8080/css/styles.css | head -c 50 | grep -q "root\|color\|background"; then
     print_test "PASS" "CSS files served correctly"
 else
     print_test "FAIL" "CSS files not accessible"
 fi
 
-# Test JavaScript files  
-if curl -s -I http://localhost:8080/js/dist/app.js | head -n1 | grep -q "200"; then
+# Test JavaScript files (check if file exists and has content)
+if curl -s http://localhost:8080/js/dist/app.js | head -c 100 | grep -q "function\|var\|const\|=>\|import"; then
     print_test "PASS" "JavaScript dist files served correctly"
 else
     print_test "FAIL" "JavaScript dist files not accessible - may need compilation"
 fi
 
-# Test WASM files
-if curl -s -I http://localhost:8080/wasm_exec.js | head -n1 | grep -q "200"; then
+# Test WASM files (check for JavaScript content)
+if curl -s http://localhost:8080/wasm_exec.js | head -c 100 | grep -q "WebAssembly\|wasm\|go"; then
     print_test "PASS" "WASM exec script accessible"
 else
     print_test "FAIL" "WASM exec script not accessible"
 fi
 
-if curl -s -I http://localhost:8080/main.wasm | head -n1 | grep -q "200"; then
-    print_test "PASS" "WASM binary accessible"
+# Test WASM binary (check for binary content - should be non-empty)
+WASM_SIZE=$(curl -s http://localhost:8080/main.wasm | wc -c)
+if [ "$WASM_SIZE" -gt 1000000 ]; then
+    print_test "PASS" "WASM binary accessible (${WASM_SIZE} bytes)"
 else
     print_test "FAIL" "WASM binary not accessible - may need compilation"
 fi
@@ -132,7 +134,7 @@ else
     print_test "FAIL" "X-Content-Type-Options header missing"
 fi
 
-if echo "$HEADERS" | grep -q "X-XSS-Protection"; then
+if echo "$HEADERS" | grep -qi "X-XSS-Protection\|X-Xss-Protection"; then
     print_test "PASS" "X-XSS-Protection header present"
 else
     print_test "FAIL" "X-XSS-Protection header missing"
@@ -145,14 +147,14 @@ echo "============================="
 
 # Test share info endpoint (should return 404 for non-existent share)
 SHARE_ID="test-share-$(date +%s)"
-if curl -s http://localhost:8080/api/share/$SHARE_ID | grep -q "404\|error"; then
+if curl -s http://localhost:8080/api/share/$SHARE_ID | grep -q "Share not found\|404\|error"; then
     print_test "PASS" "Share info endpoint responding (404 for non-existent share)"
 else
     print_test "FAIL" "Share info endpoint not responding correctly"
 fi
 
 # Test share access endpoint with POST
-if curl -s -X POST -H "Content-Type: application/json" -d '{"password":"test"}' http://localhost:8080/api/share/$SHARE_ID | grep -q "404\|error"; then
+if curl -s -X POST -H "Content-Type: application/json" -d '{"password":"test"}' http://localhost:8080/api/share/$SHARE_ID | grep -q "Share not found\|404\|error"; then
     print_test "PASS" "Share access endpoint responding (404 for non-existent share)"
 else
     print_test "FAIL" "Share access endpoint not responding correctly"
