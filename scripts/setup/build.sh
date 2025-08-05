@@ -196,12 +196,18 @@ echo "Building TypeScript frontend..."
 
 # Find bun in various locations
 BUN_CMD=""
+# First check if bun is in PATH
 if command -v bun >/dev/null 2>&1; then
     BUN_CMD="bun"
+# Check current user's home directory
 elif [ -f "$HOME/.bun/bin/bun" ]; then
     BUN_CMD="$HOME/.bun/bin/bun"
+# Check root's home directory (when running under sudo)
 elif [ -f "/root/.bun/bin/bun" ]; then
     BUN_CMD="/root/.bun/bin/bun"
+# Check if SUDO_USER is set and try their home directory
+elif [ -n "$SUDO_USER" ] && [ -f "/home/$SUDO_USER/.bun/bin/bun" ]; then
+    BUN_CMD="/home/$SUDO_USER/.bun/bin/bun"
 fi
 
 if [ -z "$BUN_CMD" ]; then
@@ -379,6 +385,21 @@ sudo chown -R arkfile:arkfile "${BASE_DIR}/database"
 echo "Copying client files to working directory..."
 sudo mkdir -p "${BASE_DIR}/client"
 sudo cp -r client/* "${BASE_DIR}/client/"
+
+# Ensure WASM binary is copied from build directory to working directory
+if [ -f "${BUILD_DIR}/${WASM_DIR}/main.wasm" ]; then
+    echo "Copying WASM binary to working directory..."
+    sudo cp "${BUILD_DIR}/${WASM_DIR}/main.wasm" "${BASE_DIR}/client/main.wasm"
+else
+    echo -e "${YELLOW}⚠️ WASM binary not found in build directory - may cause runtime issues${NC}"
+fi
+
+# Ensure wasm_exec.js is also available in working directory
+if [ -f "${BUILD_DIR}/${WASM_DIR}/wasm_exec.js" ]; then
+    echo "Copying wasm_exec.js to working directory..."
+    sudo cp "${BUILD_DIR}/${WASM_DIR}/wasm_exec.js" "${BASE_DIR}/client/wasm_exec.js"
+fi
+
 sudo chown -R arkfile:arkfile "${BASE_DIR}/client"
 
 # Clean up temporary build directory
