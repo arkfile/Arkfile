@@ -64,24 +64,94 @@ if ! /usr/local/go/bin/go mod download; then
         exit 1
     fi
 fi
-echo -e "${GREEN}✅ Go dependencies resolved${NC}"
+
+# Smart vendor directory sync - only when dependencies actually change
+echo -e "${YELLOW}Checking vendor directory consistency...${NC}"
+VENDOR_CACHE=".vendor_cache"
+CURRENT_HASH=""
+CACHED_HASH=""
+
+if [ -f "go.sum" ]; then
+    CURRENT_HASH=$(sha256sum go.sum | cut -d' ' -f1)
+    CACHED_HASH=$(cat "$VENDOR_CACHE" 2>/dev/null || echo "")
+fi
+
+if [ "$CURRENT_HASH" = "$CACHED_HASH" ] && [ -d "vendor" ]; then
+    echo -e "${GREEN}✅ Vendor directory matches go.sum, skipping sync (preserves compiled libraries)${NC}"
+else
+    echo -e "${YELLOW}Dependencies changed or vendor missing, syncing vendor directory...${NC}"
+    if ! /usr/local/go/bin/go mod vendor; then
+        echo -e "${YELLOW}Vendor sync failed, attempting to fix missing dependencies...${NC}"
+        # Try to get missing dependencies that might not be in go.sum
+        /usr/local/go/bin/go get -d ./...
+        if ! /usr/local/go/bin/go mod vendor; then
+            echo -e "${RED}Failed to sync vendor directory${NC}" >&2
+            exit 1
+        fi
+    fi
+    # Cache the successful sync
+    if [ -n "$CURRENT_HASH" ]; then
+        echo "$CURRENT_HASH" > "$VENDOR_CACHE"
+    fi
+    echo -e "${GREEN}✅ Vendor directory synced with dependencies${NC}"
+fi
 
 # Initialize and build C dependencies
 echo -e "${YELLOW}Initializing and building C dependencies...${NC}"
-if [ -d "vendor/stef/libopaque" ] && [ -d "vendor/stef/liboprf" ]; then
-    echo "Found libopaque and liboprf submodules..."
+
+# Check if we should skip C library building
+if [ "${SKIP_C_LIBS}" = "true" ]; then
+    echo -e "${GREEN}✅ Skipping C library rebuild (libraries already exist)${NC}"
     
-    # Use specialized build script with proper error handling and optimizations
-    echo "Building libopaque and liboprf with optimized configuration..."
-    if ! ./scripts/setup/build-libopaque.sh; then
-        echo -e "${RED}❌ Failed to build libopaque/liboprf dependencies${NC}"
-        exit 1
+    # Verify libraries still exist
+    if [ ! -f "vendor/stef/liboprf/src/liboprf.so" ] || [ ! -f "vendor/stef/libopaque/src/libopaque.so" ]; then
+        echo -e "${YELLOW}⚠️  Expected libraries missing, forcing rebuild...${NC}"
+        SKIP_C_LIBS="false"
     fi
+fi
+
+if [ "${SKIP_C_LIBS}" != "true" ]; then
+    # Smart source code detection - check for key source files instead of .git directories
+    OPAQUE_SOURCE="vendor/stef/libopaque/src/opaque.c"
+    OPRF_SOURCE="vendor/stef/liboprf/src/oprf.c"
     
-    echo -e "${GREEN}✅ C dependencies built successfully${NC}"
+    if [ -f "$OPAQUE_SOURCE" ] && [ -f "$OPRF_SOURCE" ]; then
+        echo -e "${GREEN}✅ Source code available, building libraries...${NC}"
+        
+        # Use specialized build script with proper error handling and optimizations
+        echo "Building libopaque and liboprf with optimized configuration..."
+        if ! ./scripts/setup/build-libopaque.sh; then
+            echo -e "${RED}❌ Failed to build libopaque/liboprf dependencies${NC}"
+            exit 1
+        fi
+        
+        echo -e "${GREEN}✅ C dependencies built successfully${NC}"
+    else
+        echo -e "${YELLOW}⚠️ Source code missing, checking for source directory availability...${NC}"
+        echo "Missing files: $OPAQUE_SOURCE or $OPRF_SOURCE"
+        
+        # Initialize git submodules
+        if ! git submodule update --init --recursive; then
+            echo -e "${RED}❌ Failed to initialize git submodules${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✅ Git submodules initialized${NC}"
+        
+        # Verify source files are now available
+        if [ -f "$OPAQUE_SOURCE" ] && [ -f "$OPRF_SOURCE" ]; then
+            echo "Building libopaque and liboprf after source setup..."
+            if ! ./scripts/setup/build-libopaque.sh; then
+                echo -e "${RED}❌ Failed to build libopaque/liboprf dependencies${NC}"
+                exit 1
+            fi
+            echo -e "${GREEN}✅ C dependencies built successfully${NC}"
+        else
+            echo -e "${RED}❌ Source files still missing after source setup${NC}"
+            exit 1
+        fi
+    fi
 else
-    echo -e "${RED}❌ libopaque/liboprf submodules not found. Please run 'git submodule update --init --recursive'${NC}"
-    exit 1
+    echo -e "${GREEN}✅ Using existing C dependencies${NC}"
 fi
 
 # Run user and directory setup if needed
@@ -117,8 +187,9 @@ if systemctl is-active --quiet arkfile 2>/dev/null; then
     echo -e "${GREEN}Service stopped successfully${NC}"
 fi
 
-# Create temporary build directory
+# Create build directory
 mkdir -p ${BUILD_DIR}
+echo -e "${GREEN}Building in directory: $(pwd)${NC}"
 
 # Build TypeScript Frontend (Mandatory)
 echo "Building TypeScript frontend..."
@@ -129,8 +200,6 @@ if command -v bun >/dev/null 2>&1; then
     BUN_CMD="bun"
 elif [ -f "$HOME/.bun/bin/bun" ]; then
     BUN_CMD="$HOME/.bun/bin/bun"
-elif [ -f "/home/adam/.bun/bin/bun" ]; then
-    BUN_CMD="/home/adam/.bun/bin/bun"
 elif [ -f "/root/.bun/bin/bun" ]; then
     BUN_CMD="/root/.bun/bin/bun"
 fi

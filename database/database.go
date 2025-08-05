@@ -55,131 +55,50 @@ func InitDB() {
 }
 
 func createTables() {
-	// Users table
-	userTable := `CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT UNIQUE NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        total_storage_bytes BIGINT NOT NULL DEFAULT 0,
-        storage_limit_bytes BIGINT NOT NULL DEFAULT 10737418240,
-        is_approved BOOLEAN NOT NULL DEFAULT false,
-        approved_by TEXT,
-        approved_at TIMESTAMP,
-        is_admin BOOLEAN NOT NULL DEFAULT false
-    );`
-
-	// File metadata table
-	fileMetadataTable := `CREATE TABLE IF NOT EXISTS file_metadata (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        filename TEXT UNIQUE NOT NULL,
-        owner_email TEXT NOT NULL,
-        password_hint TEXT,
-        password_type TEXT NOT NULL DEFAULT 'custom',
-        sha256sum CHAR(64) NOT NULL,
-        size_bytes BIGINT NOT NULL DEFAULT 0,
-        upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (owner_email) REFERENCES users(email)
-    );
-    
-    -- Create index for faster lookups by hash
-    CREATE INDEX IF NOT EXISTS idx_file_metadata_sha256sum ON file_metadata(sha256sum);
-    `
-
-	// User activity table
-	userActivityTable := `CREATE TABLE IF NOT EXISTS user_activity (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_email TEXT NOT NULL,
-        action TEXT NOT NULL,
-        target TEXT,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_email) REFERENCES users(email)
-    );`
-
-	// Access logs table (keep for backwards compatibility)
-	accessLogsTable := `CREATE TABLE IF NOT EXISTS access_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_email TEXT NOT NULL,
-        action TEXT NOT NULL,
-        filename TEXT,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_email) REFERENCES users(email)
-    );`
-
-	// Admin actions logs table
-	adminLogsTable := `CREATE TABLE IF NOT EXISTS admin_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        admin_email TEXT NOT NULL,
-        action TEXT NOT NULL,
-        target_email TEXT NOT NULL,
-        details TEXT,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (admin_email) REFERENCES users(email),
-        FOREIGN KEY (target_email) REFERENCES users(email)
-    );`
-
-	tables := []string{userTable, fileMetadataTable, userActivityTable, accessLogsTable, adminLogsTable}
-
-	for _, table := range tables {
-		_, err := DB.Exec(table)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-
-	// Now apply schema extensions after base tables are created
-	createExtendedSchema()
+	// Apply the complete unified schema in a single operation
+	createUnifiedSchema()
 }
 
-// createExtendedSchema reads and executes the schema extensions SQL file
-func createExtendedSchema() {
-	// Check if schema_extensions.sql exists - try multiple locations
+// createUnifiedSchema reads and executes the complete unified schema file
+func createUnifiedSchema() {
+	// Check if unified_schema.sql exists - try multiple locations
 	possiblePaths := []string{
-		"database/schema_extensions.sql",              // Development/source directory
-		"/opt/arkfile/database/schema_extensions.sql", // Production deployment
-		"./database/schema_extensions.sql",            // Current working directory
+		"database/unified_schema.sql",              // Development/source directory
+		"/opt/arkfile/database/unified_schema.sql", // Production deployment
+		"./database/unified_schema.sql",            // Current working directory
 	}
 
-	var extensionsPath string
+	var schemaPath string
 	for _, path := range possiblePaths {
 		if _, err := os.Stat(path); err == nil {
-			extensionsPath = path
+			schemaPath = path
 			break
 		}
 	}
 
-	if extensionsPath == "" {
-		log.Printf("Warning: No schema extensions file found, skipping extended schema creation")
+	if schemaPath == "" {
+		log.Fatal("Critical: unified_schema.sql file not found - cannot initialize database")
 		return
 	}
 
-	log.Printf("Loading schema extensions from: %s", extensionsPath)
+	log.Printf("Loading unified database schema from: %s", schemaPath)
 
-	// Read the file
-	extensionsSQL, err := os.ReadFile(extensionsPath)
+	// Read the complete schema file
+	schemaSQL, err := os.ReadFile(schemaPath)
 	if err != nil {
-		log.Printf("Warning: Failed to read schema extensions: %v", err)
+		log.Fatalf("Critical: Failed to read unified schema: %v", err)
 		return
 	}
 
-	// Split the file into individual statements
-	statements := strings.Split(string(extensionsSQL), ";")
-
-	// Execute each statement
-	for i, stmt := range statements {
-		// Skip empty statements
-		trimmed := strings.TrimSpace(stmt)
-		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
-			continue
-		}
-
-		_, err := DB.Exec(trimmed)
-		if err != nil {
-			log.Printf("Warning: Failed to execute schema extension statement %d: %v", i+1, err)
-			log.Printf("Failing statement: %s", trimmed)
-		}
+	// Execute the entire schema as a single operation
+	// This avoids the fragile statement-splitting approach
+	_, err = DB.Exec(string(schemaSQL))
+	if err != nil {
+		log.Fatalf("Critical: Failed to execute unified schema: %v", err)
+		return
 	}
 
-	log.Println("Applied schema extensions for chunked uploads and sharing")
+	log.Println("Successfully applied complete unified database schema")
 }
 
 // Log user actions

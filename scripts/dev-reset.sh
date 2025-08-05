@@ -5,6 +5,13 @@
 
 set -e
 
+# Check if running as root first
+if [ "$EUID" -ne 0 ]; then
+    echo -e "\033[0;31mERROR: This script must be run with sudo privileges\033[0m"
+    echo "Usage: sudo ./scripts/dev-reset.sh"
+    exit 1
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -52,12 +59,6 @@ done
 echo
 echo -e "${RED}NUKING EVERYTHING!${NC}"
 echo
-
-# Check if running as root
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}ERROR: This script must be run with sudo privileges${NC}"
-    exit 1
-fi
 
 # Function to print status messages
 print_status() {
@@ -159,33 +160,32 @@ else
 fi
 echo
 
-# Step 3: Build application directly in current directory
-echo -e "${CYAN}Step 3: Building application directly${NC}"
-echo "====================================="
+# Step 3: Build application in user directory
+echo -e "${CYAN}Step 3: Building application${NC}"
+echo "==========================="
 
 print_status "INFO" "Building application in current directory..."
 
 # Set a fallback version for development
 FALLBACK_VERSION="dev-$(date +%Y%m%d-%H%M%S)"
 
-# Build directly without user switching
-if ! bash -c "
-    export VERSION='$FALLBACK_VERSION' &&
-    ./scripts/setup/build.sh
-"; then
+# Check if C libraries already exist to skip expensive rebuild
+SKIP_C_LIBS=false
+if [ -f "vendor/stef/liboprf/src/liboprf.so" ] && [ -f "vendor/stef/libopaque/src/libopaque.so" ]; then
+    SKIP_C_LIBS=true
+    print_status "INFO" "Found existing C libraries - will skip rebuild for faster development iteration"
+fi
+
+# Build using existing build script
+export VERSION="$FALLBACK_VERSION"
+export SKIP_C_LIBS="$SKIP_C_LIBS"
+
+if ! ./scripts/setup/build.sh; then
     print_status "ERROR" "Build script failed - this is CRITICAL"
     exit 1
 fi
 
-print_status "SUCCESS" "Application build and asset compilation complete"
-
-# Copy built binary to arkfile location
-print_status "INFO" "Deploying built binary to arkfile location..."
-mkdir -p "$ARKFILE_DIR/bin"
-cp arkfile "$ARKFILE_DIR/bin/" 2>/dev/null || true
-chown "$USER:$GROUP" "$ARKFILE_DIR/bin/arkfile" 2>/dev/null || true
-chmod 755 "$ARKFILE_DIR/bin/arkfile" 2>/dev/null || true
-print_status "SUCCESS" "Binary deployed"
+print_status "SUCCESS" "Application build and deployment complete"
 echo
 
 # Step 6: Generate fresh secrets
@@ -258,6 +258,37 @@ print_status "SUCCESS" "Fresh rqlite authentication created"
 print_status "SUCCESS" "Secret generation complete"
 echo
 
+# Step 6.5: Generate cryptographic keys
+echo -e "${CYAN}Step 6.5: Generating cryptographic keys${NC}"
+echo "======================================="
+
+# Ensure key directories exist first
+print_status "INFO" "Setting up key directory structure..."
+if ! ./scripts/setup/02-setup-directories.sh; then
+    print_status "ERROR" "Directory setup failed - this is CRITICAL"
+    exit 1
+fi
+print_status "SUCCESS" "Key directories created"
+
+# Generate OPAQUE server keys
+print_status "INFO" "Generating OPAQUE server keys..."
+if ! ./scripts/setup/03-setup-opaque-keys.sh; then
+    print_status "ERROR" "OPAQUE key generation failed - this is CRITICAL"
+    exit 1
+fi
+print_status "SUCCESS" "OPAQUE server keys generated"
+
+# Generate JWT signing keys
+print_status "INFO" "Generating JWT signing keys..."
+if ! ./scripts/setup/04-setup-jwt-keys.sh; then
+    print_status "ERROR" "JWT key generation failed - this is CRITICAL"
+    exit 1
+fi
+print_status "SUCCESS" "JWT signing keys generated"
+
+print_status "SUCCESS" "Cryptographic key generation complete"
+echo
+
 # Step 7: Start services
 echo -e "${CYAN}Step 7: Starting services${NC}"
 echo "========================="
@@ -308,13 +339,10 @@ if [ $attempt -eq $max_attempts ]; then
     exit 1
 fi
 
-# Set up fresh database schema
-print_status "INFO" "Setting up database schema with improved script..."
-if ! ./scripts/setup/06-setup-database-improved.sh; then
-    print_status "ERROR" "Database schema setup FAILED - this is CRITICAL"
-    exit 1
-fi
-print_status "SUCCESS" "Database schema created successfully"
+# Database schema will be handled by the application using unified schema
+print_status "INFO" "Database schema will be created by arkfile application on startup..."
+print_status "INFO" "Using unified schema approach - no separate database setup needed"
+print_status "SUCCESS" "Database setup delegated to application"
 
 # Start Arkfile
 print_status "INFO" "Starting Arkfile application..."
@@ -387,13 +415,13 @@ echo -e "${RED}  All logs${NC}"
 echo
 echo -e "${BLUE}What was preserved:${NC}"
 echo -e "${GREEN}  Downloaded binaries (MinIO, rqlite)${NC}"
-echo -e "${GREEN}  Compiled libraries (libopaque)${NC}"
+echo -e "${GREEN}  Compiled libraries (libopaque) - CACHED for speed${NC}"
 echo -e "${GREEN}  System users and directory structure${NC}"
 echo
 echo -e "${BLUE}Build approach:${NC}"
-echo -e "${GREEN}  Clean source copy to /opt/arkfile/src/current/${NC}"
-echo -e "${GREEN}  Built by arkfile user with its own Go/bun${NC}"
-echo -e "${GREEN}  No user directory modification${NC}"
+echo -e "${GREEN}  Built directly in user directory${NC}"
+echo -e "${GREEN}  Preserves libopaque libraries for faster rebuilds${NC}"
+echo -e "${GREEN}  Uses existing Git submodules and vendor directory${NC}"
 echo
 echo -e "${BLUE}Ready for development testing!${NC}"
 echo -e "${YELLOW}Admin user: admin@dev.local${NC}"

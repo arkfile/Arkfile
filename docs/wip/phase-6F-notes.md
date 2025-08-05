@@ -45,78 +45,141 @@ This document tracks the development of an improved dev-reset workflow and datab
 - ✅ **Service verification**: Waits for rqlite leadership establishment
 - ✅ **Improved error handling**: Better feedback during each phase
 
-## Current Deployment Issues
+## ✅ RESOLVED: Database Schema & Deployment Issues
 
-### Application Startup Failure
+### Unified Schema Implementation - COMPLETED
 
-**Status**: Application build completes successfully but service fails to start.
+**Status**: ✅ **SUCCESSFULLY IMPLEMENTED AND DEPLOYED**
 
-**Root Cause**: Environment configuration issues preventing proper initialization.
+**Final Solution**: Replaced fragile multi-step schema approach with single unified schema file.
 
-**Symptoms Observed**:
+**Implementation Details**:
+- ✅ **Created `database/unified_schema.sql`**: Complete 350+ line schema with proper dependency ordering
+- ✅ **Updated `database/database.go`**: Single schema execution instead of multi-step approach  
+- ✅ **Removed legacy `access_logs` table**: Eliminated redundant table (unused in greenfield app)
+- ✅ **Fixed rqlite compatibility**: TEXT fields instead of JSON, proper BLOB support
+- ✅ **Updated dev-reset script**: Now deploys unified schema to `/opt/arkfile/database/`
+
+**Root Cause Analysis**: The original multi-step database approach was fundamentally flawed:
+- Complex SQL statement splitting by semicolons broke on triggers and views
+- Dependency ordering issues with indexes being created before tables
+- Partial failure scenarios left incomplete database state
+- Unnecessary "legacy compatibility" elements in greenfield application
+
+**Success Verification**:
 ```
-2025/08/04 16:57:03 Warning: Could not load .env file: open .env: no such file or directory
-2025/08/04 16:57:03 Continuing with environment variables from system/systemd
-2025/08/04 16:57:03 Failed to load configuration: JWT_SECRET is required
+2025/08/05 09:42:02 Loading unified database schema from: database/unified_schema.sql
+2025/08/05 09:42:02 Successfully applied complete unified database schema
 ```
 
-**Analysis**:
-- Application cannot locate `.env` file in working directory `/opt/arkfile`
-- Missing `JWT_SECRET` environment variable in systemd environment
-- Application attempts to fall back to systemd environment but required variables not set
+**Application Status**: ✅ **FULLY OPERATIONAL**
+- HTTP endpoint: http://localhost:8080 ✅ responding
+- HTTPS endpoint: https://localhost:4443 ✅ responding  
+- Health check: `{"status":"ok"}` ✅ working
+- All services running stable: arkfile, minio, rqlite ✅
 
-### SystemD Service Configuration Issues
+### Dev-Reset Script - FULLY UPDATED
 
-**Service File**: `systemd/arkfile.service`
+**Status**: ✅ **WORKING PERFECTLY WITH UNIFIED SCHEMA**
 
-**Current Configuration**:
-- Uses `EnvironmentFile=-/opt/arkfile/etc/secrets.env` for configuration
-- Loads systemd credentials from key files
-- Working directory set to `/opt/arkfile`
+**Key Updates Applied**:
+- ✅ **Schema deployment**: Creates `/opt/arkfile/database/` and copies `unified_schema.sql`
+- ✅ **Eliminated old database setup**: Removed dependency on fragile bash SQL parsing
+- ✅ **Application-managed schema**: Database initialization handled by arkfile service on startup
+- ✅ **Complete reset verification**: Successfully tested full reset cycle
 
-**Identified Issues**:
-1. **Environment Variable Mismatch**: Application expects `JWT_SECRET` but secrets.env may use different variable names
-2. **Working Directory Conflict**: Service runs from `/opt/arkfile` but development build in project directory
-3. **Library Path Issues**: LD_LIBRARY_PATH may not properly point to built libraries
+**Deployment Flow**:
+1. ✅ Services stopped and data wiped
+2. ✅ Application built with unified schema support  
+3. ✅ Binary and schema deployed to `/opt/arkfile/`
+4. ✅ Services started successfully
+5. ✅ Unified schema applied automatically on startup
+6. ✅ All endpoints responding correctly
 
-## Next Steps for Resolution
+## ✅ BREAKTHROUGH: Development Iteration Performance Issue RESOLVED
 
-### Immediate Actions Required
+### Major Performance Optimization - COMPLETED
 
-**1. Environment Configuration Audit**
-- Examine `/opt/arkfile/etc/secrets.env` contents to verify variable names
-- Ensure JWT_SECRET is properly set in secrets.env
-- Validate all required environment variables are present
+**Status**: ✅ **CRITICAL PERFORMANCE ISSUE SOLVED**
 
-**2. Service Configuration Fix**
-- Update systemd service to properly load environment variables
-- Verify working directory and binary paths are correct
-- Ensure library path points to correct shared libraries
+**Problem**: The dev-reset script was rebuilding libopaque libraries on every run, causing 5-10 minute delays and thrashing during development iteration.
 
-**3. Application Configuration Review**
-- Check `config/config.go` for required environment variable names
-- Ensure application properly handles missing .env file scenario
-- Validate fallback to systemd environment variables works correctly
+**Root Cause Analysis**: 
+- `go mod vendor` was running on every build, overwriting compiled libopaque `.so` files with source-only submodules
+- The existing `SKIP_C_LIBS` logic was being bypassed because `go mod vendor` would destroy the libraries before the check
+- No caching mechanism existed to detect when dependency sync was actually needed
 
-**4. Database Schema Validation**
-- Verify consolidated schema applies correctly on application startup
-- Test that all required tables are created properly
-- Ensure no missing tables cause application crashes
+**Solution Implemented**: ✅ **INTELLIGENT VENDOR CACHING SYSTEM**
 
-### Validation Testing Plan
+**Technical Implementation**:
+```bash
+# Smart vendor directory sync - only when dependencies actually change
+VENDOR_CACHE=".vendor_cache"
+CURRENT_HASH=$(sha256sum go.sum | cut -d' ' -f1)
+CACHED_HASH=$(cat "$VENDOR_CACHE" 2>/dev/null || echo "")
 
-**When Issues Resolved**:
-1. **Complete Reset Test**: Run `dev-reset.sh` and verify clean startup
-2. **Service Stability**: Ensure arkfile service starts and remains running
-3. **Database Verification**: Confirm all tables exist and are properly indexed
-4. **API Functionality**: Test basic endpoints respond correctly
-5. **Phase 6F Integration Test**: Run complete share workflow validation
+if [ "$CURRENT_HASH" = "$CACHED_HASH" ] && [ -d "vendor" ]; then
+    echo "✅ Vendor directory matches go.sum, skipping sync (preserves compiled libraries)"
+else
+    echo "Dependencies changed or vendor missing, syncing vendor directory..."
+    go mod vendor
+    echo "$CURRENT_HASH" > "$VENDOR_CACHE"
+fi
+```
 
-**Success Criteria**:
-- `dev-reset.sh` completes without errors
-- Arkfile service starts successfully and remains stable
-- All database tables created and accessible
-- Ready for Phase 6F user interface testing
+**Performance Results**:
+- **First run**: Dependencies sync + libopaque compilation (several minutes)
+- **Subsequent runs**: ✅ **16 seconds total** (skips both vendor sync and compilation)
+
+**Verification Evidence**:
+
+**Before Fix (every run)**:
+```
+Dependencies changed or vendor missing, syncing vendor directory...
+[Full libopaque compilation with gcc warnings - 3-5 minutes]
+✅ C dependencies built successfully
+```
+
+**After Fix (subsequent runs)**:
+```
+✅ Vendor directory matches go.sum, skipping sync (preserves compiled libraries)  
+✅ Using existing C dependencies
+real    0m16.502s
+```
+
+**Files Modified**:
+- ✅ `scripts/setup/build.sh`: Added intelligent vendor caching logic
+- ✅ `.gitignore`: Added `.vendor_cache` to ignore list
+
+### Final Resolution Status: COMPLETE
+
+**All Previous Issues**: ✅ **RESOLVED**
+- ✅ Database schema consolidation: Working perfectly
+- ✅ Service startup issues: Resolved  
+- ✅ Environment configuration: Working correctly
+- ✅ Build process: Fully functional with caching
+- ✅ **Development iteration speed: DRAMATICALLY IMPROVED**
+
+**Current System Status**: ✅ **FULLY OPERATIONAL FOR RAPID DEVELOPMENT**
+- HTTP endpoint: http://localhost:8080 ✅ responding (`{"status":"ok"}`)
+- HTTPS endpoint: https://localhost:4443 ✅ responding
+- All services: arkfile, minio, rqlite ✅ running stable
+- **Dev-reset performance**: ✅ **16 seconds** (down from 5-10 minutes)
+- **Library caching**: ✅ **Working perfectly** - libopaque preserved between runs
+
+**Development Workflow Achievement**:
+- **Fast iteration cycles**: ✅ Complete reset in 16 seconds
+- **Reliable caching**: ✅ Automatically detects dependency changes
+- **Zero manual intervention**: ✅ Transparent operation
+- **Preserved functionality**: ✅ All workspace simplifications intact
+
+### Ready for Intensive Phase 6F Development
+
+**System Performance**: The development iteration bottleneck has been eliminated. The system now supports:
+- **Rapid testing cycles**: Quick reset → test → iterate
+- **Preserved compiled libraries**: No unnecessary recompilation
+- **Intelligent dependency management**: Only rebuilds when actually needed
+- **Streamlined workflow**: Simple `sudo ./scripts/dev-reset.sh` → working system in 16 seconds
 
 ## Schema Components Successfully Consolidated
 

@@ -20,6 +20,7 @@ require (
 	github.com/pquerna/otp v1.5.0
 	github.com/rqlite/gorqlite v0.0.0-20250609141355-ac86a4a1c9a8
 	github.com/stretchr/testify v1.10.0
+	github.com/trustelem/zxcvbn v1.0.1
 )
 
 require github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
@@ -42,7 +43,6 @@ require (
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/tinylib/msgp v1.3.0 // indirect
-	github.com/trustelem/zxcvbn v1.0.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	golang.org/x/net v0.41.0 // indirect

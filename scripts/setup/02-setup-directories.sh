@@ -59,21 +59,10 @@ echo -e "${GREEN}Directory setup complete!${NC}"
 echo "Base directory: ${BASE_DIR}"
 echo "User: ${USER} (group: ${GROUP})"
 
-# Display directory structure
+# Display clean directory summary
 echo -e "${YELLOW}Directory structure created:${NC}"
-if command -v tree >/dev/null 2>&1; then
-    sudo tree -L 4 --dirsfirst ${BASE_DIR}
-else
-    echo "Install 'tree' command to see directory structure visualization"
-    echo "Main structure:"
-    echo "  ${BASE_DIR}/"
-    echo "  ├── bin/              # Application binaries"
-    echo "  ├── etc/              # Configuration files"
-    echo "  │   └── keys/         # Cryptographic keys (700 permissions)"
-    echo "  ├── var/              # Variable data"
-    echo "  │   ├── lib/          # Application data"
-    echo "  │   ├── log/          # Log files"
-    echo "  │   └── run/          # Runtime files"
-    echo "  ├── webroot/          # Static web assets"
-    echo "  └── releases/         # Deployment releases"
-fi
+echo "  ${BASE_DIR}/"
+echo "  ├── bin/              # Application binaries"
+echo "  ├── etc/keys/         # Cryptographic keys"
+echo "  ├── var/lib/          # Application data"
+echo "  └── releases/         # Deployment releases"

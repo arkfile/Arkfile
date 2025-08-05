@@ -149,6 +149,9 @@ client/static/js/.buildcache
 dist/
 .tsbuildinfo
 
+# Build cache files
+.vendor_cache
+
 # Runtime artifacts
 pid/
 *.pid
