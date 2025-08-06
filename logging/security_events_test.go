@@ -24,7 +24,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 		event_type TEXT NOT NULL,
 		entity_id TEXT,
 		time_window TEXT,
-		user_email TEXT,
+		username TEXT,
 		device_profile TEXT,
 		severity TEXT NOT NULL,
 		details TEXT,
@@ -74,7 +74,7 @@ func TestSecurityEventLogging(t *testing.T) {
 		name        string
 		eventType   SecurityEventType
 		ip          net.IP
-		userEmail   *string
+		username    *string
 		deviceType  *string
 		details     map[string]interface{}
 		expectedSev SecurityEventSeverity
@@ -83,7 +83,7 @@ func TestSecurityEventLogging(t *testing.T) {
 			name:        "OPAQUE Login Success",
 			eventType:   EventOpaqueLoginSuccess,
 			ip:          net.ParseIP("192.168.1.100"),
-			userEmail:   stringPtr("test@example.com"),
+			username:    stringPtr("testuser1"),
 			deviceType:  stringPtr("ArgonBalanced"),
 			details:     map[string]interface{}{"success": true},
 			expectedSev: SeverityInfo,
@@ -92,7 +92,7 @@ func TestSecurityEventLogging(t *testing.T) {
 			name:        "OPAQUE Login Failure",
 			eventType:   EventOpaqueLoginFailure,
 			ip:          net.ParseIP("192.168.1.101"),
-			userEmail:   stringPtr("test@example.com"),
+			username:    stringPtr("testuser2"),
 			deviceType:  stringPtr("ArgonBalanced"),
 			details:     map[string]interface{}{"success": false, "error": "invalid_credentials"},
 			expectedSev: SeverityWarning,
@@ -101,7 +101,7 @@ func TestSecurityEventLogging(t *testing.T) {
 			name:        "Rate Limit Violation",
 			eventType:   EventRateLimitViolation,
 			ip:          net.ParseIP("10.0.0.1"),
-			userEmail:   nil,
+			username:    nil,
 			deviceType:  nil,
 			details:     map[string]interface{}{"requests": 100, "limit": 50, "endpoint": "/auth/login"},
 			expectedSev: SeverityWarning,
@@ -110,7 +110,7 @@ func TestSecurityEventLogging(t *testing.T) {
 			name:        "Key Health Check",
 			eventType:   EventKeyHealthCheck,
 			ip:          nil,
-			userEmail:   nil,
+			username:    nil,
 			deviceType:  nil,
 			details:     map[string]interface{}{"component": "jwt_keys", "status": "healthy", "key_age_days": 30},
 			expectedSev: SeverityInfo,
@@ -119,7 +119,7 @@ func TestSecurityEventLogging(t *testing.T) {
 			name:        "Emergency Procedure",
 			eventType:   EventEmergencyProcedure,
 			ip:          nil,
-			userEmail:   nil,
+			username:    nil,
 			deviceType:  nil,
 			details:     map[string]interface{}{"action": "key_revocation", "reason": "suspected_compromise"},
 			expectedSev: SeverityCritical,
@@ -128,7 +128,7 @@ func TestSecurityEventLogging(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := LogSecurityEvent(tt.eventType, tt.ip, tt.userEmail, tt.deviceType, tt.details)
+			err := LogSecurityEvent(tt.eventType, tt.ip, tt.username, tt.deviceType, tt.details)
 			if err != nil {
 				t.Fatalf("Failed to log security event: %v", err)
 			}
@@ -146,14 +146,14 @@ func TestSecurityEventLogging(t *testing.T) {
 
 			// Verify event details
 			var eventType, severity, entityID, timeWindow, createdAt string
-			var userEmail, deviceProfile sql.NullString
+			var username, deviceProfile sql.NullString
 			err = db.QueryRow(`
-				SELECT event_type, severity, entity_id, time_window, user_email, device_profile, created_at 
+				SELECT event_type, severity, entity_id, time_window, username, device_profile, created_at 
 				FROM security_events 
 				WHERE event_type = ? 
 				ORDER BY created_at DESC 
 				LIMIT 1
-			`, string(tt.eventType)).Scan(&eventType, &severity, &entityID, &timeWindow, &userEmail, &deviceProfile, &createdAt)
+			`, string(tt.eventType)).Scan(&eventType, &severity, &entityID, &timeWindow, &username, &deviceProfile, &createdAt)
 
 			if err != nil {
 				t.Fatalf("Failed to query event details: %v", err)
@@ -179,10 +179,10 @@ func TestSecurityEventLogging(t *testing.T) {
 				t.Errorf("Expected non-empty time window for IP-based event")
 			}
 
-			// Verify user email
-			if tt.userEmail != nil {
-				if !userEmail.Valid || userEmail.String != *tt.userEmail {
-					t.Errorf("Expected user email %s, got %v", *tt.userEmail, userEmail)
+			// Verify username
+			if tt.username != nil {
+				if !username.Valid || username.String != *tt.username {
+					t.Errorf("Expected username %s, got %v", *tt.username, username)
 				}
 			}
 
@@ -312,7 +312,7 @@ func TestSecurityEventSensitiveDataExclusion(t *testing.T) {
 	}
 
 	// Use correct function signature
-	err = LogSecurityEvent(EventOpaqueLoginSuccess, net.ParseIP("192.168.1.1"), stringPtr("test@example.com"), nil, sensitiveDetails)
+	err = LogSecurityEvent(EventOpaqueLoginSuccess, net.ParseIP("192.168.1.1"), stringPtr("testuser"), nil, sensitiveDetails)
 	if err != nil {
 		t.Fatalf("Failed to log security event: %v", err)
 	}

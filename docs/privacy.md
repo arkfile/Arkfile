@@ -37,19 +37,33 @@ Recipients decrypt the file with this secondary key; your primary password remai
 
 Links can have expiry dates and can be revoked at any time.
 
-## 5. Minimal Metadata
+## 5. Username-Based Accounts
+
+Arkfile uses **usernames** as the primary account identifier, not email addresses.
+
+**Email addresses are optional** and are only stored if the user chooses to provide one for account recovery purposes. The system is designed to function fully without requiring any email address.
+
+This approach enhances privacy by:
+- Reducing personal information stored on servers
+- Eliminating potential email-based tracking
+- Allowing truly anonymous account creation
+- Reducing data exposure in case of server compromise
+
+## 6. Minimal Metadata
 
 The server stores only what it needs to function:
 
 | Metadata | Purpose |
 |----------|---------|
+| Username | Account identification (chosen by user, not email) |
+| Email address | Optional - only for account recovery if provided |
 | Filename & size | Display in file lists; allow progress tracking. |
 | Timestamps | Show upload date and enable cleanup tasks. |
 | Anonymised entity ID | See Logging section below. |
 
 No plaintext content, passwords, or encryption keys are stored server-side.
 
-## 6. Privacy-Preserving Logging
+## 7. Privacy-Preserving Logging
 
 Arkfile deliberately excludes client IP addresses from logs.
 
@@ -72,7 +86,7 @@ WHERE event_type = 'opaque_login_failure'
   AND timestamp > datetime('now', '-1 hour');
 ```
 
-## 7. File Size Padding
+## 8. File Size Padding
 
 To prevent attackers from identifying files by their exact size, Arkfile implements a sophisticated file size padding system that obscures the true size of uploaded files while maintaining storage efficiency.
 
@@ -85,19 +99,19 @@ The padding occurs exclusively at the storage backend level, meaning that encryp
 **Privacy Benefits:**
 This approach prevents several classes of attacks including file fingerprinting based on exact byte counts, correlation attacks across multiple uploads of the same file, and metadata inference attacks that attempt to determine file types or contents based on size patterns. The random component within each tier ensures that even identical files do not produce identical storage footprints.
 
-## 8. Storage Back-Ends
+## 9. Storage Back-Ends
 
 Arkfile supports multiple S3-compatible services (MinIO, Backblaze B2, Wasabi, Vultr).
 
 Encrypted file data is opaque to the storage provider; none of them receive decryption keys.
 
-## 9. Glossary
+## 10. Glossary
 
 - **Zero-knowledge:** The server never possesses the information needed to decrypt user data.
 - **OPAQUE:** A protocol that lets users prove they know their password without revealing it.
 - **AES-256-GCM:** An encryption mode that hides data and detects tampering in one step.
 - **HMAC:** A keyed hash that turns input (e.g., an IP address) into an irreversible digest.
-- **Entity ID:** A short, daily-rotating code derived from the user's IP; used in logs instead of raw IP or email.
+- **Entity ID:** A short, daily-rotating code derived from the user's IP; used in logs instead of raw IP or username.
 - **Ciphertext:** The scrambled output of an encryption algorithm.
 
 ---

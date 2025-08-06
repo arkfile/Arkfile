@@ -24,7 +24,7 @@ import (
 
 // TestDownloadFile_Success tests successful file download
 func TestDownloadFile_Success(t *testing.T) {
-	email := "downloader@example.com"
+	username := "downloader"
 	filename := "download-test.txt"
 	fileContent := "This is the content to be downloaded."
 	fileSize := int64(len(fileContent))
@@ -35,21 +35,21 @@ func TestDownloadFile_Success(t *testing.T) {
 	c, rec, mockDB, mockStorage := setupTestEnv(t, http.MethodGet, "/files/:filename", nil)
 	c.SetParamNames("filename")
 	c.SetParamValues(filename)
-	claims := &auth.Claims{Email: email}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// Check if user is approved - add user query
-	getUserSQL := `SELECT id, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE email = ?`
-	userRows := sqlmock.NewRows([]string{"id", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-		AddRow(1, email, time.Now(), 1000, 10000000, true, nil, nil, false)
-	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+	getUserSQL := `SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = ?`
+	userRows := sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+		AddRow(1, username, "test@example.com", time.Now(), 1000, 10000000, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
 	// Updated query to match actual handler
-	metadataSQL := "SELECT storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes FROM file_metadata WHERE filename = ?"
+	metadataSQL := "SELECT storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes FROM file_metadata WHERE filename = ?"
 	storageID := "test-storage-id-123"
-	metaRows := sqlmock.NewRows([]string{"storage_id", "owner_email", "password_hint", "password_type", "sha256sum", "size_bytes"}).
-		AddRow(storageID, email, passwordHint, passwordType, sha256sum, fileSize)
+	metaRows := sqlmock.NewRows([]string{"storage_id", "owner_username", "password_hint", "password_type", "sha256sum", "size_bytes"}).
+		AddRow(storageID, username, passwordHint, passwordType, sha256sum, fileSize)
 	mockDB.ExpectQuery(metadataSQL).WithArgs(filename).WillReturnRows(metaRows)
 
 	mockStorageObject := new(storage.MockMinioObject)
@@ -58,8 +58,8 @@ func TestDownloadFile_Success(t *testing.T) {
 	mockStorageObject.On("Close").Return(nil)
 	mockStorage.On("GetObjectWithoutPadding", mock.Anything, storageID, fileSize, mock.AnythingOfType("minio.GetObjectOptions")).Return(mockStorageObject, nil).Once()
 
-	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
-	mockDB.ExpectExec(logActionSQL).WithArgs(email, "downloaded", filename).WillReturnResult(sqlmock.NewResult(1, 1))
+	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
+	mockDB.ExpectExec(logActionSQL).WithArgs(username, "downloaded", filename).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	err := DownloadFile(c)
 	require.NoError(t, err)
@@ -82,7 +82,7 @@ func TestDownloadFile_Success(t *testing.T) {
 
 // TestDeleteFile_Success tests successful file deletion
 func TestDeleteFile_Success(t *testing.T) {
-	email := "user-delete@example.com"
+	username := "user-delete"
 	filename := "file-to-delete.txt"
 	fileSize := int64(1024)
 	initialStorage := int64(5000)
@@ -90,40 +90,40 @@ func TestDeleteFile_Success(t *testing.T) {
 	c, rec, mockDB, mockStorage := setupTestEnv(t, http.MethodDelete, "/files/:filename", nil)
 	c.SetParamNames("filename")
 	c.SetParamValues(filename)
-	claims := &auth.Claims{Email: email}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	mockDB.ExpectBegin()
 	// Updated query to match actual handler - includes storage_id
-	ownerCheckSQL := "SELECT owner_email, storage_id, size_bytes FROM file_metadata WHERE filename = ?"
+	ownerCheckSQL := "SELECT owner_username, storage_id, size_bytes FROM file_metadata WHERE filename = ?"
 	storageID := "test-storage-id-456"
-	ownerRows := sqlmock.NewRows([]string{"owner_email", "storage_id", "size_bytes"}).AddRow(email, storageID, fileSize)
+	ownerRows := sqlmock.NewRows([]string{"owner_username", "storage_id", "size_bytes"}).AddRow(username, storageID, fileSize)
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnRows(ownerRows)
 
 	deleteMetaSQL := `DELETE FROM file_metadata WHERE filename = \?`
 	mockDB.ExpectExec(deleteMetaSQL).WithArgs(filename).WillReturnResult(sqlmock.NewResult(0, 1))
 
 	getUserSQL := `
-		SELECT id, email, created_at,
+		SELECT id, username, email, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE email = ?`
+		FROM users WHERE username = ?`
 	userID := int64(1)
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "created_at",
+		"id", "username", "email", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
-	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+	}).AddRow(userID, username, "test@example.com", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
 	updateStorageSQL := `UPDATE users SET total_storage_bytes = \? WHERE id = \?`
 	expectedStorage := initialStorage - fileSize
 	mockDB.ExpectExec(updateStorageSQL).WithArgs(expectedStorage, userID).WillReturnResult(sqlmock.NewResult(0, 1))
 	mockDB.ExpectCommit()
 
-	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
-	mockDB.ExpectExec(logActionSQL).WithArgs(email, "deleted", filename).WillReturnResult(sqlmock.NewResult(1, 1))
+	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
+	mockDB.ExpectExec(logActionSQL).WithArgs(username, "deleted", filename).WillReturnResult(sqlmock.NewResult(1, 1))
 	mockStorage.On("RemoveObject", mock.Anything, storageID, mock.AnythingOfType("minio.RemoveObjectOptions")).Return(nil).Once()
 
 	err := DeleteFile(c)
@@ -144,18 +144,18 @@ func TestDeleteFile_Success(t *testing.T) {
 
 // TestDeleteFile_NotFound tests deleting a file that doesn't exist
 func TestDeleteFile_NotFound(t *testing.T) {
-	email := "user-delete@example.com"
+	username := "user-delete"
 	filename := "non-existent-file.txt"
 
 	c, _, mockDB, _ := setupTestEnv(t, http.MethodDelete, "/files/:filename", nil)
 	c.SetParamNames("filename")
 	c.SetParamValues(filename)
-	claims := &auth.Claims{Email: email}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	mockDB.ExpectBegin()
-	ownerCheckSQL := "SELECT owner_email, storage_id, size_bytes FROM file_metadata WHERE filename = ?"
+	ownerCheckSQL := "SELECT owner_username, storage_id, size_bytes FROM file_metadata WHERE filename = ?"
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnError(fmt.Errorf("sql: no rows in result set")) // Simulate sql.ErrNoRows
 
 	mockDB.ExpectRollback()
@@ -172,22 +172,22 @@ func TestDeleteFile_NotFound(t *testing.T) {
 
 // TestDeleteFile_NotOwner tests deleting a file owned by someone else
 func TestDeleteFile_NotOwner(t *testing.T) {
-	requestingUserEmail := "user-trying-delete@example.com"
-	ownerEmail := "actual-owner@example.com"
+	requestingUsername := "user-trying-delete"
+	ownerUsername := "actual-owner"
 	filename := "someone-elses-file.txt"
 	fileSize := int64(512)
 
 	c, _, mockDB, _ := setupTestEnv(t, http.MethodDelete, "/files/:filename", nil)
 	c.SetParamNames("filename")
 	c.SetParamValues(filename)
-	claims := &auth.Claims{Email: requestingUserEmail}
+	claims := &auth.Claims{Username: requestingUsername}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	mockDB.ExpectBegin()
-	ownerCheckSQL := "SELECT owner_email, storage_id, size_bytes FROM file_metadata WHERE filename = ?"
+	ownerCheckSQL := "SELECT owner_username, storage_id, size_bytes FROM file_metadata WHERE filename = ?"
 	storageID := "test-storage-id-789"
-	ownerRows := sqlmock.NewRows([]string{"owner_email", "storage_id", "size_bytes"}).AddRow(ownerEmail, storageID, fileSize)
+	ownerRows := sqlmock.NewRows([]string{"owner_username", "storage_id", "size_bytes"}).AddRow(ownerUsername, storageID, fileSize)
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnRows(ownerRows)
 	mockDB.ExpectRollback()
 
@@ -203,21 +203,21 @@ func TestDeleteFile_NotOwner(t *testing.T) {
 
 // TestDeleteFile_StorageError tests failure during storage object removal
 func TestDeleteFile_StorageError(t *testing.T) {
-	email := "user-delete@example.com"
+	username := "user-delete"
 	filename := "file-stor-err.txt"
 	fileSize := int64(1024)
 
 	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodDelete, "/files/:filename", nil)
 	c.SetParamNames("filename")
 	c.SetParamValues(filename)
-	claims := &auth.Claims{Email: email}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	mockDB.ExpectBegin()
-	ownerCheckSQL := "SELECT owner_email, storage_id, size_bytes FROM file_metadata WHERE filename = ?"
+	ownerCheckSQL := "SELECT owner_username, storage_id, size_bytes FROM file_metadata WHERE filename = ?"
 	storageID := "test-storage-id-999"
-	ownerRows := sqlmock.NewRows([]string{"owner_email", "storage_id", "size_bytes"}).AddRow(email, storageID, fileSize)
+	ownerRows := sqlmock.NewRows([]string{"owner_username", "storage_id", "size_bytes"}).AddRow(username, storageID, fileSize)
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(filename).WillReturnRows(ownerRows)
 	mockDB.ExpectRollback()
 
@@ -259,15 +259,4 @@ func TestDeleteFile_StorageError(t *testing.T) {
 // === For DeleteFile Handler (handlers.DeleteFile) ===
 //   (Existing tests cover Success, NotFound, NotOwner, StorageError)
 // - TestDeleteFile_TransactionBeginError: Simulate failure in database.DB.Begin().
-// - TestDeleteFile_DBOwnerCheckError_Generic: Simulate a generic DB error (not sql.ErrNoRows) during the initial owner/size check.
-// - TestDeleteFile_DBDeleteMetadataError: Simulate failure in tx.Exec("DELETE FROM file_metadata ...").
-// - TestDeleteFile_DBGetUserForStorageError: Simulate failure in models.GetUserByEmail() when trying to update storage usage.
-// - TestDeleteFile_DBUpdateUserStorageError: Simulate failure in user.UpdateStorageUsage().
-// - TestDeleteFile_DBCommitError: Simulate failure in tx.Commit(), ensure rollback is attempted.
-// - TestDeleteFile_StorageRemoveObjectNotFound: If storage.Provider.RemoveObject is called for a file already gone from storage (should ideally be a no-op or non-fatal error).
-// - TestDeleteFile_LogUserActionFailure: (Lower priority) Simulate failure in database.LogUserAction.
-//
-// Note: Tests for file sharing (CreateFileShare, GetFileShareDetails, etc.) and file encryption keys
-// (AddFileKey, ListFileKeys, etc.) should ideally go into their own dedicated test files,
-// e.g., file_shares_test.go and file_keys_test.go, respectively, if those handlers exist in
-// handlers/file_shares.go and handlers/file_keys.go.
+// - TestDeleteFile_DBOwnerCheckError_Generic: Simulate a generic DB error (not sql.ErrNoRows) during the

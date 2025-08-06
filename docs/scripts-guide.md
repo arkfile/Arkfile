@@ -22,7 +22,6 @@ scripts/
 │   ├── 03-setup-opaque-keys.sh       # Generate OPAQUE server keys
 │   ├── 04-setup-jwt-keys.sh          # Generate JWT signing keys
 │   ├── 05-setup-tls-certs.sh         # Generate TLS certificates
-│   ├── 06-setup-database.sh          # Set up database schema
 │   ├── 07-setup-minio.sh             # Configure MinIO storage
 │   ├── 08-setup-rqlite.sh            # Configure rqlite database
 │   ├── build.sh                      # Build application
@@ -117,11 +116,7 @@ The setup scripts are numbered to show their logical dependency order:
 **Dependencies**: Directories  
 **Creates**: Self-signed TLS certificates
 
-#### `06-setup-database.sh`
-**Purpose**: Set up database schema  
-**Usage**: `sudo ./scripts/setup/06-setup-database.sh`  
-**Dependencies**: Database service running  
-**Creates**: Database tables and indexes
+**Note**: Database schema setup is now handled automatically by the arkfile application using the unified schema approach. The application reads `database/unified_schema.sql` and creates all tables, indexes, and triggers on startup. No separate database setup script is needed.
 
 #### `07-setup-minio.sh`
 **Purpose**: Configure MinIO object storage  

@@ -259,7 +259,7 @@ func TestOpaqueLogin_TOTPRequired(t *testing.T) {
 	mockOPAQUESuccess(t, email, password)
 
 	// Mock TOTP check (user does NOT have TOTP enabled - this is the expected case)
-	totpCheckSQL := `SELECT enabled, setup_completed FROM user_totp WHERE user_email = \?`
+	totpCheckSQL := `SELECT enabled, setup_completed FROM user_totp WHERE username = \?`
 	mock.ExpectQuery(totpCheckSQL).WithArgs(email).WillReturnError(sql.ErrNoRows)
 
 	// Execute the handler
@@ -296,7 +296,7 @@ func TestOpaqueLogin_WithTOTPEnabled_Success(t *testing.T) {
 	mockOPAQUESuccess(t, email, password)
 
 	// Mock TOTP check (user HAS TOTP enabled and setup completed)
-	totpCheckSQL := `SELECT enabled, setup_completed FROM user_totp WHERE user_email = \?`
+	totpCheckSQL := `SELECT enabled, setup_completed FROM user_totp WHERE username = \?`
 	totpRows := sqlmock.NewRows([]string{"enabled", "setup_completed"}).AddRow(true, true)
 	mock.ExpectQuery(totpCheckSQL).WithArgs(email).WillReturnRows(totpRows)
 
@@ -304,7 +304,7 @@ func TestOpaqueLogin_WithTOTPEnabled_Success(t *testing.T) {
 	// So we don't expect any INSERT INTO refresh_tokens here
 
 	// Mock logging user action
-	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
+	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mock.ExpectExec(logActionSQL).
 		WithArgs(email, "OPAQUE auth completed, awaiting TOTP", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -381,9 +381,9 @@ func TestRefreshToken_Success(t *testing.T) {
 
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/refresh", bytes.NewReader(jsonBody))
 
-	mock.ExpectQuery(`SELECT id, user_email, expires_at, is_revoked, is_used FROM refresh_tokens WHERE token_hash = \?`).
+	mock.ExpectQuery(`SELECT id, username, expires_at, is_revoked, is_used FROM refresh_tokens WHERE token_hash = \?`).
 		WithArgs(sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "user_email", "expires_at", "is_revoked", "is_used"}).AddRow("test-id", userEmail, time.Now().Add(time.Hour), false, false))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "expires_at", "is_revoked", "is_used"}).AddRow("test-id", userEmail, time.Now().Add(time.Hour), false, false))
 
 	mock.ExpectExec(`UPDATE refresh_tokens SET is_used = true WHERE id = \?`).
 		WithArgs("test-id").
@@ -394,7 +394,7 @@ func TestRefreshToken_Success(t *testing.T) {
 		WithArgs(sqlmock.AnyArg(), userEmail, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), false, false).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
+	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mock.ExpectExec(logActionSQL).
 		WithArgs(userEmail, "refreshed token", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))

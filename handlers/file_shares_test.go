@@ -32,24 +32,24 @@ func TestCreateFileShare_Success(t *testing.T) {
 	c.Set("userID", 1)
 
 	// Create and set JWT token for authentication
-	claims := &auth.Claims{Email: userEmail}
+	claims := &auth.Claims{Username: userEmail}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// Mock file ownership check in file_metadata
-	fileOwnerSQL := `SELECT owner_email, multi_key, password_type FROM file_metadata WHERE filename = \?`
-	fileRows := sqlmock.NewRows([]string{"owner_email", "multi_key", "password_type"}).
+	fileOwnerSQL := `SELECT owner_username, multi_key, password_type FROM file_metadata WHERE filename = \?`
+	fileRows := sqlmock.NewRows([]string{"owner_username", "multi_key", "password_type"}).
 		AddRow(userEmail, true, "custom")
 	mock.ExpectQuery(fileOwnerSQL).WithArgs("test-file-123").WillReturnRows(fileRows)
 
 	// Mock share creation
-	shareInsertSQL := `INSERT INTO file_share_keys \(share_id, file_id, owner_email, salt, encrypted_fek, created_at, expires_at\) VALUES \(\?, \?, \?, \?, \?, CURRENT_TIMESTAMP, \?\)`
+	shareInsertSQL := `INSERT INTO file_share_keys \(share_id, file_id, owner_username, salt, encrypted_fek, created_at, expires_at\) VALUES \(\?, \?, \?, \?, \?, CURRENT_TIMESTAMP, \?\)`
 	mock.ExpectExec(shareInsertSQL).
 		WithArgs(sqlmock.AnyArg(), "test-file-123", userEmail, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock user action logging
-	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
+	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mock.ExpectExec(logActionSQL).
 		WithArgs(userEmail, "created_share", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -85,13 +85,13 @@ func TestCreateFileShare_InvalidSalt(t *testing.T) {
 	c.Set("userID", 1)
 
 	// Create and set JWT token for authentication
-	claims := &auth.Claims{Email: userEmail}
+	claims := &auth.Claims{Username: userEmail}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// Mock file ownership check in file_metadata (matches actual handler)
-	fileOwnerSQL := `SELECT owner_email, multi_key, password_type FROM file_metadata WHERE filename = \?`
-	fileRows := sqlmock.NewRows([]string{"owner_email", "multi_key", "password_type"}).
+	fileOwnerSQL := `SELECT owner_username, multi_key, password_type FROM file_metadata WHERE filename = \?`
+	fileRows := sqlmock.NewRows([]string{"owner_username", "multi_key", "password_type"}).
 		AddRow(userEmail, true, "custom")
 	mock.ExpectQuery(fileOwnerSQL).WithArgs("test-file-123").WillReturnRows(fileRows)
 
@@ -121,16 +121,16 @@ func TestCreateFileShare_FileNotOwned(t *testing.T) {
 	c.Set("userID", 1)
 
 	// Create and set JWT token for authentication
-	claims := &auth.Claims{Email: userEmail}
+	claims := &auth.Claims{Username: userEmail}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// Mock file ownership check in file_metadata - file not found (different owner)
-	fileOwnerSQL := `SELECT owner_email, multi_key, password_type FROM file_metadata WHERE filename = \?`
+	fileOwnerSQL := `SELECT owner_username, multi_key, password_type FROM file_metadata WHERE filename = \?`
 	mock.ExpectQuery(fileOwnerSQL).WithArgs("test-file-456").WillReturnError(sql.ErrNoRows)
 
 	// Mock fallback check in upload_sessions - also not found
-	uploadSessionSQL := `SELECT owner_email, password_type, multi_key FROM upload_sessions WHERE filename = \? AND status = 'completed'`
+	uploadSessionSQL := `SELECT owner_username, password_type, multi_key FROM upload_sessions WHERE filename = \? AND status = 'completed'`
 	mock.ExpectQuery(uploadSessionSQL).WithArgs("test-file-456").WillReturnError(sql.ErrNoRows)
 
 	// Execute handler - should fail due to file not found
@@ -162,8 +162,8 @@ func TestAccessSharedFile_Success(t *testing.T) {
 	mock.ExpectExec(rateLimitInsertSQL).WithArgs("test-share-id", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock share lookup (matches actual handler processShareAccess function)
-	shareSQL := `SELECT file_id, owner_email, salt, encrypted_fek, expires_at FROM file_share_keys WHERE share_id = \?`
-	shareRows := sqlmock.NewRows([]string{"file_id", "owner_email", "salt", "encrypted_fek", "expires_at"}).
+	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at FROM file_share_keys WHERE share_id = \?`
+	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at"}).
 		AddRow("test-file-123", "owner@example.com", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
 	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
@@ -213,8 +213,8 @@ func TestAccessSharedFile_WeakPassword(t *testing.T) {
 	mock.ExpectExec(rateLimitInsertSQL).WithArgs("test-share-id", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock share lookup (matches actual handler processShareAccess function)
-	shareSQL := `SELECT file_id, owner_email, salt, encrypted_fek, expires_at FROM file_share_keys WHERE share_id = \?`
-	shareRows := sqlmock.NewRows([]string{"file_id", "owner_email", "salt", "encrypted_fek", "expires_at"}).
+	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at FROM file_share_keys WHERE share_id = \?`
+	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at"}).
 		AddRow("test-file-123", "owner@example.com", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
 	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
@@ -255,7 +255,7 @@ func TestAccessSharedFile_NonexistentShare(t *testing.T) {
 	mock.ExpectExec(rateLimitInsertSQL).WithArgs("nonexistent", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock share lookup - not found (matches actual handler processShareAccess function)
-	shareSQL := `SELECT file_id, owner_email, salt, encrypted_fek, expires_at FROM file_share_keys WHERE share_id = \?`
+	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at FROM file_share_keys WHERE share_id = \?`
 	mock.ExpectQuery(shareSQL).WithArgs("nonexistent").WillReturnError(sql.ErrNoRows)
 
 	// Mock failed attempt recording (for rate limiting on 404) - new logic in recordFailedAttempt
@@ -285,8 +285,8 @@ func TestGetSharedFile_Success(t *testing.T) {
 	c.SetParamValues("test-share-id")
 
 	// Mock share existence check (matches actual handler GetSharedFile function)
-	shareSQL := `SELECT file_id, owner_email, expires_at FROM file_share_keys WHERE share_id = \?`
-	shareRows := sqlmock.NewRows([]string{"file_id", "owner_email", "expires_at"}).
+	shareSQL := `SELECT file_id, owner_username, expires_at FROM file_share_keys WHERE share_id = \?`
+	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "expires_at"}).
 		AddRow("test-file-123", "owner@example.com", nil)
 	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
@@ -314,12 +314,12 @@ func TestListShares_Success(t *testing.T) {
 	c.Set("userID", 1)
 
 	// Create and set JWT token for authentication (matches handler expectation)
-	claims := &auth.Claims{Email: userEmail}
+	claims := &auth.Claims{Username: userEmail}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// Mock shares query (matches actual handler ListShares function)
-	sharesSQL := `SELECT sk\.share_id, sk\.file_id, sk\.created_at, sk\.expires_at, fm\.filename, fm\.size_bytes FROM file_share_keys sk JOIN file_metadata fm ON sk\.file_id = fm\.filename WHERE sk\.owner_email = \? ORDER BY sk\.created_at DESC`
+	sharesSQL := `SELECT sk\.share_id, sk\.file_id, sk\.created_at, sk\.expires_at, fm\.filename, fm\.size_bytes FROM file_share_keys sk JOIN file_metadata fm ON sk\.file_id = fm\.filename WHERE sk\.owner_username = \? ORDER BY sk\.created_at DESC`
 	sharesRows := sqlmock.NewRows([]string{"share_id", "file_id", "created_at", "expires_at", "filename", "size_bytes"}).
 		AddRow("test-share-id", "test-file-123", time.Now().Format("2006-01-02 15:04:05"), nil, "test.txt", 1024)
 	mock.ExpectQuery(sharesSQL).WithArgs(userEmail).WillReturnRows(sharesRows)
@@ -356,13 +356,13 @@ func TestDeleteShare_Success(t *testing.T) {
 	c.SetParamValues("test-share-id")
 
 	// Create and set JWT token for authentication (matches handler expectation)
-	claims := &auth.Claims{Email: userEmail}
+	claims := &auth.Claims{Username: userEmail}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// Mock share ownership verification (matches actual handler DeleteShare function)
-	shareOwnerSQL := `SELECT owner_email FROM file_share_keys WHERE share_id = \?`
-	shareRows := sqlmock.NewRows([]string{"owner_email"}).AddRow(userEmail)
+	shareOwnerSQL := `SELECT owner_username FROM file_share_keys WHERE share_id = \?`
+	shareRows := sqlmock.NewRows([]string{"owner_username"}).AddRow(userEmail)
 	mock.ExpectQuery(shareOwnerSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
 	// Mock share deletion
@@ -370,7 +370,7 @@ func TestDeleteShare_Success(t *testing.T) {
 	mock.ExpectExec(deleteSQL).WithArgs("test-share-id").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock user action logging
-	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
+	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mock.ExpectExec(logActionSQL).
 		WithArgs(userEmail, "deleted_share", "test-share-id").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -436,8 +436,8 @@ func TestSharePasswordValidation_WithZxcvbn(t *testing.T) {
 			mock.ExpectExec(rateLimitInsertSQL).WithArgs("test-share-id", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 			// Mock share lookup (matches actual handler processShareAccess function)
-			shareSQL := `SELECT file_id, owner_email, salt, encrypted_fek, expires_at FROM file_share_keys WHERE share_id = \?`
-			shareRows := sqlmock.NewRows([]string{"file_id", "owner_email", "salt", "encrypted_fek", "expires_at"}).
+			shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at FROM file_share_keys WHERE share_id = \?`
+			shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at"}).
 				AddRow("test-file-123", "owner@example.com", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
 			mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 

@@ -258,7 +258,7 @@ MINIO_ROOT_PASSWORD=DevPassword123_$(openssl rand -hex 8)
 LOCAL_STORAGE_PATH=/opt/arkfile/var/lib/dev/minio/data
 
 # Admin Configuration
-ADMIN_EMAILS=admin@dev.local
+ADMIN_USERNAMES=admin.dev.user
 
 # Development Settings
 REQUIRE_APPROVAL=false

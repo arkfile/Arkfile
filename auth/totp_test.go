@@ -17,7 +17,7 @@ import (
 
 // Test constants
 const (
-	testEmail            = "test@example.com"
+	testUsername         = "test_username"
 	testPassword         = "TestPassword123!"
 	testSecretB32        = "JBSWY3DPEHPK3PXP" // Test secret for reproducible tests
 	TOTPSetupTempContext = "ARKFILE_TOTP_SETUP_TEMP"
@@ -75,7 +75,7 @@ func TestGenerateTOTPSetup_Success(t *testing.T) {
 	sessionKey := generateTestSessionKey(t)
 	defer crypto.SecureZeroSessionKey(sessionKey)
 
-	setup, err := GenerateTOTPSetup(testEmail, sessionKey)
+	setup, err := GenerateTOTPSetup(testUsername, sessionKey)
 	require.NoError(t, err)
 	assert.NotNil(t, setup)
 
@@ -92,7 +92,7 @@ func TestGenerateTOTPSetup_Success(t *testing.T) {
 	assert.Equal(t, 32, len(secretBytes)) // 32 bytes = 256 bits
 
 	// Verify QR code URL format
-	expectedPrefix := "otpauth://totp/ArkFile:test@example.com?secret="
+	expectedPrefix := "otpauth://totp/ArkFile:" + testUsername + "?secret="
 	assert.Contains(t, setup.QRCodeURL, expectedPrefix)
 	assert.Contains(t, setup.QRCodeURL, "&issuer=ArkFile")
 	assert.Contains(t, setup.QRCodeURL, "&digits=6")
@@ -119,15 +119,15 @@ func TestStoreTOTPSetup_Success(t *testing.T) {
 	sessionKey := generateTestSessionKey(t)
 	defer crypto.SecureZeroSessionKey(sessionKey)
 
-	setup, err := GenerateTOTPSetup(testEmail, sessionKey)
+	setup, err := GenerateTOTPSetup(testUsername, sessionKey)
 	require.NoError(t, err)
 
 	// Mock database insert
 	mock.ExpectExec(`INSERT OR REPLACE INTO user_totp`).
-		WithArgs(testEmail, sqlmock.AnyArg(), sqlmock.AnyArg(), false, false, sqlmock.AnyArg()).
+		WithArgs(testUsername, sqlmock.AnyArg(), sqlmock.AnyArg(), false, false, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	err = StoreTOTPSetup(db, testEmail, setup, sessionKey)
+	err = StoreTOTPSetup(db, testUsername, setup, sessionKey)
 	require.NoError(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -156,21 +156,21 @@ func TestCompleteTOTPSetup_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	// Mock database queries
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE user_email = \?`).
-		WithArgs(testEmail).
+	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
+		WithArgs(testUsername).
 		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
 			AddRow(secretEncrypted, backupCodesEncrypted, false, false, time.Now(), nil))
 
 	// Mock update query with production encryption
-	mock.ExpectExec(`UPDATE user_totp SET secret_encrypted = \?, backup_codes_encrypted = \?, enabled = true, setup_completed = true WHERE user_email = \?`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), testEmail).
+	mock.ExpectExec(`UPDATE user_totp SET secret_encrypted = \?, backup_codes_encrypted = \?, enabled = true, setup_completed = true WHERE username = \?`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), testUsername).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Generate valid TOTP code
 	testTime := time.Now()
 	validCode := generateTestTOTPCode(t, testSecretB32, testTime)
 
-	err = CompleteTOTPSetup(db, testEmail, validCode, sessionKey)
+	err = CompleteTOTPSetup(db, testUsername, validCode, sessionKey)
 	require.NoError(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -198,13 +198,13 @@ func TestCompleteTOTPSetup_InvalidCode(t *testing.T) {
 	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, tempTotpKey)
 	require.NoError(t, err)
 
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE user_email = \?`).
-		WithArgs(testEmail).
+	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
+		WithArgs(testUsername).
 		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
 			AddRow(secretEncrypted, backupCodesEncrypted, false, false, time.Now(), nil))
 
 	// Use invalid code
-	err = CompleteTOTPSetup(db, testEmail, "000000", sessionKey)
+	err = CompleteTOTPSetup(db, testUsername, "000000", sessionKey)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid TOTP code")
 
@@ -226,8 +226,8 @@ func TestValidateTOTPCode_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	// Mock getting TOTP data
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE user_email = \?`).
-		WithArgs(testEmail).
+	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
+		WithArgs(testUsername).
 		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
 			AddRow(secretEncrypted, []byte("encrypted-backup-codes"), true, true, time.Now(), nil))
 
@@ -235,15 +235,15 @@ func TestValidateTOTPCode_Success(t *testing.T) {
 	// TODO: Re-enable replay protection tests when the feature is re-implemented
 
 	// Mock updating last used
-	mock.ExpectExec(`UPDATE user_totp SET last_used = \? WHERE user_email = \?`).
-		WithArgs(sqlmock.AnyArg(), testEmail).
+	mock.ExpectExec(`UPDATE user_totp SET last_used = \? WHERE username = \?`).
+		WithArgs(sqlmock.AnyArg(), testUsername).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Generate valid code
 	testTime := time.Now()
 	validCode := generateTestTOTPCode(t, testSecretB32, testTime)
 
-	err = ValidateTOTPCode(db, testEmail, validCode, sessionKey)
+	err = ValidateTOTPCode(db, testUsername, validCode, sessionKey)
 	require.NoError(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -306,30 +306,30 @@ func TestValidateBackupCode_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	// Mock getting TOTP data
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE user_email = \?`).
-		WithArgs(testEmail).
+	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
+		WithArgs(testUsername).
 		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
 			AddRow([]byte("encrypted-secret"), backupCodesEncrypted, true, true, time.Now(), nil))
 
 	// Mock backup code replay check
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM totp_backup_usage WHERE user_email = \? AND code_hash = \?`).
-		WithArgs(testEmail, sqlmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM totp_backup_usage WHERE username = \? AND code_hash = \?`).
+		WithArgs(testUsername, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
 	// Mock logging backup code usage
-	mock.ExpectExec(`INSERT INTO totp_backup_usage \(user_email, code_hash\) VALUES \(\?, \?\)`).
-		WithArgs(testEmail, sqlmock.AnyArg()).
+	mock.ExpectExec(`INSERT INTO totp_backup_usage \(username, code_hash\) VALUES \(\?, \?\)`).
+		WithArgs(testUsername, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock updating last used
-	mock.ExpectExec(`UPDATE user_totp SET last_used = \? WHERE user_email = \?`).
-		WithArgs(sqlmock.AnyArg(), testEmail).
+	mock.ExpectExec(`UPDATE user_totp SET last_used = \? WHERE username = \?`).
+		WithArgs(sqlmock.AnyArg(), testUsername).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Use valid backup code
 	testCode := backupCodes[0]
 
-	err = ValidateBackupCode(db, testEmail, testCode, sessionKey)
+	err = ValidateBackupCode(db, testUsername, testCode, sessionKey)
 	require.NoError(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -355,20 +355,20 @@ func TestValidateBackupCode_AlreadyUsed(t *testing.T) {
 	require.NoError(t, err)
 
 	// Mock getting TOTP data
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE user_email = \?`).
-		WithArgs(testEmail).
+	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
+		WithArgs(testUsername).
 		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
 			AddRow([]byte("encrypted-secret"), backupCodesEncrypted, true, true, time.Now(), nil))
 
 	// Mock backup code replay check - code already used
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM totp_backup_usage WHERE user_email = \? AND code_hash = \?`).
-		WithArgs(testEmail, sqlmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM totp_backup_usage WHERE username = \? AND code_hash = \?`).
+		WithArgs(testUsername, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1)) // Code already used
 
 	// Use backup code that's already been used
 	testCode := backupCodes[0]
 
-	err = ValidateBackupCode(db, testEmail, testCode, sessionKey)
+	err = ValidateBackupCode(db, testUsername, testCode, sessionKey)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "backup code already used")
 
@@ -380,12 +380,12 @@ func TestIsUserTOTPEnabled_Success(t *testing.T) {
 	db, mock := setupTOTPTestDB(t)
 
 	// Mock enabled TOTP
-	mock.ExpectQuery(`SELECT enabled, setup_completed FROM user_totp WHERE user_email = \?`).
-		WithArgs(testEmail).
+	mock.ExpectQuery(`SELECT enabled, setup_completed FROM user_totp WHERE username = \?`).
+		WithArgs(testUsername).
 		WillReturnRows(sqlmock.NewRows([]string{"enabled", "setup_completed"}).
 			AddRow(true, true))
 
-	enabled, err := IsUserTOTPEnabled(db, testEmail)
+	enabled, err := IsUserTOTPEnabled(db, testUsername)
 	require.NoError(t, err)
 	assert.True(t, enabled)
 
@@ -397,11 +397,11 @@ func TestIsUserTOTPEnabled_UserNotFound(t *testing.T) {
 	db, mock := setupTOTPTestDB(t)
 
 	// Mock no TOTP record
-	mock.ExpectQuery(`SELECT enabled, setup_completed FROM user_totp WHERE user_email = \?`).
-		WithArgs(testEmail).
+	mock.ExpectQuery(`SELECT enabled, setup_completed FROM user_totp WHERE username = \?`).
+		WithArgs(testUsername).
 		WillReturnError(sql.ErrNoRows)
 
-	enabled, err := IsUserTOTPEnabled(db, testEmail)
+	enabled, err := IsUserTOTPEnabled(db, testUsername)
 	require.NoError(t, err)
 	assert.False(t, enabled)
 
@@ -423,8 +423,8 @@ func TestDisableTOTP_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	// Mock getting TOTP data for validation
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE user_email = \?`).
-		WithArgs(testEmail).
+	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
+		WithArgs(testUsername).
 		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
 			AddRow(secretEncrypted, []byte("encrypted-backup-codes"), true, true, time.Now(), nil))
 
@@ -432,20 +432,20 @@ func TestDisableTOTP_Success(t *testing.T) {
 	// TODO: Re-enable replay protection tests when the feature is re-implemented
 
 	// Mock updating last used for validation
-	mock.ExpectExec(`UPDATE user_totp SET last_used = \? WHERE user_email = \?`).
-		WithArgs(sqlmock.AnyArg(), testEmail).
+	mock.ExpectExec(`UPDATE user_totp SET last_used = \? WHERE username = \?`).
+		WithArgs(sqlmock.AnyArg(), testUsername).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock disabling TOTP
-	mock.ExpectExec(`DELETE FROM user_totp WHERE user_email = \?`).
-		WithArgs(testEmail).
+	mock.ExpectExec(`DELETE FROM user_totp WHERE username = \?`).
+		WithArgs(testUsername).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Generate valid code for disable
 	testTime := time.Now()
 	validCode := generateTestTOTPCode(t, testSecretB32, testTime)
 
-	err = DisableTOTP(db, testEmail, validCode, sessionKey)
+	err = DisableTOTP(db, testUsername, validCode, sessionKey)
 	require.NoError(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -523,8 +523,8 @@ func TestValidateTOTPCode_ClockSkewTolerance(t *testing.T) {
 	validCode := generateTestTOTPCode(t, testSecretB32, testTime)
 
 	// Mock getting TOTP data
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE user_email = \?`).
-		WithArgs(testEmail).
+	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
+		WithArgs(testUsername).
 		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
 			AddRow(secretEncrypted, []byte("encrypted-backup-codes"), true, true, time.Now(), nil))
 
@@ -532,11 +532,11 @@ func TestValidateTOTPCode_ClockSkewTolerance(t *testing.T) {
 	// TODO: Re-enable replay protection tests when the feature is re-implemented
 
 	// Mock updating last used
-	mock.ExpectExec(`UPDATE user_totp SET last_used = \? WHERE user_email = \?`).
-		WithArgs(sqlmock.AnyArg(), testEmail).
+	mock.ExpectExec(`UPDATE user_totp SET last_used = \? WHERE username = \?`).
+		WithArgs(sqlmock.AnyArg(), testUsername).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	err = ValidateTOTPCode(db, testEmail, validCode, sessionKey)
+	err = ValidateTOTPCode(db, testUsername, validCode, sessionKey)
 	require.NoError(t, err)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -554,7 +554,7 @@ func TestTOTPSecuritySessionKeyIsolation(t *testing.T) {
 	}()
 
 	// Generate setup with first session key
-	setup, err := GenerateTOTPSetup(testEmail, sessionKey1)
+	setup, err := GenerateTOTPSetup(testUsername, sessionKey1)
 	require.NoError(t, err)
 
 	// Encrypt with first key
@@ -579,7 +579,7 @@ func BenchmarkGenerateTOTPSetup(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := GenerateTOTPSetup(testEmail, sessionKey)
+		_, err := GenerateTOTPSetup(testUsername, sessionKey)
 		if err != nil {
 			b.Fatal(err)
 		}

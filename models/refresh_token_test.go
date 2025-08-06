@@ -21,7 +21,7 @@ func setupTestDB_RefreshToken(t *testing.T) *sql.DB {
 	schema := `
 	CREATE TABLE refresh_tokens (
 		id TEXT PRIMARY KEY,
-		user_email TEXT NOT NULL,
+		username TEXT NOT NULL,
 		token_hash TEXT NOT NULL UNIQUE,
 		expires_at TIMESTAMP NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -39,10 +39,10 @@ func TestCreateRefreshToken(t *testing.T) {
 	db := setupTestDB_RefreshToken(t)
 	defer db.Close()
 
-	userEmail := "test@example.com"
+	username := "test_username"
 
 	// Execute CreateRefreshToken
-	tokenString, err := CreateRefreshToken(db, userEmail)
+	tokenString, err := CreateRefreshToken(db, username)
 
 	// Assert: No error and token string is generated
 	assert.NoError(t, err)
@@ -52,11 +52,11 @@ func TestCreateRefreshToken(t *testing.T) {
 	hash := sha256.Sum256([]byte(tokenString))
 	tokenHash := hex.EncodeToString(hash[:])
 
-	var dbUserEmail string
+	var dbUsername string
 	var dbExpiresAt time.Time
-	err = db.QueryRow("SELECT user_email, expires_at FROM refresh_tokens WHERE token_hash = ?", tokenHash).Scan(&dbUserEmail, &dbExpiresAt)
+	err = db.QueryRow("SELECT username, expires_at FROM refresh_tokens WHERE token_hash = ?", tokenHash).Scan(&dbUsername, &dbExpiresAt)
 	assert.NoError(t, err, "Token hash should exist in DB")
-	assert.Equal(t, userEmail, dbUserEmail, "User email in DB should match")
+	assert.Equal(t, username, dbUsername, "Username in DB should match")
 
 	// Assert: Expiry time is approximately 30 days in the future
 	expectedExpiry := time.Now().Add(30 * 24 * time.Hour)
@@ -67,11 +67,11 @@ func TestValidateRefreshToken(t *testing.T) {
 	db := setupTestDB_RefreshToken(t)
 	defer db.Close()
 
-	userEmail := "validate@example.com"
-	validTokenString, _ := CreateRefreshToken(db, userEmail) // Valid token
-	expiredTokenString, _ := CreateRefreshToken(db, userEmail)
-	usedTokenString, _ := CreateRefreshToken(db, userEmail)
-	revokedTokenString, _ := CreateRefreshToken(db, userEmail)
+	username := "validate_username"
+	validTokenString, _ := CreateRefreshToken(db, username) // Valid token
+	expiredTokenString, _ := CreateRefreshToken(db, username)
+	usedTokenString, _ := CreateRefreshToken(db, username)
+	revokedTokenString, _ := CreateRefreshToken(db, username)
 
 	// Modify tokens in DB for test cases
 	hashExpired := sha256.Sum256([]byte(expiredTokenString))
@@ -100,7 +100,7 @@ func TestValidateRefreshToken(t *testing.T) {
 		{
 			name:        "Valid token",
 			token:       validTokenString,
-			expectEmail: userEmail,
+			expectEmail: username,
 			expectUsed:  true,
 		},
 		{
@@ -164,9 +164,9 @@ func TestRevokeRefreshToken(t *testing.T) {
 	db := setupTestDB_RefreshToken(t)
 	defer db.Close()
 
-	userEmail := "revoke@test.com"
-	tokenToRevoke, _ := CreateRefreshToken(db, userEmail)
-	tokenToKeep, _ := CreateRefreshToken(db, userEmail) // Another token for the same user
+	username := "revoke_username"
+	tokenToRevoke, _ := CreateRefreshToken(db, username)
+	tokenToKeep, _ := CreateRefreshToken(db, username) // Another token for the same user
 
 	// Execute RevokeRefreshToken
 	err := RevokeRefreshToken(db, tokenToRevoke)
@@ -197,16 +197,16 @@ func TestRevokeAllUserTokens(t *testing.T) {
 	db := setupTestDB_RefreshToken(t)
 	defer db.Close()
 
-	user1Email := "user1@revoke.all"
-	user2Email := "user2@keep.all"
+	user1Username := "user1_username"
+	user2Username := "user2_username"
 
 	// Create tokens for both users
-	token1User1, _ := CreateRefreshToken(db, user1Email)
-	token2User1, _ := CreateRefreshToken(db, user1Email)
-	token1User2, _ := CreateRefreshToken(db, user2Email)
+	token1User1, _ := CreateRefreshToken(db, user1Username)
+	token2User1, _ := CreateRefreshToken(db, user1Username)
+	token1User2, _ := CreateRefreshToken(db, user2Username)
 
 	// Execute RevokeAllUserTokens for user1
-	err := RevokeAllUserTokens(db, user1Email)
+	err := RevokeAllUserTokens(db, user1Username)
 
 	// Assert: No error
 	assert.NoError(t, err)
@@ -235,8 +235,8 @@ func TestCleanupExpiredTokens_RefreshToken(t *testing.T) { // Renamed to avoid c
 	defer db.Close()
 
 	// Add expired and active tokens
-	expiredTokenString, _ := CreateRefreshToken(db, "cleanup@example.com")
-	activeTokenString, _ := CreateRefreshToken(db, "cleanup@example.com")
+	expiredTokenString, _ := CreateRefreshToken(db, "cleanup_username")
+	activeTokenString, _ := CreateRefreshToken(db, "cleanup_username")
 
 	// Manually expire one token
 	hashExpired := sha256.Sum256([]byte(expiredTokenString))

@@ -154,94 +154,10 @@ func GetUserByUsername(db *sql.DB, username string) (*User, error) {
 	return user, nil
 }
 
-// GetUserByEmail retrieves a user by email (for backward compatibility)
-func GetUserByEmail(db *sql.DB, email string) (*User, error) {
-	user := &User{}
-	var createdAtStr string
-	var approvedAtStr sql.NullString
-	var totalStorageInterface interface{}
-	var storageLimitInterface interface{}
-	var emailStr sql.NullString
-
-	query := `SELECT id, username, email, created_at,
-		       total_storage_bytes, storage_limit_bytes,
-		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE email = ?`
-
-	err := db.QueryRow(query, email).Scan(
-		&user.ID, &user.Username, &emailStr, &createdAtStr,
-		&totalStorageInterface, &storageLimitInterface,
-		&user.IsApproved, &user.ApprovedBy, &approvedAtStr, &user.IsAdmin,
-	)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, err // Return sql.ErrNoRows directly
-		}
-		return nil, err
-	}
-
-	// Handle optional email field
-	if emailStr.Valid {
-		user.Email = &emailStr.String
-	}
-
-	// Parse the timestamp strings
-	if createdAtStr != "" {
-		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", createdAtStr); parseErr == nil {
-			user.CreatedAt = parsedTime
-		} else if parsedTime, parseErr := time.Parse(time.RFC3339, createdAtStr); parseErr == nil {
-			user.CreatedAt = parsedTime
-		}
-	}
-
-	if approvedAtStr.Valid && approvedAtStr.String != "" {
-		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", approvedAtStr.String); parseErr == nil {
-			user.ApprovedAt = sql.NullTime{Time: parsedTime, Valid: true}
-		} else if parsedTime, parseErr := time.Parse(time.RFC3339, approvedAtStr.String); parseErr == nil {
-			user.ApprovedAt = sql.NullTime{Time: parsedTime, Valid: true}
-		}
-	}
-
-	// Handle numeric fields that might come as float64 from rqlite
-	if totalStorageInterface != nil {
-		switch v := totalStorageInterface.(type) {
-		case int64:
-			user.TotalStorageBytes = v
-		case float64:
-			user.TotalStorageBytes = int64(v)
-		default:
-			user.TotalStorageBytes = 0
-		}
-	}
-
-	if storageLimitInterface != nil {
-		switch v := storageLimitInterface.(type) {
-		case int64:
-			user.StorageLimitBytes = v
-		case float64:
-			user.StorageLimitBytes = int64(v)
-		default:
-			user.StorageLimitBytes = DefaultStorageLimit
-		}
-	}
-
-	return user, nil
-}
-
 // HasAdminPrivileges checks if a user has admin privileges
 func (u *User) HasAdminPrivileges() bool {
 	// Check if user is admin by username
-	if u.IsAdmin || isAdminUsername(u.Username) {
-		return true
-	}
-
-	// Check by email if provided (for backward compatibility)
-	if u.Email != nil {
-		return isAdminEmail(*u.Email)
-	}
-
-	return false
+	return u.IsAdmin || isAdminUsername(u.Username)
 }
 
 // ApproveUser approves a user (admin only)
@@ -338,17 +254,6 @@ func GetPendingUsers(db *sql.DB) ([]*User, error) {
 	}
 
 	return users, rows.Err()
-}
-
-// isAdminEmail checks if an email is in the admin list (for backward compatibility)
-func isAdminEmail(email string) bool {
-	adminEmails := strings.Split(getEnvOrDefault("ADMIN_EMAILS", ""), ",")
-	for _, adminEmail := range adminEmails {
-		if strings.TrimSpace(adminEmail) == email {
-			return true
-		}
-	}
-	return false
 }
 
 // Helper function to get environment variable with default

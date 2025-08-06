@@ -28,7 +28,7 @@ func setupTestDB(t *testing.T) *sql.DB {
 	schema := `
 	CREATE TABLE revoked_tokens (
 		token_id TEXT PRIMARY KEY,
-		user_email TEXT NOT NULL,
+		username TEXT NOT NULL,
 		expires_at TIMESTAMP NOT NULL,
 		reason TEXT,
 		revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -52,9 +52,9 @@ func resetCache() {
 }
 
 // createTestToken generates a JWT string for testing revocation.
-func createTestToken(t *testing.T, email, tokenID string, expiry time.Time) string {
+func createTestToken(t *testing.T, username, tokenID string, expiry time.Time) string {
 	claims := &Claims{
-		Email: email,
+		Username: username,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiry),
 			ID:        tokenID,
@@ -78,9 +78,9 @@ func TestRevokeToken(t *testing.T) {
 	defer os.Setenv("JWT_SECRET", originalSecret)
 
 	tokenID := "test-jti-1"
-	email := "revoke@example.com"
+	username := "revoke_user"
 	expiry := time.Now().Add(1 * time.Hour)
-	tokenString := createTestToken(t, email, tokenID, expiry)
+	tokenString := createTestToken(t, username, tokenID, expiry)
 
 	// Execute RevokeToken
 	err := RevokeToken(db, tokenString, "User logout")
@@ -90,11 +90,11 @@ func TestRevokeToken(t *testing.T) {
 
 	// Assert: Token ID should be in the database
 	var dbTokenID string
-	var dbUserEmail string
-	err = db.QueryRow("SELECT token_id, user_email FROM revoked_tokens WHERE token_id = ?", tokenID).Scan(&dbTokenID, &dbUserEmail)
+	var dbUsername string
+	err = db.QueryRow("SELECT token_id, username FROM revoked_tokens WHERE token_id = ?", tokenID).Scan(&dbTokenID, &dbUsername)
 	assert.NoError(t, err, "Token should exist in DB after revocation")
 	assert.Equal(t, tokenID, dbTokenID)
-	assert.Equal(t, email, dbUserEmail)
+	assert.Equal(t, username, dbUsername)
 
 	// Assert: Token ID should be in the cache
 	cacheMutex.RLock()
@@ -104,7 +104,7 @@ func TestRevokeToken(t *testing.T) {
 
 	// Test case: Token without JTI
 	claimsNoJTI := &Claims{
-		Email:            email,
+		Username:         username,
 		RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(expiry)}, // No ID
 	}
 	tokenNoJTI := jwt.NewWithClaims(jwt.SigningMethodHS256, claimsNoJTI)
@@ -124,9 +124,9 @@ func TestIsRevoked(t *testing.T) {
 
 	revokedTokenID := "revoked-jti"
 	validTokenID := "valid-jti"
-	email := "isrevoked@example.com"
+	username := "isrevoked_user"
 	expiry := time.Now().Add(1 * time.Hour)
-	revokedTokenString := createTestToken(t, email, revokedTokenID, expiry)
+	revokedTokenString := createTestToken(t, username, revokedTokenID, expiry)
 
 	// Revoke one token directly via function
 	err := RevokeToken(db, revokedTokenString, "test revoking")
@@ -208,11 +208,11 @@ func TestInitializeCache(t *testing.T) {
 	// Add some tokens to DB: one expired, one active
 	expiredTokenID := "expired-jti"
 	activeTokenID := "active-jti"
-	_, err := db.Exec("INSERT INTO revoked_tokens (token_id, user_email, expires_at) VALUES (?, ?, ?)",
-		expiredTokenID, "test@example.com", time.Now().Add(-1*time.Hour))
+	_, err := db.Exec("INSERT INTO revoked_tokens (token_id, username, expires_at) VALUES (?, ?, ?)",
+		expiredTokenID, "test_username", time.Now().Add(-1*time.Hour))
 	require.NoError(t, err)
-	_, err = db.Exec("INSERT INTO revoked_tokens (token_id, user_email, expires_at) VALUES (?, ?, ?)",
-		activeTokenID, "test@example.com", time.Now().Add(1*time.Hour))
+	_, err = db.Exec("INSERT INTO revoked_tokens (token_id, username, expires_at) VALUES (?, ?, ?)",
+		activeTokenID, "test_username", time.Now().Add(1*time.Hour))
 	require.NoError(t, err)
 
 	// Execute initializeCache
@@ -237,11 +237,11 @@ func TestCleanupExpiredTokens(t *testing.T) {
 	// Add expired and active tokens
 	expiredTokenID := "expired-to-clean-jti"
 	activeTokenID := "active-to-keep-jti"
-	_, err := db.Exec("INSERT INTO revoked_tokens (token_id, user_email, expires_at) VALUES (?, ?, ?)",
-		expiredTokenID, "test@example.com", time.Now().Add(-1*time.Hour))
+	_, err := db.Exec("INSERT INTO revoked_tokens (token_id, username, expires_at) VALUES (?, ?, ?)",
+		expiredTokenID, "test_username", time.Now().Add(-1*time.Hour))
 	require.NoError(t, err)
-	_, err = db.Exec("INSERT INTO revoked_tokens (token_id, user_email, expires_at) VALUES (?, ?, ?)",
-		activeTokenID, "test@example.com", time.Now().Add(1*time.Hour))
+	_, err = db.Exec("INSERT INTO revoked_tokens (token_id, username, expires_at) VALUES (?, ?, ?)",
+		activeTokenID, "test_username", time.Now().Add(1*time.Hour))
 	require.NoError(t, err)
 
 	// Populate cache (to test cache reset)
@@ -289,13 +289,13 @@ func TestTokenRevocationMiddleware(t *testing.T) {
 	validTokenID := "valid-for-middleware"
 	revokedTokenID := "revoked-for-middleware"
 	// tokenNoJTI_ID := "token-without-jti" // Unused variable removed
-	email := "middleware@example.com"
+	username := "middleware_user"
 	expiry := time.Now().Add(1 * time.Hour)
 
-	validTokenString := createTestToken(t, email, validTokenID, expiry)
-	revokedTokenString := createTestToken(t, email, revokedTokenID, expiry)
+	validTokenString := createTestToken(t, username, validTokenID, expiry)
+	revokedTokenString := createTestToken(t, username, revokedTokenID, expiry)
 	// Token without JTI (ID claim)
-	claimsNoJTI := &Claims{Email: email, RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(expiry)}}
+	claimsNoJTI := &Claims{Username: username, RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(expiry)}}
 	tokenNoJTI := jwt.NewWithClaims(jwt.SigningMethodHS256, claimsNoJTI)
 	tokenStringNoJTI, _ := tokenNoJTI.SignedString([]byte("test-middleware-secret"))
 

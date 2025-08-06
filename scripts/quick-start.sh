@@ -227,7 +227,7 @@ MINIO_ROOT_PASSWORD=TestPassword123_SecureMinIO
 LOCAL_STORAGE_PATH=/opt/arkfile/var/lib/minio/data
 
 # Admin Configuration (comma-separated list)
-ADMIN_EMAILS=admin@arkfile.demo
+ADMIN_USERNAMES=admin.demo.user
 
 # Security Settings for Demo
 REQUIRE_APPROVAL=false
@@ -287,13 +287,9 @@ if [ $attempt -eq $max_attempts ]; then
     exit 1
 fi
 
-# Set up the database schema using the improved setup script
-echo "Setting up database schema with improved script..."
-sudo ./scripts/setup/06-setup-database-improved.sh
-if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ Database setup failed${NC}"
-    exit 1
-fi
+# Database schema will be handled automatically by arkfile application
+echo "Database schema will be created automatically by arkfile application..."
+echo "  Using unified schema approach - no separate database setup needed"
 
 echo "Starting Arkfile application..."
 sudo systemctl start arkfile

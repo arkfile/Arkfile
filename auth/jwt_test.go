@@ -62,18 +62,18 @@ func TestGenerateToken(t *testing.T) {
 	// Config with JWT_SECRET is loaded in TestMain
 
 	testCases := []struct {
-		name  string
-		email string
+		name     string
+		username string
 	}{
-		{"Valid email", "user@example.com"},
-		{"Admin email", "admin@example.com"},
-		{"Empty email", ""}, // Test edge case
+		{"Valid username", "user123"},
+		{"Admin username", "admin"},
+		{"Empty username", ""}, // Test edge case
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Execute
-			tokenString, err := GenerateToken(tc.email)
+			tokenString, err := GenerateToken(tc.username)
 
 			// Assert: Check for errors and non-empty token
 			assert.NoError(t, err)
@@ -94,7 +94,7 @@ func TestGenerateToken(t *testing.T) {
 
 			claims, ok := token.Claims.(*Claims)
 			assert.True(t, ok, "Claims should be of type *Claims")
-			assert.Equal(t, tc.email, claims.Email, "Email claim should match")
+			assert.Equal(t, tc.username, claims.Username, "Username claim should match")
 			assert.Equal(t, "arkfile-auth", claims.Issuer, "Issuer claim should be correct")
 			assert.Contains(t, claims.Audience, "arkfile-api", "Audience claim should contain 'arkfile-api'")
 			assert.NotEmpty(t, claims.ID, "ID (jti) claim should not be empty")
@@ -109,11 +109,11 @@ func TestGenerateToken(t *testing.T) {
 	}
 }
 
-func TestGetEmailFromToken(t *testing.T) {
+func TestGetUsernameFromToken(t *testing.T) {
 	// Setup: Create a valid token for testing
-	testEmail := "test@example.com"
+	testUsername := "testuser"
 	claims := &Claims{
-		Email: testEmail,
+		Username: testUsername,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)), // Valid expiry
 		},
@@ -131,10 +131,10 @@ func TestGetEmailFromToken(t *testing.T) {
 	c.Set("user", token)
 
 	// Execute
-	extractedEmail := GetEmailFromToken(c)
+	extractedUsername := GetUsernameFromToken(c)
 
 	// Assert
-	assert.Equal(t, testEmail, extractedEmail, "Extracted email should match the one in the token")
+	assert.Equal(t, testUsername, extractedUsername, "Extracted username should match the one in the token")
 }
 
 func TestJWTMiddleware(t *testing.T) {
@@ -146,7 +146,7 @@ func TestJWTMiddleware(t *testing.T) {
 		// We can verify the claims are set correctly by the middleware
 		user := c.Get("user").(*jwt.Token)
 		claims := user.Claims.(*Claims)
-		assert.Equal(t, "test@example.com", claims.Email)
+		assert.Equal(t, "testuser", claims.Username)
 		return c.String(http.StatusOK, "test passed")
 	}
 
@@ -166,7 +166,7 @@ func TestJWTMiddleware(t *testing.T) {
 			name: "Valid Token",
 			tokenFunc: func() string {
 				claims := &Claims{
-					Email: "test@example.com",
+					Username: "testuser",
 					RegisteredClaims: jwt.RegisteredClaims{
 						ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 						ID:        "valid-token-id",
@@ -185,7 +185,7 @@ func TestJWTMiddleware(t *testing.T) {
 			name: "Expired Token",
 			tokenFunc: func() string {
 				claims := &Claims{
-					Email: "test@example.com",
+					Username: "testuser",
 					RegisteredClaims: jwt.RegisteredClaims{
 						ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)), // Expired
 						ID:        "expired-token-id",
@@ -204,7 +204,7 @@ func TestJWTMiddleware(t *testing.T) {
 			name: "Invalid Signature",
 			tokenFunc: func() string {
 				claims := &Claims{ // Use claims but sign with wrong key
-					Email: "test@example.com",
+					Username: "testuser",
 					RegisteredClaims: jwt.RegisteredClaims{
 						ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 					},

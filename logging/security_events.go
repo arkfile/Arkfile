@@ -92,7 +92,7 @@ func NewSecurityEventLogger(db *sql.DB, entityIDService *EntityIDService, config
 }
 
 // LogSecurityEvent logs a security event with privacy-preserving entity identification
-func (sel *SecurityEventLogger) LogSecurityEvent(eventType SecurityEventType, ip net.IP, userEmail *string, deviceProfile *string, details map[string]interface{}) error {
+func (sel *SecurityEventLogger) LogSecurityEvent(eventType SecurityEventType, ip net.IP, username *string, deviceProfile *string, details map[string]interface{}) error {
 	// Generate privacy-preserving entity ID
 	entityID := ""
 	timeWindow := ""
@@ -113,7 +113,7 @@ func (sel *SecurityEventLogger) LogSecurityEvent(eventType SecurityEventType, ip
 		EventType:     eventType,
 		EntityID:      entityID,
 		TimeWindow:    timeWindow,
-		Username:      userEmail,
+		Username:      username,
 		DeviceProfile: deviceProfile,
 		Severity:      severity,
 		Details:       sanitizedDetails,
@@ -133,14 +133,14 @@ func (sel *SecurityEventLogger) LogSecurityEvent(eventType SecurityEventType, ip
 }
 
 // LogAuthenticationEvent logs authentication-related events
-func (sel *SecurityEventLogger) LogAuthenticationEvent(eventType SecurityEventType, ip net.IP, userEmail *string, deviceProfile *string, success bool, details map[string]interface{}) error {
+func (sel *SecurityEventLogger) LogAuthenticationEvent(eventType SecurityEventType, ip net.IP, username *string, deviceProfile *string, success bool, details map[string]interface{}) error {
 	if details == nil {
 		details = make(map[string]interface{})
 	}
 	details["success"] = success
 	details["authentication_type"] = "opaque"
 
-	return sel.LogSecurityEvent(eventType, ip, userEmail, deviceProfile, details)
+	return sel.LogSecurityEvent(eventType, ip, username, deviceProfile, details)
 }
 
 // LogRateLimitEvent logs rate limiting events
@@ -397,9 +397,9 @@ func InitializeSecurityEventLogger(config SecurityEventConfig) error {
 }
 
 // LogSecurityEvent is a convenience function that uses the default logger
-func LogSecurityEvent(eventType SecurityEventType, ip net.IP, userEmail *string, deviceProfile *string, details map[string]interface{}) error {
+func LogSecurityEvent(eventType SecurityEventType, ip net.IP, username *string, deviceProfile *string, details map[string]interface{}) error {
 	if DefaultSecurityEventLogger == nil {
 		return fmt.Errorf("security event logger not initialized")
 	}
-	return DefaultSecurityEventLogger.LogSecurityEvent(eventType, ip, userEmail, deviceProfile, details)
+	return DefaultSecurityEventLogger.LogSecurityEvent(eventType, ip, username, deviceProfile, details)
 }

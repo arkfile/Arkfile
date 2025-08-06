@@ -47,7 +47,7 @@ func TestUploadFile_Success(t *testing.T) {
 	c, rec, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody)) // Assuming POST /files is the route
 
 	// Add Authentication context
-	claims := &auth.Claims{Email: email}
+	claims := &auth.Claims{Username: email}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
@@ -87,7 +87,7 @@ func TestUploadFile_Success(t *testing.T) {
 	).Return(nil).Maybe() // Use Maybe() since it should not be called in success case
 
 	// 2. Expect Metadata Insertion (after PutObject) - exact SQL match
-	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
+	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
 		WithArgs(filename, sqlmock.AnyArg(), email, passwordHint, passwordType, sha256sum, fileSize, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -102,7 +102,7 @@ func TestUploadFile_Success(t *testing.T) {
 	mockDB.ExpectCommit()
 
 	// --- Mock LogUserAction (after commit) ---
-	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
+	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mockDB.ExpectExec(logActionSQL).WithArgs(email, "uploaded", filename).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// --- Execute Handler ---
@@ -154,7 +154,7 @@ func TestUploadFile_StorageLimitExceeded(t *testing.T) {
 	c, _, mockDB, _ := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody)) // Storage mock not used here
 
 	// Add Authentication context
-	claims := &auth.Claims{Email: email}
+	claims := &auth.Claims{Username: email}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
@@ -210,7 +210,7 @@ func TestUploadFile_StoragePutError(t *testing.T) {
 	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody))
 
 	// Add Authentication context
-	claims := &auth.Claims{Email: email}
+	claims := &auth.Claims{Username: email}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
@@ -282,7 +282,7 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody))
 
 	// Add Authentication context
-	claims := &auth.Claims{Email: email}
+	claims := &auth.Claims{Username: email}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
@@ -310,7 +310,7 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 
 	// 2. Expect Metadata Insertion to FAIL
 	dbError := fmt.Errorf("simulated DB metadata insert error")
-	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
+	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
 		WithArgs(filename, sqlmock.AnyArg(), email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize, sqlmock.AnyArg()).
 		WillReturnError(dbError)
@@ -360,7 +360,7 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody))
 
 	// Add Authentication context
-	claims := &auth.Claims{Email: email}
+	claims := &auth.Claims{Username: email}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
@@ -391,7 +391,7 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	// so the handler just returns an error without storage cleanup
 
 	// 2. Expect Metadata Insertion to SUCCEED
-	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
+	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
 		WithArgs(filename, sqlmock.AnyArg(), email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -507,7 +507,7 @@ func TestUploadFile_CommitError(t *testing.T) {
 	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody))
 
 	// Add Authentication context
-	claims := &auth.Claims{Email: email}
+	claims := &auth.Claims{Username: email}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
@@ -534,7 +534,7 @@ func TestUploadFile_CommitError(t *testing.T) {
 	).Return(minio.UploadInfo{}, nil).Once()
 
 	// 2. Expect Metadata Insertion to SUCCEED
-	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
+	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
 		WithArgs(filename, sqlmock.AnyArg(), email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
