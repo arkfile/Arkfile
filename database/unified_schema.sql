@@ -8,7 +8,8 @@
 -- Users table (foundation for all other tables)
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE NOT NULL,
+    email TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     total_storage_bytes BIGINT NOT NULL DEFAULT 0,
     storage_limit_bytes BIGINT NOT NULL DEFAULT 10737418240,
@@ -22,13 +23,13 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS file_metadata (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     filename TEXT UNIQUE NOT NULL,
-    owner_email TEXT NOT NULL,
+    owner_username TEXT NOT NULL,
     password_hint TEXT,
     password_type TEXT NOT NULL DEFAULT 'custom',
     sha256sum CHAR(64) NOT NULL,
     size_bytes BIGINT NOT NULL DEFAULT 0,
     upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (owner_email) REFERENCES users(email)
+    FOREIGN KEY (owner_username) REFERENCES users(username)
 );
 
 -- =====================================================
@@ -46,20 +47,20 @@ CREATE TABLE IF NOT EXISTS opaque_server_keys (
 
 -- OPAQUE user authentication records
 CREATE TABLE IF NOT EXISTS opaque_user_data (
-    user_email TEXT PRIMARY KEY,
+    username TEXT PRIMARY KEY,
     serialized_record BLOB NOT NULL,
     created_at DATETIME NOT NULL,
-    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 -- OPAQUE password records for files and accounts
 CREATE TABLE IF NOT EXISTS opaque_password_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     record_type TEXT NOT NULL,           -- 'account', 'file_custom' (NO 'share' type)
-    record_identifier TEXT NOT NULL UNIQUE, -- email, 'user:file:filename'
+    record_identifier TEXT NOT NULL UNIQUE, -- username, 'user:file:filename'
     opaque_user_record BLOB NOT NULL,    -- OPAQUE registration data
     associated_file_id TEXT,             -- NULL for account, filename for file_custom
-    associated_user_email TEXT,          -- User who created this record
+    associated_username TEXT,            -- User who created this record
     key_label TEXT,                      -- Human-readable label
     password_hint_encrypted BLOB,        -- Encrypted with export key
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -70,23 +71,23 @@ CREATE TABLE IF NOT EXISTS opaque_password_records (
 -- JWT token management
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     id TEXT PRIMARY KEY,
-    user_email TEXT NOT NULL,
+    username TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     expires_at TIMESTAMP NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_revoked BOOLEAN DEFAULT FALSE,
     is_used BOOLEAN DEFAULT FALSE,
-    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS revoked_tokens (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     token_id TEXT NOT NULL UNIQUE,  -- the jti claim value
-    user_email TEXT NOT NULL,
+    username TEXT NOT NULL,
     revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP NOT NULL,
     reason TEXT,
-    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 -- =====================================================
@@ -94,33 +95,33 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS user_totp (
-    user_email TEXT PRIMARY KEY,
+    username TEXT PRIMARY KEY,
     secret_encrypted BLOB NOT NULL,           -- AES-GCM encrypted with session key
     backup_codes_encrypted BLOB,              -- JSON array of codes, encrypted
     enabled BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_used TIMESTAMP,
     setup_completed BOOLEAN DEFAULT FALSE,    -- Two-phase setup
-    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 -- TOTP Usage Log for Replay Protection (90-second window)
 CREATE TABLE IF NOT EXISTS totp_usage_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_email TEXT NOT NULL,
+    username TEXT NOT NULL,
     code_hash TEXT NOT NULL,                  -- SHA-256 hash of used code
     used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     window_start INTEGER NOT NULL,            -- Unix timestamp of 30s window
-    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 -- Backup Code Usage Log
 CREATE TABLE IF NOT EXISTS totp_backup_usage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_email TEXT NOT NULL,
+    username TEXT NOT NULL,
     code_hash TEXT NOT NULL,                  -- SHA-256 hash of used backup code
     used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 -- =====================================================
@@ -132,12 +133,12 @@ CREATE TABLE IF NOT EXISTS file_share_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     share_id TEXT NOT NULL UNIQUE,        -- 256-bit crypto-secure identifier
     file_id TEXT NOT NULL,                -- Reference to the shared file
-    owner_email TEXT NOT NULL,            -- User who created the share
+    owner_username TEXT NOT NULL,         -- User who created the share
     salt BLOB NOT NULL,                   -- 32-byte random salt for Argon2id
     encrypted_fek BLOB NOT NULL,          -- FEK encrypted with Argon2id-derived share key
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     expires_at DATETIME,                  -- Optional expiration
-    FOREIGN KEY (owner_email) REFERENCES users(email) ON DELETE CASCADE
+    FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 -- File encryption keys
@@ -161,7 +162,7 @@ CREATE TABLE IF NOT EXISTS file_encryption_keys (
 CREATE TABLE IF NOT EXISTS upload_sessions (
     id TEXT PRIMARY KEY,
     filename TEXT NOT NULL,
-    owner_email TEXT NOT NULL,
+    owner_username TEXT NOT NULL,
     total_size BIGINT NOT NULL,
     chunk_size INTEGER NOT NULL,
     total_chunks INTEGER NOT NULL,
@@ -181,7 +182,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,
-    FOREIGN KEY (owner_email) REFERENCES users(email)
+    FOREIGN KEY (owner_username) REFERENCES users(username)
 );
 
 -- Individual chunk tracking
@@ -209,7 +210,7 @@ CREATE TABLE IF NOT EXISTS security_events (
     event_type TEXT NOT NULL,
     entity_id TEXT NOT NULL,           -- HMAC-based, privacy-preserving
     time_window TEXT NOT NULL,         -- "2025-06-20"
-    user_email TEXT,                   -- Only for authenticated events
+    username TEXT,                     -- Only for authenticated events
     device_profile TEXT,               -- Argon2ID profile
     severity TEXT NOT NULL DEFAULT 'INFO',
     details TEXT,                      -- Changed from JSON to TEXT for rqlite compatibility
@@ -293,23 +294,23 @@ CREATE TABLE IF NOT EXISTS security_alerts (
 -- User activity tracking
 CREATE TABLE IF NOT EXISTS user_activity (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_email TEXT NOT NULL,
+    username TEXT NOT NULL,
     action TEXT NOT NULL,
     target TEXT,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_email) REFERENCES users(email)
+    FOREIGN KEY (username) REFERENCES users(username)
 );
 
 -- Admin actions logs
 CREATE TABLE IF NOT EXISTS admin_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    admin_email TEXT NOT NULL,
+    admin_username TEXT NOT NULL,
     action TEXT NOT NULL,
-    target_email TEXT NOT NULL,
+    target_username TEXT NOT NULL,
     details TEXT,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (admin_email) REFERENCES users(email),
-    FOREIGN KEY (target_email) REFERENCES users(email)
+    FOREIGN KEY (admin_username) REFERENCES users(username),
+    FOREIGN KEY (target_username) REFERENCES users(username)
 );
 
 -- =====================================================
@@ -318,35 +319,35 @@ CREATE TABLE IF NOT EXISTS admin_logs (
 
 -- Core table indexes
 CREATE INDEX IF NOT EXISTS idx_file_metadata_sha256sum ON file_metadata(sha256sum);
-CREATE INDEX IF NOT EXISTS idx_file_metadata_owner ON file_metadata(owner_email);
+CREATE INDEX IF NOT EXISTS idx_file_metadata_owner ON file_metadata(owner_username);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_upload_date ON file_metadata(upload_date);
 
 -- Authentication indexes
-CREATE INDEX IF NOT EXISTS idx_opaque_user_data_email ON opaque_user_data(user_email);
+CREATE INDEX IF NOT EXISTS idx_opaque_user_data_username ON opaque_user_data(username);
 CREATE INDEX IF NOT EXISTS idx_opaque_passwords_type ON opaque_password_records(record_type);
 CREATE INDEX IF NOT EXISTS idx_opaque_passwords_identifier ON opaque_password_records(record_identifier);
 CREATE INDEX IF NOT EXISTS idx_opaque_passwords_file ON opaque_password_records(associated_file_id);
-CREATE INDEX IF NOT EXISTS idx_opaque_passwords_user ON opaque_password_records(associated_user_email);
+CREATE INDEX IF NOT EXISTS idx_opaque_passwords_user ON opaque_password_records(associated_username);
 CREATE INDEX IF NOT EXISTS idx_opaque_passwords_active ON opaque_password_records(is_active);
 
 -- Token management indexes
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_email);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(username);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_jti ON revoked_tokens(token_id);
-CREATE INDEX IF NOT EXISTS idx_revoked_tokens_user ON revoked_tokens(user_email);
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_user ON revoked_tokens(username);
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_at);
 
 -- TOTP indexes
-CREATE INDEX IF NOT EXISTS idx_user_totp_email ON user_totp(user_email);
+CREATE INDEX IF NOT EXISTS idx_user_totp_username ON user_totp(username);
 CREATE INDEX IF NOT EXISTS idx_totp_usage_cleanup ON totp_usage_log(used_at);
-CREATE INDEX IF NOT EXISTS idx_totp_usage_user_window ON totp_usage_log(user_email, window_start);
-CREATE INDEX IF NOT EXISTS idx_totp_backup_user ON totp_backup_usage(user_email);
+CREATE INDEX IF NOT EXISTS idx_totp_usage_user_window ON totp_usage_log(username, window_start);
+CREATE INDEX IF NOT EXISTS idx_totp_backup_user ON totp_backup_usage(username);
 CREATE INDEX IF NOT EXISTS idx_totp_backup_cleanup ON totp_backup_usage(used_at);
 
 -- File sharing indexes
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_share_id ON file_share_keys(share_id);
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_file_id ON file_share_keys(file_id);
-CREATE INDEX IF NOT EXISTS idx_file_share_keys_owner ON file_share_keys(owner_email);
+CREATE INDEX IF NOT EXISTS idx_file_share_keys_owner ON file_share_keys(owner_username);
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_expires_at ON file_share_keys(expires_at);
 
 -- File encryption keys indexes
@@ -354,7 +355,7 @@ CREATE INDEX IF NOT EXISTS idx_file_encryption_keys_file ON file_encryption_keys
 CREATE INDEX IF NOT EXISTS idx_file_encryption_keys_key ON file_encryption_keys(key_id);
 
 -- Upload session indexes
-CREATE INDEX IF NOT EXISTS idx_upload_sessions_owner ON upload_sessions(owner_email);
+CREATE INDEX IF NOT EXISTS idx_upload_sessions_owner ON upload_sessions(owner_username);
 CREATE INDEX IF NOT EXISTS idx_upload_sessions_status ON upload_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_upload_chunks_session ON upload_chunks(session_id);
 

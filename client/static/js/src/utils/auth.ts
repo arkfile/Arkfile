@@ -126,12 +126,17 @@ export class AuthManager {
     }
   }
 
-  public static getUserEmailFromToken(): string | null {
+  public static getUsernameFromToken(): string | null {
     const token = this.getToken();
     if (!token) return null;
     
     const payload = this.parseJwtToken(token);
-    return payload?.email || null;
+    return payload?.username || null;
+  }
+
+  // Legacy function for backwards compatibility
+  public static getUserEmailFromToken(): string | null {
+    return this.getUsernameFromToken();
   }
 
   public static getTokenExpiry(): Date | null {
@@ -152,23 +157,39 @@ export class AuthManager {
   }
 
   // Admin contact management
-  private static adminEmails: string[] = ['admin@arkfile.demo'];
+  private static adminUsernames: string[] = ['admin.user.2024'];
+  private static adminContact: string = 'admin@arkfile.demo';
 
-  public static async fetchAdminEmails(): Promise<string[]> {
+  public static async fetchAdminContacts(): Promise<{usernames: string[], contact: string}> {
     try {
       const response = await fetch('/api/admin-contacts');
       if (response.ok) {
         const data = await response.json();
-        this.adminEmails = data.adminEmails || ['admin@arkfile.demo'];
+        this.adminUsernames = data.adminUsernames || ['admin.user.2024'];
+        this.adminContact = data.adminContact || 'admin@arkfile.demo';
       }
     } catch (error) {
-      console.warn('Could not fetch admin emails:', error);
+      console.warn('Could not fetch admin contacts:', error);
     }
-    return this.adminEmails;
+    return { usernames: this.adminUsernames, contact: this.adminContact };
+  }
+
+  public static getAdminUsernames(): string[] {
+    return this.adminUsernames;
+  }
+
+  public static getAdminContact(): string {
+    return this.adminContact;
+  }
+
+  // Legacy function for backwards compatibility
+  public static async fetchAdminEmails(): Promise<string[]> {
+    const contacts = await this.fetchAdminContacts();
+    return [contacts.contact]; // Return contact email for legacy compatibility
   }
 
   public static getAdminEmails(): string[] {
-    return this.adminEmails;
+    return [this.adminContact]; // Return contact email for legacy compatibility
   }
 
   // API helpers with authentication
@@ -232,7 +253,8 @@ export const getRefreshToken = AuthManager.getRefreshToken.bind(AuthManager);
 export const setTokens = AuthManager.setTokens.bind(AuthManager);
 export const clearTokens = AuthManager.clearTokens.bind(AuthManager);
 export const isAuthenticated = AuthManager.isAuthenticated.bind(AuthManager);
-export const getUserEmailFromToken = AuthManager.getUserEmailFromToken.bind(AuthManager);
+export const getUsernameFromToken = AuthManager.getUsernameFromToken.bind(AuthManager);
+export const getUserEmailFromToken = AuthManager.getUserEmailFromToken.bind(AuthManager); // Legacy compatibility
 export const isTokenExpired = AuthManager.isTokenExpired.bind(AuthManager);
 export const refreshToken = AuthManager.refreshToken.bind(AuthManager);
 export const revokeAllSessions = AuthManager.revokeAllSessions.bind(AuthManager);
@@ -240,5 +262,8 @@ export const logout = AuthManager.logout.bind(AuthManager);
 export const validateToken = AuthManager.validateToken.bind(AuthManager);
 export const authenticatedFetch = AuthManager.authenticatedFetch.bind(AuthManager);
 export const clearAllSessionData = AuthManager.clearAllSessionData.bind(AuthManager);
-export const fetchAdminEmails = AuthManager.fetchAdminEmails.bind(AuthManager);
-export const getAdminEmails = AuthManager.getAdminEmails.bind(AuthManager);
+export const fetchAdminContacts = AuthManager.fetchAdminContacts.bind(AuthManager);
+export const getAdminUsernames = AuthManager.getAdminUsernames.bind(AuthManager);
+export const getAdminContact = AuthManager.getAdminContact.bind(AuthManager);
+export const fetchAdminEmails = AuthManager.fetchAdminEmails.bind(AuthManager); // Legacy compatibility
+export const getAdminEmails = AuthManager.getAdminEmails.bind(AuthManager); // Legacy compatibility

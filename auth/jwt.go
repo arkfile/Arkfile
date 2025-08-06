@@ -18,17 +18,17 @@ import (
 var Echo *echo.Group
 
 type Claims struct {
-	Email        string `json:"email"`
+	Username     string `json:"username"`
 	RequiresTOTP bool   `json:"requires_totp,omitempty"`
 	jwt.RegisteredClaims
 }
 
-func GenerateToken(email string) (string, error) {
+func GenerateToken(username string) (string, error) {
 	// Generate a unique token ID
 	tokenID := uuid.New().String()
 
 	claims := &Claims{
-		Email: email,
+		Username: username,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24)), // Token expires in 24 hours
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -58,10 +58,16 @@ func JWTMiddleware() echo.MiddlewareFunc {
 	return echojwt.WithConfig(config)
 }
 
-func GetEmailFromToken(c echo.Context) string {
-	user := c.Get("user").(*jwt.Token)
-	claims := user.Claims.(*Claims)
-	return claims.Email
+func GetUsernameFromToken(c echo.Context) string {
+	user, ok := c.Get("user").(*jwt.Token)
+	if !ok || user == nil {
+		return ""
+	}
+	claims, ok := user.Claims.(*Claims)
+	if !ok {
+		return ""
+	}
+	return claims.Username
 }
 
 // GenerateRefreshToken creates a cryptographically secure random string to be used as a refresh token.
@@ -87,11 +93,11 @@ func HashToken(token string) (string, error) {
 }
 
 // GenerateTemporaryTOTPToken creates a temporary JWT token that requires TOTP completion
-func GenerateTemporaryTOTPToken(email string) (string, error) {
+func GenerateTemporaryTOTPToken(username string) (string, error) {
 	tokenID := uuid.New().String()
 
 	claims := &Claims{
-		Email:        email,
+		Username:     username,
 		RequiresTOTP: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(5 * time.Minute)), // 5 minute expiry
@@ -108,11 +114,11 @@ func GenerateTemporaryTOTPToken(email string) (string, error) {
 }
 
 // GenerateFullAccessToken creates a full access JWT token after TOTP validation
-func GenerateFullAccessToken(email string) (string, error) {
+func GenerateFullAccessToken(username string) (string, error) {
 	tokenID := uuid.New().String()
 
 	claims := &Claims{
-		Email:        email,
+		Username:     username,
 		RequiresTOTP: false,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24)), // 24 hour expiry

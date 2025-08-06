@@ -61,7 +61,7 @@ type SecurityEvent struct {
 	EventType     SecurityEventType      `json:"event_type"`
 	EntityID      string                 `json:"entity_id"`      // HMAC-based, non-reversible
 	TimeWindow    string                 `json:"time_window"`    // "2025-06-20"
-	UserEmail     *string                `json:"user_email"`     // Only for authenticated events
+	Username      *string                `json:"username"`       // Only for authenticated events
 	DeviceProfile *string                `json:"device_profile"` // OPAQUE export key context
 	Severity      SecurityEventSeverity  `json:"severity"`
 	Details       map[string]interface{} `json:"details"`
@@ -113,7 +113,7 @@ func (sel *SecurityEventLogger) LogSecurityEvent(eventType SecurityEventType, ip
 		EventType:     eventType,
 		EntityID:      entityID,
 		TimeWindow:    timeWindow,
-		UserEmail:     userEmail,
+		Username:      userEmail,
 		DeviceProfile: deviceProfile,
 		Severity:      severity,
 		Details:       sanitizedDetails,
@@ -170,7 +170,7 @@ func (sel *SecurityEventLogger) LogKeyHealthEvent(eventType SecurityEventType, c
 
 // GetSecurityEvents retrieves security events with filtering options
 func (sel *SecurityEventLogger) GetSecurityEvents(filters SecurityEventFilters) ([]SecurityEvent, error) {
-	query := `SELECT id, timestamp, event_type, entity_id, time_window, user_email, device_profile, severity, details, created_at FROM security_events WHERE 1=1`
+	query := `SELECT id, timestamp, event_type, entity_id, time_window, username, device_profile, severity, details, created_at FROM security_events WHERE 1=1`
 	args := []interface{}{}
 	argCount := 0
 
@@ -236,7 +236,7 @@ func (sel *SecurityEventLogger) GetSecurityEvents(filters SecurityEventFilters) 
 			&event.EventType,
 			&event.EntityID,
 			&event.TimeWindow,
-			&event.UserEmail,
+			&event.Username,
 			&event.DeviceProfile,
 			&event.Severity,
 			&detailsJSON,
@@ -292,14 +292,14 @@ func (sel *SecurityEventLogger) storeSecurityEvent(event SecurityEvent) error {
 		detailsJSON = []byte("{}")
 	}
 
-	query := `INSERT INTO security_events (timestamp, event_type, entity_id, time_window, user_email, device_profile, severity, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO security_events (timestamp, event_type, entity_id, time_window, username, device_profile, severity, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	_, err = sel.db.Exec(query,
 		event.Timestamp,
 		string(event.EventType),
 		event.EntityID,
 		event.TimeWindow,
-		event.UserEmail,
+		event.Username,
 		event.DeviceProfile,
 		string(event.Severity),
 		string(detailsJSON),
@@ -359,8 +359,8 @@ func (sel *SecurityEventLogger) logToFile(event SecurityEvent) {
 	message := fmt.Sprintf("Security Event: %s | Entity: %s | Window: %s | Severity: %s",
 		event.EventType, event.EntityID, event.TimeWindow, event.Severity)
 
-	if event.UserEmail != nil {
-		message += fmt.Sprintf(" | User: %s", *event.UserEmail)
+	if event.Username != nil {
+		message += fmt.Sprintf(" | User: %s", *event.Username)
 	}
 
 	if event.DeviceProfile != nil {

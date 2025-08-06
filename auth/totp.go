@@ -48,7 +48,7 @@ type TOTPData struct {
 }
 
 // GenerateTOTPSetup creates a new TOTP setup for a user
-func GenerateTOTPSetup(userEmail string, sessionKey []byte) (*TOTPSetup, error) {
+func GenerateTOTPSetup(username string, sessionKey []byte) (*TOTPSetup, error) {
 	// Generate 32-byte secret
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
@@ -63,7 +63,7 @@ func GenerateTOTPSetup(userEmail string, sessionKey []byte) (*TOTPSetup, error) 
 
 	// Generate QR code URL
 	qrURL := fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s&digits=%d&period=%d",
-		TOTPIssuer, userEmail, secretB32, TOTPIssuer, TOTPDigits, TOTPPeriod)
+		TOTPIssuer, username, secretB32, TOTPIssuer, TOTPDigits, TOTPPeriod)
 
 	// Generate backup codes
 	backupCodes := generateBackupCodes(BackupCodeCount)
@@ -77,7 +77,7 @@ func GenerateTOTPSetup(userEmail string, sessionKey []byte) (*TOTPSetup, error) 
 }
 
 // StoreTOTPSetup stores the TOTP setup data in the database (temporarily encrypted during setup)
-func StoreTOTPSetup(db *sql.DB, userEmail string, setup *TOTPSetup, sessionKey []byte) error {
+func StoreTOTPSetup(db *sql.DB, username string, setup *TOTPSetup, sessionKey []byte) error {
 	// During setup, use a temporary encryption key derivable from session key
 	// This allows us to decrypt during verification, then re-encrypt with production key
 
@@ -109,10 +109,10 @@ func StoreTOTPSetup(db *sql.DB, userEmail string, setup *TOTPSetup, sessionKey [
 	// Store in database with temporarily encrypted data during setup
 	_, err = db.Exec(`
 		INSERT OR REPLACE INTO user_totp (
-			user_email, secret_encrypted, backup_codes_encrypted, 
+			username, secret_encrypted, backup_codes_encrypted, 
 			enabled, setup_completed, created_at
 		) VALUES (?, ?, ?, ?, ?, ?)`,
-		userEmail, secretEncrypted, backupCodesEncrypted,
+		username, secretEncrypted, backupCodesEncrypted,
 		false, false, time.Now(),
 	)
 
@@ -124,9 +124,9 @@ func StoreTOTPSetup(db *sql.DB, userEmail string, setup *TOTPSetup, sessionKey [
 }
 
 // CompleteTOTPSetup validates a test code and enables TOTP for the user
-func CompleteTOTPSetup(db *sql.DB, userEmail, testCode string, sessionKey []byte) error {
+func CompleteTOTPSetup(db *sql.DB, username, testCode string, sessionKey []byte) error {
 	// Get stored TOTP data
-	totpData, err := getTOTPData(db, userEmail)
+	totpData, err := getTOTPData(db, username)
 	if err != nil {
 		return fmt.Errorf("failed to get TOTP data: %w", err)
 	}
@@ -195,8 +195,8 @@ func CompleteTOTPSetup(db *sql.DB, userEmail, testCode string, sessionKey []byte
 	_, err = db.Exec(`
 		UPDATE user_totp 
 		SET secret_encrypted = ?, backup_codes_encrypted = ?, enabled = true, setup_completed = true 
-		WHERE user_email = ?`,
-		secretEncrypted, backupCodesEncrypted, userEmail,
+		WHERE username = ?`,
+		secretEncrypted, backupCodesEncrypted, username,
 	)
 
 	if err != nil {
@@ -205,16 +205,16 @@ func CompleteTOTPSetup(db *sql.DB, userEmail, testCode string, sessionKey []byte
 
 	// Log successful TOTP setup
 	if logging.InfoLogger != nil {
-		logging.InfoLogger.Printf("TOTP setup completed for user: %s", userEmail)
+		logging.InfoLogger.Printf("TOTP setup completed for user: %s", username)
 	}
 
 	return nil
 }
 
 // ValidateTOTPCode validates a TOTP code with replay protection
-func ValidateTOTPCode(db *sql.DB, userEmail, code string, sessionKey []byte) error {
+func ValidateTOTPCode(db *sql.DB, username, code string, sessionKey []byte) error {
 	// Get user's TOTP data
-	totpData, err := getTOTPData(db, userEmail)
+	totpData, err := getTOTPData(db, username)
 	if err != nil {
 		return fmt.Errorf("failed to get TOTP data: %w", err)
 	}
@@ -250,8 +250,8 @@ func ValidateTOTPCode(db *sql.DB, userEmail, code string, sessionKey []byte) err
 	// so the previous replay protection mechanism needs to be re-evaluated.
 
 	// Update last used timestamp
-	_, err = db.Exec("UPDATE user_totp SET last_used = ? WHERE user_email = ?",
-		time.Now(), userEmail)
+	_, err = db.Exec("UPDATE user_totp SET last_used = ? WHERE username = ?",
+		time.Now(), username)
 	if err != nil {
 		// Log but don't fail
 		if logging.ErrorLogger != nil {
@@ -263,9 +263,9 @@ func ValidateTOTPCode(db *sql.DB, userEmail, code string, sessionKey []byte) err
 }
 
 // ValidateBackupCode validates and consumes a backup code
-func ValidateBackupCode(db *sql.DB, userEmail, code string, sessionKey []byte) error {
+func ValidateBackupCode(db *sql.DB, username, code string, sessionKey []byte) error {
 	// Get user's TOTP data
-	totpData, err := getTOTPData(db, userEmail)
+	totpData, err := getTOTPData(db, username)
 	if err != nil {
 		return fmt.Errorf("failed to get TOTP data: %w", err)
 	}
@@ -282,7 +282,7 @@ func ValidateBackupCode(db *sql.DB, userEmail, code string, sessionKey []byte) e
 
 	// Check if code exists and not used
 	codeHash := hashString(code)
-	if err := checkBackupCodeReplay(db, userEmail, codeHash); err != nil {
+	if err := checkBackupCodeReplay(db, username, codeHash); err != nil {
 		return fmt.Errorf("backup code already used: %w", err)
 	}
 
@@ -300,13 +300,13 @@ func ValidateBackupCode(db *sql.DB, userEmail, code string, sessionKey []byte) e
 	}
 
 	// Mark as used
-	if err := logBackupCodeUsage(db, userEmail, codeHash); err != nil {
+	if err := logBackupCodeUsage(db, username, codeHash); err != nil {
 		return fmt.Errorf("failed to log backup code usage: %w", err)
 	}
 
 	// Update last used timestamp
-	_, err = db.Exec("UPDATE user_totp SET last_used = ? WHERE user_email = ?",
-		time.Now(), userEmail)
+	_, err = db.Exec("UPDATE user_totp SET last_used = ? WHERE username = ?",
+		time.Now(), username)
 	if err != nil {
 		// Log but don't fail
 		if logging.ErrorLogger != nil {
@@ -318,15 +318,15 @@ func ValidateBackupCode(db *sql.DB, userEmail, code string, sessionKey []byte) e
 }
 
 // IsUserTOTPEnabled checks if TOTP is enabled for a user
-func IsUserTOTPEnabled(db *sql.DB, userEmail string) (bool, error) {
+func IsUserTOTPEnabled(db *sql.DB, username string) (bool, error) {
 	var enabled bool
 	var setupCompleted bool
 
 	err := db.QueryRow(`
 		SELECT enabled, setup_completed 
 		FROM user_totp 
-		WHERE user_email = ?`,
-		userEmail,
+		WHERE username = ?`,
+		username,
 	).Scan(&enabled, &setupCompleted)
 
 	if err != nil {
@@ -340,21 +340,21 @@ func IsUserTOTPEnabled(db *sql.DB, userEmail string) (bool, error) {
 }
 
 // DisableTOTP disables TOTP for a user (requires current TOTP code)
-func DisableTOTP(db *sql.DB, userEmail, currentCode string, sessionKey []byte) error {
+func DisableTOTP(db *sql.DB, username, currentCode string, sessionKey []byte) error {
 	// Validate current code first
-	if err := ValidateTOTPCode(db, userEmail, currentCode, sessionKey); err != nil {
+	if err := ValidateTOTPCode(db, username, currentCode, sessionKey); err != nil {
 		return fmt.Errorf("invalid current TOTP code: %w", err)
 	}
 
 	// Disable TOTP
-	_, err := db.Exec("DELETE FROM user_totp WHERE user_email = ?", userEmail)
+	_, err := db.Exec("DELETE FROM user_totp WHERE username = ?", username)
 	if err != nil {
 		return fmt.Errorf("failed to disable TOTP: %w", err)
 	}
 
 	// Log the action
 	if logging.InfoLogger != nil {
-		logging.InfoLogger.Printf("TOTP disabled for user: %s", userEmail)
+		logging.InfoLogger.Printf("TOTP disabled for user: %s", username)
 	}
 
 	return nil
@@ -442,7 +442,7 @@ func validateTOTPCodeInternal(secret, code string) bool {
 	return valid
 }
 
-func checkTOTPReplay(db *sql.DB, userEmail, code string, testTime time.Time) error {
+func checkTOTPReplay(db *sql.DB, username, code string, testTime time.Time) error {
 	codeHash := hashString(code)
 	windowStart := testTime.Truncate(time.Duration(TOTPPeriod) * time.Second).Unix()
 
@@ -450,8 +450,8 @@ func checkTOTPReplay(db *sql.DB, userEmail, code string, testTime time.Time) err
 	err := db.QueryRow(`
 		SELECT COUNT(*) 
 		FROM totp_usage_log 
-		WHERE user_email = ? AND code_hash = ? AND window_start = ?`,
-		userEmail, codeHash, windowStart,
+		WHERE username = ? AND code_hash = ? AND window_start = ?`,
+		username, codeHash, windowStart,
 	).Scan(&count)
 
 	if err != nil {
@@ -465,26 +465,26 @@ func checkTOTPReplay(db *sql.DB, userEmail, code string, testTime time.Time) err
 	return nil
 }
 
-func logTOTPUsage(db *sql.DB, userEmail, code string, testTime time.Time) error {
+func logTOTPUsage(db *sql.DB, username, code string, testTime time.Time) error {
 	codeHash := hashString(code)
 	windowStart := testTime.Truncate(time.Duration(TOTPPeriod) * time.Second).Unix()
 
 	_, err := db.Exec(`
-		INSERT INTO totp_usage_log (user_email, code_hash, window_start) 
+		INSERT INTO totp_usage_log (username, code_hash, window_start) 
 		VALUES (?, ?, ?)`,
-		userEmail, codeHash, windowStart,
+		username, codeHash, windowStart,
 	)
 
 	return err
 }
 
-func checkBackupCodeReplay(db *sql.DB, userEmail, codeHash string) error {
+func checkBackupCodeReplay(db *sql.DB, username, codeHash string) error {
 	var count int
 	err := db.QueryRow(`
 		SELECT COUNT(*) 
 		FROM totp_backup_usage 
-		WHERE user_email = ? AND code_hash = ?`,
-		userEmail, codeHash,
+		WHERE username = ? AND code_hash = ?`,
+		username, codeHash,
 	).Scan(&count)
 
 	if err != nil {
@@ -498,16 +498,16 @@ func checkBackupCodeReplay(db *sql.DB, userEmail, codeHash string) error {
 	return nil
 }
 
-func logBackupCodeUsage(db *sql.DB, userEmail, codeHash string) error {
+func logBackupCodeUsage(db *sql.DB, username, codeHash string) error {
 	_, err := db.Exec(`
-		INSERT INTO totp_backup_usage (user_email, code_hash) 
+		INSERT INTO totp_backup_usage (username, code_hash) 
 		VALUES (?, ?)`,
-		userEmail, codeHash,
+		username, codeHash,
 	)
 	return err
 }
 
-func getTOTPData(db *sql.DB, userEmail string) (*TOTPData, error) {
+func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 	var data TOTPData
 	var createdAtStr string
 	var lastUsedStr sql.NullString
@@ -515,8 +515,8 @@ func getTOTPData(db *sql.DB, userEmail string) (*TOTPData, error) {
 	err := db.QueryRow(`
 		SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used
 		FROM user_totp 
-		WHERE user_email = ?`,
-		userEmail,
+		WHERE username = ?`,
+		username,
 	).Scan(&data.SecretEncrypted, &data.BackupCodesEncrypted, &data.Enabled, &data.SetupCompleted, &createdAtStr, &lastUsedStr)
 
 	if err != nil {

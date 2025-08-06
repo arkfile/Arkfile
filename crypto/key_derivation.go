@@ -9,8 +9,8 @@ import (
 )
 
 // DeriveOPAQUEFileKey derives a file encryption key from OPAQUE export key
-func DeriveOPAQUEFileKey(exportKey []byte, fileID, userEmail string) ([]byte, error) {
-	info := fmt.Sprintf("arkfile-file-encryption:%s:%s", userEmail, fileID)
+func DeriveOPAQUEFileKey(exportKey []byte, fileID, username string) ([]byte, error) {
+	info := fmt.Sprintf("arkfile-file-encryption:%s:%s", username, fileID)
 	return hkdfExpand(exportKey, []byte(info), 32)
 }
 
@@ -27,8 +27,8 @@ func DerivePasswordHintKey(exportKey []byte, recordIdentifier string) ([]byte, e
 }
 
 // DeriveAccountFileKey derives a file encryption key from account password export key
-func DeriveAccountFileKey(exportKey []byte, userEmail, fileID string) ([]byte, error) {
-	info := fmt.Sprintf("arkfile-account-file:%s:%s", userEmail, fileID)
+func DeriveAccountFileKey(exportKey []byte, username, fileID string) ([]byte, error) {
+	info := fmt.Sprintf("arkfile-account-file:%s:%s", username, fileID)
 	return hkdfExpand(exportKey, []byte(info), 32)
 }
 

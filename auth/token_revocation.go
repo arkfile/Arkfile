@@ -45,9 +45,9 @@ func RevokeToken(db *sql.DB, tokenString, reason string) error {
 
 	// Add to database
 	_, err = db.Exec(
-		`INSERT INTO revoked_tokens (token_id, user_email, expires_at, reason) 
+		`INSERT INTO revoked_tokens (token_id, username, expires_at, reason) 
 		 VALUES (?, ?, ?, ?)`,
-		tokenID, claims.Email, expiryTime, reason,
+		tokenID, claims.Username, expiryTime, reason,
 	)
 	if err != nil {
 		return err
@@ -154,8 +154,8 @@ func CleanupExpiredTokens(db *sql.DB) error {
 	return nil
 }
 
-func DeleteAllRefreshTokensForUser(db *sql.DB, userEmail string) error {
-	_, err := db.Exec("DELETE FROM refresh_tokens WHERE user_email = ?", userEmail)
+func DeleteAllRefreshTokensForUser(db *sql.DB, username string) error {
+	_, err := db.Exec("DELETE FROM refresh_tokens WHERE username = ?", username)
 	return err
 }
 

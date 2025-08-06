@@ -19,7 +19,7 @@ if (typeof window !== 'undefined') {
 export interface TOTPFlowData {
   tempToken: string;
   sessionKey: string;
-  email: string;
+  username: string;
 }
 
 export interface TOTPSetupData {
@@ -211,7 +211,7 @@ async function verifyTOTPLogin(): Promise<void> {
         refreshToken: data.refreshToken,
         sessionKey: data.sessionKey,
         authMethod: 'OPAQUE'
-      }, totpLoginData.email);
+      }, totpLoginData.username);
       
       // Clean up
       if (typeof window !== 'undefined') {
@@ -524,9 +524,9 @@ async function completeTOTPSetupFlow(code: string, sessionKey: string): Promise<
 }
 
 // Export utility functions for WASM integration
-export async function validateTOTPCode(code: string, userEmail: string): Promise<boolean> {
+export async function validateTOTPCode(code: string, username: string): Promise<boolean> {
   try {
-    const result = await wasmManager.validateTOTPCode(code, userEmail);
+    const result = await wasmManager.validateTOTPCode(code, username);
     return result.valid;
   } catch (error) {
     console.error('TOTP validation error:', error);
@@ -534,9 +534,9 @@ export async function validateTOTPCode(code: string, userEmail: string): Promise
   }
 }
 
-export async function generateTOTPSetup(userEmail: string): Promise<TOTPSetupData | null> {
+export async function generateTOTPSetup(username: string): Promise<TOTPSetupData | null> {
   try {
-    const result = await wasmManager.generateTOTPSetupData(userEmail);
+    const result = await wasmManager.generateTOTPSetupData(username);
     return result.success ? result.data! : null;
   } catch (error) {
     console.error('TOTP setup generation error:', error);
@@ -544,9 +544,9 @@ export async function generateTOTPSetup(userEmail: string): Promise<TOTPSetupDat
   }
 }
 
-export async function verifyTOTPSetup(code: string, secret: string, userEmail: string): Promise<boolean> {
+export async function verifyTOTPSetup(code: string, secret: string, username: string): Promise<boolean> {
   try {
-    const result = await wasmManager.verifyTOTPSetup(code, secret, userEmail);
+    const result = await wasmManager.verifyTOTPSetup(code, secret, username);
     return result.valid;
   } catch (error) {
     console.error('TOTP setup verification error:', error);

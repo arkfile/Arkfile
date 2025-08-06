@@ -13,6 +13,7 @@ import (
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
+	"github.com/84adam/arkfile/utils"
 )
 
 // RefreshTokenRequest represents the request structure for refreshing a token
@@ -32,7 +33,7 @@ func RefreshToken(c echo.Context) error {
 	}
 
 	// Validate the refresh token
-	userEmail, err := models.ValidateRefreshToken(database.DB, request.RefreshToken)
+	username, err := models.ValidateRefreshToken(database.DB, request.RefreshToken)
 	if err != nil {
 		if err == models.ErrRefreshTokenExpired {
 			return echo.NewHTTPError(http.StatusUnauthorized, "Refresh token expired")
@@ -44,22 +45,22 @@ func RefreshToken(c echo.Context) error {
 	}
 
 	// Generate new JWT token
-	token, err := auth.GenerateToken(userEmail)
+	token, err := auth.GenerateToken(username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate token: %v", err)
+		logging.ErrorLogger.Printf("Failed to generate token for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create new token")
 	}
 
 	// Generate new refresh token
-	refreshToken, err := models.CreateRefreshToken(database.DB, userEmail)
+	refreshToken, err := models.CreateRefreshToken(database.DB, username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate refresh token: %v", err)
+		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Could not create new refresh token")
 	}
 
 	// Log the token refresh
-	database.LogUserAction(userEmail, "refreshed token", "")
-	logging.InfoLogger.Printf("Token refreshed for user: %s", userEmail)
+	database.LogUserAction(username, "refreshed token", "")
+	logging.InfoLogger.Printf("Token refreshed for user: %s", username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"token":        token,
@@ -79,8 +80,8 @@ func Logout(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
 	}
 
-	// Get user email from token (if authenticated)
-	email := auth.GetEmailFromToken(c)
+	// Get username from token (if authenticated)
+	username := auth.GetUsernameFromToken(c)
 
 	// Revoke the refresh token if provided
 	if request.RefreshToken != "" {
@@ -106,9 +107,9 @@ func Logout(c echo.Context) error {
 	c.SetCookie(cookie)
 
 	// Log the logout
-	if email != "" {
-		database.LogUserAction(email, "logged out", "")
-		logging.InfoLogger.Printf("User logged out: %s", email)
+	if username != "" {
+		database.LogUserAction(username, "logged out", "")
+		logging.InfoLogger.Printf("User logged out: %s", username)
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{
@@ -118,7 +119,7 @@ func Logout(c echo.Context) error {
 
 // RevokeToken revokes a specific JWT token
 func RevokeToken(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 
 	var request struct {
 		Token  string `json:"token"`
@@ -140,8 +141,8 @@ func RevokeToken(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke token")
 	}
 
-	database.LogUserAction(email, "revoked token", "")
-	logging.InfoLogger.Printf("Token revoked by user: %s", email)
+	database.LogUserAction(username, "revoked token", "")
+	logging.InfoLogger.Printf("Token revoked by user: %s", username)
 
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Token revoked successfully",
@@ -150,16 +151,16 @@ func RevokeToken(c echo.Context) error {
 
 // RevokeAllTokens revokes all refresh tokens for the current user
 func RevokeAllTokens(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 
-	err := models.RevokeAllUserTokens(database.DB, email)
+	err := models.RevokeAllUserTokens(database.DB, username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to revoke all tokens: %v", err)
+		logging.ErrorLogger.Printf("Failed to revoke all tokens for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke tokens")
 	}
 
-	database.LogUserAction(email, "revoked all tokens", "")
-	logging.InfoLogger.Printf("All tokens revoked for user: %s", email)
+	database.LogUserAction(username, "revoked all tokens", "")
+	logging.InfoLogger.Printf("All tokens revoked for user: %s", username)
 
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "All sessions revoked successfully",
@@ -170,13 +171,14 @@ func RevokeAllTokens(c echo.Context) error {
 
 // OpaqueRegisterRequest represents the request for OPAQUE registration
 type OpaqueRegisterRequest struct {
-	Email    string `json:"email"`
+	Username string `json:"username"`
+	Email    string `json:"email,omitempty"` // Optional email
 	Password string `json:"password"`
 }
 
 // OpaqueLoginRequest represents the request for OPAQUE login
 type OpaqueLoginRequest struct {
-	Email    string `json:"email"`
+	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
@@ -198,8 +200,12 @@ func OpaqueRegister(c echo.Context) error {
 	}
 
 	// Comprehensive input validation
-	if request.Email == "" || !strings.Contains(request.Email, "@") {
-		return echo.NewHTTPError(http.StatusBadRequest, "Valid email address is required")
+	if err := utils.ValidateUsername(request.Username); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid username: "+err.Error())
+	}
+
+	if request.Email != "" && !strings.Contains(request.Email, "@") {
+		return echo.NewHTTPError(http.StatusBadRequest, "Provided email is not valid")
 	}
 
 	// Phase 5E: Enhanced password validation with entropy checking
@@ -213,16 +219,20 @@ func OpaqueRegister(c echo.Context) error {
 	}
 
 	// Check if user already exists
-	_, err := models.GetUserByEmail(database.DB, request.Email)
+	_, err := models.GetUserByUsername(database.DB, request.Username)
 	if err == nil {
-		return echo.NewHTTPError(http.StatusConflict, "Email already registered")
+		return echo.NewHTTPError(http.StatusConflict, "Username already registered")
 	}
 
 	// Create user record AND register OPAQUE account in single transaction
-	user, err := models.CreateUserWithOPAQUE(database.DB, request.Email, request.Password)
+	var emailPtr *string
+	if request.Email != "" {
+		emailPtr = &request.Email
+	}
+	user, err := models.CreateUserWithOPAQUE(database.DB, request.Username, request.Password, emailPtr)
 	if err != nil {
 		if logging.ErrorLogger != nil {
-			logging.ErrorLogger.Printf("OPAQUE user registration failed for %s: %v", request.Email, err)
+			logging.ErrorLogger.Printf("OPAQUE user registration failed for %s: %v", request.Username, err)
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
 	}
@@ -231,13 +241,13 @@ func OpaqueRegister(c echo.Context) error {
 	// For Phase 5A: We need the export key to derive the session key properly
 	exportKey, err := user.GetOPAQUEExportKey(database.DB, request.Password)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get OPAQUE export key during registration for %s: %v", request.Email, err)
+		logging.ErrorLogger.Printf("Failed to get OPAQUE export key during registration for %s: %v", request.Username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
 	}
 
 	// Validate export key from OPAQUE registration
 	if err := user.ValidateOPAQUEExportKey(exportKey); err != nil {
-		logging.ErrorLogger.Printf("Invalid OPAQUE export key during registration for %s: %v", request.Email, err)
+		logging.ErrorLogger.Printf("Invalid OPAQUE export key during registration for %s: %v", request.Username, err)
 		user.SecureZeroExportKey(exportKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
 	}
@@ -245,7 +255,7 @@ func OpaqueRegister(c echo.Context) error {
 	// Derive session key from OPAQUE export key using proper HKDF for Phase 5A
 	sessionKey, err := crypto.DeriveSessionKey(exportKey, crypto.SessionKeyContext)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to derive session key during registration for %s: %v", request.Email, err)
+		logging.ErrorLogger.Printf("Failed to derive session key during registration for %s: %v", request.Username, err)
 		user.SecureZeroExportKey(exportKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
 	}
@@ -254,9 +264,9 @@ func OpaqueRegister(c echo.Context) error {
 	user.SecureZeroExportKey(exportKey)
 
 	// Generate temporary token for mandatory TOTP setup
-	tempToken, err := auth.GenerateTemporaryTOTPToken(request.Email)
+	tempToken, err := auth.GenerateTemporaryTOTPToken(request.Username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Email, err)
+		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
 		crypto.SecureZeroSessionKey(sessionKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration succeeded but setup token creation failed")
 	}
@@ -268,8 +278,8 @@ func OpaqueRegister(c echo.Context) error {
 	crypto.SecureZeroSessionKey(sessionKey)
 
 	// Log successful registration
-	database.LogUserAction(request.Email, "registered with OPAQUE, TOTP setup required", "")
-	logging.InfoLogger.Printf("OPAQUE user registered, TOTP setup required: %s", request.Email)
+	database.LogUserAction(request.Username, "registered with OPAQUE, TOTP setup required", "")
+	logging.InfoLogger.Printf("OPAQUE user registered, TOTP setup required: %s", request.Username)
 
 	return c.JSON(http.StatusCreated, map[string]interface{}{
 		"message":           "Account created successfully. Two-factor authentication setup is required to complete registration.",
@@ -277,7 +287,7 @@ func OpaqueRegister(c echo.Context) error {
 		"tempToken":         tempToken,
 		"sessionKey":        sessionKeyB64,
 		"authMethod":        "OPAQUE",
-		"email":             request.Email,
+		"username":          request.Username,
 	})
 }
 
@@ -290,8 +300,8 @@ func OpaqueLogin(c echo.Context) error {
 	}
 
 	// Input validation
-	if request.Email == "" || !strings.Contains(request.Email, "@") {
-		return echo.NewHTTPError(http.StatusBadRequest, "Valid email address is required")
+	if request.Username == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Username is required")
 	}
 
 	if request.Password == "" {
@@ -302,9 +312,9 @@ func OpaqueLogin(c echo.Context) error {
 	// Users can complete OPAQUE + TOTP authentication but will be restricted from file operations if unapproved
 
 	// Get user to authenticate
-	user, err := models.GetUserByEmail(database.DB, request.Email)
+	user, err := models.GetUserByUsername(database.DB, request.Username)
 	if err != nil {
-		logging.ErrorLogger.Printf("User not found for %s: %v", request.Email, err)
+		logging.ErrorLogger.Printf("User not found for %s: %v", request.Username, err)
 		// Record failed login attempt
 		entityID := logging.GetOrCreateEntityID(c)
 		if recordErr := recordAuthFailedAttempt("login", entityID); recordErr != nil {
@@ -316,7 +326,7 @@ func OpaqueLogin(c echo.Context) error {
 	// Perform OPAQUE authentication via user model to get export key
 	exportKey, err := user.AuthenticateOPAQUE(database.DB, request.Password)
 	if err != nil {
-		logging.ErrorLogger.Printf("OPAQUE authentication failed for %s: %v", request.Email, err)
+		logging.ErrorLogger.Printf("OPAQUE authentication failed for %s: %v", request.Username, err)
 		// Record failed login attempt
 		entityID := logging.GetOrCreateEntityID(c)
 		if recordErr := recordAuthFailedAttempt("login", entityID); recordErr != nil {
@@ -327,7 +337,7 @@ func OpaqueLogin(c echo.Context) error {
 
 	// Validate export key from OPAQUE authentication
 	if err := user.ValidateOPAQUEExportKey(exportKey); err != nil {
-		logging.ErrorLogger.Printf("Invalid OPAQUE export key for %s: %v", request.Email, err)
+		logging.ErrorLogger.Printf("Invalid OPAQUE export key for %s: %v", request.Username, err)
 		user.SecureZeroExportKey(exportKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
@@ -335,7 +345,7 @@ func OpaqueLogin(c echo.Context) error {
 	// Derive session key from OPAQUE export key using proper HKDF
 	sessionKey, err := crypto.DeriveSessionKey(exportKey, crypto.SessionKeyContext)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to derive session key for %s: %v", request.Email, err)
+		logging.ErrorLogger.Printf("Failed to derive session key for %s: %v", request.Username, err)
 		user.SecureZeroExportKey(exportKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
@@ -344,9 +354,9 @@ func OpaqueLogin(c echo.Context) error {
 	user.SecureZeroExportKey(exportKey)
 
 	// Check if user has TOTP enabled
-	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, request.Email)
+	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, request.Username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", request.Email, err)
+		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", request.Username, err)
 		crypto.SecureZeroSessionKey(sessionKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
@@ -354,14 +364,14 @@ func OpaqueLogin(c echo.Context) error {
 	// MANDATORY TOTP: All users must have TOTP enabled to login
 	if !totpEnabled {
 		crypto.SecureZeroSessionKey(sessionKey)
-		logging.ErrorLogger.Printf("User %s attempted login without TOTP setup", request.Email)
+		logging.ErrorLogger.Printf("User %s attempted login without TOTP setup", request.Username)
 		return echo.NewHTTPError(http.StatusForbidden, "Two-factor authentication setup is required. Please complete TOTP setup before logging in.")
 	}
 
 	// Generate temporary token that requires TOTP completion
-	tempToken, err := auth.GenerateTemporaryTOTPToken(request.Email)
+	tempToken, err := auth.GenerateTemporaryTOTPToken(request.Username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Email, err)
+		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
 		crypto.SecureZeroSessionKey(sessionKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
@@ -373,8 +383,8 @@ func OpaqueLogin(c echo.Context) error {
 	crypto.SecureZeroSessionKey(sessionKey)
 
 	// Log partial authentication
-	database.LogUserAction(request.Email, "OPAQUE auth completed, awaiting TOTP", "")
-	logging.InfoLogger.Printf("OPAQUE user authenticated, TOTP required: %s", request.Email)
+	database.LogUserAction(request.Username, "OPAQUE auth completed, awaiting TOTP", "")
+	logging.InfoLogger.Printf("OPAQUE user authenticated, TOTP required: %s", request.Username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"requiresTOTP": true,
@@ -447,8 +457,8 @@ func TOTPSetup(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
 	}
 
-	// Get user email from JWT token
-	email := auth.GetEmailFromToken(c)
+	// Get username from JWT token
+	username := auth.GetUsernameFromToken(c)
 
 	// Decode session key
 	sessionKey, err := base64.StdEncoding.DecodeString(request.SessionKey)
@@ -458,9 +468,9 @@ func TOTPSetup(c echo.Context) error {
 	defer crypto.SecureZeroSessionKey(sessionKey)
 
 	// Check if user already has TOTP enabled
-	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, email)
+	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, username)
 	if err != nil && err.Error() != "sql: no rows in result set" {
-		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", email, err)
+		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check TOTP status")
 	}
 
@@ -469,21 +479,21 @@ func TOTPSetup(c echo.Context) error {
 	}
 
 	// Generate TOTP setup
-	setup, err := auth.GenerateTOTPSetup(email, sessionKey)
+	setup, err := auth.GenerateTOTPSetup(username, sessionKey)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate TOTP setup for %s: %v", email, err)
+		logging.ErrorLogger.Printf("Failed to generate TOTP setup for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate TOTP setup")
 	}
 
 	// Store TOTP setup in database
-	if err := auth.StoreTOTPSetup(database.DB, email, setup, sessionKey); err != nil {
-		logging.ErrorLogger.Printf("Failed to store TOTP setup for %s: %v", email, err)
+	if err := auth.StoreTOTPSetup(database.DB, username, setup, sessionKey); err != nil {
+		logging.ErrorLogger.Printf("Failed to store TOTP setup for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to store TOTP setup")
 	}
 
 	// Log TOTP setup initiation
-	database.LogUserAction(email, "initiated TOTP setup", "")
-	logging.InfoLogger.Printf("TOTP setup initiated for user: %s", email)
+	database.LogUserAction(username, "initiated TOTP setup", "")
+	logging.InfoLogger.Printf("TOTP setup initiated for user: %s", username)
 
 	return c.JSON(http.StatusOK, TOTPSetupResponse{
 		Secret:      setup.Secret,
@@ -507,8 +517,8 @@ func TOTPVerify(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
 	}
 
-	// Get user email from JWT token
-	email := auth.GetEmailFromToken(c)
+	// Get username from JWT token
+	username := auth.GetUsernameFromToken(c)
 
 	// Validate input
 	if request.Code == "" {
@@ -531,8 +541,8 @@ func TOTPVerify(c echo.Context) error {
 	defer crypto.SecureZeroSessionKey(sessionKey)
 
 	// Complete TOTP setup
-	if err := auth.CompleteTOTPSetup(database.DB, email, request.Code, sessionKey); err != nil {
-		logging.ErrorLogger.Printf("Failed to complete TOTP setup for %s: %v", email, err)
+	if err := auth.CompleteTOTPSetup(database.DB, username, request.Code, sessionKey); err != nil {
+		logging.ErrorLogger.Printf("Failed to complete TOTP setup for %s: %v", username, err)
 		// Record failed TOTP verification attempt
 		entityID := logging.GetOrCreateEntityID(c)
 		if recordErr := recordAuthFailedAttempt("totp_verify", entityID); recordErr != nil {
@@ -545,36 +555,36 @@ func TOTPVerify(c echo.Context) error {
 	isTemporaryToken := auth.RequiresTOTPFromToken(c)
 
 	// Log successful TOTP setup
-	database.LogUserAction(email, "completed TOTP setup", "")
-	logging.InfoLogger.Printf("TOTP setup completed for user: %s", email)
+	database.LogUserAction(username, "completed TOTP setup", "")
+	logging.InfoLogger.Printf("TOTP setup completed for user: %s", username)
 
 	// If this is a temporary TOTP token from registration, provide full access tokens
 	if isTemporaryToken {
 		// Generate full access token
-		token, err := auth.GenerateFullAccessToken(email)
+		token, err := auth.GenerateFullAccessToken(username)
 		if err != nil {
-			logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", email, err)
+			logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create session")
 		}
 
 		// Generate refresh token
-		refreshToken, err := models.CreateRefreshToken(database.DB, email)
+		refreshToken, err := models.CreateRefreshToken(database.DB, username)
 		if err != nil {
-			logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", email, err)
+			logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create session")
 		}
 
 		// Get user record for response
-		user, err := models.GetUserByEmail(database.DB, email)
+		user, err := models.GetUserByUsername(database.DB, username)
 		if err != nil {
-			logging.ErrorLogger.Printf("Failed to get user record for %s: %v", email, err)
+			logging.ErrorLogger.Printf("Failed to get user record for %s: %v", username, err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user details")
 		}
 
 		// Encode session key for response
 		sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
 
-		logging.InfoLogger.Printf("Registration completed with TOTP setup for user: %s", email)
+		logging.InfoLogger.Printf("Registration completed with TOTP setup for user: %s", username)
 
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"message":       "TOTP setup and registration completed successfully",
@@ -584,6 +594,7 @@ func TOTPVerify(c echo.Context) error {
 			"session_key":   sessionKeyB64,
 			"auth_method":   "OPAQUE+TOTP",
 			"user": map[string]interface{}{
+				"username":        user.Username,
 				"email":           user.Email,
 				"is_approved":     user.IsApproved,
 				"is_admin":        user.IsAdmin,
@@ -615,8 +626,8 @@ func TOTPAuth(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
 	}
 
-	// Get user email from JWT token
-	email := auth.GetEmailFromToken(c)
+	// Get username from JWT token
+	username := auth.GetUsernameFromToken(c)
 
 	// Check if token requires TOTP
 	if !auth.RequiresTOTPFromToken(c) {
@@ -645,8 +656,8 @@ func TOTPAuth(c echo.Context) error {
 
 	// Validate TOTP code or backup code
 	if request.IsBackup {
-		if err := auth.ValidateBackupCode(database.DB, email, request.Code, sessionKey); err != nil {
-			logging.ErrorLogger.Printf("Failed backup code validation for %s: %v", email, err)
+		if err := auth.ValidateBackupCode(database.DB, username, request.Code, sessionKey); err != nil {
+			logging.ErrorLogger.Printf("Failed backup code validation for %s: %v", username, err)
 			// Record failed TOTP auth attempt
 			entityID := logging.GetOrCreateEntityID(c)
 			if recordErr := recordAuthFailedAttempt("totp_auth", entityID); recordErr != nil {
@@ -654,10 +665,10 @@ func TOTPAuth(c echo.Context) error {
 			}
 			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid backup code")
 		}
-		database.LogUserAction(email, "used backup code", "")
+		database.LogUserAction(username, "used backup code", "")
 	} else {
-		if err := auth.ValidateTOTPCode(database.DB, email, request.Code, sessionKey); err != nil {
-			logging.ErrorLogger.Printf("Failed TOTP code validation for %s: %v", email, err)
+		if err := auth.ValidateTOTPCode(database.DB, username, request.Code, sessionKey); err != nil {
+			logging.ErrorLogger.Printf("Failed TOTP code validation for %s: %v", username, err)
 			// Record failed TOTP auth attempt
 			entityID := logging.GetOrCreateEntityID(c)
 			if recordErr := recordAuthFailedAttempt("totp_auth", entityID); recordErr != nil {
@@ -665,27 +676,27 @@ func TOTPAuth(c echo.Context) error {
 			}
 			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid TOTP code")
 		}
-		database.LogUserAction(email, "authenticated with TOTP", "")
+		database.LogUserAction(username, "authenticated with TOTP", "")
 	}
 
 	// Get user record
-	user, err := models.GetUserByEmail(database.DB, email)
+	user, err := models.GetUserByUsername(database.DB, username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get user record for %s: %v", email, err)
+		logging.ErrorLogger.Printf("Failed to get user record for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// Generate full access token
-	token, err := auth.GenerateFullAccessToken(email)
+	token, err := auth.GenerateFullAccessToken(username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", email, err)
+		logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create session")
 	}
 
 	// Generate refresh token
-	refreshToken, err := models.CreateRefreshToken(database.DB, email)
+	refreshToken, err := models.CreateRefreshToken(database.DB, username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", email, err)
+		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create session")
 	}
 
@@ -693,8 +704,8 @@ func TOTPAuth(c echo.Context) error {
 	sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
 
 	// Log successful authentication
-	database.LogUserAction(email, "completed TOTP authentication", "")
-	logging.InfoLogger.Printf("TOTP authentication completed for user: %s", email)
+	database.LogUserAction(username, "completed TOTP authentication", "")
+	logging.InfoLogger.Printf("TOTP authentication completed for user: %s", username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"token":        token,
@@ -702,6 +713,7 @@ func TOTPAuth(c echo.Context) error {
 		"sessionKey":   sessionKeyB64,
 		"authMethod":   "OPAQUE+TOTP",
 		"user": map[string]interface{}{
+			"username":        user.Username,
 			"email":           user.Email,
 			"is_approved":     user.IsApproved,
 			"is_admin":        user.IsAdmin,
@@ -725,8 +737,8 @@ func TOTPDisable(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
 	}
 
-	// Get user email from JWT token
-	email := auth.GetEmailFromToken(c)
+	// Get username from JWT token
+	username := auth.GetUsernameFromToken(c)
 
 	// Validate input
 	if request.CurrentCode == "" || len(request.CurrentCode) != 6 {
@@ -741,14 +753,14 @@ func TOTPDisable(c echo.Context) error {
 	defer crypto.SecureZeroSessionKey(sessionKey)
 
 	// Disable TOTP (this validates the current code)
-	if err := auth.DisableTOTP(database.DB, email, request.CurrentCode, sessionKey); err != nil {
-		logging.ErrorLogger.Printf("Failed to disable TOTP for %s: %v", email, err)
+	if err := auth.DisableTOTP(database.DB, username, request.CurrentCode, sessionKey); err != nil {
+		logging.ErrorLogger.Printf("Failed to disable TOTP for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid TOTP code")
 	}
 
 	// Log TOTP disabling
-	database.LogUserAction(email, "disabled TOTP", "")
-	logging.InfoLogger.Printf("TOTP disabled for user: %s", email)
+	database.LogUserAction(username, "disabled TOTP", "")
+	logging.InfoLogger.Printf("TOTP disabled for user: %s", username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "TOTP disabled successfully",
@@ -766,13 +778,13 @@ type TOTPStatusResponse struct {
 
 // TOTPStatus returns the TOTP status for a user
 func TOTPStatus(c echo.Context) error {
-	// Get user email from JWT token
-	email := auth.GetEmailFromToken(c)
+	// Get username from JWT token
+	username := auth.GetUsernameFromToken(c)
 
 	// Check TOTP status
-	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, email)
+	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", email, err)
+		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check TOTP status")
 	}
 

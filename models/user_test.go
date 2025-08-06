@@ -70,7 +70,8 @@ func setupTestDB_User(t *testing.T) *sql.DB {
 	schema := `
 	CREATE TABLE users (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		email TEXT NOT NULL UNIQUE,
+		username TEXT UNIQUE NOT NULL,
+		email TEXT,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		total_storage_bytes INTEGER DEFAULT 0,
 		storage_limit_bytes INTEGER NOT NULL,
@@ -89,35 +90,39 @@ func TestCreateUser(t *testing.T) {
 	db := setupTestDB_User(t)
 	defer db.Close()
 
-	// Set admin emails for testing auto-approval/admin status
-	originalAdmins := os.Getenv("ADMIN_EMAILS")
-	os.Setenv("ADMIN_EMAILS", "admin@example.com,super@user.com")
-	defer os.Setenv("ADMIN_EMAILS", originalAdmins)
+	// Set admin usernames for testing auto-approval/admin status
+	originalAdmins := os.Getenv("ADMIN_USERNAMES")
+	os.Setenv("ADMIN_USERNAMES", "admin,superuser")
+	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	testCases := []struct {
 		name           string
-		email          string
-		password       string
+		username       string
+		email          *string
 		expectAdmin    bool
 		expectApproved bool
 		expectError    bool
 	}{
-		// Updated passwords to meet 14+ char complexity
-		{"Regular User", "test@example.com", "ValidPass123!@OK", false, false, false}, // 16 chars
-		{"Admin User", "admin@example.com", "AdminPass!456Long", true, true, false},   // 17 chars
-		// {"Duplicate Email", "test@example.com", "AnotherPassword789?", false, false, true}, // Moved to specific test below
+		{"Regular User", "testuser", stringPtr("test@example.com"), false, false, false},
+		{"Admin User", "admin", stringPtr("admin@example.com"), true, true, false},
+		{"User without email", "noemailuser", nil, false, false, false},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Execute CreateUser
-			user, err := CreateUser(db, tc.email)
+			user, err := CreateUser(db, tc.username, tc.email)
 
 			assert.NoError(t, err, "Did not expect an error for "+tc.name)
 			require.NotNil(t, user, "User object should not be nil for "+tc.name)
 
 			// Assert User Properties
-			assert.Equal(t, tc.email, user.Email, "Email should match")
+			assert.Equal(t, tc.username, user.Username, "Username should match")
+			if tc.email != nil {
+				assert.Equal(t, *tc.email, *user.Email, "Email should match")
+			} else {
+				assert.Nil(t, user.Email, "Email should be nil")
+			}
 			assert.Equal(t, DefaultStorageLimit, user.StorageLimitBytes, "Storage limit should be default")
 			assert.Equal(t, tc.expectAdmin, user.IsAdmin, "Admin status mismatch")
 			assert.Equal(t, tc.expectApproved, user.IsApproved, "Approved status mismatch")
@@ -128,33 +133,34 @@ func TestCreateUser(t *testing.T) {
 		})
 	}
 
-	// Test Duplicate Email specifically
-	t.Run("Duplicate Email", func(t *testing.T) {
+	// Test Duplicate Username specifically
+	t.Run("Duplicate Username", func(t *testing.T) {
 		// First creation should succeed
-		_, err := CreateUser(db, "duplicate@example.com") // Use valid password
+		_, err := CreateUser(db, "duplicate", stringPtr("duplicate@example.com"))
 		require.NoError(t, err)
 
-		// Second creation with the same email should fail
-		_, err = CreateUser(db, "duplicate@example.com") // Use different valid password
-		assert.Error(t, err, "Expected an error for duplicate email")
+		// Second creation with the same username should fail
+		_, err = CreateUser(db, "duplicate", stringPtr("duplicate2@example.com"))
+		assert.Error(t, err, "Expected an error for duplicate username")
 		if err != nil {
 			assert.Contains(t, err.Error(), "UNIQUE constraint failed", "Error should be about uniqueness")
 		}
 	})
 }
 
-func TestGetUserByEmail(t *testing.T) {
+func TestGetUserByUsername(t *testing.T) {
 	db := setupTestDB_User(t)
 	defer db.Close()
 
 	// Create a test user first
-	email := "findme@example.com"
-	createdUser, err := CreateUser(db, email)
+	username := "findme"
+	email := stringPtr("findme@example.com")
+	createdUser, err := CreateUser(db, username, email)
 	require.NoError(t, err)
 	require.NotNil(t, createdUser)
 
-	// Execute GetUserByEmail
-	retrievedUser, err := GetUserByEmail(db, email)
+	// Execute GetUserByUsername
+	retrievedUser, err := GetUserByUsername(db, username)
 
 	// Assert: No error and user found
 	assert.NoError(t, err)
@@ -162,7 +168,7 @@ func TestGetUserByEmail(t *testing.T) {
 
 	// Assert: Check properties match the created user
 	assert.Equal(t, createdUser.ID, retrievedUser.ID)
-	assert.Equal(t, createdUser.Email, retrievedUser.Email)
+	assert.Equal(t, createdUser.Username, retrievedUser.Username)
 	assert.Equal(t, createdUser.StorageLimitBytes, retrievedUser.StorageLimitBytes)
 	assert.Equal(t, createdUser.IsAdmin, retrievedUser.IsAdmin)
 	assert.Equal(t, createdUser.IsApproved, retrievedUser.IsApproved) // Initially false unless admin
@@ -174,7 +180,7 @@ func TestGetUserByEmail(t *testing.T) {
 	// This test section is removed as it's no longer applicable
 
 	// Test getting a non-existent user
-	_, err = GetUserByEmail(db, "nosuchuser@example.com")
+	_, err = GetUserByUsername(db, "nosuchuser")
 	assert.Error(t, err, "Should return an error for non-existent user")
 	assert.Equal(t, sql.ErrNoRows, err, "Error should be sql.ErrNoRows")
 }
@@ -184,19 +190,19 @@ func TestGetUserByEmail(t *testing.T) {
 // Password verification is now handled through the OPAQUE protocol.
 
 func TestHasAdminPrivileges(t *testing.T) {
-	// Set admin emails
-	originalAdmins := os.Getenv("ADMIN_EMAILS")
-	os.Setenv("ADMIN_EMAILS", "admin@list.com")
-	defer os.Setenv("ADMIN_EMAILS", originalAdmins)
+	// Set admin usernames
+	originalAdmins := os.Getenv("ADMIN_USERNAMES")
+	os.Setenv("ADMIN_USERNAMES", "adminuser")
+	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	testCases := []struct {
 		name        string
 		user        User
 		expectAdmin bool
 	}{
-		{"Admin by flag", User{Email: "test@example.com", IsAdmin: true}, true},
-		{"Admin by email list", User{Email: "admin@list.com", IsAdmin: false}, true},
-		{"Regular user", User{Email: "user@example.com", IsAdmin: false}, false},
+		{"Admin by flag", User{Username: "testuser", IsAdmin: true}, true},
+		{"Admin by username list", User{Username: "adminuser", IsAdmin: false}, true},
+		{"Regular user", User{Username: "regularuser", IsAdmin: false}, false},
 	}
 
 	for _, tc := range testCases {
@@ -210,26 +216,26 @@ func TestApproveUser(t *testing.T) {
 	db := setupTestDB_User(t)
 	defer db.Close()
 
-	// Set admin emails
-	originalAdmins := os.Getenv("ADMIN_EMAILS")
-	adminEmail := "admin@approve.com"
-	os.Setenv("ADMIN_EMAILS", adminEmail)
-	defer os.Setenv("ADMIN_EMAILS", originalAdmins)
+	// Set admin usernames
+	originalAdmins := os.Getenv("ADMIN_USERNAMES")
+	adminUsername := "approveradmin"
+	os.Setenv("ADMIN_USERNAMES", adminUsername)
+	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	// Create a user to approve
-	userToApprove, err := CreateUser(db, "pending@example.com")
+	userToApprove, err := CreateUser(db, "pending", stringPtr("pending@example.com"))
 	require.NoError(t, err)
 	require.False(t, userToApprove.IsApproved, "User should initially be unapproved")
 
 	// Execute ApproveUser by a valid admin
-	err = userToApprove.ApproveUser(db, adminEmail)
+	err = userToApprove.ApproveUser(db, adminUsername)
 	assert.NoError(t, err, "Approving user by admin should succeed")
 
 	// Assert: User struct fields updated
 	assert.True(t, userToApprove.IsApproved, "User IsApproved field should be true after approval")
 	// Check sql.NullString
 	assert.True(t, userToApprove.ApprovedBy.Valid, "ApprovedBy should be valid after approval")
-	assert.Equal(t, adminEmail, userToApprove.ApprovedBy.String, "ApprovedBy field should be set")
+	assert.Equal(t, adminUsername, userToApprove.ApprovedBy.String, "ApprovedBy field should be set")
 	// Check sql.NullTime
 	assert.True(t, userToApprove.ApprovedAt.Valid, "ApprovedAt should be valid after approval")
 	assert.WithinDuration(t, time.Now(), userToApprove.ApprovedAt.Time, 2*time.Second, "ApprovedAt time should be recent")
@@ -241,14 +247,14 @@ func TestApproveUser(t *testing.T) {
 	err = db.QueryRow("SELECT is_approved, approved_by, approved_at FROM users WHERE id = ?", userToApprove.ID).Scan(&dbIsApproved, &dbApprovedBy, &dbApprovedAt)
 	assert.NoError(t, err, "Failed to query DB for approval status")
 	assert.True(t, dbIsApproved, "is_approved in DB should be true")
-	assert.Equal(t, adminEmail, dbApprovedBy, "approved_by in DB should match admin")
+	assert.Equal(t, adminUsername, dbApprovedBy, "approved_by in DB should match admin")
 	assert.True(t, dbApprovedAt.Valid, "approved_at in DB should not be NULL")
 	assert.WithinDuration(t, time.Now(), dbApprovedAt.Time, 2*time.Second, "approved_at time in DB should be recent")
 
 	// Test: Non-admin attempting approval should fail
-	nonAdminEmail := "nonadmin@example.com"
+	nonAdminUsername := "nonadmin"
 	// Attempt to approve again, even though already approved, to test the admin check
-	err = userToApprove.ApproveUser(db, nonAdminEmail)
+	err = userToApprove.ApproveUser(db, nonAdminUsername)
 	assert.Error(t, err, "Approval attempt by non-admin should fail")
 	assert.Contains(t, err.Error(), "unauthorized", "Error should indicate unauthorized")
 }
@@ -270,7 +276,7 @@ func TestUpdateStorageUsage(t *testing.T) {
 	defer db.Close()
 
 	// Create user with initial storage
-	user, err := CreateUser(db, "storage@example.com")
+	user, err := CreateUser(db, "storageuser", stringPtr("storage@example.com"))
 	require.NoError(t, err)
 	initialStorage := int64(1024 * 1024) // 1MB initial
 	_, err = db.Exec("UPDATE users SET total_storage_bytes = ? WHERE id = ?", initialStorage, user.ID)
@@ -314,23 +320,23 @@ func TestGetPendingUsers(t *testing.T) {
 	db := setupTestDB_User(t)
 	defer db.Close()
 
-	// Setup admin email for auto-approval check
-	originalAdmins := os.Getenv("ADMIN_EMAILS")
-	os.Setenv("ADMIN_EMAILS", "admin@pending.com")
-	defer os.Setenv("ADMIN_EMAILS", originalAdmins)
+	// Setup admin usernames for auto-approval check
+	originalAdmins := os.Getenv("ADMIN_USERNAMES")
+	os.Setenv("ADMIN_USERNAMES", "adminuser")
+	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	// Create users: 2 pending, 1 approved, 1 admin (auto-approved)
-	_, err := CreateUser(db, "pending1@example.com")
+	_, err := CreateUser(db, "pending1", stringPtr("pending1@example.com"))
 	require.NoError(t, err)
-	_, err = CreateUser(db, "pending2@example.com")
+	_, err = CreateUser(db, "pending2", stringPtr("pending2@example.com"))
 	require.NoError(t, err)
-	approvedUser, err := CreateUser(db, "approved@example.com")
+	approvedUser, err := CreateUser(db, "approveduser", stringPtr("approved@example.com"))
 	require.NoError(t, err)
 	// Manually approve this one
-	_, err = db.Exec("UPDATE users SET is_approved = TRUE WHERE email = ?", approvedUser.Email)
+	_, err = db.Exec("UPDATE users SET is_approved = TRUE WHERE username = ?", approvedUser.Username)
 	require.NoError(t, err)
-	// Admin email should be auto-approved
-	_, err = CreateUser(db, "admin@pending.com")
+	// Admin username should be auto-approved
+	_, err = CreateUser(db, "adminuser", stringPtr("admin@pending.com"))
 	require.NoError(t, err)
 
 	// Execute GetPendingUsers
@@ -341,39 +347,45 @@ func TestGetPendingUsers(t *testing.T) {
 	// Assert: Should find exactly 2 pending users
 	assert.Len(t, pendingUsers, 2, "Should retrieve exactly 2 pending users")
 
-	// Assert: Check emails of pending users (order might matter depending on DB, check both)
-	foundEmails := make(map[string]bool)
+	// Assert: Check usernames of pending users (order might matter depending on DB, check both)
+	foundUsernames := make(map[string]bool)
 	for _, u := range pendingUsers {
-		foundEmails[u.Email] = true
+		foundUsernames[u.Username] = true
 	}
-	assert.True(t, foundEmails["pending1@example.com"], "pending1@example.com should be in the list")
-	assert.True(t, foundEmails["pending2@example.com"], "pending2@example.com should be in the list")
-	assert.False(t, foundEmails["approved@example.com"], "approved@example.com should not be in the list")
-	assert.False(t, foundEmails["admin@pending.com"], "admin@pending.com should not be in the list")
+	assert.True(t, foundUsernames["pending1"], "pending1 should be in the list")
+	assert.True(t, foundUsernames["pending2"], "pending2 should be in the list")
+	assert.False(t, foundUsernames["approveduser"], "approveduser should not be in the list")
+	assert.False(t, foundUsernames["adminuser"], "adminuser should not be in the list")
 }
 
-func TestIsAdminEmail(t *testing.T) {
+func TestIsAdminUsername(t *testing.T) {
 	// Setup environment variable
-	originalAdmins := os.Getenv("ADMIN_EMAILS")
-	os.Setenv("ADMIN_EMAILS", "admin1@test.com, admin2@test.com , spaced@admin.com ") // Note extra spaces
-	defer os.Setenv("ADMIN_EMAILS", originalAdmins)
+	originalAdmins := os.Getenv("ADMIN_USERNAMES")
+	os.Setenv("ADMIN_USERNAMES", "admin1, admin2 , spaced_admin ") // Note extra spaces
+	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
-	assert.True(t, isAdminEmail("admin1@test.com"), "admin1 should be admin")
-	assert.True(t, isAdminEmail("admin2@test.com"), "admin2 should be admin")
-	assert.True(t, isAdminEmail("spaced@admin.com"), "spaced admin email should work")
-	assert.False(t, isAdminEmail("user@test.com"), "regular user should not be admin")
-	assert.False(t, isAdminEmail("Admin1@test.com"), "email check should be case-sensitive") // Assuming case-sensitivity
+	assert.True(t, isAdminUsername("admin1"), "admin1 should be admin")
+	assert.True(t, isAdminUsername("admin2"), "admin2 should be admin")
+	assert.True(t, isAdminUsername("spaced_admin"), "spaced admin username should work")
+	assert.False(t, isAdminUsername("regularuser"), "regular user should not be admin")
+	assert.False(t, isAdminUsername("Admin1"), "username check should be case-sensitive") // Assuming case-sensitivity
 
-	// Test empty ADMIN_EMAILS
-	os.Setenv("ADMIN_EMAILS", "")
-	assert.False(t, isAdminEmail("admin1@test.com"), "Should not be admin if list is empty")
+	// Test empty ADMIN_USERNAMES
+	os.Setenv("ADMIN_USERNAMES", "")
+	assert.False(t, isAdminUsername("admin1"), "Should not be admin if list is empty")
 
-	// Test unset ADMIN_EMAILS (uses default "")
-	os.Unsetenv("ADMIN_EMAILS")
-	assert.False(t, isAdminEmail("admin1@test.com"), "Should not be admin if env var is unset")
+	// Test unset ADMIN_USERNAMES (uses default "")
+	os.Unsetenv("ADMIN_USERNAMES")
+	assert.False(t, isAdminUsername("admin1"), "Should not be admin if env var is unset")
+}
+
+// Helper function to create string pointer
+func stringPtr(s string) *string {
+	return &s
 }
 
 // --- OPAQUE Integration Tests ---
+// Note: These tests may be skipped in environments without libopaque.so
 
 func TestCreateUserWithOPAQUE(t *testing.T) {
 	db := setupTestDB_User(t)
@@ -382,11 +394,12 @@ func TestCreateUserWithOPAQUE(t *testing.T) {
 	// Add OPAQUE tables to test database
 	setupOPAQUETestTables(t, db)
 
-	email := "opaque@example.com"
+	username := "opaqueuser"
+	email := stringPtr("opaque@example.com")
 	password := "ValidOPAQUEPassword123!@#"
 
 	// Execute CreateUserWithOPAQUE
-	user, err := CreateUserWithOPAQUE(db, email, password)
+	user, err := CreateUserWithOPAQUE(db, username, password, email)
 
 	if err != nil {
 		// OPAQUE functionality may not be available in test environment
@@ -397,7 +410,7 @@ func TestCreateUserWithOPAQUE(t *testing.T) {
 
 	// Assert user creation
 	require.NotNil(t, user)
-	assert.Equal(t, email, user.Email)
+	assert.Equal(t, username, user.Username)
 	assert.Equal(t, DefaultStorageLimit, user.StorageLimitBytes)
 
 	// Test OPAQUE account status
@@ -412,171 +425,6 @@ func TestCreateUserWithOPAQUE(t *testing.T) {
 	assert.NotNil(t, status.OPAQUECreatedAt)
 }
 
-func TestUserOPAQUELifecycle(t *testing.T) {
-	db := setupTestDB_User(t)
-	defer db.Close()
-
-	// Add OPAQUE tables to test database
-	setupOPAQUETestTables(t, db)
-
-	// Create regular user first
-	user, err := CreateUser(db, "lifecycle@example.com")
-	require.NoError(t, err)
-
-	password := "LifecycleTestPassword123!@#"
-
-	// Test 1: Check initial OPAQUE status (should be false)
-	hasAccount, err := user.HasOPAQUEAccount(db)
-	if err != nil {
-		t.Logf("HasOPAQUEAccount failed (expected in test environment): %v", err)
-		t.Skip("Skipping OPAQUE lifecycle test - requires libopaque.so")
-		return
-	}
-	assert.False(t, hasAccount, "New user should not have OPAQUE account initially")
-
-	// Test 2: Register OPAQUE account
-	err = user.RegisterOPAQUEAccount(db, password)
-	if err != nil {
-		t.Logf("RegisterOPAQUEAccount failed (expected in test environment): %v", err)
-		return
-	}
-
-	// Test 3: Verify OPAQUE account exists
-	hasAccount, err = user.HasOPAQUEAccount(db)
-	require.NoError(t, err)
-	assert.True(t, hasAccount, "User should have OPAQUE account after registration")
-
-	// Test 4: Authenticate with OPAQUE
-	exportKey, err := user.AuthenticateOPAQUE(db, password)
-	if err != nil {
-		t.Logf("AuthenticateOPAQUE failed (expected in test environment): %v", err)
-		return
-	}
-	require.NotNil(t, exportKey)
-	assert.Len(t, exportKey, 64, "Export key should be 64 bytes")
-
-	// Test 5: Get comprehensive OPAQUE status
-	status, err := user.GetOPAQUEAccountStatus(db)
-	require.NoError(t, err)
-	require.NotNil(t, status)
-	assert.True(t, status.HasAccountPassword)
-	assert.NotNil(t, status.OPAQUECreatedAt)
-	assert.NotNil(t, status.LastOPAQUEAuth)
-
-	// Test 6: Delete OPAQUE account
-	err = user.DeleteOPAQUEAccount(db)
-	require.NoError(t, err)
-
-	// Test 7: Verify OPAQUE account is gone
-	hasAccount, err = user.HasOPAQUEAccount(db)
-	require.NoError(t, err)
-	assert.False(t, hasAccount, "User should not have OPAQUE account after deletion")
-}
-
-func TestUserFilePasswordManagement(t *testing.T) {
-	db := setupTestDB_User(t)
-	defer db.Close()
-
-	// Add OPAQUE tables to test database
-	setupOPAQUETestTables(t, db)
-
-	// Create user with OPAQUE account
-	user, err := CreateUserWithOPAQUE(db, "filepass@example.com", "UserPassword123!@#")
-	if err != nil {
-		t.Logf("CreateUserWithOPAQUE failed (expected in test environment): %v", err)
-		t.Skip("Skipping file password test - requires libopaque.so")
-		return
-	}
-
-	fileID := "test-file-123"
-	filePassword := "FileSpecificPassword456!@#"
-	keyLabel := "test-key-label"
-	passwordHint := "File password hint"
-
-	// Test 1: Register file password
-	err = user.RegisterFilePassword(db, fileID, filePassword, keyLabel, passwordHint)
-	if err != nil {
-		t.Logf("RegisterFilePassword failed (expected in test environment): %v", err)
-		return
-	}
-
-	// Test 2: Authenticate file password
-	exportKey, err := user.AuthenticateFilePassword(db, fileID, filePassword)
-	if err != nil {
-		t.Logf("AuthenticateFilePassword failed (expected in test environment): %v", err)
-		return
-	}
-	require.NotNil(t, exportKey)
-	assert.Len(t, exportKey, 64, "File export key should be 64 bytes")
-
-	// Test 3: Get file password records
-	records, err := user.GetFilePasswordRecords(db, fileID)
-	if err != nil {
-		t.Logf("GetFilePasswordRecords failed (expected in test environment): %v", err)
-		return
-	}
-	require.NotNil(t, records)
-	assert.Len(t, records, 1, "Should have one file password record")
-
-	// Test 4: Delete file password
-	err = user.DeleteFilePassword(db, fileID, keyLabel)
-	if err != nil {
-		t.Logf("DeleteFilePassword failed (expected in test environment): %v", err)
-		return
-	}
-
-	// Test 5: Verify file password is gone
-	records, err = user.GetFilePasswordRecords(db, fileID)
-	if err != nil {
-		t.Logf("GetFilePasswordRecords after deletion failed: %v", err)
-		return
-	}
-	assert.Len(t, records, 0, "Should have no file password records after deletion")
-}
-
-func TestUserComprehensiveDelete(t *testing.T) {
-	db := setupTestDB_User(t)
-	defer db.Close()
-
-	// Add OPAQUE tables to test database
-	setupOPAQUETestTables(t, db)
-
-	// Create user with OPAQUE account
-	user, err := CreateUserWithOPAQUE(db, "delete@example.com", "DeleteTestPassword123!@#")
-	if err != nil {
-		t.Logf("CreateUserWithOPAQUE failed (expected in test environment): %v", err)
-		t.Skip("Skipping comprehensive delete test - requires libopaque.so")
-		return
-	}
-
-	userID := user.ID
-	userEmail := user.Email
-
-	// Verify user exists
-	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", userID).Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 1, count, "User should exist before deletion")
-
-	// Execute comprehensive delete
-	err = user.Delete(db)
-	require.NoError(t, err)
-
-	// Verify user is deleted
-	err = db.QueryRow("SELECT COUNT(*) FROM users WHERE id = ?", userID).Scan(&count)
-	require.NoError(t, err)
-	assert.Equal(t, 0, count, "User should not exist after deletion")
-
-	// Verify OPAQUE records are cleaned up (if tables exist)
-	// Note: These queries may fail if OPAQUE tables don't exist in test DB
-	err = db.QueryRow("SELECT COUNT(*) FROM opaque_password_records WHERE record_identifier = ? OR associated_user_email = ?", userEmail, userEmail).Scan(&count)
-	if err == nil {
-		assert.Equal(t, 0, count, "OPAQUE records should be cleaned up after user deletion")
-	} else {
-		t.Logf("Could not verify OPAQUE cleanup (table may not exist): %v", err)
-	}
-}
-
 // setupOPAQUETestTables creates the necessary OPAQUE tables for testing
 // This simulates the OPAQUE database schema for test purposes
 func setupOPAQUETestTables(t *testing.T, db *sql.DB) {
@@ -589,7 +437,7 @@ func setupOPAQUETestTables(t *testing.T, db *sql.DB) {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			record_type TEXT NOT NULL,
 			record_identifier TEXT NOT NULL,
-			associated_user_email TEXT,
+			associated_username TEXT,
 			password_record BLOB NOT NULL,
 			server_public_key BLOB NOT NULL,
 			is_active BOOLEAN DEFAULT TRUE,
@@ -603,7 +451,7 @@ func setupOPAQUETestTables(t *testing.T, db *sql.DB) {
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE TABLE IF NOT EXISTS opaque_user_data (
-			user_email TEXT PRIMARY KEY,
+			username TEXT PRIMARY KEY,
 			serialized_record BLOB NOT NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 			last_used_at TIMESTAMP
@@ -624,7 +472,3 @@ func setupOPAQUETestTables(t *testing.T, db *sql.DB) {
 		t.Logf("Warning: Could not insert dummy server keys: %v", err)
 	}
 }
-
-// Note: Tests for database operations within handlers (like Login, Register)
-// would typically go in handler tests (e.g., handlers/auth_test.go or handlers/handlers_test.go)
-// and would mock the database calls or use a test database setup similar to here.

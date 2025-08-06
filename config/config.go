@@ -76,7 +76,7 @@ type Config struct {
 		DataDirectory     string   `json:"data_directory"`
 		LogDirectory      string   `json:"log_directory"`
 		AdminContact      string   `json:"admin_contact"`
-		AdminEmails       []string `json:"admin_emails"`
+		AdminUsernames    []string `json:"admin_usernames"`
 		RequireApproval   bool     `json:"require_approval"`
 		MaintenanceWindow string   `json:"maintenance_window"`
 		BackupRetention   int      `json:"backup_retention_days"`
@@ -280,14 +280,14 @@ func loadEnvConfig(cfg *Config) error {
 		cfg.Deployment.AdminContact = adminContact
 	}
 
-	// Admin emails configuration
-	if adminEmails := os.Getenv("ADMIN_EMAILS"); adminEmails != "" {
-		// Parse comma-separated list of admin emails
-		emails := strings.Split(adminEmails, ",")
-		cfg.Deployment.AdminEmails = make([]string, 0, len(emails))
-		for _, email := range emails {
-			if trimmed := strings.TrimSpace(email); trimmed != "" {
-				cfg.Deployment.AdminEmails = append(cfg.Deployment.AdminEmails, trimmed)
+	// Admin usernames configuration
+	if adminUsernames := os.Getenv("ADMIN_USERNAMES"); adminUsernames != "" {
+		// Parse comma-separated list of admin usernames
+		usernames := strings.Split(adminUsernames, ",")
+		cfg.Deployment.AdminUsernames = make([]string, 0, len(usernames))
+		for _, username := range usernames {
+			if trimmed := strings.TrimSpace(username); trimmed != "" {
+				cfg.Deployment.AdminUsernames = append(cfg.Deployment.AdminUsernames, trimmed)
 			}
 		}
 	}

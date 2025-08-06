@@ -28,15 +28,15 @@ type FileKeyResponse struct {
 
 // UpdateEncryption handles updating a file's encryption with a new or converted format
 func UpdateEncryption(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	filename := c.Param("filename")
 
 	// Check if the file exists and user owns it
-	var ownerEmail string
+	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_email FROM file_metadata WHERE filename = ?",
+		"SELECT owner_username FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&ownerEmail)
+	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "File not found")
@@ -45,7 +45,7 @@ func UpdateEncryption(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error checking file ownership")
 	}
 
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to modify this file")
 	}
 
@@ -136,7 +136,7 @@ func UpdateEncryption(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete encryption update")
 	}
 
-	logging.InfoLogger.Printf("File encryption updated: %s by %s", filename, email)
+	logging.InfoLogger.Printf("File encryption updated: %s by %s", filename, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "File encryption updated successfully",
@@ -146,15 +146,15 @@ func UpdateEncryption(c echo.Context) error {
 
 // ListKeys lists all encryption keys for a file
 func ListKeys(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	filename := c.Param("filename")
 
 	// Check if the file exists and user owns it
-	var ownerEmail string
+	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_email FROM file_metadata WHERE filename = ?",
+		"SELECT owner_username FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&ownerEmail)
+	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "File not found")
@@ -163,7 +163,7 @@ func ListKeys(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error checking file ownership")
 	}
 
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to access this file's keys")
 	}
 
@@ -219,16 +219,16 @@ func ListKeys(c echo.Context) error {
 
 // DeleteKey removes an encryption key from a file
 func DeleteKey(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	filename := c.Param("filename")
 	keyID := c.Param("keyId")
 
 	// Check if the file exists and user owns it
-	var ownerEmail string
+	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_email FROM file_metadata WHERE filename = ?",
+		"SELECT owner_username FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&ownerEmail)
+	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "File not found")
@@ -237,7 +237,7 @@ func DeleteKey(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error checking file ownership")
 	}
 
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to modify this file's keys")
 	}
 
@@ -286,7 +286,7 @@ func DeleteKey(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error deleting key")
 	}
 
-	logging.InfoLogger.Printf("Key deleted: %s for file %s by %s", keyID, filename, email)
+	logging.InfoLogger.Printf("Key deleted: %s for file %s by %s", keyID, filename, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "Key deleted successfully",
@@ -295,16 +295,16 @@ func DeleteKey(c echo.Context) error {
 
 // UpdateKey updates a key's label or password hint
 func UpdateKey(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	filename := c.Param("filename")
 	keyID := c.Param("keyId")
 
 	// Check if the file exists and user owns it
-	var ownerEmail string
+	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_email FROM file_metadata WHERE filename = ?",
+		"SELECT owner_username FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&ownerEmail)
+	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "File not found")
@@ -313,7 +313,7 @@ func UpdateKey(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error checking file ownership")
 	}
 
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to modify this file's keys")
 	}
 
@@ -338,7 +338,7 @@ func UpdateKey(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error updating key")
 	}
 
-	logging.InfoLogger.Printf("Key updated: %s for file %s by %s", keyID, filename, email)
+	logging.InfoLogger.Printf("Key updated: %s for file %s by %s", keyID, filename, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "Key updated successfully",
@@ -347,16 +347,16 @@ func UpdateKey(c echo.Context) error {
 
 // SetPrimaryKey sets a key as the primary key for a file
 func SetPrimaryKey(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	filename := c.Param("filename")
 	keyID := c.Param("keyId")
 
 	// Check if the file exists and user owns it
-	var ownerEmail string
+	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_email FROM file_metadata WHERE filename = ?",
+		"SELECT owner_username FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&ownerEmail)
+	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "File not found")
@@ -365,7 +365,7 @@ func SetPrimaryKey(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error checking file ownership")
 	}
 
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to modify this file's keys")
 	}
 
@@ -415,7 +415,7 @@ func SetPrimaryKey(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete primary key update")
 	}
 
-	logging.InfoLogger.Printf("Primary key set: %s for file %s by %s", keyID, filename, email)
+	logging.InfoLogger.Printf("Primary key set: %s for file %s by %s", keyID, filename, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "Primary key updated successfully",
@@ -424,15 +424,15 @@ func SetPrimaryKey(c echo.Context) error {
 
 // RegisterCustomFilePassword registers a custom password with OPAQUE for a file
 func RegisterCustomFilePassword(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	filename := c.Param("filename")
 
 	// Check file ownership
-	var ownerEmail string
+	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_email FROM file_metadata WHERE filename = ?",
+		"SELECT owner_username FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&ownerEmail)
+	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "File not found")
@@ -440,7 +440,7 @@ func RegisterCustomFilePassword(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
 	}
 
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to modify this file")
 	}
 
@@ -455,7 +455,7 @@ func RegisterCustomFilePassword(c echo.Context) error {
 	}
 
 	// Get user object and use integrated OPAQUE method
-	user, err := models.GetUserByEmail(database.DB, email)
+	user, err := models.GetUserByUsername(database.DB, username)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "User not found")
 	}
@@ -467,7 +467,7 @@ func RegisterCustomFilePassword(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to register custom password")
 	}
 
-	logging.InfoLogger.Printf("Custom file password registered for %s by %s", filename, email)
+	logging.InfoLogger.Printf("Custom file password registered for %s by %s", filename, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "Custom file password registered successfully",
@@ -477,15 +477,15 @@ func RegisterCustomFilePassword(c echo.Context) error {
 
 // GetFileDecryptionKey provides the encryption key for a file given a password
 func GetFileDecryptionKey(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	filename := c.Param("filename")
 
 	// Check file ownership
-	var ownerEmail string
+	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_email FROM file_metadata WHERE filename = ?",
+		"SELECT owner_username FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&ownerEmail)
+	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "File not found")
@@ -493,7 +493,7 @@ func GetFileDecryptionKey(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
 	}
 
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
@@ -511,7 +511,7 @@ func GetFileDecryptionKey(c echo.Context) error {
 	switch request.KeyType {
 	case "account":
 		// Get user object and authenticate via user model
-		user, err := models.GetUserByEmail(database.DB, email)
+		user, err := models.GetUserByUsername(database.DB, username)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "User not found")
 		}
@@ -525,14 +525,14 @@ func GetFileDecryptionKey(c echo.Context) error {
 		defer secureZeroBytes(accountExportKey)
 
 		// Derive file-specific encryption key from account export key
-		encryptionKey, err = deriveAccountFileKey(accountExportKey, email, filename)
+		encryptionKey, err = deriveAccountFileKey(accountExportKey, username, filename)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Key derivation failed")
 		}
 
 	case "custom":
 		// Get user object and use integrated OPAQUE method
-		user, err := models.GetUserByEmail(database.DB, email)
+		user, err := models.GetUserByUsername(database.DB, username)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "User not found")
 		}
@@ -546,7 +546,7 @@ func GetFileDecryptionKey(c echo.Context) error {
 		defer secureZeroBytes(exportKey)
 
 		// Derive file encryption key from custom password export key
-		encryptionKey, err = deriveOPAQUEFileKey(exportKey, filename, email)
+		encryptionKey, err = deriveOPAQUEFileKey(exportKey, filename, username)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Key derivation failed")
 		}
@@ -560,7 +560,7 @@ func GetFileDecryptionKey(c echo.Context) error {
 	// Return key as hex for client-side decryption
 	keyHex := fmt.Sprintf("%x", encryptionKey)
 
-	logging.InfoLogger.Printf("File decryption key provided: %s (%s) for %s", filename, request.KeyType, email)
+	logging.InfoLogger.Printf("File decryption key provided: %s (%s) for %s", filename, request.KeyType, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"encryptionKey": keyHex,
@@ -575,13 +575,13 @@ func secureZeroBytes(data []byte) {
 	}
 }
 
-func deriveAccountFileKey(exportKey []byte, userEmail, fileID string) ([]byte, error) {
+func deriveAccountFileKey(exportKey []byte, username, fileID string) ([]byte, error) {
 	// This would use HKDF with proper domain separation
 	// Placeholder implementation - should use crypto.DeriveAccountFileKey
 	return make([]byte, 32), nil
 }
 
-func deriveOPAQUEFileKey(exportKey []byte, fileID, userEmail string) ([]byte, error) {
+func deriveOPAQUEFileKey(exportKey []byte, fileID, username string) ([]byte, error) {
 	// This would use HKDF with proper domain separation
 	// Placeholder implementation - should use crypto.DeriveOPAQUEFileKey
 	return make([]byte, 32), nil

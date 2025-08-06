@@ -15,7 +15,7 @@ import (
 
 // OPAQUEUserData represents the server-side storage for libopaque user data
 type OPAQUEUserData struct {
-	UserEmail        string
+	Username         string
 	SerializedRecord []byte // libopaque user record
 	CreatedAt        time.Time
 }
@@ -134,14 +134,14 @@ func loadServerKeys(db *sql.DB) error {
 }
 
 // RegisterUser performs the libopaque registration flow using the one-step method
-func RegisterUser(db *sql.DB, email, password string) error {
+func RegisterUser(db *sql.DB, username, password string) error {
 	if serverKeys == nil {
 		return fmt.Errorf("server keys not loaded")
 	}
 
 	// Validate inputs
-	if email == "" {
-		return fmt.Errorf("email cannot be empty")
+	if username == "" {
+		return fmt.Errorf("username cannot be empty")
 	}
 	if password == "" {
 		return fmt.Errorf("password cannot be empty")
@@ -160,7 +160,7 @@ func RegisterUser(db *sql.DB, email, password string) error {
 
 	// Store the user record in the database
 	userData := OPAQUEUserData{
-		UserEmail:        email,
+		Username:         username,
 		SerializedRecord: userRecord,
 		CreatedAt:        time.Now(),
 	}
@@ -169,12 +169,12 @@ func RegisterUser(db *sql.DB, email, password string) error {
 }
 
 // AuthenticateUser performs the libopaque authentication flow using the one-step method
-func AuthenticateUser(db *sql.DB, email, password string) ([]byte, error) {
+func AuthenticateUser(db *sql.DB, username, password string) ([]byte, error) {
 	if serverKeys == nil {
 		return nil, fmt.Errorf("server keys not loaded")
 	}
 
-	userData, err := loadOPAQUEUserData(db, email)
+	userData, err := loadOPAQUEUserData(db, username)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load user data: %w", err)
 	}
@@ -196,27 +196,27 @@ func storeOPAQUEUserData(db *sql.DB, userData OPAQUEUserData) error {
 
 	_, err := db.Exec(`
 		INSERT INTO opaque_user_data (
-			user_email, serialized_record, created_at
+			username, serialized_record, created_at
 		) VALUES (?, ?, ?)
-		ON CONFLICT(user_email) DO UPDATE SET
+		ON CONFLICT(username) DO UPDATE SET
 		serialized_record=excluded.serialized_record;`,
-		userData.UserEmail, recordHex, userData.CreatedAt,
+		userData.Username, recordHex, userData.CreatedAt,
 	)
 	return err
 }
 
 // loadOPAQUEUserData loads user data from the database
-func loadOPAQUEUserData(db *sql.DB, email string) (*OPAQUEUserData, error) {
+func loadOPAQUEUserData(db *sql.DB, username string) (*OPAQUEUserData, error) {
 	userData := &OPAQUEUserData{}
 	var recordHex string
 	var createdAt sql.NullString // Use NullString to handle potential NULLs
 
-	err := db.QueryRow("SELECT user_email, serialized_record, created_at FROM opaque_user_data WHERE user_email = ?", email).Scan(
-		&userData.UserEmail, &recordHex, &createdAt,
+	err := db.QueryRow("SELECT username, serialized_record, created_at FROM opaque_user_data WHERE username = ?", username).Scan(
+		&userData.Username, &recordHex, &createdAt,
 	)
 
 	if err != nil {
-		return nil, fmt.Errorf("could not find user '%s': %w", email, err)
+		return nil, fmt.Errorf("could not find user '%s': %w", username, err)
 	}
 
 	userData.SerializedRecord, err = hex.DecodeString(recordHex)

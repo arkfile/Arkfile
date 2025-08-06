@@ -20,7 +20,7 @@ var (
 // RefreshToken represents a refresh token in the database
 type RefreshToken struct {
 	ID        string
-	UserEmail string
+	Username  string
 	TokenHash string
 	ExpiresAt time.Time
 	CreatedAt time.Time
@@ -29,7 +29,7 @@ type RefreshToken struct {
 }
 
 // CreateRefreshToken generates a new refresh token for a user
-func CreateRefreshToken(db *sql.DB, userEmail string) (string, error) {
+func CreateRefreshToken(db *sql.DB, username string) (string, error) {
 	// Generate a random token
 	tokenString := uuid.New().String()
 
@@ -46,8 +46,8 @@ func CreateRefreshToken(db *sql.DB, userEmail string) (string, error) {
 	// Insert token into database.
 	createdAt := time.Now()
 	_, err := db.Exec(
-		`INSERT INTO refresh_tokens (id, user_email, token_hash, expires_at, created_at, is_revoked, is_used) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, userEmail, tokenHash, expiresAt, createdAt, false, false,
+		`INSERT INTO refresh_tokens (id, username, token_hash, expires_at, created_at, is_revoked, is_used) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, username, tokenHash, expiresAt, createdAt, false, false,
 	)
 	if err != nil {
 		return "", err
@@ -56,7 +56,7 @@ func CreateRefreshToken(db *sql.DB, userEmail string) (string, error) {
 	return tokenString, nil
 }
 
-// ValidateRefreshToken checks if a refresh token is valid and returns the user email
+// ValidateRefreshToken checks if a refresh token is valid and returns the username
 func ValidateRefreshToken(db *sql.DB, tokenString string) (string, error) {
 	// Hash the token to compare with stored hash
 	hash := sha256.Sum256([]byte(tokenString))
@@ -64,18 +64,18 @@ func ValidateRefreshToken(db *sql.DB, tokenString string) (string, error) {
 
 	var (
 		id        string
-		userEmail string
+		username  string
 		expiresAt time.Time
 		isRevoked bool
 		isUsed    bool
 	)
 
 	err := db.QueryRow(
-		`SELECT id, user_email, expires_at, is_revoked, is_used 
+		`SELECT id, username, expires_at, is_revoked, is_used 
 		 FROM refresh_tokens 
 		 WHERE token_hash = ?`,
 		tokenHash,
-	).Scan(&id, &userEmail, &expiresAt, &isRevoked, &isUsed)
+	).Scan(&id, &username, &expiresAt, &isRevoked, &isUsed)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -106,7 +106,7 @@ func ValidateRefreshToken(db *sql.DB, tokenString string) (string, error) {
 		return "", err
 	}
 
-	return userEmail, nil
+	return username, nil
 }
 
 // RevokeRefreshToken marks a token as revoked
@@ -135,10 +135,10 @@ func RevokeRefreshToken(db *sql.DB, tokenString string) error {
 }
 
 // RevokeAllUserTokens revokes all refresh tokens for a user
-func RevokeAllUserTokens(db *sql.DB, userEmail string) error {
+func RevokeAllUserTokens(db *sql.DB, username string) error {
 	_, err := db.Exec(
-		"UPDATE refresh_tokens SET is_revoked = true WHERE user_email = ?",
-		userEmail,
+		"UPDATE refresh_tokens SET is_revoked = true WHERE username = ?",
+		username,
 	)
 	return err
 }

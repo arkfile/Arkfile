@@ -32,6 +32,11 @@ func mustHashToken(token string, t *testing.T) string {
 	return hash
 }
 
+// Helper function to create string pointer
+func stringPtr(s string) *string {
+	return &s
+}
+
 // Helper function to create a new Echo context for testing
 func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Context, *httptest.ResponseRecorder, sqlmock.Sqlmock, *storage.MockObjectStorageProvider) {
 	// --- Test Config Setup ---
@@ -144,7 +149,7 @@ func TestOpaqueRegister_Success(t *testing.T) {
 	mock.ExpectCommit()
 
 	// Mock logging user action
-	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
+	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mock.ExpectExec(logActionSQL).
 		WithArgs(email, "registered with OPAQUE, TOTP setup required", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -431,14 +436,15 @@ func TestLogout_Success(t *testing.T) {
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	user := &models.User{Email: "logout@example.com"}
-	claims := &auth.Claims{Email: user.Email}
+	username := "logoutuser"
+	user := &models.User{Username: username, Email: stringPtr("logout@example.com")}
+	claims := &auth.Claims{Username: user.Username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	logActionSQL := `INSERT INTO user_activity \(user_email, action, target\) VALUES \(\?, \?, \?\)`
+	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mock.ExpectExec(logActionSQL).
-		WithArgs(user.Email, "logged out", "").
+		WithArgs(user.Username, "logged out", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	logoutErr := Logout(c)

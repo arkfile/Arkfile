@@ -429,7 +429,7 @@ func TLSVersionCheck(next echo.HandlerFunc) echo.HandlerFunc {
 // RequireApproved ensures the user is approved before allowing access
 func RequireApproved(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		email := auth.GetEmailFromToken(c)
+		username := auth.GetUsernameFromToken(c)
 
 		// Allow TOTP setup/verify operations during registration flow
 		// These operations use temporary TOTP tokens and should bypass approval
@@ -441,7 +441,7 @@ func RequireApproved(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		// Get user details
-		user, err := models.GetUserByEmail(database.DB, email)
+		user, err := models.GetUserByUsername(database.DB, username)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user details")
 		}
@@ -458,10 +458,10 @@ func RequireApproved(next echo.HandlerFunc) echo.HandlerFunc {
 // RequireAdmin ensures the user has admin privileges before allowing access
 func RequireAdmin(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		email := auth.GetEmailFromToken(c)
+		username := auth.GetUsernameFromToken(c)
 
 		// Get user details
-		user, err := models.GetUserByEmail(database.DB, email)
+		user, err := models.GetUserByUsername(database.DB, username)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user details")
 		}
@@ -478,7 +478,7 @@ func RequireAdmin(next echo.HandlerFunc) echo.HandlerFunc {
 // RequireTOTP ensures the user has TOTP enabled before allowing access to protected resources
 func RequireTOTP(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		email := auth.GetEmailFromToken(c)
+		username := auth.GetUsernameFromToken(c)
 
 		// Allow TOTP setup/verify operations during registration flow
 		// These operations use temporary TOTP tokens and should bypass this check
@@ -490,9 +490,9 @@ func RequireTOTP(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		// Check if user has TOTP enabled
-		totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, email)
+		totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, username)
 		if err != nil {
-			logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", email, err)
+			logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", username, err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to verify TOTP status")
 		}
 
@@ -501,7 +501,7 @@ func RequireTOTP(next echo.HandlerFunc) echo.HandlerFunc {
 			logging.LogSecurityEvent(
 				logging.EventUnauthorizedAccess,
 				parseIPAddress(c.RealIP()),
-				&email,
+				&username,
 				nil,
 				map[string]interface{}{
 					"reason":   "TOTP not enabled",

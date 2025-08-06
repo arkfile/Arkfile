@@ -24,10 +24,10 @@ var Echo *echo.Echo
 
 // UploadFile handles file uploads
 func UploadFile(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 
 	// Get user for storage checks and approval status
-	user, err := models.GetUserByEmail(database.DB, email)
+	user, err := models.GetUserByUsername(database.DB, username)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user details")
 	}
@@ -97,8 +97,8 @@ func UploadFile(c echo.Context) error {
 
 	// Store metadata in database with storage_id and padded_size
 	_, err = tx.Exec(
-		"INSERT INTO file_metadata (filename, storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes, padded_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		request.Filename, storageID, email, request.PasswordHint, request.PasswordType, request.SHA256Sum, fileSize, paddedSize,
+		"INSERT INTO file_metadata (filename, storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes, padded_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		request.Filename, storageID, username, request.PasswordHint, request.PasswordType, request.SHA256Sum, fileSize, paddedSize,
 	)
 	if err != nil {
 		// If metadata storage fails, delete the uploaded file using storage.Provider
@@ -119,9 +119,9 @@ func UploadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete upload")
 	}
 
-	database.LogUserAction(email, "uploaded", request.Filename)
+	database.LogUserAction(username, "uploaded", request.Filename)
 	logging.InfoLogger.Printf("File uploaded: %s (storage_id: %s) by %s (size: %d bytes, padded: %d bytes)",
-		request.Filename, storageID, email, fileSize, paddedSize)
+		request.Filename, storageID, username, fileSize, paddedSize)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message":    "File uploaded successfully",
@@ -138,11 +138,11 @@ func UploadFile(c echo.Context) error {
 
 // DownloadFile handles file downloads
 func DownloadFile(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	filename := c.Param("filename")
 
 	// Check if user is approved for file operations
-	user, err := models.GetUserByEmail(database.DB, email)
+	user, err := models.GetUserByUsername(database.DB, username)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user details")
 	}
@@ -153,17 +153,17 @@ func DownloadFile(c echo.Context) error {
 
 	// Get file metadata including storage_id and original size
 	var fileMetadata struct {
-		StorageID    string
-		OwnerEmail   string
-		PasswordHint string
-		PasswordType string
-		SHA256Sum    string
-		SizeBytes    int64
+		StorageID     string
+		OwnerUsername string
+		PasswordHint  string
+		PasswordType  string
+		SHA256Sum     string
+		SizeBytes     int64
 	}
 	err = database.DB.QueryRow(
-		"SELECT storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes FROM file_metadata WHERE filename = ?",
+		"SELECT storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&fileMetadata.StorageID, &fileMetadata.OwnerEmail, &fileMetadata.PasswordHint,
+	).Scan(&fileMetadata.StorageID, &fileMetadata.OwnerUsername, &fileMetadata.PasswordHint,
 		&fileMetadata.PasswordType, &fileMetadata.SHA256Sum, &fileMetadata.SizeBytes)
 
 	if err == sql.ErrNoRows {
@@ -174,7 +174,7 @@ func DownloadFile(c echo.Context) error {
 	}
 
 	// Verify ownership
-	if fileMetadata.OwnerEmail != email {
+	if fileMetadata.OwnerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
@@ -197,8 +197,8 @@ func DownloadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read file")
 	}
 
-	database.LogUserAction(email, "downloaded", filename)
-	logging.InfoLogger.Printf("File downloaded: %s (storage_id: %s) by %s", filename, fileMetadata.StorageID, email)
+	database.LogUserAction(username, "downloaded", filename)
+	logging.InfoLogger.Printf("File downloaded: %s (storage_id: %s) by %s", filename, fileMetadata.StorageID, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"data":         string(data),
@@ -210,14 +210,14 @@ func DownloadFile(c echo.Context) error {
 
 // ListFiles returns a list of files owned by the user
 func ListFiles(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 
 	rows, err := database.DB.Query(`
 		SELECT filename, storage_id, password_hint, password_type, sha256sum, size_bytes, upload_date 
 		FROM file_metadata 
-		WHERE owner_email = ?
+		WHERE owner_username = ?
 		ORDER BY upload_date DESC
-	`, email)
+	`, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to list files: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve files")
@@ -254,7 +254,7 @@ func ListFiles(c echo.Context) error {
 	}
 
 	// Get user's storage information
-	user, err := models.GetUserByEmail(database.DB, email)
+	user, err := models.GetUserByUsername(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get user storage info: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get storage info")
@@ -290,26 +290,34 @@ func formatBytes(bytes int64) string {
 
 // AdminContactsHandler returns admin contact information for user support
 func AdminContactsHandler(c echo.Context) error {
-	// Get admin emails from configuration system
+	// Get admin usernames from configuration system
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to load config for admin contacts: %v", err)
 		// Fallback to default
 		return c.JSON(http.StatusOK, map[string]interface{}{
-			"adminEmails": []string{"admin@arkfile.demo"},
-			"message":     "Contact information for administrators",
+			"adminUsernames": []string{"admin.user.2024"},
+			"adminContact":   "admin@arkfile.demo",
+			"message":        "Contact information for administrators",
 		})
 	}
 
-	adminEmails := cfg.Deployment.AdminEmails
+	adminUsernames := cfg.Deployment.AdminUsernames
+	adminContact := cfg.Deployment.AdminContact
 
-	// Fallback if no admin emails configured
-	if len(adminEmails) == 0 {
-		adminEmails = []string{"admin@arkfile.demo"}
+	// Fallback if no admin usernames configured
+	if len(adminUsernames) == 0 {
+		adminUsernames = []string{"admin.user.2024"}
+	}
+
+	// Fallback for admin contact if not configured
+	if adminContact == "" {
+		adminContact = "admin@arkfile.demo"
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"adminEmails": adminEmails,
-		"message":     "Contact information for administrators",
+		"adminUsernames": adminUsernames,
+		"adminContact":   adminContact,
+		"message":        "Contact information for administrators",
 	})
 }

@@ -62,7 +62,7 @@ type ShareFileInfo struct {
 
 // CreateFileShare creates a new Argon2id-based anonymous file share
 func CreateFileShare(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 
 	var request ShareRequest
 	if err := c.Bind(&request); err != nil {
@@ -81,16 +81,16 @@ func CreateFileShare(c echo.Context) error {
 	}
 
 	// Validate that the user owns the file
-	var ownerEmail string
+	var ownerUsername string
 	var multiKey bool
 	var passwordType string
 	var foundInMetadata, foundInUploadSessions bool
 
 	// Check file_metadata first
 	err := database.DB.QueryRow(
-		"SELECT owner_email, multi_key, password_type FROM file_metadata WHERE filename = ?",
+		"SELECT owner_username, multi_key, password_type FROM file_metadata WHERE filename = ?",
 		request.FileID,
-	).Scan(&ownerEmail, &multiKey, &passwordType)
+	).Scan(&ownerUsername, &multiKey, &passwordType)
 
 	if err == nil {
 		foundInMetadata = true
@@ -101,18 +101,18 @@ func CreateFileShare(c echo.Context) error {
 
 	// If not found in file_metadata, check upload_sessions
 	if !foundInMetadata {
-		var usOwnerEmail string
+		var usOwnerUsername string
 		var usPasswordType string
 		var usMultiKey sql.NullBool
 
 		err = database.DB.QueryRow(
-			"SELECT owner_email, password_type, multi_key FROM upload_sessions WHERE filename = ? AND status = 'completed'",
+			"SELECT owner_username, password_type, multi_key FROM upload_sessions WHERE filename = ? AND status = 'completed'",
 			request.FileID,
-		).Scan(&usOwnerEmail, &usPasswordType, &usMultiKey)
+		).Scan(&usOwnerUsername, &usPasswordType, &usMultiKey)
 
 		if err == nil {
 			foundInUploadSessions = true
-			ownerEmail = usOwnerEmail
+			ownerUsername = usOwnerUsername
 			passwordType = usPasswordType
 			multiKey = usMultiKey.Valid && usMultiKey.Bool
 		} else if err != sql.ErrNoRows {
@@ -125,7 +125,7 @@ func CreateFileShare(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusNotFound, "File not found or not yet fully processed")
 	}
 
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to share this file")
 	}
 
@@ -162,9 +162,9 @@ func CreateFileShare(c echo.Context) error {
 
 	// Create file share record
 	_, err = database.DB.Exec(`
-		INSERT INTO file_share_keys (share_id, file_id, owner_email, salt, encrypted_fek, created_at, expires_at)
+		INSERT INTO file_share_keys (share_id, file_id, owner_username, salt, encrypted_fek, created_at, expires_at)
 		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
-		shareID, request.FileID, email, saltBytes, request.EncryptedFEK, expiresAt,
+		shareID, request.FileID, username, saltBytes, request.EncryptedFEK, expiresAt,
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create file share record for file %s: %v", request.FileID, err)
@@ -201,8 +201,8 @@ func CreateFileShare(c echo.Context) error {
 	shareURL := baseURL + "/shared/" + shareID
 
 	createdAt := time.Now()
-	logging.InfoLogger.Printf("Anonymous share created: file=%s, share_id=%s, owner=%s", request.FileID, shareID, email)
-	database.LogUserAction(email, "created_share", fmt.Sprintf("file:%s, share:%s", request.FileID, shareID))
+	logging.InfoLogger.Printf("Anonymous share created: file=%s, share_id=%s, owner=%s", request.FileID, shareID, username)
+	database.LogUserAction(username, "created_share", fmt.Sprintf("file:%s, share:%s", request.FileID, shareID))
 
 	return c.JSON(http.StatusOK, ShareResponse{
 		ShareID:   shareID,
@@ -234,18 +234,18 @@ func GetShareInfo(c echo.Context) error {
 
 	// Query share data from database (no password required for metadata)
 	var share struct {
-		FileID     string
-		OwnerEmail string
-		ExpiresAt  *time.Time
+		FileID        string
+		OwnerUsername string
+		ExpiresAt     *time.Time
 	}
 
 	err := database.DB.QueryRow(`
-		SELECT file_id, owner_email, expires_at
+		SELECT file_id, owner_username, expires_at
 		FROM file_share_keys 
 		WHERE share_id = ?
 	`, shareID).Scan(
 		&share.FileID,
-		&share.OwnerEmail,
+		&share.OwnerUsername,
 		&share.ExpiresAt,
 	)
 
@@ -319,20 +319,20 @@ func AccessSharedFile(c echo.Context) error {
 func processShareAccess(shareID string, request ShareAccessRequest, c echo.Context) error {
 	// Validate share exists and isn't expired
 	var share struct {
-		FileID       string
-		OwnerEmail   string
-		Salt         []byte
-		EncryptedFEK string
-		ExpiresAt    *time.Time
+		FileID        string
+		OwnerUsername string
+		Salt          []byte
+		EncryptedFEK  string
+		ExpiresAt     *time.Time
 	}
 
 	err := database.DB.QueryRow(`
-		SELECT file_id, owner_email, salt, encrypted_fek, expires_at
+		SELECT file_id, owner_username, salt, encrypted_fek, expires_at
 		FROM file_share_keys 
 		WHERE share_id = ?
 	`, shareID).Scan(
 		&share.FileID,
-		&share.OwnerEmail,
+		&share.OwnerUsername,
 		&share.Salt,
 		&share.EncryptedFEK,
 		&share.ExpiresAt,
@@ -396,18 +396,18 @@ func GetSharedFile(c echo.Context) error {
 
 	// Validate share exists and get basic info (no password required for page display)
 	var share struct {
-		FileID     string
-		OwnerEmail string
-		ExpiresAt  *time.Time
+		FileID        string
+		OwnerUsername string
+		ExpiresAt     *time.Time
 	}
 
 	err := database.DB.QueryRow(`
-		SELECT file_id, owner_email, expires_at
+		SELECT file_id, owner_username, expires_at
 		FROM file_share_keys 
 		WHERE share_id = ?
 	`, shareID).Scan(
 		&share.FileID,
-		&share.OwnerEmail,
+		&share.OwnerUsername,
 		&share.ExpiresAt,
 	)
 
@@ -446,7 +446,7 @@ func GetSharedFile(c echo.Context) error {
 
 // ListShares returns all shares created by a user
 func ListShares(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 
 	// Query shares
 	rows, err := database.DB.Query(`
@@ -454,9 +454,9 @@ func ListShares(c echo.Context) error {
 			   fm.filename, fm.size_bytes
 		FROM file_share_keys sk
 		JOIN file_metadata fm ON sk.file_id = fm.filename
-		WHERE sk.owner_email = ?
+		WHERE sk.owner_username = ?
 		ORDER BY sk.created_at DESC
-	`, email)
+	`, username)
 
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to query shares: %v", err)
@@ -524,15 +524,15 @@ func ListShares(c echo.Context) error {
 
 // DeleteShare deletes a share
 func DeleteShare(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	shareID := c.Param("id")
 
 	// Check if share exists and belongs to user
-	var ownerEmail string
+	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_email FROM file_share_keys WHERE share_id = ?",
+		"SELECT owner_username FROM file_share_keys WHERE share_id = ?",
 		shareID,
-	).Scan(&ownerEmail)
+	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
@@ -541,7 +541,7 @@ func DeleteShare(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
 	}
 
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
@@ -552,8 +552,8 @@ func DeleteShare(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete share")
 	}
 
-	database.LogUserAction(email, "deleted_share", shareID)
-	logging.InfoLogger.Printf("Share deleted: %s by %s", shareID, email)
+	database.LogUserAction(username, "deleted_share", shareID)
+	logging.InfoLogger.Printf("Share deleted: %s by %s", shareID, username)
 
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Share deleted successfully",
@@ -566,18 +566,18 @@ func DownloadSharedFile(c echo.Context) error {
 
 	// Validate share exists and isn't expired
 	var share struct {
-		FileID     string
-		OwnerEmail string
-		ExpiresAt  *time.Time
+		FileID        string
+		OwnerUsername string
+		ExpiresAt     *time.Time
 	}
 
 	err := database.DB.QueryRow(`
-		SELECT file_id, owner_email, expires_at
+		SELECT file_id, owner_username, expires_at
 		FROM file_share_keys 
 		WHERE share_id = ?
 	`, shareID).Scan(
 		&share.FileID,
-		&share.OwnerEmail,
+		&share.OwnerUsername,
 		&share.ExpiresAt,
 	)
 

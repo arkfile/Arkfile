@@ -9,14 +9,14 @@ import (
 )
 
 type File struct {
-	ID           int64     `json:"id"`
-	Filename     string    `json:"filename"`
-	StorageID    string    `json:"storage_id"` // UUID v4 for storage backend
-	OwnerEmail   string    `json:"owner_email"`
-	PasswordHint string    `json:"password_hint,omitempty"`
-	SizeBytes    int64     `json:"size_bytes"`  // Original file size
-	PaddedSize   int64     `json:"padded_size"` // Size after padding
-	UploadDate   time.Time `json:"upload_date"`
+	ID            int64     `json:"id"`
+	Filename      string    `json:"filename"`
+	StorageID     string    `json:"storage_id"` // UUID v4 for storage backend
+	OwnerUsername string    `json:"owner_username"`
+	PasswordHint  string    `json:"password_hint,omitempty"`
+	SizeBytes     int64     `json:"size_bytes"`  // Original file size
+	PaddedSize    int64     `json:"padded_size"` // Size after padding
+	UploadDate    time.Time `json:"upload_date"`
 }
 
 // GenerateStorageID creates a new UUID v4 for storage
@@ -25,10 +25,10 @@ func GenerateStorageID() string {
 }
 
 // CreateFile creates a new file record in the database
-func CreateFile(db *sql.DB, filename, ownerEmail, passwordHint string) (*File, error) {
+func CreateFile(db *sql.DB, filename, ownerUsername, passwordHint string) (*File, error) {
 	result, err := db.Exec(
-		"INSERT INTO file_metadata (filename, owner_email, password_hint) VALUES (?, ?, ?)",
-		filename, ownerEmail, passwordHint,
+		"INSERT INTO file_metadata (filename, owner_username, password_hint) VALUES (?, ?, ?)",
+		filename, ownerUsername, passwordHint,
 	)
 	if err != nil {
 		return nil, err
@@ -40,11 +40,11 @@ func CreateFile(db *sql.DB, filename, ownerEmail, passwordHint string) (*File, e
 	}
 
 	return &File{
-		ID:           id,
-		Filename:     filename,
-		OwnerEmail:   ownerEmail,
-		PasswordHint: passwordHint,
-		UploadDate:   time.Now(),
+		ID:            id,
+		Filename:      filename,
+		OwnerUsername: ownerUsername,
+		PasswordHint:  passwordHint,
+		UploadDate:    time.Now(),
 	}, nil
 }
 
@@ -52,9 +52,9 @@ func CreateFile(db *sql.DB, filename, ownerEmail, passwordHint string) (*File, e
 func GetFileByFilename(db *sql.DB, filename string) (*File, error) {
 	file := &File{}
 	err := db.QueryRow(
-		"SELECT id, filename, owner_email, password_hint, upload_date FROM file_metadata WHERE filename = ?",
+		"SELECT id, filename, owner_username, password_hint, upload_date FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&file.ID, &file.Filename, &file.OwnerEmail, &file.PasswordHint, &file.UploadDate)
+	).Scan(&file.ID, &file.Filename, &file.OwnerUsername, &file.PasswordHint, &file.UploadDate)
 
 	if err == sql.ErrNoRows {
 		return nil, errors.New("file not found")
@@ -67,10 +67,10 @@ func GetFileByFilename(db *sql.DB, filename string) (*File, error) {
 }
 
 // GetFilesByOwner retrieves all files owned by a specific user
-func GetFilesByOwner(db *sql.DB, ownerEmail string) ([]*File, error) {
+func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 	rows, err := db.Query(
-		"SELECT id, filename, owner_email, password_hint, upload_date FROM file_metadata WHERE owner_email = ? ORDER BY upload_date DESC",
-		ownerEmail,
+		"SELECT id, filename, owner_username, password_hint, upload_date FROM file_metadata WHERE owner_username = ? ORDER BY upload_date DESC",
+		ownerUsername,
 	)
 	if err != nil {
 		return nil, err
@@ -80,7 +80,7 @@ func GetFilesByOwner(db *sql.DB, ownerEmail string) ([]*File, error) {
 	var files []*File
 	for rows.Next() {
 		file := &File{}
-		err := rows.Scan(&file.ID, &file.Filename, &file.OwnerEmail, &file.PasswordHint, &file.UploadDate)
+		err := rows.Scan(&file.ID, &file.Filename, &file.OwnerUsername, &file.PasswordHint, &file.UploadDate)
 		if err != nil {
 			return nil, err
 		}
@@ -95,10 +95,10 @@ func GetFilesByOwner(db *sql.DB, ownerEmail string) ([]*File, error) {
 }
 
 // DeleteFile removes a file record from the database
-func DeleteFile(db *sql.DB, filename string, ownerEmail string) error {
+func DeleteFile(db *sql.DB, filename string, ownerUsername string) error {
 	result, err := db.Exec(
-		"DELETE FROM file_metadata WHERE filename = ? AND owner_email = ?",
-		filename, ownerEmail,
+		"DELETE FROM file_metadata WHERE filename = ? AND owner_username = ?",
+		filename, ownerUsername,
 	)
 	if err != nil {
 		return err

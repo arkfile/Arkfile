@@ -17,7 +17,7 @@
         <div class="auth-section" id="auth-section">
             <div class="login-form" id="login-form">
                 <h2>Login</h2>
-                <input type="email" id="login-email" placeholder="Email">
+                <input type="text" id="login-username" placeholder="Username">
                 <input type="password" id="login-password" placeholder="Password">
                 <button onclick="login()">Login</button>
                 <p>Don't have an account? <a href="#" onclick="toggleAuthForm()">Register</a></p>
@@ -25,7 +25,7 @@
 
             <div class="register-form hidden" id="register-form">
                 <h2>Register</h2>
-                <input type="email" id="register-email" placeholder="Email">
+                <input type="text" id="register-username" placeholder="Username (letters, numbers, dots, dashes only)">
                 <div class="password-section">
                     <input type="password" id="register-password" placeholder="Password (min. 14 characters)">
                     <div class="password-requirements">

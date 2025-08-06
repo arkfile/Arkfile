@@ -12,8 +12,8 @@ import (
 
 // OPAQUEPasswordManagerInterface defines the interface for OPAQUE password management
 type OPAQUEPasswordManagerInterface interface {
-	RegisterCustomFilePassword(userEmail, fileID, password, keyLabel, passwordHint string) error
-	RegisterSharePassword(shareID, fileID, ownerEmail, password string) error
+	RegisterCustomFilePassword(username, fileID, password, keyLabel, passwordHint string) error
+	RegisterSharePassword(shareID, fileID, ownerUsername, password string) error
 	AuthenticatePassword(recordIdentifier, password string) ([]byte, error)
 	GetPasswordRecord(recordIdentifier string) (*OPAQUEPasswordRecord, error)
 	GetFilePasswordRecords(fileID string) ([]*OPAQUEPasswordRecord, error)
@@ -47,10 +47,10 @@ func NewOPAQUEPasswordManagerWithDB(db *sql.DB) *OPAQUEPasswordManager {
 type OPAQUEPasswordRecord struct {
 	ID                    int        `json:"id"`
 	RecordType            string     `json:"record_type"`             // 'account', 'file_custom', 'share'
-	RecordIdentifier      string     `json:"record_identifier"`       // email, 'user:file:filename', 'share:shareID'
+	RecordIdentifier      string     `json:"record_identifier"`       // username, 'user:file:filename', 'share:shareID'
 	OPAQUEUserRecord      []byte     `json:"opaque_user_record"`      // OPAQUE registration data
 	AssociatedFileID      *string    `json:"associated_file_id"`      // NULL for account, filename for file/share
-	AssociatedUserEmail   *string    `json:"associated_user_email"`   // User who created this record
+	AssociatedUsername    *string    `json:"associated_username"`     // User who created this record
 	KeyLabel              *string    `json:"key_label"`               // Human-readable label
 	PasswordHintEncrypted []byte     `json:"password_hint_encrypted"` // Encrypted with export key
 	CreatedAt             time.Time  `json:"created_at"`
@@ -60,9 +60,9 @@ type OPAQUEPasswordRecord struct {
 
 // RegisterCustomFilePassword registers a custom password for a specific file
 func (opm *OPAQUEPasswordManager) RegisterCustomFilePassword(
-	userEmail, fileID, password, keyLabel, passwordHint string) error {
+	username, fileID, password, keyLabel, passwordHint string) error {
 
-	recordIdentifier := fmt.Sprintf("%s:file:%s", userEmail, fileID)
+	recordIdentifier := fmt.Sprintf("%s:file:%s", username, fileID)
 
 	// Use provider interface
 	provider := GetOPAQUEProvider()
@@ -96,16 +96,16 @@ func (opm *OPAQUEPasswordManager) RegisterCustomFilePassword(
 	_, err = opm.db.Exec(`
 		INSERT INTO opaque_password_records 
 		(record_type, record_identifier, opaque_user_record, associated_file_id, 
-		 associated_user_email, key_label, password_hint_encrypted)
+		 associated_username, key_label, password_hint_encrypted)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		"file_custom", recordIdentifier, userRecord, fileID, userEmail, keyLabel, encryptedHint)
+		"file_custom", recordIdentifier, userRecord, fileID, username, keyLabel, encryptedHint)
 
 	return err
 }
 
 // RegisterSharePassword registers a password for anonymous share access
 func (opm *OPAQUEPasswordManager) RegisterSharePassword(
-	shareID, fileID, ownerEmail, password string) error {
+	shareID, fileID, ownerUsername, password string) error {
 
 	recordIdentifier := fmt.Sprintf("share:%s", shareID)
 
@@ -131,9 +131,9 @@ func (opm *OPAQUEPasswordManager) RegisterSharePassword(
 	// Store OPAQUE record
 	_, err = opm.db.Exec(`
 		INSERT INTO opaque_password_records 
-		(record_type, record_identifier, opaque_user_record, associated_file_id, associated_user_email)
+		(record_type, record_identifier, opaque_user_record, associated_file_id, associated_username)
 		VALUES (?, ?, ?, ?, ?)`,
-		"share", recordIdentifier, userRecord, fileID, ownerEmail)
+		"share", recordIdentifier, userRecord, fileID, ownerUsername)
 
 	return err
 }
@@ -180,14 +180,14 @@ func (opm *OPAQUEPasswordManager) GetPasswordRecord(recordIdentifier string) (*O
 
 	err := opm.db.QueryRow(`
 		SELECT id, record_type, record_identifier, opaque_user_record, 
-		       associated_file_id, associated_user_email, key_label, 
+		       associated_file_id, associated_username, key_label, 
 		       password_hint_encrypted, created_at, last_used_at, is_active
 		FROM opaque_password_records 
 		WHERE record_identifier = ? AND is_active = TRUE`,
 		recordIdentifier).Scan(
 		&record.ID, &record.RecordType, &record.RecordIdentifier,
 		&record.OPAQUEUserRecord, &record.AssociatedFileID,
-		&record.AssociatedUserEmail, &record.KeyLabel,
+		&record.AssociatedUsername, &record.KeyLabel,
 		&record.PasswordHintEncrypted, &record.CreatedAt,
 		&record.LastUsedAt, &record.IsActive)
 
@@ -202,7 +202,7 @@ func (opm *OPAQUEPasswordManager) GetPasswordRecord(recordIdentifier string) (*O
 func (opm *OPAQUEPasswordManager) GetFilePasswordRecords(fileID string) ([]*OPAQUEPasswordRecord, error) {
 	rows, err := opm.db.Query(`
 		SELECT id, record_type, record_identifier, opaque_user_record, 
-		       associated_file_id, associated_user_email, key_label, 
+		       associated_file_id, associated_username, key_label, 
 		       password_hint_encrypted, created_at, last_used_at, is_active
 		FROM opaque_password_records 
 		WHERE associated_file_id = ? AND is_active = TRUE
@@ -220,7 +220,7 @@ func (opm *OPAQUEPasswordManager) GetFilePasswordRecords(fileID string) ([]*OPAQ
 		err := rows.Scan(
 			&record.ID, &record.RecordType, &record.RecordIdentifier,
 			&record.OPAQUEUserRecord, &record.AssociatedFileID,
-			&record.AssociatedUserEmail, &record.KeyLabel,
+			&record.AssociatedUsername, &record.KeyLabel,
 			&record.PasswordHintEncrypted, &record.CreatedAt,
 			&record.LastUsedAt, &record.IsActive)
 

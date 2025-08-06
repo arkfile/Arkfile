@@ -23,7 +23,7 @@ import (
 
 // CreateUploadSession initializes a new chunked upload
 func CreateUploadSession(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 
 	var request struct {
 		Filename     string `json:"filename"`
@@ -86,7 +86,7 @@ func CreateUploadSession(c echo.Context) error {
 	}
 
 	// Check user's storage limit and approval status
-	user, err := models.GetUserByEmail(database.DB, email)
+	user, err := models.GetUserByUsername(database.DB, username)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user")
 	}
@@ -122,8 +122,8 @@ func CreateUploadSession(c echo.Context) error {
 
 	// Create upload session record with storage_id and envelope data
 	_, err = tx.Exec(
-		"INSERT INTO upload_sessions (id, filename, owner_email, total_size, chunk_size, total_chunks, original_hash, password_hint, password_type, storage_id, padded_size, envelope_data, envelope_version, envelope_key_type, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		sessionID, request.Filename, email, request.TotalSize, request.ChunkSize, totalChunks, request.OriginalHash, request.PasswordHint, request.PasswordType, storageID, paddedSize, envelopeData, envelopeVersion, envelopeKeyType, "in_progress", time.Now().Add(24*time.Hour),
+		"INSERT INTO upload_sessions (id, filename, owner_username, total_size, chunk_size, total_chunks, original_hash, password_hint, password_type, storage_id, padded_size, envelope_data, envelope_version, envelope_key_type, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		sessionID, request.Filename, username, request.TotalSize, request.ChunkSize, totalChunks, request.OriginalHash, request.PasswordHint, request.PasswordType, storageID, paddedSize, envelopeData, envelopeVersion, envelopeKeyType, "in_progress", time.Now().Add(24*time.Hour),
 	)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create upload session")
@@ -131,8 +131,8 @@ func CreateUploadSession(c echo.Context) error {
 
 	// Initialize multipart upload in storage with sessionID metadata
 	metadata := map[string]string{
-		"session-id":  sessionID,
-		"owner-email": email,
+		"session-id":     sessionID,
+		"owner-username": username,
 	}
 
 	// Get the concrete MinioStorage implementation via type assertion
@@ -171,7 +171,7 @@ func CreateUploadSession(c echo.Context) error {
 	}
 
 	logging.InfoLogger.Printf("Upload session created: %s by %s for file: %s (size: %d bytes)",
-		sessionID, email, request.Filename, request.TotalSize)
+		sessionID, username, request.Filename, request.TotalSize)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"sessionId":   sessionID,
@@ -189,7 +189,7 @@ func GetSharedFileByShareID(c echo.Context) error {
 
 // DownloadFileChunk streams a specific chunk of a file to the client
 func DownloadFileChunk(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	fileID := c.Param("fileId")
 	chunkNumberStr := c.Param("chunkNumber")
 
@@ -201,26 +201,26 @@ func DownloadFileChunk(c echo.Context) error {
 
 	// Get file metadata and verify ownership
 	var (
-		filename     string
-		ownerEmail   string
-		size         int64
-		passwordHint string
-		passwordType string
-		originalHash string
+		filename      string
+		ownerUsername string
+		size          int64
+		passwordHint  string
+		passwordType  string
+		originalHash  string
 	)
 
 	// First check if it's a regular file
 	err = database.DB.QueryRow(
-		"SELECT filename, owner_email, size_bytes, password_hint, password_type, sha256sum FROM file_metadata WHERE filename = ?",
+		"SELECT filename, owner_username, size_bytes, password_hint, password_type, sha256sum FROM file_metadata WHERE filename = ?",
 		fileID,
-	).Scan(&filename, &ownerEmail, &size, &passwordHint, &passwordType, &originalHash)
+	).Scan(&filename, &ownerUsername, &size, &passwordHint, &passwordType, &originalHash)
 
 	if err == sql.ErrNoRows {
 		// Not found as a regular file, check completed upload sessions
 		err = database.DB.QueryRow(
-			"SELECT filename, owner_email, total_size, password_hint, password_type, original_hash FROM upload_sessions WHERE filename = ? AND status = 'completed'",
+			"SELECT filename, owner_username, total_size, password_hint, password_type, original_hash FROM upload_sessions WHERE filename = ? AND status = 'completed'",
 			fileID,
-		).Scan(&filename, &ownerEmail, &size, &passwordHint, &passwordType, &originalHash)
+		).Scan(&filename, &ownerUsername, &size, &passwordHint, &passwordType, &originalHash)
 
 		if err == sql.ErrNoRows {
 			return echo.NewHTTPError(http.StatusNotFound, "File not found")
@@ -232,7 +232,7 @@ func DownloadFileChunk(c echo.Context) error {
 	}
 
 	// Verify ownership
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to access this file")
 	}
 
@@ -271,7 +271,7 @@ func DownloadFileChunk(c echo.Context) error {
 	c.Response().Header().Set("X-Password-Type", passwordType)
 
 	// Log access
-	logging.InfoLogger.Printf("Chunk download: %s, chunk: %d/%d by %s", fileID, chunkNumber+1, totalChunks, email)
+	logging.InfoLogger.Printf("Chunk download: %s, chunk: %d/%d by %s", fileID, chunkNumber+1, totalChunks, username)
 
 	// Stream the chunk to the client
 	return c.Stream(http.StatusOK, "application/octet-stream", reader)
@@ -279,12 +279,12 @@ func DownloadFileChunk(c echo.Context) error {
 
 // CancelUpload aborts an in-progress upload session
 func CancelUpload(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	sessionID := c.Param("sessionId")
 
 	// Verify session exists and belongs to user
 	var (
-		ownerEmail      string
+		ownerUsername   string
 		filename        string
 		storageID       string
 		storageUploadID string
@@ -292,9 +292,9 @@ func CancelUpload(c echo.Context) error {
 	)
 
 	err := database.DB.QueryRow(
-		"SELECT owner_email, filename, storage_id, storage_upload_id, status FROM upload_sessions WHERE id = ?",
+		"SELECT owner_username, filename, storage_id, storage_upload_id, status FROM upload_sessions WHERE id = ?",
 		sessionID,
-	).Scan(&ownerEmail, &filename, &storageID, &storageUploadID, &status)
+	).Scan(&ownerUsername, &filename, &storageID, &storageUploadID, &status)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
@@ -303,7 +303,7 @@ func CancelUpload(c echo.Context) error {
 	}
 
 	// Verify ownership
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized for this upload session")
 	}
 
@@ -341,7 +341,7 @@ func CancelUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
 	}
 
-	logging.InfoLogger.Printf("Upload canceled: %s, file: %s by %s", sessionID, filename, email)
+	logging.InfoLogger.Printf("Upload canceled: %s, file: %s by %s", sessionID, filename, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "Upload canceled successfully",
@@ -350,24 +350,24 @@ func CancelUpload(c echo.Context) error {
 
 // GetUploadStatus returns the status of an upload session including which chunks have been uploaded
 func GetUploadStatus(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	sessionID := c.Param("sessionId")
 
 	// Verify session exists and belongs to user
 	var (
-		ownerEmail  string
-		filename    string
-		status      string
-		totalChunks int
-		totalSize   int64
-		createdAt   time.Time
-		expiresAt   time.Time
+		ownerUsername string
+		filename      string
+		status        string
+		totalChunks   int
+		totalSize     int64
+		createdAt     time.Time
+		expiresAt     time.Time
 	)
 
 	err := database.DB.QueryRow(
-		"SELECT owner_email, filename, status, total_chunks, total_size, created_at, expires_at FROM upload_sessions WHERE id = ?",
+		"SELECT owner_username, filename, status, total_chunks, total_size, created_at, expires_at FROM upload_sessions WHERE id = ?",
 		sessionID,
-	).Scan(&ownerEmail, &filename, &status, &totalChunks, &totalSize, &createdAt, &expiresAt)
+	).Scan(&ownerUsername, &filename, &status, &totalChunks, &totalSize, &createdAt, &expiresAt)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
@@ -376,7 +376,7 @@ func GetUploadStatus(c echo.Context) error {
 	}
 
 	// Verify ownership
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized for this upload session")
 	}
 
@@ -422,7 +422,7 @@ func GetUploadStatus(c echo.Context) error {
 
 // UploadChunk handles individual chunk uploads
 func UploadChunk(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	sessionID := c.Param("sessionId")
 	chunkNumberStr := c.Param("chunkNumber")
 
@@ -434,7 +434,7 @@ func UploadChunk(c echo.Context) error {
 
 	// Verify session exists and belongs to user
 	var (
-		ownerEmail      string
+		ownerUsername   string
 		filename        string
 		storageID       string
 		storageUploadID string
@@ -443,9 +443,9 @@ func UploadChunk(c echo.Context) error {
 	)
 
 	err = database.DB.QueryRow(
-		"SELECT owner_email, filename, storage_id, storage_upload_id, status, total_chunks FROM upload_sessions WHERE id = ?",
+		"SELECT owner_username, filename, storage_id, storage_upload_id, status, total_chunks FROM upload_sessions WHERE id = ?",
 		sessionID,
-	).Scan(&ownerEmail, &filename, &storageID, &storageUploadID, &status, &totalChunks)
+	).Scan(&ownerUsername, &filename, &storageID, &storageUploadID, &status, &totalChunks)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
@@ -454,7 +454,7 @@ func UploadChunk(c echo.Context) error {
 	}
 
 	// Verify ownership
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized for this upload session")
 	}
 
@@ -538,7 +538,7 @@ func UploadChunk(c echo.Context) error {
 
 // CompleteUpload finalizes a chunked upload
 func CompleteUpload(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	sessionID := c.Param("sessionId")
 
 	// Begin transaction
@@ -550,7 +550,7 @@ func CompleteUpload(c echo.Context) error {
 
 	// Get session details
 	var (
-		ownerEmail      string
+		ownerUsername   string
 		filename        string
 		storageID       string
 		storageUploadID string
@@ -564,10 +564,10 @@ func CompleteUpload(c echo.Context) error {
 	)
 
 	err = tx.QueryRow(
-		"SELECT owner_email, filename, storage_id, storage_upload_id, padded_size, status, total_chunks, total_size, original_hash, password_hint, password_type FROM upload_sessions WHERE id = ?",
+		"SELECT owner_username, filename, storage_id, storage_upload_id, padded_size, status, total_chunks, total_size, original_hash, password_hint, password_type FROM upload_sessions WHERE id = ?",
 		sessionID,
 	).Scan(
-		&ownerEmail, &filename, &storageID, &storageUploadID, &paddedSize, &status, &totalChunks,
+		&ownerUsername, &filename, &storageID, &storageUploadID, &paddedSize, &status, &totalChunks,
 		&totalSize, &originalHash, &passwordHint, &passwordType,
 	)
 
@@ -578,7 +578,7 @@ func CompleteUpload(c echo.Context) error {
 	}
 
 	// Verify ownership
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized for this upload session")
 	}
 
@@ -691,8 +691,8 @@ func CompleteUpload(c echo.Context) error {
 
 	// Create file metadata record with storage_id and padded_size
 	_, err = tx.Exec(
-		"INSERT INTO file_metadata (filename, storage_id, owner_email, password_hint, password_type, sha256sum, size_bytes, padded_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		filename, storageID, email, passwordHint, passwordType, originalHash, totalSize, paddedSize,
+		"INSERT INTO file_metadata (filename, storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes, padded_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		filename, storageID, username, passwordHint, passwordType, originalHash, totalSize, paddedSize,
 	)
 	if err != nil {
 		// Handle duplicate filenames
@@ -704,7 +704,7 @@ func CompleteUpload(c echo.Context) error {
 	}
 
 	// Update user's storage usage
-	user, err := models.GetUserByEmail(database.DB, email)
+	user, err := models.GetUserByUsername(database.DB, username)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user")
 	}
@@ -719,9 +719,9 @@ func CompleteUpload(c echo.Context) error {
 	}
 
 	logging.InfoLogger.Printf("Upload completed: %s, file: %s by %s (size: %d bytes)",
-		sessionID, filename, email, totalSize)
+		sessionID, filename, username, totalSize)
 
-	database.LogUserAction(email, "uploaded", filename)
+	database.LogUserAction(username, "uploaded", filename)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "File uploaded successfully",
@@ -735,7 +735,7 @@ func CompleteUpload(c echo.Context) error {
 
 // DeleteFile handles file deletion
 func DeleteFile(c echo.Context) error {
-	email := auth.GetEmailFromToken(c)
+	username := auth.GetUsernameFromToken(c)
 	filename := c.Param("filename")
 
 	// Begin transaction
@@ -746,13 +746,13 @@ func DeleteFile(c echo.Context) error {
 	defer tx.Rollback() // Rollback if not committed
 
 	// Verify file ownership and get file size and storage_id
-	var ownerEmail string
+	var ownerUsername string
 	var storageID string
 	var fileSize int64
 	err = tx.QueryRow(
-		"SELECT owner_email, storage_id, size_bytes FROM file_metadata WHERE filename = ?",
+		"SELECT owner_username, storage_id, size_bytes FROM file_metadata WHERE filename = ?",
 		filename,
-	).Scan(&ownerEmail, &storageID, &fileSize)
+	).Scan(&ownerUsername, &storageID, &fileSize)
 
 	if err != nil {
 		// If there is any error (including sql.ErrNoRows), treat it as 'not found'.
@@ -763,7 +763,7 @@ func DeleteFile(c echo.Context) error {
 	}
 
 	// Verify ownership
-	if ownerEmail != email {
+	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to delete this file")
 	}
 
@@ -782,7 +782,7 @@ func DeleteFile(c echo.Context) error {
 	}
 
 	// Update user's storage usage (reduce by file size)
-	user, err := models.GetUserByEmail(database.DB, email)
+	user, err := models.GetUserByUsername(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get user: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage usage")
@@ -800,8 +800,8 @@ func DeleteFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete file deletion")
 	}
 
-	database.LogUserAction(email, "deleted", filename)
-	logging.InfoLogger.Printf("File deleted: %s by %s", filename, email)
+	database.LogUserAction(username, "deleted", filename)
+	logging.InfoLogger.Printf("File deleted: %s by %s", filename, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "File deleted successfully",

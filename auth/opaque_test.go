@@ -26,7 +26,7 @@ func setupTestDatabase(t *testing.T) *sql.DB {
 	// Create OPAQUE tables
 	schema := `
 		CREATE TABLE opaque_user_data (
-			user_email TEXT PRIMARY KEY,
+			username TEXT PRIMARY KEY,
 			serialized_record TEXT NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
@@ -67,21 +67,21 @@ func TestOpaqueRegistrationAndAuthentication(t *testing.T) {
 	}
 
 	// 2. Test registration
-	email := "test@example.com"
+	username := "test.user.2024"
 	password := "TestPassword123!SecurePass"
 
-	err = RegisterUser(db, email, password)
+	err = RegisterUser(db, username, password)
 	if err != nil {
 		t.Fatalf("RegisterUser failed: %v", err)
 	}
 
 	// 3. Verify user data was stored
-	userData, err := loadOPAQUEUserData(db, email)
+	userData, err := loadOPAQUEUserData(db, username)
 	if err != nil {
 		t.Fatalf("Failed to load user data: %v", err)
 	}
-	if userData.UserEmail != email {
-		t.Errorf("Expected email %s, got %s", email, userData.UserEmail)
+	if userData.Username != username {
+		t.Errorf("Expected username %s, got %s", username, userData.Username)
 	}
 	if len(userData.SerializedRecord) == 0 {
 		t.Error("Serialized OPAQUE record should not be empty")
@@ -93,7 +93,7 @@ func TestOpaqueRegistrationAndAuthentication(t *testing.T) {
 	}
 
 	// 4. Test authentication with the correct password
-	sessionKey, err := AuthenticateUser(db, email, password)
+	sessionKey, err := AuthenticateUser(db, username, password)
 	if err != nil {
 		t.Fatalf("Authentication failed with correct password: %v", err)
 	}
@@ -107,19 +107,19 @@ func TestOpaqueRegistrationAndAuthentication(t *testing.T) {
 	}
 
 	// 5. Test authentication with an incorrect password
-	_, err = AuthenticateUser(db, email, "WrongPassword")
+	_, err = AuthenticateUser(db, username, "WrongPassword")
 	if err == nil {
 		t.Error("Authentication should have failed with an incorrect password")
 	}
 
 	// 6. Test authentication with empty password
-	_, err = AuthenticateUser(db, email, "")
+	_, err = AuthenticateUser(db, username, "")
 	if err == nil {
 		t.Error("Authentication should have failed with empty password")
 	}
 
 	// 7. Test authentication for non-existent user
-	_, err = AuthenticateUser(db, "nonexistent@example.com", password)
+	_, err = AuthenticateUser(db, "nonexistent.user", password)
 	if err == nil {
 		t.Error("Authentication should have failed for non-existent user")
 	}
@@ -140,29 +140,29 @@ func TestOpaqueSecurityProperties(t *testing.T) {
 
 	// 1. Register two different users
 	users := []struct {
-		email    string
+		username string
 		password string
 	}{
-		{"user1@example.com", "User1Password123!Secure"},
-		{"user2@example.com", "User2Password456!Safe"},
+		{"user1.secure.2024", "User1Password123!Secure"},
+		{"user2.safe.2024", "User2Password456!Safe"},
 	}
 
 	for _, user := range users {
-		err := RegisterUser(db, user.email, user.password)
+		err := RegisterUser(db, user.username, user.password)
 		if err != nil {
-			t.Fatalf("Registration failed for %s: %v", user.email, err)
+			t.Fatalf("Registration failed for %s: %v", user.username, err)
 		}
 	}
 
 	// 2. Authenticate both users and get their session keys
-	sessionKey1, err := AuthenticateUser(db, users[0].email, users[0].password)
+	sessionKey1, err := AuthenticateUser(db, users[0].username, users[0].password)
 	if err != nil {
-		t.Fatalf("Authentication failed for %s: %v", users[0].email, err)
+		t.Fatalf("Authentication failed for %s: %v", users[0].username, err)
 	}
 
-	sessionKey2, err := AuthenticateUser(db, users[1].email, users[1].password)
+	sessionKey2, err := AuthenticateUser(db, users[1].username, users[1].password)
 	if err != nil {
-		t.Fatalf("Authentication failed for %s: %v", users[1].email, err)
+		t.Fatalf("Authentication failed for %s: %v", users[1].username, err)
 	}
 
 	// 3. Verify that the session keys are different
@@ -171,15 +171,15 @@ func TestOpaqueSecurityProperties(t *testing.T) {
 	}
 
 	// 4. Test that cross-authentication fails
-	_, err = AuthenticateUser(db, users[0].email, users[1].password)
+	_, err = AuthenticateUser(db, users[0].username, users[1].password)
 	if err == nil {
 		t.Error("Cross-user authentication should fail")
 	}
 
 	// 5. Test same user authentication - OPAQUE should generate different session keys each time for security
-	sessionKey1Again, err := AuthenticateUser(db, users[0].email, users[0].password)
+	sessionKey1Again, err := AuthenticateUser(db, users[0].username, users[0].password)
 	if err != nil {
-		t.Fatalf("Second authentication failed for %s: %v", users[0].email, err)
+		t.Fatalf("Second authentication failed for %s: %v", users[0].username, err)
 	}
 
 	// Session keys should be different each time for security (OPAQUE protocol feature)
@@ -302,28 +302,28 @@ func TestOpaqueEdgeCases(t *testing.T) {
 		t.Fatalf("Failed to setup server keys: %v", err)
 	}
 
-	// 1. Test registration with empty email
+	// 1. Test registration with empty username
 	err = RegisterUser(db, "", "password123")
 	if err == nil {
-		t.Error("Registration should fail with empty email")
+		t.Error("Registration should fail with empty username")
 	}
 
 	// 2. Test registration with empty password
-	err = RegisterUser(db, "test@example.com", "")
+	err = RegisterUser(db, "test.user.name", "")
 	if err == nil {
 		t.Error("Registration should fail with empty password")
 	}
 
 	// 3. Test duplicate registration
-	email := "duplicate@example.com"
+	username := "duplicate.user.2024"
 	password := "TestPassword123"
 
-	err = RegisterUser(db, email, password)
+	err = RegisterUser(db, username, password)
 	if err != nil {
 		t.Fatalf("First registration failed: %v", err)
 	}
 
-	err = RegisterUser(db, email, password+"different")
+	err = RegisterUser(db, username, password+"different")
 	if err != nil {
 		t.Logf("Duplicate registration handled (expected): %v", err)
 		// This should update the existing record due to our UPSERT logic
@@ -331,7 +331,7 @@ func TestOpaqueEdgeCases(t *testing.T) {
 
 	// 4. Test authentication without server keys
 	serverKeys = nil
-	_, err = AuthenticateUser(db, email, password)
+	_, err = AuthenticateUser(db, username, password)
 	if err == nil {
 		t.Error("Authentication should fail without server keys loaded")
 	}

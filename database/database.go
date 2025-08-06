@@ -10,6 +10,14 @@ import (
 	_ "github.com/rqlite/gorqlite/stdlib"
 )
 
+// min returns the smaller of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 var (
 	DB *sql.DB
 )
@@ -90,6 +98,13 @@ func createUnifiedSchema() {
 		return
 	}
 
+	// Temporarily disable foreign key constraints during schema creation
+	// This prevents issues with table creation order
+	_, err = DB.Exec("PRAGMA foreign_keys = OFF")
+	if err != nil {
+		log.Printf("Warning: Could not disable foreign keys: %v", err)
+	}
+
 	// Execute the entire schema as a single operation
 	// This avoids the fragile statement-splitting approach
 	_, err = DB.Exec(string(schemaSQL))
@@ -98,38 +113,44 @@ func createUnifiedSchema() {
 		return
 	}
 
+	// Re-enable foreign key constraints
+	_, err = DB.Exec("PRAGMA foreign_keys = ON")
+	if err != nil {
+		log.Printf("Warning: Could not re-enable foreign keys: %v", err)
+	}
+
 	log.Println("Successfully applied complete unified database schema")
 }
 
 // Log user actions
-func LogUserAction(email, action, target string) error {
+func LogUserAction(username, action, target string) error {
 	_, err := DB.Exec(
-		"INSERT INTO user_activity (user_email, action, target) VALUES (?, ?, ?)",
-		email, action, target,
+		"INSERT INTO user_activity (username, action, target) VALUES (?, ?, ?)",
+		username, action, target,
 	)
 	return err
 }
 
 // Log admin actions
-func LogAdminAction(adminEmail, action, targetEmail, details string) error {
+func LogAdminAction(adminUsername, action, targetUsername, details string) error {
 	_, err := DB.Exec(
-		"INSERT INTO admin_logs (admin_email, action, target_email, details) VALUES (?, ?, ?, ?)",
-		adminEmail, action, targetEmail, details,
+		"INSERT INTO admin_logs (admin_username, action, target_username, details) VALUES (?, ?, ?, ?)",
+		adminUsername, action, targetUsername, details,
 	)
 	return err
 }
 
-func LogAdminActionWithTx(tx *sql.Tx, adminEmail, action, targetEmail, details string) error {
+func LogAdminActionWithTx(tx *sql.Tx, adminUsername, action, targetUsername, details string) error {
 	_, err := tx.Exec(
-		"INSERT INTO admin_logs (admin_email, action, target_email, details) VALUES (?, ?, ?, ?)",
-		adminEmail, action, targetEmail, details,
+		"INSERT INTO admin_logs (admin_username, action, target_username, details) VALUES (?, ?, ?, ?)",
+		adminUsername, action, targetUsername, details,
 	)
 	return err
 }
 
-// ApplyRateLimitingSchema is deprecated - rate limiting schema is now included in schema_extensions.sql
+// ApplyRateLimitingSchema is deprecated - rate limiting schema is now included in unified_schema.sql
 // This function is kept for backwards compatibility but does nothing
 func ApplyRateLimitingSchema() error {
-	log.Println("Rate limiting schema is now included in main schema extensions - no separate application needed")
+	log.Println("Rate limiting schema is now included in unified schema - no separate application needed")
 	return nil
 }

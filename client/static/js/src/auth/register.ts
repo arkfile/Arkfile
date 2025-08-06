@@ -10,7 +10,7 @@ import { showFileSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 
 export interface RegistrationCredentials {
-  email: string;
+  username: string;
   password: string;
   confirmPassword: string;
 }
@@ -70,14 +70,14 @@ export class RegistrationManager {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          email: credentials.email,
+          username: credentials.username,
           password: credentials.password
         }),
       });
 
       if (response.ok) {
         const data: RegistrationResponse = await response.json();
-        await this.completeRegistration(data, credentials.email);
+        await this.completeRegistration(data, credentials.username);
       } else {
         hideProgress();
         const errorData = await response.json().catch(() => ({}));
@@ -91,15 +91,20 @@ export class RegistrationManager {
   }
 
   private static validateRegistrationInputs(credentials: RegistrationCredentials): boolean {
-    if (!credentials.email || !credentials.password || !credentials.confirmPassword) {
+    if (!credentials.username || !credentials.password || !credentials.confirmPassword) {
       showError('Please fill in all required fields.');
       return false;
     }
 
-    // Basic email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(credentials.email)) {
-      showError('Please enter a valid email address.');
+    // Basic username validation
+    const usernameRegex = /^[a-zA-Z0-9._-]+$/;
+    if (!usernameRegex.test(credentials.username)) {
+      showError('Username can only contain letters, numbers, dots, dashes, and underscores.');
+      return false;
+    }
+
+    if (credentials.username.length < 3 || credentials.username.length > 32) {
+      showError('Username must be between 3 and 32 characters.');
       return false;
     }
 
@@ -125,13 +130,13 @@ export class RegistrationManager {
     });
   }
 
-  private static async completeRegistration(data: RegistrationResponse, email: string): Promise<void> {
+  private static async completeRegistration(data: RegistrationResponse, username: string): Promise<void> {
     try {
       // Store authentication tokens
       setTokens(data.token, data.refreshToken);
       
       // Create secure session in WASM (NEVER store session key in JavaScript)
-      const sessionResult = await wasmManager.createSecureSession(data.sessionKey, email);
+      const sessionResult = await wasmManager.createSecureSession(data.sessionKey, username);
       if (!sessionResult.success) {
         hideProgress();
         showError('Failed to create secure session: ' + sessionResult.error);
@@ -158,19 +163,19 @@ export function setupRegistrationForm(): void {
   const registerForm = document.getElementById('register-form');
   if (!registerForm) return;
 
-  const emailInput = document.getElementById('register-email') as HTMLInputElement;
+  const usernameInput = document.getElementById('register-username') as HTMLInputElement;
   const passwordInput = document.getElementById('register-password') as HTMLInputElement;
-  const confirmPasswordInput = document.getElementById('register-confirm-password') as HTMLInputElement;
+  const confirmPasswordInput = document.getElementById('register-password-confirm') as HTMLInputElement;
   const submitButton = registerForm.querySelector('button[type="submit"]') as HTMLButtonElement;
 
-  if (!emailInput || !passwordInput || !confirmPasswordInput || !submitButton) return;
+  if (!usernameInput || !passwordInput || !confirmPasswordInput || !submitButton) return;
 
   // Handle form submission
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
     
     const credentials: RegistrationCredentials = {
-      email: emailInput.value.trim(),
+      username: usernameInput.value.trim(),
       password: passwordInput.value,
       confirmPassword: confirmPasswordInput.value
     };
@@ -182,7 +187,7 @@ export function setupRegistrationForm(): void {
   registerForm.addEventListener('submit', handleSubmit);
   
   // Handle Enter key in form fields
-  [emailInput, passwordInput, confirmPasswordInput].forEach(input => {
+  [usernameInput, passwordInput, confirmPasswordInput].forEach(input => {
     input.addEventListener('keypress', (e) => {
       if (e.key === 'Enter') {
         handleSubmit(e);
@@ -191,7 +196,7 @@ export function setupRegistrationForm(): void {
   });
 
   // Clear any previous error states when user starts typing
-  [emailInput, passwordInput, confirmPasswordInput].forEach(input => {
+  [usernameInput, passwordInput, confirmPasswordInput].forEach(input => {
     input.addEventListener('input', () => {
       input.classList.remove('error');
     });
@@ -257,17 +262,17 @@ async function validatePasswordConfirmationRealTime(password: string, confirmati
 
 // Export utility functions for compatibility
 export async function register(): Promise<void> {
-  const emailInput = document.getElementById('register-email') as HTMLInputElement;
+  const usernameInput = document.getElementById('register-username') as HTMLInputElement;
   const passwordInput = document.getElementById('register-password') as HTMLInputElement;
-  const confirmPasswordInput = document.getElementById('register-confirm-password') as HTMLInputElement;
+  const confirmPasswordInput = document.getElementById('register-password-confirm') as HTMLInputElement;
   
-  if (!emailInput || !passwordInput || !confirmPasswordInput) {
+  if (!usernameInput || !passwordInput || !confirmPasswordInput) {
     showError('Registration form not found.');
     return;
   }
 
   const credentials: RegistrationCredentials = {
-    email: emailInput.value.trim(),
+    username: usernameInput.value.trim(),
     password: passwordInput.value,
     confirmPassword: confirmPasswordInput.value
   };

@@ -5,13 +5,13 @@
 import { wasmManager } from '../utils/wasm';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
-import { setTokens, getUserEmailFromToken, clearAllSessionData } from '../utils/auth';
+import { setTokens, getUsernameFromToken, getUserEmailFromToken, clearAllSessionData } from '../utils/auth';
 import { showFileSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { handleTOTPFlow } from './totp';
 
 export interface LoginCredentials {
-  email: string;
+  username: string;
   password: string;
 }
 
@@ -26,8 +26,8 @@ export interface LoginResponse {
 
 export class LoginManager {
   public static async login(credentials: LoginCredentials): Promise<void> {
-    if (!credentials.email || !credentials.password) {
-      showError('Please enter both email and password.');
+    if (!credentials.username || !credentials.password) {
+      showError('Please enter both username and password.');
       return;
     }
 
@@ -51,7 +51,7 @@ export class LoginManager {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          email: credentials.email,
+          username: credentials.username,
           password: credentials.password
         }),
       });
@@ -65,13 +65,13 @@ export class LoginManager {
           handleTOTPFlow({
             tempToken: data.tempToken!,
             sessionKey: data.sessionKey,
-            email: credentials.email
+            username: credentials.username
           });
           return;
         }
         
         // Complete authentication
-        await this.completeLogin(data, credentials.email);
+        await this.completeLogin(data, credentials.username);
         
       } else {
         hideProgress();
@@ -85,13 +85,13 @@ export class LoginManager {
     }
   }
 
-  public static async completeLogin(data: LoginResponse, email: string): Promise<void> {
+  public static async completeLogin(data: LoginResponse, username: string): Promise<void> {
     try {
       // Store authentication tokens
       setTokens(data.token, data.refreshToken);
       
       // Create secure session in WASM (NEVER store session key in JavaScript)
-      const sessionResult = await wasmManager.createSecureSession(data.sessionKey, email);
+      const sessionResult = await wasmManager.createSecureSession(data.sessionKey, username);
       if (!sessionResult.success) {
         hideProgress();
         showError('Failed to create secure session: ' + sessionResult.error);
@@ -114,12 +114,12 @@ export class LoginManager {
 
   public static async logout(): Promise<void> {
     try {
-      // Get user email for secure session cleanup
-      const userEmail = getUserEmailFromToken();
+      // Get username for secure session cleanup
+      const username = getUsernameFromToken();
       
       // Clear secure session from WASM memory
-      if (userEmail) {
-        await wasmManager.clearSecureSession(userEmail);
+      if (username) {
+        await wasmManager.clearSecureSession(username);
       }
       
       // Use auth manager to handle token cleanup and API call
@@ -138,10 +138,10 @@ export class LoginManager {
       console.error('Logout error:', error);
       
       // Still attempt cleanup even on error
-      const userEmail = getUserEmailFromToken();
-      if (userEmail) {
+      const username = getUsernameFromToken();
+      if (username) {
         try {
-          await wasmManager.clearSecureSession(userEmail);
+          await wasmManager.clearSecureSession(username);
         } catch (e) {
           console.warn('Failed to clear secure session on logout error:', e);
         }
@@ -160,18 +160,18 @@ export function setupLoginForm(): void {
   const loginForm = document.getElementById('login-form');
   if (!loginForm) return;
 
-  const emailInput = document.getElementById('login-email') as HTMLInputElement;
+  const usernameInput = document.getElementById('login-username') as HTMLInputElement;
   const passwordInput = document.getElementById('login-password') as HTMLInputElement;
   const submitButton = loginForm.querySelector('button[type="submit"]') as HTMLButtonElement;
 
-  if (!emailInput || !passwordInput || !submitButton) return;
+  if (!usernameInput || !passwordInput || !submitButton) return;
 
   // Handle form submission
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
     
     const credentials: LoginCredentials = {
-      email: emailInput.value.trim(),
+      username: usernameInput.value.trim(),
       password: passwordInput.value
     };
 
@@ -182,7 +182,7 @@ export function setupLoginForm(): void {
   loginForm.addEventListener('submit', handleSubmit);
   
   // Handle Enter key in form fields
-  [emailInput, passwordInput].forEach(input => {
+  [usernameInput, passwordInput].forEach(input => {
     input.addEventListener('keypress', (e) => {
       if (e.key === 'Enter') {
         handleSubmit(e);
@@ -191,7 +191,7 @@ export function setupLoginForm(): void {
   });
 
   // Clear any previous error states when user starts typing
-  [emailInput, passwordInput].forEach(input => {
+  [usernameInput, passwordInput].forEach(input => {
     input.addEventListener('input', () => {
       input.classList.remove('error');
     });
@@ -200,16 +200,16 @@ export function setupLoginForm(): void {
 
 // Export utility functions for compatibility
 export async function login(): Promise<void> {
-  const emailInput = document.getElementById('login-email') as HTMLInputElement;
+  const usernameInput = document.getElementById('login-username') as HTMLInputElement;
   const passwordInput = document.getElementById('login-password') as HTMLInputElement;
   
-  if (!emailInput || !passwordInput) {
+  if (!usernameInput || !passwordInput) {
     showError('Login form not found.');
     return;
   }
 
   const credentials: LoginCredentials = {
-    email: emailInput.value.trim(),
+    username: usernameInput.value.trim(),
     password: passwordInput.value
   };
 

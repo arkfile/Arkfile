@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/84adam/arkfile/auth"
+	"github.com/84adam/arkfile/utils"
 )
 
 type User struct {
 	ID                int64          `json:"id"`
-	Email             string         `json:"email"`
+	Username          string         `json:"username"`
+	Email             *string        `json:"email,omitempty"`
 	CreatedAt         time.Time      `json:"created_at"`
 	TotalStorageBytes int64          `json:"total_storage_bytes"`
 	StorageLimitBytes int64          `json:"storage_limit_bytes"`
@@ -27,14 +29,35 @@ const (
 	DefaultStorageLimit int64 = 10737418240 // 10GB in bytes
 )
 
+// validateUsername wrapper function for utils.ValidateUsername
+func validateUsername(username string) error {
+	return utils.ValidateUsername(username)
+}
+
+// isAdminUsername checks if a username is in the admin list
+func isAdminUsername(username string) bool {
+	adminUsernames := strings.Split(getEnvOrDefault("ADMIN_USERNAMES", ""), ",")
+	for _, adminUsername := range adminUsernames {
+		if strings.TrimSpace(adminUsername) == username {
+			return true
+		}
+	}
+	return false
+}
+
 // CreateUser creates a new user in the database for OPAQUE authentication
-func CreateUser(db *sql.DB, email string) (*User, error) {
-	isAdmin := isAdminEmail(email)
+func CreateUser(db *sql.DB, username string, email *string) (*User, error) {
+	// Validate username
+	if err := validateUsername(username); err != nil {
+		return nil, fmt.Errorf("invalid username: %w", err)
+	}
+
+	isAdmin := isAdminUsername(username)
 	result, err := db.Exec(
 		`INSERT INTO users (
-			email, storage_limit_bytes, is_admin, is_approved
-		) VALUES (?, ?, ?, ?)`,
-		email, DefaultStorageLimit, isAdmin, isAdmin, // Auto-approve admin emails
+			username, email, storage_limit_bytes, is_admin, is_approved
+		) VALUES (?, ?, ?, ?, ?)`,
+		username, email, DefaultStorageLimit, isAdmin, isAdmin, // Auto-approve admin usernames
 	)
 	if err != nil {
 		return nil, err
@@ -47,6 +70,7 @@ func CreateUser(db *sql.DB, email string) (*User, error) {
 
 	return &User{
 		ID:                id,
+		Username:          username,
 		Email:             email,
 		StorageLimitBytes: DefaultStorageLimit,
 		CreatedAt:         time.Now(),
@@ -55,21 +79,22 @@ func CreateUser(db *sql.DB, email string) (*User, error) {
 	}, nil
 }
 
-// GetUserByEmail retrieves a user by email (OPAQUE-only)
-func GetUserByEmail(db *sql.DB, email string) (*User, error) {
+// GetUserByUsername retrieves a user by username
+func GetUserByUsername(db *sql.DB, username string) (*User, error) {
 	user := &User{}
 	var createdAtStr string
 	var approvedAtStr sql.NullString
 	var totalStorageInterface interface{}
 	var storageLimitInterface interface{}
+	var emailStr sql.NullString
 
-	query := `SELECT id, email, created_at,
+	query := `SELECT id, username, email, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE email = ?`
+		FROM users WHERE username = ?`
 
-	err := db.QueryRow(query, email).Scan(
-		&user.ID, &user.Email, &createdAtStr,
+	err := db.QueryRow(query, username).Scan(
+		&user.ID, &user.Username, &emailStr, &createdAtStr,
 		&totalStorageInterface, &storageLimitInterface,
 		&user.IsApproved, &user.ApprovedBy, &approvedAtStr, &user.IsAdmin,
 	)
@@ -79,6 +104,86 @@ func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 			return nil, err // Return sql.ErrNoRows directly
 		}
 		return nil, err
+	}
+
+	// Handle optional email field
+	if emailStr.Valid {
+		user.Email = &emailStr.String
+	}
+
+	// Parse the timestamp strings
+	if createdAtStr != "" {
+		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", createdAtStr); parseErr == nil {
+			user.CreatedAt = parsedTime
+		} else if parsedTime, parseErr := time.Parse(time.RFC3339, createdAtStr); parseErr == nil {
+			user.CreatedAt = parsedTime
+		}
+	}
+
+	if approvedAtStr.Valid && approvedAtStr.String != "" {
+		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", approvedAtStr.String); parseErr == nil {
+			user.ApprovedAt = sql.NullTime{Time: parsedTime, Valid: true}
+		} else if parsedTime, parseErr := time.Parse(time.RFC3339, approvedAtStr.String); parseErr == nil {
+			user.ApprovedAt = sql.NullTime{Time: parsedTime, Valid: true}
+		}
+	}
+
+	// Handle numeric fields that might come as float64 from rqlite
+	if totalStorageInterface != nil {
+		switch v := totalStorageInterface.(type) {
+		case int64:
+			user.TotalStorageBytes = v
+		case float64:
+			user.TotalStorageBytes = int64(v)
+		default:
+			user.TotalStorageBytes = 0
+		}
+	}
+
+	if storageLimitInterface != nil {
+		switch v := storageLimitInterface.(type) {
+		case int64:
+			user.StorageLimitBytes = v
+		case float64:
+			user.StorageLimitBytes = int64(v)
+		default:
+			user.StorageLimitBytes = DefaultStorageLimit
+		}
+	}
+
+	return user, nil
+}
+
+// GetUserByEmail retrieves a user by email (for backward compatibility)
+func GetUserByEmail(db *sql.DB, email string) (*User, error) {
+	user := &User{}
+	var createdAtStr string
+	var approvedAtStr sql.NullString
+	var totalStorageInterface interface{}
+	var storageLimitInterface interface{}
+	var emailStr sql.NullString
+
+	query := `SELECT id, username, email, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE email = ?`
+
+	err := db.QueryRow(query, email).Scan(
+		&user.ID, &user.Username, &emailStr, &createdAtStr,
+		&totalStorageInterface, &storageLimitInterface,
+		&user.IsApproved, &user.ApprovedBy, &approvedAtStr, &user.IsAdmin,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, err // Return sql.ErrNoRows directly
+		}
+		return nil, err
+	}
+
+	// Handle optional email field
+	if emailStr.Valid {
+		user.Email = &emailStr.String
 	}
 
 	// Parse the timestamp strings
@@ -126,12 +231,22 @@ func GetUserByEmail(db *sql.DB, email string) (*User, error) {
 
 // HasAdminPrivileges checks if a user has admin privileges
 func (u *User) HasAdminPrivileges() bool {
-	return u.IsAdmin || isAdminEmail(u.Email)
+	// Check if user is admin by username
+	if u.IsAdmin || isAdminUsername(u.Username) {
+		return true
+	}
+
+	// Check by email if provided (for backward compatibility)
+	if u.Email != nil {
+		return isAdminEmail(*u.Email)
+	}
+
+	return false
 }
 
 // ApproveUser approves a user (admin only)
-func (u *User) ApproveUser(db *sql.DB, adminEmail string) error {
-	if !isAdminEmail(adminEmail) {
+func (u *User) ApproveUser(db *sql.DB, adminUsername string) error {
+	if !isAdminUsername(adminUsername) {
 		return errors.New("unauthorized: admin privileges required")
 	}
 
@@ -142,7 +257,7 @@ func (u *User) ApproveUser(db *sql.DB, adminEmail string) error {
 		approved_by = ?,
 		    approved_at = ?
 		WHERE id = ?`,
-		adminEmail, now, u.ID,
+		adminUsername, now, u.ID,
 	)
 	if err != nil {
 		return err
@@ -150,7 +265,7 @@ func (u *User) ApproveUser(db *sql.DB, adminEmail string) error {
 
 	// Update struct fields using sql.Null* types
 	u.IsApproved = true
-	u.ApprovedBy = sql.NullString{String: adminEmail, Valid: true}
+	u.ApprovedBy = sql.NullString{String: adminUsername, Valid: true}
 	u.ApprovedAt = sql.NullTime{Time: now, Valid: true}
 
 	return nil
@@ -192,7 +307,7 @@ func (u *User) GetStorageUsagePercent() float64 {
 // GetPendingUsers retrieves users pending approval (admin only)
 func GetPendingUsers(db *sql.DB) ([]*User, error) {
 	rows, err := db.Query(`
-		SELECT id, email, created_at, total_storage_bytes, storage_limit_bytes
+		SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes
 		FROM users
 		WHERE is_approved = false
 		ORDER BY created_at ASC`,
@@ -205,20 +320,27 @@ func GetPendingUsers(db *sql.DB) ([]*User, error) {
 	var users []*User
 	for rows.Next() {
 		user := &User{}
+		var emailStr sql.NullString
 		err := rows.Scan(
-			&user.ID, &user.Email, &user.CreatedAt,
+			&user.ID, &user.Username, &emailStr, &user.CreatedAt,
 			&user.TotalStorageBytes, &user.StorageLimitBytes,
 		)
 		if err != nil {
 			return nil, err
 		}
+
+		// Handle optional email field
+		if emailStr.Valid {
+			user.Email = &emailStr.String
+		}
+
 		users = append(users, user)
 	}
 
 	return users, rows.Err()
 }
 
-// isAdminEmail checks if an email is in the admin list
+// isAdminEmail checks if an email is in the admin list (for backward compatibility)
 func isAdminEmail(email string) bool {
 	adminEmails := strings.Split(getEnvOrDefault("ADMIN_EMAILS", ""), ",")
 	for _, adminEmail := range adminEmails {
@@ -249,7 +371,7 @@ type OPAQUEAccountStatus struct {
 }
 
 // CreateUserWithOPAQUE creates user AND registers OPAQUE account in single transaction
-func CreateUserWithOPAQUE(db *sql.DB, email, password string) (*User, error) {
+func CreateUserWithOPAQUE(db *sql.DB, username, password string, email *string) (*User, error) {
 	// Start transaction to ensure atomicity
 	tx, err := db.Begin()
 	if err != nil {
@@ -258,12 +380,12 @@ func CreateUserWithOPAQUE(db *sql.DB, email, password string) (*User, error) {
 	defer tx.Rollback()
 
 	// Create user record first
-	isAdmin := isAdminEmail(email)
+	isAdmin := isAdminUsername(username)
 	result, err := tx.Exec(
 		`INSERT INTO users (
-			email, storage_limit_bytes, is_admin, is_approved
-		) VALUES (?, ?, ?, ?)`,
-		email, DefaultStorageLimit, isAdmin, isAdmin,
+			username, email, storage_limit_bytes, is_admin, is_approved
+		) VALUES (?, ?, ?, ?, ?)`,
+		username, email, DefaultStorageLimit, isAdmin, isAdmin,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
@@ -275,7 +397,7 @@ func CreateUserWithOPAQUE(db *sql.DB, email, password string) (*User, error) {
 	}
 
 	// Register OPAQUE account using unified password manager
-	recordIdentifier := email // Account passwords use email as identifier
+	recordIdentifier := username // Account passwords now use username as identifier
 
 	// Use provider interface
 	provider := auth.GetOPAQUEProvider()
@@ -300,9 +422,9 @@ func CreateUserWithOPAQUE(db *sql.DB, email, password string) (*User, error) {
 	// In test environment, this may be mocked differently
 	_, err = tx.Exec(`
 		INSERT INTO opaque_password_records 
-		(record_type, record_identifier, password_record, associated_user_email, is_active, server_public_key)
+		(record_type, record_identifier, password_record, associated_username, is_active, server_public_key)
 		VALUES (?, ?, ?, ?, ?, ?)`,
-		"account", recordIdentifier, userRecord, email, true, []byte("dummy-server-public-key"))
+		"account", recordIdentifier, userRecord, username, true, []byte("dummy-server-public-key"))
 	if err != nil {
 		// In test environments, the table might not exist or be mocked differently
 		// Log the error but don't fail completely if we're in a test environment
@@ -328,6 +450,7 @@ func CreateUserWithOPAQUE(db *sql.DB, email, password string) (*User, error) {
 
 	return &User{
 		ID:                id,
+		Username:          username,
 		Email:             email,
 		StorageLimitBytes: DefaultStorageLimit,
 		CreatedAt:         time.Now(),
@@ -358,9 +481,9 @@ func (u *User) RegisterOPAQUEAccount(db *sql.DB, password string) error {
 	// Store record in database (even in mock mode for testing)
 	_, err = db.Exec(`
 		INSERT INTO opaque_password_records 
-		(record_type, record_identifier, password_record, associated_user_email, is_active, server_public_key)
+		(record_type, record_identifier, password_record, associated_username, is_active, server_public_key)
 		VALUES (?, ?, ?, ?, ?, ?)`,
-		"account", u.Email, userRecord, u.Email, true, []byte("dummy-server-public-key"))
+		"account", u.Username, userRecord, u.Username, true, []byte("dummy-server-public-key"))
 	if err != nil {
 		// In mock mode, table might not exist, but that's okay for testing
 		if getEnvOrDefault("OPAQUE_MOCK_MODE", "") != "true" {
@@ -398,7 +521,7 @@ func (u *User) AuthenticateOPAQUE(db *sql.DB, password string) ([]byte, error) {
 	}
 
 	// Production mode: Use unified password manager for account password authentication
-	recordIdentifier := u.Email // Account passwords use email as identifier
+	recordIdentifier := u.Username // Account passwords now use username as identifier
 	opm := auth.GetOPAQUEPasswordManagerWithDB(db)
 
 	exportKey, err := opm.AuthenticatePassword(recordIdentifier, password)
@@ -462,7 +585,7 @@ func (u *User) HasOPAQUEAccount(db *sql.DB) (bool, error) {
 		err := db.QueryRow(`
 			SELECT COUNT(*) FROM opaque_password_records 
 			WHERE record_type = 'account' AND record_identifier = ? AND is_active = true`,
-			u.Email).Scan(&count)
+			u.Username).Scan(&count)
 		if err != nil {
 			// If table doesn't exist or query fails, assume no account
 			return false, nil
@@ -475,7 +598,7 @@ func (u *User) HasOPAQUEAccount(db *sql.DB) (bool, error) {
 	err := db.QueryRow(`
 		SELECT COUNT(*) FROM opaque_password_records 
 		WHERE record_type = 'account' AND record_identifier = ? AND is_active = true`,
-		u.Email).Scan(&count)
+		u.Username).Scan(&count)
 	if err != nil {
 		return false, err
 	}
@@ -488,8 +611,8 @@ func (u *User) DeleteOPAQUEAccount(db *sql.DB) error {
 	_, err := db.Exec(`
 		UPDATE opaque_password_records 
 		SET is_active = false 
-		WHERE associated_user_email = ? OR record_identifier = ?`,
-		u.Email, u.Email)
+		WHERE associated_username = ? OR record_identifier = ?`,
+		u.Username, u.Username)
 	if err != nil {
 		// In mock mode, table might not exist, but that's okay for testing
 		if getEnvOrDefault("OPAQUE_MOCK_MODE", "") != "true" {
@@ -533,7 +656,7 @@ func (u *User) GetOPAQUEAccountStatus(db *sql.DB) (*OPAQUEAccountStatus, error) 
 	err := db.QueryRow(`
 		SELECT COUNT(*) FROM opaque_password_records 
 		WHERE record_type = 'account' AND record_identifier = ? AND is_active = true`,
-		u.Email).Scan(&accountCount)
+		u.Username).Scan(&accountCount)
 	if err != nil {
 		return nil, err
 	}
@@ -543,8 +666,8 @@ func (u *User) GetOPAQUEAccountStatus(db *sql.DB) (*OPAQUEAccountStatus, error) 
 	var fileCount int
 	err = db.QueryRow(`
 		SELECT COUNT(*) FROM opaque_password_records 
-		WHERE record_type = 'file' AND associated_user_email = ? AND is_active = true`,
-		u.Email).Scan(&fileCount)
+		WHERE record_type = 'file' AND associated_username = ? AND is_active = true`,
+		u.Username).Scan(&fileCount)
 	if err != nil {
 		return nil, err
 	}
@@ -556,7 +679,7 @@ func (u *User) GetOPAQUEAccountStatus(db *sql.DB) (*OPAQUEAccountStatus, error) 
 		err = db.QueryRow(`
 			SELECT created_at, last_used_at FROM opaque_password_records 
 			WHERE record_type = 'account' AND record_identifier = ? AND is_active = true LIMIT 1`,
-			u.Email).Scan(&createdAt, &lastUsed)
+			u.Username).Scan(&createdAt, &lastUsed)
 		if err == nil {
 			if createdAt.Valid {
 				status.OPAQUECreatedAt = &createdAt.Time
@@ -573,7 +696,7 @@ func (u *User) GetOPAQUEAccountStatus(db *sql.DB) (*OPAQUEAccountStatus, error) 
 // RegisterFilePassword registers a custom password for a specific file
 func (u *User) RegisterFilePassword(db *sql.DB, fileID, password, keyLabel, passwordHint string) error {
 	opm := auth.GetOPAQUEPasswordManagerWithDB(db)
-	return opm.RegisterCustomFilePassword(u.Email, fileID, password, keyLabel, passwordHint)
+	return opm.RegisterCustomFilePassword(u.Username, fileID, password, keyLabel, passwordHint)
 }
 
 // GetFilePasswordRecords gets all password records for a specific file owned by this user
@@ -584,7 +707,7 @@ func (u *User) GetFilePasswordRecords(db *sql.DB, fileID string) ([]*auth.OPAQUE
 
 // AuthenticateFilePassword authenticates a file-specific password and returns the export key
 func (u *User) AuthenticateFilePassword(db *sql.DB, fileID, password string) ([]byte, error) {
-	recordIdentifier := fmt.Sprintf("%s:file:%s", u.Email, fileID)
+	recordIdentifier := fmt.Sprintf("%s:file:%s", u.Username, fileID)
 	opm := auth.GetOPAQUEPasswordManagerWithDB(db)
 
 	exportKey, err := opm.AuthenticatePassword(recordIdentifier, password)
@@ -597,7 +720,7 @@ func (u *User) AuthenticateFilePassword(db *sql.DB, fileID, password string) ([]
 
 // DeleteFilePassword removes a specific file password record
 func (u *User) DeleteFilePassword(db *sql.DB, fileID, keyLabel string) error {
-	recordIdentifier := fmt.Sprintf("%s:file:%s", u.Email, fileID)
+	recordIdentifier := fmt.Sprintf("%s:file:%s", u.Username, fileID)
 	opm := auth.GetOPAQUEPasswordManagerWithDB(db)
 	return opm.DeletePasswordRecord(recordIdentifier)
 }
@@ -614,8 +737,8 @@ func (u *User) Delete(db *sql.DB) error {
 	// First, clean up all OPAQUE records using the transaction
 	_, err = tx.Exec(`
 		DELETE FROM opaque_password_records 
-		WHERE associated_user_email = ? OR record_identifier = ?`,
-		u.Email, u.Email)
+		WHERE associated_username = ? OR record_identifier = ?`,
+		u.Username, u.Username)
 	if err != nil {
 		// In mock mode, table might not exist, but that's okay for testing
 		if getEnvOrDefault("OPAQUE_MOCK_MODE", "") != "true" {

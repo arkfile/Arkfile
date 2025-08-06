@@ -94,7 +94,8 @@ func setupOPAQUETestUser(t *testing.T, db *sql.DB, email, password string) *mode
 	}
 
 	// Create user with OPAQUE account in atomic transaction
-	user, err := models.CreateUserWithOPAQUE(db, email, password)
+	// For the username migration, we'll use email as username for now during transition
+	user, err := models.CreateUserWithOPAQUE(db, email, password, &email)
 	require.NoError(t, err, "Failed to create OPAQUE test user")
 	require.NotNil(t, user, "Created user should not be nil")
 
