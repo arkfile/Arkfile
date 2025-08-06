@@ -200,14 +200,14 @@ func TestChunkedEncryptionRoundTrip(t *testing.T) {
 	// However, it requires a full WASM environment with OPAQUE keys
 
 	testData := []byte("Hello, this is test data for chunked encryption!")
-	userEmail := "test@example.com"
+	username := "test@example.com"
 	fileID := "test-file-123"
 	keyType := "account"
 	chunkSize := 32 // Small chunk for testing
 
 	// Create mock export key
 	mockKey := createMockExportKey()
-	opaqueExportKeys[userEmail] = mockKey
+	opaqueExportKeys[username] = mockKey
 
 	// Note: This test would need actual JavaScript environment to run
 	// For now, we validate the logic structure
@@ -231,7 +231,7 @@ func TestChunkedEncryptionRoundTrip(t *testing.T) {
 	})
 
 	t.Run("Key derivation parameters", func(t *testing.T) {
-		if userEmail == "" {
+		if username == "" {
 			t.Error("User email should not be empty")
 		}
 

@@ -58,16 +58,16 @@ func DeriveFileEncryptionKey(sessionKey []byte, fileID string) ([]byte, error) {
 
 // DeriveJWTSigningMaterial derives JWT signing material from session key
 // This provides domain separation for JWT tokens
-func DeriveJWTSigningMaterial(sessionKey []byte, userEmail string) ([]byte, error) {
+func DeriveJWTSigningMaterial(sessionKey []byte, username string) ([]byte, error) {
 	if len(sessionKey) != 32 {
 		return nil, fmt.Errorf("session key must be 32 bytes")
 	}
-	if userEmail == "" {
+	if username == "" {
 		return nil, fmt.Errorf("user email cannot be empty")
 	}
 
 	// Create context with user email for per-user JWT material
-	context := fmt.Sprintf("%s:%s", JWTSigningContext, userEmail)
+	context := fmt.Sprintf("%s:%s", JWTSigningContext, username)
 
 	hkdf := hkdf.New(sha256.New, sessionKey, nil, []byte(context))
 
@@ -110,9 +110,9 @@ type SessionKeyInfo struct {
 }
 
 // CreateSessionKeyInfo creates metadata for a session key
-func CreateSessionKeyInfo(userEmail, context string, sessionKey []byte) SessionKeyInfo {
+func CreateSessionKeyInfo(username, context string, sessionKey []byte) SessionKeyInfo {
 	info := SessionKeyInfo{
-		UserEmail: userEmail,
+		UserEmail: username,
 		Context:   context,
 		KeyLength: len(sessionKey),
 		IsValid:   ValidateSessionKey(sessionKey) == nil,

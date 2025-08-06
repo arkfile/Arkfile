@@ -39,7 +39,7 @@ func TestChunkedUploadIntegration(t *testing.T) {
 			originalHashHex := hex.EncodeToString(originalHash[:])
 
 			// Mock user credentials
-			userEmail := "test@example.com"
+			username := "test@example.com"
 			fileID := "test-file-" + tc.name
 
 			// Mock OPAQUE export key (64 bytes)
@@ -51,7 +51,7 @@ func TestChunkedUploadIntegration(t *testing.T) {
 
 			// Step 1: Store export key
 			storeResult := storeOPAQUEExportKey(js.Null(), []js.Value{
-				js.ValueOf(userEmail),
+				js.ValueOf(username),
 				js.ValueOf(exportKeyB64),
 			})
 
@@ -79,7 +79,7 @@ func TestChunkedUploadIntegration(t *testing.T) {
 
 			encryptResult := encryptFileChunkedOPAQUE(js.Null(), []js.Value{
 				jsArray,
-				js.ValueOf(userEmail),
+				js.ValueOf(username),
 				js.ValueOf(tc.keyType),
 				js.ValueOf(fileID),
 				js.ValueOf(16 * 1024 * 1024), // 16MB chunk size
@@ -126,7 +126,7 @@ func TestChunkedUploadIntegration(t *testing.T) {
 
 			decryptResult := decryptFileChunkedOPAQUE(js.Null(), []js.Value{
 				js.ValueOf(concatenatedB64),
-				js.ValueOf(userEmail),
+				js.ValueOf(username),
 				js.ValueOf(fileID),
 			})
 
@@ -169,7 +169,7 @@ func TestChunkedUploadIntegration(t *testing.T) {
 
 			// Step 7: Clean up
 			clearResult := clearOPAQUEExportKey(js.Null(), []js.Value{
-				js.ValueOf(userEmail),
+				js.ValueOf(username),
 			})
 
 			clearMap, ok := clearResult.(map[string]interface{})
@@ -185,7 +185,7 @@ func TestChunkedUploadIntegration(t *testing.T) {
 // TestChunkedEncryptionSecurity tests security properties
 func TestChunkedEncryptionSecurity(t *testing.T) {
 	// Mock user credentials
-	userEmail := "security-test@example.com"
+	username := "security-test@example.com"
 	fileID := "security-test-file"
 
 	// Generate test data
@@ -203,7 +203,7 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 
 	// Store export key
 	storeResult := storeOPAQUEExportKey(js.Null(), []js.Value{
-		js.ValueOf(userEmail),
+		js.ValueOf(username),
 		js.ValueOf(exportKeyB64),
 	})
 
@@ -219,7 +219,7 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 	// Test 1: Same input should produce different encrypted output (due to nonce randomness)
 	encrypt1 := encryptFileChunkedOPAQUE(js.Null(), []js.Value{
 		jsArray,
-		js.ValueOf(userEmail),
+		js.ValueOf(username),
 		js.ValueOf("account"),
 		js.ValueOf(fileID),
 		js.ValueOf(32 * 1024), // 32KB chunks
@@ -227,7 +227,7 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 
 	encrypt2 := encryptFileChunkedOPAQUE(js.Null(), []js.Value{
 		jsArray,
-		js.ValueOf(userEmail),
+		js.ValueOf(username),
 		js.ValueOf("account"),
 		js.ValueOf(fileID),
 		js.ValueOf(32 * 1024), // 32KB chunks
@@ -258,7 +258,7 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 	}
 
 	// Test 2: Different users should produce different output
-	userEmail2 := "security-test-2@example.com"
+	username2 := "security-test-2@example.com"
 	exportKey2 := make([]byte, 64)
 	if _, err := rand.Read(exportKey2); err != nil {
 		t.Fatalf("Failed to generate export key 2: %v", err)
@@ -266,7 +266,7 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 	exportKey2B64 := base64.StdEncoding.EncodeToString(exportKey2)
 
 	storeResult2 := storeOPAQUEExportKey(js.Null(), []js.Value{
-		js.ValueOf(userEmail2),
+		js.ValueOf(username2),
 		js.ValueOf(exportKey2B64),
 	})
 
@@ -277,7 +277,7 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 
 	encryptUser2 := encryptFileChunkedOPAQUE(js.Null(), []js.Value{
 		jsArray,
-		js.ValueOf(userEmail2), // Different user
+		js.ValueOf(username2), // Different user
 		js.ValueOf("account"),
 		js.ValueOf(fileID),
 		js.ValueOf(32 * 1024),
@@ -303,7 +303,7 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 	// Test 3: Account vs Custom password types should produce different output
 	encryptCustom := encryptFileChunkedOPAQUE(js.Null(), []js.Value{
 		jsArray,
-		js.ValueOf(userEmail),
+		js.ValueOf(username),
 		js.ValueOf("custom"), // Different password type
 		js.ValueOf(fileID),
 		js.ValueOf(32 * 1024),
@@ -329,8 +329,8 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 	t.Log("✅ Security tests passed: Nonce uniqueness, user isolation, and password type isolation verified")
 
 	// Cleanup
-	clearOPAQUEExportKey(js.Null(), []js.Value{js.ValueOf(userEmail)})
-	clearOPAQUEExportKey(js.Null(), []js.Value{js.ValueOf(userEmail2)})
+	clearOPAQUEExportKey(js.Null(), []js.Value{js.ValueOf(username)})
+	clearOPAQUEExportKey(js.Null(), []js.Value{js.ValueOf(username2)})
 }
 
 // TestChunkedFormatValidation tests format validation

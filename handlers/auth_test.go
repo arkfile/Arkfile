@@ -118,11 +118,11 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 // --- Test OPAQUE Authentication ---
 
 func TestOpaqueRegister_Success(t *testing.T) {
-	email := "test@example.com"
+	username := "test.user"
 	password := "Xy8$mQ3#nP9@vK2!eR5&wL7*uT4%iO6^sA1+bC0-fG9~hJ3"
 
 	reqBody := map[string]interface{}{
-		"email":    email,
+		"username": username,
 		"password": password,
 	}
 	jsonBody, _ := json.Marshal(reqBody)
@@ -130,20 +130,20 @@ func TestOpaqueRegister_Success(t *testing.T) {
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/opaque/register", bytes.NewReader(jsonBody))
 
 	// Mock checking if user already exists (should return no rows)
-	getUserSQL := `SELECT id, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE email = \?`
-	mock.ExpectQuery(getUserSQL).WithArgs(email).WillReturnError(sql.ErrNoRows)
+	getUserSQL := `SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
+	mock.ExpectQuery(getUserSQL).WithArgs(username).WillReturnError(sql.ErrNoRows)
 
 	// Mock integrated user + OPAQUE creation transaction
 	mock.ExpectBegin()
-	createUserSQL := `INSERT INTO users \(\s*email, storage_limit_bytes, is_admin, is_approved\s*\) VALUES \(\?, \?, \?, \?\)`
+	createUserSQL := `INSERT INTO users \(\s*username, storage_limit_bytes, is_admin, is_approved\s*\) VALUES \(\?, \?, \?, \?\)`
 	mock.ExpectExec(createUserSQL).
-		WithArgs(email, models.DefaultStorageLimit, false, false).
+		WithArgs(username, models.DefaultStorageLimit, false, false).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock OPAQUE password record creation (succeeds in mock mode)
 	opaqueRecordSQL := `INSERT INTO opaque_password_records`
 	mock.ExpectExec(opaqueRecordSQL).
-		WithArgs("account", email, sqlmock.AnyArg(), email, true, sqlmock.AnyArg()).
+		WithArgs("account", username, sqlmock.AnyArg(), username, true, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectCommit()
@@ -151,7 +151,7 @@ func TestOpaqueRegister_Success(t *testing.T) {
 	// Mock logging user action
 	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mock.ExpectExec(logActionSQL).
-		WithArgs(email, "registered with OPAQUE, TOTP setup required", "").
+		WithArgs(username, "registered with OPAQUE, TOTP setup required", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Execute handler
@@ -173,9 +173,9 @@ func TestOpaqueRegister_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestOpaqueRegister_InvalidEmail(t *testing.T) {
+func TestOpaqueRegister_InvalidUsername(t *testing.T) {
 	reqBody := map[string]interface{}{
-		"email":    "invalid-email",
+		"username": "invalid@username!",
 		"password": "ValidPassword123!@#",
 	}
 	jsonBody, _ := json.Marshal(reqBody)
@@ -187,12 +187,12 @@ func TestOpaqueRegister_InvalidEmail(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-	assert.Equal(t, "Valid email address is required", httpErr.Message)
+	assert.Contains(t, httpErr.Message, "Invalid username")
 }
 
 func TestOpaqueRegister_WeakPassword(t *testing.T) {
 	reqBody := map[string]interface{}{
-		"email":    "test@example.com",
+		"username": "test.user",
 		"password": "weak",
 	}
 	jsonBody, _ := json.Marshal(reqBody)
@@ -212,9 +212,9 @@ func TestOpaqueRegister_WeakPassword(t *testing.T) {
 }
 
 func TestOpaqueRegister_UserAlreadyExists(t *testing.T) {
-	email := "existing@example.com"
+	username := "existing.user"
 	reqBody := map[string]interface{}{
-		"email":    email,
+		"username": username,
 		"password": "Xy8$mQ3#nP9@vK2!eR5&wL7*uT4%iO6^sA1+bC0-fG9~hJ3",
 	}
 	jsonBody, _ := json.Marshal(reqBody)
@@ -222,27 +222,27 @@ func TestOpaqueRegister_UserAlreadyExists(t *testing.T) {
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/opaque/register", bytes.NewReader(jsonBody))
 
 	// Mock user already exists
-	getUserSQL := `SELECT id, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE email = \?`
-	rows := sqlmock.NewRows([]string{"id", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-		AddRow(1, email, time.Now(), 0, models.DefaultStorageLimit, true, nil, nil, false)
-	mock.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(rows)
+	getUserSQL := `SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
+	rows := sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+		AddRow(1, username, sql.NullString{}, time.Now(), 0, models.DefaultStorageLimit, true, nil, nil, false)
+	mock.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(rows)
 
 	err := OpaqueRegister(c)
 	require.Error(t, err)
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusConflict, httpErr.Code)
-	assert.Equal(t, "Email already registered", httpErr.Message)
+	assert.Equal(t, "Username already registered", httpErr.Message)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestOpaqueLogin_TOTPRequired(t *testing.T) {
-	email := "login@example.com"
+	username := "login.user"
 	password := "ValidPassword123!@#"
 
 	reqBody := map[string]interface{}{
-		"email":    email,
+		"username": username,
 		"password": password,
 	}
 	jsonBody, _ := json.Marshal(reqBody)
@@ -250,17 +250,17 @@ func TestOpaqueLogin_TOTPRequired(t *testing.T) {
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/opaque/login", bytes.NewReader(jsonBody))
 
 	// Mock getting user
-	getUserSQL := `SELECT id, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE email = \?`
-	rows := sqlmock.NewRows([]string{"id", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-		AddRow(1, email, time.Now(), 0, models.DefaultStorageLimit, true, nil, nil, false)
-	mock.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(rows)
+	getUserSQL := `SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
+	rows := sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+		AddRow(1, username, sql.NullString{}, time.Now(), 0, models.DefaultStorageLimit, true, nil, nil, false)
+	mock.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(rows)
 
 	// In mock mode, OPAQUE authentication happens entirely in memory
-	mockOPAQUESuccess(t, email, password)
+	mockOPAQUESuccess(t, username, password)
 
 	// Mock TOTP check (user does NOT have TOTP enabled - this is the expected case)
 	totpCheckSQL := `SELECT enabled, setup_completed FROM user_totp WHERE username = \?`
-	mock.ExpectQuery(totpCheckSQL).WithArgs(email).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(totpCheckSQL).WithArgs(username).WillReturnError(sql.ErrNoRows)
 
 	// Execute the handler
 	err := OpaqueLogin(c)
@@ -275,11 +275,11 @@ func TestOpaqueLogin_TOTPRequired(t *testing.T) {
 }
 
 func TestOpaqueLogin_WithTOTPEnabled_Success(t *testing.T) {
-	email := "login@example.com"
+	username := "login.user"
 	password := "ValidPassword123!@#"
 
 	reqBody := map[string]interface{}{
-		"email":    email,
+		"username": username,
 		"password": password,
 	}
 	jsonBody, _ := json.Marshal(reqBody)
@@ -287,18 +287,18 @@ func TestOpaqueLogin_WithTOTPEnabled_Success(t *testing.T) {
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/opaque/login", bytes.NewReader(jsonBody))
 
 	// Mock getting user
-	getUserSQL := `SELECT id, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE email = \?`
-	rows := sqlmock.NewRows([]string{"id", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-		AddRow(1, email, time.Now(), 0, models.DefaultStorageLimit, true, nil, nil, false)
-	mock.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(rows)
+	getUserSQL := `SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
+	rows := sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+		AddRow(1, username, sql.NullString{}, time.Now(), 0, models.DefaultStorageLimit, true, nil, nil, false)
+	mock.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(rows)
 
 	// In mock mode, OPAQUE authentication happens entirely in memory
-	mockOPAQUESuccess(t, email, password)
+	mockOPAQUESuccess(t, username, password)
 
 	// Mock TOTP check (user HAS TOTP enabled and setup completed)
 	totpCheckSQL := `SELECT enabled, setup_completed FROM user_totp WHERE username = \?`
 	totpRows := sqlmock.NewRows([]string{"enabled", "setup_completed"}).AddRow(true, true)
-	mock.ExpectQuery(totpCheckSQL).WithArgs(email).WillReturnRows(totpRows)
+	mock.ExpectQuery(totpCheckSQL).WithArgs(username).WillReturnRows(totpRows)
 
 	// Note: GenerateTemporaryTOTPToken creates a JWT in memory only - no database record
 	// So we don't expect any INSERT INTO refresh_tokens here
@@ -306,7 +306,7 @@ func TestOpaqueLogin_WithTOTPEnabled_Success(t *testing.T) {
 	// Mock logging user action
 	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mock.ExpectExec(logActionSQL).
-		WithArgs(email, "OPAQUE auth completed, awaiting TOTP", "").
+		WithArgs(username, "OPAQUE auth completed, awaiting TOTP", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Execute the handler
@@ -332,7 +332,7 @@ func TestOpaqueLogin_WithTOTPEnabled_Success(t *testing.T) {
 
 func TestOpaqueLogin_InvalidCredentials(t *testing.T) {
 	reqBody := map[string]interface{}{
-		"email":    "",
+		"username": "",
 		"password": "ValidPassword123!@#",
 	}
 	jsonBody, _ := json.Marshal(reqBody)
@@ -344,7 +344,7 @@ func TestOpaqueLogin_InvalidCredentials(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-	assert.Equal(t, "Valid email address is required", httpErr.Message)
+	assert.Contains(t, httpErr.Message, "Invalid username")
 }
 
 // NOTE: TestOpaqueLogin_UserNotApproved test removed
@@ -374,7 +374,7 @@ func TestOpaqueHealthCheck_Success(t *testing.T) {
 // --- Test RefreshToken (works with OPAQUE sessions) ---
 
 func TestRefreshToken_Success(t *testing.T) {
-	userEmail := "refresh@example.com"
+	username := "refresh@example.com"
 	refreshTokenVal := "valid-refresh-token"
 	reqBody := map[string]string{"refreshToken": refreshTokenVal}
 	jsonBody, _ := json.Marshal(reqBody)
@@ -383,7 +383,7 @@ func TestRefreshToken_Success(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT id, username, expires_at, is_revoked, is_used FROM refresh_tokens WHERE token_hash = \?`).
 		WithArgs(sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "expires_at", "is_revoked", "is_used"}).AddRow("test-id", userEmail, time.Now().Add(time.Hour), false, false))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "username", "expires_at", "is_revoked", "is_used"}).AddRow("test-id", username, time.Now().Add(time.Hour), false, false))
 
 	mock.ExpectExec(`UPDATE refresh_tokens SET is_used = true WHERE id = \?`).
 		WithArgs("test-id").
@@ -391,12 +391,12 @@ func TestRefreshToken_Success(t *testing.T) {
 
 	refreshTokenSQL := `(?s).*INSERT INTO refresh_tokens.*VALUES.*`
 	mock.ExpectExec(refreshTokenSQL).
-		WithArgs(sqlmock.AnyArg(), userEmail, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), false, false).
+		WithArgs(sqlmock.AnyArg(), username, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), false, false).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mock.ExpectExec(logActionSQL).
-		WithArgs(userEmail, "refreshed token", "").
+		WithArgs(username, "refreshed token", "").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	err := RefreshToken(c)

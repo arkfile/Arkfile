@@ -253,18 +253,18 @@ func createSecureSessionFromOpaqueExportJS(this js.Value, args []js.Value) inter
 	if len(args) != 2 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected opaqueExport, userEmail",
+			"error":   "Invalid arguments: expected opaqueExport, username",
 		}
 	}
 
 	// Get arguments
 	opaqueExportB64 := args[0].String()
-	userEmail := args[1].String()
+	username := args[1].String()
 
-	if opaqueExportB64 == "" || userEmail == "" {
+	if opaqueExportB64 == "" || username == "" {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "opaqueExport and userEmail cannot be empty",
+			"error":   "opaqueExport and username cannot be empty",
 		}
 	}
 
@@ -287,7 +287,7 @@ func createSecureSessionFromOpaqueExportJS(this js.Value, args []js.Value) inter
 	}
 
 	// Store session key securely in WASM memory (NEVER in JavaScript)
-	secureSessionStorage[userEmail] = sessionKey
+	secureSessionStorage[username] = sessionKey
 
 	return map[string]interface{}{
 		"success": true,
@@ -300,14 +300,14 @@ func encryptFileWithSecureSessionJS(this js.Value, args []js.Value) interface{} 
 	if len(args) != 2 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected fileData, userEmail",
+			"error":   "Invalid arguments: expected fileData, username",
 		}
 	}
 
-	userEmail := args[1].String()
+	username := args[1].String()
 
 	// Get session key from secure storage
-	sessionKey, exists := secureSessionStorage[userEmail]
+	sessionKey, exists := secureSessionStorage[username]
 	if !exists {
 		return map[string]interface{}{
 			"success": false,
@@ -339,15 +339,15 @@ func decryptFileWithSecureSessionJS(this js.Value, args []js.Value) interface{} 
 	if len(args) != 2 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected encryptedData, userEmail",
+			"error":   "Invalid arguments: expected encryptedData, username",
 		}
 	}
 
 	encryptedData := args[0].String()
-	userEmail := args[1].String()
+	username := args[1].String()
 
 	// Get session key from secure storage
-	sessionKey, exists := secureSessionStorage[userEmail]
+	sessionKey, exists := secureSessionStorage[username]
 	if !exists {
 		return map[string]interface{}{
 			"success": false,
@@ -375,13 +375,13 @@ func validateSecureSessionJS(this js.Value, args []js.Value) interface{} {
 	if len(args) != 1 {
 		return map[string]interface{}{
 			"valid": false,
-			"error": "Invalid arguments: expected userEmail",
+			"error": "Invalid arguments: expected username",
 		}
 	}
 
-	userEmail := args[0].String()
+	username := args[0].String()
 
-	sessionKey, exists := secureSessionStorage[userEmail]
+	sessionKey, exists := secureSessionStorage[username]
 	if !exists {
 		return map[string]interface{}{
 			"valid": false,
@@ -408,16 +408,16 @@ func clearSecureSessionJS(this js.Value, args []js.Value) interface{} {
 	if len(args) != 1 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected userEmail",
+			"error":   "Invalid arguments: expected username",
 		}
 	}
 
-	userEmail := args[0].String()
+	username := args[0].String()
 
 	// Get session key and securely zero it
-	if sessionKey, exists := secureSessionStorage[userEmail]; exists {
+	if sessionKey, exists := secureSessionStorage[username]; exists {
 		SecureZeroSessionKey(sessionKey)
-		delete(secureSessionStorage, userEmail)
+		delete(secureSessionStorage, username)
 	}
 
 	return map[string]interface{}{
@@ -540,12 +540,12 @@ func validateTOTPCodeJS(this js.Value, args []js.Value) interface{} {
 	if len(args) != 2 {
 		return map[string]interface{}{
 			"valid": false,
-			"error": "Invalid arguments: expected code, userEmail",
+			"error": "Invalid arguments: expected code, username",
 		}
 	}
 
 	code := args[0].String()
-	userEmail := args[1].String()
+	username := args[1].String()
 
 	// Validate input format
 	if len(code) != 6 {
@@ -566,7 +566,7 @@ func validateTOTPCodeJS(this js.Value, args []js.Value) interface{} {
 	}
 
 	// Get session key from secure storage
-	sessionKey, exists := secureSessionStorage[userEmail]
+	sessionKey, exists := secureSessionStorage[username]
 	if !exists {
 		return map[string]interface{}{
 			"valid": false,
@@ -604,12 +604,12 @@ func validateBackupCodeJS(this js.Value, args []js.Value) interface{} {
 	if len(args) != 2 {
 		return map[string]interface{}{
 			"valid": false,
-			"error": "Invalid arguments: expected code, userEmail",
+			"error": "Invalid arguments: expected code, username",
 		}
 	}
 
 	code := args[0].String()
-	userEmail := args[1].String()
+	username := args[1].String()
 
 	// Validate input format (backup codes are typically longer than TOTP codes)
 	if len(code) < 8 || len(code) > 16 {
@@ -620,7 +620,7 @@ func validateBackupCodeJS(this js.Value, args []js.Value) interface{} {
 	}
 
 	// Get session key from secure storage
-	sessionKey, exists := secureSessionStorage[userEmail]
+	sessionKey, exists := secureSessionStorage[username]
 	if !exists {
 		return map[string]interface{}{
 			"valid": false,
@@ -657,14 +657,14 @@ func generateTOTPSetupDataJS(this js.Value, args []js.Value) interface{} {
 	if len(args) != 1 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected userEmail",
+			"error":   "Invalid arguments: expected username",
 		}
 	}
 
-	userEmail := args[0].String()
+	username := args[0].String()
 
 	// Get session key from secure storage
-	sessionKey, exists := secureSessionStorage[userEmail]
+	sessionKey, exists := secureSessionStorage[username]
 	if !exists {
 		return map[string]interface{}{
 			"success": false,
@@ -687,7 +687,7 @@ func generateTOTPSetupDataJS(this js.Value, args []js.Value) interface{} {
 		"success": true,
 		"data": map[string]interface{}{
 			"secret":      "WASM_GENERATED_SECRET_123456789012", // Base32 secret
-			"qrCodeUrl":   "otpauth://totp/ArkFile:" + userEmail + "?secret=WASM_GENERATED_SECRET_123456789012&issuer=ArkFile",
+			"qrCodeUrl":   "otpauth://totp/ArkFile:" + username + "?secret=WASM_GENERATED_SECRET_123456789012&issuer=ArkFile",
 			"manualEntry": "WASM GENE RATE DSEC RET1 2345 6789 012",
 			"backupCodes": []string{
 				"BAK123456789",
@@ -705,13 +705,13 @@ func verifyTOTPSetupJS(this js.Value, args []js.Value) interface{} {
 	if len(args) != 3 {
 		return map[string]interface{}{
 			"valid": false,
-			"error": "Invalid arguments: expected code, secret, userEmail",
+			"error": "Invalid arguments: expected code, secret, username",
 		}
 	}
 
 	code := args[0].String()
 	secret := args[1].String()
-	userEmail := args[2].String()
+	username := args[2].String()
 
 	// Validate input format
 	if len(code) != 6 {
@@ -729,7 +729,7 @@ func verifyTOTPSetupJS(this js.Value, args []js.Value) interface{} {
 	}
 
 	// Get session key from secure storage to validate user session
-	_, exists := secureSessionStorage[userEmail]
+	_, exists := secureSessionStorage[username]
 	if !exists {
 		return map[string]interface{}{
 			"valid": false,
@@ -957,13 +957,13 @@ func encryptFileMultiKeyWithSecureSessionJS(this js.Value, args []js.Value) inte
 	if len(args) != 4 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Expected 4 arguments: fileData, userEmail, primaryType, additionalKeys",
+			"error":   "Expected 4 arguments: fileData, username, primaryType, additionalKeys",
 		}
 	}
 
 	// Extract arguments
 	fileDataJS := args[0]
-	userEmail := args[1].String()
+	username := args[1].String()
 	primaryType := args[2].String()
 	additionalKeysJS := args[3]
 
@@ -973,7 +973,7 @@ func encryptFileMultiKeyWithSecureSessionJS(this js.Value, args []js.Value) inte
 	js.CopyBytesToGo(fileData, fileDataJS)
 
 	// Check if user has a secure session
-	sessionKeyBytes, exists := secureSessionStorage[userEmail]
+	sessionKeyBytes, exists := secureSessionStorage[username]
 	if !exists {
 		return map[string]interface{}{
 			"success": false,
@@ -1013,15 +1013,15 @@ func decryptFileMultiKeyWithSecureSessionJS(this js.Value, args []js.Value) inte
 	if len(args) != 2 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Expected 2 arguments: encryptedData, userEmail",
+			"error":   "Expected 2 arguments: encryptedData, username",
 		}
 	}
 
 	encryptedData := args[0].String()
-	userEmail := args[1].String()
+	username := args[1].String()
 
 	// Check if user has a secure session
-	_, exists := secureSessionStorage[userEmail]
+	_, exists := secureSessionStorage[username]
 	if !exists {
 		return map[string]interface{}{
 			"success": false,
@@ -1052,17 +1052,17 @@ func addKeyToEncryptedFileWithSecureSessionJS(this js.Value, args []js.Value) in
 	if len(args) != 4 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Expected 4 arguments: encryptedData, userEmail, newPassword, keyId",
+			"error":   "Expected 4 arguments: encryptedData, username, newPassword, keyId",
 		}
 	}
 
 	encryptedData := args[0].String()
-	userEmail := args[1].String()
+	username := args[1].String()
 	newPassword := args[2].String()
 	keyId := args[3].String()
 
 	// Check if user has a secure session
-	_, exists := secureSessionStorage[userEmail]
+	_, exists := secureSessionStorage[username]
 	if !exists {
 		return map[string]interface{}{
 			"success": false,

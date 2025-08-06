@@ -92,7 +92,7 @@ func TestCreateUser(t *testing.T) {
 
 	// Set admin usernames for testing auto-approval/admin status
 	originalAdmins := os.Getenv("ADMIN_USERNAMES")
-	os.Setenv("ADMIN_USERNAMES", "admin,superuser")
+	os.Setenv("ADMIN_USERNAMES", "admin.superuser,superuser")
 	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	testCases := []struct {
@@ -103,8 +103,8 @@ func TestCreateUser(t *testing.T) {
 		expectApproved bool
 		expectError    bool
 	}{
-		{"Regular User", "testuser", stringPtr("test@example.com"), false, false, false},
-		{"Admin User", "admin", stringPtr("admin@example.com"), true, true, false},
+		{"Regular User", "test.user.regular", stringPtr("test@example.com"), false, false, false},
+		{"Admin User", "admin.superuser", stringPtr("admin@example.com"), true, true, false},
 		{"User without email", "noemailuser", nil, false, false, false},
 	}
 
@@ -136,11 +136,11 @@ func TestCreateUser(t *testing.T) {
 	// Test Duplicate Username specifically
 	t.Run("Duplicate Username", func(t *testing.T) {
 		// First creation should succeed
-		_, err := CreateUser(db, "duplicate", stringPtr("duplicate@example.com"))
+		_, err := CreateUser(db, "duplicate.user.test", stringPtr("duplicate@example.com"))
 		require.NoError(t, err)
 
 		// Second creation with the same username should fail
-		_, err = CreateUser(db, "duplicate", stringPtr("duplicate2@example.com"))
+		_, err = CreateUser(db, "duplicate.user.test", stringPtr("duplicate2@example.com"))
 		assert.Error(t, err, "Expected an error for duplicate username")
 		if err != nil {
 			assert.Contains(t, err.Error(), "UNIQUE constraint failed", "Error should be about uniqueness")
@@ -153,7 +153,7 @@ func TestGetUserByUsername(t *testing.T) {
 	defer db.Close()
 
 	// Create a test user first
-	username := "findme"
+	username := "findme.user.test"
 	email := stringPtr("findme@example.com")
 	createdUser, err := CreateUser(db, username, email)
 	require.NoError(t, err)
@@ -192,7 +192,7 @@ func TestGetUserByUsername(t *testing.T) {
 func TestHasAdminPrivileges(t *testing.T) {
 	// Set admin usernames
 	originalAdmins := os.Getenv("ADMIN_USERNAMES")
-	os.Setenv("ADMIN_USERNAMES", "adminuser")
+	os.Setenv("ADMIN_USERNAMES", "adminuser,adminuser.test")
 	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	testCases := []struct {
@@ -200,7 +200,7 @@ func TestHasAdminPrivileges(t *testing.T) {
 		user        User
 		expectAdmin bool
 	}{
-		{"Admin by flag", User{Username: "testuser", IsAdmin: true}, true},
+		{"Admin by flag", User{Username: "test.user.admin", IsAdmin: true}, true},
 		{"Admin by username list", User{Username: "adminuser", IsAdmin: false}, true},
 		{"Regular user", User{Username: "regularuser", IsAdmin: false}, false},
 	}
@@ -223,7 +223,7 @@ func TestApproveUser(t *testing.T) {
 	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	// Create a user to approve
-	userToApprove, err := CreateUser(db, "pending", stringPtr("pending@example.com"))
+	userToApprove, err := CreateUser(db, "pending.user.test", stringPtr("pending@example.com"))
 	require.NoError(t, err)
 	require.False(t, userToApprove.IsApproved, "User should initially be unapproved")
 
@@ -322,21 +322,21 @@ func TestGetPendingUsers(t *testing.T) {
 
 	// Setup admin usernames for auto-approval check
 	originalAdmins := os.Getenv("ADMIN_USERNAMES")
-	os.Setenv("ADMIN_USERNAMES", "adminuser")
+	os.Setenv("ADMIN_USERNAMES", "adminuser,adminuser.test")
 	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	// Create users: 2 pending, 1 approved, 1 admin (auto-approved)
-	_, err := CreateUser(db, "pending1", stringPtr("pending1@example.com"))
+	_, err := CreateUser(db, "pending1.user.test", stringPtr("pending1@example.com"))
 	require.NoError(t, err)
-	_, err = CreateUser(db, "pending2", stringPtr("pending2@example.com"))
+	_, err = CreateUser(db, "pending2.user.test", stringPtr("pending2@example.com"))
 	require.NoError(t, err)
-	approvedUser, err := CreateUser(db, "approveduser", stringPtr("approved@example.com"))
+	approvedUser, err := CreateUser(db, "approved.user.test", stringPtr("approved@example.com"))
 	require.NoError(t, err)
 	// Manually approve this one
 	_, err = db.Exec("UPDATE users SET is_approved = TRUE WHERE username = ?", approvedUser.Username)
 	require.NoError(t, err)
 	// Admin username should be auto-approved
-	_, err = CreateUser(db, "adminuser", stringPtr("admin@pending.com"))
+	_, err = CreateUser(db, "adminuser.test", stringPtr("admin@pending.com"))
 	require.NoError(t, err)
 
 	// Execute GetPendingUsers
@@ -352,9 +352,9 @@ func TestGetPendingUsers(t *testing.T) {
 	for _, u := range pendingUsers {
 		foundUsernames[u.Username] = true
 	}
-	assert.True(t, foundUsernames["pending1"], "pending1 should be in the list")
-	assert.True(t, foundUsernames["pending2"], "pending2 should be in the list")
-	assert.False(t, foundUsernames["approveduser"], "approveduser should not be in the list")
+	assert.True(t, foundUsernames["pending1.user.test"], "pending1.user.test should be in the list")
+	assert.True(t, foundUsernames["pending2.user.test"], "pending2.user.test should be in the list")
+	assert.False(t, foundUsernames["approved.user.test"], "approved.user.test should not be in the list")
 	assert.False(t, foundUsernames["adminuser"], "adminuser should not be in the list")
 }
 

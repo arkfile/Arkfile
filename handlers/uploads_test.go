@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -51,19 +52,19 @@ func TestUploadFile_Success(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// --- Mock GetUserByEmail (for storage check) ---
-	// Uses the *non-transactional* GetUserByEmail outside the transaction
+	// --- Mock GetUserByUsername (for storage check) ---
+	// Uses the *non-transactional* GetUserByUsername outside the transaction
 	getUserSQL := `
-		SELECT id, email, created_at,
+		SELECT id, username, email, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE email = ?`
+		FROM users WHERE username = ?`
 	userID := int64(5) // Assume some user ID
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "created_at",
+		"id", "username", "email", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, sql.NullString{}, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations (Order based on handler logic) ---
@@ -158,18 +159,18 @@ func TestUploadFile_StorageLimitExceeded(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// --- Mock GetUserByEmail (for storage check) ---
+	// --- Mock GetUserByUsername (for storage check) ---
 	getUserSQL := `
-		SELECT id, email, created_at,
+		SELECT id, username, email, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE email = ?`
+		FROM users WHERE username = ?`
 	userID := int64(6)
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "created_at",
+		"id", "username", "email", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, sql.NullString{}, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	// Handler should check storage and fail BEFORE starting transaction or calling storage
@@ -214,18 +215,18 @@ func TestUploadFile_StoragePutError(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// --- Mock GetUserByEmail (for storage check) ---
+	// --- Mock GetUserByUsername (for storage check) ---
 	getUserSQL := `
-		SELECT id, email, created_at,
+		SELECT id, username, email, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE email = ?`
+		FROM users WHERE username = ?`
 	userID := int64(7)
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "created_at",
+		"id", "username", "email", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, sql.NullString{}, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations ---
@@ -286,18 +287,18 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// --- Mock GetUserByEmail (for storage check) ---
+	// --- Mock GetUserByUsername (for storage check) ---
 	getUserSQL := `
-		SELECT id, email, created_at,
+		SELECT id, username, email, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE email = ?`
+		FROM users WHERE username = ?`
 	userID := int64(8)
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "created_at",
+		"id", "username", "email", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, sql.NullString{}, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations ---
@@ -364,18 +365,18 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// --- Mock GetUserByEmail (for storage check) ---
+	// --- Mock GetUserByUsername (for storage check) ---
 	getUserSQL := `
-		SELECT id, email, created_at,
+		SELECT id, username, email, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE email = ?`
+		FROM users WHERE username = ?`
 	userID := int64(9)
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "created_at",
+		"id", "username", "email", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, sql.NullString{}, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations ---
@@ -511,18 +512,18 @@ func TestUploadFile_CommitError(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// --- Mock GetUserByEmail (for storage check) ---
+	// --- Mock GetUserByUsername (for storage check) ---
 	getUserSQL := `
-		SELECT id, email, created_at,
+		SELECT id, username, email, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE email = ?`
+		FROM users WHERE username = ?`
 	userID := int64(10)
 	userRows := sqlmock.NewRows([]string{
-		"id", "email", "created_at",
+		"id", "username", "email", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, email, sql.NullString{}, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations ---

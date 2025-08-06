@@ -65,8 +65,8 @@ func TestGenerateToken(t *testing.T) {
 		name     string
 		username string
 	}{
-		{"Valid username", "user123"},
-		{"Admin username", "admin"},
+		{"Valid username", "test.user.123"},
+		{"Admin username", "admin.user.test"},
 		{"Empty username", ""}, // Test edge case
 	}
 
@@ -111,7 +111,7 @@ func TestGenerateToken(t *testing.T) {
 
 func TestGetUsernameFromToken(t *testing.T) {
 	// Setup: Create a valid token for testing
-	testUsername := "testuser"
+	testUsername := "test.user.2024"
 	claims := &Claims{
 		Username: testUsername,
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -146,7 +146,7 @@ func TestJWTMiddleware(t *testing.T) {
 		// We can verify the claims are set correctly by the middleware
 		user := c.Get("user").(*jwt.Token)
 		claims := user.Claims.(*Claims)
-		assert.Equal(t, "testuser", claims.Username)
+		assert.Equal(t, "test.user.2024", claims.Username)
 		return c.String(http.StatusOK, "test passed")
 	}
 
@@ -166,7 +166,7 @@ func TestJWTMiddleware(t *testing.T) {
 			name: "Valid Token",
 			tokenFunc: func() string {
 				claims := &Claims{
-					Username: "testuser",
+					Username: "test.user.2024",
 					RegisteredClaims: jwt.RegisteredClaims{
 						ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 						ID:        "valid-token-id",
@@ -185,7 +185,7 @@ func TestJWTMiddleware(t *testing.T) {
 			name: "Expired Token",
 			tokenFunc: func() string {
 				claims := &Claims{
-					Username: "testuser",
+					Username: "test.user.expired",
 					RegisteredClaims: jwt.RegisteredClaims{
 						ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)), // Expired
 						ID:        "expired-token-id",
@@ -204,7 +204,7 @@ func TestJWTMiddleware(t *testing.T) {
 			name: "Invalid Signature",
 			tokenFunc: func() string {
 				claims := &Claims{ // Use claims but sign with wrong key
-					Username: "testuser",
+					Username: "test.user.invalid",
 					RegisteredClaims: jwt.RegisteredClaims{
 						ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 					},

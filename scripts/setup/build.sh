@@ -371,6 +371,7 @@ fi
 sudo ln -snf "${RELEASE_DIR}" "${BASE_DIR}/releases/current"
 
 # Copy binary to bin directory
+sudo mkdir -p "${BASE_DIR}/bin/"
 sudo cp "${RELEASE_DIR}/${APP_NAME}" "${BASE_DIR}/bin/"
 sudo chown arkadmin:arkfile "${BASE_DIR}/bin/${APP_NAME}"
 sudo chmod 755 "${BASE_DIR}/bin/${APP_NAME}"

@@ -17,7 +17,7 @@ import (
 // TestChunkedCryptoLogic tests the core crypto logic that powers the WASM functions
 func TestChunkedCryptoLogic(t *testing.T) {
 	// Test data
-	userEmail := "test@example.com"
+	username := "test@example.com"
 	fileID := "test-file"
 	testData := []byte("This is test data for chunked encryption validation")
 
@@ -28,7 +28,7 @@ func TestChunkedCryptoLogic(t *testing.T) {
 	}
 
 	// Test account key derivation
-	accountKey, err := crypto.DeriveAccountFileKey(exportKey, userEmail, fileID)
+	accountKey, err := crypto.DeriveAccountFileKey(exportKey, username, fileID)
 	if err != nil {
 		t.Fatalf("Failed to derive account key: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestChunkedCryptoLogic(t *testing.T) {
 	}
 
 	// Test custom key derivation
-	customKey, err := crypto.DeriveOPAQUEFileKey(exportKey, fileID, userEmail)
+	customKey, err := crypto.DeriveOPAQUEFileKey(exportKey, fileID, username)
 	if err != nil {
 		t.Fatalf("Failed to derive custom key: %v", err)
 	}

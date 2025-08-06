@@ -36,9 +36,9 @@ func setupAdminEnv(adminUsername string) func() {
 
 // TestGetPendingUsers_Success_Admin tests successful retrieval of pending users by an admin.
 func TestGetPendingUsers_Success_Admin(t *testing.T) {
-	adminUsername := "admin-user"
-	pendingUser1Username := "pending-user-1"
-	pendingUser2Username := "pending-user-2"
+	adminUsername := "admin.user.test"
+	pendingUser1Username := "pending.user.one"
+	pendingUser2Username := "pending.user.two"
 
 	c, rec, mockDB, _ := setupTestEnv(t, http.MethodGet, "/admin/users/pending", nil)
 
@@ -48,8 +48,8 @@ func TestGetPendingUsers_Success_Admin(t *testing.T) {
 	c.Set("user", adminToken)
 
 	// Mock GetUserByUsername for admin check
-	adminUserRows := sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-		AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true) // Admin user
+	adminUserRows := sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+		AddRow(1, adminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true) // Admin user
 	mockDB.ExpectQuery(`
 		SELECT id, username, email, created_at,
 		       total_storage_bytes, storage_limit_bytes,
@@ -62,9 +62,9 @@ func TestGetPendingUsers_Success_Admin(t *testing.T) {
 		{ID: 3, Username: pendingUser2Username, IsApproved: false},
 	}
 	// Construct rows for GetPendingUsers (models/user.go)
-	pendingRows := sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes"}).
-		AddRow(pendingUsersData[0].ID, pendingUsersData[0].Username, time.Now(), int64(0), models.DefaultStorageLimit).
-		AddRow(pendingUsersData[1].ID, pendingUsersData[1].Username, time.Now(), int64(0), models.DefaultStorageLimit)
+	pendingRows := sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes"}).
+		AddRow(pendingUsersData[0].ID, pendingUsersData[0].Username, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit).
+		AddRow(pendingUsersData[1].ID, pendingUsersData[1].Username, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit)
 
 	// This query must exactly match the one in models.GetPendingUsers
 	mockDB.ExpectQuery(`
@@ -154,8 +154,8 @@ func TestGetPendingUsers_Success_Admin(t *testing.T) {
 
 // TestDeleteUser_Success_Admin tests successful user deletion by an admin.
 func TestDeleteUser_Success_Admin(t *testing.T) {
-	adminUsername := "admin-user"
-	targetUsername := "user-to-delete"
+	adminUsername := "admin.user.test"
+	targetUsername := "user.to.delete"
 	mockFile1 := "userfile1.txt"
 	mockFile2 := "userfile2.dat"
 
@@ -173,8 +173,8 @@ func TestDeleteUser_Success_Admin(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`).WithArgs(adminUsername).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
+		sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, adminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
 	mockDB.ExpectBegin()
 
@@ -241,8 +241,8 @@ func TestDeleteUser_Forbidden_NonAdmin(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`).WithArgs(nonAdminUsername).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-			AddRow(2, nonAdminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, false))
+		sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(2, nonAdminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, false))
 
 	err := DeleteUser(c)
 	require.Error(t, err)
@@ -256,8 +256,8 @@ func TestDeleteUser_Forbidden_NonAdmin(t *testing.T) {
 
 // TestDeleteUser_Error_AdminFetchError tests error when fetching admin user details.
 func TestDeleteUser_Error_AdminFetchError(t *testing.T) {
-	adminUsername := "admin-user"
-	targetUsername := "user-to-delete"
+	adminUsername := "admin.user.test"
+	targetUsername := "user.to.delete"
 
 	c, _, mockDB, _ := setupTestEnv(t, http.MethodDelete, "/admin/users/:username", nil)
 	c.SetParamNames("username")
@@ -298,8 +298,8 @@ func TestDeleteUser_BadRequest_MissingUsernameParam(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`).WithArgs(adminUsername).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
+		sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, adminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
 	err := DeleteUser(c)
 	require.Error(t, err)
@@ -328,8 +328,8 @@ func TestDeleteUser_Error_SelfDeletionAttempt(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`).WithArgs(adminUsername).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
+		sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, adminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
 	err := DeleteUser(c)
 	require.Error(t, err)
@@ -359,8 +359,8 @@ func TestDeleteUser_Error_GetUserFilesError(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`).WithArgs(adminUsername).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
+		sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, adminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
 	mockDB.ExpectBegin()
 
@@ -399,8 +399,8 @@ func TestDeleteUser_Error_StorageRemoveObjectError(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`).WithArgs(adminUsername).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
+		sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, adminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
 	mockDB.ExpectBegin()
 
@@ -446,8 +446,8 @@ func TestDeleteUser_Error_DeleteFileMetadataError(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`).WithArgs(adminUsername).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
+		sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, adminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
 	mockDB.ExpectBegin()
 
@@ -495,8 +495,8 @@ func TestDeleteUser_Error_DeleteFileSharesError(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`).WithArgs(adminUsername).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
+		sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, adminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
 	mockDB.ExpectBegin()
 
@@ -541,8 +541,8 @@ func TestDeleteUser_Error_DeleteUserRecordError(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`).WithArgs(adminUsername).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
+		sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, adminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
 	mockDB.ExpectBegin()
 
@@ -590,8 +590,8 @@ func TestDeleteUser_Error_LogAdminActionFailure(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`).WithArgs(adminUsername).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
+		sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(1, adminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT filename FROM file_metadata WHERE owner_username = ?").WithArgs(targetUsername).WillReturnRows(sqlmock.NewRows([]string{}))
@@ -781,8 +781,8 @@ func TestUpdateUser_Error_Forbidden_NonAdmin(t *testing.T) {
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`).WithArgs(nonAdminUsername).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-			AddRow(2, nonAdminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, false))
+		sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(2, nonAdminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, false))
 
 	err := UpdateUser(c)
 	require.Error(t, err)
@@ -1428,8 +1428,8 @@ func TestGetPendingUsers_Forbidden_NonAdmin(t *testing.T) {
 	nonAdminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, nonAdminClaims)
 	c.Set("user", nonAdminToken)
 
-	nonAdminUserRows := sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-		AddRow(1, nonAdminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, false)
+	nonAdminUserRows := sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+		AddRow(1, nonAdminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, false)
 	mockDB.ExpectQuery(`
 		SELECT id, username, email, created_at,
 		       total_storage_bytes, storage_limit_bytes,

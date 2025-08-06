@@ -136,8 +136,9 @@ if [ -d "$ARKFILE_DIR" ]; then
     
     # Delete database
     print_status "INFO" "Nuking database..."
-    rm -rf "$ARKFILE_DIR/var/lib/"*/rqlite/data/* 2>/dev/null || true
-    rm -rf "$ARKFILE_DIR/var/lib/"*/database/* 2>/dev/null || true
+    rm -rf "$ARKFILE_DIR/var/lib/"*/rqlite/* 2>/dev/null || true
+    rm -rf "$ARKFILE_DIR/var/lib/"*/database 2>/dev/null || true
+    rm -rf "$ARKFILE_DIR/database"* 2>/dev/null || true
     
     # Delete all logs
     print_status "INFO" "Nuking logs..."
@@ -220,6 +221,23 @@ fi
 print_status "SUCCESS" "Critical file verification complete"
 echo
 
+# Step 5.5: Ensure directory structure exists
+echo -e "${CYAN}Step 5.5: Ensuring directory structure${NC}"
+echo "======================================"
+
+# Ensure all directories exist before trying to write files
+print_status "INFO" "Setting up directory structure..."
+if ! ./scripts/setup/01-setup-users.sh; then
+    print_status "ERROR" "User setup failed - this is CRITICAL"
+    exit 1
+fi
+if ! ./scripts/setup/02-setup-directories.sh; then
+    print_status "ERROR" "Directory setup failed - this is CRITICAL"
+    exit 1
+fi
+print_status "SUCCESS" "Directory structure created"
+echo
+
 # Step 6: Generate fresh secrets
 echo -e "${CYAN}Step 6: Generating fresh secrets${NC}"
 echo "================================="
@@ -293,14 +311,6 @@ echo
 # Step 6.5: Generate cryptographic keys
 echo -e "${CYAN}Step 6.5: Generating cryptographic keys${NC}"
 echo "======================================="
-
-# Ensure key directories exist first
-print_status "INFO" "Setting up key directory structure..."
-if ! ./scripts/setup/02-setup-directories.sh; then
-    print_status "ERROR" "Directory setup failed - this is CRITICAL"
-    exit 1
-fi
-print_status "SUCCESS" "Key directories created"
 
 # Generate OPAQUE server keys
 print_status "INFO" "Generating OPAQUE server keys..."

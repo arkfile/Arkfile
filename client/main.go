@@ -20,7 +20,7 @@ import (
 
 // OPAQUE Export Key Storage
 // This replaces the old Argon2ID-based key derivation system for authenticated operations
-var opaqueExportKeys = make(map[string][]byte) // userEmail -> exportKey
+var opaqueExportKeys = make(map[string][]byte) // username -> exportKey
 
 // validateOPAQUEExportKey validates that an OPAQUE export key has the correct format
 func validateOPAQUEExportKey(exportKey []byte) bool {
@@ -48,11 +48,11 @@ func storeOPAQUEExportKey(this js.Value, args []js.Value) interface{} {
 	if len(args) != 2 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected userEmail, exportKeyB64",
+			"error":   "Invalid arguments: expected username, exportKeyB64",
 		}
 	}
 
-	userEmail := args[0].String()
+	username := args[0].String()
 	exportKeyB64 := args[1].String()
 
 	// Decode the export key
@@ -73,7 +73,7 @@ func storeOPAQUEExportKey(this js.Value, args []js.Value) interface{} {
 	}
 
 	// Store the export key
-	opaqueExportKeys[userEmail] = exportKey
+	opaqueExportKeys[username] = exportKey
 
 	return map[string]interface{}{
 		"success": true,
@@ -82,13 +82,13 @@ func storeOPAQUEExportKey(this js.Value, args []js.Value) interface{} {
 }
 
 // deriveAccountFileKey derives a file encryption key from OPAQUE export key for account password
-func deriveAccountFileKey(exportKey []byte, userEmail, fileID string) ([]byte, error) {
-	return crypto.DeriveAccountFileKey(exportKey, userEmail, fileID)
+func deriveAccountFileKey(exportKey []byte, username, fileID string) ([]byte, error) {
+	return crypto.DeriveAccountFileKey(exportKey, username, fileID)
 }
 
 // deriveCustomFileKey derives a file encryption key from OPAQUE export key for custom password
-func deriveCustomFileKey(exportKey []byte, fileID, userEmail string) ([]byte, error) {
-	return crypto.DeriveOPAQUEFileKey(exportKey, fileID, userEmail)
+func deriveCustomFileKey(exportKey []byte, fileID, username string) ([]byte, error) {
+	return crypto.DeriveOPAQUEFileKey(exportKey, fileID, username)
 }
 
 // encryptFileOPAQUE encrypts a file using OPAQUE-derived keys (replaces old Argon2ID approach)
@@ -96,13 +96,13 @@ func encryptFileOPAQUE(this js.Value, args []js.Value) interface{} {
 	if len(args) != 4 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected fileData, userEmail, keyType, fileID",
+			"error":   "Invalid arguments: expected fileData, username, keyType, fileID",
 		}
 	}
 
 	// Extract arguments
 	fileDataJS := args[0]
-	userEmail := args[1].String()
+	username := args[1].String()
 	keyType := args[2].String() // "account" or "custom"
 	fileID := args[3].String()
 
@@ -111,7 +111,7 @@ func encryptFileOPAQUE(this js.Value, args []js.Value) interface{} {
 	js.CopyBytesToGo(fileData, fileDataJS)
 
 	// Get the OPAQUE export key for this user
-	exportKey, exists := opaqueExportKeys[userEmail]
+	exportKey, exists := opaqueExportKeys[username]
 	if !exists {
 		return map[string]interface{}{
 			"success": false,
@@ -126,10 +126,10 @@ func encryptFileOPAQUE(this js.Value, args []js.Value) interface{} {
 
 	if keyType == "account" {
 		version = 0x01 // VersionOPAQUEAccount
-		fileEncKey, err = deriveAccountFileKey(exportKey, userEmail, fileID)
+		fileEncKey, err = deriveAccountFileKey(exportKey, username, fileID)
 	} else if keyType == "custom" {
 		version = 0x02 // VersionOPAQUECustom
-		fileEncKey, err = deriveCustomFileKey(exportKey, fileID, userEmail)
+		fileEncKey, err = deriveCustomFileKey(exportKey, fileID, username)
 	} else {
 		return map[string]interface{}{
 			"success": false,
@@ -195,16 +195,16 @@ func decryptFileOPAQUE(this js.Value, args []js.Value) interface{} {
 	if len(args) != 3 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected encryptedData, userEmail, fileID",
+			"error":   "Invalid arguments: expected encryptedData, username, fileID",
 		}
 	}
 
 	encryptedDataB64 := args[0].String()
-	userEmail := args[1].String()
+	username := args[1].String()
 	fileID := args[2].String()
 
 	// Get the OPAQUE export key for this user
-	exportKey, exists := opaqueExportKeys[userEmail]
+	exportKey, exists := opaqueExportKeys[username]
 	if !exists {
 		return map[string]interface{}{
 			"success": false,
@@ -245,7 +245,7 @@ func decryptFileOPAQUE(this js.Value, args []js.Value) interface{} {
 				"error":   "Key type mismatch for account version",
 			}
 		}
-		fileEncKey, err = deriveAccountFileKey(exportKey, userEmail, fileID)
+		fileEncKey, err = deriveAccountFileKey(exportKey, username, fileID)
 	case 0x02: // VersionOPAQUECustom
 		if keyType != 0x02 {
 			return map[string]interface{}{
@@ -253,7 +253,7 @@ func decryptFileOPAQUE(this js.Value, args []js.Value) interface{} {
 				"error":   "Key type mismatch for custom version",
 			}
 		}
-		fileEncKey, err = deriveCustomFileKey(exportKey, fileID, userEmail)
+		fileEncKey, err = deriveCustomFileKey(exportKey, fileID, username)
 	default:
 		return map[string]interface{}{
 			"success": false,
@@ -317,18 +317,18 @@ func clearOPAQUEExportKey(this js.Value, args []js.Value) interface{} {
 	if len(args) != 1 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected userEmail",
+			"error":   "Invalid arguments: expected username",
 		}
 	}
 
-	userEmail := args[0].String()
+	username := args[0].String()
 
 	// Securely zero the export key before deleting
-	if exportKey, exists := opaqueExportKeys[userEmail]; exists {
+	if exportKey, exists := opaqueExportKeys[username]; exists {
 		for i := range exportKey {
 			exportKey[i] = 0
 		}
-		delete(opaqueExportKeys, userEmail)
+		delete(opaqueExportKeys, username)
 	}
 
 	return map[string]interface{}{
@@ -699,13 +699,13 @@ func encryptFileChunkedOPAQUE(this js.Value, args []js.Value) interface{} {
 	if len(args) != 5 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected fileData, userEmail, keyType, fileID, chunkSize",
+			"error":   "Invalid arguments: expected fileData, username, keyType, fileID, chunkSize",
 		}
 	}
 
 	// Extract arguments
 	fileDataJS := args[0]
-	userEmail := args[1].String()
+	username := args[1].String()
 	keyType := args[2].String()
 	fileID := args[3].String()
 	chunkSize := args[4].Int()
@@ -720,7 +720,7 @@ func encryptFileChunkedOPAQUE(this js.Value, args []js.Value) interface{} {
 	js.CopyBytesToGo(fileData, fileDataJS)
 
 	// Get the OPAQUE export key for this user
-	exportKey, exists := opaqueExportKeys[userEmail]
+	exportKey, exists := opaqueExportKeys[username]
 	if !exists {
 		return map[string]interface{}{
 			"success": false,
@@ -736,11 +736,11 @@ func encryptFileChunkedOPAQUE(this js.Value, args []js.Value) interface{} {
 	if keyType == "account" {
 		version = 0x01
 		keyTypeByte = 0x01
-		fileEncKey, err = deriveAccountFileKey(exportKey, userEmail, fileID)
+		fileEncKey, err = deriveAccountFileKey(exportKey, username, fileID)
 	} else if keyType == "custom" {
 		version = 0x02
 		keyTypeByte = 0x02
-		fileEncKey, err = deriveCustomFileKey(exportKey, fileID, userEmail)
+		fileEncKey, err = deriveCustomFileKey(exportKey, fileID, username)
 	} else {
 		return map[string]interface{}{
 			"success": false,
@@ -823,16 +823,16 @@ func decryptFileChunkedOPAQUE(this js.Value, args []js.Value) interface{} {
 	if len(args) != 3 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected encryptedData, userEmail, fileID",
+			"error":   "Invalid arguments: expected encryptedData, username, fileID",
 		}
 	}
 
 	encryptedDataB64 := args[0].String()
-	userEmail := args[1].String()
+	username := args[1].String()
 	fileID := args[2].String()
 
 	// Get the OPAQUE export key for this user
-	exportKey, exists := opaqueExportKeys[userEmail]
+	exportKey, exists := opaqueExportKeys[username]
 	if !exists {
 		return map[string]interface{}{
 			"success": false,
@@ -873,7 +873,7 @@ func decryptFileChunkedOPAQUE(this js.Value, args []js.Value) interface{} {
 				"error":   "Key type mismatch for account version",
 			}
 		}
-		fileEncKey, err = deriveAccountFileKey(exportKey, userEmail, fileID)
+		fileEncKey, err = deriveAccountFileKey(exportKey, username, fileID)
 	case 0x02: // VersionOPAQUECustom
 		if keyType != 0x02 {
 			return map[string]interface{}{
@@ -881,7 +881,7 @@ func decryptFileChunkedOPAQUE(this js.Value, args []js.Value) interface{} {
 				"error":   "Key type mismatch for custom version",
 			}
 		}
-		fileEncKey, err = deriveCustomFileKey(exportKey, fileID, userEmail)
+		fileEncKey, err = deriveCustomFileKey(exportKey, fileID, username)
 	default:
 		return map[string]interface{}{
 			"success": false,

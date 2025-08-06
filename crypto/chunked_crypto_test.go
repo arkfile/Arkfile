@@ -127,7 +127,7 @@ func TestChunkFormatValidation(t *testing.T) {
 func TestChunkedEncryptionLogic(t *testing.T) {
 	// Create test data
 	testData := []byte("Hello, this is test data for chunked encryption! This needs to be long enough to test chunking properly.")
-	userEmail := "test@example.com"
+	username := "test@example.com"
 	fileID := "test-file-123"
 	chunkSize := 32 // Small chunk for testing
 
@@ -138,7 +138,7 @@ func TestChunkedEncryptionLogic(t *testing.T) {
 	// Test key derivation
 	t.Run("Key derivation", func(t *testing.T) {
 		// Test account key derivation
-		accountKey, err := DeriveAccountFileKey(mockExportKey, userEmail, fileID)
+		accountKey, err := DeriveAccountFileKey(mockExportKey, username, fileID)
 		if err != nil {
 			t.Fatalf("Failed to derive account key: %v", err)
 		}
@@ -147,7 +147,7 @@ func TestChunkedEncryptionLogic(t *testing.T) {
 		}
 
 		// Test custom key derivation
-		customKey, err := DeriveOPAQUEFileKey(mockExportKey, fileID, userEmail)
+		customKey, err := DeriveOPAQUEFileKey(mockExportKey, fileID, username)
 		if err != nil {
 			t.Fatalf("Failed to derive custom key: %v", err)
 		}
@@ -164,7 +164,7 @@ func TestChunkedEncryptionLogic(t *testing.T) {
 	// Test chunked encryption process
 	t.Run("Chunked encryption process", func(t *testing.T) {
 		// Derive file encryption key
-		fileEncKey, err := DeriveAccountFileKey(mockExportKey, userEmail, fileID)
+		fileEncKey, err := DeriveAccountFileKey(mockExportKey, username, fileID)
 		if err != nil {
 			t.Fatalf("Failed to derive file encryption key: %v", err)
 		}

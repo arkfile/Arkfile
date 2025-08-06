@@ -65,7 +65,7 @@ func CreateSingleKeyEnvelope(fek []byte, keyInfo KeyInfo) ([]byte, error) {
 }
 
 // ExtractFEKFromEnvelope attempts to extract the File Encryption Key using OPAQUE export key
-func ExtractFEKFromEnvelope(envelope []byte, exportKey []byte, userEmail, fileID string) ([]byte, error) {
+func ExtractFEKFromEnvelope(envelope []byte, exportKey []byte, username, fileID string) ([]byte, error) {
 	if len(envelope) < 2 {
 		return nil, fmt.Errorf("envelope too short")
 	}
@@ -83,12 +83,12 @@ func ExtractFEKFromEnvelope(envelope []byte, exportKey []byte, userEmail, fileID
 		if keyType != KeyTypeAccount {
 			return nil, fmt.Errorf("key type mismatch for account version")
 		}
-		kek, err = DeriveAccountFileKey(exportKey, userEmail, fileID)
+		kek, err = DeriveAccountFileKey(exportKey, username, fileID)
 	case VersionOPAQUECustom:
 		if keyType != KeyTypeCustom {
 			return nil, fmt.Errorf("key type mismatch for custom version")
 		}
-		kek, err = DeriveOPAQUEFileKey(exportKey, fileID, userEmail)
+		kek, err = DeriveOPAQUEFileKey(exportKey, fileID, username)
 	default:
 		return nil, fmt.Errorf("unsupported envelope version: 0x%02x", version)
 	}

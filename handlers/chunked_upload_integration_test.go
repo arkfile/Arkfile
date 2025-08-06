@@ -47,7 +47,7 @@ func TestChunkedUploadEndToEnd(t *testing.T) {
 	originalHashHex := hex.EncodeToString(originalHash[:])
 
 	// Test user
-	userEmail := "chunked-test@example.com"
+	username := "chunked-test@example.com"
 	fileID := "test-chunked-file.bin"
 
 	// Mock OPAQUE export key (in real system this comes from OPAQUE authentication)
@@ -59,13 +59,13 @@ func TestChunkedUploadEndToEnd(t *testing.T) {
 	t.Logf("🔍 Testing chunked upload for %d MB file", fileSize/(1024*1024))
 
 	// STEP 1: Simulate client-side encryption (what WASM would do)
-	envelope, encryptedChunks, err := simulateClientEncryption(originalData, exportKey, userEmail, fileID, "account")
+	envelope, encryptedChunks, err := simulateClientEncryption(originalData, exportKey, username, fileID, "account")
 	require.NoError(t, err)
 
 	t.Logf("✅ Client encryption: created %d chunks with envelope", len(encryptedChunks))
 
 	// STEP 2: Create upload session with mock expectations
-	sessionID, err := simulateCreateUploadSessionWithMocks(t, userEmail, fileID, int64(fileSize), originalHashHex, envelope, mockDB, mockStorage)
+	sessionID, err := simulateCreateUploadSessionWithMocks(t, username, fileID, int64(fileSize), originalHashHex, envelope, mockDB, mockStorage)
 	require.NoError(t, err)
 
 	t.Logf("✅ Upload session created: %s", sessionID)
@@ -83,7 +83,7 @@ func TestChunkedUploadEndToEnd(t *testing.T) {
 	t.Logf("✅ Upload completed - file should be stored as [envelope][chunk1][chunk2]...")
 
 	// STEP 5: Simulate download and decrypt (proves the fix works)
-	downloadedData, err := simulateDownloadAndDecryptWithMocks(t, userEmail, fileID, exportKey, storageID, mockStorage, envelope, encryptedChunks)
+	downloadedData, err := simulateDownloadAndDecryptWithMocks(t, username, fileID, exportKey, storageID, mockStorage, envelope, encryptedChunks)
 	require.NoError(t, err)
 
 	t.Logf("✅ File downloaded and decrypted: %d bytes", len(downloadedData))
@@ -119,7 +119,7 @@ func TestChunkedUploadEndToEnd(t *testing.T) {
 }
 
 // simulateClientEncryption simulates what the WASM encryptFileChunkedOPAQUE function does
-func simulateClientEncryption(data []byte, exportKey []byte, userEmail, fileID, keyType string) ([]byte, [][]byte, error) {
+func simulateClientEncryption(data []byte, exportKey []byte, username, fileID, keyType string) ([]byte, [][]byte, error) {
 	// Derive file encryption key
 	var fileEncKey []byte
 	var err error
@@ -128,11 +128,11 @@ func simulateClientEncryption(data []byte, exportKey []byte, userEmail, fileID, 
 	if keyType == "account" {
 		version = 0x01
 		keyTypeByte = 0x01
-		fileEncKey, err = crypto.DeriveAccountFileKey(exportKey, userEmail, fileID)
+		fileEncKey, err = crypto.DeriveAccountFileKey(exportKey, username, fileID)
 	} else {
 		version = 0x02
 		keyTypeByte = 0x02
-		fileEncKey, err = crypto.DeriveOPAQUEFileKey(exportKey, fileID, userEmail)
+		fileEncKey, err = crypto.DeriveOPAQUEFileKey(exportKey, fileID, username)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -179,7 +179,7 @@ func simulateClientEncryption(data []byte, exportKey []byte, userEmail, fileID, 
 }
 
 // simulateCreateUploadSession creates an upload session with envelope data
-func simulateCreateUploadSession(t *testing.T, userEmail, filename string, totalSize int64, originalHash string, envelope []byte) (string, error) {
+func simulateCreateUploadSession(t *testing.T, username, filename string, totalSize int64, originalHash string, envelope []byte) (string, error) {
 	// Create request
 	reqBody := map[string]interface{}{
 		"filename":     filename,
@@ -197,7 +197,7 @@ func simulateCreateUploadSession(t *testing.T, userEmail, filename string, total
 
 	// Mock JWT token
 	mockJWT := fmt.Sprintf("header.%s.signature",
-		base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"email":"%s"}`, userEmail))))
+		base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"email":"%s"}`, username))))
 	req.Header.Set("Authorization", "Bearer "+mockJWT)
 
 	rec := httptest.NewRecorder()
@@ -205,7 +205,7 @@ func simulateCreateUploadSession(t *testing.T, userEmail, filename string, total
 	c := e.NewContext(req, rec)
 
 	// Mock auth middleware
-	c.Set("user_email", userEmail)
+	c.Set("user_email", username)
 
 	// Call handler
 	err := CreateUploadSession(c)
@@ -290,7 +290,7 @@ func simulateCompleteUpload(t *testing.T, sessionID string) error {
 }
 
 // simulateDownloadAndDecrypt downloads the file and decrypts it (proves fix works)
-func simulateDownloadAndDecrypt(t *testing.T, userEmail, fileID string, exportKey []byte) ([]byte, error) {
+func simulateDownloadAndDecrypt(t *testing.T, username, fileID string, exportKey []byte) ([]byte, error) {
 	// For this test, we need to directly access the storage to get the concatenated file
 	// In real system, this would go through download handlers
 
@@ -321,11 +321,11 @@ func simulateDownloadAndDecrypt(t *testing.T, userEmail, fileID string, exportKe
 	t.Logf("Downloaded %d bytes from storage", len(concatenatedData))
 
 	// Now decrypt using the same logic as WASM decryptFileChunkedOPAQUE
-	return simulateClientDecryption(concatenatedData, exportKey, userEmail, fileID)
+	return simulateClientDecryption(concatenatedData, exportKey, username, fileID)
 }
 
 // simulateClientDecryption simulates what the WASM decryptFileChunkedOPAQUE function does
-func simulateClientDecryption(concatenatedData []byte, exportKey []byte, userEmail, fileID string) ([]byte, error) {
+func simulateClientDecryption(concatenatedData []byte, exportKey []byte, username, fileID string) ([]byte, error) {
 	fmt.Printf("🔍 Starting decryption of %d bytes\n", len(concatenatedData))
 
 	if len(concatenatedData) < 2 {
@@ -347,12 +347,12 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, userEma
 		if keyType != 0x01 {
 			return nil, fmt.Errorf("key type mismatch for account version")
 		}
-		fileEncKey, err = crypto.DeriveAccountFileKey(exportKey, userEmail, fileID)
+		fileEncKey, err = crypto.DeriveAccountFileKey(exportKey, username, fileID)
 	case 0x02: // Custom
 		if keyType != 0x02 {
 			return nil, fmt.Errorf("key type mismatch for custom version")
 		}
-		fileEncKey, err = crypto.DeriveOPAQUEFileKey(exportKey, fileID, userEmail)
+		fileEncKey, err = crypto.DeriveOPAQUEFileKey(exportKey, fileID, username)
 	default:
 		return nil, fmt.Errorf("unsupported encryption version: 0x%02x", version)
 	}
@@ -458,7 +458,7 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, userEma
 
 // Mock helper functions for proper testing with database and storage mocks
 
-func simulateCreateUploadSessionWithMocks(t *testing.T, userEmail, filename string, totalSize int64, originalHash string, envelope []byte, mockDB sqlmock.Sqlmock, mockStorage *storage.MockObjectStorageProvider) (string, error) {
+func simulateCreateUploadSessionWithMocks(t *testing.T, username, filename string, totalSize int64, originalHash string, envelope []byte, mockDB sqlmock.Sqlmock, mockStorage *storage.MockObjectStorageProvider) (string, error) {
 	// This is a simplified simulation - in a real test we'd mock all the database calls
 	// For now, just return a mock session ID since we're testing the crypto logic
 	return "mock-session-12345", nil
@@ -489,7 +489,7 @@ func simulateCompleteUploadWithMocks(t *testing.T, sessionID string, mockDB sqlm
 	return storageID, nil
 }
 
-func simulateDownloadAndDecryptWithMocks(t *testing.T, userEmail, fileID string, exportKey []byte, storageID string, mockStorage *storage.MockObjectStorageProvider, envelope []byte, chunks [][]byte) ([]byte, error) {
+func simulateDownloadAndDecryptWithMocks(t *testing.T, username, fileID string, exportKey []byte, storageID string, mockStorage *storage.MockObjectStorageProvider, envelope []byte, chunks [][]byte) ([]byte, error) {
 	// Simulate the concatenated data directly since we already have the components
 	// This is what would be stored in storage after envelope concatenation
 	var concatenatedData []byte
@@ -501,7 +501,7 @@ func simulateDownloadAndDecryptWithMocks(t *testing.T, userEmail, fileID string,
 	t.Logf("Simulated download of %d bytes from storage", len(concatenatedData))
 
 	// Now decrypt using the same logic as WASM decryptFileChunkedOPAQUE
-	return simulateClientDecryption(concatenatedData, exportKey, userEmail, fileID)
+	return simulateClientDecryption(concatenatedData, exportKey, username, fileID)
 }
 
 // mockReader implements io.ReadCloser for testing

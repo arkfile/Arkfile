@@ -83,7 +83,7 @@ func TestSecurityEventLogging(t *testing.T) {
 			name:        "OPAQUE Login Success",
 			eventType:   EventOpaqueLoginSuccess,
 			ip:          net.ParseIP("192.168.1.100"),
-			username:    stringPtr("testuser1"),
+			username:    stringPtr("test.user.one"),
 			deviceType:  stringPtr("ArgonBalanced"),
 			details:     map[string]interface{}{"success": true},
 			expectedSev: SeverityInfo,
@@ -92,7 +92,7 @@ func TestSecurityEventLogging(t *testing.T) {
 			name:        "OPAQUE Login Failure",
 			eventType:   EventOpaqueLoginFailure,
 			ip:          net.ParseIP("192.168.1.101"),
-			username:    stringPtr("testuser2"),
+			username:    stringPtr("test.user.two"),
 			deviceType:  stringPtr("ArgonBalanced"),
 			details:     map[string]interface{}{"success": false, "error": "invalid_credentials"},
 			expectedSev: SeverityWarning,
@@ -312,7 +312,7 @@ func TestSecurityEventSensitiveDataExclusion(t *testing.T) {
 	}
 
 	// Use correct function signature
-	err = LogSecurityEvent(EventOpaqueLoginSuccess, net.ParseIP("192.168.1.1"), stringPtr("testuser"), nil, sensitiveDetails)
+	err = LogSecurityEvent(EventOpaqueLoginSuccess, net.ParseIP("192.168.1.1"), stringPtr("test.user.sensitive"), nil, sensitiveDetails)
 	if err != nil {
 		t.Fatalf("Failed to log security event: %v", err)
 	}

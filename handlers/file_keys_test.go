@@ -44,10 +44,10 @@ func TestSecureZeroBytes(t *testing.T) {
 func TestDeriveAccountFileKey_PlaceholderBehavior(t *testing.T) {
 	// Test placeholder implementation returns 32-byte key
 	exportKey := make([]byte, 64) // Typical OPAQUE export key size
-	userEmail := "test@example.com"
+	username := "test@example.com"
 	fileID := "test-file.txt"
 
-	derivedKey, err := deriveAccountFileKey(exportKey, userEmail, fileID)
+	derivedKey, err := deriveAccountFileKey(exportKey, username, fileID)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 32, len(derivedKey), "Derived key should be 32 bytes (AES-256)")
@@ -57,9 +57,9 @@ func TestDeriveOPAQUEFileKey_PlaceholderBehavior(t *testing.T) {
 	// Test placeholder implementation returns 32-byte key
 	exportKey := make([]byte, 64) // Typical OPAQUE export key size
 	fileID := "test-file.txt"
-	userEmail := "test@example.com"
+	username := "test@example.com"
 
-	derivedKey, err := deriveOPAQUEFileKey(exportKey, fileID, userEmail)
+	derivedKey, err := deriveOPAQUEFileKey(exportKey, fileID, username)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 32, len(derivedKey), "Derived key should be 32 bytes (AES-256)")

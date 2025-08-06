@@ -30,7 +30,7 @@ func TestChunkedUpload100MB(t *testing.T) {
 	originalHashHex := hex.EncodeToString(originalHash[:])
 
 	// Test user
-	userEmail := "chunked-100mb-test@example.com"
+	username := "chunked-100mb-test@example.com"
 	fileID := "test-100mb-file.bin"
 
 	// Mock OPAQUE export key (in real system this comes from OPAQUE authentication)
@@ -42,7 +42,7 @@ func TestChunkedUpload100MB(t *testing.T) {
 	t.Logf("🚀 Testing chunked upload for %d MB file", fileSize/(1024*1024))
 
 	// STEP 1: Simulate client-side encryption (what WASM would do)
-	envelope, encryptedChunks, err := simulateClientEncryption(originalData, exportKey, userEmail, fileID, "account")
+	envelope, encryptedChunks, err := simulateClientEncryption(originalData, exportKey, username, fileID, "account")
 	require.NoError(t, err)
 
 	expectedChunkCount := (fileSize + 16*1024*1024 - 1) / (16 * 1024 * 1024) // Ceiling division
@@ -51,7 +51,7 @@ func TestChunkedUpload100MB(t *testing.T) {
 	t.Logf("✅ Client encryption: created %d chunks with envelope (expected %d)", len(encryptedChunks), expectedChunkCount)
 
 	// STEP 2: Create upload session with mock expectations
-	sessionID, err := simulateCreateUploadSessionWithMocks(t, userEmail, fileID, int64(fileSize), originalHashHex, envelope, mockDB, mockStorage)
+	sessionID, err := simulateCreateUploadSessionWithMocks(t, username, fileID, int64(fileSize), originalHashHex, envelope, mockDB, mockStorage)
 	require.NoError(t, err)
 
 	t.Logf("✅ Upload session created: %s", sessionID)
@@ -69,7 +69,7 @@ func TestChunkedUpload100MB(t *testing.T) {
 	t.Logf("✅ Upload completed - file should be stored as [envelope][chunk1][chunk2]...[chunk%d]", len(encryptedChunks))
 
 	// STEP 5: Simulate download and decrypt (proves the fix works)
-	downloadedData, err := simulateDownloadAndDecryptWithMocks(t, userEmail, fileID, exportKey, storageID, mockStorage, envelope, encryptedChunks)
+	downloadedData, err := simulateDownloadAndDecryptWithMocks(t, username, fileID, exportKey, storageID, mockStorage, envelope, encryptedChunks)
 	require.NoError(t, err)
 
 	t.Logf("✅ File downloaded and decrypted: %d bytes", len(downloadedData))

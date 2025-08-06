@@ -42,7 +42,7 @@ func (mock *MockOPAQUEPasswordManager) ClearFailures() {
 
 // RegisterCustomFilePassword registers a custom password for a specific file (mock implementation)
 func (mock *MockOPAQUEPasswordManager) RegisterCustomFilePassword(
-	userEmail, fileID, password, keyLabel, passwordHint string) error {
+	username, fileID, password, keyLabel, passwordHint string) error {
 
 	mock.mutex.Lock()
 	defer mock.mutex.Unlock()
@@ -52,7 +52,7 @@ func (mock *MockOPAQUEPasswordManager) RegisterCustomFilePassword(
 		return err
 	}
 
-	recordIdentifier := fmt.Sprintf("%s:file:%s", userEmail, fileID)
+	recordIdentifier := fmt.Sprintf("%s:file:%s", username, fileID)
 
 	// Use mock OPAQUE provider for registration
 	provider := GetOPAQUEProvider()
@@ -87,7 +87,7 @@ func (mock *MockOPAQUEPasswordManager) RegisterCustomFilePassword(
 		RecordIdentifier:      recordIdentifier,
 		OPAQUEUserRecord:      userRecord,
 		AssociatedFileID:      &fileID,
-		AssociatedUserEmail:   &userEmail,
+		AssociatedUsername:    &username,
 		KeyLabel:              &keyLabel,
 		PasswordHintEncrypted: encryptedHint,
 		CreatedAt:             now,
@@ -146,7 +146,7 @@ func (mock *MockOPAQUEPasswordManager) RegisterSharePassword(
 		RecordIdentifier:      recordIdentifier,
 		OPAQUEUserRecord:      userRecord,
 		AssociatedFileID:      &fileID,
-		AssociatedUserEmail:   &ownerEmail,
+		AssociatedUsername:    &ownerEmail,
 		KeyLabel:              nil,
 		PasswordHintEncrypted: nil,
 		CreatedAt:             now,

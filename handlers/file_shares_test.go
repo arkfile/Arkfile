@@ -27,31 +27,31 @@ func TestCreateFileShare_Success(t *testing.T) {
 	}`)))
 
 	// Set up authenticated user context
-	userEmail := "test@example.com"
-	c.Set("userEmail", userEmail)
+	username := "test@example.com"
+	c.Set("username", username)
 	c.Set("userID", 1)
 
 	// Create and set JWT token for authentication
-	claims := &auth.Claims{Username: userEmail}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// Mock file ownership check in file_metadata
 	fileOwnerSQL := `SELECT owner_username, multi_key, password_type FROM file_metadata WHERE filename = \?`
 	fileRows := sqlmock.NewRows([]string{"owner_username", "multi_key", "password_type"}).
-		AddRow(userEmail, true, "custom")
+		AddRow(username, true, "custom")
 	mock.ExpectQuery(fileOwnerSQL).WithArgs("test-file-123").WillReturnRows(fileRows)
 
 	// Mock share creation
 	shareInsertSQL := `INSERT INTO file_share_keys \(share_id, file_id, owner_username, salt, encrypted_fek, created_at, expires_at\) VALUES \(\?, \?, \?, \?, \?, CURRENT_TIMESTAMP, \?\)`
 	mock.ExpectExec(shareInsertSQL).
-		WithArgs(sqlmock.AnyArg(), "test-file-123", userEmail, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "test-file-123", username, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock user action logging
 	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mock.ExpectExec(logActionSQL).
-		WithArgs(userEmail, "created_share", sqlmock.AnyArg()).
+		WithArgs(username, "created_share", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Execute handler
@@ -80,19 +80,19 @@ func TestCreateFileShare_InvalidSalt(t *testing.T) {
 	}`)))
 
 	// Set up authenticated user context
-	userEmail := "test@example.com"
-	c.Set("userEmail", userEmail)
+	username := "test@example.com"
+	c.Set("username", username)
 	c.Set("userID", 1)
 
 	// Create and set JWT token for authentication
-	claims := &auth.Claims{Username: userEmail}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// Mock file ownership check in file_metadata (matches actual handler)
 	fileOwnerSQL := `SELECT owner_username, multi_key, password_type FROM file_metadata WHERE filename = \?`
 	fileRows := sqlmock.NewRows([]string{"owner_username", "multi_key", "password_type"}).
-		AddRow(userEmail, true, "custom")
+		AddRow(username, true, "custom")
 	mock.ExpectQuery(fileOwnerSQL).WithArgs("test-file-123").WillReturnRows(fileRows)
 
 	// Execute handler - should fail due to invalid salt (too short)
@@ -116,12 +116,12 @@ func TestCreateFileShare_FileNotOwned(t *testing.T) {
 	}`)))
 
 	// Set up authenticated user context
-	userEmail := "test@example.com"
-	c.Set("userEmail", userEmail)
+	username := "test@example.com"
+	c.Set("username", username)
 	c.Set("userID", 1)
 
 	// Create and set JWT token for authentication
-	claims := &auth.Claims{Username: userEmail}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
@@ -309,12 +309,12 @@ func TestListShares_Success(t *testing.T) {
 	c, rec, mock, _ := setupTestEnv(t, http.MethodGet, "/api/shares", nil)
 
 	// Set up authenticated user context with JWT token
-	userEmail := "test@example.com"
-	c.Set("userEmail", userEmail)
+	username := "test@example.com"
+	c.Set("username", username)
 	c.Set("userID", 1)
 
 	// Create and set JWT token for authentication (matches handler expectation)
-	claims := &auth.Claims{Username: userEmail}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
@@ -322,7 +322,7 @@ func TestListShares_Success(t *testing.T) {
 	sharesSQL := `SELECT sk\.share_id, sk\.file_id, sk\.created_at, sk\.expires_at, fm\.filename, fm\.size_bytes FROM file_share_keys sk JOIN file_metadata fm ON sk\.file_id = fm\.filename WHERE sk\.owner_username = \? ORDER BY sk\.created_at DESC`
 	sharesRows := sqlmock.NewRows([]string{"share_id", "file_id", "created_at", "expires_at", "filename", "size_bytes"}).
 		AddRow("test-share-id", "test-file-123", time.Now().Format("2006-01-02 15:04:05"), nil, "test.txt", 1024)
-	mock.ExpectQuery(sharesSQL).WithArgs(userEmail).WillReturnRows(sharesRows)
+	mock.ExpectQuery(sharesSQL).WithArgs(username).WillReturnRows(sharesRows)
 
 	// Execute handler
 	err := ListShares(c)
@@ -348,21 +348,21 @@ func TestDeleteShare_Success(t *testing.T) {
 	c, rec, mock, _ := setupTestEnv(t, http.MethodDelete, "/api/shares/test-share-id", nil)
 
 	// Set up authenticated user context with JWT token
-	userEmail := "test@example.com"
+	username := "test@example.com"
 	userID := 1
-	c.Set("userEmail", userEmail)
+	c.Set("username", username)
 	c.Set("userID", userID)
 	c.SetParamNames("id")
 	c.SetParamValues("test-share-id")
 
 	// Create and set JWT token for authentication (matches handler expectation)
-	claims := &auth.Claims{Username: userEmail}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// Mock share ownership verification (matches actual handler DeleteShare function)
 	shareOwnerSQL := `SELECT owner_username FROM file_share_keys WHERE share_id = \?`
-	shareRows := sqlmock.NewRows([]string{"owner_username"}).AddRow(userEmail)
+	shareRows := sqlmock.NewRows([]string{"owner_username"}).AddRow(username)
 	mock.ExpectQuery(shareOwnerSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
 	// Mock share deletion
@@ -372,7 +372,7 @@ func TestDeleteShare_Success(t *testing.T) {
 	// Mock user action logging
 	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mock.ExpectExec(logActionSQL).
-		WithArgs(userEmail, "deleted_share", "test-share-id").
+		WithArgs(username, "deleted_share", "test-share-id").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Execute handler
