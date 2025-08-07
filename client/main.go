@@ -567,10 +567,10 @@ func validateTokenStructure(this js.Value, args []js.Value) interface{} {
 	}
 
 	// Check for required claims
-	if email, exists := claims["email"]; !exists || email == "" {
+	if username, exists := claims["username"]; !exists || username == "" {
 		return map[string]interface{}{
 			"valid":   false,
-			"message": "Missing or empty email claim",
+			"message": "Missing or empty username claim",
 		}
 	}
 
@@ -587,9 +587,9 @@ func validateTokenStructure(this js.Value, args []js.Value) interface{} {
 	}
 
 	return map[string]interface{}{
-		"valid":   true,
-		"message": "Token structure is valid",
-		"email":   claims["email"],
+		"valid":    true,
+		"message":  "Token structure is valid",
+		"username": claims["username"],
 	}
 }
 

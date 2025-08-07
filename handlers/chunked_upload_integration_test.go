@@ -20,11 +20,13 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/84adam/arkfile/auth"
 	"github.com/84adam/arkfile/crypto"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/storage"
@@ -197,7 +199,7 @@ func simulateCreateUploadSession(t *testing.T, username, filename string, totalS
 
 	// Mock JWT token
 	mockJWT := fmt.Sprintf("header.%s.signature",
-		base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"email":"%s"}`, username))))
+		base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"username":"%s"}`, username))))
 	req.Header.Set("Authorization", "Bearer "+mockJWT)
 
 	rec := httptest.NewRecorder()
@@ -205,7 +207,9 @@ func simulateCreateUploadSession(t *testing.T, username, filename string, totalS
 	c := e.NewContext(req, rec)
 
 	// Mock auth middleware
-	c.Set("user_email", username)
+	claims := &auth.Claims{Username: username}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
 
 	// Call handler
 	err := CreateUploadSession(c)
@@ -249,7 +253,9 @@ func simulateUploadChunks(t *testing.T, sessionID string, chunks [][]byte) error
 		c.SetParamValues(sessionID, fmt.Sprintf("%d", i))
 
 		// Mock auth
-		c.Set("user_email", "chunked-test@example.com")
+		claims := &auth.Claims{Username: "chunked-test@example.com"}
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		c.Set("user", token)
 
 		err := UploadChunk(c)
 		if err != nil {
@@ -275,7 +281,9 @@ func simulateCompleteUpload(t *testing.T, sessionID string) error {
 	c.SetParamValues(sessionID)
 
 	// Mock auth
-	c.Set("user_email", "chunked-test@example.com")
+	claims := &auth.Claims{Username: "chunked-test@example.com"}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
 
 	err := CompleteUpload(c)
 	if err != nil {

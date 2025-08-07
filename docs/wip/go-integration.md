@@ -6,7 +6,7 @@
 Create a comprehensive Go-based integration test (`test-complete-integration.go`) that validates the entire Arkfile system end-to-end, including OPAQUE authentication, file operations, and anonymous file sharing capabilities.
 
 ### Key Objectives
-1. **Complete Authentication Flow**: OPAQUE registration → TOTP setup → login with 2FA
+1. **Complete Authentication Flow**: Username-based OPAQUE registration → TOTP setup → login with 2FA
 2. **Large File Operations**: 50MB file upload/download with integrity verification
 3. **Share System Validation**: Create shares → anonymous access → file download
 4. **Security Validation**: Rate limiting, timing protection, encryption round-trip
@@ -73,15 +73,17 @@ main()
 #### Step 1: RegisterUser()
 ```go
 type RegistrationRequest struct {
-    Email    string `json:"email"`
+    Username string `json:"username"`
     Password string `json:"password"`
+    Email    string `json:"email,omitempty"` // Optional field
 }
 
 func (t *IntegrationTest) RegisterUser() error {
     // Use existing OPAQUE client implementation
     req := RegistrationRequest{
-        Email:    t.config.TestEmail,
+        Username: t.config.TestUsername,
         Password: t.config.TestPassword,
+        Email:    t.config.TestEmail, // Optional
     }
     
     resp, err := t.httpClient.Post("/api/opaque/register", req)
@@ -101,15 +103,15 @@ func (t *IntegrationTest) RegisterUser() error {
 #### Step 2: ApproveInDatabase()
 ```go
 func (t *IntegrationTest) ApproveInDatabase() error {
-    query := "UPDATE users SET is_approved = 1, approved_by = 'integration-test', approved_at = CURRENT_TIMESTAMP WHERE email = ?"
+    query := "UPDATE users SET is_approved = 1, approved_by = 'integration-test', approved_at = CURRENT_TIMESTAMP WHERE username = ?"
     
-    result, err := t.dbClient.Execute(query, t.config.TestEmail)
+    result, err := t.dbClient.Execute(query, t.config.TestUsername)
     if err != nil {
         return fmt.Errorf("database approval failed: %w", err)
     }
     
     if result.RowsAffected == 0 {
-        return fmt.Errorf("no user found to approve: %s", t.config.TestEmail)
+        return fmt.Errorf("no user found to approve: %s", t.config.TestUsername)
     }
     
     return t.verifyUserApproval()
@@ -156,7 +158,7 @@ func (t *IntegrationTest) SetupTOTP() error {
 func (t *IntegrationTest) LoginUser() error {
     // OPAQUE login
     loginReq := LoginRequest{
-        Email:    t.config.TestEmail,
+        Username: t.config.TestUsername,
         Password: t.config.TestPassword,
     }
     
@@ -514,7 +516,8 @@ type IntegrationTest struct {
 
 type TestConfig struct {
     ServerURL     string `default:"https://localhost:4443"`
-    TestEmail     string `default:"integration-test@example.com"`
+    TestUsername  string `default:"integration.test.user.2025"`
+    TestEmail     string `default:"integration-test@example.com"` // Optional
     TestPassword  string `default:"IntegrationTestPassword123456789!"`
     SharePassword string `default:"TestSharePassword2025_SecureAndLong!"`
     TestFileSize  int64  `default:"52428800"` // 50MB
@@ -761,7 +764,8 @@ import (
 
 // Use existing user and file models
 user := &models.User{
-    Email: testEmail,
+    Username: testUsername,
+    Email:    &testEmail, // Optional field
     // ... other fields
 }
 ```
@@ -849,6 +853,7 @@ go run scripts/testing/test-complete-integration.go
 # With custom configuration
 go run scripts/testing/test-complete-integration.go \
     --server-url https://arkfile.example.com \
+    --test-username integration.user.custom \
     --test-email integration@example.com \
     --verbose
 
@@ -866,20 +871,22 @@ go run scripts/testing/test-complete-integration.go --no-cleanup
 🧪 ARKFILE COMPLETE INTEGRATION TEST
 Configuration:
   Server URL: https://localhost:4443
-  Test Email: integration-test@example.com
+  Test Username: integration.test.user.2025
+  Test Email: integration-test@example.com (optional)
   Test File Size: 50MB
   Database URL: http://localhost:4001
   TLS Insecure: true
 
 📋 Phase 1: User Setup & Authentication
   ✅ Step 1: RegisterUser (2.1s)
-      - OPAQUE registration successful
+      - OPAQUE registration successful (username: integration.test.user.2025)
+      - Optional email provided: integration-test@example.com
       - Temp token: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
       - Session key: 64 bytes
       - Requires TOTP setup: true
       
   ✅ Step 2: ApproveInDatabase (0.3s)
-      - Database query executed successfully
+      - Database query executed successfully (username: integration.test.user.2025)
       - Rows affected: 1
       - User approval verified
       
@@ -972,7 +979,7 @@ Configuration:
 
 📋 Phase 4: Comprehensive Cleanup
   ✅ Step 17: CleanupUser (1.2s)
-      - User removed from users table
+      - User removed from users table (username: integration.test.user.2025)
       - OPAQUE data removed
       - TOTP data removed  
       - File metadata removed
@@ -1034,7 +1041,8 @@ server:
   tls_insecure: true
   
 test:
-  email: "integration-test@example.com"
+  username: "integration.test.user.2025"
+  email: "integration-test@example.com"  # Optional
   password: "IntegrationTestPassword123456789!"
   share_password: "TestSharePassword2025_SecureAndLong!"
   file_size: 52428800  # 50MB

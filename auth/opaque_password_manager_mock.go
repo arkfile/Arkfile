@@ -108,7 +108,7 @@ func (mock *MockOPAQUEPasswordManager) RegisterCustomFilePassword(
 
 // RegisterSharePassword registers a password for anonymous share access (mock implementation)
 func (mock *MockOPAQUEPasswordManager) RegisterSharePassword(
-	shareID, fileID, ownerEmail, password string) error {
+	shareID, fileID, ownerUsername, password string) error {
 
 	mock.mutex.Lock()
 	defer mock.mutex.Unlock()
@@ -146,7 +146,7 @@ func (mock *MockOPAQUEPasswordManager) RegisterSharePassword(
 		RecordIdentifier:      recordIdentifier,
 		OPAQUEUserRecord:      userRecord,
 		AssociatedFileID:      &fileID,
-		AssociatedUsername:    &ownerEmail,
+		AssociatedUsername:    &ownerUsername,
 		KeyLabel:              nil,
 		PasswordHintEncrypted: nil,
 		CreatedAt:             now,

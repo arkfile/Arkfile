@@ -63,10 +63,10 @@ func DeriveJWTSigningMaterial(sessionKey []byte, username string) ([]byte, error
 		return nil, fmt.Errorf("session key must be 32 bytes")
 	}
 	if username == "" {
-		return nil, fmt.Errorf("user email cannot be empty")
+		return nil, fmt.Errorf("username cannot be empty")
 	}
 
-	// Create context with user email for per-user JWT material
+	// Create context with username for per-user JWT material
 	context := fmt.Sprintf("%s:%s", JWTSigningContext, username)
 
 	hkdf := hkdf.New(sha256.New, sessionKey, nil, []byte(context))
@@ -102,7 +102,7 @@ func ValidateSessionKey(sessionKey []byte) error {
 
 // SessionKeyInfo contains metadata about a session key
 type SessionKeyInfo struct {
-	UserEmail string
+	Username  string
 	DerivedAt int64  // Unix timestamp
 	Context   string // The context used for derivation
 	KeyLength int    // Length in bytes
@@ -112,7 +112,7 @@ type SessionKeyInfo struct {
 // CreateSessionKeyInfo creates metadata for a session key
 func CreateSessionKeyInfo(username, context string, sessionKey []byte) SessionKeyInfo {
 	info := SessionKeyInfo{
-		UserEmail: username,
+		Username:  username,
 		Context:   context,
 		KeyLength: len(sessionKey),
 		IsValid:   ValidateSessionKey(sessionKey) == nil,

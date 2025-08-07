@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 SERVER_URL="http://localhost:8080"
-TEST_USER_EMAIL="test-share-user@example.com"
+TEST_USERNAME="test-share-user"
 TEMP_DIR="/tmp/arkfile-share-test"
 TEST_FILE_NAME="test-share-file.txt"
 TEST_FILE_CONTENT="This is a test file for share workflow validation. It contains sample data for testing the complete share system."
@@ -23,7 +23,7 @@ SHARE_PASSWORD="ShareTest2025*ForWorkflow#Validation"
 
 echo -e "${BLUE}=== Arkfile Phase 6E: Complete Share Workflow Test ===${NC}"
 echo "Testing server: $SERVER_URL"
-echo "Test user: $TEST_USER_EMAIL"
+echo "Test user: $TEST_USERNAME"
 echo "Test directory: $TEMP_DIR"
 echo ""
 

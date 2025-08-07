@@ -252,7 +252,7 @@ func TestDeleteFile_StorageError(t *testing.T) {
 // - TestListFiles_Success_StorageCalculations: Verify the 'storage' part of the response (total, limit, available, usage_percent) is accurate for various scenarios (empty, partially full, full). Check formatBytes helper implicitly.
 // - TestListFiles_DBQueryError_FileListing: DB error occurs when querying 'file_metadata' for the list of files.
 // - TestListFiles_DBScanError_FileRow: DB error occurs during rows.Scan() for an individual file row.
-// - TestListFiles_DBGetUserError_StorageInfo: DB error occurs when models.GetUserByEmail is called to fetch user storage info.
+// - TestListFiles_DBGetUserError_StorageInfo: DB error occurs when models.GetUserByUsername is called to fetch user storage info.
 // - TestListFiles_Pagination: If pagination is implemented, test different page sizes, page numbers, and edge cases.
 // - TestListFiles_Sorting: If sorting options are implemented (e.g., by date, name, size), test them.
 //

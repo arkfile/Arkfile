@@ -11,10 +11,10 @@ import (
 )
 
 // setupOPAQUEMocks sets up standardized mock expectations for OPAQUE database operations
-func setupOPAQUEMocks(mock sqlmock.Sqlmock, email string) {
+func setupOPAQUEMocks(mock sqlmock.Sqlmock, username string) {
 	// Mock expectations for unified OPAQUE password system
 	// These mocks align with our opaque_password_records table structure
-	recordIdentifier := email // For account passwords
+	recordIdentifier := username // For account passwords
 
 	// Mock OPAQUE password record retrieval for authentication
 	mock.ExpectQuery(`SELECT opaque_user_record FROM opaque_password_records WHERE record_identifier = \? AND is_active = TRUE`).
@@ -24,20 +24,20 @@ func setupOPAQUEMocks(mock sqlmock.Sqlmock, email string) {
 }
 
 // expectOPAQUERegistration sets up mock expectations for OPAQUE user registration
-func expectOPAQUERegistration(mock sqlmock.Sqlmock, email string) {
+func expectOPAQUERegistration(mock sqlmock.Sqlmock, username string) {
 	// Mock expectations for account password registration in unified system
-	// Note: Account passwords use email as record_identifier
+	// Note: Account passwords use username as record_identifier
 
 	// Mock OPAQUE password record insertion
 	mock.ExpectExec(`INSERT INTO opaque_password_records`).
-		WithArgs(sqlmock.AnyArg(), email, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), username, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 }
 
 // expectOPAQUEAuthentication sets up mock expectations for OPAQUE authentication
-func expectOPAQUEAuthentication(mock sqlmock.Sqlmock, email string) {
+func expectOPAQUEAuthentication(mock sqlmock.Sqlmock, username string) {
 	// Mock expectations for unified OPAQUE password system authentication
-	recordIdentifier := email // For account passwords
+	recordIdentifier := username // For account passwords
 
 	// Mock OPAQUE password record retrieval
 	mock.ExpectQuery(`SELECT opaque_user_record FROM opaque_password_records WHERE record_identifier = \? AND is_active = TRUE`).
@@ -94,7 +94,7 @@ func setupOPAQUETestUser(t *testing.T, db *sql.DB, email, password string) *mode
 	}
 
 	// Create user with OPAQUE account in atomic transaction
-	// For the username migration, we'll use email as username for now during transition
+	// Create user with OPAQUE account in atomic transaction
 	user, err := models.CreateUserWithOPAQUE(db, email, password, &email)
 	require.NoError(t, err, "Failed to create OPAQUE test user")
 	require.NotNil(t, user, "Created user should not be nil")

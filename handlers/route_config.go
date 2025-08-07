@@ -102,8 +102,8 @@ func RegisterRoutes() {
 
 	// User management (admin only) - require TOTP
 	totpProtectedGroup.GET("/api/admin/users", RequireAdmin(ListUsers))
-	totpProtectedGroup.PATCH("/api/admin/users/:email", RequireAdmin(UpdateUser))
-	totpProtectedGroup.DELETE("/api/admin/users/:email", RequireAdmin(DeleteUser))
+	totpProtectedGroup.PATCH("/api/admin/users/:username", RequireAdmin(UpdateUser))
+	totpProtectedGroup.DELETE("/api/admin/users/:username", RequireAdmin(DeleteUser))
 
 	// System statistics (admin only) - require TOTP
 	totpProtectedGroup.GET("/api/admin/stats", RequireAdmin(GetSystemStats))

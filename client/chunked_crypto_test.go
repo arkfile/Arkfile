@@ -200,7 +200,7 @@ func TestChunkedEncryptionRoundTrip(t *testing.T) {
 	// However, it requires a full WASM environment with OPAQUE keys
 
 	testData := []byte("Hello, this is test data for chunked encryption!")
-	username := "test@example.com"
+	username := "test_username_123"
 	fileID := "test-file-123"
 	keyType := "account"
 	chunkSize := 32 // Small chunk for testing
@@ -232,7 +232,7 @@ func TestChunkedEncryptionRoundTrip(t *testing.T) {
 
 	t.Run("Key derivation parameters", func(t *testing.T) {
 		if username == "" {
-			t.Error("User email should not be empty")
+			t.Error("Username should not be empty")
 		}
 
 		if fileID == "" {

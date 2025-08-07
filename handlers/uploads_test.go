@@ -431,7 +431,7 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 // - TestUploadFile_InvalidSHA256Format: Provide an SHA256 sum that is not a 64-character hexadecimal string.
 // - TestUploadFile_InvalidPasswordType: Provide a `passwordType` other than the allowed values (e.g., "account", "custom").
 // - TestUploadFile_FilenameConstraints: If there are filename constraints (e.g., length, allowed characters, path components), test these.
-// - TestUploadFile_GetUserError_PreTransaction: Simulate `models.GetUserByEmail` failing *before* the DB transaction begins (during the initial storage capacity check).
+// - TestUploadFile_GetUserError_PreTransaction: Simulate `models.GetUserByUsername` failing *before* the DB transaction begins (during the initial storage capacity check).
 // - TestUploadFile_TransactionBeginError: Simulate `database.DB.Begin()` failing.
 // - TestUploadFile_DuplicateFilename: (If filenames must be unique per user or globally) Test uploading a file with a name that already exists for that user,
 //   expecting a failure (likely at the metadata insertion step due to a UNIQUE constraint).

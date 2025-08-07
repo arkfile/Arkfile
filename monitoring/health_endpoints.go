@@ -408,7 +408,7 @@ func (hm *HealthMonitor) HealthHandler(c echo.Context) error {
 	logging.LogSecurityEvent(
 		logging.EventKeyHealthCheck,
 		nil, // No IP for health checks
-		nil, // No user email for health checks
+		nil, // No username for health checks
 		nil, // No device profile for health checks
 		map[string]interface{}{
 			"status":       string(status.Status),

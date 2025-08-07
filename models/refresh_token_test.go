@@ -91,17 +91,17 @@ func TestValidateRefreshToken(t *testing.T) {
 	require.NoError(t, err)
 
 	testCases := []struct {
-		name          string
-		token         string
-		expectEmail   string
-		expectErrText string // Substring of the expected error message
-		expectUsed    bool   // Whether the token should be marked as used after validation
+		name           string
+		token          string
+		expectUsername string
+		expectErrText  string // Substring of the expected error message
+		expectUsed     bool   // Whether the token should be marked as used after validation
 	}{
 		{
-			name:        "Valid token",
-			token:       validTokenString,
-			expectEmail: username,
-			expectUsed:  true,
+			name:           "Valid token",
+			token:          validTokenString,
+			expectUsername: username,
+			expectUsed:     true,
 		},
 		{
 			name:          "Expired token",
@@ -132,16 +132,16 @@ func TestValidateRefreshToken(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Execute ValidateRefreshToken
-			validatedEmail, err := ValidateRefreshToken(db, tc.token)
+			validatedUsername, err := ValidateRefreshToken(db, tc.token)
 
 			// Assert: Error expectation
 			if tc.expectErrText != "" {
 				assert.Error(t, err, "Expected an error")
 				assert.Contains(t, err.Error(), tc.expectErrText, "Error message mismatch")
-				assert.Empty(t, validatedEmail, "Email should be empty on error")
+				assert.Empty(t, validatedUsername, "Username should be empty on error")
 			} else {
 				assert.NoError(t, err, "Did not expect an error")
-				assert.Equal(t, tc.expectEmail, validatedEmail, "Validated email mismatch")
+				assert.Equal(t, tc.expectUsername, validatedUsername, "Validated username mismatch")
 			}
 
 			// Assert: Check 'is_used' status in DB

@@ -16,7 +16,7 @@ NC='\033[0m'
 # Configuration
 ARKFILE_PORT=${ARKFILE_PORT:-8080}
 MINIO_PORT=${MINIO_PORT:-9000}
-TEST_EMAIL="admin@example.com"
+TEST_USERNAME="admin-test-user"
 TEST_PASSWORD="TestPassword123_Secure"
 TEST_FILE_CONTENT="Hello World - Arkfile Integration Test"
 TEST_FILE_NAME="integration-test.txt"
@@ -246,7 +246,7 @@ run_guided_web_test() {
     
     echo -e "${YELLOW}${BOLD}📋 STEP 2: User Registration${NC}"
     echo -e "1. Click the ${BOLD}'Register'${NC} button"
-    echo -e "2. Enter email: ${BOLD}${TEST_EMAIL}${NC}"
+    echo -e "2. Enter username: ${BOLD}${TEST_USERNAME}${NC}"
     echo -e "3. Enter password: ${BOLD}${TEST_PASSWORD}${NC}"
     echo -e "4. Click ${BOLD}'Create Account'${NC}"
     echo
@@ -304,7 +304,7 @@ run_guided_web_test() {
     echo -e "${YELLOW}${BOLD}📋 STEP 6: Authentication Test${NC}"
     echo -e "1. In your original browser window, log out of Arkfile"
     echo -e "2. Log back in using the same credentials:"
-    echo -e "   • Email: ${BOLD}${TEST_EMAIL}${NC}"
+    echo -e "   • Username: ${BOLD}${TEST_USERNAME}${NC}"
     echo -e "   • Password: ${BOLD}${TEST_PASSWORD}${NC}"
     echo -e "3. Verify your uploaded file is still visible in the file list"
     echo

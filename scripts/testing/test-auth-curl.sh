@@ -15,6 +15,7 @@ set -euo pipefail
 # Configuration
 ARKFILE_BASE_URL="${ARKFILE_BASE_URL:-https://localhost:4443}"
 INSECURE_FLAG="--insecure"  # For local development with self-signed certs
+TEST_USERNAME="${TEST_USERNAME:-auth-test-user-12345}"
 TEST_EMAIL="${TEST_EMAIL:-auth-test@example.com}"
 TEST_PASSWORD="${TEST_PASSWORD:-SecureTestPassword123456789!}"
 TEMP_DIR=$(mktemp -d)
@@ -227,14 +228,14 @@ phase_cleanup_and_health() {
     local timer_start
     [ "$PERFORMANCE_MODE" = true ] && timer_start=$(start_timer)
     
-    log "Cleaning up existing test user: $TEST_EMAIL"
+    log "Cleaning up existing test user: $TEST_USERNAME"
     
     # Clean up all test user data
-    execute_db_query "DELETE FROM users WHERE email = '$TEST_EMAIL'" "Remove user from users table" >/dev/null || true
-    execute_db_query "DELETE FROM opaque_user_data WHERE user_email = '$TEST_EMAIL'" "Remove OPAQUE data" >/dev/null || true
-    execute_db_query "DELETE FROM user_totp WHERE user_email = '$TEST_EMAIL'" "Remove TOTP data" >/dev/null || true
-    execute_db_query "DELETE FROM totp_usage_log WHERE user_email = '$TEST_EMAIL'" "Remove TOTP usage logs" >/dev/null || true
-    execute_db_query "DELETE FROM totp_backup_usage WHERE user_email = '$TEST_EMAIL'" "Remove backup code logs" >/dev/null || true
+    execute_db_query "DELETE FROM users WHERE username = '$TEST_USERNAME'" "Remove user from users table" >/dev/null || true
+    execute_db_query "DELETE FROM opaque_user_data WHERE username = '$TEST_USERNAME'" "Remove OPAQUE data" >/dev/null || true
+    execute_db_query "DELETE FROM user_totp WHERE username = '$TEST_USERNAME'" "Remove TOTP data" >/dev/null || true
+    execute_db_query "DELETE FROM totp_usage_log WHERE username = '$TEST_USERNAME'" "Remove TOTP usage logs" >/dev/null || true
+    execute_db_query "DELETE FROM totp_backup_usage WHERE username = '$TEST_USERNAME'" "Remove backup code logs" >/dev/null || true
     
     success "Test user cleanup completed"
     
@@ -294,7 +295,7 @@ phase_registration() {
     local timer_start
     [ "$PERFORMANCE_MODE" = true ] && timer_start=$(start_timer)
     
-    log "Registering new user: $TEST_EMAIL"
+    log "Registering new user: $TEST_USERNAME"
     
     # Test device capability detection first
     log "Testing device capability detection..."
@@ -393,7 +394,7 @@ phase_user_approval() {
     log "Approving user in database: $TEST_EMAIL"
     
     local response
-    response=$(execute_db_query "UPDATE users SET is_approved = 1, approved_by = 'auth-test', approved_at = CURRENT_TIMESTAMP WHERE email = '$TEST_EMAIL'" "User approval")
+    response=$(execute_db_query "UPDATE users SET is_approved = 1, approved_by = 'auth-test', approved_at = CURRENT_TIMESTAMP WHERE username = '$TEST_USERNAME'" "User approval")
     
     # Extract just the JSON part of the response (ignore log lines)
     local json_response
@@ -426,7 +427,7 @@ phase_user_approval() {
     
     # Verify approval
     local verify_response
-    verify_response=$(query_db "SELECT email, is_approved FROM users WHERE email = '$TEST_EMAIL'" "Verify user approval")
+    verify_response=$(query_db "SELECT username, is_approved FROM users WHERE username = '$TEST_USERNAME'" "Verify user approval")
     
     # Extract JSON from verification response
     local verify_json
@@ -647,7 +648,7 @@ manually_enable_totp_database() {
     log "Manually enabling TOTP in database for testing..."
     
     local manual_response
-    manual_response=$(execute_db_query "UPDATE user_totp SET enabled = 1, setup_completed = 1 WHERE user_email = '$TEST_EMAIL'" "Manual TOTP enabling")
+    manual_response=$(execute_db_query "UPDATE user_totp SET enabled = 1, setup_completed = 1 WHERE username = '$TEST_USERNAME'" "Manual TOTP enabling")
     
     if echo "$manual_response" | jq -e '.results[0].rows_affected' >/dev/null 2>&1; then
         local rows_affected
@@ -667,7 +668,7 @@ verify_totp_database_status() {
     log "Verifying TOTP status in database..."
     
     local verify_response
-    verify_response=$(query_db "SELECT enabled, setup_completed FROM user_totp WHERE user_email = '$TEST_EMAIL'" "TOTP database verification")
+    verify_response=$(query_db "SELECT enabled, setup_completed FROM user_totp WHERE username = '$TEST_USERNAME'" "TOTP database verification")
     
     debug "Database TOTP verification: $verify_response"
     
@@ -733,7 +734,7 @@ setup_test_user_for_endpoint_testing() {
     fi
     
     # Approve user in database
-    execute_db_query "UPDATE users SET is_approved = 1, approved_by = 'endpoint-test', approved_at = CURRENT_TIMESTAMP WHERE email = '$TEST_EMAIL'" "User approval for endpoint testing" >/dev/null || true
+    execute_db_query "UPDATE users SET is_approved = 1, approved_by = 'endpoint-test', approved_at = CURRENT_TIMESTAMP WHERE username = '$TEST_USERNAME'" "User approval for endpoint testing" >/dev/null || true
     
     # Login user to get full token
     local login_request
@@ -1383,11 +1384,11 @@ phase_final_cleanup() {
     log "Removing test user data from database..."
     
     # Clean up all test user data
-    execute_db_query "DELETE FROM users WHERE email = '$TEST_EMAIL'" "Remove test user" >/dev/null || true
-    execute_db_query "DELETE FROM opaque_user_data WHERE user_email = '$TEST_EMAIL'" "Remove OPAQUE data" >/dev/null || true
-    execute_db_query "DELETE FROM user_totp WHERE user_email = '$TEST_EMAIL'" "Remove TOTP data" >/dev/null || true
-    execute_db_query "DELETE FROM totp_usage_log WHERE user_email = '$TEST_EMAIL'" "Remove TOTP logs" >/dev/null || true
-    execute_db_query "DELETE FROM totp_backup_usage WHERE user_email = '$TEST_EMAIL'" "Remove backup logs" >/dev/null || true
+    execute_db_query "DELETE FROM users WHERE username = '$TEST_USERNAME'" "Remove test user" >/dev/null || true
+    execute_db_query "DELETE FROM opaque_user_data WHERE username = '$TEST_USERNAME'" "Remove OPAQUE data" >/dev/null || true
+    execute_db_query "DELETE FROM user_totp WHERE username = '$TEST_USERNAME'" "Remove TOTP data" >/dev/null || true
+    execute_db_query "DELETE FROM totp_usage_log WHERE username = '$TEST_USERNAME'" "Remove TOTP logs" >/dev/null || true
+    execute_db_query "DELETE FROM totp_backup_usage WHERE username = '$TEST_USERNAME'" "Remove backup logs" >/dev/null || true
     
     success "Final cleanup completed"
     

@@ -265,21 +265,21 @@ func TestValidateTOTPCode_Success(t *testing.T) {
 // 	require.NoError(t, err)
 
 // 	// Mock getting TOTP data
-// 	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE user_email = \?`).
-// 		WithArgs(testEmail).
+// 	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
+// 		WithArgs(testUsername).
 // 		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
 //			AddRow(secretEncrypted, []byte("encrypted-backup-codes"), true, true, time.Now(), nil))
 
 // 	// Mock replay check - code already used
-// 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM totp_usage_log WHERE user_email = \? AND code_hash = \? AND window_start = \?`).
-// 		WithArgs(testEmail, sqlmock.AnyArg(), sqlmock.AnyArg()).
+// 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM totp_usage_log WHERE username = \? AND code_hash = \? AND window_start = \?`).
+// 		WithArgs(testUsername, sqlmock.AnyArg(), sqlmock.AnyArg()).
 // 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1)) // Code already used
 
 // 	// Generate valid code
 // 	testTime := time.Now()
 // 	validCode := generateTestTOTPCode(t, testSecretB32, testTime)
 
-// 	err = ValidateTOTPCode(db, testEmail, validCode, sessionKey)
+// 	err = ValidateTOTPCode(db, testUsername, validCode, sessionKey)
 // 	require.Error(t, err)
 // 	assert.Contains(t, err.Error(), "replay attack detected")
 

@@ -526,7 +526,7 @@ if [ "$FULL_SETUP" = true ]; then
             echo "   (or https://localhost - accept certificate warning)"
             echo
             echo "2. 👤 Register test user:"
-            echo "   Email: admin@test.local"
+            echo "   Username: admin-test-user"
             echo "   Password: AdminTest123!@# (or your choice)"
             echo
             echo "3. 🔐 Login with same credentials"

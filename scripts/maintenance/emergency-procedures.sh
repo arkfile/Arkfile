@@ -312,18 +312,18 @@ investigate_suspicious_activity() {
 isolate_user_account() {
     log_header "USER ACCOUNT ISOLATION"
     
-    local user_email=""
+    local username=""
     echo ""
-    read -p "Enter the email address of the compromised user account: " user_email
+    read -p "Enter the username of the compromised user account: " username
     
-    if [[ -z "$user_email" ]]; then
-        log_warning "No email address provided - isolation cancelled"
+    if [[ -z "$username" ]]; then
+        log_warning "No username provided - isolation cancelled"
         return 1
     fi
     
-    log_warning "Initiating isolation procedure for user: $user_email"
+    log_warning "Initiating isolation procedure for user: $username"
     
-    if ! confirm_action "ISOLATE USER ACCOUNT: $user_email - This will disable the account and revoke all tokens"; then
+    if ! confirm_action "ISOLATE USER ACCOUNT: $username - This will disable the account and revoke all tokens"; then
         log_warning "User isolation cancelled"
         return 1
     fi
@@ -335,15 +335,15 @@ isolate_user_account() {
             log_action "Disabling user account in database..."
             
             # Set user as not approved and add security flag
-            sqlite3 "$db_file" "UPDATE users SET is_approved = 0, updated_at = datetime('now') WHERE email = '$user_email';" 2>/dev/null || true
+            sqlite3 "$db_file" "UPDATE users SET is_approved = 0, updated_at = datetime('now') WHERE username = '$username';" 2>/dev/null || true
             
             # Revoke all refresh tokens for the user
-            sqlite3 "$db_file" "UPDATE refresh_tokens SET revoked = 1, updated_at = datetime('now') WHERE user_email = '$user_email';" 2>/dev/null || true
+            sqlite3 "$db_file" "UPDATE refresh_tokens SET revoked = 1, updated_at = datetime('now') WHERE username = '$username';" 2>/dev/null || true
             
             log_action "User account disabled and all tokens revoked"
             
             # Log security event
-            sqlite3 "$db_file" "INSERT INTO security_events (event_type, user_email, details, created_at) VALUES ('user_isolation', '$user_email', 'Account isolated due to security incident', datetime('now'));" 2>/dev/null || true
+            sqlite3 "$db_file" "INSERT INTO security_events (event_type, username, details, created_at) VALUES ('user_isolation', '$username', 'Account isolated due to security incident', datetime('now'));" 2>/dev/null || true
             
             log_action "Security event logged for user isolation"
         else
@@ -357,11 +357,11 @@ isolate_user_account() {
     log_info "Checking for active user sessions..."
     
     log_emergency "USER ACCOUNT ISOLATION COMPLETE"
-    log_warning "User $user_email has been isolated and all tokens revoked"
+    log_warning "User $username has been isolated and all tokens revoked"
     
     echo ""
     echo -e "${RED}${BOLD}USER ISOLATION COMPLETE${NC}"
-    echo -e "${YELLOW}User: $user_email${NC}"
+    echo -e "${YELLOW}User: $username${NC}"
     echo -e "${YELLOW}Account disabled and all tokens revoked${NC}"
     echo -e "${YELLOW}Monitor for any continued suspicious activity${NC}"
 }
@@ -557,7 +557,7 @@ OPTIONS:
     --shutdown                  Perform emergency service shutdown
     --rotate-keys               Rotate all cryptographic keys
     --investigate               Investigate suspicious activity
-    --isolate-user EMAIL        Isolate specific user account
+    --isolate-user USERNAME     Isolate specific user account
     --reset-rate-limit          Reset rate limiting data
     --forensic-snapshot         Create forensic snapshot
     --menu                      Show interactive emergency menu (default)
@@ -566,7 +566,7 @@ EXAMPLES:
     $0                          # Show interactive menu
     $0 --shutdown               # Emergency shutdown
     $0 --investigate            # Investigate suspicious activity
-    $0 --isolate-user user@example.com
+    $0 --isolate-user john.doe.2024
     $0 --forensic-snapshot      # Create forensic snapshot
 
 IMPORTANT:
@@ -581,7 +581,7 @@ EOF
 # Main execution
 main() {
     local action="menu"
-    local user_email=""
+    local username=""
     
     # Parse command line arguments
     while [[ $# -gt 0 ]]; do
@@ -604,7 +604,7 @@ main() {
                 ;;
             --isolate-user)
                 action="isolate-user"
-                user_email="$2"
+                username="$2"
                 shift 2
                 ;;
             --reset-rate-limit)
@@ -693,23 +693,54 @@ main() {
             investigate_suspicious_activity
             ;;
         "isolate-user")
-            if [[ -z "$user_email" ]]; then
-                echo "Error: User email required for isolation"
-                echo "Usage: $0 --isolate-user EMAIL"
+            if [[ -z "$username" ]]; then
+                echo "Error: Username required for isolation"
+                echo "Usage: $0 --isolate-user USERNAME"
                 exit 1
             fi
-            # Set the email for the function
+            # Use the global isolate_user_account function with the provided username
             isolate_user_account() {
                 log_header "USER ACCOUNT ISOLATION"
-                log_warning "Initiating isolation procedure for user: $user_email"
+                log_warning "Initiating isolation procedure for user: $username"
                 
-                if ! confirm_action "ISOLATE USER ACCOUNT: $user_email - This will disable the account and revoke all tokens"; then
+                if ! confirm_action "ISOLATE USER ACCOUNT: $username - This will disable the account and revoke all tokens"; then
                     log_warning "User isolation cancelled"
                     return 1
                 fi
                 
-                # Rest of the isolation logic here...
-                # (Implementation continues as in the original function)
+                # Disable user account in database
+                if command -v sqlite3 >/dev/null 2>&1; then
+                    db_file="$ARKFILE_HOME/data/arkfile.db"
+                    if [[ -f "$db_file" ]]; then
+                        log_action "Disabling user account in database..."
+                        
+                        # Set user as not approved and add security flag
+                        sqlite3 "$db_file" "UPDATE users SET is_approved = 0, updated_at = datetime('now') WHERE username = '$username';" 2>/dev/null || true
+                        
+                        # Revoke all refresh tokens for the user
+                        sqlite3 "$db_file" "UPDATE refresh_tokens SET revoked = 1, updated_at = datetime('now') WHERE username = '$username';" 2>/dev/null || true
+                        
+                        log_action "User account disabled and all tokens revoked"
+                        
+                        # Log security event
+                        sqlite3 "$db_file" "INSERT INTO security_events (event_type, username, details, created_at) VALUES ('user_isolation', '$username', 'Account isolated due to security incident', datetime('now'));" 2>/dev/null || true
+                        
+                        log_action "Security event logged for user isolation"
+                    else
+                        log_critical "Database not accessible - manual intervention required"
+                    fi
+                else
+                    log_critical "SQLite3 not available - cannot modify database"
+                fi
+                
+                log_emergency "USER ACCOUNT ISOLATION COMPLETE"
+                log_warning "User $username has been isolated and all tokens revoked"
+                
+                echo ""
+                echo -e "${RED}${BOLD}USER ISOLATION COMPLETE${NC}"
+                echo -e "${YELLOW}User: $username${NC}"
+                echo -e "${YELLOW}Account disabled and all tokens revoked${NC}"
+                echo -e "${YELLOW}Monitor for any continued suspicious activity${NC}"
             }
             isolate_user_account
             ;;

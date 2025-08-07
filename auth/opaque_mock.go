@@ -17,7 +17,7 @@ type MockOPAQUEProvider struct {
 	mu                 sync.RWMutex
 	serverPublicKey    []byte
 	serverPrivateKey   []byte
-	registrations      map[string][]byte // email -> userRecord
+	registrations      map[string][]byte // username -> userRecord
 	configuredFailures map[string]error  // operation -> error to return
 	callHistory        []MockOPAQUECall  // track calls for verification
 }
@@ -25,7 +25,7 @@ type MockOPAQUEProvider struct {
 // MockOPAQUECall represents a tracked function call for test verification
 type MockOPAQUECall struct {
 	Operation string
-	Email     string
+	Username  string
 	Success   bool
 	Error     error
 }

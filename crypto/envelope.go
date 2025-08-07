@@ -17,7 +17,7 @@ type KeyInfo struct {
 	ID        string  // User-friendly identifier
 	Type      KeyType // Account or custom
 	ExportKey []byte  // OPAQUE export key (for both account and custom)
-	UserEmail string  // User email for HKDF context
+	Username  string  // Username for HKDF context
 	FileID    string  // File ID for HKDF context
 	Hint      string  // Optional hint for custom passwords
 }
@@ -42,10 +42,10 @@ func CreateSingleKeyEnvelope(fek []byte, keyInfo KeyInfo) ([]byte, error) {
 	var err error
 	if keyInfo.Type == KeyTypeAccount {
 		// Use account file key derivation
-		kek, err = DeriveAccountFileKey(keyInfo.ExportKey, keyInfo.UserEmail, keyInfo.FileID)
+		kek, err = DeriveAccountFileKey(keyInfo.ExportKey, keyInfo.Username, keyInfo.FileID)
 	} else {
 		// Use custom file key derivation (different HKDF context)
-		kek, err = DeriveOPAQUEFileKey(keyInfo.ExportKey, keyInfo.FileID, keyInfo.UserEmail)
+		kek, err = DeriveOPAQUEFileKey(keyInfo.ExportKey, keyInfo.FileID, keyInfo.Username)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive KEK: %w", err)

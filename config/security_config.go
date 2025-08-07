@@ -47,7 +47,7 @@ type RateLimitConfig struct {
 
 	// Account operations (per hour)
 	ProfileAccessLimit int `json:"profile_access_limit"` // 100 per hour
-	EmailCheckLimit    int `json:"email_check_limit"`    // 20 per hour
+	UsernameCheckLimit int `json:"username_check_limit"` // 20 per hour
 
 	// Administrative operations (per hour)
 	UserManagementLimit int `json:"user_management_limit"` // 50 per hour
@@ -154,7 +154,7 @@ func GetDefaultSecurityConfig() SecurityConfig {
 
 			// Account operation limits
 			ProfileAccessLimit: 100, // 100 per hour
-			EmailCheckLimit:    20,  // 20 per hour
+			UsernameCheckLimit: 20,  // 20 per hour
 
 			// Admin operation limits
 			UserManagementLimit: 50, // 50 per hour
@@ -304,14 +304,14 @@ func GetRateLimitedEndpoints() []EndpointConfig {
 			Description: "User profile access",
 		},
 		{
-			Path:        "/check-email",
+			Path:        "/check-username",
 			Method:      "POST",
 			Category:    "account",
 			Limit:       20,
 			WindowType:  "hour",
 			WindowSize:  1 * time.Hour,
 			Enabled:     true,
-			Description: "Email existence checking",
+			Description: "Username existence checking",
 		},
 	}
 }

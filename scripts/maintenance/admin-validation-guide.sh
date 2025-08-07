@@ -16,7 +16,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration
-TEST_EMAIL="admin@test.local"
+TEST_USERNAME="admin-test-user"
 TEST_PASSWORD="AdminTest123!@#"
 TEST_FILE_CONTENT="Hello Arkfile! This is a test file for encryption validation."
 START_TIME=$(date +%s)
@@ -34,7 +34,7 @@ echo -e "${BLUE}║  deployment with real-world user workflows and backend verif
 echo -e "${BLUE}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
 echo
 echo -e "${CYAN}Start Time: $(date)${NC}"
-echo -e "${CYAN}Test User: ${TEST_EMAIL}${NC}"
+echo -e "${CYAN}Test User: ${TEST_USERNAME}${NC}"
 echo
 
 # Function to increment test counters
@@ -217,28 +217,28 @@ echo -e "${BLUE}👤 STEP 4: USER REGISTRATION TEST (OPAQUE)${NC}"
 echo "==========================================="
 echo
 echo -e "${CYAN}Test Credentials:${NC}"
-echo -e "   Email: ${GREEN}${TEST_EMAIL}${NC}"
+echo -e "   Username: ${GREEN}${TEST_USERNAME}${NC}"
 echo -e "   Password: ${GREEN}${TEST_PASSWORD}${NC}"
 echo
 
 wait_for_user "1. Click 'Register' on the web interface
-2. Enter Email: ${TEST_EMAIL}
+2. Enter Username: ${TEST_USERNAME}
 3. Enter Password: ${TEST_PASSWORD}
 4. Verify password requirements show green checkmarks
 5. Click 'Register' button
 6. Look for 'Registration successful' message"
 
 # Backend verification for user registration
-validate_backend "registration" "$TEST_EMAIL" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT email FROM users WHERE email='$TEST_EMAIL';\" 2>/dev/null" "User registration in database"
+validate_backend "registration" "$TEST_USERNAME" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT username FROM users WHERE username='$TEST_USERNAME';\" 2>/dev/null" "User registration in database"
 
-validate_backend "opaque_envelope" "" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT LENGTH(opaque_envelope) FROM users WHERE email='$TEST_EMAIL';\" 2>/dev/null" "OPAQUE envelope storage"
+validate_backend "opaque_data" "" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT username FROM opaque_user_data WHERE username='$TEST_USERNAME';\" 2>/dev/null" "OPAQUE authentication data"
 
 echo -e "${BLUE}🔐 STEP 5: USER LOGIN TEST (OPAQUE)${NC}"
 echo "==================================="
 echo
 
 wait_for_user "1. Use the same login credentials:
-   Email: ${TEST_EMAIL}
+   Username: ${TEST_USERNAME}
    Password: ${TEST_PASSWORD}
 2. Click 'Login' button
 3. Verify redirect to file upload interface
@@ -265,9 +265,9 @@ wait_for_user "1. Click 'Choose File' and select: /tmp/arkfile-test.txt
 6. Verify file appears in 'Your Files' section with 🔒 icon"
 
 # Backend verification for file upload
-validate_backend "file_upload" "$TEST_EMAIL" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT user_email FROM files WHERE user_email='$TEST_EMAIL' ORDER BY created_at DESC LIMIT 1;\" 2>/dev/null" "File upload in database"
+validate_backend "file_upload" "$TEST_USERNAME" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT fm.owner_username FROM file_metadata fm WHERE fm.owner_username='$TEST_USERNAME' ORDER BY fm.upload_date DESC LIMIT 1;\" 2>/dev/null" "File upload in database"
 
-validate_backend "file_encryption" "encrypted" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT encrypted FROM files WHERE user_email='$TEST_EMAIL' ORDER BY created_at DESC LIMIT 1;\" 2>/dev/null" "File encryption flag"
+validate_backend "file_encryption" "custom" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT fm.password_type FROM file_metadata fm WHERE fm.owner_username='$TEST_USERNAME' ORDER BY fm.upload_date DESC LIMIT 1;\" 2>/dev/null" "File encryption type"
 
 # Check for encrypted files in storage
 storage_files=$(find /opt/arkfile/var/lib/storage/ -name "*.enc" 2>/dev/null | wc -l)
@@ -317,7 +317,7 @@ wait_for_user "1. Click 'Share' button for your uploaded file
 6. Verify the file downloads successfully in the private window"
 
 # Check for share records in database
-validate_backend "file_sharing" "" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT COUNT(*) FROM file_shares WHERE file_id IN (SELECT id FROM files WHERE user_email='$TEST_EMAIL');\" 2>/dev/null" "File sharing record creation"
+validate_backend "file_sharing" "" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT COUNT(*) FROM file_share_keys fsk JOIN file_metadata fm ON fsk.file_id = fm.filename WHERE fm.owner_username='$TEST_USERNAME';\" 2>/dev/null" "File sharing record creation"
 
 echo -e "${BLUE}🔧 STEP 9: BACKEND VERIFICATION SUMMARY${NC}"
 echo "========================================"
