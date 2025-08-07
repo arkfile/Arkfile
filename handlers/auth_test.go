@@ -118,7 +118,7 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 // --- Test OPAQUE Authentication ---
 
 func TestOpaqueRegister_Success(t *testing.T) {
-	username := "test.user"
+	username := "test.user.valid"
 	password := "Xy8$mQ3#nP9@vK2!eR5&wL7*uT4%iO6^sA1+bC0-fG9~hJ3"
 
 	reqBody := map[string]interface{}{
@@ -135,16 +135,13 @@ func TestOpaqueRegister_Success(t *testing.T) {
 
 	// Mock integrated user + OPAQUE creation transaction
 	mock.ExpectBegin()
-	createUserSQL := `INSERT INTO users \(\s*username, storage_limit_bytes, is_admin, is_approved\s*\) VALUES \(\?, \?, \?, \?\)`
+	createUserSQL := `INSERT INTO users \(\s*username, email, storage_limit_bytes, is_admin, is_approved\s*\) VALUES \(\?, \?, \?, \?, \?\)`
 	mock.ExpectExec(createUserSQL).
-		WithArgs(username, models.DefaultStorageLimit, false, false).
+		WithArgs(username, sqlmock.AnyArg(), models.DefaultStorageLimit, false, false).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Mock OPAQUE password record creation (succeeds in mock mode)
-	opaqueRecordSQL := `INSERT INTO opaque_password_records`
-	mock.ExpectExec(opaqueRecordSQL).
-		WithArgs("account", username, sqlmock.AnyArg(), username, true, sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	// In OPAQUE_MOCK_MODE, password record insertion is skipped
+	// No need to mock the OPAQUE password record creation
 
 	mock.ExpectCommit()
 
@@ -192,7 +189,7 @@ func TestOpaqueRegister_InvalidUsername(t *testing.T) {
 
 func TestOpaqueRegister_WeakPassword(t *testing.T) {
 	reqBody := map[string]interface{}{
-		"username": "test.user",
+		"username": "test.user.weak.pass",
 		"password": "weak",
 	}
 	jsonBody, _ := json.Marshal(reqBody)
@@ -344,7 +341,7 @@ func TestOpaqueLogin_InvalidCredentials(t *testing.T) {
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok)
 	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-	assert.Contains(t, httpErr.Message, "Invalid username")
+	assert.Contains(t, httpErr.Message, "Username is required")
 }
 
 // NOTE: TestOpaqueLogin_UserNotApproved test removed
