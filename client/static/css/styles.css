@@ -1,13 +1,16 @@
 :root {
     --primary-color: #2c3e50;
-    --secondary-color: #3498db;
-    --background-color: #ecf0f1;
+    --secondary-color: #dc2626;
+    --background-color: #f8f9fa;
     --text-color: #2c3e50;
-    --error-color: #e74c3c;
-    --success-color: #27ae60;
-    --weak-password: #ff4d4d;
-    --moderate-password: #ffdd00;
-    --strong-password: #00cc44;
+    --error-color: #dc2626;
+    --success-color: #059669;
+    --weak-password: #dc2626;
+    --moderate-password: #ea580c;
+    --strong-password: #059669;
+    --accent-color: #991b1b;
+    --light-red: #fef2f2;
+    --medium-red: #fecaca;
 }
 
 * {
@@ -79,7 +82,7 @@ button {
 }
 
 button:hover {
-    background-color: #2980b9;
+    background-color: var(--accent-color);
 }
 
 .hidden {
@@ -357,7 +360,7 @@ button:hover {
 }
 
 .strength-meter.weak {
-    background-color: #ffaa00;
+    background-color: #f59e0b;
     width: 40%;
 }
 
@@ -367,7 +370,7 @@ button:hover {
 }
 
 .strength-meter.strong {
-    background-color: #00cc44;
+    background-color: #10b981;
     width: 80%;
 }
 
@@ -580,8 +583,8 @@ button:hover {
 }
 
 .btn-primary:hover {
-    background-color: #2980b9;
-    border-color: #2980b9;
+    background-color: var(--accent-color);
+    border-color: var(--accent-color);
 }
 
 .btn-secondary {

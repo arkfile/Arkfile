@@ -4,14 +4,82 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="x-tls-version" content="">  <!-- Will be populated by server middleware -->
-    <title>Arkfile - Secure File Sharing</title>
+    <title>Arkfile - Zero-knowledge Encrypted File Vault</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="stylesheet" href="/css/styles.css">
+    <link rel="stylesheet" href="/css/home.css">
 </head>
 <body>
-    <div class="container">
+    <div class="home-container">
+        <!-- Hero Section -->
+        <section class="hero-section">
+            <h1 class="hero-title">Arkfile</h1>
+            <p class="hero-tagline">Zero-knowledge Encrypted File Vault</p>
+            <div class="hero-buttons">
+                <button class="hero-btn primary" id="get-started-btn">Get Started</button>
+                <button class="hero-btn secondary" id="login-btn">Login</button>
+            </div>
+        </section>
+
+        <!-- Features Section -->
+        <section class="features-section">
+            <h2 class="section-title">Arkfile Vault Features</h2>
+            <div class="features-grid">
+                <div class="feature-card security-highlight">
+                    <div class="feature-icon">🔐</div>
+                    <h3 class="feature-title">Client-Side Encryption</h3>
+                    <p class="feature-description">
+                        All files are encrypted in your browser before upload. Your data is protected by AES-256-GCM encryption, ensuring that even we cannot access your files.
+                    </p>
+                </div>
+
+                <div class="feature-card security-highlight">
+                    <div class="feature-icon">🛡️</div>
+                    <h3 class="feature-title">OPAQUE Authentication</h3>
+                    <p class="feature-description">
+                        Advanced password authentication using the OPAQUE protocol. Your password never leaves your device, providing perfect security even against server compromises.
+                    </p>
+                </div>
+
+                <div class="feature-card security-highlight">
+                    <div class="feature-icon">📱</div>
+                    <h3 class="feature-title">Mandatory 2FA</h3>
+                    <p class="feature-description">
+                        Time-based One-Time Passwords (TOTP) are required for all accounts, with support for Google Authenticator, Authy, and other standard apps.
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">🔗</div>
+                    <h3 class="feature-title">Secure File Sharing</h3>
+                    <p class="feature-description">
+                        Share files with additional password protection using Argon2id key derivation. Recipients don't need accounts - just the share password.
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">☁️</div>
+                    <h3 class="feature-title">Flexible Storage</h3>
+                    <p class="feature-description">
+                        Built on MinIO with support for S3-compatible storage providers including Backblaze B2, Wasabi, Vultr Object Storage, and more.
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">🔄</div>
+                    <h3 class="feature-title">Redundant Backups</h3>
+                    <p class="feature-description">
+                        Your encrypted files are safely stored with built-in redundancy and can be replicated across multiple storage providers for maximum reliability.
+                    </p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Authentication Modal (hidden by default) -->
+    <div class="container hidden" id="app-container">
         <header>
-            <h1>Secure File Sharing</h1>
+            <h1>Arkfile - Secure File Sharing</h1>
         </header>
 
         <div class="auth-section" id="auth-section">
@@ -19,8 +87,9 @@
                 <h2>Login</h2>
                 <input type="text" id="login-username" placeholder="Username">
                 <input type="password" id="login-password" placeholder="Password">
-                <button onclick="login()">Login</button>
-                <p>Don't have an account? <a href="#" onclick="toggleAuthForm()">Register</a></p>
+                <button type="button" id="login-submit-btn">Login</button>
+                <p>Don't have an account? <a href="#" id="show-register-link">Register</a></p>
+                <p><a href="#" id="back-to-home-link">← Back to Home</a></p>
             </div>
 
             <div class="register-form hidden" id="register-form">
@@ -43,8 +112,9 @@
                         <div id="password-match-status" class="match-status"></div>
                     </div>
                 </div>
-                <button onclick="register()">Register</button>
-                <p>Already have an account? <a href="#" onclick="toggleAuthForm()">Login</a></p>
+                <button type="button" id="register-submit-btn">Register</button>
+                <p>Already have an account? <a href="#" id="show-login-link">Login</a></p>
+                <p><a href="#" id="back-to-home-from-register-link">← Back to Home</a></p>
             </div>
 
             <!-- TOTP Setup Section -->
@@ -68,7 +138,7 @@
 
                 <div class="totp-step">
                     <h3>📲 Step 2: Scan QR Code</h3>
-                    <button onclick="generateTOTPSetup()" id="generate-totp-btn">Generate Setup Code</button>
+                    <button type="button" id="generate-totp-btn">Generate Setup Code</button>
                     <div id="qr-code-section" class="hidden">
                         <div class="qr-code-container">
                             <div id="qr-code-display"></div>
@@ -83,7 +153,7 @@
                 <div class="totp-step">
                     <h3>🔢 Step 3: Enter Verification Code</h3>
                     <input type="text" id="totp-verify-code" placeholder="000000" maxlength="6" class="totp-input">
-                    <button onclick="verifyTOTPSetup()" id="verify-totp-btn" disabled>Verify & Complete Registration</button>
+                    <button type="button" id="verify-totp-btn" disabled>Verify & Complete Registration</button>
                     <div id="totp-verification-status"></div>
                 </div>
 
@@ -94,12 +164,12 @@
                     </div>
                     <div class="backup-codes-container">
                         <ul id="backup-codes-list"></ul>
-                        <button onclick="downloadBackupCodes()" class="secondary-button">Download Backup Codes</button>
+                        <button type="button" id="download-backup-codes-btn" class="secondary-button">Download Backup Codes</button>
                     </div>
                 </div>
 
                 <div class="totp-navigation">
-                    <button onclick="cancelRegistration()" class="secondary-button">Cancel Registration</button>
+                    <button type="button" id="cancel-registration-btn" class="secondary-button">Cancel Registration</button>
                 </div>
             </div>
         </div>
@@ -108,8 +178,8 @@
             <!-- User navigation bar -->
             <div class="user-nav">
                 <div class="user-controls">
-                    <a href="#" onclick="toggleSecuritySettings(); return false;" class="nav-link">Security Settings</a>
-                    <a href="#" onclick="logout(); return false;" class="nav-link logout-link">Logout</a>
+                    <a href="#" id="security-settings-toggle" class="nav-link">Security Settings</a>
+                    <a href="#" id="logout-link" class="nav-link logout-link">Logout</a>
                 </div>
                 
                 <!-- Security settings panel (hidden by default) -->
@@ -117,7 +187,7 @@
                     <h3>Security Settings</h3>
                     <div class="setting-item">
                         <p><strong>Session Security:</strong> For maximum security, you can revoke access from all devices. This will sign you out everywhere.</p>
-                        <button onclick="revokeAllSessions()" class="danger-button">Revoke All Sessions</button>
+                        <button type="button" id="revoke-sessions-btn" class="danger-button">Revoke All Sessions</button>
                     </div>
                 </div>
             </div>
@@ -155,7 +225,7 @@
                 </div>
                 
                 <input type="text" id="passwordHint" placeholder="Password Hint (optional)">
-                <button onclick="uploadFile()">Upload</button>
+                <button type="button" id="upload-file-btn">Upload</button>
             </div>
 
             <div class="files-list">
@@ -167,16 +237,5 @@
 
     <script src="/wasm_exec.js"></script>
     <script src="/js/dist/app.js"></script>
-    
-    <script>
-        // Update TLS version meta tag from response header
-        document.addEventListener('DOMContentLoaded', () => {
-            const tlsVersionMeta = document.querySelector('meta[name="x-tls-version"]');
-            const tlsVersion = document.querySelector('header')?.getAttribute('x-tls-version');
-            if (tlsVersion) {
-                tlsVersionMeta.content = tlsVersion;
-            }
-        });
-    </script>
 </body>
 </html>

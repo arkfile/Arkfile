@@ -43,7 +43,7 @@ h2 {
 }
 
 #file-input:hover {
-    border-color: #3498db;
+    border-color: #dc2626;
 }
 
 #password-type {
@@ -63,7 +63,7 @@ h2 {
 .strength-meter {
     height: 6px;
     width: 0%;
-    background-color: #ff4d4d;
+    background-color: #dc2626;
     margin-top: 10px;
     border-radius: 3px;
     transition: width 0.3s, background-color 0.3s;
@@ -78,7 +78,7 @@ h2 {
 }
 
 #upload-button, #refresh-button {
-    background-color: #3498db;
+    background-color: #dc2626;
     color: white;
     border: none;
     padding: 12px 20px;
@@ -89,7 +89,7 @@ h2 {
 }
 
 #upload-button:hover, #refresh-button:hover {
-    background-color: #2980b9;
+    background-color: #991b1b;
 }
 
 #refresh-button {
@@ -236,11 +236,11 @@ h2 {
 }
 
 .download-button {
-    background-color: #3498db;
+    background-color: #dc2626;
 }
 
 .share-button {
-    background-color: #9b59b6;
+    background-color: #ea580c;
 }
 
 /* Message box */
@@ -385,7 +385,7 @@ h2 {
 }
 
 .share-link-container button {
-    background-color: #3498db;
+    background-color: #dc2626;
     color: white;
     border: none;
     padding: 10px 15px;
@@ -413,7 +413,7 @@ h2 {
 }
 
 .modal-actions .submit-button {
-    background-color: #3498db;
+    background-color: #dc2626;
     color: white;
 }
 

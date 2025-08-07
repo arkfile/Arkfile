@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Arkfile Phase 6E: Complete Share Workflow Test Script
+# Arkfile Phase 6F: Complete Share Workflow Test Script
 # Purpose: Full end-to-end share system validation
 # Security Goal: Verify complete share lifecycle with proper security measures
 
@@ -15,13 +15,14 @@ NC='\033[0m' # No Color
 
 # Configuration
 SERVER_URL="http://localhost:8080"
-TEST_USERNAME="test-share-user"
+HTTPS_URL="https://localhost:4443"
+TEST_USERNAME="test.share.user.2025"  # Updated to use username format instead of email
 TEMP_DIR="/tmp/arkfile-share-test"
 TEST_FILE_NAME="test-share-file.txt"
 TEST_FILE_CONTENT="This is a test file for share workflow validation. It contains sample data for testing the complete share system."
 SHARE_PASSWORD="ShareTest2025*ForWorkflow#Validation"
 
-echo -e "${BLUE}=== Arkfile Phase 6E: Complete Share Workflow Test ===${NC}"
+echo -e "${BLUE}=== Arkfile Phase 6F: Complete Share Workflow Test ===${NC}"
 echo "Testing server: $SERVER_URL"
 echo "Test user: $TEST_USERNAME"
 echo "Test directory: $TEMP_DIR"

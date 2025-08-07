@@ -249,28 +249,22 @@ export class ShareAccessor {
 
     /**
      * Decrypts file data using FEK (File Encryption Key)
-     * This is a helper method that simulates file decryption using the FEK
+     * This method uses the WASM decryptFileWithFEKWASM function for real AES-GCM decryption
      */
     private async decryptFileWithFEK(encryptedFileBase64: string, fek: Uint8Array): Promise<string | null> {
         try {
-            // For now, we'll use a simplified approach since we don't have a dedicated WASM function
-            // In a real implementation, this would use proper AES-GCM decryption with the FEK
+            // Use the WASM function for real AES-GCM decryption
+            if (typeof window.decryptFileWithFEKWASM !== 'function') {
+                throw new Error('WASM decryption function not available');
+            }
+
+            const result = window.decryptFileWithFEKWASM(encryptedFileBase64, fek);
             
-            // Convert encrypted file data from base64 to bytes
-            const encryptedData = ShareCrypto.base64ToUint8Array(encryptedFileBase64);
-            
-            // Manual decryption simulation (for demo purposes)
-            // In production, this would use proper AES-GCM with the FEK
-            if (encryptedData.length < 28) { // nonce(12) + data(1+) + tag(16)
-                throw new Error('Encrypted data too short');
+            if (!result || !result.success) {
+                throw new Error(result?.error || 'File decryption failed');
             }
             
-            // Skip nonce and tag for now (this is just a demo)
-            const ciphertext = encryptedData.slice(12, encryptedData.length - 16);
-            
-            // For demo purposes, return the "decrypted" data as base64
-            // In production, this would perform actual AES-GCM decryption
-            return ShareCrypto.uint8ArrayToBase64(ciphertext);
+            return result.data || null;
             
         } catch (error) {
             console.error('File decryption error:', error);

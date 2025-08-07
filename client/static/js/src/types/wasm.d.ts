@@ -150,6 +150,14 @@ declare global {
   // OPAQUE health check
   function opaqueHealthCheck(): { wasmReady: boolean; timestamp: number; opaqueReady: boolean };
 
+  // Phase 6B: Anonymous Share System WASM Functions
+  function generateSecureShareSaltWASM(): { success: boolean; salt?: Uint8Array; error?: string };
+  function deriveShareKeyFromPasswordWASM(password: string, salt: Uint8Array): { success: boolean; shareKey?: Uint8Array; error?: string };
+  function encryptFEKWithShareKeyWASM(fek: Uint8Array, shareKey: Uint8Array): { success: boolean; encryptedFEK?: Uint8Array; error?: string };
+  function decryptFEKWithShareKeyWASM(encryptedFEK: Uint8Array, shareKey: Uint8Array): { success: boolean; fek?: Uint8Array; error?: string };
+  function validateSharePasswordEntropyWASM(password: string): { success: boolean; entropy: number; strength_score: number; feedback: string[]; meets_requirements: boolean; pattern_penalties: string[]; error?: string };
+  function decryptFileWithFEKWASM(encryptedFileBase64: string, fek: Uint8Array): { success: boolean; data?: string; error?: string };
+
   // Utility functions that might be exposed
   var arrayBufferToBase64: ((buffer: ArrayBuffer) => string) | undefined;
   var base64ToArrayBuffer: ((base64: string) => ArrayBuffer) | undefined;

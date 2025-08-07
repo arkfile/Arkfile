@@ -1,6 +1,7 @@
 /**
  * Main application entry point
  * Coordinates all modules and handles initial setup
+ * Updated for new home page with proper event listeners
  */
 
 import { wasmManager } from './utils/wasm';
@@ -21,11 +22,25 @@ class ArkFileApp {
       // Initialize WASM first
       await wasmManager.initWasm();
       
-      // Set up event listeners and UI handlers
-      this.setupEventListeners();
-      
-      // Handle initial authentication state
-      await this.handleInitialAuth();
+      // Check if we're on the home page or app page
+      if (this.isHomePage()) {
+        this.setupHomePageListeners();
+        
+        // Check if user is already authenticated
+        if (isAuthenticated()) {
+          const tokenValid = await validateToken();
+          if (tokenValid) {
+            // User is logged in, show app directly
+            this.showApp();
+            showFileSection();
+            await this.loadUserFiles();
+          }
+        }
+      } else {
+        // We're in the app interface
+        this.setupAppListeners();
+        await this.handleInitialAuth();
+      }
       
       this.initialized = true;
       console.log('ArkFile TypeScript application initialized');
@@ -36,31 +51,103 @@ class ArkFileApp {
     }
   }
 
-  private setupEventListeners(): void {
+  private isHomePage(): boolean {
+    // Check if we're showing the home page (hero section visible)
+    const heroSection = document.querySelector('.hero-section');
+    return heroSection !== null && !heroSection.classList.contains('hidden');
+  }
+
+  private setupHomePageListeners(): void {
+    // Get Started button - shows registration form
+    const getStartedBtn = document.getElementById('get-started-btn');
+    if (getStartedBtn) {
+      getStartedBtn.addEventListener('click', () => {
+        this.showApp();
+        showAuthSection();
+        toggleAuthForm(); // Switch to register form
+      });
+    }
+
+    // Login button - shows login form
+    const loginBtn = document.getElementById('login-btn');
+    if (loginBtn) {
+      loginBtn.addEventListener('click', () => {
+        this.showApp();
+        showAuthSection();
+        // Login form is shown by default
+      });
+    }
+  }
+
+  private setupAppListeners(): void {
     // Set up login and registration forms
     setupLoginForm();
     setupRegistrationForm();
     
-    // Auth form toggle
-    const toggleButton = document.querySelector('button[onclick="toggleAuthForm()"]');
-    if (toggleButton) {
-      toggleButton.addEventListener('click', (e) => {
+    // Navigation between login and register
+    const showRegisterLink = document.getElementById('show-register-link');
+    if (showRegisterLink) {
+      showRegisterLink.addEventListener('click', (e) => {
         e.preventDefault();
         toggleAuthForm();
       });
     }
 
-    // Logout button
-    const logoutButton = document.querySelector('button[onclick="logout()"]');
-    if (logoutButton) {
-      logoutButton.addEventListener('click', async (e) => {
+    const showLoginLink = document.getElementById('show-login-link');
+    if (showLoginLink) {
+      showLoginLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        toggleAuthForm();
+      });
+    }
+
+    // Back to home links
+    const backToHomeLink = document.getElementById('back-to-home-link');
+    if (backToHomeLink) {
+      backToHomeLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.showHome();
+      });
+    }
+
+    const backToHomeFromRegisterLink = document.getElementById('back-to-home-from-register-link');
+    if (backToHomeFromRegisterLink) {
+      backToHomeFromRegisterLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.showHome();
+      });
+    }
+
+    // Login form submission
+    const loginSubmitBtn = document.getElementById('login-submit-btn');
+    if (loginSubmitBtn) {
+      loginSubmitBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        await login();
+      });
+    }
+
+    // Register form submission
+    const registerSubmitBtn = document.getElementById('register-submit-btn');
+    if (registerSubmitBtn) {
+      registerSubmitBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        await register();
+      });
+    }
+
+    // Logout functionality
+    const logoutLink = document.getElementById('logout-link');
+    if (logoutLink) {
+      logoutLink.addEventListener('click', async (e) => {
         e.preventDefault();
         await logout();
+        this.showHome(); // Return to home page after logout
       });
     }
 
     // Security settings toggle
-    const securityToggle = document.querySelector('button[onclick="toggleSecuritySettings()"]');
+    const securityToggle = document.getElementById('security-settings-toggle');
     if (securityToggle) {
       securityToggle.addEventListener('click', async (e) => {
         e.preventDefault();
@@ -69,8 +156,8 @@ class ArkFileApp {
       });
     }
 
-    // Revoke all sessions button
-    const revokeButton = document.querySelector('button[onclick="revokeAllSessions()"]');
+    // Revoke all sessions
+    const revokeButton = document.getElementById('revoke-sessions-btn');
     if (revokeButton) {
       revokeButton.addEventListener('click', async (e) => {
         e.preventDefault();
@@ -79,26 +166,28 @@ class ArkFileApp {
         if (success) {
           showSuccess('All sessions have been revoked. Please log in again.');
           clearAllSessionData();
-          showAuthSection();
+          this.showHome(); // Return to home page
         } else {
           showError('Failed to revoke sessions.');
         }
       });
     }
 
-    // File upload form setup (basic)
-    const uploadForm = document.querySelector('form[onsubmit*="uploadFile"]');
-    if (uploadForm) {
-      uploadForm.addEventListener('submit', async (e) => {
+    // File upload functionality
+    const uploadFileBtn = document.getElementById('upload-file-btn');
+    if (uploadFileBtn) {
+      uploadFileBtn.addEventListener('click', async (e) => {
         e.preventDefault();
-        // Dynamically import upload functionality when needed
         const { uploadFile } = await import('./files/upload');
         await uploadFile();
       });
     }
 
-    // Password type radio buttons
+    // Password type toggle
     this.setupPasswordTypeToggle();
+
+    // TOTP setup functionality
+    this.setupTOTPListeners();
   }
 
   private setupPasswordTypeToggle(): void {
@@ -116,25 +205,92 @@ class ArkFileApp {
         }
         
         if (!useCustomPassword && filePassword) {
-          filePassword.value = ''; // Clear password field when switching to account password
+          filePassword.value = '';
         }
       });
     });
   }
 
+  private setupTOTPListeners(): void {
+    // TOTP generation
+    const generateTOTPBtn = document.getElementById('generate-totp-btn');
+    if (generateTOTPBtn) {
+      generateTOTPBtn.addEventListener('click', async () => {
+        const { initiateTOTPSetup } = await import('./auth/totp');
+        // This needs to be called with proper session context
+        console.log('TOTP setup initiated');
+      });
+    }
+
+    // TOTP verification
+    const verifyTOTPBtn = document.getElementById('verify-totp-btn');
+    if (verifyTOTPBtn) {
+      verifyTOTPBtn.addEventListener('click', async () => {
+        const { completeTOTPSetup } = await import('./auth/totp');
+        // This needs proper implementation
+        console.log('TOTP verification attempted');
+      });
+    }
+
+    // Cancel registration
+    const cancelRegistrationBtn = document.getElementById('cancel-registration-btn');
+    if (cancelRegistrationBtn) {
+      cancelRegistrationBtn.addEventListener('click', () => {
+        showAuthSection();
+        toggleAuthForm(); // Switch back to login
+      });
+    }
+
+    // Download backup codes
+    const downloadBackupCodesBtn = document.getElementById('download-backup-codes-btn');
+    if (downloadBackupCodesBtn) {
+      downloadBackupCodesBtn.addEventListener('click', () => {
+        console.log('Download backup codes functionality needs implementation');
+      });
+    }
+  }
+
+  private showHome(): void {
+    // Hide app container and show home page
+    const homeContainer = document.querySelector('.home-container');
+    const appContainer = document.getElementById('app-container');
+    
+    if (homeContainer) {
+      homeContainer.classList.remove('hidden');
+    }
+    if (appContainer) {
+      appContainer.classList.add('hidden');
+    }
+  }
+
+  private showApp(): void {
+    // Hide home page and show app container
+    const homeContainer = document.querySelector('.home-container');
+    const appContainer = document.getElementById('app-container');
+    
+    if (homeContainer) {
+      homeContainer.classList.add('hidden');
+    }
+    if (appContainer) {
+      appContainer.classList.remove('hidden');
+    }
+    
+    // Set up app listeners if not already done
+    if (!this.isHomePage()) {
+      this.setupAppListeners();
+    }
+  }
+
   private async handleInitialAuth(): Promise<void> {
     if (isAuthenticated()) {
       try {
-        // Validate the stored token by making an API call
+        // Validate the stored token
         const tokenValid = await validateToken();
         
         if (tokenValid) {
-          // Token is valid, show the file section and load files
+          // Token is valid, show file section and load files
           showFileSection();
-          
-          // Load files and display them
-          const response = await loadFiles();
-          
+          await this.loadUserFiles();
         } else {
           // Token is invalid, clear storage and show auth
           console.warn('Stored token is invalid, clearing and showing auth');
@@ -143,7 +299,7 @@ class ArkFileApp {
           showError('Your session has expired. Please log in again.');
         }
       } catch (error) {
-        // Network error or other issue, clear storage and show auth
+        // Network error or other issue
         console.error('Error validating token:', error);
         clearAllSessionData();
         showAuthSection();
@@ -152,6 +308,26 @@ class ArkFileApp {
       // No token, show auth section
       showAuthSection();
     }
+  }
+
+  private async loadUserFiles(): Promise<void> {
+    try {
+      const response = await loadFiles();
+      // Files will be displayed by the loadFiles function
+    } catch (error) {
+      console.error('Error loading user files:', error);
+      showError('Failed to load your files. Please refresh the page.');
+    }
+  }
+
+  // Public method to show app from home page
+  public navigateToApp(): void {
+    this.showApp();
+  }
+
+  // Public method to return to home page
+  public navigateToHome(): void {
+    this.showHome();
   }
 }
 
@@ -168,58 +344,9 @@ if (document.readyState === 'loading') {
   app.initialize();
 }
 
-// Export for legacy compatibility
+// Export for global access
 if (typeof window !== 'undefined') {
-  // Make key functions available globally for onclick handlers (temporary)
-  (window as any).login = login;
-  (window as any).register = register;
-  (window as any).logout = logout;
-  (window as any).toggleAuthForm = toggleAuthForm;
-  (window as any).toggleSecuritySettings = async () => {
-    const { toggleSecuritySettings } = await import('./ui/sections');
-    toggleSecuritySettings();
-  };
-  (window as any).revokeAllSessions = async () => {
-    const { revokeAllSessions } = await import('./utils/auth');
-    const success = await revokeAllSessions();
-    if (success) {
-      showSuccess('All sessions have been revoked. Please log in again.');
-      clearAllSessionData();
-      showAuthSection();
-    } else {
-      showError('Failed to revoke sessions.');
-    }
-  };
-  
-  // TOTP-related functions for onclick handlers
-  (window as any).generateTOTPSetup = async () => {
-    const { initiateTOTPSetup } = await import('./auth/totp');
-    // This will need to be called with a session key during registration flow
-    showError('TOTP setup should be called during registration flow');
-  };
-  
-  (window as any).verifyTOTPSetup = async () => {
-    const { completeTOTPSetup } = await import('./auth/totp');
-    // This will need proper implementation during registration flow
-    showError('TOTP verification should be called during registration flow');
-  };
-  
-  (window as any).cancelRegistration = () => {
-    // Clear any registration state and return to login
-    showAuthSection();
-    toggleAuthForm(); // Switch back to login form
-  };
-  
-  (window as any).downloadBackupCodes = () => {
-    // This would need to be implemented to download backup codes
-    showError('Backup code download functionality needs to be implemented during TOTP setup');
-  };
-  
-  // File upload function
-  (window as any).uploadFile = async () => {
-    const { uploadFile } = await import('./files/upload');
-    await uploadFile();
-  };
+  (window as any).arkfileApp = app;
 }
 
 // Export the app instance

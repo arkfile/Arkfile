@@ -208,40 +208,16 @@ func decryptFileWithSessionKey(encryptedDataB64 string, sessionKey []byte) (stri
 	return base64.StdEncoding.EncodeToString(decryptedData), nil
 }
 
-// encryptWithGCM encrypts data using AES-GCM (compatible with existing client/main.go implementation)
+// encryptWithGCM encrypts data using AES-GCM with proper cryptographic security
 func encryptWithGCM(data []byte, key []byte) ([]byte, error) {
-	// This is a simplified implementation that matches the pattern in client/main.go
-	// In a real implementation, we would use proper AES-GCM encryption
-
-	// For now, return a placeholder that indicates the session key was used
-	// This will be replaced with proper AES-GCM implementation
-	nonce := make([]byte, 12) // GCM standard nonce size
-	// In real implementation: rand.Read(nonce)
-
-	// Placeholder encrypted data - in real implementation this would be AES-GCM encrypted
-	encryptedData := make([]byte, len(nonce)+len(data)+16) // nonce + data + GCM tag
-	copy(encryptedData[:12], nonce)
-	copy(encryptedData[12:12+len(data)], data) // This should be encrypted
-
-	return encryptedData, nil
+	// Use the real AES-GCM implementation from crypto/gcm.go
+	return EncryptGCM(data, key)
 }
 
-// decryptWithGCM decrypts data using AES-GCM (compatible with existing client/main.go implementation)
+// decryptWithGCM decrypts data using AES-GCM with proper cryptographic security
 func decryptWithGCM(encryptedData []byte, key []byte) ([]byte, error) {
-	// This is a simplified implementation that matches the pattern in client/main.go
-
-	if len(encryptedData) < 28 { // nonce(12) + minimum data(1) + tag(16)
-		return nil, fmt.Errorf("encrypted data too short")
-	}
-
-	// Extract components
-	// nonce := encryptedData[:12]
-	ciphertext := encryptedData[12 : len(encryptedData)-16]
-	// tag := encryptedData[len(encryptedData)-16:]
-
-	// In real implementation, this would perform AES-GCM decryption
-	// For now, return the "decrypted" data (which is actually the original data in our placeholder)
-	return ciphertext, nil
+	// Use the real AES-GCM implementation from crypto/gcm.go
+	return DecryptGCM(encryptedData, key)
 }
 
 // Secure session storage - NEVER exposed to JavaScript
@@ -866,6 +842,7 @@ func RegisterAllWASMFunctions() {
 	js.Global().Set("encryptFEKWithShareKeyWASM", js.FuncOf(encryptFEKWithShareKeyWASM))
 	js.Global().Set("decryptFEKWithShareKeyWASM", js.FuncOf(decryptFEKWithShareKeyWASM))
 	js.Global().Set("validateSharePasswordEntropyWASM", js.FuncOf(validateSharePasswordEntropyWASM))
+	js.Global().Set("decryptFileWithFEKWASM", js.FuncOf(decryptFileWithFEKWASM))
 }
 
 // Phase 5F: WASM exports for enhanced password validation
@@ -1086,13 +1063,13 @@ func addKeyToEncryptedFileWithSecureSessionJS(this js.Value, args []js.Value) in
 
 // generateSecureShareSaltWASM generates a cryptographically secure 32-byte salt for Argon2id
 func generateSecureShareSaltWASM(this js.Value, args []js.Value) interface{} {
-	// Generate 32-byte salt using crypto/rand
-	salt := make([]byte, 32)
-
-	// Use a simple pseudo-random generation for WASM compatibility
-	// In a production environment, this would use crypto/rand
-	for i := range salt {
-		salt[i] = byte((time.Now().UnixNano() + int64(i)) % 256)
+	// Use the real cryptographically secure salt generation from crypto/share_kdf.go
+	salt, err := GenerateSecureSalt(32)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to generate secure salt: " + err.Error(),
+		}
 	}
 
 	// Convert salt to JavaScript Uint8Array
@@ -1276,5 +1253,56 @@ func validateSharePasswordEntropyWASM(this js.Value, args []js.Value) interface{
 		"feedback":           result.Feedback,
 		"meets_requirements": result.MeetsRequirement,
 		"pattern_penalties":  result.PatternPenalties,
+	}
+}
+
+// decryptFileWithFEKWASM decrypts file data using a File Encryption Key (FEK)
+func decryptFileWithFEKWASM(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected encryptedFileBase64, fek",
+		}
+	}
+
+	encryptedFileBase64 := args[0].String()
+	fekJS := args[1]
+
+	// Convert JavaScript Uint8Array FEK to Go bytes
+	fek := make([]byte, fekJS.Length())
+	js.CopyBytesToGo(fek, fekJS)
+
+	// Validate inputs
+	if len(fek) != 32 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "FEK must be exactly 32 bytes",
+		}
+	}
+
+	// Decode base64 encrypted file data
+	encryptedData, err := base64.StdEncoding.DecodeString(encryptedFileBase64)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to decode encrypted file data: " + err.Error(),
+		}
+	}
+
+	// Decrypt file data with FEK using AES-GCM
+	decryptedData, err := decryptWithGCM(encryptedData, fek)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to decrypt file data: " + err.Error(),
+		}
+	}
+
+	// Convert decrypted data to base64 for JavaScript
+	decryptedBase64 := base64.StdEncoding.EncodeToString(decryptedData)
+
+	return map[string]interface{}{
+		"success": true,
+		"data":    decryptedBase64,
 	}
 }
