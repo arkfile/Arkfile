@@ -39,15 +39,16 @@ Links can have expiry dates and can be revoked at any time.
 
 ## 5. Username-Based Accounts
 
-Arkfile uses **usernames** as the primary account identifier, not email addresses.
+Arkfile uses **usernames** as the primary account identifier, not email addresses. This design choice represents a fundamental shift away from traditional email-based authentication systems.
 
-**Email addresses are optional** and are only stored if the user chooses to provide one for account recovery purposes. The system is designed to function fully without requiring any email address.
+**Email addresses are optional** and are only stored if the user chooses to provide one for account recovery purposes. The system is designed to function fully without requiring any email address, enabling truly anonymous account creation.
 
-This approach enhances privacy by:
-- Reducing personal information stored on servers
-- Eliminating potential email-based tracking
-- Allowing truly anonymous account creation
-- Reducing data exposure in case of server compromise
+This username-based approach enhances privacy by:
+- **Reducing Personal Information**: No email addresses required means less personally identifiable information stored on servers
+- **Eliminating Email-Based Tracking**: No correlation with email addresses prevents cross-service tracking and data aggregation
+- **Supporting Anonymous Usage**: Users can create accounts with pseudonymous usernames without revealing identity
+- **Minimizing Data Exposure**: In case of server compromise, fewer personal identifiers are exposed to attackers
+- **Avoiding Email Metadata Leakage**: No risk of exposing email domains that might reveal organizational affiliations or personal details
 
 ## 6. Minimal Metadata
 
@@ -101,7 +102,7 @@ This approach prevents several classes of attacks including file fingerprinting 
 
 ## 9. Storage Back-Ends
 
-Arkfile supports multiple S3-compatible services (MinIO, Backblaze B2, Wasabi, Vultr).
+Arkfile supports multiple storage backends including Amazon S3, MinIO, Backblaze B2, Wasabi, and Vultr Object Storage.
 
 Encrypted file data is opaque to the storage provider; none of them receive decryption keys.
 

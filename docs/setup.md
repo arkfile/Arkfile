@@ -255,12 +255,23 @@ security:
 For external S3-compatible providers:
 ```yaml
 storage:
-  backend: "backblaze"  # or "wasabi", "vultr"
+  backend: "backblaze"  # or "wasabi", "vultr", "aws-s3"
   endpoint: "s3.us-west-002.backblazeb2.com"
   region: "us-west-002"
   bucket_name: "your-bucket"
   key_id: "your-access-key"
   access_key: "your-secret-key"
+  use_ssl: true
+```
+
+**Amazon S3 Configuration:**
+```yaml
+storage:
+  backend: "aws-s3"
+  region: "us-west-2"  # Required, defaults to us-east-1 if not specified
+  bucket_name: "your-s3-bucket"
+  key_id: "your-aws-access-key-id"
+  access_key: "your-aws-secret-access-key"
   use_ssl: true
 ```
 

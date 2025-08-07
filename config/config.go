@@ -32,7 +32,7 @@ type Config struct {
 	} `json:"database"`
 
 	Storage struct {
-		Provider        string `json:"provider"` // "local", "backblaze", "wasabi", "vultr", "cluster"
+		Provider        string `json:"provider"` // "local", "backblaze", "wasabi", "vultr", "aws-s3", "cluster"
 		Endpoint        string `json:"endpoint"`
 		AccessKeyID     string `json:"access_key_id"`
 		SecretAccessKey string `json:"secret_access_key"`
@@ -213,6 +213,16 @@ func loadEnvConfig(cfg *Config) error {
 		cfg.Storage.SecretAccessKey = os.Getenv("VULTR_SECRET_ACCESS_KEY")
 		cfg.Storage.BucketName = os.Getenv("VULTR_BUCKET_NAME")
 		cfg.Storage.UseSSL = true
+	case "aws-s3":
+		cfg.Storage.Region = os.Getenv("AWS_REGION")
+		cfg.Storage.AccessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
+		cfg.Storage.SecretAccessKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
+		cfg.Storage.BucketName = os.Getenv("AWS_S3_BUCKET_NAME")
+		cfg.Storage.UseSSL = true
+		// Default to us-east-1 if no region specified
+		if cfg.Storage.Region == "" {
+			cfg.Storage.Region = "us-east-1"
+		}
 	case "cluster":
 		cfg.Storage.Endpoint = os.Getenv("MINIO_CLUSTER_NODES")
 		cfg.Storage.AccessKeyID = os.Getenv("MINIO_CLUSTER_ACCESS_KEY")
@@ -340,6 +350,15 @@ func validateConfig(cfg *Config) error {
 		if cfg.Storage.AccessKeyID == "" || cfg.Storage.SecretAccessKey == "" ||
 			cfg.Storage.BucketName == "" || cfg.Storage.Region == "" {
 			return fmt.Errorf("%s storage requires access key, secret key, bucket name, and region", cfg.Storage.Provider)
+		}
+	case "aws-s3":
+		if cfg.Storage.AccessKeyID == "" || cfg.Storage.SecretAccessKey == "" ||
+			cfg.Storage.BucketName == "" {
+			return fmt.Errorf("AWS S3 storage requires AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_S3_BUCKET_NAME")
+		}
+		// Region validation for AWS S3 - should have been defaulted to us-east-1 if not provided
+		if cfg.Storage.Region == "" {
+			return fmt.Errorf("AWS S3 storage requires a valid region")
 		}
 	case "cluster":
 		if cfg.Storage.Endpoint == "" || cfg.Storage.AccessKeyID == "" ||

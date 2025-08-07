@@ -30,6 +30,7 @@ const (
 	ProviderBackblaze StorageProvider = "backblaze"
 	ProviderWasabi    StorageProvider = "wasabi"
 	ProviderVultr     StorageProvider = "vultr"
+	ProviderAmazonS3  StorageProvider = "aws-s3"
 	ProviderLocal     StorageProvider = "local"
 	ProviderCluster   StorageProvider = "cluster"
 )
@@ -54,6 +55,11 @@ func getProviderEndpoint(provider StorageProvider, region string) string {
 		return fmt.Sprintf("s3.%s.wasabi.com", region)
 	case ProviderVultr:
 		return fmt.Sprintf("%s.vultrobjects.com", region)
+	case ProviderAmazonS3:
+		if region == "us-east-1" {
+			return "s3.amazonaws.com"
+		}
+		return fmt.Sprintf("s3.%s.amazonaws.com", region)
 	case ProviderLocal:
 		return "localhost:9000" // MinIO server in filesystem mode
 	case ProviderCluster:
@@ -109,6 +115,20 @@ func InitMinio() error {
 		config.BucketName = os.Getenv("MINIO_CLUSTER_BUCKET")
 		if config.BucketName == "" {
 			config.BucketName = "arkfile"
+		}
+
+	case ProviderAmazonS3:
+		config.Region = os.Getenv("AWS_REGION")
+		config.AccessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
+		config.SecretAccessKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
+		config.BucketName = os.Getenv("AWS_S3_BUCKET_NAME")
+		// Default region for AWS S3 if not specified
+		if config.Region == "" {
+			config.Region = "us-east-1"
+		}
+		// Validate required fields for AWS S3
+		if config.AccessKeyID == "" || config.SecretAccessKey == "" || config.BucketName == "" {
+			return fmt.Errorf("missing required storage configuration for AWS S3: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_S3_BUCKET_NAME are required")
 		}
 
 	default: // External providers (Backblaze, Wasabi, Vultr)

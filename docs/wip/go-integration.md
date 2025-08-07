@@ -1,25 +1,166 @@
-# Arkfile Go-Based Complete Integration Test
+# Arkfile Go-Based Production Validation Test
 
-## Project Overview & Objectives
+## HIGH LEVEL OVERVIEW
 
-### Purpose
-Create a comprehensive Go-based integration test (`test-complete-integration.go`) that validates the entire Arkfile system end-to-end, including OPAQUE authentication, file operations, and anonymous file sharing capabilities.
+## **Go Integration Test Project - High-Level Overview**
 
-### Key Objectives
-1. **Complete Authentication Flow**: Username-based OPAQUE registration → TOTP setup → login with 2FA
-2. **Large File Operations**: 50MB file upload/download with integrity verification
-3. **Share System Validation**: Create shares → anonymous access → file download
-4. **Security Validation**: Rate limiting, timing protection, encryption round-trip
-5. **Database Integration**: Direct database operations and validation
-6. **MinIO Storage Testing**: Verify S3-compatible storage backend
+The go-integration.md project aims to create a comprehensive, automated validation tool that serves as the final certification step for the Arkfile secure file sharing system before production deployment. This Go-based integration test is designed to systematically validate every critical component of the system through realistic, end-to-end workflows that mirror actual user behavior, providing definitive proof that all security, cryptographic, and functional requirements work correctly together in a production environment.
 
-### Why Go vs Existing Bash Scripts
-- **Complex Crypto Operations**: OPAQUE client implementation requires Go packages
-- **Binary Data Handling**: 50MB files, encryption, and decryption operations
-- **JSON API Interaction**: Complex request/response handling with proper error parsing
-- **Concurrent Operations**: Chunked upload handling and parallel validation
-- **Database Integration**: Direct SQL operations with proper connection management
-- **Performance Testing**: Precise timing and resource usage measurement
+The project's primary objective is to execute a complete user journey that begins with username-based OPAQUE authentication (including two-factor authentication via TOTP), proceeds through uploading and encrypting a substantial 50MB test file, creates an anonymous share link protected by Argon2id password derivation, and concludes with anonymous access and file download - all while validating that every security measure (timing protection, rate limiting, end-to-end encryption) functions correctly and that file integrity is perfectly preserved throughout multiple encryption/decryption cycles.
+
+**The major requirements include:**
+
+**Authentication and Security Validation**: The system must successfully register a test user using the zero-knowledge OPAQUE protocol, set up and verify two-factor authentication with real TOTP codes, and validate that all security headers, timing protection (minimum 1-second response times), and rate limiting mechanisms are active and functioning correctly under realistic load conditions.
+
+**Large File Operations with Real Cryptography**: The test must generate, upload, and download a 50MB file using production-grade cryptographic operations, including AES-GCM encryption with randomly generated File Encryption Keys (FEKs), chunked upload processing, and comprehensive integrity verification through SHA-256 hash comparisons to ensure no data corruption occurs during the complete encryption-storage-decryption cycle.
+
+**Anonymous Share System Validation**: The system must create share links using real Argon2id key derivation (with production parameters: 128MB memory, 4 iterations), enable anonymous users to access shared files without requiring account creation, and validate that the share password system provides appropriate security while maintaining usability for legitimate users.
+
+**Database and Storage Integration**: The test must perform direct database operations against the rqlite backend to validate proper data storage and cleanup, integrate with MinIO S3-compatible storage to verify encrypted file blob handling, and ensure complete resource cleanup after test execution to maintain system hygiene.
+
+**Performance and Production Readiness**: The system must demonstrate acceptable performance benchmarks (50MB uploads within 30 seconds, downloads within 15 seconds, or better), validate that all security measures remain effective under realistic load conditions, and provide comprehensive reporting that confirms the system is ready for production deployment with confidence in its security, reliability, and performance characteristics.
+
+This integration test essentially serves as the final quality assurance checkpoint, providing automated verification that replaces the need for extensive manual testing while delivering measurable proof that the Arkfile system meets all security, performance, and functional requirements for production use.
+
+---
+
+## ARKFILE SYSTEM ARCHITECTURE
+
+### Current System Overview
+
+The Arkfile system is a **production-ready secure file sharing platform** that implements zero-knowledge architecture using OPAQUE authentication, end-to-end encryption, and anonymous sharing capabilities. The system consists of multiple integrated components working together to provide secure file storage and sharing functionality.
+
+### Core Components
+
+#### **Authentication System**
+- **OPAQUE Protocol**: Zero-knowledge authentication ensuring server never sees user passwords
+- **Username-Based Authentication**: Primary identifier system throughout the application
+- **Two-Factor Authentication**: TOTP-based 2FA with backup codes for enhanced security
+- **JWT Token Management**: Secure session handling with refresh token rotation
+- **Session Key Derivation**: HKDF-based key derivation from OPAQUE export keys
+
+#### **Encryption Architecture**
+- **File-Level Encryption**: Each file encrypted with unique randomly generated FEK (File Encryption Key)
+- **Session Key Protection**: FEKs encrypted with user's session keys derived from OPAQUE export
+- **Share System**: Anonymous sharing using Argon2id key derivation (128MB memory, 4 iterations)
+- **Real Cryptography**: All WASM functions use production-grade AES-GCM and Argon2id implementations
+
+#### **Storage Integration**
+- **Database Backend**: rqlite distributed SQL database for metadata and authentication data
+- **Object Storage**: MinIO S3-compatible storage for encrypted file blobs
+- **Zero-Knowledge Server**: Server stores only encrypted blobs and salts, never plaintext content
+
+#### **Security Features**
+- **Rate Limiting**: EntityID-based exponential backoff for anonymous users
+- **Timing Protection**: Minimum 1-second response times for security-critical endpoints
+- **Security Headers**: Comprehensive CSP, XSS protection, frame options, content-type validation
+- **Anonymous Privacy**: Share access requires no user accounts or identity disclosure
+
+### API Endpoints
+
+#### **Authentication APIs**
+```
+POST /api/opaque/register  - User registration with OPAQUE protocol
+POST /api/opaque/login     - Username-based login with OPAQUE
+POST /api/totp/setup       - Two-factor authentication setup
+POST /api/totp/verify      - TOTP verification during setup
+POST /api/totp/auth        - TOTP authentication during login
+```
+
+#### **File Management APIs**  
+```
+POST /api/upload/init      - Initialize chunked file upload
+POST /api/upload/chunk     - Upload individual file chunks
+POST /api/upload/finalize  - Complete upload process
+GET  /api/files            - List user's files
+GET  /api/files/{id}       - Get specific file metadata
+GET  /api/files/{id}/download - Download encrypted file
+```
+
+#### **Share System APIs**
+```
+POST /api/files/{id}/share - Create anonymous share link
+POST /api/share/{shareId}  - Access shared file (anonymous)
+GET  /api/share/{shareId}/download - Download shared file (anonymous)
+```
+
+### Database Schema
+
+#### **Core Tables**
+```sql
+-- User authentication data (OPAQUE records only)
+users (id, username, email, opaque_record, is_approved, created_at, approved_by)
+
+-- File metadata (encrypted content in MinIO)  
+files (id, user_id, filename, file_size, content_type, encrypted_fek, created_at)
+
+-- Anonymous share system
+file_share_keys (id, share_id, file_id, salt, encrypted_fek, expires_at, created_at)
+
+-- Rate limiting for anonymous access
+share_access_attempts (id, share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt)
+```
+
+### Cryptographic Flows
+
+#### **Authenticated File Operations**
+```
+User Password → OPAQUE Authentication → Export Key → HKDF → Session Key
+Random FEK → AES-GCM(File, FEK) → Encrypted File Blob
+FEK → AES-GCM(FEK, Session Key) → Encrypted FEK (stored in database)
+```
+
+#### **Anonymous Share Access**  
+```
+Share Password → Argon2id(Password, Salt, 128MB, 4 iter) → Share Key
+Share Key → AES-GCM_decrypt(Encrypted FEK) → FEK  
+FEK → AES-GCM_decrypt(Encrypted File) → Original File
+```
+
+## PROJECT OBJECTIVES
+
+### Primary Goal
+Create a comprehensive Go-based integration test that validates the complete Arkfile system through realistic end-to-end workflows, providing automated verification of all security, cryptographic, and functional requirements before production deployment.
+
+### Key Testing Requirements
+
+#### **Complete User Journey Validation**
+1. **User Registration & Authentication**: OPAQUE protocol registration, TOTP setup, and full login flow
+2. **Large File Operations**: 50MB file upload/download with chunked processing and integrity verification  
+3. **Anonymous Sharing**: Share creation, anonymous access, and file retrieval without user accounts
+4. **Security Measure Validation**: Rate limiting, timing protection, and cryptographic security verification
+5. **Database Integration**: Direct database operations to validate data consistency and cleanup
+
+#### **Performance Benchmarking**
+- **Upload Performance**: 50MB files within 60 seconds (target: 30 seconds or better)
+- **Download Performance**: 50MB files within 20 seconds (target: 15 seconds or better)
+- **Share Creation**: Complete workflow within 5 seconds
+- **Anonymous Access**: Timing protection validation (900ms-1500ms range)
+- **Total Test Duration**: Complete validation within 5 minutes
+
+#### **Security Validation**
+- **Zero-Knowledge Authentication**: Verify OPAQUE protocol prevents password exposure
+- **Cryptographic Integrity**: Triple integrity verification (original → authenticated → anonymous)  
+- **Timing Protection**: Consistent response times under various load conditions
+- **Rate Limiting**: Exponential backoff functionality for failed attempts
+- **Anonymous Privacy**: No user information disclosure during share access
+
+### Why Go Implementation
+
+#### **Technical Advantages**
+- **Real Cryptographic Operations**: Direct access to same crypto libraries as production system
+- **Binary Data Handling**: Proper handling of 50MB files with encryption/decryption verification
+- **Database Integration**: Direct SQL operations for comprehensive validation and cleanup
+- **Automated Execution**: No manual browser interaction required for complete testing
+- **Performance Measurement**: Precise timing and resource usage benchmarking
+- **Concurrent Testing**: Ability to simulate multiple users and load conditions
+
+#### **Operational Benefits**
+- **CI/CD Integration**: Automated testing pipeline compatibility
+- **Comprehensive Reporting**: Detailed success/failure reporting with performance metrics
+- **Resource Cleanup**: Automatic cleanup of test data and temporary files  
+- **Error Handling**: Graceful failure handling with detailed diagnostic information
+- **Reproducible Results**: Consistent testing environment and deterministic outcomes
 
 ## Technical Architecture
 
@@ -41,26 +182,26 @@ Create a comprehensive Go-based integration test (`test-complete-integration.go`
 
 ```
 main()
-├── Phase1: UserSetupAndAuthentication()
+├── TestSuite1: UserSetupAndAuthentication()
 │   ├── RegisterUser()
 │   ├── ApproveInDatabase()
 │   ├── SetupTOTP()
 │   ├── LoginUser()
 │   └── ValidateTokens()
-├── Phase2: FileOperations()
+├── TestSuite2: FileOperations()
 │   ├── GenerateTestFile()
 │   ├── UploadFile()
 │   ├── ListFiles()
 │   ├── DownloadFile()
 │   └── VerifyIntegrity()
-├── Phase3: FileSharingOperations()
+├── TestSuite3: FileSharingOperations()
 │   ├── CreateShareLink()
 │   ├── ValidateShareInDatabase()
 │   ├── LogoutUser()
 │   ├── AnonymousShareAccess()
 │   ├── AnonymousDownload()
 │   └── VerifySharedFileIntegrity()
-└── Phase4: ComprehensiveCleanup()
+└── TestSuite4: ComprehensiveCleanup()
     ├── CleanupUser()
     ├── ValidateCleanup()
     └── GenerateReport()
@@ -68,7 +209,7 @@ main()
 
 ## Implementation Specifications
 
-### Phase 1: User Setup & Authentication
+### Test Suite 1: User Setup & Authentication
 
 #### Step 1: RegisterUser()
 ```go
@@ -201,7 +342,7 @@ func (t *IntegrationTest) LoginUser() error {
 }
 ```
 
-### Phase 2: File Operations
+### Test Suite 2: File Operations
 
 #### Step 6: GenerateTestFile()
 ```go

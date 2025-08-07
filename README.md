@@ -15,7 +15,7 @@ Because of this “zero-knowledge” design, only you – and anyone with whom y
 1. **Privacy first** – files are encrypted on your device.  
 2. **Share safely** – you can create sharing links with share passwords for friends or co-workers without giving them your main password.
 3. **Multi-factor security** – Time-based One-Time Passwords (TOTP authentication) is used to provide two-factor protection for all accounts.
-4. **Pick your storage** – use the built-in MinIO server for single-node or self-hosted cluster deployments, or point Arkfile at Backblaze B2, Wasabi, Vultr Object Storage, and other S3-compatible storage back-ends.
+4. **Pick your storage** – use the built-in MinIO server for single-node or self-hosted cluster deployments, or point Arkfile at Amazon S3, Backblaze B2, Wasabi, Vultr Object Storage, and other S3-compatible storage back-ends.
 5. **Runs anywhere** – one binary, no external database. (Arkfile uses the lightweight rqlite engine under the hood.)  
 6. **Open source** – anyone can inspect or improve the code.
 

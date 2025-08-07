@@ -8,7 +8,7 @@ All requests to the Arkfile API must be authenticated using a JSON Web Token (JW
 
 `Authorization: Bearer <your-jwt-token>`
 
-Tokens can be obtained by making a POST request to the `/login` endpoint with a valid username and password.
+Tokens can be obtained by making a POST request to the `/api/opaque/login` endpoint with a valid username and password. Arkfile uses a username-based authentication system where users create accounts with usernames rather than email addresses, enhancing privacy by reducing personal information stored on servers.
 
 ## Endpoints
 
@@ -102,8 +102,8 @@ Public endpoints for the recipients of a share:
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET  | `/api/admin/users` | List all users |
-| PATCH | `/api/admin/users/:email` | Update a user (roles, status) |
-| DELETE | `/api/admin/users/:email` | Delete a user |
+| PATCH | `/api/admin/users/:username` | Update a user (roles, status) |
+| DELETE | `/api/admin/users/:username` | Delete a user |
 | GET  | `/api/admin/stats` | System statistics |
 | GET  | `/api/admin/activity` | Security & activity logs |
 

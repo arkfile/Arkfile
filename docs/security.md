@@ -531,7 +531,7 @@ rqlite -H localhost:4001 \
 ```bash
 # Detect rapid attempts across multiple accounts
 rqlite -H localhost:4001 \
-  "SELECT entity_id, count(DISTINCT user_email) as unique_users
+  "SELECT entity_id, count(DISTINCT username) as unique_users
    FROM security_events 
    WHERE event_type IN ('opaque_login_failure', 'opaque_login_success')
    AND timestamp > datetime('now', '-1 hour')
@@ -543,11 +543,11 @@ rqlite -H localhost:4001 \
 ```bash
 # Identify unusual file access patterns
 rqlite -H localhost:4001 \
-  "SELECT user_email, count(*) as file_accesses
+  "SELECT username, count(*) as file_accesses
    FROM security_events 
    WHERE event_type='file_access'
    AND timestamp > datetime('now', '-1 hour')
-   GROUP BY user_email
+   GROUP BY username
    HAVING file_accesses > 100;"
 ```
 
