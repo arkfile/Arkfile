@@ -139,14 +139,16 @@ int arkfile_opaque_authenticate_user(const uint8_t* password, uint16_t pwd_len,
     result = opaque_UserAuth(authU_server, authU_client);
     if (result == -1) return -1; // Authentication failed
     
-    // Copy session key
-    memcpy(session_key, sk_client, OPAQUE_SHARED_SECRETBYTES);
+    // CRITICAL FIX: Return the deterministic export_key instead of random session_key
+    // The export_key is derived from the password and is the same each time
+    // The session_key (sk_client) is random and different each authentication
+    memcpy(session_key, export_key, OPAQUE_SHARED_SECRETBYTES);
     
     // Clear sensitive data
-    memset(export_key, 0, sizeof(export_key));
-    memset(sec, 0, sizeof(sec));
     memset(sk_server, 0, sizeof(sk_server));
     memset(sk_client, 0, sizeof(sk_client));
+    memset(export_key, 0, sizeof(export_key));
+    memset(sec, 0, sizeof(sec));
     
     return 0; // Success
 }

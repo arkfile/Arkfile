@@ -41,7 +41,7 @@ func main() {
 	// Use the padded secret for TOTP generation
 	secret = secretPadded
 
-	// Use provided timestamp or current time
+	// Use provided timestamp or current time (USE UTC TO MATCH SERVER VALIDATION)
 	var testTime time.Time
 	if len(os.Args) >= 3 {
 		timestamp, err := strconv.ParseInt(os.Args[2], 10, 64)
@@ -49,9 +49,9 @@ func main() {
 			fmt.Printf("Error: Invalid timestamp: %v\n", err)
 			os.Exit(1)
 		}
-		testTime = time.Unix(timestamp, 0)
+		testTime = time.Unix(timestamp, 0).UTC()
 	} else {
-		testTime = time.Now()
+		testTime = time.Now().UTC()
 	}
 
 	// Generate TOTP code using the same parameters as production

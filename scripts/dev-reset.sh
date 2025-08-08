@@ -137,7 +137,8 @@ if [ -d "$ARKFILE_DIR" ]; then
     # Delete database
     print_status "INFO" "Nuking database..."
     rm -rf "$ARKFILE_DIR/var/lib/"*/rqlite/* 2>/dev/null || true
-    rm -rf "$ARKFILE_DIR/var/lib/"*/database 2>/dev/null || true
+    rm -rf "$ARKFILE_DIR/var/lib/database/data"* 2>/dev/null || true
+    rm -rf "$ARKFILE_DIR/var/lib/"*/database/* 2>/dev/null || true
     rm -rf "$ARKFILE_DIR/database"* 2>/dev/null || true
     
     # Delete all logs
@@ -275,8 +276,8 @@ MINIO_ROOT_USER=arkfile-dev
 MINIO_ROOT_PASSWORD=DevPassword123_$(openssl rand -hex 8)
 LOCAL_STORAGE_PATH=/opt/arkfile/var/lib/dev/minio/data
 
-# Admin Configuration
-ADMIN_USERNAMES=admin.dev.user
+# Admin Configuration - DEV ONLY
+ADMIN_USERNAMES=arkfile-dev-admin
 
 # Development Settings
 REQUIRE_APPROVAL=false

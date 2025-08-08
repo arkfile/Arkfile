@@ -130,6 +130,21 @@ sudo ./scripts/setup/08-setup-rqlite.sh
 ./scripts/setup/deploy.sh prod
 ```
 
+## ⚠️ CRITICAL PRODUCTION SECURITY NOTICE
+
+### Dev Admin Accounts
+The following accounts are **DEVELOPMENT ONLY** and are automatically blocked in production:
+- `arkfile-dev-admin`
+- `admin.dev.user` 
+- `admin.demo.user`
+
+### Production Deployment Checklist
+- [ ] Set `ENVIRONMENT=production`
+- [ ] Update `ADMIN_USERNAMES` with production admin accounts only
+- [ ] Remove all dev admin accounts from environment variables
+- [ ] Verify deployment scripts pass admin validation
+- [ ] Test admin functionality with production accounts
+
 ## Production Deployment
 
 ### System Requirements

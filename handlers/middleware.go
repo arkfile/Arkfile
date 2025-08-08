@@ -16,6 +16,7 @@ import (
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
+	"github.com/84adam/arkfile/utils"
 )
 
 // parseIPAddress safely converts IP string to net.IP
@@ -512,6 +513,85 @@ func RequireTOTP(next echo.HandlerFunc) echo.HandlerFunc {
 
 			return echo.NewHTTPError(http.StatusForbidden, "Two-factor authentication is required. Please complete TOTP setup.")
 		}
+
+		return next(c)
+	}
+}
+
+// isLocalhostIP checks if an IP address is localhost without storing or logging it
+func isLocalhostIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.Equal(net.ParseIP("127.0.0.1")) || ip.Equal(net.ParseIP("::1"))
+}
+
+// AdminMiddleware enforces multi-layer security for admin endpoints
+func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// 1. Localhost validation (only time we check actual IP)
+		clientIP := parseIPAddress(c.RealIP())
+		if !isLocalhostIP(clientIP) {
+			return echo.NewHTTPError(http.StatusForbidden, "Admin endpoints only available from localhost")
+		}
+
+		// 2. For rate limiting and audit logging, use EntityID system
+		entityID := logging.GetEntityIDForIP(clientIP)
+
+		// 3. Check rate limit using existing EntityID system
+		if DefaultRateLimitManager != nil {
+			rateLimited, err := DefaultRateLimitManager.CheckRateLimit(
+				entityID,
+				"/api/admin",
+				10, // 10 requests per minute
+				time.Minute,
+			)
+			if err != nil {
+				logging.ErrorLogger.Printf("Admin rate limit check failed: %v", err)
+				return echo.NewHTTPError(http.StatusInternalServerError, "Failed to validate request")
+			}
+			if rateLimited {
+				// Log rate limit violation using existing system
+				logging.LogSecurityEvent(
+					logging.EventRateLimitViolation,
+					nil, // No IP in logs - privacy preserving
+					nil,
+					nil,
+					map[string]interface{}{
+						"endpoint":    "/api/admin",
+						"description": "Admin API rate limit exceeded",
+					},
+				)
+				return echo.NewHTTPError(http.StatusTooManyRequests, "Admin rate limit exceeded")
+			}
+		}
+
+		// 4. Valid admin JWT
+		username := auth.GetUsernameFromToken(c)
+		if username == "" {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Admin authentication required")
+		}
+
+		// 5. Admin privileges
+		user, err := models.GetUserByUsername(database.DB, username)
+		if err != nil || !user.HasAdminPrivileges() {
+			return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
+		}
+
+		// 6. Block dev admin accounts in production
+		if utils.IsProductionEnvironment() && utils.IsDevAdminAccount(username) {
+			logging.ErrorLogger.Printf("SECURITY: Blocked dev admin account '%s' in production", username)
+			return echo.NewHTTPError(http.StatusForbidden, "Dev admin accounts blocked in production")
+		}
+
+		// 7. Audit log using existing security event system (no IP stored)
+		logging.LogSecurityEvent(
+			logging.EventAdminAccess, // Will need to add this event type to logging package
+			nil,                      // No IP in logs - privacy preserving
+			&username,
+			nil,
+			map[string]interface{}{
+				"endpoint": c.Request().URL.Path,
+				"method":   c.Request().Method,
+			},
+		)
 
 		return next(c)
 	}

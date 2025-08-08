@@ -213,24 +213,44 @@ func CompleteTOTPSetup(db *sql.DB, username, testCode string, sessionKey []byte)
 
 // ValidateTOTPCode validates a TOTP code with replay protection
 func ValidateTOTPCode(db *sql.DB, username, code string, sessionKey []byte) error {
+	fmt.Printf("DEBUG TOTP: Starting validation for user %s with code %s\n", username, code)
+	fmt.Printf("DEBUG TOTP: Session key length: %d bytes\n", len(sessionKey))
+
 	// Get user's TOTP data
 	totpData, err := getTOTPData(db, username)
 	if err != nil {
+		logging.ErrorLogger.Printf("DEBUG TOTP: Failed to get TOTP data for %s: %v", username, err)
 		return fmt.Errorf("failed to get TOTP data: %w", err)
 	}
+
+	logging.InfoLogger.Printf("DEBUG TOTP: TOTP enabled=%t, setup_completed=%t", totpData.Enabled, totpData.SetupCompleted)
 
 	if !totpData.Enabled || !totpData.SetupCompleted {
 		return fmt.Errorf("TOTP not enabled for user")
 	}
 
-	// Decrypt secret
+	// CRITICAL FIX: Session key derivation issue
+	// The sessionKey parameter is already derived from the export key, but we need the export key
+	// to properly derive the TOTP key that was used during setup.
+	// For admin user validation, we need to re-derive from the original export key context.
+
+	// Get the export key by reconstructing the derivation chain
+	// The sessionKey was derived from exportKey, so we need to work backwards or use a different approach
+
+	// Try to decrypt with the session key first (current approach)
+	logging.InfoLogger.Printf("DEBUG TOTP: Attempting to decrypt TOTP secret...")
 	secret, err := decryptTOTPSecret(totpData.SecretEncrypted, sessionKey)
 	if err != nil {
+		logging.ErrorLogger.Printf("DEBUG TOTP: Failed to decrypt TOTP secret for %s: %v", username, err)
 		return fmt.Errorf("failed to decrypt TOTP secret: %w", err)
 	}
+	logging.InfoLogger.Printf("DEBUG TOTP: Successfully decrypted TOTP secret (length: %d)", len(secret))
 
 	// Validate code
-	valid, err := totp.ValidateCustom(code, secret, time.Now().UTC(), totp.ValidateOpts{
+	currentTime := time.Now().UTC()
+	logging.InfoLogger.Printf("DEBUG TOTP: Validating code %s against secret at time %v", code, currentTime)
+
+	valid, err := totp.ValidateCustom(code, secret, currentTime, totp.ValidateOpts{
 		Period:    TOTPPeriod,
 		Skew:      uint(TOTPSkew),
 		Digits:    otp.DigitsSix,
@@ -238,10 +258,18 @@ func ValidateTOTPCode(db *sql.DB, username, code string, sessionKey []byte) erro
 	})
 
 	if err != nil {
+		logging.ErrorLogger.Printf("DEBUG TOTP: TOTP validation error for %s: %v", username, err)
 		return fmt.Errorf("TOTP validation error: %w", err)
 	}
 
+	logging.InfoLogger.Printf("DEBUG TOTP: Validation result for %s: %t", username, valid)
+
 	if !valid {
+		// Generate what the code should be for debugging
+		expectedCode, genErr := totp.GenerateCode(secret, currentTime)
+		if genErr == nil {
+			logging.ErrorLogger.Printf("DEBUG TOTP: Expected code at %v: %s (received: %s)", currentTime, expectedCode, code)
+		}
 		return fmt.Errorf("invalid TOTP code")
 	}
 
@@ -544,20 +572,28 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 }
 
 func decryptTOTPSecret(encrypted []byte, sessionKey []byte) (string, error) {
+	logging.InfoLogger.Printf("DEBUG TOTP: decryptTOTPSecret - encrypted length: %d bytes", len(encrypted))
+	logging.InfoLogger.Printf("DEBUG TOTP: decryptTOTPSecret - session key length: %d bytes", len(sessionKey))
+
 	// Use user-specific persistent key derived from user's OPAQUE record
 	// This ensures the same key is used regardless of session
 	totpKey, err := deriveUserTOTPKey(sessionKey)
 	if err != nil {
+		logging.ErrorLogger.Printf("DEBUG TOTP: Failed to derive TOTP key: %v", err)
 		return "", err
 	}
 	defer crypto.SecureZeroSessionKey(totpKey)
 
+	logging.InfoLogger.Printf("DEBUG TOTP: Successfully derived TOTP key, length: %d bytes", len(totpKey))
+
 	// Decrypt using AES-GCM
 	decrypted, err := crypto.DecryptGCM(encrypted, totpKey)
 	if err != nil {
+		logging.ErrorLogger.Printf("DEBUG TOTP: AES-GCM decryption failed: %v", err)
 		return "", err
 	}
 
+	logging.InfoLogger.Printf("DEBUG TOTP: Successfully decrypted, result length: %d bytes", len(decrypted))
 	return string(decrypted), nil
 }
 
@@ -580,7 +616,6 @@ func decryptJSON(encrypted []byte, sessionKey []byte, target interface{}) error 
 // This key is derived from the user's OPAQUE export key and remains the same
 // across different login sessions, unlike session-specific keys
 func deriveUserTOTPKey(sessionKey []byte) ([]byte, error) {
-	// Use a specific context for user TOTP encryption that's distinct from session keys
-	const UserTOTPContext = "ARKFILE_USER_TOTP_PERSISTENT"
-	return crypto.DeriveSessionKey(sessionKey, UserTOTPContext)
+	// Use the same context constant as defined in crypto/session.go
+	return crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
 }

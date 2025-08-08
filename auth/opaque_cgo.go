@@ -43,8 +43,9 @@ func libopaqueRegisterUser(password []byte, serverPrivateKey []byte) ([]byte, []
 }
 
 // libopaqueAuthenticateUser is a Go wrapper for the one-step authentication
+// IMPORTANT: This now returns the deterministic export_key, not a random session_key
 func libopaqueAuthenticateUser(password []byte, userRecord []byte) ([]byte, error) {
-	sessionKey := make([]byte, OPAQUE_SHARED_SECRETBYTES)
+	exportKey := make([]byte, OPAQUE_SHARED_SECRETBYTES)
 
 	cPassword := C.CBytes(password)
 	defer C.free(cPassword)
@@ -53,14 +54,14 @@ func libopaqueAuthenticateUser(password []byte, userRecord []byte) ([]byte, erro
 		(*C.uint8_t)(cPassword),
 		C.uint16_t(len(password)),
 		(*C.uint8_t)(unsafe.Pointer(&userRecord[0])),
-		(*C.uint8_t)(unsafe.Pointer(&sessionKey[0])),
+		(*C.uint8_t)(unsafe.Pointer(&exportKey[0])),
 	)
 
 	if ret != 0 {
 		return nil, fmt.Errorf("libopaque authentication failed: error code %d", ret)
 	}
 
-	return sessionKey, nil
+	return exportKey, nil
 }
 
 // Error handling helper

@@ -43,6 +43,7 @@ const (
 	EventSecurityAudit       SecurityEventType = "security_audit"
 	EventSystemStartup       SecurityEventType = "system_startup"
 	EventSystemShutdown      SecurityEventType = "system_shutdown"
+	EventAdminAccess         SecurityEventType = "admin_access"
 )
 
 // SecurityEventSeverity defines the severity levels for security events

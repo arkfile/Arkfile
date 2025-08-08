@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+
+	"github.com/84adam/arkfile/utils"
 )
 
 var (
@@ -379,6 +381,37 @@ func validateConfig(cfg *Config) error {
 		}
 	default:
 		return fmt.Errorf("unsupported storage provider: %s", cfg.Storage.Provider)
+	}
+
+	return nil
+}
+
+// ValidateProductionConfig validates that the configuration is safe for production
+func ValidateProductionConfig() error {
+	if utils.IsProductionEnvironment() {
+		// Get admin usernames from configuration
+		cfg, err := LoadConfig()
+		if err != nil {
+			return fmt.Errorf("failed to load config for production validation: %w", err)
+		}
+
+		// Check for dev admin accounts in configuration
+		for _, adminUsername := range cfg.Deployment.AdminUsernames {
+			if utils.IsDevAdminAccount(adminUsername) {
+				return fmt.Errorf("FATAL: Dev admin account '%s' found in production ADMIN_USERNAMES - deployment blocked", adminUsername)
+			}
+		}
+
+		// Also check environment variable directly as a backup
+		adminUsernames := os.Getenv("ADMIN_USERNAMES")
+		if adminUsernames != "" {
+			for _, adminUsername := range strings.Split(adminUsernames, ",") {
+				adminUsername = strings.TrimSpace(adminUsername)
+				if utils.IsDevAdminAccount(adminUsername) {
+					return fmt.Errorf("FATAL: Dev admin account '%s' found in production ADMIN_USERNAMES environment variable - deployment blocked", adminUsername)
+				}
+			}
+		}
 	}
 
 	return nil

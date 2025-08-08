@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -349,6 +350,9 @@ func OpaqueLogin(c echo.Context) error {
 		user.SecureZeroExportKey(exportKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
+
+	fmt.Printf("DEBUG LOGIN: Export key length: %d bytes\n", len(exportKey))
+	fmt.Printf("DEBUG LOGIN: Session key length: %d bytes\n", len(sessionKey))
 
 	// Clear export key from memory immediately after session key derivation
 	user.SecureZeroExportKey(exportKey)

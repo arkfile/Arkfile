@@ -100,12 +100,19 @@ func RegisterRoutes() {
 	totpProtectedGroup.PATCH("/api/files/:filename/keys/:keyId", UpdateKey)
 	totpProtectedGroup.POST("/api/files/:filename/keys/:keyId/set-primary", SetPrimaryKey)
 
-	// User management (admin only) - require TOTP
-	totpProtectedGroup.GET("/api/admin/users", RequireAdmin(ListUsers))
-	totpProtectedGroup.PATCH("/api/admin/users/:username", RequireAdmin(UpdateUser))
-	totpProtectedGroup.DELETE("/api/admin/users/:username", RequireAdmin(DeleteUser))
+	// Admin API endpoints (localhost only, admin auth required)
+	adminGroup := Echo.Group("/api/admin")
+	adminGroup.Use(AdminMiddleware)
+	adminGroup.POST("/test-user/cleanup", AdminCleanupTestUser)
+	adminGroup.POST("/user/:username/approve", AdminApproveUser)
+	adminGroup.GET("/user/:username/status", AdminGetUserStatus)
 
-	// System statistics (admin only) - require TOTP
-	totpProtectedGroup.GET("/api/admin/stats", RequireAdmin(GetSystemStats))
-	totpProtectedGroup.GET("/api/admin/activity", RequireAdmin(GetActivityLogs))
+	// User management (admin only) - require TOTP (commented out until implemented)
+	// totpProtectedGroup.GET("/api/admin/users", RequireAdmin(ListUsers))
+	// totpProtectedGroup.PATCH("/api/admin/users/:username", RequireAdmin(UpdateUser))
+	// totpProtectedGroup.DELETE("/api/admin/users/:username", RequireAdmin(DeleteUser))
+
+	// System statistics (admin only) - require TOTP (commented out until implemented)
+	// totpProtectedGroup.GET("/api/admin/stats", RequireAdmin(GetSystemStats))
+	// totpProtectedGroup.GET("/api/admin/activity", RequireAdmin(GetActivityLogs))
 }

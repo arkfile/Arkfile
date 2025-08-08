@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/84adam/arkfile/auth"
+	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/utils"
 )
 
@@ -36,6 +37,15 @@ func validateUsername(username string) error {
 
 // isAdminUsername checks if a username is in the admin list
 func isAdminUsername(username string) bool {
+	// Block dev admin accounts in production
+	if utils.IsProductionEnvironment() {
+		if utils.IsDevAdminAccount(username) {
+			logging.ErrorLogger.Printf("SECURITY WARNING: Blocked dev admin account '%s' in production", username)
+			return false
+		}
+	}
+
+	// Normal admin username check
 	adminUsernames := strings.Split(getEnvOrDefault("ADMIN_USERNAMES", ""), ",")
 	for _, adminUsername := range adminUsernames {
 		if strings.TrimSpace(adminUsername) == username {
@@ -81,6 +91,9 @@ func CreateUser(db *sql.DB, username string, email *string) (*User, error) {
 
 // GetUserByUsername retrieves a user by username
 func GetUserByUsername(db *sql.DB, username string) (*User, error) {
+	// DEBUG: Log the lookup attempt
+	fmt.Printf("DEBUG: GetUserByUsername called for username '%s'\n", username)
+
 	user := &User{}
 	var createdAtStr string
 	var approvedAtStr sql.NullString
@@ -101,10 +114,18 @@ func GetUserByUsername(db *sql.DB, username string) (*User, error) {
 
 	if err != nil {
 		if err == sql.ErrNoRows {
+			// DEBUG: Log when no user is found
+			fmt.Printf("DEBUG: No user found with username '%s'\n", username)
 			return nil, err // Return sql.ErrNoRows directly
 		}
+		// DEBUG: Log database errors
+		fmt.Printf("DEBUG: Database error looking up username '%s': %v\n", username, err)
 		return nil, err
 	}
+
+	// DEBUG: Log when user is found
+	fmt.Printf("DEBUG: Found user '%s' with ID %d, IsAdmin: %t, IsApproved: %t\n",
+		user.Username, user.ID, user.IsAdmin, user.IsApproved)
 
 	// Handle optional email field
 	if emailStr.Valid {
@@ -401,8 +422,14 @@ func (u *User) RegisterOPAQUEAccount(db *sql.DB, password string) error {
 
 // AuthenticateOPAQUE authenticates the user's account password via OPAQUE
 func (u *User) AuthenticateOPAQUE(db *sql.DB, password string) ([]byte, error) {
+	fmt.Printf("DEBUG OPAQUE: AuthenticateOPAQUE called for user %s\n", u.Username)
+
 	// Check if we're in mock mode
-	if getEnvOrDefault("OPAQUE_MOCK_MODE", "") == "true" {
+	mockMode := getEnvOrDefault("OPAQUE_MOCK_MODE", "")
+	fmt.Printf("DEBUG OPAQUE: OPAQUE_MOCK_MODE = '%s'\n", mockMode)
+
+	if mockMode == "true" {
+		fmt.Printf("DEBUG OPAQUE: Using mock mode authentication\n")
 		// In mock mode, use the OPAQUE provider directly for testing
 		provider := auth.GetOPAQUEProvider()
 		if !provider.IsAvailable() {
@@ -422,18 +449,24 @@ func (u *User) AuthenticateOPAQUE(db *sql.DB, password string) ([]byte, error) {
 			return nil, fmt.Errorf("mock authentication failed: %w", err)
 		}
 
+		fmt.Printf("DEBUG OPAQUE: Mock mode returned export key length: %d\n", len(exportKey))
 		return exportKey, nil
 	}
 
+	fmt.Printf("DEBUG OPAQUE: Using production mode authentication\n")
 	// Production mode: Use unified password manager for account password authentication
 	recordIdentifier := u.Username // Account passwords now use username as identifier
+	fmt.Printf("DEBUG OPAQUE: Record identifier: %s\n", recordIdentifier)
+
 	opm := auth.GetOPAQUEPasswordManagerWithDB(db)
 
 	exportKey, err := opm.AuthenticatePassword(recordIdentifier, password)
 	if err != nil {
+		fmt.Printf("DEBUG OPAQUE: Authentication failed: %v\n", err)
 		return nil, fmt.Errorf("account password authentication failed: %w", err)
 	}
 
+	fmt.Printf("DEBUG OPAQUE: Production mode returned export key length: %d\n", len(exportKey))
 	return exportKey, nil
 }
 

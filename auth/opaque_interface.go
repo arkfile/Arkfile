@@ -54,9 +54,8 @@ func GetOPAQUEProvider() OPAQUEProvider {
 		if os.Getenv("OPAQUE_MOCK_MODE") == "true" {
 			provider = NewMockOPAQUEProvider()
 		} else {
-			// Use mock by default for now to avoid libopaque.so dependency
-			// In full production, this would initialize real OPAQUE provider
-			provider = NewMockOPAQUEProvider()
+			// Use real OPAQUE provider for production
+			provider = NewRealOPAQUEProvider()
 		}
 	}
 	return provider

@@ -1,21 +1,29 @@
 package main
 
 import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/pquerna/otp/totp"
 
 	"github.com/84adam/arkfile/auth"
 	"github.com/84adam/arkfile/config"
+	"github.com/84adam/arkfile/crypto"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/handlers"
 	"github.com/84adam/arkfile/logging"
+	"github.com/84adam/arkfile/models"
 	"github.com/84adam/arkfile/storage"
+	"github.com/84adam/arkfile/utils"
 )
 
 func setupRoutes(e *echo.Echo) {
@@ -57,6 +65,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
+
+	// Validate production configuration
+	if err := config.ValidateProductionConfig(); err != nil {
+		log.Fatalf("Production configuration validation failed: %v", err)
+	}
+
 	log.Printf("Configuration loaded successfully")
 	_ = cfg // Use the config variable to prevent unused variable warning
 
@@ -79,6 +93,11 @@ func main() {
 
 	// Rate limiting schema is now included in unified_schema.sql
 	// No separate application needed
+
+	// Initialize OPAQUE server keys first (required for real OPAQUE provider)
+	if err := auth.SetupServerKeys(database.DB); err != nil {
+		log.Fatalf("Failed to setup OPAQUE server keys: %v", err)
+	}
 
 	// Initialize OPAQUE provider
 	provider := auth.GetOPAQUEProvider()
@@ -123,6 +142,13 @@ func main() {
 
 	// Initialize storage
 	storage.InitMinio()
+
+	// Initialize admin user if needed
+	if err := initializeAdminUser(); err != nil {
+		log.Printf("Warning: Failed to initialize admin user: %v", err)
+		log.Printf("Application will continue running without admin user setup")
+		// Don't crash the app - admin user can be set up manually later
+	}
 
 	// Create Echo instance
 	e := echo.New()
@@ -228,4 +254,252 @@ func main() {
 	if err := e.Start(":" + port); err != nil {
 		logging.ErrorLogger.Printf("Failed to start HTTP server: %v", err)
 	}
+}
+
+// initializeAdminUser creates and configures the designated admin user if needed
+// CRITICAL SECURITY: This function MUST NEVER run in production environment
+func initializeAdminUser() error {
+	// SECURITY CHECK #1: Block in production environment
+	if utils.IsProductionEnvironment() {
+		// Log critical security warning and BLOCK execution
+		logging.ErrorLogger.Printf("CRITICAL SECURITY: initializeAdminUser() blocked in production environment")
+		return fmt.Errorf("SECURITY: Admin user initialization blocked in production environment")
+	}
+
+	// SECURITY CHECK #2: Verify we have admin usernames configured
+	adminUsernames := os.Getenv("ADMIN_USERNAMES")
+	if adminUsernames == "" {
+		log.Printf("No ADMIN_USERNAMES configured, skipping admin user initialization")
+		return nil
+	}
+
+	// SECURITY CHECK #3: Block dev admin accounts if somehow we're in production
+	devAdminAccounts := []string{"arkfile-dev-admin", "admin.dev.user", "admin.demo.user", "dev-admin", "test-admin"}
+	for _, devAccount := range devAdminAccounts {
+		if strings.Contains(adminUsernames, devAccount) {
+			if utils.IsProductionEnvironment() {
+				logging.ErrorLogger.Printf("CRITICAL SECURITY: Dev admin account '%s' blocked in production", devAccount)
+				return fmt.Errorf("SECURITY: Dev admin accounts not allowed in production")
+			}
+		}
+	}
+
+	// Get first admin username (for development, we typically use one admin user)
+	adminUsernameList := strings.Split(adminUsernames, ",")
+	if len(adminUsernameList) == 0 {
+		return nil
+	}
+
+	adminUsername := strings.TrimSpace(adminUsernameList[0])
+	if adminUsername == "" {
+		return nil
+	}
+
+	log.Printf("Checking if admin user '%s' needs initialization...", adminUsername)
+
+	// Check if admin user already exists
+	existingUser, err := models.GetUserByUsername(database.DB, adminUsername)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("failed to check admin user existence: %w", err)
+	}
+
+	if existingUser != nil {
+		log.Printf("Admin user '%s' already exists (ID: %d), skipping initialization", adminUsername, existingUser.ID)
+		return nil
+	}
+
+	log.Printf("No existing admin user found - creating fresh admin user '%s' for development/testing...", adminUsername)
+
+	// Create fresh admin user
+	log.Printf("Creating admin user '%s' for development/testing...", adminUsername)
+
+	// Use a secure default password for the admin user
+	// In a real deployment, this should be changed immediately
+	defaultAdminPassword := "DevAdmin2025!SecureInitialPassword"
+
+	// Create admin user with OPAQUE authentication
+	adminUser, err := models.CreateUserWithOPAQUE(database.DB, adminUsername, defaultAdminPassword, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create admin user with OPAQUE: %w", err)
+	}
+
+	log.Printf("Admin user '%s' created successfully with ID: %d", adminUsername, adminUser.ID)
+	log.Printf("IMPORTANT: Default admin password is: %s", defaultAdminPassword)
+
+	// Set up TOTP for the new admin user
+	if err := setupAdminTOTP(adminUser); err != nil {
+		return fmt.Errorf("failed to setup TOTP for new admin user: %w", err)
+	}
+
+	return nil
+}
+
+// isProductionEnvironment checks multiple indicators to determine if we're in production
+func isProductionEnvironment() bool {
+	// Check environment variables that indicate production
+	env := strings.ToLower(os.Getenv("ENVIRONMENT"))
+	goEnv := strings.ToLower(os.Getenv("GO_ENV"))
+	appEnv := strings.ToLower(os.Getenv("APP_ENV"))
+
+	// Production indicators
+	productionIndicators := []string{"production", "prod", "live", "release"}
+
+	for _, indicator := range productionIndicators {
+		if env == indicator || goEnv == indicator || appEnv == indicator {
+			return true
+		}
+	}
+
+	// Check if DEBUG_MODE is explicitly disabled (production setting)
+	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
+	if debugMode == "false" || debugMode == "0" {
+		// Additional check - if debug is disabled AND we don't have explicit dev indicators
+		devIndicators := []string{"development", "dev", "test", "testing", "local"}
+		hasDevIndicator := false
+
+		for _, devIndicator := range devIndicators {
+			if env == devIndicator || goEnv == devIndicator || appEnv == devIndicator {
+				hasDevIndicator = true
+				break
+			}
+		}
+
+		if !hasDevIndicator {
+			return true // Likely production
+		}
+	}
+
+	return false
+}
+
+// setupAdminTOTP sets up TOTP for the admin user with a fixed secret for testing
+// CRITICAL FIX: Now uses deterministic export keys from OPAQUE authentication
+func setupAdminTOTP(user *models.User) error {
+	// SECURITY CHECK: Double-check production environment (defense in depth)
+	if utils.IsProductionEnvironment() {
+		logging.ErrorLogger.Printf("CRITICAL SECURITY: setupAdminTOTP() blocked in production environment")
+		return fmt.Errorf("SECURITY: Admin TOTP setup blocked in production environment")
+	}
+
+	// Fixed TOTP secret for predictable testing (base32 encoded)
+	// This is "Hello!" encoded in base32 - easy to remember and generates predictable codes
+	fixedTOTPSecret := "JBSWY3DPEHPK3PXP"
+
+	log.Printf("Setting up TOTP for admin user '%s' with fixed secret for testing", user.Username)
+
+	// Generate backup codes
+	backupCodes := generateAdminBackupCodes(10)
+
+	// Get admin user's OPAQUE export key for encryption
+	// Since this is during initialization, we need to use the known admin password
+	defaultAdminPassword := "DevAdmin2025!SecureInitialPassword"
+	fmt.Printf("DEBUG SETUP: About to call user.AuthenticateOPAQUE for TOTP setup\n")
+
+	// CRITICAL FIX: This now returns deterministic export_key instead of random session_key
+	exportKey, err := user.AuthenticateOPAQUE(database.DB, defaultAdminPassword)
+	if err != nil {
+		return fmt.Errorf("failed to get admin user export key: %w", err)
+	}
+	defer user.SecureZeroExportKey(exportKey)
+
+	// Derive session key from export key (same as login flow)
+	sessionKey, err := crypto.DeriveSessionKey(exportKey, crypto.SessionKeyContext)
+	if err != nil {
+		return fmt.Errorf("failed to derive session key: %w", err)
+	}
+	defer crypto.SecureZeroSessionKey(sessionKey)
+
+	fmt.Printf("DEBUG SETUP: Export key length: %d bytes\n", len(exportKey))
+	fmt.Printf("DEBUG SETUP: Session key length: %d bytes\n", len(sessionKey))
+
+	// CRITICAL FIX: Derive TOTP key exactly the same way as validation does
+	// The validation calls deriveUserTOTPKey(sessionKey) which does:
+	// crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
+	totpKey, err := crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
+	if err != nil {
+		return fmt.Errorf("failed to derive TOTP key: %w", err)
+	}
+	defer crypto.SecureZeroSessionKey(totpKey)
+
+	fmt.Printf("DEBUG SETUP: TOTP key length: %d bytes\n", len(totpKey))
+
+	// Encrypt TOTP secret
+	secretEncrypted, err := crypto.EncryptGCM([]byte(fixedTOTPSecret), totpKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
+	}
+
+	// Encrypt backup codes
+	backupCodesJSON, err := json.Marshal(backupCodes)
+	if err != nil {
+		return fmt.Errorf("failed to marshal backup codes: %w", err)
+	}
+
+	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt backup codes: %w", err)
+	}
+
+	// Store TOTP data directly in database (bypass normal setup flow)
+	_, err = database.DB.Exec(`
+		INSERT OR REPLACE INTO user_totp (
+			username, secret_encrypted, backup_codes_encrypted, 
+			enabled, setup_completed, created_at, last_used
+		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		user.Username, secretEncrypted, backupCodesEncrypted,
+		true, true, time.Now(), nil,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to store admin TOTP setup: %w", err)
+	}
+
+	// Generate current TOTP code for immediate testing (use UTC to match validation)
+	currentCode, err := totp.GenerateCode(fixedTOTPSecret, time.Now().UTC())
+	if err != nil {
+		log.Printf("Warning: Failed to generate current TOTP code: %v", err)
+	}
+
+	// Log setup completion with testing information
+	log.Printf("✅ TOTP setup completed for admin user '%s'", user.Username)
+	log.Printf("📱 TOTP Secret: %s", fixedTOTPSecret)
+	log.Printf("🔗 Manual Entry: %s", formatTOTPManualEntry(fixedTOTPSecret))
+	log.Printf("🔐 Current TOTP Code: %s", currentCode)
+	log.Printf("🗝️  Backup Codes: %v", backupCodes[:3]) // Show first 3 codes
+	log.Printf("ℹ️  QR Code URL: otpauth://totp/ArkFile:%s?secret=%s&issuer=ArkFile&digits=6&period=30", user.Username, fixedTOTPSecret)
+	log.Printf("⚠️  SECURITY: This is a fixed TOTP secret for development/testing only!")
+	log.Printf("🎯 KEY FIX: Now using deterministic export keys for consistent TOTP encryption!")
+
+	return nil
+}
+
+// generateAdminBackupCodes generates backup codes for admin user
+func generateAdminBackupCodes(count int) []string {
+	// Use a simple charset for backup codes
+	const charset = "ACDEFGHJKLMNPQRTUVWXY34679"
+	codes := make([]string, count)
+
+	for i := 0; i < count; i++ {
+		code := make([]byte, 10)
+		for j := 0; j < 10; j++ {
+			// Use a deterministic approach for testing consistency
+			// In real deployment, this would use crypto/rand
+			code[j] = charset[(i*10+j)%len(charset)]
+		}
+		codes[i] = string(code)
+	}
+
+	return codes
+}
+
+// formatTOTPManualEntry formats TOTP secret for manual entry
+func formatTOTPManualEntry(secret string) string {
+	formatted := ""
+	for i, char := range secret {
+		if i > 0 && i%4 == 0 {
+			formatted += " "
+		}
+		formatted += string(char)
+	}
+	return formatted
 }
