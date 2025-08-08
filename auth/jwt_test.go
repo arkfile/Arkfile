@@ -1,10 +1,14 @@
 package auth
 
 import (
+	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,6 +17,81 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
 )
+
+// createTestJWTKeys creates Ed25519 keys for testing
+func createTestJWTKeys() error {
+	// Create test key directory
+	keyDir := "/tmp/test-arkfile-keys/jwt/current"
+	if err := os.MkdirAll(keyDir, 0755); err != nil {
+		return fmt.Errorf("failed to create test key directory: %w", err)
+	}
+
+	// Generate Ed25519 key pair
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		return fmt.Errorf("failed to generate Ed25519 key pair: %w", err)
+	}
+
+	// Marshal private key to PKCS8 format
+	privateKeyBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		return fmt.Errorf("failed to marshal private key: %w", err)
+	}
+
+	// Marshal public key to PKIX format
+	publicKeyBytes, err := x509.MarshalPKIXPublicKey(publicKey)
+	if err != nil {
+		return fmt.Errorf("failed to marshal public key: %w", err)
+	}
+
+	// Create PEM blocks
+	privateKeyPEM := &pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: privateKeyBytes,
+	}
+
+	publicKeyPEM := &pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: publicKeyBytes,
+	}
+
+	// Write private key
+	privateKeyFile := filepath.Join(keyDir, "signing.key")
+	privateFile, err := os.Create(privateKeyFile)
+	if err != nil {
+		return fmt.Errorf("failed to create private key file: %w", err)
+	}
+	defer privateFile.Close()
+
+	if err := pem.Encode(privateFile, privateKeyPEM); err != nil {
+		return fmt.Errorf("failed to encode private key PEM: %w", err)
+	}
+
+	// Write public key
+	publicKeyFile := filepath.Join(keyDir, "public.key")
+	publicFile, err := os.Create(publicKeyFile)
+	if err != nil {
+		return fmt.Errorf("failed to create public key file: %w", err)
+	}
+	defer publicFile.Close()
+
+	if err := pem.Encode(publicFile, publicKeyPEM); err != nil {
+		return fmt.Errorf("failed to encode public key PEM: %w", err)
+	}
+
+	// Set environment variables to point to test keys
+	os.Setenv("JWT_PRIVATE_KEY_PATH", privateKeyFile)
+	os.Setenv("JWT_PUBLIC_KEY_PATH", publicKeyFile)
+
+	return nil
+}
+
+// cleanupTestJWTKeys removes test keys and directories
+func cleanupTestJWTKeys() {
+	os.RemoveAll("/tmp/test-arkfile-keys")
+	os.Unsetenv("JWT_PRIVATE_KEY_PATH")
+	os.Unsetenv("JWT_PUBLIC_KEY_PATH")
+}
 
 // TestMain sets up necessary environment variables for config loading before running tests
 // and cleans them up afterwards.
@@ -23,11 +102,11 @@ func TestMain(m *testing.M) {
 	// Store original env vars and set test values
 	originalEnv := map[string]string{}
 	testEnv := map[string]string{
-		"JWT_SECRET":          "test-jwt-secret-for-auth", // Unique secret for this package's tests
-		"STORAGE_PROVIDER":    "local",                    // Set storage provider to local (supports MinIO)
-		"MINIO_ROOT_USER":     "test-user-auth",           // Provide dummy values for all required fields
+		"STORAGE_PROVIDER":    "local",          // Set storage provider to local (supports MinIO)
+		"MINIO_ROOT_USER":     "test-user-auth", // Provide dummy values for all required fields
 		"MINIO_ROOT_PASSWORD": "test-password-auth",
 		"LOCAL_STORAGE_PATH":  "/tmp/test-storage-auth", // Required for local storage
+		// JWT keys will use default paths for test keys (created below)
 	}
 
 	for key, testValue := range testEnv {
@@ -35,17 +114,28 @@ func TestMain(m *testing.M) {
 		os.Setenv(key, testValue)
 	}
 
+	// Create test Ed25519 keys for testing
+	err := createTestJWTKeys()
+	if err != nil {
+		fmt.Printf("FATAL: Failed to create test JWT keys: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Load config with test env vars
-	_, err := config.LoadConfig()
+	_, err = config.LoadConfig()
 	if err != nil {
 		fmt.Printf("FATAL: Failed to load config for auth tests: %v\n", err)
 		os.Exit(1)
 	}
 
+	// Reset keys for test
+	ResetKeysForTest()
+
 	// Run tests
 	exitCode := m.Run()
 
 	// --- Cleanup ---
+	cleanupTestJWTKeys()
 	for key, originalValue := range originalEnv {
 		if originalValue == "" {
 			os.Unsetenv(key)
@@ -82,11 +172,11 @@ func TestGenerateToken(t *testing.T) {
 			// Assert: Verify token structure and claims
 			token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 				// Validate the alg is what you expect:
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				if _, ok := token.Method.(*jwt.SigningMethodEd25519); !ok {
 					return nil, jwt.ErrSignatureInvalid // Use standard error
 				}
-				// Validate using the secret loaded from config by TestMain
-				return []byte(config.GetConfig().Security.JWTSecret), nil
+				// Validate using the Ed25519 public key
+				return GetJWTPublicKey(), nil
 			})
 
 			assert.NoError(t, err)
@@ -172,9 +262,9 @@ func TestJWTMiddleware(t *testing.T) {
 						ID:        "valid-token-id",
 					},
 				}
-				token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-				// Sign with the secret loaded from config by TestMain
-				tokenString, _ := token.SignedString([]byte(config.GetConfig().Security.JWTSecret))
+				token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+				// Sign with the Ed25519 private key
+				tokenString, _ := token.SignedString(GetJWTPrivateKey())
 				return tokenString
 			},
 			expectedStatus: http.StatusOK,
@@ -191,9 +281,9 @@ func TestJWTMiddleware(t *testing.T) {
 						ID:        "expired-token-id",
 					},
 				}
-				token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-				// Sign with the secret loaded from config by TestMain
-				tokenString, _ := token.SignedString([]byte(config.GetConfig().Security.JWTSecret))
+				token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+				// Sign with the Ed25519 private key
+				tokenString, _ := token.SignedString(GetJWTPrivateKey())
 				return tokenString
 			},
 			expectedStatus: http.StatusUnauthorized,
@@ -203,14 +293,16 @@ func TestJWTMiddleware(t *testing.T) {
 		{
 			name: "Invalid Signature",
 			tokenFunc: func() string {
-				claims := &Claims{ // Use claims but sign with wrong key
+				// Generate a different Ed25519 key pair for wrong signature
+				_, wrongPrivateKey, _ := ed25519.GenerateKey(nil)
+				claims := &Claims{
 					Username: "test.user.invalid",
 					RegisteredClaims: jwt.RegisteredClaims{
 						ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 					},
 				}
-				token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-				tokenString, _ := token.SignedString([]byte("wrong-secret-key")) // Sign with wrong key
+				token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+				tokenString, _ := token.SignedString(wrongPrivateKey) // Sign with wrong key
 				return tokenString
 			},
 			expectedStatus: http.StatusUnauthorized,

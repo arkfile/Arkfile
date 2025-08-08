@@ -48,10 +48,8 @@ func main() {
 	// This allows flexibility - the app can work with systemd EnvironmentFile
 	// or with a local .env file for development
 	if err := godotenv.Load(); err != nil {
-		// Log the error but don't fail - environment variables might be
-		// provided by systemd or other means
-		log.Printf("Warning: Could not load .env file: %v", err)
-		log.Printf("Continuing with environment variables from system/systemd")
+		// This is expected behavior in production with systemd - log as info, not warning
+		log.Printf("Info: No .env file found (%v), using system environment variables", err)
 	}
 
 	// Load configuration - this must happen after environment variables are loaded
@@ -64,8 +62,8 @@ func main() {
 
 	// Initialize logging with error handling
 	loggingConfig := &logging.LogConfig{
-		LogDir:     "var/log",        // Use the var/log directory that's properly set up
-		MaxSize:    10 * 1024 * 1024, // 10MB
+		LogDir:     "/opt/arkfile/var/log", // Use absolute path for production deployment
+		MaxSize:    10 * 1024 * 1024,       // 10MB
 		MaxBackups: 5,
 		LogLevel:   logging.INFO,
 	}
@@ -79,15 +77,8 @@ func main() {
 	database.InitDB()
 	defer database.DB.Close()
 
-	// Apply Phase 5E database schema for rate limiting
-	// Temporarily disabled to fix remaining schema issues
-	/*
-		if err := database.ApplyRateLimitingSchema(); err != nil {
-			log.Fatalf("Failed to apply rate limiting schema: %v", err)
-		}
-		logging.InfoLogger.Printf("Rate limiting database schema applied successfully")
-	*/
-	logging.InfoLogger.Printf("Rate limiting schema application temporarily disabled")
+	// Rate limiting schema is now included in unified_schema.sql
+	// No separate application needed
 
 	// Initialize OPAQUE provider
 	provider := auth.GetOPAQUEProvider()

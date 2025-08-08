@@ -105,8 +105,8 @@ func createUnifiedSchema() {
 		log.Printf("Warning: Could not disable foreign keys: %v", err)
 	}
 
-	// Execute the entire schema as a single operation
-	// This avoids the fragile statement-splitting approach
+	// Execute the entire schema as a single operation - simpler and more reliable
+	log.Printf("Executing unified database schema as single operation")
 	_, err = DB.Exec(string(schemaSQL))
 	if err != nil {
 		log.Fatalf("Critical: Failed to execute unified schema: %v", err)
@@ -120,6 +120,86 @@ func createUnifiedSchema() {
 	}
 
 	log.Println("Successfully applied complete unified database schema")
+}
+
+// splitSQLStatements splits a SQL file into individual statements
+// This handles multi-line statements properly by splitting on semicolons outside of string literals
+func splitSQLStatements(sql string) []string {
+	var statements []string
+	var current strings.Builder
+	inString := false
+	inComment := false
+	var stringChar rune
+
+	lines := strings.Split(sql, "\n")
+
+	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+
+		// Skip empty lines and comment-only lines
+		if trimmedLine == "" || strings.HasPrefix(trimmedLine, "--") {
+			continue
+		}
+
+		// Process character by character to handle strings and comments
+		for i, r := range line {
+			switch r {
+			case '-':
+				// Check for start of comment
+				if !inString && i < len(line)-1 && line[i+1] == '-' {
+					inComment = true
+				}
+				if !inComment {
+					current.WriteRune(r)
+				}
+			case '\'', '"':
+				if !inComment {
+					if !inString {
+						inString = true
+						stringChar = r
+					} else if r == stringChar {
+						// Check if it's escaped
+						if i > 0 && line[i-1] != '\\' {
+							inString = false
+						}
+					}
+					current.WriteRune(r)
+				}
+			case ';':
+				if !inString && !inComment {
+					current.WriteRune(r)
+					// End of statement
+					stmt := strings.TrimSpace(current.String())
+					if stmt != "" && !strings.HasPrefix(stmt, "--") {
+						statements = append(statements, stmt)
+					}
+					current.Reset()
+				} else if !inComment {
+					current.WriteRune(r)
+				}
+			default:
+				if !inComment {
+					current.WriteRune(r)
+				}
+			}
+		}
+
+		// Reset comment flag at end of line, add newline if we're building a statement
+		inComment = false
+		if current.Len() > 0 {
+			current.WriteRune('\n')
+		}
+	}
+
+	// Add any remaining content
+	if current.Len() > 0 {
+		stmt := strings.TrimSpace(current.String())
+		if stmt != "" && !strings.HasPrefix(stmt, "--") {
+			statements = append(statements, stmt)
+		}
+	}
+
+	return statements
 }
 
 // Log user actions

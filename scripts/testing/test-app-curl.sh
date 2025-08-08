@@ -1,8 +1,7 @@
 #!/bin/bash
 
-# Master ArkFile Authentication Testing Script
-# Comprehensive End-to-End Authentication Flow Testing
-# Consolidates: test-auth-flow-curl.sh + test-totp-endpoints-curl.sh + test-opaque-totp-flow-curl.sh
+# Master ArkFile App Testing Script
+# Comprehensive End-to-End App Testing
 #
 # Flow: Cleanup → Registration → Approval → TOTP Setup → Login → 2FA Auth → 
 #       Session Management → Endpoint Testing → Logout → Cleanup
@@ -17,7 +16,7 @@ ARKFILE_BASE_URL="${ARKFILE_BASE_URL:-https://localhost:4443}"
 INSECURE_FLAG="--insecure"  # For local development with self-signed certs
 TEST_USERNAME="${TEST_USERNAME:-auth-test-user-12345}"
 TEST_EMAIL="${TEST_EMAIL:-auth-test@example.com}"
-TEST_PASSWORD="${TEST_PASSWORD:-SecureTestPassword123456789!}"
+TEST_PASSWORD="${TEST_PASSWORD:-SuperSecureTestPassword123456789!@#$%^&*()ABCDEFGabcdefg}"
 TEMP_DIR=$(mktemp -d)
 
 # Colors for output
@@ -230,14 +229,83 @@ phase_cleanup_and_health() {
     
     log "Cleaning up existing test user: $TEST_USERNAME"
     
-    # Clean up all test user data
-    execute_db_query "DELETE FROM users WHERE username = '$TEST_USERNAME'" "Remove user from users table" >/dev/null || true
-    execute_db_query "DELETE FROM opaque_user_data WHERE username = '$TEST_USERNAME'" "Remove OPAQUE data" >/dev/null || true
-    execute_db_query "DELETE FROM user_totp WHERE username = '$TEST_USERNAME'" "Remove TOTP data" >/dev/null || true
-    execute_db_query "DELETE FROM totp_usage_log WHERE username = '$TEST_USERNAME'" "Remove TOTP usage logs" >/dev/null || true
-    execute_db_query "DELETE FROM totp_backup_usage WHERE username = '$TEST_USERNAME'" "Remove backup code logs" >/dev/null || true
+    # Clean up all test user data - Updated for current schema
+    local cleanup_success=true
+    local cleanup_details=""
     
-    success "Test user cleanup completed"
+    # Check each deletion and track results
+    local result
+    result=$(execute_db_query "DELETE FROM users WHERE username = '$TEST_USERNAME'" "Remove user from users table" 2>/dev/null || echo "ERROR")
+    if [[ "$result" != "ERROR" ]]; then
+        local rows_affected=$(echo "$result" | jq -r '.results[0].rows_affected // 0' 2>/dev/null || echo "0")
+        cleanup_details="${cleanup_details}users(${rows_affected}) "
+    else
+        cleanup_success=false
+        cleanup_details="${cleanup_details}users(FAIL) "
+    fi
+    
+    # CRITICAL: Clean BOTH OPAQUE tables - this was the missing piece!
+    result=$(execute_db_query "DELETE FROM opaque_user_data WHERE username = '$TEST_USERNAME'" "Remove OPAQUE user data" 2>/dev/null || echo "ERROR")
+    if [[ "$result" != "ERROR" ]]; then
+        local rows_affected=$(echo "$result" | jq -r '.results[0].rows_affected // 0' 2>/dev/null || echo "0")
+        cleanup_details="${cleanup_details}opaque_user(${rows_affected}) "
+    else
+        cleanup_success=false
+        cleanup_details="${cleanup_details}opaque_user(FAIL) "
+    fi
+    
+    result=$(execute_db_query "DELETE FROM opaque_password_records WHERE record_identifier = '$TEST_USERNAME' OR associated_username = '$TEST_USERNAME'" "Remove OPAQUE password records" 2>/dev/null || echo "ERROR")
+    if [[ "$result" != "ERROR" ]]; then
+        local rows_affected=$(echo "$result" | jq -r '.results[0].rows_affected // 0' 2>/dev/null || echo "0")
+        cleanup_details="${cleanup_details}opaque_pwd(${rows_affected}) "
+    else
+        cleanup_success=false
+        cleanup_details="${cleanup_details}opaque_pwd(FAIL) "
+    fi
+    
+    result=$(execute_db_query "DELETE FROM user_totp WHERE username = '$TEST_USERNAME'" "Remove TOTP data" 2>/dev/null || echo "ERROR")
+    if [[ "$result" != "ERROR" ]]; then
+        local rows_affected=$(echo "$result" | jq -r '.results[0].rows_affected // 0' 2>/dev/null || echo "0")
+        cleanup_details="${cleanup_details}totp(${rows_affected}) "
+    else
+        cleanup_success=false
+        cleanup_details="${cleanup_details}totp(FAIL) "
+    fi
+    
+    result=$(execute_db_query "DELETE FROM refresh_tokens WHERE username = '$TEST_USERNAME'" "Remove refresh tokens" 2>/dev/null || echo "ERROR")
+    if [[ "$result" != "ERROR" ]]; then
+        local rows_affected=$(echo "$result" | jq -r '.results[0].rows_affected // 0' 2>/dev/null || echo "0")
+        cleanup_details="${cleanup_details}tokens(${rows_affected}) "
+    else
+        cleanup_success=false
+        cleanup_details="${cleanup_details}tokens(FAIL) "
+    fi
+    
+    if [ "$cleanup_success" = true ]; then
+        success "Test user cleanup completed: $cleanup_details"
+    else
+        warning "Test user cleanup had failures: $cleanup_details"
+        info "Some cleanup failures are expected if user doesn't exist yet"
+    fi
+    
+    # Add a small delay to ensure cleanup is fully processed
+    sleep 1
+    
+    # Double-check that user doesn't exist after cleanup
+    local verify_user_result
+    verify_user_result=$(query_db "SELECT COUNT(*) FROM users WHERE username = '$TEST_USERNAME'" "Verify user deletion" 2>/dev/null || echo "ERROR")
+    if [[ "$verify_user_result" != "ERROR" ]]; then
+        local user_count
+        user_count=$(echo "$verify_user_result" | jq -r '.results[0].values[0][0] // 0' 2>/dev/null || echo "0")
+        if [ "$user_count" -gt 0 ]; then
+            warning "User still exists in database after cleanup! Count: $user_count"
+            # Force delete the user
+            execute_db_query "DELETE FROM users WHERE username = '$TEST_USERNAME'" "Force delete user" >/dev/null || true
+            sleep 1
+        else
+            debug "Verified: User does not exist in database (count: $user_count)"
+        fi
+    fi
     
     # Test server health
     log "Testing server connectivity and health..."
@@ -297,26 +365,12 @@ phase_registration() {
     
     log "Registering new user: $TEST_USERNAME"
     
-    # Test device capability detection first
-    log "Testing device capability detection..."
-    local device_response
-    device_response=$(curl -s $INSECURE_FLAG \
-        -H "Content-Type: application/json" \
-        "$ARKFILE_BASE_URL/api/opaque/device-info" || echo "ERROR")
-    
-    if [ "$device_response" != "ERROR" ]; then
-        debug "Device info response: $device_response"
-        success "Device capability detection available"
-    else
-        warning "Device capability detection unavailable (may be expected)"
-    fi
-    
     local register_request
     register_request=$(jq -n \
-        --arg email "$TEST_EMAIL" \
+        --arg username "$TEST_USERNAME" \
         --arg password "$TEST_PASSWORD" \
         '{
-            email: $email,
+            username: $username,
             password: $password
         }')
     
@@ -963,14 +1017,14 @@ phase_login() {
     local timer_start
     [ "$PERFORMANCE_MODE" = true ] && timer_start=$(start_timer)
     
-    log "Attempting login with OPAQUE user: $TEST_EMAIL"
+    log "Attempting login with OPAQUE user: $TEST_USERNAME"
     
     local login_request
     login_request=$(jq -n \
-        --arg email "$TEST_EMAIL" \
+        --arg username "$TEST_USERNAME" \
         --arg password "$TEST_PASSWORD" \
         '{
-            email: $email,
+            username: $username,
             password: $password
         }')
     
@@ -1383,12 +1437,16 @@ phase_final_cleanup() {
     
     log "Removing test user data from database..."
     
-    # Clean up all test user data
+    # Clean up all test user data - Updated for current schema
     execute_db_query "DELETE FROM users WHERE username = '$TEST_USERNAME'" "Remove test user" >/dev/null || true
-    execute_db_query "DELETE FROM opaque_user_data WHERE username = '$TEST_USERNAME'" "Remove OPAQUE data" >/dev/null || true
+    execute_db_query "DELETE FROM opaque_user_data WHERE username = '$TEST_USERNAME'" "Remove OPAQUE user data" >/dev/null || true
+    execute_db_query "DELETE FROM opaque_password_records WHERE record_identifier = '$TEST_USERNAME' OR associated_username = '$TEST_USERNAME'" "Remove OPAQUE password records" >/dev/null || true
     execute_db_query "DELETE FROM user_totp WHERE username = '$TEST_USERNAME'" "Remove TOTP data" >/dev/null || true
     execute_db_query "DELETE FROM totp_usage_log WHERE username = '$TEST_USERNAME'" "Remove TOTP logs" >/dev/null || true
-    execute_db_query "DELETE FROM totp_backup_usage WHERE username = '$TEST_USERNAME'" "Remove backup logs" >/dev/null || true
+    execute_db_query "DELETE FROM totp_backup_usage WHERE username = '$TEST_USERNAME'" "Remove backup code logs" >/dev/null || true
+    execute_db_query "DELETE FROM refresh_tokens WHERE username = '$TEST_USERNAME'" "Remove refresh tokens" >/dev/null || true
+    execute_db_query "DELETE FROM revoked_tokens WHERE username = '$TEST_USERNAME'" "Remove revoked tokens" >/dev/null || true
+    execute_db_query "DELETE FROM user_activity WHERE username = '$TEST_USERNAME'" "Remove user activity logs" >/dev/null || true
     
     success "Final cleanup completed"
     

@@ -69,16 +69,24 @@ golden/
 *_benchmark.*
 *_performance.*
 
-# Log files (all types)
+# Log files (all types and locations)
 logging/logs/*.log
 logs/
+var/log/
+var/logs/
+**/logs/
+**/log/
 *.log
+*_*.log
 audit_*.log
 security_*.log
 access_*.log
 error_*.log
 debug_*.log
 trace_*.log
+app_*.log
+arkfile_*.log
+service_*.log
 
 # Test reports and coverage
 coverage.out

@@ -1,183 +1,6 @@
 # Go Utilities Migration Project
 
-## JWT Algorithm Migration to EdDSA/Ed25519
-
-### Overview
-
-Before implementing the Go utilities migration, Arkfile will undergo a critical security upgrade by migrating from HMAC-SHA256 (HS256) JWT tokens to EdDSA with Ed25519 signatures. This migration addresses fundamental security limitations of symmetric key JWT implementations and establishes a modern, auditable cryptographic foundation.
-
-### Current State Analysis
-
-**Current Implementation:**
-- **Algorithm**: `jwt.SigningMethodHS256` (HMAC-SHA256)
-- **Key Type**: Symmetric shared secret stored in `config.Security.JWTSecret`
-- **Key Material**: Environment variable string converted to byte array
-- **Security Issues**: Key distribution problems, algorithm confusion vulnerabilities, lack of proper key rotation
-
-**Target Implementation:**
-- **Algorithm**: `jwt.SigningMethodEdDSA` (Ed25519 signatures)
-- **Key Type**: Asymmetric Ed25519 keypairs (32-byte private + 32-byte public keys)
-- **Key Material**: PEM-encoded keys with 600 permissions, owned by `arkfile` user
-- **Security Benefits**: No key distribution issues, immune to timing attacks, smallest signature size, fastest verification
-
-### Migration Strategy
-
-#### Phase 1: Core JWT Infrastructure Migration
-
-**Key Generation System:**
-- Generate Ed25519 keypairs using `crypto/ed25519.GenerateKey(crypto/rand.Reader)` 
-- Leverage `/dev/urandom` through Go's `crypto/rand` package for cryptographically secure key generation
-- Store keys in PEM format at `/opt/arkfile/etc/keys/jwt/private.pem` and `public.pem`
-- Set file permissions to 600 for private keys, 644 for public keys, owned by `arkfile` user
-
-**Application Code Updates:**
-```go
-// Current implementation:
-token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-return token.SignedString([]byte(config.GetConfig().Security.JWTSecret))
-
-// New implementation:
-token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-return token.SignedString(privateKey) // Ed25519 private key
-```
-
-**Backward Compatibility:**
-- Dual-algorithm support during transition period
-- Token validation accepts both HS256 and EdDSA during migration
-- Gradual rollout with token refresh triggering algorithm migration
-- Complete cutover after all active tokens expire (24-hour window)
-
-#### Phase 2: Automated Key Rotation System
-
-**Rotation Schedule:**
-- **Recommended Interval**: 60 days (optimal balance of security and operational overhead)
-- **Alternative Options**: 30 days (high-security environments) or 90 days (lower-risk scenarios)
-- **Implementation**: Automated scheduling via systemd timers or Go-based cron system
-
-**Key Rotation Process:**
-1. **Pre-rotation Validation**: Verify current key integrity and system health
-2. **Backup Creation**: Create encrypted backup of current keys with separate master key
-3. **New Key Generation**: Generate fresh Ed25519 keypair using secure random generation
-4. **Atomic Replacement**: Replace keys with minimal service downtime (< 1 second)
-5. **Service Restart**: Graceful restart of arkfile service to load new keys
-6. **Validation**: Comprehensive post-rotation testing and health verification
-7. **Cleanup**: Archive old keys and update rotation logs
-
-**Dual-Key Transition Support:**
-- Maintain both old and new public keys during transition period
-- Sign new tokens with new private key
-- Validate existing tokens with appropriate public key (based on token metadata)
-- Automatic migration of user sessions during natural token refresh cycles
-
-#### Phase 3: Encrypted Backup and Recovery
-
-**Backup Encryption:**
-- Use `golang.org/x/crypto/nacl/secretbox` for authenticated encryption of key backups
-- Generate separate master key for backup encryption (stored securely outside key directory)
-- Create tamper-evident backup metadata with checksums and timestamps
-- Implement backup integrity verification procedures
-
-**Backup Storage:**
-- Local encrypted backups: `/opt/arkfile/backups/jwt-keys/`
-- Backup retention: 30 days of daily backups, 12 months of monthly backups
-- Compressed and encrypted backup archives with detailed manifest files
-- Support for remote backup destinations (S3-compatible storage)
-
-**Recovery Procedures:**
-- Emergency key restoration from encrypted backups
-- Rollback capabilities with service coordination
-- Key validation and health checking post-recovery
-- Detailed incident logging and audit trails
-
-#### Phase 4: Security Monitoring and Compliance
-
-**Key Health Monitoring:**
-- Automated key age monitoring with configurable alert thresholds
-- Cryptographic validation of key integrity (mathematical correctness)
-- File permission and ownership verification
-- Key usage analytics and anomaly detection
-
-**Audit and Compliance:**
-- Comprehensive logging of all key operations (generation, rotation, backup, recovery)
-- Tamper-resistant audit logs suitable for compliance requirements
-- Integration with existing security event logging system
-- Detailed reporting for security audits and compliance frameworks
-
-**Emergency Procedures:**
-- Immediate key rotation capabilities for security incidents
-- User session invalidation and forced re-authentication
-- Incident response documentation and communication templates
-- Post-incident key validation and system hardening verification
-
-### Implementation Dependencies
-
-**Required Packages (All FOSS):**
-- `crypto/ed25519` - Ed25519 key generation and operations (Go standard library)
-- `crypto/rand` - Cryptographically secure random number generation (uses `/dev/urandom`)
-- `crypto/x509` - PEM encoding/decoding for key storage (Go standard library)
-- `github.com/golang-jwt/jwt/v5` - JWT library with EdDSA support (already included)
-- `golang.org/x/crypto/nacl/secretbox` - Authenticated encryption for backups (already included)
-
-**No External Dependencies:**
-- Pure Go implementation using standard library and existing dependencies
-- No C libraries, external cryptographic tools, or proprietary components required
-- Compatible with existing build system and deployment processes
-
-### Integration with Go Utilities Migration
-
-**Setup Utility Integration:**
-- `cmd/arkfile-setup` will include Ed25519 key generation during initial installation
-- Migration detection and automatic upgrade from HMAC to EdDSA during system setup
-- Validation of key infrastructure as part of system health checks
-
-**Admin Utility Integration:**
-- `cmd/arkfile-admin` will provide comprehensive key rotation and management commands
-- Automated scheduling and monitoring of key rotation operations
-- Backup management and recovery procedures
-- Emergency key rotation capabilities
-
-**Cryptocli Integration:**
-- Extend existing `cmd/cryptocli` with Ed25519 key validation and diagnostic tools
-- Key health checking and cryptographic validation utilities
-- Integration with overall cryptographic infrastructure management
-
-### Timeline and Milestones
-
-**Week 1-2: JWT Migration Preparation**
-- Update `auth/jwt.go` to support dual-algorithm validation
-- Implement Ed25519 key generation and PEM storage utilities
-- Create backward compatibility layer for smooth transition
-
-**Week 3-4: Key Rotation Infrastructure**
-- Implement automated key rotation logic with atomic replacement
-- Create encrypted backup and recovery systems
-- Build key health monitoring and validation systems
-
-**Week 5-6: Integration and Testing**
-- Integrate JWT migration with Go utilities development
-- Comprehensive testing across all supported environments
-- Security validation and penetration testing of new key infrastructure
-
-**Week 7: Deployment and Migration**
-- Gradual rollout with dual-algorithm support
-- Monitor migration progress and system health
-- Complete cutover to EdDSA-only mode
-
-### Success Metrics
-
-**Security Improvements:**
-- Elimination of symmetric key distribution vulnerabilities
-- Reduction in JWT signature verification time (Ed25519 performance advantage)
-- Enhanced audit capabilities with asymmetric key operations
-- Improved compliance posture with modern cryptographic standards
-
-**Operational Benefits:**
-- Automated key rotation reducing manual security maintenance
-- Encrypted backup system providing disaster recovery capabilities
-- Comprehensive monitoring reducing security incident response time
-- Integration with Go utilities providing unified management interface
-
-## Bash Script Migration Overview
+## Bash-to-Go Script Migration Overview
 
 This document outlines the plan to migrate Arkfile's bash-based setup and maintenance scripts to Go utilities, reducing script complexity while improving reliability, maintainability, and user experience.
 
@@ -405,20 +228,19 @@ The certificate generation will use Go's crypto/x509 and crypto/tls packages to 
 
 Certificate parameters will include appropriate subject names, key usage extensions, validity periods, and subject alternative names for service certificates. The system will support both development certificates (self-signed) and integration with external Certificate Authorities for production deployments.
 
-#### Database Setup and Management (database/database.go)
+#### Database Setup and Management (database/database.go) [DEPRECATED]
 
-Replaces: `scripts/setup/06-setup-database.sh`
+Would have replaced `scripts/setup/06-setup-database*.sh` scripts (these have been deleted now). The system now uses a unified schema. No need for such scripts any longer.
 
-The database component will handle database schema creation, migration, and connectivity testing using the same database libraries as the main application.
+New functions should include those for connectivity testing, database migrations post-deployment, and database backups.
 
 Key functions:
-- `CreateDatabaseSchema()` - Create all required tables and indexes
 - `MigrateDatabase()` - Handle database schema migrations
 - `TestDatabaseConnectivity()` - Verify database accessibility
 - `BackupDatabase()` - Create database backups during maintenance
 
 Implementation approach:
-The database setup will connect to rqlite using the same connection logic as the main application, ensuring consistency in database access patterns. Schema creation will execute the SQL statements from the existing schema files but with better error handling and transaction management.
+The database functions will connect to rqlite using the same connection logic as the main application, ensuring consistency in database access patterns.
 
 Database migration support will be built-in from the start, allowing future schema changes to be applied automatically during system updates. The system will track applied migrations and provide rollback capabilities where possible.
 
@@ -674,9 +496,6 @@ The atomic rotation process will minimize service disruption by stopping the ark
 
 Rollback capabilities will support restoration from any timestamped backup, with automatic detection of the most recent backup if no specific timestamp is provided, and comprehensive verification that restored Ed25519 keys work correctly with the EdDSA JWT implementation.
 
-**Migration from HMAC to EdDSA:**
-The rotation system will include special migration logic to handle the transition from the current HMAC-SHA256 implementation to EdDSA/Ed25519, including dual-algorithm support during the transition period and automatic detection of which key type is currently in use.
-
 ##### Certificate Rotation (rotation/certificates.go)
 
 Replaces: `scripts/maintenance/renew-certificates.sh`
@@ -780,7 +599,7 @@ This will be implemented in `cmd/arkfile-admin` with a `schedule` subcommand tha
 
 The Go utilities plan incorporates security best practices that are missing from the current bash implementation:
 
-**Key Derivation Function Updates**: While not requiring separate keys, the system should support updating KDF parameters (Argon2id settings) used for password hashing. This will be included in the security audit functionality.
+**Key Derivation Function Updates**: While not requiring separate keys, the system should support updating KDF parameters (Argon2id settings) used for file-share password hashing. This will be included in the security audit functionality.
 
 **Cryptographic Algorithm Migration**: Support for migrating between cryptographic algorithms (e.g., RSA to ECDSA for certificates) will be included in the certificate rotation system.
 

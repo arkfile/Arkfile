@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/84adam/arkfile/config" // Import config package
+	// Import config package
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	echojwt "github.com/labstack/echo-jwt/v4"
@@ -39,9 +39,9 @@ func GenerateToken(username string) (string, error) {
 		},
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	// Use JWTSecret from loaded config
-	return token.SignedString([]byte(config.GetConfig().Security.JWTSecret))
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	// Use Ed25519 private key for signing
+	return token.SignedString(GetJWTPrivateKey())
 }
 
 func JWTMiddleware() echo.MiddlewareFunc {
@@ -49,8 +49,9 @@ func JWTMiddleware() echo.MiddlewareFunc {
 		NewClaimsFunc: func(c echo.Context) jwt.Claims {
 			return new(Claims)
 		},
-		// Use JWTSecret from loaded config
-		SigningKey: []byte(config.GetConfig().Security.JWTSecret),
+		// Use Ed25519 public key for validation
+		SigningKey:    GetJWTPublicKey(),
+		SigningMethod: jwt.SigningMethodEdDSA.Alg(),
 		ErrorHandler: func(c echo.Context, err error) error {
 			return echo.NewHTTPError(401, "Unauthorized")
 		},
@@ -109,8 +110,8 @@ func GenerateTemporaryTOTPToken(username string) (string, error) {
 		},
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(config.GetConfig().Security.JWTSecret))
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	return token.SignedString(GetJWTPrivateKey())
 }
 
 // GenerateFullAccessToken creates a full access JWT token after TOTP validation
@@ -130,8 +131,8 @@ func GenerateFullAccessToken(username string) (string, error) {
 		},
 	}
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(config.GetConfig().Security.JWTSecret))
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	return token.SignedString(GetJWTPrivateKey())
 }
 
 // RequiresTOTPFromToken checks if the token requires TOTP completion
@@ -147,7 +148,8 @@ func TOTPJWTMiddleware() echo.MiddlewareFunc {
 		NewClaimsFunc: func(c echo.Context) jwt.Claims {
 			return new(Claims)
 		},
-		SigningKey: []byte(config.GetConfig().Security.JWTSecret),
+		SigningKey:    GetJWTPublicKey(),
+		SigningMethod: jwt.SigningMethodEdDSA.Alg(),
 		ErrorHandler: func(c echo.Context, err error) error {
 			return echo.NewHTTPError(401, "Unauthorized")
 		},

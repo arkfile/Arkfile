@@ -31,7 +31,7 @@ scripts/
 ├── testing/                          # Testing and validation scripts
 │   ├── test-only.sh                  # Run test suite
 │   ├── test-wasm.sh                  # WebAssembly tests
-│   ├── test-auth-curl.sh             # Functional Auth tests using curl
+│   ├── test-app-curl.sh              # Comprehensive application testing
 |   ├── totp-generator.go             # Helper utility for TOTP (2FA) testing
 │   ├── test-typescript.sh            # TypeScript testing suite
 │   ├── performance-benchmark.sh      # Performance testing
@@ -149,10 +149,22 @@ The setup scripts are numbered to show their logical dependency order:
 **Usage**: `./scripts/testing/test-wasm.sh`  
 **Tests**: WASM crypto functions, browser compatibility
 
-#### `test-auth-curl.sh`
-**Purpose**: Comprehensive end-to-end authentication flow testing (consolidates all auth testing)  
-**Location**: `./scripts/testing/test-auth-curl.sh`  
-**Usage**: `./scripts/testing/test-auth-curl.sh [options]`  
+#### `test-app-curl.sh`
+**Purpose**: Comprehensive application testing with OPAQUE authentication and TOTP  
+**Location**: `./scripts/testing/test-app-curl.sh`  
+**Usage**:
+```bash
+# Run full application test
+./scripts/testing/test-app-curl.sh
+
+# Quick mode
+./scripts/testing/test-app-curl.sh --quick
+
+# Debug mode  
+./scripts/testing/test-app-curl.sh --debug
+```
+
+Tests complete user workflow: registration → TOTP setup → login → session management → cleanup.
 
 #### `totp-generator.go`
 **Purpose**: Generate production-compatible TOTP codes for automated testing  

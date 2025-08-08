@@ -327,9 +327,9 @@ func CreateUserWithOPAQUE(db *sql.DB, username, password string, email *string) 
 	// In test environment, this may be mocked differently
 	_, err = tx.Exec(`
 		INSERT INTO opaque_password_records 
-		(record_type, record_identifier, password_record, associated_username, is_active, server_public_key)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		"account", recordIdentifier, userRecord, username, true, []byte("dummy-server-public-key"))
+		(record_type, record_identifier, opaque_user_record, associated_username, is_active)
+		VALUES (?, ?, ?, ?, ?)`,
+		"account", recordIdentifier, userRecord, username, true)
 	if err != nil {
 		// In test environments, the table might not exist or be mocked differently
 		// Log the error but don't fail completely if we're in a test environment
@@ -386,9 +386,9 @@ func (u *User) RegisterOPAQUEAccount(db *sql.DB, password string) error {
 	// Store record in database (even in mock mode for testing)
 	_, err = db.Exec(`
 		INSERT INTO opaque_password_records 
-		(record_type, record_identifier, password_record, associated_username, is_active, server_public_key)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		"account", u.Username, userRecord, u.Username, true, []byte("dummy-server-public-key"))
+		(record_type, record_identifier, opaque_user_record, associated_username, is_active)
+		VALUES (?, ?, ?, ?, ?)`,
+		"account", u.Username, userRecord, u.Username, true)
 	if err != nil {
 		// In mock mode, table might not exist, but that's okay for testing
 		if getEnvOrDefault("OPAQUE_MOCK_MODE", "") != "true" {
