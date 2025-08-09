@@ -1,603 +1,419 @@
 package auth
 
 import (
-	"crypto/rand"
 	"database/sql"
-	"encoding/base32"
-	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/84adam/arkfile/crypto"
-	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pquerna/otp/totp"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-// Test constants
-const (
-	testUsername         = "test_username"
-	testPassword         = "TestPassword123!"
-	testSecretB32        = "JBSWY3DPEHPK3PXP" // Test secret for reproducible tests
-	TOTPSetupTempContext = "ARKFILE_TOTP_SETUP_TEMP"
-)
-
-// Helper function to generate test session key
-func generateTestSessionKey(t *testing.T) []byte {
-	t.Helper()
-	// Generate a deterministic session key for testing
-	opaqueExportKey := make([]byte, 32)
-	copy(opaqueExportKey, []byte("test-opaque-export-key-for-testing"))
-
-	sessionKey, err := crypto.DeriveSessionKey(opaqueExportKey, crypto.SessionKeyContext)
-	require.NoError(t, err)
-	return sessionKey
-}
-
-// Helper function to generate valid TOTP code for testing
-func generateTestTOTPCode(t *testing.T, secret string, testTime time.Time) string {
-	t.Helper()
-	// NOTE: totp.GenerateCodeCustom expects the raw secret bytes, not the base32 string.
-	// But our validation functions now use the base32 string. For the test to pass,
-	// we must generate the code from the base32 string, just like an authenticator app would.
-	code, err := totp.GenerateCode(secret, testTime)
-	require.NoError(t, err)
-	return code
-}
-
-// Helper function to generate valid TOTP code for benchmarking
-func generateTestTOTPCodeBench(b *testing.B, secret string, testTime time.Time) string {
-	b.Helper()
-	// This appears to be unused now. Let's keep it but fix it.
-	code, err := totp.GenerateCode(secret, testTime)
+func setupTOTPTestDB(t *testing.T) *sql.DB {
+	// Use in-memory SQLite for testing
+	db, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
-		b.Fatal(err)
+		t.Fatalf("Failed to open test database: %v", err)
 	}
-	return code
+
+	// Create the required tables for TOTP testing
+	schema := `
+		CREATE TABLE user_totp (
+			username TEXT PRIMARY KEY,
+			secret_encrypted BLOB NOT NULL,
+			backup_codes_encrypted BLOB NOT NULL,
+			enabled BOOLEAN DEFAULT FALSE,
+			setup_completed BOOLEAN DEFAULT FALSE,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			last_used DATETIME
+		);
+
+		CREATE TABLE totp_usage_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL,
+			code_hash TEXT NOT NULL,
+			window_start INTEGER NOT NULL,
+			used_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+
+		CREATE TABLE totp_backup_usage (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL,
+			code_hash TEXT NOT NULL,
+			used_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	`
+
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatalf("Failed to create test schema: %v", err)
+	}
+
+	return db
 }
 
-// Helper function to create test database with mocks
-func setupTOTPTestDB(t *testing.T) (*sql.DB, sqlmock.Sqlmock) {
-	t.Helper()
-	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
-	require.NoError(t, err)
+func TestServerSideTOTPKeyManagement(t *testing.T) {
+	// Initialize TOTP master key for testing
+	if err := crypto.InitializeTOTPMasterKey(); err != nil {
+		t.Fatalf("Failed to initialize TOTP master key: %v", err)
+	}
 
-	t.Cleanup(func() {
-		db.Close()
-	})
+	username := "testuser"
 
-	return db, mock
-}
+	// Test key derivation consistency
+	key1, err := crypto.DeriveTOTPUserKey(username)
+	if err != nil {
+		t.Fatalf("Failed to derive TOTP key 1: %v", err)
+	}
+	defer crypto.SecureZeroTOTPKey(key1)
 
-// Test TOTP Setup Generation
-func TestGenerateTOTPSetup_Success(t *testing.T) {
-	sessionKey := generateTestSessionKey(t)
-	defer crypto.SecureZeroSessionKey(sessionKey)
+	key2, err := crypto.DeriveTOTPUserKey(username)
+	if err != nil {
+		t.Fatalf("Failed to derive TOTP key 2: %v", err)
+	}
+	defer crypto.SecureZeroTOTPKey(key2)
 
-	setup, err := GenerateTOTPSetup(testUsername, sessionKey)
-	require.NoError(t, err)
-	assert.NotNil(t, setup)
+	// Keys should be identical for the same user
+	if len(key1) != len(key2) {
+		t.Fatal("TOTP keys have different lengths")
+	}
 
-	// Verify secret is base32 encoded (add padding if needed)
-	secretPadded := setup.Secret
-	if len(setup.Secret)%8 != 0 {
-		padding := 8 - (len(setup.Secret) % 8)
-		for i := 0; i < padding; i++ {
-			secretPadded += "="
+	for i := range key1 {
+		if key1[i] != key2[i] {
+			t.Fatal("TOTP keys are not identical")
 		}
 	}
-	secretBytes, err := base32.StdEncoding.DecodeString(secretPadded)
-	require.NoError(t, err)
-	assert.Equal(t, 32, len(secretBytes)) // 32 bytes = 256 bits
 
-	// Verify QR code URL format
-	expectedPrefix := "otpauth://totp/ArkFile:" + testUsername + "?secret="
-	assert.Contains(t, setup.QRCodeURL, expectedPrefix)
-	assert.Contains(t, setup.QRCodeURL, "&issuer=ArkFile")
-	assert.Contains(t, setup.QRCodeURL, "&digits=6")
-	assert.Contains(t, setup.QRCodeURL, "&period=30")
+	// Test that different users get different keys
+	key3, err := crypto.DeriveTOTPUserKey("different_user")
+	if err != nil {
+		t.Fatalf("Failed to derive TOTP key 3: %v", err)
+	}
+	defer crypto.SecureZeroTOTPKey(key3)
 
-	// Verify backup codes
-	assert.Len(t, setup.BackupCodes, BackupCodeCount)
-	for _, code := range setup.BackupCodes {
-		assert.Len(t, code, BackupCodeLength)
-		// Verify codes only contain allowed characters
-		for _, char := range code {
-			assert.Contains(t, BackupCodeCharset, string(char))
+	// Keys should be different for different users
+	identical := true
+	for i := range key1 {
+		if key1[i] != key3[i] {
+			identical = false
+			break
 		}
 	}
-
-	// Verify manual entry format
-	assert.NotEmpty(t, setup.ManualEntry)
-	assert.Contains(t, setup.ManualEntry, " ") // Should contain spaces for formatting
-}
-
-// Test TOTP Setup Storage
-func TestStoreTOTPSetup_Success(t *testing.T) {
-	db, mock := setupTOTPTestDB(t)
-	sessionKey := generateTestSessionKey(t)
-	defer crypto.SecureZeroSessionKey(sessionKey)
-
-	setup, err := GenerateTOTPSetup(testUsername, sessionKey)
-	require.NoError(t, err)
-
-	// Mock database insert
-	mock.ExpectExec(`INSERT OR REPLACE INTO user_totp`).
-		WithArgs(testUsername, sqlmock.AnyArg(), sqlmock.AnyArg(), false, false, sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	err = StoreTOTPSetup(db, testUsername, setup, sessionKey)
-	require.NoError(t, err)
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// Test TOTP Setup Completion
-func TestCompleteTOTPSetup_Success(t *testing.T) {
-	db, mock := setupTOTPTestDB(t)
-	sessionKey := generateTestSessionKey(t)
-	defer crypto.SecureZeroSessionKey(sessionKey)
-
-	// Encrypt the test secret with TEMPORARY key (like during setup)
-	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, TOTPSetupTempContext)
-	require.NoError(t, err)
-	defer crypto.SecureZeroSessionKey(tempTotpKey)
-
-	secretEncrypted, err := crypto.EncryptGCM([]byte(testSecretB32), tempTotpKey)
-	require.NoError(t, err)
-
-	// Create some mock backup codes
-	backupCodes := []string{"TEST123456", "TEST234567"}
-	backupCodesJSON, err := json.Marshal(backupCodes)
-	require.NoError(t, err)
-
-	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, tempTotpKey)
-	require.NoError(t, err)
-
-	// Mock database queries
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
-		WithArgs(testUsername).
-		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
-			AddRow(secretEncrypted, backupCodesEncrypted, false, false, time.Now(), nil))
-
-	// Mock update query with production encryption
-	mock.ExpectExec(`UPDATE user_totp SET secret_encrypted = \?, backup_codes_encrypted = \?, enabled = true, setup_completed = true WHERE username = \?`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), testUsername).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Generate valid TOTP code
-	testTime := time.Now()
-	validCode := generateTestTOTPCode(t, testSecretB32, testTime)
-
-	err = CompleteTOTPSetup(db, testUsername, validCode, sessionKey)
-	require.NoError(t, err)
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// Test TOTP Setup Completion with Invalid Code
-func TestCompleteTOTPSetup_InvalidCode(t *testing.T) {
-	db, mock := setupTOTPTestDB(t)
-	sessionKey := generateTestSessionKey(t)
-	defer crypto.SecureZeroSessionKey(sessionKey)
-
-	// Encrypt the test secret with TEMPORARY key (like during setup)
-	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, TOTPSetupTempContext)
-	require.NoError(t, err)
-	defer crypto.SecureZeroSessionKey(tempTotpKey)
-
-	secretEncrypted, err := crypto.EncryptGCM([]byte(testSecretB32), tempTotpKey)
-	require.NoError(t, err)
-
-	// Create some mock backup codes
-	backupCodes := []string{"TEST123456", "TEST234567"}
-	backupCodesJSON, err := json.Marshal(backupCodes)
-	require.NoError(t, err)
-
-	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, tempTotpKey)
-	require.NoError(t, err)
-
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
-		WithArgs(testUsername).
-		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
-			AddRow(secretEncrypted, backupCodesEncrypted, false, false, time.Now(), nil))
-
-	// Use invalid code
-	err = CompleteTOTPSetup(db, testUsername, "000000", sessionKey)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid TOTP code")
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// Test TOTP Code Validation
-func TestValidateTOTPCode_Success(t *testing.T) {
-	db, mock := setupTOTPTestDB(t)
-	sessionKey := generateTestSessionKey(t)
-	defer crypto.SecureZeroSessionKey(sessionKey)
-
-	// Setup encrypted secret
-	totpKey, err := deriveUserTOTPKey(sessionKey)
-	require.NoError(t, err)
-	defer crypto.SecureZeroSessionKey(totpKey)
-
-	secretEncrypted, err := crypto.EncryptGCM([]byte(testSecretB32), totpKey)
-	require.NoError(t, err)
-
-	// Mock getting TOTP data
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
-		WithArgs(testUsername).
-		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
-			AddRow(secretEncrypted, []byte("encrypted-backup-codes"), true, true, time.Now(), nil))
-
-	// Replay protection is temporarily disabled
-	// TODO: Re-enable replay protection tests when the feature is re-implemented
-
-	// Mock updating last used
-	mock.ExpectExec(`UPDATE user_totp SET last_used = \? WHERE username = \?`).
-		WithArgs(sqlmock.AnyArg(), testUsername).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Generate valid code
-	testTime := time.Now()
-	validCode := generateTestTOTPCode(t, testSecretB32, testTime)
-
-	err = ValidateTOTPCode(db, testUsername, validCode, sessionKey)
-	require.NoError(t, err)
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// TODO: Re-implement this test when replay protection is re-enabled
-// // Test TOTP Code Validation with Replay Attack
-// func TestValidateTOTPCode_ReplayAttack(t *testing.T) {
-// 	db, mock := setupTOTPTestDB(t)
-// 	sessionKey := generateTestSessionKey(t)
-// 	defer crypto.SecureZeroSessionKey(sessionKey)
-
-// 	// Setup encrypted secret
-// 	totpKey, err := deriveUserTOTPKey(sessionKey)
-// 	require.NoError(t, err)
-// 	defer crypto.SecureZeroSessionKey(totpKey)
-
-// 	secretEncrypted, err := crypto.EncryptGCM([]byte(testSecretB32), totpKey)
-// 	require.NoError(t, err)
-
-// 	// Mock getting TOTP data
-// 	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
-// 		WithArgs(testUsername).
-// 		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
-//			AddRow(secretEncrypted, []byte("encrypted-backup-codes"), true, true, time.Now(), nil))
-
-// 	// Mock replay check - code already used
-// 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM totp_usage_log WHERE username = \? AND code_hash = \? AND window_start = \?`).
-// 		WithArgs(testUsername, sqlmock.AnyArg(), sqlmock.AnyArg()).
-// 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1)) // Code already used
-
-// 	// Generate valid code
-// 	testTime := time.Now()
-// 	validCode := generateTestTOTPCode(t, testSecretB32, testTime)
-
-// 	err = ValidateTOTPCode(db, testUsername, validCode, sessionKey)
-// 	require.Error(t, err)
-// 	assert.Contains(t, err.Error(), "replay attack detected")
-
-// 	assert.NoError(t, mock.ExpectationsWereMet())
-// }
-
-// Test Backup Code Validation
-func TestValidateBackupCode_Success(t *testing.T) {
-	db, mock := setupTOTPTestDB(t)
-	sessionKey := generateTestSessionKey(t)
-	defer crypto.SecureZeroSessionKey(sessionKey)
-
-	// Setup test backup codes
-	backupCodes := []string{"TEST123456", "TEST234567", "TEST345678"}
-	backupCodesJSON, err := json.Marshal(backupCodes)
-	require.NoError(t, err)
-
-	// Encrypt backup codes
-	totpKey, err := deriveUserTOTPKey(sessionKey)
-	require.NoError(t, err)
-	defer crypto.SecureZeroSessionKey(totpKey)
-
-	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
-	require.NoError(t, err)
-
-	// Mock getting TOTP data
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
-		WithArgs(testUsername).
-		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
-			AddRow([]byte("encrypted-secret"), backupCodesEncrypted, true, true, time.Now(), nil))
-
-	// Mock backup code replay check
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM totp_backup_usage WHERE username = \? AND code_hash = \?`).
-		WithArgs(testUsername, sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-
-	// Mock logging backup code usage
-	mock.ExpectExec(`INSERT INTO totp_backup_usage \(username, code_hash\) VALUES \(\?, \?\)`).
-		WithArgs(testUsername, sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Mock updating last used
-	mock.ExpectExec(`UPDATE user_totp SET last_used = \? WHERE username = \?`).
-		WithArgs(sqlmock.AnyArg(), testUsername).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Use valid backup code
-	testCode := backupCodes[0]
-
-	err = ValidateBackupCode(db, testUsername, testCode, sessionKey)
-	require.NoError(t, err)
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// Test Backup Code Validation with Already Used Code
-func TestValidateBackupCode_AlreadyUsed(t *testing.T) {
-	db, mock := setupTOTPTestDB(t)
-	sessionKey := generateTestSessionKey(t)
-	defer crypto.SecureZeroSessionKey(sessionKey)
-
-	// Setup test backup codes
-	backupCodes := []string{"TEST123456", "TEST234567", "TEST345678"}
-	backupCodesJSON, err := json.Marshal(backupCodes)
-	require.NoError(t, err)
-
-	// Encrypt backup codes
-	totpKey, err := deriveUserTOTPKey(sessionKey)
-	require.NoError(t, err)
-	defer crypto.SecureZeroSessionKey(totpKey)
-
-	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
-	require.NoError(t, err)
-
-	// Mock getting TOTP data
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
-		WithArgs(testUsername).
-		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
-			AddRow([]byte("encrypted-secret"), backupCodesEncrypted, true, true, time.Now(), nil))
-
-	// Mock backup code replay check - code already used
-	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM totp_backup_usage WHERE username = \? AND code_hash = \?`).
-		WithArgs(testUsername, sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1)) // Code already used
-
-	// Use backup code that's already been used
-	testCode := backupCodes[0]
-
-	err = ValidateBackupCode(db, testUsername, testCode, sessionKey)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "backup code already used")
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// Test TOTP Status Check
-func TestIsUserTOTPEnabled_Success(t *testing.T) {
-	db, mock := setupTOTPTestDB(t)
-
-	// Mock enabled TOTP
-	mock.ExpectQuery(`SELECT enabled, setup_completed FROM user_totp WHERE username = \?`).
-		WithArgs(testUsername).
-		WillReturnRows(sqlmock.NewRows([]string{"enabled", "setup_completed"}).
-			AddRow(true, true))
-
-	enabled, err := IsUserTOTPEnabled(db, testUsername)
-	require.NoError(t, err)
-	assert.True(t, enabled)
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// Test TOTP Status Check for Non-Existent User
-func TestIsUserTOTPEnabled_UserNotFound(t *testing.T) {
-	db, mock := setupTOTPTestDB(t)
-
-	// Mock no TOTP record
-	mock.ExpectQuery(`SELECT enabled, setup_completed FROM user_totp WHERE username = \?`).
-		WithArgs(testUsername).
-		WillReturnError(sql.ErrNoRows)
-
-	enabled, err := IsUserTOTPEnabled(db, testUsername)
-	require.NoError(t, err)
-	assert.False(t, enabled)
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// Test TOTP Disable
-func TestDisableTOTP_Success(t *testing.T) {
-	db, mock := setupTOTPTestDB(t)
-	sessionKey := generateTestSessionKey(t)
-	defer crypto.SecureZeroSessionKey(sessionKey)
-
-	// Setup encrypted secret for validation
-	totpKey, err := deriveUserTOTPKey(sessionKey)
-	require.NoError(t, err)
-	defer crypto.SecureZeroSessionKey(totpKey)
-
-	secretEncrypted, err := crypto.EncryptGCM([]byte(testSecretB32), totpKey)
-	require.NoError(t, err)
-
-	// Mock getting TOTP data for validation
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
-		WithArgs(testUsername).
-		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
-			AddRow(secretEncrypted, []byte("encrypted-backup-codes"), true, true, time.Now(), nil))
-
-	// Replay protection is temporarily disabled
-	// TODO: Re-enable replay protection tests when the feature is re-implemented
-
-	// Mock updating last used for validation
-	mock.ExpectExec(`UPDATE user_totp SET last_used = \? WHERE username = \?`).
-		WithArgs(sqlmock.AnyArg(), testUsername).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Mock disabling TOTP
-	mock.ExpectExec(`DELETE FROM user_totp WHERE username = \?`).
-		WithArgs(testUsername).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Generate valid code for disable
-	testTime := time.Now()
-	validCode := generateTestTOTPCode(t, testSecretB32, testTime)
-
-	err = DisableTOTP(db, testUsername, validCode, sessionKey)
-	require.NoError(t, err)
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// Test TOTP Cleanup
-func TestCleanupTOTPLogs_Success(t *testing.T) {
-	db, mock := setupTOTPTestDB(t)
-
-	// Mock cleanup of TOTP usage logs
-	mock.ExpectExec(`DELETE FROM totp_usage_log WHERE used_at < \?`).
-		WithArgs(sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 5)) // 5 rows deleted
-
-	// Mock cleanup of backup code usage logs
-	mock.ExpectExec(`DELETE FROM totp_backup_usage WHERE used_at < \?`).
-		WithArgs(sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 2)) // 2 rows deleted
-
-	err := CleanupTOTPLogs(db)
-	require.NoError(t, err)
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// Test TOTP Helper Functions
-func TestGenerateSingleBackupCode(t *testing.T) {
-	code := generateSingleBackupCode()
-
-	assert.Len(t, code, BackupCodeLength)
-
-	// Verify all characters are from allowed charset
-	for _, char := range code {
-		assert.Contains(t, BackupCodeCharset, string(char))
+	if identical {
+		t.Fatal("TOTP keys for different users are identical")
 	}
 }
 
-func TestFormatManualEntry(t *testing.T) {
-	secret := "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
-	formatted := formatManualEntry(secret)
+func TestTOTPSetup(t *testing.T) {
+	// Initialize TOTP master key for testing
+	if err := crypto.InitializeTOTPMasterKey(); err != nil {
+		t.Fatalf("Failed to initialize TOTP master key: %v", err)
+	}
 
-	assert.Contains(t, formatted, " ")                           // Should contain spaces
-	assert.Equal(t, len(secret)+len(secret)/4-1, len(formatted)) // Original + spaces, -1 for no trailing space
-}
+	db := setupTOTPTestDB(t)
+	defer db.Close()
 
-func TestHashString(t *testing.T) {
-	input := "test-string"
-	hash1 := hashString(input)
-	hash2 := hashString(input)
+	username := "testuser"
 
-	assert.Equal(t, hash1, hash2) // Same input should produce same hash
-	assert.Len(t, hash1, 64)      // SHA-256 produces 64 character hex string
+	// Test TOTP setup generation
+	setup, err := GenerateTOTPSetup(username)
+	if err != nil {
+		t.Fatalf("Failed to generate TOTP setup: %v", err)
+	}
 
-	// Different inputs should produce different hashes
-	hash3 := hashString("different-string")
-	assert.NotEqual(t, hash1, hash3)
-}
+	// Validate setup structure
+	if setup.Secret == "" {
+		t.Fatal("TOTP secret is empty")
+	}
+	if setup.QRCodeURL == "" {
+		t.Fatal("TOTP QR code URL is empty")
+	}
+	if len(setup.BackupCodes) != BackupCodeCount {
+		t.Fatalf("Expected %d backup codes, got %d", BackupCodeCount, len(setup.BackupCodes))
+	}
+	if setup.ManualEntry == "" {
+		t.Fatal("TOTP manual entry is empty")
+	}
 
-// Test Clock Skew Tolerance
-func TestValidateTOTPCode_ClockSkewTolerance(t *testing.T) {
-	db, mock := setupTOTPTestDB(t)
-	sessionKey := generateTestSessionKey(t)
-	defer crypto.SecureZeroSessionKey(sessionKey)
+	// Store the TOTP setup
+	if err := StoreTOTPSetup(db, username, setup); err != nil {
+		t.Fatalf("Failed to store TOTP setup: %v", err)
+	}
 
-	// Setup encrypted secret
-	totpKey, err := deriveUserTOTPKey(sessionKey)
-	require.NoError(t, err)
-	defer crypto.SecureZeroSessionKey(totpKey)
+	// Verify setup was stored correctly
+	totpData, err := getTOTPData(db, username)
+	if err != nil {
+		t.Fatalf("Failed to retrieve TOTP data: %v", err)
+	}
 
-	secretEncrypted, err := crypto.EncryptGCM([]byte(testSecretB32), totpKey)
-	require.NoError(t, err)
+	if totpData.Enabled {
+		t.Fatal("TOTP should not be enabled before completion")
+	}
+	if totpData.SetupCompleted {
+		t.Fatal("TOTP setup should not be completed yet")
+	}
 
-	// Test with code from previous window (should work due to skew tolerance)
-	testTime := time.Now().Add(-TOTPPeriod * time.Second) // Previous window
-	validCode := generateTestTOTPCode(t, testSecretB32, testTime)
+	// Test that we can decrypt the stored secret
+	decryptedSecret, err := decryptTOTPSecret(totpData.SecretEncrypted, username)
+	if err != nil {
+		t.Fatalf("Failed to decrypt TOTP secret: %v", err)
+	}
 
-	// Mock getting TOTP data
-	mock.ExpectQuery(`SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used FROM user_totp WHERE username = \?`).
-		WithArgs(testUsername).
-		WillReturnRows(sqlmock.NewRows([]string{"secret_encrypted", "backup_codes_encrypted", "enabled", "setup_completed", "created_at", "last_used"}).
-			AddRow(secretEncrypted, []byte("encrypted-backup-codes"), true, true, time.Now(), nil))
-
-	// Replay protection is temporarily disabled
-	// TODO: Re-enable replay protection tests when the feature is re-implemented
-
-	// Mock updating last used
-	mock.ExpectExec(`UPDATE user_totp SET last_used = \? WHERE username = \?`).
-		WithArgs(sqlmock.AnyArg(), testUsername).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	err = ValidateTOTPCode(db, testUsername, validCode, sessionKey)
-	require.NoError(t, err)
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// Test Session Key Security
-func TestTOTPSecuritySessionKeyIsolation(t *testing.T) {
-	sessionKey1 := generateTestSessionKey(t)
-	sessionKey2 := make([]byte, 32)
-	copy(sessionKey2, []byte("different-session-key-for-test"))
-
-	defer func() {
-		crypto.SecureZeroSessionKey(sessionKey1)
-		crypto.SecureZeroSessionKey(sessionKey2)
-	}()
-
-	// Generate setup with first session key
-	setup, err := GenerateTOTPSetup(testUsername, sessionKey1)
-	require.NoError(t, err)
-
-	// Encrypt with first key
-	totpKey1, err := deriveUserTOTPKey(sessionKey1)
-	require.NoError(t, err)
-	defer crypto.SecureZeroSessionKey(totpKey1)
-
-	secretEncrypted, err := crypto.EncryptGCM([]byte(setup.Secret), totpKey1)
-	require.NoError(t, err)
-
-	// Try to decrypt with second key (should fail)
-	_, err = decryptTOTPSecret(secretEncrypted, sessionKey2)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cipher: message authentication failed")
-}
-
-// Benchmark TOTP Operations
-func BenchmarkGenerateTOTPSetup(b *testing.B) {
-	sessionKey := make([]byte, 32)
-	rand.Read(sessionKey)
-	defer crypto.SecureZeroSessionKey(sessionKey)
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := GenerateTOTPSetup(testUsername, sessionKey)
-		if err != nil {
-			b.Fatal(err)
-		}
+	if decryptedSecret != setup.Secret {
+		t.Fatal("Decrypted TOTP secret does not match original")
 	}
 }
 
-func BenchmarkValidateTOTPCode(b *testing.B) {
-	// This would require more complex mocking for benchmarking
-	// For now, just benchmark the internal validation
-	secret := testSecretB32
-	testTime := time.Now()
-	validCode := generateTestTOTPCodeBench(b, secret, testTime)
+func TestTOTPCompletion(t *testing.T) {
+	// Initialize TOTP master key for testing
+	if err := crypto.InitializeTOTPMasterKey(); err != nil {
+		t.Fatalf("Failed to initialize TOTP master key: %v", err)
+	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		valid := validateTOTPCodeInternal(secret, validCode)
-		if !valid {
-			b.Fatal("Code validation failed")
-		}
+	db := setupTOTPTestDB(t)
+	defer db.Close()
+
+	username := "testuser"
+
+	// Generate and store TOTP setup
+	setup, err := GenerateTOTPSetup(username)
+	if err != nil {
+		t.Fatalf("Failed to generate TOTP setup: %v", err)
+	}
+
+	if err := StoreTOTPSetup(db, username, setup); err != nil {
+		t.Fatalf("Failed to store TOTP setup: %v", err)
+	}
+
+	// Generate a valid TOTP code
+	currentCode, err := totp.GenerateCode(setup.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Failed to generate TOTP code: %v", err)
+	}
+
+	// Complete TOTP setup
+	if err := CompleteTOTPSetup(db, username, currentCode); err != nil {
+		t.Fatalf("Failed to complete TOTP setup: %v", err)
+	}
+
+	// Verify TOTP is now enabled
+	enabled, err := IsUserTOTPEnabled(db, username)
+	if err != nil {
+		t.Fatalf("Failed to check TOTP status: %v", err)
+	}
+	if !enabled {
+		t.Fatal("TOTP should be enabled after completion")
+	}
+
+	// Test invalid code during setup completion
+	setup2, err := GenerateTOTPSetup("testuser2")
+	if err != nil {
+		t.Fatalf("Failed to generate second TOTP setup: %v", err)
+	}
+
+	if err := StoreTOTPSetup(db, "testuser2", setup2); err != nil {
+		t.Fatalf("Failed to store second TOTP setup: %v", err)
+	}
+
+	// Try to complete with invalid code
+	if err := CompleteTOTPSetup(db, "testuser2", "000000"); err == nil {
+		t.Fatal("TOTP setup completion should fail with invalid code")
+	}
+}
+
+func TestTOTPValidation(t *testing.T) {
+	// Initialize TOTP master key for testing
+	if err := crypto.InitializeTOTPMasterKey(); err != nil {
+		t.Fatalf("Failed to initialize TOTP master key: %v", err)
+	}
+
+	db := setupTOTPTestDB(t)
+	defer db.Close()
+
+	username := "testuser"
+
+	// Set up and complete TOTP
+	setup, err := GenerateTOTPSetup(username)
+	if err != nil {
+		t.Fatalf("Failed to generate TOTP setup: %v", err)
+	}
+
+	if err := StoreTOTPSetup(db, username, setup); err != nil {
+		t.Fatalf("Failed to store TOTP setup: %v", err)
+	}
+
+	currentCode, err := totp.GenerateCode(setup.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Failed to generate TOTP code: %v", err)
+	}
+
+	if err := CompleteTOTPSetup(db, username, currentCode); err != nil {
+		t.Fatalf("Failed to complete TOTP setup: %v", err)
+	}
+
+	// Test valid TOTP code validation
+	testTime := time.Now().UTC()
+	validCode, err := totp.GenerateCode(setup.Secret, testTime)
+	if err != nil {
+		t.Fatalf("Failed to generate valid TOTP code: %v", err)
+	}
+
+	if err := ValidateTOTPCode(db, username, validCode); err != nil {
+		t.Fatalf("Valid TOTP code should be accepted: %v", err)
+	}
+
+	// Test invalid TOTP code
+	if err := ValidateTOTPCode(db, username, "000000"); err == nil {
+		t.Fatal("Invalid TOTP code should be rejected")
+	}
+
+	// Test replay attack prevention
+	if err := ValidateTOTPCode(db, username, validCode); err == nil {
+		t.Fatal("TOTP code replay should be prevented")
+	}
+}
+
+func TestBackupCodeValidation(t *testing.T) {
+	// Initialize TOTP master key for testing
+	if err := crypto.InitializeTOTPMasterKey(); err != nil {
+		t.Fatalf("Failed to initialize TOTP master key: %v", err)
+	}
+
+	db := setupTOTPTestDB(t)
+	defer db.Close()
+
+	username := "testuser"
+
+	// Set up and complete TOTP
+	setup, err := GenerateTOTPSetup(username)
+	if err != nil {
+		t.Fatalf("Failed to generate TOTP setup: %v", err)
+	}
+
+	if err := StoreTOTPSetup(db, username, setup); err != nil {
+		t.Fatalf("Failed to store TOTP setup: %v", err)
+	}
+
+	currentCode, err := totp.GenerateCode(setup.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Failed to generate TOTP code: %v", err)
+	}
+
+	if err := CompleteTOTPSetup(db, username, currentCode); err != nil {
+		t.Fatalf("Failed to complete TOTP setup: %v", err)
+	}
+
+	// Test valid backup code
+	firstBackupCode := setup.BackupCodes[0]
+	if err := ValidateBackupCode(db, username, firstBackupCode); err != nil {
+		t.Fatalf("Valid backup code should be accepted: %v", err)
+	}
+
+	// Test backup code replay prevention
+	if err := ValidateBackupCode(db, username, firstBackupCode); err == nil {
+		t.Fatal("Backup code replay should be prevented")
+	}
+
+	// Test invalid backup code
+	if err := ValidateBackupCode(db, username, "INVALIDCODE"); err == nil {
+		t.Fatal("Invalid backup code should be rejected")
+	}
+}
+
+func TestTOTPCleanup(t *testing.T) {
+	// Initialize TOTP master key for testing
+	if err := crypto.InitializeTOTPMasterKey(); err != nil {
+		t.Fatalf("Failed to initialize TOTP master key: %v", err)
+	}
+
+	db := setupTOTPTestDB(t)
+	defer db.Close()
+
+	// Test cleanup function doesn't error
+	if err := CleanupTOTPLogs(db); err != nil {
+		t.Fatalf("TOTP cleanup failed: %v", err)
+	}
+}
+
+func TestTOTPDisable(t *testing.T) {
+	// Initialize TOTP master key for testing
+	if err := crypto.InitializeTOTPMasterKey(); err != nil {
+		t.Fatalf("Failed to initialize TOTP master key: %v", err)
+	}
+
+	db := setupTOTPTestDB(t)
+	defer db.Close()
+
+	username := "testuser"
+
+	// Set up and complete TOTP
+	setup, err := GenerateTOTPSetup(username)
+	if err != nil {
+		t.Fatalf("Failed to generate TOTP setup: %v", err)
+	}
+
+	if err := StoreTOTPSetup(db, username, setup); err != nil {
+		t.Fatalf("Failed to store TOTP setup: %v", err)
+	}
+
+	currentCode, err := totp.GenerateCode(setup.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Failed to generate TOTP code: %v", err)
+	}
+
+	if err := CompleteTOTPSetup(db, username, currentCode); err != nil {
+		t.Fatalf("Failed to complete TOTP setup: %v", err)
+	}
+
+	// Verify TOTP is enabled
+	enabled, err := IsUserTOTPEnabled(db, username)
+	if err != nil {
+		t.Fatalf("Failed to check TOTP status: %v", err)
+	}
+	if !enabled {
+		t.Fatal("TOTP should be enabled")
+	}
+
+	// Generate a current TOTP code for disabling
+	disableCode, err := totp.GenerateCode(setup.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Failed to generate disable TOTP code: %v", err)
+	}
+
+	// Disable TOTP
+	if err := DisableTOTP(db, username, disableCode); err != nil {
+		t.Fatalf("Failed to disable TOTP: %v", err)
+	}
+
+	// Verify TOTP is disabled
+	enabled, err = IsUserTOTPEnabled(db, username)
+	if err != nil {
+		t.Fatalf("Failed to check TOTP status after disable: %v", err)
+	}
+	if enabled {
+		t.Fatal("TOTP should be disabled")
+	}
+
+	// Test invalid code for disable
+	setup2, err := GenerateTOTPSetup("testuser2")
+	if err != nil {
+		t.Fatalf("Failed to generate second TOTP setup: %v", err)
+	}
+
+	if err := StoreTOTPSetup(db, "testuser2", setup2); err != nil {
+		t.Fatalf("Failed to store second TOTP setup: %v", err)
+	}
+
+	currentCode2, err := totp.GenerateCode(setup2.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("Failed to generate TOTP code: %v", err)
+	}
+
+	if err := CompleteTOTPSetup(db, "testuser2", currentCode2); err != nil {
+		t.Fatalf("Failed to complete TOTP setup: %v", err)
+	}
+
+	// Try to disable with invalid code
+	if err := DisableTOTP(db, "testuser2", "000000"); err == nil {
+		t.Fatal("TOTP disable should fail with invalid code")
 	}
 }

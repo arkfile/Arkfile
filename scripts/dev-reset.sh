@@ -155,6 +155,7 @@ if [ -d "$ARKFILE_DIR" ]; then
     print_status "INFO" "Nuking cryptographic keys..."
     rm -rf "$ARKFILE_DIR/etc/keys/jwt"* 2>/dev/null || true
     rm -rf "$ARKFILE_DIR/etc/keys/opaque"* 2>/dev/null || true
+    rm -f "$ARKFILE_DIR/etc/keys/totp_master.key" 2>/dev/null || true
     
     print_status "SUCCESS" "Data and secrets destroyed"
 else

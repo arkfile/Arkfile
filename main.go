@@ -99,6 +99,11 @@ func main() {
 		log.Fatalf("Failed to setup OPAQUE server keys: %v", err)
 	}
 
+	// Initialize TOTP master key
+	if err := crypto.InitializeTOTPMasterKey(); err != nil {
+		log.Fatalf("Failed to initialize TOTP master key: %v", err)
+	}
+
 	// Initialize OPAQUE provider
 	provider := auth.GetOPAQUEProvider()
 	if !provider.IsAvailable() {
@@ -390,44 +395,28 @@ func setupAdminTOTP(user *models.User) error {
 	// Generate backup codes
 	backupCodes := generateAdminBackupCodes(10)
 
-	// Get admin user's OPAQUE export key for encryption
-	// Since this is during initialization, we need to use the known admin password
-	defaultAdminPassword := "DevAdmin2025!SecureInitialPassword"
-	fmt.Printf("DEBUG SETUP: About to call user.AuthenticateOPAQUE for TOTP setup\n")
+	// NEW APPROACH: Use server-side TOTP key management
+	// This decouples TOTP from OPAQUE sessions for better reliability
+	fmt.Printf("DEBUG SETUP: Using server-side TOTP key management\n")
 
-	// CRITICAL FIX: This now returns deterministic export_key instead of random session_key
-	exportKey, err := user.AuthenticateOPAQUE(database.DB, defaultAdminPassword)
+	// Derive user-specific TOTP key from server master key
+	totpKey, err := crypto.DeriveTOTPUserKey(user.Username)
 	if err != nil {
-		return fmt.Errorf("failed to get admin user export key: %w", err)
+		return fmt.Errorf("failed to derive TOTP user key: %w", err)
 	}
-	defer user.SecureZeroExportKey(exportKey)
-
-	// Derive session key from export key (same as login flow)
-	sessionKey, err := crypto.DeriveSessionKey(exportKey, crypto.SessionKeyContext)
-	if err != nil {
-		return fmt.Errorf("failed to derive session key: %w", err)
-	}
-	defer crypto.SecureZeroSessionKey(sessionKey)
-
-	fmt.Printf("DEBUG SETUP: Export key length: %d bytes\n", len(exportKey))
-	fmt.Printf("DEBUG SETUP: Session key length: %d bytes\n", len(sessionKey))
-
-	// CRITICAL FIX: Derive TOTP key exactly the same way as validation does
-	// The validation calls deriveUserTOTPKey(sessionKey) which does:
-	// crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
-	totpKey, err := crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
-	if err != nil {
-		return fmt.Errorf("failed to derive TOTP key: %w", err)
-	}
-	defer crypto.SecureZeroSessionKey(totpKey)
+	defer crypto.SecureZeroTOTPKey(totpKey)
 
 	fmt.Printf("DEBUG SETUP: TOTP key length: %d bytes\n", len(totpKey))
 
 	// Encrypt TOTP secret
+	fmt.Printf("DEBUG SETUP: Encrypting TOTP secret '%s'\n", fixedTOTPSecret)
+	fmt.Printf("DEBUG SETUP: Secret bytes: %x\n", []byte(fixedTOTPSecret))
 	secretEncrypted, err := crypto.EncryptGCM([]byte(fixedTOTPSecret), totpKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
 	}
+	fmt.Printf("DEBUG SETUP: Encrypted secret length: %d bytes\n", len(secretEncrypted))
+	fmt.Printf("DEBUG SETUP: Encrypted secret: %x\n", secretEncrypted)
 
 	// Encrypt backup codes
 	backupCodesJSON, err := json.Marshal(backupCodes)
@@ -468,7 +457,6 @@ func setupAdminTOTP(user *models.User) error {
 	log.Printf("🗝️  Backup Codes: %v", backupCodes[:3]) // Show first 3 codes
 	log.Printf("ℹ️  QR Code URL: otpauth://totp/ArkFile:%s?secret=%s&issuer=ArkFile&digits=6&period=30", user.Username, fixedTOTPSecret)
 	log.Printf("⚠️  SECURITY: This is a fixed TOTP secret for development/testing only!")
-	log.Printf("🎯 KEY FIX: Now using deterministic export keys for consistent TOTP encryption!")
 
 	return nil
 }

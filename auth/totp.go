@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -21,7 +22,7 @@ const (
 	TOTPIssuer       = "ArkFile"
 	TOTPDigits       = 6
 	TOTPPeriod       = 30
-	TOTPSkew         = 1 // Allow ±1 window (90 seconds total)
+	TOTPSkew         = 1 // Allow ±1 window (90 seconds total: current + prev/next 30s windows)
 	BackupCodeLength = 10
 	BackupCodeCount  = 10
 )
@@ -48,7 +49,7 @@ type TOTPData struct {
 }
 
 // GenerateTOTPSetup creates a new TOTP setup for a user
-func GenerateTOTPSetup(username string, sessionKey []byte) (*TOTPSetup, error) {
+func GenerateTOTPSetup(username string) (*TOTPSetup, error) {
 	// Generate 32-byte secret
 	secret := make([]byte, 32)
 	if _, err := rand.Read(secret); err != nil {
@@ -76,21 +77,17 @@ func GenerateTOTPSetup(username string, sessionKey []byte) (*TOTPSetup, error) {
 	}, nil
 }
 
-// StoreTOTPSetup stores the TOTP setup data in the database (temporarily encrypted during setup)
-func StoreTOTPSetup(db *sql.DB, username string, setup *TOTPSetup, sessionKey []byte) error {
-	// During setup, use a temporary encryption key derivable from session key
-	// This allows us to decrypt during verification, then re-encrypt with production key
-
-	// Derive temporary TOTP setup key (different from production key)
-	const TOTPSetupTempContext = "ARKFILE_TOTP_SETUP_TEMP"
-	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, TOTPSetupTempContext)
+// StoreTOTPSetup stores the TOTP setup data in the database with server-side encryption
+func StoreTOTPSetup(db *sql.DB, username string, setup *TOTPSetup) error {
+	// Derive user-specific TOTP encryption key from server master key
+	totpKey, err := crypto.DeriveTOTPUserKey(username)
 	if err != nil {
-		return fmt.Errorf("failed to derive temporary TOTP key: %w", err)
+		return fmt.Errorf("failed to derive TOTP user key: %w", err)
 	}
-	defer crypto.SecureZeroSessionKey(tempTotpKey)
+	defer crypto.SecureZeroTOTPKey(totpKey)
 
-	// Encrypt the TOTP secret with temporary key
-	secretEncrypted, err := crypto.EncryptGCM([]byte(setup.Secret), tempTotpKey)
+	// Encrypt the TOTP secret
+	secretEncrypted, err := crypto.EncryptGCM([]byte(setup.Secret), totpKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
 	}
@@ -101,12 +98,12 @@ func StoreTOTPSetup(db *sql.DB, username string, setup *TOTPSetup, sessionKey []
 		return fmt.Errorf("failed to marshal backup codes: %w", err)
 	}
 
-	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, tempTotpKey)
+	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt backup codes: %w", err)
 	}
 
-	// Store in database with temporarily encrypted data during setup
+	// Store in database (not enabled until setup completion)
 	_, err = db.Exec(`
 		INSERT OR REPLACE INTO user_totp (
 			username, secret_encrypted, backup_codes_encrypted, 
@@ -124,7 +121,7 @@ func StoreTOTPSetup(db *sql.DB, username string, setup *TOTPSetup, sessionKey []
 }
 
 // CompleteTOTPSetup validates a test code and enables TOTP for the user
-func CompleteTOTPSetup(db *sql.DB, username, testCode string, sessionKey []byte) error {
+func CompleteTOTPSetup(db *sql.DB, username, testCode string) error {
 	// Get stored TOTP data
 	totpData, err := getTOTPData(db, username)
 	if err != nil {
@@ -135,68 +132,23 @@ func CompleteTOTPSetup(db *sql.DB, username, testCode string, sessionKey []byte)
 		return fmt.Errorf("TOTP setup already completed")
 	}
 
-	// During setup, the secret is encrypted with temporary key
-	// Decrypt using the same temporary key from setup
-	const TOTPSetupTempContext = "ARKFILE_TOTP_SETUP_TEMP"
-	tempTotpKey, err := crypto.DeriveSessionKey(sessionKey, TOTPSetupTempContext)
+	// Decrypt and validate the test code
+	secret, err := decryptTOTPSecret(totpData.SecretEncrypted, username)
 	if err != nil {
-		return fmt.Errorf("failed to derive temporary TOTP key: %w", err)
+		return fmt.Errorf("failed to decrypt TOTP secret: %w", err)
 	}
-	defer crypto.SecureZeroSessionKey(tempTotpKey)
-
-	// Decrypt the secret from temporary encryption
-	secretBytes, err := crypto.DecryptGCM(totpData.SecretEncrypted, tempTotpKey)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt temporary TOTP secret: %w", err)
-	}
-	secret := string(secretBytes)
 
 	// Validate the test code
 	if !validateTOTPCodeInternal(secret, testCode) {
 		return fmt.Errorf("invalid TOTP code")
 	}
 
-	// Now encrypt the secret for production use with user-specific persistent key
-	totpKey, err := deriveUserTOTPKey(sessionKey)
-	if err != nil {
-		return fmt.Errorf("failed to derive user TOTP key: %w", err)
-	}
-	defer crypto.SecureZeroSessionKey(totpKey)
-
-	// Encrypt the TOTP secret with user-specific persistent key
-	secretEncrypted, err := crypto.EncryptGCM([]byte(secret), totpKey)
-	if err != nil {
-		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
-	}
-
-	// Decrypt backup codes from temporary encryption
-	backupCodesBytes, err := crypto.DecryptGCM(totpData.BackupCodesEncrypted, tempTotpKey)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt temporary backup codes: %w", err)
-	}
-
-	var backupCodes []string
-	if err := json.Unmarshal(backupCodesBytes, &backupCodes); err != nil {
-		return fmt.Errorf("failed to unmarshal backup codes: %w", err)
-	}
-
-	// Re-encrypt backup codes with user-specific persistent key
-	backupCodesJSON, err := json.Marshal(backupCodes)
-	if err != nil {
-		return fmt.Errorf("failed to marshal backup codes: %w", err)
-	}
-
-	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
-	if err != nil {
-		return fmt.Errorf("failed to encrypt backup codes: %w", err)
-	}
-
-	// Update with encrypted data and enable TOTP
+	// Enable TOTP
 	_, err = db.Exec(`
 		UPDATE user_totp 
-		SET secret_encrypted = ?, backup_codes_encrypted = ?, enabled = true, setup_completed = true 
+		SET enabled = true, setup_completed = true 
 		WHERE username = ?`,
-		secretEncrypted, backupCodesEncrypted, username,
+		username,
 	)
 
 	if err != nil {
@@ -212,9 +164,8 @@ func CompleteTOTPSetup(db *sql.DB, username, testCode string, sessionKey []byte)
 }
 
 // ValidateTOTPCode validates a TOTP code with replay protection
-func ValidateTOTPCode(db *sql.DB, username, code string, sessionKey []byte) error {
+func ValidateTOTPCode(db *sql.DB, username, code string) error {
 	fmt.Printf("DEBUG TOTP: Starting validation for user %s with code %s\n", username, code)
-	fmt.Printf("DEBUG TOTP: Session key length: %d bytes\n", len(sessionKey))
 
 	// Get user's TOTP data
 	totpData, err := getTOTPData(db, username)
@@ -223,32 +174,27 @@ func ValidateTOTPCode(db *sql.DB, username, code string, sessionKey []byte) erro
 		return fmt.Errorf("failed to get TOTP data: %w", err)
 	}
 
-	logging.InfoLogger.Printf("DEBUG TOTP: TOTP enabled=%t, setup_completed=%t", totpData.Enabled, totpData.SetupCompleted)
+	fmt.Printf("DEBUG TOTP: TOTP enabled=%t, setup_completed=%t\n", totpData.Enabled, totpData.SetupCompleted)
 
 	if !totpData.Enabled || !totpData.SetupCompleted {
 		return fmt.Errorf("TOTP not enabled for user")
 	}
 
-	// CRITICAL FIX: Session key derivation issue
-	// The sessionKey parameter is already derived from the export key, but we need the export key
-	// to properly derive the TOTP key that was used during setup.
-	// For admin user validation, we need to re-derive from the original export key context.
+	// Decrypt TOTP secret using server-side key management
+	fmt.Printf("DEBUG TOTP: Attempting to decrypt TOTP secret...\n")
+	fmt.Printf("DEBUG TOTP: Encrypted data length: %d bytes\n", len(totpData.SecretEncrypted))
+	fmt.Printf("DEBUG TOTP: Encrypted data: %x\n", totpData.SecretEncrypted)
 
-	// Get the export key by reconstructing the derivation chain
-	// The sessionKey was derived from exportKey, so we need to work backwards or use a different approach
-
-	// Try to decrypt with the session key first (current approach)
-	logging.InfoLogger.Printf("DEBUG TOTP: Attempting to decrypt TOTP secret...")
-	secret, err := decryptTOTPSecret(totpData.SecretEncrypted, sessionKey)
+	secret, err := decryptTOTPSecret(totpData.SecretEncrypted, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("DEBUG TOTP: Failed to decrypt TOTP secret for %s: %v", username, err)
 		return fmt.Errorf("failed to decrypt TOTP secret: %w", err)
 	}
-	logging.InfoLogger.Printf("DEBUG TOTP: Successfully decrypted TOTP secret (length: %d)", len(secret))
+	fmt.Printf("DEBUG TOTP: Successfully decrypted TOTP secret: '%s' (length: %d)\n", secret, len(secret))
 
 	// Validate code
 	currentTime := time.Now().UTC()
-	logging.InfoLogger.Printf("DEBUG TOTP: Validating code %s against secret at time %v", code, currentTime)
+	fmt.Printf("DEBUG TOTP: Validating code %s against secret at time %v\n", code, currentTime)
 
 	valid, err := totp.ValidateCustom(code, secret, currentTime, totp.ValidateOpts{
 		Period:    TOTPPeriod,
@@ -258,24 +204,31 @@ func ValidateTOTPCode(db *sql.DB, username, code string, sessionKey []byte) erro
 	})
 
 	if err != nil {
-		logging.ErrorLogger.Printf("DEBUG TOTP: TOTP validation error for %s: %v", username, err)
+		fmt.Printf("DEBUG TOTP: TOTP validation error for %s: %v\n", username, err)
 		return fmt.Errorf("TOTP validation error: %w", err)
 	}
 
-	logging.InfoLogger.Printf("DEBUG TOTP: Validation result for %s: %t", username, valid)
+	fmt.Printf("DEBUG TOTP: Validation result for %s: %t\n", username, valid)
 
 	if !valid {
 		// Generate what the code should be for debugging
 		expectedCode, genErr := totp.GenerateCode(secret, currentTime)
 		if genErr == nil {
-			logging.ErrorLogger.Printf("DEBUG TOTP: Expected code at %v: %s (received: %s)", currentTime, expectedCode, code)
+			fmt.Printf("DEBUG TOTP: Expected code at %v: %s (received: %s)\n", currentTime, expectedCode, code)
 		}
 		return fmt.Errorf("invalid TOTP code")
 	}
 
-	// TODO: Re-implement replay attack protection.
-	// The new validation method does not provide the timestamp of the matched code,
-	// so the previous replay protection mechanism needs to be re-evaluated.
+	// Check for replay attack
+	if err := checkTOTPReplay(db, username, code, currentTime); err != nil {
+		return fmt.Errorf("replay attack detected: %w", err)
+	}
+
+	// Log TOTP usage
+	if err := logTOTPUsage(db, username, code, currentTime); err != nil {
+		// Log but don't fail
+		logging.ErrorLogger.Printf("Failed to log TOTP usage: %v", err)
+	}
 
 	// Update last used timestamp
 	_, err = db.Exec("UPDATE user_totp SET last_used = ? WHERE username = ?",
@@ -291,7 +244,7 @@ func ValidateTOTPCode(db *sql.DB, username, code string, sessionKey []byte) erro
 }
 
 // ValidateBackupCode validates and consumes a backup code
-func ValidateBackupCode(db *sql.DB, username, code string, sessionKey []byte) error {
+func ValidateBackupCode(db *sql.DB, username, code string) error {
 	// Get user's TOTP data
 	totpData, err := getTOTPData(db, username)
 	if err != nil {
@@ -304,7 +257,7 @@ func ValidateBackupCode(db *sql.DB, username, code string, sessionKey []byte) er
 
 	// Decrypt backup codes
 	var backupCodes []string
-	if err := decryptJSON(totpData.BackupCodesEncrypted, sessionKey, &backupCodes); err != nil {
+	if err := decryptJSON(totpData.BackupCodesEncrypted, username, &backupCodes); err != nil {
 		return fmt.Errorf("failed to decrypt backup codes: %w", err)
 	}
 
@@ -368,9 +321,9 @@ func IsUserTOTPEnabled(db *sql.DB, username string) (bool, error) {
 }
 
 // DisableTOTP disables TOTP for a user (requires current TOTP code)
-func DisableTOTP(db *sql.DB, username, currentCode string, sessionKey []byte) error {
+func DisableTOTP(db *sql.DB, username, currentCode string) error {
 	// Validate current code first
-	if err := ValidateTOTPCode(db, username, currentCode, sessionKey); err != nil {
+	if err := ValidateTOTPCode(db, username, currentCode); err != nil {
 		return fmt.Errorf("invalid current TOTP code: %w", err)
 	}
 
@@ -551,6 +504,30 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 		return nil, err
 	}
 
+	// Debug the raw data we got from database
+	fmt.Printf("DEBUG DB: Raw secret_encrypted length: %d bytes\n", len(data.SecretEncrypted))
+	fmt.Printf("DEBUG DB: Raw secret_encrypted: %x\n", data.SecretEncrypted)
+
+	// Fix for base64 encoding issue: if we get 60 bytes that look like base64-encoded data,
+	// decode it to get the original binary data
+	if len(data.SecretEncrypted) == 60 {
+		// Convert the hex representation back to the original base64 string
+		hexStr := fmt.Sprintf("%x", data.SecretEncrypted)
+		if rawBytes, err := hex.DecodeString(hexStr); err == nil {
+			base64Str := string(rawBytes)
+			fmt.Printf("DEBUG DB: Base64 string from DB: %s\n", base64Str)
+
+			// Try to decode the base64 string manually
+			if decodedBytes, err := decodeBase64(base64Str); err == nil {
+				fmt.Printf("DEBUG DB: Successfully decoded base64 data, new length: %d bytes\n", len(decodedBytes))
+				fmt.Printf("DEBUG DB: Decoded data: %x\n", decodedBytes)
+				data.SecretEncrypted = decodedBytes
+			} else {
+				fmt.Printf("DEBUG DB: Failed to decode base64: %v\n", err)
+			}
+		}
+	}
+
 	// Parse timestamps
 	if createdAtStr != "" {
 		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", createdAtStr); parseErr == nil {
@@ -571,18 +548,17 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 	return &data, nil
 }
 
-func decryptTOTPSecret(encrypted []byte, sessionKey []byte) (string, error) {
+func decryptTOTPSecret(encrypted []byte, username string) (string, error) {
 	logging.InfoLogger.Printf("DEBUG TOTP: decryptTOTPSecret - encrypted length: %d bytes", len(encrypted))
-	logging.InfoLogger.Printf("DEBUG TOTP: decryptTOTPSecret - session key length: %d bytes", len(sessionKey))
+	logging.InfoLogger.Printf("DEBUG TOTP: decryptTOTPSecret - username: %s", username)
 
-	// Use user-specific persistent key derived from user's OPAQUE record
-	// This ensures the same key is used regardless of session
-	totpKey, err := deriveUserTOTPKey(sessionKey)
+	// Use user-specific persistent key derived from server TOTP master key
+	totpKey, err := crypto.DeriveTOTPUserKey(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("DEBUG TOTP: Failed to derive TOTP key: %v", err)
 		return "", err
 	}
-	defer crypto.SecureZeroSessionKey(totpKey)
+	defer crypto.SecureZeroTOTPKey(totpKey)
 
 	logging.InfoLogger.Printf("DEBUG TOTP: Successfully derived TOTP key, length: %d bytes", len(totpKey))
 
@@ -597,12 +573,12 @@ func decryptTOTPSecret(encrypted []byte, sessionKey []byte) (string, error) {
 	return string(decrypted), nil
 }
 
-func decryptJSON(encrypted []byte, sessionKey []byte, target interface{}) error {
-	totpKey, err := deriveUserTOTPKey(sessionKey)
+func decryptJSON(encrypted []byte, username string, target interface{}) error {
+	totpKey, err := crypto.DeriveTOTPUserKey(username)
 	if err != nil {
 		return err
 	}
-	defer crypto.SecureZeroSessionKey(totpKey)
+	defer crypto.SecureZeroTOTPKey(totpKey)
 
 	decrypted, err := crypto.DecryptGCM(encrypted, totpKey)
 	if err != nil {
@@ -612,10 +588,8 @@ func decryptJSON(encrypted []byte, sessionKey []byte, target interface{}) error 
 	return json.Unmarshal(decrypted, target)
 }
 
-// deriveUserTOTPKey derives a consistent user-specific key for TOTP encryption
-// This key is derived from the user's OPAQUE export key and remains the same
-// across different login sessions, unlike session-specific keys
-func deriveUserTOTPKey(sessionKey []byte) ([]byte, error) {
-	// Use the same context constant as defined in crypto/session.go
-	return crypto.DeriveSessionKey(sessionKey, crypto.TOTPEncryptionContext)
+// decodeBase64 decodes base64 data
+func decodeBase64(s string) ([]byte, error) {
+	// Import encoding/base64 manually if needed
+	return base64.StdEncoding.DecodeString(s)
 }

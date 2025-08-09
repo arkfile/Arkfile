@@ -483,14 +483,14 @@ func TOTPSetup(c echo.Context) error {
 	}
 
 	// Generate TOTP setup
-	setup, err := auth.GenerateTOTPSetup(username, sessionKey)
+	setup, err := auth.GenerateTOTPSetup(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate TOTP setup for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate TOTP setup")
 	}
 
 	// Store TOTP setup in database
-	if err := auth.StoreTOTPSetup(database.DB, username, setup, sessionKey); err != nil {
+	if err := auth.StoreTOTPSetup(database.DB, username, setup); err != nil {
 		logging.ErrorLogger.Printf("Failed to store TOTP setup for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to store TOTP setup")
 	}
@@ -545,7 +545,7 @@ func TOTPVerify(c echo.Context) error {
 	defer crypto.SecureZeroSessionKey(sessionKey)
 
 	// Complete TOTP setup
-	if err := auth.CompleteTOTPSetup(database.DB, username, request.Code, sessionKey); err != nil {
+	if err := auth.CompleteTOTPSetup(database.DB, username, request.Code); err != nil {
 		logging.ErrorLogger.Printf("Failed to complete TOTP setup for %s: %v", username, err)
 		// Record failed TOTP verification attempt
 		entityID := logging.GetOrCreateEntityID(c)
@@ -660,7 +660,7 @@ func TOTPAuth(c echo.Context) error {
 
 	// Validate TOTP code or backup code
 	if request.IsBackup {
-		if err := auth.ValidateBackupCode(database.DB, username, request.Code, sessionKey); err != nil {
+		if err := auth.ValidateBackupCode(database.DB, username, request.Code); err != nil {
 			logging.ErrorLogger.Printf("Failed backup code validation for %s: %v", username, err)
 			// Record failed TOTP auth attempt
 			entityID := logging.GetOrCreateEntityID(c)
@@ -671,7 +671,7 @@ func TOTPAuth(c echo.Context) error {
 		}
 		database.LogUserAction(username, "used backup code", "")
 	} else {
-		if err := auth.ValidateTOTPCode(database.DB, username, request.Code, sessionKey); err != nil {
+		if err := auth.ValidateTOTPCode(database.DB, username, request.Code); err != nil {
 			logging.ErrorLogger.Printf("Failed TOTP code validation for %s: %v", username, err)
 			// Record failed TOTP auth attempt
 			entityID := logging.GetOrCreateEntityID(c)
@@ -757,7 +757,7 @@ func TOTPDisable(c echo.Context) error {
 	defer crypto.SecureZeroSessionKey(sessionKey)
 
 	// Disable TOTP (this validates the current code)
-	if err := auth.DisableTOTP(database.DB, username, request.CurrentCode, sessionKey); err != nil {
+	if err := auth.DisableTOTP(database.DB, username, request.CurrentCode); err != nil {
 		logging.ErrorLogger.Printf("Failed to disable TOTP for %s: %v", username, err)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid TOTP code")
 	}

@@ -27,7 +27,7 @@ LoadCredential=jwt_signing_key:/opt/arkfile/etc/keys/jwt/current/signing.key
 # Security hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/opt/arkfile/var
+ReadWritePaths=/opt/arkfile/var /opt/arkfile/etc/keys
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes
