@@ -13,7 +13,6 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/pquerna/otp/totp"
 
 	"github.com/84adam/arkfile/auth"
 	"github.com/84adam/arkfile/config"
@@ -329,7 +328,7 @@ func initializeAdminUser() error {
 	}
 
 	log.Printf("Admin user '%s' created successfully with ID: %d", adminUsername, adminUser.ID)
-	log.Printf("IMPORTANT: Default admin password is: %s", defaultAdminPassword)
+	log.Printf("SECURITY: Default admin password has been set - change it immediately after first login")
 
 	// Set up TOTP for the new admin user
 	if err := setupAdminTOTP(adminUser); err != nil {
@@ -378,7 +377,6 @@ func isProductionEnvironment() bool {
 }
 
 // setupAdminTOTP sets up TOTP for the admin user with a fixed secret for testing
-// CRITICAL FIX: Now uses deterministic export keys from OPAQUE authentication
 func setupAdminTOTP(user *models.User) error {
 	// SECURITY CHECK: Double-check production environment (defense in depth)
 	if utils.IsProductionEnvironment() {
@@ -395,9 +393,8 @@ func setupAdminTOTP(user *models.User) error {
 	// Generate backup codes
 	backupCodes := generateAdminBackupCodes(10)
 
-	// NEW APPROACH: Use server-side TOTP key management
+	// Use server-side TOTP key management
 	// This decouples TOTP from OPAQUE sessions for better reliability
-	fmt.Printf("DEBUG SETUP: Using server-side TOTP key management\n")
 
 	// Derive user-specific TOTP key from server master key
 	totpKey, err := crypto.DeriveTOTPUserKey(user.Username)
@@ -406,17 +403,11 @@ func setupAdminTOTP(user *models.User) error {
 	}
 	defer crypto.SecureZeroTOTPKey(totpKey)
 
-	fmt.Printf("DEBUG SETUP: TOTP key length: %d bytes\n", len(totpKey))
-
 	// Encrypt TOTP secret
-	fmt.Printf("DEBUG SETUP: Encrypting TOTP secret '%s'\n", fixedTOTPSecret)
-	fmt.Printf("DEBUG SETUP: Secret bytes: %x\n", []byte(fixedTOTPSecret))
 	secretEncrypted, err := crypto.EncryptGCM([]byte(fixedTOTPSecret), totpKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
 	}
-	fmt.Printf("DEBUG SETUP: Encrypted secret length: %d bytes\n", len(secretEncrypted))
-	fmt.Printf("DEBUG SETUP: Encrypted secret: %x\n", secretEncrypted)
 
 	// Encrypt backup codes
 	backupCodesJSON, err := json.Marshal(backupCodes)
@@ -443,20 +434,10 @@ func setupAdminTOTP(user *models.User) error {
 		return fmt.Errorf("failed to store admin TOTP setup: %w", err)
 	}
 
-	// Generate current TOTP code for immediate testing (use UTC to match validation)
-	currentCode, err := totp.GenerateCode(fixedTOTPSecret, time.Now().UTC())
-	if err != nil {
-		log.Printf("Warning: Failed to generate current TOTP code: %v", err)
-	}
-
-	// Log setup completion with testing information
+	// Log setup completion
 	log.Printf("✅ TOTP setup completed for admin user '%s'", user.Username)
-	log.Printf("📱 TOTP Secret: %s", fixedTOTPSecret)
-	log.Printf("🔗 Manual Entry: %s", formatTOTPManualEntry(fixedTOTPSecret))
-	log.Printf("🔐 Current TOTP Code: %s", currentCode)
-	log.Printf("🗝️  Backup Codes: %v", backupCodes[:3]) // Show first 3 codes
-	log.Printf("ℹ️  QR Code URL: otpauth://totp/ArkFile:%s?secret=%s&issuer=ArkFile&digits=6&period=30", user.Username, fixedTOTPSecret)
-	log.Printf("⚠️  SECURITY: This is a fixed TOTP secret for development/testing only!")
+	log.Printf("⚠️  SECURITY: TOTP configured with fixed secret for development/testing only!")
+	log.Printf("� Use a TOTP app to scan QR code or manually enter the secret for authentication")
 
 	return nil
 }

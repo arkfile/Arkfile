@@ -280,6 +280,9 @@ LOCAL_STORAGE_PATH=/opt/arkfile/var/lib/dev/minio/data
 # Admin Configuration - DEV ONLY
 ADMIN_USERNAMES=arkfile-dev-admin
 
+# Dev/Test Admin API Configuration (CRITICAL: Must be false in production)
+ADMIN_DEV_TEST_API_ENABLED=true
+
 # Development Settings
 REQUIRE_APPROVAL=false
 ENABLE_REGISTRATION=true
@@ -468,7 +471,7 @@ echo -e "${GREEN}  Preserves libopaque libraries for faster rebuilds${NC}"
 echo -e "${GREEN}  Uses existing Git submodules and vendor directory${NC}"
 echo
 echo -e "${BLUE}Ready for development testing!${NC}"
-echo -e "${YELLOW}Admin user: admin@dev.local${NC}"
+echo -e "${YELLOW}Admin user: arkfile-dev-admin${NC}"
 echo -e "${YELLOW}Check logs: sudo journalctl -u arkfile -f${NC}"
 echo
 

@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"os"
+	"strings"
+
 	"github.com/84adam/arkfile/auth"
 	"github.com/labstack/echo/v4"
 )
@@ -100,12 +103,23 @@ func RegisterRoutes() {
 	totpProtectedGroup.PATCH("/api/files/:filename/keys/:keyId", UpdateKey)
 	totpProtectedGroup.POST("/api/files/:filename/keys/:keyId/set-primary", SetPrimaryKey)
 
-	// Admin API endpoints (localhost only, admin auth required)
+	// Admin API endpoints - structured for future expansion
+	// Production admin endpoints (reserved for future legitimate admin operations)
 	adminGroup := Echo.Group("/api/admin")
 	adminGroup.Use(AdminMiddleware)
-	adminGroup.POST("/test-user/cleanup", AdminCleanupTestUser)
-	adminGroup.POST("/user/:username/approve", AdminApproveUser)
-	adminGroup.GET("/user/:username/status", AdminGetUserStatus)
+	// Future production admin endpoints will go here
+	// Examples: adminGroup.GET("/system/health", AdminSystemHealth)
+	//          adminGroup.GET("/users/pending", AdminPendingUsers)
+
+	// Development/Testing admin endpoints (gated by ADMIN_DEV_TEST_API_ENABLED)
+	// SECURITY: These endpoints are ONLY for development and testing
+	if isDevTestAdminAPIEnabled() {
+		devTestAdminGroup := Echo.Group("/api/admin/dev-test")
+		devTestAdminGroup.Use(AdminMiddleware)
+		devTestAdminGroup.POST("/user/cleanup", AdminCleanupTestUser)
+		devTestAdminGroup.POST("/user/:username/approve", AdminApproveUser)
+		devTestAdminGroup.GET("/user/:username/status", AdminGetUserStatus)
+	}
 
 	// User management (admin only) - require TOTP (commented out until implemented)
 	// totpProtectedGroup.GET("/api/admin/users", RequireAdmin(ListUsers))
@@ -115,4 +129,17 @@ func RegisterRoutes() {
 	// System statistics (admin only) - require TOTP (commented out until implemented)
 	// totpProtectedGroup.GET("/api/admin/stats", RequireAdmin(GetSystemStats))
 	// totpProtectedGroup.GET("/api/admin/activity", RequireAdmin(GetActivityLogs))
+}
+
+// isDevTestAdminAPIEnabled checks if development/testing admin API endpoints should be enabled
+// SECURITY: This MUST return false in production environments
+func isDevTestAdminAPIEnabled() bool {
+	// Check environment variable
+	enabled := strings.ToLower(os.Getenv("ADMIN_DEV_TEST_API_ENABLED"))
+	if enabled == "true" || enabled == "1" || enabled == "yes" {
+		return true
+	}
+
+	// Default to false for security
+	return false
 }

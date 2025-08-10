@@ -18,8 +18,6 @@ const (
 // DeriveSessionKey derives a session key from OPAQUE export key with domain separation
 // This ensures session keys are cryptographically distinct from file encryption keys
 func DeriveSessionKey(opaqueExportKey []byte, context string) ([]byte, error) {
-	fmt.Printf("DEBUG CRYPTO: DeriveSessionKey called with context '%s'\n", context)
-	fmt.Printf("DEBUG CRYPTO: Export key length: %d bytes\n", len(opaqueExportKey))
 
 	if len(opaqueExportKey) == 0 {
 		return nil, fmt.Errorf("OPAQUE export key cannot be empty")
@@ -30,11 +28,9 @@ func DeriveSessionKey(opaqueExportKey []byte, context string) ([]byte, error) {
 
 	sessionKey := make([]byte, 32) // 256-bit session key
 	if _, err := hkdf.Read(sessionKey); err != nil {
-		fmt.Printf("DEBUG CRYPTO: HKDF derivation failed: %v\n", err)
 		return nil, fmt.Errorf("failed to derive session key: %w", err)
 	}
 
-	fmt.Printf("DEBUG CRYPTO: Successfully derived %d-byte key for context '%s'\n", len(sessionKey), context)
 	return sessionKey, nil
 }
 

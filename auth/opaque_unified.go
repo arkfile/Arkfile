@@ -143,8 +143,6 @@ func (opm *OPAQUEPasswordManager) RegisterSharePassword(
 func (opm *OPAQUEPasswordManager) AuthenticatePassword(
 	recordIdentifier, password string) ([]byte, error) {
 
-	fmt.Printf("DEBUG OPAQUE_MGR: AuthenticatePassword called for %s\n", recordIdentifier)
-
 	// Get OPAQUE user record
 	var userRecord []byte
 	err := opm.db.QueryRow(`
@@ -153,25 +151,16 @@ func (opm *OPAQUEPasswordManager) AuthenticatePassword(
 		recordIdentifier).Scan(&userRecord)
 
 	if err != nil {
-		fmt.Printf("DEBUG OPAQUE_MGR: Failed to get user record: %v\n", err)
 		return nil, fmt.Errorf("password record not found: %w", err)
 	}
-
-	fmt.Printf("DEBUG OPAQUE_MGR: Retrieved user record length: %d bytes\n", len(userRecord))
 
 	// rqlite stores binary data as base64-encoded text, but libopaque expects raw binary
 	// Check if data appears to be base64 encoded and decode it
 	if len(userRecord) != 256 {
-		fmt.Printf("DEBUG OPAQUE_MGR: User record length != 256, attempting base64 decode\n")
 		// Try to decode from base64
 		if decodedRecord, err := base64.StdEncoding.DecodeString(string(userRecord)); err == nil && len(decodedRecord) == 256 {
-			fmt.Printf("DEBUG OPAQUE_MGR: Successfully decoded base64, new length: %d\n", len(decodedRecord))
 			userRecord = decodedRecord
-		} else {
-			fmt.Printf("DEBUG OPAQUE_MGR: Base64 decode failed or wrong length: err=%v, len=%d\n", err, len(decodedRecord))
 		}
-	} else {
-		fmt.Printf("DEBUG OPAQUE_MGR: User record already 256 bytes, using as-is\n")
 	}
 
 	// Use provider interface for authentication
@@ -180,16 +169,11 @@ func (opm *OPAQUEPasswordManager) AuthenticatePassword(
 		return nil, fmt.Errorf("OPAQUE provider not available")
 	}
 
-	fmt.Printf("DEBUG OPAQUE_MGR: Calling provider.AuthenticateUser with record length: %d\n", len(userRecord))
-
 	// Authenticate with OPAQUE
 	exportKey, err := provider.AuthenticateUser([]byte(password), userRecord)
 	if err != nil {
-		fmt.Printf("DEBUG OPAQUE_MGR: Provider authentication failed: %v\n", err)
 		return nil, fmt.Errorf("OPAQUE authentication failed: %w", err)
 	}
-
-	fmt.Printf("DEBUG OPAQUE_MGR: Provider returned export key length: %d\n", len(exportKey))
 
 	// Update last used timestamp
 	_, _ = opm.db.Exec(`

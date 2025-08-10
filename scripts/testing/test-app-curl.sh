@@ -17,7 +17,7 @@ INSECURE_FLAG="--insecure"  # For local development with self-signed certs
 TEST_USERNAME="${TEST_USERNAME:-arkfile-dev-test-user}"
 TEST_PASSWORD="${TEST_PASSWORD:-MyVacation2025PhotosForFamily!ExtraSecure}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-arkfile-dev-admin}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-AdminDev2025!SecurePassword}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-DevAdmin2025!SecureInitialPassword}"
 TEMP_DIR=$(mktemp -d)
 
 # Colors for output
@@ -141,26 +141,7 @@ save_json_response() {
 authenticate_admin() {
     debug "Authenticating admin user: $ADMIN_USERNAME"
     
-    # Register admin user if doesn't exist
-    local register_request
-    register_request=$(jq -n \
-        --arg username "$ADMIN_USERNAME" \
-        --arg password "$ADMIN_PASSWORD" \
-        '{
-            username: $username,
-            password: $password
-        }')
-    
-    local register_response
-    register_response=$(curl -s $INSECURE_FLAG \
-        -X POST \
-        -H "Content-Type: application/json" \
-        -d "$register_request" \
-        "$ARKFILE_BASE_URL/api/opaque/register" || echo "ERROR")
-    
-    debug "Admin registration response: $register_response"
-    
-    # Login admin user
+    # Login admin user directly (user should already exist from dev-reset)
     local login_request
     login_request=$(jq -n \
         --arg username "$ADMIN_USERNAME" \
@@ -184,31 +165,77 @@ authenticate_admin() {
         return 1
     fi
     
-    # Handle TOTP setup if required
-    if echo "$login_response" | jq -e '.requiresTOTPSetup' >/dev/null 2>&1; then
-        local requires_setup
-        requires_setup=$(echo "$login_response" | jq -r '.requiresTOTPSetup')
-        if [ "$requires_setup" = "true" ]; then
-            warning "Admin user requires TOTP setup - this should be handled in production"
-            # For testing, we'll skip TOTP for admin user or handle it differently
-            return 1
-        fi
-    fi
-    
     # Check if TOTP authentication is required
     if echo "$login_response" | jq -e '.requiresTOTP' >/dev/null 2>&1; then
-        local requires_totp
+        local requires_totp temp_token session_key
         requires_totp=$(echo "$login_response" | jq -r '.requiresTOTP')
-        if [ "$requires_totp" = "true" ]; then
-            warning "Admin user requires TOTP authentication - this should be configured in production"
-            # For development/testing, we may need to handle this differently
+        temp_token=$(echo "$login_response" | jq -r '.tempToken')
+        session_key=$(echo "$login_response" | jq -r '.sessionKey')
+        
+        if [ "$requires_totp" = "true" ] && [ "$temp_token" != "null" ] && [ "$session_key" != "null" ]; then
+            debug "Admin user requires TOTP authentication, completing flow..."
+            
+            # Generate TOTP code using known admin secret
+            local totp_code="JBSWY3DPEHPK3PXP"  # Known admin TOTP secret
+            if [ -x "scripts/testing/totp-generator" ]; then
+                totp_code=$(scripts/testing/totp-generator "$totp_code")
+            elif [ -x "./totp-generator" ]; then
+                totp_code=$(./totp-generator "$totp_code")
+            else
+                warning "TOTP generator not found"
+                return 1
+            fi
+            
+            debug "Generated admin TOTP code: $totp_code"
+            
+            # Complete TOTP authentication
+            local totp_request
+            totp_request=$(jq -n \
+                --arg code "$totp_code" \
+                --arg sessionKey "$session_key" \
+                --argjson isBackup false \
+                '{
+                    code: $code,
+                    sessionKey: $sessionKey,
+                    isBackup: $isBackup
+                }')
+            
+            local totp_response
+            totp_response=$(curl -s $INSECURE_FLAG \
+                -X POST \
+                -H "Authorization: Bearer $temp_token" \
+                -H "Content-Type: application/json" \
+                -d "$totp_request" \
+                "$ARKFILE_BASE_URL/api/totp/auth" || echo "ERROR")
+            
+            debug "Admin TOTP response: $totp_response"
+            
+            if [ "$totp_response" = "ERROR" ]; then
+                warning "Admin TOTP authentication failed"
+                return 1
+            fi
+            
+            # Extract final admin token
+            local admin_token
+            admin_token=$(echo "$totp_response" | jq -r '.token')
+            
+            if [ "$admin_token" = "null" ] || [ -z "$admin_token" ]; then
+                warning "Failed to extract final admin token after TOTP"
+                return 1
+            fi
+            
+            echo "$admin_token" > "$TEMP_DIR/admin_token"
+            debug "Admin TOTP authentication successful, final token stored"
+            return 0
+        else
+            warning "Admin user requires TOTP but response is incomplete"
             return 1
         fi
     fi
     
-    # Extract token for API calls
+    # Extract token for API calls (if TOTP wasn't required)
     local admin_token
-    admin_token=$(echo "$login_response" | jq -r '.token // .tempToken')
+    admin_token=$(echo "$login_response" | jq -r '.token')
     
     if [ "$admin_token" = "null" ] || [ -z "$admin_token" ]; then
         warning "Failed to extract admin token"
@@ -254,7 +281,7 @@ admin_cleanup_user() {
         -H "Authorization: Bearer $admin_token" \
         -H "Content-Type: application/json" \
         -d "$cleanup_request" \
-        "$ARKFILE_BASE_URL/api/admin/test-user/cleanup" || echo "ERROR")
+        "$ARKFILE_BASE_URL/api/admin/dev-test/user/cleanup" || echo "ERROR")
     
     if [ "$response" = "ERROR" ]; then
         error "Failed to connect to admin API for: $context"
@@ -295,7 +322,7 @@ admin_approve_user() {
         -H "Authorization: Bearer $admin_token" \
         -H "Content-Type: application/json" \
         -d "$approve_request" \
-        "$ARKFILE_BASE_URL/api/admin/user/$username/approve" || echo "ERROR")
+        "$ARKFILE_BASE_URL/api/admin/dev-test/user/$username/approve" || echo "ERROR")
     
     if [ "$response" = "ERROR" ]; then
         error "Failed to connect to admin API for: $context"
@@ -326,7 +353,7 @@ admin_get_user_status() {
     response=$(curl -s $INSECURE_FLAG \
         -H "Authorization: Bearer $admin_token" \
         -H "Content-Type: application/json" \
-        "$ARKFILE_BASE_URL/api/admin/user/$username/status" || echo "ERROR")
+        "$ARKFILE_BASE_URL/api/admin/dev-test/user/$username/status" || echo "ERROR")
     
     if [ "$response" = "ERROR" ]; then
         error "Failed to connect to admin API for: $context"
@@ -881,8 +908,18 @@ setup_test_user_for_endpoint_testing() {
         debug "User registration for endpoint testing: success"
     fi
     
-    # Approve user in database
-    execute_db_query "UPDATE users SET is_approved = 1, approved_by = 'endpoint-test', approved_at = CURRENT_TIMESTAMP WHERE username = '$TEST_USERNAME'" "User approval for endpoint testing" >/dev/null || true
+    # Approve user via Admin API (no direct database access)
+    local approve_resp
+    approve_resp=$(admin_approve_user "$TEST_USERNAME" "endpoint-test" "Endpoint test approval" 2>/dev/null || echo "ERROR")
+    if [[ "$approve_resp" != "ERROR" ]]; then
+        if echo "$approve_resp" | jq -e '.success == true and .is_approved == true' >/dev/null 2>&1; then
+            debug "User approved via Admin API for endpoint testing"
+        else
+            warning "Admin API approval may not have succeeded for endpoint testing"
+        fi
+    else
+        warning "Admin API approval unavailable during endpoint testing"
+    fi
     
     # Login user to get full token
     local login_request
@@ -1630,7 +1667,7 @@ show_help() {
     echo "Flow (Full Mode):"
     echo "  1. Pre-flight & Cleanup"
     echo "  2. OPAQUE Registration"
-    echo "  3. Database User Approval"
+    echo "  3. Admin API User Approval"
     echo "  4. TOTP Setup & Endpoint Validation"
     echo "  5. OPAQUE Login Authentication"
     echo "  6. TOTP Two-Factor Authentication"
@@ -1716,7 +1753,7 @@ done
 main() {
     echo -e "${BLUE}"
     echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║          ARKFILE MASTER AUTHENTICATION TEST SUITE       ║"
+    echo "║          ARKFILE MASTER AUTHENTICATION TEST SUITE        ║"
     echo "╚══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     
@@ -1727,6 +1764,74 @@ main() {
     log "Performance Benchmarking: $([ "$PERFORMANCE_MODE" = true ] && echo "ENABLED" || echo "DISABLED")"
     log "Debug Mode: $([ "$DEBUG_MODE" = true ] && echo "ENABLED" || echo "DISABLED")"
     log "Temp Directory: $TEMP_DIR"
+    echo
+    
+    # ADMIN AUTHENTICATION SETUP
+    echo -e "${CYAN}╔═══════════════════════════════════════════╗"
+    echo "║         ADMIN AUTHENTICATION              ║"
+    echo -e "╚═══════════════════════════════════════════╝${NC}"
+    
+    log "Step 1: Admin OPAQUE Authentication..."
+    local admin_login_response
+    admin_login_response=$(curl -s $INSECURE_FLAG \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"username\": \"$ADMIN_USERNAME\",
+            \"password\": \"$ADMIN_PASSWORD\"
+        }" \
+        "$ARKFILE_BASE_URL/api/opaque/login" || echo "ERROR")
+    
+    if echo "$admin_login_response" | jq -e '.requiresTOTP' >/dev/null 2>&1; then
+        success "Admin OPAQUE authentication successful"
+        local admin_temp_token admin_session_key
+        admin_temp_token=$(echo "$admin_login_response" | jq -r '.tempToken')
+        admin_session_key=$(echo "$admin_login_response" | jq -r '.sessionKey')
+        log "Extracted admin temporary token and session key"
+        
+        # Step 2: Admin TOTP Authentication
+        log "Step 2: Admin TOTP Authentication..."
+        local admin_totp_code
+        if [ -x "scripts/testing/totp-generator" ]; then
+            admin_totp_code=$(scripts/testing/totp-generator "JBSWY3DPEHPK3PXP")
+        elif [ -x "./totp-generator" ]; then
+            admin_totp_code=$(./totp-generator "JBSWY3DPEHPK3PXP")
+        else
+            error "TOTP generator not found. Please run from project root directory."
+        fi
+        
+        success "Generated admin TOTP code: $admin_totp_code"
+        
+        local admin_totp_response
+        admin_totp_response=$(curl -s $INSECURE_FLAG \
+            -X POST \
+            -H "Authorization: Bearer $admin_temp_token" \
+            -H "Content-Type: application/json" \
+            -d "{
+                \"code\": \"$admin_totp_code\",
+                \"sessionKey\": \"$admin_session_key\"
+            }" \
+            "$ARKFILE_BASE_URL/api/totp/auth" || echo "ERROR")
+        
+        if echo "$admin_totp_response" | jq -e '.token' >/dev/null 2>&1; then
+            success "Admin TOTP authentication successful"
+            local admin_final_token auth_method
+            admin_final_token=$(echo "$admin_totp_response" | jq -r '.token')
+            auth_method=$(echo "$admin_totp_response" | jq -r '.authMethod')
+            log "Admin final token obtained - Auth method: $auth_method"
+            
+            # Store admin token for use in cleanup functions
+            echo "$admin_final_token" > "$TEMP_DIR/admin_token"
+            
+            success "Admin authentication completed successfully!"
+        else
+            error "Admin TOTP authentication failed: $admin_totp_response"
+        fi
+    else
+        error "Admin OPAQUE login failed: $admin_login_response"
+    fi
+    
+    echo
     
     # Setup library paths
     setup_library_paths
