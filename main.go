@@ -385,8 +385,8 @@ func setupAdminTOTP(user *models.User) error {
 	}
 
 	// Fixed TOTP secret for predictable testing (base32 encoded)
-	// This is "Hello!" encoded in base32 - easy to remember and generates predictable codes
-	fixedTOTPSecret := "JBSWY3DPEHPK3PXP"
+	// This is a 32-character standard Base32 secret (160 bits) for dev/test admin user
+	fixedTOTPSecret := "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"
 
 	log.Printf("Setting up TOTP for admin user '%s' with fixed secret for testing", user.Username)
 

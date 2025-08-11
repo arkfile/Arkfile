@@ -50,8 +50,8 @@ type TOTPData struct {
 
 // GenerateTOTPSetup creates a new TOTP setup for a user
 func GenerateTOTPSetup(username string) (*TOTPSetup, error) {
-	// Generate 32-byte secret
-	secret := make([]byte, 32)
+	// Generate 20-byte secret (160 bits) for standard 32-character Base32 output
+	secret := make([]byte, 20)
 	if _, err := rand.Read(secret); err != nil {
 		return nil, fmt.Errorf("failed to generate TOTP secret: %w", err)
 	}
@@ -59,8 +59,8 @@ func GenerateTOTPSetup(username string) (*TOTPSetup, error) {
 	// Encode as base32 for TOTP compatibility
 	secretB32 := base32.StdEncoding.EncodeToString(secret)
 
-	// Remove padding for cleaner display
-	secretB32 = trimPadding(secretB32)
+	// Remove padding to get clean 32-character Base32 string (consistent with admin secret)
+	secretB32 = strings.TrimRight(secretB32, "=")
 
 	// Generate QR code URL
 	qrURL := fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s&digits=%d&period=%d",
@@ -378,11 +378,6 @@ func formatManualEntry(secret string) string {
 		formatted += string(char)
 	}
 	return formatted
-}
-
-func trimPadding(s string) string {
-	// Remove trailing '=' padding characters from base32 string
-	return strings.TrimRight(s, "=")
 }
 
 func hashString(s string) string {

@@ -124,8 +124,11 @@ save_json_response() {
         error "Invalid JSON response from $error_context: $response"
     }
     
-    # Check for API error in response
-    if jq -e '.error' "$TEMP_DIR/$filename" >/dev/null 2>&1; then
+    # Check for API error in response (but NOT if success=true)
+    if jq -e '.success == true' "$TEMP_DIR/$filename" >/dev/null 2>&1; then
+        # Response has success=true, this is a successful API call
+        return 0
+    elif jq -e '.error' "$TEMP_DIR/$filename" >/dev/null 2>&1; then
         local error_msg
         error_msg=$(jq -r '.error' "$TEMP_DIR/$filename")
         
@@ -176,7 +179,7 @@ authenticate_admin() {
             debug "Admin user requires TOTP authentication, completing flow..."
             
             # Generate TOTP code using known admin secret
-            local totp_code="JBSWY3DPEHPK3PXP"  # Known admin TOTP secret
+            local totp_code="ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"  # Known admin TOTP secret
             if [ -x "scripts/testing/totp-generator" ]; then
                 totp_code=$(scripts/testing/totp-generator "$totp_code")
             elif [ -x "./totp-generator" ]; then
@@ -252,19 +255,19 @@ admin_cleanup_user() {
     local username="$1"
     local context="$2"
     
-    debug "Admin API cleanup for user: $username - $context"
+    debug "Admin API cleanup for user: $username - $context" >&2
     
-    # Ensure we have admin authentication
+    # Check if we have admin authentication token from main()
     if [ ! -f "$TEMP_DIR/admin_token" ]; then
-        if ! authenticate_admin; then
-            warning "Admin authentication failed, cannot use admin API"
-            echo "ERROR"
-            return
-        fi
+        warning "No admin token found - admin authentication may have failed" >&2
+        echo "ERROR"
+        return
     fi
     
     local admin_token
     admin_token=$(cat "$TEMP_DIR/admin_token")
+    
+    debug "Using existing admin token for cleanup API call" >&2
     
     local cleanup_request
     cleanup_request=$(jq -n \
@@ -295,19 +298,19 @@ admin_approve_user() {
     local approved_by="$2"
     local context="$3"
     
-    debug "Admin API user approval: $username by $approved_by - $context"
+    debug "Admin API user approval: $username by $approved_by - $context" >&2
     
-    # Ensure we have admin authentication
+    # Check if we have admin authentication token from main()
     if [ ! -f "$TEMP_DIR/admin_token" ]; then
-        if ! authenticate_admin; then
-            warning "Admin authentication failed, cannot use admin API"
-            echo "ERROR"
-            return
-        fi
+        warning "No admin token found - admin authentication may have failed" >&2
+        echo "ERROR"
+        return
     fi
     
     local admin_token
     admin_token=$(cat "$TEMP_DIR/admin_token")
+    
+    debug "Using existing admin token for approval API call" >&2
     
     local approve_request
     approve_request=$(jq -n \
@@ -335,19 +338,19 @@ admin_get_user_status() {
     local username="$1"
     local context="$2"
     
-    debug "Admin API user status check: $username - $context"
+    debug "Admin API user status check: $username - $context" >&2
     
-    # Ensure we have admin authentication
+    # Check if we have admin authentication token from main()
     if [ ! -f "$TEMP_DIR/admin_token" ]; then
-        if ! authenticate_admin; then
-            warning "Admin authentication failed, cannot use admin API"
-            echo "ERROR"
-            return
-        fi
+        warning "No admin token found - admin authentication may have failed" >&2
+        echo "ERROR"
+        return
     fi
     
     local admin_token
     admin_token=$(cat "$TEMP_DIR/admin_token")
+    
+    debug "Using existing admin token for status API call" >&2
     
     local response
     response=$(curl -s $INSECURE_FLAG \
@@ -603,57 +606,55 @@ phase_user_approval() {
     
     log "Approving user via Admin API: $TEST_USERNAME"
     
-    # Use Admin API for user approval
+    # Use Admin API for user approval  
     local response
-    response=$(admin_approve_user "$TEST_USERNAME" "auth-test" "Test user approval" 2>/dev/null || echo "ERROR")
+    response=$(admin_approve_user "$TEST_USERNAME" "$ADMIN_USERNAME" "Test user approval" 2>/dev/null || echo "ERROR")
     
-    if [[ "$response" != "ERROR" ]]; then
-        if save_json_response "$response" "approve.json" "admin approval API"; then
-            local success username is_approved approved_by
-            success=$(jq -r '.success' "$TEMP_DIR/approve.json")
-            username=$(jq -r '.username' "$TEMP_DIR/approve.json")
-            is_approved=$(jq -r '.is_approved' "$TEMP_DIR/approve.json")
-            approved_by=$(jq -r '.approved_by' "$TEMP_DIR/approve.json")
-            
-            if [ "$success" = "true" ] && [ "$is_approved" = "true" ]; then
-                success "User approved via Admin API: $username by $approved_by"
-            else
-                warning "Admin API approval may have failed: success=$success, is_approved=$is_approved"
-                info "This can happen if user doesn't exist yet or is already approved"
-            fi
-        else
-            warning "Admin API approval had issues but may have partially succeeded"
-            info "Some approval failures are expected if user doesn't exist yet"
-        fi
-    else
-        warning "Admin API not available for approval, this is expected in some test environments"
-        info "User approval will be checked during login phase"
+    if [[ "$response" = "ERROR" ]]; then
+        error "Admin API not available for user approval - this is a critical failure"
     fi
+    
+    if ! save_json_response "$response" "approve.json" "admin approval API"; then
+        error "Admin API approval failed with invalid response - this is a critical failure"
+    fi
+    
+    local success username is_approved approved_by
+    success=$(jq -r '.success' "$TEMP_DIR/approve.json")
+    username=$(jq -r '.username' "$TEMP_DIR/approve.json")
+    is_approved=$(jq -r '.is_approved' "$TEMP_DIR/approve.json")
+    approved_by=$(jq -r '.approved_by' "$TEMP_DIR/approve.json")
+    
+    if [ "$success" != "true" ] || [ "$is_approved" != "true" ]; then
+        error "Admin API user approval failed: success=$success, is_approved=$is_approved - this is a critical failure"
+    fi
+    
+    success "User approved via Admin API: $username by $approved_by"
     
     # Verify approval using admin API status check
     local verify_result
     verify_result=$(admin_get_user_status "$TEST_USERNAME" "Verify user approval" 2>/dev/null || echo "ERROR")
     
-    if [[ "$verify_result" != "ERROR" ]]; then
-        if save_json_response "$verify_result" "user_approval_status.json" "admin user approval status"; then
-            local exists user_approved
-            exists=$(jq -r '.exists' "$TEMP_DIR/user_approval_status.json")
-            user_approved=$(jq -r '.user.is_approved' "$TEMP_DIR/user_approval_status.json")
-            
-            if [ "$exists" = "true" ] && [ "$user_approved" = "true" ]; then
-                success "User approval verified via Admin API"
-            elif [ "$exists" = "true" ]; then
-                warning "User exists but approval status: $user_approved"
-                warning "Continuing with test - user may still be functional"
-            else
-                warning "User not found during approval verification"
-                info "This can happen if user creation is asynchronous"
-            fi
-        fi
-    else
-        warning "Could not verify user approval status via Admin API"
-        info "This is normal if admin endpoints are not accessible"
+    if [[ "$verify_result" = "ERROR" ]]; then
+        error "Could not verify user approval status via Admin API - this is a critical failure"
     fi
+    
+    if ! save_json_response "$verify_result" "user_approval_status.json" "admin user approval status"; then
+        error "Admin API status verification failed with invalid response - this is a critical failure"
+    fi
+    
+    local exists user_approved
+    exists=$(jq -r '.exists' "$TEMP_DIR/user_approval_status.json")
+    user_approved=$(jq -r '.user.is_approved' "$TEMP_DIR/user_approval_status.json")
+    
+    if [ "$exists" != "true" ]; then
+        error "User does not exist after approval attempt - this is a critical failure"
+    fi
+    
+    if [ "$user_approved" != "true" ]; then
+        error "User approval verification failed: user exists but is_approved=$user_approved - this is a critical failure"
+    fi
+    
+    success "User approval verified via Admin API"
     
     if [ "$PERFORMANCE_MODE" = true ]; then
         local duration=$(end_timer "$timer_start")
@@ -748,11 +749,16 @@ phase_totp_setup_comprehensive() {
     # Complete TOTP setup with verification
     log "Completing TOTP setup with real code verification..."
     
+    # Fix the TOTP secret padding for proper base32 decoding
+    local padded_secret
+    padded_secret=$(fix_totp_secret_padding "$secret")
+    debug "Fixed TOTP secret: original length=${#secret}, padded length=${#padded_secret}"
+    
     local test_code
-    test_code=$(generate_totp_code "$secret" "" 2>/dev/null | tail -n1)
+    test_code=$(generate_totp_code "$padded_secret" "" 2>/dev/null | tail -n1)
     
     if [ -z "$test_code" ] || [ ${#test_code} -ne 6 ]; then
-        error "Failed to generate valid TOTP code for verification"
+        error "Failed to generate valid TOTP code for verification. Secret: ${secret:0:10}..., Padded: ${padded_secret:0:10}..."
     fi
     
     info "Generated TOTP verification code: $test_code"
@@ -799,48 +805,8 @@ phase_totp_setup_comprehensive() {
     fi
     
     if [ "$verification_success" = false ]; then
-        # Try generating a fresh code and retry once
-        info "Attempting TOTP verification with a fresh code..."
-        sleep 2  # Wait for next time window
-        local fresh_code
-        fresh_code=$(generate_totp_code "$secret" "" 2>/dev/null | tail -n1)
-        
-        if [ -n "$fresh_code" ] && [ ${#fresh_code} -eq 6 ]; then
-            info "Generated fresh TOTP code: $fresh_code"
-            
-            local retry_request
-            retry_request=$(jq -n \
-                --arg code "$fresh_code" \
-                --arg sessionKey "$session_key" \
-                '{
-                    code: $code,
-                    sessionKey: $sessionKey
-                }')
-            
-            response=$(curl -s $INSECURE_FLAG \
-                -X POST \
-                -H "Authorization: Bearer $temp_token" \
-                -H "Content-Type: application/json" \
-                -d "$retry_request" \
-                "$ARKFILE_BASE_URL/api/totp/verify" || echo "ERROR")
-            
-            debug "Retry verification response: $response"
-            
-            if save_json_response "$response" "totp_verify_retry.json" "TOTP verification retry"; then
-                success "TOTP verification completed successfully with fresh code!"
-                info "TOTP is now enabled for the user"
-            else
-                warning "Fresh code verification also failed - manually enabling TOTP for testing"
-                manually_enable_totp_database
-            fi
-        else
-            warning "Could not generate fresh TOTP code - manually enabling for testing"
-            manually_enable_totp_database
-        fi
+        error "TOTP verification failed - this is a critical failure in Phase 4"
     fi
-    
-    # Verify TOTP is actually enabled in database
-    verify_totp_database_status
     
     success "TOTP setup phase completed"
     
@@ -850,17 +816,20 @@ phase_totp_setup_comprehensive() {
     fi
 }
 
-# Helper function to manually enable TOTP in database
-manually_enable_totp_database() {
-    log "Cannot manually enable TOTP - no longer using direct database access"
-    warning "TOTP verification failed but will continue with testing"
-    warning "In production, TOTP verification should work correctly"
-}
-
-# Helper function to verify TOTP database status
-verify_totp_database_status() {
-    log "Cannot verify TOTP database status - no longer using direct database access"
-    info "TOTP status verification now uses admin API endpoints"
+# Helper function to add proper base32 padding to TOTP secret
+fix_totp_secret_padding() {
+    local secret="$1"
+    local secret_len=${#secret}
+    local remainder=$((secret_len % 8))
+    
+    if [ $remainder -ne 0 ]; then
+        local padding_needed=$((8 - remainder))
+        for ((i=0; i<padding_needed; i++)); do
+            secret="${secret}="
+        done
+    fi
+    
+    echo "$secret"
 }
 
 # Individual TOTP endpoint testing function
@@ -1793,9 +1762,9 @@ main() {
         log "Step 2: Admin TOTP Authentication..."
         local admin_totp_code
         if [ -x "scripts/testing/totp-generator" ]; then
-            admin_totp_code=$(scripts/testing/totp-generator "JBSWY3DPEHPK3PXP")
+            admin_totp_code=$(scripts/testing/totp-generator "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D")
         elif [ -x "./totp-generator" ]; then
-            admin_totp_code=$(./totp-generator "JBSWY3DPEHPK3PXP")
+            admin_totp_code=$(./totp-generator "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D")
         else
             error "TOTP generator not found. Please run from project root directory."
         fi

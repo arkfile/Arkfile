@@ -9,7 +9,7 @@ set -euo pipefail
 ARKFILE_BASE_URL="${ARKFILE_BASE_URL:-https://localhost:4443}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-arkfile-dev-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-DevAdmin2025!SecureInitialPassword}"
-TOTP_SECRET="JBSWY3DPEHPK3PXP"  # Fixed dev secret
+TOTP_SECRET="ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"  # Fixed dev secret (32-character Base32)
 
 # Colors
 RED='\033[0;31m'

@@ -115,7 +115,8 @@ func RegisterRoutes() {
 	// SECURITY: These endpoints are ONLY for development and testing
 	if isDevTestAdminAPIEnabled() {
 		devTestAdminGroup := Echo.Group("/api/admin/dev-test")
-		devTestAdminGroup.Use(AdminMiddleware)
+		devTestAdminGroup.Use(auth.JWTMiddleware()) // Add JWT middleware first
+		devTestAdminGroup.Use(AdminMiddleware)      // Then admin middleware
 		devTestAdminGroup.POST("/user/cleanup", AdminCleanupTestUser)
 		devTestAdminGroup.POST("/user/:username/approve", AdminApproveUser)
 		devTestAdminGroup.GET("/user/:username/status", AdminGetUserStatus)
