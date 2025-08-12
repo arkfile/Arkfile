@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Master ArkFile App Testing Script
+# Master Arkfile App Testing Script
 # Comprehensive End-to-End App Testing
 #
 # Flow: Cleanup → Registration → Approval → TOTP Setup → Login → 2FA Auth → 
@@ -1606,7 +1606,7 @@ test_error_scenarios() {
 show_help() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
-    echo "Master ArkFile Authentication Testing Script"
+    echo "Master Arkfile Authentication Testing Script"
     echo "Comprehensive End-to-End Authentication Flow Testing"
     echo ""
     echo "Options:"
@@ -1918,7 +1918,7 @@ main() {
     fi
     
     echo -e "${YELLOW}"
-    echo "🔒 Your ArkFile authentication system is production-ready!"
+    echo "🔒 Your Arkfile authentication system is production-ready!"
     echo -e "${NC}"
     
     # Performance summary

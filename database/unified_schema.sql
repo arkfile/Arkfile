@@ -381,6 +381,7 @@ CREATE INDEX IF NOT EXISTS idx_alerts_severity ON security_alerts(severity, crea
 CREATE INDEX IF NOT EXISTS idx_alerts_unack ON security_alerts(acknowledged, created_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_entity ON security_alerts(entity_id, time_window);
 
+
 -- =====================================================
 -- PHASE 10: TRIGGERS FOR AUTOMATIC UPDATES
 -- =====================================================
@@ -395,8 +396,57 @@ BEGIN
     WHERE id = NEW.id;
 END;
 
+
 -- =====================================================
--- PHASE 11: MONITORING VIEWS
+-- PHASE 11: CREDITS AND BILLING SYSTEM
+-- =====================================================
+
+-- User credits balance table
+CREATE TABLE IF NOT EXISTS user_credits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    balance_usd_cents INTEGER NOT NULL DEFAULT 0,  -- Store as cents to avoid floating point issues
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE,
+    UNIQUE(username)
+);
+
+-- Credit transactions log with full audit trail
+CREATE TABLE IF NOT EXISTS credit_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id TEXT,                          -- External transaction ID (Bitcoin, PayPal, etc.)
+    username TEXT NOT NULL,
+    amount_usd_cents INTEGER NOT NULL,            -- Positive for credits, negative for debits
+    balance_after_usd_cents INTEGER NOT NULL,     -- Balance after this transaction
+    transaction_type TEXT NOT NULL,               -- 'credit', 'debit', 'adjustment', 'refund'
+    reason TEXT,                                  -- Human-readable reason for transaction
+    admin_username TEXT,                          -- NULL for user transactions, filled for admin adjustments
+    metadata TEXT,                                -- JSON for additional details
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+-- Credits system indexes
+CREATE INDEX IF NOT EXISTS idx_user_credits_username ON user_credits(username);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_username ON credit_transactions(username);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_transaction_id ON credit_transactions(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_type ON credit_transactions(transaction_type);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_created_at ON credit_transactions(created_at);
+CREATE INDEX IF NOT EXISTS idx_credit_transactions_admin ON credit_transactions(admin_username);
+
+-- Update trigger to maintain updated_at timestamp for user_credits
+CREATE TRIGGER IF NOT EXISTS update_user_credits_updated_at
+    AFTER UPDATE ON user_credits
+    FOR EACH ROW
+BEGIN
+    UPDATE user_credits 
+    SET updated_at = CURRENT_TIMESTAMP 
+    WHERE id = NEW.id;
+END;
+
+-- =====================================================
+-- PHASE 12: MONITORING VIEWS
 -- =====================================================
 
 -- View for monitoring rate limiting activity

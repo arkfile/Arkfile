@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	TOTPIssuer       = "ArkFile"
+	TOTPIssuer       = "Arkfile"
 	TOTPDigits       = 6
 	TOTPPeriod       = 30
 	TOTPSkew         = 1 // Allow ±1 window (90 seconds total: current + prev/next 30s windows)

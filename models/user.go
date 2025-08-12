@@ -27,7 +27,7 @@ type User struct {
 }
 
 const (
-	DefaultStorageLimit int64 = 10737418240 // 10GB in bytes
+	DefaultStorageLimit int64 = 1181116006 // 1.1GB in bytes
 )
 
 // validateUsername wrapper function for utils.ValidateUsername

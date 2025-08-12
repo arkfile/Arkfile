@@ -351,7 +351,7 @@ func (t *IntegrationTest) GenerateTestFile() error {
     
     // Create deterministic test data for consistent hashing
     data := make([]byte, fileSize)
-    seed := []byte("ArkFile Integration Test File Content")
+    seed := []byte("Arkfile Integration Test File Content")
     
     // Fill with pseudo-random but deterministic data
     for i := 0; i < len(data); i += len(seed) {

@@ -663,7 +663,7 @@ func generateTOTPSetupDataJS(this js.Value, args []js.Value) interface{} {
 		"success": true,
 		"data": map[string]interface{}{
 			"secret":      "WASM_GENERATED_SECRET_123456789012", // Base32 secret
-			"qrCodeUrl":   "otpauth://totp/ArkFile:" + username + "?secret=WASM_GENERATED_SECRET_123456789012&issuer=ArkFile",
+			"qrCodeUrl":   "otpauth://totp/Arkfile:" + username + "?secret=WASM_GENERATED_SECRET_123456789012&issuer=Arkfile",
 			"manualEntry": "WASM GENE RATE DSEC RET1 2345 6789 012",
 			"backupCodes": []string{
 				"BAK123456789",

@@ -103,10 +103,20 @@ func RegisterRoutes() {
 	totpProtectedGroup.PATCH("/api/files/:filename/keys/:keyId", UpdateKey)
 	totpProtectedGroup.POST("/api/files/:filename/keys/:keyId/set-primary", SetPrimaryKey)
 
+	// Credits system - user endpoints (require TOTP)
+	totpProtectedGroup.GET("/api/credits", GetUserCredits)
+
 	// Admin API endpoints - structured for future expansion
 	// Production admin endpoints (reserved for future legitimate admin operations)
 	adminGroup := Echo.Group("/api/admin")
 	adminGroup.Use(AdminMiddleware)
+
+	// Credits system - admin endpoints (require admin privileges)
+	adminGroup.GET("/credits", AdminGetAllCredits)
+	adminGroup.GET("/credits/:username", AdminGetUserCredits)
+	adminGroup.POST("/credits/:username", AdminAdjustCredits)
+	adminGroup.PUT("/credits/:username", AdminSetCredits)
+
 	// Future production admin endpoints will go here
 	// Examples: adminGroup.GET("/system/health", AdminSystemHealth)
 	//          adminGroup.GET("/users/pending", AdminPendingUsers)
