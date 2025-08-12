@@ -1,60 +1,1124 @@
 # Test App Plan: Build end-to-end functionality test script: `test-app-curl.sh`
 
-The `test-app-curl.sh` script serves as a comprehensive end-to-end authentication testing framework for the Arkfile secure file vault system. The script validates the complete user lifecycle from initial registration through OPAQUE password-authenticated key exchange, administrative approval workflows, time-based one-time password (TOTP) two-factor authentication setup and verification, session management, and secure cleanup procedures. It exists to ensure that all critical mechanisms function correctly in production environments, providing confidence that users can securely register, authenticate, and maintain sessions within the system. The script currently implements ten distinct testing phases including pre-flight cleanup, OPAQUE registration, administrative API user approval, comprehensive TOTP setup and endpoint validation, login authentication, two-factor authentication verification, basic session management, TOTP management operations, logout procedures, and final comprehensive cleanup.
+## Introduction/Overview
 
-To extend the script with comprehensive file operations testing, we need to implement additional phases that validate the core file sharing functionality that users expect from the Arkfile system. The proposed file operations testing would require implementing several new testing phases that build upon the existing authenticated session established during the current authentication flow. These new phases would validate that users can perform essential file management operations including listing existing files, encrypting and uploading files, downloading and decrypting files with integrity verification, creating secure sharing links with password protection, and managing the complete sharing lifecycle.
+The test-app.md project establishes a comprehensive end-to-end testing framework for the Arkfile secure file vault system by developing production-ready Go utilities that enable authentic user workflow validation through real server interactions. Rather than simulating or mocking system behavior, this approach creates a suite of four specialized Go tools that work together to provide system administrators with powerful capabilities for installation, maintenance, API interaction, and cryptographic operations while simultaneously serving as the foundation for comprehensive system testing. These can all be integrated into `test-app-curl.sh` as needed once complete.
 
-The file listing verification phase would need to test the GET /api/files endpoint with the authenticated user's JWT token to ensure the system correctly returns the user's file inventory in a structured JSON format. This assumes the current system implements this endpoint and that it returns file metadata including file identifiers, names, sizes, upload timestamps, encryption status, sha256 checksums and (potentially also) any sharing information. The API response format should be consistent and include pagination support for users with large file collections.
+The core of this approach is building Go-based administrative tools that interact with the running Arkfile server through authentic authentication and API workflows, eliminating the challenges of simulating browser behavior or extracting cryptographic keys from isolated contexts. These tools provide system administrators with utilities for managing real Arkfile deployments while creating a testing infrastructure that validates every aspect of the user experience through genuine server interactions. The architecture separates concerns cleanly: network operations and authentication are handled by dedicated client tools, while security-critical cryptographic operations remain isolated in specialized cryptographic utilities, providing operational flexibility and enhanced security boundaries.
 
-For the file upload testing, the system would need to handle a 100 MB test file upload through a chunked upload mechanism that supports the Arkfile encryption protocol. This assumes the existence of either a single-request upload endpoint that can handle large files or a chunked upload API that allows files to be transmitted in segments. The upload process must implement client-side encryption before transmission, ensuring that the server receives only encrypted content. The current system architecture suggests that files are encrypted client-side using derived keys, and this encryption must be validated during the upload process. The API would likely be POST /api/files with multipart form data or a specialized chunked upload endpoint that accepts encrypted file segments. If needed, the Go-based command-line tools should be expanded, in order to facilitate the use of the exact same crypto functions as are/will be used in the browser via Go/WASM in order to perform the client-side encryption of files or chunks of files. The Go command-line tools must use exactly the same encryption algorithms and parameters and underlying functions as the Go/WASM functions do.
-
-The download and decryption verification phase requires a corresponding GET /api/files/{fileId}/download endpoint that returns the encrypted file content along with necessary metadata for decryption. The system must provide the authenticated user with their encrypted file content and any required decryption parameters while maintaining the security model where the server never has access to unencrypted file contents. File integrity verification would involve comparing cryptographic hashes of the original file with the downloaded and decrypted content to ensure no corruption occurred during the upload, storage, or download processes. The decryption process must also use the same underlying decryption functions that would be used by the Go/WASM browser client-side functions too.
-
-The sharing functionality implementation requires significant additions to the current system. Creating a sharing link would involve a POST /api/files/{fileId}/share endpoint that generates a unique sharing identifier and accepts a sharing password. The system must implement secure sharing link generation that creates cryptographically strong identifiers while maintaining the encrypted nature of shared files. The sharing mechanism must support password protection where the sharing password is used to derive additional encryption keys, ensuring that even shared files remain encrypted and require the correct sharing password for decryption. The Go command-line tools must be augmented as needed so as to facilitate checking of the password strength to ensure it is sufficiently strong. 
-
-The anonymous sharing access functionality requires implementing public endpoints that do not require user authentication but instead authenticate sharing requests using the sharing link identifier and password combination. This would involve GET /api/shares/{shareId} endpoints that validate sharing credentials and return encrypted file content to anonymous users. The system must implement rate limiting and abuse protection for these public endpoints while maintaining the security model where shared files remain encrypted until the correct sharing password is provided.
-
-The sharing link management capabilities require implementing PUT or DELETE /api/files/{fileId}/share endpoints that allow file owners to modify sharing parameters or disable sharing entirely. This includes the ability to change sharing passwords, set expiration dates, limit the number of downloads, and completely revoke sharing access. The system must maintain sharing audit logs and provide file owners with visibility into sharing activity.
-
-The shared file decryption must also be facilitated by (augmented) Go command-line tools such that the same underlying functions are used both on the command-line as are used in the Go/WASM functions for client-side in-browser decryption.
-
-Current system assumptions include the existence of a robust file storage backend that can handle large encrypted files (MinIO local single node server for testing), implementation of client-side encryption and decryption capabilities that can be replicated in the test environment, proper key derivation mechanisms that support both user authentication and file sharing scenarios, and adequate database schema design to support file metadata, sharing relationships, and access control lists. The system must also implement proper session management that maintains user authentication state throughout extended file operations.
-
-Required enhancements to support comprehensive file operations testing include implementing any missing API endpoints for file management and sharing, ensuring that chunked upload mechanisms can handle large files efficiently, developing client-side encryption and decryption utilities (Go command-line tools) that can be used within the test script environment, implementing comprehensive error handling for file operations including disk space limitations and network interruptions, and creating proper sharing link generation and validation mechanisms that maintain security while enabling anonymous access.
-
-The enhanced test script would need to incorporate file generation utilities that create test files of specified sizes with known content patterns for integrity verification, encryption and decryption functions that replicate the client-side cryptographic operations (Go command-line tools), HTTP request handling that can manage large file uploads and downloads with appropriate timeout settings, and comprehensive verification procedures that validate file integrity through cryptographic hash comparison. The script must also implement proper cleanup procedures that remove test files from both local storage and the server to prevent accumulation of test data in production environments.
-
-Success criteria for the comprehensive file operations testing would include verification that all file API endpoints respond correctly with appropriate HTTP status codes and well-formed JSON responses, confirmation that large file uploads complete successfully with proper encryption and integrity preservation, validation that downloads provide correct encrypted content that decrypts to match original files, demonstration that sharing links function correctly for anonymous access with password protection, proof that sharing link management operations properly control access permissions, and confirmation that all test files and sharing relationships are properly cleaned up after testing completion.
-
-Additionaly future enhancements could include: pausing and resuming of chunked file uploads, initiating multiple uploads simultaneously, and revoking sharing links during download of shared files.
+The four-tool ecosystem consists of `arkfile-setup` for system installation and configuration management, `arkfile-admin` for operational maintenance and monitoring tasks, `arkfile-client` for authenticated server communication and API operations, and `cryptocli` for cryptographic operations including file encryption, key management, and security-critical functions. This separation ensures that network communications never handle plaintext user data, cryptographic operations remain isolated from network code, administrative functions are properly scoped and audited, and system installation remains independent of running services. The tools will work together through well-defined interfaces to provide comprehensive system management capabilities that serve both daily administrative needs and comprehensive system validation requirements.
 
 ---
 
-<IMPLEMENTATION_OVERVIEW_PHASE_1>
+## PHASE 1 Overview
 
-## Phase 1: File Listing and Test File Generation with Encryption
+Phase 1 focuses on implementing the foundational components of the four-tool architecture to enable comprehensive file operations testing through authentic server interactions. The primary objective is to extend the existing `test-app-curl.sh` script with Go-based tools that perform real user workflows including OPAQUE authentication, large file encryption and upload, and file integrity verification, while establishing the architectural patterns that will support future administrative and testing capabilities.
 
-The first phase focuses on validating authenticated file listing capabilities and establishing the foundation for large file testing through generating, encrypting, and preparing a 100 MB test file using the existing OPAQUE-based encryption system. This phase requires creating command-line tools that replicate the exact cryptographic functions used by the Go/WASM client-side implementation to ensure complete compatibility and integrity verification.
+The implementation centers on enhancing `cryptocli` with file generation and encryption capabilities that exactly replicate the cryptographic operations performed by the browser WASM client, ensuring that command-line encrypted files are fully compatible with the web interface through identical key derivation, encryption algorithms, and data formats. Simultaneously, a new `arkfile-client` tool will be developed to handle authenticated server communication including OPAQUE registration and login flows, TOTP setup and verification, session management with JWT tokens, and chunked file upload through real API endpoints. The integration between these tools follows a secure pattern where `arkfile-client` obtains authentication credentials and exports them to `cryptocli` for cryptographic operations, then uploads the resulting encrypted data through authenticated API calls.
 
-The file listing verification functionality can be implemented immediately since the GET /api/files endpoint already exists and returns comprehensive file metadata including filenames, storage IDs, password hints, password types, SHA-256 checksums, file sizes, and upload dates. The test script needs to authenticate using the existing JWT token from the authentication flow, make a request to this endpoint, validate the JSON response structure, and verify that the response includes the expected pagination and storage information fields. The current API returns storage usage statistics including total bytes used, storage limits, available space, and usage percentages, which the test must validate for accuracy.
+The file operations testing workflow validates the complete user experience by first authenticating a test user through the OPAQUE protocol to obtain genuine export keys, generating a 100MB test file with deterministic content for integrity verification, encrypting the file using OPAQUE-derived keys through the same cryptographic functions as the web client, uploading the encrypted file via chunked upload API endpoints while maintaining session state, verifying the file appears correctly in the user's file listing with proper metadata, and confirming perfect file integrity through download and decryption workflows. This approach eliminates the need for mocking or simulation by performing authentic operations against the running server while maintaining the security boundaries established by the tool architecture.
 
-The 100 MB test file generation requires creating a new Go command-line tool that generates files with known content patterns for integrity verification. The tool must create files with predictable content such as repeated patterns or sequential data that can be easily verified after download and decryption. The generated file must be exactly 100 MB to test the chunked upload system which uses 16 MB chunks, resulting in 7 total chunks with the final chunk being smaller. The tool needs to calculate and store the SHA-256 hash of the original unencrypted content for later integrity comparison.
-
-The encryption functionality must be implemented as a standalone Go command-line tool that replicates the exact OPAQUE-based encryption used by the client/main.go WASM functions. This tool needs to accept an OPAQUE export key, username, file ID, and key type as parameters, then derive the file encryption key using either deriveAccountFileKey or deriveCustomFileKey functions from the crypto package. The encryption process must use AES-GCM with randomly generated nonces and produce output in the exact format expected by the server including proper envelope headers for version and key type information.
-
-For chunked uploads, the command-line tool must implement the encryptFileChunkedOPAQUE functionality where the file is split into 16 MB chunks, each chunk is encrypted separately with its own nonce, and each encrypted chunk includes the nonce, encrypted data, and authentication tag in the format expected by the UploadChunk handler. The tool must calculate SHA-256 hashes for each encrypted chunk and provide these for upload verification. The envelope creation must match the createEnvelopeOPAQUE function using version 0x01 and key type 0x01 for account-based encryption or version 0x02 and key type 0x02 for custom password encryption.
-
-The command-line tools must be designed as extensions to the existing cryptocli framework or as separate utilities that import the same crypto package functions used by the WASM client. The tools need to handle OPAQUE export key input either through command-line parameters, environment variables, or secure file reading. The output must be compatible with the existing API endpoints including proper base64 encoding for data transmission and correct header format for chunk hashes.
-
-Integration with the test script requires modifying test-app-curl.sh to include a new phase_file_operations function that first tests the file listing endpoint, then generates the test file using the command-line tool, encrypts it for chunked upload, initiates an upload session using the existing CreateUploadSession endpoint, uploads all chunks using UploadChunk, and completes the upload using CompleteUpload. The script must validate that the file appears correctly in subsequent file listing requests and that all metadata matches the original file parameters.
-
-Error handling and validation must be comprehensive throughout this phase including verification that all API responses contain expected fields, validation that file sizes match expectations, confirmation that SHA-256 hashes are calculated correctly, and proper cleanup of temporary files and test data. The script must also validate storage quota updates and ensure that user storage statistics are accurately maintained throughout the upload process.
-
-The command-line encryption tool needs to support both account-based and custom password encryption modes to test the full range of encryption capabilities. For account-based encryption, the tool uses the user's OPAQUE export key directly, while custom password encryption requires additional parameters for password derivation. The tool must validate that derived encryption keys are exactly 32 bytes and that all cryptographic operations use the same parameters as the WASM functions including the same AES-GCM configuration and nonce generation methods.
-
-This phase establishes the foundation for all subsequent file operations testing by ensuring that the basic file listing, encryption, and upload mechanisms work correctly with large files and that the command-line tools accurately replicate the client-side cryptographic operations. Success criteria include successful authentication and file listing, generation of a valid 100 MB test file, successful encryption using OPAQUE-derived keys, successful chunked upload of all file parts, verification that the completed file appears in file listings with correct metadata, and confirmation that all cryptographic hashes match expected values throughout the process.
-
-</IMPLEMENTATION_OVERVIEW_PHASE_1>
+The Phase 1 implementation integrates with the existing authentication testing in `test-app-curl.sh` by adding a new phase that leverages the authenticated session established by the current OPAQUE and TOTP flows. Rather than replacing the existing bash script authentication, the new Go tools extend the test suite by consuming the authentication tokens and session keys generated by the proven authentication workflow, ensuring compatibility with the current testing infrastructure while adding comprehensive file operations validation that exercises the complete encryption, upload, storage, and retrieval pipeline that forms the core value proposition of the Arkfile secure file vault system.
 
 ---
 
+## PHASE 1 Implementation Details
+
+Here's the expanded and revised outline with PHASE 1 split into three manageable sections:
+
+## PHASE 1A: Basic Go Tools Foundation
+
+### Tool Architecture and Components
+
+#### Enhanced cryptocli Tool - Basic File Operations
+**Location:** `cmd/cryptocli/commands/file_operations.go` (new file)
+
+```go
+// Basic file generation and encryption without OPAQUE integration
+func GenerateTestFile(args []string) error {
+    fs := flag.NewFlagSet("generate-test-file", flag.ExitOnError)
+    var (
+        size     = fs.String("size", "100MB", "File size (e.g., 100MB, 1GB)")
+        pattern  = fs.String("pattern", "sequential", "Content pattern: sequential, random, repeated")
+        output   = fs.String("output", "test-file.dat", "Output file path")
+        hashOut  = fs.String("hash-output", "", "Output hash file path")
+        verify   = fs.Bool("verify", true, "Verify generated content")
+    )
+    
+    // Implementation:
+    // - Parse size string to bytes (100MB = 104857600 bytes)
+    // - Generate content using crypto.GenerateTestFileContent()
+    // - Write file in chunks for memory efficiency
+    // - Calculate SHA-256 hash and optionally write to file
+    // - Verify content integrity after generation
+}
+
+func EncryptFileBasic(args []string) error {
+    fs := flag.NewFlagSet("encrypt-file-basic", flag.ExitOnError)
+    var (
+        inputFile  = fs.String("input", "", "Input file path")
+        outputFile = fs.String("output", "", "Output file path")
+        keyHex     = fs.String("key-hex", "", "32-byte encryption key in hex format")
+        envelope   = fs.Bool("envelope", true, "Include crypto envelope")
+    )
+    
+    // Implementation:
+    // - Read input file
+    // - Parse hex key and validate 32 bytes
+    // - Encrypt using crypto.EncryptGCM (same as WASM)
+    // - Create basic envelope header if requested
+    // - Write encrypted file
+    // - Output hash of encrypted result
+}
+
+func DecryptFileBasic(args []string) error {
+    fs := flag.NewFlagSet("decrypt-file-basic", flag.ExitOnError)
+    var (
+        inputFile  = fs.String("input", "", "Encrypted input file path")
+        outputFile = fs.String("output", "", "Decrypted output file path")
+        keyHex     = fs.String("key-hex", "", "32-byte decryption key in hex format")
+        envelope   = fs.Bool("envelope", true, "Parse crypto envelope")
+    )
+    
+    // Implementation:
+    // - Read encrypted file
+    // - Parse envelope header if present
+    // - Parse hex key and validate 32 bytes
+    // - Decrypt using crypto.DecryptGCM
+    // - Write decrypted file
+    // - Verify output file integrity
+}
+```
+
+#### New arkfile-client Tool - Basic Structure
+**Location:** `cmd/arkfile-client/main.go` (new tool)
+
+```go
+package main
+
+import (
+    "crypto/tls"
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "os"
+)
+
+type ClientConfig struct {
+    ServerURL   string `json:"server_url"`
+    Username    string `json:"username"`
+    TLSInsecure bool   `json:"tls_insecure"`
+    TokenFile   string `json:"token_file"`
+}
+
+type AuthResponse struct {
+    Token        string `json:"token"`
+    RefreshToken string `json:"refreshToken"`
+    SessionKey   string `json:"sessionKey"`
+    ExportKey    string `json:"exportKey,omitempty"`
+}
+
+func main() {
+    if len(os.Args) < 2 {
+        printUsage()
+        os.Exit(1)
+    }
+    
+    switch os.Args[1] {
+    case "health":
+        healthCheck()
+    case "login":
+        loginUser()
+    case "list-files":
+        listFiles()
+    case "status":
+        showStatus()
+    default:
+        fmt.Printf("Unknown command: %s\n", os.Args[1])
+        printUsage()
+        os.Exit(1)
+    }
+}
+
+func healthCheck() error {
+    config := loadConfig()
+    
+    client := createHTTPClient(config)
+    
+    resp, err := client.Get(config.ServerURL + "/api/health")
+    if err != nil {
+        return fmt.Errorf("health check failed: %w", err)
+    }
+    defer resp.Body.Close()
+    
+    if resp.StatusCode != http.StatusOK {
+        return fmt.Errorf("health check returned status %d", resp.StatusCode)
+    }
+    
+    fmt.Println("✅ Server health check passed")
+    return nil
+}
+
+func loginUser() error {
+    // Implementation for basic OPAQUE login flow
+    // - Read username/password from flags or prompt
+    // - Perform OPAQUE authentication
+    // - Handle TOTP if required
+    // - Store tokens to file
+    // - Export session key for cryptocli usage
+}
+
+func listFiles() error {
+    config := loadConfig()
+    token := loadToken(config.TokenFile)
+    
+    client := createHTTPClient(config)
+    
+    req, err := http.NewRequest("GET", config.ServerURL+"/api/files", nil)
+    if err != nil {
+        return err
+    }
+    req.Header.Set("Authorization", "Bearer "+token)
+    
+    resp, err := client.Do(req)
+    if err != nil {
+        return fmt.Errorf("list files failed: %w", err)
+    }
+    defer resp.Body.Close()
+    
+    var result map[string]interface{}
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return err
+    }
+    
+    fmt.Printf("Files: %+v\n", result)
+    return nil
+}
+
+func createHTTPClient(config *ClientConfig) *http.Client {
+    transport := &http.Transport{
+        TLSClientConfig: &tls.Config{
+            InsecureSkipVerify: config.TLSInsecure,
+        },
+    }
+    return &http.Client{Transport: transport}
+}
+```
+
+### Testing and Validation
+
+#### Basic Tool Testing
+**Location:** `scripts/testing/test-go-tools-basic.sh` (new file)
+
+```bash
+#!/bin/bash
+# Basic testing of Go tools without server integration
+
+set -euo pipefail
+
+echo "=== Testing cryptocli basic operations ==="
+
+# Test file generation
+echo "Testing file generation..."
+./cryptocli generate-test-file \
+    --size 10MB \
+    --pattern sequential \
+    --output /tmp/test-10mb.dat \
+    --hash-output /tmp/test-10mb.hash
+
+if [ -f "/tmp/test-10mb.dat" ] && [ -f "/tmp/test-10mb.hash" ]; then
+    echo "✅ File generation successful"
+    ls -lh /tmp/test-10mb.dat
+    echo "Hash: $(cat /tmp/test-10mb.hash)"
+else
+    echo "❌ File generation failed"
+    exit 1
+fi
+
+# Test basic encryption/decryption
+echo "Testing basic encryption/decryption..."
+TEST_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+./cryptocli encrypt-file-basic \
+    --input /tmp/test-10mb.dat \
+    --output /tmp/test-10mb.enc \
+    --key-hex "$TEST_KEY"
+
+./cryptocli decrypt-file-basic \
+    --input /tmp/test-10mb.enc \
+    --output /tmp/test-10mb-decrypted.dat \
+    --key-hex "$TEST_KEY"
+
+# Verify integrity
+ORIGINAL_HASH=$(cat /tmp/test-10mb.hash)
+DECRYPTED_HASH=$(sha256sum /tmp/test-10mb-decrypted.dat | cut -d' ' -f1)
+
+if [ "$ORIGINAL_HASH" = "$DECRYPTED_HASH" ]; then
+    echo "✅ Basic encryption/decryption cycle successful"
+else
+    echo "❌ Hash mismatch: $ORIGINAL_HASH != $DECRYPTED_HASH"
+    exit 1
+fi
+
+# Test arkfile-client basic operations
+echo "=== Testing arkfile-client basic operations ==="
+
+# Test server health check (assuming server is running)
+./arkfile-client health --server-url https://localhost:4443 --tls-insecure
+
+echo "✅ All basic Go tool tests passed"
+
+# Cleanup
+rm -f /tmp/test-10mb.dat /tmp/test-10mb.hash /tmp/test-10mb.enc /tmp/test-10mb-decrypted.dat
+```
+
+## PHASE 1B: OPAQUE Integration and File Operations
+
+### OPAQUE Integration
+
+#### Enhanced cryptocli with OPAQUE Support
+**Location:** `cmd/cryptocli/commands/file_operations.go` (extend existing)
+
+```go
+func EncryptFileOPAQUE(args []string) error {
+    fs := flag.NewFlagSet("encrypt-file-opaque", flag.ExitOnError)
+    var (
+        inputFile   = fs.String("input", "", "Input file path")
+        outputFile  = fs.String("output", "", "Output file path")
+        exportKey   = fs.String("export-key", "", "OPAQUE export key (hex)")
+        username    = fs.String("username", "", "Username for key derivation")
+        fileID      = fs.String("file-id", "", "File ID for key derivation")
+        keyType     = fs.String("key-type", "account", "Key type: account or custom")
+    )
+    
+    // Implementation:
+    // 1. Parse and validate OPAQUE export key (64 bytes hex)
+    // 2. Derive file encryption key using crypto.DeriveAccountFileKey
+    // 3. Read input file
+    // 4. Encrypt using derived key with crypto.EncryptGCM
+    // 5. Create envelope with version and key type
+    // 6. Write encrypted file with envelope
+    // 7. Output file hash for verification
+}
+
+func EncryptChunkedOPAQUE(args []string) error {
+    fs := flag.NewFlagSet("encrypt-chunked-opaque", flag.ExitOnError)
+    var (
+        inputFile  = fs.String("input", "", "Input file path")
+        outputDir  = fs.String("output-dir", "", "Output directory for chunks")
+        exportKey  = fs.String("export-key", "", "OPAQUE export key (hex)")
+        username   = fs.String("username", "", "Username for key derivation")
+        fileID     = fs.String("file-id", "", "File ID for key derivation")
+        manifest   = fs.String("manifest", "", "Output manifest file")
+        chunkSize  = fs.Int("chunk-size", 16*1024*1024, "Chunk size (default: 16MB)")
+    )
+    
+    // Implementation:
+    // 1. Derive file encryption key from OPAQUE export key
+    // 2. Create envelope (2 bytes: version + key type)
+    // 3. Split file into chunks of specified size
+    // 4. For each chunk:
+    //    - Generate unique 12-byte nonce
+    //    - Encrypt with AES-GCM: nonce + encrypted_data + tag
+    //    - Calculate SHA-256 of encrypted chunk
+    //    - Write to chunk_N.enc file
+    // 5. Create manifest JSON with envelope and chunk metadata
+    // 6. Validate all chunks were created successfully
+}
+
+func DecryptFileOPAQUE(args []string) error {
+    fs := flag.NewFlagSet("decrypt-file-opaque", flag.ExitOnError)
+    var (
+        inputFile    = fs.String("input", "", "Encrypted input file")
+        outputFile   = fs.String("output", "", "Decrypted output file")
+        exportKey    = fs.String("export-key", "", "OPAQUE export key (hex)")
+        encryptedFEK = fs.String("encrypted-fek", "", "Encrypted FEK file")
+        username     = fs.String("username", "", "Username for key derivation")
+    )
+    
+    // Implementation:
+    // 1. Parse OPAQUE export key
+    // 2. If encrypted FEK provided, decrypt it with session key
+    // 3. Otherwise derive file key from export key
+    // 4. Parse envelope from encrypted file
+    // 5. Decrypt file content using derived/decrypted key
+    // 6. Write decrypted file
+    // 7. Verify integrity if hash provided
+}
+```
+
+#### Enhanced arkfile-client with Upload/Download
+**Location:** `cmd/arkfile-client/main.go` (extend existing)
+
+```go
+func uploadFile() error {
+    fs := flag.NewFlagSet("upload", flag.ExitOnError)
+    var (
+        manifest   = fs.String("manifest", "", "Chunk manifest file")
+        chunksDir  = fs.String("chunks-dir", "", "Directory containing encrypted chunks")
+        filename   = fs.String("filename", "", "Original filename")
+        serverURL  = fs.String("server-url", "", "Server URL")
+        tokenFile  = fs.String("token-file", "", "JWT token file")
+        tlsInsecure = fs.Bool("tls-insecure", false, "Skip TLS verification")
+    )
+    
+    // Implementation:
+    // 1. Load JWT token from file
+    // 2. Read manifest file with chunk metadata
+    // 3. Initialize upload session via POST /api/uploads/init
+    // 4. Upload each chunk via POST /api/uploads/{sessionId}/chunks/{chunkIndex}
+    // 5. Complete upload via POST /api/uploads/{sessionId}/complete
+    // 6. Verify upload success and get file ID
+    // 7. Save upload response for verification
+}
+
+func downloadFile() error {
+    fs := flag.NewFlagSet("download", flag.ExitOnError)
+    var (
+        fileID      = fs.String("file-id", "", "File ID to download")
+        output      = fs.String("output", "", "Output file path")
+        exportFEK   = fs.String("export-fek", "", "Export encrypted FEK to file")
+        serverURL   = fs.String("server-url", "", "Server URL")
+        tokenFile   = fs.String("token-file", "", "JWT token file")
+        tlsInsecure = fs.Bool("tls-insecure", false, "Skip TLS verification")
+    )
+    
+    // Implementation:
+    // 1. Load JWT token from file
+    // 2. Get file metadata via GET /api/files/{fileId}
+    // 3. Download encrypted file via GET /api/files/{fileId}/download
+    // 4. If export-fek specified, save encrypted FEK to file
+    // 5. Save encrypted file to output path
+    // 6. Return success with file metadata
+}
+
+func authenticateAndExportKey() error {
+    // Enhanced authentication that captures and exports OPAQUE export key
+    // 1. Perform OPAQUE login flow
+    // 2. Handle TOTP authentication
+    // 3. Capture export key during authentication process
+    // 4. Store tokens and export key to files for cryptocli usage
+    // 5. Create session file with all necessary authentication data
+}
+```
+
+### Advanced Crypto Package Extensions
+**Location:** `crypto/opaque_integration.go` (new file)
+
+```go
+package crypto
+
+import (
+    "crypto/rand"
+    "encoding/hex"
+    "fmt"
+)
+
+// ExportKeyData represents OPAQUE export key and derived session data
+type ExportKeyData struct {
+    ExportKey   []byte `json:"export_key"`
+    SessionKey  []byte `json:"session_key"`
+    Username    string `json:"username"`
+}
+
+// DeriveFileKeyFromExport derives file encryption key from OPAQUE export key
+func DeriveFileKeyFromExport(exportKey []byte, username, fileID string) ([]byte, error) {
+    if len(exportKey) != 64 {
+        return nil, fmt.Errorf("export key must be 64 bytes, got %d", len(exportKey))
+    }
+    
+    // Use existing key derivation function
+    return DeriveAccountFileKey(exportKey, username, fileID)
+}
+
+// EncryptFileWithOPAQUE encrypts file using OPAQUE-derived key
+func EncryptFileWithOPAQUE(data []byte, exportKey []byte, username, fileID string) ([]byte, error) {
+    // Derive file encryption key
+    fileKey, err := DeriveFileKeyFromExport(exportKey, username, fileID)
+    if err != nil {
+        return nil, fmt.Errorf("key derivation failed: %w", err)
+    }
+    
+    // Encrypt file data
+    encryptedData, err := EncryptGCM(data, fileKey)
+    if err != nil {
+        return nil, fmt.Errorf("encryption failed: %w", err)
+    }
+    
+    // Create envelope
+    envelope := CreateOPAQUEEnvelope("account")
+    
+    // Combine envelope + encrypted data
+    result := make([]byte, len(envelope)+len(encryptedData))
+    copy(result, envelope)
+    copy(result[len(envelope):], encryptedData)
+    
+    return result, nil
+}
+
+// DecryptFileWithOPAQUE decrypts file using OPAQUE-derived key
+func DecryptFileWithOPAQUE(encryptedData []byte, exportKey []byte, username, fileID string) ([]byte, error) {
+    // Parse envelope (first 2 bytes)
+    if len(encryptedData) < 2 {
+        return nil, fmt.Errorf("encrypted data too short for envelope")
+    }
+    
+    envelope := encryptedData[:2]
+    ciphertext := encryptedData[2:]
+    
+    // Validate envelope
+    if err := ValidateOPAQUEEnvelope(envelope); err != nil {
+        return nil, fmt.Errorf("invalid envelope: %w", err)
+    }
+    
+    // Derive file encryption key
+    fileKey, err := DeriveFileKeyFromExport(exportKey, username, fileID)
+    if err != nil {
+        return nil, fmt.Errorf("key derivation failed: %w", err)
+    }
+    
+    // Decrypt file data
+    return DecryptGCM(ciphertext, fileKey)
+}
+
+// CreateChunkedEncryption encrypts file in chunks for upload
+func CreateChunkedEncryption(data []byte, exportKey []byte, username, fileID string, chunkSize int) (*ChunkManifest, map[int][]byte, error) {
+    // Derive file encryption key
+    fileKey, err := DeriveFileKeyFromExport(exportKey, username, fileID)
+    if err != nil {
+        return nil, nil, err
+    }
+    
+    // Create envelope
+    envelope := CreateOPAQUEEnvelope("account")
+    
+    // Split into chunks and encrypt each
+    chunks := make(map[int][]byte)
+    var chunkInfos []ChunkInfo
+    
+    for i := 0; i < len(data); i += chunkSize {
+        end := i + chunkSize
+        if end > len(data) {
+            end = len(data)
+        }
+        
+        chunkData := data[i:end]
+        chunkIndex := i / chunkSize
+        
+        // Generate unique nonce for this chunk
+        nonce := make([]byte, 12)
+        if _, err := rand.Read(nonce); err != nil {
+            return nil, nil, fmt.Errorf("nonce generation failed: %w", err)
+        }
+        
+        // Encrypt chunk with nonce
+        encryptedChunk, err := EncryptChunkWithNonce(chunkData, fileKey, nonce)
+        if err != nil {
+            return nil, nil, fmt.Errorf("chunk encryption failed: %w", err)
+        }
+        
+        chunks[chunkIndex] = encryptedChunk
+        
+        // Calculate chunk hash
+        chunkHash := CalculateFileHash(encryptedChunk)
+        
+        chunkInfos = append(chunkInfos, ChunkInfo{
+            Index: chunkIndex,
+            File:  fmt.Sprintf("chunk_%d.enc", chunkIndex),
+            Hash:  chunkHash,
+            Size:  len(encryptedChunk),
+        })
+    }
+    
+    // Create manifest
+    manifest := &ChunkManifest{
+        Envelope:    hex.EncodeToString(envelope),
+        TotalChunks: len(chunkInfos),
+        ChunkSize:   chunkSize,
+        Chunks:      chunkInfos,
+    }
+    
+    return manifest, chunks, nil
+}
+```
+
+### Testing Integration
+**Location:** `scripts/testing/test-go-tools-opaque.sh` (new file)
+
+```bash
+#!/bin/bash
+# Test OPAQUE integration with Go tools
+
+set -euo pipefail
+
+# Mock OPAQUE export key for testing (64 bytes hex)
+MOCK_EXPORT_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+TEST_USERNAME="test-user"
+TEST_FILE_ID="test-file.dat"
+
+echo "=== Testing OPAQUE integration ==="
+
+# Generate test file
+./cryptocli generate-test-file \
+    --size 50MB \
+    --pattern sequential \
+    --output /tmp/test-50mb.dat \
+    --hash-output /tmp/test-50mb.hash
+
+echo "✅ Generated 50MB test file"
+
+# Test OPAQUE encryption
+./cryptocli encrypt-file-opaque \
+    --input /tmp/test-50mb.dat \
+    --output /tmp/test-50mb-opaque.enc \
+    --export-key "$MOCK_EXPORT_KEY" \
+    --username "$TEST_USERNAME" \
+    --file-id "$TEST_FILE_ID"
+
+echo "✅ OPAQUE encryption completed"
+
+# Test OPAQUE decryption
+./cryptocli decrypt-file-opaque \
+    --input /tmp/test-50mb-opaque.enc \
+    --output /tmp/test-50mb-opaque-decrypted.dat \
+    --export-key "$MOCK_EXPORT_KEY" \
+    --username "$TEST_USERNAME"
+
+echo "✅ OPAQUE decryption completed"
+
+# Verify integrity
+ORIGINAL_HASH=$(cat /tmp/test-50mb.hash)
+DECRYPTED_HASH=$(sha256sum /tmp/test-50mb-opaque-decrypted.dat | cut -d' ' -f1)
+
+if [ "$ORIGINAL_HASH" = "$DECRYPTED_HASH" ]; then
+    echo "✅ OPAQUE encryption/decryption integrity verified"
+else
+    echo "❌ Hash mismatch: $ORIGINAL_HASH != $DECRYPTED_HASH"
+    exit 1
+fi
+
+# Test chunked encryption
+./cryptocli encrypt-chunked-opaque \
+    --input /tmp/test-50mb.dat \
+    --output-dir /tmp/encrypted_chunks \
+    --export-key "$MOCK_EXPORT_KEY" \
+    --username "$TEST_USERNAME" \
+    --file-id "$TEST_FILE_ID" \
+    --manifest /tmp/chunk_manifest.json
+
+echo "✅ Chunked encryption completed"
+
+# Validate manifest and chunks
+TOTAL_CHUNKS=$(jq -r '.totalChunks' /tmp/chunk_manifest.json)
+echo "Generated $TOTAL_CHUNKS chunks"
+
+for ((i=0; i<TOTAL_CHUNKS; i++)); do
+    CHUNK_FILE="/tmp/encrypted_chunks/chunk_${i}.enc"
+    if [ ! -f "$CHUNK_FILE" ]; then
+        echo "❌ Missing chunk: $CHUNK_FILE"
+        exit 1
+    fi
+done
+
+echo "✅ All chunks validated"
+
+# Cleanup
+rm -rf /tmp/test-50mb* /tmp/encrypted_chunks /tmp/chunk_manifest.json
+
+echo "✅ OPAQUE integration tests passed"
+```
+
+## PHASE 1C: Test Script Integration and Complete Workflow
+
+### Integration with test-app-curl.sh
+**Location:** `scripts/testing/test-app-curl.sh` (modifications)
+
+```bash
+# Add after existing authentication phases (around line 1500)
+
+# PHASE 11: FILE OPERATIONS WITH GO TOOLS
+phase_file_operations() {
+    phase "FILE OPERATIONS WITH GO TOOLS"
+    
+    local timer_start
+    [ "$PERFORMANCE_MODE" = true ] && timer_start=$(start_timer)
+    
+    if [ ! -f "$TEMP_DIR/final_jwt_token" ] || [ ! -f "$TEMP_DIR/final_session_key" ]; then
+        warning "No JWT token or session key available, skipping file operations tests"
+        return
+    fi
+    
+    # Ensure Go tools are built
+    build_go_tools
+    
+    # Export authentication data for Go tools
+    export_auth_data_for_go_tools
+    
+    # Step 1: Generate test file
+    generate_test_file_with_cryptocli
+    
+    # Step 2: Authenticate with arkfile-client to get OPAQUE export key
+    authenticate_with_client_tool
+    
+    # Step 3: Encrypt file using authentic OPAQUE export key
+    encrypt_test_file_with_opaque
+    
+    # Step 4: Upload encrypted file
+    upload_file_with_client
+    
+    # Step 5: Verify file in listing
+    verify_file_with_client
+    
+    # Step 6: Download and decrypt file
+    download_and_decrypt_file
+    
+    # Step 7: Verify complete integrity
+    verify_complete_integrity
+    
+    # Step 8: Cleanup
+    cleanup_file_operations_test
+    
+    success "File operations testing completed with Go tools"
+    
+    if [ "$PERFORMANCE_MODE" = true ]; then
+        local duration=$(end_timer "$timer_start")
+        info "File operations completed in: $duration"
+    fi
+}
+
+build_go_tools() {
+    log "Building Go tools if needed..."
+    
+    # Build cryptocli if not available or outdated
+    if [ ! -x "./cryptocli" ] || [ "cmd/cryptocli" -nt "./cryptocli" ]; then
+        log "Building cryptocli..."
+        cd cmd/cryptocli && go build -o ../../cryptocli . && cd ../..
+        success "cryptocli built successfully"
+    fi
+    
+    # Build arkfile-client if not available or outdated
+    if [ ! -x "./arkfile-client" ] || [ "cmd/arkfile-client" -nt "./arkfile-client" ]; then
+        log "Building arkfile-client..."
+        cd cmd/arkfile-client && go build -o ../../arkfile-client . && cd ../..
+        success "arkfile-client built successfully"
+    fi
+    
+    # Verify tools work
+    ./cryptocli --version >/dev/null 2>&1 || error "cryptocli build verification failed"
+    ./arkfile-client --version >/dev/null 2>&1 || error "arkfile-client build verification failed"
+    
+    success "All Go tools built and verified"
+}
+
+export_auth_data_for_go_tools() {
+    log "Exporting authentication data for Go tools..."
+    
+    local token session_key
+    token=$(cat "$TEMP_DIR/final_jwt_token")
+    session_key=$(cat "$TEMP_DIR/final_session_key")
+    
+    # Create secure temporary files for Go tool communication
+    echo "$token" > "$TEMP_DIR/go_jwt_token"
+    echo "$session_key" > "$TEMP_DIR/go_session_key"
+    echo "$TEST_USERNAME" > "$TEMP_DIR/go_username"
+    echo "$TEST_PASSWORD" > "$TEMP_DIR/go_password"
+    
+    # Set restrictive permissions
+    chmod 600 "$TEMP_DIR/go_jwt_token" "$TEMP_DIR/go_session_key" "$TEMP_DIR/go_username" "$TEMP_DIR/go_password"
+    
+    success "Authentication data exported for Go tools"
+}
+
+generate_test_file_with_cryptocli() {
+    log "Generating 100MB test file with cryptocli..."
+    
+    local test_file="$TEMP_DIR/test-file-100mb.dat"
+    local hash_file="$TEMP_DIR/test-file-100mb.hash"
+    
+    ./cryptocli generate-test-file \
+        --size 100MB \
+        --pattern sequential \
+        --output "$test_file" \
+        --hash-output "$hash_file" \
+        --verify
+    
+    if [ -f "$test_file" ] && [ -f "$hash_file" ]; then
+        local file_size
+        file_size=$(stat -c%s "$test_file" 2>/dev/null || stat -f%z "$test_file" 2>/dev/null)
+        local expected_size=$((100 * 1024 * 1024))
+        
+        if [ "$file_size" -eq "$expected_size" ]; then
+            success "100MB test file generated successfully"
+            info "File: $test_file ($(numfmt --to=iec $file_size))"
+            info "SHA-256: $(cat "$hash_file")"
+        else
+            error "Generated file size mismatch: expected $expected_size, got $file_size"
+        fi
+    else
+        error "Failed to generate test file or hash"
+    fi
+}
+
+authenticate_with_client_tool() {
+    log "Authenticating with arkfile-client to obtain OPAQUE export key..."
+    
+    # Create client config
+    cat > "$TEMP_DIR/client_config.json" <<EOF
+{
+    "server_url": "$ARKFILE_BASE_URL",
+    "username": "$TEST_USERNAME",
+    "tls_insecure": true,
+    "token_file": "$TEMP_DIR/go_jwt_token",
+    "session_file": "$TEMP_DIR/client_session.json"
+}
+EOF
+    
+    # Authenticate and export OPAQUE key
+    ./arkfile-client authenticate \
+        --config "$TEMP_DIR/client_config.json" \
+        --password-file "$TEMP_DIR/go_password" \
+        --export-opaque-key "$TEMP_DIR/opaque_export_key.hex" \
+        --reuse-session
+    
+    if [ -f "$TEMP_DIR/opaque_export_key.hex" ]; then
+        local key_size
+        key_size=$(wc -c < "$TEMP_DIR/opaque_export_key.hex")
+        # OPAQUE export key should be 128 hex chars (64 bytes)
+        if [ "$key_size" -eq 128 ]; then
+            success "OPAQUE export key obtained (64 bytes)"
+            debug "Export key: $(head -c 20 "$TEMP_DIR/opaque_export_key.hex")..."
+        else
+            error "Invalid OPAQUE export key size: expected 128 hex chars, got $key_size"
+        fi
+    else
+        error "Failed to obtain OPAQUE export key"
+    fi
+}
+
+encrypt_test_file_with_opaque() {
+    log "Encrypting test file with authentic OPAQUE export key..."
+    
+    local test_file="$TEMP_DIR/test-file-100mb.dat"
+    local encrypted_dir="$TEMP_DIR/encrypted_chunks"
+    local manifest_file="$TEMP_DIR/chunk_manifest.json"
+    local export_key_file="$TEMP_DIR/opaque_export_key.hex"
+    
+    mkdir -p "$encrypted_dir"
+    
+    # Read export key
+    local export_key
+    export_key=$(cat "$export_key_file")
+    
+    ./cryptocli encrypt-chunked-opaque \
+        --input "$test_file" \
+        --output-dir "$encrypted_dir" \
+        --export-key "$export_key" \
+        --username "$TEST_USERNAME" \
+        --file-id "test-file-100mb.dat" \
+        --key-type "account" \
+        --manifest "$manifest_file"
+    
+    if [ -f "$manifest_file" ]; then
+        local total_chunks
+        total_chunks=$(jq -r '.totalChunks' "$manifest_file")
+        success "File encrypted into $total_chunks chunks using authentic OPAQUE key"
+        
+        # Verify all chunks exist and have correct format
+        local chunks_verified=0
+        for ((i=0; i<total_chunks; i++)); do
+            local chunk_file="$encrypted_dir/chunk_${i}.enc"
+            if [ -f "$chunk_file" ]; then
+                # Verify chunk has minimum size (nonce + tag = 28 bytes minimum)
+                local chunk_size
+                chunk_size=$(stat -c%s "$chunk_file" 2>/dev/null || stat -f%z "$chunk_file" 2>/dev/null)
+                if [ "$chunk_size" -gt 28 ]; then
+                    chunks_verified=$((chunks_verified + 1))
+                fi
+            fi
+        done
+        
+        if [ "$chunks_verified" -eq "$total_chunks" ]; then
+            success "All $total_chunks encrypted chunks verified and properly formatted"
+        else
+            error "Chunk verification failed: verified $chunks_verified, expected $total_chunks"
+        fi
+    else
+        error "Failed to encrypt test file into chunks"
+    fi
+}
+
+upload_file_with_client() {
+    log "Uploading encrypted file using arkfile-client..."
+    
+    local manifest_file="$TEMP_DIR/chunk_manifest.json"
+    local encrypted_dir="$TEMP_DIR/encrypted_chunks"
+    local config_file="$TEMP_DIR/client_config.json"
+    
+    ./arkfile-client upload \
+        --config "$config_file" \
+        --manifest "$manifest_file" \
+        --chunks-dir "$encrypted_dir" \
+        --filename "test-file-100mb.dat" \
+        --progress
+    
+    if [ $? -eq 0 ]; then
+        success "File uploaded successfully via arkfile-client"
+        
+        # Extract file ID from upload response
+        if [ -f "$TEMP_DIR/upload_response.json" ]; then
+            local file_id
+            file_id=$(jq -r '.fileId' "$TEMP_DIR/upload_response.json")
+            echo "$file_id" > "$TEMP_DIR/uploaded_file_id"
+            info "File ID: $file_id"
+        fi
+    else
+        error "File upload failed"
+    fi
+}
+
+verify_file_with_client() {
+    log "Verifying uploaded file appears in listing..."
+    
+    local config_file="$TEMP_DIR/client_config.json"
+    
+    ./arkfile-client list-files \
+        --config "$config_file" \
+        --output-json > "$TEMP_DIR/file_listing.json"
+    
+    if [ $? -eq 0 ]; then
+        # Check if our test file is in the listing
+        local test_file_found
+        test_file_found=$(jq -r '.files[] | select(.filename == "test-file-100mb.dat") | .filename' "$TEMP_DIR/file_listing.json")
+        
+        if [ "$test_file_found" = "test-file-100mb.dat" ]; then
+            success "Test file found in file listing"
+            
+            # Validate file metadata
+            local file_size sha256sum password_type storage_total
+            file_size=$(jq -r '.files[] | select(.filename == "test-file-100mb.dat") | .size_bytes' "$TEMP_DIR/file_listing.json")
+            sha256sum=$(jq -r '.files[] | select(.filename == "test-file-100mb.dat") | .sha256sum' "$TEMP_DIR/file_listing.json")
+            password_type=$(jq -r '.files[] | select(.filename == "test-file-100mb.dat") | .passwordType' "$TEMP_DIR/file_listing.json")
+            storage_total=$(jq -r '.storage.total_bytes' "$TEMP_DIR/file_listing.json")
+            
+            local expected_size=$((100 * 1024 * 1024))
+            local expected_hash
+            expected_hash=$(cat "$TEMP_DIR/test-file-100mb.hash")
+            
+            if [ "$file_size" -eq "$expected_size" ] && [ "$sha256sum" = "$expected_hash" ] && [ "$password_type" = "account" ]; then
+                success "File metadata validated:"
+                info "  Size: $(numfmt --to=iec $file_size)"
+                info "  Hash: $sha256sum"
+                info "  Type: $password_type"
+                info "  Storage total: $(numfmt --to=iec $storage_total)"
+            else
+                error "File metadata validation failed: size=$file_size, hash_match=$([[ "$sha256sum" = "$expected_hash" ]] && echo "true" || echo "false"), type=$password_type"
+            fi
+        else
+            error "Test file not found in listing"
+        fi
+    else
+        error "Failed to retrieve file listing"
+    fi
+}
+
+download_and_decrypt_file() {
+    log "Downloading and decrypting file to verify complete workflow..."
+    
+    local file_id
+    file_id=$(cat "$TEMP_DIR/uploaded_file_id")
+    local config_file="$TEMP_DIR/client_config.json"
+    local download_path="$TEMP_DIR/downloaded-encrypted-file.dat"
+    local fek_path="$TEMP_DIR/downloaded_encrypted_fek.bin"
+    local decrypted_path="$TEMP_DIR/final-decrypted-file.dat"
+    local export_key_file="$TEMP_DIR/opaque_export_key.hex"
+    
+    # Download encrypted file and FEK
+    ./arkfile-client download \
+        --config "$config_file" \
+        --file-id "$file_id" \
+        --output "$download_path" \
+        --export-encrypted-fek "$fek_path"
+    
+    if [ $? -eq 0 ] && [ -f "$download_path" ] && [ -f "$fek_path" ]; then
+        success "Encrypted file and FEK downloaded successfully"
+        
+        local download_size
+        download_size=$(stat -c%s "$download_path" 2>/dev/null || stat -f%z "$download_path" 2>/dev/null)
+        info "Downloaded encrypted file size: $(numfmt --to=iec $download_size)"
+        
+        # Decrypt file using cryptocli with OPAQUE export key
+        local export_key
+        export_key=$(cat "$export_key_file")
+        
+        ./cryptocli decrypt-file-opaque \
+            --input "$download_path" \
+            --output "$decrypted_path" \
+            --export-key "$export_key" \
+            --encrypted-fek "$fek_path" \
+            --username "$TEST_USERNAME"
+        
+        if [ -f "$decrypted_path" ]; then
+            success "File decryption completed using OPAQUE export key"
+            
+            local decrypted_size
+            decrypted_size=$(stat -c%s "$decrypted_path" 2>/dev/null || stat -f%z "$decrypted_path" 2>/dev/null)
+            info "Decrypted file size: $(numfmt --to=iec $decrypted_size)"
+        else
+            error "File decryption failed"
+        fi
+    else
+        error "File download failed"
+    fi
+}
+
+verify_complete_integrity() {
+    log "Verifying complete file integrity through entire workflow..."
+    
+    local original_hash decrypted_hash original_file decrypted_file
+    original_file="$TEMP_DIR/test-file-100mb.dat"
+    decrypted_file="$TEMP_DIR/final-decrypted-file.dat"
+    
+    original_hash=$(cat "$TEMP_DIR/test-file-100mb.hash")
+    decrypted_hash=$(sha256sum "$decrypted_file" | cut -d' ' -f1)
+    
+    if [ "$original_hash" = "$decrypted_hash" ]; then
+        success "🎉 PERFECT INTEGRITY VERIFIED - Complete workflow successful!"
+        info "Original file →  Generate →  Encrypt →  Upload →  List →  Download →  Decrypt →  Verify"
+        info "SHA-256 hashes:"
+        info "  Original:  $original_hash"
+        info "  Final:     $decrypted_hash"
+        info "  ✅ EXACT MATCH - Zero data corruption through complete cycle"
+        
+        # Additional file size verification
+        local original_size decrypted_size
+        original_size=$(stat -c%s "$original_file" 2>/dev/null || stat -f%z "$original_file" 2>/dev/null)
+        decrypted_size=$(stat -c%s "$decrypted_file" 2>/dev/null || stat -f%z "$decrypted_file" 2>/dev/null)
+        
+        if [ "$original_size" -eq "$decrypted_size" ]; then
+            info "  File sizes: $(numfmt --to=iec $original_size) ✅ EXACT MATCH"
+        else
+            warning "File size mismatch: original=$original_size, decrypted=$decrypted_size"
+        fi
+        
+    else
+        error "INTEGRITY VERIFICATION FAILED - Hash mismatch detected!"
+        error "Original:  $original_hash"
+        error "Final:     $decrypted_hash"
+        error "This indicates data corruption in the encryption/upload/download/decryption workflow"
+    fi
+}
+
+cleanup_file_operations_test() {
+    log "Cleaning up file operations test files and data..."
+    
+    # Remove local test files
+    rm -f "$TEMP_DIR/test-file-100mb.dat"
+    rm -f "$TEMP_DIR/test-file-100mb.hash"
+    rm -rf "$TEMP_DIR/encrypted_chunks"
+    rm -f "$TEMP_DIR/chunk_manifest.json"
+    rm -f "$TEMP_DIR/downloaded-encrypted-file.dat"
+    rm -f "$TEMP_DIR/downloaded_encrypted_fek.bin"
+    rm -f "$TEMP_DIR/final-decrypted-file.dat"
+    rm -f "$TEMP_DIR/upload_response.json"
+    rm -f "$TEMP_DIR/file_listing.json"
+    rm -f "$TEMP_DIR/uploaded_file_id"
+    
+    # Clean up Go tool configuration and auth files
+    rm -f "$TEMP_DIR/client_config.json"
+    rm -f "$TEMP_DIR/client_session.json"
+    rm -f "$TEMP_DIR/opaque_export_key.hex"
+    rm -f "$TEMP_DIR/go_jwt_token"
+    rm -f "$TEMP_DIR/go_session_key"
+    rm -f "$TEMP_DIR/go_username"
+    rm -f "$TEMP_DIR/go_password"
+    
+    success "File operations test cleanup completed"
+    info "All temporary files and authentication data securely removed"
+}
+```
+
+### Build System Integration
+**Location:** Root `Makefile` (new/updated)
+
+```makefile
+# Go tools building
+.PHONY: build-go-tools clean-go-tools test-go-tools
+
+build-go-tools:
+	@echo "Building Go tools..."
+	cd cmd/cryptocli && go build -o ../../cryptocli .
+	cd cmd/arkfile-client && go build -o ../../arkfile-client .
+	@echo "✅ Go tools built successfully"
+
+clean-go-tools:
+	rm -f cryptocli arkfile-client
+	@echo "✅ Go tools cleaned"
+
+test-go-tools: build-go-tools
+	@echo "Testing Go tools..."
+	./scripts/testing/test-go-tools-basic.sh
+	./scripts/testing/test-go-tools-opaque.sh
+	@echo "✅ Go tools tests passed"
+
+# Integration with existing test targets
+test-complete: build-go-tools
+	./scripts/testing/test-app-curl.sh
+
+test-file-operations: build-go-tools
+	./scripts/testing/test-app-curl.sh --phase file-operations
+
+# Development targets
+dev-test-files: build-go-tools
+	./scripts/testing/test-app-curl.sh --phase file-operations --debug --skip-cleanup
+
+# Dependencies
+cmd/cryptocli/cryptocli: $(shell find cmd/cryptocli -name '*.go')
+	cd cmd/cryptocli && go build -o cryptocli .
+
+cmd/arkfile-client/arkfile-client: $(shell find cmd/arkfile-client -name '*.go')
+	cd cmd/arkfile-client && go build -o arkfile-client .
+```
+
+---
+
+`NOTE: FINISH PHASE 1 AND THEN REVISIT/REVISE PLAN FOR SUBSEQUENT PHASES BELOW`
+
+---
+
+## PHASE 2 OUTLINE: Anonymous File Sharing Operations
+
+- **Share Creation**
+  - Extend cryptocli with Argon2id share password key derivation
+  - Add arkfile-client share creation and password setting commands
+  - Implement FEK re-encryption for anonymous access
+
+- **Anonymous Download Testing**
+  - Test anonymous file access without authentication
+  - Validate share password verification and decryption
+  - Verify timing protection and rate limiting on share endpoints
+
+- **Complete Sharing Workflow**
+  - Add Phase 12 to test-app-curl.sh for share creation and access
+  - Test: authenticate → upload → create share → logout → anonymous download
+  - Verify file integrity through anonymous decryption cycle
+
+---
+
+## PHASE 3 OUTLINE: Complete System Validation
+
+- **Single Comprehensive Test Script**
+  - Combine all phases into one master validation script
+  - Test complete user journey: register → login → upload → share → anonymous access
+  - Include performance benchmarking and timing measurements
+
+- **Error Handling and Edge Cases**
+  - Test authentication failures, file corruption, network errors
+  - Validate security boundaries and proper error responses
+  - Test cleanup and recovery from partial failures
+  
+- **Production Readiness Validation**
+  - Comprehensive integrity checking across all operations
+  - Performance validation with large files and concurrent operations
+  - Final verification that all core features work end-to-end
+
+---

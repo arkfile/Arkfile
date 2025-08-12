@@ -6,7 +6,7 @@
 
 The go-integration.md project aims to create a comprehensive, automated validation tool that serves as the final certification step for the Arkfile secure file sharing system before production deployment. This Go-based integration test is designed to systematically validate every critical component of the system through realistic, end-to-end workflows that mirror actual user behavior, providing definitive proof that all security, cryptographic, and functional requirements work correctly together in a production environment.
 
-The project's primary objective is to execute a complete user journey that begins with username-based OPAQUE authentication (including two-factor authentication via TOTP), proceeds through uploading and encrypting a substantial 50MB test file, creates an anonymous share link protected by Argon2id password derivation, and concludes with anonymous access and file download - all while validating that every security measure (timing protection, rate limiting, end-to-end encryption) functions correctly and that file integrity is perfectly preserved throughout multiple encryption/decryption cycles.
+The project's primary objective is to execute a complete user journey that begins with username-based OPAQUE authentication (including two-factor authentication via TOTP), proceeds through uploading and encrypting a substantial 100MB test file, creates an anonymous share link protected by Argon2id password derivation, and concludes with anonymous access and file download - all while validating that every security measure (timing protection, rate limiting, end-to-end encryption) functions correctly and that file integrity is perfectly preserved throughout multiple encryption/decryption cycles.
 
 **The major requirements include:**
 
