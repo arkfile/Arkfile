@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/base64"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -657,7 +658,18 @@ func TOTPAuth(c echo.Context) error {
 	// Validate TOTP code or backup code
 	if request.IsBackup {
 		if err := auth.ValidateBackupCode(database.DB, username, request.Code); err != nil {
-			logging.ErrorLogger.Printf("Failed backup code validation for %s: %v", username, err)
+			// Enhanced debug logging for backup code failures (with specific failure causes)
+			if debugMode := strings.ToLower(os.Getenv("DEBUG_MODE")); debugMode == "true" || debugMode == "1" {
+				if strings.Contains(err.Error(), "decrypt") {
+					logging.ErrorLogger.Printf("TOTP backup code decrypt failure for user: %s", username)
+				} else if strings.Contains(err.Error(), "already used") {
+					logging.ErrorLogger.Printf("TOTP backup code replay detected for user: %s", username)
+				} else {
+					logging.ErrorLogger.Printf("TOTP backup code mismatch for user: %s", username)
+				}
+			} else {
+				logging.ErrorLogger.Printf("Failed backup code validation for %s: %v", username, err)
+			}
 			// Record failed TOTP auth attempt
 			entityID := logging.GetOrCreateEntityID(c)
 			if recordErr := recordAuthFailedAttempt("totp_auth", entityID); recordErr != nil {
@@ -668,7 +680,20 @@ func TOTPAuth(c echo.Context) error {
 		database.LogUserAction(username, "used backup code", "")
 	} else {
 		if err := auth.ValidateTOTPCode(database.DB, username, request.Code); err != nil {
-			logging.ErrorLogger.Printf("Failed TOTP code validation for %s: %v", username, err)
+			// Enhanced debug logging for TOTP failures (with specific failure causes)
+			if debugMode := strings.ToLower(os.Getenv("DEBUG_MODE")); debugMode == "true" || debugMode == "1" {
+				if strings.Contains(err.Error(), "decrypt") {
+					logging.ErrorLogger.Printf("TOTP decrypt failure for user: %s", username)
+				} else if strings.Contains(err.Error(), "replay") {
+					logging.ErrorLogger.Printf("TOTP replay detected for user: %s", username)
+				} else if strings.Contains(err.Error(), "invalid") {
+					logging.ErrorLogger.Printf("TOTP code mismatch for user: %s", username)
+				} else {
+					logging.ErrorLogger.Printf("TOTP validation error for user: %s, error: %v", username, err)
+				}
+			} else {
+				logging.ErrorLogger.Printf("Failed TOTP code validation for %s: %v", username, err)
+			}
 			// Record failed TOTP auth attempt
 			entityID := logging.GetOrCreateEntityID(c)
 			if recordErr := recordAuthFailedAttempt("totp_auth", entityID); recordErr != nil {

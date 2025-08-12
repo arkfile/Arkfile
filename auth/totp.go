@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -178,11 +179,16 @@ func ValidateTOTPCode(db *sql.DB, username, code string) error {
 	// Decrypt TOTP secret using server-side key management
 	secret, err := decryptTOTPSecret(totpData.SecretEncrypted, username)
 	if err != nil {
+		// Debug logging for decrypt failures (no secret exposure)
+		if isDebugMode() && logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("TOTP decrypt failed for user: %s", username)
+		}
 		return fmt.Errorf("failed to decrypt TOTP secret: %w", err)
 	}
 
 	// Validate code
 	currentTime := time.Now().UTC()
+	windowStart := currentTime.Truncate(time.Duration(TOTPPeriod) * time.Second).Unix()
 
 	valid, err := totp.ValidateCustom(code, secret, currentTime, totp.ValidateOpts{
 		Period:    TOTPPeriod,
@@ -196,11 +202,20 @@ func ValidateTOTPCode(db *sql.DB, username, code string) error {
 	}
 
 	if !valid {
+		// Debug logging for code mismatch (with window metadata)
+		if isDebugMode() && logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("TOTP code mismatch for user: %s, window_start: %d, skew: %d",
+				username, windowStart, TOTPSkew)
+		}
 		return fmt.Errorf("invalid TOTP code")
 	}
 
 	// Check for replay attack
 	if err := checkTOTPReplay(db, username, code, currentTime); err != nil {
+		// Debug logging for replay detection
+		if isDebugMode() && logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("TOTP replay detected for user: %s", username)
+		}
 		return fmt.Errorf("replay attack detected: %w", err)
 	}
 
@@ -479,19 +494,28 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 		return nil, err
 	}
 
-	// Fix for base64 encoding issue: if we get 60 bytes that look like base64-encoded data,
-	// decode it to get the original binary data
-	if len(data.SecretEncrypted) == 60 {
-		// Convert the hex representation back to the original base64 string
-		hexStr := fmt.Sprintf("%x", data.SecretEncrypted)
-		if rawBytes, err := hex.DecodeString(hexStr); err == nil {
-			base64Str := string(rawBytes)
+	// CRITICAL FIX: rqlite driver returns BLOB data as base64-encoded strings
+	// We need to decode them back to binary data for proper GCM decryption
+	if isDebugMode() {
+		fmt.Printf("getTOTPData: Raw data lengths - secret=%d, backup_codes=%d\n",
+			len(data.SecretEncrypted), len(data.BackupCodesEncrypted))
+	}
 
-			// Try to decode the base64 string
-			if decodedBytes, err := decodeBase64(base64Str); err == nil {
-				data.SecretEncrypted = decodedBytes
-			}
+	// Detect and decode base64-encoded data
+	if decodedSecret, err := decodeBase64IfNeeded(data.SecretEncrypted); err == nil {
+		if isDebugMode() && len(decodedSecret) != len(data.SecretEncrypted) {
+			fmt.Printf("getTOTPData: Decoded secret from %d to %d bytes (was base64)\n",
+				len(data.SecretEncrypted), len(decodedSecret))
 		}
+		data.SecretEncrypted = decodedSecret
+	}
+
+	if decodedBackup, err := decodeBase64IfNeeded(data.BackupCodesEncrypted); err == nil {
+		if isDebugMode() && len(decodedBackup) != len(data.BackupCodesEncrypted) {
+			fmt.Printf("getTOTPData: Decoded backup codes from %d to %d bytes (was base64)\n",
+				len(data.BackupCodesEncrypted), len(decodedBackup))
+		}
+		data.BackupCodesEncrypted = decodedBackup
 	}
 
 	// Parse timestamps
@@ -515,17 +539,55 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 }
 
 func decryptTOTPSecret(encrypted []byte, username string) (string, error) {
+	// Debug logging for TOTP decryption attempts
+	if isDebugMode() && logging.ErrorLogger != nil {
+		logging.ErrorLogger.Printf("TOTP decrypt attempt for user: %s, encrypted_data_len: %d",
+			username, len(encrypted))
+		if len(encrypted) > 0 {
+			logging.ErrorLogger.Printf("TOTP decrypt data preview: first_8_bytes=%x, last_8_bytes=%x",
+				encrypted[:min(8, len(encrypted))],
+				encrypted[max(0, len(encrypted)-8):])
+		}
+	}
+
 	// Use user-specific persistent key derived from server TOTP master key
 	totpKey, err := crypto.DeriveTOTPUserKey(username)
 	if err != nil {
+		if isDebugMode() && logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("TOTP key derivation failed for user: %s, error: %v", username, err)
+		}
 		return "", err
 	}
 	defer crypto.SecureZeroTOTPKey(totpKey)
 
+	// Debug logging for derived key validation
+	if isDebugMode() && logging.ErrorLogger != nil {
+		if len(totpKey) == 32 {
+			// Log key hash for debugging (never log actual key)
+			keyHash := hashString(string(totpKey))
+			logging.ErrorLogger.Printf("TOTP key derived successfully for user: %s, key_hash: %s",
+				username, keyHash[:16])
+		} else {
+			logging.ErrorLogger.Printf("TOTP key derivation issue for user: %s, unexpected key length: %d",
+				username, len(totpKey))
+		}
+	}
+
 	// Decrypt using AES-GCM
 	decrypted, err := crypto.DecryptGCM(encrypted, totpKey)
 	if err != nil {
+		if isDebugMode() && logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("TOTP GCM decryption failed for user: %s, error: %v", username, err)
+			logging.ErrorLogger.Printf("TOTP GCM decrypt context: key_len=%d, data_len=%d",
+				len(totpKey), len(encrypted))
+		}
 		return "", err
+	}
+
+	// Debug logging for successful decryption
+	if isDebugMode() && logging.ErrorLogger != nil {
+		logging.ErrorLogger.Printf("TOTP decrypt successful for user: %s, decrypted_len: %d",
+			username, len(decrypted))
 	}
 
 	return string(decrypted), nil
@@ -546,8 +608,104 @@ func decryptJSON(encrypted []byte, username string, target interface{}) error {
 	return json.Unmarshal(decrypted, target)
 }
 
+// Helper functions for safe array slicing
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// isDebugMode checks if debug mode is enabled
+func isDebugMode() bool {
+	debug := strings.ToLower(os.Getenv("DEBUG_MODE"))
+	return debug == "true" || debug == "1"
+}
+
+// CanDecryptTOTPSecret checks if a user's TOTP secret can be decrypted (dev diagnostic helper)
+// This is exported for use by dev-only diagnostic endpoints
+func CanDecryptTOTPSecret(db *sql.DB, username string) (present bool, decryptable bool, enabled bool, setupCompleted bool, err error) {
+	// Enhanced debug logging for CanDecryptTOTPSecret function
+	if isDebugMode() {
+		fmt.Printf("=== CanDecryptTOTPSecret DEBUG START for user: %s ===\n", username)
+	}
+
+	// Get stored TOTP data
+	totpData, err := getTOTPData(db, username)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			if isDebugMode() {
+				fmt.Printf("CanDecryptTOTPSecret: No TOTP data found for user: %s\n", username)
+			}
+			return false, false, false, false, nil // User has no TOTP data
+		}
+		if isDebugMode() {
+			fmt.Printf("CanDecryptTOTPSecret: Database error for user %s: %v\n", username, err)
+		}
+		return false, false, false, false, err
+	}
+
+	present = true
+	enabled = totpData.Enabled
+	setupCompleted = totpData.SetupCompleted
+
+	if isDebugMode() {
+		fmt.Printf("CanDecryptTOTPSecret: TOTP data found - enabled=%t, setupCompleted=%t, encrypted_len=%d\n",
+			enabled, setupCompleted, len(totpData.SecretEncrypted))
+	}
+
+	// Try to decrypt the secret with enhanced debug logging
+	decryptedSecret, decryptErr := decryptTOTPSecret(totpData.SecretEncrypted, username)
+	decryptable = (decryptErr == nil)
+
+	if isDebugMode() {
+		if decryptErr != nil {
+			fmt.Printf("CanDecryptTOTPSecret: Decryption FAILED for user %s: %v\n", username, decryptErr)
+		} else {
+			fmt.Printf("CanDecryptTOTPSecret: Decryption SUCCESS for user %s, secret_len=%d\n", username, len(decryptedSecret))
+		}
+		fmt.Printf("=== CanDecryptTOTPSecret DEBUG END for user: %s ===\n", username)
+	}
+
+	return present, decryptable, enabled, setupCompleted, nil
+}
+
+// decodeBase64IfNeeded attempts to detect and decode base64-encoded data
+// If the input is not valid base64, it returns the original data unchanged
+func decodeBase64IfNeeded(data []byte) ([]byte, error) {
+	// If data looks like base64 (length is multiple of 4, contains only base64 chars)
+	// and is longer than what we expect for raw binary, try to decode it
+	if len(data) > 60 && len(data)%4 == 0 {
+		// Check if all characters are valid base64
+		isBase64 := true
+		for _, b := range data {
+			if !((b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') ||
+				(b >= '0' && b <= '9') || b == '+' || b == '/' || b == '=') {
+				isBase64 = false
+				break
+			}
+		}
+
+		if isBase64 {
+			decoded, err := base64.StdEncoding.DecodeString(string(data))
+			if err == nil {
+				return decoded, nil
+			}
+		}
+	}
+
+	// Return original data if not base64 or decoding failed
+	return data, nil
+}
+
 // decodeBase64 decodes base64 data
 func decodeBase64(s string) ([]byte, error) {
-	// Import encoding/base64 manually if needed
 	return base64.StdEncoding.DecodeString(s)
 }

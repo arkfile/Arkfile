@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
 
 CREATE TABLE IF NOT EXISTS user_totp (
     username TEXT PRIMARY KEY,
-    secret_encrypted BLOB NOT NULL,           -- AES-GCM encrypted with session key
+    secret_encrypted BLOB NOT NULL,           -- AES-GCM encrypted with user-specific TOTP key
     backup_codes_encrypted BLOB,              -- JSON array of codes, encrypted
     enabled BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

@@ -120,6 +120,7 @@ func RegisterRoutes() {
 		devTestAdminGroup.POST("/user/cleanup", AdminCleanupTestUser)
 		devTestAdminGroup.POST("/user/:username/approve", AdminApproveUser)
 		devTestAdminGroup.GET("/user/:username/status", AdminGetUserStatus)
+		devTestAdminGroup.GET("/totp/decrypt-check/:username", AdminTOTPDecryptCheck) // TOTP diagnostic endpoint
 	}
 
 	// User management (admin only) - require TOTP (commented out until implemented)

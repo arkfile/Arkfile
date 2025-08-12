@@ -184,14 +184,6 @@ func (opm *OPAQUEPasswordManager) AuthenticatePassword(
 	return exportKey, nil
 }
 
-// Helper function for min
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // GetPasswordRecord retrieves a password record by identifier
 func (opm *OPAQUEPasswordManager) GetPasswordRecord(recordIdentifier string) (*OPAQUEPasswordRecord, error) {
 	var record OPAQUEPasswordRecord

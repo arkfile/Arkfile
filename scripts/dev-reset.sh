@@ -223,8 +223,8 @@ fi
 print_status "SUCCESS" "Critical file verification complete"
 echo
 
-# Step 5.5: Ensure directory structure exists
-echo -e "${CYAN}Step 5.5: Ensuring directory structure${NC}"
+# Step 4: Ensure directory structure exists
+echo -e "${CYAN}Step 4: Ensuring directory structure${NC}"
 echo "======================================"
 
 # Ensure all directories exist before trying to write files
@@ -240,8 +240,8 @@ fi
 print_status "SUCCESS" "Directory structure created"
 echo
 
-# Step 6: Generate fresh secrets
-echo -e "${CYAN}Step 6: Generating fresh secrets${NC}"
+# Step 5: Generate fresh secrets
+echo -e "${CYAN}Step 5: Generating fresh secrets${NC}"
 echo "================================="
 
 # Generate random JWT secret for security
@@ -313,9 +313,9 @@ print_status "SUCCESS" "Fresh rqlite authentication created"
 print_status "SUCCESS" "Secret generation complete"
 echo
 
-# Step 6.5: Generate cryptographic keys
-echo -e "${CYAN}Step 6.5: Generating cryptographic keys${NC}"
-echo "======================================="
+# Step 6: Generate cryptographic keys
+echo -e "${CYAN}Step 6: Generate cryptographic keys${NC}"
+echo "====================================="
 
 # Generate OPAQUE server keys
 print_status "INFO" "Generating OPAQUE server keys..."
@@ -332,6 +332,14 @@ if ! ./scripts/setup/04-setup-jwt-keys.sh; then
     exit 1
 fi
 print_status "SUCCESS" "JWT signing keys generated"
+
+# Generate TOTP master key
+print_status "INFO" "Generating TOTP master key..."
+if ! ./scripts/setup/06-setup-totp-keys.sh; then
+    print_status "ERROR" "TOTP key generation failed - this is CRITICAL"
+    exit 1
+fi
+print_status "SUCCESS" "TOTP master key generated"
 
 print_status "SUCCESS" "Cryptographic key generation complete"
 echo

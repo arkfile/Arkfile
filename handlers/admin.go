@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -65,6 +67,8 @@ type AdminUserInfo struct {
 
 // AdminTOTPStatus represents TOTP status information
 type AdminTOTPStatus struct {
+	Present        bool `json:"present"`
+	Decryptable    bool `json:"decryptable"`
 	Enabled        bool `json:"enabled"`
 	SetupCompleted bool `json:"setup_completed"`
 }
@@ -183,6 +187,74 @@ func AdminCleanupTestUser(c echo.Context) error {
 	return c.JSON(http.StatusOK, response)
 }
 
+// AdminTOTPDecryptCheck provides TOTP diagnostic information for development
+func AdminTOTPDecryptCheck(c echo.Context) error {
+	// Only available in debug mode
+	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
+	if debugMode != "true" && debugMode != "1" {
+		return echo.NewHTTPError(http.StatusNotFound, "Endpoint not available")
+	}
+
+	targetUsername := c.Param("username")
+	if targetUsername == "" {
+		// Use current user if no username specified
+		targetUsername = auth.GetUsernameFromToken(c)
+		if targetUsername == "" {
+			return echo.NewHTTPError(http.StatusBadRequest, "Username required")
+		}
+	}
+
+	// Get admin username for audit logging
+	adminUsername := auth.GetUsernameFromToken(c)
+
+	// Use the diagnostic helper we added to auth/totp.go
+	present, decryptable, enabled, setupCompleted, err := auth.CanDecryptTOTPSecret(database.DB, targetUsername)
+	if err != nil {
+		logging.ErrorLogger.Printf("TOTP decrypt check failed for %s: %v", targetUsername, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check TOTP decrypt status")
+	}
+
+	// Get additional metadata for debugging
+	var createdAt, lastUsed interface{}
+	err = database.DB.QueryRow(`
+		SELECT created_at, last_used 
+		FROM user_totp 
+		WHERE username = ?`,
+		targetUsername,
+	).Scan(&createdAt, &lastUsed)
+
+	response := map[string]interface{}{
+		"username":        targetUsername,
+		"present":         present,
+		"decryptable":     decryptable,
+		"enabled":         enabled,
+		"setup_completed": setupCompleted,
+		"created_at":      createdAt,
+		"last_used":       lastUsed,
+		"debug_info": map[string]interface{}{
+			"checked_by":    adminUsername,
+			"checked_at":    time.Now().UTC(),
+			"debug_enabled": true,
+		},
+	}
+
+	// Log admin action for audit trail
+	logging.LogSecurityEvent(
+		logging.EventAdminAccess,
+		nil,
+		&adminUsername,
+		nil,
+		map[string]interface{}{
+			"operation":       "totp_decrypt_check",
+			"target_username": targetUsername,
+			"present":         present,
+			"decryptable":     decryptable,
+		},
+	)
+
+	return c.JSON(http.StatusOK, response)
+}
+
 // AdminApproveUser approves a specific user for testing
 func AdminApproveUser(c echo.Context) error {
 	targetUsername := c.Param("username")
@@ -280,27 +352,18 @@ func AdminGetUserStatus(c echo.Context) error {
 		},
 	}
 
-	// Get TOTP status
-	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, targetUsername)
+	// Get comprehensive TOTP status using diagnostic helper
+	present, decryptable, enabled, setupCompleted, err := auth.CanDecryptTOTPSecret(database.DB, targetUsername)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get TOTP status for %s: %v", targetUsername, err)
+		logging.ErrorLogger.Printf("Failed to get TOTP diagnostic status for %s: %v", targetUsername, err)
 		response.Details = map[string]interface{}{
-			"totp_status_error": "Failed to retrieve TOTP status",
+			"totp_status_error": "Failed to retrieve TOTP diagnostic status",
 		}
 	} else {
-		// Get TOTP setup completion status
-		var setupCompleted bool
-		err = database.DB.QueryRow(
-			"SELECT setup_completed FROM user_totp WHERE username = ?",
-			targetUsername,
-		).Scan(&setupCompleted)
-		if err != nil && err != sql.ErrNoRows {
-			logging.ErrorLogger.Printf("Failed to get TOTP setup status for %s: %v", targetUsername, err)
-			setupCompleted = false
-		}
-
 		response.TOTP = &AdminTOTPStatus{
-			Enabled:        totpEnabled,
+			Present:        present,
+			Decryptable:    decryptable,
+			Enabled:        enabled,
 			SetupCompleted: setupCompleted,
 		}
 	}
