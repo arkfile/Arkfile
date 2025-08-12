@@ -101,6 +101,21 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "generate-test-file":
+		if err := commands.GenerateTestFile(filteredArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "encrypt-file-basic":
+		if err := commands.EncryptFileBasic(filteredArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "decrypt-file-basic":
+		if err := commands.DecryptFileBasic(filteredArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
 		printUsage()
@@ -120,12 +135,15 @@ GLOBAL FLAGS:
     -version        Show version information
 
 COMMANDS:
-    inspect         Inspect OPAQUE envelope contents
-    validate        Validate file format compatibility
-    pq-status       Check post-quantum readiness status
-    pq-prepare      Prepare system for post-quantum migration
-    health          Check OPAQUE system health
-    opaque-status   Show OPAQUE system status and configuration
+    inspect              Inspect OPAQUE envelope contents
+    validate             Validate file format compatibility
+    pq-status            Check post-quantum readiness status
+    pq-prepare           Prepare system for post-quantum migration
+    health               Check OPAQUE system health
+    opaque-status        Show OPAQUE system status and configuration
+    generate-test-file   Generate test files for encryption testing
+    encrypt-file-basic   Encrypt files with static keys (testing only)
+    decrypt-file-basic   Decrypt files with static keys (testing only)
 
 EXAMPLES:
     # Inspect an OPAQUE envelope
@@ -145,6 +163,17 @@ EXAMPLES:
 
     # Show OPAQUE system status
     cryptocli opaque-status --detailed
+
+    # Generate a 100MB test file
+    cryptocli generate-test-file -size=100MB -output=test.dat
+
+    # Encrypt a file with a static key
+    cryptocli encrypt-file-basic -input=test.dat -output=test.enc \
+        -key-hex=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+    # Decrypt the encrypted file
+    cryptocli decrypt-file-basic -input=test.enc -output=decrypted.dat \
+        -key-hex=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
 Use 'cryptocli <command> -help' for command-specific help.
 
