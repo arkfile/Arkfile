@@ -45,6 +45,18 @@ After each phase completion, the following validation sequence **must pass**:
 - **Always validate with dev-reset → test-app-curl.sh** after any changes
 - **Incremental validation** - test after each significant change, not just at phase completion
 
+```
+NOTES:
+
+please read or re-read all relevant code / files / scripts in the project before beginning work on a new phase or step
+
+please also read in detail the dev-reset script and all scripts and logic it currently uses, and consider how it may need to be updated as we go
+
+we must use dev-reset.sh with sudo every time to rebuild and redeploy the project when making major changes. and we must use test-app-curl.sh to validate that the app is fully running correctly (at least as far as auth/login is concerned)
+
+do not create new bash files during this process, or new documentation files, unless absolutely necessary.
+```
+
 ## Implementation Phases
 
 ### Phase 1: Static Build System (Week 1)

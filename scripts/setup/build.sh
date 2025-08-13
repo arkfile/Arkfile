@@ -96,6 +96,18 @@ else
     echo -e "${GREEN}✅ Vendor directory synced with dependencies${NC}"
 fi
 
+# Build static dependencies first
+build_static_dependencies() {
+    echo -e "${YELLOW}Building static dependencies...${NC}"
+    
+    if ! ./scripts/setup/build-libopaque.sh; then
+        echo -e "${RED}❌ Failed to build static dependencies${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✅ Static dependencies built successfully${NC}"
+}
+
 # Initialize and build C dependencies
 echo -e "${YELLOW}Initializing and building C dependencies...${NC}"
 
@@ -103,9 +115,9 @@ echo -e "${YELLOW}Initializing and building C dependencies...${NC}"
 if [ "${SKIP_C_LIBS}" = "true" ]; then
     echo -e "${GREEN}✅ Skipping C library rebuild (libraries already exist)${NC}"
     
-    # Verify libraries still exist
-    if [ ! -f "vendor/stef/liboprf/src/liboprf.so" ] || [ ! -f "vendor/stef/libopaque/src/libopaque.so" ]; then
-        echo -e "${YELLOW}⚠️  Expected libraries missing, forcing rebuild...${NC}"
+    # Verify static libraries still exist
+    if [ ! -f "vendor/stef/liboprf/src/liboprf.a" ] || [ ! -f "vendor/stef/libopaque/src/libopaque.a" ]; then
+        echo -e "${YELLOW}⚠️  Expected static libraries missing, forcing rebuild...${NC}"
         SKIP_C_LIBS="false"
     fi
 fi
@@ -116,16 +128,12 @@ if [ "${SKIP_C_LIBS}" != "true" ]; then
     OPRF_SOURCE="vendor/stef/liboprf/src/oprf.c"
     
     if [ -f "$OPAQUE_SOURCE" ] && [ -f "$OPRF_SOURCE" ]; then
-        echo -e "${GREEN}✅ Source code available, building libraries...${NC}"
+        echo -e "${GREEN}✅ Source code available, building static libraries...${NC}"
         
-        # Use specialized build script with proper error handling and optimizations
-        echo "Building libopaque and liboprf with optimized configuration..."
-        if ! ./scripts/setup/build-libopaque.sh; then
-            echo -e "${RED}❌ Failed to build libopaque/liboprf dependencies${NC}"
-            exit 1
-        fi
+        # Use specialized build script with static linking
+        build_static_dependencies
         
-        echo -e "${GREEN}✅ C dependencies built successfully${NC}"
+        echo -e "${GREEN}✅ Static C dependencies built successfully${NC}"
     else
         echo -e "${YELLOW}⚠️ Source code missing, checking for source directory availability...${NC}"
         echo "Missing files: $OPAQUE_SOURCE or $OPRF_SOURCE"
@@ -139,19 +147,16 @@ if [ "${SKIP_C_LIBS}" != "true" ]; then
         
         # Verify source files are now available
         if [ -f "$OPAQUE_SOURCE" ] && [ -f "$OPRF_SOURCE" ]; then
-            echo "Building libopaque and liboprf after source setup..."
-            if ! ./scripts/setup/build-libopaque.sh; then
-                echo -e "${RED}❌ Failed to build libopaque/liboprf dependencies${NC}"
-                exit 1
-            fi
-            echo -e "${GREEN}✅ C dependencies built successfully${NC}"
+            echo "Building static libopaque and liboprf after source setup..."
+            build_static_dependencies
+            echo -e "${GREEN}✅ Static C dependencies built successfully${NC}"
         else
             echo -e "${RED}❌ Source files still missing after source setup${NC}"
             exit 1
         fi
     fi
 else
-    echo -e "${GREEN}✅ Using existing C dependencies${NC}"
+    echo -e "${GREEN}✅ Using existing static C dependencies${NC}"
 fi
 
 # Run user and directory setup if needed
@@ -300,9 +305,65 @@ fi
 echo "Using wasm_exec.js from: ${WASM_EXEC_JS}"
 cp "${WASM_EXEC_JS}" ${BUILD_DIR}/${WASM_DIR}/
 
-# Build main application with version information
-echo "Building main application..."
-/usr/local/go/bin/go build -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME}" -o ${BUILD_DIR}/${APP_NAME}
+# Build Go binaries with static linking
+build_go_binaries_static() {
+    echo -e "${YELLOW}Building Go binaries with static linking...${NC}"
+    
+    # Set up static linking environment
+    export CGO_ENABLED=1
+    export CGO_CFLAGS="-I./vendor/stef/libopaque/src -I./vendor/stef/liboprf/src"
+    export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf"
+    export CGO_LDFLAGS="$CGO_LDFLAGS $(pkg-config --libs --static libsodium)"
+    
+    echo "Building arkfile server..."
+    /usr/local/go/bin/go build -a -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -extldflags '-static'" -o ${BUILD_DIR}/${APP_NAME} .
+    
+    echo "Building cryptocli..."
+    /usr/local/go/bin/go build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/cryptocli ./cmd/cryptocli
+    
+    echo -e "${GREEN}✅ Go binaries built with static linking${NC}"
+}
+
+# Verify static binaries
+verify_static_binaries() {
+    echo -e "${YELLOW}Verifying static binaries...${NC}"
+    
+    for binary in ${BUILD_DIR}/${APP_NAME} ${BUILD_DIR}/cryptocli; do
+        if [ -f "$binary" ]; then
+            # Use appropriate verification for platform
+            if [[ "$OSTYPE" == "freebsd"* ]] || [[ "$OSTYPE" == "openbsd"* ]]; then
+                # BSD systems use different tools
+                if file "$binary" | grep -q "statically linked"; then
+                    echo -e "${GREEN}✅ $(basename $binary): Static binary verified${NC}"
+                else
+                    echo -e "${RED}❌ $(basename $binary): Dynamic linking detected${NC}"
+                    exit 1
+                fi
+            else
+                # Linux systems (includes Alpine, Debian, Alma, etc.)
+                if ldd "$binary" 2>&1 | grep -q "not a dynamic executable"; then
+                    echo -e "${GREEN}✅ $(basename $binary): Static binary verified${NC}"
+                else
+                    echo -e "${RED}❌ $(basename $binary): Dynamic linking detected${NC}"
+                    ldd "$binary" 2>&1 || true
+                    exit 1
+                fi
+            fi
+        else
+            echo -e "${RED}❌ Binary not found: $binary${NC}"
+            exit 1
+        fi
+    done
+    
+    echo -e "${GREEN}✅ All binaries verified as static${NC}"
+}
+
+# Build main application with static linking
+echo "Building Go binaries with static linking..."
+build_go_binaries_static
+
+# Verify static linking
+verify_static_binaries
 
 # Copy static files
 echo "Copying static files..."
@@ -318,32 +379,13 @@ echo "Copying systemd service files..."
 mkdir -p ${BUILD_DIR}/systemd
 cp systemd/* ${BUILD_DIR}/systemd/
 
-# Copy C library dependencies
-echo "Copying C library dependencies..."
-mkdir -p ${BUILD_DIR}/vendor/stef/libopaque/src
-mkdir -p ${BUILD_DIR}/vendor/stef/liboprf/src
-mkdir -p ${BUILD_DIR}/vendor/stef/liboprf/src/noise_xk
-
-# Copy libopaque shared library
-if [ -f "vendor/stef/libopaque/src/libopaque.so" ]; then
-    cp vendor/stef/libopaque/src/libopaque.so* ${BUILD_DIR}/vendor/stef/libopaque/src/
-fi
-
-# Copy liboprf shared libraries
-if [ -f "vendor/stef/liboprf/src/liboprf.so" ]; then
-    cp vendor/stef/liboprf/src/liboprf.so* ${BUILD_DIR}/vendor/stef/liboprf/src/
-fi
-
-if [ -f "vendor/stef/liboprf/src/noise_xk/liboprf-noiseXK.so" ]; then
-    cp vendor/stef/liboprf/src/noise_xk/liboprf-noiseXK.so* ${BUILD_DIR}/vendor/stef/liboprf/src/noise_xk/
-fi
-
 # Create version file
 echo "Creating version file..."
 cat > ${BUILD_DIR}/version.json <<EOF
 {
    "version": "${VERSION}",
-   "buildTime": "${BUILD_TIME}"
+   "buildTime": "${BUILD_TIME}",
+   "staticLinking": true
 }
 EOF
 

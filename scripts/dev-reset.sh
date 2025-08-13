@@ -341,11 +341,40 @@ if ! ./scripts/setup/06-setup-totp-keys.sh; then
 fi
 print_status "SUCCESS" "TOTP master key generated"
 
+# Generate TLS certificates
+print_status "INFO" "Generating TLS certificates..."
+if ! ./scripts/setup/05-setup-tls-certs.sh; then
+    print_status "ERROR" "TLS certificate generation failed - this is CRITICAL"
+    exit 1
+fi
+print_status "SUCCESS" "TLS certificates generated"
+
 print_status "SUCCESS" "Cryptographic key generation complete"
 echo
 
-# Step 7: Start services
-echo -e "${CYAN}Step 7: Starting services${NC}"
+# Step 7: Setup MinIO and rqlite
+echo -e "${CYAN}Step 7: Setting up MinIO and rqlite${NC}"
+echo "==================================="
+
+# Setup MinIO directories and service
+print_status "INFO" "Setting up MinIO..."
+if ! ./scripts/setup/07-setup-minio.sh; then
+    print_status "ERROR" "MinIO setup failed - this is CRITICAL"
+    exit 1
+fi
+print_status "SUCCESS" "MinIO setup complete"
+
+# Setup rqlite service
+print_status "INFO" "Setting up rqlite..."
+if ! ./scripts/setup/08-setup-rqlite.sh; then
+    print_status "ERROR" "rqlite setup failed - this is CRITICAL"
+    exit 1
+fi
+print_status "SUCCESS" "rqlite setup complete"
+echo
+
+# Step 8: Start services
+echo -e "${CYAN}Step 8: Starting services${NC}"
 echo "========================="
 
 # Install/update systemd service file
@@ -413,8 +442,8 @@ else
 fi
 echo
 
-# Step 8: Health verification
-echo -e "${CYAN}Step 8: Health verification${NC}"
+# Step 9: Health verification
+echo -e "${CYAN}Step 9: Health verification${NC}"
 echo "==========================="
 
 # Wait for Arkfile to be ready
