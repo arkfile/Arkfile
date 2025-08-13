@@ -422,3 +422,401 @@ func AdminGetUserStatus(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, response)
 }
+
+// GetPendingUsers returns a list of users pending approval
+func GetPendingUsers(c echo.Context) error {
+	// Get admin user and verify admin privileges
+	adminUsername := auth.GetUsernameFromToken(c)
+	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user")
+	}
+
+	if !adminUser.IsAdmin {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
+	}
+
+	// Get pending users
+	pendingUsers, err := models.GetPendingUsers(database.DB)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get pending users")
+	}
+
+	return c.JSON(http.StatusOK, pendingUsers)
+}
+
+// DeleteUser deletes a user and all associated data
+func DeleteUser(c echo.Context) error {
+	targetUsername := c.Param("username")
+	if targetUsername == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Username parameter required")
+	}
+
+	// Get admin user and verify admin privileges
+	adminUsername := auth.GetUsernameFromToken(c)
+	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get admin user")
+	}
+
+	if !adminUser.IsAdmin {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
+	}
+
+	// Prevent self-deletion
+	if adminUsername == targetUsername {
+		return echo.NewHTTPError(http.StatusBadRequest, "Cannot delete your own account")
+	}
+
+	// Start transaction
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to start transaction")
+	}
+	defer tx.Rollback()
+
+	// Get user's files for cleanup
+	rows, err := tx.Query("SELECT filename FROM file_metadata WHERE owner_username = ?", targetUsername)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve user's files")
+	}
+
+	var filenames []string
+	for rows.Next() {
+		var filename string
+		if err := rows.Scan(&filename); err != nil {
+			rows.Close()
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to scan filename")
+		}
+		filenames = append(filenames, filename)
+	}
+	rows.Close()
+
+	// Remove files from storage - this would be handled by storage cleanup in real implementation
+	// For now, just remove the database metadata
+	for _, filename := range filenames {
+		// Remove file metadata
+		if _, err := tx.Exec("DELETE FROM file_metadata WHERE filename = ?", filename); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to delete file metadata for: %s", filename))
+		}
+	}
+
+	// Delete user's file shares
+	if _, err := tx.Exec("DELETE FROM file_shares WHERE owner_username = ?", targetUsername); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete user's file shares")
+	}
+
+	// Delete user record
+	if _, err := tx.Exec("DELETE FROM users WHERE username = ?", targetUsername); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete user record")
+	}
+
+	// Log admin action
+	if err := LogAdminAction(tx, adminUsername, "delete_user", targetUsername, ""); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to log admin action")
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "User deleted successfully",
+	})
+}
+
+// UpdateUser updates user properties
+func UpdateUser(c echo.Context) error {
+	targetUsername := c.Param("username")
+	if targetUsername == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Username parameter required")
+	}
+
+	// Get admin user and verify admin privileges
+	adminUsername := auth.GetUsernameFromToken(c)
+	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get admin user")
+	}
+
+	if !adminUser.IsAdmin {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
+	}
+
+	// Parse request body
+	var req struct {
+		IsApproved        *bool  `json:"isApproved"`
+		IsAdmin           *bool  `json:"isAdmin"`
+		StorageLimitBytes *int64 `json:"storageLimitBytes"`
+	}
+
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+	}
+
+	// Check if any fields to update
+	if req.IsApproved == nil && req.IsAdmin == nil && req.StorageLimitBytes == nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "No updatable fields provided")
+	}
+
+	// Start transaction
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to start transaction")
+	}
+	defer tx.Rollback()
+
+	// Verify target user exists
+	var exists int
+	err = tx.QueryRow("SELECT 1 FROM users WHERE username = ?", targetUsername).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return echo.NewHTTPError(http.StatusNotFound, "Target user not found")
+	} else if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check target user")
+	}
+
+	// Build update query and collect details
+	var setParts []string
+	var args []interface{}
+	var details []string
+
+	if req.IsApproved != nil {
+		// Prevent admin from revoking own approval
+		if targetUsername == adminUsername && !*req.IsApproved {
+			return echo.NewHTTPError(http.StatusBadRequest, "Admins cannot revoke their own approval status.")
+		}
+		setParts = append(setParts, "is_approved = ?")
+		args = append(args, *req.IsApproved)
+		details = append(details, fmt.Sprintf("isApproved: %t", *req.IsApproved))
+	}
+
+	if req.IsAdmin != nil {
+		setParts = append(setParts, "is_admin = ?")
+		args = append(args, *req.IsAdmin)
+		details = append(details, fmt.Sprintf("isAdmin: %t", *req.IsAdmin))
+	}
+
+	if req.StorageLimitBytes != nil {
+		setParts = append(setParts, "storage_limit_bytes = ?")
+		args = append(args, *req.StorageLimitBytes)
+		details = append(details, fmt.Sprintf("storageLimitBytes: %d", *req.StorageLimitBytes))
+	}
+
+	// Execute update
+	query := fmt.Sprintf("UPDATE users SET %s WHERE username = ?", strings.Join(setParts, ", "))
+	args = append(args, targetUsername)
+
+	if _, err := tx.Exec(query, args...); err != nil {
+		if req.IsApproved != nil && !*req.IsApproved {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update approval status")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update user")
+	}
+
+	// Log admin action
+	detailsStr := "Updated fields: " + strings.Join(details, ", ")
+	if err := LogAdminAction(tx, adminUsername, "update_user", targetUsername, detailsStr); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to log admin action")
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
+	}
+
+	// If revoking approval, tokens would be invalidated in a real implementation
+	// For now, just log the action
+	if req.IsApproved != nil && !*req.IsApproved {
+		logging.InfoLogger.Printf("User %s approval revoked by admin %s", targetUsername, adminUsername)
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "User updated successfully",
+	})
+}
+
+// ListUsers returns a list of all users
+func ListUsers(c echo.Context) error {
+	// Get admin user and verify admin privileges
+	adminUsername := auth.GetUsernameFromToken(c)
+	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get admin user")
+	}
+
+	if !adminUser.IsAdmin {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
+	}
+
+	// Get all users except the current admin
+	rows, err := database.DB.Query(`
+		SELECT username, email, is_approved, is_admin, storage_limit_bytes, total_storage_bytes,
+		       registration_date, last_login
+		FROM users
+		ORDER BY registration_date DESC`)
+
+	if err == sql.ErrNoRows {
+		return c.JSON(http.StatusOK, map[string]interface{}{
+			"users": []interface{}{},
+		})
+	} else if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve users")
+	}
+	defer rows.Close()
+
+	var users []map[string]interface{}
+	for rows.Next() {
+		var username, email sql.NullString
+		var isApproved, isAdmin bool
+		var storageLimitBytes, totalStorageBytes int64
+		var registrationDate time.Time
+		var lastLogin sql.NullTime
+
+		err := rows.Scan(&username, &email, &isApproved, &isAdmin, &storageLimitBytes, &totalStorageBytes,
+			&registrationDate, &lastLogin)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Error processing user data")
+		}
+
+		// Filter out admins from the list (optional, or keep them)
+		if username.String == adminUsername {
+			continue // Skip the current admin user
+		}
+
+		// Calculate storage usage percentage
+		var usagePercent float64
+		if storageLimitBytes > 0 {
+			usagePercent = (float64(totalStorageBytes) / float64(storageLimitBytes)) * 100
+		}
+
+		// Format total storage for display
+		totalStorageReadable := formatBytes(totalStorageBytes)
+
+		// Format last login
+		var lastLoginFormatted string
+		if lastLogin.Valid {
+			lastLoginFormatted = lastLogin.Time.Format("2006-01-02 15:04:05")
+		}
+
+		user := map[string]interface{}{
+			"username":             username.String,
+			"email":                email.String,
+			"isApproved":           isApproved,
+			"isAdmin":              isAdmin,
+			"storageLimitBytes":    storageLimitBytes,
+			"totalStorageBytes":    totalStorageBytes,
+			"totalStorageReadable": totalStorageReadable,
+			"usagePercent":         usagePercent,
+			"registrationDate":     registrationDate.Format("2006-01-02"),
+			"lastLogin":            lastLoginFormatted,
+		}
+
+		users = append(users, user)
+	}
+
+	// Log admin action
+	LogAdminAction(database.DB, adminUsername, "list_users", "", "")
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"users": users,
+	})
+}
+
+// ApproveUser approves a user
+func ApproveUser(c echo.Context) error {
+	targetUsername := c.Param("username")
+	if targetUsername == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Username parameter required")
+	}
+
+	// Get admin user and verify admin privileges
+	adminUsername := auth.GetUsernameFromToken(c)
+	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get admin user")
+	}
+
+	if !adminUser.IsAdmin {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
+	}
+
+	// Get target user
+	targetUser, err := models.GetUserByUsername(database.DB, targetUsername)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return echo.NewHTTPError(http.StatusNotFound, "User not found")
+		}
+		return echo.NewHTTPError(http.StatusNotFound, "User not found")
+	}
+
+	// Approve user
+	if err := targetUser.ApproveUser(database.DB, adminUsername); err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to approve user")
+	}
+
+	// Log admin action
+	LogAdminAction(database.DB, adminUsername, "approve_user", targetUsername, "")
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "User approved successfully",
+	})
+}
+
+// UpdateUserStorageLimit updates a user's storage limit
+func UpdateUserStorageLimit(c echo.Context) error {
+	targetUsername := c.Param("username")
+	if targetUsername == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Username parameter required")
+	}
+
+	// Get admin user and verify admin privileges
+	adminUsername := auth.GetUsernameFromToken(c)
+	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get admin user")
+	}
+
+	if !adminUser.IsAdmin {
+		return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
+	}
+
+	// Parse request body
+	var req struct {
+		StorageLimitBytes int64 `json:"storage_limit_bytes"`
+	}
+
+	if err := c.Bind(&req); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+	}
+
+	if req.StorageLimitBytes <= 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "Storage limit must be positive")
+	}
+
+	// Update storage limit
+	_, err = database.DB.Exec("UPDATE users SET storage_limit_bytes = ? WHERE username = ?",
+		req.StorageLimitBytes, targetUsername)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage limit")
+	}
+
+	// Log admin action
+	details := fmt.Sprintf("New limit: %d bytes", req.StorageLimitBytes)
+	LogAdminAction(database.DB, adminUsername, "update_storage_limit", targetUsername, details)
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "Storage limit updated successfully",
+	})
+}
+
+// LogAdminAction logs an admin action to the admin_logs table
+func LogAdminAction(db interface {
+	Exec(string, ...interface{}) (sql.Result, error)
+}, adminUsername, action, targetUsername, details string) error {
+	_, err := db.Exec(`
+		INSERT INTO admin_logs (admin_username, action, target_username, details) 
+		VALUES (?, ?, ?, ?)`,
+		adminUsername, action, targetUsername, details)
+	return err
+}

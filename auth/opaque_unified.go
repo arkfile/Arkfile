@@ -44,6 +44,16 @@ func NewOPAQUEPasswordManagerWithDB(db *sql.DB) *OPAQUEPasswordManager {
 	}
 }
 
+// GetOPAQUEPasswordManager returns the OPAQUE password manager implementation
+func GetOPAQUEPasswordManager() OPAQUEPasswordManagerInterface {
+	return NewOPAQUEPasswordManager()
+}
+
+// GetOPAQUEPasswordManagerWithDB returns the OPAQUE password manager implementation with database
+func GetOPAQUEPasswordManagerWithDB(db *sql.DB) OPAQUEPasswordManagerInterface {
+	return NewOPAQUEPasswordManagerWithDB(db)
+}
+
 // OPAQUEPasswordRecord represents a unified password record
 type OPAQUEPasswordRecord struct {
 	ID                    int        `json:"id"`

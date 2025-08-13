@@ -49,7 +49,6 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 		"BACKBLAZE_KEY_ID":          "test-key-id",
 		"BACKBLAZE_APPLICATION_KEY": "test-app-key",
 		"BACKBLAZE_BUCKET_NAME":     "test-bucket",
-		"OPAQUE_MOCK_MODE":          "true", // Enable OPAQUE mock mode for tests
 	}
 	for key, testValue := range testEnv {
 		originalEnv[key] = os.Getenv(key)
@@ -140,8 +139,12 @@ func TestOpaqueRegister_Success(t *testing.T) {
 		WithArgs(username, sqlmock.AnyArg(), models.DefaultStorageLimit, false, false).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// In OPAQUE_MOCK_MODE, password record insertion is skipped
-	// No need to mock the OPAQUE password record creation
+	// With static linking, OPAQUE record creation will be handled by the real implementation
+	// We need to mock the OPAQUE password record creation
+	opaqueRecordSQL := `INSERT INTO opaque_password_records \(\s*record_type, record_identifier, opaque_user_record, associated_username, is_active\s*\) VALUES \(\?, \?, \?, \?, \?\)`
+	mock.ExpectExec(opaqueRecordSQL).
+		WithArgs("account", username, sqlmock.AnyArg(), username, true).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectCommit()
 

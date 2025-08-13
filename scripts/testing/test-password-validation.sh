@@ -147,9 +147,9 @@ test_password_strength() {
     echo "  Length: ${#password} characters"
     echo "  Expected: $expected_result"
     
-    # Call the actual Go password validation function
+    # Call the actual Go password validation function (static linking - no LD_LIBRARY_PATH needed)
     local json_result
-    json_result=$(export LD_LIBRARY_PATH=$(pwd)/vendor/stef/libopaque/src:$(pwd)/vendor/stef/liboprf/src:$(pwd)/vendor/stef/liboprf/src/noise_xk && go run test/test_password_validation.go "$password" 2>/dev/null)
+    json_result=$(go run test/test_password_validation.go "$password" 2>/dev/null)
     
     if [ $? -ne 0 ] || [ -z "$json_result" ]; then
         echo -e "  ${RED}❌ FAIL: Could not run Go password validation${NC}"

@@ -28,7 +28,6 @@ func TestMain(m *testing.M) {
 		"MINIO_ROOT_USER":     "test-user-models",           // Provide dummy values for all required fields
 		"MINIO_ROOT_PASSWORD": "test-password-models",
 		"LOCAL_STORAGE_PATH":  "/tmp/test-storage-models", // Required for local storage
-		"OPAQUE_MOCK_MODE":    "true",                     // Enable OPAQUE mock mode for User model tests
 	}
 
 	for key, testValue := range testEnv {

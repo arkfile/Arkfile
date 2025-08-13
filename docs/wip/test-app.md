@@ -1,12 +1,20 @@
 # Test App Plan: Build end-to-end functionality test scripts
 
-`NOTE: Revisit and revise this project once the static-linking.md project is complete. We may be able to move to fully Go-based testing at that time; i.e. 'test-app.go' instead of 'test-app-curl.sh'`
+`NOTE: Updated for static linking implementation - Phase 1 foundation complete as of August 13, 2025`
 
 ## Introduction/Overview
 
-The test-app.md project establishes a comprehensive end-to-end testing framework for the Arkfile secure file vault system by developing production-ready Go utilities that enable authentic user workflow validation through real server interactions. Rather than simulating or mocking system behavior, this approach creates a suite of specialized Go tools that work together using **static linking to ensure consistent cryptographic operations** and eliminate test vs production discrepancies. These tools provide system administrators with powerful capabilities for installation, maintenance, API interaction, and cryptographic operations while simultaneously serving as the foundation for comprehensive system testing. These can all be integrated into `test-app-curl.sh` as needed once complete.
+The test-app.md project establishes a comprehensive end-to-end testing framework for the Arkfile secure file vault system by developing production-ready Go utilities that enable authentic user workflow validation through real server interactions. Rather than simulating or mocking system behavior, this approach creates a suite of specialized Go tools that work together using **static linking to ensure consistent cryptographic operations** and eliminate test vs production discrepancies. 
 
-The core of this approach is building Go-based administrative tools that interact with the running Arkfile server through authentic authentication and API workflows, eliminating the challenges of simulating browser behavior or extracting cryptographic keys from isolated contexts. **Static linking ensures these tools use identical cryptographic implementations to the server**, eliminating mock complexity and providing perfect consistency between testing and production environments. These tools provide system administrators with utilities for managing real Arkfile deployments while creating a testing infrastructure that validates every aspect of the user experience through genuine server interactions. The architecture separates concerns cleanly: network operations and authentication are handled by dedicated client tools, while security-critical cryptographic operations remain isolated in specialized cryptographic utilities, providing operational flexibility and enhanced security boundaries.
+**Static Linking Implementation Update**: Following the successful completion of Phase 1 of the static-linking.md project, all components now use static linking with embedded libopaque libraries. This eliminates library dependencies and ensures perfect consistency between test tools and production server cryptographic operations. The `test-app-curl.sh` script has been updated to work with static libraries and successfully validates the complete authentication flow.
+
+These tools provide system administrators with powerful capabilities for installation, maintenance, API interaction, and cryptographic operations while simultaneously serving as the foundation for comprehensive system testing. These can all be integrated into `test-app-curl.sh` as needed once complete.
+
+The core of this approach is building Go-based administrative tools that interact with the running Arkfile server through authentic authentication and API workflows, eliminating the challenges of simulating browser behavior or extracting cryptographic keys from isolated contexts. **Static linking ensures these tools use identical cryptographic implementations to the server**, eliminating mock complexity and providing perfect consistency between testing and production environments. 
+
+**Static Linking Benefits Realized**: With static linking now implemented, all Go tools (cryptocli, arkfile-client) use the same statically-linked libopaque libraries as the server binary. This eliminates the previous need for LD_LIBRARY_PATH management and shared library dependencies that could cause test environment inconsistencies. The authentication testing infrastructure has been validated with the updated `test-app-curl.sh` which now properly works with static libraries.
+
+These tools provide system administrators with utilities for managing real Arkfile deployments while creating a testing infrastructure that validates every aspect of the user experience through genuine server interactions. The architecture separates concerns cleanly: network operations and authentication are handled by dedicated client tools, while security-critical cryptographic operations remain isolated in specialized cryptographic utilities, providing operational flexibility and enhanced security boundaries.
 
 The specialized tool ecosystem consists of `arkfile-setup` for system installation and configuration management, `arkfile-admin` for operational maintenance and monitoring tasks, `arkfile-client` for authenticated server communication and API operations, and `cryptocli` for cryptographic operations including file encryption, key management, and security-critical functions. **All tools use static linking to ensure consistent cryptographic behavior and eliminate library dependency issues.** This separation ensures that network communications never handle plaintext user data, cryptographic operations remain isolated from network code, administrative functions are properly scoped and audited, and system installation remains independent of running services. The tools will work together through well-defined interfaces to provide comprehensive system management capabilities that serve both daily administrative needs and comprehensive system validation requirements.
 
@@ -30,8 +38,10 @@ Here's the expanded and revised outline with PHASE 1 split into three manageable
 
 ## PHASE 1A: Basic Go Tools Foundation ✅ COMPLETED
 
-### Implementation Status: COMPLETED
-PHASE 1A has been successfully implemented and tested with comprehensive coverage of foundational file operations and basic encryption capabilities.
+### Implementation Status: COMPLETED (Updated for Static Linking)
+PHASE 1A has been successfully implemented and tested with comprehensive coverage of foundational file operations and basic encryption capabilities. **The implementation has been updated and validated to work with the static linking infrastructure completed in static-linking.md Phase 1**.
+
+**Static Linking Compatibility**: All tools now build and operate with statically-linked binaries, eliminating dynamic library dependencies. The test infrastructure properly handles static library requirements and no longer needs LD_LIBRARY_PATH configuration.
 
 ### Implemented Components
 
@@ -140,10 +150,11 @@ version, keyType, err := crypto.ParseBasicEnvelope(envelope)
 
 ### Architecture and Compatibility
 
-**Dependencies:** No external dependencies - uses only Go standard library
-**Integration:** Seamless compatibility with existing Arkfile codebase
+**Dependencies:** No external dependencies - uses only Go standard library and static linking
+**Integration:** Seamless compatibility with existing Arkfile codebase and static linking infrastructure
 **Security:** Production-ready cryptographic operations with proper error handling
 **Performance:** Memory-efficient processing supports multi-GB file operations
+**Static Linking:** All binaries are self-contained with embedded libopaque libraries
 
 ### Files Created/Modified:
 ```
@@ -160,14 +171,18 @@ cmd/cryptocli/
 
 ### Ready for PHASE 1B Integration
 
-PHASE 1A provides the complete foundation for OPAQUE integration:
-- ✅ File operations utilities ready for OPAQUE key derivation
+PHASE 1A provides the complete foundation for OPAQUE integration with static linking support:
+- ✅ File operations utilities ready for OPAQUE key derivation with static linking
 - ✅ Envelope system extensible for OPAQUE metadata  
 - ✅ Encryption infrastructure supports seamless key replacement
 - ✅ Comprehensive test framework validates all workflows
 - ✅ Memory-efficient processing handles production file sizes
+- ✅ **Static linking compatibility verified and operational**
+- ✅ **Test script integration updated for static library configuration**
 
-**Next Steps:** PHASE 1B will integrate OPAQUE authentication with these foundational file operations, replacing static keys with OPAQUE-derived keys while maintaining full compatibility with the established architecture.
+**Static Linking Foundation**: With Phase 1 of static-linking.md complete, all tools now use identical cryptographic implementations to the server. The authentication testing (test-app-curl.sh) successfully validates the complete OPAQUE+TOTP authentication flow, providing the perfect foundation for file operations integration.
+
+**Next Steps:** PHASE 1B will integrate OPAQUE authentication with these foundational file operations, replacing static keys with OPAQUE-derived keys while maintaining full compatibility with the established architecture and static linking infrastructure.
 
 #### New arkfile-client Tool - Basic Structure
 **Location:** `cmd/arkfile-client/main.go` (new tool)

@@ -85,27 +85,29 @@ debug() {
     fi
 }
 
-# Setup library paths automatically
+# Setup library paths automatically (Updated for static linking)
 setup_library_paths() {
     local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     local PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
     
-    # Check if libopaque exists, if not build it
-    local LIBOPAQUE_PATH="$PROJECT_ROOT/vendor/stef/libopaque/src/libopaque.so"
-    local LIBOPRF_PATH="$PROJECT_ROOT/vendor/stef/liboprf/src/liboprf.so"
+    # With static linking, we only need to verify static libraries exist
+    local LIBOPAQUE_PATH="$PROJECT_ROOT/vendor/stef/libopaque/src/libopaque.a"
+    local LIBOPRF_PATH="$PROJECT_ROOT/vendor/stef/liboprf/src/liboprf.a"
     
     if [ ! -f "$LIBOPAQUE_PATH" ] || [ ! -f "$LIBOPRF_PATH" ]; then
-        warning "libopaque/liboprf not found, building..."
+        info "Static libraries not found, ensuring they are built..."
         if [ -x "$PROJECT_ROOT/scripts/setup/build-libopaque.sh" ]; then
             cd "$PROJECT_ROOT"
             ./scripts/setup/build-libopaque.sh >/dev/null 2>&1
         else
-            error "Cannot find build-libopaque.sh script"
+            warning "Cannot find build-libopaque.sh script, but may not be needed with static linking"
         fi
+    else
+        debug "Static libraries verified: libopaque.a and liboprf.a present"
     fi
     
-    # Set up library path
-    export LD_LIBRARY_PATH="$PROJECT_ROOT/vendor/stef/libopaque/src:$PROJECT_ROOT/vendor/stef/liboprf/src:$PROJECT_ROOT/vendor/stef/liboprf/src/noise_xk${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # With static linking, we don't need to set LD_LIBRARY_PATH since libraries are embedded in the binary
+    # The arkfile binary already contains all required OPAQUE functionality
 }
 
 # Utility function to save and validate JSON responses

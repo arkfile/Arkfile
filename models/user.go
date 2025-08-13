@@ -346,14 +346,7 @@ func CreateUserWithOPAQUE(db *sql.DB, username, password string, email *string) 
 		VALUES (?, ?, ?, ?, ?)`,
 		"account", recordIdentifier, userRecord, username, true)
 	if err != nil {
-		// In test environments, the table might not exist or be mocked differently
-		// Log the error but don't fail completely if we're in a test environment
-		if getEnvOrDefault("OPAQUE_MOCK_MODE", "") == "true" {
-			// In mock mode, we can skip the password record storage since it's mocked at the provider level
-			// The test is focused on the HTTP handler logic, not the database schema
-		} else {
-			return nil, fmt.Errorf("failed to store OPAQUE record: %w", err)
-		}
+		return nil, fmt.Errorf("failed to store OPAQUE record: %w", err)
 	}
 
 	// Clear export key (we don't store it)
@@ -405,10 +398,7 @@ func (u *User) RegisterOPAQUEAccount(db *sql.DB, password string) error {
 		VALUES (?, ?, ?, ?, ?)`,
 		"account", u.Username, userRecord, u.Username, true)
 	if err != nil {
-		// In mock mode, table might not exist, but that's okay for testing
-		if getEnvOrDefault("OPAQUE_MOCK_MODE", "") != "true" {
-			return fmt.Errorf("failed to store OPAQUE record: %w", err)
-		}
+		return fmt.Errorf("failed to store OPAQUE record: %w", err)
 	}
 
 	return nil
@@ -416,34 +406,7 @@ func (u *User) RegisterOPAQUEAccount(db *sql.DB, password string) error {
 
 // AuthenticateOPAQUE authenticates the user's account password via OPAQUE
 func (u *User) AuthenticateOPAQUE(db *sql.DB, password string) ([]byte, error) {
-
-	// Check if we're in mock mode
-	mockMode := getEnvOrDefault("OPAQUE_MOCK_MODE", "")
-
-	if mockMode == "true" {
-		// In mock mode, use the OPAQUE provider directly for testing
-		provider := auth.GetOPAQUEProvider()
-		if !provider.IsAvailable() {
-			return nil, fmt.Errorf("OPAQUE provider not available")
-		}
-
-		// Get server keys
-		_, serverPrivateKey, err := provider.GetServerKeys()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get server keys: %w", err)
-		}
-
-		// For mock mode, we simulate authentication by doing a registration
-		// This allows the test to focus on handler logic rather than database schema
-		_, exportKey, err := provider.RegisterUser([]byte(password), serverPrivateKey)
-		if err != nil {
-			return nil, fmt.Errorf("mock authentication failed: %w", err)
-		}
-
-		return exportKey, nil
-	}
-
-	// Production mode: Use unified password manager for account password authentication
+	// Use unified password manager for account password authentication
 	recordIdentifier := u.Username // Account passwords now use username as identifier
 
 	opm := auth.GetOPAQUEPasswordManagerWithDB(db)
@@ -501,23 +464,7 @@ func (u *User) SecureZeroExportKey(exportKey []byte) {
 
 // HasOPAQUEAccount checks if the user has an OPAQUE account registered
 func (u *User) HasOPAQUEAccount(db *sql.DB) (bool, error) {
-	// Check if we're in mock mode
-	if getEnvOrDefault("OPAQUE_MOCK_MODE", "") == "true" {
-		// In mock mode, check if the OPAQUE test tables exist and have records
-		// This allows tests to control the account state more precisely
-		var count int
-		err := db.QueryRow(`
-			SELECT COUNT(*) FROM opaque_password_records 
-			WHERE record_type = 'account' AND record_identifier = ? AND is_active = true`,
-			u.Username).Scan(&count)
-		if err != nil {
-			// If table doesn't exist or query fails, assume no account
-			return false, nil
-		}
-		return count > 0, nil
-	}
-
-	// Production mode: Check database for OPAQUE records
+	// Check database for OPAQUE records
 	var count int
 	err := db.QueryRow(`
 		SELECT COUNT(*) FROM opaque_password_records 
@@ -538,41 +485,14 @@ func (u *User) DeleteOPAQUEAccount(db *sql.DB) error {
 		WHERE associated_username = ? OR record_identifier = ?`,
 		u.Username, u.Username)
 	if err != nil {
-		// In mock mode, table might not exist, but that's okay for testing
-		if getEnvOrDefault("OPAQUE_MOCK_MODE", "") != "true" {
-			return fmt.Errorf("failed to deactivate OPAQUE records: %w", err)
-		}
+		return fmt.Errorf("failed to deactivate OPAQUE records: %w", err)
 	}
 	return nil
 }
 
 // GetOPAQUEAccountStatus returns comprehensive OPAQUE status for the user
 func (u *User) GetOPAQUEAccountStatus(db *sql.DB) (*OPAQUEAccountStatus, error) {
-	// Check if we're in mock mode
-	if getEnvOrDefault("OPAQUE_MOCK_MODE", "") == "true" {
-		// In mock mode, simulate status based on provider availability
-		provider := auth.GetOPAQUEProvider()
-		if provider.IsAvailable() {
-			now := time.Now()
-			return &OPAQUEAccountStatus{
-				HasAccountPassword: true,
-				FilePasswordCount:  0, // Mock doesn't track files yet
-				SharePasswordCount: 0, // Mock doesn't track shares yet
-				LastOPAQUEAuth:     &now,
-				OPAQUECreatedAt:    &now,
-			}, nil
-		}
-
-		return &OPAQUEAccountStatus{
-			HasAccountPassword: false,
-			FilePasswordCount:  0,
-			SharePasswordCount: 0,
-			LastOPAQUEAuth:     nil,
-			OPAQUECreatedAt:    nil,
-		}, nil
-	}
-
-	// Production mode: Query database for actual statistics
+	// Query database for actual statistics
 	status := &OPAQUEAccountStatus{}
 
 	// Check for account password
@@ -664,10 +584,7 @@ func (u *User) Delete(db *sql.DB) error {
 		WHERE associated_username = ? OR record_identifier = ?`,
 		u.Username, u.Username)
 	if err != nil {
-		// In mock mode, table might not exist, but that's okay for testing
-		if getEnvOrDefault("OPAQUE_MOCK_MODE", "") != "true" {
-			return fmt.Errorf("failed to delete OPAQUE records: %w", err)
-		}
+		return fmt.Errorf("failed to delete OPAQUE records: %w", err)
 	}
 
 	// Delete user record

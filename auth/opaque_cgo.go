@@ -4,10 +4,9 @@
 package auth
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../vendor/stef/libopaque/src -I${SRCDIR}/../vendor/stef -I${SRCDIR}/../vendor/stef/liboprf/src
+#cgo CFLAGS: -I../vendor/stef/libopaque/src -I../vendor/stef/liboprf/src
+#cgo LDFLAGS: -L../vendor/stef/libopaque/src -L../vendor/stef/liboprf/src -lopaque -loprf -static
 #cgo pkg-config: libsodium
-#cgo LDFLAGS: -L${SRCDIR}/../vendor/stef/libopaque/src -L${SRCDIR}/../vendor/stef/liboprf/src
-#cgo LDFLAGS: -lopaque -loprf -static
 #include "opaque_wrapper.h"
 #include <stdlib.h>
 */
@@ -44,9 +43,8 @@ func libopaqueRegisterUser(password []byte, serverPrivateKey []byte) ([]byte, []
 }
 
 // libopaqueAuthenticateUser is a Go wrapper for the one-step authentication
-// IMPORTANT: This now returns the deterministic export_key, not a random session_key
 func libopaqueAuthenticateUser(password []byte, userRecord []byte) ([]byte, error) {
-	exportKey := make([]byte, OPAQUE_SHARED_SECRETBYTES)
+	sessionKey := make([]byte, OPAQUE_SHARED_SECRETBYTES)
 
 	cPassword := C.CBytes(password)
 	defer C.free(cPassword)
@@ -55,20 +53,12 @@ func libopaqueAuthenticateUser(password []byte, userRecord []byte) ([]byte, erro
 		(*C.uint8_t)(cPassword),
 		C.uint16_t(len(password)),
 		(*C.uint8_t)(unsafe.Pointer(&userRecord[0])),
-		(*C.uint8_t)(unsafe.Pointer(&exportKey[0])),
+		(*C.uint8_t)(unsafe.Pointer(&sessionKey[0])),
 	)
 
 	if ret != 0 {
 		return nil, fmt.Errorf("libopaque authentication failed: error code %d", ret)
 	}
 
-	return exportKey, nil
-}
-
-// Error handling helper
-func libopaqueError(code C.int, operation string) error {
-	if code == 0 {
-		return nil
-	}
-	return fmt.Errorf("libopaque %s failed: error code %d", operation, code)
+	return sessionKey, nil
 }
