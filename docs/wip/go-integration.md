@@ -4,7 +4,9 @@
 
 ## **Go Integration Test Project - High-Level Overview**
 
-The go-integration.md project aims to create a comprehensive, automated validation tool that serves as the final certification step for the Arkfile secure file sharing system before production deployment. This Go-based integration test is designed to systematically validate every critical component of the system through realistic, end-to-end workflows that mirror actual user behavior, providing definitive proof that all security, cryptographic, and functional requirements work correctly together in a production environment.
+`NOTE: Revisit and revise this project once the static-linking.md project is complete. This may be merged potentially with test-app.md after that time.`
+
+The go-integration.md project aims to create a comprehensive, automated validation tool that serves as the final certification step for the Arkfile secure file vault system before production deployment. This Go-based integration test is designed to systematically validate every critical component of the system through realistic, end-to-end workflows that mirror actual user behavior, providing definitive proof that all security, cryptographic, and functional requirements work correctly together in a production environment.
 
 The project's primary objective is to execute a complete user journey that begins with username-based OPAQUE authentication (including two-factor authentication via TOTP), proceeds through uploading and encrypting a substantial 100MB test file, creates an anonymous share link protected by Argon2id password derivation, and concludes with anonymous access and file download - all while validating that every security measure (timing protection, rate limiting, end-to-end encryption) functions correctly and that file integrity is perfectly preserved throughout multiple encryption/decryption cycles.
 
@@ -12,13 +14,13 @@ The project's primary objective is to execute a complete user journey that begin
 
 **Authentication and Security Validation**: The system must successfully register a test user using the zero-knowledge OPAQUE protocol, set up and verify two-factor authentication with real TOTP codes, and validate that all security headers, timing protection (minimum 1-second response times), and rate limiting mechanisms are active and functioning correctly under realistic load conditions.
 
-**Large File Operations with Real Cryptography**: The test must generate, upload, and download a 50MB file using production-grade cryptographic operations, including AES-GCM encryption with randomly generated File Encryption Keys (FEKs), chunked upload processing, and comprehensive integrity verification through SHA-256 hash comparisons to ensure no data corruption occurs during the complete encryption-storage-decryption cycle.
+**Large File Operations with Real Cryptography**: The test must generate, upload, and download a 100MB file using production-grade cryptographic operations, including AES-GCM encryption with randomly generated File Encryption Keys (FEKs), chunked upload processing, and comprehensive integrity verification through SHA-256 hash comparisons to ensure no data corruption occurs during the complete encryption-storage-decryption cycle.
 
 **Anonymous Share System Validation**: The system must create share links using real Argon2id key derivation (with production parameters: 128MB memory, 4 iterations), enable anonymous users to access shared files without requiring account creation, and validate that the share password system provides appropriate security while maintaining usability for legitimate users.
 
 **Database and Storage Integration**: The test must perform direct database operations against the rqlite backend to validate proper data storage and cleanup, integrate with MinIO S3-compatible storage to verify encrypted file blob handling, and ensure complete resource cleanup after test execution to maintain system hygiene.
 
-**Performance and Production Readiness**: The system must demonstrate acceptable performance benchmarks (50MB uploads within 30 seconds, downloads within 15 seconds, or better), validate that all security measures remain effective under realistic load conditions, and provide comprehensive reporting that confirms the system is ready for production deployment with confidence in its security, reliability, and performance characteristics.
+**Performance and Production Readiness**: The system must demonstrate acceptable performance benchmarks (100MB uploads within 30 seconds, downloads within 15 seconds, or better), validate that all security measures remain effective under realistic load conditions, and provide comprehensive reporting that confirms the system is ready for production deployment with confidence in its security, reliability, and performance characteristics.
 
 This integration test essentially serves as the final quality assurance checkpoint, providing automated verification that replaces the need for extensive manual testing while delivering measurable proof that the Arkfile system meets all security, performance, and functional requirements for production use.
 
@@ -28,7 +30,7 @@ This integration test essentially serves as the final quality assurance checkpoi
 
 ### Current System Overview
 
-The Arkfile system is a **production-ready secure file sharing platform** that implements zero-knowledge architecture using OPAQUE authentication, end-to-end encryption, and anonymous sharing capabilities. The system consists of multiple integrated components working together to provide secure file storage and sharing functionality.
+The Arkfile system is a **production-ready secure file vault platform** that implements zero-knowledge architecture using OPAQUE authentication, end-to-end encryption, and anonymous sharing capabilities. The system consists of multiple integrated components working together to provide secure file storage and sharing functionality.
 
 ### Core Components
 
@@ -1168,7 +1170,7 @@ Configuration:
    Total data transferred:   ~157MB (3x file size)
 
 ✨ ARKFILE SYSTEM VALIDATION: COMPLETE SUCCESS
-Your secure file sharing system is fully operational and production-ready!
+Your secure file vault system is fully operational and production-ready!
 
 Cleanup completed - all test data removed
 Test artifacts saved to: /tmp/arkfile-integration-test-20250806-081137/

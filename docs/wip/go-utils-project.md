@@ -4,11 +4,13 @@
 
 This document outlines the plan to migrate Arkfile's bash-based setup and maintenance scripts to Go utilities, reducing script complexity while improving reliability, maintainability, and user experience.
 
+`NOTE: Revisit and revise this plan once static-linking.md project is complete.`
+
 ## Current State Analysis
 
-The Arkfile project currently contains 33 bash scripts that handle setup, maintenance, and testing operations. The primary pain points include:
+The Arkfile project currently contains ~33 bash scripts that handle setup, maintenance, and testing operations. The primary pain points include:
 
-- Fragmented setup process across 8 numbered scripts (01-08)
+- Fragmented setup process across 8+ numbered scripts (01-08, etc.)
 - Complex error handling and state management in bash
 - Frequent need for complete uninstall/reinstall cycles during development
 - Scattered configuration management across multiple scripts
@@ -16,15 +18,15 @@ The Arkfile project currently contains 33 bash scripts that handle setup, mainte
 
 ## Migration Strategy
 
-The migration will create focused Go utilities while keeping bash scripts only for operations that are more appropriate in shell environments (systemd service management, package installation, simple file operations).
+The migration will create focused Go utilities while keeping bash scripts only for operations that are more appropriate in shell environments (systemd service management, package installation, simple file operations). **This migration is enhanced by the static linking implementation**, which eliminates mock system complexity and enables unified production cryptographic operations across all components.
 
 ### Target Architecture
 
 Three main Go utilities will replace the majority of bash functionality:
 
-1. **`cmd/arkfile-setup`** - Installation, configuration, and system management
-2. **`cmd/arkfile-admin`** - General system administration and maintenance
-3. **`cmd/cryptocli`** - Cryptographic operations (already exists, keep focused)
+1. **`cmd/arkfile-setup`** - Installation, configuration, system management, and **static build management**
+2. **`cmd/arkfile-admin`** - General system administration, maintenance, and **static binary deployment**
+3. **`cmd/cryptocli`** - Cryptographic operations (already exists, enhanced with static linking)
 
 ## Primary Focus: cmd/arkfile-setup
 
@@ -93,7 +95,7 @@ cmd/arkfile-setup/
 
 Replaces: `scripts/setup/01-setup-users.sh`
 
-The user management component will handle creation and management of the arkfile system user and group. This will use Go's os/user package combined with exec.Command for system operations.
+The user management component will handle creation and management of the arkfile system user and group. This will use Go's os/user package combined with exec.Command for system operations. **With static linking, user setup is simplified as no library dependencies need to be configured.**
 
 Key functions:
 - `CreateArkfileUser()` - Create the arkfile user with proper settings
@@ -127,37 +129,39 @@ The implementation will include comprehensive validation of the created director
 
 Replaces: `scripts/setup/build.sh`
 
-The build system will coordinate compilation of TypeScript, WebAssembly, Go binaries, and C libraries. This represents the most complex part of the migration due to the multiple build technologies involved.
+The build system will coordinate compilation of TypeScript, WebAssembly, Go binaries, and C libraries. This represents the most complex part of the migration due to the multiple build technologies involved. **Enhanced with static linking capabilities for libopaque integration.**
 
 Key functions:
 - `BuildComplete()` - Orchestrate complete build process
 - `BuildTypeScript()` - Handle TypeScript compilation via Bun
 - `BuildWebAssembly()` - Generate WebAssembly modules
-- `BuildGoBinary()` - Compile main Go application
-- `BuildCLibraries()` - Compile libopaque and liboprf
+- `BuildGoBinary()` - Compile main Go application **with static linking**
+- `BuildCLibraries()` - Compile libopaque and liboprf **as static libraries**
+- **`BuildStaticBinaries()`** - **Build all binaries with static libopaque linking**
+- **`VerifyStaticLinking()`** - **Verify static binary creation**
 
 Implementation approach:
 The build orchestration will use a pipeline approach where each build step has defined inputs, outputs, and dependencies. The TypeScript compilation will shell out to Bun but provide better progress reporting and error handling. The WebAssembly generation will use the Go toolchain directly through exec.Command.
 
-The C library compilation will initially continue to use the existing build-libopaque.sh script but with enhanced error handling and progress reporting from the Go wrapper. Future iterations may move this compilation into Go using cgo compilation approaches.
+**Static library compilation will pin to specific libopaque commits and build static libraries with position-independent code.** The system includes comprehensive verification that all binaries are statically linked and contain no runtime dependencies.
 
-Version management and caching will be implemented to avoid unnecessary rebuilds. The system will track file checksums and build timestamps to determine when components need rebuilding, significantly improving development iteration time.
+**Version management tracks libopaque commit hashes** and caching will be implemented to avoid unnecessary rebuilds. The system will track file checksums, build timestamps, and **libopaque version changes** to determine when components need rebuilding, significantly improving development iteration time.
 
 #### Cryptographic Key Management (crypto/keys.go)
 
 Replaces: `scripts/setup/03-setup-opaque-keys.sh` and `scripts/setup/04-setup-jwt-keys.sh`
 
-The key management component will generate and manage all cryptographic keys used by the system, including OPAQUE server keys, JWT signing keys, and key rotation capabilities.
+The key management component will generate and manage all cryptographic keys used by the system, including OPAQUE server keys, JWT signing keys, and key rotation capabilities. **Static linking ensures consistent cryptographic behavior across all key operations.**
 
 Key functions:
-- `GenerateOPAQUEKeys()` - Generate OPAQUE server keypair and OPRF seed
+- `GenerateOPAQUEKeys()` - Generate OPAQUE server keypair and OPRF seed **using statically linked libopaque**
 - `GenerateJWTKeys()` - Generate JWT signing keypair with rotation support
 - `ValidateKeys()` - Verify key integrity and proper permissions
 - `BackupKeys()` - Create secure key backups
 - `RotateKeys()` - Handle key rotation with migration support
 
 Implementation approach:
-The OPAQUE key generation will use the same libopaque library that the main application uses, ensuring consistency and eliminating the current placeholder approach. The implementation will properly generate the server private key, derive the public key, and create the OPRF seed using cryptographically secure random number generation.
+**The OPAQUE key generation will use the statically linked libopaque library**, ensuring perfect consistency with the main application and eliminating any library version discrepancies. The implementation will properly generate the server private key, derive the public key, and create the OPRF seed using cryptographically secure random number generation.
 
 JWT key generation will use Go's crypto/ed25519 package to generate Ed25519 keypairs (32-byte private keys, 32-byte public keys) for optimal security and performance. The keys will be stored in PEM format with proper file permissions (600 for private keys, 644 for public keys).
 
@@ -542,7 +546,7 @@ Incident reporting will generate comprehensive documentation of the emergency ro
 
 ### Complete Key Rotation Coverage Analysis
 
-Based on the analysis of existing scripts and the security requirements of Arkfile, the Go utilities plan provides comprehensive coverage of all necessary key rotation functions:
+Based on the analysis of existing scripts and the security requirements of Arkfile, the Go utilities plan provides comprehensive coverage of all necessary key rotation functions. **Static linking eliminates mock complexity and ensures all key rotation operations use production cryptographic implementations.**
 
 #### Covered Key Types and Rotation Scenarios
 
@@ -609,15 +613,16 @@ The Go utilities plan incorporates security best practices that are missing from
 
 The proposed Go utilities provide complete coverage of all cryptographic key rotation requirements for Arkfile:
 
-✅ **User Authentication Keys**: OPAQUE keys with sophisticated migration strategies
+✅ **User Authentication Keys**: OPAQUE keys with sophisticated migration strategies **using static libopaque**
 ✅ **Service Authentication Keys**: JWT keys with minimal-downtime rotation
-✅ **Transport Security Keys**: TLS certificates with automated renewal
+✅ **Transport Security Keys**: TLS certificates with automated renewal  
 ✅ **Emergency Security Response**: Coordinated rotation of all keys
 ✅ **Operational Continuity**: Backup, rollback, and recovery procedures
 ✅ **Compliance and Auditing**: Comprehensive logging and incident reporting
 ✅ **Automated Management**: Scheduling and monitoring capabilities
+✅ **Static Binary Operations**: **All cryptographic operations use consistent static implementations**
 
-This represents a significant improvement over the current bash script approach, which has incomplete implementations (OPAQUE rotation is only a template) and lacks automation capabilities.
+This represents a significant improvement over the current bash script approach, which has incomplete implementations (OPAQUE rotation is only a template), lacks automation capabilities, **and suffers from mock/production discrepancies that static linking eliminates**.
 
 #### System Health Monitoring (health/health.go)
 
@@ -677,13 +682,13 @@ The migration will be implemented as a non-destructive process that preserves al
 
 ### Testing Strategy
 
-Comprehensive testing will be implemented to ensure the Go utilities provide reliable operation across different environments and installation scenarios.
+Comprehensive testing will be implemented to ensure the Go utilities provide reliable operation across different environments and installation scenarios. **Static linking eliminates the need for mock testing infrastructure.**
 
 #### Unit Testing
 
 Individual components will have comprehensive unit tests covering:
 
-**Component Functionality**: All major functions within each package will have complete test coverage.
+**Component Functionality**: All major functions within each package will have complete test coverage **using static binaries**.
 
 **Error Conditions**: Tests for all error conditions and edge cases to ensure proper error handling.
 
@@ -691,17 +696,21 @@ Individual components will have comprehensive unit tests covering:
 
 **State Management**: Tests for state file operations, corruption recovery, and concurrent access handling.
 
+**Static Build Verification**: **Tests ensuring all binaries are properly statically linked.**
+
 #### Integration Testing
 
-End-to-end testing will validate complete installation workflows:
+End-to-end testing will validate complete installation workflows **using static binaries consistently**:
 
-**Fresh Installation**: Complete installation testing in clean environments using containerized testing platforms.
+**Fresh Installation**: Complete installation testing in clean environments using containerized testing platforms **with static binaries**.
 
 **Reinstall Scenarios**: Testing all reinstall strategies with various system corruption scenarios.
 
-**Migration Testing**: Validation that bash script installations can be successfully migrated to Go utility management.
+**Migration Testing**: Validation that bash script installations can be successfully migrated to Go utility management **with static linking**.
 
-**Service Integration**: Testing integration with systemd, database systems, and external services.
+**Service Integration**: Testing integration with systemd, database systems, and external services **without library dependencies**.
+
+**Cross-Platform Testing**: **Validation that static binaries work identically across different Linux distributions.**
 
 #### Compatibility Testing
 

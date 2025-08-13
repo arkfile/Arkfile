@@ -116,6 +116,21 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "encrypt-file-opaque":
+		if err := commands.EncryptFileOPAQUE(filteredArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "decrypt-file-opaque":
+		if err := commands.DecryptFileOPAQUE(filteredArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	case "encrypt-chunked-opaque":
+		if err := commands.EncryptChunkedOPAQUE(filteredArgs); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
 		printUsage()
@@ -135,15 +150,18 @@ GLOBAL FLAGS:
     -version        Show version information
 
 COMMANDS:
-    inspect              Inspect OPAQUE envelope contents
-    validate             Validate file format compatibility
-    pq-status            Check post-quantum readiness status
-    pq-prepare           Prepare system for post-quantum migration
-    health               Check OPAQUE system health
-    opaque-status        Show OPAQUE system status and configuration
-    generate-test-file   Generate test files for encryption testing
-    encrypt-file-basic   Encrypt files with static keys (testing only)
-    decrypt-file-basic   Decrypt files with static keys (testing only)
+    inspect                  Inspect OPAQUE envelope contents
+    validate                 Validate file format compatibility
+    pq-status                Check post-quantum readiness status
+    pq-prepare               Prepare system for post-quantum migration
+    health                   Check OPAQUE system health
+    opaque-status            Show OPAQUE system status and configuration
+    generate-test-file       Generate test files for encryption testing
+    encrypt-file-basic       Encrypt files with static keys (testing only)
+    decrypt-file-basic       Decrypt files with static keys (testing only)
+    encrypt-file-opaque      Encrypt files with OPAQUE-derived keys
+    decrypt-file-opaque      Decrypt files with OPAQUE-derived keys
+    encrypt-chunked-opaque   Encrypt large files into chunks with OPAQUE keys
 
 EXAMPLES:
     # Inspect an OPAQUE envelope
@@ -167,13 +185,26 @@ EXAMPLES:
     # Generate a 100MB test file
     cryptocli generate-test-file -size=100MB -output=test.dat
 
-    # Encrypt a file with a static key
+    # Encrypt a file with a static key (testing only)
     cryptocli encrypt-file-basic -input=test.dat -output=test.enc \
         -key-hex=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 
-    # Decrypt the encrypted file
+    # Decrypt the encrypted file (testing only)
     cryptocli decrypt-file-basic -input=test.enc -output=decrypted.dat \
         -key-hex=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+    # Encrypt with OPAQUE-derived key
+    cryptocli encrypt-file-opaque -input=document.pdf -output=document.enc \
+        -export-key=0123...abcdef -username=alice -file-id=document.pdf
+
+    # Decrypt with OPAQUE-derived key
+    cryptocli decrypt-file-opaque -input=document.enc -output=document.pdf \
+        -export-key=0123...abcdef -username=alice
+
+    # Encrypt large file into chunks
+    cryptocli encrypt-chunked-opaque -input=video.mp4 -output-dir=./chunks \
+        -export-key=0123...abcdef -username=bob -file-id=video.mp4 \
+        -manifest=chunks.json
 
 Use 'cryptocli <command> -help' for command-specific help.
 

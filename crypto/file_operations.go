@@ -3,6 +3,8 @@ package crypto
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -162,6 +164,101 @@ func ParseSizeString(sizeStr string) (int64, error) {
 	}
 
 	return result, nil
+}
+
+// ChunkInfo represents metadata for a single encrypted chunk
+type ChunkInfo struct {
+	Index int    `json:"index"`
+	File  string `json:"file"`
+	Hash  string `json:"hash"`
+	Size  int    `json:"size"`
+}
+
+// ChunkManifest represents metadata for chunked encryption
+type ChunkManifest struct {
+	Envelope    string      `json:"envelope"`
+	TotalChunks int         `json:"totalChunks"`
+	ChunkSize   int         `json:"chunkSize"`
+	Chunks      []ChunkInfo `json:"chunks"`
+}
+
+// ToJSON serializes the manifest to JSON
+func (m *ChunkManifest) ToJSON() ([]byte, error) {
+	return json.Marshal(m)
+}
+
+// CreateChunkedEncryption encrypts data into chunks using OPAQUE-derived keys
+func CreateChunkedEncryption(data []byte, exportKey []byte, username, fileID string, chunkSize int, keyType string) (*ChunkManifest, map[int][]byte, error) {
+	if len(exportKey) != 64 {
+		return nil, nil, fmt.Errorf("export key must be 64 bytes, got %d", len(exportKey))
+	}
+
+	if chunkSize <= 0 || chunkSize > 100*1024*1024 {
+		return nil, nil, fmt.Errorf("invalid chunk size: %d (must be between 1 and 100MB)", chunkSize)
+	}
+
+	// Derive file encryption key based on key type
+	var fileKey []byte
+	var err error
+	switch keyType {
+	case "account":
+		fileKey, err = DeriveAccountFileKey(exportKey, username, fileID)
+	case "custom":
+		fileKey, err = DeriveOPAQUEFileKey(exportKey, fileID, username)
+	default:
+		return nil, nil, fmt.Errorf("unsupported key type: %s (supported: account, custom)", keyType)
+	}
+
+	if err != nil {
+		return nil, nil, fmt.Errorf("key derivation failed: %w", err)
+	}
+
+	// Create envelope
+	envelope := CreateBasicEnvelope(keyType)
+
+	// Split data into chunks and encrypt each
+	chunks := make(map[int][]byte)
+	var chunkInfos []ChunkInfo
+
+	totalChunks := (len(data) + chunkSize - 1) / chunkSize
+
+	for i := 0; i < totalChunks; i++ {
+		start := i * chunkSize
+		end := start + chunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+
+		chunkData := data[start:end]
+
+		// Encrypt chunk using derived file key
+		encryptedChunk, err := EncryptGCM(chunkData, fileKey)
+		if err != nil {
+			return nil, nil, fmt.Errorf("chunk %d encryption failed: %w", i, err)
+		}
+
+		chunks[i] = encryptedChunk
+
+		// Calculate chunk hash
+		chunkHash := CalculateFileHash(encryptedChunk)
+
+		chunkInfos = append(chunkInfos, ChunkInfo{
+			Index: i,
+			File:  fmt.Sprintf("chunk_%d.enc", i),
+			Hash:  chunkHash,
+			Size:  len(encryptedChunk),
+		})
+	}
+
+	// Create manifest
+	manifest := &ChunkManifest{
+		Envelope:    hex.EncodeToString(envelope),
+		TotalChunks: totalChunks,
+		ChunkSize:   chunkSize,
+		Chunks:      chunkInfos,
+	}
+
+	return manifest, chunks, nil
 }
 
 // FormatFileSize converts bytes to human-readable format

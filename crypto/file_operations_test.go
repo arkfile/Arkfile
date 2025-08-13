@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -119,6 +120,251 @@ func TestGenerateTestFileContent(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOPAQUEFileEncryption tests OPAQUE-based file encryption/decryption
+func TestOPAQUEFileEncryption(t *testing.T) {
+	// Mock OPAQUE export key (64 bytes)
+	exportKey := make([]byte, 64)
+	for i := range exportKey {
+		exportKey[i] = byte(i % 256)
+	}
+
+	username := "test-user"
+	fileID := "test-document.pdf"
+	testData := []byte("This is test data for OPAQUE encryption validation")
+
+	tests := []struct {
+		name    string
+		keyType string
+	}{
+		{"Account key", "account"},
+		{"Custom key", "custom"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Derive key using the same method as the CLI
+			var derivedKey []byte
+			var err error
+			switch tt.keyType {
+			case "account":
+				derivedKey, err = DeriveAccountFileKey(exportKey, username, fileID)
+			case "custom":
+				derivedKey, err = DeriveOPAQUEFileKey(exportKey, fileID, username)
+			}
+
+			if err != nil {
+				t.Fatalf("Key derivation failed: %v", err)
+			}
+
+			// Encrypt data
+			encrypted, err := EncryptGCM(testData, derivedKey)
+			if err != nil {
+				t.Fatalf("Encryption failed: %v", err)
+			}
+
+			// Create envelope
+			envelope := CreateBasicEnvelope(tt.keyType)
+			envelopedData := make([]byte, len(envelope)+len(encrypted))
+			copy(envelopedData, envelope)
+			copy(envelopedData[len(envelope):], encrypted)
+
+			// Parse envelope
+			version, parsedKeyType, err := ParseBasicEnvelope(envelopedData[:2])
+			if err != nil {
+				t.Fatalf("Envelope parsing failed: %v", err)
+			}
+
+			if version != 1 {
+				t.Errorf("Expected version 1, got %d", version)
+			}
+
+			if parsedKeyType != tt.keyType {
+				t.Errorf("Expected key type %s, got %s", tt.keyType, parsedKeyType)
+			}
+
+			// Decrypt data
+			decrypted, err := DecryptGCM(envelopedData[2:], derivedKey)
+			if err != nil {
+				t.Fatalf("Decryption failed: %v", err)
+			}
+
+			// Verify data integrity
+			if string(decrypted) != string(testData) {
+				t.Errorf("Decrypted data mismatch: expected %q, got %q", string(testData), string(decrypted))
+			}
+		})
+	}
+}
+
+// TestChunkedEncryptionOPAQUE tests OPAQUE-based chunked encryption
+func TestChunkedEncryptionOPAQUE(t *testing.T) {
+	// Create test data
+	testSize := 50 * 1024 // 50KB
+	testData, err := GenerateTestFileContent(int64(testSize), PatternSequential)
+	if err != nil {
+		t.Fatalf("Failed to generate test data: %v", err)
+	}
+
+	// Mock OPAQUE export key (64 bytes)
+	exportKey := make([]byte, 64)
+	for i := range exportKey {
+		exportKey[i] = byte(i % 256)
+	}
+
+	username := "chunk-test-user"
+	fileID := "large-file.dat"
+	chunkSize := 16 * 1024 // 16KB chunks
+	keyType := "account"
+
+	// Create chunked encryption
+	manifest, chunks, err := CreateChunkedEncryption(testData, exportKey, username, fileID, chunkSize, keyType)
+	if err != nil {
+		t.Fatalf("Chunked encryption failed: %v", err)
+	}
+
+	// Verify manifest
+	if manifest.TotalChunks != 4 { // 50KB / 16KB = ~4 chunks
+		t.Errorf("Expected ~4 chunks, got %d", manifest.TotalChunks)
+	}
+
+	if manifest.ChunkSize != chunkSize {
+		t.Errorf("Expected chunk size %d, got %d", chunkSize, manifest.ChunkSize)
+	}
+
+	if len(manifest.Chunks) != len(chunks) {
+		t.Errorf("Chunk count mismatch: manifest=%d, actual=%d", len(manifest.Chunks), len(chunks))
+	}
+
+	// Verify each chunk can be decrypted
+	derivedKey, err := DeriveAccountFileKey(exportKey, username, fileID)
+	if err != nil {
+		t.Fatalf("Key derivation failed: %v", err)
+	}
+
+	var reconstructed []byte
+	for i := 0; i < manifest.TotalChunks; i++ {
+		chunkData, exists := chunks[i]
+		if !exists {
+			t.Fatalf("Missing chunk %d", i)
+		}
+
+		// Verify chunk hash matches manifest
+		expectedHash := manifest.Chunks[i].Hash
+		actualHash := CalculateFileHash(chunkData)
+		if actualHash != expectedHash {
+			t.Errorf("Chunk %d hash mismatch: expected %s, got %s", i, expectedHash, actualHash)
+		}
+
+		// Decrypt chunk
+		decrypted, err := DecryptGCM(chunkData, derivedKey)
+		if err != nil {
+			t.Fatalf("Failed to decrypt chunk %d: %v", i, err)
+		}
+
+		reconstructed = append(reconstructed, decrypted...)
+	}
+
+	// Verify reconstructed data matches original
+	if len(reconstructed) != len(testData) {
+		t.Errorf("Reconstructed data size mismatch: expected %d, got %d", len(testData), len(reconstructed))
+	}
+
+	originalHash := CalculateFileHash(testData)
+	reconstructedHash := CalculateFileHash(reconstructed)
+	if originalHash != reconstructedHash {
+		t.Errorf("Reconstructed data hash mismatch: expected %s, got %s", originalHash, reconstructedHash)
+	}
+}
+
+// TestOPAQUEKeyDerivationConsistency tests that key derivation is consistent
+func TestOPAQUEKeyDerivationConsistency(t *testing.T) {
+	exportKey := make([]byte, 64)
+	for i := range exportKey {
+		exportKey[i] = byte(i % 256)
+	}
+
+	username := "consistency-test"
+	fileID := "test-file.dat"
+
+	// Test multiple derivations produce same result
+	for i := 0; i < 5; i++ {
+		key1, err := DeriveAccountFileKey(exportKey, username, fileID)
+		if err != nil {
+			t.Fatalf("Key derivation %d failed: %v", i+1, err)
+		}
+
+		key2, err := DeriveAccountFileKey(exportKey, username, fileID)
+		if err != nil {
+			t.Fatalf("Key derivation %d (second) failed: %v", i+1, err)
+		}
+
+		if len(key1) != 32 {
+			t.Errorf("Key length should be 32 bytes, got %d", len(key1))
+		}
+
+		if string(key1) != string(key2) {
+			t.Errorf("Key derivation not consistent on attempt %d", i+1)
+		}
+	}
+
+	// Test different parameters produce different keys
+	key1, _ := DeriveAccountFileKey(exportKey, username, fileID)
+	key2, _ := DeriveAccountFileKey(exportKey, username+"different", fileID)
+	key3, _ := DeriveAccountFileKey(exportKey, username, fileID+"different")
+
+	if string(key1) == string(key2) {
+		t.Error("Different usernames should produce different keys")
+	}
+
+	if string(key1) == string(key3) {
+		t.Error("Different file IDs should produce different keys")
+	}
+
+	if string(key2) == string(key3) {
+		t.Error("Different parameters should produce different keys")
+	}
+}
+
+// TestManifestSerialization tests JSON manifest serialization
+func TestManifestSerialization(t *testing.T) {
+	manifest := &ChunkManifest{
+		Envelope:    "0102",
+		TotalChunks: 3,
+		ChunkSize:   1024,
+		Chunks: []ChunkInfo{
+			{Index: 0, File: "chunk_0.enc", Hash: "hash0", Size: 1024},
+			{Index: 1, File: "chunk_1.enc", Hash: "hash1", Size: 1024},
+			{Index: 2, File: "chunk_2.enc", Hash: "hash2", Size: 512},
+		},
+	}
+
+	jsonData, err := manifest.ToJSON()
+	if err != nil {
+		t.Fatalf("JSON serialization failed: %v", err)
+	}
+
+	// Verify JSON contains expected fields
+	jsonStr := string(jsonData)
+	expectedFields := []string{
+		`"envelope":"0102"`,
+		`"totalChunks":3`,
+		`"chunkSize":1024`,
+		`"chunks":[`,
+		`"index":0`,
+		`"file":"chunk_0.enc"`,
+		`"hash":"hash0"`,
+		`"size":1024`,
+	}
+
+	for _, field := range expectedFields {
+		if !strings.Contains(jsonStr, field) {
+			t.Errorf("JSON missing expected field: %s", field)
+		}
+	}
+
+	t.Logf("Generated JSON: %s", jsonStr)
 }
 
 func TestGenerateTestFileToPath(t *testing.T) {
