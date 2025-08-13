@@ -1,8 +1,10 @@
-# Static Linking Implementation Plan
+# Static Linking Implementation (Foundation Phase)
 
 ## Executive Summary
 
-This document outlines the migration of Arkfile from dynamic libopaque linking to static linking across all components - server, client tools, and test infrastructure. This architectural change eliminates runtime library dependencies, simplifies deployment, removes mock complexity from testing, and provides a foundation for reliable client tool distribution while maintaining the existing tool separation between cryptocli (offline cryptographic operations) and arkfile-client (authenticated server communication).
+This document outlines the migration of Arkfile from dynamic libopaque linking to static linking to eliminate deployment complexity and testing inconsistencies. The **primary goal is to maintain all existing functionality while removing library dependencies.**
+
+This is a **foundation phase** focused on core architectural changes. Advanced tooling and client utilities are covered in `go-utils-project.md`.
 
 ## Background and Motivation
 
@@ -14,757 +16,657 @@ The existing dynamic linking approach presents several operational and developme
 
 **Testing Complexity**: Extensive mock infrastructure exists throughout the codebase specifically to enable testing without libopaque dependencies. This mock system introduces maintenance overhead, potential behavioral differences between test and production code, and complexity in CI/CD environments.
 
-**Client Distribution**: Distributing client tools (cryptocli, arkfile-client) to end users requires them to install libopaque libraries, creating barriers to adoption and support complexity.
-
 **Development Friction**: New developers must install and configure libopaque libraries before contributing, and development environments can have subtle differences in library versions leading to inconsistent behavior.
 
 ### Strategic Benefits of Static Linking
 
-**Deployment Simplification**: Self-contained binaries eliminate library installation requirements for both server deployments and client distributions, reducing operational complexity and support burden.
+**Deployment Simplification**: Self-contained binaries eliminate library installation requirements, reducing operational complexity and support burden.
 
 **Testing Unification**: Removal of mock infrastructure means all tests run against production cryptographic code paths, increasing confidence in test results and eliminating mock/production behavioral discrepancies.
 
-**Client Tool Distribution**: Static binaries enable simple client tool distribution across platforms without library installation requirements, supporting broader user adoption.
-
 **Development Environment Consistency**: All developers work with identical cryptographic implementations, eliminating version-related development issues and simplifying onboarding.
 
-**Version Control**: Pinning to specific libopaque commits ensures identical cryptographic behavior across all environments and deployments.
+## Critical Success Criteria
 
-## Architecture Overview
+After each phase completion, the following validation sequence **must pass**:
 
-### Tool Ecosystem Preservation
+1. `sudo ./scripts/dev-reset.sh` completes successfully without errors
+2. `./scripts/testing/test-app-curl.sh` passes all tests 
+3. Built-in admin dev test user can authenticate via web interface
+4. All existing functionality remains intact
 
-The static linking migration preserves the established tool architecture while eliminating library dependencies:
+**Important**: The app should never be "manually rebuilt in-place and then moved to /opt/arkfile/". All builds must go through the standard dev-reset workflow during this project.
 
-**cryptocli** (Offline Cryptographic Tool):
-- File operations: generate, encrypt, decrypt with OPAQUE-derived keys
-- No network communication capabilities
-- Pure cryptographic operations using statically linked libopaque
-- Commands: `generate-test-file`, `encrypt-file-opaque`, `decrypt-file-opaque`, `encrypt-chunked-opaque`
+## Development Guidelines
 
-**arkfile-client** (Server Communication Tool):
-- Authenticated server communication over TLS 1.3 (localhost and remote)
-- OPAQUE authentication flows and session management
-- File upload/download operations and share creation
-- Commands: `login`, `upload`, `download`, `list-files`, `create-share`
+- **No manual binary compilation and movement** - Always use dev-reset workflow
+- **New bash scripts only if absolutely necessary** for debugging purposes
+- **Any new bash scripts must be placed under `scripts/wip/`** only
+- **Always validate with dev-reset → test-app-curl.sh** after any changes
+- **Incremental validation** - test after each significant change, not just at phase completion
 
-**arkfile** (Main Server Binary):
-- Web server with authentication and file management APIs
-- Static linking eliminates server library dependencies
-- Simplified deployment across different environments
+## Implementation Phases
 
-### Integration Pattern
+### Phase 1: Static Build System (Week 1)
 
-The tools integrate through secure key handoff patterns:
-1. arkfile-client performs OPAQUE authentication and exports account-export and session keys as needed
-2. cryptocli uses exported keys for offline cryptographic operations
-3. arkfile-client handles all network communication with the offline, pre-encrypted payloads
+#### Goal
+Create cross-platform static library build system that produces statically linked binaries without breaking existing functionality.
 
-## Implementation Strategy
+#### Technical Changes
 
-### Phase 1: Build System Transformation
+**1.1 Enhanced build-libopaque.sh**
 
-#### 1.1 Libopaque Build System
-**File: `scripts/setup/build-libopaque.sh`**
-
-Transform the build system to support static linking:
+**File: `scripts/setup/build-libopaque.sh`** - Complete cross-platform static build system:
 
 ```bash
 #!/bin/bash
-# Static libopaque build with version pinning
-
-LIBOPAQUE_COMMIT="specific-commit-hash-for-consistency"
-LIBOPAQUE_DIR="/opt/arkfile/src/libopaque"
-
-# Clone specific commit for consistency
-if [ ! -d "$LIBOPAQUE_DIR" ]; then
-    git clone https://github.com/facebook/opaque.git "$LIBOPAQUE_DIR"
-    cd "$LIBOPAQUE_DIR"
-    git checkout "$LIBOPAQUE_COMMIT"
-else
-    cd "$LIBOPAQUE_DIR"
-    git fetch
-    git checkout "$LIBOPAQUE_COMMIT"
-fi
-
-# Configure for static library generation
-mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release \
-      -DBUILD_SHARED_LIBS=OFF \
-      -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-      -DCMAKE_INSTALL_PREFIX=/opt/arkfile/lib/libopaque \
-      ..
-
-# Build static library
-make -j$(nproc)
-make install
-
-# Verify static library exists
-if [ -f "/opt/arkfile/lib/libopaque/lib/libopaque.a" ]; then
-    echo "✅ Static libopaque library built successfully"
-    echo "Commit: $LIBOPAQUE_COMMIT"
-    echo "Library: /opt/arkfile/lib/libopaque/lib/libopaque.a"
-else
-    echo "❌ Static library build failed"
-    exit 1
-fi
-```
-
-#### 1.2 Go Build Configuration
-**File: `scripts/setup/build.sh`**
-
-Update the main build script for static linking:
-
-```bash
-#!/bin/bash
-# Static linking build configuration
-
-set -euo pipefail
-
-# Ensure libopaque is built statically
-./scripts/setup/build-libopaque.sh
-
-# Static linking environment
-export CGO_ENABLED=1
-export CGO_LDFLAGS="-L/opt/arkfile/lib/libopaque/lib -lopaque -lstdc++ -lm -static"
-export CGO_CPPFLAGS="-I/opt/arkfile/lib/libopaque/include"
-
-# Build main server binary statically
-echo "Building arkfile server binary with static linking..."
-go build -a -ldflags '-extldflags "-static"' -o arkfile main.go
-
-# Build client tools statically
-echo "Building cryptocli with static linking..."
-cd cmd/cryptocli
-go build -a -ldflags '-extldflags "-static"' -o ../../cryptocli .
-cd ../..
-
-echo "Building arkfile-client with static linking..."
-cd cmd/arkfile-client  
-go build -a -ldflags '-extldflags "-static"' -o ../../arkfile-client .
-cd ../..
-
-# Verify static linking
-echo "Verifying static binaries..."
-if ldd ./arkfile 2>&1 | grep -q "not a dynamic executable"; then
-    echo "✅ arkfile: Static binary verified"
-else
-    echo "❌ arkfile: Dynamic linking detected"
-fi
-
-if ldd ./cryptocli 2>&1 | grep -q "not a dynamic executable"; then
-    echo "✅ cryptocli: Static binary verified"  
-else
-    echo "❌ cryptocli: Dynamic linking detected"
-fi
-
-if ldd ./arkfile-client 2>&1 | grep -q "not a dynamic executable"; then
-    echo "✅ arkfile-client: Static binary verified"
-else
-    echo "❌ arkfile-client: Dynamic linking detected"
-fi
-
-echo "✅ Static linking build completed"
-```
-
-### Phase 2: Mock System Removal
-
-#### 2.1 Authentication System Cleanup
-
-**Files to Delete:**
-```
-auth/opaque_mock.go
-auth/opaque_mock_server.go
-auth/opaque_password_manager_mock.go
-auth/opaque_password_manager_factory_mock.go
-auth/mock_only_test.go
-```
-
-**File: `auth/opaque_unified.go`** - Remove mock conditionals:
-
-```go
-// Remove all build tag conditionals like:
-// //go:build !mock
-
-// Remove mock-related imports and conditional logic
-// Simplify to single production implementation
-
-package auth
-
-import (
-    "context"
-    "fmt"
-    "github.com/yourdomain/arkfile/logging"
-)
-
-// Unified OPAQUE provider - production implementation only
-type OPAQUEProvider struct {
-    logger *logging.Logger
-    // Remove mock field
-}
-
-func NewOPAQUEProvider(logger *logging.Logger) *OPAQUEProvider {
-    // Remove mock detection logic
-    return &OPAQUEProvider{
-        logger: logger,
-    }
-}
-
-// Remove all mock-related methods and conditional implementations
-```
-
-**File: `auth/opaque_password_manager_factory.go`** - Simplify to single implementation:
-
-```go
-package auth
-
-// Remove mock factory logic
-func NewPasswordManagerFactory() PasswordManagerFactory {
-    // Always return production implementation
-    return &ProductionPasswordManagerFactory{}
-}
-```
-
-#### 2.2 Test System Updates
-
-**Global Changes:**
-- Remove all `//go:build !mock` and `//go:build mock` build tags
-- Update all `*_test.go` files to use static binaries
-- Remove mock setup and teardown logic from tests
-
-**Example: `auth/opaque_provider_test.go`**:
-
-```go
-func TestOPAQUEProvider(t *testing.T) {
-    // Remove mock setup
-    // Use static binary OPAQUE implementation directly
-    
-    provider := NewOPAQUEProvider(logging.NewLogger())
-    
-    // Test against production implementation
-    result, err := provider.Register(context.Background(), username, password)
-    require.NoError(t, err)
-    require.NotNil(t, result)
-}
-```
-
-### Phase 3: Client Tools Enhancement
-
-#### 3.1 arkfile-client TLS 1.3 Remote Support
-
-**File: `cmd/arkfile-client/main.go`** - Add remote server support:
-
-```go
-package main
-
-import (
-    "crypto/tls"
-    "flag"
-    "fmt"
-    "net/url"
-    "os"
-)
-
-type ClientConfig struct {
-    ServerURL    string `json:"server_url"`
-    Username     string `json:"username"`
-    TLSInsecure  bool   `json:"tls_insecure"`  
-    TLSMinVersion uint16 `json:"tls_min_version"`
-    TokenFile    string `json:"token_file"`
-    ConfigFile   string `json:"config_file"`
-}
-
-func main() {
-    var (
-        serverURL    = flag.String("server-url", "https://localhost:4443", "Server URL (supports remote servers)")
-        configFile   = flag.String("config", "", "Configuration file path")
-        tlsInsecure  = flag.Bool("tls-insecure", false, "Skip TLS certificate verification (localhost only)")
-        tlsMinVer    = flag.String("tls-min-version", "1.3", "Minimum TLS version (1.2 or 1.3)")
-        username     = flag.String("username", "", "Username for authentication")
-    )
-    flag.Parse()
-
-    if len(os.Args) < 2 {
-        printUsage()
-        os.Exit(1)
-    }
-
-    // Parse and validate server URL
-    serverURL, err := url.Parse(*serverURL)
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Invalid server URL: %v\n", err)
-        os.Exit(1)
-    }
-
-    // Validate TLS settings for remote servers
-    if serverURL.Hostname() != "localhost" && serverURL.Hostname() != "127.0.0.1" {
-        if *tlsInsecure {
-            fmt.Fprintf(os.Stderr, "Error: --tls-insecure is not allowed for remote servers\n")
-            os.Exit(1)
-        }
-    }
-
-    config := &ClientConfig{
-        ServerURL:     serverURL.String(),
-        Username:      *username,
-        TLSInsecure:   *tlsInsecure,
-        TLSMinVersion: parseTLSVersion(*tlsMinVer),
-        ConfigFile:    *configFile,
-    }
-
-    client := NewHTTPClient(config)
-
-    switch os.Args[1] {
-    case "login":
-        err = handleLogin(client, config)
-    case "upload":
-        err = handleUpload(client, config)
-    case "download":
-        err = handleDownload(client, config)
-    case "list-files":
-        err = handleListFiles(client, config)
-    case "create-share":
-        err = handleCreateShare(client, config)
-    default:
-        fmt.Fprintf(os.Stderr, "Unknown command: %s\n", os.Args[1])
-        printUsage()
-        os.Exit(1)
-    }
-
-    if err != nil {
-        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-        os.Exit(1)
-    }
-}
-
-func NewHTTPClient(config *ClientConfig) *http.Client {
-    tlsConfig := &tls.Config{
-        InsecureSkipVerify: config.TLSInsecure,
-        MinVersion:         config.TLSMinVersion,
-        // Prefer TLS 1.3 for remote connections
-        MaxVersion:         tls.VersionTLS13,
-    }
-
-    transport := &http.Transport{
-        TLSClientConfig: tlsConfig,
-        // Connection optimization for remote servers
-        MaxIdleConns:        100,
-        MaxIdleConnsPerHost: 10,
-        IdleConnTimeout:     90 * time.Second,
-    }
-
-    return &http.Client{
-        Transport: transport,
-        Timeout:   60 * time.Second, // Longer timeout for remote servers
-    }
-}
-
-func parseTLSVersion(version string) uint16 {
-    switch version {
-    case "1.2":
-        return tls.VersionTLS12
-    case "1.3":
-        return tls.VersionTLS13
-    default:
-        fmt.Fprintf(os.Stderr, "Invalid TLS version: %s (use 1.2 or 1.3)\n", version)
-        os.Exit(1)
-        return 0
-    }
-}
-```
-
-### Phase 4: Go Utilities Integration
-
-#### 4.1 arkfile-setup Enhancement
-
-**File: `cmd/arkfile-setup/build/static.go`** - Add static build management:
-
-```go
-package build
-
-import (
-    "fmt"
-    "os"
-    "os/exec"
-    "path/filepath"
-    "strings"
-)
-
-type StaticBuilder struct {
-    config      *Config
-    libopaqueDir string
-    logger      *Logger
-}
-
-func NewStaticBuilder(config *Config, logger *Logger) *StaticBuilder {
-    return &StaticBuilder{
-        config:       config,
-        libopaqueDir: "/opt/arkfile/src/libopaque",
-        logger:       logger,
-    }
-}
-
-func (sb *StaticBuilder) BuildLibopaque(commitHash string) error {
-    sb.logger.Info("Building libopaque statically", "commit", commitHash)
-    
-    // Clone or update libopaque to specific commit
-    if err := sb.ensureLibopaqueSource(commitHash); err != nil {
-        return fmt.Errorf("failed to prepare libopaque source: %w", err)
-    }
-    
-    // Build static library
-    if err := sb.buildStaticLibrary(); err != nil {
-        return fmt.Errorf("failed to build static library: %w", err)
-    }
-    
-    // Verify static library
-    if err := sb.verifyStaticLibrary(); err != nil {
-        return fmt.Errorf("static library verification failed: %w", err)
-    }
-    
-    sb.logger.Success("Libopaque static build completed")
-    return nil
-}
-
-func (sb *StaticBuilder) BuildAllBinaries() error {
-    sb.logger.Info("Building all binaries with static linking")
-    
-    binaries := map[string]string{
-        "arkfile":        ".",
-        "cryptocli":      "cmd/cryptocli",
-        "arkfile-client": "cmd/arkfile-client",
-    }
-    
-    // Set static linking environment
-    env := append(os.Environ(),
-        "CGO_ENABLED=1",
-        "CGO_LDFLAGS=-L/opt/arkfile/lib/libopaque/lib -lopaque -lstdc++ -lm -static",
-        "CGO_CPPFLAGS=-I/opt/arkfile/lib/libopaque/include",
-    )
-    
-    for binary, path := range binaries {
-        sb.logger.Info("Building binary", "name", binary, "path", path)
-        
-        cmd := exec.Command("go", "build", "-a", "-ldflags", "-extldflags \"-static\"", "-o", binary)
-        cmd.Dir = filepath.Join(sb.config.ProjectRoot, path)
-        cmd.Env = env
-        
-        if output, err := cmd.CombinedOutput(); err != nil {
-            return fmt.Errorf("failed to build %s: %w\nOutput: %s", binary, err, output)
-        }
-        
-        // Verify static linking
-        if err := sb.verifyStaticBinary(filepath.Join(sb.config.ProjectRoot, binary)); err != nil {
-            return fmt.Errorf("static linking verification failed for %s: %w", binary, err)
-        }
-        
-        sb.logger.Success("Built binary", "name", binary)
-    }
-    
-    return nil
-}
-
-func (sb *StaticBuilder) verifyStaticBinary(binaryPath string) error {
-    cmd := exec.Command("ldd", binaryPath)
-    output, err := cmd.CombinedOutput()
-    
-    if err != nil {
-        // ldd returns error for static binaries, check output
-        if strings.Contains(string(output), "not a dynamic executable") {
-            return nil // This is expected for static binaries
-        }
-        return fmt.Errorf("ldd failed: %w", err)
-    }
-    
-    // If ldd succeeded, the binary is dynamic (not what we want)
-    return fmt.Errorf("binary is dynamically linked: %s", string(output))
-}
-```
-
-#### 4.2 arkfile-admin Enhancement
-
-**File: `cmd/arkfile-admin/deployment/static.go`** - Add deployment management:
-
-```go
-package deployment
-
-import (
-    "fmt"
-    "os"
-    "path/filepath"
-)
-
-type StaticDeployment struct {
-    config *Config
-    logger *Logger
-}
-
-func NewStaticDeployment(config *Config, logger *Logger) *StaticDeployment {
-    return &StaticDeployment{
-        config: config,
-        logger: logger,
-    }
-}
-
-func (sd *StaticDeployment) DeployStaticBinaries() error {
-    sd.logger.Info("Deploying static binaries")
-    
-    binaries := []string{"arkfile", "cryptocli", "arkfile-client"}
-    
-    for _, binary := range binaries {
-        sourcePath := filepath.Join(sd.config.BuildDir, binary)
-        targetPath := filepath.Join(sd.config.BinDir, binary)
-        
-        if err := sd.deployBinary(sourcePath, targetPath); err != nil {
-            return fmt.Errorf("failed to deploy %s: %w", binary, err)
-        }
-        
-        sd.logger.Success("Deployed binary", "name", binary, "path", targetPath)
-    }
-    
-    return nil
-}
-
-func (sd *StaticDeployment) ValidateDeployment() error {
-    sd.logger.Info("Validating static binary deployment")
-    
-    binaries := []string{"arkfile", "cryptocli", "arkfile-client"}
-    
-    for _, binary := range binaries {
-        binaryPath := filepath.Join(sd.config.BinDir, binary)
-        
-        // Check binary exists and is executable
-        if err := sd.validateBinary(binaryPath); err != nil {
-            return fmt.Errorf("validation failed for %s: %w", binary, err)
-        }
-        
-        // Verify static linking
-        if err := sd.verifyStaticLinking(binaryPath); err != nil {
-            return fmt.Errorf("static linking verification failed for %s: %w", binary, err)
-        }
-        
-        sd.logger.Success("Validated binary", "name", binary)
-    }
-    
-    return nil
-}
-
-func (sd *StaticDeployment) CleanupOldBinaries() error {
-    sd.logger.Info("Cleaning up old binary versions")
-    
-    // Remove old backup binaries older than 30 days
-    backupDir := filepath.Join(sd.config.BinDir, "backups")
-    
-    return sd.cleanupOldBackups(backupDir, 30*24*time.Hour)
-}
-```
-
-### Phase 5: Testing Infrastructure Update
-
-#### 5.1 Test Script Integration
-
-**File: `scripts/testing/test-app-curl.sh`** - Update for static binaries:
-
-```bash
-# Add static binary verification phase
-verify_static_binaries() {
-    log "Verifying static binary builds..."
-    
-    local binaries=("./arkfile" "./cryptocli" "./arkfile-client")
-    
-    for binary in "${binaries[@]}"; do
-        if [ ! -f "$binary" ]; then
-            error "Binary not found: $binary"
+# Cross-platform static library build system
+
+set -e
+
+echo "=== Arkfile Static Library Build System ==="
+
+# Cross-platform system detection
+detect_system_and_packages() {
+    if [[ "$OSTYPE" == "linux-gnu"* ]] || [[ "$OSTYPE" == "linux-musl"* ]]; then
+        if [ -f /etc/alpine-release ]; then
+            OS="alpine"
+            PACKAGE_MANAGER="apk"
+            INSTALL_CMD="apk add --no-cache"
+            SODIUM_PKG="libsodium-dev libsodium-static"
+            LIBC="musl"
+        elif command -v apt-get >/dev/null; then
+            OS="debian"
+            PACKAGE_MANAGER="apt"
+            INSTALL_CMD="apt-get update && apt-get install -y"
+            SODIUM_PKG="libsodium-dev"
+            LIBC="glibc"
+        elif command -v dnf >/dev/null; then
+            OS="alma"
+            PACKAGE_MANAGER="dnf"
+            INSTALL_CMD="dnf install -y"
+            SODIUM_PKG="libsodium-devel"
+            LIBC="glibc"
         fi
-        
-        if ! ldd "$binary" 2>&1 | grep -q "not a dynamic executable"; then
-            error "Binary is not statically linked: $binary"
-        fi
-        
-        success "Verified static binary: $binary"
-    done
-}
-
-# Update Go tool building phase
-build_go_tools() {
-    log "Building Go tools with static linking..."
-    
-    # Use static build script instead of individual builds
-    if ! ./scripts/setup/build.sh; then
-        error "Static build failed"
-    fi
-    
-    # Verify static binaries
-    verify_static_binaries
-    
-    success "All static Go tools built and verified"
-}
-
-# Update file operations phase to use static binaries consistently
-phase_file_operations() {
-    phase "FILE OPERATIONS WITH STATIC GO TOOLS"
-    
-    # No mock setup needed - always using production implementation
-    build_go_tools
-    export_auth_data_for_go_tools
-    generate_test_file_with_cryptocli
-    authenticate_with_client_tool
-    encrypt_test_file_with_opaque
-    upload_file_with_client
-    verify_file_with_client
-    download_and_decrypt_file
-    verify_complete_integrity
-    cleanup_file_operations_test
-    
-    success "File operations testing completed with static binaries"
-}
-```
-
-### Phase 6: Development Workflow Updates
-
-#### 6.1 dev-reset Script Updates
-
-**File: `scripts/dev-reset.sh`** - Update for static binary approach:
-
-```bash
-#!/bin/bash
-# Development reset with static binary support
-
-set -euo pipefail
-
-# Reset function for static binary environment
-reset_static_environment() {
-    log "Resetting development environment with static binaries"
-    
-    # Stop all services
-    stop_all_services
-    
-    # Clean data directories
-    clean_data_directories
-    
-    # Check if libopaque version changed
-    local current_commit
-    current_commit=$(get_current_libopaque_commit)
-    
-    if [ "$current_commit" != "$(cat .libopaque-version 2>/dev/null || echo '')" ]; then
-        log "Libopaque version changed, rebuilding static binaries"
-        rebuild_static_binaries
-        echo "$current_commit" > .libopaque-version
+    elif [[ "$OSTYPE" == "freebsd"* ]]; then
+        OS="freebsd"
+        PACKAGE_MANAGER="pkg"
+        INSTALL_CMD="pkg install -y"
+        SODIUM_PKG="libsodium"
+        LIBC="freebsd-libc"
+    elif [[ "$OSTYPE" == "openbsd"* ]]; then
+        OS="openbsd"
+        PACKAGE_MANAGER="pkg_add"
+        INSTALL_CMD="pkg_add"
+        SODIUM_PKG="libsodium"
+        LIBC="openbsd-libc"
     else
-        log "Libopaque version unchanged, using existing static binaries"
+        echo "❌ Unsupported platform: $OSTYPE"
+        exit 1
     fi
     
-    # Deploy static binaries
-    deploy_static_binaries
-    
-    # Initialize with test data
-    initialize_test_data
-    
-    success "Development environment reset completed with static binaries"
+    echo "📋 Detected: $OS ($LIBC) with $PACKAGE_MANAGER"
 }
 
-rebuild_static_binaries() {
-    log "Rebuilding all static binaries"
+# Go version verification
+check_go_version() {
+    local required_major=1
+    local required_minor=24
     
-    # Clean old binaries
-    rm -f arkfile cryptocli arkfile-client
+    if ! command -v go >/dev/null; then
+        echo "❌ Go is not installed. Please install Go 1.24+ first."
+        exit 1
+    fi
     
-    # Build with static linking
-    ./scripts/setup/build.sh
+    local current_version=$(go version | grep -o 'go[0-9]\+\.[0-9]\+' | sed 's/go//')
+    local current_major=$(echo $current_version | cut -d. -f1)
+    local current_minor=$(echo $current_version | cut -d. -f2)
+    
+    if [ "$current_major" -lt "$required_major" ] || 
+       ([ "$current_major" -eq "$required_major" ] && [ "$current_minor" -lt "$required_minor" ]); then
+        echo "❌ Go version $current_version is too old"
+        echo "Required: Go ${required_major}.${required_minor}+ (from go.mod)"
+        echo "Please update Go to version 1.24 or later"
+        exit 1
+    fi
+    
+    echo "✅ Go version $current_version meets requirements (>= ${required_major}.${required_minor})"
+}
+
+# Universal dependency installation
+install_dependencies_universal() {
+    echo "📦 Installing dependencies on $OS..."
+    
+    case $PACKAGE_MANAGER in
+        apk)
+            sudo $INSTALL_CMD libsodium-dev libsodium-static gcc musl-dev make pkgconfig cmake
+            ;;
+        apt)
+            sudo $INSTALL_CMD libsodium-dev build-essential pkg-config cmake
+            ;;
+        dnf)
+            sudo $INSTALL_CMD libsodium-devel gcc make pkgconfig cmake
+            ;;
+        pkg)
+            sudo $INSTALL_CMD libsodium gcc gmake pkgconf cmake
+            ;;
+        pkg_add)
+            sudo $INSTALL_CMD libsodium gcc gmake pkgconf cmake
+            ;;
+    esac
+    
+    echo "✅ Dependencies installed for $OS"
+}
+
+# Build static libraries in vendor directories
+build_static_libraries() {
+    echo "🔨 Building static libraries in vendor/ directories..."
+    
+    # Set universal optimization flags
+    export CFLAGS="-O2 -fPIC"
+    export LDFLAGS="-static"
+    
+    # Platform-specific optimizations (not preferences)
+    case $LIBC in
+        musl)
+            # musl allows additional size optimizations
+            CFLAGS="$CFLAGS -Os -fomit-frame-pointer"
+            ;;
+        glibc|freebsd-libc|openbsd-libc)
+            # Standard flags work well
+            ;;
+    esac
+    
+    # Vendor directories
+    OPRF_DIR="vendor/stef/liboprf/src"
+    OPAQUE_DIR="vendor/stef/libopaque/src"
+    
+    # Build liboprf static library
+    echo "Building liboprf static library..."
+    if [ ! -d "$OPRF_DIR" ]; then
+        echo "❌ liboprf source directory not found: $OPRF_DIR"
+        echo "Please ensure git submodules are initialized: git submodule update --init --recursive"
+        exit 1
+    fi
+    
+    cd "$OPRF_DIR"
+    make clean || true
+    make CFLAGS="$CFLAGS $(pkg-config --cflags libsodium)" AR=ar ARFLAGS=rcs liboprf.a
+    
+    # Build libopaque static library
+    echo "Building libopaque static library..."
+    cd "../../../libopaque/src"
+    make clean || true
+    make CFLAGS="$CFLAGS -I../../../liboprf/src $(pkg-config --cflags libsodium)" \
+         AR=ar ARFLAGS=rcs libopaque.a
+    
+    # Return to project root
+    cd - >/dev/null
+    cd - >/dev/null
+    
+    echo "✅ Static libraries built successfully on $OS"
+    
+    # Verify libraries exist
+    if [ -f "$OPRF_DIR/liboprf.a" ] && [ -f "$OPAQUE_DIR/libopaque.a" ]; then
+        echo "📁 Static libraries:"
+        ls -la "$OPRF_DIR/liboprf.a" "$OPAQUE_DIR/libopaque.a"
+    else
+        echo "❌ Static library build verification failed"
+        exit 1
+    fi
+}
+
+# Main execution
+main() {
+    check_go_version
+    detect_system_and_packages
+    
+    # Check for libsodium availability
+    if ! pkg-config --exists libsodium; then
+        echo "⚠️  libsodium not found, attempting to install..."
+        install_dependencies_universal
+    else
+        echo "✅ libsodium found: $(pkg-config --modversion libsodium)"
+    fi
+    
+    build_static_libraries
+    echo "🎉 Static library build completed successfully!"
+}
+
+# Run main function
+main "$@"
+```
+
+**1.2 Updated CGO Configuration**
+
+**File: `auth/opaque_cgo.go`** - Updated for vendor-based static linking:
+
+```go
+//go:build !mock
+// +build !mock
+
+package auth
+
+/*
+#cgo CFLAGS: -I../../vendor/stef/libopaque/src -I../../vendor/stef/liboprf/src
+#cgo pkg-config: libsodium
+#cgo LDFLAGS: -L../../vendor/stef/libopaque/src -L../../vendor/stef/liboprf/src
+#cgo LDFLAGS: -lopaque -loprf -static
+#include "opaque_wrapper.h"
+#include <stdlib.h>
+*/
+import "C"
+import (
+	"fmt"
+	"unsafe"
+)
+
+// libopaqueRegisterUser is a Go wrapper for the one-step registration
+func libopaqueRegisterUser(password []byte, serverPrivateKey []byte) ([]byte, []byte, error) {
+	userRecord := make([]byte, OPAQUE_USER_RECORD_LEN)
+	exportKey := make([]byte, OPAQUE_SHARED_SECRETBYTES)
+
+	cPassword := C.CBytes(password)
+	defer C.free(cPassword)
+
+	cServerPrivateKey := C.CBytes(serverPrivateKey)
+	defer C.free(cServerPrivateKey)
+
+	ret := C.arkfile_opaque_register_user(
+		(*C.uint8_t)(cPassword),
+		C.uint16_t(len(password)),
+		(*C.uint8_t)(cServerPrivateKey),
+		(*C.uint8_t)(unsafe.Pointer(&userRecord[0])),
+		(*C.uint8_t)(unsafe.Pointer(&exportKey[0])),
+	)
+
+	if ret != 0 {
+		return nil, nil, fmt.Errorf("libopaque registration failed: error code %d", ret)
+	}
+
+	return userRecord, exportKey, nil
+}
+
+// libopaqueAuthenticateUser is a Go wrapper for the one-step authentication
+func libopaqueAuthenticateUser(password []byte, userRecord []byte) ([]byte, error) {
+	exportKey := make([]byte, OPAQUE_SHARED_SECRETBYTES)
+
+	cPassword := C.CBytes(password)
+	defer C.free(cPassword)
+
+	ret := C.arkfile_opaque_authenticate_user(
+		(*C.uint8_t)(cPassword),
+		C.uint16_t(len(password)),
+		(*C.uint8_t)(unsafe.Pointer(&userRecord[0])),
+		(*C.uint8_t)(unsafe.Pointer(&exportKey[0])),
+	)
+
+	if ret != 0 {
+		return nil, fmt.Errorf("libopaque authentication failed: error code %d", ret)
+	}
+
+	return exportKey, nil
+}
+```
+
+**1.3 Build System Integration**
+
+**File: `scripts/setup/build.sh`** - Updated for static linking:
+
+```bash
+#!/bin/bash
+set -e
+
+# Configuration
+APP_NAME="arkfile"
+WASM_DIR="client"
+BUILD_DIR="build"
+VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "unknown")}
+BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+BASE_DIR="/opt/arkfile"
+
+# Colors for output 
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# Function to check Go version requirements from go.mod
+check_go_version() {
+    local required_version=$(grep '^go [0-9]' go.mod | awk '{print $2}')
+    
+    if [ -z "$required_version" ]; then
+        echo -e "${YELLOW}⚠️  Cannot determine Go version requirement from go.mod${NC}"
+        return 0
+    fi
+    
+    local current_version=$(/usr/local/go/bin/go version | grep -o 'go[0-9]\+\.[0-9]\+\.[0-9]\+' | sed 's/go//')
+    
+    if [ -z "$current_version" ]; then
+        echo -e "${RED}❌ Cannot determine Go version${NC}"
+        exit 1
+    fi
+    
+    # Convert versions to comparable format (remove dots and compare as integers)
+    local current_num=$(echo $current_version | awk -F. '{printf "%d%02d%02d", $1, $2, $3}')
+    local required_num=$(echo $required_version | awk -F. '{printf "%d%02d%02d", $1, $2, $3}')
+    
+    if [ "$current_num" -lt "$required_num" ]; then
+        echo -e "${RED}❌ Go version $current_version is too old${NC}"
+        echo -e "${YELLOW}Required: Go $required_version or later (from go.mod)${NC}"
+        echo -e "${YELLOW}Current:  Go $current_version${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✅ Go version $current_version meets requirements (>= $required_version)${NC}"
+}
+
+# Build static libraries first
+build_static_dependencies() {
+    echo -e "${YELLOW}Building static dependencies...${NC}"
+    
+    if ! ./scripts/setup/build-libopaque.sh; then
+        echo -e "${RED}❌ Failed to build static dependencies${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✅ Static dependencies built successfully${NC}"
+}
+
+# Build Go binaries with static linking
+build_go_binaries_static() {
+    echo -e "${YELLOW}Building Go binaries with static linking...${NC}"
+    
+    # Set up static linking environment
+    export CGO_ENABLED=1
+    export CGO_CFLAGS="-I./vendor/stef/libopaque/src -I./vendor/stef/liboprf/src"
+    export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf"
+    export CGO_LDFLAGS="$CGO_LDFLAGS $(pkg-config --libs --static libsodium)"
+    
+    echo "Building arkfile server..."
+    /usr/local/go/bin/go build -a -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -extldflags '-static'" -o arkfile .
+    
+    echo "Building cryptocli..."
+    /usr/local/go/bin/go build -a -ldflags '-extldflags "-static"' -o cryptocli ./cmd/cryptocli
+    
+    echo -e "${GREEN}✅ Go binaries built with static linking${NC}"
+}
+
+# Verify static binaries
+verify_static_binaries() {
+    echo -e "${YELLOW}Verifying static binaries...${NC}"
+    
+    for binary in arkfile cryptocli; do
+        if [ -f "$binary" ]; then
+            # Use appropriate verification for platform
+            if [[ "$OSTYPE" == "freebsd"* ]] || [[ "$OSTYPE" == "openbsd"* ]]; then
+                # BSD systems use different tools
+                if file "$binary" | grep -q "statically linked"; then
+                    echo -e "${GREEN}✅ $binary: Static binary verified${NC}"
+                else
+                    echo -e "${RED}❌ $binary: Dynamic linking detected${NC}"
+                    exit 1
+                fi
+            else
+                # Linux systems (includes Alpine, Debian, Alma, etc.)
+                if ldd "$binary" 2>&1 | grep -q "not a dynamic executable"; then
+                    echo -e "${GREEN}✅ $binary: Static binary verified${NC}"
+                else
+                    echo -e "${RED}❌ $binary: Dynamic linking detected${NC}"
+                    ldd "$binary" 2>&1 || true
+                    exit 1
+                fi
+            fi
+        else
+            echo -e "${RED}❌ Binary not found: $binary${NC}"
+            exit 1
+        fi
+    done
+    
+    echo -e "${GREEN}✅ All binaries verified as static${NC}"
+}
+
+# Deploy binaries to runtime location
+deploy_binaries() {
+    echo -e "${YELLOW}Deploying binaries to ${BASE_DIR}/bin...${NC}"
+    
+    # Create deployment directories
+    sudo mkdir -p "${BASE_DIR}/bin"
+    
+    # Copy static binaries
+    sudo cp arkfile cryptocli "${BASE_DIR}/bin/"
+    sudo chown -R arkfile:arkfile "${BASE_DIR}/bin/"
+    sudo chmod 755 "${BASE_DIR}/bin/"*
+    
+    echo -e "${GREEN}✅ Binaries deployed to ${BASE_DIR}/bin${NC}"
+}
+
+# Main build process
+main() {
+    echo -e "${GREEN}Building ${APP_NAME} version ${VERSION} with static linking${NC}"
+    
+    # Preliminary checks
+    command -v /usr/local/go/bin/go >/dev/null 2>&1 || { echo -e "${RED}Go is required but not installed.${NC}" >&2; exit 1; }
+    check_go_version
+    
+    # Build static dependencies
+    build_static_dependencies
+    
+    # Build TypeScript frontend (existing process)
+    # ... (keep existing TypeScript build process)
+    
+    # Build WebAssembly (existing process)  
+    # ... (keep existing WASM build process)
+    
+    # Build Go binaries with static linking
+    build_go_binaries_static
     
     # Verify static linking
     verify_static_binaries
+    
+    # Deploy to runtime location
+    deploy_binaries
+    
+    # Create version file
+    echo "Creating version file..."
+    cat > "${BASE_DIR}/version.json" <<EOF
+{
+   "version": "${VERSION}",
+   "buildTime": "${BUILD_TIME}",
+   "staticLinking": true
+}
+EOF
+    
+    echo -e "${GREEN}✅ Static linking build completed successfully!${NC}"
+    echo "Binaries: ${BASE_DIR}/bin/"
+    echo "Version: ${VERSION}"
 }
 
-get_current_libopaque_commit() {
-    # Get the pinned commit from build script
-    grep "LIBOPAQUE_COMMIT=" scripts/setup/build-libopaque.sh | cut -d'"' -f2
+# Execute main function
+main "$@"
+```
+
+#### Validation Steps
+1. Run `sudo ./scripts/dev-reset.sh`
+2. Verify all binaries are statically linked: `ldd ./arkfile` shows "not a dynamic executable"
+3. Run `./scripts/testing/test-app-curl.sh` - all tests must pass
+4. Verify admin authentication works via web interface
+
+### Phase 2: Mock System Removal (Week 2)
+
+#### Goal
+Eliminate all mock infrastructure and ensure all tests run against production cryptographic code.
+
+#### Technical Changes
+
+**2.1 Remove Mock Files**
+
+Delete these files entirely:
+- `auth/opaque_mock.go`
+- `auth/opaque_mock_server.go` 
+- `auth/opaque_password_manager_mock.go`
+- `auth/opaque_password_manager_factory_mock.go`
+- `auth/mock_only_test.go`
+
+**2.2 Simplify Authentication Interface**
+
+Update `auth/opaque_interface.go` for static linking only:
+
+```go
+package auth
+
+// OPAQUEProvider defines the interface for OPAQUE authentication operations.
+// Static linking eliminates the need for mock implementations.
+type OPAQUEProvider interface {
+	RegisterUser(password []byte, serverPrivateKey []byte) ([]byte, []byte, error)
+	AuthenticateUser(password []byte, userRecord []byte) ([]byte, error)
+	IsAvailable() bool
+	GetServerKeys() ([]byte, []byte, error)
+	GenerateServerKeys() ([]byte, []byte, error)
+}
+
+// Global provider instance - always uses real implementation with static linking
+var provider OPAQUEProvider
+
+// GetOPAQUEProvider returns the static OPAQUE provider.
+func GetOPAQUEProvider() OPAQUEProvider {
+	if provider == nil {
+		provider = NewRealOPAQUEProvider()
+	}
+	return provider
 }
 ```
 
-## Migration Timeline
+**2.3 Update Build Processes**
 
-### Phase 1: Foundation (Week 1)
-- **Days 1-2**: Update libopaque build system for static compilation
-- **Days 3-4**: Modify main build system for static linking
-- **Days 5-7**: Test static builds and resolve linking issues
+Update all references:
+- Remove LD_LIBRARY_PATH management from scripts
+- Update import statements throughout codebase
+- Modify test configurations to use static binaries only
+- Update `scripts/dev-reset.sh` for static binary workflow
 
-### Phase 2: Mock Removal (Week 2)  
-- **Days 1-3**: Remove all mock files and build tags
-- **Days 4-5**: Update authentication system for single implementation
-- **Days 6-7**: Update all tests to use static binaries
+#### Validation Steps
+1. Ensure no mock-related files remain in codebase
+2. Run `sudo ./scripts/dev-reset.sh` 
+3. Verify all tests pass with production crypto: `./scripts/testing/test-app-curl.sh`
+4. Confirm no build or runtime errors related to missing mock implementations
 
-### Phase 3: Client Enhancement (Week 3)
-- **Days 1-3**: Add TLS 1.3 remote server support to arkfile-client
-- **Days 4-5**: Test client tools with static linking
-- **Days 6-7**: Integration testing between cryptocli and arkfile-client
+### Phase 3: Integration Validation (Week 3)
 
-### Phase 4: Tooling Integration (Week 4)
-- **Days 1-3**: Enhance arkfile-setup with static build management
-- **Days 4-5**: Enhance arkfile-admin with deployment capabilities
-- **Days 6-7**: Update development scripts for static binary workflow
+#### Goal  
+Comprehensive validation that static linking implementation maintains all existing functionality and fix any issues discovered.
 
-### Phase 5: Testing and Documentation (Week 5)
-- **Days 1-3**: Update all test scripts for static binary approach
-- **Days 4-5**: Comprehensive testing across all environments
-- **Days 6-7**: Documentation updates and final validation
+#### Validation Activities
 
-## Validation Criteria
+**3.1 Comprehensive Testing**
 
-### Static Linking Verification
-- All binaries pass `ldd` static verification tests
-- No runtime library dependencies on any target system
-- Binaries work identically across different Linux distributions
+- Run full test suite multiple times to ensure consistency
+- Test complete user workflows (registration, login, file operations, sharing)
+- Verify performance characteristics remain acceptable
+- Test across different development environments if available
 
-### Functional Verification
-- All existing tests pass with static binaries
-- OPAQUE authentication works identically to dynamic linking
-- File operations maintain perfect integrity through static crypto
-- Client tools successfully connect to both localhost and remote servers
+**3.2 Error Investigation and Fixes**
 
-### Performance Verification
-- Static binary startup time acceptable (< 100ms difference)
-- Cryptographic operations performance within 5% of dynamic linking
-- Memory usage remains within acceptable bounds
+- Document any behavioral changes discovered
+- Fix any broken functionality found during testing
+- Ensure error messages and logging remain informative
+- Validate security characteristics remain intact
 
-### Integration Verification
-- arkfile-setup successfully manages static builds
-- arkfile-admin properly deploys static binaries
-- dev-reset works seamlessly with static binary workflow
-- All test scripts pass with static binary implementations
+**3.3 Documentation Updates**
 
-## Risk Mitigation
+- Update any developer documentation affected by static linking changes
+- Document new build process requirements
+- Update troubleshooting guides for static binary issues
 
-### Build Complexity
-**Risk**: Static linking may increase build complexity and compilation time
-**Mitigation**: Comprehensive build scripts with clear error handling and progress reporting
+#### Validation Steps
+1. Run `sudo ./scripts/dev-reset.sh` - must complete without errors
+2. Run `./scripts/testing/test-app-curl.sh` - must pass consistently (try 3-5 runs)
+3. Manual testing of key workflows via web interface
+4. Performance comparison with previous dynamic linking version (if possible)
 
-### Binary Size
-**Risk**: Static binaries may be significantly larger than dynamic ones
-**Mitigation**: Monitor binary sizes and implement compression for distribution if needed
+## Cross-Platform Support
 
-### Platform Compatibility  
-**Risk**: Static linking may have platform-specific issues
-**Mitigation**: Test on primary target platforms (Alma Linux 10, Debian 13)
+### Supported Platforms
+- **Debian 12/13** (apt, glibc, libsodium-dev)
+- **Alma Linux 9/10** (dnf, glibc, libsodium-devel)  
+- **Alpine Linux 3.18+** (apk, musl, libsodium-dev + libsodium-static)
+- **Ubuntu LTS** (apt, glibc, libsodium-dev)
+- **FreeBSD 13+** (pkg, BSD libc, libsodium)
+- **OpenBSD 7+** (pkg_add, BSD libc, libsodium)
+
+### Platform-Specific Considerations
+
+**Alpine Linux (musl)**:
+- Requires both libsodium-dev and libsodium-static packages
+- May need additional size optimizations (-Os -fomit-frame-pointer)
+
+**BSD Systems**:
+- Use `file` command instead of `ldd` for static verification
+- May require `gmake` instead of `make`
+- Package manager differences (pkg vs pkg_add)
+
+## Troubleshooting
+
+### Static Linking Issues
+
+**Linker Errors**:
+- Ensure all static libraries built successfully in vendor/ directories
+- Verify pkg-config finds libsodium correctly
+- Check CGO environment variables are set properly
+
+**Runtime Errors**:
+- Verify static binaries with appropriate platform tools
+- Ensure no remaining dynamic library references
+- Check file permissions and ownership after deployment
+
+**Build Failures**:
+- Verify Go version meets go.mod requirements
+- Ensure all dependencies installed via package manager
+- Check vendor/ directory structure and library files
+
+### Mock Removal Issues
+
+**Test Failures**:
+- Verify all mock imports removed from test files
+- Ensure OPAQUE provider initialization works correctly  
+- Check for remaining mock-specific test configurations
+
+**Interface Changes**:
+- Update any code that relied on mock-specific behavior
+- Ensure production OPAQUE implementation handles all test cases
+- Verify error handling works with real cryptographic operations
 
 ## Success Metrics
 
-### Development Experience
-- Elimination of environment-specific build issues
-- Simplified CI/CD pipeline without library management
+### Technical Success
+- All binaries are statically linked (verified via ldd/file commands)
+- Zero mock-related code remains in codebase
+- All existing tests pass consistently
+- dev-reset + test-app-curl.sh workflow operates without errors
 
-### Testing Quality
-- 100% removal of mock-related code and build tags
-- All tests running against production cryptographic implementations
-- Increased confidence in test results due to elimination of mock/production differences
+### Operational Success  
+- Simplified deployment (no library dependencies)
+- Consistent development environment setup
+- Increased confidence in test results (no mock discrepancies)
+- Identical cryptographic behavior across all environments
 
-### Operational Benefits
-- Simplified server deployment without library dependencies
-- Simplified client tool distribution as self-contained binaries
-- Reduced support burden from library-related issues
+## Future Enhancements
 
-## Conclusion
+Advanced tooling and client utilities planned for future phases are documented in `go-utils-project.md`, including:
 
-The migration to static linking represents a significant architectural improvement that addresses current pain points while establishing a more robust foundation for future development. By eliminating mock complexity, simplifying deployment, and enabling seamless client tool distribution, this change positions Arkfile for more reliable operation and broader adoption.
+- arkfile-client command-line tool
+- arkfile-setup administrative installation tool
+- arkfile-admin maintenance and monitoring tool
+- Enhanced Go-based integration testing framework
+- Cross-tool integration patterns
 
-The implementation preserves all existing functionality while providing operational benefits that compound over time. The phased approach ensures minimal disruption to ongoing development while providing incremental validation of the migration's success.
+These enhancements will build upon the static linking foundation established in this phase.
+
+## Timeline Summary
+
+**Week 1**: Static build system implementation and validation
+**Week 2**: Mock system removal and validation  
+**Week 3**: Comprehensive integration validation and fixes
+
+**Total Duration**: 3 weeks for foundation phase
+**Extended Features**: See go-utils-project.md for phases 4+
