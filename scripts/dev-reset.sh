@@ -223,6 +223,58 @@ fi
 print_status "SUCCESS" "Critical file verification complete"
 echo
 
+# Step 3.5: Update systemd service file
+echo -e "${CYAN}Step 3.5: Updating systemd service file${NC}"
+echo "========================================"
+
+print_status "INFO" "Checking systemd service file consistency..."
+
+# Define paths
+REPO_SERVICE_FILE="systemd/arkfile.service"
+SYSTEM_SERVICE_FILE="/etc/systemd/system/arkfile.service"
+
+# Check if repository service file exists
+if [ ! -f "$REPO_SERVICE_FILE" ]; then
+    print_status "ERROR" "Repository service file not found: $REPO_SERVICE_FILE"
+    exit 1
+fi
+
+# Check if system service file needs updating
+needs_update=false
+daemon_reload_needed=false
+
+if [ ! -f "$SYSTEM_SERVICE_FILE" ]; then
+    print_status "INFO" "System service file does not exist, will create it"
+    needs_update=true
+    daemon_reload_needed=true
+else
+    # Compare files to see if they differ
+    if ! cmp -s "$REPO_SERVICE_FILE" "$SYSTEM_SERVICE_FILE"; then
+        print_status "INFO" "System service file differs from repository version, will update it"
+        needs_update=true
+        daemon_reload_needed=true
+    else
+        print_status "SUCCESS" "System service file is up to date"
+    fi
+fi
+
+# Update service file if needed
+if [ "$needs_update" = true ]; then
+    print_status "INFO" "Copying updated service file to system location..."
+    cp "$REPO_SERVICE_FILE" "$SYSTEM_SERVICE_FILE"
+    print_status "SUCCESS" "Service file updated"
+fi
+
+# Reload systemd daemon if needed
+if [ "$daemon_reload_needed" = true ]; then
+    print_status "INFO" "Reloading systemd daemon..."
+    systemctl daemon-reload
+    print_status "SUCCESS" "Systemd daemon reloaded"
+fi
+
+print_status "SUCCESS" "Systemd service file verification complete"
+echo
+
 # Step 4: Ensure directory structure exists
 echo -e "${CYAN}Step 4: Ensuring directory structure${NC}"
 echo "======================================"
