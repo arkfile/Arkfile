@@ -3,6 +3,7 @@ package crypto
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"fmt"
 )
 
 // GenerateRandomBytes creates a slice of bytes with a specified length,
@@ -29,4 +30,35 @@ func SecureZeroBytes(slice []byte) {
 	for i := range slice {
 		slice[i] = 0
 	}
+}
+
+// ValidateOPAQUEExportKey validates that an OPAQUE export key has the correct format
+func ValidateOPAQUEExportKey(exportKey []byte) error {
+	if len(exportKey) != 64 {
+		return fmt.Errorf("OPAQUE export key must be exactly 64 bytes, got %d", len(exportKey))
+	}
+
+	// Check that key is not all zeros (indicates invalid/missing key)
+	allZeros := true
+	for _, b := range exportKey {
+		if b != 0 {
+			allZeros = false
+			break
+		}
+	}
+	if allZeros {
+		return fmt.Errorf("OPAQUE export key cannot be all zeros")
+	}
+
+	return nil
+}
+
+// DeriveSecureSessionFromOPAQUE derives a session key from OPAQUE export key using HKDF
+func DeriveSecureSessionFromOPAQUE(exportKey []byte) ([]byte, error) {
+	if err := ValidateOPAQUEExportKey(exportKey); err != nil {
+		return nil, fmt.Errorf("invalid export key: %w", err)
+	}
+
+	// Use the session key derivation from crypto/session.go
+	return DeriveSessionKey(exportKey, SessionKeyContext)
 }

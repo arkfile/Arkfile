@@ -350,36 +350,144 @@ func executeCompleteReinstall(config *SetupConfig, opts *ReinstallOptions, state
 }
 ```
 
-### 5.2 arkfile-admin Implementation
+### 5.2 arkfile-admin Implementation (Hybrid Network/Local Architecture)
 
-#### System Health Monitoring
+#### Current Implementation Status
+
+**arkfile-admin** is implemented as a **hybrid network/local admin tool** that combines:
+
+1. **Network-based commands** - Use admin API (localhost-only via AdminMiddleware)
+2. **Local commands** - Direct system access for operations without server endpoints yet
+
+#### Usage and Command Architecture
 
 **File: `cmd/arkfile-admin/main.go`**
 
 ```go
 const (
-	Usage = `arkfile-admin - System maintenance and monitoring
+	Usage = `arkfile-admin - Hybrid network/local admin tool for arkfile server management
 
 USAGE:
     arkfile-admin [global options] command [command options] [arguments...]
 
-COMMANDS:
-    health        System health monitoring and diagnostics
-    rotate-keys   Rotate cryptographic keys (OPAQUE, JWT, TLS)
-    backup        Create system backups
-    restore       Restore from backups
-    audit         Basic security audit
-    monitor       Performance monitoring
-    status        System status overview
+NETWORK COMMANDS (Admin API - localhost only):
+    login             Admin login via OPAQUE+TOTP authentication
+    logout            Clear admin session
+    list-users        List all users (dev-test env only)
+    approve-user      Approve user account (dev-test env only)
+    set-storage       Set user storage limit (via credits API)
+
+LOCAL COMMANDS (Direct system access - server endpoints not yet available):
+    backup            Create system backup (local implementation)
+    restore           Restore from backup (local implementation)
+    monitor           Performance monitoring (local implementation)
+    audit             Security audit (local implementation)
+    key-rotation      Rotate cryptographic keys (local implementation)
+    health-check      System health check (local implementation)
+    system-status     System status overview (local implementation)
 
 EXAMPLES:
-    arkfile-admin health --detailed
-    arkfile-admin rotate-keys --opaque --confirm
-    arkfile-admin backup --encrypt --output backup.tar.gz
-    arkfile-admin monitor --duration 5m
+    # Network-based admin operations:
+    arkfile-admin login --username admin
+    arkfile-admin list-users
+    arkfile-admin approve-user --username alice
+    
+    # Local system operations:
+    arkfile-admin backup --output backup.tar.gz
+    arkfile-admin health-check --detailed
+    arkfile-admin key-rotation --type jwt
 `
 )
 ```
+
+#### Network Commands (Available Now)
+
+**Admin Authentication Flow:**
+- Uses existing AdminMiddleware (localhost-only access)
+- OPAQUE + TOTP authentication via `/api/admin/login`
+- Session management with JWT tokens
+- Rate limiting (10 requests/minute)
+- Complete audit logging via security events
+
+**User Management Commands (Dev-Test Environment):**
+- `list-users` → Maps to existing admin endpoints when `ADMIN_DEV_TEST_API_ENABLED=true`
+- `approve-user` → Uses `/api/admin/dev-test/user/:username/approve` 
+- `set-storage` → Uses existing admin credits/storage management endpoints
+
+#### Local Commands (Placeholder Implementation)
+
+**Current Status:** Local commands display clear warnings and return errors indicating server endpoints needed.
+
+Example output:
+```bash
+$ arkfile-admin backup --output backup.tar.gz
+⚠️  Using local implementation - server endpoint not yet available
+🔄 Creating system backup...
+Output file: backup.tar.gz
+Base directory: /opt/arkfile
+⚠️  Backup functionality requires server endpoint implementation
+Would backup: config files, keys, database, user data
+ERROR: backup endpoint not yet implemented on server
+```
+
+#### Security Model
+
+**AdminMiddleware Security Features:**
+1. **Localhost-only access** - `clientIP.IsLoopback()` enforcement
+2. **Rate limiting** - 10 requests/minute via EntityID system
+3. **JWT authentication** - Valid admin JWT token required
+4. **Admin privileges** - `user.HasAdminPrivileges()` check
+5. **Production protection** - Blocks dev admin accounts in production
+6. **Audit logging** - All admin actions logged without IP for privacy
+
+#### Required Server Endpoints (To Be Implemented)
+
+**Missing Production Admin Endpoints:**
+```
+GET  /api/admin/users                    - List all users (production)
+PATCH /api/admin/users/:username         - Update user properties (production)  
+DELETE /api/admin/users/:username        - Delete user (production)
+GET  /api/admin/system/status            - System metrics and status
+GET  /api/admin/system/health            - Health check with component status
+POST /api/admin/system/rotate-keys       - Key rotation operations
+POST /api/admin/system/backup            - Create system backup
+POST /api/admin/system/restore           - Restore from backup
+GET  /api/admin/system/monitor           - Performance monitoring data
+GET  /api/admin/system/audit             - Security audit information
+GET  /api/admin/stats                    - System statistics
+GET  /api/admin/activity                 - Activity logs
+```
+
+**Available Endpoints:**
+```
+✅ POST /api/admin/login                         - Admin authentication
+✅ GET  /api/admin/credits                       - Credits management
+✅ GET  /api/admin/credits/:username             - User credits
+✅ POST /api/admin/credits/:username             - Adjust credits
+✅ PUT  /api/admin/credits/:username             - Set credits
+✅ POST /api/admin/dev-test/user/cleanup         - Test user cleanup (dev-test)
+✅ POST /api/admin/dev-test/user/:username/approve - Approve user (dev-test)
+✅ GET  /api/admin/dev-test/user/:username/status  - User status (dev-test)
+✅ GET  /api/admin/dev-test/totp/decrypt-check/:username - TOTP diagnostics (dev-test)
+```
+
+#### Migration Strategy
+
+**Phase 1: Current State (Complete)**
+- ✅ Hybrid arkfile-admin implemented
+- ✅ Network commands use existing admin API
+- ✅ Local commands show clear "not implemented" warnings
+- ✅ AdminMiddleware enforces localhost-only security
+
+**Phase 2: Server Endpoint Implementation**
+- Implement missing `/api/admin/system/*` endpoints
+- Add production user management endpoints  
+- Update arkfile-admin command routing as endpoints become available
+
+**Phase 3: Production Deployment**
+- Disable dev-test endpoints in production (`ADMIN_DEV_TEST_API_ENABLED=false`)
+- Use production admin endpoints for all operations
+- Full network-based admin functionality
 
 #### Comprehensive Key Rotation System
 
@@ -747,3 +855,169 @@ phase_file_operations_go_tools() {
 - Comprehensive documentation and examples
 
 This advanced tooling framework provides a complete ecosystem for Arkfile operations while maintaining the static binary consistency and security characteristics established in the foundation phase.
+
+---
+
+## IMPLEMENTATION STATUS AND TODOS (August 14, 2025 - 4:27 PM)
+
+### ✅ COMPLETED WORK
+
+#### Phase 4 - Basic Client Tools (PARTIAL COMPLETION)
+
+**✅ arkfile-client Implementation**
+- **File**: `cmd/arkfile-client/main.go` - **COMPLETED AND COMPILED**
+- **Status**: Full implementation with comprehensive command structure
+- **Features Implemented**:
+  - Complete command-line interface with help system
+  - OPAQUE authentication with TOTP support
+  - File upload/download operations with chunked support
+  - Share creation and management
+  - Session management with token persistence
+  - TLS configuration (1.2/1.3 support)
+  - Verbose logging and error handling
+  - Cross-platform configuration management
+- **Binary Status**: Successfully compiles (arkfile-client binary exists)
+- **Static Linking Status**: ⚠️ **DYNAMICALLY LINKED** (shows libc dependencies)
+
+**✅ arkfile-admin Implementation (HYBRID ARCHITECTURE)**
+- **File**: `cmd/arkfile-admin/main.go` - **COMPLETED AND COMPILED**
+- **Status**: Hybrid network/local implementation fully complete
+- **Architecture**: 
+  - **Network Commands**: Use existing admin API (localhost-only)
+  - **Local Commands**: Show clear warnings + placeholder implementations
+- **Network Commands Implemented**:
+  - ✅ `login` - Admin OPAQUE+TOTP authentication
+  - ✅ `logout` - Session management
+  - ✅ `list-users` - User management (dev-test env)
+  - ✅ `approve-user` - User approval (dev-test env)
+  - ✅ `set-storage` - Credits/storage management
+- **Local Commands Implemented** (with proper warning system):
+  - ✅ `backup` - Shows "server endpoint not yet available" warning
+  - ✅ `restore` - Shows "server endpoint not yet available" warning
+  - ✅ `monitor` - Shows "server endpoint not yet available" warning
+  - ✅ `audit` - Shows "server endpoint not yet available" warning
+  - ✅ `key-rotation` - Shows "server endpoint not yet available" warning
+  - ✅ `health-check` - Shows "server endpoint not yet available" warning
+  - ✅ `system-status` - Shows "server endpoint not yet available" warning
+- **Binary Status**: Successfully compiles (arkfile-admin binary exists)
+- **Static Linking Status**: ⚠️ **DYNAMICALLY LINKED** (shows libc dependencies)
+- **Working Examples**:
+  ```bash
+  ./arkfile-admin --help                    # Shows full command structure
+  ./arkfile-admin backup --help             # Shows warning + usage
+  ./arkfile-admin version                   # Shows "1.0.0-static"
+  ```
+
+### ⚠️ CRITICAL TODOS - STATIC LINKING ISSUE
+
+**🔍 IMMEDIATE INVESTIGATION NEEDED**:
+
+Both `arkfile-client` and `arkfile-admin` are showing dynamic linking instead of static linking:
+```bash
+$ ldd ./arkfile-admin
+linux-vdso.so.1 (0x00007ffc8c29d000)
+libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007feba7d0b000)
+/lib64/ld-linux-x86-64.so.2 (0x00007feba7f03000)
+
+$ ldd ./arkfile-client
+# Similar dynamic linking output
+```
+
+**Root Cause Analysis Needed**:
+1. **Check if Go tools need CGO**: arkfile-client and arkfile-admin may not use libopaque directly
+2. **Verify build commands**: May need different static linking flags for pure Go programs
+3. **Compare with main arkfile binary**: Main server is properly statically linked
+4. **Build flag verification**: Current build may not be using proper static flags
+
+**Recommended Investigation Steps**:
+```bash
+# Check if main arkfile is still statically linked
+ldd ./arkfile                              # Should show "not a dynamic executable"
+
+# Rebuild with explicit static flags
+CGO_ENABLED=0 go build -ldflags '-extldflags "-static"' -o arkfile-client ./cmd/arkfile-client
+CGO_ENABLED=0 go build -ldflags '-extldflags "-static"' -o arkfile-admin ./cmd/arkfile-admin
+
+# Verify static linking after rebuild
+ldd ./arkfile-client
+ldd ./arkfile-admin
+```
+
+### 📋 PHASE 4 REMAINING WORK
+
+#### cryptocli Integration Enhancement
+- **Status**: ⏳ **PARTIALLY IMPLEMENTED**
+- **File**: `cmd/cryptocli/main.go` exists but may need updates for client integration
+- **TODO**: Verify OPAQUE export key compatibility with arkfile-client
+
+#### Client Tool Testing and Validation
+- **Status**: ⏳ **NOT YET TESTED**
+- **Critical Requirement**: Must test with `sudo dev-reset.sh` + `test-app-curl.sh` workflow
+- **Validation Needed**:
+  - arkfile-client authentication against running server
+  - File upload/download operations
+  - Share creation functionality
+  - Session persistence and token management
+
+### 📋 PHASE 5 REMAINING WORK (Administrative Tools)
+
+#### arkfile-admin Server Endpoint Implementation
+- **Status**: ⏳ **SERVER ENDPOINTS NOT YET IMPLEMENTED**
+- **Required Server Endpoints** (to be added to main server):
+  ```
+  GET  /api/admin/system/status            - System metrics and status
+  GET  /api/admin/system/health            - Health check with component status
+  POST /api/admin/system/rotate-keys       - Key rotation operations
+  POST /api/admin/system/backup            - Create system backup
+  POST /api/admin/system/restore           - Restore from backup
+  GET  /api/admin/system/monitor           - Performance monitoring data
+  GET  /api/admin/system/audit             - Security audit information
+  ```
+
+#### arkfile-setup Implementation
+- **Status**: ⏳ **NOT YET STARTED**
+- **File**: `cmd/arkfile-setup/main.go` - needs to be created
+- **Scope**: Cross-platform installation and management tool
+
+### 📋 IMMEDIATE NEXT STEPS
+
+1. **🔥 CRITICAL**: Investigate and fix static linking issue with Go tools
+2. **Validate existing tools**: Test arkfile-client and arkfile-admin with running server
+3. **Run full validation**: Use `sudo dev-reset.sh` + `test-app-curl.sh` to ensure no regressions
+4. **Implement missing server endpoints** for arkfile-admin local commands
+5. **Begin arkfile-setup implementation** when ready to continue
+
+### 📋 VALIDATION REQUIREMENTS
+
+**Before Continuing Any Work**:
+- ✅ Static linking foundation verified (Phase 1-2 from static-linking.md)
+- ✅ `sudo dev-reset.sh` working correctly  
+- ✅ `test-app-curl.sh` passing all 10 phases
+- ⚠️ **MUST FIX**: Static linking for Go utility tools
+- ⏳ **TODO**: Validate Go tools work with existing server
+
+**Success Criteria for Phase 4 Completion**:
+- arkfile-client can authenticate and perform file operations
+- arkfile-admin network commands work with existing admin API
+- All tools are properly statically linked
+- dev-reset + test-app-curl.sh workflow remains intact
+- No regressions in existing functionality
+
+### 📋 ARCHITECTURE DECISIONS MADE
+
+1. **Hybrid arkfile-admin Approach**: Decided to implement network commands first using existing admin API, with local commands showing clear warnings until server endpoints are implemented
+2. **Security Model**: AdminMiddleware enforces localhost-only access for admin operations
+3. **Warning System**: Local commands provide clear feedback about missing server endpoints
+4. **Session Management**: Both tools use file-based session persistence in user home directory
+
+### 📋 FILES TO MONITOR
+
+**Completed and Ready**:
+- `cmd/arkfile-client/main.go` - Full implementation, needs testing
+- `cmd/arkfile-admin/main.go` - Hybrid implementation, network commands ready
+- `docs/wip/go-utils-project.md` - Updated with current status
+
+**Needs Attention**:
+- Static linking configuration for Go tools
+- Server endpoint implementation for arkfile-admin local commands
+- Integration testing with existing infrastructure

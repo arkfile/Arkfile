@@ -373,6 +373,12 @@ build_go_binaries_static() {
     echo "Building cryptocli..."
     "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/cryptocli ./cmd/cryptocli
     
+    echo "Building arkfile-client..."
+    "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/arkfile-client ./cmd/arkfile-client
+    
+    echo "Building arkfile-admin..."
+    "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
+    
     echo -e "${GREEN}✅ Go binaries built with static linking${NC}"
 }
 
@@ -380,7 +386,7 @@ build_go_binaries_static() {
 verify_static_binaries() {
     echo -e "${YELLOW}Verifying static binaries...${NC}"
     
-    for binary in ${BUILD_DIR}/${APP_NAME} ${BUILD_DIR}/cryptocli; do
+    for binary in ${BUILD_DIR}/${APP_NAME} ${BUILD_DIR}/cryptocli ${BUILD_DIR}/arkfile-client ${BUILD_DIR}/arkfile-admin; do
         if [ -f "$binary" ]; then
             # Use appropriate verification for platform
             if [[ "$OSTYPE" == "freebsd"* ]] || [[ "$OSTYPE" == "openbsd"* ]]; then
@@ -464,11 +470,20 @@ fi
 # Update the 'current' symlink
 sudo ln -snf "${RELEASE_DIR}" "${BASE_DIR}/releases/current"
 
-# Copy binary to bin directory
+# Copy binaries to bin directory
 sudo mkdir -p "${BASE_DIR}/bin/"
 sudo cp "${RELEASE_DIR}/${APP_NAME}" "${BASE_DIR}/bin/"
+sudo cp "${RELEASE_DIR}/cryptocli" "${BASE_DIR}/bin/"
+sudo cp "${RELEASE_DIR}/arkfile-client" "${BASE_DIR}/bin/"
+sudo cp "${RELEASE_DIR}/arkfile-admin" "${BASE_DIR}/bin/"
 sudo chown arkadmin:arkfile "${BASE_DIR}/bin/${APP_NAME}"
+sudo chown arkadmin:arkfile "${BASE_DIR}/bin/cryptocli"
+sudo chown arkadmin:arkfile "${BASE_DIR}/bin/arkfile-client"
+sudo chown arkadmin:arkfile "${BASE_DIR}/bin/arkfile-admin"
 sudo chmod 755 "${BASE_DIR}/bin/${APP_NAME}"
+sudo chmod 755 "${BASE_DIR}/bin/cryptocli"
+sudo chmod 755 "${BASE_DIR}/bin/arkfile-client"
+sudo chmod 755 "${BASE_DIR}/bin/arkfile-admin"
 
 # Copy database files to working directory for runtime access
 echo "Copying database files to working directory..."
