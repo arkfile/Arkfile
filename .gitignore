@@ -2,6 +2,7 @@
 
 # Compiled binaries
 arkfile
+arkfile-alpine
 cryptocli
 bin/
 obj/

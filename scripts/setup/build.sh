@@ -13,7 +13,33 @@ BASE_DIR="/opt/arkfile"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
+
+# POSIX-compatible Go detection with fallbacks
+find_go_binary() {
+    # Try command -v first (respects PATH, aliases, functions)
+    if command -v go >/dev/null 2>&1; then
+        command -v go
+        return 0
+    fi
+    
+    # Fallback to common installation paths
+    local go_candidates=(
+        "/usr/bin/go"                       # Linux package managers
+        "/usr/local/bin/go"                 # BSD package managers  
+        "/usr/local/go/bin/go"              # Manual golang.org installs
+    )
+    
+    for go_path in "${go_candidates[@]}"; do
+        if [ -x "$go_path" ]; then
+            echo "$go_path"
+            return 0
+        fi
+    done
+    
+    return 1
+}
 
 # Function to check Go version requirements from go.mod
 check_go_version() {
@@ -24,7 +50,24 @@ check_go_version() {
         return 0
     fi
     
-    local current_version=$(/usr/local/go/bin/go version | grep -o 'go[0-9]\+\.[0-9]\+\.[0-9]\+' | sed 's/go//')
+    local go_binary
+    if ! go_binary=$(find_go_binary); then
+        echo -e "${RED}❌ Go compiler not found in standard locations:${NC}"
+        echo "   Checked: PATH, /usr/bin/go, /usr/local/bin/go, /usr/local/go/bin/go"
+        echo "   Please install Go $required_version+ via package manager or from https://golang.org"
+        echo ""
+        echo "   Package manager installs:"
+        echo "   • Debian/Ubuntu: apt install golang-go"
+        echo "   • Alpine: apk add go"
+        echo "   • Alma/RHEL: dnf install golang"
+        echo "   • FreeBSD: pkg install go"
+        echo "   • OpenBSD: pkg_add go"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✅ Found Go at: $go_binary${NC}"
+    
+    local current_version=$("$go_binary" version | grep -o 'go[0-9]\+\.[0-9]\+\.[0-9]\+' | sed 's/go//')
     
     if [ -z "$current_version" ]; then
         echo -e "${RED}❌ Cannot determine Go version${NC}"
@@ -48,18 +91,20 @@ check_go_version() {
     fi
     
     echo -e "${GREEN}✅ Go version $current_version meets requirements (>= $required_version)${NC}"
+    
+    # Store the Go binary path for later use
+    export GO_BINARY="$go_binary"
 }
 
-# Ensure required tools are installed
-command -v /usr/local/go/bin/go >/dev/null 2>&1 || { echo -e "${RED}Go is required but not installed.${NC}" >&2; exit 1; }
+# Ensure required tools are installed and get Go binary path
 check_go_version
 
 # Ensure Go dependencies are properly resolved
 echo -e "${YELLOW}Checking Go module dependencies...${NC}"
-if ! /usr/local/go/bin/go mod download; then
+if ! "$GO_BINARY" mod download; then
     echo -e "${YELLOW}Dependencies need updating, running go mod tidy...${NC}"
-    /usr/local/go/bin/go mod tidy
-    if ! /usr/local/go/bin/go mod download; then
+    "$GO_BINARY" mod tidy
+    if ! "$GO_BINARY" mod download; then
         echo -e "${RED}Failed to resolve Go dependencies${NC}" >&2
         exit 1
     fi
@@ -80,11 +125,11 @@ if [ "$CURRENT_HASH" = "$CACHED_HASH" ] && [ -d "vendor" ]; then
     echo -e "${GREEN}✅ Vendor directory matches go.sum, skipping sync (preserves compiled libraries)${NC}"
 else
     echo -e "${YELLOW}Dependencies changed or vendor missing, syncing vendor directory...${NC}"
-    if ! /usr/local/go/bin/go mod vendor; then
+    if ! "$GO_BINARY" mod vendor; then
         echo -e "${YELLOW}Vendor sync failed, attempting to fix missing dependencies...${NC}"
         # Try to get missing dependencies that might not be in go.sum
-        /usr/local/go/bin/go get -d ./...
-        if ! /usr/local/go/bin/go mod vendor; then
+        "$GO_BINARY" get -d ./...
+        if ! "$GO_BINARY" mod vendor; then
             echo -e "${RED}Failed to sync vendor directory${NC}" >&2
             exit 1
         fi
@@ -138,10 +183,17 @@ if [ "${SKIP_C_LIBS}" != "true" ]; then
         echo -e "${YELLOW}⚠️ Source code missing, checking for source directory availability...${NC}"
         echo "Missing files: $OPAQUE_SOURCE or $OPRF_SOURCE"
         
-        # Initialize git submodules
+        # Initialize git submodules with proper ownership preservation
         if ! git submodule update --init --recursive; then
             echo -e "${RED}❌ Failed to initialize git submodules${NC}"
             exit 1
+        fi
+        
+        # Fix ownership if running as root (preserve original user ownership)
+        if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+            echo -e "${YELLOW}Fixing git submodule ownership after root initialization...${NC}"
+            chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
+            echo -e "${GREEN}✅ Vendor directory ownership restored to $SUDO_USER${NC}"
         fi
         echo -e "${GREEN}✅ Git submodules initialized${NC}"
         
@@ -288,10 +340,10 @@ echo -e "${GREEN}✅ TypeScript frontend built successfully${NC}"
 
 # Build WebAssembly
 echo "Building WebAssembly..."
-GOOS=js GOARCH=wasm /usr/local/go/bin/go build -o ${BUILD_DIR}/${WASM_DIR}/main.wasm ./${WASM_DIR}/main.go
+GOOS=js GOARCH=wasm "$GO_BINARY" build -o ${BUILD_DIR}/${WASM_DIR}/main.wasm ./${WASM_DIR}/main.go
 
 # Find wasm_exec.js using Go's environment
-GOROOT=$(/usr/local/go/bin/go env GOROOT)
+GOROOT=$("$GO_BINARY" env GOROOT)
 WASM_EXEC_JS=""
 if [ -f "${GOROOT}/lib/wasm/wasm_exec.js" ]; then
     WASM_EXEC_JS="${GOROOT}/lib/wasm/wasm_exec.js"
@@ -316,10 +368,10 @@ build_go_binaries_static() {
     export CGO_LDFLAGS="$CGO_LDFLAGS $(pkg-config --libs --static libsodium)"
     
     echo "Building arkfile server..."
-    /usr/local/go/bin/go build -a -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -extldflags '-static'" -o ${BUILD_DIR}/${APP_NAME} .
+    "$GO_BINARY" build -a -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -extldflags '-static'" -o ${BUILD_DIR}/${APP_NAME} .
     
     echo "Building cryptocli..."
-    /usr/local/go/bin/go build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/cryptocli ./cmd/cryptocli
+    "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/cryptocli ./cmd/cryptocli
     
     echo -e "${GREEN}✅ Go binaries built with static linking${NC}"
 }

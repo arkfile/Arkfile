@@ -169,13 +169,43 @@ NOTE: Storage needs vary based on storage backend; minio local/cluster modes req
 ### Prerequisites
 
 **Go Installation:**
+
+**Option 1: Package Manager (Recommended)**
+```bash
+# Debian/Ubuntu
+sudo apt update && sudo apt install golang-go
+
+# Alpine Linux
+sudo apk add go
+
+# Alma/RHEL/Rocky Linux
+sudo dnf install golang
+
+# FreeBSD
+sudo pkg install go
+
+# OpenBSD
+sudo pkg_add go
+
+# Verify installation
+go version
+```
+
+**Option 2: Manual Install (Latest Version)**
 ```bash
 # Install Go 1.24.2 or later
 wget https://go.dev/dl/go1.24.2.linux-amd64.tar.gz
 sudo tar -C /usr/local -xzf go1.24.2.linux-amd64.tar.gz
+
+# Add Go to PATH for manual installs
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
+
+# Verify installation
+go version
 ```
+
+**Note:** Arkfile's build system automatically detects Go installations from package managers or manual installs. No PATH configuration needed for package manager installations.
 
 **System Dependencies:**
 ```bash
@@ -423,6 +453,72 @@ echo "Hello Arkfile! Test file for validation." > ~/test-file.txt
    - Complete TOTP setup by entering verification code
    - Log out and log back in to verify TOTP requirement
    - Test backup codes for account recovery
+
+### Interactive Web Interface Testing
+
+**Manual Testing Workflow (Administrative Validation):**
+
+**Step 1: Access Web Interface**
+- Open your web browser
+- Navigate to: `http://localhost:8080` (or your configured address)
+- You should see the Arkfile login/registration page
+- ✅ **Expected**: Clean web interface with Register/Login options
+- ❌ **If page doesn't load**: Check if Arkfile service is running
+
+**Step 2: User Registration**
+- Click the 'Register' button  
+- Enter username: `admin-test-user`
+- Enter password: `TestPassword123_Secure`
+- Click 'Create Account'
+- ✅ **Expected**: Registration success message and redirect to dashboard
+- ❌ **If registration fails**:
+  - Check password meets requirements (18+ chars, high entropy)
+  - Verify database is writable
+  - Check browser console for JavaScript errors
+
+**Step 3: File Upload Test**
+- Look for an 'Upload File' button or drag-and-drop area
+- Upload your test file: `~/test-file.txt`
+- Wait for upload to complete
+- ✅ **Expected**: File appears in your file list with an encrypted/lock icon
+- ❌ **If upload fails**:
+  - Check MinIO service is running: `sudo systemctl status minio`
+  - Verify file permissions in `/opt/arkfile/var/lib/`
+  - Check browser console for upload errors
+
+**Step 4: File Download Test**
+- Click on the file name in your file list
+- File should download automatically
+- Open the downloaded file in a text editor
+- Verify content matches: `Hello Arkfile! Test file for validation.`
+- ✅ **Expected**: Downloaded file content exactly matches original
+- ❌ **If content differs or download fails**:
+  - File encryption/decryption may be broken
+  - Check application logs: `sudo journalctl -u arkfile -f`
+  - Verify cryptographic keys are properly generated
+
+**Step 5: File Sharing Test**
+- Look for a 'Share' button or link next to your uploaded file
+- Click to generate a share link
+- Copy the generated share URL
+- Open an incognito/private browser window
+- Paste the share link in the incognito window
+- File should download without requiring login
+- ✅ **Expected**: File downloads in incognito mode without authentication
+- ❌ **If sharing fails**:
+  - Share link generation may be broken
+  - Check if anonymous access is properly configured
+  - Verify share tokens are being generated correctly
+
+**Step 6: Authentication Test**
+- In your original browser window, log out of Arkfile
+- Log back in using the same credentials
+- Verify your uploaded file is still visible in the file list
+- ✅ **Expected**: Login successful, files persistent across sessions
+- ❌ **If login fails**:
+  - OPAQUE authentication may be broken
+  - Check database integrity
+  - Verify session management is working
 
 ### Backend Verification
 

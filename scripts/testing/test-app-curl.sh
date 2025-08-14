@@ -1780,23 +1780,17 @@ main() {
         fi
     fi
     
-    local admin_totp_code
-    admin_totp_code=$(scripts/testing/totp-generator "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D")
-    
-    if [ -z "$admin_totp_code" ] || [ ${#admin_totp_code} -ne 6 ]; then
-        error "Failed to generate valid admin TOTP code: $admin_totp_code"
-    fi
-    
+    # Generate TOTP code and use immediately (atomic operation to avoid timing issues)
     local admin_totp_response
-    admin_totp_response=$(curl -s $INSECURE_FLAG \
-        -X POST \
-        -H "Authorization: Bearer $admin_temp_token" \
-        -H "Content-Type: application/json" \
-        -d "{
-            \"code\": \"$admin_totp_code\",
-            \"sessionKey\": \"$admin_session_key\"
-        }" \
-        "$ARKFILE_BASE_URL/api/totp/auth" || echo "ERROR")
+    admin_totp_response=$(
+        local totp_code=$(scripts/testing/totp-generator "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D")
+        curl -s $INSECURE_FLAG \
+            -X POST \
+            -H "Authorization: Bearer $admin_temp_token" \
+            -H "Content-Type: application/json" \
+            -d "{\"code\":\"$totp_code\",\"sessionKey\":\"$admin_session_key\"}" \
+            "$ARKFILE_BASE_URL/api/totp/auth" || echo "ERROR"
+    )
     
     if [ "$admin_totp_response" = "ERROR" ]; then
         error "Failed to connect to server for admin TOTP authentication"

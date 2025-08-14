@@ -22,21 +22,25 @@ scripts/
 │   ├── 03-setup-opaque-keys.sh       # Generate OPAQUE server keys
 │   ├── 04-setup-jwt-keys.sh          # Generate JWT signing keys
 │   ├── 05-setup-tls-certs.sh         # Generate TLS certificates
+│   ├── 06-setup-totp-keys.sh         # Generate TOTP keys
 │   ├── 07-setup-minio.sh             # Configure MinIO storage
 │   ├── 08-setup-rqlite.sh            # Configure rqlite database
+│   ├── build-libopaque.sh            # Build libopaque library
 │   ├── build.sh                      # Build application
 │   ├── deploy.sh                     # Deploy to production
 │   ├── rollback.sh                   # Rollback deployment
 │   └── uninstall.sh                  # Remove system installation
+├── dev-reset.sh                      # Development environment reset
 ├── testing/                          # Testing and validation scripts
-│   ├── test-only.sh                  # Run test suite
-│   ├── test-wasm.sh                  # WebAssembly tests
+│   ├── admin-auth-test.sh            # Admin OPAQUE authentication + TOTP tests
 │   ├── test-app-curl.sh              # Comprehensive application testing
-|   ├── totp-generator.go             # Helper utility for TOTP (2FA) testing
+│   ├── alpine-build-test.sh          # Alpine Linux compatibility testing
+│   ├── security-test-suite.sh        # Consolidated security testing
+│   ├── test-credits-system.sh        # Credits system testing
+│   ├── test-share-workflow-complete.sh # Share workflow testing
 │   ├── test-typescript.sh            # TypeScript testing suite
-│   ├── performance-benchmark.sh      # Performance testing
-│   ├── golden-test-preservation.sh   # Format compatibility tests
-│   └── admin-integration-test.sh     # Admin integration tests
+│   ├── test-wasm.sh                  # WebAssembly tests
+│   └── totp-generator.go             # Helper utility for TOTP (2FA) testing
 ├── maintenance/                      # Maintenance and operational scripts
 │   ├── health-check.sh               # System health monitoring
 │   ├── security-audit.sh             # Security auditing
@@ -116,6 +120,12 @@ The setup scripts are numbered to show their logical dependency order:
 **Dependencies**: Directories  
 **Creates**: Self-signed TLS certificates
 
+#### `06-setup-totp-keys.sh`
+**Purpose**: Generate TOTP master keys for 2FA functionality  
+**Usage**: `sudo ./scripts/setup/06-setup-totp-keys.sh`  
+**Dependencies**: Directories  
+**Creates**: TOTP master keys for backup code generation and validation
+
 **Note**: Database schema setup is now handled automatically by the arkfile application using the unified schema approach. The application reads `database/unified_schema.sql` and creates all tables, indexes, and triggers on startup. No separate database setup script is needed.
 
 #### `07-setup-minio.sh`
@@ -132,22 +142,36 @@ The setup scripts are numbered to show their logical dependency order:
 
 #### Other Setup Scripts
 
+- **`build-libopaque.sh`** - Build libopaque cryptographic library with static linking support
 - **`build.sh`** - Build application binary
 - **`deploy.sh`** - Deploy to production environment
 - **`rollback.sh`** - Rollback to previous deployment
 - **`uninstall.sh`** - Remove system installation
 
+### Development Scripts
+
+#### `dev-reset.sh`
+**Purpose**: Reset development environment to clean state  
+**Usage**: `./scripts/dev-reset.sh`  
+**What it does**:
+- Stops all Arkfile services
+- Resets database to clean state
+- Clears temporary files and logs
+- Rebuilds application if needed
+- Restarts services for fresh development session
+
 ### Testing Scripts
 
-#### `test-only.sh`
-**Purpose**: Run comprehensive test suite  
-**Usage**: `./scripts/testing/test-only.sh [--skip-performance] [--skip-golden]`  
-**Tests**: Unit tests, integration tests, security tests
 
 #### `test-wasm.sh`
 **Purpose**: Test WebAssembly functionality  
 **Usage**: `./scripts/testing/test-wasm.sh`  
 **Tests**: WASM crypto functions, browser compatibility
+
+#### `admin-auth-test.sh`
+**Purpose**: OPAQUE authentication and TOTP testing focused on admin functionality  
+**Usage**: `./scripts/testing/admin-auth-test.sh`  
+**Tests**: Admin registration, OPAQUE authentication, TOTP setup and validation
 
 #### `test-app-curl.sh`
 **Purpose**: Comprehensive application testing with OPAQUE authentication and TOTP  
@@ -165,6 +189,36 @@ The setup scripts are numbered to show their logical dependency order:
 ```
 
 Tests complete user workflow: registration → TOTP setup → login → session management → cleanup.
+
+#### `alpine-build-test.sh`
+**Purpose**: Alpine Linux compatibility and static linking testing  
+**Usage**: `./scripts/testing/alpine-build-test.sh [--clean] [--rebuild]`  
+**Tests**: 
+- Alpine Linux musl libc compatibility
+- Static linking of libopaque with musl
+- CGO compilation in Alpine environment
+- Binary portability across distributions
+
+**What it does**:
+- Creates Alpine Linux container environment
+- Builds static-linked arkfile binary
+- Tests OPAQUE functionality in musl environment
+- Validates cross-platform compatibility
+
+#### `security-test-suite.sh`
+**Purpose**: Consolidated security testing (replaces 4 individual security scripts)  
+**Usage**: `./scripts/testing/security-test-suite.sh`  
+**Tests**:
+- **Security Headers**: Content Security Policy, XSS protection, frame options
+- **Password Validation**: Entropy checking, pattern detection, strength requirements
+- **Rate Limiting**: Progressive backoff, share isolation, brute force protection
+- **Timing Protection**: Consistent response times, side-channel prevention
+
+**Features**:
+- Comprehensive security validation in single script
+- Detailed test results with color-coded output
+- Performance metrics and timing analysis
+- Automated pass/fail criteria with exit codes
 
 #### `totp-generator.go`
 **Purpose**: Generate production-compatible TOTP codes for automated testing  
@@ -200,20 +254,6 @@ go build -o totp-generator totp-generator.go
 **Tests**: TypeScript compilation, Bun testing, WASM integration, build validation
 **Prerequisites**: Bun runtime installed for client-side testing
 
-#### `performance-benchmark.sh`
-**Purpose**: Performance testing and benchmarking  
-**Usage**: `./scripts/testing/performance-benchmark.sh`  
-**Tests**: Crypto performance, file I/O, memory usage
-
-#### `golden-test-preservation.sh`
-**Purpose**: Format compatibility testing  
-**Usage**: `./scripts/testing/golden-test-preservation.sh --validate`  
-**Tests**: Backward compatibility, format integrity
-
-#### `admin-integration-test.sh`
-**Purpose**: Administrative integration tests  
-**Usage**: `./scripts/testing/admin-integration-test.sh`  
-**Tests**: Admin workflows, system integration
 
 ### Maintenance Scripts
 
@@ -314,14 +354,20 @@ sudo systemctl start arkfile
 
 ### Testing
 ```bash
-# Run all tests
-./scripts/testing/test-only.sh
+# Comprehensive application testing
+./scripts/testing/test-app-curl.sh
 
-# Performance testing
-./scripts/testing/performance-benchmark.sh
+# Security testing suite
+./scripts/testing/security-test-suite.sh
+
+# Alpine Linux compatibility
+./scripts/testing/alpine-build-test.sh
 
 # WebAssembly tests
 ./scripts/testing/test-wasm.sh
+
+# TypeScript testing
+./scripts/testing/test-typescript.sh
 ```
 
 ### Maintenance

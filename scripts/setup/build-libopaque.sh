@@ -47,17 +47,54 @@ detect_system_and_packages() {
     echo "📋 Detected: $OS ($LIBC) with $PACKAGE_MANAGER"
 }
 
+# POSIX-compatible Go detection with fallbacks
+find_go_binary() {
+    # Try command -v first (respects PATH, aliases, functions)
+    if command -v go >/dev/null 2>&1; then
+        command -v go
+        return 0
+    fi
+    
+    # Fallback to common installation paths
+    local go_candidates=(
+        "/usr/bin/go"                       # Linux package managers
+        "/usr/local/bin/go"                 # BSD package managers  
+        "/usr/local/go/bin/go"              # Manual golang.org installs
+    )
+    
+    for go_path in "${go_candidates[@]}"; do
+        if [ -x "$go_path" ]; then
+            echo "$go_path"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
 # Go version verification
 check_go_version() {
     local required_major=1
     local required_minor=24
     
-    if ! command -v /usr/local/go/bin/go >/dev/null; then
-        echo "❌ Go is not installed at /usr/local/go/bin/go. Please install Go 1.24+ first."
+    local go_binary
+    if ! go_binary=$(find_go_binary); then
+        echo "❌ Go compiler not found in standard locations:"
+        echo "   Checked: PATH, /usr/bin/go, /usr/local/bin/go, /usr/local/go/bin/go"
+        echo "   Please install Go 1.24+ via package manager or from https://golang.org"
+        echo ""
+        echo "   Package manager installs:"
+        echo "   • Debian/Ubuntu: apt install golang-go"
+        echo "   • Alpine: apk add go"
+        echo "   • Alma/RHEL: dnf install golang"
+        echo "   • FreeBSD: pkg install go"
+        echo "   • OpenBSD: pkg_add go"
         exit 1
     fi
     
-    local current_version=$(/usr/local/go/bin/go version | grep -o 'go[0-9]\+\.[0-9]\+' | sed 's/go//')
+    echo "✅ Found Go at: $go_binary"
+    
+    local current_version=$("$go_binary" version | grep -o 'go[0-9]\+\.[0-9]\+' | sed 's/go//')
     local current_major=$(echo $current_version | cut -d. -f1)
     local current_minor=$(echo $current_version | cut -d. -f2)
     
@@ -124,8 +161,26 @@ build_static_libraries() {
     echo "Building noise_xk static library..."
     if [ ! -d "$OPRF_DIR" ]; then
         echo "❌ liboprf source directory not found: $OPRF_DIR"
-        echo "Please ensure git submodules are initialized: git submodule update --init --recursive"
-        exit 1
+        echo "Attempting to initialize git submodules..."
+        
+        if ! git submodule update --init --recursive; then
+            echo "❌ Failed to initialize git submodules"
+            exit 1
+        fi
+        
+        # Fix ownership if running as root (preserve original user ownership)
+        if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+            echo "Fixing git submodule ownership after root initialization..."
+            chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
+            echo "✅ Vendor directory ownership restored to $SUDO_USER"
+        fi
+        
+        if [ ! -d "$OPRF_DIR" ]; then
+            echo "❌ liboprf source directory still not found after submodule initialization"
+            exit 1
+        fi
+        
+        echo "✅ Git submodules initialized successfully"
     fi
     
     cd "$OPRF_DIR/noise_xk"
