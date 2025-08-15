@@ -168,12 +168,7 @@ build_static_libraries() {
             exit 1
         fi
         
-        # Fix ownership if running as root (preserve original user ownership)
-        if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-            echo "Fixing git submodule ownership after root initialization..."
-            chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
-            echo "✅ Vendor directory ownership restored to $SUDO_USER"
-        fi
+        # Note: Ownership will be handled by calling script (build.sh)
         
         if [ ! -d "$OPRF_DIR" ]; then
             echo "❌ liboprf source directory still not found after submodule initialization"
@@ -206,7 +201,13 @@ build_static_libraries() {
     echo "Building libopaque static library..."
     cd "../../libopaque/src"
     make clean || true
-    make CFLAGS="$CFLAGS -I../../liboprf/src $(pkg-config --cflags libsodium)" \
+    
+    # Create oprf subdirectory and symlink headers for libopaque build
+    mkdir -p oprf
+    ln -sf ../../../liboprf/src/toprf.h oprf/toprf.h 2>/dev/null || true
+    ln -sf ../../../liboprf/src/oprf.h oprf/oprf.h 2>/dev/null || true
+    
+    make CFLAGS="$CFLAGS -I../../liboprf/src -I. $(pkg-config --cflags libsodium)" \
          AR=ar ARFLAGS=rcs libopaque.a
     
     echo "✅ Static libraries built successfully on $OS"

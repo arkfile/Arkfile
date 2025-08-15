@@ -4,7 +4,7 @@
 
 ## **Go Integration Test Project - High-Level Overview**
 
-`NOTE: Revisit and revise this project once the static-linking.md project is complete. This may be merged potentially with test-app.md after that time.`
+-`NOTE: Revisit and revise this project once the static-linking.md project is complete. This may be merged potentially with test-app.md after that time.`
 
 The go-integration.md project aims to create a comprehensive, automated validation tool that serves as the final certification step for the Arkfile secure file vault system before production deployment. This Go-based integration test is designed to systematically validate every critical component of the system through realistic, end-to-end workflows that mirror actual user behavior, providing definitive proof that all security, cryptographic, and functional requirements work correctly together in a production environment.
 

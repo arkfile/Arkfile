@@ -125,6 +125,15 @@ if [ "$CURRENT_HASH" = "$CACHED_HASH" ] && [ -d "vendor" ]; then
     echo -e "${GREEN}✅ Vendor directory matches go.sum, skipping sync (preserves compiled libraries)${NC}"
 else
     echo -e "${YELLOW}Dependencies changed or vendor missing, syncing vendor directory...${NC}"
+    
+    # CRITICAL: Backup C library submodules before Go vendor sync
+    C_LIBS_BACKUP=""
+    if [ -d "vendor/stef" ]; then
+        C_LIBS_BACKUP=$(mktemp -d)
+        echo -e "${YELLOW}Backing up C libraries to: $C_LIBS_BACKUP${NC}"
+        cp -r vendor/stef "$C_LIBS_BACKUP/" 2>/dev/null || true
+    fi
+    
     if ! "$GO_BINARY" mod vendor; then
         echo -e "${YELLOW}Vendor sync failed, attempting to fix missing dependencies...${NC}"
         # Try to get missing dependencies that might not be in go.sum
@@ -134,6 +143,18 @@ else
             exit 1
         fi
     fi
+    
+    # CRITICAL: Restore C library submodules after Go vendor sync
+    if [ -n "$C_LIBS_BACKUP" ] && [ -d "$C_LIBS_BACKUP/stef" ]; then
+        echo -e "${YELLOW}Restoring C libraries from backup...${NC}"
+        mkdir -p vendor/stef
+        cp -r "$C_LIBS_BACKUP/stef/"* vendor/stef/ 2>/dev/null || true
+        rm -rf "$C_LIBS_BACKUP"
+        echo -e "${GREEN}✅ C libraries restored after vendor sync${NC}"
+    else
+        echo -e "${YELLOW}No C libraries to restore - will initialize via submodules${NC}"
+    fi
+    
     # Cache the successful sync
     if [ -n "$CURRENT_HASH" ]; then
         echo "$CURRENT_HASH" > "$VENDOR_CACHE"
@@ -141,14 +162,38 @@ else
     echo -e "${GREEN}✅ Vendor directory synced with dependencies${NC}"
 fi
 
+# Function to fix vendor directory ownership
+fix_vendor_ownership() {
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        echo -e "${YELLOW}Fixing vendor directory ownership (running as root)...${NC}"
+        chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
+        echo -e "${GREEN}✅ Vendor directory ownership restored to $SUDO_USER${NC}"
+    elif [ "$EUID" -ne 0 ] && [ -d "vendor" ]; then
+        # Check if vendor directory has wrong ownership
+        VENDOR_OWNER=$(stat -c '%U' vendor 2>/dev/null || echo "unknown")
+        CURRENT_USER=$(whoami)
+        if [ "$VENDOR_OWNER" = "root" ] && [ "$CURRENT_USER" != "root" ]; then
+            echo -e "${YELLOW}Vendor directory owned by root, fixing with sudo...${NC}"
+            sudo chown -R "$CURRENT_USER:$CURRENT_USER" vendor/ 2>/dev/null || true
+            echo -e "${GREEN}✅ Vendor directory ownership restored to $CURRENT_USER${NC}"
+        fi
+    fi
+}
+
 # Build static dependencies first
 build_static_dependencies() {
     echo -e "${YELLOW}Building static dependencies...${NC}"
+    
+    # Fix permissions before building
+    fix_vendor_ownership
     
     if ! ./scripts/setup/build-libopaque.sh; then
         echo -e "${RED}❌ Failed to build static dependencies${NC}"
         exit 1
     fi
+    
+    # Fix permissions after building
+    fix_vendor_ownership
     
     echo -e "${GREEN}✅ Static dependencies built successfully${NC}"
 }
@@ -189,12 +234,8 @@ if [ "${SKIP_C_LIBS}" != "true" ]; then
             exit 1
         fi
         
-        # Fix ownership if running as root (preserve original user ownership)
-        if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-            echo -e "${YELLOW}Fixing git submodule ownership after root initialization...${NC}"
-            chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
-            echo -e "${GREEN}✅ Vendor directory ownership restored to $SUDO_USER${NC}"
-        fi
+    # Fix ownership immediately after any root operations
+    fix_vendor_ownership
         echo -e "${GREEN}✅ Git submodules initialized${NC}"
         
         # Verify source files are now available
@@ -361,14 +402,20 @@ cp "${WASM_EXEC_JS}" ${BUILD_DIR}/${WASM_DIR}/
 build_go_binaries_static() {
     echo -e "${YELLOW}Building Go binaries with static linking...${NC}"
     
-    # Set up static linking environment
+    # Build main arkfile server with CGO (needs libopaque)
+    echo "Building arkfile server with CGO static linking..."
     export CGO_ENABLED=1
     export CGO_CFLAGS="-I./vendor/stef/libopaque/src -I./vendor/stef/liboprf/src"
     export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf"
     export CGO_LDFLAGS="$CGO_LDFLAGS $(pkg-config --libs --static libsodium)"
     
-    echo "Building arkfile server..."
     "$GO_BINARY" build -a -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -extldflags '-static'" -o ${BUILD_DIR}/${APP_NAME} .
+    echo -e "${GREEN}✅ arkfile server built with CGO static linking${NC}"
+    
+    # Build Go utility tools without CGO (pure static)
+    echo "Building Go utility tools with pure static linking..."
+    export CGO_ENABLED=0
+    unset CGO_CFLAGS CGO_LDFLAGS
     
     echo "Building cryptocli..."
     "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/cryptocli ./cmd/cryptocli
@@ -379,7 +426,8 @@ build_go_binaries_static() {
     echo "Building arkfile-admin..."
     "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
     
-    echo -e "${GREEN}✅ Go binaries built with static linking${NC}"
+    echo -e "${GREEN}✅ Go utility tools built with pure static linking${NC}"
+    echo -e "${GREEN}✅ All Go binaries built with static linking${NC}"
 }
 
 # Verify static binaries

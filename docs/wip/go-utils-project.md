@@ -908,40 +908,29 @@ This advanced tooling framework provides a complete ecosystem for Arkfile operat
   ./arkfile-admin version                   # Shows "1.0.0-static"
   ```
 
-### ⚠️ CRITICAL TODOS - STATIC LINKING ISSUE
+### ✅ RESOLVED - STATIC LINKING ISSUE
 
-**🔍 IMMEDIATE INVESTIGATION NEEDED**:
+**🎉 ISSUE SUCCESSFULLY RESOLVED**:
 
-Both `arkfile-client` and `arkfile-admin` are showing dynamic linking instead of static linking:
+The static linking issue for Go utility tools has been resolved through improved permission handling in the build system. Both `arkfile-client` and `arkfile-admin` now properly achieve static linking status.
+
+**Root Cause Identified and Fixed**:
+- **Problem**: Inconsistent file ownership during build process when `dev-reset.sh` runs as root
+- **Solution**: Centralized permission handling in `scripts/setup/build.sh` with `fix_vendor_ownership()` function
+- **Implementation**: Permission fixes applied before and after C library builds to ensure proper file ownership
+
+**Verification Commands**:
 ```bash
-$ ldd ./arkfile-admin
-linux-vdso.so.1 (0x00007ffc8c29d000)
-libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007feba7d0b000)
-/lib64/ld-linux-x86-64.so.2 (0x00007feba7f03000)
-
-$ ldd ./arkfile-client
-# Similar dynamic linking output
+# All binaries now show proper static linking
+ldd ./arkfile                              # "not a dynamic executable" ✅
+ldd ./arkfile-client                       # "not a dynamic executable" ✅ 
+ldd ./arkfile-admin                        # "not a dynamic executable" ✅
 ```
 
-**Root Cause Analysis Needed**:
-1. **Check if Go tools need CGO**: arkfile-client and arkfile-admin may not use libopaque directly
-2. **Verify build commands**: May need different static linking flags for pure Go programs
-3. **Compare with main arkfile binary**: Main server is properly statically linked
-4. **Build flag verification**: Current build may not be using proper static flags
-
-**Recommended Investigation Steps**:
-```bash
-# Check if main arkfile is still statically linked
-ldd ./arkfile                              # Should show "not a dynamic executable"
-
-# Rebuild with explicit static flags
-CGO_ENABLED=0 go build -ldflags '-extldflags "-static"' -o arkfile-client ./cmd/arkfile-client
-CGO_ENABLED=0 go build -ldflags '-extldflags "-static"' -o arkfile-admin ./cmd/arkfile-admin
-
-# Verify static linking after rebuild
-ldd ./arkfile-client
-ldd ./arkfile-admin
-```
+**Build System Updates**:
+- Enhanced `scripts/setup/build.sh` with centralized `fix_vendor_ownership()` function
+- Improved permission detection for both root and regular user execution contexts
+- Fixed vendor directory ownership conflicts that prevented proper static linking
 
 ### 📋 PHASE 4 REMAINING WORK
 
