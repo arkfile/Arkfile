@@ -52,6 +52,12 @@ func RefreshToken(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create new token")
 	}
 
+	// Revoke the old refresh token for security (token rotation)
+	if err := models.RevokeRefreshToken(database.DB, request.RefreshToken); err != nil {
+		// Log but don't fail - the old token will expire naturally
+		logging.ErrorLogger.Printf("Warning: Failed to revoke old refresh token for %s: %v", username, err)
+	}
+
 	// Generate new refresh token
 	refreshToken, err := models.CreateRefreshToken(database.DB, username)
 	if err != nil {

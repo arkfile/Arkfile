@@ -384,20 +384,24 @@ Advanced tooling and client utilities planned for future phases are documented i
 
 These enhancements will build upon the static linking foundation established in this phase.
 
-### Phase 4: Go Utility Tools Static Linking ✅ COMPLETED (August 15, 2025)
+### Phase 4: Go Utility Tools Static Linking ✅ COMPLETED (August 16, 2025)
 
 #### Goal
 Ensure Go utility tools (arkfile-client, arkfile-admin) achieve proper static linking status consistent with the main arkfile server binary.
 
-**STATUS: ✅ PHASE 4 COMPLETE** - All Go utility tools now properly statically linked
+**STATUS: ✅ PHASE 4 COMPLETE AND VALIDATED** - All Go utility tools now properly statically linked
 
 #### Issue Identified and Resolved
 
-**Problem**: Go utility tools (`arkfile-client` and `arkfile-admin`) were showing dynamic linking (`ldd` showing libc dependencies) instead of proper static linking like the main server binary.
+**Problem**: Go utility tools (`arkfile-client` and `arkfile-admin`) were not present in the project directory after dev-reset and needed to be built with proper static linking flags.
 
-**Root Cause**: Inconsistent file ownership during build process when `dev-reset.sh` runs as root. The vendor directory would become owned by root, causing permission conflicts during subsequent builds that prevented proper static linking.
+**Root Cause**: The utility tools required separate build process using `CGO_ENABLED=0` with static linking flags since they don't use CGO/libopaque directly like the main server.
 
-**Solution**: Centralized permission handling in `scripts/setup/build.sh` with the `fix_vendor_ownership()` function.
+**Solution**: Built both utilities using proper static linking commands:
+```bash
+CGO_ENABLED=0 go build -ldflags '-extldflags "-static"' -o arkfile-client ./cmd/arkfile-client
+CGO_ENABLED=0 go build -ldflags '-extldflags "-static"' -o arkfile-admin ./cmd/arkfile-admin
+```
 
 #### Technical Implementation
 

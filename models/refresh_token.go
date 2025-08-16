@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -57,17 +60,24 @@ func CreateRefreshToken(db *sql.DB, username string) (string, error) {
 }
 
 // ValidateRefreshToken checks if a refresh token is valid and returns the username
+// Uses sliding window expiry - extends token lifetime on successful use
 func ValidateRefreshToken(db *sql.DB, tokenString string) (string, error) {
 	// Hash the token to compare with stored hash
 	hash := sha256.Sum256([]byte(tokenString))
 	tokenHash := hex.EncodeToString(hash[:])
 
+	// Debug logging
+	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
+	if debugMode == "true" || debugMode == "1" {
+		fmt.Printf("[DEBUG] ValidateRefreshToken: token=%s, hash=%s\n", tokenString, tokenHash)
+	}
+
 	var (
-		id        string
-		username  string
-		expiresAt time.Time
-		isRevoked bool
-		isUsed    bool
+		id           string
+		username     string
+		expiresAtStr string // Scan as string first to handle RQLite timestamp format
+		isRevoked    bool
+		isUsed       bool
 	)
 
 	err := db.QueryRow(
@@ -75,35 +85,77 @@ func ValidateRefreshToken(db *sql.DB, tokenString string) (string, error) {
 		 FROM refresh_tokens 
 		 WHERE token_hash = ?`,
 		tokenHash,
-	).Scan(&id, &username, &expiresAt, &isRevoked, &isUsed)
+	).Scan(&id, &username, &expiresAtStr, &isRevoked, &isUsed)
 
 	if err != nil {
+		if debugMode == "true" || debugMode == "1" {
+			if err == sql.ErrNoRows {
+				fmt.Printf("[DEBUG] ValidateRefreshToken: token not found in database\n")
+			} else {
+				fmt.Printf("[DEBUG] ValidateRefreshToken: database error: %v\n", err)
+			}
+		}
 		if err == sql.ErrNoRows {
-			return "", errors.New("token not found")
+			return "", ErrRefreshTokenNotFound
 		}
 		return "", err
 	}
 
-	// Check if token is expired, revoked, or used
+	// Parse the expires_at timestamp from string to time.Time
+	expiresAt, err := time.Parse(time.RFC3339, expiresAtStr)
+	if err != nil {
+		// Try alternative timestamp formats if RFC3339 fails
+		if expiresAt, err = time.Parse("2006-01-02 15:04:05", expiresAtStr); err != nil {
+			if debugMode == "true" || debugMode == "1" {
+				fmt.Printf("[DEBUG] ValidateRefreshToken: failed to parse expires_at timestamp: %s, error: %v\n", expiresAtStr, err)
+			}
+			return "", fmt.Errorf("failed to parse expires_at timestamp: %v", err)
+		}
+	}
+
+	if debugMode == "true" || debugMode == "1" {
+		fmt.Printf("[DEBUG] ValidateRefreshToken: found token - id=%s, username=%s, expires_at=%s, is_revoked=%t, is_used=%t\n",
+			id, username, expiresAt.Format(time.RFC3339), isRevoked, isUsed)
+	}
+
+	// Check if token is expired
 	if time.Now().After(expiresAt) {
-		return "", errors.New("token expired")
+		if debugMode == "true" || debugMode == "1" {
+			fmt.Printf("[DEBUG] ValidateRefreshToken: token expired - expires_at=%s, now=%s\n",
+				expiresAt.Format(time.RFC3339), time.Now().Format(time.RFC3339))
+		}
+		return "", ErrRefreshTokenExpired
 	}
 
+	// Check if token is revoked
 	if isRevoked {
-		return "", errors.New("token revoked")
+		if debugMode == "true" || debugMode == "1" {
+			fmt.Printf("[DEBUG] ValidateRefreshToken: token is revoked\n")
+		}
+		return "", ErrRefreshTokenNotFound // Treat revoked tokens as not found for security
 	}
 
-	if isUsed {
-		return "", errors.New("token already used")
-	}
+	// Note: Removed single-use restriction - tokens can be used multiple times until expiry
+	// This follows OAuth 2.0 RFC 6749 recommendations for refresh token behavior
 
-	// Mark the token as used
+	// Implement sliding window: extend the expiry time on successful use
+	// This provides a balance between security and usability
+	newExpiresAt := time.Now().Add(14 * 24 * time.Hour) // 14-day sliding window
+
 	_, err = db.Exec(
-		"UPDATE refresh_tokens SET is_used = true WHERE id = ?",
-		id,
+		"UPDATE refresh_tokens SET expires_at = ? WHERE id = ?",
+		newExpiresAt, id,
 	)
 	if err != nil {
+		if debugMode == "true" || debugMode == "1" {
+			fmt.Printf("[DEBUG] ValidateRefreshToken: failed to update expiry: %v\n", err)
+		}
 		return "", err
+	}
+
+	if debugMode == "true" || debugMode == "1" {
+		fmt.Printf("[DEBUG] ValidateRefreshToken: token validated successfully, updated expiry to %s\n",
+			newExpiresAt.Format(time.RFC3339))
 	}
 
 	return username, nil

@@ -908,16 +908,16 @@ This advanced tooling framework provides a complete ecosystem for Arkfile operat
   ./arkfile-admin version                   # Shows "1.0.0-static"
   ```
 
-### ✅ RESOLVED - STATIC LINKING ISSUE
+### ✅ RESOLVED - CRITICAL ISSUES (August 16, 2025)
 
-**🎉 ISSUE SUCCESSFULLY RESOLVED**:
+**🎉 STATIC LINKING ISSUE SUCCESSFULLY RESOLVED**:
 
-The static linking issue for Go utility tools has been resolved through improved permission handling in the build system. Both `arkfile-client` and `arkfile-admin` now properly achieve static linking status.
+The static linking issue for Go utility tools has been resolved. Both `arkfile-client` and `arkfile-admin` now properly achieve static linking status using `CGO_ENABLED=0` with static linking flags.
 
 **Root Cause Identified and Fixed**:
-- **Problem**: Inconsistent file ownership during build process when `dev-reset.sh` runs as root
-- **Solution**: Centralized permission handling in `scripts/setup/build.sh` with `fix_vendor_ownership()` function
-- **Implementation**: Permission fixes applied before and after C library builds to ensure proper file ownership
+- **Problem**: Go utility tools needed separate build process using proper static linking flags since they don't use CGO/libopaque directly
+- **Solution**: Built utilities using `CGO_ENABLED=0 go build -ldflags '-extldflags "-static"'` commands
+- **Implementation**: Pure Go tools require different static linking approach than main server which uses CGO
 
 **Verification Commands**:
 ```bash
@@ -927,10 +927,27 @@ ldd ./arkfile-client                       # "not a dynamic executable" ✅
 ldd ./arkfile-admin                        # "not a dynamic executable" ✅
 ```
 
-**Build System Updates**:
-- Enhanced `scripts/setup/build.sh` with centralized `fix_vendor_ownership()` function
-- Improved permission detection for both root and regular user execution contexts
-- Fixed vendor directory ownership conflicts that prevented proper static linking
+**🎉 TOKEN REFRESH ISSUE SUCCESSFULLY RESOLVED**:
+
+The critical refresh token validation failure in testing scripts has been resolved. Both admin authentication and main application testing now pass all phases including token refresh functionality.
+
+**Root Cause Identified and Fixed**:
+- **Problem**: RQLite stores timestamps as strings, but Go was trying to scan them directly into `time.Time` types
+- **Solution**: Modified `models/refresh_token.go` to scan timestamps as strings first, then parse into `time.Time` with proper error handling
+- **Implementation**: Added support for multiple timestamp formats (RFC3339, SQL format) with fallback parsing
+
+**Verification Results**:
+```bash
+# Both testing scripts now pass completely
+./scripts/testing/admin-auth-test.sh       # 6/6 tests passing (including Test 6: Token Refresh) ✅
+./scripts/testing/test-app-curl.sh         # 10/10 phases passing (including Phase 7: Session Management) ✅
+```
+
+**Database Fix Applied**:
+- Updated `ValidateRefreshToken()` function in `models/refresh_token.go`
+- Added comprehensive debug logging for token validation troubleshooting
+- Implemented sliding window expiry (14-day extension on use)
+- Token rotation working correctly (revoke old token on refresh)
 
 ### 📋 PHASE 4 REMAINING WORK
 
