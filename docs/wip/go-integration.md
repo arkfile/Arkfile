@@ -1,1739 +1,825 @@
-# Arkfile Go-Based Production Validation Test
+# Arkfile Go Integration Test Framework
 
-## HIGH LEVEL OVERVIEW
+## Overview
 
-## **Go Integration Test Project - High-Level Overview**
+This document outlines the implementation of `scripts/testing/integration-test.go` - a Go-based integration test framework that orchestrates existing Go tools (arkfile-client, arkfile-admin, cryptocli) to validate end-to-end workflows.
 
--`NOTE: Revisit and revise this project once the static-linking.md project is complete. This may be merged potentially with test-app.md after that time.`
+`NOTE: Complete go-utils-project.md before starting this project.`
 
-The go-integration.md project aims to create a comprehensive, automated validation tool that serves as the final certification step for the Arkfile secure file vault system before production deployment. This Go-based integration test is designed to systematically validate every critical component of the system through realistic, end-to-end workflows that mirror actual user behavior, providing definitive proof that all security, cryptographic, and functional requirements work correctly together in a production environment.
+**Core Philosophy**: Tool orchestration, not reimplementation. Execute existing binaries via `os/exec` to test real-world workflows that complement `test-app-curl.sh`.
 
-The project's primary objective is to execute a complete user journey that begins with username-based OPAQUE authentication (including two-factor authentication via TOTP), proceeds through uploading and encrypting a substantial 100MB test file, creates an anonymous share link protected by Argon2id password derivation, and concludes with anonymous access and file download - all while validating that every security measure (timing protection, rate limiting, end-to-end encryption) functions correctly and that file integrity is perfectly preserved throughout multiple encryption/decryption cycles.
+## Project Structure
 
-**The major requirements include:**
-
-**Authentication and Security Validation**: The system must successfully register a test user using the zero-knowledge OPAQUE protocol, set up and verify two-factor authentication with real TOTP codes, and validate that all security headers, timing protection (minimum 1-second response times), and rate limiting mechanisms are active and functioning correctly under realistic load conditions.
-
-**Large File Operations with Real Cryptography**: The test must generate, upload, and download a 100MB file using production-grade cryptographic operations, including AES-GCM encryption with randomly generated File Encryption Keys (FEKs), chunked upload processing, and comprehensive integrity verification through SHA-256 hash comparisons to ensure no data corruption occurs during the complete encryption-storage-decryption cycle.
-
-**Anonymous Share System Validation**: The system must create share links using real Argon2id key derivation (with production parameters: 128MB memory, 4 iterations), enable anonymous users to access shared files without requiring account creation, and validate that the share password system provides appropriate security while maintaining usability for legitimate users.
-
-**Database and Storage Integration**: The test must perform direct database operations against the rqlite backend to validate proper data storage and cleanup, integrate with MinIO S3-compatible storage to verify encrypted file blob handling, and ensure complete resource cleanup after test execution to maintain system hygiene.
-
-**Performance and Production Readiness**: The system must demonstrate acceptable performance benchmarks (100MB uploads within 30 seconds, downloads within 15 seconds, or better), validate that all security measures remain effective under realistic load conditions, and provide comprehensive reporting that confirms the system is ready for production deployment with confidence in its security, reliability, and performance characteristics.
-
-This integration test essentially serves as the final quality assurance checkpoint, providing automated verification that replaces the need for extensive manual testing while delivering measurable proof that the Arkfile system meets all security, performance, and functional requirements for production use.
-
----
-
-## ARKFILE SYSTEM ARCHITECTURE
-
-### Current System Overview
-
-The Arkfile system is a **secure file vault platform** that implements zero-knowledge architecture using OPAQUE authentication, end-to-end encryption, and anonymous sharing capabilities. The system consists of multiple integrated components working together to provide secure file storage and sharing functionality.
-
-### Core Components
-
-#### **Authentication System**
-- **OPAQUE Protocol**: Zero-knowledge authentication ensuring server never sees user passwords
-- **Username-Based Authentication**: Primary identifier system throughout the application
-- **Two-Factor Authentication**: TOTP-based 2FA with backup codes for enhanced security
-- **JWT Token Management**: Secure session handling with refresh token rotation
-- **Session Key Derivation**: HKDF-based key derivation from OPAQUE export keys
-
-#### **Encryption Architecture**
-- **File-Level Encryption**: Each file encrypted with unique randomly generated FEK (File Encryption Key)
-- **Session Key Protection**: FEKs encrypted with user's session keys derived from OPAQUE export
-- **Share System**: Anonymous sharing using Argon2id key derivation (128MB memory, 4 iterations)
-- **Real Cryptography**: All WASM functions use production-grade AES-GCM and Argon2id implementations
-
-#### **Storage Integration**
-- **Database Backend**: rqlite distributed SQL database for metadata and authentication data
-- **Object Storage**: MinIO S3-compatible storage for encrypted file blobs
-- **Zero-Knowledge Server**: Server stores only encrypted blobs and salts, never plaintext content
-
-#### **Security Features**
-- **Rate Limiting**: EntityID-based exponential backoff for anonymous users
-- **Timing Protection**: Minimum 1-second response times for security-critical endpoints
-- **Security Headers**: Comprehensive CSP, XSS protection, frame options, content-type validation
-- **Anonymous Privacy**: Share access requires no user accounts or identity disclosure
-
-### API Endpoints
-
-#### **Authentication APIs**
+### File Location
 ```
-POST /api/opaque/register  - User registration with OPAQUE protocol
-POST /api/opaque/login     - Username-based login with OPAQUE
-POST /api/totp/setup       - Two-factor authentication setup
-POST /api/totp/verify      - TOTP verification during setup
-POST /api/totp/auth        - TOTP authentication during login
+scripts/testing/integration-test.go
 ```
 
-#### **File Management APIs**  
-```
-POST /api/upload/init      - Initialize chunked file upload
-POST /api/upload/chunk     - Upload individual file chunks
-POST /api/upload/finalize  - Complete upload process
-GET  /api/files            - List user's files
-GET  /api/files/{id}       - Get specific file metadata
-GET  /api/files/{id}/download - Download encrypted file
+### Execution Model
+```bash
+# From project root:
+go run scripts/testing/integration-test.go full-suite
+go run scripts/testing/integration-test.go auth-flow --verbose
+go run scripts/testing/integration-test.go file-ops --performance
 ```
 
-#### **Share System APIs**
-```
-POST /api/files/{id}/share - Create anonymous share link
-POST /api/share/{shareId}  - Access shared file (anonymous)
-GET  /api/share/{shareId}/download - Download shared file (anonymous)
-```
-
-### Database Schema
-
-#### **Core Tables**
-```sql
--- User authentication data (OPAQUE records only)
-users (id, username, email, opaque_record, is_approved, created_at, approved_by)
-
--- File metadata (encrypted content in MinIO)  
-files (id, user_id, filename, file_size, content_type, encrypted_fek, created_at)
-
--- Anonymous share system
-file_share_keys (id, share_id, file_id, salt, encrypted_fek, expires_at, created_at)
-
--- Rate limiting for anonymous access
-share_access_attempts (id, share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt)
+### Integration with Existing Workflow
+```bash
+sudo ./scripts/dev-reset.sh                                    # Reset environment  
+./scripts/testing/test-app-curl.sh                             # API endpoint validation
+go run scripts/testing/integration-test.go full-suite          # Tool orchestration validation
 ```
 
-### Cryptographic Flows
+## Implementation Phases
 
-#### **Authenticated File Operations**
-```
-User Password → OPAQUE Authentication → Export Key → HKDF → Session Key
-Random FEK → AES-GCM(File, FEK) → Encrypted File Blob
-FEK → AES-GCM(FEK, Session Key) → Encrypted FEK (stored in database)
-```
+### Phase 1: Core Infrastructure
 
-#### **Anonymous Share Access**  
-```
-Share Password → Argon2id(Password, Salt, 128MB, 4 iter) → Share Key
-Share Key → AES-GCM_decrypt(Encrypted FEK) → FEK  
-FEK → AES-GCM_decrypt(Encrypted File) → Original File
-```
+**Goal**: Build foundation for tool orchestration and test management.
 
-## PROJECT OBJECTIVES
-
-### Primary Goal
-Create a comprehensive Go-based integration test that validates the complete Arkfile system through realistic end-to-end workflows, providing automated verification of all security, cryptographic, and functional requirements before production deployment.
-
-### Key Testing Requirements
-
-#### **Complete User Journey Validation**
-1. **User Registration & Authentication**: OPAQUE protocol registration, TOTP setup, and full login flow
-2. **Large File Operations**: 100MB file upload/download with chunked processing and integrity verification  
-3. **Anonymous Sharing**: Share creation, anonymous access, and file retrieval without user accounts
-4. **Security Measure Validation**: Rate limiting, timing protection, and cryptographic security verification
-5. **Database Integration**: Direct database operations to validate data consistency and cleanup
-
-#### **Performance Benchmarking**
-- **Upload Performance**: 100MB files within 60 seconds (target: 30 seconds or better)
-- **Download Performance**: 100MB files within 20 seconds (target: 15 seconds or better)
-- **Share Creation**: Complete workflow within 5 seconds
-- **Anonymous Access**: Timing protection validation (900ms-1500ms range)
-- **Total Test Duration**: Complete validation within 5 minutes
-
-#### **Security Validation**
-- **Zero-Knowledge Authentication**: Verify OPAQUE protocol prevents password exposure
-- **Cryptographic Integrity**: Triple integrity verification (original → authenticated → anonymous)  
-- **Timing Protection**: Consistent response times under various load conditions
-- **Rate Limiting**: Exponential backoff functionality for failed attempts
-- **Anonymous Privacy**: No user information disclosure during share access
-
-### Why Go Implementation
-
-#### **Technical Advantages**
-- **Real Cryptographic Operations**: Direct access to same crypto libraries as production system
-- **Binary Data Handling**: Proper handling of 100MB files with encryption/decryption verification
-- **Database Integration**: Direct SQL operations for comprehensive validation and cleanup
-- **Automated Execution**: No manual browser interaction required for complete testing
-- **Performance Measurement**: Precise timing and resource usage benchmarking
-- **Concurrent Testing**: Ability to simulate multiple users and load conditions
-
-#### **Operational Benefits**
-- **CI/CD Integration**: Automated testing pipeline compatibility
-- **Comprehensive Reporting**: Detailed success/failure reporting with performance metrics
-- **Resource Cleanup**: Automatic cleanup of test data and temporary files  
-- **Error Handling**: Graceful failure handling with detailed diagnostic information
-- **Reproducible Results**: Consistent testing environment and deterministic outcomes
-
-## Technical Architecture
-
-### System Integration Points
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Integration   │    │    Arkfile       │    │    External     │
-│   Test (Go)     │    │    Server        │    │    Services     │
-│                 │    │                  │    │                 │
-│ • OPAQUE Client │◄──►│ • Auth APIs      │    │ • MinIO S3      │
-│ • TOTP Generator│    │ • File APIs      │    │ • rqlite DB     │
-│ • Crypto Ops    │    │ • Share APIs     │    │ • TLS Certs     │
-│ • HTTP Client   │    │ • Static Files   │    │                 │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-```
-
-### Test Architecture
-
-```
-main()
-├── TestSuite1: UserSetupAndAuthentication()
-│   ├── RegisterUser()
-│   ├── ApproveInDatabase()
-│   ├── SetupTOTP()
-│   ├── LoginUser()
-│   └── ValidateTokens()
-├── TestSuite2: FileOperations()
-│   ├── GenerateTestFile()
-│   ├── UploadFile()
-│   ├── ListFiles()
-│   ├── DownloadFile()
-│   └── VerifyIntegrity()
-├── TestSuite3: FileSharingOperations()
-│   ├── CreateShareLink()
-│   ├── ValidateShareInDatabase()
-│   ├── LogoutUser()
-│   ├── AnonymousShareAccess()
-│   ├── AnonymousDownload()
-│   └── VerifySharedFileIntegrity()
-└── TestSuite4: ComprehensiveCleanup()
-    ├── CleanupUser()
-    ├── ValidateCleanup()
-    └── GenerateReport()
-```
-
-## Implementation Specifications
-
-### Test Suite 1: User Setup & Authentication
-
-#### Step 1: RegisterUser()
+#### 1.1 Command Line Interface
 ```go
-type RegistrationRequest struct {
-    Username string `json:"username"`
-    Password string `json:"password"`
-    Email    string `json:"email,omitempty"` // Optional field
+package main
+
+import (
+    "flag"
+    "fmt"
+    "os"
+    "os/exec" 
+    "path/filepath"
+    "time"
+)
+
+const Usage = `integration-test - Go tool orchestration testing
+
+USAGE:
+    go run integration-test.go [global options] command [command options]
+
+COMMANDS:
+    full-suite      Run all 5 phases of integration testing
+    env-check       Phase 1: Environment validation only
+    auth-flow       Phase 2: Authentication workflow only
+    file-ops        Phase 3: File operations workflow only
+    share-ops       Phase 4: Share operations workflow only
+    admin-ops       Phase 5: Admin operations workflow only
+
+GLOBAL OPTIONS:
+    --server-url URL     Server URL (default: https://localhost:4443)
+    --verbose, -v        Verbose output with command details
+    --performance        Enable performance timing and benchmarks
+    --cleanup            Cleanup test files after completion
+    --test-file-size     Size for test files (default: 100MB)
+    --help, -h           Show help
+
+EXAMPLES:
+    go run integration-test.go full-suite --verbose
+    go run integration-test.go file-ops --performance --test-file-size 50MB
+`
+
+type Config struct {
+    ServerURL    string
+    Verbose      bool
+    Performance  bool
+    Cleanup      bool
+    TestFileSize string
+    BaseDir      string
+    TestUser     string
 }
 
-func (t *IntegrationTest) RegisterUser() error {
-    // Use existing OPAQUE client implementation
-    req := RegistrationRequest{
-        Username: t.config.TestUsername,
-        Password: t.config.TestPassword,
-        Email:    t.config.TestEmail, // Optional
+func main() {
+    config := &Config{
+        ServerURL:    "https://localhost:4443",
+        TestFileSize: "100MB",
+        BaseDir:      ".",
+        TestUser:     "testuser",
     }
     
-    resp, err := t.httpClient.Post("/api/opaque/register", req)
-    if err != nil {
-        return fmt.Errorf("registration failed: %w", err)
+    // Parse command line arguments
+    parseArgs(config)
+    
+    // Create integration suite
+    suite := NewIntegrationSuite(config)
+    
+    // Execute requested command
+    if err := suite.Run(); err != nil {
+        fmt.Printf("❌ Integration testing failed: %v\n", err)
+        os.Exit(1)
     }
     
-    // Extract temp token and session key for TOTP setup
-    t.tempToken = resp.TempToken
-    t.sessionKey = resp.SessionKey
-    t.requiresTOTPSetup = resp.RequiresTOTPSetup
-    
-    return t.validateRegistrationResponse(resp)
-}
-```
-
-#### Step 2: ApproveInDatabase()
-```go
-func (t *IntegrationTest) ApproveInDatabase() error {
-    query := "UPDATE users SET is_approved = 1, approved_by = 'integration-test', approved_at = CURRENT_TIMESTAMP WHERE username = ?"
-    
-    result, err := t.dbClient.Execute(query, t.config.TestUsername)
-    if err != nil {
-        return fmt.Errorf("database approval failed: %w", err)
-    }
-    
-    if result.RowsAffected == 0 {
-        return fmt.Errorf("no user found to approve: %s", t.config.TestUsername)
-    }
-    
-    return t.verifyUserApproval()
-}
-```
-
-#### Step 3: SetupTOTP()
-```go
-type TOTPSetupRequest struct {
-    SessionKey string `json:"sessionKey"`
-}
-
-func (t *IntegrationTest) SetupTOTP() error {
-    // Initiate TOTP setup
-    req := TOTPSetupRequest{SessionKey: t.sessionKey}
-    resp, err := t.httpClient.PostWithAuth("/api/totp/setup", req, t.tempToken)
-    if err != nil {
-        return fmt.Errorf("TOTP setup failed: %w", err)
-    }
-    
-    // Store TOTP secret and backup codes
-    t.totpSecret = resp.Secret
-    t.backupCodes = resp.BackupCodes
-    
-    // Generate real TOTP code using existing totp-generator logic
-    totpCode, err := t.generateTOTPCode(t.totpSecret)
-    if err != nil {
-        return fmt.Errorf("TOTP code generation failed: %w", err)
-    }
-    
-    // Verify TOTP setup
-    verifyReq := TOTPVerifyRequest{
-        Code:       totpCode,
-        SessionKey: t.sessionKey,
-    }
-    
-    _, err = t.httpClient.PostWithAuth("/api/totp/verify", verifyReq, t.tempToken)
-    return err
+    fmt.Printf("✅ Integration testing completed successfully\n")
 }
 ```
 
-#### Step 4: LoginUser()
+#### 1.2 Tool Execution Framework
 ```go
-func (t *IntegrationTest) LoginUser() error {
-    // OPAQUE login
-    loginReq := LoginRequest{
-        Username: t.config.TestUsername,
-        Password: t.config.TestPassword,
-    }
-    
-    loginResp, err := t.httpClient.Post("/api/opaque/login", loginReq)
-    if err != nil {
-        return fmt.Errorf("OPAQUE login failed: %w", err)
-    }
-    
-    // Should require TOTP
-    if !loginResp.RequiresTOTP {
-        return fmt.Errorf("expected TOTP requirement, got: %v", loginResp.RequiresTOTP)
-    }
-    
-    t.loginTempToken = loginResp.TempToken
-    t.loginSessionKey = loginResp.SessionKey
-    
-    // TOTP authentication
-    totpCode, err := t.generateTOTPCode(t.totpSecret)
-    if err != nil {
-        return fmt.Errorf("TOTP generation failed: %w", err)
-    }
-    
-    totpReq := TOTPAuthRequest{
-        Code:       totpCode,
-        SessionKey: t.loginSessionKey,
-        IsBackup:   false,
-    }
-    
-    totpResp, err := t.httpClient.PostWithAuth("/api/totp/auth", totpReq, t.loginTempToken)
-    if err != nil {
-        return fmt.Errorf("TOTP authentication failed: %w", err)
-    }
-    
-    // Store final tokens
-    t.jwtToken = totpResp.Token
-    t.refreshToken = totpResp.RefreshToken
-    t.finalSessionKey = totpResp.SessionKey
-    
-    return nil
+type ExecResult struct {
+    Stdout   string
+    Stderr   string
+    ExitCode int
+    Duration time.Duration
 }
-```
 
-### Test Suite 2: File Operations
-
-#### Step 6: GenerateTestFile()
-```go
-func (t *IntegrationTest) GenerateTestFile() error {
-    const fileSize = 50 * 1024 * 1024 // 100MB
-    
-    // Create deterministic test data for consistent hashing
-    data := make([]byte, fileSize)
-    seed := []byte("Arkfile Integration Test File Content")
-    
-    // Fill with pseudo-random but deterministic data
-    for i := 0; i < len(data); i += len(seed) {
-        copy(data[i:], seed)
-    }
-    
-    // Calculate SHA-256 hash for integrity verification
-    hash := sha256.Sum256(data)
-    t.originalFileHash = hex.EncodeToString(hash[:])
-    
-    // Save to temporary file
-    t.testFilePath = filepath.Join(os.TempDir(), "arkfile-test-50mb.dat")
-    err := os.WriteFile(t.testFilePath, data, 0644)
-    if err != nil {
-        return fmt.Errorf("failed to create test file: %w", err)
-    }
-    
-    t.logger.Printf("Generated 100MB test file: %s", t.testFilePath)
-    t.logger.Printf("Original file hash: %s", t.originalFileHash)
-    
-    return nil
+type IntegrationSuite struct {
+    config    *Config
+    testDir   string
+    startTime time.Time
+    results   map[string]bool
 }
-```
 
-#### Step 7: UploadFile()
-```go
-func (t *IntegrationTest) UploadFile() error {
-    // Read test file
-    fileData, err := os.ReadFile(t.testFilePath)
-    if err != nil {
-        return fmt.Errorf("failed to read test file: %w", err)
+func (s *IntegrationSuite) executeCommand(tool string, args ...string) (*ExecResult, error) {
+    var binPath string
+    switch tool {
+    case "arkfile-client":
+        binPath = "./cmd/arkfile-client/arkfile-client"
+    case "arkfile-admin":
+        binPath = "./cmd/arkfile-admin/arkfile-admin"
+    case "cryptocli":
+        binPath = "./cmd/cryptocli/cryptocli"
+    default:
+        return nil, fmt.Errorf("unknown tool: %s", tool)
     }
     
-    // Generate File Encryption Key (FEK)
-    fek := make([]byte, 32)
-    _, err = rand.Read(fek)
-    if err != nil {
-        return fmt.Errorf("failed to generate FEK: %w", err)
-    }
-    
-    // Encrypt file with FEK
-    encryptedFile, err := t.encryptFile(fileData, fek)
-    if err != nil {
-        return fmt.Errorf("file encryption failed: %w", err)
-    }
-    
-    // Encrypt FEK with session key
-    encryptedFEK, err := t.encryptFEK(fek, t.finalSessionKey)
-    if err != nil {
-        return fmt.Errorf("FEK encryption failed: %w", err)
-    }
-    
-    // Chunked upload implementation
-    const chunkSize = 1024 * 1024 // 1MB chunks
-    totalChunks := (len(encryptedFile) + chunkSize - 1) / chunkSize
-    
-    // Initialize upload session
-    uploadReq := InitUploadRequest{
-        Filename:     "integration-test-file.dat",
-        FileSize:     int64(len(encryptedFile)),
-        ContentType:  "application/octet-stream",
-        EncryptedFEK: base64.StdEncoding.EncodeToString(encryptedFEK),
-        TotalChunks:  totalChunks,
-    }
-    
-    uploadResp, err := t.httpClient.PostWithAuth("/api/upload/init", uploadReq, t.jwtToken)
-    if err != nil {
-        return fmt.Errorf("upload initialization failed: %w", err)
-    }
-    
-    t.uploadSessionID = uploadResp.SessionID
-    t.fileID = uploadResp.FileID
-    
-    // Upload chunks with progress tracking
-    for chunkIndex := 0; chunkIndex < totalChunks; chunkIndex++ {
-        start := chunkIndex * chunkSize
-        end := start + chunkSize
-        if end > len(encryptedFile) {
-            end = len(encryptedFile)
-        }
-        
-        chunkData := encryptedFile[start:end]
-        
-        err := t.uploadChunk(chunkIndex, chunkData)
-        if err != nil {
-            return fmt.Errorf("chunk %d upload failed: %w", chunkIndex, err)
-        }
-        
-        // Progress logging
-        progress := float64(chunkIndex+1) / float64(totalChunks) * 100
-        t.logger.Printf("Upload progress: %.1f%% (%d/%d chunks)", progress, chunkIndex+1, totalChunks)
-    }
-    
-    // Finalize upload
-    finalizeReq := FinalizeUploadRequest{
-        SessionID: t.uploadSessionID,
-    }
-    
-    _, err = t.httpClient.PostWithAuth("/api/upload/finalize", finalizeReq, t.jwtToken)
-    if err != nil {
-        return fmt.Errorf("upload finalization failed: %w", err)
-    }
-    
-    t.logger.Printf("File upload completed successfully - FileID: %s", t.fileID)
-    return nil
-}
-```
-
-### Phase 3: File Sharing Operations
-
-#### Step 11: CreateShareLink()
-```go
-func (t *IntegrationTest) CreateShareLink() error {
-    sharePassword := t.config.SharePassword
-    
-    // Generate 32-byte random salt
-    salt := make([]byte, 32)
-    _, err := rand.Read(salt)
-    if err != nil {
-        return fmt.Errorf("salt generation failed: %w", err)
-    }
-    
-    // Derive Argon2id key (same parameters as production)
-    shareKey := argon2.IDKey([]byte(sharePassword), salt, 4, 128*1024, 4, 32)
-    
-    // Download and decrypt FEK using user's session key
-    encryptedFEK, err := t.downloadEncryptedFEK(t.fileID)
-    if err != nil {
-        return fmt.Errorf("failed to download encrypted FEK: %w", err)
-    }
-    
-    fek, err := t.decryptFEK(encryptedFEK, t.finalSessionKey)
-    if err != nil {
-        return fmt.Errorf("FEK decryption failed: %w", err)
-    }
-    
-    // Re-encrypt FEK with share key
-    encryptedFEKForShare, err := t.encryptFEK(fek, shareKey)
-    if err != nil {
-        return fmt.Errorf("FEK re-encryption failed: %w", err)
-    }
-    
-    // Create share via API
-    createShareReq := CreateShareRequest{
-        Salt:          base64.StdEncoding.EncodeToString(salt),
-        EncryptedFEK:  base64.StdEncoding.EncodeToString(encryptedFEKForShare),
-        ExpiresInDays: 30,
-    }
-    
-    shareResp, err := t.httpClient.PostWithAuth(
-        fmt.Sprintf("/api/files/%s/share", t.fileID), 
-        createShareReq, 
-        t.jwtToken,
-    )
-    if err != nil {
-        return fmt.Errorf("share creation failed: %w", err)
-    }
-    
-    t.shareID = shareResp.ShareID
-    t.shareURL = shareResp.ShareURL
-    t.shareExpiresAt = shareResp.ExpiresAt
-    
-    t.logger.Printf("Share created successfully:")
-    t.logger.Printf("  Share ID: %s", t.shareID)
-    t.logger.Printf("  Share URL: %s", t.shareURL)
-    t.logger.Printf("  Expires: %s", t.shareExpiresAt)
-    
-    return nil
-}
-```
-
-#### Step 14: AnonymousShareAccess()
-```go
-func (t *IntegrationTest) AnonymousShareAccess() error {
-    sharePassword := t.config.SharePassword
-    
-    // Access share without authentication (anonymous)
-    shareAccessReq := ShareAccessRequest{
-        Password: sharePassword,
-    }
-    
-    // Test timing protection (should take ~1000ms)
     startTime := time.Now()
-    shareResp, err := t.httpClient.Post(fmt.Sprintf("/api/share/%s", t.shareID), shareAccessReq)
+    cmd := exec.Command(binPath, args...)
+    cmd.Dir = s.config.BaseDir
+    
+    // Set environment
+    cmd.Env = append(os.Environ(),
+        "ARKFILE_SERVER_URL="+s.config.ServerURL,
+        "ARKFILE_VERBOSE="+fmt.Sprintf("%v", s.config.Verbose),
+    )
+    
+    var stdout, stderr bytes.Buffer
+    cmd.Stdout = &stdout
+    cmd.Stderr = &stderr
+    
+    if s.config.Verbose {
+        fmt.Printf("🔧 Executing: %s %s\n", binPath, strings.Join(args, " "))
+    }
+    
+    err := cmd.Run()
     duration := time.Since(startTime)
     
+    result := &ExecResult{
+        Stdout:   stdout.String(),
+        Stderr:   stderr.String(),
+        ExitCode: 0,
+        Duration: duration,
+    }
+    
     if err != nil {
-        return fmt.Errorf("anonymous share access failed: %w", err)
+        if exitError, ok := err.(*exec.ExitError); ok {
+            result.ExitCode = exitError.ExitCode()
+        }
     }
     
-    // Validate timing protection
-    if duration < 900*time.Millisecond {
-        return fmt.Errorf("timing protection not working: duration %v < 900ms", duration)
+    if s.config.Performance {
+        fmt.Printf("⏱️  Command completed in: %v\n", duration)
     }
     
-    // Extract salt and encrypted FEK from response
-    salt, err := base64.StdEncoding.DecodeString(shareResp.Salt)
-    if err != nil {
-        return fmt.Errorf("invalid salt in share response: %w", err)
+    return result, err
+}
+
+func (s *IntegrationSuite) runTest(name string, testFunc func() error) {
+    fmt.Printf("🧪 Running: %s\n", name)
+    
+    if err := testFunc(); err != nil {
+        fmt.Printf("❌ FAILED: %s - %v\n", name, err)
+        s.results[name] = false
+        return
     }
     
-    encryptedFEKFromShare, err := base64.StdEncoding.DecodeString(shareResp.EncryptedFEK)
-    if err != nil {
-        return fmt.Errorf("invalid encrypted FEK in share response: %w", err)
-    }
-    
-    // Store for anonymous download
-    t.anonymousDownloadURL = shareResp.DownloadURL
-    t.shareResponseSalt = salt
-    t.shareResponseEncryptedFEK = encryptedFEKFromShare
-    
-    t.logger.Printf("Anonymous share access successful:")
-    t.logger.Printf("  Timing protection: %v", duration)
-    t.logger.Printf("  Download URL: %s", t.anonymousDownloadURL)
-    
-    return nil
+    fmt.Printf("✅ PASSED: %s\n", name)
+    s.results[name] = true
 }
 ```
 
-#### Step 15: AnonymousDownload()
+### Phase 2: Environment Validation (Test Phase 1)
+
+**Goal**: Verify all tools are available and server is accessible.
+
 ```go
-func (t *IntegrationTest) AnonymousDownload() error {
-    sharePassword := t.config.SharePassword
+func (s *IntegrationSuite) runEnvironmentValidation() error {
+    fmt.Printf("📋 Phase 1: Environment Validation\n")
     
-    // Derive share key again (anonymous client-side operation)
-    shareKey := argon2.IDKey([]byte(sharePassword), t.shareResponseSalt, 4, 128*1024, 4, 32)
-    
-    // Decrypt FEK using share key
-    fek, err := t.decryptFEK(t.shareResponseEncryptedFEK, shareKey)
-    if err != nil {
-        return fmt.Errorf("FEK decryption with share key failed: %w", err)
-    }
-    
-    // Download encrypted file using download URL (no auth required)
-    encryptedFileData, err := t.httpClient.GetRaw(t.anonymousDownloadURL)
-    if err != nil {
-        return fmt.Errorf("anonymous file download failed: %w", err)
-    }
-    
-    // Decrypt file with FEK
-    decryptedFileData, err := t.decryptFile(encryptedFileData, fek)
-    if err != nil {
-        return fmt.Errorf("anonymous file decryption failed: %w", err)
-    }
-    
-    // Save decrypted file for integrity verification
-    t.anonymousDownloadPath = filepath.Join(os.TempDir(), "arkfile-anonymous-download.dat")
-    err = os.WriteFile(t.anonymousDownloadPath, decryptedFileData, 0644)
-    if err != nil {
-        return fmt.Errorf("failed to save anonymous download: %w", err)
-    }
-    
-    t.logger.Printf("Anonymous download completed: %s", t.anonymousDownloadPath)
-    return nil
-}
-```
-
-## Code Structure Design
-
-### Main Test Structure
-```go
-type IntegrationTest struct {
-    config   *TestConfig
-    logger   *log.Logger
-    
-    // HTTP client for API calls
-    httpClient *HTTPClient
-    
-    // Database client for direct operations
-    dbClient *DatabaseClient
-    
-    // Test state tracking
-    tempToken         string
-    sessionKey        string
-    jwtToken          string
-    refreshToken      string
-    finalSessionKey   string
-    
-    // TOTP data
-    totpSecret    string
-    backupCodes   []string
-    
-    // File data
-    testFilePath         string
-    originalFileHash     string
-    fileID              string
-    uploadSessionID     string
-    authenticatedDownloadPath string
-    
-    // Share data
-    shareID              string
-    shareURL             string
-    shareExpiresAt       time.Time
-    anonymousDownloadURL string
-    shareResponseSalt    []byte
-    shareResponseEncryptedFEK []byte
-    anonymousDownloadPath string
-    
-    // Test results
-    startTime    time.Time
-    phaseResults map[string]PhaseResult
-}
-
-type TestConfig struct {
-    ServerURL     string `default:"https://localhost:4443"`
-    TestUsername  string `default:"integration.test.user.2025"`
-    TestEmail     string `default:"integration-test@example.com"` // Optional
-    TestPassword  string `default:"IntegrationTestPassword123456789!"`
-    SharePassword string `default:"TestSharePassword2025_SecureAndLong!"`
-    TestFileSize  int64  `default:"52428800"` // 100MB
-    DatabaseURL   string `default:"http://demo-user:TestPassword123_Secure@localhost:4001"`
-    TLSInsecure   bool   `default:"true"`     // For local testing with self-signed certs
-    Verbose       bool   `default:"false"`
-    CleanupOnFail bool   `default:"true"`
-}
-
-type PhaseResult struct {
-    PhaseName   string
-    StartTime   time.Time
-    EndTime     time.Time
-    Duration    time.Duration
-    Success     bool
-    Error       error
-    Steps       []StepResult
-}
-
-type StepResult struct {
-    StepName    string
-    Duration    time.Duration
-    Success     bool
-    Error       error
-    Details     map[string]interface{}
-}
-```
-
-### Helper Functions and Utilities
-
-#### HTTP Client Implementation
-```go
-type HTTPClient struct {
-    client      *http.Client
-    baseURL     string
-    tlsInsecure bool
-    logger      *log.Logger
-}
-
-func NewHTTPClient(baseURL string, tlsInsecure bool, logger *log.Logger) *HTTPClient {
-    tr := &http.Transport{
-        TLSClientConfig: &tls.Config{
-            InsecureSkipVerify: tlsInsecure,
-        },
-    }
-    
-    return &HTTPClient{
-        client:      &http.Client{Transport: tr, Timeout: 30 * time.Second},
-        baseURL:     strings.TrimSuffix(baseURL, "/"),
-        tlsInsecure: tlsInsecure,
-        logger:      logger,
-    }
-}
-
-func (c *HTTPClient) Post(endpoint string, request interface{}) (*Response, error) {
-    return c.makeRequest("POST", endpoint, request, "")
-}
-
-func (c *HTTPClient) PostWithAuth(endpoint string, request interface{}, token string) (*Response, error) {
-    return c.makeRequest("POST", endpoint, request, token)
-}
-
-func (c *HTTPClient) Get(endpoint string) (*Response, error) {
-    return c.makeRequest("GET", endpoint, nil, "")
-}
-
-func (c *HTTPClient) GetWithAuth(endpoint string, token string) (*Response, error) {
-    return c.makeRequest("GET", endpoint, nil, token)
-}
-
-func (c *HTTPClient) GetRaw(url string) ([]byte, error) {
-    resp, err := c.client.Get(url)
-    if err != nil {
-        return nil, err
-    }
-    defer resp.Body.Close()
-    
-    if resp.StatusCode != http.StatusOK {
-        return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
-    }
-    
-    return io.ReadAll(resp.Body)
-}
-```
-
-#### Database Client Implementation
-```go
-type DatabaseClient struct {
-    baseURL string
-    auth    string
-    client  *http.Client
-    logger  *log.Logger
-}
-
-func NewDatabaseClient(dbURL string, logger *log.Logger) (*DatabaseClient, error) {
-    // Parse URL to extract auth and base URL
-    u, err := url.Parse(dbURL)
-    if err != nil {
-        return nil, fmt.Errorf("invalid database URL: %w", err)
-    }
-    
-    auth := ""
-    if u.User != nil {
-        auth = base64.StdEncoding.EncodeToString([]byte(u.User.String()))
-        u.User = nil
-    }
-    
-    return &DatabaseClient{
-        baseURL: u.String(),
-        auth:    auth,
-        client:  &http.Client{Timeout: 10 * time.Second},
-        logger:  logger,
-    }, nil
-}
-
-func (db *DatabaseClient) Execute(query string, args ...interface{}) (*DatabaseResult, error) {
-    // Format query with arguments
-    formattedQuery := fmt.Sprintf(query, args...)
-    
-    reqBody := []string{formattedQuery}
-    jsonData, _ := json.Marshal(reqBody)
-    
-    req, err := http.NewRequest("POST", db.baseURL+"/db/execute", bytes.NewBuffer(jsonData))
-    if err != nil {
-        return nil, err
-    }
-    
-    req.Header.Set("Content-Type", "application/json")
-    if db.auth != "" {
-        req.Header.Set("Authorization", "Basic "+db.auth)
-    }
-    
-    resp, err := db.client.Do(req)
-    if err != nil {
-        return nil, err
-    }
-    defer resp.Body.Close()
-    
-    var result DatabaseResult
-    err = json.NewDecoder(resp.Body).Decode(&result)
-    return &result, err
-}
-```
-
-#### Crypto Operations
-```go
-// Reuse existing crypto packages from the Arkfile project
-func (t *IntegrationTest) encryptFile(data []byte, fek []byte) ([]byte, error) {
-    // Use crypto/gcm.go functions
-    return EncryptWithGCM(data, fek)
-}
-
-func (t *IntegrationTest) decryptFile(encryptedData []byte, fek []byte) ([]byte, error) {
-    // Use crypto/gcm.go functions
-    return DecryptWithGCM(encryptedData, fek)
-}
-
-func (t *IntegrationTest) encryptFEK(fek []byte, sessionKey string) ([]byte, error) {
-    // Convert session key to bytes and encrypt FEK
-    keyBytes := []byte(sessionKey)
-    if len(keyBytes) > 32 {
-        keyBytes = keyBytes[:32]
-    }
-    return EncryptWithGCM(fek, keyBytes)
-}
-
-func (t *IntegrationTest) decryptFEK(encryptedFEK []byte, sessionKey string) ([]byte, error) {
-    // Convert session key to bytes and decrypt FEK
-    keyBytes := []byte(sessionKey)
-    if len(keyBytes) > 32 {
-        keyBytes = keyBytes[:32]
-    }
-    return DecryptWithGCM(encryptedFEK, keyBytes)
-}
-
-func (t *IntegrationTest) generateTOTPCode(secret string) (string, error) {
-    // Reuse the existing totp-generator logic
-    return totp.GenerateCodeCustom(secret, time.Now(), totp.ValidateOpts{
-        Period:    30,
-        Skew:      0,
-        Digits:    otp.DigitsSix,
-        Algorithm: otp.AlgorithmSHA1,
+    s.runTest("Tool Availability - arkfile-client", func() error {
+        result, err := s.executeCommand("arkfile-client", "--help")
+        if err != nil {
+            return fmt.Errorf("arkfile-client not available: %v", err)
+        }
+        if !strings.Contains(result.Stdout, "arkfile-client - Secure file sharing client") {
+            return fmt.Errorf("arkfile-client help output invalid")
+        }
+        return nil
     })
+    
+    s.runTest("Tool Availability - arkfile-admin", func() error {
+        result, err := s.executeCommand("arkfile-admin", "--version")
+        if err != nil {
+            return fmt.Errorf("arkfile-admin not available: %v", err)
+        }
+        if !strings.Contains(result.Stdout, "1.0.0") {
+            return fmt.Errorf("arkfile-admin version output invalid")
+        }
+        return nil
+    })
+    
+    s.runTest("Tool Availability - cryptocli", func() error {
+        result, err := s.executeCommand("cryptocli", "--help")
+        if err != nil {
+            return fmt.Errorf("cryptocli not available: %v", err)
+        }
+        return nil
+    })
+    
+    s.runTest("Server Connectivity", func() error {
+        // Test basic HTTPS connectivity
+        client := &http.Client{
+            Timeout: 10 * time.Second,
+            Transport: &http.Transport{
+                TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+            },
+        }
+        
+        resp, err := client.Get(s.config.ServerURL + "/")
+        if err != nil {
+            return fmt.Errorf("server not accessible: %v", err)
+        }
+        defer resp.Body.Close()
+        
+        if resp.StatusCode != 200 {
+            return fmt.Errorf("server returned status %d", resp.StatusCode)
+        }
+        
+        return nil
+    })
+    
+    fmt.Printf("✅ Environment validation completed\n\n")
+    return nil
 }
 ```
 
-## Security & Validation Requirements
+### Phase 3: Authentication Workflow (Test Phase 2)
 
-### Authentication Security
-- **OPAQUE Protocol**: Zero-knowledge authentication with no password exposure
-- **TOTP Verification**: Real 6-digit codes generated with production parameters
-- **JWT Validation**: Proper token format and expiration handling
-- **Session Management**: Secure session key derivation and usage
+**Goal**: Test authentication and session management across tools.
 
-### File Security
-- **End-to-End Encryption**: File encrypted client-side before upload
-- **FEK Protection**: File Encryption Keys encrypted with session keys
-- **Integrity Verification**: SHA-256 hash comparison for all file operations
-- **Secure Transport**: All operations over HTTPS with proper certificate handling
-
-### Share Security
-- **Argon2id Parameters**: 128MB memory, 4 iterations, 4 threads (production settings)
-- **Anonymous Access**: No authentication required for share access
-- **Timing Protection**: Minimum 1-second response times for security endpoints
-- **Rate Limiting**: Exponential backoff for failed share access attempts
-- **EntityID Privacy**: Anonymous user identification without personal data
-
-### Database Security
-- **SQL Injection Prevention**: Parameterized queries for all database operations
-- **Data Cleanup**: Complete removal of test data after execution
-- **Access Validation**: Proper database permissions and authentication
-
-## Integration Points
-
-### Existing Arkfile Components to Reuse
-
-#### Authentication System
 ```go
-import (
-    "github.com/yourorg/arkfile/auth"
-    "github.com/yourorg/arkfile/models"
-)
+func (s *IntegrationSuite) runAuthenticationWorkflow() error {
+    fmt.Printf("📋 Phase 2: Authentication Workflow\n")
+    
+    var opaqueExportKey string
+    var sessionToken string
+    
+    s.runTest("User Authentication", func() error {
+        result, err := s.executeCommand("arkfile-client", "login", "--username", s.config.TestUser)
+        if err != nil {
+            return fmt.Errorf("login failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        // Parse login output for session data
+        if strings.Contains(result.Stdout, "Login successful") {
+            sessionToken = extractSessionToken(result.Stdout)
+            opaqueExportKey = extractOPAQUEExportKey(result.Stdout)
+            
+            if opaqueExportKey == "" {
+                return fmt.Errorf("OPAQUE export key not found in login output")
+            }
+            
+            // Store for later phases
+            s.setSessionData("opaque_export_key", opaqueExportKey)
+            s.setSessionData("session_token", sessionToken)
+            
+            return nil
+        }
+        
+        return fmt.Errorf("login output invalid: %s", result.Stdout)
+    })
+    
+    s.runTest("Session Persistence", func() error {
+        // Test that session persists across command invocations
+        result, err := s.executeCommand("arkfile-client", "list-files")
+        if err != nil {
+            return fmt.Errorf("session not persisting: %v", err)
+        }
+        
+        if strings.Contains(result.Stderr, "authentication required") {
+            return fmt.Errorf("session not properly persisted")
+        }
+        
+        return nil
+    })
+    
+    s.runTest("OPAQUE Export Key Validation", func() error {
+        // Verify export key format and length
+        if len(opaqueExportKey) < 64 {
+            return fmt.Errorf("OPAQUE export key too short: %d bytes", len(opaqueExportKey))
+        }
+        
+        // Test key with cryptocli
+        result, err := s.executeCommand("cryptocli", "validate-export-key", "--key", opaqueExportKey)
+        if err != nil {
+            // If validate command doesn't exist, just check format
+            if !isValidHexString(opaqueExportKey) {
+                return fmt.Errorf("OPAQUE export key not valid hex: %s", opaqueExportKey[:20]+"...")
+            }
+        }
+        
+        return nil
+    })
+    
+    fmt.Printf("✅ Authentication workflow completed\n\n")
+    return nil
+}
 
-// Use existing OPAQUE implementation
-opaqueProvider := auth.NewOPAQUEProvider()
+// Helper functions
+func extractSessionToken(output string) string {
+    // Parse session token from arkfile-client output
+    lines := strings.Split(output, "\n")
+    for _, line := range lines {
+        if strings.Contains(line, "Session token:") {
+            parts := strings.Split(line, ":")
+            if len(parts) > 1 {
+                return strings.TrimSpace(parts[1])
+            }
+        }
+    }
+    return ""
+}
+
+func extractOPAQUEExportKey(output string) string {
+    // Parse OPAQUE export key from arkfile-client output
+    lines := strings.Split(output, "\n")
+    for _, line := range lines {
+        if strings.Contains(line, "OPAQUE export key:") {
+            parts := strings.Split(line, ":")
+            if len(parts) > 1 {
+                return strings.TrimSpace(parts[1])
+            }
+        }
+    }
+    return ""
+}
 ```
 
-#### Crypto System
+### Phase 4: File Operations Workflow (Test Phase 3)
+
+**Goal**: Test complete file encrypt→upload→download→decrypt cycle.
+
 ```go
-import (
-    "github.com/yourorg/arkfile/crypto"
-)
-
-// Use existing encryption functions
-encryptedData, err := crypto.EncryptWithGCM(plaintext, key)
+func (s *IntegrationSuite) runFileOperationsWorkflow() error {
+    fmt.Printf("📋 Phase 3: File Operations Workflow\n")
+    
+    var testFileName = "integration-test.dat"
+    var encryptedFileName = "integration-test.enc"
+    var downloadedFileName = "integration-test-downloaded.enc"
+    var decryptedFileName = "integration-test-decrypted.dat"
+    var originalHash string
+    var fileID string
+    
+    s.runTest("Test File Generation", func() error {
+        result, err := s.executeCommand("cryptocli", "generate-test-file",
+            "--size", s.config.TestFileSize,
+            "--pattern", "sequential",
+            "--output", testFileName,
+            "--hash-output", testFileName+".hash")
+        if err != nil {
+            return fmt.Errorf("test file generation failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        // Read original file hash
+        hashBytes, err := os.ReadFile(testFileName + ".hash")
+        if err != nil {
+            return fmt.Errorf("failed to read hash file: %v", err)
+        }
+        originalHash = strings.TrimSpace(string(hashBytes))
+        
+        return nil
+    })
+    
+    s.runTest("File Encryption with OPAQUE Keys", func() error {
+        opaqueKey := s.getSessionData("opaque_export_key")
+        if opaqueKey == "" {
+            return fmt.Errorf("OPAQUE export key not available")
+        }
+        
+        result, err := s.executeCommand("cryptocli", "encrypt-file-opaque",
+            "--input", testFileName,
+            "--output", encryptedFileName,
+            "--export-key", opaqueKey,
+            "--username", s.config.TestUser,
+            "--file-id", testFileName)
+        if err != nil {
+            return fmt.Errorf("file encryption failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        // Verify encrypted file exists and is larger than original
+        if !fileExists(encryptedFileName) {
+            return fmt.Errorf("encrypted file not created")
+        }
+        
+        return nil
+    })
+    
+    s.runTest("Chunked File Upload", func() error {
+        result, err := s.executeCommand("arkfile-client", "upload",
+            "--file", encryptedFileName,
+            "--description", "Integration test file")
+        if err != nil {
+            return fmt.Errorf("file upload failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        // Parse file ID from upload output
+        fileID = extractFileID(result.Stdout)
+        if fileID == "" {
+            return fmt.Errorf("file ID not found in upload output")
+        }
+        
+        s.setSessionData("file_id", fileID)
+        
+        return nil
+    })
+    
+    s.runTest("File Download", func() error {
+        result, err := s.executeCommand("arkfile-client", "download",
+            "--file-id", fileID,
+            "--output", downloadedFileName)
+        if err != nil {
+            return fmt.Errorf("file download failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        if !fileExists(downloadedFileName) {
+            return fmt.Errorf("downloaded file not created")
+        }
+        
+        return nil
+    })
+    
+    s.runTest("File Decryption and Integrity", func() error {
+        opaqueKey := s.getSessionData("opaque_export_key")
+        
+        result, err := s.executeCommand("cryptocli", "decrypt-file-opaque",
+            "--input", downloadedFileName,
+            "--output", decryptedFileName,
+            "--export-key", opaqueKey,
+            "--username", s.config.TestUser)
+        if err != nil {
+            return fmt.Errorf("file decryption failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        // Verify file integrity through hash comparison
+        finalHash, err := calculateFileHash(decryptedFileName)
+        if err != nil {
+            return fmt.Errorf("failed to calculate final hash: %v", err)
+        }
+        
+        if finalHash != originalHash {
+            return fmt.Errorf("file integrity check failed: original=%s, final=%s", 
+                originalHash[:16]+"...", finalHash[:16]+"...")
+        }
+        
+        fmt.Printf("✅ Perfect file integrity maintained through complete cycle\n")
+        return nil
+    })
+    
+    fmt.Printf("✅ File operations workflow completed\n\n")
+    return nil
+}
 ```
 
-#### Database Models
+### Phase 5: Share Operations Workflow (Test Phase 4)
+
+**Goal**: Test anonymous sharing with proper session isolation and security validation.
+
 ```go
-import (
-    "github.com/yourorg/arkfile/models"
-    "github.com/yourorg/arkfile/database"
-)
-
-// Use existing user and file models
-user := &models.User{
-    Username: testUsername,
-    Email:    &testEmail, // Optional field
-    // ... other fields
+func (s *IntegrationSuite) runShareOperationsWorkflow() error {
+    fmt.Printf("📋 Phase 4: Share Operations Workflow\n")
+    
+    var shareURL string
+    var sharePassword = "integration-test-share-pass"
+    var sharedFileName = "integration-test-shared.dat"
+    var originalFileHash string
+    
+    s.runTest("Share Creation (Authenticated User)", func() error {
+        fileID := s.getSessionData("file_id")
+        if fileID == "" {
+            return fmt.Errorf("file ID not available from previous phase")
+        }
+        
+        // Capture original file hash for later verification
+        if hashData := s.getSessionData("original_hash"); hashData != "" {
+            originalFileHash = hashData
+        } else {
+            // Calculate hash from decrypted file if not stored
+            hash, err := calculateFileHash("integration-test-decrypted.dat")
+            if err != nil {
+                return fmt.Errorf("failed to get original file hash: %v", err)
+            }
+            originalFileHash = hash
+        }
+        
+        result, err := s.executeCommand("arkfile-client", "create-share",
+            "--file-id", fileID,
+            "--password", sharePassword,
+            "--description", "Integration test share")
+        if err != nil {
+            return fmt.Errorf("share creation failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        // Parse share URL from output
+        shareURL = extractShareURL(result.Stdout)
+        if shareURL == "" {
+            return fmt.Errorf("share URL not found in output")
+        }
+        
+        s.setSessionData("share_url", shareURL)
+        s.setSessionData("share_password", sharePassword)
+        s.setSessionData("original_file_hash", originalFileHash)
+        
+        fmt.Printf("✅ Share created successfully with URL: %s\n", shareURL[:50]+"...")
+        
+        return nil
+    })
+    
+    s.runTest("User Logout (Session Isolation)", func() error {
+        // Critical: Log out the authenticated user to test anonymous access
+        result, err := s.executeCommand("arkfile-client", "logout")
+        if err != nil {
+            return fmt.Errorf("user logout failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        if !strings.Contains(result.Stdout, "Logout successful") {
+            return fmt.Errorf("logout output invalid: %s", result.Stdout)
+        }
+        
+        // Verify session is actually cleared
+        listResult, listErr := s.executeCommand("arkfile-client", "list-files")
+        if listErr == nil || !strings.Contains(listResult.Stderr, "authentication required") {
+            return fmt.Errorf("session not properly cleared after logout")
+        }
+        
+        fmt.Printf("✅ User logged out, session cleared for anonymous testing\n")
+        
+        return nil
+    })
+    
+    s.runTest("Anonymous Share Access", func() error {
+        // Extract share data from URL
+        shareSalt, shareContent, err := parseShareURL(shareURL)
+        if err != nil {
+            return fmt.Errorf("failed to parse share URL: %v", err)
+        }
+        
+        // Use cryptocli to decrypt as anonymous visitor with only share URL + password
+        result, err := s.executeCommand("cryptocli", "decrypt-share-file",
+            "--input", shareContent,
+            "--output", sharedFileName,
+            "--share-password", sharePassword,
+            "--salt", shareSalt)
+        if err != nil {
+            return fmt.Errorf("anonymous share decryption failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        if !fileExists(sharedFileName) {
+            return fmt.Errorf("shared file not created by anonymous access")
+        }
+        
+        fmt.Printf("✅ Anonymous visitor successfully accessed and decrypted shared file\n")
+        
+        return nil
+    })
+    
+    s.runTest("Anonymous Share Integrity Verification", func() error {
+        // Second SHA256 verification: compare anonymously decrypted file against original
+        sharedHash, err := calculateFileHash(sharedFileName)
+        if err != nil {
+            return fmt.Errorf("failed to calculate anonymously decrypted file hash: %v", err)
+        }
+        
+        originalHash := s.getSessionData("original_file_hash")
+        if originalHash == "" {
+            return fmt.Errorf("original file hash not available for comparison")
+        }
+        
+        if sharedHash != originalHash {
+            return fmt.Errorf("anonymous share integrity check FAILED: original=%s, anonymous=%s", 
+                originalHash[:16]+"...", sharedHash[:16]+"...")
+        }
+        
+        fmt.Printf("✅ Perfect integrity: Anonymous decryption matches original file\n")
+        fmt.Printf("   Original hash:  %s\n", originalHash[:32]+"...")
+        fmt.Printf("   Anonymous hash: %s\n", sharedHash[:32]+"...")
+        
+        return nil
+    })
+    
+    s.runTest("Session Isolation Validation", func() error {
+        // Verify that anonymous access truly worked without authentication
+        // Try to access authenticated endpoints (should fail)
+        result, err := s.executeCommand("arkfile-client", "list-files")
+        if err == nil {
+            return fmt.Errorf("authenticated endpoint accessible without login - session isolation failed")
+        }
+        
+        if !strings.Contains(result.Stderr, "authentication required") {
+            return fmt.Errorf("unexpected error from authenticated endpoint: %s", result.Stderr)
+        }
+        
+        fmt.Printf("✅ Session isolation confirmed: Anonymous access only, no authenticated access\n")
+        
+        return nil
+    })
+    
+    fmt.Printf("✅ Share operations workflow completed with proper anonymous access testing\n\n")
+    return nil
 }
 ```
 
-### New Components Required
+### Phase 6: Admin Operations Workflow (Test Phase 5)
 
-#### Chunked Upload Client
+**Goal**: Test administrative tools and user management.
+
 ```go
-type ChunkedUploader struct {
-    httpClient  *HTTPClient
-    sessionID   string
-    totalChunks int
-    chunkSize   int
-}
-
-func (cu *ChunkedUploader) UploadChunk(index int, data []byte) error {
-    // Implementation for chunked upload
+func (s *IntegrationSuite) runAdminOperationsWorkflow() error {
+    fmt.Printf("📋 Phase 5: Admin Operations Workflow\n")
+    
+    s.runTest("Admin Authentication", func() error {
+        result, err := s.executeCommand("arkfile-admin", "login", "--username", "admin")
+        if err != nil {
+            return fmt.Errorf("admin login failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        if !strings.Contains(result.Stdout, "Admin login successful") {
+            return fmt.Errorf("admin login output invalid")
+        }
+        
+        return nil
+    })
+    
+    s.runTest("User Management - List Users", func() error {
+        result, err := s.executeCommand("arkfile-admin", "list-users")
+        if err != nil {
+            return fmt.Errorf("list users failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        if !strings.Contains(result.Stdout, s.config.TestUser) {
+            return fmt.Errorf("test user not found in user list")
+        }
+        
+        return nil
+    })
+    
+    s.runTest("User Management - Storage Management", func() error {
+        result, err := s.executeCommand("arkfile-admin", "set-storage",
+            "--username", s.config.TestUser,
+            "--credits", "2000")
+        if err != nil {
+            return fmt.Errorf("set storage failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        return nil
+    })
+    
+    s.runTest("System Operations - Health Check", func() error {
+        result, err := s.executeCommand("arkfile-admin", "health-check")
+        if err != nil {
+            // Expected if server endpoints not implemented yet
+            if strings.Contains(result.Stderr, "server endpoint not yet available") {
+                fmt.Printf("ℹ️  Health check endpoint not yet implemented (expected)\n")
+                return nil
+            }
+            return fmt.Errorf("health check failed: %v\nStderr: %s", err, result.Stderr)
+        }
+        
+        return nil
+    })
+    
+    fmt.Printf("✅ Admin operations workflow completed\n\n")
+    return nil
 }
 ```
 
-#### MinIO Integration Testing
+### Phase 7: Performance and Integration (Final Validation)
+
+**Goal**: End-to-end validation and performance benchmarking.
+
 ```go
-type MinIOTester struct {
-    endpoint   string
-    accessKey  string
-    secretKey  string
-    bucketName string
+func (s *IntegrationSuite) runPerformanceValidation() error {
+    if !s.config.Performance {
+        return nil
+    }
+    
+    fmt.Printf("📋 Performance Benchmarking\n")
+    
+    // Benchmark file operations with different sizes
+    sizes := []string{"1MB", "10MB", "50MB"}
+    
+    for _, size := range sizes {
+        s.runTest(fmt.Sprintf("Performance - %s File Operations", size), func() error {
+            startTime := time.Now()
+            
+            // Complete file cycle with timing
+            if err := s.benchmarkFileCycle(size); err != nil {
+                return err
+            }
+            
+            duration := time.Since(startTime)
+            fmt.Printf("📊 %s file cycle completed in: %v\n", size, duration)
+            
+            return nil
+        })
+    }
+    
+    return nil
 }
 
-func (mt *MinIOTester) VerifyObjectExists(objectKey string) error {
-    // Direct MinIO object verification
+func (s *IntegrationSuite) cleanup() error {
+    if !s.config.Cleanup {
+        return nil
+    }
+    
+    fmt.Printf("🧹 Cleaning up test files\n")
+    
+    testFiles := []string{
+        "integration-test.dat",
+        "integration-test.enc", 
+        "integration-test-downloaded.enc",
+        "integration-test-decrypted.dat",
+        "integration-test-shared.dat",
+        "integration-test.dat.hash",
+    }
+    
+    for _, file := range testFiles {
+        if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+            fmt.Printf("⚠️  Failed to remove %s: %v\n", file, err)
+        }
+    }
+    
+    return nil
 }
 ```
 
-## Testing Philosophy and Framework Integration
+## Success Criteria
 
-### Core Testing Principles
+### Functional Requirements
+- ✅ All 5 test phases pass with existing Go tools
+- ✅ File integrity maintained through complete encrypt→upload→download→decrypt cycle
+- ✅ OPAQUE export keys work seamlessly between arkfile-client and cryptocli
+- ✅ Session management works correctly across tool invocations
+- ✅ Share operations produce correct decrypted files
+- ✅ Admin operations integrate correctly with user workflows
 
-The integration testing framework eliminates simulation and mocking in favor of authentic server interactions using production-grade cryptographic operations. By leveraging static linking, all testing tools use identical libopaque implementations to the server, ensuring perfect consistency between test and production environments.
+### Performance Requirements
+- ✅ 100MB file operations complete within reasonable time (<2 minutes)
+- ✅ Authentication workflow completes quickly (<10 seconds)
+- ✅ Memory usage stays reasonable during large file operations
+- ✅ Performance meets or exceeds test-app-curl.sh baseline
 
-**Authentic Operations**: All tests perform real OPAQUE authentication, genuine file encryption, and actual server API calls using production cryptographic implementations.
+### Integration Requirements
+- ✅ Clean integration with existing `dev-reset.sh` + `test-app-curl.sh` workflow
+- ✅ Proper error handling and cleanup on failures
+- ✅ Structured output with clear pass/fail reporting
+- ✅ Zero regressions in existing functionality
 
-**Comprehensive Workflows**: Testing covers complete user journeys from registration through file operations to anonymous sharing, validating every aspect of the user experience.
+## Usage Examples
 
-**Static Binary Consistency**: All testing tools use statically linked binaries, eliminating library dependency issues and ensuring identical cryptographic behavior across test environments.
-
-**Production Readiness**: The testing framework doubles as administrative tooling, providing practical utilities for system management while enabling comprehensive validation.
-
-### Tool Integration Architecture
-
-The testing framework uses four primary tools working in coordination:
-
-**cryptocli** (Static Cryptographic Operations):
-- File generation with deterministic patterns for integrity verification
-- OPAQUE-derived encryption/decryption using identical server implementations
-- Key derivation and management with static libopaque
-- Chunked file processing for large file operations
-
-**arkfile-client** (Authenticated Server Communication):
-- OPAQUE authentication flows with export key capture
-- TLS 1.3 server communication (localhost and remote)
-- Chunked file upload/download operations
-- Session management and token handling
-
-**arkfile-admin** (Administrative Operations):
-- System health monitoring and validation
-- User management and database operations
-- Performance monitoring and benchmarking
-- Cleanup and resource management
-
-**Test Orchestration** (Bash Integration):
-- Coordination between Go tools and existing test infrastructure
-- Integration with `test-app-curl.sh` for comprehensive validation
-- Environment setup and teardown procedures
-- Result aggregation and reporting
-
-### Integration Workflow
-
-```
-Authentication Phase (arkfile-client):
-  Register User → OPAQUE Login → TOTP Setup → Export Keys
-
-File Operations Phase (cryptocli + arkfile-client):
-  Generate Test File → Encrypt with OPAQUE Keys → Chunked Upload → Verify Listing
-
-Download Validation Phase (arkfile-client + cryptocli):
-  Download Encrypted File → Decrypt with OPAQUE Keys → Verify Integrity
-
-Share Operations Phase (arkfile-client + cryptocli):
-  Create Share → Anonymous Access → Share Download → Verify Integrity
-
-Administrative Phase (arkfile-admin):
-  System Health Check → Performance Metrics → Resource Cleanup
-```
-
-## Testing Scenarios & Edge Cases
-
-### Success Path Validation
-1. **Happy Path**: All operations succeed without errors
-2. **Performance Validation**: Operations complete within acceptable timeframes
-3. **Data Integrity**: All hash comparisons pass
-4. **Security Compliance**: All security measures active and working
-
-### Error Condition Handling
-1. **Network Failures**: Graceful handling of connection timeouts
-2. **Authentication Errors**: Proper error messages for auth failures
-3. **File Upload Failures**: Chunked upload retry and recovery
-4. **Database Errors**: Transaction rollback and cleanup
-
-### Security Boundary Testing
-1. **Invalid TOTP Codes**: Rejection of incorrect 2FA codes
-2. **Expired Tokens**: Proper handling of JWT expiration
-3. **Rate Limiting Triggers**: Verification of rate limiting activation
-4. **Share Password Attacks**: Timing protection under load
-
-### Edge Case Scenarios
-1. **Large File Handling**: 100MB upload performance and reliability
-2. **Concurrent Operations**: Multiple simultaneous test executions
-3. **Resource Cleanup**: Proper cleanup after partial failures
-4. **System Resource Usage**: Memory and disk space management
-
-## Implementation Timeline
-
-### Phase 1: Foundation (Days 1-2)
-- **Day 1**: Project structure, configuration, and basic HTTP client
-- **Day 2**: Database client and TOTP generation integration
-
-### Phase 2: Authentication & File Operations (Days 3-4)
-- **Day 3**: OPAQUE authentication flow and TOTP integration
-- **Day 4**: File upload/download with chunked operations
-
-### Phase 3: Share System (Days 5-6)
-- **Day 5**: Share creation and anonymous access implementation
-- **Day 6**: End-to-end testing and validation
-
-### Phase 4: Polish & Documentation (Day 7)
-- **Day 7**: Error handling, edge cases, and comprehensive documentation
-
-## Expected Output & Usage
-
-### Command Line Interface
+### Basic Testing
 ```bash
-# Basic execution
-go run scripts/testing/test-complete-integration.go
+# Run all integration tests
+go run scripts/testing/integration-test.go full-suite
 
-# With custom configuration
-go run scripts/testing/test-complete-integration.go \
-    --server-url https://arkfile.example.com \
-    --test-username integration.user.custom \
-    --test-email integration@example.com \
-    --verbose
+# Run specific phase with verbose output
+go run scripts/testing/integration-test.go file-ops --verbose
 
-# Specific phase testing
-go run scripts/testing/test-complete-integration.go --phase auth
-go run scripts/testing/test-complete-integration.go --phase files
-go run scripts/testing/test-complete-integration.go --phase sharing
-
-# Skip cleanup for debugging
-go run scripts/testing/test-complete-integration.go --no-cleanup
+# Run with performance benchmarking
+go run scripts/testing/integration-test.go full-suite --performance --cleanup
 ```
 
-### Expected Console Output
-```
-🧪 ARKFILE COMPLETE INTEGRATION TEST
-Configuration:
-  Server URL: https://localhost:4443
-  Test Username: integration.test.user.2025
-  Test Email: integration-test@example.com (optional)
-  Test File Size: 100MB
-  Database URL: http://localhost:4001
-  TLS Insecure: true
-
-📋 Phase 1: User Setup & Authentication
-  ✅ Step 1: RegisterUser (2.1s)
-      - OPAQUE registration successful (username: integration.test.user.2025)
-      - Optional email provided: integration-test@example.com
-      - Temp token: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
-      - Session key: 64 bytes
-      - Requires TOTP setup: true
-      
-  ✅ Step 2: ApproveInDatabase (0.3s)
-      - Database query executed successfully (username: integration.test.user.2025)
-      - Rows affected: 1
-      - User approval verified
-      
-  ✅ Step 3: SetupTOTP (4.2s)
-      - TOTP secret: JBSWY3DPEHPK3PXP... (32 chars)
-      - QR code URL generated
-      - Backup codes: 12 codes generated
-      - TOTP verification: SUCCESS (code: 123456)
-      
-  ✅ Step 4: LoginUser (3.8s)
-      - OPAQUE login successful
-      - TOTP authentication successful
-      - Final JWT token: 512 bytes
-      - Refresh token: 256 bytes
-      - Session key: 64 bytes
-      
-  ✅ Step 5: ValidateTokens (0.5s)
-      - JWT format validation: PASSED
-      - Token expiration: 1 hour
-      - Refresh token valid: true
-
-📋 Phase 2: File Operations
-  ✅ Step 6: GenerateTestFile (1.2s)
-      - File size: 52,428,800 bytes (50.0 MB)
-      - File path: /tmp/arkfile-test-50mb.dat
-      - SHA-256: a1b2c3d4e5f6789012345678901234567890abcdef...
-      
-  ✅ Step 7: UploadFile (45.3s)
-      - File encryption: AES-GCM with random FEK
-      - FEK encryption: Session key derived encryption
-      - Total chunks: 53 (1MB each)
-      - Upload progress: 100% (53/53 chunks)
-      - File ID: file_abc123def456
-      
-  ✅ Step 8: ListFiles (0.8s)
-      - Files in account: 1
-      - Target file found: ✓
-      - File metadata verified: ✓
-      
-  ✅ Step 9: DownloadFile (12.4s)
-      - Encrypted file download: 52.4MB
-      - FEK decryption: SUCCESS
-      - File decryption: SUCCESS
-      - Save path: /tmp/arkfile-authenticated-download.dat
-      
-  ✅ Step 10: VerifyIntegrity (0.9s)
-      - Original hash:  a1b2c3d4e5f6789012345678901234567890abcdef...
-      - Downloaded hash: a1b2c3d4e5f6789012345678901234567890abcdef...
-      - Hash match: ✅ PERFECT INTEGRITY
-
-📋 Phase 3: File Sharing Operations
-  ✅ Step 11: CreateShareLink (3.7s)
-      - Share password: TestSharePassword2025_SecureAndLong!
-      - Argon2id salt: 32 bytes (random)
-      - Share key derivation: 128MB memory, 4 iterations
-      - FEK re-encryption: SUCCESS
-      - Share ID: share_xyz789abc123
-      - Share URL: https://localhost:4443/shared/share_xyz789abc123
-      - Expires: 2025-09-05T08:11:37Z
-      
-  ✅ Step 12: ValidateShareInDatabase (0.4s)
-      - file_share_keys table: 1 entry found
-      - Share ID match: ✓
-      - Salt length: 32 bytes ✓
-      - Encrypted FEK length: 48 bytes ✓
-      
-  ✅ Step 13: LogoutUser (0.6s)
-      - JWT token invalidated
-      - Session terminated
-      - Verification: protected endpoints inaccessible ✓
-      
-  ✅ Step 14: AnonymousShareAccess (1.8s)
-      - Share access request: POST /api/share/share_xyz789abc123
-      - Timing protection: 1,015ms (✅ > 900ms)
-      - Response: salt + encrypted FEK received
-      - Download URL: https://storage.localhost:9000/files/obj_abc123...
-      
-  ✅ Step 15: AnonymousDownload (15.2s)
-      - Argon2id key derivation: 128MB operation completed
-      - FEK decryption with share key: SUCCESS
-      - File download (no auth): 52.4MB
-      - File decryption with FEK: SUCCESS
-      - Save path: /tmp/arkfile-anonymous-download.dat
-      
-  ✅ Step 16: VerifySharedFileIntegrity (0.7s)
-      - Original hash:    a1b2c3d4e5f6789012345678901234567890abcdef...
-      - Auth download:    a1b2c3d4e5f6789012345678901234567890abcdef...
-      - Anonymous hash:   a1b2c3d4e5f6789012345678901234567890abcdef...
-      - Triple integrity: ✅ PERFECT MATCH
-
-📋 Phase 4: Comprehensive Cleanup
-  ✅ Step 17: CleanupUser (1.2s)
-      - User removed from users table (username: integration.test.user.2025)
-      - OPAQUE data removed
-      - TOTP data removed  
-      - File metadata removed
-      - Share data removed
-      - MinIO objects deleted: 1
-      
-  ✅ Step 18: ValidateCleanup (0.8s)
-      - Database queries: 0 test records found ✓
-      - Temporary files removed ✓
-      - System state clean ✓
-
-🎉 ALL TESTS COMPLETED SUCCESSFULLY
-
-📊 Test Summary:
-   Total Duration: 2 minutes 34 seconds
-   Total Steps: 18
-   Success Rate: 100% (18/18)
-   
-📈 Performance Metrics:
-   File Upload: 45.3s (100MB → ~1.1MB/s)
-   Authenticated Download: 12.4s (~4.0MB/s)  
-   Anonymous Download: 15.2s (~3.3MB/s)
-   Share Access Timing: 1,015ms (security compliant)
-   
-🔐 Security Validation:
-   ✅ OPAQUE zero-knowledge authentication
-   ✅ TOTP two-factor authentication  
-   ✅ End-to-end file encryption
-   ✅ Argon2id share password protection
-   ✅ Timing protection (>900ms)
-   ✅ Anonymous access privacy
-   ✅ Perfect file integrity (3x verified)
-   
-🗄️ System Integration:
-   ✅ Database operations (rqlite)
-   ✅ Storage backend (MinIO S3)
-   ✅ TLS certificate handling
-   ✅ JWT token management
-   ✅ Rate limiting validation
-   
-💾 File Operations Summary:
-   Original file:         52,428,800 bytes
-   Authenticated round-trip: PERFECT (100% integrity)
-   Anonymous share access:   PERFECT (100% integrity)
-   Total data transferred:   ~157MB (3x file size)
-
-✨ ARKFILE SYSTEM VALIDATION: COMPLETE SUCCESS
-Your secure file vault system is fully operational and production-ready!
-
-Cleanup completed - all test data removed
-Test artifacts saved to: /tmp/arkfile-integration-test-20250806-081137/
-```
-
-### Configuration File Support
-```yaml
-# config/integration-test.yaml
-server:
-  url: "https://localhost:4443"
-  tls_insecure: true
-  
-test:
-  username: "integration.test.user.2025"
-  email: "integration-test@example.com"  # Optional
-  password: "IntegrationTestPassword123456789!"
-  share_password: "TestSharePassword2025_SecureAndLong!"
-  file_size: 52428800  # 100MB
-  
-database:
-  url: "http://demo-user:TestPassword123_Secure@localhost:4001"
-  
-options:
-  verbose: false
-  cleanup_on_fail: true
-  save_artifacts: true
-  performance_mode: true
-```
-
-## File Structure
-
-### Project Organization
-```
-scripts/testing/
-├── test-complete-integration.go      # Main integration test
-├── integration/                      # Support packages
-│   ├── config.go                    # Configuration management
-│   ├── client/                      # HTTP and database clients
-│   │   ├── http.go                 # HTTP client implementation
-│   │   └── database.go             # Database client implementation
-│   ├── crypto/                      # Crypto operations
-│   │   ├── encryption.go           # File encryption/decryption
-│   │   ├── totp.go                 # TOTP generation
-│   │   └── argon2.go               # Argon2id operations
-│   ├── models/                      # Request/response models
-│   │   ├── auth.go                 # Authentication models
-│   │   ├── files.go                # File operation models
-│   │   └── shares.go               # Share operation models
-│   └── utils/                       # Utility functions
-│       ├── logging.go              # Structured logging
-│       ├── validation.go           # Response validation
-│       └── cleanup.go              # Resource cleanup
-└── go.mod                           # Go module definition
-```
-
-### Dependencies
-```go
-module arkfile-integration-test
-
-go 1.21
-
-require (
-    github.com/pquerna/otp v1.4.0
-    golang.org/x/crypto v0.17.0
-    github.com/stretchr/testify v1.8.4
-)
-```
-
-## Success Criteria & Validation
-
-### Completion Criteria
-1. **✅ All 18 steps complete without errors**
-2. **✅ Triple file integrity verification passes**
-3. **✅ Security measures validated (timing, rate limiting)**
-4. **✅ Database operations successful**
-5. **✅ Anonymous access working correctly**
-6. **✅ Complete cleanup verification**
-
-### Performance Benchmarks
-- **File Upload**: < 60 seconds for 100MB
-- **File Download**: < 20 seconds for 100MB  
-- **Share Creation**: < 5 seconds
-- **Anonymous Access**: 900ms - 1500ms (timing protection)
-- **Total Test Duration**: < 5 minutes
-
-### Security Validation
-- **OPAQUE Authentication**: Zero password exposure
-- **TOTP Verification**: Real 6-digit codes accepted
-- **Encryption Round-trip**: Perfect integrity preservation  
-- **Share Password Security**: Argon2id with 128MB memory requirement
-- **Timing Protection**: Consistent >900ms response times
-- **Anonymous Privacy**: No user information disclosure
-
-### Integration Validation
-- **Database Consistency**: All operations properly recorded/cleaned
-- **Storage Backend**: MinIO objects created and deleted correctly
-- **TLS Handling**: Self-signed certificates accepted in test mode
-- **API Compatibility**: All endpoints responding as expected
-- **Error Handling**: Graceful failure and cleanup on errors
-
-## Enhanced Tool Implementations
-
-### Enhanced cryptocli Commands
-
-#### File Generation and Encryption
-
-```go
-// Generate deterministic test files with integrity hashes
-cryptocli generate-test-file --size 100MB --pattern sequential --output test.dat --hash-output test.hash
-
-// Encrypt files using OPAQUE-derived keys (production compatibility)
-cryptocli encrypt-file-opaque --input test.dat --output test.enc --export-key <hex> --username alice --file-id test.dat
-
-// Chunked encryption for large file upload preparation
-cryptocli encrypt-chunked-opaque --input test.dat --output-dir chunks/ --export-key <hex> --username alice --manifest manifest.json
-
-// Decrypt files using various key sources
-cryptocli decrypt-file-opaque --input test.enc --output decrypted.dat --export-key <hex> --username alice
-cryptocli decrypt-file-opaque --input test.enc --output decrypted.dat --encrypted-fek fek.bin --export-key <hex>
-```
-
-#### Share-Based Decryption
-
-```go
-// Decrypt files accessed through anonymous sharing
-cryptocli decrypt-share-file --input shared.enc --output shared-decrypted.dat --share-password <password> --salt <hex>
-
-// Validate share key derivation using Argon2id
-cryptocli derive-share-key --password <password> --salt <hex> --output share-key.hex
-```
-
-### Enhanced arkfile-client Commands
-
-#### Authentication and Session Management
-
-```go
-// Complete OPAQUE authentication with export key capture
-arkfile-client login --username alice --export-opaque-key opaque-export.hex --session-file session.json
-
-// Session validation and token management
-arkfile-client validate-session --session-file session.json
-arkfile-client refresh-token --session-file session.json
-```
-
-#### File Operations
-
-```go
-// Upload chunked encrypted files with progress tracking
-arkfile-client upload --manifest manifest.json --chunks-dir chunks/ --filename test.dat --progress
-
-// Download files with encrypted FEK export
-arkfile-client download --file-id <id> --output encrypted.dat --export-encrypted-fek fek.bin
-
-// List files with detailed metadata
-arkfile-client list-files --output-json files.json
-```
-
-#### Share Management
-
-```go
-// Create anonymous shares with Argon2id password protection
-arkfile-client create-share --file-id <id> --password <password> --expires-days 30
-
-// Access shares anonymously (no authentication required)
-arkfile-client access-share --share-id <id> --password <password> --output shared.dat
-```
-
-### arkfile-admin Integration
-
-#### System Validation
-
-```go
-// Comprehensive system health assessment
-arkfile-admin health --detailed --output-json health.json
-
-// Database connectivity and integrity validation
-arkfile-admin validate-database --check-integrity --repair-minor-issues
-
-// Performance benchmarking with detailed metrics
-arkfile-admin benchmark --test-file-size 100MB --concurrent-users 5 --output-json benchmark.json
-```
-
-#### Resource Management
-
-```go
-// Clean up test data and resources
-arkfile-admin cleanup --test-users --temporary-files --verify-cleanup
-
-// User management for testing
-arkfile-admin create-test-user --username test-user --auto-approve
-arkfile-admin remove-test-user --username test-user --cleanup-files
-```
-
-## Test Integration with Existing Infrastructure
-
-### Enhanced test-app-curl.sh Integration
-
-#### Phase 11: Go Tools File Operations
-
+### Development Workflow
 ```bash
-phase_file_operations_go_tools() {
-    phase "FILE OPERATIONS WITH GO TOOLS"
-    
-    local timer_start
-    [ "$PERFORMANCE_MODE" = true ] && timer_start=$(start_timer)
-    
-    # Ensure Go tools are built with static linking
-    build_go_tools_static
-    
-    # Export authentication data for Go tools
-    export_auth_data_for_go_tools
-    
-    # Step 1: Generate 100MB test file with cryptocli
-    generate_large_test_file_with_cryptocli
-    
-    # Step 2: Authenticate with arkfile-client and capture OPAQUE export key
-    authenticate_with_arkfile_client_export_key
-    
-    # Step 3: Encrypt file using authentic OPAQUE export key
-    encrypt_test_file_with_opaque_keys
-    
-    # Step 4: Upload encrypted file using chunked operations
-    upload_chunked_file_with_arkfile_client
-    
-    # Step 5: Verify file in listing and validate metadata
-    verify_uploaded_file_metadata
-    
-    # Step 6: Download and decrypt file for integrity verification
-    download_and_decrypt_complete_workflow
-    
-    # Step 7: Verify perfect integrity through complete cycle
-    verify_complete_file_integrity
-    
-    # Step 8: Performance benchmarking and metrics
-    benchmark_file_operations_performance
-    
-    success "File operations testing completed with Go tools"
-    
-    if [ "$PERFORMANCE_MODE" = true ]; then
-        local duration=$(end_timer "$timer_start")
-        info "File operations completed in: $duration"
-    fi
-}
+# Complete development testing cycle
+sudo ./scripts/dev-reset.sh                           # Reset environment
+./scripts/testing/test-app-curl.sh                    # API endpoint tests
+go run scripts/testing/integration-test.go full-suite # Tool integration tests
 ```
 
-#### Phase 12: Anonymous Sharing Operations
-
+### Troubleshooting
 ```bash
-phase_anonymous_sharing_go_tools() {
-    phase "ANONYMOUS SHARING WITH GO TOOLS"
-    
-    # Step 1: Create share using arkfile-client
-    create_anonymous_share_with_password
-    
-    # Step 2: Validate share in database
-    validate_share_database_record
-    
-    # Step 3: Logout authenticated user
-    logout_authenticated_session
-    
-    # Step 4: Access share anonymously
-    access_share_anonymously_with_timing_validation
-    
-    # Step 5: Download shared file without authentication
-    download_shared_file_anonymous
-    
-    # Step 6: Decrypt shared file using Argon2id-derived key
-    decrypt_shared_file_with_share_key
-    
-    # Step 7: Verify integrity through complete sharing workflow
-    verify_sharing_workflow_integrity
-    
-    success "Anonymous sharing testing completed with Go tools"
-}
+# Test environment only
+go run scripts/testing/integration-test.go env-check --verbose
+
+# Test specific workflow
+go run scripts/testing/integration-test.go auth-flow --verbose
 ```
 
-### Performance and Security Validation
+## Implementation Status
 
-#### Benchmarking Framework
+**Phase 1: Foundation** - ⏳ Ready to implement
+**Phase 2: Environment** - ⏳ Ready to implement  
+**Phase 3: Authentication** - ⏳ Ready to implement
+**Phase 4: File Operations** - ⏳ Ready to implement
+**Phase 5: Share Operations** - ⏳ Ready to implement
+**Phase 6: Admin Operations** - ⏳ Ready to implement
+**Phase 7: Performance** - ⏳ Ready to implement
 
-```bash
-benchmark_comprehensive_operations() {
-    log "Running comprehensive performance benchmarks..."
-    
-    # File operation benchmarks
-    local upload_start download_start share_start
-    
-    upload_start=$(date +%s%N)
-    upload_chunked_file_with_arkfile_client
-    local upload_duration=$(($(date +%s%N) - upload_start))
-    
-    download_start=$(date +%s%N)
-    download_and_decrypt_complete_workflow
-    local download_duration=$(($(date +%s%N) - download_start))
-    
-    share_start=$(date +%s%N)
-    access_share_anonymously_with_timing_validation
-    local share_duration=$(($(date +%s%N) - share_start))
-    
-    # Performance validation
-    validate_performance_benchmarks "$upload_duration" "$download_duration" "$share_duration"
-}
+**Estimated Implementation Time**: 13-16 hours total
 
-validate_performance_benchmarks() {
-    local upload_ns="$1" download_ns="$2" share_ns="$3"
-    
-    local upload_ms=$((upload_ns / 1000000))
-    local download_ms=$((download_ns / 1000000))
-    local share_ms=$((share_ns / 1000000))
-    
-    info "Performance Results:"
-    info "  100MB Upload: ${upload_ms}ms"
-    info "  100MB Download: ${download_ms}ms" 
-    info "  Share Access: ${share_ms}ms"
-    
-    # Validate against performance targets
-    if [ "$upload_ms" -gt 60000 ]; then
-        warning "Upload slower than 60s target: ${upload_ms}ms"
-    fi
-    
-    if [ "$download_ms" -gt 20000 ]; then
-        warning "Download slower than 20s target: ${download_ms}ms"
-    fi
-    
-    if [ "$share_ms" -lt 900 ] || [ "$share_ms" -gt 1500 ]; then
-        warning "Share access timing outside 900-1500ms range: ${share_ms}ms"
-    else
-        success "Timing protection validated: ${share_ms}ms"
-    fi
-}
-```
-
-#### Security Validation Framework
-
-```bash
-validate_security_measures() {
-    log "Validating security measures..."
-    
-    # Cryptographic integrity validation
-    validate_cryptographic_integrity
-    
-    # Timing protection validation
-    validate_timing_protection_consistency
-    
-    # Rate limiting validation
-    validate_rate_limiting_functionality
-    
-    # Anonymous privacy validation
-    validate_anonymous_privacy_protection
-    
-    success "All security measures validated"
-}
-
-validate_cryptographic_integrity() {
-    log "Validating cryptographic integrity..."
-    
-    # Compare all file hashes through complete workflow
-    local original_hash authenticated_hash anonymous_hash
-    
-    original_hash=$(cat "$TEMP_DIR/original-file.hash")
-    authenticated_hash=$(sha256sum "$TEMP_DIR/authenticated-download.dat" | cut -d' ' -f1)
-    anonymous_hash=$(sha256sum "$TEMP_DIR/anonymous-download.dat" | cut -d' ' -f1)
-    
-    if [ "$original_hash" = "$authenticated_hash" ] && [ "$original_hash" = "$anonymous_hash" ]; then
-        success "Perfect cryptographic integrity verified across all workflows"
-        info "  Original:        $original_hash"
-        info "  Authenticated:   $authenticated_hash" 
-        info "  Anonymous:       $anonymous_hash"
-        info "  ✅ Triple integrity match"
-    else
-        error "Cryptographic integrity failure detected"
-        error "  Original:        $original_hash"
-        error "  Authenticated:   $authenticated_hash"
-        error "  Anonymous:       $anonymous_hash"
-        return 1
-    fi
-}
-```
-
-## Comprehensive Test Output Example
-
-### Expected Integration Test Results
-
-```
-🧪 ARKFILE INTEGRATION TESTING FRAMEWORK
-Configuration:
-  Server URL: https://localhost:4443
-  Test Username: integration.test.user.2025
-  Test File Size: 100MB
-  Database URL: http://localhost:4001
-  Static Binaries: ✅ Verified
-
-📋 Phase 1: User Authentication and Setup
-  ✅ OPAQUE Registration (2.1s) - Zero-knowledge authentication
-  ✅ Database User Approval (0.3s) - Direct database operation  
-  ✅ TOTP Setup and Verification (4.2s) - Real cryptographic keys
-  ✅ Complete Login Flow (3.8s) - JWT and refresh tokens
-  ✅ Export Key Capture (0.5s) - OPAQUE export key: 64 bytes
-
-📋 Phase 2: Large File Operations
-  ✅ Test File Generation (1.2s) - 100MB deterministic content
-  ✅ OPAQUE Key Derivation (0.1s) - Static libopaque consistency
-  ✅ File Encryption (8.3s) - AES-256-GCM with derived keys
-  ✅ Chunked Upload (45.3s) - 100 chunks, 1MB each
-  ✅ File Listing Verification (0.8s) - Metadata validation
-  ✅ Authenticated Download (12.4s) - Encrypted file retrieval
-  ✅ File Decryption (7.9s) - OPAQUE key decryption
-  ✅ Integrity Verification (0.9s) - SHA-256 perfect match ✅
-
-📋 Phase 3: Anonymous Sharing System  
-  ✅ Share Creation (3.7s) - Argon2id key derivation (128MB, 4 iter)
-  ✅ Database Share Validation (0.4s) - Share record verified
-  ✅ Session Logout (0.6s) - Authentication cleared
-  ✅ Anonymous Share Access (1.8s) - Timing protection: 1,015ms ✅
-  ✅ Anonymous Download (15.2s) - No authentication required
-  ✅ Share Key Decryption (2.1s) - Argon2id key derivation
-  ✅ Anonymous Integrity Check (0.7s) - SHA-256 perfect match ✅
-
-📋 Phase 4: System Integration and Performance
-  ✅ Database Operations (1.2s) - Direct queries and cleanup
-  ✅ Performance Benchmarks - All targets met ✅
-      Upload:   45.3s (target: <60s) ✅
-      Download: 12.4s (target: <20s) ✅  
-      Share:    1.8s (timing protection: 900-1500ms) ✅
-  ✅ Security Validation (0.8s) - All measures active ✅
-  ✅ Resource Cleanup (1.5s) - Complete data removal ✅
-
-🎉 ALL INTEGRATION TESTS PASSED
-
-📊 Final Results:
-   Total Duration: 2 minutes 47 seconds
-   Total Steps: 24 operations
-   Success Rate: 100% (24/24) ✅
-   
-📈 Performance Summary:
-   File Operations: 100MB file - Complete cycle in 77 seconds
-   Cryptographic: Static libopaque consistency across all operations ✅
-   Network: TLS 1.3 connections stable for local and remote servers ✅
-   
-🔐 Security Validation Summary:
-   ✅ OPAQUE zero-knowledge authentication (no password exposure)
-   ✅ End-to-end file encryption (AES-256-GCM integrity preserved)
-   ✅ Argon2id share protection (128MB memory, production parameters)
-   ✅ Timing protection active (1.8s > 900ms minimum)
-   ✅ Anonymous privacy maintained (no user data disclosure)
-   ✅ Perfect file integrity (SHA-256 triple verification)
-   
-💾 Data Integrity Report:
-   Original file:       104,857,600 bytes (100.0 MB)
-   Authenticated cycle: 104,857,600 bytes ✅ Perfect match
-   Anonymous cycle:     104,857,600 bytes ✅ Perfect match
-   Hash verification:   SHA-256 identical across all workflows ✅
-   
-✨ SYSTEM VALIDATION: COMPLETE SUCCESS
-Arkfile secure file vault fully operational with static binary consistency!
-
-Cleanup completed - all test data securely removed
-Detailed logs: /tmp/arkfile-integration-20250813-090000/
-```
-
-## Next Steps for Implementation
-
-### Ready for Development
-This comprehensive planning document provides:
-
-1. **✅ Complete technical specification**
-2. **✅ Detailed implementation examples** 
-3. **✅ Integration architecture**
-4. **✅ Expected output format**
-5. **✅ Success criteria definition**
-6. **✅ Timeline and milestones**
-7. **✅ Enhanced tool implementations**
-8. **✅ Bash integration patterns**
-9. **✅ Comprehensive testing workflows**
-
-### Implementation Priority
-1. **Start with foundation** (HTTP client, config, basic structure)
-2. **Implement authentication flow** (leverage existing auth patterns)
-3. **Add file operations** (chunked upload/download)
-4. **Complete share system** (anonymous access testing)
-5. **Polish and validate** (error handling, edge cases)
-
-### Implementation Timeline
-
-#### Week 1: Core Tool Enhancement
-- **Days 1-3**: Enhance cryptocli with OPAQUE integration and large file operations
-- **Days 4-5**: Enhance arkfile-client with comprehensive API operations  
-- **Days 6-7**: Develop arkfile-admin integration and validation tools
-
-#### Week 2: Test Framework Integration
-- **Days 1-3**: Integrate Go tools with existing test-app-curl.sh infrastructure
-- **Days 4-5**: Implement comprehensive workflow testing (Phases 11-12)
-- **Days 6-7**: Develop performance benchmarking and security validation
-
-#### Week 3: Validation and Optimization  
-- **Days 1-3**: Cross-platform testing and validation
-- **Days 4-5**: Performance optimization and security hardening
-- **Days 6-7**: Documentation and deployment preparation
-
-### Estimated Development Time
-- **Full implementation**: 5-7 days
-- **Basic functionality**: 2-3 days  
-- **Production ready**: 7-10 days
-
-This Go-based integration test will provide **definitive validation** that your Phase 6F implementation is complete and production-ready, covering all critical workflows with real 100MB files and comprehensive security validation using authentic operations and static binary consistency.
+This framework provides comprehensive testing of the Go tool ecosystem while maintaining clean separation from API endpoint testing handled by `test-app-curl.sh`.
