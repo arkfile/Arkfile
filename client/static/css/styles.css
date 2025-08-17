@@ -1,8 +1,8 @@
 :root {
-    --primary-color: #2c3e50;
+    --primary-color: #000000;
     --secondary-color: #dc2626;
     --background-color: #f8f9fa;
-    --text-color: #2c3e50;
+    --text-color: #000000;
     --error-color: #dc2626;
     --success-color: #059669;
     --weak-password: #dc2626;

@@ -19,7 +19,7 @@ body {
     font-weight: 700;
     margin-bottom: 15px;
     margin-top: 0;
-    text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    text-shadow: 0 2px 4px rgba(0,0,0,0);
 }
 
 .hero-tagline {
@@ -155,6 +155,37 @@ body {
 .home-container {
     max-width: 1400px;
     margin: 0 auto;
+}
+
+/* Footer Section */
+.footer-section {
+    background: #f8f9fa;
+    padding: 20px 0 30px;
+    text-align: center;
+    border-top: 1px solid #e0e4e7;
+}
+
+.github-link-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 20px;
+}
+
+.github-link {
+    font-size: 0.85rem;
+    color: #777777;
+    margin: 0;
+}
+
+.github-link a {
+    color: #000000;
+    text-decoration: underline;
+    font-weight: 500;
+}
+
+.github-link a:hover {
+    color: #333;
+    text-decoration: underline;
 }
 
 /* Responsive design */
