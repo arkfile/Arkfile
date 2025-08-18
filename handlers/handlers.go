@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,7 +22,7 @@ import (
 // Echo is the global echo instance used for routing
 var Echo *echo.Echo
 
-// UploadFile handles file uploads
+// UploadFile handles file uploads with encrypted metadata
 func UploadFile(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 
@@ -38,20 +38,23 @@ func UploadFile(c echo.Context) error {
 	}
 
 	var request struct {
-		Filename     string `json:"filename"`
-		Data         string `json:"data"`
-		PasswordHint string `json:"passwordHint"`
-		PasswordType string `json:"passwordType"`
-		SHA256Sum    string `json:"sha256sum"`
+		Data               string `json:"data"`
+		PasswordHint       string `json:"passwordHint"`
+		PasswordType       string `json:"passwordType"`
+		EncryptedFilename  string `json:"encryptedFilename"`
+		FilenameNonce      string `json:"filenameNonce"`
+		EncryptedSha256sum string `json:"encryptedSha256sum"`
+		Sha256sumNonce     string `json:"sha256sumNonce"`
 	}
 
 	if err := c.Bind(&request); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
 	}
 
-	// Validate SHA-256 hash format
-	if len(request.SHA256Sum) != 64 || !utils.IsHexString(request.SHA256Sum) {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid SHA-256 hash")
+	// Validate encrypted metadata is provided
+	if request.EncryptedFilename == "" || request.FilenameNonce == "" ||
+		request.EncryptedSha256sum == "" || request.Sha256sumNonce == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Missing encrypted metadata")
 	}
 
 	// Validate password type
@@ -95,10 +98,34 @@ func UploadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to upload file")
 	}
 
-	// Store metadata in database with storage_id and padded_size
+	// Generate file ID and decode encrypted metadata for storage
+	fileID := models.GenerateFileID()
+
+	// Decode base64 encoded encrypted data and nonces
+	encryptedFilenameBytes, err := base64.StdEncoding.DecodeString(request.EncryptedFilename)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid encrypted filename encoding")
+	}
+
+	filenameNonceBytes, err := base64.StdEncoding.DecodeString(request.FilenameNonce)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid filename nonce encoding")
+	}
+
+	encryptedSha256sumBytes, err := base64.StdEncoding.DecodeString(request.EncryptedSha256sum)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid encrypted sha256sum encoding")
+	}
+
+	sha256sumNonceBytes, err := base64.StdEncoding.DecodeString(request.Sha256sumNonce)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid sha256sum nonce encoding")
+	}
+
+	// Store metadata in database with encrypted fields
 	_, err = tx.Exec(
-		"INSERT INTO file_metadata (filename, storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes, padded_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		request.Filename, storageID, username, request.PasswordHint, request.PasswordType, request.SHA256Sum, fileSize, paddedSize,
+		"INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, padded_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		fileID, storageID, username, request.PasswordHint, request.PasswordType, filenameNonceBytes, encryptedFilenameBytes, sha256sumNonceBytes, encryptedSha256sumBytes, fileSize, paddedSize,
 	)
 	if err != nil {
 		// If metadata storage fails, delete the uploaded file using storage.Provider
@@ -119,9 +146,9 @@ func UploadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete upload")
 	}
 
-	database.LogUserAction(username, "uploaded", request.Filename)
-	logging.InfoLogger.Printf("File uploaded: %s (storage_id: %s) by %s (size: %d bytes, padded: %d bytes)",
-		request.Filename, storageID, username, fileSize, paddedSize)
+	database.LogUserAction(username, "uploaded", fileID)
+	logging.InfoLogger.Printf("File uploaded by %s (file_id: %s, storage_id: %s, size: %d bytes, padded: %d bytes)",
+		username, fileID, storageID, fileSize, paddedSize)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message":    "File uploaded successfully",
@@ -136,10 +163,10 @@ func UploadFile(c echo.Context) error {
 	})
 }
 
-// DownloadFile handles file downloads
+// DownloadFile handles file downloads with encrypted metadata
 func DownloadFile(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
-	filename := c.Param("filename")
+	fileID := c.Param("fileId") // Now uses fileId instead of filename
 
 	// Check if user is approved for file operations
 	user, err := models.GetUserByUsername(database.DB, username)
@@ -151,38 +178,26 @@ func DownloadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Account pending approval. File downloads are restricted until your account is approved by an administrator. You can still access other features of your account.")
 	}
 
-	// Get file metadata including storage_id and original size
-	var fileMetadata struct {
-		StorageID     string
-		OwnerUsername string
-		PasswordHint  string
-		PasswordType  string
-		SHA256Sum     string
-		SizeBytes     int64
-	}
-	err = database.DB.QueryRow(
-		"SELECT storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes FROM file_metadata WHERE filename = ?",
-		filename,
-	).Scan(&fileMetadata.StorageID, &fileMetadata.OwnerUsername, &fileMetadata.PasswordHint,
-		&fileMetadata.PasswordType, &fileMetadata.SHA256Sum, &fileMetadata.SizeBytes)
-
-	if err == sql.ErrNoRows {
-		return echo.NewHTTPError(http.StatusNotFound, "File not found")
-	} else if err != nil {
+	// Get file metadata using the new encrypted schema
+	file, err := models.GetFileByFileID(database.DB, fileID)
+	if err != nil {
+		if err.Error() == "file not found" {
+			return echo.NewHTTPError(http.StatusNotFound, "File not found")
+		}
 		logging.ErrorLogger.Printf("Database error during download: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
 	}
 
 	// Verify ownership
-	if fileMetadata.OwnerUsername != username {
+	if file.OwnerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
 	// Get file from object storage backend using storage ID and remove padding
 	reader, err := storage.Provider.GetObjectWithoutPadding(
 		c.Request().Context(),
-		fileMetadata.StorageID, // Use storage ID instead of filename
-		fileMetadata.SizeBytes, // Original size to strip padding
+		file.StorageID, // Use storage ID instead of filename
+		file.SizeBytes, // Original size to strip padding
 		minio.GetObjectOptions{},
 	)
 	if err != nil {
@@ -197,60 +212,50 @@ func DownloadFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read file")
 	}
 
-	database.LogUserAction(username, "downloaded", filename)
-	logging.InfoLogger.Printf("File downloaded: %s (storage_id: %s) by %s", filename, fileMetadata.StorageID, username)
+	database.LogUserAction(username, "downloaded", fileID)
+	logging.InfoLogger.Printf("File downloaded: file_id %s (storage_id: %s) by %s", fileID, file.StorageID, username)
 
+	// Return encrypted metadata for client-side decryption
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"data":         string(data),
-		"passwordHint": fileMetadata.PasswordHint,
-		"passwordType": fileMetadata.PasswordType,
-		"sha256sum":    fileMetadata.SHA256Sum,
+		"data":               string(data),
+		"passwordHint":       file.PasswordHint,
+		"passwordType":       file.PasswordType,
+		"filenameNonce":      base64.StdEncoding.EncodeToString(file.FilenameNonce),
+		"encryptedFilename":  base64.StdEncoding.EncodeToString(file.EncryptedFilename),
+		"sha256sumNonce":     base64.StdEncoding.EncodeToString(file.Sha256sumNonce),
+		"encryptedSha256sum": base64.StdEncoding.EncodeToString(file.EncryptedSha256sum),
 	})
 }
 
-// ListFiles returns a list of files owned by the user
+// ListFiles returns a list of files owned by the user with encrypted metadata
 func ListFiles(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 
-	rows, err := database.DB.Query(`
-		SELECT filename, storage_id, password_hint, password_type, sha256sum, size_bytes, upload_date 
-		FROM file_metadata 
-		WHERE owner_username = ?
-		ORDER BY upload_date DESC
-	`, username)
+	// Get files using the models function with encrypted metadata support
+	files, err := models.GetFilesByOwner(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to list files: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve files")
 	}
-	defer rows.Close()
 
-	var files []map[string]interface{}
-	for rows.Next() {
-		var file struct {
-			Filename     string
-			StorageID    string
-			PasswordHint string
-			PasswordType string
-			SHA256Sum    string
-			SizeBytes    int64
-			UploadDate   string
+	// Convert files to client metadata format
+	var fileList []map[string]interface{}
+	for _, file := range files {
+		clientMetadata := file.ToClientMetadata()
+		fileMetadata := map[string]interface{}{
+			"file_id":            file.FileID,
+			"storage_id":         file.StorageID,
+			"passwordHint":       file.PasswordHint,
+			"passwordType":       file.PasswordType,
+			"filenameNonce":      base64.StdEncoding.EncodeToString(clientMetadata.FilenameNonce),
+			"encryptedFilename":  base64.StdEncoding.EncodeToString(clientMetadata.EncryptedFilename),
+			"sha256sumNonce":     base64.StdEncoding.EncodeToString(clientMetadata.Sha256sumNonce),
+			"encryptedSha256sum": base64.StdEncoding.EncodeToString(clientMetadata.EncryptedSha256sum),
+			"size_bytes":         file.SizeBytes,
+			"size_readable":      formatBytes(file.SizeBytes),
+			"uploadDate":         file.UploadDate,
 		}
-
-		if err := rows.Scan(&file.Filename, &file.StorageID, &file.PasswordHint, &file.PasswordType, &file.SHA256Sum, &file.SizeBytes, &file.UploadDate); err != nil {
-			logging.ErrorLogger.Printf("Error scanning file row: %v", err)
-			continue
-		}
-
-		files = append(files, map[string]interface{}{
-			"filename":      file.Filename,
-			"storage_id":    file.StorageID,
-			"passwordHint":  file.PasswordHint,
-			"passwordType":  file.PasswordType,
-			"sha256sum":     file.SHA256Sum,
-			"size_bytes":    file.SizeBytes,
-			"size_readable": formatBytes(file.SizeBytes),
-			"uploadDate":    file.UploadDate,
-		})
+		fileList = append(fileList, fileMetadata)
 	}
 
 	// Get user's storage information
@@ -261,7 +266,7 @@ func ListFiles(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"files": files,
+		"files": fileList,
 		"storage": map[string]interface{}{
 			"total_bytes":        user.TotalStorageBytes,
 			"total_readable":     formatBytes(user.TotalStorageBytes),

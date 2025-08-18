@@ -69,15 +69,15 @@ func RegisterRoutes() {
 
 	totpProtectedGroup.GET("/api/files", ListFiles)
 	totpProtectedGroup.POST("/api/upload", UploadFile)
-	totpProtectedGroup.GET("/api/download/:filename", DownloadFile)
-	totpProtectedGroup.DELETE("/api/files/:filename", DeleteFile)
+	totpProtectedGroup.GET("/api/download/:fileId", DownloadFile)
+	totpProtectedGroup.DELETE("/api/files/:fileId", DeleteFile)
 
 	// Chunked uploads - require TOTP
 	totpProtectedGroup.POST("/api/uploads/init", CreateUploadSession)
 	totpProtectedGroup.POST("/api/uploads/:sessionId/chunks/:chunkNumber", UploadChunk)
 	totpProtectedGroup.POST("/api/uploads/:sessionId/complete", CompleteUpload)
 	totpProtectedGroup.GET("/api/uploads/:sessionId/status", GetUploadStatus)
-	totpProtectedGroup.DELETE("/api/uploads/:sessionId", CancelUpload)
+	totpProtectedGroup.DELETE("/api/uploads/:fileId", CancelUpload)
 
 	// File sharing - require TOTP for creation, anonymous access for usage
 	totpProtectedGroup.POST("/api/files/:fileId/share", CreateFileShare) // Create Argon2id-based anonymous share
@@ -97,11 +97,11 @@ func RegisterRoutes() {
 	shareGroup.GET("/api/shared/:id/download", DownloadSharedFile) // Alternative route for frontend compatibility
 
 	// File encryption key management - require TOTP
-	totpProtectedGroup.POST("/api/files/:filename/update-encryption", UpdateEncryption)
-	totpProtectedGroup.GET("/api/files/:filename/keys", ListKeys)
-	totpProtectedGroup.DELETE("/api/files/:filename/keys/:keyId", DeleteKey)
-	totpProtectedGroup.PATCH("/api/files/:filename/keys/:keyId", UpdateKey)
-	totpProtectedGroup.POST("/api/files/:filename/keys/:keyId/set-primary", SetPrimaryKey)
+	totpProtectedGroup.POST("/api/files/:fileId/update-encryption", UpdateEncryption)
+	totpProtectedGroup.GET("/api/files/:fileId/keys", ListKeys)
+	totpProtectedGroup.DELETE("/api/files/:fileId/keys/:keyId", DeleteKey)
+	totpProtectedGroup.PATCH("/api/files/:fileId/keys/:keyId", UpdateKey)
+	totpProtectedGroup.POST("/api/files/:fileId/keys/:keyId/set-primary", SetPrimaryKey)
 
 	// Credits system - user endpoints (require TOTP)
 	totpProtectedGroup.GET("/api/credits", GetUserCredits)

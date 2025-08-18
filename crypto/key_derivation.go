@@ -32,6 +32,12 @@ func DeriveAccountFileKey(exportKey []byte, username, fileID string) ([]byte, er
 	return hkdfExpand(exportKey, []byte(info), 32)
 }
 
+// DeriveMetadataKey derives a metadata encryption key from OPAQUE export key
+func DeriveMetadataKey(exportKey []byte, username string) ([]byte, error) {
+	info := fmt.Sprintf("arkfile-metadata-encryption:%s", username)
+	return hkdfExpand(exportKey, []byte(info), 32)
+}
+
 // hkdfExpand performs HKDF-Expand operation
 func hkdfExpand(prk []byte, info []byte, length int) ([]byte, error) {
 	if len(prk) == 0 {

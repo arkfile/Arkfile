@@ -178,9 +178,11 @@ func TestDeleteUser_Success_Admin(t *testing.T) {
 
 	mockDB.ExpectBegin()
 
-	// Mock query for user's files
-	fileRows := sqlmock.NewRows([]string{"filename"}).AddRow(mockFile1).AddRow(mockFile2)
-	mockDB.ExpectQuery("SELECT filename FROM file_metadata WHERE owner_username = ?").
+	// Mock query for user's files using NEW schema with file_id and storage_id
+	fileRows := sqlmock.NewRows([]string{"file_id", "storage_id"}).
+		AddRow("file-id-1", mockFile1).
+		AddRow("file-id-2", mockFile2)
+	mockDB.ExpectQuery("SELECT file_id, storage_id FROM file_metadata WHERE owner_username = ?").
 		WithArgs(targetUsername).
 		WillReturnRows(fileRows)
 
@@ -188,9 +190,9 @@ func TestDeleteUser_Success_Admin(t *testing.T) {
 	mockStorage.On("RemoveObject", mock.Anything, mockFile1, mock.AnythingOfType("minio.RemoveObjectOptions")).Return(nil).Once()
 	mockStorage.On("RemoveObject", mock.Anything, mockFile2, mock.AnythingOfType("minio.RemoveObjectOptions")).Return(nil).Once()
 
-	// Mock deletion of file metadata for each file
-	mockDB.ExpectExec("DELETE FROM file_metadata WHERE filename = ?").WithArgs(mockFile1).WillReturnResult(sqlmock.NewResult(0, 1))
-	mockDB.ExpectExec("DELETE FROM file_metadata WHERE filename = ?").WithArgs(mockFile2).WillReturnResult(sqlmock.NewResult(0, 1))
+	// Mock deletion of file metadata for each file using file_id (not storage_id)
+	mockDB.ExpectExec("DELETE FROM file_metadata WHERE file_id = ?").WithArgs("file-id-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mockDB.ExpectExec("DELETE FROM file_metadata WHERE file_id = ?").WithArgs("file-id-2").WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Mock deletion of user shares
 	mockDB.ExpectExec("DELETE FROM file_shares WHERE owner_username = ?").
@@ -364,7 +366,7 @@ func TestDeleteUser_Error_GetUserFilesError(t *testing.T) {
 
 	mockDB.ExpectBegin()
 
-	mockDB.ExpectQuery("SELECT filename FROM file_metadata WHERE owner_username = ?").
+	mockDB.ExpectQuery("SELECT file_id, storage_id FROM file_metadata WHERE owner_username = ?").
 		WithArgs(targetUsername).
 		WillReturnError(fmt.Errorf("DB error fetching user files"))
 
@@ -404,8 +406,8 @@ func TestDeleteUser_Error_StorageRemoveObjectError(t *testing.T) {
 
 	mockDB.ExpectBegin()
 
-	fileRows := sqlmock.NewRows([]string{"filename"}).AddRow(fileWithError)
-	mockDB.ExpectQuery("SELECT filename FROM file_metadata WHERE owner_username = ?").
+	fileRows := sqlmock.NewRows([]string{"file_id", "storage_id"}).AddRow("file-id-error", fileWithError)
+	mockDB.ExpectQuery("SELECT file_id, storage_id FROM file_metadata WHERE owner_username = ?").
 		WithArgs(targetUsername).
 		WillReturnRows(fileRows)
 
@@ -451,8 +453,8 @@ func TestDeleteUser_Error_DeleteFileMetadataError(t *testing.T) {
 
 	mockDB.ExpectBegin()
 
-	fileRows := sqlmock.NewRows([]string{"filename"}).AddRow(fileWithError)
-	mockDB.ExpectQuery("SELECT filename FROM file_metadata WHERE owner_username = ?").
+	fileRows := sqlmock.NewRows([]string{"file_id", "storage_id"}).AddRow("file-id-meta-error", fileWithError)
+	mockDB.ExpectQuery("SELECT file_id, storage_id FROM file_metadata WHERE owner_username = ?").
 		WithArgs(targetUsername).
 		WillReturnRows(fileRows)
 
@@ -460,7 +462,7 @@ func TestDeleteUser_Error_DeleteFileMetadataError(t *testing.T) {
 		Return(nil).Once()
 
 	dbErr := fmt.Errorf("simulated DB error deleting metadata")
-	mockDB.ExpectExec("DELETE FROM file_metadata WHERE filename = ?").WithArgs(fileWithError).
+	mockDB.ExpectExec("DELETE FROM file_metadata WHERE file_id = ?").WithArgs("file-id-meta-error").
 		WillReturnError(dbErr)
 
 	mockDB.ExpectRollback()
@@ -500,8 +502,8 @@ func TestDeleteUser_Error_DeleteFileSharesError(t *testing.T) {
 
 	mockDB.ExpectBegin()
 
-	fileRows := sqlmock.NewRows([]string{"filename"})
-	mockDB.ExpectQuery("SELECT filename FROM file_metadata WHERE owner_username = ?").
+	fileRows := sqlmock.NewRows([]string{"file_id", "storage_id"})
+	mockDB.ExpectQuery("SELECT file_id, storage_id FROM file_metadata WHERE owner_username = ?").
 		WithArgs(targetUsername).
 		WillReturnRows(fileRows)
 
@@ -546,8 +548,8 @@ func TestDeleteUser_Error_DeleteUserRecordError(t *testing.T) {
 
 	mockDB.ExpectBegin()
 
-	fileRows := sqlmock.NewRows([]string{"filename"})
-	mockDB.ExpectQuery("SELECT filename FROM file_metadata WHERE owner_username = ?").
+	fileRows := sqlmock.NewRows([]string{"file_id", "storage_id"})
+	mockDB.ExpectQuery("SELECT file_id, storage_id FROM file_metadata WHERE owner_username = ?").
 		WithArgs(targetUsername).
 		WillReturnRows(fileRows)
 
@@ -594,7 +596,7 @@ func TestDeleteUser_Error_LogAdminActionFailure(t *testing.T) {
 			AddRow(1, adminUsername, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
 	mockDB.ExpectBegin()
-	mockDB.ExpectQuery("SELECT filename FROM file_metadata WHERE owner_username = ?").WithArgs(targetUsername).WillReturnRows(sqlmock.NewRows([]string{}))
+	mockDB.ExpectQuery("SELECT file_id, storage_id FROM file_metadata WHERE owner_username = ?").WithArgs(targetUsername).WillReturnRows(sqlmock.NewRows([]string{"file_id", "storage_id"}))
 	mockDB.ExpectExec("DELETE FROM file_shares WHERE owner_username = ?").WithArgs(targetUsername).WillReturnResult(sqlmock.NewResult(0, 0))
 	mockDB.ExpectExec("DELETE FROM users WHERE username = ?").WithArgs(targetUsername).WillReturnResult(sqlmock.NewResult(0, 1))
 

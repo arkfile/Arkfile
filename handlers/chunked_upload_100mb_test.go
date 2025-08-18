@@ -31,7 +31,8 @@ func TestChunkedUpload100MB(t *testing.T) {
 
 	// Test user
 	username := "chunked-100mb-test@example.com"
-	fileID := "test-100mb-file.bin"
+	fileID := "660e8400-e29b-41d4-a716-446655440000"    // UUID v4 format
+	storageID := "770e8400-e29b-41d4-a716-446655440001" // UUID v4 format
 
 	// Mock OPAQUE export key (in real system this comes from OPAQUE authentication)
 	exportKey := make([]byte, 64)
@@ -51,7 +52,7 @@ func TestChunkedUpload100MB(t *testing.T) {
 	t.Logf("✅ Client encryption: created %d chunks with envelope (expected %d)", len(encryptedChunks), expectedChunkCount)
 
 	// STEP 2: Create upload session with mock expectations
-	sessionID, err := simulateCreateUploadSessionWithMocks(t, username, fileID, int64(fileSize), originalHashHex, envelope, mockDB, mockStorage)
+	sessionID, err := simulateCreateUploadSessionWithMocks(t, username, fileID, storageID, int64(fileSize), originalHashHex, envelope, mockDB, mockStorage)
 	require.NoError(t, err)
 
 	t.Logf("✅ Upload session created: %s", sessionID)
@@ -63,13 +64,13 @@ func TestChunkedUpload100MB(t *testing.T) {
 	t.Logf("✅ All %d chunks uploaded successfully", len(encryptedChunks))
 
 	// STEP 4: Complete upload with mock expectations (this is where envelope concatenation happens)
-	storageID, err := simulateCompleteUploadWithMocks(t, sessionID, mockDB, mockStorage, envelope, encryptedChunks)
+	finalStorageID, err := simulateCompleteUploadWithMocks(t, sessionID, mockDB, mockStorage, envelope, encryptedChunks)
 	require.NoError(t, err)
 
 	t.Logf("✅ Upload completed - file should be stored as [envelope][chunk1][chunk2]...[chunk%d]", len(encryptedChunks))
 
 	// STEP 5: Simulate download and decrypt (proves the fix works)
-	downloadedData, err := simulateDownloadAndDecryptWithMocks(t, username, fileID, exportKey, storageID, mockStorage, envelope, encryptedChunks)
+	downloadedData, err := simulateDownloadAndDecryptWithMocks(t, username, fileID, exportKey, finalStorageID, mockStorage, envelope, encryptedChunks)
 	require.NoError(t, err)
 
 	t.Logf("✅ File downloaded and decrypted: %d bytes", len(downloadedData))

@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/arkfile/auth"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
+	"github.com/84adam/arkfile/storage"
 )
 
 // AdminCleanupRequest represents the request payload for test user cleanup
@@ -447,12 +449,7 @@ func GetPendingUsers(c echo.Context) error {
 
 // DeleteUser deletes a user and all associated data
 func DeleteUser(c echo.Context) error {
-	targetUsername := c.Param("username")
-	if targetUsername == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Username parameter required")
-	}
-
-	// Get admin user and verify admin privileges
+	// Get admin user and verify admin privileges first
 	adminUsername := auth.GetUsernameFromToken(c)
 	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
 	if err != nil {
@@ -463,9 +460,25 @@ func DeleteUser(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
 	}
 
+	targetUsername := c.Param("username")
+	if targetUsername == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Username parameter required")
+	}
+
 	// Prevent self-deletion
 	if adminUsername == targetUsername {
 		return echo.NewHTTPError(http.StatusBadRequest, "Cannot delete your own account")
+	}
+
+	// Get storage provider from context or use global provider
+	var storageProvider storage.ObjectStorageProvider
+
+	// Try to get storage provider from context first
+	if sp := c.Get("storage"); sp != nil {
+		storageProvider = sp.(storage.ObjectStorageProvider)
+	} else {
+		// Fallback to global storage provider (used in tests and production)
+		storageProvider = storage.Provider
 	}
 
 	// Start transaction
@@ -476,28 +489,36 @@ func DeleteUser(c echo.Context) error {
 	defer tx.Rollback()
 
 	// Get user's files for cleanup
-	rows, err := tx.Query("SELECT filename FROM file_metadata WHERE owner_username = ?", targetUsername)
+	rows, err := tx.Query("SELECT file_id, storage_id FROM file_metadata WHERE owner_username = ?", targetUsername)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve user's files")
 	}
 
-	var filenames []string
+	var fileIDs []string
+	var storageIDs []string
 	for rows.Next() {
-		var filename string
-		if err := rows.Scan(&filename); err != nil {
+		var fileID, storageID string
+		if err := rows.Scan(&fileID, &storageID); err != nil {
 			rows.Close()
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to scan filename")
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to scan file IDs")
 		}
-		filenames = append(filenames, filename)
+		fileIDs = append(fileIDs, fileID)
+		storageIDs = append(storageIDs, storageID)
 	}
 	rows.Close()
 
-	// Remove files from storage - this would be handled by storage cleanup in real implementation
-	// For now, just remove the database metadata
-	for _, filename := range filenames {
-		// Remove file metadata
-		if _, err := tx.Exec("DELETE FROM file_metadata WHERE filename = ?", filename); err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to delete file metadata for: %s", filename))
+	// Remove files from storage first
+	for i, storageID := range storageIDs {
+		if storageProvider != nil {
+			// Import minio and use proper RemoveObjectOptions type
+			if err := storageProvider.RemoveObject(c.Request().Context(), storageID, minio.RemoveObjectOptions{}); err != nil {
+				return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to delete user's file from storage: %s", storageID))
+			}
+		}
+
+		// Remove file metadata after successful storage deletion
+		if _, err := tx.Exec("DELETE FROM file_metadata WHERE file_id = ?", fileIDs[i]); err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to delete file metadata for: %s", storageIDs[i]))
 		}
 	}
 
@@ -528,12 +549,7 @@ func DeleteUser(c echo.Context) error {
 
 // UpdateUser updates user properties
 func UpdateUser(c echo.Context) error {
-	targetUsername := c.Param("username")
-	if targetUsername == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Username parameter required")
-	}
-
-	// Get admin user and verify admin privileges
+	// Get admin user and verify admin privileges first
 	adminUsername := auth.GetUsernameFromToken(c)
 	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
 	if err != nil {
@@ -542,6 +558,11 @@ func UpdateUser(c echo.Context) error {
 
 	if !adminUser.IsAdmin {
 		return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
+	}
+
+	targetUsername := c.Param("username")
+	if targetUsername == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Username parameter required")
 	}
 
 	// Parse request body
@@ -725,12 +746,7 @@ func ListUsers(c echo.Context) error {
 
 // ApproveUser approves a user
 func ApproveUser(c echo.Context) error {
-	targetUsername := c.Param("username")
-	if targetUsername == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Username parameter required")
-	}
-
-	// Get admin user and verify admin privileges
+	// Get admin user and verify admin privileges first
 	adminUsername := auth.GetUsernameFromToken(c)
 	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
 	if err != nil {
@@ -739,6 +755,11 @@ func ApproveUser(c echo.Context) error {
 
 	if !adminUser.IsAdmin {
 		return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
+	}
+
+	targetUsername := c.Param("username")
+	if targetUsername == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Username parameter required")
 	}
 
 	// Get target user
@@ -765,12 +786,7 @@ func ApproveUser(c echo.Context) error {
 
 // UpdateUserStorageLimit updates a user's storage limit
 func UpdateUserStorageLimit(c echo.Context) error {
-	targetUsername := c.Param("username")
-	if targetUsername == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Username parameter required")
-	}
-
-	// Get admin user and verify admin privileges
+	// Get admin user and verify admin privileges first
 	adminUsername := auth.GetUsernameFromToken(c)
 	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
 	if err != nil {
@@ -779,6 +795,11 @@ func UpdateUserStorageLimit(c echo.Context) error {
 
 	if !adminUser.IsAdmin {
 		return echo.NewHTTPError(http.StatusForbidden, "Admin privileges required")
+	}
+
+	targetUsername := c.Param("username")
+	if targetUsername == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Username parameter required")
 	}
 
 	// Parse request body

@@ -19,14 +19,18 @@ CREATE TABLE IF NOT EXISTS users (
     is_admin BOOLEAN NOT NULL DEFAULT false
 );
 
--- File metadata table (core file information)
+-- File metadata table (core file information with encrypted metadata)
 CREATE TABLE IF NOT EXISTS file_metadata (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    filename TEXT UNIQUE NOT NULL,
+    file_id VARCHAR(36) UNIQUE NOT NULL,        -- UUID v4 for file identification
+    storage_id VARCHAR(36) UNIQUE NOT NULL,     -- UUID v4 for storage backend
     owner_username TEXT NOT NULL,
     password_hint TEXT,
     password_type TEXT NOT NULL DEFAULT 'custom',
-    sha256sum CHAR(64) NOT NULL,
+    filename_nonce BINARY(12) NOT NULL,         -- 12-byte nonce for filename encryption
+    encrypted_filename BLOB NOT NULL,           -- AES-GCM encrypted filename
+    sha256sum_nonce BINARY(12) NOT NULL,        -- 12-byte nonce for sha256 encryption
+    encrypted_sha256sum BLOB NOT NULL,          -- AES-GCM encrypted sha256 hash
     size_bytes BIGINT NOT NULL DEFAULT 0,
     upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (owner_username) REFERENCES users(username)
@@ -151,7 +155,7 @@ CREATE TABLE IF NOT EXISTS file_encryption_keys (
     password_hint TEXT,      -- Optional hint for custom passwords
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_primary BOOLEAN DEFAULT FALSE,
-    FOREIGN KEY (file_id) REFERENCES file_metadata(filename) ON DELETE CASCADE
+    FOREIGN KEY (file_id) REFERENCES file_metadata(file_id) ON DELETE CASCADE
 );
 
 -- =====================================================
@@ -318,7 +322,8 @@ CREATE TABLE IF NOT EXISTS admin_logs (
 -- =====================================================
 
 -- Core table indexes
-CREATE INDEX IF NOT EXISTS idx_file_metadata_sha256sum ON file_metadata(sha256sum);
+CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata(file_id);
+CREATE INDEX IF NOT EXISTS idx_file_metadata_storage_id ON file_metadata(storage_id);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_owner ON file_metadata(owner_username);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_upload_date ON file_metadata(upload_date);
 

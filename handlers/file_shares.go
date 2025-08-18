@@ -80,59 +80,30 @@ func CreateFileShare(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Encrypted FEK is required")
 	}
 
-	// Validate that the user owns the file
+	// Validate that the user owns the file using the new encrypted schema
 	var ownerUsername string
-	var multiKey bool
 	var passwordType string
-	var foundInMetadata, foundInUploadSessions bool
 
-	// Check file_metadata first
 	err := database.DB.QueryRow(
-		"SELECT owner_username, multi_key, password_type FROM file_metadata WHERE filename = ?",
+		"SELECT owner_username, password_type FROM file_metadata WHERE file_id = ?",
 		request.FileID,
-	).Scan(&ownerUsername, &multiKey, &passwordType)
+	).Scan(&ownerUsername, &passwordType)
 
-	if err == nil {
-		foundInMetadata = true
-	} else if err != sql.ErrNoRows {
+	if err == sql.ErrNoRows {
+		return echo.NewHTTPError(http.StatusNotFound, "File not found")
+	} else if err != nil {
 		logging.ErrorLogger.Printf("Database error checking file_metadata for file %s: %v", request.FileID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file ownership")
-	}
-
-	// If not found in file_metadata, check upload_sessions
-	if !foundInMetadata {
-		var usOwnerUsername string
-		var usPasswordType string
-		var usMultiKey sql.NullBool
-
-		err = database.DB.QueryRow(
-			"SELECT owner_username, password_type, multi_key FROM upload_sessions WHERE filename = ? AND status = 'completed'",
-			request.FileID,
-		).Scan(&usOwnerUsername, &usPasswordType, &usMultiKey)
-
-		if err == nil {
-			foundInUploadSessions = true
-			ownerUsername = usOwnerUsername
-			passwordType = usPasswordType
-			multiKey = usMultiKey.Valid && usMultiKey.Bool
-		} else if err != sql.ErrNoRows {
-			logging.ErrorLogger.Printf("Database error checking upload_sessions for file %s: %v", request.FileID, err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file ownership")
-		}
-	}
-
-	if !foundInMetadata && !foundInUploadSessions {
-		return echo.NewHTTPError(http.StatusNotFound, "File not found or not yet fully processed")
 	}
 
 	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to share this file")
 	}
 
-	// For account-encrypted files that aren't multi-key, require re-encryption first
-	if !multiKey && passwordType == "account" {
+	// For account-encrypted files, require custom password for sharing
+	if passwordType == "account" {
 		return echo.NewHTTPError(http.StatusBadRequest,
-			"This file is encrypted with your account password. To share it, first add a custom password or enable multi-key access for this file.")
+			"This file is encrypted with your account password. To share it, first add a custom password for this file.")
 	}
 
 	// Validate salt and encrypted FEK format
@@ -261,27 +232,36 @@ func GetShareInfo(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
 	}
 
-	// Get file metadata for display
+	// Get file metadata for display (encrypted metadata needs client-side decryption)
 	var fileInfo ShareFileInfo
 	var size sql.NullInt64
+	var encryptedFilename []byte
+	var encryptedSha256sum []byte
 
 	err = database.DB.QueryRow(`
-		SELECT filename, size_bytes, sha256sum
+		SELECT encrypted_filename, size_bytes, encrypted_sha256sum
 		FROM file_metadata
-		WHERE filename = ?
+		WHERE file_id = ?
 	`, share.FileID).Scan(
-		&fileInfo.Filename,
+		&encryptedFilename,
 		&size,
-		&fileInfo.SHA256Sum,
+		&encryptedSha256sum,
 	)
 
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
-		// Use fallback file info
-		fileInfo.Filename = share.FileID
+		// Use fallback file info - filename will be decrypted client-side
+		fileInfo.Filename = "encrypted_file"
 		fileInfo.Size = 0
-	} else if size.Valid {
-		fileInfo.Size = size.Int64
+		fileInfo.SHA256Sum = "encrypted"
+	} else {
+		// For share info, we can't decrypt the filename/sha256sum server-side
+		// Client will need to decrypt these after successful password verification
+		fileInfo.Filename = "encrypted_file"
+		fileInfo.SHA256Sum = "encrypted"
+		if size.Valid {
+			fileInfo.Size = size.Int64
+		}
 	}
 
 	// Log metadata access
@@ -350,18 +330,24 @@ func processShareAccess(shareID string, request ShareAccessRequest, c echo.Conte
 		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
 	}
 
-	// Get file metadata
+	// Get file metadata with encrypted fields
 	var fileInfo ShareFileInfo
 	var size sql.NullInt64
+	var encryptedFilename []byte
+	var encryptedSha256sum []byte
+	var filenameNonce []byte
+	var sha256sumNonce []byte
 
 	err = database.DB.QueryRow(`
-		SELECT filename, size_bytes, sha256sum
+		SELECT encrypted_filename, size_bytes, encrypted_sha256sum, filename_nonce, sha256sum_nonce
 		FROM file_metadata
-		WHERE filename = ?
+		WHERE file_id = ?
 	`, share.FileID).Scan(
-		&fileInfo.Filename,
+		&encryptedFilename,
 		&size,
-		&fileInfo.SHA256Sum,
+		&encryptedSha256sum,
+		&filenameNonce,
+		&sha256sumNonce,
 	)
 
 	if err != nil {
@@ -369,6 +355,9 @@ func processShareAccess(shareID string, request ShareAccessRequest, c echo.Conte
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
 	}
 
+	// Return encrypted metadata for client-side decryption
+	fileInfo.Filename = base64.StdEncoding.EncodeToString(encryptedFilename)
+	fileInfo.SHA256Sum = base64.StdEncoding.EncodeToString(encryptedSha256sum)
 	if size.Valid {
 		fileInfo.Size = size.Int64
 	}
@@ -423,17 +412,17 @@ func GetSharedFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
 	}
 
-	// Get file metadata for display
-	var filename string
+	// Verify file exists in the new encrypted metadata schema
+	var fileExists bool
 	err = database.DB.QueryRow(`
-		SELECT filename
+		SELECT 1
 		FROM file_metadata
-		WHERE filename = ?
-	`, share.FileID).Scan(&filename)
+		WHERE file_id = ?
+	`, share.FileID).Scan(&fileExists)
 
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get file metadata for share display %s: %v", share.FileID, err)
-		filename = share.FileID // Fallback to file ID
+		logging.ErrorLogger.Printf("Failed to verify file metadata for share display %s: %v", share.FileID, err)
+		// Continue anyway - the shared.html page will handle missing files
 	}
 
 	// Log page access (no password required)
@@ -448,12 +437,12 @@ func GetSharedFile(c echo.Context) error {
 func ListShares(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 
-	// Query shares
+	// Query shares with encrypted metadata
 	rows, err := database.DB.Query(`
 		SELECT sk.share_id, sk.file_id, sk.created_at, sk.expires_at,
-			   fm.filename, fm.size_bytes
+			   fm.encrypted_filename, fm.filename_nonce, fm.encrypted_sha256sum, fm.sha256sum_nonce, fm.size_bytes
 		FROM file_share_keys sk
-		JOIN file_metadata fm ON sk.file_id = fm.filename
+		JOIN file_metadata fm ON sk.file_id = fm.file_id
 		WHERE sk.owner_username = ?
 		ORDER BY sk.created_at DESC
 	`, username)
@@ -467,12 +456,15 @@ func ListShares(c echo.Context) error {
 	var shares []map[string]interface{}
 	for rows.Next() {
 		var share struct {
-			ShareID   string
-			FileID    string
-			CreatedAt string
-			ExpiresAt sql.NullString
-			Filename  string
-			Size      sql.NullInt64
+			ShareID            string
+			FileID             string
+			CreatedAt          string
+			ExpiresAt          sql.NullString
+			EncryptedFilename  []byte
+			FilenameNonce      []byte
+			EncryptedSha256sum []byte
+			Sha256sumNonce     []byte
+			Size               sql.NullInt64
 		}
 
 		if err := rows.Scan(
@@ -480,7 +472,10 @@ func ListShares(c echo.Context) error {
 			&share.FileID,
 			&share.CreatedAt,
 			&share.ExpiresAt,
-			&share.Filename,
+			&share.EncryptedFilename,
+			&share.FilenameNonce,
+			&share.EncryptedSha256sum,
+			&share.Sha256sumNonce,
 			&share.Size,
 		); err != nil {
 			logging.ErrorLogger.Printf("Error scanning share row: %v", err)
@@ -495,13 +490,16 @@ func ListShares(c echo.Context) error {
 
 		shareURL := baseURL + "/shared/" + share.ShareID
 
-		// Format response
+		// Format response with encrypted metadata for client-side decryption
 		shareData := map[string]interface{}{
-			"shareId":   share.ShareID,
-			"fileId":    share.FileID,
-			"filename":  share.Filename,
-			"shareUrl":  shareURL,
-			"createdAt": share.CreatedAt,
+			"shareId":            share.ShareID,
+			"fileId":             share.FileID,
+			"encryptedFilename":  base64.StdEncoding.EncodeToString(share.EncryptedFilename),
+			"filenameNonce":      base64.StdEncoding.EncodeToString(share.FilenameNonce),
+			"encryptedSha256sum": base64.StdEncoding.EncodeToString(share.EncryptedSha256sum),
+			"sha256sumNonce":     base64.StdEncoding.EncodeToString(share.Sha256sumNonce),
+			"shareUrl":           shareURL,
+			"createdAt":          share.CreatedAt,
 		}
 
 		if share.Size.Valid {
@@ -593,25 +591,29 @@ func DownloadSharedFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
 	}
 
-	// Get file metadata
-	var filename string
+	// Get file metadata using the new encrypted schema
+	var storageID string
 	var size sql.NullInt64
+	var encryptedFilename []byte
+	var filenameNonce []byte
+	var encryptedSha256sum []byte
+	var sha256sumNonce []byte
 
 	err = database.DB.QueryRow(`
-		SELECT filename, size_bytes
+		SELECT storage_id, size_bytes, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce
 		FROM file_metadata
-		WHERE filename = ?
-	`, share.FileID).Scan(&filename, &size)
+		WHERE file_id = ?
+	`, share.FileID).Scan(&storageID, &size, &encryptedFilename, &filenameNonce, &encryptedSha256sum, &sha256sumNonce)
 
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
 	}
 
-	// Get file from object storage
+	// Get file from object storage using storage_id
 	object, err := storage.Provider.GetObject(
 		c.Request().Context(),
-		share.FileID, // bucketName is handled by the provider
+		storageID, // Use storage_id for object storage access
 		minio.GetObjectOptions{},
 	)
 	if err != nil {
@@ -630,12 +632,20 @@ func DownloadSharedFile(c echo.Context) error {
 	entityID := logging.GetOrCreateEntityID(c)
 	logging.InfoLogger.Printf("Shared file downloaded: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
 
-	// Return encrypted file data for client-side decryption
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"data":     base64.StdEncoding.EncodeToString(data),
-		"filename": filename,
-		"size":     size.Int64,
-	})
+	// Return encrypted file data and encrypted metadata for client-side decryption
+	response := map[string]interface{}{
+		"data":               base64.StdEncoding.EncodeToString(data),
+		"encryptedFilename":  base64.StdEncoding.EncodeToString(encryptedFilename),
+		"filenameNonce":      base64.StdEncoding.EncodeToString(filenameNonce),
+		"encryptedSha256sum": base64.StdEncoding.EncodeToString(encryptedSha256sum),
+		"sha256sumNonce":     base64.StdEncoding.EncodeToString(sha256sumNonce),
+	}
+
+	if size.Valid {
+		response["size"] = size.Int64
+	}
+
+	return c.JSON(http.StatusOK, response)
 }
 
 // generateShareID creates a cryptographically secure 256-bit share ID using Base64 URL-safe encoding

@@ -29,14 +29,14 @@ type FileKeyResponse struct {
 // UpdateEncryption handles updating a file's encryption with a new or converted format
 func UpdateEncryption(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
-	filename := c.Param("filename")
+	fileID := c.Param("fileId")
 
 	// Check if the file exists and user owns it
-	var ownerUsername string
+	var ownerUsername, storageID string
 	err := database.DB.QueryRow(
-		"SELECT owner_username FROM file_metadata WHERE filename = ?",
-		filename,
-	).Scan(&ownerUsername)
+		"SELECT owner_username, storage_id FROM file_metadata WHERE file_id = ?",
+		fileID,
+	).Scan(&ownerUsername, &storageID)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "File not found")
@@ -69,7 +69,7 @@ func UpdateEncryption(c echo.Context) error {
 	defer tx.Rollback()
 
 	// Update the file in object storage
-	objectName := filename
+	objectName := storageID
 	reader := strings.NewReader(request.EncryptedData)
 	contentType := "application/octet-stream"
 
@@ -89,8 +89,8 @@ func UpdateEncryption(c echo.Context) error {
 
 	// Update file metadata to indicate multi-key
 	_, err = tx.Exec(
-		"UPDATE file_metadata SET multi_key = TRUE WHERE filename = ?",
-		filename,
+		"UPDATE file_metadata SET multi_key = TRUE WHERE file_id = ?",
+		fileID,
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to update file metadata: %v", err)
@@ -101,7 +101,7 @@ func UpdateEncryption(c echo.Context) error {
 	var existingKeyCount int
 	err = tx.QueryRow(
 		"SELECT COUNT(*) FROM file_encryption_keys WHERE file_id = ?",
-		filename,
+		fileID,
 	).Scan(&existingKeyCount)
 	if err != nil {
 		logging.ErrorLogger.Printf("Error checking existing keys: %v", err)
@@ -112,7 +112,7 @@ func UpdateEncryption(c echo.Context) error {
 	if existingKeyCount == 0 {
 		_, err = tx.Exec(
 			"INSERT INTO file_encryption_keys (file_id, key_id, key_type, key_label, is_primary) VALUES (?, ?, ?, ?, ?)",
-			filename, "primary", "account", "Account Password", true,
+			fileID, "primary", "account", "Account Password", true,
 		)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to add primary key: %v", err)
@@ -123,7 +123,7 @@ func UpdateEncryption(c echo.Context) error {
 	// Add the new custom key
 	_, err = tx.Exec(
 		"INSERT INTO file_encryption_keys (file_id, key_id, key_type, key_label, password_hint, is_primary) VALUES (?, ?, ?, ?, ?, ?)",
-		filename, request.NewKeyID, "custom", request.KeyLabel, request.PasswordHint, false,
+		fileID, request.NewKeyID, "custom", request.KeyLabel, request.PasswordHint, false,
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to add new key: %v", err)
@@ -136,7 +136,7 @@ func UpdateEncryption(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete encryption update")
 	}
 
-	logging.InfoLogger.Printf("File encryption updated: %s by %s", filename, username)
+	logging.InfoLogger.Printf("File encryption updated: %s by %s", fileID, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "File encryption updated successfully",
@@ -147,13 +147,13 @@ func UpdateEncryption(c echo.Context) error {
 // ListKeys lists all encryption keys for a file
 func ListKeys(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
-	filename := c.Param("filename")
+	fileID := c.Param("fileId")
 
 	// Check if the file exists and user owns it
 	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_username FROM file_metadata WHERE filename = ?",
-		filename,
+		"SELECT owner_username FROM file_metadata WHERE file_id = ?",
+		fileID,
 	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
@@ -173,7 +173,7 @@ func ListKeys(c echo.Context) error {
 		FROM file_encryption_keys 
 		WHERE file_id = ? 
 		ORDER BY is_primary DESC, created_at ASC
-	`, filename)
+	`, fileID)
 
 	if err != nil {
 		logging.ErrorLogger.Printf("Error querying file keys: %v", err)
@@ -203,8 +203,8 @@ func ListKeys(c echo.Context) error {
 	// Check if file is multi-key encrypted
 	var isMultiKey bool
 	err = database.DB.QueryRow(
-		"SELECT multi_key FROM file_metadata WHERE filename = ?",
-		filename,
+		"SELECT multi_key FROM file_metadata WHERE file_id = ?",
+		fileID,
 	).Scan(&isMultiKey)
 
 	if err != nil && err != sql.ErrNoRows {
@@ -220,14 +220,14 @@ func ListKeys(c echo.Context) error {
 // DeleteKey removes an encryption key from a file
 func DeleteKey(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
-	filename := c.Param("filename")
+	fileID := c.Param("fileId")
 	keyID := c.Param("keyId")
 
 	// Check if the file exists and user owns it
 	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_username FROM file_metadata WHERE filename = ?",
-		filename,
+		"SELECT owner_username FROM file_metadata WHERE file_id = ?",
+		fileID,
 	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
@@ -245,7 +245,7 @@ func DeleteKey(c echo.Context) error {
 	var isPrimary bool
 	err = database.DB.QueryRow(
 		"SELECT is_primary FROM file_encryption_keys WHERE file_id = ? AND key_id = ?",
-		filename, keyID,
+		fileID, keyID,
 	).Scan(&isPrimary)
 
 	if err == sql.ErrNoRows {
@@ -263,7 +263,7 @@ func DeleteKey(c echo.Context) error {
 	var keyCount int
 	err = database.DB.QueryRow(
 		"SELECT COUNT(*) FROM file_encryption_keys WHERE file_id = ?",
-		filename,
+		fileID,
 	).Scan(&keyCount)
 
 	if err != nil {
@@ -278,7 +278,7 @@ func DeleteKey(c echo.Context) error {
 	// Delete the key
 	_, err = database.DB.Exec(
 		"DELETE FROM file_encryption_keys WHERE file_id = ? AND key_id = ?",
-		filename, keyID,
+		fileID, keyID,
 	)
 
 	if err != nil {
@@ -286,7 +286,7 @@ func DeleteKey(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error deleting key")
 	}
 
-	logging.InfoLogger.Printf("Key deleted: %s for file %s by %s", keyID, filename, username)
+	logging.InfoLogger.Printf("Key deleted: %s for file %s by %s", keyID, fileID, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "Key deleted successfully",
@@ -296,14 +296,14 @@ func DeleteKey(c echo.Context) error {
 // UpdateKey updates a key's label or password hint
 func UpdateKey(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
-	filename := c.Param("filename")
+	fileID := c.Param("fileId")
 	keyID := c.Param("keyId")
 
 	// Check if the file exists and user owns it
 	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_username FROM file_metadata WHERE filename = ?",
-		filename,
+		"SELECT owner_username FROM file_metadata WHERE file_id = ?",
+		fileID,
 	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
@@ -330,7 +330,7 @@ func UpdateKey(c echo.Context) error {
 	// Update key details
 	_, err = database.DB.Exec(
 		"UPDATE file_encryption_keys SET key_label = ?, password_hint = ? WHERE file_id = ? AND key_id = ?",
-		request.KeyLabel, request.PasswordHint, filename, keyID,
+		request.KeyLabel, request.PasswordHint, fileID, keyID,
 	)
 
 	if err != nil {
@@ -338,7 +338,7 @@ func UpdateKey(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error updating key")
 	}
 
-	logging.InfoLogger.Printf("Key updated: %s for file %s by %s", keyID, filename, username)
+	logging.InfoLogger.Printf("Key updated: %s for file %s by %s", keyID, fileID, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "Key updated successfully",
@@ -348,14 +348,14 @@ func UpdateKey(c echo.Context) error {
 // SetPrimaryKey sets a key as the primary key for a file
 func SetPrimaryKey(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
-	filename := c.Param("filename")
+	fileID := c.Param("fileId")
 	keyID := c.Param("keyId")
 
 	// Check if the file exists and user owns it
 	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_username FROM file_metadata WHERE filename = ?",
-		filename,
+		"SELECT owner_username FROM file_metadata WHERE file_id = ?",
+		fileID,
 	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
@@ -379,7 +379,7 @@ func SetPrimaryKey(c echo.Context) error {
 	// Reset all keys to non-primary
 	_, err = tx.Exec(
 		"UPDATE file_encryption_keys SET is_primary = FALSE WHERE file_id = ?",
-		filename,
+		fileID,
 	)
 
 	if err != nil {
@@ -390,7 +390,7 @@ func SetPrimaryKey(c echo.Context) error {
 	// Set the specified key as primary
 	result, err := tx.Exec(
 		"UPDATE file_encryption_keys SET is_primary = TRUE WHERE file_id = ? AND key_id = ?",
-		filename, keyID,
+		fileID, keyID,
 	)
 
 	if err != nil {
@@ -415,7 +415,7 @@ func SetPrimaryKey(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to complete primary key update")
 	}
 
-	logging.InfoLogger.Printf("Primary key set: %s for file %s by %s", keyID, filename, username)
+	logging.InfoLogger.Printf("Primary key set: %s for file %s by %s", keyID, fileID, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "Primary key updated successfully",
@@ -425,13 +425,13 @@ func SetPrimaryKey(c echo.Context) error {
 // RegisterCustomFilePassword registers a custom password with OPAQUE for a file
 func RegisterCustomFilePassword(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
-	filename := c.Param("filename")
+	fileID := c.Param("fileId")
 
 	// Check file ownership
 	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_username FROM file_metadata WHERE filename = ?",
-		filename,
+		"SELECT owner_username FROM file_metadata WHERE file_id = ?",
+		fileID,
 	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
@@ -461,13 +461,13 @@ func RegisterCustomFilePassword(c echo.Context) error {
 	}
 
 	// Register custom password using User model integration
-	err = user.RegisterFilePassword(database.DB, filename, request.Password, request.KeyLabel, request.PasswordHint)
+	err = user.RegisterFilePassword(database.DB, fileID, request.Password, request.KeyLabel, request.PasswordHint)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to register custom file password: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to register custom password")
 	}
 
-	logging.InfoLogger.Printf("Custom file password registered for %s by %s", filename, username)
+	logging.InfoLogger.Printf("Custom file password registered for %s by %s", fileID, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "Custom file password registered successfully",
@@ -478,13 +478,13 @@ func RegisterCustomFilePassword(c echo.Context) error {
 // GetFileDecryptionKey provides the encryption key for a file given a password
 func GetFileDecryptionKey(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
-	filename := c.Param("filename")
+	fileID := c.Param("fileId")
 
 	// Check file ownership
 	var ownerUsername string
 	err := database.DB.QueryRow(
-		"SELECT owner_username FROM file_metadata WHERE filename = ?",
-		filename,
+		"SELECT owner_username FROM file_metadata WHERE file_id = ?",
+		fileID,
 	).Scan(&ownerUsername)
 
 	if err == sql.ErrNoRows {
@@ -525,7 +525,7 @@ func GetFileDecryptionKey(c echo.Context) error {
 		defer secureZeroBytes(accountExportKey)
 
 		// Derive file-specific encryption key from account export key
-		encryptionKey, err = deriveAccountFileKey(accountExportKey, username, filename)
+		encryptionKey, err = deriveAccountFileKey(accountExportKey, username, fileID)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Key derivation failed")
 		}
@@ -538,7 +538,7 @@ func GetFileDecryptionKey(c echo.Context) error {
 		}
 
 		// Authenticate custom password using User model integration
-		exportKey, err := user.AuthenticateFilePassword(database.DB, filename, request.Password)
+		exportKey, err := user.AuthenticateFilePassword(database.DB, fileID, request.Password)
 		if err != nil {
 			logging.ErrorLogger.Printf("Custom password authentication failed: %v", err)
 			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid custom password")
@@ -546,7 +546,7 @@ func GetFileDecryptionKey(c echo.Context) error {
 		defer secureZeroBytes(exportKey)
 
 		// Derive file encryption key from custom password export key
-		encryptionKey, err = deriveOPAQUEFileKey(exportKey, filename, username)
+		encryptionKey, err = deriveOPAQUEFileKey(exportKey, fileID, username)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Key derivation failed")
 		}
@@ -560,7 +560,7 @@ func GetFileDecryptionKey(c echo.Context) error {
 	// Return key as hex for client-side decryption
 	keyHex := fmt.Sprintf("%x", encryptionKey)
 
-	logging.InfoLogger.Printf("File decryption key provided: %s (%s) for %s", filename, request.KeyType, username)
+	logging.InfoLogger.Printf("File decryption key provided: %s (%s) for %s", fileID, request.KeyType, username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"encryptionKey": keyHex,

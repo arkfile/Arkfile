@@ -158,6 +158,22 @@ declare global {
   function validateSharePasswordEntropyWASM(password: string): { success: boolean; entropy: number; strength_score: number; feedback: string[]; meets_requirements: boolean; pattern_penalties: string[]; error?: string };
   function decryptFileWithFEKWASM(encryptedFileBase64: string, fek: Uint8Array): { success: boolean; data?: string; error?: string };
 
+  // Metadata Encryption/Decryption Functions (Phase 7: Encrypted Metadata)
+  function encryptFileMetadata(exportKey: string, username: string, filename: string, sha256sum: string): {
+    success: boolean;
+    encryptedFilename?: string;
+    filenameNonce?: string;
+    encryptedSha256sum?: string;
+    sha256sumNonce?: string;
+    error?: string;
+  };
+  function decryptFileMetadata(exportKey: string, username: string, encryptedFilename: string, filenameNonce: string, encryptedSha256sum: string, sha256sumNonce: string): {
+    success: boolean;
+    filename?: string;
+    sha256sum?: string;
+    error?: string;
+  };
+
   // Utility functions that might be exposed
   var arrayBufferToBase64: ((buffer: ArrayBuffer) => string) | undefined;
   var base64ToArrayBuffer: ((base64: string) => ArrayBuffer) | undefined;

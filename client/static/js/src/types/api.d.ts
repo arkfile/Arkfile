@@ -64,7 +64,35 @@ interface TOTPSetupResponse {
 // File operation types
 interface FileMetadata {
   id: string;
+  fileId: string;
+  storageId: string;
+  // Encrypted metadata fields (base64 encoded)
+  encryptedFilename: string;
+  filenameNonce: string;
+  encryptedSha256sum: string;
+  sha256sumNonce: string;
+  // Decrypted fields (populated client-side)
+  filename?: string;
+  sha256sum?: string;
+  size: number;
+  uploadedAt: string;
+  contentType: string;
+  encrypted: boolean;
+  keyType?: 'account' | 'custom';
+  hasCustomPassword?: boolean;
+  multiKey?: boolean;
+  sharedWith?: string[];
+  downloadCount?: number;
+  maxDownloads?: number;
+  expiresAt?: string;
+}
+// File operation types for client-side display (after decryption)
+interface DecryptedFileMetadata {
+  id: string;
+  fileId: string;
+  storageId: string;
   filename: string;
+  sha256sum: string;
   size: number;
   uploadedAt: string;
   contentType: string;
@@ -85,7 +113,11 @@ interface FileListResponse {
 }
 
 interface FileUploadRequest {
-  filename: string;
+  // Encrypted metadata fields (base64 encoded)
+  encryptedFilename: string;
+  filenameNonce: string;
+  encryptedSha256sum: string;
+  sha256sumNonce: string;
   contentType: string;
   size: number;
   encrypted: boolean;
@@ -123,7 +155,14 @@ interface FileDownloadRequest {
 }
 
 interface FileDownloadResponse {
-  filename: string;
+  // Encrypted metadata fields (base64 encoded)
+  encryptedFilename: string;
+  filenameNonce: string;
+  encryptedSha256sum: string;
+  sha256sumNonce: string;
+  // Decrypted fields (populated client-side)
+  filename?: string;
+  sha256sum?: string;
   contentType: string;
   size: number;
   encrypted: boolean;
@@ -219,7 +258,7 @@ interface ProgressCallback {
 
 interface ChunkedUploadProgress {
   fileId: string;
-  filename: string;
+  filename: string; // This can be the original filename client-side
   totalSize: number;
   uploadedSize: number;
   currentChunk: number;
@@ -243,6 +282,7 @@ export type {
   TOTPSetupRequest,
   TOTPSetupResponse,
   FileMetadata,
+  DecryptedFileMetadata,
   FileListResponse,
   FileUploadRequest,
   FileUploadResponse,

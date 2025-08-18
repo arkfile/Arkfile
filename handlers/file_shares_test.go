@@ -36,10 +36,10 @@ func TestCreateFileShare_Success(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Mock file ownership check in file_metadata
-	fileOwnerSQL := `SELECT owner_username, multi_key, password_type FROM file_metadata WHERE filename = \?`
-	fileRows := sqlmock.NewRows([]string{"owner_username", "multi_key", "password_type"}).
-		AddRow(username, true, "custom")
+	// Mock file ownership check in file_metadata using file_id (matches actual handler)
+	fileOwnerSQL := `SELECT owner_username, password_type FROM file_metadata WHERE file_id = \?`
+	fileRows := sqlmock.NewRows([]string{"owner_username", "password_type"}).
+		AddRow(username, "custom")
 	mock.ExpectQuery(fileOwnerSQL).WithArgs("test-file-123").WillReturnRows(fileRows)
 
 	// Mock share creation
@@ -89,10 +89,10 @@ func TestCreateFileShare_InvalidSalt(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Mock file ownership check in file_metadata (matches actual handler)
-	fileOwnerSQL := `SELECT owner_username, multi_key, password_type FROM file_metadata WHERE filename = \?`
-	fileRows := sqlmock.NewRows([]string{"owner_username", "multi_key", "password_type"}).
-		AddRow(username, true, "custom")
+	// Mock file ownership check in file_metadata using file_id (matches actual handler)
+	fileOwnerSQL := `SELECT owner_username, password_type FROM file_metadata WHERE file_id = \?`
+	fileRows := sqlmock.NewRows([]string{"owner_username", "password_type"}).
+		AddRow(username, "custom")
 	mock.ExpectQuery(fileOwnerSQL).WithArgs("test-file-123").WillReturnRows(fileRows)
 
 	// Execute handler - should fail due to invalid salt (too short)
@@ -125,13 +125,9 @@ func TestCreateFileShare_FileNotOwned(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Mock file ownership check in file_metadata - file not found (different owner)
-	fileOwnerSQL := `SELECT owner_username, multi_key, password_type FROM file_metadata WHERE filename = \?`
+	// Mock file ownership check in file_metadata using file_id - file not found (different owner)
+	fileOwnerSQL := `SELECT owner_username, password_type FROM file_metadata WHERE file_id = \?`
 	mock.ExpectQuery(fileOwnerSQL).WithArgs("test-file-456").WillReturnError(sql.ErrNoRows)
-
-	// Mock fallback check in upload_sessions - also not found
-	uploadSessionSQL := `SELECT owner_username, password_type, multi_key FROM upload_sessions WHERE filename = \? AND status = 'completed'`
-	mock.ExpectQuery(uploadSessionSQL).WithArgs("test-file-456").WillReturnError(sql.ErrNoRows)
 
 	// Execute handler - should fail due to file not found
 	err := CreateFileShare(c)
@@ -167,10 +163,10 @@ func TestAccessSharedFile_Success(t *testing.T) {
 		AddRow("test-file-123", "owner@example.com", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
 	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
-	// Mock file metadata lookup
-	fileMetaSQL := `SELECT filename, size_bytes, sha256sum FROM file_metadata WHERE filename = \?`
-	fileMetaRows := sqlmock.NewRows([]string{"filename", "size_bytes", "sha256sum"}).
-		AddRow("test.txt", 1024, "abc123")
+	// Mock file metadata lookup with encrypted fields (matches actual handler)
+	fileMetaSQL := `SELECT encrypted_filename, size_bytes, encrypted_sha256sum, filename_nonce, sha256sum_nonce FROM file_metadata WHERE file_id = \?`
+	fileMetaRows := sqlmock.NewRows([]string{"encrypted_filename", "size_bytes", "encrypted_sha256sum", "filename_nonce", "sha256sum_nonce"}).
+		AddRow([]byte("encryptedfilename"), 1024, []byte("encryptedsha256sum"), []byte("testfilenamenonce"), []byte("testsha256nonce"))
 	mock.ExpectQuery(fileMetaSQL).WithArgs("test-file-123").WillReturnRows(fileMetaRows)
 
 	// Mock rate limit reset on success
@@ -218,10 +214,10 @@ func TestAccessSharedFile_WeakPassword(t *testing.T) {
 		AddRow("test-file-123", "owner@example.com", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
 	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
-	// Mock file metadata lookup
-	fileMetaSQL := `SELECT filename, size_bytes, sha256sum FROM file_metadata WHERE filename = \?`
-	fileMetaRows := sqlmock.NewRows([]string{"filename", "size_bytes", "sha256sum"}).
-		AddRow("test.txt", 1024, "abc123")
+	// Mock file metadata lookup with encrypted fields (matches actual handler)
+	fileMetaSQL := `SELECT encrypted_filename, size_bytes, encrypted_sha256sum, filename_nonce, sha256sum_nonce FROM file_metadata WHERE file_id = \?`
+	fileMetaRows := sqlmock.NewRows([]string{"encrypted_filename", "size_bytes", "encrypted_sha256sum", "filename_nonce", "sha256sum_nonce"}).
+		AddRow([]byte("encryptedfilename"), 1024, []byte("encryptedsha256sum"), []byte("testfilenamenonce"), []byte("testsha256nonce"))
 	mock.ExpectQuery(fileMetaSQL).WithArgs("test-file-123").WillReturnRows(fileMetaRows)
 
 	// Mock rate limit reset on success
@@ -290,9 +286,9 @@ func TestGetSharedFile_Success(t *testing.T) {
 		AddRow("test-file-123", "owner@example.com", nil)
 	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
-	// Mock file metadata lookup for display
-	fileMetaSQL := `SELECT filename FROM file_metadata WHERE filename = \?`
-	fileMetaRows := sqlmock.NewRows([]string{"filename"}).AddRow("test.txt")
+	// Mock file metadata lookup for display with encrypted fields (matches actual handler)
+	fileMetaSQL := `SELECT 1 FROM file_metadata WHERE file_id = \?`
+	fileMetaRows := sqlmock.NewRows([]string{"1"}).AddRow(1)
 	mock.ExpectQuery(fileMetaSQL).WithArgs("test-file-123").WillReturnRows(fileMetaRows)
 
 	// Execute handler - will fail due to no renderer, but that's expected in test
@@ -318,10 +314,10 @@ func TestListShares_Success(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Mock shares query (matches actual handler ListShares function)
-	sharesSQL := `SELECT sk\.share_id, sk\.file_id, sk\.created_at, sk\.expires_at, fm\.filename, fm\.size_bytes FROM file_share_keys sk JOIN file_metadata fm ON sk\.file_id = fm\.filename WHERE sk\.owner_username = \? ORDER BY sk\.created_at DESC`
-	sharesRows := sqlmock.NewRows([]string{"share_id", "file_id", "created_at", "expires_at", "filename", "size_bytes"}).
-		AddRow("test-share-id", "test-file-123", time.Now().Format("2006-01-02 15:04:05"), nil, "test.txt", 1024)
+	// Mock shares query with encrypted metadata fields (matches actual handler ListShares function)
+	sharesSQL := `SELECT sk\.share_id, sk\.file_id, sk\.created_at, sk\.expires_at, fm\.encrypted_filename, fm\.filename_nonce, fm\.encrypted_sha256sum, fm\.sha256sum_nonce, fm\.size_bytes FROM file_share_keys sk JOIN file_metadata fm ON sk\.file_id = fm\.file_id WHERE sk\.owner_username = \? ORDER BY sk\.created_at DESC`
+	sharesRows := sqlmock.NewRows([]string{"share_id", "file_id", "created_at", "expires_at", "encrypted_filename", "filename_nonce", "encrypted_sha256sum", "sha256sum_nonce", "size_bytes"}).
+		AddRow("test-share-id", "test-file-123", time.Now().Format("2006-01-02 15:04:05"), nil, []byte("encryptedfilename"), []byte("testfilenamenonce"), []byte("encryptedsha256sum"), []byte("testsha256nonce"), 1024)
 	mock.ExpectQuery(sharesSQL).WithArgs(username).WillReturnRows(sharesRows)
 
 	// Execute handler
@@ -441,10 +437,10 @@ func TestSharePasswordValidation_WithZxcvbn(t *testing.T) {
 				AddRow("test-file-123", "owner@example.com", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
 			mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
-			// Mock file metadata lookup
-			fileMetaSQL := `SELECT filename, size_bytes, sha256sum FROM file_metadata WHERE filename = \?`
-			fileMetaRows := sqlmock.NewRows([]string{"filename", "size_bytes", "sha256sum"}).
-				AddRow("test.txt", 1024, "abc123")
+			// Mock file metadata lookup with encrypted fields (matches actual handler)
+			fileMetaSQL := `SELECT encrypted_filename, size_bytes, encrypted_sha256sum, filename_nonce, sha256sum_nonce FROM file_metadata WHERE file_id = \?`
+			fileMetaRows := sqlmock.NewRows([]string{"encrypted_filename", "size_bytes", "encrypted_sha256sum", "filename_nonce", "sha256sum_nonce"}).
+				AddRow([]byte("encryptedfilename"), 1024, []byte("encryptedsha256sum"), []byte("testfilenamenonce"), []byte("testsha256nonce"))
 			mock.ExpectQuery(fileMetaSQL).WithArgs("test-file-123").WillReturnRows(fileMetaRows)
 
 			// Mock rate limit reset on success

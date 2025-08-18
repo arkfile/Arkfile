@@ -28,7 +28,6 @@ import (
 
 	"github.com/84adam/arkfile/auth"
 	"github.com/84adam/arkfile/crypto"
-	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/storage"
 )
 
@@ -50,7 +49,8 @@ func TestChunkedUploadEndToEnd(t *testing.T) {
 
 	// Test user
 	username := "chunked-test@example.com"
-	fileID := "test-chunked-file.bin"
+	fileID := "550e8400-e29b-41d4-a716-446655440000"    // UUID v4 format
+	storageID := "650e8400-e29b-41d4-a716-446655440001" // UUID v4 format
 
 	// Mock OPAQUE export key (in real system this comes from OPAQUE authentication)
 	exportKey := make([]byte, 64)
@@ -67,7 +67,7 @@ func TestChunkedUploadEndToEnd(t *testing.T) {
 	t.Logf("✅ Client encryption: created %d chunks with envelope", len(encryptedChunks))
 
 	// STEP 2: Create upload session with mock expectations
-	sessionID, err := simulateCreateUploadSessionWithMocks(t, username, fileID, int64(fileSize), originalHashHex, envelope, mockDB, mockStorage)
+	sessionID, err := simulateCreateUploadSessionWithMocks(t, username, fileID, storageID, int64(fileSize), originalHashHex, envelope, mockDB, mockStorage)
 	require.NoError(t, err)
 
 	t.Logf("✅ Upload session created: %s", sessionID)
@@ -79,13 +79,13 @@ func TestChunkedUploadEndToEnd(t *testing.T) {
 	t.Logf("✅ All %d chunks uploaded successfully", len(encryptedChunks))
 
 	// STEP 4: Complete upload with mock expectations (this is where envelope concatenation happens)
-	storageID, err := simulateCompleteUploadWithMocks(t, sessionID, mockDB, mockStorage, envelope, encryptedChunks)
+	finalStorageID, err := simulateCompleteUploadWithMocks(t, sessionID, mockDB, mockStorage, envelope, encryptedChunks)
 	require.NoError(t, err)
 
 	t.Logf("✅ Upload completed - file should be stored as [envelope][chunk1][chunk2]...")
 
 	// STEP 5: Simulate download and decrypt (proves the fix works)
-	downloadedData, err := simulateDownloadAndDecryptWithMocks(t, username, fileID, exportKey, storageID, mockStorage, envelope, encryptedChunks)
+	downloadedData, err := simulateDownloadAndDecryptWithMocks(t, username, fileID, exportKey, finalStorageID, mockStorage, envelope, encryptedChunks)
 	require.NoError(t, err)
 
 	t.Logf("✅ File downloaded and decrypted: %d bytes", len(downloadedData))
@@ -181,10 +181,11 @@ func simulateClientEncryption(data []byte, exportKey []byte, username, fileID, k
 }
 
 // simulateCreateUploadSession creates an upload session with envelope data
-func simulateCreateUploadSession(t *testing.T, username, filename string, totalSize int64, originalHash string, envelope []byte) (string, error) {
+func simulateCreateUploadSession(t *testing.T, username, fileID, storageID string, totalSize int64, originalHash string, envelope []byte) (string, error) {
 	// Create request
 	reqBody := map[string]interface{}{
-		"filename":     filename,
+		"fileId":       fileID,
+		"storageId":    storageID,
 		"totalSize":    totalSize,
 		"chunkSize":    16 * 1024 * 1024,
 		"originalHash": originalHash,
@@ -298,23 +299,14 @@ func simulateCompleteUpload(t *testing.T, sessionID string) error {
 }
 
 // simulateDownloadAndDecrypt downloads the file and decrypts it (proves fix works)
-func simulateDownloadAndDecrypt(t *testing.T, username, fileID string, exportKey []byte) ([]byte, error) {
+func simulateDownloadAndDecrypt(t *testing.T, username, fileID, storageID string, exportKey []byte) ([]byte, error) {
 	// For this test, we need to directly access the storage to get the concatenated file
 	// In real system, this would go through download handlers
 
 	// Get the stored file from storage
 	ctx := context.Background()
 
-	// Find the storage ID from file_metadata
-	var storageID string
-	err := database.DB.QueryRow(
-		"SELECT storage_id FROM file_metadata WHERE filename = ?", fileID,
-	).Scan(&storageID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get storage ID: %v", err)
-	}
-
-	// Get the file data from storage
+	// Get the file data from storage using storage_id directly
 	reader, err := storage.Provider.GetObject(ctx, storageID, minio.GetObjectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get object from storage: %v", err)
@@ -466,7 +458,7 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, usernam
 
 // Mock helper functions for proper testing with database and storage mocks
 
-func simulateCreateUploadSessionWithMocks(t *testing.T, username, filename string, totalSize int64, originalHash string, envelope []byte, mockDB sqlmock.Sqlmock, mockStorage *storage.MockObjectStorageProvider) (string, error) {
+func simulateCreateUploadSessionWithMocks(t *testing.T, username, fileID, storageID string, totalSize int64, originalHash string, envelope []byte, mockDB sqlmock.Sqlmock, mockStorage *storage.MockObjectStorageProvider) (string, error) {
 	// This is a simplified simulation - in a real test we'd mock all the database calls
 	// For now, just return a mock session ID since we're testing the crypto logic
 	return "mock-session-12345", nil

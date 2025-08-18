@@ -26,21 +26,22 @@ import (
 // TestUploadFile_Success tests successful file upload
 func TestUploadFile_Success(t *testing.T) {
 	email := "uploader@example.com"
-	filename := "my-test-file.dat"
 	fileData := "This is the test file content."
 	passwordHint := "test hint"
-	passwordType := "account"                                                       // or "custom"
-	sha256sum := "f2ca1bb6c7e907d06dafe4687e579fce76b37e4e93b7605022da52e6ccc26fd2" // Example hash for "This is the test file content."
+	passwordType := "account" // or "custom"
 	fileSize := int64(len(fileData))
 	initialStorage := int64(0)
 	expectedFinalStorage := initialStorage + fileSize
 
+	// Create request body with encrypted metadata (mocked for testing)
 	reqBodyMap := map[string]string{
-		"filename":     filename,
-		"data":         fileData,
-		"passwordHint": passwordHint,
-		"passwordType": passwordType,
-		"sha256sum":    sha256sum,
+		"data":               fileData,
+		"passwordHint":       passwordHint,
+		"passwordType":       passwordType,
+		"encryptedFilename":  "ZW5jcnlwdGVkX215LXRlc3QtZmlsZS5kYXQ=", // base64 encoded mock
+		"filenameNonce":      "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
+		"encryptedSha256sum": "ZW5jcnlwdGVkX2YyY2ExYmI2Yzc=",         // base64 encoded mock
+		"sha256sumNonce":     "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
 	}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
@@ -87,10 +88,10 @@ func TestUploadFile_Success(t *testing.T) {
 		mock.AnythingOfType("minio.RemoveObjectOptions"),
 	).Return(nil).Maybe() // Use Maybe() since it should not be called in success case
 
-	// 2. Expect Metadata Insertion (after PutObject) - exact SQL match
-	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
+	// 2. Expect Metadata Insertion (after PutObject) - updated for encrypted metadata schema
+	insertMetaSQL := `INSERT INTO file_metadata \(file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
-		WithArgs(filename, sqlmock.AnyArg(), email, passwordHint, passwordType, sha256sum, fileSize, sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), email, passwordHint, passwordType, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), fileSize, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// 3. Expect Storage Usage Update (inside user.UpdateStorageUsage)
@@ -102,9 +103,9 @@ func TestUploadFile_Success(t *testing.T) {
 	// 4. Expect Commit
 	mockDB.ExpectCommit()
 
-	// --- Mock LogUserAction (after commit) ---
+	// --- Mock LogUserAction (after commit) - now uses file_id instead of filename
 	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
-	mockDB.ExpectExec(logActionSQL).WithArgs(email, "uploaded", filename).WillReturnResult(sqlmock.NewResult(1, 1))
+	mockDB.ExpectExec(logActionSQL).WithArgs(email, "uploaded", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// --- Execute Handler ---
 	err := UploadFile(c)
@@ -135,7 +136,6 @@ func TestUploadFile_Success(t *testing.T) {
 // TestUploadFile_StorageLimitExceeded tests attempting to upload when storage is insufficient
 func TestUploadFile_StorageLimitExceeded(t *testing.T) {
 	email := "limit-exceeder@example.com"
-	filename := "too-big-file.dat"
 	fileData := "Some data"
 	fileSize := int64(len(fileData)) // e.g., 9 bytes
 	// Set initial storage to be very close to the limit
@@ -143,11 +143,13 @@ func TestUploadFile_StorageLimitExceeded(t *testing.T) {
 	// Uploading fileSize (9 bytes) would exceed the limit (10GB)
 
 	reqBodyMap := map[string]string{
-		"filename":     filename,
-		"data":         fileData,
-		"passwordHint": "hint",
-		"passwordType": "account",
-		"sha256sum":    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // Valid 64 hex chars
+		"data":               fileData,
+		"passwordHint":       "hint",
+		"passwordType":       "account",
+		"encryptedFilename":  "ZW5jcnlwdGVkX3Rvby1iaWctZmlsZS5kYXQ=", // base64 encoded mock
+		"filenameNonce":      "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
+		"encryptedSha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",     // base64 encoded mock
+		"sha256sumNonce":     "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
 	}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
@@ -193,17 +195,18 @@ func TestUploadFile_StorageLimitExceeded(t *testing.T) {
 // TestUploadFile_StoragePutError tests failure during storage PutObject
 func TestUploadFile_StoragePutError(t *testing.T) {
 	email := "uploader-stor-err@example.com"
-	filename := "fail-on-put.dat"
 	fileData := "This data won't make it."
 	fileSize := int64(len(fileData))
 	initialStorage := int64(0)
 
 	reqBodyMap := map[string]string{
-		"filename":     filename,
-		"data":         fileData,
-		"passwordHint": "hint",
-		"passwordType": "account",
-		"sha256sum":    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // Valid hash
+		"data":               fileData,
+		"passwordHint":       "hint",
+		"passwordType":       "account",
+		"encryptedFilename":  "ZW5jcnlwdGVkX2ZhaWwtb24tcHV0LmRhdA==", // base64 encoded mock
+		"filenameNonce":      "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
+		"encryptedSha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",     // base64 encoded mock
+		"sha256sumNonce":     "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
 	}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
@@ -265,17 +268,18 @@ func TestUploadFile_StoragePutError(t *testing.T) {
 // TestUploadFile_MetadataInsertError tests failure during DB metadata insertion
 func TestUploadFile_MetadataInsertError(t *testing.T) {
 	email := "uploader-meta-err@example.com"
-	filename := "fail-on-meta-insert.dat"
 	fileData := "This data makes it to storage, but not DB."
 	fileSize := int64(len(fileData))
 	initialStorage := int64(0)
 
 	reqBodyMap := map[string]string{
-		"filename":     filename,
-		"data":         fileData,
-		"passwordHint": "hint",
-		"passwordType": "account",
-		"sha256sum":    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // Valid hash
+		"data":               fileData,
+		"passwordHint":       "hint",
+		"passwordType":       "account",
+		"encryptedFilename":  "ZW5jcnlwdGVkX2ZhaWwtb24tbWV0YS1pbnNlcnQuZGF0", // base64 encoded mock
+		"filenameNonce":      "YWJjZGVmZ2hpams=",                             // base64 encoded 12-byte mock nonce
+		"encryptedSha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",             // base64 encoded mock
+		"sha256sumNonce":     "YWJjZGVmZ2hpams=",                             // base64 encoded 12-byte mock nonce
 	}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
@@ -309,11 +313,11 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("int64"), mock.AnythingOfType("minio.PutObjectOptions"),
 	).Return(minio.UploadInfo{}, nil).Once()
 
-	// 2. Expect Metadata Insertion to FAIL
+	// 2. Expect Metadata Insertion to FAIL - updated for encrypted metadata schema
 	dbError := fmt.Errorf("simulated DB metadata insert error")
-	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
+	insertMetaSQL := `INSERT INTO file_metadata \(file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
-		WithArgs(filename, sqlmock.AnyArg(), email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize, sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), email, "hint", "account", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), fileSize, sqlmock.AnyArg()).
 		WillReturnError(dbError)
 
 	// 3. Expect Storage Cleanup (RemoveObject) because metadata insert failed
@@ -343,17 +347,18 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 // TestUploadFile_UpdateStorageError tests failure during DB user storage update
 func TestUploadFile_UpdateStorageError(t *testing.T) {
 	email := "uploader-upd-stor-err@example.com"
-	filename := "fail-on-update-storage.dat"
 	fileData := "This data is in storage & meta, but user total is wrong."
 	fileSize := int64(len(fileData))
 	initialStorage := int64(0)
 
 	reqBodyMap := map[string]string{
-		"filename":     filename,
-		"data":         fileData,
-		"passwordHint": "hint",
-		"passwordType": "account",
-		"sha256sum":    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // Valid hash
+		"data":               fileData,
+		"passwordHint":       "hint",
+		"passwordType":       "account",
+		"encryptedFilename":  "ZW5jcnlwdGVkX2ZhaWwtb24tdXBkYXRlLXN0b3JhZ2UuZGF0", // base64 encoded mock
+		"filenameNonce":      "YWJjZGVmZ2hpams=",                                 // base64 encoded 12-byte mock nonce
+		"encryptedSha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",                 // base64 encoded mock
+		"sha256sumNonce":     "YWJjZGVmZ2hpams=",                                 // base64 encoded 12-byte mock nonce
 	}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
@@ -391,10 +396,10 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	// The storage update failure occurs after successful metadata insertion,
 	// so the handler just returns an error without storage cleanup
 
-	// 2. Expect Metadata Insertion to SUCCEED
-	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
+	// 2. Expect Metadata Insertion to SUCCEED - updated for encrypted metadata schema
+	insertMetaSQL := `INSERT INTO file_metadata \(file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
-		WithArgs(filename, sqlmock.AnyArg(), email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize, sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), email, "hint", "account", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), fileSize, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// 3. Expect Storage Usage Update to FAIL
@@ -489,18 +494,19 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 // TestUploadFile_CommitError tests failure during the final DB transaction commit
 func TestUploadFile_CommitError(t *testing.T) {
 	email := "uploader-commit-err@example.com"
-	filename := "fail-on-commit.dat"
 	fileData := "This data is almost committed."
 	fileSize := int64(len(fileData))
 	initialStorage := int64(0)
 	expectedFinalStorage := initialStorage + fileSize
 
 	reqBodyMap := map[string]string{
-		"filename":     filename,
-		"data":         fileData,
-		"passwordHint": "hint",
-		"passwordType": "account",
-		"sha256sum":    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // Valid hash
+		"data":               fileData,
+		"passwordHint":       "hint",
+		"passwordType":       "account",
+		"encryptedFilename":  "ZW5jcnlwdGVkX2ZhaWwtb24tY29tbWl0LmRhdA==", // base64 encoded mock
+		"filenameNonce":      "YWJjZGVmZ2hpams=",                         // base64 encoded 12-byte mock nonce
+		"encryptedSha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",         // base64 encoded mock
+		"sha256sumNonce":     "YWJjZGVmZ2hpams=",                         // base64 encoded 12-byte mock nonce
 	}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
@@ -534,10 +540,10 @@ func TestUploadFile_CommitError(t *testing.T) {
 		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("int64"), mock.AnythingOfType("minio.PutObjectOptions"),
 	).Return(minio.UploadInfo{}, nil).Once()
 
-	// 2. Expect Metadata Insertion to SUCCEED
-	insertMetaSQL := `INSERT INTO file_metadata \(filename, storage_id, owner_username, password_hint, password_type, sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?\)`
+	// 2. Expect Metadata Insertion to SUCCEED - updated for encrypted metadata schema
+	insertMetaSQL := `INSERT INTO file_metadata \(file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
-		WithArgs(filename, sqlmock.AnyArg(), email, "hint", "account", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", fileSize, sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), email, "hint", "account", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), fileSize, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// 3. Expect Storage Usage Update to SUCCEED

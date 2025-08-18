@@ -91,6 +91,13 @@ func deriveCustomFileKey(exportKey []byte, fileID, username string) ([]byte, err
 	return crypto.DeriveOPAQUEFileKey(exportKey, fileID, username)
 }
 
+// deriveMetadataEncryptionKey derives a metadata encryption key from OPAQUE export key
+func deriveMetadataEncryptionKey(exportKey []byte, username string) ([]byte, error) {
+	// Use HKDF to derive a consistent metadata encryption key for the user
+	// This key will be used to encrypt/decrypt filenames and SHA256 hashes
+	return crypto.DeriveMetadataKey(exportKey, username)
+}
+
 // encryptFileOPAQUE encrypts a file using OPAQUE-derived keys (replaces old Argon2ID approach)
 func encryptFileOPAQUE(this js.Value, args []js.Value) interface{} {
 	if len(args) != 4 {
@@ -312,6 +319,195 @@ func decryptFileOPAQUE(this js.Value, args []js.Value) interface{} {
 	}
 }
 
+// encryptFileMetadata encrypts filename and SHA256 hash for storage
+func encryptFileMetadata(this js.Value, args []js.Value) interface{} {
+	if len(args) != 3 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected filename, sha256sum, username",
+		}
+	}
+
+	filename := args[0].String()
+	sha256sum := args[1].String()
+	username := args[2].String()
+
+	// Get the OPAQUE export key for this user
+	exportKey, exists := opaqueExportKeys[username]
+	if !exists {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "No OPAQUE export key found for user",
+		}
+	}
+
+	// Derive the metadata encryption key
+	metadataKey, err := deriveMetadataEncryptionKey(exportKey, username)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to derive metadata encryption key: " + err.Error(),
+		}
+	}
+
+	// Create AES-GCM cipher
+	block, err := aes.NewCipher(metadataKey)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to create cipher: " + err.Error(),
+		}
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to create GCM: " + err.Error(),
+		}
+	}
+
+	// Generate random nonce for filename encryption
+	filenameNonce := make([]byte, 12) // 12 bytes for GCM
+	if _, err := rand.Read(filenameNonce); err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to generate filename nonce: " + err.Error(),
+		}
+	}
+
+	// Generate random nonce for SHA256 encryption
+	sha256Nonce := make([]byte, 12) // 12 bytes for GCM
+	if _, err := rand.Read(sha256Nonce); err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to generate SHA256 nonce: " + err.Error(),
+		}
+	}
+
+	// Encrypt filename
+	encryptedFilename := gcm.Seal(nil, filenameNonce, []byte(filename), nil)
+
+	// Encrypt SHA256 hash
+	encryptedSha256 := gcm.Seal(nil, sha256Nonce, []byte(sha256sum), nil)
+
+	return map[string]interface{}{
+		"success":            true,
+		"filenameNonce":      base64.StdEncoding.EncodeToString(filenameNonce),
+		"encryptedFilename":  base64.StdEncoding.EncodeToString(encryptedFilename),
+		"sha256Nonce":        base64.StdEncoding.EncodeToString(sha256Nonce),
+		"encryptedSha256sum": base64.StdEncoding.EncodeToString(encryptedSha256),
+	}
+}
+
+// decryptFileMetadata decrypts filename and SHA256 hash for display
+func decryptFileMetadata(this js.Value, args []js.Value) interface{} {
+	if len(args) != 5 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected filenameNonce, encryptedFilename, sha256Nonce, encryptedSha256sum, username",
+		}
+	}
+
+	filenameNonceB64 := args[0].String()
+	encryptedFilenameB64 := args[1].String()
+	sha256NonceB64 := args[2].String()
+	encryptedSha256B64 := args[3].String()
+	username := args[4].String()
+
+	// Get the OPAQUE export key for this user
+	exportKey, exists := opaqueExportKeys[username]
+	if !exists {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "No OPAQUE export key found for user",
+		}
+	}
+
+	// Derive the metadata encryption key
+	metadataKey, err := deriveMetadataEncryptionKey(exportKey, username)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to derive metadata encryption key: " + err.Error(),
+		}
+	}
+
+	// Create AES-GCM cipher
+	block, err := aes.NewCipher(metadataKey)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to create cipher: " + err.Error(),
+		}
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to create GCM: " + err.Error(),
+		}
+	}
+
+	// Decode nonces and encrypted data
+	filenameNonce, err := base64.StdEncoding.DecodeString(filenameNonceB64)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to decode filename nonce: " + err.Error(),
+		}
+	}
+
+	encryptedFilename, err := base64.StdEncoding.DecodeString(encryptedFilenameB64)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to decode encrypted filename: " + err.Error(),
+		}
+	}
+
+	sha256Nonce, err := base64.StdEncoding.DecodeString(sha256NonceB64)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to decode SHA256 nonce: " + err.Error(),
+		}
+	}
+
+	encryptedSha256, err := base64.StdEncoding.DecodeString(encryptedSha256B64)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to decode encrypted SHA256: " + err.Error(),
+		}
+	}
+
+	// Decrypt filename
+	filenameBytes, err := gcm.Open(nil, filenameNonce, encryptedFilename, nil)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to decrypt filename: " + err.Error(),
+		}
+	}
+
+	// Decrypt SHA256 hash
+	sha256Bytes, err := gcm.Open(nil, sha256Nonce, encryptedSha256, nil)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to decrypt SHA256: " + err.Error(),
+		}
+	}
+
+	return map[string]interface{}{
+		"success":   true,
+		"filename":  string(filenameBytes),
+		"sha256sum": string(sha256Bytes),
+	}
+}
+
 // clearOPAQUEExportKey securely clears the export key for a user
 func clearOPAQUEExportKey(this js.Value, args []js.Value) interface{} {
 	if len(args) != 1 {
@@ -496,6 +692,10 @@ func main() {
 	js.Global().Set("encryptFileOPAQUE", js.FuncOf(encryptFileOPAQUE))
 	js.Global().Set("decryptFileOPAQUE", js.FuncOf(decryptFileOPAQUE))
 	js.Global().Set("clearOPAQUEExportKey", js.FuncOf(clearOPAQUEExportKey))
+
+	// File metadata encryption functions (NEW)
+	js.Global().Set("encryptFileMetadata", js.FuncOf(encryptFileMetadata))
+	js.Global().Set("decryptFileMetadata", js.FuncOf(decryptFileMetadata))
 
 	// Phase 1: Chunked upload encryption functions
 	js.Global().Set("encryptFileChunkedOPAQUE", js.FuncOf(encryptFileChunkedOPAQUE))
