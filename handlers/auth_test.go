@@ -2,13 +2,18 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -37,13 +42,65 @@ func stringPtr(s string) *string {
 	return &s
 }
 
+// setupJWTKeysForTest creates temporary Ed25519 key files for testing
+func setupJWTKeysForTest(t *testing.T) (string, string, func()) {
+	t.Helper()
+
+	// Create temporary directory for keys
+	tempDir := t.TempDir()
+
+	// Generate Ed25519 key pair
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err, "Failed to generate Ed25519 key pair")
+
+	// Marshal private key to PKCS8 format
+	privateKeyBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	require.NoError(t, err, "Failed to marshal private key")
+
+	// Create PEM blocks
+	privateKeyPEM := &pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: privateKeyBytes,
+	}
+
+	publicKeyBytes, err := x509.MarshalPKIXPublicKey(publicKey)
+	require.NoError(t, err, "Failed to marshal public key")
+
+	publicKeyPEM := &pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: publicKeyBytes,
+	}
+
+	// Write key files
+	privateKeyPath := filepath.Join(tempDir, "signing.key")
+	publicKeyPath := filepath.Join(tempDir, "public.key")
+
+	err = os.WriteFile(privateKeyPath, pem.EncodeToMemory(privateKeyPEM), 0600)
+	require.NoError(t, err, "Failed to write private key file")
+
+	err = os.WriteFile(publicKeyPath, pem.EncodeToMemory(publicKeyPEM), 0644)
+	require.NoError(t, err, "Failed to write public key file")
+
+	// Cleanup function
+	cleanup := func() {
+		auth.ResetKeysForTest()
+	}
+
+	return privateKeyPath, publicKeyPath, cleanup
+}
+
 // Helper function to create a new Echo context for testing
 func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Context, *httptest.ResponseRecorder, sqlmock.Sqlmock, *storage.MockObjectStorageProvider) {
+	// --- JWT Keys Setup ---
+	privateKeyPath, publicKeyPath, keyCleanup := setupJWTKeysForTest(t)
+
 	// --- Test Config Setup ---
 	config.ResetConfigForTest()
 	originalEnv := map[string]string{}
 	testEnv := map[string]string{
 		"JWT_SECRET":                "test-jwt-secret-for-handlers", // Consistent secret
+		"JWT_PRIVATE_KEY_PATH":      privateKeyPath,                 // Use temporary keys
+		"JWT_PUBLIC_KEY_PATH":       publicKeyPath,                  // Use temporary keys
 		"STORAGE_PROVIDER":          "backblaze",                    // Set provider to backblaze
 		"BACKBLAZE_ENDPOINT":        "test-endpoint",
 		"BACKBLAZE_KEY_ID":          "test-key-id",
@@ -106,6 +163,7 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 		dbSetup.DB = originalDB
 		storage.Provider = originalProvider
 		mockDB.Close()
+		keyCleanup() // Clean up JWT keys
 		for key, originalValue := range originalEnv {
 			if originalValue == "" {
 				os.Unsetenv(key)
