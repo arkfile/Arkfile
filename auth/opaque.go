@@ -44,6 +44,18 @@ func GetOPAQUEProvider() OPAQUEProvider {
 	return provider
 }
 
+// SetTestProvider overrides the global provider for testing purposes.
+// This should only be used in test code.
+func SetTestProvider(testProvider OPAQUEProvider) {
+	provider = testProvider
+}
+
+// RestoreProvider restores a previously saved provider.
+// This should only be used in test code for cleanup.
+func RestoreProvider(originalProvider OPAQUEProvider) {
+	provider = originalProvider
+}
+
 // IsOPAQUEAvailable is a convenience function that checks if OPAQUE operations
 // are available through the current provider.
 func IsOPAQUEAvailable() bool {

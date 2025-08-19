@@ -159,7 +159,11 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 	// Setup OPAQUE test tables and server keys
 	setupOPAQUETestEnvironment(t, mockDB, mockSQL)
 
+	// Setup test OPAQUE provider to avoid CGO calls
+	cleanupOPAQUE := setupTestOPAQUEProvider(t)
+
 	t.Cleanup(func() {
+		cleanupOPAQUE() // Restore original OPAQUE provider
 		dbSetup.DB = originalDB
 		storage.Provider = originalProvider
 		mockDB.Close()
@@ -201,14 +205,25 @@ func TestOpaqueRegister_Success(t *testing.T) {
 		WithArgs(username, sqlmock.AnyArg(), models.DefaultStorageLimit, false, false).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// With static linking, OPAQUE record creation will be handled by the real implementation
-	// We need to mock the OPAQUE password record creation
+	// Mock the OPAQUE password record creation
 	opaqueRecordSQL := `INSERT INTO opaque_password_records \(\s*record_type, record_identifier, opaque_user_record, associated_username, is_active\s*\) VALUES \(\?, \?, \?, \?, \?\)`
 	mock.ExpectExec(opaqueRecordSQL).
 		WithArgs("account", username, sqlmock.AnyArg(), username, true).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	mock.ExpectCommit()
+
+	// Mock the OPAQUE authentication queries that GetOPAQUEExportKey will trigger
+	// This query happens when the handler calls user.GetOPAQUEExportKey
+	mock.ExpectQuery(`SELECT opaque_user_record FROM opaque_password_records WHERE record_identifier = \? AND is_active = TRUE`).
+		WithArgs(username).
+		WillReturnRows(sqlmock.NewRows([]string{"opaque_user_record"}).
+			AddRow(generateTestUserRecord([]byte(password))))
+
+	// Mock updating last used timestamp for the OPAQUE authentication
+	mock.ExpectExec(`UPDATE opaque_password_records SET last_used_at = CURRENT_TIMESTAMP WHERE record_identifier = \?`).
+		WithArgs(username).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock logging user action
 	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
@@ -403,8 +418,8 @@ func TestOpaqueLogin_TOTPRequired(t *testing.T) {
 		AddRow(1, username, sql.NullString{}, time.Now(), 0, models.DefaultStorageLimit, true, nil, nil, false)
 	mock.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(rows)
 
-	// In mock mode, OPAQUE authentication happens entirely in memory
-	mockOPAQUESuccess(t, username, password)
+	// Mock OPAQUE authentication database operations
+	setupOPAQUEAuthenticationMocks(mock, username)
 
 	// Mock TOTP check (user does NOT have TOTP enabled - this is the expected case)
 	totpCheckSQL := `SELECT enabled, setup_completed FROM user_totp WHERE username = \?`
@@ -440,8 +455,8 @@ func TestOpaqueLogin_WithTOTPEnabled_Success(t *testing.T) {
 		AddRow(1, username, sql.NullString{}, time.Now(), 0, models.DefaultStorageLimit, true, nil, nil, false)
 	mock.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(rows)
 
-	// In mock mode, OPAQUE authentication happens entirely in memory
-	mockOPAQUESuccess(t, username, password)
+	// Mock OPAQUE authentication database operations
+	setupOPAQUEAuthenticationMocks(mock, username)
 
 	// Mock TOTP check (user HAS TOTP enabled and setup completed)
 	totpCheckSQL := `SELECT enabled, setup_completed FROM user_totp WHERE username = \?`
