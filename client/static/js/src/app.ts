@@ -5,7 +5,7 @@
  */
 
 import { wasmManager } from './utils/wasm';
-import { validateToken, isAuthenticated, clearAllSessionData } from './utils/auth';
+import { validateToken, isAuthenticated, clearAllSessionData } from './utils/auth-wasm';
 import { showError, showSuccess } from './ui/messages';
 import { showFileSection, showAuthSection, toggleAuthForm } from './ui/sections';
 import { loadFiles, displayFiles } from './files/list';

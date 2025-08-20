@@ -2,7 +2,9 @@ package utils
 
 import (
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // IsProductionEnvironment checks if the application is running in production
@@ -90,4 +92,22 @@ func GetEnvironmentName() string {
 	}
 
 	return "development"
+}
+
+// GetJWTTokenLifetime returns the JWT token lifetime from environment variables
+// Defaults to 30 minutes if not set or invalid
+func GetJWTTokenLifetime() time.Duration {
+	const defaultMinutes = 30
+
+	lifetimeStr := os.Getenv("JWT_TOKEN_LIFETIME_MINUTES")
+	if lifetimeStr == "" {
+		return time.Duration(defaultMinutes) * time.Minute
+	}
+
+	minutes, err := strconv.Atoi(lifetimeStr)
+	if err != nil || minutes <= 0 {
+		return time.Duration(defaultMinutes) * time.Minute
+	}
+
+	return time.Duration(minutes) * time.Minute
 }

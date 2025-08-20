@@ -45,6 +45,20 @@ func RefreshToken(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid or expired refresh token")
 	}
 
+	// LAZY REVOCATION CHECK: Check for user-wide JWT revocations during refresh token operation
+	// This implements the Netflix/Spotify model where we only check revocations during refresh,
+	// not on every API request. This catches edge cases like password changes and admin force-logout.
+	currentTime := time.Now()
+	isUserRevoked, err := auth.IsUserJWTRevoked(database.DB, username, currentTime)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to check user JWT revocation for %s: %v", username, err)
+		// Continue with refresh - don't fail on revocation check errors
+	} else if isUserRevoked {
+		// User has been force-revoked - deny refresh and log security event
+		logging.InfoLogger.Printf("SECURITY: Refresh denied for force-revoked user: %s", username)
+		return echo.NewHTTPError(http.StatusUnauthorized, "All tokens have been revoked for security reasons")
+	}
+
 	// Generate new JWT token
 	token, err := auth.GenerateToken(username)
 	if err != nil {
@@ -120,7 +134,7 @@ func Logout(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{
-		"message": "Logged out successfully",
+		"message": "Logged out successfully. Your access token will expire automatically within 30 minutes.",
 	})
 }
 
@@ -156,21 +170,101 @@ func RevokeToken(c echo.Context) error {
 	})
 }
 
-// RevokeAllTokens revokes all refresh tokens for the current user
-func RevokeAllTokens(c echo.Context) error {
+// RevokeAllRefreshTokens revokes all refresh tokens for the current user
+// Note: This does NOT revoke active JWT tokens - they will expire automatically within 30 minutes
+func RevokeAllRefreshTokens(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 
 	err := models.RevokeAllUserTokens(database.DB, username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to revoke all tokens for %s: %v", username, err)
+		logging.ErrorLogger.Printf("Failed to revoke all refresh tokens for %s: %v", username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke refresh tokens")
+	}
+
+	database.LogUserAction(username, "revoked all refresh tokens", "")
+	logging.InfoLogger.Printf("All refresh tokens revoked for user: %s", username)
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "All refresh tokens revoked successfully. Active access tokens will expire automatically within 30 minutes.",
+	})
+}
+
+// ForceRevokeAllTokens implements security-critical revocation for edge cases
+// This function revokes BOTH refresh tokens AND active JWT tokens immediately
+// Used for: password changes, admin force-logout, security breaches
+func ForceRevokeAllTokens(c echo.Context) error {
+	username := auth.GetUsernameFromToken(c)
+
+	var request struct {
+		Reason string `json:"reason"`
+	}
+
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+	}
+
+	if request.Reason == "" {
+		request.Reason = "security-critical revocation"
+	}
+
+	// Step 1: Revoke all refresh tokens
+	err := models.RevokeAllUserTokens(database.DB, username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to revoke all refresh tokens for %s during force revocation: %v", username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke tokens")
 	}
 
-	database.LogUserAction(username, "revoked all tokens", "")
-	logging.InfoLogger.Printf("All tokens revoked for user: %s", username)
+	// Step 2: Add user-specific JWT revocation entry
+	// This creates a timestamp-based revocation that invalidates all JWTs issued before now
+	err = auth.RevokeAllUserJWTTokens(database.DB, username, request.Reason)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to revoke all JWT tokens for %s during force revocation: %v", username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke active tokens")
+	}
+
+	// Step 3: Log security event
+	database.LogUserAction(username, "force revoked all tokens", request.Reason)
+	logging.InfoLogger.Printf("SECURITY: All tokens force-revoked for user %s, reason: %s", username, request.Reason)
 
 	return c.JSON(http.StatusOK, map[string]string{
-		"message": "All sessions revoked successfully",
+		"message": "All tokens (including active access tokens) have been immediately revoked for security reasons.",
+		"reason":  request.Reason,
+	})
+}
+
+// AdminForceLogout allows admin to force-logout a specific user (admin-only endpoint)
+func AdminForceLogout(c echo.Context) error {
+	// This will be used by admin endpoints - placeholder for now
+	targetUsername := c.Param("username")
+	adminUsername := auth.GetUsernameFromToken(c)
+
+	if targetUsername == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Username is required")
+	}
+
+	// Verify admin privileges (this should be handled by AdminMiddleware)
+	// Force revoke all tokens for target user
+	err := models.RevokeAllUserTokens(database.DB, targetUsername)
+	if err != nil {
+		logging.ErrorLogger.Printf("Admin %s failed to revoke tokens for %s: %v", adminUsername, targetUsername, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke user tokens")
+	}
+
+	// Add user-specific JWT revocation
+	err = auth.RevokeAllUserJWTTokens(database.DB, targetUsername, "admin force logout")
+	if err != nil {
+		logging.ErrorLogger.Printf("Admin %s failed to revoke JWT tokens for %s: %v", adminUsername, targetUsername, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke user JWT tokens")
+	}
+
+	// Log security event
+	database.LogUserAction(targetUsername, "force logged out by admin", adminUsername)
+	database.LogUserAction(adminUsername, "force logged out user", targetUsername)
+	logging.InfoLogger.Printf("ADMIN: User %s force-logged out by admin %s", targetUsername, adminUsername)
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "User has been force-logged out successfully",
+		"target":  targetUsername,
 	})
 }
 

@@ -181,11 +181,12 @@ authenticate_admin() {
             debug "Admin user requires TOTP authentication, completing flow..."
             
             # Generate TOTP code using known admin secret
-            local totp_code="ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"  # Known admin TOTP secret
+            local totp_secret="ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"  # Known admin TOTP secret
+            local totp_code
             if [ -x "scripts/testing/totp-generator" ]; then
-                totp_code=$(scripts/testing/totp-generator "$totp_code")
+                totp_code=$(scripts/testing/totp-generator "$totp_secret")
             elif [ -x "./totp-generator" ]; then
-                totp_code=$(./totp-generator "$totp_code")
+                totp_code=$(./totp-generator "$totp_secret")
             else
                 warning "TOTP generator not found"
                 return 1
@@ -323,7 +324,7 @@ admin_approve_user() {
         -H "Authorization: Bearer $admin_token" \
         -H "Content-Type: application/json" \
         -d "$approve_request" \
-        "$ARKFILE_BASE_URL/api/admin/dev-test/user/$username/approve" || echo "ERROR")
+        "$ARKFILE_BASE_URL/api/admin/user/$username/approve" || echo "ERROR")
     
     if [ "$response" = "ERROR" ]; then
         error "Failed to connect to admin API for: $context"
@@ -352,7 +353,7 @@ admin_get_user_status() {
     response=$(curl -s $INSECURE_FLAG \
         -H "Authorization: Bearer $admin_token" \
         -H "Content-Type: application/json" \
-        "$ARKFILE_BASE_URL/api/admin/dev-test/user/$username/status" || echo "ERROR")
+        "$ARKFILE_BASE_URL/api/admin/user/$username/status" || echo "ERROR")
     
     if [ "$response" = "ERROR" ]; then
         error "Failed to connect to admin API for: $context"
@@ -443,24 +444,42 @@ phase_cleanup_and_health() {
         info "This is expected if admin endpoints are not accessible"
     fi
     
-    # Add a small delay to ensure cleanup is fully processed
-    sleep 1
+    # Add a small delay to ensure cleanup is fully processed and committed
+    sleep 2
     
-    # Verify cleanup using admin API status check
-    local verify_result
-    verify_result=$(admin_get_user_status "$TEST_USERNAME" "Verify user deletion" 2>/dev/null || echo "ERROR")
+    # Verify cleanup using admin API status check with retry logic
+    local verify_result exists
+    local retry_count=0
+    local max_retries=3
     
-    if [[ "$verify_result" != "ERROR" ]]; then
-        if save_json_response "$verify_result" "user_status.json" "admin user status check"; then
-            local exists
-            exists=$(jq -r '.exists' "$TEMP_DIR/user_status.json")
-            if [ "$exists" = "false" ]; then
-                debug "Verified: User does not exist (Admin API confirmation)"
+    while [ $retry_count -lt $max_retries ]; do
+        verify_result=$(admin_get_user_status "$TEST_USERNAME" "Verify user deletion" 2>/dev/null || echo "ERROR")
+        
+        if [[ "$verify_result" != "ERROR" ]]; then
+            if save_json_response "$verify_result" "user_status_${retry_count}.json" "admin user status check"; then
+                exists=$(jq -r '.exists' "$TEMP_DIR/user_status_${retry_count}.json")
+                if [ "$exists" = "false" ]; then
+                    debug "Verified: User does not exist (Admin API confirmation after $((retry_count + 1)) attempt(s))"
+                    break
+                else
+                    retry_count=$((retry_count + 1))
+                    if [ $retry_count -lt $max_retries ]; then
+                        debug "User still exists, retrying verification in 1 second... (attempt $((retry_count + 1))/$max_retries)"
+                        sleep 1
+                    else
+                        warning "User still exists after cleanup and $max_retries verification attempts!"
+                        info "This may indicate a database transaction timing issue or incomplete cleanup"
+                    fi
+                fi
             else
-                warning "User still exists after cleanup!"
+                warning "Failed to verify user status via admin API"
+                break
             fi
+        else
+            warning "Admin API not available for cleanup verification"
+            break
         fi
-    fi
+    done
     
     # Test server health
     log "Testing server connectivity and health..."
@@ -617,11 +636,11 @@ phase_user_approval() {
     local success username is_approved approved_by
     success=$(jq -r '.success' "$TEMP_DIR/approve.json")
     username=$(jq -r '.username' "$TEMP_DIR/approve.json")
-    is_approved=$(jq -r '.is_approved' "$TEMP_DIR/approve.json")
-    approved_by=$(jq -r '.approved_by' "$TEMP_DIR/approve.json")
+    is_approved=$(jq -r '.isApproved' "$TEMP_DIR/approve.json")
+    approved_by=$(jq -r '.approvedBy' "$TEMP_DIR/approve.json")
     
     if [ "$success" != "true" ] || [ "$is_approved" != "true" ]; then
-        error "Admin API user approval failed: success=$success, is_approved=$is_approved - this is a critical failure"
+        error "Admin API user approval failed: success=$success, isApproved=$is_approved - this is a critical failure"
     fi
     
     success "User approved via Admin API: $username by $approved_by"
@@ -640,14 +659,14 @@ phase_user_approval() {
     
     local exists user_approved
     exists=$(jq -r '.exists' "$TEMP_DIR/user_approval_status.json")
-    user_approved=$(jq -r '.user.is_approved' "$TEMP_DIR/user_approval_status.json")
+    user_approved=$(jq -r '.user.isApproved' "$TEMP_DIR/user_approval_status.json")
     
     if [ "$exists" != "true" ]; then
         error "User does not exist after approval attempt - this is a critical failure"
     fi
     
     if [ "$user_approved" != "true" ]; then
-        error "User approval verification failed: user exists but is_approved=$user_approved - this is a critical failure"
+        error "User approval verification failed: user exists but isApproved=$user_approved - this is a critical failure"
     fi
     
     success "User approval verified via Admin API"

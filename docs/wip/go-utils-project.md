@@ -1067,3 +1067,168 @@ The integration test would be testing a **fundamentally incomplete system**. We 
 4. **Implement backup/restore/audit logic** - Complete missing business logic
 
 **BOTTOM LINE**: This is a **massive server-side development effort** that must be completed before arkfile-admin can function as designed and before any meaningful integration testing can occur.
+
+---
+
+## 🎯 ADMIN ENDPOINT ARCHITECTURE PLAN (August 19, 2025)
+
+### SECURITY FRAMEWORK FOR ALL ADMIN ENDPOINTS
+
+**Base Security Requirements (ALL endpoints)**:
+- ✅ Rate limited (10 requests/minute via AdminMiddleware)
+- ✅ Require admin privileges (`user.HasAdminPrivileges()`)
+- ✅ JWT authentication required
+- ✅ Available to localhost only (`AdminMiddleware` enforcement)
+- ✅ Security event logging (privacy-preserving)
+
+### ENDPOINT CATEGORIZATION AND IMPLEMENTATION PLAN
+
+#### **Category A: Production Admin Endpoints**
+**Route Group**: `/api/admin` with `AdminMiddleware`
+**Environment**: Available in all environments (dev, test, production)
+
+**User Management (Move from dev/test to production)**:
+- `POST /api/admin/user/:username/approve` - **MIGRATE** from `/api/admin/dev-test/user/:username/approve`
+- `GET /api/admin/user/:username/status` - **MIGRATE** from `/api/admin/dev-test/user/:username/status`
+
+**Credits System (Already implemented)**:
+- `GET /api/admin/credits` ✅
+- `GET /api/admin/credits/:username` ✅ 
+- `POST /api/admin/credits/:username` ✅
+- `PUT /api/admin/credits/:username` ✅
+
+**System Operations (NEW - Bridge existing monitoring infrastructure)**:
+- `GET /api/admin/system/health` - **NEW** - Wire `monitoring/health_endpoints.go`
+- `GET /api/admin/audit/security-events` - **NEW** - Expose existing security event logs
+- `POST /api/admin/system/backup` - **NEW** - Production-ready backup operations
+- `POST /api/admin/system/restore` - **NEW** - Production-ready restore operations  
+- `POST /api/admin/system/rotate-keys` - **NEW** - Production-ready key rotation
+
+#### **Category B: Dev/Test Only Endpoints**
+**Route Group**: `/api/admin/dev-test` with `ADMIN_DEV_TEST_API_ENABLED` gate
+**Environment**: Only when `ADMIN_DEV_TEST_API_ENABLED=true`
+
+**Test/Diagnostic Operations (Keep in dev/test)**:
+- `POST /api/admin/dev-test/user/cleanup` - **KEEP** - `AdminCleanupTestUser` (test-specific)
+- `GET /api/admin/dev-test/totp/decrypt-check/:username` - **KEEP** - `AdminTOTPDecryptCheck` (diagnostic)
+
+### IMPLEMENTATION STRATEGY
+
+#### **Phase 1: Migrate User Management (Immediate)**
+**Action**: Move user management from dev/test to production admin group
+
+**Changes Required**:
+1. **`handlers/route_config.go`**: 
+   - Remove user management from `devTestAdminGroup`
+   - Add to main `adminGroup`
+2. **No handler changes needed** - `AdminApproveUser` and `AdminGetUserStatus` already implemented
+
+#### **Phase 2: Wire Existing Monitoring Infrastructure (Quick Win)**
+**Action**: Bridge existing monitoring to admin endpoints
+
+**Implementation**:
+```go
+// handlers/admin.go - NEW functions
+func AdminSystemHealth(c echo.Context) error {
+    // Bridge to existing monitoring/health_endpoints.go
+    return monitoring.HealthMonitor.HealthHandler(c)
+}
+
+func AdminSecurityEvents(c echo.Context) error {
+    // Expose existing security event logs from logging package
+    events, err := logging.GetRecentSecurityEvents(database.DB, 100)
+    if err != nil {
+        return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve security events")
+    }
+    return c.JSON(http.StatusOK, events)
+}
+```
+
+#### **Phase 3: Implement Missing Business Logic (Major Work)**
+**Action**: Implement backup, restore, and key rotation logic
+
+**New Implementations Needed**:
+- `AdminSystemBackup` - Create system backups (database, keys, config)
+- `AdminSystemRestore` - Restore from backups with validation
+- `AdminSystemRotateKeys` - Coordinate key rotation operations
+
+#### **Phase 4: Update Route Configuration**
+**Action**: Wire all new endpoints in `handlers/route_config.go`
+
+**Changes Required**:
+```go
+// Production admin endpoints (always available)
+adminGroup.POST("/user/:username/approve", AdminApproveUser) // MIGRATED
+adminGroup.GET("/user/:username/status", AdminGetUserStatus) // MIGRATED
+adminGroup.GET("/system/health", AdminSystemHealth) // NEW
+adminGroup.GET("/audit/security-events", AdminSecurityEvents) // NEW
+adminGroup.POST("/system/backup", AdminSystemBackup) // NEW
+adminGroup.POST("/system/restore", AdminSystemRestore) // NEW
+adminGroup.POST("/system/rotate-keys", AdminSystemRotateKeys) // NEW
+```
+
+### SECURITY CONSIDERATIONS
+
+#### **Localhost-Only Enforcement**
+- All admin endpoints restricted to localhost via `AdminMiddleware`
+- `clientIP.IsLoopback()` validation prevents remote access
+- Privacy-preserving logging (no IP addresses stored)
+
+#### **Environment-Based Security**
+- Production: User management, system operations, monitoring available
+- Dev/Test: Additional diagnostic and cleanup operations available
+- Clear separation between operational and diagnostic endpoints
+
+#### **Audit Trail**
+- All admin operations logged via existing `logging.LogSecurityEvent` system
+- Privacy-preserving entity IDs used for rate limiting
+- Complete admin action audit trail maintained
+
+### MIGRATION IMPACT
+
+#### **arkfile-admin Command Mapping**
+**After Implementation**:
+- `arkfile-admin approve-user` → `POST /api/admin/user/:username/approve` ✅
+- `arkfile-admin system-status` → `GET /api/admin/user/:username/status` ✅  
+- `arkfile-admin health-check` → `GET /api/admin/system/health` ✅
+- `arkfile-admin audit` → `GET /api/admin/audit/security-events` ✅
+- `arkfile-admin backup` → `POST /api/admin/system/backup` ✅
+- `arkfile-admin restore` → `POST /api/admin/system/restore` ✅
+- `arkfile-admin key-rotation` → `POST /api/admin/system/rotate-keys` ✅
+
+#### **Testing Integration**
+- All admin operations can be validated in integration tests
+- Full admin functionality available for production deployment
+- Clear separation between production and diagnostic operations
+
+### SUCCESS CRITERIA
+
+#### **Immediate Goals**
+1. **User management available in production** (simple migration)
+2. **System health monitoring working** (wire existing infrastructure)
+3. **Security audit logs accessible** (expose existing logging)
+
+#### **Complete Implementation**
+1. **All 7 missing admin endpoints implemented and tested**
+2. **58% functionality gap eliminated**
+3. **Production-ready admin operations available**
+4. **Clean separation between production and dev/test endpoints**
+
+### DEVELOPMENT EFFORT ESTIMATE
+
+#### **Phase 1-2: Quick Wins (1-2 days)**
+- Migrate user management endpoints
+- Wire existing monitoring infrastructure
+- Update routing configuration
+
+#### **Phase 3: Major Implementation (1-2 weeks)**
+- Implement backup/restore logic with encryption
+- Implement comprehensive key rotation system
+- Add comprehensive error handling and validation
+
+#### **Phase 4: Integration and Testing (3-5 days)**
+- Update arkfile-admin command routing
+- Integration testing with existing test suite
+- Production deployment validation
+
+**TOTAL EFFORT**: 2-3 weeks for complete implementation, but **immediate progress possible** with phased approach focusing on quick wins first.

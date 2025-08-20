@@ -5,7 +5,7 @@
 
 import { ShareCreator, type ShareCreationRequest, type FileInfo } from '../shares/share-creation.js';
 import { ShareCrypto } from '../shares/share-crypto.js';
-import { authenticatedFetch } from '../utils/auth.js';
+import { authenticatedFetch } from '../utils/auth-wasm';
 import { showError, showSuccess } from '../ui/messages.js';
 
 let currentShareForm: HTMLElement | null = null;

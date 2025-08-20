@@ -12,9 +12,11 @@ import (
 	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/arkfile/auth"
+	"github.com/84adam/arkfile/config"
 	"github.com/84adam/arkfile/database"
 	"github.com/84adam/arkfile/logging"
 	"github.com/84adam/arkfile/models"
+	"github.com/84adam/arkfile/monitoring"
 	"github.com/84adam/arkfile/storage"
 )
 
@@ -41,9 +43,9 @@ type AdminApproveRequest struct {
 type AdminApproveResponse struct {
 	Success    bool      `json:"success"`
 	Username   string    `json:"username"`
-	IsApproved bool      `json:"is_approved"`
-	ApprovedBy string    `json:"approved_by"`
-	ApprovedAt time.Time `json:"approved_at"`
+	IsApproved bool      `json:"isApproved"`
+	ApprovedBy string    `json:"approvedBy"`
+	ApprovedAt time.Time `json:"approvedAt"`
 }
 
 // AdminUserStatusResponse represents the comprehensive user status response
@@ -62,9 +64,9 @@ type AdminUserInfo struct {
 	ID         int64     `json:"id"`
 	Username   string    `json:"username"`
 	Email      *string   `json:"email,omitempty"`
-	IsApproved bool      `json:"is_approved"`
-	IsAdmin    bool      `json:"is_admin"`
-	CreatedAt  time.Time `json:"created_at"`
+	IsApproved bool      `json:"isApproved"`
+	IsAdmin    bool      `json:"isAdmin"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 // AdminTOTPStatus represents TOTP status information
@@ -292,6 +294,13 @@ func AdminApproveUser(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to approve user")
 	}
 
+	// Reload user from database to get updated approval status
+	updatedUser, err := models.GetUserByUsername(database.DB, targetUsername)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to reload user after approval: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to verify user approval")
+	}
+
 	// Log admin action for audit trail
 	logging.LogSecurityEvent(
 		logging.EventAdminAccess,
@@ -307,10 +316,10 @@ func AdminApproveUser(c echo.Context) error {
 
 	response := AdminApproveResponse{
 		Success:    true,
-		Username:   user.Username,
-		IsApproved: user.IsApproved,
+		Username:   updatedUser.Username,
+		IsApproved: updatedUser.IsApproved,
 		ApprovedBy: req.ApprovedBy,
-		ApprovedAt: user.ApprovedAt.Time,
+		ApprovedAt: updatedUser.ApprovedAt.Time,
 	}
 
 	return c.JSON(http.StatusOK, response)
@@ -340,18 +349,20 @@ func AdminGetUserStatus(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve user")
 	}
 
-	// Build comprehensive status response
+	// Build comprehensive status response with proper AdminUserInfo mapping
+	adminUserInfo := &AdminUserInfo{
+		ID:         user.ID,
+		Username:   user.Username,
+		Email:      user.Email,
+		IsApproved: user.IsApproved,
+		IsAdmin:    user.IsAdmin,
+		CreatedAt:  user.CreatedAt,
+	}
+
 	response := AdminUserStatusResponse{
 		Exists:   true,
 		Username: targetUsername,
-		User: &AdminUserInfo{
-			ID:         user.ID,
-			Username:   user.Username,
-			Email:      user.Email,
-			IsApproved: user.IsApproved,
-			IsAdmin:    user.IsAdmin,
-			CreatedAt:  user.CreatedAt,
-		},
+		User:     adminUserInfo,
 	}
 
 	// Get comprehensive TOTP status using diagnostic helper
@@ -829,6 +840,80 @@ func UpdateUserStorageLimit(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Storage limit updated successfully",
 	})
+}
+
+// AdminSystemHealth bridges existing monitoring infrastructure to admin API endpoints
+func AdminSystemHealth(c echo.Context) error {
+	// Get admin username for audit logging
+	adminUsername := auth.GetUsernameFromToken(c)
+
+	// Create a HealthMonitor instance for this request
+	// Note: In a production system, this would ideally be a global instance
+	// but for Phase 2 we're implementing the quick bridge approach
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to load config for health check: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Configuration error")
+	}
+
+	healthMonitor := monitoring.NewHealthMonitor(database.DB, cfg, "arkfile-server")
+	status := healthMonitor.GetHealthStatus()
+
+	// Log admin action for audit trail
+	logging.LogSecurityEvent(
+		logging.EventAdminAccess,
+		nil,
+		&adminUsername,
+		nil,
+		map[string]interface{}{
+			"operation":      "system_health_check",
+			"overall_status": string(status.Status),
+		},
+	)
+
+	return c.JSON(http.StatusOK, status)
+}
+
+// AdminSecurityEvents exposes existing security event logs via admin API
+func AdminSecurityEvents(c echo.Context) error {
+	// Get admin username for audit logging
+	adminUsername := auth.GetUsernameFromToken(c)
+
+	// Use the default security event logger to get recent events
+	if logging.DefaultSecurityEventLogger == nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Security event logger not initialized")
+	}
+
+	// Create filters for recent events (limit to 100 for performance)
+	filters := logging.SecurityEventFilters{
+		Limit: 100,
+	}
+
+	events, err := logging.DefaultSecurityEventLogger.GetSecurityEvents(filters)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to retrieve security events: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve security events")
+	}
+
+	// Log admin action for audit trail
+	logging.LogSecurityEvent(
+		logging.EventAdminAccess,
+		nil,
+		&adminUsername,
+		nil,
+		map[string]interface{}{
+			"operation":    "security_events_access",
+			"events_count": len(events),
+		},
+	)
+
+	response := map[string]interface{}{
+		"events": events,
+		"count":  len(events),
+		"limit":  100,
+	}
+
+	return c.JSON(http.StatusOK, response)
 }
 
 // LogAdminAction logs an admin action to the admin_logs table

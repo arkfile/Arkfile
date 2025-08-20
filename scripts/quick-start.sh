@@ -214,6 +214,9 @@ RQLITE_PASSWORD=TestPassword123_Secure
 PORT=8080
 JWT_SECRET=${JWT_SECRET}
 
+# JWT Token Configuration (Netflix/Spotify model: 30-minute tokens)
+JWT_TOKEN_LIFETIME_MINUTES=30
+
 # TLS Configuration
 TLS_ENABLED=true
 TLS_PORT=4443

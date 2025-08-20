@@ -685,6 +685,395 @@ func validatePasswordConfirmation(this js.Value, args []js.Value) interface{} {
 	}
 }
 
+// JWT Token Management and Auto-Refresh System
+var autoRefreshTimer *time.Timer
+var refreshChannel = make(chan bool, 1)
+
+// setJWTTokens stores JWT and refresh tokens in localStorage
+func setJWTTokens(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected token, refreshToken",
+		}
+	}
+
+	token := args[0].String()
+	refreshToken := args[1].String()
+
+	// Validate token structure first
+	tokenValidation := validateTokenStructure(js.Value{}, []js.Value{js.ValueOf(token)})
+	if validationMap, ok := tokenValidation.(map[string]interface{}); ok {
+		if !validationMap["valid"].(bool) {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "Invalid token structure: " + validationMap["message"].(string),
+			}
+		}
+	}
+
+	// Store in localStorage
+	localStorage := js.Global().Get("localStorage")
+	localStorage.Call("setItem", "token", token)
+	localStorage.Call("setItem", "refreshToken", refreshToken)
+
+	return map[string]interface{}{
+		"success": true,
+		"message": "Tokens stored successfully",
+	}
+}
+
+// getJWTToken retrieves the current JWT token from localStorage
+func getJWTToken(this js.Value, args []js.Value) interface{} {
+	localStorage := js.Global().Get("localStorage")
+	token := localStorage.Call("getItem", "token")
+
+	if token.IsNull() {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "No token found",
+			"token":   nil,
+		}
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"token":   token.String(),
+	}
+}
+
+// getRefreshToken retrieves the current refresh token from localStorage
+func getRefreshToken(this js.Value, args []js.Value) interface{} {
+	localStorage := js.Global().Get("localStorage")
+	refreshToken := localStorage.Call("getItem", "refreshToken")
+
+	if refreshToken.IsNull() {
+		return map[string]interface{}{
+			"success":      false,
+			"error":        "No refresh token found",
+			"refreshToken": nil,
+		}
+	}
+
+	return map[string]interface{}{
+		"success":      true,
+		"refreshToken": refreshToken.String(),
+	}
+}
+
+// clearJWTTokens removes JWT and refresh tokens from localStorage
+func clearJWTTokens(this js.Value, args []js.Value) interface{} {
+	localStorage := js.Global().Get("localStorage")
+	localStorage.Call("removeItem", "token")
+	localStorage.Call("removeItem", "refreshToken")
+
+	// Stop auto-refresh timer
+	stopAutoRefresh(js.Value{}, []js.Value{})
+
+	return map[string]interface{}{
+		"success": true,
+		"message": "Tokens cleared successfully",
+	}
+}
+
+// isJWTTokenExpired checks if the current JWT token is expired
+func isJWTTokenExpired(this js.Value, args []js.Value) interface{} {
+	tokenResult := getJWTToken(js.Value{}, []js.Value{})
+	tokenMap, ok := tokenResult.(map[string]interface{})
+	if !ok || !tokenMap["success"].(bool) {
+		return map[string]interface{}{
+			"expired": true,
+			"error":   "No token available",
+		}
+	}
+
+	token := tokenMap["token"].(string)
+
+	// Parse token to check expiry
+	validation := validateTokenStructure(js.Value{}, []js.Value{js.ValueOf(token)})
+	if validationMap, ok := validation.(map[string]interface{}); ok {
+		if !validationMap["valid"].(bool) {
+			return map[string]interface{}{
+				"expired": true,
+				"error":   validationMap["message"].(string),
+			}
+		}
+	}
+
+	return map[string]interface{}{
+		"expired": false,
+		"message": "Token is valid",
+	}
+}
+
+// parseJWTClaims extracts claims from JWT token
+func parseJWTClaims(this js.Value, args []js.Value) interface{} {
+	if len(args) != 1 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected token",
+		}
+	}
+
+	token := args[0].String()
+	validation := validateTokenStructure(js.Value{}, []js.Value{js.ValueOf(token)})
+
+	if validationMap, ok := validation.(map[string]interface{}); ok {
+		if !validationMap["valid"].(bool) {
+			return map[string]interface{}{
+				"success": false,
+				"error":   validationMap["message"].(string),
+			}
+		}
+
+		// Parse the token payload
+		parts := strings.Split(token, ".")
+		if len(parts) != 3 {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "Invalid JWT structure",
+			}
+		}
+
+		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "Failed to decode payload: " + err.Error(),
+			}
+		}
+
+		var claims map[string]interface{}
+		if err := json.Unmarshal(payload, &claims); err != nil {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "Failed to parse claims: " + err.Error(),
+			}
+		}
+
+		return map[string]interface{}{
+			"success": true,
+			"claims":  claims,
+		}
+	}
+
+	return map[string]interface{}{
+		"success": false,
+		"error":   "Failed to validate token",
+	}
+}
+
+// isAuthenticated checks if user has valid tokens
+func isAuthenticated(this js.Value, args []js.Value) interface{} {
+	tokenResult := getJWTToken(js.Value{}, []js.Value{})
+	tokenMap, ok := tokenResult.(map[string]interface{})
+
+	if !ok || !tokenMap["success"].(bool) {
+		return map[string]interface{}{
+			"authenticated": false,
+			"error":         "No token found",
+		}
+	}
+
+	// Check if token is expired
+	expiredResult := isJWTTokenExpired(js.Value{}, []js.Value{})
+	if expiredMap, ok := expiredResult.(map[string]interface{}); ok {
+		if expiredMap["expired"].(bool) {
+			return map[string]interface{}{
+				"authenticated": false,
+				"error":         "Token expired",
+			}
+		}
+	}
+
+	return map[string]interface{}{
+		"authenticated": true,
+		"message":       "User is authenticated",
+	}
+}
+
+// refreshJWTToken performs token refresh using refresh token
+func refreshJWTToken(this js.Value, args []js.Value) interface{} {
+	// Get current refresh token
+	refreshResult := getRefreshToken(js.Value{}, []js.Value{})
+	refreshMap, ok := refreshResult.(map[string]interface{})
+	if !ok || !refreshMap["success"].(bool) {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "No refresh token available",
+		}
+	}
+
+	refreshToken := refreshMap["refreshToken"].(string)
+
+	// Prepare request body
+	requestBody := map[string]string{
+		"refreshToken": refreshToken,
+	}
+
+	requestBodyJSON, err := json.Marshal(requestBody)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to marshal request: " + err.Error(),
+		}
+	}
+
+	// Make fetch request using JavaScript
+	fetchPromise := js.Global().Call("fetch", "/api/refresh", map[string]interface{}{
+		"method": "POST",
+		"headers": map[string]interface{}{
+			"Content-Type": "application/json",
+		},
+		"body": string(requestBodyJSON),
+	})
+
+	// Note: This returns immediately - we'll need to handle the Promise in TypeScript wrapper
+	return map[string]interface{}{
+		"success": true,
+		"promise": fetchPromise,
+	}
+}
+
+// startAutoRefresh begins the 25-minute refresh cycle
+func startAutoRefresh(this js.Value, args []js.Value) interface{} {
+	// Stop existing timer if any
+	stopAutoRefresh(js.Value{}, []js.Value{})
+
+	// Start goroutine for auto-refresh (25 minutes = 1500000 milliseconds)
+	go func() {
+		ticker := time.NewTicker(25 * time.Minute)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				// Check if still authenticated before refreshing
+				authResult := isAuthenticated(js.Value{}, []js.Value{})
+				if authMap, ok := authResult.(map[string]interface{}); ok && authMap["authenticated"].(bool) {
+					// Trigger refresh via JavaScript callback
+					js.Global().Call("handleAutoRefresh")
+				} else {
+					// Not authenticated anymore, stop the timer
+					return
+				}
+			case <-refreshChannel:
+				// Stop signal received
+				return
+			}
+		}
+	}()
+
+	return map[string]interface{}{
+		"success": true,
+		"message": "Auto-refresh started (25-minute interval)",
+	}
+}
+
+// stopAutoRefresh stops the auto-refresh timer
+func stopAutoRefresh(this js.Value, args []js.Value) interface{} {
+	// Send stop signal to goroutine
+	select {
+	case refreshChannel <- true:
+	default:
+		// Channel might be full, that's okay
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"message": "Auto-refresh stopped",
+	}
+}
+
+// authenticatedFetch performs fetch with JWT authentication
+func authenticatedFetch(this js.Value, args []js.Value) interface{} {
+	if len(args) < 1 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected url, options (optional)",
+		}
+	}
+
+	url := args[0].String()
+	var options map[string]interface{}
+
+	if len(args) > 1 && !args[1].IsNull() {
+		// Convert JavaScript object to Go map
+		optionsJS := args[1]
+		options = make(map[string]interface{})
+
+		// Get headers if they exist
+		if !optionsJS.Get("headers").IsUndefined() {
+			headers := make(map[string]interface{})
+			headersJS := optionsJS.Get("headers")
+			// Copy existing headers
+			if !headersJS.IsUndefined() {
+				// This is a simplified approach - real implementation would iterate over all headers
+				if !headersJS.Get("Content-Type").IsUndefined() {
+					headers["Content-Type"] = headersJS.Get("Content-Type").String()
+				}
+			}
+			options["headers"] = headers
+		} else {
+			options["headers"] = make(map[string]interface{})
+		}
+
+		// Copy other options
+		if !optionsJS.Get("method").IsUndefined() {
+			options["method"] = optionsJS.Get("method").String()
+		}
+		if !optionsJS.Get("body").IsUndefined() {
+			options["body"] = optionsJS.Get("body").String()
+		}
+	} else {
+		options = map[string]interface{}{
+			"headers": make(map[string]interface{}),
+		}
+	}
+
+	// Get JWT token
+	tokenResult := getJWTToken(js.Value{}, []js.Value{})
+	if tokenMap, ok := tokenResult.(map[string]interface{}); ok && tokenMap["success"].(bool) {
+		token := tokenMap["token"].(string)
+
+		// Add Authorization header
+		headers := options["headers"].(map[string]interface{})
+		headers["Authorization"] = "Bearer " + token
+		options["headers"] = headers
+	}
+
+	// Make the fetch request
+	fetchPromise := js.Global().Call("fetch", url, options)
+
+	return map[string]interface{}{
+		"success": true,
+		"promise": fetchPromise,
+	}
+}
+
+// clearSession clears all session data including tokens and OPAQUE keys
+func clearSession(this js.Value, args []js.Value) interface{} {
+	// Clear JWT tokens
+	clearJWTTokens(js.Value{}, []js.Value{})
+
+	// Clear all OPAQUE export keys
+	for username := range opaqueExportKeys {
+		clearOPAQUEExportKey(js.Value{}, []js.Value{js.ValueOf(username)})
+	}
+
+	// Clear any other session data from localStorage
+	localStorage := js.Global().Get("localStorage")
+	localStorage.Call("removeItem", "arkfileSecurityContext")
+	localStorage.Call("removeItem", "registrationData")
+	localStorage.Call("removeItem", "totpLoginData")
+	localStorage.Call("removeItem", "totpSetupData")
+
+	return map[string]interface{}{
+		"success": true,
+		"message": "All session data cleared",
+	}
+}
+
 // main function to register WASM functions
 func main() {
 	// OPAQUE-based file encryption functions (NEW)
@@ -714,6 +1103,20 @@ func main() {
 	// Authentication and security functions
 	js.Global().Set("validateTokenStructure", js.FuncOf(validateTokenStructure))
 	js.Global().Set("sanitizeAPIResponse", js.FuncOf(sanitizeAPIResponse))
+
+	// JWT Token Management Functions (NEW - Phase 5 Implementation)
+	js.Global().Set("setJWTTokens", js.FuncOf(setJWTTokens))
+	js.Global().Set("getJWTToken", js.FuncOf(getJWTToken))
+	js.Global().Set("getRefreshToken", js.FuncOf(getRefreshToken))
+	js.Global().Set("clearJWTTokens", js.FuncOf(clearJWTTokens))
+	js.Global().Set("isJWTTokenExpired", js.FuncOf(isJWTTokenExpired))
+	js.Global().Set("parseJWTClaims", js.FuncOf(parseJWTClaims))
+	js.Global().Set("isAuthenticated", js.FuncOf(isAuthenticated))
+	js.Global().Set("refreshJWTToken", js.FuncOf(refreshJWTToken))
+	js.Global().Set("startAutoRefresh", js.FuncOf(startAutoRefresh))
+	js.Global().Set("stopAutoRefresh", js.FuncOf(stopAutoRefresh))
+	js.Global().Set("authenticatedFetch", js.FuncOf(authenticatedFetch))
+	js.Global().Set("clearSession", js.FuncOf(clearSession))
 
 	// Call the registration function from crypto package
 	crypto.RegisterAllWASMFunctions()

@@ -3,7 +3,7 @@
  */
 
 import { wasmManager } from '../utils/wasm';
-import { getUserEmailFromToken, authenticatedFetch } from '../utils/auth';
+import { getUserEmailFromToken, authenticatedFetch } from '../utils/auth-wasm';
 import { showError } from '../ui/messages';
 
 export async function downloadFile(filename: string, hint: string, expectedHash: string, passwordType: string): Promise<void> {

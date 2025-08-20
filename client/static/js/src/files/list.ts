@@ -2,7 +2,7 @@
  * File listing functionality
  */
 
-import { authenticatedFetch } from '../utils/auth';
+import { authenticatedFetch } from '../utils/auth-wasm';
 import { showError } from '../ui/messages';
 
 export interface FileMetadata {

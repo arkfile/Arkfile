@@ -63,7 +63,7 @@ func RegisterRoutes() {
 
 	// Token revocation - require TOTP
 	totpProtectedGroup.POST("/api/revoke-token", RevokeToken)
-	totpProtectedGroup.POST("/api/revoke-all", RevokeAllTokens)
+	totpProtectedGroup.POST("/api/revoke-all", RevokeAllRefreshTokens)
 
 	// Files - require authentication AND TOTP
 
@@ -107,9 +107,10 @@ func RegisterRoutes() {
 	totpProtectedGroup.GET("/api/credits", GetUserCredits)
 
 	// Admin API endpoints - structured for future expansion
-	// Production admin endpoints (reserved for future legitimate admin operations)
+	// Production admin endpoints (require JWT authentication + admin privileges)
 	adminGroup := Echo.Group("/api/admin")
-	adminGroup.Use(AdminMiddleware)
+	adminGroup.Use(auth.JWTMiddleware()) // Add JWT middleware first
+	adminGroup.Use(AdminMiddleware)      // Then admin middleware
 
 	// Credits system - admin endpoints (require admin privileges)
 	adminGroup.GET("/credits", AdminGetAllCredits)
@@ -117,8 +118,15 @@ func RegisterRoutes() {
 	adminGroup.POST("/credits/:username", AdminAdjustCredits)
 	adminGroup.PUT("/credits/:username", AdminSetCredits)
 
+	// User management - admin endpoints (migrated from dev/test to production)
+	adminGroup.POST("/user/:username/approve", AdminApproveUser)
+	adminGroup.GET("/user/:username/status", AdminGetUserStatus)
+
+	// System monitoring - admin endpoints (Phase 2: Bridge existing monitoring infrastructure)
+	adminGroup.GET("/system/health", AdminSystemHealth)
+	adminGroup.GET("/security/events", AdminSecurityEvents)
+
 	// Future production admin endpoints will go here
-	// Examples: adminGroup.GET("/system/health", AdminSystemHealth)
 	//          adminGroup.GET("/users/pending", AdminPendingUsers)
 
 	// Development/Testing admin endpoints (gated by ADMIN_DEV_TEST_API_ENABLED)
@@ -128,8 +136,6 @@ func RegisterRoutes() {
 		devTestAdminGroup.Use(auth.JWTMiddleware()) // Add JWT middleware first
 		devTestAdminGroup.Use(AdminMiddleware)      // Then admin middleware
 		devTestAdminGroup.POST("/user/cleanup", AdminCleanupTestUser)
-		devTestAdminGroup.POST("/user/:username/approve", AdminApproveUser)
-		devTestAdminGroup.GET("/user/:username/status", AdminGetUserStatus)
 		devTestAdminGroup.GET("/totp/decrypt-check/:username", AdminTOTPDecryptCheck) // TOTP diagnostic endpoint
 	}
 

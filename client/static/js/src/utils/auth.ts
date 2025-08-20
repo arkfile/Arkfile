@@ -5,6 +5,8 @@
 export class AuthManager {
   private static readonly TOKEN_KEY = 'token';
   private static readonly REFRESH_TOKEN_KEY = 'refreshToken';
+  private static autoRefreshTimer: number | null = null;
+  private static readonly AUTO_REFRESH_INTERVAL = 25 * 60 * 1000; // 25 minutes in milliseconds
 
   // Token management
   public static getToken(): string | null {

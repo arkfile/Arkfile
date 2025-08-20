@@ -6,7 +6,7 @@ import { wasmManager } from '../utils/wasm';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
 import { showModal, showTOTPAppsModal } from '../ui/modals';
-import { setTokens } from '../utils/auth';
+import { setTokens } from '../utils/auth-wasm';
 import { showFileSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { LoginManager } from './login';

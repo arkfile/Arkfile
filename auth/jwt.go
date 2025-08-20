@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"time"
 
-	// Import config package
+	"github.com/84adam/arkfile/utils"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	echojwt "github.com/labstack/echo-jwt/v4"
@@ -30,7 +30,7 @@ func GenerateToken(username string) (string, error) {
 	claims := &Claims{
 		Username: username,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24)), // Token expires in 24 hours
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(utils.GetJWTTokenLifetime())), // Token expires based on environment config
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    "arkfile-auth",          // Add issuer claim
@@ -122,7 +122,7 @@ func GenerateFullAccessToken(username string) (string, error) {
 		Username:     username,
 		RequiresTOTP: false,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24)), // 24 hour expiry
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(utils.GetJWTTokenLifetime())), // Configurable expiry time
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    "arkfile-auth",

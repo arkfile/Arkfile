@@ -5,7 +5,7 @@
 import { wasmManager } from '../utils/wasm';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
-import { setTokens, getUsernameFromToken, getUserEmailFromToken, clearAllSessionData } from '../utils/auth';
+import { setTokens, getUsernameFromToken, getUserEmailFromToken, clearAllSessionData } from '../utils/auth-wasm';
 import { showFileSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { handleTOTPFlow } from './totp';

@@ -3,8 +3,11 @@ package auth
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -134,6 +137,83 @@ func initializeCache(db *sql.DB) error {
 
 	cacheInitialized = true
 	return nil
+}
+
+// RevokeAllUserJWTTokens creates a user-wide JWT revocation entry
+// This invalidates all JWTs issued to a user before the current timestamp
+func RevokeAllUserJWTTokens(db *sql.DB, username, reason string) error {
+	currentTime := time.Now()
+
+	// Create a special token ID that represents user-wide revocation
+	// Format: "user-revoke:{username}:{timestamp}"
+	userRevokeTokenID := fmt.Sprintf("user-revoke:%s:%d", username, currentTime.Unix())
+
+	// Set expiry far in the future (1 year from now) to catch all current tokens
+	// This is safe because JWT tokens are short-lived (30 minutes)
+	expiryTime := currentTime.Add(365 * 24 * time.Hour)
+
+	// Insert user-wide revocation entry
+	_, err := db.Exec(
+		`INSERT INTO revoked_tokens (token_id, username, expires_at, reason) 
+		 VALUES (?, ?, ?, ?)`,
+		userRevokeTokenID, username, expiryTime, reason,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Update cache with the user revocation entry
+	cacheMutex.Lock()
+	revokedTokensCache[userRevokeTokenID] = true
+	cacheMutex.Unlock()
+
+	return nil
+}
+
+// IsUserJWTRevoked checks if all JWTs for a user have been revoked after a specific time
+// This is used during JWT validation to check for user-wide revocations
+func IsUserJWTRevoked(db *sql.DB, username string, tokenIssuedAt time.Time) (bool, error) {
+	// Query for user-wide revocation entries that are newer than the token
+	rows, err := db.Query(`
+		SELECT token_id FROM revoked_tokens 
+		WHERE username = ? 
+		AND token_id LIKE 'user-revoke:%' 
+		AND expires_at > ?
+		ORDER BY rowid DESC
+		LIMIT 1`,
+		username, time.Now())
+
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var revokeTokenID string
+		if err := rows.Scan(&revokeTokenID); err != nil {
+			return false, err
+		}
+
+		// Extract timestamp from token ID format: "user-revoke:{username}:{timestamp}"
+		parts := strings.Split(revokeTokenID, ":")
+		if len(parts) != 3 {
+			continue // Skip malformed entries
+		}
+
+		revokeTimestamp, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil {
+			continue // Skip entries with invalid timestamps
+		}
+
+		revokeTime := time.Unix(revokeTimestamp, 0)
+
+		// If the revocation happened after the token was issued, the token is revoked
+		if revokeTime.After(tokenIssuedAt) {
+			return true, nil
+		}
+	}
+
+	return false, rows.Err()
 }
 
 // CleanupExpiredTokens removes expired tokens from the database
