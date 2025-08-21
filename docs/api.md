@@ -4,11 +4,20 @@ This document provides a reference for the Arkfile API. It is intended for devel
 
 ## Authentication
 
-All requests to the Arkfile API must be authenticated using a JSON Web Token (JWT). The token should be included in the `Authorization` header of your HTTP request with the `Bearer` scheme.
+Arkfile implements a **Netflix/Spotify-style authentication model** using JSON Web Tokens (JWT) with enhanced security and performance characteristics. Tokens should be included in the `Authorization` header of your HTTP request with the `Bearer` scheme.
 
 `Authorization: Bearer <your-jwt-token>`
 
+**Token Lifecycle:**
+- **30-minute access tokens**: Short-lived tokens for enhanced security
+- **Automatic refresh**: Client-side tokens automatically refresh at 25-minute intervals
+- **Lazy revocation checking**: Revocation only checked during token refresh for optimal performance
+- **Security-critical revocation**: Immediate revocation for critical security scenarios
+
 Tokens can be obtained by making a POST request to the `/api/opaque/login` endpoint with a valid username and password. Arkfile uses a username-based authentication system where users create accounts with usernames rather than email addresses, enhancing privacy by reducing personal information stored on servers.
+
+**Performance Optimization:**
+Normal API requests do not check token revocation status for maximum speed. Revocation checking is performed only during token refresh operations, providing the optimal balance between security and performance similar to Netflix and Spotify's authentication models.
 
 ## Endpoints
 
@@ -23,9 +32,21 @@ The tables below list every current HTTP endpoint exposed by Arkfile v1.
 | POST | `/api/opaque/login` | Log in and receive access / refresh tokens | Public | `curl -X POST -d @login.json http://localhost:8080/api/opaque/login` |
 | GET  | `/api/opaque/health` | Simple health probe for the OPAQUE service | Public | `curl http://localhost:8080/api/opaque/health` |
 | POST | `/api/refresh` | Exchange a refresh token for a new access token | Access | `curl -X POST --cookie "refresh=…" http://localhost:8080/api/refresh` |
-| POST | `/api/logout` | Invalidate current session refresh token | Access | `curl -X POST -H "Authorization: Bearer $TOK" http://localhost:8080/api/logout` |
+| POST | `/api/logout` | Invalidate current session and revoke tokens immediately | Access | `curl -X POST -H "Authorization: Bearer $TOK" http://localhost:8080/api/logout` |
 | POST | `/api/revoke-token` | Revoke an arbitrary token (self-service) | Access | `curl -X POST -H "Authorization: Bearer $TOK" -d '{"token":"…"}' http://localhost:8080/api/revoke-token` |
 | POST | `/api/revoke-all` | Revoke **all** tokens belonging to the user | Access | `curl -X POST -H "Authorization: Bearer $TOK" http://localhost:8080/api/revoke-all` |
+
+#### Token Refresh Behavior
+
+The `/api/refresh` endpoint implements lazy revocation checking as part of the Netflix/Spotify authentication model:
+
+- **Normal requests**: API endpoints do not check token revocation status for optimal performance
+- **Refresh operations**: Token revocation is checked during refresh to ensure security
+- **30-minute lifecycle**: Tokens expire after 30 minutes and are automatically refreshed by the client at 25 minutes
+- **Edge case revocations**: Critical security revocations (logout, revoke-all, admin actions) are processed immediately
+- **Performance benefit**: This approach provides maximum API performance while maintaining security
+
+When a token is revoked via `/api/logout`, `/api/revoke-all`, or administrative actions, the revocation takes effect immediately for security-critical operations but is lazily checked for normal API requests during the next refresh cycle.
 
 ### 2 • Multi-Factor Authentication (TOTP)
 

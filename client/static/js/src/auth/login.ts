@@ -123,7 +123,7 @@ export class LoginManager {
       }
       
       // Use auth manager to handle token cleanup and API call
-      const { logout } = await import('../utils/auth');
+        const { logout } = await import('../utils/auth-wasm');
       await logout();
       
       // Clear all session data

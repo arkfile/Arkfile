@@ -161,7 +161,7 @@ class ArkFileApp {
     if (revokeButton) {
       revokeButton.addEventListener('click', async (e) => {
         e.preventDefault();
-        const { revokeAllSessions } = await import('./utils/auth');
+        const { revokeAllSessions } = await import('./utils/auth-wasm');
         const success = await revokeAllSessions();
         if (success) {
           showSuccess('All sessions have been revoked. Please log in again.');
@@ -296,7 +296,7 @@ class ArkFileApp {
           console.warn('Stored token is invalid, clearing and showing auth');
           clearAllSessionData();
           showAuthSection();
-          showError('Your session has expired. Please log in again.');
+          showError('Your session has expired (30 minutes). Please log in again.');
         }
       } catch (error) {
         // Network error or other issue

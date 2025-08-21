@@ -27,7 +27,7 @@ export async function downloadFile(filename: string, hint: string, expectedHash:
       // Validate secure session exists
       const sessionValidation = await wasmManager.validateSecureSession(userEmail);
       if (!sessionValidation.valid) {
-        showError('Your session has expired. Please log in again to decrypt account-encrypted files.');
+        showError('Your session has expired (30 minutes). Please log in again to decrypt account-encrypted files.');
         return;
       }
       

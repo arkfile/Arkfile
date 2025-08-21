@@ -1267,6 +1267,7 @@ phase_totp_authentication() {
                 success "TOTP authentication completed with real code"
                 info "Final authentication method: $auth_method"
                 info "JWT Token length: ${#final_token} characters"
+                info "Token valid for 30 minutes with 25-minute auto-refresh"
                 
                 if [ "$PERFORMANCE_MODE" = true ]; then
                     local duration=$(end_timer "$timer_start")
@@ -1342,6 +1343,7 @@ phase_totp_authentication() {
     success "TOTP authentication completed with backup code!"
     info "Final authentication method: $auth_method"
     info "JWT Token length: ${#final_token} characters"
+    info "Token valid for 30 minutes with 25-minute auto-refresh"
     
     # Store final tokens
     echo "$final_token" > "$TEMP_DIR/final_jwt_token"
@@ -1395,7 +1397,7 @@ phase_session_testing() {
         refresh_token=$(cat "$TEMP_DIR/final_refresh_token")
         
         if [[ "$refresh_token" != "mock-"* ]]; then
-            log "Testing token refresh..."
+            log "Testing token refresh (30-minute JWT token lifecycle)..."
             
             local refresh_request
             refresh_request=$(jq -n \
@@ -1413,8 +1415,9 @@ phase_session_testing() {
             if [ "$response" != "ERROR" ] && save_json_response "$response" "refresh.json" "token refresh endpoint"; then
                 local new_token
                 new_token=$(jq -r '.token' "$TEMP_DIR/refresh.json")
-                success "Token refresh successful"
+                success "Token refresh successful (30-minute token lifecycle)"
                 info "New JWT Token length: ${#new_token} characters"
+                info "Token will auto-refresh at 25-minute mark in production"
                 
                 # Update token for logout test
                 echo "$new_token" > "$TEMP_DIR/final_jwt_token"

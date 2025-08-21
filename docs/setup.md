@@ -157,8 +157,8 @@ The following accounts are **DEVELOPMENT ONLY** and are automatically blocked in
 NOTE: Storage needs vary based on storage backend; minio local/cluster modes require the most storage space.
 
 **Operating System Support:**
-- **Primary**: Debian 11/12/+, Ubuntu 20.04/22.04/+ LTS
-- **RHEL-based**: AlmaLinux 8/9/+, Rocky Linux 8/9/+, RHEL 8/9/+, Fedora 41/42/+
+- **Linux**: Debian, Ubuntu, Alma/Rocky Linux, RHEL, Fedora, Alpine
+- **BSD**: FreeBSD, OpenBSD
 - **Architecture**: x86_64 (amd64)
 
 **Network Requirements:**
@@ -292,7 +292,16 @@ security:
   allowed_origins: ["https://your-domain.com"]
   rate_limit_requests: 100
   rate_limit_window: "1h"
-  session_timeout: "24h"
+  
+# JWT Authentication Model (Netflix/Spotify-style)
+jwt:
+  token_duration: "30m"        # 30-minute token lifecycle
+  refresh_threshold: "25m"     # Auto-refresh at 25 minutes
+  lazy_revocation: true        # Enable lazy revocation checking
+  immediate_revocation:        # Security-critical operations
+    - "logout"
+    - "admin_revoke"
+    - "security_incident"
 ```
 
 **Storage Provider Configuration:**

@@ -194,17 +194,30 @@ The system performs sophisticated analysis of password entropy that goes beyond 
 
 ### JWT Token System
 
+ArkFile implements a **Netflix/Spotify-style authentication model** with enhanced security and performance characteristics:
+
 **Token Architecture:**
-- Short-lived access tokens (15-minute expiration)
-- Long-lived refresh tokens (7-day expiration with rotation)
+- **30-minute access tokens**: Short-lived tokens for enhanced security
+- **Automatic refresh at 25 minutes**: Proactive token renewal before expiration
+- **Lazy revocation checking**: Revocation only checked during token refresh for optimal performance
+- **Security-critical revocation**: Immediate revocation for critical security scenarios
+- **Go/WASM client implementation**: High-performance client-side token management
 - Secure storage with HttpOnly, Secure, SameSite=Strict cookies
-- Immediate token revocation support
 
 **Session Security:**
+- **Performance optimized**: Normal requests don't check revocation for maximum speed
+- **Enhanced refresh cycle**: 30-minute token lifecycle with 25-minute refresh intervals
 - Stateless and scalable token validation
 - Cryptographically independent from file encryption
 - Session keys derived from OPAQUE authentication
 - Distributed deployment support
+
+**Token Lifecycle Management:**
+1. **Initial Authentication**: 30-minute token issued after OPAQUE authentication
+2. **Automatic Refresh**: Client automatically refreshes token at 25-minute mark
+3. **Lazy Revocation**: Revocation checking only performed during refresh operations
+4. **Performance Optimization**: Normal API requests skip revocation checks for speed
+5. **Security Edge Cases**: Critical revocations processed immediately when required
 
 ### Access Control and Rate Limiting
 

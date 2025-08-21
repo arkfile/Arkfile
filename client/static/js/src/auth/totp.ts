@@ -6,7 +6,7 @@ import { wasmManager } from '../utils/wasm';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
 import { showModal, showTOTPAppsModal } from '../ui/modals';
-import { setTokens } from '../utils/auth-wasm';
+import { setTokens, getToken } from '../utils/auth-wasm';
 import { showFileSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { LoginManager } from './login';
@@ -182,7 +182,7 @@ async function verifyTOTPLogin(): Promise<void> {
   // Get stored login data
   const totpLoginData = typeof window !== 'undefined' ? (window as any).totpLoginData : null;
   if (!totpLoginData) {
-    showError('Login session expired. Please try again.');
+    showError('Login session expired (30 minutes). Please try again.');
     return;
   }
   
@@ -238,11 +238,18 @@ export async function initiateTOTPSetup(sessionKey: string): Promise<TOTPSetupDa
   try {
     showProgressMessage('Setting up TOTP...');
     
+    const token = getToken();
+    if (!token) {
+      hideProgress();
+      showError('Authentication required');
+      return null;
+    }
+    
     const response = await fetch('/api/totp/setup', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
+        'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
         sessionKey: sessionKey
@@ -276,11 +283,18 @@ export async function completeTOTPSetup(code: string, sessionKey: string): Promi
   try {
     showProgressMessage('Completing TOTP setup...');
     
+    const token = getToken();
+    if (!token) {
+      hideProgress();
+      showError('Authentication required');
+      return false;
+    }
+    
     const response = await fetch('/api/totp/verify', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
+        'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
         code: code,
@@ -309,11 +323,17 @@ export async function completeTOTPSetup(code: string, sessionKey: string): Promi
 
 export async function getTOTPStatus(): Promise<{enabled: boolean, setupRequired: boolean} | null> {
   try {
+    const token = getToken();
+    if (!token) {
+      console.error('No authentication token available');
+      return null;
+    }
+    
     const response = await fetch('/api/totp/status', {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
+        'Authorization': `Bearer ${token}`
       },
     });
     
@@ -333,11 +353,18 @@ export async function disableTOTP(currentCode: string, sessionKey: string): Prom
   try {
     showProgressMessage('Disabling TOTP...');
     
+    const token = getToken();
+    if (!token) {
+      hideProgress();
+      showError('Authentication required');
+      return false;
+    }
+    
     const response = await fetch('/api/totp/disable', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
+        'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
         currentCode: currentCode,
