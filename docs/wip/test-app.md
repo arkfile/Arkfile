@@ -362,11 +362,318 @@ echo "✅ All basic Go tool tests passed"
 rm -f /tmp/test-10mb.dat /tmp/test-10mb.hash /tmp/test-10mb.enc /tmp/test-10mb-decrypted.dat
 ```
 
-## PHASE 1B: OPAQUE Integration and File Operations
+## PHASE 1B: OPAQUE Integration and File Operations (BASH SCRIPT FOCUS)
 
-### OPAQUE Integration
+**IMPLEMENTATION PRIORITY: Extending test-app-curl.sh with Phase 11 File Operations**
 
-#### Enhanced cryptocli with OPAQUE Support
+This phase focuses specifically on extending the existing `test-app-curl.sh` bash script with comprehensive file operations testing capabilities. The Go utilities (cryptocli and arkfile-client) will be enhanced to support the file operations workflow, but the primary deliverable is Phase 11 integration in the bash script that validates the complete file vault functionality.
+
+**Key Implementation Strategy:**
+- Build upon the successful 10-phase authentication testing in test-app-curl.sh (currently 100% passing)
+- Add Phase 11 that leverages existing JWT tokens and session keys from authentication phases
+- Use Go tools as the implementation mechanism for authentic file operations testing
+- Future scope includes equivalent Go-based test scripts, but current focus is bash script extension
+
+### Bash Script Integration: Phase 11 File Operations
+
+#### Overview of Phase 11 Workflow
+The new phase integrates seamlessly with the existing 10 authentication phases in `test-app-curl.sh`, using established session tokens and authenticated state to test core file vault functionality:
+
+```bash
+# Phase 11: File Operations Testing (Integration with test-app-curl.sh)
+1. Generate deterministic test files (100MB with sequential pattern)
+2. Build and verify Go tools (cryptocli + arkfile-client) 
+3. Export authentication data from existing bash script session
+4. Authenticate with arkfile-client to obtain OPAQUE export key
+5. Encrypt files using authentic OPAQUE-derived keys via cryptocli
+6. Upload encrypted files using chunked upload API via arkfile-client
+7. Verify files in user's listing via authenticated API calls
+8. Download files back through authenticated API endpoints
+9. Decrypt downloaded files using cryptocli with OPAQUE keys
+10. Verify perfect integrity through complete hash comparison
+11. Clean up all test artifacts and temporary files
+```
+
+#### Required Go Tool Enhancements for Bash Script Integration
+
+**cryptocli Extensions for test-app-curl.sh:**
+```bash
+# Commands needed by Phase 11 in the bash script:
+
+# Generate deterministic test files
+./cryptocli generate-test-file --size 100MB --pattern sequential --output test.dat --hash-output test.hash
+
+# Encrypt with OPAQUE export key (obtained from arkfile-client authentication)
+./cryptocli encrypt-chunked-opaque --input test.dat --output-dir chunks/ \
+    --export-key $OPAQUE_EXPORT_KEY --username $TEST_USERNAME --file-id "test.dat"
+
+# Decrypt downloaded files using OPAQUE keys
+./cryptocli decrypt-file-opaque --input downloaded.enc --output decrypted.dat \
+    --export-key $OPAQUE_EXPORT_KEY --username $TEST_USERNAME
+```
+
+**arkfile-client Extensions for test-app-curl.sh:**
+```bash
+# Commands needed by Phase 11 in the bash script:
+
+# Authenticate and export OPAQUE key for bash script usage
+./arkfile-client authenticate --config client_config.json \
+    --export-opaque-key opaque_export_key.hex --reuse-session
+
+# Upload encrypted file chunks
+./arkfile-client upload --config client_config.json --manifest chunks.json \
+    --chunks-dir chunks/ --filename "test.dat"
+
+# List files to verify upload
+./arkfile-client list-files --config client_config.json --output-json listing.json
+
+# Download files for integrity verification
+./arkfile-client download --file-id $FILE_ID --output downloaded.enc \
+    --export-encrypted-fek fek.bin --config client_config.json
+```
+
+### Detailed bash Script Implementation Plan
+
+#### Step 1: Phase 11 Integration Point
+**Location:** `scripts/testing/test-app-curl.sh` (add after line ~1500)
+
+```bash
+# Add Phase 11 after existing Phase 10 (logout and cleanup)
+phase_file_operations() {
+    phase "FILE OPERATIONS WITH GO TOOLS"
+    
+    if [ ! -f "$TEMP_DIR/final_jwt_token" ] || [ ! -f "$TEMP_DIR/final_session_key" ]; then
+        warning "No JWT token or session key available, skipping file operations tests"
+        return
+    fi
+    
+    # Build Go tools if needed
+    build_go_tools
+    
+    # Export authentication data for Go tools
+    export_auth_data_for_go_tools
+    
+    # Execute complete file operations workflow
+    generate_test_file_with_cryptocli
+    authenticate_with_client_tool
+    encrypt_test_file_with_opaque
+    upload_file_with_client
+    verify_file_with_client
+    download_and_decrypt_file
+    verify_complete_integrity
+    cleanup_file_operations_test
+    
+    success "File operations testing completed with Go tools"
+}
+
+# Call Phase 11 in main script flow
+# Add after phase_logout_and_cleanup call:
+phase_file_operations
+```
+
+#### Step 2: Go Tools Integration Functions
+**Purpose:** Support functions for Phase 11 that handle Go tool building, authentication export, and workflow execution
+
+```bash
+build_go_tools() {
+    log "Building Go tools if needed..."
+    
+    # Build cryptocli if not available or outdated
+    if [ ! -x "./cryptocli" ] || [ "cmd/cryptocli" -nt "./cryptocli" ]; then
+        log "Building cryptocli..."
+        cd cmd/cryptocli && go build -o ../../cryptocli . && cd ../..
+        success "cryptocli built successfully"
+    fi
+    
+    # Build arkfile-client if not available or outdated  
+    if [ ! -x "./arkfile-client" ] || [ "cmd/arkfile-client" -nt "./arkfile-client" ]; then
+        log "Building arkfile-client..."
+        cd cmd/arkfile-client && go build -o ../../arkfile-client . && cd ../..
+        success "arkfile-client built successfully"
+    fi
+    
+    # Verify tools work
+    ./cryptocli --version >/dev/null 2>&1 || error "cryptocli build verification failed"
+    ./arkfile-client --version >/dev/null 2>&1 || error "arkfile-client build verification failed"
+    
+    success "All Go tools built and verified"
+}
+
+export_auth_data_for_go_tools() {
+    log "Exporting authentication data for Go tools..."
+    
+    local token session_key
+    token=$(cat "$TEMP_DIR/final_jwt_token")
+    session_key=$(cat "$TEMP_DIR/final_session_key")
+    
+    # Create secure temporary files for Go tool communication
+    echo "$token" > "$TEMP_DIR/go_jwt_token"
+    echo "$session_key" > "$TEMP_DIR/go_session_key"
+    echo "$TEST_USERNAME" > "$TEMP_DIR/go_username"
+    echo "$TEST_PASSWORD" > "$TEMP_DIR/go_password"
+    
+    # Set restrictive permissions
+    chmod 600 "$TEMP_DIR/go_jwt_token" "$TEMP_DIR/go_session_key" "$TEMP_DIR/go_username" "$TEMP_DIR/go_password"
+    
+    success "Authentication data exported for Go tools"
+}
+```
+
+#### Step 3: Core File Operations Workflow
+**Purpose:** The actual file operations testing that validates complete file vault functionality
+
+```bash
+generate_test_file_with_cryptocli() {
+    log "Generating 100MB test file with cryptocli..."
+    
+    local test_file="$TEMP_DIR/test-file-100mb.dat"
+    local hash_file="$TEMP_DIR/test-file-100mb.hash"
+    
+    ./cryptocli generate-test-file \
+        --size 100MB \
+        --pattern sequential \
+        --output "$test_file" \
+        --hash-output "$hash_file" \
+        --verify
+    
+    if [ -f "$test_file" ] && [ -f "$hash_file" ]; then
+        local file_size
+        file_size=$(stat -c%s "$test_file" 2>/dev/null || stat -f%z "$test_file" 2>/dev/null)
+        local expected_size=$((100 * 1024 * 1024))
+        
+        if [ "$file_size" -eq "$expected_size" ]; then
+            success "100MB test file generated successfully"
+            info "File: $test_file ($(numfmt --to=iec $file_size))"
+            info "SHA-256: $(cat "$hash_file")"
+        else
+            error "Generated file size mismatch: expected $expected_size, got $file_size"
+        fi
+    else
+        error "Failed to generate test file or hash"
+    fi
+}
+
+encrypt_test_file_with_opaque() {
+    log "Encrypting test file with authentic OPAQUE export key..."
+    
+    local test_file="$TEMP_DIR/test-file-100mb.dat"
+    local encrypted_dir="$TEMP_DIR/encrypted_chunks"
+    local manifest_file="$TEMP_DIR/chunk_manifest.json"
+    local export_key_file="$TEMP_DIR/opaque_export_key.hex"
+    
+    mkdir -p "$encrypted_dir"
+    
+    # Read export key obtained from arkfile-client authentication
+    local export_key
+    export_key=$(cat "$export_key_file")
+    
+    ./cryptocli encrypt-chunked-opaque \
+        --input "$test_file" \
+        --output-dir "$encrypted_dir" \
+        --export-key "$export_key" \
+        --username "$TEST_USERNAME" \
+        --file-id "test-file-100mb.dat" \
+        --key-type "account" \
+        --manifest "$manifest_file"
+    
+    if [ -f "$manifest_file" ]; then
+        local total_chunks
+        total_chunks=$(jq -r '.totalChunks' "$manifest_file")
+        success "File encrypted into $total_chunks chunks using authentic OPAQUE key"
+        
+        # Verify all chunks exist and are properly formatted
+        local chunks_verified=0
+        for ((i=0; i<total_chunks; i++)); do
+            local chunk_file="$encrypted_dir/chunk_${i}.enc"
+            if [ -f "$chunk_file" ]; then
+                local chunk_size
+                chunk_size=$(stat -c%s "$chunk_file" 2>/dev/null || stat -f%z "$chunk_file" 2>/dev/null)
+                if [ "$chunk_size" -gt 28 ]; then  # nonce + tag minimum
+                    chunks_verified=$((chunks_verified + 1))
+                fi
+            fi
+        done
+        
+        if [ "$chunks_verified" -eq "$total_chunks" ]; then
+            success "All $total_chunks encrypted chunks verified and properly formatted"
+        else
+            error "Chunk verification failed: verified $chunks_verified, expected $total_chunks"
+        fi
+    else
+        error "Failed to encrypt test file into chunks"
+    fi
+}
+
+verify_complete_integrity() {
+    log "Verifying complete file integrity through entire workflow..."
+    
+    local original_hash decrypted_hash original_file decrypted_file
+    original_file="$TEMP_DIR/test-file-100mb.dat"
+    decrypted_file="$TEMP_DIR/final-decrypted-file.dat"
+    
+    original_hash=$(cat "$TEMP_DIR/test-file-100mb.hash")
+    decrypted_hash=$(sha256sum "$decrypted_file" | cut -d' ' -f1)
+    
+    if [ "$original_hash" = "$decrypted_hash" ]; then
+        success "🎉 PERFECT INTEGRITY VERIFIED - Complete workflow successful!"
+        info "Original file →  Generate →  Encrypt →  Upload →  List →  Download →  Decrypt →  Verify"
+        info "SHA-256 hashes:"
+        info "  Original:  $original_hash"
+        info "  Final:     $decrypted_hash"
+        info "  ✅ EXACT MATCH - Zero data corruption through complete cycle"
+        
+        # Additional file size verification
+        local original_size decrypted_size
+        original_size=$(stat -c%s "$original_file" 2>/dev/null || stat -f%z "$original_file" 2>/dev/null)
+        decrypted_size=$(stat -c%s "$decrypted_file" 2>/dev/null || stat -f%z "$decrypted_file" 2>/dev/null)
+        
+        if [ "$original_size" -eq "$decrypted_size" ]; then
+            info "  File sizes: $(numfmt --to=iec $original_size) ✅ EXACT MATCH"
+        else
+            warning "File size mismatch: original=$original_size, decrypted=$decrypted_size"
+        fi
+        
+    else
+        error "INTEGRITY VERIFICATION FAILED - Hash mismatch detected!"
+        error "Original:  $original_hash"
+        error "Final:     $decrypted_hash"
+        error "This indicates data corruption in the encryption/upload/download/decryption workflow"
+    fi
+}
+```
+
+### Success Criteria for Phase 11 Integration
+
+**Phase 11 Success Metrics:**
+- [ ] Generate 100MB deterministic test file successfully
+- [ ] Build and verify Go tools (cryptocli + arkfile-client) automatically
+- [ ] Export authentication data securely from existing bash script session
+- [ ] Authenticate with arkfile-client and obtain authentic OPAQUE export key (64 bytes)
+- [ ] Encrypt test file using OPAQUE-derived keys with proper envelope format
+- [ ] Upload encrypted file chunks via authenticated API without errors
+- [ ] Verify file appears correctly in authenticated user's file listing with proper metadata
+- [ ] Download file successfully through authenticated API endpoints
+- [ ] Decrypt downloaded file using authentic OPAQUE session keys
+- [ ] Achieve 100% file integrity verification (perfect SHA-256 hash match)
+- [ ] Clean up all test artifacts and temporary files properly
+- [ ] Integrate seamlessly with existing 10-phase authentication workflow
+
+**Integration Requirements:**
+- Must not break existing 10 authentication phases (maintain 100% success rate)
+- Must leverage existing JWT tokens and session keys from authentication phases
+- Must build Go tools automatically if not present or outdated
+- Must handle errors gracefully and provide detailed logging
+- Must clean up all temporary files and sensitive data after completion
+- Must provide comprehensive success/failure reporting
+
+**Future Scope (Not Current Focus):**
+- Equivalent Go-based test scripts that perform the same functions as test-app-curl.sh
+- Native Go test frameworks that don't require bash script integration
+- Advanced file operations testing (multiple file types, concurrent uploads, large file stress testing)
+
+This approach ensures we extend the proven authentication foundation in test-app-curl.sh with comprehensive file operations testing while maintaining compatibility and reliability.
+
+### Enhanced cryptocli with OPAQUE Support (Go Implementation Details)
 **Location:** `cmd/cryptocli/commands/file_operations.go` (extend existing)
 
 ```go
