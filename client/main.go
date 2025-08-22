@@ -15,7 +15,7 @@ import (
 	"syscall/js" // specifically for WASM build
 	"time"
 
-	"github.com/84adam/arkfile/crypto"
+	"github.com/84adam/Arkfile/crypto"
 )
 
 // OPAQUE Export Key Storage

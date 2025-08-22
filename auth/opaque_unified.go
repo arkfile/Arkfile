@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/84adam/arkfile/crypto"
-	"github.com/84adam/arkfile/database"
+	"github.com/84adam/Arkfile/crypto"
+	"github.com/84adam/Arkfile/database"
 )
 
 // OPAQUEPasswordManagerInterface defines the interface for OPAQUE password management

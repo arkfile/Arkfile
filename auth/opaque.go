@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/84adam/arkfile/crypto"
-	"github.com/84adam/arkfile/logging"
+	"github.com/84adam/Arkfile/crypto"
+	"github.com/84adam/Arkfile/logging"
 )
 
 // OPAQUEProvider defines the interface for OPAQUE authentication operations.

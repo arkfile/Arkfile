@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/84adam/arkfile/auth"
-	"github.com/84adam/arkfile/logging"
-	"github.com/84adam/arkfile/utils"
+	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/logging"
+	"github.com/84adam/Arkfile/utils"
 )
 
 type User struct {

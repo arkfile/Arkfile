@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/84adam/arkfile/auth"
+	"github.com/84adam/Arkfile/auth"
 	"github.com/DATA-DOG/go-sqlmock"
 )
 

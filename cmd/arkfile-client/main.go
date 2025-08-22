@@ -21,7 +21,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/84adam/arkfile/crypto"
+	"github.com/84adam/Arkfile/crypto"
 )
 
 const (

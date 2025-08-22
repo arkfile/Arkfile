@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/84adam/arkfile/logging"
+	"github.com/84adam/Arkfile/logging"
 )
 
 // UserCredit represents a user's credit balance

@@ -10,13 +10,13 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/minio/minio-go/v7"
 
-	"github.com/84adam/arkfile/auth"
-	"github.com/84adam/arkfile/config"
-	"github.com/84adam/arkfile/database"
-	"github.com/84adam/arkfile/logging"
-	"github.com/84adam/arkfile/models"
-	"github.com/84adam/arkfile/storage"
-	"github.com/84adam/arkfile/utils"
+	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/config"
+	"github.com/84adam/Arkfile/database"
+	"github.com/84adam/Arkfile/logging"
+	"github.com/84adam/Arkfile/models"
+	"github.com/84adam/Arkfile/storage"
+	"github.com/84adam/Arkfile/utils"
 )
 
 // Echo is the global echo instance used for routing

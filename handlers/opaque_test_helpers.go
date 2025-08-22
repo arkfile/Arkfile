@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/84adam/arkfile/auth"
-	"github.com/84adam/arkfile/models"
+	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/models"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )

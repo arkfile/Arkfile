@@ -11,12 +11,12 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/84adam/arkfile/auth"
-	"github.com/84adam/arkfile/config"
-	"github.com/84adam/arkfile/database"
-	"github.com/84adam/arkfile/logging"
-	"github.com/84adam/arkfile/models"
-	"github.com/84adam/arkfile/utils"
+	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/config"
+	"github.com/84adam/Arkfile/database"
+	"github.com/84adam/Arkfile/logging"
+	"github.com/84adam/Arkfile/models"
+	"github.com/84adam/Arkfile/utils"
 )
 
 // parseIPAddress safely converts IP string to net.IP

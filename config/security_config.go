@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/84adam/arkfile/logging"
+	"github.com/84adam/Arkfile/logging"
 )
 
 // SecurityConfig centralizes all security-related configuration

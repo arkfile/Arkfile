@@ -235,7 +235,7 @@ bun --version
 ```bash
 # Clone repository
 cd /opt/arkfile
-sudo -u arkfile git clone https://github.com/84adam/arkfile.git src
+sudo -u arkfile git clone https://github.com/84adam/Arkfile.git src
 cd src
 
 # Run comprehensive setup
@@ -248,7 +248,7 @@ sudo ./scripts/complete-setup-test.sh
 ```bash
 # Clone and build
 cd /opt/arkfile
-sudo -u arkfile git clone https://github.com/84adam/arkfile.git src
+sudo -u arkfile git clone https://github.com/84adam/Arkfile.git src
 cd src
 sudo -u arkfile ./scripts/setup/build.sh
 

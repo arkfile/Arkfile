@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/84adam/arkfile/crypto"
-	"github.com/84adam/arkfile/logging"
+	"github.com/84adam/Arkfile/crypto"
+	"github.com/84adam/Arkfile/logging"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 )

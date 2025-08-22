@@ -11,7 +11,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/84adam/arkfile/crypto"
+	"github.com/84adam/Arkfile/crypto"
 )
 
 // TestChunkedCryptoLogic tests the core crypto logic that powers the WASM functions

@@ -11,7 +11,7 @@ import (
 
 	"github.com/joho/godotenv"
 
-	"github.com/84adam/arkfile/utils"
+	"github.com/84adam/Arkfile/utils"
 )
 
 var (

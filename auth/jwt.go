@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/84adam/arkfile/utils"
+	"github.com/84adam/Arkfile/utils"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	echojwt "github.com/labstack/echo-jwt/v4"

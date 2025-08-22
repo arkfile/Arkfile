@@ -4,7 +4,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/84adam/arkfile/auth"
+	"github.com/84adam/Arkfile/auth"
 	"github.com/labstack/echo/v4"
 )
 

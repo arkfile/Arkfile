@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/84adam/arkfile/auth"
+	"github.com/84adam/Arkfile/auth"
 	"github.com/DATA-DOG/go-sqlmock"
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"

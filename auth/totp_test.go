@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/84adam/arkfile/crypto"
+	"github.com/84adam/Arkfile/crypto"
 	"github.com/pquerna/otp/totp"
 )
 

@@ -15,9 +15,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/84adam/arkfile/auth"
-	"github.com/84adam/arkfile/models"
-	"github.com/84adam/arkfile/storage"
+	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/models"
+	"github.com/84adam/Arkfile/storage"
 )
 
 // --- Test DownloadFile ---

@@ -8,7 +8,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/84adam/arkfile/config"
+	"github.com/84adam/Arkfile/config"
 )
 
 var (

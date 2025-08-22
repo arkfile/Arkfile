@@ -9,9 +9,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/84adam/arkfile/config"
-	"github.com/84adam/arkfile/database"
-	"github.com/84adam/arkfile/logging"
+	"github.com/84adam/Arkfile/config"
+	"github.com/84adam/Arkfile/database"
+	"github.com/84adam/Arkfile/logging"
 )
 
 // KeyHealthStatus represents the health status of a cryptographic component

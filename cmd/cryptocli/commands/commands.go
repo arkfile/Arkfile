@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/84adam/arkfile/auth"
-	"github.com/84adam/arkfile/crypto"
-	"github.com/84adam/arkfile/database"
+	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/crypto"
+	"github.com/84adam/Arkfile/database"
 )
 
 var verbose bool

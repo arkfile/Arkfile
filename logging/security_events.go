@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/84adam/arkfile/database"
+	"github.com/84adam/Arkfile/database"
 )
 
 // SecurityEventType defines the types of security events that can be logged

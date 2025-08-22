@@ -1,4 +1,4 @@
-module github.com/84adam/arkfile
+module github.com/84adam/Arkfile
 
 go 1.24
 

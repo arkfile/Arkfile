@@ -8,8 +8,8 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/84adam/arkfile/database"
-	"github.com/84adam/arkfile/logging"
+	"github.com/84adam/Arkfile/database"
+	"github.com/84adam/Arkfile/logging"
 )
 
 // ShareRateLimitEntry represents a rate limiting entry for share access

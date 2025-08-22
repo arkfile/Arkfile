@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/84adam/arkfile/config" // Import config
+	"github.com/84adam/Arkfile/config" // Import config
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
