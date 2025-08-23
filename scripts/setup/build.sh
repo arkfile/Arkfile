@@ -96,19 +96,53 @@ check_go_version() {
     export GO_BINARY="$go_binary"
 }
 
+# Function to fix vendor directory ownership
+fix_vendor_ownership() {
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        echo -e "${YELLOW}Fixing vendor directory ownership (running as root)...${NC}"
+        chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
+        chown -R "$SUDO_USER:$SUDO_USER" go.mod go.sum 2>/dev/null || true
+        [ -f ".vendor_cache" ] && chown "$SUDO_USER:$SUDO_USER" .vendor_cache 2>/dev/null || true
+        echo -e "${GREEN}✅ Vendor directory ownership restored to $SUDO_USER${NC}"
+    elif [ "$EUID" -ne 0 ] && [ -d "vendor" ]; then
+        # Check if vendor directory has wrong ownership
+        VENDOR_OWNER=$(stat -c '%U' vendor 2>/dev/null || echo "unknown")
+        CURRENT_USER=$(whoami)
+        if [ "$VENDOR_OWNER" = "root" ] && [ "$CURRENT_USER" != "root" ]; then
+            echo -e "${YELLOW}Vendor directory owned by root, fixing with sudo...${NC}"
+            sudo chown -R "$CURRENT_USER:$CURRENT_USER" vendor/ 2>/dev/null || true
+            sudo chown -R "$CURRENT_USER:$CURRENT_USER" go.mod go.sum 2>/dev/null || true
+            [ -f ".vendor_cache" ] && sudo chown "$CURRENT_USER:$CURRENT_USER" .vendor_cache 2>/dev/null || true
+            echo -e "${GREEN}✅ Vendor directory ownership restored to $CURRENT_USER${NC}"
+        fi
+    fi
+}
+
+# Function to run Go commands with proper user context
+run_go_as_user() {
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        sudo -u "$SUDO_USER" -H "$GO_BINARY" "$@"
+    else
+        "$GO_BINARY" "$@"
+    fi
+}
+
 # Ensure required tools are installed and get Go binary path
 check_go_version
 
 # Ensure Go dependencies are properly resolved
 echo -e "${YELLOW}Checking Go module dependencies...${NC}"
-if ! "$GO_BINARY" mod download; then
+fix_vendor_ownership
+if ! run_go_as_user mod download; then
     echo -e "${YELLOW}Dependencies need updating, running go mod tidy...${NC}"
-    "$GO_BINARY" mod tidy
-    if ! "$GO_BINARY" mod download; then
+    run_go_as_user mod tidy
+    fix_vendor_ownership
+    if ! run_go_as_user mod download; then
         echo -e "${RED}Failed to resolve Go dependencies${NC}" >&2
         exit 1
     fi
 fi
+fix_vendor_ownership
 
 # Smart vendor directory sync - only when dependencies actually change
 echo -e "${YELLOW}Checking vendor directory consistency...${NC}"
@@ -134,15 +168,17 @@ else
         cp -r vendor/stef "$C_LIBS_BACKUP/" 2>/dev/null || true
     fi
     
-    if ! "$GO_BINARY" mod vendor; then
+    if ! run_go_as_user mod vendor; then
         echo -e "${YELLOW}Vendor sync failed, attempting to fix missing dependencies...${NC}"
         # Try to get missing dependencies that might not be in go.sum
-        "$GO_BINARY" get -d ./...
-        if ! "$GO_BINARY" mod vendor; then
+        run_go_as_user get -d ./...
+        fix_vendor_ownership
+        if ! run_go_as_user mod vendor; then
             echo -e "${RED}Failed to sync vendor directory${NC}" >&2
             exit 1
         fi
     fi
+    fix_vendor_ownership
     
     # CRITICAL: Restore C library submodules after Go vendor sync
     if [ -n "$C_LIBS_BACKUP" ] && [ -d "$C_LIBS_BACKUP/stef" ]; then
@@ -161,24 +197,6 @@ else
     fi
     echo -e "${GREEN}✅ Vendor directory synced with dependencies${NC}"
 fi
-
-# Function to fix vendor directory ownership
-fix_vendor_ownership() {
-    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        echo -e "${YELLOW}Fixing vendor directory ownership (running as root)...${NC}"
-        chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
-        echo -e "${GREEN}✅ Vendor directory ownership restored to $SUDO_USER${NC}"
-    elif [ "$EUID" -ne 0 ] && [ -d "vendor" ]; then
-        # Check if vendor directory has wrong ownership
-        VENDOR_OWNER=$(stat -c '%U' vendor 2>/dev/null || echo "unknown")
-        CURRENT_USER=$(whoami)
-        if [ "$VENDOR_OWNER" = "root" ] && [ "$CURRENT_USER" != "root" ]; then
-            echo -e "${YELLOW}Vendor directory owned by root, fixing with sudo...${NC}"
-            sudo chown -R "$CURRENT_USER:$CURRENT_USER" vendor/ 2>/dev/null || true
-            echo -e "${GREEN}✅ Vendor directory ownership restored to $CURRENT_USER${NC}"
-        fi
-    fi
-}
 
 # Build static dependencies first
 build_static_dependencies() {

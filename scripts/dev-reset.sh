@@ -25,6 +25,11 @@ ARKFILE_DIR="/opt/arkfile"
 USER="arkfile"
 GROUP="arkfile"
 
+# Preserve original user context for Go operations
+ORIGINAL_USER="${SUDO_USER:-$USER}"
+ORIGINAL_UID="${SUDO_UID:-$(id -u)}"
+ORIGINAL_GID="${SUDO_GID:-$(id -g)}"
+
 echo -e "${RED}ARKFILE DEVELOPMENT RESET${NC}"
 echo -e "${RED}===========================================================${NC}"
 echo
@@ -60,6 +65,31 @@ echo
 echo -e "${RED}NUKING EVERYTHING!${NC}"
 echo
 
+# POSIX-compatible Go detection with fallbacks
+find_go_binary() {
+    # Try command -v first (respects PATH, aliases, functions)
+    if command -v go >/dev/null 2>&1; then
+        command -v go
+        return 0
+    fi
+    
+    # Fallback to common installation paths
+    local go_candidates=(
+        "/usr/bin/go"                       # Linux package managers
+        "/usr/local/bin/go"                 # BSD package managers  
+        "/usr/local/go/bin/go"              # Manual golang.org installs
+    )
+    
+    for go_path in "${go_candidates[@]}"; do
+        if [ -x "$go_path" ]; then
+            echo "$go_path"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
 # Function to print status messages
 print_status() {
     local status=$1
@@ -79,6 +109,47 @@ print_status() {
             echo -e "  ${RED}ERROR:${NC} ${message}"
             ;;
     esac
+}
+
+# Find and verify Go binary before proceeding
+echo -e "${YELLOW}Detecting Go installation...${NC}"
+if ! GO_BINARY=$(find_go_binary); then
+    echo -e "${RED}❌ Go compiler not found in standard locations${NC}"
+    echo "   Checked: PATH, /usr/bin/go, /usr/local/bin/go, /usr/local/go/bin/go"
+    echo "   Please install Go via package manager or from https://golang.org"
+    exit 1
+fi
+
+echo -e "${GREEN}✅ Found Go at: $GO_BINARY${NC}"
+export GO_BINARY="$GO_BINARY"
+
+# Function to run commands as original user (not root)
+run_as_user() {
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        sudo -u "$SUDO_USER" -H "$@"
+    else
+        "$@"
+    fi
+}
+
+# Function to run Go commands with proper user context and binary path
+run_go_as_user() {
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        sudo -u "$SUDO_USER" -H "$GO_BINARY" "$@"
+    else
+        "$GO_BINARY" "$@"
+    fi
+}
+
+# Function to fix ownership of Go-related files
+fix_go_ownership() {
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        print_status "INFO" "Fixing Go file ownership for user $SUDO_USER..."
+        chown -R "$SUDO_USER:$SUDO_USER" go.mod go.sum 2>/dev/null || true
+        [ -d "vendor" ] && chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
+        [ -f ".vendor_cache" ] && chown "$SUDO_USER:$SUDO_USER" .vendor_cache 2>/dev/null || true
+        print_status "SUCCESS" "Go file ownership restored"
+    fi
 }
 
 # Function to safely stop a service if it exists and is running
@@ -169,6 +240,49 @@ echo "==========================="
 
 print_status "INFO" "Building application in current directory..."
 
+# Step 3.1: Pre-build Go module resolution
+echo -e "${YELLOW}Step 3.1: Resolving Go dependencies${NC}"
+print_status "INFO" "Ensuring Go dependencies are properly resolved with correct permissions..."
+
+# Fix any existing ownership issues first
+fix_go_ownership
+
+# Resolve Go module dependencies as the original user (not root)
+print_status "INFO" "Running go mod download as user $ORIGINAL_USER..."
+if ! run_go_as_user mod download; then
+    print_status "WARNING" "go mod download failed, attempting go mod tidy..."
+    if ! run_go_as_user mod tidy; then
+        print_status "ERROR" "Failed to resolve Go module dependencies"
+        exit 1
+    fi
+    # Try download again after tidy
+    if ! run_go_as_user mod download; then
+        print_status "ERROR" "Still unable to download dependencies after go mod tidy"
+        exit 1
+    fi
+fi
+
+# Ensure all internal packages are available (including auth)
+print_status "INFO" "Verifying internal package availability..."
+if ! run_go_as_user list -m github.com/84adam/Arkfile >/dev/null 2>&1; then
+    print_status "WARNING" "Main module not properly recognized, running go mod tidy..."
+    run_go_as_user mod tidy
+fi
+
+# Verify the auth package is accessible
+print_status "INFO" "Verifying auth package accessibility..."
+if run_go_as_user list ./auth >/dev/null 2>&1; then
+    print_status "SUCCESS" "Auth package is accessible"
+else
+    print_status "WARNING" "Auth package not immediately accessible - will be resolved during build"
+fi
+
+# Fix ownership again after Go operations
+fix_go_ownership
+
+print_status "SUCCESS" "Go dependencies resolved successfully"
+echo
+
 # Set a fallback version for development
 FALLBACK_VERSION="dev-$(date +%Y%m%d-%H%M%S)"
 
@@ -183,10 +297,16 @@ fi
 export VERSION="$FALLBACK_VERSION"
 export SKIP_C_LIBS="$SKIP_C_LIBS"
 
+# Ensure ownership is correct before build
+fix_go_ownership
+
 if ! ./scripts/setup/build.sh; then
     print_status "ERROR" "Build script failed - this is CRITICAL"
     exit 1
 fi
+
+# Fix ownership after build as well
+fix_go_ownership
 
 print_status "SUCCESS" "Application build and deployment complete"
 
