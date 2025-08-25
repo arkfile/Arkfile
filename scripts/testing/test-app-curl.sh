@@ -24,7 +24,7 @@ TEMP_DIR=$(mktemp -d)
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
+WHITE='\033[0;37m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
@@ -42,14 +42,14 @@ DEBUG_MODE=false
 
 # Cleanup function
 cleanup() {
-    echo -e "${BLUE}🧹 Cleaning up temporary files...${NC}"
+    echo -e "${WHITE}[CLEANUP] Cleaning up temporary files...${NC}"
     rm -rf "$TEMP_DIR"
 }
 trap cleanup EXIT
 
 # Logging functions
 log() {
-    echo -e "${BLUE}[$(date +'%Y-%m-%d %H:%M:%S')] $1${NC}"
+    echo -e "${WHITE}[$(date +'%Y-%m-%d %H:%M:%S')] $1${NC}"
 }
 
 phase() {
@@ -62,26 +62,26 @@ phase() {
 }
 
 success() {
-    echo -e "${GREEN}✅ $1${NC}"
+    echo -e "${GREEN}[OK] $1${NC}"
 }
 
 error() {
-    echo -e "${RED}❌ $1${NC}"
+    echo -e "${RED}[X] $1${NC}"
     echo -e "${RED}Test failed at: $(date +'%Y-%m-%d %H:%M:%S')${NC}"
     exit 1
 }
 
 warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
+    echo -e "${YELLOW}[WARNING] $1${NC}"
 }
 
 info() {
-    echo -e "${CYAN}ℹ️  $1${NC}"
+    echo -e "${CYAN}[INFO] $1${NC}"
 }
 
 debug() {
     if [ "$DEBUG_MODE" = true ]; then
-        echo -e "${PURPLE}🐛 DEBUG: $1${NC}"
+        echo -e "${PURPLE}[DEBUG] $1${NC}"
     fi
 }
 
@@ -1159,7 +1159,7 @@ phase_login() {
         # Check if it's the expected mandatory TOTP setup error
         if echo "$error_msg" | grep -q "Two-factor authentication setup is required"; then
             if [ "$MANDATORY_TOTP" = true ]; then
-                success "Login correctly blocked - TOTP setup is mandatory ✅"
+                success "Login correctly blocked - TOTP setup is mandatory [OK]"
                 info "Error message: $error_msg"
                 return
             else
@@ -1482,8 +1482,97 @@ phase_totp_management() {
     fi
 }
 
-# PHASE 9: LOGOUT & SESSION TERMINATION
-phase_logout() {
+# PHASE 9: FILE OPERATIONS
+phase_9_file_operations() {
+    phase "FILE OPERATIONS"
+    
+    local timer_start
+    [ "$PERFORMANCE_MODE" = true ] && timer_start=$(start_timer)
+    
+    local test_file="${TEMP_DIR}/test_file_100mb.bin"
+    local hash_file="${TEMP_DIR}/test_file_100mb.sha256"
+    
+    info "Generating 100MB test file for future verification..."
+    
+    # Check if cryptocli is available
+    if ! command -v ./client/cryptocli >/dev/null 2>&1; then
+        info "Building cryptocli tool..."
+        if ! (cd client && go build -o cryptocli ./main.go 2>/dev/null); then
+            warning "Failed to build cryptocli tool, using alternative method"
+        else
+            success "Built cryptocli tool successfully"
+        fi
+    fi
+    
+    # Generate deterministic 100MB file with sequential pattern
+    info "Creating 100MB file with deterministic pattern..."
+    
+    # Create a deterministic pattern that will compress predictably
+    local pattern="ARKFILE_TEST_DATA_PATTERN_$(date +%Y%m%d)_"
+    local pattern_length=${#pattern}
+    local target_size=104857600  # 100MB
+    
+    # Calculate how many full patterns we need
+    local full_patterns=$((target_size / pattern_length))
+    local remaining_bytes=$((target_size % pattern_length))
+    
+    # Generate the file with our pattern
+    {
+        for ((i=0; i<full_patterns; i++)); do
+            echo -n "$pattern"
+        done
+        if [ $remaining_bytes -gt 0 ]; then
+            echo -n "${pattern:0:$remaining_bytes}"
+        fi
+    } > "$test_file"
+    
+    # Verify file size
+    local file_size=$(stat -c%s "$test_file" 2>/dev/null || echo "0")
+    if [ "$file_size" -ne "$target_size" ]; then
+        error "Generated file size mismatch: expected $target_size bytes, got $file_size bytes"
+    fi
+    
+    success "Generated 100MB test file successfully"
+    info "File location: $test_file"
+    info "File size: $(printf "%'d" $file_size) bytes (100.00 MB)"
+    
+    # Calculate SHA256 hash
+    log "Calculating SHA256 hash for verification..."
+    local file_hash
+    if command -v sha256sum >/dev/null 2>&1; then
+        file_hash=$(sha256sum "$test_file" | cut -d' ' -f1)
+    elif command -v shasum >/dev/null 2>&1; then
+        file_hash=$(shasum -a 256 "$test_file" | cut -d' ' -f1)
+    else
+        error "No SHA256 utility available (sha256sum or shasum required)"
+    fi
+    
+    if [ ${#file_hash} -ne 64 ]; then
+        error "Invalid SHA256 hash generated: $file_hash"
+    fi
+    
+    # Save hash to file for future reference
+    echo "$file_hash" > "$hash_file"
+    
+    success "SHA256 hash calculated successfully"
+    info "SHA256: $file_hash"
+    info "Hash saved to: $hash_file"
+    
+    # Store file paths in global variables for cleanup
+    echo "$test_file" > "$TEMP_DIR/phase9_test_file"
+    echo "$hash_file" > "$TEMP_DIR/phase9_hash_file"
+    
+    success "File operations phase completed"
+    info "Files ready for future download/decryption verification"
+    
+    if [ "$PERFORMANCE_MODE" = true ]; then
+        local duration=$(end_timer "$timer_start")
+        info "File operations completed in: $duration"
+    fi
+}
+
+# PHASE 10: LOGOUT & SESSION TERMINATION
+phase_10_logout() {
     phase "LOGOUT & SESSION TERMINATION"
     
     local timer_start
@@ -1546,8 +1635,8 @@ phase_logout() {
     fi
 }
 
-# PHASE 10: COMPREHENSIVE CLEANUP
-phase_final_cleanup() {
+# PHASE 11: COMPREHENSIVE CLEANUP
+phase_11_final_cleanup() {
     phase "COMPREHENSIVE CLEANUP"
     
     local timer_start
@@ -1738,7 +1827,7 @@ done
 
 # Main execution function
 main() {
-    echo -e "${BLUE}"
+    echo -e "${WHITE}"
     echo "╔══════════════════════════════════════════════════════════╗"
     echo "║          ARKFILE MASTER AUTHENTICATION TEST SUITE        ║"
     echo "╚══════════════════════════════════════════════════════════╝"
@@ -1884,45 +1973,46 @@ main() {
         phase_totp_authentication
         phase_session_testing
         phase_totp_management
-        phase_logout
+        phase_9_file_operations
+        phase_10_logout
         
         if [ "$SKIP_CLEANUP" = false ]; then
-            phase_final_cleanup
+            phase_11_final_cleanup
         fi
     fi
     
     # Success summary
     echo -e "${GREEN}"
     echo "╔══════════════════════════════════════════════════════════╗"
-    echo "║              ALL AUTHENTICATION TESTS PASSED ✅          ║"
+    echo "║              ALL AUTHENTICATION TESTS PASSED [OK]        ║"
     echo "╚══════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     
-    log "🎉 Master authentication test suite completed successfully!"
+    log "[SUCCESS] Master authentication test suite completed successfully!"
     
     echo -e "${CYAN}"
     echo "Test Summary:"
     if [ "$ENDPOINTS_ONLY" = true ]; then
-        echo "✅ TOTP Endpoint Testing - All 5 endpoints validated"
+        echo "[OK] TOTP Endpoint Testing - All 5 endpoints validated"
     elif [ "$ERROR_SCENARIOS" = true ]; then
-        echo "✅ Error Scenario Testing - Edge cases validated"
+        echo "[OK] Error Scenario Testing - Edge cases validated"
     elif [ "$QUICK_MODE" = true ]; then
-        echo "✅ Quick Mode Testing - Essential flow validated"
-        echo "✅ OPAQUE Registration - User registered successfully"
-        echo "✅ Database Approval - User approved for testing"
-        echo "✅ TOTP Setup - Two-factor authentication configured"
-        echo "✅ OPAQUE Login - Initial authentication successful"
-        echo "✅ TOTP Authentication - 2FA verification completed"
+        echo "[OK] Quick Mode Testing - Essential flow validated"
+        echo "[OK] OPAQUE Registration - User registered successfully"
+        echo "[OK] Database Approval - User approved for testing"
+        echo "[OK] TOTP Setup - Two-factor authentication configured"
+        echo "[OK] OPAQUE Login - Initial authentication successful"
+        echo "[OK] TOTP Authentication - 2FA verification completed"
     else
-        echo "✅ OPAQUE Registration - User registered successfully"
-        echo "✅ Database Approval - User approved for testing"
-        echo "✅ TOTP Setup - Two-factor authentication configured"
-        echo "✅ OPAQUE Login - Initial authentication successful"
-        echo "✅ TOTP Authentication - 2FA verification completed"
-        echo "✅ Session Management - API access and token refresh tested"
-        echo "✅ TOTP Management - Post-auth operations verified"
-        echo "✅ Logout Process - Session termination verified"
-        echo "✅ Cleanup - Test data removed"
+        echo "[OK] OPAQUE Registration - User registered successfully"
+        echo "[OK] Database Approval - User approved for testing"
+        echo "[OK] TOTP Setup - Two-factor authentication configured"
+        echo "[OK] OPAQUE Login - Initial authentication successful"
+        echo "[OK] TOTP Authentication - 2FA verification completed"
+        echo "[OK] Session Management - API access and token refresh tested"
+        echo "[OK] TOTP Management - Post-auth operations verified"
+        echo "[OK] Logout Process - Session termination verified"
+        echo "[OK] Cleanup - Test data removed"
     fi
     echo -e "${NC}"
     
@@ -1935,15 +2025,13 @@ main() {
         info "Test user username: $TEST_USERNAME"
     fi
     
-    echo -e "${YELLOW}"
-    echo "🔒 Your Arkfile authentication system is production-ready!"
     echo -e "${NC}"
     
     # Performance summary
     if [ "$PERFORMANCE_MODE" = true ]; then
         local total_duration=$(($(date +%s) - TEST_START_TIME))
         echo -e "${PURPLE}"
-        echo "⚡ Performance Summary:"
+        echo "[PERFORMANCE] Performance Summary:"
         echo "   Total execution time: ${total_duration} seconds"
         echo "   Average phase time: $((total_duration / PHASE_COUNTER)) seconds"
         echo -e "${NC}"
