@@ -73,7 +73,7 @@ async function loadWASMModule(): Promise<void> {
     
     try {
         // Check if WASM file exists
-        const wasmPath = join(import.meta.dir, '..', '..', '..', 'static', 'main.wasm');
+        const wasmPath = join(import.meta.dir, '..', '..', '..', 'main.wasm');
         if (!existsSync(wasmPath)) {
             console.warn('❌ WASM file not found. OPAQUE functions will be mocked.');
             return;
@@ -83,7 +83,7 @@ async function loadWASMModule(): Promise<void> {
         const wasmBytes = readFileSync(wasmPath);
         
         // Load wasm_exec.js for Go runtime
-        const wasmExecPath = join(import.meta.dir, '..', '..', '..', 'wasm_exec.js');
+        const wasmExecPath = join(import.meta.dir, '..', '..', '..', '..', 'wasm_exec.js');
         if (!existsSync(wasmExecPath)) {
             console.warn('❌ wasm_exec.js not found. OPAQUE functions will be mocked.');
             return;

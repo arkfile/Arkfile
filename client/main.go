@@ -997,20 +997,26 @@ func authenticatedFetch(this js.Value, args []js.Value) interface{} {
 	url := args[0].String()
 	var options map[string]interface{}
 
-	if len(args) > 1 && !args[1].IsNull() {
+	if len(args) > 1 && !args[1].IsNull() && !args[1].IsUndefined() {
 		// Convert JavaScript object to Go map
 		optionsJS := args[1]
 		options = make(map[string]interface{})
 
-		// Get headers if they exist
-		if !optionsJS.Get("headers").IsUndefined() {
+		// Handle headers - copy all headers from JavaScript object
+		if !optionsJS.Get("headers").IsUndefined() && !optionsJS.Get("headers").IsNull() {
 			headers := make(map[string]interface{})
 			headersJS := optionsJS.Get("headers")
-			// Copy existing headers
-			if !headersJS.IsUndefined() {
-				// This is a simplified approach - real implementation would iterate over all headers
-				if !headersJS.Get("Content-Type").IsUndefined() {
-					headers["Content-Type"] = headersJS.Get("Content-Type").String()
+
+			// Get all header keys by using Object.keys() in JavaScript
+			objectKeys := js.Global().Get("Object").Call("keys", headersJS)
+			headerCount := objectKeys.Length()
+
+			// Copy each header
+			for i := 0; i < headerCount; i++ {
+				headerName := objectKeys.Index(i).String()
+				headerValue := headersJS.Get(headerName)
+				if !headerValue.IsUndefined() && !headerValue.IsNull() {
+					headers[headerName] = headerValue.String()
 				}
 			}
 			options["headers"] = headers
@@ -1018,12 +1024,36 @@ func authenticatedFetch(this js.Value, args []js.Value) interface{} {
 			options["headers"] = make(map[string]interface{})
 		}
 
-		// Copy other options
+		// Copy other fetch options
 		if !optionsJS.Get("method").IsUndefined() {
 			options["method"] = optionsJS.Get("method").String()
 		}
 		if !optionsJS.Get("body").IsUndefined() {
 			options["body"] = optionsJS.Get("body").String()
+		}
+		if !optionsJS.Get("mode").IsUndefined() {
+			options["mode"] = optionsJS.Get("mode").String()
+		}
+		if !optionsJS.Get("credentials").IsUndefined() {
+			options["credentials"] = optionsJS.Get("credentials").String()
+		}
+		if !optionsJS.Get("cache").IsUndefined() {
+			options["cache"] = optionsJS.Get("cache").String()
+		}
+		if !optionsJS.Get("redirect").IsUndefined() {
+			options["redirect"] = optionsJS.Get("redirect").String()
+		}
+		if !optionsJS.Get("referrer").IsUndefined() {
+			options["referrer"] = optionsJS.Get("referrer").String()
+		}
+		if !optionsJS.Get("referrerPolicy").IsUndefined() {
+			options["referrerPolicy"] = optionsJS.Get("referrerPolicy").String()
+		}
+		if !optionsJS.Get("integrity").IsUndefined() {
+			options["integrity"] = optionsJS.Get("integrity").String()
+		}
+		if !optionsJS.Get("signal").IsUndefined() {
+			options["signal"] = optionsJS.Get("signal")
 		}
 	} else {
 		options = map[string]interface{}{
@@ -1031,7 +1061,7 @@ func authenticatedFetch(this js.Value, args []js.Value) interface{} {
 		}
 	}
 
-	// Get JWT token
+	// Get JWT token and add Authorization header
 	tokenResult := getJWTToken(js.Value{}, []js.Value{})
 	if tokenMap, ok := tokenResult.(map[string]interface{}); ok && tokenMap["success"].(bool) {
 		token := tokenMap["token"].(string)
@@ -1516,71 +1546,70 @@ func decryptFileChunkedOPAQUE(this js.Value, args []js.Value) interface{} {
 		}
 	}
 
-	// Process remaining data as chunks: [nonce][encrypted_data][tag]
+	// Process chunks using proper boundary detection
+	// Format: [nonce:12][encrypted_data][tag:16] repeated
 	var plaintext []byte
 	offset := 0
+	chunkNumber := 0
 
 	for offset < len(chunksData) {
-		// Check if we have enough data for a chunk (minimum: nonce + tag)
-		if offset+gcm.NonceSize()+16 > len(chunksData) {
+		chunkNumber++
+
+		// Check if we have minimum bytes for a chunk (nonce + tag)
+		minChunkSize := gcm.NonceSize() + 16 // 12 + 16 = 28 bytes minimum
+		if offset+minChunkSize > len(chunksData) {
 			return map[string]interface{}{
 				"success": false,
-				"error":   "Incomplete chunk data at offset " + string(rune(offset)),
+				"error":   "Incomplete chunk data: chunk " + string(rune(chunkNumber)) + " at offset " + string(rune(offset)) + " needs at least " + string(rune(minChunkSize)) + " bytes",
 			}
 		}
 
-		// Find the end of this chunk by looking for the next valid nonce position
-		// For now, we'll assume chunks are properly formatted and parse sequentially
-
-		// Read nonce
+		// Extract nonce (first 12 bytes of chunk)
 		nonce := chunksData[offset : offset+gcm.NonceSize()]
 		offset += gcm.NonceSize()
 
-		// Find the tag at the end of encrypted data
-		// We need to determine chunk size, but for now assume remaining data
+		// Find next chunk boundary by looking for the next valid nonce position
 		remainingData := chunksData[offset:]
+		nextNoncePos := -1
 
-		// The tag is the last 16 bytes of the remaining data for this chunk
-		// We need a better way to determine chunk boundaries
-		// For now, try to decrypt what we can
-		if len(remainingData) < 16 {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "Insufficient data for authentication tag",
-			}
-		}
-
-		// Try different chunk sizes to find valid decryption
-		// Start with maximum possible size and work down
-		maxPossibleSize := len(remainingData)
-
-		var decryptedChunk []byte
-		var chunkProcessed bool
-
-		// Try to decrypt starting from the maximum size down to minimum
-		for chunkSize := maxPossibleSize; chunkSize >= 16; chunkSize-- {
-			if chunkSize > len(remainingData) {
-				continue
-			}
-
-			testChunk := remainingData[:chunkSize]
-			testDecrypted, err := gcm.Open(nil, nonce, testChunk, nil)
-			if err == nil {
-				// Successfully decrypted with this chunk size
-				decryptedChunk = testDecrypted
-				offset += chunkSize
-				chunkProcessed = true
+		// Look for next nonce starting from minimum encrypted data size (17 bytes: 1 byte data + 16 byte tag)
+		for searchPos := 17; searchPos <= len(remainingData)-gcm.NonceSize(); searchPos++ {
+			// Check if there's enough data after this position for another complete chunk
+			if searchPos+gcm.NonceSize()+16 <= len(remainingData) {
+				nextNoncePos = searchPos
 				break
 			}
 		}
 
-		if !chunkProcessed {
+		var encryptedChunk []byte
+		if nextNoncePos == -1 {
+			// This is the last chunk - use all remaining data
+			encryptedChunk = remainingData
+			offset = len(chunksData) // Mark end of processing
+		} else {
+			// Extract chunk data up to next nonce position
+			encryptedChunk = remainingData[:nextNoncePos]
+			offset += nextNoncePos
+		}
+
+		// Validate chunk has minimum size (at least 16 bytes for tag)
+		if len(encryptedChunk) < 16 {
 			return map[string]interface{}{
 				"success": false,
-				"error":   "Failed to decrypt any chunk at offset " + string(rune(offset-gcm.NonceSize())),
+				"error":   "Chunk " + string(rune(chunkNumber)) + " too small: " + string(rune(len(encryptedChunk))) + " bytes (minimum 16)",
 			}
 		}
 
+		// Decrypt chunk
+		decryptedChunk, err := gcm.Open(nil, nonce, encryptedChunk, nil)
+		if err != nil {
+			return map[string]interface{}{
+				"success": false,
+				"error":   "Failed to decrypt chunk " + string(rune(chunkNumber)) + ": " + err.Error(),
+			}
+		}
+
+		// Append decrypted data to result
 		plaintext = append(plaintext, decryptedChunk...)
 	}
 

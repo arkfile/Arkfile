@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/84adam/Arkfile/crypto"
+	"golang.org/x/term"
 )
 
 const (
@@ -29,6 +30,7 @@ COMMANDS:
     derive-key        Derive encryption keys from OPAQUE export keys
     hash              Calculate SHA-256 hash of files
     generate-key      Generate random AES keys
+    generate-test-file Generate test files with deterministic patterns
     version           Show version information
 
 GLOBAL OPTIONS:
@@ -45,6 +47,7 @@ KEY DERIVATION:
 UTILITY COMMANDS:
     hash --file FILE
     generate-key [--size SIZE]
+    generate-test-file --filename FILE --size SIZE
 
 KEY TYPES:
     account           Account password-derived encryption (default)
@@ -65,6 +68,9 @@ EXAMPLES:
 
     # Generate random key
     cryptocli generate-key --size 32
+
+    # Generate test file
+    cryptocli generate-test-file --filename test.bin --size 104857600
 `
 )
 
@@ -129,6 +135,11 @@ func main() {
 	case "generate-key":
 		if err := handleGenerateKeyCommand(args); err != nil {
 			logError("Key generation failed: %v", err)
+			os.Exit(1)
+		}
+	case "generate-test-file":
+		if err := handleGenerateTestFileCommand(args); err != nil {
+			logError("Test file generation failed: %v", err)
 			os.Exit(1)
 		}
 	case "version":
@@ -273,7 +284,7 @@ EXAMPLES:
 		return fmt.Errorf("failed to write encrypted file: %w", err)
 	}
 
-	fmt.Printf("✅ Encryption completed successfully\n")
+	fmt.Printf("Encryption completed successfully\n")
 	fmt.Printf("Input file: %s (%d bytes)\n", *filePath, len(fileData))
 	fmt.Printf("Output file: %s (%d bytes)\n", outputFilePath, len(encryptedData))
 	fmt.Printf("Key type: %s (version: 0x%02x)\n", *keyType, version)
@@ -421,11 +432,12 @@ EXAMPLES:
 	}
 
 	// Write decrypted file
-	if err := os.WriteFile(outputFilePath, plaintext, 0644); err != nil {
+	// -- file permissions set so that only the owner can read/write the decrypted file
+	if err := os.WriteFile(outputFilePath, plaintext, 0600); err != nil {
 		return fmt.Errorf("failed to write decrypted file: %w", err)
 	}
 
-	fmt.Printf("✅ Decryption completed successfully\n")
+	fmt.Printf("Decryption completed successfully\n")
 	fmt.Printf("Input file: %s (%d bytes)\n", *filePath, len(encryptedData))
 	fmt.Printf("Output file: %s (%d bytes)\n", outputFilePath, len(plaintext))
 	fmt.Printf("Key type: %s (version: 0x%02x)\n", finalKeyType, version)
@@ -632,6 +644,146 @@ EXAMPLES:
 	return nil
 }
 
+// handleGenerateTestFileCommand processes generate-test-file command
+func handleGenerateTestFileCommand(args []string) error {
+	fs := flag.NewFlagSet("generate-test-file", flag.ExitOnError)
+	var (
+		filename = fs.String("filename", "", "Output filename (required)")
+		size     = fs.Int64("size", 0, "File size in bytes (required)")
+		pattern  = fs.String("pattern", "deterministic", "Pattern type: deterministic, random, or zeros")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli generate-test-file [FLAGS]
+
+Generate test files with specified size and pattern for testing purposes.
+
+FLAGS:
+    --filename FILE     Output filename (required)
+    --size SIZE         File size in bytes (required)
+    --pattern TYPE      Pattern type: deterministic, random, or zeros (default: deterministic)
+    --help             Show this help message
+
+EXAMPLES:
+    cryptocli generate-test-file --filename test.bin --size 104857600
+    cryptocli generate-test-file --filename random.bin --size 1048576 --pattern random
+    cryptocli generate-test-file --filename zeros.bin --size 2048 --pattern zeros
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *filename == "" {
+		return fmt.Errorf("filename is required")
+	}
+	if *size <= 0 {
+		return fmt.Errorf("size must be greater than 0")
+	}
+	if *size > 1024*1024*1024 { // 1GB limit
+		return fmt.Errorf("size must not exceed 1GB (1073741824 bytes)")
+	}
+
+	if *pattern != "deterministic" && *pattern != "random" && *pattern != "zeros" {
+		return fmt.Errorf("pattern must be 'deterministic', 'random', or 'zeros'")
+	}
+
+	logVerbose("Generating test file: %s (%d bytes, pattern: %s)", *filename, *size, *pattern)
+
+	// Create output file
+	file, err := os.Create(*filename)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer file.Close()
+
+	// Generate file content based on pattern
+	var bytesWritten int64
+	bufSize := 8192 // 8KB buffer for writing
+	buf := make([]byte, bufSize)
+
+	switch *pattern {
+	case "zeros":
+		// Buffer is already zero-initialized
+		for bytesWritten < *size {
+			remaining := *size - bytesWritten
+			toWrite := int64(bufSize)
+			if remaining < toWrite {
+				toWrite = remaining
+			}
+
+			n, err := file.Write(buf[:toWrite])
+			if err != nil {
+				return fmt.Errorf("failed to write to file: %w", err)
+			}
+			bytesWritten += int64(n)
+		}
+
+	case "random":
+		for bytesWritten < *size {
+			remaining := *size - bytesWritten
+			toWrite := int64(bufSize)
+			if remaining < toWrite {
+				toWrite = remaining
+			}
+
+			// Generate random bytes
+			randomBuf := crypto.GenerateRandomBytes(int(toWrite))
+			n, err := file.Write(randomBuf)
+			if err != nil {
+				return fmt.Errorf("failed to write to file: %w", err)
+			}
+			bytesWritten += int64(n)
+		}
+
+	case "deterministic":
+		// Generate deterministic pattern based on position
+		for bytesWritten < *size {
+			remaining := *size - bytesWritten
+			toWrite := int64(bufSize)
+			if remaining < toWrite {
+				toWrite = remaining
+			}
+
+			// Fill buffer with deterministic pattern
+			for i := int64(0); i < toWrite; i++ {
+				pos := bytesWritten + i
+				buf[i] = byte((pos % 256) ^ ((pos >> 8) % 256) ^ ((pos >> 16) % 256))
+			}
+
+			n, err := file.Write(buf[:toWrite])
+			if err != nil {
+				return fmt.Errorf("failed to write to file: %w", err)
+			}
+			bytesWritten += int64(n)
+		}
+	}
+
+	// Close file to ensure all data is written
+	file.Close()
+
+	// Calculate SHA-256 hash of the generated file
+	fileData, err := os.ReadFile(*filename)
+	if err != nil {
+		return fmt.Errorf("failed to read generated file for hashing: %w", err)
+	}
+
+	hasher := sha256.New()
+	hasher.Write(fileData)
+	hash := hasher.Sum(nil)
+	hashHex := hex.EncodeToString(hash)
+
+	// Output results
+	fmt.Printf("Test file generated successfully\n")
+	fmt.Printf("Filename: %s\n", *filename)
+	fmt.Printf("Size: %d bytes\n", *size)
+	fmt.Printf("Pattern: %s\n", *pattern)
+	fmt.Printf("SHA-256: %s\n", hashHex)
+
+	return nil
+}
+
 // Helper functions
 
 func printVersion() {
@@ -653,13 +805,22 @@ func logError(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "[ERROR] "+format+"\n", args...)
 }
 
-// readPassword reads a password from stdin without echoing
 func readPassword() (string, error) {
 	fmt.Print("Password: ")
-	reader := bufio.NewReader(os.Stdin)
-	password, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		password, err := term.ReadPassword(int(os.Stdin.Fd()))
+		if err != nil {
+			return "", err
+		}
+		fmt.Println() // Print newline after password input
+		return string(password), nil
+	} else {
+		// Fallback for non-terminal input
+		reader := bufio.NewReader(os.Stdin)
+		password, err := reader.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(password), nil
 	}
-	return strings.TrimSpace(password), nil
 }
