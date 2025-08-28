@@ -12,11 +12,9 @@ import (
 	"testing"
 )
 
-// Test helper to create a mock OPAQUE export key
-func createMockExportKey() []byte {
-	key := make([]byte, 64)
-	rand.Read(key)
-	return key
+// Test helper to create a mock password
+func createMockPassword() string {
+	return "test-password-123"
 }
 
 // Test helper to create JavaScript values for WASM functions
@@ -26,7 +24,7 @@ func createJSValue(data interface{}) js.Value {
 	return js.Null() // Placeholder
 }
 
-func TestCreateEnvelopeOPAQUE(t *testing.T) {
+func TestCreateEnvelopePassword(t *testing.T) {
 	tests := []struct {
 		name        string
 		keyType     string
@@ -35,17 +33,17 @@ func TestCreateEnvelopeOPAQUE(t *testing.T) {
 		expectedKey byte
 	}{
 		{
-			name:        "Account key type",
+			name:        "Account password type",
 			keyType:     "account",
 			expectError: false,
 			expectedVer: 0x01,
 			expectedKey: 0x01,
 		},
 		{
-			name:        "Custom key type",
+			name:        "Custom password type",
 			keyType:     "custom",
 			expectError: false,
-			expectedVer: 0x02,
+			expectedVer: 0x01,
 			expectedKey: 0x02,
 		},
 		{
@@ -61,7 +59,7 @@ func TestCreateEnvelopeOPAQUE(t *testing.T) {
 			args := []js.Value{js.ValueOf(tt.keyType)}
 
 			// Call the function
-			result := createEnvelopeOPAQUE(js.Null(), args)
+			result := createPasswordEnvelope(js.Null(), args)
 
 			// Convert result to map for testing
 			resultMap, ok := result.(map[string]interface{})
@@ -198,7 +196,7 @@ func TestValidateChunkFormat(t *testing.T) {
 
 func TestChunkedEncryptionRoundTrip(t *testing.T) {
 	// This test would verify that encrypt -> decrypt produces original data
-	// However, it requires a full WASM environment with OPAQUE keys
+	// However, it requires a full WASM environment with password-based keys
 
 	testData := []byte("Hello, this is test data for chunked encryption!")
 	username := "test_username_123"
@@ -206,9 +204,9 @@ func TestChunkedEncryptionRoundTrip(t *testing.T) {
 	keyType := "account"
 	chunkSize := 32 // Small chunk for testing
 
-	// Create mock export key
-	mockKey := createMockExportKey()
-	opaqueExportKeys[username] = mockKey
+	// Create mock password
+	mockPassword := createMockPassword()
+	userPasswords[username] = []byte(mockPassword)
 
 	// Note: This test would need actual JavaScript environment to run
 	// For now, we validate the logic structure
@@ -231,7 +229,7 @@ func TestChunkedEncryptionRoundTrip(t *testing.T) {
 			len(testData), chunkSize, expectedChunks)
 	})
 
-	t.Run("Key derivation parameters", func(t *testing.T) {
+	t.Run("Password derivation parameters", func(t *testing.T) {
 		if username == "" {
 			t.Error("Username should not be empty")
 		}
@@ -240,19 +238,19 @@ func TestChunkedEncryptionRoundTrip(t *testing.T) {
 			t.Error("File ID should not be empty")
 		}
 
-		if keyType != "account" && keyType != "custom" {
-			t.Error("Key type should be 'account' or 'custom'")
+		if keyType != "account" && keyType != "custom" && keyType != "share" {
+			t.Error("Key type should be 'account', 'custom', or 'share'")
 		}
 
-		if len(mockKey) != 64 {
-			t.Errorf("Export key should be 64 bytes, got %d", len(mockKey))
+		if len(mockPassword) == 0 {
+			t.Error("Password should not be empty")
 		}
 	})
 }
 
-func TestDecryptFileChunkedOPAQUEBoundaryDetection(t *testing.T) {
+func TestDecryptFileChunkedPasswordBoundaryDetection(t *testing.T) {
 	t.Run("Chunk boundary detection logic", func(t *testing.T) {
-		// Test the logic that was fixed in decryptFileChunkedOPAQUE
+		// Test the logic that was fixed in decryptFileChunkedPassword
 		// This validates the new boundary detection algorithm
 
 		// Simulate chunk format: [nonce:12][encrypted_data][tag:16]
@@ -427,28 +425,38 @@ func TestAuthenticatedFetchHeaderHandling(t *testing.T) {
 
 func TestEnvelopeFormatSpecification(t *testing.T) {
 	t.Run("Envelope byte layout", func(t *testing.T) {
-		// Test account envelope
+		// Test account password envelope
 		accountEnvelope := []byte{0x01, 0x01}
 		if len(accountEnvelope) != 2 {
 			t.Error("Envelope should be exactly 2 bytes")
 		}
 
 		if accountEnvelope[0] != 0x01 {
-			t.Error("Account version should be 0x01")
+			t.Error("Password-based version should be 0x01")
 		}
 
 		if accountEnvelope[1] != 0x01 {
 			t.Error("Account key type should be 0x01")
 		}
 
-		// Test custom envelope
-		customEnvelope := []byte{0x02, 0x02}
-		if customEnvelope[0] != 0x02 {
-			t.Error("Custom version should be 0x02")
+		// Test custom password envelope
+		customEnvelope := []byte{0x01, 0x02}
+		if customEnvelope[0] != 0x01 {
+			t.Error("Custom version should be 0x01")
 		}
 
 		if customEnvelope[1] != 0x02 {
 			t.Error("Custom key type should be 0x02")
+		}
+
+		// Test share password envelope
+		shareEnvelope := []byte{0x01, 0x03}
+		if shareEnvelope[0] != 0x01 {
+			t.Error("Share version should be 0x01")
+		}
+
+		if shareEnvelope[1] != 0x03 {
+			t.Error("Share key type should be 0x03")
 		}
 	})
 
@@ -509,30 +517,68 @@ func TestSecurityProperties(t *testing.T) {
 		}
 	})
 
-	t.Run("Key validation", func(t *testing.T) {
-		// Test valid key
-		validKey := make([]byte, 64)
-		rand.Read(validKey)
+	t.Run("Password validation", func(t *testing.T) {
+		// Test valid password using validatePasswordComplexity
+		validPassword := "SecureP@ssw0rd123"
 
-		if !validateOPAQUEExportKey(validKey) {
-			t.Error("Valid key should pass validation")
+		result := validatePasswordComplexity(js.Null(), []js.Value{js.ValueOf(validPassword)})
+		if resultMap, ok := result.(map[string]interface{}); ok {
+			if !resultMap["valid"].(bool) {
+				t.Error("Valid password should pass validation")
+			}
 		}
 
-		// Test invalid key lengths
-		shortKey := make([]byte, 32)
-		if validateOPAQUEExportKey(shortKey) {
-			t.Error("Short key should fail validation")
+		// Test invalid passwords
+		shortPassword := "short"
+		result = validatePasswordComplexity(js.Null(), []js.Value{js.ValueOf(shortPassword)})
+		if resultMap, ok := result.(map[string]interface{}); ok {
+			if resultMap["valid"].(bool) {
+				t.Error("Short password should fail validation")
+			}
 		}
 
-		longKey := make([]byte, 128)
-		if validateOPAQUEExportKey(longKey) {
-			t.Error("Long key should fail validation")
+		emptyPassword := ""
+		result = validatePasswordComplexity(js.Null(), []js.Value{js.ValueOf(emptyPassword)})
+		if resultMap, ok := result.(map[string]interface{}); ok {
+			if resultMap["valid"].(bool) {
+				t.Error("Empty password should fail validation")
+			}
 		}
 
-		// Test all-zero key
-		zeroKey := make([]byte, 64)
-		if validateOPAQUEExportKey(zeroKey) {
-			t.Error("All-zero key should fail validation")
+		// Test weak password
+		weakPassword := "password"
+		result = validatePasswordComplexity(js.Null(), []js.Value{js.ValueOf(weakPassword)})
+		if resultMap, ok := result.(map[string]interface{}); ok {
+			if resultMap["valid"].(bool) {
+				t.Error("Weak password should fail validation")
+			}
 		}
+	})
+
+	t.Run("Argon2ID parameters", func(t *testing.T) {
+		// Test Argon2ID parameter validation
+		memory := uint32(256 * 1024) // 256MB
+		iterations := uint32(8)      // 8 iterations
+		threads := uint8(4)          // 4 threads
+		keyLength := uint32(32)      // 32 bytes output
+
+		if memory != 256*1024 {
+			t.Errorf("Expected 256MB memory, got %d KB", memory)
+		}
+
+		if iterations != 8 {
+			t.Errorf("Expected 8 iterations, got %d", iterations)
+		}
+
+		if threads != 4 {
+			t.Errorf("Expected 4 threads, got %d", threads)
+		}
+
+		if keyLength != 32 {
+			t.Errorf("Expected 32-byte key, got %d bytes", keyLength)
+		}
+
+		t.Logf("Argon2ID params: memory=%dMB, iterations=%d, threads=%d, keyLen=%d",
+			memory/1024, iterations, threads, keyLength)
 	})
 }

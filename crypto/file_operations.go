@@ -3,7 +3,6 @@ package crypto
 import (
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -187,80 +186,6 @@ func (m *ChunkManifest) ToJSON() ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// CreateChunkedEncryption encrypts data into chunks using OPAQUE-derived keys
-func CreateChunkedEncryption(data []byte, exportKey []byte, username, fileID string, chunkSize int, keyType string) (*ChunkManifest, map[int][]byte, error) {
-	if len(exportKey) != 64 {
-		return nil, nil, fmt.Errorf("export key must be 64 bytes, got %d", len(exportKey))
-	}
-
-	if chunkSize <= 0 || chunkSize > 100*1024*1024 {
-		return nil, nil, fmt.Errorf("invalid chunk size: %d (must be between 1 and 100MB)", chunkSize)
-	}
-
-	// Derive file encryption key based on key type
-	var fileKey []byte
-	var err error
-	switch keyType {
-	case "account":
-		fileKey, err = DeriveAccountFileKey(exportKey, username, fileID)
-	case "custom":
-		fileKey, err = DeriveOPAQUEFileKey(exportKey, fileID, username)
-	default:
-		return nil, nil, fmt.Errorf("unsupported key type: %s (supported: account, custom)", keyType)
-	}
-
-	if err != nil {
-		return nil, nil, fmt.Errorf("key derivation failed: %w", err)
-	}
-
-	// Create envelope
-	envelope := CreateBasicEnvelope(keyType)
-
-	// Split data into chunks and encrypt each
-	chunks := make(map[int][]byte)
-	var chunkInfos []ChunkInfo
-
-	totalChunks := (len(data) + chunkSize - 1) / chunkSize
-
-	for i := 0; i < totalChunks; i++ {
-		start := i * chunkSize
-		end := start + chunkSize
-		if end > len(data) {
-			end = len(data)
-		}
-
-		chunkData := data[start:end]
-
-		// Encrypt chunk using derived file key
-		encryptedChunk, err := EncryptGCM(chunkData, fileKey)
-		if err != nil {
-			return nil, nil, fmt.Errorf("chunk %d encryption failed: %w", i, err)
-		}
-
-		chunks[i] = encryptedChunk
-
-		// Calculate chunk hash
-		chunkHash := CalculateFileHash(encryptedChunk)
-
-		chunkInfos = append(chunkInfos, ChunkInfo{
-			Index: i,
-			File:  fmt.Sprintf("chunk_%d.enc", i),
-			Hash:  chunkHash,
-			Size:  len(encryptedChunk),
-		})
-	}
-
-	// Create manifest
-	manifest := &ChunkManifest{
-		Envelope:    hex.EncodeToString(envelope),
-		TotalChunks: totalChunks,
-		ChunkSize:   chunkSize,
-		Chunks:      chunkInfos,
-	}
-
-	return manifest, chunks, nil
-}
-
 // FormatFileSize converts bytes to human-readable format
 func FormatFileSize(bytes int64) string {
 	const unit = 1024
@@ -307,10 +232,10 @@ func VerifyFileIntegrity(filePath string, expectedHash string, expectedSize int6
 	return nil
 }
 
-// CreateBasicEnvelope creates a basic envelope header for testing
-func CreateBasicEnvelope(keyType string) []byte {
+// CreatePasswordEnvelope creates an envelope header for password-based encryption
+func CreatePasswordEnvelope(keyType string) []byte {
 	envelope := make([]byte, 2)
-	envelope[0] = 0x01 // Version 1
+	envelope[0] = 0x01 // Version 1 - Password-based Argon2ID encryption
 
 	switch keyType {
 	case "account":
@@ -326,13 +251,16 @@ func CreateBasicEnvelope(keyType string) []byte {
 	return envelope
 }
 
-// ParseBasicEnvelope parses a basic envelope header
-func ParseBasicEnvelope(envelope []byte) (version byte, keyType string, err error) {
+// ParsePasswordEnvelope parses a password-based envelope header
+func ParsePasswordEnvelope(envelope []byte) (version byte, keyType string, err error) {
 	if len(envelope) < 2 {
 		return 0, "", fmt.Errorf("envelope too short: need at least 2 bytes, got %d", len(envelope))
 	}
 
 	version = envelope[0]
+	if version != 0x01 {
+		return 0, "", fmt.Errorf("unsupported version: 0x%02x (expected 0x01 for password-based encryption)", version)
+	}
 
 	switch envelope[1] {
 	case 0x01:
@@ -346,4 +274,137 @@ func ParseBasicEnvelope(envelope []byte) (version byte, keyType string, err erro
 	}
 
 	return version, keyType, nil
+}
+
+// EncryptFileWithPassword encrypts file data using password-based key derivation
+func EncryptFileWithPassword(data []byte, password []byte, username, keyType string) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("cannot encrypt empty data")
+	}
+
+	if len(password) == 0 {
+		return nil, fmt.Errorf("password cannot be empty")
+	}
+
+	if username == "" {
+		return nil, fmt.Errorf("username cannot be empty")
+	}
+
+	// Derive key based on key type
+	var derivedKey []byte
+	switch keyType {
+	case "account":
+		derivedKey = DeriveAccountPasswordKey(password, username)
+	case "custom":
+		derivedKey = DeriveCustomPasswordKey(password, username)
+	case "share":
+		derivedKey = DeriveSharePasswordKey(password, username)
+	default:
+		return nil, fmt.Errorf("unsupported key type: %s (supported: account, custom, share)", keyType)
+	}
+
+	// Create envelope header using password-based envelope function
+	envelope := CreatePasswordEnvelope(keyType)
+
+	// Encrypt the data
+	encryptedData, err := EncryptGCM(data, derivedKey)
+	if err != nil {
+		return nil, fmt.Errorf("encryption failed: %w", err)
+	}
+
+	// Prepend envelope to encrypted data
+	result := make([]byte, len(envelope)+len(encryptedData))
+	copy(result, envelope)
+	copy(result[len(envelope):], encryptedData)
+
+	return result, nil
+}
+
+// DecryptFileWithPassword decrypts file data using password-based key derivation
+func DecryptFileWithPassword(encryptedData []byte, password []byte, username string) ([]byte, string, error) {
+	if len(encryptedData) < 2 {
+		return nil, "", fmt.Errorf("encrypted data too short: need at least 2 bytes for envelope, got %d", len(encryptedData))
+	}
+
+	if len(password) == 0 {
+		return nil, "", fmt.Errorf("password cannot be empty")
+	}
+
+	if username == "" {
+		return nil, "", fmt.Errorf("username cannot be empty")
+	}
+
+	// Parse envelope
+	envelope := encryptedData[:2]
+	ciphertext := encryptedData[2:]
+
+	_, keyType, err := ParsePasswordEnvelope(envelope)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to parse envelope: %w", err)
+	}
+
+	// Derive key based on key type from envelope
+	var derivedKey []byte
+	switch keyType {
+	case "account":
+		derivedKey = DeriveAccountPasswordKey(password, username)
+	case "custom":
+		derivedKey = DeriveCustomPasswordKey(password, username)
+	case "share":
+		derivedKey = DeriveSharePasswordKey(password, username)
+	default:
+		return nil, "", fmt.Errorf("unsupported key type: %s", keyType)
+	}
+
+	// Decrypt the data
+	plaintext, err := DecryptGCM(ciphertext, derivedKey)
+	if err != nil {
+		return nil, "", fmt.Errorf("decryption failed: %w", err)
+	}
+
+	return plaintext, keyType, nil
+}
+
+// EncryptFileToPath encrypts a file using password-based key derivation and writes to disk
+func EncryptFileToPath(inputPath, outputPath string, password []byte, username, keyType string) error {
+	// Read input file
+	inputData, err := os.ReadFile(inputPath)
+	if err != nil {
+		return fmt.Errorf("failed to read input file: %w", err)
+	}
+
+	// Encrypt data
+	encryptedData, err := EncryptFileWithPassword(inputData, password, username, keyType)
+	if err != nil {
+		return fmt.Errorf("encryption failed: %w", err)
+	}
+
+	// Write encrypted data to output file
+	if err := os.WriteFile(outputPath, encryptedData, 0600); err != nil {
+		return fmt.Errorf("failed to write encrypted file: %w", err)
+	}
+
+	return nil
+}
+
+// DecryptFileFromPath decrypts a file using password-based key derivation and writes to disk
+func DecryptFileFromPath(inputPath, outputPath string, password []byte, username string) (string, error) {
+	// Read encrypted file
+	encryptedData, err := os.ReadFile(inputPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read encrypted file: %w", err)
+	}
+
+	// Decrypt data
+	plaintext, keyType, err := DecryptFileWithPassword(encryptedData, password, username)
+	if err != nil {
+		return "", fmt.Errorf("decryption failed: %w", err)
+	}
+
+	// Write decrypted data to output file
+	if err := os.WriteFile(outputPath, plaintext, 0600); err != nil {
+		return "", fmt.Errorf("failed to write decrypted file: %w", err)
+	}
+
+	return keyType, nil
 }

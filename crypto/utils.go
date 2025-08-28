@@ -32,33 +32,47 @@ func SecureZeroBytes(slice []byte) {
 	}
 }
 
-// ValidateOPAQUEExportKey validates that an OPAQUE export key has the correct format
-func ValidateOPAQUEExportKey(exportKey []byte) error {
-	if len(exportKey) != 64 {
-		return fmt.Errorf("OPAQUE export key must be exactly 64 bytes, got %d", len(exportKey))
+// ValidatePasswordStrength validates that a password meets minimum requirements
+func ValidatePasswordStrength(password []byte) error {
+	if len(password) < 8 {
+		return fmt.Errorf("password must be at least 8 characters long, got %d", len(password))
 	}
 
-	// Check that key is not all zeros (indicates invalid/missing key)
-	allZeros := true
-	for _, b := range exportKey {
-		if b != 0 {
-			allZeros = false
-			break
-		}
+	if len(password) > 256 {
+		return fmt.Errorf("password too long: maximum 256 characters, got %d", len(password))
 	}
-	if allZeros {
-		return fmt.Errorf("OPAQUE export key cannot be all zeros")
+
+	// Check that password is not all the same character
+	if len(password) > 1 {
+		firstChar := password[0]
+		allSame := true
+		for _, b := range password[1:] {
+			if b != firstChar {
+				allSame = false
+				break
+			}
+		}
+		if allSame {
+			return fmt.Errorf("password cannot be all the same character")
+		}
 	}
 
 	return nil
 }
 
-// DeriveSecureSessionFromOPAQUE derives a session key from OPAQUE export key using HKDF
-func DeriveSecureSessionFromOPAQUE(exportKey []byte) ([]byte, error) {
-	if err := ValidateOPAQUEExportKey(exportKey); err != nil {
-		return nil, fmt.Errorf("invalid export key: %w", err)
+// DeriveSecureSessionFromPassword derives a session key from password using Argon2ID
+func DeriveSecureSessionFromPassword(password []byte, username string) ([]byte, error) {
+	if err := ValidatePasswordStrength(password); err != nil {
+		return nil, fmt.Errorf("invalid password: %w", err)
 	}
 
-	// Use the session key derivation from crypto/session.go
-	return DeriveSessionKey(exportKey, SessionKeyContext)
+	if username == "" {
+		return nil, fmt.Errorf("username cannot be empty")
+	}
+
+	// Derive session key using account password derivation
+	sessionKey := DeriveAccountPasswordKey(password, username)
+
+	// Use HKDF to derive final session key
+	return DeriveSessionKey(sessionKey, SessionKeyContext)
 }

@@ -122,17 +122,11 @@ func TestGenerateTestFileContent(t *testing.T) {
 	}
 }
 
-// TestOPAQUEFileEncryption tests OPAQUE-based file encryption/decryption
-func TestOPAQUEFileEncryption(t *testing.T) {
-	// Mock OPAQUE export key (64 bytes)
-	exportKey := make([]byte, 64)
-	for i := range exportKey {
-		exportKey[i] = byte(i % 256)
-	}
-
+// TestPasswordFileEncryption tests password-based file encryption/decryption
+func TestPasswordFileEncryption(t *testing.T) {
 	username := "test-user"
-	fileID := "test-document.pdf"
-	testData := []byte("This is test data for OPAQUE encryption validation")
+	password := []byte("test-password-123")
+	testData := []byte("This is test data for password-based encryption validation")
 
 	tests := []struct {
 		name    string
@@ -140,165 +134,60 @@ func TestOPAQUEFileEncryption(t *testing.T) {
 	}{
 		{"Account key", "account"},
 		{"Custom key", "custom"},
+		{"Share key", "share"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Derive key using the same method as the CLI
-			var derivedKey []byte
-			var err error
-			switch tt.keyType {
-			case "account":
-				derivedKey, err = DeriveAccountFileKey(exportKey, username, fileID)
-			case "custom":
-				derivedKey, err = DeriveOPAQUEFileKey(exportKey, fileID, username)
-			}
-
-			if err != nil {
-				t.Fatalf("Key derivation failed: %v", err)
-			}
-
-			// Encrypt data
-			encrypted, err := EncryptGCM(testData, derivedKey)
+			// Encrypt data using password-based encryption
+			encryptedData, err := EncryptFileWithPassword(testData, password, username, tt.keyType)
 			if err != nil {
 				t.Fatalf("Encryption failed: %v", err)
 			}
 
-			// Create envelope
-			envelope := CreateBasicEnvelope(tt.keyType)
-			envelopedData := make([]byte, len(envelope)+len(encrypted))
-			copy(envelopedData, envelope)
-			copy(envelopedData[len(envelope):], encrypted)
+			// Verify encrypted data has envelope + ciphertext
+			if len(encryptedData) <= 2 {
+				t.Fatalf("Encrypted data too short: %d bytes", len(encryptedData))
+			}
 
 			// Parse envelope
-			version, parsedKeyType, err := ParseBasicEnvelope(envelopedData[:2])
+			_, keyType, err := ParsePasswordEnvelope(encryptedData[:2])
 			if err != nil {
 				t.Fatalf("Envelope parsing failed: %v", err)
 			}
 
-			if version != 1 {
-				t.Errorf("Expected version 1, got %d", version)
+			if keyType != tt.keyType {
+				t.Errorf("Expected key type %s, got %s", tt.keyType, keyType)
 			}
 
-			if parsedKeyType != tt.keyType {
-				t.Errorf("Expected key type %s, got %s", tt.keyType, parsedKeyType)
-			}
-
-			// Decrypt data
-			decrypted, err := DecryptGCM(envelopedData[2:], derivedKey)
+			// Decrypt data using password-based decryption
+			decryptedData, returnedKeyType, err := DecryptFileWithPassword(encryptedData, password, username)
 			if err != nil {
 				t.Fatalf("Decryption failed: %v", err)
 			}
 
+			// Verify key type matches
+			if returnedKeyType != tt.keyType {
+				t.Errorf("Returned key type mismatch: expected %s, got %s", tt.keyType, returnedKeyType)
+			}
+
 			// Verify data integrity
-			if string(decrypted) != string(testData) {
-				t.Errorf("Decrypted data mismatch: expected %q, got %q", string(testData), string(decrypted))
+			if string(decryptedData) != string(testData) {
+				t.Errorf("Decrypted data mismatch: expected %q, got %q", string(testData), string(decryptedData))
 			}
 		})
 	}
 }
 
-// TestChunkedEncryptionOPAQUE tests OPAQUE-based chunked encryption
-func TestChunkedEncryptionOPAQUE(t *testing.T) {
-	// Create test data
-	testSize := 50 * 1024 // 50KB
-	testData, err := GenerateTestFileContent(int64(testSize), PatternSequential)
-	if err != nil {
-		t.Fatalf("Failed to generate test data: %v", err)
-	}
-
-	// Mock OPAQUE export key (64 bytes)
-	exportKey := make([]byte, 64)
-	for i := range exportKey {
-		exportKey[i] = byte(i % 256)
-	}
-
-	username := "chunk-test-user"
-	fileID := "large-file.dat"
-	chunkSize := 16 * 1024 // 16KB chunks
-	keyType := "account"
-
-	// Create chunked encryption
-	manifest, chunks, err := CreateChunkedEncryption(testData, exportKey, username, fileID, chunkSize, keyType)
-	if err != nil {
-		t.Fatalf("Chunked encryption failed: %v", err)
-	}
-
-	// Verify manifest
-	if manifest.TotalChunks != 4 { // 50KB / 16KB = ~4 chunks
-		t.Errorf("Expected ~4 chunks, got %d", manifest.TotalChunks)
-	}
-
-	if manifest.ChunkSize != chunkSize {
-		t.Errorf("Expected chunk size %d, got %d", chunkSize, manifest.ChunkSize)
-	}
-
-	if len(manifest.Chunks) != len(chunks) {
-		t.Errorf("Chunk count mismatch: manifest=%d, actual=%d", len(manifest.Chunks), len(chunks))
-	}
-
-	// Verify each chunk can be decrypted
-	derivedKey, err := DeriveAccountFileKey(exportKey, username, fileID)
-	if err != nil {
-		t.Fatalf("Key derivation failed: %v", err)
-	}
-
-	var reconstructed []byte
-	for i := 0; i < manifest.TotalChunks; i++ {
-		chunkData, exists := chunks[i]
-		if !exists {
-			t.Fatalf("Missing chunk %d", i)
-		}
-
-		// Verify chunk hash matches manifest
-		expectedHash := manifest.Chunks[i].Hash
-		actualHash := CalculateFileHash(chunkData)
-		if actualHash != expectedHash {
-			t.Errorf("Chunk %d hash mismatch: expected %s, got %s", i, expectedHash, actualHash)
-		}
-
-		// Decrypt chunk
-		decrypted, err := DecryptGCM(chunkData, derivedKey)
-		if err != nil {
-			t.Fatalf("Failed to decrypt chunk %d: %v", i, err)
-		}
-
-		reconstructed = append(reconstructed, decrypted...)
-	}
-
-	// Verify reconstructed data matches original
-	if len(reconstructed) != len(testData) {
-		t.Errorf("Reconstructed data size mismatch: expected %d, got %d", len(testData), len(reconstructed))
-	}
-
-	originalHash := CalculateFileHash(testData)
-	reconstructedHash := CalculateFileHash(reconstructed)
-	if originalHash != reconstructedHash {
-		t.Errorf("Reconstructed data hash mismatch: expected %s, got %s", originalHash, reconstructedHash)
-	}
-}
-
-// TestOPAQUEKeyDerivationConsistency tests that key derivation is consistent
-func TestOPAQUEKeyDerivationConsistency(t *testing.T) {
-	exportKey := make([]byte, 64)
-	for i := range exportKey {
-		exportKey[i] = byte(i % 256)
-	}
-
+// TestPasswordKeyDerivationConsistency tests that password key derivation is consistent
+func TestPasswordKeyDerivationConsistency(t *testing.T) {
+	password := []byte("test-password-consistency")
 	username := "consistency-test"
-	fileID := "test-file.dat"
 
 	// Test multiple derivations produce same result
 	for i := 0; i < 5; i++ {
-		key1, err := DeriveAccountFileKey(exportKey, username, fileID)
-		if err != nil {
-			t.Fatalf("Key derivation %d failed: %v", i+1, err)
-		}
-
-		key2, err := DeriveAccountFileKey(exportKey, username, fileID)
-		if err != nil {
-			t.Fatalf("Key derivation %d (second) failed: %v", i+1, err)
-		}
+		key1 := DeriveAccountPasswordKey(password, username)
+		key2 := DeriveAccountPasswordKey(password, username)
 
 		if len(key1) != 32 {
 			t.Errorf("Key length should be 32 bytes, got %d", len(key1))
@@ -310,16 +199,16 @@ func TestOPAQUEKeyDerivationConsistency(t *testing.T) {
 	}
 
 	// Test different parameters produce different keys
-	key1, _ := DeriveAccountFileKey(exportKey, username, fileID)
-	key2, _ := DeriveAccountFileKey(exportKey, username+"different", fileID)
-	key3, _ := DeriveAccountFileKey(exportKey, username, fileID+"different")
+	key1 := DeriveAccountPasswordKey(password, username)
+	key2 := DeriveAccountPasswordKey(password, username+"different")
+	key3 := DeriveCustomPasswordKey(password, username)
 
 	if string(key1) == string(key2) {
 		t.Error("Different usernames should produce different keys")
 	}
 
 	if string(key1) == string(key3) {
-		t.Error("Different file IDs should produce different keys")
+		t.Error("Different key types should produce different keys")
 	}
 
 	if string(key2) == string(key3) {
@@ -619,7 +508,7 @@ func TestVerifyFileIntegrity(t *testing.T) {
 	}
 }
 
-func TestCreateAndParseBasicEnvelope(t *testing.T) {
+func TestCreateAndParsePasswordEnvelope(t *testing.T) {
 	tests := []struct {
 		keyType         string
 		expectedVersion byte
@@ -634,13 +523,13 @@ func TestCreateAndParseBasicEnvelope(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.keyType, func(t *testing.T) {
 			// Test envelope creation
-			envelope := CreateBasicEnvelope(tt.keyType)
+			envelope := CreatePasswordEnvelope(tt.keyType)
 			if len(envelope) != 2 {
 				t.Errorf("envelope should be 2 bytes, got %d", len(envelope))
 			}
 
 			// Test envelope parsing
-			version, keyType, err := ParseBasicEnvelope(envelope)
+			version, keyType, err := ParsePasswordEnvelope(envelope)
 			if err != nil {
 				t.Errorf("unexpected error parsing envelope: %v", err)
 				return
@@ -657,7 +546,7 @@ func TestCreateAndParseBasicEnvelope(t *testing.T) {
 	}
 }
 
-func TestParseBasicEnvelopeErrors(t *testing.T) {
+func TestParsePasswordEnvelopeErrors(t *testing.T) {
 	tests := []struct {
 		name        string
 		envelope    []byte
@@ -678,11 +567,16 @@ func TestParseBasicEnvelopeErrors(t *testing.T) {
 			envelope:    []byte{0x01, 0x01},
 			expectError: false,
 		},
+		{
+			name:        "unsupported version",
+			envelope:    []byte{0x02, 0x01},
+			expectError: true,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := ParseBasicEnvelope(tt.envelope)
+			_, _, err := ParsePasswordEnvelope(tt.envelope)
 
 			if tt.expectError {
 				if err == nil {

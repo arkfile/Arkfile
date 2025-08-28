@@ -27,7 +27,10 @@ USAGE:
 COMMANDS:
     encrypt           Encrypt files using OPAQUE export keys
     decrypt           Decrypt files using OPAQUE export keys
+    encrypt-password  Encrypt files using password-based key derivation
+    decrypt-password  Decrypt files using password-based key derivation
     derive-key        Derive encryption keys from OPAQUE export keys
+    derive-export-key Derive OPAQUE export key from username/password
     hash              Calculate SHA-256 hash of files
     generate-key      Generate random AES keys
     generate-test-file Generate test files with deterministic patterns
@@ -127,6 +130,20 @@ func main() {
 			logError("Key derivation failed: %v", err)
 			os.Exit(1)
 		}
+	case "encrypt-password":
+		if err := handleEncryptPasswordCommand(args); err != nil {
+			logError("Password-based encryption failed: %v", err)
+			os.Exit(1)
+		}
+	case "decrypt-password":
+		if err := handleDecryptPasswordCommand(args); err != nil {
+			logError("Password-based decryption failed: %v", err)
+			os.Exit(1)
+		}
+	case "derive-export-key":
+		logError("derive-export-key command is not available in offline mode")
+		logError("OPAQUE export key derivation requires server keys and user records")
+		os.Exit(1)
 	case "hash":
 		if err := handleHashCommand(args); err != nil {
 			logError("Hash calculation failed: %v", err)
@@ -222,18 +239,18 @@ EXAMPLES:
 
 	logVerbose("File size: %d bytes", len(fileData))
 
-	// Derive file encryption key
+	// Derive file encryption key using password-based derivation
 	var fileKey []byte
 	var version, keyTypeByte byte
 
 	if *keyType == "account" {
 		version = 0x01
 		keyTypeByte = 0x01
-		fileKey, err = crypto.DeriveAccountFileKey(exportKeyBytes, *username, *fileID)
+		fileKey, err = crypto.DerivePasswordFileKey(exportKeyBytes, nil, *fileID, *username)
 	} else {
 		version = 0x02
 		keyTypeByte = 0x02
-		fileKey, err = crypto.DeriveOPAQUEFileKey(exportKeyBytes, *fileID, *username)
+		fileKey, err = crypto.DerivePasswordFileKey(exportKeyBytes, nil, *fileID, *username)
 	}
 
 	if err != nil {
@@ -396,13 +413,13 @@ EXAMPLES:
 		return fmt.Errorf("key type mismatch: specified %s but file contains %s", finalKeyType, detectedKeyType)
 	}
 
-	// Derive file encryption key
+	// Derive file encryption key using password-based derivation
 	var fileKey []byte
 
 	if finalKeyType == "account" {
-		fileKey, err = crypto.DeriveAccountFileKey(exportKeyBytes, *username, *fileID)
+		fileKey, err = crypto.DerivePasswordFileKey(exportKeyBytes, nil, *fileID, *username)
 	} else {
-		fileKey, err = crypto.DeriveOPAQUEFileKey(exportKeyBytes, *fileID, *username)
+		fileKey, err = crypto.DerivePasswordFileKey(exportKeyBytes, nil, *fileID, *username)
 	}
 
 	if err != nil {
@@ -503,13 +520,13 @@ EXAMPLES:
 		return fmt.Errorf("invalid export key format: %w", err)
 	}
 
-	// Derive file encryption key
+	// Derive file encryption key using password-based derivation
 	var fileKey []byte
 
 	if *keyType == "account" {
-		fileKey, err = crypto.DeriveAccountFileKey(exportKeyBytes, *username, *fileID)
+		fileKey, err = crypto.DerivePasswordFileKey(exportKeyBytes, nil, *fileID, *username)
 	} else {
-		fileKey, err = crypto.DeriveOPAQUEFileKey(exportKeyBytes, *fileID, *username)
+		fileKey, err = crypto.DerivePasswordFileKey(exportKeyBytes, nil, *fileID, *username)
 	}
 
 	if err != nil {
@@ -784,6 +801,219 @@ EXAMPLES:
 	return nil
 }
 
+// handleEncryptPasswordCommand processes encrypt-password command
+func handleEncryptPasswordCommand(args []string) error {
+	fs := flag.NewFlagSet("encrypt-password", flag.ExitOnError)
+	var (
+		filePath   = fs.String("file", "", "File to encrypt (required)")
+		username   = fs.String("username", "", "Username for salt generation (required)")
+		keyType    = fs.String("key-type", "account", "Key type: account, custom, or share")
+		outputPath = fs.String("output", "", "Output file path (optional)")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli encrypt-password [FLAGS]
+
+Encrypt files using password-based key derivation with unified Argon2ID parameters.
+Passwords are always prompted securely (hidden from view) for security.
+
+FLAGS:
+    --file FILE         File to encrypt (required)
+    --username USER     Username for salt generation (required)
+    --key-type TYPE     Key type: account, custom, or share (default: account)
+    --output FILE       Output file path (optional, defaults to input.enc)
+    --help             Show this help message
+
+KEY TYPES:
+    account             Account password encryption (uses username + "account" salt)
+    custom              Custom password encryption (uses username + "custom" salt)
+    share               Share password encryption (uses username + "share" salt)
+
+EXAMPLES:
+    cryptocli encrypt-password --file document.pdf --username alice --key-type account
+    cryptocli encrypt-password --file data.bin --username bob --key-type custom
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *filePath == "" {
+		return fmt.Errorf("file path is required")
+	}
+	if *username == "" {
+		return fmt.Errorf("username is required")
+	}
+
+	if *keyType != "account" && *keyType != "custom" && *keyType != "share" {
+		return fmt.Errorf("key type must be 'account', 'custom', or 'share'")
+	}
+
+	// Always prompt for password securely
+	fmt.Printf("Enter %s password for user '%s': ", *keyType, *username)
+	passwordStr, err := readPassword()
+	if err != nil {
+		return fmt.Errorf("failed to read password: %w", err)
+	}
+	if passwordStr == "" {
+		return fmt.Errorf("password cannot be empty")
+	}
+
+	// Validate password complexity based on key type
+	var validation *crypto.PasswordValidationResult
+	switch *keyType {
+	case "account":
+		validation = crypto.ValidateAccountPassword(passwordStr)
+	case "custom":
+		validation = crypto.ValidateCustomPassword(passwordStr)
+	case "share":
+		validation = crypto.ValidateSharePassword(passwordStr)
+	}
+
+	if !validation.MeetsRequirement {
+		fmt.Printf("\nPassword validation failed:\n")
+		fmt.Printf("  Entropy: %.2f bits (minimum: 60.0 bits required)\n", validation.Entropy)
+		fmt.Printf("  Strength score: %d/4\n", validation.StrengthScore)
+		if len(validation.Feedback) > 0 {
+			fmt.Printf("  Feedback:\n")
+			for _, feedback := range validation.Feedback {
+				fmt.Printf("    - %s\n", feedback)
+			}
+		}
+		if len(validation.PatternPenalties) > 0 {
+			fmt.Printf("  Security concerns:\n")
+			for _, penalty := range validation.PatternPenalties {
+				fmt.Printf("    - %s\n", penalty)
+			}
+		}
+		return fmt.Errorf("password does not meet security requirements")
+	}
+
+	logVerbose("Password validation passed: %.2f bits entropy (score: %d/4)", validation.Entropy, validation.StrengthScore)
+	logVerbose("Using unified Argon2ID parameters: 8 iterations, 256MB memory, 4 threads")
+
+	// Use core crypto function for encryption
+	if err := crypto.EncryptFileToPath(*filePath, getOutputPath(*filePath, *outputPath), []byte(passwordStr), *username, *keyType); err != nil {
+		return fmt.Errorf("encryption failed: %w", err)
+	}
+
+	// Clear password from memory
+	passwordStr = ""
+
+	// Get file sizes for reporting
+	inputInfo, err := os.Stat(*filePath)
+	if err != nil {
+		return fmt.Errorf("failed to get input file info: %w", err)
+	}
+
+	outputFilePath := getOutputPath(*filePath, *outputPath)
+	outputInfo, err := os.Stat(outputFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to get output file info: %w", err)
+	}
+
+	fmt.Printf("Password-based encryption completed successfully\n")
+	fmt.Printf("Input file: %s (%d bytes)\n", *filePath, inputInfo.Size())
+	fmt.Printf("Output file: %s (%d bytes)\n", outputFilePath, outputInfo.Size())
+	fmt.Printf("Key type: %s (version: 0x03)\n", *keyType)
+	fmt.Printf("Argon2ID parameters: 8 iterations, 256MB memory, 4 threads\n")
+
+	return nil
+}
+
+// handleDecryptPasswordCommand processes decrypt-password command
+func handleDecryptPasswordCommand(args []string) error {
+	fs := flag.NewFlagSet("decrypt-password", flag.ExitOnError)
+	var (
+		filePath   = fs.String("file", "", "File to decrypt (required)")
+		username   = fs.String("username", "", "Username for salt generation (required)")
+		keyType    = fs.String("key-type", "", "Key type: account, custom, or share (auto-detect if not specified)")
+		outputPath = fs.String("output", "", "Output file path (optional)")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli decrypt-password [FLAGS]
+
+Decrypt files using password-based key derivation with unified Argon2ID parameters.
+Passwords are always prompted securely (hidden from view) for security.
+
+FLAGS:
+    --file FILE         File to decrypt (required)
+    --username USER     Username for salt generation (required)
+    --key-type TYPE     Key type: account, custom, or share (auto-detect if not specified)
+    --output FILE       Output file path (optional, defaults to input.dec)
+    --help             Show this help message
+
+KEY TYPES:
+    account             Account password encryption (uses username + "account" salt)
+    custom              Custom password encryption (uses username + "custom" salt)
+    share               Share password encryption (uses username + "share" salt)
+
+EXAMPLES:
+    cryptocli decrypt-password --file document.pdf.enc --username alice --key-type account
+    cryptocli decrypt-password --file data.bin.enc --username bob --key-type custom
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *filePath == "" {
+		return fmt.Errorf("file path is required")
+	}
+	if *username == "" {
+		return fmt.Errorf("username is required")
+	}
+
+	// Always prompt for password securely
+	fmt.Printf("Enter password for user '%s': ", *username)
+	passwordStr, err := readPassword()
+	if err != nil {
+		return fmt.Errorf("failed to read password: %w", err)
+	}
+	if passwordStr == "" {
+		return fmt.Errorf("password cannot be empty")
+	}
+
+	logVerbose("Using unified Argon2ID parameters: 8 iterations, 256MB memory, 4 threads")
+
+	// Use core crypto function for decryption
+	outputFilePath := getOutputPath(*filePath, *outputPath)
+	detectedKeyType, err := crypto.DecryptFileFromPath(*filePath, outputFilePath, []byte(passwordStr), *username)
+	if err != nil {
+		return fmt.Errorf("decryption failed: %w", err)
+	}
+
+	// Clear password from memory
+	passwordStr = ""
+
+	// Validate key type if specified
+	if *keyType != "" && *keyType != detectedKeyType {
+		return fmt.Errorf("key type mismatch: specified %s but file contains %s", *keyType, detectedKeyType)
+	}
+
+	// Get file sizes for reporting
+	inputInfo, err := os.Stat(*filePath)
+	if err != nil {
+		return fmt.Errorf("failed to get input file info: %w", err)
+	}
+
+	outputInfo, err := os.Stat(outputFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to get output file info: %w", err)
+	}
+
+	fmt.Printf("Password-based decryption completed successfully\n")
+	fmt.Printf("Input file: %s (%d bytes)\n", *filePath, inputInfo.Size())
+	fmt.Printf("Output file: %s (%d bytes)\n", outputFilePath, outputInfo.Size())
+	fmt.Printf("Key type: %s (version: 0x03)\n", detectedKeyType)
+	fmt.Printf("Argon2ID parameters: 8 iterations, 256MB memory, 4 threads\n")
+
+	return nil
+}
+
 // Helper functions
 
 func printVersion() {
@@ -822,5 +1052,21 @@ func readPassword() (string, error) {
 			return "", err
 		}
 		return strings.TrimSpace(password), nil
+	}
+}
+
+// getOutputPath determines the output file path
+func getOutputPath(inputPath, outputPath string) string {
+	if outputPath != "" {
+		return outputPath
+	}
+
+	// Default output path
+	if strings.HasSuffix(inputPath, ".enc") {
+		// For decryption, remove .enc extension
+		return strings.TrimSuffix(inputPath, ".enc")
+	} else {
+		// For encryption, add .enc extension
+		return inputPath + ".enc"
 	}
 }

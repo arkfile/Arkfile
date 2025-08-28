@@ -5,32 +5,28 @@ package crypto
 
 import (
 	"encoding/base64"
-	"fmt"
 	"syscall/js"
 	"time"
 )
 
-// OPAQUE Export Key Processing Functions
-// Phase 5B Complete: All authenticated operations now use OPAQUE-only
+// Password-based Argon2ID Processing Functions
+// Replaces all OPAQUE export key functionality with password-based encryption
 
 // JavaScript-callable functions for WASM
 
-// validateOPAQUEExportKeyJS validates OPAQUE export key format
-func validateOPAQUEExportKeyJS(this js.Value, args []js.Value) interface{} {
+// validatePasswordStrengthJS validates password strength format
+func validatePasswordStrengthJS(this js.Value, args []js.Value) interface{} {
 	if len(args) != 1 {
 		return map[string]interface{}{
 			"valid": false,
-			"error": "Invalid arguments: expected exportKey",
+			"error": "Invalid arguments: expected password",
 		}
 	}
 
-	// Convert JavaScript Uint8Array to Go bytes
-	exportKeyJS := args[0]
-	exportKey := make([]byte, exportKeyJS.Length())
-	js.CopyBytesToGo(exportKey, exportKeyJS)
+	password := args[0].String()
 
-	// Validate the export key
-	if err := ValidateOPAQUEExportKey(exportKey); err != nil {
+	// Validate the password strength
+	if err := ValidatePasswordStrength([]byte(password)); err != nil {
 		return map[string]interface{}{
 			"valid": false,
 			"error": err.Error(),
@@ -39,26 +35,24 @@ func validateOPAQUEExportKeyJS(this js.Value, args []js.Value) interface{} {
 
 	return map[string]interface{}{
 		"valid":   true,
-		"message": "OPAQUE export key is valid",
+		"message": "Password meets strength requirements",
 	}
 }
 
-// deriveSecureSessionFromOPAQUEJS derives session key from OPAQUE export key
-func deriveSecureSessionFromOPAQUEJS(this js.Value, args []js.Value) interface{} {
-	if len(args) != 1 {
+// deriveSecureSessionFromPasswordJS derives session key from password
+func deriveSecureSessionFromPasswordJS(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected exportKey",
+			"error":   "Invalid arguments: expected password, username",
 		}
 	}
 
-	// Convert JavaScript Uint8Array to Go bytes
-	exportKeyJS := args[0]
-	exportKey := make([]byte, exportKeyJS.Length())
-	js.CopyBytesToGo(exportKey, exportKeyJS)
+	password := args[0].String()
+	username := args[1].String()
 
 	// Derive session key
-	sessionKey, err := DeriveSecureSessionFromOPAQUE(exportKey)
+	sessionKey, err := DeriveSecureSessionFromPassword([]byte(password), username)
 	if err != nil {
 		return map[string]interface{}{
 			"success": false,
@@ -76,154 +70,91 @@ func deriveSecureSessionFromOPAQUEJS(this js.Value, args []js.Value) interface{}
 	}
 }
 
-// RegisterWASMFunctions registers core OPAQUE functions with JavaScript
+// RegisterWASMFunctions registers core password-based functions with JavaScript
 func RegisterWASMFunctions() {
-	js.Global().Set("validateOPAQUEExportKey", js.FuncOf(validateOPAQUEExportKeyJS))
-	js.Global().Set("deriveSecureSessionFromOPAQUE", js.FuncOf(deriveSecureSessionFromOPAQUEJS))
+	js.Global().Set("validatePasswordStrength", js.FuncOf(validatePasswordStrengthJS))
+	js.Global().Set("deriveSecureSessionFromPassword", js.FuncOf(deriveSecureSessionFromPasswordJS))
 }
 
-// RegisterExtendedWASMFunctions registers additional OPAQUE functions
+// RegisterExtendedWASMFunctions registers additional password-based functions
 func RegisterExtendedWASMFunctions() {
 	RegisterWASMFunctions() // Register basic functions first
 	// Extended functions will be added here as needed
 }
 
-// opaqueHealthCheckJS provides a simple health check for OPAQUE readiness
-func opaqueHealthCheckJS(this js.Value, args []js.Value) interface{} {
+// passwordHealthCheckJS provides a simple health check for password-based readiness
+func passwordHealthCheckJS(this js.Value, args []js.Value) interface{} {
 	return map[string]interface{}{
-		"wasmReady":   true,
-		"timestamp":   time.Now().Unix(),
-		"opaqueReady": true, // WASM is ready means OPAQUE can work
+		"wasmReady":     true,
+		"timestamp":     time.Now().Unix(),
+		"passwordReady": true, // WASM is ready means password-based crypto can work
 	}
 }
 
-// wasmSystemInfoJS provides basic system information for OPAQUE operations
+// wasmSystemInfoJS provides basic system information for password-based operations
 func wasmSystemInfoJS(this js.Value, args []js.Value) interface{} {
 	return map[string]interface{}{
-		"wasmReady":   true,
-		"opaqueReady": true,
-		"timestamp":   time.Now().Unix(),
-		"message":     "WASM crypto system ready for OPAQUE operations",
+		"wasmReady":     true,
+		"passwordReady": true,
+		"timestamp":     time.Now().Unix(),
+		"message":       "WASM crypto system ready for password-based operations",
 	}
 }
 
 // Helper functions for secure session file operations
 
-// encryptFileWithSessionKey encrypts file data using a session key (account password type)
-func encryptFileWithSessionKey(fileData []byte, sessionKey []byte) (string, error) {
-	// Import required packages locally
-	aes, err := func() (interface{}, error) {
-		return nil, nil // Placeholder - will use existing encryption logic
-	}()
-	_ = aes
-
-	// Use OPAQUE-based format (this is a compatibility placeholder)
-	// Format version 0x01 = OPAQUE Account, keyType 0x01 = account password
-	result := []byte{0x01, 0x01}
-
-	// Generate a dummy salt since we already have the session key
-	salt := make([]byte, 16)
-	for i := range salt {
-		salt[i] = 0x00 // Use zero salt since session key is already derived
-	}
-
-	// Use the GCM encryption implementation from existing WASM code
-	// This leverages the crypto functions already available in the WASM environment
-	encryptedData, err := encryptWithGCM(fileData, sessionKey)
+// encryptFileWithPasswordKey encrypts file data using a password-derived key
+func encryptFileWithPasswordKey(fileData []byte, password []byte, username, keyType string) (string, error) {
+	// Encrypt using password-based key derivation
+	encryptedData, err := EncryptFileWithPassword(fileData, password, username, keyType)
 	if err != nil {
 		return "", err
 	}
 
-	// Combine format header, salt, and encrypted data
-	result = append(result, salt...)
-	result = append(result, encryptedData...)
-
-	return base64.StdEncoding.EncodeToString(result), nil
+	return base64.StdEncoding.EncodeToString(encryptedData), nil
 }
 
-// decryptFileWithSessionKey decrypts file data using a session key (account password type)
-func decryptFileWithSessionKey(encryptedDataB64 string, sessionKey []byte) (string, error) {
+// decryptFileWithPasswordKey decrypts file data using a password-derived key
+func decryptFileWithPasswordKey(encryptedDataB64 string, password []byte, username string) (string, string, error) {
 	// Decode base64
 	data, err := base64.StdEncoding.DecodeString(encryptedDataB64)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	// Check format
-	if len(data) < 18 { // version(1) + keyType(1) + salt(16)
-		return "", fmt.Errorf("invalid encrypted data format")
-	}
-
-	version := data[0]
-	keyType := data[1]
-
-	if version != 0x04 {
-		return "", fmt.Errorf("unsupported encryption version")
-	}
-
-	if keyType != 0x01 {
-		return "", fmt.Errorf("expected account password type")
-	}
-
-	// Skip salt (bytes 2-17) since we have the session key
-	encryptedData := data[18:]
-
-	// Decrypt using GCM
-	decryptedData, err := decryptWithGCM(encryptedData, sessionKey)
+	// Decrypt using password-based key derivation
+	decryptedData, keyType, err := DecryptFileWithPassword(data, password, username)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	return base64.StdEncoding.EncodeToString(decryptedData), nil
-}
-
-// encryptWithGCM encrypts data using AES-GCM with proper cryptographic security
-func encryptWithGCM(data []byte, key []byte) ([]byte, error) {
-	// Use the real AES-GCM implementation from crypto/gcm.go
-	return EncryptGCM(data, key)
-}
-
-// decryptWithGCM decrypts data using AES-GCM with proper cryptographic security
-func decryptWithGCM(encryptedData []byte, key []byte) ([]byte, error) {
-	// Use the real AES-GCM implementation from crypto/gcm.go
-	return DecryptGCM(encryptedData, key)
+	return base64.StdEncoding.EncodeToString(decryptedData), keyType, nil
 }
 
 // Secure session storage - NEVER exposed to JavaScript
 var secureSessionStorage = make(map[string][]byte)
 
-// createSecureSessionFromOpaqueExportJS creates a secure session from OPAQUE export key
-// This replaces the vulnerable client-side session key storage
-func createSecureSessionFromOpaqueExportJS(this js.Value, args []js.Value) interface{} {
+// createSecureSessionFromPasswordJS creates a secure session from password
+func createSecureSessionFromPasswordJS(this js.Value, args []js.Value) interface{} {
 	if len(args) != 2 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected opaqueExport, username",
+			"error":   "Invalid arguments: expected password, username",
 		}
 	}
 
-	// Get arguments
-	opaqueExportB64 := args[0].String()
+	password := args[0].String()
 	username := args[1].String()
 
-	if opaqueExportB64 == "" || username == "" {
+	if password == "" || username == "" {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "opaqueExport and username cannot be empty",
+			"error":   "Password and username cannot be empty",
 		}
 	}
 
-	// Decode the OPAQUE export key
-	opaqueExportKey, err := base64.StdEncoding.DecodeString(opaqueExportB64)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to decode OPAQUE export key",
-		}
-	}
-
-	// Derive session key using proper HKDF-SHA256 with domain separation
-	sessionKey, err := DeriveSessionKey(opaqueExportKey, SessionKeyContext)
+	// Derive session key using password-based derivation
+	sessionKey, err := DeriveSecureSessionFromPassword([]byte(password), username)
 	if err != nil {
 		return map[string]interface{}{
 			"success": false,
@@ -240,19 +171,20 @@ func createSecureSessionFromOpaqueExportJS(this js.Value, args []js.Value) inter
 	}
 }
 
-// encryptFileWithSecureSessionJS encrypts file using secure session (account password type)
+// encryptFileWithSecureSessionJS encrypts file using secure session
 func encryptFileWithSecureSessionJS(this js.Value, args []js.Value) interface{} {
-	if len(args) != 2 {
+	if len(args) != 3 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected fileData, username",
+			"error":   "Invalid arguments: expected fileData, username, keyType",
 		}
 	}
 
 	username := args[1].String()
+	keyType := args[2].String()
 
-	// Get session key from secure storage
-	sessionKey, exists := secureSessionStorage[username]
+	// Get session key from secure storage (this represents the password)
+	password, exists := secureSessionStorage[username]
 	if !exists {
 		return map[string]interface{}{
 			"success": false,
@@ -264,8 +196,8 @@ func encryptFileWithSecureSessionJS(this js.Value, args []js.Value) interface{} 
 	fileData := make([]byte, args[0].Length())
 	js.CopyBytesToGo(fileData, args[0])
 
-	// Use the existing file encryption logic but with secure session key
-	encryptedData, err := encryptFileWithSessionKey(fileData, sessionKey)
+	// Encrypt file using password-based encryption
+	encryptedData, err := encryptFileWithPasswordKey(fileData, password, username, keyType)
 	if err != nil {
 		return map[string]interface{}{
 			"success": false,
@@ -279,7 +211,7 @@ func encryptFileWithSecureSessionJS(this js.Value, args []js.Value) interface{} 
 	}
 }
 
-// decryptFileWithSecureSessionJS decrypts file using secure session (account password type)
+// decryptFileWithSecureSessionJS decrypts file using secure session
 func decryptFileWithSecureSessionJS(this js.Value, args []js.Value) interface{} {
 	if len(args) != 2 {
 		return map[string]interface{}{
@@ -291,8 +223,8 @@ func decryptFileWithSecureSessionJS(this js.Value, args []js.Value) interface{} 
 	encryptedData := args[0].String()
 	username := args[1].String()
 
-	// Get session key from secure storage
-	sessionKey, exists := secureSessionStorage[username]
+	// Get session key from secure storage (this represents the password)
+	password, exists := secureSessionStorage[username]
 	if !exists {
 		return map[string]interface{}{
 			"success": false,
@@ -301,7 +233,7 @@ func decryptFileWithSecureSessionJS(this js.Value, args []js.Value) interface{} 
 	}
 
 	// Decrypt the file
-	decryptedData, err := decryptFileWithSessionKey(encryptedData, sessionKey)
+	decryptedData, keyType, err := decryptFileWithPasswordKey(encryptedData, password, username)
 	if err != nil {
 		return map[string]interface{}{
 			"success": false,
@@ -312,6 +244,7 @@ func decryptFileWithSecureSessionJS(this js.Value, args []js.Value) interface{} 
 	return map[string]interface{}{
 		"success": true,
 		"data":    decryptedData,
+		"keyType": keyType,
 	}
 }
 
@@ -371,7 +304,9 @@ func clearSecureSessionJS(this js.Value, args []js.Value) interface{} {
 	}
 }
 
-// validatePasswordComplexityJS provides password complexity validation from WASM using zxcvbn
+// Password validation functions
+
+// validatePasswordComplexityJS provides password complexity validation
 func validatePasswordComplexityJS(this js.Value, args []js.Value) interface{} {
 	if len(args) != 1 {
 		return map[string]interface{}{
@@ -383,7 +318,7 @@ func validatePasswordComplexityJS(this js.Value, args []js.Value) interface{} {
 
 	password := args[0].String()
 
-	// Use our zxcvbn-based validation
+	// Use our password validation
 	result := ValidateAccountPassword(password)
 
 	// Convert feedback to requirements/missing format for legacy compatibility
@@ -404,7 +339,7 @@ func validatePasswordComplexityJS(this js.Value, args []js.Value) interface{} {
 		score += 20 // Bonus for meeting entropy requirement
 	}
 
-	// Determine message based on zxcvbn score
+	// Determine message based on strength score
 	var message string
 	valid := result.MeetsRequirement
 
@@ -480,232 +415,6 @@ func validatePasswordConfirmationJS(this js.Value, args []js.Value) interface{} 
 	}
 }
 
-// validateTOTPCodeJS validates a TOTP code using secure session
-func validateTOTPCodeJS(this js.Value, args []js.Value) interface{} {
-	if len(args) != 2 {
-		return map[string]interface{}{
-			"valid": false,
-			"error": "Invalid arguments: expected code, username",
-		}
-	}
-
-	code := args[0].String()
-	username := args[1].String()
-
-	// Validate input format
-	if len(code) != 6 {
-		return map[string]interface{}{
-			"valid": false,
-			"error": "TOTP code must be 6 digits",
-		}
-	}
-
-	// Check if code contains only digits
-	for _, r := range code {
-		if r < '0' || r > '9' {
-			return map[string]interface{}{
-				"valid": false,
-				"error": "TOTP code must contain only digits",
-			}
-		}
-	}
-
-	// Get session key from secure storage
-	sessionKey, exists := secureSessionStorage[username]
-	if !exists {
-		return map[string]interface{}{
-			"valid": false,
-			"error": "No secure session found for user",
-		}
-	}
-
-	// Note: In a real implementation, this would:
-	// 1. Use the session key to derive the TOTP secret
-	// 2. Calculate the expected TOTP value for current time window
-	// 3. Compare with provided code (with time window tolerance)
-	// For now, we provide a placeholder that indicates WASM processing
-
-	// Placeholder validation - in real implementation this would use proper TOTP algorithm
-	_ = sessionKey // Use sessionKey in actual implementation
-
-	// For demonstration, accept codes that follow a simple pattern
-	// In production, this would be replaced with proper TOTP validation
-	expectedPattern := "123456" // This would be calculated from TOTP secret + current time
-	if code == expectedPattern {
-		return map[string]interface{}{
-			"valid":   true,
-			"message": "TOTP code valid",
-		}
-	}
-
-	return map[string]interface{}{
-		"valid": false,
-		"error": "Invalid TOTP code",
-	}
-}
-
-// validateBackupCodeJS validates a backup code using secure session
-func validateBackupCodeJS(this js.Value, args []js.Value) interface{} {
-	if len(args) != 2 {
-		return map[string]interface{}{
-			"valid": false,
-			"error": "Invalid arguments: expected code, username",
-		}
-	}
-
-	code := args[0].String()
-	username := args[1].String()
-
-	// Validate input format (backup codes are typically longer than TOTP codes)
-	if len(code) < 8 || len(code) > 16 {
-		return map[string]interface{}{
-			"valid": false,
-			"error": "Backup code format invalid",
-		}
-	}
-
-	// Get session key from secure storage
-	sessionKey, exists := secureSessionStorage[username]
-	if !exists {
-		return map[string]interface{}{
-			"valid": false,
-			"error": "No secure session found for user",
-		}
-	}
-
-	// Note: In a real implementation, this would:
-	// 1. Use the session key to access stored backup codes (encrypted)
-	// 2. Check if the provided code matches any unused backup code
-	// 3. Mark the backup code as used if valid
-	// For now, we provide a placeholder that indicates WASM processing
-
-	// Placeholder validation - in real implementation this would check against stored backup codes
-	_ = sessionKey // Use sessionKey in actual implementation
-
-	// For demonstration, accept a specific backup code format
-	// In production, this would check against encrypted stored backup codes
-	if len(code) >= 10 && code[0:3] == "BAK" {
-		return map[string]interface{}{
-			"valid":   true,
-			"message": "Backup code valid",
-		}
-	}
-
-	return map[string]interface{}{
-		"valid": false,
-		"error": "Invalid backup code",
-	}
-}
-
-// generateTOTPSetupDataJS generates TOTP setup data using secure session
-func generateTOTPSetupDataJS(this js.Value, args []js.Value) interface{} {
-	if len(args) != 1 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Invalid arguments: expected username",
-		}
-	}
-
-	username := args[0].String()
-
-	// Get session key from secure storage
-	sessionKey, exists := secureSessionStorage[username]
-	if !exists {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "No secure session found for user",
-		}
-	}
-
-	// Note: In a real implementation, this would:
-	// 1. Generate a cryptographically secure TOTP secret
-	// 2. Use session key to encrypt and store the secret
-	// 3. Generate QR code URL and manual entry code
-	// 4. Generate backup codes
-	// For now, we provide a placeholder that indicates WASM processing
-
-	// Placeholder implementation - in production this would generate real TOTP setup
-	_ = sessionKey // Use sessionKey in actual implementation
-
-	// Generate placeholder setup data
-	return map[string]interface{}{
-		"success": true,
-		"data": map[string]interface{}{
-			"secret":      "WASM_GENERATED_SECRET_123456789012", // Base32 secret
-			"qrCodeUrl":   "otpauth://totp/Arkfile:" + username + "?secret=WASM_GENERATED_SECRET_123456789012&issuer=Arkfile",
-			"manualEntry": "WASM GENE RATE DSEC RET1 2345 6789 012",
-			"backupCodes": []string{
-				"BAK123456789",
-				"BAK987654321",
-				"BAK456789123",
-				"BAK321987654",
-				"BAK789123456",
-			},
-		},
-	}
-}
-
-// verifyTOTPSetupJS verifies TOTP setup during initial configuration
-func verifyTOTPSetupJS(this js.Value, args []js.Value) interface{} {
-	if len(args) != 3 {
-		return map[string]interface{}{
-			"valid": false,
-			"error": "Invalid arguments: expected code, secret, username",
-		}
-	}
-
-	code := args[0].String()
-	secret := args[1].String()
-	username := args[2].String()
-
-	// Validate input format
-	if len(code) != 6 {
-		return map[string]interface{}{
-			"valid": false,
-			"error": "TOTP code must be 6 digits",
-		}
-	}
-
-	if secret == "" {
-		return map[string]interface{}{
-			"valid": false,
-			"error": "TOTP secret required",
-		}
-	}
-
-	// Get session key from secure storage to validate user session
-	_, exists := secureSessionStorage[username]
-	if !exists {
-		return map[string]interface{}{
-			"valid": false,
-			"error": "No secure session found for user",
-		}
-	}
-
-	// Note: In a real implementation, this would:
-	// 1. Use the provided secret to calculate expected TOTP value
-	// 2. Compare with provided code (with time window tolerance)
-	// 3. Confirm TOTP setup if valid
-	// For now, we provide a placeholder that indicates WASM processing
-
-	// Placeholder verification - in production this would use proper TOTP algorithm with the secret
-	_ = secret // Use secret in actual TOTP calculation
-
-	// For demonstration, accept the expected pattern code
-	expectedPattern := "123456"
-	if code == expectedPattern {
-		return map[string]interface{}{
-			"valid":   true,
-			"message": "TOTP setup verified successfully",
-		}
-	}
-
-	return map[string]interface{}{
-		"valid": false,
-		"error": "TOTP verification failed - please try again",
-	}
-}
-
 // validatePasswordEntropyJS validates password entropy from JavaScript
 func validatePasswordEntropyJS(this js.Value, args []js.Value) interface{} {
 	if len(args) < 2 {
@@ -765,56 +474,7 @@ func calculatePasswordScoreJS(this js.Value, args []js.Value) interface{} {
 	}
 }
 
-// RegisterAllWASMFunctions registers all WASM functions
-func RegisterAllWASMFunctions() {
-	RegisterExtendedWASMFunctions()
-
-	// Add OPAQUE-compatible functions
-	js.Global().Set("opaqueHealthCheck", js.FuncOf(opaqueHealthCheckJS))
-	js.Global().Set("wasmSystemInfo", js.FuncOf(wasmSystemInfoJS))
-
-	// Add secure session management functions
-	js.Global().Set("createSecureSessionFromOpaqueExport", js.FuncOf(createSecureSessionFromOpaqueExportJS))
-	js.Global().Set("encryptFileWithSecureSession", js.FuncOf(encryptFileWithSecureSessionJS))
-	js.Global().Set("decryptFileWithSecureSession", js.FuncOf(decryptFileWithSecureSessionJS))
-	js.Global().Set("validateSecureSession", js.FuncOf(validateSecureSessionJS))
-	js.Global().Set("clearSecureSession", js.FuncOf(clearSecureSessionJS))
-
-	// Add password validation functions
-	js.Global().Set("validatePasswordComplexity", js.FuncOf(validatePasswordComplexityJS))
-	js.Global().Set("validatePasswordConfirmation", js.FuncOf(validatePasswordConfirmationJS))
-
-	// Add TOTP validation functions
-	js.Global().Set("validateTOTPCodeWASM", js.FuncOf(validateTOTPCodeJS))
-	js.Global().Set("validateBackupCodeWASM", js.FuncOf(validateBackupCodeJS))
-	js.Global().Set("generateTOTPSetupDataWASM", js.FuncOf(generateTOTPSetupDataJS))
-	js.Global().Set("verifyTOTPSetupWASM", js.FuncOf(verifyTOTPSetupJS))
-
-	// Add Phase 5E password validation functions
-	js.Global().Set("validatePasswordEntropy", js.FuncOf(validatePasswordEntropyJS))
-	js.Global().Set("calculatePasswordScore", js.FuncOf(calculatePasswordScoreJS))
-
-	// Add multi-key encryption with secure session functions
-	js.Global().Set("encryptFileMultiKeyWithSecureSession", js.FuncOf(encryptFileMultiKeyWithSecureSessionJS))
-	js.Global().Set("decryptFileMultiKeyWithSecureSession", js.FuncOf(decryptFileMultiKeyWithSecureSessionJS))
-	js.Global().Set("addKeyToEncryptedFileWithSecureSession", js.FuncOf(addKeyToEncryptedFileWithSecureSessionJS))
-
-	// Phase 5F: Enhanced password validation WASM exports
-	js.Global().Set("validatePasswordEntropyWASM", js.FuncOf(validatePasswordEntropyWASM))
-	js.Global().Set("validateAccountPasswordWASM", js.FuncOf(validateAccountPasswordWASM))
-	js.Global().Set("validateSharePasswordWASM", js.FuncOf(validateSharePasswordWASM))
-	js.Global().Set("validateCustomPasswordWASM", js.FuncOf(validateCustomPasswordWASM))
-
-	// Phase 6B: Anonymous Share System WASM Functions
-	js.Global().Set("generateSecureShareSaltWASM", js.FuncOf(generateSecureShareSaltWASM))
-	js.Global().Set("deriveShareKeyFromPasswordWASM", js.FuncOf(deriveShareKeyFromPasswordWASM))
-	js.Global().Set("encryptFEKWithShareKeyWASM", js.FuncOf(encryptFEKWithShareKeyWASM))
-	js.Global().Set("decryptFEKWithShareKeyWASM", js.FuncOf(decryptFEKWithShareKeyWASM))
-	js.Global().Set("validateSharePasswordEntropyWASM", js.FuncOf(validateSharePasswordEntropyWASM))
-	js.Global().Set("decryptFileWithFEKWASM", js.FuncOf(decryptFileWithFEKWASM))
-}
-
-// Phase 5F: WASM exports for enhanced password validation
+// WASM validation functions
 
 // validatePasswordEntropyWASM provides client-side password entropy validation
 func validatePasswordEntropyWASM(this js.Value, inputs []js.Value) interface{} {
@@ -898,380 +558,32 @@ func validateCustomPasswordWASM(this js.Value, inputs []js.Value) interface{} {
 	}
 }
 
-// encryptFileMultiKeyWithSecureSessionJS encrypts file with multi-key using secure session (account password type)
-func encryptFileMultiKeyWithSecureSessionJS(this js.Value, args []js.Value) interface{} {
-	if len(args) != 4 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Expected 4 arguments: fileData, username, primaryType, additionalKeys",
-		}
-	}
+// RegisterAllWASMFunctions registers all WASM functions
+func RegisterAllWASMFunctions() {
+	RegisterExtendedWASMFunctions()
 
-	// Extract arguments
-	fileDataJS := args[0]
-	username := args[1].String()
-	primaryType := args[2].String()
-	additionalKeysJS := args[3]
+	// Add password-compatible functions
+	js.Global().Set("passwordHealthCheck", js.FuncOf(passwordHealthCheckJS))
+	js.Global().Set("wasmSystemInfo", js.FuncOf(wasmSystemInfoJS))
 
-	// Convert file data from JavaScript Uint8Array to Go []byte
-	fileDataLen := fileDataJS.Get("length").Int()
-	fileData := make([]byte, fileDataLen)
-	js.CopyBytesToGo(fileData, fileDataJS)
+	// Add secure session management functions
+	js.Global().Set("createSecureSessionFromPassword", js.FuncOf(createSecureSessionFromPasswordJS))
+	js.Global().Set("encryptFileWithSecureSession", js.FuncOf(encryptFileWithSecureSessionJS))
+	js.Global().Set("decryptFileWithSecureSession", js.FuncOf(decryptFileWithSecureSessionJS))
+	js.Global().Set("validateSecureSession", js.FuncOf(validateSecureSessionJS))
+	js.Global().Set("clearSecureSession", js.FuncOf(clearSecureSessionJS))
 
-	// Check if user has a secure session
-	sessionKeyBytes, exists := secureSessionStorage[username]
-	if !exists {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "No secure session found for user. Please log in again.",
-		}
-	}
+	// Add password validation functions
+	js.Global().Set("validatePasswordComplexity", js.FuncOf(validatePasswordComplexityJS))
+	js.Global().Set("validatePasswordConfirmation", js.FuncOf(validatePasswordConfirmationJS))
 
-	// Convert additional keys from JavaScript array
-	additionalKeysLen := additionalKeysJS.Get("length").Int()
-	additionalKeys := make([]struct {
-		Password string `json:"password"`
-		ID       string `json:"id"`
-	}, additionalKeysLen)
+	// Add enhanced password validation functions
+	js.Global().Set("validatePasswordEntropy", js.FuncOf(validatePasswordEntropyJS))
+	js.Global().Set("calculatePasswordScore", js.FuncOf(calculatePasswordScoreJS))
 
-	for i := 0; i < additionalKeysLen; i++ {
-		keyJS := additionalKeysJS.Index(i)
-		additionalKeys[i].Password = keyJS.Get("password").String()
-		additionalKeys[i].ID = keyJS.Get("id").String()
-	}
-
-	// Use secure session to encrypt with multi-key format
-	// For now, use base64 encoding as placeholder for multi-key encryption
-	// In a real implementation, this would use the session key and additional keys
-	_ = primaryType     // Will be used in real implementation
-	_ = sessionKeyBytes // Will be used in real implementation
-	_ = additionalKeys  // Will be used in real implementation
-	encryptedData := base64.StdEncoding.EncodeToString(fileData)
-
-	return map[string]interface{}{
-		"success": true,
-		"data":    encryptedData,
-	}
-}
-
-// decryptFileMultiKeyWithSecureSessionJS decrypts multi-key file using secure session
-func decryptFileMultiKeyWithSecureSessionJS(this js.Value, args []js.Value) interface{} {
-	if len(args) != 2 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Expected 2 arguments: encryptedData, username",
-		}
-	}
-
-	encryptedData := args[0].String()
-	username := args[1].String()
-
-	// Check if user has a secure session
-	_, exists := secureSessionStorage[username]
-	if !exists {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "No secure session found for user. Please log in again.",
-		}
-	}
-
-	// Decrypt using secure session (placeholder implementation)
-	decryptedBytes, err := base64.StdEncoding.DecodeString(encryptedData)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to decrypt data: " + err.Error(),
-		}
-	}
-
-	// Convert to base64 for JavaScript
-	decryptedBase64 := base64.StdEncoding.EncodeToString(decryptedBytes)
-
-	return map[string]interface{}{
-		"success": true,
-		"data":    decryptedBase64,
-	}
-}
-
-// addKeyToEncryptedFileWithSecureSessionJS adds a key to encrypted file using secure session
-func addKeyToEncryptedFileWithSecureSessionJS(this js.Value, args []js.Value) interface{} {
-	if len(args) != 4 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Expected 4 arguments: encryptedData, username, newPassword, keyId",
-		}
-	}
-
-	encryptedData := args[0].String()
-	username := args[1].String()
-	newPassword := args[2].String()
-	keyId := args[3].String()
-
-	// Check if user has a secure session
-	_, exists := secureSessionStorage[username]
-	if !exists {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "No secure session found for user. Please log in again.",
-		}
-	}
-
-	// Add key to encrypted file (placeholder implementation)
-	// In a real implementation, this would decrypt with secure session,
-	// then re-encrypt with both the secure session key and new password
-	_ = newPassword // Will be used in real implementation
-	_ = keyId       // Will be used in real implementation
-
-	return map[string]interface{}{
-		"success": true,
-		"data":    encryptedData, // Return updated encrypted data
-	}
-}
-
-// Phase 6B: Anonymous Share System WASM Implementation
-
-// generateSecureShareSaltWASM generates a cryptographically secure 32-byte salt for Argon2id
-func generateSecureShareSaltWASM(this js.Value, args []js.Value) interface{} {
-	// Use the real cryptographically secure salt generation from crypto/share_kdf.go
-	salt, err := GenerateSecureSalt(32)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to generate secure salt: " + err.Error(),
-		}
-	}
-
-	// Convert salt to JavaScript Uint8Array
-	saltJS := js.Global().Get("Uint8Array").New(len(salt))
-	js.CopyBytesToJS(saltJS, salt)
-
-	return map[string]interface{}{
-		"success": true,
-		"salt":    saltJS,
-	}
-}
-
-// deriveShareKeyFromPasswordWASM derives share key using Argon2id with production parameters
-func deriveShareKeyFromPasswordWASM(this js.Value, args []js.Value) interface{} {
-	if len(args) != 2 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Invalid arguments: expected password, salt",
-		}
-	}
-
-	password := args[0].String()
-	saltJS := args[1]
-
-	// Convert JavaScript Uint8Array salt to Go bytes
-	salt := make([]byte, saltJS.Length())
-	js.CopyBytesToGo(salt, saltJS)
-
-	// Validate inputs
-	if len(password) < 18 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Share password must be at least 18 characters",
-		}
-	}
-
-	if len(salt) != 32 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Salt must be exactly 32 bytes",
-		}
-	}
-
-	// Use Argon2id from share_kdf.go
-	shareKey := DeriveShareKey([]byte(password), salt)
-
-	// Convert share key to JavaScript Uint8Array
-	shareKeyJS := js.Global().Get("Uint8Array").New(len(shareKey))
-	js.CopyBytesToJS(shareKeyJS, shareKey)
-
-	return map[string]interface{}{
-		"success":  true,
-		"shareKey": shareKeyJS,
-	}
-}
-
-// encryptFEKWithShareKeyWASM encrypts a File Encryption Key with the derived share key
-func encryptFEKWithShareKeyWASM(this js.Value, args []js.Value) interface{} {
-	if len(args) != 2 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Invalid arguments: expected fek, shareKey",
-		}
-	}
-
-	fekJS := args[0]
-	shareKeyJS := args[1]
-
-	// Convert JavaScript Uint8Arrays to Go bytes
-	fek := make([]byte, fekJS.Length())
-	js.CopyBytesToGo(fek, fekJS)
-
-	shareKey := make([]byte, shareKeyJS.Length())
-	js.CopyBytesToGo(shareKey, shareKeyJS)
-
-	// Validate inputs
-	if len(fek) != 32 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "FEK must be exactly 32 bytes",
-		}
-	}
-
-	if len(shareKey) != 32 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Share key must be exactly 32 bytes",
-		}
-	}
-
-	// Encrypt FEK with share key using AES-GCM
-	encryptedFEK, err := encryptWithGCM(fek, shareKey)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to encrypt FEK: " + err.Error(),
-		}
-	}
-
-	// Convert encrypted FEK to JavaScript Uint8Array
-	encryptedFEKJS := js.Global().Get("Uint8Array").New(len(encryptedFEK))
-	js.CopyBytesToJS(encryptedFEKJS, encryptedFEK)
-
-	return map[string]interface{}{
-		"success":      true,
-		"encryptedFEK": encryptedFEKJS,
-	}
-}
-
-// decryptFEKWithShareKeyWASM decrypts a File Encryption Key with the derived share key
-func decryptFEKWithShareKeyWASM(this js.Value, args []js.Value) interface{} {
-	if len(args) != 2 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Invalid arguments: expected encryptedFEK, shareKey",
-		}
-	}
-
-	encryptedFEKJS := args[0]
-	shareKeyJS := args[1]
-
-	// Convert JavaScript Uint8Arrays to Go bytes
-	encryptedFEK := make([]byte, encryptedFEKJS.Length())
-	js.CopyBytesToGo(encryptedFEK, encryptedFEKJS)
-
-	shareKey := make([]byte, shareKeyJS.Length())
-	js.CopyBytesToGo(shareKey, shareKeyJS)
-
-	// Validate inputs
-	if len(shareKey) != 32 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Share key must be exactly 32 bytes",
-		}
-	}
-
-	if len(encryptedFEK) < 28 { // nonce(12) + minimum data(1) + tag(16)
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Encrypted FEK too short",
-		}
-	}
-
-	// Decrypt FEK with share key using AES-GCM
-	fek, err := decryptWithGCM(encryptedFEK, shareKey)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to decrypt FEK: " + err.Error(),
-		}
-	}
-
-	// Convert FEK to JavaScript Uint8Array
-	fekJS := js.Global().Get("Uint8Array").New(len(fek))
-	js.CopyBytesToJS(fekJS, fek)
-
-	return map[string]interface{}{
-		"success": true,
-		"fek":     fekJS,
-	}
-}
-
-// validateSharePasswordEntropyWASM validates share password entropy with 60+ bit requirement
-func validateSharePasswordEntropyWASM(this js.Value, args []js.Value) interface{} {
-	if len(args) != 1 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Invalid arguments: expected password",
-		}
-	}
-
-	password := args[0].String()
-
-	// Use the enhanced password validation from password_validation.go
-	result := ValidateSharePassword(password)
-
-	return map[string]interface{}{
-		"success":            true,
-		"entropy":            result.Entropy,
-		"strength_score":     result.StrengthScore,
-		"feedback":           result.Feedback,
-		"meets_requirements": result.MeetsRequirement,
-		"pattern_penalties":  result.PatternPenalties,
-	}
-}
-
-// decryptFileWithFEKWASM decrypts file data using a File Encryption Key (FEK)
-func decryptFileWithFEKWASM(this js.Value, args []js.Value) interface{} {
-	if len(args) != 2 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Invalid arguments: expected encryptedFileBase64, fek",
-		}
-	}
-
-	encryptedFileBase64 := args[0].String()
-	fekJS := args[1]
-
-	// Convert JavaScript Uint8Array FEK to Go bytes
-	fek := make([]byte, fekJS.Length())
-	js.CopyBytesToGo(fek, fekJS)
-
-	// Validate inputs
-	if len(fek) != 32 {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "FEK must be exactly 32 bytes",
-		}
-	}
-
-	// Decode base64 encrypted file data
-	encryptedData, err := base64.StdEncoding.DecodeString(encryptedFileBase64)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to decode encrypted file data: " + err.Error(),
-		}
-	}
-
-	// Decrypt file data with FEK using AES-GCM
-	decryptedData, err := decryptWithGCM(encryptedData, fek)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to decrypt file data: " + err.Error(),
-		}
-	}
-
-	// Convert decrypted data to base64 for JavaScript
-	decryptedBase64 := base64.StdEncoding.EncodeToString(decryptedData)
-
-	return map[string]interface{}{
-		"success": true,
-		"data":    decryptedBase64,
-	}
+	// WASM exports for enhanced password validation
+	js.Global().Set("validatePasswordEntropyWASM", js.FuncOf(validatePasswordEntropyWASM))
+	js.Global().Set("validateAccountPasswordWASM", js.FuncOf(validateAccountPasswordWASM))
+	js.Global().Set("validateSharePasswordWASM", js.FuncOf(validateSharePasswordWASM))
+	js.Global().Set("validateCustomPasswordWASM", js.FuncOf(validateCustomPasswordWASM))
 }

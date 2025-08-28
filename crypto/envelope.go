@@ -8,45 +8,49 @@ import (
 type KeyType byte
 
 const (
-	KeyTypeAccount KeyType = 0x01 // OPAQUE account password
-	KeyTypeCustom  KeyType = 0x02 // OPAQUE custom password
+	KeyTypeAccount KeyType = 0x01 // Account password
+	KeyTypeCustom  KeyType = 0x02 // Custom password
+	KeyTypeShare   KeyType = 0x03 // Share password
 )
 
 // KeyInfo contains information about an encryption key
 type KeyInfo struct {
-	ID        string  // User-friendly identifier
-	Type      KeyType // Account or custom
-	ExportKey []byte  // OPAQUE export key (for both account and custom)
-	Username  string  // Username for HKDF context
-	FileID    string  // File ID for HKDF context
-	Hint      string  // Optional hint for custom passwords
+	ID       string  // User-friendly identifier
+	Type     KeyType // Account, custom, or share
+	Password []byte  // Password for key derivation
+	Salt     []byte  // Salt for Argon2ID
+	Username string  // Username for HKDF context
+	FileID   string  // File ID for HKDF context
+	Hint     string  // Optional hint for custom passwords
 }
 
 // FileEncryptionVersion represents file encryption format versions
 type FileEncryptionVersion byte
 
 const (
-	VersionOPAQUEAccount FileEncryptionVersion = 0x01 // OPAQUE account password
-	VersionOPAQUECustom  FileEncryptionVersion = 0x02 // OPAQUE custom password
+	VersionPasswordBased FileEncryptionVersion = 0x01 // Password-based encryption with Argon2ID
 )
 
-// CreateSingleKeyEnvelope creates a simple envelope for single-key encryption using OPAQUE
-func CreateSingleKeyEnvelope(fek []byte, keyInfo KeyInfo) ([]byte, error) {
-	version := VersionOPAQUECustom
-	if keyInfo.Type == KeyTypeAccount {
-		version = VersionOPAQUEAccount
-	}
+// CreatePasswordKeyEnvelope creates an envelope for password-based encryption
+func CreatePasswordKeyEnvelope(fek []byte, keyInfo KeyInfo) ([]byte, error) {
+	// All encryption is now password-based with version 0x01
+	version := VersionPasswordBased
 
-	// Derive Key Encryption Key (KEK) from OPAQUE export key using HKDF
+	// Derive Key Encryption Key (KEK) from password using Argon2ID
 	var kek []byte
 	var err error
-	if keyInfo.Type == KeyTypeAccount {
-		// Use account file key derivation
-		kek, err = DeriveAccountFileKey(keyInfo.ExportKey, keyInfo.Username, keyInfo.FileID)
-	} else {
-		// Use custom file key derivation (different HKDF context)
-		kek, err = DeriveOPAQUEFileKey(keyInfo.ExportKey, keyInfo.FileID, keyInfo.Username)
+
+	switch keyInfo.Type {
+	case KeyTypeAccount:
+		kek, err = DerivePasswordFileKey(keyInfo.Password, keyInfo.Salt, keyInfo.FileID, keyInfo.Username)
+	case KeyTypeCustom:
+		kek, err = DerivePasswordFileKey(keyInfo.Password, keyInfo.Salt, keyInfo.FileID, keyInfo.Username)
+	case KeyTypeShare:
+		kek, err = DerivePasswordShareKey(keyInfo.Password, keyInfo.Salt, keyInfo.FileID, keyInfo.Username)
+	default:
+		return nil, fmt.Errorf("unsupported key type: %d", keyInfo.Type)
 	}
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive KEK: %w", err)
 	}
@@ -57,40 +61,42 @@ func CreateSingleKeyEnvelope(fek []byte, keyInfo KeyInfo) ([]byte, error) {
 		return nil, fmt.Errorf("failed to encrypt FEK: %w", err)
 	}
 
-	// Build envelope: version + keyType + encryptedFEK (no salt needed - OPAQUE provides entropy)
+	// Build envelope: version + keyType + salt + encryptedFEK
 	result := []byte{byte(version), byte(keyInfo.Type)}
+	result = append(result, keyInfo.Salt...)
 	result = append(result, encryptedFEK...)
 
 	return result, nil
 }
 
-// ExtractFEKFromEnvelope attempts to extract the File Encryption Key using OPAQUE export key
-func ExtractFEKFromEnvelope(envelope []byte, exportKey []byte, username, fileID string) ([]byte, error) {
-	if len(envelope) < 2 {
+// ExtractFEKFromPasswordEnvelope extracts the File Encryption Key using password
+func ExtractFEKFromPasswordEnvelope(envelope []byte, password []byte, username, fileID string) ([]byte, error) {
+	if len(envelope) < 34 { // version(1) + keyType(1) + salt(32) + minimum encrypted data
 		return nil, fmt.Errorf("envelope too short")
 	}
 
 	version := FileEncryptionVersion(envelope[0])
 	keyType := KeyType(envelope[1])
-	encryptedFEK := envelope[2:]
+	salt := envelope[2:34]        // 32-byte salt
+	encryptedFEK := envelope[34:] // Rest is encrypted FEK
+
+	if version != VersionPasswordBased {
+		return nil, fmt.Errorf("unsupported envelope version: 0x%02x", version)
+	}
 
 	// Derive KEK based on key type
 	var kek []byte
 	var err error
 
-	switch version {
-	case VersionOPAQUEAccount:
-		if keyType != KeyTypeAccount {
-			return nil, fmt.Errorf("key type mismatch for account version")
-		}
-		kek, err = DeriveAccountFileKey(exportKey, username, fileID)
-	case VersionOPAQUECustom:
-		if keyType != KeyTypeCustom {
-			return nil, fmt.Errorf("key type mismatch for custom version")
-		}
-		kek, err = DeriveOPAQUEFileKey(exportKey, fileID, username)
+	switch keyType {
+	case KeyTypeAccount:
+		kek, err = DerivePasswordFileKey(password, salt, fileID, username)
+	case KeyTypeCustom:
+		kek, err = DerivePasswordFileKey(password, salt, fileID, username)
+	case KeyTypeShare:
+		kek, err = DerivePasswordShareKey(password, salt, fileID, username)
 	default:
-		return nil, fmt.Errorf("unsupported envelope version: 0x%02x", version)
+		return nil, fmt.Errorf("unsupported key type: %d", keyType)
 	}
 
 	if err != nil {
@@ -106,19 +112,24 @@ func ExtractFEKFromEnvelope(envelope []byte, exportKey []byte, username, fileID 
 	return fek, nil
 }
 
-// GetEnvelopeInfo returns information about an envelope without decrypting it
-func GetEnvelopeInfo(envelope []byte) (FileEncryptionVersion, KeyType, error) {
-	if len(envelope) < 2 {
-		return 0, 0, fmt.Errorf("envelope too short")
+// GetPasswordEnvelopeInfo returns information about a password-based envelope without decrypting it
+func GetPasswordEnvelopeInfo(envelope []byte) (FileEncryptionVersion, KeyType, []byte, error) {
+	if len(envelope) < 34 {
+		return 0, 0, nil, fmt.Errorf("envelope too short")
 	}
 
 	version := FileEncryptionVersion(envelope[0])
 	keyType := KeyType(envelope[1])
+	salt := envelope[2:34]
 
-	switch version {
-	case VersionOPAQUEAccount, VersionOPAQUECustom:
-		return version, keyType, nil
+	if version != VersionPasswordBased {
+		return 0, 0, nil, fmt.Errorf("unsupported envelope version: 0x%02x", version)
+	}
+
+	switch keyType {
+	case KeyTypeAccount, KeyTypeCustom, KeyTypeShare:
+		return version, keyType, salt, nil
 	default:
-		return 0, 0, fmt.Errorf("unsupported envelope version: 0x%02x", version)
+		return 0, 0, nil, fmt.Errorf("unsupported key type: %d", keyType)
 	}
 }
