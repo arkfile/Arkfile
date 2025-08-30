@@ -1498,15 +1498,11 @@ phase_9_file_operations() {
     
     info "Testing complete file encryption workflow using cryptocli with unified password architecture..."
     
-    # Check if cryptocli is available - REQUIRED for file operations
-    if ! command -v ./cmd/cryptocli/cryptocli >/dev/null 2>&1; then
-        info "Building cryptocli tool..."
-        if ! (cd cmd/cryptocli && go build -o cryptocli ./main.go 2>/dev/null); then
-            error "Failed to build cryptocli tool - this is required for Phase 9 file operations"
-        else
-            success "Built cryptocli tool successfully"
-        fi
+    # Ensure cryptocli is available from the deployed location
+    if ! command -v /opt/arkfile/bin/cryptocli >/dev/null 2>&1; then
+        error "cryptocli tool not found at /opt/arkfile/bin/cryptocli - Please re-run 'sudo scripts/dev-reset.sh'"
     fi
+    success "cryptocli tool available and ready"
     
     # Step 1: Generate 100MB test file using cryptocli generate-test-file command
     log "Step 1: Generating 100MB deterministic test file using cryptocli..."
@@ -1514,7 +1510,7 @@ phase_9_file_operations() {
     local target_size=104857600  # 100MB
     local cryptocli_output
     
-    if ! cryptocli_output=$(./cmd/cryptocli/cryptocli generate-test-file --filename "$test_file" --size "$target_size" 2>&1); then
+    if ! cryptocli_output=$(/opt/arkfile/bin/cryptocli generate-test-file --filename "$test_file" --size "$target_size" 2>&1); then
         error "Failed to generate test file using cryptocli: $cryptocli_output"
     fi
     
@@ -1546,7 +1542,7 @@ phase_9_file_operations() {
     log "Step 2: Encrypting file with account password using unified Argon2ID (256MB/8i/4t)..."
     
     # Use the TEST_PASSWORD from the authentication phase and TEST_USERNAME
-    if ! echo "$TEST_PASSWORD" | ./cmd/cryptocli/cryptocli encrypt-password \
+    if ! echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli encrypt-password \
         --file "$test_file" \
         --output "$encrypted_file" \
         --username "$TEST_USERNAME" \
@@ -1568,7 +1564,7 @@ phase_9_file_operations() {
     # Step 3: Test decryption with account password  
     log "Step 3: Decrypting file with account password..."
     
-    if ! echo "$TEST_PASSWORD" | ./cmd/cryptocli/cryptocli decrypt-password \
+    if ! echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli decrypt-password \
         --file "$encrypted_file" \
         --output "$decrypted_file" \
         --username "$TEST_USERNAME" \
@@ -1623,7 +1619,7 @@ phase_9_file_operations() {
     # Use a different password for custom encryption (simulates user providing custom password)
     local CUSTOM_TEST_PASSWORD="CustomPassword123!DifferentFromAccount"
     
-    if ! echo "$CUSTOM_TEST_PASSWORD" | ./cmd/cryptocli/cryptocli encrypt-password \
+    if ! echo "$CUSTOM_TEST_PASSWORD" | /opt/arkfile/bin/cryptocli encrypt-password \
         --file "$test_file" \
         --output "$custom_encrypted_file" \
         --username "$TEST_USERNAME" \
@@ -1634,7 +1630,7 @@ phase_9_file_operations() {
     success "File encrypted successfully with custom password (different key derivation)"
     
     # Decrypt with custom password
-    if ! echo "$CUSTOM_TEST_PASSWORD" | ./cmd/cryptocli/cryptocli decrypt-password \
+    if ! echo "$CUSTOM_TEST_PASSWORD" | /opt/arkfile/bin/cryptocli decrypt-password \
         --file "$custom_encrypted_file" \
         --output "$custom_decrypted_file" \
         --username "$TEST_USERNAME" \
@@ -1683,7 +1679,7 @@ phase_9_file_operations() {
     
     # Use cryptocli encrypt-password command (this will prompt for password securely)
     info "Encrypting file using cryptocli secure password prompting..."
-    if ! echo "$TEST_PASSWORD" | ./cmd/cryptocli/cryptocli encrypt-password \
+    if ! echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli encrypt-password \
         --file "$test_file" \
         --output "$secure_encrypted_file" \
         --username "$TEST_USERNAME" \
@@ -1709,7 +1705,7 @@ phase_9_file_operations() {
     
     # Use cryptocli decrypt-password command (this will prompt for password securely)
     info "Decrypting file using cryptocli secure password prompting..."
-    if ! echo "$TEST_PASSWORD" | ./cmd/cryptocli/cryptocli decrypt-password \
+    if ! echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli decrypt-password \
         --file "$secure_encrypted_file" \
         --output "$secure_decrypted_file" \
         --username "$TEST_USERNAME" \
@@ -1861,20 +1857,16 @@ phase_11_file_integrity_verification() {
         local test_file="${TEMP_DIR}/verification_test_file_100mb.bin"
         local hash_file="${TEMP_DIR}/verification_test_file_100mb.sha256"
         
-        # Check if cryptocli is available
-        if ! command -v ./cmd/cryptocli/cryptocli >/dev/null 2>&1; then
-            info "Building cryptocli tool for Phase 11..."
-            if ! (cd cmd/cryptocli && go build -o cryptocli ./main.go 2>/dev/null); then
-                error "Failed to build cryptocli tool - required for Phase 11 file verification"
-            else
-                success "Built cryptocli tool successfully"
-            fi
+        # Ensure cryptocli is available from the deployed location
+        if ! command -v /opt/arkfile/bin/cryptocli >/dev/null 2>&1; then
+            error "cryptocli tool not found at /opt/arkfile/bin/cryptocli - Please re-run 'sudo scripts/dev-reset.sh'"
         fi
+        success "cryptocli tool available and ready for Phase 11"
         
         local target_size=104857600  # 100MB
         local cryptocli_output
         
-        if ! cryptocli_output=$(./cmd/cryptocli/cryptocli generate-test-file --filename "$test_file" --size "$target_size" 2>&1); then
+        if ! cryptocli_output=$(/opt/arkfile/bin/cryptocli generate-test-file --filename "$test_file" --size "$target_size" 2>&1); then
             error "Failed to generate verification test file using cryptocli: $cryptocli_output"
         fi
         
@@ -1950,10 +1942,10 @@ phase_11_file_integrity_verification() {
     # Additional verification using cryptocli if available
     log "Performing additional verification using cryptocli..."
     
-    if command -v ./cmd/cryptocli/cryptocli >/dev/null 2>&1; then
+    if command -v /opt/arkfile/bin/cryptocli >/dev/null 2>&1; then
         local cryptocli_hash_output cryptocli_hash
         
-        if cryptocli_hash_output=$(./cmd/cryptocli/cryptocli hash-file --filename "$test_file" 2>&1); then
+        if cryptocli_hash_output=$(/opt/arkfile/bin/cryptocli hash-file --filename "$test_file" 2>&1); then
             cryptocli_hash=$(echo "$cryptocli_hash_output" | grep "SHA-256:" | cut -d' ' -f2)
             
             if [ -n "$cryptocli_hash" ] && [ ${#cryptocli_hash} -eq 64 ]; then
