@@ -407,14 +407,14 @@ The new phase integrates seamlessly with the existing 10 authentication phases i
 ```bash
 # Phase 11: File Operations Testing (Integration with test-app-curl.sh)
 1. Generate deterministic test files (100MB with sequential pattern)
-2. Build and verify Go tools (cryptocli + arkfile-client) 
+2. Build and verify Go tools (cryptocli + arkfile-client)
 3. Export authentication data from existing bash script session
-4. Authenticate with arkfile-client to obtain OPAQUE export key
-5. Encrypt files using authentic OPAQUE-derived keys via cryptocli
+4. Authenticate with arkfile-client (authentication is for OPAQUE only; no OPAQUE export key is used for file encryption)
+5. Encrypt files using password-derived keys via cryptocli encrypt-password
 6. Upload encrypted files using chunked upload API via arkfile-client
 7. Verify files in user's listing via authenticated API calls
 8. Download files back through authenticated API endpoints
-9. Decrypt downloaded files using cryptocli with OPAQUE keys
+9. Decrypt downloaded files using cryptocli decrypt-password with password input
 10. Verify perfect integrity through complete hash comparison
 11. Clean up all test artifacts and temporary files
 ```
@@ -428,22 +428,22 @@ The new phase integrates seamlessly with the existing 10 authentication phases i
 # Generate deterministic test files
 ./cryptocli generate-test-file --size 100MB --pattern sequential --output test.dat --hash-output test.hash
 
-# Encrypt with OPAQUE export key (obtained from arkfile-client authentication)
-./cryptocli encrypt-chunked-opaque --input test.dat --output-dir chunks/ \
-    --export-key $OPAQUE_EXPORT_KEY --username $TEST_USERNAME --file-id "test.dat"
+# Encrypt with password 
+./cryptocli encrypt-password --input test.dat --output-dir chunks/ \
+    --username $TEST_USERNAME --file-id "test.dat" --password-file "$TEMP_DIR/go_password"
 
-# Decrypt downloaded files using OPAQUE keys
-./cryptocli decrypt-file-opaque --input downloaded.enc --output decrypted.dat \
-    --export-key $OPAQUE_EXPORT_KEY --username $TEST_USERNAME
+# Decrypt downloaded files using password
+./cryptocli decrypt-password --input downloaded.enc --output decrypted.dat \
+    --username $TEST_USERNAME --password-file "$TEMP_DIR/go_password"
 ```
 
 **arkfile-client Extensions for test-app-curl.sh:**
 ```bash
 # Commands needed by Phase 11 in the bash script:
 
-# Authenticate and export OPAQUE key for bash script usage
+# Authenticate with arkfile-client (authentication is for OPAQUE only)
 ./arkfile-client authenticate --config client_config.json \
-    --export-opaque-key opaque_export_key.hex --reuse-session
+    --reuse-session # No --export-opaque-key flag
 
 # Upload encrypted file chunks
 ./arkfile-client upload --config client_config.json --manifest chunks.json \
@@ -480,11 +480,11 @@ phase_file_operations() {
     
     # Execute complete file operations workflow
     generate_test_file_with_cryptocli
-    authenticate_with_client_tool
-    encrypt_test_file_with_opaque
+    # No longer need to specifically authenticate with client tool for OPAQUE export key
+    encrypt_test_file_with_password # Renamed to reflect password-based encryption
     upload_file_with_client
     verify_file_with_client
-    download_and_decrypt_file
+    download_and_decrypt_file_with_password # Renamed to reflect password-based decryption
     verify_complete_integrity
     cleanup_file_operations_test
     
@@ -667,388 +667,10 @@ verify_complete_integrity() {
 }
 ```
 
-### Success Criteria for Phase 11 Integration
-
-**Phase 11 Success Metrics:**
-- [ ] Generate 100MB deterministic test file successfully
-- [ ] Build and verify Go tools (cryptocli + arkfile-client) automatically
-- [ ] Export authentication data securely from existing bash script session
-- [ ] Authenticate with arkfile-client and obtain authentic OPAQUE export key (64 bytes)
-- [ ] Encrypt test file using OPAQUE-derived keys with proper envelope format
-- [ ] Upload encrypted file chunks via authenticated API without errors
-- [ ] Verify file appears correctly in authenticated user's file listing with proper metadata
-- [ ] Download file successfully through authenticated API endpoints
-- [ ] Decrypt downloaded file using authentic OPAQUE session keys
-- [ ] Achieve 100% file integrity verification (perfect SHA-256 hash match)
-- [ ] Clean up all test artifacts and temporary files properly
-- [ ] Integrate seamlessly with existing 10-phase authentication workflow
-
-**Integration Requirements:**
-- Must not break existing 10 authentication phases (maintain 100% success rate)
-- Must leverage existing JWT tokens and session keys from authentication phases
-- Must build Go tools automatically if not present or outdated
-- Must handle errors gracefully and provide detailed logging
-- Must clean up all temporary files and sensitive data after completion
-- Must provide comprehensive success/failure reporting
-
-**Future Scope (Not Current Focus):**
-- Equivalent Go-based test scripts that perform the same functions as test-app-curl.sh
-- Native Go test frameworks that don't require bash script integration
-- Advanced file operations testing (multiple file types, concurrent uploads, large file stress testing)
-
-This approach ensures we extend the proven authentication foundation in test-app-curl.sh with comprehensive file operations testing while maintaining compatibility and reliability.
-
-### Enhanced cryptocli with OPAQUE Support (Go Implementation Details)
-**Location:** `cmd/cryptocli/commands/file_operations.go` (extend existing)
-
-```go
-func EncryptFileOPAQUE(args []string) error {
-    fs := flag.NewFlagSet("encrypt-file-opaque", flag.ExitOnError)
-    var (
-        inputFile   = fs.String("input", "", "Input file path")
-        outputFile  = fs.String("output", "", "Output file path")
-        exportKey   = fs.String("export-key", "", "OPAQUE export key (hex)")
-        username    = fs.String("username", "", "Username for key derivation")
-        fileID      = fs.String("file-id", "", "File ID for key derivation")
-        keyType     = fs.String("key-type", "account", "Key type: account or custom")
-    )
-    
-    // Implementation:
-    // 1. Parse and validate OPAQUE export key (64 bytes hex)
-    // 2. Derive file encryption key using crypto.DeriveAccountFileKey
-    // 3. Read input file
-    // 4. Encrypt using derived key with crypto.EncryptGCM
-    // 5. Create envelope with version and key type
-    // 6. Write encrypted file with envelope
-    // 7. Output file hash for verification
-}
-
-func EncryptChunkedOPAQUE(args []string) error {
-    fs := flag.NewFlagSet("encrypt-chunked-opaque", flag.ExitOnError)
-    var (
-        inputFile  = fs.String("input", "", "Input file path")
-        outputDir  = fs.String("output-dir", "", "Output directory for chunks")
-        exportKey  = fs.String("export-key", "", "OPAQUE export key (hex)")
-        username   = fs.String("username", "", "Username for key derivation")
-        fileID     = fs.String("file-id", "", "File ID for key derivation")
-        manifest   = fs.String("manifest", "", "Output manifest file")
-        chunkSize  = fs.Int("chunk-size", 16*1024*1024, "Chunk size (default: 16MB)")
-    )
-    
-    // Implementation:
-    // 1. Derive file encryption key from OPAQUE export key
-    // 2. Create envelope (2 bytes: version + key type)
-    // 3. Split file into chunks of specified size
-    // 4. For each chunk:
-    //    - Generate unique 12-byte nonce
-    //    - Encrypt with AES-GCM: nonce + encrypted_data + tag
-    //    - Calculate SHA-256 of encrypted chunk
-    //    - Write to chunk_N.enc file
-    // 5. Create manifest JSON with envelope and chunk metadata
-    // 6. Validate all chunks were created successfully
-}
-
-func DecryptFileOPAQUE(args []string) error {
-    fs := flag.NewFlagSet("decrypt-file-opaque", flag.ExitOnError)
-    var (
-        inputFile    = fs.String("input", "", "Encrypted input file")
-        outputFile   = fs.String("output", "", "Decrypted output file")
-        exportKey    = fs.String("export-key", "", "OPAQUE export key (hex)")
-        encryptedFEK = fs.String("encrypted-fek", "", "Encrypted FEK file")
-        username     = fs.String("username", "", "Username for key derivation")
-    )
-    
-    // Implementation:
-    // 1. Parse OPAQUE export key
-    // 2. If encrypted FEK provided, decrypt it with session key
-    // 3. Otherwise derive file key from export key
-    // 4. Parse envelope from encrypted file
-    // 5. Decrypt file content using derived/decrypted key
-    // 6. Write decrypted file
-    // 7. Verify integrity if hash provided
-}
 ```
 
-#### Enhanced arkfile-client with Upload/Download
-**Location:** `cmd/arkfile-client/main.go` (extend existing)
 
-```go
-func uploadFile() error {
-    fs := flag.NewFlagSet("upload", flag.ExitOnError)
-    var (
-        manifest   = fs.String("manifest", "", "Chunk manifest file")
-        chunksDir  = fs.String("chunks-dir", "", "Directory containing encrypted chunks")
-        filename   = fs.String("filename", "", "Original filename")
-        serverURL  = fs.String("server-url", "", "Server URL")
-        tokenFile  = fs.String("token-file", "", "JWT token file")
-        tlsInsecure = fs.Bool("tls-insecure", false, "Skip TLS verification")
-    )
-    
-    // Implementation:
-    // 1. Load JWT token from file
-    // 2. Read manifest file with chunk metadata
-    // 3. Initialize upload session via POST /api/uploads/init
-    // 4. Upload each chunk via POST /api/uploads/{sessionId}/chunks/{chunkIndex}
-    // 5. Complete upload via POST /api/uploads/{sessionId}/complete
-    // 6. Verify upload success and get file ID
-    // 7. Save upload response for verification
-}
 
-func downloadFile() error {
-    fs := flag.NewFlagSet("download", flag.ExitOnError)
-    var (
-        fileID      = fs.String("file-id", "", "File ID to download")
-        output      = fs.String("output", "", "Output file path")
-        exportFEK   = fs.String("export-fek", "", "Export encrypted FEK to file")
-        serverURL   = fs.String("server-url", "", "Server URL")
-        tokenFile   = fs.String("token-file", "", "JWT token file")
-        tlsInsecure = fs.Bool("tls-insecure", false, "Skip TLS verification")
-    )
-    
-    // Implementation:
-    // 1. Load JWT token from file
-    // 2. Get file metadata via GET /api/files/{fileId}
-    // 3. Download encrypted file via GET /api/files/{fileId}/download
-    // 4. If export-fek specified, save encrypted FEK to file
-    // 5. Save encrypted file to output path
-    // 6. Return success with file metadata
-}
-
-func authenticateAndExportKey() error {
-    // Enhanced authentication that captures and exports OPAQUE export key
-    // 1. Perform OPAQUE login flow
-    // 2. Handle TOTP authentication
-    // 3. Capture export key during authentication process
-    // 4. Store tokens and export key to files for cryptocli usage
-    // 5. Create session file with all necessary authentication data
-}
-```
-
-### Advanced Crypto Package Extensions
-**Location:** `crypto/opaque_integration.go` (new file)
-
-```go
-package crypto
-
-import (
-    "crypto/rand"
-    "encoding/hex"
-    "fmt"
-)
-
-// ExportKeyData represents OPAQUE export key and derived session data
-type ExportKeyData struct {
-    ExportKey   []byte `json:"export_key"`
-    SessionKey  []byte `json:"session_key"`
-    Username    string `json:"username"`
-}
-
-// DeriveFileKeyFromExport derives file encryption key from OPAQUE export key
-func DeriveFileKeyFromExport(exportKey []byte, username, fileID string) ([]byte, error) {
-    if len(exportKey) != 64 {
-        return nil, fmt.Errorf("export key must be 64 bytes, got %d", len(exportKey))
-    }
-    
-    // Use existing key derivation function
-    return DeriveAccountFileKey(exportKey, username, fileID)
-}
-
-// EncryptFileWithOPAQUE encrypts file using OPAQUE-derived key
-func EncryptFileWithOPAQUE(data []byte, exportKey []byte, username, fileID string) ([]byte, error) {
-    // Derive file encryption key
-    fileKey, err := DeriveFileKeyFromExport(exportKey, username, fileID)
-    if err != nil {
-        return nil, fmt.Errorf("key derivation failed: %w", err)
-    }
-    
-    // Encrypt file data
-    encryptedData, err := EncryptGCM(data, fileKey)
-    if err != nil {
-        return nil, fmt.Errorf("encryption failed: %w", err)
-    }
-    
-    // Create envelope
-    envelope := CreateOPAQUEEnvelope("account")
-    
-    // Combine envelope + encrypted data
-    result := make([]byte, len(envelope)+len(encryptedData))
-    copy(result, envelope)
-    copy(result[len(envelope):], encryptedData)
-    
-    return result, nil
-}
-
-// DecryptFileWithOPAQUE decrypts file using OPAQUE-derived key
-func DecryptFileWithOPAQUE(encryptedData []byte, exportKey []byte, username, fileID string) ([]byte, error) {
-    // Parse envelope (first 2 bytes)
-    if len(encryptedData) < 2 {
-        return nil, fmt.Errorf("encrypted data too short for envelope")
-    }
-    
-    envelope := encryptedData[:2]
-    ciphertext := encryptedData[2:]
-    
-    // Validate envelope
-    if err := ValidateOPAQUEEnvelope(envelope); err != nil {
-        return nil, fmt.Errorf("invalid envelope: %w", err)
-    }
-    
-    // Derive file encryption key
-    fileKey, err := DeriveFileKeyFromExport(exportKey, username, fileID)
-    if err != nil {
-        return nil, fmt.Errorf("key derivation failed: %w", err)
-    }
-    
-    // Decrypt file data
-    return DecryptGCM(ciphertext, fileKey)
-}
-
-// CreateChunkedEncryption encrypts file in chunks for upload
-func CreateChunkedEncryption(data []byte, exportKey []byte, username, fileID string, chunkSize int) (*ChunkManifest, map[int][]byte, error) {
-    // Derive file encryption key
-    fileKey, err := DeriveFileKeyFromExport(exportKey, username, fileID)
-    if err != nil {
-        return nil, nil, err
-    }
-    
-    // Create envelope
-    envelope := CreateOPAQUEEnvelope("account")
-    
-    // Split into chunks and encrypt each
-    chunks := make(map[int][]byte)
-    var chunkInfos []ChunkInfo
-    
-    for i := 0; i < len(data); i += chunkSize {
-        end := i + chunkSize
-        if end > len(data) {
-            end = len(data)
-        }
-        
-        chunkData := data[i:end]
-        chunkIndex := i / chunkSize
-        
-        // Generate unique nonce for this chunk
-        nonce := make([]byte, 12)
-        if _, err := rand.Read(nonce); err != nil {
-            return nil, nil, fmt.Errorf("nonce generation failed: %w", err)
-        }
-        
-        // Encrypt chunk with nonce
-        encryptedChunk, err := EncryptChunkWithNonce(chunkData, fileKey, nonce)
-        if err != nil {
-            return nil, nil, fmt.Errorf("chunk encryption failed: %w", err)
-        }
-        
-        chunks[chunkIndex] = encryptedChunk
-        
-        // Calculate chunk hash
-        chunkHash := CalculateFileHash(encryptedChunk)
-        
-        chunkInfos = append(chunkInfos, ChunkInfo{
-            Index: chunkIndex,
-            File:  fmt.Sprintf("chunk_%d.enc", chunkIndex),
-            Hash:  chunkHash,
-            Size:  len(encryptedChunk),
-        })
-    }
-    
-    // Create manifest
-    manifest := &ChunkManifest{
-        Envelope:    hex.EncodeToString(envelope),
-        TotalChunks: len(chunkInfos),
-        ChunkSize:   chunkSize,
-        Chunks:      chunkInfos,
-    }
-    
-    return manifest, chunks, nil
-}
-```
-
-### Testing Integration
-**Location:** `scripts/testing/test-go-tools-opaque.sh` (new file)
-
-```bash
-#!/bin/bash
-# Test OPAQUE integration with Go tools
-
-set -euo pipefail
-
-# Mock OPAQUE export key for testing (64 bytes hex)
-MOCK_EXPORT_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-TEST_USERNAME="test-user"
-TEST_FILE_ID="test-file.dat"
-
-echo "=== Testing OPAQUE integration ==="
-
-# Generate test file
-./cryptocli generate-test-file \
-    --size 50MB \
-    --pattern sequential \
-    --output /tmp/test-50mb.dat \
-    --hash-output /tmp/test-50mb.hash
-
-echo "✅ Generated 50MB test file"
-
-# Test OPAQUE encryption
-./cryptocli encrypt-file-opaque \
-    --input /tmp/test-50mb.dat \
-    --output /tmp/test-50mb-opaque.enc \
-    --export-key "$MOCK_EXPORT_KEY" \
-    --username "$TEST_USERNAME" \
-    --file-id "$TEST_FILE_ID"
-
-echo "✅ OPAQUE encryption completed"
-
-# Test OPAQUE decryption
-./cryptocli decrypt-file-opaque \
-    --input /tmp/test-50mb-opaque.enc \
-    --output /tmp/test-50mb-opaque-decrypted.dat \
-    --export-key "$MOCK_EXPORT_KEY" \
-    --username "$TEST_USERNAME"
-
-echo "✅ OPAQUE decryption completed"
-
-# Verify integrity
-ORIGINAL_HASH=$(cat /tmp/test-50mb.hash)
-DECRYPTED_HASH=$(sha256sum /tmp/test-50mb-opaque-decrypted.dat | cut -d' ' -f1)
-
-if [ "$ORIGINAL_HASH" = "$DECRYPTED_HASH" ]; then
-    echo "✅ OPAQUE encryption/decryption integrity verified"
-else
-    echo "❌ Hash mismatch: $ORIGINAL_HASH != $DECRYPTED_HASH"
-    exit 1
-fi
-
-# Test chunked encryption
-./cryptocli encrypt-chunked-opaque \
-    --input /tmp/test-50mb.dat \
-    --output-dir /tmp/encrypted_chunks \
-    --export-key "$MOCK_EXPORT_KEY" \
-    --username "$TEST_USERNAME" \
-    --file-id "$TEST_FILE_ID" \
-    --manifest /tmp/chunk_manifest.json
-
-echo "✅ Chunked encryption completed"
-
-# Validate manifest and chunks
-TOTAL_CHUNKS=$(jq -r '.totalChunks' /tmp/chunk_manifest.json)
-echo "Generated $TOTAL_CHUNKS chunks"
-
-for ((i=0; i<TOTAL_CHUNKS; i++)); do
-    CHUNK_FILE="/tmp/encrypted_chunks/chunk_${i}.enc"
-    if [ ! -f "$CHUNK_FILE" ]; then
-        echo "❌ Missing chunk: $CHUNK_FILE"
-        exit 1
-    fi
-done
-
-echo "✅ All chunks validated"
-
-# Cleanup
-rm -rf /tmp/test-50mb* /tmp/encrypted_chunks /tmp/chunk_manifest.json
-
-echo "✅ OPAQUE integration tests passed"
-```
 
 ## PHASE 1C: Test Script Integration and Complete Workflow
 
@@ -1181,61 +803,21 @@ generate_test_file_with_cryptocli() {
     fi
 }
 
-authenticate_with_client_tool() {
-    log "Authenticating with arkfile-client to obtain OPAQUE export key..."
-    
-    # Create client config
-    cat > "$TEMP_DIR/client_config.json" <<EOF
-{
-    "server_url": "$ARKFILE_BASE_URL",
-    "username": "$TEST_USERNAME",
-    "tls_insecure": true,
-    "token_file": "$TEMP_DIR/go_jwt_token",
-    "session_file": "$TEMP_DIR/client_session.json"
-}
-EOF
-    
-    # Authenticate and export OPAQUE key
-    ./arkfile-client authenticate \
-        --config "$TEMP_DIR/client_config.json" \
-        --password-file "$TEMP_DIR/go_password" \
-        --export-opaque-key "$TEMP_DIR/opaque_export_key.hex" \
-        --reuse-session
-    
-    if [ -f "$TEMP_DIR/opaque_export_key.hex" ]; then
-        local key_size
-        key_size=$(wc -c < "$TEMP_DIR/opaque_export_key.hex")
-        # OPAQUE export key should be 128 hex chars (64 bytes)
-        if [ "$key_size" -eq 128 ]; then
-            success "OPAQUE export key obtained (64 bytes)"
-            debug "Export key: $(head -c 20 "$TEMP_DIR/opaque_export_key.hex")..."
-        else
-            error "Invalid OPAQUE export key size: expected 128 hex chars, got $key_size"
-        fi
-    else
-        error "Failed to obtain OPAQUE export key"
-    fi
-}
-
-encrypt_test_file_with_opaque() {
-    log "Encrypting test file with authentic OPAQUE export key..."
+encrypt_test_file_with_password() {
+    log "Encrypting test file with password..."
     
     local test_file="$TEMP_DIR/test-file-100mb.dat"
     local encrypted_dir="$TEMP_DIR/encrypted_chunks"
     local manifest_file="$TEMP_DIR/chunk_manifest.json"
-    local export_key_file="$TEMP_DIR/opaque_export_key.hex"
+    local password_file="$TEMP_DIR/go_password"
     
     mkdir -p "$encrypted_dir"
     
-    # Read export key
-    local export_key
-    export_key=$(cat "$export_key_file")
-    
-    ./cryptocli encrypt-chunked-opaque \
+    ./cryptocli encrypt-password \
         --input "$test_file" \
         --output-dir "$encrypted_dir" \
-        --export-key "$export_key" \
         --username "$TEST_USERNAME" \
+        --password-file "$password_file" \
         --file-id "test-file-100mb.dat" \
         --key-type "account" \
         --manifest "$manifest_file"
@@ -1243,7 +825,7 @@ encrypt_test_file_with_opaque() {
     if [ -f "$manifest_file" ]; then
         local total_chunks
         total_chunks=$(jq -r '.totalChunks' "$manifest_file")
-        success "File encrypted into $total_chunks chunks using authentic OPAQUE key"
+        success "File encrypted into $total_chunks chunks using password"
         
         # Verify all chunks exist and have correct format
         local chunks_verified=0
@@ -1343,7 +925,7 @@ verify_file_with_client() {
     fi
 }
 
-download_and_decrypt_file() {
+download_and_decrypt_file_with_password() {
     log "Downloading and decrypting file to verify complete workflow..."
     
     local file_id
@@ -1352,7 +934,7 @@ download_and_decrypt_file() {
     local download_path="$TEMP_DIR/downloaded-encrypted-file.dat"
     local fek_path="$TEMP_DIR/downloaded_encrypted_fek.bin"
     local decrypted_path="$TEMP_DIR/final-decrypted-file.dat"
-    local export_key_file="$TEMP_DIR/opaque_export_key.hex"
+    local password_file="$TEMP_DIR/go_password"
     
     # Download encrypted file and FEK
     ./arkfile-client download \
@@ -1368,19 +950,16 @@ download_and_decrypt_file() {
         download_size=$(stat -c%s "$download_path" 2>/dev/null || stat -f%z "$download_path" 2>/dev/null)
         info "Downloaded encrypted file size: $(numfmt --to=iec $download_size)"
         
-        # Decrypt file using cryptocli with OPAQUE export key
-        local export_key
-        export_key=$(cat "$export_key_file")
-        
-        ./cryptocli decrypt-file-opaque \
+        # Decrypt file using cryptocli with password
+        ./cryptocli decrypt-password \
             --input "$download_path" \
             --output "$decrypted_path" \
-            --export-key "$export_key" \
+            --password-file "$password_file" \
             --encrypted-fek "$fek_path" \
             --username "$TEST_USERNAME"
         
         if [ -f "$decrypted_path" ]; then
-            success "File decryption completed using OPAQUE export key"
+            success "File decryption completed using password"
             
             local decrypted_size
             decrypted_size=$(stat -c%s "$decrypted_path" 2>/dev/null || stat -f%z "$decrypted_path" 2>/dev/null)
@@ -1448,7 +1027,6 @@ cleanup_file_operations_test() {
     # Clean up Go tool configuration and auth files
     rm -f "$TEMP_DIR/client_config.json"
     rm -f "$TEMP_DIR/client_session.json"
-    rm -f "$TEMP_DIR/opaque_export_key.hex"
     rm -f "$TEMP_DIR/go_jwt_token"
     rm -f "$TEMP_DIR/go_session_key"
     rm -f "$TEMP_DIR/go_username"

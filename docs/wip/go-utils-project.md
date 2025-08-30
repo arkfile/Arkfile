@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines advanced Go-based tooling and utilities for the Arkfile secure file vault system. These tools provide comprehensive administrative capabilities, client tooling, and enhanced testing frameworks.
+This document outlines advanced Go-based tooling and utilities for the Arkfile secure file vault system. These tools provide comprehensive administrative capabilities, client tooling, and enhanced testing frameworks, all designed around the principle of strict separation between OPAQUE authentication and Argon2ID password-based file encryption.
 
 ## Architecture Overview
 
@@ -11,36 +11,36 @@ This document outlines advanced Go-based tooling and utilities for the Arkfile s
 The Go utilities maintain separation of concerns while enabling secure integration:
 
 **cryptocli** (Offline Cryptographic Tool):
-- File operations: generate, encrypt, decrypt with OPAQUE-derived keys
-- No network communication capabilities
-- Pure cryptographic operations using libopaque
-- Commands: `generate-test-file`, `encrypt-file-opaque`, `decrypt-file-opaque`, `encrypt-chunked-opaque`
+- File operations: generate, encrypt, decrypt with **password-derived (Argon2ID) keys**.
+- No network communication capabilities.
+- Pure cryptographic operations using `libopaque` (for OPAQUE authentication related tasks if any, but not for file encryption).
+- Commands: `generate-test-file`, `encrypt-password`, `decrypt-password`
 
 **arkfile-client** (Server Communication Tool):
-- Authenticated server communication over TLS 1.3 (localhost and remote)
-- OPAQUE authentication flows and session management
-- File upload/download operations and share creation
+- Authenticated server communication over TLS 1.3 (localhost and remote).
+- OPAQUE authentication flows and session management.
+- File upload/download operations and share creation, using **password-derived (Argon2ID) keys for file encryption**.
 - Commands: `login`, `upload`, `download`, `list-files`, `create-share`
 
 **arkfile-setup** (Administrative Installation Tool):
-- Cross-platform system installation and configuration
-- Cryptographic key generation using static binaries
-- Service configuration and state management
-- Reinstall strategies (soft, hard, complete, selective)
+- Cross-platform system installation and configuration.
+- Cryptographic key generation using static binaries.
+- Service configuration and state management.
+- Reinstall strategies (soft, hard, complete, selective).
 
 **arkfile-admin** (Maintenance and Monitoring Tool):
-- System health monitoring and diagnostics
-- Comprehensive key rotation (OPAQUE, JWT, TLS)
-- Backup and restore operations with encryption
-- Performance monitoring and security auditing
+- System health monitoring and diagnostics.
+- Comprehensive key rotation (OPAQUE, JWT, TLS).
+- Backup and restore operations with encryption.
+- Performance monitoring and security auditing.
 
 ### Integration Pattern
 
-Tools integrate through secure key handoff patterns:
-1. arkfile-client performs OPAQUE authentication and exports session keys as needed
-2. cryptocli uses exported keys for offline cryptographic operations
-3. arkfile-client handles all network communication with pre-encrypted payloads
-4. Administrative tools coordinate system operations using consistent static binaries
+Tools integrate through secure, well-defined patterns:
+1. `arkfile-client` performs OPAQUE authentication, handling session keys internally for server communication.
+2. `cryptocli` performs offline file encryption/decryption using **passwords (and Argon2ID)**, with no reliance on OPAQUE export keys for this purpose.
+3. `arkfile-client` handles all network communication with encrypted payloads (encrypted using password-derived keys).
+4. Administrative tools coordinate system operations using consistent static binaries.
 
 ## Phase 4: Basic Client Tools (Weeks 4-5)
 
@@ -63,7 +63,7 @@ import (
 
 const (
 	Version = "1.0.0-static"
-	Usage = `arkfile-client - Secure file sharing client with OPAQUE authentication
+	Usage = `arkfile-client - Secure file sharing client with OPAQUE authentication and Argon2ID file encryption
 
 USAGE:
     arkfile-client [global options] command [command options] [arguments...]
@@ -105,7 +105,7 @@ type ClientConfig struct {
 
 #### Authentication Implementation
 
-**OPAQUE Authentication with Export Keys:**
+**OPAQUE Authentication (No Export Keys for File Encryption):**
 
 ```go
 func performOPAQUEAuthentication(client *http.Client, config *ClientConfig) (*AuthSession, error) {
@@ -134,13 +134,13 @@ func performOPAQUEAuthentication(client *http.Client, config *ClientConfig) (*Au
 		}
 	}
 	
-	// Step 4: Export OPAQUE key for cryptocli integration
+	// Step 4: Authentication complete; no OPAQUE key export for file encryption.
+	// OPAQUE Export Keys are for server-side use only.
 	session := &AuthSession{
 		Username:     username,
 		AccessToken:  authResp.AccessToken,
 		RefreshToken: authResp.RefreshToken,
 		ExpiresAt:    authResp.ExpiresAt,
-		OPAQUEExport: authResp.OPAQUEExport, // For cryptocli key handoff
 		ServerURL:    config.ServerURL,
 	}
 	
@@ -150,7 +150,7 @@ func performOPAQUEAuthentication(client *http.Client, config *ClientConfig) (*Au
 
 #### File Operations Implementation
 
-**Chunked Upload with Progress Tracking:**
+**Chunked Upload with Progress Tracking (Files encrypted with Argon2ID password-derived keys):**
 
 ```go
 func handleUploadCommand(client *http.Client, config *ClientConfig, args []string) error {
@@ -191,20 +191,20 @@ func handleUploadCommand(client *http.Client, config *ClientConfig, args []strin
 
 ### 4.2 Enhanced cryptocli Integration
 
-#### OPAQUE-Integrated Encryption
+#### Password-Based Argon2ID File Encryption
 
 ```go
 // Generate deterministic test files with integrity hashes
 cryptocli generate-test-file --size 100MB --pattern sequential --output test.dat --hash-output test.hash
 
-// Encrypt files using OPAQUE-derived keys (production compatibility)
-cryptocli encrypt-file-opaque --input test.dat --output test.enc --export-key <hex> --username alice --file-id test.dat
+// Encrypt files using password-derived (Argon2ID) keys
+cryptocli encrypt-password --input test.dat --output test.enc --username alice
 
-// Chunked encryption for large file upload preparation
-cryptocli encrypt-chunked-opaque --input test.dat --output-dir chunks/ --export-key <hex> --username alice --manifest manifest.json
+// Chunked encryption for large file upload preparation (using password-derived keys)
+cryptocli encrypt-password-chunked --input test.dat --output-dir chunks/ --username alice --manifest manifest.json
 
-// Decrypt files using various key sources
-cryptocli decrypt-file-opaque --input test.enc --output decrypted.dat --export-key <hex> --username alice
+// Decrypt files using password-derived (Argon2ID) keys
+cryptocli decrypt-password --input test.enc --output decrypted.dat --username alice
 ```
 
 #### Share-Based Decryption
@@ -615,9 +615,9 @@ func (suite *IntegrationTestSuite) runAuthenticationFlowTests() error {
 		return suite.testSessionManagement()
 	})
 	
-	// Test 4: Export Key Functionality
-	suite.runTest("OPAQUE Export Key Handling", func() error {
-		return suite.testExportKeyHandling()
+	// Test 4: File Encryption Key Derivation (Password and Argon2ID)
+	suite.runTest("Password-Based File Encryption Key Derivation", func() error {
+		return suite.testPasswordBasedFileEncryptionKeyDerivation()
 	})
 	
 	fmt.Printf("✅ Authentication flows validated\n\n")
@@ -636,8 +636,8 @@ func (suite *IntegrationTestSuite) runFileOperationTests() error {
 		return suite.generateTestFile()
 	})
 	
-	// Test 2: File Encryption with OPAQUE Keys
-	suite.runTest("OPAQUE-Derived File Encryption", func() error {
+	// Test 2: File Encryption with Password-Derived Keys (Argon2ID)
+	suite.runTest("Password-Derived File Encryption (Argon2ID)", func() error {
 		return suite.testFileEncryption()
 	})
 	
@@ -675,17 +675,17 @@ phase_file_operations_go_tools() {
     # Ensure Go tools are built with static linking
     build_go_tools_static
     
-    # Export authentication data for Go tools
+    # Export authentication data for Go tools (no OPAQUE export keys for file encryption)
     export_auth_data_for_go_tools
     
     # Step 1: Generate 100MB test file with cryptocli
     generate_large_test_file_with_cryptocli
     
-    # Step 2: Authenticate with arkfile-client and capture OPAQUE export key
-    authenticate_with_arkfile_client_export_key
+    # Step 2: Authenticate with arkfile-client (no OPAQUE export key for file encryption)
+    authenticate_with_arkfile_client
     
-    # Step 3: Encrypt file using authentic OPAQUE export key
-    encrypt_test_file_with_opaque_keys
+    # Step 3: Encrypt file using password-derived (Argon2ID) keys
+    encrypt_test_file_with_password_based_keys
     
     # Step 4: Upload encrypted file using chunked operations
     upload_chunked_file_with_arkfile_client
@@ -804,7 +804,7 @@ phase_file_operations_go_tools() {
 - arkfile-client can authenticate, upload, download files successfully
 - Session management works across tool invocations
 - Integration with existing dev-reset + test-app-curl.sh workflow
-- OPAQUE export keys work correctly with cryptocli
+- File encryption uses Argon2ID password-derived keys, not OPAQUE export keys
 
 ### Phase 5 Success (Administrative Tools)
 - arkfile-setup can perform fresh installations across platforms
@@ -845,9 +845,11 @@ This advanced tooling framework provides a complete ecosystem for Arkfile operat
 
 ---
 
-## IMPLEMENTATION STATUS AND TODOS (August 14, 2025 - 4:27 PM)
+## IMPLEMENTATION STATUS AND TODOS (Historical - Refer to `docs/wip/encrypt-cleanup.md` for latest encryption status)
 
-### ✅ COMPLETED WORK
+The following section contains historical implementation status and todos as of August 14, 2025, and August 16, 2025. For the current status regarding the Argon2ID encryption refactoring and OPAQUE protocol roles, please refer to `docs/wip/encrypt-cleanup.md`.
+
+### ✅ COMPLETED WORK (Historical)
 
 #### Phase 4 - Basic Client Tools (PARTIAL COMPLETION)
 
@@ -889,9 +891,9 @@ This advanced tooling framework provides a complete ecosystem for Arkfile operat
 - **Binary Status**: Successfully compiles (arkfile-admin binary exists)
 - **Static Linking Status**: ⚠️ **NOW STATIC** (confirmed static linking working)
 
-### ✅ RESOLVED - CRITICAL ISSUES
+### ✅ RESOLVED - CRITICAL ISSUES (Historical)
 
-**🎉 TOKEN REFRESH ISSUE SUCCESSFULLY RESOLVED**:
+**🎉 TOKEN REFRESH ISSUE SUCCESSFULLY RESOLVED (Historical)**:
 
 The critical refresh token validation failure in testing scripts has been resolved. Both admin authentication and main application testing now pass all phases including token refresh functionality.
 
@@ -913,12 +915,12 @@ The critical refresh token validation failure in testing scripts has been resolv
 - Implemented sliding window expiry (14-day extension on use)
 - Token rotation working correctly (revoke old token on refresh)
 
-### 📋 PHASE 4 REMAINING WORK
+### 📋 PHASE 4 REMAINING WORK (Historical)
 
 #### cryptocli Integration Enhancement
 - **Status**: ⏳ **PARTIALLY IMPLEMENTED**
 - **File**: `cmd/cryptocli/main.go` exists but may need updates for client integration
-- **TODO**: Verify OPAQUE export key compatibility with arkfile-client
+- **TODO**: Verify OPAQUE export key compatibility with arkfile-client (This task is now irrelevant, as OPAQUE export keys are not used for file encryption.)
 
 #### Client Tool Testing and Validation
 - **Status**: ⏳ **NOT YET TESTED**
@@ -929,7 +931,7 @@ The critical refresh token validation failure in testing scripts has been resolv
   - Share creation functionality
   - Session persistence and token management
 
-### 📋 PHASE 5 REMAINING WORK (Administrative Tools)
+### 📋 PHASE 5 REMAINING WORK (Administrative Tools - Historical)
 
 #### arkfile-admin Server Endpoint Implementation
 - **Status**: ⏳ **SERVER ENDPOINTS NOT YET IMPLEMENTED**
@@ -948,7 +950,7 @@ The critical refresh token validation failure in testing scripts has been resolv
 - **File**: `cmd/arkfile-setup/main.go`
 - **Scope**: Cross-platform installation and management tool
 
-### 📋 VALIDATION REQUIREMENTS
+### 📋 VALIDATION REQUIREMENTS (Historical)
 
 **Success Criteria for Phase 4 Completion**:
 - arkfile-client can authenticate and perform file operations
@@ -956,14 +958,14 @@ The critical refresh token validation failure in testing scripts has been resolv
 - dev-reset + test-app-curl.sh workflow remains intact
 - No regressions in existing functionality
 
-### 📋 ARCHITECTURE DECISIONS MADE
+### 📋 ARCHITECTURE DECISIONS MADE (Historical)
 
 1. **Hybrid arkfile-admin Approach**: Decided to implement network commands first using existing admin API, with local commands showing clear warnings until server endpoints are implemented
 2. **Security Model**: AdminMiddleware enforces localhost-only access for admin operations
 3. **Warning System**: Local commands provide clear feedback about missing server endpoints
 4. **Session Management**: Both tools use file-based session persistence in user home directory
 
-### 📋 FILES TO MONITOR
+### 📋 FILES TO MONITOR (Historical)
 
 **Completed and Ready**:
 - `cmd/arkfile-client/main.go` - Full implementation, needs testing
@@ -977,7 +979,7 @@ The critical refresh token validation failure in testing scripts has been resolv
 
 ---
 
-## 🚨 CRITICAL SERVER ENDPOINT GAP ANALYSIS (August 16, 2025)
+## 🚨 CRITICAL SERVER ENDPOINT GAP ANALYSIS (Historical - August 16, 2025)
 
 ### THE BRUTAL TRUTH: MASSIVE ENDPOINT IMPLEMENTATION REQUIRED
 
@@ -1070,7 +1072,7 @@ The integration test would be testing a **fundamentally incomplete system**. We 
 
 ---
 
-## 🎯 ADMIN ENDPOINT ARCHITECTURE PLAN (August 19, 2025)
+## 🎯 ADMIN ENDPOINT ARCHITECTURE PLAN (Historical - August 19, 2025)
 
 ### SECURITY FRAMEWORK FOR ALL ADMIN ENDPOINTS
 
@@ -1199,7 +1201,7 @@ adminGroup.POST("/system/rotate-keys", AdminSystemRotateKeys) // NEW
 #### **Testing Integration**
 - All admin operations can be validated in integration tests
 - Full admin functionality available for production deployment
-- Clear separation between production and diagnostic operations
+- Clear separation between production and dev/test endpoints
 
 ### SUCCESS CRITERIA
 

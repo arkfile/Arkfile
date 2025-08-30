@@ -102,6 +102,7 @@ func RegisterRoutes() {
 	totpProtectedGroup.DELETE("/api/files/:fileId/keys/:keyId", DeleteKey)
 	totpProtectedGroup.PATCH("/api/files/:fileId/keys/:keyId", UpdateKey)
 	totpProtectedGroup.POST("/api/files/:fileId/keys/:keyId/set-primary", SetPrimaryKey)
+	totpProtectedGroup.POST("/api/files/:fileId/get-decryption-key", GetFileDecryptionKey) // To be refactored for Argon2ID based encryption key management
 
 	// Credits system - user endpoints (require TOTP)
 	totpProtectedGroup.GET("/api/credits", GetUserCredits)

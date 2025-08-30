@@ -2,11 +2,11 @@
 
 ## Overview
 
-This document outlines the implementation of `scripts/testing/integration-test.go` - a Go-based integration test framework that orchestrates existing Go tools (arkfile-client, arkfile-admin, cryptocli) to validate end-to-end workflows.
+This document outlines the implementation of `scripts/testing/integration-test.go` - a Go-based integration test framework that orchestrates existing Go tools (`arkfile-client`, `arkfile-admin`, `cryptocli`) to validate end-to-end workflows of **password-based Argon2ID file encryption** and OPAQUE authentication.
 
 `NOTE: Complete go-utils-project.md before starting this project.`
 
-**Core Philosophy**: Tool orchestration, not reimplementation. Execute existing binaries via `os/exec` to test real-world workflows that complement `test-app-curl.sh`.
+**Core Philosophy**: Tool orchestration, not reimplementation. Execute existing binaries via `os/exec` to test real-world workflows that complement `test-app-curl.sh`. **All file encryption uses Argon2ID key derivation from user passwords; OPAQUE is exclusively for authentication flow.**
 
 ## Project Structure
 
@@ -260,16 +260,16 @@ func (s *IntegrationSuite) runEnvironmentValidation() error {
 
 ### Phase 3: Authentication Workflow (Test Phase 2)
 
-**Goal**: Test authentication and session management across tools.
+**Goal**: Test OPAQUE authentication and session management across tools. OPAQUE is for authentication only and does not involve export keys for file encryption.
 
 ```go
 func (s *IntegrationSuite) runAuthenticationWorkflow() error {
     fmt.Printf("📋 Phase 2: Authentication Workflow\n")
     
-    var opaqueExportKey string
     var sessionToken string
     
     s.runTest("User Authentication", func() error {
+        // Assume password is provided securely in test environment or derived
         result, err := s.executeCommand("arkfile-client", "login", "--username", s.config.TestUser)
         if err != nil {
             return fmt.Errorf("login failed: %v\nStderr: %s", err, result.Stderr)
@@ -278,14 +278,8 @@ func (s *IntegrationSuite) runAuthenticationWorkflow() error {
         // Parse login output for session data
         if strings.Contains(result.Stdout, "Login successful") {
             sessionToken = extractSessionToken(result.Stdout)
-            opaqueExportKey = extractOPAQUEExportKey(result.Stdout)
-            
-            if opaqueExportKey == "" {
-                return fmt.Errorf("OPAQUE export key not found in login output")
-            }
             
             // Store for later phases
-            s.setSessionData("opaque_export_key", opaqueExportKey)
             s.setSessionData("session_token", sessionToken)
             
             return nil
@@ -308,29 +302,11 @@ func (s *IntegrationSuite) runAuthenticationWorkflow() error {
         return nil
     })
     
-    s.runTest("OPAQUE Export Key Validation", func() error {
-        // Verify export key format and length
-        if len(opaqueExportKey) < 64 {
-            return fmt.Errorf("OPAQUE export key too short: %d bytes", len(opaqueExportKey))
-        }
-        
-        // Test key with cryptocli
-        result, err := s.executeCommand("cryptocli", "validate-export-key", "--key", opaqueExportKey)
-        if err != nil {
-            // If validate command doesn't exist, just check format
-            if !isValidHexString(opaqueExportKey) {
-                return fmt.Errorf("OPAQUE export key not valid hex: %s", opaqueExportKey[:20]+"...")
-            }
-        }
-        
-        return nil
-    })
-    
     fmt.Printf("✅ Authentication workflow completed\n\n")
     return nil
 }
 
-// Helper functions
+// Helper functions (only extractSessionToken needed for updated flow)
 func extractSessionToken(output string) string {
     // Parse session token from arkfile-client output
     lines := strings.Split(output, "\n")
@@ -344,25 +320,13 @@ func extractSessionToken(output string) string {
     }
     return ""
 }
-
-func extractOPAQUEExportKey(output string) string {
-    // Parse OPAQUE export key from arkfile-client output
-    lines := strings.Split(output, "\n")
-    for _, line := range lines {
-        if strings.Contains(line, "OPAQUE export key:") {
-            parts := strings.Split(line, ":")
-            if len(parts) > 1 {
-                return strings.TrimSpace(parts[1])
-            }
-        }
-    }
-    return ""
-}
+// Remove extractOPAQUEExportKey as it's no longer used
+// func extractOPAQUEExportKey(output string) string { ... }
 ```
 
 ### Phase 4: File Operations Workflow (Test Phase 3)
 
-**Goal**: Test complete file encrypt→upload→download→decrypt cycle.
+**Goal**: Test complete Argon2ID password-based encrypt→upload→download→decrypt cycle.
 
 ```go
 func (s *IntegrationSuite) runFileOperationsWorkflow() error {
@@ -374,6 +338,8 @@ func (s *IntegrationSuite) runFileOperationsWorkflow() error {
     var decryptedFileName = "integration-test-decrypted.dat"
     var originalHash string
     var fileID string
+    // Assuming TEST_PASSWORD is available to the Go test suite securely
+    local testPassword := "MyTestPassword123!" // Replace with actual secure test password acquisition
     
     s.runTest("Test File Generation", func() error {
         result, err := s.executeCommand("cryptocli", "generate-test-file",
@@ -395,20 +361,25 @@ func (s *IntegrationSuite) runFileOperationsWorkflow() error {
         return nil
     })
     
-    s.runTest("File Encryption with OPAQUE Keys", func() error {
-        opaqueKey := s.getSessionData("opaque_export_key")
-        if opaqueKey == "" {
-            return fmt.Errorf("OPAQUE export key not available")
-        }
-        
-        result, err := s.executeCommand("cryptocli", "encrypt-file-opaque",
-            "--input", testFileName,
+    s.runTest("File Encryption with Password (Argon2ID)", func() error {
+        // Use cryptocli encrypt-password with a secure password
+        // The password should be passed securely, e.g., via stdin for cryptocli or as a secured config value
+        cmd := exec.Command("./cmd/cryptocli/cryptocli", "encrypt-password",
+            "--file", testFileName,
             "--output", encryptedFileName,
-            "--export-key", opaqueKey,
             "--username", s.config.TestUser,
-            "--file-id", testFileName)
+            "--key-type", "account") // Assuming "account" key type uses Argon2ID with user's password
+        cmd.Stdin = strings.NewReader(testPassword + "\n") // Securely provide password
+        cmd.Dir = s.config.BaseDir
+        
+        var stdout, stderr bytes.Buffer
+        cmd.Stdout = &stdout
+        cmd.Stderr = &stderr
+        
+        err := cmd.Run()
+        
         if err != nil {
-            return fmt.Errorf("file encryption failed: %v\nStderr: %s", err, result.Stderr)
+            return fmt.Errorf("file encryption failed: %v\nStdout: %s\nStderr: %s", err, stdout.String(), stderr.String())
         }
         
         // Verify encrypted file exists and is larger than original
@@ -454,15 +425,23 @@ func (s *IntegrationSuite) runFileOperationsWorkflow() error {
     })
     
     s.runTest("File Decryption and Integrity", func() error {
-        opaqueKey := s.getSessionData("opaque_export_key")
-        
-        result, err := s.executeCommand("cryptocli", "decrypt-file-opaque",
-            "--input", downloadedFileName,
+        // Use cryptocli decrypt-password with a secure password
+        cmd := exec.Command("./cmd/cryptocli/cryptocli", "decrypt-password",
+            "--file", downloadedFileName,
             "--output", decryptedFileName,
-            "--export-key", opaqueKey,
-            "--username", s.config.TestUser)
+            "--username", s.config.TestUser,
+            "--key-type", "account") // Assuming "account" key type uses Argon2ID with user's password
+        cmd.Stdin = strings.NewReader(testPassword + "\n") // Securely provide password
+        cmd.Dir = s.config.BaseDir
+        
+        var stdout, stderr bytes.Buffer
+        cmd.Stdout = &stdout
+        cmd.Stderr = &stderr
+        
+        err := cmd.Run()
+        
         if err != nil {
-            return fmt.Errorf("file decryption failed: %v\nStderr: %s", err, result.Stderr)
+            return fmt.Errorf("file decryption failed: %v\nStdout: %s\nStderr: %s", err, stdout.String(), stderr.String())
         }
         
         // Verify file integrity through hash comparison
@@ -476,7 +455,7 @@ func (s *IntegrationSuite) runFileOperationsWorkflow() error {
                 originalHash[:16]+"...", finalHash[:16]+"...")
         }
         
-        fmt.Printf("✅ Perfect file integrity maintained through complete cycle\n")
+        fmt.Printf("✅ Perfect file integrity maintained through complete Argon2ID password-based cycle\n")
         return nil
     })
     
@@ -761,8 +740,8 @@ func (s *IntegrationSuite) cleanup() error {
 
 ### Functional Requirements
 - ✅ All 5 test phases pass with existing Go tools
-- ✅ File integrity maintained through complete encrypt→upload→download→decrypt cycle
-- ✅ OPAQUE export keys work seamlessly between arkfile-client and cryptocli
+- ✅ File integrity maintained through complete Argon2ID password-based encrypt→upload→download→decrypt cycle
+- ✅ OPAQUE is used for authentication only, without export keys for file encryption
 - ✅ Session management works correctly across tool invocations
 - ✅ Share operations produce correct decrypted files
 - ✅ Admin operations integrate correctly with user workflows

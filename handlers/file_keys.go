@@ -422,59 +422,6 @@ func SetPrimaryKey(c echo.Context) error {
 	})
 }
 
-// RegisterCustomFilePassword registers a custom password with OPAQUE for a file
-func RegisterCustomFilePassword(c echo.Context) error {
-	username := auth.GetUsernameFromToken(c)
-	fileID := c.Param("fileId")
-
-	// Check file ownership
-	var ownerUsername string
-	err := database.DB.QueryRow(
-		"SELECT owner_username FROM file_metadata WHERE file_id = ?",
-		fileID,
-	).Scan(&ownerUsername)
-
-	if err == sql.ErrNoRows {
-		return echo.NewHTTPError(http.StatusNotFound, "File not found")
-	} else if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Database error")
-	}
-
-	if ownerUsername != username {
-		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to modify this file")
-	}
-
-	var request struct {
-		Password     string `json:"password"`
-		KeyLabel     string `json:"keyLabel"`
-		PasswordHint string `json:"passwordHint"`
-	}
-
-	if err := c.Bind(&request); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
-	}
-
-	// Get user object and use integrated OPAQUE method
-	user, err := models.GetUserByUsername(database.DB, username)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "User not found")
-	}
-
-	// Register custom password using User model integration
-	err = user.RegisterFilePassword(database.DB, fileID, request.Password, request.KeyLabel, request.PasswordHint)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to register custom file password: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to register custom password")
-	}
-
-	logging.InfoLogger.Printf("Custom file password registered for %s by %s", fileID, username)
-
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"message": "Custom file password registered successfully",
-		"keyType": "custom",
-	})
-}
-
 // GetFileDecryptionKey provides the encryption key for a file given a password
 func GetFileDecryptionKey(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
@@ -530,27 +477,6 @@ func GetFileDecryptionKey(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Key derivation failed")
 		}
 
-	case "custom":
-		// Get user object and use integrated OPAQUE method
-		user, err := models.GetUserByUsername(database.DB, username)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "User not found")
-		}
-
-		// Authenticate custom password using User model integration
-		exportKey, err := user.AuthenticateFilePassword(database.DB, fileID, request.Password)
-		if err != nil {
-			logging.ErrorLogger.Printf("Custom password authentication failed: %v", err)
-			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid custom password")
-		}
-		defer secureZeroBytes(exportKey)
-
-		// Derive file encryption key from custom password export key
-		encryptionKey, err = deriveOPAQUEFileKey(exportKey, fileID, username)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Key derivation failed")
-		}
-
 	default:
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid key type")
 	}
@@ -577,12 +503,5 @@ func secureZeroBytes(data []byte) {
 
 func deriveAccountFileKey(exportKey []byte, username, fileID string) ([]byte, error) {
 	// This would use HKDF with proper domain separation
-	// Placeholder implementation - should use crypto.DeriveAccountFileKey
-	return make([]byte, 32), nil
-}
-
-func deriveOPAQUEFileKey(exportKey []byte, fileID, username string) ([]byte, error) {
-	// This would use HKDF with proper domain separation
-	// Placeholder implementation - should use crypto.DeriveOPAQUEFileKey
 	return make([]byte, 32), nil
 }

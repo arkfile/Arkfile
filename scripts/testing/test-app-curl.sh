@@ -1550,8 +1550,7 @@ phase_9_file_operations() {
         --file "$test_file" \
         --output "$encrypted_file" \
         --username "$TEST_USERNAME" \
-        --key-type account \
-        --password "$TEST_PASSWORD" 2>/dev/null; then
+        --key-type account 2>/dev/null; then
         error "Failed to encrypt file with account password"
     fi
     
@@ -1569,12 +1568,11 @@ phase_9_file_operations() {
     # Step 3: Test decryption with account password  
     log "Step 3: Decrypting file with account password..."
     
-    if ! ./cmd/cryptocli/cryptocli decrypt-password \
+    if ! echo "$TEST_PASSWORD" | ./cmd/cryptocli/cryptocli decrypt-password \
         --file "$encrypted_file" \
         --output "$decrypted_file" \
         --username "$TEST_USERNAME" \
-        --key-type account \
-        --password "$TEST_PASSWORD" 2>/dev/null; then
+        --key-type account 2>/dev/null; then
         error "Failed to decrypt file with account password"
     fi
     
@@ -1625,24 +1623,22 @@ phase_9_file_operations() {
     # Use a different password for custom encryption (simulates user providing custom password)
     local CUSTOM_TEST_PASSWORD="CustomPassword123!DifferentFromAccount"
     
-    if ! ./cmd/cryptocli/cryptocli encrypt-password \
+    if ! echo "$CUSTOM_TEST_PASSWORD" | ./cmd/cryptocli/cryptocli encrypt-password \
         --file "$test_file" \
         --output "$custom_encrypted_file" \
         --username "$TEST_USERNAME" \
-        --key-type custom \
-        --password "$CUSTOM_TEST_PASSWORD" 2>/dev/null; then
+        --key-type custom 2>/dev/null; then
         error "Failed to encrypt file with custom password"
     fi
     
     success "File encrypted successfully with custom password (different key derivation)"
     
     # Decrypt with custom password
-    if ! ./cmd/cryptocli/cryptocli decrypt-password \
+    if ! echo "$CUSTOM_TEST_PASSWORD" | ./cmd/cryptocli/cryptocli decrypt-password \
         --file "$custom_encrypted_file" \
         --output "$custom_decrypted_file" \
         --username "$TEST_USERNAME" \
-        --key-type custom \
-        --password "$CUSTOM_TEST_PASSWORD" 2>/dev/null; then
+        --key-type custom 2>/dev/null; then
         error "Failed to decrypt file with custom password"
     fi
     

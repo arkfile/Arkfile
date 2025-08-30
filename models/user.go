@@ -537,12 +537,6 @@ func (u *User) GetOPAQUEAccountStatus(db *sql.DB) (*OPAQUEAccountStatus, error) 
 	return status, nil
 }
 
-// RegisterFilePassword registers a custom password for a specific file
-func (u *User) RegisterFilePassword(db *sql.DB, fileID, password, keyLabel, passwordHint string) error {
-	opm := auth.GetOPAQUEPasswordManagerWithDB(db)
-	return opm.RegisterCustomFilePassword(u.Username, fileID, password, keyLabel, passwordHint)
-}
-
 // GetFilePasswordRecords gets all password records for a specific file owned by this user
 func (u *User) GetFilePasswordRecords(db *sql.DB, fileID string) ([]*auth.OPAQUEPasswordRecord, error) {
 	opm := auth.GetOPAQUEPasswordManagerWithDB(db)

@@ -9,16 +9,16 @@ import (
 
 // Protocol version constants
 const (
-	VersionOPAQUE   = 0x01 // Current OPAQUE protocol
-	VersionOPAQUEPQ = 0x02 // Future post-quantum OPAQUE protocol
-	VersionReserved = 0xFF // Reserved for future use
+	AuthProtoVersionOPAQUE   = 0x01 // Current OPAQUE protocol
+	AuthProtoVersionOPAQUEPQ = 0x02 // Future post-quantum OPAQUE protocol
+	VersionReserved          = 0xFF // Reserved for future use
 )
 
 // Protocol version names for human-readable output
 var VersionNames = map[byte]string{
-	VersionOPAQUE:   "OPAQUE-v1",
-	VersionOPAQUEPQ: "OPAQUE-PQ-v1",
-	VersionReserved: "Reserved",
+	AuthProtoVersionOPAQUE:   "OPAQUE-v1",
+	AuthProtoVersionOPAQUEPQ: "OPAQUE-PQ-v1",
+	VersionReserved:          "Reserved",
 }
 
 // File encryption header versions (separate from authentication protocol)
@@ -46,9 +46,9 @@ type CapabilityFlags struct {
 // NewProtocolNegotiator creates a new protocol negotiator
 func NewProtocolNegotiator() *ProtocolNegotiator {
 	return &ProtocolNegotiator{
-		SupportedVersions: []byte{VersionOPAQUE}, // Currently only OPAQUE-v1
-		PreferredVersion:  VersionOPAQUE,
-		CurrentVersion:    VersionOPAQUE,
+		SupportedVersions: []byte{AuthProtoVersionOPAQUE}, // Currently only OPAQUE-v1
+		PreferredVersion:  AuthProtoVersionOPAQUE,
+		CurrentVersion:    AuthProtoVersionOPAQUE,
 	}
 }
 
@@ -63,12 +63,12 @@ func (pn *ProtocolNegotiator) NegotiateVersion(clientVersions []byte) (byte, err
 		for _, clientVersion := range clientVersions {
 			if serverVersion == clientVersion {
 				// Prefer post-quantum if both support it
-				if serverVersion == VersionOPAQUEPQ {
-					return VersionOPAQUEPQ, nil
+				if serverVersion == AuthProtoVersionOPAQUEPQ {
+					return AuthProtoVersionOPAQUEPQ, nil
 				}
 				// Fall back to current stable version
-				if serverVersion == VersionOPAQUE {
-					return VersionOPAQUE, nil
+				if serverVersion == AuthProtoVersionOPAQUE {
+					return AuthProtoVersionOPAQUE, nil
 				}
 			}
 		}
@@ -81,26 +81,26 @@ func (pn *ProtocolNegotiator) NegotiateVersion(clientVersions []byte) (byte, err
 func (pn *ProtocolNegotiator) AddPostQuantumSupport() {
 	// Check if already supported
 	for _, version := range pn.SupportedVersions {
-		if version == VersionOPAQUEPQ {
+		if version == AuthProtoVersionOPAQUEPQ {
 			return // Already supported
 		}
 	}
 
 	// Add post-quantum support while maintaining backward compatibility
-	pn.SupportedVersions = append(pn.SupportedVersions, VersionOPAQUEPQ)
-	pn.PreferredVersion = VersionOPAQUEPQ
+	pn.SupportedVersions = append(pn.SupportedVersions, AuthProtoVersionOPAQUEPQ)
+	pn.PreferredVersion = AuthProtoVersionOPAQUEPQ
 }
 
 // RemovePostQuantumSupport disables post-quantum protocol support
 func (pn *ProtocolNegotiator) RemovePostQuantumSupport() {
 	newVersions := make([]byte, 0, len(pn.SupportedVersions))
 	for _, version := range pn.SupportedVersions {
-		if version != VersionOPAQUEPQ {
+		if version != AuthProtoVersionOPAQUEPQ {
 			newVersions = append(newVersions, version)
 		}
 	}
 	pn.SupportedVersions = newVersions
-	pn.PreferredVersion = VersionOPAQUE
+	pn.PreferredVersion = AuthProtoVersionOPAQUE
 }
 
 // GetCapabilities returns current protocol capabilities
@@ -112,9 +112,9 @@ func (pn *ProtocolNegotiator) GetCapabilities() CapabilityFlags {
 
 	for _, version := range pn.SupportedVersions {
 		switch version {
-		case VersionOPAQUE:
+		case AuthProtoVersionOPAQUE:
 			caps.SupportsOPAQUE = true
-		case VersionOPAQUEPQ:
+		case AuthProtoVersionOPAQUEPQ:
 			caps.SupportsOPAQUEPQ = true
 		}
 	}
@@ -214,7 +214,7 @@ func (mh *MigrationHelper) PrepareForPostQuantumMigration() error {
 // CompletePostQuantumMigration finalizes PQ transition
 func (mh *MigrationHelper) CompletePostQuantumMigration() error {
 	// Validate post-quantum support is active
-	if !mh.negotiator.IsVersionSupported(VersionOPAQUEPQ) {
+	if !mh.negotiator.IsVersionSupported(AuthProtoVersionOPAQUEPQ) {
 		return fmt.Errorf("post-quantum support not enabled")
 	}
 
@@ -230,7 +230,7 @@ func (mh *MigrationHelper) RollbackPostQuantumMigration() error {
 	mh.negotiator.RemovePostQuantumSupport()
 
 	// Ensure OPAQUE-v1 support is maintained
-	if !mh.negotiator.IsVersionSupported(VersionOPAQUE) {
+	if !mh.negotiator.IsVersionSupported(AuthProtoVersionOPAQUE) {
 		return fmt.Errorf("cannot rollback - OPAQUE-v1 support missing")
 	}
 
@@ -286,7 +286,7 @@ func (ccc *ClientCompatibilityChecker) CheckCompatibility(clientVersions []byte,
 	}
 
 	// If negotiated version is post-quantum but client doesn't support it
-	if negotiatedVersion == VersionOPAQUEPQ && !clientCaps.SupportsOPAQUEPQ {
+	if negotiatedVersion == AuthProtoVersionOPAQUEPQ && !clientCaps.SupportsOPAQUEPQ {
 		return false, "server prefers post-quantum but client doesn't support it"
 	}
 

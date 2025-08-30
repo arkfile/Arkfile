@@ -43,31 +43,6 @@ func DeriveArgon2IDKey(password, salt []byte, keyLen uint32, memory, time uint32
 // Password-based key derivation functions using Argon2ID
 // These replace the old OPAQUE export key based functions
 
-// DerivePasswordFileKey derives a file encryption key from password using Argon2ID
-func DerivePasswordFileKey(password []byte, salt []byte, fileID, username string) ([]byte, error) {
-	// Use unified Argon2ID parameters
-	baseKey, err := DeriveArgon2IDKey(password, salt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
-	if err != nil {
-		return nil, fmt.Errorf("argon2id derivation failed: %w", err)
-	}
-
-	// Use HKDF to derive file-specific key
-	info := fmt.Sprintf("arkfile-file-encryption:%s:%s", username, fileID)
-	return hkdfExpand(baseKey, []byte(info), 32)
-}
-
-// DerivePasswordShareKey derives a share access key from password using Argon2ID
-func DerivePasswordShareKey(password []byte, salt []byte, shareID, fileID string) ([]byte, error) {
-	// Use unified Argon2ID parameters
-	baseKey, err := DeriveArgon2IDKey(password, salt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
-	if err != nil {
-		return nil, fmt.Errorf("argon2id derivation failed: %w", err)
-	}
-
-	info := fmt.Sprintf("arkfile-share-access:%s:%s", shareID, fileID)
-	return hkdfExpand(baseKey, []byte(info), 32)
-}
-
 // DerivePasswordMetadataKey derives a metadata encryption key from password using Argon2ID
 func DerivePasswordMetadataKey(password []byte, salt []byte, username string) ([]byte, error) {
 	// Use unified Argon2ID parameters

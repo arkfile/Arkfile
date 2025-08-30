@@ -18,7 +18,6 @@ type KeyInfo struct {
 	ID       string  // User-friendly identifier
 	Type     KeyType // Account, custom, or share
 	Password []byte  // Password for key derivation
-	Salt     []byte  // Salt for Argon2ID
 	Username string  // Username for HKDF context
 	FileID   string  // File ID for HKDF context
 	Hint     string  // Optional hint for custom passwords
@@ -42,11 +41,11 @@ func CreatePasswordKeyEnvelope(fek []byte, keyInfo KeyInfo) ([]byte, error) {
 
 	switch keyInfo.Type {
 	case KeyTypeAccount:
-		kek, err = DerivePasswordFileKey(keyInfo.Password, keyInfo.Salt, keyInfo.FileID, keyInfo.Username)
+		kek = DeriveAccountPasswordKey(keyInfo.Password, keyInfo.Username)
 	case KeyTypeCustom:
-		kek, err = DerivePasswordFileKey(keyInfo.Password, keyInfo.Salt, keyInfo.FileID, keyInfo.Username)
+		kek = DeriveCustomPasswordKey(keyInfo.Password, keyInfo.Username)
 	case KeyTypeShare:
-		kek, err = DerivePasswordShareKey(keyInfo.Password, keyInfo.Salt, keyInfo.FileID, keyInfo.Username)
+		kek = DeriveSharePasswordKey(keyInfo.Password, keyInfo.Username)
 	default:
 		return nil, fmt.Errorf("unsupported key type: %d", keyInfo.Type)
 	}
@@ -61,9 +60,22 @@ func CreatePasswordKeyEnvelope(fek []byte, keyInfo KeyInfo) ([]byte, error) {
 		return nil, fmt.Errorf("failed to encrypt FEK: %w", err)
 	}
 
-	// Build envelope: version + keyType + salt + encryptedFEK
+	// Determine the deterministic salt based on the key type
+	var deterministicSalt []byte
+	switch keyInfo.Type {
+	case KeyTypeAccount:
+		deterministicSalt = GenerateUserKeySalt(keyInfo.Username, "account")
+	case KeyTypeCustom:
+		deterministicSalt = GenerateUserKeySalt(keyInfo.Username, "custom")
+	case KeyTypeShare:
+		deterministicSalt = GenerateUserKeySalt(keyInfo.Username, "share")
+	default:
+		return nil, fmt.Errorf("unsupported key type for salt generation: %d", keyInfo.Type)
+	}
+
+	// Build envelope: version + keyType + deterministicSalt + encryptedFEK
 	result := []byte{byte(version), byte(keyInfo.Type)}
-	result = append(result, keyInfo.Salt...)
+	result = append(result, deterministicSalt...)
 	result = append(result, encryptedFEK...)
 
 	return result, nil
@@ -77,8 +89,10 @@ func ExtractFEKFromPasswordEnvelope(envelope []byte, password []byte, username, 
 
 	version := FileEncryptionVersion(envelope[0])
 	keyType := KeyType(envelope[1])
-	salt := envelope[2:34]        // 32-byte salt
-	encryptedFEK := envelope[34:] // Rest is encrypted FEK
+	// The salt is still part of the envelope structure for compatibility,
+	// but it's not directly used for key derivation with the new deterministic salts.
+	// encryptedFEK starts after the salt.
+	encryptedFEK := envelope[34:]
 
 	if version != VersionPasswordBased {
 		return nil, fmt.Errorf("unsupported envelope version: 0x%02x", version)
@@ -90,11 +104,11 @@ func ExtractFEKFromPasswordEnvelope(envelope []byte, password []byte, username, 
 
 	switch keyType {
 	case KeyTypeAccount:
-		kek, err = DerivePasswordFileKey(password, salt, fileID, username)
+		kek = DeriveAccountPasswordKey(password, username)
 	case KeyTypeCustom:
-		kek, err = DerivePasswordFileKey(password, salt, fileID, username)
+		kek = DeriveCustomPasswordKey(password, username)
 	case KeyTypeShare:
-		kek, err = DerivePasswordShareKey(password, salt, fileID, username)
+		kek = DeriveSharePasswordKey(password, username)
 	default:
 		return nil, fmt.Errorf("unsupported key type: %d", keyType)
 	}
@@ -120,7 +134,8 @@ func GetPasswordEnvelopeInfo(envelope []byte) (FileEncryptionVersion, KeyType, [
 
 	version := FileEncryptionVersion(envelope[0])
 	keyType := KeyType(envelope[1])
-	salt := envelope[2:34]
+	// The salt is still part of the envelope structure for compatibility.
+	// It's returned here but not necessarily used for key derivation by the caller.
 
 	if version != VersionPasswordBased {
 		return 0, 0, nil, fmt.Errorf("unsupported envelope version: 0x%02x", version)
@@ -128,7 +143,7 @@ func GetPasswordEnvelopeInfo(envelope []byte) (FileEncryptionVersion, KeyType, [
 
 	switch keyType {
 	case KeyTypeAccount, KeyTypeCustom, KeyTypeShare:
-		return version, keyType, salt, nil
+		return version, keyType, envelope[2:34], nil // Directly return the salt slice
 	default:
 		return 0, 0, nil, fmt.Errorf("unsupported key type: %d", keyType)
 	}

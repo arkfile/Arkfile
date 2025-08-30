@@ -25,12 +25,8 @@ USAGE:
     cryptocli [global options] command [command options] [arguments...]
 
 COMMANDS:
-    encrypt           Encrypt files using OPAQUE export keys
-    decrypt           Decrypt files using OPAQUE export keys
     encrypt-password  Encrypt files using password-based key derivation
     decrypt-password  Decrypt files using password-based key derivation
-    derive-key        Derive encryption keys from OPAQUE export keys
-    derive-export-key Derive OPAQUE export key from username/password
     hash              Calculate SHA-256 hash of files
     generate-key      Generate random AES keys
     generate-test-file Generate test files with deterministic patterns
@@ -39,13 +35,6 @@ COMMANDS:
 GLOBAL OPTIONS:
     --verbose, -v     Verbose output
     --help, -h        Show help
-
-ENCRYPTION COMMANDS:
-    encrypt --file FILE --export-key KEY --username USER --file-id ID [--key-type TYPE]
-    decrypt --file FILE --export-key KEY --username USER --file-id ID [--key-type TYPE]
-
-KEY DERIVATION:
-    derive-key --export-key KEY --username USER --file-id ID [--key-type TYPE]
 
 UTILITY COMMANDS:
     hash --file FILE
@@ -57,15 +46,6 @@ KEY TYPES:
     custom            Custom password-derived encryption
 
 EXAMPLES:
-    # Encrypt with account key
-    cryptocli encrypt --file document.pdf --export-key <base64> --username alice --file-id doc123
-
-    # Decrypt with custom key
-    cryptocli decrypt --file encrypted.bin --export-key <base64> --username alice --file-id doc123 --key-type custom
-
-    # Derive key for inspection
-    cryptocli derive-key --export-key <base64> --username alice --file-id doc123
-
     # Calculate file hash
     cryptocli hash --file document.pdf
 
@@ -115,21 +95,6 @@ func main() {
 
 	// Execute command
 	switch command {
-	case "encrypt":
-		if err := handleEncryptCommand(args); err != nil {
-			logError("Encryption failed: %v", err)
-			os.Exit(1)
-		}
-	case "decrypt":
-		if err := handleDecryptCommand(args); err != nil {
-			logError("Decryption failed: %v", err)
-			os.Exit(1)
-		}
-	case "derive-key":
-		if err := handleDeriveKeyCommand(args); err != nil {
-			logError("Key derivation failed: %v", err)
-			os.Exit(1)
-		}
 	case "encrypt-password":
 		if err := handleEncryptPasswordCommand(args); err != nil {
 			logError("Password-based encryption failed: %v", err)
@@ -166,388 +131,6 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
-}
-
-// handleEncryptCommand processes encrypt command
-func handleEncryptCommand(args []string) error {
-	fs := flag.NewFlagSet("encrypt", flag.ExitOnError)
-	var (
-		filePath    = fs.String("file", "", "File to encrypt (required)")
-		exportKey   = fs.String("export-key", "", "OPAQUE export key (base64) (required)")
-		username    = fs.String("username", "", "Username for key derivation (required)")
-		fileID      = fs.String("file-id", "", "File ID for key derivation (required)")
-		keyType     = fs.String("key-type", "account", "Key type: account or custom")
-		outputPath  = fs.String("output", "", "Output file path (optional)")
-		chunkFormat = fs.Bool("chunked", false, "Use chunked encryption format")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: cryptocli encrypt [FLAGS]
-
-Encrypt files using OPAQUE export keys (completely offline).
-
-FLAGS:
-    --file FILE         File to encrypt (required)
-    --export-key KEY    OPAQUE export key (base64 encoded) (required)
-    --username USER     Username for key derivation (required)
-    --file-id ID        File ID for key derivation (required)
-    --key-type TYPE     Key type: account or custom (default: account)
-    --output FILE       Output file path (optional, defaults to input.enc)
-    --chunked           Use chunked encryption format
-    --help             Show this help message
-
-EXAMPLES:
-    cryptocli encrypt --file document.pdf --export-key dGVzdGtleQ== --username alice --file-id doc123
-    cryptocli encrypt --file data.bin --export-key dGVzdGtleQ== --username bob --file-id data456 --key-type custom
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *filePath == "" {
-		return fmt.Errorf("file path is required")
-	}
-	if *exportKey == "" {
-		return fmt.Errorf("export key is required")
-	}
-	if *username == "" {
-		return fmt.Errorf("username is required")
-	}
-	if *fileID == "" {
-		return fmt.Errorf("file ID is required")
-	}
-
-	if *keyType != "account" && *keyType != "custom" {
-		return fmt.Errorf("key type must be 'account' or 'custom'")
-	}
-
-	// Decode export key
-	exportKeyBytes, err := base64.StdEncoding.DecodeString(*exportKey)
-	if err != nil {
-		return fmt.Errorf("invalid export key format: %w", err)
-	}
-
-	logVerbose("Export key length: %d bytes", len(exportKeyBytes))
-
-	// Read input file
-	fileData, err := os.ReadFile(*filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
-	}
-
-	logVerbose("File size: %d bytes", len(fileData))
-
-	// Derive file encryption key using password-based derivation
-	var fileKey []byte
-	var version, keyTypeByte byte
-
-	if *keyType == "account" {
-		version = 0x01
-		keyTypeByte = 0x01
-		fileKey, err = crypto.DerivePasswordFileKey(exportKeyBytes, nil, *fileID, *username)
-	} else {
-		version = 0x02
-		keyTypeByte = 0x02
-		fileKey, err = crypto.DerivePasswordFileKey(exportKeyBytes, nil, *fileID, *username)
-	}
-
-	if err != nil {
-		return fmt.Errorf("key derivation failed: %w", err)
-	}
-
-	logVerbose("Derived key: %x", fileKey[:8]) // Show first 8 bytes for debugging
-
-	// Encrypt file
-	var encryptedData []byte
-
-	if *chunkFormat {
-		// Use chunked format with envelope
-		envelope := []byte{version, keyTypeByte}
-
-		// For simplicity, encrypt as a single chunk
-		ciphertext, err := crypto.EncryptGCM(fileData, fileKey)
-		if err != nil {
-			return fmt.Errorf("encryption failed: %w", err)
-		}
-
-		// Combine envelope + encrypted data
-		encryptedData = make([]byte, len(envelope)+len(ciphertext))
-		copy(encryptedData, envelope)
-		copy(encryptedData[len(envelope):], ciphertext)
-	} else {
-		// Use simple format with version header
-		ciphertext, err := crypto.EncryptGCM(fileData, fileKey)
-		if err != nil {
-			return fmt.Errorf("encryption failed: %w", err)
-		}
-
-		// Add version header: [version][keyType] + ciphertext
-		encryptedData = make([]byte, 2+len(ciphertext))
-		encryptedData[0] = version
-		encryptedData[1] = keyTypeByte
-		copy(encryptedData[2:], ciphertext)
-	}
-
-	// Determine output path
-	outputFilePath := *outputPath
-	if outputFilePath == "" {
-		outputFilePath = *filePath + ".enc"
-	}
-
-	// Write encrypted file
-	if err := os.WriteFile(outputFilePath, encryptedData, 0644); err != nil {
-		return fmt.Errorf("failed to write encrypted file: %w", err)
-	}
-
-	fmt.Printf("Encryption completed successfully\n")
-	fmt.Printf("Input file: %s (%d bytes)\n", *filePath, len(fileData))
-	fmt.Printf("Output file: %s (%d bytes)\n", outputFilePath, len(encryptedData))
-	fmt.Printf("Key type: %s (version: 0x%02x)\n", *keyType, version)
-	if *chunkFormat {
-		fmt.Printf("Format: chunked with envelope\n")
-	} else {
-		fmt.Printf("Format: simple with header\n")
-	}
-
-	return nil
-}
-
-// handleDecryptCommand processes decrypt command
-func handleDecryptCommand(args []string) error {
-	fs := flag.NewFlagSet("decrypt", flag.ExitOnError)
-	var (
-		filePath   = fs.String("file", "", "File to decrypt (required)")
-		exportKey  = fs.String("export-key", "", "OPAQUE export key (base64) (required)")
-		username   = fs.String("username", "", "Username for key derivation (required)")
-		fileID     = fs.String("file-id", "", "File ID for key derivation (required)")
-		keyType    = fs.String("key-type", "", "Key type: account or custom (auto-detect if not specified)")
-		outputPath = fs.String("output", "", "Output file path (optional)")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: cryptocli decrypt [FLAGS]
-
-Decrypt files using OPAQUE export keys (completely offline).
-
-FLAGS:
-    --file FILE         File to decrypt (required)
-    --export-key KEY    OPAQUE export key (base64 encoded) (required)
-    --username USER     Username for key derivation (required)
-    --file-id ID        File ID for key derivation (required)
-    --key-type TYPE     Key type: account or custom (auto-detect if not specified)
-    --output FILE       Output file path (optional, defaults to input.dec)
-    --help             Show this help message
-
-EXAMPLES:
-    cryptocli decrypt --file document.pdf.enc --export-key dGVzdGtleQ== --username alice --file-id doc123
-    cryptocli decrypt --file data.bin.enc --export-key dGVzdGtleQ== --username bob --file-id data456 --key-type custom
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *filePath == "" {
-		return fmt.Errorf("file path is required")
-	}
-	if *exportKey == "" {
-		return fmt.Errorf("export key is required")
-	}
-	if *username == "" {
-		return fmt.Errorf("username is required")
-	}
-	if *fileID == "" {
-		return fmt.Errorf("file ID is required")
-	}
-
-	// Decode export key
-	exportKeyBytes, err := base64.StdEncoding.DecodeString(*exportKey)
-	if err != nil {
-		return fmt.Errorf("invalid export key format: %w", err)
-	}
-
-	// Read encrypted file
-	encryptedData, err := os.ReadFile(*filePath)
-	if err != nil {
-		return fmt.Errorf("failed to read encrypted file: %w", err)
-	}
-
-	logVerbose("Encrypted file size: %d bytes", len(encryptedData))
-
-	// Check minimum length
-	if len(encryptedData) < 2 {
-		return fmt.Errorf("encrypted file too short")
-	}
-
-	// Read version and key type from header
-	version := encryptedData[0]
-	keyTypeByte := encryptedData[1]
-
-	logVerbose("File version: 0x%02x, key type: 0x%02x", version, keyTypeByte)
-
-	// Determine key type from header if not specified
-	detectedKeyType := ""
-	switch version {
-	case 0x01:
-		if keyTypeByte == 0x01 {
-			detectedKeyType = "account"
-		}
-	case 0x02:
-		if keyTypeByte == 0x02 {
-			detectedKeyType = "custom"
-		}
-	}
-
-	if detectedKeyType == "" {
-		return fmt.Errorf("unsupported file format (version: 0x%02x, key type: 0x%02x)", version, keyTypeByte)
-	}
-
-	// Use specified key type or detected key type
-	finalKeyType := *keyType
-	if finalKeyType == "" {
-		finalKeyType = detectedKeyType
-	} else if finalKeyType != detectedKeyType {
-		return fmt.Errorf("key type mismatch: specified %s but file contains %s", finalKeyType, detectedKeyType)
-	}
-
-	// Derive file encryption key using password-based derivation
-	var fileKey []byte
-
-	if finalKeyType == "account" {
-		fileKey, err = crypto.DerivePasswordFileKey(exportKeyBytes, nil, *fileID, *username)
-	} else {
-		fileKey, err = crypto.DerivePasswordFileKey(exportKeyBytes, nil, *fileID, *username)
-	}
-
-	if err != nil {
-		return fmt.Errorf("key derivation failed: %w", err)
-	}
-
-	logVerbose("Derived key: %x", fileKey[:8]) // Show first 8 bytes for debugging
-
-	// Extract ciphertext (skip 2-byte header)
-	ciphertext := encryptedData[2:]
-
-	// Decrypt file
-	plaintext, err := crypto.DecryptGCM(ciphertext, fileKey)
-	if err != nil {
-		return fmt.Errorf("decryption failed: %w", err)
-	}
-
-	// Determine output path
-	outputFilePath := *outputPath
-	if outputFilePath == "" {
-		// Remove .enc extension if present
-		if strings.HasSuffix(*filePath, ".enc") {
-			outputFilePath = strings.TrimSuffix(*filePath, ".enc")
-		} else {
-			outputFilePath = *filePath + ".dec"
-		}
-	}
-
-	// Write decrypted file
-	// -- file permissions set so that only the owner can read/write the decrypted file
-	if err := os.WriteFile(outputFilePath, plaintext, 0600); err != nil {
-		return fmt.Errorf("failed to write decrypted file: %w", err)
-	}
-
-	fmt.Printf("Decryption completed successfully\n")
-	fmt.Printf("Input file: %s (%d bytes)\n", *filePath, len(encryptedData))
-	fmt.Printf("Output file: %s (%d bytes)\n", outputFilePath, len(plaintext))
-	fmt.Printf("Key type: %s (version: 0x%02x)\n", finalKeyType, version)
-
-	return nil
-}
-
-// handleDeriveKeyCommand processes derive-key command
-func handleDeriveKeyCommand(args []string) error {
-	fs := flag.NewFlagSet("derive-key", flag.ExitOnError)
-	var (
-		exportKey = fs.String("export-key", "", "OPAQUE export key (base64) (required)")
-		username  = fs.String("username", "", "Username for key derivation (required)")
-		fileID    = fs.String("file-id", "", "File ID for key derivation (required)")
-		keyType   = fs.String("key-type", "account", "Key type: account or custom")
-		format    = fs.String("format", "hex", "Output format: hex or base64")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: cryptocli derive-key [FLAGS]
-
-Derive encryption keys from OPAQUE export keys for inspection.
-
-FLAGS:
-    --export-key KEY    OPAQUE export key (base64 encoded) (required)
-    --username USER     Username for key derivation (required)
-    --file-id ID        File ID for key derivation (required)
-    --key-type TYPE     Key type: account or custom (default: account)
-    --format FORMAT     Output format: hex or base64 (default: hex)
-    --help             Show this help message
-
-EXAMPLES:
-    cryptocli derive-key --export-key dGVzdGtleQ== --username alice --file-id doc123
-    cryptocli derive-key --export-key dGVzdGtleQ== --username bob --file-id data456 --key-type custom --format base64
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *exportKey == "" {
-		return fmt.Errorf("export key is required")
-	}
-	if *username == "" {
-		return fmt.Errorf("username is required")
-	}
-	if *fileID == "" {
-		return fmt.Errorf("file ID is required")
-	}
-
-	if *keyType != "account" && *keyType != "custom" {
-		return fmt.Errorf("key type must be 'account' or 'custom'")
-	}
-
-	if *format != "hex" && *format != "base64" {
-		return fmt.Errorf("format must be 'hex' or 'base64'")
-	}
-
-	// Decode export key
-	exportKeyBytes, err := base64.StdEncoding.DecodeString(*exportKey)
-	if err != nil {
-		return fmt.Errorf("invalid export key format: %w", err)
-	}
-
-	// Derive file encryption key using password-based derivation
-	var fileKey []byte
-
-	if *keyType == "account" {
-		fileKey, err = crypto.DerivePasswordFileKey(exportKeyBytes, nil, *fileID, *username)
-	} else {
-		fileKey, err = crypto.DerivePasswordFileKey(exportKeyBytes, nil, *fileID, *username)
-	}
-
-	if err != nil {
-		return fmt.Errorf("key derivation failed: %w", err)
-	}
-
-	// Output derived key
-	fmt.Printf("Key derivation successful\n")
-	fmt.Printf("Username: %s\n", *username)
-	fmt.Printf("File ID: %s\n", *fileID)
-	fmt.Printf("Key type: %s\n", *keyType)
-	fmt.Printf("Export key length: %d bytes\n", len(exportKeyBytes))
-	fmt.Printf("Derived key length: %d bytes\n", len(fileKey))
-
-	if *format == "hex" {
-		fmt.Printf("Derived key (hex): %x\n", fileKey)
-	} else {
-		fmt.Printf("Derived key (base64): %s\n", base64.StdEncoding.EncodeToString(fileKey))
-	}
-
-	return nil
 }
 
 // handleHashCommand processes hash command
@@ -702,94 +285,24 @@ EXAMPLES:
 		return fmt.Errorf("size must not exceed 1GB (1073741824 bytes)")
 	}
 
-	if *pattern != "deterministic" && *pattern != "random" && *pattern != "zeros" {
+	var filePattern crypto.FilePattern
+	switch *pattern {
+	case "deterministic":
+		filePattern = crypto.PatternSequential
+	case "random":
+		filePattern = crypto.PatternRandom
+	case "zeros":
+		filePattern = crypto.PatternZeros
+	default:
 		return fmt.Errorf("pattern must be 'deterministic', 'random', or 'zeros'")
 	}
 
-	logVerbose("Generating test file: %s (%d bytes, pattern: %s)", *filename, *size, *pattern)
+	logVerbose("Generating test file: %s (%d bytes, pattern: %s)", *filename, *size, filePattern)
 
-	// Create output file
-	file, err := os.Create(*filename)
+	hashHex, err := crypto.GenerateTestFileToPath(*filename, *size, filePattern)
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		return fmt.Errorf("failed to generate test file: %w", err)
 	}
-	defer file.Close()
-
-	// Generate file content based on pattern
-	var bytesWritten int64
-	bufSize := 8192 // 8KB buffer for writing
-	buf := make([]byte, bufSize)
-
-	switch *pattern {
-	case "zeros":
-		// Buffer is already zero-initialized
-		for bytesWritten < *size {
-			remaining := *size - bytesWritten
-			toWrite := int64(bufSize)
-			if remaining < toWrite {
-				toWrite = remaining
-			}
-
-			n, err := file.Write(buf[:toWrite])
-			if err != nil {
-				return fmt.Errorf("failed to write to file: %w", err)
-			}
-			bytesWritten += int64(n)
-		}
-
-	case "random":
-		for bytesWritten < *size {
-			remaining := *size - bytesWritten
-			toWrite := int64(bufSize)
-			if remaining < toWrite {
-				toWrite = remaining
-			}
-
-			// Generate random bytes
-			randomBuf := crypto.GenerateRandomBytes(int(toWrite))
-			n, err := file.Write(randomBuf)
-			if err != nil {
-				return fmt.Errorf("failed to write to file: %w", err)
-			}
-			bytesWritten += int64(n)
-		}
-
-	case "deterministic":
-		// Generate deterministic pattern based on position
-		for bytesWritten < *size {
-			remaining := *size - bytesWritten
-			toWrite := int64(bufSize)
-			if remaining < toWrite {
-				toWrite = remaining
-			}
-
-			// Fill buffer with deterministic pattern
-			for i := int64(0); i < toWrite; i++ {
-				pos := bytesWritten + i
-				buf[i] = byte((pos % 256) ^ ((pos >> 8) % 256) ^ ((pos >> 16) % 256))
-			}
-
-			n, err := file.Write(buf[:toWrite])
-			if err != nil {
-				return fmt.Errorf("failed to write to file: %w", err)
-			}
-			bytesWritten += int64(n)
-		}
-	}
-
-	// Close file to ensure all data is written
-	file.Close()
-
-	// Calculate SHA-256 hash of the generated file
-	fileData, err := os.ReadFile(*filename)
-	if err != nil {
-		return fmt.Errorf("failed to read generated file for hashing: %w", err)
-	}
-
-	hasher := sha256.New()
-	hasher.Write(fileData)
-	hash := hasher.Sum(nil)
-	hashHex := hex.EncodeToString(hash)
 
 	// Output results
 	fmt.Printf("Test file generated successfully\n")
@@ -916,7 +429,8 @@ EXAMPLES:
 	fmt.Printf("Password-based encryption completed successfully\n")
 	fmt.Printf("Input file: %s (%d bytes)\n", *filePath, inputInfo.Size())
 	fmt.Printf("Output file: %s (%d bytes)\n", outputFilePath, outputInfo.Size())
-	fmt.Printf("Key type: %s (version: 0x03)\n", *keyType)
+	// Note: The file's actual envelope version is 0x01 and key type is 0x01, 0x02, or 0x03 as handled by crypto.CreatePasswordEnvelope.
+	fmt.Printf("Key type: %s (version: 0x01)\n", *keyType)
 	fmt.Printf("Argon2ID parameters: 8 iterations, 256MB memory, 4 threads\n")
 
 	return nil
@@ -1008,7 +522,7 @@ EXAMPLES:
 	fmt.Printf("Password-based decryption completed successfully\n")
 	fmt.Printf("Input file: %s (%d bytes)\n", *filePath, inputInfo.Size())
 	fmt.Printf("Output file: %s (%d bytes)\n", outputFilePath, outputInfo.Size())
-	fmt.Printf("Key type: %s (version: 0x03)\n", detectedKeyType)
+	fmt.Printf("Key type: %s (version: 0x01)\n", detectedKeyType)
 	fmt.Printf("Argon2ID parameters: 8 iterations, 256MB memory, 4 threads\n")
 
 	return nil

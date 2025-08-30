@@ -76,7 +76,6 @@ type AuthSession struct {
 	AccessToken    string    `json:"access_token"`
 	RefreshToken   string    `json:"refresh_token"`
 	ExpiresAt      time.Time `json:"expires_at"`
-	OPAQUEExport   string    `json:"opaque_export"`
 	ServerURL      string    `json:"server_url"`
 	SessionCreated time.Time `json:"session_created"`
 }
@@ -100,7 +99,6 @@ type Response struct {
 	Token        string                 `json:"token"`
 	RefreshToken string                 `json:"refresh_token"`
 	ExpiresAt    time.Time              `json:"expires_at"`
-	OPAQUEExport string                 `json:"opaque_export"`
 }
 
 // FileInfo represents file metadata
@@ -324,7 +322,11 @@ EXAMPLES:
 
 	loginReq := map[string]string{
 		"username": *usernameFlag,
-		"password": string(password),
+		"password": string(password), // OPAQUE login still expects string password
+	}
+	// Securely clear the password from memory after it's used for loginReq
+	for i := range password {
+		password[i] = 0
 	}
 
 	loginResp, err := client.makeRequest("POST", "/api/opaque/login", loginReq, "")
@@ -357,7 +359,6 @@ EXAMPLES:
 		loginResp.Token = totpResp.Token
 		loginResp.RefreshToken = totpResp.RefreshToken
 		loginResp.ExpiresAt = totpResp.ExpiresAt
-		loginResp.OPAQUEExport = totpResp.OPAQUEExport
 	}
 
 	// Create session
@@ -366,7 +367,6 @@ EXAMPLES:
 		AccessToken:    loginResp.Token,
 		RefreshToken:   loginResp.RefreshToken,
 		ExpiresAt:      loginResp.ExpiresAt,
-		OPAQUEExport:   loginResp.OPAQUEExport,
 		ServerURL:      config.ServerURL,
 		SessionCreated: time.Now(),
 	}
@@ -382,9 +382,6 @@ EXAMPLES:
 
 	fmt.Printf("✅ Login successful for user: %s\n", *usernameFlag)
 	fmt.Printf("Session expires: %s\n", session.ExpiresAt.Format("2006-01-02 15:04:05"))
-	if session.OPAQUEExport != "" {
-		fmt.Printf("OPAQUE export key available for cryptocli integration\n")
-	}
 
 	return nil
 }
@@ -402,7 +399,7 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 	fs.Usage = func() {
 		fmt.Printf(`Usage: arkfile-client upload [FLAGS]
 
-Upload a file to the arkfile server with encryption.
+Upload a file to the arkfile server with password-based encryption.
 
 FLAGS:
     --file FILE         File to upload (required)
@@ -451,6 +448,16 @@ EXAMPLES:
 
 	logVerbose("Uploading file: %s (%d bytes)", uploadFilename, len(fileData))
 
+	// Prompt for password
+	fmt.Printf("Enter password to encrypt File Encryption Key (FEK): ")
+	password, err := readPassword()
+	if err != nil {
+		return fmt.Errorf("failed to read password: %w", err)
+	}
+	if len(password) == 0 {
+		return fmt.Errorf("password cannot be empty")
+	}
+
 	// Generate File Encryption Key (FEK)
 	fek, err := crypto.GenerateAESKey()
 	if err != nil {
@@ -463,22 +470,15 @@ EXAMPLES:
 		return fmt.Errorf("file encryption failed: %w", err)
 	}
 
-	// Encrypt FEK with session key derived from OPAQUE export
-	opaqueExportBytes := []byte(session.OPAQUEExport)
-
-	// Validate and derive session key using unified crypto functions
-	if err := crypto.ValidateOPAQUEExportKey(opaqueExportBytes); err != nil {
-		return fmt.Errorf("invalid OPAQUE export key: %w", err)
-	}
-
-	sessionKey, err := crypto.DeriveSessionKey(opaqueExportBytes, crypto.SessionKeyContext)
-	if err != nil {
-		return fmt.Errorf("session key derivation failed: %w", err)
-	}
-
-	encryptedFEK, err := crypto.EncryptGCM(fek, sessionKey)
+	// Encrypt FEK with password using Argon2ID
+	encryptedFEK, err := crypto.EncryptFEKWithPassword(fek, password, session.Username, "account")
 	if err != nil {
 		return fmt.Errorf("FEK encryption failed: %w", err)
+	}
+
+	// Securely clear the password from memory
+	for i := range password {
+		password[i] = 0
 	}
 
 	// Initialize chunked upload
@@ -654,7 +654,7 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 	fs.Usage = func() {
 		fmt.Printf(`Usage: arkfile-client download [FLAGS]
 
-Download a file from the arkfile server.
+Download a file from the arkfile server with password-based decryption.
 
 FLAGS:
     --file-id ID        File ID to download (from list-files)
@@ -751,22 +751,25 @@ EXAMPLES:
 		return fmt.Errorf("invalid encrypted FEK: %w", err)
 	}
 
-	// Decrypt FEK with session key derived from OPAQUE export
-	opaqueExportBytes := []byte(session.OPAQUEExport)
-
-	// Validate and derive session key using unified crypto functions
-	if err := crypto.ValidateOPAQUEExportKey(opaqueExportBytes); err != nil {
-		return fmt.Errorf("invalid OPAQUE export key: %w", err)
-	}
-
-	sessionKey, err := crypto.DeriveSessionKey(opaqueExportBytes, crypto.SessionKeyContext)
+	// Prompt for password
+	fmt.Printf("Enter password to decrypt File Encryption Key (FEK): ")
+	password, err := readPassword()
 	if err != nil {
-		return fmt.Errorf("session key derivation failed: %w", err)
+		return fmt.Errorf("failed to read password: %w", err)
+	}
+	if len(password) == 0 {
+		return fmt.Errorf("password cannot be empty")
 	}
 
-	fek, err := crypto.DecryptGCM(encryptedFEK, sessionKey)
+	// Decrypt FEK with password using Argon2ID
+	fek, _, err := crypto.DecryptFEKWithPassword(encryptedFEK, password, session.Username)
 	if err != nil {
 		return fmt.Errorf("FEK decryption failed: %w", err)
+	}
+
+	// Securely clear the password from memory
+	for i := range password {
+		password[i] = 0
 	}
 
 	// Decrypt file
@@ -1050,13 +1053,14 @@ func downloadFile(client *http.Client, url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// readPassword reads a password from stdin without echoing using terminal controls
-func readPassword() (string, error) {
+// readPassword reads a password from stdin without echoing using terminal controls and returns it as a byte slice.
+// The caller is responsible for securely clearing the returned byte slice from memory.
+func readPassword() ([]byte, error) {
 	fmt.Print("")
 	bytePassword, err := term.ReadPassword(int(syscall.Stdin))
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	fmt.Println() // Add newline after password input
-	return string(bytePassword), nil
+	return bytePassword, nil
 }

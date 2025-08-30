@@ -42,26 +42,26 @@ func TestChunkedUploadIntegration(t *testing.T) {
 			username := "test@example.com"
 			fileID := "test-file-" + tc.name
 
-			// Mock OPAQUE export key (64 bytes)
-			exportKey := make([]byte, 64)
-			if _, err := rand.Read(exportKey); err != nil {
-				t.Fatalf("Failed to generate export key: %v", err)
+			// Mock password (64 bytes for Argon2ID salt)
+			password := make([]byte, 64)
+			if _, err := rand.Read(password); err != nil {
+				t.Fatalf("Failed to generate password: %v", err)
 			}
-			exportKeyB64 := base64.StdEncoding.EncodeToString(exportKey)
+			passwordB64 := base64.StdEncoding.EncodeToString(password)
 
-			// Step 1: Store export key
-			storeResult := storeOPAQUEExportKey(js.Null(), []js.Value{
+			// Step 1: Store password
+			storeResult := storePasswordForUser(js.Null(), []js.Value{
 				js.ValueOf(username),
-				js.ValueOf(exportKeyB64),
+				js.ValueOf(passwordB64),
 			})
 
 			storeMap, ok := storeResult.(map[string]interface{})
 			if !ok || !storeMap["success"].(bool) {
-				t.Fatalf("Failed to store export key: %v", storeMap["error"])
+				t.Fatalf("Failed to store password: %v", storeMap["error"])
 			}
 
 			// Step 2: Create envelope
-			envelopeResult := createEnvelopeOPAQUE(js.Null(), []js.Value{
+			envelopeResult := createPasswordEnvelope(js.Null(), []js.Value{
 				js.ValueOf(tc.keyType),
 			})
 
@@ -77,7 +77,7 @@ func TestChunkedUploadIntegration(t *testing.T) {
 			jsArray := js.Global().Get("Uint8Array").New(len(originalData))
 			js.CopyBytesToJS(jsArray, originalData)
 
-			encryptResult := encryptFileChunkedOPAQUE(js.Null(), []js.Value{
+			encryptResult := encryptFileChunkedPassword(js.Null(), []js.Value{
 				jsArray,
 				js.ValueOf(username),
 				js.ValueOf(tc.keyType),
@@ -124,7 +124,7 @@ func TestChunkedUploadIntegration(t *testing.T) {
 			// Step 5: Decrypt concatenated data
 			concatenatedB64 := base64.StdEncoding.EncodeToString(concatenatedData)
 
-			decryptResult := decryptFileChunkedOPAQUE(js.Null(), []js.Value{
+			decryptResult := decryptFileChunkedPassword(js.Null(), []js.Value{
 				js.ValueOf(concatenatedB64),
 				js.ValueOf(username),
 				js.ValueOf(fileID),
@@ -168,13 +168,13 @@ func TestChunkedUploadIntegration(t *testing.T) {
 			}
 
 			// Step 7: Clean up
-			clearResult := clearOPAQUEExportKey(js.Null(), []js.Value{
+			clearResult := clearPasswordForUser(js.Null(), []js.Value{
 				js.ValueOf(username),
 			})
 
 			clearMap, ok := clearResult.(map[string]interface{})
 			if !ok || !clearMap["success"].(bool) {
-				t.Errorf("Failed to clear export key: %v", clearMap["error"])
+				t.Errorf("Failed to clear password: %v", clearMap["error"])
 			}
 
 			t.Logf("✅ %s: Successfully processed %d bytes in %d chunks", tc.name, tc.fileSize, totalChunks)
@@ -194,22 +194,22 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 		t.Fatalf("Failed to generate test data: %v", err)
 	}
 
-	// Mock OPAQUE export key
-	exportKey := make([]byte, 64)
-	if _, err := rand.Read(exportKey); err != nil {
-		t.Fatalf("Failed to generate export key: %v", err)
+	// Mock password (64 bytes for Argon2ID salt)
+	password := make([]byte, 64)
+	if _, err := rand.Read(password); err != nil {
+		t.Fatalf("Failed to generate password: %v", err)
 	}
-	exportKeyB64 := base64.StdEncoding.EncodeToString(exportKey)
+	passwordB64 := base64.StdEncoding.EncodeToString(password)
 
-	// Store export key
-	storeResult := storeOPAQUEExportKey(js.Null(), []js.Value{
+	// Store password
+	storeResult := storePasswordForUser(js.Null(), []js.Value{
 		js.ValueOf(username),
-		js.ValueOf(exportKeyB64),
+		js.ValueOf(passwordB64),
 	})
 
 	storeMap, ok := storeResult.(map[string]interface{})
 	if !ok || !storeMap["success"].(bool) {
-		t.Fatalf("Failed to store export key: %v", storeMap["error"])
+		t.Fatalf("Failed to store password: %v", storeMap["error"])
 	}
 
 	// Convert to JS array
@@ -217,7 +217,7 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 	js.CopyBytesToJS(jsArray, testData)
 
 	// Test 1: Same input should produce different encrypted output (due to nonce randomness)
-	encrypt1 := encryptFileChunkedOPAQUE(js.Null(), []js.Value{
+	encrypt1 := encryptFileChunkedPassword(js.Null(), []js.Value{
 		jsArray,
 		js.ValueOf(username),
 		js.ValueOf("account"),
@@ -225,7 +225,7 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 		js.ValueOf(32 * 1024), // 32KB chunks
 	})
 
-	encrypt2 := encryptFileChunkedOPAQUE(js.Null(), []js.Value{
+	encrypt2 := encryptFileChunkedPassword(js.Null(), []js.Value{
 		jsArray,
 		js.ValueOf(username),
 		js.ValueOf("account"),
@@ -259,23 +259,23 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 
 	// Test 2: Different users should produce different output
 	username2 := "security-test-2@example.com"
-	exportKey2 := make([]byte, 64)
-	if _, err := rand.Read(exportKey2); err != nil {
-		t.Fatalf("Failed to generate export key 2: %v", err)
+	password2 := make([]byte, 64)
+	if _, err := rand.Read(password2); err != nil {
+		t.Fatalf("Failed to generate password 2: %v", err)
 	}
-	exportKey2B64 := base64.StdEncoding.EncodeToString(exportKey2)
+	password2B64 := base64.StdEncoding.EncodeToString(password2)
 
-	storeResult2 := storeOPAQUEExportKey(js.Null(), []js.Value{
+	storeResult2 := storePasswordForUser(js.Null(), []js.Value{
 		js.ValueOf(username2),
-		js.ValueOf(exportKey2B64),
+		js.ValueOf(password2B64),
 	})
 
 	storeMap2 := storeResult2.(map[string]interface{})
 	if !storeMap2["success"].(bool) {
-		t.Fatalf("Failed to store export key 2: %v", storeMap2["error"])
+		t.Fatalf("Failed to store password 2: %v", storeMap2["error"])
 	}
 
-	encryptUser2 := encryptFileChunkedOPAQUE(js.Null(), []js.Value{
+	encryptUser2 := encryptFileChunkedPassword(js.Null(), []js.Value{
 		jsArray,
 		js.ValueOf(username2), // Different user
 		js.ValueOf("account"),
@@ -301,7 +301,7 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 	}
 
 	// Test 3: Account vs Custom password types should produce different output
-	encryptCustom := encryptFileChunkedOPAQUE(js.Null(), []js.Value{
+	encryptCustom := encryptFileChunkedPassword(js.Null(), []js.Value{
 		jsArray,
 		js.ValueOf(username),
 		js.ValueOf("custom"), // Different password type
@@ -329,8 +329,8 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 	t.Log("✅ Security tests passed: Nonce uniqueness, user isolation, and password type isolation verified")
 
 	// Cleanup
-	clearOPAQUEExportKey(js.Null(), []js.Value{js.ValueOf(username)})
-	clearOPAQUEExportKey(js.Null(), []js.Value{js.ValueOf(username2)})
+	clearPasswordForUser(js.Null(), []js.Value{js.ValueOf(username)})
+	clearPasswordForUser(js.Null(), []js.Value{js.ValueOf(username2)})
 }
 
 // TestChunkedFormatValidation tests format validation
@@ -343,14 +343,14 @@ func TestChunkedFormatValidation(t *testing.T) {
 		expectedKey byte
 	}{
 		{"account", true, 0x01, 0x01},
-		{"custom", true, 0x02, 0x02},
-		{"invalid", false, 0x00, 0x00},
+		{"custom", true, 0x01, 0x02},
+		{"invalid", false, 0x01, 0x00},
 		{"", false, 0x00, 0x00},
 	}
 
 	for _, tc := range testCases {
 		t.Run("Envelope_"+tc.keyType, func(t *testing.T) {
-			result := createEnvelopeOPAQUE(js.Null(), []js.Value{
+			result := createPasswordEnvelope(js.Null(), []js.Value{
 				js.ValueOf(tc.keyType),
 			})
 

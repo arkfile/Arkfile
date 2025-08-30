@@ -53,18 +53,6 @@ func TestDeriveAccountFileKey_PlaceholderBehavior(t *testing.T) {
 	assert.Equal(t, 32, len(derivedKey), "Derived key should be 32 bytes (AES-256)")
 }
 
-func TestDeriveOPAQUEFileKey_PlaceholderBehavior(t *testing.T) {
-	// Test placeholder implementation returns 32-byte key
-	exportKey := make([]byte, 64) // Typical OPAQUE export key size
-	fileID := "test-file.txt"
-	username := "test@example.com"
-
-	derivedKey, err := deriveOPAQUEFileKey(exportKey, fileID, username)
-
-	assert.NoError(t, err)
-	assert.Equal(t, 32, len(derivedKey), "Derived key should be 32 bytes (AES-256)")
-}
-
 // Note: Full integration tests would require:
 // 1. Test database setup
 // 2. OPAQUE library environment
@@ -72,36 +60,6 @@ func TestDeriveOPAQUEFileKey_PlaceholderBehavior(t *testing.T) {
 // 4. File metadata in database
 //
 // These tests focus on the core logic that can be tested without external dependencies.
-
-func TestRegisterCustomFilePassword_RequestBinding(t *testing.T) {
-	// Test request structure binding
-	requestData := map[string]interface{}{
-		"password":     "test-password-123",
-		"keyLabel":     "My Custom Key",
-		"passwordHint": "My secure password",
-	}
-
-	jsonData, err := json.Marshal(requestData)
-	assert.NoError(t, err)
-
-	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBuffer(jsonData))
-	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	var request struct {
-		Password     string `json:"password"`
-		KeyLabel     string `json:"keyLabel"`
-		PasswordHint string `json:"passwordHint"`
-	}
-
-	err = c.Bind(&request)
-	assert.NoError(t, err)
-	assert.Equal(t, "test-password-123", request.Password)
-	assert.Equal(t, "My Custom Key", request.KeyLabel)
-	assert.Equal(t, "My secure password", request.PasswordHint)
-}
 
 func TestGetFileDecryptionKey_RequestBinding(t *testing.T) {
 	// Test request structure binding

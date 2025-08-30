@@ -159,36 +159,6 @@ func expectOPAQUEAuthenticationFailure(t *testing.T, db *sql.DB, user *models.Us
 	require.Nil(t, exportKey, "Export key should be nil on failed authentication")
 }
 
-// testOPAQUEFilePassword tests file-specific password functionality
-// Note: Requires actual database connection and OPAQUE library
-func testOPAQUEFilePassword(t *testing.T, db *sql.DB, user *models.User, fileID, password string) {
-	t.Helper()
-
-	if db == nil {
-		t.Skip("Integration test requires real database connection")
-		return
-	}
-
-	// Register file password
-	err := user.RegisterFilePassword(db, fileID, password, "test-label", "test hint")
-	require.NoError(t, err, "Failed to register file password")
-
-	// Authenticate file password
-	exportKey, err := user.AuthenticateFilePassword(db, fileID, password)
-	require.NoError(t, err, "File password authentication should succeed")
-	require.NotNil(t, exportKey, "File export key should not be nil")
-	require.Len(t, exportKey, 64, "File export key should be 64 bytes")
-
-	// Get file password records
-	records, err := user.GetFilePasswordRecords(db, fileID)
-	require.NoError(t, err, "Failed to get file password records")
-	require.Len(t, records, 1, "Should have one file password record")
-
-	// Clean up file password
-	err = user.DeleteFilePassword(db, fileID, "test-label")
-	require.NoError(t, err, "Failed to delete file password")
-}
-
 // cleanupOPAQUETestUser removes test user and all OPAQUE records
 // Note: Requires actual database connection
 func cleanupOPAQUETestUser(t *testing.T, db *sql.DB, user *models.User) {

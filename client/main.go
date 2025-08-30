@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt" // Added fmt import
 	"strings"
 	"syscall/js" // specifically for WASM build
 	"time"
@@ -68,14 +69,24 @@ func clearPasswordForUser(this js.Value, args []js.Value) interface{} {
 	}
 }
 
-// derivePasswordFileKey derives a file encryption key from password for account password context
-func derivePasswordFileKey(password []byte, username, fileID string) ([]byte, error) {
-	return crypto.DerivePasswordFileKey(password, nil, fileID, username)
+// deriveAccountFileKeyInternal derives an encryption key from account password using Argon2ID
+func deriveAccountFileKeyInternal(password []byte, username, fileID string) ([]byte, error) {
+	salt := sha256.Sum256([]byte("arkfile-account-key-salt:" + username + ":" + fileID))
+	key, err := crypto.DeriveArgon2IDKey(password, salt[:], crypto.UnifiedArgonSecure.KeyLen, crypto.UnifiedArgonSecure.Memory, crypto.UnifiedArgonSecure.Time, crypto.UnifiedArgonSecure.Threads)
+	if err != nil {
+		return nil, fmt.Errorf("Argon2ID account key derivation failed: %w", err)
+	}
+	return key, nil
 }
 
-// deriveCustomPasswordFileKey derives a file encryption key from custom password
-func deriveCustomPasswordFileKey(customPassword []byte, fileID, username string) ([]byte, error) {
-	return crypto.DerivePasswordFileKey(customPassword, nil, fileID, username)
+// deriveCustomFileKeyInternal derives an encryption key from custom password using Argon2ID
+func deriveCustomFileKeyInternal(password []byte, fileID, username string) ([]byte, error) {
+	salt := sha256.Sum256([]byte("arkfile-custom-key-salt:" + username + ":" + fileID))
+	key, err := crypto.DeriveArgon2IDKey(password, salt[:], crypto.UnifiedArgonSecure.KeyLen, crypto.UnifiedArgonSecure.Memory, crypto.UnifiedArgonSecure.Time, crypto.UnifiedArgonSecure.Threads)
+	if err != nil {
+		return nil, fmt.Errorf("Argon2ID custom key derivation failed: %w", err)
+	}
+	return key, nil
 }
 
 // derivePasswordMetadataKey derives a metadata encryption key from password
@@ -83,7 +94,11 @@ func derivePasswordMetadataKey(password []byte, username string) ([]byte, error)
 	// Generate a deterministic salt from username for metadata keys
 	// This ensures the same metadata key is always derived for the same user
 	salt := sha256.Sum256([]byte("arkfile-metadata-salt:" + username))
-	return crypto.DerivePasswordMetadataKey(password, salt[:], username)
+	key, err := crypto.DeriveArgon2IDKey(password, salt[:], crypto.UnifiedArgonSecure.KeyLen, crypto.UnifiedArgonSecure.Memory, crypto.UnifiedArgonSecure.Time, crypto.UnifiedArgonSecure.Threads)
+	if err != nil {
+		return nil, fmt.Errorf("Argon2ID metadata key derivation failed: %w", err)
+	}
+	return key, nil
 }
 
 // encryptFilePassword encrypts a file using password-derived keys
@@ -119,7 +134,7 @@ func encryptFilePassword(this js.Value, args []js.Value) interface{} {
 				"error":   "No password found for user",
 			}
 		}
-		fileEncKey, err = derivePasswordFileKey(password, username, fileID)
+		fileEncKey, err = deriveAccountFileKeyInternal(password, username, fileID)
 	} else if keyType == "custom" {
 		if len(args) != 5 {
 			return map[string]interface{}{
@@ -128,7 +143,7 @@ func encryptFilePassword(this js.Value, args []js.Value) interface{} {
 			}
 		}
 		customPassword := []byte(args[4].String())
-		fileEncKey, err = deriveCustomPasswordFileKey(customPassword, fileID, username)
+		fileEncKey, err = deriveCustomFileKeyInternal(customPassword, fileID, username)
 	} else {
 		return map[string]interface{}{
 			"success": false,
@@ -237,7 +252,7 @@ func decryptFilePassword(this js.Value, args []js.Value) interface{} {
 					"error":   "No password found for user",
 				}
 			}
-			fileEncKey, err = derivePasswordFileKey(password, username, fileID)
+			fileEncKey, err = deriveAccountFileKeyInternal(password, username, fileID)
 		} else if keyType == 0x02 { // Custom password
 			if len(args) != 4 {
 				return map[string]interface{}{
@@ -246,8 +261,8 @@ func decryptFilePassword(this js.Value, args []js.Value) interface{} {
 				}
 			}
 			customPassword := []byte(args[3].String())
-			fileEncKey, err = deriveCustomPasswordFileKey(customPassword, fileID, username)
-		} else {
+			fileEncKey, err = deriveCustomFileKeyInternal(customPassword, fileID, username)
+		} else { // No change
 			return map[string]interface{}{
 				"success": false,
 				"error":   "Invalid key type for password-based encryption",
@@ -1191,7 +1206,7 @@ func encryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 				"error":   "No password found for user",
 			}
 		}
-		fileEncKey, err = derivePasswordFileKey(password, username, fileID)
+		fileEncKey, err = deriveAccountFileKeyInternal(password, username, fileID)
 	} else if keyType == "custom" {
 		keyTypeByte = 0x02
 		if len(args) != 6 {
@@ -1201,7 +1216,7 @@ func encryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 			}
 		}
 		customPassword := []byte(args[5].String())
-		fileEncKey, err = deriveCustomPasswordFileKey(customPassword, fileID, username)
+		fileEncKey, err = deriveCustomFileKeyInternal(customPassword, fileID, username)
 	} else {
 		return map[string]interface{}{
 			"success": false,
@@ -1327,7 +1342,7 @@ func decryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 					"error":   "No password found for user",
 				}
 			}
-			fileEncKey, err = derivePasswordFileKey(password, username, fileID)
+			fileEncKey, err = deriveAccountFileKeyInternal(password, username, fileID)
 		} else if keyType == 0x02 { // Custom password
 			if len(args) != 4 {
 				return map[string]interface{}{
@@ -1336,7 +1351,7 @@ func decryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 				}
 			}
 			customPassword := []byte(args[3].String())
-			fileEncKey, err = deriveCustomPasswordFileKey(customPassword, fileID, username)
+			fileEncKey, err = deriveCustomFileKeyInternal(customPassword, fileID, username)
 		} else {
 			return map[string]interface{}{
 				"success": false,

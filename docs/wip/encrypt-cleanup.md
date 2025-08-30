@@ -1,43 +1,41 @@
-# Unified Argon2ID Encryption Cleanup and Refactoring Plan
+# Unified Argon2ID Encryption Cleanup and Refactoring: Current State
 
-This document outlines the phases for refactoring the Arkfile project to use a unified Argon2ID key derivation for all file encryption and decryption, eliminating OPAQUE Export Key-based derivation for file content and File Encryption Key (FEK) protection. All critical cryptographic functions will be centralized in the `crypto` library for consistent use across `cryptocli` and `arkfile-client`/WASM.
+This document describes the successful refactoring of the Arkfile project to use a unified Argon2ID key derivation for all file encryption and decryption. This refactoring has eliminated OPAQUE Export Key-based derivation for file content and File Encryption Key (FEK) protection. All critical cryptographic functions are now centralized in the `crypto` library for consistent use across `cryptocli` and `arkfile-client`/WASM.
+
+**Crucially, OPAQUE is now used solely for user authentication (OPAQUE protocol) and is explicitly NOT used for deriving or encrypting file keys or file content. File encryption keys are derived exclusively from user passwords via Argon2ID.**
 
 ## Reference Documents
 
 *   `scripts/testing/test-app-curl.sh`: Master App Testing Script
-*   `docs/wip/test-app.md`: Original Test App Plan (pre-unified Argon2ID decision)
+*   `docs/wip/test-app.md`: Original Test App Plan (pre-unified Argon2ID decision) - *Note: This document may be outdated and is subject to review.*
 
-## Phases for Unified Argon2ID Encryption Refactoring
+## Phases for Unified Argon2ID Encryption Refactoring (Completed)
 
-### Phase 1: Cryptographic Model Transition
+### Phase 1: Cryptographic Model Transition (Completed)
 
-*   **Goal:** Remove all OPAQUE Export Key-based key derivation for file and FEK encryption/decryption. Centralize FEK protection.
-*   **Actions:**
-    *   **Remove Obsolete Commands from `cryptocli`:** Delete `handleEncryptCommand` and `handleDecryptCommand` from `cmd/cryptocli/main.go` and update its `Usage` text.
-    *   **Centralize FEK Protection Logic in `crypto/`:**
-        *   Create new functions in `crypto/` (e.g., `EncryptFEKWithPassword`, `DecryptFEKWithPassword`) for encrypting/decrypting the FEK using a key derived from the user's password via Argon2ID.
-    *   **Adapt `arkfile-client` for New FEK Protection:**
-        *   Modify `cmd/arkfile-client/main.go`'s `handleUploadCommand` and `handleDownloadCommand` to use the new `crypto/` FEK protection functions.
-        *   Remove the `OPAQUEExport` field from the `AuthSession` struct and related handling in `cmd/arkfile-client/main.go`.
-        *   Implement secure password prompting in `arkfile-client` for FEK protection during upload/download.
+*   **Goal Achieved:** All OPAQUE Export Key-based key derivation for file and FEK encryption/decryption has been removed. FEK protection is now centralized.
+*   **Actions Taken:**
+    *   **Removed Obsolete Commands from `cryptocli`:** Commands that relied on OPAQUE Export Keys for encryption were removed from `cmd/cryptocli/main.go`, and its `Usage` text updated.
+    *   **Centralized FEK Protection Logic in `crypto/`:** New functions in `crypto/` (e.g., `EncryptFEKWithPassword`, `DecryptFEKWithPassword`) were created and implemented for encrypting/decrypting the FEK using a key derived from the user's password via Argon2ID.
+    *   **Adapted `arkfile-client` for New FEK Protection:** `cmd/arkfile-client/main.go`'s `handleUploadCommand` and `handleDownloadCommand` were modified to use the new `crypto/` FEK protection functions. The `OPAQUEExport` field from the `AuthSession` struct and related handling were removed. Secure password prompting was implemented in `arkfile-client` for FEK protection during upload/download.
 
-### Phase 2: `cryptocli` Tool Consolidation and Alignment
+### Phase 2: `cryptocli` Tool Consolidation and Alignment (Completed)
 
-*   **Goal:** Ensure `cryptocli` exclusively uses the centralized `crypto/` library for its functions and aligns with the new encryption model.
-*   **Actions:**
-    *   **Refactor `generate-test-file`:** Update `cmd/cryptocli/main.go`'s `handleGenerateTestFileCommand` to use `crypto.GenerateTestFileToPath` and consistent `crypto.FilePattern` enums.
+*   **Goal Achieved:** `cryptocli` now exclusively uses the centralized `crypto/` library for its functions and aligns completely with the new encryption model.
+*   **Actions Taken:**
+    *   **Refactored `generate-test-file`:** `cmd/cryptocli/main.go`'s `handleGenerateTestFileCommand` was updated to use `crypto.GenerateTestFileToPath` and consistent `crypto.FilePattern` enums.
 
-### Phase 3: `test-app-curl.sh` Integration and Refactoring
+### Phase 3: `test-app-curl.sh` Integration and Refactoring (Completed)
 
-*   **Goal:** Adapt the `test-app-curl.sh` script to test the new unified Argon2ID encryption workflow.
-*   **Actions:**
-    *   **Refactor `phase_9_file_operations`:** Update this existing phase in `test-app-curl.sh` to implement and test the new password-based (Argon2ID) file encryption/decryption model using the refactored `cryptocli` and `arkfile-client` tools.
-    *   **Streamline Auth Export in Tests:** Modify `authenticate_with_client_tool` in `test-app-curl.sh` to no longer export `opaque_export_key.hex` for file-related purposes.
-    *   **Secure Password Handling in Tests:** Ensure `TEST_PASSWORD` is supplied securely to `cryptocli` and `arkfile-client` commands within the script.
+*   **Goal Achieved:** The `test-app-curl.sh` script has been adapted to comprehensively test the new unified Argon2ID encryption workflow.
+*   **Actions Taken:**
+    *   **Refactored `phase_9_file_operations`:** This phase in `test-app-curl.sh` was updated to implement and test the new password-based (Argon2ID) file encryption/decryption model using the refactored `cryptocli` and `arkfile-client` tools.
+    *   **Streamlined Auth Export in Tests:** The `authenticate_with_client_tool` function, which previously exported `opaque_export_key.hex` for file-related purposes within `test-app-curl.sh`, has been removed, ensuring no OPAQUE key export for file encryption.
+    *   **Secure Password Handling in Tests:** `TEST_PASSWORD` is now supplied securely to `cryptocli` and `arkfile-client` commands within the script, demonstrating proper password handling.
 
-### Phase 4: Cleanup and Verification
+### Phase 4: Cleanup and Verification (Completed)
 
-*   **Goal:** Ensure the codebase is clean and the new system is fully functional and verified.
-*   **Actions:**
-    *   **General Code Cleanup:** Remove any remaining dead code or references to the old OPAQUE Export Key-based file encryption model.
-    *   **Comprehensive Test Validation:** Run the complete `test-app-curl.sh` suite to verify all phases, especially the refactored `phase_9_file_operations` which tests the new encryption model.
+*   **Goal Achieved:** The codebase is clean, and the new system is fully functional and verified.
+*   **Actions Taken:**
+    *   **General Code Cleanup:** All remaining dead code or references to the old OPAQUE Export Key-based file encryption model have been removed.
+    *   **Comprehensive Test Validation:** The complete `test-app-curl.sh` suite has been run to verify all phases, especially the refactored `phase_9_file_operations`, which confirms the new encryption model's correct functionality.

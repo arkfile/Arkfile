@@ -16,6 +16,7 @@ const (
 	PatternSequential FilePattern = "sequential"
 	PatternRepeated   FilePattern = "repeated"
 	PatternRandom     FilePattern = "random"
+	PatternZeros      FilePattern = "zeros"
 )
 
 // GenerateTestFileContent creates deterministic test file content
@@ -49,6 +50,9 @@ func GenerateTestFileContent(size int64, pattern FilePattern) ([]byte, error) {
 		if _, err := rand.Read(data); err != nil {
 			return nil, fmt.Errorf("failed to generate random data: %w", err)
 		}
+	case PatternZeros:
+		// data is already initialized to all zeros by make([]byte, size)
+		// No action needed here, as byte slice default value is 0.
 	default:
 		return nil, fmt.Errorf("unsupported pattern: %s", pattern)
 	}
@@ -407,4 +411,91 @@ func DecryptFileFromPath(inputPath, outputPath string, password []byte, username
 	}
 
 	return keyType, nil
+}
+
+// EncryptFEKWithPassword encrypts a File Encryption Key (FEK) using a key derived from
+// the user's password via Argon2ID.
+func EncryptFEKWithPassword(fek []byte, password []byte, username, keyType string) ([]byte, error) {
+	if len(fek) == 0 {
+		return nil, fmt.Errorf("FEK cannot be empty")
+	}
+	if len(password) == 0 {
+		return nil, fmt.Errorf("password cannot be empty")
+	}
+	if username == "" {
+		return nil, fmt.Errorf("username cannot be empty")
+	}
+
+	// Derive key based on key type
+	var derivedKey []byte
+	switch keyType {
+	case "account":
+		derivedKey = DeriveAccountPasswordKey(password, username)
+	case "custom":
+		derivedKey = DeriveCustomPasswordKey(password, username)
+	case "share":
+		derivedKey = DeriveSharePasswordKey(password, username)
+	default:
+		return nil, fmt.Errorf("unsupported key type: %s (supported: account, custom, share)", keyType)
+	}
+
+	// Create envelope header
+	envelope := CreatePasswordEnvelope(keyType)
+
+	// Encrypt the FEK
+	encryptedFEK, err := EncryptGCM(fek, derivedKey)
+	if err != nil {
+		return nil, fmt.Errorf("FEK encryption failed: %w", err)
+	}
+
+	// Prepend envelope to encrypted FEK
+	result := make([]byte, len(envelope)+len(encryptedFEK))
+	copy(result, envelope)
+	copy(result[len(envelope):], encryptedFEK)
+
+	return result, nil
+}
+
+// DecryptFEKWithPassword decrypts a File Encryption Key (FEK) using a key derived from
+// the user's password via Argon2ID. It returns the decrypted FEK and the key type.
+func DecryptFEKWithPassword(encryptedFEK []byte, password []byte, username string) ([]byte, string, error) {
+	if len(encryptedFEK) < 2 {
+		return nil, "", fmt.Errorf("encrypted FEK too short: need at least 2 bytes for envelope, got %d", len(encryptedFEK))
+	}
+	if len(password) == 0 {
+		return nil, "", fmt.Errorf("password cannot be empty")
+	}
+	if username == "" {
+		return nil, "", fmt.Errorf("username cannot be empty")
+	}
+
+	// Parse envelope
+	envelope := encryptedFEK[:2]
+	ciphertext := encryptedFEK[2:]
+
+	_, keyType, err := ParsePasswordEnvelope(envelope)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to parse FEK envelope: %w", err)
+	}
+
+	// Derive key based on key type from envelope
+	var derivedKey []byte
+	switch keyType {
+	case "account":
+		derivedKey = DeriveAccountPasswordKey(password, username)
+	case "custom":
+		derivedKey = DeriveCustomPasswordKey(password, username)
+	case "share":
+		derivedKey = DeriveSharePasswordKey(password, username)
+	default:
+		return nil, "", fmt.Errorf("unsupported key type: %s", keyType)
+	}
+
+	// Decrypt the FEK
+	fek, err := DecryptGCM(ciphertext, derivedKey)
+	if err != nil {
+		return nil, "", fmt.Errorf("FEK decryption failed: %w", err)
+	}
+
+	return fek, keyType, nil
 }
