@@ -482,7 +482,11 @@ EXAMPLES:
 	}
 
 	// Always prompt for password securely
-	fmt.Printf("Enter password for user '%s': ", *username)
+	prompt := fmt.Sprintf("Enter password for user '%s'", *username)
+	if *keyType != "" {
+		prompt = fmt.Sprintf("Enter %s password for user '%s'", *keyType, *username)
+	}
+	fmt.Print(prompt + ": ")
 	passwordStr, err := readPassword()
 	if err != nil {
 		return fmt.Errorf("failed to read password: %w", err)
@@ -503,9 +507,13 @@ EXAMPLES:
 	// Clear password from memory
 	passwordStr = ""
 
-	// Validate key type if specified
-	if *keyType != "" && *keyType != detectedKeyType {
-		return fmt.Errorf("key type mismatch: specified %s but file contains %s", *keyType, detectedKeyType)
+	// Validate key type if specified, otherwise update it
+	if *keyType == "" {
+		*keyType = detectedKeyType
+		logVerbose("Auto-detected key type: %s", detectedKeyType)
+	} else if *keyType != detectedKeyType {
+		// Only fail if the user explicitly specified the wrong key type
+		return fmt.Errorf("key type mismatch: specified '%s' but file contains '%s'", *keyType, detectedKeyType)
 	}
 
 	// Get file sizes for reporting
@@ -550,7 +558,6 @@ func logError(format string, args ...interface{}) {
 }
 
 func readPassword() (string, error) {
-	fmt.Print("Password: ")
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		password, err := term.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {

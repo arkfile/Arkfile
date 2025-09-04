@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"time"
 
+	"crypto/sha256"
+
 	"golang.org/x/term"
 
 	"github.com/84adam/Arkfile/crypto"
@@ -99,6 +101,8 @@ type Response struct {
 	Token        string                 `json:"token"`
 	RefreshToken string                 `json:"refresh_token"`
 	ExpiresAt    time.Time              `json:"expires_at"`
+	SessionID    string                 `json:"sessionId"`
+	FileID       string                 `json:"fileId"`
 }
 
 // FileInfo represents file metadata
@@ -224,7 +228,7 @@ func newHTTPClient(baseURL string, tlsInsecure bool, tlsMinVersion uint16, verbo
 }
 
 // makeRequest makes an HTTP request with proper error handling
-func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, token string) (*Response, error) {
+func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, token string, headers ...string) (*Response, error) {
 	url := c.baseURL + endpoint
 
 	var body io.Reader
@@ -244,6 +248,9 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 	req.Header.Set("Content-Type", "application/json")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	for i := 0; i < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
 	}
 
 	if c.verbose {
@@ -311,8 +318,7 @@ EXAMPLES:
 	}
 
 	// Get password securely
-	fmt.Printf("Enter password for %s: ", *usernameFlag)
-	password, err := readPassword()
+	password, err := readPassword(fmt.Sprintf("Enter password for %s: ", *usernameFlag))
 	if err != nil {
 		return fmt.Errorf("failed to read password: %w", err)
 	}
@@ -392,7 +398,7 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 	var (
 		filePath     = fs.String("file", "", "File to upload (required)")
 		filename     = fs.String("name", "", "Custom filename (optional)")
-		chunkSize    = fs.Int("chunk-size", 1024*1024, "Chunk size in bytes")
+		chunkSize    = fs.Int("chunk-size", 16*1024*1024, "Chunk size in bytes")
 		showProgress = fs.Bool("progress", true, "Show upload progress")
 	)
 
@@ -448,9 +454,9 @@ EXAMPLES:
 
 	logVerbose("Uploading file: %s (%d bytes)", uploadFilename, len(fileData))
 
-	// Prompt for password
-	fmt.Printf("Enter password to encrypt File Encryption Key (FEK): ")
-	password, err := readPassword()
+	// Get password for FEK encryption
+	logVerbose("Reading password for FEK encryption...")
+	password, err := readPassword("Enter password to encrypt File Encryption Key (FEK): ")
 	if err != nil {
 		return fmt.Errorf("failed to read password: %w", err)
 	}
@@ -481,24 +487,47 @@ EXAMPLES:
 		password[i] = 0
 	}
 
-	// Initialize chunked upload
+	// Calculate original file hash
+	hash := sha256.Sum256(fileData)
+	fileHash := fmt.Sprintf("%x", hash)
+
+	// Encrypt metadata with the FEK
+	encryptedFilename, err := crypto.EncryptGCM([]byte(uploadFilename), fek)
+	if err != nil {
+		return fmt.Errorf("filename encryption failed: %w", err)
+	}
+
+	encryptedHash, err := crypto.EncryptGCM([]byte(fileHash), fek)
+	if err != nil {
+		return fmt.Errorf("file hash encryption failed: %w", err)
+	}
+
+	// Create envelope for password-based encryption type
+	envelope := crypto.CreatePasswordEnvelope("account")
+
+	// Initialize chunked upload with the new, secure payload
 	totalChunks := (len(encryptedFile) + *chunkSize - 1) / *chunkSize
 
 	uploadReq := map[string]interface{}{
-		"filename":      uploadFilename,
-		"file_size":     len(encryptedFile),
-		"content_type":  getContentType(uploadFilename),
-		"encrypted_fek": base64.StdEncoding.EncodeToString(encryptedFEK),
-		"total_chunks":  totalChunks,
+		"encryptedFilename":  base64.StdEncoding.EncodeToString(encryptedFilename),
+		"filenameNonce":      base64.StdEncoding.EncodeToString(encryptedFilename[:12]), // GCM nonce is the first 12 bytes
+		"encryptedSha256sum": base64.StdEncoding.EncodeToString(encryptedHash),
+		"sha256sumNonce":     base64.StdEncoding.EncodeToString(encryptedHash[:12]), // GCM nonce is the first 12 bytes
+		"encryptedFek":       base64.StdEncoding.EncodeToString(encryptedFEK),
+		"totalSize":          len(fileData),
+		"chunkSize":          *chunkSize,
+		"passwordHint":       "", // Not implemented in this client version
+		"passwordType":       "account",
+		"envelopeData":       base64.StdEncoding.EncodeToString(envelope),
 	}
 
-	uploadResp, err := client.makeRequest("POST", "/api/upload/init", uploadReq, session.AccessToken)
+	uploadResp, err := client.makeRequest("POST", "/api/uploads/init", uploadReq, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("upload initialization failed: %w", err)
 	}
 
-	sessionID := uploadResp.Data["session_id"].(string)
-	fileID := uploadResp.Data["file_id"].(string)
+	sessionID := uploadResp.SessionID
+	fileID := uploadResp.FileID
 
 	logVerbose("Upload session initialized: %s", sessionID)
 	logVerbose("File ID: %s", fileID)
@@ -514,18 +543,36 @@ EXAMPLES:
 		}
 
 		chunkData := encryptedFile[start:end]
+		chunkHash := sha256.Sum256(chunkData)
+		chunkHashStr := fmt.Sprintf("%x", chunkHash)
 
-		chunkReq := map[string]interface{}{
-			"session_id":  sessionID,
-			"chunk_index": chunkIndex,
-			"chunk_data":  base64.StdEncoding.EncodeToString(chunkData),
-			"chunk_size":  len(chunkData),
+		uploadURL := fmt.Sprintf("%s/api/uploads/%s/chunks/%d", client.baseURL, sessionID, chunkIndex)
+
+		req, err := http.NewRequest("POST", uploadURL, bytes.NewBuffer(chunkData))
+		if err != nil {
+			return fmt.Errorf("chunk %d: failed to create request: %w", chunkIndex, err)
 		}
 
-		_, err := client.makeRequest("POST", "/api/upload/chunk", chunkReq, session.AccessToken)
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+		req.Header.Set("X-Chunk-Hash", chunkHashStr)
+		req.ContentLength = int64(len(chunkData))
+
+		if client.verbose {
+			logVerbose("Uploading chunk %d to %s", chunkIndex, uploadURL)
+		}
+
+		resp, err := client.client.Do(req)
 		if err != nil {
 			return fmt.Errorf("chunk %d upload failed: %w", chunkIndex, err)
 		}
+
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close() // Ensure body is closed
+			return fmt.Errorf("chunk %d upload failed: status %d, body: %s", chunkIndex, resp.StatusCode, string(bodyBytes))
+		}
+		resp.Body.Close() // Ensure body is closed on success too
 
 		if *showProgress {
 			progress := float64(chunkIndex+1) / float64(totalChunks) * 100
@@ -542,7 +589,8 @@ EXAMPLES:
 		"session_id": sessionID,
 	}
 
-	_, err = client.makeRequest("POST", "/api/upload/finalize", finalizeReq, session.AccessToken)
+	finalizeURL := fmt.Sprintf("/api/uploads/%s/complete", sessionID)
+	_, err = client.makeRequest("POST", finalizeURL, finalizeReq, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("upload finalization failed: %w", err)
 	}
@@ -751,9 +799,8 @@ EXAMPLES:
 		return fmt.Errorf("invalid encrypted FEK: %w", err)
 	}
 
-	// Prompt for password
-	fmt.Printf("Enter password to decrypt File Encryption Key (FEK): ")
-	password, err := readPassword()
+	// Get password to decrypt FEK
+	password, err := readPassword("Enter password to decrypt File Encryption Key (FEK): ")
 	if err != nil {
 		return fmt.Errorf("failed to read password: %w", err)
 	}
@@ -1053,14 +1100,34 @@ func downloadFile(client *http.Client, url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// readPassword reads a password from stdin without echoing using terminal controls and returns it as a byte slice.
-// The caller is responsible for securely clearing the returned byte slice from memory.
-func readPassword() ([]byte, error) {
-	fmt.Print("")
-	bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+// readPassword reads a password from stdin. If stdin is a terminal, it will
+// print the provided prompt and read without echoing. If stdin is a pipe, it will
+// read directly. The caller is responsible for securely clearing the returned byte slice.
+func readPassword(prompt string) ([]byte, error) {
+	fi, err := os.Stdin.Stat()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to stat stdin: %w", err)
 	}
-	fmt.Println() // Add newline after password input
-	return bytePassword, nil
+
+	// Check if stdin is a Character Device, which indicates a terminal
+	if (fi.Mode() & os.ModeCharDevice) != 0 {
+		if prompt != "" {
+			fmt.Print(prompt)
+		}
+		bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			return nil, err
+		}
+		// Add a newline because terminal reads don't echo the Enter key
+		fmt.Println()
+		return bytePassword, nil
+	}
+
+	// Not a terminal, so read from stdin (likely a pipe)
+	bytePassword, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read password from stdin: %w", err)
+	}
+	// Trim trailing newline characters which are common in piped input
+	return bytes.TrimRight(bytePassword, "\r\n"), nil
 }

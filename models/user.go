@@ -13,6 +13,14 @@ import (
 	"github.com/84adam/Arkfile/utils"
 )
 
+// DBTX is an interface for database operations that can be handled
+// by either a *sql.DB or a *sql.Tx
+type DBTX interface {
+	Exec(query string, args ...interface{}) (sql.Result, error)
+	Query(query string, args ...interface{}) (*sql.Rows, error)
+	QueryRow(query string, args ...interface{}) *sql.Row
+}
+
 type User struct {
 	ID                int64          `json:"id"`
 	Username          string         `json:"username"`
@@ -56,14 +64,14 @@ func isAdminUsername(username string) bool {
 }
 
 // CreateUser creates a new user in the database for OPAQUE authentication
-func CreateUser(db *sql.DB, username string, email *string) (*User, error) {
+func CreateUser(dbtx DBTX, username string, email *string) (*User, error) {
 	// Validate username
 	if err := validateUsername(username); err != nil {
 		return nil, fmt.Errorf("invalid username: %w", err)
 	}
 
 	isAdmin := isAdminUsername(username)
-	result, err := db.Exec(
+	result, err := dbtx.Exec(
 		`INSERT INTO users (
 			username, email, storage_limit_bytes, is_admin, is_approved
 		) VALUES (?, ?, ?, ?, ?)`,
@@ -90,7 +98,7 @@ func CreateUser(db *sql.DB, username string, email *string) (*User, error) {
 }
 
 // GetUserByUsername retrieves a user by username
-func GetUserByUsername(db *sql.DB, username string) (*User, error) {
+func GetUserByUsername(dbtx DBTX, username string) (*User, error) {
 	// DEBUG: Log the lookup attempt
 
 	user := &User{}
@@ -105,7 +113,7 @@ func GetUserByUsername(db *sql.DB, username string) (*User, error) {
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`
 
-	err := db.QueryRow(query, username).Scan(
+	err := dbtx.QueryRow(query, username).Scan(
 		&user.ID, &user.Username, &emailStr, &createdAtStr,
 		&totalStorageInterface, &storageLimitInterface,
 		&user.IsApproved, &user.ApprovedBy, &approvedAtStr, &user.IsAdmin,
@@ -176,13 +184,13 @@ func (u *User) HasAdminPrivileges() bool {
 }
 
 // ApproveUser approves a user (admin only)
-func (u *User) ApproveUser(db *sql.DB, adminUsername string) error {
+func (u *User) ApproveUser(dbtx DBTX, adminUsername string) error {
 	if !isAdminUsername(adminUsername) {
 		return errors.New("unauthorized: admin privileges required")
 	}
 
 	now := time.Now()
-	_, err := db.Exec(`
+	_, err := dbtx.Exec(`
 		UPDATE users 
 		SET is_approved = true, 
 		approved_by = ?,
@@ -236,8 +244,8 @@ func (u *User) GetStorageUsagePercent() float64 {
 }
 
 // GetPendingUsers retrieves users pending approval (admin only)
-func GetPendingUsers(db *sql.DB) ([]*User, error) {
-	rows, err := db.Query(`
+func GetPendingUsers(dbtx DBTX) ([]*User, error) {
+	rows, err := dbtx.Query(`
 		SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes
 		FROM users
 		WHERE is_approved = false

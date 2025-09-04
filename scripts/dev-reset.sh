@@ -400,7 +400,7 @@ echo -e "${CYAN}Step 4: Ensuring directory structure${NC}"
 echo "======================================"
 
 # Ensure all directories exist before trying to write files
-print_status "INFO" "Setting up directory structure..."
+print_status "INFO" "Setting up directory structure via external scripts..."
 if ! ./scripts/setup/01-setup-users.sh; then
     print_status "ERROR" "User setup failed - this is CRITICAL"
     exit 1
@@ -409,7 +409,14 @@ if ! ./scripts/setup/02-setup-directories.sh; then
     print_status "ERROR" "Directory setup failed - this is CRITICAL"
     exit 1
 fi
-print_status "SUCCESS" "Directory structure created"
+print_status "SUCCESS" "Base directory structure created"
+
+# Explicitly create and permission the log directory
+print_status "INFO" "Ensuring log directory exists and has correct permissions..."
+mkdir -p "$ARKFILE_DIR/var/log"
+chown "$USER:$GROUP" "$ARKFILE_DIR/var/log"
+chmod 775 "$ARKFILE_DIR/var/log"
+print_status "SUCCESS" "Log directory configured at $ARKFILE_DIR/var/log"
 echo
 
 # Step 5: Generate fresh secrets

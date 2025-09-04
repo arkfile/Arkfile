@@ -43,7 +43,7 @@ func main() {
 
 	// Use provided timestamp or current time (USE UTC TO MATCH SERVER VALIDATION)
 	var testTime time.Time
-	if len(os.Args) >= 3 {
+	if len(os.Args) >= 3 && os.Args[2] != "" {
 		timestamp, err := strconv.ParseInt(os.Args[2], 10, 64)
 		if err != nil {
 			fmt.Printf("Error: Invalid timestamp: %v\n", err)

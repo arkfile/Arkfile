@@ -173,10 +173,10 @@ main() {
     fi
     
     # Install dependencies
-    echo -e "\n${BLUE}📦 Installing dependencies...${NC}"
-    cd client/static/js
-    bun install
-    cd ../../..
+    echo -e "\n${BLUE}📦 Skipping dependency installation...${NC}"
+    # cd client/static/js
+    # bun install
+    # cd ../../..
     
     # Run TypeScript type checking
     tests_run=$((tests_run + 1))

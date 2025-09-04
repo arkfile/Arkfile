@@ -446,9 +446,6 @@ phase_cleanup_and_health() {
         info "This is expected if admin endpoints are not accessible"
     fi
     
-    # Add a small delay to ensure cleanup is fully processed and committed
-    sleep 2
-    
     # Verify cleanup using admin API status check with retry logic
     local verify_result exists
     local retry_count=0
@@ -1769,10 +1766,183 @@ phase_9_file_operations() {
     info "[OK] Different passwords produce different ciphertexts"
     info "[OK] TEST_PASSWORD 'MyVacation2025PhotosForFamily!ExtraSecure' validated in secure workflow"
     info "Ready for future server upload/download workflow testing"
+
+    #
+    # --- BEGIN NETWORK FILE OPERATIONS ---
+    #
+    info "---"
+    info "Starting complete end-to-end network file operations test..."
+
+    # Check for authentication tokens before proceeding
+    if [ ! -f "$TEMP_DIR/final_jwt_token" ] || [ ! -f "$TEMP_DIR/final_session_key" ]; then
+        warning "No JWT token or session key available. Skipping network file operations."
+        # We don't exit here because the local tests passed.
+        # The phase can still be considered a partial success.
+        return
+    fi
+
+    # Ensure arkfile-client is available from the deployed location
+    if ! command -v /opt/arkfile/bin/arkfile-client >/dev/null 2>&1; then
+        error "arkfile-client tool not found at /opt/arkfile/bin/arkfile-client - Please re-run 'sudo scripts/dev-reset.sh'"
+    fi
+    success "arkfile-client tool available and ready"
+
+    # Step 9: Configure arkfile-client with a valid session file
+    log "Step 9: Configuring arkfile-client with a valid session file..."
+    local client_config_file="$TEMP_DIR/client_config.json"
+    local client_session_file="$TEMP_DIR/client_auth_session.json"
+
+    # Create a valid AuthSession JSON file for the client
+    # This maps the server response to the format the Go client expects
+
+    # The /api/refresh endpoint does not return 'expiresAt', so we must extract it from the new JWT payload.
+    local new_token_after_refresh
+    new_token_after_refresh=$(cat "$TEMP_DIR/final_jwt_token")
+
+    # Extract payload (part 2 of JWT), decode it, and get the 'exp' (expiry) timestamp
+    local jwt_payload expiry_timestamp expires_at_iso
+    jwt_payload=$(echo "$new_token_after_refresh" | cut -d'.' -f2)
+
+    # The JWT payload is Base64URL encoded. We must convert it to standard Base64 before decoding.
+    # 1. Replace URL-safe characters.
+    local std_base64_payload
+    std_base64_payload=$(echo "$jwt_payload" | sed 's/-/+/g; s/_/\//g')
+
+    # 2. Add padding.
+    case $(( ${#std_base64_payload} % 4 )) in
+        2) std_base64_payload="${std_base64_payload}==" ;;
+        3) std_base64_payload="${std_base64_payload}=" ;;
+    esac
+
+    # Now, decode the standard Base64.
+    expiry_timestamp=$(echo "$std_base64_payload" | base64 -d | jq -r '.exp')
+    if [ -z "$expiry_timestamp" ]; then
+        error "Failed to extract expiry_timestamp from JWT payload after refresh."
+    fi
+
+    # Convert Unix timestamp to the ISO 8601 format the client expects
+    expires_at_iso=$(date -u -d "@${expiry_timestamp}" +"%Y-%m-%dT%H:%M:%SZ")
+
+    jq -n \
+        --arg username "$TEST_USERNAME" \
+        --arg access_token "$new_token_after_refresh" \
+        --arg refresh_token "$(cat "$TEMP_DIR/final_refresh_token")" \
+        --arg expires_at "$expires_at_iso" \
+        --arg server_url "$ARKFILE_BASE_URL" \
+        --arg session_created "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+        '{
+            username: $username,
+            access_token: $access_token,
+            refresh_token: $refresh_token,
+            expires_at: $expires_at,
+            server_url: $server_url,
+            session_created: $session_created
+        }' > "$client_session_file"
+
+    # Create a JSON config for the arkfile-client that points to the session file
+    jq -n \
+        --arg url "$ARKFILE_BASE_URL" \
+        --arg user "$TEST_USERNAME" \
+        --arg token_file "$client_session_file" \
+        '{
+            server_url: $url,
+            username: $user,
+            tls_insecure: true,
+            token_file: $token_file
+        }' > "$client_config_file"
+    success "arkfile-client config and session file created"
+    debug "Client session file at: $client_session_file"
+    debug "Client config file at: $client_config_file"
+
+    # Step 10: Upload file using arkfile-client, letting it handle encryption
+    log "Step 10: Uploading original file using arkfile-client with piped password..."
+    info "Initiating client upload... See log for details: $TEMP_DIR/upload_output.log"
+    # The client will now encrypt the file itself, creating a true E2E test.
+    # We securely pipe the password to the client, which reads it from stdin.
+    local upload_output_log="$TEMP_DIR/upload_output.log"
+    echo "$TEST_PASSWORD" | /opt/arkfile/bin/arkfile-client \
+        --config "$client_config_file" \
+        --verbose \
+        upload \
+        --file "$test_file" \
+        --name "e2e-test-file.dat" \
+        --progress=false 2>&1 | tee "$upload_output_log"
+
+    local file_id
+    file_id=$(grep "File ID" "$upload_output_log" | awk '{print $3}')
+    echo "$file_id" > "$TEMP_DIR/uploaded_file_id.txt"
+
+    if [ -n "$file_id" ]; then
+        success "File uploaded successfully. File ID: $file_id"
+    else
+        error "File upload failed. Log: $(cat $upload_output_log)"
+    fi
+
+    # Step 11: Verify file in server listing
+    log "Step 11: Verifying file in server listing..."
+    local list_files_log="$TEMP_DIR/list_files_output.log"
+    /opt/arkfile/bin/arkfile-client --config "$client_config_file" list-files > "$list_files_log"
+    
+    if grep -q "$file_id" "$list_files_log"; then
+        success "Uploaded file found in server file listing."
+    else
+        error "Uploaded file NOT found in server file listing. Log: $(cat $list_files_log)"
+    fi
+
+    # Step 12: Download and decrypt the file
+    log "Step 12: Downloading and decrypting file..."
+    local downloaded_e2e_file="$TEMP_DIR/e2e_downloaded_file.enc"
+    local decrypted_e2e_file="$TEMP_DIR/e2e_decrypted_file.dat"
+    local download_log="$TEMP_DIR/download_output.log"
+
+    /opt/arkfile/bin/arkfile-client --config "$client_config_file" download \
+        --file-id "$file_id" \
+        --output "$downloaded_e2e_file" \
+        --progress=false \
+        > "$download_log"
+
+    if [ -s "$downloaded_e2e_file" ]; then
+        success "File downloaded successfully."
+    else
+        error "File download failed. Log: $(cat $download_log)"
+    fi
+
+    # Decrypt the downloaded file
+    if ! echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli decrypt-password \
+        --file "$downloaded_e2e_file" \
+        --output "$decrypted_e2e_file" \
+        --username "$TEST_USERNAME" \
+        --key-type account 2>/dev/null; then
+        error "Failed to decrypt downloaded file"
+    fi
+     if [ -s "$decrypted_e2e_file" ]; then
+        success "Downloaded file decrypted successfully."
+    else
+        error "Failed to decrypt downloaded file."
+    fi
+
+    # Step 13: Final end-to-end integrity verification
+    log "Step 13: Verifying final end-to-end data integrity..."
+    local final_e2e_hash
+    if command -v sha256sum >/dev/null 2>&1; then
+        final_e2e_hash=$(sha256sum "$decrypted_e2e_file" | cut -d' ' -f1)
+    else
+        final_e2e_hash=$(shasum -a 256 "$decrypted_e2e_file" | cut -d' ' -f1)
+    fi
+
+    info "Original Hash:  $file_hash"
+    info "Final E2E Hash: $final_e2e_hash"
+
+    if [ "$file_hash" = "$final_e2e_hash" ]; then
+        success "🎉🎉🎉 PERFECT END-TO-END INTEGRITY VERIFIED! Hashes match."
+        info "Workflow: Generate -> Encrypt -> Upload -> List -> Download -> Decrypt -> Verify"
+    else
+        error "END-TO-END INTEGRITY CHECK FAILED! Hashes do not match."
+    fi
     
     if [ "$PERFORMANCE_MODE" = true ]; then
         local duration=$(end_timer "$timer_start")
-        info "Complete file encryption workflow completed in: $duration"
+        info "Complete file operations (local + network) completed in: $duration"
     fi
 }
 
@@ -1840,160 +2010,9 @@ phase_10_logout() {
     fi
 }
 
-# PHASE 11: FILE INTEGRITY VERIFICATION
-phase_11_file_integrity_verification() {
-    phase "FILE INTEGRITY VERIFICATION"
-    
-    local timer_start
-    [ "$PERFORMANCE_MODE" = true ] && timer_start=$(start_timer)
-    
-    log "Verifying file integrity for download/decryption testing..."
-    
-    # Check if we have files from Phase 9
-    if [ ! -f "$TEMP_DIR/phase9_test_file" ] || [ ! -f "$TEMP_DIR/phase9_hash_file" ]; then
-        warning "Phase 9 files not found, generating new 100MB test file for verification..."
-        
-        # Generate new test file using cryptocli
-        local test_file="${TEMP_DIR}/verification_test_file_100mb.bin"
-        local hash_file="${TEMP_DIR}/verification_test_file_100mb.sha256"
-        
-        # Ensure cryptocli is available from the deployed location
-        if ! command -v /opt/arkfile/bin/cryptocli >/dev/null 2>&1; then
-            error "cryptocli tool not found at /opt/arkfile/bin/cryptocli - Please re-run 'sudo scripts/dev-reset.sh'"
-        fi
-        success "cryptocli tool available and ready for Phase 11"
-        
-        local target_size=104857600  # 100MB
-        local cryptocli_output
-        
-        if ! cryptocli_output=$(/opt/arkfile/bin/cryptocli generate-test-file --filename "$test_file" --size "$target_size" 2>&1); then
-            error "Failed to generate verification test file using cryptocli: $cryptocli_output"
-        fi
-        
-        # Extract SHA256 hash from cryptocli output
-        local file_hash
-        file_hash=$(echo "$cryptocli_output" | grep "SHA-256:" | cut -d' ' -f2)
-        
-        if [ -z "$file_hash" ] || [ ${#file_hash} -ne 64 ]; then
-            error "Failed to extract SHA256 hash from cryptocli output: $file_hash"
-        fi
-        
-        echo "$file_hash" > "$hash_file"
-        echo "$test_file" > "$TEMP_DIR/phase11_test_file"
-        echo "$hash_file" > "$TEMP_DIR/phase11_hash_file"
-        
-        success "Generated new 100MB test file for Phase 11 verification"
-        info "File: $test_file"
-        info "SHA256: $file_hash"
-    else
-        # Use files from Phase 9
-        local test_file hash_file file_hash
-        test_file=$(cat "$TEMP_DIR/phase9_test_file")
-        hash_file=$(cat "$TEMP_DIR/phase9_hash_file")
-        
-        if [ ! -f "$test_file" ] || [ ! -f "$hash_file" ]; then
-            error "Phase 9 test files missing: $test_file, $hash_file"
-        fi
-        
-        file_hash=$(cat "$hash_file")
-        echo "$test_file" > "$TEMP_DIR/phase11_test_file"
-        echo "$hash_file" > "$TEMP_DIR/phase11_hash_file"
-        
-        success "Using Phase 9 test file for verification"
-        info "File: $test_file"
-        info "SHA256: $file_hash"
-    fi
-    
-    # Perform integrity verification using system sha256sum
-    log "Performing file integrity verification using system sha256sum..."
-    
-    local test_file hash_file original_hash computed_hash
-    test_file=$(cat "$TEMP_DIR/phase11_test_file")
-    hash_file=$(cat "$TEMP_DIR/phase11_hash_file")
-    original_hash=$(cat "$hash_file")
-    
-    if ! command -v sha256sum >/dev/null 2>&1; then
-        warning "sha256sum not available, trying shasum..."
-        if command -v shasum >/dev/null 2>&1; then
-            computed_hash=$(shasum -a 256 "$test_file" | cut -d' ' -f1)
-        else
-            error "Neither sha256sum nor shasum available for verification"
-        fi
-    else
-        computed_hash=$(sha256sum "$test_file" | cut -d' ' -f1)
-    fi
-    
-    if [ -z "$computed_hash" ] || [ ${#computed_hash} -ne 64 ]; then
-        error "Failed to compute SHA256 hash: $computed_hash"
-    fi
-    
-    success "Computed SHA256 hash using system tools"
-    info "Original hash:  $original_hash"
-    info "Computed hash:  $computed_hash"
-    
-    # Verify hashes match
-    if [ "$original_hash" = "$computed_hash" ]; then
-        success "File integrity verification PASSED - hashes match perfectly"
-        info "File is ready for secure download/decryption testing"
-    else
-        error "File integrity verification FAILED - hash mismatch detected"
-    fi
-    
-    # Additional verification using cryptocli if available
-    log "Performing additional verification using cryptocli..."
-    
-    if command -v /opt/arkfile/bin/cryptocli >/dev/null 2>&1; then
-        local cryptocli_hash_output cryptocli_hash
-        
-        if cryptocli_hash_output=$(/opt/arkfile/bin/cryptocli hash-file --filename "$test_file" 2>&1); then
-            cryptocli_hash=$(echo "$cryptocli_hash_output" | grep "SHA-256:" | cut -d' ' -f2)
-            
-            if [ -n "$cryptocli_hash" ] && [ ${#cryptocli_hash} -eq 64 ]; then
-                success "Cryptocli hash verification completed"
-                info "Cryptocli hash: $cryptocli_hash"
-                
-                if [ "$original_hash" = "$cryptocli_hash" ]; then
-                    success "Cryptocli verification PASSED - triple verification successful"
-                else
-                    warning "Cryptocli hash mismatch (unexpected but not critical)"
-                fi
-            else
-                warning "Cryptocli hash extraction failed, but system verification passed"
-            fi
-        else
-            warning "Cryptocli hash verification unavailable, but system verification passed"
-        fi
-    else
-        info "Cryptocli not available for additional verification"
-    fi
-    
-    # Store verification results for future phases
-    echo "$original_hash" > "$TEMP_DIR/phase11_verified_hash"
-    echo "$computed_hash" > "$TEMP_DIR/phase11_system_hash"
-    
-    # File statistics for comprehensive verification
-    local file_size file_size_mb
-    file_size=$(stat -c%s "$test_file" 2>/dev/null || echo "0")
-    file_size_mb=$((file_size / 1024 / 1024))
-    
-    success "File verification statistics:"
-    info "  - File size: $(printf "%'d" $file_size) bytes ($file_size_mb MB)"
-    info "  - Hash algorithm: SHA-256"
-    info "  - Hash length: 64 hexadecimal characters"
-    info "  - Verification method: System tools + cryptocli"
-    info "  - Status: VERIFIED and ready for secure operations"
-    
-    success "Phase 11 file integrity verification completed successfully"
-    
-    if [ "$PERFORMANCE_MODE" = true ]; then
-        local duration=$(end_timer "$timer_start")
-        info "File integrity verification completed in: $duration"
-    fi
-}
-
-# PHASE 12: COMPREHENSIVE CLEANUP
-phase_12_final_cleanup() {
-    phase "COMPREHENSIVE CLEANUP"
+# PHASE 11: FINAL COMPREHENSIVE CLEANUP
+phase_11_final_cleanup() {
+    phase "FINAL COMPREHENSIVE CLEANUP"
     
     local timer_start
     [ "$PERFORMANCE_MODE" = true ] && timer_start=$(start_timer)
@@ -2204,6 +2223,10 @@ main() {
     echo -e "╚═══════════════════════════════════════════╝${NC}"
     
     log "Authenticating admin user for critical operations..."
+
+    # Add a small delay to allow services (and system clock) to stabilize after reset
+    log "Waiting for services to stabilize before admin auth..."
+    sleep 3 # Allow services to fully initialize, preventing TOTP timing issues
     
     # Step 1: OPAQUE Authentication (using proven pattern from admin-auth-test.sh)
     local admin_opaque_response
@@ -2250,7 +2273,8 @@ main() {
     # Generate TOTP code and use immediately (atomic operation to avoid timing issues)
     local admin_totp_response
     admin_totp_response=$(
-        local totp_code=$(scripts/testing/totp-generator "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D")
+        local current_timestamp=$(date +%s)
+        local totp_code=$(scripts/testing/totp-generator "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D" "$current_timestamp")
         curl -s $INSECURE_FLAG \
             -X POST \
             -H "Authorization: Bearer $admin_temp_token" \
@@ -2331,10 +2355,9 @@ main() {
         phase_totp_management
         phase_9_file_operations
         phase_10_logout
-        phase_11_file_integrity_verification
         
         if [ "$SKIP_CLEANUP" = false ]; then
-            phase_12_final_cleanup
+            phase_11_final_cleanup
         fi
     fi
     

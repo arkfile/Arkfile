@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS file_metadata (
     encrypted_filename BLOB NOT NULL,           -- AES-GCM encrypted filename
     sha256sum_nonce BINARY(12) NOT NULL,        -- 12-byte nonce for sha256 encryption
     encrypted_sha256sum BLOB NOT NULL,          -- AES-GCM encrypted sha256 hash
+    encrypted_fek BLOB,                         -- AES-GCM encrypted File Encryption Key
     size_bytes BIGINT NOT NULL DEFAULT 0,
     upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (owner_username) REFERENCES users(username)
@@ -165,24 +166,27 @@ CREATE TABLE IF NOT EXISTS file_encryption_keys (
 -- Upload sessions for chunked uploads
 CREATE TABLE IF NOT EXISTS upload_sessions (
     id TEXT PRIMARY KEY,
-    filename TEXT NOT NULL,
+    file_id VARCHAR(36) NOT NULL,
+    encrypted_filename BLOB NOT NULL,
+    filename_nonce BINARY(12) NOT NULL,
+    encrypted_sha256sum BLOB NOT NULL,
+    sha256sum_nonce BINARY(12) NOT NULL,
     owner_username TEXT NOT NULL,
     total_size BIGINT NOT NULL,
     chunk_size INTEGER NOT NULL,
     total_chunks INTEGER NOT NULL,
-    original_hash CHAR(64) NOT NULL,
-    encrypted_hash CHAR(64),
     password_hint TEXT,
-    password_type TEXT NOT NULL DEFAULT 'custom',
+    password_type TEXT NOT NULL,
     storage_upload_id TEXT,
-    storage_id VARCHAR(36),  -- UUID v4 for storage backend
-    padded_size BIGINT,      -- Size after padding
+    storage_id VARCHAR(36),
+    padded_size BIGINT,
     status TEXT NOT NULL DEFAULT 'in_progress',
-    multi_key BOOLEAN DEFAULT FALSE,
+    encrypted_hash CHAR(64),
+    encrypted_fek BLOB,
     -- Crypto envelope support
-    envelope_data BLOB,      -- Crypto envelope [version][keyType]
-    envelope_version TINYINT, -- Version byte from envelope
-    envelope_key_type TINYINT, -- Key type byte from envelope
+    envelope_data BLOB,
+    envelope_version TINYINT,
+    envelope_key_type TINYINT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,
@@ -196,7 +200,6 @@ CREATE TABLE IF NOT EXISTS upload_chunks (
     chunk_number INTEGER NOT NULL,
     chunk_hash CHAR(64) NOT NULL,
     chunk_size BIGINT NOT NULL,
-    iv TEXT NOT NULL,
     etag TEXT NOT NULL,
     uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (session_id) REFERENCES upload_sessions(id) ON DELETE CASCADE,

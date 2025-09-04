@@ -85,16 +85,16 @@ func RegisterRoutes() {
 	totpProtectedGroup.DELETE("/api/share/:id", DeleteShare)             // Delete a share
 
 	// Anonymous share access (no authentication required) - with rate limiting and timing protection
-	shareGroup := Echo.Group("")
-	shareGroup.Use(ShareRateLimitMiddleware)                       // Apply rate limiting FIRST (fail fast for abusers)
-	shareGroup.Use(TimingProtectionMiddleware)                     // Then timing protection (for valid requests)
-	shareGroup.GET("/shared/:id", GetSharedFile)                   // Share access page
-	shareGroup.GET("/api/share/:id", GetShareInfo)                 // Get share metadata (no password required)
-	shareGroup.GET("/api/shared/:id", GetShareInfo)                // Alternative route for frontend compatibility
-	shareGroup.POST("/api/share/:id", AccessSharedFile)            // Anonymous share access with password
-	shareGroup.POST("/api/shared/:id", AccessSharedFile)           // Alternative route for frontend compatibility
-	shareGroup.GET("/api/share/:id/download", DownloadSharedFile)  // Download shared file
-	shareGroup.GET("/api/shared/:id/download", DownloadSharedFile) // Alternative route for frontend compatibility
+	shareGroup := Echo.Group("/api")
+	shareGroup.Use(ShareRateLimitMiddleware)        // Apply rate limiting FIRST (fail fast for abusers)
+	shareGroup.Use(TimingProtectionMiddleware)      // Then timing protection (for valid requests)
+	shareGroup.GET("/shared/:id", GetSharedFile)    // Share access page
+	shareGroup.GET("/share/:id", GetShareInfo)      // Get share metadata
+	shareGroup.POST("/share/:id", AccessSharedFile) // Anonymous share access with password
+	// Alternative routes for frontend compatibility
+	shareGroup.GET("/shared/:id/info", GetShareInfo)
+	shareGroup.POST("/shared/:id/access", AccessSharedFile)
+	shareGroup.GET("/shared/:id/download", DownloadSharedFile)
 
 	// File encryption key management - require TOTP
 	totpProtectedGroup.POST("/api/files/:fileId/update-encryption", UpdateEncryption)

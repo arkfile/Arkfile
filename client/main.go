@@ -70,8 +70,10 @@ func clearPasswordForUser(this js.Value, args []js.Value) interface{} {
 }
 
 // deriveAccountFileKeyInternal derives an encryption key from account password using Argon2ID
-func deriveAccountFileKeyInternal(password []byte, username, fileID string) ([]byte, error) {
-	salt := sha256.Sum256([]byte("arkfile-account-key-salt:" + username + ":" + fileID))
+// Fixed to match server-side key derivation - no fileID in salt generation
+func deriveAccountFileKeyInternal(password []byte, username string) ([]byte, error) {
+	// Use same salt generation as server: username + "account" (no fileID)
+	salt := sha256.Sum256([]byte("arkfile-account-key-salt:" + username))
 	key, err := crypto.DeriveArgon2IDKey(password, salt[:], crypto.UnifiedArgonSecure.KeyLen, crypto.UnifiedArgonSecure.Memory, crypto.UnifiedArgonSecure.Time, crypto.UnifiedArgonSecure.Threads)
 	if err != nil {
 		return nil, fmt.Errorf("Argon2ID account key derivation failed: %w", err)
@@ -80,8 +82,10 @@ func deriveAccountFileKeyInternal(password []byte, username, fileID string) ([]b
 }
 
 // deriveCustomFileKeyInternal derives an encryption key from custom password using Argon2ID
-func deriveCustomFileKeyInternal(password []byte, fileID, username string) ([]byte, error) {
-	salt := sha256.Sum256([]byte("arkfile-custom-key-salt:" + username + ":" + fileID))
+// Fixed to match server-side key derivation - no fileID in salt generation
+func deriveCustomFileKeyInternal(password []byte, username string) ([]byte, error) {
+	// Use same salt generation as server: username + "custom" (no fileID)
+	salt := sha256.Sum256([]byte("arkfile-custom-key-salt:" + username))
 	key, err := crypto.DeriveArgon2IDKey(password, salt[:], crypto.UnifiedArgonSecure.KeyLen, crypto.UnifiedArgonSecure.Memory, crypto.UnifiedArgonSecure.Time, crypto.UnifiedArgonSecure.Threads)
 	if err != nil {
 		return nil, fmt.Errorf("Argon2ID custom key derivation failed: %w", err)
@@ -103,10 +107,10 @@ func derivePasswordMetadataKey(password []byte, username string) ([]byte, error)
 
 // encryptFilePassword encrypts a file using password-derived keys
 func encryptFilePassword(this js.Value, args []js.Value) interface{} {
-	if len(args) != 4 && len(args) != 5 {
+	if len(args) != 3 && len(args) != 4 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected fileData, username, keyType, fileID, [customPassword]",
+			"error":   "Invalid arguments: expected fileData, username, keyType, [customPassword]",
 		}
 	}
 
@@ -114,7 +118,6 @@ func encryptFilePassword(this js.Value, args []js.Value) interface{} {
 	fileDataJS := args[0]
 	username := args[1].String()
 	keyType := args[2].String() // "account" or "custom"
-	fileID := args[3].String()
 
 	// Convert file data from JavaScript Uint8Array to Go []byte
 	fileData := make([]byte, fileDataJS.Length())
@@ -134,16 +137,24 @@ func encryptFilePassword(this js.Value, args []js.Value) interface{} {
 				"error":   "No password found for user",
 			}
 		}
-		fileEncKey, err = deriveAccountFileKeyInternal(password, username, fileID)
+		fileEncKey, err = deriveAccountFileKeyInternal(password, username)
+		// SECURITY: Clear password from memory after use
+		for i := range password {
+			password[i] = 0
+		}
 	} else if keyType == "custom" {
-		if len(args) != 5 {
+		if len(args) != 4 {
 			return map[string]interface{}{
 				"success": false,
 				"error":   "Custom password required for custom key type",
 			}
 		}
-		customPassword := []byte(args[4].String())
-		fileEncKey, err = deriveCustomFileKeyInternal(customPassword, fileID, username)
+		customPassword := []byte(args[3].String())
+		fileEncKey, err = deriveCustomFileKeyInternal(customPassword, username)
+		// SECURITY: Clear password from memory after use
+		for i := range customPassword {
+			customPassword[i] = 0
+		}
 	} else {
 		return map[string]interface{}{
 			"success": false,
@@ -206,16 +217,15 @@ func encryptFilePassword(this js.Value, args []js.Value) interface{} {
 
 // decryptFilePassword decrypts a file using password-derived keys
 func decryptFilePassword(this js.Value, args []js.Value) interface{} {
-	if len(args) != 3 && len(args) != 4 {
+	if len(args) != 2 && len(args) != 3 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected encryptedData, username, fileID, [customPassword]",
+			"error":   "Invalid arguments: expected encryptedData, username, [customPassword]",
 		}
 	}
 
 	encryptedDataB64 := args[0].String()
 	username := args[1].String()
-	fileID := args[2].String()
 
 	// Decode the encrypted data
 	encryptedData, err := base64.StdEncoding.DecodeString(encryptedDataB64)
@@ -245,6 +255,14 @@ func decryptFilePassword(this js.Value, args []js.Value) interface{} {
 	switch version {
 	case 0x01: // Password-based encryption
 		if keyType == 0x01 { // Account password
+			// VULNERABILITY FIX: Ensure a custom password was NOT provided for account-based decryption
+			if len(args) == 3 {
+				return map[string]interface{}{
+					"success": false,
+					"error":   "A custom password was provided for a file encrypted with the account password",
+				}
+			}
+
 			password, exists := userPasswords[username]
 			if !exists {
 				return map[string]interface{}{
@@ -252,16 +270,16 @@ func decryptFilePassword(this js.Value, args []js.Value) interface{} {
 					"error":   "No password found for user",
 				}
 			}
-			fileEncKey, err = deriveAccountFileKeyInternal(password, username, fileID)
+			fileEncKey, err = deriveAccountFileKeyInternal(password, username)
 		} else if keyType == 0x02 { // Custom password
-			if len(args) != 4 {
+			if len(args) != 3 {
 				return map[string]interface{}{
 					"success": false,
 					"error":   "Custom password required for decryption",
 				}
 			}
-			customPassword := []byte(args[3].String())
-			fileEncKey, err = deriveCustomFileKeyInternal(customPassword, fileID, username)
+			customPassword := []byte(args[2].String())
+			fileEncKey, err = deriveCustomFileKeyInternal(customPassword, username)
 		} else { // No change
 			return map[string]interface{}{
 				"success": false,
@@ -350,6 +368,10 @@ func encryptFileMetadata(this js.Value, args []js.Value) interface{} {
 
 	// Derive the metadata encryption key
 	metadataKey, err := derivePasswordMetadataKey(password, username)
+	// SECURITY: Clear password from memory after use
+	for i := range password {
+		password[i] = 0
+	}
 	if err != nil {
 		return map[string]interface{}{
 			"success": false,
@@ -1169,10 +1191,10 @@ func validateChunkFormat(this js.Value, args []js.Value) interface{} {
 
 // encryptFileChunkedPassword encrypts a file for chunked upload using password-based encryption
 func encryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
-	if len(args) != 5 && len(args) != 6 {
+	if len(args) != 4 && len(args) != 5 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected fileData, username, keyType, fileID, chunkSize, [customPassword]",
+			"error":   "Invalid arguments: expected fileData, username, keyType, chunkSize, [customPassword]",
 		}
 	}
 
@@ -1180,8 +1202,7 @@ func encryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 	fileDataJS := args[0]
 	username := args[1].String()
 	keyType := args[2].String()
-	fileID := args[3].String()
-	chunkSize := args[4].Int()
+	chunkSize := args[3].Int()
 
 	// Default chunk size to 16MB if not specified or invalid
 	if chunkSize <= 0 || chunkSize > 16*1024*1024 {
@@ -1206,17 +1227,25 @@ func encryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 				"error":   "No password found for user",
 			}
 		}
-		fileEncKey, err = deriveAccountFileKeyInternal(password, username, fileID)
+		fileEncKey, err = deriveAccountFileKeyInternal(password, username)
+		// SECURITY: Clear password from memory after use
+		for i := range password {
+			password[i] = 0
+		}
 	} else if keyType == "custom" {
 		keyTypeByte = 0x02
-		if len(args) != 6 {
+		if len(args) != 5 {
 			return map[string]interface{}{
 				"success": false,
 				"error":   "Custom password required for custom key type",
 			}
 		}
-		customPassword := []byte(args[5].String())
-		fileEncKey, err = deriveCustomFileKeyInternal(customPassword, fileID, username)
+		customPassword := []byte(args[4].String())
+		fileEncKey, err = deriveCustomFileKeyInternal(customPassword, username)
+		// SECURITY: Clear password from memory after use
+		for i := range customPassword {
+			customPassword[i] = 0
+		}
 	} else {
 		return map[string]interface{}{
 			"success": false,
@@ -1296,16 +1325,15 @@ func encryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 
 // decryptFileChunkedPassword decrypts a chunked file with envelope processing using password-based encryption
 func decryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
-	if len(args) != 3 && len(args) != 4 {
+	if len(args) != 2 && len(args) != 3 {
 		return map[string]interface{}{
 			"success": false,
-			"error":   "Invalid arguments: expected encryptedData, username, fileID, [customPassword]",
+			"error":   "Invalid arguments: expected encryptedData, username, [customPassword]",
 		}
 	}
 
 	encryptedDataB64 := args[0].String()
 	username := args[1].String()
-	fileID := args[2].String()
 
 	// Decode the encrypted data
 	encryptedData, err := base64.StdEncoding.DecodeString(encryptedDataB64)
@@ -1334,7 +1362,16 @@ func decryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 
 	switch version {
 	case 0x01: // Password-based encryption
+
 		if keyType == 0x01 { // Account password
+			// VULNERABILITY FIX: Ensure a custom password was NOT provided for account-based decryption
+			if len(args) == 3 {
+				return map[string]interface{}{
+					"success": false,
+					"error":   "A custom password was provided for a file encrypted with the account password",
+				}
+			}
+
 			password, exists := userPasswords[username]
 			if !exists {
 				return map[string]interface{}{
@@ -1342,16 +1379,16 @@ func decryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 					"error":   "No password found for user",
 				}
 			}
-			fileEncKey, err = deriveAccountFileKeyInternal(password, username, fileID)
+			fileEncKey, err = deriveAccountFileKeyInternal(password, username)
 		} else if keyType == 0x02 { // Custom password
-			if len(args) != 4 {
+			if len(args) != 3 {
 				return map[string]interface{}{
 					"success": false,
 					"error":   "Custom password required for decryption",
 				}
 			}
-			customPassword := []byte(args[3].String())
-			fileEncKey, err = deriveCustomFileKeyInternal(customPassword, fileID, username)
+			customPassword := []byte(args[2].String())
+			fileEncKey, err = deriveCustomFileKeyInternal(customPassword, username)
 		} else {
 			return map[string]interface{}{
 				"success": false,

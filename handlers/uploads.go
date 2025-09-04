@@ -31,6 +31,7 @@ func CreateUploadSession(c echo.Context) error {
 		FilenameNonce      string `json:"filenameNonce"`
 		EncryptedSha256sum string `json:"encryptedSha256sum"`
 		Sha256sumNonce     string `json:"sha256sumNonce"`
+		EncryptedFek       string `json:"encryptedFek"`
 
 		TotalSize    int64  `json:"totalSize"`
 		ChunkSize    int    `json:"chunkSize"`
@@ -63,6 +64,9 @@ func CreateUploadSession(c echo.Context) error {
 	}
 	if _, err := base64.StdEncoding.DecodeString(request.Sha256sumNonce); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid SHA256 nonce encoding")
+	}
+	if _, err := base64.StdEncoding.DecodeString(request.EncryptedFek); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid encrypted FEK encoding")
 	}
 
 	// Validate password type
@@ -148,10 +152,12 @@ func CreateUploadSession(c echo.Context) error {
 	encryptedSha256sum, _ := base64.StdEncoding.DecodeString(request.EncryptedSha256sum)
 	sha256sumNonce, _ := base64.StdEncoding.DecodeString(request.Sha256sumNonce)
 
+	encryptedFek, _ := base64.StdEncoding.DecodeString(request.EncryptedFek)
+
 	// Create upload session record with encrypted metadata
 	_, err = tx.Exec(
-		"INSERT INTO upload_sessions (id, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, owner_username, total_size, chunk_size, total_chunks, password_hint, password_type, storage_id, padded_size, envelope_data, envelope_version, envelope_key_type, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		sessionID, fileID, encryptedFilename, filenameNonce, encryptedSha256sum, sha256sumNonce, username, request.TotalSize, request.ChunkSize, totalChunks, request.PasswordHint, request.PasswordType, storageID, paddedSize, envelopeData, envelopeVersion, envelopeKeyType, "in_progress", time.Now().Add(24*time.Hour),
+		"INSERT INTO upload_sessions (id, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, encrypted_fek, owner_username, total_size, chunk_size, total_chunks, password_hint, password_type, storage_id, padded_size, envelope_data, envelope_version, envelope_key_type, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		sessionID, fileID, encryptedFilename, filenameNonce, encryptedSha256sum, sha256sumNonce, encryptedFek, username, request.TotalSize, request.ChunkSize, totalChunks, request.PasswordHint, request.PasswordType, storageID, paddedSize, envelopeData, envelopeVersion, envelopeKeyType, "in_progress", time.Now().Add(24*time.Hour),
 	)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create upload session")
@@ -313,6 +319,7 @@ func CancelUpload(c echo.Context) error {
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
 	} else if err != nil {
+		logging.ErrorLogger.Printf("Failed to get upload session details for sessionID %s: %v", sessionID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get session details")
 	}
 
@@ -377,7 +384,7 @@ func GetUploadStatus(c echo.Context) error {
 		sha256sumNonce     []byte
 		status             string
 		totalChunks        int
-		totalSize          int64
+		totalSizeFloat     sql.NullFloat64 // Handle scientific notation
 		createdAt          time.Time
 		expiresAt          time.Time
 	)
@@ -385,7 +392,7 @@ func GetUploadStatus(c echo.Context) error {
 	err := database.DB.QueryRow(
 		"SELECT owner_username, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, status, total_chunks, total_size, created_at, expires_at FROM upload_sessions WHERE id = ?",
 		sessionID,
-	).Scan(&ownerUsername, &fileID, &encryptedFilename, &filenameNonce, &encryptedSha256sum, &sha256sumNonce, &status, &totalChunks, &totalSize, &createdAt, &expiresAt)
+	).Scan(&ownerUsername, &fileID, &encryptedFilename, &filenameNonce, &encryptedSha256sum, &sha256sumNonce, &status, &totalChunks, &totalSizeFloat, &createdAt, &expiresAt)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
@@ -423,6 +430,11 @@ func GetUploadStatus(c echo.Context) error {
 
 	// Calculate upload progress percentage
 	progress := float64(len(uploadedChunks)) / float64(totalChunks) * 100.0
+
+	var totalSize int64
+	if totalSizeFloat.Valid {
+		totalSize = int64(totalSizeFloat.Float64)
+	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"sessionId":          sessionID,
@@ -528,16 +540,15 @@ func UploadChunk(c echo.Context) error {
 		storageUploadID,
 		minioPartNumber,
 		c.Request().Body,
-		-1, // Unknown size, will read until EOF
+		c.Request().ContentLength, // Use actual content length
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to upload chunk %d via storage provider: %v", minioPartNumber, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to upload chunk to storage")
 	}
 
-	// Since minio.CompletePart doesn't have a Size field/method, we'll estimate the size
-	// from the object length or set a default value
-	chunkSize := int64(-1) // Default value indicating unknown size
+	// Get the actual chunk size from the request content length
+	chunkSize := c.Request().ContentLength
 
 	// Record chunk metadata in database
 	// Note: IV is no longer needed since chunks contain their own nonces
@@ -563,80 +574,95 @@ func CompleteUpload(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 	sessionID := c.Param("sessionId")
 
-	// Begin transaction
-	tx, err := database.DB.Begin()
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to start transaction")
-	}
-	defer tx.Rollback()
+	logging.InfoLogger.Printf("Attempting to complete upload for sessionID: '%s' by user: '%s'", sessionID, username)
 
-	// Get session details
+	// Step 1: Get session details (excluding BLOBs) without a transaction first.
 	var (
 		ownerUsername      string
-		fileID             string
-		storageID          string
-		storageUploadID    string
-		paddedSize         int64
+		fileID             sql.NullString
+		storageID          sql.NullString
+		storageUploadID    sql.NullString
+		paddedSizeFloat    sql.NullFloat64 // Handle scientific notation from DB
 		status             string
 		totalChunks        int
-		totalSize          int64
+		totalSizeFloat     sql.NullFloat64 // Handle scientific notation from DB
+		passwordHint       sql.NullString
+		passwordType       sql.NullString
 		encryptedFilename  []byte
 		filenameNonce      []byte
 		encryptedSha256sum []byte
 		sha256sumNonce     []byte
-		passwordHint       string
-		passwordType       string
+		encryptedFek       []byte
 	)
 
-	err = tx.QueryRow(
-		"SELECT owner_username, file_id, storage_id, storage_upload_id, padded_size, status, total_chunks, total_size, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, password_hint, password_type FROM upload_sessions WHERE id = ?",
+	// Query for most data, keeping BLOBs separate. Read large numbers as floats.
+	err := database.DB.QueryRow(
+		`SELECT owner_username, file_id, storage_id, storage_upload_id, padded_size, status, total_chunks, 
+                total_size, password_hint, password_type, encrypted_filename, filename_nonce, 
+                encrypted_sha256sum, sha256sum_nonce, encrypted_fek 
+         FROM upload_sessions WHERE id = ?`,
 		sessionID,
 	).Scan(
-		&ownerUsername, &fileID, &storageID, &storageUploadID, &paddedSize, &status, &totalChunks,
-		&totalSize, &encryptedFilename, &filenameNonce, &encryptedSha256sum, &sha256sumNonce, &passwordHint, &passwordType,
+		&ownerUsername, &fileID, &storageID, &storageUploadID, &paddedSizeFloat, &status, &totalChunks,
+		&totalSizeFloat, &passwordHint, &passwordType, &encryptedFilename, &filenameNonce, &encryptedSha256sum, &sha256sumNonce, &encryptedFek,
 	)
 
 	if err == sql.ErrNoRows {
+		logging.ErrorLogger.Printf("CompleteUpload Error: Session not found in database for sessionID: '%s'. This is the point of failure.", sessionID)
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
 	} else if err != nil {
+		logging.ErrorLogger.Printf("Failed to get upload session details (part 1) for sessionID %s: %v", sessionID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get session details")
 	}
 
-	// Verify ownership
+	// Manually cast float64 values from DB to int64.
+	var totalSize int64
+	if totalSizeFloat.Valid {
+		totalSize = int64(totalSizeFloat.Float64)
+	}
+	var paddedSize int64
+	if paddedSizeFloat.Valid {
+		paddedSize = int64(paddedSizeFloat.Float64)
+	}
+
+	logging.InfoLogger.Printf("CompleteUpload: DB query (part 1) successful for sessionID: '%s'. Status: '%s'.", sessionID, status)
+
+	// Step 2: Get envelope_data (BLOB) in a separate query to avoid potential driver issues.
+	var envelopeData []byte
+	err = database.DB.QueryRow(
+		"SELECT envelope_data FROM upload_sessions WHERE id = ?", sessionID,
+	).Scan(&envelopeData)
+	// sql.ErrNoRows should not happen here since the first query succeeded, but we handle it.
+	if err != nil && err != sql.ErrNoRows {
+		logging.ErrorLogger.Printf("Failed to get upload session details (part 2: envelope) for sessionID %s: %v", sessionID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve session envelope data")
+	}
+
+	// Step 3: Perform validation checks on the retrieved data.
 	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized for this upload session")
 	}
-
-	// Verify session status
 	if status != "in_progress" {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Upload session is %s, not in progress", status))
 	}
 
-	// Verify all chunks were uploaded
+	// Verify all chunks were uploaded.
 	var uploadedChunks int
-	err = tx.QueryRow(
-		"SELECT COUNT(*) FROM upload_chunks WHERE session_id = ?",
-		sessionID,
-	).Scan(&uploadedChunks)
+	err = database.DB.QueryRow("SELECT COUNT(*) FROM upload_chunks WHERE session_id = ?", sessionID).Scan(&uploadedChunks)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to count uploaded chunks")
 	}
-
 	if uploadedChunks != totalChunks {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Not all chunks uploaded (%d/%d)", uploadedChunks, totalChunks))
 	}
 
-	// Get all chunk parts for completing the multipart upload
-	rows, err := tx.Query(
-		"SELECT chunk_number, etag FROM upload_chunks WHERE session_id = ? ORDER BY chunk_number ASC",
-		sessionID,
-	)
+	// Get all chunk parts for completing the multipart upload.
+	rows, err := database.DB.Query("SELECT chunk_number, etag FROM upload_chunks WHERE session_id = ? ORDER BY chunk_number ASC", sessionID)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve chunk metadata")
 	}
 	defer rows.Close()
 
-	// Collect the parts info required by MinIO
 	var parts []minio.CompletePart
 	for rows.Next() {
 		var chunkNumber int
@@ -644,120 +670,80 @@ func CompleteUpload(c echo.Context) error {
 		if err := rows.Scan(&chunkNumber, &etag); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to scan chunk data")
 		}
-
-		// Convert to MinIO's part number (1-based)
-		parts = append(parts, minio.CompletePart{
-			PartNumber: chunkNumber + 1,
-			ETag:       etag,
-		})
+		parts = append(parts, minio.CompletePart{PartNumber: chunkNumber + 1, ETag: etag})
 	}
-
 	if err = rows.Err(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error reading chunk data")
 	}
 
-	// Phase 3: Get envelope data from upload session
-	var envelopeData []byte
-	err = tx.QueryRow(
-		"SELECT envelope_data FROM upload_sessions WHERE id = ?",
-		sessionID,
-	).Scan(&envelopeData)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve envelope data")
-	}
-
-	// Complete the multipart upload with envelope concatenation
+	// Step 4: Perform the long-running I/O operation (Minio completion) outside of any DB transaction.
 	if len(envelopeData) > 0 {
-		// Use envelope-aware completion for chunked uploads
-		err = storage.Provider.CompleteMultipartUploadWithEnvelope(
-			c.Request().Context(),
-			storageID,
-			storageUploadID,
-			parts,
-			envelopeData,
-			totalSize,
-			paddedSize,
-		)
+		err = storage.Provider.CompleteMultipartUploadWithEnvelope(c.Request().Context(), storageID.String, storageUploadID.String, parts, envelopeData, totalSize, paddedSize)
 	} else {
-		// Fall back to regular padding completion for non-chunked uploads
-		err = storage.Provider.CompleteMultipartUploadWithPadding(
-			c.Request().Context(),
-			storageID,
-			storageUploadID,
-			parts,
-			totalSize,
-			paddedSize,
-		)
+		err = storage.Provider.CompleteMultipartUploadWithPadding(c.Request().Context(), storageID.String, storageUploadID.String, parts, totalSize, paddedSize)
 	}
-
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to complete storage upload via storage provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
 	}
 
-	// Get encrypted file hash from request if provided
+	// Step 5: Begin the final, short-lived transaction now that I/O is complete.
+	tx, err := database.DB.Begin()
+	if err != nil {
+		logging.ErrorLogger.Printf("CRITICAL: Failed to start transaction after completing storage upload for session %s. Orphaned file may exist: %s", sessionID, storageID.String)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to start database transaction")
+	}
+	defer tx.Rollback()
+
 	var encryptedHash string
-	if c.Request().Header.Get("X-Encrypted-Hash") != "" {
-		encryptedHash = c.Request().Header.Get("X-Encrypted-Hash")
-		// Validate hash format
-		if len(encryptedHash) != 64 || !utils.IsHexString(encryptedHash) {
+	if h := c.Request().Header.Get("X-Encrypted-Hash"); h != "" {
+		if len(h) != 64 || !utils.IsHexString(h) {
 			return echo.NewHTTPError(http.StatusBadRequest, "Invalid encrypted hash format")
 		}
+		encryptedHash = h
 	}
 
-	// Mark upload session as completed
-	_, err = tx.Exec(
-		"UPDATE upload_sessions SET status = ?, encrypted_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-		"completed", encryptedHash, sessionID,
-	)
-	if err != nil {
+	// Update session status.
+	if _, err := tx.Exec("UPDATE upload_sessions SET status = ?, encrypted_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", "completed", encryptedHash, sessionID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update session status")
 	}
 
-	// Create file metadata record using encrypted metadata and new schema
-	// Note: Using the transaction version of the database connection
+	// Create the final file metadata record.
 	_, err = tx.Exec(`
-		INSERT INTO file_metadata (
-			file_id, storage_id, owner_username, password_hint, password_type,
-			filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fileID, storageID, username, passwordHint, passwordType,
-		filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, totalSize,
+		INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_fek, size_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, encryptedFek, totalSize,
 	)
 	if err != nil {
-		// Handle duplicate file_id (should be extremely rare with UUID v4)
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "file_id") {
 			return echo.NewHTTPError(http.StatusConflict, "File ID conflict occurred")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create file metadata")
 	}
 
-	// Update user's storage usage
-	user, err := models.GetUserByUsername(database.DB, username)
+	// Update user's storage usage.
+	user, err := models.GetUserByUsername(tx, username)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user")
 	}
-
 	if err := user.UpdateStorageUsage(tx, totalSize); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage usage")
 	}
 
-	// Commit transaction
+	// Commit the transaction.
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
 	}
 
-	logging.InfoLogger.Printf("Upload completed: %s, file_id: %s by %s (size: %d bytes)",
-		sessionID, fileID, username, totalSize)
-
-	database.LogUserAction(username, "uploaded", fileID)
+	logging.InfoLogger.Printf("Upload completed: %s, file_id: %s by %s (size: %d bytes)", sessionID, fileID.String, username, totalSize)
+	database.LogUserAction(username, "uploaded", fileID.String)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "File uploaded successfully",
 		"storage": map[string]interface{}{
-			"total_bytes":     user.TotalStorageBytes + totalSize,
+			"total_bytes":     user.TotalStorageBytes,
 			"limit_bytes":     user.StorageLimitBytes,
-			"available_bytes": user.StorageLimitBytes - (user.TotalStorageBytes + totalSize),
+			"available_bytes": user.StorageLimitBytes - user.TotalStorageBytes,
 		},
 	})
 }
@@ -811,7 +797,7 @@ func DeleteFile(c echo.Context) error {
 	}
 
 	// Update user's storage usage (reduce by file size)
-	user, err := models.GetUserByUsername(database.DB, username)
+	user, err := models.GetUserByUsername(tx, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get user: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage usage")
