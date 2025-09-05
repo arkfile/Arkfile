@@ -9,18 +9,19 @@ import (
 )
 
 type File struct {
-	ID                 int64     `json:"id"`
-	FileID             string    `json:"file_id"`    // UUID v4 for file identification
-	StorageID          string    `json:"storage_id"` // UUID v4 for storage backend
-	OwnerUsername      string    `json:"owner_username"`
-	PasswordHint       string    `json:"password_hint,omitempty"`
-	PasswordType       string    `json:"password_type"`
-	FilenameNonce      []byte    `json:"-"`          // Hidden from JSON - 12 bytes
-	EncryptedFilename  []byte    `json:"-"`          // Hidden from JSON - encrypted blob
-	Sha256sumNonce     []byte    `json:"-"`          // Hidden from JSON - 12 bytes
-	EncryptedSha256sum []byte    `json:"-"`          // Hidden from JSON - encrypted blob
-	SizeBytes          int64     `json:"size_bytes"` // Original file size
-	UploadDate         time.Time `json:"upload_date"`
+	ID                     int64     `json:"id"`
+	FileID                 string    `json:"file_id"`    // UUID v4 for file identification
+	StorageID              string    `json:"storage_id"` // UUID v4 for storage backend
+	OwnerUsername          string    `json:"owner_username"`
+	PasswordHint           string    `json:"password_hint,omitempty"`
+	PasswordType           string    `json:"password_type"`
+	FilenameNonce          []byte    `json:"-"`          // Hidden from JSON - 12 bytes
+	EncryptedFilename      []byte    `json:"-"`          // Hidden from JSON - encrypted blob
+	Sha256sumNonce         []byte    `json:"-"`          // Hidden from JSON - 12 bytes
+	EncryptedSha256sum     []byte    `json:"-"`          // Hidden from JSON - encrypted blob (client-side)
+	EncryptedFileSha256sum string    `json:"-"`          // Hidden from JSON - server-side hash
+	SizeBytes              int64     `json:"size_bytes"` // Original file size
+	UploadDate             time.Time `json:"upload_date"`
 }
 
 // GenerateStorageID creates a new UUID v4 for storage
@@ -76,7 +77,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
-			   size_bytes, upload_date 
+			   encrypted_file_sha256sum, size_bytes, upload_date 
 		FROM file_metadata WHERE file_id = ?`,
 		fileID,
 	).Scan(
@@ -84,7 +85,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		&file.PasswordHint, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
-		&file.SizeBytes, &file.UploadDate,
+		&file.EncryptedFileSha256sum, &file.SizeBytes, &file.UploadDate,
 	)
 
 	if err == sql.ErrNoRows {
@@ -103,7 +104,7 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
-			   size_bytes, upload_date 
+			   encrypted_file_sha256sum, size_bytes, upload_date 
 		FROM file_metadata WHERE storage_id = ?`,
 		storageID,
 	).Scan(
@@ -111,7 +112,7 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		&file.PasswordHint, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
-		&file.SizeBytes, &file.UploadDate,
+		&file.EncryptedFileSha256sum, &file.SizeBytes, &file.UploadDate,
 	)
 
 	if err == sql.ErrNoRows {
@@ -129,7 +130,7 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 	rows, err := db.Query(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
-			   size_bytes, upload_date 
+			   encrypted_file_sha256sum, size_bytes, upload_date 
 		FROM file_metadata WHERE owner_username = ? ORDER BY upload_date DESC`,
 		ownerUsername,
 	)
@@ -146,7 +147,7 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 			&file.PasswordHint, &file.PasswordType,
 			&file.FilenameNonce, &file.EncryptedFilename,
 			&file.Sha256sumNonce, &file.EncryptedSha256sum,
-			&file.SizeBytes, &file.UploadDate,
+			&file.EncryptedFileSha256sum, &file.SizeBytes, &file.UploadDate,
 		)
 		if err != nil {
 			return nil, err

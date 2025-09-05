@@ -114,9 +114,9 @@ func (m *MockObjectStorageProvider) CompleteMultipartUploadWithPadding(ctx conte
 }
 
 // Phase 3: CompleteMultipartUploadWithEnvelope mocks the CompleteMultipartUploadWithEnvelope method
-func (m *MockObjectStorageProvider) CompleteMultipartUploadWithEnvelope(ctx context.Context, storageID, uploadID string, parts []minio.CompletePart, envelope []byte, originalSize, paddedSize int64) (string, error) {
+func (m *MockObjectStorageProvider) CompleteMultipartUploadWithEnvelope(ctx context.Context, storageID, uploadID string, parts []minio.CompletePart, envelope []byte, originalSize, paddedSize int64) error {
 	args := m.Called(ctx, storageID, uploadID, parts, envelope, originalSize, paddedSize)
-	return args.String(0), args.Error(1)
+	return args.Error(0)
 }
 
 // --- Mock Minio Object ---

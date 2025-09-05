@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +22,12 @@ import (
 	"github.com/84adam/Arkfile/models"
 	"github.com/84adam/Arkfile/storage"
 	"github.com/84adam/Arkfile/utils"
+)
+
+// Global streaming hash state management
+var (
+	streamingHashStates = make(map[string]*StreamingHashState)
+	hashStateMutex      sync.RWMutex
 )
 
 // CreateUploadSession initializes a new chunked upload
@@ -222,7 +231,7 @@ func GetSharedFileByShareID(c echo.Context) error {
 	return echo.NewHTTPError(http.StatusNotImplemented, "This endpoint has been replaced by the new anonymous share system. Please use /api/share/:id instead.")
 }
 
-// DownloadFileChunk streams a specific chunk of a file to the client
+// DownloadFileChunk streams a specific chunk of a file to the client with optional streaming hash verification
 func DownloadFileChunk(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 	fileID := c.Param("fileId")
@@ -233,6 +242,9 @@ func DownloadFileChunk(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk number")
 	}
+
+	// Check if client wants streaming hash verification
+	enableVerification := c.QueryParam("verify") == "true"
 
 	// Get file by file_id and verify ownership
 	file, err := models.GetFileByFileID(database.DB, fileID)
@@ -290,10 +302,48 @@ func DownloadFileChunk(c echo.Context) error {
 	c.Response().Header().Set("X-Password-Hint", file.PasswordHint)
 	c.Response().Header().Set("X-Password-Type", file.PasswordType)
 
-	// Log access using file_id
-	logging.InfoLogger.Printf("Chunk download: file_id=%s, chunk: %d/%d by %s", fileID, chunkNumber+1, totalChunks, username)
+	// If streaming verification is enabled, set up hash verification
+	if enableVerification && file.EncryptedFileSha256sum != "" {
+		// Add header to indicate verification is active (for first chunk)
+		if chunkNumber == 0 {
+			c.Response().Header().Set("X-Hash-Verification", "enabled")
+			logging.InfoLogger.Printf("Started streaming hash verification for file_id %s", fileID)
+		}
 
-	// Stream the chunk to the client
+		// If this is the last chunk, include verification status in headers
+		if int64(chunkNumber) == totalChunks-1 {
+			c.Response().Header().Set("X-Last-Chunk", "true")
+		}
+	}
+
+	// Log access using file_id
+	logging.InfoLogger.Printf("Chunk download: file_id=%s, chunk: %d/%d by %s (verification: %v)",
+		fileID, chunkNumber+1, totalChunks, username, enableVerification)
+
+	// If verification is enabled, wrap the reader with hash verification
+	if enableVerification && file.EncryptedFileSha256sum != "" {
+		// Create a TeeReader that calculates hash while streaming data to client
+		teeReader := NewStreamingHashTeeReader(reader, file.EncryptedFileSha256sum)
+
+		// If this is the last chunk, verify the complete hash after streaming
+		if int64(chunkNumber) == totalChunks-1 {
+			defer func() {
+				// Verify the complete hash and clean up
+				isValid, calculatedHash := teeReader.VerifyHash()
+
+				if isValid {
+					logging.InfoLogger.Printf("Download hash verification successful for file_id %s by %s", fileID, username)
+				} else {
+					logging.ErrorLogger.Printf("Download hash verification FAILED for file_id %s by %s - expected: %s, calculated: %s - file integrity compromised", fileID, username, file.EncryptedFileSha256sum, calculatedHash)
+				}
+			}()
+		}
+
+		// Stream through the hash verifying reader
+		return c.Stream(http.StatusOK, "application/octet-stream", teeReader)
+	}
+
+	// Stream the chunk to the client (no verification)
 	return c.Stream(http.StatusOK, "application/octet-stream", reader)
 }
 
@@ -533,14 +583,41 @@ func UploadChunk(c echo.Context) error {
 	// Minio part numbers are 1-based (consistent with Minio SDK, assuming provider implements this detail)
 	minioPartNumber := chunkNumber + 1
 
-	// Stream chunk directly to storage using storage provider interface
+	// Read the chunk data to calculate hash while streaming to storage
+	chunkData, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to read chunk data for hash calculation: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read chunk data")
+	}
+
+	// Get or create streaming hash state for this session
+	hashStateMutex.Lock()
+	hashState, exists := streamingHashStates[sessionID]
+	if !exists {
+		hashState = NewStreamingHashState(sessionID)
+		streamingHashStates[sessionID] = hashState
+		logging.InfoLogger.Printf("Initialized streaming hash state for session %s", sessionID)
+	}
+	hashStateMutex.Unlock()
+
+	// Add this chunk to the running hash calculation
+	_, err = hashState.WriteChunk(chunkData)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to update streaming hash for session %s, chunk %d: %v", sessionID, chunkNumber, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to calculate streaming hash")
+	}
+
+	// Create a reader from the chunk data for uploading to storage
+	chunkReader := bytes.NewReader(chunkData)
+
+	// Stream chunk to storage using storage provider interface
 	part, err := storage.Provider.UploadPart(
 		c.Request().Context(),
 		storageID, // Use storage ID instead of filename
 		storageUploadID,
 		minioPartNumber,
-		c.Request().Body,
-		c.Request().ContentLength, // Use actual content length
+		chunkReader,
+		int64(len(chunkData)), // Use actual chunk data length
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to upload chunk %d via storage provider: %v", minioPartNumber, err)
@@ -676,18 +753,34 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error reading chunk data")
 	}
 
-	// Step 4: Perform the long-running I/O operation (Minio completion) outside of any DB transaction.
+	// Step 4: Get the streaming hash calculated during chunk uploads
+	hashStateMutex.RLock()
+	hashState, hashExists := streamingHashStates[sessionID]
+	hashStateMutex.RUnlock()
+
 	var serverCalculatedHash string
+	if hashExists {
+		// Finalize the streaming hash calculation
+		serverCalculatedHash = hashState.FinalizeHash()
+		logging.InfoLogger.Printf("Streaming hash calculated for session %s: %s", sessionID, serverCalculatedHash)
+
+		// Clean up the hash state since upload is completing
+		hashStateMutex.Lock()
+		delete(streamingHashStates, sessionID)
+		hashStateMutex.Unlock()
+	} else {
+		logging.ErrorLogger.Printf("No streaming hash state found for session %s - this should not happen", sessionID)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Hash calculation failed - no streaming state found")
+	}
+
+	// Step 5: Complete the multipart upload in storage (using streaming hash instead of storage-calculated hash)
 	if len(envelopeData) > 0 {
-		hash, err := storage.Provider.CompleteMultipartUploadWithEnvelope(c.Request().Context(), storageID.String, storageUploadID.String, parts, envelopeData, totalSize, paddedSize)
+		err = storage.Provider.CompleteMultipartUploadWithEnvelope(c.Request().Context(), storageID.String, storageUploadID.String, parts, envelopeData, totalSize, paddedSize)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to complete storage upload with envelope via storage provider: %v", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
 		}
-		serverCalculatedHash = hash
 	} else {
-		// Fallback for non-envelope uploads. Hashing is not performed here.
-		// Consider adding hashing to CompleteMultipartUploadWithPadding if needed.
 		err = storage.Provider.CompleteMultipartUploadWithPadding(c.Request().Context(), storageID.String, storageUploadID.String, parts, totalSize, paddedSize)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to complete storage upload with padding via storage provider: %v", err)
@@ -695,7 +788,7 @@ func CompleteUpload(c echo.Context) error {
 		}
 	}
 
-	// Step 5: Begin the final, short-lived transaction now that I/O is complete.
+	// Step 6: Begin the final, short-lived transaction now that I/O is complete.
 	tx, err := database.DB.Begin()
 	if err != nil {
 		logging.ErrorLogger.Printf("CRITICAL: Failed to start transaction after completing storage upload for session %s. Orphaned file may exist: %s", sessionID, storageID.String)

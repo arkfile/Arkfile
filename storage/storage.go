@@ -37,7 +37,7 @@ type ObjectStorageProvider interface {
 	CompleteMultipartUploadWithPadding(ctx context.Context, storageID, uploadID string, parts []minio.CompletePart, originalSize, paddedSize int64) error
 
 	// Phase 3: Envelope-aware storage methods for chunked uploads
-	CompleteMultipartUploadWithEnvelope(ctx context.Context, storageID, uploadID string, parts []minio.CompletePart, envelope []byte, originalSize, paddedSize int64) (string, error)
+	CompleteMultipartUploadWithEnvelope(ctx context.Context, storageID, uploadID string, parts []minio.CompletePart, envelope []byte, originalSize, paddedSize int64) error
 }
 
 // Global object storage provider instance (will be initialized with Minio or mock)
