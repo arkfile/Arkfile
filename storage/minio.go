@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -425,17 +427,17 @@ func (m *MinioStorage) CompleteMultipartUploadWithPadding(ctx context.Context, s
 }
 
 // Phase 3: CompleteMultipartUploadWithEnvelope completes a multipart upload and prepends envelope
-func (m *MinioStorage) CompleteMultipartUploadWithEnvelope(ctx context.Context, storageID, uploadID string, parts []minio.CompletePart, envelope []byte, originalSize, paddedSize int64) error {
+func (m *MinioStorage) CompleteMultipartUploadWithEnvelope(ctx context.Context, storageID, uploadID string, parts []minio.CompletePart, envelope []byte, originalSize, paddedSize int64) (string, error) {
 	// Step 1: Complete the multipart upload to get concatenated chunks
 	err := m.CompleteMultipartUpload(ctx, storageID, uploadID, parts)
 	if err != nil {
-		return fmt.Errorf("failed to complete multipart upload: %w", err)
+		return "", fmt.Errorf("failed to complete multipart upload: %w", err)
 	}
 
 	// Step 2: Download the concatenated chunks
 	object, err := m.GetObject(ctx, storageID, minio.GetObjectOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to get concatenated chunks: %w", err)
+		return "", fmt.Errorf("failed to get concatenated chunks: %w", err)
 	}
 	defer object.Close()
 
@@ -456,7 +458,7 @@ func (m *MinioStorage) CompleteMultipartUploadWithEnvelope(ctx context.Context, 
 		ContentType: "application/octet-stream",
 	})
 	if err != nil {
-		return fmt.Errorf("failed to upload envelope-prefixed content: %w", err)
+		return "", fmt.Errorf("failed to upload envelope-prefixed content: %w", err)
 	}
 
 	// Step 6: Remove the original concatenated chunks file
@@ -464,7 +466,7 @@ func (m *MinioStorage) CompleteMultipartUploadWithEnvelope(ctx context.Context, 
 	if err != nil {
 		// Try to clean up temp file
 		m.RemoveObject(ctx, tempObjectName, minio.RemoveObjectOptions{})
-		return fmt.Errorf("failed to remove original chunks file: %w", err)
+		return "", fmt.Errorf("failed to remove original chunks file: %w", err)
 	}
 
 	// Step 7: Move temp file to final location
@@ -480,7 +482,7 @@ func (m *MinioStorage) CompleteMultipartUploadWithEnvelope(ctx context.Context, 
 
 	_, err = m.client.CopyObject(ctx, dst, src)
 	if err != nil {
-		return fmt.Errorf("failed to copy temp file to final location: %w", err)
+		return "", fmt.Errorf("failed to copy temp file to final location: %w", err)
 	}
 
 	// Step 8: Clean up temp file
@@ -490,7 +492,20 @@ func (m *MinioStorage) CompleteMultipartUploadWithEnvelope(ctx context.Context, 
 		log.Printf("Warning: Failed to clean up temp file %s: %v", tempObjectName, err)
 	}
 
-	return nil
+	// Step 9: Calculate SHA256 hash of the final object for integrity verification
+	finalObject, err := m.GetObject(ctx, storageID, minio.GetObjectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get final object for hashing: %w", err)
+	}
+	defer finalObject.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, finalObject); err != nil {
+		return "", fmt.Errorf("failed to hash final object: %w", err)
+	}
+	hashString := hex.EncodeToString(hasher.Sum(nil))
+
+	return hashString, nil
 }
 
 // paddingReader generates padding bytes on demand

@@ -677,14 +677,22 @@ func CompleteUpload(c echo.Context) error {
 	}
 
 	// Step 4: Perform the long-running I/O operation (Minio completion) outside of any DB transaction.
+	var serverCalculatedHash string
 	if len(envelopeData) > 0 {
-		err = storage.Provider.CompleteMultipartUploadWithEnvelope(c.Request().Context(), storageID.String, storageUploadID.String, parts, envelopeData, totalSize, paddedSize)
+		hash, err := storage.Provider.CompleteMultipartUploadWithEnvelope(c.Request().Context(), storageID.String, storageUploadID.String, parts, envelopeData, totalSize, paddedSize)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to complete storage upload with envelope via storage provider: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
+		}
+		serverCalculatedHash = hash
 	} else {
+		// Fallback for non-envelope uploads. Hashing is not performed here.
+		// Consider adding hashing to CompleteMultipartUploadWithPadding if needed.
 		err = storage.Provider.CompleteMultipartUploadWithPadding(c.Request().Context(), storageID.String, storageUploadID.String, parts, totalSize, paddedSize)
-	}
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to complete storage upload via storage provider: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to complete storage upload with padding via storage provider: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
+		}
 	}
 
 	// Step 5: Begin the final, short-lived transaction now that I/O is complete.
@@ -695,24 +703,16 @@ func CompleteUpload(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	var encryptedHash string
-	if h := c.Request().Header.Get("X-Encrypted-Hash"); h != "" {
-		if len(h) != 64 || !utils.IsHexString(h) {
-			return echo.NewHTTPError(http.StatusBadRequest, "Invalid encrypted hash format")
-		}
-		encryptedHash = h
-	}
-
 	// Update session status.
-	if _, err := tx.Exec("UPDATE upload_sessions SET status = ?, encrypted_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", "completed", encryptedHash, sessionID); err != nil {
+	if _, err := tx.Exec("UPDATE upload_sessions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", "completed", sessionID); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update session status")
 	}
 
 	// Create the final file metadata record.
 	_, err = tx.Exec(`
-		INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_fek, size_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, encryptedFek, totalSize,
+		INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_file_sha256sum, encrypted_fek, size_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, encryptedFek, totalSize,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "file_id") {
@@ -739,7 +739,10 @@ func CompleteUpload(c echo.Context) error {
 	database.LogUserAction(username, "uploaded", fileID.String)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"message": "File uploaded successfully",
+		"message":             "File uploaded successfully",
+		"fileId":              fileID.String,
+		"storageId":           storageID.String, // Expose storage ID for test verification
+		"encryptedFileSHA256": serverCalculatedHash,
 		"storage": map[string]interface{}{
 			"total_bytes":     user.TotalStorageBytes,
 			"limit_bytes":     user.StorageLimitBytes,

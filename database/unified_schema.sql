@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS file_metadata (
     encrypted_filename BLOB NOT NULL,           -- AES-GCM encrypted filename
     sha256sum_nonce BINARY(12) NOT NULL,        -- 12-byte nonce for sha256 encryption
     encrypted_sha256sum BLOB NOT NULL,          -- AES-GCM encrypted sha256 hash
+    encrypted_file_sha256sum CHAR(64),          -- sha256sum of the final encrypted file in storage
     encrypted_fek BLOB,                         -- AES-GCM encrypted File Encryption Key
     size_bytes BIGINT NOT NULL DEFAULT 0,
     upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

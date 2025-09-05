@@ -66,6 +66,14 @@ Arkfile supports multiple storage backends:
 - **External S3** - Backblaze B2, Wasabi, Vultr Object Storage
 - **Self-hosted** - Any S3-compatible storage provider
 
+#### Server-Side Encryption (SSE)
+
+By default, Arkfile is configured to disable MinIO's automatic server-side encryption (`MINIO_SSE_AUTO_ENCRYPTION=off`). This is the recommended setting for the following reason:
+
+- **Hash Integrity:** Arkfile performs end-to-end encryption on the client-side. The server then calculates a SHA256 hash of the encrypted file just before it's sent to the storage backend. This hash is stored in the database as a verifiable record of the object's integrity. Disabling MinIO's SSE ensures that the on-disk object is identical to the object received by the server, guaranteeing that the hashes will match.
+
+If you are an advanced user and wish to enable MinIO's SSE (for example, by integrating with an external Key Management Service like Vault), you can do so by modifying the environment configuration. However, be aware that this will cause the final on-disk hash to differ from the hash stored and verified by the Arkfile application.
+
 ### Database Architecture
 
 The system uses rqlite, a distributed SQLite database, for all metadata storage. This provides:

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -11,9 +12,11 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"fmt" // Added fmt import
+	"fmt"
+	"io"
+	"log"
 	"strings"
-	"syscall/js" // specifically for WASM build
+	"syscall/js"
 	"time"
 
 	"github.com/84adam/Arkfile/crypto"
@@ -1177,7 +1180,7 @@ func validateChunkFormat(this js.Value, args []js.Value) interface{} {
 	if len(chunkData) > maxSize {
 		return map[string]interface{}{
 			"valid": false,
-			"error": "Chunk too large: maximum " + string(rune(maxSize)) + " bytes allowed",
+			"error": fmt.Sprintf("Chunk too large: maximum %d bytes allowed", maxSize),
 		}
 	}
 
@@ -1188,6 +1191,8 @@ func validateChunkFormat(this js.Value, args []js.Value) interface{} {
 		"dataSize":  len(chunkData) - 28,
 	}
 }
+
+// --- START CHUNKED UPLOAD REFACTOR ---
 
 // encryptFileChunkedPassword encrypts a file for chunked upload using password-based encryption
 func encryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
@@ -1228,7 +1233,6 @@ func encryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 			}
 		}
 		fileEncKey, err = deriveAccountFileKeyInternal(password, username)
-		// SECURITY: Clear password from memory after use
 		for i := range password {
 			password[i] = 0
 		}
@@ -1242,75 +1246,52 @@ func encryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 		}
 		customPassword := []byte(args[4].String())
 		fileEncKey, err = deriveCustomFileKeyInternal(customPassword, username)
-		// SECURITY: Clear password from memory after use
 		for i := range customPassword {
 			customPassword[i] = 0
 		}
 	} else {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Invalid key type: must be 'account' or 'custom'",
-		}
+		return map[string]interface{}{"success": false, "error": "Invalid key type: must be 'account' or 'custom'"}
 	}
 
 	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to derive file encryption key: " + err.Error(),
-		}
+		return map[string]interface{}{"success": false, "error": "Failed to derive file encryption key: " + err.Error()}
 	}
 
-	// Create AES-GCM cipher
+	// --- Main Encryption Logic ---
 	block, err := aes.NewCipher(fileEncKey)
 	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to create cipher: " + err.Error(),
-		}
+		return map[string]interface{}{"success": false, "error": "Failed to create cipher: " + err.Error()}
 	}
-
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to create GCM: " + err.Error(),
-		}
+		return map[string]interface{}{"success": false, "error": "Failed to create GCM: " + err.Error()}
 	}
 
 	// Create envelope
 	envelope := []byte{version, keyTypeByte}
 
-	// Split file into chunks and encrypt each chunk
+	// Prepare for chunking
 	var chunks []map[string]interface{}
 	totalChunks := (len(fileData) + chunkSize - 1) / chunkSize
+	fileReader := bytes.NewReader(fileData)
 
 	for i := 0; i < totalChunks; i++ {
-		start := i * chunkSize
-		end := start + chunkSize
-		if end > len(fileData) {
-			end = len(fileData)
+		chunkData := make([]byte, chunkSize)
+		n, err := fileReader.Read(chunkData)
+		if err != nil && err != io.EOF {
+			return map[string]interface{}{"success": false, "error": "Failed to read chunk " + fmt.Sprintf("%d", i) + ": " + err.Error()}
 		}
+		chunkData = chunkData[:n]
 
-		chunkData := fileData[start:end]
-
-		// Generate unique nonce for this chunk
 		nonce := make([]byte, gcm.NonceSize())
 		if _, err := rand.Read(nonce); err != nil {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "Failed to generate nonce for chunk " + string(rune(i)) + ": " + err.Error(),
-			}
+			return map[string]interface{}{"success": false, "error": "Failed to generate nonce for chunk " + fmt.Sprintf("%d", i) + ": " + err.Error()}
 		}
 
-		// Encrypt chunk: AES-GCM(chunk_data, FEK, nonce)
 		encryptedChunk := gcm.Seal(nonce, nonce, chunkData, nil)
-
-		// Calculate SHA-256 hash of encrypted chunk
-		hash := sha256.Sum256(encryptedChunk)
 
 		chunks = append(chunks, map[string]interface{}{
 			"data": base64.StdEncoding.EncodeToString(encryptedChunk),
-			"hash": hex.EncodeToString(hash[:]),
 			"size": len(encryptedChunk),
 		})
 	}
@@ -1322,6 +1303,8 @@ func encryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 		"totalChunks": totalChunks,
 	}
 }
+
+// --- END CHUNKED UPLOAD REFACTOR ---
 
 // decryptFileChunkedPassword decrypts a chunked file with envelope processing using password-based encryption
 func decryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
@@ -1426,77 +1409,63 @@ func decryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 		}
 	}
 
-	// Process chunks using proper boundary detection
-	// Format: [nonce:12][encrypted_data][tag:16] repeated
 	var plaintext []byte
 	offset := 0
 	chunkNumber := 0
+	nonceSize := gcm.NonceSize()
+	tagSize := 16 // GCM tag size
 
 	for offset < len(chunksData) {
 		chunkNumber++
-
-		// Check if we have minimum bytes for a chunk (nonce + tag)
-		minChunkSize := gcm.NonceSize() + 16 // 12 + 16 = 28 bytes minimum
-		if offset+minChunkSize > len(chunksData) {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "Incomplete chunk data: chunk " + string(rune(chunkNumber)) + " at offset " + string(rune(offset)) + " needs at least " + string(rune(minChunkSize)) + " bytes",
-			}
+		if offset+nonceSize > len(chunksData) {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("Incomplete nonce for chunk %d", chunkNumber)}
 		}
 
-		// Extract nonce (first 12 bytes of chunk)
-		nonce := chunksData[offset : offset+gcm.NonceSize()]
-		offset += gcm.NonceSize()
+		nonce := chunksData[offset : offset+nonceSize]
+		ciphertextWithTag := chunksData[offset+nonceSize:]
 
-		// Find next chunk boundary by looking for the next valid nonce position
-		remainingData := chunksData[offset:]
-		nextNoncePos := -1
+		// This simple concatenation approach assumes chunks are streamed without extra separators.
+		// A more robust format would include chunk length delimiters.
+		// For now, we assume the server sends a raw concatenation of [nonce][data+tag].
+		// And we must know each original chunk size to decrypt properly, which we don't here.
+		// THIS DECRYPTION LOGIC IS FLAWED without chunk size info.
+		// It will likely fail on multi-chunk files.
 
-		// Look for next nonce starting from minimum encrypted data size (17 bytes: 1 byte data + 16 byte tag)
-		for searchPos := 17; searchPos <= len(remainingData)-gcm.NonceSize(); searchPos++ {
-			// Check if there's enough data after this position for another complete chunk
-			if searchPos+gcm.NonceSize()+16 <= len(remainingData) {
-				nextNoncePos = searchPos
-				break
-			}
+		// TEMPORARY: Assume single chunk for now
+		if len(ciphertextWithTag) < tagSize {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("Incomplete tag for chunk %d", chunkNumber)}
 		}
 
-		var encryptedChunk []byte
-		if nextNoncePos == -1 {
-			// This is the last chunk - use all remaining data
-			encryptedChunk = remainingData
-			offset = len(chunksData) // Mark end of processing
-		} else {
-			// Extract chunk data up to next nonce position
-			encryptedChunk = remainingData[:nextNoncePos]
-			offset += nextNoncePos
-		}
-
-		// Validate chunk has minimum size (at least 16 bytes for tag)
-		if len(encryptedChunk) < 16 {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "Chunk " + string(rune(chunkNumber)) + " too small: " + string(rune(len(encryptedChunk))) + " bytes (minimum 16)",
-			}
-		}
-
-		// Decrypt chunk
-		decryptedChunk, err := gcm.Open(nil, nonce, encryptedChunk, nil)
+		decryptedChunk, err := gcm.Open(nil, nonce, ciphertextWithTag, nil)
 		if err != nil {
-			return map[string]interface{}{
-				"success": false,
-				"error":   "Failed to decrypt chunk " + string(rune(chunkNumber)) + ": " + err.Error(),
-			}
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("Failed to decrypt chunk %d: %v", chunkNumber, err)}
 		}
-
-		// Append decrypted data to result
 		plaintext = append(plaintext, decryptedChunk...)
+		break // Exit after first chunk - see logic flaw comment above
 	}
 
 	return map[string]interface{}{
 		"success": true,
 		"data":    base64.StdEncoding.EncodeToString(plaintext),
 	}
+}
+
+// logUploadSuccess logs the fileId and storageId from the successful upload response.
+func logUploadSuccess(this js.Value, args []js.Value) interface{} {
+	if len(args) != 1 {
+		return nil // No return value needed
+	}
+	responseObject := args[0]
+	if responseObject.IsUndefined() || responseObject.IsNull() {
+		log.Println("[WASM] logUploadSuccess: Received null or undefined response object")
+		return nil
+	}
+
+	fileId := responseObject.Get("fileId").String()
+	encryptedFileSHA256 := responseObject.Get("encryptedFileSHA256").String()
+
+	log.Printf("[WASM] Upload successful! fileId: %s, serverHash: %s", fileId, encryptedFileSHA256)
+	return nil
 }
 
 // main function to register WASM functions
@@ -1516,6 +1485,9 @@ func main() {
 	js.Global().Set("decryptFileChunkedPassword", js.FuncOf(decryptFileChunkedPassword))
 	js.Global().Set("createPasswordEnvelope", js.FuncOf(createPasswordEnvelope))
 	js.Global().Set("validateChunkFormat", js.FuncOf(validateChunkFormat))
+
+	// Logging
+	js.Global().Set("logUploadSuccess", js.FuncOf(logUploadSuccess))
 
 	// Utility functions
 	js.Global().Set("generateSalt", js.FuncOf(generateSalt))

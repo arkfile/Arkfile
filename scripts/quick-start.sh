@@ -229,6 +229,12 @@ MINIO_ROOT_USER=arkfile-demo
 MINIO_ROOT_PASSWORD=TestPassword123_SecureMinIO
 LOCAL_STORAGE_PATH=/opt/arkfile/var/lib/minio/data
 
+# Disable MinIO's automatic server-side encryption.
+# Arkfile handles end-to-end encryption on the client-side, so this
+# must be disabled to ensure the on-disk SHA256 hash matches the
+# server-verified hash.
+MINIO_SSE_AUTO_ENCRYPTION=off
+
 # Admin Configuration (comma-separated list)
 ADMIN_USERNAMES=admin.demo.user
 

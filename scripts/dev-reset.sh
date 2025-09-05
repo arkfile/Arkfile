@@ -456,6 +456,9 @@ MINIO_ROOT_USER=arkfile-dev
 MINIO_ROOT_PASSWORD=DevPassword123_$(openssl rand -hex 8)
 LOCAL_STORAGE_PATH=/opt/arkfile/var/lib/dev/minio/data
 
+# Disable MinIO's automatic server-side encryption to preserve hash integrity.
+MINIO_SSE_AUTO_ENCRYPTION=off
+
 # Admin Configuration - DEV ONLY
 ADMIN_USERNAMES=arkfile-dev-admin
 

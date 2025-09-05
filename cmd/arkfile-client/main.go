@@ -91,18 +91,20 @@ type HTTPClient struct {
 
 // Response represents a generic API response
 type Response struct {
-	Success      bool                   `json:"success"`
-	Message      string                 `json:"message"`
-	Data         map[string]interface{} `json:"data"`
-	Error        string                 `json:"error"`
-	TempToken    string                 `json:"temp_token"`
-	SessionKey   string                 `json:"session_key"`
-	RequiresTOTP bool                   `json:"requires_totp"`
-	Token        string                 `json:"token"`
-	RefreshToken string                 `json:"refresh_token"`
-	ExpiresAt    time.Time              `json:"expires_at"`
-	SessionID    string                 `json:"sessionId"`
-	FileID       string                 `json:"fileId"`
+	Success             bool                   `json:"success"`
+	Message             string                 `json:"message"`
+	Data                map[string]interface{} `json:"data"`
+	Error               string                 `json:"error"`
+	TempToken           string                 `json:"temp_token"`
+	SessionKey          string                 `json:"session_key"`
+	RequiresTOTP        bool                   `json:"requires_totp"`
+	Token               string                 `json:"token"`
+	RefreshToken        string                 `json:"refresh_token"`
+	ExpiresAt           time.Time              `json:"expires_at"`
+	SessionID           string                 `json:"sessionId"`
+	FileID              string                 `json:"fileId"`
+	StorageID           string                 `json:"storageId"` // For verification
+	EncryptedFileSHA256 string                 `json:"encryptedFileSHA256"`
 }
 
 // FileInfo represents file metadata
@@ -590,13 +592,15 @@ EXAMPLES:
 	}
 
 	finalizeURL := fmt.Sprintf("/api/uploads/%s/complete", sessionID)
-	_, err = client.makeRequest("POST", finalizeURL, finalizeReq, session.AccessToken)
+	finalizeResp, err := client.makeRequest("POST", finalizeURL, finalizeReq, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("upload finalization failed: %w", err)
 	}
 
 	fmt.Printf("✅ Upload completed successfully\n")
 	fmt.Printf("File ID: %s\n", fileID)
+	fmt.Printf("Storage ID: %s\n", finalizeResp.StorageID)
+	fmt.Printf("Server-side Encrypted SHA256: %s\n", finalizeResp.EncryptedFileSHA256)
 	fmt.Printf("Original size: %s\n", formatFileSize(int64(len(fileData))))
 	fmt.Printf("Encrypted size: %s\n", formatFileSize(int64(len(encryptedFile))))
 

@@ -4,6 +4,9 @@
 arkfile
 arkfile-alpine
 cryptocli
+arkfile-client
+arkfile-admin
+totp-generator
 bin/
 obj/
 *.out
