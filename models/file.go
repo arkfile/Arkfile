@@ -9,19 +9,19 @@ import (
 )
 
 type File struct {
-	ID                     int64     `json:"id"`
-	FileID                 string    `json:"file_id"`    // UUID v4 for file identification
-	StorageID              string    `json:"storage_id"` // UUID v4 for storage backend
-	OwnerUsername          string    `json:"owner_username"`
-	PasswordHint           string    `json:"password_hint,omitempty"`
-	PasswordType           string    `json:"password_type"`
-	FilenameNonce          []byte    `json:"-"`          // Hidden from JSON - 12 bytes
-	EncryptedFilename      []byte    `json:"-"`          // Hidden from JSON - encrypted blob
-	Sha256sumNonce         []byte    `json:"-"`          // Hidden from JSON - 12 bytes
-	EncryptedSha256sum     []byte    `json:"-"`          // Hidden from JSON - encrypted blob (client-side)
-	EncryptedFileSha256sum string    `json:"-"`          // Hidden from JSON - server-side hash
-	SizeBytes              int64     `json:"size_bytes"` // Original file size
-	UploadDate             time.Time `json:"upload_date"`
+	ID                     int64          `json:"id"`
+	FileID                 string         `json:"file_id"`    // UUID v4 for file identification
+	StorageID              string         `json:"storage_id"` // UUID v4 for storage backend
+	OwnerUsername          string         `json:"owner_username"`
+	PasswordHint           string         `json:"password_hint,omitempty"`
+	PasswordType           string         `json:"password_type"`
+	FilenameNonce          []byte         `json:"-"`          // Hidden from JSON - 12 bytes
+	EncryptedFilename      []byte         `json:"-"`          // Hidden from JSON - encrypted blob
+	Sha256sumNonce         []byte         `json:"-"`          // Hidden from JSON - 12 bytes
+	EncryptedSha256sum     []byte         `json:"-"`          // Hidden from JSON - encrypted blob (client-side)
+	EncryptedFileSha256sum sql.NullString `json:"-"`          // Hidden from JSON - server-side hash (nullable)
+	SizeBytes              int64          `json:"size_bytes"` // Original file size
+	UploadDate             time.Time      `json:"upload_date"`
 }
 
 // GenerateStorageID creates a new UUID v4 for storage
@@ -74,10 +74,11 @@ func CreateFile(db *sql.DB, fileID, storageID, ownerUsername, passwordHint, pass
 // GetFileByFileID retrieves a file record by file_id
 func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	file := &File{}
+	var encryptedFileSha256sum string
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
-			   encrypted_file_sha256sum, size_bytes, upload_date 
+			   COALESCE(encrypted_file_sha256sum, ''), size_bytes, upload_date 
 		FROM file_metadata WHERE file_id = ?`,
 		fileID,
 	).Scan(
@@ -85,7 +86,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		&file.PasswordHint, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
-		&file.EncryptedFileSha256sum, &file.SizeBytes, &file.UploadDate,
+		&encryptedFileSha256sum, &file.SizeBytes, &file.UploadDate,
 	)
 
 	if err == sql.ErrNoRows {
@@ -93,6 +94,19 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+
+	// Handle the nullable encrypted_file_sha256sum field
+	if encryptedFileSha256sum != "" {
+		file.EncryptedFileSha256sum = sql.NullString{
+			String: encryptedFileSha256sum,
+			Valid:  true,
+		}
+	} else {
+		file.EncryptedFileSha256sum = sql.NullString{
+			String: "",
+			Valid:  false,
+		}
 	}
 
 	return file, nil
@@ -101,10 +115,11 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 // GetFileByStorageID retrieves a file record by storage_id
 func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	file := &File{}
+	var encryptedFileSha256sum string
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
-			   encrypted_file_sha256sum, size_bytes, upload_date 
+			   COALESCE(encrypted_file_sha256sum, ''), size_bytes, upload_date 
 		FROM file_metadata WHERE storage_id = ?`,
 		storageID,
 	).Scan(
@@ -112,7 +127,7 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		&file.PasswordHint, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
-		&file.EncryptedFileSha256sum, &file.SizeBytes, &file.UploadDate,
+		&encryptedFileSha256sum, &file.SizeBytes, &file.UploadDate,
 	)
 
 	if err == sql.ErrNoRows {
@@ -120,6 +135,19 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+
+	// Handle the nullable encrypted_file_sha256sum field
+	if encryptedFileSha256sum != "" {
+		file.EncryptedFileSha256sum = sql.NullString{
+			String: encryptedFileSha256sum,
+			Valid:  true,
+		}
+	} else {
+		file.EncryptedFileSha256sum = sql.NullString{
+			String: "",
+			Valid:  false,
+		}
 	}
 
 	return file, nil
@@ -130,7 +158,7 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 	rows, err := db.Query(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
-			   encrypted_file_sha256sum, size_bytes, upload_date 
+			   COALESCE(encrypted_file_sha256sum, ''), size_bytes, upload_date 
 		FROM file_metadata WHERE owner_username = ? ORDER BY upload_date DESC`,
 		ownerUsername,
 	)
@@ -142,16 +170,31 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 	var files []*File
 	for rows.Next() {
 		file := &File{}
+		var encryptedFileSha256sum string
 		err := rows.Scan(
 			&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 			&file.PasswordHint, &file.PasswordType,
 			&file.FilenameNonce, &file.EncryptedFilename,
 			&file.Sha256sumNonce, &file.EncryptedSha256sum,
-			&file.EncryptedFileSha256sum, &file.SizeBytes, &file.UploadDate,
+			&encryptedFileSha256sum, &file.SizeBytes, &file.UploadDate,
 		)
 		if err != nil {
 			return nil, err
 		}
+
+		// Handle the nullable encrypted_file_sha256sum field
+		if encryptedFileSha256sum != "" {
+			file.EncryptedFileSha256sum = sql.NullString{
+				String: encryptedFileSha256sum,
+				Valid:  true,
+			}
+		} else {
+			file.EncryptedFileSha256sum = sql.NullString{
+				String: "",
+				Valid:  false,
+			}
+		}
+
 		files = append(files, file)
 	}
 

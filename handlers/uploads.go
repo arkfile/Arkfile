@@ -303,7 +303,7 @@ func DownloadFileChunk(c echo.Context) error {
 	c.Response().Header().Set("X-Password-Type", file.PasswordType)
 
 	// If streaming verification is enabled, set up hash verification
-	if enableVerification && file.EncryptedFileSha256sum != "" {
+	if enableVerification && file.EncryptedFileSha256sum.Valid && file.EncryptedFileSha256sum.String != "" {
 		// Add header to indicate verification is active (for first chunk)
 		if chunkNumber == 0 {
 			c.Response().Header().Set("X-Hash-Verification", "enabled")
@@ -321,9 +321,9 @@ func DownloadFileChunk(c echo.Context) error {
 		fileID, chunkNumber+1, totalChunks, username, enableVerification)
 
 	// If verification is enabled, wrap the reader with hash verification
-	if enableVerification && file.EncryptedFileSha256sum != "" {
+	if enableVerification && file.EncryptedFileSha256sum.Valid && file.EncryptedFileSha256sum.String != "" {
 		// Create a TeeReader that calculates hash while streaming data to client
-		teeReader := NewStreamingHashTeeReader(reader, file.EncryptedFileSha256sum)
+		teeReader := NewStreamingHashTeeReader(reader, file.EncryptedFileSha256sum.String)
 
 		// If this is the last chunk, verify the complete hash after streaming
 		if int64(chunkNumber) == totalChunks-1 {
@@ -334,7 +334,7 @@ func DownloadFileChunk(c echo.Context) error {
 				if isValid {
 					logging.InfoLogger.Printf("Download hash verification successful for file_id %s by %s", fileID, username)
 				} else {
-					logging.ErrorLogger.Printf("Download hash verification FAILED for file_id %s by %s - expected: %s, calculated: %s - file integrity compromised", fileID, username, file.EncryptedFileSha256sum, calculatedHash)
+					logging.ErrorLogger.Printf("Download hash verification FAILED for file_id %s by %s - expected: %s, calculated: %s - file integrity compromised", fileID, username, file.EncryptedFileSha256sum.String, calculatedHash)
 				}
 			}()
 		}
