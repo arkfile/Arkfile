@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS file_metadata (
     encrypted_file_sha256sum CHAR(64),          -- sha256sum of the final encrypted file in storage
     encrypted_fek BLOB,                         -- AES-GCM encrypted File Encryption Key
     size_bytes BIGINT NOT NULL DEFAULT 0,
+    padded_size BIGINT,                         -- Size with padding for privacy/security
     upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (owner_username) REFERENCES users(username)
 );

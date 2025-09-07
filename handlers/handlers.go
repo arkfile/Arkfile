@@ -229,14 +229,43 @@ func DownloadFile(c echo.Context) error {
 
 // ListFiles returns a list of files owned by the user with encrypted metadata
 func ListFiles(c echo.Context) error {
-	username := auth.GetUsernameFromToken(c)
+	// Enhanced debugging: Log the start of the function
+	logging.InfoLogger.Printf("ListFiles: Starting file listing request")
 
-	// Get files using the models function with encrypted metadata support
+	// Step 1: Extract username from JWT token
+	username := auth.GetUsernameFromToken(c)
+	if username == "" {
+		logging.ErrorLogger.Printf("ListFiles: Failed to extract username from JWT token")
+		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid authentication token")
+	}
+	logging.InfoLogger.Printf("ListFiles: Successfully extracted username: %s", username)
+
+	// Step 2: Verify database connection
+	if database.DB == nil {
+		logging.ErrorLogger.Printf("ListFiles: Database connection is nil")
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database connection error")
+	}
+
+	// Test database connection with a simple ping
+	if err := database.DB.Ping(); err != nil {
+		logging.ErrorLogger.Printf("ListFiles: Database ping failed: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Database connection error")
+	}
+	logging.InfoLogger.Printf("ListFiles: Database connection verified successfully")
+
+	// Step 3: Get files using the models function with encrypted metadata support
+	logging.InfoLogger.Printf("ListFiles: Calling GetFilesByOwner for username: %s", username)
 	files, err := models.GetFilesByOwner(database.DB, username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to list files: %v", err)
+		logging.ErrorLogger.Printf("ListFiles: GetFilesByOwner failed for user '%s': %v", username, err)
+		// Log the specific SQL error details if available
+		if sqlErr, ok := err.(interface{ Error() string }); ok {
+			logging.ErrorLogger.Printf("ListFiles: SQL Error details: %s", sqlErr.Error())
+		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve files")
 	}
+
+	logging.InfoLogger.Printf("ListFiles: Successfully retrieved %d files for user: %s", len(files), username)
 
 	// Convert files to client metadata format
 	var fileList []map[string]interface{}
