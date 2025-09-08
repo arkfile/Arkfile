@@ -19,9 +19,8 @@
     "build:prod": "bun build src/app.ts --outdir dist --target browser --minify --sourcemap=external"
   },
   "devDependencies": {
-    "@types/node": "^24.1.0",
-    "bun-types": "^1.2.19",
-    "typescript": "^5.8.3"
+    "bun-types": "^1.2.21",
+    "typescript": "^5.9.2"
   },
   "dependencies": {}
 }

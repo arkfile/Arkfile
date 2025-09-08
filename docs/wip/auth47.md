@@ -2,7 +2,7 @@
 
 This document outlines the comprehensive plan for integrating Auth47 as an alternative login method into the Arkfile project. The primary goals are to provide users with an additional login option, maintain the integrity and non-disruption of the existing OPAQUE authentication system, and ensure mandatory TOTP 2FA for all login methods.
 
-The integration will involve modifications to the database schema, the introduction of a new Bun/Node.js microservice for Auth47 proof verification, updates to the Go backend to handle Auth47 login flows, and adaptations in the TypeScript/Bun/WASM frontend.
+The integration will involve modifications to the database schema, the introduction of a new Bun microservice for Auth47 proof verification, updates to the Go backend to handle Auth47 login flows, and adaptations in the TypeScript/Bun/WASM frontend.
 
 ### Database Schema Modifications
 
@@ -12,11 +12,11 @@ In addition, a new table named `auth47_identities` will be created. This table w
 
 ### Auth47 Verifier Bridge Service
 
-Given the decision to avoid reimplementing the Auth47 TypeScript library in Go due to potential risks, a pragmatic solution involves developing a dedicated microservice. This service, built using Bun and TypeScript, will act as a secure bridge solely for verifying Auth47 proofs using the official `@samouraiwallet/auth47` library. This service will expose a single, internal API endpoint (e.g., `POST /verify-auth47-proof`) that accepts an Auth47 proof and returns a success status along with the verified `nym` or an error. Crucially, this service will be deployed in a secure, internal network environment, accessible only by the Go backend, to minimize its exposure.
+Given the decision to avoid reimplementing the Auth47 TypeScript library in Go due to potential risks, a pragmatic solution involves developing a dedicated microservice. This service, built using Bun with TypeScript, will act as a secure bridge solely for verifying Auth47 proofs using the official `@samouraiwallet/auth47` library. This service will expose a single, internal API endpoint (e.g., `POST /verify-auth47-proof`) that accepts an Auth47 proof and returns a success status along with the verified `nym` or an error. Crucially, this service will be deployed in a secure, internal network environment, accessible only by the Go backend, to minimize its exposure.
 
 ### Go Backend Integration
 
-The Go backend (`handlers/auth.go`) will be updated to manage the Auth47 login flow. A new handler, such as `POST /auth/login/auth47`, will be implemented to receive the Auth47 proof from the frontend. Upon receiving a proof, the Go backend will first forward it to the internal Bun/Node.js `auth47-verifier-service` for cryptographic validation.
+The Go backend (`handlers/auth.go`) will be updated to manage the Auth47 login flow. A new handler, such as `POST /auth/login/auth47`, will be implemented to receive the Auth47 proof from the frontend. Upon receiving a proof, the Go backend will first forward it to the internal Bun `auth47-verifier-service` for cryptographic validation.
 
 After successful proof verification and extraction of the `nym`, the backend will perform a user lookup. If a user associated with the `nym` is found in the `auth47_identities` table, the existing user record will be retrieved. If no existing user is found, indicating a new Auth47 user, a new user entry will be provisioned in the `users` table with `login_type` set to 'AUTH47', and a corresponding entry will be added to the `auth47_identities` table. The temporary `sessionKey` used in this process will be securely generated from `crypto/rand`.
 

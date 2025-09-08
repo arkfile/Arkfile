@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # WASM Build and Test Script for Arkfile Client
-# This script builds the WASM module and runs tests in Node.js
+# This script builds the WASM module and runs tests in Bun
 
 set -e
 
@@ -15,17 +15,15 @@ NC='\033[0m' # No Color
 echo -e "${BLUE}🔧 Building and Testing Arkfile WASM Module${NC}"
 echo
 
-# Check if Node.js is available
-if ! command -v node &> /dev/null; then
-    echo -e "${RED}❌ Node.js is not installed or not in PATH${NC}"
-    echo "Please install Node.js (version 18+ recommended) to run WASM tests"
+# Check if Bun is available
+if ! command -v bun &> /dev/null; then
+    echo -e "${RED}❌ Bun is not installed or not in PATH${NC}"
+    echo "Please install Bun from https://bun.sh to run WASM tests"
     exit 1
 fi
 
-NODE_VERSION=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
-if [ "$NODE_VERSION" -lt 16 ]; then
-    echo -e "${YELLOW}⚠️  Warning: Node.js version $NODE_VERSION detected. Version 16+ recommended for better WASM support.${NC}"
-fi
+BUN_VERSION=$(bun --version)
+echo -e "${GREEN}✅ Bun ${BUN_VERSION} detected for WASM testing${NC}"
 
 # Navigate to client directory
 cd client
@@ -44,68 +42,51 @@ echo
 echo -e "${BLUE}🧪 Running WASM tests...${NC}"
 echo
 
-# Run the Node.js test runner
-node test-runner.js
+# Navigate to TypeScript test directory and run with Bun
+cd static/js
+
+# Run Bun test suite
+bun test
 
 # Capture exit code
 TEST_EXIT_CODE=$?
 
 if [ $TEST_EXIT_CODE -eq 0 ]; then
     echo
-    echo -e "${BLUE}🔐 Running password function tests...${NC}"
+    echo -e "${BLUE}🔐 Running WASM integration tests...${NC}"
     echo
     
-    # Run password function tests
-    node password-functions-test.js
+    # Run WASM integration tests
+    bun test tests/wasm/
     
-    # Capture password test exit code
-    PASSWORD_TEST_EXIT_CODE=$?
+    # Capture WASM test exit code
+    WASM_TEST_EXIT_CODE=$?
     
-    if [ $PASSWORD_TEST_EXIT_CODE -eq 0 ]; then
+    if [ $WASM_TEST_EXIT_CODE -eq 0 ]; then
         echo
-        echo -e "${BLUE}🔐 Running login integration tests...${NC}"
+        echo -e "${BLUE}🔐 Running integration test suite...${NC}"
         echo
         
-        # Run login integration tests
-        node login-integration-test.js
+        # Run integration tests
+        bun test tests/integration/
         
-        # Capture login integration test exit code
-        LOGIN_TEST_EXIT_CODE=$?
+        # Capture integration test exit code
+        INTEGRATION_TEST_EXIT_CODE=$?
         
-        if [ $LOGIN_TEST_EXIT_CODE -eq 0 ]; then
+        if [ $INTEGRATION_TEST_EXIT_CODE -eq 0 ]; then
             echo
-            echo -e "${BLUE}🔐 Running OPAQUE crypto tests...${NC}"
-            echo
-            
-            # Run OPAQUE WASM tests (if available)
-            if [ -f "opaque_wasm_test.js" ]; then
-                node opaque_wasm_test.js
-                OPAQUE_TEST_EXIT_CODE=$?
-                
-                if [ $OPAQUE_TEST_EXIT_CODE -eq 0 ]; then
-                    echo
-                    echo -e "${GREEN}🎉 All WASM tests passed including OPAQUE crypto!${NC}"
-                    exit 0
-                else
-                    echo -e "${RED}❌ Some OPAQUE crypto tests failed${NC}"
-                    exit $OPAQUE_TEST_EXIT_CODE
-                fi
-            else
-                echo -e "${YELLOW}⚠️  OPAQUE crypto tests not found - skipping${NC}"
-                echo
-                echo -e "${GREEN}🎉 All WASM tests passed!${NC}"
-                exit 0
-            fi
+            echo -e "${GREEN}🎉 All WASM tests passed including OPAQUE crypto!${NC}"
+            exit 0
         else
-            echo -e "${RED}❌ Some login integration tests failed${NC}"
-            exit $LOGIN_TEST_EXIT_CODE
+            echo -e "${RED}❌ Some integration tests failed${NC}"
+            exit $INTEGRATION_TEST_EXIT_CODE
         fi
     else
-        echo -e "${RED}❌ Some password function tests failed${NC}"
-        exit $PASSWORD_TEST_EXIT_CODE
+        echo -e "${RED}❌ Some WASM tests failed${NC}"
+        exit $WASM_TEST_EXIT_CODE
     fi
 else
     echo
-    echo -e "${RED}❌ Some WASM tests failed${NC}"
+    echo -e "${RED}❌ Some tests failed${NC}"
     exit $TEST_EXIT_CODE
 fi

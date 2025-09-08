@@ -111,8 +111,9 @@ if ! command -v go &> /dev/null; then
 fi
 
 # Check Node.js for browser tests
-if ! command -v node &> /dev/null; then
-    echo -e "${RED}❌ Node.js is not installed${NC}"
+if ! command -v bun &> /dev/null; then
+    echo -e "${RED}❌ Bun is not installed${NC}"
+    echo -e "${YELLOW}Install Bun from: https://bun.sh${NC}"
     exit 1
 fi
 

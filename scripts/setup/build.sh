@@ -328,7 +328,7 @@ fi
 
 if [ -z "$BUN_CMD" ]; then
     echo -e "${RED}❌ Bun is required for TypeScript compilation${NC}"
-    echo -e "${YELLOW}Install Bun using: source <(curl -fsSL https://bun.sh/install)${NC}"
+    echo -e "${YELLOW}Install Bun using: curl -fsSL https://bun.sh/install | bash${NC}"
     exit 1
 fi
 
