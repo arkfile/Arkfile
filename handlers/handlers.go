@@ -215,15 +215,20 @@ func DownloadFile(c echo.Context) error {
 	database.LogUserAction(username, "downloaded", fileID)
 	logging.InfoLogger.Printf("File downloaded: file_id %s (storage_id: %s) by %s", fileID, file.StorageID, username)
 
-	// Return encrypted metadata for client-side decryption
+	// Return encrypted metadata for client-side decryption in the nested format expected by the client
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"data":               string(data),
-		"passwordHint":       file.PasswordHint,
-		"passwordType":       file.PasswordType,
-		"filenameNonce":      base64.StdEncoding.EncodeToString(file.FilenameNonce),
-		"encryptedFilename":  base64.StdEncoding.EncodeToString(file.EncryptedFilename),
-		"sha256sumNonce":     base64.StdEncoding.EncodeToString(file.Sha256sumNonce),
-		"encryptedSha256sum": base64.StdEncoding.EncodeToString(file.EncryptedSha256sum),
+		"file": map[string]interface{}{
+			"data":               string(data),
+			"passwordHint":       file.PasswordHint,
+			"passwordType":       file.PasswordType,
+			"filenameNonce":      base64.StdEncoding.EncodeToString(file.FilenameNonce),
+			"encryptedFilename":  base64.StdEncoding.EncodeToString(file.EncryptedFilename),
+			"sha256sumNonce":     base64.StdEncoding.EncodeToString(file.Sha256sumNonce),
+			"encryptedSha256sum": base64.StdEncoding.EncodeToString(file.EncryptedSha256sum),
+			"filename":           "", // Will be decrypted client-side
+			"file_size":          file.SizeBytes,
+			"encrypted_fek":      base64.StdEncoding.EncodeToString(file.EncryptedFEK),
+		},
 	})
 }
 

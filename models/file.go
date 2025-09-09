@@ -21,6 +21,7 @@ type File struct {
 	Sha256sumNonce         []byte         `json:"-"`           // Hidden from JSON - 12 bytes
 	EncryptedSha256sum     []byte         `json:"-"`           // Hidden from JSON - encrypted blob (client-side)
 	EncryptedFileSha256sum sql.NullString `json:"-"`           // Hidden from JSON - server-side hash (nullable)
+	EncryptedFEK           []byte         `json:"-"`           // Hidden from JSON - encrypted File Encryption Key
 	SizeBytes              int64          `json:"size_bytes"`  // Original file size
 	PaddedSize             sql.NullInt64  `json:"padded_size"` // Size with padding for privacy/security
 	UploadDate             time.Time      `json:"upload_date"`
@@ -79,6 +80,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	var encryptedFileSha256sum string
 	var encryptedFek []byte   // Add missing encrypted_fek field
 	var sizeBytes interface{} // Use interface{} to handle both int64 and float64
+	var uploadDateStr string  // Scan as string first to handle RQLite timestamp format
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
@@ -90,7 +92,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		&file.PasswordHint, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
-		&encryptedFileSha256sum, &encryptedFek, &sizeBytes, &file.PaddedSize, &file.UploadDate,
+		&encryptedFileSha256sum, &encryptedFek, &sizeBytes, &file.PaddedSize, &uploadDateStr,
 	)
 
 	if err == sql.ErrNoRows {
@@ -112,6 +114,18 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		return nil, fmt.Errorf("GetFileByFileID: unexpected type for size_bytes: %T", v)
 	}
 
+	// Parse timestamp string to time.Time
+	if uploadDateStr != "" {
+		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", uploadDateStr); parseErr == nil {
+			file.UploadDate = parsedTime
+		} else if parsedTime, parseErr := time.Parse(time.RFC3339, uploadDateStr); parseErr == nil {
+			file.UploadDate = parsedTime
+		} else {
+			// Fallback to current time if parsing fails
+			file.UploadDate = time.Now()
+		}
+	}
+
 	// Handle the nullable encrypted_file_sha256sum field
 	if encryptedFileSha256sum != "" {
 		file.EncryptedFileSha256sum = sql.NullString{
@@ -125,6 +139,9 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		}
 	}
 
+	// Assign the encrypted FEK to the struct field
+	file.EncryptedFEK = encryptedFek
+
 	return file, nil
 }
 
@@ -134,6 +151,7 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	var encryptedFileSha256sum string
 	var encryptedFek []byte   // Add missing encrypted_fek field
 	var sizeBytes interface{} // Use interface{} to handle both int64 and float64
+	var uploadDateStr string  // Scan as string first to handle RQLite timestamp format
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
@@ -145,7 +163,7 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		&file.PasswordHint, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
-		&encryptedFileSha256sum, &encryptedFek, &sizeBytes, &file.PaddedSize, &file.UploadDate,
+		&encryptedFileSha256sum, &encryptedFek, &sizeBytes, &file.PaddedSize, &uploadDateStr,
 	)
 
 	if err == sql.ErrNoRows {
@@ -167,6 +185,18 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		return nil, fmt.Errorf("GetFileByStorageID: unexpected type for size_bytes: %T", v)
 	}
 
+	// Parse timestamp string to time.Time
+	if uploadDateStr != "" {
+		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", uploadDateStr); parseErr == nil {
+			file.UploadDate = parsedTime
+		} else if parsedTime, parseErr := time.Parse(time.RFC3339, uploadDateStr); parseErr == nil {
+			file.UploadDate = parsedTime
+		} else {
+			// Fallback to current time if parsing fails
+			file.UploadDate = time.Now()
+		}
+	}
+
 	// Handle the nullable encrypted_file_sha256sum field
 	if encryptedFileSha256sum != "" {
 		file.EncryptedFileSha256sum = sql.NullString{
@@ -179,6 +209,9 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 			Valid:  false,
 		}
 	}
+
+	// Assign the encrypted FEK to the struct field
+	file.EncryptedFEK = encryptedFek
 
 	return file, nil
 }
@@ -266,12 +299,13 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 		var encryptedFileSha256sum string
 		var encryptedFek []byte   // Add missing encrypted_fek field
 		var sizeBytes interface{} // Use interface{} to handle both int64 and float64
+		var uploadDateStr string
 		err := rows.Scan(
 			&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 			&file.PasswordHint, &file.PasswordType,
 			&file.FilenameNonce, &file.EncryptedFilename,
 			&file.Sha256sumNonce, &file.EncryptedSha256sum,
-			&encryptedFileSha256sum, &encryptedFek, &sizeBytes, &file.PaddedSize, &file.UploadDate,
+			&encryptedFileSha256sum, &encryptedFek, &sizeBytes, &file.PaddedSize, &uploadDateStr,
 		)
 		if err != nil {
 			fmt.Printf("GetFilesByOwner: Failed to scan row %d: %v\n", rowCount, err)
@@ -293,6 +327,18 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 			return nil, fmt.Errorf("GetFilesByOwner: unexpected type for size_bytes: %T", v)
 		}
 
+		// Parse timestamp string to time.Time
+		if uploadDateStr != "" {
+			if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", uploadDateStr); parseErr == nil {
+				file.UploadDate = parsedTime
+			} else if parsedTime, parseErr := time.Parse(time.RFC3339, uploadDateStr); parseErr == nil {
+				file.UploadDate = parsedTime
+			} else {
+				fmt.Printf("GetFilesByOwner: Warning - failed to parse upload_date '%s': %v\n", uploadDateStr, parseErr)
+				file.UploadDate = time.Now() // Fallback to current time
+			}
+		}
+
 		// Handle the nullable encrypted_file_sha256sum field
 		if encryptedFileSha256sum != "" {
 			file.EncryptedFileSha256sum = sql.NullString{
@@ -305,6 +351,9 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 				Valid:  false,
 			}
 		}
+
+		// Assign the encrypted FEK to the struct field
+		file.EncryptedFEK = encryptedFek
 
 		files = append(files, file)
 		fmt.Printf("GetFilesByOwner: Successfully processed row %d - file_id: %s\n", rowCount, file.FileID)

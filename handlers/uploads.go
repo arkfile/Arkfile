@@ -435,19 +435,43 @@ func GetUploadStatus(c echo.Context) error {
 		status             string
 		totalChunks        int
 		totalSizeFloat     sql.NullFloat64 // Handle scientific notation
-		createdAt          time.Time
-		expiresAt          time.Time
+		createdAtStr       string          // Scan as string first to handle RQLite timestamp format
+		expiresAtStr       string          // Scan as string first to handle RQLite timestamp format
 	)
 
 	err := database.DB.QueryRow(
 		"SELECT owner_username, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, status, total_chunks, total_size, created_at, expires_at FROM upload_sessions WHERE id = ?",
 		sessionID,
-	).Scan(&ownerUsername, &fileID, &encryptedFilename, &filenameNonce, &encryptedSha256sum, &sha256sumNonce, &status, &totalChunks, &totalSizeFloat, &createdAt, &expiresAt)
+	).Scan(&ownerUsername, &fileID, &encryptedFilename, &filenameNonce, &encryptedSha256sum, &sha256sumNonce, &status, &totalChunks, &totalSizeFloat, &createdAtStr, &expiresAtStr)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
 	} else if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get session details")
+	}
+
+	// Parse timestamp strings to time.Time
+	var createdAt, expiresAt time.Time
+	if createdAtStr != "" {
+		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", createdAtStr); parseErr == nil {
+			createdAt = parsedTime
+		} else if parsedTime, parseErr := time.Parse(time.RFC3339, createdAtStr); parseErr == nil {
+			createdAt = parsedTime
+		} else {
+			// Fallback to current time if parsing fails
+			createdAt = time.Now()
+		}
+	}
+
+	if expiresAtStr != "" {
+		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", expiresAtStr); parseErr == nil {
+			expiresAt = parsedTime
+		} else if parsedTime, parseErr := time.Parse(time.RFC3339, expiresAtStr); parseErr == nil {
+			expiresAt = parsedTime
+		} else {
+			// Fallback to future time if parsing fails
+			expiresAt = time.Now().Add(24 * time.Hour)
+		}
 	}
 
 	// Verify ownership

@@ -499,3 +499,59 @@ func DecryptFEKWithPassword(encryptedFEK []byte, password []byte, username strin
 
 	return fek, keyType, nil
 }
+
+// DecryptedFileMetadata represents decrypted file metadata
+type DecryptedFileMetadata struct {
+	FileID       string `json:"file_id"`
+	StorageID    string `json:"storage_id"`
+	PasswordHint string `json:"password_hint"`
+	PasswordType string `json:"password_type"`
+	Filename     string `json:"filename"`
+	SHA256       string `json:"sha256"`
+	SizeBytes    int64  `json:"size_bytes"`
+	SizeReadable string `json:"size_readable"`
+	UploadDate   string `json:"upload_date"`
+}
+
+// DecryptFileMetadata decrypts encrypted filename and SHA256 metadata using stored password
+// This function works with raw encrypted data (no envelope headers) as stored in the database
+// Note: The encryptedFilename and encryptedSHA256 already contain their nonces from EncryptGCM
+func DecryptFileMetadata(filenameNonce, encryptedFilename, sha256Nonce, encryptedSHA256 []byte, password string, username string) (string, string, error) {
+	if len(password) == 0 {
+		return "", "", fmt.Errorf("password cannot be empty")
+	}
+	if username == "" {
+		return "", "", fmt.Errorf("username cannot be empty")
+	}
+
+	// Decrypt filename
+	var filename string
+	if len(encryptedFilename) > 0 {
+		// Use account password derivation (default for file metadata)
+		// The database stores password_type separately, but for now we assume "account"
+		derivedKey := DeriveAccountPasswordKey([]byte(password), username)
+
+		// The encryptedFilename already contains the nonce from EncryptGCM - use it directly
+		decryptedFilename, err := DecryptGCM(encryptedFilename, derivedKey)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to decrypt filename: %w", err)
+		}
+		filename = string(decryptedFilename)
+	}
+
+	// Decrypt SHA256
+	var sha256 string
+	if len(encryptedSHA256) > 0 {
+		// Use account password derivation (default for file metadata)
+		derivedKey := DeriveAccountPasswordKey([]byte(password), username)
+
+		// The encryptedSHA256 already contains the nonce from EncryptGCM - use it directly
+		decryptedSHA256, err := DecryptGCM(encryptedSHA256, derivedKey)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to decrypt SHA256: %w", err)
+		}
+		sha256 = string(decryptedSHA256)
+	}
+
+	return filename, sha256, nil
+}

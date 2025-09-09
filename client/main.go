@@ -1468,6 +1468,155 @@ func logUploadSuccess(this js.Value, args []js.Value) interface{} {
 	return nil
 }
 
+// listUserFiles lists files for the authenticated user with metadata decryption
+func listUserFiles(this js.Value, args []js.Value) interface{} {
+	if len(args) != 1 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected username",
+		}
+	}
+
+	username := args[0].String()
+
+	// Check if user has a password stored (required for metadata decryption)
+	_, exists := userPasswords[username]
+	if !exists {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "No password found for user - cannot decrypt metadata",
+		}
+	}
+
+	// Make authenticated request to list files
+	fetchResult := authenticatedFetch(js.Value{}, []js.Value{
+		js.ValueOf("/api/files?limit=50&offset=0"),
+		js.ValueOf(map[string]interface{}{
+			"method": "GET",
+		}),
+	})
+
+	fetchMap, ok := fetchResult.(map[string]interface{})
+	if !ok || !fetchMap["success"].(bool) {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to create fetch request",
+		}
+	}
+
+	// Note: This returns a Promise that needs to be handled in JavaScript
+	// The actual response processing should be done in the .then() callback
+	// This function sets up the authenticated request correctly
+	return map[string]interface{}{
+		"success": true,
+		"promise": fetchMap["promise"],
+		"message": "Authenticated request created - handle response in .then() callback",
+	}
+}
+
+// processFileListResponse processes the server response and decrypts metadata
+func processFileListResponse(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected serverResponse, username",
+		}
+	}
+
+	username := args[1].String()
+
+	// Check if user has a password stored
+	_, exists := userPasswords[username]
+	if !exists {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "No password found for user - cannot decrypt metadata",
+		}
+	}
+
+	// Parse the server response - expect {"files": [...], "storage": {...}}
+	serverResponse := args[0]
+
+	if serverResponse.IsNull() || serverResponse.IsUndefined() {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Server response is null or undefined",
+		}
+	}
+
+	files := serverResponse.Get("files")
+	if files.IsNull() || files.IsUndefined() {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "No 'files' array found in server response",
+		}
+	}
+
+	// Process each file and decrypt metadata
+	filesLength := files.Length()
+	var decryptedFiles []map[string]interface{}
+
+	for i := 0; i < filesLength; i++ {
+		file := files.Index(i)
+
+		// Extract encrypted metadata
+		filenameNonce := file.Get("filename_nonce").String()
+		encryptedFilename := file.Get("encrypted_filename").String()
+		sha256Nonce := file.Get("sha256sum_nonce").String()
+		encryptedSHA256 := file.Get("encrypted_sha256sum").String()
+
+		// Decrypt metadata using the shared crypto function
+		decryptResult := decryptFileMetadata(js.Value{}, []js.Value{
+			js.ValueOf(filenameNonce),
+			js.ValueOf(encryptedFilename),
+			js.ValueOf(sha256Nonce),
+			js.ValueOf(encryptedSHA256),
+			js.ValueOf(username),
+		})
+
+		decryptMap, ok := decryptResult.(map[string]interface{})
+		if !ok || !decryptMap["success"].(bool) {
+			// Skip this file if decryption fails
+			log.Printf("Failed to decrypt metadata for file: %v", decryptMap["error"])
+			continue
+		}
+
+		// Build decrypted file info
+		decryptedFile := map[string]interface{}{
+			"id":             file.Get("id").String(),
+			"file_id":        file.Get("file_id").String(),
+			"storage_id":     file.Get("storage_id").String(),
+			"owner_username": file.Get("owner_username").String(),
+			"filename":       decryptMap["filename"].(string),
+			"sha256sum":      decryptMap["sha256sum"].(string),
+			"size_bytes":     file.Get("size_bytes").Int(),
+			"padded_size":    file.Get("padded_size").Int(),
+			"upload_date":    file.Get("upload_date").String(),
+			"password_hint":  file.Get("password_hint").String(),
+			"password_type":  file.Get("password_type").String(),
+		}
+
+		decryptedFiles = append(decryptedFiles, decryptedFile)
+	}
+
+	// Get storage info if available
+	var storageInfo map[string]interface{}
+	storage := serverResponse.Get("storage")
+	if !storage.IsNull() && !storage.IsUndefined() {
+		storageInfo = map[string]interface{}{
+			"used_bytes":  storage.Get("used_bytes").Int(),
+			"total_bytes": storage.Get("total_bytes").Int(),
+		}
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"files":   decryptedFiles,
+		"storage": storageInfo,
+		"count":   len(decryptedFiles),
+	}
+}
+
 // main function to register WASM functions
 func main() {
 	// Password-based file encryption functions
@@ -1479,6 +1628,10 @@ func main() {
 	// File metadata encryption functions
 	js.Global().Set("encryptFileMetadata", js.FuncOf(encryptFileMetadata))
 	js.Global().Set("decryptFileMetadata", js.FuncOf(decryptFileMetadata))
+
+	// File listing functions
+	js.Global().Set("listUserFiles", js.FuncOf(listUserFiles))
+	js.Global().Set("processFileListResponse", js.FuncOf(processFileListResponse))
 
 	// Chunked upload encryption functions (password-based)
 	js.Global().Set("encryptFileChunkedPassword", js.FuncOf(encryptFileChunkedPassword))

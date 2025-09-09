@@ -607,22 +607,47 @@ EXAMPLES:
 	return nil
 }
 
+// ServerFileListResponse represents the server's file list response format
+type ServerFileListResponse struct {
+	Files   []ServerFileInfo `json:"files"`
+	Storage interface{}      `json:"storage"`
+}
+
+// ServerFileInfo represents file metadata from server response
+type ServerFileInfo struct {
+	FileID            string `json:"file_id"`
+	StorageID         string `json:"storage_id"`
+	PasswordHint      string `json:"passwordHint"`
+	PasswordType      string `json:"passwordType"`
+	FilenameNonce     string `json:"filenameNonce"`
+	EncryptedFilename string `json:"encryptedFilename"`
+	SHA256Nonce       string `json:"sha256sumNonce"`
+	EncryptedSHA256   string `json:"encryptedSha256sum"`
+	SizeBytes         int64  `json:"size_bytes"`
+	SizeReadable      string `json:"size_readable"`
+	UploadDate        string `json:"uploadDate"`
+}
+
 // handleListFilesCommand processes list-files command
 func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("list-files", flag.ExitOnError)
 	var (
 		detailed = fs.Bool("detailed", false, "Show detailed file information")
+		decrypt  = fs.Bool("decrypt", true, "Decrypt filename and SHA256 metadata")
 		limit    = fs.Int("limit", 50, "Maximum number of files to list")
 		offset   = fs.Int("offset", 0, "Offset for pagination")
+		showRaw  = fs.Bool("raw", false, "Show raw encrypted metadata (for debugging)")
 	)
 
 	fs.Usage = func() {
 		fmt.Printf(`Usage: arkfile-client list-files [FLAGS]
 
-List files uploaded by the authenticated user.
+List files uploaded by the authenticated user with metadata decryption.
 
 FLAGS:
     --detailed          Show detailed file information
+    --decrypt           Decrypt filename and SHA256 metadata (default: true)
+    --raw              Show raw encrypted metadata (for debugging)
     --limit INT         Maximum number of files to list (default: 50)
     --offset INT        Offset for pagination (default: 0)
     --help             Show this help message
@@ -631,6 +656,7 @@ EXAMPLES:
     arkfile-client list-files
     arkfile-client list-files --detailed
     arkfile-client list-files --limit 10 --offset 20
+    arkfile-client list-files --raw --no-decrypt
 `)
 	}
 
@@ -649,47 +675,170 @@ EXAMPLES:
 		return fmt.Errorf("session expired, please login again")
 	}
 
-	// Request file list
+	// Request file list with direct HTTP handling to avoid response wrapper issues
 	endpoint := fmt.Sprintf("/api/files?limit=%d&offset=%d", *limit, *offset)
-	resp, err := client.makeRequest("GET", endpoint, nil, session.AccessToken)
+
+	// Make direct HTTP request to get raw response
+	url := client.baseURL + endpoint
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return fmt.Errorf("failed to list files: %w", err)
+		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Parse file list
-	filesData, ok := resp.Data["files"].([]interface{})
-	if !ok {
-		return fmt.Errorf("invalid file list response")
+	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	if client.verbose {
+		logVerbose("Making GET request to %s", url)
 	}
 
-	if len(filesData) == 0 {
+	httpResp, err := client.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	responseData, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if client.verbose {
+		logVerbose("Response status: %d", httpResp.StatusCode)
+		logVerbose("Raw response body: %s", string(responseData))
+	}
+
+	if httpResp.StatusCode != 200 {
+		return fmt.Errorf("server returned status %d: %s", httpResp.StatusCode, string(responseData))
+	}
+
+	// Parse the response directly as ServerFileListResponse
+	var serverResponse ServerFileListResponse
+	if err := json.Unmarshal(responseData, &serverResponse); err != nil {
+		return fmt.Errorf("failed to parse server response: %w", err)
+	}
+
+	if client.verbose {
+		logVerbose("Parsed %d files from server response", len(serverResponse.Files))
+	}
+
+	if len(serverResponse.Files) == 0 {
 		fmt.Println("No files found")
 		return nil
 	}
 
 	fmt.Printf("Files for user %s:\n\n", session.Username)
 
-	if *detailed {
-		for i, fileData := range filesData {
-			fileMap := fileData.(map[string]interface{})
-			fmt.Printf("%d. %s\n", i+1, fileMap["filename"])
-			fmt.Printf("   ID: %s\n", fileMap["id"])
-			fmt.Printf("   Size: %s\n", formatFileSize(int64(fileMap["file_size"].(float64))))
-			fmt.Printf("   Type: %s\n", fileMap["content_type"])
-			fmt.Printf("   Created: %s\n", fileMap["created_at"])
-			fmt.Println()
+	// Get password for metadata decryption if needed
+	var password string
+	if *decrypt && !*showRaw {
+		passwordBytes, err := readPassword("Enter password to decrypt file metadata: ")
+		if err != nil {
+			return fmt.Errorf("failed to read password: %w", err)
 		}
-	} else {
-		for i, fileData := range filesData {
-			fileMap := fileData.(map[string]interface{})
-			size := formatFileSize(int64(fileMap["file_size"].(float64)))
-			fmt.Printf("%3d. %-30s %10s  %s\n", i+1, fileMap["filename"], size, fileMap["created_at"])
+		password = string(passwordBytes)
+		// Securely clear password bytes
+		for i := range passwordBytes {
+			passwordBytes[i] = 0
+		}
+		if password == "" {
+			logError("Warning: Empty password, showing encrypted metadata")
+			*decrypt = false
 		}
 	}
 
-	fmt.Printf("\nShowing %d files (offset: %d)\n", len(filesData), *offset)
+	// Display files
+	if *detailed {
+		for i, serverFile := range serverResponse.Files {
+			fmt.Printf("%d. ", i+1)
+
+			if *showRaw {
+				fmt.Printf("[ENCRYPTED] %s\n", serverFile.EncryptedFilename)
+				fmt.Printf("   File ID: %s\n", serverFile.FileID)
+				fmt.Printf("   Storage ID: %s\n", serverFile.StorageID)
+				fmt.Printf("   Password Type: %s\n", serverFile.PasswordType)
+				fmt.Printf("   Password Hint: %s\n", serverFile.PasswordHint)
+				fmt.Printf("   Filename Nonce: %s\n", serverFile.FilenameNonce)
+				fmt.Printf("   Encrypted Filename: %s\n", serverFile.EncryptedFilename)
+				fmt.Printf("   SHA256 Nonce: %s\n", serverFile.SHA256Nonce)
+				fmt.Printf("   Encrypted SHA256: %s\n", serverFile.EncryptedSHA256)
+			} else if *decrypt && password != "" {
+				// Decrypt metadata
+				filename, sha256sum, err := decryptFileMetadata(serverFile, password, session.Username)
+				if err != nil {
+					logError("Failed to decrypt metadata for file %s: %v", serverFile.FileID, err)
+					fmt.Printf("[DECRYPT FAILED] %s\n", serverFile.FileID)
+				} else {
+					fmt.Printf("%s\n", filename)
+					fmt.Printf("   SHA256: %s\n", sha256sum)
+				}
+				fmt.Printf("   File ID: %s\n", serverFile.FileID)
+				fmt.Printf("   Storage ID: %s\n", serverFile.StorageID)
+				fmt.Printf("   Password Type: %s\n", serverFile.PasswordType)
+			} else {
+				fmt.Printf("[ENCRYPTED] %s\n", serverFile.FileID)
+				fmt.Printf("   File ID: %s\n", serverFile.FileID)
+				fmt.Printf("   Storage ID: %s\n", serverFile.StorageID)
+				fmt.Printf("   Password Type: %s\n", serverFile.PasswordType)
+			}
+
+			fmt.Printf("   Size: %s (%d bytes)\n", serverFile.SizeReadable, serverFile.SizeBytes)
+			fmt.Printf("   Upload Date: %s\n", serverFile.UploadDate)
+			fmt.Println()
+		}
+	} else {
+		for i, serverFile := range serverResponse.Files {
+			displayName := serverFile.FileID // Default to file ID
+
+			if *showRaw {
+				displayName = fmt.Sprintf("[ENCRYPTED] %s", serverFile.EncryptedFilename)
+			} else if *decrypt && password != "" {
+				// Decrypt filename only
+				filename, _, err := decryptFileMetadata(serverFile, password, session.Username)
+				if err != nil {
+					logError("Failed to decrypt filename for file %s: %v", serverFile.FileID, err)
+					displayName = fmt.Sprintf("[DECRYPT FAILED] %s", serverFile.FileID)
+				} else {
+					displayName = filename
+				}
+			} else {
+				displayName = fmt.Sprintf("[ENCRYPTED] %s", serverFile.FileID)
+			}
+
+			fmt.Printf("%3d. %-40s %10s  %s\n", i+1, displayName, serverFile.SizeReadable, serverFile.UploadDate)
+		}
+	}
+
+	fmt.Printf("\nShowing %d files (offset: %d)\n", len(serverResponse.Files), *offset)
 
 	return nil
+}
+
+// decryptFileMetadata decrypts filename and SHA256 from server file metadata
+func decryptFileMetadata(serverFile ServerFileInfo, password, username string) (string, string, error) {
+	// Decode base64 encoded metadata
+	encryptedFilename, err := base64.StdEncoding.DecodeString(serverFile.EncryptedFilename)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to decode encrypted filename: %w", err)
+	}
+
+	encryptedSHA256, err := base64.StdEncoding.DecodeString(serverFile.EncryptedSHA256)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to decode encrypted SHA256: %w", err)
+	}
+
+	// Use shared crypto function to decrypt metadata
+	// Note: The encrypted data already contains nonces from EncryptGCM, so pass nil for nonce parameters
+	filename, sha256sum, err := crypto.DecryptFileMetadata(
+		nil, encryptedFilename,
+		nil, encryptedSHA256,
+		password, username,
+	)
+	if err != nil {
+		return "", "", fmt.Errorf("metadata decryption failed: %w", err)
+	}
+
+	return filename, sha256sum, nil
 }
 
 // handleDownloadCommand processes download command
@@ -767,37 +916,61 @@ EXAMPLES:
 		}
 	}
 
-	// Get file metadata and download URL
-	resp, err := client.makeRequest("GET", "/api/files/"+targetFileID, nil, session.AccessToken)
+	// Get file metadata and encrypted data directly from server
+	resp, err := client.makeRequest("GET", "/api/download/"+targetFileID, nil, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to get file metadata: %w", err)
 	}
 
-	fileData := resp.Data["file"].(map[string]interface{})
-	originalFilename := fileData["filename"].(string)
-	fileSize := int64(fileData["file_size"].(float64))
-	downloadURL := fileData["download_url"].(string)
-
-	logVerbose("Downloading file: %s (%s)", originalFilename, formatFileSize(fileSize))
-
-	// Determine output path
-	finalOutputPath := *outputPath
-	if finalOutputPath == "" {
-		finalOutputPath = filepath.Join(*outputDir, originalFilename)
+	// Check if the response has the expected structure
+	if resp.Data == nil {
+		return fmt.Errorf("server returned empty response data")
 	}
 
-	// Download encrypted file
+	fileDataInterface, exists := resp.Data["file"]
+	if !exists {
+		return fmt.Errorf("server response missing 'file' field")
+	}
+
+	fileData, ok := fileDataInterface.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("server response 'file' field has unexpected type: %T", fileDataInterface)
+	}
+
+	// Extract file size
+	fileSizeInterface, exists := fileData["file_size"]
+	if !exists {
+		return fmt.Errorf("server response missing 'file_size' field")
+	}
+	fileSize := int64(fileSizeInterface.(float64))
+
+	// Extract encrypted file data directly from response
+	encryptedDataInterface, exists := fileData["data"]
+	if !exists {
+		return fmt.Errorf("server response missing 'data' field")
+	}
+	encryptedDataString, ok := encryptedDataInterface.(string)
+	if !ok {
+		return fmt.Errorf("server response 'data' field has unexpected type: %T", encryptedDataInterface)
+	}
+	encryptedData := []byte(encryptedDataString)
+
+	logVerbose("Retrieved encrypted file data: %d bytes", len(encryptedData))
+
+	// We'll decrypt the filename after getting the FEK to determine output path
 	if *showProgress {
-		fmt.Printf("Downloading %s (%s)...\n", originalFilename, formatFileSize(fileSize))
-	}
-
-	encryptedData, err := downloadFile(client.client, downloadURL)
-	if err != nil {
-		return fmt.Errorf("file download failed: %w", err)
+		fmt.Printf("Processing encrypted file (%s)...\n", formatFileSize(fileSize))
 	}
 
 	// Get encrypted FEK from metadata
-	encryptedFEKBase64 := fileData["encrypted_fek"].(string)
+	encryptedFEKInterface, exists := fileData["encrypted_fek"]
+	if !exists {
+		return fmt.Errorf("server response missing 'encrypted_fek' field")
+	}
+	encryptedFEKBase64, ok := encryptedFEKInterface.(string)
+	if !ok {
+		return fmt.Errorf("server response 'encrypted_fek' field has unexpected type: %T", encryptedFEKInterface)
+	}
 	encryptedFEK, err := base64.StdEncoding.DecodeString(encryptedFEKBase64)
 	if err != nil {
 		return fmt.Errorf("invalid encrypted FEK: %w", err)
@@ -818,15 +991,52 @@ EXAMPLES:
 		return fmt.Errorf("FEK decryption failed: %w", err)
 	}
 
+	// Decrypt file
+	plaintext, err := crypto.DecryptGCM(encryptedData, fek)
+	if err != nil {
+		return fmt.Errorf("file decryption failed: %w", err)
+	}
+
+	// Decrypt filename to determine the original filename for output
+	var originalFilename string
+	if filenameNonceInterface, exists := fileData["filenameNonce"]; exists {
+		if filenameNonceBase64, ok := filenameNonceInterface.(string); ok {
+			if encryptedFilenameInterface, exists := fileData["encryptedFilename"]; exists {
+				if encryptedFilenameBase64, ok := encryptedFilenameInterface.(string); ok {
+					_, err := base64.StdEncoding.DecodeString(filenameNonceBase64)
+					if err == nil {
+						encryptedFilename, err := base64.StdEncoding.DecodeString(encryptedFilenameBase64)
+						if err == nil {
+							decryptedFilename, _, err := crypto.DecryptFileMetadata(
+								nil, encryptedFilename,
+								nil, nil, // We don't need SHA256 for download
+								string(password), session.Username,
+							)
+							if err == nil {
+								originalFilename = decryptedFilename
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback to file ID if filename decryption failed
+	if originalFilename == "" {
+		originalFilename = targetFileID + ".decrypted"
+		logVerbose("Warning: Could not decrypt filename, using fallback: %s", originalFilename)
+	}
+
 	// Securely clear the password from memory
 	for i := range password {
 		password[i] = 0
 	}
 
-	// Decrypt file
-	plaintext, err := crypto.DecryptGCM(encryptedData, fek)
-	if err != nil {
-		return fmt.Errorf("file decryption failed: %w", err)
+	// Determine output path
+	finalOutputPath := *outputPath
+	if finalOutputPath == "" {
+		finalOutputPath = filepath.Join(*outputDir, originalFilename)
 	}
 
 	// Write file
@@ -836,6 +1046,7 @@ EXAMPLES:
 
 	fmt.Printf("✅ Download completed successfully\n")
 	fmt.Printf("File saved to: %s\n", finalOutputPath)
+	fmt.Printf("Original filename: %s\n", originalFilename)
 	fmt.Printf("Size: %s\n", formatFileSize(int64(len(plaintext))))
 
 	return nil

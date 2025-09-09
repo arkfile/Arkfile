@@ -1869,7 +1869,15 @@ phase_9_file_operations() {
         --progress=false 2>&1 | tee "$upload_output_log"
 
     local file_id
-    file_id=$(grep "File ID" "$upload_output_log" | awk '{print $3}')
+    # Extract file ID more robustly to avoid contamination
+    # Look for the final file ID from upload completion, not verbose logs
+    file_id=$(grep -E "^File ID: [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$" "$upload_output_log" | tail -1 | awk '{print $3}')
+    
+    # Fallback: if the above doesn't work, try a more general pattern but clean it
+    if [ -z "$file_id" ]; then
+        file_id=$(grep "File ID:" "$upload_output_log" | grep -o "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}" | tail -1)
+    fi
+    
     echo "$file_id" > "$TEMP_DIR/uploaded_file_id.txt"
 
     if [ -n "$file_id" ]; then
@@ -1881,7 +1889,7 @@ phase_9_file_operations() {
     # Step 11: Verify file in server listing
     log "Step 11: Verifying file in server listing..."
     local list_files_log="$TEMP_DIR/list_files_output.log"
-    /opt/arkfile/bin/arkfile-client --config "$client_config_file" list-files > "$list_files_log"
+    echo "$TEST_PASSWORD" | /opt/arkfile/bin/arkfile-client --config "$client_config_file" list-files > "$list_files_log"
     
     if grep -q "$file_id" "$list_files_log"; then
         success "Uploaded file found in server file listing."

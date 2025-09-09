@@ -260,9 +260,11 @@ func GetPendingUsers(dbtx DBTX) ([]*User, error) {
 	for rows.Next() {
 		user := &User{}
 		var emailStr sql.NullString
+		var createdAtStr string                                      // Scan as string first to handle RQLite timestamp format
+		var totalStorageInterface, storageLimitInterface interface{} // Handle numeric types
 		err := rows.Scan(
-			&user.ID, &user.Username, &emailStr, &user.CreatedAt,
-			&user.TotalStorageBytes, &user.StorageLimitBytes,
+			&user.ID, &user.Username, &emailStr, &createdAtStr,
+			&totalStorageInterface, &storageLimitInterface,
 		)
 		if err != nil {
 			return nil, err
@@ -271,6 +273,41 @@ func GetPendingUsers(dbtx DBTX) ([]*User, error) {
 		// Handle optional email field
 		if emailStr.Valid {
 			user.Email = &emailStr.String
+		}
+
+		// Parse timestamp string to time.Time
+		if createdAtStr != "" {
+			if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", createdAtStr); parseErr == nil {
+				user.CreatedAt = parsedTime
+			} else if parsedTime, parseErr := time.Parse(time.RFC3339, createdAtStr); parseErr == nil {
+				user.CreatedAt = parsedTime
+			} else {
+				// Fallback to current time if parsing fails
+				user.CreatedAt = time.Now()
+			}
+		}
+
+		// Handle numeric fields that might come as float64 from rqlite
+		if totalStorageInterface != nil {
+			switch v := totalStorageInterface.(type) {
+			case int64:
+				user.TotalStorageBytes = v
+			case float64:
+				user.TotalStorageBytes = int64(v)
+			default:
+				user.TotalStorageBytes = 0
+			}
+		}
+
+		if storageLimitInterface != nil {
+			switch v := storageLimitInterface.(type) {
+			case int64:
+				user.StorageLimitBytes = v
+			case float64:
+				user.StorageLimitBytes = int64(v)
+			default:
+				user.StorageLimitBytes = DefaultStorageLimit
+			}
 		}
 
 		users = append(users, user)
