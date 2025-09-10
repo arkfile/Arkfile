@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
@@ -78,9 +79,9 @@ func CreateFile(db *sql.DB, fileID, storageID, ownerUsername, passwordHint, pass
 func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	file := &File{}
 	var encryptedFileSha256sum string
-	var encryptedFek []byte   // Add missing encrypted_fek field
-	var sizeBytes interface{} // Use interface{} to handle both int64 and float64
-	var uploadDateStr string  // Scan as string first to handle RQLite timestamp format
+	var encryptedFekRaw interface{} // Use interface{} to handle driver differences
+	var sizeBytes interface{}       // Use interface{} to handle both int64 and float64
+	var uploadDateStr string        // Scan as string first to handle RQLite timestamp format
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
@@ -92,7 +93,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		&file.PasswordHint, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
-		&encryptedFileSha256sum, &encryptedFek, &sizeBytes, &file.PaddedSize, &uploadDateStr,
+		&encryptedFileSha256sum, &encryptedFekRaw, &sizeBytes, &file.PaddedSize, &uploadDateStr,
 	)
 
 	if err == sql.ErrNoRows {
@@ -139,8 +140,22 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		}
 	}
 
-	// Assign the encrypted FEK to the struct field
-	file.EncryptedFEK = encryptedFek
+	// Correctly handle encrypted_fek, which may be a base64 string from rqlite
+	switch v := encryptedFekRaw.(type) {
+	case []byte:
+		file.EncryptedFEK = v
+	case string:
+		// rqlite driver returns BLOBs as base64-encoded strings
+		decoded, err := base64.StdEncoding.DecodeString(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64 for encrypted_fek: %w", err)
+		}
+		file.EncryptedFEK = decoded
+	case nil:
+		file.EncryptedFEK = nil
+	default:
+		return nil, fmt.Errorf("unexpected type for encrypted_fek: %T", v)
+	}
 
 	return file, nil
 }
@@ -149,9 +164,9 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	file := &File{}
 	var encryptedFileSha256sum string
-	var encryptedFek []byte   // Add missing encrypted_fek field
-	var sizeBytes interface{} // Use interface{} to handle both int64 and float64
-	var uploadDateStr string  // Scan as string first to handle RQLite timestamp format
+	var encryptedFekRaw interface{} // Use interface{} to handle driver differences
+	var sizeBytes interface{}       // Use interface{} to handle both int64 and float64
+	var uploadDateStr string        // Scan as string first to handle RQLite timestamp format
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
@@ -163,7 +178,7 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		&file.PasswordHint, &file.PasswordType,
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
-		&encryptedFileSha256sum, &encryptedFek, &sizeBytes, &file.PaddedSize, &uploadDateStr,
+		&encryptedFileSha256sum, &encryptedFekRaw, &sizeBytes, &file.PaddedSize, &uploadDateStr,
 	)
 
 	if err == sql.ErrNoRows {
@@ -210,161 +225,114 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		}
 	}
 
-	// Assign the encrypted FEK to the struct field
-	file.EncryptedFEK = encryptedFek
+	// Correctly handle encrypted_fek, which may be a base64 string from rqlite
+	switch v := encryptedFekRaw.(type) {
+	case []byte:
+		file.EncryptedFEK = v
+	case string:
+		// rqlite driver returns BLOBs as base64-encoded strings
+		decoded, err := base64.StdEncoding.DecodeString(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64 for encrypted_fek: %w", err)
+		}
+		file.EncryptedFEK = decoded
+	case nil:
+		file.EncryptedFEK = nil
+	default:
+		return nil, fmt.Errorf("unexpected type for encrypted_fek: %T", v)
+	}
 
 	return file, nil
 }
 
 // GetFilesByOwner retrieves all files owned by a specific user
 func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
-	fmt.Printf("GetFilesByOwner: Starting function for user: %s\n", ownerUsername)
-
 	if db == nil {
-		return nil, fmt.Errorf("GetFilesByOwner: database connection is nil")
+		return nil, errors.New("database connection is nil")
 	}
 
-	if ownerUsername == "" {
-		return nil, fmt.Errorf("GetFilesByOwner: ownerUsername is empty")
-	}
-
-	// Log the SQL query being executed
 	query := `
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
 			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size, upload_date 
 		FROM file_metadata WHERE owner_username = ? ORDER BY upload_date DESC`
 
-	fmt.Printf("GetFilesByOwner: Executing query: %s with username: %s\n", query, ownerUsername)
-
-	// Enhanced debugging: Test if the table exists and has the expected structure
-	var tableExists int
-	err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='file_metadata'").Scan(&tableExists)
-	if err != nil {
-		fmt.Printf("GetFilesByOwner: Table existence check failed: %v\n", err)
-		return nil, fmt.Errorf("GetFilesByOwner: failed to check table existence: %v", err)
-	}
-	if tableExists == 0 {
-		fmt.Printf("GetFilesByOwner: Table 'file_metadata' does not exist\n")
-		return nil, fmt.Errorf("GetFilesByOwner: table 'file_metadata' does not exist")
-	}
-	fmt.Printf("GetFilesByOwner: Table 'file_metadata' exists\n")
-
-	// Check column structure
-	fmt.Printf("GetFilesByOwner: Checking table column structure\n")
-	columnRows, err := db.Query("PRAGMA table_info(file_metadata)")
-	if err != nil {
-		fmt.Printf("GetFilesByOwner: Failed to get table info: %v\n", err)
-		return nil, fmt.Errorf("GetFilesByOwner: failed to get table info: %v", err)
-	}
-	defer columnRows.Close()
-
-	var columnCount int
-	var columnInfo []string
-	for columnRows.Next() {
-		var cid int
-		var name, dataType string
-		var notNull, pk int
-		var defaultValue sql.NullString
-
-		if err := columnRows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk); err != nil {
-			fmt.Printf("GetFilesByOwner: Failed to scan column info: %v\n", err)
-			return nil, fmt.Errorf("GetFilesByOwner: failed to scan column info: %v", err)
-		}
-		columnCount++
-		columnInfo = append(columnInfo, fmt.Sprintf("%s(%s)", name, dataType))
-	}
-	fmt.Printf("GetFilesByOwner: Found %d columns: %v\n", columnCount, columnInfo)
-
-	if columnCount < 14 {
-		fmt.Printf("GetFilesByOwner: Insufficient columns - found %d, expected at least 14\n", columnCount)
-		return nil, fmt.Errorf("GetFilesByOwner: table has %d columns, expected at least 14. Columns: %v", columnCount, columnInfo)
-	}
-
-	fmt.Printf("GetFilesByOwner: Executing main query for user '%s'\n", ownerUsername)
 	rows, err := db.Query(query, ownerUsername)
 	if err != nil {
-		fmt.Printf("GetFilesByOwner: Main query failed: %v\n", err)
-		return nil, fmt.Errorf("GetFilesByOwner: SQL query failed for user '%s': %v", ownerUsername, err)
+		return nil, fmt.Errorf("sql query failed for user '%s': %w", ownerUsername, err)
 	}
 	defer rows.Close()
 
 	var files []*File
-	rowCount := 0
-	fmt.Printf("GetFilesByOwner: Starting to process rows\n")
 	for rows.Next() {
-		rowCount++
-		fmt.Printf("GetFilesByOwner: Processing row %d\n", rowCount)
 		file := &File{}
 		var encryptedFileSha256sum string
-		var encryptedFek []byte   // Add missing encrypted_fek field
-		var sizeBytes interface{} // Use interface{} to handle both int64 and float64
+		var encryptedFekRaw interface{}
+		var sizeBytes interface{}
 		var uploadDateStr string
+
 		err := rows.Scan(
 			&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 			&file.PasswordHint, &file.PasswordType,
 			&file.FilenameNonce, &file.EncryptedFilename,
 			&file.Sha256sumNonce, &file.EncryptedSha256sum,
-			&encryptedFileSha256sum, &encryptedFek, &sizeBytes, &file.PaddedSize, &uploadDateStr,
+			&encryptedFileSha256sum, &encryptedFekRaw, &sizeBytes, &file.PaddedSize, &uploadDateStr,
 		)
 		if err != nil {
-			fmt.Printf("GetFilesByOwner: Failed to scan row %d: %v\n", rowCount, err)
-			return nil, fmt.Errorf("GetFilesByOwner: failed to scan row %d for user '%s': %v", rowCount, ownerUsername, err)
+			return nil, fmt.Errorf("failed to scan row for user '%s': %w", ownerUsername, err)
 		}
 
-		// Convert sizeBytes from interface{} to int64, handling both int64 and float64
+		// Convert sizeBytes from interface{} to int64
 		switch v := sizeBytes.(type) {
 		case int64:
 			file.SizeBytes = v
 		case float64:
 			file.SizeBytes = int64(v)
-			fmt.Printf("GetFilesByOwner: Converted size_bytes from float64(%f) to int64(%d)\n", v, file.SizeBytes)
 		case nil:
 			file.SizeBytes = 0
-			fmt.Printf("GetFilesByOwner: size_bytes was null, defaulting to 0\n")
 		default:
-			fmt.Printf("GetFilesByOwner: Unexpected type for size_bytes: %T, value: %v\n", v, v)
-			return nil, fmt.Errorf("GetFilesByOwner: unexpected type for size_bytes: %T", v)
+			return nil, fmt.Errorf("unexpected type for size_bytes: %T", v)
+		}
+
+		// Convert encryptedFekRaw from interface{} to []byte, preventing driver corruption
+		switch v := encryptedFekRaw.(type) {
+		case []byte:
+			file.EncryptedFEK = v
+		case string:
+			// rqlite driver returns BLOBs as base64-encoded strings
+			decoded, err := base64.StdEncoding.DecodeString(v)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode base64 for encrypted_fek: %w", err)
+			}
+			file.EncryptedFEK = decoded
+		case nil:
+			file.EncryptedFEK = nil
+		default:
+			return nil, fmt.Errorf("unexpected type for encrypted_fek: %T", v)
 		}
 
 		// Parse timestamp string to time.Time
-		if uploadDateStr != "" {
-			if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", uploadDateStr); parseErr == nil {
-				file.UploadDate = parsedTime
-			} else if parsedTime, parseErr := time.Parse(time.RFC3339, uploadDateStr); parseErr == nil {
-				file.UploadDate = parsedTime
-			} else {
-				fmt.Printf("GetFilesByOwner: Warning - failed to parse upload_date '%s': %v\n", uploadDateStr, parseErr)
-				file.UploadDate = time.Now() // Fallback to current time
-			}
+		if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", uploadDateStr); parseErr == nil {
+			file.UploadDate = parsedTime
+		} else if parsedTime, parseErr := time.Parse(time.RFC3339, uploadDateStr); parseErr == nil {
+			file.UploadDate = parsedTime
+		} else if uploadDateStr != "" {
+			// In a real application, this would be a logged warning.
+			// For now, we just skip if parsing fails.
 		}
 
-		// Handle the nullable encrypted_file_sha256sum field
+		// Handle nullable encrypted_file_sha256sum
 		if encryptedFileSha256sum != "" {
-			file.EncryptedFileSha256sum = sql.NullString{
-				String: encryptedFileSha256sum,
-				Valid:  true,
-			}
-		} else {
-			file.EncryptedFileSha256sum = sql.NullString{
-				String: "",
-				Valid:  false,
-			}
+			file.EncryptedFileSha256sum = sql.NullString{String: encryptedFileSha256sum, Valid: true}
 		}
-
-		// Assign the encrypted FEK to the struct field
-		file.EncryptedFEK = encryptedFek
 
 		files = append(files, file)
-		fmt.Printf("GetFilesByOwner: Successfully processed row %d - file_id: %s\n", rowCount, file.FileID)
 	}
 
 	if err = rows.Err(); err != nil {
-		fmt.Printf("GetFilesByOwner: Rows iteration error: %v\n", err)
-		return nil, fmt.Errorf("GetFilesByOwner: rows iteration error for user '%s' after processing %d rows: %v", ownerUsername, rowCount, err)
+		return nil, fmt.Errorf("rows iteration error for user '%s': %w", ownerUsername, err)
 	}
 
-	fmt.Printf("GetFilesByOwner: Successfully retrieved %d files for user '%s'\n", len(files), ownerUsername)
 	return files, nil
 }
 
@@ -404,28 +372,35 @@ func (f *File) UpdatePasswordHint(db *sql.DB, newHint string) error {
 	return nil
 }
 
-// FileMetadataForClient represents the encrypted metadata that gets sent to the client
-// The client will decrypt these fields using their OPAQUE export key
+// FileMetadataForClient represents the encrypted metadata that gets sent to the client.
+// All binary data is Base64-encoded as strings for robust JSON transport.
 type FileMetadataForClient struct {
 	FileID             string    `json:"file_id"`
 	StorageID          string    `json:"storage_id"`
-	FilenameNonce      []byte    `json:"filename_nonce"`
-	EncryptedFilename  []byte    `json:"encrypted_filename"`
-	Sha256sumNonce     []byte    `json:"sha256sum_nonce"`
-	EncryptedSha256sum []byte    `json:"encrypted_sha256sum"`
+	PasswordHint       string    `json:"password_hint,omitempty"`
+	PasswordType       string    `json:"password_type"`
+	FilenameNonce      string    `json:"filename_nonce"`
+	EncryptedFilename  string    `json:"encrypted_filename"`
+	Sha256sumNonce     string    `json:"sha256sum_nonce"`
+	EncryptedSha256sum string    `json:"encrypted_sha256sum"`
+	EncryptedFEK       string    `json:"encrypted_fek"`
 	SizeBytes          int64     `json:"size_bytes"`
 	UploadDate         time.Time `json:"upload_date"`
 }
 
-// ToClientMetadata converts a File to FileMetadataForClient for sending to the client
+// ToClientMetadata converts a File to FileMetadataForClient for sending to the client,
+// ensuring all binary data is Base64 encoded.
 func (f *File) ToClientMetadata() *FileMetadataForClient {
 	return &FileMetadataForClient{
 		FileID:             f.FileID,
 		StorageID:          f.StorageID,
-		FilenameNonce:      f.FilenameNonce,
-		EncryptedFilename:  f.EncryptedFilename,
-		Sha256sumNonce:     f.Sha256sumNonce,
-		EncryptedSha256sum: f.EncryptedSha256sum,
+		PasswordHint:       f.PasswordHint,
+		PasswordType:       f.PasswordType,
+		FilenameNonce:      base64.StdEncoding.EncodeToString(f.FilenameNonce),
+		EncryptedFilename:  base64.StdEncoding.EncodeToString(f.EncryptedFilename),
+		Sha256sumNonce:     base64.StdEncoding.EncodeToString(f.Sha256sumNonce),
+		EncryptedSha256sum: base64.StdEncoding.EncodeToString(f.EncryptedSha256sum),
+		EncryptedFEK:       base64.StdEncoding.EncodeToString(f.EncryptedFEK),
 		SizeBytes:          f.SizeBytes,
 		UploadDate:         f.UploadDate,
 	}

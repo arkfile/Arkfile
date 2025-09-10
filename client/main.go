@@ -369,18 +369,9 @@ func encryptFileMetadata(this js.Value, args []js.Value) interface{} {
 		}
 	}
 
-	// Derive the metadata encryption key
-	metadataKey, err := derivePasswordMetadataKey(password, username)
-	// SECURITY: Clear password from memory after use
-	for i := range password {
-		password[i] = 0
-	}
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to derive metadata encryption key: " + err.Error(),
-		}
-	}
+	// Derive the metadata encryption key directly using DeriveAccountPasswordKey
+	// This matches the server-side approach - metadata uses account key, NOT FEK
+	metadataKey := crypto.DeriveAccountPasswordKey(password, username)
 
 	// Create AES-GCM cipher
 	block, err := aes.NewCipher(metadataKey)
@@ -432,7 +423,8 @@ func encryptFileMetadata(this js.Value, args []js.Value) interface{} {
 	}
 }
 
-// decryptFileMetadata decrypts filename and SHA256 hash for display
+// decryptFileMetadata decrypts filename and SHA256 hash using password-derived key directly.
+// The FEK is ONLY for file content, NOT for metadata.
 func decryptFileMetadata(this js.Value, args []js.Value) interface{} {
 	if len(args) != 5 {
 		return map[string]interface{}{
@@ -447,90 +439,54 @@ func decryptFileMetadata(this js.Value, args []js.Value) interface{} {
 	encryptedSha256B64 := args[3].String()
 	username := args[4].String()
 
-	// Get password for this user
+	// Get password for this user to derive metadata key
 	password, exists := userPasswords[username]
 	if !exists {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "No password found for user",
-		}
+		return map[string]interface{}{"success": false, "error": "No password found for user"}
 	}
 
-	// Derive the metadata encryption key
-	metadataKey, err := derivePasswordMetadataKey(password, username)
-	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to derive metadata encryption key: " + err.Error(),
-		}
-	}
+	// Derive the metadata encryption key directly from password
+	// This matches the server-side crypto.DeriveAccountPasswordKey
+	metadataKey := crypto.DeriveAccountPasswordKey(password, username)
 
-	// Create AES-GCM cipher
+	// Create AES-GCM cipher with the metadata key
 	block, err := aes.NewCipher(metadataKey)
 	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to create cipher: " + err.Error(),
-		}
+		return map[string]interface{}{"success": false, "error": "Failed to create cipher from metadata key: " + err.Error()}
 	}
-
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to create GCM: " + err.Error(),
-		}
+		return map[string]interface{}{"success": false, "error": "Failed to create GCM: " + err.Error()}
 	}
 
-	// Decode nonces and encrypted data
+	// Decode metadata fields
 	filenameNonce, err := base64.StdEncoding.DecodeString(filenameNonceB64)
 	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to decode filename nonce: " + err.Error(),
-		}
+		return map[string]interface{}{"success": false, "error": "Failed to decode filename nonce: " + err.Error()}
 	}
-
 	encryptedFilename, err := base64.StdEncoding.DecodeString(encryptedFilenameB64)
 	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to decode encrypted filename: " + err.Error(),
-		}
+		return map[string]interface{}{"success": false, "error": "Failed to decode encrypted filename: " + err.Error()}
 	}
-
 	sha256Nonce, err := base64.StdEncoding.DecodeString(sha256NonceB64)
 	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to decode SHA256 nonce: " + err.Error(),
-		}
+		return map[string]interface{}{"success": false, "error": "Failed to decode SHA256 nonce: " + err.Error()}
 	}
-
 	encryptedSha256, err := base64.StdEncoding.DecodeString(encryptedSha256B64)
 	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to decode encrypted SHA256: " + err.Error(),
-		}
+		return map[string]interface{}{"success": false, "error": "Failed to decode encrypted SHA256: " + err.Error()}
 	}
 
 	// Decrypt filename
 	filenameBytes, err := gcm.Open(nil, filenameNonce, encryptedFilename, nil)
 	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to decrypt filename: " + err.Error(),
-		}
+		return map[string]interface{}{"success": false, "error": "Failed to decrypt filename: " + err.Error()}
 	}
 
 	// Decrypt SHA256 hash
 	sha256Bytes, err := gcm.Open(nil, sha256Nonce, encryptedSha256, nil)
 	if err != nil {
-		return map[string]interface{}{
-			"success": false,
-			"error":   "Failed to decrypt SHA256: " + err.Error(),
-		}
+		return map[string]interface{}{"success": false, "error": "Failed to decrypt SHA256: " + err.Error()}
 	}
 
 	return map[string]interface{}{
@@ -1565,7 +1521,7 @@ func processFileListResponse(this js.Value, args []js.Value) interface{} {
 		sha256Nonce := file.Get("sha256sum_nonce").String()
 		encryptedSHA256 := file.Get("encrypted_sha256sum").String()
 
-		// Decrypt metadata using the shared crypto function
+		// Decrypt metadata using password-derived key (NOT FEK)
 		decryptResult := decryptFileMetadata(js.Value{}, []js.Value{
 			js.ValueOf(filenameNonce),
 			js.ValueOf(encryptedFilename),

@@ -25,6 +25,14 @@ var UnifiedArgonSecure = UnifiedArgonProfile{
 	KeyLen:  32,
 }
 
+// Static salts for FEK wrapping
+// These are intentionally static and not user-dependent to derive the FEK wrapping key.
+var (
+	FEKAccountSalt = []byte("arkfile-fek-account-salt-v1")
+	FEKCustomSalt  = []byte("arkfile-fek-custom-salt-v1")
+	FEKShareSalt   = []byte("arkfile-fek-share-salt-v1")
+)
+
 // DeriveArgon2IDKey derives a key using Argon2ID with specified parameters
 func DeriveArgon2IDKey(password, salt []byte, keyLen uint32, memory, time uint32, threads uint8) ([]byte, error) {
 	if len(password) == 0 {
@@ -53,6 +61,27 @@ func DerivePasswordMetadataKey(password []byte, salt []byte, username string) ([
 
 	info := fmt.Sprintf("arkfile-metadata-encryption:%s", username)
 	return hkdfExpand(baseKey, []byte(info), 32)
+}
+
+// DeriveAccountPasswordKey derives a key from an account password
+func DeriveAccountPasswordKey(password []byte, username string) []byte {
+	salt := sha256.Sum256([]byte("arkfile-account-key-salt:" + username))
+	key, _ := DeriveArgon2IDKey(password, salt[:], UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
+	return key
+}
+
+// DeriveCustomPasswordKey derives a key from a custom file password
+func DeriveCustomPasswordKey(password []byte, username string) []byte {
+	salt := sha256.Sum256([]byte("arkfile-custom-key-salt:" + username))
+	key, _ := DeriveArgon2IDKey(password, salt[:], UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
+	return key
+}
+
+// DeriveSharePasswordKey derives a key from a share password
+func DeriveSharePasswordKey(password []byte, username string) []byte {
+	salt := sha256.Sum256([]byte("arkfile-share-key-salt:" + username))
+	key, _ := DeriveArgon2IDKey(password, salt[:], UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
+	return key
 }
 
 // hkdfExpand performs HKDF-Expand operation

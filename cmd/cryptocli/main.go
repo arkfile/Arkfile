@@ -27,6 +27,10 @@ USAGE:
 COMMANDS:
     encrypt-password  Encrypt files using password-based key derivation
     decrypt-password  Decrypt files using password-based key derivation
+    encrypt-metadata  Encrypt file metadata (filename, hash) using password-derived key
+    decrypt-metadata  Decrypt file metadata (filename, hash) using password-derived key
+    encrypt-fek       Encrypt a File Encryption Key (FEK) using password-derived key
+    decrypt-fek       Decrypt a File Encryption Key (FEK) using password-derived key
     hash              Calculate SHA-256 hash of files
     generate-key      Generate random AES keys
     generate-test-file Generate test files with deterministic patterns
@@ -103,6 +107,26 @@ func main() {
 	case "decrypt-password":
 		if err := handleDecryptPasswordCommand(args); err != nil {
 			logError("Password-based decryption failed: %v", err)
+			os.Exit(1)
+		}
+	case "encrypt-metadata":
+		if err := handleEncryptMetadataCommand(args); err != nil {
+			logError("Metadata encryption failed: %v", err)
+			os.Exit(1)
+		}
+	case "decrypt-metadata":
+		if err := handleDecryptMetadataCommand(args); err != nil {
+			logError("Metadata decryption failed: %v", err)
+			os.Exit(1)
+		}
+	case "encrypt-fek":
+		if err := handleEncryptFEKCommand(args); err != nil {
+			logError("FEK encryption failed: %v", err)
+			os.Exit(1)
+		}
+	case "decrypt-fek":
+		if err := handleDecryptFEKCommand(args); err != nil {
+			logError("FEK decryption failed: %v", err)
 			os.Exit(1)
 		}
 	case "derive-export-key":
@@ -364,12 +388,16 @@ EXAMPLES:
 	}
 
 	// Always prompt for password securely
-	fmt.Printf("Enter %s password for user '%s': ", *keyType, *username)
-	passwordStr, err := readPassword()
+	password, err := readPassword(fmt.Sprintf("Enter %s password for user '%s': ", *keyType, *username))
 	if err != nil {
 		return fmt.Errorf("failed to read password: %w", err)
 	}
-	if passwordStr == "" {
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	if len(password) == 0 {
 		return fmt.Errorf("password cannot be empty")
 	}
 
@@ -377,11 +405,11 @@ EXAMPLES:
 	var validation *crypto.PasswordValidationResult
 	switch *keyType {
 	case "account":
-		validation = crypto.ValidateAccountPassword(passwordStr)
+		validation = crypto.ValidateAccountPassword(string(password))
 	case "custom":
-		validation = crypto.ValidateCustomPassword(passwordStr)
+		validation = crypto.ValidateCustomPassword(string(password))
 	case "share":
-		validation = crypto.ValidateSharePassword(passwordStr)
+		validation = crypto.ValidateSharePassword(string(password))
 	}
 
 	if !validation.MeetsRequirement {
@@ -407,12 +435,9 @@ EXAMPLES:
 	logVerbose("Using unified Argon2ID parameters: 8 iterations, 256MB memory, 4 threads")
 
 	// Use core crypto function for encryption
-	if err := crypto.EncryptFileToPath(*filePath, getOutputPath(*filePath, *outputPath), []byte(passwordStr), *username, *keyType); err != nil {
+	if err := crypto.EncryptFileToPath(*filePath, getOutputPath(*filePath, *outputPath), password, *username, *keyType); err != nil {
 		return fmt.Errorf("encryption failed: %w", err)
 	}
-
-	// Clear password from memory
-	passwordStr = ""
 
 	// Get file sizes for reporting
 	inputInfo, err := os.Stat(*filePath)
@@ -486,12 +511,16 @@ EXAMPLES:
 	if *keyType != "" {
 		prompt = fmt.Sprintf("Enter %s password for user '%s'", *keyType, *username)
 	}
-	fmt.Print(prompt + ": ")
-	passwordStr, err := readPassword()
+	password, err := readPassword(prompt + ": ")
 	if err != nil {
 		return fmt.Errorf("failed to read password: %w", err)
 	}
-	if passwordStr == "" {
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	if len(password) == 0 {
 		return fmt.Errorf("password cannot be empty")
 	}
 
@@ -499,13 +528,10 @@ EXAMPLES:
 
 	// Use core crypto function for decryption
 	outputFilePath := getOutputPath(*filePath, *outputPath)
-	detectedKeyType, err := crypto.DecryptFileFromPath(*filePath, outputFilePath, []byte(passwordStr), *username)
+	detectedKeyType, err := crypto.DecryptFileFromPath(*filePath, outputFilePath, password, *username)
 	if err != nil {
 		return fmt.Errorf("decryption failed: %w", err)
 	}
-
-	// Clear password from memory
-	passwordStr = ""
 
 	// Validate key type if specified, otherwise update it
 	if *keyType == "" {
@@ -536,6 +562,367 @@ EXAMPLES:
 	return nil
 }
 
+// handleEncryptMetadataCommand processes the encrypt-metadata command
+func handleEncryptMetadataCommand(args []string) error {
+	fs := flag.NewFlagSet("encrypt-metadata", flag.ExitOnError)
+	var (
+		filename       = fs.String("filename", "", "Filename to encrypt (required)")
+		sha256sum      = fs.String("sha256sum", "", "SHA256 hash to encrypt (required)")
+		username       = fs.String("username", "", "Username for salt generation (required)")
+		passwordSource = fs.String("password-source", "prompt", "Password source: prompt or stdin")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli encrypt-metadata [FLAGS]
+
+Encrypts file metadata (filename, SHA256 hash) using a password-derived key.
+Metadata is encrypted separately from file content and uses a key derived directly from the password.
+
+FLAGS:
+    --filename FILE         Filename to encrypt (required)
+    --sha256sum HASH        SHA256 hash to encrypt (required)
+    --username USER         Username for salt generation (required)
+    --password-source SRC   Password source: prompt or stdin (default: prompt)
+    --help                  Show this help message
+
+EXAMPLE:
+    cryptocli encrypt-metadata --filename "document.pdf" --sha256sum "abc123..." --username "alice"
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *filename == "" || *sha256sum == "" || *username == "" {
+		fs.Usage()
+		return fmt.Errorf("filename, sha256sum, and username are required")
+	}
+
+	// Read password
+	var password []byte
+	var err error
+	if *passwordSource == "stdin" {
+		reader := bufio.NewReader(os.Stdin)
+		passwordStr, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read password from stdin: %w", err)
+		}
+		password = []byte(strings.TrimSpace(passwordStr))
+	} else {
+		password, err = readPassword(fmt.Sprintf("Enter password for user '%s' to encrypt metadata: ", *username))
+		if err != nil {
+			return fmt.Errorf("failed to read password: %w", err)
+		}
+	}
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	if len(password) == 0 {
+		return fmt.Errorf("password cannot be empty")
+	}
+
+	// Derive metadata key directly from password (account key type)
+	// Metadata always uses the account password key derivation
+	metadataKey := crypto.DeriveAccountPasswordKey(password, *username)
+	logVerbose("Derived metadata key using account password derivation for user: %s", *username)
+
+	// Encrypt filename
+	encryptedFilename, err := crypto.EncryptGCM([]byte(*filename), metadataKey)
+	if err != nil {
+		return fmt.Errorf("filename encryption failed: %w", err)
+	}
+
+	// Encrypt SHA256
+	encryptedSha256, err := crypto.EncryptGCM([]byte(*sha256sum), metadataKey)
+	if err != nil {
+		return fmt.Errorf("SHA256 encryption failed: %w", err)
+	}
+
+	// Print results
+	fmt.Printf("Metadata encrypted successfully\n")
+	fmt.Printf("Encrypted Filename: %s\n", base64.StdEncoding.EncodeToString(encryptedFilename))
+	fmt.Printf("Encrypted SHA256: %s\n", base64.StdEncoding.EncodeToString(encryptedSha256))
+
+	return nil
+}
+
+// handleDecryptMetadataCommand processes the decrypt-metadata command
+func handleDecryptMetadataCommand(args []string) error {
+	fs := flag.NewFlagSet("decrypt-metadata", flag.ExitOnError)
+	var (
+		encryptedFilename  = fs.String("encrypted-filename", "", "Base64 encoded encrypted filename (required)")
+		encryptedSha256sum = fs.String("encrypted-sha256sum", "", "Base64 encoded encrypted SHA256 sum (required)")
+		username           = fs.String("username", "", "Username for salt generation (required)")
+		passwordSource     = fs.String("password-source", "prompt", "Password source: prompt or stdin")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli decrypt-metadata [FLAGS]
+
+Decrypts file metadata (filename, SHA256 hash) using a password-derived key.
+Metadata is encrypted separately from file content and uses a key derived directly from the password.
+
+FLAGS:
+    --encrypted-filename    Base64 encoded encrypted filename (required)
+    --encrypted-sha256sum   Base64 encoded encrypted SHA256 sum (required)
+    --username USER         Username for salt generation (required)
+    --password-source SRC   Password source: prompt or stdin (default: prompt)
+    --help                 Show this help message
+
+EXAMPLE:
+    cryptocli decrypt-metadata --encrypted-filename "..." --encrypted-sha256sum "..." --username "alice"
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *encryptedFilename == "" || *encryptedSha256sum == "" || *username == "" {
+		fs.Usage()
+		return fmt.Errorf("encrypted-filename, encrypted-sha256sum, and username are required")
+	}
+
+	// Read password
+	var password []byte
+	var err error
+	if *passwordSource == "stdin" {
+		reader := bufio.NewReader(os.Stdin)
+		passwordStr, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read password from stdin: %w", err)
+		}
+		password = []byte(strings.TrimSpace(passwordStr))
+	} else {
+		password, err = readPassword(fmt.Sprintf("Enter password for user '%s' to decrypt metadata: ", *username))
+		if err != nil {
+			return fmt.Errorf("failed to read password: %w", err)
+		}
+	}
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	if len(password) == 0 {
+		return fmt.Errorf("password cannot be empty")
+	}
+
+	// Decode inputs
+	filenameEnc, err := base64.StdEncoding.DecodeString(*encryptedFilename)
+	if err != nil {
+		return fmt.Errorf("failed to decode encrypted-filename: %w", err)
+	}
+	sha256sumEnc, err := base64.StdEncoding.DecodeString(*encryptedSha256sum)
+	if err != nil {
+		return fmt.Errorf("failed to decode encrypted-sha256sum: %w", err)
+	}
+
+	// Derive metadata key directly from password (account key type)
+	// Metadata always uses the account password key derivation
+	metadataKey := crypto.DeriveAccountPasswordKey(password, *username)
+	logVerbose("Derived metadata key using account password derivation for user: %s", *username)
+
+	// Decrypt filename with the metadata key (NOT the FEK)
+	filenameBytes, err := crypto.DecryptGCM(filenameEnc, metadataKey)
+	if err != nil {
+		return fmt.Errorf("filename decryption failed: %w", err)
+	}
+
+	// Decrypt hash with the metadata key (NOT the FEK)
+	sha256sumBytes, err := crypto.DecryptGCM(sha256sumEnc, metadataKey)
+	if err != nil {
+		// Log error but continue to show filename if hash fails
+		logError("SHA256 sum decryption failed: %v", err)
+		sha256sumBytes = []byte{} // Ensure it's empty on failure
+	}
+
+	// Print results
+	fmt.Printf("Decrypted Filename: %s\n", string(filenameBytes))
+	if len(sha256sumBytes) > 0 {
+		fmt.Printf("Decrypted SHA256: %s\n", string(sha256sumBytes))
+	}
+
+	return nil
+}
+
+// handleEncryptFEKCommand processes the encrypt-fek command
+func handleEncryptFEKCommand(args []string) error {
+	fs := flag.NewFlagSet("encrypt-fek", flag.ExitOnError)
+	var (
+		fekHex         = fs.String("fek", "", "File Encryption Key in hex format (required)")
+		username       = fs.String("username", "", "Username for salt generation (required)")
+		passwordSource = fs.String("password-source", "prompt", "Password source: prompt or stdin")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli encrypt-fek [FLAGS]
+
+Encrypts a File Encryption Key (FEK) using a password-derived key.
+The FEK is encrypted with the account password key derivation.
+
+FLAGS:
+    --fek HEX              File Encryption Key in hex format (required)
+    --username USER        Username for salt generation (required)
+    --password-source SRC  Password source: prompt or stdin (default: prompt)
+    --help                 Show this help message
+
+EXAMPLE:
+    cryptocli encrypt-fek --fek "abc123..." --username "alice"
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *fekHex == "" || *username == "" {
+		fs.Usage()
+		return fmt.Errorf("fek and username are required")
+	}
+
+	// Decode FEK from hex
+	fek, err := hex.DecodeString(*fekHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode FEK from hex: %w", err)
+	}
+
+	// Validate FEK length (should be 32 bytes for AES-256)
+	if len(fek) != 32 {
+		return fmt.Errorf("FEK must be 32 bytes (256 bits) for AES-256, got %d bytes", len(fek))
+	}
+
+	// Read password
+	var password []byte
+	if *passwordSource == "stdin" {
+		reader := bufio.NewReader(os.Stdin)
+		passwordStr, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read password from stdin: %w", err)
+		}
+		password = []byte(strings.TrimSpace(passwordStr))
+	} else {
+		password, err = readPassword(fmt.Sprintf("Enter password for user '%s' to encrypt FEK: ", *username))
+		if err != nil {
+			return fmt.Errorf("failed to read password: %w", err)
+		}
+	}
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	if len(password) == 0 {
+		return fmt.Errorf("password cannot be empty")
+	}
+
+	// Derive key for FEK encryption using account password derivation
+	encryptionKey := crypto.DeriveAccountPasswordKey(password, *username)
+	logVerbose("Derived FEK encryption key using account password derivation for user: %s", *username)
+
+	// Encrypt FEK
+	encryptedFEK, err := crypto.EncryptGCM(fek, encryptionKey)
+	if err != nil {
+		return fmt.Errorf("FEK encryption failed: %w", err)
+	}
+
+	// Print result
+	fmt.Printf("FEK encrypted successfully\n")
+	fmt.Printf("Encrypted FEK (base64): %s\n", base64.StdEncoding.EncodeToString(encryptedFEK))
+
+	return nil
+}
+
+// handleDecryptFEKCommand processes the decrypt-fek command
+func handleDecryptFEKCommand(args []string) error {
+	fs := flag.NewFlagSet("decrypt-fek", flag.ExitOnError)
+	var (
+		encryptedFEK   = fs.String("encrypted-fek", "", "Base64 encoded encrypted FEK (required)")
+		username       = fs.String("username", "", "Username for salt generation (required)")
+		passwordSource = fs.String("password-source", "prompt", "Password source: prompt or stdin")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli decrypt-fek [FLAGS]
+
+Decrypts a File Encryption Key (FEK) using a password-derived key.
+The FEK is decrypted with the account password key derivation.
+
+FLAGS:
+    --encrypted-fek B64    Base64 encoded encrypted FEK (required)
+    --username USER        Username for salt generation (required)
+    --password-source SRC  Password source: prompt or stdin (default: prompt)
+    --help                 Show this help message
+
+EXAMPLE:
+    cryptocli decrypt-fek --encrypted-fek "..." --username "alice"
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *encryptedFEK == "" || *username == "" {
+		fs.Usage()
+		return fmt.Errorf("encrypted-fek and username are required")
+	}
+
+	// Decode encrypted FEK from base64
+	fekEnc, err := base64.StdEncoding.DecodeString(*encryptedFEK)
+	if err != nil {
+		return fmt.Errorf("failed to decode encrypted FEK: %w", err)
+	}
+
+	// Read password
+	var password []byte
+	if *passwordSource == "stdin" {
+		reader := bufio.NewReader(os.Stdin)
+		passwordStr, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read password from stdin: %w", err)
+		}
+		password = []byte(strings.TrimSpace(passwordStr))
+	} else {
+		password, err = readPassword(fmt.Sprintf("Enter password for user '%s' to decrypt FEK: ", *username))
+		if err != nil {
+			return fmt.Errorf("failed to read password: %w", err)
+		}
+	}
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	if len(password) == 0 {
+		return fmt.Errorf("password cannot be empty")
+	}
+
+	// Derive key for FEK decryption using account password derivation
+	decryptionKey := crypto.DeriveAccountPasswordKey(password, *username)
+	logVerbose("Derived FEK decryption key using account password derivation for user: %s", *username)
+
+	// Decrypt FEK
+	fekBytes, err := crypto.DecryptGCM(fekEnc, decryptionKey)
+	if err != nil {
+		return fmt.Errorf("FEK decryption failed: %w", err)
+	}
+
+	// Validate FEK length
+	if len(fekBytes) != 32 {
+		return fmt.Errorf("decrypted FEK must be 32 bytes (256 bits) for AES-256, got %d bytes", len(fekBytes))
+	}
+
+	// Print result
+	fmt.Printf("FEK decrypted successfully\n")
+	fmt.Printf("Decrypted FEK (hex): %s\n", hex.EncodeToString(fekBytes))
+
+	return nil
+}
+
 // Helper functions
 
 func printVersion() {
@@ -557,22 +944,23 @@ func logError(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "[ERROR] "+format+"\n", args...)
 }
 
-func readPassword() (string, error) {
+func readPassword(prompt string) ([]byte, error) {
 	if term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Print(prompt)
 		password, err := term.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		fmt.Println() // Print newline after password input
-		return string(password), nil
+		return password, nil
 	} else {
 		// Fallback for non-terminal input
 		reader := bufio.NewReader(os.Stdin)
-		password, err := reader.ReadString('\n')
+		passwordStr, err := reader.ReadString('\n')
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		return strings.TrimSpace(password), nil
+		return []byte(strings.TrimSpace(passwordStr)), nil
 	}
 }
 

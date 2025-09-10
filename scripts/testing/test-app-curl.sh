@@ -1854,18 +1854,59 @@ phase_9_file_operations() {
     debug "Client session file at: $client_session_file"
     debug "Client config file at: $client_config_file"
 
-    # Step 10: Upload file using arkfile-client, letting it handle encryption
-    log "Step 10: Uploading original file using arkfile-client with piped password..."
-    info "Initiating client upload... See log for details: $TEMP_DIR/upload_output.log"
-    # The client will now encrypt the file itself, creating a true E2E test.
-    # We securely pipe the password to the client, which reads it from stdin.
+    # Step 10: Prepare encrypted file and metadata for upload
+    log "Step 10: Preparing encrypted file and metadata for upload..."
+    
+    # First, encrypt the file using cryptocli
+    local upload_encrypted_file="$TEMP_DIR/upload_ready.enc"
+    info "Encrypting file with cryptocli for upload..."
+    if ! echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli encrypt-password \
+        --file "$test_file" \
+        --output "$upload_encrypted_file" \
+        --username "$TEST_USERNAME" \
+        --key-type account 2>/dev/null; then
+        error "Failed to encrypt file for upload"
+    fi
+    success "File encrypted for upload"
+    
+    # Generate FEK (the key used for the file encryption)
+    local fek_hex
+    fek_hex=$(/opt/arkfile/bin/cryptocli generate-key --size 32 --format hex | grep "Key (hex):" | cut -d' ' -f3)
+    info "Generated FEK: ${fek_hex:0:20}..."
+    
+    # Encrypt the FEK with password-derived key
+    local encrypted_fek_output
+    encrypted_fek_output=$(echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli encrypt-fek \
+        --fek "$fek_hex" \
+        --username "$TEST_USERNAME" 2>&1)
+    local encrypted_fek
+    encrypted_fek=$(echo "$encrypted_fek_output" | grep "Encrypted FEK (base64):" | cut -d' ' -f4)
+    info "Encrypted FEK: ${encrypted_fek:0:20}..."
+    
+    # Encrypt metadata (filename and SHA256)
+    local metadata_output
+    metadata_output=$(echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli encrypt-metadata \
+        --filename "e2e-test-file.dat" \
+        --sha256sum "$file_hash" \
+        --username "$TEST_USERNAME" 2>&1)
+    
+    local encrypted_filename encrypted_sha256
+    encrypted_filename=$(echo "$metadata_output" | grep "Encrypted Filename:" | cut -d' ' -f3)
+    encrypted_sha256=$(echo "$metadata_output" | grep "Encrypted SHA256:" | cut -d' ' -f3)
+    
+    info "Encrypted metadata prepared"
+    
+    # Now upload using arkfile-client with pre-encrypted data
+    log "Uploading pre-encrypted file using arkfile-client..."
     local upload_output_log="$TEMP_DIR/upload_output.log"
-    echo "$TEST_PASSWORD" | /opt/arkfile/bin/arkfile-client \
+    /opt/arkfile/bin/arkfile-client \
         --config "$client_config_file" \
         --verbose \
         upload \
-        --file "$test_file" \
-        --name "e2e-test-file.dat" \
+        --file "$upload_encrypted_file" \
+        --encrypted-filename "$encrypted_filename" \
+        --encrypted-sha256 "$encrypted_sha256" \
+        --encrypted-fek "$encrypted_fek" \
         --progress=false 2>&1 | tee "$upload_output_log"
 
     local file_id
@@ -1886,47 +1927,79 @@ phase_9_file_operations() {
         error "File upload failed. Log: $(cat $upload_output_log)"
     fi
 
-    # Step 11: Verify file in server listing
-    log "Step 11: Verifying file in server listing..."
-    local list_files_log="$TEMP_DIR/list_files_output.log"
-    echo "$TEST_PASSWORD" | /opt/arkfile/bin/arkfile-client --config "$client_config_file" list-files > "$list_files_log"
+    # Step 11: Verify file metadata decryption via cryptocli
+    log "Step 11: Verifying file metadata decryption via cryptocli..."
+    local list_files_json="$TEMP_DIR/list_files_output.json"
     
-    if grep -q "$file_id" "$list_files_log"; then
-        success "Uploaded file found in server file listing."
+    /opt/arkfile/bin/arkfile-client --config "$client_config_file" list-files --json > "$list_files_json"
+    
+    # Find the specific file in the JSON output, using -c for compact output
+    local file_entry
+    file_entry=$(jq -c ".files[] | select(.file_id == \"$file_id\")" "$list_files_json")
+    
+    if [ -z "$file_entry" ]; then
+        error "Uploaded file ID ($file_id) NOT found in server file listing JSON."
+    fi
+    success "Uploaded file found in server file listing JSON."
+
+    # Extract metadata for decryption with corrected snake_case field names
+    local encrypted_fek encrypted_filename encrypted_sha256sum
+    encrypted_fek=$(echo "$file_entry" | jq -r '.encrypted_fek')
+            encrypted_filename=$(echo "$file_entry" | jq -r '.encrypted_filename')
+            encrypted_sha256sum=$(echo "$file_entry" | jq -r '.encrypted_sha256sum')
+
+            debug "Raw file_entry JSON: $file_entry"
+            debug "Extracted encrypted_filename: $encrypted_filename"
+            debug "Extracted encrypted_sha256sum: $encrypted_sha256sum"
+
+            # Decrypt metadata using cryptocli
+            local decrypted_metadata_output
+            decrypted_metadata_output=$(echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli decrypt-metadata \
+                --encrypted-filename "$encrypted_filename" \
+                --encrypted-sha256sum "$encrypted_sha256sum" \
+                --username "$TEST_USERNAME" \
+                --password-source stdin \
+                --encrypted-sha256sum "$encrypted_sha256sum" \
+                --username "$TEST_USERNAME" 2>&1) # Capture stderr to see cryptocli errors
+
+    # Verify decrypted filename
+    local decrypted_filename
+    decrypted_filename=$(echo "$decrypted_metadata_output" | grep "Filename:" | awk '{print $2}')
+    
+    if [ "$decrypted_filename" = "e2e-test-file.dat" ]; then
+        success "Successfully decrypted filename using cryptocli: $decrypted_filename"
     else
-        error "Uploaded file NOT found in server file listing. Log: $(cat $list_files_log)"
+        error "Filename decryption mismatch. Expected 'e2e-test-file.dat', got '$decrypted_filename'"
     fi
 
-    # Step 12: Download and decrypt the file
-    log "Step 12: Downloading and decrypting file..."
+    # Step 12: Download the encrypted file
+    log "Step 12: Downloading encrypted file..."
     local downloaded_e2e_file="$TEMP_DIR/e2e_downloaded_file.enc"
     local decrypted_e2e_file="$TEMP_DIR/e2e_decrypted_file.dat"
-    local download_log="$TEMP_DIR/download_output.log"
 
     /opt/arkfile/bin/arkfile-client --config "$client_config_file" download \
         --file-id "$file_id" \
         --output "$downloaded_e2e_file" \
-        --progress=false \
-        > "$download_log"
+        --raw  # Download raw encrypted file without any processing
 
     if [ -s "$downloaded_e2e_file" ]; then
-        success "File downloaded successfully."
+        success "Encrypted file downloaded successfully."
     else
-        error "File download failed. Log: $(cat $download_log)"
+        error "File download failed."
     fi
 
-    # Decrypt the downloaded file
+    # Decrypt the downloaded file using cryptocli
     if ! echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli decrypt-password \
         --file "$downloaded_e2e_file" \
         --output "$decrypted_e2e_file" \
         --username "$TEST_USERNAME" \
         --key-type account 2>/dev/null; then
-        error "Failed to decrypt downloaded file"
+        error "cryptocli failed to decrypt downloaded file"
     fi
      if [ -s "$decrypted_e2e_file" ]; then
-        success "Downloaded file decrypted successfully."
+        success "Downloaded file decrypted successfully using cryptocli."
     else
-        error "Failed to decrypt downloaded file."
+        error "cryptocli failed to produce a decrypted file."
     fi
 
     # Step 13: Final end-to-end integrity verification

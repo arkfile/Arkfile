@@ -14,24 +14,6 @@ func DeriveShareKey(password, salt []byte) []byte {
 	return argon2.IDKey(password, salt, UnifiedArgonSecure.Time, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Threads, UnifiedArgonSecure.KeyLen)
 }
 
-// DeriveAccountPasswordKey derives a key from account password using unified Argon2ID parameters
-func DeriveAccountPasswordKey(password []byte, username string) []byte {
-	salt := GenerateUserKeySalt(username, "account")
-	return argon2.IDKey(password, salt, UnifiedArgonSecure.Time, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Threads, UnifiedArgonSecure.KeyLen)
-}
-
-// DeriveCustomPasswordKey derives a key from custom password using unified Argon2ID parameters
-func DeriveCustomPasswordKey(password []byte, username string) []byte {
-	salt := GenerateUserKeySalt(username, "custom")
-	return argon2.IDKey(password, salt, UnifiedArgonSecure.Time, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Threads, UnifiedArgonSecure.KeyLen)
-}
-
-// DeriveSharePasswordKey derives a key from share password using unified Argon2ID parameters
-func DeriveSharePasswordKey(password []byte, username string) []byte {
-	salt := GenerateUserKeySalt(username, "share")
-	return argon2.IDKey(password, salt, UnifiedArgonSecure.Time, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Threads, UnifiedArgonSecure.KeyLen)
-}
-
 // GenerateUserKeySalt creates a deterministic salt from username and key type
 // This allows offline key derivation without storing additional metadata
 func GenerateUserKeySalt(username, keyType string) []byte {

@@ -272,39 +272,18 @@ func ListFiles(c echo.Context) error {
 
 	logging.InfoLogger.Printf("ListFiles: Successfully retrieved %d files for user: %s", len(files), username)
 
-	// Convert files to client metadata format
-	var fileList []map[string]interface{}
+	// Refactored to use ToClientMetadata for consistency and correctness
+	type FileListResponseItem struct {
+		*models.FileMetadataForClient
+		SizeReadable string `json:"size_readable"`
+	}
+
+	var fileList []FileListResponseItem
 	for _, file := range files {
-		// Add safety checks for nil byte slices to prevent base64 encoding errors
-		var filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum string
-
-		if file.FilenameNonce != nil {
-			filenameNonce = base64.StdEncoding.EncodeToString(file.FilenameNonce)
-		}
-		if file.EncryptedFilename != nil {
-			encryptedFilename = base64.StdEncoding.EncodeToString(file.EncryptedFilename)
-		}
-		if file.Sha256sumNonce != nil {
-			sha256sumNonce = base64.StdEncoding.EncodeToString(file.Sha256sumNonce)
-		}
-		if file.EncryptedSha256sum != nil {
-			encryptedSha256sum = base64.StdEncoding.EncodeToString(file.EncryptedSha256sum)
-		}
-
-		fileMetadata := map[string]interface{}{
-			"file_id":            file.FileID,
-			"storage_id":         file.StorageID,
-			"passwordHint":       file.PasswordHint,
-			"passwordType":       file.PasswordType,
-			"filenameNonce":      filenameNonce,
-			"encryptedFilename":  encryptedFilename,
-			"sha256sumNonce":     sha256sumNonce,
-			"encryptedSha256sum": encryptedSha256sum,
-			"size_bytes":         file.SizeBytes,
-			"size_readable":      formatBytes(file.SizeBytes),
-			"uploadDate":         file.UploadDate,
-		}
-		fileList = append(fileList, fileMetadata)
+		fileList = append(fileList, FileListResponseItem{
+			FileMetadataForClient: file.ToClientMetadata(),
+			SizeReadable:          formatBytes(file.SizeBytes),
+		})
 	}
 
 	// Get user's storage information

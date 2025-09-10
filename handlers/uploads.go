@@ -294,11 +294,11 @@ func DownloadFileChunk(c echo.Context) error {
 	c.Response().Header().Set("X-Total-Chunks", strconv.FormatInt(totalChunks, 10))
 	c.Response().Header().Set("X-File-Size", strconv.FormatInt(file.SizeBytes, 10))
 
-	// Return encrypted metadata for client-side decryption (base64 encoded)
-	c.Response().Header().Set("X-Encrypted-Filename", base64.StdEncoding.EncodeToString(clientMetadata.EncryptedFilename))
-	c.Response().Header().Set("X-Filename-Nonce", base64.StdEncoding.EncodeToString(clientMetadata.FilenameNonce))
-	c.Response().Header().Set("X-Encrypted-Sha256sum", base64.StdEncoding.EncodeToString(clientMetadata.EncryptedSha256sum))
-	c.Response().Header().Set("X-Sha256sum-Nonce", base64.StdEncoding.EncodeToString(clientMetadata.Sha256sumNonce))
+	// Return encrypted metadata for client-side decryption (already base64 encoded)
+	c.Response().Header().Set("X-Encrypted-Filename", clientMetadata.EncryptedFilename)
+	c.Response().Header().Set("X-Filename-Nonce", clientMetadata.FilenameNonce)
+	c.Response().Header().Set("X-Encrypted-Sha256sum", clientMetadata.EncryptedSha256sum)
+	c.Response().Header().Set("X-Sha256sum-Nonce", clientMetadata.Sha256sumNonce)
 	c.Response().Header().Set("X-Password-Hint", file.PasswordHint)
 	c.Response().Header().Set("X-Password-Type", file.PasswordType)
 
@@ -798,18 +798,11 @@ func CompleteUpload(c echo.Context) error {
 	}
 
 	// Step 5: Complete the multipart upload in storage (using streaming hash instead of storage-calculated hash)
-	if len(envelopeData) > 0 {
-		err = storage.Provider.CompleteMultipartUploadWithEnvelope(c.Request().Context(), storageID.String, storageUploadID.String, parts, envelopeData, totalSize, paddedSize)
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to complete storage upload with envelope via storage provider: %v", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
-		}
-	} else {
-		err = storage.Provider.CompleteMultipartUploadWithPadding(c.Request().Context(), storageID.String, storageUploadID.String, parts, totalSize, paddedSize)
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to complete storage upload with padding via storage provider: %v", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
-		}
+	// Always use CompleteMultipartUploadWithEnvelope as it handles both envelope and non-envelope cases
+	err = storage.Provider.CompleteMultipartUploadWithEnvelope(c.Request().Context(), storageID.String, storageUploadID.String, parts, envelopeData, totalSize, paddedSize)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to complete storage upload via storage provider: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
 	}
 
 	// Step 6: Begin the final, short-lived transaction now that I/O is complete.

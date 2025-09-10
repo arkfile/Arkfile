@@ -426,6 +426,11 @@ func (m *MinioStorage) CompleteMultipartUploadWithPadding(ctx context.Context, s
 
 // Phase 3: CompleteMultipartUploadWithEnvelope completes a multipart upload and prepends envelope
 func (m *MinioStorage) CompleteMultipartUploadWithEnvelope(ctx context.Context, storageID, uploadID string, parts []minio.CompletePart, envelope []byte, originalSize, paddedSize int64) error {
+	// If no envelope, just complete normally with padding if needed
+	if len(envelope) == 0 {
+		return m.CompleteMultipartUploadWithPadding(ctx, storageID, uploadID, parts, originalSize, paddedSize)
+	}
+
 	// Step 1: Complete the multipart upload to get concatenated chunks
 	err := m.CompleteMultipartUpload(ctx, storageID, uploadID, parts)
 	if err != nil {

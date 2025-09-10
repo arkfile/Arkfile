@@ -159,6 +159,7 @@ declare global {
   function decryptFileWithFEKWASM(encryptedFileBase64: string, fek: Uint8Array): { success: boolean; data?: string; error?: string };
 
   // Metadata Encryption/Decryption Functions (Phase 7: Encrypted Metadata)
+  // Note: These functions use password-derived keys for metadata, NOT the FEK
   function encryptFileMetadata(exportKey: string, username: string, filename: string, sha256sum: string): {
     success: boolean;
     encryptedFilename?: string;
@@ -167,7 +168,7 @@ declare global {
     sha256sumNonce?: string;
     error?: string;
   };
-  function decryptFileMetadata(exportKey: string, username: string, encryptedFilename: string, filenameNonce: string, encryptedSha256sum: string, sha256sumNonce: string): {
+  function decryptFileMetadata(exportKey: string, username: string, encryptedFilename: string, encryptedSha256sum: string, sha256sumNonce: string): {
     success: boolean;
     filename?: string;
     sha256sum?: string;

@@ -1,11 +1,14 @@
 // arkfile-client - Secure file sharing client with OPAQUE authentication
 // This tool provides authenticated server communication for file operations
+// NOTE: This client does NOT perform any encryption/decryption operations
+// All crypto operations must be done with the cryptocli tool
 
 package main
 
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -19,15 +22,11 @@ import (
 	"syscall"
 	"time"
 
-	"crypto/sha256"
-
 	"golang.org/x/term"
-
-	"github.com/84adam/Arkfile/crypto"
 )
 
 const (
-	Version = "1.0.0-static"
+	Version = "2.0.0-static"
 	Usage   = `arkfile-client - Secure file sharing client with OPAQUE authentication
 
 USAGE:
@@ -35,10 +34,9 @@ USAGE:
 
 COMMANDS:
     login         Authenticate with arkfile server
-    upload        Upload file to server
-    download      Download file from server  
-    list-files    List available files
-    create-share  Create anonymous share link
+    upload        Upload pre-encrypted file to server
+    download      Download encrypted file from server  
+    list-files    List available files (encrypted metadata)
     logout        Logout and clear session
     version       Show version information
 
@@ -50,13 +48,21 @@ GLOBAL OPTIONS:
     --verbose, -v       Verbose output
     --help, -h          Show help
 
+IMPORTANT:
+    This client does NOT perform encryption/decryption.
+    Use 'cryptocli' for all cryptographic operations.
+
+WORKFLOW:
+    1. Encrypt file: cryptocli encrypt-password --file doc.pdf --username alice
+    2. Upload: arkfile-client upload --file doc.pdf.enc --metadata metadata.json
+    3. Download: arkfile-client download --file-id xyz --output encrypted.dat
+    4. Decrypt: cryptocli decrypt-password --file encrypted.dat --username alice
+
 EXAMPLES:
     arkfile-client login --username alice
-    arkfile-client upload --file document.pdf
-    arkfile-client download --file document.pdf --output ./downloads/
-    arkfile-client --server-url https://files.example.com login --username alice
-    arkfile-client create-share --file document.pdf --password sharepass123
-    arkfile-client list-files
+    arkfile-client upload --file document.pdf.enc --metadata metadata.json
+    arkfile-client download --file-id abc123 --output downloaded.enc
+    arkfile-client list-files --json
 `
 )
 
@@ -95,26 +101,27 @@ type Response struct {
 	Message             string                 `json:"message"`
 	Data                map[string]interface{} `json:"data"`
 	Error               string                 `json:"error"`
-	TempToken           string                 `json:"temp_token"`
-	SessionKey          string                 `json:"session_key"`
-	RequiresTOTP        bool                   `json:"requires_totp"`
+	TempToken           string                 `json:"tempToken"`
+	SessionKey          string                 `json:"sessionKey"`
+	RequiresTOTP        bool                   `json:"requiresTOTP"`
 	Token               string                 `json:"token"`
-	RefreshToken        string                 `json:"refresh_token"`
-	ExpiresAt           time.Time              `json:"expires_at"`
+	RefreshToken        string                 `json:"refreshToken"`
+	ExpiresAt           time.Time              `json:"expiresAt"`
 	SessionID           string                 `json:"sessionId"`
 	FileID              string                 `json:"fileId"`
-	StorageID           string                 `json:"storageId"` // For verification
+	StorageID           string                 `json:"storageId"`
 	EncryptedFileSHA256 string                 `json:"encryptedFileSHA256"`
 }
 
-// FileInfo represents file metadata
-type FileInfo struct {
-	ID          string    `json:"id"`
-	Filename    string    `json:"filename"`
-	FileSize    int64     `json:"file_size"`
-	ContentType string    `json:"content_type"`
-	CreatedAt   time.Time `json:"created_at"`
-	DownloadURL string    `json:"download_url"`
+// UploadMetadata represents pre-encrypted metadata for upload
+type UploadMetadata struct {
+	EncryptedFilename  string `json:"encryptedFilename"`
+	FilenameNonce      string `json:"filenameNonce"`
+	EncryptedSHA256sum string `json:"encryptedSha256sum"`
+	SHA256sumNonce     string `json:"sha256sumNonce"`
+	EncryptedFEK       string `json:"encryptedFek"`
+	PasswordType       string `json:"passwordType"`
+	PasswordHint       string `json:"passwordHint"`
 }
 
 func main() {
@@ -192,11 +199,6 @@ func main() {
 	case "list-files":
 		if err := handleListFilesCommand(client, config, args); err != nil {
 			logError("List files failed: %v", err)
-			os.Exit(1)
-		}
-	case "create-share":
-		if err := handleCreateShareCommand(client, config, args); err != nil {
-			logError("Create share failed: %v", err)
 			os.Exit(1)
 		}
 	case "logout":
@@ -330,7 +332,7 @@ EXAMPLES:
 
 	loginReq := map[string]string{
 		"username": *usernameFlag,
-		"password": string(password), // OPAQUE login still expects string password
+		"password": string(password),
 	}
 	// Securely clear the password from memory after it's used for loginReq
 	for i := range password {
@@ -353,9 +355,9 @@ EXAMPLES:
 		totpCode = strings.TrimSpace(totpCode)
 
 		totpReq := map[string]interface{}{
-			"code":        totpCode,
-			"session_key": loginResp.SessionKey,
-			"is_backup":   false,
+			"code":       totpCode,
+			"sessionKey": loginResp.SessionKey,
+			"isBackup":   false,
 		}
 
 		totpResp, err := client.makeRequest("POST", "/api/totp/auth", totpReq, loginResp.TempToken)
@@ -394,32 +396,48 @@ EXAMPLES:
 	return nil
 }
 
-// handleUploadCommand processes upload command
+// handleUploadCommand processes upload command for pre-encrypted files
 func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("upload", flag.ExitOnError)
 	var (
-		filePath     = fs.String("file", "", "File to upload (required)")
-		filename     = fs.String("name", "", "Custom filename (optional)")
+		filePath     = fs.String("file", "", "Pre-encrypted file to upload (required)")
+		metadataFile = fs.String("metadata", "", "JSON file with encrypted metadata (required)")
 		chunkSize    = fs.Int("chunk-size", 16*1024*1024, "Chunk size in bytes")
 		showProgress = fs.Bool("progress", true, "Show upload progress")
+		// Raw metadata flags for when not using a metadata file
+		encFilename  = fs.String("encrypted-filename", "", "Base64 encrypted filename")
+		encSha256    = fs.String("encrypted-sha256", "", "Base64 encrypted SHA256")
+		encFek       = fs.String("encrypted-fek", "", "Base64 encrypted FEK")
+		passwordType = fs.String("password-type", "account", "Password type used for encryption")
 	)
 
 	fs.Usage = func() {
 		fmt.Printf(`Usage: arkfile-client upload [FLAGS]
 
-Upload a file to the arkfile server with password-based encryption.
+Upload a pre-encrypted file to the arkfile server.
+The file must already be encrypted using cryptocli.
 
 FLAGS:
-    --file FILE         File to upload (required)
-    --name NAME         Custom filename (optional, uses original if not specified)
-    --chunk-size SIZE   Chunk size in bytes (default: 1048576 = 1MB)
-    --progress          Show upload progress (default: true)
-    --help             Show this help message
+    --file FILE             Pre-encrypted file to upload (required)
+    --metadata FILE         JSON file with encrypted metadata (recommended)
+    OR provide metadata directly:
+    --encrypted-filename    Base64 encrypted filename
+    --encrypted-sha256      Base64 encrypted SHA256
+    --encrypted-fek         Base64 encrypted FEK
+    --password-type TYPE    Password type: account/custom/share (default: account)
+    
+    --chunk-size SIZE       Chunk size in bytes (default: 16777216 = 16MB)
+    --progress             Show upload progress (default: true)
+    --help                 Show this help message
+
+WORKFLOW:
+    1. Encrypt file: cryptocli encrypt-password --file doc.pdf --username alice
+    2. Encrypt metadata: cryptocli encrypt-metadata --filename "doc.pdf" --sha256sum "..." --username alice
+    3. Upload: arkfile-client upload --file doc.pdf.enc --metadata metadata.json
 
 EXAMPLES:
-    arkfile-client upload --file document.pdf
-    arkfile-client upload --file video.mp4 --name "my-video.mp4"
-    arkfile-client upload --file large.dat --chunk-size 2097152
+    arkfile-client upload --file document.pdf.enc --metadata metadata.json
+    arkfile-client upload --file data.enc --encrypted-filename "..." --encrypted-sha256 "..." --encrypted-fek "..."
 `)
 	}
 
@@ -442,85 +460,53 @@ EXAMPLES:
 		return fmt.Errorf("session expired, please login again")
 	}
 
-	// Read file
-	fileData, err := os.ReadFile(*filePath)
+	// Read encrypted file
+	encryptedData, err := os.ReadFile(*filePath)
 	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
+		return fmt.Errorf("failed to read encrypted file: %w", err)
 	}
 
-	// Determine filename
-	uploadFilename := *filename
-	if uploadFilename == "" {
-		uploadFilename = filepath.Base(*filePath)
+	logVerbose("Uploading pre-encrypted file: %s (%d bytes)", *filePath, len(encryptedData))
+
+	// Load or construct metadata
+	var metadata UploadMetadata
+	if *metadataFile != "" {
+		// Load metadata from JSON file
+		metadataData, err := os.ReadFile(*metadataFile)
+		if err != nil {
+			return fmt.Errorf("failed to read metadata file: %w", err)
+		}
+		if err := json.Unmarshal(metadataData, &metadata); err != nil {
+			return fmt.Errorf("failed to parse metadata JSON: %w", err)
+		}
+	} else if *encFilename != "" && *encSha256 != "" && *encFek != "" {
+		// Use provided metadata flags
+		metadata = UploadMetadata{
+			EncryptedFilename:  *encFilename,
+			FilenameNonce:      extractNonce(*encFilename),
+			EncryptedSHA256sum: *encSha256,
+			SHA256sumNonce:     extractNonce(*encSha256),
+			EncryptedFEK:       *encFek,
+			PasswordType:       *passwordType,
+			PasswordHint:       "",
+		}
+	} else {
+		return fmt.Errorf("either --metadata file or all encrypted metadata flags are required")
 	}
 
-	logVerbose("Uploading file: %s (%d bytes)", uploadFilename, len(fileData))
-
-	// Get password for FEK encryption
-	logVerbose("Reading password for FEK encryption...")
-	password, err := readPassword("Enter password to encrypt File Encryption Key (FEK): ")
-	if err != nil {
-		return fmt.Errorf("failed to read password: %w", err)
-	}
-	if len(password) == 0 {
-		return fmt.Errorf("password cannot be empty")
-	}
-
-	// Generate File Encryption Key (FEK)
-	fek, err := crypto.GenerateAESKey()
-	if err != nil {
-		return fmt.Errorf("failed to generate encryption key: %w", err)
-	}
-
-	// Encrypt file
-	encryptedFile, err := crypto.EncryptGCM(fileData, fek)
-	if err != nil {
-		return fmt.Errorf("file encryption failed: %w", err)
-	}
-
-	// Encrypt FEK with password using Argon2ID
-	encryptedFEK, err := crypto.EncryptFEKWithPassword(fek, password, session.Username, "account")
-	if err != nil {
-		return fmt.Errorf("FEK encryption failed: %w", err)
-	}
-
-	// Securely clear the password from memory
-	for i := range password {
-		password[i] = 0
-	}
-
-	// Calculate original file hash
-	hash := sha256.Sum256(fileData)
-	fileHash := fmt.Sprintf("%x", hash)
-
-	// Encrypt metadata with the FEK
-	encryptedFilename, err := crypto.EncryptGCM([]byte(uploadFilename), fek)
-	if err != nil {
-		return fmt.Errorf("filename encryption failed: %w", err)
-	}
-
-	encryptedHash, err := crypto.EncryptGCM([]byte(fileHash), fek)
-	if err != nil {
-		return fmt.Errorf("file hash encryption failed: %w", err)
-	}
-
-	// Create envelope for password-based encryption type
-	envelope := crypto.CreatePasswordEnvelope("account")
-
-	// Initialize chunked upload with the new, secure payload
-	totalChunks := (len(encryptedFile) + *chunkSize - 1) / *chunkSize
+	// Initialize chunked upload
+	totalChunks := (len(encryptedData) + *chunkSize - 1) / *chunkSize
 
 	uploadReq := map[string]interface{}{
-		"encryptedFilename":  base64.StdEncoding.EncodeToString(encryptedFilename),
-		"filenameNonce":      base64.StdEncoding.EncodeToString(encryptedFilename[:12]), // GCM nonce is the first 12 bytes
-		"encryptedSha256sum": base64.StdEncoding.EncodeToString(encryptedHash),
-		"sha256sumNonce":     base64.StdEncoding.EncodeToString(encryptedHash[:12]), // GCM nonce is the first 12 bytes
-		"encryptedFek":       base64.StdEncoding.EncodeToString(encryptedFEK),
-		"totalSize":          len(fileData),
+		"encryptedFilename":  metadata.EncryptedFilename,
+		"filenameNonce":      metadata.FilenameNonce,
+		"encryptedSha256sum": metadata.EncryptedSHA256sum,
+		"sha256sumNonce":     metadata.SHA256sumNonce,
+		"encryptedFek":       metadata.EncryptedFEK,
+		"totalSize":          len(encryptedData),
 		"chunkSize":          *chunkSize,
-		"passwordHint":       "", // Not implemented in this client version
-		"passwordType":       "account",
-		"envelopeData":       base64.StdEncoding.EncodeToString(envelope),
+		"passwordHint":       metadata.PasswordHint,
+		"passwordType":       metadata.PasswordType,
 	}
 
 	uploadResp, err := client.makeRequest("POST", "/api/uploads/init", uploadReq, session.AccessToken)
@@ -535,16 +521,18 @@ EXAMPLES:
 	logVerbose("File ID: %s", fileID)
 
 	// Upload chunks
-	fmt.Printf("Uploading %s (%s) in %d chunks...\n", uploadFilename, formatFileSize(int64(len(fileData))), totalChunks)
+	if *showProgress {
+		fmt.Printf("Uploading encrypted file (%s) in %d chunks...\n", formatFileSize(int64(len(encryptedData))), totalChunks)
+	}
 
 	for chunkIndex := 0; chunkIndex < totalChunks; chunkIndex++ {
 		start := chunkIndex * *chunkSize
 		end := start + *chunkSize
-		if end > len(encryptedFile) {
-			end = len(encryptedFile)
+		if end > len(encryptedData) {
+			end = len(encryptedData)
 		}
 
-		chunkData := encryptedFile[start:end]
+		chunkData := encryptedData[start:end]
 		chunkHash := sha256.Sum256(chunkData)
 		chunkHashStr := fmt.Sprintf("%x", chunkHash)
 
@@ -571,10 +559,10 @@ EXAMPLES:
 
 		if resp.StatusCode != http.StatusOK {
 			bodyBytes, _ := io.ReadAll(resp.Body)
-			resp.Body.Close() // Ensure body is closed
+			resp.Body.Close()
 			return fmt.Errorf("chunk %d upload failed: status %d, body: %s", chunkIndex, resp.StatusCode, string(bodyBytes))
 		}
-		resp.Body.Close() // Ensure body is closed on success too
+		resp.Body.Close()
 
 		if *showProgress {
 			progress := float64(chunkIndex+1) / float64(totalChunks) * 100
@@ -586,13 +574,9 @@ EXAMPLES:
 		fmt.Println() // Add newline after progress
 	}
 
-	// Finalize upload
-	finalizeReq := map[string]interface{}{
-		"session_id": sessionID,
-	}
-
+	// Finalize upload - no body needed since session ID is in the URL
 	finalizeURL := fmt.Sprintf("/api/uploads/%s/complete", sessionID)
-	finalizeResp, err := client.makeRequest("POST", finalizeURL, finalizeReq, session.AccessToken)
+	finalizeResp, err := client.makeRequest("POST", finalizeURL, nil, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("upload finalization failed: %w", err)
 	}
@@ -601,8 +585,103 @@ EXAMPLES:
 	fmt.Printf("File ID: %s\n", fileID)
 	fmt.Printf("Storage ID: %s\n", finalizeResp.StorageID)
 	fmt.Printf("Server-side Encrypted SHA256: %s\n", finalizeResp.EncryptedFileSHA256)
-	fmt.Printf("Original size: %s\n", formatFileSize(int64(len(fileData))))
-	fmt.Printf("Encrypted size: %s\n", formatFileSize(int64(len(encryptedFile))))
+	fmt.Printf("Encrypted file size: %s\n", formatFileSize(int64(len(encryptedData))))
+
+	return nil
+}
+
+// handleDownloadCommand processes download command
+func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+	fs := flag.NewFlagSet("download", flag.ExitOnError)
+	var (
+		fileID     = fs.String("file-id", "", "File ID to download (required)")
+		outputPath = fs.String("output", "", "Output file path (required)")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-client download [FLAGS]
+
+Downloads an encrypted file from the server.
+The downloaded file will still be encrypted - use cryptocli to decrypt it.
+
+FLAGS:
+    --file-id ID        File ID to download (required)
+    --output PATH       Output file path for the encrypted data (required)
+    --help             Show this help message
+
+WORKFLOW:
+    1. Download: arkfile-client download --file-id "..." --output encrypted.dat
+    2. Decrypt: cryptocli decrypt-password --file encrypted.dat --username alice
+
+EXAMPLES:
+    arkfile-client download --file-id "abc123..." --output downloaded.enc
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *fileID == "" {
+		return fmt.Errorf("file-id must be specified")
+	}
+	if *outputPath == "" {
+		return fmt.Errorf("output must be specified")
+	}
+
+	// Load session
+	session, err := loadAuthSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in (use 'arkfile-client login'): %w", err)
+	}
+
+	// Check if session is expired
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("session expired, please login again")
+	}
+
+	// Perform a direct HTTP GET to handle the file download stream
+	downloadURL := client.baseURL + "/api/download/" + *fileID
+	req, err := http.NewRequest("GET", downloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create download request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+
+	if client.verbose {
+		logVerbose("Making GET request to %s", downloadURL)
+	}
+
+	httpResp, err := client.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("download request failed: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(httpResp.Body)
+		return fmt.Errorf("server returned status %d: %s", httpResp.StatusCode, string(bodyBytes))
+	}
+
+	// Create the output file
+	outFile, err := os.Create(*outputPath)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer outFile.Close()
+
+	// Stream the download directly to the file
+	bytesWritten, err := io.Copy(outFile, httpResp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to write downloaded data to file: %w", err)
+	}
+
+	logVerbose("Wrote %d bytes to %s", bytesWritten, *outputPath)
+
+	fmt.Printf("✅ Encrypted file downloaded successfully\n")
+	fmt.Printf("Saved to: %s\n", *outputPath)
+	fmt.Printf("Size: %s\n", formatFileSize(bytesWritten))
+	fmt.Printf("\nUse 'cryptocli decrypt-password' to decrypt the file.\n")
 
 	return nil
 }
@@ -617,46 +696,47 @@ type ServerFileListResponse struct {
 type ServerFileInfo struct {
 	FileID            string `json:"file_id"`
 	StorageID         string `json:"storage_id"`
-	PasswordHint      string `json:"passwordHint"`
-	PasswordType      string `json:"passwordType"`
-	FilenameNonce     string `json:"filenameNonce"`
-	EncryptedFilename string `json:"encryptedFilename"`
-	SHA256Nonce       string `json:"sha256sumNonce"`
-	EncryptedSHA256   string `json:"encryptedSha256sum"`
+	PasswordHint      string `json:"password_hint"`
+	PasswordType      string `json:"password_type"`
+	FilenameNonce     string `json:"filename_nonce"`
+	EncryptedFilename string `json:"encrypted_filename"`
+	SHA256Nonce       string `json:"sha256sum_nonce"`
+	EncryptedSHA256   string `json:"encrypted_sha256sum"`
+	EncryptedFEK      string `json:"encrypted_fek"`
 	SizeBytes         int64  `json:"size_bytes"`
 	SizeReadable      string `json:"size_readable"`
-	UploadDate        string `json:"uploadDate"`
+	UploadDate        string `json:"upload_date"`
 }
 
 // handleListFilesCommand processes list-files command
 func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("list-files", flag.ExitOnError)
 	var (
-		detailed = fs.Bool("detailed", false, "Show detailed file information")
-		decrypt  = fs.Bool("decrypt", true, "Decrypt filename and SHA256 metadata")
-		limit    = fs.Int("limit", 50, "Maximum number of files to list")
-		offset   = fs.Int("offset", 0, "Offset for pagination")
-		showRaw  = fs.Bool("raw", false, "Show raw encrypted metadata (for debugging)")
+		limit  = fs.Int("limit", 50, "Maximum number of files to list")
+		offset = fs.Int("offset", 0, "Offset for pagination")
+		asJSON = fs.Bool("json", false, "Output file list as raw JSON")
 	)
 
 	fs.Usage = func() {
 		fmt.Printf(`Usage: arkfile-client list-files [FLAGS]
 
-List files uploaded by the authenticated user with metadata decryption.
+List encrypted file metadata from the server.
+Metadata decryption must be handled separately by the 'cryptocli' tool.
 
 FLAGS:
-    --detailed          Show detailed file information
-    --decrypt           Decrypt filename and SHA256 metadata (default: true)
-    --raw              Show raw encrypted metadata (for debugging)
     --limit INT         Maximum number of files to list (default: 50)
     --offset INT        Offset for pagination (default: 0)
+    --json              Output file list as raw JSON
     --help             Show this help message
+
+WORKFLOW:
+    1. List: arkfile-client list-files --json > files.json
+    2. Decrypt metadata: cryptocli decrypt-metadata --encrypted-filename "..." --encrypted-sha256sum "..." --username alice
 
 EXAMPLES:
     arkfile-client list-files
-    arkfile-client list-files --detailed
-    arkfile-client list-files --limit 10 --offset 20
-    arkfile-client list-files --raw --no-decrypt
+    arkfile-client list-files --json
+    arkfile-client list-files --limit 10 --json | jq .
 `)
 	}
 
@@ -712,7 +792,14 @@ EXAMPLES:
 		return fmt.Errorf("server returned status %d: %s", httpResp.StatusCode, string(responseData))
 	}
 
-	// Parse the response directly as ServerFileListResponse
+	// If --json flag is set, output the raw JSON and exit
+	if *asJSON {
+		// Output the raw JSON directly without re-formatting to preserve encoding
+		fmt.Println(string(responseData))
+		return nil
+	}
+
+	// Otherwise, parse and print a human-readable summary
 	var serverResponse ServerFileListResponse
 	if err := json.Unmarshal(responseData, &serverResponse); err != nil {
 		return fmt.Errorf("failed to parse server response: %w", err)
@@ -727,441 +814,16 @@ EXAMPLES:
 		return nil
 	}
 
-	fmt.Printf("Files for user %s:\n\n", session.Username)
+	fmt.Printf("Found %d file(s) for user %s:\n\n", len(serverResponse.Files), session.Username)
+	fmt.Println("File ID                                 Size       Upload Date")
+	fmt.Println("------------------------------------  ---------- --------------------------")
 
-	// Get password for metadata decryption if needed
-	var password string
-	if *decrypt && !*showRaw {
-		passwordBytes, err := readPassword("Enter password to decrypt file metadata: ")
-		if err != nil {
-			return fmt.Errorf("failed to read password: %w", err)
-		}
-		password = string(passwordBytes)
-		// Securely clear password bytes
-		for i := range passwordBytes {
-			passwordBytes[i] = 0
-		}
-		if password == "" {
-			logError("Warning: Empty password, showing encrypted metadata")
-			*decrypt = false
-		}
+	for _, serverFile := range serverResponse.Files {
+		fmt.Printf("%-36s  %-10s %s\n", serverFile.FileID, serverFile.SizeReadable, serverFile.UploadDate)
 	}
 
-	// Display files
-	if *detailed {
-		for i, serverFile := range serverResponse.Files {
-			fmt.Printf("%d. ", i+1)
-
-			if *showRaw {
-				fmt.Printf("[ENCRYPTED] %s\n", serverFile.EncryptedFilename)
-				fmt.Printf("   File ID: %s\n", serverFile.FileID)
-				fmt.Printf("   Storage ID: %s\n", serverFile.StorageID)
-				fmt.Printf("   Password Type: %s\n", serverFile.PasswordType)
-				fmt.Printf("   Password Hint: %s\n", serverFile.PasswordHint)
-				fmt.Printf("   Filename Nonce: %s\n", serverFile.FilenameNonce)
-				fmt.Printf("   Encrypted Filename: %s\n", serverFile.EncryptedFilename)
-				fmt.Printf("   SHA256 Nonce: %s\n", serverFile.SHA256Nonce)
-				fmt.Printf("   Encrypted SHA256: %s\n", serverFile.EncryptedSHA256)
-			} else if *decrypt && password != "" {
-				// Decrypt metadata
-				filename, sha256sum, err := decryptFileMetadata(serverFile, password, session.Username)
-				if err != nil {
-					logError("Failed to decrypt metadata for file %s: %v", serverFile.FileID, err)
-					fmt.Printf("[DECRYPT FAILED] %s\n", serverFile.FileID)
-				} else {
-					fmt.Printf("%s\n", filename)
-					fmt.Printf("   SHA256: %s\n", sha256sum)
-				}
-				fmt.Printf("   File ID: %s\n", serverFile.FileID)
-				fmt.Printf("   Storage ID: %s\n", serverFile.StorageID)
-				fmt.Printf("   Password Type: %s\n", serverFile.PasswordType)
-			} else {
-				fmt.Printf("[ENCRYPTED] %s\n", serverFile.FileID)
-				fmt.Printf("   File ID: %s\n", serverFile.FileID)
-				fmt.Printf("   Storage ID: %s\n", serverFile.StorageID)
-				fmt.Printf("   Password Type: %s\n", serverFile.PasswordType)
-			}
-
-			fmt.Printf("   Size: %s (%d bytes)\n", serverFile.SizeReadable, serverFile.SizeBytes)
-			fmt.Printf("   Upload Date: %s\n", serverFile.UploadDate)
-			fmt.Println()
-		}
-	} else {
-		for i, serverFile := range serverResponse.Files {
-			displayName := serverFile.FileID // Default to file ID
-
-			if *showRaw {
-				displayName = fmt.Sprintf("[ENCRYPTED] %s", serverFile.EncryptedFilename)
-			} else if *decrypt && password != "" {
-				// Decrypt filename only
-				filename, _, err := decryptFileMetadata(serverFile, password, session.Username)
-				if err != nil {
-					logError("Failed to decrypt filename for file %s: %v", serverFile.FileID, err)
-					displayName = fmt.Sprintf("[DECRYPT FAILED] %s", serverFile.FileID)
-				} else {
-					displayName = filename
-				}
-			} else {
-				displayName = fmt.Sprintf("[ENCRYPTED] %s", serverFile.FileID)
-			}
-
-			fmt.Printf("%3d. %-40s %10s  %s\n", i+1, displayName, serverFile.SizeReadable, serverFile.UploadDate)
-		}
-	}
-
-	fmt.Printf("\nShowing %d files (offset: %d)\n", len(serverResponse.Files), *offset)
-
-	return nil
-}
-
-// decryptFileMetadata decrypts filename and SHA256 from server file metadata
-func decryptFileMetadata(serverFile ServerFileInfo, password, username string) (string, string, error) {
-	// Decode base64 encoded metadata
-	encryptedFilename, err := base64.StdEncoding.DecodeString(serverFile.EncryptedFilename)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to decode encrypted filename: %w", err)
-	}
-
-	encryptedSHA256, err := base64.StdEncoding.DecodeString(serverFile.EncryptedSHA256)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to decode encrypted SHA256: %w", err)
-	}
-
-	// Use shared crypto function to decrypt metadata
-	// Note: The encrypted data already contains nonces from EncryptGCM, so pass nil for nonce parameters
-	filename, sha256sum, err := crypto.DecryptFileMetadata(
-		nil, encryptedFilename,
-		nil, encryptedSHA256,
-		password, username,
-	)
-	if err != nil {
-		return "", "", fmt.Errorf("metadata decryption failed: %w", err)
-	}
-
-	return filename, sha256sum, nil
-}
-
-// handleDownloadCommand processes download command
-func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []string) error {
-	fs := flag.NewFlagSet("download", flag.ExitOnError)
-	var (
-		fileID       = fs.String("file-id", "", "File ID to download")
-		filename     = fs.String("file", "", "Filename to download (alternative to file-id)")
-		outputPath   = fs.String("output", "", "Output file path (optional)")
-		outputDir    = fs.String("output-dir", ".", "Output directory (default: current)")
-		showProgress = fs.Bool("progress", true, "Show download progress")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-client download [FLAGS]
-
-Download a file from the arkfile server with password-based decryption.
-
-FLAGS:
-    --file-id ID        File ID to download (from list-files)
-    --file FILENAME     Filename to download (alternative to file-id)
-    --output PATH       Output file path (optional, uses original filename if not specified)
-    --output-dir DIR    Output directory (default: current directory)
-    --progress          Show download progress (default: true)
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-client download --file-id abc123def456
-    arkfile-client download --file document.pdf
-    arkfile-client download --file-id abc123 --output ~/Downloads/my-doc.pdf
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *fileID == "" && *filename == "" {
-		return fmt.Errorf("either file-id or file must be specified")
-	}
-
-	// Load session
-	session, err := loadAuthSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in (use 'arkfile-client login'): %w", err)
-	}
-
-	// Check if session is expired
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("session expired, please login again")
-	}
-
-	// Find file by name if needed
-	targetFileID := *fileID
-	if targetFileID == "" {
-		// List files and find by name
-		resp, err := client.makeRequest("GET", "/api/files", nil, session.AccessToken)
-		if err != nil {
-			return fmt.Errorf("failed to list files: %w", err)
-		}
-
-		filesData := resp.Data["files"].([]interface{})
-		found := false
-		for _, fileData := range filesData {
-			fileMap := fileData.(map[string]interface{})
-			if fileMap["filename"].(string) == *filename {
-				targetFileID = fileMap["id"].(string)
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			return fmt.Errorf("file not found: %s", *filename)
-		}
-	}
-
-	// Get file metadata and encrypted data directly from server
-	resp, err := client.makeRequest("GET", "/api/download/"+targetFileID, nil, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("failed to get file metadata: %w", err)
-	}
-
-	// Check if the response has the expected structure
-	if resp.Data == nil {
-		return fmt.Errorf("server returned empty response data")
-	}
-
-	fileDataInterface, exists := resp.Data["file"]
-	if !exists {
-		return fmt.Errorf("server response missing 'file' field")
-	}
-
-	fileData, ok := fileDataInterface.(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("server response 'file' field has unexpected type: %T", fileDataInterface)
-	}
-
-	// Extract file size
-	fileSizeInterface, exists := fileData["file_size"]
-	if !exists {
-		return fmt.Errorf("server response missing 'file_size' field")
-	}
-	fileSize := int64(fileSizeInterface.(float64))
-
-	// Extract encrypted file data directly from response
-	encryptedDataInterface, exists := fileData["data"]
-	if !exists {
-		return fmt.Errorf("server response missing 'data' field")
-	}
-	encryptedDataString, ok := encryptedDataInterface.(string)
-	if !ok {
-		return fmt.Errorf("server response 'data' field has unexpected type: %T", encryptedDataInterface)
-	}
-	encryptedData := []byte(encryptedDataString)
-
-	logVerbose("Retrieved encrypted file data: %d bytes", len(encryptedData))
-
-	// We'll decrypt the filename after getting the FEK to determine output path
-	if *showProgress {
-		fmt.Printf("Processing encrypted file (%s)...\n", formatFileSize(fileSize))
-	}
-
-	// Get encrypted FEK from metadata
-	encryptedFEKInterface, exists := fileData["encrypted_fek"]
-	if !exists {
-		return fmt.Errorf("server response missing 'encrypted_fek' field")
-	}
-	encryptedFEKBase64, ok := encryptedFEKInterface.(string)
-	if !ok {
-		return fmt.Errorf("server response 'encrypted_fek' field has unexpected type: %T", encryptedFEKInterface)
-	}
-	encryptedFEK, err := base64.StdEncoding.DecodeString(encryptedFEKBase64)
-	if err != nil {
-		return fmt.Errorf("invalid encrypted FEK: %w", err)
-	}
-
-	// Get password to decrypt FEK
-	password, err := readPassword("Enter password to decrypt File Encryption Key (FEK): ")
-	if err != nil {
-		return fmt.Errorf("failed to read password: %w", err)
-	}
-	if len(password) == 0 {
-		return fmt.Errorf("password cannot be empty")
-	}
-
-	// Decrypt FEK with password using Argon2ID
-	fek, _, err := crypto.DecryptFEKWithPassword(encryptedFEK, password, session.Username)
-	if err != nil {
-		return fmt.Errorf("FEK decryption failed: %w", err)
-	}
-
-	// Decrypt file
-	plaintext, err := crypto.DecryptGCM(encryptedData, fek)
-	if err != nil {
-		return fmt.Errorf("file decryption failed: %w", err)
-	}
-
-	// Decrypt filename to determine the original filename for output
-	var originalFilename string
-	if filenameNonceInterface, exists := fileData["filenameNonce"]; exists {
-		if filenameNonceBase64, ok := filenameNonceInterface.(string); ok {
-			if encryptedFilenameInterface, exists := fileData["encryptedFilename"]; exists {
-				if encryptedFilenameBase64, ok := encryptedFilenameInterface.(string); ok {
-					_, err := base64.StdEncoding.DecodeString(filenameNonceBase64)
-					if err == nil {
-						encryptedFilename, err := base64.StdEncoding.DecodeString(encryptedFilenameBase64)
-						if err == nil {
-							decryptedFilename, _, err := crypto.DecryptFileMetadata(
-								nil, encryptedFilename,
-								nil, nil, // We don't need SHA256 for download
-								string(password), session.Username,
-							)
-							if err == nil {
-								originalFilename = decryptedFilename
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Fallback to file ID if filename decryption failed
-	if originalFilename == "" {
-		originalFilename = targetFileID + ".decrypted"
-		logVerbose("Warning: Could not decrypt filename, using fallback: %s", originalFilename)
-	}
-
-	// Securely clear the password from memory
-	for i := range password {
-		password[i] = 0
-	}
-
-	// Determine output path
-	finalOutputPath := *outputPath
-	if finalOutputPath == "" {
-		finalOutputPath = filepath.Join(*outputDir, originalFilename)
-	}
-
-	// Write file
-	if err := os.WriteFile(finalOutputPath, plaintext, 0644); err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
-	}
-
-	fmt.Printf("✅ Download completed successfully\n")
-	fmt.Printf("File saved to: %s\n", finalOutputPath)
-	fmt.Printf("Original filename: %s\n", originalFilename)
-	fmt.Printf("Size: %s\n", formatFileSize(int64(len(plaintext))))
-
-	return nil
-}
-
-// handleCreateShareCommand processes create-share command
-func handleCreateShareCommand(client *HTTPClient, config *ClientConfig, args []string) error {
-	fs := flag.NewFlagSet("create-share", flag.ExitOnError)
-	var (
-		fileID        = fs.String("file-id", "", "File ID to share")
-		filename      = fs.String("file", "", "Filename to share (alternative to file-id)")
-		password      = fs.String("password", "", "Share password (optional, will prompt if not provided)")
-		expiresInDays = fs.Int("expires", 30, "Expiration in days")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-client create-share [FLAGS]
-
-Create an anonymous share link for a file.
-
-FLAGS:
-    --file-id ID        File ID to share (from list-files)
-    --file FILENAME     Filename to share (alternative to file-id)
-    --password PASS     Share password (optional, will prompt if not provided)
-    --expires DAYS      Expiration in days (default: 30)
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-client create-share --file-id abc123def456
-    arkfile-client create-share --file document.pdf --password mypass123
-    arkfile-client create-share --file-id abc123 --expires 7
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *fileID == "" && *filename == "" {
-		return fmt.Errorf("either file-id or file must be specified")
-	}
-
-	// Load session
-	session, err := loadAuthSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in (use 'arkfile-client login'): %w", err)
-	}
-
-	// Check if session is expired
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("session expired, please login again")
-	}
-
-	// Find file by name if needed
-	targetFileID := *fileID
-	if targetFileID == "" {
-		// List files and find by name
-		resp, err := client.makeRequest("GET", "/api/files", nil, session.AccessToken)
-		if err != nil {
-			return fmt.Errorf("failed to list files: %w", err)
-		}
-
-		filesData := resp.Data["files"].([]interface{})
-		found := false
-		for _, fileData := range filesData {
-			fileMap := fileData.(map[string]interface{})
-			if fileMap["filename"].(string) == *filename {
-				targetFileID = fileMap["id"].(string)
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			return fmt.Errorf("file not found: %s", *filename)
-		}
-	}
-
-	// Get share password
-	sharePassword := *password
-	if sharePassword == "" {
-		fmt.Print("Enter share password: ")
-		reader := bufio.NewReader(os.Stdin)
-		passwordInput, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read password: %w", err)
-		}
-		sharePassword = strings.TrimSpace(passwordInput)
-	}
-
-	if sharePassword == "" {
-		return fmt.Errorf("share password is required")
-	}
-
-	// Create share
-	createShareReq := map[string]interface{}{
-		"password":        sharePassword,
-		"expires_in_days": *expiresInDays,
-	}
-
-	shareResp, err := client.makeRequest("POST", "/api/files/"+targetFileID+"/share", createShareReq, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("share creation failed: %w", err)
-	}
-
-	shareID := shareResp.Data["share_id"].(string)
-	shareURL := shareResp.Data["share_url"].(string)
-	expiresAt := shareResp.Data["expires_at"].(string)
-
-	fmt.Printf("✅ Share created successfully\n")
-	fmt.Printf("Share ID: %s\n", shareID)
-	fmt.Printf("Share URL: %s\n", shareURL)
-	fmt.Printf("Expires: %s\n", expiresAt)
-	fmt.Printf("\nShare this URL with others to allow anonymous access.\n")
-	fmt.Printf("They will need the password: %s\n", sharePassword)
+	fmt.Printf("\nNote: Metadata is encrypted. Use 'cryptocli decrypt-metadata' to decrypt filenames.\n")
+	fmt.Printf("Use --json flag to get raw metadata for decryption.\n")
 
 	return nil
 }
@@ -1199,7 +861,7 @@ EXAMPLES:
 
 func printVersion() {
 	fmt.Printf("arkfile-client version %s\n", Version)
-	fmt.Printf("Static binary with OPAQUE authentication\n")
+	fmt.Printf("Secure file sharing client (crypto operations via cryptocli)\n")
 }
 
 func printUsage() {
@@ -1255,32 +917,6 @@ func loadConfigFile(config *ClientConfig, filePath string) error {
 	return json.Unmarshal(data, config)
 }
 
-func getContentType(filename string) string {
-	ext := strings.ToLower(filepath.Ext(filename))
-	switch ext {
-	case ".pdf":
-		return "application/pdf"
-	case ".txt":
-		return "text/plain"
-	case ".jpg", ".jpeg":
-		return "image/jpeg"
-	case ".png":
-		return "image/png"
-	case ".gif":
-		return "image/gif"
-	case ".mp4":
-		return "video/mp4"
-	case ".mp3":
-		return "audio/mpeg"
-	case ".zip":
-		return "application/zip"
-	case ".json":
-		return "application/json"
-	default:
-		return "application/octet-stream"
-	}
-}
-
 func formatFileSize(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {
@@ -1299,20 +935,6 @@ func formatFileSize(bytes int64) string {
 	}
 
 	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), units[exp])
-}
-
-func downloadFile(client *http.Client, url string) ([]byte, error) {
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
-	}
-
-	return io.ReadAll(resp.Body)
 }
 
 // readPassword reads a password from stdin. If stdin is a terminal, it will
@@ -1345,4 +967,21 @@ func readPassword(prompt string) ([]byte, error) {
 	}
 	// Trim trailing newline characters which are common in piped input
 	return bytes.TrimRight(bytePassword, "\r\n"), nil
+}
+
+// extractNonce extracts the nonce from base64 encrypted data (first 12 bytes)
+func extractNonce(base64Data string) string {
+	// Decode the base64 data
+	data, err := base64.StdEncoding.DecodeString(base64Data)
+	if err != nil {
+		// If we can't decode, just return empty string
+		return ""
+	}
+
+	// GCM nonce is the first 12 bytes
+	if len(data) >= 12 {
+		return base64.StdEncoding.EncodeToString(data[:12])
+	}
+
+	return ""
 }

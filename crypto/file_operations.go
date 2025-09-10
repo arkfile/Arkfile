@@ -555,3 +555,47 @@ func DecryptFileMetadata(filenameNonce, encryptedFilename, sha256Nonce, encrypte
 
 	return filename, sha256, nil
 }
+
+// DecryptFEKFromEnvelope decrypts a File Encryption Key (FEK) from its envelope using a password.
+// This is the missing link for client-side metadata decryption.
+func DecryptFEKFromEnvelope(encryptedFEK, password []byte) ([]byte, error) {
+	if len(encryptedFEK) < 2 {
+		return nil, fmt.Errorf("encrypted FEK too short for envelope")
+	}
+
+	// Parse the envelope to determine key type
+	_, keyType, err := ParsePasswordEnvelope(encryptedFEK)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse FEK envelope: %w", err)
+	}
+
+	// The actual encrypted data starts after the 2-byte envelope
+	ciphertext := encryptedFEK[2:]
+
+	// Derive the key used to wrap the FEK.
+	// NOTE: The salt for FEK wrapping *does not* include the username. This is a critical detail.
+	// It uses a static salt based on the key type.
+	var fekWrappingKey []byte
+	switch keyType {
+	case "account":
+		fekWrappingKey, err = DeriveArgon2IDKey(password, FEKAccountSalt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
+	case "custom":
+		fekWrappingKey, err = DeriveArgon2IDKey(password, FEKCustomSalt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
+	case "share":
+		// Share key derivation may have other inputs; for now, align with others.
+		fekWrappingKey, err = DeriveArgon2IDKey(password, FEKShareSalt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
+	default:
+		return nil, fmt.Errorf("unsupported key type from envelope: %s", keyType)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive FEK wrapping key: %w", err)
+	}
+
+	// Decrypt the FEK.
+	fek, err := DecryptGCM(ciphertext, fekWrappingKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt FEK: %w", err)
+	}
+
+	return fek, nil
+}
