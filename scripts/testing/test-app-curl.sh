@@ -2081,7 +2081,6 @@ phase_9_file_operations() {
         # Check for session expiration FIRST (before cleanup can trigger)
         if echo "$upload_log_content" | grep -q -i "session expired\|please login again\|unauthorized\|authentication.*fail"; then
             warning "Upload attempt $upload_attempts failed due to session expiration - RE-AUTHENTICATING..."
-            info "As requested: 'if we get to this point, just LOG IN AGAIN and TRY AGAIN'"
             
             if [ $upload_attempts -lt $max_upload_attempts ]; then
                 # RE-AUTHENTICATE: Perform fresh two-phase authentication
