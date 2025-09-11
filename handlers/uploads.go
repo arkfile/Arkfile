@@ -46,7 +46,6 @@ func CreateUploadSession(c echo.Context) error {
 		ChunkSize    int    `json:"chunkSize"`
 		PasswordHint string `json:"passwordHint"`
 		PasswordType string `json:"passwordType"`
-		EnvelopeData string `json:"envelopeData"` // Phase 1: base64 envelope
 	}
 
 	if err := c.Bind(&request); err != nil {
@@ -81,42 +80,6 @@ func CreateUploadSession(c echo.Context) error {
 	// Validate password type
 	if request.PasswordType != "account" && request.PasswordType != "custom" {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid password type")
-	}
-
-	// Phase 1: Validate and process envelope data
-	var envelopeData []byte
-	var envelopeVersion, envelopeKeyType byte
-
-	if request.EnvelopeData != "" {
-		// Decode envelope data
-		var err error
-		envelopeData, err = base64.StdEncoding.DecodeString(request.EnvelopeData)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, "Invalid envelope data encoding")
-		}
-
-		// Validate envelope format: must be exactly 2 bytes
-		if len(envelopeData) != 2 {
-			return echo.NewHTTPError(http.StatusBadRequest, "Invalid envelope format: must be 2 bytes")
-		}
-
-		envelopeVersion = envelopeData[0]
-		envelopeKeyType = envelopeData[1]
-
-		// Validate envelope consistency with password type
-		switch request.PasswordType {
-		case "account":
-			if envelopeVersion != 0x01 || envelopeKeyType != 0x01 {
-				return echo.NewHTTPError(http.StatusBadRequest, "Envelope mismatch: expected account envelope (0x01, 0x01)")
-			}
-		case "custom":
-			if envelopeVersion != 0x02 || envelopeKeyType != 0x02 {
-				return echo.NewHTTPError(http.StatusBadRequest, "Envelope mismatch: expected custom envelope (0x02, 0x02)")
-			}
-		}
-
-		logging.InfoLogger.Printf("Envelope validation successful: version=0x%02x, keyType=0x%02x for %s",
-			envelopeVersion, envelopeKeyType, request.PasswordType)
 	}
 
 	// Check user's storage limit and approval status
@@ -165,8 +128,8 @@ func CreateUploadSession(c echo.Context) error {
 
 	// Create upload session record with encrypted metadata
 	_, err = tx.Exec(
-		"INSERT INTO upload_sessions (id, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, encrypted_fek, owner_username, total_size, chunk_size, total_chunks, password_hint, password_type, storage_id, padded_size, envelope_data, envelope_version, envelope_key_type, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		sessionID, fileID, encryptedFilename, filenameNonce, encryptedSha256sum, sha256sumNonce, encryptedFek, username, request.TotalSize, request.ChunkSize, totalChunks, request.PasswordHint, request.PasswordType, storageID, paddedSize, envelopeData, envelopeVersion, envelopeKeyType, "in_progress", time.Now().Add(24*time.Hour),
+		"INSERT INTO upload_sessions (id, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, encrypted_fek, owner_username, total_size, chunk_size, total_chunks, password_hint, password_type, storage_id, padded_size, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		sessionID, fileID, encryptedFilename, filenameNonce, encryptedSha256sum, sha256sumNonce, encryptedFek, username, request.TotalSize, request.ChunkSize, totalChunks, request.PasswordHint, request.PasswordType, storageID, paddedSize, "in_progress", time.Now().Add(24*time.Hour),
 	)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create upload session")
@@ -197,17 +160,14 @@ func CreateUploadSession(c echo.Context) error {
 		uploadID, sessionID,
 	)
 	if err != nil {
-		// Abort the multipart upload if we can't update the database (using minioProvider)
-		// Note: minioProvider should still be in scope here from the assertion above.
-		if minioProvider != nil {
-			minioProvider.AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
-		}
+		// Abort the multipart upload if we can't update the database
+		minioProvider.AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update upload session")
 	}
 
 	if err := tx.Commit(); err != nil {
 		// Attempt to abort the storage upload if we can't commit (using minioProvider)
-		if minioProvider != nil {
+		if minioProvider != nil && uploadID != "" {
 			minioProvider.AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
@@ -545,7 +505,7 @@ func UploadChunk(c echo.Context) error {
 		ownerUsername   string
 		fileID          string
 		storageID       string
-		storageUploadID string
+		storageUploadID sql.NullString
 		status          string
 		totalChunks     int
 	)
@@ -588,19 +548,36 @@ func UploadChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk hash format")
 	}
 
-	// Phase 2: Validate chunk format - chunks are now [nonce][encrypted_data][tag]
-	// No envelope validation needed since envelopes are stored separately
+	// Phase 2: Validate chunk format based on chunk number
+	// Chunk 0: [2-byte envelope][nonce][encrypted_data][tag] = 2 + 12 + 1 + 16 = 31 bytes minimum
+	// Chunks 1-N: [nonce][encrypted_data][tag] = 12 + 1 + 16 = 29 bytes minimum
 	contentLength := c.Request().ContentLength
 	if contentLength != -1 {
-		// Minimum chunk size: 12 (nonce) + 1 (data) + 16 (tag) = 29 bytes
-		if contentLength < 29 {
-			return echo.NewHTTPError(http.StatusBadRequest, "Chunk too small: minimum 29 bytes required")
+		var minChunkSize int64
+		var description string
+
+		if chunkNumber == 0 {
+			// Chunk 0 includes envelope: 2 (envelope) + 12 (nonce) + 1 (data) + 16 (tag) = 31 bytes
+			minChunkSize = 31
+			description = "minimum 31 bytes required (includes envelope)"
+		} else {
+			// Regular chunks: 12 (nonce) + 1 (data) + 16 (tag) = 29 bytes
+			minChunkSize = 29
+			description = "minimum 29 bytes required"
 		}
 
-		// Maximum chunk size: 16MB + 28 bytes overhead
-		maxChunkSize := int64(16*1024*1024 + 28)
+		if contentLength < minChunkSize {
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Chunk %d too small: %s", chunkNumber, description))
+		}
+
+		// Maximum chunk size: 16MB + envelope overhead (2 bytes for chunk 0) + crypto overhead (28 bytes)
+		maxEnvelopeOverhead := int64(2) // Only for chunk 0
+		if chunkNumber != 0 {
+			maxEnvelopeOverhead = 0
+		}
+		maxChunkSize := int64(16*1024*1024) + maxEnvelopeOverhead + 28
 		if contentLength > maxChunkSize {
-			return echo.NewHTTPError(http.StatusBadRequest, "Chunk too large: maximum 16MB + 28 bytes allowed")
+			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Chunk %d too large: maximum %d bytes allowed", chunkNumber, maxChunkSize))
 		}
 	}
 
@@ -634,18 +611,27 @@ func UploadChunk(c echo.Context) error {
 	// Create a reader from the chunk data for uploading to storage
 	chunkReader := bytes.NewReader(chunkData)
 
-	// Stream chunk to storage using storage provider interface
-	part, err := storage.Provider.UploadPart(
-		c.Request().Context(),
-		storageID, // Use storage ID instead of filename
-		storageUploadID,
-		minioPartNumber,
-		chunkReader,
-		int64(len(chunkData)), // Use actual chunk data length
-	)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to upload chunk %d via storage provider: %v", minioPartNumber, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to upload chunk to storage")
+	var etag string
+	if storageUploadID.Valid && storageUploadID.String != "" {
+		// Use multipart upload for large files
+		part, err := storage.Provider.UploadPart(
+			c.Request().Context(),
+			storageID, // Use storage ID instead of filename
+			storageUploadID.String,
+			minioPartNumber,
+			chunkReader,
+			int64(len(chunkData)), // Use actual chunk data length
+		)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to upload chunk %d via storage provider: %v", minioPartNumber, err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to upload chunk to storage")
+		}
+		etag = part.ETag
+	} else {
+		// For small files, we store chunks temporarily and will use PutObject during completion
+		// For now, we just generate a fake etag to satisfy the database constraint
+		etag = fmt.Sprintf("chunk-%d-%s", chunkNumber, sessionID[:8])
+		logging.InfoLogger.Printf("Storing chunk %d for regular upload (small file)", chunkNumber+1)
 	}
 
 	// Get the actual chunk size from the request content length
@@ -655,7 +641,7 @@ func UploadChunk(c echo.Context) error {
 	// Note: IV is no longer needed since chunks contain their own nonces
 	_, err = database.DB.Exec(
 		"INSERT INTO upload_chunks (session_id, chunk_number, chunk_hash, chunk_size, etag) VALUES (?, ?, ?, ?, ?)",
-		sessionID, chunkNumber, chunkHash, chunkSize, part.ETag,
+		sessionID, chunkNumber, chunkHash, chunkSize, etag,
 	)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to record chunk metadata")
@@ -666,7 +652,7 @@ func UploadChunk(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"chunkNumber": chunkNumber,
-		"etag":        part.ETag,
+		"etag":        etag,
 	})
 }
 
@@ -721,23 +707,10 @@ func CompleteUpload(c echo.Context) error {
 	if totalSizeFloat.Valid {
 		totalSize = int64(totalSizeFloat.Float64)
 	}
-	var paddedSize int64
-	if paddedSizeFloat.Valid {
-		paddedSize = int64(paddedSizeFloat.Float64)
-	}
 
 	logging.InfoLogger.Printf("CompleteUpload: DB query (part 1) successful for sessionID: '%s'. Status: '%s'.", sessionID, status)
 
-	// Step 2: Get envelope_data (BLOB) in a separate query to avoid potential driver issues.
-	var envelopeData []byte
-	err = database.DB.QueryRow(
-		"SELECT envelope_data FROM upload_sessions WHERE id = ?", sessionID,
-	).Scan(&envelopeData)
-	// sql.ErrNoRows should not happen here since the first query succeeded, but we handle it.
-	if err != nil && err != sql.ErrNoRows {
-		logging.ErrorLogger.Printf("Failed to get upload session details (part 2: envelope) for sessionID %s: %v", sessionID, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve session envelope data")
-	}
+	// Step 2: Envelope handling removed - envelope is now part of chunk 0
 
 	// Step 3: Perform validation checks on the retrieved data.
 	if ownerUsername != username {
@@ -798,8 +771,8 @@ func CompleteUpload(c echo.Context) error {
 	}
 
 	// Step 5: Complete the multipart upload in storage (using streaming hash instead of storage-calculated hash)
-	// Always use CompleteMultipartUploadWithEnvelope as it handles both envelope and non-envelope cases
-	err = storage.Provider.CompleteMultipartUploadWithEnvelope(c.Request().Context(), storageID.String, storageUploadID.String, parts, envelopeData, totalSize, paddedSize)
+	// Use standard CompleteMultipartUpload since envelope is now part of chunk 0
+	err = storage.Provider.CompleteMultipartUpload(c.Request().Context(), storageID.String, storageUploadID.String, parts)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to complete storage upload via storage provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))

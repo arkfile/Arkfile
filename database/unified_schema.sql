@@ -185,10 +185,6 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     status TEXT NOT NULL DEFAULT 'in_progress',
     encrypted_hash CHAR(64),
     encrypted_fek BLOB,
-    -- Crypto envelope support
-    envelope_data BLOB,
-    envelope_version TINYINT,
-    envelope_key_type TINYINT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,
