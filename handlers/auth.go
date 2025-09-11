@@ -19,7 +19,7 @@ import (
 
 // RefreshTokenRequest represents the request structure for refreshing a token
 type RefreshTokenRequest struct {
-	RefreshToken string `json:"refreshToken"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 // RefreshToken handles refresh token requests
@@ -91,7 +91,7 @@ func RefreshToken(c echo.Context) error {
 
 // LogoutRequest represents the request structure for logging out
 type LogoutRequest struct {
-	RefreshToken string `json:"refreshToken"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 // Logout handles user logout
@@ -833,10 +833,10 @@ func TOTPAuth(c echo.Context) error {
 	logging.InfoLogger.Printf("TOTP authentication completed for user: %s", username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"token":        token,
-		"refreshToken": refreshToken,
-		"sessionKey":   sessionKeyB64,
-		"authMethod":   "OPAQUE+TOTP",
+		"token":         token,
+		"refresh_token": refreshToken,
+		"session_key":   sessionKeyB64,
+		"auth_method":   "OPAQUE+TOTP",
 		"user": map[string]interface{}{
 			"username":        user.Username,
 			"email":           user.Email,

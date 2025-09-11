@@ -21,19 +21,19 @@ import (
 
 // ShareRequest represents a file sharing request (Argon2id-based anonymous shares)
 type ShareRequest struct {
-	FileID            string `json:"fileId"`
-	SharePassword     string `json:"sharePassword"`     // Share password for Argon2id derivation (client-side only)
-	Salt              string `json:"salt"`              // Base64-encoded 32-byte salt
-	EncryptedFEK      string `json:"encrypted_fek"`     // Base64-encoded FEK encrypted with Argon2id-derived key
-	ExpiresAfterHours int    `json:"expiresAfterHours"` // Optional expiration
+	FileID            string `json:"file_id"`
+	SharePassword     string `json:"share_password"`      // Share password for Argon2id derivation (client-side only)
+	Salt              string `json:"salt"`                // Base64-encoded 32-byte salt
+	EncryptedFEK      string `json:"encrypted_fek"`       // Base64-encoded FEK encrypted with Argon2id-derived key
+	ExpiresAfterHours int    `json:"expires_after_hours"` // Optional expiration
 }
 
 // ShareResponse represents a file share creation response
 type ShareResponse struct {
-	ShareID   string     `json:"shareId"`
-	ShareURL  string     `json:"shareUrl"`
-	CreatedAt time.Time  `json:"createdAt"`
-	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	ShareID   string     `json:"share_id"`
+	ShareURL  string     `json:"share_url"`
+	CreatedAt time.Time  `json:"created_at"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // ShareAccessRequest represents an anonymous share access request
@@ -269,10 +269,10 @@ func GetShareInfo(c echo.Context) error {
 
 	// Return share metadata (no sensitive data like salt or encrypted FEK)
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"success":          true,
-		"shareId":          shareID,
-		"fileInfo":         &fileInfo,
-		"requiresPassword": true, // All Argon2id shares require password
+		"success":           true,
+		"share_id":          shareID,
+		"file_info":         &fileInfo,
+		"requires_password": true, // All Argon2id shares require password
 	})
 }
 
@@ -492,14 +492,14 @@ func ListShares(c echo.Context) error {
 
 		// Format response with encrypted metadata for client-side decryption
 		shareData := map[string]interface{}{
-			"shareId":            share.ShareID,
-			"fileId":             share.FileID,
-			"encryptedFilename":  base64.StdEncoding.EncodeToString(share.EncryptedFilename),
-			"filenameNonce":      base64.StdEncoding.EncodeToString(share.FilenameNonce),
-			"encryptedSha256sum": base64.StdEncoding.EncodeToString(share.EncryptedSha256sum),
-			"sha256sumNonce":     base64.StdEncoding.EncodeToString(share.Sha256sumNonce),
-			"shareUrl":           shareURL,
-			"createdAt":          share.CreatedAt,
+			"share_id":            share.ShareID,
+			"file_id":             share.FileID,
+			"encrypted_filename":  base64.StdEncoding.EncodeToString(share.EncryptedFilename),
+			"filename_nonce":      base64.StdEncoding.EncodeToString(share.FilenameNonce),
+			"encrypted_sha256sum": base64.StdEncoding.EncodeToString(share.EncryptedSha256sum),
+			"sha256sum_nonce":     base64.StdEncoding.EncodeToString(share.Sha256sumNonce),
+			"share_url":           shareURL,
+			"created_at":          share.CreatedAt,
 		}
 
 		if share.Size.Valid {
@@ -507,9 +507,9 @@ func ListShares(c echo.Context) error {
 		}
 
 		if share.ExpiresAt.Valid {
-			shareData["expiresAt"] = share.ExpiresAt.String
+			shareData["expires_at"] = share.ExpiresAt.String
 		} else {
-			shareData["expiresAt"] = nil
+			shareData["expires_at"] = nil
 		}
 
 		shares = append(shares, shareData)
@@ -634,11 +634,11 @@ func DownloadSharedFile(c echo.Context) error {
 
 	// Return encrypted file data and encrypted metadata for client-side decryption
 	response := map[string]interface{}{
-		"data":               base64.StdEncoding.EncodeToString(data),
-		"encryptedFilename":  base64.StdEncoding.EncodeToString(encryptedFilename),
-		"filenameNonce":      base64.StdEncoding.EncodeToString(filenameNonce),
-		"encryptedSha256sum": base64.StdEncoding.EncodeToString(encryptedSha256sum),
-		"sha256sumNonce":     base64.StdEncoding.EncodeToString(sha256sumNonce),
+		"data":                base64.StdEncoding.EncodeToString(data),
+		"encrypted_filename":  base64.StdEncoding.EncodeToString(encryptedFilename),
+		"filename_nonce":      base64.StdEncoding.EncodeToString(filenameNonce),
+		"encrypted_sha256sum": base64.StdEncoding.EncodeToString(encryptedSha256sum),
+		"sha256sum_nonce":     base64.StdEncoding.EncodeToString(sha256sumNonce),
 	}
 
 	if size.Valid {

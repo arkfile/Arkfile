@@ -36,16 +36,16 @@ func CreateUploadSession(c echo.Context) error {
 
 	var request struct {
 		// Client sends encrypted metadata
-		EncryptedFilename  string `json:"encryptedFilename"`
-		FilenameNonce      string `json:"filenameNonce"`
-		EncryptedSha256sum string `json:"encryptedSha256sum"`
-		Sha256sumNonce     string `json:"sha256sumNonce"`
-		EncryptedFek       string `json:"encryptedFek"`
+		EncryptedFilename  string `json:"encrypted_filename"`
+		FilenameNonce      string `json:"filename_nonce"`
+		EncryptedSha256sum string `json:"encrypted_sha256sum"`
+		Sha256sumNonce     string `json:"sha256sum_nonce"`
+		EncryptedFek       string `json:"encrypted_fek"`
 
-		TotalSize    int64  `json:"totalSize"`
-		ChunkSize    int    `json:"chunkSize"`
-		PasswordHint string `json:"passwordHint"`
-		PasswordType string `json:"passwordType"`
+		TotalSize    int64  `json:"total_size"`
+		ChunkSize    int    `json:"chunk_size"`
+		PasswordHint string `json:"password_hint"`
+		PasswordType string `json:"password_type"`
 	}
 
 	if err := c.Bind(&request); err != nil {
@@ -389,9 +389,9 @@ func GetUploadStatus(c echo.Context) error {
 		ownerUsername      string
 		fileID             string
 		encryptedFilename  []byte
-		filenameNonce      []byte
+		filenameNonceRaw   interface{} // Use interface{} to handle RQLite base64 BLOB returns
 		encryptedSha256sum []byte
-		sha256sumNonce     []byte
+		sha256sumNonceRaw  interface{} // Use interface{} to handle RQLite base64 BLOB returns
 		status             string
 		totalChunks        int
 		totalSizeFloat     sql.NullFloat64 // Handle scientific notation
@@ -402,7 +402,7 @@ func GetUploadStatus(c echo.Context) error {
 	err := database.DB.QueryRow(
 		"SELECT owner_username, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, status, total_chunks, total_size, created_at, expires_at FROM upload_sessions WHERE id = ?",
 		sessionID,
-	).Scan(&ownerUsername, &fileID, &encryptedFilename, &filenameNonce, &encryptedSha256sum, &sha256sumNonce, &status, &totalChunks, &totalSizeFloat, &createdAtStr, &expiresAtStr)
+	).Scan(&ownerUsername, &fileID, &encryptedFilename, &filenameNonceRaw, &encryptedSha256sum, &sha256sumNonceRaw, &status, &totalChunks, &totalSizeFloat, &createdAtStr, &expiresAtStr)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
@@ -437,6 +437,42 @@ func GetUploadStatus(c echo.Context) error {
 	// Verify ownership
 	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized for this upload session")
+	}
+
+	// Handle FilenameNonce - may be a base64 string from rqlite
+	var filenameNonce []byte
+	switch v := filenameNonceRaw.(type) {
+	case []byte:
+		filenameNonce = v
+	case string:
+		// rqlite driver returns BLOBs as base64-encoded strings
+		decoded, err := base64.StdEncoding.DecodeString(v)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to decode base64 for filename_nonce: %v", err))
+		}
+		filenameNonce = decoded
+	case nil:
+		filenameNonce = nil
+	default:
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Unexpected type for filename_nonce: %T", v))
+	}
+
+	// Handle Sha256sumNonce - may be a base64 string from rqlite
+	var sha256sumNonce []byte
+	switch v := sha256sumNonceRaw.(type) {
+	case []byte:
+		sha256sumNonce = v
+	case string:
+		// rqlite driver returns BLOBs as base64-encoded strings
+		decoded, err := base64.StdEncoding.DecodeString(v)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to decode base64 for sha256sum_nonce: %v", err))
+		}
+		sha256sumNonce = decoded
+	case nil:
+		sha256sumNonce = nil
+	default:
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Unexpected type for sha256sum_nonce: %T", v))
 	}
 
 	// Get uploaded chunk numbers

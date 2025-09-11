@@ -79,9 +79,11 @@ func CreateFile(db *sql.DB, fileID, storageID, ownerUsername, passwordHint, pass
 func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	file := &File{}
 	var encryptedFileSha256sum string
-	var encryptedFekRaw interface{} // Use interface{} to handle driver differences
-	var sizeBytes interface{}       // Use interface{} to handle both int64 and float64
-	var uploadDateStr string        // Scan as string first to handle RQLite timestamp format
+	var encryptedFekRaw interface{}   // Use interface{} to handle driver differences
+	var filenameNonceRaw interface{}  // Use interface{} to handle RQLite base64 BLOB returns
+	var sha256sumNonceRaw interface{} // Use interface{} to handle RQLite base64 BLOB returns
+	var sizeBytes interface{}         // Use interface{} to handle both int64 and float64
+	var uploadDateStr string          // Scan as string first to handle RQLite timestamp format
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
@@ -91,8 +93,8 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	).Scan(
 		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 		&file.PasswordHint, &file.PasswordType,
-		&file.FilenameNonce, &file.EncryptedFilename,
-		&file.Sha256sumNonce, &file.EncryptedSha256sum,
+		&filenameNonceRaw, &file.EncryptedFilename,
+		&sha256sumNonceRaw, &file.EncryptedSha256sum,
 		&encryptedFileSha256sum, &encryptedFekRaw, &sizeBytes, &file.PaddedSize, &uploadDateStr,
 	)
 
@@ -140,6 +142,40 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		}
 	}
 
+	// Handle FilenameNonce - may be a base64 string from rqlite
+	switch v := filenameNonceRaw.(type) {
+	case []byte:
+		file.FilenameNonce = v
+	case string:
+		// rqlite driver returns BLOBs as base64-encoded strings
+		decoded, err := base64.StdEncoding.DecodeString(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64 for filename_nonce: %w", err)
+		}
+		file.FilenameNonce = decoded
+	case nil:
+		file.FilenameNonce = nil
+	default:
+		return nil, fmt.Errorf("unexpected type for filename_nonce: %T", v)
+	}
+
+	// Handle Sha256sumNonce - may be a base64 string from rqlite
+	switch v := sha256sumNonceRaw.(type) {
+	case []byte:
+		file.Sha256sumNonce = v
+	case string:
+		// rqlite driver returns BLOBs as base64-encoded strings
+		decoded, err := base64.StdEncoding.DecodeString(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64 for sha256sum_nonce: %w", err)
+		}
+		file.Sha256sumNonce = decoded
+	case nil:
+		file.Sha256sumNonce = nil
+	default:
+		return nil, fmt.Errorf("unexpected type for sha256sum_nonce: %T", v)
+	}
+
 	// Correctly handle encrypted_fek, which may be a base64 string from rqlite
 	switch v := encryptedFekRaw.(type) {
 	case []byte:
@@ -164,9 +200,11 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	file := &File{}
 	var encryptedFileSha256sum string
-	var encryptedFekRaw interface{} // Use interface{} to handle driver differences
-	var sizeBytes interface{}       // Use interface{} to handle both int64 and float64
-	var uploadDateStr string        // Scan as string first to handle RQLite timestamp format
+	var encryptedFekRaw interface{}   // Use interface{} to handle driver differences
+	var filenameNonceRaw interface{}  // Use interface{} to handle RQLite base64 BLOB returns
+	var sha256sumNonceRaw interface{} // Use interface{} to handle RQLite base64 BLOB returns
+	var sizeBytes interface{}         // Use interface{} to handle both int64 and float64
+	var uploadDateStr string          // Scan as string first to handle RQLite timestamp format
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
@@ -176,8 +214,8 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	).Scan(
 		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 		&file.PasswordHint, &file.PasswordType,
-		&file.FilenameNonce, &file.EncryptedFilename,
-		&file.Sha256sumNonce, &file.EncryptedSha256sum,
+		&filenameNonceRaw, &file.EncryptedFilename,
+		&sha256sumNonceRaw, &file.EncryptedSha256sum,
 		&encryptedFileSha256sum, &encryptedFekRaw, &sizeBytes, &file.PaddedSize, &uploadDateStr,
 	)
 
@@ -225,6 +263,40 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		}
 	}
 
+	// Handle FilenameNonce - may be a base64 string from rqlite
+	switch v := filenameNonceRaw.(type) {
+	case []byte:
+		file.FilenameNonce = v
+	case string:
+		// rqlite driver returns BLOBs as base64-encoded strings
+		decoded, err := base64.StdEncoding.DecodeString(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64 for filename_nonce: %w", err)
+		}
+		file.FilenameNonce = decoded
+	case nil:
+		file.FilenameNonce = nil
+	default:
+		return nil, fmt.Errorf("unexpected type for filename_nonce: %T", v)
+	}
+
+	// Handle Sha256sumNonce - may be a base64 string from rqlite
+	switch v := sha256sumNonceRaw.(type) {
+	case []byte:
+		file.Sha256sumNonce = v
+	case string:
+		// rqlite driver returns BLOBs as base64-encoded strings
+		decoded, err := base64.StdEncoding.DecodeString(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64 for sha256sum_nonce: %w", err)
+		}
+		file.Sha256sumNonce = decoded
+	case nil:
+		file.Sha256sumNonce = nil
+	default:
+		return nil, fmt.Errorf("unexpected type for sha256sum_nonce: %T", v)
+	}
+
 	// Correctly handle encrypted_fek, which may be a base64 string from rqlite
 	switch v := encryptedFekRaw.(type) {
 	case []byte:
@@ -268,14 +340,16 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 		file := &File{}
 		var encryptedFileSha256sum string
 		var encryptedFekRaw interface{}
+		var filenameNonceRaw interface{}  // Use interface{} to handle RQLite base64 BLOB returns
+		var sha256sumNonceRaw interface{} // Use interface{} to handle RQLite base64 BLOB returns
 		var sizeBytes interface{}
 		var uploadDateStr string
 
 		err := rows.Scan(
 			&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 			&file.PasswordHint, &file.PasswordType,
-			&file.FilenameNonce, &file.EncryptedFilename,
-			&file.Sha256sumNonce, &file.EncryptedSha256sum,
+			&filenameNonceRaw, &file.EncryptedFilename,
+			&sha256sumNonceRaw, &file.EncryptedSha256sum,
 			&encryptedFileSha256sum, &encryptedFekRaw, &sizeBytes, &file.PaddedSize, &uploadDateStr,
 		)
 		if err != nil {
@@ -292,6 +366,40 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 			file.SizeBytes = 0
 		default:
 			return nil, fmt.Errorf("unexpected type for size_bytes: %T", v)
+		}
+
+		// Handle FilenameNonce - may be a base64 string from rqlite
+		switch v := filenameNonceRaw.(type) {
+		case []byte:
+			file.FilenameNonce = v
+		case string:
+			// rqlite driver returns BLOBs as base64-encoded strings
+			decoded, err := base64.StdEncoding.DecodeString(v)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode base64 for filename_nonce: %w", err)
+			}
+			file.FilenameNonce = decoded
+		case nil:
+			file.FilenameNonce = nil
+		default:
+			return nil, fmt.Errorf("unexpected type for filename_nonce: %T", v)
+		}
+
+		// Handle Sha256sumNonce - may be a base64 string from rqlite
+		switch v := sha256sumNonceRaw.(type) {
+		case []byte:
+			file.Sha256sumNonce = v
+		case string:
+			// rqlite driver returns BLOBs as base64-encoded strings
+			decoded, err := base64.StdEncoding.DecodeString(v)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decode base64 for sha256sum_nonce: %w", err)
+			}
+			file.Sha256sumNonce = decoded
+		case nil:
+			file.Sha256sumNonce = nil
+		default:
+			return nil, fmt.Errorf("unexpected type for sha256sum_nonce: %T", v)
 		}
 
 		// Convert encryptedFekRaw from interface{} to []byte, preventing driver corruption

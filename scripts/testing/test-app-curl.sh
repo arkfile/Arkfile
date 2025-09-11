@@ -9,7 +9,9 @@
 # Features: Real TOTP codes, individual endpoint validation, mandatory TOTP enforcement,
 #          database manipulation, comprehensive error handling, modular execution
 
-set -euo pipefail
+# Note: Removed strict error handling to prevent silent failures in debugging
+# set -euo pipefail
+set -eo pipefail
 
 # Configuration
 ARKFILE_BASE_URL="${ARKFILE_BASE_URL:-https://localhost:4443}"
@@ -1883,30 +1885,60 @@ phase_9_file_operations() {
     encrypted_fek=$(echo "$encrypted_fek_output" | grep "Encrypted FEK (base64):" | cut -d' ' -f4)
     info "Encrypted FEK: ${encrypted_fek:0:20}..."
     
-    # Encrypt metadata (filename and SHA256)
+    # Encrypt metadata (filename and SHA256) using new separated format
     local metadata_output
     metadata_output=$(echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli encrypt-metadata \
         --filename "e2e-test-file.dat" \
         --sha256sum "$file_hash" \
         --username "$TEST_USERNAME" 2>&1)
     
-    local encrypted_filename encrypted_sha256
-    encrypted_filename=$(echo "$metadata_output" | grep "Encrypted Filename:" | cut -d' ' -f3)
-    encrypted_sha256=$(echo "$metadata_output" | grep "Encrypted SHA256:" | cut -d' ' -f3)
+    # Extract separated nonce and data fields from cryptocli output
+    local filename_nonce encrypted_filename_data sha256sum_nonce encrypted_sha256sum_data
+    filename_nonce=$(echo "$metadata_output" | grep "Filename Nonce:" | cut -d' ' -f3)
+    encrypted_filename_data=$(echo "$metadata_output" | grep "Encrypted Filename:" | cut -d' ' -f3)
+    sha256sum_nonce=$(echo "$metadata_output" | grep "SHA256 Nonce:" | cut -d' ' -f3)
+    encrypted_sha256sum_data=$(echo "$metadata_output" | grep "Encrypted SHA256:" | cut -d' ' -f3)
     
-    info "Encrypted metadata prepared"
+    # Validate that all metadata fields were extracted
+    if [ -z "$filename_nonce" ] || [ -z "$encrypted_filename_data" ] || [ -z "$sha256sum_nonce" ] || [ -z "$encrypted_sha256sum_data" ]; then
+        error "Failed to extract separated metadata fields from cryptocli output"
+        debug "Metadata output: $metadata_output"
+    fi
     
-    # Now upload using arkfile-client with pre-encrypted data
-    log "Uploading pre-encrypted file using arkfile-client..."
+    info "Encrypted metadata prepared with separated nonce and data fields"
+    debug "Filename nonce: ${filename_nonce:0:20}..."
+    debug "Encrypted filename data: ${encrypted_filename_data:0:20}..."
+    debug "SHA256 nonce: ${sha256sum_nonce:0:20}..."
+    debug "Encrypted SHA256 data: ${encrypted_sha256sum_data:0:20}..."
+    
+    # Create JSON metadata file for arkfile-client
+    local metadata_json_file="$TEMP_DIR/upload_metadata.json"
+    jq -n \
+        --arg filename_nonce "$filename_nonce" \
+        --arg encrypted_filename "$encrypted_filename_data" \
+        --arg sha256sum_nonce "$sha256sum_nonce" \
+        --arg encrypted_sha256sum "$encrypted_sha256sum_data" \
+        --arg encrypted_fek "$encrypted_fek" \
+        '{
+            filename_nonce: $filename_nonce,
+            encrypted_filename: $encrypted_filename,
+            sha256sum_nonce: $sha256sum_nonce,
+            encrypted_sha256sum: $encrypted_sha256sum,
+            encrypted_fek: $encrypted_fek
+        }' > "$metadata_json_file"
+    
+    success "JSON metadata file created for arkfile-client"
+    debug "Metadata JSON file: $metadata_json_file"
+    
+    # Now upload using arkfile-client with JSON metadata file
+    log "Uploading pre-encrypted file using arkfile-client with JSON metadata..."
     local upload_output_log="$TEMP_DIR/upload_output.log"
     /opt/arkfile/bin/arkfile-client \
         --config "$client_config_file" \
         --verbose \
         upload \
         --file "$upload_encrypted_file" \
-        --encrypted-filename "$encrypted_filename" \
-        --encrypted-sha256 "$encrypted_sha256" \
-        --encrypted-fek "$encrypted_fek" \
+        --metadata "$metadata_json_file" \
         --progress=false 2>&1 | tee "$upload_output_log"
 
     local file_id
@@ -1927,50 +1959,149 @@ phase_9_file_operations() {
         error "File upload failed. Log: $(cat $upload_output_log)"
     fi
 
-    # Step 11: Verify file metadata decryption via cryptocli
-    log "Step 11: Verifying file metadata decryption via cryptocli..."
+    # Step 11: Verify file metadata decryption via cryptocli (Enhanced Debug Version)
+    log "Step 11: Verifying file metadata decryption via cryptocli with comprehensive debug logging..."
     local list_files_json="$TEMP_DIR/list_files_output.json"
     
-    /opt/arkfile/bin/arkfile-client --config "$client_config_file" list-files --json > "$list_files_json"
+    debug "=== STEP 11 DEBUG: Starting metadata decryption workflow ==="
+    debug "File ID to decrypt: $file_id"
+    debug "Password length: ${#TEST_PASSWORD}"
+    debug "Username: $TEST_USERNAME"
+    debug "Cryptocli path: /opt/arkfile/bin/cryptocli"
     
-    # Find the specific file in the JSON output, using -c for compact output
+    # Verify cryptocli is available
+    if ! command -v /opt/arkfile/bin/cryptocli >/dev/null 2>&1; then
+        error "STEP 11 FAILED: cryptocli not found at /opt/arkfile/bin/cryptocli"
+    fi
+    debug "Cryptocli availability confirmed"
+    
+    # Get file listing from server
+    debug "Calling arkfile-client list-files to get server metadata..."
+    if ! /opt/arkfile/bin/arkfile-client --config "$client_config_file" list-files --json > "$list_files_json" 2>/dev/null; then
+        error "STEP 11 FAILED: arkfile-client list-files command failed"
+    fi
+    
+    debug "Raw JSON file listing saved to: $list_files_json"
+    debug "JSON file listing contents:"
+    debug "$(cat "$list_files_json" 2>/dev/null || echo 'ERROR: Cannot read JSON file')"
+    
+    # Find the specific file in the JSON output
     local file_entry
-    file_entry=$(jq -c ".files[] | select(.file_id == \"$file_id\")" "$list_files_json")
+    debug "Searching for file ID '$file_id' in server file listing..."
+    file_entry=$(jq -c ".files[] | select(.file_id == \"$file_id\")" "$list_files_json" 2>/dev/null)
     
     if [ -z "$file_entry" ]; then
-        error "Uploaded file ID ($file_id) NOT found in server file listing JSON."
+        error "STEP 11 FAILED: Uploaded file ID ($file_id) NOT found in server file listing JSON."
+        debug "Available file IDs in listing: $(jq -r '.files[].file_id' "$list_files_json" 2>/dev/null || echo 'ERROR: Cannot parse JSON')"
     fi
     success "Uploaded file found in server file listing JSON."
+    debug "Found file entry: $file_entry"
 
-    # Extract metadata for decryption with corrected snake_case field names
-    local encrypted_fek encrypted_filename encrypted_sha256sum
-    encrypted_fek=$(echo "$file_entry" | jq -r '.encrypted_fek')
-            encrypted_filename=$(echo "$file_entry" | jq -r '.encrypted_filename')
-            encrypted_sha256sum=$(echo "$file_entry" | jq -r '.encrypted_sha256sum')
-
-            debug "Raw file_entry JSON: $file_entry"
-            debug "Extracted encrypted_filename: $encrypted_filename"
-            debug "Extracted encrypted_sha256sum: $encrypted_sha256sum"
-
-            # Decrypt metadata using cryptocli
-            local decrypted_metadata_output
-            decrypted_metadata_output=$(echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli decrypt-metadata \
-                --encrypted-filename "$encrypted_filename" \
-                --encrypted-sha256sum "$encrypted_sha256sum" \
-                --username "$TEST_USERNAME" \
-                --password-source stdin \
-                --encrypted-sha256sum "$encrypted_sha256sum" \
-                --username "$TEST_USERNAME" 2>&1) # Capture stderr to see cryptocli errors
-
-    # Verify decrypted filename
-    local decrypted_filename
-    decrypted_filename=$(echo "$decrypted_metadata_output" | grep "Filename:" | awk '{print $2}')
+    # Extract metadata for decryption - server returns separate nonce and data fields
+    debug "Extracting metadata fields from server JSON response..."
+    local filename_nonce encrypted_filename_data sha256sum_nonce encrypted_sha256sum_data
     
-    if [ "$decrypted_filename" = "e2e-test-file.dat" ]; then
-        success "Successfully decrypted filename using cryptocli: $decrypted_filename"
-    else
-        error "Filename decryption mismatch. Expected 'e2e-test-file.dat', got '$decrypted_filename'"
+    filename_nonce=$(echo "$file_entry" | jq -r '.filename_nonce' 2>/dev/null)
+    encrypted_filename_data=$(echo "$file_entry" | jq -r '.encrypted_filename' 2>/dev/null)
+    sha256sum_nonce=$(echo "$file_entry" | jq -r '.sha256sum_nonce' 2>/dev/null)
+    encrypted_sha256sum_data=$(echo "$file_entry" | jq -r '.encrypted_sha256sum' 2>/dev/null)
+
+    debug "=== EXTRACTED METADATA FIELDS ==="
+    debug "filename_nonce: '$filename_nonce'"
+    debug "encrypted_filename_data: '$encrypted_filename_data'"
+    debug "sha256sum_nonce: '$sha256sum_nonce'"
+    debug "encrypted_sha256sum_data: '$encrypted_sha256sum_data'"
+    debug "=================================="
+
+    # Validate extracted parameters before calling cryptocli
+    local validation_errors=""
+    if [ "$filename_nonce" = "null" ] || [ -z "$filename_nonce" ]; then
+        validation_errors="${validation_errors}filename_nonce is null/empty; "
     fi
+    if [ "$encrypted_filename_data" = "null" ] || [ -z "$encrypted_filename_data" ]; then
+        validation_errors="${validation_errors}encrypted_filename_data is null/empty; "
+    fi
+    if [ "$sha256sum_nonce" = "null" ] || [ -z "$sha256sum_nonce" ]; then
+        validation_errors="${validation_errors}sha256sum_nonce is null/empty; "
+    fi
+    if [ "$encrypted_sha256sum_data" = "null" ] || [ -z "$encrypted_sha256sum_data" ]; then
+        validation_errors="${validation_errors}encrypted_sha256sum_data is null/empty; "
+    fi
+    
+    if [ -n "$validation_errors" ]; then
+        error "STEP 11 FAILED: Parameter validation errors: $validation_errors"
+        debug "Raw file_entry for debugging: $file_entry"
+    fi
+    debug "All parameters validated successfully"
+
+    # Construct cryptocli command for debugging
+    local cryptocli_cmd="/opt/arkfile/bin/cryptocli decrypt-metadata --filename-nonce '$filename_nonce' --encrypted-filename-data '$encrypted_filename_data' --sha256sum-nonce '$sha256sum_nonce' --encrypted-sha256sum-data '$encrypted_sha256sum_data' --username '$TEST_USERNAME'"
+    debug "cryptocli command to execute: $cryptocli_cmd"
+    
+    # Decrypt metadata using cryptocli with separate parameters and capture all output
+    debug "Calling cryptocli decrypt-metadata with separate parameters..."
+    local decrypted_metadata_output cryptocli_exit_code
+    set +e  # Temporarily disable exit on error to capture cryptocli failure details
+    
+    # Enable verbose mode in cryptocli if debug mode is enabled in test script
+    local cryptocli_verbose_flag=""
+    if [ "$DEBUG_MODE" = true ]; then
+        cryptocli_verbose_flag="--verbose"
+        debug "Enabling verbose mode in cryptocli for detailed internal logging"
+    fi
+    
+    decrypted_metadata_output=$(echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli $cryptocli_verbose_flag decrypt-metadata \
+        --filename-nonce "$filename_nonce" \
+        --encrypted-filename-data "$encrypted_filename_data" \
+        --sha256sum-nonce "$sha256sum_nonce" \
+        --encrypted-sha256sum-data "$encrypted_sha256sum_data" \
+        --username "$TEST_USERNAME" 2>&1)
+    cryptocli_exit_code=$?
+    set -e  # Re-enable exit on error
+    
+    debug "=== CRYPTOCLI EXECUTION RESULTS ==="
+    debug "Exit code: $cryptocli_exit_code"
+    debug "Full output/error: '$decrypted_metadata_output'"
+    debug "================================="
+    
+    if [ $cryptocli_exit_code -ne 0 ]; then
+        error "STEP 11 FAILED: cryptocli decrypt-metadata exited with code $cryptocli_exit_code"
+        error "cryptocli stderr/stdout: $decrypted_metadata_output"
+        debug "This indicates an internal cryptocli error or parameter format mismatch"
+    fi
+
+    # Parse cryptocli output for decrypted filename
+    debug "Parsing cryptocli output for decrypted filename..."
+    local decrypted_filename
+    decrypted_filename=$(echo "$decrypted_metadata_output" | grep "Filename:" | awk '{print $2}' 2>/dev/null)
+    debug "Extracted decrypted filename: '$decrypted_filename'"
+    
+    # Parse cryptocli output for decrypted SHA256
+    local decrypted_sha256
+    decrypted_sha256=$(echo "$decrypted_metadata_output" | grep "SHA256:" | awk '{print $2}' 2>/dev/null)
+    debug "Extracted decrypted SHA256: '$decrypted_sha256'"
+    
+    # Verify decrypted filename matches expectation
+    debug "Verifying decrypted filename matches expectation..."
+    if [ "$decrypted_filename" = "e2e-test-file.dat" ]; then
+        success "✓ Successfully decrypted filename using cryptocli: $decrypted_filename"
+    else
+        error "STEP 11 FAILED: Filename decryption mismatch. Expected 'e2e-test-file.dat', got '$decrypted_filename'"
+        debug "This indicates a metadata encryption/decryption key derivation mismatch"
+    fi
+    
+    # Also verify decrypted SHA256 if available
+    if [ -n "$decrypted_sha256" ]; then
+        debug "Also verifying decrypted SHA256 hash..."
+        if [ "$decrypted_sha256" = "$file_hash" ]; then
+            success "✓ Successfully decrypted SHA256 using cryptocli: $decrypted_sha256"
+        else
+            warning "SHA256 decryption mismatch. Expected '$file_hash', got '$decrypted_sha256'"
+        fi
+    fi
+    
+    success "Step 11: File metadata decryption workflow completed successfully"
+    debug "=== STEP 11 DEBUG: Metadata decryption workflow complete ==="
 
     # Step 12: Download the encrypted file
     log "Step 12: Downloading encrypted file..."

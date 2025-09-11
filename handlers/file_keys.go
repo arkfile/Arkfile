@@ -18,12 +18,12 @@ import (
 
 // FileKeyResponse represents a file encryption key
 type FileKeyResponse struct {
-	KeyID        string `json:"keyId"`
-	KeyType      string `json:"keyType"`
-	KeyLabel     string `json:"keyLabel"`
-	PasswordHint string `json:"passwordHint"`
-	IsPrimary    bool   `json:"isPrimary"`
-	CreatedAt    string `json:"createdAt"`
+	KeyID        string `json:"key_id"`
+	KeyType      string `json:"key_type"`
+	KeyLabel     string `json:"key_label"`
+	PasswordHint string `json:"password_hint"`
+	IsPrimary    bool   `json:"is_primary"`
+	CreatedAt    string `json:"created_at"`
 }
 
 // UpdateEncryption handles updating a file's encryption with a new or converted format
@@ -51,10 +51,10 @@ func UpdateEncryption(c echo.Context) error {
 
 	// Parse the request body
 	var request struct {
-		EncryptedData string `json:"encryptedData"`
-		NewKeyID      string `json:"newKeyId"`
-		KeyLabel      string `json:"keyLabel"`
-		PasswordHint  string `json:"passwordHint"`
+		EncryptedData string `json:"encrypted_data"`
+		NewKeyID      string `json:"new_key_id"`
+		KeyLabel      string `json:"key_label"`
+		PasswordHint  string `json:"password_hint"`
 	}
 
 	if err := c.Bind(&request); err != nil {
@@ -319,8 +319,8 @@ func UpdateKey(c echo.Context) error {
 
 	// Parse request
 	var request struct {
-		KeyLabel     string `json:"keyLabel"`
-		PasswordHint string `json:"passwordHint"`
+		KeyLabel     string `json:"key_label"`
+		PasswordHint string `json:"password_hint"`
 	}
 
 	if err := c.Bind(&request); err != nil {
@@ -446,7 +446,7 @@ func GetFileDecryptionKey(c echo.Context) error {
 
 	var request struct {
 		Password string `json:"password"`
-		KeyType  string `json:"keyType"` // 'account' or 'custom'
+		KeyType  string `json:"key_type"` // 'account' or 'custom'
 	}
 
 	if err := c.Bind(&request); err != nil {

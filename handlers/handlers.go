@@ -39,12 +39,12 @@ func UploadFile(c echo.Context) error {
 
 	var request struct {
 		Data               string `json:"data"`
-		PasswordHint       string `json:"passwordHint"`
-		PasswordType       string `json:"passwordType"`
-		EncryptedFilename  string `json:"encryptedFilename"`
-		FilenameNonce      string `json:"filenameNonce"`
-		EncryptedSha256sum string `json:"encryptedSha256sum"`
-		Sha256sumNonce     string `json:"sha256sumNonce"`
+		PasswordHint       string `json:"password_hint"`
+		PasswordType       string `json:"password_type"`
+		EncryptedFilename  string `json:"encrypted_filename"`
+		FilenameNonce      string `json:"filename_nonce"`
+		EncryptedSha256sum string `json:"encrypted_sha256sum"`
+		Sha256sumNonce     string `json:"sha256sum_nonce"`
 	}
 
 	if err := c.Bind(&request); err != nil {
@@ -218,16 +218,16 @@ func DownloadFile(c echo.Context) error {
 	// Return encrypted metadata for client-side decryption in the nested format expected by the client
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"file": map[string]interface{}{
-			"data":               string(data),
-			"passwordHint":       file.PasswordHint,
-			"passwordType":       file.PasswordType,
-			"filenameNonce":      base64.StdEncoding.EncodeToString(file.FilenameNonce),
-			"encryptedFilename":  base64.StdEncoding.EncodeToString(file.EncryptedFilename),
-			"sha256sumNonce":     base64.StdEncoding.EncodeToString(file.Sha256sumNonce),
-			"encryptedSha256sum": base64.StdEncoding.EncodeToString(file.EncryptedSha256sum),
-			"filename":           "", // Will be decrypted client-side
-			"file_size":          file.SizeBytes,
-			"encrypted_fek":      base64.StdEncoding.EncodeToString(file.EncryptedFEK),
+			"data":                string(data),
+			"password_hint":       file.PasswordHint,
+			"password_type":       file.PasswordType,
+			"filename_nonce":      base64.StdEncoding.EncodeToString(file.FilenameNonce),
+			"encrypted_filename":  base64.StdEncoding.EncodeToString(file.EncryptedFilename),
+			"sha256sum_nonce":     base64.StdEncoding.EncodeToString(file.Sha256sumNonce),
+			"encrypted_sha256sum": base64.StdEncoding.EncodeToString(file.EncryptedSha256sum),
+			"filename":            "", // Will be decrypted client-side
+			"file_size":           file.SizeBytes,
+			"encrypted_fek":       base64.StdEncoding.EncodeToString(file.EncryptedFEK),
 		},
 	})
 }

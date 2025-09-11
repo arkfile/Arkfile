@@ -570,6 +570,7 @@ func handleEncryptMetadataCommand(args []string) error {
 		sha256sum      = fs.String("sha256sum", "", "SHA256 hash to encrypt (required)")
 		username       = fs.String("username", "", "Username for salt generation (required)")
 		passwordSource = fs.String("password-source", "prompt", "Password source: prompt or stdin")
+		outputFormat   = fs.String("output-format", "separated", "Output format: separated or combined (default: separated)")
 	)
 
 	fs.Usage = func() {
@@ -577,13 +578,19 @@ func handleEncryptMetadataCommand(args []string) error {
 
 Encrypts file metadata (filename, SHA256 hash) using a password-derived key.
 Metadata is encrypted separately from file content and uses a key derived directly from the password.
+Outputs separate nonce and encrypted data fields for compatibility with the server API.
 
 FLAGS:
     --filename FILE         Filename to encrypt (required)
     --sha256sum HASH        SHA256 hash to encrypt (required)
     --username USER         Username for salt generation (required)
     --password-source SRC   Password source: prompt or stdin (default: prompt)
+    --output-format FMT     Output format: separated or combined (default: separated)
     --help                  Show this help message
+
+OUTPUT FORMAT:
+    separated: Outputs nonce and encrypted data separately (default, for server/client compatibility)
+    combined: Outputs combined nonce+data+tag format (legacy format)
 
 EXAMPLE:
     cryptocli encrypt-metadata --filename "document.pdf" --sha256sum "abc123..." --username "alice"
@@ -641,10 +648,40 @@ EXAMPLE:
 		return fmt.Errorf("SHA256 encryption failed: %w", err)
 	}
 
-	// Print results
+	// Print results based on output format
 	fmt.Printf("Metadata encrypted successfully\n")
-	fmt.Printf("Encrypted Filename: %s\n", base64.StdEncoding.EncodeToString(encryptedFilename))
-	fmt.Printf("Encrypted SHA256: %s\n", base64.StdEncoding.EncodeToString(encryptedSha256))
+
+	if *outputFormat == "combined" {
+		// Legacy format: output combined nonce+data+tag
+		fmt.Printf("Encrypted Filename: %s\n", base64.StdEncoding.EncodeToString(encryptedFilename))
+		fmt.Printf("Encrypted SHA256: %s\n", base64.StdEncoding.EncodeToString(encryptedSha256))
+	} else {
+		// Default separated format: extract nonce and data separately
+		// GCM format is: [12-byte nonce][encrypted data + 16-byte tag]
+
+		// For filename
+		if len(encryptedFilename) < 12 {
+			return fmt.Errorf("encrypted filename too short to contain nonce")
+		}
+		filenameNonce := encryptedFilename[:12]
+		filenameData := encryptedFilename[12:]
+
+		// For SHA256
+		if len(encryptedSha256) < 12 {
+			return fmt.Errorf("encrypted SHA256 too short to contain nonce")
+		}
+		sha256Nonce := encryptedSha256[:12]
+		sha256Data := encryptedSha256[12:]
+
+		// Output in the format expected by arkfile-client and server
+		fmt.Printf("Filename Nonce: %s\n", base64.StdEncoding.EncodeToString(filenameNonce))
+		fmt.Printf("Encrypted Filename: %s\n", base64.StdEncoding.EncodeToString(filenameData))
+		fmt.Printf("SHA256 Nonce: %s\n", base64.StdEncoding.EncodeToString(sha256Nonce))
+		fmt.Printf("Encrypted SHA256: %s\n", base64.StdEncoding.EncodeToString(sha256Data))
+
+		logVerbose("Output format: separated (nonce: 12 bytes, data+tag: %d bytes for filename, %d bytes for SHA256)",
+			len(filenameData), len(sha256Data))
+	}
 
 	return nil
 }
@@ -653,10 +690,13 @@ EXAMPLE:
 func handleDecryptMetadataCommand(args []string) error {
 	fs := flag.NewFlagSet("decrypt-metadata", flag.ExitOnError)
 	var (
-		encryptedFilename  = fs.String("encrypted-filename", "", "Base64 encoded encrypted filename (required)")
-		encryptedSha256sum = fs.String("encrypted-sha256sum", "", "Base64 encoded encrypted SHA256 sum (required)")
-		username           = fs.String("username", "", "Username for salt generation (required)")
-		passwordSource     = fs.String("password-source", "prompt", "Password source: prompt or stdin")
+		filenameNonce          = fs.String("filename-nonce", "", "Base64 encoded filename nonce (required)")
+		encryptedFilenameData  = fs.String("encrypted-filename-data", "", "Base64 encoded encrypted filename data (required)")
+		sha256sumNonce         = fs.String("sha256sum-nonce", "", "Base64 encoded SHA256 nonce (required)")
+		encryptedSha256sumData = fs.String("encrypted-sha256sum-data", "", "Base64 encoded encrypted SHA256 data (required)")
+		username               = fs.String("username", "", "Username for salt generation (required)")
+		passwordSource         = fs.String("password-source", "prompt", "Password source: prompt or stdin")
+		debugMode              = fs.Bool("debug", false, "Enable debug logging for troubleshooting")
 	)
 
 	fs.Usage = func() {
@@ -664,41 +704,92 @@ func handleDecryptMetadataCommand(args []string) error {
 
 Decrypts file metadata (filename, SHA256 hash) using a password-derived key.
 Metadata is encrypted separately from file content and uses a key derived directly from the password.
+This version accepts separate nonce and encrypted data parameters matching server JSON format.
 
 FLAGS:
-    --encrypted-filename    Base64 encoded encrypted filename (required)
-    --encrypted-sha256sum   Base64 encoded encrypted SHA256 sum (required)
-    --username USER         Username for salt generation (required)
-    --password-source SRC   Password source: prompt or stdin (default: prompt)
-    --help                 Show this help message
+    --filename-nonce DATA           Base64 encoded filename nonce (required)
+    --encrypted-filename-data DATA  Base64 encoded encrypted filename data (required)
+    --sha256sum-nonce DATA          Base64 encoded SHA256 nonce (required)  
+    --encrypted-sha256sum-data DATA Base64 encoded encrypted SHA256 data (required)
+    --username USER                 Username for salt generation (required)
+    --password-source SRC           Password source: prompt or stdin (default: prompt)
+    --debug                        Enable debug logging for troubleshooting
+    --help                         Show this help message
 
 EXAMPLE:
-    cryptocli decrypt-metadata --encrypted-filename "..." --encrypted-sha256sum "..." --username "alice"
+    cryptocli decrypt-metadata \
+        --filename-nonce "base64nonce..." \
+        --encrypted-filename-data "base64data..." \
+        --sha256sum-nonce "base64nonce..." \
+        --encrypted-sha256sum-data "base64data..." \
+        --username "alice"
 `)
 	}
 
 	if err := fs.Parse(args); err != nil {
+		logError("Failed to parse command line arguments: %v", err)
 		return err
 	}
 
-	if *encryptedFilename == "" || *encryptedSha256sum == "" || *username == "" {
+	// Enable debug logging if requested or if verbose is enabled
+	debugLogging := *debugMode || verbose
+
+	if debugLogging {
+		logVerbose("=== CRYPTOCLI DECRYPT-METADATA DEBUG SESSION ===")
+		logVerbose("Command: decrypt-metadata")
+		logVerbose("Arguments received: %d args", len(args))
+		logVerbose("Username: '%s'", *username)
+		logVerbose("Password source: %s", *passwordSource)
+		logVerbose("Debug mode: %t", *debugMode)
+	}
+
+	if *filenameNonce == "" || *encryptedFilenameData == "" || *sha256sumNonce == "" || *encryptedSha256sumData == "" || *username == "" {
+		if debugLogging {
+			logVerbose("Parameter validation failed:")
+			logVerbose("  filename-nonce empty: %t", *filenameNonce == "")
+			logVerbose("  encrypted-filename-data empty: %t", *encryptedFilenameData == "")
+			logVerbose("  sha256sum-nonce empty: %t", *sha256sumNonce == "")
+			logVerbose("  encrypted-sha256sum-data empty: %t", *encryptedSha256sumData == "")
+			logVerbose("  username empty: %t", *username == "")
+		}
 		fs.Usage()
-		return fmt.Errorf("encrypted-filename, encrypted-sha256sum, and username are required")
+		return fmt.Errorf("filename-nonce, encrypted-filename-data, sha256sum-nonce, encrypted-sha256sum-data, and username are required")
+	}
+
+	if debugLogging {
+		logVerbose("=== INPUT PARAMETERS VALIDATION PASSED ===")
+		logVerbose("filename-nonce length: %d characters", len(*filenameNonce))
+		logVerbose("encrypted-filename-data length: %d characters", len(*encryptedFilenameData))
+		logVerbose("sha256sum-nonce length: %d characters", len(*sha256sumNonce))
+		logVerbose("encrypted-sha256sum-data length: %d characters", len(*encryptedSha256sumData))
+		logVerbose("username: '%s'", *username)
 	}
 
 	// Read password
 	var password []byte
 	var err error
 	if *passwordSource == "stdin" {
+		if debugLogging {
+			logVerbose("Reading password from stdin...")
+		}
 		reader := bufio.NewReader(os.Stdin)
 		passwordStr, err := reader.ReadString('\n')
 		if err != nil {
+			if debugLogging {
+				logVerbose("Failed to read password from stdin: %v", err)
+			}
 			return fmt.Errorf("failed to read password from stdin: %w", err)
 		}
 		password = []byte(strings.TrimSpace(passwordStr))
 	} else {
+		if debugLogging {
+			logVerbose("Reading password from secure prompt...")
+		}
 		password, err = readPassword(fmt.Sprintf("Enter password for user '%s' to decrypt metadata: ", *username))
 		if err != nil {
+			if debugLogging {
+				logVerbose("Failed to read password from prompt: %v", err)
+			}
 			return fmt.Errorf("failed to read password: %w", err)
 		}
 	}
@@ -708,43 +799,117 @@ EXAMPLE:
 		}
 	}()
 	if len(password) == 0 {
+		if debugLogging {
+			logVerbose("Password validation failed: empty password")
+		}
 		return fmt.Errorf("password cannot be empty")
 	}
 
-	// Decode inputs
-	filenameEnc, err := base64.StdEncoding.DecodeString(*encryptedFilename)
-	if err != nil {
-		return fmt.Errorf("failed to decode encrypted-filename: %w", err)
+	if debugLogging {
+		logVerbose("Password successfully read (length: %d characters)", len(password))
+		logVerbose("=== STARTING BASE64 DECODING ===")
 	}
-	sha256sumEnc, err := base64.StdEncoding.DecodeString(*encryptedSha256sum)
+
+	// Decode separate nonce and encrypted data components
+	filenameNonceBytes, err := base64.StdEncoding.DecodeString(*filenameNonce)
 	if err != nil {
-		return fmt.Errorf("failed to decode encrypted-sha256sum: %w", err)
+		if debugLogging {
+			logVerbose("Base64 decode failed for filename-nonce: %v", err)
+			logVerbose("Raw filename-nonce input: '%s' (length: %d)", *filenameNonce, len(*filenameNonce))
+		}
+		return fmt.Errorf("failed to decode filename-nonce: %w", err)
+	}
+
+	encryptedFilenameBytes, err := base64.StdEncoding.DecodeString(*encryptedFilenameData)
+	if err != nil {
+		if debugLogging {
+			logVerbose("Base64 decode failed for encrypted-filename-data: %v", err)
+			logVerbose("Raw encrypted-filename-data input: '%s' (length: %d)", *encryptedFilenameData, len(*encryptedFilenameData))
+		}
+		return fmt.Errorf("failed to decode encrypted-filename-data: %w", err)
+	}
+
+	sha256sumNonceBytes, err := base64.StdEncoding.DecodeString(*sha256sumNonce)
+	if err != nil {
+		if debugLogging {
+			logVerbose("Base64 decode failed for sha256sum-nonce: %v", err)
+			logVerbose("Raw sha256sum-nonce input: '%s' (length: %d)", *sha256sumNonce, len(*sha256sumNonce))
+		}
+		return fmt.Errorf("failed to decode sha256sum-nonce: %w", err)
+	}
+
+	encryptedSha256sumBytes, err := base64.StdEncoding.DecodeString(*encryptedSha256sumData)
+	if err != nil {
+		if debugLogging {
+			logVerbose("Base64 decode failed for encrypted-sha256sum-data: %v", err)
+			logVerbose("Raw encrypted-sha256sum-data input: '%s' (length: %d)", *encryptedSha256sumData, len(*encryptedSha256sumData))
+		}
+		return fmt.Errorf("failed to decode encrypted-sha256sum-data: %w", err)
+	}
+
+	if debugLogging {
+		logVerbose("=== BASE64 DECODING SUCCESSFUL ===")
+		logVerbose("filenameNonceBytes length: %d bytes", len(filenameNonceBytes))
+		logVerbose("encryptedFilenameBytes length: %d bytes", len(encryptedFilenameBytes))
+		logVerbose("sha256sumNonceBytes length: %d bytes", len(sha256sumNonceBytes))
+		logVerbose("encryptedSha256sumBytes length: %d bytes", len(encryptedSha256sumBytes))
+		logVerbose("=== CALLING CRYPTO.DECRYPTFILEMETADATA ===")
+		logVerbose("Function parameters:")
+		logVerbose("  filenameNonce: %d bytes", len(filenameNonceBytes))
+		logVerbose("  encryptedFilename: %d bytes", len(encryptedFilenameBytes))
+		logVerbose("  sha256sumNonce: %d bytes", len(sha256sumNonceBytes))
+		logVerbose("  encryptedSha256sum: %d bytes", len(encryptedSha256sumBytes))
+		logVerbose("  password: %d chars (redacted)", len(password))
+		logVerbose("  username: '%s'", *username)
 	}
 
 	// Derive metadata key directly from password (account key type)
 	// Metadata always uses the account password key derivation
 	metadataKey := crypto.DeriveAccountPasswordKey(password, *username)
-	logVerbose("Derived metadata key using account password derivation for user: %s", *username)
 
-	// Decrypt filename with the metadata key (NOT the FEK)
-	filenameBytes, err := crypto.DecryptGCM(filenameEnc, metadataKey)
+	// Decrypt filename using the fixed function
+	decryptedFilenameBytes, err := crypto.DecryptMetadataWithDerivedKey(metadataKey, filenameNonceBytes, encryptedFilenameBytes)
 	if err != nil {
+		if debugLogging {
+			logVerbose("crypto.DecryptMetadataWithDerivedKey failed for filename: %v", err)
+		}
 		return fmt.Errorf("filename decryption failed: %w", err)
 	}
 
-	// Decrypt hash with the metadata key (NOT the FEK)
-	sha256sumBytes, err := crypto.DecryptGCM(sha256sumEnc, metadataKey)
+	// Decrypt SHA256 using the fixed function
+	decryptedSha256Bytes, err := crypto.DecryptMetadataWithDerivedKey(metadataKey, sha256sumNonceBytes, encryptedSha256sumBytes)
 	if err != nil {
-		// Log error but continue to show filename if hash fails
-		logError("SHA256 sum decryption failed: %v", err)
-		sha256sumBytes = []byte{} // Ensure it's empty on failure
+		if debugLogging {
+			logVerbose("crypto.DecryptMetadataWithDerivedKey failed for SHA256: %v", err)
+		}
+		return fmt.Errorf("SHA256 decryption failed: %w", err)
+	}
+
+	// Convert to strings
+	decryptedFilename := string(decryptedFilenameBytes)
+	decryptedSha256sum := string(decryptedSha256Bytes)
+	if err != nil {
+		if debugLogging {
+			logVerbose("crypto.DecryptFileMetadata failed: %v", err)
+			logVerbose("This indicates either:")
+			logVerbose("  1. Wrong password for key derivation")
+			logVerbose("  2. Corrupted/invalid encrypted data")
+			logVerbose("  3. Username mismatch in salt generation")
+			logVerbose("  4. Data format incompatibility")
+		}
+		return fmt.Errorf("metadata decryption failed: %w", err)
+	}
+
+	if debugLogging {
+		logVerbose("=== DECRYPTION SUCCESSFUL ===")
+		logVerbose("Decrypted filename: '%s' (length: %d)", decryptedFilename, len(decryptedFilename))
+		logVerbose("Decrypted SHA256: '%s' (length: %d)", decryptedSha256sum, len(decryptedSha256sum))
+		logVerbose("=== CRYPTOCLI DECRYPT-METADATA COMPLETED SUCCESSFULLY ===")
 	}
 
 	// Print results
-	fmt.Printf("Decrypted Filename: %s\n", string(filenameBytes))
-	if len(sha256sumBytes) > 0 {
-		fmt.Printf("Decrypted SHA256: %s\n", string(sha256sumBytes))
-	}
+	fmt.Printf("Decrypted Filename: %s\n", decryptedFilename)
+	fmt.Printf("Decrypted SHA256: %s\n", decryptedSha256sum)
 
 	return nil
 }

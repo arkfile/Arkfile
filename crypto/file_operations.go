@@ -514,8 +514,8 @@ type DecryptedFileMetadata struct {
 }
 
 // DecryptFileMetadata decrypts encrypted filename and SHA256 metadata using stored password
-// This function works with raw encrypted data (no envelope headers) as stored in the database
-// Note: The encryptedFilename and encryptedSHA256 already contain their nonces from EncryptGCM
+// This function works with separate nonce and encrypted data fields as stored in the database
+// The server stores nonces and encrypted data separately, so we need to combine them for DecryptGCM
 func DecryptFileMetadata(filenameNonce, encryptedFilename, sha256Nonce, encryptedSHA256 []byte, password string, username string) (string, string, error) {
 	if len(password) == 0 {
 		return "", "", fmt.Errorf("password cannot be empty")
@@ -524,15 +524,14 @@ func DecryptFileMetadata(filenameNonce, encryptedFilename, sha256Nonce, encrypte
 		return "", "", fmt.Errorf("username cannot be empty")
 	}
 
+	// Use account password derivation (default for file metadata)
+	// The database stores password_type separately, but for now we assume "account"
+	derivedKey := DeriveAccountPasswordKey([]byte(password), username)
+
 	// Decrypt filename
 	var filename string
-	if len(encryptedFilename) > 0 {
-		// Use account password derivation (default for file metadata)
-		// The database stores password_type separately, but for now we assume "account"
-		derivedKey := DeriveAccountPasswordKey([]byte(password), username)
-
-		// The encryptedFilename already contains the nonce from EncryptGCM - use it directly
-		decryptedFilename, err := DecryptGCM(encryptedFilename, derivedKey)
+	if len(encryptedFilename) > 0 && len(filenameNonce) > 0 {
+		decryptedFilename, err := DecryptMetadataWithDerivedKey(derivedKey, filenameNonce, encryptedFilename)
 		if err != nil {
 			return "", "", fmt.Errorf("failed to decrypt filename: %w", err)
 		}
@@ -541,12 +540,8 @@ func DecryptFileMetadata(filenameNonce, encryptedFilename, sha256Nonce, encrypte
 
 	// Decrypt SHA256
 	var sha256 string
-	if len(encryptedSHA256) > 0 {
-		// Use account password derivation (default for file metadata)
-		derivedKey := DeriveAccountPasswordKey([]byte(password), username)
-
-		// The encryptedSHA256 already contains the nonce from EncryptGCM - use it directly
-		decryptedSHA256, err := DecryptGCM(encryptedSHA256, derivedKey)
+	if len(encryptedSHA256) > 0 && len(sha256Nonce) > 0 {
+		decryptedSHA256, err := DecryptMetadataWithDerivedKey(derivedKey, sha256Nonce, encryptedSHA256)
 		if err != nil {
 			return "", "", fmt.Errorf("failed to decrypt SHA256: %w", err)
 		}
@@ -554,6 +549,38 @@ func DecryptFileMetadata(filenameNonce, encryptedFilename, sha256Nonce, encrypte
 	}
 
 	return filename, sha256, nil
+}
+
+// DecryptMetadataWithDerivedKey decrypts file metadata using a pre-derived key
+// This function is used by cryptocli and expects separate nonce and encrypted data parameters
+func DecryptMetadataWithDerivedKey(derivedKey []byte, nonce, encryptedData []byte) ([]byte, error) {
+	// Validate input lengths
+	if len(nonce) != 12 {
+		return nil, fmt.Errorf("invalid nonce length: expected 12 bytes, got %d", len(nonce))
+	}
+	if len(encryptedData) < 16 {
+		return nil, fmt.Errorf("invalid encrypted data length: expected at least 16 bytes for auth tag, got %d", len(encryptedData))
+	}
+
+	// The encrypted data from the database contains: [ciphertext][16-byte auth tag]
+	// We need to reconstruct the format expected by DecryptGCM: [nonce][ciphertext][auth tag]
+	ciphertextLen := len(encryptedData) - 16
+	if ciphertextLen < 0 {
+		return nil, fmt.Errorf("encrypted data too short to contain auth tag")
+	}
+
+	// Split the encrypted data
+	ciphertext := encryptedData[:ciphertextLen]
+	authTag := encryptedData[ciphertextLen:]
+
+	// Reconstruct the proper GCM format: [nonce][ciphertext][auth_tag]
+	gcmData := make([]byte, len(nonce)+len(ciphertext)+len(authTag))
+	copy(gcmData, nonce)
+	copy(gcmData[len(nonce):], ciphertext)
+	copy(gcmData[len(nonce)+len(ciphertext):], authTag)
+
+	// Now decrypt using the reconstructed data
+	return DecryptGCM(gcmData, derivedKey)
 }
 
 // DecryptFEKFromEnvelope decrypts a File Encryption Key (FEK) from its envelope using a password.

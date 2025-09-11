@@ -43,9 +43,9 @@ type AdminApproveRequest struct {
 type AdminApproveResponse struct {
 	Success    bool      `json:"success"`
 	Username   string    `json:"username"`
-	IsApproved bool      `json:"isApproved"`
-	ApprovedBy string    `json:"approvedBy"`
-	ApprovedAt time.Time `json:"approvedAt"`
+	IsApproved bool      `json:"is_approved"`
+	ApprovedBy string    `json:"approved_by"`
+	ApprovedAt time.Time `json:"approved_at"`
 }
 
 // AdminUserStatusResponse represents the comprehensive user status response
@@ -64,9 +64,9 @@ type AdminUserInfo struct {
 	ID         int64     `json:"id"`
 	Username   string    `json:"username"`
 	Email      *string   `json:"email,omitempty"`
-	IsApproved bool      `json:"isApproved"`
-	IsAdmin    bool      `json:"isAdmin"`
-	CreatedAt  time.Time `json:"createdAt"`
+	IsApproved bool      `json:"is_approved"`
+	IsAdmin    bool      `json:"is_admin"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // AdminTOTPStatus represents TOTP status information
@@ -578,9 +578,9 @@ func UpdateUser(c echo.Context) error {
 
 	// Parse request body
 	var req struct {
-		IsApproved        *bool  `json:"isApproved"`
-		IsAdmin           *bool  `json:"isAdmin"`
-		StorageLimitBytes *int64 `json:"storageLimitBytes"`
+		IsApproved        *bool  `json:"is_approved"`
+		IsAdmin           *bool  `json:"is_admin"`
+		StorageLimitBytes *int64 `json:"storage_limit_bytes"`
 	}
 
 	if err := c.Bind(&req); err != nil {
@@ -732,16 +732,16 @@ func ListUsers(c echo.Context) error {
 		}
 
 		user := map[string]interface{}{
-			"username":             username.String,
-			"email":                email.String,
-			"isApproved":           isApproved,
-			"isAdmin":              isAdmin,
-			"storageLimitBytes":    storageLimitBytes,
-			"totalStorageBytes":    totalStorageBytes,
-			"totalStorageReadable": totalStorageReadable,
-			"usagePercent":         usagePercent,
-			"registrationDate":     registrationDate.Format("2006-01-02"),
-			"lastLogin":            lastLoginFormatted,
+			"username":               username.String,
+			"email":                  email.String,
+			"is_approved":            isApproved,
+			"is_admin":               isAdmin,
+			"storage_limit_bytes":    storageLimitBytes,
+			"total_storage_bytes":    totalStorageBytes,
+			"total_storage_readable": totalStorageReadable,
+			"usage_percent":          usagePercent,
+			"registration_date":      registrationDate.Format("2006-01-02"),
+			"last_login":             lastLoginFormatted,
 		}
 
 		users = append(users, user)

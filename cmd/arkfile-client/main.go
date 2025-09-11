@@ -10,7 +10,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
-	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -115,13 +114,13 @@ type Response struct {
 
 // UploadMetadata represents pre-encrypted metadata for upload
 type UploadMetadata struct {
-	EncryptedFilename  string `json:"encryptedFilename"`
-	FilenameNonce      string `json:"filenameNonce"`
-	EncryptedSHA256sum string `json:"encryptedSha256sum"`
-	SHA256sumNonce     string `json:"sha256sumNonce"`
-	EncryptedFEK       string `json:"encryptedFek"`
-	PasswordType       string `json:"passwordType"`
-	PasswordHint       string `json:"passwordHint"`
+	EncryptedFilename  string `json:"encrypted_filename"`
+	FilenameNonce      string `json:"filename_nonce"`
+	EncryptedSHA256sum string `json:"encrypted_sha256sum"`
+	SHA256sumNonce     string `json:"sha256sum_nonce"`
+	EncryptedFEK       string `json:"encrypted_fek"`
+	PasswordType       string `json:"password_type"`
+	PasswordHint       string `json:"password_hint"`
 }
 
 func main() {
@@ -405,10 +404,9 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 		chunkSize    = fs.Int("chunk-size", 16*1024*1024, "Chunk size in bytes")
 		showProgress = fs.Bool("progress", true, "Show upload progress")
 		// Raw metadata flags for when not using a metadata file
-		encFilename  = fs.String("encrypted-filename", "", "Base64 encrypted filename")
-		encSha256    = fs.String("encrypted-sha256", "", "Base64 encrypted SHA256")
-		encFek       = fs.String("encrypted-fek", "", "Base64 encrypted FEK")
-		passwordType = fs.String("password-type", "account", "Password type used for encryption")
+		encFilename = fs.String("encrypted-filename", "", "Base64 encrypted filename")
+		encSha256   = fs.String("encrypted-sha256", "", "Base64 encrypted SHA256")
+		encFek      = fs.String("encrypted-fek", "", "Base64 encrypted FEK")
 	)
 
 	fs.Usage = func() {
@@ -480,33 +478,26 @@ EXAMPLES:
 			return fmt.Errorf("failed to parse metadata JSON: %w", err)
 		}
 	} else if *encFilename != "" && *encSha256 != "" && *encFek != "" {
-		// Use provided metadata flags
-		metadata = UploadMetadata{
-			EncryptedFilename:  *encFilename,
-			FilenameNonce:      extractNonce(*encFilename),
-			EncryptedSHA256sum: *encSha256,
-			SHA256sumNonce:     extractNonce(*encSha256),
-			EncryptedFEK:       *encFek,
-			PasswordType:       *passwordType,
-			PasswordHint:       "",
-		}
+		// Use provided metadata flags - nonces must be provided separately
+		// The client no longer attempts to extract nonces from encrypted data
+		return fmt.Errorf("direct metadata flags are deprecated. Please use a JSON metadata file or provide separate nonce parameters")
 	} else {
-		return fmt.Errorf("either --metadata file or all encrypted metadata flags are required")
+		return fmt.Errorf("metadata JSON file is required (use --metadata)")
 	}
 
 	// Initialize chunked upload
 	totalChunks := (len(encryptedData) + *chunkSize - 1) / *chunkSize
 
 	uploadReq := map[string]interface{}{
-		"encryptedFilename":  metadata.EncryptedFilename,
-		"filenameNonce":      metadata.FilenameNonce,
-		"encryptedSha256sum": metadata.EncryptedSHA256sum,
-		"sha256sumNonce":     metadata.SHA256sumNonce,
-		"encryptedFek":       metadata.EncryptedFEK,
-		"totalSize":          len(encryptedData),
-		"chunkSize":          *chunkSize,
-		"passwordHint":       metadata.PasswordHint,
-		"passwordType":       metadata.PasswordType,
+		"encrypted_filename":  metadata.EncryptedFilename,
+		"filename_nonce":      metadata.FilenameNonce,
+		"encrypted_sha256sum": metadata.EncryptedSHA256sum,
+		"sha256sum_nonce":     metadata.SHA256sumNonce,
+		"encrypted_fek":       metadata.EncryptedFEK,
+		"totalSize":           len(encryptedData),
+		"chunkSize":           *chunkSize,
+		"password_hint":       metadata.PasswordHint,
+		"password_type":       metadata.PasswordType,
 	}
 
 	uploadResp, err := client.makeRequest("POST", "/api/uploads/init", uploadReq, session.AccessToken)
@@ -967,21 +958,4 @@ func readPassword(prompt string) ([]byte, error) {
 	}
 	// Trim trailing newline characters which are common in piped input
 	return bytes.TrimRight(bytePassword, "\r\n"), nil
-}
-
-// extractNonce extracts the nonce from base64 encrypted data (first 12 bytes)
-func extractNonce(base64Data string) string {
-	// Decode the base64 data
-	data, err := base64.StdEncoding.DecodeString(base64Data)
-	if err != nil {
-		// If we can't decode, just return empty string
-		return ""
-	}
-
-	// GCM nonce is the first 12 bytes
-	if len(data) >= 12 {
-		return base64.StdEncoding.EncodeToString(data[:12])
-	}
-
-	return ""
 }
