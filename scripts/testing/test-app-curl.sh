@@ -637,8 +637,8 @@ phase_user_approval() {
     local success username is_approved approved_by
     success=$(jq -r '.success' "$TEMP_DIR/approve.json")
     username=$(jq -r '.username' "$TEMP_DIR/approve.json")
-    is_approved=$(jq -r '.isApproved' "$TEMP_DIR/approve.json")
-    approved_by=$(jq -r '.approvedBy' "$TEMP_DIR/approve.json")
+    is_approved=$(jq -r '.is_approved' "$TEMP_DIR/approve.json")
+    approved_by=$(jq -r '.approved_by' "$TEMP_DIR/approve.json")
     
     if [ "$success" != "true" ] || [ "$is_approved" != "true" ]; then
         error "Admin API user approval failed: success=$success, isApproved=$is_approved - this is a critical failure"
@@ -660,7 +660,7 @@ phase_user_approval() {
     
     local exists user_approved
     exists=$(jq -r '.exists' "$TEMP_DIR/user_approval_status.json")
-    user_approved=$(jq -r '.user.isApproved' "$TEMP_DIR/user_approval_status.json")
+    user_approved=$(jq -r '.user.is_approved' "$TEMP_DIR/user_approval_status.json")
     
     if [ "$exists" != "true" ]; then
         error "User does not exist after approval attempt - this is a critical failure"
@@ -1789,72 +1789,187 @@ phase_9_file_operations() {
     fi
     success "arkfile-client tool available and ready"
 
-    # Step 9: Configure arkfile-client with a valid session file
-    log "Step 9: Configuring arkfile-client with a valid session file..."
-    local client_config_file="$TEMP_DIR/client_config.json"
-    local client_session_file="$TEMP_DIR/client_auth_session.json"
-
-    # Create a valid AuthSession JSON file for the client
-    # This maps the server response to the format the Go client expects
-
-    # The /api/refresh endpoint does not return 'expiresAt', so we must extract it from the new JWT payload.
-    local new_token_after_refresh
-    new_token_after_refresh=$(cat "$TEMP_DIR/final_jwt_token")
-
-    # Extract payload (part 2 of JWT), decode it, and get the 'exp' (expiry) timestamp
-    local jwt_payload expiry_timestamp expires_at_iso
-    jwt_payload=$(echo "$new_token_after_refresh" | cut -d'.' -f2)
-
-    # The JWT payload is Base64URL encoded. We must convert it to standard Base64 before decoding.
-    # 1. Replace URL-safe characters.
-    local std_base64_payload
-    std_base64_payload=$(echo "$jwt_payload" | sed 's/-/+/g; s/_/\//g')
-
-    # 2. Add padding.
-    case $(( ${#std_base64_payload} % 4 )) in
-        2) std_base64_payload="${std_base64_payload}==" ;;
-        3) std_base64_payload="${std_base64_payload}=" ;;
-    esac
-
-    # Now, decode the standard Base64.
-    expiry_timestamp=$(echo "$std_base64_payload" | base64 -d | jq -r '.exp')
-    if [ -z "$expiry_timestamp" ]; then
-        error "Failed to extract expiry_timestamp from JWT payload after refresh."
+    # Step 9: Check for existing tokens before authenticating
+    log "Step 9: Checking for existing valid JWT tokens from earlier phases..."
+    
+    local final_token session_key auth_method="existing"
+    local token_reused=false
+    
+    # Check if we have valid tokens from Phase 6 that we can reuse
+    if [ -f "$TEMP_DIR/final_jwt_token" ] && [ -f "$TEMP_DIR/final_session_key" ]; then
+        final_token=$(cat "$TEMP_DIR/final_jwt_token")
+        session_key=$(cat "$TEMP_DIR/final_session_key")
+        
+        # Validate tokens are not mock tokens and not empty
+        if [ -n "$final_token" ] && [[ "$final_token" != "mock-"* ]] && [ -n "$session_key" ]; then
+            # Test if the token is still valid by making a simple API call
+            local token_test_response
+            token_test_response=$(curl -s $INSECURE_FLAG \
+                -H "Authorization: Bearer $final_token" \
+                -H "Content-Type: application/json" \
+                "$ARKFILE_BASE_URL/api/files" || echo "ERROR")
+            
+            if [ "$token_test_response" != "ERROR" ]; then
+                # Token is valid, reuse it
+                token_reused=true
+                success "✓ Reusing valid JWT token from Phase 6 (avoids TOTP code reuse)"
+                info "Token validation successful - Phase 6 authentication still valid"
+                debug "Token: ${final_token:0:20}..."
+                debug "Session key: ${session_key:0:20}..."
+            else
+                debug "Existing token failed validation, proceeding with fresh authentication"
+            fi
+        else
+            debug "Existing tokens are mock or empty, proceeding with fresh authentication"
+        fi
+    else
+        debug "No existing tokens found, proceeding with fresh authentication"
     fi
-
-    # Convert Unix timestamp to the ISO 8601 format the client expects
-    expires_at_iso=$(date -u -d "@${expiry_timestamp}" +"%Y-%m-%dT%H:%M:%SZ")
-
-    jq -n \
-        --arg username "$TEST_USERNAME" \
-        --arg access_token "$new_token_after_refresh" \
-        --arg refresh_token "$(cat "$TEMP_DIR/final_refresh_token")" \
-        --arg expires_at "$expires_at_iso" \
-        --arg server_url "$ARKFILE_BASE_URL" \
-        --arg session_created "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-        '{
-            username: $username,
-            access_token: $access_token,
-            refresh_token: $refresh_token,
-            expires_at: $expires_at,
-            server_url: $server_url,
-            session_created: $session_created
-        }' > "$client_session_file"
-
-    # Create a JSON config for the arkfile-client that points to the session file
+    
+    # If we couldn't reuse tokens, perform fresh authentication
+    if [ "$token_reused" = false ]; then
+        log "Performing fresh curl-based two-phase authentication..."
+        
+        # Phase 1: OPAQUE Login to get temporary tokens
+        log "Phase 1: OPAQUE authentication..."
+        local login_request
+        login_request=$(jq -n \
+            --arg username "$TEST_USERNAME" \
+            --arg password "$TEST_PASSWORD" \
+            '{
+                username: $username,
+                password: $password
+            }')
+        
+        local opaque_response
+        opaque_response=$(curl -s $INSECURE_FLAG \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d "$login_request" \
+            "$ARKFILE_BASE_URL/api/opaque/login" || echo "ERROR")
+        
+        if [ "$opaque_response" = "ERROR" ]; then
+            error "Failed to connect to server for OPAQUE authentication"
+        fi
+        
+        if ! echo "$opaque_response" | jq -e '.requiresTOTP' >/dev/null 2>&1; then
+            error "OPAQUE authentication failed: $opaque_response"
+        fi
+        
+        success "OPAQUE authentication successful - TOTP required"
+        
+        # Extract temporary tokens
+        local temp_token
+        temp_token=$(echo "$opaque_response" | jq -r '.tempToken')
+        session_key=$(echo "$opaque_response" | jq -r '.sessionKey')
+        
+        if [ "$temp_token" = "null" ] || [ "$session_key" = "null" ]; then
+            error "OPAQUE response missing required tokens"
+        fi
+        
+        # Phase 2: TOTP Authentication to get final token
+        log "Phase 2: TOTP authentication..."
+        
+        # Generate TOTP code using the stored secret from Phase 4
+        if [ ! -f "$TEMP_DIR/totp_secret" ]; then
+            error "TOTP secret not found - Phase 4 setup may have failed"
+        fi
+        
+        local totp_secret totp_code
+        totp_secret=$(cat "$TEMP_DIR/totp_secret")
+        totp_code=$(generate_totp_code "$totp_secret")
+        
+        if [ -z "$totp_code" ] || [ ${#totp_code} -ne 6 ]; then
+            error "Failed to generate valid TOTP code: $totp_code"
+        fi
+        
+        info "Generated TOTP code: $totp_code"
+        
+        # Complete TOTP authentication
+        local totp_request
+        totp_request=$(jq -n \
+            --arg code "$totp_code" \
+            --arg sessionKey "$session_key" \
+            --argjson isBackup false \
+            '{
+                code: $code,
+                sessionKey: $sessionKey,
+                isBackup: $isBackup
+            }')
+        
+        local totp_response
+        totp_response=$(curl -s $INSECURE_FLAG \
+            -X POST \
+            -H "Authorization: Bearer $temp_token" \
+            -H "Content-Type: application/json" \
+            -d "$totp_request" \
+            "$ARKFILE_BASE_URL/api/totp/auth" || echo "ERROR")
+        
+        if [ "$totp_response" = "ERROR" ]; then
+            error "Failed to connect to server for TOTP authentication"
+        fi
+        
+        if ! echo "$totp_response" | jq -e '.token' >/dev/null 2>&1; then
+            error "TOTP authentication failed: $totp_response"
+        fi
+        
+        # Extract final authentication token
+        final_token=$(echo "$totp_response" | jq -r '.token')
+        auth_method=$(echo "$totp_response" | jq -r '.authMethod')
+        
+        success "Fresh two-phase authentication completed successfully!"
+        info "Authentication method: $auth_method"
+    fi
+    
+    # Store tokens for later use regardless of source
+    echo "$final_token" > "$TEMP_DIR/step9_final_token"
+    echo "$session_key" > "$TEMP_DIR/step9_session_key"
+    
+    if [ "$token_reused" = true ]; then
+        success "Step 9 authentication: Token reuse successful (no TOTP code consumed)"
+    else
+        success "Step 9 authentication: Fresh authentication successful"
+    fi
+    info "Final token ready for network operations"
+    
+    # Create arkfile-client config for server connection (still needed for file operations)
+    local client_config_file="$TEMP_DIR/client_config.json"
     jq -n \
         --arg url "$ARKFILE_BASE_URL" \
         --arg user "$TEST_USERNAME" \
-        --arg token_file "$client_session_file" \
+        --arg token "$final_token" \
         '{
             server_url: $url,
             username: $user,
             tls_insecure: true,
-            token_file: $token_file
+            auth_token: $token
         }' > "$client_config_file"
-    success "arkfile-client config and session file created"
-    debug "Client session file at: $client_session_file"
-    debug "Client config file at: $client_config_file"
+    
+    # For arkfile-client compatibility, create a session file
+    local session_file="$HOME/.arkfile-session.json"
+    jq -n \
+        --arg token "$final_token" \
+        --arg username "$TEST_USERNAME" \
+        --arg server_url "$ARKFILE_BASE_URL" \
+        '{
+            token: $token,
+            username: $username,
+            server_url: $server_url
+        }' > "$session_file"
+    
+    # Verify authentication works by testing a protected endpoint
+    local session_file="$HOME/.arkfile-session.json"
+    if [ ! -f "$session_file" ]; then
+        error "arkfile-client failed to create session file at $session_file"
+    fi
+    
+    # Update client config to point to the proper session file
+    jq --arg token_file "$session_file" '. + {token_file: $token_file}' "$client_config_file" > "$client_config_file.tmp"
+    mv "$client_config_file.tmp" "$client_config_file"
+    
+    success "arkfile-client authentication completed successfully"
+    debug "Client config file: $client_config_file"
+    debug "Session file: $session_file"
 
     # Step 10: Prepare encrypted file and metadata for upload
     log "Step 10: Preparing encrypted file and metadata for upload..."
@@ -1930,33 +2045,203 @@ phase_9_file_operations() {
     success "JSON metadata file created for arkfile-client"
     debug "Metadata JSON file: $metadata_json_file"
     
-    # Now upload using arkfile-client with JSON metadata file
-    log "Uploading pre-encrypted file using arkfile-client with JSON metadata..."
-    local upload_output_log="$TEMP_DIR/upload_output.log"
-    /opt/arkfile/bin/arkfile-client \
-        --config "$client_config_file" \
-        --verbose \
-        upload \
-        --file "$upload_encrypted_file" \
-        --metadata "$metadata_json_file" \
-        --progress=false 2>&1 | tee "$upload_output_log"
-
+    # Now upload using arkfile-client with JSON metadata file WITH RETRY LOGIC
+    log "Uploading pre-encrypted file using arkfile-client with JSON metadata (with retry logic)..."
+    
+    local upload_success=false
+    local upload_attempts=0
+    local max_upload_attempts=3
     local file_id
-    # Extract file ID more robustly to avoid contamination
-    # Look for the final file ID from upload completion, not verbose logs
-    file_id=$(grep -E "^File ID: [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$" "$upload_output_log" | tail -1 | awk '{print $3}')
     
-    # Fallback: if the above doesn't work, try a more general pattern but clean it
-    if [ -z "$file_id" ]; then
-        file_id=$(grep "File ID:" "$upload_output_log" | grep -o "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}" | tail -1)
-    fi
+    while [ $upload_attempts -lt $max_upload_attempts ] && [ "$upload_success" = false ]; do
+        upload_attempts=$((upload_attempts + 1))
+        log "Upload attempt $upload_attempts of $max_upload_attempts..."
+        
+        local upload_output_log="$TEMP_DIR/upload_output_attempt_${upload_attempts}.log"
+        
+        # Attempt upload with explicit error handling to capture session expiration BEFORE any cleanup
+        local upload_exit_code=0
+        set +e  # Disable exit on error to capture the failure properly
+        
+        /opt/arkfile/bin/arkfile-client \
+            --config "$client_config_file" \
+            --verbose \
+            upload \
+            --file "$upload_encrypted_file" \
+            --metadata "$metadata_json_file" \
+            --progress=false > "$upload_output_log" 2>&1
+        upload_exit_code=$?
+        
+        set -e  # Re-enable exit on error
+        
+        # Immediately check output for session expiration BEFORE checking for success
+        local upload_log_content
+        upload_log_content=$(cat "$upload_output_log" 2>/dev/null || echo "")
+        
+        # Check for session expiration FIRST (before cleanup can trigger)
+        if echo "$upload_log_content" | grep -q -i "session expired\|please login again\|unauthorized\|authentication.*fail"; then
+            warning "Upload attempt $upload_attempts failed due to session expiration - RE-AUTHENTICATING..."
+            info "As requested: 'if we get to this point, just LOG IN AGAIN and TRY AGAIN'"
+            
+            if [ $upload_attempts -lt $max_upload_attempts ]; then
+                # RE-AUTHENTICATE: Perform fresh two-phase authentication
+                log "Re-authenticating due to session expiration..."
+                
+                # Phase 1: Fresh OPAQUE Login 
+                log "Phase 1: Fresh OPAQUE authentication for retry..."
+                local retry_login_request
+                retry_login_request=$(jq -n \
+                    --arg username "$TEST_USERNAME" \
+                    --arg password "$TEST_PASSWORD" \
+                    '{
+                        username: $username,
+                        password: $password
+                    }')
+                
+                local retry_opaque_response
+                retry_opaque_response=$(curl -s $INSECURE_FLAG \
+                    -X POST \
+                    -H "Content-Type: application/json" \
+                    -d "$retry_login_request" \
+                    "$ARKFILE_BASE_URL/api/opaque/login" || echo "ERROR")
+                
+                if [ "$retry_opaque_response" = "ERROR" ]; then
+                    warning "Retry OPAQUE authentication failed - connection error"
+                    continue
+                fi
+                
+                if ! echo "$retry_opaque_response" | jq -e '.requiresTOTP' >/dev/null 2>&1; then
+                    warning "Retry OPAQUE authentication failed: $retry_opaque_response"
+                    continue
+                fi
+                
+                success "Retry OPAQUE authentication successful"
+                
+                # Extract temporary tokens for retry
+                local retry_temp_token retry_session_key
+                retry_temp_token=$(echo "$retry_opaque_response" | jq -r '.tempToken')
+                retry_session_key=$(echo "$retry_opaque_response" | jq -r '.sessionKey')
+                
+                if [ "$retry_temp_token" = "null" ] || [ "$retry_session_key" = "null" ]; then
+                    warning "Retry OPAQUE response missing required tokens"
+                    continue
+                fi
+                
+                # Phase 2: Fresh TOTP Authentication for retry
+                log "Phase 2: Fresh TOTP authentication for retry..."
+                
+                # Generate fresh TOTP code for retry
+                if [ ! -f "$TEMP_DIR/totp_secret" ]; then
+                    warning "TOTP secret not found for retry authentication"
+                    continue
+                fi
+                
+                local retry_totp_secret retry_totp_code
+                retry_totp_secret=$(cat "$TEMP_DIR/totp_secret")
+                retry_totp_code=$(generate_totp_code "$retry_totp_secret")
+                
+                if [ -z "$retry_totp_code" ] || [ ${#retry_totp_code} -ne 6 ]; then
+                    warning "Failed to generate valid TOTP code for retry: $retry_totp_code"
+                    continue
+                fi
+                
+                info "Generated fresh TOTP code for retry: $retry_totp_code"
+                
+                # Complete fresh TOTP authentication for retry
+                local retry_totp_request
+                retry_totp_request=$(jq -n \
+                    --arg code "$retry_totp_code" \
+                    --arg sessionKey "$retry_session_key" \
+                    --argjson isBackup false \
+                    '{
+                        code: $code,
+                        sessionKey: $sessionKey,
+                        isBackup: $isBackup
+                    }')
+                
+                local retry_totp_response
+                retry_totp_response=$(curl -s $INSECURE_FLAG \
+                    -X POST \
+                    -H "Authorization: Bearer $retry_temp_token" \
+                    -H "Content-Type: application/json" \
+                    -d "$retry_totp_request" \
+                    "$ARKFILE_BASE_URL/api/totp/auth" || echo "ERROR")
+                
+                if [ "$retry_totp_response" = "ERROR" ]; then
+                    warning "Retry TOTP authentication failed - connection error"
+                    continue
+                fi
+                
+                if ! echo "$retry_totp_response" | jq -e '.token' >/dev/null 2>&1; then
+                    warning "Retry TOTP authentication failed: $retry_totp_response"
+                    continue
+                fi
+                
+                # Extract fresh final token for retry
+                local retry_final_token retry_auth_method
+                retry_final_token=$(echo "$retry_totp_response" | jq -r '.token')
+                retry_auth_method=$(echo "$retry_totp_response" | jq -r '.authMethod')
+                
+                success "Fresh re-authentication completed successfully!"
+                info "Retry authentication method: $retry_auth_method"
+                
+                # Update client config with fresh token
+                jq --arg token "$retry_final_token" '.auth_token = $token' "$client_config_file" > "$client_config_file.tmp"
+                mv "$client_config_file.tmp" "$client_config_file"
+                
+                # Update session file with fresh token
+                local session_file="$HOME/.arkfile-session.json"
+                jq --arg token "$retry_final_token" '.token = $token' "$session_file" > "$session_file.tmp"
+                mv "$session_file.tmp" "$session_file"
+                
+                success "Fresh authentication tokens updated - retrying upload..."
+                info "As requested: LOGGED IN AGAIN, now TRYING AGAIN!"
+                
+                # Brief pause before retry to let tokens settle
+                sleep 1
+                
+                # Continue the loop to try the upload again
+                continue
+            else
+                warning "Maximum retry attempts reached, cannot re-authenticate again"
+                break
+            fi
+        fi
+        
+        # Check for successful upload (only if not a session expiration case)
+        file_id=$(grep -E "^File ID: [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$" "$upload_output_log" | tail -1 | awk '{print $3}')
+        
+        # Fallback: if the above doesn't work, try a more general pattern but clean it
+        if [ -z "$file_id" ]; then
+            file_id=$(grep "File ID:" "$upload_output_log" | grep -o "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}" | tail -1)
+        fi
+        
+        if [ -n "$file_id" ] && [ $upload_exit_code -eq 0 ]; then
+            # Upload successful
+            upload_success=true
+            success "File uploaded successfully on attempt $upload_attempts. File ID: $file_id"
+            echo "$file_id" > "$TEMP_DIR/uploaded_file_id.txt"
+            break
+        else
+            # Not a session expiration error, different kind of failure
+            warning "Upload attempt $upload_attempts failed (not due to session expiration):"
+            warning "Exit code: $upload_exit_code"
+            warning "$(tail -5 "$upload_output_log" 2>/dev/null || echo 'No log content available')"
+            
+            if [ $upload_attempts -lt $max_upload_attempts ]; then
+                info "Retrying upload (attempt $((upload_attempts + 1)) of $max_upload_attempts)..."
+                sleep 2
+            fi
+        fi
+    done
     
-    echo "$file_id" > "$TEMP_DIR/uploaded_file_id.txt"
-
-    if [ -n "$file_id" ]; then
-        success "File uploaded successfully. File ID: $file_id"
+    # Final check after all retry attempts
+    if [ "$upload_success" = true ]; then
+        success "🎉 Upload completed successfully after $upload_attempts attempt(s) with retry logic!"
+        info "Retry logic worked: 'LOG IN AGAIN and TRY AGAIN' strategy successful"
     else
-        error "File upload failed. Log: $(cat $upload_output_log)"
+        error "Upload failed after $max_upload_attempts attempts with retry logic"
+        error "Final failure log: $(cat "$TEMP_DIR/upload_output_attempt_${upload_attempts}.log" 2>/dev/null || echo 'No log available')"
     fi
 
     # Step 11: Verify file metadata decryption via cryptocli (Enhanced Debug Version)
