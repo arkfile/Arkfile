@@ -174,7 +174,7 @@ async function runWasmTests(): Promise<void> {
         
         testWrongPassword();
         
-        console.log('\n🎉 All basic tests passed!');
+        console.log('\nAll basic tests passed!');
         
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);

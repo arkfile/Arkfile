@@ -48,8 +48,9 @@ func CreateUploadSession(c echo.Context) error {
 		PasswordType string `json:"password_type"`
 	}
 
+	// Bind the JSON request body to the struct
 	if err := c.Bind(&request); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON request: "+err.Error())
 	}
 
 	// Validate encrypted metadata format
@@ -97,9 +98,16 @@ func CreateUploadSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Storage limit would be exceeded")
 	}
 
-	// Create upload session
+	// Create upload session - with safe chunk size validation
 	sessionID := uuid.New().String()
 	fileID := models.GenerateFileID() // Generate file_id for the new encrypted metadata system
+
+	// Validate and set default chunk size to prevent divide by zero
+	if request.ChunkSize <= 0 {
+		logging.InfoLogger.Printf("Invalid chunk_size %d received, defaulting to 16MB (16,777,216 bytes)", request.ChunkSize)
+		request.ChunkSize = 16 * 1024 * 1024 // 16MB default
+	}
+
 	totalChunks := (request.TotalSize + int64(request.ChunkSize) - 1) / int64(request.ChunkSize)
 
 	// Begin transaction
@@ -177,11 +185,11 @@ func CreateUploadSession(c echo.Context) error {
 		sessionID, username, fileID, request.TotalSize)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"sessionId":   sessionID,
-		"fileId":      fileID, // Return file_id for client reference
-		"chunkSize":   request.ChunkSize,
-		"totalChunks": totalChunks,
-		"expiresAt":   time.Now().Add(24 * time.Hour),
+		"session_id":   sessionID,
+		"file_id":      fileID, // Return file_id for client reference
+		"chunk_size":   request.ChunkSize,
+		"total_chunks": totalChunks,
+		"expires_at":   time.Now().Add(24 * time.Hour),
 	})
 }
 
@@ -507,20 +515,20 @@ func GetUploadStatus(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"sessionId":          sessionID,
-		"fileId":             fileID,
-		"encryptedFilename":  base64.StdEncoding.EncodeToString(encryptedFilename),
-		"filenameNonce":      base64.StdEncoding.EncodeToString(filenameNonce),
-		"encryptedSha256sum": base64.StdEncoding.EncodeToString(encryptedSha256sum),
-		"sha256sumNonce":     base64.StdEncoding.EncodeToString(sha256sumNonce),
-		"status":             status,
-		"totalChunks":        totalChunks,
-		"uploadedChunks":     uploadedChunks,
-		"progress":           progress,
-		"totalSize":          totalSize,
-		"createdAt":          createdAt,
-		"expiresAt":          expiresAt,
-		"isExpired":          time.Now().After(expiresAt),
+		"session_id":          sessionID,
+		"file_id":             fileID,
+		"encrypted_filename":  base64.StdEncoding.EncodeToString(encryptedFilename),
+		"filename_nonce":      base64.StdEncoding.EncodeToString(filenameNonce),
+		"encrypted_sha256sum": base64.StdEncoding.EncodeToString(encryptedSha256sum),
+		"sha256sum_nonce":     base64.StdEncoding.EncodeToString(sha256sumNonce),
+		"status":              status,
+		"total_chunks":        totalChunks,
+		"uploaded_chunks":     uploadedChunks,
+		"progress":            progress,
+		"total_size":          totalSize,
+		"created_at":          createdAt,
+		"expires_at":          expiresAt,
+		"is_expired":          time.Now().After(expiresAt),
 	})
 }
 
@@ -858,10 +866,10 @@ func CompleteUpload(c echo.Context) error {
 	database.LogUserAction(username, "uploaded", fileID.String)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"message":             "File uploaded successfully",
-		"fileId":              fileID.String,
-		"storageId":           storageID.String, // Expose storage ID for test verification
-		"encryptedFileSHA256": serverCalculatedHash,
+		"message":               "File uploaded successfully",
+		"file_id":               fileID.String,
+		"storage_id":            storageID.String, // Expose storage ID for test verification
+		"encrypted_file_sha256": serverCalculatedHash,
 		"storage": map[string]interface{}{
 			"total_bytes":     user.TotalStorageBytes,
 			"limit_bytes":     user.StorageLimitBytes,

@@ -112,8 +112,8 @@ func TestChunkedUploadEndToEnd(t *testing.T) {
 		}
 	}
 
-	t.Logf("🎉 SUCCESS: 32MB chunked upload/download cycle completed successfully")
-	t.Logf("🎉 This proves the envelope fix works for files >16MB")
+	t.Logf("SUCCESS: 32MB chunked upload/download cycle completed successfully")
+	t.Logf("This proves the envelope fix works for files >16MB")
 
 	// Verify all mock expectations were met
 	require.NoError(t, mockDB.ExpectationsWereMet(), "Database mock expectations not met")
@@ -452,7 +452,7 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, usernam
 		fmt.Printf("📈 Total plaintext so far: %d bytes\n", len(plaintext))
 	}
 
-	fmt.Printf("🎉 Decryption complete: %d chunks, %d bytes total\n", chunkNumber, len(plaintext))
+	fmt.Printf("Decryption complete: %d chunks, %d bytes total\n", chunkNumber, len(plaintext))
 	return plaintext, nil
 }
 

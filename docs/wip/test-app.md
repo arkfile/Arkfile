@@ -640,12 +640,12 @@ verify_complete_integrity() {
     decrypted_hash=$(sha256sum "$decrypted_file" | cut -d' ' -f1)
     
     if [ "$original_hash" = "$decrypted_hash" ]; then
-        success "🎉 PERFECT INTEGRITY VERIFIED - Complete workflow successful!"
+        success "PERFECT INTEGRITY VERIFIED - Complete workflow successful!"
         info "Original file →  Generate →  Encrypt →  Upload →  List →  Download →  Decrypt →  Verify"
         info "SHA-256 hashes:"
         info "  Original:  $original_hash"
         info "  Final:     $decrypted_hash"
-        info "  ✅ EXACT MATCH - Zero data corruption through complete cycle"
+        info "  EXACT MATCH - Zero data corruption through complete cycle"
         
         # Additional file size verification
         local original_size decrypted_size
@@ -983,12 +983,12 @@ verify_complete_integrity() {
     decrypted_hash=$(sha256sum "$decrypted_file" | cut -d' ' -f1)
     
     if [ "$original_hash" = "$decrypted_hash" ]; then
-        success "🎉 PERFECT INTEGRITY VERIFIED - Complete workflow successful!"
+        success "PERFECT INTEGRITY VERIFIED - Complete workflow successful!"
         info "Original file →  Generate →  Encrypt →  Upload →  List →  Download →  Decrypt →  Verify"
         info "SHA-256 hashes:"
         info "  Original:  $original_hash"
         info "  Final:     $decrypted_hash"
-        info "  ✅ EXACT MATCH - Zero data corruption through complete cycle"
+        info "  EXACT MATCH - Zero data corruption through complete cycle"
         
         # Additional file size verification
         local original_size decrypted_size

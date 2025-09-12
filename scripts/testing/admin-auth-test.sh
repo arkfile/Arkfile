@@ -75,18 +75,22 @@ info() {
     echo -e "${GRAY}   $1${NC}"
 }
 
-# Function to generate TOTP code for specific time window
+# Function to generate TOTP code for specific time window (with timestamp control)
 generate_totp_for_window() {
     local secret=$1
     local time_offset=${2:-0}  # offset in 30-second windows
-    
-    # For current window, just use existing totp-generator directly
+
+    # FIX: Use explicit timestamps to control TOTP generation timing
     if [[ "$time_offset" == "0" ]]; then
-        ./scripts/testing/totp-generator "$secret"
+        # Current window - use current timestamp
+        local current_ts=$(date +%s)
+        debug "Generating TOTP for current timestamp: $current_ts"
+        ./scripts/testing/totp-generator "$secret" "$current_ts"
     else
-        # For offset windows, we'll just use current code since TOTP has window tolerance
-        # This is simpler and more reliable than generating code for specific timestamps
-        ./scripts/testing/totp-generator "$secret"
+        # Offset window - calculate specific timestamp
+        local offset_ts=$(( $(date +%s) + (time_offset * 30) ))
+        debug "Generating TOTP for offset timestamp: $offset_ts (offset: ${time_offset}x30s)"
+        ./scripts/testing/totp-generator "$secret" "$offset_ts"
     fi
 }
 
@@ -238,10 +242,10 @@ show_test_summary() {
     echo
     echo -e "${BLUE}Summary: ${NC}"
     if [[ $passed_tests -eq $total_tests ]]; then
-        echo -e "${GREEN}🎉 All tests passed! ($passed_tests/$total_tests)${NC}"
+        echo -e "${GREEN}All tests passed! ($passed_tests/$total_tests)${NC}"
         echo -e "${GREEN}Admin authentication system is fully operational${NC}"
     else
-        echo -e "${YELLOW}⚠️  Some tests failed ($passed_tests/$total_tests passed)${NC}"
+        echo -e "${YELLOW}Some tests failed ($passed_tests/$total_tests passed)${NC}"
         echo -e "${YELLOW}Review failed tests above for troubleshooting${NC}"
     fi
     echo
@@ -415,10 +419,11 @@ for i in "${!TOTP_CODES[@]}"; do
         fi
     fi
     
-    # Wait before next attempt to avoid rate limiting
+    # FIXME: Add proper rate limiting protection by incrementing delays
     if [[ $i -lt $((${#TOTP_CODES[@]} - 1)) ]]; then
-        debug "Waiting before next attempt..."
-        sleep 3
+        local wait_time=$((2 + (i * 2)))  # Progressive wait: 2s, 4s, 6s, etc.
+        debug "Waiting ${wait_time}s before next attempt (rate limiting protection)..."
+        sleep $wait_time
     fi
 done
 

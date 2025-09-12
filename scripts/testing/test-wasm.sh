@@ -75,7 +75,7 @@ if [ $TEST_EXIT_CODE -eq 0 ]; then
         
         if [ $INTEGRATION_TEST_EXIT_CODE -eq 0 ]; then
             echo
-            echo -e "${GREEN}🎉 All WASM tests passed including OPAQUE crypto!${NC}"
+            echo -e "${GREEN}All WASM tests passed including OPAQUE crypto!${NC}"
             exit 0
         else
             echo -e "${RED}❌ Some integration tests failed${NC}"

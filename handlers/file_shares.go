@@ -49,7 +49,7 @@ type ShareAccessResponse struct {
 	FileInfo     *ShareFileInfo `json:"file_info,omitempty"`
 	Error        string         `json:"error,omitempty"`
 	Message      string         `json:"message,omitempty"`
-	RetryAfter   int            `json:"retryAfter,omitempty"` // For rate limiting
+	RetryAfter   int            `json:"retry_after,omitempty"` // For rate limiting
 }
 
 // ShareFileInfo contains metadata about the shared file

@@ -111,8 +111,8 @@ func TestChunkedUpload100MB(t *testing.T) {
 		t.Logf("✓ Chunk %d integrity verified (%d-%d bytes)", chunkIdx, startByte, endByte-1)
 	}
 
-	t.Logf("🎉 SUCCESS: 100MB chunked upload/download cycle completed successfully")
-	t.Logf("🎉 This proves the envelope fix works robustly with %d chunks for large files", len(encryptedChunks))
+	t.Logf("SUCCESS: 100MB chunked upload/download cycle completed successfully")
+	t.Logf("This proves the envelope fix works robustly with %d chunks for large files", len(encryptedChunks))
 
 	// Verify all mock expectations were met
 	require.NoError(t, mockDB.ExpectationsWereMet(), "Database mock expectations not met")

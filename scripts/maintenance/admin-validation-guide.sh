@@ -356,17 +356,17 @@ echo
 
 # Final verdict
 if [ $TESTS_FAILED -eq 0 ]; then
-    echo -e "${GREEN}🎉 CONGRATULATIONS! 🎉${NC}"
+    echo -e "${GREEN}CONGRATULATIONS!${NC}"
     echo -e "${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║                         VALIDATION SUCCESSFUL                                ║${NC}"
     echo -e "${GREEN}║                                                                              ║${NC}"
-    echo -e "${GREEN}║  Your Arkfile deployment is working correctly and ready for use!            ║${NC}"
+    echo -e "${GREEN}║  Your Arkfile deployment is working correctly and ready for use!             ║${NC}"
     echo -e "${GREEN}║                                                                              ║${NC}"
-    echo -e "${GREEN}║  ✓ OPAQUE authentication system functional                                   ║${NC}"
-    echo -e "${GREEN}║  ✓ File encryption and decryption working                                   ║${NC}"
-    echo -e "${GREEN}║  ✓ File sharing system operational                                          ║${NC}"
-    echo -e "${GREEN}║  ✓ All backend services healthy                                             ║${NC}"
-    echo -e "${GREEN}║  ✓ TLS certificates configured properly                                     ║${NC}"
+    echo -e "${GREEN}║  + OPAQUE authentication system functional                                   ║${NC}"
+    echo -e "${GREEN}║  + File encryption and decryption working                                    ║${NC}"
+    echo -e "${GREEN}║  + File sharing system operational                                           ║${NC}"
+    echo -e "${GREEN}║  + All backend services healthy                                              ║${NC}"
+    echo -e "${GREEN}║  + TLS certificates configured properly                                      ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo
     echo -e "${BLUE}🚀 NEXT STEPS:${NC}"
@@ -380,7 +380,7 @@ elif [ $TESTS_FAILED -le 2 ]; then
     echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${YELLOW}║                    MOSTLY FUNCTIONAL DEPLOYMENT                              ║${NC}"
     echo -e "${YELLOW}║                                                                              ║${NC}"
-    echo -e "${YELLOW}║  Your Arkfile deployment is largely working but has minor issues.           ║${NC}"
+    echo -e "${YELLOW}║  Your Arkfile deployment is largely working but has minor issues.            ║${NC}"
     echo -e "${YELLOW}║  Core functionality appears operational.                                     ║${NC}"
     echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo

@@ -219,7 +219,7 @@ async function runDebugTest(): Promise<void> {
             process.exit(1);
         }
         
-        console.log('\n🎉 Multi-key encryption test passed!');
+        console.log('\nMulti-key encryption test passed!');
         
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);

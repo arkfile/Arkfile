@@ -255,9 +255,9 @@ main() {
     
     # Verify the libraries were built correctly
     if verify_static_libraries; then
-        echo "🎉 Static library build completed successfully!"
+        echo "[OK] Static library build completed successfully!"
     else
-        echo "❌ Static library verification failed"
+        echo "[X] Static library verification failed"
         exit 1
     fi
 }

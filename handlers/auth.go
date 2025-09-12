@@ -285,9 +285,9 @@ type OpaqueLoginRequest struct {
 
 // OpaqueHealthCheckResponse represents the health status of OPAQUE system
 type OpaqueHealthCheckResponse struct {
-	OpaqueReady       bool   `json:"opaqueReady"`
-	ServerKeysLoaded  bool   `json:"serverKeysLoaded"`
-	DatabaseConnected bool   `json:"databaseConnected"`
+	OpaqueReady       bool   `json:"opaque_ready"`
+	ServerKeysLoaded  bool   `json:"server_keys_loaded"`
+	DatabaseConnected bool   `json:"database_connected"`
 	Status            string `json:"status"`
 	Message           string `json:"message"`
 }
@@ -540,15 +540,15 @@ func OpaqueHealthCheck(c echo.Context) error {
 
 // TOTPSetupRequest represents the request for TOTP setup
 type TOTPSetupRequest struct {
-	SessionKey string `json:"sessionKey"`
+	SessionKey string `json:"session_key"`
 }
 
 // TOTPSetupResponse represents the response for TOTP setup
 type TOTPSetupResponse struct {
 	Secret      string   `json:"secret"`
-	QRCodeURL   string   `json:"qrCodeUrl"`
-	BackupCodes []string `json:"backupCodes"`
-	ManualEntry string   `json:"manualEntry"`
+	QRCodeURL   string   `json:"qr_code_url"`
+	BackupCodes []string `json:"backup_codes"`
+	ManualEntry string   `json:"manual_entry"`
 }
 
 // TOTPSetup initializes TOTP setup for a user
@@ -607,8 +607,8 @@ func TOTPSetup(c echo.Context) error {
 // TOTPVerifyRequest represents the request for TOTP verification
 type TOTPVerifyRequest struct {
 	Code       string `json:"code"`
-	SessionKey string `json:"sessionKey"`
-	IsBackup   bool   `json:"isBackup,omitempty"`
+	SessionKey string `json:"session_key"`
+	IsBackup   bool   `json:"is_backup,omitempty"`
 }
 
 // TOTPVerify completes TOTP setup by verifying a test code
@@ -716,8 +716,8 @@ func TOTPVerify(c echo.Context) error {
 // TOTPAuthRequest represents the request for TOTP authentication
 type TOTPAuthRequest struct {
 	Code       string `json:"code"`
-	SessionKey string `json:"sessionKey"`
-	IsBackup   bool   `json:"isBackup,omitempty"`
+	SessionKey string `json:"session_key"`
+	IsBackup   bool   `json:"is_backup,omitempty"`
 }
 
 // TOTPAuth validates a TOTP code and completes authentication
@@ -851,8 +851,8 @@ func TOTPAuth(c echo.Context) error {
 
 // TOTPDisableRequest represents the request for TOTP disabling
 type TOTPDisableRequest struct {
-	CurrentCode string `json:"currentCode"`
-	SessionKey  string `json:"sessionKey"`
+	CurrentCode string `json:"current_code"`
+	SessionKey  string `json:"session_key"`
 }
 
 // TOTPDisable disables TOTP for a user
@@ -896,9 +896,9 @@ func TOTPDisable(c echo.Context) error {
 // TOTPStatusResponse represents the TOTP status response
 type TOTPStatusResponse struct {
 	Enabled       bool       `json:"enabled"`
-	SetupRequired bool       `json:"setupRequired"`
-	LastUsed      *time.Time `json:"lastUsed,omitempty"`
-	CreatedAt     *time.Time `json:"createdAt,omitempty"`
+	SetupRequired bool       `json:"setup_required"`
+	LastUsed      *time.Time `json:"last_used,omitempty"`
+	CreatedAt     *time.Time `json:"created_at,omitempty"`
 }
 
 // TOTPStatus returns the TOTP status for a user

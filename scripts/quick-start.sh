@@ -371,7 +371,7 @@ if [ "$arkfile_status" = "active" ]; then
     local_ip=$(hostname -I | awk '{print $1}' 2>/dev/null || echo "192.168.x.x")
     
     echo
-    echo -e "${GREEN}🎉 SETUP COMPLETE! 🎉${NC}"
+    echo -e "${GREEN}SETUP COMPLETE! ${NC}"
     echo "================================"
     echo
     echo -e "${BLUE}Your Arkfile system is now running at:${NC}"

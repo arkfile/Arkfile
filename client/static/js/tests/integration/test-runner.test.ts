@@ -126,7 +126,7 @@ export async function runAllTests(): Promise<void> {
     console.log(`\n🎯 Overall: ${totalPassed}/${totalTests} test suites passed`);
     
     if (totalPassed === totalTests) {
-        console.log('🎉 All test suites completed successfully!');
+        console.log('All test suites completed successfully!');
         process.exit(0);
     } else {
         console.log('⚠️ Some test suites had issues. Check output above for details.');

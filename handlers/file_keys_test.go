@@ -65,7 +65,7 @@ func TestGetFileDecryptionKey_RequestBinding(t *testing.T) {
 	// Test request structure binding
 	requestData := map[string]interface{}{
 		"password": "test-password-123",
-		"keyType":  "account",
+		"key_type": "account",
 	}
 
 	jsonData, err := json.Marshal(requestData)
@@ -79,7 +79,7 @@ func TestGetFileDecryptionKey_RequestBinding(t *testing.T) {
 
 	var request struct {
 		Password string `json:"password"`
-		KeyType  string `json:"keyType"`
+		KeyType  string `json:"key_type"`
 	}
 
 	err = c.Bind(&request)

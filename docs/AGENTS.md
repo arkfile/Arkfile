@@ -36,3 +36,7 @@ In order to slowly build up the core functionality of the system and prove its c
 - `sudo bash /scripts/dev-reset.sh` - This tool peforms a full recompilation of the app, including static-linking of OPAQUE Auth libraries, and redeploys the app and starts app services, including the local Minio server used for testing and rqlite for the database. We should use `dev-reset.sh` every time we make a change to the app itself, in order to redeploy it consistently. Do not attempt to rebuild the app using any other build scripts or manual compilation commands, including for the CLI utils written in Go. `dev-reset.sh` does all of this for you. Use it every time.
 
 - `sudo bash /scripts/testing/test-app-curl.sh` - This is the main testing script used for proving out the correct implementation and functionality of the system via in-depth, end-to-end testing of all critical app functions using a combination of `curl` and `arkfile-client` and `cryptocli`. This script is the main way that we demonstrate that the app does what it is designed to do right now. `test-app-curl.sh` must not be used immediately after changes have been made to the app itself; instead use `dev-reset.sh` first, then run the test script.
+
+## No Emojis
+
+None of this stuff: "🎉🚀❌📦⚠️✅". I don't want it in responses, nor in comments, nor in code. Nowhere. We are not middle school girls. Instead of '❌' use [X]. Instead of '✅' use [OK]. Instead of '⚠️' use [!]. Instead of '🎉'/'🚀' use 'SUCCESS!' or something to that effect.

@@ -301,7 +301,7 @@ apply_updates() {
         echo
         if run_tests; then
             echo
-            echo -e "${GREEN}🎉 Updates completed successfully!${NC}"
+            echo -e "${GREEN}Updates completed successfully!${NC}"
             
             # Show summary
             echo

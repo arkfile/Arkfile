@@ -399,7 +399,7 @@ if [ "$FULL_SETUP" = true ]; then
         fi
         
         echo
-        echo -e "${GREEN}🎉 COMPLETE SYSTEM SETUP FINISHED!${NC}"
+        echo -e "${GREEN}COMPLETE SYSTEM SETUP FINISHED!${NC}"
         echo -e "${BLUE}All services installed and started${NC}"
         
         # Test the complete system
@@ -505,7 +505,7 @@ if [ "$FULL_SETUP" = true ]; then
                 
                 echo
                 if [ $VALIDATION_EXIT_CODE -eq 0 ]; then
-                    echo -e "${GREEN}🎉 VALIDATION COMPLETED SUCCESSFULLY!${NC}"
+                    echo -e "${GREEN}VALIDATION COMPLETED SUCCESSFULLY!${NC}"
                     echo -e "${GREEN}Your Arkfile deployment is fully validated and ready for use.${NC}"
                 else
                     echo -e "${YELLOW}⚠️  Validation completed with some issues.${NC}"
@@ -523,18 +523,18 @@ if [ "$FULL_SETUP" = true ]; then
             echo
             echo -e "${CYAN}Your system is ready! To validate it manually:${NC}"
             echo
-            echo "1. 🌐 Open browser to: http://localhost:8080"
+            echo "1. Open browser to: http://localhost:8080"
             echo "   (or https://localhost - accept certificate warning)"
             echo
-            echo "2. 👤 Register test user:"
+            echo "2. Register test user:"
             echo "   Username: admin-test-user"
             echo "   Password: AdminTest123!@# (or your choice)"
             echo
-            echo "3. 🔐 Login with same credentials"
+            echo "3. Login with same credentials"
             echo
-            echo "4. 📁 Upload a test file and verify encryption works"
+            echo "4. Upload a test file and verify encryption works"
             echo
-            echo "5. 🔗 Test file sharing in incognito window"
+            echo "5. Test file sharing in incognito window"
             echo
             echo -e "${YELLOW}📖 For detailed step-by-step instructions, see:${NC}"
             echo "   docs/admin-testing-guide.md"
@@ -544,7 +544,7 @@ if [ "$FULL_SETUP" = true ]; then
         fi
         
     else
-        echo -e "${GREEN}🎉 Foundation setup finished successfully!${NC}"
+        echo -e "${GREEN}Foundation setup finished successfully!${NC}"
         echo -e "${BLUE}Foundation is ready - services need to be configured separately${NC}"
     fi
     
@@ -609,7 +609,7 @@ echo -e "${GREEN}✅ Build process works${NC}"
 echo -e "${GREEN}✅ Deployment scripts functional${NC}"
 
 echo
-echo -e "${GREEN}🎉 All comprehensive integration tests passed!${NC}"
+echo -e "${GREEN}All comprehensive integration tests passed!${NC}"
 echo
 echo -e "${BLUE}📋 Test Coverage Achieved:${NC}"
 echo "• Unit Tests: 100% pass rate across all modules"
@@ -903,14 +903,14 @@ echo "• Issues & support: GitHub issues or arkfile [at] pm [dot] me"
 echo
 if [ "$FULL_SETUP" = true ]; then
     if [ "$COMPLETE_SETUP" = true ]; then
-        echo -e "${GREEN}🎉 Congratulations! Your complete Arkfile system is deployed and running!${NC}"
+        echo -e "${GREEN}Congratulations! Your complete Arkfile system is deployed and running!${NC}"
         echo -e "${BLUE}Next: Configure domain/SSL and test the web interface.${NC}"
     else
-        echo -e "${GREEN}🎉 Congratulations! Your Arkfile foundation is ready for service configuration.${NC}"
+        echo -e "${GREEN}Congratulations! Your Arkfile foundation is ready for service configuration.${NC}"
         echo -e "${BLUE}Next: Configure external services and start the application.${NC}"
     fi
 else
-    echo -e "${GREEN}🎉 All tests passed! Your system is validated and ready for setup.${NC}"
+    echo -e "${GREEN}All tests passed! Your system is validated and ready for setup.${NC}"
     echo -e "${BLUE}Next: Run this script again with 'FOUNDATION' or 'COMPLETE' to deploy.${NC}"
 fi
 

@@ -179,7 +179,7 @@ authenticate_admin() {
         local requires_totp temp_token session_key
         requires_totp=$(echo "$login_response" | jq -r '.requiresTOTP')
         temp_token=$(echo "$login_response" | jq -r '.tempToken')
-        session_key=$(echo "$login_response" | jq -r '.sessionKey')
+        session_key=$(echo "$login_response" | jq -r '.session_key')
         
         if [ "$requires_totp" = "true" ] && [ "$temp_token" != "null" ] && [ "$session_key" != "null" ]; then
             debug "Admin user requires TOTP authentication, completing flow..."
@@ -202,12 +202,12 @@ authenticate_admin() {
             local totp_request
             totp_request=$(jq -n \
                 --arg code "$totp_code" \
-                --arg sessionKey "$session_key" \
-                --argjson isBackup false \
+                --arg session_key "$session_key" \
+                --argjson is_backup false \
                 '{
                     code: $code,
-                    sessionKey: $sessionKey,
-                    isBackup: $isBackup
+                    session_key: $session_key,
+                    is_backup: $is_backup
                 }')
             
             local totp_response
@@ -1594,7 +1594,7 @@ phase_9_file_operations() {
     fi
     
     if [ "$file_hash" = "$decrypted_hash" ]; then
-        success "🎉 PERFECT INTEGRITY VERIFIED - Complete encryption workflow successful!"
+        success "PERFECT INTEGRITY VERIFIED - Complete encryption workflow successful!"
         info "Workflow: Generate → Encrypt (Argon2ID) → Decrypt → Verify"
         info "SHA-256 hashes:"
         info "  Original:  $file_hash"
@@ -1733,7 +1733,7 @@ phase_9_file_operations() {
     fi
     
     if [ "$file_hash" = "$secure_decrypted_hash" ]; then
-        success "🎉 SECURE ENCRYPTION INTEGRITY VERIFIED - Complete cryptocli workflow successful!"
+        success "SECURE ENCRYPTION INTEGRITY VERIFIED - Complete cryptocli workflow successful!"
         info "Secure Workflow: Generate → Encrypt (Secure Prompting) → Decrypt (Secure Prompting) → Verify"
         info "SHA-256 hashes:"
         info "  Original:         $file_hash"
@@ -2128,23 +2128,34 @@ phase_9_file_operations() {
                 
                 # Phase 2: Fresh TOTP Authentication for retry
                 log "Phase 2: Fresh TOTP authentication for retry..."
-                
+
                 # Generate fresh TOTP code for retry
                 if [ ! -f "$TEMP_DIR/totp_secret" ]; then
                     warning "TOTP secret not found for retry authentication"
                     continue
                 fi
-                
-                local retry_totp_secret retry_totp_code
+
+                local retry_totp_secret raw_totp_output retry_totp_code
                 retry_totp_secret=$(cat "$TEMP_DIR/totp_secret")
-                retry_totp_code=$(generate_totp_code "$retry_totp_secret")
-                
-                if [ -z "$retry_totp_code" ] || [ ${#retry_totp_code} -ne 6 ]; then
-                    warning "Failed to generate valid TOTP code for retry: $retry_totp_code"
+
+                # Generate fresh TOTP code for this specific retry attempt
+                # Use explicit current timestamp to ensure we get a fresh code (not cached/reused)
+                debug "Generating fresh TOTP code for retry authentication with explicit timestamp..."
+                local current_unix_timestamp=$(date +%s)
+                raw_totp_output=$(generate_totp_code "$retry_totp_secret" "$current_unix_timestamp" 2>/dev/null)
+
+                # Parse TOTP code to ensure we get clean 6 digits (handles debug output, whitespace, etc.)
+                retry_totp_code=$(echo "$raw_totp_output" | grep -Eo '[0-9]{6}' | head -1)
+
+                # More robust validation
+                if [ -z "$retry_totp_code" ] || [ "$retry_totp_code" = "" ] || ! [[ "$retry_totp_code" =~ ^[0-9]{6}$ ]]; then
+                    warning "Failed to generate valid TOTP code for retry. Raw output: '$raw_totp_output', Extracted: '$retry_totp_code'"
                     continue
+                else
+                    info "Successfully extracted fresh TOTP code for retry: $retry_totp_code (attempt $upload_attempts)"
                 fi
-                
-                info "Generated fresh TOTP code for retry: $retry_totp_code"
+
+                debug "Using TOTP code: $retry_totp_code for retry authentication"
                 
                 # Complete fresh TOTP authentication for retry
                 local retry_totp_request
@@ -2236,7 +2247,7 @@ phase_9_file_operations() {
     
     # Final check after all retry attempts
     if [ "$upload_success" = true ]; then
-        success "🎉 Upload completed successfully after $upload_attempts attempt(s) with retry logic!"
+        success "Upload completed successfully after $upload_attempts attempt(s) with retry logic!"
         info "Retry logic worked: 'LOG IN AGAIN and TRY AGAIN' strategy successful"
     else
         error "Upload failed after $max_upload_attempts attempts with retry logic"
@@ -2430,7 +2441,7 @@ phase_9_file_operations() {
     info "Final E2E Hash: $final_e2e_hash"
 
     if [ "$file_hash" = "$final_e2e_hash" ]; then
-        success "🎉🎉🎉 PERFECT END-TO-END INTEGRITY VERIFIED! Hashes match."
+        success "PERFECT END-TO-END INTEGRITY VERIFIED! Hashes match."
         info "Workflow: Generate -> Encrypt -> Upload -> List -> Download -> Decrypt -> Verify"
     else
         error "END-TO-END INTEGRITY CHECK FAILED! Hashes do not match."

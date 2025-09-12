@@ -274,7 +274,7 @@ mark_completed "foundation"
 
 # Summary
 echo
-echo -e "${GREEN}🎉 FOUNDATION SETUP COMPLETED SUCCESSFULLY!${NC}"
+echo -e "${GREEN}FOUNDATION SETUP COMPLETED SUCCESSFULLY!${NC}"
 echo "========================================"
 echo "Setup Duration: $(($(date +%s) - START_TIME)) seconds"
 echo

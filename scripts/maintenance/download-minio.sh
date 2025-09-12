@@ -316,7 +316,7 @@ verify_signature "${MINIO_CHECKSUM}" "${MINIO_SIGNATURE}"
 
 # Install MinIO
 if install_minio "${MINIO_BINARY}"; then
-    echo -e "${GREEN}🎉 MinIO download, verification, and installation completed successfully!${NC}"
+    echo -e "${GREEN}MinIO download, verification, and installation completed successfully!${NC}"
     echo ""
     echo -e "${BLUE}📋 Summary:${NC}"
     echo "• Version: ${MINIO_VERSION}"

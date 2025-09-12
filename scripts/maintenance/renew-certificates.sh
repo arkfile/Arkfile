@@ -454,7 +454,7 @@ if [ "$verification_failed" = true ]; then
     echo -e "${BLUE}Backup location: ${BACKUP_DIR}${NC}"
     exit 1
 else
-    echo -e "${GREEN}🎉 Certificate renewal completed successfully!${NC}"
+    echo -e "${GREEN}Certificate renewal completed successfully!${NC}"
 fi
 
 echo ""

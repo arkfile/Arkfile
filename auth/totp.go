@@ -34,9 +34,9 @@ const BackupCodeCharset = "ACDEFGHJKLMNPQRTUVWXY34679"
 // TOTPSetup represents the data needed for TOTP setup
 type TOTPSetup struct {
 	Secret      string   `json:"secret"`
-	QRCodeURL   string   `json:"qrCodeUrl"`
-	BackupCodes []string `json:"backupCodes"`
-	ManualEntry string   `json:"manualEntry"`
+	QRCodeURL   string   `json:"qr_code_url"`
+	BackupCodes []string `json:"backup_codes"`
+	ManualEntry string   `json:"manual_entry"`
 }
 
 // TOTPData represents the stored TOTP data for a user

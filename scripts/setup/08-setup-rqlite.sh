@@ -69,7 +69,7 @@ if command -v rqlited &> /dev/null && command -v rqlite &> /dev/null && [ "$FORC
     echo "Reloading systemd..."
     sudo systemctl daemon-reload
     
-    echo -e "${GREEN}🎉 rqlite cluster database setup complete!${NC}"
+    echo -e "${GREEN}rqlite cluster database setup complete!${NC}"
     echo -e "${BLUE}Binaries were already installed, systemd services configured.${NC}"
     exit 0
 fi
@@ -238,7 +238,7 @@ echo "Reloading systemd..."
 sudo systemctl daemon-reload
 
 echo
-echo -e "${GREEN}🎉 rqlite cluster database setup complete!${NC}"
+echo -e "${GREEN}rqlite cluster database setup complete!${NC}"
 echo
 echo -e "${BLUE}📋 Installation Summary:${NC}"
 echo "• Version: ${VERSION}"

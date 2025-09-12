@@ -168,12 +168,12 @@ main() {
     
     # Ensure we're in the right directory
     if [ ! -f "go.mod" ]; then
-        echo -e "${RED}❌ Must be run from project root directory${NC}"
+        echo -e "${RED}Must be run from project root directory${NC}"
         exit 1
     fi
     
     # Install dependencies
-    echo -e "\n${BLUE}📦 Skipping dependency installation...${NC}"
+    echo -e "\n${BLUE}Skipping dependency installation...${NC}"
     # cd client/static/js
     # bun install
     # cd ../../..
@@ -222,10 +222,10 @@ main() {
     echo -e "Tests failed: ${RED}$((tests_run - tests_passed))${NC}"
     
     if [ $exit_code -eq 0 ]; then
-        echo -e "\n${GREEN}🎉 All critical TypeScript tests passed!${NC}"
+        echo -e "\n${GREEN}All critical TypeScript tests passed!${NC}"
     else
-        echo -e "\n${RED}❌ Some critical TypeScript tests failed${NC}"
-        echo -e "${YELLOW}💡 Check the output above for details${NC}"
+        echo -e "\n${RED}Some critical TypeScript tests failed${NC}"
+        echo -e "${YELLOW}Check the output above for details${NC}"
     fi
     
     exit $exit_code

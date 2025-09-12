@@ -100,16 +100,16 @@ type Response struct {
 	Message             string                 `json:"message"`
 	Data                map[string]interface{} `json:"data"`
 	Error               string                 `json:"error"`
-	TempToken           string                 `json:"tempToken"`
-	SessionKey          string                 `json:"sessionKey"`
-	RequiresTOTP        bool                   `json:"requiresTOTP"`
+	TempToken           string                 `json:"temp_token"`
+	SessionKey          string                 `json:"session_key"`
+	RequiresTOTP        bool                   `json:"requires_totp"`
 	Token               string                 `json:"token"`
-	RefreshToken        string                 `json:"refreshToken"`
-	ExpiresAt           time.Time              `json:"expiresAt"`
-	SessionID           string                 `json:"sessionId"`
-	FileID              string                 `json:"fileId"`
-	StorageID           string                 `json:"storageId"`
-	EncryptedFileSHA256 string                 `json:"encryptedFileSHA256"`
+	RefreshToken        string                 `json:"refresh_token"`
+	ExpiresAt           time.Time              `json:"expires_at"`
+	SessionID           string                 `json:"session_id"`
+	FileID              string                 `json:"file_id"`
+	StorageID           string                 `json:"storage_id"`
+	EncryptedFileSHA256 string                 `json:"encrypted_file_sha256"`
 }
 
 // UploadMetadata represents pre-encrypted metadata for upload
@@ -292,8 +292,10 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
 	var (
-		usernameFlag = fs.String("username", config.Username, "Username for login")
-		saveSession  = fs.Bool("save-session", true, "Save session for future use")
+		usernameFlag   = fs.String("username", config.Username, "Username for login")
+		saveSession    = fs.Bool("save-session", true, "Save session for future use")
+		totpCode       = fs.String("totp-code", "", "TOTP code for non-interactive login")
+		nonInteractive = fs.Bool("non-interactive", false, "Don't prompt for input")
 	)
 
 	fs.Usage = func() {
@@ -302,13 +304,16 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 Authenticate with arkfile server using OPAQUE protocol.
 
 FLAGS:
-    --username USER     Username for authentication (required)
-    --save-session      Save session for future use (default: true)
-    --help             Show this help message
+    --username USER       Username for authentication (required)
+    --totp-code CODE      TOTP code for non-interactive login
+    --non-interactive     Don't prompt for input (for automated scripts)
+    --save-session        Save session for future use (default: true)
+    --help               Show this help message
 
 EXAMPLES:
     arkfile-client login --username alice
     arkfile-client login --username bob --save-session=false
+    arkfile-client login --username alice --totp-code 123456 --non-interactive
 `)
 	}
 
@@ -345,16 +350,30 @@ EXAMPLES:
 
 	// Handle TOTP requirement
 	if loginResp.RequiresTOTP {
-		fmt.Print("Enter TOTP code: ")
-		reader := bufio.NewReader(os.Stdin)
-		totpCode, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read TOTP code: %w", err)
+		var userTotpCode string
+
+		// Check if TOTP code was provided via command line
+		if *totpCode != "" {
+			userTotpCode = *totpCode
+			logVerbose("Using provided TOTP code for non-interactive authentication")
+		} else {
+			// Check if non-interactive mode is enabled
+			if *nonInteractive {
+				return fmt.Errorf("non-interactive mode enabled but no TOTP code provided (--totp-code required)")
+			}
+
+			// Interactive mode: prompt user
+			fmt.Print("Enter TOTP code: ")
+			reader := bufio.NewReader(os.Stdin)
+			totpInput, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("failed to read TOTP code: %w", err)
+			}
+			userTotpCode = strings.TrimSpace(totpInput)
 		}
-		totpCode = strings.TrimSpace(totpCode)
 
 		totpReq := map[string]interface{}{
-			"code":       totpCode,
+			"code":       userTotpCode,
 			"sessionKey": loginResp.SessionKey,
 			"isBackup":   false,
 		}
@@ -494,8 +513,8 @@ EXAMPLES:
 		"encrypted_sha256sum": metadata.EncryptedSHA256sum,
 		"sha256sum_nonce":     metadata.SHA256sumNonce,
 		"encrypted_fek":       metadata.EncryptedFEK,
-		"totalSize":           len(encryptedData),
-		"chunkSize":           *chunkSize,
+		"total_size":          len(encryptedData),
+		"chunk_size":          *chunkSize,
 		"password_hint":       metadata.PasswordHint,
 		"password_type":       metadata.PasswordType,
 	}

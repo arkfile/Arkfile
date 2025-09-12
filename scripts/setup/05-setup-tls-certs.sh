@@ -466,7 +466,7 @@ fi
 # Final summary
 echo ""
 if [ "$all_valid" = true ]; then
-    echo -e "${GREEN}🎉 TLS certificate setup completed successfully!${NC}"
+    echo -e "${GREEN}TLS certificate setup completed successfully!${NC}"
 else
     echo -e "${YELLOW}⚠️  TLS certificate setup completed with some issues${NC}"
 fi

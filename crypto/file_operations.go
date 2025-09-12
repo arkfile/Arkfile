@@ -180,8 +180,8 @@ type ChunkInfo struct {
 // ChunkManifest represents metadata for chunked encryption
 type ChunkManifest struct {
 	Envelope    string      `json:"envelope"`
-	TotalChunks int         `json:"totalChunks"`
-	ChunkSize   int         `json:"chunkSize"`
+	TotalChunks int         `json:"total_chunks"`
+	ChunkSize   int         `json:"chunk_size"`
 	Chunks      []ChunkInfo `json:"chunks"`
 }
 
