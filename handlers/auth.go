@@ -84,8 +84,8 @@ func RefreshToken(c echo.Context) error {
 	logging.InfoLogger.Printf("Token refreshed for user: %s", username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"token":        token,
-		"refreshToken": refreshToken,
+		"token":         token,
+		"refresh_token": refreshToken,
 	})
 }
 
@@ -383,12 +383,12 @@ func OpaqueRegister(c echo.Context) error {
 	logging.InfoLogger.Printf("OPAQUE user registered, TOTP setup required: %s", request.Username)
 
 	return c.JSON(http.StatusCreated, map[string]interface{}{
-		"message":           "Account created successfully. Two-factor authentication setup is required to complete registration.",
-		"requiresTOTPSetup": true,
-		"tempToken":         tempToken,
-		"sessionKey":        sessionKeyB64,
-		"authMethod":        "OPAQUE",
-		"username":          request.Username,
+		"message":             "Account created successfully. Two-factor authentication setup is required to complete registration.",
+		"requires_totp_setup": true,
+		"temp_token":          tempToken,
+		"session_key":         sessionKeyB64,
+		"auth_method":         "OPAQUE",
+		"username":            request.Username,
 	})
 }
 
@@ -488,11 +488,11 @@ func OpaqueLogin(c echo.Context) error {
 	logging.InfoLogger.Printf("OPAQUE user authenticated, TOTP required: %s", request.Username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"requiresTOTP": true,
-		"tempToken":    tempToken,
-		"sessionKey":   sessionKeyB64,
-		"authMethod":   "OPAQUE",
-		"message":      "OPAQUE authentication successful. TOTP code required.",
+		"requires_totp": true,
+		"temp_token":    tempToken,
+		"session_key":   sessionKeyB64,
+		"auth_method":   "OPAQUE",
+		"message":       "OPAQUE authentication successful. TOTP code required.",
 	})
 }
 

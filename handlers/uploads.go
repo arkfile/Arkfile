@@ -695,8 +695,8 @@ func UploadChunk(c echo.Context) error {
 		sessionID, fileID, chunkNumber+1, totalChunks)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"chunkNumber": chunkNumber,
-		"etag":        etag,
+		"chunk_number": chunkNumber,
+		"etag":         etag,
 	})
 }
 

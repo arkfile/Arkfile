@@ -473,10 +473,10 @@ show_test_summary() {
     echo
     echo -e "${BLUE}Summary: ${NC}"
     if [[ $passed_tests -eq $total_tests ]]; then
-        echo -e "${GREEN}🎉 All security tests passed! ($passed_tests/$total_tests)${NC}"
+        echo -e "${GREEN}All security tests passed! ($passed_tests/$total_tests)${NC}"
         echo -e "${GREEN}Security system is fully operational${NC}"
     else
-        echo -e "${YELLOW}⚠️  Some security tests failed ($passed_tests/$total_tests passed)${NC}"
+        echo -e "${YELLOW}Some security tests failed ($passed_tests/$total_tests passed)${NC}"
         echo -e "${YELLOW}Review failed tests above for security issues${NC}"
     fi
     

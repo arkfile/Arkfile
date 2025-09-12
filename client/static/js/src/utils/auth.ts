@@ -4,7 +4,7 @@
 
 export class AuthManager {
   private static readonly TOKEN_KEY = 'token';
-  private static readonly REFRESH_TOKEN_KEY = 'refreshToken';
+  private static readonly REFRESH_TOKEN_KEY = 'refresh_token';
   private static autoRefreshTimer: number | null = null;
   private static readonly AUTO_REFRESH_INTERVAL = 25 * 60 * 1000; // 25 minutes in milliseconds
 
@@ -45,12 +45,12 @@ export class AuthManager {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ refreshToken }),
+        body: JSON.stringify({ refresh_token: refreshToken }),
       });
 
       if (response.ok) {
         const data = await response.json();
-        this.setTokens(data.token, data.refreshToken);
+        this.setTokens(data.token, data.refresh_token);
         return true;
       } else {
         this.clearTokens();
@@ -100,7 +100,7 @@ export class AuthManager {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ refreshToken }),
+          body: JSON.stringify({ refresh_token: refreshToken }),
         });
       }
       

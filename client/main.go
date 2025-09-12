@@ -415,11 +415,11 @@ func encryptFileMetadata(this js.Value, args []js.Value) interface{} {
 	encryptedSha256 := gcm.Seal(nil, sha256Nonce, []byte(sha256sum), nil)
 
 	return map[string]interface{}{
-		"success":            true,
-		"filenameNonce":      base64.StdEncoding.EncodeToString(filenameNonce),
-		"encryptedFilename":  base64.StdEncoding.EncodeToString(encryptedFilename),
-		"sha256Nonce":        base64.StdEncoding.EncodeToString(sha256Nonce),
-		"encryptedSha256sum": base64.StdEncoding.EncodeToString(encryptedSha256),
+		"success":             true,
+		"filename_nonce":      base64.StdEncoding.EncodeToString(filenameNonce),
+		"encrypted_filename":  base64.StdEncoding.EncodeToString(encryptedFilename),
+		"sha256sum_nonce":     base64.StdEncoding.EncodeToString(sha256Nonce),
+		"encrypted_sha256sum": base64.StdEncoding.EncodeToString(encryptedSha256),
 	}
 }
 
@@ -678,7 +678,7 @@ func setJWTTokens(this js.Value, args []js.Value) interface{} {
 	// Store in localStorage
 	localStorage := js.Global().Get("localStorage")
 	localStorage.Call("setItem", "token", token)
-	localStorage.Call("setItem", "refreshToken", refreshToken)
+	localStorage.Call("setItem", "refresh_token", refreshToken)
 
 	return map[string]interface{}{
 		"success": true,
@@ -708,19 +708,19 @@ func getJWTToken(this js.Value, args []js.Value) interface{} {
 // getRefreshToken retrieves the current refresh token from localStorage
 func getRefreshToken(this js.Value, args []js.Value) interface{} {
 	localStorage := js.Global().Get("localStorage")
-	refreshToken := localStorage.Call("getItem", "refreshToken")
+	refreshToken := localStorage.Call("getItem", "refresh_token")
 
 	if refreshToken.IsNull() {
 		return map[string]interface{}{
-			"success":      false,
-			"error":        "No refresh token found",
-			"refreshToken": nil,
+			"success":       false,
+			"error":         "No refresh token found",
+			"refresh_token": nil,
 		}
 	}
 
 	return map[string]interface{}{
-		"success":      true,
-		"refreshToken": refreshToken.String(),
+		"success":       true,
+		"refresh_token": refreshToken.String(),
 	}
 }
 
@@ -728,7 +728,7 @@ func getRefreshToken(this js.Value, args []js.Value) interface{} {
 func clearJWTTokens(this js.Value, args []js.Value) interface{} {
 	localStorage := js.Global().Get("localStorage")
 	localStorage.Call("removeItem", "token")
-	localStorage.Call("removeItem", "refreshToken")
+	localStorage.Call("removeItem", "refresh_token")
 
 	// Stop auto-refresh timer
 	stopAutoRefresh(js.Value{}, []js.Value{})
@@ -867,11 +867,11 @@ func refreshJWTToken(this js.Value, args []js.Value) interface{} {
 		}
 	}
 
-	refreshToken := refreshMap["refreshToken"].(string)
+	refreshToken := refreshMap["refresh_token"].(string)
 
 	// Prepare request body
 	requestBody := map[string]string{
-		"refreshToken": refreshToken,
+		"refresh_token": refreshToken,
 	}
 
 	requestBodyJSON, err := json.Marshal(requestBody)
@@ -1417,10 +1417,10 @@ func logUploadSuccess(this js.Value, args []js.Value) interface{} {
 		return nil
 	}
 
-	fileId := responseObject.Get("fileId").String()
-	encryptedFileSHA256 := responseObject.Get("encryptedFileSHA256").String()
+	fileId := responseObject.Get("file_id").String()
+	encryptedFileSHA256 := responseObject.Get("encrypted_file_sha256").String()
 
-	log.Printf("[WASM] Upload successful! fileId: %s, serverHash: %s", fileId, encryptedFileSHA256)
+	log.Printf("[WASM] Upload successful! file_id: %s, serverHash: %s", fileId, encryptedFileSHA256)
 	return nil
 }
 
