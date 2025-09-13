@@ -178,10 +178,10 @@ authenticate_admin() {
     fi
     
     # Check if TOTP authentication is required
-    if echo "$login_response" | jq -e '.requiresTOTP' >/dev/null 2>&1; then
+    if echo "$login_response" | jq -e '.requires_totp' >/dev/null 2>&1; then
         local requires_totp temp_token session_key
-        requires_totp=$(echo "$login_response" | jq -r '.requiresTOTP')
-        temp_token=$(echo "$login_response" | jq -r '.tempToken')
+        requires_totp=$(echo "$login_response" | jq -r '.requires_totp')
+        temp_token=$(echo "$login_response" | jq -r '.temp_token')
         session_key=$(echo "$login_response" | jq -r '.session_key')
         
         if [ "$requires_totp" = "true" ] && [ "$temp_token" != "null" ] && [ "$session_key" != "null" ]; then
@@ -369,13 +369,14 @@ admin_get_user_status() {
     echo "$response"
 }
 
-# Generate real TOTP code using production-compatible generator
+# Generate real TOTP code using production-compatible generator (FIXED: Clean output parsing)
 generate_totp_code() {
     local secret="$1"
     local timestamp="${2:-}"
     local output=""
 
-    debug "[DEBUG] Generating real TOTP code for secret: ${secret:0:10}..."
+    # Send debug messages to stderr to avoid polluting stdout
+    debug "[DEBUG] Generating real TOTP code for secret: ${secret:0:10}..." >&2
 
     # Use our TOTP generator with the same parameters as production
     if [ -f "scripts/testing/totp-generator" ]; then
@@ -392,13 +393,13 @@ generate_totp_code() {
         fi
     else
         # Build generator if it doesn't exist
-        warning "TOTP generator not found, building..."
+        warning "TOTP generator not found, building..." >&2
         if [ -f "scripts/testing/totp-generator.go" ]; then
-            cd scripts/testing && go build -o totp-generator totp-generator.go && cd ../..
+            cd scripts/testing && go build -o totp-generator totp-generator.go && cd ../.. >/dev/null 2>&1
             generate_totp_code "$secret" "$timestamp"
             return $?
         elif [ -f "scripts/totp-generator.go" ]; then
-            cd scripts && go build -o totp-generator totp-generator.go && cd ..
+            cd scripts && go build -o totp-generator totp-generator.go && cd .. >/dev/null 2>&1
             generate_totp_code "$secret" "$timestamp"
             return $?
         else
@@ -406,16 +407,17 @@ generate_totp_code() {
         fi
     fi
     
-    # Extract only the 6-digit code from output (in case there's any debug text)
+    # CRITICAL FIX: Extract only the 6-digit code from output (robust parsing)
     local clean_code
     clean_code=$(echo "$output" | grep -o '[0-9]\{6\}' | head -n1)
     
     if [ -z "$clean_code" ] || [ ${#clean_code} -ne 6 ]; then
-        debug "Failed to extract clean TOTP code from output: '$output'"
+        debug "Failed to extract clean TOTP code from output: '$output'" >&2
         return 1
     fi
     
-    debug "[DEBUG] Generated clean TOTP code: $clean_code"
+    debug "[DEBUG] Generated clean TOTP code: $clean_code" >&2
+    # OUTPUT ONLY THE CLEAN CODE TO STDOUT
     echo "$clean_code"
 }
 
@@ -481,15 +483,15 @@ authenticate_via_curl() {
         return 1
     fi
     
-    if ! echo "$opaque_response" | jq -e '.requiresTOTP' >/dev/null 2>&1; then
+    if ! echo "$opaque_response" | jq -e '.requires_totp' >/dev/null 2>&1; then
         warning "Fresh OPAQUE authentication failed: $opaque_response"
         return 1
     fi
     
     # Extract temporary tokens
     local temp_token session_key
-    temp_token=$(echo "$opaque_response" | jq -r '.tempToken')
-    session_key=$(echo "$opaque_response" | jq -r '.sessionKey')
+    temp_token=$(echo "$opaque_response" | jq -r '.temp_token')
+    session_key=$(echo "$opaque_response" | jq -r '.session_key')
     
     if [ "$temp_token" = "null" ] || [ "$session_key" = "null" ]; then
         warning "Fresh OPAQUE response missing required tokens"
@@ -823,14 +825,14 @@ phase_registration() {
     
     # Extract registration details
     local temp_token session_key auth_method email requires_totp_setup message
-    temp_token=$(jq -r '.tempToken' "$TEMP_DIR/register.json")
-    session_key=$(jq -r '.sessionKey' "$TEMP_DIR/register.json")
-    auth_method=$(jq -r '.authMethod' "$TEMP_DIR/register.json")
+    temp_token=$(jq -r '.temp_token' "$TEMP_DIR/register.json")
+    session_key=$(jq -r '.session_key' "$TEMP_DIR/register.json")
+    auth_method=$(jq -r '.auth_method' "$TEMP_DIR/register.json")
     email=$(jq -r '.email' "$TEMP_DIR/register.json")
-    requires_totp_setup=$(jq -r '.requiresTOTPSetup' "$TEMP_DIR/register.json")
+    requires_totp_setup=$(jq -r '.requires_totp_setup' "$TEMP_DIR/register.json")
     message=$(jq -r '.message' "$TEMP_DIR/register.json")
     
-    debug "Extracted values: tempToken=${temp_token:0:20}..., sessionKey=${session_key:0:20}..., requiresTOTPSetup=$requires_totp_setup"
+    debug "Extracted values: temp_token=${temp_token:0:20}..., session_key=${session_key:0:20}..., requires_totp_setup=$requires_totp_setup"
     
     # Validate registration response for TOTP setup requirement
     if [ "$temp_token" = "null" ] || [ "$session_key" = "null" ]; then
@@ -839,7 +841,7 @@ phase_registration() {
     
     if [ "$requires_totp_setup" != "true" ]; then
         if [ "$MANDATORY_TOTP" = true ]; then
-            error "Expected requiresTOTPSetup=true for mandatory TOTP mode, got: $requires_totp_setup"
+            error "Expected requires_totp_setup=true for mandatory TOTP mode, got: $requires_totp_setup"
         else
             warning "TOTP setup not required (non-mandatory mode): $requires_totp_setup"
         fi
@@ -953,9 +955,9 @@ phase_totp_setup_comprehensive() {
     # Test TOTP setup endpoint
     local setup_request
     setup_request=$(jq -n \
-        --arg sessionKey "$session_key" \
+        --arg session_key "$session_key" \
         '{
-            sessionKey: $sessionKey
+            session_key: $session_key
         }')
     
     local response
@@ -1435,10 +1437,10 @@ phase_login() {
     
     # Extract login details
     local temp_token session_key auth_method requires_totp
-    temp_token=$(jq -r '.tempToken' "$TEMP_DIR/login.json")
-    session_key=$(jq -r '.sessionKey' "$TEMP_DIR/login.json")
-    auth_method=$(jq -r '.authMethod' "$TEMP_DIR/login.json")
-    requires_totp=$(jq -r '.requiresTOTP' "$TEMP_DIR/login.json")
+    temp_token=$(jq -r '.temp_token' "$TEMP_DIR/login.json")
+    session_key=$(jq -r '.session_key' "$TEMP_DIR/login.json")
+    auth_method=$(jq -r '.auth_method' "$TEMP_DIR/login.json")
+    requires_totp=$(jq -r '.requires_totp' "$TEMP_DIR/login.json")
     
     # Validate login response
     if [ "$temp_token" = "null" ] || [ "$session_key" = "null" ]; then
@@ -1446,7 +1448,7 @@ phase_login() {
     fi
     
     if [ "$requires_totp" != "true" ]; then
-        error "Expected requiresTOTP=true, got: $requires_totp"
+        error "Expected requires_totp=true, got: $requires_totp"
     fi
     
     success "OPAQUE login successful - TOTP authentication required"
@@ -1495,12 +1497,12 @@ phase_totp_authentication() {
             local auth_request
             auth_request=$(jq -n \
                 --arg code "$totp_code" \
-                --arg sessionKey "$session_key" \
-                --argjson isBackup false \
+                --arg session_key "$session_key" \
+                --argjson is_backup false \
                 '{
                     code: $code,
-                    sessionKey: $sessionKey,
-                    isBackup: $isBackup
+                    session_key: $session_key,
+                    is_backup: $is_backup
                 }')
 
             local response
@@ -2106,7 +2108,7 @@ phase_9_file_operations() {
             error "Failed to connect to server for OPAQUE authentication"
         fi
         
-        if ! echo "$opaque_response" | jq -e '.requiresTOTP' >/dev/null 2>&1; then
+        if ! echo "$opaque_response" | jq -e '.requires_totp' >/dev/null 2>&1; then
             error "OPAQUE authentication failed: $opaque_response"
         fi
         
@@ -2124,31 +2126,37 @@ phase_9_file_operations() {
         # Phase 2: TOTP Authentication to get final token
         log "Phase 2: TOTP authentication..."
         
-        # Generate TOTP code using the stored secret from Phase 4
-        if [ ! -f "$TEMP_DIR/totp_secret" ]; then
-            error "TOTP secret not found - Phase 4 setup may have failed"
-        fi
-        
-        local totp_secret totp_code
-        totp_secret=$(cat "$TEMP_DIR/totp_secret")
-        totp_code=$(generate_totp_code "$totp_secret" 2>/dev/null)
+    # Generate TOTP code using the stored secret from Phase 4
+    if [ ! -f "$TEMP_DIR/totp_secret" ]; then
+        error "TOTP secret not found - Phase 4 setup may have failed"
+    fi
+    
+    local totp_secret totp_code
+    totp_secret=$(cat "$TEMP_DIR/totp_secret")
+    
+    # Fix the TOTP secret padding for proper base32 decoding
+    local padded_secret
+    padded_secret=$(fix_totp_secret_padding "$totp_secret")
+    
+    # Use TOTP reuse prevention to avoid duplicate codes
+    totp_code=$(generate_totp_with_reuse_prevention "$padded_secret")
 
-        if [ -z "$totp_code" ] || [ ${#totp_code} -ne 6 ]; then
-            error "Failed to generate valid TOTP code: $totp_code"
-        fi
-        
-        info "Generated TOTP code: $totp_code"
+    if [ -z "$totp_code" ] || [ ${#totp_code} -ne 6 ]; then
+        error "Failed to generate valid TOTP code: $totp_code"
+    fi
+    
+    info "Generated TOTP code: $totp_code"
         
         # Complete TOTP authentication
         local totp_request
         totp_request=$(jq -n \
             --arg code "$totp_code" \
-            --arg sessionKey "$session_key" \
-            --argjson isBackup false \
+            --arg session_key "$session_key" \
+            --argjson is_backup false \
             '{
                 code: $code,
-                sessionKey: $sessionKey,
-                isBackup: $isBackup
+                session_key: $session_key,
+                is_backup: $is_backup
             }')
         
         local totp_response
@@ -2959,15 +2967,15 @@ main() {
         error "Failed to connect to server for admin authentication"
     fi
     
-    if ! echo "$admin_opaque_response" | jq -e '.requiresTOTP' >/dev/null 2>&1; then
+    if ! echo "$admin_opaque_response" | jq -e '.requires_totp' >/dev/null 2>&1; then
         error "Admin OPAQUE authentication failed: $admin_opaque_response"
     fi
     
     success "Admin OPAQUE login successful"
     
     local admin_temp_token admin_session_key
-    admin_temp_token=$(echo "$admin_opaque_response" | jq -r '.tempToken')
-    admin_session_key=$(echo "$admin_opaque_response" | jq -r '.sessionKey')
+    admin_temp_token=$(echo "$admin_opaque_response" | jq -r '.temp_token')
+    admin_session_key=$(echo "$admin_opaque_response" | jq -r '.session_key')
     
     if [ "$admin_temp_token" = "null" ] || [ "$admin_session_key" = "null" ]; then
         error "Admin OPAQUE response missing required tokens"

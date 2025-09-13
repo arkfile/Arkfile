@@ -18,10 +18,10 @@ interface LoginRequest {
 
 interface LoginResponse {
   token: string;
-  refreshToken: string;
-  sessionKey: string;
-  authMethod: 'OPAQUE';
-  requiresTOTP?: boolean;
+  refresh_token: string;
+  session_key: string;
+  auth_method: 'OPAQUE';
+  requires_totp?: boolean;
 }
 
 interface RegisterRequest {
@@ -31,34 +31,34 @@ interface RegisterRequest {
 
 interface RegisterResponse {
   token: string;
-  refreshToken: string;
-  sessionKey: string;
-  authMethod: 'OPAQUE';
+  refresh_token: string;
+  session_key: string;
+  auth_method: 'OPAQUE';
   message: string;
 }
 
 interface TOTPLoginRequest {
   email: string;
   code: string;
-  tempToken: string;
-  sessionKey: string;
+  temp_token: string;
+  session_key: string;
 }
 
 interface TOTPVerifyRequest {
   code: string;
-  sessionKey: string;
+  session_key: string;
 }
 
 interface TOTPSetupRequest {
   code: string;
-  sessionKey: string;
+  session_key: string;
 }
 
 interface TOTPSetupResponse {
   secret: string;
-  qrCodeUrl: string;
-  manualEntry: string;
-  backupCodes: string[];
+  qr_code_url: string;
+  manual_entry: string;
+  backup_codes: string[];
 }
 
 // File operation types

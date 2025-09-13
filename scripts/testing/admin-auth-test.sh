@@ -131,7 +131,7 @@ test_totp_auth() {
     local response=$(curl -k -s -X POST "$ARKFILE_BASE_URL/api/totp/auth" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $temp_token" \
-      -d "{\"code\":\"$totp_code\",\"sessionKey\":\"$session_key\"}" 2>/dev/null)
+      -d "{\"code\":\"$totp_code\",\"session_key\":\"$session_key\"}" 2>/dev/null)
     
     # Clean any potential whitespace or non-JSON characters from response
     local clean_response=$(echo "$response" | tr -d '\r' | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//')
@@ -331,11 +331,11 @@ OPAQUE_RESPONSE=$(curl -k -s -X POST "$ARKFILE_BASE_URL/api/opaque/login" \
 
 debug "OPAQUE response: $OPAQUE_RESPONSE"
 
-if echo "$OPAQUE_RESPONSE" | jq -e '.requiresTOTP' >/dev/null 2>&1; then
+if echo "$OPAQUE_RESPONSE" | jq -e '.requires_totp' >/dev/null 2>&1; then
     success "OPAQUE login successful"
     TEST_RESULTS[opaque_auth]=1
-    TEMP_TOKEN=$(echo "$OPAQUE_RESPONSE" | jq -r '.tempToken')
-    SESSION_KEY=$(echo "$OPAQUE_RESPONSE" | jq -r '.sessionKey')
+    TEMP_TOKEN=$(echo "$OPAQUE_RESPONSE" | jq -r '.temp_token')
+    SESSION_KEY=$(echo "$OPAQUE_RESPONSE" | jq -r '.session_key')
     
     debug "Temporary token: ${TEMP_TOKEN:0:20}...${TEMP_TOKEN: -20}"
     debug "Session key: ${SESSION_KEY:0:20}...${SESSION_KEY: -20}"
@@ -412,8 +412,8 @@ for i in "${!TOTP_CODES[@]}"; do
         # Parse the successful response
         if echo "$TOTP_RESPONSE" | jq -e '.' >/dev/null 2>&1; then
             FINAL_TOKEN=$(echo "$TOTP_RESPONSE" | jq -r '.token // empty' 2>/dev/null)
-            REFRESH_TOKEN=$(echo "$TOTP_RESPONSE" | jq -r '.refreshToken // empty' 2>/dev/null)
-            AUTH_METHOD=$(echo "$TOTP_RESPONSE" | jq -r '.authMethod // empty' 2>/dev/null)
+            REFRESH_TOKEN=$(echo "$TOTP_RESPONSE" | jq -r '.refresh_token // empty' 2>/dev/null)
+            AUTH_METHOD=$(echo "$TOTP_RESPONSE" | jq -r '.auth_method // empty' 2>/dev/null)
             TOTP_SUCCESS=1
             break
         fi
@@ -487,7 +487,7 @@ if [[ -n "$REFRESH_TOKEN" ]]; then
     info "Testing token refresh..."
     REFRESH_RESPONSE=$(curl -k -s -X POST "$ARKFILE_BASE_URL/api/refresh" \
       -H "Content-Type: application/json" \
-      -d "{\"refreshToken\": \"$REFRESH_TOKEN\"}" 2>/dev/null)
+      -d "{\"refresh_token\": \"$REFRESH_TOKEN\"}" 2>/dev/null)
     
     if echo "$REFRESH_RESPONSE" | jq -e '.token' >/dev/null 2>&1; then
         success "Token refresh working"

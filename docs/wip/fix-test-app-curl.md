@@ -281,3 +281,102 @@ Refactor the script to use a single token file approach instead of the current m
 
 ---
 
+# Remaining work to do to standardize the JSON field naming across the entire stack:
+
+## **Root Cause Analysis**
+
+The upload retry bug is a **field naming inconsistency issue** where different parts of the system use different JSON field conventions:
+
+### **Current State Assessment:**
+
+**1. Server-Side Go Handlers (handlers/auth.go):**
+- ✅ **Already uses snake_case consistently**
+- Examples: `refresh_token`, `session_key`, `requires_totp`, `temp_token`
+- All JSON responses properly use snake_case keys
+
+**2. Test Scripts Analysis:**
+- ❌ **test-app-curl.sh**: Mixed usage - some snake_case, some camelCase extractions
+- ✅ **fix-upload.sh**: Correctly uses snake_case throughout  
+- ❌ **admin-auth-test.sh**: Uses camelCase (`sessionKey`, `refreshToken`)
+
+**3. TypeScript Client Code:**
+- ❌ **Partially inconsistent** - interfaces define snake_case but some code expects camelCase
+
+**4. The Specific Bug:**
+The `generate_totp_code` function in `test-app-curl.sh` produces debug output like:
+```
+[DEBUG] Generating real TOTP code for secret: LQMNOPPYNH... 548605
+```
+
+But the script's parsing logic expects only the clean 6-digit code (`548605`), causing validation failures during retry attempts.
+
+## **Comprehensive Solution Plan**
+
+### **Phase 1: Fix the Immediate TOTP Code Parsing Bug**
+
+**Problem**: The retry logic in `test-app-curl.sh` fails because `generate_totp_code` outputs debug text mixed with the actual code.
+
+**Solution**: 
+1. Update the `generate_totp_code` function to separate debug logging from output
+2. Ensure debug messages go to stderr, clean code goes to stdout
+3. Add robust parsing in retry logic to extract 6-digit codes reliably
+
+### **Phase 2: Standardize All JSON Field Names to snake_case**
+
+The server already uses snake_case correctly, so we need to update clients to match:
+
+**Script Updates:**
+1. **test-app-curl.sh**: Change all `.refreshToken` → `.refresh_token`, `.sessionKey` → `.session_key`, etc.
+2. **admin-auth-test.sh**: Update TOTP payload and response parsing to use snake_case
+3. Ensure all `jq` extractions use the correct field names
+
+**TypeScript Updates:**
+1. **auth/login.ts**: Update interfaces to ensure snake_case consistency
+2. **auth/totp.ts**: Verify TOTP-related API calls use snake_case
+3. **types/api.d.ts**: Standardize all API response type definitions
+
+### **Phase 3: Implement Robust Retry Logic**
+
+Based on the working `fix-upload.sh` pattern:
+1. Replace the complex curl-based upload in `test-app-curl.sh` with the proven arkfile-client approach
+2. Implement the `authenticate_via_curl()` helper function for clean re-authentication
+3. Add proper session file management with consistent JSON schema
+4. Ensure retry logic handles both authentication failures and TOTP code timing issues
+
+### **Phase 4: Testing and Validation**
+
+1. Run the updated `test-app-curl.sh` to verify upload retry works
+2. Ensure Step 11 (file metadata decryption testing) is reached successfully
+3. Validate that both initial uploads and retry scenarios work correctly
+
+## **Key Technical Details**
+
+**Why This Approach Works:**
+- The server is already correct (uses snake_case)
+- `fix-upload.sh` works because it uses snake_case consistently
+- `test-app-curl.sh` fails because it mixes camelCase and snake_case extractions
+
+**Expected Outcomes:**
+- Upload retry logic will work reliably
+- No more "session expired, please login again" failures due to null tokens
+- Step 11 file metadata decryption testing will be reached
+- Consistent API field naming across the entire stack
+
+**Risk Mitigation:**
+- All changes maintain backward compatibility
+- Server-side code requires no changes (already correct)
+- Progressive rollout possible (fix critical bug first, then complete standardization)
+
+This plan directly addresses your original issue while fixing the underlying architectural inconsistency that caused it. The immediate focus should be on Phase 1 (TOTP parsing fix) and the critical parts of Phase 2 (field name corrections in test-app-curl.sh) to resolve the upload retry bug.
+
+---
+
+## UPDATES
+
+We have been systematically updating the Arkfile authentication system to use consistent snake_case JSON field names throughout the codebase. The project has multiple authentication test scripts including `admin-auth-test.sh` (which is working fully), `fix-upload.sh` (which is working for both login and file upload), but `test-app-curl.sh` has been failing at the network file operations phase.
+
+We successfully updated the main authentication flow in `test-app-curl.sh` to use snake_case field names, but the output shows we still have an issue in Step 9 where the script is trying to perform fresh authentication for the network file operations. The error "OPAQUE response missing required tokens" indicates that after the OPAQUE authentication succeeds, the script is still looking for the wrong field names when extracting the temporary tokens from the server response.
+
+Looking at the failure pattern, the script successfully completes the OPAQUE authentication (gets "TOTP required" confirmation), but then fails when trying to extract `temp_token` and `session_key` from the JSON response. This suggests the server is returning these fields in snake_case format, but our extraction logic in the fresh authentication section may still be using camelCase field names like `tempToken` and `sessionKey`.
+
+The remaining work is to identify and fix this specific field name extraction issue in the fresh authentication logic within Step 9 of the Phase 9 file operations. We need to examine the exact field names being used in the token extraction code and ensure they match the snake_case format that the server is now consistently returning. Once this final inconsistency is resolved, the complete end-to-end test should pass, including the network file upload/download operations that represent the full authentication workflow.

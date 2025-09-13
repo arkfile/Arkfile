@@ -17,11 +17,11 @@ export interface LoginCredentials {
 
 export interface LoginResponse {
   token: string;
-  refreshToken: string;
-  sessionKey: string;
-  authMethod: 'OPAQUE';
-  requiresTOTP?: boolean;
-  tempToken?: string;
+  refresh_token: string;
+  session_key: string;
+  auth_method: 'OPAQUE';
+  requires_totp?: boolean;
+  temp_token?: string;
 }
 
 export class LoginManager {
@@ -60,11 +60,11 @@ export class LoginManager {
         const data: LoginResponse = await response.json();
         
         // Handle TOTP if required
-        if (data.requiresTOTP) {
+        if (data.requires_totp) {
           hideProgress();
           handleTOTPFlow({
-            tempToken: data.tempToken!,
-            sessionKey: data.sessionKey,
+            tempToken: data.temp_token!,
+            sessionKey: data.session_key,
             username: credentials.username
           });
           return;
@@ -88,10 +88,10 @@ export class LoginManager {
   public static async completeLogin(data: LoginResponse, username: string): Promise<void> {
     try {
       // Store authentication tokens
-      setTokens(data.token, data.refreshToken);
-      
+      setTokens(data.token, data.refresh_token);
+
       // Create secure session in WASM (NEVER store session key in JavaScript)
-      const sessionResult = await wasmManager.createSecureSession(data.sessionKey, username);
+      const sessionResult = await wasmManager.createSecureSession(data.session_key, username);
       if (!sessionResult.success) {
         hideProgress();
         showError('Failed to create secure session: ' + sessionResult.error);

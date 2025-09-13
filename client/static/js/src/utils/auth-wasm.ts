@@ -51,7 +51,7 @@ export function getToken(): string | null {
 
 export function getRefreshTokenValue(): string | null {
   const result = getRefreshToken();
-  return result.success ? result.refreshToken : null;
+  return result.success ? result.refresh_token : null;
 }
 
 export function setTokens(token: string, refreshToken: string): void {
@@ -100,7 +100,7 @@ export async function refreshToken(): Promise<boolean> {
     
     if (response.ok) {
       const data = await response.json();
-      setTokens(data.token, data.refreshToken);
+      setTokens(data.token, data.refresh_token);
       return true;
     } else {
       console.error('Refresh response not ok:', response.status);
@@ -163,7 +163,7 @@ export async function logout(): Promise<boolean> {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ refreshToken: refreshTokenValue }),
+        body: JSON.stringify({ refresh_token: refreshTokenValue }),
       });
     }
     

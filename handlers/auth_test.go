@@ -241,10 +241,10 @@ func TestOpaqueRegister_Success(t *testing.T) {
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Equal(t, "Account created successfully. Two-factor authentication setup is required to complete registration.", resp["message"])
-	assert.Equal(t, "OPAQUE", resp["authMethod"])
-	assert.Equal(t, true, resp["requiresTOTPSetup"])
-	assert.NotEmpty(t, resp["tempToken"])
-	assert.NotEmpty(t, resp["sessionKey"])
+	assert.Equal(t, "OPAQUE", resp["auth_method"])
+	assert.Equal(t, true, resp["requires_totp_setup"])
+	assert.NotEmpty(t, resp["temp_token"])
+	assert.NotEmpty(t, resp["session_key"])
 
 	// Ensure all SQL expectations were met
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -484,10 +484,10 @@ func TestOpaqueLogin_WithTOTPEnabled_Success(t *testing.T) {
 
 	// Should return TOTP authentication requirement
 	assert.Equal(t, "OPAQUE authentication successful. TOTP code required.", resp["message"])
-	assert.Equal(t, true, resp["requiresTOTP"])
-	assert.Contains(t, resp, "tempToken", "Should include temporary token for TOTP completion")
-	assert.Contains(t, resp, "sessionKey", "Should include session key")
-	assert.Equal(t, "OPAQUE", resp["authMethod"])
+	assert.Equal(t, true, resp["requires_totp"])
+	assert.Contains(t, resp, "temp_token", "Should include temporary token for TOTP completion")
+	assert.Contains(t, resp, "session_key", "Should include session key")
+	assert.Equal(t, "OPAQUE", resp["auth_method"])
 
 	// Verify that mock database expectations were met
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -539,7 +539,7 @@ func TestOpaqueHealthCheck_Success(t *testing.T) {
 func TestRefreshToken_Success(t *testing.T) {
 	username := "refresh@example.com"
 	refreshTokenVal := "valid-refresh-token"
-	reqBody := map[string]string{"refreshToken": refreshTokenVal}
+	reqBody := map[string]string{"refresh_token": refreshTokenVal}
 	jsonBody, _ := json.Marshal(reqBody)
 
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/refresh", bytes.NewReader(jsonBody))
@@ -573,7 +573,7 @@ func TestRefreshToken_Success(t *testing.T) {
 	unmarshalErr := json.Unmarshal(rec.Body.Bytes(), &respBody)
 	require.NoError(t, unmarshalErr)
 	assert.NotEmpty(t, respBody["token"], "New JWT token should be present")
-	assert.NotEmpty(t, respBody["refreshToken"], "New refresh token should be present")
+	assert.NotEmpty(t, respBody["refresh_token"], "New refresh token should be present")
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -593,7 +593,7 @@ func TestRefreshToken_NoToken(t *testing.T) {
 
 func TestLogout_Success(t *testing.T) {
 	refreshTokenVal := "valid-refresh-token"
-	reqBody := map[string]string{"refreshToken": refreshTokenVal}
+	reqBody := map[string]string{"refresh_token": refreshTokenVal}
 	jsonBody, _ := json.Marshal(reqBody)
 
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/logout", bytes.NewReader(jsonBody))

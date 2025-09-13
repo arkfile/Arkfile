@@ -90,10 +90,10 @@ authenticate_admin() {
         "$ARKFILE_BASE_URL/api/opaque/login" || echo "ERROR")
 
     info "[Admin Auth] OPAQUE Response: $admin_opaque_response"
-    if [[ "$admin_opaque_response" == "ERROR" ]] || ! echo "$admin_opaque_response" | jq -e '.requiresTOTP' >/dev/null; then error "Admin OPAQUE login failed: $admin_opaque_response"; fi
+    if [[ "$admin_opaque_response" == "ERROR" ]] || ! echo "$admin_opaque_response" | jq -e '.requires_totp' >/dev/null; then error "Admin OPAQUE login failed: $admin_opaque_response"; fi
 
-    local admin_temp_token=$(echo "$admin_opaque_response" | jq -r '.tempToken')
-    local admin_session_key=$(echo "$admin_opaque_response" | jq -r '.sessionKey')
+    local admin_temp_token=$(echo "$admin_opaque_response" | jq -r '.temp_token')
+    local admin_session_key=$(echo "$admin_opaque_response" | jq -r '.session_key')
     info "[Admin Auth] Temp Token: $admin_temp_token"
     info "[Admin Auth] Session Key: $admin_session_key"
 
@@ -133,9 +133,9 @@ setup_and_authenticate_user() {
     info "[Sub-step] Registering user..."
     local reg_req=$(jq -n --arg u "$TEST_USERNAME" --arg p "$TEST_PASSWORD" '{username:$u, password:$p}')
     local reg_resp=$(curl -s $INSECURE_FLAG -X POST -H "Content-Type: application/json" -d "$reg_req" "$ARKFILE_BASE_URL/api/opaque/register")
-    if ! echo "$reg_resp" | jq -e '.requiresTOTPSetup' >/dev/null; then error "Registration failed: $reg_resp"; fi
-    local reg_temp_token=$(echo "$reg_resp" | jq -r '.tempToken')
-    local reg_session_key=$(echo "$reg_resp" | jq -r '.sessionKey')
+    if ! echo "$reg_resp" | jq -e '.requires_totp_setup' >/dev/null; then error "Registration failed: $reg_resp"; fi
+    local reg_temp_token=$(echo "$reg_resp" | jq -r '.temp_token')
+    local reg_session_key=$(echo "$reg_resp" | jq -r '.session_key')
 
     # Approval
     info "[Sub-step] Approving user..."
@@ -157,12 +157,12 @@ setup_and_authenticate_user() {
     info "[Sub-step] Logging in for 2FA..."
     local login_req=$(jq -n --arg u "$TEST_USERNAME" --arg p "$TEST_PASSWORD" '{username:$u, password:$p}')
     local login_resp=$(curl -s $INSECURE_FLAG -X POST -H "Content-Type: application/json" -d "$login_req" "$ARKFILE_BASE_URL/api/opaque/login")
-    local login_temp_token=$(echo "$login_resp" | jq -r '.tempToken')
-    local login_session_key=$(echo "$login_resp" | jq -r '.sessionKey')
+    local login_temp_token=$(echo "$login_resp" | jq -r '.temp_token')
+    local login_session_key=$(echo "$login_resp" | jq -r '.session_key')
 
     # Final TOTP Auth
     info "[Sub-step] Finalizing 2FA..."
-    local auth_req=$(jq -n --arg code "$(generate_totp_code "$secret" "$(date +%s)")" --arg sessionKey "$login_session_key" '{code:$code, session_key:$sessionKey, is_backup:false}')
+    local auth_req=$(jq -n --arg code "$(generate_totp_code "$secret" "$(date +%s)")" --arg session_key "$login_session_key" '{code:$code, session_key:$session_key, is_backup:false}')
     local auth_resp=$(curl -s $INSECURE_FLAG -X POST -H "Authorization: Bearer $login_temp_token" -H "Content-Type: application/json" -d "$auth_req" "$ARKFILE_BASE_URL/api/totp/auth")
     local final_token=$(echo "$auth_resp" | jq -r '.token')
     if [[ "$final_token" == "null" ]]; then error "Final user auth failed: $auth_resp"; fi
@@ -174,7 +174,7 @@ setup_and_authenticate_user() {
     local expiry_timestamp=$(echo "$jwt_payload" | base64 -d | jq .exp)
     local expires_at_iso=$(date -u -d "@$expiry_timestamp" +"%Y-%m-%dT%H:%M:%SZ")
 
-    jq -n --arg u "$TEST_USERNAME" --arg at "$final_token" --arg rt "$(echo $auth_resp | jq -r .refreshToken)" --arg ea "$expires_at_iso" --arg su "$ARKFILE_BASE_URL" \
+    jq -n --arg u "$TEST_USERNAME" --arg at "$final_token" --arg rt "$(echo $auth_resp | jq -r .refresh_token)" --arg ea "$expires_at_iso" --arg su "$ARKFILE_BASE_URL" \
         '{username:$u, access_token:$at, refresh_token:$rt, expires_at:$ea, server_url:$su, session_created:"'$(date -u -d@$(date +%s) --iso-8601=seconds)'"}' > "$client_session_file"
     
     local client_config_file="$TEMP_DIR/client_config.json"

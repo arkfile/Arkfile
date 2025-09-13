@@ -24,24 +24,24 @@ export interface TOTPFlowData {
 
 export interface TOTPSetupData {
   secret: string;
-  qrCodeUrl: string;
-  backupCodes: string[];
-  manualEntry: string;
+  qr_code_url: string;
+  backup_codes: string[];
+  manual_entry: string;
 }
 
 export interface TOTPLoginResponse {
   token: string;
-  refreshToken: string;
-  sessionKey: string;
-  authMethod: string;
+  refresh_token: string;
+  session_key: string;
+  auth_method: string;
   user: any;
 }
 
 export interface TOTPSetupResponse {
   secret: string;
-  qrCodeUrl: string;
-  backupCodes: string[];
-  manualEntry: string;
+  qr_code_url: string;
+  backup_codes: string[];
+  manual_entry: string;
 }
 
 export function handleTOTPFlow(data: TOTPFlowData): void {
@@ -197,8 +197,8 @@ async function verifyTOTPLogin(): Promise<void> {
       },
       body: JSON.stringify({
         code: code,
-        sessionKey: totpLoginData.sessionKey,
-        isBackup: isBackup
+        session_key: totpLoginData.sessionKey,
+        is_backup: isBackup
       }),
     });
     
@@ -208,9 +208,9 @@ async function verifyTOTPLogin(): Promise<void> {
       // Complete authentication using LoginManager
       await LoginManager.completeLogin({
         token: data.token,
-        refreshToken: data.refreshToken,
-        sessionKey: data.sessionKey,
-        authMethod: 'OPAQUE'
+        refresh_token: data.refresh_token,
+        session_key: data.session_key,
+        auth_method: 'OPAQUE'
       }, totpLoginData.username);
       
       // Clean up
@@ -252,7 +252,7 @@ export async function initiateTOTPSetup(sessionKey: string): Promise<TOTPSetupDa
         'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
-        sessionKey: sessionKey
+        session_key: sessionKey
       }),
     });
     
@@ -262,9 +262,9 @@ export async function initiateTOTPSetup(sessionKey: string): Promise<TOTPSetupDa
       const data: TOTPSetupResponse = await response.json();
       return {
         secret: data.secret,
-        qrCodeUrl: data.qrCodeUrl,
-        backupCodes: data.backupCodes,
-        manualEntry: data.manualEntry
+        qr_code_url: data.qr_code_url,
+        backup_codes: data.backup_codes,
+        manual_entry: data.manual_entry
       };
     } else {
       const errorData = await response.json().catch(() => ({}));
@@ -298,7 +298,7 @@ export async function completeTOTPSetup(code: string, sessionKey: string): Promi
       },
       body: JSON.stringify({
         code: code,
-        sessionKey: sessionKey
+        session_key: sessionKey
       }),
     });
     
@@ -367,8 +367,8 @@ export async function disableTOTP(currentCode: string, sessionKey: string): Prom
         'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
-        currentCode: currentCode,
-        sessionKey: sessionKey
+        current_code: currentCode,
+        session_key: sessionKey
       }),
     });
     
@@ -442,7 +442,7 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData, sess
     <div style="margin-bottom: 20px;">
       <h4>Step 1: Scan QR Code</h4>
       <div style="text-align: center; margin: 15px 0;">
-        <img src="${setupData.qrCodeUrl}" alt="TOTP QR Code" style="max-width: 200px;">
+        <img src="${setupData.qr_code_url}" alt="TOTP QR Code" style="max-width: 200px;">
       </div>
       <p style="font-size: 14px; color: #666;">
         Scan this QR code with your authenticator app 
@@ -455,7 +455,7 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData, sess
     <div style="margin-bottom: 20px;">
       <h4>Step 2: Manual Entry (Alternative)</h4>
       <div style="background: #f5f5f5; padding: 10px; border-radius: 4px; margin: 10px 0;">
-        <code style="font-family: monospace; word-break: break-all;">${setupData.manualEntry}</code>
+        <code style="font-family: monospace; word-break: break-all;">${setupData.manual_entry}</code>
       </div>
       <p style="font-size: 14px; color: #666;">
         If you can't scan the QR code, enter this code manually in your authenticator app.
@@ -469,7 +469,7 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData, sess
           ⚠️ Save these backup codes in a secure location:
         </p>
         <div style="font-family: monospace; font-size: 14px; line-height: 1.5;">
-          ${setupData.backupCodes.map(code => `<div>${code}</div>`).join('')}
+          ${setupData.backup_codes.map((code: string) => `<div>${code}</div>`).join('')}
         </div>
       </div>
       <p style="font-size: 14px; color: #666;">
@@ -564,7 +564,16 @@ export async function validateTOTPCode(code: string, username: string): Promise<
 export async function generateTOTPSetup(username: string): Promise<TOTPSetupData | null> {
   try {
     const result = await wasmManager.generateTOTPSetupData(username);
-    return result.success ? result.data! : null;
+    if (result.success && result.data) {
+      // Convert WASM camelCase to API snake_case format
+      return {
+        secret: result.data.secret,
+        qr_code_url: result.data.qrCodeUrl,
+        manual_entry: result.data.manualEntry,
+        backup_codes: result.data.backupCodes
+      };
+    }
+    return null;
   } catch (error) {
     console.error('TOTP setup generation error:', error);
     return null;

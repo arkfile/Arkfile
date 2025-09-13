@@ -17,9 +17,9 @@ export interface RegistrationCredentials {
 
 export interface RegistrationResponse {
   token: string;
-  refreshToken: string;
-  sessionKey: string;
-  authMethod: 'OPAQUE';
+  refresh_token: string;
+  session_key: string;
+  auth_method: 'OPAQUE';
   message: string;
 }
 
@@ -133,10 +133,10 @@ export class RegistrationManager {
   private static async completeRegistration(data: RegistrationResponse, username: string): Promise<void> {
     try {
       // Store authentication tokens
-      setTokens(data.token, data.refreshToken);
-      
+      setTokens(data.token, data.refresh_token);
+
       // Create secure session in WASM (NEVER store session key in JavaScript)
-      const sessionResult = await wasmManager.createSecureSession(data.sessionKey, username);
+      const sessionResult = await wasmManager.createSecureSession(data.session_key, username);
       if (!sessionResult.success) {
         hideProgress();
         showError('Failed to create secure session: ' + sessionResult.error);
