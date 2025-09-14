@@ -456,7 +456,7 @@ generate_totp_with_reuse_prevention() {
     echo "$new_totp_code"  # Return the last code anyway
 }
 
-# Fresh authentication helper function (modeled after fix-upload.sh)
+# Fresh authentication helper function (standardized pattern from fix-upload.sh)
 authenticate_via_curl() {
     debug "=== Starting fresh authentication workflow ==="
     
@@ -488,7 +488,7 @@ authenticate_via_curl() {
         return 1
     fi
     
-    # Extract temporary tokens
+    # Extract temporary tokens using consistent snake_case
     local temp_token session_key
     temp_token=$(echo "$opaque_response" | jq -r '.temp_token')
     session_key=$(echo "$opaque_response" | jq -r '.session_key')
@@ -509,40 +509,19 @@ authenticate_via_curl() {
         return 1
     fi
     
-    local totp_secret totp_code
+    local totp_secret padded_secret totp_code
     totp_secret=$(cat "$TEMP_DIR/totp_secret")
-    
-    # Apply padding fix to TOTP secret (inline fix since function is defined later)
-    local padded_secret secret_len remainder padding_needed
-    padded_secret="$totp_secret"
-    secret_len=${#totp_secret}
-    remainder=$((secret_len % 8))
-    
-    if [ $remainder -ne 0 ]; then
-        padding_needed=$((8 - remainder))
-        for ((i=0; i<padding_needed; i++)); do
-            padded_secret="${padded_secret}="
-        done
-    fi
-    
-    # Generate TOTP code using reuse prevention to avoid duplicate codes
-    local totp_code
+    padded_secret=$(fix_totp_secret_padding "$totp_secret")
     totp_code=$(generate_totp_with_reuse_prevention "$padded_secret")
     
-    # Additional validation and debug output for TOTP code
-    debug "TOTP secret (raw): ${totp_secret:0:10}..."
-    debug "TOTP secret (padded): ${padded_secret:0:10}..."
-    debug "Generated TOTP code: $totp_code"
-    
     if [ -z "$totp_code" ] || [ ${#totp_code} -ne 6 ] || ! [[ "$totp_code" =~ ^[0-9]{6}$ ]]; then
-        warning "Failed to generate valid TOTP code for fresh authentication"
-        warning "Generated code: '$totp_code'"
+        warning "Failed to generate valid TOTP code for fresh authentication: '$totp_code'"
         return 1
     fi
     
     debug "Generated TOTP code for fresh authentication: $totp_code"
     
-    # Complete TOTP authentication using correct snake_case payload
+    # Complete TOTP authentication using consistent snake_case payload
     local totp_request
     totp_request=$(jq -n \
         --arg code "$totp_code" \
@@ -572,13 +551,11 @@ authenticate_via_curl() {
         return 1
     fi
     
-    # Extract final tokens using correct snake_case keys
-    local final_token refresh_token final_session_key
+    # Extract final tokens using consistent snake_case keys
+    local final_token refresh_token
     final_token=$(echo "$totp_response" | jq -r '.token')
     refresh_token=$(echo "$totp_response" | jq -r '.refresh_token')
-    final_session_key=$(echo "$totp_response" | jq -r '.session_key')
     
-    # Validate extracted tokens
     if [ "$final_token" = "null" ] || [ -z "$final_token" ]; then
         warning "Fresh authentication response missing valid token"
         return 1
@@ -586,30 +563,14 @@ authenticate_via_curl() {
     
     debug "Fresh authentication successful, creating session files..."
     
-    # Compute expires_at from JWT exp claim (like fix-upload.sh)
-    local expires_at
-    if command -v jq >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1; then
-        # Extract exp claim from JWT payload
-        local jwt_payload exp_timestamp
-        jwt_payload=$(echo "$final_token" | cut -d'.' -f2)
-        # Add padding if needed for base64 decoding
-        while [ $((${#jwt_payload} % 4)) -ne 0 ]; do
-            jwt_payload="${jwt_payload}="
-        done
-        exp_timestamp=$(echo "$jwt_payload" | base64 -d 2>/dev/null | jq -r '.exp' 2>/dev/null || echo "")
-        
-        if [ -n "$exp_timestamp" ] && [ "$exp_timestamp" != "null" ]; then
-            expires_at=$(date -u -d "@$exp_timestamp" --iso-8601=seconds 2>/dev/null || echo "")
-        fi
-    fi
-    
-    # Fallback to 30 minutes from now if JWT parsing failed
-    if [ -z "$expires_at" ]; then
-        expires_at=$(date -u -d "+30 minutes" --iso-8601=seconds)
-    fi
-    
-    # Create session JSON following fix-upload.sh schema
+    # Create session and config files following fix-upload.sh schema
     local client_session_file="$TEMP_DIR/fresh_auth_session.json"
+    local client_config_file="$TEMP_DIR/fresh_auth_config.json"
+    
+    # Parse JWT expiration for session file
+    local expires_at
+    expires_at=$(date -u -d "+30 minutes" --iso-8601=seconds)
+    
     jq -n \
         --arg username "$TEST_USERNAME" \
         --arg access_token "$final_token" \
@@ -626,8 +587,6 @@ authenticate_via_curl() {
             session_created: $session_created
         }' > "$client_session_file"
     
-    # Create client config JSON following fix-upload.sh schema
-    local client_config_file="$TEMP_DIR/fresh_auth_config.json"
     jq -n \
         --arg server_url "$ARKFILE_BASE_URL" \
         --arg username "$TEST_USERNAME" \
@@ -645,10 +604,6 @@ authenticate_via_curl() {
     echo "$final_token" > "$TEMP_DIR/fresh_auth_token"
     
     debug "Fresh authentication completed successfully"
-    debug "Config file: $client_config_file"
-    debug "Session file: $client_session_file"
-    debug "Token: ${final_token:0:16}..."
-    
     return 0
 }
 
@@ -1195,8 +1150,8 @@ setup_test_user_for_endpoint_testing() {
     
     # Extract tokens
     local token session_key
-    token=$(jq -r '.tempToken' "$TEMP_DIR/login.json")
-    session_key=$(jq -r '.sessionKey' "$TEMP_DIR/login.json")
+    token=$(jq -r '.temp_token' "$TEMP_DIR/login.json")
+    session_key=$(jq -r '.session_key' "$TEMP_DIR/login.json")
     
     if [ "$token" = "null" ] || [ "$session_key" = "null" ]; then
         error "Failed to extract authentication tokens for endpoint testing"
@@ -2043,47 +1998,14 @@ phase_9_file_operations() {
     fi
     success "arkfile-client tool available and ready"
 
-    # Step 9: Check for existing tokens before authenticating
-    log "Step 9: Checking for existing valid JWT tokens from earlier phases..."
+    # Step 9: Always perform fresh authentication for file operations
+    log "Step 9: Performing fresh authentication for file operations (ensuring valid JWT token)..."
     
-    local final_token session_key auth_method="existing"
-    local token_reused=false
+    local final_token session_key auth_method="fresh"
     
-    # Check if we have valid tokens from Phase 6 that we can reuse
-    if [ -f "$TEMP_DIR/final_jwt_token" ] && [ -f "$TEMP_DIR/final_session_key" ]; then
-        final_token=$(cat "$TEMP_DIR/final_jwt_token")
-        session_key=$(cat "$TEMP_DIR/final_session_key")
-        
-        # Strict validation: tokens must not be mock, null, or empty
-        if [ -n "$final_token" ] && [[ "$final_token" != "mock-"* ]] && [ "$final_token" != "null" ] && [ -n "$session_key" ] && [ "$session_key" != "null" ]; then
-            # Test if the token is still valid by making authenticated API call
-            local token_test_response
-            token_test_response=$(curl -s $INSECURE_FLAG \
-                -H "Authorization: Bearer $final_token" \
-                -H "Content-Type: application/json" \
-                "$ARKFILE_BASE_URL/api/files" || echo "ERROR")
-            
-            # Validate response is successful (not ERROR and not containing auth errors)
-            if [ "$token_test_response" != "ERROR" ] && ! echo "$token_test_response" | jq -e '.error' | grep -iq "unauthorized\|expired\|invalid" 2>/dev/null; then
-                # Token is valid, reuse it
-                token_reused=true
-                success "✓ Reusing valid JWT token from Phase 6 (avoids TOTP code reuse)"
-                info "Token validation successful - Phase 6 authentication still valid"
-                debug "Token: ${final_token:0:16}..."
-                debug "Session key: ${session_key:0:16}..."
-            else
-                debug "Existing token failed API validation, proceeding with fresh authentication"
-                debug "Token test response: $token_test_response"
-            fi
-        else
-            debug "Existing tokens are invalid (mock/null/empty): token='$final_token', session='$session_key'"
-        fi
-    else
-        debug "No existing token files found, proceeding with fresh authentication"
-    fi
-    
-    # If we couldn't reuse tokens, perform fresh authentication
-    if [ "$token_reused" = false ]; then
+    # Always perform fresh authentication to ensure token validity
+    # This follows the successful pattern from fix-upload.sh
+    info "File operations require fresh JWT token - performing complete authentication flow"
         log "Performing fresh curl-based two-phase authentication..."
         
         # Phase 1: OPAQUE Login to get temporary tokens
@@ -2116,8 +2038,8 @@ phase_9_file_operations() {
         
         # Extract temporary tokens
         local temp_token
-        temp_token=$(echo "$opaque_response" | jq -r '.tempToken')
-        session_key=$(echo "$opaque_response" | jq -r '.sessionKey')
+        temp_token=$(echo "$opaque_response" | jq -r '.temp_token')
+        session_key=$(echo "$opaque_response" | jq -r '.session_key')
         
         if [ "$temp_token" = "null" ] || [ "$session_key" = "null" ]; then
             error "OPAQUE response missing required tokens"
@@ -2138,8 +2060,21 @@ phase_9_file_operations() {
     local padded_secret
     padded_secret=$(fix_totp_secret_padding "$totp_secret")
     
-    # Use TOTP reuse prevention to avoid duplicate codes
+    # Use TOTP reuse prevention to avoid duplicate codes (critical for retry scenarios)
     totp_code=$(generate_totp_with_reuse_prevention "$padded_secret")
+    
+    # Additional validation and wait if needed to avoid reuse
+    if [ "$totp_code" = "$LAST_TOTP_CODE" ] && [ -n "$LAST_TOTP_TIMESTAMP" ]; then
+        local time_since_last=$(($(date +%s) - LAST_TOTP_TIMESTAMP))
+        if [ $time_since_last -lt 30 ]; then
+            local wait_time=$((30 - time_since_last + 1))
+            warning "TOTP code reuse detected in fresh auth, waiting ${wait_time}s for new window..."
+            sleep $wait_time
+            totp_code=$(generate_totp_code "$padded_secret")
+            LAST_TOTP_CODE="$totp_code"
+            LAST_TOTP_TIMESTAMP="$(date +%s)"
+        fi
+    fi
 
     if [ -z "$totp_code" ] || [ ${#totp_code} -ne 6 ]; then
         error "Failed to generate valid TOTP code: $totp_code"
@@ -2177,25 +2112,20 @@ phase_9_file_operations() {
         
         # Extract final authentication token
         final_token=$(echo "$totp_response" | jq -r '.token')
-        auth_method=$(echo "$totp_response" | jq -r '.authMethod')
-        
+        auth_method=$(echo "$totp_response" | jq -r '.auth_method')
+
         success "Fresh two-phase authentication completed successfully!"
         info "Authentication method: $auth_method"
-    fi
-    
-    # Store tokens for later use regardless of source
+
+    # Store tokens for later use
     echo "$final_token" > "$TEMP_DIR/step9_final_token"
     echo "$session_key" > "$TEMP_DIR/step9_session_key"
-    
+
     # CRITICAL FIX: Also update the main token files so other phases can use this valid token
     echo "$final_token" > "$TEMP_DIR/final_jwt_token"
     echo "$session_key" > "$TEMP_DIR/final_session_key"
     
-    if [ "$token_reused" = true ]; then
-        success "Step 9 authentication: Token reuse successful (no TOTP code consumed)"
-    else
-        success "Step 9 authentication: Fresh authentication successful"
-    fi
+    success "Step 9 authentication: Fresh authentication successful"
     info "Final token ready for network operations"
     
     # Create arkfile-client config for server connection (still needed for file operations)
@@ -3017,7 +2947,7 @@ main() {
     
     local admin_final_token auth_method
     admin_final_token=$(echo "$admin_totp_response" | jq -r '.token')
-    auth_method=$(echo "$admin_totp_response" | jq -r '.authMethod')
+    auth_method=$(echo "$admin_totp_response" | jq -r '.auth_method')
     
     # Store admin token for use in admin API functions
     echo "$admin_final_token" > "$TEMP_DIR/admin_token"
