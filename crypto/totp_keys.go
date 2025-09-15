@@ -37,11 +37,6 @@ func InitializeTOTPMasterKey() error {
 				}
 			}
 			totpMasterKey = keyData
-			if isDebugMode() {
-				// Hash the key for debugging (never log actual key)
-				keyHash := sha256.Sum256(totpMasterKey)
-				fmt.Printf("TOTP master key: loaded from file (DEBUG_MODE=1), hash=%x\n", keyHash[:8])
-			}
 			return nil
 		}
 	}
@@ -53,10 +48,6 @@ func InitializeTOTPMasterKey() error {
 		fixedSeed := "ARKFILE_DEV_TOTP_MASTER_KEY_FIXED_2025"
 		hash := sha256.Sum256([]byte(fixedSeed))
 		totpMasterKey = hash[:]
-
-		if isDebugMode() {
-			fmt.Printf("TOTP master key: generated fixed development key (DEBUG_MODE=1, no file found)\n")
-		}
 	} else {
 		// PRODUCTION MODE: Generate cryptographically random key
 		totpMasterKey = make([]byte, 32)
@@ -86,54 +77,24 @@ func InitializeTOTPMasterKey() error {
 // DeriveTOTPUserKey derives a user-specific TOTP encryption key from the master key
 // This key remains consistent for the user across all sessions
 func DeriveTOTPUserKey(username string) ([]byte, error) {
-	// Enhanced debug logging for TOTP key derivation
-	if isDebugMode() {
-		fmt.Printf("TOTP key derivation attempt for user: %s\n", username)
-		fmt.Printf("TOTP master key status: initialized=%t, length=%d\n",
-			len(totpMasterKey) > 0, len(totpMasterKey))
-	}
+	// Debug logging for TOTP key derivation is handled by calling function if needed
 
 	if len(totpMasterKey) == 0 {
-		if isDebugMode() {
-			fmt.Printf("TOTP key derivation failed: master key not initialized\n")
-		}
 		return nil, fmt.Errorf("TOTP master key not initialized")
 	}
 
 	if username == "" {
-		if isDebugMode() {
-			fmt.Printf("TOTP key derivation failed: empty username\n")
-		}
 		return nil, fmt.Errorf("username cannot be empty")
 	}
 
 	// Use HKDF to derive user-specific key with domain separation
 	context := fmt.Sprintf("%s:%s", TOTPUserKeyContext, username)
 
-	// Debug logging for HKDF context
-	if isDebugMode() {
-		fmt.Printf("TOTP HKDF context: %s (length=%d)\n", context, len(context))
-		// Hash the master key for debugging (never log actual key)
-		masterKeyHash := sha256.Sum256(totpMasterKey)
-		fmt.Printf("TOTP master key hash: %x\n", masterKeyHash[:8])
-	}
-
 	hkdf := hkdf.New(sha256.New, totpMasterKey, nil, []byte(context))
 
 	userKey := make([]byte, 32)
 	if _, err := hkdf.Read(userKey); err != nil {
-		if isDebugMode() {
-			fmt.Printf("TOTP HKDF read failed for user %s: %v\n", username, err)
-		}
 		return nil, fmt.Errorf("failed to derive TOTP user key: %w", err)
-	}
-
-	// Debug logging for successful key derivation
-	if isDebugMode() {
-		// Hash the derived key for debugging (never log actual key)
-		userKeyHash := sha256.Sum256(userKey)
-		fmt.Printf("TOTP key derived successfully for user: %s, derived_key_hash: %x\n",
-			username, userKeyHash[:8])
 	}
 
 	return userKey, nil

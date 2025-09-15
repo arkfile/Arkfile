@@ -23,7 +23,7 @@ const (
 	TOTPIssuer       = "Arkfile"
 	TOTPDigits       = 6
 	TOTPPeriod       = 30
-	TOTPSkew         = 1 // Allow ±1 window (90 seconds total: current + prev/next 30s windows)
+	TOTPSkew         = 0 // Allow ±0 window (60 seconds total: current + prev/next 30s windows = ±25s tolerance)
 	BackupCodeLength = 10
 	BackupCodeCount  = 10
 )
@@ -504,7 +504,7 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 	// Detect and decode base64-encoded data
 	if decodedSecret, err := decodeBase64IfNeeded(data.SecretEncrypted); err == nil {
 		if isDebugMode() && len(decodedSecret) != len(data.SecretEncrypted) {
-			fmt.Printf("getTOTPData: Decoded secret from %d to %d bytes (was base64)\n",
+			fmt.Printf("TOTP: Decoded secret from %d to %d bytes (was base64)\n",
 				len(data.SecretEncrypted), len(decodedSecret))
 		}
 		data.SecretEncrypted = decodedSecret
@@ -512,7 +512,7 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 
 	if decodedBackup, err := decodeBase64IfNeeded(data.BackupCodesEncrypted); err == nil {
 		if isDebugMode() && len(decodedBackup) != len(data.BackupCodesEncrypted) {
-			fmt.Printf("getTOTPData: Decoded backup codes from %d to %d bytes (was base64)\n",
+			fmt.Printf("TOTP: Decoded backup codes from %d to %d bytes (was base64)\n",
 				len(data.BackupCodesEncrypted), len(decodedBackup))
 		}
 		data.BackupCodesEncrypted = decodedBackup

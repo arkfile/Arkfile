@@ -421,7 +421,7 @@ for i in "${!TOTP_CODES[@]}"; do
     
     # FIXME: Add proper rate limiting protection by incrementing delays
     if [[ $i -lt $((${#TOTP_CODES[@]} - 1)) ]]; then
-        local wait_time=$((2 + (i * 2)))  # Progressive wait: 2s, 4s, 6s, etc.
+        wait_time=$((2 + (i * 2)))  # Progressive wait: 2s, 4s, 6s, etc.
         debug "Waiting ${wait_time}s before next attempt (rate limiting protection)..."
         sleep $wait_time
     fi
