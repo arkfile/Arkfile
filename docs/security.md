@@ -435,7 +435,7 @@ rqlite -H localhost:4001 \
 **Containment Actions:**
 ```bash
 # Rotate JWT keys immediately
-./scripts/rotate-jwt-keys.sh --force
+./scripts/maintenance/rotate-jwt-keys.sh --force
 
 # Revoke all active sessions
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \

@@ -20,7 +20,15 @@ TEST_USERNAME="${TEST_USERNAME:-arkfile-dev-test-user}"
 TEST_PASSWORD="${TEST_PASSWORD:-MyVacation2025PhotosForFamily!ExtraSecure}"
 ADMIN_USERNAME="${ADMIN_USERNAME:-arkfile-dev-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-DevAdmin2025!SecureInitialPassword}"
-TEMP_DIR=$(mktemp -d)
+TEMP_DIR="/tmp/fix-upload"
+
+# Create the standardized temp directory
+mkdir -p "$TEMP_DIR"
+
+# Standardized test file configuration
+TEST_FILE_PATH="$TEMP_DIR/test-100mb-deterministic.bin"
+TEST_FILE_SIZE=104857600 # 100 MiB
+TEST_FILE_SHA256="4cbf988462cc3ba2e10e3aae9f5268546aa79016359fb45be7dd199c073125c0"
 
 # --- Colors ---
 RED='\033[0;31m'
@@ -39,8 +47,12 @@ debug_log() { if [[ "${DEBUG:-}" == "true" ]]; then echo -e "[$(date +'%T')] [DE
 
 # --- Cleanup ---
 cleanup() {
-    log "Cleaning up temporary directory: $TEMP_DIR"
-    rm -rf "$TEMP_DIR"
+    # This function is now a no-op as we use a persistent temp directory.
+    # Manual cleanup of /tmp/fix-upload can be done if needed.
+    # The directory is persistent, but we can clean its contents if not skipping
+    log "Cleaning contents of temporary directory $TEMP_DIR..."
+    # Remove everything except the main test file to speed up subsequent runs
+    find "$TEMP_DIR" -mindepth 1 ! -name "$(basename "$TEST_FILE_PATH")" -exec rm -rf {} +
 }
 trap cleanup EXIT
 
@@ -188,22 +200,42 @@ run_upload_test() {
     log "Starting file upload test..."
     local client_config_file=$(cat "$TEMP_DIR/client_config_path.txt")
 
-    # Generate a test file (smaller size to account for encryption overhead)
-    local test_file="${TEMP_DIR}/upload_test.dat"
-    # Generate smaller file (95MB) to account for ~30 bytes envelope overhead
-    # 95MB = 95 * 1024 * 1024 = 99614720 bytes
-    local target_size=$((95 * 1024 * 1024))  # 95MB in bytes
+    # --- Standardized Test File Generation ---
+    local test_file="$TEST_FILE_PATH"
+    local file_hash="$TEST_FILE_SHA256"
+    log "Verifying or generating standard 100MB test file..."
 
-    info "Generating test file with size: $(printf "%'d" $target_size) bytes (95MB)"
-    /opt/arkfile/bin/cryptocli generate-test-file --filename "$test_file" --size "$target_size" >/dev/null
-
-    # Verify file was created
-    local actual_size=$(stat -c%s "$test_file" 2>/dev/null || echo "0")
-    if [ "$actual_size" -ne "$target_size" ]; then
-        error "File size mismatch: expected $target_size, got $actual_size bytes"
+    # Check if the file exists and its hash is correct
+    local needs_generation=false
+    if [ -f "$test_file" ]; then
+        info "Test file found at $test_file. Verifying integrity..."
+        local existing_hash=$(sha256sum "$test_file" | awk '{print $1}')
+        if [ "$existing_hash" == "$file_hash" ]; then
+            success "Test file already exists and hash is correct. Skipping generation."
+        else
+            info "Test file exists but hash is incorrect. Will regenerate."
+            needs_generation=true
+        fi
+    else
+        info "Test file not found. Will generate a new one."
+        needs_generation=true
     fi
 
-    info "Generated test file: $test_file ($(printf "%'d" $actual_size) bytes)"
+    if [ "$needs_generation" = true ]; then
+        info "Generating new 100MB test file..."
+        if ! /opt/arkfile/bin/cryptocli generate-test-file --filename "$test_file" --size "$TEST_FILE_SIZE" --pattern deterministic >/dev/null 2>&1; then
+            error "Failed to generate standard test file using cryptocli."
+        fi
+        local new_hash=$(sha256sum "$test_file" | awk '{print $1}')
+        if [ "$new_hash" == "$file_hash" ]; then
+            success "Successfully generated new standard test file."
+        else
+            error "Generated file hash does not match the expected standard hash."
+        fi
+    fi
+
+    local actual_size=$(stat -c%s "$test_file" 2>/dev/null || echo "0")
+    success "Standard test file is ready: $test_file ($(printf "%'d" $actual_size) bytes)"
 
     # Encrypt the file for upload (this creates the pre-encrypted file arkfile-client expects)
     info "Encrypting test file for arkfile-client upload..."
@@ -220,11 +252,8 @@ run_upload_test() {
 
     info "File encrypted for upload: $encrypted_file"
 
-    # Calculate SHA256 hash of the original file for metadata
-    info "Calculating SHA256 hash..."
-    local file_hash
-    file_hash=$(sha256sum "$test_file" | cut -d' ' -f1)
-    info "File hash: $file_hash"
+    # The SHA256 hash is now pre-defined and verified
+    info "Using verified file hash: $file_hash"
 
     # Generate and encrypt FEK (File Encryption Key)
     info "Generating and encrypting File Encryption Key (FEK)..."
@@ -331,6 +360,12 @@ run_upload_test() {
 # --- Main Execution ---
 main() {
     log "Starting focused upload debug script..."
+    # Perform pre-run cleanup to ensure a clean slate
+    log "Performing pre-run cleanup of temporary directory..."
+    # This command removes all files and directories inside TEMP_DIR, but not the directory itself.
+    # It's safe because TEMP_DIR is a hardcoded, specific path.
+    find "$TEMP_DIR" -mindepth 1 -delete
+    
     authenticate_admin
     setup_and_authenticate_user
     run_upload_test

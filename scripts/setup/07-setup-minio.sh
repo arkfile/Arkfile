@@ -69,7 +69,7 @@ fi
 
 # Copy systemd service files
 echo "Installing systemd service files..."
-sudo cp ${BASE_DIR}/releases/current/systemd/minio.service /etc/systemd/system/
+sudo cp ${BASE_DIR}/systemd/minio.service /etc/systemd/system/
 
 # Create simplified directory structure for single-node deployment
 echo "Setting up MinIO directories..."

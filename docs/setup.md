@@ -54,7 +54,7 @@ External services include S3-compatible object storage, a distributed rqlite dat
 
 ### Directory Structure and Service Users
 
-Arkfile uses a standardized directory structure with dedicated service users. The main application directory is `/opt/arkfile/`, containing subdirectories for binaries, configuration files, application data, logs, and versioned releases.
+Arkfile uses a standardized directory structure with dedicated service users. The main application directory is `/opt/arkfile/`, containing subdirectories for binaries, configuration files, application data and logs.
 
 The system operates with the `arkfile` user for running services, and the `arkfile` group for resource access. This separation enforces the principle of least privilege and isolates application resources.
 

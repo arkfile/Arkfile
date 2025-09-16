@@ -687,7 +687,6 @@ if [ "$FULL_SETUP" = true ]; then
         echo "• Base directory: /opt/arkfile ($(ls -ld /opt/arkfile | awk '{print $3":"$4" "$1}'))"
         echo "• Key storage: /opt/arkfile/etc/keys ($(ls -ld /opt/arkfile/etc/keys 2>/dev/null | awk '{print $1}' || echo 'configured'))"
         echo "• Binary location: /opt/arkfile/bin/arkfile"
-        echo "• Current release: /opt/arkfile/releases/current"
         
         echo
         echo -e "${BLUE}🔐 Security Configuration:${NC}"
@@ -765,7 +764,6 @@ if [ "$FULL_SETUP" = true ]; then
         echo "• Base directory: /opt/arkfile ($(ls -ld /opt/arkfile | awk '{print $3":"$4" "$1}'))"
         echo "• Key storage: /opt/arkfile/etc/keys ($(ls -ld /opt/arkfile/etc/keys 2>/dev/null | awk '{print $1}' || echo 'configured'))"
         echo "• Binary location: /opt/arkfile/bin/arkfile"
-        echo "• Current release: /opt/arkfile/releases/current"
         
         echo
         echo -e "${BLUE}🔐 Security Configuration:${NC}"

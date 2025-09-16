@@ -297,6 +297,16 @@ fi
 export VERSION="$FALLBACK_VERSION"
 export SKIP_C_LIBS="$SKIP_C_LIBS"
 
+# Step 3.2: Clean build artifacts to prevent directory conflicts
+echo -e "${YELLOW}Step 3.2: Cleaning build artifacts${NC}"
+print_status "INFO" "Removing any existing build artifacts to ensure clean build..."
+if [ -d "build" ]; then
+    print_status "INFO" "Removing existing build directory..."
+    rm -rf build
+    print_status "SUCCESS" "Build artifacts cleaned"
+fi
+echo
+
 # Ensure ownership is correct before build
 fix_go_ownership
 
@@ -315,29 +325,20 @@ print_status "INFO" "Verifying critical files are in place..."
 
 # Ensure WASM binary is available in working directory
 if [ ! -f "$ARKFILE_DIR/client/main.wasm" ]; then
-    print_status "WARNING" "WASM binary missing from working directory, copying from release..."
-    if [ -f "$ARKFILE_DIR/releases/current/client/main.wasm" ]; then
-        cp "$ARKFILE_DIR/releases/current/client/main.wasm" "$ARKFILE_DIR/client/main.wasm"
-        chown "$USER:$GROUP" "$ARKFILE_DIR/client/main.wasm"
-        print_status "SUCCESS" "WASM binary copied to working directory"
-    else
-        print_status "ERROR" "WASM binary not found in release either - build may have failed"
-        exit 1
-    fi
+    print_status "ERROR" "WASM binary missing from working directory. The build likely failed."
+    # The build script should place this file here directly, so a fallback is no longer appropriate.
+    exit 1
 else
     print_status "SUCCESS" "WASM binary verified in working directory"
 fi
 
 # Ensure wasm_exec.js is available
 if [ ! -f "$ARKFILE_DIR/client/wasm_exec.js" ]; then
-    print_status "WARNING" "wasm_exec.js missing from working directory, copying from release..."
-    if [ -f "$ARKFILE_DIR/releases/current/client/wasm_exec.js" ]; then
-        cp "$ARKFILE_DIR/releases/current/client/wasm_exec.js" "$ARKFILE_DIR/client/wasm_exec.js"
-        chown "$USER:$GROUP" "$ARKFILE_DIR/client/wasm_exec.js"
-        print_status "SUCCESS" "wasm_exec.js copied to working directory"
-    else
-        print_status "WARNING" "wasm_exec.js not found in release - may affect WASM functionality"
-    fi
+    print_status "ERROR" "wasm_exec.js missing from working directory. The build likely failed."
+    # The build script should place this file here directly.
+    exit 1
+else
+    print_status "SUCCESS" "wasm_exec.js verified in working directory"
 fi
 
 print_status "SUCCESS" "Critical file verification complete"

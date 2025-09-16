@@ -3,7 +3,8 @@ set -e
 
 # Configuration
 APP_NAME="arkfile"
-WASM_DIR="client"
+WASM_SOURCE_DIR="client"  # Source directory containing main.go
+WASM_BUILD_DIR="wasm-build"  # Build destination directory
 BUILD_DIR="build"
 VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "unknown")}
 BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -399,7 +400,7 @@ echo -e "${GREEN}✅ TypeScript frontend built successfully${NC}"
 
 # Build WebAssembly
 echo "Building WebAssembly..."
-GOOS=js GOARCH=wasm "$GO_BINARY" build -o ${BUILD_DIR}/${WASM_DIR}/main.wasm ./${WASM_DIR}/main.go
+GOOS=js GOARCH=wasm "$GO_BINARY" build -o ${BUILD_DIR}/${WASM_BUILD_DIR}/main.wasm ./${WASM_SOURCE_DIR}/main.go
 
 # Find wasm_exec.js using Go's environment
 GOROOT=$("$GO_BINARY" env GOROOT)
@@ -414,7 +415,7 @@ else
 fi
 
 echo "Using wasm_exec.js from: ${WASM_EXEC_JS}"
-cp "${WASM_EXEC_JS}" ${BUILD_DIR}/${WASM_DIR}/
+cp "${WASM_EXEC_JS}" ${BUILD_DIR}/${WASM_BUILD_DIR}/
 
 # Build Go binaries with static linking
 build_go_binaries_static() {
@@ -513,75 +514,37 @@ cat > ${BUILD_DIR}/version.json <<EOF
 }
 EOF
 
-# Create release directory with timestamp
-RELEASE_DIR="${BASE_DIR}/releases/$(date +%Y%m%d_%H%M%S)"
-echo "Creating release directory: ${RELEASE_DIR}"
+# Arrange final artifacts in build directory
+echo "Arranging final artifacts in build directory..."
 
-# Copy build artifacts to release directory
-sudo mkdir -p "${RELEASE_DIR}"
-sudo cp -r ${BUILD_DIR}/* "${RELEASE_DIR}/"
+# Binaries
+mkdir -p "${BUILD_DIR}/bin"
+mv "${BUILD_DIR}/${APP_NAME}" "${BUILD_DIR}/bin/"
+mv "${BUILD_DIR}/cryptocli" "${BUILD_DIR}/bin/"
+mv "${BUILD_DIR}/arkfile-client" "${BUILD_DIR}/bin/"
+mv "${BUILD_DIR}/arkfile-admin" "${BUILD_DIR}/bin/"
 
-# Update ownership and permissions
-echo "Setting ownership and permissions..."
-sudo chown -R arkadmin:arkfile "${RELEASE_DIR}"
-sudo chmod 755 "${RELEASE_DIR}/${APP_NAME}"
+# Client files (WASM is already in its own subdir)
+mv "${BUILD_DIR}/static" "${BUILD_DIR}/client/"
+mv "${BUILD_DIR}/${WASM_BUILD_DIR}" "${BUILD_DIR}/client/"
 
-if command -v semanage >/dev/null 2>&1; then
-    sudo semanage fcontext -a -t bin_t "${RELEASE_DIR}/${APP_NAME}"
-    sudo restorecon -v "${RELEASE_DIR}/${APP_NAME}"
-else
-    echo -e "${YELLOW}semanage not found - skipping SELinux context${NC}"
-fi
+# Database files
+mkdir -p "${BUILD_DIR}/database"
+cp -r database/* "${BUILD_DIR}/database/"
 
-# Update the 'current' symlink
-sudo ln -snf "${RELEASE_DIR}" "${BASE_DIR}/releases/current"
+# Systemd files are already in build/systemd
 
-# Copy binaries to bin directory
-sudo mkdir -p "${BASE_DIR}/bin/"
-sudo cp "${RELEASE_DIR}/${APP_NAME}" "${BASE_DIR}/bin/"
-sudo cp "${RELEASE_DIR}/cryptocli" "${BASE_DIR}/bin/"
-sudo cp "${RELEASE_DIR}/arkfile-client" "${BASE_DIR}/bin/"
-sudo cp "${RELEASE_DIR}/arkfile-admin" "${BASE_DIR}/bin/"
-sudo chown arkadmin:arkfile "${BASE_DIR}/bin/${APP_NAME}"
-sudo chown arkadmin:arkfile "${BASE_DIR}/bin/cryptocli"
-sudo chown arkadmin:arkfile "${BASE_DIR}/bin/arkfile-client"
-sudo chown arkadmin:arkfile "${BASE_DIR}/bin/arkfile-admin"
-sudo chmod 755 "${BASE_DIR}/bin/${APP_NAME}"
-sudo chmod 755 "${BASE_DIR}/bin/cryptocli"
-sudo chmod 755 "${BASE_DIR}/bin/arkfile-client"
-sudo chmod 755 "${BASE_DIR}/bin/arkfile-admin"
+# version.json is already in build/
 
-# Copy database files to working directory for runtime access
-echo "Copying database files to working directory..."
+# Deploy systemd service files to production location
+echo "Deploying systemd service files to ${BASE_DIR}/systemd/..."
+sudo mkdir -p "${BASE_DIR}/systemd"
+sudo cp "${BUILD_DIR}/systemd/"* "${BASE_DIR}/systemd/"
+
+# Deploy database schema to production location
+echo "Deploying database schema to ${BASE_DIR}/database/..."
 sudo mkdir -p "${BASE_DIR}/database"
-sudo cp -r database/* "${BASE_DIR}/database/"
-sudo chown -R arkfile:arkfile "${BASE_DIR}/database"
-
-# Copy client files to working directory for runtime access
-echo "Copying client files to working directory..."
-sudo mkdir -p "${BASE_DIR}/client"
-sudo cp -r client/* "${BASE_DIR}/client/"
-
-# Ensure WASM binary is copied from build directory to working directory
-if [ -f "${BUILD_DIR}/${WASM_DIR}/main.wasm" ]; then
-    echo "Copying WASM binary to working directory..."
-    sudo cp "${BUILD_DIR}/${WASM_DIR}/main.wasm" "${BASE_DIR}/client/main.wasm"
-else
-    echo -e "${YELLOW}⚠️ WASM binary not found in build directory - may cause runtime issues${NC}"
-fi
-
-# Ensure wasm_exec.js is also available in working directory
-if [ -f "${BUILD_DIR}/${WASM_DIR}/wasm_exec.js" ]; then
-    echo "Copying wasm_exec.js to working directory..."
-    sudo cp "${BUILD_DIR}/${WASM_DIR}/wasm_exec.js" "${BASE_DIR}/client/wasm_exec.js"
-fi
-
-sudo chown -R arkfile:arkfile "${BASE_DIR}/client"
-
-# Clean up temporary build directory
-rm -rf ${BUILD_DIR}
+sudo cp "${BUILD_DIR}/database/"* "${BASE_DIR}/database/"
 
 echo -e "${GREEN}Build complete!${NC}"
-echo "Release directory: ${RELEASE_DIR}"
-echo "Binary location: ${BASE_DIR}/bin/${APP_NAME}"
-echo "Current symlink updated: ${BASE_DIR}/releases/current"
+echo "Build artifacts are ready in the '${BUILD_DIR}' directory."

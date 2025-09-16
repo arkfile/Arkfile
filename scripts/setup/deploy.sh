@@ -4,8 +4,6 @@ set -e
 # Configuration
 APP_NAME="arkfile"
 BASE_DIR="/opt/arkfile"
-REMOTE_USER="arkadmin"
-REMOTE_HOST="arkfile.net"
 BUILD_DIR="build"
 ENVIRONMENT=${1:-prod}  # Default to prod if no environment specified
 
@@ -21,122 +19,59 @@ if [[ ! "$ENVIRONMENT" =~ ^(prod|test)$ ]]; then
     exit 1
 fi
 
-# Set environment-specific variables
-if [ "$ENVIRONMENT" = "test" ]; then
-    REMOTE_HOST="test.arkfile.net"
+echo -e "${GREEN}Deploying ${APP_NAME} to ${ENVIRONMENT} environment locally...${NC}"
+
+# Verify we have build artifacts
+if [ ! -d "$BUILD_DIR" ]; then
+    echo -e "${RED}❌ Build directory ${BUILD_DIR} not found. Run build first.${NC}"
+    exit 1
 fi
 
-echo -e "${GREEN}Deploying ${APP_NAME} to ${ENVIRONMENT} environment on ${REMOTE_HOST}...${NC}"
-
-# Build the application first
-echo "Building application..."
-./scripts/setup/build.sh
-
-# Ensure remote directory structure exists
-echo "Checking remote directory structure..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo /opt/arkfile/scripts/setup/02-setup-directories.sh"
-
-# Copy deployment scripts first
-echo "Copying setup scripts..."
-scp scripts/setup-*.sh ${REMOTE_USER}@${REMOTE_HOST}:${BASE_DIR}/scripts/
-
-# Make scripts executable
-ssh ${REMOTE_USER}@${REMOTE_HOST} "chmod +x ${BASE_DIR}/scripts/setup-*.sh"
-
-# Create new release directory on remote
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-RELEASE_DIR="${BASE_DIR}/releases/${TIMESTAMP}"
-echo "Creating release directory: ${RELEASE_DIR}"
-
-# Copy files to remote server
-echo "Copying files to remote server..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo mkdir -p ${RELEASE_DIR}"
-rsync -avz --progress ${BUILD_DIR}/ ${REMOTE_USER}@${REMOTE_HOST}:${RELEASE_DIR}/
-
-# Update permissions on remote
-echo "Setting permissions..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo chown -R arkadmin:arkfile ${RELEASE_DIR} && \
-    sudo chmod 755 ${RELEASE_DIR}/${APP_NAME}"
-
-# Update the current symlink
-echo "Updating current symlink..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo ln -snf ${RELEASE_DIR} ${BASE_DIR}/releases/current && \
-    sudo chown -h arkadmin:arkfile ${BASE_DIR}/releases/current"
-
-# Copy binary to bin directory
-echo "Installing binary..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo cp ${RELEASE_DIR}/${APP_NAME} ${BASE_DIR}/bin/ && \
-    sudo chown arkadmin:arkfile ${BASE_DIR}/bin/${APP_NAME} && \
-    sudo chmod 755 ${BASE_DIR}/bin/${APP_NAME}"
-
-# Set up storage and database services
-echo "Setting up rqlite..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo ${BASE_DIR}/scripts/setup/08-setup-rqlite.sh"
-echo "Setting up MinIO..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo ${BASE_DIR}/scripts/setup/07-setup-minio.sh"
-
-# Copy and update service files
-echo "Setting up systemd services..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo cp ${RELEASE_DIR}/systemd/arkfile.service /etc/systemd/system/ && \
-    sudo cp ${RELEASE_DIR}/systemd/rqlite.service /etc/systemd/system/ && \
-    sudo cp ${RELEASE_DIR}/systemd/rqlite /etc/systemd/system/ && \
-    sudo cp ${RELEASE_DIR}/systemd/minio.service /etc/systemd/system/ && \
-    sudo cp ${RELEASE_DIR}/systemd/minio /etc/systemd/system/ && \
-    sudo systemctl daemon-reload"
-
-# Start and enable infrastructure services
-echo "Starting infrastructure services..."
-# Start rqlite services
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo systemctl enable rqlite${ENVIRONMENT} && \
-    sudo systemctl start rqlite${ENVIRONMENT} || true && \
-    sudo systemctl enable rqlite && \
-    sudo systemctl start rqlite"
-
-# Start MinIO services if using local/cluster storage
-if [[ $(ssh ${REMOTE_USER}@${REMOTE_HOST} "grep '^STORAGE_PROVIDER=\(local\|cluster\)' ${BASE_DIR}/etc/${ENVIRONMENT}/secrets.env") ]]; then
-    echo "Starting MinIO services..."
-    ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo systemctl enable minio${ENVIRONMENT} && \
-        sudo systemctl start minio${ENVIRONMENT} || true && \
-        sudo systemctl enable minio && \
-        sudo systemctl start minio"
+# Verify build directory has content
+if [ ! "$(ls -A $BUILD_DIR)" ]; then
+    echo -e "${RED}❌ Build directory ${BUILD_DIR} is empty. Run build first.${NC}"
+    exit 1
 fi
 
-# Wait for services to be ready
-echo "Waiting for services to be ready..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sleep 5"
+# Copy build artifacts to installation directory
+echo -e "${YELLOW}📦 Copying build artifacts to ${BASE_DIR}...${NC}"
+sudo cp -r ${BUILD_DIR}/* ${BASE_DIR}/
 
-# Restart application services
-echo "Restarting services..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "sudo systemctl restart arkfile${ENVIRONMENT} && \
-    sudo systemctl restart caddy"
+# Set proper ownership
+echo -e "${YELLOW}🔑 Setting permissions...${NC}"
+sudo chown -R arkfile:arkfile ${BASE_DIR}
+sudo find ${BASE_DIR} -type f -executable -exec chmod 755 {} \;
 
-# Verify deployment
-echo "Verifying deployment..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "systemctl status rqlite${ENVIRONMENT} --no-pager && \
-    systemctl status arkfile${ENVIRONMENT} --no-pager && \
-    systemctl status caddy --no-pager"
+# Copy systemd service files
+echo -e "${YELLOW}⚙️  Installing systemd services...${NC}"
+sudo cp ${BASE_DIR}/systemd/${APP_NAME}.service /etc/systemd/system/
+sudo cp ${BASE_DIR}/systemd/rqlite.service /etc/systemd/system/ 2>/dev/null || true
+sudo cp ${BASE_DIR}/systemd/minio.service /etc/systemd/system/ 2>/dev/null || true
+sudo cp ${BASE_DIR}/systemd/caddy.service /etc/systemd/system/ 2>/dev/null || true
 
-# Verify MinIO if using local/cluster storage
-if [[ $(ssh ${REMOTE_USER}@${REMOTE_HOST} "grep '^STORAGE_PROVIDER=\(local\|cluster\)' ${BASE_DIR}/etc/${ENVIRONMENT}/secrets.env") ]]; then
-    ssh ${REMOTE_USER}@${REMOTE_HOST} "systemctl status minio${ENVIRONMENT} --no-pager"
-fi
+# Reload systemd daemon
+echo -e "${YELLOW}🔄 Reloading systemd...${NC}"
+sudo systemctl daemon-reload
 
-# Clean up old releases (keep last 5)
-echo "Cleaning up old releases..."
-ssh ${REMOTE_USER}@${REMOTE_HOST} "cd ${BASE_DIR}/releases && \
-    ls -t | tail -n +6 | xargs -I {} sudo rm -rf {}"
+# Enable services (but don't auto-start)
+echo -e "${YELLOW}📋 Enabling services (without auto-start)...${NC}"
+sudo systemctl enable ${APP_NAME}${ENVIRONMENT} 2>/dev/null || sudo systemctl enable ${APP_NAME} 2>/dev/null || true
 
-echo -e "${GREEN}Deployment complete!${NC}"
-echo -e "${YELLOW}Service Stack:${NC}"
-echo "  1. rqlite: Distributed database cluster"
-echo "  2. arkfile: Main application service"
-echo "  3. Caddy: Web server and reverse proxy"
-
-echo -e "${YELLOW}Useful commands:${NC}"
-echo "  View database logs: sudo journalctl -u rqlite${ENVIRONMENT} -f"
-echo "  View application logs: sudo journalctl -u arkfile${ENVIRONMENT} -f"
-echo "  View Caddy logs: sudo journalctl -u caddy -f"
-echo "  Check rqlite status: systemctl status rqlite${ENVIRONMENT}"
-echo "  Check app status: systemctl status arkfile${ENVIRONMENT}"
-echo "  Check full stack: systemctl status rqlite${ENVIRONMENT} arkfile${ENVIRONMENT} caddy"
-echo "  Rollback to previous version: ${BASE_DIR}/scripts/setup/rollback.sh ${ENVIRONMENT}"
+# Services can be started manually by the user when ready
+echo -e "${GREEN}✅ Deployment complete!${NC}"
+echo
+echo -e "${YELLOW}📊 Deployment Summary:${NC}"
+echo "• Build artifacts copied to: ${BASE_DIR}"
+echo "• Permissions set for arkfile:arkfile user"
+echo "• Systemd services installed and enabled"
+echo
+echo -e "${BLUE}🚀 To start the services:${NC}"
+echo "  sudo systemctl start ${APP_NAME}${ENVIRONMENT}"
+echo "  sudo systemctl start rqlite 2>/dev/null || true"
+echo "  sudo systemctl start minio 2>/dev/null || true"
+echo "  sudo systemctl start caddy 2>/dev/null || true"
+echo
+echo -e "${BLUE}📋 Check service status:${NC}"
+echo "  sudo systemctl status ${APP_NAME}${ENVIRONMENT}"
+echo
+echo -e "${GREEN}🎯 Ready for deployment validation!${NC}"

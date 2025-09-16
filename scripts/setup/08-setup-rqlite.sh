@@ -59,7 +59,7 @@ if command -v rqlited &> /dev/null && command -v rqlite &> /dev/null && [ "$FORC
     
     # Still need to install systemd service files
     echo -e "${BLUE}⚙️  Installing systemd service files...${NC}"
-    sudo cp "${BASE_DIR}/releases/current/systemd/rqlite.service" /etc/systemd/system/
+    sudo cp "${BASE_DIR}/systemd/rqlite.service" /etc/systemd/system/
     
     # Create simplified data directory for single-node deployment
     echo "Setting up database directory..."
@@ -227,7 +227,7 @@ fi
 
 # Copy systemd service files
 echo -e "${BLUE}⚙️  Installing systemd service files...${NC}"
-sudo cp "${BASE_DIR}/releases/current/systemd/rqlite.service" /etc/systemd/system/
+sudo cp "${BASE_DIR}/systemd/rqlite.service" /etc/systemd/system/
 
 # Create simplified data directory for single-node deployment
 echo "Setting up database directory..."

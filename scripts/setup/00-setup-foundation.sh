@@ -284,7 +284,6 @@ echo "• System user: arkfile ($(id arkfile 2>/dev/null || echo 'configured'))"
 echo "• Base directory: /opt/arkfile ($(ls -ld /opt/arkfile 2>/dev/null | awk '{print $3":"$4" "$1}' || echo 'configured'))"
 echo "• Key storage: /opt/arkfile/etc/keys ($(ls -ld /opt/arkfile/etc/keys 2>/dev/null | awk '{print $1}' || echo 'configured'))"
 echo "• Binary location: /opt/arkfile/bin/arkfile"
-echo "• Current release: /opt/arkfile/releases/current"
 
 echo
 echo -e "${BLUE}🔐 Security Configuration:${NC}"

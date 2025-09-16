@@ -264,7 +264,7 @@ sudo chown arkfile:arkfile /opt/arkfile/etc/rqlite-auth.json
 sudo chmod 640 /opt/arkfile/etc/rqlite-auth.json
 
 echo "Installing arkfile systemd service..."
-sudo cp /opt/arkfile/releases/current/systemd/arkfile.service /etc/systemd/system/
+sudo cp /opt/arkfile/systemd/arkfile.service /etc/systemd/system/
 sudo systemctl daemon-reload
 
 echo "Starting MinIO..."
@@ -411,10 +411,10 @@ if [ "$arkfile_status" = "active" ]; then
     echo "• Security audit: ./scripts/maintenance/security-audit.sh"
     echo
     echo -e "${BLUE}Configuration Files:${NC}"
-    echo "• Main config: /opt/arkfile/releases/current/.env"
+    echo "• Main config: /opt/arkfile/etc/secrets.env"
     echo "• Service logs: /opt/arkfile/var/log/"
     echo "• Database: rqlite cluster (port 4001)"
-    echo "• Object storage: /opt/arkfile/var/lib/prod/minio/"
+    echo "• Object storage: /opt/arkfile/var/lib/minio/data"
     echo
     echo -e "${GREEN}✅ System is ready for use!${NC}"
     
@@ -429,7 +429,7 @@ else
     echo "   - rqlite: sudo systemctl status rqlite"
     echo
     echo "Configuration check:"
-    echo "4. Verify config file: cat /opt/arkfile/releases/current/.env"
+    echo "4. Verify config file: cat /opt/arkfile/etc/secrets.env"
     echo
     exit 1
 fi

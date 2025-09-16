@@ -28,7 +28,6 @@ scripts/
 │   ├── build-libopaque.sh            # Build libopaque library
 │   ├── build.sh                      # Build application
 │   ├── deploy.sh                     # Deploy to production
-│   ├── rollback.sh                   # Rollback deployment
 │   └── uninstall.sh                  # Remove system installation
 ├── dev-reset.sh                      # Development environment reset
 ├── testing/                          # Testing and validation scripts
@@ -145,7 +144,6 @@ The setup scripts are numbered to show their logical dependency order:
 - **`build-libopaque.sh`** - Build libopaque cryptographic library with static linking support
 - **`build.sh`** - Build application binary
 - **`deploy.sh`** - Deploy to production environment
-- **`rollback.sh`** - Rollback to previous deployment
 - **`uninstall.sh`** - Remove system installation
 
 ### Development Scripts
@@ -423,7 +421,6 @@ All scripts include comprehensive error handling:
 - **Logging**: Detailed output with timestamps
 - **Validation**: Pre-flight checks before operations
 - **Cleanup**: Automatic cleanup on failure
-- **Recovery**: Rollback capabilities where applicable
 
 ## Security Considerations
 
