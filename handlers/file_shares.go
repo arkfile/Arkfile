@@ -106,16 +106,8 @@ func CreateFileShare(c echo.Context) error {
 			"This file is encrypted with your account password. To share it, first add a custom password for this file.")
 	}
 
-	// Validate salt and encrypted FEK format
-	saltBytes, err := base64.StdEncoding.DecodeString(request.Salt)
-	if err != nil || len(saltBytes) != 32 {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid salt format (must be 32 bytes, base64-encoded)")
-	}
-
-	_, err = base64.StdEncoding.DecodeString(request.EncryptedFEK)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid encrypted FEK format (must be base64-encoded)")
-	}
+	// Basic validation - ensure required fields are not empty
+	// Salt validation removed for Phase 1A - client is responsible for providing valid base64 strings
 
 	// Generate cryptographically secure share ID
 	shareID, err := generateShareID()
@@ -131,11 +123,11 @@ func CreateFileShare(c echo.Context) error {
 		expiresAt = &expiry
 	}
 
-	// Create file share record
+	// Create file share record - store salt as base64 string directly
 	_, err = database.DB.Exec(`
 		INSERT INTO file_share_keys (share_id, file_id, owner_username, salt, encrypted_fek, created_at, expires_at)
 		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
-		shareID, request.FileID, username, saltBytes, request.EncryptedFEK, expiresAt,
+		shareID, request.FileID, username, request.Salt, request.EncryptedFEK, expiresAt,
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create file share record for file %s: %v", request.FileID, err)
@@ -235,8 +227,8 @@ func GetShareInfo(c echo.Context) error {
 	// Get file metadata for display (encrypted metadata needs client-side decryption)
 	var fileInfo ShareFileInfo
 	var size sql.NullInt64
-	var encryptedFilename []byte
-	var encryptedSha256sum []byte
+	var encryptedFilename string
+	var encryptedSha256sum string
 
 	err = database.DB.QueryRow(`
 		SELECT encrypted_filename, size_bytes, encrypted_sha256sum
@@ -301,7 +293,7 @@ func processShareAccess(shareID string, request ShareAccessRequest, c echo.Conte
 	var share struct {
 		FileID        string
 		OwnerUsername string
-		Salt          []byte
+		Salt          string // Now stored as base64 string directly
 		EncryptedFEK  string
 		ExpiresAt     *time.Time
 	}
@@ -330,13 +322,13 @@ func processShareAccess(shareID string, request ShareAccessRequest, c echo.Conte
 		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
 	}
 
-	// Get file metadata with encrypted fields
+	// Get file metadata with encrypted fields (stored as base64 strings)
 	var fileInfo ShareFileInfo
 	var size sql.NullInt64
-	var encryptedFilename []byte
-	var encryptedSha256sum []byte
-	var filenameNonce []byte
-	var sha256sumNonce []byte
+	var encryptedFilename string
+	var encryptedSha256sum string
+	var filenameNonce string
+	var sha256sumNonce string
 
 	err = database.DB.QueryRow(`
 		SELECT encrypted_filename, size_bytes, encrypted_sha256sum, filename_nonce, sha256sum_nonce
@@ -355,9 +347,9 @@ func processShareAccess(shareID string, request ShareAccessRequest, c echo.Conte
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
 	}
 
-	// Return encrypted metadata for client-side decryption
-	fileInfo.Filename = base64.StdEncoding.EncodeToString(encryptedFilename)
-	fileInfo.SHA256Sum = base64.StdEncoding.EncodeToString(encryptedSha256sum)
+	// Return encrypted metadata for client-side decryption (already base64 strings)
+	fileInfo.Filename = encryptedFilename   // Already base64 - no encoding needed
+	fileInfo.SHA256Sum = encryptedSha256sum // Already base64 - no encoding needed
 	if size.Valid {
 		fileInfo.Size = size.Int64
 	}
@@ -373,7 +365,7 @@ func processShareAccess(shareID string, request ShareAccessRequest, c echo.Conte
 	// Return salt and encrypted FEK for client-side Argon2id decryption
 	return c.JSON(http.StatusOK, ShareAccessResponse{
 		Success:      true,
-		Salt:         base64.StdEncoding.EncodeToString(share.Salt),
+		Salt:         share.Salt, // Already base64 string - no encoding needed
 		EncryptedFEK: share.EncryptedFEK,
 		FileInfo:     &fileInfo,
 	})
@@ -437,7 +429,7 @@ func GetSharedFile(c echo.Context) error {
 func ListShares(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 
-	// Query shares with encrypted metadata
+	// Query shares with encrypted metadata (stored as base64 strings)
 	rows, err := database.DB.Query(`
 		SELECT sk.share_id, sk.file_id, sk.created_at, sk.expires_at,
 			   fm.encrypted_filename, fm.filename_nonce, fm.encrypted_sha256sum, fm.sha256sum_nonce, fm.size_bytes
@@ -460,10 +452,10 @@ func ListShares(c echo.Context) error {
 			FileID             string
 			CreatedAt          string
 			ExpiresAt          sql.NullString
-			EncryptedFilename  []byte
-			FilenameNonce      []byte
-			EncryptedSha256sum []byte
-			Sha256sumNonce     []byte
+			EncryptedFilename  string
+			FilenameNonce      string
+			EncryptedSha256sum string
+			Sha256sumNonce     string
 			Size               sql.NullInt64
 		}
 
@@ -490,14 +482,14 @@ func ListShares(c echo.Context) error {
 
 		shareURL := baseURL + "/shared/" + share.ShareID
 
-		// Format response with encrypted metadata for client-side decryption
+		// Format response with encrypted metadata for client-side decryption (already base64 strings)
 		shareData := map[string]interface{}{
 			"share_id":            share.ShareID,
 			"file_id":             share.FileID,
-			"encrypted_filename":  base64.StdEncoding.EncodeToString(share.EncryptedFilename),
-			"filename_nonce":      base64.StdEncoding.EncodeToString(share.FilenameNonce),
-			"encrypted_sha256sum": base64.StdEncoding.EncodeToString(share.EncryptedSha256sum),
-			"sha256sum_nonce":     base64.StdEncoding.EncodeToString(share.Sha256sumNonce),
+			"encrypted_filename":  share.EncryptedFilename,  // Already base64 - no encoding needed
+			"filename_nonce":      share.FilenameNonce,      // Already base64 - no encoding needed
+			"encrypted_sha256sum": share.EncryptedSha256sum, // Already base64 - no encoding needed
+			"sha256sum_nonce":     share.Sha256sumNonce,     // Already base64 - no encoding needed
 			"share_url":           shareURL,
 			"created_at":          share.CreatedAt,
 		}
@@ -591,13 +583,13 @@ func DownloadSharedFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
 	}
 
-	// Get file metadata using the new encrypted schema
+	// Get file metadata using the new encrypted schema (stored as base64 strings)
 	var storageID string
 	var size sql.NullInt64
-	var encryptedFilename []byte
-	var filenameNonce []byte
-	var encryptedSha256sum []byte
-	var sha256sumNonce []byte
+	var encryptedFilename string
+	var filenameNonce string
+	var encryptedSha256sum string
+	var sha256sumNonce string
 
 	err = database.DB.QueryRow(`
 		SELECT storage_id, size_bytes, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce
@@ -632,13 +624,13 @@ func DownloadSharedFile(c echo.Context) error {
 	entityID := logging.GetOrCreateEntityID(c)
 	logging.InfoLogger.Printf("Shared file downloaded: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
 
-	// Return encrypted file data and encrypted metadata for client-side decryption
+	// Return encrypted file data and encrypted metadata for client-side decryption (encrypted metadata already base64)
 	response := map[string]interface{}{
-		"data":                base64.StdEncoding.EncodeToString(data),
-		"encrypted_filename":  base64.StdEncoding.EncodeToString(encryptedFilename),
-		"filename_nonce":      base64.StdEncoding.EncodeToString(filenameNonce),
-		"encrypted_sha256sum": base64.StdEncoding.EncodeToString(encryptedSha256sum),
-		"sha256sum_nonce":     base64.StdEncoding.EncodeToString(sha256sumNonce),
+		"data":                base64.StdEncoding.EncodeToString(data), // Data needs encoding as it's binary
+		"encrypted_filename":  encryptedFilename,                       // Already base64 - no encoding needed
+		"filename_nonce":      filenameNonce,                           // Already base64 - no encoding needed
+		"encrypted_sha256sum": encryptedSha256sum,                      // Already base64 - no encoding needed
+		"sha256sum_nonce":     sha256sumNonce,                          // Already base64 - no encoding needed
 	}
 
 	if size.Valid {

@@ -2168,14 +2168,14 @@ phase_9_file_operations() {
         error "sha256sum_nonce is empty - cannot proceed with metadata decryption"
     fi
 
-    # Decrypt the metadata using cryptocli (correct parameter names from help)
+    # Decrypt the metadata using cryptocli (server now returns base64 strings directly - pass them as-is)
     local metadata_decrypt_output
     set +e  # Don't exit on command failure so we can capture error
     metadata_decrypt_output=$(echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli decrypt-metadata \
-        --encrypted-filename-data "$(echo "$encrypted_filename" | base64 --decode)" \
-        --filename-nonce "$(echo "$filename_nonce" | base64 --decode)" \
-        --encrypted-sha256sum-data "$(echo "$encrypted_sha256" | base64 --decode)" \
-        --sha256sum-nonce "$(echo "$sha256sum_nonce" | base64 --decode)" \
+        --encrypted-filename-data "$encrypted_filename" \
+        --filename-nonce "$filename_nonce" \
+        --encrypted-sha256sum-data "$encrypted_sha256" \
+        --sha256sum-nonce "$sha256sum_nonce" \
         --username "$TEST_USERNAME" 2>&1)
     local decrypt_exit_code=$?
     set -e  # Restore exit on error

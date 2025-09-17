@@ -53,7 +53,7 @@ func TestDownloadFile_Success(t *testing.T) {
 	metadataSQL := `SELECT id, file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date FROM file_metadata WHERE file_id = \?`
 	storageID := "test-storage-id-123"
 	metaRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "password_hint", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "size_bytes", "upload_date"}).
-		AddRow(1, fileID, storageID, username, passwordHint, passwordType, []byte("nonceFilename"), []byte("encryptedFilename"), []byte("nonceSha256"), []byte("encryptedSha256"), fileSize, time.Now())
+		AddRow(1, fileID, storageID, username, passwordHint, passwordType, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, fileSize, time.Now())
 	mockDB.ExpectQuery(metadataSQL).WithArgs(fileID).WillReturnRows(metaRows)
 
 	mockStorageObject := new(storage.MockMinioObject)

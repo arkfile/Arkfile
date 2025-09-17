@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"database/sql"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,22 +60,8 @@ func CreateUploadSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Missing encrypted SHA256 or nonce")
 	}
 
-	// Validate base64 encoding of encrypted data and nonces
-	if _, err := base64.StdEncoding.DecodeString(request.EncryptedFilename); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid encrypted filename encoding")
-	}
-	if _, err := base64.StdEncoding.DecodeString(request.FilenameNonce); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid filename nonce encoding")
-	}
-	if _, err := base64.StdEncoding.DecodeString(request.EncryptedSha256sum); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid encrypted SHA256 encoding")
-	}
-	if _, err := base64.StdEncoding.DecodeString(request.Sha256sumNonce); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid SHA256 nonce encoding")
-	}
-	if _, err := base64.StdEncoding.DecodeString(request.EncryptedFek); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid encrypted FEK encoding")
-	}
+	// Basic validation - ensure required fields are not empty (base64 format validation removed for Phase 1A)
+	// Client is responsible for providing properly formatted base64 strings
 
 	// Validate password type
 	if request.PasswordType != "account" && request.PasswordType != "custom" {
@@ -126,13 +111,13 @@ func CreateUploadSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process file")
 	}
 
-	// Decode encrypted metadata for storage
-	encryptedFilename, _ := base64.StdEncoding.DecodeString(request.EncryptedFilename)
-	filenameNonce, _ := base64.StdEncoding.DecodeString(request.FilenameNonce)
-	encryptedSha256sum, _ := base64.StdEncoding.DecodeString(request.EncryptedSha256sum)
-	sha256sumNonce, _ := base64.StdEncoding.DecodeString(request.Sha256sumNonce)
-
-	encryptedFek, _ := base64.StdEncoding.DecodeString(request.EncryptedFek)
+	// Store encrypted metadata as base64 strings directly (no binary conversion)
+	// This eliminates double-encoding issues and simplifies the architecture
+	encryptedFilename := request.EncryptedFilename
+	filenameNonce := request.FilenameNonce
+	encryptedSha256sum := request.EncryptedSha256sum
+	sha256sumNonce := request.Sha256sumNonce
+	encryptedFek := request.EncryptedFek
 
 	// Create upload session record with encrypted metadata
 	_, err = tx.Exec(
@@ -280,10 +265,10 @@ func GetUploadStatus(c echo.Context) error {
 	var (
 		ownerUsername      string
 		fileID             string
-		encryptedFilename  []byte
-		filenameNonceRaw   interface{} // Use interface{} to handle RQLite base64 BLOB returns
-		encryptedSha256sum []byte
-		sha256sumNonceRaw  interface{} // Use interface{} to handle RQLite base64 BLOB returns
+		encryptedFilename  string // Now stored as base64 strings directly
+		filenameNonce      string // Now stored as base64 strings directly
+		encryptedSha256sum string // Now stored as base64 strings directly
+		sha256sumNonce     string // Now stored as base64 strings directly
 		status             string
 		totalChunks        int
 		totalSizeFloat     sql.NullFloat64 // Handle scientific notation
@@ -294,7 +279,7 @@ func GetUploadStatus(c echo.Context) error {
 	err := database.DB.QueryRow(
 		"SELECT owner_username, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, status, total_chunks, total_size, created_at, expires_at FROM upload_sessions WHERE id = ?",
 		sessionID,
-	).Scan(&ownerUsername, &fileID, &encryptedFilename, &filenameNonceRaw, &encryptedSha256sum, &sha256sumNonceRaw, &status, &totalChunks, &totalSizeFloat, &createdAtStr, &expiresAtStr)
+	).Scan(&ownerUsername, &fileID, &encryptedFilename, &filenameNonce, &encryptedSha256sum, &sha256sumNonce, &status, &totalChunks, &totalSizeFloat, &createdAtStr, &expiresAtStr)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
@@ -331,42 +316,6 @@ func GetUploadStatus(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized for this upload session")
 	}
 
-	// Handle FilenameNonce - may be a base64 string from rqlite
-	var filenameNonce []byte
-	switch v := filenameNonceRaw.(type) {
-	case []byte:
-		filenameNonce = v
-	case string:
-		// rqlite driver returns BLOBs as base64-encoded strings
-		decoded, err := base64.StdEncoding.DecodeString(v)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to decode base64 for filename_nonce: %v", err))
-		}
-		filenameNonce = decoded
-	case nil:
-		filenameNonce = nil
-	default:
-		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Unexpected type for filename_nonce: %T", v))
-	}
-
-	// Handle Sha256sumNonce - may be a base64 string from rqlite
-	var sha256sumNonce []byte
-	switch v := sha256sumNonceRaw.(type) {
-	case []byte:
-		sha256sumNonce = v
-	case string:
-		// rqlite driver returns BLOBs as base64-encoded strings
-		decoded, err := base64.StdEncoding.DecodeString(v)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to decode base64 for sha256sum_nonce: %v", err))
-		}
-		sha256sumNonce = decoded
-	case nil:
-		sha256sumNonce = nil
-	default:
-		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Unexpected type for sha256sum_nonce: %T", v))
-	}
-
 	// Get uploaded chunk numbers
 	rows, err := database.DB.Query(
 		"SELECT chunk_number FROM upload_chunks WHERE session_id = ? ORDER BY chunk_number ASC",
@@ -401,10 +350,10 @@ func GetUploadStatus(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"session_id":          sessionID,
 		"file_id":             fileID,
-		"encrypted_filename":  base64.StdEncoding.EncodeToString(encryptedFilename),
-		"filename_nonce":      base64.StdEncoding.EncodeToString(filenameNonce),
-		"encrypted_sha256sum": base64.StdEncoding.EncodeToString(encryptedSha256sum),
-		"sha256sum_nonce":     base64.StdEncoding.EncodeToString(sha256sumNonce),
+		"encrypted_filename":  encryptedFilename,  // Already base64 strings
+		"filename_nonce":      filenameNonce,      // Already base64 strings
+		"encrypted_sha256sum": encryptedSha256sum, // Already base64 strings
+		"sha256sum_nonce":     sha256sumNonce,     // Already base64 strings
 		"status":              status,
 		"total_chunks":        totalChunks,
 		"uploaded_chunks":     uploadedChunks,
@@ -603,11 +552,11 @@ func CompleteUpload(c echo.Context) error {
 		totalSizeFloat     sql.NullFloat64 // Handle scientific notation from DB
 		passwordHint       sql.NullString
 		passwordType       sql.NullString
-		encryptedFilename  []byte
-		filenameNonce      []byte
-		encryptedSha256sum []byte
-		sha256sumNonce     []byte
-		encryptedFek       []byte
+		encryptedFilename  string // Now stored as base64 strings directly
+		filenameNonce      string // Now stored as base64 strings directly
+		encryptedSha256sum string // Now stored as base64 strings directly
+		sha256sumNonce     string // Now stored as base64 strings directly
+		encryptedFek       string // Now stored as base64 strings directly
 	)
 
 	// Query for most data, keeping BLOBs separate. Read large numbers as floats.

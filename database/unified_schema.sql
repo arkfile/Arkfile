@@ -27,12 +27,12 @@ CREATE TABLE IF NOT EXISTS file_metadata (
     owner_username TEXT NOT NULL,
     password_hint TEXT,
     password_type TEXT NOT NULL DEFAULT 'custom',
-    filename_nonce BINARY(12) NOT NULL,         -- 12-byte nonce for filename encryption
-    encrypted_filename BLOB NOT NULL,           -- AES-GCM encrypted filename
-    sha256sum_nonce BINARY(12) NOT NULL,        -- 12-byte nonce for sha256 encryption
-    encrypted_sha256sum BLOB NOT NULL,          -- AES-GCM encrypted sha256 hash
+    filename_nonce TEXT NOT NULL,               -- base64-encoded 12-byte nonce for filename encryption
+    encrypted_filename TEXT NOT NULL,           -- base64-encoded AES-GCM encrypted filename
+    sha256sum_nonce TEXT NOT NULL,              -- base64-encoded 12-byte nonce for sha256 encryption  
+    encrypted_sha256sum TEXT NOT NULL,          -- base64-encoded AES-GCM encrypted sha256 hash
     encrypted_file_sha256sum CHAR(64),          -- sha256sum of the final encrypted file in storage
-    encrypted_fek BLOB,                         -- AES-GCM encrypted File Encryption Key
+    encrypted_fek TEXT,                         -- base64-encoded AES-GCM encrypted File Encryption Key
     size_bytes BIGINT NOT NULL DEFAULT 0,
     padded_size BIGINT,                         -- Size with padding for privacy/security
     upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -141,8 +141,8 @@ CREATE TABLE IF NOT EXISTS file_share_keys (
     share_id TEXT NOT NULL UNIQUE,        -- 256-bit crypto-secure identifier
     file_id TEXT NOT NULL,                -- Reference to the shared file
     owner_username TEXT NOT NULL,         -- User who created the share
-    salt BLOB NOT NULL,                   -- 32-byte random salt for Argon2id
-    encrypted_fek BLOB NOT NULL,          -- FEK encrypted with Argon2id-derived share key
+    salt TEXT NOT NULL,                   -- base64-encoded 32-byte random salt for Argon2id
+    encrypted_fek TEXT NOT NULL,          -- base64-encoded FEK encrypted with Argon2id-derived share key
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     expires_at DATETIME,                  -- Optional expiration
     FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE
@@ -169,10 +169,10 @@ CREATE TABLE IF NOT EXISTS file_encryption_keys (
 CREATE TABLE IF NOT EXISTS upload_sessions (
     id TEXT PRIMARY KEY,
     file_id VARCHAR(36) NOT NULL,
-    encrypted_filename BLOB NOT NULL,
-    filename_nonce BINARY(12) NOT NULL,
-    encrypted_sha256sum BLOB NOT NULL,
-    sha256sum_nonce BINARY(12) NOT NULL,
+    encrypted_filename TEXT NOT NULL,
+    filename_nonce TEXT NOT NULL,
+    encrypted_sha256sum TEXT NOT NULL,
+    sha256sum_nonce TEXT NOT NULL,
     owner_username TEXT NOT NULL,
     total_size BIGINT NOT NULL,
     chunk_size INTEGER NOT NULL,
@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     padded_size BIGINT,
     status TEXT NOT NULL DEFAULT 'in_progress',
     encrypted_hash CHAR(64),
-    encrypted_fek BLOB,
+    encrypted_fek TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,

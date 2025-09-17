@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net/http"
 
@@ -51,11 +50,11 @@ func GetFileMeta(c echo.Context) error {
 	logging.InfoLogger.Printf("File metadata requested: file_id %s by %s (size: %d bytes, chunks: %d)", fileID, username, file.SizeBytes, totalChunks)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"encrypted_filename":    base64.StdEncoding.EncodeToString(file.EncryptedFilename),
-		"filename_nonce":        base64.StdEncoding.EncodeToString(file.FilenameNonce),
-		"encrypted_sha256sum":   base64.StdEncoding.EncodeToString(file.EncryptedSha256sum),
-		"sha256sum_nonce":       base64.StdEncoding.EncodeToString(file.Sha256sumNonce),
-		"encrypted_fek":         base64.StdEncoding.EncodeToString(file.EncryptedFEK),
+		"encrypted_filename":    file.EncryptedFilename,  // Already base64 strings
+		"filename_nonce":        file.FilenameNonce,      // Already base64 strings
+		"encrypted_sha256sum":   file.EncryptedSha256sum, // Already base64 strings
+		"sha256sum_nonce":       file.Sha256sumNonce,     // Already base64 strings
+		"encrypted_fek":         file.EncryptedFEK,       // Already base64 strings
 		"password_hint":         file.PasswordHint,
 		"password_type":         file.PasswordType,
 		"size_bytes":            file.SizeBytes,

@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net/http"
 	"strings"
@@ -121,31 +120,10 @@ func UploadFile(c echo.Context) error {
 	// Generate file ID and decode encrypted metadata for storage
 	fileID := models.GenerateFileID()
 
-	// Decode base64 encoded encrypted data and nonces
-	encryptedFilenameBytes, err := base64.StdEncoding.DecodeString(request.EncryptedFilename)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid encrypted filename encoding")
-	}
-
-	filenameNonceBytes, err := base64.StdEncoding.DecodeString(request.FilenameNonce)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid filename nonce encoding")
-	}
-
-	encryptedSha256sumBytes, err := base64.StdEncoding.DecodeString(request.EncryptedSha256sum)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid encrypted sha256sum encoding")
-	}
-
-	sha256sumNonceBytes, err := base64.StdEncoding.DecodeString(request.Sha256sumNonce)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid sha256sum nonce encoding")
-	}
-
-	// Store metadata in database with encrypted fields
+	// Store metadata in database with encrypted fields as base64 strings (no binary conversion)
 	_, err = tx.Exec(
 		"INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, padded_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		fileID, storageID, username, request.PasswordHint, request.PasswordType, filenameNonceBytes, encryptedFilenameBytes, sha256sumNonceBytes, encryptedSha256sumBytes, fileSize, paddedSize,
+		fileID, storageID, username, request.PasswordHint, request.PasswordType, request.FilenameNonce, request.EncryptedFilename, request.Sha256sumNonce, request.EncryptedSha256sum, fileSize, paddedSize,
 	)
 	if err != nil {
 		// If metadata storage fails, delete the uploaded file using storage.Provider
