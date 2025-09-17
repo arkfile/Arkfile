@@ -2123,37 +2123,145 @@ phase_9_file_operations() {
         error "File upload failed with exit code $upload_exit_code. Log below:\n$(cat "$upload_log")"
     fi
 
-    # Step 11 & 12: Download and verify (This logic can remain as it was)
-    log "Step 11 & 12: Downloading and verifying uploaded file..."
+        # IMPLEMENTED: Step 11: List and decrypt file metadata
+    log "Step 11: Listing and decrypting file metadata..."
+
+    # List files to get encrypted metadata - using jq to extract the data inline
+    local target_file_data
+    target_file_data=$("/opt/arkfile/bin/arkfile-client" --config "$client_config_file" list-files --json 2>/dev/null | \
+                      jq -r ".files[] | select(.file_id == \"$file_id\")" 2>/dev/null)
+
+    if [ -z "$target_file_data" ]; then
+        error "Uploaded file $file_id not found in file list - check if upload completed successfully"
+    fi
+
+    info "Found uploaded file in metadata list"
+
+    # Extract encrypted metadata using jq in a single pass
+    local encrypted_filename encrypted_sha256 filename_nonce sha256sum_nonce
+    encrypted_filename=$(jq -r '.encrypted_filename' <<< "$target_file_data" 2>/dev/null)
+    encrypted_sha256=$(jq -r '.encrypted_sha256sum' <<< "$target_file_data" 2>/dev/null)
+    filename_nonce=$(jq -r '.filename_nonce' <<< "$target_file_data" 2>/dev/null)
+    sha256sum_nonce=$(jq -r '.sha256sum_nonce' <<< "$target_file_data" 2>/dev/null)
+
+    # Validate extracted metadata
+    if [ -z "$encrypted_filename" ] || [ -z "$encrypted_sha256" ] || [ -z "$filename_nonce" ] || [ -z "$sha256sum_nonce" ]; then
+        error "Failed to extract complete metadata from file list response"
+    fi
+
+    success "Successfully extracted encrypted metadata from file list"
+
+    # IMPLEMENTED: Decrypt metadata using cryptocli (THIS WAS MISSING!)
+    log "Step 12: Decrypting file metadata with cryptocli..."
+
+    # Verify required variables are not empty before proceeding
+    if [ -z "$encrypted_filename" ]; then
+        error "encrypted_filename is empty - cannot proceed with metadata decryption"
+    fi
+    if [ -z "$filename_nonce" ]; then
+        error "filename_nonce is empty - cannot proceed with metadata decryption"
+    fi
+    if [ -z "$encrypted_sha256" ]; then
+        error "encrypted_sha256 is empty - cannot proceed with metadata decryption"
+    fi
+    if [ -z "$sha256sum_nonce" ]; then
+        error "sha256sum_nonce is empty - cannot proceed with metadata decryption"
+    fi
+
+    # Decrypt the metadata using cryptocli (correct parameter names from help)
+    local metadata_decrypt_output
+    set +e  # Don't exit on command failure so we can capture error
+    metadata_decrypt_output=$(echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli decrypt-metadata \
+        --encrypted-filename-data "$(echo "$encrypted_filename" | base64 --decode)" \
+        --filename-nonce "$(echo "$filename_nonce" | base64 --decode)" \
+        --encrypted-sha256sum-data "$(echo "$encrypted_sha256" | base64 --decode)" \
+        --sha256sum-nonce "$(echo "$sha256sum_nonce" | base64 --decode)" \
+        --username "$TEST_USERNAME" 2>&1)
+    local decrypt_exit_code=$?
+    set -e  # Restore exit on error
+
+    if [ $decrypt_exit_code -ne 0 ]; then
+        error "cryptocli decrypt-metadata failed (exit code: $decrypt_exit_code). Output: $metadata_decrypt_output"
+    fi
+
+    local decrypted_filename decrypted_sha256
+    decrypted_filename=$(echo "$metadata_decrypt_output" | grep "Decrypted Filename:" | cut -d':' -f2- | sed 's/^ *//')
+    decrypted_sha256=$(echo "$metadata_decrypt_output" | grep "Decrypted SHA256:" | cut -d':' -f2- | sed 's/^ *//')
+
+    if [ -z "$decrypted_filename" ] || [ -z "$decrypted_sha256" ]; then
+        error "Failed to decrypt file metadata - missing decrypted values"
+    fi
+
+    success "Successfully decrypted file metadata"
+    info "Original filename: e2e-test-file.dat"
+    info "Decrypted filename: $decrypted_filename"
+    info "Original SHA256: $file_hash"
+    info "Decrypted SHA256: $decrypted_sha256"
+
+    # IMPLEMENTED: Step 13: Download and decrypt file content
+    log "Step 13: Downloading and decrypting file content..."
     local downloaded_e2e_file="$TEMP_DIR/e2e_downloaded_file.enc"
     local decrypted_e2e_file="$TEMP_DIR/e2e_decrypted_file.dat"
 
+    # FIXED: Use new chunked download API instead of broken single-stream
     /opt/arkfile/bin/arkfile-client --config "$client_config_file" download \
         --file-id "$file_id" \
-        --output "$downloaded_e2e_file" \
-        --raw
+        --output "$downloaded_e2e_file"
 
+    if [ $? -ne 0 ]; then
+        error "File download failed with exit code $?"
+    fi
+
+    success "File downloaded successfully using chunked API"
+
+    # Decrypt the downloaded encrypted content
     if ! echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli decrypt-password \
         --file "$downloaded_e2e_file" \
         --output "$decrypted_e2e_file" \
         --username "$TEST_USERNAME" \
         --key-type account 2>/dev/null; then
-        error "Failed to decrypt downloaded file."
+        error "Failed to decrypt downloaded file content."
     fi
 
-    # Step 13: Final end-to-end integrity verification
-    log "Step 13: Verifying final end-to-end data integrity..."
+    success "Downloaded encrypted content decrypted successfully"
+
+    # IMPLEMENTED: Step 14: Multi-layer integrity verification
+    log "Step 14: Performing comprehensive end-to-end integrity verification..."
+
+    # Verify metadata SHA256 matches original
+    if [ "$file_hash" = "$decrypted_sha256" ]; then
+        success "Metadata integrity verified - server SHA256 matches original"
+    else
+        error "METADATA INTEGRITY FAILURE! Server SHA256 does not match original."
+        error "Original:  $file_hash"
+        error "Metadata:  $decrypted_sha256"
+    fi
+
+    # Verify content SHA256 matches decrypted content
     local final_e2e_hash
     final_e2e_hash=$(sha256sum "$decrypted_e2e_file" | cut -d' ' -f1)
 
-    info "Original Hash:  $file_hash"
-    info "Final E2E Hash: $final_e2e_hash"
-
     if [ "$file_hash" = "$final_e2e_hash" ]; then
-        success "PERFECT END-TO-END INTEGRITY VERIFIED! Hashes match."
-        info "Workflow: Generate -> Encrypt -> Upload -> Download -> Decrypt -> Verify"
+        success "PERFECT END-TO-END INTEGRITY VERIFIED! Complete workflow successful."
+        info "Full workflow validated:"
+        info "  ✓ Generate original file"
+        info "  ✓ Encrypt content + metadata"
+        info "  ✓ Upload encrypted content + encrypted metadata"
+        info "  ✓ Store and retrieve encrypted metadata"
+        info "  ✓ Decrypt metadata (filenames, hashes)"
+        info "  ✓ Download encrypted content in chunks"
+        info "  ✓ Decrypt content"
+        info "  ✓ Verify perfect integrity through entire cycle"
+        info "Final validation:"
+        info "  Original file:      $file_hash"
+        info "  Decrypted metadata: $decrypted_sha256"
+        info "  Decrypted content:  $final_e2e_hash"
+        info "  [ALL THREE MATCH PERFECTLY]"
     else
-        error "END-TO-END INTEGRITY CHECK FAILED! Hashes do not match."
+        error "CONTENT INTEGRITY FAILURE! Decrypted content hash mismatch."
+        error "Original: $file_hash"
+        error "Content:  $final_e2e_hash"
+        error "This indicates corruption in encrypt/decrypt cycle"
     fi
     
     if [ "$PERFORMANCE_MODE" = true ]; then

@@ -24,6 +24,16 @@ import (
 	"golang.org/x/term"
 )
 
+// DownloadFileMetaResponse represents the metadata response for a file download
+type DownloadFileMetaResponse struct {
+	FileID      string `json:"file_id"`
+	TotalSize   int64  `json:"total_size"`
+	ChunkSize   int    `json:"chunk_size"`
+	TotalChunks int    `json:"total_chunks"`
+	Filename    string `json:"filename"` // Will be encrypted
+	SHA256      string `json:"sha256"`   // Will be encrypted
+}
+
 const (
 	Version = "2.0.0-static"
 	Usage   = `arkfile-client - Secure file sharing client with OPAQUE authentication
@@ -600,23 +610,25 @@ EXAMPLES:
 	return nil
 }
 
-// handleDownloadCommand processes download command
+// handleDownloadCommand processes download command using chunked download API
 func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("download", flag.ExitOnError)
 	var (
-		fileID     = fs.String("file-id", "", "File ID to download (required)")
-		outputPath = fs.String("output", "", "Output file path (required)")
+		fileID       = fs.String("file-id", "", "File ID to download (required)")
+		outputPath   = fs.String("output", "", "Output file path for the encrypted data (required)")
+		showProgress = fs.Bool("progress", true, "Show download progress")
 	)
 
 	fs.Usage = func() {
 		fmt.Printf(`Usage: arkfile-client download [FLAGS]
 
-Downloads an encrypted file from the server.
+Downloads an encrypted file from the server using chunked download.
 The downloaded file will still be encrypted - use cryptocli to decrypt it.
 
 FLAGS:
     --file-id ID        File ID to download (required)
     --output PATH       Output file path for the encrypted data (required)
+    --progress          Show download progress (default: true)
     --help             Show this help message
 
 WORKFLOW:
@@ -625,6 +637,7 @@ WORKFLOW:
 
 EXAMPLES:
     arkfile-client download --file-id "abc123..." --output downloaded.enc
+    arkfile-client download --file-id "def456..." --output file.enc --progress=false
 `)
 	}
 
@@ -650,47 +663,121 @@ EXAMPLES:
 		return fmt.Errorf("session expired, please login again")
 	}
 
-	// Perform a direct HTTP GET to handle the file download stream
-	downloadURL := client.baseURL + "/api/download/" + *fileID
-	req, err := http.NewRequest("GET", downloadURL, nil)
+	logVerbose("Starting chunked download for file: %s", *fileID)
+
+	// STEP 1: Get file metadata to determine chunks
+	metaURL := fmt.Sprintf("/api/files/%s/meta", *fileID)
+	logVerbose("Fetching file metadata from: %s", metaURL)
+
+	req, err := http.NewRequest("GET", client.baseURL+metaURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create download request: %w", err)
+		return fmt.Errorf("failed to create metadata request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
 
-	if client.verbose {
-		logVerbose("Making GET request to %s", downloadURL)
-	}
-
-	httpResp, err := client.client.Do(req)
+	metaResp, err := client.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("download request failed: %w", err)
+		return fmt.Errorf("metadata request failed: %w", err)
 	}
-	defer httpResp.Body.Close()
+	defer metaResp.Body.Close()
 
-	if httpResp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(httpResp.Body)
-		return fmt.Errorf("server returned status %d: %s", httpResp.StatusCode, string(bodyBytes))
+	if metaResp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(metaResp.Body)
+		return fmt.Errorf("metadata request failed with status %d: %s", metaResp.StatusCode, string(bodyBytes))
 	}
 
-	// Create the output file
+	metaData, err := io.ReadAll(metaResp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read metadata response: %w", err)
+	}
+
+	var meta DownloadFileMetaResponse
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		return fmt.Errorf("failed to parse metadata response: %w", err)
+	}
+
+	logVerbose("File metadata: ID=%s, TotalSize=%d, ChunkSize=%d, TotalChunks=%d",
+		meta.FileID, meta.TotalSize, meta.ChunkSize, meta.TotalChunks)
+
+	// STEP 2: Check if file exists and has expected metadata
+	if meta.TotalChunks <= 0 {
+		return fmt.Errorf("invalid file metadata: total chunks is %d", meta.TotalChunks)
+	}
+
+	// STEP 3: Download chunks sequentially and write to output file
+	if *showProgress {
+		fmt.Printf("Downloading encrypted file (%s) in %d chunks...\n",
+			formatFileSize(meta.TotalSize), meta.TotalChunks)
+	}
+
+	// Create output file
 	outFile, err := os.Create(*outputPath)
 	if err != nil {
 		return fmt.Errorf("failed to create output file: %w", err)
 	}
 	defer outFile.Close()
 
-	// Stream the download directly to the file
-	bytesWritten, err := io.Copy(outFile, httpResp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to write downloaded data to file: %w", err)
+	totalBytesDownloaded := int64(0)
+
+	for chunkIndex := 0; chunkIndex < meta.TotalChunks; chunkIndex++ {
+		chunkURL := fmt.Sprintf("/api/files/%s/chunks/%d", *fileID, chunkIndex)
+
+		req, err := http.NewRequest("GET", client.baseURL+chunkURL, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create chunk %d request: %w", chunkIndex, err)
+		}
+		req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+
+		if client.verbose {
+			logVerbose("Downloading chunk %d/%d from %s", chunkIndex+1, meta.TotalChunks, chunkURL)
+		}
+
+		chunkResp, err := client.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("chunk %d download failed: %w", chunkIndex, err)
+		}
+
+		if chunkResp.StatusCode != http.StatusOK {
+			chunkResp.Body.Close()
+			bodyBytes, _ := io.ReadAll(chunkResp.Body)
+			return fmt.Errorf("chunk %d download failed with status %d: %s",
+				chunkIndex, chunkResp.StatusCode, string(bodyBytes))
+		}
+
+		// Stream chunk directly to output file
+		bytesWritten, err := io.Copy(outFile, chunkResp.Body)
+		chunkResp.Body.Close()
+
+		if err != nil {
+			return fmt.Errorf("failed to write chunk %d to file: %w", chunkIndex, err)
+		}
+
+		totalBytesDownloaded += bytesWritten
+
+		if *showProgress {
+			progress := float64(chunkIndex+1) / float64(meta.TotalChunks) * 100
+			fmt.Printf("\rProgress: %.1f%% (%d/%d chunks)",
+				progress, chunkIndex+1, meta.TotalChunks)
+		}
 	}
 
-	logVerbose("Wrote %d bytes to %s", bytesWritten, *outputPath)
+	if *showProgress {
+		fmt.Println() // Newline after progress
+	}
+
+	// STEP 4: Verify download integrity
+	if totalBytesDownloaded != meta.TotalSize {
+		return fmt.Errorf("download size mismatch: expected %d bytes, downloaded %d bytes",
+			meta.TotalSize, totalBytesDownloaded)
+	}
+
+	logVerbose("Successfully downloaded %d bytes to %s", totalBytesDownloaded, *outputPath)
 
 	fmt.Printf("✅ Encrypted file downloaded successfully\n")
+	fmt.Printf("File ID: %s\n", *fileID)
 	fmt.Printf("Saved to: %s\n", *outputPath)
-	fmt.Printf("Size: %s\n", formatFileSize(bytesWritten))
+	fmt.Printf("Size: %s\n", formatFileSize(totalBytesDownloaded))
+	fmt.Printf("Downloaded in %d chunks\n", meta.TotalChunks)
 	fmt.Printf("\nUse 'cryptocli decrypt-password' to decrypt the file.\n")
 
 	return nil

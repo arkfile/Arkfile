@@ -8,6 +8,9 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// Import other handler packages for routing
+// This allows routing to use functions from the separated handlers
+
 // RegisterRoutes initializes all routes for the application
 func RegisterRoutes() {
 	// Explicitly serve index.html at root with HEAD support
@@ -69,7 +72,8 @@ func RegisterRoutes() {
 
 	totpProtectedGroup.GET("/api/files", ListFiles)
 	totpProtectedGroup.POST("/api/upload", UploadFile)
-	totpProtectedGroup.GET("/api/download/:fileId", DownloadFile)
+	totpProtectedGroup.GET("/api/files/:fileId/meta", GetFileMeta)
+	totpProtectedGroup.GET("/api/files/:fileId/chunks/:chunkNumber", DownloadFileChunk)
 	totpProtectedGroup.DELETE("/api/files/:fileId", DeleteFile)
 
 	// Chunked uploads - require TOTP
