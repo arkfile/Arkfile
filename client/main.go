@@ -416,10 +416,10 @@ func encryptFileMetadata(this js.Value, args []js.Value) interface{} {
 
 	return map[string]interface{}{
 		"success":             true,
-		"filename_nonce":      base64.StdEncoding.EncodeToString(filenameNonce),
-		"encrypted_filename":  base64.StdEncoding.EncodeToString(encryptedFilename),
-		"sha256sum_nonce":     base64.StdEncoding.EncodeToString(sha256Nonce),
-		"encrypted_sha256sum": base64.StdEncoding.EncodeToString(encryptedSha256),
+		"filename_nonce":      string(filenameNonce),
+		"encrypted_filename":  string(encryptedFilename),
+		"sha256sum_nonce":     string(sha256Nonce),
+		"encrypted_sha256sum": string(encryptedSha256),
 	}
 }
 
