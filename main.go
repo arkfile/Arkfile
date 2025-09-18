@@ -75,11 +75,16 @@ func main() {
 	_ = cfg // Use the config variable to prevent unused variable warning
 
 	// Initialize logging with error handling
+	logLevel := logging.INFO // Default
+	if strings.ToLower(cfg.Server.LogLevel) == "debug" {
+		logLevel = logging.DEBUG
+	}
+
 	loggingConfig := &logging.LogConfig{
-		LogDir:     "/opt/arkfile/var/log", // Use absolute path for production deployment
-		MaxSize:    10 * 1024 * 1024,       // 10MB
-		MaxBackups: 5,
-		LogLevel:   logging.INFO,
+		LogDir:     cfg.Deployment.LogDirectory,
+		MaxSize:    cfg.Logging.MaxSize,
+		MaxBackups: cfg.Logging.MaxBackups,
+		LogLevel:   logLevel,
 	}
 	if err := logging.InitLogging(loggingConfig); err != nil {
 		log.Printf("Warning: Failed to initialize file logging, using console only: %v", err)

@@ -81,6 +81,13 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	var sizeBytes interface{} // Use interface{} to handle both int64 and float64
 	var uploadDateStr string  // Scan as string first to handle RQLite timestamp format
 
+	// Store metadata fields as []byte during scan to prevent double-encoding
+	var filenameNonceBytes []byte
+	var encryptedFilenameBytes []byte
+	var sha256sumNonceBytes []byte
+	var encryptedSha256sumBytes []byte
+	var encryptedFekBytes []byte
+
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
@@ -90,11 +97,18 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	).Scan(
 		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 		&file.PasswordHint, &file.PasswordType,
-		&file.FilenameNonce, &file.EncryptedFilename, // Now stored as base64 strings directly
-		&file.Sha256sumNonce, &file.EncryptedSha256sum, // Now stored as base64 strings directly
-		&encryptedFileSha256sum, &file.EncryptedFEK, // Now stored as base64 strings directly
+		&filenameNonceBytes, &encryptedFilenameBytes, // Scan as []byte first
+		&sha256sumNonceBytes, &encryptedSha256sumBytes, // Scan as []byte first
+		&encryptedFileSha256sum, &encryptedFekBytes, // Scan as []byte first
 		&sizeBytes, &file.PaddedSize, &uploadDateStr,
 	)
+
+	// Convert []byte to string to prevent JSON marshaler from double-base64-encoding these fields
+	file.FilenameNonce = string(filenameNonceBytes)
+	file.EncryptedFilename = string(encryptedFilenameBytes)
+	file.Sha256sumNonce = string(sha256sumNonceBytes)
+	file.EncryptedSha256sum = string(encryptedSha256sumBytes)
+	file.EncryptedFEK = string(encryptedFekBytes)
 
 	if err == sql.ErrNoRows {
 		return nil, errors.New("file not found")
@@ -150,6 +164,13 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	var sizeBytes interface{} // Use interface{} to handle both int64 and float64
 	var uploadDateStr string  // Scan as string first to handle RQLite timestamp format
 
+	// Store metadata fields as []byte during scan to prevent double-encoding
+	var filenameNonceBytes []byte
+	var encryptedFilenameBytes []byte
+	var sha256sumNonceBytes []byte
+	var encryptedSha256sumBytes []byte
+	var encryptedFekBytes []byte
+
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
@@ -159,11 +180,18 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	).Scan(
 		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 		&file.PasswordHint, &file.PasswordType,
-		&file.FilenameNonce, &file.EncryptedFilename, // Now stored as base64 strings directly
-		&file.Sha256sumNonce, &file.EncryptedSha256sum, // Now stored as base64 strings directly
-		&encryptedFileSha256sum, &file.EncryptedFEK, // Now stored as base64 strings directly
+		&filenameNonceBytes, &encryptedFilenameBytes, // Scan as []byte first
+		&sha256sumNonceBytes, &encryptedSha256sumBytes, // Scan as []byte first
+		&encryptedFileSha256sum, &encryptedFekBytes, // Scan as []byte first
 		&sizeBytes, &file.PaddedSize, &uploadDateStr,
 	)
+
+	// Convert []byte to string to prevent JSON marshaler from double-base64-encoding these fields
+	file.FilenameNonce = string(filenameNonceBytes)
+	file.EncryptedFilename = string(encryptedFilenameBytes)
+	file.Sha256sumNonce = string(sha256sumNonceBytes)
+	file.EncryptedSha256sum = string(encryptedSha256sumBytes)
+	file.EncryptedFEK = string(encryptedFekBytes)
 
 	if err == sql.ErrNoRows {
 		return nil, errors.New("file not found")
@@ -237,17 +265,31 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 		var sizeBytes interface{}
 		var uploadDateStr string
 
+		// Store metadata fields as []byte during scan to prevent double-encoding
+		var filenameNonceBytes []byte
+		var encryptedFilenameBytes []byte
+		var sha256sumNonceBytes []byte
+		var encryptedSha256sumBytes []byte
+		var encryptedFekBytes []byte
+
 		err := rows.Scan(
 			&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 			&file.PasswordHint, &file.PasswordType,
-			&file.FilenameNonce, &file.EncryptedFilename, // Now stored as base64 strings directly
-			&file.Sha256sumNonce, &file.EncryptedSha256sum, // Now stored as base64 strings directly
-			&encryptedFileSha256sum, &file.EncryptedFEK, // Now stored as base64 strings directly
+			&filenameNonceBytes, &encryptedFilenameBytes, // Scan as []byte first
+			&sha256sumNonceBytes, &encryptedSha256sumBytes, // Scan as []byte first
+			&encryptedFileSha256sum, &encryptedFekBytes, // Scan as []byte first
 			&sizeBytes, &file.PaddedSize, &uploadDateStr,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan row for user '%s': %w", ownerUsername, err)
 		}
+
+		// Convert []byte to string to prevent JSON marshaler from double-base64-encoding these fields
+		file.FilenameNonce = string(filenameNonceBytes)
+		file.EncryptedFilename = string(encryptedFilenameBytes)
+		file.Sha256sumNonce = string(sha256sumNonceBytes)
+		file.EncryptedSha256sum = string(encryptedSha256sumBytes)
+		file.EncryptedFEK = string(encryptedFekBytes)
 
 		// Convert sizeBytes from interface{} to int64
 		switch v := sizeBytes.(type) {
@@ -340,17 +382,18 @@ type FileMetadataForClient struct {
 // ToClientMetadata converts a File to FileMetadataForClient for sending to the client.
 // All data is now stored as base64 strings directly, so we return them as-is.
 func (f *File) ToClientMetadata() *FileMetadataForClient {
-	return &FileMetadataForClient{
+	clientFile := &FileMetadataForClient{
 		FileID:             f.FileID,
 		StorageID:          f.StorageID,
 		PasswordHint:       f.PasswordHint,
 		PasswordType:       f.PasswordType,
-		FilenameNonce:      f.FilenameNonce,      // Already base64 strings
-		EncryptedFilename:  f.EncryptedFilename,  // Already base64 strings
-		Sha256sumNonce:     f.Sha256sumNonce,     // Already base64 strings
-		EncryptedSha256sum: f.EncryptedSha256sum, // Already base64 strings
-		EncryptedFEK:       f.EncryptedFEK,       // Already base64 strings
+		FilenameNonce:      f.FilenameNonce,
+		EncryptedFilename:  f.EncryptedFilename,
+		Sha256sumNonce:     f.Sha256sumNonce,
+		EncryptedSha256sum: f.EncryptedSha256sum,
+		EncryptedFEK:       f.EncryptedFEK,
 		SizeBytes:          f.SizeBytes,
 		UploadDate:         f.UploadDate,
 	}
+	return clientFile
 }

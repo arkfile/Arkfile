@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -113,11 +114,40 @@ func CreateUploadSession(c echo.Context) error {
 
 	// Store encrypted metadata as base64 strings directly (no binary conversion)
 	// This eliminates double-encoding issues and simplifies the architecture
+	// Ensure metadata is not already base64-encoded to prevent double-encoding
 	encryptedFilename := request.EncryptedFilename
 	filenameNonce := request.FilenameNonce
 	encryptedSha256sum := request.EncryptedSha256sum
 	sha256sumNonce := request.Sha256sumNonce
 	encryptedFek := request.EncryptedFek
+
+	// DEBUG: Log received metadata during upload session creation
+	logging.Log(logging.DEBUG, "UploadSession %s - Received metadata from client (INGRESS):", sessionID)
+	logging.Log(logging.DEBUG, "  filename_nonce: '%s' (length: %d)", filenameNonce, len(filenameNonce))
+	logging.Log(logging.DEBUG, "  encrypted_filename: '%s' (length: %d)", encryptedFilename, len(encryptedFilename))
+	logging.Log(logging.DEBUG, "  sha256sum_nonce: '%s' (length: %d)", sha256sumNonce, len(sha256sumNonce))
+	logging.Log(logging.DEBUG, "  encrypted_sha256sum: '%s' (length: %d)", encryptedSha256sum, len(encryptedSha256sum))
+	logging.Log(logging.DEBUG, "  encrypted_fek: '%s' (length: %d)", encryptedFek, len(encryptedFek))
+
+	// TEST BASE64 DECODE FOR DOUBLE-ENCODING DETECTION (INGRESS)
+	if len(filenameNonce) > 0 {
+		if decoded, err := base64.StdEncoding.DecodeString(filenameNonce); err == nil {
+			logging.Log(logging.DEBUG, "[DEBUG_TEST_INGRESS] Successfully decoded filename_nonce: %d bytes -> %d bytes", len(filenameNonce), len(decoded))
+		} else {
+			logging.Log(logging.DEBUG, "[DEBUG_TEST_INGRESS] ERROR decoding filename_nonce: %v", err)
+		}
+	}
+	if len(encryptedFilename) > 0 {
+		if decoded, err := base64.StdEncoding.DecodeString(encryptedFilename); err == nil {
+			logging.Log(logging.DEBUG, "[DEBUG_TEST_INGRESS] Successfully decoded encrypted_filename: %d bytes -> %d bytes", len(encryptedFilename), len(decoded))
+		} else {
+			logging.Log(logging.DEBUG, "[DEBUG_TEST_INGRESS] ERROR decoding encrypted_filename: %v", err)
+		}
+	}
+
+	// CRITICAL: Do NOT base64 encode these values - they arrive from client already base64-encoded
+	// The double-encoding bug was caused by calling base64.StdEncoding.EncodeToString() on these values
+	// Since cryptocli now expects base64-encoded data from server, we must maintain single-encoding
 
 	// Create upload session record with encrypted metadata
 	_, err = tx.Exec(
@@ -560,16 +590,30 @@ func CompleteUpload(c echo.Context) error {
 	)
 
 	// Query for most data, keeping BLOBs separate. Read large numbers as floats.
+	// Use []byte for metadata fields to prevent automatic double-encoding during JSON marshaling
+	var encryptedFilenameBytes []byte
+	var filenameNonceBytes []byte
+	var encryptedSha256sumBytes []byte
+	var sha256sumNonceBytes []byte
+	var encryptedFekBytes []byte
+
 	err := database.DB.QueryRow(
-		`SELECT owner_username, file_id, storage_id, storage_upload_id, padded_size, status, total_chunks, 
-                total_size, password_hint, password_type, encrypted_filename, filename_nonce, 
-                encrypted_sha256sum, sha256sum_nonce, encrypted_fek 
+		`SELECT owner_username, file_id, storage_id, storage_upload_id, padded_size, status, total_chunks,
+                total_size, password_hint, password_type, encrypted_filename, filename_nonce,
+                encrypted_sha256sum, sha256sum_nonce, encrypted_fek
          FROM upload_sessions WHERE id = ?`,
 		sessionID,
 	).Scan(
 		&ownerUsername, &fileID, &storageID, &storageUploadID, &paddedSizeFloat, &status, &totalChunks,
-		&totalSizeFloat, &passwordHint, &passwordType, &encryptedFilename, &filenameNonce, &encryptedSha256sum, &sha256sumNonce, &encryptedFek,
+		&totalSizeFloat, &passwordHint, &passwordType, &encryptedFilenameBytes, &filenameNonceBytes, &encryptedSha256sumBytes, &sha256sumNonceBytes, &encryptedFekBytes,
 	)
+
+	// Convert []byte to string to ensure single-encoding for file_metadata table
+	encryptedFilename = string(encryptedFilenameBytes)
+	filenameNonce = string(filenameNonceBytes)
+	encryptedSha256sum = string(encryptedSha256sumBytes)
+	sha256sumNonce = string(sha256sumNonceBytes)
+	encryptedFek = string(encryptedFekBytes)
 
 	if err == sql.ErrNoRows {
 		logging.ErrorLogger.Printf("CompleteUpload Error: Session not found in database for sessionID: '%s'. This is the point of failure.", sessionID)
