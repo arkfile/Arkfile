@@ -2181,7 +2181,8 @@ phase_9_file_operations() {
     set -e  # Restore exit on error
 
     if [ $decrypt_exit_code -ne 0 ]; then
-        error "cryptocli decrypt-metadata failed (exit code: $decrypt_exit_code). Output: $metadata_decrypt_output"
+        error "cryptocli decrypt-metadata failed (exit code: $decrypt_exit_code). Error output:
+$metadata_decrypt_output"
     fi
 
     local decrypted_filename decrypted_sha256

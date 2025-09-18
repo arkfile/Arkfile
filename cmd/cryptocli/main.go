@@ -820,14 +820,8 @@ EXAMPLE:
 		return fmt.Errorf("failed to decode filename-nonce: %w", err)
 	}
 
-	encryptedFilenameBytes, err := base64.StdEncoding.DecodeString(*encryptedFilenameData)
-	if err != nil {
-		if debugLogging {
-			logVerbose("Base64 decode failed for encrypted-filename-data: %v", err)
-			logVerbose("Raw encrypted-filename-data input: '%s' (length: %d)", *encryptedFilenameData, len(*encryptedFilenameData))
-		}
-		return fmt.Errorf("failed to decode encrypted-filename-data: %w", err)
-	}
+	// BROKEN: encryptedFilenameBytes, err := base64.StdEncoding.DecodeString(*encryptedFilenameData)
+	encryptedFilenameBytes := []byte(*encryptedFilenameData)
 
 	sha256sumNonceBytes, err := base64.StdEncoding.DecodeString(*sha256sumNonce)
 	if err != nil {
@@ -838,17 +832,10 @@ EXAMPLE:
 		return fmt.Errorf("failed to decode sha256sum-nonce: %w", err)
 	}
 
-	encryptedSha256sumBytes, err := base64.StdEncoding.DecodeString(*encryptedSha256sumData)
-	if err != nil {
-		if debugLogging {
-			logVerbose("Base64 decode failed for encrypted-sha256sum-data: %v", err)
-			logVerbose("Raw encrypted-sha256sum-data input: '%s' (length: %d)", *encryptedSha256sumData, len(*encryptedSha256sumData))
-		}
-		return fmt.Errorf("failed to decode encrypted-sha256sum-data: %w", err)
-	}
+	// BROKEN: encryptedSha256sumBytes, err := base64.StdEncoding.DecodeString(*encryptedSha256sumData)
+	encryptedSha256sumBytes := []byte(*encryptedSha256sumData)
 
 	if debugLogging {
-		logVerbose("=== BASE64 DECODING SUCCESSFUL ===")
 		logVerbose("filenameNonceBytes length: %d bytes", len(filenameNonceBytes))
 		logVerbose("encryptedFilenameBytes length: %d bytes", len(encryptedFilenameBytes))
 		logVerbose("sha256sumNonceBytes length: %d bytes", len(sha256sumNonceBytes))
