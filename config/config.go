@@ -179,6 +179,9 @@ func loadEnvConfig(cfg *Config) error {
 	if baseURL := os.Getenv("BASE_URL"); baseURL != "" {
 		cfg.Server.BaseURL = baseURL
 	}
+	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
+		cfg.Server.LogLevel = logLevel
+	}
 	if tlsEnabled := os.Getenv("TLS_ENABLED"); tlsEnabled != "" {
 		if enabled, err := strconv.ParseBool(tlsEnabled); err == nil {
 			cfg.Server.TLSEnabled = enabled

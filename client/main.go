@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/84adam/Arkfile/crypto"
+	"github.com/84adam/Arkfile/logging"
 )
 
 // Password Storage for WASM Context
@@ -416,10 +417,10 @@ func encryptFileMetadata(this js.Value, args []js.Value) interface{} {
 
 	return map[string]interface{}{
 		"success":             true,
-		"filename_nonce":      string(filenameNonce),
-		"encrypted_filename":  string(encryptedFilename),
-		"sha256sum_nonce":     string(sha256Nonce),
-		"encrypted_sha256sum": string(encryptedSha256),
+		"filename_nonce":      base64.StdEncoding.EncodeToString(filenameNonce),
+		"encrypted_filename":  base64.StdEncoding.EncodeToString(encryptedFilename),
+		"sha256sum_nonce":     base64.StdEncoding.EncodeToString(sha256Nonce),
+		"encrypted_sha256sum": base64.StdEncoding.EncodeToString(encryptedSha256),
 	}
 }
 
@@ -439,11 +440,20 @@ func decryptFileMetadata(this js.Value, args []js.Value) interface{} {
 	encryptedSha256B64 := args[3].String()
 	username := args[4].String()
 
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] decryptFileMetadata called for user: %s", username)
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT]   INPUT filename_nonce: '%s' (length: %d)", filenameNonceB64, len(filenameNonceB64))
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT]   INPUT encrypted_filename: '%s' (length: %d)", encryptedFilenameB64, len(encryptedFilenameB64))
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT]   INPUT sha256sum_nonce: '%s' (length: %d)", sha256NonceB64, len(sha256NonceB64))
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT]   INPUT encrypted_sha256sum: '%s' (length: %d)", encryptedSha256B64, len(encryptedSha256B64))
+
 	// Get password for this user to derive metadata key
 	password, exists := userPasswords[username]
 	if !exists {
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] ERROR: No password found for user: %s", username)
 		return map[string]interface{}{"success": false, "error": "No password found for user"}
 	}
+
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Found password for user (length: %d)", len(password))
 
 	// Derive the metadata encryption key directly from password
 	// This matches the server-side crypto.DeriveAccountPasswordKey
@@ -462,33 +472,53 @@ func decryptFileMetadata(this js.Value, args []js.Value) interface{} {
 	// Decode metadata fields
 	filenameNonce, err := base64.StdEncoding.DecodeString(filenameNonceB64)
 	if err != nil {
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] ERROR: Failed to decode filename nonce: %v", err)
 		return map[string]interface{}{"success": false, "error": "Failed to decode filename nonce: " + err.Error()}
 	}
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Decoded filename_nonce: %d bytes", len(filenameNonce))
+
 	encryptedFilename, err := base64.StdEncoding.DecodeString(encryptedFilenameB64)
 	if err != nil {
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] ERROR: Failed to decode encrypted filename: %v", err)
 		return map[string]interface{}{"success": false, "error": "Failed to decode encrypted filename: " + err.Error()}
 	}
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Decoded encrypted_filename: %d bytes", len(encryptedFilename))
+
 	sha256Nonce, err := base64.StdEncoding.DecodeString(sha256NonceB64)
 	if err != nil {
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] ERROR: Failed to decode SHA256 nonce: %v", err)
 		return map[string]interface{}{"success": false, "error": "Failed to decode SHA256 nonce: " + err.Error()}
 	}
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Decoded sha256sum_nonce: %d bytes", len(sha256Nonce))
+
 	encryptedSha256, err := base64.StdEncoding.DecodeString(encryptedSha256B64)
 	if err != nil {
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] ERROR: Failed to decode encrypted SHA256: %v", err)
 		return map[string]interface{}{"success": false, "error": "Failed to decode encrypted SHA256: " + err.Error()}
 	}
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Decoded encrypted_sha256sum: %d bytes", len(encryptedSha256))
 
 	// Decrypt filename
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Attempting to decrypt filename...")
 	filenameBytes, err := gcm.Open(nil, filenameNonce, encryptedFilename, nil)
 	if err != nil {
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] ERROR: Failed to decrypt filename: %v", err)
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Nonce length: %d, expected: %d", len(filenameNonce), gcm.NonceSize())
 		return map[string]interface{}{"success": false, "error": "Failed to decrypt filename: " + err.Error()}
 	}
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Successfully decrypted filename: '%s'", string(filenameBytes))
 
 	// Decrypt SHA256 hash
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Attempting to decrypt SHA256...")
 	sha256Bytes, err := gcm.Open(nil, sha256Nonce, encryptedSha256, nil)
 	if err != nil {
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] ERROR: Failed to decrypt SHA256: %v", err)
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Nonce length: %d, expected: %d", len(sha256Nonce), gcm.NonceSize())
 		return map[string]interface{}{"success": false, "error": "Failed to decrypt SHA256: " + err.Error()}
 	}
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Successfully decrypted SHA256: '%s'", string(sha256Bytes))
 
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] decryptFileMetadata completed successfully")
 	return map[string]interface{}{
 		"success":   true,
 		"filename":  string(filenameBytes),
@@ -1420,7 +1450,7 @@ func logUploadSuccess(this js.Value, args []js.Value) interface{} {
 	fileId := responseObject.Get("file_id").String()
 	encryptedFileSHA256 := responseObject.Get("encrypted_file_sha256").String()
 
-	log.Printf("[WASM] Upload successful! file_id: %s, serverHash: %s", fileId, encryptedFileSHA256)
+	logging.InfoLogger.Printf("[WASM] Upload successful! file_id: %s, serverHash: %s", fileId, encryptedFileSHA256)
 	return nil
 }
 
@@ -1480,10 +1510,12 @@ func processFileListResponse(this js.Value, args []js.Value) interface{} {
 	}
 
 	username := args[1].String()
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] processFileListResponse called for user: %s", username)
 
 	// Check if user has a password stored
 	_, exists := userPasswords[username]
 	if !exists {
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] ERROR: No password found for user: %s", username)
 		return map[string]interface{}{
 			"success": false,
 			"error":   "No password found for user - cannot decrypt metadata",
@@ -1494,6 +1526,7 @@ func processFileListResponse(this js.Value, args []js.Value) interface{} {
 	serverResponse := args[0]
 
 	if serverResponse.IsNull() || serverResponse.IsUndefined() {
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] ERROR: Server response is null or undefined")
 		return map[string]interface{}{
 			"success": false,
 			"error":   "Server response is null or undefined",
@@ -1502,6 +1535,7 @@ func processFileListResponse(this js.Value, args []js.Value) interface{} {
 
 	files := serverResponse.Get("files")
 	if files.IsNull() || files.IsUndefined() {
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] ERROR: No 'files' array found in server response")
 		return map[string]interface{}{
 			"success": false,
 			"error":   "No 'files' array found in server response",
@@ -1510,16 +1544,25 @@ func processFileListResponse(this js.Value, args []js.Value) interface{} {
 
 	// Process each file and decrypt metadata
 	filesLength := files.Length()
+	logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Processing %d files from server response", filesLength)
 	var decryptedFiles []map[string]interface{}
 
 	for i := 0; i < filesLength; i++ {
 		file := files.Index(i)
+		fileId := file.Get("file_id").String()
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Processing file #%d: %s", i+1, fileId)
 
 		// Extract encrypted metadata
 		filenameNonce := file.Get("filename_nonce").String()
 		encryptedFilename := file.Get("encrypted_filename").String()
 		sha256Nonce := file.Get("sha256sum_nonce").String()
 		encryptedSHA256 := file.Get("encrypted_sha256sum").String()
+
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] File %s - Received metadata from server:", fileId)
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT]   filename_nonce: '%s' (length: %d)", filenameNonce, len(filenameNonce))
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT]   encrypted_filename: '%s' (length: %d)", encryptedFilename, len(encryptedFilename))
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT]   sha256sum_nonce: '%s' (length: %d)", sha256Nonce, len(sha256Nonce))
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT]   encrypted_sha256sum: '%s' (length: %d)", encryptedSHA256, len(encryptedSHA256))
 
 		// Decrypt metadata using password-derived key (NOT FEK)
 		decryptResult := decryptFileMetadata(js.Value{}, []js.Value{
@@ -1533,9 +1576,11 @@ func processFileListResponse(this js.Value, args []js.Value) interface{} {
 		decryptMap, ok := decryptResult.(map[string]interface{})
 		if !ok || !decryptMap["success"].(bool) {
 			// Skip this file if decryption fails
-			log.Printf("Failed to decrypt metadata for file: %v", decryptMap["error"])
+			logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] ERROR: Failed to decrypt metadata for file %s: %v", fileId, decryptMap["error"])
 			continue
 		}
+
+		logging.InfoLogger.Printf("[DEBUG_WASM_CLIENT] Successfully decrypted metadata for file %s", fileId)
 
 		// Build decrypted file info
 		decryptedFile := map[string]interface{}{

@@ -32,6 +32,7 @@ var (
 
 // CreateUploadSession initializes a new chunked upload
 func CreateUploadSession(c echo.Context) error {
+	logging.InfoLogger.Printf("CREATE_UPLOAD_SESSION_HANDLER_START: func called")
 	username := auth.GetUsernameFromToken(c)
 
 	var request struct {
@@ -121,27 +122,31 @@ func CreateUploadSession(c echo.Context) error {
 	sha256sumNonce := request.Sha256sumNonce
 	encryptedFek := request.EncryptedFek
 
-	// DEBUG: Log received metadata during upload session creation
-	logging.Log(logging.DEBUG, "UploadSession %s - Received metadata from client (INGRESS):", sessionID)
-	logging.Log(logging.DEBUG, "  filename_nonce: '%s' (length: %d)", filenameNonce, len(filenameNonce))
-	logging.Log(logging.DEBUG, "  encrypted_filename: '%s' (length: %d)", encryptedFilename, len(encryptedFilename))
-	logging.Log(logging.DEBUG, "  sha256sum_nonce: '%s' (length: %d)", sha256sumNonce, len(sha256sumNonce))
-	logging.Log(logging.DEBUG, "  encrypted_sha256sum: '%s' (length: %d)", encryptedSha256sum, len(encryptedSha256sum))
-	logging.Log(logging.DEBUG, "  encrypted_fek: '%s' (length: %d)", encryptedFek, len(encryptedFek))
+	// METADATA TRACKING: Simplified checkpoint logging to test if basic printf works
+	logging.InfoLogger.Printf("LOG_TEST_001: UploadSession created: %s", sessionID)
+	logging.InfoLogger.Printf("LOG_TEST_002: User: %s", username)
+	logging.InfoLogger.Printf("LOG_TEST_003: Metadata received")
+
+	// METADATA TRACKING: Log metadata as it goes to database
+	logging.InfoLogger.Printf("UploadSession %s - Storing metadata in database (PRE-DATABASE):", sessionID)
+	logging.InfoLogger.Printf("  filename_nonce (to DB): '%s' (length: %d)", filenameNonce, len(filenameNonce))
+	logging.InfoLogger.Printf("  encrypted_filename (to DB): '%s' (length: %d)", encryptedFilename, len(encryptedFilename))
+	logging.InfoLogger.Printf("  sha256sum_nonce (to DB): '%s' (length: %d)", sha256sumNonce, len(sha256sumNonce))
+	logging.InfoLogger.Printf("  encrypted_sha256sum (to DB): '%s' (length: %d)", encryptedSha256sum, len(encryptedSha256sum))
 
 	// TEST BASE64 DECODE FOR DOUBLE-ENCODING DETECTION (INGRESS)
 	if len(filenameNonce) > 0 {
 		if decoded, err := base64.StdEncoding.DecodeString(filenameNonce); err == nil {
-			logging.Log(logging.DEBUG, "[DEBUG_TEST_INGRESS] Successfully decoded filename_nonce: %d bytes -> %d bytes", len(filenameNonce), len(decoded))
+			logging.InfoLogger.Printf("[DEBUG_TEST_INGRESS] Successfully decoded filename_nonce: %d bytes -> %d bytes", len(filenameNonce), len(decoded))
 		} else {
-			logging.Log(logging.DEBUG, "[DEBUG_TEST_INGRESS] ERROR decoding filename_nonce: %v", err)
+			logging.InfoLogger.Printf("[DEBUG_TEST_INGRESS] ERROR decoding filename_nonce: %v", err)
 		}
 	}
 	if len(encryptedFilename) > 0 {
 		if decoded, err := base64.StdEncoding.DecodeString(encryptedFilename); err == nil {
-			logging.Log(logging.DEBUG, "[DEBUG_TEST_INGRESS] Successfully decoded encrypted_filename: %d bytes -> %d bytes", len(encryptedFilename), len(decoded))
+			logging.InfoLogger.Printf("[DEBUG_TEST_INGRESS] Successfully decoded encrypted_filename: %d bytes -> %d bytes", len(encryptedFilename), len(decoded))
 		} else {
-			logging.Log(logging.DEBUG, "[DEBUG_TEST_INGRESS] ERROR decoding encrypted_filename: %v", err)
+			logging.InfoLogger.Printf("[DEBUG_TEST_INGRESS] ERROR decoding encrypted_filename: %v", err)
 		}
 	}
 

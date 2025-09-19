@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/84adam/Arkfile/logging"
 	"github.com/google/uuid"
 )
 
@@ -81,13 +82,6 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	var sizeBytes interface{} // Use interface{} to handle both int64 and float64
 	var uploadDateStr string  // Scan as string first to handle RQLite timestamp format
 
-	// Store metadata fields as []byte during scan to prevent double-encoding
-	var filenameNonceBytes []byte
-	var encryptedFilenameBytes []byte
-	var sha256sumNonceBytes []byte
-	var encryptedSha256sumBytes []byte
-	var encryptedFekBytes []byte
-
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
@@ -97,18 +91,18 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	).Scan(
 		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 		&file.PasswordHint, &file.PasswordType,
-		&filenameNonceBytes, &encryptedFilenameBytes, // Scan as []byte first
-		&sha256sumNonceBytes, &encryptedSha256sumBytes, // Scan as []byte first
-		&encryptedFileSha256sum, &encryptedFekBytes, // Scan as []byte first
+		&file.FilenameNonce, &file.EncryptedFilename, // Scan directly into string fields
+		&file.Sha256sumNonce, &file.EncryptedSha256sum, // Scan directly into string fields
+		&encryptedFileSha256sum, &file.EncryptedFEK, // Scan directly into string fields
 		&sizeBytes, &file.PaddedSize, &uploadDateStr,
 	)
 
-	// Convert []byte to string to prevent JSON marshaler from double-base64-encoding these fields
-	file.FilenameNonce = string(filenameNonceBytes)
-	file.EncryptedFilename = string(encryptedFilenameBytes)
-	file.Sha256sumNonce = string(sha256sumNonceBytes)
-	file.EncryptedSha256sum = string(encryptedSha256sumBytes)
-	file.EncryptedFEK = string(encryptedFekBytes)
+	// ENHANCED DEBUG: Log metadata as retrieved from database (EGRESS)
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] GetFileByFileID %s - Retrieved metadata from database:", fileID)
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   filename_nonce: '%s' (length: %d)", file.FilenameNonce, len(file.FilenameNonce))
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_filename: '%s' (length: %d)", file.EncryptedFilename, len(file.EncryptedFilename))
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   sha256sum_nonce: '%s' (length: %d)", file.Sha256sumNonce, len(file.Sha256sumNonce))
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_sha256sum: '%s' (length: %d)", file.EncryptedSha256sum, len(file.EncryptedSha256sum))
 
 	if err == sql.ErrNoRows {
 		return nil, errors.New("file not found")
@@ -164,13 +158,6 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	var sizeBytes interface{} // Use interface{} to handle both int64 and float64
 	var uploadDateStr string  // Scan as string first to handle RQLite timestamp format
 
-	// Store metadata fields as []byte during scan to prevent double-encoding
-	var filenameNonceBytes []byte
-	var encryptedFilenameBytes []byte
-	var sha256sumNonceBytes []byte
-	var encryptedSha256sumBytes []byte
-	var encryptedFekBytes []byte
-
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
@@ -180,18 +167,11 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	).Scan(
 		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 		&file.PasswordHint, &file.PasswordType,
-		&filenameNonceBytes, &encryptedFilenameBytes, // Scan as []byte first
-		&sha256sumNonceBytes, &encryptedSha256sumBytes, // Scan as []byte first
-		&encryptedFileSha256sum, &encryptedFekBytes, // Scan as []byte first
+		&file.FilenameNonce, &file.EncryptedFilename, // Scan directly into string fields
+		&file.Sha256sumNonce, &file.EncryptedSha256sum, // Scan directly into string fields
+		&encryptedFileSha256sum, &file.EncryptedFEK, // Scan directly into string fields
 		&sizeBytes, &file.PaddedSize, &uploadDateStr,
 	)
-
-	// Convert []byte to string to prevent JSON marshaler from double-base64-encoding these fields
-	file.FilenameNonce = string(filenameNonceBytes)
-	file.EncryptedFilename = string(encryptedFilenameBytes)
-	file.Sha256sumNonce = string(sha256sumNonceBytes)
-	file.EncryptedSha256sum = string(encryptedSha256sumBytes)
-	file.EncryptedFEK = string(encryptedFekBytes)
 
 	if err == sql.ErrNoRows {
 		return nil, errors.New("file not found")
@@ -242,6 +222,8 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 
 // GetFilesByOwner retrieves all files owned by a specific user
 func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] GetFilesByOwner called for user: %s", ownerUsername)
+
 	if db == nil {
 		return nil, errors.New("database connection is nil")
 	}
@@ -259,37 +241,33 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 	defer rows.Close()
 
 	var files []*File
+	fileCount := 0
 	for rows.Next() {
 		file := &File{}
 		var encryptedFileSha256sum string
 		var sizeBytes interface{}
 		var uploadDateStr string
 
-		// Store metadata fields as []byte during scan to prevent double-encoding
-		var filenameNonceBytes []byte
-		var encryptedFilenameBytes []byte
-		var sha256sumNonceBytes []byte
-		var encryptedSha256sumBytes []byte
-		var encryptedFekBytes []byte
-
 		err := rows.Scan(
 			&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 			&file.PasswordHint, &file.PasswordType,
-			&filenameNonceBytes, &encryptedFilenameBytes, // Scan as []byte first
-			&sha256sumNonceBytes, &encryptedSha256sumBytes, // Scan as []byte first
-			&encryptedFileSha256sum, &encryptedFekBytes, // Scan as []byte first
+			&file.FilenameNonce, &file.EncryptedFilename, // Scan directly into string fields
+			&file.Sha256sumNonce, &file.EncryptedSha256sum, // Scan directly into string fields
+			&encryptedFileSha256sum, &file.EncryptedFEK, // Scan directly into string fields
 			&sizeBytes, &file.PaddedSize, &uploadDateStr,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan row for user '%s': %w", ownerUsername, err)
 		}
 
-		// Convert []byte to string to prevent JSON marshaler from double-base64-encoding these fields
-		file.FilenameNonce = string(filenameNonceBytes)
-		file.EncryptedFilename = string(encryptedFilenameBytes)
-		file.Sha256sumNonce = string(sha256sumNonceBytes)
-		file.EncryptedSha256sum = string(encryptedSha256sumBytes)
-		file.EncryptedFEK = string(encryptedFekBytes)
+		fileCount++
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] File #%d - Retrieved from database:", fileCount)
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   file_id: %s", file.FileID)
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   filename_nonce: '%s' (length: %d)", file.FilenameNonce, len(file.FilenameNonce))
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_filename: '%s' (length: %d)", file.EncryptedFilename, len(file.EncryptedFilename))
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   sha256sum_nonce: '%s' (length: %d)", file.Sha256sumNonce, len(file.Sha256sumNonce))
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_sha256sum: '%s' (length: %d)", file.EncryptedSha256sum, len(file.EncryptedSha256sum))
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_fek: '%s' (length: %d)", file.EncryptedFEK, len(file.EncryptedFEK))
 
 		// Convert sizeBytes from interface{} to int64
 		switch v := sizeBytes.(type) {
@@ -324,6 +302,7 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 		return nil, fmt.Errorf("rows iteration error for user '%s': %w", ownerUsername, err)
 	}
 
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] GetFilesByOwner returning %d files for user %s", len(files), ownerUsername)
 	return files, nil
 }
 
@@ -382,6 +361,14 @@ type FileMetadataForClient struct {
 // ToClientMetadata converts a File to FileMetadataForClient for sending to the client.
 // All data is now stored as base64 strings directly, so we return them as-is.
 func (f *File) ToClientMetadata() *FileMetadataForClient {
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] ToClientMetadata called for file_id: %s", f.FileID)
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] INPUT from File struct:")
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   filename_nonce: '%s' (length: %d)", f.FilenameNonce, len(f.FilenameNonce))
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_filename: '%s' (length: %d)", f.EncryptedFilename, len(f.EncryptedFilename))
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   sha256sum_nonce: '%s' (length: %d)", f.Sha256sumNonce, len(f.Sha256sumNonce))
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_sha256sum: '%s' (length: %d)", f.EncryptedSha256sum, len(f.EncryptedSha256sum))
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_fek: '%s' (length: %d)", f.EncryptedFEK, len(f.EncryptedFEK))
+
 	clientFile := &FileMetadataForClient{
 		FileID:             f.FileID,
 		StorageID:          f.StorageID,
@@ -395,5 +382,13 @@ func (f *File) ToClientMetadata() *FileMetadataForClient {
 		SizeBytes:          f.SizeBytes,
 		UploadDate:         f.UploadDate,
 	}
+
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] OUTPUT to ClientMetadata:")
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   filename_nonce: '%s' (length: %d)", clientFile.FilenameNonce, len(clientFile.FilenameNonce))
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_filename: '%s' (length: %d)", clientFile.EncryptedFilename, len(clientFile.EncryptedFilename))
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   sha256sum_nonce: '%s' (length: %d)", clientFile.Sha256sumNonce, len(clientFile.Sha256sumNonce))
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_sha256sum: '%s' (length: %d)", clientFile.EncryptedSha256sum, len(clientFile.EncryptedSha256sum))
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_fek: '%s' (length: %d)", clientFile.EncryptedFEK, len(clientFile.EncryptedFEK))
+
 	return clientFile
 }

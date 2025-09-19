@@ -2,7 +2,6 @@ package logging
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -58,25 +57,11 @@ func InitLogging(config *LogConfig) error {
 	// Configure loggers
 	flags := log.Ldate | log.Ltime | log.LUTC
 
-	// Discard logs lower than the configured level
-	debugOutput := io.Discard
-	infoOutput := io.Discard
-	warningOutput := io.Discard
-
-	if config.LogLevel <= DEBUG {
-		debugOutput = file
-	}
-	if config.LogLevel <= INFO {
-		infoOutput = file
-	}
-	if config.LogLevel <= WARNING {
-		warningOutput = file
-	}
-
-	DebugLogger = log.New(debugOutput, "[DEBUG] ", flags)
-	InfoLogger = log.New(infoOutput, "[INFO] ", flags)
-	WarningLogger = log.New(warningOutput, "[WARNING] ", flags)
-	ErrorLogger = log.New(file, "[ERROR] ", flags) // Always log errors
+	// Configure loggers to write to the log file
+	DebugLogger = log.New(file, "[DEBUG] ", flags)
+	InfoLogger = log.New(file, "[INFO] ", flags)
+	WarningLogger = log.New(file, "[WARNING] ", flags)
+	ErrorLogger = log.New(file, "[ERROR] ", flags)
 
 	// Start log rotation goroutine
 	go monitorLogSize(config, logFile)
@@ -86,13 +71,13 @@ func InitLogging(config *LogConfig) error {
 
 // InitFallbackConsoleLogging initializes console-only loggers when file logging fails
 func InitFallbackConsoleLogging() {
-	// Configure loggers to write to stderr/stdout
+	// Configure loggers to write to stderr for systemd capture
 	flags := log.Ldate | log.Ltime | log.LUTC
 
-	DebugLogger = log.New(os.Stderr, "DEBUG: ", flags)
-	InfoLogger = log.New(os.Stdout, "INFO: ", flags)
-	WarningLogger = log.New(os.Stderr, "WARNING: ", flags)
-	ErrorLogger = log.New(os.Stderr, "ERROR: ", flags)
+	DebugLogger = log.New(os.Stderr, "[DEBUG] ", flags)
+	InfoLogger = log.New(os.Stderr, "[INFO] ", flags)
+	WarningLogger = log.New(os.Stderr, "[WARNING] ", flags)
+	ErrorLogger = log.New(os.Stderr, "[ERROR] ", flags)
 }
 
 func monitorLogSize(config *LogConfig, logFile string) {
@@ -123,45 +108,36 @@ func rotateLog(config *LogConfig, logFile string) {
 	InitLogging(config)
 }
 
-// Log formats and writes log messages with source file information
+// Log formats and writes log messages with source file information - NO LEVEL FILTERING
 func Log(level LogLevel, format string, v ...interface{}) {
-	// Check if the logger for this level is initialized and not writing to io.Discard
-	shouldLog := false
-	switch level {
-	case DEBUG:
-		if DebugLogger != nil && DebugLogger.Writer() != io.Discard {
-			shouldLog = true
-		}
-	case INFO:
-		if InfoLogger != nil && InfoLogger.Writer() != io.Discard {
-			shouldLog = true
-		}
-	case WARNING:
-		if WarningLogger != nil && WarningLogger.Writer() != io.Discard {
-			shouldLog = true
-		}
-	case ERROR:
-		if ErrorLogger != nil && ErrorLogger.Writer() != io.Discard {
-			shouldLog = true
-		}
-	}
-
-	// Only proceed if we are actually logging for this level
-	if !shouldLog {
-		return
-	}
-
-	_, file, line, _ := runtime.Caller(2) // Adjusted to get the correct caller
+	_, file, line, _ := runtime.Caller(2)
 	message := fmt.Sprintf("%s:%d: %s", filepath.Base(file), line, fmt.Sprintf(format, v...))
 
+	// ALWAYS output logs regardless of configured level - no more filtering!
 	switch level {
 	case DEBUG:
-		DebugLogger.Print(message)
+		if DebugLogger != nil {
+			DebugLogger.Print(message)
+		} else {
+			log.Printf("DEBUG: %s", message)
+		}
 	case INFO:
-		InfoLogger.Print(message)
+		if InfoLogger != nil {
+			InfoLogger.Print(message)
+		} else {
+			log.Printf("INFO: %s", message)
+		}
 	case WARNING:
-		WarningLogger.Print(message)
+		if WarningLogger != nil {
+			WarningLogger.Print(message)
+		} else {
+			log.Printf("WARNING: %s", message)
+		}
 	case ERROR:
-		ErrorLogger.Print(message)
+		if ErrorLogger != nil {
+			ErrorLogger.Print(message)
+		} else {
+			log.Printf("ERROR: %s", message)
+		}
 	}
 }

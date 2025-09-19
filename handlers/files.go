@@ -67,12 +67,15 @@ func GetFileMeta(c echo.Context) error {
 
 // ListFiles returns a list of files owned by the user with encrypted metadata
 func ListFiles(c echo.Context) error {
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] ListFiles handler called")
+
 	username := auth.GetUsernameFromToken(c)
 	if username == "" {
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] Failed to extract username from JWT token")
 		logging.Log(logging.ERROR, "ListFiles: Failed to extract username from JWT token")
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid authentication token")
 	}
-	logging.Log(logging.DEBUG, "ListFiles: Successfully extracted username: %s", username)
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] Successfully extracted username: %s", username)
 
 	// Step 2: Verify database connection
 	if database.DB == nil {
@@ -85,12 +88,13 @@ func ListFiles(c echo.Context) error {
 		logging.Log(logging.ERROR, "ListFiles: Database ping failed: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Database connection error")
 	}
-	logging.Log(logging.DEBUG, "ListFiles: Database connection verified successfully")
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] Database connection verified successfully")
 
 	// Step 3: Get files using the models function with encrypted metadata support
-	logging.Log(logging.DEBUG, "ListFiles: Calling GetFilesByOwner for username: %s", username)
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] About to call models.GetFilesByOwner for username: %s", username)
 	files, err := models.GetFilesByOwner(database.DB, username)
 	if err != nil {
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] GetFilesByOwner failed with error: %v", err)
 		logging.Log(logging.ERROR, "ListFiles: GetFilesByOwner failed for user '%s': %v", username, err)
 		// Log the specific SQL error details if available
 		if sqlErr, ok := err.(interface{ Error() string }); ok {
@@ -99,7 +103,7 @@ func ListFiles(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve files")
 	}
 
-	logging.Log(logging.DEBUG, "ListFiles: Successfully retrieved %d files for user: %s", len(files), username)
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] Successfully retrieved %d files from models.GetFilesByOwner for user: %s", len(files), username)
 
 	// Refactored to use ToClientMetadata for consistency and correctness with debug logging
 	type FileListResponseItem struct {
@@ -108,29 +112,35 @@ func ListFiles(c echo.Context) error {
 	}
 
 	var fileList []FileListResponseItem
-	for _, file := range files {
-		// DEBUG: Log raw metadata values from database
-		logging.Log(logging.DEBUG, "File %s - Raw values from DB:", file.FileID)
-		logging.Log(logging.DEBUG, "  filename_nonce: '%s' (length: %d)", file.FilenameNonce, len(file.FilenameNonce))
-		logging.Log(logging.DEBUG, "  encrypted_filename: '%s' (length: %d)", file.EncryptedFilename, len(file.EncryptedFilename))
-		logging.Log(logging.DEBUG, "  sha256sum_nonce: '%s' (length: %d)", file.Sha256sumNonce, len(file.Sha256sumNonce))
-		logging.Log(logging.DEBUG, "  encrypted_sha256sum: '%s' (length: %d)", file.EncryptedSha256sum, len(file.EncryptedSha256sum))
+	logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] Processing %d files for response", len(files))
 
+	for i, file := range files {
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] Processing file #%d: %s", i+1, file.FileID)
+
+		// DEBUG: Log raw metadata values from database
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] File %s - Raw values from File struct:", file.FileID)
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   filename_nonce: '%s' (length: %d)", file.FilenameNonce, len(file.FilenameNonce))
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_filename: '%s' (length: %d)", file.EncryptedFilename, len(file.EncryptedFilename))
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   sha256sum_nonce: '%s' (length: %d)", file.Sha256sumNonce, len(file.Sha256sumNonce))
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_sha256sum: '%s' (length: %d)", file.EncryptedSha256sum, len(file.EncryptedSha256sum))
+
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] About to call ToClientMetadata() for file: %s", file.FileID)
 		clientMeta := file.ToClientMetadata()
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] ToClientMetadata() returned for file: %s", file.FileID)
 
 		// DEBUG: Log values after ToClientMetadata conversion
-		logging.Log(logging.DEBUG, "File %s - After ToClientMetadata CONVERSION:", file.FileID)
-		logging.Log(logging.DEBUG, "  filename_nonce: '%s' (length: %d)", clientMeta.FilenameNonce, len(clientMeta.FilenameNonce))
-		logging.Log(logging.DEBUG, "  encrypted_filename: '%s' (length: %d)", clientMeta.EncryptedFilename, len(clientMeta.EncryptedFilename))
-		logging.Log(logging.DEBUG, "  sha256sum_nonce: '%s' (length: %d)", clientMeta.Sha256sumNonce, len(clientMeta.Sha256sumNonce))
-		logging.Log(logging.DEBUG, "  encrypted_sha256sum: '%s' (length: %d)", clientMeta.EncryptedSha256sum, len(clientMeta.EncryptedSha256sum))
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] File %s - After ToClientMetadata conversion:", file.FileID)
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   filename_nonce: '%s' (length: %d)", clientMeta.FilenameNonce, len(clientMeta.FilenameNonce))
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_filename: '%s' (length: %d)", clientMeta.EncryptedFilename, len(clientMeta.EncryptedFilename))
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   sha256sum_nonce: '%s' (length: %d)", clientMeta.Sha256sumNonce, len(clientMeta.Sha256sumNonce))
+		logging.InfoLogger.Printf("[INFO_METADATA_DEBUG]   encrypted_sha256sum: '%s' (length: %d)", clientMeta.EncryptedSha256sum, len(clientMeta.EncryptedSha256sum))
 
 		// TEST BASE64 DECODE FOR DOUBLE-ENCODING DETECTION
 		if len(clientMeta.FilenameNonce) > 0 {
 			if decoded, err := base64.StdEncoding.DecodeString(clientMeta.FilenameNonce); err == nil {
-				logging.Log(logging.DEBUG, "[DEBUG_TEST] Successfully decoded filename_nonce: %d bytes -> %d bytes", len(clientMeta.FilenameNonce), len(decoded))
+				logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] BASE64 decode test - filename_nonce: %d chars -> %d bytes", len(clientMeta.FilenameNonce), len(decoded))
 			} else {
-				logging.Log(logging.DEBUG, "[DEBUG_TEST] ERROR decoding filename_nonce: %v", err)
+				logging.InfoLogger.Printf("[INFO_METADATA_DEBUG] BASE64 decode test - filename_nonce FAILED: %v", err)
 			}
 		}
 
