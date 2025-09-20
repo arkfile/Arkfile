@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,7 +33,7 @@ var (
 
 // CreateUploadSession initializes a new chunked upload
 func CreateUploadSession(c echo.Context) error {
-	logging.InfoLogger.Printf("CREATE_UPLOAD_SESSION_HANDLER_START: func called")
+	log.Printf("CREATE_UPLOAD_SESSION_HANDLER_START: func called")
 	username := auth.GetUsernameFromToken(c)
 
 	var request struct {
