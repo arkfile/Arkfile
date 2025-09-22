@@ -136,7 +136,7 @@ export class RegistrationManager {
       setTokens(data.token, data.refresh_token);
 
       // Create secure session in WASM (NEVER store session key in JavaScript)
-      const sessionResult = await wasmManager.createSecureSession(data.session_key, username);
+      const sessionResult = await wasmManager.createSecureSessionFromKey(data.session_key, username);
       if (!sessionResult.success) {
         hideProgress();
         showError('Failed to create secure session: ' + sessionResult.error);

@@ -74,22 +74,15 @@ func main() {
 	log.Printf("Configuration loaded successfully")
 	_ = cfg // Use the config variable to prevent unused variable warning
 
-	// Initialize logging with error handling
-	logLevel := logging.INFO // Default
-	if strings.ToLower(cfg.Server.LogLevel) == "debug" {
-		logLevel = logging.DEBUG
-	}
+	// Initialize console-only logging for systemd compatibility
+	// This ensures all logs go to stderr and are captured by systemd/journalctl
+	log.Printf("Initializing console-only logging for systemd compatibility")
+	logging.InitFallbackConsoleLogging()
 
-	loggingConfig := &logging.LogConfig{
-		LogDir:     cfg.Deployment.LogDirectory,
-		MaxSize:    cfg.Logging.MaxSize,
-		MaxBackups: cfg.Logging.MaxBackups,
-		LogLevel:   logLevel,
-	}
-	if err := logging.InitLogging(loggingConfig); err != nil {
-		log.Printf("Warning: Failed to initialize file logging, using console only: %v", err)
-		// Initialize fallback console loggers to prevent nil pointer panics
-		logging.InitFallbackConsoleLogging()
+	// Set debug logging if configured
+	if strings.ToLower(cfg.Server.LogLevel) == "debug" {
+		log.Printf("Debug logging enabled - all debug messages will be visible in journalctl")
+		// The logging package will handle debug level filtering
 	}
 
 	// Initialize database

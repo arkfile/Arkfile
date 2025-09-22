@@ -73,7 +73,7 @@ func RegisterRoutes() {
 	totpProtectedGroup.GET("/api/files", ListFiles)
 	totpProtectedGroup.POST("/api/upload", UploadFile)
 	totpProtectedGroup.GET("/api/files/:fileId/meta", GetFileMeta)
-	totpProtectedGroup.GET("/api/files/:fileId/chunks/:chunkNumber", DownloadFileChunk)
+	totpProtectedGroup.GET("/api/files/:fileId", DownloadFile)
 	totpProtectedGroup.DELETE("/api/files/:fileId", DeleteFile)
 
 	// Chunked uploads - require TOTP

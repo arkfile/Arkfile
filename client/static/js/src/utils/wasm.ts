@@ -88,18 +88,8 @@ export class WASMManager {
     }
   }
 
-  public async createSecureSession(opaqueExport: string, userEmail: string): Promise<SecureSessionResult> {
-    await this.ensureReady();
-    try {
-      return createSecureSessionFromOpaqueExport(opaqueExport, userEmail);
-    } catch (error) {
-      console.error('WASM secure session creation error:', error);
-      return {
-        success: false,
-        error: `Secure session creation failed: ${error}`
-      };
-    }
-  }
+  // Removed deprecated OPAQUE export-based methods
+  // Now using HTTP-based OPAQUE authentication methods below
 
   public async validateSecureSession(userEmail: string): Promise<SessionValidationResult> {
     await this.ensureReady();
@@ -110,19 +100,6 @@ export class WASMManager {
       return {
         valid: false,
         error: `Session validation failed: ${error}`
-      };
-    }
-  }
-
-  public async clearSecureSession(userEmail: string): Promise<SecureSessionResult> {
-    await this.ensureReady();
-    try {
-      return clearSecureSession(userEmail);
-    } catch (error) {
-      console.error('WASM session clearing error:', error);
-      return {
-        success: false,
-        error: `Session clearing failed: ${error}`
       };
     }
   }
@@ -232,6 +209,46 @@ export class WASMManager {
         wasmReady: false,
         timestamp: Date.now(),
         opaqueReady: false
+      };
+    }
+  }
+
+  // HTTP-based OPAQUE authentication methods
+  public async performOpaqueLogin(username: string, password: string): Promise<{ success: boolean; promise?: Promise<Response>; error?: string; message?: string }> {
+    await this.ensureReady();
+    try {
+      return performOpaqueLogin(username, password);
+    } catch (error) {
+      console.error('WASM OPAQUE login error:', error);
+      return {
+        success: false,
+        error: `OPAQUE login failed: ${error}`
+      };
+    }
+  }
+
+  public async createSecureSessionFromKey(sessionKey: string, username: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    await this.ensureReady();
+    try {
+      return createSecureSession(sessionKey, username);
+    } catch (error) {
+      console.error('WASM secure session creation error:', error);
+      return {
+        success: false,
+        error: `Secure session creation failed: ${error}`
+      };
+    }
+  }
+
+  public async clearSecureSessionForUser(username: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    await this.ensureReady();
+    try {
+      return clearSecureSession(username);
+    } catch (error) {
+      console.error('WASM secure session clearing error:', error);
+      return {
+        success: false,
+        error: `Secure session clearing failed: ${error}`
       };
     }
   }

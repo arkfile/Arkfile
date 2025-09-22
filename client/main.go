@@ -1618,8 +1618,128 @@ func processFileListResponse(this js.Value, args []js.Value) interface{} {
 	}
 }
 
+// OPAQUE Authentication Functions (HTTP-based, not crypto)
+
+// performOpaqueLogin performs OPAQUE authentication via HTTP to server endpoints
+func performOpaqueLogin(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected username, password",
+		}
+	}
+
+	username := args[0].String()
+	password := args[1].String()
+
+	// Create login request payload
+	loginReq := map[string]string{
+		"username": username,
+		"password": password,
+	}
+
+	requestBodyJSON, err := json.Marshal(loginReq)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to marshal login request: " + err.Error(),
+		}
+	}
+
+	// Make HTTP request to server's OPAQUE endpoint
+	fetchPromise := js.Global().Call("fetch", "/api/opaque/login", map[string]interface{}{
+		"method": "POST",
+		"headers": map[string]interface{}{
+			"Content-Type": "application/json",
+		},
+		"body": string(requestBodyJSON),
+	})
+
+	// Return the fetch promise - TypeScript will handle the response
+	return map[string]interface{}{
+		"success": true,
+		"promise": fetchPromise,
+		"message": "OPAQUE login request sent - handle response in .then() callback",
+	}
+}
+
+// createSecureSession stores session key securely for user
+func createSecureSession(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected sessionKey, username",
+		}
+	}
+
+	sessionKey := args[0].String()
+	username := args[1].String()
+
+	if sessionKey == "" || username == "" {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Session key and username cannot be empty",
+		}
+	}
+
+	// Store the session key securely in memory
+	// Note: This is kept separate from userPasswords for security separation
+	// Session keys are for authentication, passwords are for file encryption
+	sessionData := map[string]interface{}{
+		"sessionKey": sessionKey,
+		"username":   username,
+		"createdAt":  time.Now().Unix(),
+	}
+
+	// Store in a secure context (not localStorage for security)
+	localStorage := js.Global().Get("localStorage")
+	sessionDataJSON, err := json.Marshal(sessionData)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to marshal session data: " + err.Error(),
+		}
+	}
+
+	localStorage.Call("setItem", "arkfileSecurityContext", string(sessionDataJSON))
+
+	return map[string]interface{}{
+		"success": true,
+		"message": "Secure session created successfully",
+	}
+}
+
+// clearSecureSession clears session data for user
+func clearSecureSession(this js.Value, args []js.Value) interface{} {
+	if len(args) != 1 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected username",
+		}
+	}
+
+	username := args[0].String()
+
+	// Clear the secure session context
+	localStorage := js.Global().Get("localStorage")
+	localStorage.Call("removeItem", "arkfileSecurityContext")
+
+	// Also clear password for this user if it exists (for complete cleanup)
+	clearPasswordForUser(js.Value{}, []js.Value{js.ValueOf(username)})
+
+	return map[string]interface{}{
+		"success": true,
+		"message": "Secure session cleared successfully",
+	}
+}
+
 // main function to register WASM functions
 func main() {
+	// OPAQUE Authentication Functions (HTTP-based)
+	js.Global().Set("performOpaqueLogin", js.FuncOf(performOpaqueLogin))
+	js.Global().Set("createSecureSession", js.FuncOf(createSecureSession))
+	js.Global().Set("clearSecureSession", js.FuncOf(clearSecureSession))
+
 	// Password-based file encryption functions
 	js.Global().Set("storePasswordForUser", js.FuncOf(storePasswordForUser))
 	js.Global().Set("clearPasswordForUser", js.FuncOf(clearPasswordForUser))

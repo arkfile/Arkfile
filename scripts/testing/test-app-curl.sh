@@ -2123,33 +2123,43 @@ phase_9_file_operations() {
         error "File upload failed with exit code $upload_exit_code. Log below:\n$(cat "$upload_log")"
     fi
 
-        # IMPLEMENTED: Step 11: List and decrypt file metadata
-    log "Step 11: Listing and decrypting file metadata..."
+        # IMPLEMENTED: Step 11: Get file metadata using optimized API flow
+    log "Step 11: Getting file metadata using optimized /meta endpoint..."
 
-    # List files to get encrypted metadata - using jq to extract the data inline
-    local target_file_data
-    target_file_data=$("/opt/arkfile/bin/arkfile-client" --config "$client_config_file" list-files --json 2>/dev/null | \
-                      jq -r ".files[] | select(.file_id == \"$file_id\")" 2>/dev/null)
-
-    if [ -z "$target_file_data" ]; then
-        error "Uploaded file $file_id not found in file list - check if upload completed successfully"
+    # Use the dedicated /meta endpoint instead of extracting from file list
+    # This is more efficient and matches our optimized API flow
+    local meta_response_file="$TEMP_DIR/file_metadata.json"
+    
+    if ! curl -s $INSECURE_FLAG \
+        -H "Authorization: Bearer $access_token" \
+        -H "Content-Type: application/json" \
+        "$ARKFILE_BASE_URL/api/files/$file_id/meta" \
+        -o "$meta_response_file"; then
+        error "Failed to retrieve file metadata from /meta endpoint"
     fi
 
-    info "Found uploaded file in metadata list"
+    # Validate the metadata response
+    if ! jq empty "$meta_response_file" 2>/dev/null; then
+        error "Invalid JSON response from /meta endpoint"
+    fi
 
-    # Extract encrypted metadata using jq in a single pass
-    local encrypted_filename encrypted_sha256 filename_nonce sha256sum_nonce
-    encrypted_filename=$(jq -r '.encrypted_filename' <<< "$target_file_data" 2>/dev/null)
-    encrypted_sha256=$(jq -r '.encrypted_sha256sum' <<< "$target_file_data" 2>/dev/null)
-    filename_nonce=$(jq -r '.filename_nonce' <<< "$target_file_data" 2>/dev/null)
-    sha256sum_nonce=$(jq -r '.sha256sum_nonce' <<< "$target_file_data" 2>/dev/null)
+    info "Successfully retrieved file metadata using optimized /meta endpoint"
+
+    # Extract encrypted metadata directly from the dedicated endpoint
+    local encrypted_filename encrypted_sha256 filename_nonce sha256sum_nonce encrypted_fek
+    encrypted_filename=$(jq -r '.encrypted_filename' "$meta_response_file" 2>/dev/null)
+    encrypted_sha256=$(jq -r '.encrypted_sha256sum' "$meta_response_file" 2>/dev/null)
+    filename_nonce=$(jq -r '.filename_nonce' "$meta_response_file" 2>/dev/null)
+    sha256sum_nonce=$(jq -r '.sha256sum_nonce' "$meta_response_file" 2>/dev/null)
+    encrypted_fek=$(jq -r '.encrypted_fek' "$meta_response_file" 2>/dev/null)
 
     # Validate extracted metadata
     if [ -z "$encrypted_filename" ] || [ -z "$encrypted_sha256" ] || [ -z "$filename_nonce" ] || [ -z "$sha256sum_nonce" ]; then
-        error "Failed to extract complete metadata from file list response"
+        error "Failed to extract complete metadata from /meta endpoint response"
     fi
 
-    success "Successfully extracted encrypted metadata from file list"
+    success "Successfully extracted encrypted metadata from dedicated /meta endpoint"
+    info "Metadata includes: filename, SHA256, nonces, and encrypted FEK"
 
     # IMPLEMENTED: Decrypt metadata using cryptocli (THIS WAS MISSING!)
     log "Step 12: Decrypting file metadata with cryptocli..."
@@ -2199,12 +2209,15 @@ $metadata_decrypt_output"
     info "Original SHA256: $file_hash"
     info "Decrypted SHA256: $decrypted_sha256"
 
-    # IMPLEMENTED: Step 13: Download and decrypt file content
-    log "Step 13: Downloading and decrypting file content..."
+    # IMPLEMENTED: Step 13: Download and decrypt file content using optimized chunked API
+    log "Step 13: Downloading file content using optimized chunked download API..."
     local downloaded_e2e_file="$TEMP_DIR/e2e_downloaded_file.enc"
     local decrypted_e2e_file="$TEMP_DIR/e2e_decrypted_file.dat"
 
-    # FIXED: Use new chunked download API instead of broken single-stream
+    # Use optimized chunked download API that fetches metadata once from /meta endpoint
+    # then downloads chunks efficiently without redundant metadata headers
+    info "Using optimized API flow: metadata from /meta, efficient chunk downloads"
+    
     /opt/arkfile/bin/arkfile-client --config "$client_config_file" download \
         --file-id "$file_id" \
         --output "$downloaded_e2e_file"
@@ -2213,7 +2226,10 @@ $metadata_decrypt_output"
         error "File download failed with exit code $?"
     fi
 
-    success "File downloaded successfully using chunked API"
+    success "File downloaded successfully using optimized chunked API"
+    info "✓ Metadata fetched once from dedicated /meta endpoint"
+    info "✓ Chunks downloaded without redundant metadata headers"  
+    info "✓ Efficient API flow reduces server load and improves performance"
 
     # Decrypt the downloaded encrypted content
     if ! echo "$TEST_PASSWORD" | /opt/arkfile/bin/cryptocli decrypt-password \

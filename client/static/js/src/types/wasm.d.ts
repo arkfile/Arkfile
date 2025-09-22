@@ -150,6 +150,24 @@ declare global {
   // OPAQUE health check
   function opaqueHealthCheck(): { wasmReady: boolean; timestamp: number; opaqueReady: boolean };
 
+  // HTTP-based OPAQUE authentication functions
+  function performOpaqueLogin(username: string, password: string): { 
+    success: boolean; 
+    promise?: Promise<Response>; 
+    error?: string; 
+    message?: string 
+  };
+  function createSecureSession(sessionKey: string, username: string): { 
+    success: boolean; 
+    message?: string; 
+    error?: string 
+  };
+  function clearSecureSession(username: string): { 
+    success: boolean; 
+    message?: string; 
+    error?: string 
+  };
+
   // Phase 6B: Anonymous Share System WASM Functions
   function generateSecureShareSaltWASM(): { success: boolean; salt?: Uint8Array; error?: string };
   function deriveShareKeyFromPasswordWASM(password: string, salt: Uint8Array): { success: boolean; shareKey?: Uint8Array; error?: string };

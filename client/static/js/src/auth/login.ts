@@ -35,48 +35,51 @@ export class LoginManager {
       // Ensure WASM is ready
       await wasmManager.ensureReady();
 
-      // Check OPAQUE health first
-      const healthCheck = await wasmManager.checkOpaqueHealth();
-      if (!healthCheck.wasmReady) {
-        showError('Authentication system not ready. Please try again in a few moments.');
-        return;
-      }
-
       showProgressMessage('Authenticating...');
 
-      // Direct call to server OPAQUE endpoint
-      const response = await fetch('/api/opaque/login', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          username: credentials.username,
-          password: credentials.password
-        }),
-      });
-
-      if (response.ok) {
-        const data: LoginResponse = await response.json();
-        
-        // Handle TOTP if required
-        if (data.requires_totp) {
+      // FIXED: Use Go/WASM HTTP request to OPAQUE endpoint
+      const result = await wasmManager.performOpaqueLogin(credentials.username, credentials.password);
+      
+      if (result.success && result.promise) {
+        try {
+          const response = await result.promise;
+          
+          if (!response.ok) {
+            const errorText = await response.text();
+            hideProgress();
+            showError(`Login failed: ${errorText}`);
+            return;
+          }
+          
+          const loginData = await response.json();
+          
+          // Handle TOTP if required
+          if (loginData.requires_totp) {
+            hideProgress();
+            handleTOTPFlow({
+              tempToken: loginData.temp_token!,
+              sessionKey: loginData.session_key,
+              username: credentials.username
+            });
+            return;
+          }
+          
+          // Complete authentication with tokens from OPAQUE
+          await this.completeLogin({
+            token: loginData.token,
+            refresh_token: loginData.refresh_token,
+            session_key: loginData.session_key,
+            auth_method: 'OPAQUE'
+          }, credentials.username);
+          
+        } catch (error) {
           hideProgress();
-          handleTOTPFlow({
-            tempToken: data.temp_token!,
-            sessionKey: data.session_key,
-            username: credentials.username
-          });
-          return;
+          console.error('OPAQUE login error:', error);
+          showError('Authentication failed - server error');
         }
-        
-        // Complete authentication
-        await this.completeLogin(data, credentials.username);
-        
       } else {
         hideProgress();
-        const errorData = await response.json().catch(() => ({}));
-        showError(errorData.message || 'Login failed');
+        showError(result.error || 'Login failed');
       }
     } catch (error) {
       hideProgress();
@@ -91,7 +94,7 @@ export class LoginManager {
       setTokens(data.token, data.refresh_token);
 
       // Create secure session in WASM (NEVER store session key in JavaScript)
-      const sessionResult = await wasmManager.createSecureSession(data.session_key, username);
+      const sessionResult = await wasmManager.createSecureSessionFromKey(data.session_key, username);
       if (!sessionResult.success) {
         hideProgress();
         showError('Failed to create secure session: ' + sessionResult.error);
@@ -119,7 +122,7 @@ export class LoginManager {
       
       // Clear secure session from WASM memory
       if (username) {
-        await wasmManager.clearSecureSession(username);
+        await wasmManager.clearSecureSessionForUser(username);
       }
       
       // Use auth manager to handle token cleanup and API call
@@ -141,7 +144,7 @@ export class LoginManager {
       const username = getUsernameFromToken();
       if (username) {
         try {
-          await wasmManager.clearSecureSession(username);
+          await wasmManager.clearSecureSessionForUser(username);
         } catch (e) {
           console.warn('Failed to clear secure session on logout error:', e);
         }

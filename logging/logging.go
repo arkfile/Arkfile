@@ -69,15 +69,19 @@ func InitLogging(config *LogConfig) error {
 	return nil
 }
 
-// InitFallbackConsoleLogging initializes console-only loggers when file logging fails
+// InitFallbackConsoleLogging initializes console-only loggers for systemd compatibility
 func InitFallbackConsoleLogging() {
 	// Configure loggers to write to stderr for systemd capture
-	flags := log.Ldate | log.Ltime | log.LUTC
+	// Enhanced flags for better visibility in systemd logs
+	flags := log.Ldate | log.Ltime | log.LUTC | log.Lshortfile
 
 	DebugLogger = log.New(os.Stderr, "[DEBUG] ", flags)
 	InfoLogger = log.New(os.Stderr, "[INFO] ", flags)
 	WarningLogger = log.New(os.Stderr, "[WARNING] ", flags)
 	ErrorLogger = log.New(os.Stderr, "[ERROR] ", flags)
+
+	// Notify that console logging is active
+	log.Printf("[LOGGING] Console-only logging initialized - all logs will go to systemd/journalctl")
 }
 
 func monitorLogSize(config *LogConfig, logFile string) {
