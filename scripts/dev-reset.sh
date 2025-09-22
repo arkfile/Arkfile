@@ -240,8 +240,8 @@ echo "==========================="
 
 print_status "INFO" "Building application in current directory..."
 
-# Step 3.1: Pre-build Go module resolution
-echo -e "${YELLOW}Step 3.1: Resolving Go dependencies${NC}"
+# Resolving Go dependencies
+print_status "INFO" "Resolving Go dependencies..."
 print_status "INFO" "Ensuring Go dependencies are properly resolved with correct permissions..."
 
 # Fix any existing ownership issues first
@@ -297,8 +297,7 @@ fi
 export VERSION="$FALLBACK_VERSION"
 export SKIP_C_LIBS="$SKIP_C_LIBS"
 
-# Step 3.2: Clean build artifacts to prevent directory conflicts
-echo -e "${YELLOW}Step 3.2: Cleaning build artifacts${NC}"
+# Clean build artifacts to prevent directory conflicts
 print_status "INFO" "Removing any existing build artifacts to ensure clean build..."
 if [ -d "build" ]; then
     print_status "INFO" "Removing existing build directory..."
@@ -325,8 +324,13 @@ print_status "INFO" "Verifying critical files are in place..."
 
 # Ensure WASM binary is available in working directory
 if [ ! -f "$ARKFILE_DIR/client/main.wasm" ]; then
-    print_status "ERROR" "WASM binary missing from working directory. The build likely failed."
-    # The build script should place this file here directly, so a fallback is no longer appropriate.
+    print_status "ERROR" "WASM binary missing from working directory."
+    echo "    Expected location: $ARKFILE_DIR/client/main.wasm"
+    if [ -f "build/client/main.wasm" ]; then
+        echo "    Found in build directory: build/client/main.wasm"
+        echo "    The build script should have deployed this automatically."
+    fi
+    print_status "ERROR" "The build likely failed or deployment step was skipped."
     exit 1
 else
     print_status "SUCCESS" "WASM binary verified in working directory"
@@ -344,9 +348,9 @@ fi
 print_status "SUCCESS" "Critical file verification complete"
 echo
 
-# Step 3.5: Update systemd service file
-echo -e "${CYAN}Step 3.5: Updating systemd service file${NC}"
-echo "========================================"
+# Step 4: Update systemd service file and ensure directory structure
+echo -e "${CYAN}Step 4: Updating systemd service file${NC}"
+echo "======================================"
 
 print_status "INFO" "Checking systemd service file consistency..."
 
@@ -394,10 +398,8 @@ if [ "$daemon_reload_needed" = true ]; then
 fi
 
 print_status "SUCCESS" "Systemd service file verification complete"
-echo
 
-# Step 4: Ensure directory structure exists
-echo -e "${CYAN}Step 4: Ensuring directory structure${NC}"
+echo -e "${CYAN}Step 5: Ensuring directory structure${NC}"
 echo "======================================"
 
 # Ensure all directories exist before trying to write files
@@ -420,8 +422,8 @@ chmod 775 "$ARKFILE_DIR/var/log"
 print_status "SUCCESS" "Log directory configured at $ARKFILE_DIR/var/log"
 echo
 
-# Step 5: Generate fresh secrets
-echo -e "${CYAN}Step 5: Generating fresh secrets${NC}"
+# Step 6: Generate fresh secrets
+echo -e "${CYAN}Step 6: Generating fresh secrets${NC}"
 echo "================================="
 
 # Generate random JWT secret for security
@@ -496,8 +498,8 @@ print_status "SUCCESS" "Fresh rqlite authentication created"
 print_status "SUCCESS" "Secret generation complete"
 echo
 
-# Step 6: Generate cryptographic keys
-echo -e "${CYAN}Step 6: Generate cryptographic keys${NC}"
+# Step 7: Generate cryptographic keys
+echo -e "${CYAN}Step 7: Generate cryptographic keys${NC}"
 echo "====================================="
 
 # Generate OPAQUE server keys
@@ -535,8 +537,8 @@ print_status "SUCCESS" "TLS certificates generated"
 print_status "SUCCESS" "Cryptographic key generation complete"
 echo
 
-# Step 7: Setup MinIO and rqlite
-echo -e "${CYAN}Step 7: Setting up MinIO and rqlite${NC}"
+# Step 8: Setup MinIO and rqlite
+echo -e "${CYAN}Step 8: Setting up MinIO and rqlite${NC}"
 echo "==================================="
 
 # Setup MinIO directories and service
@@ -556,8 +558,8 @@ fi
 print_status "SUCCESS" "rqlite setup complete"
 echo
 
-# Step 8: Start services
-echo -e "${CYAN}Step 8: Starting services${NC}"
+# Step 9: Start services
+echo -e "${CYAN}Step 9: Starting services${NC}"
 echo "========================="
 
 # Install/update systemd service file
@@ -625,9 +627,9 @@ else
 fi
 echo
 
-# Step 9: Health verification
-echo -e "${CYAN}Step 9: Health verification${NC}"
-echo "==========================="
+# Step 10: Health verification
+echo -e "${CYAN}Step 10: Health verification${NC}"
+echo "============================"
 
 # Wait for Arkfile to be ready
 print_status "INFO" "Waiting for Arkfile to start and be ready..."

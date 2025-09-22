@@ -400,6 +400,8 @@ echo -e "${GREEN}✅ TypeScript frontend built successfully${NC}"
 
 # Build WebAssembly
 echo "Building WebAssembly..."
+# Ensure WASM build directory exists with proper permissions
+mkdir -p ${BUILD_DIR}/${WASM_BUILD_DIR}
 GOOS=js GOARCH=wasm "$GO_BINARY" build -o ${BUILD_DIR}/${WASM_BUILD_DIR}/main.wasm ./${WASM_SOURCE_DIR}/main.go
 
 # Find wasm_exec.js using Go's environment
@@ -524,8 +526,14 @@ mv "${BUILD_DIR}/cryptocli" "${BUILD_DIR}/bin/"
 mv "${BUILD_DIR}/arkfile-client" "${BUILD_DIR}/bin/"
 mv "${BUILD_DIR}/arkfile-admin" "${BUILD_DIR}/bin/"
 
-# Client files (WASM is already in its own subdir)
+# Client files and WASM deployment
 mv "${BUILD_DIR}/static" "${BUILD_DIR}/client/"
+
+# Deploy WASM files to client root for deployment
+mv "${BUILD_DIR}/${WASM_BUILD_DIR}/main.wasm" "${BUILD_DIR}/client/"
+mv "${BUILD_DIR}/${WASM_BUILD_DIR}/wasm_exec.js" "${BUILD_DIR}/client/"
+
+# Keep wasm-build directory for reference but it's no longer needed for deployment
 mv "${BUILD_DIR}/${WASM_BUILD_DIR}" "${BUILD_DIR}/client/"
 
 # Database files
@@ -545,6 +553,19 @@ sudo cp "${BUILD_DIR}/systemd/"* "${BASE_DIR}/systemd/"
 echo "Deploying database schema to ${BASE_DIR}/database/..."
 sudo mkdir -p "${BASE_DIR}/database"
 sudo cp "${BUILD_DIR}/database/"* "${BASE_DIR}/database/"
+
+# Deploy WASM files to production location for dev-reset verification
+echo "Deploying WASM files to ${BASE_DIR}/client/..."
+sudo mkdir -p "${BASE_DIR}/client"
+sudo cp "${BUILD_DIR}/client/main.wasm" "${BASE_DIR}/client/"
+sudo cp "${BUILD_DIR}/client/wasm_exec.js" "${BASE_DIR}/client/"
+
+# Deploy binaries to production location for key setup scripts
+echo "Deploying binaries to ${BASE_DIR}/bin/..."
+sudo mkdir -p "${BASE_DIR}/bin"
+sudo cp "${BUILD_DIR}/bin/"* "${BASE_DIR}/bin/"
+sudo chown root:root "${BASE_DIR}/bin/"*
+sudo chmod 755 "${BASE_DIR}/bin/"*
 
 echo -e "${GREEN}Build complete!${NC}"
 echo "Build artifacts are ready in the '${BUILD_DIR}' directory."
