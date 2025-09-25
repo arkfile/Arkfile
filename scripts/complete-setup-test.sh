@@ -324,7 +324,7 @@ if [ "$FULL_SETUP" = true ]; then
         
         # Setup rqlite
         echo -e "${YELLOW}Setting up rqlite database cluster...${NC}"
-        sudo -E ./scripts/setup/08-setup-rqlite.sh
+        sudo -E ./scripts/setup/08-setup-rqlite-build.sh
         
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}✅ rqlite setup completed${NC}"

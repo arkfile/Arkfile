@@ -324,7 +324,7 @@ echo "• Start all services"
 echo "• Give you the web interface URL"
 echo
 echo -e "${BLUE}OR, for manual setup:${NC}"
-echo "1. Set up services: sudo ./scripts/setup/07-setup-minio.sh && sudo ./scripts/setup/08-setup-rqlite.sh"
+echo "1. Set up services: sudo ./scripts/setup/07-setup-minio.sh && sudo ./scripts/setup/08-setup-rqlite-build.sh"
 echo "2. Start services: sudo systemctl start arkfile"
 echo "3. Visit: http://localhost:8080"
 echo

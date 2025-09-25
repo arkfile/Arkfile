@@ -551,7 +551,7 @@ print_status "SUCCESS" "MinIO setup complete"
 
 # Setup rqlite service
 print_status "INFO" "Setting up rqlite..."
-if ! ./scripts/setup/08-setup-rqlite.sh; then
+if ! ./scripts/setup/08-setup-rqlite-build.sh; then
     print_status "ERROR" "rqlite setup failed - this is CRITICAL"
     exit 1
 fi

@@ -177,7 +177,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-sudo ./scripts/setup/08-setup-rqlite.sh
+sudo ./scripts/setup/08-setup-rqlite-build.sh
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ rqlite setup failed${NC}"
     exit 1
