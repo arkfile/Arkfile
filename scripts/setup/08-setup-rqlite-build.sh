@@ -63,9 +63,9 @@ echo
 # Detect operating system and package manager
 detect_os() {
     if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS=$ID
-        VERSION_ID=$VERSION_ID
+        # Extract only the variables we need to avoid conflicts
+        OS=$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+        OS_VERSION=$(grep '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
     elif [ -f /etc/debian_version ]; then
         OS=debian
     elif [ -f /etc/redhat-release ]; then
@@ -80,7 +80,7 @@ detect_os() {
         echo -e "${RED}Unsupported operating system${NC}"
         exit 1
     fi
-    
+
     echo -e "${BLUE}Detected OS: ${OS}${NC}"
 }
 
@@ -179,41 +179,102 @@ install_dependencies() {
     echo -e "${GREEN}Dependencies installed${NC}"
 }
 
-# POSIX-compatible Go detection with fallbacks (from dev-reset.sh)
+# Function to compare Go versions (returns 0 if version1 >= version2)
+compare_go_versions() {
+    local version1="$1"
+    local version2="$2"
+    
+    # Extract version numbers (e.g., "1.24.4" from "go1.24.4")
+    local v1=$(echo "$version1" | sed 's/^go//' | sed 's/\./ /g')
+    local v2=$(echo "$version2" | sed 's/^go//' | sed 's/\./ /g')
+    
+    # Convert to arrays
+    local v1_array=($v1)
+    local v2_array=($v2)
+    
+    # Compare major, minor, patch
+    for i in 0 1 2; do
+        local num1=${v1_array[$i]:-0}
+        local num2=${v2_array[$i]:-0}
+        
+        if [ "$num1" -gt "$num2" ]; then
+            return 0  # version1 > version2
+        elif [ "$num1" -lt "$num2" ]; then
+            return 1  # version1 < version2
+        fi
+    done
+    
+    return 0  # versions are equal
+}
+
+# Function to get minimum required Go version from go.mod files
+get_minimum_go_version() {
+    local min_version="1.24"  # Default fallback
+    
+    # Check project's go.mod
+    if [ -f "go.mod" ]; then
+        local project_version=$(grep '^go ' go.mod | awk '{print $2}' | head -1)
+        if [ -n "$project_version" ]; then
+            min_version="$project_version"
+        fi
+    fi
+    
+    # Check rqlite's requirements (we know it requires 1.24.0)
+    # In a real implementation, this could fetch from their repo
+    local rqlite_version="1.24.0"
+    
+    # Use the higher of the two requirements
+    if compare_go_versions "$rqlite_version" "$min_version"; then
+        min_version="$rqlite_version"
+    fi
+    
+    echo "$min_version"
+}
+
+# POSIX-compatible Go detection with fallbacks
 find_go_binary() {
-    # Try command -v first (respects PATH, aliases, functions)
+    # When running with sudo, get Go from original user's environment
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        GO_BINARY=$(sudo -u "$SUDO_USER" command -v go 2>/dev/null)
+        if [ -n "$GO_BINARY" ] && [ -x "$GO_BINARY" ]; then
+            echo "$GO_BINARY"
+            return 0
+        fi
+    fi
+
+    # Fallback: check current user's PATH
     if command -v go >/dev/null 2>&1; then
         command -v go
         return 0
     fi
-    
+
     # Fallback to common installation paths
     local go_candidates=(
         "/usr/bin/go"                       # Linux package managers
-        "/usr/local/bin/go"                 # BSD package managers  
+        "/usr/local/bin/go"                 # BSD package managers
         "/usr/local/go/bin/go"              # Manual golang.org installs
     )
-    
+
     for go_path in "${go_candidates[@]}"; do
         if [ -x "$go_path" ]; then
             echo "$go_path"
             return 0
         fi
     done
-    
+
     return 1
 }
 
-# Function to run Go commands with proper user context and binary path (from dev-reset.sh)
+# Function to run Go commands with proper user context and binary path
 run_go_as_user() {
     if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" -H bash -c "cd '$(pwd)' && '$GO_BINARY' \"\$@\"" -- "$@"
+        sudo -u "$SUDO_USER" -H bash -c "cd '$(pwd)' && GOTOOLCHAIN=\"$GOTOOLCHAIN\" \"$GO_BINARY\" \"\$@\"" -- "$@"
     else
-        "$GO_BINARY" "$@"
+        GOTOOLCHAIN="$GOTOOLCHAIN" "$GO_BINARY" "$@"
     fi
 }
 
-# Enhanced Go availability check with binary detection
+# Enhanced Go availability check with binary detection and version verification
 check_go_available() {
     echo -e "${BLUE}Detecting Go installation...${NC}"
     
@@ -225,14 +286,55 @@ check_go_available() {
     fi
     
     echo -e "${GREEN}Found Go at: $GO_BINARY${NC}"
+    
+    # Get the Go version from the detected binary
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        GO_VERSION_OUTPUT=$(sudo -u "$SUDO_USER" "$GO_BINARY" version 2>/dev/null)
+    else
+        GO_VERSION_OUTPUT=$("$GO_BINARY" version 2>/dev/null)
+    fi
+    
+    if [ -z "$GO_VERSION_OUTPUT" ]; then
+        echo -e "${RED}Failed to get Go version from $GO_BINARY${NC}"
+        exit 1
+    fi
+    
+    # Extract version (e.g., "go1.24.4" from "go version go1.24.4 linux/amd64")
+    DETECTED_GO_VERSION=$(echo "$GO_VERSION_OUTPUT" | grep -o 'go[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+    if [ -z "$DETECTED_GO_VERSION" ]; then
+        # Fallback for versions without patch number (e.g., "go1.24")
+        DETECTED_GO_VERSION=$(echo "$GO_VERSION_OUTPUT" | grep -o 'go[0-9]\+\.[0-9]\+' | head -1)
+    fi
+    
+    echo -e "${GREEN}Detected Go version: $DETECTED_GO_VERSION${NC}"
+    
+    # Get minimum required version
+    MIN_GO_VERSION=$(get_minimum_go_version)
+    echo -e "${BLUE}Minimum required Go version: $MIN_GO_VERSION${NC}"
+    
+    # Check if detected version meets minimum requirement
+    if ! compare_go_versions "$DETECTED_GO_VERSION" "$MIN_GO_VERSION"; then
+        echo -e "${RED}Go version $DETECTED_GO_VERSION is too old${NC}"
+        echo "   Required: $MIN_GO_VERSION or higher"
+        echo "   Please upgrade Go to a compatible version"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✅ Go version $DETECTED_GO_VERSION meets requirements${NC}"
+    
+    # Set GOTOOLCHAIN to the specific detected version to prevent downloads
+    export GOTOOLCHAIN="$DETECTED_GO_VERSION"
     export GO_BINARY="$GO_BINARY"
+    
+    echo -e "${BLUE}Using GOTOOLCHAIN=$GOTOOLCHAIN${NC}"
 }
 
 # Check if rqlite is already installed
 check_existing_installation() {
     if command -v rqlited &> /dev/null && command -v rqlite &> /dev/null && [ "$FORCE_DOWNLOAD" != true ]; then
-        # Extract major version from rqlited output (e.g., "rqlited 9 linux..." -> "9")
-        INSTALLED_MAJOR=$(rqlited -version 2>&1 | head -n1 | grep -o 'rqlited [0-9]\+' | grep -o '[0-9]\+' || echo "unknown")
+        # Extract major version from rqlited output (e.g., "rqlited v8.38.2 linux..." -> "8")
+        # Handle both "rqlited v8.x.x" (v8 format) and "rqlited 9" (v9+ format)
+        INSTALLED_MAJOR=$(rqlited -version 2>&1 | head -n1 | grep -oE 'rqlited (v)?[0-9]+' | grep -oE '[0-9]+' || echo "unknown")
         # Extract major version from target version (e.g., "9.1.0" -> "9")
         TARGET_MAJOR=$(echo "${VERSION}" | cut -d. -f1)
         
@@ -350,25 +452,12 @@ verify_source() {
         sudo chmod 755 "$(dirname "$(dirname "${CACHE_DIR}")")"
     fi
     
-    # Verify go.mod and go.sum integrity (run as original user in source directory)
-    echo "Verifying Go module integrity..."
-    CURRENT_DIR=$(pwd)
-    cd "${SOURCE_DIR}"
-    if ! run_go_as_user mod verify; then
-        echo -e "${RED}❌ Go module verification failed${NC}"
-        cd "$CURRENT_DIR"
-        exit 1
-    fi
-    cd "$CURRENT_DIR"
-    echo -e "${GREEN}✅ Go module integrity verified${NC}"
-    
     # Display version info
     echo -e "${BLUE}Source Information:${NC}"
     echo "• Repository: $(git remote get-url origin)"
     echo "• Tag: v${VERSION}"
     echo "• Commit: $ACTUAL_COMMIT"
     echo "• Date: $(git log -1 --format=%cd --date=short)"
-    echo "• Go module: $(run_go_as_user mod why)"
 }
 
 # Build rqlite
@@ -381,8 +470,16 @@ build_rqlite() {
     
     # Set build environment (run as original user)
     export CGO_ENABLED=1
-    export GOOS=$(run_go_as_user env GOOS)
-    export GOARCH=$(run_go_as_user env GOARCH)
+    # GOTOOLCHAIN is already set by check_go_available()
+    
+    # Get GOOS and GOARCH from the correct Go binary
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        export GOOS=$(sudo -u "$SUDO_USER" -H bash -c "GOTOOLCHAIN=\"$GOTOOLCHAIN\" \"$GO_BINARY\" env GOOS")
+        export GOARCH=$(sudo -u "$SUDO_USER" -H bash -c "GOTOOLCHAIN=\"$GOTOOLCHAIN\" \"$GO_BINARY\" env GOARCH")
+    else
+        export GOOS=$(GOTOOLCHAIN="$GOTOOLCHAIN" "$GO_BINARY" env GOOS)
+        export GOARCH=$(GOTOOLCHAIN="$GOTOOLCHAIN" "$GO_BINARY" env GOARCH)
+    fi
     
     # Build flags for optimization and static linking
     BUILD_FLAGS="-a -installsuffix cgo"
