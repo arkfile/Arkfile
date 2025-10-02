@@ -26,7 +26,6 @@
             <h2 class="section-title">Arkfile Vault Features</h2>
             <div class="features-grid">
                 <div class="feature-card security-highlight">
-                    <div class="feature-icon">🔐</div>
                     <h3 class="feature-title">Client-Side Encryption</h3>
                     <p class="feature-description">
                         All files are encrypted in your browser before upload. Your data is protected by AES-256-GCM encryption, ensuring that even admins cannot access your files.
@@ -34,7 +33,6 @@
                 </div>
 
                 <div class="feature-card security-highlight">
-                    <div class="feature-icon">🛡️</div>
                     <h3 class="feature-title">OPAQUE Authentication</h3>
                     <p class="feature-description">
                         Advanced password authentication using the OPAQUE protocol. Your password never leaves your device, providing perfect security even against server compromises.
@@ -42,7 +40,6 @@
                 </div>
 
                 <div class="feature-card security-highlight">
-                    <div class="feature-icon">📱</div>
                     <h3 class="feature-title">Mandatory 2FA</h3>
                     <p class="feature-description">
                         Time-based One-Time Passwords (TOTP) are required for all accounts, with support for Google Authenticator, Authy, and other standard 2FA apps.
@@ -50,7 +47,6 @@
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon">🔗</div>
                     <h3 class="feature-title">Secure File Sharing</h3>
                     <p class="feature-description">
                         Share files with additional password protection using Argon2id key derivation. Recipients don't need accounts - just the link and the share password.
@@ -58,7 +54,6 @@
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon">☁️</div>
                     <h3 class="feature-title">Flexible Storage</h3>
                     <p class="feature-description">
                         Built on MinIO with support for S3-compatible storage providers including Amazon S3, Backblaze B2, Wasabi and Vultr Object Storage.
@@ -66,7 +61,6 @@
                 </div>
 
                 <div class="feature-card">
-                    <div class="feature-icon">🔄</div>
                     <h3 class="feature-title">Redundant Backups</h3>
                     <p class="feature-description">
                         Your encrypted files are safely stored with built-in redundancy and replication across multiple drives and storage servers.
@@ -86,7 +80,7 @@
     <!-- Authentication Modal (hidden by default) -->
     <div class="container hidden" id="app-container">
         <header>
-            <h1>Arkfile - Secure File Sharing</h1>
+            <h1>Arkfile - Secure File Vault</h1>
         </header>
 
         <div class="auth-section" id="auth-section">
@@ -128,12 +122,12 @@
             <div class="totp-setup-form hidden" id="totp-setup-form">
                 <h2>Setup Two-Factor Authentication</h2>
                 <div class="totp-info">
-                    <p><strong>🔐 Enhanced Security Required</strong></p>
+                    <p><strong>Enhanced Security Required</strong></p>
                     <p>Two-factor authentication (2FA) is required for all accounts. Please set up your authenticator app.</p>
                 </div>
                 
                 <div class="totp-step">
-                    <h3>📱 Step 1: Install an Authenticator App</h3>
+                    <h3>Step 1: Install an Authenticator App</h3>
                     <p>Download one of these apps if you don't have one:</p>
                     <ul>
                         <li>Google Authenticator</li>
@@ -144,7 +138,7 @@
                 </div>
 
                 <div class="totp-step">
-                    <h3>📲 Step 2: Scan QR Code</h3>
+                    <h3>Step 2: Scan QR Code</h3>
                     <button type="button" id="generate-totp-btn">Generate Setup Code</button>
                     <div id="qr-code-section" class="hidden">
                         <div class="qr-code-container">
@@ -158,16 +152,16 @@
                 </div>
 
                 <div class="totp-step">
-                    <h3>🔢 Step 3: Enter Verification Code</h3>
+                    <h3>Step 3: Enter Verification Code</h3>
                     <input type="text" id="totp-verify-code" placeholder="000000" maxlength="6" class="totp-input">
                     <button type="button" id="verify-totp-btn" disabled>Verify & Complete Registration</button>
                     <div id="totp-verification-status"></div>
                 </div>
 
                 <div class="backup-codes-section hidden" id="backup-codes-section">
-                    <h3>🔑 Backup Codes</h3>
+                    <h3>Backup Codes</h3>
                     <div class="backup-warning">
-                        <p><strong>⚠️ Important:</strong> Save these backup codes in a secure location. You can use them to access your account if you lose your authenticator device.</p>
+                        <p><strong>Important:</strong> Save these backup codes in a secure location. You can use them to access your account if you lose your authenticator device.</p>
                     </div>
                     <div class="backup-codes-container">
                         <ul id="backup-codes-list"></ul>

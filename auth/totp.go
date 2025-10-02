@@ -704,8 +704,3 @@ func decodeBase64IfNeeded(data []byte) ([]byte, error) {
 	// Return original data if not base64 or decoding failed
 	return data, nil
 }
-
-// decodeBase64 decodes base64 data
-func decodeBase64(s string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(s)
-}

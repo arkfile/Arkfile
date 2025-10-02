@@ -418,7 +418,7 @@ EXAMPLES:
 		}
 	}
 
-	fmt.Printf("✅ Login successful for user: %s\n", *usernameFlag)
+	fmt.Printf("Login successful for user: %s\n", *usernameFlag)
 	fmt.Printf("Session expires: %s\n", session.ExpiresAt.Format("2006-01-02 15:04:05"))
 
 	return nil
@@ -601,7 +601,7 @@ EXAMPLES:
 		return fmt.Errorf("upload finalization failed: %w", err)
 	}
 
-	fmt.Printf("✅ Upload completed successfully\n")
+	fmt.Printf("Upload completed successfully\n")
 	fmt.Printf("File ID: %s\n", fileID)
 	fmt.Printf("Storage ID: %s\n", finalizeResp.StorageID)
 	fmt.Printf("Server-side Encrypted SHA256: %s\n", finalizeResp.EncryptedFileSHA256)
@@ -770,7 +770,7 @@ EXAMPLES:
 
 	logVerbose("Successfully downloaded %d bytes to %s", totalBytesDownloaded, *outputPath)
 
-	fmt.Printf("✅ Encrypted file downloaded successfully\n")
+	fmt.Printf("Encrypted file downloaded successfully\n")
 	fmt.Printf("File ID: %s\n", *fileID)
 	fmt.Printf("Saved to: %s\n", *outputPath)
 	fmt.Printf("Size: %s\n", formatFileSize(totalBytesDownloaded))
@@ -946,7 +946,7 @@ EXAMPLES:
 		}
 	}
 
-	fmt.Printf("✅ Logged out successfully\n")
+	fmt.Printf("Logged out successfully\n")
 	return nil
 }
 

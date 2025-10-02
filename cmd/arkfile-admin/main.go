@@ -193,13 +193,13 @@ func main() {
 			os.Exit(1)
 		}
 	case "list-users":
-		fmt.Printf("⚠️  Dev-test environment only - using network implementation\n")
+		fmt.Printf("Dev-test environment only - using network implementation\n")
 		if err := handleListUsersCommand(client, config, args); err != nil {
 			logError("List users failed: %v", err)
 			os.Exit(1)
 		}
 	case "approve-user":
-		fmt.Printf("⚠️  Dev-test environment only - using network implementation\n")
+		fmt.Printf("Dev-test environment only - using network implementation\n")
 		if err := handleApproveUserCommand(client, config, args); err != nil {
 			logError("Approve user failed: %v", err)
 			os.Exit(1)
@@ -210,53 +210,53 @@ func main() {
 			os.Exit(1)
 		}
 
+	// Network-based system monitoring commands
+	case "system-status":
+		if err := handleSystemStatusCommand(client, config, args); err != nil {
+			logError("System status failed: %v", err)
+			os.Exit(1)
+		}
+	case "health-check":
+		if err := handleHealthCheckCommand(client, config, args); err != nil {
+			logError("Health check failed: %v", err)
+			os.Exit(1)
+		}
+
 	// Local commands (server endpoints not yet available)
 	case "backup":
-		fmt.Printf("⚠️  Using local implementation - server endpoint not yet available\n")
+		fmt.Printf("Using local implementation - server endpoint not yet available\n")
 		if err := handleBackupCommand(config, args); err != nil {
 			logError("Backup failed: %v", err)
 			os.Exit(1)
 		}
 	case "restore":
-		fmt.Printf("⚠️  Using local implementation - server endpoint not yet available\n")
+		fmt.Printf("Using local implementation - server endpoint not yet available\n")
 		if err := handleRestoreCommand(config, args); err != nil {
 			logError("Restore failed: %v", err)
 			os.Exit(1)
 		}
 	case "monitor":
-		fmt.Printf("⚠️  Using local implementation - server endpoint not yet available\n")
+		fmt.Printf("Using local implementation - server endpoint not yet available\n")
 		if err := handleMonitorCommand(config, args); err != nil {
 			logError("Monitor failed: %v", err)
 			os.Exit(1)
 		}
 	case "audit":
-		fmt.Printf("⚠️  Using local implementation - server endpoint not yet available\n")
+		fmt.Printf("Using local implementation - server endpoint not yet available\n")
 		if err := handleAuditCommand(config, args); err != nil {
 			logError("Audit failed: %v", err)
 			os.Exit(1)
 		}
-	case "system-status":
-		fmt.Printf("⚠️  Using local implementation - server endpoint not yet available\n")
-		if err := handleLocalSystemStatusCommand(config, args); err != nil {
-			logError("System status failed: %v", err)
-			os.Exit(1)
-		}
 	case "key-rotation":
-		fmt.Printf("⚠️  Using local implementation - server endpoint not yet available\n")
-		if err := handleLocalKeyRotationCommand(config, args); err != nil {
+		fmt.Printf("Using local implementation - server endpoint not yet available\n")
+		if err := handleKeyRotationCommand(client, config, args); err != nil {
 			logError("Key rotation failed: %v", err)
-			os.Exit(1)
-		}
-	case "health-check":
-		fmt.Printf("⚠️  Using local implementation - server endpoint not yet available\n")
-		if err := handleLocalHealthCheckCommand(config, args); err != nil {
-			logError("Health check failed: %v", err)
 			os.Exit(1)
 		}
 
 	// Legacy commands that were removed from network - keeping for compatibility
 	case "revoke-user":
-		fmt.Printf("⚠️  Command deprecated - use network API when available\n")
+		fmt.Printf("Command deprecated - use network API when available\n")
 		if err := handleRevokeUserCommand(client, config, args); err != nil {
 			logError("Revoke user failed: %v", err)
 			os.Exit(1)
@@ -443,7 +443,7 @@ EXAMPLES:
 		}
 	}
 
-	fmt.Printf("✅ Admin login successful for user: %s\n", *usernameFlag)
+	fmt.Printf("Admin login successful for user: %s\n", *usernameFlag)
 	fmt.Printf("Session expires: %s\n", session.ExpiresAt.Format("2006-01-02 15:04:05"))
 	fmt.Printf("Administrative privileges active\n")
 
@@ -636,7 +636,7 @@ EXAMPLES:
 		return fmt.Errorf("user approval failed: %w", err)
 	}
 
-	fmt.Printf("✅ User %s approved successfully\n", *usernameFlag)
+	fmt.Printf("User %s approved successfully\n", *usernameFlag)
 	fmt.Printf("Storage limit set to: %s\n", formatFileSize(limitBytes))
 
 	return nil
@@ -707,7 +707,7 @@ EXAMPLES:
 		return fmt.Errorf("user revocation failed: %w", err)
 	}
 
-	fmt.Printf("✅ User %s access revoked successfully\n", *usernameFlag)
+	fmt.Printf("User %s access revoked successfully\n", *usernameFlag)
 
 	return nil
 }
@@ -774,7 +774,7 @@ EXAMPLES:
 		return fmt.Errorf("storage limit update failed: %w", err)
 	}
 
-	fmt.Printf("✅ Storage limit updated for user %s\n", *usernameFlag)
+	fmt.Printf("Storage limit updated for user %s\n", *usernameFlag)
 	fmt.Printf("New limit: %s\n", formatFileSize(limitBytes))
 
 	return nil
@@ -817,7 +817,7 @@ EXAMPLES:
 
 	// Display system status
 	status := resp.Data
-	fmt.Printf("🖥️  System Status\n")
+	fmt.Printf("System Status\n")
 	fmt.Printf("================\n\n")
 
 	if uptime, ok := status["uptime"].(string); ok {
@@ -830,7 +830,7 @@ EXAMPLES:
 		fmt.Printf("Go Version: %s\n", goVersion)
 	}
 
-	fmt.Printf("\n📊 Storage Statistics\n")
+	fmt.Printf("\nStorage Statistics\n")
 	fmt.Printf("====================\n")
 	if storage, ok := status["storage"].(map[string]interface{}); ok {
 		if totalFiles, ok := storage["total_files"].(float64); ok {
@@ -844,7 +844,7 @@ EXAMPLES:
 		}
 	}
 
-	fmt.Printf("\n👥 User Statistics\n")
+	fmt.Printf("\nUser Statistics\n")
 	fmt.Printf("=================\n")
 	if users, ok := status["users"].(map[string]interface{}); ok {
 		if totalUsers, ok := users["total_users"].(float64); ok {
@@ -861,7 +861,7 @@ EXAMPLES:
 		}
 	}
 
-	fmt.Printf("\n🔐 Security Status\n")
+	fmt.Printf("\nSecurity Status\n")
 	fmt.Printf("=================\n")
 	if security, ok := status["security"].(map[string]interface{}); ok {
 		if totpUsers, ok := security["totp_enabled_users"].(float64); ok {
@@ -924,7 +924,7 @@ EXAMPLES:
 
 	// Confirm rotation if not forced
 	if !*force {
-		fmt.Printf("⚠️  Warning: Key rotation will invalidate existing sessions and may require user re-authentication.\n")
+		fmt.Printf("Warning: Key rotation will invalidate existing sessions and may require user re-authentication.\n")
 		fmt.Printf("Are you sure you want to rotate %s keys? (yes/no): ", *keyType)
 		reader := bufio.NewReader(os.Stdin)
 		response, err := reader.ReadString('\n')
@@ -949,7 +949,7 @@ EXAMPLES:
 		return fmt.Errorf("key rotation failed: %w", err)
 	}
 
-	fmt.Printf("✅ %s key rotation completed successfully\n", strings.ToUpper(*keyType))
+	fmt.Printf("%s key rotation completed successfully\n", strings.ToUpper(*keyType))
 	if message, ok := resp.Data["message"].(string); ok {
 		fmt.Printf("Details: %s\n", message)
 	}
@@ -1007,13 +1007,13 @@ EXAMPLES:
 
 	// Display health results
 	health := resp.Data
-	fmt.Printf("🏥 System Health Check\n")
+	fmt.Printf("System Health Check\n")
 	fmt.Printf("=====================\n\n")
 
 	if overall, ok := health["overall_status"].(string); ok {
-		statusIcon := "✅"
+		statusIcon := "OK"
 		if overall != "healthy" {
-			statusIcon = "❌"
+			statusIcon = "[X]"
 		}
 		fmt.Printf("Overall Status: %s %s\n\n", statusIcon, strings.ToUpper(overall))
 	}
@@ -1026,9 +1026,9 @@ EXAMPLES:
 		for component, status := range components {
 			statusMap := status.(map[string]interface{})
 			statusStr := statusMap["status"].(string)
-			statusIcon := "✅"
+			statusIcon := "OK"
 			if statusStr != "healthy" {
-				statusIcon = "❌"
+				statusIcon = "[X]"
 			}
 
 			fmt.Printf("%-15s %s %s", component+":", statusIcon, statusStr)
@@ -1070,7 +1070,7 @@ EXAMPLES:
 		}
 	}
 
-	fmt.Printf("✅ Admin logout successful\n")
+	fmt.Printf("Admin logout successful\n")
 	return nil
 }
 
@@ -1234,12 +1234,12 @@ EXAMPLES:
 		return err
 	}
 
-	fmt.Printf("🔄 Creating system backup...\n")
+	fmt.Printf("Creating system backup...\n")
 	fmt.Printf("Output file: %s\n", *output)
 	fmt.Printf("Base directory: %s\n", *baseDir)
 
 	// TODO: Implement actual backup logic
-	fmt.Printf("⚠️  Backup functionality requires server endpoint implementation\n")
+	fmt.Printf("Backup functionality requires server endpoint implementation\n")
 	fmt.Printf("Would backup: config files, keys, database, user data\n")
 
 	return fmt.Errorf("backup endpoint not yet implemented on server")
@@ -1278,13 +1278,13 @@ EXAMPLES:
 		return fmt.Errorf("input backup file is required")
 	}
 
-	fmt.Printf("🔄 Restoring from backup...\n")
+	fmt.Printf("Restoring from backup...\n")
 	fmt.Printf("Input file: %s\n", *input)
 	fmt.Printf("Base directory: %s\n", *baseDir)
 	fmt.Printf("Force mode: %v\n", *force)
 
 	// TODO: Implement actual restore logic
-	fmt.Printf("⚠️  Restore functionality requires server endpoint implementation\n")
+	fmt.Printf("Restore functionality requires server endpoint implementation\n")
 	fmt.Printf("Would restore: config files, keys, database, user data\n")
 
 	return fmt.Errorf("restore endpoint not yet implemented on server")
@@ -1317,12 +1317,12 @@ EXAMPLES:
 		return err
 	}
 
-	fmt.Printf("📊 Starting performance monitoring...\n")
+	fmt.Printf("Starting performance monitoring...\n")
 	fmt.Printf("Duration: %s\n", *duration)
 	fmt.Printf("Interval: %s\n", *interval)
 
 	// TODO: Implement actual monitoring logic
-	fmt.Printf("⚠️  Monitoring functionality requires server endpoint implementation\n")
+	fmt.Printf("Monitoring functionality requires server endpoint implementation\n")
 	fmt.Printf("Would monitor: CPU, memory, disk I/O, network, database performance\n")
 
 	return fmt.Errorf("monitoring endpoint not yet implemented on server")
@@ -1362,116 +1362,10 @@ EXAMPLES:
 	}
 
 	// TODO: Implement actual audit logic
-	fmt.Printf("⚠️  Audit functionality requires server endpoint implementation\n")
+	fmt.Printf("Audit functionality requires server endpoint implementation\n")
 	fmt.Printf("Would audit: file permissions, key security, user access, configuration\n")
 
 	return fmt.Errorf("audit endpoint not yet implemented on server")
-}
-
-// handleLocalSystemStatusCommand shows local system status
-func handleLocalSystemStatusCommand(config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("system-status", flag.ExitOnError)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin system-status
-
-Show local system status and metrics.
-
-EXAMPLES:
-    arkfile-admin system-status
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	fmt.Printf("🖥️  Local System Status\n")
-	fmt.Printf("======================\n\n")
-
-	// TODO: Implement actual local system status logic
-	fmt.Printf("⚠️  Local system status requires server endpoint implementation\n")
-	fmt.Printf("Would show: uptime, version, storage stats, user counts, security status\n")
-
-	return fmt.Errorf("local system status endpoint not yet implemented on server")
-}
-
-// handleLocalKeyRotationCommand handles local key rotation
-func handleLocalKeyRotationCommand(config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("key-rotation", flag.ExitOnError)
-	var (
-		keyType = fs.String("type", "", "Key type to rotate: jwt, opaque, totp (required)")
-		force   = fs.Bool("force", false, "Force rotation without confirmation")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin key-rotation [FLAGS]
-
-Perform local cryptographic key rotation.
-
-FLAGS:
-    --type TYPE         Key type to rotate: jwt, opaque, totp (required)
-    --force            Force rotation without confirmation prompt
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin key-rotation --type jwt
-    arkfile-admin key-rotation --type opaque --force
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *keyType == "" {
-		return fmt.Errorf("key type is required (jwt, opaque, totp)")
-	}
-
-	fmt.Printf("🔑 Local key rotation: %s\n", *keyType)
-	fmt.Printf("Force mode: %v\n", *force)
-
-	// TODO: Implement actual local key rotation logic
-	fmt.Printf("⚠️  Local key rotation requires server endpoint implementation\n")
-	fmt.Printf("Would rotate %s keys and update configuration files\n", *keyType)
-
-	return fmt.Errorf("local key rotation endpoint not yet implemented on server")
-}
-
-// handleLocalHealthCheckCommand performs local health check
-func handleLocalHealthCheckCommand(config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("health-check", flag.ExitOnError)
-	var (
-		detailed = fs.Bool("detailed", false, "Show detailed health information")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin health-check [FLAGS]
-
-Perform local system health check.
-
-FLAGS:
-    --detailed          Show detailed health information
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin health-check --detailed
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	fmt.Printf("🏥 Local Health Check\n")
-	fmt.Printf("====================\n\n")
-	fmt.Printf("Detailed mode: %v\n", *detailed)
-
-	// TODO: Implement actual local health check logic
-	fmt.Printf("⚠️  Local health check requires server endpoint implementation\n")
-	fmt.Printf("Would check: service status, file permissions, disk space, database connectivity\n")
-
-	return fmt.Errorf("local health check endpoint not yet implemented on server")
 }
 
 // readPassword reads a password from stdin without echoing using terminal controls

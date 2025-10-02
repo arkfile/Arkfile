@@ -3,7 +3,6 @@ package handlers
 import (
 	"bytes"
 	"database/sql"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -134,22 +133,6 @@ func CreateUploadSession(c echo.Context) error {
 	logging.InfoLogger.Printf("  encrypted_filename (to DB): '%s' (length: %d)", encryptedFilename, len(encryptedFilename))
 	logging.InfoLogger.Printf("  sha256sum_nonce (to DB): '%s' (length: %d)", sha256sumNonce, len(sha256sumNonce))
 	logging.InfoLogger.Printf("  encrypted_sha256sum (to DB): '%s' (length: %d)", encryptedSha256sum, len(encryptedSha256sum))
-
-	// TEST BASE64 DECODE FOR DOUBLE-ENCODING DETECTION (INGRESS)
-	if len(filenameNonce) > 0 {
-		if decoded, err := base64.StdEncoding.DecodeString(filenameNonce); err == nil {
-			logging.InfoLogger.Printf("[DEBUG_TEST_INGRESS] Successfully decoded filename_nonce: %d bytes -> %d bytes", len(filenameNonce), len(decoded))
-		} else {
-			logging.InfoLogger.Printf("[DEBUG_TEST_INGRESS] ERROR decoding filename_nonce: %v", err)
-		}
-	}
-	if len(encryptedFilename) > 0 {
-		if decoded, err := base64.StdEncoding.DecodeString(encryptedFilename); err == nil {
-			logging.InfoLogger.Printf("[DEBUG_TEST_INGRESS] Successfully decoded encrypted_filename: %d bytes -> %d bytes", len(encryptedFilename), len(decoded))
-		} else {
-			logging.InfoLogger.Printf("[DEBUG_TEST_INGRESS] ERROR decoding encrypted_filename: %v", err)
-		}
-	}
 
 	// CRITICAL: Do NOT base64 encode these values - they arrive from client already base64-encoded
 	// The double-encoding bug was caused by calling base64.StdEncoding.EncodeToString() on these values

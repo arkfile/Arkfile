@@ -177,7 +177,7 @@ func TestChunkedUploadIntegration(t *testing.T) {
 				t.Errorf("Failed to clear password: %v", clearMap["error"])
 			}
 
-			t.Logf("✅ %s: Successfully processed %d bytes in %d chunks", tc.name, tc.fileSize, totalChunks)
+			t.Logf("%s: Successfully processed %d bytes in %d chunks", tc.name, tc.fileSize, totalChunks)
 		})
 	}
 }
@@ -326,7 +326,7 @@ func TestChunkedEncryptionSecurity(t *testing.T) {
 		}
 	}
 
-	t.Log("✅ Security tests passed: Nonce uniqueness, user isolation, and password type isolation verified")
+	t.Log("Security tests passed: Nonce uniqueness, user isolation, and password type isolation verified")
 
 	// Cleanup
 	clearPasswordForUser(js.Null(), []js.Value{js.ValueOf(username)})
@@ -390,5 +390,5 @@ func TestChunkedFormatValidation(t *testing.T) {
 		})
 	}
 
-	t.Log("✅ Format validation tests passed")
+	t.Log("Format validation tests passed")
 }

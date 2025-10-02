@@ -702,15 +702,22 @@ button:hover {
 }
 
 .auth-method-indicator::before {
-    content: "🔒";
+    content: "[SECURE]";
+    font-size: 0.8em;
+    font-weight: bold;
 }
 
 .auth-method-indicator.opaque::before {
-    content: "🛡️";
+    content: "[OPAQUE]";
+    font-size: 0.8em;
+    font-weight: bold;
 }
 
 .auth-method-indicator.legacy::before {
-    content: "⚠️";
+    content: "[LEGACY]";
+    font-size: 0.8em;
+    font-weight: bold;
+    color: #ff9800;
 }
 
 /* Enhanced Form Styling for OPAQUE */

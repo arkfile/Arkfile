@@ -1,6 +1,6 @@
 // Commands package for cryptocli - OPAQUE-exclusive administrative operations
 // This package provides envelope inspection, file format validation, and
-// post-quantum migration utilities with proper administrative scoping.
+// administrative utilities with proper scoping.
 
 package commands
 
@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 )
 
@@ -226,134 +225,6 @@ EXAMPLES:
 	return nil
 }
 
-// PostQuantumStatus checks post-quantum migration readiness
-func PostQuantumStatus(args []string) error {
-	fs := flag.NewFlagSet("pq-status", flag.ExitOnError)
-	var (
-		detailed = fs.Bool("detailed", false, "Show detailed algorithm availability")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: cryptocli pq-status [FLAGS]
-
-Check post-quantum cryptographic migration readiness status.
-Reports on NIST-finalized algorithm availability and system preparation.
-
-FLAGS:
-    -detailed        Show detailed algorithm analysis
-    -help           Show this help message
-
-EXAMPLES:
-    cryptocli pq-status
-    cryptocli pq-status -detailed
-
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	logVerbose("Checking post-quantum migration status")
-
-	// Initialize post-quantum migrator
-	migrator := crypto.NewPostQuantumMigrator()
-
-	// Check algorithm availability
-	algorithms, err := migrator.CheckPostQuantumAvailability()
-	if err != nil {
-		return fmt.Errorf("failed to check PQ availability: %w", err)
-	}
-
-	// Get migration status
-	status := migrator.GetMigrationStatus()
-
-	fmt.Printf("Post-Quantum Migration Status\n")
-	fmt.Printf("=============================\n")
-	fmt.Printf("Current Version: %s\n", status["current_version"])
-	fmt.Printf("Target Version: %s\n", status["target_version"])
-	fmt.Printf("Migration State: %s\n", status["migration_state"])
-	fmt.Printf("Ready for PQ: %t\n", status["ready_for_pq"])
-
-	if *detailed {
-		fmt.Printf("\nAlgorithm Availability:\n")
-		for _, alg := range algorithms {
-			fmt.Printf("  %s:\n", alg.Name)
-			fmt.Printf("    Available: %t\n", alg.Available)
-			fmt.Printf("    Tested: %t\n", alg.Tested)
-			fmt.Printf("    Version: %s\n", alg.Version)
-		}
-	}
-
-	fmt.Printf("\nNOTE: Post-quantum migration is not yet implemented.\n")
-	fmt.Printf("Waiting for stable Go implementations of NIST-finalized algorithms.\n")
-
-	return nil
-}
-
-// PreparePostQuantumMigration prepares system for PQ transition
-func PreparePostQuantumMigration(args []string) error {
-	fs := flag.NewFlagSet("pq-prepare", flag.ExitOnError)
-	var (
-		checkOnly = fs.Bool("check-only", false, "Only check readiness, don't prepare")
-		force     = fs.Bool("force", false, "Force preparation even if not ready")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: cryptocli pq-prepare [FLAGS]
-
-Prepare system for post-quantum cryptographic migration.
-This command validates current setup and prepares migration infrastructure.
-
-FLAGS:
-    -check-only      Only check readiness without making changes
-    -force          Force preparation even if prerequisites not met
-    -help           Show this help message
-
-EXAMPLES:
-    cryptocli pq-prepare -check-only
-    cryptocli pq-prepare
-    cryptocli pq-prepare -force
-
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	logVerbose("Preparing post-quantum migration")
-
-	migrator := crypto.NewPostQuantumMigrator()
-
-	if *checkOnly {
-		fmt.Printf("Post-Quantum Migration Readiness Check\n")
-		fmt.Printf("=====================================\n")
-
-		if migrator.IsPostQuantumReady() {
-			fmt.Printf("Status: READY for post-quantum migration\n")
-		} else {
-			fmt.Printf("Status: NOT READY for post-quantum migration\n")
-			fmt.Printf("Reason: NIST-finalized algorithms not yet available in stable Go libraries\n")
-		}
-		return nil
-	}
-
-	// Attempt preparation
-	err := migrator.PrepareMigration()
-	if err != nil && !*force {
-		return fmt.Errorf("migration preparation failed: %w", err)
-	}
-
-	if err != nil && *force {
-		fmt.Printf("WARNING: Preparation failed but continuing due to -force flag\n")
-		fmt.Printf("Error: %v\n", err)
-	}
-
-	fmt.Printf("Post-quantum migration preparation completed\n")
-	return nil
-}
-
 // HealthCheck verifies OPAQUE system health
 func HealthCheck(args []string) error {
 	fs := flag.NewFlagSet("health", flag.ExitOnError)
@@ -490,26 +361,26 @@ EXAMPLES:
 	if *detailed {
 		fmt.Printf("\nDetailed Analysis:\n")
 		if checks["OPAQUE server initialized"] {
-			fmt.Printf("  ✅ OPAQUE authentication ready for production use\n")
+			fmt.Printf("OPAQUE authentication ready for production use\n")
 		} else {
-			fmt.Printf("  ❌ OPAQUE server not initialized (may need configuration)\n")
+			fmt.Printf("OPAQUE server not initialized (may need configuration)\n")
 		}
 
 		if checks["Database connectivity"] {
-			fmt.Printf("  ✅ Database connection operational\n")
+			fmt.Printf("Database connection operational\n")
 		} else {
-			fmt.Printf("  ❌ Database not connected (run with -init-db for testing or configure production DB)\n")
+			fmt.Printf("Database not connected (run with -init-db for testing or configure production DB)\n")
 		}
 
 		if checks["Key material loaded"] {
-			fmt.Printf("  ✅ Cryptographic keys found and secured\n")
+			fmt.Printf("Cryptographic keys found and secured\n")
 		} else {
-			fmt.Printf("  ❌ Key material not found (run ./scripts/setup-opaque-keys.sh)\n")
+			fmt.Printf("Key material not found (run ./scripts/setup-opaque-keys.sh)\n")
 		}
 
-		fmt.Printf("  ✅ Post-quantum migration framework in place\n")
-		fmt.Printf("  ✅ File encryption domain separation maintained\n")
-		fmt.Printf("  ✅ Golden test compatibility preserved\n")
+		fmt.Printf("Post-quantum migration framework in place\n")
+		fmt.Printf("File encryption domain separation maintained\n")
+		fmt.Printf("Golden test compatibility preserved\n")
 
 		// Provide helpful next steps
 		if !allHealthy {
@@ -589,12 +460,12 @@ EXAMPLES:
 		fmt.Printf("  Share Compatibility: Argon2ID (128MB memory)\n")
 
 		fmt.Printf("\nSecurity Features:\n")
-		fmt.Printf("  ✅ Password-Authenticated Key Exchange (PAKE)\n")
-		fmt.Printf("  ✅ Forward Secrecy\n")
-		fmt.Printf("  ✅ Offline Dictionary Attack Resistance\n")
-		fmt.Printf("  ✅ Server Compromise Protection\n")
-		fmt.Printf("  ✅ Quantum-Resistant Key Derivation\n")
-		fmt.Printf("  ✅ Zero-Knowledge Password Verification\n")
+		fmt.Printf("Password-Authenticated Key Exchange (PAKE)\n")
+		fmt.Printf("Forward Secrecy\n")
+		fmt.Printf("Offline Dictionary Attack Resistance\n")
+		fmt.Printf("Server Compromise Protection\n")
+		fmt.Printf("Quantum-Resistant Key Derivation\n")
+		fmt.Printf("Zero-Knowledge Password Verification\n")
 
 		fmt.Printf("\nMigration Status:\n")
 		fmt.Printf("  Phase 5B: COMPLETE - OPAQUE-only authentication\n")

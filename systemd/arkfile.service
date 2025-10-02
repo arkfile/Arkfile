@@ -1,5 +1,5 @@
 [Unit]
-Description=Arkfile Secure File Sharing Service
+Description=Arkfile Secure File Vault Service
 Documentation=https://github.com/84adam/Arkfile
 After=network.target
 Wants=network.target
