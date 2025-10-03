@@ -55,15 +55,15 @@ print_status() {
     
     case $status in
         "PASS")
-            echo -e "  ${GREEN}✓${NC} ${message}"
+            echo -e "  ${GREEN}[OK]${NC} ${message}"
             ((CHECKS_PASSED++))
             ;;
         "FAIL")
-            echo -e "  ${RED}✗${NC} ${message}"
+            echo -e "  ${RED}[X]${NC} ${message}"
             ((CHECKS_FAILED++))
             ;;
         "WARN")
-            echo -e "  ${YELLOW}⚠${NC} ${message}"
+            echo -e "  ${YELLOW}[WARNING]${NC} ${message}"
             ((CHECKS_WARNING++))
             ;;
         "INFO")
@@ -419,9 +419,9 @@ main() {
     # Summary
     echo -e "${BLUE}Health Check Summary${NC}"
     echo "==================="
-    echo -e "  ${GREEN}✓${NC} Passed: $CHECKS_PASSED"
-    echo -e "  ${YELLOW}⚠${NC} Warnings: $CHECKS_WARNING"
-    echo -e "  ${RED}✗${NC} Failed: $CHECKS_FAILED"
+    echo -e "  ${GREEN}[OK]${NC} Passed: $CHECKS_PASSED"
+    echo -e "  ${YELLOW}[WARNING]${NC} Warnings: $CHECKS_WARNING"
+    echo -e "  ${RED}[X]${NC} Failed: $CHECKS_FAILED"
     echo ""
     
     # Exit code based on failures

@@ -74,7 +74,7 @@ if [ -f "$TOTP_KEY_FILE" ]; then
     KEY_SIZE=$(wc -c < "$TOTP_KEY_FILE")
     if [ "$KEY_SIZE" -eq 32 ]; then
         print_status "SUCCESS" "Existing TOTP master key is valid (32 bytes)"
-        echo -e "${GREEN}✓ TOTP master key setup complete!${NC}"
+        echo -e "${GREEN}[OK] TOTP master key setup complete!${NC}"
         exit 0
     else
         print_status "WARNING" "Existing TOTP master key has invalid size ($KEY_SIZE bytes, expected 32)"
@@ -118,7 +118,7 @@ print_status "SUCCESS" "TOTP master key secured"
 # Validation and reporting
 echo
 print_status "INFO" "Validating key setup..."
-echo -e "  ${GREEN}✓${NC} $TOTP_KEY_FILE: $(stat -c %a "$TOTP_KEY_FILE") $(stat -c %U:%G "$TOTP_KEY_FILE")"
+echo -e "  ${GREEN}[OK]${NC} $TOTP_KEY_FILE: $(stat -c %a "$TOTP_KEY_FILE") $(stat -c %U:%G "$TOTP_KEY_FILE")"
 
 # Test key readability by arkfile user
 if sudo -u "$USER" test -r "$TOTP_KEY_FILE"; then
@@ -130,7 +130,7 @@ fi
 
 # Summary
 echo
-echo -e "${GREEN}✓ TOTP master key generated and secured${NC}"
+echo -e "${GREEN}[OK] TOTP master key generated and secured${NC}"
 echo -e "${BLUE}Location:${NC} $TOTP_KEY_FILE"
 echo -e "${BLUE}Size:${NC} 32 bytes (256-bit key)"
 echo -e "${BLUE}Permissions:${NC} Private key (600)"

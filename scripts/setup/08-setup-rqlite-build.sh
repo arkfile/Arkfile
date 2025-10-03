@@ -320,7 +320,7 @@ check_go_available() {
         exit 1
     fi
     
-    echo -e "${GREEN}✅ Go version $DETECTED_GO_VERSION meets requirements${NC}"
+    echo -e "${GREEN}[OK] Go version $DETECTED_GO_VERSION meets requirements${NC}"
     
     # Set GOTOOLCHAIN to the specific detected version to prevent downloads
     export GOTOOLCHAIN="$DETECTED_GO_VERSION"
@@ -376,7 +376,7 @@ setup_source() {
     
     # Cache directory should already exist from 02-setup-directories.sh
     if [ ! -d "${CACHE_DIR}" ]; then
-        echo -e "${RED}❌ Cache directory not found: ${CACHE_DIR}${NC}"
+        echo -e "${RED}[X] Cache directory not found: ${CACHE_DIR}${NC}"
         echo "Please run 02-setup-directories.sh first"
         exit 1
     fi
@@ -405,21 +405,21 @@ setup_source() {
         cd "${SOURCE_DIR}"
     fi
     
-    echo -e "${GREEN}✅ Source repository ready${NC}"
+    echo -e "${GREEN}[OK] Source repository ready${NC}"
 }
 
 # Verify source integrity
 verify_source() {
-    echo -e "${BLUE}🔐 Verifying source integrity...${NC}"
+    echo -e "${BLUE}[SECURE] Verifying source integrity...${NC}"
     cd "${SOURCE_DIR}"
     
     # Verify we're using the official repository
     ORIGIN_URL=$(git remote get-url origin)
     if [[ ! "$ORIGIN_URL" =~ github\.com[/:]rqlite/rqlite ]]; then
-        echo -e "${RED}❌ Repository origin is not official: $ORIGIN_URL${NC}"
+        echo -e "${RED}[X] Repository origin is not official: $ORIGIN_URL${NC}"
         exit 1
     fi
-    echo -e "${GREEN}✅ Repository origin verified: $ORIGIN_URL${NC}"
+    echo -e "${GREEN}[OK] Repository origin verified: $ORIGIN_URL${NC}"
     
     # Checkout the specific version
     echo "Checking out version v${VERSION}..."
@@ -428,7 +428,7 @@ verify_source() {
     # Verify the commit hash
     ACTUAL_COMMIT=$(git rev-parse HEAD)
     if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
-        echo -e "${RED}❌ Commit hash verification failed${NC}"
+        echo -e "${RED}[X] Commit hash verification failed${NC}"
         echo "Expected: $EXPECTED_COMMIT"
         echo "Actual:   $ACTUAL_COMMIT"
         echo
@@ -438,7 +438,7 @@ verify_source() {
         echo "- Repository tampering"
         exit 1
     fi
-    echo -e "${GREEN}✅ Git commit hash verified: $ACTUAL_COMMIT${NC}"
+    echo -e "${GREEN}[OK] Git commit hash verified: $ACTUAL_COMMIT${NC}"
     
     # Get the original user who invoked sudo
     ORIGINAL_USER=${SUDO_USER:-$(whoami)}
@@ -462,7 +462,7 @@ verify_source() {
 
 # Build rqlite
 build_rqlite() {
-    echo -e "${BLUE}🔨 Building rqlite v${VERSION}...${NC}"
+    echo -e "${BLUE}[BUILD] Building rqlite v${VERSION}...${NC}"
     cd "${SOURCE_DIR}"
     
     # Get the original user who invoked sudo
@@ -502,7 +502,7 @@ build_rqlite() {
     echo "Building rqlited..."
     echo "Command: go build $BUILD_FLAGS -ldflags \"$LDFLAGS\" -o \"${BUILD_DIR}/rqlited\" ./cmd/rqlited"
     if ! run_go_as_user build $BUILD_FLAGS -ldflags="$LDFLAGS" -o "${BUILD_DIR}/rqlited" ./cmd/rqlited; then
-        echo -e "${RED}❌ Failed to build rqlited${NC}"
+        echo -e "${RED}[X] Failed to build rqlited${NC}"
         exit 1
     fi
     
@@ -510,11 +510,11 @@ build_rqlite() {
     echo "Building rqlite..."
     echo "Command: go build $BUILD_FLAGS -ldflags \"$LDFLAGS\" -o \"${BUILD_DIR}/rqlite\" ./cmd/rqlite"
     if ! run_go_as_user build $BUILD_FLAGS -ldflags="$LDFLAGS" -o "${BUILD_DIR}/rqlite" ./cmd/rqlite; then
-        echo -e "${RED}❌ Failed to build rqlite${NC}"
+        echo -e "${RED}[X] Failed to build rqlite${NC}"
         exit 1
     fi
     
-    echo -e "${GREEN}✅ Build completed successfully${NC}"
+    echo -e "${GREEN}[OK] Build completed successfully${NC}"
     
     # Display build information
     echo -e "${BLUE}Build Results:${NC}"
@@ -530,32 +530,32 @@ install_binaries() {
     sudo install -m 755 "${BUILD_DIR}/rqlited" /usr/local/bin/
     sudo install -m 755 "${BUILD_DIR}/rqlite" /usr/local/bin/
     
-    echo -e "${GREEN}✅ rqlite binaries installed successfully${NC}"
+    echo -e "${GREEN}[OK] rqlite binaries installed successfully${NC}"
     
     # Verify installation
     if command -v rqlited &> /dev/null && command -v rqlite &> /dev/null; then
         RQLITED_VERSION=$(rqlited -version | head -n1)
         RQLITE_VERSION=$(rqlite -version | head -n1)
-        echo -e "${GREEN}✅ Installation verified:${NC}"
+        echo -e "${GREEN}[OK] Installation verified:${NC}"
         echo "• rqlited: ${RQLITED_VERSION}"
         echo "• rqlite: ${RQLITE_VERSION}"
     else
-        echo -e "${RED}❌ Installation verification failed${NC}"
+        echo -e "${RED}[X] Installation verification failed${NC}"
         exit 1
     fi
 }
 
 # Install service files
 install_services() {
-    echo -e "${BLUE}⚙️  Installing systemd service files...${NC}"
+    echo -e "${BLUE}[CONFIG]  Installing systemd service files...${NC}"
     
     # Check if systemd is available (Linux only)
     if command -v systemctl &> /dev/null; then
         sudo cp "${BASE_DIR}/systemd/rqlite.service" /etc/systemd/system/
         sudo systemctl daemon-reload
-        echo -e "${GREEN}✅ systemd service installed${NC}"
+        echo -e "${GREEN}[OK] systemd service installed${NC}"
     else
-        echo -e "${YELLOW}⚠️  systemd not available - service files not installed${NC}"
+        echo -e "${YELLOW}[WARNING]  systemd not available - service files not installed${NC}"
         echo "On BSD systems, you may need to create rc.d scripts manually."
     fi
     
@@ -564,16 +564,16 @@ install_services() {
     sudo install -d -m 750 -o arkfile -g arkfile "${BASE_DIR}/var/lib/database" 2>/dev/null || {
         # Fallback if arkfile user doesn't exist
         sudo install -d -m 755 "${BASE_DIR}/var/lib/database"
-        echo -e "${YELLOW}⚠️  Created directory with default permissions (arkfile user not found)${NC}"
+        echo -e "${YELLOW}[WARNING]  Created directory with default permissions (arkfile user not found)${NC}"
     }
 }
 
 # Cache cleanup
 cleanup_build_cache() {
     if [ -n "$1" ] && [ "$1" = "--clean" ]; then
-        echo -e "${BLUE}🧹 Cleaning build cache...${NC}"
+        echo -e "${BLUE}[CLEANUP] Cleaning build cache...${NC}"
         rm -rf "${BUILD_DIR}"
-        echo -e "${GREEN}✅ Build cache cleaned${NC}"
+        echo -e "${GREEN}[OK] Build cache cleaned${NC}"
     fi
 }
 
@@ -592,15 +592,15 @@ main() {
     echo
     echo -e "${GREEN}rqlite cluster database build and setup complete!${NC}"
     echo
-    echo -e "${BLUE}📋 Installation Summary:${NC}"
+    echo -e "${BLUE}[INFO] Installation Summary:${NC}"
     echo "• Version: ${VERSION}"
     echo "• Binaries: /usr/local/bin/rqlited, /usr/local/bin/rqlite"
-    echo "• SHA256: ✅ Verified (source build)"
-    echo "• PGP: ⚠️  Not available from upstream"
+    echo "• SHA256: [OK] Verified (source build)"
+    echo "• PGP: [WARNING]  Not available from upstream"
     echo "• Cached: ${SOURCE_DIR}"
     
     echo
-    echo -e "${BLUE}🚀 Next Steps:${NC}"
+    echo -e "${BLUE}[START] Next Steps:${NC}"
     echo "1. Configure environment variables in /opt/arkfile/etc/[env]/secrets.env:"
     echo "   DATABASE_TYPE=rqlite"
     echo "   RQLITE_ADDRESS=http://localhost:4001"

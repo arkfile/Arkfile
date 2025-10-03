@@ -74,7 +74,7 @@ done
 # Check if we're in the right directory
 check_environment() {
     if [[ ! -f "$PROJECT_ROOT/go.mod" ]]; then
-        echo -e "${RED}❌ go.mod not found in $PROJECT_ROOT${NC}"
+        echo -e "${RED}[X] go.mod not found in $PROJECT_ROOT${NC}"
         echo "Please run this script from the arkfile project root or scripts directory."
         exit 1
     fi
@@ -82,7 +82,7 @@ check_environment() {
     cd "$PROJECT_ROOT"
     
     if ! command -v go &> /dev/null; then
-        echo -e "${RED}❌ Go is not installed or not in PATH${NC}"
+        echo -e "${RED}[X] Go is not installed or not in PATH${NC}"
         exit 1
     fi
 }
@@ -143,10 +143,10 @@ run_tests() {
     echo -e "${BLUE}🧪 Running tests...${NC}"
     
     if go test ./... -timeout=30s; then
-        echo -e "${GREEN}✅ All tests passed${NC}"
+        echo -e "${GREEN}[OK] All tests passed${NC}"
         return 0
     else
-        echo -e "${RED}❌ Tests failed${NC}"
+        echo -e "${RED}[X] Tests failed${NC}"
         return 1
     fi
 }
@@ -159,10 +159,10 @@ update_module() {
     echo -e "${BLUE}📦 Updating $module to $latest...${NC}"
     
     if go get "$module@$latest"; then
-        echo -e "${GREEN}✅ Updated $module${NC}"
+        echo -e "${GREEN}[OK] Updated $module${NC}"
         return 0
     else
-        echo -e "${RED}❌ Failed to update $module${NC}"
+        echo -e "${RED}[X] Failed to update $module${NC}"
         return 1
     fi
 }
@@ -183,7 +183,7 @@ interactive_mode() {
     done < <(get_updates "all")
     
     if [[ ${#patch_updates[@]} -eq 0 && ${#minor_updates[@]} -eq 0 && ${#major_updates[@]} -eq 0 ]]; then
-        echo -e "${GREEN}✅ All Go modules are up to date!${NC}"
+        echo -e "${GREEN}[OK] All Go modules are up to date!${NC}"
         return 0
     fi
     
@@ -275,7 +275,7 @@ apply_updates() {
     mapfile -t updates < <(get_updates "$update_type")
     
     if [[ ${#updates[@]} -eq 0 ]]; then
-        echo -e "${GREEN}✅ No $update_type updates available${NC}"
+        echo -e "${GREEN}[OK] No $update_type updates available${NC}"
         return 0
     fi
     
@@ -293,9 +293,9 @@ apply_updates() {
         echo
         echo -e "${BLUE}📝 Cleaning up dependencies...${NC}"
         if go mod tidy; then
-            echo -e "${GREEN}✅ Dependencies cleaned up${NC}"
+            echo -e "${GREEN}[OK] Dependencies cleaned up${NC}"
         else
-            echo -e "${YELLOW}⚠️  Warning: go mod tidy failed${NC}"
+            echo -e "${YELLOW}[WARNING]  Warning: go mod tidy failed${NC}"
         fi
         
         echo
@@ -305,20 +305,20 @@ apply_updates() {
             
             # Show summary
             echo
-            echo -e "${CYAN}📋 Updated modules:${NC}"
+            echo -e "${CYAN}[INFO] Updated modules:${NC}"
             for update in "${updates[@]}"; do
                 IFS=':' read -r module current latest type <<< "$update"
                 printf "  %-35s %s → %s\n" "$module:" "$current" "$latest"
             done
         else
             echo
-            echo -e "${RED}❌ Updates applied but tests failed${NC}"
+            echo -e "${RED}[X] Updates applied but tests failed${NC}"
             echo -e "${YELLOW}💡 Consider reverting changes with: git checkout go.mod go.sum${NC}"
             exit 1
         fi
     else
         echo
-        echo -e "${RED}❌ Update process failed${NC}"
+        echo -e "${RED}[X] Update process failed${NC}"
         echo -e "${YELLOW}💡 Consider reverting changes with: git checkout go.mod go.sum${NC}"
         exit 1
     fi

@@ -94,7 +94,7 @@ EOF"
 
 sudo chmod 644 "${BACKUP_DIR}/backup_${TIMESTAMP}.json"
 
-echo -e "${GREEN}✓ Key backup created successfully${NC}"
+echo -e "${GREEN}[OK] Key backup created successfully${NC}"
 echo "Backup file: ${BACKUP_PATH}"
 echo "Key file: ${BACKUP_KEY_FILE}"
 echo "Metadata: ${BACKUP_DIR}/backup_${TIMESTAMP}.json"
@@ -105,9 +105,9 @@ if sudo -u ${USER} bash -c "
     echo '${BACKUP_KEY}' | openssl enc -aes-256-cbc -d -pbkdf2 -iter 100000 \
         -in '${BACKUP_PATH}' -pass stdin | tar -tz >/dev/null 2>&1
 "; then
-    echo "  ✓ Backup integrity test: PASSED"
+    echo "  [OK] Backup integrity test: PASSED"
 else
-    echo -e "  ${RED}✗ Backup integrity test: FAILED${NC}"
+    echo -e "  ${RED}[X] Backup integrity test: FAILED${NC}"
     exit 1
 fi
 

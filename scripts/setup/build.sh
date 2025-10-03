@@ -47,13 +47,13 @@ check_go_version() {
     local required_version=$(grep '^go [0-9]' go.mod | awk '{print $2}')
     
     if [ -z "$required_version" ]; then
-        echo -e "${YELLOW}⚠️  Cannot determine Go version requirement from go.mod${NC}"
+        echo -e "${YELLOW}[WARNING]  Cannot determine Go version requirement from go.mod${NC}"
         return 0
     fi
     
     local go_binary
     if ! go_binary=$(find_go_binary); then
-        echo -e "${RED}❌ Go compiler not found in standard locations:${NC}"
+        echo -e "${RED}[X] Go compiler not found in standard locations:${NC}"
         echo "   Checked: PATH, /usr/bin/go, /usr/local/bin/go, /usr/local/go/bin/go"
         echo "   Please install Go $required_version+ via package manager or from https://golang.org"
         echo ""
@@ -66,12 +66,12 @@ check_go_version() {
         exit 1
     fi
     
-    echo -e "${GREEN}✅ Found Go at: $go_binary${NC}"
+    echo -e "${GREEN}[OK] Found Go at: $go_binary${NC}"
     
     local current_version=$("$go_binary" version | grep -o 'go[0-9]\+\.[0-9]\+\.[0-9]\+' | sed 's/go//')
     
     if [ -z "$current_version" ]; then
-        echo -e "${RED}❌ Cannot determine Go version${NC}"
+        echo -e "${RED}[X] Cannot determine Go version${NC}"
         exit 1
     fi
     
@@ -80,7 +80,7 @@ check_go_version() {
     local required_num=$(echo $required_version | awk -F. '{printf "%d%02d%02d", $1, $2, $3}')
     
     if [ "$current_num" -lt "$required_num" ]; then
-        echo -e "${RED}❌ Go version $current_version is too old${NC}"
+        echo -e "${RED}[X] Go version $current_version is too old${NC}"
         echo -e "${YELLOW}Required: Go $required_version or later (from go.mod)${NC}"
         echo -e "${YELLOW}Current:  Go $current_version${NC}"
         echo
@@ -91,7 +91,7 @@ check_go_version() {
         exit 1
     fi
     
-    echo -e "${GREEN}✅ Go version $current_version meets requirements (>= $required_version)${NC}"
+    echo -e "${GREEN}[OK] Go version $current_version meets requirements (>= $required_version)${NC}"
     
     # Store the Go binary path for later use
     export GO_BINARY="$go_binary"
@@ -104,7 +104,7 @@ fix_vendor_ownership() {
         chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
         chown -R "$SUDO_USER:$SUDO_USER" go.mod go.sum 2>/dev/null || true
         [ -f ".vendor_cache" ] && chown "$SUDO_USER:$SUDO_USER" .vendor_cache 2>/dev/null || true
-        echo -e "${GREEN}✅ Vendor directory ownership restored to $SUDO_USER${NC}"
+        echo -e "${GREEN}[OK] Vendor directory ownership restored to $SUDO_USER${NC}"
     elif [ "$EUID" -ne 0 ] && [ -d "vendor" ]; then
         # Check if vendor directory has wrong ownership
         VENDOR_OWNER=$(stat -c '%U' vendor 2>/dev/null || echo "unknown")
@@ -114,7 +114,7 @@ fix_vendor_ownership() {
             sudo chown -R "$CURRENT_USER:$CURRENT_USER" vendor/ 2>/dev/null || true
             sudo chown -R "$CURRENT_USER:$CURRENT_USER" go.mod go.sum 2>/dev/null || true
             [ -f ".vendor_cache" ] && sudo chown "$CURRENT_USER:$CURRENT_USER" .vendor_cache 2>/dev/null || true
-            echo -e "${GREEN}✅ Vendor directory ownership restored to $CURRENT_USER${NC}"
+            echo -e "${GREEN}[OK] Vendor directory ownership restored to $CURRENT_USER${NC}"
         fi
     fi
 }
@@ -157,7 +157,7 @@ if [ -f "go.sum" ]; then
 fi
 
 if [ "$CURRENT_HASH" = "$CACHED_HASH" ] && [ -d "vendor" ]; then
-    echo -e "${GREEN}✅ Vendor directory matches go.sum, skipping sync (preserves compiled libraries)${NC}"
+    echo -e "${GREEN}[OK] Vendor directory matches go.sum, skipping sync (preserves compiled libraries)${NC}"
 else
     echo -e "${YELLOW}Dependencies changed or vendor missing, syncing vendor directory...${NC}"
     
@@ -187,7 +187,7 @@ else
         mkdir -p vendor/stef
         cp -r "$C_LIBS_BACKUP/stef/"* vendor/stef/ 2>/dev/null || true
         rm -rf "$C_LIBS_BACKUP"
-        echo -e "${GREEN}✅ C libraries restored after vendor sync${NC}"
+        echo -e "${GREEN}[OK] C libraries restored after vendor sync${NC}"
     else
         echo -e "${YELLOW}No C libraries to restore - will initialize via submodules${NC}"
     fi
@@ -196,7 +196,7 @@ else
     if [ -n "$CURRENT_HASH" ]; then
         echo "$CURRENT_HASH" > "$VENDOR_CACHE"
     fi
-    echo -e "${GREEN}✅ Vendor directory synced with dependencies${NC}"
+    echo -e "${GREEN}[OK] Vendor directory synced with dependencies${NC}"
 fi
 
 # Build static dependencies first
@@ -207,14 +207,14 @@ build_static_dependencies() {
     fix_vendor_ownership
     
     if ! ./scripts/setup/build-libopaque.sh; then
-        echo -e "${RED}❌ Failed to build static dependencies${NC}"
+        echo -e "${RED}[X] Failed to build static dependencies${NC}"
         exit 1
     fi
     
     # Fix permissions after building
     fix_vendor_ownership
     
-    echo -e "${GREEN}✅ Static dependencies built successfully${NC}"
+    echo -e "${GREEN}[OK] Static dependencies built successfully${NC}"
 }
 
 # Initialize and build C dependencies
@@ -222,11 +222,11 @@ echo -e "${YELLOW}Initializing and building C dependencies...${NC}"
 
 # Check if we should skip C library building
 if [ "${SKIP_C_LIBS}" = "true" ]; then
-    echo -e "${GREEN}✅ Skipping C library rebuild (libraries already exist)${NC}"
+    echo -e "${GREEN}[OK] Skipping C library rebuild (libraries already exist)${NC}"
     
     # Verify static libraries still exist
     if [ ! -f "vendor/stef/liboprf/src/liboprf.a" ] || [ ! -f "vendor/stef/libopaque/src/libopaque.a" ]; then
-        echo -e "${YELLOW}⚠️  Expected static libraries missing, forcing rebuild...${NC}"
+        echo -e "${YELLOW}[WARNING]  Expected static libraries missing, forcing rebuild...${NC}"
         SKIP_C_LIBS="false"
     fi
 fi
@@ -237,38 +237,38 @@ if [ "${SKIP_C_LIBS}" != "true" ]; then
     OPRF_SOURCE="vendor/stef/liboprf/src/oprf.c"
     
     if [ -f "$OPAQUE_SOURCE" ] && [ -f "$OPRF_SOURCE" ]; then
-        echo -e "${GREEN}✅ Source code available, building static libraries...${NC}"
+        echo -e "${GREEN}[OK] Source code available, building static libraries...${NC}"
         
         # Use specialized build script with static linking
         build_static_dependencies
         
-        echo -e "${GREEN}✅ Static C dependencies built successfully${NC}"
+        echo -e "${GREEN}[OK] Static C dependencies built successfully${NC}"
     else
-        echo -e "${YELLOW}⚠️ Source code missing, checking for source directory availability...${NC}"
+        echo -e "${YELLOW}[WARNING] Source code missing, checking for source directory availability...${NC}"
         echo "Missing files: $OPAQUE_SOURCE or $OPRF_SOURCE"
         
         # Initialize git submodules with proper ownership preservation
         if ! git submodule update --init --recursive; then
-            echo -e "${RED}❌ Failed to initialize git submodules${NC}"
+            echo -e "${RED}[X] Failed to initialize git submodules${NC}"
             exit 1
         fi
         
     # Fix ownership immediately after any root operations
     fix_vendor_ownership
-        echo -e "${GREEN}✅ Git submodules initialized${NC}"
+        echo -e "${GREEN}[OK] Git submodules initialized${NC}"
         
         # Verify source files are now available
         if [ -f "$OPAQUE_SOURCE" ] && [ -f "$OPRF_SOURCE" ]; then
             echo "Building static libopaque and liboprf after source setup..."
             build_static_dependencies
-            echo -e "${GREEN}✅ Static C dependencies built successfully${NC}"
+            echo -e "${GREEN}[OK] Static C dependencies built successfully${NC}"
         else
-            echo -e "${RED}❌ Source files still missing after source setup${NC}"
+            echo -e "${RED}[X] Source files still missing after source setup${NC}"
             exit 1
         fi
     fi
 else
-    echo -e "${GREEN}✅ Using existing static C dependencies${NC}"
+    echo -e "${GREEN}[OK] Using existing static C dependencies${NC}"
 fi
 
 # Run user and directory setup if needed
@@ -328,7 +328,7 @@ elif [ -n "$SUDO_USER" ] && [ -f "/home/$SUDO_USER/.bun/bin/bun" ]; then
 fi
 
 if [ -z "$BUN_CMD" ]; then
-    echo -e "${RED}❌ Bun is required for TypeScript compilation${NC}"
+    echo -e "${RED}[X] Bun is required for TypeScript compilation${NC}"
     echo -e "${YELLOW}Install Bun using: curl -fsSL https://bun.sh/install | bash${NC}"
     exit 1
 fi
@@ -345,21 +345,21 @@ cd client/static/js
 if [ ! -d "node_modules" ]; then
     echo "Installing Bun dependencies..."
     ${BUN_CMD} install || {
-        echo -e "${RED}❌ Failed to install dependencies${NC}"
+        echo -e "${RED}[X] Failed to install dependencies${NC}"
         exit 1
     }
 fi
 
 # Verify source files exist
 if [ ! -f "src/app.ts" ]; then
-    echo -e "${RED}❌ Missing TypeScript source files${NC}"
+    echo -e "${RED}[X] Missing TypeScript source files${NC}"
     exit 1
 fi
 
 # Run TypeScript type checking
 echo "Running TypeScript type checking..."
 if ! ${BUN_CMD} run type-check; then
-    echo -e "${RED}❌ TypeScript type checking failed - aborting build${NC}"
+    echo -e "${RED}[X] TypeScript type checking failed - aborting build${NC}"
     exit 1
 fi
 
@@ -369,17 +369,17 @@ TS_HASH=$(find src -name "*.ts" -type f -exec sha256sum {} \; | sha256sum)
 BUILD_HASH=$(cat ${CACHE_FILE} 2>/dev/null || true)
 
 if [ "${TS_HASH}" = "${BUILD_HASH}" ] && [ -f "dist/app.js" ]; then
-    echo -e "${GREEN}✅ No TypeScript changes - skipping build${NC}"
+    echo -e "${GREEN}[OK] No TypeScript changes - skipping build${NC}"
 else
     echo "Building TypeScript production bundle..."
     ${BUN_CMD} run build:prod || {
-        echo -e "${RED}❌ TypeScript build failed${NC}"
+        echo -e "${RED}[X] TypeScript build failed${NC}"
         exit 1
     }
     
     # Verify build output
     if [ ! -f "dist/app.js" ] || [ ! -s "dist/app.js" ]; then
-        echo -e "${RED}❌ Build output missing or empty${NC}"
+        echo -e "${RED}[X] Build output missing or empty${NC}"
         exit 1
     fi
     
@@ -392,11 +392,11 @@ cd ../../..
 # Validate final JS path
 JS_PATH="client/static/js/dist/app.js"
 if [ ! -f "${JS_PATH}" ]; then
-    echo -e "${RED}❌ Missing built JavaScript file at ${JS_PATH}${NC}"
+    echo -e "${RED}[X] Missing built JavaScript file at ${JS_PATH}${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}✅ TypeScript frontend built successfully${NC}"
+echo -e "${GREEN}[OK] TypeScript frontend built successfully${NC}"
 
 # Build WebAssembly
 echo "Building WebAssembly..."
@@ -412,7 +412,7 @@ if [ -f "${GOROOT}/lib/wasm/wasm_exec.js" ]; then
 elif [ -f "${GOROOT}/misc/wasm/wasm_exec.js" ]; then
     WASM_EXEC_JS="${GOROOT}/misc/wasm/wasm_exec.js"
 else
-    echo -e "${RED}❌ Cannot find wasm_exec.js in Go installation at ${GOROOT}${NC}"
+    echo -e "${RED}[X] Cannot find wasm_exec.js in Go installation at ${GOROOT}${NC}"
     exit 1
 fi
 
@@ -431,7 +431,7 @@ build_go_binaries_static() {
     export CGO_LDFLAGS="$CGO_LDFLAGS $(pkg-config --libs --static libsodium)"
     
     "$GO_BINARY" build -a -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -extldflags '-static'" -o ${BUILD_DIR}/${APP_NAME} .
-    echo -e "${GREEN}✅ arkfile server built with CGO static linking${NC}"
+    echo -e "${GREEN}[OK] arkfile server built with CGO static linking${NC}"
     
     # Build Go utility tools without CGO (pure static)
     echo "Building Go utility tools with pure static linking..."
@@ -447,8 +447,8 @@ build_go_binaries_static() {
     echo "Building arkfile-admin..."
     "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
     
-    echo -e "${GREEN}✅ Go utility tools built with pure static linking${NC}"
-    echo -e "${GREEN}✅ All Go binaries built with static linking${NC}"
+    echo -e "${GREEN}[OK] Go utility tools built with pure static linking${NC}"
+    echo -e "${GREEN}[OK] All Go binaries built with static linking${NC}"
 }
 
 # Verify static binaries
@@ -461,28 +461,28 @@ verify_static_binaries() {
             if [[ "$OSTYPE" == "freebsd"* ]] || [[ "$OSTYPE" == "openbsd"* ]]; then
                 # BSD systems use different tools
                 if file "$binary" | grep -q "statically linked"; then
-                    echo -e "${GREEN}✅ $(basename $binary): Static binary verified${NC}"
+                    echo -e "${GREEN}[OK] $(basename $binary): Static binary verified${NC}"
                 else
-                    echo -e "${RED}❌ $(basename $binary): Dynamic linking detected${NC}"
+                    echo -e "${RED}[X] $(basename $binary): Dynamic linking detected${NC}"
                     exit 1
                 fi
             else
                 # Linux systems (includes Alpine, Debian, Alma, etc.)
                 if ldd "$binary" 2>&1 | grep -q "not a dynamic executable"; then
-                    echo -e "${GREEN}✅ $(basename $binary): Static binary verified${NC}"
+                    echo -e "${GREEN}[OK] $(basename $binary): Static binary verified${NC}"
                 else
-                    echo -e "${RED}❌ $(basename $binary): Dynamic linking detected${NC}"
+                    echo -e "${RED}[X] $(basename $binary): Dynamic linking detected${NC}"
                     ldd "$binary" 2>&1 || true
                     exit 1
                 fi
             fi
         else
-            echo -e "${RED}❌ Binary not found: $binary${NC}"
+            echo -e "${RED}[X] Binary not found: $binary${NC}"
             exit 1
         fi
     done
     
-    echo -e "${GREEN}✅ All binaries verified as static${NC}"
+    echo -e "${GREEN}[OK] All binaries verified as static${NC}"
 }
 
 # Build main application with static linking

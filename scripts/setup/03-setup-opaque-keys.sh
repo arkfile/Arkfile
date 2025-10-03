@@ -55,7 +55,7 @@ sudo chown -R ${USER}:${GROUP} ${KEY_DIR}
 sudo chmod 600 ${KEY_DIR}/*.key
 sudo chmod 644 ${KEY_DIR}/server_public.key  # Public key can be readable
 
-echo -e "${GREEN}✓ OPAQUE keys generated and secured${NC}"
+echo -e "${GREEN}[OK] OPAQUE keys generated and secured${NC}"
 echo "Location: ${KEY_DIR}"
 echo "Permissions: Private keys (600), Public key (644)"
 echo "Owner: ${USER}:${GROUP}"
@@ -73,9 +73,9 @@ for key_file in server_private.key server_public.key oprf_seed.key; do
     if [ -f "${key_path}" ]; then
         perms=$(stat -c "%a" "${key_path}")
         owner=$(stat -c "%U:%G" "${key_path}")
-        echo "  ✓ ${key_file}: ${perms} ${owner}"
+        echo "  [OK] ${key_file}: ${perms} ${owner}"
     else
-        echo -e "  ${RED}✗ ${key_file}: Missing${NC}"
+        echo -e "  ${RED}[X] ${key_file}: Missing${NC}"
     fi
 done
 

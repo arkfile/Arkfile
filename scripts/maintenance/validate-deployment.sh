@@ -29,15 +29,15 @@ print_validation() {
     
     case $status in
         "PASS")
-            echo -e "  ${GREEN}✓${NC} ${message}"
+            echo -e "  ${GREEN}[OK]${NC} ${message}"
             ((VALIDATIONS_PASSED++))
             ;;
         "FAIL")
-            echo -e "  ${RED}✗${NC} ${message}"
+            echo -e "  ${RED}[X]${NC} ${message}"
             ((VALIDATIONS_FAILED++))
             ;;
         "WARN")
-            echo -e "  ${YELLOW}⚠${NC} ${message}"
+            echo -e "  ${YELLOW}[WARNING]${NC} ${message}"
             ((VALIDATIONS_WARNING++))
             ;;
         "INFO")
@@ -402,23 +402,23 @@ main() {
     # Summary
     echo -e "${BLUE}Validation Summary${NC}"
     echo "=================="
-    echo -e "  ${GREEN}✓${NC} Passed: $VALIDATIONS_PASSED"
-    echo -e "  ${YELLOW}⚠${NC} Warnings: $VALIDATIONS_WARNING"
-    echo -e "  ${RED}✗${NC} Failed: $VALIDATIONS_FAILED"
+    echo -e "  ${GREEN}[OK]${NC} Passed: $VALIDATIONS_PASSED"
+    echo -e "  ${YELLOW}[WARNING]${NC} Warnings: $VALIDATIONS_WARNING"
+    echo -e "  ${RED}[X]${NC} Failed: $VALIDATIONS_FAILED"
     echo ""
     
     # Final verdict
     if [ $VALIDATIONS_FAILED -eq 0 ]; then
         if [ $VALIDATIONS_WARNING -eq 0 ]; then
-            echo -e "${GREEN}✅ DEPLOYMENT VALIDATION PASSED${NC}"
+            echo -e "${GREEN}[OK] DEPLOYMENT VALIDATION PASSED${NC}"
             echo "Arkfile is successfully deployed and ready for production use."
         else
-            echo -e "${YELLOW}⚠️  DEPLOYMENT VALIDATION PASSED WITH WARNINGS${NC}"
+            echo -e "${YELLOW}[WARNING]  DEPLOYMENT VALIDATION PASSED WITH WARNINGS${NC}"
             echo "Arkfile is deployed and functional, but consider addressing warnings."
         fi
         exit 0
     else
-        echo -e "${RED}❌ DEPLOYMENT VALIDATION FAILED${NC}"
+        echo -e "${RED}[X] DEPLOYMENT VALIDATION FAILED${NC}"
         echo "Deployment has critical issues that must be resolved."
         echo ""
         echo "Troubleshooting steps:"

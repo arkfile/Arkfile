@@ -23,14 +23,14 @@ check_certificate_expiry() {
     local warning_days="${3:-30}"
     
     if [ ! -f "${cert_path}" ]; then
-        echo -e "  ${RED}✗ ${service_name}: Certificate not found${NC}"
+        echo -e "  ${RED}[X] ${service_name}: Certificate not found${NC}"
         return 1
     fi
     
     # Get certificate expiration date
     local expiry_date=$(sudo -u ${USER} openssl x509 -in "${cert_path}" -noout -enddate 2>/dev/null | cut -d= -f2)
     if [ -z "${expiry_date}" ]; then
-        echo -e "  ${RED}✗ ${service_name}: Cannot read certificate expiration${NC}"
+        echo -e "  ${RED}[X] ${service_name}: Cannot read certificate expiration${NC}"
         return 1
     fi
     
@@ -40,15 +40,15 @@ check_certificate_expiry() {
     local warning_epoch=$((current_epoch + warning_days * 24 * 3600))
     
     if [ ${expiry_epoch} -lt ${current_epoch} ]; then
-        echo -e "  ${RED}✗ ${service_name}: Certificate EXPIRED (${expiry_date})${NC}"
+        echo -e "  ${RED}[X] ${service_name}: Certificate EXPIRED (${expiry_date})${NC}"
         return 1
     elif [ ${expiry_epoch} -lt ${warning_epoch} ]; then
         local days_left=$(( (expiry_epoch - current_epoch) / 86400 ))
-        echo -e "  ${YELLOW}⚠ ${service_name}: Certificate expires in ${days_left} days (${expiry_date})${NC}"
+        echo -e "  ${YELLOW}[WARNING] ${service_name}: Certificate expires in ${days_left} days (${expiry_date})${NC}"
         return 2
     else
         local days_left=$(( (expiry_epoch - current_epoch) / 86400 ))
-        echo -e "  ${GREEN}✓ ${service_name}: Certificate valid for ${days_left} days (${expiry_date})${NC}"
+        echo -e "  ${GREEN}[OK] ${service_name}: Certificate valid for ${days_left} days (${expiry_date})${NC}"
         return 0
     fi
 }
@@ -60,7 +60,7 @@ validate_key_pair() {
     local service_name="$3"
     
     if [ ! -f "${cert_path}" ] || [ ! -f "${key_path}" ]; then
-        echo -e "  ${RED}✗ ${service_name}: Missing certificate or key file${NC}"
+        echo -e "  ${RED}[X] ${service_name}: Missing certificate or key file${NC}"
         return 1
     fi
     
@@ -69,15 +69,15 @@ validate_key_pair() {
     local key_hash=$(sudo -u ${USER} openssl pkey -in "${key_path}" -pubout 2>/dev/null | openssl sha256 2>/dev/null)
     
     if [ -z "${cert_hash}" ] || [ -z "${key_hash}" ]; then
-        echo -e "  ${RED}✗ ${service_name}: Cannot read certificate or key${NC}"
+        echo -e "  ${RED}[X] ${service_name}: Cannot read certificate or key${NC}"
         return 1
     fi
     
     if [ "${cert_hash}" = "${key_hash}" ]; then
-        echo -e "  ${GREEN}✓ ${service_name}: Certificate and key match${NC}"
+        echo -e "  ${GREEN}[OK] ${service_name}: Certificate and key match${NC}"
         return 0
     else
-        echo -e "  ${RED}✗ ${service_name}: Certificate and key DO NOT match${NC}"
+        echo -e "  ${RED}[X] ${service_name}: Certificate and key DO NOT match${NC}"
         return 1
     fi
 }
@@ -136,10 +136,10 @@ validate_certificate_chain() {
     
     # Verify certificate against CA
     if sudo -u ${USER} openssl verify -CAfile "${ca_path}" "${cert_path}" >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓ ${service_name}: Certificate chain valid${NC}"
+        echo -e "  ${GREEN}[OK] ${service_name}: Certificate chain valid${NC}"
         return 0
     else
-        echo -e "  ${RED}✗ ${service_name}: Certificate chain invalid${NC}"
+        echo -e "  ${RED}[X] ${service_name}: Certificate chain invalid${NC}"
         return 1
     fi
 }
@@ -153,7 +153,7 @@ fi
 
 # Check if metadata exists
 if [ -f "${TLS_DIR}/metadata.json" ]; then
-    echo -e "${BLUE}📋 Certificate Metadata:${NC}"
+    echo -e "${BLUE}[INFO] Certificate Metadata:${NC}"
     if command -v jq >/dev/null 2>&1; then
         sudo -u ${USER} jq -r '
             "Generated: " + .generated + 
@@ -176,7 +176,7 @@ passed_checks=0
 warning_checks=0
 failed_checks=0
 
-echo -e "${BLUE}🔐 Certificate Expiration Check:${NC}"
+echo -e "${BLUE}[SECURE] Certificate Expiration Check:${NC}"
 echo "========================================"
 
 # Check CA certificate
@@ -209,7 +209,7 @@ for service in arkfile rqlite minio; do
 done
 
 echo ""
-echo -e "${BLUE}🔑 Certificate-Key Pair Validation:${NC}"
+echo -e "${BLUE}[KEY] Certificate-Key Pair Validation:${NC}"
 echo "========================================"
 
 # Validate CA key pair
@@ -272,7 +272,7 @@ fi
 
 # Summary
 echo ""
-echo -e "${BLUE}📊 Validation Summary:${NC}"
+echo -e "${BLUE}[STATS] Validation Summary:${NC}"
 echo "========================================"
 echo "Total checks: ${total_checks}"
 echo -e "Passed: ${GREEN}${passed_checks}${NC}"
@@ -286,21 +286,21 @@ fi
 # Recommendations
 echo ""
 if [ ${failed_checks} -gt 0 ]; then
-    echo -e "${RED}❌ Certificate validation failed!${NC}"
+    echo -e "${RED}[X] Certificate validation failed!${NC}"
     echo -e "${YELLOW}Recommendations:${NC}"
     echo "• Regenerate failed certificates: sudo ./scripts/setup/05-setup-tls-certs.sh"
     echo "• Check file permissions and ownership"
     echo "• Verify certificate authority integrity"
     exit 1
 elif [ ${warning_checks} -gt 0 ]; then
-    echo -e "${YELLOW}⚠️  Certificate renewal recommended${NC}"
+    echo -e "${YELLOW}[WARNING]  Certificate renewal recommended${NC}"
     echo -e "${YELLOW}Recommendations:${NC}"
     echo "• Plan certificate renewal before expiration"
     echo "• Create calendar reminders for renewal"
     echo "• Consider automated renewal setup"
     exit 2
 else
-    echo -e "${GREEN}✅ All certificates are valid and healthy!${NC}"
+    echo -e "${GREEN}[OK] All certificates are valid and healthy!${NC}"
     echo -e "${BLUE}Recommendations:${NC}"
     echo "• Set up automated monitoring"
     echo "• Schedule regular validation checks"

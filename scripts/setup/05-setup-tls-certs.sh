@@ -42,10 +42,10 @@ generate_ecdsa_key() {
     sudo -u ${USER} openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-384 -out "${key_path}"
     
     if [ $? -eq 0 ]; then
-        echo -e "  ${GREEN}✓ ECDSA P-384 key generated successfully${NC}"
+        echo -e "  ${GREEN}[OK] ECDSA P-384 key generated successfully${NC}"
         return 0
     else
-        echo -e "  ${YELLOW}⚠ ECDSA generation failed, falling back to RSA${NC}"
+        echo -e "  ${YELLOW}[WARNING] ECDSA generation failed, falling back to RSA${NC}"
         return 1
     fi
 }
@@ -60,10 +60,10 @@ generate_rsa_key() {
     sudo -u ${USER} openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:${key_size} -out "${key_path}"
     
     if [ $? -eq 0 ]; then
-        echo -e "  ${GREEN}✓ RSA ${key_size}-bit key generated successfully${NC}"
+        echo -e "  ${GREEN}[OK] RSA ${key_size}-bit key generated successfully${NC}"
         return 0
     else
-        echo -e "  ${RED}✗ RSA key generation failed${NC}"
+        echo -e "  ${RED}[X] RSA key generation failed${NC}"
         return 1
     fi
 }
@@ -87,7 +87,7 @@ generate_private_key() {
         return 0
     fi
     
-    echo -e "${RED}✗ Failed to generate private key for ${description}${NC}"
+    echo -e "${RED}[X] Failed to generate private key for ${description}${NC}"
     return 1
 }
 
@@ -140,7 +140,7 @@ EOF
         # Generate CSR
         sudo -u ${USER} openssl req -new -key "${key_path}" -out "${csr_file}" -config "${config_file}" -extensions v3_req
         if [ $? -ne 0 ]; then
-            echo -e "  ${RED}✗ Failed to create certificate request${NC}"
+            echo -e "  ${RED}[X] Failed to create certificate request${NC}"
             rm -f "${config_file}" "${csr_file}"
             return 1
         fi
@@ -161,10 +161,10 @@ EOF
     rm -f "${config_file}"
     
     if [ $sign_result -eq 0 ]; then
-        echo -e "  ${GREEN}✓ Certificate created successfully${NC}"
+        echo -e "  ${GREEN}[OK] Certificate created successfully${NC}"
         return 0
     else
-        echo -e "  ${RED}✗ Certificate creation failed${NC}"
+        echo -e "  ${RED}[X] Certificate creation failed${NC}"
         return 1
     fi
 }
@@ -176,15 +176,15 @@ validate_certificate() {
     local service_name="$3"
     
     if [ ! -f "${cert_path}" ] || [ ! -f "${key_path}" ]; then
-        echo -e "  ${RED}✗ ${service_name}: Missing certificate or key${NC}"
+        echo -e "  ${RED}[X] ${service_name}: Missing certificate or key${NC}"
         return 1
     fi
     
     # Check certificate validity
     if sudo -u ${USER} openssl x509 -in "${cert_path}" -noout -checkend 0 >/dev/null 2>&1; then
-        echo -e "  ${GREEN}✓ ${service_name}: Certificate valid${NC}"
+        echo -e "  ${GREEN}[OK] ${service_name}: Certificate valid${NC}"
     else
-        echo -e "  ${RED}✗ ${service_name}: Certificate invalid or expired${NC}"
+        echo -e "  ${RED}[X] ${service_name}: Certificate invalid or expired${NC}"
         return 1
     fi
     
@@ -193,9 +193,9 @@ validate_certificate() {
     local key_pubkey_hash=$(sudo -u ${USER} openssl pkey -in "${key_path}" -pubout | openssl sha256)
     
     if [ "${cert_pubkey_hash}" = "${key_pubkey_hash}" ]; then
-        echo -e "  ${GREEN}✓ ${service_name}: Certificate matches private key${NC}"
+        echo -e "  ${GREEN}[OK] ${service_name}: Certificate matches private key${NC}"
     else
-        echo -e "  ${RED}✗ ${service_name}: Certificate/key mismatch${NC}"
+        echo -e "  ${RED}[X] ${service_name}: Certificate/key mismatch${NC}"
         return 1
     fi
     
@@ -243,14 +243,14 @@ ca_alt_names="DNS.1=ca.internal.arkfile,DNS.2=ca.${DOMAIN}"
 
 if create_certificate "${TLS_DIR}/ca/ca.key" "${TLS_DIR}/ca/ca.crt" \
     "${ca_cn}" "${ca_alt_names}" "" "" "Certificate Authority"; then
-    echo -e "${GREEN}✓ Certificate Authority created successfully${NC}"
+    echo -e "${GREEN}[OK] Certificate Authority created successfully${NC}"
     
     # Create legacy filename copies for backward compatibility
     sudo -u ${USER} cp "${TLS_DIR}/ca/ca.crt" "${TLS_DIR}/ca/ca-cert.pem"
     sudo -u ${USER} cp "${TLS_DIR}/ca/ca.key" "${TLS_DIR}/ca/ca-key.pem"
-    echo -e "${GREEN}✓ Legacy CA filenames created for compatibility${NC}"
+    echo -e "${GREEN}[OK] Legacy CA filenames created for compatibility${NC}"
 else
-    echo -e "${RED}✗ Failed to create Certificate Authority${NC}"
+    echo -e "${RED}[X] Failed to create Certificate Authority${NC}"
     exit 1
 fi
 
@@ -268,9 +268,9 @@ arkfile_alt_names="DNS.1=arkfile.${DOMAIN},DNS.2=${DOMAIN},DNS.3=localhost,DNS.4
 
 if create_certificate "${TLS_DIR}/arkfile/server-key.pem" "${TLS_DIR}/arkfile/server-cert.pem" \
     "${arkfile_cn}" "${arkfile_alt_names}" "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "Arkfile Application"; then
-    echo -e "${GREEN}✓ Arkfile certificate created successfully${NC}"
+    echo -e "${GREEN}[OK] Arkfile certificate created successfully${NC}"
 else
-    echo -e "${RED}✗ Failed to create Arkfile certificate${NC}"
+    echo -e "${RED}[X] Failed to create Arkfile certificate${NC}"
     exit 1
 fi
 
@@ -288,14 +288,14 @@ rqlite_alt_names="DNS.1=rqlite.${DOMAIN},DNS.2=rqlite.internal,DNS.3=localhost,I
 
 if create_certificate "${TLS_DIR}/rqlite/server-key.pem" "${TLS_DIR}/rqlite/server-cert.pem" \
     "${rqlite_cn}" "${rqlite_alt_names}" "${TLS_DIR}/ca/ca.crt" "${TLS_DIR}/ca/ca.key" "rqlite Database"; then
-    echo -e "${GREEN}✓ rqlite certificate created successfully${NC}"
+    echo -e "${GREEN}[OK] rqlite certificate created successfully${NC}"
     
     # Create health-check compatible filenames
     sudo -u ${USER} cp "${TLS_DIR}/rqlite/server-cert.pem" "${TLS_DIR}/rqlite/server.crt"
     sudo -u ${USER} cp "${TLS_DIR}/rqlite/server-key.pem" "${TLS_DIR}/rqlite/server.key"
-    echo -e "${GREEN}✓ Health-check compatible rqlite filenames created${NC}"
+    echo -e "${GREEN}[OK] Health-check compatible rqlite filenames created${NC}"
 else
-    echo -e "${RED}✗ Failed to create rqlite certificate${NC}"
+    echo -e "${RED}[X] Failed to create rqlite certificate${NC}"
     exit 1
 fi
 
@@ -313,14 +313,14 @@ minio_alt_names="DNS.1=minio.${DOMAIN},DNS.2=minio.internal,DNS.3=localhost,IP.1
 
 if create_certificate "${TLS_DIR}/minio/server-key.pem" "${TLS_DIR}/minio/server-cert.pem" \
     "${minio_cn}" "${minio_alt_names}" "${TLS_DIR}/ca/ca.crt" "${TLS_DIR}/ca/ca.key" "MinIO Storage"; then
-    echo -e "${GREEN}✓ MinIO certificate created successfully${NC}"
+    echo -e "${GREEN}[OK] MinIO certificate created successfully${NC}"
     
     # Create health-check compatible filenames
     sudo -u ${USER} cp "${TLS_DIR}/minio/server-cert.pem" "${TLS_DIR}/minio/server.crt"
     sudo -u ${USER} cp "${TLS_DIR}/minio/server-key.pem" "${TLS_DIR}/minio/server.key"
-    echo -e "${GREEN}✓ Health-check compatible MinIO filenames created${NC}"
+    echo -e "${GREEN}[OK] Health-check compatible MinIO filenames created${NC}"
 else
-    echo -e "${RED}✗ Failed to create MinIO certificate${NC}"
+    echo -e "${RED}[X] Failed to create MinIO certificate${NC}"
     exit 1
 fi
 
@@ -332,9 +332,9 @@ for service in arkfile rqlite minio; do
     echo "Creating certificate bundle for ${service}..."
     sudo -u ${USER} cat "${TLS_DIR}/${service}/server-cert.pem" "${TLS_DIR}/ca/ca-cert.pem" > "${bundle_path}"
     if [ $? -eq 0 ]; then
-        echo -e "  ${GREEN}✓ ${service} bundle created${NC}"
+        echo -e "  ${GREEN}[OK] ${service} bundle created${NC}"
     else
-        echo -e "  ${RED}✗ ${service} bundle creation failed${NC}"
+        echo -e "  ${RED}[X] ${service} bundle creation failed${NC}"
     fi
 done
 
@@ -366,7 +366,7 @@ for service in arkfile rqlite minio; do
     fi
 done
 
-echo -e "  ${GREEN}✓ File permissions set securely${NC}"
+echo -e "  ${GREEN}[OK] File permissions set securely${NC}"
 
 # Validate all certificates
 echo ""
@@ -458,9 +458,9 @@ EOF
 # Validate metadata creation
 if [ -f "${TLS_DIR}/metadata.json" ] && [ -s "${TLS_DIR}/metadata.json" ]; then
     sudo chmod 644 "${TLS_DIR}/metadata.json"
-    echo -e "  ${GREEN}✓ Certificate metadata created successfully${NC}"
+    echo -e "  ${GREEN}[OK] Certificate metadata created successfully${NC}"
 else
-    echo -e "  ${YELLOW}⚠ Certificate metadata creation failed, continuing without metadata${NC}"
+    echo -e "  ${YELLOW}[WARNING] Certificate metadata creation failed, continuing without metadata${NC}"
 fi
 
 # Final summary
@@ -468,11 +468,11 @@ echo ""
 if [ "$all_valid" = true ]; then
     echo -e "${GREEN}TLS certificate setup completed successfully!${NC}"
 else
-    echo -e "${YELLOW}⚠️  TLS certificate setup completed with some issues${NC}"
+    echo -e "${YELLOW}[WARNING]  TLS certificate setup completed with some issues${NC}"
 fi
 
 echo ""
-echo -e "${BLUE}📋 Certificate Summary:${NC}"
+echo -e "${BLUE}[INFO] Certificate Summary:${NC}"
 echo "========================================"
 echo "Certificate Authority:"
 echo "  Key: ${TLS_DIR}/ca/ca-key.pem"
@@ -519,6 +519,6 @@ echo "• Renewal needed before: ${renewal_date}"
 echo "• Use ./scripts/renew-certificates.sh for renewal"
 echo "• Monitor expiration with ./scripts/validate-certificates.sh"
 echo ""
-echo -e "${GREEN}✅ Modern TLS certificates ready for production use!${NC}"
+echo -e "${GREEN}[OK] Modern TLS certificates ready for production use!${NC}"
 
 exit 0

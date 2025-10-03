@@ -69,29 +69,29 @@ validate_backend() {
     
     if result=$(eval "$command" 2>/dev/null); then
         if [[ "$result" == *"$expected"* ]] || [ -z "$expected" ]; then
-            echo -e "${GREEN}✅ PASS: ${description}${NC}"
+            echo -e "${GREEN}[OK] PASS: ${description}${NC}"
             echo -e "   Result: ${result}"
             record_test "pass"
         else
-            echo -e "${RED}❌ FAIL: ${description}${NC}"
+            echo -e "${RED}[X] FAIL: ${description}${NC}"
             echo -e "   Expected: ${expected}"
             echo -e "   Got: ${result}"
             record_test "fail"
         fi
     else
-        echo -e "${RED}❌ FAIL: ${description} (command failed)${NC}"
+        echo -e "${RED}[X] FAIL: ${description} (command failed)${NC}"
         record_test "fail"
     fi
     echo
 }
 
-echo -e "${BLUE}🔐 UNDERSTANDING YOUR TLS SETUP${NC}"
+echo -e "${BLUE}[SECURE] UNDERSTANDING YOUR TLS SETUP${NC}"
 echo "=================================="
 echo
 echo -e "${CYAN}Your deployment uses self-signed certificates for HTTPS access.${NC}"
 echo -e "${CYAN}This is NORMAL and SECURE for development/internal deployments.${NC}"
 echo
-echo -e "${YELLOW}⚠️  IMPORTANT: Browser Certificate Warnings${NC}"
+echo -e "${YELLOW}[WARNING]  IMPORTANT: Browser Certificate Warnings${NC}"
 echo
 echo "When you access https://localhost, you WILL see browser warnings like:"
 echo
@@ -106,7 +106,7 @@ echo
 echo "Press Enter to continue..."
 read
 
-echo -e "${BLUE}📋 STEP 1: SYSTEM HEALTH VERIFICATION${NC}"
+echo -e "${BLUE}[INFO] STEP 1: SYSTEM HEALTH VERIFICATION${NC}"
 echo "======================================"
 echo
 
@@ -114,11 +114,11 @@ echo
 echo -e "${PURPLE}🔍 Testing system health endpoint...${NC}"
 if curl -s -f http://localhost:8080/health >/dev/null 2>&1; then
     health_response=$(curl -s http://localhost:8080/health)
-    echo -e "${GREEN}✅ PASS: Health endpoint accessible${NC}"
+    echo -e "${GREEN}[OK] PASS: Health endpoint accessible${NC}"
     echo -e "   Response: $(echo "$health_response" | jq -r '.status // "healthy"' 2>/dev/null || echo "healthy")"
     record_test "pass"
 else
-    echo -e "${RED}❌ FAIL: Health endpoint not accessible${NC}"
+    echo -e "${RED}[X] FAIL: Health endpoint not accessible${NC}"
     echo -e "${RED}   Make sure Arkfile service is running: sudo systemctl status arkfile${NC}"
     record_test "fail"
 fi
@@ -131,18 +131,18 @@ services_ok=0
 
 for service in "${services[@]}"; do
     if systemctl is-active --quiet "$service" 2>/dev/null; then
-        echo -e "${GREEN}✅ ${service}: running${NC}"
+        echo -e "${GREEN}[OK] ${service}: running${NC}"
         ((services_ok++))
     else
-        echo -e "${RED}❌ ${service}: not running${NC}"
+        echo -e "${RED}[X] ${service}: not running${NC}"
     fi
 done
 
 if [ $services_ok -eq ${#services[@]} ]; then
-    echo -e "${GREEN}✅ PASS: All services are running${NC}"
+    echo -e "${GREEN}[OK] PASS: All services are running${NC}"
     record_test "pass"
 else
-    echo -e "${YELLOW}⚠️  PARTIAL: $services_ok/${#services[@]} services running${NC}"
+    echo -e "${YELLOW}[WARNING]  PARTIAL: $services_ok/${#services[@]} services running${NC}"
     record_test "fail"
 fi
 echo
@@ -152,19 +152,19 @@ echo -e "${PURPLE}🔍 Testing network connectivity...${NC}"
 
 # Test HTTP
 if curl -s -I http://localhost:8080/ | head -1 | grep -q "200 OK"; then
-    echo -e "${GREEN}✅ HTTP access (localhost:8080): working${NC}"
+    echo -e "${GREEN}[OK] HTTP access (localhost:8080): working${NC}"
     record_test "pass"
 else
-    echo -e "${RED}❌ HTTP access (localhost:8080): failed${NC}"
+    echo -e "${RED}[X] HTTP access (localhost:8080): failed${NC}"
     record_test "fail"
 fi
 
 # Test HTTPS (ignore certificate)
 if curl -s -I https://localhost --insecure 2>/dev/null | head -1 | grep -q "200"; then
-    echo -e "${GREEN}✅ HTTPS access (localhost:443): working${NC}"
+    echo -e "${GREEN}[OK] HTTPS access (localhost:443): working${NC}"
     record_test "pass"
 else
-    echo -e "${YELLOW}⚠️  HTTPS access (localhost:443): may need configuration${NC}"
+    echo -e "${YELLOW}[WARNING]  HTTPS access (localhost:443): may need configuration${NC}"
     record_test "fail"
 fi
 echo
@@ -233,7 +233,7 @@ validate_backend "registration" "$TEST_USERNAME" "sqlite3 /opt/arkfile/var/lib/d
 
 validate_backend "opaque_data" "" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT username FROM opaque_user_data WHERE username='$TEST_USERNAME';\" 2>/dev/null" "OPAQUE authentication data"
 
-echo -e "${BLUE}🔐 STEP 5: USER LOGIN TEST (OPAQUE)${NC}"
+echo -e "${BLUE}[SECURE] STEP 5: USER LOGIN TEST (OPAQUE)${NC}"
 echo "==================================="
 echo
 
@@ -247,13 +247,13 @@ wait_for_user "1. Use the same login credentials:
 # Check for recent OPAQUE authentication in logs
 validate_backend "login" "opaque" "sudo journalctl -u arkfile --since='2 minutes ago' --no-pager -q | grep -i opaque | tail -1" "OPAQUE authentication in logs"
 
-echo -e "${BLUE}📁 STEP 6: FILE UPLOAD & ENCRYPTION TEST${NC}"
+echo -e "${BLUE}[FILES] STEP 6: FILE UPLOAD & ENCRYPTION TEST${NC}"
 echo "========================================="
 echo
 
 # Create test file
 echo "$TEST_FILE_CONTENT" > /tmp/arkfile-test.txt
-echo -e "${GREEN}✅ Created test file: /tmp/arkfile-test.txt${NC}"
+echo -e "${GREEN}[OK] Created test file: /tmp/arkfile-test.txt${NC}"
 echo -e "   Content: ${TEST_FILE_CONTENT}"
 echo
 
@@ -262,7 +262,7 @@ wait_for_user "1. Click 'Choose File' and select: /tmp/arkfile-test.txt
 3. Add password hint: 'Test file for validation'
 4. Click 'Upload' button
 5. Wait for upload progress to complete
-6. Verify file appears in 'Your Files' section with 🔒 icon"
+6. Verify file appears in 'Your Files' section with [LOCK] icon"
 
 # Backend verification for file upload
 validate_backend "file_upload" "$TEST_USERNAME" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT fm.owner_username FROM file_metadata fm WHERE fm.owner_username='$TEST_USERNAME' ORDER BY fm.upload_date DESC LIMIT 1;\" 2>/dev/null" "File upload in database"
@@ -272,10 +272,10 @@ validate_backend "file_encryption" "custom" "sqlite3 /opt/arkfile/var/lib/databa
 # Check for encrypted files in storage
 storage_files=$(find /opt/arkfile/var/lib/storage/ -name "*.enc" 2>/dev/null | wc -l)
 if [ "$storage_files" -gt 0 ]; then
-    echo -e "${GREEN}✅ PASS: Found $storage_files encrypted file(s) in storage${NC}"
+    echo -e "${GREEN}[OK] PASS: Found $storage_files encrypted file(s) in storage${NC}"
     record_test "pass"
 else
-    echo -e "${RED}❌ FAIL: No encrypted files found in storage${NC}"
+    echo -e "${RED}[X] FAIL: No encrypted files found in storage${NC}"
     record_test "fail"
 fi
 echo
@@ -294,14 +294,14 @@ latest_file=$(find /opt/arkfile/var/lib/storage/ -name "*.enc" -printf '%T@ %p\n
 if [ -n "$latest_file" ] && [ -f "$latest_file" ]; then
     file_header=$(xxd -l 4 "$latest_file" 2>/dev/null | head -1 | cut -d' ' -f2)
     if [[ "$file_header" =~ ^(0004|0005) ]]; then
-        echo -e "${GREEN}✅ PASS: File has correct encryption header (0x${file_header})${NC}"
+        echo -e "${GREEN}[OK] PASS: File has correct encryption header (0x${file_header})${NC}"
         record_test "pass"
     else
-        echo -e "${RED}❌ FAIL: File has incorrect encryption header${NC}"
+        echo -e "${RED}[X] FAIL: File has incorrect encryption header${NC}"
         record_test "fail"
     fi
 else
-    echo -e "${YELLOW}⚠️  SKIP: Could not locate encrypted file for header verification${NC}"
+    echo -e "${YELLOW}[WARNING]  SKIP: Could not locate encrypted file for header verification${NC}"
 fi
 echo
 
@@ -339,7 +339,7 @@ if command -v curl >/dev/null 2>&1; then
     validate_backend "minio_health" "200" "curl -s -o /dev/null -w '%{http_code}' http://localhost:9000/minio/health/ready" "MinIO storage health"
 fi
 
-echo -e "${BLUE}📊 FINAL VALIDATION SUMMARY${NC}"
+echo -e "${BLUE}[STATS] FINAL VALIDATION SUMMARY${NC}"
 echo "============================"
 echo
 
@@ -350,8 +350,8 @@ DURATION=$((END_TIME - START_TIME))
 echo -e "${CYAN}Validation completed in ${DURATION} seconds${NC}"
 echo -e "${CYAN}Total tests performed: ${TESTS_TOTAL}${NC}"
 echo
-echo -e "${GREEN}✅ Tests passed: ${TESTS_PASSED}${NC}"
-echo -e "${RED}❌ Tests failed: ${TESTS_FAILED}${NC}"
+echo -e "${GREEN}[OK] Tests passed: ${TESTS_PASSED}${NC}"
+echo -e "${RED}[X] Tests failed: ${TESTS_FAILED}${NC}"
 echo
 
 # Final verdict
@@ -369,14 +369,14 @@ if [ $TESTS_FAILED -eq 0 ]; then
     echo -e "${GREEN}║  + TLS certificates configured properly                                      ║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo
-    echo -e "${BLUE}🚀 NEXT STEPS:${NC}"
+    echo -e "${BLUE}[START] NEXT STEPS:${NC}"
     echo "• Your system is ready for production use"
     echo "• Consider running security audit: ./scripts/security-audit.sh"
     echo "• Set up monitoring and backups for production deployment"
     echo "• Upgrade to production TLS certificates when ready"
     
 elif [ $TESTS_FAILED -le 2 ]; then
-    echo -e "${YELLOW}⚠️  VALIDATION COMPLETED WITH MINOR ISSUES${NC}"
+    echo -e "${YELLOW}[WARNING]  VALIDATION COMPLETED WITH MINOR ISSUES${NC}"
     echo -e "${YELLOW}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${YELLOW}║                    MOSTLY FUNCTIONAL DEPLOYMENT                              ║${NC}"
     echo -e "${YELLOW}║                                                                              ║${NC}"
@@ -391,7 +391,7 @@ elif [ $TESTS_FAILED -le 2 ]; then
     echo "• Most functionality should work despite minor issues"
     
 else
-    echo -e "${RED}❌ VALIDATION FAILED${NC}"
+    echo -e "${RED}[X] VALIDATION FAILED${NC}"
     echo -e "${RED}╔══════════════════════════════════════════════════════════════════════════════╗${NC}"
     echo -e "${RED}║                       DEPLOYMENT NEEDS ATTENTION                             ║${NC}"
     echo -e "${RED}║                                                                              ║${NC}"

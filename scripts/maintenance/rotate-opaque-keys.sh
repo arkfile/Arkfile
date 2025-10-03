@@ -33,7 +33,7 @@ TEST_MODE=false
 
 print_header() {
     echo
-    echo -e "${RED}${BOLD}⚠️  OPAQUE SERVER KEY ROTATION${NC}"
+    echo -e "${RED}${BOLD}[WARNING]  OPAQUE SERVER KEY ROTATION${NC}"
     echo -e "${RED}${BOLD}================================${NC}"
     echo -e "${YELLOW}WARNING: This operation affects all user authentication${NC}"
     echo -e "${YELLOW}Users may need to re-register after key rotation${NC}"
@@ -134,7 +134,7 @@ assess_user_impact() {
     echo "  - Plan user communication strategy"
     
     if [ "$SKIP_USER_CHECK" = false ] && [ $active_users -gt 100 ]; then
-        echo -e "${RED}❌ Warning: ${active_users} active users detected${NC}"
+        echo -e "${RED}[X] Warning: ${active_users} active users detected${NC}"
         echo -e "${RED}   Key rotation will affect many users${NC}"
         echo -e "${YELLOW}   Use --skip-user-check to override${NC}"
         return 1
@@ -145,7 +145,7 @@ assess_user_impact() {
 
 # Function to create comprehensive backup of current state
 create_rotation_backup() {
-    echo -e "${BLUE}💾 Creating rotation backup...${NC}"
+    echo -e "${BLUE}Creating rotation backup...${NC}"
     
     # TODO: Implement comprehensive backup
     # - Backup current OPAQUE keys
@@ -167,7 +167,7 @@ create_rotation_backup() {
 
 # Function to generate new OPAQUE server keypair with versioning
 generate_new_opaque_keys() {
-    echo -e "${BLUE}🔑 Generating new OPAQUE server keys...${NC}"
+    echo -e "${BLUE}[KEY] Generating new OPAQUE server keys...${NC}"
     
     # TODO: Implement new key generation
     # - Generate new OPAQUE server private key
@@ -209,7 +209,7 @@ implement_dual_key_transition() {
 
 # Function to implement versioned key migration system
 implement_versioned_migration() {
-    echo -e "${BLUE}📋 Implementing versioned migration...${NC}"
+    echo -e "${BLUE}[INFO] Implementing versioned migration...${NC}"
     
     # TODO: Implement versioned key system
     # - Create key version management system
@@ -293,7 +293,7 @@ generate_user_communications() {
 
 # Function to monitor migration progress
 monitor_migration_progress() {
-    echo -e "${BLUE}📊 Monitoring migration progress...${NC}"
+    echo -e "${BLUE}[STATS] Monitoring migration progress...${NC}"
     
     # TODO: Implement migration monitoring
     # - Track user re-registration rates
@@ -314,7 +314,7 @@ monitor_migration_progress() {
 
 # Function to cleanup old keys after migration completion
 cleanup_old_keys() {
-    echo -e "${BLUE}🧹 Cleaning up old OPAQUE keys...${NC}"
+    echo -e "${BLUE}[CLEANUP] Cleaning up old OPAQUE keys...${NC}"
     
     # TODO: Implement key cleanup
     # - Verify migration completion (100% user migration)
@@ -356,7 +356,7 @@ rollback_rotation() {
 
 # Function to generate detailed rotation plan
 generate_rotation_plan() {
-    echo -e "${BLUE}📋 Generating OPAQUE key rotation plan...${NC}"
+    echo -e "${BLUE}[INFO] Generating OPAQUE key rotation plan...${NC}"
     
     local plan_file="${BACKUP_DIR}/rotation-plan.md"
     mkdir -p "$BACKUP_DIR"
@@ -443,7 +443,7 @@ generate_rotation_plan() {
 
 EOF
 
-    echo -e "${GREEN}✅ Rotation plan generated: $plan_file${NC}"
+    echo -e "${GREEN}[OK] Rotation plan generated: $plan_file${NC}"
     return 0
 }
 
@@ -496,7 +496,7 @@ main() {
     
     # Validate strategy selection
     if [ -z "$MIGRATION_STRATEGY" ]; then
-        echo -e "${RED}❌ No migration strategy specified${NC}"
+        echo -e "${RED}[X] No migration strategy specified${NC}"
         print_usage
         exit 1
     fi
@@ -504,11 +504,11 @@ main() {
     # Execute based on selected strategy
     case "$MIGRATION_STRATEGY" in
         "plan-only")
-            echo -e "${BLUE}📋 Generating rotation plan only...${NC}"
+            echo -e "${BLUE}[INFO] Generating rotation plan only...${NC}"
             validate_current_setup
             assess_user_impact
             generate_rotation_plan
-            echo -e "${GREEN}✅ Rotation plan generated successfully${NC}"
+            echo -e "${GREEN}[OK] Rotation plan generated successfully${NC}"
             ;;
         "dual-key")
             if [ "$TEST_MODE" = true ]; then
@@ -518,7 +518,7 @@ main() {
                 create_rotation_backup
                 generate_new_opaque_keys
                 test_new_keys
-                echo -e "${GREEN}✅ Test mode completed - no changes made${NC}"
+                echo -e "${GREEN}[OK] Test mode completed - no changes made${NC}"
             else
                 echo -e "${BLUE}🔄 Implementing dual-key transition...${NC}"
                 validate_current_setup
@@ -528,8 +528,8 @@ main() {
                 test_new_keys
                 implement_dual_key_transition
                 generate_user_communications
-                echo -e "${GREEN}✅ Dual-key transition implemented${NC}"
-                echo -e "${YELLOW}📋 Monitor migration progress with: monitor_migration_progress${NC}"
+                echo -e "${GREEN}[OK] Dual-key transition implemented${NC}"
+                echo -e "${YELLOW}[INFO] Monitor migration progress with: monitor_migration_progress${NC}"
             fi
             ;;
         "versioned")
@@ -540,9 +540,9 @@ main() {
                 create_rotation_backup
                 generate_new_opaque_keys
                 test_new_keys
-                echo -e "${GREEN}✅ Versioned migration test completed${NC}"
+                echo -e "${GREEN}[OK] Versioned migration test completed${NC}"
             else
-                echo -e "${BLUE}📋 Implementing versioned migration...${NC}"
+                echo -e "${BLUE}[INFO] Implementing versioned migration...${NC}"
                 validate_current_setup
                 assess_user_impact
                 create_rotation_backup
@@ -550,12 +550,12 @@ main() {
                 test_new_keys
                 implement_versioned_migration
                 generate_user_communications
-                echo -e "${GREEN}✅ Versioned migration implemented${NC}"
+                echo -e "${GREEN}[OK] Versioned migration implemented${NC}"
             fi
             ;;
         "breaking")
             if [ "$FORCE_ROTATION" = false ]; then
-                echo -e "${RED}❌ Breaking change rotation requires --force flag${NC}"
+                echo -e "${RED}[X] Breaking change rotation requires --force flag${NC}"
                 echo -e "${YELLOW}   This will invalidate ALL user accounts${NC}"
                 exit 1
             fi
@@ -567,7 +567,7 @@ main() {
                 create_rotation_backup
                 generate_new_opaque_keys
                 test_new_keys
-                echo -e "${GREEN}✅ Breaking change test completed${NC}"
+                echo -e "${GREEN}[OK] Breaking change test completed${NC}"
             else
                 echo -e "${BLUE}💥 Performing breaking change rotation...${NC}"
                 validate_current_setup
@@ -577,26 +577,26 @@ main() {
                 test_new_keys
                 perform_breaking_change_rotation
                 generate_user_communications
-                echo -e "${GREEN}✅ Breaking change rotation completed${NC}"
-                echo -e "${RED}⚠️  ALL USERS MUST RE-REGISTER${NC}"
+                echo -e "${GREEN}[OK] Breaking change rotation completed${NC}"
+                echo -e "${RED}[WARNING]  ALL USERS MUST RE-REGISTER${NC}"
             fi
             ;;
         *)
-            echo -e "${RED}❌ Invalid migration strategy: $MIGRATION_STRATEGY${NC}"
+            echo -e "${RED}[X] Invalid migration strategy: $MIGRATION_STRATEGY${NC}"
             exit 1
             ;;
     esac
     
     echo
-    echo -e "${BLUE}📋 OPAQUE key rotation operation completed${NC}"
+    echo -e "${BLUE}[INFO] OPAQUE key rotation operation completed${NC}"
     echo -e "${BLUE}Backup location: $BACKUP_DIR${NC}"
-    echo -e "${YELLOW}⚠️  Review all outputs and test thoroughly before production use${NC}"
+    echo -e "${YELLOW}[WARNING]  Review all outputs and test thoroughly before production use${NC}"
 }
 
 # Trap for cleanup on script exit
 cleanup_on_exit() {
     echo
-    echo -e "${YELLOW}🧹 Performing cleanup...${NC}"
+    echo -e "${YELLOW}[CLEANUP] Performing cleanup...${NC}"
     # TODO: Add any necessary cleanup operations
 }
 

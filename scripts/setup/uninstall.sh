@@ -28,7 +28,7 @@ COMPONENTS_SKIPPED=0
 echo -e "${RED}🗑️  Arkfile Uninstall Script${NC}"
 echo -e "${RED}===============================${NC}"
 echo
-echo -e "${YELLOW}⚠️  WARNING: This script will help you remove Arkfile from your system.${NC}"
+echo -e "${YELLOW}[WARNING]  WARNING: This script will help you remove Arkfile from your system.${NC}"
 echo -e "${YELLOW}You will be prompted before each component is removed.${NC}"
 echo
 echo -e "${BLUE}Components that may be removed:${NC}"
@@ -88,7 +88,7 @@ print_status() {
             ((COMPONENTS_FOUND++))
             ;;
         "REMOVED")
-            echo -e "  ${GREEN}✓${NC} ${message}"
+            echo -e "  ${GREEN}[OK]${NC} ${message}"
             ((COMPONENTS_REMOVED++))
             ;;
         "SKIPPED")
@@ -99,14 +99,14 @@ print_status() {
             echo -e "  ${CYAN}−${NC} ${message}"
             ;;
         "ERROR")
-            echo -e "  ${RED}✗${NC} ${message}"
+            echo -e "  ${RED}[X]${NC} ${message}"
             ;;
     esac
 }
 
 # Check if running with appropriate privileges
 if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}❌ This script must be run with sudo privileges${NC}"
+    echo -e "${RED}[X] This script must be run with sudo privileges${NC}"
     echo "Usage: sudo $0"
     exit 1
 fi
@@ -180,12 +180,12 @@ if [ "$BINARIES_FOUND" = false ]; then
 fi
 
 echo
-echo -e "${BLUE}📊 Scan Summary:${NC}"
+echo -e "${BLUE}[STATS] Scan Summary:${NC}"
 echo "Components found: $COMPONENTS_FOUND"
 echo
 
 if [ $COMPONENTS_FOUND -eq 0 ]; then
-    echo -e "${GREEN}✅ No Arkfile components found on system${NC}"
+    echo -e "${GREEN}[OK] No Arkfile components found on system${NC}"
     echo "System appears to be clean already."
     exit 0
 fi
@@ -195,7 +195,7 @@ echo
 
 # Step 1: Backup cryptographic keys
 if [ -d "$ARKFILE_DIR/etc/keys" ]; then
-    echo -e "${CYAN}🔐 Cryptographic Keys Backup${NC}"
+    echo -e "${CYAN}[SECURE] Cryptographic Keys Backup${NC}"
     echo "====================================="
     echo "Arkfile uses important cryptographic keys for security."
     echo "It's recommended to backup these keys before removal."
@@ -210,7 +210,7 @@ if [ -d "$ARKFILE_DIR/etc/keys" ]; then
         
         if [ -d "$BACKUP_DIR/keys" ]; then
             print_status "REMOVED" "Keys backed up to: $BACKUP_DIR/keys"
-            echo -e "${GREEN}📋 Backup created successfully!${NC}"
+            echo -e "${GREEN}[INFO] Backup created successfully!${NC}"
             echo "Keys backed up to: $BACKUP_DIR/keys"
             echo "This backup includes:"
             echo "• OPAQUE server keys"
@@ -330,14 +330,14 @@ fi
 echo
 
 # Step 4: Remove user data and configuration
-echo -e "${CYAN}📁 User Data and Configuration${NC}"
+echo -e "${CYAN}[FILES] User Data and Configuration${NC}"
 echo "=============================="
 
 if [ -d "$ARKFILE_DIR" ]; then
     DIR_SIZE=$(du -sh "$ARKFILE_DIR" 2>/dev/null | cut -f1 || echo "unknown")
     echo "Installation directory: $ARKFILE_DIR ($DIR_SIZE)"
     echo
-    echo -e "${RED}⚠️  WARNING: This will delete all uploaded files and databases!${NC}"
+    echo -e "${RED}[WARNING]  WARNING: This will delete all uploaded files and databases!${NC}"
     echo "This includes:"
     echo "• User uploaded files"
     echo "• Database content"
@@ -431,7 +431,7 @@ fi
 echo
 
 # Step 7: Clean up temporary files and caches
-echo -e "${CYAN}🧹 Temporary Files and Caches${NC}"
+echo -e "${CYAN}[CLEANUP] Temporary Files and Caches${NC}"
 echo "============================="
 
 TEMP_LOCATIONS=(
@@ -550,14 +550,14 @@ if [ -d "$ARKFILE_DIR" ]; then
 fi
 
 if [ $REMAINING_COMPONENTS -eq 0 ]; then
-    echo -e "${GREEN}✅ No Arkfile components detected${NC}"
+    echo -e "${GREEN}[OK] No Arkfile components detected${NC}"
 else
-    echo -e "${YELLOW}⚠️  $REMAINING_COMPONENTS components still present${NC}"
+    echo -e "${YELLOW}[WARNING]  $REMAINING_COMPONENTS components still present${NC}"
     echo "This may be intentional based on your choices above."
 fi
 
 echo
-echo -e "${BLUE}📊 Uninstall Summary${NC}"
+echo -e "${BLUE}[STATS] Uninstall Summary${NC}"
 echo "===================="
 echo "Components found: $COMPONENTS_FOUND"
 echo "Components removed: $COMPONENTS_REMOVED"
@@ -566,19 +566,19 @@ echo "Components remaining: $REMAINING_COMPONENTS"
 
 if [ -d "$BACKUP_DIR/keys" ]; then
     echo
-    echo -e "${GREEN}🔐 Key Backup Created${NC}"
+    echo -e "${GREEN}[SECURE] Key Backup Created${NC}"
     echo "====================="
     echo "Location: $BACKUP_DIR/keys"
     echo "This backup contains your cryptographic keys."
     echo "Store this backup securely if you plan to reinstall Arkfile."
     echo
-    echo -e "${YELLOW}⚠️  Remember to delete this backup securely when no longer needed:${NC}"
+    echo -e "${YELLOW}[WARNING]  Remember to delete this backup securely when no longer needed:${NC}"
     echo "sudo rm -rf $BACKUP_DIR"
 fi
 
 echo
 if [ $COMPONENTS_REMOVED -gt 0 ]; then
-    echo -e "${GREEN}✅ Arkfile uninstall completed${NC}"
+    echo -e "${GREEN}[OK] Arkfile uninstall completed${NC}"
     echo "Thank you for using Arkfile!"
     
     if [ $REMAINING_COMPONENTS -eq 0 ]; then

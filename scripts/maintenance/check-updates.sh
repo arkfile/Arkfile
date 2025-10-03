@@ -87,7 +87,7 @@ check_tools() {
     fi
     
     if [[ ${#missing_tools[@]} -gt 0 ]]; then
-        echo -e "${RED}❌ Missing required tools: ${missing_tools[*]}${NC}"
+        echo -e "${RED}[X] Missing required tools: ${missing_tools[*]}${NC}"
         echo "Please install the missing tools and try again."
         exit 1
     fi
@@ -139,9 +139,9 @@ check_rqlite() {
     else
         local icon
         case $status in
-            "up_to_date") icon="✅" ;;
+            "up_to_date") icon="[OK]" ;;
             "update_available") icon="⬆️ " ;;
-            "error") icon="❌" ;;
+            "error") icon="[X]" ;;
         esac
         printf "  %-10s %s → %s %s\n" "rqlite:" "$current" "$latest" "$icon"
     fi
@@ -173,9 +173,9 @@ check_minio() {
     else
         local icon
         case $status in
-            "up_to_date") icon="✅" ;;
+            "up_to_date") icon="[OK]" ;;
             "update_available") icon="⬆️ " ;;
-            "error") icon="❌" ;;
+            "error") icon="[X]" ;;
         esac
         printf "  %-10s %s → %s %s\n" "MinIO:" "$current" "$latest" "$icon"
     fi
@@ -239,7 +239,7 @@ check_go_modules() {
         
         if [[ "$updates_found" == "false" ]]; then
             echo -e "${CYAN}📦 Go Modules:${NC}"
-            echo "  All modules up to date ✅"
+            echo "  All modules up to date [OK]"
         fi
     fi
 }

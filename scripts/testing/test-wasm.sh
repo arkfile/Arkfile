@@ -17,13 +17,13 @@ echo
 
 # Check if Bun is available
 if ! command -v bun &> /dev/null; then
-    echo -e "${RED}❌ Bun is not installed or not in PATH${NC}"
+    echo -e "${RED}[X] Bun is not installed or not in PATH${NC}"
     echo "Please install Bun from https://bun.sh to run WASM tests"
     exit 1
 fi
 
 BUN_VERSION=$(bun --version)
-echo -e "${GREEN}✅ Bun ${BUN_VERSION} detected for WASM testing${NC}"
+echo -e "${GREEN}[OK] Bun ${BUN_VERSION} detected for WASM testing${NC}"
 
 # Navigate to client directory
 cd client
@@ -32,9 +32,9 @@ echo -e "${BLUE}📦 Building WASM module...${NC}"
 GOOS=js GOARCH=wasm go build -o static/main.wasm .
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ WASM build successful${NC}"
+    echo -e "${GREEN}[OK] WASM build successful${NC}"
 else
-    echo -e "${RED}❌ WASM build failed${NC}"
+    echo -e "${RED}[X] WASM build failed${NC}"
     exit 1
 fi
 
@@ -53,7 +53,7 @@ TEST_EXIT_CODE=$?
 
 if [ $TEST_EXIT_CODE -eq 0 ]; then
     echo
-    echo -e "${BLUE}🔐 Running WASM integration tests...${NC}"
+    echo -e "${BLUE}[SECURE] Running WASM integration tests...${NC}"
     echo
     
     # Run WASM integration tests
@@ -64,7 +64,7 @@ if [ $TEST_EXIT_CODE -eq 0 ]; then
     
     if [ $WASM_TEST_EXIT_CODE -eq 0 ]; then
         echo
-        echo -e "${BLUE}🔐 Running integration test suite...${NC}"
+        echo -e "${BLUE}[SECURE] Running integration test suite...${NC}"
         echo
         
         # Run integration tests
@@ -78,15 +78,15 @@ if [ $TEST_EXIT_CODE -eq 0 ]; then
             echo -e "${GREEN}All WASM tests passed including OPAQUE crypto!${NC}"
             exit 0
         else
-            echo -e "${RED}❌ Some integration tests failed${NC}"
+            echo -e "${RED}[X] Some integration tests failed${NC}"
             exit $INTEGRATION_TEST_EXIT_CODE
         fi
     else
-        echo -e "${RED}❌ Some WASM tests failed${NC}"
+        echo -e "${RED}[X] Some WASM tests failed${NC}"
         exit $WASM_TEST_EXIT_CODE
     fi
 else
     echo
-    echo -e "${RED}❌ Some tests failed${NC}"
+    echo -e "${RED}[X] Some tests failed${NC}"
     exit $TEST_EXIT_CODE
 fi

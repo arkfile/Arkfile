@@ -12,13 +12,13 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${RED}🔒 Arkfile Security Cleanup${NC}"
+echo -e "${RED}[LOCK] Arkfile Security Cleanup${NC}"
 echo -e "${RED}This script will invalidate ALL existing tokens and sessions${NC}"
 echo
 
 # Check if running as root
 if [ "$EUID" -eq 0 ]; then
-    echo -e "${RED}❌ Do not run this script as root${NC}"
+    echo -e "${RED}[X] Do not run this script as root${NC}"
     echo "Run as a regular user with sudo access"
     exit 1
 fi
@@ -27,7 +27,7 @@ fi
 echo -e "${YELLOW}Step 1: Stopping Arkfile service...${NC}"
 if sudo systemctl is-active --quiet arkfile; then
     sudo systemctl stop arkfile
-    echo -e "${GREEN}✅ Arkfile service stopped${NC}"
+    echo -e "${GREEN}[OK] Arkfile service stopped${NC}"
 else
     echo -e "${YELLOW}ℹ️  Arkfile service was not running${NC}"
 fi
@@ -41,9 +41,9 @@ SECRETS_FILE="/opt/arkfile/etc/secrets.env"
 if [ -f "$SECRETS_FILE" ]; then
     sudo cp "$SECRETS_FILE" "$SECRETS_FILE.backup.$(date +%Y%m%d_%H%M%S)"
     sudo sed -i "s/JWT_SECRET=.*/JWT_SECRET=${NEW_JWT_SECRET}/" "$SECRETS_FILE"
-    echo -e "${GREEN}✅ JWT secret updated (old secret backed up)${NC}"
+    echo -e "${GREEN}[OK] JWT secret updated (old secret backed up)${NC}"
 else
-    echo -e "${YELLOW}⚠️  Secrets file not found at $SECRETS_FILE${NC}"
+    echo -e "${YELLOW}[WARNING]  Secrets file not found at $SECRETS_FILE${NC}"
 fi
 
 # Step 3: Clear database token tables
@@ -83,7 +83,7 @@ curl -s -u "$RQLITE_USERNAME:$RQLITE_PASSWORD" \
     -d '["DELETE FROM totp_recovery_log"]' \
     "$RQLITE_ADDRESS/db/execute" > /dev/null
 
-echo -e "${GREEN}✅ Database authentication tables cleared${NC}"
+echo -e "${GREEN}[OK] Database authentication tables cleared${NC}"
 
 # Step 4: Update session security version
 echo -e "${YELLOW}Step 4: Updating session security version...${NC}"
@@ -93,7 +93,7 @@ curl -s -u "$RQLITE_USERNAME:$RQLITE_PASSWORD" \
     -H "Content-Type: application/json" \
     -d "[\"INSERT OR REPLACE INTO system_config (key, value) VALUES ('security_version', '$SECURITY_VERSION')\"]" \
     "$RQLITE_ADDRESS/db/execute" > /dev/null
-echo -e "${GREEN}✅ Security version updated to $SECURITY_VERSION${NC}"
+echo -e "${GREEN}[OK] Security version updated to $SECURITY_VERSION${NC}"
 
 # Step 5: Restart Arkfile service
 echo -e "${YELLOW}Step 5: Restarting Arkfile service...${NC}"
@@ -105,7 +105,7 @@ max_attempts=10
 attempt=0
 while [ $attempt -lt $max_attempts ]; do
     if curl -s http://localhost:8080/health 2>/dev/null | grep -q '"status":"ok"'; then
-        echo -e "${GREEN}✅ Arkfile is running and responding${NC}"
+        echo -e "${GREEN}[OK] Arkfile is running and responding${NC}"
         break
     fi
     echo "  ⏳ Waiting for Arkfile to be ready... (attempt $((attempt + 1))/$max_attempts)"
@@ -114,7 +114,7 @@ while [ $attempt -lt $max_attempts ]; do
 done
 
 if [ $attempt -eq $max_attempts ]; then
-    echo -e "${RED}❌ Arkfile failed to start within timeout${NC}"
+    echo -e "${RED}[X] Arkfile failed to start within timeout${NC}"
     echo "Check status: sudo systemctl status arkfile"
     exit 1
 fi
@@ -155,6 +155,6 @@ echo "• Clear their browser storage (instructions above)"
 echo "• Log in again with their credentials"
 echo "• Set up TOTP again if they had it enabled"
 echo
-echo -e "${GREEN}✅ Security cleanup completed successfully${NC}"
+echo -e "${GREEN}[OK] Security cleanup completed successfully${NC}"
 echo -e "${BLUE}New JWT secret: ${NEW_JWT_SECRET:0:16}... (truncated for security)${NC}"
 echo -e "${BLUE}Security version: $SECURITY_VERSION${NC}"

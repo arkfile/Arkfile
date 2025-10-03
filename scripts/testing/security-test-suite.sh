@@ -38,15 +38,15 @@ log() {
 }
 
 success() {
-    echo -e "${GREEN}✅ $1${NC}"
+    echo -e "${GREEN}[OK] $1${NC}"
 }
 
 error() {
-    echo -e "${RED}❌ $1${NC}"
+    echo -e "${RED}[X] $1${NC}"
 }
 
 warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
+    echo -e "${YELLOW}[WARNING]  $1${NC}"
 }
 
 info() {
@@ -95,9 +95,9 @@ test_security_headers() {
             
             # Check for WASM support
             if echo "$csp" | grep -i "wasm-unsafe-eval" > /dev/null; then
-                info "├─ ✅ WASM support enabled"
+                info "├─ [OK] WASM support enabled"
             else
-                warning "├─ ⚠️  WASM support not detected"
+                warning "├─ [WARNING]  WASM support not detected"
             fi
         else
             error "Content-Security-Policy header missing"
@@ -432,41 +432,41 @@ show_test_summary() {
     
     # Test 1: Security Headers
     if [[ "${TEST_RESULTS[security_headers]}" == "1" ]]; then
-        echo -e "${GREEN}✅ Test 1: Security Headers Implementation${NC}"
+        echo -e "${GREEN}[OK] Test 1: Security Headers Implementation${NC}"
         info "Content Security Policy, XSS protection, and frame options configured"
         passed_tests=$((passed_tests + 1))
     else
-        echo -e "${RED}❌ Test 1: Security Headers Implementation${NC}"
+        echo -e "${RED}[X] Test 1: Security Headers Implementation${NC}"
         info "Security headers missing or misconfigured"
     fi
     
     # Test 2: Password Validation
     if [[ "${TEST_RESULTS[password_validation]}" == "1" ]]; then
-        echo -e "${GREEN}✅ Test 2: Password Validation System${NC}"
+        echo -e "${GREEN}[OK] Test 2: Password Validation System${NC}"
         info "Entropy checking and pattern detection working correctly"
         passed_tests=$((passed_tests + 1))
     else
-        echo -e "${RED}❌ Test 2: Password Validation System${NC}"
+        echo -e "${RED}[X] Test 2: Password Validation System${NC}"
         info "Password validation may allow weak passwords"
     fi
     
     # Test 3: Rate Limiting
     if [[ "${TEST_RESULTS[rate_limiting]}" == "1" ]]; then
-        echo -e "${GREEN}✅ Test 3: Rate Limiting System${NC}"
+        echo -e "${GREEN}[OK] Test 3: Rate Limiting System${NC}"
         info "Progressive backoff and share isolation working"
         passed_tests=$((passed_tests + 1))
     else
-        echo -e "${RED}❌ Test 3: Rate Limiting System${NC}"
+        echo -e "${RED}[X] Test 3: Rate Limiting System${NC}"
         info "Rate limiting may not prevent brute force attacks"
     fi
     
     # Test 4: Timing Protection
     if [[ "${TEST_RESULTS[timing_protection]}" == "1" ]]; then
-        echo -e "${GREEN}✅ Test 4: Timing Protection System${NC}"
+        echo -e "${GREEN}[OK] Test 4: Timing Protection System${NC}"
         info "Consistent response times prevent timing side-channels"
         passed_tests=$((passed_tests + 1))
     else
-        echo -e "${RED}❌ Test 4: Timing Protection System${NC}"
+        echo -e "${RED}[X] Test 4: Timing Protection System${NC}"
         info "Timing side-channels may leak information"
     fi
     

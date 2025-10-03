@@ -16,7 +16,7 @@ NC='\033[0m' # No Color
 # Record start time for duration calculation
 START_TIME=$(date +%s)
 
-echo -e "${BLUE}🚀 Starting Arkfile Comprehensive Integration Tests${NC}"
+echo -e "${BLUE}[START] Starting Arkfile Comprehensive Integration Tests${NC}"
 echo
 echo -e "${YELLOW}💡 NEW TO ARKFILE? Looking for a quick setup?${NC}"
 echo -e "${GREEN}   Try: ./scripts/quick-start.sh${NC}"
@@ -36,13 +36,13 @@ SKIP_DOWNLOAD="${SKIP_DOWNLOAD:-false}"
 FORCE_REBUILD="${FORCE_REBUILD:-false}"
 
 # Ask user if they want to perform full system setup
-echo -e "${YELLOW}⚠️  SYSTEM SETUP OPTION${NC}"
+echo -e "${YELLOW}[WARNING]  SYSTEM SETUP OPTION${NC}"
 echo "This script can run in three modes:"
 echo "1. Testing only (default) - Run tests without modifying system"
 echo "2. Foundation setup - Create user, directories, keys, certificates"
 echo "3. Complete setup - Foundation + MinIO + rqlite + Caddy + start services"
 echo
-echo -e "${BLUE}📋 Environment Variables for Customization:${NC}"
+echo -e "${BLUE}[INFO] Environment Variables for Customization:${NC}"
 echo "• SKIP_TESTS=1        - Skip all test execution"
 echo "• SKIP_WASM=1         - Skip WebAssembly tests"
 echo "• SKIP_PERFORMANCE=1  - Skip performance benchmarks"
@@ -73,13 +73,13 @@ COMPLETE_SETUP=false
 if [ "$SETUP_CONFIRM" = "COMPLETE" ]; then
     FULL_SETUP=true
     COMPLETE_SETUP=true
-    echo -e "${GREEN}✅ Complete system setup enabled${NC}"
+    echo -e "${GREEN}[OK] Complete system setup enabled${NC}"
     echo -e "${YELLOW}This will install and start all services${NC}"
     echo -e "${YELLOW}You will be prompted for sudo password as needed${NC}"
 elif [ "$SETUP_CONFIRM" = "FOUNDATION" ]; then
     FULL_SETUP=true
     COMPLETE_SETUP=false
-    echo -e "${GREEN}✅ Foundation setup enabled${NC}"
+    echo -e "${GREEN}[OK] Foundation setup enabled${NC}"
     echo -e "${YELLOW}This will create infrastructure but not start services${NC}"
     echo -e "${YELLOW}You will be prompted for sudo password as needed${NC}"
 else
@@ -102,29 +102,29 @@ fi
 echo
 
 # Check dependencies
-echo -e "${BLUE}📋 Checking dependencies...${NC}"
+echo -e "${BLUE}[INFO] Checking dependencies...${NC}"
 
 # Check Go
 if ! command -v go &> /dev/null; then
-    echo -e "${RED}❌ Go is not installed${NC}"
+    echo -e "${RED}[X] Go is not installed${NC}"
     exit 1
 fi
 
 # Check Node.js for browser tests
 if ! command -v bun &> /dev/null; then
-    echo -e "${RED}❌ Bun is not installed${NC}"
+    echo -e "${RED}[X] Bun is not installed${NC}"
     echo -e "${YELLOW}Install Bun from: https://bun.sh${NC}"
     exit 1
 fi
 
 # Check if we can build the application
-echo -e "${BLUE}🔨 Building application...${NC}"
+echo -e "${BLUE}[BUILD] Building application...${NC}"
 go build -o /tmp/arkfile-test ./main.go
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Application builds successfully${NC}"
+    echo -e "${GREEN}[OK] Application builds successfully${NC}"
 else
-    echo -e "${RED}❌ Application build failed${NC}"
+    echo -e "${RED}[X] Application build failed${NC}"
     exit 1
 fi
 
@@ -139,9 +139,9 @@ echo -e "${YELLOW}Testing crypto module...${NC}"
 go test -v ./crypto/... -count=1
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Crypto tests passed (modular crypto core)${NC}"
+    echo -e "${GREEN}[OK] Crypto tests passed (modular crypto core)${NC}"
 else
-    echo -e "${RED}❌ Some crypto tests failed${NC}"
+    echo -e "${RED}[X] Some crypto tests failed${NC}"
     exit 1
 fi
 
@@ -150,9 +150,9 @@ echo -e "${YELLOW}Testing auth module (OPAQUE, JWT, password hashing)...${NC}"
 go test -v ./auth/... -count=1
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Auth tests passed (OPAQUE authentication, JWT tokens, Argon2ID)${NC}"
+    echo -e "${GREEN}[OK] Auth tests passed (OPAQUE authentication, JWT tokens, Argon2ID)${NC}"
 else
-    echo -e "${RED}❌ Some auth tests failed${NC}"
+    echo -e "${RED}[X] Some auth tests failed${NC}"
     exit 1
 fi
 
@@ -161,9 +161,9 @@ echo -e "${YELLOW}Testing logging module (security events, privacy protection)..
 go test -v ./logging/... -count=1
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Logging tests passed (security events, entity ID anonymization)${NC}"
+    echo -e "${GREEN}[OK] Logging tests passed (security events, entity ID anonymization)${NC}"
 else
-    echo -e "${RED}❌ Some logging tests failed${NC}"
+    echo -e "${RED}[X] Some logging tests failed${NC}"
     exit 1
 fi
 
@@ -172,9 +172,9 @@ echo -e "${YELLOW}Testing models module (user management, refresh tokens)...${NC
 go test -v ./models/... -count=1
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Models tests passed (user management, token handling)${NC}"
+    echo -e "${GREEN}[OK] Models tests passed (user management, token handling)${NC}"
 else
-    echo -e "${RED}❌ Some models tests failed${NC}"
+    echo -e "${RED}[X] Some models tests failed${NC}"
     exit 1
 fi
 
@@ -183,9 +183,9 @@ echo -e "${YELLOW}Testing utility modules...${NC}"
 go test -v ./utils/... -count=1
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Utility tests passed${NC}"
+    echo -e "${GREEN}[OK] Utility tests passed${NC}"
 else
-    echo -e "${RED}❌ Some utility tests failed${NC}"
+    echo -e "${RED}[X] Some utility tests failed${NC}"
     exit 1
 fi
 
@@ -195,23 +195,23 @@ echo -e "${BLUE}🌐 Running WebAssembly tests...${NC}"
 ./scripts/testing/test-wasm.sh
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ WebAssembly tests passed${NC}"
+    echo -e "${GREEN}[OK] WebAssembly tests passed${NC}"
 else
-    echo -e "${RED}❌ Some WebAssembly tests failed${NC}"
+    echo -e "${RED}[X] Some WebAssembly tests failed${NC}"
     exit 1
 fi
 
 # Run comprehensive performance benchmarks
 echo
-echo -e "${BLUE}⚡ Running comprehensive performance benchmarks...${NC}"
+echo -e "${BLUE}[FAST] Running comprehensive performance benchmarks...${NC}"
 
 echo -e "${YELLOW}Running full performance benchmark suite...${NC}"
 ./scripts/testing/performance-benchmark.sh
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Performance benchmarks completed successfully${NC}"
+    echo -e "${GREEN}[OK] Performance benchmarks completed successfully${NC}"
 else
-    echo -e "${RED}❌ Some performance benchmarks failed${NC}"
+    echo -e "${RED}[X] Some performance benchmarks failed${NC}"
     exit 1
 fi
 
@@ -223,9 +223,9 @@ echo -e "${YELLOW}Testing backward compatibility and format preservation...${NC}
 ./scripts/testing/golden-test-preservation.sh --validate
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Golden test preservation passed (100% format compatibility)${NC}"
+    echo -e "${GREEN}[OK] Golden test preservation passed (100% format compatibility)${NC}"
 else
-    echo -e "${RED}❌ Golden test preservation failed${NC}"
+    echo -e "${RED}[X] Golden test preservation failed${NC}"
     exit 1
 fi
 
@@ -235,25 +235,25 @@ echo -e "${BLUE}🏗️  Testing build process...${NC}"
 ./scripts/setup/build.sh
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Build process completed successfully${NC}"
+    echo -e "${GREEN}[OK] Build process completed successfully${NC}"
 else
-    echo -e "${RED}❌ Build process failed${NC}"
+    echo -e "${RED}[X] Build process failed${NC}"
     exit 1
 fi
 
 # Test deployment scripts or perform full setup
 echo
 if [ "$FULL_SETUP" = true ]; then
-    echo -e "${BLUE}🚀 Performing complete system setup...${NC}"
+    echo -e "${BLUE}[START] Performing complete system setup...${NC}"
     
     # Create arkfile user and group
     echo -e "${YELLOW}Creating arkfile system user and group...${NC}"
     sudo -E ./scripts/setup/01-setup-users.sh
     
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}✅ User setup completed${NC}"
+        echo -e "${GREEN}[OK] User setup completed${NC}"
     else
-        echo -e "${RED}❌ User setup failed${NC}"
+        echo -e "${RED}[X] User setup failed${NC}"
         exit 1
     fi
     
@@ -262,9 +262,9 @@ if [ "$FULL_SETUP" = true ]; then
     sudo -E ./scripts/setup/02-setup-directories.sh
     
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}✅ Directory setup completed${NC}"
+        echo -e "${GREEN}[OK] Directory setup completed${NC}"
     else
-        echo -e "${RED}❌ Directory setup failed${NC}"
+        echo -e "${RED}[X] Directory setup failed${NC}"
         exit 1
     fi
     
@@ -273,9 +273,9 @@ if [ "$FULL_SETUP" = true ]; then
     sudo -E ./scripts/setup/03-setup-opaque-keys.sh
     
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}✅ OPAQUE key generation completed${NC}"
+        echo -e "${GREEN}[OK] OPAQUE key generation completed${NC}"
     else
-        echo -e "${RED}❌ OPAQUE key generation failed${NC}"
+        echo -e "${RED}[X] OPAQUE key generation failed${NC}"
         exit 1
     fi
     
@@ -283,25 +283,25 @@ if [ "$FULL_SETUP" = true ]; then
     sudo -E ./scripts/setup/04-setup-jwt-keys.sh
     
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}✅ JWT key generation completed${NC}"
+        echo -e "${GREEN}[OK] JWT key generation completed${NC}"
     else
-        echo -e "${RED}❌ JWT key generation failed${NC}"
+        echo -e "${RED}[X] JWT key generation failed${NC}"
         exit 1
     fi
     
     echo -e "${YELLOW}Setting up TLS certificates...${NC}"
     if sudo -E ./scripts/setup/05-setup-tls-certs.sh; then
-        echo -e "${GREEN}✅ TLS certificate setup completed${NC}"
+        echo -e "${GREEN}[OK] TLS certificate setup completed${NC}"
         
         # Validate certificates
         echo -e "${YELLOW}Validating TLS certificates...${NC}"
         if ./scripts/maintenance/validate-certificates.sh >/dev/null 2>&1; then
-            echo -e "${GREEN}✅ TLS certificate validation passed${NC}"
+            echo -e "${GREEN}[OK] TLS certificate validation passed${NC}"
         else
-            echo -e "${YELLOW}⚠️  TLS certificate validation had warnings (non-critical)${NC}"
+            echo -e "${YELLOW}[WARNING]  TLS certificate validation had warnings (non-critical)${NC}"
         fi
     else
-        echo -e "${YELLOW}⚠️  TLS certificate setup had issues (non-critical for core functionality)${NC}"
+        echo -e "${YELLOW}[WARNING]  TLS certificate setup had issues (non-critical for core functionality)${NC}"
         echo -e "${BLUE}ℹ️  Note: TLS certificates are for internal service communication${NC}"
         echo -e "${BLUE}ℹ️  Core Arkfile functionality (OPAQUE auth, file encryption) works independently${NC}"
     fi
@@ -316,9 +316,9 @@ if [ "$FULL_SETUP" = true ]; then
         sudo -E ./scripts/setup/07-setup-minio.sh
         
         if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✅ MinIO setup completed${NC}"
+            echo -e "${GREEN}[OK] MinIO setup completed${NC}"
         else
-            echo -e "${RED}❌ MinIO setup failed${NC}"
+            echo -e "${RED}[X] MinIO setup failed${NC}"
             exit 1
         fi
         
@@ -327,9 +327,9 @@ if [ "$FULL_SETUP" = true ]; then
         sudo -E ./scripts/setup/08-setup-rqlite-build.sh
         
         if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✅ rqlite setup completed${NC}"
+            echo -e "${GREEN}[OK] rqlite setup completed${NC}"
         else
-            echo -e "${RED}❌ rqlite setup failed${NC}"
+            echo -e "${RED}[X] rqlite setup failed${NC}"
             exit 1
         fi
         
@@ -338,9 +338,9 @@ if [ "$FULL_SETUP" = true ]; then
         sudo -E ./scripts/setup/deploy.sh prod
         
         if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✅ Application deployment completed${NC}"
+            echo -e "${GREEN}[OK] Application deployment completed${NC}"
         else
-            echo -e "${RED}❌ Application deployment failed${NC}"
+            echo -e "${RED}[X] Application deployment failed${NC}"
             exit 1
         fi
         
@@ -351,27 +351,27 @@ if [ "$FULL_SETUP" = true ]; then
         sudo systemctl enable minio
         sudo systemctl start minio
         if systemctl is-active --quiet minio; then
-            echo -e "${GREEN}✅ MinIO service started${NC}"
+            echo -e "${GREEN}[OK] MinIO service started${NC}"
         else
-            echo -e "${YELLOW}⚠️  MinIO service may need manual configuration${NC}"
+            echo -e "${YELLOW}[WARNING]  MinIO service may need manual configuration${NC}"
         fi
         
         # Start rqlite
         sudo systemctl enable rqlite
         sudo systemctl start rqlite
         if systemctl is-active --quiet rqlite; then
-            echo -e "${GREEN}✅ rqlite service started${NC}"
+            echo -e "${GREEN}[OK] rqlite service started${NC}"
         else
-            echo -e "${YELLOW}⚠️  rqlite service may need manual configuration${NC}"
+            echo -e "${YELLOW}[WARNING]  rqlite service may need manual configuration${NC}"
         fi
         
         # Start Arkfile
         sudo systemctl enable arkfile
         sudo systemctl start arkfile
         if systemctl is-active --quiet arkfile; then
-            echo -e "${GREEN}✅ Arkfile service started${NC}"
+            echo -e "${GREEN}[OK] Arkfile service started${NC}"
         else
-            echo -e "${YELLOW}⚠️  Arkfile service may need configuration${NC}"
+            echo -e "${YELLOW}[WARNING]  Arkfile service may need configuration${NC}"
         fi
         
         # Setup Caddy (optional - only if not already configured)
@@ -380,22 +380,22 @@ if [ "$FULL_SETUP" = true ]; then
             if [ -f "./scripts/setup/setup-caddy.sh" ]; then
                 sudo -E ./scripts/setup/setup-caddy.sh
                 if [ $? -eq 0 ]; then
-                    echo -e "${GREEN}✅ Caddy setup completed${NC}"
+                    echo -e "${GREEN}[OK] Caddy setup completed${NC}"
                     sudo systemctl enable caddy
                     sudo systemctl start caddy
                     if systemctl is-active --quiet caddy; then
-                        echo -e "${GREEN}✅ Caddy service started${NC}"
+                        echo -e "${GREEN}[OK] Caddy service started${NC}"
                     else
-                        echo -e "${YELLOW}⚠️  Caddy may need manual configuration${NC}"
+                        echo -e "${YELLOW}[WARNING]  Caddy may need manual configuration${NC}"
                     fi
                 else
-                    echo -e "${YELLOW}⚠️  Caddy setup had issues (manual configuration may be needed)${NC}"
+                    echo -e "${YELLOW}[WARNING]  Caddy setup had issues (manual configuration may be needed)${NC}"
                 fi
             else
-                echo -e "${YELLOW}⚠️  Caddy setup script not found, skipping reverse proxy setup${NC}"
+                echo -e "${YELLOW}[WARNING]  Caddy setup script not found, skipping reverse proxy setup${NC}"
             fi
         else
-            echo -e "${GREEN}✅ Caddy already running${NC}"
+            echo -e "${GREEN}[OK] Caddy already running${NC}"
         fi
         
         echo
@@ -409,23 +409,23 @@ if [ "$FULL_SETUP" = true ]; then
         
         # Test health endpoint
         if curl -f http://localhost:8080/health >/dev/null 2>&1; then
-            echo -e "${GREEN}✅ Arkfile health check passed${NC}"
+            echo -e "${GREEN}[OK] Arkfile health check passed${NC}"
         else
-            echo -e "${YELLOW}⚠️  Arkfile health check failed - may need configuration${NC}"
+            echo -e "${YELLOW}[WARNING]  Arkfile health check failed - may need configuration${NC}"
         fi
         
         # Test MinIO
         if curl -f http://localhost:9000/minio/health/ready >/dev/null 2>&1; then
-            echo -e "${GREEN}✅ MinIO health check passed${NC}"
+            echo -e "${GREEN}[OK] MinIO health check passed${NC}"
         else
-            echo -e "${YELLOW}⚠️  MinIO health check failed - may need configuration${NC}"
+            echo -e "${YELLOW}[WARNING]  MinIO health check failed - may need configuration${NC}"
         fi
         
         # Test rqlite
         if curl -f http://localhost:4001/status >/dev/null 2>&1; then
-            echo -e "${GREEN}✅ rqlite health check passed${NC}"
+            echo -e "${GREEN}[OK] rqlite health check passed${NC}"
         else
-            echo -e "${YELLOW}⚠️  rqlite health check failed - may need configuration${NC}"
+            echo -e "${YELLOW}[WARNING]  rqlite health check failed - may need configuration${NC}"
         fi
         
         # Enhanced: Test with cryptocli administrative tool
@@ -450,22 +450,22 @@ if [ "$FULL_SETUP" = true ]; then
                 echo -e "${YELLOW}Checking post-quantum migration readiness...${NC}"
                 ./cryptocli pq-status
                 
-                echo -e "${GREEN}✅ cryptocli administrative tool validation completed${NC}"
+                echo -e "${GREEN}[OK] cryptocli administrative tool validation completed${NC}"
             else
-                echo -e "${YELLOW}⚠️  cryptocli build failed - skipping admin tool validation${NC}"
+                echo -e "${YELLOW}[WARNING]  cryptocli build failed - skipping admin tool validation${NC}"
             fi
         else
-            echo -e "${YELLOW}⚠️  Go not available - skipping cryptocli validation${NC}"
+            echo -e "${YELLOW}[WARNING]  Go not available - skipping cryptocli validation${NC}"
         fi
         
         # NEW: Offer interactive admin validation
         echo
-        echo -e "${GREEN}🎯 SYSTEM DEPLOYED - READY FOR ADMIN VALIDATION${NC}"
+        echo -e "${GREEN}[TARGET] SYSTEM DEPLOYED - READY FOR ADMIN VALIDATION${NC}"
         echo "=================================================="
         echo
         echo -e "${BLUE}Your complete Arkfile system is now deployed and ready for testing!${NC}"
         echo
-        echo -e "${CYAN}📋 Quick System Status:${NC}"
+        echo -e "${CYAN}[INFO] Quick System Status:${NC}"
         echo "• Arkfile Web Interface: http://localhost:8080"
         echo "• HTTPS Interface: https://localhost (with certificate warnings)"
         echo "• Health Dashboard: http://localhost:8080/health"
@@ -476,12 +476,12 @@ if [ "$FULL_SETUP" = true ]; then
         echo "The system is set up, but you should validate that everything works"
         echo "with real user interactions. Our interactive guide will walk you through:"
         echo
-        echo "✓ Understanding TLS certificate warnings (normal behavior)"
-        echo "✓ Testing user registration with OPAQUE protocol"
-        echo "✓ Testing user login and authentication"
-        echo "✓ Testing file upload, encryption, and download"
-        echo "✓ Testing file sharing functionality"
-        echo "✓ Backend verification of all operations"
+        echo "[OK] Understanding TLS certificate warnings (normal behavior)"
+        echo "[OK] Testing user registration with OPAQUE protocol"
+        echo "[OK] Testing user login and authentication"
+        echo "[OK] Testing file upload, encryption, and download"
+        echo "[OK] Testing file sharing functionality"
+        echo "[OK] Backend verification of all operations"
         echo
         echo -e "${GREEN}Would you like to run the interactive admin validation guide?${NC}"
         echo
@@ -489,7 +489,7 @@ if [ "$FULL_SETUP" = true ]; then
         
         if [[ "$RUN_VALIDATION" =~ ^[Yy]$ ]]; then
             echo
-            echo -e "${BLUE}🚀 STARTING INTERACTIVE ADMIN VALIDATION${NC}"
+            echo -e "${BLUE}[START] STARTING INTERACTIVE ADMIN VALIDATION${NC}"
             echo "==========================================="
             echo
             echo "The validation guide will walk you through testing your deployment"
@@ -508,17 +508,17 @@ if [ "$FULL_SETUP" = true ]; then
                     echo -e "${GREEN}VALIDATION COMPLETED SUCCESSFULLY!${NC}"
                     echo -e "${GREEN}Your Arkfile deployment is fully validated and ready for use.${NC}"
                 else
-                    echo -e "${YELLOW}⚠️  Validation completed with some issues.${NC}"
+                    echo -e "${YELLOW}[WARNING]  Validation completed with some issues.${NC}"
                     echo -e "${YELLOW}Review the validation results above and address any failures.${NC}"
                 fi
             else
-                echo -e "${RED}❌ Admin validation guide not found or not executable${NC}"
+                echo -e "${RED}[X] Admin validation guide not found or not executable${NC}"
                 echo -e "${YELLOW}You can still test manually using the admin testing guide:${NC}"
                 echo -e "${YELLOW}docs/admin-testing-guide.md${NC}"
             fi
         else
             echo
-            echo -e "${BLUE}📋 MANUAL VALIDATION INSTRUCTIONS${NC}"
+            echo -e "${BLUE}[INFO] MANUAL VALIDATION INSTRUCTIONS${NC}"
             echo "================================="
             echo
             echo -e "${CYAN}Your system is ready! To validate it manually:${NC}"
@@ -549,7 +549,7 @@ if [ "$FULL_SETUP" = true ]; then
     fi
     
 else
-    echo -e "${BLUE}🚀 Testing deployment scripts (dry run)...${NC}"
+    echo -e "${BLUE}[START] Testing deployment scripts (dry run)...${NC}"
     
     # Setup directories first (required for key generation tests)
     echo -e "${YELLOW}Setting up deployment directories for testing...${NC}"
@@ -558,28 +558,28 @@ else
     # Note: Directory setup may fail in test environment due to missing arkfile user
     # This is expected and doesn't affect core functionality testing
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}✅ Directory setup completed${NC}"
+        echo -e "${GREEN}[OK] Directory setup completed${NC}"
         
         # Test key generation (only if directory setup succeeded)
         echo -e "${YELLOW}Testing key generation...${NC}"
         sudo -E ./scripts/setup/03-setup-opaque-keys.sh --dry-run
     
         if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✅ OPAQUE key generation test passed${NC}"
+            echo -e "${GREEN}[OK] OPAQUE key generation test passed${NC}"
         else
-            echo -e "${YELLOW}⚠️  OPAQUE key generation test had warnings${NC}"
+            echo -e "${YELLOW}[WARNING]  OPAQUE key generation test had warnings${NC}"
         fi
     
         sudo -E ./scripts/setup/04-setup-jwt-keys.sh --dry-run
     
         if [ $? -eq 0 ]; then
-            echo -e "${GREEN}✅ JWT key generation test passed${NC}"
+            echo -e "${GREEN}[OK] JWT key generation test passed${NC}"
         else
-            echo -e "${YELLOW}⚠️  JWT key generation test had warnings${NC}"
+            echo -e "${YELLOW}[WARNING]  JWT key generation test had warnings${NC}"
         fi
     else
-        echo -e "${YELLOW}⚠️  Directory setup failed (expected in test environment without arkfile user)${NC}"
-        echo -e "${YELLOW}⚠️  Skipping key generation tests (require proper directory structure)${NC}"
+        echo -e "${YELLOW}[WARNING]  Directory setup failed (expected in test environment without arkfile user)${NC}"
+        echo -e "${YELLOW}[WARNING]  Skipping key generation tests (require proper directory structure)${NC}"
     fi
 fi
 
@@ -588,30 +588,30 @@ echo -e "${YELLOW}Testing health check scripts...${NC}"
 ./scripts/maintenance/health-check.sh --pre-install
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Health check test passed${NC}"
+    echo -e "${GREEN}[OK] Health check test passed${NC}"
 else
-    echo -e "${RED}❌ Health check test failed${NC}"
+    echo -e "${RED}[X] Health check test failed${NC}"
 fi
 
 # Comprehensive Summary
 echo
-echo -e "${BLUE}📊 Comprehensive Integration Test Summary${NC}"
-echo -e "${GREEN}✅ Application builds successfully${NC}"
-echo -e "${GREEN}✅ Crypto module tests pass (modular crypto core)${NC}"
-echo -e "${GREEN}✅ Auth module tests pass (OPAQUE, JWT, Argon2ID)${NC}"
-echo -e "${GREEN}✅ Logging module tests pass (security events, privacy)${NC}"
-echo -e "${GREEN}✅ Models module tests pass (user management, tokens)${NC}"
-echo -e "${GREEN}✅ Utility module tests pass${NC}"
-echo -e "${GREEN}✅ WebAssembly tests pass (14/14 tests across browsers)${NC}"
-echo -e "${GREEN}✅ Performance benchmarks complete (1GB file testing)${NC}"
-echo -e "${GREEN}✅ Golden test preservation pass (100% format compatibility)${NC}"
-echo -e "${GREEN}✅ Build process works${NC}"
-echo -e "${GREEN}✅ Deployment scripts functional${NC}"
+echo -e "${BLUE}[STATS] Comprehensive Integration Test Summary${NC}"
+echo -e "${GREEN}[OK] Application builds successfully${NC}"
+echo -e "${GREEN}[OK] Crypto module tests pass (modular crypto core)${NC}"
+echo -e "${GREEN}[OK] Auth module tests pass (OPAQUE, JWT, Argon2ID)${NC}"
+echo -e "${GREEN}[OK] Logging module tests pass (security events, privacy)${NC}"
+echo -e "${GREEN}[OK] Models module tests pass (user management, tokens)${NC}"
+echo -e "${GREEN}[OK] Utility module tests pass${NC}"
+echo -e "${GREEN}[OK] WebAssembly tests pass (14/14 tests across browsers)${NC}"
+echo -e "${GREEN}[OK] Performance benchmarks complete (1GB file testing)${NC}"
+echo -e "${GREEN}[OK] Golden test preservation pass (100% format compatibility)${NC}"
+echo -e "${GREEN}[OK] Build process works${NC}"
+echo -e "${GREEN}[OK] Deployment scripts functional${NC}"
 
 echo
 echo -e "${GREEN}All comprehensive integration tests passed!${NC}"
 echo
-echo -e "${BLUE}📋 Test Coverage Achieved:${NC}"
+echo -e "${BLUE}[INFO] Test Coverage Achieved:${NC}"
 echo "• Unit Tests: 100% pass rate across all modules"
 echo "• WebAssembly: 14/14 tests (crypto, password, login integration)"
 echo "• Performance: Production-scale 1GB file validation"
@@ -620,7 +620,7 @@ echo "• Deployment: Key generation and health checks verified"
 
 # Generate comprehensive test report
 echo
-echo -e "${BLUE}📊 COMPREHENSIVE TEST REPORT${NC}"
+echo -e "${BLUE}[STATS] COMPREHENSIVE TEST REPORT${NC}"
 echo "========================================"
 echo "Test Date: $(date)"
 echo "Test Duration: $(($(date +%s) - START_TIME)) seconds"
@@ -630,112 +630,112 @@ echo "Hardware: $(nproc) cores, $(free -h | grep ^Mem | awk '{print $2}') RAM"
 echo
 
 # Test results summary
-echo -e "${GREEN}✅ TEST RESULTS SUMMARY${NC}"
+echo -e "${GREEN}[OK] TEST RESULTS SUMMARY${NC}"
 echo "----------------------------------------"
-echo "📋 Unit Tests:"
-echo "  • Crypto Module: ✅ PASSED (modular crypto core)"
-echo "  • Auth Module: ✅ PASSED (OPAQUE, JWT, Argon2ID)"
-echo "  • Logging Module: ✅ PASSED (security events, privacy)"
-echo "  • Models Module: ✅ PASSED (user management, tokens)"
-echo "  • Utils Module: ✅ PASSED (validation, helpers)"
+echo "[INFO] Unit Tests:"
+echo "  • Crypto Module: [OK] PASSED (modular crypto core)"
+echo "  • Auth Module: [OK] PASSED (OPAQUE, JWT, Argon2ID)"
+echo "  • Logging Module: [OK] PASSED (security events, privacy)"
+echo "  • Models Module: [OK] PASSED (user management, tokens)"
+echo "  • Utils Module: [OK] PASSED (validation, helpers)"
 
 echo
 echo "🌐 WebAssembly Tests:"
-echo "  • Core Crypto Functions: ✅ 5/5 PASSED"
-echo "  • Password Functions: ✅ 5/5 PASSED"
-echo "  • Login Integration: ✅ 4/4 PASSED"
-echo "  • OPAQUE Crypto: ✅ ALL PASSED"
+echo "  • Core Crypto Functions: [OK] 5/5 PASSED"
+echo "  • Password Functions: [OK] 5/5 PASSED"
+echo "  • Login Integration: [OK] 4/4 PASSED"
+echo "  • OPAQUE Crypto: [OK] ALL PASSED"
 echo "  • Total: 14/14 tests across all browsers"
 
 echo
-echo "⚡ Performance Benchmarks:"
-echo "  • Cryptographic Operations: ✅ COMPLETED"
-echo "  • File I/O Performance: ✅ VALIDATED"
-echo "  • 1GB File Testing: ✅ PRODUCTION-SCALE"
-echo "  • Memory Usage: ✅ WITHIN LIMITS"
+echo "[FAST] Performance Benchmarks:"
+echo "  • Cryptographic Operations: [OK] COMPLETED"
+echo "  • File I/O Performance: [OK] VALIDATED"
+echo "  • 1GB File Testing: [OK] PRODUCTION-SCALE"
+echo "  • Memory Usage: [OK] WITHIN LIMITS"
 
 echo
 echo "🏆 Format Compatibility:"
-echo "  • Golden Test Vectors: ✅ 72/72 VALIDATED"
-echo "  • Backward Compatibility: ✅ 100% PRESERVED"
-echo "  • File Format Integrity: ✅ BYTE-PERFECT"
+echo "  • Golden Test Vectors: [OK] 72/72 VALIDATED"
+echo "  • Backward Compatibility: [OK] 100% PRESERVED"
+echo "  • File Format Integrity: [OK] BYTE-PERFECT"
 
 echo
 echo "🏗️  Build & Deployment:"
-echo "  • Application Build: ✅ SUCCESSFUL"
-echo "  • WebAssembly Build: ✅ SUCCESSFUL"
-echo "  • Static Assets: ✅ DEPLOYED"
+echo "  • Application Build: [OK] SUCCESSFUL"
+echo "  • WebAssembly Build: [OK] SUCCESSFUL"
+echo "  • Static Assets: [OK] DEPLOYED"
 
 if [ "$FULL_SETUP" = true ]; then
-    echo "  • System Setup: ✅ COMPLETED"
-    echo "  • User Creation: ✅ arkfile user configured"
-    echo "  • Directory Structure: ✅ /opt/arkfile ready"
-    echo "  • Key Generation: ✅ OPAQUE & JWT keys secured"
-    echo "  • Permissions: ✅ Production-ready security"
+    echo "  • System Setup: [OK] COMPLETED"
+    echo "  • User Creation: [OK] arkfile user configured"
+    echo "  • Directory Structure: [OK] /opt/arkfile ready"
+    echo "  • Key Generation: [OK] OPAQUE & JWT keys secured"
+    echo "  • Permissions: [OK] Production-ready security"
 fi
 
 echo
-echo -e "${GREEN}🎯 DEPLOYMENT STATUS${NC}"
+echo -e "${GREEN}[TARGET] DEPLOYMENT STATUS${NC}"
 echo "========================================"
 
 if [ "$FULL_SETUP" = true ]; then
     if [ "$COMPLETE_SETUP" = true ]; then
-        echo -e "${GREEN}🚀 COMPLETE SYSTEM DEPLOYED${NC}"
+        echo -e "${GREEN}[START] COMPLETE SYSTEM DEPLOYED${NC}"
         echo
-        echo -e "${BLUE}✅ Infrastructure Completed:${NC}"
+        echo -e "${BLUE}[OK] Infrastructure Completed:${NC}"
         echo "• System user: arkfile ($(id arkfile))"
         echo "• Base directory: /opt/arkfile ($(ls -ld /opt/arkfile | awk '{print $3":"$4" "$1}'))"
         echo "• Key storage: /opt/arkfile/etc/keys ($(ls -ld /opt/arkfile/etc/keys 2>/dev/null | awk '{print $1}' || echo 'configured'))"
         echo "• Binary location: /opt/arkfile/bin/arkfile"
         
         echo
-        echo -e "${BLUE}🔐 Security Configuration:${NC}"
-        echo "• OPAQUE server keys: ✅ Generated and secured"
-        echo "• JWT signing keys: ✅ Generated with rotation capability"
-        echo "• TLS certificates: ✅ Self-signed for development"
-        echo "• File permissions: ✅ Production security standards"
-        echo "• Service isolation: ✅ Dedicated arkfile user"
+        echo -e "${BLUE}[SECURE] Security Configuration:${NC}"
+        echo "• OPAQUE server keys: [OK] Generated and secured"
+        echo "• JWT signing keys: [OK] Generated with rotation capability"
+        echo "• TLS certificates: [OK] Self-signed for development"
+        echo "• File permissions: [OK] Production security standards"
+        echo "• Service isolation: [OK] Dedicated arkfile user"
         
         echo
         echo -e "${BLUE}🗄️  Services Status:${NC}"
         # Check actual service status
         if systemctl is-active --quiet arkfile; then
-            echo "• Arkfile: ✅ RUNNING"
+            echo "• Arkfile: [OK] RUNNING"
         else
-            echo "• Arkfile: ⚠️  STOPPED (may need configuration)"
+            echo "• Arkfile: [WARNING]  STOPPED (may need configuration)"
         fi
         
         if systemctl is-active --quiet minio; then
-            echo "• MinIO: ✅ RUNNING"
+            echo "• MinIO: [OK] RUNNING"
         else
-            echo "• MinIO: ⚠️  STOPPED (may need configuration)"
+            echo "• MinIO: [WARNING]  STOPPED (may need configuration)"
         fi
         
         if systemctl is-active --quiet rqlite; then
-            echo "• rqlite: ✅ RUNNING"  
+            echo "• rqlite: [OK] RUNNING"  
         else
-            echo "• rqlite: ⚠️  STOPPED (may need configuration)"
+            echo "• rqlite: [WARNING]  STOPPED (may need configuration)"
         fi
         
         if systemctl is-active --quiet caddy; then
-            echo "• Caddy: ✅ RUNNING"
+            echo "• Caddy: [OK] RUNNING"
         else
-            echo "• Caddy: ⚠️  STOPPED (may need configuration)"
+            echo "• Caddy: [WARNING]  STOPPED (may need configuration)"
         fi
         
         echo
-        echo -e "${BLUE}📊 System Health Check:${NC}"
+        echo -e "${BLUE}[STATS] System Health Check:${NC}"
         if ./scripts/maintenance/health-check.sh --quick >/dev/null 2>&1; then
-            echo "• Health monitoring: ✅ Operational"
+            echo "• Health monitoring: [OK] Operational"
         else
-            echo "• Health monitoring: ⚠️  Configure services for full health checks"
+            echo "• Health monitoring: [WARNING]  Configure services for full health checks"
         fi
-        echo "• Test coverage: ✅ 100% validation complete"
-        echo "• Performance validation: ✅ Production-scale verified"
-        echo "• Format compatibility: ✅ Long-term stability assured"
+        echo "• Test coverage: [OK] 100% validation complete"
+        echo "• Performance validation: [OK] Production-scale verified"
+        echo "• Format compatibility: [OK] Long-term stability assured"
         
         echo
-        echo -e "${GREEN}🎯 SYSTEM READY FOR USE${NC}"
+        echo -e "${GREEN}[TARGET] SYSTEM READY FOR USE${NC}"
         echo "========================================"
         echo -e "${BLUE}Your complete Arkfile system is deployed and ready!${NC}"
         echo
@@ -757,35 +757,35 @@ if [ "$FULL_SETUP" = true ]; then
         echo "• Run security audit: ./scripts/maintenance/security-audit.sh"
         
     else
-        echo -e "${GREEN}🚀 FOUNDATION SYSTEM READY${NC}"
+        echo -e "${GREEN}[START] FOUNDATION SYSTEM READY${NC}"
         echo
-        echo -e "${BLUE}✅ Infrastructure Completed:${NC}"
+        echo -e "${BLUE}[OK] Infrastructure Completed:${NC}"
         echo "• System user: arkfile ($(id arkfile))"
         echo "• Base directory: /opt/arkfile ($(ls -ld /opt/arkfile | awk '{print $3":"$4" "$1}'))"
         echo "• Key storage: /opt/arkfile/etc/keys ($(ls -ld /opt/arkfile/etc/keys 2>/dev/null | awk '{print $1}' || echo 'configured'))"
         echo "• Binary location: /opt/arkfile/bin/arkfile"
         
         echo
-        echo -e "${BLUE}🔐 Security Configuration:${NC}"
-        echo "• OPAQUE server keys: ✅ Generated and secured"
-        echo "• JWT signing keys: ✅ Generated with rotation capability"
-        echo "• TLS certificates: ✅ Self-signed for development"
-        echo "• File permissions: ✅ Production security standards"
-        echo "• Service isolation: ✅ Dedicated arkfile user"
+        echo -e "${BLUE}[SECURE] Security Configuration:${NC}"
+        echo "• OPAQUE server keys: [OK] Generated and secured"
+        echo "• JWT signing keys: [OK] Generated with rotation capability"
+        echo "• TLS certificates: [OK] Self-signed for development"
+        echo "• File permissions: [OK] Production security standards"
+        echo "• Service isolation: [OK] Dedicated arkfile user"
         
         echo
-        echo -e "${BLUE}📊 System Health Check:${NC}"
+        echo -e "${BLUE}[STATS] System Health Check:${NC}"
         if ./scripts/maintenance/health-check.sh --quick >/dev/null 2>&1; then
-            echo "• Health monitoring: ✅ Operational"
+            echo "• Health monitoring: [OK] Operational"
         else
-            echo "• Health monitoring: ⚠️  Available (configure services for full health checks)"
+            echo "• Health monitoring: [WARNING]  Available (configure services for full health checks)"
         fi
-        echo "• Test coverage: ✅ 100% validation complete"
-        echo "• Performance validation: ✅ Production-scale verified"
-        echo "• Format compatibility: ✅ Long-term stability assured"
+        echo "• Test coverage: [OK] 100% validation complete"
+        echo "• Performance validation: [OK] Production-scale verified"
+        echo "• Format compatibility: [OK] Long-term stability assured"
         
         echo
-        echo -e "${GREEN}🚀 NEXT STEPS FOR COMPLETE SYSTEM${NC}"
+        echo -e "${GREEN}[START] NEXT STEPS FOR COMPLETE SYSTEM${NC}"
         echo "========================================"
         echo -e "${YELLOW}1. Configure External Services:${NC}"
         echo "   # Set up MinIO object storage"
@@ -845,14 +845,14 @@ if [ "$FULL_SETUP" = true ]; then
 else
     echo -e "${BLUE}🧪 TEST-ONLY MODE COMPLETED${NC}"
     echo
-    echo -e "${GREEN}✅ Validation Results:${NC}"
+    echo -e "${GREEN}[OK] Validation Results:${NC}"
     echo "• All core functionality verified"
     echo "• Security mechanisms validated" 
     echo "• Performance benchmarks completed"
     echo "• Cross-browser compatibility confirmed"
     echo "• Deployment scripts tested"
     echo
-    echo -e "${YELLOW}🚀 READY FOR PRODUCTION SETUP${NC}"
+    echo -e "${YELLOW}[START] READY FOR PRODUCTION SETUP${NC}"
     echo "========================================"
     echo "Your system has passed all tests and is ready for production deployment."
     echo
@@ -875,7 +875,7 @@ else
     echo "  2. Configure rqlite: ./scripts/setup/08-setup-rqlite.sh"
     echo "  3. Run application: go run main.go"
     echo
-    echo -e "${GREEN}📋 PRE-PRODUCTION CHECKLIST${NC}"
+    echo -e "${GREEN}[INFO] PRE-PRODUCTION CHECKLIST${NC}"
     echo "========================================"
     echo "Before deploying to production, ensure:"
     echo "☐ Domain name configured and DNS set up"

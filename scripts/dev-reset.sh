@@ -114,13 +114,13 @@ print_status() {
 # Find and verify Go binary before proceeding
 echo -e "${YELLOW}Detecting Go installation...${NC}"
 if ! GO_BINARY=$(find_go_binary); then
-    echo -e "${RED}❌ Go compiler not found in standard locations${NC}"
+    echo -e "${RED}[X] Go compiler not found in standard locations${NC}"
     echo "   Checked: PATH, /usr/bin/go, /usr/local/bin/go, /usr/local/go/bin/go"
     echo "   Please install Go via package manager or from https://golang.org"
     exit 1
 fi
 
-echo -e "${GREEN}✅ Found Go at: $GO_BINARY${NC}"
+echo -e "${GREEN}[OK] Found Go at: $GO_BINARY${NC}"
 export GO_BINARY="$GO_BINARY"
 
 # Function to run commands as original user (not root)

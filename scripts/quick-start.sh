@@ -12,10 +12,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${BLUE}🚀 Arkfile Quick Start${NC}"
+echo -e "${BLUE}[START] Arkfile Quick Start${NC}"
 echo -e "${BLUE}Setting up a complete working system...${NC}"
 echo
-echo -e "${RED}⚠️  SECURITY WARNING - DEMO CONFIGURATION ⚠️${NC}"
+echo -e "${RED}[WARNING]  SECURITY WARNING - DEMO CONFIGURATION [WARNING]${NC}"
 echo -e "${YELLOW}This quick-start creates a demo system with default credentials.${NC}"
 echo -e "${YELLOW}This is NOT suitable for production use without security hardening.${NC}"
 echo -e "${YELLOW}For production, regenerate ALL credentials and certificates.${NC}"
@@ -35,7 +35,7 @@ echo
 
 # Check if running as root
 if [ "$EUID" -eq 0 ]; then
-    echo -e "${RED}❌ Do not run this script as root${NC}"
+    echo -e "${RED}[X] Do not run this script as root${NC}"
     echo "Run as a regular user with sudo access"
     exit 1
 fi
@@ -97,14 +97,14 @@ if pgrep -f "arkfile" > /dev/null; then
     fi
 fi
 
-echo -e "${GREEN}✅ Service cleanup completed${NC}"
+echo -e "${GREEN}[OK] Service cleanup completed${NC}"
 echo
 
 # Step 1: Foundation setup
 echo -e "${YELLOW}Step 1: Setting up foundation (users, directories, keys, TLS)...${NC}"
 ./scripts/setup/00-setup-foundation.sh --skip-tests
 if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ Foundation setup failed${NC}"
+    echo -e "${RED}[X] Foundation setup failed${NC}"
     exit 1
 fi
 
@@ -116,14 +116,14 @@ check_go_version() {
     local required_version=$(grep '^go [0-9]' go.mod | awk '{print $2}')
     
     if [ -z "$required_version" ]; then
-        echo -e "${YELLOW}⚠️  Cannot determine Go version requirement from go.mod${NC}"
+        echo -e "${YELLOW}[WARNING]  Cannot determine Go version requirement from go.mod${NC}"
         return 0
     fi
     
     local current_version=$(go version | grep -o 'go[0-9]\+\.[0-9]\+\.[0-9]\+' | sed 's/go//')
     
     if [ -z "$current_version" ]; then
-        echo -e "${RED}❌ Cannot determine Go version${NC}"
+        echo -e "${RED}[X] Cannot determine Go version${NC}"
         exit 1
     fi
     
@@ -132,7 +132,7 @@ check_go_version() {
     local required_num=$(echo $required_version | awk -F. '{printf "%d%02d%02d", $1, $2, $3}')
     
     if [ "$current_num" -lt "$required_num" ]; then
-        echo -e "${RED}❌ Go version $current_version is too old${NC}"
+        echo -e "${RED}[X] Go version $current_version is too old${NC}"
         echo -e "${YELLOW}Required: Go $required_version or later (from go.mod)${NC}"
         echo -e "${YELLOW}Current:  Go $current_version${NC}"
         echo
@@ -143,12 +143,12 @@ check_go_version() {
         exit 1
     fi
     
-    echo -e "${GREEN}✅ Go version $current_version meets requirements (>= $required_version)${NC}"
+    echo -e "${GREEN}[OK] Go version $current_version meets requirements (>= $required_version)${NC}"
 }
 
 # Check if Go is installed
 if ! command -v go >/dev/null 2>&1; then
-    echo -e "${RED}❌ Go is required but not installed${NC}"
+    echo -e "${RED}[X] Go is required but not installed${NC}"
     echo -e "${BLUE}To install Go:${NC}"
     echo "1. Visit https://golang.org/dl/"
     echo "2. Download and install the latest Go version"
@@ -163,23 +163,23 @@ if ! go mod download; then
     echo -e "${YELLOW}Dependencies need updating, running go mod tidy...${NC}"
     go mod tidy
     if ! go mod download; then
-        echo -e "${RED}❌ Failed to resolve Go dependencies${NC}"
+        echo -e "${RED}[X] Failed to resolve Go dependencies${NC}"
         exit 1
     fi
 fi
-echo -e "${GREEN}✅ Go dependencies resolved${NC}"
+echo -e "${GREEN}[OK] Go dependencies resolved${NC}"
 
 # Step 2: Set up services (MinIO and rqlite)
 echo -e "${YELLOW}Step 2: Setting up storage and database services...${NC}"
 sudo ./scripts/setup/07-setup-minio.sh
 if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ MinIO setup failed${NC}"
+    echo -e "${RED}[X] MinIO setup failed${NC}"
     exit 1
 fi
 
 sudo ./scripts/setup/08-setup-rqlite-build.sh
 if [ $? -ne 0 ]; then
-    echo -e "${RED}❌ rqlite setup failed${NC}"
+    echo -e "${RED}[X] rqlite setup failed${NC}"
     exit 1
 fi
 
@@ -192,11 +192,11 @@ JWT_SECRET=$(openssl rand -hex 32)
 echo "Generated random JWT secret: ${JWT_SECRET:0:16}... (truncated for security)"
 
 sudo tee /opt/arkfile/etc/secrets.env > /dev/null << EOF
-# ⚠️  DEMO CONFIGURATION - NOT FOR PRODUCTION ⚠️
+# [WARNING]  DEMO CONFIGURATION - NOT FOR PRODUCTION [WARNING]
 #
 # This file contains demo credentials for quick-start testing.
 # 
-# 🔒 SECURITY WARNING: 
+# [LOCK] SECURITY WARNING: 
 # These are DEFAULT DEMO VALUES and MUST be changed for production use!
 #
 # Before production deployment, run:
@@ -281,7 +281,7 @@ max_attempts=30
 attempt=0
 while [ $attempt -lt $max_attempts ]; do
     if curl -u demo-user:TestPassword123_Secure http://localhost:4001/status 2>/dev/null | grep -q '"ready":true'; then
-        echo "  ✅ rqlite is ready and established as leader"
+        echo "  [OK] rqlite is ready and established as leader"
         break
     fi
     echo "  ⏳ Waiting for rqlite to be ready... (attempt $((attempt + 1))/$max_attempts)"
@@ -290,7 +290,7 @@ while [ $attempt -lt $max_attempts ]; do
 done
 
 if [ $attempt -eq $max_attempts ]; then
-    echo -e "${RED}❌ rqlite failed to become ready within timeout${NC}"
+    echo -e "${RED}[X] rqlite failed to become ready within timeout${NC}"
     echo "Check rqlite status: sudo systemctl status rqlite"
     echo "Check rqlite logs: sudo journalctl -u rqlite -n 20"
     exit 1
@@ -310,7 +310,7 @@ max_attempts=15
 attempt=0
 while [ $attempt -lt $max_attempts ]; do
     if curl -s http://localhost:8080/health 2>/dev/null | grep -q '"status":"ok"'; then
-        echo "  ✅ Arkfile is running and responding"
+        echo "  [OK] Arkfile is running and responding"
         break
     fi
     echo "  ⏳ Waiting for Arkfile to be ready... (attempt $((attempt + 1))/$max_attempts)"
@@ -319,7 +319,7 @@ while [ $attempt -lt $max_attempts ]; do
 done
 
 if [ $attempt -eq $max_attempts ]; then
-    echo -e "${RED}❌ Arkfile failed to start or respond within timeout${NC}"
+    echo -e "${RED}[X] Arkfile failed to start or respond within timeout${NC}"
     echo "Check Arkfile status: sudo systemctl status arkfile"
     echo "Check Arkfile logs: sudo journalctl -u arkfile -n 20"
     exit 1
@@ -341,15 +341,15 @@ echo "  Arkfile: ${arkfile_status}"
 # Validate TLS certificates
 echo -e "${YELLOW}Validating TLS certificates for secure local network access...${NC}"
 if ./scripts/maintenance/validate-certificates.sh >/dev/null 2>&1; then
-    echo -e "${GREEN}✅ TLS certificates validated successfully${NC}"
-    TLS_STATUS="✅ Available"
+    echo -e "${GREEN}[OK] TLS certificates validated successfully${NC}"
+    TLS_STATUS="[OK] Available"
 else
-    echo -e "${YELLOW}⚠️  TLS certificate validation had warnings (non-critical)${NC}"
-    TLS_STATUS="⚠️  Available with warnings"
+    echo -e "${YELLOW}[WARNING]  TLS certificate validation had warnings (non-critical)${NC}"
+    TLS_STATUS="[WARNING]  Available with warnings"
 fi
 
 if [ "$arkfile_status" = "active" ]; then
-    echo -e "${GREEN}✅ Arkfile is running!${NC}"
+    echo -e "${GREEN}[OK] Arkfile is running!${NC}"
     
     # Get the port from config or use default
     arkfile_port=$(sudo grep -o 'PORT=[0-9]*' /opt/arkfile/etc/secrets.env 2>/dev/null | cut -d= -f2)
@@ -375,21 +375,21 @@ if [ "$arkfile_status" = "active" ]; then
     echo "================================"
     echo
     echo -e "${BLUE}Your Arkfile system is now running at:${NC}"
-    echo -e "${GREEN}  📱 HTTP Interface: http://localhost:${arkfile_port}${NC}"
+    echo -e "${GREEN}  [DEVICE] HTTP Interface: http://localhost:${arkfile_port}${NC}"
     if [ -n "$tls_enabled" ]; then
-        echo -e "${GREEN}  🔒 HTTPS Interface: https://localhost:${arkfile_tls_port}${NC}"
+        echo -e "${GREEN}  [LOCK] HTTPS Interface: https://localhost:${arkfile_tls_port}${NC}"
         echo -e "${BLUE}     (Accept self-signed certificate warning)${NC}"
     else
-        echo -e "${YELLOW}  🔒 HTTPS Interface: Disabled${NC}"
+        echo -e "${YELLOW}  [LOCK] HTTPS Interface: Disabled${NC}"
     fi
     echo
     echo -e "${BLUE}🌐 Local Network Access:${NC}"
-    echo -e "${GREEN}  📱 HTTP: http://${local_ip}:${arkfile_port}${NC}"
+    echo -e "${GREEN}  [DEVICE] HTTP: http://${local_ip}:${arkfile_port}${NC}"
     if [ -n "$tls_enabled" ]; then
-        echo -e "${GREEN}  🔒 HTTPS: https://${local_ip}:${arkfile_tls_port}${NC}"
+        echo -e "${GREEN}  [LOCK] HTTPS: https://${local_ip}:${arkfile_tls_port}${NC}"
         echo -e "${BLUE}     (TLS Status: ${TLS_STATUS})${NC}"
     else
-        echo -e "${YELLOW}  🔒 HTTPS: Disabled${NC}"
+        echo -e "${YELLOW}  [LOCK] HTTPS: Disabled${NC}"
     fi
     echo
     echo -e "${BLUE}Next Steps - Test Your System:${NC}"
@@ -416,10 +416,10 @@ if [ "$arkfile_status" = "active" ]; then
     echo "• Database: rqlite cluster (port 4001)"
     echo "• Object storage: /opt/arkfile/var/lib/minio/data"
     echo
-    echo -e "${GREEN}✅ System is ready for use!${NC}"
+    echo -e "${GREEN}[OK] System is ready for use!${NC}"
     
 else
-    echo -e "${RED}❌ Arkfile failed to start${NC}"
+    echo -e "${RED}[X] Arkfile failed to start${NC}"
     echo
     echo "Troubleshooting:"
     echo "1. Check logs: sudo journalctl -u arkfile --no-pager"

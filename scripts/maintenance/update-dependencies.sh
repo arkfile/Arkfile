@@ -70,7 +70,7 @@ check_scripts() {
     fi
     
     if [[ ${#missing_scripts[@]} -gt 0 ]]; then
-        echo -e "${RED}❌ Missing required scripts: ${missing_scripts[*]}${NC}"
+        echo -e "${RED}[X] Missing required scripts: ${missing_scripts[*]}${NC}"
         echo "Please ensure all dependency management scripts are present."
         exit 1
     fi
@@ -115,7 +115,7 @@ check_for_updates() {
             return 1
         fi
     else
-        echo -e "${RED}❌ Failed to check for updates${NC}"
+        echo -e "${RED}[X] Failed to check for updates${NC}"
         return 1
     fi
 }
@@ -123,7 +123,7 @@ check_for_updates() {
 # Show interactive menu
 show_menu() {
     echo
-    echo -e "${CYAN}📋 Available Actions:${NC}"
+    echo -e "${CYAN}[INFO] Available Actions:${NC}"
     
     option=1
     
@@ -195,9 +195,9 @@ handle_choice() {
             if [[ -n "$RQLITE_OPTION" ]]; then
                 echo -e "${BLUE}🔧 Updating rqlite...${NC}"
                 if "$SCRIPT_DIR/setup-rqlite.sh"; then
-                    echo -e "${GREEN}✅ rqlite updated successfully${NC}"
+                    echo -e "${GREEN}[OK] rqlite updated successfully${NC}"
                 else
-                    echo -e "${RED}❌ rqlite update failed${NC}"
+                    echo -e "${RED}[X] rqlite update failed${NC}"
                 fi
             else
                 echo "Invalid choice"
@@ -207,9 +207,9 @@ handle_choice() {
             if [[ -n "$MINIO_OPTION" ]]; then
                 echo -e "${BLUE}🔧 Updating MinIO...${NC}"
                 if "$SCRIPT_DIR/setup-minio.sh"; then
-                    echo -e "${GREEN}✅ MinIO updated successfully${NC}"
+                    echo -e "${GREEN}[OK] MinIO updated successfully${NC}"
                 else
-                    echo -e "${RED}❌ MinIO update failed${NC}"
+                    echo -e "${RED}[X] MinIO update failed${NC}"
                 fi
             else
                 echo "Invalid choice"
@@ -243,9 +243,9 @@ handle_choice() {
                 fi
                 
                 if [[ "$success" == "true" ]]; then
-                    echo -e "${GREEN}✅ All system dependencies updated successfully${NC}"
+                    echo -e "${GREEN}[OK] All system dependencies updated successfully${NC}"
                 else
-                    echo -e "${RED}❌ Some system dependency updates failed${NC}"
+                    echo -e "${RED}[X] Some system dependency updates failed${NC}"
                 fi
             else
                 echo "Invalid choice"
@@ -284,9 +284,9 @@ handle_choice() {
                 echo -e "${BLUE}🧪 Running tests...${NC}"
                 cd "$PROJECT_ROOT"
                 if go test ./...; then
-                    echo -e "${GREEN}✅ All tests passed${NC}"
+                    echo -e "${GREEN}[OK] All tests passed${NC}"
                 else
-                    echo -e "${RED}❌ Some tests failed${NC}"
+                    echo -e "${RED}[X] Some tests failed${NC}"
                 fi
             else
                 echo "Invalid choice"
@@ -312,7 +312,7 @@ interactive_mode() {
                 # Re-check for updates
                 if ! check_for_updates; then
                     echo
-                    echo -e "${GREEN}✅ All dependencies are now up to date!${NC}"
+                    echo -e "${GREEN}[OK] All dependencies are now up to date!${NC}"
                     break
                 fi
                 ;;
@@ -328,7 +328,7 @@ interactive_mode() {
 main() {
     check_scripts
     
-    echo -e "${BLUE}🚀 Arkfile Dependency Manager${NC}"
+    echo -e "${BLUE}[START] Arkfile Dependency Manager${NC}"
     echo
     
     if check_for_updates; then
@@ -340,7 +340,7 @@ main() {
         fi
     else
         echo
-        echo -e "${GREEN}✅ All dependencies are up to date!${NC}"
+        echo -e "${GREEN}[OK] All dependencies are up to date!${NC}"
     fi
 }
 

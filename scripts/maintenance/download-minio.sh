@@ -102,10 +102,10 @@ download_with_retry() {
                --connect-timeout 30 --max-time 1800 \
                --progress-bar --fail \
                -o "${output}" "${url}"; then
-            echo -e "${GREEN}✅ ${description} downloaded successfully${NC}"
+            echo -e "${GREEN}[OK] ${description} downloaded successfully${NC}"
             return 0
         else
-            echo -e "${YELLOW}⚠️  Download attempt ${attempt} failed${NC}"
+            echo -e "${YELLOW}[WARNING]  Download attempt ${attempt} failed${NC}"
             if [ $attempt -lt $max_retries ]; then
                 echo "Retrying in ${retry_delay} seconds..."
                 sleep $retry_delay
@@ -114,7 +114,7 @@ download_with_retry() {
         fi
     done
     
-    echo -e "${RED}❌ Failed to download ${description} after ${max_retries} attempts${NC}"
+    echo -e "${RED}[X] Failed to download ${description} after ${max_retries} attempts${NC}"
     return 1
 }
 
@@ -126,7 +126,7 @@ verify_checksum() {
     echo -e "${BLUE}Verifying SHA256 checksum...${NC}"
     
     if [ ! -f "${checksum_file}" ]; then
-        echo -e "${RED}❌ Checksum file not found: ${checksum_file}${NC}"
+        echo -e "${RED}[X] Checksum file not found: ${checksum_file}${NC}"
         return 1
     fi
     
@@ -135,7 +135,7 @@ verify_checksum() {
     expected_checksum=$(awk '{print $1}' "${checksum_file}" | head -1)
     
     if [ -z "${expected_checksum}" ]; then
-        echo -e "${RED}❌ Could not extract checksum from file${NC}"
+        echo -e "${RED}[X] Could not extract checksum from file${NC}"
         return 1
     fi
     
@@ -147,10 +147,10 @@ verify_checksum() {
     echo "Actual:   ${actual_checksum}"
     
     if [ "${expected_checksum}" = "${actual_checksum}" ]; then
-        echo -e "${GREEN}✅ SHA256 checksum verification passed${NC}"
+        echo -e "${GREEN}[OK] SHA256 checksum verification passed${NC}"
         return 0
     else
-        echo -e "${RED}❌ SHA256 checksum verification failed${NC}"
+        echo -e "${RED}[X] SHA256 checksum verification failed${NC}"
         return 1
     fi
 }
@@ -164,13 +164,13 @@ verify_signature() {
     
     # Check if gpg is available
     if ! command -v gpg >/dev/null 2>&1; then
-        echo -e "${YELLOW}⚠️  GPG not available, skipping signature verification${NC}"
+        echo -e "${YELLOW}[WARNING]  GPG not available, skipping signature verification${NC}"
         return 0
     fi
     
     # Check if signature file exists
     if [ ! -f "${signature_file}" ]; then
-        echo -e "${YELLOW}⚠️  PGP signature file not available, skipping signature verification${NC}"
+        echo -e "${YELLOW}[WARNING]  PGP signature file not available, skipping signature verification${NC}"
         return 0
     fi
     
@@ -181,16 +181,16 @@ verify_signature() {
         echo "Importing MinIO's PGP public key..."
         # Note: In production, you'd want to import from a keyserver or local file
         # gpg --keyserver keyserver.ubuntu.com --recv-keys ${MINIO_PGP_KEY_ID}
-        echo -e "${YELLOW}⚠️  MinIO public key not imported, skipping signature verification${NC}"
+        echo -e "${YELLOW}[WARNING]  MinIO public key not imported, skipping signature verification${NC}"
         return 0
     fi
     
     # Verify signature
     if gpg --verify "${signature_file}" "${checksum_file}" >/dev/null 2>&1; then
-        echo -e "${GREEN}✅ PGP signature verification passed${NC}"
+        echo -e "${GREEN}[OK] PGP signature verification passed${NC}"
         return 0
     else
-        echo -e "${RED}❌ PGP signature verification failed${NC}"
+        echo -e "${RED}[X] PGP signature verification failed${NC}"
         return 1
     fi
 }
@@ -214,11 +214,11 @@ install_minio() {
     if command -v minio >/dev/null 2>&1; then
         local installed_version
         installed_version=$(minio --version 2>/dev/null | head -1 || echo "unknown")
-        echo -e "${GREEN}✅ MinIO installed successfully${NC}"
+        echo -e "${GREEN}[OK] MinIO installed successfully${NC}"
         echo "Version: ${installed_version}"
         return 0
     else
-        echo -e "${RED}❌ MinIO installation failed${NC}"
+        echo -e "${RED}[X] MinIO installation failed${NC}"
         return 1
     fi
 }
@@ -230,12 +230,12 @@ if [ "$VERIFY_ONLY" = true ]; then
     echo -e "${BLUE}Verify-only mode: checking existing cached files${NC}"
     
     if [ ! -f "${MINIO_BINARY}" ]; then
-        echo -e "${RED}❌ Cached MinIO binary not found: ${MINIO_BINARY}${NC}"
+        echo -e "${RED}[X] Cached MinIO binary not found: ${MINIO_BINARY}${NC}"
         exit 1
     fi
     
     if [ ! -f "${MINIO_CHECKSUM}" ]; then
-        echo -e "${RED}❌ Cached checksum file not found: ${MINIO_CHECKSUM}${NC}"
+        echo -e "${RED}[X] Cached checksum file not found: ${MINIO_CHECKSUM}${NC}"
         exit 1
     fi
     
@@ -257,7 +257,7 @@ if [ -f "${MINIO_BINARY}" ] && [ -f "${MINIO_CHECKSUM}" ]; then
             install_minio "${MINIO_BINARY}"
             exit $?
         else
-            echo -e "${YELLOW}⚠️  Cached file verification failed, will re-download${NC}"
+            echo -e "${YELLOW}[WARNING]  Cached file verification failed, will re-download${NC}"
         fi
     elif [ "$FORCE_DOWNLOAD" = false ]; then
         echo -e "${YELLOW}MinIO files already cached. Use --force-download to re-download or --skip-download to use cached files${NC}"
@@ -270,7 +270,7 @@ if [ -f "${MINIO_BINARY}" ] && [ -f "${MINIO_CHECKSUM}" ]; then
             install_minio "${MINIO_BINARY}"
             exit $?
         else
-            echo -e "${YELLOW}⚠️  Cached file verification failed, will re-download${NC}"
+            echo -e "${YELLOW}[WARNING]  Cached file verification failed, will re-download${NC}"
         fi
     fi
 fi
@@ -280,21 +280,21 @@ echo -e "${BLUE}Downloading MinIO version ${MINIO_VERSION}...${NC}"
 
 # Download checksum file first
 if ! download_with_retry "${MINIO_SHA256_URL}" "${MINIO_CHECKSUM}" "SHA256 checksum"; then
-    echo -e "${RED}❌ Failed to download checksum file${NC}"
+    echo -e "${RED}[X] Failed to download checksum file${NC}"
     exit 1
 fi
 
 # Try to download signature file (optional)
 if curl -L --retry 2 --connect-timeout 10 --max-time 60 \
         --fail -o "${MINIO_SIGNATURE}" "${MINIO_SHA256_URL}.sig" >/dev/null 2>&1; then
-    echo -e "${GREEN}✅ PGP signature file downloaded${NC}"
+    echo -e "${GREEN}[OK] PGP signature file downloaded${NC}"
 else
-    echo -e "${YELLOW}⚠️  PGP signature file not available (non-critical)${NC}"
+    echo -e "${YELLOW}[WARNING]  PGP signature file not available (non-critical)${NC}"
 fi
 
 # Download MinIO binary
 if ! download_with_retry "${MINIO_DOWNLOAD_URL}" "${MINIO_BINARY}" "MinIO binary"; then
-    echo -e "${RED}❌ Failed to download MinIO binary${NC}"
+    echo -e "${RED}[X] Failed to download MinIO binary${NC}"
     exit 1
 fi
 
@@ -308,7 +308,7 @@ fi
 echo -e "${BLUE}Verifying downloaded files...${NC}"
 
 if ! verify_checksum "${MINIO_BINARY}" "${MINIO_CHECKSUM}"; then
-    echo -e "${RED}❌ MinIO binary verification failed${NC}"
+    echo -e "${RED}[X] MinIO binary verification failed${NC}"
     exit 1
 fi
 
@@ -318,15 +318,15 @@ verify_signature "${MINIO_CHECKSUM}" "${MINIO_SIGNATURE}"
 if install_minio "${MINIO_BINARY}"; then
     echo -e "${GREEN}MinIO download, verification, and installation completed successfully!${NC}"
     echo ""
-    echo -e "${BLUE}📋 Summary:${NC}"
+    echo -e "${BLUE}[INFO] Summary:${NC}"
     echo "• Version: ${MINIO_VERSION}"
     echo "• Binary location: /usr/local/bin/minio"
     echo "• Cached in: ${MINIO_BINARY}"
-    echo "• SHA256 verified: ✅"
+    echo "• SHA256 verified: [OK]"
     if [ -f "${MINIO_SIGNATURE}" ]; then
-        echo "• PGP signature checked: ✅"
+        echo "• PGP signature checked: [OK]"
     else
-        echo "• PGP signature: ⚠️  Not available"
+        echo "• PGP signature: [WARNING]  Not available"
     fi
     echo ""
     echo -e "${YELLOW}📝 Next steps:${NC}"
@@ -337,7 +337,7 @@ if install_minio "${MINIO_BINARY}"; then
     echo -e "${BLUE}🔧 Quick test:${NC}"
     echo "minio --version"
 else
-    echo -e "${RED}❌ MinIO installation failed${NC}"
+    echo -e "${RED}[X] MinIO installation failed${NC}"
     exit 1
 fi
 

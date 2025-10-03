@@ -53,12 +53,12 @@ echo
 # Check if rqlite is already installed
 if command -v rqlited &> /dev/null && command -v rqlite &> /dev/null && [ "$FORCE_DOWNLOAD" != true ]; then
     INSTALLED_VERSION=$(rqlited -version 2>/dev/null | head -n1 | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+' || echo "unknown")
-    echo -e "${GREEN}✅ rqlite binaries already installed${NC}"
+    echo -e "${GREEN}[OK] rqlite binaries already installed${NC}"
     echo "Installed version: ${INSTALLED_VERSION}"
     echo "Skipping download and installation..."
     
     # Still need to install systemd service files
-    echo -e "${BLUE}⚙️  Installing systemd service files...${NC}"
+    echo -e "${BLUE}[CONFIG]  Installing systemd service files...${NC}"
     sudo cp "${BASE_DIR}/systemd/rqlite.service" /etc/systemd/system/
     
     # Create simplified data directory for single-node deployment
@@ -86,7 +86,7 @@ CACHED_FILE="${CACHE_DIR}/rqlite-v${VERSION}-linux-amd64.tar.gz"
 CACHED_SHA256="${CACHE_DIR}/rqlite-v${VERSION}-linux-amd64.tar.gz.sha256"
 
 if [ -f "$CACHED_FILE" ] && [ -f "$CACHED_SHA256" ] && [ "$FORCE_DOWNLOAD" != true ]; then
-    echo -e "${GREEN}✅ Using cached rqlite v${VERSION}${NC}"
+    echo -e "${GREEN}[OK] Using cached rqlite v${VERSION}${NC}"
 else
     echo -e "${YELLOW}📥 Downloading rqlite v${VERSION} with security verification...${NC}"
     
@@ -96,28 +96,28 @@ else
     if curl -L "${RQLITE_SHA256_URL}" -o "${CACHED_SHA256}" 2>/dev/null; then
         # Check if we got a real checksum or a 404 page
         if [ -s "${CACHED_SHA256}" ] && ! grep -q "Not Found" "${CACHED_SHA256}"; then
-            echo -e "${GREEN}✅ SHA256 checksum downloaded from upstream${NC}"
+            echo -e "${GREEN}[OK] SHA256 checksum downloaded from upstream${NC}"
             CHECKSUM_AVAILABLE=true
         else
-            echo -e "${YELLOW}⚠️  Upstream SHA256 checksum not available${NC}"
+            echo -e "${YELLOW}[WARNING]  Upstream SHA256 checksum not available${NC}"
             rm -f "${CACHED_SHA256}"
         fi
     else
-        echo -e "${YELLOW}⚠️  Upstream SHA256 checksum not available${NC}"
+        echo -e "${YELLOW}[WARNING]  Upstream SHA256 checksum not available${NC}"
     fi
     
     # Download the binary
     echo "Downloading rqlite binary..."
     if ! curl -L "${RQLITE_DOWNLOAD_URL}" -o "${CACHED_FILE}"; then
-        echo -e "${RED}❌ Failed to download rqlite binary${NC}"
+        echo -e "${RED}[X] Failed to download rqlite binary${NC}"
         exit 1
     fi
     
-    echo -e "${GREEN}✅ Binary download completed${NC}"
+    echo -e "${GREEN}[OK] Binary download completed${NC}"
 fi
 
 # Verify SHA256 checksum using fallback methods
-echo -e "${BLUE}🔐 Verifying download integrity...${NC}"
+echo -e "${BLUE}[SECURE] Verifying download integrity...${NC}"
 cd "${CACHE_DIR}"
 
 VERIFICATION_PASSED=false
@@ -133,11 +133,11 @@ if [ -f "${CACHED_SHA256}" ] && [ -s "${CACHED_SHA256}" ]; then
     echo "Actual SHA256:   ${ACTUAL_SHA256}"
     
     if [ "$EXPECTED_SHA256" = "$ACTUAL_SHA256" ]; then
-        echo -e "${GREEN}✅ Upstream SHA256 verification passed${NC}"
+        echo -e "${GREEN}[OK] Upstream SHA256 verification passed${NC}"
         VERIFICATION_PASSED=true
         VERIFICATION_METHOD="upstream_checksum"
     else
-        echo -e "${RED}❌ Upstream SHA256 verification failed${NC}"
+        echo -e "${RED}[X] Upstream SHA256 verification failed${NC}"
         exit 1
     fi
 fi
@@ -156,30 +156,30 @@ if [ "$VERIFICATION_PASSED" = false ]; then
             echo "Actual SHA256:                    ${ACTUAL_SHA256}"
             
             if [ "$EXPECTED_SHA256" = "$ACTUAL_SHA256" ]; then
-                echo -e "${GREEN}✅ Local database SHA256 verification passed${NC}"
+                echo -e "${GREEN}[OK] Local database SHA256 verification passed${NC}"
                 VERIFICATION_PASSED=true
                 VERIFICATION_METHOD="local_database"
             else
-                echo -e "${RED}❌ Local database SHA256 verification failed${NC}"
-                echo -e "${RED}❌ This indicates the download may be corrupted or tampered with${NC}"
+                echo -e "${RED}[X] Local database SHA256 verification failed${NC}"
+                echo -e "${RED}[X] This indicates the download may be corrupted or tampered with${NC}"
                 rm -f "${CACHED_FILE}"
                 exit 1
             fi
         else
-            echo -e "${YELLOW}⚠️  No SHA256 found in local database for v${VERSION}${NC}"
+            echo -e "${YELLOW}[WARNING]  No SHA256 found in local database for v${VERSION}${NC}"
         fi
     else
-        echo -e "${YELLOW}⚠️  Local dependency database not available or jq not installed${NC}"
+        echo -e "${YELLOW}[WARNING]  Local dependency database not available or jq not installed${NC}"
     fi
 fi
 
 # Method 3: Manual verification prompt (last resort)
 if [ "$VERIFICATION_PASSED" = false ]; then
     ACTUAL_SHA256=$(sha256sum "$(basename "${CACHED_FILE}")" | awk '{print $1}')
-    echo -e "${YELLOW}⚠️  WARNING: Unable to verify download automatically${NC}"
-    echo -e "${YELLOW}⚠️  Computed SHA256: ${ACTUAL_SHA256}${NC}"
+    echo -e "${YELLOW}[WARNING]  WARNING: Unable to verify download automatically${NC}"
+    echo -e "${YELLOW}[WARNING]  Computed SHA256: ${ACTUAL_SHA256}${NC}"
     echo
-    echo -e "${RED}🔒 SECURITY WARNING: No automatic verification available${NC}"
+    echo -e "${RED}[LOCK] SECURITY WARNING: No automatic verification available${NC}"
     echo "rqlite does not provide SHA256 checksums, and no local database entry exists."
     echo "Please manually verify this SHA256 against a trusted source."
     echo
@@ -194,13 +194,13 @@ if [ "$VERIFICATION_PASSED" = false ]; then
         exit 1
     fi
     VERIFICATION_METHOD="manual_override"
-    echo -e "${YELLOW}⚠️  Proceeding with unverified download${NC}"
+    echo -e "${YELLOW}[WARNING]  Proceeding with unverified download${NC}"
 fi
 
 # TODO: PGP signature verification would go here
 # Note: rqlite releases don't currently provide PGP signatures
 # but we should check for them and verify if available
-echo -e "${YELLOW}⚠️  PGP signature verification not available for rqlite releases${NC}"
+echo -e "${YELLOW}[WARNING]  PGP signature verification not available for rqlite releases${NC}"
 
 # Install the binaries
 echo -e "${BLUE}📦 Installing rqlite binaries...${NC}"
@@ -214,19 +214,19 @@ sudo install -m 755 "${TEMP_DIR}/rqlite-v${VERSION}-linux-amd64/rqlite" /usr/loc
 # Clean up temporary files
 rm -rf "${TEMP_DIR}"
 
-echo -e "${GREEN}✅ rqlite binaries installed successfully${NC}"
+echo -e "${GREEN}[OK] rqlite binaries installed successfully${NC}"
 
 # Verify installation
 if command -v rqlited &> /dev/null && command -v rqlite &> /dev/null; then
     RQLITED_VERSION=$(rqlited -version | head -n1)
-    echo -e "${GREEN}✅ Installation verified: ${RQLITED_VERSION}${NC}"
+    echo -e "${GREEN}[OK] Installation verified: ${RQLITED_VERSION}${NC}"
 else
-    echo -e "${RED}❌ Installation verification failed${NC}"
+    echo -e "${RED}[X] Installation verification failed${NC}"
     exit 1
 fi
 
 # Copy systemd service files
-echo -e "${BLUE}⚙️  Installing systemd service files...${NC}"
+echo -e "${BLUE}[CONFIG]  Installing systemd service files...${NC}"
 sudo cp "${BASE_DIR}/systemd/rqlite.service" /etc/systemd/system/
 
 # Create simplified data directory for single-node deployment
@@ -240,15 +240,15 @@ sudo systemctl daemon-reload
 echo
 echo -e "${GREEN}rqlite cluster database setup complete!${NC}"
 echo
-echo -e "${BLUE}📋 Installation Summary:${NC}"
+echo -e "${BLUE}[INFO] Installation Summary:${NC}"
 echo "• Version: ${VERSION}"
 echo "• Binaries: /usr/local/bin/rqlited, /usr/local/bin/rqlite"
-echo "• SHA256: ✅ Verified"
-echo "• PGP: ⚠️  Not available from upstream"
+echo "• SHA256: [OK] Verified"
+echo "• PGP: [WARNING]  Not available from upstream"
 echo "• Cached: ${CACHED_FILE}"
 
 echo
-echo -e "${BLUE}🚀 Next Steps:${NC}"
+echo -e "${BLUE}[START] Next Steps:${NC}"
 echo "1. Configure environment variables in /opt/arkfile/etc/[env]/secrets.env:"
 echo "   DATABASE_TYPE=rqlite"
 echo "   RQLITE_ADDRESS=http://localhost:4001"

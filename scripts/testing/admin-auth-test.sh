@@ -57,18 +57,18 @@ verbose() {
 }
 
 success() {
-    echo -e "${GREEN}✅ $1${NC}"
+    echo -e "${GREEN}[OK] $1${NC}"
 }
 
 error() {
-    echo -e "${RED}❌ $1${NC}"
+    echo -e "${RED}[X] $1${NC}"
     if [[ $# -gt 1 ]] && [[ "$DEBUG_MODE" == "1" ]]; then
         echo -e "${RED}   Details: $2${NC}"
     fi
 }
 
 warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
+    echo -e "${YELLOW}[WARNING]  $1${NC}"
 }
 
 info() {
@@ -176,66 +176,66 @@ show_test_summary() {
     # Test 1: Server Connectivity
     total_tests=$((total_tests + 1))
     if [[ "${TEST_RESULTS[connectivity]}" == "1" ]]; then
-        echo -e "${GREEN}✅ Test 1: Server Connectivity${NC}"
+        echo -e "${GREEN}[OK] Test 1: Server Connectivity${NC}"
         info "Server responding at $ARKFILE_BASE_URL"
         passed_tests=$((passed_tests + 1))
     else
-        echo -e "${RED}❌ Test 1: Server Connectivity${NC}"
+        echo -e "${RED}[X] Test 1: Server Connectivity${NC}"
         info "Server not reachable"
     fi
     
     # Test 2: OPAQUE Authentication
     total_tests=$((total_tests + 1))
     if [[ "${TEST_RESULTS[opaque_auth]}" == "1" ]]; then
-        echo -e "${GREEN}✅ Test 2: OPAQUE Authentication${NC}"
+        echo -e "${GREEN}[OK] Test 2: OPAQUE Authentication${NC}"
         info "Login successful, TOTP required as expected"
         passed_tests=$((passed_tests + 1))
     else
-        echo -e "${RED}❌ Test 2: OPAQUE Authentication${NC}"
+        echo -e "${RED}[X] Test 2: OPAQUE Authentication${NC}"
         info "OPAQUE login failed"
     fi
     
     # Test 3: TOTP Code Generation
     total_tests=$((total_tests + 1))
     if [[ "${TEST_RESULTS[totp_generation]}" == "1" ]]; then
-        echo -e "${GREEN}✅ Test 3: TOTP Code Generation${NC}"
+        echo -e "${GREEN}[OK] Test 3: TOTP Code Generation${NC}"
         info "Successfully generated time-based codes"
         passed_tests=$((passed_tests + 1))
     else
-        echo -e "${RED}❌ Test 3: TOTP Code Generation${NC}"
+        echo -e "${RED}[X] Test 3: TOTP Code Generation${NC}"
         info "Failed to generate TOTP codes"
     fi
     
     # Test 4: TOTP Authentication
     total_tests=$((total_tests + 1))
     if [[ "${TEST_RESULTS[totp_auth]}" == "1" ]]; then
-        echo -e "${GREEN}✅ Test 4: TOTP Authentication${NC}"
+        echo -e "${GREEN}[OK] Test 4: TOTP Authentication${NC}"
         info "Successfully completed two-factor authentication"
         passed_tests=$((passed_tests + 1))
     else
-        echo -e "${RED}❌ Test 4: TOTP Authentication${NC}"
+        echo -e "${RED}[X] Test 4: TOTP Authentication${NC}"
         info "TOTP verification failed"
     fi
     
     # Test 5: Authenticated API Access
     total_tests=$((total_tests + 1))
     if [[ "${TEST_RESULTS[api_access]}" == "1" ]]; then
-        echo -e "${GREEN}✅ Test 5: Authenticated API Access${NC}"
+        echo -e "${GREEN}[OK] Test 5: Authenticated API Access${NC}"
         info "API endpoints responding with valid tokens"
         passed_tests=$((passed_tests + 1))
     else
-        echo -e "${RED}❌ Test 5: Authenticated API Access${NC}"
+        echo -e "${RED}[X] Test 5: Authenticated API Access${NC}"
         info "Failed to access protected endpoints"
     fi
     
     # Test 6: Token Refresh
     total_tests=$((total_tests + 1))
     if [[ "${TEST_RESULTS[token_refresh]}" == "1" ]]; then
-        echo -e "${GREEN}✅ Test 6: Token Refresh${NC}"
+        echo -e "${GREEN}[OK] Test 6: Token Refresh${NC}"
         info "Refresh token functionality working"
         passed_tests=$((passed_tests + 1))
     else
-        echo -e "${RED}❌ Test 6: Token Refresh${NC}"
+        echo -e "${RED}[X] Test 6: Token Refresh${NC}"
         info "Token refresh failed or not available"
     fi
     
@@ -462,10 +462,10 @@ for endpoint in "${API_ENDPOINTS[@]}"; do
       "$ARKFILE_BASE_URL$endpoint" 2>/dev/null)
     
     if echo "$API_RESPONSE" | jq -e '.' >/dev/null 2>&1; then
-        debug "✅ $endpoint - Valid response"
+        debug "[OK] $endpoint - Valid response"
         API_SUCCESS_COUNT=$((API_SUCCESS_COUNT + 1))
     else
-        debug "⚠️ $endpoint - Invalid response"
+        debug "[WARNING] $endpoint - Invalid response"
     fi
 done
 

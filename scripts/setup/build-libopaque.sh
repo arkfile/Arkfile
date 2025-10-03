@@ -49,7 +49,7 @@ detect_system_and_packages() {
     
     # Detect make command early
     if ! MAKE_CMD=$(find_make_command); then
-        echo "❌ No make command found (tried: make, gmake)"
+        echo "[X] No make command found (tried: make, gmake)"
         exit 1
     fi
     
@@ -99,7 +99,7 @@ detect_system_and_packages() {
             BUILD_TOOLS_PKG="gcc make cmake"
             LIBC="glibc"
         else
-            echo "❌ Unknown Linux distribution"
+            echo "[X] Unknown Linux distribution"
             exit 1
         fi
     elif [[ "$OSTYPE" == "freebsd"* ]] || uname | grep -q FreeBSD; then
@@ -127,12 +127,12 @@ detect_system_and_packages() {
         BUILD_TOOLS_PKG="gcc cmake"
         LIBC="netbsd-libc"
     else
-        echo "❌ Unsupported platform: $OSTYPE ($(uname -s))"
+        echo "[X] Unsupported platform: $OSTYPE ($(uname -s))"
         echo "Supported: Linux (Debian, RHEL, Alpine, Arch), FreeBSD, OpenBSD, NetBSD"
         exit 1
     fi
     
-    echo "📋 Detected: $OS ($LIBC) with $PACKAGE_MANAGER using $MAKE_CMD"
+    echo "[INFO] Detected: $OS ($LIBC) with $PACKAGE_MANAGER using $MAKE_CMD"
 }
 
 # POSIX-compatible Go detection with fallbacks
@@ -167,7 +167,7 @@ check_go_version() {
     
     local go_binary
     if ! go_binary=$(find_go_binary); then
-        echo "❌ Go compiler not found in standard locations:"
+        echo "[X] Go compiler not found in standard locations:"
         echo "   Checked: PATH, /usr/bin/go, /usr/local/bin/go, /usr/local/go/bin/go"
         echo "   Please install Go 1.24+ via package manager or from https://golang.org"
         echo ""
@@ -180,7 +180,7 @@ check_go_version() {
         exit 1
     fi
     
-    echo "✅ Found Go at: $go_binary"
+    echo "[OK] Found Go at: $go_binary"
     
     local current_version=$("$go_binary" version | grep -o 'go[0-9]\+\.[0-9]\+' | sed 's/go//')
     local current_major=$(echo $current_version | cut -d. -f1)
@@ -188,13 +188,13 @@ check_go_version() {
     
     if [ "$current_major" -lt "$required_major" ] || 
        ([ "$current_major" -eq "$required_major" ] && [ "$current_minor" -lt "$required_minor" ]); then
-        echo "❌ Go version $current_version is too old"
+        echo "[X] Go version $current_version is too old"
         echo "Required: Go ${required_major}.${required_minor}+ (from go.mod)"
         echo "Please update Go to version 1.24 or later"
         exit 1
     fi
     
-    echo "✅ Go version $current_version meets requirements (>= ${required_major}.${required_minor})"
+    echo "[OK] Go version $current_version meets requirements (>= ${required_major}.${required_minor})"
 }
 
 # Enhanced dependency installation with fallbacks
@@ -209,32 +209,32 @@ install_dependencies_universal() {
     case $PACKAGE_MANAGER in
         apk)
             if ! sudo $INSTALL_CMD $packages; then
-                echo "⚠️  Primary package installation failed, trying alternatives..."
+                echo "[WARNING]  Primary package installation failed, trying alternatives..."
                 # Try alternative package names for Alpine
                 sudo $INSTALL_CMD libsodium-dev libsodium-static pkgconf-dev gcc musl-dev make cmake || {
-                    echo "❌ Failed to install required packages on Alpine"
+                    echo "[X] Failed to install required packages on Alpine"
                     exit 1
                 }
             fi
             ;;
         apt)
             if ! sudo $INSTALL_CMD $packages; then
-                echo "⚠️  Primary package installation failed, trying alternatives..."
+                echo "[WARNING]  Primary package installation failed, trying alternatives..."
                 # Try alternative package names for Debian/Ubuntu
                 sudo $INSTALL_CMD libsodium-dev pkg-config build-essential cmake || {
-                    echo "❌ Failed to install required packages on Debian/Ubuntu"
+                    echo "[X] Failed to install required packages on Debian/Ubuntu"
                     exit 1
                 }
             fi
             ;;
         dnf|yum)
             if ! sudo $INSTALL_CMD $packages; then
-                echo "⚠️  Primary package installation failed, trying alternatives..."
+                echo "[WARNING]  Primary package installation failed, trying alternatives..."
                 # Try alternative package names for RHEL family
                 if ! sudo $INSTALL_CMD libsodium-devel pkg-config gcc make cmake; then
                     # Final fallback - try pkgconfig instead of pkg-config
                     sudo $INSTALL_CMD libsodium-devel pkgconfig gcc make cmake || {
-                        echo "❌ Failed to install required packages on RHEL family"
+                        echo "[X] Failed to install required packages on RHEL family"
                         exit 1
                     }
                 fi
@@ -242,16 +242,16 @@ install_dependencies_universal() {
             ;;
         pacman)
             if ! sudo $INSTALL_CMD $packages; then
-                echo "❌ Failed to install required packages on Arch Linux"
+                echo "[X] Failed to install required packages on Arch Linux"
                 exit 1
             fi
             ;;
         pkg)
             if ! sudo $INSTALL_CMD $packages; then
-                echo "⚠️  Primary package installation failed, trying alternatives..."
+                echo "[WARNING]  Primary package installation failed, trying alternatives..."
                 # Try alternative package names for FreeBSD
                 sudo $INSTALL_CMD libsodium pkgconf gcc cmake || {
-                    echo "❌ Failed to install required packages on FreeBSD"
+                    echo "[X] Failed to install required packages on FreeBSD"
                     exit 1
                 }
             fi
@@ -260,31 +260,31 @@ install_dependencies_universal() {
             # OpenBSD pkg_add doesn't have good error handling, so try one by one
             echo "Installing packages individually on OpenBSD..."
             for pkg in $packages; do
-                sudo $INSTALL_CMD "$pkg" || echo "⚠️  Failed to install $pkg, continuing..."
+                sudo $INSTALL_CMD "$pkg" || echo "[WARNING]  Failed to install $pkg, continuing..."
             done
             ;;
         pkgin)
             if ! sudo $INSTALL_CMD $packages; then
-                echo "❌ Failed to install required packages on NetBSD"
+                echo "[X] Failed to install required packages on NetBSD"
                 exit 1
             fi
             ;;
     esac
     
-    echo "✅ Dependencies installed for $OS"
+    echo "[OK] Dependencies installed for $OS"
 }
 
 # Build static libraries in vendor directories
 build_static_libraries() {
-    echo "🔨 Building static libraries in vendor/ directories..."
+    echo "[BUILD] Building static libraries in vendor/ directories..."
     
     # Detect pkg-config command
     local PKG_CONFIG_CMD
     if ! PKG_CONFIG_CMD=$(find_pkg_config); then
-        echo "❌ No pkg-config command found (tried: pkg-config, pkgconf, pkgconfig)"
+        echo "[X] No pkg-config command found (tried: pkg-config, pkgconf, pkgconfig)"
         exit 1
     fi
-    echo "✅ Using pkg-config command: $PKG_CONFIG_CMD"
+    echo "[OK] Using pkg-config command: $PKG_CONFIG_CMD"
     
     # Create temporary workaround for vendor makefile pkgconf dependency
     local TEMP_PKGCONF_LINK=""
@@ -292,27 +292,27 @@ build_static_libraries() {
     
     # Check if vendor makefile needs pkgconf but we only have pkg-config
     if [ "$PKG_CONFIG_CMD" = "pkg-config" ] && ! command -v pkgconf >/dev/null 2>&1; then
-        echo "⚙️  Creating temporary pkgconf symlink for vendor makefile compatibility..."
+        echo "[CONFIG]  Creating temporary pkgconf symlink for vendor makefile compatibility..."
         # Create symlink in /usr/local/bin which is typically in PATH
         TEMP_PKGCONF_LINK="/usr/local/bin/pkgconf"
         if sudo ln -sf "$(which pkg-config)" "$TEMP_PKGCONF_LINK"; then
             NEED_PKGCONF_LINK=true
-            echo "✅ Temporary pkgconf link created at $TEMP_PKGCONF_LINK"
+            echo "[OK] Temporary pkgconf link created at $TEMP_PKGCONF_LINK"
             # Verify it's working
             if command -v pkgconf >/dev/null 2>&1; then
-                echo "✅ pkgconf symlink is accessible"
+                echo "[OK] pkgconf symlink is accessible"
             else
-                echo "⚠️  pkgconf symlink may not be in PATH, but should work for make"
+                echo "[WARNING]  pkgconf symlink may not be in PATH, but should work for make"
             fi
         else
-            echo "⚠️  Failed to create pkgconf symlink, trying alternative approach..."
+            echo "[WARNING]  Failed to create pkgconf symlink, trying alternative approach..."
             # Fallback: try creating in /tmp and modify PATH more aggressively
             TEMP_PKGCONF_LINK="/tmp/arkfile-bin-$$"
             mkdir -p "$TEMP_PKGCONF_LINK"
             ln -sf "$(which pkg-config)" "$TEMP_PKGCONF_LINK/pkgconf"
             export PATH="$TEMP_PKGCONF_LINK:$PATH"
             NEED_PKGCONF_LINK=true
-            echo "✅ Created temporary bin directory with pkgconf at $TEMP_PKGCONF_LINK"
+            echo "[OK] Created temporary bin directory with pkgconf at $TEMP_PKGCONF_LINK"
         fi
     fi
     
@@ -338,22 +338,22 @@ build_static_libraries() {
     # Build noise_xk library first (dependency for liboprf)
     echo "Building noise_xk static library..."
     if [ ! -d "$OPRF_DIR" ]; then
-        echo "❌ liboprf source directory not found: $OPRF_DIR"
+        echo "[X] liboprf source directory not found: $OPRF_DIR"
         echo "Attempting to initialize git submodules..."
         
         if ! git submodule update --init --recursive; then
-            echo "❌ Failed to initialize git submodules"
+            echo "[X] Failed to initialize git submodules"
             exit 1
         fi
         
         # Note: Ownership will be handled by calling script (build.sh)
         
         if [ ! -d "$OPRF_DIR" ]; then
-            echo "❌ liboprf source directory still not found after submodule initialization"
+            echo "[X] liboprf source directory still not found after submodule initialization"
             exit 1
         fi
         
-        echo "✅ Git submodules initialized successfully"
+        echo "[OK] Git submodules initialized successfully"
     fi
     
     cd "$OPRF_DIR/noise_xk"
@@ -397,17 +397,17 @@ build_static_libraries() {
     
     # Clean up temporary pkgconf symlink if we created one
     if [ "$NEED_PKGCONF_LINK" = true ] && [ -n "$TEMP_PKGCONF_LINK" ]; then
-        echo "🧹 Cleaning up temporary pkgconf symlink..."
+        echo "[CLEANUP] Cleaning up temporary pkgconf symlink..."
         if [ "$TEMP_PKGCONF_LINK" = "/usr/local/bin/pkgconf" ]; then
             sudo rm -f "$TEMP_PKGCONF_LINK"
         else
             # Remove temporary directory and its contents
             rm -rf "$TEMP_PKGCONF_LINK"
         fi
-        echo "✅ Temporary symlink cleaned up"
+        echo "[OK] Temporary symlink cleaned up"
     fi
     
-    echo "✅ Static libraries built successfully on $OS"
+    echo "[OK] Static libraries built successfully on $OS"
 }
 
 # Verify libraries from project root
@@ -417,11 +417,11 @@ verify_static_libraries() {
     local OPAQUE_LIB="vendor/stef/libopaque/src/libopaque.a"
     
     if [ -f "$OPRF_LIB" ] && [ -f "$OPAQUE_LIB" ]; then
-        echo "📁 Static libraries verified:"
+        echo "[FILES] Static libraries verified:"
         ls -la "$OPRF_LIB" "$OPAQUE_LIB"
         return 0
     else
-        echo "❌ Static library verification failed"
+        echo "[X] Static library verification failed"
         [ ! -f "$OPRF_LIB" ] && echo "Missing: $OPRF_LIB"
         [ ! -f "$OPAQUE_LIB" ] && echo "Missing: $OPAQUE_LIB"
         return 1
@@ -440,14 +440,14 @@ main() {
     # Check for libsodium availability using detected pkg-config command
     local PKG_CONFIG_CMD
     if ! PKG_CONFIG_CMD=$(find_pkg_config); then
-        echo "⚠️  No pkg-config command found, installing dependencies..."
+        echo "[WARNING]  No pkg-config command found, installing dependencies..."
         install_dependencies_universal
     else
         if ! $PKG_CONFIG_CMD --exists libsodium; then
-            echo "⚠️  libsodium not found, attempting to install..."
+            echo "[WARNING]  libsodium not found, attempting to install..."
             install_dependencies_universal
         else
-            echo "✅ libsodium found: $($PKG_CONFIG_CMD --modversion libsodium)"
+            echo "[OK] libsodium found: $($PKG_CONFIG_CMD --modversion libsodium)"
         fi
     fi
     

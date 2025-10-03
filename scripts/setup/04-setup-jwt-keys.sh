@@ -59,7 +59,7 @@ sudo chmod 600 ${KEY_DIR}/current/signing.key
 sudo chmod 644 ${KEY_DIR}/current/public.key
 sudo chmod 644 ${KEY_DIR}/current/metadata.json
 
-echo -e "${GREEN}✓ JWT keys generated and secured${NC}"
+echo -e "${GREEN}[OK] JWT keys generated and secured${NC}"
 echo "Location: ${KEY_DIR}/current/"
 echo "Algorithm: Ed25519"
 echo "Permissions: Private key (600), Public key (644)"
@@ -91,9 +91,9 @@ for key_file in signing.key public.key metadata.json; do
     if [ -f "${key_path}" ]; then
         perms=$(stat -c "%a" "${key_path}")
         owner=$(stat -c "%U:%G" "${key_path}")
-        echo "  ✓ ${key_file}: ${perms} ${owner}"
+        echo "  [OK] ${key_file}: ${perms} ${owner}"
     else
-        echo -e "  ${RED}✗ ${key_file}: Missing${NC}"
+        echo -e "  ${RED}[X] ${key_file}: Missing${NC}"
     fi
 done
 
@@ -106,17 +106,17 @@ if command -v openssl >/dev/null 2>&1; then
     # Use timeout to prevent hanging (5 second limit)
     if timeout 5s bash -c "echo -n '${test_message}' | sudo -u ${USER} openssl dgst -sha256 -sign '${KEY_DIR}/current/signing.key' > /tmp/test_signature 2>/dev/null"; then
         if [ -f "/tmp/test_signature" ] && [ -s "/tmp/test_signature" ]; then
-            echo "  ✓ Key signing test: PASSED"
+            echo "  [OK] Key signing test: PASSED"
             rm -f /tmp/test_signature
         else
-            echo -e "  ${YELLOW}⚠ Key signing test: No output generated (keys may still be valid)${NC}"
+            echo -e "  ${YELLOW}[WARNING] Key signing test: No output generated (keys may still be valid)${NC}"
         fi
     else
-        echo -e "  ${YELLOW}⚠ Key signing test: Timeout or error (keys may still be valid)${NC}"
+        echo -e "  ${YELLOW}[WARNING] Key signing test: Timeout or error (keys may still be valid)${NC}"
         rm -f /tmp/test_signature 2>/dev/null
     fi
 else
-    echo -e "  ${YELLOW}⚠ OpenSSL not available for testing${NC}"
+    echo -e "  ${YELLOW}[WARNING] OpenSSL not available for testing${NC}"
 fi
 
 echo -e "${GREEN}JWT key setup complete!${NC}"

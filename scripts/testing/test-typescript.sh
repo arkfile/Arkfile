@@ -8,13 +8,13 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${BLUE}🚀 ArkFile TypeScript Test Suite${NC}"
+echo -e "${BLUE}[START] ArkFile TypeScript Test Suite${NC}"
 echo "=============================================="
 
 # Function to check if Bun is installed
 check_bun() {
     if ! command -v bun >/dev/null 2>&1; then
-        echo -e "${RED}❌ Bun is not installed${NC}"
+        echo -e "${RED}[X] Bun is not installed${NC}"
         echo -e "${YELLOW}Install Bun from: https://bun.sh${NC}"
         echo ""
         echo "Quick install:"
@@ -23,7 +23,7 @@ check_bun() {
         return 1
     fi
     
-    echo -e "${GREEN}✅ Bun $(bun --version) detected${NC}"
+    echo -e "${GREEN}[OK] Bun $(bun --version) detected${NC}"
     return 0
 }
 
@@ -33,11 +33,11 @@ run_type_check() {
     cd client/static/js
     
     if bun run type-check; then
-        echo -e "${GREEN}✅ TypeScript type checking passed${NC}"
+        echo -e "${GREEN}[OK] TypeScript type checking passed${NC}"
         cd ../../..
         return 0
     else
-        echo -e "${RED}❌ TypeScript type checking failed${NC}"
+        echo -e "${RED}[X] TypeScript type checking failed${NC}"
         cd ../../..
         return 1
     fi
@@ -49,11 +49,11 @@ run_bun_tests() {
     cd client/static/js
     
     if bun test; then
-        echo -e "${GREEN}✅ Bun tests passed${NC}"
+        echo -e "${GREEN}[OK] Bun tests passed${NC}"
         cd ../../..
         return 0
     else
-        echo -e "${RED}❌ Bun tests failed${NC}"
+        echo -e "${RED}[X] Bun tests failed${NC}"
         cd ../../..
         return 1
     fi
@@ -65,11 +65,11 @@ run_integration_tests() {
     cd client/static/js
     
     if bun test tests/integration/test-runner.test.ts; then
-        echo -e "${GREEN}✅ Integration tests passed${NC}"
+        echo -e "${GREEN}[OK] Integration tests passed${NC}"
         cd ../../..
         return 0
     else
-        echo -e "${YELLOW}⚠️  Integration tests had issues (may be expected if WASM not built)${NC}"
+        echo -e "${YELLOW}[WARNING]  Integration tests had issues (may be expected if WASM not built)${NC}"
         cd ../../..
         return 0  # Don't fail the entire suite for integration test issues
     fi
@@ -81,33 +81,33 @@ run_wasm_tests() {
     
     # Check if WASM file exists (informational only)
     if [ ! -f "client/static/main.wasm" ]; then
-        echo -e "${YELLOW}⚠️  WASM file not found - tests will use mocks${NC}"
+        echo -e "${YELLOW}[WARNING]  WASM file not found - tests will use mocks${NC}"
         echo -e "${YELLOW}   Build WASM with: cd client && GOOS=js GOARCH=wasm go build -o static/main.wasm .${NC}"
     else
-        echo -e "${GREEN}✅ WASM file found - tests will use real WASM functions${NC}"
+        echo -e "${GREEN}[OK] WASM file found - tests will use real WASM functions${NC}"
     fi
     
     cd client/static/js
     
     echo "Running WASM integration tests..."
     if bun test tests/utils/test-runner.test.ts; then
-        echo -e "${GREEN}✅ WASM tests passed${NC}"
+        echo -e "${GREEN}[OK] WASM tests passed${NC}"
     else
-        echo -e "${YELLOW}⚠️  WASM tests encountered issues${NC}"
+        echo -e "${YELLOW}[WARNING]  WASM tests encountered issues${NC}"
     fi
     
     echo "Running OPAQUE WASM tests..."
     if bun test tests/wasm/opaque-wasm.test.ts; then
-        echo -e "${GREEN}✅ OPAQUE WASM tests passed${NC}"
+        echo -e "${GREEN}[OK] OPAQUE WASM tests passed${NC}"
     else
-        echo -e "${YELLOW}⚠️  OPAQUE WASM tests encountered issues${NC}"
+        echo -e "${YELLOW}[WARNING]  OPAQUE WASM tests encountered issues${NC}"
     fi
     
     echo "Running multi-key debug tests..."
     if bun test tests/debug/multi-key-test.test.ts; then
-        echo -e "${GREEN}✅ Multi-key debug tests passed${NC}"
+        echo -e "${GREEN}[OK] Multi-key debug tests passed${NC}"
     else
-        echo -e "${YELLOW}⚠️  Multi-key debug tests encountered issues${NC}"
+        echo -e "${YELLOW}[WARNING]  Multi-key debug tests encountered issues${NC}"
     fi
     
     cd ../../..
@@ -116,15 +116,15 @@ run_wasm_tests() {
 
 # Function to run build tests
 run_build_tests() {
-    echo -e "\n${BLUE}🔨 Running Build Tests...${NC}"
+    echo -e "\n${BLUE}[BUILD] Running Build Tests...${NC}"
     cd client/static/js
     
     # Test development build
     echo "Testing development build..."
     if bun run build:dev; then
-        echo -e "${GREEN}✅ Development build successful${NC}"
+        echo -e "${GREEN}[OK] Development build successful${NC}"
     else
-        echo -e "${RED}❌ Development build failed${NC}"
+        echo -e "${RED}[X] Development build failed${NC}"
         cd ../../..
         return 1
     fi
@@ -132,9 +132,9 @@ run_build_tests() {
     # Test production build
     echo "Testing production build..."
     if bun run build:prod; then
-        echo -e "${GREEN}✅ Production build successful${NC}"
+        echo -e "${GREEN}[OK] Production build successful${NC}"
     else
-        echo -e "${RED}❌ Production build failed${NC}"
+        echo -e "${RED}[X] Production build failed${NC}"
         cd ../../..
         return 1
     fi
@@ -144,7 +144,7 @@ run_build_tests() {
         local file_size=$(stat -f%z "dist/app.js" 2>/dev/null || stat -c%s "dist/app.js" 2>/dev/null)
         echo -e "${GREEN}📦 Built app.js: ${file_size} bytes${NC}"
     else
-        echo -e "${RED}❌ Built app.js not found${NC}"
+        echo -e "${RED}[X] Built app.js not found${NC}"
         cd ../../..
         return 1
     fi
@@ -215,7 +215,7 @@ main() {
     fi
     
     # Final summary
-    echo -e "\n${BLUE}📊 Test Results Summary${NC}"
+    echo -e "\n${BLUE}[STATS] Test Results Summary${NC}"
     echo "=============================="
     echo -e "Tests run:    ${tests_run}"
     echo -e "Tests passed: ${GREEN}${tests_passed}${NC}"

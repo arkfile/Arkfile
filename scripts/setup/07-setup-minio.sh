@@ -17,16 +17,16 @@ echo -e "${GREEN}Setting up MinIO Server ${MINIO_VERSION}...${NC}"
 # Check if MinIO is already installed
 if command -v minio >/dev/null 2>&1; then
     INSTALLED_VERSION=$(minio --version 2>/dev/null | head -1 || echo "unknown")
-    echo -e "${GREEN}✅ MinIO is already installed${NC}"
+    echo -e "${GREEN}[OK] MinIO is already installed${NC}"
     echo "Installed version: ${INSTALLED_VERSION}"
     echo "Location: $(which minio)"
     
     # Check if the version matches what we expect
     if echo "${INSTALLED_VERSION}" | grep -q "${MINIO_VERSION}"; then
-        echo -e "${GREEN}✅ Version matches expected version ${MINIO_VERSION}${NC}"
+        echo -e "${GREEN}[OK] Version matches expected version ${MINIO_VERSION}${NC}"
         echo "Skipping download and installation"
     else
-        echo -e "${YELLOW}⚠️  Installed version doesn't match expected version ${MINIO_VERSION}${NC}"
+        echo -e "${YELLOW}[WARNING]  Installed version doesn't match expected version ${MINIO_VERSION}${NC}"
         echo "Proceeding with download to update..."
         
         # Download and install MinIO using secure download script
@@ -35,7 +35,7 @@ if command -v minio >/dev/null 2>&1; then
             # Use our secure download script
             ./scripts/maintenance/download-minio.sh --version "${MINIO_VERSION}"
         else
-            echo -e "${YELLOW}⚠️  Secure download script not found, falling back to direct download${NC}"
+            echo -e "${YELLOW}[WARNING]  Secure download script not found, falling back to direct download${NC}"
             echo "Downloading MinIO..."
             curl -L ${MINIO_DOWNLOAD_URL} -o /tmp/minio
             
@@ -55,7 +55,7 @@ else
         # Use our secure download script
         ./scripts/maintenance/download-minio.sh --version "${MINIO_VERSION}"
     else
-        echo -e "${YELLOW}⚠️  Secure download script not found, falling back to direct download${NC}"
+        echo -e "${YELLOW}[WARNING]  Secure download script not found, falling back to direct download${NC}"
         echo "Downloading MinIO..."
         curl -L ${MINIO_DOWNLOAD_URL} -o /tmp/minio
         
