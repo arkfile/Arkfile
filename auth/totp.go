@@ -262,10 +262,10 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 		return fmt.Errorf("backup code already used: %w", err)
 	}
 
-	// Find and validate code
+	// Find and validate code using constant-time comparison to prevent timing attacks
 	codeFound := false
 	for _, validCode := range backupCodes {
-		if validCode == code {
+		if crypto.SecureCompare([]byte(validCode), []byte(code)) {
 			codeFound = true
 			break
 		}

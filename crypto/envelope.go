@@ -61,6 +61,8 @@ func CreatePasswordKeyEnvelope(fek []byte, keyInfo KeyInfo) ([]byte, error) {
 	}
 
 	// Determine the deterministic salt based on the key type
+	// NOTE: These salts are deterministic (username-based) to enable password changes
+	// without re-encrypting files. See crypto/key_derivation.go for security rationale.
 	var deterministicSalt []byte
 	switch keyInfo.Type {
 	case KeyTypeAccount:

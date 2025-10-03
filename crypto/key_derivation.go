@@ -26,7 +26,33 @@ var UnifiedArgonSecure = UnifiedArgonProfile{
 }
 
 // Static salts for FEK wrapping
-// These are intentionally static and not user-dependent to derive the FEK wrapping key.
+//
+// SECURITY NOTE: These salts are intentionally static and deterministic.
+// This design is SAFE because:
+//
+// 1. Security Model: Password → Argon2ID → KEK → wraps random FEK → encrypts file
+//   - User passwords are processed through Argon2ID (256MB memory, 8 iterations)
+//   - This derives a Key Encryption Key (KEK) which wraps the File Encryption Key (FEK)
+//   - Each file has a randomly-generated FEK (true entropy, not password-derived)
+//   - The FEK is what actually encrypts the file data
+//
+// 2. Why Deterministic Salts Are Safe Here:
+//   - These salts are used for KEY WRAPPING, not password storage
+//   - Argon2ID provides strong protection even with known salts due to its memory-hard properties
+//   - An attacker would need to break Argon2ID to derive the KEK (computationally infeasible)
+//   - The actual file encryption uses randomly-generated FEKs with unique nonces per file
+//
+// 3. Benefits of This Design:
+//   - Allows password changes without re-encrypting all files
+//   - Each user gets a unique KEK via username-based salt derivation (see Derive*PasswordKey functions)
+//   - Maintains separation between account, custom, and share password contexts
+//
+// 4. Defense in Depth:
+//   - Even if an attacker knows the salt, they still face Argon2ID's memory-hard function
+//   - The 256MB memory requirement makes parallel attacks expensive
+//   - The randomly-generated FEKs provide an additional layer of security
+//
+// This is a well-established pattern in cryptographic key management systems.
 var (
 	FEKAccountSalt = []byte("arkfile-fek-account-salt-v1")
 	FEKCustomSalt  = []byte("arkfile-fek-custom-salt-v1")
@@ -103,56 +129,4 @@ func hkdfExpand(prk []byte, info []byte, length int) ([]byte, error) {
 	}
 
 	return result, nil
-}
-
-// EncryptAESGCM encrypts data with AES-GCM using provided key and nonce
-func EncryptAESGCM(plaintext, key, nonce []byte) ([]byte, error) {
-	if len(nonce) != 12 {
-		return nil, fmt.Errorf("nonce must be 12 bytes for AES-GCM")
-	}
-
-	// Use existing EncryptGCM but with custom nonce
-	return encryptGCMWithNonce(plaintext, key, nonce)
-}
-
-// DecryptAESGCM decrypts data with AES-GCM using provided key and nonce
-func DecryptAESGCM(ciphertext, key, nonce []byte) ([]byte, error) {
-	if len(nonce) != 12 {
-		return nil, fmt.Errorf("nonce must be 12 bytes for AES-GCM")
-	}
-
-	// Prepend nonce to ciphertext to match DecryptGCM format
-	data := make([]byte, len(nonce)+len(ciphertext))
-	copy(data, nonce)
-	copy(data[len(nonce):], ciphertext)
-
-	return DecryptGCM(data, key)
-}
-
-// encryptGCMWithNonce encrypts with a provided nonce (internal helper)
-func encryptGCMWithNonce(plaintext, key, nonce []byte) ([]byte, error) {
-	if len(key) != 32 {
-		return nil, fmt.Errorf("key must be 32 bytes for AES-256")
-	}
-
-	if len(nonce) != 12 {
-		return nil, fmt.Errorf("nonce must be 12 bytes for AES-GCM")
-	}
-
-	// For now, we'll use the existing EncryptGCM and replace the nonce
-	// This is a temporary solution - ideally we'd modify the crypto package
-	encrypted, err := EncryptGCM(plaintext, key)
-	if err != nil {
-		return nil, err
-	}
-
-	// Replace the generated nonce with our provided nonce
-	if len(encrypted) < 12 {
-		return nil, fmt.Errorf("encrypted data too short")
-	}
-
-	// Copy our nonce into the encrypted data
-	copy(encrypted[:12], nonce)
-
-	return encrypted, nil
 }
