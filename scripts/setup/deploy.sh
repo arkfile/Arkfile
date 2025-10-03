@@ -34,7 +34,7 @@ if [ ! "$(ls -A $BUILD_DIR)" ]; then
 fi
 
 # Copy build artifacts to installation directory
-echo -e "${YELLOW}📦 Copying build artifacts to ${BASE_DIR}...${NC}"
+echo -e "${YELLOW}Copying build artifacts to ${BASE_DIR}...${NC}"
 sudo cp -r ${BUILD_DIR}/* ${BASE_DIR}/
 
 # Set proper ownership
@@ -50,7 +50,7 @@ sudo cp ${BASE_DIR}/systemd/minio.service /etc/systemd/system/ 2>/dev/null || tr
 sudo cp ${BASE_DIR}/systemd/caddy.service /etc/systemd/system/ 2>/dev/null || true
 
 # Reload systemd daemon
-echo -e "${YELLOW}🔄 Reloading systemd...${NC}"
+echo -e "${YELLOW}Reloading systemd...${NC}"
 sudo systemctl daemon-reload
 
 # Enable services (but don't auto-start)

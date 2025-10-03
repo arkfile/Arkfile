@@ -58,37 +58,37 @@ func TestChunkedUploadEndToEnd(t *testing.T) {
 		t.Fatalf("Failed to generate export key: %v", err)
 	}
 
-	t.Logf("🔍 Testing chunked upload for %d MB file", fileSize/(1024*1024))
+	t.Logf("Testing chunked upload for %d MB file", fileSize/(1024*1024))
 
 	// STEP 1: Simulate client-side encryption (what WASM would do)
 	envelope, encryptedChunks, err := simulateClientEncryption(originalData, exportKey, username, fileID, "account")
 	require.NoError(t, err)
 
-	t.Logf("✅ Client encryption: created %d chunks with envelope", len(encryptedChunks))
+	t.Logf("Client encryption: created %d chunks with envelope", len(encryptedChunks))
 
 	// STEP 2: Create upload session with mock expectations
 	sessionID, err := simulateCreateUploadSessionWithMocks(t, username, fileID, storageID, int64(fileSize), originalHashHex, envelope, mockDB, mockStorage)
 	require.NoError(t, err)
 
-	t.Logf("✅ Upload session created: %s", sessionID)
+	t.Logf("Upload session created: %s", sessionID)
 
 	// STEP 3: Upload chunks with mock expectations
 	err = simulateUploadChunksWithMocks(t, sessionID, encryptedChunks, mockDB, mockStorage)
 	require.NoError(t, err)
 
-	t.Logf("✅ All %d chunks uploaded successfully", len(encryptedChunks))
+	t.Logf("All %d chunks uploaded successfully", len(encryptedChunks))
 
 	// STEP 4: Complete upload with mock expectations (this is where envelope concatenation happens)
 	finalStorageID, err := simulateCompleteUploadWithMocks(t, sessionID, mockDB, mockStorage, envelope, encryptedChunks)
 	require.NoError(t, err)
 
-	t.Logf("✅ Upload completed - file should be stored as [envelope][chunk1][chunk2]...")
+	t.Logf("Upload completed - file should be stored as [envelope][chunk1][chunk2]...")
 
 	// STEP 5: Simulate download and decrypt (proves the fix works)
 	downloadedData, err := simulateDownloadAndDecryptWithMocks(t, username, fileID, exportKey, finalStorageID, mockStorage, envelope, encryptedChunks)
 	require.NoError(t, err)
 
-	t.Logf("✅ File downloaded and decrypted: %d bytes", len(downloadedData))
+	t.Logf("File downloaded and decrypted: %d bytes", len(downloadedData))
 
 	// STEP 6: Verify integrity
 	if len(downloadedData) != len(originalData) {
@@ -326,7 +326,7 @@ func simulateDownloadAndDecrypt(t *testing.T, username, fileID, storageID string
 
 // simulateClientDecryption simulates what the WASM decryptFileChunkedOPAQUE function does
 func simulateClientDecryption(concatenatedData []byte, exportKey []byte, username, fileID string) ([]byte, error) {
-	fmt.Printf("🔍 Starting decryption of %d bytes\n", len(concatenatedData))
+	fmt.Printf("Starting decryption of %d bytes\n", len(concatenatedData))
 
 	if len(concatenatedData) < 2 {
 		return nil, fmt.Errorf("data too short for envelope")
@@ -336,7 +336,7 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, usernam
 	version := concatenatedData[0]
 	keyType := concatenatedData[1]
 	chunksData := concatenatedData[2:]
-	fmt.Printf("📦 Envelope: version=0x%02x, keyType=0x%02x, chunksData=%d bytes\n", version, keyType, len(chunksData))
+	fmt.Printf("Envelope: version=0x%02x, keyType=0x%02x, chunksData=%d bytes\n", version, keyType, len(chunksData))
 
 	// Derive file encryption key based on envelope
 	var fileEncKey []byte
@@ -360,7 +360,7 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, usernam
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("🔑 File encryption key derived successfully\n")
+	fmt.Printf("File encryption key derived successfully\n")
 
 	// Create cipher for decryption
 	block, err := aes.NewCipher(fileEncKey)
@@ -372,7 +372,7 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, usernam
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("🔐 AES-GCM cipher created, nonce size: %d\n", gcm.NonceSize())
+	fmt.Printf("AES-GCM cipher created, nonce size: %d\n", gcm.NonceSize())
 
 	// Decrypt chunks sequentially
 	var plaintext []byte
@@ -385,14 +385,14 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, usernam
 		// Check minimum data available
 		minChunkSize := gcm.NonceSize() + 16 // nonce + tag
 		if offset+minChunkSize > len(chunksData) {
-			fmt.Printf("⚠️ Not enough data for another chunk, breaking\n")
+			fmt.Printf("Not enough data for another chunk, breaking\n")
 			break // No more complete chunks
 		}
 
 		// Read nonce
 		nonce := chunksData[offset : offset+gcm.NonceSize()]
 		offset += gcm.NonceSize()
-		fmt.Printf("🎯 Read nonce for chunk %d\n", chunkNumber)
+		fmt.Printf("Read nonce for chunk %d\n", chunkNumber)
 
 		// OPTIMIZED: Try common chunk sizes first, then fallback to brute force
 		remainingData := chunksData[offset:]
@@ -416,19 +416,19 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, usernam
 				chunkData = decrypted
 				offset += trySize
 				found = true
-				fmt.Printf("✅ Chunk %d decrypted successfully with expected size %d\n", chunkNumber, trySize)
+				fmt.Printf("Chunk %d decrypted successfully with expected size %d\n", chunkNumber, trySize)
 				break
 			}
 		}
 
 		// Fallback to brute force if expected sizes didn't work
 		if !found {
-			fmt.Printf("🔍 Trying brute force for chunk %d...\n", chunkNumber)
+			fmt.Printf("Trying brute force for chunk %d...\n", chunkNumber)
 			maxChunkDataSize := 16*1024*1024 + 100 // Some tolerance
 
 			for chunkDataSize := 1; chunkDataSize <= len(remainingData) && chunkDataSize <= maxChunkDataSize; chunkDataSize++ {
 				if chunkDataSize%1000000 == 0 { // Progress every MB
-					fmt.Printf("  🔄 Trying size %d MB...\n", chunkDataSize/(1024*1024))
+					fmt.Printf("  Trying size %d MB...\n", chunkDataSize/(1024*1024))
 				}
 
 				candidateChunk := remainingData[:chunkDataSize]
@@ -437,7 +437,7 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, usernam
 					chunkData = decrypted
 					offset += chunkDataSize
 					found = true
-					fmt.Printf("✅ Chunk %d decrypted with brute force size %d\n", chunkNumber, chunkDataSize)
+					fmt.Printf("Chunk %d decrypted with brute force size %d\n", chunkNumber, chunkDataSize)
 					break
 				}
 			}
@@ -449,7 +449,7 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, usernam
 
 		plaintext = append(plaintext, chunkData...)
 		chunkNumber++
-		fmt.Printf("📈 Total plaintext so far: %d bytes\n", len(plaintext))
+		fmt.Printf("Total plaintext so far: %d bytes\n", len(plaintext))
 	}
 
 	fmt.Printf("Decryption complete: %d chunks, %d bytes total\n", chunkNumber, len(plaintext))

@@ -408,7 +408,7 @@ export class ShareAccessUI {
         
         // Update feedback
         if (validation.meets_requirements) {
-            feedbackDiv.innerHTML = '<div class="text-success">✓ Password meets requirements</div>';
+            feedbackDiv.innerHTML = '<div class="text-success">Password meets requirements</div>';
             this.updateAccessButton(true);
         } else {
             const feedback = validation.feedback.join('. ');
@@ -478,7 +478,7 @@ export class ShareAccessUI {
         this.fileInfoDiv.innerHTML = `
             <div class="card">
                 <div class="card-body">
-                    <h5 class="card-title">📁 ${shareInfo.fileInfo.filename}</h5>
+                    <h5 class="card-title">${shareInfo.fileInfo.filename}</h5>
                     <p class="card-text">
                         <small class="text-muted">Size: ${fileSize}</small>
                     </p>
@@ -501,7 +501,7 @@ export class ShareAccessUI {
                 <h4>File Decrypted Successfully!</h4>
                 <p>Click the button below to download your file:</p>
                 <button type="button" id="download-file-btn" class="btn btn-success">
-                    📥 Download ${filename}
+                    Download ${filename}
                 </button>
             </div>
         `;

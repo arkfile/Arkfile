@@ -15,7 +15,7 @@ NC='\033[0m'
 # Record start time
 START_TIME=$(date +%s)
 
-echo -e "${BLUE}🏗️  Starting Arkfile Foundation Setup${NC}"
+echo -e "${BLUE}️  Starting Arkfile Foundation Setup${NC}"
 echo -e "${BLUE}Creating infrastructure without starting services${NC}"
 echo
 
@@ -85,7 +85,7 @@ if [ "$SKIP_TESTS" = false ]; then
         echo -e "${YELLOW}[WARNING]  Test script not found, skipping tests${NC}"
     fi
 else
-    echo -e "${YELLOW}⏭️  Skipping tests as requested${NC}"
+    echo -e "${YELLOW}️  Skipping tests as requested${NC}"
 fi
 
 echo
@@ -190,12 +190,12 @@ if [ "$SKIP_TLS" = false ]; then
         fi
     fi
 else
-    echo -e "${YELLOW}⏭️  Skipping TLS certificate generation as requested${NC}"
+    echo -e "${YELLOW}️  Skipping TLS certificate generation as requested${NC}"
 fi
 
 # Step 7: Validate foundation setup
 echo
-echo -e "${BLUE}🔍 Validating foundation setup...${NC}"
+echo -e "${BLUE}Validating foundation setup...${NC}"
 
 # Check key files exist
 echo -e "${YELLOW}Checking cryptographic keys...${NC}"
@@ -297,7 +297,7 @@ if [ "$SKIP_TLS" = false ]; then
         echo "• TLS certificates: [WARNING]  Generation had issues (non-critical)"
     fi
 else
-    echo "• TLS certificates: ⏭️  Skipped"
+    echo "• TLS certificates: ️  Skipped"
 fi
 
 echo "• File permissions: [OK] Production security standards"

@@ -327,7 +327,7 @@ func validatePasswordComplexityJS(this js.Value, args []js.Value) interface{} {
 
 	for _, feedback := range result.Feedback {
 		if result.MeetsRequirement {
-			requirements = append(requirements, "✓ "+feedback)
+			requirements = append(requirements, ""+feedback)
 		} else {
 			missing = append(missing, "• "+feedback)
 		}

@@ -491,7 +491,7 @@ for service in arkfile rqlite minio; do
 done
 
 echo ""
-echo -e "${BLUE}🔧 Configuration Instructions:${NC}"
+echo -e "${BLUE}Configuration Instructions:${NC}"
 echo "========================================"
 echo "1. Configure Arkfile application:"
 echo "   TLS_CERT_FILE=${TLS_DIR}/arkfile/server-cert.pem"
@@ -510,7 +510,7 @@ echo ""
 echo "4. Distribute CA certificate to clients:"
 echo "   ${TLS_DIR}/ca/ca-cert.pem"
 echo ""
-echo -e "${YELLOW}⏰ Certificate Lifecycle:${NC}"
+echo -e "${YELLOW}Certificate Lifecycle:${NC}"
 echo "========================================"
 echo "• Validity: ${VALIDITY_DAYS} days"
 renewal_days=$((VALIDITY_DAYS - 30))

@@ -19,6 +19,9 @@ TARGET_EXTENSIONS=("go" "sh" "ts" "js" "md")
 # Directories to exclude
 EXCLUDE_DIRS=("vendor" "node_modules" ".git" "build" "dist" "target" ".cache")
 
+# Specific files to exclude
+EXCLUDE_FILES=("docs/AGENTS.md" "scripts/wip/delete-emojis.sh")
+
 # Comprehensive emoji Unicode ranges
 EMOJI_PATTERNS=(
     # Emoticons
@@ -78,6 +81,7 @@ usage() {
     echo ""
     echo "Target file types: ${TARGET_EXTENSIONS[*]}"
     echo "Excluded directories: ${EXCLUDE_DIRS[*]}"
+    echo "Excluded files: ${EXCLUDE_FILES[*]}"
     echo ""
     echo "This script removes all Unicode emoji characters from source code files."
     echo "By default, it creates .bak backup files before making changes."
@@ -114,9 +118,14 @@ done
 build_find_command() {
     local cmd="find . -type f"
     
-    # Add exclusions for directories
+    # Add exclusions for directories (match at any depth)
     for dir in "${EXCLUDE_DIRS[@]}"; do
-        cmd="$cmd -not -path \"./$dir/*\""
+        cmd="$cmd -not -path \"*/$dir/*\""
+    done
+    
+    # Add exclusions for specific files
+    for file in "${EXCLUDE_FILES[@]}"; do
+        cmd="$cmd -not -path \"./$file\""
     done
     
     # Add file extension filters
@@ -152,9 +161,10 @@ remove_emojis_from_file() {
     # Copy original content to temp file
     cp "$file" "$temp_file"
     
-    # Apply each emoji pattern removal
+    # Apply each emoji pattern removal (including optional trailing space)
     for pattern in "${EMOJI_PATTERNS[@]}"; do
-        if sed -i "s/$pattern//g" "$temp_file" 2>/dev/null; then
+        # Remove emoji and optional space after it
+        if sed -i "s/$pattern \?//g" "$temp_file" 2>/dev/null; then
             # Check if changes were made by comparing file sizes or content
             if ! cmp -s "$file" "$temp_file"; then
                 changes_made=true
@@ -205,6 +215,7 @@ main() {
     
     echo "Target file types: ${TARGET_EXTENSIONS[*]}"
     echo "Excluded directories: ${EXCLUDE_DIRS[*]}"
+    echo "Excluded files: ${EXCLUDE_FILES[*]}"
     echo
     
     # Build and execute find command

@@ -62,7 +62,7 @@ function setupMockWASMFunctions(): void {
             encrypted: true
         })).toString('base64');
         
-        console.log('📝 Mock encryption successful, result length:', mockResult.length);
+        console.log('Mock encryption successful, result length:', mockResult.length);
         return mockResult;
     };
     
@@ -78,11 +78,11 @@ function setupMockWASMFunctions(): void {
             if (mockData.encrypted && mockData.data) {
                 const originalData = new Uint8Array(mockData.data);
                 const result = Buffer.from(originalData).toString('base64');
-                console.log('📝 Mock decryption successful');
+                console.log('Mock decryption successful');
                 return result;
             }
         } catch (e) {
-            console.log('📝 Mock decryption failed - invalid format');
+            console.log('Mock decryption failed - invalid format');
             return 'Failed: Invalid encrypted data format';
         }
         
@@ -92,13 +92,13 @@ function setupMockWASMFunctions(): void {
 
 // Load and run WASM tests
 async function runDebugTest(): Promise<void> {
-    console.log('🔍 Debug Multi-Key Encryption Test (Bun Runtime)\n');
+    console.log('Debug Multi-Key Encryption Test (Bun Runtime)\n');
     
     try {
         // Check if WASM file exists
         const wasmPath = join(import.meta.dir, '..', '..', '..', 'static', 'main.wasm');
         if (!existsSync(wasmPath)) {
-            console.log('❌ WASM file not found. Multi-key functions will be mocked.');
+            console.log('WASM file not found. Multi-key functions will be mocked.');
             setupMockWASMFunctions();
         } else {
             // Load WASM file
@@ -107,7 +107,7 @@ async function runDebugTest(): Promise<void> {
             // Load wasm_exec.js for Go runtime
             const wasmExecPath = join(import.meta.dir, '..', '..', '..', 'wasm_exec.js');
             if (!existsSync(wasmExecPath)) {
-                console.error('❌ wasm_exec.js not found');
+                console.error('wasm_exec.js not found');
                 process.exit(1);
             }
             
@@ -130,11 +130,11 @@ async function runDebugTest(): Promise<void> {
             
             // Check if WASM functions are available
             if (typeof globalThis.encryptFileMultiKey === 'undefined') {
-                console.error('❌ Multi-key WASM functions not available.');
+                console.error('Multi-key WASM functions not available.');
                 process.exit(1);
             }
             
-            console.log('✅ WASM module loaded successfully\n');
+            console.log('WASM module loaded successfully\n');
         }
         
         // Run the multi-key encryption test with extensive debugging
@@ -144,9 +144,9 @@ async function runDebugTest(): Promise<void> {
         const primaryPassword = "primary123!";
         const additionalPassword = "additional123!";
         
-        console.log(`📝 Test data: [${Array.from(testData).join(', ')}]`);
-        console.log(`📝 Primary password: "${primaryPassword}"`);
-        console.log(`📝 Additional password: "${additionalPassword}"`);
+        console.log(`Test data: [${Array.from(testData).join(', ')}]`);
+        console.log(`Primary password: "${primaryPassword}"`);
+        console.log(`Additional password: "${additionalPassword}"`);
         console.log();
         
         // Create additional keys array structure
@@ -154,68 +154,68 @@ async function runDebugTest(): Promise<void> {
             { password: additionalPassword, id: "share1" }
         ];
         
-        console.log('📝 Additional keys structure:', JSON.stringify(additionalKeys, null, 2));
+        console.log('Additional keys structure:', JSON.stringify(additionalKeys, null, 2));
         console.log();
         
         // Step 1: Encrypt with multi-key
-        console.log('🔐 Step 1: Encrypting with multi-key...');
+        console.log('Step 1: Encrypting with multi-key...');
         const encrypted = globalThis.encryptFileMultiKey(testData, primaryPassword, "custom", additionalKeys);
         
         if (typeof encrypted !== 'string') {
-            console.error('❌ Multi-key encryption did not return a string');
+            console.error('Multi-key encryption did not return a string');
             console.error('   Returned:', typeof encrypted, encrypted);
             process.exit(1);
         }
         
-        console.log('✅ Multi-key encryption successful');
-        console.log(`📝 Encrypted result length: ${encrypted.length} characters`);
-        console.log(`📝 Encrypted result (first 100 chars): ${encrypted.substring(0, 100)}...`);
+        console.log('Multi-key encryption successful');
+        console.log(`Encrypted result length: ${encrypted.length} characters`);
+        console.log(`Encrypted result (first 100 chars): ${encrypted.substring(0, 100)}...`);
         console.log();
         
         // Step 2: Analyze the encrypted data structure (only for real WASM)
         if (existsSync(join(import.meta.dir, '..', '..', '..', 'static', 'main.wasm'))) {
-            console.log('🔍 Step 2: Analyzing encrypted data structure...');
+            console.log('Step 2: Analyzing encrypted data structure...');
             const encryptedBuffer = Buffer.from(encrypted, 'base64');
-            console.log(`📝 Encrypted data length: ${encryptedBuffer.length} bytes`);
-            console.log(`📝 Version byte: 0x${encryptedBuffer[0].toString(16).padStart(2, '0')}`);
-            console.log(`📝 Number of keys: ${encryptedBuffer[1]}`);
-            console.log(`📝 First few bytes: [${Array.from(encryptedBuffer.slice(0, 20)).map(b => '0x' + b.toString(16).padStart(2, '0')).join(', ')}]`);
+            console.log(`Encrypted data length: ${encryptedBuffer.length} bytes`);
+            console.log(`Version byte: 0x${encryptedBuffer[0].toString(16).padStart(2, '0')}`);
+            console.log(`Number of keys: ${encryptedBuffer[1]}`);
+            console.log(`First few bytes: [${Array.from(encryptedBuffer.slice(0, 20)).map(b => '0x' + b.toString(16).padStart(2, '0')).join(', ')}]`);
             console.log();
         }
         
         // Step 3: Try decryption with primary password
-        console.log('🔓 Step 3: Attempting decryption with primary password...');
+        console.log('Step 3: Attempting decryption with primary password...');
         const decrypted1 = globalThis.decryptFileMultiKey(encrypted, primaryPassword);
         
-        console.log(`📝 Decryption result type: ${typeof decrypted1}`);
-        console.log(`📝 Decryption result (first 200 chars): ${decrypted1.substring(0, 200)}`);
+        console.log(`Decryption result type: ${typeof decrypted1}`);
+        console.log(`Decryption result (first 200 chars): ${decrypted1.substring(0, 200)}`);
         
         if (typeof decrypted1 !== 'string' || decrypted1.startsWith('Failed')) {
-            console.error('❌ Multi-key decryption with primary password failed');
+            console.error('Multi-key decryption with primary password failed');
             console.error('   Full error:', decrypted1);
             
             // Let's also try with the additional password to see if it's a key-specific issue
-            console.log('\n🔍 Trying with additional password for comparison...');
+            console.log('\nTrying with additional password for comparison...');
             const decrypted2 = globalThis.decryptFileMultiKey(encrypted, additionalPassword);
-            console.log(`📝 Additional password result: ${decrypted2.substring(0, 200)}`);
+            console.log(`Additional password result: ${decrypted2.substring(0, 200)}`);
             
             process.exit(1);
         }
         
-        console.log('✅ Primary password decryption successful!');
+        console.log('Primary password decryption successful!');
         
         // Step 4: Verify decrypted data matches original
-        console.log('\n🔍 Step 4: Verifying decrypted data...');
+        console.log('\nStep 4: Verifying decrypted data...');
         const decryptedBuffer = Buffer.from(decrypted1, 'base64');
         const originalBuffer = Buffer.from(testData);
         
-        console.log(`📝 Original data: [${Array.from(originalBuffer).join(', ')}]`);
-        console.log(`📝 Decrypted data: [${Array.from(decryptedBuffer).join(', ')}]`);
+        console.log(`Original data: [${Array.from(originalBuffer).join(', ')}]`);
+        console.log(`Decrypted data: [${Array.from(decryptedBuffer).join(', ')}]`);
         
         if (Buffer.compare(originalBuffer, decryptedBuffer) === 0) {
-            console.log('✅ Data verification successful!');
+            console.log('Data verification successful!');
         } else {
-            console.error('❌ Decrypted data does not match original');
+            console.error('Decrypted data does not match original');
             process.exit(1);
         }
         
@@ -223,7 +223,7 @@ async function runDebugTest(): Promise<void> {
         
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(`💥 Error running debug test: ${errorMessage}`);
+        console.error(`Error running debug test: ${errorMessage}`);
         if (error instanceof Error && error.stack) {
             console.error(error.stack);
         }

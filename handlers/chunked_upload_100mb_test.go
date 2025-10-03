@@ -40,7 +40,7 @@ func TestChunkedUpload100MB(t *testing.T) {
 		t.Fatalf("Failed to generate export key: %v", err)
 	}
 
-	t.Logf("🚀 Testing chunked upload for %d MB file", fileSize/(1024*1024))
+	t.Logf("Testing chunked upload for %d MB file", fileSize/(1024*1024))
 
 	// STEP 1: Simulate client-side encryption (what WASM would do)
 	envelope, encryptedChunks, err := simulateClientEncryption(originalData, exportKey, username, fileID, "account")
@@ -49,31 +49,31 @@ func TestChunkedUpload100MB(t *testing.T) {
 	expectedChunkCount := (fileSize + 16*1024*1024 - 1) / (16 * 1024 * 1024) // Ceiling division
 	require.Equal(t, expectedChunkCount, len(encryptedChunks), "Chunk count should match expected")
 
-	t.Logf("✅ Client encryption: created %d chunks with envelope (expected %d)", len(encryptedChunks), expectedChunkCount)
+	t.Logf("Client encryption: created %d chunks with envelope (expected %d)", len(encryptedChunks), expectedChunkCount)
 
 	// STEP 2: Create upload session with mock expectations
 	sessionID, err := simulateCreateUploadSessionWithMocks(t, username, fileID, storageID, int64(fileSize), originalHashHex, envelope, mockDB, mockStorage)
 	require.NoError(t, err)
 
-	t.Logf("✅ Upload session created: %s", sessionID)
+	t.Logf("Upload session created: %s", sessionID)
 
 	// STEP 3: Upload chunks with mock expectations
 	err = simulateUploadChunksWithMocks(t, sessionID, encryptedChunks, mockDB, mockStorage)
 	require.NoError(t, err)
 
-	t.Logf("✅ All %d chunks uploaded successfully", len(encryptedChunks))
+	t.Logf("All %d chunks uploaded successfully", len(encryptedChunks))
 
 	// STEP 4: Complete upload with mock expectations (this is where envelope concatenation happens)
 	finalStorageID, err := simulateCompleteUploadWithMocks(t, sessionID, mockDB, mockStorage, envelope, encryptedChunks)
 	require.NoError(t, err)
 
-	t.Logf("✅ Upload completed - file should be stored as [envelope][chunk1][chunk2]...[chunk%d]", len(encryptedChunks))
+	t.Logf("Upload completed - file should be stored as [envelope][chunk1][chunk2]...[chunk%d]", len(encryptedChunks))
 
 	// STEP 5: Simulate download and decrypt (proves the fix works)
 	downloadedData, err := simulateDownloadAndDecryptWithMocks(t, username, fileID, exportKey, finalStorageID, mockStorage, envelope, encryptedChunks)
 	require.NoError(t, err)
 
-	t.Logf("✅ File downloaded and decrypted: %d bytes", len(downloadedData))
+	t.Logf("File downloaded and decrypted: %d bytes", len(downloadedData))
 
 	// STEP 6: Verify integrity
 	if len(downloadedData) != len(originalData) {
@@ -108,7 +108,7 @@ func TestChunkedUpload100MB(t *testing.T) {
 			}
 		}
 
-		t.Logf("✓ Chunk %d integrity verified (%d-%d bytes)", chunkIdx, startByte, endByte-1)
+		t.Logf("Chunk %d integrity verified (%d-%d bytes)", chunkIdx, startByte, endByte-1)
 	}
 
 	t.Logf("SUCCESS: 100MB chunked upload/download cycle completed successfully")

@@ -13,7 +13,7 @@ TLS_DIR="/opt/arkfile/etc/keys/tls"
 USER="arkfile"
 WARNING_DAYS=30
 
-echo -e "${BLUE}🔍 Arkfile TLS Certificate Validation${NC}"
+echo -e "${BLUE}Arkfile TLS Certificate Validation${NC}"
 echo "========================================"
 
 # Function to check certificate expiration
@@ -235,7 +235,7 @@ for service in arkfile rqlite minio; do
 done
 
 echo ""
-echo -e "${BLUE}🔗 Certificate Chain Validation:${NC}"
+echo -e "${BLUE}Certificate Chain Validation:${NC}"
 echo "========================================"
 
 # Validate certificate chains
@@ -257,7 +257,7 @@ fi
 # Show detailed certificate information if requested
 if [ "$1" = "--details" ] || [ "$1" = "-d" ]; then
     echo ""
-    echo -e "${BLUE}📄 Certificate Details:${NC}"
+    echo -e "${BLUE}Certificate Details:${NC}"
     echo "========================================"
     
     get_certificate_details "${TLS_DIR}/ca/ca-cert.pem" "Certificate Authority"
@@ -308,7 +308,7 @@ else
 fi
 
 echo ""
-echo -e "${BLUE}📞 Support Commands:${NC}"
+echo -e "${BLUE}Support Commands:${NC}"
 echo "========================================"
 echo "• Regenerate certificates: sudo ./scripts/setup/05-setup-tls-certs.sh"
 echo "• Detailed validation: ./scripts/maintenance/validate-certificates.sh --details"

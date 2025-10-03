@@ -322,11 +322,11 @@ export function showTOTPAppsModal(): HTMLElement {
   modalContent.innerHTML = `
     <h3 style="margin: 0 0 20px 0; color: #333; text-align: center;">Recommended TOTP Apps</h3>
     <div style="margin-bottom: 20px;">
-      ${createAppsList(appsData.mobile, '📱', 'Mobile (Recommended)')}
-      ${createAppsList(appsData.desktop, '💻', 'Desktop')}
-      ${createAppsList(appsData.advanced, '⌨️', 'Advanced')}
+      ${createAppsList(appsData.mobile, '', 'Mobile (Recommended)')}
+      ${createAppsList(appsData.desktop, '', 'Desktop')}
+      ${createAppsList(appsData.advanced, '️', 'Advanced')}
       <div style="margin-top: 20px; padding: 15px; background: #e7f3ff; border-radius: 4px; font-size: 14px; color: #0066cc;">
-        <strong>💡 Tip:</strong> All listed apps are fully open source and respect your privacy.
+        <strong>Tip:</strong> All listed apps are fully open source and respect your privacy.
       </div>
     </div>
     <button onclick="this.closest('.modal-overlay').remove();" style="

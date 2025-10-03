@@ -284,7 +284,7 @@ while [ $attempt -lt $max_attempts ]; do
         echo "  [OK] rqlite is ready and established as leader"
         break
     fi
-    echo "  ⏳ Waiting for rqlite to be ready... (attempt $((attempt + 1))/$max_attempts)"
+    echo "  Waiting for rqlite to be ready... (attempt $((attempt + 1))/$max_attempts)"
     sleep 2
     attempt=$((attempt + 1))
 done
@@ -313,7 +313,7 @@ while [ $attempt -lt $max_attempts ]; do
         echo "  [OK] Arkfile is running and responding"
         break
     fi
-    echo "  ⏳ Waiting for Arkfile to be ready... (attempt $((attempt + 1))/$max_attempts)"
+    echo "  Waiting for Arkfile to be ready... (attempt $((attempt + 1))/$max_attempts)"
     sleep 3
     attempt=$((attempt + 1))
 done
@@ -383,7 +383,7 @@ if [ "$arkfile_status" = "active" ]; then
         echo -e "${YELLOW}  [LOCK] HTTPS Interface: Disabled${NC}"
     fi
     echo
-    echo -e "${BLUE}🌐 Local Network Access:${NC}"
+    echo -e "${BLUE}Local Network Access:${NC}"
     echo -e "${GREEN}  [DEVICE] HTTP: http://${local_ip}:${arkfile_port}${NC}"
     if [ -n "$tls_enabled" ]; then
         echo -e "${GREEN}  [LOCK] HTTPS: https://${local_ip}:${arkfile_tls_port}${NC}"

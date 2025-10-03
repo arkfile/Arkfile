@@ -18,7 +18,7 @@ START_TIME=$(date +%s)
 
 echo -e "${BLUE}[START] Starting Arkfile Comprehensive Integration Tests${NC}"
 echo
-echo -e "${YELLOW}💡 NEW TO ARKFILE? Looking for a quick setup?${NC}"
+echo -e "${YELLOW}NEW TO ARKFILE? Looking for a quick setup?${NC}"
 echo -e "${GREEN}   Try: ./scripts/quick-start.sh${NC}"
 echo -e "${BLUE}   (Sets up everything in one command)${NC}"
 echo
@@ -88,7 +88,7 @@ fi
 
 # Display active skip options
 if [ "$SKIP_TESTS" = "1" ] || [ "$SKIP_WASM" = "1" ] || [ "$SKIP_PERFORMANCE" = "1" ] || [ "$SKIP_GOLDEN" = "1" ] || [ "$SKIP_BUILD" = "1" ] || [ "$SKIP_TLS" = "1" ] || [ "$SKIP_DOWNLOAD" = "1" ] || [ "$FORCE_REBUILD" = "1" ]; then
-    echo -e "${YELLOW}🔧 Active Environment Variables:${NC}"
+    echo -e "${YELLOW}Active Environment Variables:${NC}"
     [ "$SKIP_TESTS" = "1" ] && echo "  • SKIP_TESTS=1 - Test execution disabled"
     [ "$SKIP_WASM" = "1" ] && echo "  • SKIP_WASM=1 - WebAssembly tests disabled"
     [ "$SKIP_PERFORMANCE" = "1" ] && echo "  • SKIP_PERFORMANCE=1 - Performance benchmarks disabled"
@@ -130,7 +130,7 @@ fi
 
 # Run comprehensive Go unit tests
 echo
-echo -e "\n${BLUE}🔧 Validating TypeScript build...${NC}"
+echo -e "\n${BLUE}Validating TypeScript build...${NC}"
 ./scripts/testing/test-typescript.sh build
 echo -e "${BLUE}🧪 Running comprehensive Go unit test suite...${NC}"
 
@@ -191,7 +191,7 @@ fi
 
 # Run WebAssembly tests
 echo
-echo -e "${BLUE}🌐 Running WebAssembly tests...${NC}"
+echo -e "${BLUE}Running WebAssembly tests...${NC}"
 ./scripts/testing/test-wasm.sh
 
 if [ $? -eq 0 ]; then
@@ -217,7 +217,7 @@ fi
 
 # Run golden test preservation (format compatibility)
 echo
-echo -e "${BLUE}🏆 Running golden test preservation (format compatibility)...${NC}"
+echo -e "${BLUE}Running golden test preservation (format compatibility)...${NC}"
 
 echo -e "${YELLOW}Testing backward compatibility and format preservation...${NC}"
 ./scripts/testing/golden-test-preservation.sh --validate
@@ -231,7 +231,7 @@ fi
 
 # Test build process
 echo
-echo -e "${BLUE}🏗️  Testing build process...${NC}"
+echo -e "${BLUE}️  Testing build process...${NC}"
 ./scripts/setup/build.sh
 
 if [ $? -eq 0 ]; then
@@ -309,7 +309,7 @@ if [ "$FULL_SETUP" = true ]; then
     # If complete setup is requested, install and configure services
     if [ "$COMPLETE_SETUP" = true ]; then
         echo
-        echo -e "${BLUE}🔧 Installing and configuring services for complete setup...${NC}"
+        echo -e "${BLUE}Installing and configuring services for complete setup...${NC}"
         
         # Setup MinIO
         echo -e "${YELLOW}Setting up MinIO object storage...${NC}"
@@ -404,7 +404,7 @@ if [ "$FULL_SETUP" = true ]; then
         
         # Test the complete system
         echo
-        echo -e "${BLUE}🔍 Testing complete system...${NC}"
+        echo -e "${BLUE}Testing complete system...${NC}"
         sleep 5  # Give services time to start
         
         # Test health endpoint
@@ -430,7 +430,7 @@ if [ "$FULL_SETUP" = true ]; then
         
         # Enhanced: Test with cryptocli administrative tool
         echo
-        echo -e "${BLUE}🔧 Running cryptocli system health validation...${NC}"
+        echo -e "${BLUE}Running cryptocli system health validation...${NC}"
         if [ -f "./cryptocli" ] || command -v go &> /dev/null; then
             # Build cryptocli if not already built
             if [ ! -f "./cryptocli" ]; then
@@ -536,10 +536,10 @@ if [ "$FULL_SETUP" = true ]; then
             echo
             echo "5. Test file sharing in incognito window"
             echo
-            echo -e "${YELLOW}📖 For detailed step-by-step instructions, see:${NC}"
+            echo -e "${YELLOW}For detailed step-by-step instructions, see:${NC}"
             echo "   docs/admin-testing-guide.md"
             echo
-            echo -e "${YELLOW}🔧 To run interactive validation later:${NC}"
+            echo -e "${YELLOW}To run interactive validation later:${NC}"
             echo "   ./scripts/maintenance/admin-validation-guide.sh"
         fi
         
@@ -640,7 +640,7 @@ echo "  • Models Module: [OK] PASSED (user management, tokens)"
 echo "  • Utils Module: [OK] PASSED (validation, helpers)"
 
 echo
-echo "🌐 WebAssembly Tests:"
+echo "WebAssembly Tests:"
 echo "  • Core Crypto Functions: [OK] 5/5 PASSED"
 echo "  • Password Functions: [OK] 5/5 PASSED"
 echo "  • Login Integration: [OK] 4/4 PASSED"
@@ -655,13 +655,13 @@ echo "  • 1GB File Testing: [OK] PRODUCTION-SCALE"
 echo "  • Memory Usage: [OK] WITHIN LIMITS"
 
 echo
-echo "🏆 Format Compatibility:"
+echo "Format Compatibility:"
 echo "  • Golden Test Vectors: [OK] 72/72 VALIDATED"
 echo "  • Backward Compatibility: [OK] 100% PRESERVED"
 echo "  • File Format Integrity: [OK] BYTE-PERFECT"
 
 echo
-echo "🏗️  Build & Deployment:"
+echo "️  Build & Deployment:"
 echo "  • Application Build: [OK] SUCCESSFUL"
 echo "  • WebAssembly Build: [OK] SUCCESSFUL"
 echo "  • Static Assets: [OK] DEPLOYED"
@@ -697,7 +697,7 @@ if [ "$FULL_SETUP" = true ]; then
         echo "• Service isolation: [OK] Dedicated arkfile user"
         
         echo
-        echo -e "${BLUE}🗄️  Services Status:${NC}"
+        echo -e "${BLUE}️  Services Status:${NC}"
         # Check actual service status
         if systemctl is-active --quiet arkfile; then
             echo "• Arkfile: [OK] RUNNING"
@@ -739,7 +739,7 @@ if [ "$FULL_SETUP" = true ]; then
         echo "========================================"
         echo -e "${BLUE}Your complete Arkfile system is deployed and ready!${NC}"
         echo
-        echo -e "${YELLOW}📝 Final Configuration Steps:${NC}"
+        echo -e "${YELLOW}Final Configuration Steps:${NC}"
         echo "1. Configure domain and SSL certificates for production:"
         echo "   sudo nano /etc/caddy/Caddyfile"
         echo
@@ -750,7 +750,7 @@ if [ "$FULL_SETUP" = true ]; then
         echo
         echo "4. Upload and test file encryption/sharing"
         echo
-        echo -e "${YELLOW}🔧 Optional Production Hardening:${NC}"
+        echo -e "${YELLOW}Optional Production Hardening:${NC}"
         echo "• Configure firewall rules"
         echo "• Set up monitoring and alerting"
         echo "• Configure automated backups"
@@ -828,14 +828,14 @@ if [ "$FULL_SETUP" = true ]; then
     fi
     
     echo
-    echo -e "${GREEN}📚 DOCUMENTATION REFERENCES${NC}"
+    echo -e "${GREEN}DOCUMENTATION REFERENCES${NC}"
     echo "========================================"
     echo "• Production Deployment: docs/deployment-guide.md"
     echo "• Security Operations: docs/security-operations.md"
     echo "• API Documentation: docs/api.md"
     echo "• Emergency Procedures: scripts/maintenance/emergency-procedures.sh"
     echo
-    echo -e "${BLUE}🔧 MAINTENANCE SCHEDULE${NC}"
+    echo -e "${BLUE}MAINTENANCE SCHEDULE${NC}"
     echo "========================================"
     echo "• Daily: Health checks (automated)"
     echo "• Weekly: Security audits, key backups"
@@ -878,18 +878,18 @@ else
     echo -e "${GREEN}[INFO] PRE-PRODUCTION CHECKLIST${NC}"
     echo "========================================"
     echo "Before deploying to production, ensure:"
-    echo "☐ Domain name configured and DNS set up"
-    echo "☐ TLS certificates obtained (Let's Encrypt recommended)"
-    echo "☐ Firewall rules configured (ports 80, 443)"
-    echo "☐ Object storage backend selected and configured"
-    echo "☐ Database backup strategy implemented"
-    echo "☐ Monitoring and alerting configured"
-    echo "☐ Security audit completed"
-    echo "☐ Emergency procedures documented and tested"
+    echo "Domain name configured and DNS set up"
+    echo "TLS certificates obtained (Let's Encrypt recommended)"
+    echo "Firewall rules configured (ports 80, 443)"
+    echo "Object storage backend selected and configured"
+    echo "Database backup strategy implemented"
+    echo "Monitoring and alerting configured"
+    echo "Security audit completed"
+    echo "Emergency procedures documented and tested"
 fi
 
 echo
-echo -e "${GREEN}📞 SUPPORT & RESOURCES${NC}"
+echo -e "${GREEN}SUPPORT & RESOURCES${NC}"
 echo "========================================"
 echo "• Documentation: docs/ directory"
 echo "• Health monitoring: curl http://localhost:8080/health"

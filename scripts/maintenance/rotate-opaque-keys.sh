@@ -96,7 +96,7 @@ EOF
 
 # Function to validate current OPAQUE setup and user base
 validate_current_setup() {
-    echo -e "${BLUE}🔍 Validating current OPAQUE setup...${NC}"
+    echo -e "${BLUE}Validating current OPAQUE setup...${NC}"
     
     # TODO: Implement validation logic
     # - Check if current OPAQUE keys exist and are valid
@@ -115,7 +115,7 @@ validate_current_setup() {
 
 # Function to count active users and assess migration impact
 assess_user_impact() {
-    echo -e "${BLUE}👥 Assessing user migration impact...${NC}"
+    echo -e "${BLUE}Assessing user migration impact...${NC}"
     
     # TODO: Implement user impact assessment
     # - Count total registered users in database
@@ -188,7 +188,7 @@ generate_new_opaque_keys() {
 
 # Function to implement dual-key transition period
 implement_dual_key_transition() {
-    echo -e "${BLUE}🔄 Implementing dual-key transition...${NC}"
+    echo -e "${BLUE}Implementing dual-key transition...${NC}"
     
     # TODO: Implement dual-key support
     # - Modify application to support multiple OPAQUE keys
@@ -230,7 +230,7 @@ implement_versioned_migration() {
 
 # Function to perform breaking change rotation
 perform_breaking_change_rotation() {
-    echo -e "${BLUE}💥 Performing breaking change rotation...${NC}"
+    echo -e "${BLUE}Performing breaking change rotation...${NC}"
     
     # TODO: Implement breaking change rotation
     # - Replace old keys with new keys immediately
@@ -272,7 +272,7 @@ test_new_keys() {
 
 # Function to generate user communication materials
 generate_user_communications() {
-    echo -e "${BLUE}📢 Generating user communications...${NC}"
+    echo -e "${BLUE}Generating user communications...${NC}"
     
     # TODO: Implement user communication generation
     # - Create email templates for affected users
@@ -335,7 +335,7 @@ cleanup_old_keys() {
 
 # Function to rollback rotation in case of issues
 rollback_rotation() {
-    echo -e "${BLUE}🔙 Rolling back OPAQUE key rotation...${NC}"
+    echo -e "${BLUE}Rolling back OPAQUE key rotation...${NC}"
     
     # TODO: Implement rollback capability
     # - Restore original key files from backup
@@ -520,7 +520,7 @@ main() {
                 test_new_keys
                 echo -e "${GREEN}[OK] Test mode completed - no changes made${NC}"
             else
-                echo -e "${BLUE}🔄 Implementing dual-key transition...${NC}"
+                echo -e "${BLUE}Implementing dual-key transition...${NC}"
                 validate_current_setup
                 assess_user_impact
                 create_rotation_backup
@@ -569,7 +569,7 @@ main() {
                 test_new_keys
                 echo -e "${GREEN}[OK] Breaking change test completed${NC}"
             else
-                echo -e "${BLUE}💥 Performing breaking change rotation...${NC}"
+                echo -e "${BLUE}Performing breaking change rotation...${NC}"
                 validate_current_setup
                 assess_user_impact
                 create_rotation_backup

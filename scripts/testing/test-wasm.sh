@@ -12,7 +12,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}🔧 Building and Testing Arkfile WASM Module${NC}"
+echo -e "${BLUE}Building and Testing Arkfile WASM Module${NC}"
 echo
 
 # Check if Bun is available
@@ -28,7 +28,7 @@ echo -e "${GREEN}[OK] Bun ${BUN_VERSION} detected for WASM testing${NC}"
 # Navigate to client directory
 cd client
 
-echo -e "${BLUE}📦 Building WASM module...${NC}"
+echo -e "${BLUE}Building WASM module...${NC}"
 GOOS=js GOARCH=wasm go build -o static/main.wasm .
 
 if [ $? -eq 0 ]; then

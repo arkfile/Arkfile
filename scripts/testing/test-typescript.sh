@@ -29,7 +29,7 @@ check_bun() {
 
 # Function to run TypeScript type checking
 run_type_check() {
-    echo -e "\n${BLUE}📝 Running TypeScript Type Checking...${NC}"
+    echo -e "\n${BLUE}Running TypeScript Type Checking...${NC}"
     cd client/static/js
     
     if bun run type-check; then
@@ -61,7 +61,7 @@ run_bun_tests() {
 
 # Function to run integration tests
 run_integration_tests() {
-    echo -e "\n${BLUE}🔗 Running Integration Tests...${NC}"
+    echo -e "\n${BLUE}Running Integration Tests...${NC}"
     cd client/static/js
     
     if bun test tests/integration/test-runner.test.ts; then
@@ -77,7 +77,7 @@ run_integration_tests() {
 
 # Function to run WASM-specific tests
 run_wasm_tests() {
-    echo -e "\n${BLUE}🌐 Running WASM Tests...${NC}"
+    echo -e "\n${BLUE}Running WASM Tests...${NC}"
     
     # Check if WASM file exists (informational only)
     if [ ! -f "client/static/main.wasm" ]; then
@@ -142,7 +142,7 @@ run_build_tests() {
     # Check if built files exist
     if [ -f "dist/app.js" ]; then
         local file_size=$(stat -f%z "dist/app.js" 2>/dev/null || stat -c%s "dist/app.js" 2>/dev/null)
-        echo -e "${GREEN}📦 Built app.js: ${file_size} bytes${NC}"
+        echo -e "${GREEN}Built app.js: ${file_size} bytes${NC}"
     else
         echo -e "${RED}[X] Built app.js not found${NC}"
         cd ../../..

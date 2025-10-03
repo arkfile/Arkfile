@@ -329,12 +329,12 @@ if install_minio "${MINIO_BINARY}"; then
         echo "• PGP signature: [WARNING]  Not available"
     fi
     echo ""
-    echo -e "${YELLOW}📝 Next steps:${NC}"
+    echo -e "${YELLOW}Next steps:${NC}"
     echo "1. Configure MinIO environment variables"
     echo "2. Set up MinIO systemd service"
     echo "3. Start MinIO service"
     echo ""
-    echo -e "${BLUE}🔧 Quick test:${NC}"
+    echo -e "${BLUE}Quick test:${NC}"
     echo "minio --version"
 else
     echo -e "${RED}[X] MinIO installation failed${NC}"

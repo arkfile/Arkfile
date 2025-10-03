@@ -156,7 +156,7 @@ update_module() {
     local module="$1"
     local latest="$2"
     
-    echo -e "${BLUE}📦 Updating $module to $latest...${NC}"
+    echo -e "${BLUE}Updating $module to $latest...${NC}"
     
     if go get "$module@$latest"; then
         echo -e "${GREEN}[OK] Updated $module${NC}"
@@ -187,7 +187,7 @@ interactive_mode() {
         return 0
     fi
     
-    echo -e "${CYAN}🔧 Go Module Updates Available:${NC}"
+    echo -e "${CYAN}Go Module Updates Available:${NC}"
     echo
     
     # Show patch updates
@@ -269,7 +269,7 @@ apply_updates() {
     local updates
     local success=true
     
-    echo -e "${BLUE}📦 Applying $update_type updates...${NC}"
+    echo -e "${BLUE}Applying $update_type updates...${NC}"
     echo
     
     mapfile -t updates < <(get_updates "$update_type")
@@ -291,7 +291,7 @@ apply_updates() {
     
     if [[ "$success" == "true" ]]; then
         echo
-        echo -e "${BLUE}📝 Cleaning up dependencies...${NC}"
+        echo -e "${BLUE}Cleaning up dependencies...${NC}"
         if go mod tidy; then
             echo -e "${GREEN}[OK] Dependencies cleaned up${NC}"
         else
@@ -313,13 +313,13 @@ apply_updates() {
         else
             echo
             echo -e "${RED}[X] Updates applied but tests failed${NC}"
-            echo -e "${YELLOW}💡 Consider reverting changes with: git checkout go.mod go.sum${NC}"
+            echo -e "${YELLOW}Consider reverting changes with: git checkout go.mod go.sum${NC}"
             exit 1
         fi
     else
         echo
         echo -e "${RED}[X] Update process failed${NC}"
-        echo -e "${YELLOW}💡 Consider reverting changes with: git checkout go.mod go.sum${NC}"
+        echo -e "${YELLOW}Consider reverting changes with: git checkout go.mod go.sum${NC}"
         exit 1
     fi
 }
@@ -328,7 +328,7 @@ apply_updates() {
 main() {
     check_environment
     
-    echo -e "${BLUE}🔍 Arkfile Go Module Updater${NC}"
+    echo -e "${BLUE}Arkfile Go Module Updater${NC}"
     echo
     
     if [[ "$UPDATE_MODE" == "test-only" ]]; then

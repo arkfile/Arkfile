@@ -25,7 +25,7 @@ COMPONENTS_FOUND=0
 COMPONENTS_REMOVED=0
 COMPONENTS_SKIPPED=0
 
-echo -e "${RED}🗑️  Arkfile Uninstall Script${NC}"
+echo -e "${RED}️  Arkfile Uninstall Script${NC}"
 echo -e "${RED}===============================${NC}"
 echo
 echo -e "${YELLOW}[WARNING]  WARNING: This script will help you remove Arkfile from your system.${NC}"
@@ -92,7 +92,7 @@ print_status() {
             ((COMPONENTS_REMOVED++))
             ;;
         "SKIPPED")
-            echo -e "  ${YELLOW}⏭${NC} ${message}"
+            echo -e "  ${YELLOW}${NC} ${message}"
             ((COMPONENTS_SKIPPED++))
             ;;
         "NOT_FOUND")
@@ -112,7 +112,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Initial system scan
-echo -e "${BLUE}🔍 Scanning system for Arkfile components...${NC}"
+echo -e "${BLUE}Scanning system for Arkfile components...${NC}"
 echo
 
 # Check for services
@@ -288,7 +288,7 @@ fi
 echo
 
 # Step 3: Remove systemd service files
-echo -e "${CYAN}📄 Systemd Service Files${NC}"
+echo -e "${CYAN}Systemd Service Files${NC}"
 echo "========================"
 
 SERVICE_FILES=(
@@ -359,7 +359,7 @@ fi
 echo
 
 # Step 5: Remove system user and group
-echo -e "${CYAN}👤 System User and Group${NC}"
+echo -e "${CYAN}System User and Group${NC}"
 echo "========================"
 
 if getent passwd "$USER" >/dev/null 2>&1; then
@@ -393,7 +393,7 @@ fi
 echo
 
 # Step 6: Remove downloaded binaries
-echo -e "${CYAN}📦 Downloaded Binaries${NC}"
+echo -e "${CYAN}Downloaded Binaries${NC}"
 echo "====================="
 
 BINARY_LOCATIONS=(
@@ -525,7 +525,7 @@ fi
 echo
 
 # Final verification
-echo -e "${BLUE}🔍 Final Verification${NC}"
+echo -e "${BLUE}Final Verification${NC}"
 echo "===================="
 
 # Re-scan for any remaining components
@@ -592,7 +592,7 @@ else
 fi
 
 echo
-echo -e "${RED}🔥 IMPORTANT SECURITY NOTICE 🔥${NC}"
+echo -e "${RED}IMPORTANT SECURITY NOTICE ${NC}"
 echo -e "${RED}═══════════════════════════════════════════════════════════${NC}"
 echo
 echo -e "${YELLOW}BROWSER STORAGE CLEANUP REQUIRED${NC}"
@@ -621,7 +621,7 @@ echo "4. Click 'Clear data' or 'Remove all data'"
 echo
 echo -e "${RED}OR USE INCOGNITO/PRIVATE BROWSING MODE${NC}"
 echo
-echo -e "${BLUE}🔄 To reinstall Arkfile:${NC}"
+echo -e "${BLUE}To reinstall Arkfile:${NC}"
 echo "./scripts/quick-start.sh"
 echo
 echo -e "${GREEN}New installations will generate fresh secrets automatically.${NC}"

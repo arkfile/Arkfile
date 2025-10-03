@@ -1355,7 +1355,7 @@ EXAMPLES:
 		return err
 	}
 
-	fmt.Printf("🔍 Performing security audit...\n")
+	fmt.Printf("Performing security audit...\n")
 	fmt.Printf("Detailed mode: %v\n", *detailed)
 	if *output != "" {
 		fmt.Printf("Output file: %s\n", *output)

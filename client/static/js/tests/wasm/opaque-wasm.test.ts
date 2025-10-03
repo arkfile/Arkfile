@@ -75,7 +75,7 @@ async function loadWASMModule(): Promise<void> {
         // Check if WASM file exists
         const wasmPath = join(import.meta.dir, '..', '..', '..', 'main.wasm');
         if (!existsSync(wasmPath)) {
-            console.warn('❌ WASM file not found. OPAQUE functions will be mocked.');
+            console.warn('WASM file not found. OPAQUE functions will be mocked.');
             return;
         }
         
@@ -85,7 +85,7 @@ async function loadWASMModule(): Promise<void> {
         // Load wasm_exec.js for Go runtime
         const wasmExecPath = join(import.meta.dir, '..', '..', '..', '..', 'wasm_exec.js');
         if (!existsSync(wasmExecPath)) {
-            console.warn('❌ wasm_exec.js not found. OPAQUE functions will be mocked.');
+            console.warn('wasm_exec.js not found. OPAQUE functions will be mocked.');
             return;
         }
         
@@ -107,11 +107,11 @@ async function loadWASMModule(): Promise<void> {
         await new Promise(resolve => setTimeout(resolve, 100));
         
         wasmLoaded = true;
-        console.log('✅ OPAQUE WASM module loaded successfully');
+        console.log('OPAQUE WASM module loaded successfully');
         
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.warn(`⚠️ Failed to load WASM module: ${errorMessage}. Using mocks.`);
+        console.warn(`Failed to load WASM module: ${errorMessage}. Using mocks.`);
     }
 }
 
@@ -176,12 +176,12 @@ function getWASMFunction<T extends (...args: any[]) => any>(fnName: keyof typeof
 
 describe('OPAQUE WASM Integration Tests', () => {
     beforeAll(async () => {
-        console.log('🚀 Starting OPAQUE WASM Tests (Bun Runtime)');
+        console.log('Starting OPAQUE WASM Tests (Bun Runtime)');
         await loadWASMModule();
     });
 
     afterAll(() => {
-        console.log('🏁 OPAQUE WASM Tests completed');
+        console.log('OPAQUE WASM Tests completed');
     });
 
     test('Device Capability Detection', async () => {
@@ -195,7 +195,7 @@ describe('OPAQUE WASM Integration Tests', () => {
         const capability = detectCapability('allow');
         expect(['minimal', 'interactive', 'balanced', 'maximum']).toContain(capability);
         
-        console.log(`📝 Detected device capability: ${capability}`);
+        console.log(`Detected device capability: ${capability}`);
     });
 
     test('OPAQUE Registration Flow', async () => {
@@ -212,7 +212,7 @@ describe('OPAQUE WASM Integration Tests', () => {
         expect(init.request).toBeDefined();
         expect(typeof init.request).toBe('string');
         
-        console.log(`📝 Registration init successful, request length: ${init.request.length}`);
+        console.log(`Registration init successful, request length: ${init.request.length}`);
         
         // Simulate server response (would come from server in real flow)
         const mockServerResponse = 'mock-server-response-base64';
@@ -222,7 +222,7 @@ describe('OPAQUE WASM Integration Tests', () => {
         expect(finalize.success).toBe(true);
         expect(finalize.export).toBeDefined();
         
-        console.log(`📝 Registration finalize successful, export length: ${finalize.export?.length}`);
+        console.log(`Registration finalize successful, export length: ${finalize.export?.length}`);
     });
 
     test('OPAQUE Login Flow', async () => {
@@ -237,7 +237,7 @@ describe('OPAQUE WASM Integration Tests', () => {
         expect(init.ke1).toBeDefined();
         expect(typeof init.ke1).toBe('string');
         
-        console.log(`📝 Login init successful, KE1 length: ${init.ke1.length}`);
+        console.log(`Login init successful, KE1 length: ${init.ke1.length}`);
         
         // Simulate server KE2 response
         const mockKE2 = 'mock-ke2-response-base64';
@@ -247,7 +247,7 @@ describe('OPAQUE WASM Integration Tests', () => {
         expect(finalize.success).toBe(true);
         expect(finalize.sessionKey || finalize.export).toBeDefined();
         
-        console.log(`📝 Login finalize successful`);
+        console.log(`Login finalize successful`);
     });
 
     test('Session Key Derivation and Validation', async () => {
@@ -262,13 +262,13 @@ describe('OPAQUE WASM Integration Tests', () => {
         expect(derived.sessionKey).toBeDefined();
         expect(typeof derived.sessionKey).toBe('string');
         
-        console.log(`📝 Session key derived successfully, length: ${derived.sessionKey.length}`);
+        console.log(`Session key derived successfully, length: ${derived.sessionKey.length}`);
         
         // Test session key validation
         const validation = validateSessionKey(derived.sessionKey);
         expect(validation.valid).toBe(true);
         
-        console.log(`📝 Session key validation successful`);
+        console.log(`Session key validation successful`);
     });
 
     test('Error Handling for Invalid Inputs', async () => {
@@ -283,7 +283,7 @@ describe('OPAQUE WASM Integration Tests', () => {
         const emptyPasswordLogin = loginInit('');
         expect(emptyPasswordLogin).toBeDefined();
         
-        console.log(`📝 Error handling test completed`);
+        console.log(`Error handling test completed`);
     });
 });
 
@@ -294,11 +294,11 @@ export async function runOpaqueWASMTests(): Promise<void> {
     
     try {
         // Run tests manually if needed
-        console.log('✅ OPAQUE WASM module setup complete');
+        console.log('OPAQUE WASM module setup complete');
         console.log('Use "bun test" to run the full test suite');
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(`💥 Error in OPAQUE WASM tests: ${errorMessage}`);
+        console.error(`Error in OPAQUE WASM tests: ${errorMessage}`);
         throw error;
     }
 }

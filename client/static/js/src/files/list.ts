@@ -53,7 +53,7 @@ export function displayFiles(data: FilesResponse): void {
         <strong>${escapeHtml(file.filename)}</strong>
         <span class="file-size">${escapeHtml(file.size_readable)}</span>
         <span class="file-date">${escapeHtml(new Date(file.uploadDate).toLocaleString())}</span>
-        <span class="encryption-type">${file.passwordType === 'account' ? '🔑 Account Password' : '🔒 Custom Password'}</span>
+        <span class="encryption-type">${file.passwordType === 'account' ? 'Account Password' : 'Custom Password'}</span>
       </div>
       <div class="file-actions">
         <button onclick="downloadFile('${escapeHtml(file.filename)}', '${escapeHtml(file.passwordHint || '')}', '${escapeHtml(file.sha256sum)}', '${escapeHtml(file.passwordType)}')">Download</button>

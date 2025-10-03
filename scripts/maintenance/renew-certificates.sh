@@ -19,7 +19,7 @@ BACKUP_DIR="${TLS_DIR}/backup/$(date +%Y%m%d_%H%M%S)"
 FORCE_RENEWAL=false
 WARNING_DAYS=30
 
-echo -e "${BLUE}🔄 Arkfile TLS Certificate Renewal${NC}"
+echo -e "${BLUE}Arkfile TLS Certificate Renewal${NC}"
 echo "========================================"
 
 # Parse command line arguments
@@ -99,7 +99,7 @@ check_certificate_expiry() {
 
 # Function to backup existing certificates
 backup_certificates() {
-    echo -e "${BLUE}📦 Creating certificate backup...${NC}"
+    echo -e "${BLUE}Creating certificate backup...${NC}"
     
     sudo -u ${USER} mkdir -p "${BACKUP_DIR}"
     
@@ -122,7 +122,7 @@ backup_certificates() {
 
 # Function to rollback certificates
 rollback_certificates() {
-    echo -e "${YELLOW}🔄 Rolling back certificates...${NC}"
+    echo -e "${YELLOW}Rolling back certificates...${NC}"
     
     if [ ! -d "${BACKUP_DIR}" ]; then
         echo -e "${RED}[X] Backup directory not found: ${BACKUP_DIR}${NC}"
@@ -149,7 +149,7 @@ rollback_certificates() {
 
 # Function to restart services using certificates
 restart_services() {
-    echo -e "${BLUE}🔄 Restarting services with new certificates...${NC}"
+    echo -e "${BLUE}Restarting services with new certificates...${NC}"
     
     local services_restarted=0
     
@@ -233,7 +233,7 @@ if [ ! -d "${TLS_DIR}" ]; then
 fi
 
 # Check if we need to renew certificates
-echo -e "${BLUE}🔍 Checking certificate expiration status...${NC}"
+echo -e "${BLUE}Checking certificate expiration status...${NC}"
 
 certificates_to_renew=()
 renewal_reasons=()
@@ -313,7 +313,7 @@ backup_certificates
 
 # Renew certificates
 echo ""
-echo -e "${BLUE}🔄 Renewing certificates...${NC}"
+echo -e "${BLUE}Renewing certificates...${NC}"
 
 # If CA needs renewal, renew all certificates
 if [[ " ${certificates_to_renew[@]} " =~ " ca " ]]; then
@@ -363,7 +363,7 @@ fi
 
 # Validate renewed certificates
 echo ""
-echo -e "${BLUE}🔍 Validating renewed certificates...${NC}"
+echo -e "${BLUE}Validating renewed certificates...${NC}"
 if ./scripts/maintenance/validate-certificates.sh >/dev/null 2>&1; then
     echo -e "${GREEN}[OK] Certificate validation passed${NC}"
 else
@@ -379,7 +379,7 @@ restart_services
 
 # Final verification
 echo ""
-echo -e "${BLUE}🔍 Final system verification...${NC}"
+echo -e "${BLUE}Final system verification...${NC}"
 
 # Test certificate loading
 verification_failed=false
@@ -466,7 +466,7 @@ echo "• Services restarted: $(systemctl is-active arkfile minio rqlite 2>/dev/
 echo "• Next renewal check: $(date -d "+$((VALIDITY_DAYS - WARNING_DAYS)) days" "+%Y-%m-%d")"
 
 echo ""
-echo -e "${BLUE}📄 Certificate Details:${NC}"
+echo -e "${BLUE}Certificate Details:${NC}"
 echo "========================================"
 for service in ca arkfile rqlite minio; do
     case "${service}" in
@@ -489,14 +489,14 @@ for service in ca arkfile rqlite minio; do
 done
 
 echo ""
-echo -e "${BLUE}🔄 Maintenance Schedule:${NC}"
+echo -e "${BLUE}Maintenance Schedule:${NC}"
 echo "========================================"
 echo "• Next automatic check: $(date -d "+$((WARNING_DAYS/2)) days" "+%Y-%m-%d")"
 echo "• Recommended renewal: $(date -d "+$((VALIDITY_DAYS - WARNING_DAYS)) days" "+%Y-%m-%d")"
 echo "• Certificate expiry: $(date -d "+${VALIDITY_DAYS} days" "+%Y-%m-%d")"
 
 echo ""
-echo -e "${BLUE}📞 Support Commands:${NC}"
+echo -e "${BLUE}Support Commands:${NC}"
 echo "========================================"
 echo "• Validate certificates: ./scripts/maintenance/validate-certificates.sh"
 echo "• View certificate details: ./scripts/maintenance/validate-certificates.sh --details"

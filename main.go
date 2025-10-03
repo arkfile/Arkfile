@@ -459,7 +459,7 @@ func setupAdminTOTP(user *models.User) error {
 			log.Printf("ERROR: TOTP master key integrity validation failed: %v", err)
 			return fmt.Errorf("TOTP master key integrity validation failed: %w", err)
 		}
-		log.Printf("✅ TOTP master key integrity validation passed")
+		log.Printf("TOTP master key integrity validation passed")
 	}
 
 	// Fixed TOTP secret for predictable testing (base32 encoded)
@@ -556,9 +556,9 @@ func setupAdminTOTP(user *models.User) error {
 	}
 
 	// Log setup completion
-	log.Printf("✅ TOTP setup completed for admin user '%s'", user.Username)
-	log.Printf("⚠️  SECURITY: TOTP configured with fixed secret for development/testing only!")
-	log.Printf("📱 Use a TOTP app to scan QR code or manually enter the secret for authentication")
+	log.Printf("TOTP setup completed for admin user '%s'", user.Username)
+	log.Printf(" SECURITY: TOTP configured with fixed secret for development/testing only!")
+	log.Printf("Use a TOTP app to scan QR code or manually enter the secret for authentication")
 
 	return nil
 }
@@ -627,7 +627,7 @@ func validateAdminTOTPWorkflow(user *models.User) error {
 	}
 
 	if isDebug {
-		log.Printf("✅ Step 1: TOTP is enabled for admin user")
+		log.Printf("Step 1: TOTP is enabled for admin user")
 	}
 
 	// Step 2: Test the complete TOTP decryption workflow using auth.CanDecryptTOTPSecret
@@ -653,7 +653,7 @@ func validateAdminTOTPWorkflow(user *models.User) error {
 	}
 
 	if isDebug {
-		log.Printf("✅ Step 2: TOTP decryption workflow validated successfully")
+		log.Printf("Step 2: TOTP decryption workflow validated successfully")
 		log.Printf("   - TOTP present: %t", present)
 		log.Printf("   - TOTP decryptable: %t", decryptable)
 		log.Printf("   - TOTP enabled: %t", totpEnabled)

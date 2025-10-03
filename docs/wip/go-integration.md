@@ -101,11 +101,11 @@ func main() {
     
     // Execute requested command
     if err := suite.Run(); err != nil {
-        fmt.Printf("❌ Integration testing failed: %v\n", err)
+        fmt.Printf("Integration testing failed: %v\n", err)
         os.Exit(1)
     }
     
-    fmt.Printf("✅ Integration testing completed successfully\n")
+    fmt.Printf("Integration testing completed successfully\n")
 }
 ```
 
@@ -153,7 +153,7 @@ func (s *IntegrationSuite) executeCommand(tool string, args ...string) (*ExecRes
     cmd.Stderr = &stderr
     
     if s.config.Verbose {
-        fmt.Printf("🔧 Executing: %s %s\n", binPath, strings.Join(args, " "))
+        fmt.Printf("Executing: %s %s\n", binPath, strings.Join(args, " "))
     }
     
     err := cmd.Run()
@@ -173,7 +173,7 @@ func (s *IntegrationSuite) executeCommand(tool string, args ...string) (*ExecRes
     }
     
     if s.config.Performance {
-        fmt.Printf("⏱️  Command completed in: %v\n", duration)
+        fmt.Printf("️  Command completed in: %v\n", duration)
     }
     
     return result, err
@@ -183,12 +183,12 @@ func (s *IntegrationSuite) runTest(name string, testFunc func() error) {
     fmt.Printf("🧪 Running: %s\n", name)
     
     if err := testFunc(); err != nil {
-        fmt.Printf("❌ FAILED: %s - %v\n", name, err)
+        fmt.Printf("FAILED: %s - %v\n", name, err)
         s.results[name] = false
         return
     }
     
-    fmt.Printf("✅ PASSED: %s\n", name)
+    fmt.Printf("PASSED: %s\n", name)
     s.results[name] = true
 }
 ```
@@ -199,7 +199,7 @@ func (s *IntegrationSuite) runTest(name string, testFunc func() error) {
 
 ```go
 func (s *IntegrationSuite) runEnvironmentValidation() error {
-    fmt.Printf("📋 Phase 1: Environment Validation\n")
+    fmt.Printf("Phase 1: Environment Validation\n")
     
     s.runTest("Tool Availability - arkfile-client", func() error {
         result, err := s.executeCommand("arkfile-client", "--help")
@@ -253,7 +253,7 @@ func (s *IntegrationSuite) runEnvironmentValidation() error {
         return nil
     })
     
-    fmt.Printf("✅ Environment validation completed\n\n")
+    fmt.Printf("Environment validation completed\n\n")
     return nil
 }
 ```
@@ -264,7 +264,7 @@ func (s *IntegrationSuite) runEnvironmentValidation() error {
 
 ```go
 func (s *IntegrationSuite) runAuthenticationWorkflow() error {
-    fmt.Printf("📋 Phase 2: Authentication Workflow\n")
+    fmt.Printf("Phase 2: Authentication Workflow\n")
     
     var sessionToken string
     
@@ -302,7 +302,7 @@ func (s *IntegrationSuite) runAuthenticationWorkflow() error {
         return nil
     })
     
-    fmt.Printf("✅ Authentication workflow completed\n\n")
+    fmt.Printf("Authentication workflow completed\n\n")
     return nil
 }
 
@@ -330,7 +330,7 @@ func extractSessionToken(output string) string {
 
 ```go
 func (s *IntegrationSuite) runFileOperationsWorkflow() error {
-    fmt.Printf("📋 Phase 3: File Operations Workflow\n")
+    fmt.Printf("Phase 3: File Operations Workflow\n")
     
     var testFileName = "integration-test.dat"
     var encryptedFileName = "integration-test.enc"
@@ -455,11 +455,11 @@ func (s *IntegrationSuite) runFileOperationsWorkflow() error {
                 originalHash[:16]+"...", finalHash[:16]+"...")
         }
         
-        fmt.Printf("✅ Perfect file integrity maintained through complete Argon2ID password-based cycle\n")
+        fmt.Printf("Perfect file integrity maintained through complete Argon2ID password-based cycle\n")
         return nil
     })
     
-    fmt.Printf("✅ File operations workflow completed\n\n")
+    fmt.Printf("File operations workflow completed\n\n")
     return nil
 }
 ```
@@ -470,7 +470,7 @@ func (s *IntegrationSuite) runFileOperationsWorkflow() error {
 
 ```go
 func (s *IntegrationSuite) runShareOperationsWorkflow() error {
-    fmt.Printf("📋 Phase 4: Share Operations Workflow\n")
+    fmt.Printf("Phase 4: Share Operations Workflow\n")
     
     var shareURL string
     var sharePassword = "integration-test-share-pass"
@@ -513,7 +513,7 @@ func (s *IntegrationSuite) runShareOperationsWorkflow() error {
         s.setSessionData("share_password", sharePassword)
         s.setSessionData("original_file_hash", originalFileHash)
         
-        fmt.Printf("✅ Share created successfully with URL: %s\n", shareURL[:50]+"...")
+        fmt.Printf("Share created successfully with URL: %s\n", shareURL[:50]+"...")
         
         return nil
     })
@@ -535,7 +535,7 @@ func (s *IntegrationSuite) runShareOperationsWorkflow() error {
             return fmt.Errorf("session not properly cleared after logout")
         }
         
-        fmt.Printf("✅ User logged out, session cleared for anonymous testing\n")
+        fmt.Printf("User logged out, session cleared for anonymous testing\n")
         
         return nil
     })
@@ -561,7 +561,7 @@ func (s *IntegrationSuite) runShareOperationsWorkflow() error {
             return fmt.Errorf("shared file not created by anonymous access")
         }
         
-        fmt.Printf("✅ Anonymous visitor successfully accessed and decrypted shared file\n")
+        fmt.Printf("Anonymous visitor successfully accessed and decrypted shared file\n")
         
         return nil
     })
@@ -583,7 +583,7 @@ func (s *IntegrationSuite) runShareOperationsWorkflow() error {
                 originalHash[:16]+"...", sharedHash[:16]+"...")
         }
         
-        fmt.Printf("✅ Perfect integrity: Anonymous decryption matches original file\n")
+        fmt.Printf("Perfect integrity: Anonymous decryption matches original file\n")
         fmt.Printf("   Original hash:  %s\n", originalHash[:32]+"...")
         fmt.Printf("   Anonymous hash: %s\n", sharedHash[:32]+"...")
         
@@ -602,12 +602,12 @@ func (s *IntegrationSuite) runShareOperationsWorkflow() error {
             return fmt.Errorf("unexpected error from authenticated endpoint: %s", result.Stderr)
         }
         
-        fmt.Printf("✅ Session isolation confirmed: Anonymous access only, no authenticated access\n")
+        fmt.Printf("Session isolation confirmed: Anonymous access only, no authenticated access\n")
         
         return nil
     })
     
-    fmt.Printf("✅ Share operations workflow completed with proper anonymous access testing\n\n")
+    fmt.Printf("Share operations workflow completed with proper anonymous access testing\n\n")
     return nil
 }
 ```
@@ -618,7 +618,7 @@ func (s *IntegrationSuite) runShareOperationsWorkflow() error {
 
 ```go
 func (s *IntegrationSuite) runAdminOperationsWorkflow() error {
-    fmt.Printf("📋 Phase 5: Admin Operations Workflow\n")
+    fmt.Printf("Phase 5: Admin Operations Workflow\n")
     
     s.runTest("Admin Authentication", func() error {
         result, err := s.executeCommand("arkfile-admin", "login", "--username", "admin")
@@ -671,7 +671,7 @@ func (s *IntegrationSuite) runAdminOperationsWorkflow() error {
         return nil
     })
     
-    fmt.Printf("✅ Admin operations workflow completed\n\n")
+    fmt.Printf("Admin operations workflow completed\n\n")
     return nil
 }
 ```
@@ -686,7 +686,7 @@ func (s *IntegrationSuite) runPerformanceValidation() error {
         return nil
     }
     
-    fmt.Printf("📋 Performance Benchmarking\n")
+    fmt.Printf("Performance Benchmarking\n")
     
     // Benchmark file operations with different sizes
     sizes := []string{"1MB", "10MB", "50MB"}
@@ -701,7 +701,7 @@ func (s *IntegrationSuite) runPerformanceValidation() error {
             }
             
             duration := time.Since(startTime)
-            fmt.Printf("📊 %s file cycle completed in: %v\n", size, duration)
+            fmt.Printf("%s file cycle completed in: %v\n", size, duration)
             
             return nil
         })
@@ -728,7 +728,7 @@ func (s *IntegrationSuite) cleanup() error {
     
     for _, file := range testFiles {
         if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
-            fmt.Printf("⚠️  Failed to remove %s: %v\n", file, err)
+            fmt.Printf("️  Failed to remove %s: %v\n", file, err)
         }
     }
     
@@ -739,24 +739,24 @@ func (s *IntegrationSuite) cleanup() error {
 ## Success Criteria
 
 ### Functional Requirements
-- ✅ All 5 test phases pass with existing Go tools
-- ✅ File integrity maintained through complete Argon2ID password-based encrypt→upload→download→decrypt cycle
-- ✅ OPAQUE is used for authentication only, without export keys for file encryption
-- ✅ Session management works correctly across tool invocations
-- ✅ Share operations produce correct decrypted files
-- ✅ Admin operations integrate correctly with user workflows
+- All 5 test phases pass with existing Go tools
+- File integrity maintained through complete Argon2ID password-based encrypt→upload→download→decrypt cycle
+- OPAQUE is used for authentication only, without export keys for file encryption
+- Session management works correctly across tool invocations
+- Share operations produce correct decrypted files
+- Admin operations integrate correctly with user workflows
 
 ### Performance Requirements
-- ✅ 100MB file operations complete within reasonable time (<2 minutes)
-- ✅ Authentication workflow completes quickly (<10 seconds)
-- ✅ Memory usage stays reasonable during large file operations
-- ✅ Performance meets or exceeds test-app-curl.sh baseline
+- 100MB file operations complete within reasonable time (<2 minutes)
+- Authentication workflow completes quickly (<10 seconds)
+- Memory usage stays reasonable during large file operations
+- Performance meets or exceeds test-app-curl.sh baseline
 
 ### Integration Requirements
-- ✅ Clean integration with existing `dev-reset.sh` + `test-app-curl.sh` workflow
-- ✅ Proper error handling and cleanup on failures
-- ✅ Structured output with clear pass/fail reporting
-- ✅ Zero regressions in existing functionality
+- Clean integration with existing `dev-reset.sh` + `test-app-curl.sh` workflow
+- Proper error handling and cleanup on failures
+- Structured output with clear pass/fail reporting
+- Zero regressions in existing functionality
 
 ## Usage Examples
 
@@ -791,13 +791,13 @@ go run scripts/testing/integration-test.go auth-flow --verbose
 
 ## Implementation Status
 
-**Phase 1: Foundation** - ⏳ Ready to implement
-**Phase 2: Environment** - ⏳ Ready to implement  
-**Phase 3: Authentication** - ⏳ Ready to implement
-**Phase 4: File Operations** - ⏳ Ready to implement
-**Phase 5: Share Operations** - ⏳ Ready to implement
-**Phase 6: Admin Operations** - ⏳ Ready to implement
-**Phase 7: Performance** - ⏳ Ready to implement
+**Phase 1: Foundation** - Ready to implement
+**Phase 2: Environment** - Ready to implement  
+**Phase 3: Authentication** - Ready to implement
+**Phase 4: File Operations** - Ready to implement
+**Phase 5: Share Operations** - Ready to implement
+**Phase 6: Admin Operations** - Ready to implement
+**Phase 7: Performance** - Ready to implement
 
 **Estimated Implementation Time**: 13-16 hours total
 

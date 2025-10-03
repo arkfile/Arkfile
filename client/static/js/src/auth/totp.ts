@@ -466,7 +466,7 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData, sess
       <h4>Step 3: Backup Codes</h4>
       <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 4px; margin: 10px 0;">
         <p style="margin: 0 0 10px 0; font-weight: bold; color: #856404;">
-          ⚠️ Save these backup codes in a secure location:
+          Save these backup codes in a secure location:
         </p>
         <div style="font-family: monospace; font-size: 14px; line-height: 1.5;">
           ${setupData.backup_codes.map((code: string) => `<div>${code}</div>`).join('')}

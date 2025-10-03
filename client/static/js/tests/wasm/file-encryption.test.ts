@@ -98,13 +98,13 @@ async function loadWASMModule(): Promise<void> {
     try {
         const wasmPath = join(__dirname, '..', '..', '..', 'main.wasm');
         if (!existsSync(wasmPath)) {
-            console.warn('❌ WASM file not found, tests will be skipped.');
+            console.warn('WASM file not found, tests will be skipped.');
             return;
         }
 
         const wasmExecPath = join(__dirname, '..', '..', '..', '..', 'wasm_exec.js');
         if (!existsSync(wasmExecPath)) {
-            console.warn('❌ wasm_exec.js not found, tests will be skipped.');
+            console.warn('wasm_exec.js not found, tests will be skipped.');
             return;
         }
 
@@ -118,9 +118,9 @@ async function loadWASMModule(): Promise<void> {
 
         await new Promise(resolve => setTimeout(resolve, 100)); // Short delay for init
         wasmLoaded = true;
-        console.log("✅ Go WASM Module Loaded Successfully");
+        console.log("Go WASM Module Loaded Successfully");
     } catch (e) {
-        console.error("💥 Failed to load WASM module:", e);
+        console.error("Failed to load WASM module:", e);
     }
 }
 
@@ -145,7 +145,7 @@ describe("File Encryption WASM Tests", () => {
     const fileData = new TextEncoder().encode(fileContent);
 
     beforeAll(async () => {
-        console.log("🚀 Starting File Encryption WASM Tests...");
+        console.log("Starting File Encryption WASM Tests...");
         await loadWASMModule();
 
         if (wasmLoaded) {
@@ -160,7 +160,7 @@ describe("File Encryption WASM Tests", () => {
             const clearPass = getWASMFunction<typeof globalThis.clearPasswordForUser>('clearPasswordForUser');
             clearPass(username);
         }
-        console.log("🏁 File Encryption WASM Tests Completed.");
+        console.log("File Encryption WASM Tests Completed.");
     });
 
     /**

@@ -51,7 +51,7 @@ record_test() {
 # Function to wait for user confirmation
 wait_for_user() {
     local message="$1"
-    echo -e "${YELLOW}👤 USER ACTION REQUIRED${NC}"
+    echo -e "${YELLOW}USER ACTION REQUIRED${NC}"
     echo -e "${YELLOW}${message}${NC}"
     echo
     read -p "Press Enter when completed..."
@@ -65,7 +65,7 @@ validate_backend() {
     local command="$3"
     local description="$4"
     
-    echo -e "${PURPLE}🔍 Backend Verification: ${description}${NC}"
+    echo -e "${PURPLE}Backend Verification: ${description}${NC}"
     
     if result=$(eval "$command" 2>/dev/null); then
         if [[ "$result" == *"$expected"* ]] || [ -z "$expected" ]; then
@@ -111,7 +111,7 @@ echo "======================================"
 echo
 
 # Test 1: Health endpoint
-echo -e "${PURPLE}🔍 Testing system health endpoint...${NC}"
+echo -e "${PURPLE}Testing system health endpoint...${NC}"
 if curl -s -f http://localhost:8080/health >/dev/null 2>&1; then
     health_response=$(curl -s http://localhost:8080/health)
     echo -e "${GREEN}[OK] PASS: Health endpoint accessible${NC}"
@@ -125,7 +125,7 @@ fi
 echo
 
 # Test 2: Service status
-echo -e "${PURPLE}🔍 Checking service status...${NC}"
+echo -e "${PURPLE}Checking service status...${NC}"
 services=("arkfile" "caddy" "minio" "rqlite")
 services_ok=0
 
@@ -148,7 +148,7 @@ fi
 echo
 
 # Test 3: Network connectivity
-echo -e "${PURPLE}🔍 Testing network connectivity...${NC}"
+echo -e "${PURPLE}Testing network connectivity...${NC}"
 
 # Test HTTP
 if curl -s -I http://localhost:8080/ | head -1 | grep -q "200 OK"; then
@@ -169,7 +169,7 @@ else
 fi
 echo
 
-echo -e "${BLUE}🌐 STEP 2: CHOOSE YOUR TESTING METHOD${NC}"
+echo -e "${BLUE}STEP 2: CHOOSE YOUR TESTING METHOD${NC}"
 echo "======================================"
 echo
 echo "You can test the system using either:"
@@ -199,7 +199,7 @@ else
 fi
 echo
 
-echo -e "${BLUE}🌐 STEP 3: WEB INTERFACE ACCESS TEST${NC}"
+echo -e "${BLUE}STEP 3: WEB INTERFACE ACCESS TEST${NC}"
 echo "====================================="
 echo
 echo -e "${CYAN}Testing URL: ${TEST_URL}${NC}"
@@ -213,7 +213,7 @@ wait_for_user "1. Open your browser to: ${TEST_URL}
 # Validate web interface access
 validate_backend "web" "200" "curl -s -I ${TEST_URL} $([ '$TESTING_METHOD' = 'B' ] && echo '--insecure') | head -1" "Web interface accessibility"
 
-echo -e "${BLUE}👤 STEP 4: USER REGISTRATION TEST (OPAQUE)${NC}"
+echo -e "${BLUE}STEP 4: USER REGISTRATION TEST (OPAQUE)${NC}"
 echo "==========================================="
 echo
 echo -e "${CYAN}Test Credentials:${NC}"
@@ -280,7 +280,7 @@ else
 fi
 echo
 
-echo -e "${BLUE}📥 STEP 7: FILE DOWNLOAD & DECRYPTION TEST${NC}"
+echo -e "${BLUE}STEP 7: FILE DOWNLOAD & DECRYPTION TEST${NC}"
 echo "==========================================="
 echo
 
@@ -305,7 +305,7 @@ else
 fi
 echo
 
-echo -e "${BLUE}🔗 STEP 8: FILE SHARING TEST${NC}"
+echo -e "${BLUE}STEP 8: FILE SHARING TEST${NC}"
 echo "============================="
 echo
 
@@ -319,12 +319,12 @@ wait_for_user "1. Click 'Share' button for your uploaded file
 # Check for share records in database
 validate_backend "file_sharing" "" "sqlite3 /opt/arkfile/var/lib/database/arkfile.db \"SELECT COUNT(*) FROM file_share_keys fsk JOIN file_metadata fm ON fsk.file_id = fm.filename WHERE fm.owner_username='$TEST_USERNAME';\" 2>/dev/null" "File sharing record creation"
 
-echo -e "${BLUE}🔧 STEP 9: BACKEND VERIFICATION SUMMARY${NC}"
+echo -e "${BLUE}STEP 9: BACKEND VERIFICATION SUMMARY${NC}"
 echo "========================================"
 echo
 
 # Additional backend checks
-echo -e "${PURPLE}🔍 Performing comprehensive backend validation...${NC}"
+echo -e "${PURPLE}Performing comprehensive backend validation...${NC}"
 
 # Check key material
 validate_backend "opaque_keys" "server_private.key" "ls /opt/arkfile/etc/keys/opaque/" "OPAQUE server keys"
@@ -384,7 +384,7 @@ elif [ $TESTS_FAILED -le 2 ]; then
     echo -e "${YELLOW}║  Core functionality appears operational.                                     ║${NC}"
     echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo
-    echo -e "${BLUE}🔧 RECOMMENDED ACTIONS:${NC}"
+    echo -e "${BLUE}RECOMMENDED ACTIONS:${NC}"
     echo "• Review failed tests above and address issues"
     echo "• Run deployment validation: ./scripts/validate-deployment.sh"
     echo "• Check service logs: sudo journalctl -u arkfile"
@@ -409,7 +409,7 @@ else
 fi
 
 echo
-echo -e "${BLUE}📚 ADDITIONAL RESOURCES:${NC}"
+echo -e "${BLUE}ADDITIONAL RESOURCES:${NC}"
 echo "• Admin Testing Guide: docs/admin-testing-guide.md"
 echo "• Deployment Guide: docs/deployment-guide.md"
 echo "• Security Operations: docs/security-operations.md"

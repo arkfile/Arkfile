@@ -199,7 +199,7 @@ check_go_version() {
 
 # Enhanced dependency installation with fallbacks
 install_dependencies_universal() {
-    echo "📦 Installing dependencies on $OS..."
+    echo "Installing dependencies on $OS..."
     
     # Build the full package list
     local packages="$SODIUM_PKG $PKG_CONFIG_PKG $BUILD_TOOLS_PKG"

@@ -108,7 +108,7 @@ while [ $attempt -lt $max_attempts ]; do
         echo -e "${GREEN}[OK] Arkfile is running and responding${NC}"
         break
     fi
-    echo "  ⏳ Waiting for Arkfile to be ready... (attempt $((attempt + 1))/$max_attempts)"
+    echo "  Waiting for Arkfile to be ready... (attempt $((attempt + 1))/$max_attempts)"
     sleep 2
     attempt=$((attempt + 1))
 done
@@ -121,7 +121,7 @@ fi
 
 # Step 6: Display browser cleanup instructions
 echo
-echo -e "${RED}🔥 CRITICAL SECURITY NOTICE 🔥${NC}"
+echo -e "${RED}CRITICAL SECURITY NOTICE ${NC}"
 echo -e "${RED}═══════════════════════════════════════════════════════════${NC}"
 echo
 echo -e "${YELLOW}ALL EXISTING TOKENS HAVE BEEN INVALIDATED${NC}"

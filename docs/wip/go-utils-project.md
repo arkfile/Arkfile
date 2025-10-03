@@ -182,7 +182,7 @@ func handleUploadCommand(client *http.Client, config *ClientConfig, args []strin
 		return fmt.Errorf("failed to complete upload: %v", err)
 	}
 	
-	fmt.Printf("✅ Upload completed successfully\n")
+	fmt.Printf("Upload completed successfully\n")
 	fmt.Printf("File ID: %s\n", uploadSession.FileID)
 	
 	return nil
@@ -301,7 +301,7 @@ func detectPlatformAndInstallDeps(config *SetupConfig, opts *InstallOptions) (*P
 
 ```go
 func executeCompleteReinstall(config *SetupConfig, opts *ReinstallOptions, state *InstallationState) error {
-	fmt.Printf("💣 Complete Reinstall: Full system rebuild with optional data preservation\n")
+	fmt.Printf("Complete Reinstall: Full system rebuild with optional data preservation\n")
 	
 	var dataBackupDir string
 	
@@ -313,7 +313,7 @@ func executeCompleteReinstall(config *SetupConfig, opts *ReinstallOptions, state
 		if err := preserveDirectories(dataDirs, dataBackupDir); err != nil {
 			return fmt.Errorf("failed to preserve user data: %v", err)
 		}
-		fmt.Printf("📦 User data preserved\n")
+		fmt.Printf("User data preserved\n")
 	}
 	
 	// Stop services and remove installation
@@ -408,11 +408,11 @@ EXAMPLES:
 Example output:
 ```bash
 $ arkfile-admin backup --output backup.tar.gz
-⚠️  Using local implementation - server endpoint not yet available
-🔄 Creating system backup...
+️  Using local implementation - server endpoint not yet available
+Creating system backup...
 Output file: backup.tar.gz
 Base directory: /opt/arkfile
-⚠️  Backup functionality requires server endpoint implementation
+️  Backup functionality requires server endpoint implementation
 Would backup: config files, keys, database, user data
 ERROR: backup endpoint not yet implemented on server
 ```
@@ -447,24 +447,24 @@ GET  /api/admin/activity                 - Activity logs
 
 **Available Endpoints:**
 ```
-✅ POST /api/admin/login                         - Admin authentication
-✅ GET  /api/admin/credits                       - Credits management
-✅ GET  /api/admin/credits/:username             - User credits
-✅ POST /api/admin/credits/:username             - Adjust credits
-✅ PUT  /api/admin/credits/:username             - Set credits
-✅ POST /api/admin/dev-test/user/cleanup         - Test user cleanup (dev-test)
-✅ POST /api/admin/dev-test/user/:username/approve - Approve user (dev-test)
-✅ GET  /api/admin/dev-test/user/:username/status  - User status (dev-test)
-✅ GET  /api/admin/dev-test/totp/decrypt-check/:username - TOTP diagnostics (dev-test)
+POST /api/admin/login                         - Admin authentication
+GET  /api/admin/credits                       - Credits management
+GET  /api/admin/credits/:username             - User credits
+POST /api/admin/credits/:username             - Adjust credits
+PUT  /api/admin/credits/:username             - Set credits
+POST /api/admin/dev-test/user/cleanup         - Test user cleanup (dev-test)
+POST /api/admin/dev-test/user/:username/approve - Approve user (dev-test)
+GET  /api/admin/dev-test/user/:username/status  - User status (dev-test)
+GET  /api/admin/dev-test/totp/decrypt-check/:username - TOTP diagnostics (dev-test)
 ```
 
 #### Migration Strategy
 
 **Phase 1: Current State (Complete)**
-- ✅ Hybrid arkfile-admin implemented
-- ✅ Network commands use existing admin API
-- ✅ Local commands show clear "not implemented" warnings
-- ✅ AdminMiddleware enforces localhost-only security
+- Hybrid arkfile-admin implemented
+- Network commands use existing admin API
+- Local commands show clear "not implemented" warnings
+- AdminMiddleware enforces localhost-only security
 
 **Phase 2: Server Endpoint Implementation**
 - Implement missing `/api/admin/system/*` endpoints
@@ -598,7 +598,7 @@ EXAMPLES:
 
 ```go
 func (suite *IntegrationTestSuite) runAuthenticationFlowTests() error {
-	fmt.Printf("📋 Phase 2: Authentication Flow Testing\n")
+	fmt.Printf("Phase 2: Authentication Flow Testing\n")
 	
 	// Test 1: OPAQUE Registration and Authentication
 	suite.runTest("OPAQUE Authentication Flow", func() error {
@@ -620,7 +620,7 @@ func (suite *IntegrationTestSuite) runAuthenticationFlowTests() error {
 		return suite.testPasswordBasedFileEncryptionKeyDerivation()
 	})
 	
-	fmt.Printf("✅ Authentication flows validated\n\n")
+	fmt.Printf("Authentication flows validated\n\n")
 	return nil
 }
 ```
@@ -629,7 +629,7 @@ func (suite *IntegrationTestSuite) runAuthenticationFlowTests() error {
 
 ```go
 func (suite *IntegrationTestSuite) runFileOperationTests() error {
-	fmt.Printf("📋 Phase 3: File Operation Testing\n")
+	fmt.Printf("Phase 3: File Operation Testing\n")
 	
 	// Test 1: Large File Generation
 	suite.runTest("Test File Generation (100MB)", func() error {
@@ -656,7 +656,7 @@ func (suite *IntegrationTestSuite) runFileOperationTests() error {
 		return suite.testIntegrityVerification()
 	})
 	
-	fmt.Printf("✅ File operations validated\n\n")
+	fmt.Printf("File operations validated\n\n")
 	return nil
 }
 ```
@@ -849,11 +849,11 @@ This advanced tooling framework provides a complete ecosystem for Arkfile operat
 
 The following section contains historical implementation status and todos as of August 14, 2025, and August 16, 2025. For the current status regarding the Argon2ID encryption refactoring and OPAQUE protocol roles, please refer to `docs/wip/encrypt-cleanup.md`.
 
-### ✅ COMPLETED WORK (Historical)
+### COMPLETED WORK (Historical)
 
 #### Phase 4 - Basic Client Tools (PARTIAL COMPLETION)
 
-**✅ arkfile-client Implementation**
+**arkfile-client Implementation**
 - **File**: `cmd/arkfile-client/main.go` - **COMPLETED AND COMPILED**
 - **Status**: Full implementation with comprehensive command structure
 - **Features Implemented**:
@@ -866,32 +866,32 @@ The following section contains historical implementation status and todos as of 
   - Verbose logging and error handling
   - Cross-platform configuration management
 - **Binary Status**: Successfully compiles (arkfile-client binary exists)
-- **Static Linking Status**: ⚠️ **NOW STATIC** (confirmed static linking working)
+- **Static Linking Status**: ️ **NOW STATIC** (confirmed static linking working)
 
-**✅ arkfile-admin Implementation (HYBRID ARCHITECTURE)**
+**arkfile-admin Implementation (HYBRID ARCHITECTURE)**
 - **File**: `cmd/arkfile-admin/main.go` - **COMPLETED AND COMPILED**
 - **Status**: Hybrid network/local implementation fully complete
 - **Architecture**: 
   - **Network Commands**: Use existing admin API (localhost-only)
   - **Local Commands**: Show clear warnings + placeholder implementations
 - **Network Commands Implemented**:
-  - ✅ `login` - Admin OPAQUE+TOTP authentication
-  - ✅ `logout` - Session management
-  - ✅ `list-users` - User management (dev-test env)
-  - ✅ `approve-user` - User approval (dev-test env)
-  - ✅ `set-storage` - Credits/storage management
+  - `login` - Admin OPAQUE+TOTP authentication
+  - `logout` - Session management
+  - `list-users` - User management (dev-test env)
+  - `approve-user` - User approval (dev-test env)
+  - `set-storage` - Credits/storage management
 - **Local Commands Implemented** (with proper warning system):
-  - ✅ `backup` - Shows "server endpoint not yet available" warning
-  - ✅ `restore` - Shows "server endpoint not yet available" warning
-  - ✅ `monitor` - Shows "server endpoint not yet available" warning
-  - ✅ `audit` - Shows "server endpoint not yet available" warning
-  - ✅ `key-rotation` - Shows "server endpoint not yet available" warning
-  - ✅ `health-check` - Shows "server endpoint not yet available" warning
-  - ✅ `system-status` - Shows "server endpoint not yet available" warning
+  - `backup` - Shows "server endpoint not yet available" warning
+  - `restore` - Shows "server endpoint not yet available" warning
+  - `monitor` - Shows "server endpoint not yet available" warning
+  - `audit` - Shows "server endpoint not yet available" warning
+  - `key-rotation` - Shows "server endpoint not yet available" warning
+  - `health-check` - Shows "server endpoint not yet available" warning
+  - `system-status` - Shows "server endpoint not yet available" warning
 - **Binary Status**: Successfully compiles (arkfile-admin binary exists)
-- **Static Linking Status**: ⚠️ **NOW STATIC** (confirmed static linking working)
+- **Static Linking Status**: ️ **NOW STATIC** (confirmed static linking working)
 
-### ✅ RESOLVED - CRITICAL ISSUES (Historical)
+### RESOLVED - CRITICAL ISSUES (Historical)
 
 **TOKEN REFRESH ISSUE SUCCESSFULLY RESOLVED (Historical)**:
 
@@ -905,8 +905,8 @@ The critical refresh token validation failure in testing scripts has been resolv
 **Verification Results**:
 ```bash
 # Both testing scripts now pass completely
-./scripts/testing/admin-auth-test.sh       # 6/6 tests passing (including Test 6: Token Refresh) ✅
-./scripts/testing/test-app-curl.sh         # 10/10 phases passing (including Phase 7: Session Management) ✅
+./scripts/testing/admin-auth-test.sh       # 6/6 tests passing (including Test 6: Token Refresh) 
+./scripts/testing/test-app-curl.sh         # 10/10 phases passing (including Phase 7: Session Management) 
 ```
 
 **Database Fix Applied**:
@@ -915,15 +915,15 @@ The critical refresh token validation failure in testing scripts has been resolv
 - Implemented sliding window expiry (14-day extension on use)
 - Token rotation working correctly (revoke old token on refresh)
 
-### 📋 PHASE 4 REMAINING WORK (Historical)
+### PHASE 4 REMAINING WORK (Historical)
 
 #### cryptocli Integration Enhancement
-- **Status**: ⏳ **PARTIALLY IMPLEMENTED**
+- **Status**: **PARTIALLY IMPLEMENTED**
 - **File**: `cmd/cryptocli/main.go` exists but may need updates for client integration
 - **TODO**: Verify OPAQUE export key compatibility with arkfile-client (This task is now irrelevant, as OPAQUE export keys are not used for file encryption.)
 
 #### Client Tool Testing and Validation
-- **Status**: ⏳ **NOT YET TESTED**
+- **Status**: **NOT YET TESTED**
 - **Critical Requirement**: Must test with `sudo dev-reset.sh` + `test-app-curl.sh` workflow
 - **Validation Needed**:
   - arkfile-client authentication against running server
@@ -931,10 +931,10 @@ The critical refresh token validation failure in testing scripts has been resolv
   - Share creation functionality
   - Session persistence and token management
 
-### 📋 PHASE 5 REMAINING WORK (Administrative Tools - Historical)
+### PHASE 5 REMAINING WORK (Administrative Tools - Historical)
 
 #### arkfile-admin Server Endpoint Implementation
-- **Status**: ⏳ **SERVER ENDPOINTS NOT YET IMPLEMENTED**
+- **Status**: **SERVER ENDPOINTS NOT YET IMPLEMENTED**
 - **Required Server Endpoints** (to be added to main server):
   ```
   GET  /api/admin/system/status            - System metrics and status
@@ -950,7 +950,7 @@ The critical refresh token validation failure in testing scripts has been resolv
 - **File**: `cmd/arkfile-setup/main.go`
 - **Scope**: Cross-platform installation and management tool
 
-### 📋 VALIDATION REQUIREMENTS (Historical)
+### VALIDATION REQUIREMENTS (Historical)
 
 **Success Criteria for Phase 4 Completion**:
 - arkfile-client can authenticate and perform file operations
@@ -958,14 +958,14 @@ The critical refresh token validation failure in testing scripts has been resolv
 - dev-reset + test-app-curl.sh workflow remains intact
 - No regressions in existing functionality
 
-### 📋 ARCHITECTURE DECISIONS MADE (Historical)
+### ARCHITECTURE DECISIONS MADE (Historical)
 
 1. **Hybrid arkfile-admin Approach**: Decided to implement network commands first using existing admin API, with local commands showing clear warnings until server endpoints are implemented
 2. **Security Model**: AdminMiddleware enforces localhost-only access for admin operations
 3. **Warning System**: Local commands provide clear feedback about missing server endpoints
 4. **Session Management**: Both tools use file-based session persistence in user home directory
 
-### 📋 FILES TO MONITOR (Historical)
+### FILES TO MONITOR (Historical)
 
 **Completed and Ready**:
 - `cmd/arkfile-client/main.go` - Full implementation, needs testing
@@ -973,7 +973,7 @@ The critical refresh token validation failure in testing scripts has been resolv
 - `docs/wip/go-utils-project.md` - Updated with current status
 
 **Needs Attention**:
-- Static linking configuration for Go tools (RESOLVED ✅)
+- Static linking configuration for Go tools (RESOLVED )
 - Server endpoint implementation for arkfile-admin local commands
 - Integration testing with existing infrastructure
 
@@ -1055,11 +1055,11 @@ func AdminSystemHealth(c echo.Context) error { /* NEW - bridge to monitoring pac
 
 ### RECOMMENDATION
 
-**❌ HALT all go-integration2.md planning until this server endpoint gap is closed**
+**HALT all go-integration2.md planning until this server endpoint gap is closed**
 
 The integration test would be testing a **fundamentally incomplete system**. We cannot validate admin operations that don't exist on the server side.
 
-**✅ PRIORITY**: Implement missing server endpoints as **PHASE 0** before any integration testing work begins.
+**PRIORITY**: Implement missing server endpoints as **PHASE 0** before any integration testing work begins.
 
 ### FILES REQUIRING IMMEDIATE ATTENTION
 
@@ -1072,16 +1072,16 @@ The integration test would be testing a **fundamentally incomplete system**. We 
 
 ---
 
-## 🎯 ADMIN ENDPOINT ARCHITECTURE PLAN (Historical - August 19, 2025)
+## ADMIN ENDPOINT ARCHITECTURE PLAN (Historical - August 19, 2025)
 
 ### SECURITY FRAMEWORK FOR ALL ADMIN ENDPOINTS
 
 **Base Security Requirements (ALL endpoints)**:
-- ✅ Rate limited (10 requests/minute via AdminMiddleware)
-- ✅ Require admin privileges (`user.HasAdminPrivileges()`)
-- ✅ JWT authentication required
-- ✅ Available to localhost only (`AdminMiddleware` enforcement)
-- ✅ Security event logging (privacy-preserving)
+- Rate limited (10 requests/minute via AdminMiddleware)
+- Require admin privileges (`user.HasAdminPrivileges()`)
+- JWT authentication required
+- Available to localhost only (`AdminMiddleware` enforcement)
+- Security event logging (privacy-preserving)
 
 ### ENDPOINT CATEGORIZATION AND IMPLEMENTATION PLAN
 
@@ -1094,10 +1094,10 @@ The integration test would be testing a **fundamentally incomplete system**. We 
 - `GET /api/admin/user/:username/status` - **MIGRATE** from `/api/admin/dev-test/user/:username/status`
 
 **Credits System (Already implemented)**:
-- `GET /api/admin/credits` ✅
-- `GET /api/admin/credits/:username` ✅ 
-- `POST /api/admin/credits/:username` ✅
-- `PUT /api/admin/credits/:username` ✅
+- `GET /api/admin/credits` 
+- `GET /api/admin/credits/:username` 
+- `POST /api/admin/credits/:username` 
+- `PUT /api/admin/credits/:username` 
 
 **System Operations (NEW - Bridge existing monitoring infrastructure)**:
 - `GET /api/admin/system/health` - **NEW** - Wire `monitoring/health_endpoints.go`
@@ -1190,13 +1190,13 @@ adminGroup.POST("/system/rotate-keys", AdminSystemRotateKeys) // NEW
 
 #### **arkfile-admin Command Mapping**
 **After Implementation**:
-- `arkfile-admin approve-user` → `POST /api/admin/user/:username/approve` ✅
-- `arkfile-admin system-status` → `GET /api/admin/user/:username/status` ✅  
-- `arkfile-admin health-check` → `GET /api/admin/system/health` ✅
-- `arkfile-admin audit` → `GET /api/admin/audit/security-events` ✅
-- `arkfile-admin backup` → `POST /api/admin/system/backup` ✅
-- `arkfile-admin restore` → `POST /api/admin/system/restore` ✅
-- `arkfile-admin key-rotation` → `POST /api/admin/system/rotate-keys` ✅
+- `arkfile-admin approve-user` → `POST /api/admin/user/:username/approve` 
+- `arkfile-admin system-status` → `GET /api/admin/user/:username/status`  
+- `arkfile-admin health-check` → `GET /api/admin/system/health` 
+- `arkfile-admin audit` → `GET /api/admin/audit/security-events` 
+- `arkfile-admin backup` → `POST /api/admin/system/backup` 
+- `arkfile-admin restore` → `POST /api/admin/system/restore` 
+- `arkfile-admin key-rotation` → `POST /api/admin/system/rotate-keys` 
 
 #### **Testing Integration**
 - All admin operations can be validated in integration tests

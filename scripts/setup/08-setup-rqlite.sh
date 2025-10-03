@@ -43,9 +43,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-echo -e "${BLUE}🗄️  Setting up rqlite cluster database v${VERSION}...${NC}"
+echo -e "${BLUE}️  Setting up rqlite cluster database v${VERSION}...${NC}"
 echo
-echo -e "${BLUE}🔧 rqlite Database Installation${NC}"
+echo -e "${BLUE}rqlite Database Installation${NC}"
 echo "This will download and install rqlite binaries for distributed database clusters."
 echo "Suitable for both development and production deployments."
 echo
@@ -88,7 +88,7 @@ CACHED_SHA256="${CACHE_DIR}/rqlite-v${VERSION}-linux-amd64.tar.gz.sha256"
 if [ -f "$CACHED_FILE" ] && [ -f "$CACHED_SHA256" ] && [ "$FORCE_DOWNLOAD" != true ]; then
     echo -e "${GREEN}[OK] Using cached rqlite v${VERSION}${NC}"
 else
-    echo -e "${YELLOW}📥 Downloading rqlite v${VERSION} with security verification...${NC}"
+    echo -e "${YELLOW}Downloading rqlite v${VERSION} with security verification...${NC}"
     
     # Try to download SHA256 checksum first (likely to fail for rqlite)
     echo "Attempting to download SHA256 checksum..."
@@ -203,7 +203,7 @@ fi
 echo -e "${YELLOW}[WARNING]  PGP signature verification not available for rqlite releases${NC}"
 
 # Install the binaries
-echo -e "${BLUE}📦 Installing rqlite binaries...${NC}"
+echo -e "${BLUE}Installing rqlite binaries...${NC}"
 TEMP_DIR=$(mktemp -d)
 tar xzf "${CACHED_FILE}" -C "${TEMP_DIR}"
 

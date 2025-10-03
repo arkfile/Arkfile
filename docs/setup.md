@@ -138,7 +138,7 @@ sudo ./scripts/setup/08-setup-rqlite.sh
 ./scripts/setup/deploy.sh prod
 ```
 
-## ⚠️ CRITICAL PRODUCTION SECURITY NOTICE
+## ️ CRITICAL PRODUCTION SECURITY NOTICE
 
 ### Dev Admin Accounts
 The following accounts are **DEVELOPMENT ONLY** and are automatically blocked in production:
@@ -479,16 +479,16 @@ echo "Hello Arkfile! Test file for validation." > ~/test-file.txt
 - Open your web browser
 - Navigate to: `http://localhost:8080` (or your configured address)
 - You should see the Arkfile login/registration page
-- ✅ **Expected**: Clean web interface with Register/Login options
-- ❌ **If page doesn't load**: Check if Arkfile service is running
+- **Expected**: Clean web interface with Register/Login options
+- **If page doesn't load**: Check if Arkfile service is running
 
 **Step 2: User Registration**
 - Click the 'Register' button  
 - Enter username: `admin-test-user`
 - Enter password: `TestPassword123_Secure`
 - Click 'Create Account'
-- ✅ **Expected**: Registration success message and redirect to dashboard
-- ❌ **If registration fails**:
+- **Expected**: Registration success message and redirect to dashboard
+- **If registration fails**:
   - Check password meets requirements (18+ chars, high entropy)
   - Verify database is writable
   - Check browser console for JavaScript errors
@@ -497,8 +497,8 @@ echo "Hello Arkfile! Test file for validation." > ~/test-file.txt
 - Look for an 'Upload File' button or drag-and-drop area
 - Upload your test file: `~/test-file.txt`
 - Wait for upload to complete
-- ✅ **Expected**: File appears in your file list with an encrypted/lock icon
-- ❌ **If upload fails**:
+- **Expected**: File appears in your file list with an encrypted/lock icon
+- **If upload fails**:
   - Check MinIO service is running: `sudo systemctl status minio`
   - Verify file permissions in `/opt/arkfile/var/lib/`
   - Check browser console for upload errors
@@ -508,8 +508,8 @@ echo "Hello Arkfile! Test file for validation." > ~/test-file.txt
 - File should download automatically
 - Open the downloaded file in a text editor
 - Verify content matches: `Hello Arkfile! Test file for validation.`
-- ✅ **Expected**: Downloaded file content exactly matches original
-- ❌ **If content differs or download fails**:
+- **Expected**: Downloaded file content exactly matches original
+- **If content differs or download fails**:
   - File encryption/decryption may be broken
   - Check application logs: `sudo journalctl -u arkfile -f`
   - Verify cryptographic keys are properly generated
@@ -521,8 +521,8 @@ echo "Hello Arkfile! Test file for validation." > ~/test-file.txt
 - Open an incognito/private browser window
 - Paste the share link in the incognito window
 - File should download without requiring login
-- ✅ **Expected**: File downloads in incognito mode without authentication
-- ❌ **If sharing fails**:
+- **Expected**: File downloads in incognito mode without authentication
+- **If sharing fails**:
   - Share link generation may be broken
   - Check if anonymous access is properly configured
   - Verify share tokens are being generated correctly
@@ -531,8 +531,8 @@ echo "Hello Arkfile! Test file for validation." > ~/test-file.txt
 - In your original browser window, log out of Arkfile
 - Log back in using the same credentials
 - Verify your uploaded file is still visible in the file list
-- ✅ **Expected**: Login successful, files persistent across sessions
-- ❌ **If login fails**:
+- **Expected**: Login successful, files persistent across sessions
+- **If login fails**:
   - OPAQUE authentication may be broken
   - Check database integrity
   - Verify session management is working
@@ -806,7 +806,7 @@ curl http://localhost:8080/health
 
 ### Success Criteria
 
-✅ **System is ready when:**
+**System is ready when:**
 - All services show "active (running)" status
 - Health endpoint returns "healthy" for all checks
 - User can register with OPAQUE authentication

@@ -107,17 +107,17 @@ function setupMockWASMFunctions(): void {
         return 'Failed: Unknown error';
     };
     
-    console.log('✅ Mock WASM functions setup complete');
+    console.log('Mock WASM functions setup complete');
 }
 
 async function runWasmTests(): Promise<void> {
-    console.log('🚀 Starting Arkfile WASM Tests (Bun Runtime)\n');
+    console.log('Starting Arkfile WASM Tests (Bun Runtime)\n');
     
     try {
         // Check if WASM file exists
         const wasmPath = join(import.meta.dir, '..', '..', '..', 'static', 'main.wasm');
         if (!existsSync(wasmPath)) {
-            console.log('❌ WASM file not found. Please build first with:');
+            console.log('WASM file not found. Please build first with:');
             console.log('   cd client && GOOS=js GOARCH=wasm go build -o static/main.wasm .');
             console.log('🧪 Using mock WASM functions for testing...\n');
             setupMockWASMFunctions();
@@ -128,7 +128,7 @@ async function runWasmTests(): Promise<void> {
             // Load wasm_exec.js for Go runtime
             const wasmExecPath = join(import.meta.dir, '..', '..', '..', 'wasm_exec.js');
             if (!existsSync(wasmExecPath)) {
-                console.error('❌ wasm_exec.js not found');
+                console.error('wasm_exec.js not found');
                 throw new Error('wasm_exec.js not found');
             }
             
@@ -151,14 +151,14 @@ async function runWasmTests(): Promise<void> {
             
             // Check if WASM functions are available
             if (typeof globalThis.encryptFile === 'undefined') {
-                console.error('❌ WASM functions not available. Module may not have loaded correctly.');
+                console.error('WASM functions not available. Module may not have loaded correctly.');
                 throw new Error('WASM functions not available');
             }
             
-            console.log('✅ WASM module loaded successfully\n');
+            console.log('WASM module loaded successfully\n');
         }
         
-        console.log('📋 Running TypeScript integration tests...\n');
+        console.log('Running TypeScript integration tests...\n');
         
         // Test basic functions
         testBasicEncryption();
@@ -169,7 +169,7 @@ async function runWasmTests(): Promise<void> {
         if (typeof globalThis.encryptFileMultiKey !== 'undefined') {
             testMultiKeyEncryption();
         } else {
-            console.log('⏭️  Multi-key encryption tests skipped - functions not available');
+            console.log('️  Multi-key encryption tests skipped - functions not available');
         }
         
         testWrongPassword();
@@ -178,7 +178,7 @@ async function runWasmTests(): Promise<void> {
         
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(`💥 Error running tests: ${errorMessage}`);
+        console.error(`Error running tests: ${errorMessage}`);
         throw error;
     }
 }
@@ -198,7 +198,7 @@ function testBasicEncryption(): void {
         throw new Error('Decryption did not return a string');
     }
     
-    console.log('✅ Basic encryption test passed');
+    console.log('Basic encryption test passed');
 }
 
 function testSaltGeneration(): void {
@@ -214,7 +214,7 @@ function testSaltGeneration(): void {
         throw new Error('Salt generation is not producing unique values');
     }
     
-    console.log('✅ Salt generation test passed');
+    console.log('Salt generation test passed');
 }
 
 function testSessionKeyDerivation(): void {
@@ -233,7 +233,7 @@ function testSessionKeyDerivation(): void {
         throw new Error('Session key derivation is not deterministic');
     }
     
-    console.log('✅ Session key derivation test passed');
+    console.log('Session key derivation test passed');
 }
 
 function testMultiKeyEncryption(): void {
@@ -256,7 +256,7 @@ function testMultiKeyEncryption(): void {
         throw new Error(`Multi-key decryption with primary password failed: ${decrypted1}`);
     }
     
-    console.log('✅ Multi-key encryption test passed');
+    console.log('Multi-key encryption test passed');
 }
 
 function testWrongPassword(): void {
@@ -270,9 +270,9 @@ function testWrongPassword(): void {
     
     // For mock functions, we expect wrong password to return 'Failed:'
     if (typeof decrypted === 'string' && decrypted.includes('Failed')) {
-        console.log('✅ Wrong password test passed');
+        console.log('Wrong password test passed');
     } else {
-        console.log('⚠️  Wrong password test: mock doesn\'t simulate password validation');
+        console.log(' Wrong password test: mock doesn\'t simulate password validation');
     }
 }
 

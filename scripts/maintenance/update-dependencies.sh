@@ -83,7 +83,7 @@ check_for_updates() {
     local minio_updates=false
     local go_updates=false
     
-    echo -e "${BLUE}🔍 Checking for available updates...${NC}"
+    echo -e "${BLUE}Checking for available updates...${NC}"
     echo
     
     # Run the check-updates script and capture output
@@ -91,15 +91,15 @@ check_for_updates() {
         echo "$check_output"
         
         # Parse output to determine what updates are available
-        if echo "$check_output" | grep -q "^  rqlite:.*⬆️"; then
+        if echo "$check_output" | grep -q "^  rqlite:.*️"; then
             rqlite_updates=true
         fi
         
-        if echo "$check_output" | grep -q "^  MinIO:.*⬆️"; then
+        if echo "$check_output" | grep -q "^  MinIO:.*️"; then
             minio_updates=true
         fi
         
-        if echo "$check_output" | grep -q "Go Module Updates:" || echo "$check_output" | grep -q "⬆️.*patch)"; then
+        if echo "$check_output" | grep -q "Go Module Updates:" || echo "$check_output" | grep -q "️.*patch)"; then
             go_updates=true
         fi
         
@@ -193,7 +193,7 @@ handle_choice() {
             ;;
         "$RQLITE_OPTION")
             if [[ -n "$RQLITE_OPTION" ]]; then
-                echo -e "${BLUE}🔧 Updating rqlite...${NC}"
+                echo -e "${BLUE}Updating rqlite...${NC}"
                 if "$SCRIPT_DIR/setup-rqlite.sh"; then
                     echo -e "${GREEN}[OK] rqlite updated successfully${NC}"
                 else
@@ -205,7 +205,7 @@ handle_choice() {
             ;;
         "$MINIO_OPTION")
             if [[ -n "$MINIO_OPTION" ]]; then
-                echo -e "${BLUE}🔧 Updating MinIO...${NC}"
+                echo -e "${BLUE}Updating MinIO...${NC}"
                 if "$SCRIPT_DIR/setup-minio.sh"; then
                     echo -e "${GREEN}[OK] MinIO updated successfully${NC}"
                 else
@@ -217,7 +217,7 @@ handle_choice() {
             ;;
         "$GO_OPTION")
             if [[ -n "$GO_OPTION" ]]; then
-                echo -e "${BLUE}🔧 Starting Go module updater...${NC}"
+                echo -e "${BLUE}Starting Go module updater...${NC}"
                 "$SCRIPT_DIR/update-go-deps.sh"
             else
                 echo "Invalid choice"
@@ -225,7 +225,7 @@ handle_choice() {
             ;;
         "$ALL_SYSTEM_OPTION")
             if [[ -n "$ALL_SYSTEM_OPTION" ]]; then
-                echo -e "${BLUE}🔧 Updating all system dependencies...${NC}"
+                echo -e "${BLUE}Updating all system dependencies...${NC}"
                 local success=true
                 
                 if [[ "$RQLITE_UPDATES" == "true" ]]; then
@@ -253,7 +253,7 @@ handle_choice() {
             ;;
         "$ALL_OPTION")
             if [[ -n "$ALL_OPTION" ]]; then
-                echo -e "${BLUE}🔧 Updating all dependencies...${NC}"
+                echo -e "${BLUE}Updating all dependencies...${NC}"
                 
                 # Update system dependencies first
                 if [[ "$RQLITE_UPDATES" == "true" || "$MINIO_UPDATES" == "true" ]]; then
@@ -272,7 +272,7 @@ handle_choice() {
             ;;
         "$RECHECK_OPTION")
             if [[ -n "$RECHECK_OPTION" ]]; then
-                echo -e "${BLUE}🔄 Rechecking for updates...${NC}"
+                echo -e "${BLUE}Rechecking for updates...${NC}"
                 main
                 return
             else
@@ -334,7 +334,7 @@ main() {
     if check_for_updates; then
         if [[ "$CHECK_ONLY" == "true" ]]; then
             echo
-            echo -e "${YELLOW}💡 Run without --check to use interactive updater${NC}"
+            echo -e "${YELLOW}Run without --check to use interactive updater${NC}"
         else
             interactive_mode
         fi

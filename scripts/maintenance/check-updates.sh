@@ -140,7 +140,7 @@ check_rqlite() {
         local icon
         case $status in
             "up_to_date") icon="[OK]" ;;
-            "update_available") icon="⬆️ " ;;
+            "update_available") icon="️ " ;;
             "error") icon="[X]" ;;
         esac
         printf "  %-10s %s → %s %s\n" "rqlite:" "$current" "$latest" "$icon"
@@ -174,7 +174,7 @@ check_minio() {
         local icon
         case $status in
             "up_to_date") icon="[OK]" ;;
-            "update_available") icon="⬆️ " ;;
+            "update_available") icon="️ " ;;
             "error") icon="[X]" ;;
         esac
         printf "  %-10s %s → %s %s\n" "MinIO:" "$current" "$latest" "$icon"
@@ -214,7 +214,7 @@ check_go_modules() {
         while IFS=' ' read -r module current latest indirect; do
             if [[ "$current" != "$latest" && -n "$latest" && "$latest" != "$current" ]]; then
                 if [[ "$updates_found" == "false" ]]; then
-                    echo -e "${CYAN}📦 Go Module Updates:${NC}"
+                    echo -e "${CYAN}Go Module Updates:${NC}"
                     updates_found=true
                 fi
                 
@@ -233,12 +233,12 @@ check_go_modules() {
                     fi
                 fi
                 
-                printf "  %-35s %s → %s ⬆️  (%s)\n" "$module:" "$current" "$latest" "$update_type"
+                printf "  %-35s %s → %s ️  (%s)\n" "$module:" "$current" "$latest" "$update_type"
             fi
         done < <(go list -u -m all 2>/dev/null | grep -v "^$(go list -m)$")
         
         if [[ "$updates_found" == "false" ]]; then
-            echo -e "${CYAN}📦 Go Modules:${NC}"
+            echo -e "${CYAN}Go Modules:${NC}"
             echo "  All modules up to date [OK]"
         fi
     fi
@@ -268,11 +268,11 @@ main() {
         echo "\"check_complete\": true"
         echo "}"
     else
-        echo -e "${BLUE}🔍 Checking Arkfile Dependencies...${NC}"
+        echo -e "${BLUE}Checking Arkfile Dependencies...${NC}"
         echo
         
         if [[ "$CHECK_RQLITE" == "true" || "$CHECK_MINIO" == "true" ]]; then
-            echo -e "${CYAN}📦 System Dependencies:${NC}"
+            echo -e "${CYAN}System Dependencies:${NC}"
             
             if [[ "$CHECK_RQLITE" == "true" ]]; then
                 check_rqlite
@@ -289,7 +289,7 @@ main() {
         
         # Show update commands if any updates are available
         echo
-        echo -e "${YELLOW}💡 To update dependencies:${NC}"
+        echo -e "${YELLOW}To update dependencies:${NC}"
         
         if [[ "$CHECK_RQLITE" == "true" ]]; then
             echo "  ./scripts/setup-rqlite.sh     # Update rqlite"

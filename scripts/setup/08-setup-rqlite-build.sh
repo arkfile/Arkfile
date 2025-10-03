@@ -372,7 +372,7 @@ check_existing_installation() {
 
 # Clone or update source
 setup_source() {
-    echo -e "${BLUE}📥 Setting up rqlite source code...${NC}"
+    echo -e "${BLUE}Setting up rqlite source code...${NC}"
     
     # Cache directory should already exist from 02-setup-directories.sh
     if [ ! -d "${CACHE_DIR}" ]; then
@@ -524,7 +524,7 @@ build_rqlite() {
 
 # Install binaries
 install_binaries() {
-    echo -e "${BLUE}📦 Installing rqlite binaries...${NC}"
+    echo -e "${BLUE}Installing rqlite binaries...${NC}"
     
     # Install with proper permissions
     sudo install -m 755 "${BUILD_DIR}/rqlited" /usr/local/bin/
@@ -622,7 +622,7 @@ main() {
         echo "   rqlite -H localhost:4001 'SELECT 1'"
     fi
     echo
-    echo -e "${BLUE}💡 Tips:${NC}"
+    echo -e "${BLUE}Tips:${NC}"
     echo "• Source code cached at: ${SOURCE_DIR}"
     echo "• To rebuild: $0 --force"
     echo "• To clean cache: rm -rf ${CACHE_DIR}"
