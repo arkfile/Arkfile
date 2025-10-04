@@ -228,6 +228,10 @@ if [ -d "$ARKFILE_DIR" ]; then
     rm -rf "$ARKFILE_DIR/etc/keys/opaque"* 2>/dev/null || true
     rm -f "$ARKFILE_DIR/etc/keys/totp_master.key" 2>/dev/null || true
     
+    # Delete old client static files (including stale TypeScript builds)
+    print_status "INFO" "Nuking old client static files..."
+    rm -rf "$ARKFILE_DIR/client/static/js/dist"* 2>/dev/null || true
+    
     print_status "SUCCESS" "Data and secrets destroyed"
 else
     print_status "WARNING" "Arkfile directory not found, skipping data destruction"
@@ -297,6 +301,11 @@ fi
 export VERSION="$FALLBACK_VERSION"
 export SKIP_C_LIBS="$SKIP_C_LIBS"
 
+# Force fresh TypeScript rebuild by removing build cache AND dist directory
+print_status "INFO" "Forcing fresh TypeScript rebuild..."
+rm -f client/static/js/.buildcache
+rm -rf client/static/js/dist/*
+
 # Clean build artifacts to prevent directory conflicts
 print_status "INFO" "Removing any existing build artifacts to ensure clean build..."
 if [ -d "build" ]; then
@@ -316,6 +325,13 @@ fi
 
 # Fix ownership after build as well
 fix_go_ownership
+
+# Deploy the build artifacts to /opt/arkfile
+print_status "INFO" "Deploying build artifacts to $ARKFILE_DIR..."
+if ! ./scripts/setup/deploy.sh; then
+    print_status "ERROR" "Deployment script failed - this is CRITICAL"
+    exit 1
+fi
 
 print_status "SUCCESS" "Application build and deployment complete"
 
@@ -348,58 +364,7 @@ fi
 print_status "SUCCESS" "Critical file verification complete"
 echo
 
-# Step 4: Update systemd service file and ensure directory structure
-echo -e "${CYAN}Step 4: Updating systemd service file${NC}"
-echo "======================================"
-
-print_status "INFO" "Checking systemd service file consistency..."
-
-# Define paths
-REPO_SERVICE_FILE="systemd/arkfile.service"
-SYSTEM_SERVICE_FILE="/etc/systemd/system/arkfile.service"
-
-# Check if repository service file exists
-if [ ! -f "$REPO_SERVICE_FILE" ]; then
-    print_status "ERROR" "Repository service file not found: $REPO_SERVICE_FILE"
-    exit 1
-fi
-
-# Check if system service file needs updating
-needs_update=false
-daemon_reload_needed=false
-
-if [ ! -f "$SYSTEM_SERVICE_FILE" ]; then
-    print_status "INFO" "System service file does not exist, will create it"
-    needs_update=true
-    daemon_reload_needed=true
-else
-    # Compare files to see if they differ
-    if ! cmp -s "$REPO_SERVICE_FILE" "$SYSTEM_SERVICE_FILE"; then
-        print_status "INFO" "System service file differs from repository version, will update it"
-        needs_update=true
-        daemon_reload_needed=true
-    else
-        print_status "SUCCESS" "System service file is up to date"
-    fi
-fi
-
-# Update service file if needed
-if [ "$needs_update" = true ]; then
-    print_status "INFO" "Copying updated service file to system location..."
-    cp "$REPO_SERVICE_FILE" "$SYSTEM_SERVICE_FILE"
-    print_status "SUCCESS" "Service file updated"
-fi
-
-# Reload systemd daemon if needed
-if [ "$daemon_reload_needed" = true ]; then
-    print_status "INFO" "Reloading systemd daemon..."
-    systemctl daemon-reload
-    print_status "SUCCESS" "Systemd daemon reloaded"
-fi
-
-print_status "SUCCESS" "Systemd service file verification complete"
-
-echo -e "${CYAN}Step 5: Ensuring directory structure${NC}"
+echo -e "${CYAN}Step 4: Ensuring directory structure${NC}"
 echo "======================================"
 
 # Ensure all directories exist before trying to write files
@@ -422,8 +387,8 @@ chmod 775 "$ARKFILE_DIR/var/log"
 print_status "SUCCESS" "Log directory configured at $ARKFILE_DIR/var/log"
 echo
 
-# Step 6: Generate fresh secrets
-echo -e "${CYAN}Step 6: Generating fresh secrets${NC}"
+# Step 5: Generate fresh secrets
+echo -e "${CYAN}Step 5: Generating fresh secrets${NC}"
 echo "================================="
 
 # Generate random JWT secret for security
@@ -498,8 +463,8 @@ print_status "SUCCESS" "Fresh rqlite authentication created"
 print_status "SUCCESS" "Secret generation complete"
 echo
 
-# Step 7: Generate cryptographic keys
-echo -e "${CYAN}Step 7: Generate cryptographic keys${NC}"
+# Step 6: Generate cryptographic keys
+echo -e "${CYAN}Step 6: Generate cryptographic keys${NC}"
 echo "====================================="
 
 # Generate OPAQUE server keys
@@ -537,8 +502,8 @@ print_status "SUCCESS" "TLS certificates generated"
 print_status "SUCCESS" "Cryptographic key generation complete"
 echo
 
-# Step 8: Setup MinIO and rqlite
-echo -e "${CYAN}Step 8: Setting up MinIO and rqlite${NC}"
+# Step 7: Setup MinIO and rqlite
+echo -e "${CYAN}Step 7: Setting up MinIO and rqlite${NC}"
 echo "==================================="
 
 # Setup MinIO directories and service
@@ -549,8 +514,8 @@ if ! ./scripts/setup/07-setup-minio.sh; then
 fi
 print_status "SUCCESS" "MinIO setup complete"
 
-# Setup rqlite service
-print_status "INFO" "Setting up rqlite..."
+# Setup rqlite service (using build-from-source approach)
+print_status "INFO" "Setting up rqlite (build from source)..."
 if ! ./scripts/setup/08-setup-rqlite-build.sh; then
     print_status "ERROR" "rqlite setup failed - this is CRITICAL"
     exit 1
@@ -558,8 +523,8 @@ fi
 print_status "SUCCESS" "rqlite setup complete"
 echo
 
-# Step 9: Start services
-echo -e "${CYAN}Step 9: Starting services${NC}"
+# Step 8: Start services
+echo -e "${CYAN}Step 8: Starting services${NC}"
 echo "========================="
 
 # Install/update systemd service file
@@ -627,8 +592,8 @@ else
 fi
 echo
 
-# Step 10: Health verification
-echo -e "${CYAN}Step 10: Health verification${NC}"
+# Step 9: Health verification
+echo -e "${CYAN}Step 9: Health verification${NC}"
 echo "============================"
 
 # Wait for Arkfile to be ready

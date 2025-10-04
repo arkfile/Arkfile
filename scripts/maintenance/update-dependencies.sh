@@ -61,8 +61,8 @@ check_scripts() {
         missing_scripts+=("update-go-deps.sh")
     fi
     
-    if [[ ! -f "$SCRIPT_DIR/setup-rqlite.sh" ]]; then
-        missing_scripts+=("setup-rqlite.sh")
+    if [[ ! -f "$SCRIPT_DIR/setup-rqlite-build.sh" ]]; then
+        missing_scripts+=("setup-rqlite-build.sh")
     fi
     
     if [[ ! -f "$SCRIPT_DIR/setup-minio.sh" ]]; then
@@ -194,7 +194,7 @@ handle_choice() {
         "$RQLITE_OPTION")
             if [[ -n "$RQLITE_OPTION" ]]; then
                 echo -e "${BLUE}Updating rqlite...${NC}"
-                if "$SCRIPT_DIR/setup-rqlite.sh"; then
+                if "$SCRIPT_DIR/setup-rqlite-build.sh"; then
                     echo -e "${GREEN}[OK] rqlite updated successfully${NC}"
                 else
                     echo -e "${RED}[X] rqlite update failed${NC}"
@@ -230,7 +230,7 @@ handle_choice() {
                 
                 if [[ "$RQLITE_UPDATES" == "true" ]]; then
                     echo -e "${CYAN}Updating rqlite...${NC}"
-                    if ! "$SCRIPT_DIR/setup-rqlite.sh"; then
+                    if ! "$SCRIPT_DIR/setup-rqlite-build.sh"; then
                         success=false
                     fi
                 fi

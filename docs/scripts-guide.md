@@ -133,11 +133,13 @@ The setup scripts are numbered to show their logical dependency order:
 **Dependencies**: Directories  
 **Creates**: MinIO configuration and systemd service
 
-#### `08-setup-rqlite.sh`
-**Purpose**: Configure rqlite database  
-**Usage**: `sudo ./scripts/setup/08-setup-rqlite.sh`  
-**Dependencies**: Directories  
-**Creates**: rqlite configuration and systemd service
+#### `08-setup-rqlite-build.sh`
+**Purpose**: Build and configure rqlite database from source  
+**Usage**: `sudo ./scripts/setup/08-setup-rqlite-build.sh`  
+**Dependencies**: Directories, Go compiler  
+**Creates**: rqlite binary (built from source), configuration, and systemd service
+
+**Note**: This script builds rqlite from source to ensure compatibility and latest features. The older `08-setup-rqlite.sh` downloads pre-built binaries and is kept for compatibility but `08-setup-rqlite-build.sh` is now the recommended approach.
 
 #### Other Setup Scripts
 
@@ -178,9 +180,6 @@ The setup scripts are numbered to show their logical dependency order:
 ```bash
 # Run full application test
 ./scripts/testing/test-app-curl.sh
-
-# Quick mode
-./scripts/testing/test-app-curl.sh --quick
 
 # Debug mode  
 ./scripts/testing/test-app-curl.sh --debug
@@ -344,7 +343,7 @@ go build -o totp-generator totp-generator.go
 
 # Then services
 sudo ./scripts/setup/07-setup-minio.sh
-sudo ./scripts/setup/08-setup-rqlite.sh
+sudo ./scripts/setup/08-setup-rqlite-build.sh
 
 # Start services
 sudo systemctl start arkfile
@@ -446,12 +445,3 @@ When adding new scripts:
 3. Include comprehensive error handling
 4. Add usage documentation
 5. Update this guide
-
-## Deprecated Scripts
-
-Scripts in `deprecated/` are preserved for safety but should not be used:
-
-- `first-time-setup.sh` - Use `quick-start.sh` instead
-- `generate-keys.sh` - Use individual key setup scripts
-
-These will be removed in a future version after confirming no dependencies exist.

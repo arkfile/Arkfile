@@ -10,8 +10,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "noEmit": false,
-    "outDir": "./client/static/js/dist",
+    "noEmit": true,
     "rootDir": "./client/static/js/src",
     "noImplicitAny": true,
     "strictNullChecks": true,
@@ -20,7 +19,6 @@
     "noUnusedParameters": false,
     "exactOptionalPropertyTypes": true,
     "sourceMap": true,
-    "declaration": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true
   },

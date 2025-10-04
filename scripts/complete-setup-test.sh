@@ -792,7 +792,7 @@ if [ "$FULL_SETUP" = true ]; then
         echo "   sudo ./scripts/setup/07-setup-minio.sh"
         echo "   "
         echo "   # Set up rqlite database cluster"
-        echo "   sudo ./scripts/setup/08-setup-rqlite.sh"
+        echo "   sudo ./scripts/setup/08-setup-rqlite-build.sh"
         echo
         echo -e "${YELLOW}2. Configure Application:${NC}"
         echo "   # Edit configuration file"
@@ -872,7 +872,7 @@ else
     echo -e "${BLUE}Option 3: Development Environment${NC}"
     echo "For development and testing:"
     echo "  1. Configure MinIO: ./scripts/setup/07-setup-minio.sh"
-    echo "  2. Configure rqlite: ./scripts/setup/08-setup-rqlite.sh"
+    echo "  2. Configure rqlite: ./scripts/setup/08-setup-rqlite-build.sh"
     echo "  3. Run application: go run main.go"
     echo
     echo -e "${GREEN}[INFO] PRE-PRODUCTION CHECKLIST${NC}"

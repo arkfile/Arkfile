@@ -95,7 +95,7 @@ check_tools() {
 
 # Get current rqlite version from setup script
 get_current_rqlite_version() {
-    local setup_script="${SCRIPT_DIR}/setup-rqlite.sh"
+    local setup_script="${SCRIPT_DIR}/setup-rqlite-build.sh"
     if [[ -f "$setup_script" ]]; then
         grep '^VERSION=' "$setup_script" | head -1 | cut -d'"' -f2 | sed 's/^v*//'
     else
@@ -292,7 +292,7 @@ main() {
         echo -e "${YELLOW}To update dependencies:${NC}"
         
         if [[ "$CHECK_RQLITE" == "true" ]]; then
-            echo "  ./scripts/setup-rqlite.sh     # Update rqlite"
+            echo "  ./scripts/setup-rqlite-build.sh     # Update rqlite"
         fi
         
         if [[ "$CHECK_MINIO" == "true" ]]; then

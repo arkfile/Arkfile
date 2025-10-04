@@ -496,6 +496,17 @@ verify_static_binaries
 echo "Copying static files..."
 cp -r client/static ${BUILD_DIR}/static
 
+# Ensure TypeScript dist files are copied (they're built in source, not build dir)
+if [ -d "client/static/js/dist" ]; then
+    echo "Copying TypeScript build artifacts..."
+    mkdir -p ${BUILD_DIR}/static/js/dist
+    cp -r client/static/js/dist/* ${BUILD_DIR}/static/js/dist/
+    echo -e "${GREEN}[OK] TypeScript dist files copied to build directory${NC}"
+else
+    echo -e "${RED}[X] TypeScript dist directory not found - build may have failed${NC}"
+    exit 1
+fi
+
 # Setup error pages in webroot
 echo "Setting up error pages..."
 mkdir -p ${BUILD_DIR}/webroot/errors

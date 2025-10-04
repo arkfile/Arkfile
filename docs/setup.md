@@ -131,7 +131,7 @@ curl http://localhost:8080/health
 
 # Add services manually
 sudo ./scripts/setup/07-setup-minio.sh
-sudo ./scripts/setup/08-setup-rqlite.sh
+sudo ./scripts/setup/08-setup-rqlite-build.sh
 
 # Build and deploy
 ./scripts/setup/build.sh

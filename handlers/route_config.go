@@ -36,6 +36,10 @@ func RegisterRoutes() {
 	Echo.HEAD("/main.wasm", func(c echo.Context) error {
 		return c.File("client/main.wasm")
 	})
+	Echo.File("/favicon.ico", "client/static/favicon.ico")
+	Echo.HEAD("/favicon.ico", func(c echo.Context) error {
+		return c.File("client/static/favicon.ico")
+	})
 
 	// OPAQUE Authentication (Only) - with rate limiting protection
 	Echo.POST("/api/opaque/register", RegisterRateLimitMiddleware(OpaqueRegister))
