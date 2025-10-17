@@ -275,10 +275,8 @@ class ArkFileApp {
       appContainer.classList.remove('hidden');
     }
     
-    // Set up app listeners if not already done
-    if (!this.isHomePage()) {
-      this.setupAppListeners();
-    }
+    // Always set up app listeners when showing the app
+    this.setupAppListeners();
   }
 
   private async handleInitialAuth(): Promise<void> {

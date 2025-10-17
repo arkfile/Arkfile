@@ -34,13 +34,6 @@ export class RegistrationManager {
       // Ensure WASM is ready
       await wasmManager.ensureReady();
 
-      // Check OPAQUE health first
-      const healthCheck = await wasmManager.checkOpaqueHealth();
-      if (!healthCheck.wasmReady) {
-        showError('Registration system not ready. Please try again in a few moments.');
-        return;
-      }
-
       showProgressMessage('Creating account...');
 
       // Validate password complexity using WASM
@@ -63,17 +56,20 @@ export class RegistrationManager {
         return;
       }
 
-      // Call server OPAQUE registration endpoint
-      const response = await fetch('/api/opaque/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          username: credentials.username,
-          password: credentials.password
-        }),
-      });
+      // Use WASM to perform OPAQUE registration (matches CLI flow)
+      const result = await wasmManager.performOpaqueRegister(
+        credentials.username,
+        credentials.password
+      );
+
+      if (!result.success || !result.promise) {
+        hideProgress();
+        showError(result.error || 'Failed to initiate registration');
+        return;
+      }
+
+      // Handle the response promise
+      const response = await result.promise;
 
       if (response.ok) {
         const data: RegistrationResponse = await response.json();

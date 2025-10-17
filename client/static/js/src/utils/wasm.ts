@@ -227,6 +227,19 @@ export class WASMManager {
     }
   }
 
+  public async performOpaqueRegister(username: string, password: string, email?: string): Promise<{ success: boolean; promise?: Promise<Response>; error?: string; message?: string }> {
+    await this.ensureReady();
+    try {
+      return performOpaqueRegister(username, password, email);
+    } catch (error) {
+      console.error('WASM OPAQUE registration error:', error);
+      return {
+        success: false,
+        error: `OPAQUE registration failed: ${error}`
+      };
+    }
+  }
+
   public async createSecureSessionFromKey(sessionKey: string, username: string): Promise<{ success: boolean; message?: string; error?: string }> {
     await this.ensureReady();
     try {

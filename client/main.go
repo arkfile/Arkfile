@@ -548,19 +548,30 @@ func containsRune(s string, r rune) bool {
 func validatePasswordComplexity(this js.Value, args []js.Value) interface{} {
 	if len(args) != 1 {
 		return map[string]interface{}{
-			"valid":   false,
-			"message": "Invalid number of arguments",
+			"valid":        false,
+			"score":        0,
+			"message":      "Invalid number of arguments",
+			"requirements": []string{},
+			"missing":      []string{"Invalid arguments"},
 		}
 	}
 
 	password := args[0].String()
 
+	// Define all requirements
+	requirements := []string{
+		"At least 14 characters",
+		"At least one uppercase letter",
+		"At least one lowercase letter",
+		"At least one number",
+		"At least one special character: `~!@#$%^&*()-_=+[]{}|;:,.<>?",
+	}
+
+	var missing []string
+
 	// Check minimum length (14 characters)
 	if len(password) < 14 {
-		return map[string]interface{}{
-			"valid":   false,
-			"message": "Password must be at least 14 characters long",
-		}
+		missing = append(missing, "At least 14 characters")
 	}
 
 	var (
@@ -587,33 +598,48 @@ func validatePasswordComplexity(this js.Value, args []js.Value) interface{} {
 	}
 
 	if !hasUpper {
-		return map[string]interface{}{
-			"valid":   false,
-			"message": "Password must contain at least one uppercase letter",
-		}
+		missing = append(missing, "At least one uppercase letter")
 	}
 	if !hasLower {
-		return map[string]interface{}{
-			"valid":   false,
-			"message": "Password must contain at least one lowercase letter",
-		}
+		missing = append(missing, "At least one lowercase letter")
 	}
 	if !hasDigit {
-		return map[string]interface{}{
-			"valid":   false,
-			"message": "Password must contain at least one digit",
-		}
+		missing = append(missing, "At least one number")
 	}
 	if !hasSpecial {
-		return map[string]interface{}{
-			"valid":   false,
-			"message": "Password must contain at least one special character: `~!@#$%^&*()-_=+[]{}|;:,.<>?`",
-		}
+		missing = append(missing, "At least one special character: `~!@#$%^&*()-_=+[]{}|;:,.<>?")
+	}
+
+	// Calculate score (0-100)
+	score := 0
+	if len(password) >= 14 {
+		score += 20
+	}
+	if hasUpper {
+		score += 20
+	}
+	if hasLower {
+		score += 20
+	}
+	if hasDigit {
+		score += 20
+	}
+	if hasSpecial {
+		score += 20
+	}
+
+	valid := len(missing) == 0
+	message := "Password meets all requirements"
+	if !valid {
+		message = "Password does not meet all requirements"
 	}
 
 	return map[string]interface{}{
-		"valid":   true,
-		"message": "Password meets all requirements",
+		"valid":        valid,
+		"score":        score,
+		"message":      message,
+		"requirements": requirements,
+		"missing":      missing,
 	}
 }
 
@@ -621,8 +647,9 @@ func validatePasswordComplexity(this js.Value, args []js.Value) interface{} {
 func validatePasswordConfirmation(this js.Value, args []js.Value) interface{} {
 	if len(args) != 2 {
 		return map[string]interface{}{
-			"valid":   false,
+			"match":   false,
 			"message": "Invalid number of arguments",
+			"status":  "error",
 		}
 	}
 
@@ -631,7 +658,7 @@ func validatePasswordConfirmation(this js.Value, args []js.Value) interface{} {
 
 	if password == "" && confirmPassword == "" {
 		return map[string]interface{}{
-			"valid":   false,
+			"match":   false,
 			"message": "Please enter confirmation password",
 			"status":  "empty",
 		}
@@ -639,14 +666,14 @@ func validatePasswordConfirmation(this js.Value, args []js.Value) interface{} {
 
 	if password != confirmPassword {
 		return map[string]interface{}{
-			"valid":   false,
+			"match":   false,
 			"message": "Passwords do not match",
 			"status":  "not-matching",
 		}
 	}
 
 	return map[string]interface{}{
-		"valid":   true,
+		"match":   true,
 		"message": "Passwords match",
 		"status":  "matching",
 	}
@@ -1621,6 +1648,57 @@ func performOpaqueLogin(this js.Value, args []js.Value) interface{} {
 	}
 }
 
+// performOpaqueRegister performs OPAQUE registration via HTTP to server endpoints
+func performOpaqueRegister(this js.Value, args []js.Value) interface{} {
+	if len(args) != 2 && len(args) != 3 {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Invalid arguments: expected username, password, [email]",
+		}
+	}
+
+	username := args[0].String()
+	password := args[1].String()
+
+	// Create registration request payload
+	registerReq := map[string]string{
+		"username": username,
+		"password": password,
+	}
+
+	// Add email if provided
+	if len(args) == 3 && !args[2].IsNull() && !args[2].IsUndefined() {
+		email := args[2].String()
+		if email != "" {
+			registerReq["email"] = email
+		}
+	}
+
+	requestBodyJSON, err := json.Marshal(registerReq)
+	if err != nil {
+		return map[string]interface{}{
+			"success": false,
+			"error":   "Failed to marshal registration request: " + err.Error(),
+		}
+	}
+
+	// Make HTTP request to server's OPAQUE registration endpoint
+	fetchPromise := js.Global().Call("fetch", "/api/opaque/register", map[string]interface{}{
+		"method": "POST",
+		"headers": map[string]interface{}{
+			"Content-Type": "application/json",
+		},
+		"body": string(requestBodyJSON),
+	})
+
+	// Return the fetch promise - TypeScript will handle the response
+	return map[string]interface{}{
+		"success": true,
+		"promise": fetchPromise,
+		"message": "OPAQUE registration request sent - handle response in .then() callback",
+	}
+}
+
 // createSecureSession stores session key securely for user
 func createSecureSession(this js.Value, args []js.Value) interface{} {
 	if len(args) != 2 {
@@ -1695,6 +1773,7 @@ func clearSecureSession(this js.Value, args []js.Value) interface{} {
 func main() {
 	// OPAQUE Authentication Functions (HTTP-based)
 	js.Global().Set("performOpaqueLogin", js.FuncOf(performOpaqueLogin))
+	js.Global().Set("performOpaqueRegister", js.FuncOf(performOpaqueRegister))
 	js.Global().Set("createSecureSession", js.FuncOf(createSecureSession))
 	js.Global().Set("clearSecureSession", js.FuncOf(clearSecureSession))
 

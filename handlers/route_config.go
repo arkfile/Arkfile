@@ -22,7 +22,7 @@ func RegisterRoutes() {
 	})
 
 	// Static assets with HEAD support
-	Echo.Static("/js/dist", "client/static/js/dist")
+	Echo.Static("/js/dist", "client/js/dist")
 	Echo.Static("/css", "client/static/css")
 	Echo.Static("/wasm", "client/static/wasm")
 	Echo.Static("/errors", "client/static/errors")

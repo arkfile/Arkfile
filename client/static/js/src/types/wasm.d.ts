@@ -157,6 +157,12 @@ declare global {
     error?: string; 
     message?: string 
   };
+  function performOpaqueRegister(username: string, password: string, email?: string): { 
+    success: boolean; 
+    promise?: Promise<Response>; 
+    error?: string; 
+    message?: string 
+  };
   function createSecureSession(sessionKey: string, username: string): { 
     success: boolean; 
     message?: string; 
