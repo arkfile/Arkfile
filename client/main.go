@@ -27,6 +27,16 @@ import (
 // This replaces the old OPAQUE export key system with password-based encryption
 var userPasswords = make(map[string][]byte) // username -> password
 
+// wasmHealthCheck performs a simple health check to verify WASM is working
+func wasmHealthCheck(this js.Value, args []js.Value) interface{} {
+	result := js.Global().Get("Object").New()
+	result.Set("status", js.ValueOf("ok"))
+	result.Set("message", js.ValueOf("WASM is working correctly"))
+	result.Set("timestamp", js.ValueOf(time.Now().Unix()))
+	result.Set("functions_loaded", js.ValueOf(true))
+	return result
+}
+
 // storePasswordForUser securely stores a user password for encryption operations
 func storePasswordForUser(this js.Value, args []js.Value) interface{} {
 	if len(args) != 2 {
@@ -567,7 +577,8 @@ func validatePasswordComplexity(this js.Value, args []js.Value) interface{} {
 		"At least one special character: `~!@#$%^&*()-_=+[]{}|;:,.<>?",
 	}
 
-	var missing []string
+	// Initialize missing as empty slice, not nil
+	missing := make([]string, 0)
 
 	// Check minimum length (14 characters)
 	if len(password) < 14 {
@@ -634,6 +645,7 @@ func validatePasswordComplexity(this js.Value, args []js.Value) interface{} {
 		message = "Password does not meet all requirements"
 	}
 
+	// Return Go map - automatic conversion will handle arrays properly
 	return map[string]interface{}{
 		"valid":        valid,
 		"score":        score,
@@ -645,38 +657,37 @@ func validatePasswordComplexity(this js.Value, args []js.Value) interface{} {
 
 // validatePasswordConfirmation validates that two passwords match
 func validatePasswordConfirmation(this js.Value, args []js.Value) interface{} {
+	// Create JavaScript object for return value at the start
+	result := js.Global().Get("Object").New()
+
 	if len(args) != 2 {
-		return map[string]interface{}{
-			"match":   false,
-			"message": "Invalid number of arguments",
-			"status":  "error",
-		}
+		result.Set("match", js.ValueOf(false))
+		result.Set("message", js.ValueOf("Invalid number of arguments"))
+		result.Set("status", js.ValueOf("error"))
+		return result
 	}
 
 	password := args[0].String()
 	confirmPassword := args[1].String()
 
 	if password == "" && confirmPassword == "" {
-		return map[string]interface{}{
-			"match":   false,
-			"message": "Please enter confirmation password",
-			"status":  "empty",
-		}
+		result.Set("match", js.ValueOf(false))
+		result.Set("message", js.ValueOf("Please enter confirmation password"))
+		result.Set("status", js.ValueOf("empty"))
+		return result
 	}
 
 	if password != confirmPassword {
-		return map[string]interface{}{
-			"match":   false,
-			"message": "Passwords do not match",
-			"status":  "not-matching",
-		}
+		result.Set("match", js.ValueOf(false))
+		result.Set("message", js.ValueOf("Passwords do not match"))
+		result.Set("status", js.ValueOf("not-matching"))
+		return result
 	}
 
-	return map[string]interface{}{
-		"match":   true,
-		"message": "Passwords match",
-		"status":  "matching",
-	}
+	result.Set("match", js.ValueOf(true))
+	result.Set("message", js.ValueOf("Passwords match"))
+	result.Set("status", js.ValueOf("matching"))
+	return result
 }
 
 // JWT Token Management and Auto-Refresh System
@@ -1257,8 +1268,8 @@ func encryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 	// Create envelope
 	envelope := []byte{version, keyTypeByte}
 
-	// Prepare for chunking
-	var chunks []map[string]interface{}
+	// Prepare for chunking - create JavaScript array for chunks
+	chunksJS := js.Global().Get("Array").New()
 	totalChunks := (len(fileData) + chunkSize - 1) / chunkSize
 	fileReader := bytes.NewReader(fileData)
 
@@ -1277,18 +1288,21 @@ func encryptFileChunkedPassword(this js.Value, args []js.Value) interface{} {
 
 		encryptedChunk := gcm.Seal(nonce, nonce, chunkData, nil)
 
-		chunks = append(chunks, map[string]interface{}{
-			"data": base64.StdEncoding.EncodeToString(encryptedChunk),
-			"size": len(encryptedChunk),
-		})
+		// Create JavaScript object for this chunk
+		chunkJS := js.Global().Get("Object").New()
+		chunkJS.Set("data", js.ValueOf(base64.StdEncoding.EncodeToString(encryptedChunk)))
+		chunkJS.Set("size", js.ValueOf(len(encryptedChunk)))
+
+		chunksJS.Call("push", chunkJS)
 	}
 
-	return map[string]interface{}{
-		"success":     true,
-		"envelope":    base64.StdEncoding.EncodeToString(envelope),
-		"chunks":      chunks,
-		"totalChunks": totalChunks,
-	}
+	// Create JavaScript object for return value
+	result := js.Global().Get("Object").New()
+	result.Set("success", js.ValueOf(true))
+	result.Set("envelope", js.ValueOf(base64.StdEncoding.EncodeToString(envelope)))
+	result.Set("chunks", chunksJS) // Already a js.Value
+	result.Set("totalChunks", js.ValueOf(totalChunks))
+	return result
 }
 
 // --- END CHUNKED UPLOAD REFACTOR ---
@@ -1539,9 +1553,9 @@ func processFileListResponse(this js.Value, args []js.Value) interface{} {
 		}
 	}
 
-	// Process each file and decrypt metadata
+	// Create JavaScript array for decrypted files
+	filesJS := js.Global().Get("Array").New()
 	filesLength := files.Length()
-	var decryptedFiles []map[string]interface{}
 
 	for i := 0; i < filesLength; i++ {
 		file := files.Index(i)
@@ -1567,40 +1581,39 @@ func processFileListResponse(this js.Value, args []js.Value) interface{} {
 			continue
 		}
 
-		// Build decrypted file info
-		decryptedFile := map[string]interface{}{
-			"id":             file.Get("id").String(),
-			"file_id":        file.Get("file_id").String(),
-			"storage_id":     file.Get("storage_id").String(),
-			"owner_username": file.Get("owner_username").String(),
-			"filename":       decryptMap["filename"].(string),
-			"sha256sum":      decryptMap["sha256sum"].(string),
-			"size_bytes":     file.Get("size_bytes").Int(),
-			"padded_size":    file.Get("padded_size").Int(),
-			"upload_date":    file.Get("upload_date").String(),
-			"password_hint":  file.Get("password_hint").String(),
-			"password_type":  file.Get("password_type").String(),
-		}
+		// Build decrypted file info as JavaScript object
+		fileJS := js.Global().Get("Object").New()
+		fileJS.Set("id", js.ValueOf(file.Get("id").String()))
+		fileJS.Set("file_id", js.ValueOf(file.Get("file_id").String()))
+		fileJS.Set("storage_id", js.ValueOf(file.Get("storage_id").String()))
+		fileJS.Set("owner_username", js.ValueOf(file.Get("owner_username").String()))
+		fileJS.Set("filename", js.ValueOf(decryptMap["filename"].(string)))
+		fileJS.Set("sha256sum", js.ValueOf(decryptMap["sha256sum"].(string)))
+		fileJS.Set("size_bytes", js.ValueOf(file.Get("size_bytes").Int()))
+		fileJS.Set("padded_size", js.ValueOf(file.Get("padded_size").Int()))
+		fileJS.Set("upload_date", js.ValueOf(file.Get("upload_date").String()))
+		fileJS.Set("password_hint", js.ValueOf(file.Get("password_hint").String()))
+		fileJS.Set("password_type", js.ValueOf(file.Get("password_type").String()))
 
-		decryptedFiles = append(decryptedFiles, decryptedFile)
+		filesJS.Call("push", fileJS)
 	}
 
-	// Get storage info if available
-	var storageInfo map[string]interface{}
+	// Create JavaScript object for return value
+	result := js.Global().Get("Object").New()
+	result.Set("success", js.ValueOf(true))
+	result.Set("files", filesJS) // Already a js.Value
+	result.Set("count", js.ValueOf(filesJS.Length()))
+
+	// Get storage info if available and add to result
 	storage := serverResponse.Get("storage")
 	if !storage.IsNull() && !storage.IsUndefined() {
-		storageInfo = map[string]interface{}{
-			"used_bytes":  storage.Get("used_bytes").Int(),
-			"total_bytes": storage.Get("total_bytes").Int(),
-		}
+		storageJS := js.Global().Get("Object").New()
+		storageJS.Set("used_bytes", js.ValueOf(storage.Get("used_bytes").Int()))
+		storageJS.Set("total_bytes", js.ValueOf(storage.Get("total_bytes").Int()))
+		result.Set("storage", storageJS)
 	}
 
-	return map[string]interface{}{
-		"success": true,
-		"files":   decryptedFiles,
-		"storage": storageInfo,
-		"count":   len(decryptedFiles),
-	}
+	return result
 }
 
 // OPAQUE Authentication Functions (HTTP-based, not crypto)
@@ -1771,6 +1784,9 @@ func clearSecureSession(this js.Value, args []js.Value) interface{} {
 
 // main function to register WASM functions
 func main() {
+	// Health check function
+	js.Global().Set("wasmHealthCheck", js.FuncOf(wasmHealthCheck))
+
 	// OPAQUE Authentication Functions (HTTP-based)
 	js.Global().Set("performOpaqueLogin", js.FuncOf(performOpaqueLogin))
 	js.Global().Set("performOpaqueRegister", js.FuncOf(performOpaqueRegister))

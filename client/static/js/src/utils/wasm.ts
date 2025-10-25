@@ -61,7 +61,7 @@ export class WASMManager {
   public async validatePasswordComplexity(password: string): Promise<PasswordValidationResult> {
     await this.ensureReady();
     try {
-      return validatePasswordComplexity(password);
+      return (window as any).validatePasswordComplexity(password);
     } catch (error) {
       console.error('WASM password validation error:', error);
       return {
@@ -77,7 +77,7 @@ export class WASMManager {
   public async validatePasswordConfirmation(password: string, confirm: string): Promise<PasswordConfirmationResult> {
     await this.ensureReady();
     try {
-      return validatePasswordConfirmation(password, confirm);
+      return (window as any).validatePasswordConfirmation(password, confirm);
     } catch (error) {
       console.error('WASM password confirmation error:', error);
       return {
@@ -94,7 +94,7 @@ export class WASMManager {
   public async validateSecureSession(userEmail: string): Promise<SessionValidationResult> {
     await this.ensureReady();
     try {
-      return validateSecureSession(userEmail);
+      return (window as any).validateSecureSession(userEmail);
     } catch (error) {
       console.error('WASM session validation error:', error);
       return {
@@ -107,7 +107,7 @@ export class WASMManager {
   public async encryptFileWithSecureSession(fileData: Uint8Array, userEmail: string): Promise<FileEncryptionResult> {
     await this.ensureReady();
     try {
-      return encryptFileWithSecureSession(fileData, userEmail);
+      return (window as any).encryptFileWithSecureSession(fileData, userEmail);
     } catch (error) {
       console.error('WASM file encryption error:', error);
       return {
@@ -120,7 +120,7 @@ export class WASMManager {
   public async decryptFileWithSecureSession(encryptedData: string, userEmail: string): Promise<FileDecryptionResult> {
     await this.ensureReady();
     try {
-      return decryptFileWithSecureSession(encryptedData, userEmail);
+      return (window as any).decryptFileWithSecureSession(encryptedData, userEmail);
     } catch (error) {
       console.error('WASM file decryption error:', error);
       return {
@@ -133,7 +133,7 @@ export class WASMManager {
   public async encryptFile(fileData: Uint8Array, password: string): Promise<string> {
     await this.ensureReady();
     try {
-      return encryptFile(fileData, password);
+      return (window as any).encryptFile(fileData, password);
     } catch (error) {
       console.error('WASM file encryption error:', error);
       throw new Error(`File encryption failed: ${error}`);
@@ -143,7 +143,7 @@ export class WASMManager {
   public async decryptFile(encryptedData: string, password: string): Promise<string | Uint8Array> {
     await this.ensureReady();
     try {
-      return decryptFile(encryptedData, password);
+      return (window as any).decryptFile(encryptedData, password);
     } catch (error) {
       console.error('WASM file decryption error:', error);
       return 'Failed to decrypt data';
@@ -153,7 +153,7 @@ export class WASMManager {
   public async calculateSHA256(fileData: Uint8Array): Promise<string> {
     await this.ensureReady();
     try {
-      return calculateSHA256(fileData);
+      return (window as any).calculateSHA256(fileData);
     } catch (error) {
       console.error('WASM SHA256 calculation error:', error);
       throw new Error(`SHA256 calculation failed: ${error}`);
@@ -163,7 +163,7 @@ export class WASMManager {
   public async validateTOTPCode(code: string, userEmail: string): Promise<TOTPValidationResult> {
     await this.ensureReady();
     try {
-      return validateTOTPCodeWASM(code, userEmail);
+      return (window as any).validateTOTPCodeWASM(code, userEmail);
     } catch (error) {
       console.error('WASM TOTP validation error:', error);
       return {
@@ -176,7 +176,7 @@ export class WASMManager {
   public async generateTOTPSetupData(userEmail: string): Promise<TOTPSetupResult> {
     await this.ensureReady();
     try {
-      return generateTOTPSetupDataWASM(userEmail);
+      return (window as any).generateTOTPSetupDataWASM(userEmail);
     } catch (error) {
       console.error('WASM TOTP setup generation error:', error);
       return {
@@ -189,7 +189,7 @@ export class WASMManager {
   public async verifyTOTPSetup(code: string, secret: string, userEmail: string): Promise<TOTPValidationResult> {
     await this.ensureReady();
     try {
-      return verifyTOTPSetupWASM(code, secret, userEmail);
+      return (window as any).verifyTOTPSetupWASM(code, secret, userEmail);
     } catch (error) {
       console.error('WASM TOTP setup verification error:', error);
       return {
@@ -202,7 +202,7 @@ export class WASMManager {
   public async checkOpaqueHealth(): Promise<{ wasmReady: boolean; timestamp: number; opaqueReady: boolean }> {
     await this.ensureReady();
     try {
-      return opaqueHealthCheck();
+      return (window as any).opaqueHealthCheck();
     } catch (error) {
       console.error('WASM OPAQUE health check error:', error);
       return {
@@ -217,7 +217,7 @@ export class WASMManager {
   public async performOpaqueLogin(username: string, password: string): Promise<{ success: boolean; promise?: Promise<Response>; error?: string; message?: string }> {
     await this.ensureReady();
     try {
-      return performOpaqueLogin(username, password);
+      return (window as any).performOpaqueLogin(username, password);
     } catch (error) {
       console.error('WASM OPAQUE login error:', error);
       return {
@@ -230,7 +230,7 @@ export class WASMManager {
   public async performOpaqueRegister(username: string, password: string, email?: string): Promise<{ success: boolean; promise?: Promise<Response>; error?: string; message?: string }> {
     await this.ensureReady();
     try {
-      return performOpaqueRegister(username, password, email);
+      return (window as any).performOpaqueRegister(username, password, email);
     } catch (error) {
       console.error('WASM OPAQUE registration error:', error);
       return {
@@ -243,7 +243,7 @@ export class WASMManager {
   public async createSecureSessionFromKey(sessionKey: string, username: string): Promise<{ success: boolean; message?: string; error?: string }> {
     await this.ensureReady();
     try {
-      return createSecureSession(sessionKey, username);
+      return (window as any).createSecureSession(sessionKey, username);
     } catch (error) {
       console.error('WASM secure session creation error:', error);
       return {
@@ -256,7 +256,7 @@ export class WASMManager {
   public async clearSecureSessionForUser(username: string): Promise<{ success: boolean; message?: string; error?: string }> {
     await this.ensureReady();
     try {
-      return clearSecureSession(username);
+      return (window as any).clearSecureSession(username);
     } catch (error) {
       console.error('WASM secure session clearing error:', error);
       return {
