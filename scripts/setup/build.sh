@@ -419,6 +419,12 @@ fi
 echo "Using wasm_exec.js from: ${WASM_EXEC_JS}"
 cp "${WASM_EXEC_JS}" ${BUILD_DIR}/${WASM_BUILD_DIR}/
 
+# Copy WASM files to static directory for deployment
+echo "Copying WASM files to static directory..."
+cp ${BUILD_DIR}/${WASM_BUILD_DIR}/main.wasm client/static/
+cp ${BUILD_DIR}/${WASM_BUILD_DIR}/wasm_exec.js client/static/
+echo -e "${GREEN}[OK] WASM files copied to static directory${NC}"
+
 # Build Go binaries with static linking
 build_go_binaries_static() {
     echo -e "${YELLOW}Building Go binaries with static linking...${NC}"
@@ -538,14 +544,31 @@ mv "${BUILD_DIR}/arkfile-client" "${BUILD_DIR}/bin/"
 mv "${BUILD_DIR}/arkfile-admin" "${BUILD_DIR}/bin/"
 
 # Client files and WASM deployment
-mv "${BUILD_DIR}/static" "${BUILD_DIR}/client/"
+mkdir -p "${BUILD_DIR}/client"
+mv "${BUILD_DIR}/static" "${BUILD_DIR}/client/static"
 
-# Deploy WASM files to client root for deployment
-mv "${BUILD_DIR}/${WASM_BUILD_DIR}/main.wasm" "${BUILD_DIR}/client/"
-mv "${BUILD_DIR}/${WASM_BUILD_DIR}/wasm_exec.js" "${BUILD_DIR}/client/"
+# Move the js directory with compiled TypeScript to the correct location
+if [ -d "${BUILD_DIR}/client/js" ]; then
+    mv "${BUILD_DIR}/client/js" "${BUILD_DIR}/client/static/"
+    echo -e "${GREEN}[OK] Moved compiled TypeScript to client/static/js/${NC}"
+fi
+
+# WASM files are already in client/static/ from the static directory move above
+# Verify they exist
+if [ ! -f "${BUILD_DIR}/client/static/main.wasm" ]; then
+    echo -e "${RED}[X] main.wasm missing from client/static/${NC}"
+    exit 1
+fi
+if [ ! -f "${BUILD_DIR}/client/static/wasm_exec.js" ]; then
+    echo -e "${RED}[X] wasm_exec.js missing from client/static/${NC}"
+    exit 1
+fi
+echo -e "${GREEN}[OK] WASM files verified in client/static/${NC}"
 
 # Keep wasm-build directory for reference but it's no longer needed for deployment
-mv "${BUILD_DIR}/${WASM_BUILD_DIR}" "${BUILD_DIR}/client/"
+if [ -d "${BUILD_DIR}/${WASM_BUILD_DIR}" ]; then
+    mv "${BUILD_DIR}/${WASM_BUILD_DIR}" "${BUILD_DIR}/client/" 2>/dev/null || true
+fi
 
 # Database files
 mkdir -p "${BUILD_DIR}/database"
@@ -566,10 +589,10 @@ sudo mkdir -p "${BASE_DIR}/database"
 sudo cp "${BUILD_DIR}/database/"* "${BASE_DIR}/database/"
 
 # Deploy WASM files to production location for dev-reset verification
-echo "Deploying WASM files to ${BASE_DIR}/client/..."
-sudo mkdir -p "${BASE_DIR}/client"
-sudo cp "${BUILD_DIR}/client/main.wasm" "${BASE_DIR}/client/"
-sudo cp "${BUILD_DIR}/client/wasm_exec.js" "${BASE_DIR}/client/"
+echo "Deploying WASM files to ${BASE_DIR}/client/static/..."
+sudo mkdir -p "${BASE_DIR}/client/static"
+sudo cp "${BUILD_DIR}/client/static/main.wasm" "${BASE_DIR}/client/static/"
+sudo cp "${BUILD_DIR}/client/static/wasm_exec.js" "${BASE_DIR}/client/static/"
 
 # Deploy binaries to production location for key setup scripts
 echo "Deploying binaries to ${BASE_DIR}/bin/..."

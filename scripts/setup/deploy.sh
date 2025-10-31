@@ -5,21 +5,15 @@ set -e
 APP_NAME="arkfile"
 BASE_DIR="/opt/arkfile"
 BUILD_DIR="build"
-ENVIRONMENT=${1:-prod}  # Default to prod if no environment specified
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Validate environment
-if [[ ! "$ENVIRONMENT" =~ ^(prod|test)$ ]]; then
-    echo -e "${RED}Invalid environment: ${ENVIRONMENT}. Must be 'prod' or 'test'${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}Deploying ${APP_NAME} to ${ENVIRONMENT} environment locally...${NC}"
+echo -e "${GREEN}Deploying ${APP_NAME} locally...${NC}"
 
 # Verify we have build artifacts
 if [ ! -d "$BUILD_DIR" ]; then
@@ -55,7 +49,7 @@ sudo systemctl daemon-reload
 
 # Enable services (but don't auto-start)
 echo -e "${YELLOW}[INFO] Enabling services (without auto-start)...${NC}"
-sudo systemctl enable ${APP_NAME}${ENVIRONMENT} 2>/dev/null || sudo systemctl enable ${APP_NAME} 2>/dev/null || true
+sudo systemctl enable ${APP_NAME} 2>/dev/null || true
 
 # Services can be started manually by the user when ready
 echo -e "${GREEN}[OK] Deployment complete!${NC}"
@@ -66,12 +60,12 @@ echo "• Permissions set for arkfile:arkfile user"
 echo "• Systemd services installed and enabled"
 echo
 echo -e "${BLUE}[START] To start the services:${NC}"
-echo "  sudo systemctl start ${APP_NAME}${ENVIRONMENT}"
+echo "  sudo systemctl start ${APP_NAME}"
 echo "  sudo systemctl start rqlite 2>/dev/null || true"
 echo "  sudo systemctl start minio 2>/dev/null || true"
 echo "  sudo systemctl start caddy 2>/dev/null || true"
 echo
 echo -e "${BLUE}[INFO] Check service status:${NC}"
-echo "  sudo systemctl status ${APP_NAME}${ENVIRONMENT}"
+echo "  sudo systemctl status ${APP_NAME}"
 echo
 echo -e "${GREEN}[TARGET] Ready for deployment validation!${NC}"

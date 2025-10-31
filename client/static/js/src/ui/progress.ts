@@ -1,25 +1,9 @@
 /**
  * Progress indicator utilities - Optimized for performance and bundle size
+ * Now uses CSS classes instead of inline styles to comply with CSP
  */
 
 import { ProgressOptions, ProgressState } from '../types/dom';
-
-// Optimized CSS constants to reduce inline styles and bundle size
-const STYLES = {
-  PROGRESS_MODAL: `position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;padding:30px;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,0.3);z-index:1500;min-width:300px;text-align:center;border:1px solid #ddd`,
-  TITLE: `margin:0 0 15px 0;color:#333;font-size:18px`,
-  MESSAGE: `margin-bottom:20px;color:#666;font-size:14px;line-height:1.4`,
-  PROGRESS_CONTAINER: `width:100%;height:8px;background-color:#f0f0f0;border-radius:4px;overflow:hidden;margin-bottom:15px`,
-  PROGRESS_BAR: `height:100%;background-color:#007bff;border-radius:4px;transition:width 0.3s ease`,
-  PROGRESS_INDETERMINATE: `background:linear-gradient(90deg,transparent 0%,#007bff 50%,transparent 100%);background-size:200% 100%;animation:indeterminate 1.5s infinite;width:100%`,
-  PERCENTAGE: `font-size:12px;color:#888;margin-bottom:15px`,
-  CANCEL_BUTTON: `background-color:#6c757d;color:white;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-size:14px`,
-  INFO: `font-size:11px;color:#999;margin-top:10px;line-height:1.3`,
-  ERROR: `color:#dc3545;font-size:13px;margin-top:10px;padding:8px;background-color:#f8d7da;border-radius:4px;border:1px solid #f5c6cb`,
-  BACKDROP: `position:fixed;top:0;left:0;width:100%;height:100%;background-color:rgba(0,0,0,0.3);z-index:1400`
-} as const;
-
-const KEYFRAMES_ID = 'progress-keyframes';
 
 export class ProgressManager {
   private static activeProgress: HTMLElement | null = null;
@@ -30,8 +14,7 @@ export class ProgressManager {
 
     const progressDiv = document.createElement('div');
     progressDiv.id = 'progress-indicator';
-    progressDiv.className = 'progress-message';
-    progressDiv.style.cssText = STYLES.PROGRESS_MODAL;
+    progressDiv.className = 'progress-modal';
 
     // Build UI components efficiently
     this.addTitle(progressDiv, options.title);
@@ -59,7 +42,6 @@ export class ProgressManager {
   private static addTitle(container: HTMLElement, title: string): void {
     const titleEl = document.createElement('h4');
     titleEl.textContent = title;
-    titleEl.style.cssText = STYLES.TITLE;
     container.appendChild(titleEl);
   }
 
@@ -67,21 +49,18 @@ export class ProgressManager {
     const messageEl = document.createElement('div');
     messageEl.className = 'progress-message-text';
     messageEl.textContent = message;
-    messageEl.style.cssText = STYLES.MESSAGE;
     container.appendChild(messageEl);
   }
 
   private static addProgressBar(container: HTMLElement, options: ProgressOptions): HTMLElement {
     const progressContainer = document.createElement('div');
-    progressContainer.style.cssText = STYLES.PROGRESS_CONTAINER;
+    progressContainer.className = 'progress-container';
 
     const progressBar = document.createElement('div');
     progressBar.className = 'progress-bar';
-    progressBar.style.cssText = STYLES.PROGRESS_BAR;
 
     if (options.indeterminate || options.percentage === undefined) {
-      progressBar.style.cssText += `;${STYLES.PROGRESS_INDETERMINATE}`;
-      this.ensureKeyframes();
+      progressBar.classList.add('indeterminate');
     } else {
       progressBar.style.width = `${Math.max(0, Math.min(100, options.percentage))}%`;
     }
@@ -95,14 +74,13 @@ export class ProgressManager {
     const percentageText = document.createElement('div');
     percentageText.className = 'progress-percentage';
     percentageText.textContent = `${Math.round(percentage)}%`;
-    percentageText.style.cssText = STYLES.PERCENTAGE;
     container.appendChild(percentageText);
   }
 
   private static addCancelButton(container: HTMLElement, onCancel: () => void): void {
     const cancelButton = document.createElement('button');
+    cancelButton.className = 'cancel-button';
     cancelButton.textContent = 'Cancel';
-    cancelButton.style.cssText = STYLES.CANCEL_BUTTON;
     cancelButton.onclick = () => {
       onCancel();
       this.hideProgress();
@@ -112,17 +90,8 @@ export class ProgressManager {
 
   private static addBackdrop(): void {
     const backdrop = document.createElement('div');
-    backdrop.style.cssText = STYLES.BACKDROP;
+    backdrop.className = 'progress-backdrop';
     document.body.appendChild(backdrop);
-  }
-
-  private static ensureKeyframes(): void {
-    if (!document.getElementById(KEYFRAMES_ID)) {
-      const style = document.createElement('style');
-      style.id = KEYFRAMES_ID;
-      style.textContent = '@keyframes indeterminate{0%{background-position:-200% 0}100%{background-position:200% 0}}';
-      document.head.appendChild(style);
-    }
   }
 
   public static updateProgress(state: Partial<ProgressState>): void {
@@ -172,7 +141,6 @@ export class ProgressManager {
       if (!infoElement) {
         infoElement = document.createElement('div');
         infoElement.className = 'progress-info';
-        infoElement.style.cssText = STYLES.INFO;
         this.activeProgress.appendChild(infoElement);
       }
 
@@ -190,10 +158,10 @@ export class ProgressManager {
     // Handle error state
     if (state.error) {
       const progressDiv = this.activeProgress;
-      progressDiv.style.borderColor = '#dc3545';
+      progressDiv.classList.add('error');
       
       const errorElement = document.createElement('div');
-      errorElement.style.cssText = STYLES.ERROR;
+      errorElement.className = 'progress-error';
       errorElement.textContent = state.error;
       progressDiv.appendChild(errorElement);
     }
@@ -202,7 +170,7 @@ export class ProgressManager {
   public static hideProgress(): void {
     if (this.activeProgress) {
       // Remove backdrop
-      const backdrop = document.querySelector('div[style*="z-index: 1400"]');
+      const backdrop = document.querySelector('.progress-backdrop');
       if (backdrop) {
         backdrop.remove();
       }

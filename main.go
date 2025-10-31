@@ -45,10 +45,6 @@ func setupRoutes(e *echo.Echo) {
 
 	// Register all routes
 	handlers.RegisterRoutes()
-
-	// Serve WebAssembly files
-	e.File("/wasm_exec.js", "client/wasm_exec.js")
-	e.File("/main.wasm", "client/main.wasm")
 }
 
 func main() {

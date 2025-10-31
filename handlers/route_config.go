@@ -22,19 +22,19 @@ func RegisterRoutes() {
 	})
 
 	// Static assets with HEAD support
-	Echo.Static("/js/dist", "client/js/dist")
+	Echo.Static("/js/dist", "client/static/js/dist")
 	Echo.Static("/css", "client/static/css")
 	Echo.Static("/wasm", "client/static/wasm")
 	Echo.Static("/errors", "client/static/errors")
 
 	// Individual static files needed by frontend with HEAD support
-	Echo.File("/wasm_exec.js", "client/wasm_exec.js")
+	Echo.File("/wasm_exec.js", "client/static/wasm_exec.js")
 	Echo.HEAD("/wasm_exec.js", func(c echo.Context) error {
-		return c.File("client/wasm_exec.js")
+		return c.File("client/static/wasm_exec.js")
 	})
-	Echo.File("/main.wasm", "client/main.wasm")
+	Echo.File("/main.wasm", "client/static/main.wasm")
 	Echo.HEAD("/main.wasm", func(c echo.Context) error {
-		return c.File("client/main.wasm")
+		return c.File("client/static/main.wasm")
 	})
 	Echo.File("/favicon.ico", "client/static/favicon.ico")
 	Echo.HEAD("/favicon.ico", func(c echo.Context) error {

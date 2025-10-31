@@ -339,11 +339,11 @@ print_status "SUCCESS" "Application build and deployment complete"
 print_status "INFO" "Verifying critical files are in place..."
 
 # Ensure WASM binary is available in working directory
-if [ ! -f "$ARKFILE_DIR/client/main.wasm" ]; then
+if [ ! -f "$ARKFILE_DIR/client/static/main.wasm" ]; then
     print_status "ERROR" "WASM binary missing from working directory."
-    echo "    Expected location: $ARKFILE_DIR/client/main.wasm"
-    if [ -f "build/client/main.wasm" ]; then
-        echo "    Found in build directory: build/client/main.wasm"
+    echo "    Expected location: $ARKFILE_DIR/client/static/main.wasm"
+    if [ -f "build/client/static/main.wasm" ]; then
+        echo "    Found in build directory: build/client/static/main.wasm"
         echo "    The build script should have deployed this automatically."
     fi
     print_status "ERROR" "The build likely failed or deployment step was skipped."
@@ -353,7 +353,7 @@ else
 fi
 
 # Ensure wasm_exec.js is available
-if [ ! -f "$ARKFILE_DIR/client/wasm_exec.js" ]; then
+if [ ! -f "$ARKFILE_DIR/client/static/wasm_exec.js" ]; then
     print_status "ERROR" "wasm_exec.js missing from working directory. The build likely failed."
     # The build script should place this file here directly.
     exit 1
