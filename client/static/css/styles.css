@@ -1260,6 +1260,7 @@ button:hover {
     background-color: #007bff;
     border-radius: 4px;
     transition: width 0.3s ease;
+    width: var(--progress-width, 0%);
 }
 
 .progress-modal .progress-bar.indeterminate {

@@ -321,30 +321,20 @@ func validatePasswordComplexityJS(this js.Value, args []js.Value) interface{} {
 	// Use our password validation
 	result := ValidateAccountPassword(password)
 
-	// Convert feedback to requirements/missing format for legacy compatibility
-	var requirements []string
-	var missing []string
-
-	for _, feedback := range result.Feedback {
-		if result.MeetsRequirement {
-			requirements = append(requirements, ""+feedback)
-		} else {
-			missing = append(missing, "• "+feedback)
-		}
-	}
-
 	// Calculate score out of 100 for legacy compatibility
 	score := result.StrengthScore * 20 // Convert 0-4 scale to 0-80, then add entropy bonus
 	if result.Entropy >= 60 {
 		score += 20 // Bonus for meeting entropy requirement
 	}
 
-	// Determine message based on strength score
+	// Determine message based on strength score and suggestions
 	var message string
 	valid := result.MeetsRequirement
 
 	if valid {
-		message = "Strong password"
+		message = "Strong password! All requirements met"
+	} else if len(result.Suggestions) > 0 {
+		message = result.Suggestions[0] // Use first suggestion as main message
 	} else {
 		switch result.StrengthScore {
 		case 0:
@@ -360,14 +350,51 @@ func validatePasswordComplexityJS(this js.Value, args []js.Value) interface{} {
 		}
 	}
 
+	// Convert Go slices to JavaScript arrays
+	feedbackJS := js.Global().Get("Array").New(len(result.Feedback))
+	for i, fb := range result.Feedback {
+		feedbackJS.SetIndex(i, fb)
+	}
+
+	suggestionsJS := js.Global().Get("Array").New(len(result.Suggestions))
+	for i, sug := range result.Suggestions {
+		suggestionsJS.SetIndex(i, sug)
+	}
+
+	// Convert Requirements struct to JavaScript object
+	requirementsJS := map[string]interface{}{
+		"length": map[string]interface{}{
+			"met":     result.Requirements.Length.Met,
+			"current": result.Requirements.Length.Current,
+			"needed":  result.Requirements.Length.Needed,
+			"message": result.Requirements.Length.Message,
+		},
+		"uppercase": map[string]interface{}{
+			"met":     result.Requirements.Uppercase.Met,
+			"message": result.Requirements.Uppercase.Message,
+		},
+		"lowercase": map[string]interface{}{
+			"met":     result.Requirements.Lowercase.Met,
+			"message": result.Requirements.Lowercase.Message,
+		},
+		"number": map[string]interface{}{
+			"met":     result.Requirements.Number.Met,
+			"message": result.Requirements.Number.Message,
+		},
+		"special": map[string]interface{}{
+			"met":     result.Requirements.Special.Met,
+			"message": result.Requirements.Special.Message,
+		},
+	}
+
 	return map[string]interface{}{
 		"valid":        valid,
 		"score":        score,
 		"message":      message,
-		"requirements": requirements,
-		"missing":      missing,
+		"requirements": requirementsJS,
+		"suggestions":  suggestionsJS,
 		"entropy":      result.Entropy,
-		"feedback":     result.Feedback,
+		"feedback":     feedbackJS,
 	}
 }
 
@@ -418,9 +445,11 @@ func validatePasswordConfirmationJS(this js.Value, args []js.Value) interface{} 
 // validatePasswordEntropyJS validates password entropy from JavaScript
 func validatePasswordEntropyJS(this js.Value, args []js.Value) interface{} {
 	if len(args) < 2 {
+		errorFeedback := js.Global().Get("Array").New(1)
+		errorFeedback.SetIndex(0, "Invalid arguments")
 		return map[string]interface{}{
 			"meets_requirements": false,
-			"feedback":           []string{"Invalid arguments"},
+			"feedback":           errorFeedback,
 		}
 	}
 
@@ -429,12 +458,23 @@ func validatePasswordEntropyJS(this js.Value, args []js.Value) interface{} {
 
 	result := ValidatePasswordEntropy(password, minEntropy)
 
+	// Convert Go slices to JavaScript arrays
+	feedbackJS := js.Global().Get("Array").New(len(result.Feedback))
+	for i, fb := range result.Feedback {
+		feedbackJS.SetIndex(i, fb)
+	}
+
+	penaltiesJS := js.Global().Get("Array").New(len(result.PatternPenalties))
+	for i, penalty := range result.PatternPenalties {
+		penaltiesJS.SetIndex(i, penalty)
+	}
+
 	return map[string]interface{}{
 		"entropy":            result.Entropy,
 		"strength_score":     result.StrengthScore,
-		"feedback":           result.Feedback,
+		"feedback":           feedbackJS,
 		"meets_requirements": result.MeetsRequirement,
-		"pattern_penalties":  result.PatternPenalties,
+		"pattern_penalties":  penaltiesJS,
 	}
 }
 
@@ -489,12 +529,23 @@ func validatePasswordEntropyWASM(this js.Value, inputs []js.Value) interface{} {
 
 	result := ValidatePasswordEntropy(password, minEntropy)
 
+	// Convert Go slices to JavaScript arrays
+	feedbackJS := js.Global().Get("Array").New(len(result.Feedback))
+	for i, fb := range result.Feedback {
+		feedbackJS.SetIndex(i, fb)
+	}
+
+	penaltiesJS := js.Global().Get("Array").New(len(result.PatternPenalties))
+	for i, penalty := range result.PatternPenalties {
+		penaltiesJS.SetIndex(i, penalty)
+	}
+
 	return map[string]interface{}{
 		"entropy":            result.Entropy,
 		"strength_score":     result.StrengthScore,
-		"feedback":           result.Feedback,
+		"feedback":           feedbackJS,
 		"meets_requirements": result.MeetsRequirement,
-		"pattern_penalties":  result.PatternPenalties,
+		"pattern_penalties":  penaltiesJS,
 	}
 }
 
@@ -509,12 +560,23 @@ func validateAccountPasswordWASM(this js.Value, inputs []js.Value) interface{} {
 	password := inputs[0].String()
 	result := ValidateAccountPassword(password)
 
+	// Convert Go slices to JavaScript arrays
+	feedbackJS := js.Global().Get("Array").New(len(result.Feedback))
+	for i, fb := range result.Feedback {
+		feedbackJS.SetIndex(i, fb)
+	}
+
+	penaltiesJS := js.Global().Get("Array").New(len(result.PatternPenalties))
+	for i, penalty := range result.PatternPenalties {
+		penaltiesJS.SetIndex(i, penalty)
+	}
+
 	return map[string]interface{}{
 		"entropy":            result.Entropy,
 		"strength_score":     result.StrengthScore,
-		"feedback":           result.Feedback,
+		"feedback":           feedbackJS,
 		"meets_requirements": result.MeetsRequirement,
-		"pattern_penalties":  result.PatternPenalties,
+		"pattern_penalties":  penaltiesJS,
 	}
 }
 
@@ -529,12 +591,23 @@ func validateSharePasswordWASM(this js.Value, inputs []js.Value) interface{} {
 	password := inputs[0].String()
 	result := ValidateSharePassword(password)
 
+	// Convert Go slices to JavaScript arrays
+	feedbackJS := js.Global().Get("Array").New(len(result.Feedback))
+	for i, fb := range result.Feedback {
+		feedbackJS.SetIndex(i, fb)
+	}
+
+	penaltiesJS := js.Global().Get("Array").New(len(result.PatternPenalties))
+	for i, penalty := range result.PatternPenalties {
+		penaltiesJS.SetIndex(i, penalty)
+	}
+
 	return map[string]interface{}{
 		"entropy":            result.Entropy,
 		"strength_score":     result.StrengthScore,
-		"feedback":           result.Feedback,
+		"feedback":           feedbackJS,
 		"meets_requirements": result.MeetsRequirement,
-		"pattern_penalties":  result.PatternPenalties,
+		"pattern_penalties":  penaltiesJS,
 	}
 }
 
@@ -549,12 +622,23 @@ func validateCustomPasswordWASM(this js.Value, inputs []js.Value) interface{} {
 	password := inputs[0].String()
 	result := ValidateCustomPassword(password)
 
+	// Convert Go slices to JavaScript arrays
+	feedbackJS := js.Global().Get("Array").New(len(result.Feedback))
+	for i, fb := range result.Feedback {
+		feedbackJS.SetIndex(i, fb)
+	}
+
+	penaltiesJS := js.Global().Get("Array").New(len(result.PatternPenalties))
+	for i, penalty := range result.PatternPenalties {
+		penaltiesJS.SetIndex(i, penalty)
+	}
+
 	return map[string]interface{}{
 		"entropy":            result.Entropy,
 		"strength_score":     result.StrengthScore,
-		"feedback":           result.Feedback,
+		"feedback":           feedbackJS,
 		"meets_requirements": result.MeetsRequirement,
-		"pattern_penalties":  result.PatternPenalties,
+		"pattern_penalties":  penaltiesJS,
 	}
 }
 

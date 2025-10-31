@@ -41,7 +41,7 @@ export class RegistrationManager {
       if (!passwordValidation.valid) {
         hideProgress();
         showError(passwordValidation.message);
-        this.highlightPasswordRequirements(passwordValidation.requirements, passwordValidation.missing);
+        this.highlightPasswordRequirements(passwordValidation.requirements);
         return;
       }
 
@@ -107,22 +107,44 @@ export class RegistrationManager {
     return true;
   }
 
-  private static highlightPasswordRequirements(requirements: string[], missing: string[]): void {
-    this.updatePasswordRequirementsDisplay({ requirements, missing });
+  private static highlightPasswordRequirements(requirements: any): void {
+    this.updatePasswordRequirementsDisplay(requirements);
   }
 
-  public static updatePasswordRequirementsDisplay(validation: { requirements: string[], missing: string[] }): void {
+  public static updatePasswordRequirementsDisplay(requirements: any): void {
     const requirementsList = document.getElementById('password-requirements');
     if (!requirementsList) return;
     
     const items = requirementsList.querySelectorAll('li');
-    items.forEach(item => item.classList.remove('met', 'missing'));
+    
+    // Map requirement IDs to list items
+    const requirementMap: { [key: string]: HTMLElement | null } = {
+      length: items[0] as HTMLElement,
+      uppercase: items[1] as HTMLElement,
+      lowercase: items[2] as HTMLElement,
+      number: items[3] as HTMLElement,
+      special: items[4] as HTMLElement,
+    };
 
-    validation.requirements.forEach(req => {
-      const item = Array.from(items).find(li => li.textContent?.includes(req));
-      if (item) {
-        item.classList.add(validation.missing.includes(req) ? 'missing' : 'met');
+    // Update each requirement based on its status
+    Object.keys(requirementMap).forEach(key => {
+      const item = requirementMap[key];
+      if (!item || !requirements[key]) return;
+
+      const req = requirements[key];
+      
+      // Remove existing classes
+      item.classList.remove('met', 'missing');
+      
+      // Add appropriate class based on status
+      if (req.met) {
+        item.classList.add('met');
+      } else {
+        item.classList.add('missing');
       }
+      
+      // Update the text content with the message
+      item.textContent = req.message;
     });
   }
 
@@ -231,7 +253,9 @@ async function validatePasswordRealTime(password: string): Promise<void> {
     }
 
     // Update requirements display using the consolidated helper
-    RegistrationManager.updatePasswordRequirementsDisplay(validation);
+    if (validation.requirements) {
+      RegistrationManager.updatePasswordRequirementsDisplay(validation.requirements);
+    }
   } catch (error) {
     console.warn('Real-time password validation error:', error);
   }

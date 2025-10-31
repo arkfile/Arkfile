@@ -62,7 +62,8 @@ export class ProgressManager {
     if (options.indeterminate || options.percentage === undefined) {
       progressBar.classList.add('indeterminate');
     } else {
-      progressBar.style.width = `${Math.max(0, Math.min(100, options.percentage))}%`;
+      // Use CSS custom property for width (CSP-compliant)
+      progressBar.style.setProperty('--progress-width', `${Math.max(0, Math.min(100, options.percentage))}%`);
     }
 
     progressContainer.appendChild(progressBar);
@@ -124,10 +125,10 @@ export class ProgressManager {
       const percentageText = this.activeProgress.querySelector('.progress-percentage');
       
       if (progressBar) {
-        progressBar.style.width = `${Math.max(0, Math.min(100, state.percentage))}%`;
-        // Remove indeterminate animation
-        progressBar.style.animation = '';
-        progressBar.style.background = '#007bff';
+        // Use CSS custom property for width (CSP-compliant)
+        progressBar.style.setProperty('--progress-width', `${Math.max(0, Math.min(100, state.percentage))}%`);
+        // Remove indeterminate class to stop animation
+        progressBar.classList.remove('indeterminate');
       }
 
       if (percentageText) {

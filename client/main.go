@@ -556,17 +556,23 @@ func containsRune(s string, r rune) bool {
 
 // validatePasswordComplexity validates password complexity using the same rules as the server
 func validatePasswordComplexity(this js.Value, args []js.Value) interface{} {
+	console := js.Global().Get("console")
+	console.Call("log", "[WASM] validatePasswordComplexity: ENTER")
+
 	if len(args) != 1 {
-		return map[string]interface{}{
-			"valid":        false,
-			"score":        0,
-			"message":      "Invalid number of arguments",
-			"requirements": []string{},
-			"missing":      []string{"Invalid arguments"},
-		}
+		console.Call("error", "[WASM] validatePasswordComplexity: Invalid number of arguments")
+		// Create error result object directly in JavaScript
+		result := js.Global().Get("Object").New()
+		result.Set("valid", false)
+		result.Set("score", 0)
+		result.Set("message", "Invalid number of arguments")
+		result.Set("requirements", js.Global().Get("Array").New())
+		result.Set("missing", js.Global().Get("Array").New())
+		return result
 	}
 
 	password := args[0].String()
+	console.Call("log", "[WASM] validatePasswordComplexity: Password length:", len(password))
 
 	// Define all requirements
 	requirements := []string{
@@ -645,35 +651,48 @@ func validatePasswordComplexity(this js.Value, args []js.Value) interface{} {
 		message = "Password does not meet all requirements"
 	}
 
-	// Add debug logging
-	console := js.Global().Get("console")
-	console.Call("log", "DEBUG validatePasswordComplexity: valid =", valid)
-	console.Call("log", "DEBUG validatePasswordComplexity: score =", score)
-	console.Call("log", "DEBUG validatePasswordComplexity: message =", message)
-	console.Call("log", "DEBUG validatePasswordComplexity: requirements length =", len(requirements))
-	console.Call("log", "DEBUG validatePasswordComplexity: missing length =", len(missing))
+	console.Call("log", "[WASM] validatePasswordComplexity: valid =", valid)
+	console.Call("log", "[WASM] validatePasswordComplexity: score =", score)
+	console.Call("log", "[WASM] validatePasswordComplexity: requirements length =", len(requirements))
+	console.Call("log", "[WASM] validatePasswordComplexity: missing length =", len(missing))
 
 	// Convert requirements slice to JavaScript array
+	console.Call("log", "[WASM] validatePasswordComplexity: Creating requirements JS array")
 	requirementsJS := js.Global().Get("Array").New()
 	for _, req := range requirements {
 		requirementsJS.Call("push", req)
 	}
+	console.Call("log", "[WASM] validatePasswordComplexity: Requirements JS array created, length:", requirementsJS.Length())
 
 	// Convert missing slice to JavaScript array
+	console.Call("log", "[WASM] validatePasswordComplexity: Creating missing JS array")
 	missingJS := js.Global().Get("Array").New()
 	for _, miss := range missing {
 		missingJS.Call("push", miss)
 	}
+	console.Call("log", "[WASM] validatePasswordComplexity: Missing JS array created, length:", missingJS.Length())
 
-	console.Call("log", "DEBUG validatePasswordComplexity: about to return result")
+	// Create result object directly in JavaScript to avoid ValueOf issues
+	console.Call("log", "[WASM] validatePasswordComplexity: Creating result object")
+	result := js.Global().Get("Object").New()
 
-	return map[string]interface{}{
-		"valid":        valid,
-		"score":        score,
-		"message":      message,
-		"requirements": requirementsJS, // Now a proper JS array
-		"missing":      missingJS,      // Now a proper JS array
-	}
+	console.Call("log", "[WASM] validatePasswordComplexity: Setting 'valid' property")
+	result.Set("valid", valid)
+
+	console.Call("log", "[WASM] validatePasswordComplexity: Setting 'score' property")
+	result.Set("score", score)
+
+	console.Call("log", "[WASM] validatePasswordComplexity: Setting 'message' property")
+	result.Set("message", message)
+
+	console.Call("log", "[WASM] validatePasswordComplexity: Setting 'requirements' property")
+	result.Set("requirements", requirementsJS)
+
+	console.Call("log", "[WASM] validatePasswordComplexity: Setting 'missing' property")
+	result.Set("missing", missingJS)
+
+	console.Call("log", "[WASM] validatePasswordComplexity: EXIT - returning result object")
+	return result
 }
 
 // validatePasswordConfirmation validates that two passwords match
