@@ -53,9 +53,10 @@ export async function showShareForm(filename: string, fileId: string): Promise<v
     // Initialize share creator
     currentShareCreator = new ShareCreator(fileInfo);
 
-    // Focus on password input
+    // Focus on password input and update placeholder
     const passwordInput = shareForm.querySelector('#share-password') as HTMLInputElement;
     if (passwordInput) {
+      ShareCrypto.updatePasswordPlaceholder(passwordInput, 'share');
       passwordInput.focus();
     }
 
@@ -77,8 +78,8 @@ function createShareForm(filename: string, fileId: string): HTMLElement {
       
       <div class="form-group">
         <label for="share-password">Share Password:</label>
-        <input type="password" id="share-password" placeholder="Enter a strong password (18+ characters)" 
-               minlength="18" required>
+        <input type="password" id="share-password" placeholder="Enter a strong password" 
+               required>
         <div id="password-strength" class="password-strength"></div>
         <small>This password will be required to access the shared file.</small>
       </div>

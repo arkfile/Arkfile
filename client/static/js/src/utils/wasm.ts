@@ -58,6 +58,25 @@ export class WASMManager {
   }
 
   // Wrapper functions for WASM functions with error handling
+  public async getPasswordRequirements(passwordType: 'account' | 'custom' | 'share'): Promise<{ minLength: number; minEntropy: number; error?: string }> {
+    await this.ensureReady();
+    try {
+      return (window as any).getPasswordRequirements(passwordType);
+    } catch (error) {
+      console.error('WASM get password requirements error:', error);
+      // Fallback values - should match Go constants but this is only used if WASM fails
+      const fallbacks = {
+        'account': { minLength: 14, minEntropy: 60 },
+        'custom': { minLength: 14, minEntropy: 60 },
+        'share': { minLength: 18, minEntropy: 60 }
+      };
+      return {
+        ...fallbacks[passwordType],
+        error: `Failed to get password requirements: ${error}`
+      };
+    }
+  }
+
   public async validatePasswordComplexity(password: string): Promise<PasswordValidationResult> {
     await this.ensureReady();
     try {
@@ -68,7 +87,7 @@ export class WASMManager {
         valid: false,
         score: 0,
         message: 'Password validation failed. Please try again.',
-        requirements: [],
+        requirements: {},
         missing: ['Password validation service unavailable']
       };
     }

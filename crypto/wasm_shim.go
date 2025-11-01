@@ -10,7 +10,6 @@ import (
 )
 
 // Password-based Argon2ID Processing Functions
-// Replaces all OPAQUE export key functionality with password-based encryption
 
 // JavaScript-callable functions for WASM
 
@@ -306,6 +305,36 @@ func clearSecureSessionJS(this js.Value, args []js.Value) interface{} {
 
 // Password validation functions
 
+// getPasswordRequirementsJS exposes password requirement constants to JavaScript
+func getPasswordRequirementsJS(this js.Value, args []js.Value) interface{} {
+	if len(args) != 1 {
+		return map[string]interface{}{
+			"error": "password type required (account, custom, or share)",
+		}
+	}
+
+	passwordType := args[0].String()
+
+	var minLength int
+	switch passwordType {
+	case "account":
+		minLength = MinAccountPasswordLength
+	case "custom":
+		minLength = MinCustomPasswordLength
+	case "share":
+		minLength = MinSharePasswordLength
+	default:
+		return map[string]interface{}{
+			"error": "invalid password type: must be account, custom, or share",
+		}
+	}
+
+	return map[string]interface{}{
+		"minLength":  minLength,
+		"minEntropy": MinEntropyBits,
+	}
+}
+
 // validatePasswordComplexityJS provides password complexity validation
 func validatePasswordComplexityJS(this js.Value, args []js.Value) interface{} {
 	if len(args) != 1 {
@@ -444,9 +473,9 @@ func validatePasswordConfirmationJS(this js.Value, args []js.Value) interface{} 
 
 // validatePasswordEntropyJS validates password entropy from JavaScript
 func validatePasswordEntropyJS(this js.Value, args []js.Value) interface{} {
-	if len(args) < 2 {
+	if len(args) < 3 {
 		errorFeedback := js.Global().Get("Array").New(1)
-		errorFeedback.SetIndex(0, "Invalid arguments")
+		errorFeedback.SetIndex(0, "Invalid arguments: expected password, minLength, minEntropy")
 		return map[string]interface{}{
 			"meets_requirements": false,
 			"feedback":           errorFeedback,
@@ -454,9 +483,10 @@ func validatePasswordEntropyJS(this js.Value, args []js.Value) interface{} {
 	}
 
 	password := args[0].String()
-	minEntropy := args[1].Float()
+	minLength := args[1].Int()
+	minEntropy := args[2].Float()
 
-	result := ValidatePasswordEntropy(password, minEntropy)
+	result := ValidatePasswordEntropy(password, minLength, minEntropy)
 
 	// Convert Go slices to JavaScript arrays
 	feedbackJS := js.Global().Get("Array").New(len(result.Feedback))
@@ -518,16 +548,17 @@ func calculatePasswordScoreJS(this js.Value, args []js.Value) interface{} {
 
 // validatePasswordEntropyWASM provides client-side password entropy validation
 func validatePasswordEntropyWASM(this js.Value, inputs []js.Value) interface{} {
-	if len(inputs) < 2 {
+	if len(inputs) < 3 {
 		return map[string]interface{}{
-			"error": "Password and minimum entropy required",
+			"error": "Password, minimum length, and minimum entropy required",
 		}
 	}
 
 	password := inputs[0].String()
-	minEntropy := inputs[1].Float()
+	minLength := inputs[1].Int()
+	minEntropy := inputs[2].Float()
 
-	result := ValidatePasswordEntropy(password, minEntropy)
+	result := ValidatePasswordEntropy(password, minLength, minEntropy)
 
 	// Convert Go slices to JavaScript arrays
 	feedbackJS := js.Global().Get("Array").New(len(result.Feedback))
@@ -658,6 +689,7 @@ func RegisterAllWASMFunctions() {
 	js.Global().Set("clearSecureSession", js.FuncOf(clearSecureSessionJS))
 
 	// Add password validation functions
+	js.Global().Set("getPasswordRequirements", js.FuncOf(getPasswordRequirementsJS))
 	js.Global().Set("validatePasswordComplexity", js.FuncOf(validatePasswordComplexityJS))
 	js.Global().Set("validatePasswordConfirmation", js.FuncOf(validatePasswordConfirmationJS))
 

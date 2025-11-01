@@ -120,11 +120,11 @@ export class ShareAccessor {
                 };
             }
 
-            // Step 2: Basic password validation
-            if (!password || password.length < 18) {
+            // Step 2: Basic password validation (detailed validation done by backend)
+            if (!password) {
                 return {
                     success: false,
-                    error: 'Password must be at least 18 characters'
+                    error: 'Password cannot be empty'
                 };
             }
 
@@ -340,7 +340,7 @@ export class ShareAccessUI {
                     <label for="access-password">Enter Share Password:</label>
                     <input type="password" id="access-password" class="form-control" 
                            placeholder="Enter the password provided with this share" 
-                           minlength="18" required>
+                           required>
                     <div class="password-feedback" id="password-feedback"></div>
                 </div>
 
@@ -369,6 +369,11 @@ export class ShareAccessUI {
 
         // Set up event listeners
         this.setupEventListeners();
+
+        // Update password placeholder with actual requirements
+        if (this.passwordInput) {
+            ShareCrypto.updatePasswordPlaceholder(this.passwordInput, 'share');
+        }
     }
 
     /**

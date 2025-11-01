@@ -1,6 +1,6 @@
 /**
  * TypeScript wrapper for WASM share crypto functions
- * Phase 6B: Anonymous Share System
+ * Anonymous Share System
  * 
  * This module provides TypeScript interfaces for Go/WASM cryptographic operations.
  * All actual crypto work is done in Go/WASM for security and performance.
@@ -48,6 +48,7 @@ declare global {
     function encryptFEKWithShareKeyWASM(fek: Uint8Array, shareKey: Uint8Array): FEKEncryptionResult;
     function decryptFEKWithShareKeyWASM(encryptedFEK: Uint8Array, shareKey: Uint8Array): FEKDecryptionResult;
     function validateSharePasswordEntropyWASM(password: string): PasswordValidationResult;
+    function getPasswordRequirementsWASM(passwordType: string): { minLength: number; minEntropy: number; error?: string };
 }
 
 /**
@@ -73,7 +74,7 @@ export class ShareCrypto {
      * - 128MB memory, 4 iterations, 4 threads
      * - 32-byte output key
      * 
-     * @param password Share password (min 18 characters)
+     * @param password Share password (minimum length enforced by backend)
      * @param salt 32-byte salt
      */
     static deriveShareKey(password: string, salt: Uint8Array): ShareKeyResult {
@@ -84,10 +85,11 @@ export class ShareCrypto {
             };
         }
 
-        if (!password || password.length < 18) {
+        // Note: Password length validation is handled by backend WASM function
+        if (!password) {
             return {
                 success: false,
-                error: 'Share password must be at least 18 characters'
+                error: 'Share password cannot be empty'
             };
         }
 
@@ -239,12 +241,30 @@ export class ShareCrypto {
     }
 
     /**
+     * Updates password input placeholder with actual requirements from Go constants
+     */
+    static async updatePasswordPlaceholder(inputElement: HTMLInputElement, type: 'share' | 'account' = 'share'): Promise<void> {
+        try {
+            // Get requirements from WASM
+            if (typeof window.getPasswordRequirementsWASM === 'function') {
+                const reqs = window.getPasswordRequirementsWASM(type);
+                if (reqs && reqs.minLength) {
+                    inputElement.placeholder = `Enter a strong password (${reqs.minLength}+ characters)`;
+                    inputElement.setAttribute('minlength', reqs.minLength.toString());
+                }
+            }
+        } catch (error) {
+            console.warn('Failed to update password placeholder:', error);
+        }
+    }
+
+    /**
      * Gets a user-friendly error message for crypto failures
      */
     static getErrorMessage(error: string): string {
         const errorMap: { [key: string]: string } = {
             'WASM crypto functions not available': 'Cryptographic functions are not loaded. Please refresh the page.',
-            'Share password must be at least 18 characters': 'Share password is too short. Use at least 18 characters.',
+            'Share password cannot be empty': 'Please enter a share password.',
             'Salt must be exactly 32 bytes': 'Invalid cryptographic salt format.',
             'FEK must be exactly 32 bytes': 'Invalid file encryption key format.',
             'Share key must be exactly 32 bytes': 'Invalid share key format.',

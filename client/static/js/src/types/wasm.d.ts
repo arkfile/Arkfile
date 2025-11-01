@@ -9,8 +9,16 @@ declare global {
     valid: boolean;
     score: number;
     message: string;
-    requirements: string[];
+    requirements: {
+      length?: { met: boolean; message: string };
+      uppercase?: { met: boolean; message: string };
+      lowercase?: { met: boolean; message: string };
+      number?: { met: boolean; message: string };
+      special?: { met: boolean; message: string };
+    };
     missing: string[];
+    entropy?: number;
+    feedback?: string[];
   }
 
   interface PasswordConfirmationResult {
@@ -91,6 +99,7 @@ declare global {
 // Global WASM function declarations
 declare global {
   // Password validation functions (Phase 1 - IMPLEMENTED)
+  function getPasswordRequirements(passwordType: 'account' | 'custom' | 'share'): { minLength: number; minEntropy: number; error?: string };
   function validatePasswordComplexity(password: string): PasswordValidationResult;
   function validatePasswordConfirmation(password: string, confirm: string): PasswordConfirmationResult;
 

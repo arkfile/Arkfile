@@ -230,8 +230,8 @@ export class ShareCreationUI {
                 <div class="form-group">
                     <label for="share-password">Share Password:</label>
                     <input type="password" id="share-password" class="form-control" 
-                           placeholder="Enter a strong password (18+ characters)" 
-                           minlength="18" required>
+                           placeholder="Enter a strong password" 
+                           required>
                     <div class="password-strength" id="password-strength"></div>
                     <small class="form-text">This password will be required to access the shared file.</small>
                 </div>
@@ -268,6 +268,11 @@ export class ShareCreationUI {
 
         // Set up event listeners
         this.setupEventListeners();
+
+        // Update password placeholder with actual requirements
+        if (this.passwordInput) {
+            ShareCrypto.updatePasswordPlaceholder(this.passwordInput, 'share');
+        }
     }
 
     /**

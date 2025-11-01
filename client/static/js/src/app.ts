@@ -71,6 +71,8 @@ class ArkFileApp {
         this.showApp();
         showAuthSection();
         toggleAuthForm(); // Switch to register form
+        // Set up form listeners after form is visible
+        setupRegistrationForm();
       });
     }
 
@@ -81,6 +83,7 @@ class ArkFileApp {
         this.showApp();
         showAuthSection();
         // Login form is shown by default
+        setupLoginForm();
       });
     }
   }
@@ -96,6 +99,8 @@ class ArkFileApp {
       showRegisterLink.addEventListener('click', (e) => {
         e.preventDefault();
         toggleAuthForm();
+        // Re-setup registration form when switching to it
+        setupRegistrationForm();
       });
     }
 
@@ -104,6 +109,8 @@ class ArkFileApp {
       showLoginLink.addEventListener('click', (e) => {
         e.preventDefault();
         toggleAuthForm();
+        // Re-setup login form when switching to it
+        setupLoginForm();
       });
     }
 

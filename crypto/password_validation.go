@@ -7,6 +7,14 @@ import (
 	"github.com/trustelem/zxcvbn"
 )
 
+// Password requirement constants - single source of truth
+const (
+	MinAccountPasswordLength = 14
+	MinCustomPasswordLength  = 14
+	MinSharePasswordLength   = 18
+	MinEntropyBits           = 60.0
+)
+
 // PasswordValidationResult represents the result of password validation
 type PasswordValidationResult struct {
 	Entropy          float64           `json:"entropy"`
@@ -78,7 +86,7 @@ func checkPasswordRequirements(password string, minLength int) RequirementChecks
 
 	// Set messages
 	if checks.Length.Met {
-		checks.Length.Message = "Length requirement met (14+ characters)"
+		checks.Length.Message = fmt.Sprintf("Length requirement met (%d+ characters)", minLength)
 	} else {
 		remaining := minLength - length
 		checks.Length.Message = fmt.Sprintf("Add %d more characters (currently %d/%d)", remaining, length, minLength)
@@ -112,15 +120,15 @@ func checkPasswordRequirements(password string, minLength int) RequirementChecks
 }
 
 // ValidatePasswordEntropy performs comprehensive password entropy validation using zxcvbn
-func ValidatePasswordEntropy(password string, minEntropy float64) *PasswordValidationResult {
+func ValidatePasswordEntropy(password string, minLength int, minEntropy float64) *PasswordValidationResult {
 	if password == "" {
 		return &PasswordValidationResult{
 			Entropy:          0,
 			StrengthScore:    0,
 			Feedback:         []string{"Password cannot be empty"},
 			MeetsRequirement: false,
-			Requirements:     checkPasswordRequirements(password, 14),
-			Suggestions:      []string{"Enter a password (minimum 14 characters)"},
+			Requirements:     checkPasswordRequirements(password, minLength),
+			Suggestions:      []string{fmt.Sprintf("Enter a password (minimum %d characters)", minLength)},
 		}
 	}
 
@@ -147,8 +155,8 @@ func ValidatePasswordEntropy(password string, minEntropy float64) *PasswordValid
 	}
 
 	// Add length recommendation if password is short
-	if len(password) < 14 {
-		feedback = append(feedback, "Consider using 14+ characters for better security")
+	if len(password) < minLength {
+		feedback = append(feedback, fmt.Sprintf("Consider using %d+ characters for better security", minLength))
 	}
 
 	// Add entropy feedback if below threshold
@@ -176,7 +184,7 @@ func ValidatePasswordEntropy(password string, minEntropy float64) *PasswordValid
 	}
 
 	// Check individual requirements
-	requirements := checkPasswordRequirements(password, 14)
+	requirements := checkPasswordRequirements(password, minLength)
 
 	// Build suggestions based on what's missing
 	suggestions := make([]string, 0)
@@ -225,17 +233,17 @@ func ValidatePasswordEntropy(password string, minEntropy float64) *PasswordValid
 	}
 }
 
-// ValidateAccountPassword validates account passwords with 60+ bit entropy requirement
+// ValidateAccountPassword validates account passwords with 14+ characters and 60+ bit entropy requirement
 func ValidateAccountPassword(password string) *PasswordValidationResult {
-	return ValidatePasswordEntropy(password, 60.0)
+	return ValidatePasswordEntropy(password, MinAccountPasswordLength, MinEntropyBits)
 }
 
-// ValidateSharePassword validates share passwords with 60+ bit entropy requirement
+// ValidateSharePassword validates share passwords with 18+ characters and 60+ bit entropy requirement
 func ValidateSharePassword(password string) *PasswordValidationResult {
-	return ValidatePasswordEntropy(password, 60.0)
+	return ValidatePasswordEntropy(password, MinSharePasswordLength, MinEntropyBits)
 }
 
-// ValidateCustomPassword validates custom passwords with 60+ bit entropy requirement
+// ValidateCustomPassword validates custom passwords with 14+ characters and 60+ bit entropy requirement
 func ValidateCustomPassword(password string) *PasswordValidationResult {
-	return ValidatePasswordEntropy(password, 60.0)
+	return ValidatePasswordEntropy(password, MinCustomPasswordLength, MinEntropyBits)
 }
