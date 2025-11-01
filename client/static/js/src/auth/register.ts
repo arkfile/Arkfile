@@ -9,6 +9,7 @@ import { setTokens } from '../utils/auth-wasm';
 import { showFileSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { ShareCrypto } from '../shares/share-crypto.js';
+import { addPasswordToggle } from '../utils/password-toggle';
 
 export interface RegistrationCredentials {
   username: string;
@@ -157,6 +158,10 @@ export class RegistrationManager {
     
     const items = requirementsList.querySelectorAll('li');
     
+    // Get minimum entropy requirement from WASM
+    const passwordReqs = await wasmManager.getPasswordRequirements('account');
+    const minEntropy = passwordReqs.minEntropy;
+    
     // Map requirement IDs to list items (order matches HTML)
     const requirementMap: { [key: string]: HTMLElement | null } = {
       length: items[0] as HTMLElement,
@@ -164,13 +169,34 @@ export class RegistrationManager {
       lowercase: items[2] as HTMLElement,
       number: items[3] as HTMLElement,
       special: items[4] as HTMLElement,
+      entropy: items[5] as HTMLElement,
     };
 
     // Update each requirement based on its status with [OK]/[ ] markers
     Object.keys(requirementMap).forEach(key => {
       const item = requirementMap[key];
-      if (!item || !requirements[key]) return;
-
+      if (!item) return;
+      
+      // Special handling for entropy requirement
+      if (key === 'entropy') {
+        item.classList.remove('met', 'missing');
+        if (entropy !== undefined) {
+          const entropyMet = entropy >= minEntropy;
+          if (entropyMet) {
+            item.classList.add('met');
+            item.textContent = `[OK] Minimum entropy: ${minEntropy} bits (current: ${Math.floor(entropy)} bits)`;
+          } else {
+            item.classList.add('missing');
+            item.textContent = `[ ] Minimum entropy: ${minEntropy} bits (current: ${Math.floor(entropy)} bits)`;
+          }
+        } else {
+          item.textContent = `[ ] Minimum entropy: ${minEntropy} bits`;
+        }
+        return;
+      }
+      
+      // Handle other requirements
+      if (!requirements[key]) return;
       const req = requirements[key];
       
       // Remove existing classes
@@ -261,7 +287,7 @@ export function setupRegistrationForm(): void {
   const usernameInput = document.getElementById('register-username') as HTMLInputElement;
   const passwordInput = document.getElementById('register-password') as HTMLInputElement;
   const confirmPasswordInput = document.getElementById('register-password-confirm') as HTMLInputElement;
-  const submitButton = registerForm.querySelector('button[type="submit"]') as HTMLButtonElement;
+  const submitButton = document.getElementById('register-submit-btn') as HTMLButtonElement;
 
   if (!usernameInput || !passwordInput || !confirmPasswordInput || !submitButton) {
     console.warn('[Registration] Missing form elements:', {
@@ -327,6 +353,10 @@ export function setupRegistrationForm(): void {
 
   // Update password placeholder with actual requirements from Go constants
   ShareCrypto.updatePasswordPlaceholder(passwordInput, 'account');
+  
+  // Add password visibility toggles
+  addPasswordToggle(passwordInput);
+  addPasswordToggle(confirmPasswordInput);
 }
 
 // Real-time validation functions
