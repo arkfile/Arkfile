@@ -915,3 +915,50 @@ After modifying each file, append to this document:
 
 - `docs/wip/major-auth-wasm-fix.md` - Added comprehensive cryptographic strategy section detailing Web Crypto API usage, three-tier password system (OPAQUE→HKDF for account passwords, Argon2id for custom/share passwords), TypeScript module structure, error handling patterns; removed all backward compatibility and migration references (greenfield app)
 - `docs/wip/major-auth-wasm-fix.md` - Added database schema changes section: new `file_custom_passwords` table for custom file passwords (Argon2id, no salt storage), simplified `opaque_user_data` for account auth only, deleted `opaque_password_records` table, documented salt storage strategy (OPAQUE: none, custom passwords: deterministic, share passwords: random)
+
+### WASM Removal Progress
+
+**Phase 1 Complete: WASM Infrastructure Removed**
+
+Files deleted:
+- `crypto/wasm_shim.go` - Go WASM shim for password validation
+- `client/static/js/src/types/wasm.d.ts` - WASM TypeScript type definitions
+- `client/static/js/src/utils/wasm.ts` - WASM loader utility
+- `client/static/js/src/utils/auth-wasm.ts` - WASM authentication wrapper
+- `scripts/testing/test-wasm.sh` - WASM test script
+- `client/static/main.wasm` - Compiled WASM binary
+- `client/static/wasm_exec.js` - Go WASM runtime
+
+Files modified:
+- `client/static/js/package.json` - Removed WASM-related scripts and dependencies
+- `tsconfig.json` - Removed WASM compiler options and type references
+- `scripts/setup/build.sh` - Removed WASM build steps and verification
+- `.gitignore` - Removed WASM artifact patterns
+- `handlers/route_config.go` - Removed WASM file serving routes
+- `scripts/testing/test-typescript.sh` - Removed WASM test execution
+- `client/static/index.html` - Removed WASM loading script tags
+- `client/static/shared.html` - Removed WASM loading script tags
+- `client/static/file-share.html` - Removed WASM loading script tags
+- `client/static/chunked-upload.html` - Removed WASM loading script tags
+
+TypeScript files cleaned:
+- `client/static/js/src/auth/login.ts` - Removed WASM imports
+- `client/static/js/src/auth/totp.ts` - Removed WASM imports
+- `client/static/js/src/files/list.ts` - Removed WASM imports
+- `client/static/js/src/files/download.ts` - Removed WASM imports
+- `client/static/js/src/files/share-integration.ts` - Removed WASM imports
+- `client/static/js/src/app.ts` - Added missing register.ts import
+
+Status:
+- All WASM source files removed from project
+- All WASM references removed from build system
+- All WASM imports removed from TypeScript code
+- Build system no longer compiles or deploys WASM
+- HTML files no longer load WASM runtime
+- TypeScript compilation verified working without WASM
+
+Next steps:
+- Implement TypeScript OPAQUE client using @cloudflare/opaque-ts
+- Create new registration/login flows with proper client-server message exchange
+- Update server handlers for new OPAQUE protocol flow
+- Fix CLI OPAQUE implementation
