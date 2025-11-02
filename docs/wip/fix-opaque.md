@@ -7,6 +7,12 @@
 > **⚠️ IMPORTANT: READ FIRST**  
 > Before beginning any work on this project, you MUST read `docs/AGENTS.md` for critical project guidelines, coding standards, and architectural principles.
 
+---
+
+<INITIAL_PLAN>
+
+# Zero-Knowledge OPAQUE Implementation Refactoring Plan from Claude 4.5 Sonnet LLM
+
 ## Executive Summary
 
 This document outlines the complete refactoring plan to migrate from the current "OPAQUE-inspired" password storage implementation to a true zero-knowledge OPAQUE protocol implementation. The current system sends passwords to the server (defeating zero-knowledge), while the target implementation will ensure passwords never leave the client.
@@ -2085,3 +2091,103 @@ Update setup instructions for new protocol.
 This refactoring will transform Arkfile from an "OPAQUE-inspired" system to a true zero-knowledge OPAQUE implementation, ensuring passwords never leave the client device. The multi-phase approach ensures backward compatibility during migration while maintaining security and reliability.
 
 **Remember**: NEVER roll our own crypto. All cryptographic operations rely on the battle-tested libopaque C library.
+
+
+</INITIAL_PLAN>
+
+---
+
+## FEEDBACK ON THE ABOVE PLAN FROM GPT-5 LLM
+
+"""
+Findings: gaps in the “fix-opaque.md” plan to reach truly zero-knowledge OPAQUE auth
+
+Protocol and cryptographic correctness
+- Channel/context binding omitted: The plan’s CGO prototypes do not include IdU/IdS or “context” inputs (server identity, application context) that OPAQUE uses to prevent unknown key-share/mix-ups. Add explicit parameters and ensure both sides inject and verify them consistently.
+- Server key generation/handling unspecified: The plan relies on GetServerKeys but does not define correct public key derivation from the private key nor rotation policy for oprf_seed. Define:
+  - Correct derivation for server_public_key (not random bytes).
+  - Storage and rotation policy for (server_secret_key, server_public_key, oprf_seed), including operational risk of rotation (invalidates registrations) and migration steps.
+- Replay and misuse resistance of step payloads: Define strict size checks and base64 validation for M/pub/resp/authU; reject duplicates; bind step responses to the session_id and username; ensure one-time use.
+
+Client-side WASM feasibility (critical)
+- CGO in the browser is not viable: The plan calls libopaque via CGO from crypto/wasm_shim.go and TypeScript. Go’s WASM target does not support cgo to native C in the browser. You must instead:
+  - Compile libopaque to WebAssembly via Emscripten, export a JS/WASM API, and call it from TS, or
+  - Use a Rust OPAQUE implementation compiled to WASM.
+- Memory hygiene at the JS boundary: “Password only in WASM memory” is not strictly achievable with DOM strings. Mitigations to include in the plan:
+  - Immediately copy from the input field to a Uint8Array, set input.value = '' and call form.reset().
+  - Avoid logging; never serialize to JSON.
+  - Ensure TypedArrays passed to WASM are zeroed after use.
+  - Keep all OPAQUE state (usr_ctx/sec) inside the WASM module when possible; only pass base64-encoded messages to/from server.
+
+Export key lifecycle and storage
+- Export key storage policy too weak: Storing export_key in sessionStorage exposes it to XSS. Strengthen:
+  - Keep export_key in-memory only (not in any Web Storage).
+  - If persistence is absolutely needed, wrap with WebCrypto using a non-extractable CryptoKey and gated user gesture, or use in-memory Web Worker to isolate.
+  - Define lifecycle: when created, how long kept, cleared on tab close, logout, or after TOTP verification.
+- Clarify usage: The plan says “use export_key for session” but does not specify derivations (e.g., HKDF contexts for different app keys). Add a key schedule section:
+  - export_key -> HKDF(“auth-session”) for local state only; never transmitted.
+  - Derive separate subkeys for file-metadata encryption, ephemeral UI secrets, etc., with context labels to avoid cross-use.
+
+Server-side state (opaque_sessions)
+- Encryption-at-rest design missing: The plan references encryptServerSecret/decryptServerSecret but doesn’t specify the master key source, algorithm, or rotation. Specify:
+  - Algorithm: XChaCha20-Poly1305 with random 24-byte nonce; include session_id and username as AAD.
+  - Master key provisioning via systemd-credentials (preferred) or KMS; document rotation and startup checks.
+  - Immediate zeroization of decrypted buffers; use runtime.KeepAlive and avoid Go copies when possible.
+- Expiry/cleanup: Plan includes expires_at; add guaranteed cleanup path (cron, background job on startup), and unique constraints to prevent reuse.
+
+Data model consistency
+- Dual storage paths for account records: Align on a single authoritative table for account auth:
+  - Prefer opaque_user_data (username PRIMARY KEY, serialized_record BLOB).
+  - Restrict opaque_password_records to file-specific custom passwords only; update record_type enumeration and all code paths accordingly.
+- BLOB vs TEXT: The schema specifies BLOB but some code hex-encodes to TEXT. Standardize on raw BLOB for OPAQUE records/keys to avoid silent bugs with rqlite.
+
+API and flow mechanics
+- Finalize endpoint contract details:
+  - Enforce content sizes: reject oversized base64 inputs to avoid C/WASM buffer overflows.
+  - Strong rate limiting on both steps; per entity_id and per username.
+  - Return bodies must never include any intermediate OPAQUE secrets; keep messages minimal.
+- CSRF and token scoping:
+  - If tokens are in cookies, protect step endpoints with CSRF defenses or make them purely bearer-based with explicit short-lived session_id-only authorization.
+  - temp_token must be audience-limited to TOTP endpoints only, with <= 5–10 minute expiry.
+- Remove all plaintext password fields: The plan states this principle, but explicitly forbid any legacy paths in the API docs and add tests that fail if a password field appears.
+
+TOTP alignment with zero-knowledge goals
+- Decide and document a single design:
+  - Recommended: Server-managed TOTP root with per-user derivation (HKDF), encrypted at rest with a server master key. This keeps auth zero-knowledge for passwords/files while making 2FA operationally robust and does not require sending export_key to server.
+  - If you instead bind TOTP to export_key, explicitly update the “zero-knowledge” claims to allow limited key provisioning to the server for TOTP only, or move verification client-side (impractical).
+- Scope and lifecycle of temp_token: Document TTL, scope (“totp:*”), single-use, and revocation on success/failure.
+
+Build, toolchain, and tests
+- Add a concrete browser-WASM toolchain plan:
+  - Emscripten build of libopaque -> wasm + glue JS; expose minimal stable API; integrate with TS types.
+  - CI step to build artifacts deterministically; verify symbol sizes.
+- Replace “mock M/recU/authU base64” in tests with real vectors produced by the WASM build.
+- Add negative tests: malformed base64, wrong sizes, expired session, replayed session, wrong username/session binding.
+- Fuzz CGO/WASM boundary for size misreports (where applicable on server-side).
+
+Operational/privacy hardening
+- XSS hardening: Mandate CSP (script-src 'self'; object-src 'none'; enable Trusted Types), no inline scripts, no eval, COOP/COEP for WASM performance and memory isolation. Document this in the plan because export_key and OPAQUE state live client-side.
+- Logging policy: Absolutely no logging of OPAQUE messages, session IDs, or any base64 payloads; log only high-level event types and entity IDs.
+- Documentation corrections:
+  - State clearly that passwords never leave the client; export_key never leaves client; server never derives or receives session keys.
+  - Adjust docs/api.md and docs/security.md to the final TOTP design and endpoint names.
+
+Spec-level details to add to the plan
+- Explicitly include IdU/IdS and context in all OPAQUE steps; define what values are used (e.g., IdS = “Arkfile v1”, IdU = username, context = domain + API version).
+- Define precise buffer sizes and constants from libopaque headers for each message; include validation tables in the plan to prevent off-by-one errors when marshalling.
+- Define key schedules (HKDF labels) for any derivations from export_key used by the client.
+
+Typos/compile pitfalls in the plan
+- Function name typos (“libopaqueFinalize Request” with a space); fix all prototype names and ensure they map to real symbols.
+- Handlers reference unexported helpers (store/load) and mismatched CreateUser signatures; adjust when implementing.
+
+Decisions needed to finalize the plan
+- TOTP design: server-managed master key (recommended) vs export_key-bound.
+- Single source of truth for OPAQUE account record: choose opaque_user_data and restrict opaque_password_records to file-scoped passwords.
+- Server key provisioning: systemd-credentials/KMS vs DB at rest (with encryption). Set a rotation policy.
+- Client export_key storage: in-memory only vs wrapped CryptoKey in IndexedDB; default should be in-memory only for zero-knowledge posture.
+- API paths: lock /api/auth/opaque/register|login/(step1|step2).
+- WASM toolchain: Emscripten libopaque or alternate OPAQUE WASM library.
+
+With these additions and clarifications incorporated into fix-opaque.md, the plan will align tightly with a truly zero-knowledge OPAQUE authentication model while remaining implementable in a browser WASM environment.
+"""
