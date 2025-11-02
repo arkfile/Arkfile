@@ -23,6 +23,583 @@ This must be fixed immediately.
 5. Achieve actual zero-knowledge authentication
 6. Establish stable TypeScript crypto patterns for future features
 
+## Cryptographic Strategy
+
+### Overview
+
+This refactor establishes a comprehensive, modern cryptographic architecture using native browser APIs and well-audited TypeScript libraries while removing WASM complexity.
+
+### Three-Tier Password System
+
+#### 1. Account-Based Authentication (OPAQUE → HKDF)
+
+**Flow:**
+- User authenticates via OPAQUE protocol
+- OPAQUE provides high-entropy export key (32 bytes)
+- Use Web Crypto API's HKDF to derive file encryption keys
+- No Argon2id needed (export key is already high-entropy)
+
+**Implementation:**
+```typescript
+// After OPAQUE authentication
+const exportKey = await opaqueClient.finishAuthentication(serverResponse);
+
+// Import as CryptoKey for Web Crypto API
+const baseKey = await crypto.subtle.importKey(
+  'raw',
+  exportKey,
+  { name: 'HKDF' },
+  false,
+  ['deriveKey', 'deriveBits']
+);
+
+// Derive file encryption key
+const fileKey = await crypto.subtle.deriveKey(
+  {
+    name: 'HKDF',
+    hash: 'SHA-256',
+    salt: new Uint8Array(32), // Per-file salt
+    info: new TextEncoder().encode('arkfile-file-encryption')
+  },
+  baseKey,
+  { name: 'AES-GCM', length: 256 },
+  false,
+  ['encrypt', 'decrypt']
+);
+```
+
+**Rationale:**
+- OPAQUE export key = 256 bits of entropy
+- HKDF is designed for deriving keys from high-entropy sources
+- Web Crypto API native = fast, audited, no dependencies
+- Proper cryptographic separation: authentication vs encryption
+
+#### 2. Custom File Passwords (Argon2id)
+
+**Flow:**
+- User provides custom password for specific file
+- Use `@noble/hashes` Argon2id implementation
+- Derive key encryption key (KEK)
+- KEK wraps randomly-generated file encryption key (FEK)
+
+**Parameters (Maintained from Current Implementation):**
+```typescript
+const ARGON2_PARAMS = {
+  time: 8,        // iterations
+  mem: 262144,    // 256 MB (256 * 1024 KB)
+  parallelism: 4, // threads
+  outputLen: 32   // 32 bytes
+};
+```
+
+**Implementation:**
+```typescript
+import { argon2id } from '@noble/hashes/argon2';
+
+async function deriveCustomFileKey(
+  password: string,
+  username: string
+): Promise<Uint8Array> {
+  // Generate deterministic salt (matches Go implementation)
+  const saltInput = `arkfile-custom-key-salt:${username}`;
+  const salt = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(saltInput)
+  );
+  
+  // Derive key using Argon2id
+  const key = argon2id(
+    new TextEncoder().encode(password),
+    new Uint8Array(salt),
+    {
+      t: ARGON2_PARAMS.time,
+      m: ARGON2_PARAMS.mem,
+      p: ARGON2_PARAMS.parallelism,
+      dkLen: ARGON2_PARAMS.outputLen
+    }
+  );
+  
+  return key;
+}
+```
+
+**Rationale:**
+- Custom passwords are user-chosen (potentially weak)
+- Argon2id provides memory-hard protection
+- 256MB memory cost makes brute-force expensive
+- Matches Go implementation parameters
+
+#### 3. Share Passwords (Argon2id)
+
+**Flow:**
+- User creates share with password
+- Use `@noble/hashes` Argon2id implementation
+- Derive key encryption key (KEK)
+- KEK wraps file encryption key for anonymous access
+
+**Parameters (Same as Custom File Passwords):**
+```typescript
+const ARGON2_PARAMS = {
+  time: 8,
+  mem: 262144,
+  parallelism: 4,
+  outputLen: 32
+};
+```
+
+**Implementation:**
+```typescript
+async function deriveShareKey(
+  password: string,
+  username: string
+): Promise<Uint8Array> {
+  // Generate deterministic salt (matches Go implementation)
+  const saltInput = `arkfile-share-key-salt:${username}`;
+  const salt = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(saltInput)
+  );
+  
+  // Derive key using Argon2id
+  const key = argon2id(
+    new TextEncoder().encode(password),
+    new Uint8Array(salt),
+    {
+      t: ARGON2_PARAMS.time,
+      m: ARGON2_PARAMS.mem,
+      p: ARGON2_PARAMS.parallelism,
+      dkLen: ARGON2_PARAMS.outputLen
+    }
+  );
+  
+  return key;
+}
+```
+
+**Rationale:**
+- Share passwords enable anonymous access
+- Must be strong enough to protect shared files
+- Argon2id provides necessary protection
+- Matches Go implementation parameters
+
+### Web Crypto API Usage
+
+#### File Encryption (AES-GCM)
+
+**Implementation:**
+```typescript
+async function encryptFile(
+  data: Uint8Array,
+  key: CryptoKey
+): Promise<{ ciphertext: Uint8Array; nonce: Uint8Array }> {
+  // Generate random nonce (12 bytes for AES-GCM)
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  
+  // Encrypt with AES-GCM
+  const ciphertext = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv: nonce,
+      tagLength: 128 // 16-byte authentication tag
+    },
+    key,
+    data
+  );
+  
+  return {
+    ciphertext: new Uint8Array(ciphertext),
+    nonce
+  };
+}
+
+async function decryptFile(
+  ciphertext: Uint8Array,
+  nonce: Uint8Array,
+  key: CryptoKey
+): Promise<Uint8Array> {
+  const plaintext = await crypto.subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv: nonce,
+      tagLength: 128
+    },
+    key,
+    ciphertext
+  );
+  
+  return new Uint8Array(plaintext);
+}
+```
+
+**Rationale:**
+- AES-GCM provides authenticated encryption
+- Web Crypto API native = hardware acceleration
+- 12-byte nonce is standard for AES-GCM
+- 128-bit tag provides strong authentication
+
+#### Key Import/Export
+
+**Implementation:**
+```typescript
+// Import raw key material as CryptoKey
+async function importKey(
+  keyMaterial: Uint8Array,
+  algorithm: 'AES-GCM' | 'HKDF'
+): Promise<CryptoKey> {
+  const usages = algorithm === 'AES-GCM' 
+    ? ['encrypt', 'decrypt'] 
+    : ['deriveKey', 'deriveBits'];
+    
+  return await crypto.subtle.importKey(
+    'raw',
+    keyMaterial,
+    { name: algorithm },
+    false, // not extractable
+    usages
+  );
+}
+
+// Export CryptoKey to raw bytes (when needed)
+async function exportKey(key: CryptoKey): Promise<Uint8Array> {
+  const exported = await crypto.subtle.exportKey('raw', key);
+  return new Uint8Array(exported);
+}
+```
+
+### Password Complexity Requirements
+
+**Maintained from Current Implementation:**
+
+All password validation logic remains unchanged:
+- Minimum length requirements
+- Character class requirements
+- Complexity scoring
+- User feedback
+
+**Files:**
+- `crypto/password_validation.go` - Server-side validation (unchanged)
+- `client/static/js/src/auth/*` - Client-side validation (unchanged)
+
+The cryptographic changes only affect how passwords are processed after validation, not the validation rules themselves.
+
+### TypeScript Crypto Module Structure
+
+**File: `client/static/js/src/crypto/primitives.ts`**
+```typescript
+// Core cryptographic primitives
+export class CryptoPrimitives {
+  // AES-GCM encryption/decryption
+  static async encrypt(data: Uint8Array, key: CryptoKey): Promise<EncryptedData>
+  static async decrypt(encrypted: EncryptedData, key: CryptoKey): Promise<Uint8Array>
+  
+  // Key derivation
+  static async deriveHKDF(baseKey: Uint8Array, info: string): Promise<CryptoKey>
+  static async deriveArgon2id(password: string, salt: Uint8Array): Promise<Uint8Array>
+  
+  // Key management
+  static async importKey(material: Uint8Array, algorithm: string): Promise<CryptoKey>
+  static async exportKey(key: CryptoKey): Promise<Uint8Array>
+}
+```
+
+**File: `client/static/js/src/crypto/file-encryption.ts`**
+```typescript
+// High-level file encryption operations
+export class FileEncryption {
+  // Account-based encryption (OPAQUE export key)
+  static async encryptWithAccountKey(file: File, exportKey: Uint8Array): Promise<EncryptedFile>
+  static async decryptWithAccountKey(encrypted: EncryptedFile, exportKey: Uint8Array): Promise<File>
+  
+  // Custom password encryption
+  static async encryptWithCustomPassword(file: File, password: string, username: string): Promise<EncryptedFile>
+  static async decryptWithCustomPassword(encrypted: EncryptedFile, password: string, username: string): Promise<File>
+  
+  // Share password encryption
+  static async encryptForSharing(file: File, password: string, username: string): Promise<EncryptedFile>
+  static async decryptSharedFile(encrypted: EncryptedFile, password: string): Promise<File>
+}
+```
+
+**File: `client/static/js/src/crypto/types.ts`**
+```typescript
+// Type definitions for crypto operations
+export interface EncryptedData {
+  ciphertext: Uint8Array;
+  nonce: Uint8Array;
+  tag?: Uint8Array; // For AES-GCM, included in ciphertext
+}
+
+export interface EncryptedFile {
+  metadata: FileMetadata;
+  data: EncryptedData;
+  keyType: 'account' | 'custom' | 'share';
+}
+
+export interface FileMetadata {
+  filename: string;
+  size: number;
+  mimeType: string;
+  uploadedAt: Date;
+}
+
+export const ARGON2_PARAMS = {
+  time: 8,
+  mem: 262144,
+  parallelism: 4,
+  outputLen: 32
+} as const;
+```
+
+### Error Handling Patterns
+
+**Cryptographic Errors:**
+```typescript
+export class CryptoError extends Error {
+  constructor(
+    message: string,
+    public readonly operation: string,
+    public readonly cause?: Error
+  ) {
+    super(message);
+    this.name = 'CryptoError';
+  }
+}
+
+// Usage
+try {
+  const key = await deriveKey(password, salt);
+} catch (error) {
+  throw new CryptoError(
+    'Key derivation failed',
+    'deriveArgon2id',
+    error as Error
+  );
+}
+```
+
+**User-Facing Errors:**
+```typescript
+export function handleCryptoError(error: Error): string {
+  if (error instanceof CryptoError) {
+    switch (error.operation) {
+      case 'decrypt':
+        return 'Incorrect password or corrupted file';
+      case 'encrypt':
+        return 'Encryption failed. Please try again';
+      case 'deriveKey':
+        return 'Password processing failed';
+      default:
+        return 'Cryptographic operation failed';
+    }
+  }
+  return 'An unexpected error occurred';
+}
+```
+
+### Dependencies
+
+**Add to `client/static/js/package.json`:**
+```json
+{
+  "dependencies": {
+    "@cloudflare/opaque-ts": "^0.1.0",
+    "@noble/hashes": "^1.3.3"
+  }
+}
+```
+
+**Installation:**
+```bash
+cd client/static/js
+bun add @cloudflare/opaque-ts @noble/hashes
+```
+
+**Rationale:**
+- `@cloudflare/opaque-ts`: Battle-tested OPAQUE implementation
+- `@noble/hashes`: Pure TypeScript, well-audited, supports Argon2id
+- Both maintained by respected cryptography experts
+- No WASM dependencies
+- Small bundle sizes
+
+## Database Schema Changes
+
+### Overview
+
+Clean separation between OPAQUE (account authentication) and Argon2id (file/share passwords) with minimal salt storage.
+
+### Design Principles
+
+1. **No Critical Password Salts for Account Authentication**
+   - OPAQUE handles all salt/randomness internally
+   - Server never sees or stores password-derived salts
+
+2. **Minimal Salt Storage for File Operations**
+   - Share passwords: Random salts (necessary for Argon2id)
+   - Custom file passwords: Deterministic salts (no storage needed)
+
+3. **Clear Table Separation**
+   - One table per authentication mechanism
+   - No mixing of OPAQUE and Argon2id records
+
+### Tables to Modify
+
+#### 1. Simplify `opaque_user_data`
+
+**Current Purpose:** Mixed OPAQUE storage
+**New Purpose:** Account authentication only
+
+**Keep:**
+```sql
+CREATE TABLE IF NOT EXISTS opaque_user_data (
+    username TEXT PRIMARY KEY,
+    serialized_record BLOB NOT NULL,
+    created_at DATETIME NOT NULL,
+    last_used_at DATETIME,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+```
+
+**Changes:**
+- Remove any file-related fields if present
+- Focus solely on account authentication
+
+#### 2. Delete `opaque_password_records`
+
+**Reason:** This table currently mixes OPAQUE and other password types, creating confusion.
+
+**Action:** Drop table entirely
+```sql
+DROP TABLE IF EXISTS opaque_password_records;
+```
+
+**Replacement:** Separate tables for each use case (see below)
+
+### Tables to Create
+
+#### 3. New `file_custom_passwords` Table
+
+**Purpose:** Track custom file passwords (Argon2id-based)
+
+**Schema:**
+```sql
+CREATE TABLE IF NOT EXISTS file_custom_passwords (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id TEXT NOT NULL,
+    owner_username TEXT NOT NULL,
+    key_label TEXT NOT NULL,              -- User-friendly name like "Work Password"
+    password_hint TEXT,                   -- Optional hint
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP,
+    is_active BOOLEAN DEFAULT TRUE,
+    FOREIGN KEY (file_id) REFERENCES file_metadata(file_id) ON DELETE CASCADE,
+    FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE,
+    UNIQUE(file_id, key_label)            -- Each file can have multiple custom passwords
+);
+
+CREATE INDEX IF NOT EXISTS idx_file_custom_passwords_file 
+    ON file_custom_passwords(file_id);
+CREATE INDEX IF NOT EXISTS idx_file_custom_passwords_owner 
+    ON file_custom_passwords(owner_username);
+CREATE INDEX IF NOT EXISTS idx_file_custom_passwords_active 
+    ON file_custom_passwords(is_active);
+```
+
+**Key Points:**
+- **No salt column** - uses deterministic salt from username
+- Stores metadata only (label, hint, timestamps)
+- Never stores actual password or derived keys
+- Follows same `owner_username` pattern as `file_metadata`
+
+**Salt Derivation (Client-Side):**
+```typescript
+// Deterministic salt - no storage needed
+const saltInput = `arkfile-custom-key-salt:${username}`;
+const salt = await crypto.subtle.digest(
+  'SHA-256',
+  new TextEncoder().encode(saltInput)
+);
+```
+
+### Tables to Keep Unchanged
+
+#### 4. `file_share_keys` - Already Correct
+
+**Purpose:** Anonymous file sharing with password protection
+
+**Current Schema:**
+```sql
+CREATE TABLE IF NOT EXISTS file_share_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    share_id TEXT NOT NULL UNIQUE,
+    file_id TEXT NOT NULL,
+    owner_username TEXT NOT NULL,
+    salt TEXT NOT NULL,                   -- Random salt for each share (necessary)
+    encrypted_fek TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME,
+    FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE
+);
+```
+
+**Why Keep Salt:**
+- Share passwords need random salts (not deterministic)
+- Each share is independent and anonymous
+- Salt is not secret - safe to store
+
+#### 5. `file_metadata` - No Changes
+
+**Current Schema:**
+```sql
+CREATE TABLE IF NOT EXISTS file_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id VARCHAR(36) UNIQUE NOT NULL,
+    storage_id VARCHAR(36) UNIQUE NOT NULL,
+    owner_username TEXT NOT NULL,
+    -- ... other fields ...
+    FOREIGN KEY (owner_username) REFERENCES users(username)
+);
+```
+
+**Why No Changes:**
+- Already uses `owner_username` foreign key pattern
+- Consistent with new `file_custom_passwords` table
+
+### Salt Storage Summary
+
+| Password Type | Mechanism | Salt Storage | Rationale |
+|--------------|-----------|--------------|-----------|
+| Account Password | OPAQUE | None | Handled internally by OPAQUE protocol |
+| Custom File Password | Argon2id | None | Deterministic from username |
+| Share Password | Argon2id | Random (stored) | Each share needs unique random salt |
+
+### Migration Strategy
+
+Since this is a greenfield application with no current deployments:
+
+1. Update `database/unified_schema.sql` with new schema
+2. Drop `opaque_password_records` table
+3. Create `file_custom_passwords` table
+4. Update Go models to use new tables
+5. No data migration needed
+
+### Security Benefits
+
+1. **Minimal Attack Surface**
+   - Only one table stores salts (`file_share_keys`)
+   - Account authentication has zero stored salts
+
+2. **Clear Separation**
+   - Each authentication mechanism has dedicated table
+   - No confusion between OPAQUE and Argon2id
+
+3. **Audit Trail**
+   - `last_used_at` tracks password usage
+   - `is_active` allows soft deletion
+
+4. **Scalability**
+   - Each file can have multiple custom passwords
+   - Each password has user-friendly label
+
 ## Coding Standards
 
 - Use Bun exclusively (no npm/pnpm/yarn)
@@ -262,7 +839,6 @@ No schema changes required - OPAQUE user records use the same database structure
 
 #### New Documentation
 - `docs/opaque-protocol.md` - Explain OPAQUE implementation
-- `docs/migration-guide.md` - Guide for existing users
 - `docs/testing-guide.md` - How to verify security properties
 
 ## File Modification Checklist
@@ -280,7 +856,7 @@ No schema changes required - OPAQUE user records use the same database structure
 - [ ] `auth/opaque_client.go`
 - [ ] `client/api_client.go`
 - [ ] `docs/opaque-protocol.md`
-- [ ] `docs/migration-guide.md`
+- [ ] `docs/testing-guide.md`
 
 ### Files to Modify
 - [ ] `client/static/js/package.json`
@@ -319,7 +895,6 @@ No schema changes required - OPAQUE user records use the same database structure
 - [ ] All tests pass
 - [ ] Zero-knowledge property verified
 - [ ] Documentation complete
-- [ ] Migration path clear
 
 ## Risks and Mitigations
 
@@ -338,6 +913,5 @@ After modifying each file, append to this document:
 
 ### Implementation Log
 
-- `filename` - description of changes
-
-(This section will be populated during implementation)
+- `docs/wip/major-auth-wasm-fix.md` - Added comprehensive cryptographic strategy section detailing Web Crypto API usage, three-tier password system (OPAQUE→HKDF for account passwords, Argon2id for custom/share passwords), TypeScript module structure, error handling patterns; removed all backward compatibility and migration references (greenfield app)
+- `docs/wip/major-auth-wasm-fix.md` - Added database schema changes section: new `file_custom_passwords` table for custom file passwords (Argon2id, no salt storage), simplified `opaque_user_data` for account auth only, deleted `opaque_password_records` table, documented salt storage strategy (OPAQUE: none, custom passwords: deterministic, share passwords: random)
