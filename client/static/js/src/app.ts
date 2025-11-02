@@ -4,13 +4,11 @@
  * Updated for new home page with proper event listeners
  */
 
-import { wasmManager } from './utils/wasm';
-import { validateToken, isAuthenticated, clearAllSessionData } from './utils/auth-wasm';
+import { validateToken, isAuthenticated, clearAllSessionData } from './utils/auth';
 import { showError, showSuccess } from './ui/messages';
 import { showFileSection, showAuthSection, toggleAuthForm } from './ui/sections';
 import { loadFiles, displayFiles } from './files/list';
 import { setupLoginForm, login, logout } from './auth/login';
-import { setupRegistrationForm, register } from './auth/register';
 
 class ArkFileApp {
   private initialized = false;
@@ -19,15 +17,6 @@ class ArkFileApp {
     if (this.initialized) return;
 
     try {
-      // Update status indicator to loading
-      this.updateWasmStatus('loading', 'Loading WASM...', '');
-
-      // Initialize WASM first
-      await wasmManager.initWasm();
-      
-      // Test WASM health
-      await this.testWasmHealth();
-      
       // Check if we're on the home page or app page
       if (this.isHomePage()) {
         this.setupHomePageListeners();
@@ -71,8 +60,6 @@ class ArkFileApp {
         this.showApp();
         showAuthSection();
         toggleAuthForm(); // Switch to register form
-        // Set up form listeners after form is visible
-        setupRegistrationForm();
       });
     }
 
@@ -89,9 +76,8 @@ class ArkFileApp {
   }
 
   private setupAppListeners(): void {
-    // Set up login and registration forms
+    // Set up login form
     setupLoginForm();
-    setupRegistrationForm();
     
     // Navigation between login and register
     const showRegisterLink = document.getElementById('show-register-link');
@@ -99,8 +85,6 @@ class ArkFileApp {
       showRegisterLink.addEventListener('click', (e) => {
         e.preventDefault();
         toggleAuthForm();
-        // Re-setup registration form when switching to it
-        setupRegistrationForm();
       });
     }
 
@@ -145,7 +129,8 @@ class ArkFileApp {
     if (registerSubmitBtn) {
       registerSubmitBtn.addEventListener('click', async (e) => {
         e.preventDefault();
-        await register();
+        // Registration functionality needs to be implemented
+        showError('Registration is not yet implemented');
       });
     }
 
@@ -174,7 +159,7 @@ class ArkFileApp {
     if (revokeButton) {
       revokeButton.addEventListener('click', async (e) => {
         e.preventDefault();
-        const { revokeAllSessions } = await import('./utils/auth-wasm');
+        const { revokeAllSessions } = await import('./utils/auth');
         const success = await revokeAllSessions();
         if (success) {
           showSuccess('All sessions have been revoked. Please log in again.');
@@ -331,59 +316,6 @@ class ArkFileApp {
     }
   }
 
-  private updateWasmStatus(state: 'loading' | 'ready' | 'error', text: string, details: string): void {
-    const statusElement = document.getElementById('wasm-status');
-    if (!statusElement) return;
-
-    const iconElement = statusElement.querySelector('.status-icon');
-    const textElement = statusElement.querySelector('.status-text');
-    const detailsElement = statusElement.querySelector('.status-details');
-
-    statusElement.className = `wasm-status ${state}`;
-
-    if (iconElement) {
-      iconElement.textContent = state === 'loading' ? 'LOADING' : state === 'ready' ? 'OK' : 'ERROR';
-    }
-    if (textElement) {
-      textElement.textContent = text;
-    }
-    if (detailsElement) {
-      detailsElement.textContent = details;
-    }
-
-    if (state === 'ready') {
-      setTimeout(() => {
-        statusElement.classList.add('hidden');
-      }, 3000);
-    }
-  }
-
-  private async testWasmHealth(): Promise<void> {
-    try {
-      console.log('[WASM Health Check] Starting health check...');
-      
-      if (typeof (window as any).wasmHealthCheck !== 'function') {
-        throw new Error('wasmHealthCheck function not found');
-      }
-
-      const result = (window as any).wasmHealthCheck();
-      
-      console.log('[WASM Health Check] Result:', result);
-
-      if (result && result.status === 'ok') {
-        this.updateWasmStatus('ready', 'WASM Ready', `Functions loaded: ${result.functions_loaded}`);
-        console.log('[WASM Health Check] WASM is working correctly');
-        console.log('[WASM Health Check] Message:', result.message);
-        console.log('[WASM Health Check] Timestamp:', result.timestamp);
-      } else {
-        throw new Error('Health check returned unexpected result');
-      }
-    } catch (error) {
-      console.error('[WASM Health Check] Health check failed:', error);
-      this.updateWasmStatus('error', 'WASM Error', error instanceof Error ? error.message : 'Unknown error');
-      throw error;
-    }
-  }
 
   // Public method to show app from home page
   public navigateToApp(): void {

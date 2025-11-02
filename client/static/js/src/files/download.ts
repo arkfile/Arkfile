@@ -2,49 +2,27 @@
  * File download functionality
  */
 
-import { wasmManager } from '../utils/wasm';
-import { getUserEmailFromToken, authenticatedFetch } from '../utils/auth-wasm';
+import { getUserEmailFromToken, authenticatedFetch } from '../utils/auth';
 import { showError } from '../ui/messages';
 
 export async function downloadFile(filename: string, hint: string, expectedHash: string, passwordType: string): Promise<void> {
   try {
-    await wasmManager.ensureReady();
-
     if (hint) {
       alert(`Password Hint: ${hint}`);
     }
 
-    let decryptedData: string | Uint8Array;
+    let decryptedData: string;
     
     if (passwordType === 'account') {
-      // For account-encrypted files, use secure session decryption
-      const userEmail = getUserEmailFromToken();
-      if (!userEmail) {
-        showError('Cannot determine user email. Please log in again.');
-        return;
-      }
-      
-      // Validate secure session exists
-      const sessionValidation = await wasmManager.validateSecureSession(userEmail);
-      if (!sessionValidation.valid) {
-        showError('Your session has expired (30 minutes). Please log in again to decrypt account-encrypted files.');
-        return;
-      }
-      
+      // For account-encrypted files, backend handles decryption
       const response = await authenticatedFetch(`/api/download/${encodeURIComponent(filename)}`);
 
       if (response.ok) {
         const data = await response.json();
-        
-        // Use secure session decryption (no password exposed to JavaScript)
-        const decryptResult = await wasmManager.decryptFileWithSecureSession(data.data, userEmail);
-        if (!decryptResult.success) {
-          showError('Failed to decrypt file: ' + decryptResult.error);
-          return;
-        }
-        decryptedData = decryptResult.data!;
+        decryptedData = data.data;
       } else {
-        showError('Failed to download file.');
+        const errorData = await response.json().catch(() => ({}));
+        showError(errorData.message || 'Failed to download file.');
         return;
       }
     } else {
@@ -52,31 +30,26 @@ export async function downloadFile(filename: string, hint: string, expectedHash:
       const password = prompt('Enter the file password:');
       if (!password) return;
 
-      const response = await authenticatedFetch(`/api/download/${encodeURIComponent(filename)}`);
+      const response = await authenticatedFetch(`/api/download/${encodeURIComponent(filename)}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ password }),
+      });
 
       if (response.ok) {
         const data = await response.json();
-        decryptedData = await wasmManager.decryptFile(data.data, password);
-
-        if (decryptedData === 'Failed to decrypt data') {
-          showError('Incorrect password or corrupted file.');
-          return;
-        }
+        decryptedData = data.data;
       } else {
-        showError('Failed to download file.');
+        const errorData = await response.json().catch(() => ({}));
+        showError(errorData.message || 'Failed to download file. Check your password.');
         return;
       }
     }
 
-    // Convert base64 to Uint8Array for hash verification
-    const decryptedBytes = Uint8Array.from(atob(decryptedData as string), c => c.charCodeAt(0));
-    
-    // Verify file integrity
-    const calculatedHash = await wasmManager.calculateSHA256(decryptedBytes);
-    if (calculatedHash !== expectedHash) {
-      showError('File integrity check failed. The file may be corrupted.');
-      return;
-    }
+    // Convert base64 to Uint8Array
+    const decryptedBytes = Uint8Array.from(atob(decryptedData), c => c.charCodeAt(0));
 
     // Create and download the file
     const blob = new Blob([decryptedBytes]);

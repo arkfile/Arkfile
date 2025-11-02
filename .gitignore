@@ -40,13 +40,6 @@ build/
 arkfile.db
 arkfile-test.db
 
-# WASM build artifacts
-client/main.wasm
-client/static/*.wasm
-client/wasm_exec.js
-client/static/wasm_exec.js
-*.wasm
-
 # Test artifacts and generated files
 test/
 integration_tests/

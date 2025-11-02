@@ -2,11 +2,10 @@
  * TOTP (Two-Factor Authentication) functionality
  */
 
-import { wasmManager } from '../utils/wasm';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
 import { showModal, showTOTPAppsModal } from '../ui/modals';
-import { setTokens, getToken } from '../utils/auth-wasm';
+import { getToken } from '../utils/auth';
 import { showFileSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { LoginManager } from './login';
@@ -547,45 +546,5 @@ async function completeTOTPSetupFlow(code: string, sessionKey: string): Promise<
   const success = await completeTOTPSetup(code, sessionKey);
   if (success) {
     document.querySelector('.modal-overlay')?.remove();
-  }
-}
-
-// Export utility functions for WASM integration
-export async function validateTOTPCode(code: string, username: string): Promise<boolean> {
-  try {
-    const result = await wasmManager.validateTOTPCode(code, username);
-    return result.valid;
-  } catch (error) {
-    console.error('TOTP validation error:', error);
-    return false;
-  }
-}
-
-export async function generateTOTPSetup(username: string): Promise<TOTPSetupData | null> {
-  try {
-    const result = await wasmManager.generateTOTPSetupData(username);
-    if (result.success && result.data) {
-      // Convert WASM camelCase to API snake_case format
-      return {
-        secret: result.data.secret,
-        qr_code_url: result.data.qrCodeUrl,
-        manual_entry: result.data.manualEntry,
-        backup_codes: result.data.backupCodes
-      };
-    }
-    return null;
-  } catch (error) {
-    console.error('TOTP setup generation error:', error);
-    return null;
-  }
-}
-
-export async function verifyTOTPSetup(code: string, secret: string, username: string): Promise<boolean> {
-  try {
-    const result = await wasmManager.verifyTOTPSetup(code, secret, username);
-    return result.valid;
-  } catch (error) {
-    console.error('TOTP setup verification error:', error);
-    return false;
   }
 }

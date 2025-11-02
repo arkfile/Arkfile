@@ -75,44 +75,6 @@ run_integration_tests() {
     fi
 }
 
-# Function to run WASM-specific tests
-run_wasm_tests() {
-    echo -e "\n${BLUE}Running WASM Tests...${NC}"
-    
-    # Check if WASM file exists (informational only)
-    if [ ! -f "client/static/main.wasm" ]; then
-        echo -e "${YELLOW}[WARNING]  WASM file not found - tests will use mocks${NC}"
-        echo -e "${YELLOW}   Build WASM with: cd client && GOOS=js GOARCH=wasm go build -o static/main.wasm .${NC}"
-    else
-        echo -e "${GREEN}[OK] WASM file found - tests will use real WASM functions${NC}"
-    fi
-    
-    cd client/static/js
-    
-    echo "Running WASM integration tests..."
-    if bun test tests/utils/test-runner.test.ts; then
-        echo -e "${GREEN}[OK] WASM tests passed${NC}"
-    else
-        echo -e "${YELLOW}[WARNING]  WASM tests encountered issues${NC}"
-    fi
-    
-    echo "Running OPAQUE WASM tests..."
-    if bun test tests/wasm/opaque-wasm.test.ts; then
-        echo -e "${GREEN}[OK] OPAQUE WASM tests passed${NC}"
-    else
-        echo -e "${YELLOW}[WARNING]  OPAQUE WASM tests encountered issues${NC}"
-    fi
-    
-    echo "Running multi-key debug tests..."
-    if bun test tests/debug/multi-key-test.test.ts; then
-        echo -e "${GREEN}[OK] Multi-key debug tests passed${NC}"
-    else
-        echo -e "${YELLOW}[WARNING]  Multi-key debug tests encountered issues${NC}"
-    fi
-    
-    cd ../../..
-    return 0
-}
 
 # Function to run build tests
 run_build_tests() {
@@ -208,12 +170,6 @@ main() {
         tests_passed=$((tests_passed + 1))
     fi
     
-    # Run WASM tests (don't fail on issues)
-    tests_run=$((tests_run + 1))
-    if run_wasm_tests; then
-        tests_passed=$((tests_passed + 1))
-    fi
-    
     # Final summary
     echo -e "\n${BLUE}[STATS] Test Results Summary${NC}"
     echo "=============================="
@@ -245,9 +201,6 @@ case "${1:-}" in
     "integration")
         check_bun && run_integration_tests
         ;;
-    "wasm")
-        check_bun && run_wasm_tests
-        ;;
     "help"|"-h"|"--help")
         echo "Usage: $0 [option]"
         echo ""
@@ -256,7 +209,6 @@ case "${1:-}" in
         echo "  build        Run build tests only"
         echo "  unit         Run unit tests only"
         echo "  integration  Run integration tests only"
-        echo "  wasm         Run WASM tests only"
         echo "  help         Show this help message"
         echo ""
         echo "If no option is provided, all tests will be run."

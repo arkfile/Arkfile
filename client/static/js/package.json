@@ -9,7 +9,6 @@
     "test": "bun test",
     "test:watch": "bun test --watch",
     "test:integration": "bun run tests/integration/test-runner.ts",
-    "test:wasm": "bun run tests/wasm/opaque-wasm.test.ts",
     "dev": "bun build src/app.ts --outdir dist --target browser --watch",
     "clean": "rm -rf dist/*",
     "lint": "bun tsc --noEmit && echo '✅ TypeScript checks passed'",

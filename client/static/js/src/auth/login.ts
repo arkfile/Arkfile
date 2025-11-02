@@ -2,10 +2,9 @@
  * Login functionality
  */
 
-import { wasmManager } from '../utils/wasm';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
-import { setTokens, getUsernameFromToken, getUserEmailFromToken, clearAllSessionData } from '../utils/auth-wasm';
+import { setTokens, getUsernameFromToken, clearAllSessionData } from '../utils/auth';
 import { showFileSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { handleTOTPFlow } from './totp';
@@ -32,55 +31,48 @@ export class LoginManager {
     }
 
     try {
-      // Ensure WASM is ready
-      await wasmManager.ensureReady();
-
       showProgressMessage('Authenticating...');
 
-      // FIXED: Use Go/WASM HTTP request to OPAQUE endpoint
-      const result = await wasmManager.performOpaqueLogin(credentials.username, credentials.password);
+      // Direct HTTP request to OPAQUE endpoint
+      const response = await fetch('/api/auth/opaque/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          username: credentials.username,
+          password: credentials.password
+        })
+      });
       
-      if (result.success && result.promise) {
-        try {
-          const response = await result.promise;
-          
-          if (!response.ok) {
-            const errorText = await response.text();
-            hideProgress();
-            showError(`Login failed: ${errorText}`);
-            return;
-          }
-          
-          const loginData = await response.json();
-          
-          // Handle TOTP if required
-          if (loginData.requires_totp) {
-            hideProgress();
-            handleTOTPFlow({
-              tempToken: loginData.temp_token!,
-              sessionKey: loginData.session_key,
-              username: credentials.username
-            });
-            return;
-          }
-          
-          // Complete authentication with tokens from OPAQUE
-          await this.completeLogin({
-            token: loginData.token,
-            refresh_token: loginData.refresh_token,
-            session_key: loginData.session_key,
-            auth_method: 'OPAQUE'
-          }, credentials.username);
-          
-        } catch (error) {
-          hideProgress();
-          console.error('OPAQUE login error:', error);
-          showError('Authentication failed - server error');
-        }
-      } else {
+      if (!response.ok) {
+        const errorText = await response.text();
         hideProgress();
-        showError(result.error || 'Login failed');
+        showError(`Login failed: ${errorText}`);
+        return;
       }
+      
+      const loginData = await response.json();
+      
+      // Handle TOTP if required
+      if (loginData.requires_totp) {
+        hideProgress();
+        handleTOTPFlow({
+          tempToken: loginData.temp_token!,
+          sessionKey: loginData.session_key,
+          username: credentials.username
+        });
+        return;
+      }
+      
+      // Complete authentication with tokens from OPAQUE
+      await this.completeLogin({
+        token: loginData.token,
+        refresh_token: loginData.refresh_token,
+        session_key: loginData.session_key,
+        auth_method: 'OPAQUE'
+      }, credentials.username);
+      
     } catch (error) {
       hideProgress();
       console.error('Login error:', error);
@@ -92,14 +84,6 @@ export class LoginManager {
     try {
       // Store authentication tokens
       setTokens(data.token, data.refresh_token);
-
-      // Create secure session in WASM (NEVER store session key in JavaScript)
-      const sessionResult = await wasmManager.createSecureSessionFromKey(data.session_key, username);
-      if (!sessionResult.success) {
-        hideProgress();
-        showError('Failed to create secure session: ' + sessionResult.error);
-        return;
-      }
       
       hideProgress();
       showSuccess('Login successful');
@@ -117,16 +101,8 @@ export class LoginManager {
 
   public static async logout(): Promise<void> {
     try {
-      // Get username for secure session cleanup
-      const username = getUsernameFromToken();
-      
-      // Clear secure session from WASM memory
-      if (username) {
-        await wasmManager.clearSecureSessionForUser(username);
-      }
-      
       // Use auth manager to handle token cleanup and API call
-        const { logout } = await import('../utils/auth-wasm');
+      const { logout } = await import('../utils/auth');
       await logout();
       
       // Clear all session data
@@ -141,15 +117,6 @@ export class LoginManager {
       console.error('Logout error:', error);
       
       // Still attempt cleanup even on error
-      const username = getUsernameFromToken();
-      if (username) {
-        try {
-          await wasmManager.clearSecureSessionForUser(username);
-        } catch (e) {
-          console.warn('Failed to clear secure session on logout error:', e);
-        }
-      }
-      
       clearAllSessionData();
       
       const { showAuthSection } = await import('../ui/sections');

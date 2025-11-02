@@ -3,8 +3,6 @@ set -e
 
 # Configuration
 APP_NAME="arkfile"
-WASM_SOURCE_DIR="client"  # Source directory containing main.go
-WASM_BUILD_DIR="wasm-build"  # Build destination directory
 BUILD_DIR="build"
 VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "unknown")}
 BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -398,33 +396,6 @@ fi
 
 echo -e "${GREEN}[OK] TypeScript frontend built successfully${NC}"
 
-# Build WebAssembly
-echo "Building WebAssembly..."
-# Ensure WASM build directory exists with proper permissions
-mkdir -p ${BUILD_DIR}/${WASM_BUILD_DIR}
-GOOS=js GOARCH=wasm "$GO_BINARY" build -o ${BUILD_DIR}/${WASM_BUILD_DIR}/main.wasm ./${WASM_SOURCE_DIR}/main.go
-
-# Find wasm_exec.js using Go's environment
-GOROOT=$("$GO_BINARY" env GOROOT)
-WASM_EXEC_JS=""
-if [ -f "${GOROOT}/lib/wasm/wasm_exec.js" ]; then
-    WASM_EXEC_JS="${GOROOT}/lib/wasm/wasm_exec.js"
-elif [ -f "${GOROOT}/misc/wasm/wasm_exec.js" ]; then
-    WASM_EXEC_JS="${GOROOT}/misc/wasm/wasm_exec.js"
-else
-    echo -e "${RED}[X] Cannot find wasm_exec.js in Go installation at ${GOROOT}${NC}"
-    exit 1
-fi
-
-echo "Using wasm_exec.js from: ${WASM_EXEC_JS}"
-cp "${WASM_EXEC_JS}" ${BUILD_DIR}/${WASM_BUILD_DIR}/
-
-# Copy WASM files to static directory for deployment
-echo "Copying WASM files to static directory..."
-cp ${BUILD_DIR}/${WASM_BUILD_DIR}/main.wasm client/static/
-cp ${BUILD_DIR}/${WASM_BUILD_DIR}/wasm_exec.js client/static/
-echo -e "${GREEN}[OK] WASM files copied to static directory${NC}"
-
 # Build Go binaries with static linking
 build_go_binaries_static() {
     echo -e "${YELLOW}Building Go binaries with static linking...${NC}"
@@ -553,23 +524,6 @@ if [ -d "${BUILD_DIR}/client/js" ]; then
     echo -e "${GREEN}[OK] Moved compiled TypeScript to client/static/js/${NC}"
 fi
 
-# WASM files are already in client/static/ from the static directory move above
-# Verify they exist
-if [ ! -f "${BUILD_DIR}/client/static/main.wasm" ]; then
-    echo -e "${RED}[X] main.wasm missing from client/static/${NC}"
-    exit 1
-fi
-if [ ! -f "${BUILD_DIR}/client/static/wasm_exec.js" ]; then
-    echo -e "${RED}[X] wasm_exec.js missing from client/static/${NC}"
-    exit 1
-fi
-echo -e "${GREEN}[OK] WASM files verified in client/static/${NC}"
-
-# Keep wasm-build directory for reference but it's no longer needed for deployment
-if [ -d "${BUILD_DIR}/${WASM_BUILD_DIR}" ]; then
-    mv "${BUILD_DIR}/${WASM_BUILD_DIR}" "${BUILD_DIR}/client/" 2>/dev/null || true
-fi
-
 # Database files
 mkdir -p "${BUILD_DIR}/database"
 cp -r database/* "${BUILD_DIR}/database/"
@@ -587,12 +541,6 @@ sudo cp "${BUILD_DIR}/systemd/"* "${BASE_DIR}/systemd/"
 echo "Deploying database schema to ${BASE_DIR}/database/..."
 sudo mkdir -p "${BASE_DIR}/database"
 sudo cp "${BUILD_DIR}/database/"* "${BASE_DIR}/database/"
-
-# Deploy WASM files to production location for dev-reset verification
-echo "Deploying WASM files to ${BASE_DIR}/client/static/..."
-sudo mkdir -p "${BASE_DIR}/client/static"
-sudo cp "${BUILD_DIR}/client/static/main.wasm" "${BASE_DIR}/client/static/"
-sudo cp "${BUILD_DIR}/client/static/wasm_exec.js" "${BASE_DIR}/client/static/"
 
 # Deploy binaries to production location for key setup scripts
 echo "Deploying binaries to ${BASE_DIR}/bin/..."
