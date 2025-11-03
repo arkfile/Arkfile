@@ -2,17 +2,17 @@
 
 # Arkfile: Overview for Agents
 
-Arkfile is designed as a Zero-Knowledge File Vault over S3. It enables file backup for file owners, with client-side encryption happening via Go/WASM in browsers or using the `cryptocli` tool on the command-line (prior to uploading with `arkfile-client` to the server). It uses Minio as a gateway to interface with any number of backend storage systems that are S3 compatible in order to store client-side encrypted files.
+Arkfile is designed as a Zero-Knowledge File Vault over S3. It enables file backup for file owners, with client-side encryption happening via the Web Crypto API in browsers or using the `cryptocli` tool on the command-line (prior to uploading with `arkfile-client` to the server). It uses Minio as a gateway to interface with any number of backend storage systems that are S3 compatible in order to store client-side encrypted files.
 
 It is vital to maintain the Zero-Knowledge design of the app and to preserve and protect user privacy end-to-end in all the work that we do.
 
-We use OPAQUE for authentication, so that passwords are never sent to the server for logging in.
+We use OPAQUE for authentication, so that passwords are never sent to the server for logging in. libopaque C-library via CGO is used on the server side. Cloudflare's opaque-ts is used on the client side.
 
-And we use client-side encryption to ensure that file data is never sent to the server until and unless it is encrypted with a strong password.
+We use client-side encryption to ensure that file data is never sent to the server until and unless it is encrypted with a strong password.
 
-And we use client-side encryption to encrypt file metadata as well, including the original filename and the original sha256 digest of the original file.
+We use client-side encryption to encrypt file metadata as well, including the original filename and the original sha256 digest of the original file.
 
-And we never log IP addresses or any PII of users or visitors to the app/site. (e.g. visitor IP addresses are not logged and are obfuscated with HMAC to form an EntityID for select areas that need rate-limiting, such as to protect against shared file URL enumeration type attacks.)
+We never log IP addresses or any PII of users or visitors to the app/site. (e.g. visitor IP addresses are not logged and are obfuscated with HMAC to form an EntityID for select areas that need rate-limiting, such as to protect against shared file URL enumeration type attacks.)
 
 The server must know nothing about the nature of the data belonging to clients, nor about their passwords, nor visitor IPs.
 
@@ -39,4 +39,4 @@ In order to slowly build up the core functionality of the system and prove its c
 
 ## No Emojis
 
-None of this stuff: "🎉🚀❌📦⚠️✅". I don't want it in responses, nor in comments, nor in code. Nowhere. We are not middle school girls. Instead of '❌' use [X]. Instead of '✅' use [OK]. Instead of '⚠️' use [!]. Instead of '🎉'/'🚀' use 'SUCCESS!' or something to that effect.
+No emojis in any code, documentation, or responses please. If needed, instead of '❌' you can use use '[X]'. Instead of '✅' use '[OK]'. Instead of '⚠️' use '[!]'. Instead of '🎉'/'🚀'/other celebratory emojis, use 'SUCCESS!' or something to that effect.
