@@ -308,12 +308,12 @@ func RateLimitMiddleware(endpointConfig config.EndpointConfig) echo.MiddlewareFu
 	}
 }
 
-// CSPMiddleware adds Content Security Policy headers with WASM support
+// CSPMiddleware adds Content Security Policy headers with strict security
 func CSPMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		// CSP policy with WASM support and strict security
+		// CSP policy with strict security
 		csp := "default-src 'self'; " +
-			"script-src 'self' 'wasm-unsafe-eval'; " + // Allow WASM execution
+			"script-src 'self'; " +
 			"style-src 'self'; " +
 			"img-src 'self' data:; " +
 			"connect-src 'self'; " +

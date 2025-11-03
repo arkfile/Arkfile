@@ -38,7 +38,6 @@ scripts/
 │   ├── test-credits-system.sh        # Credits system testing
 │   ├── test-share-workflow-complete.sh # Share workflow testing
 │   ├── test-typescript.sh            # TypeScript testing suite
-│   ├── test-wasm.sh                  # WebAssembly tests
 │   └── totp-generator.go             # Helper utility for TOTP (2FA) testing
 ├── maintenance/                      # Maintenance and operational scripts
 │   ├── health-check.sh               # System health monitoring
@@ -162,12 +161,6 @@ The setup scripts are numbered to show their logical dependency order:
 
 ### Testing Scripts
 
-
-#### `test-wasm.sh`
-**Purpose**: Test WebAssembly functionality  
-**Usage**: `./scripts/testing/test-wasm.sh`  
-**Tests**: WASM crypto functions, browser compatibility
-
 #### `admin-auth-test.sh`
 **Purpose**: OPAQUE authentication and TOTP testing focused on admin functionality  
 **Usage**: `./scripts/testing/admin-auth-test.sh`  
@@ -246,9 +239,8 @@ go build -o totp-generator totp-generator.go
 - `build` - Run build tests only
 - `unit` - Run unit tests only
 - `integration` - Run integration tests only
-- `wasm` - Run WASM tests only
 - `help` - Show help message
-**Tests**: TypeScript compilation, Bun testing, WASM integration, build validation
+**Tests**: TypeScript compilation, Bun testing, build validation
 **Prerequisites**: Bun runtime installed for client-side testing
 
 
@@ -360,9 +352,6 @@ sudo systemctl start arkfile
 # Alpine Linux compatibility
 ./scripts/testing/alpine-build-test.sh
 
-# WebAssembly tests
-./scripts/testing/test-wasm.sh
-
 # TypeScript testing
 ./scripts/testing/test-typescript.sh
 ```
@@ -388,7 +377,6 @@ Many scripts support environment variables for customization:
 
 ### Testing Scripts
 - `SKIP_TESTS=1` - Skip test execution
-- `SKIP_WASM=1` - Skip WebAssembly tests
 - `SKIP_PERFORMANCE=1` - Skip performance benchmarks
 - `SKIP_GOLDEN=1` - Skip golden test preservation
 
