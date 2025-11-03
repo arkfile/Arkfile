@@ -34,7 +34,7 @@
 		# Prevent MIME-sniffing
 		X-Content-Type-Options "nosniff"
 		# CSP
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline';"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';"
 		# Restrict referrer information
 		Referrer-Policy "strict-origin-when-cross-origin"
 	}

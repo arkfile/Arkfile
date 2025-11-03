@@ -14,53 +14,6 @@
     --medium-red: #fecaca;
 }
 
-/* WASM Status Indicator */
-.wasm-status {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    padding: 12px 20px;
-    text-align: center;
-    font-family: monospace;
-    font-size: 14px;
-    z-index: 10000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    transition: all 0.3s ease;
-}
-
-.wasm-status.loading {
-    background-color: #6c757d;
-    color: white;
-}
-
-.wasm-status.ready {
-    background-color: var(--success-color);
-    color: white;
-}
-
-.wasm-status.error {
-    background-color: var(--error-color);
-    color: white;
-}
-
-.wasm-status .status-icon {
-    font-weight: bold;
-    font-size: 16px;
-}
-
-.wasm-status .status-details {
-    font-size: 12px;
-    opacity: 0.9;
-}
-
-.wasm-status.hidden {
-    display: none;
-}
-
 * {
     margin: 0;
     padding: 0;

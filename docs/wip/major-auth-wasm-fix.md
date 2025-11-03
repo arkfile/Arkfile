@@ -980,13 +980,19 @@ Security improvements:
   - Changed to: `"script-src 'self';"` (strict security, no WASM)
   - Updated function comment from "with WASM support" to "with strict security"
 
+Build script cleanup:
+- `scripts/complete-setup-test.sh` - Removed WASM test execution section
+  - Deleted call to non-existent `./scripts/testing/test-wasm.sh`
+  - Removed `SKIP_WASM` environment variable
+  - Removed all WASM-related output messages
+  - Cleaned up test summary (removed "WebAssembly: 14/14 tests" references)
+
 Remaining WASM references analyzed (all acceptable):
-1. `scripts/complete-setup-test.sh` - Has `SKIP_WASM` variable and calls non-existent `test-wasm.sh` (gracefully skips)
-2. `scripts/setup/build.sh` - Comment mentions "WASM deployment" but no actual WASM build steps
-3. `scripts/setup/uninstall.sh` - References cleaning WASM files during uninstall (acceptable cleanup code)
-4. `scripts/dev-reset.sh` - Has WASM verification checks that fail gracefully (reports missing WASM, continues)
-5. `scripts/testing/security-test-suite.sh` - Checks for `wasm-unsafe-eval` in CSP (now correctly reports "WASM support not detected")
-6. `scripts/testing/test-typescript.sh` - Warning comment about WASM not being built (acceptable)
+1. `scripts/setup/build.sh` - Comment mentions "WASM deployment" but no actual WASM build steps
+2. `scripts/setup/uninstall.sh` - References cleaning WASM files during uninstall (acceptable cleanup code)
+3. `scripts/dev-reset.sh` - Has WASM verification checks that fail gracefully (reports missing WASM, continues)
+4. `scripts/testing/security-test-suite.sh` - Checks for `wasm-unsafe-eval` in CSP (now correctly reports "WASM support not detected")
+5. `scripts/testing/test-typescript.sh` - Warning comment about WASM not being built (acceptable)
 
 **Phase 1 Status: COMPLETE**
 
@@ -996,7 +1002,66 @@ All WASM infrastructure successfully removed:
 - Runtime loading: Removed
 - Route handlers: Removed
 - Test files: Deleted
+- Test execution: Removed
 - CSP headers: Hardened (removed wasm-unsafe-eval)
 - Documentation: Updated
 
 The project is now ready for Phase 2: TypeScript OPAQUE implementation using `@cloudflare/opaque-ts`.
+
+### Phase 1 Final Cleanup (2025-11-03)
+
+**Additional CSP and Configuration Cleanup:**
+
+Files modified:
+- `Caddyfile` - Removed `wasm-unsafe-eval` from Content-Security-Policy header
+  - Changed from: `Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; ..."`
+  - Changed to: `Content-Security-Policy "default-src 'self'; script-src 'self'; ..."`
+  - Hardened security by removing WASM-specific CSP directive
+
+- `Caddyfile.local` - Removed `wasm-unsafe-eval` from Content-Security-Policy header
+  - Changed from: `Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; ..."`
+  - Changed to: `Content-Security-Policy "default-src 'self'; script-src 'self'; ..."`
+  - Consistent security policy across development and production
+
+- `client/static/css/styles.css` - Removed WASM status indicator styles
+  - Deleted `.wasm-status` class and all related CSS rules
+  - Removed visual indicators for WASM loading/ready/error states
+  - Cleaned up UI elements that are no longer needed
+
+- `main.go` - Updated outdated comment in security middleware
+  - Changed from: `// CSP is handled by CSPMiddleware below for WASM compatibility`
+  - Changed to: `// CSP is handled by CSPMiddleware below`
+  - Removed reference to WASM compatibility
+
+**Comprehensive Verification:**
+
+Performed recursive search for any remaining WASM references:
+- Search pattern: `WASM|wasm` across entire codebase
+- Result: Zero matches found in source code
+- Only acceptable references remain in:
+  - Uninstall scripts (cleanup code)
+  - Security test scripts (checking for absence of wasm-unsafe-eval)
+  - Dev reset scripts (graceful failure when WASM not found)
+
+**Phase 1 Status: FULLY COMPLETE**
+
+All WASM infrastructure has been completely removed:
+- Source files: Deleted (Go WASM, TypeScript WASM utilities)
+- Build system: Cleaned (package.json, build.sh, tsconfig.json)
+- Runtime loading: Removed (HTML script tags, wasm_exec.js)
+- Route handlers: Removed (WASM file serving endpoints)
+- Test files: Deleted (WASM integration tests, test scripts)
+- Test execution: Removed (test-wasm.sh, complete-setup-test.sh)
+- CSP headers: Hardened (removed wasm-unsafe-eval from middleware, Caddyfile, Caddyfile.local)
+- UI elements: Cleaned (removed .wasm-status CSS styles)
+- Documentation: Updated (removed outdated WASM comments)
+- Verification: Complete (zero WASM references in source code)
+
+The application now uses:
+- Go-based OPAQUE implementation (CGO with libopaque) for server-side operations
+- Server-side cryptography for all authentication operations
+- Standard CSP without WASM-specific directives
+- Clean codebase ready for Phase 2 (TypeScript OPAQUE implementation)
+
+**Next Phase:**
+Phase 2 can now begin: Implement TypeScript OPAQUE client using `@cloudflare/opaque-ts` for proper zero-knowledge authentication in the browser.

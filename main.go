@@ -175,7 +175,7 @@ func main() {
 		XFrameOptions:      "SAMEORIGIN",
 		HSTSMaxAge:         63072000, // 2 years
 		HSTSPreloadEnabled: true,
-		// CSP is handled by CSPMiddleware below for WASM compatibility
+		// CSP is handled by CSPMiddleware below
 	}))
 
 	// Force HTTPS and check TLS version

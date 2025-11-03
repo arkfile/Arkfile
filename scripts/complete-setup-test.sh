@@ -27,7 +27,6 @@ echo
 
 # Parse environment variables for skip options
 SKIP_TESTS="${SKIP_TESTS:-false}"
-SKIP_WASM="${SKIP_WASM:-false}"
 SKIP_PERFORMANCE="${SKIP_PERFORMANCE:-false}"
 SKIP_GOLDEN="${SKIP_GOLDEN:-false}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
@@ -44,7 +43,6 @@ echo "3. Complete setup - Foundation + MinIO + rqlite + Caddy + start services"
 echo
 echo -e "${BLUE}[INFO] Environment Variables for Customization:${NC}"
 echo "• SKIP_TESTS=1        - Skip all test execution"
-echo "• SKIP_WASM=1         - Skip WebAssembly tests"
 echo "• SKIP_PERFORMANCE=1  - Skip performance benchmarks"
 echo "• SKIP_GOLDEN=1       - Skip golden test preservation"
 echo "• SKIP_BUILD=1        - Skip application build"
@@ -87,10 +85,9 @@ else
 fi
 
 # Display active skip options
-if [ "$SKIP_TESTS" = "1" ] || [ "$SKIP_WASM" = "1" ] || [ "$SKIP_PERFORMANCE" = "1" ] || [ "$SKIP_GOLDEN" = "1" ] || [ "$SKIP_BUILD" = "1" ] || [ "$SKIP_TLS" = "1" ] || [ "$SKIP_DOWNLOAD" = "1" ] || [ "$FORCE_REBUILD" = "1" ]; then
+if [ "$SKIP_TESTS" = "1" ] || [ "$SKIP_PERFORMANCE" = "1" ] || [ "$SKIP_GOLDEN" = "1" ] || [ "$SKIP_BUILD" = "1" ] || [ "$SKIP_TLS" = "1" ] || [ "$SKIP_DOWNLOAD" = "1" ] || [ "$FORCE_REBUILD" = "1" ]; then
     echo -e "${YELLOW}Active Environment Variables:${NC}"
     [ "$SKIP_TESTS" = "1" ] && echo "  • SKIP_TESTS=1 - Test execution disabled"
-    [ "$SKIP_WASM" = "1" ] && echo "  • SKIP_WASM=1 - WebAssembly tests disabled"
     [ "$SKIP_PERFORMANCE" = "1" ] && echo "  • SKIP_PERFORMANCE=1 - Performance benchmarks disabled"
     [ "$SKIP_GOLDEN" = "1" ] && echo "  • SKIP_GOLDEN=1 - Golden test preservation disabled"
     [ "$SKIP_BUILD" = "1" ] && echo "  • SKIP_BUILD=1 - Application build disabled"
@@ -186,18 +183,6 @@ if [ $? -eq 0 ]; then
     echo -e "${GREEN}[OK] Utility tests passed${NC}"
 else
     echo -e "${RED}[X] Some utility tests failed${NC}"
-    exit 1
-fi
-
-# Run WebAssembly tests
-echo
-echo -e "${BLUE}Running WebAssembly tests...${NC}"
-./scripts/testing/test-wasm.sh
-
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}[OK] WebAssembly tests passed${NC}"
-else
-    echo -e "${RED}[X] Some WebAssembly tests failed${NC}"
     exit 1
 fi
 
@@ -602,7 +587,6 @@ echo -e "${GREEN}[OK] Auth module tests pass (OPAQUE, JWT, Argon2ID)${NC}"
 echo -e "${GREEN}[OK] Logging module tests pass (security events, privacy)${NC}"
 echo -e "${GREEN}[OK] Models module tests pass (user management, tokens)${NC}"
 echo -e "${GREEN}[OK] Utility module tests pass${NC}"
-echo -e "${GREEN}[OK] WebAssembly tests pass (14/14 tests across browsers)${NC}"
 echo -e "${GREEN}[OK] Performance benchmarks complete (1GB file testing)${NC}"
 echo -e "${GREEN}[OK] Golden test preservation pass (100% format compatibility)${NC}"
 echo -e "${GREEN}[OK] Build process works${NC}"
@@ -613,7 +597,6 @@ echo -e "${GREEN}All comprehensive integration tests passed!${NC}"
 echo
 echo -e "${BLUE}[INFO] Test Coverage Achieved:${NC}"
 echo "• Unit Tests: 100% pass rate across all modules"
-echo "• WebAssembly: 14/14 tests (crypto, password, login integration)"
 echo "• Performance: Production-scale 1GB file validation"
 echo "• Format Compatibility: 72/72 test vectors validated"
 echo "• Deployment: Key generation and health checks verified"
@@ -640,14 +623,6 @@ echo "  • Models Module: [OK] PASSED (user management, tokens)"
 echo "  • Utils Module: [OK] PASSED (validation, helpers)"
 
 echo
-echo "WebAssembly Tests:"
-echo "  • Core Crypto Functions: [OK] 5/5 PASSED"
-echo "  • Password Functions: [OK] 5/5 PASSED"
-echo "  • Login Integration: [OK] 4/4 PASSED"
-echo "  • OPAQUE Crypto: [OK] ALL PASSED"
-echo "  • Total: 14/14 tests across all browsers"
-
-echo
 echo "[FAST] Performance Benchmarks:"
 echo "  • Cryptographic Operations: [OK] COMPLETED"
 echo "  • File I/O Performance: [OK] VALIDATED"
@@ -663,7 +638,6 @@ echo "  • File Format Integrity: [OK] BYTE-PERFECT"
 echo
 echo "️  Build & Deployment:"
 echo "  • Application Build: [OK] SUCCESSFUL"
-echo "  • WebAssembly Build: [OK] SUCCESSFUL"
 echo "  • Static Assets: [OK] DEPLOYED"
 
 if [ "$FULL_SETUP" = true ]; then
