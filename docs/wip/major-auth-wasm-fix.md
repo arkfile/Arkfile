@@ -1065,3 +1065,423 @@ The application now uses:
 
 **Next Phase:**
 Phase 2 can now begin: Implement TypeScript OPAQUE client using `@cloudflare/opaque-ts` for proper zero-knowledge authentication in the browser.
+
+---
+
+## Phase 2 Architecture Revision: Independent File Encryption System
+
+**Date:** 2025-11-05
+**Critical Decision:** Separation of Authentication and Encryption Keys
+
+### Problem Identified
+
+The original Phase 2 plan proposed using OPAQUE export keys for file encryption via HKDF derivation. This approach has fundamental flaws:
+
+1. **Server Dependency:** OPAQUE export keys require server interaction to derive
+2. **Key Rotation Risk:** If server OPAQUE keys rotate, export keys change
+3. **Server Unavailability:** If server is offline, files become inaccessible
+4. **Data Portability Violation:** User cannot decrypt files without server cooperation
+
+This violates the core principle of **client-side encryption** where users must be able to decrypt their data independently of server availability.
+
+### Revised Architecture: Two Independent Key Systems
+
+#### System 1: OPAQUE (Authentication Only)
+
+**Purpose:** Prove user identity to server, establish API session
+**Scope:** Session management, JWT generation, API access control
+**Server Dependency:** Required
+**Key Material:** Export key → Session key (ephemeral, per-session)
+
+**Flow:**
+```
+User Password → OPAQUE Protocol → Export Key → Session Key → JWT Token
+                (encrypted msgs)   (ephemeral)   (HKDF)      (API access)
+```
+
+**Properties:**
+- Zero-knowledge authentication
+- Server never sees password
+- Export key changes with each authentication
+- Session key is ephemeral (not stored)
+- Used only for API authentication
+
+#### System 2: Argon2id (File Encryption Only)
+
+**Purpose:** Encrypt/decrypt user files with account password
+**Scope:** Client-side file operations only
+**Server Dependency:** None
+**Key Material:** Password → File Encryption Key (deterministic, repeatable)
+
+**Flow:**
+```
+User Password + Username → Argon2id KDF → File Encryption Key
+                           (client-only)   (deterministic)
+```
+
+**Properties:**
+- Deterministic: Same password + username → Same key
+- Server-independent: Works offline
+- Data portable: User can decrypt files anywhere
+- No server state required
+- Memory-hard protection (256MB Argon2id cost)
+
+### Implementation Details
+
+#### File Encryption Key Derivation (Client-Side Only)
+
+```typescript
+/**
+ * Derives file encryption key from user password using Argon2id.
+ * This function is completely independent of OPAQUE authentication.
+ * 
+ * @param password - User's account password
+ * @param username - Username (used for deterministic salt)
+ * @returns CryptoKey for AES-GCM file encryption
+ */
+async function deriveFileEncryptionKey(
+  password: string,
+  username: string
+): Promise<CryptoKey> {
+  // Step 1: Create deterministic salt from username
+  // This ensures same username always produces same salt
+  const saltInput = `arkfile-file-encryption:${username}`;
+  const saltHash = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(saltInput)
+  );
+  const salt = new Uint8Array(saltHash);
+  
+  // Step 2: Derive key using Argon2id (memory-hard KDF)
+  // Parameters match Go implementation for consistency
+  const keyMaterial = argon2id(
+    new TextEncoder().encode(password),
+    salt,
+    {
+      t: 8,        // iterations (time cost)
+      m: 262144,   // 256 MB memory cost
+      p: 4,        // parallelism
+      dkLen: 32    // 32-byte output (256 bits)
+    }
+  );
+  
+  // Step 3: Import as Web Crypto API key for AES-GCM
+  return await crypto.subtle.importKey(
+    'raw',
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false, // not extractable (security)
+    ['encrypt', 'decrypt']
+  );
+}
+```
+
+#### Dual Key Management During Login
+
+```typescript
+/**
+ * Complete login flow with dual key derivation.
+ * Derives both authentication and encryption keys independently.
+ */
+async function handleLogin(username: string, password: string) {
+  // 1. Authenticate with OPAQUE (for API access)
+  const { exportKey } = await authenticateWithOPAQUE(username, password);
+  const sessionKey = await deriveSessionKey(exportKey); // HKDF
+  const jwt = await getJWTFromServer(sessionKey);
+  
+  // 2. Derive file encryption key (for file operations)
+  // This is COMPLETELY INDEPENDENT of OPAQUE
+  const fileKey = await deriveFileEncryptionKey(password, username);
+  
+  // 3. Store both in memory (never on disk)
+  sessionStorage.setItem('jwt', jwt);
+  sessionStorage.setItem('fileKey', await exportKey(fileKey));
+  
+  // Now user can:
+  // - Make API calls (using JWT from OPAQUE)
+  // - Encrypt/decrypt files (using fileKey from Argon2id)
+  // - Both operations are completely independent
+}
+```
+
+### Data Portability Guarantee
+
+**Scenario:** User wants to decrypt files without server access
+
+```typescript
+/**
+ * Offline file decryption - no server required.
+ * User only needs their password, username, and encrypted files.
+ */
+async function offlineDecrypt(
+  encryptedFile: Uint8Array,
+  username: string,
+  password: string
+): Promise<Uint8Array> {
+  // Derive same encryption key (no server needed)
+  const fileKey = await deriveFileEncryptionKey(password, username);
+  
+  // Decrypt file (pure client-side)
+  return await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: nonce },
+    fileKey,
+    encryptedFile
+  );
+}
+```
+
+**Properties Achieved:**
+- User can decrypt files with only password + username
+- No server interaction required
+- Works even if server is completely offline
+- Works even if server OPAQUE keys have rotated
+- Works even if user exports files to different system
+- True client-side encryption with data portability
+
+### Security Analysis
+
+#### Why Not Use OPAQUE Export Key for Files?
+
+**OPAQUE Export Keys Are Designed For:**
+- Deriving session-specific keys (ephemeral)
+- Server-mediated authentication flows
+- Cryptographic material that changes per-session
+
+**OPAQUE Export Keys Are NOT Designed For:**
+- Long-term data encryption (persistent)
+- Offline access scenarios
+- Data portability requirements
+- Server-independent operations
+
+#### Why Argon2id for File Encryption?
+
+**Advantages:**
+- **Memory-Hard:** 256MB cost makes brute-force expensive
+- **Deterministic:** Same inputs always produce same output
+- **Standard:** Well-studied, widely implemented algorithm
+- **Portable:** Works in any environment with the algorithm
+- **Client-Only:** No server state or interaction required
+
+**Security Properties:**
+- Password must be brute-forced (no shortcuts)
+- Each attempt costs 256MB RAM + CPU time
+- Deterministic salt prevents rainbow tables
+- Username-based salt ensures per-user isolation
+
+### Complete Key Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ User Password (Single Input)                            │
+└────────────┬────────────────────────────────────────────┘
+             │
+             ├─────────────────────────────────────────────┐
+             │                                             │
+             ▼                                             ▼
+    ┌────────────────┐                          ┌──────────────────┐
+    │ OPAQUE Protocol│                          │ Argon2id KDF     │
+    │ (with server)  │                          │ (client-only)    │
+    └────────┬───────┘                          └────────┬─────────┘
+             │                                            │
+             ▼                                            ▼
+    ┌────────────────┐                          ┌──────────────────┐
+    │ Export Key     │                          │ File Encryption  │
+    │ (ephemeral)    │                          │ Key (persistent) │
+    └────────┬───────┘                          └────────┬─────────┘
+             │                                            │
+             ▼                                            ▼
+    ┌────────────────┐                          ┌──────────────────┐
+    │ Session Key    │                          │ Encrypt/Decrypt  │
+    │ → JWT Token    │                          │ Files (offline)  │
+    └────────────────┘                          └──────────────────┘
+    
+    Purpose:                                    Purpose:
+    - API Authentication                        - File Protection
+    - Server Access                             - Data Portability
+    - Session Management                        - Offline Access
+    - Ephemeral (changes)                       - Persistent (stable)
+```
+
+### Updated Phase 2 Implementation Plan
+
+#### Changes to Original Plan
+
+**REMOVED:**
+- ❌ Using OPAQUE export key for file encryption
+- ❌ HKDF derivation from export key for files
+- ❌ Any server dependency for file encryption keys
+- ❌ Session-based file encryption keys
+
+**ADDED:**
+- ✅ Argon2id-based file encryption key derivation
+- ✅ Username-based deterministic salt generation
+- ✅ Pure client-side key derivation (no server)
+- ✅ Offline decryption capability
+- ✅ Data portability testing
+- ✅ Independent key system architecture
+
+#### Updated Module Structure
+
+**File: `client/static/js/src/crypto/file-encryption.ts`** (NEW)
+```typescript
+// Independent file encryption system
+export class FileEncryption {
+  // Derive file encryption key from password (Argon2id)
+  static async deriveFileKey(password: string, username: string): Promise<CryptoKey>
+  
+  // Encrypt file with account password
+  static async encryptFile(file: File, password: string, username: string): Promise<EncryptedFile>
+  
+  // Decrypt file with account password (offline-capable)
+  static async decryptFile(encrypted: EncryptedFile, password: string, username: string): Promise<File>
+  
+  // Test data portability (decrypt without server)
+  static async verifyOfflineDecryption(encrypted: EncryptedFile, password: string, username: string): Promise<boolean>
+}
+```
+
+**File: `client/static/js/src/auth/opaque-client.ts`** (UPDATED)
+```typescript
+// OPAQUE authentication only (no file encryption)
+export class OPAQUEClient {
+  // Registration flow
+  async startRegistration(username: string, password: string): Promise<RegistrationRequest>
+  async finalizeRegistration(response: RegistrationResponse): Promise<UserRecord>
+  
+  // Authentication flow
+  async startAuthentication(username: string, password: string): Promise<CredentialRequest>
+  async finalizeAuthentication(response: CredentialResponse): Promise<ExportKey>
+  
+  // Session key derivation (for JWT only)
+  async deriveSessionKey(exportKey: ExportKey): Promise<SessionKey>
+}
+```
+
+### Testing Requirements
+
+#### Data Portability Tests
+
+```typescript
+describe('Data Portability', () => {
+  it('should decrypt files without server', async () => {
+    // 1. Encrypt file with password
+    const encrypted = await FileEncryption.encryptFile(file, password, username);
+    
+    // 2. Simulate server offline (no OPAQUE available)
+    mockServer.offline();
+    
+    // 3. Decrypt file with only password + username
+    const decrypted = await FileEncryption.decryptFile(encrypted, password, username);
+    
+    // 4. Verify file contents match
+    expect(decrypted).toEqual(originalFile);
+  });
+  
+  it('should work after server key rotation', async () => {
+    // 1. Encrypt file before rotation
+    const encrypted = await FileEncryption.encryptFile(file, password, username);
+    
+    // 2. Rotate server OPAQUE keys
+    await server.rotateOPAQUEKeys();
+    
+    // 3. Decrypt file (should still work)
+    const decrypted = await FileEncryption.decryptFile(encrypted, password, username);
+    
+    // 4. Verify file contents match
+    expect(decrypted).toEqual(originalFile);
+  });
+});
+```
+
+#### Key Independence Tests
+
+```typescript
+describe('Key Independence', () => {
+  it('should derive different keys for auth vs files', async () => {
+    // 1. Authenticate with OPAQUE
+    const { exportKey } = await opaqueClient.authenticate(username, password);
+    const sessionKey = await opaqueClient.deriveSessionKey(exportKey);
+    
+    // 2. Derive file encryption key
+    const fileKey = await FileEncryption.deriveFileKey(password, username);
+    
+    // 3. Verify keys are different
+    expect(sessionKey).not.toEqual(fileKey);
+  });
+  
+  it('should maintain file key stability across sessions', async () => {
+    // 1. Derive file key in session 1
+    const fileKey1 = await FileEncryption.deriveFileKey(password, username);
+    
+    // 2. Simulate logout/login (new OPAQUE session)
+    await logout();
+    await login(username, password);
+    
+    // 3. Derive file key in session 2
+    const fileKey2 = await FileEncryption.deriveFileKey(password, username);
+    
+    // 4. Verify file keys are identical (deterministic)
+    expect(fileKey1).toEqual(fileKey2);
+  });
+});
+```
+
+### Migration Impact
+
+**Breaking Changes:**
+- All existing encrypted files will need re-encryption with new key derivation
+- Users must re-encrypt files after update
+
+**Acceptable Because:**
+- Project is in development (no production users)
+- Security fix is critical
+- Data portability is essential feature
+- Current implementation is fundamentally flawed
+
+### Documentation Updates Required
+
+**Files to Update:**
+- `docs/security.md` - Document dual key system architecture
+- `docs/api.md` - Clarify that file encryption is client-side only
+- `README.md` - Highlight data portability as key feature
+
+**New Documentation:**
+- `docs/data-portability.md` - Explain offline decryption capability
+- `docs/key-derivation.md` - Document Argon2id parameters and rationale
+
+### Success Criteria (Updated)
+
+**Phase 2 Complete When:**
+- [ ] OPAQUE authentication works (zero-knowledge verified)
+- [ ] File encryption uses Argon2id (independent of OPAQUE)
+- [ ] Files can be decrypted offline (no server required)
+- [ ] Files can be decrypted after server key rotation
+- [ ] Session keys and file keys are provably independent
+- [ ] Data portability tests pass
+- [ ] Network traffic contains no plaintext passwords
+- [ ] All integration tests pass
+
+### Implementation Priority
+
+**High Priority (Security Critical):**
+1. Implement Argon2id file encryption key derivation
+2. Remove OPAQUE export key usage for files
+3. Verify key independence
+
+**Medium Priority (Functionality):**
+4. Implement offline decryption capability
+5. Add data portability tests
+6. Update documentation
+
+**Low Priority (Polish):**
+7. Optimize key derivation performance
+8. Add progress indicators for Argon2id
+9. Implement key caching strategies
+
+---
+
+**Architecture Decision Rationale:**
+
+This revision ensures that Arkfile provides true client-side encryption with data portability guarantees. Users can always decrypt their files with just their password and username, regardless of server availability or server key rotation. This is a fundamental requirement for any system claiming to provide client-side encryption.
+
+The separation of authentication (OPAQUE) and encryption (Argon2id) follows the principle of **separation of concerns** and ensures that each cryptographic system is used for its intended purpose.
