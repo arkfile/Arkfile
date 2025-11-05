@@ -10,13 +10,7 @@ This document tracks the refactoring of Arkfile's authentication system to prope
 
 ## Background
 
-### Previous Issues
-- Attempted to use @cloudflare/opaque-ts library
-- Discovered incompatibility: Cloudflare uses ristretto255-SHA512, server uses P-256
-- Cloudflare library doesn't support P-256 curve
-- Server-side C wrapper had broken single-step functions
-
-### Current Solution
+### Working towards a complete solution with:
 - Use libopaque.js (WASM) on client side
 - Use libopaque C library on server side (already present)
 - Both use same underlying libopaque implementation
@@ -354,13 +348,63 @@ This document tracks the refactoring of Arkfile's authentication system to prope
 
 ## Next Steps
 
-1. Add libopaque.js script tags to HTML pages (index.html and other auth pages)
-2. Test with dev-reset.sh (rebuild and restart application)
-3. Test with test-app-curl.sh (verify end-to-end authentication)
-4. Manual testing through web UI (registration and login)
-5. Network traffic analysis (verify zero-knowledge properties)
-6. Verify offline decryption capability (Argon2id file encryption)
-7. Test data portability scenarios
+### Immediate Actions (Before Phase 6 Testing)
+
+1. **Update Test File (handlers/auth_test.go):**
+   - Remove or update tests referencing old `OpaqueLogin` handler:
+     - `TestOpaqueLogin_TOTPRequired`
+     - `TestOpaqueLogin_WithTOTPEnabled_Success`
+     - `TestOpaqueLogin_InvalidCredentials`
+   - Create new tests for multi-step endpoints:
+     - `TestOpaqueAuthResponse_Success`
+     - `TestOpaqueAuthFinalize_Success`
+     - `TestOpaqueAuthResponse_InvalidCredentials`
+   - Ensure test compilation succeeds
+
+2. **Verify TypeScript Compilation:**
+   - Run: `cd client/static/js && bun run build`
+   - Confirm bundle builds successfully
+   - Check for any new warnings or errors
+
+### Phase 6: Testing & Validation
+
+1. **Application Testing:**
+   - Run `dev-reset.sh` (rebuild and restart application)
+   - Run `test-app-curl.sh` (verify end-to-end authentication)
+   - Manual testing through web UI (registration and login)
+
+2. **OPAQUE Protocol Verification:**
+   - Network traffic analysis (verify zero-knowledge properties)
+   - Confirm no plaintext passwords in transit
+   - Verify session key derivation works correctly
+
+3. **File Encryption Testing:**
+   - Verify offline decryption capability (Argon2id file encryption)
+   - Test data portability scenarios
+   - Confirm independence from OPAQUE system
+
+4. **Integration Testing:**
+   - End-to-end: registration → login → file upload → file download
+   - TOTP integration verification
+   - Session management and token refresh
+   - Error handling and edge cases
+
+### Phase 7: Go CLI Tools Migration
+
+1. **Update arkfile-client:**
+   - Migrate from single-step to multi-step OPAQUE
+   - Add CGO bindings for libopaque client operations
+   - Test authentication flow
+
+2. **Update arkfile-admin:**
+   - Similar multi-step migration
+   - Ensure localhost-only AdminMiddleware compatibility
+   - Test admin operations
+
+3. **Validation:**
+   - Test with dev-reset.sh
+   - Test with test-app-curl.sh
+   - Verify CLI tools work with new protocol
 
 ## Recent Session Progress (November 5, 2025)
 
@@ -382,9 +426,65 @@ This document tracks the refactoring of Arkfile's authentication system to prope
 - Verified successful TypeScript compilation (91.61 KB bundle, 17 modules)
 - Confirmed zero references to old single-step endpoints remain
 
+### Phase 5 Post-Completion Audit (November 5, 2025 - 3:57 PM)
+
+**Comprehensive Codebase Audit Performed:**
+
+1. **Deprecated Handler Functions:** ✅ CLEAN
+   - Searched for `OpaqueLogin`, `opaque/login`, `single.*step`, `deprecated`
+   - Result: Old `OpaqueLogin` handler function successfully removed
+   - No deprecated single-step handlers remain in production code
+
+2. **Test File Issues:** ⚠️ NEEDS UPDATE
+   - File: `handlers/auth_test.go`
+   - Issue: Contains test functions referencing removed `OpaqueLogin` handler:
+     - `TestOpaqueLogin_TOTPRequired`
+     - `TestOpaqueLogin_WithTOTPEnabled_Success`
+     - `TestOpaqueLogin_InvalidCredentials`
+   - Impact: These tests will fail compilation when run
+   - Action Required: Update or remove these tests in Phase 6
+
+3. **Old Endpoint References:** ✅ CLEAN
+   - Searched entire codebase for `/api/opaque/login` and `/api/opaque/register` (non-multi-step)
+   - Result: Zero references found
+   - All code now uses correct multi-step endpoints
+
+4. **Client-Side OPAQUE References:** ✅ CLEAN
+   - Searched for `@cloudflare/opaque`, `opaque-config`, `opaque-types`
+   - Result: Only internal type definitions in new opaque.ts (expected)
+   - No Cloudflare library references remain
+
+5. **Route Configuration:** ✅ CORRECT
+   - File: `handlers/route_config.go`
+   - Verified all multi-step endpoints registered:
+     - `/api/opaque/register/response` ✓
+     - `/api/opaque/register/finalize` ✓
+     - `/api/opaque/auth/response` ✓
+     - `/api/opaque/auth/finalize` ✓
+     - `/api/opaque/health` ✓
+   - No old single-step routes remain
+
+6. **Stub Functions:** ✅ CLEAN
+   - Searched for `TODO`, `FIXME`, `stub`, `not.*implemented`, `placeholder`
+   - Result: Only test comments and future TODOs (not actual stubs)
+   - No incomplete handler implementations
+
+7. **Go Compilation:** ✅ SUCCESS
+   - Command: `go build -o /tmp/arkfile-test-build`
+   - Result: Successful compilation with standard CGO warnings
+   - Warnings are expected (glibc static linking) and not errors
+   - Binary builds successfully
+
+**Audit Summary:**
+- **Production Code:** 100% clean, no deprecated code
+- **Route Configuration:** 100% correct, all multi-step endpoints registered
+- **Client-Side Code:** 100% clean, proper libopaque.js integration
+- **Compilation:** Go builds successfully
+- **Known Issue:** Test file needs updating (non-blocking for Phase 6 start)
+
 ### Status
 - **Phase 1-5:** Complete (100%)
-- **Phase 6:** Not started (testing & validation)
+- **Phase 6:** Ready to start (testing & validation)
 - **Phase 7:** Not started (Go CLI tools migration)
 - **Overall Progress:** 100% of Phase 5 complete (14/14 major tasks)
 
