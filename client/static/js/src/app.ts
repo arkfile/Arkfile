@@ -9,6 +9,7 @@ import { showError, showSuccess } from './ui/messages';
 import { showFileSection, showAuthSection, toggleAuthForm } from './ui/sections';
 import { loadFiles, displayFiles } from './files/list';
 import { setupLoginForm, login, logout } from './auth/login';
+import { setupRegisterForm, register } from './auth/register';
 
 class ArkFileApp {
   private initialized = false;
@@ -124,13 +125,15 @@ class ArkFileApp {
       });
     }
 
+    // Setup registration form
+    setupRegisterForm();
+    
     // Register form submission
     const registerSubmitBtn = document.getElementById('register-submit-btn');
     if (registerSubmitBtn) {
       registerSubmitBtn.addEventListener('click', async (e) => {
         e.preventDefault();
-        // Registration functionality needs to be implemented
-        showError('Registration is not yet implemented');
+        await register();
       });
     }
 
