@@ -166,14 +166,19 @@ export class OpaqueClient {
       
       // @ts-ignore
       this.module = libopaque;
-      await this.module.ready;
+      
+      if (this.module && this.module.ready) {
+        await this.module.ready;
+      }
       
       // Set config values using module constants
-      this.config.skU = this.module.NotPackaged;
-      this.config.pkU = this.module.NotPackaged;
-      this.config.pkS = this.module.InSecEnv;
-      this.config.idS = this.module.NotPackaged;
-      this.config.idU = this.module.NotPackaged;
+      if (this.module) {
+        this.config.skU = this.module.NotPackaged;
+        this.config.pkU = this.module.NotPackaged;
+        this.config.pkS = this.module.InSecEnv;
+        this.config.idS = this.module.NotPackaged;
+        this.config.idU = this.module.NotPackaged;
+      }
       
     } catch (error) {
       throw new CryptoError(

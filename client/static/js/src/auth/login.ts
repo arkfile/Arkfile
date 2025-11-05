@@ -33,8 +33,8 @@ export class LoginManager {
     try {
       showProgressMessage('Authenticating...');
 
-      // Direct HTTP request to OPAQUE endpoint
-      const response = await fetch('/api/auth/opaque/login', {
+      // Step 1: Send authentication request to get server response
+      const responseStep1 = await fetch('/api/opaque/auth/response', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -45,14 +45,36 @@ export class LoginManager {
         })
       });
       
-      if (!response.ok) {
-        const errorText = await response.text();
+      if (!responseStep1.ok) {
+        const errorText = await responseStep1.text();
         hideProgress();
-        showError(`Login failed: ${errorText}`);
+        showError(`Authentication failed: ${errorText}`);
         return;
       }
       
-      const loginData = await response.json();
+      const step1Data = await responseStep1.json();
+      
+      // Step 2: Finalize authentication with server response
+      const responseStep2 = await fetch('/api/opaque/auth/finalize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          username: credentials.username,
+          password: credentials.password,
+          auth_u_server: step1Data.auth_u_server
+        })
+      });
+      
+      if (!responseStep2.ok) {
+        const errorText = await responseStep2.text();
+        hideProgress();
+        showError(`Authentication finalization failed: ${errorText}`);
+        return;
+      }
+      
+      const loginData = await responseStep2.json();
       
       // Handle TOTP if required
       if (loginData.requires_totp) {

@@ -270,17 +270,24 @@ func AdminForceLogout(c echo.Context) error {
 
 // OPAQUE Authentication Endpoints
 
-// OpaqueRegisterRequest represents the request for OPAQUE registration
-type OpaqueRegisterRequest struct {
+// Multi-Step OPAQUE Registration Types
+
+// OpaqueRegisterInitRequest represents the initial registration request
+type OpaqueRegisterInitRequest struct {
 	Username string `json:"username"`
-	Email    string `json:"email,omitempty"` // Optional email
 	Password string `json:"password"`
 }
 
-// OpaqueLoginRequest represents the request for OPAQUE login
-type OpaqueLoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+// OpaqueRegisterResponseRequest represents the server response request
+type OpaqueRegisterResponseRequest struct {
+	RegistrationRequest string `json:"registration_request"` // base64 encoded
+}
+
+// OpaqueRegisterFinalizeRequest represents the final registration request
+type OpaqueRegisterFinalizeRequest struct {
+	Username           string `json:"username"`
+	RegistrationRecord string `json:"registration_record"` // base64 encoded
+	Email              string `json:"email,omitempty"`
 }
 
 // OpaqueHealthCheckResponse represents the health status of OPAQUE system
@@ -292,31 +299,53 @@ type OpaqueHealthCheckResponse struct {
 	Message           string `json:"message"`
 }
 
-// OpaqueRegister handles OPAQUE user registration with rock-solid reliability
-func OpaqueRegister(c echo.Context) error {
-	var request OpaqueRegisterRequest
+// Multi-Step OPAQUE Registration Endpoints
+
+// OpaqueRegisterResponse handles server-side registration response creation
+func OpaqueRegisterResponse(c echo.Context) error {
+	var request OpaqueRegisterResponseRequest
 	if err := c.Bind(&request); err != nil {
-		logging.ErrorLogger.Printf("OPAQUE registration bind error: %v", err)
+		logging.ErrorLogger.Printf("OPAQUE registration response bind error: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
 	}
 
-	// Comprehensive input validation
+	// Decode registration request from client
+	registrationRequest, err := base64.StdEncoding.DecodeString(request.RegistrationRequest)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid registration request encoding")
+	}
+
+	// Create server registration response
+	registrationResponse, err := auth.CreateRegistrationResponse(registrationRequest)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to create registration response: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Registration response creation failed")
+	}
+
+	// Encode response for transmission
+	responseB64 := base64.StdEncoding.EncodeToString(registrationResponse)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"registration_response": responseB64,
+	})
+}
+
+// OpaqueRegisterFinalize completes user registration
+func OpaqueRegisterFinalize(c echo.Context) error {
+	var request OpaqueRegisterFinalizeRequest
+	if err := c.Bind(&request); err != nil {
+		logging.ErrorLogger.Printf("OPAQUE registration finalize bind error: %v", err)
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+	}
+
+	// Validate username
 	if err := utils.ValidateUsername(request.Username); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid username: "+err.Error())
 	}
 
+	// Validate email if provided
 	if request.Email != "" && !strings.Contains(request.Email, "@") {
 		return echo.NewHTTPError(http.StatusBadRequest, "Provided email is not valid")
-	}
-
-	// Phase 5E: Enhanced password validation with entropy checking
-	result := crypto.ValidateAccountPassword(request.Password)
-	if !result.MeetsRequirement {
-		errorMsg := "Password does not meet security requirements"
-		if len(result.Feedback) > 0 {
-			errorMsg = strings.Join(result.Feedback, "; ")
-		}
-		return echo.NewHTTPError(http.StatusBadRequest, errorMsg)
 	}
 
 	// Check if user already exists
@@ -325,97 +354,117 @@ func OpaqueRegister(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusConflict, "Username already registered")
 	}
 
-	// Create user record AND register OPAQUE account in single transaction
+	// Decode registration record
+	registrationRecord, err := base64.StdEncoding.DecodeString(request.RegistrationRecord)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid registration record encoding")
+	}
+
+	// Store user record
+	userRecord, err := auth.StoreUserRecord(registrationRecord)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to store user record for %s: %v", request.Username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to store user record")
+	}
+
+	// Create user in database
 	var emailPtr *string
 	if request.Email != "" {
 		emailPtr = &request.Email
 	}
-	user, err := models.CreateUserWithOPAQUE(database.DB, request.Username, request.Password, emailPtr)
+
+	// Start transaction for atomic user + OPAQUE record creation
+	tx, err := database.DB.Begin()
 	if err != nil {
-		if logging.ErrorLogger != nil {
-			logging.ErrorLogger.Printf("OPAQUE user registration failed for %s: %v", request.Username, err)
-		}
-		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
+		logging.ErrorLogger.Printf("Failed to start transaction for %s: %v", request.Username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "User creation failed")
 	}
+	defer tx.Rollback()
 
-	// Get OPAQUE export key from registration process
-	// For Phase 5A: We need the export key to derive the session key properly
-	exportKey, err := user.GetOPAQUEExportKey(database.DB, request.Password)
+	// Create user record
+	_, err = models.CreateUser(tx, request.Username, emailPtr)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get OPAQUE export key during registration for %s: %v", request.Username, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
+		logging.ErrorLogger.Printf("Failed to create user %s: %v", request.Username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "User creation failed")
 	}
 
-	// Validate export key from OPAQUE registration
-	if err := user.ValidateOPAQUEExportKey(exportKey); err != nil {
-		logging.ErrorLogger.Printf("Invalid OPAQUE export key during registration for %s: %v", request.Username, err)
-		user.SecureZeroExportKey(exportKey)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
-	}
-
-	// Derive session key from OPAQUE export key using proper HKDF for Phase 5A
-	sessionKey, err := crypto.DeriveSessionKey(exportKey, crypto.SessionKeyContext)
+	// Store OPAQUE record in opaque_password_records table
+	_, err = tx.Exec(`
+		INSERT INTO opaque_password_records 
+		(record_type, record_identifier, opaque_user_record, associated_username, is_active)
+		VALUES (?, ?, ?, ?, ?)`,
+		"account", request.Username, userRecord, request.Username, true)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to derive session key during registration for %s: %v", request.Username, err)
-		user.SecureZeroExportKey(exportKey)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Registration failed")
+		logging.ErrorLogger.Printf("Failed to store OPAQUE record for %s: %v", request.Username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to store OPAQUE record")
 	}
 
-	// Clear export key from memory immediately after session key derivation
-	user.SecureZeroExportKey(exportKey)
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		logging.ErrorLogger.Printf("Failed to commit transaction for %s: %v", request.Username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "User creation failed")
+	}
 
-	// Generate temporary token for mandatory TOTP setup
+	// Generate temporary token for TOTP setup
 	tempToken, err := auth.GenerateTemporaryTOTPToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
-		crypto.SecureZeroSessionKey(sessionKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration succeeded but setup token creation failed")
 	}
 
-	// Encode session key for secure transmission
-	sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
-
-	// Clear session key from memory after encoding
-	crypto.SecureZeroSessionKey(sessionKey)
-
 	// Log successful registration
-	database.LogUserAction(request.Username, "registered with OPAQUE, TOTP setup required", "")
-	logging.InfoLogger.Printf("OPAQUE user registered, TOTP setup required: %s", request.Username)
+	database.LogUserAction(request.Username, "registered with OPAQUE (multi-step), TOTP setup required", "")
+	logging.InfoLogger.Printf("OPAQUE user registered (multi-step), TOTP setup required: %s", request.Username)
 
 	return c.JSON(http.StatusCreated, map[string]interface{}{
 		"message":             "Account created successfully. Two-factor authentication setup is required to complete registration.",
 		"requires_totp_setup": true,
 		"temp_token":          tempToken,
-		"session_key":         sessionKeyB64,
 		"auth_method":         "OPAQUE",
 		"username":            request.Username,
 	})
 }
 
-// OpaqueLogin handles OPAQUE user authentication with rock-solid reliability
-func OpaqueLogin(c echo.Context) error {
-	var request OpaqueLoginRequest
+// Multi-Step OPAQUE Authentication Endpoints
+
+// OpaqueAuthInitRequest represents the initial authentication request
+type OpaqueAuthInitRequest struct {
+	Username string `json:"username"`
+}
+
+// OpaqueAuthResponseRequest represents the credential response request
+type OpaqueAuthResponseRequest struct {
+	Username          string `json:"username"`
+	CredentialRequest string `json:"credential_request"` // base64 encoded
+}
+
+// OpaqueAuthFinalizeRequest represents the final authentication request
+type OpaqueAuthFinalizeRequest struct {
+	Username string `json:"username"`
+	AuthU    string `json:"auth_u"` // base64 encoded client authentication token
+}
+
+// OpaqueAuthResponse handles server-side credential response creation
+func OpaqueAuthResponse(c echo.Context) error {
+	var request OpaqueAuthResponseRequest
 	if err := c.Bind(&request); err != nil {
-		logging.ErrorLogger.Printf("OPAQUE login bind error: %v", err)
+		logging.ErrorLogger.Printf("OPAQUE auth response bind error: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
 	}
 
-	// Input validation
+	// Validate username
 	if request.Username == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "Username is required")
 	}
 
-	if request.Password == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Password is required")
-	}
-
-	// Note: We no longer check user approval status during login
-	// Users can complete OPAQUE + TOTP authentication but will be restricted from file operations if unapproved
-
-	// Get user to authenticate
-	user, err := models.GetUserByUsername(database.DB, request.Username)
+	// Get user record from database
+	var userRecord []byte
+	err := database.DB.QueryRow(`
+		SELECT opaque_user_record FROM opaque_password_records 
+		WHERE record_type = 'account' AND record_identifier = ? AND is_active = true`,
+		request.Username).Scan(&userRecord)
 	if err != nil {
-		logging.ErrorLogger.Printf("User not found for %s: %v", request.Username, err)
+		logging.ErrorLogger.Printf("User not found for auth: %s", request.Username)
 		// Record failed login attempt
 		entityID := logging.GetOrCreateEntityID(c)
 		if recordErr := recordAuthFailedAttempt("login", entityID); recordErr != nil {
@@ -424,73 +473,132 @@ func OpaqueLogin(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
 	}
 
-	// Perform OPAQUE authentication via user model to get export key
-	exportKey, err := user.AuthenticateOPAQUE(database.DB, request.Password)
+	// Decode credential request from client
+	credentialRequest, err := base64.StdEncoding.DecodeString(request.CredentialRequest)
 	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid credential request encoding")
+	}
+
+	// Create server credential response
+	credentialResponse, authUServer, err := auth.CreateCredentialResponse(credentialRequest, userRecord)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to create credential response for %s: %v", request.Username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication response creation failed")
+	}
+
+	// Store authUServer in session for later verification
+	// We'll use a temporary session storage with 5-minute expiry
+	authUServerB64 := base64.StdEncoding.EncodeToString(authUServer)
+
+	// Store in database with expiry (using a simple approach)
+	_, err = database.DB.Exec(`
+		INSERT OR REPLACE INTO opaque_auth_sessions (username, auth_u_server, created_at)
+		VALUES (?, ?, ?)`,
+		request.Username, authUServerB64, time.Now())
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to store auth session for %s: %v", request.Username, err)
+		// Continue anyway - we'll try to authenticate without session storage
+	}
+
+	// Encode response for transmission
+	responseB64 := base64.StdEncoding.EncodeToString(credentialResponse)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"credential_response": responseB64,
+	})
+}
+
+// OpaqueAuthFinalize completes user authentication
+func OpaqueAuthFinalize(c echo.Context) error {
+	var request OpaqueAuthFinalizeRequest
+	if err := c.Bind(&request); err != nil {
+		logging.ErrorLogger.Printf("OPAQUE auth finalize bind error: %v", err)
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+	}
+
+	// Validate username
+	if request.Username == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Username is required")
+	}
+
+	// Retrieve authUServer from session
+	var authUServerB64 string
+	var createdAt time.Time
+	err := database.DB.QueryRow(`
+		SELECT auth_u_server, created_at FROM opaque_auth_sessions 
+		WHERE username = ?`,
+		request.Username).Scan(&authUServerB64, &createdAt)
+	if err != nil {
+		logging.ErrorLogger.Printf("Auth session not found for %s: %v", request.Username, err)
+		return echo.NewHTTPError(http.StatusUnauthorized, "Authentication session expired or invalid")
+	}
+
+	// Check session expiry (5 minutes)
+	if time.Since(createdAt) > 5*time.Minute {
+		// Clean up expired session
+		database.DB.Exec("DELETE FROM opaque_auth_sessions WHERE username = ?", request.Username)
+		return echo.NewHTTPError(http.StatusUnauthorized, "Authentication session expired")
+	}
+
+	// Decode authU values
+	authUServer, err := base64.StdEncoding.DecodeString(authUServerB64)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid server auth token encoding")
+	}
+
+	authUClient, err := base64.StdEncoding.DecodeString(request.AuthU)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid client auth token encoding")
+	}
+
+	// Verify authentication
+	if err := auth.UserAuth(authUServer, authUClient); err != nil {
 		logging.ErrorLogger.Printf("OPAQUE authentication failed for %s: %v", request.Username, err)
 		// Record failed login attempt
 		entityID := logging.GetOrCreateEntityID(c)
 		if recordErr := recordAuthFailedAttempt("login", entityID); recordErr != nil {
 			logging.ErrorLogger.Printf("Failed to record login failure: %v", recordErr)
 		}
+		// Clean up session
+		database.DB.Exec("DELETE FROM opaque_auth_sessions WHERE username = ?", request.Username)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
 	}
 
-	// Validate export key from OPAQUE authentication
-	if err := user.ValidateOPAQUEExportKey(exportKey); err != nil {
-		logging.ErrorLogger.Printf("Invalid OPAQUE export key for %s: %v", request.Username, err)
-		user.SecureZeroExportKey(exportKey)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
-	}
-
-	// Derive session key from OPAQUE export key using proper HKDF
-	sessionKey, err := crypto.DeriveSessionKey(exportKey, crypto.SessionKeyContext)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to derive session key for %s: %v", request.Username, err)
-		user.SecureZeroExportKey(exportKey)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
-	}
-
-	// Clear export key from memory immediately after session key derivation
-	user.SecureZeroExportKey(exportKey)
+	// Clean up auth session
+	database.DB.Exec("DELETE FROM opaque_auth_sessions WHERE username = ?", request.Username)
 
 	// Check if user has TOTP enabled
 	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", request.Username, err)
-		crypto.SecureZeroSessionKey(sessionKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// MANDATORY TOTP: All users must have TOTP enabled to login
 	if !totpEnabled {
-		crypto.SecureZeroSessionKey(sessionKey)
 		logging.ErrorLogger.Printf("User %s attempted login without TOTP setup", request.Username)
-		return echo.NewHTTPError(http.StatusForbidden, "Two-factor authentication setup is required. Please complete TOTP setup before logging in.")
+		return echo.NewHTTPError(http.StatusForbidden, "Two-factor authentication setup is required")
 	}
 
 	// Generate temporary token that requires TOTP completion
 	tempToken, err := auth.GenerateTemporaryTOTPToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
-		crypto.SecureZeroSessionKey(sessionKey)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
 
-	// Encode session key for secure transmission
-	sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
-
-	// Clear session key from memory immediately
-	crypto.SecureZeroSessionKey(sessionKey)
+	// For multi-step OPAQUE, we don't have the export key available
+	// The session key will need to be derived on the client side from the export key
+	// that the client obtained during the OPAQUE protocol
+	// So we don't return a session_key here - the client already has it
 
 	// Log partial authentication
-	database.LogUserAction(request.Username, "OPAQUE auth completed, awaiting TOTP", "")
-	logging.InfoLogger.Printf("OPAQUE user authenticated, TOTP required: %s", request.Username)
+	database.LogUserAction(request.Username, "OPAQUE auth completed (multi-step), awaiting TOTP", "")
+	logging.InfoLogger.Printf("OPAQUE user authenticated (multi-step), TOTP required: %s", request.Username)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"requires_totp": true,
 		"temp_token":    tempToken,
-		"session_key":   sessionKeyB64,
 		"auth_method":   "OPAQUE",
 		"message":       "OPAQUE authentication successful. TOTP code required.",
 	})

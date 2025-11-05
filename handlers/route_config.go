@@ -32,9 +32,11 @@ func RegisterRoutes() {
 		return c.File("client/static/favicon.ico")
 	})
 
-	// OPAQUE Authentication (Only) - with rate limiting protection
-	Echo.POST("/api/opaque/register", RegisterRateLimitMiddleware(OpaqueRegister))
-	Echo.POST("/api/opaque/login", LoginRateLimitMiddleware(OpaqueLogin))
+	// OPAQUE Authentication (Multi-Step Protocol) - with rate limiting protection
+	Echo.POST("/api/opaque/register/response", RegisterRateLimitMiddleware(OpaqueRegisterResponse))
+	Echo.POST("/api/opaque/register/finalize", RegisterRateLimitMiddleware(OpaqueRegisterFinalize))
+	Echo.POST("/api/opaque/auth/response", LoginRateLimitMiddleware(OpaqueAuthResponse))
+	Echo.POST("/api/opaque/auth/finalize", LoginRateLimitMiddleware(OpaqueAuthFinalize))
 	Echo.GET("/api/opaque/health", OpaqueHealthCheck)
 
 	// TOTP Authentication - requires authentication with rate limiting protection

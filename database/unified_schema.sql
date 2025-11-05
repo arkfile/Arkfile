@@ -75,6 +75,13 @@ CREATE TABLE IF NOT EXISTS opaque_password_records (
     is_active BOOLEAN DEFAULT TRUE
 );
 
+-- OPAQUE authentication sessions (multi-step protocol state)
+CREATE TABLE IF NOT EXISTS opaque_auth_sessions (
+    username TEXT PRIMARY KEY,
+    auth_u_server TEXT NOT NULL,         -- base64-encoded server authentication token
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- JWT token management
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     id TEXT PRIMARY KEY,

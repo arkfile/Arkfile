@@ -2,8 +2,11 @@ package crypto
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"sync"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/hkdf"
@@ -17,12 +20,61 @@ type UnifiedArgonProfile struct {
 	KeyLen  uint32 // output length in bytes
 }
 
-// UnifiedArgonSecure is the profile for all file encryption contexts (256MB, future-proofed)
-var UnifiedArgonSecure = UnifiedArgonProfile{
-	Time:    8,
-	Memory:  256 * 1024, // 256MB - future-proofed against hardware advances
-	Threads: 4,
-	KeyLen:  32,
+// argon2ParamsJSON matches the structure of config/argon2id-params.json
+type argon2ParamsJSON struct {
+	MemoryCostKiB int    `json:"memoryCostKiB"`
+	TimeCost      int    `json:"timeCost"`
+	Parallelism   int    `json:"parallelism"`
+	KeyLength     int    `json:"keyLength"`
+	Variant       string `json:"variant"`
+}
+
+var (
+	// UnifiedArgonSecure is the profile for all file encryption contexts
+	// SINGLE SOURCE OF TRUTH: Loaded from config/argon2id-params.json
+	UnifiedArgonSecure UnifiedArgonProfile
+	argonLoadOnce      sync.Once
+	argonLoadErr       error
+)
+
+// loadArgon2Params loads Argon2ID parameters from config/argon2id-params.json
+func loadArgon2Params() error {
+	file, err := os.ReadFile("config/argon2id-params.json")
+	if err != nil {
+		return fmt.Errorf("failed to read argon2id params: %w", err)
+	}
+
+	var params argon2ParamsJSON
+	if err := json.Unmarshal(file, &params); err != nil {
+		return fmt.Errorf("failed to parse argon2id params: %w", err)
+	}
+
+	// Validate variant
+	if params.Variant != "Argon2id" {
+		return fmt.Errorf("unsupported Argon2 variant: %s (expected Argon2id)", params.Variant)
+	}
+
+	// Convert to UnifiedArgonProfile
+	UnifiedArgonSecure = UnifiedArgonProfile{
+		Time:    uint32(params.TimeCost),
+		Memory:  uint32(params.MemoryCostKiB),
+		Threads: uint8(params.Parallelism),
+		KeyLen:  uint32(params.KeyLength),
+	}
+
+	return nil
+}
+
+// init loads Argon2ID parameters at package initialization
+func init() {
+	argonLoadOnce.Do(func() {
+		argonLoadErr = loadArgon2Params()
+	})
+
+	// If loading fails, panic since crypto operations cannot proceed safely
+	if argonLoadErr != nil {
+		panic(fmt.Sprintf("FATAL: Failed to load Argon2ID parameters: %v", argonLoadErr))
+	}
 }
 
 // Static salts for FEK wrapping

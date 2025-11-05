@@ -5,8 +5,8 @@
  * These primitives provide a clean interface for all cryptographic operations.
  */
 
-import { sha256, sha512 } from '@noble/hashes/sha2';
-import { argon2id } from '@noble/hashes/argon2';
+import { sha256, sha512 } from '@noble/hashes/sha2.js';
+import { argon2id } from '@noble/hashes/argon2.js';
 import {
   KEY_SIZES,
   AES_GCM_CONFIG,
@@ -224,25 +224,37 @@ export async function encryptAESGCM(
     // Generate random IV
     const iv = generateIV();
     
-    // Import key
+    // Import key (create proper ArrayBuffer copy)
+    const keyBuffer = request.key.buffer.slice(
+      request.key.byteOffset,
+      request.key.byteOffset + request.key.byteLength
+    ) as ArrayBuffer;
     const cryptoKey = await crypto.subtle.importKey(
       'raw',
-      request.key,
+      keyBuffer,
       { name: AES_GCM_CONFIG.name },
       false,
       ['encrypt']
     );
     
-    // Encrypt
+    // Encrypt (create proper ArrayBuffer copies)
+    const ivBuffer = iv.buffer.slice(
+      iv.byteOffset,
+      iv.byteOffset + iv.byteLength
+    ) as ArrayBuffer;
+    const dataBuffer = request.data.buffer.slice(
+      request.data.byteOffset,
+      request.data.byteOffset + request.data.byteLength
+    ) as ArrayBuffer;
     const ciphertext = await crypto.subtle.encrypt(
       {
         name: AES_GCM_CONFIG.name,
-        iv: iv as BufferSource,
+        iv: ivBuffer,
         tagLength: AES_GCM_CONFIG.tagLength,
-        additionalData: request.aad as BufferSource | undefined,
+        ...(request.aad && { additionalData: request.aad }),
       },
       cryptoKey,
-      request.data as BufferSource
+      dataBuffer
     );
     
     // Split ciphertext and tag
@@ -293,10 +305,14 @@ export async function decryptAESGCM(
       );
     }
     
-    // Import key
+    // Import key (create proper ArrayBuffer copy)
+    const keyBuffer = request.key.buffer.slice(
+      request.key.byteOffset,
+      request.key.byteOffset + request.key.byteLength
+    ) as ArrayBuffer;
     const cryptoKey = await crypto.subtle.importKey(
       'raw',
-      request.key,
+      keyBuffer,
       { name: AES_GCM_CONFIG.name },
       false,
       ['decrypt']
@@ -307,16 +323,24 @@ export async function decryptAESGCM(
     combined.set(request.ciphertext);
     combined.set(request.tag, request.ciphertext.length);
     
-    // Decrypt
+    // Decrypt (create proper ArrayBuffer copies)
+    const ivBuffer = request.iv.buffer.slice(
+      request.iv.byteOffset,
+      request.iv.byteOffset + request.iv.byteLength
+    ) as ArrayBuffer;
+    const combinedBuffer = combined.buffer.slice(
+      combined.byteOffset,
+      combined.byteOffset + combined.byteLength
+    ) as ArrayBuffer;
     const plaintext = await crypto.subtle.decrypt(
       {
         name: AES_GCM_CONFIG.name,
-        iv: request.iv as BufferSource,
+        iv: ivBuffer,
         tagLength: AES_GCM_CONFIG.tagLength,
-        additionalData: request.aad as BufferSource | undefined,
+        ...(request.aad && { additionalData: request.aad }),
       },
       cryptoKey,
-      combined as BufferSource
+      combinedBuffer
     );
     
     return {
@@ -350,22 +374,34 @@ export async function deriveKeyHKDF(
   ensureWebCrypto();
   
   try {
-    // Import the input key
+    // Import the input key (create proper ArrayBuffer copy)
+    const keyBuffer = inputKey.buffer.slice(
+      inputKey.byteOffset,
+      inputKey.byteOffset + inputKey.byteLength
+    ) as ArrayBuffer;
     const baseKey = await crypto.subtle.importKey(
       'raw',
-      inputKey,
+      keyBuffer,
       { name: 'HKDF' },
       false,
       ['deriveBits']
     );
     
-    // Derive bits using HKDF
+    // Derive bits using HKDF (create proper ArrayBuffer copies)
+    const saltBuffer = salt.buffer.slice(
+      salt.byteOffset,
+      salt.byteOffset + salt.byteLength
+    ) as ArrayBuffer;
+    const infoBuffer = info.buffer.slice(
+      info.byteOffset,
+      info.byteOffset + info.byteLength
+    ) as ArrayBuffer;
     const derivedBits = await crypto.subtle.deriveBits(
       {
         name: 'HKDF',
         hash: 'SHA-256',
-        salt: salt as BufferSource,
-        info: info as BufferSource,
+        salt: saltBuffer,
+        info: infoBuffer,
       },
       baseKey,
       length * 8 // Convert bytes to bits

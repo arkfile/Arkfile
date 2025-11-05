@@ -17,7 +17,7 @@ export class CryptoError extends Error {
   public readonly code: string;
   
   /** Additional context about the error */
-  public readonly context?: Record<string, unknown>;
+  public readonly context: Record<string, unknown> | undefined;
   
   /** Timestamp when error occurred */
   public readonly timestamp: number;
@@ -26,7 +26,7 @@ export class CryptoError extends Error {
     super(message);
     this.name = 'CryptoError';
     this.code = code;
-    this.context = context ?? undefined;
+    this.context = context;
     this.timestamp = Date.now();
     
     // Maintains proper stack trace for where our error was thrown (only available on V8)

@@ -6,47 +6,28 @@
  */
 
 // ============================================================================
-// Argon2id Parameters (for file encryption key derivation)
+// Argon2id Parameters (imported from single source of truth)
 // ============================================================================
 
 /**
- * Argon2id configuration for file encryption key derivation.
- * These parameters provide strong protection against brute-force attacks
- * while remaining practical for client-side use.
+ * SINGLE SOURCE OF TRUTH: config/argon2id-params.json
+ * 
+ * All Argon2id parameters are defined in config/argon2id-params.json
+ * and imported here to ensure consistency across the entire application
+ * (TypeScript client, Go CLI tools, etc.)
  * 
  * CRITICAL: These parameters are used for deterministic file encryption keys.
  * Changing them will make existing encrypted files unreadable.
  */
+import argon2Params from '../../../../config/argon2id-params.json';
+
 export const ARGON2_PARAMS = {
   FILE_ENCRYPTION: {
-    /**
-     * Memory cost in KiB (64 MiB = 65536 KiB)
-     * Higher values increase resistance to GPU attacks
-     */
-    memoryCost: 65536,
-    
-    /**
-     * Time cost (number of iterations)
-     * Higher values increase computation time
-     */
-    timeCost: 3,
-    
-    /**
-     * Parallelism factor (number of threads)
-     * Must match server-side configuration
-     */
-    parallelism: 4,
-    
-    /**
-     * Output key length in bytes (256 bits)
-     */
-    keyLength: 32,
-    
-    /**
-     * Argon2 variant (2 = Argon2id)
-     * Argon2id provides balanced protection against side-channel and GPU attacks
-     */
-    variant: 2 as const,
+    memoryCost: argon2Params.memoryCostKiB,
+    timeCost: argon2Params.timeCost,
+    parallelism: argon2Params.parallelism,
+    keyLength: argon2Params.keyLength,
+    variant: 2 as const, // Argon2id
   },
 } as const;
 

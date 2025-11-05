@@ -8,4 +8,9 @@ const (
 	OPAQUE_USER_SESSION_PUBLIC_LEN = 96
 	OPAQUE_USER_SESSION_SECRET_LEN = 226
 	OPAQUE_SERVER_SESSION_LEN      = 320
+
+	// Multi-step registration constants
+	OPAQUE_REGISTER_USER_SEC_LEN = 34 // 32 (r) + 2 (pwdU_len)
+	OPAQUE_REGISTER_PUBLIC_LEN   = 64 // 32 (Z) + 32 (pkS)
+	OPAQUE_REGISTER_SECRET_LEN   = 64 // 32 (skS) + 32 (kU)
 )

@@ -1,0 +1,7 @@
+{
+  "memoryCostKiB": 262144,
+  "timeCost": 8,
+  "parallelism": 4,
+  "keyLength": 32,
+  "variant": "Argon2id"
+}
