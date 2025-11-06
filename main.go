@@ -114,6 +114,18 @@ func main() {
 	}
 	logging.InfoLogger.Printf("OPAQUE initialized successfully")
 
+	// Start session cleanup goroutine
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			if err := auth.CleanupExpiredSessions(database.DB); err != nil {
+				logging.ErrorLogger.Printf("Failed to cleanup expired sessions: %v", err)
+			}
+		}
+	}()
+
 	// Start TOTP cleanup routine
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute) // Clean every 5 minutes

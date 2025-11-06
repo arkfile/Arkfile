@@ -303,10 +303,18 @@ type OpaqueHealthCheckResponse struct {
 
 // OpaqueRegisterResponse handles server-side registration response creation
 func OpaqueRegisterResponse(c echo.Context) error {
-	var request OpaqueRegisterResponseRequest
+	var request struct {
+		Username            string `json:"username"`
+		RegistrationRequest string `json:"registration_request"` // base64 encoded
+	}
 	if err := c.Bind(&request); err != nil {
 		logging.ErrorLogger.Printf("OPAQUE registration response bind error: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+	}
+
+	// Validate username
+	if request.Username == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Username is required")
 	}
 
 	// Decode registration request from client
@@ -322,20 +330,46 @@ func OpaqueRegisterResponse(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration response creation failed")
 	}
 
+	// Create session for multi-step protocol
+	sessionID, err := auth.CreateAuthSession(database.DB, request.Username, "registration", registrationResponse)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to create registration session for %s: %v", request.Username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Session creation failed")
+	}
+
 	// Encode response for transmission
 	responseB64 := base64.StdEncoding.EncodeToString(registrationResponse)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
+		"session_id":            sessionID,
 		"registration_response": responseB64,
 	})
 }
 
 // OpaqueRegisterFinalize completes user registration
 func OpaqueRegisterFinalize(c echo.Context) error {
-	var request OpaqueRegisterFinalizeRequest
+	var request struct {
+		SessionID          string `json:"session_id"`
+		Username           string `json:"username"`
+		RegistrationRecord string `json:"registration_record"` // base64 encoded
+		Email              string `json:"email,omitempty"`
+	}
 	if err := c.Bind(&request); err != nil {
 		logging.ErrorLogger.Printf("OPAQUE registration finalize bind error: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
+	}
+
+	// Validate session
+	sessionUsername, _, err := auth.ValidateAuthSession(database.DB, request.SessionID, "registration")
+	if err != nil {
+		logging.ErrorLogger.Printf("Invalid registration session: %v", err)
+		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid or expired session")
+	}
+
+	// Verify username matches session
+	if sessionUsername != request.Username {
+		logging.ErrorLogger.Printf("Username mismatch in registration: session=%s, request=%s", sessionUsername, request.Username)
+		return echo.NewHTTPError(http.StatusBadRequest, "Username mismatch")
 	}
 
 	// Validate username
@@ -349,8 +383,10 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	}
 
 	// Check if user already exists
-	_, err := models.GetUserByUsername(database.DB, request.Username)
+	_, err = models.GetUserByUsername(database.DB, request.Username)
 	if err == nil {
+		// Clean up session
+		auth.DeleteAuthSession(database.DB, request.SessionID)
 		return echo.NewHTTPError(http.StatusConflict, "Username already registered")
 	}
 
@@ -403,6 +439,12 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	if err := tx.Commit(); err != nil {
 		logging.ErrorLogger.Printf("Failed to commit transaction for %s: %v", request.Username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "User creation failed")
+	}
+
+	// Clean up session after successful registration
+	if err := auth.DeleteAuthSession(database.DB, request.SessionID); err != nil {
+		logging.ErrorLogger.Printf("Warning: Failed to delete registration session for %s: %v", request.Username, err)
+		// Continue - session will expire naturally
 	}
 
 	// Generate temporary token for TOTP setup
@@ -486,66 +528,48 @@ func OpaqueAuthResponse(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication response creation failed")
 	}
 
-	// Store authUServer in session for later verification
-	// We'll use a temporary session storage with 5-minute expiry
-	authUServerB64 := base64.StdEncoding.EncodeToString(authUServer)
-
-	// Store in database with expiry (using a simple approach)
-	_, err = database.DB.Exec(`
-		INSERT OR REPLACE INTO opaque_auth_sessions (username, auth_u_server, created_at)
-		VALUES (?, ?, ?)`,
-		request.Username, authUServerB64, time.Now())
+	// Create session for multi-step protocol
+	sessionID, err := auth.CreateAuthSession(database.DB, request.Username, "authentication", authUServer)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to store auth session for %s: %v", request.Username, err)
-		// Continue anyway - we'll try to authenticate without session storage
+		logging.ErrorLogger.Printf("Failed to create auth session for %s: %v", request.Username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Session creation failed")
 	}
 
 	// Encode response for transmission
 	responseB64 := base64.StdEncoding.EncodeToString(credentialResponse)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
+		"session_id":          sessionID,
 		"credential_response": responseB64,
 	})
 }
 
 // OpaqueAuthFinalize completes user authentication
 func OpaqueAuthFinalize(c echo.Context) error {
-	var request OpaqueAuthFinalizeRequest
+	var request struct {
+		SessionID string `json:"session_id"`
+		Username  string `json:"username"`
+		AuthU     string `json:"auth_u"` // base64 encoded client authentication token
+	}
 	if err := c.Bind(&request); err != nil {
 		logging.ErrorLogger.Printf("OPAQUE auth finalize bind error: %v", err)
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
 	}
 
-	// Validate username
-	if request.Username == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Username is required")
-	}
-
-	// Retrieve authUServer from session
-	var authUServerB64 string
-	var createdAt time.Time
-	err := database.DB.QueryRow(`
-		SELECT auth_u_server, created_at FROM opaque_auth_sessions 
-		WHERE username = ?`,
-		request.Username).Scan(&authUServerB64, &createdAt)
+	// Validate session
+	sessionUsername, authUServer, err := auth.ValidateAuthSession(database.DB, request.SessionID, "authentication")
 	if err != nil {
-		logging.ErrorLogger.Printf("Auth session not found for %s: %v", request.Username, err)
-		return echo.NewHTTPError(http.StatusUnauthorized, "Authentication session expired or invalid")
+		logging.ErrorLogger.Printf("Invalid auth session: %v", err)
+		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid or expired session")
 	}
 
-	// Check session expiry (5 minutes)
-	if time.Since(createdAt) > 5*time.Minute {
-		// Clean up expired session
-		database.DB.Exec("DELETE FROM opaque_auth_sessions WHERE username = ?", request.Username)
-		return echo.NewHTTPError(http.StatusUnauthorized, "Authentication session expired")
+	// Verify username matches session
+	if sessionUsername != request.Username {
+		logging.ErrorLogger.Printf("Username mismatch in auth: session=%s, request=%s", sessionUsername, request.Username)
+		return echo.NewHTTPError(http.StatusBadRequest, "Username mismatch")
 	}
 
-	// Decode authU values
-	authUServer, err := base64.StdEncoding.DecodeString(authUServerB64)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid server auth token encoding")
-	}
-
+	// Decode authU from client
 	authUClient, err := base64.StdEncoding.DecodeString(request.AuthU)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid client auth token encoding")
@@ -560,12 +584,15 @@ func OpaqueAuthFinalize(c echo.Context) error {
 			logging.ErrorLogger.Printf("Failed to record login failure: %v", recordErr)
 		}
 		// Clean up session
-		database.DB.Exec("DELETE FROM opaque_auth_sessions WHERE username = ?", request.Username)
+		auth.DeleteAuthSession(database.DB, request.SessionID)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
 	}
 
-	// Clean up auth session
-	database.DB.Exec("DELETE FROM opaque_auth_sessions WHERE username = ?", request.Username)
+	// Clean up auth session after successful authentication
+	if err := auth.DeleteAuthSession(database.DB, request.SessionID); err != nil {
+		logging.ErrorLogger.Printf("Warning: Failed to delete auth session for %s: %v", request.Username, err)
+		// Continue - session will expire naturally
+	}
 
 	// Check if user has TOTP enabled
 	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, request.Username)

@@ -9,8 +9,12 @@ package auth
 */
 import "C"
 import (
+	"database/sql"
 	"fmt"
+	"time"
 	"unsafe"
+
+	"github.com/google/uuid"
 )
 
 // Multi-step OPAQUE registration flow
@@ -30,8 +34,8 @@ func CreateRegistrationResponse(requestData []byte) ([]byte, error) {
 	}
 
 	// Allocate buffers for server response
-	rsec := make([]byte, OPAQUE_REGISTER_SECRET_LEN)
-	rpub := make([]byte, OPAQUE_REGISTER_PUBLIC_LEN)
+	responseSecret := make([]byte, OPAQUE_REGISTER_SECRET_LEN)
+	responsePublic := make([]byte, OPAQUE_REGISTER_PUBLIC_LEN)
 
 	// Convert Go slices to C pointers
 	cRequestData := C.CBytes(requestData)
@@ -41,20 +45,20 @@ func CreateRegistrationResponse(requestData []byte) ([]byte, error) {
 	defer C.free(cServerPrivateKey)
 
 	// Call C function
-	ret := C.arkfile_opaque_create_registration_response(
+	ret := C.wrap_opaque_create_registration_response(
 		(*C.uint8_t)(cRequestData),
 		(*C.uint8_t)(cServerPrivateKey),
-		(*C.uint8_t)(unsafe.Pointer(&rsec[0])),
-		(*C.uint8_t)(unsafe.Pointer(&rpub[0])),
+		(*C.uint8_t)(&responseSecret[0]),
+		(*C.uint8_t)(&responsePublic[0]),
 	)
 
 	if ret != 0 {
 		return nil, fmt.Errorf("registration response creation failed: error code %d", ret)
 	}
 
-	// Note: rsec is server-side secret, not returned to client
-	// Only rpub is sent to client
-	return rpub, nil
+	// Note: responseSecret is server-side secret, not returned to client
+	// Only responsePublic is sent to client
+	return responsePublic, nil
 }
 
 // StoreUserRecord finalizes registration by storing the user record
@@ -104,7 +108,7 @@ func CreateCredentialResponse(requestData []byte, userRecord []byte) ([]byte, []
 	defer C.free(cUserRecord)
 
 	// Call C function
-	ret := C.arkfile_opaque_create_credential_response(
+	ret := C.wrap_opaque_create_credential_response(
 		(*C.uint8_t)(cRequestData),
 		(*C.uint8_t)(cUserRecord),
 		(*C.uint8_t)(unsafe.Pointer(&resp[0])),
@@ -136,13 +140,71 @@ func UserAuth(authUServer []byte, authUClient []byte) error {
 	defer C.free(cAuthUClient)
 
 	// Call C function
-	ret := C.arkfile_opaque_user_auth(
+	ret := C.wrap_opaque_user_auth(
 		(*C.uint8_t)(cAuthUServer),
 		(*C.uint8_t)(cAuthUClient),
 	)
 
 	if ret != 0 {
 		return fmt.Errorf("authentication failed: authU mismatch")
+	}
+
+	return nil
+}
+
+// Session Management Functions
+
+// CreateAuthSession creates a new authentication session for multi-step protocol
+func CreateAuthSession(db *sql.DB, username string, flowType string, serverPublicKey []byte) (string, error) {
+	sessionID := uuid.New().String()
+	expiresAt := time.Now().Add(15 * time.Minute)
+
+	query := "INSERT INTO opaque_auth_sessions (session_id, username, flow_type, server_public_key, expires_at) VALUES (?, ?, ?, ?, ?)"
+
+	_, err := db.Exec(query, sessionID, username, flowType, serverPublicKey, expiresAt)
+	if err != nil {
+		return "", fmt.Errorf("failed to create session: %w", err)
+	}
+
+	return sessionID, nil
+}
+
+// ValidateAuthSession validates and retrieves session data
+func ValidateAuthSession(db *sql.DB, sessionID string, expectedFlowType string) (username string, serverPk []byte, err error) {
+	query := "SELECT username, server_public_key FROM opaque_auth_sessions WHERE session_id = ? AND flow_type = ? AND expires_at > CURRENT_TIMESTAMP"
+
+	err = db.QueryRow(query, sessionID, expectedFlowType).Scan(&username, &serverPk)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil, fmt.Errorf("invalid or expired session")
+		}
+		return "", nil, fmt.Errorf("session validation failed: %w", err)
+	}
+
+	return username, serverPk, nil
+}
+
+// DeleteAuthSession removes a session after use
+func DeleteAuthSession(db *sql.DB, sessionID string) error {
+	query := "DELETE FROM opaque_auth_sessions WHERE session_id = ?"
+	_, err := db.Exec(query, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to delete session: %w", err)
+	}
+	return nil
+}
+
+// CleanupExpiredSessions removes all expired sessions
+func CleanupExpiredSessions(db *sql.DB) error {
+	query := "DELETE FROM opaque_auth_sessions WHERE expires_at < CURRENT_TIMESTAMP"
+	result, err := db.Exec(query)
+	if err != nil {
+		return fmt.Errorf("failed to cleanup expired sessions: %w", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected > 0 {
+		fmt.Printf("Cleaned up %d expired OPAQUE sessions\n", rowsAffected)
 	}
 
 	return nil
