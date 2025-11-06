@@ -3,11 +3,35 @@ package handlers
 import (
 	"crypto/sha256"
 	"fmt"
+	"io"
+	"net/http/httptest"
 	"testing"
 
-	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/storage"
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/labstack/echo/v4"
 )
+
+// setupTestEnv creates a test environment with Echo context, response recorder, mock DB, and mock storage
+func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Context, *httptest.ResponseRecorder, sqlmock.Sqlmock, *storage.MockObjectStorageProvider) {
+	e := echo.New()
+	req := httptest.NewRequest(method, path, body)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	// Create mock database
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("Failed to create mock database: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	// Create mock storage
+	mockStorage := &storage.MockObjectStorageProvider{}
+
+	return c, rec, mock, mockStorage
+}
 
 // TestOPAQUEProvider implements auth.OPAQUEProvider for testing
 // This allows us to test OPAQUE handler logic without requiring CGO libraries
@@ -101,117 +125,20 @@ func (t *TestOPAQUEProvider) GetServerKeys() ([]byte, []byte, error) {
 	return t.serverKeys.publicKey, t.serverKeys.privateKey, nil
 }
 
-// GenerateServerKeys implements auth.OPAQUEProvider.GenerateServerKeys for testing
-func (t *TestOPAQUEProvider) GenerateServerKeys() ([]byte, []byte, error) {
-	if !t.available {
-		return nil, nil, fmt.Errorf("test OPAQUE provider not available")
-	}
-
-	// Generate new test keys
-	newKeys := generateTestServerKeys()
-	t.serverKeys = newKeys
-
-	return newKeys.publicKey, newKeys.privateKey, nil
-}
-
-// generateTestUserRecord creates a realistic user record for testing
+// generateTestUserRecord creates a deterministic user record for testing
 func generateTestUserRecord(password []byte) []byte {
-	// Create deterministic user record based on password
-	// Real OPAQUE user records are variable length, we'll use 200 bytes for testing
-	hash := sha256.Sum256(append([]byte("opaque-user-record:"), password...))
-
-	// Extend to 200 bytes to simulate real user record
-	userRecord := make([]byte, 200)
-	for i := 0; i < 200; i += 32 {
-		copy(userRecord[i:], hash[:])
-		hash = sha256.Sum256(append(hash[:], byte(i)))
-	}
-
-	return userRecord
+	// In real OPAQUE, this would be the output of the registration protocol
+	// For testing, we create a deterministic record based on the password
+	hash := sha256.Sum256(append([]byte("user-record:"), password...))
+	record := make([]byte, 192) // Typical OPAQUE record size
+	copy(record, hash[:])
+	return record
 }
 
-// generateTestExportKey creates a realistic 64-byte export key for testing
+// generateTestExportKey creates a deterministic export key for testing
 func generateTestExportKey(password []byte) []byte {
-	// OPAQUE export keys must be exactly 64 bytes
-	exportKey := make([]byte, 64)
-
-	// Generate deterministic but realistic export key
-	hash1 := sha256.Sum256(append([]byte("opaque-export-key-1:"), password...))
-	hash2 := sha256.Sum256(append([]byte("opaque-export-key-2:"), password...))
-
-	copy(exportKey[0:32], hash1[:])
-	copy(exportKey[32:64], hash2[:])
-
-	return exportKey
-}
-
-// Provider override functionality for testing
-
-var originalProvider auth.OPAQUEProvider
-var testProviderActive bool
-
-// setupTestOPAQUEProvider installs a test OPAQUE provider for the duration of a test
-func setupTestOPAQUEProvider(t *testing.T) func() {
-	t.Helper()
-
-	if !testProviderActive {
-		// Save the original provider
-		originalProvider = getCurrentOPAQUEProvider()
-
-		// Install test provider
-		testProvider := NewTestOPAQUEProvider()
-		setTestOPAQUEProvider(testProvider)
-		testProviderActive = true
-	}
-
-	// Return cleanup function
-	return func() {
-		if testProviderActive {
-			restoreOPAQUEProvider(originalProvider)
-			testProviderActive = false
-		}
-	}
-}
-
-// getCurrentOPAQUEProvider gets the current provider (using reflection/access pattern)
-func getCurrentOPAQUEProvider() auth.OPAQUEProvider {
-	return auth.GetOPAQUEProvider()
-}
-
-// setTestOPAQUEProvider sets a test provider (we need to access package internals)
-func setTestOPAQUEProvider(testProvider *TestOPAQUEProvider) {
-	// We need to temporarily replace the global provider
-	// This requires accessing the auth package's internal state
-	auth.SetTestProvider(testProvider)
-}
-
-// restoreOPAQUEProvider restores the original provider
-func restoreOPAQUEProvider(provider auth.OPAQUEProvider) {
-	auth.RestoreProvider(provider)
-}
-
-// Enhanced mock expectations for OPAQUE database operations
-
-// setupOPAQUEDatabaseMocks configures database mocks for OPAQUE operations
-func setupOPAQUEDatabaseMocks(mock sqlmock.Sqlmock, username string) {
-	// Mock the opaque_password_records operations that models.CreateUserWithOPAQUE expects
-
-	// Mock OPAQUE record insertion during registration
-	mock.ExpectExec(`INSERT INTO opaque_password_records`).
-		WithArgs("account", username, sqlmock.AnyArg(), username, true).
-		WillReturnResult(sqlmock.NewResult(1, 1))
-}
-
-// setupOPAQUEAuthenticationMocks configures database mocks for OPAQUE authentication
-func setupOPAQUEAuthenticationMocks(mock sqlmock.Sqlmock, username string) {
-	// Mock OPAQUE record retrieval during authentication
-	mock.ExpectQuery(`SELECT opaque_user_record FROM opaque_password_records WHERE record_identifier = \? AND is_active = TRUE`).
-		WithArgs(username).
-		WillReturnRows(sqlmock.NewRows([]string{"opaque_user_record"}).
-			AddRow(generateTestUserRecord([]byte("test-password"))))
-
-	// Mock updating last used timestamp
-	mock.ExpectExec(`UPDATE opaque_password_records SET last_used_at = CURRENT_TIMESTAMP WHERE record_identifier = \?`).
-		WithArgs(username).
-		WillReturnResult(sqlmock.NewResult(1, 1))
+	// In real OPAQUE, this would be derived during the protocol
+	// For testing, we create a deterministic key based on the password
+	hash := sha256.Sum256(append([]byte("export-key:"), password...))
+	return hash[:]
 }

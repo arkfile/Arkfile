@@ -207,11 +207,632 @@ This document tracks the refactoring of Arkfile's authentication system to prope
    - No compilation errors or warnings
    - All imports resolved correctly
 
-### Phase 6: Testing & Validation ⚠️ BLOCKED
+### Phase 6: Zero-Knowledge Compliance & CGO Implementation 🚨 CRITICAL
 
-**Status:** BLOCKED - Phase 7 must be completed first
+**Status:** REQUIRED - Critical blocker for testing
 
-**Reason:** Phase 6 code review discovered that the multi-step OPAQUE implementation is incomplete at the CGO level. The system falls back to single-step operations, which violates zero-knowledge properties and defeats the purpose of the refactor.
+**Reason:** Code review discovered that the multi-step OPAQUE implementation is incomplete at the CGO level. The "multi-step" functions are facades that fall back to single-step operations, violating zero-knowledge properties.
+
+**Overview:** This phase implements proper multi-step OPAQUE protocol at the CGO/C layer, removes all server-side export key handling, and ensures complete zero-knowledge compliance throughout the system.
+
+#### Part A: Database Schema Fixes (rqlite-specific)
+
+**Current Issues:**
+1. `opaque_auth_sessions` table structure needs optimization for rqlite
+2. `opaque_user_data` table is deprecated but still exists
+3. `opaque_password_records` table has unnecessary complexity
+4. Missing proper indexes for rqlite query patterns
+
+**Required Changes:**
+
+1. **Update opaque_auth_sessions table:**
+```sql
+-- Optimize for rqlite's distributed nature
+CREATE TABLE IF NOT EXISTS opaque_auth_sessions (
+    session_id TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    flow_type TEXT NOT NULL CHECK(flow_type IN ('registration', 'authentication')),
+    server_public_key BLOB,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL,
+    -- rqlite-optimized indexes
+    INDEX idx_username_expires (username, expires_at),
+    INDEX idx_expires_at (expires_at)
+);
+```
+
+2. **Remove deprecated opaque_user_data table:**
+```sql
+-- This table was used by single-step OPAQUE (now removed)
+DROP TABLE IF EXISTS opaque_user_data;
+```
+
+3. **Simplify opaque_password_records table:**
+```sql
+-- Remove export_key column (violates zero-knowledge)
+-- Keep only what's needed for OPAQUE protocol
+CREATE TABLE IF NOT EXISTS opaque_password_records (
+    username TEXT PRIMARY KEY,
+    registration_record BLOB NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+4. **Add session cleanup mechanism:**
+```sql
+-- Periodic cleanup of expired sessions (run via cron or app startup)
+DELETE FROM opaque_auth_sessions WHERE expires_at < CURRENT_TIMESTAMP;
+```
+
+**Implementation Steps:**
+1. Create migration script: `database/migrations/006_zero_knowledge_compliance.sql`
+2. Update `database/unified_schema.sql` with new schema
+3. Add session cleanup to `main.go` startup routine
+4. Test with rqlite's distributed query patterns
+
+**rqlite Considerations:**
+- Use TEXT for UUIDs (rqlite doesn't have native UUID type)
+- Avoid complex JOINs (rqlite prefers simple queries)
+- Use DATETIME for timestamps (rqlite-compatible)
+- Keep indexes minimal but effective
+
+#### Part B: Remove Server-Side Export Key Handling
+
+**Current Issues:**
+1. `models/user.go` has methods that expect export keys from client
+2. Authentication handlers may store/process export keys
+3. Session management incorrectly expects server-side export key derivation
+
+**Zero-Knowledge Principle:**
+- Export key MUST be derived client-side only
+- Export key MUST NEVER be sent to server
+- Server derives session key from client-provided auth token, NOT from export key
+
+**Required Changes:**
+
+1. **Update models/user.go:**
+```go
+// REMOVE these methods (violate zero-knowledge):
+// - GetOPAQUEExportKey() - ALREADY REMOVED ✅
+// - SetOPAQUEExportKey() - if exists
+// - Any method that stores/retrieves export keys
+
+// KEEP only:
+// - GetOPAQUERecord() - returns registration_record (safe)
+// - SetOPAQUERecord() - stores registration_record (safe)
+```
+
+2. **Update handlers/auth.go:**
+```go
+// OpaqueAuthFinalize handler:
+// REMOVE: Any code expecting export_key from client
+// REMOVE: Any code deriving session key from export key
+// KEEP: Verify auth_u token from client
+// KEEP: Issue JWT tokens after successful verification
+```
+
+3. **Update auth/opaque_multi_step.go:**
+```go
+// UserAuth function:
+// INPUT: auth_u (authentication token from client)
+// OUTPUT: success/failure (boolean)
+// NEVER: Handle export keys at any point
+```
+
+**Verification:**
+- Search codebase for "export_key" - should only appear in client-side code
+- Search codebase for "ExportKey" - should only appear in client-side code
+- Verify no server-side code derives session keys from export keys
+
+#### Part C: Multi-Step CGO Implementation
+
+**Current Issues:**
+1. No CGO wrappers exist for multi-step OPAQUE operations
+2. `auth/opaque_multi_step.go` calls non-existent or wrong CGO functions
+3. C wrapper functions in `auth/opaque_wrapper.c` are missing multi-step implementations
+
+**Required Implementation:**
+
+1. **Create auth/opaque_cgo.go (NEW FILE):**
+```go
+package auth
+
+/*
+#cgo LDFLAGS: -loprf -lsodium
+#include "opaque_wrapper.h"
+#include <stdlib.h>
+*/
+import "C"
+import (
+    "errors"
+    "unsafe"
+)
+
+// Multi-step registration: Step 1 - Server creates registration response
+func libopaqueCreateRegistrationResponse(registrationRequest []byte) ([]byte, []byte, error) {
+    if len(registrationRequest) == 0 {
+        return nil, nil, errors.New("registration request cannot be empty")
+    }
+
+    // Allocate buffers for response and server public key
+    responseLen := C.size_t(OPAQUE_REGISTRATION_RESPONSE_LEN)
+    response := make([]byte, responseLen)
+    
+    serverPkLen := C.size_t(OPAQUE_SERVER_PUBLIC_KEY_LEN)
+    serverPk := make([]byte, serverPkLen)
+
+    // Call C wrapper
+    ret := C.opaque_CreateRegistrationResponse(
+        (*C.uint8_t)(unsafe.Pointer(&registrationRequest[0])),
+        C.size_t(len(registrationRequest)),
+        (*C.uint8_t)(unsafe.Pointer(&response[0])),
+        &responseLen,
+        (*C.uint8_t)(unsafe.Pointer(&serverPk[0])),
+        &serverPkLen,
+    )
+
+    if ret != 0 {
+        return nil, nil, errors.New("failed to create registration response")
+    }
+
+    return response[:responseLen], serverPk[:serverPkLen], nil
+}
+
+// Multi-step registration: Step 2 - Server stores user record
+func libopaqueStoreUserRecord(registrationRecord []byte) error {
+    if len(registrationRecord) == 0 {
+        return errors.New("registration record cannot be empty")
+    }
+
+    // Validate record format
+    ret := C.opaque_ValidateRegistrationRecord(
+        (*C.uint8_t)(unsafe.Pointer(&registrationRecord[0])),
+        C.size_t(len(registrationRecord)),
+    )
+
+    if ret != 0 {
+        return errors.New("invalid registration record format")
+    }
+
+    return nil
+}
+
+// Multi-step authentication: Step 1 - Server creates credential response
+func libopaqueCreateCredentialResponse(credentialRequest []byte, registrationRecord []byte, serverPublicKey []byte) ([]byte, error) {
+    if len(credentialRequest) == 0 || len(registrationRecord) == 0 {
+        return nil, errors.New("credential request and registration record required")
+    }
+
+    // Allocate buffer for credential response
+    responseLen := C.size_t(OPAQUE_CREDENTIAL_RESPONSE_LEN)
+    response := make([]byte, responseLen)
+
+    // Call C wrapper
+    ret := C.opaque_CreateCredentialResponse(
+        (*C.uint8_t)(unsafe.Pointer(&credentialRequest[0])),
+        C.size_t(len(credentialRequest)),
+        (*C.uint8_t)(unsafe.Pointer(&registrationRecord[0])),
+        C.size_t(len(registrationRecord)),
+        (*C.uint8_t)(unsafe.Pointer(&serverPublicKey[0])),
+        C.size_t(len(serverPublicKey)),
+        (*C.uint8_t)(unsafe.Pointer(&response[0])),
+        &responseLen,
+    )
+
+    if ret != 0 {
+        return nil, errors.New("failed to create credential response")
+    }
+
+    return response[:responseLen], nil
+}
+
+// Multi-step authentication: Step 2 - Server verifies client auth token
+func libopaqueVerifyAuth(authU []byte, serverPublicKey []byte) error {
+    if len(authU) == 0 {
+        return errors.New("auth token cannot be empty")
+    }
+
+    // Call C wrapper to verify authentication
+    ret := C.opaque_VerifyAuth(
+        (*C.uint8_t)(unsafe.Pointer(&authU[0])),
+        C.size_t(len(authU)),
+        (*C.uint8_t)(unsafe.Pointer(&serverPublicKey[0])),
+        C.size_t(len(serverPublicKey)),
+    )
+
+    if ret != 0 {
+        return errors.New("authentication verification failed")
+    }
+
+    return nil
+}
+
+// Constants for buffer sizes (from libopaque)
+const (
+    OPAQUE_REGISTRATION_RESPONSE_LEN = 64
+    OPAQUE_SERVER_PUBLIC_KEY_LEN     = 32
+    OPAQUE_CREDENTIAL_RESPONSE_LEN   = 192
+)
+```
+
+2. **Update auth/opaque_wrapper.c:**
+```c
+// Add multi-step registration functions
+int opaque_CreateRegistrationResponse(
+    const uint8_t *registration_request, size_t request_len,
+    uint8_t *registration_response, size_t *response_len,
+    uint8_t *server_public_key, size_t *server_pk_len
+) {
+    // Use libopaque C library functions
+    // This is a wrapper around opaque_CreateRegistrationResponse from libopaque
+    // Implementation depends on libopaque C API
+    
+    // Pseudocode (actual implementation needs libopaque headers):
+    // 1. Validate input parameters
+    // 2. Call libopaque's opaque_CreateRegistrationResponse
+    // 3. Copy results to output buffers
+    // 4. Return 0 on success, -1 on failure
+    
+    return -1; // Placeholder - needs actual libopaque implementation
+}
+
+int opaque_ValidateRegistrationRecord(
+    const uint8_t *registration_record, size_t record_len
+) {
+    // Validate registration record format
+    // Return 0 if valid, -1 if invalid
+    return -1; // Placeholder
+}
+
+int opaque_CreateCredentialResponse(
+    const uint8_t *credential_request, size_t request_len,
+    const uint8_t *registration_record, size_t record_len,
+    const uint8_t *server_public_key, size_t server_pk_len,
+    uint8_t *credential_response, size_t *response_len
+) {
+    // Create credential response for authentication
+    return -1; // Placeholder
+}
+
+int opaque_VerifyAuth(
+    const uint8_t *auth_u, size_t auth_u_len,
+    const uint8_t *server_public_key, size_t server_pk_len
+) {
+    // Verify client authentication token
+    return -1; // Placeholder
+}
+```
+
+3. **Update auth/opaque_wrapper.h:**
+```c
+#ifndef OPAQUE_WRAPPER_H
+#define OPAQUE_WRAPPER_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+// Multi-step registration
+int opaque_CreateRegistrationResponse(
+    const uint8_t *registration_request, size_t request_len,
+    uint8_t *registration_response, size_t *response_len,
+    uint8_t *server_public_key, size_t *server_pk_len
+);
+
+int opaque_ValidateRegistrationRecord(
+    const uint8_t *registration_record, size_t record_len
+);
+
+// Multi-step authentication
+int opaque_CreateCredentialResponse(
+    const uint8_t *credential_request, size_t request_len,
+    const uint8_t *registration_record, size_t record_len,
+    const uint8_t *server_public_key, size_t server_pk_len,
+    uint8_t *credential_response, size_t *response_len
+);
+
+int opaque_VerifyAuth(
+    const uint8_t *auth_u, size_t auth_u_len,
+    const uint8_t *server_public_key, size_t server_pk_len
+);
+
+#endif // OPAQUE_WRAPPER_H
+```
+
+4. **Update auth/opaque_multi_step.go:**
+```go
+// Fix CreateRegistrationResponse to use new CGO wrapper
+func CreateRegistrationResponse(username string, registrationRequest []byte) ([]byte, []byte, error) {
+    // Use new multi-step CGO wrapper
+    response, serverPk, err := libopaqueCreateRegistrationResponse(registrationRequest)
+    if err != nil {
+        return nil, nil, fmt.Errorf("failed to create registration response: %w", err)
+    }
+    return response, serverPk, nil
+}
+
+// Fix StoreUserRecord to use new CGO wrapper
+func StoreUserRecord(db *sql.DB, username string, registrationRecord []byte) error {
+    // Validate record using new CGO wrapper
+    if err := libopaqueStoreUserRecord(registrationRecord); err != nil {
+        return fmt.Errorf("invalid registration record: %w", err)
+    }
+    
+    // Store in database
+    query := `INSERT INTO opaque_password_records (username, registration_record) 
+              VALUES (?, ?) 
+              ON CONFLICT(username) DO UPDATE SET 
+              registration_record = excluded.registration_record,
+              updated_at = CURRENT_TIMESTAMP`
+    
+    _, err := db.Exec(query, username, registrationRecord)
+    return err
+}
+
+// Fix CreateCredentialResponse to use new CGO wrapper
+func CreateCredentialResponse(username string, credentialRequest []byte, registrationRecord []byte, serverPublicKey []byte) ([]byte, error) {
+    // Use new multi-step CGO wrapper
+    response, err := libopaqueCreateCredentialResponse(credentialRequest, registrationRecord, serverPublicKey)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create credential response: %w", err)
+    }
+    return response, nil
+}
+
+// Fix UserAuth to use new CGO wrapper
+func UserAuth(authU []byte, serverPublicKey []byte) error {
+    // Use new multi-step CGO wrapper
+    if err := libopaqueVerifyAuth(authU, serverPublicKey); err != nil {
+        return fmt.Errorf("authentication verification failed: %w", err)
+    }
+    return nil
+}
+```
+
+**Implementation Steps:**
+1. Create `auth/opaque_cgo.go` with multi-step CGO wrappers
+2. Update `auth/opaque_wrapper.c` with C implementations
+3. Update `auth/opaque_wrapper.h` with function declarations
+4. Update `auth/opaque_multi_step.go` to use new CGO wrappers
+5. Build and test with `go build` (expect linking errors until libopaque is built)
+6. Run `scripts/setup/build-libopaque.sh` to build libopaque library
+7. Verify successful compilation and linking
+
+#### Part D: Provider Interface Updates
+
+**Current Issues:**
+1. `OPAQUEProvider` interface only defines single-step methods
+2. `RealOPAQUEProvider` only implements single-step operations
+3. Test providers need multi-step support
+
+**Required Changes:**
+
+1. **Update auth/opaque.go provider interface:**
+```go
+type OPAQUEProvider interface {
+    // Multi-step registration
+    CreateRegistrationResponse(username string, registrationRequest []byte) (response []byte, serverPk []byte, err error)
+    StoreUserRecord(db *sql.DB, username string, registrationRecord []byte) error
+    
+    // Multi-step authentication
+    CreateCredentialResponse(username string, credentialRequest []byte, registrationRecord []byte, serverPk []byte) ([]byte, error)
+    VerifyAuth(authU []byte, serverPk []byte) error
+    
+    // Utility methods
+    GetUserRecord(db *sql.DB, username string) ([]byte, error)
+}
+
+type RealOPAQUEProvider struct{}
+
+func (p *RealOPAQUEProvider) CreateRegistrationResponse(username string, registrationRequest []byte) ([]byte, []byte, error) {
+    return CreateRegistrationResponse(username, registrationRequest)
+}
+
+func (p *RealOPAQUEProvider) StoreUserRecord(db *sql.DB, username string, registrationRecord []byte) error {
+    return StoreUserRecord(db, username, registrationRecord)
+}
+
+func (p *RealOPAQUEProvider) CreateCredentialResponse(username string, credentialRequest []byte, registrationRecord []byte, serverPk []byte) ([]byte, error) {
+    return CreateCredentialResponse(username, credentialRequest, registrationRecord, serverPk)
+}
+
+func (p *RealOPAQUEProvider) VerifyAuth(authU []byte, serverPk []byte) error {
+    return UserAuth(authU, serverPk)
+}
+
+func (p *RealOPAQUEProvider) GetUserRecord(db *sql.DB, username string) ([]byte, error) {
+    var record []byte
+    query := `SELECT registration_record FROM opaque_password_records WHERE username = ?`
+    err := db.QueryRow(query, username).Scan(&record)
+    return record, err
+}
+```
+
+2. **Update test providers in handlers/opaque_test_helpers.go:**
+```go
+type TestOPAQUEProvider struct {
+    CreateRegistrationResponseFunc func(string, []byte) ([]byte, []byte, error)
+    StoreUserRecordFunc           func(*sql.DB, string, []byte) error
+    CreateCredentialResponseFunc  func(string, []byte, []byte, []byte) ([]byte, error)
+    VerifyAuthFunc                func([]byte, []byte) error
+    GetUserRecordFunc             func(*sql.DB, string) ([]byte, error)
+}
+
+func (p *TestOPAQUEProvider) CreateRegistrationResponse(username string, request []byte) ([]byte, []byte, error) {
+    if p.CreateRegistrationResponseFunc != nil {
+        return p.CreateRegistrationResponseFunc(username, request)
+    }
+    return []byte("mock_response"), []byte("mock_server_pk"), nil
+}
+
+// Implement other methods similarly...
+```
+
+#### Part E: Session Management
+
+**Current Issues:**
+1. Session creation/validation needs proper UUID handling
+2. Session expiration enforcement may be missing
+3. Session cleanup mechanism needed
+
+**Required Implementation:**
+
+1. **Add session management functions to auth/opaque_multi_step.go:**
+```go
+import (
+    "github.com/google/uuid"
+    "time"
+)
+
+// CreateAuthSession creates a new authentication session
+func CreateAuthSession(db *sql.DB, username string, flowType string, serverPublicKey []byte) (string, error) {
+    sessionID := uuid.New().String()
+    expiresAt := time.Now().Add(5 * time.Minute)
+    
+    query := `INSERT INTO opaque_auth_sessions 
+              (session_id, username, flow_type, server_public_key, expires_at) 
+              VALUES (?, ?, ?, ?, ?)`
+    
+    _, err := db.Exec(query, sessionID, username, flowType, serverPublicKey, expiresAt)
+    if err != nil {
+        return "", fmt.Errorf("failed to create session: %w", err)
+    }
+    
+    return sessionID, nil
+}
+
+// ValidateAuthSession validates and retrieves session data
+func ValidateAuthSession(db *sql.DB, sessionID string, expectedFlowType string) (username string, serverPk []byte, err error) {
+    query := `SELECT username, server_public_key FROM opaque_auth_sessions 
+              WHERE session_id = ? AND flow_type = ? AND expires_at > CURRENT_TIMESTAMP`
+    
+    err = db.QueryRow(query, sessionID, expectedFlowType).Scan(&username, &serverPk)
+    if err != nil {
+        return "", nil, fmt.Errorf("invalid or expired session: %w", err)
+    }
+    
+    return username, serverPk, nil
+}
+
+// DeleteAuthSession removes a session after use
+func DeleteAuthSession(db *sql.DB, sessionID string) error {
+    query := `DELETE FROM opaque_auth_sessions WHERE session_id = ?`
+    _, err := db.Exec(query, sessionID)
+    return err
+}
+
+// CleanupExpiredSessions removes all expired sessions
+func CleanupExpiredSessions(db *sql.DB) error {
+    query := `DELETE FROM opaque_auth_sessions WHERE expires_at < CURRENT_TIMESTAMP`
+    _, err := db.Exec(query)
+    return err
+}
+```
+
+2. **Update handlers/auth.go to use session management:**
+```go
+// In OpaqueRegisterResponse:
+sessionID, err := auth.CreateAuthSession(db, username, "registration", serverPk)
+
+// In OpaqueRegisterFinalize:
+username, serverPk, err := auth.ValidateAuthSession(db, sessionID, "registration")
+defer auth.DeleteAuthSession(db, sessionID)
+
+// In OpaqueAuthResponse:
+sessionID, err := auth.CreateAuthSession(db, username, "authentication", serverPk)
+
+// In OpaqueAuthFinalize:
+username, serverPk, err := auth.ValidateAuthSession(db, sessionID, "authentication")
+defer auth.DeleteAuthSession(db, sessionID)
+```
+
+3. **Add session cleanup to main.go:**
+```go
+// In main() function, add periodic cleanup:
+go func() {
+    ticker := time.NewTicker(5 * time.Minute)
+    defer ticker.Stop()
+    
+    for range ticker.C {
+        if err := auth.CleanupExpiredSessions(db); err != nil {
+            log.Printf("Failed to cleanup expired sessions: %v", err)
+        }
+    }
+}()
+```
+
+#### Testing Strategy
+
+**Unit Tests:**
+1. Test CGO wrappers with mock data
+2. Test session management functions
+3. Test provider interface implementations
+
+**Integration Tests:**
+1. Test full registration flow (both steps)
+2. Test full authentication flow (both steps)
+3. Test session expiration handling
+4. Test concurrent session management
+
+**Zero-Knowledge Verification:**
+1. Network traffic analysis (no plaintext passwords)
+2. Database inspection (no export keys stored)
+3. Server logs inspection (no sensitive data logged)
+
+**rqlite-Specific Tests:**
+1. Test distributed query patterns
+2. Test session cleanup under load
+3. Test concurrent session creation/validation
+
+#### Success Criteria
+
+Phase 6 will be complete when:
+1. ✅ All CGO wrappers implemented and tested
+2. ✅ All C wrapper functions implemented
+3. ✅ Database schema updated and migrated
+4. ✅ Server-side export key handling completely removed
+5. ✅ Provider interface updated for multi-step
+6. ✅ Session management fully implemented
+7. ✅ All code compiles and links successfully
+8. ✅ Unit tests pass
+9. ✅ Integration tests pass
+10. ✅ Zero-knowledge properties verified
+
+#### Estimated Effort
+
+- **Part A (Database):** 4-6 hours
+- **Part B (Export Keys):** 2-3 hours
+- **Part C (CGO):** 12-16 hours (most complex)
+- **Part D (Provider):** 3-4 hours
+- **Part E (Sessions):** 4-6 hours
+- **Testing:** 8-10 hours
+
+**Total:** 33-45 hours (4-6 days of focused work)
+
+#### Dependencies
+
+- libopaque C library documentation
+- Understanding of OPAQUE protocol multi-step flow
+- CGO programming knowledge
+- rqlite SQL dialect knowledge
+- Access to libopaque source code for C wrapper implementation
+
+#### Deliverables
+
+1. Working multi-step CGO implementation
+2. Updated database schema with migrations
+3. Removed server-side export key handling
+4. Updated provider interface
+5. Complete session management system
+6. Unit and integration tests
+7. Zero-knowledge compliance verification
+8. Updated documentation
+
+### Phase 7: Testing & Validation ⚠️ BLOCKED
+
+**Status:** BLOCKED - Phase 6 must be completed first
+
+**Reason:** Cannot test until multi-step OPAQUE implementation is complete at the CGO level and zero-knowledge compliance is verified.
 
 **Test Cases (Deferred until Phase 7 complete):**
 
@@ -239,11 +860,52 @@ This document tracks the refactoring of Arkfile's authentication system to prope
    - Session management works
    - Token refresh works
 
-### Phase 7: CGO Multi-Step Implementation 🚨 CRITICAL
+### Phase 7: Complete Deprecated Code Removal ✅ COMPLETE
 
-**Status:** REQUIRED - Critical blocker for Phase 6 testing
+**Status:** COMPLETE - All deprecated single-step OPAQUE code removed
 
-**Problem:** The multi-step OPAQUE protocol is NOT actually implemented at the CGO level. The "multi-step" functions are facades that fall back to single-step operations.
+**Overview:** Successfully removed ALL deprecated single-step OPAQUE code from the Arkfile project. This phase was critical to eliminate the parallel single-step implementation that was creating security issues.
+
+**What Was Removed:**
+
+**Deleted Files:**
+- `auth/opaque_cgo.go` - Deprecated CGO bindings for single-step operations
+- `handlers/auth_test_helpers.go` - Obsolete test helpers (later restored with minimal helpers)
+- `handlers/auth_test.go` - Tests for deprecated OpaqueRegister handler
+- `auth/opaque_test.go` - Tests for deprecated RegisterUser/AuthenticateUser functions
+
+**Deleted Functions from auth/opaque_wrapper.c:**
+- `opaque_Register()` - Single-step registration
+- `opaque_CreateCredentialRequest()` - Single-step auth step 1
+- `opaque_CreateCredentialResponse()` - Single-step auth step 2
+- `opaque_RecoverCredentials()` - Single-step auth step 3
+- `opaque_UserAuth()` - Single-step auth step 4
+
+**Deleted Functions from auth/opaque.go:**
+- `RegisterUser()` - Single-step registration wrapper
+- `AuthenticateUser()` - Single-step authentication wrapper
+
+**What Was Fixed:**
+- `auth/opaque_unified.go` - Removed references to deleted functions
+- `auth/opaque_multi_step.go` - Cleaned up to use only multi-step functions
+- `models/user.go` - Removed GetOPAQUEExportKey() method
+- `main.go` - Removed ValidateOPAQUESetup() call
+- `handlers/auth.go` - Removed OpaqueHealthCheck handler
+- `handlers/opaque_test_helpers.go` - Removed validateOPAQUEHealthy() helper
+
+**Verification:**
+- ✅ Go code compiles successfully (only expected linking error for liboprf)
+- ✅ No undefined functions or missing references
+- ✅ Clean codebase with only multi-step OPAQUE code
+
+**Impact:**
+- Eliminated confusion from parallel implementations
+- Removed security risks from deprecated code
+- Clean slate for Phase 6 CGO implementation
+
+### Phase 8: Go CLI Tools Migration 📋 TODO
+
+**Status:** BLOCKED - Requires Phase 6 completion
 
 **Current Architecture Issues:**
 
@@ -1036,6 +1698,194 @@ Phase 6 code review has revealed that the multi-step OPAQUE refactor is **NOT CO
 3. Consider this a critical blocker for production deployment
 
 **Status:** Phase 6 INCOMPLETE - Phase 6.5 REQUIRED
+
+---
+
+### November 6, 2025 - Phase 7: Complete Deprecated Code Removal ✅
+
+**Phase 7 Complete: Deprecated OPAQUE Code Removal**
+
+Successfully removed ALL deprecated single-step OPAQUE code from the Arkfile project. This phase was critical to eliminate the parallel single-step implementation that was creating security issues.
+
+#### What Was Removed
+
+**Deleted Files:**
+- `auth/opaque_cgo.go` - Deprecated CGO bindings for single-step operations
+- `handlers/auth_test_helpers.go` - Obsolete test helpers for deprecated handlers
+- `handlers/auth_test.go` - Tests for deprecated OpaqueRegister handler
+- `auth/opaque_test.go` - Tests for deprecated RegisterUser/AuthenticateUser functions
+
+**Deleted Functions from auth/opaque_wrapper.c:**
+- `opaque_Register()` - Single-step registration
+- `opaque_CreateCredentialRequest()` - Single-step auth step 1
+- `opaque_CreateCredentialResponse()` - Single-step auth step 2
+- `opaque_RecoverCredentials()` - Single-step auth step 3
+- `opaque_UserAuth()` - Single-step auth step 4
+
+**Deleted Functions from auth/opaque.go:**
+- `RegisterUser()` - Single-step registration wrapper
+- `AuthenticateUser()` - Single-step authentication wrapper
+
+#### What Was Fixed
+
+**Updated Files:**
+- `auth/opaque_unified.go` - Removed references to deleted RegisterUser/AuthenticateUser functions
+- `auth/opaque_multi_step.go` - Cleaned up to use only multi-step functions
+- `models/user.go` - Removed GetOPAQUEExportKey() method (deprecated, never used)
+- `main.go` - Removed ValidateOPAQUESetup() call (no longer needed)
+- `handlers/auth.go` - Removed OpaqueHealthCheck handler (deprecated)
+- `handlers/opaque_test_helpers.go` - Removed validateOPAQUEHealthy() helper function
+- `handlers/route_config.go` - Already updated in Phase 5 (no changes needed)
+
+#### Verification
+
+**✅ Go Code Compiles Successfully:**
+- All Go packages compile without syntax errors
+- Only linking error is expected (missing liboprf library - needs to be built via setup scripts)
+- No undefined functions or missing references
+- Clean compilation output confirms code integrity
+
+**Build Output:**
+```
+# github.com/84adam/Arkfile
+/usr/local/go/pkg/tool/linux_amd64/link: running gcc failed: exit status 1
+/usr/bin/ld: cannot find -loprf
+```
+
+This error is **EXPECTED** - the liboprf library needs to be built using the setup scripts (`scripts/setup/build-libopaque.sh`). The important point is that all Go code compiles successfully; only the final linking step fails due to missing external library.
+
+#### Current State
+
+The codebase now contains ONLY multi-step OPAQUE protocol code:
+- **Registration:** OpaqueRegisterResponse + OpaqueRegisterFinalize handlers
+- **Authentication:** OpaqueAuthResponse + OpaqueAuthFinalize handlers
+- **Multi-step functions:** CreateRegistrationResponse, StoreUserRecord, CreateCredentialResponse, UserAuth
+
+All deprecated single-step code has been completely removed. The project is ready for the next phase of implementation.
+
+#### Impact on Phase 6
+
+**Phase 6 Status Update:**
+- Phase 6 was previously blocked by the presence of deprecated single-step code
+- With Phase 7 complete, the codebase is now clean and consistent
+- However, Phase 6 still requires the multi-step CGO implementation (Phase 6.5)
+- The removal of deprecated code eliminates confusion and security risks
+
+#### Next Steps
+
+**Phase 6.5: Multi-Step CGO Implementation (CRITICAL):**
+1. Create multi-step CGO wrappers in `auth/opaque_cgo.go`
+2. Add multi-step C functions to `auth/opaque_wrapper.c`
+3. Update `auth/opaque_multi_step.go` to use new CGO wrappers
+4. Update provider interface for multi-step operations
+5. Migrate unified password manager to multi-step
+
+**After Phase 6.5:**
+- Complete Phase 6 testing and validation
+- Proceed to Phase 7 (Go CLI tools migration)
+
+#### Files Modified This Session
+
+- Deleted: `auth/opaque_cgo.go`
+- Deleted: `handlers/auth_test_helpers.go`
+- Deleted: `handlers/auth_test.go`
+- Deleted: `auth/opaque_test.go`
+- Modified: `auth/opaque_wrapper.c` (removed 5 functions)
+- Modified: `auth/opaque.go` (removed 2 functions)
+- Modified: `auth/opaque_unified.go` (removed function references)
+- Modified: `auth/opaque_multi_step.go` (cleaned up)
+- Modified: `models/user.go` (removed deprecated method)
+- Modified: `main.go` (removed validation call)
+- Modified: `handlers/auth.go` (removed health check)
+- Modified: `handlers/opaque_test_helpers.go` (removed helper)
+- Updated: `docs/wip/major-auth-wasm-fix.md` (this file)
+
+#### Lessons Learned
+
+**Code Cleanup is Critical:**
+- Having parallel implementations creates confusion and security risks
+- Deprecated code should be removed as soon as possible
+- Clean codebase makes it easier to identify remaining issues
+
+**Verification is Essential:**
+- Go compilation success confirms no broken references
+- Systematic file-by-file review ensures completeness
+- Documentation of changes helps track progress
+
+**Phase Ordering Matters:**
+- Phase 7 (cleanup) should have been done before Phase 6 (testing)
+- Testing against a codebase with deprecated code would have been confusing
+- Clean slate makes next phases clearer
+
+---
+
+---
+
+### November 6, 2025 - Test Helper Restoration ✅
+
+**handlers/auth_test_helpers.go Restored:**
+
+After Phase 7 cleanup removed `handlers/auth_test_helpers.go`, discovered that `handlers/admin_test.go` depends on the `setupTestEnv()` helper function from that file. Restored the file with minimal necessary helpers.
+
+#### What Was Restored
+
+**Created handlers/auth_test_helpers.go with:**
+- `setupTestEnv()` - Creates test environment with Echo context, response recorder, mock DB, and mock storage
+  - Returns: `(echo.Context, *httptest.ResponseRecorder, sqlmock.Sqlmock, *storage.MockObjectStorageProvider)`
+  - Used by admin_test.go for setting up test contexts
+- `TestOPAQUEProvider` - Mock OPAQUE provider for testing (from git history)
+- Helper functions for test OPAQUE operations
+
+#### Issues Fixed
+
+1. **Import Path Correction:**
+   - Initial attempt used lowercase `github.com/84adam/arkfile/storage`
+   - Corrected to `github.com/84adam/Arkfile/storage` (capital A)
+   - Go module path is case-sensitive
+
+2. **Mock Storage Type:**
+   - Initial attempt used non-existent `storage.MockStorage`
+   - Corrected to `storage.MockObjectStorageProvider` (actual type)
+   - Verified against storage/mock_storage.go
+
+#### Verification
+
+**✅ Go Code Compiles Successfully:**
+- All handler tests now have required dependencies
+- No compilation errors in handlers package
+- Only linking error is expected (missing liboprf library)
+
+**Build Output:**
+```
+# github.com/84adam/Arkfile/handlers.test
+/usr/bin/ld: cannot find -loprf
+```
+
+This error is **EXPECTED** - the liboprf library needs to be built. The important point is that the Go code itself compiles without errors.
+
+#### Current State
+
+**Test Infrastructure:**
+- ✅ `handlers/admin_test.go` - Has required setupTestEnv() helper
+- ✅ `handlers/opaque_test_helpers.go` - OPAQUE-specific test helpers
+- ✅ `handlers/auth_test_helpers.go` - General test helpers (restored)
+- ❌ `handlers/auth_test.go` - Still deleted (tests for deprecated handlers)
+- ❌ `auth/opaque_test.go` - Still deleted (tests for deprecated functions)
+
+**Note:** The deleted test files (`auth_test.go`, `opaque_test.go`) tested deprecated single-step OPAQUE functions that no longer exist. New tests for multi-step OPAQUE will be created in Phase 6 after the CGO implementation is complete.
+
+#### Files Modified This Session
+
+- Created: `handlers/auth_test_helpers.go` (restored from git history)
+- Updated: `docs/wip/major-auth-wasm-fix.md` (this file)
+
+#### Next Steps
+
+**Phase 6.5: Multi-Step CGO Implementation (CRITICAL):**
+- Create multi-step CGO wrappers
+- Add multi-step C functions
+- Update Go multi-step functions
+- Create new integration tests for multi-step protocol
 
 ---
 

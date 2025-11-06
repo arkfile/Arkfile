@@ -108,18 +108,11 @@ func main() {
 		log.Fatalf("Failed to initialize TOTP master key: %v", err)
 	}
 
-	// Initialize OPAQUE provider
-	provider := auth.GetOPAQUEProvider()
-	if !provider.IsAvailable() {
-		log.Fatalf("OPAQUE provider not available")
+	// Verify OPAQUE is available
+	if !auth.IsOPAQUEAvailable() {
+		log.Fatalf("OPAQUE not available")
 	}
-
-	// Verify server keys are available
-	_, _, err = provider.GetServerKeys()
-	if err != nil {
-		log.Fatalf("Failed to get OPAQUE server keys: %v", err)
-	}
-	logging.InfoLogger.Printf("OPAQUE provider initialized successfully")
+	logging.InfoLogger.Printf("OPAQUE initialized successfully")
 
 	// Start TOTP cleanup routine
 	go func() {

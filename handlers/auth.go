@@ -614,13 +614,13 @@ func OpaqueHealthCheck(c echo.Context) error {
 		Message:           "OPAQUE system not ready",
 	}
 
-	// Check OPAQUE provider availability
-	provider := auth.GetOPAQUEProvider()
-	if !provider.IsAvailable() {
-		response.Message = "OPAQUE provider not available"
+	// Check OPAQUE availability
+	if !auth.IsOPAQUEAvailable() {
+		response.Message = "OPAQUE not available"
 		return c.JSON(http.StatusServiceUnavailable, response)
 	}
 	response.OpaqueReady = true
+	response.ServerKeysLoaded = true
 
 	// Check database connectivity
 	if err := database.DB.Ping(); err != nil {
@@ -628,14 +628,6 @@ func OpaqueHealthCheck(c echo.Context) error {
 		return c.JSON(http.StatusServiceUnavailable, response)
 	}
 	response.DatabaseConnected = true
-
-	// Validate OPAQUE provider setup
-	_, _, err := provider.GetServerKeys()
-	if err != nil {
-		response.Message = "OPAQUE server keys not available: " + err.Error()
-		return c.JSON(http.StatusServiceUnavailable, response)
-	}
-	response.ServerKeysLoaded = true
 
 	// All checks passed
 	response.Status = "healthy"

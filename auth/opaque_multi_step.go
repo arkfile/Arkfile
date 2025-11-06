@@ -24,8 +24,7 @@ func CreateRegistrationResponse(requestData []byte) ([]byte, error) {
 	}
 
 	// Get server private key
-	provider := GetOPAQUEProvider()
-	serverPrivateKey, _, err := provider.GetServerKeys()
+	_, serverPrivateKey, err := GetServerKeys()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get server keys: %w", err)
 	}

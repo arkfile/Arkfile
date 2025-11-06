@@ -87,25 +87,14 @@ func (opm *OPAQUEPasswordManager) AuthenticatePassword(
 		}
 	}
 
-	// Use provider interface for authentication
-	provider := GetOPAQUEProvider()
-	if !provider.IsAvailable() {
-		return nil, fmt.Errorf("OPAQUE provider not available")
+	// Check if OPAQUE is available
+	if !IsOPAQUEAvailable() {
+		return nil, fmt.Errorf("OPAQUE not available")
 	}
 
-	// Authenticate with OPAQUE
-	exportKey, err := provider.AuthenticateUser([]byte(password), userRecord)
-	if err != nil {
-		return nil, fmt.Errorf("OPAQUE authentication failed: %w", err)
-	}
-
-	// Update last used timestamp
-	_, _ = opm.db.Exec(`
-		UPDATE opaque_password_records 
-		SET last_used_at = CURRENT_TIMESTAMP 
-		WHERE record_identifier = ?`, recordIdentifier)
-
-	return exportKey, nil
+	// TODO: Implement multi-step OPAQUE authentication here
+	// For now, return error indicating this needs to be implemented
+	return nil, fmt.Errorf("multi-step OPAQUE authentication not yet implemented in unified password manager")
 }
 
 // GetPasswordRecord retrieves a password record by identifier

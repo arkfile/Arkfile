@@ -356,97 +356,31 @@ func CreateUserWithOPAQUE(db *sql.DB, username, password string, email *string) 
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	id, err := result.LastInsertId()
+	_, err = result.LastInsertId()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user ID: %w", err)
 	}
 
-	// Register OPAQUE account using unified password manager
-	recordIdentifier := username // Account passwords now use username as identifier
-
-	// Use provider interface
-	provider := auth.GetOPAQUEProvider()
-	if !provider.IsAvailable() {
-		return nil, fmt.Errorf("OPAQUE provider not available")
+	// Check if OPAQUE is available
+	if !auth.IsOPAQUEAvailable() {
+		return nil, fmt.Errorf("OPAQUE not available")
 	}
 
-	// Get server keys
-	_, serverPrivateKey, err := provider.GetServerKeys()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get server keys: %w", err)
-	}
-
-	// Register user record with OPAQUE provider
-	userRecord, exportKey, err := provider.RegisterUser([]byte(password), serverPrivateKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to register OPAQUE account: %w", err)
-	}
-
-	// Store in unified password system (account password)
-	// In production, this stores in opaque_password_records table
-	// In test environment, this may be mocked differently
-	_, err = tx.Exec(`
-		INSERT INTO opaque_password_records 
-		(record_type, record_identifier, opaque_user_record, associated_username, is_active)
-		VALUES (?, ?, ?, ?, ?)`,
-		"account", recordIdentifier, userRecord, username, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to store OPAQUE record: %w", err)
-	}
-
-	// Clear export key (we don't store it)
-	if len(exportKey) > 0 {
-		for i := range exportKey {
-			exportKey[i] = 0
-		}
-	}
-
-	// Commit transaction
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	return &User{
-		ID:                id,
-		Username:          username,
-		Email:             email,
-		StorageLimitBytes: DefaultStorageLimit,
-		CreatedAt:         time.Now(),
-		IsApproved:        isAdmin,
-		IsAdmin:           isAdmin,
-	}, nil
+	// TODO: Implement multi-step OPAQUE registration here
+	// For now, return error indicating this needs to be implemented
+	return nil, fmt.Errorf("multi-step OPAQUE registration not yet implemented in CreateUserWithOPAQUE")
 }
 
 // RegisterOPAQUEAccount registers an OPAQUE account for an existing user
 func (u *User) RegisterOPAQUEAccount(db *sql.DB, password string) error {
-	provider := auth.GetOPAQUEProvider()
-	if !provider.IsAvailable() {
-		return fmt.Errorf("OPAQUE provider not available")
+	// Check if OPAQUE is available
+	if !auth.IsOPAQUEAvailable() {
+		return fmt.Errorf("OPAQUE not available")
 	}
 
-	// Get server keys
-	_, serverPrivateKey, err := provider.GetServerKeys()
-	if err != nil {
-		return fmt.Errorf("failed to get server keys: %w", err)
-	}
-
-	// Register user with OPAQUE provider
-	userRecord, _, err := provider.RegisterUser([]byte(password), serverPrivateKey)
-	if err != nil {
-		return fmt.Errorf("failed to register OPAQUE account: %w", err)
-	}
-
-	// Store record in database (even in mock mode for testing)
-	_, err = db.Exec(`
-		INSERT INTO opaque_password_records 
-		(record_type, record_identifier, opaque_user_record, associated_username, is_active)
-		VALUES (?, ?, ?, ?, ?)`,
-		"account", u.Username, userRecord, u.Username, true)
-	if err != nil {
-		return fmt.Errorf("failed to store OPAQUE record: %w", err)
-	}
-
-	return nil
+	// TODO: Implement multi-step OPAQUE registration here
+	// For now, return error indicating this needs to be implemented
+	return fmt.Errorf("multi-step OPAQUE registration not yet implemented in RegisterOPAQUEAccount")
 }
 
 // AuthenticateOPAQUE authenticates the user's account password via OPAQUE

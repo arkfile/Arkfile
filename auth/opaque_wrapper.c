@@ -2,23 +2,7 @@
 #include <string.h>
 #include "../vendor/stef/libopaque/src/opaque.h"
 
-// Arkfile OPAQUE wrapper functions for libopaque
-
-// One-step user registration with server key
-int arkfile_opaque_register_user(const uint8_t* password, uint16_t pwd_len, 
-                                 const uint8_t* server_private_key,
-                                 uint8_t* user_record, uint8_t* export_key) {
-    // Use simple identity structure - just usernames
-    Opaque_Ids ids = {
-        .idU_len = 4,
-        .idU = (uint8_t*)"user",
-        .idS_len = 6,
-        .idS = (uint8_t*)"server"
-    };
-    
-    // Use libopaque's one-step registration with server private key
-    return opaque_Register(password, pwd_len, server_private_key, &ids, user_record, export_key);
-}
+// Arkfile OPAQUE wrapper functions for libopaque - Multi-step protocol only
 
 // Step 1: Create registration request (client-side simulation)
 int arkfile_opaque_create_registration_request(const uint8_t* password, uint16_t pwd_len,
@@ -92,60 +76,4 @@ int arkfile_opaque_recover_credentials(const uint8_t* resp, const uint8_t* sec,
 // Multi-step authentication - Step 4: Authenticate user (server-side validation)
 int arkfile_opaque_user_auth(const uint8_t* authU_server, const uint8_t* authU_client) {
     return opaque_UserAuth(authU_server, authU_client);
-}
-
-// Simplified one-step authentication (combines multiple steps)
-int arkfile_opaque_authenticate_user(const uint8_t* password, uint16_t pwd_len,
-                                     const uint8_t* user_record, uint8_t* session_key) {
-    // Step 1: Create credential request
-    uint8_t sec[OPAQUE_USER_SESSION_SECRET_LEN + pwd_len];
-    uint8_t pub[OPAQUE_USER_SESSION_PUBLIC_LEN];
-    
-    int result = opaque_CreateCredentialRequest(password, pwd_len, sec, pub);
-    if (result != 0) return result;
-    
-    // Step 2: Create credential response (simulate server)
-    uint8_t resp[OPAQUE_SERVER_SESSION_LEN];
-    uint8_t sk_server[OPAQUE_SHARED_SECRETBYTES];
-    uint8_t authU_server[crypto_auth_hmacsha512_BYTES];
-    
-    Opaque_Ids ids = {
-        .idU_len = 4,
-        .idU = (uint8_t*)"user",
-        .idS_len = 6,
-        .idS = (uint8_t*)"server"
-    };
-    
-    const uint8_t context[] = "arkfile_auth";
-    const uint16_t context_len = sizeof(context) - 1;
-    
-    result = opaque_CreateCredentialResponse(pub, user_record, &ids, context, context_len, 
-                                           resp, sk_server, authU_server);
-    if (result != 0) return result;
-    
-    // Step 3: Recover credentials (simulate client)
-    uint8_t sk_client[OPAQUE_SHARED_SECRETBYTES];
-    uint8_t authU_client[crypto_auth_hmacsha512_BYTES];
-    uint8_t export_key[crypto_hash_sha512_BYTES];
-    
-    result = opaque_RecoverCredentials(resp, sec, context, context_len, &ids,
-                                     sk_client, authU_client, export_key);
-    if (result != 0) return result;
-    
-    // Step 4: Authenticate
-    result = opaque_UserAuth(authU_server, authU_client);
-    if (result == -1) return -1; // Authentication failed
-    
-    // CRITICAL FIX: Return the deterministic export_key instead of random session_key
-    // The export_key is derived from the password and is the same each time
-    // The session_key (sk_client) is random and different each authentication
-    memcpy(session_key, export_key, OPAQUE_SHARED_SECRETBYTES);
-    
-    // Clear sensitive data
-    memset(sk_server, 0, sizeof(sk_server));
-    memset(sk_client, 0, sizeof(sk_client));
-    memset(export_key, 0, sizeof(export_key));
-    memset(sec, 0, sizeof(sec));
-    
-    return 0; // Success
 }

@@ -64,21 +64,13 @@ func mockOPAQUESuccess(t *testing.T, email, password string) {
 func validateOPAQUEHealthy(t *testing.T) {
 	t.Helper()
 
-	// Check OPAQUE provider availability
-	provider := auth.GetOPAQUEProvider()
-	if !provider.IsAvailable() {
-		t.Log("OPAQUE provider not available (expected in test environment)")
+	// Check OPAQUE availability
+	if !auth.IsOPAQUEAvailable() {
+		t.Log("OPAQUE not available (expected in test environment)")
 		return
 	}
 
-	// Check if server keys are available
-	_, _, err := provider.GetServerKeys()
-	if err != nil {
-		t.Logf("OPAQUE server keys not available (expected in test environment): %v", err)
-		return
-	}
-
-	t.Log("OPAQUE provider reports ready")
+	t.Log("OPAQUE reports ready")
 }
 
 // Integration Test Helpers (for when libopaque.so is available)

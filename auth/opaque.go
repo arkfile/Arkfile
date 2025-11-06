@@ -10,110 +10,18 @@ import (
 	"github.com/84adam/Arkfile/logging"
 )
 
-// OPAQUEProvider defines the interface for OPAQUE authentication operations.
-// Static linking eliminates the need for mock implementations.
-type OPAQUEProvider interface {
-	// RegisterUser performs OPAQUE user registration, creating a new user record
-	// from a password and server private key. Returns the user record and export key.
-	RegisterUser(password []byte, serverPrivateKey []byte) ([]byte, []byte, error)
-
-	// AuthenticateUser performs OPAQUE authentication using a password and stored
-	// user record. Returns the export key on successful authentication.
-	AuthenticateUser(password []byte, userRecord []byte) ([]byte, error)
-
-	// IsAvailable returns true if the OPAQUE provider is ready for operations.
-	IsAvailable() bool
-
-	// GetServerKeys returns the server's public and private keys for OPAQUE operations.
-	// These are used for user registration and server-side authentication.
-	GetServerKeys() ([]byte, []byte, error)
-
-	// GenerateServerKeys creates new server keys for OPAQUE operations.
-	// This is typically called once during initial setup.
-	GenerateServerKeys() ([]byte, []byte, error)
-}
-
-// Global provider instance - always uses real implementation with static linking
-var provider OPAQUEProvider
-
-// GetOPAQUEProvider returns the static OPAQUE provider.
-func GetOPAQUEProvider() OPAQUEProvider {
-	if provider == nil {
-		provider = NewRealOPAQUEProvider()
-	}
-	return provider
-}
-
-// SetTestProvider overrides the global provider for testing purposes.
-// This should only be used in test code.
-func SetTestProvider(testProvider OPAQUEProvider) {
-	provider = testProvider
-}
-
-// RestoreProvider restores a previously saved provider.
-// This should only be used in test code for cleanup.
-func RestoreProvider(originalProvider OPAQUEProvider) {
-	provider = originalProvider
-}
-
-// IsOPAQUEAvailable is a convenience function that checks if OPAQUE operations
-// are available through the current provider.
-func IsOPAQUEAvailable() bool {
-	return GetOPAQUEProvider().IsAvailable()
-}
-
-// RealOPAQUEProvider wraps the existing OPAQUE implementation to match the interface
-type RealOPAQUEProvider struct{}
-
-// NewRealOPAQUEProvider creates a new real OPAQUE provider
-func NewRealOPAQUEProvider() *RealOPAQUEProvider {
-	return &RealOPAQUEProvider{}
-}
-
-// RegisterUser implements the OPAQUEProvider interface using real OPAQUE
-func (r *RealOPAQUEProvider) RegisterUser(password []byte, serverPrivateKey []byte) ([]byte, []byte, error) {
-	// Use low-level libopaque registration function directly
-	userRecord, exportKey, err := libopaqueRegisterUser(password, serverPrivateKey)
-	if err != nil {
-		return nil, nil, fmt.Errorf("OPAQUE registration failed: %v", err)
-	}
-	return userRecord, exportKey, nil
-}
-
-// AuthenticateUser implements the OPAQUEProvider interface using real OPAQUE
-func (r *RealOPAQUEProvider) AuthenticateUser(password []byte, userRecord []byte) ([]byte, error) {
-	// Use low-level libopaque authentication function directly
-	exportKey, err := libopaqueAuthenticateUser(password, userRecord)
-	if err != nil {
-		return nil, fmt.Errorf("OPAQUE authentication failed: %v", err)
-	}
-	return exportKey, nil
-}
-
-// IsAvailable implements the OPAQUEProvider interface
-func (r *RealOPAQUEProvider) IsAvailable() bool {
-	// Check if OPAQUE is available (simple availability check)
-	available, _ := GetOPAQUEServer()
-	return available
-}
-
-// GetServerKeys implements the OPAQUEProvider interface
-func (r *RealOPAQUEProvider) GetServerKeys() ([]byte, []byte, error) {
-	// Check if server keys are loaded
+// GetServerKeys returns the server's public and private keys for OPAQUE operations.
+func GetServerKeys() ([]byte, []byte, error) {
 	if serverKeys == nil {
 		return nil, nil, fmt.Errorf("server keys not loaded")
 	}
 	return serverKeys.ServerPublicKey, serverKeys.ServerPrivateKey, nil
 }
 
-// GenerateServerKeys implements the OPAQUEProvider interface
-func (r *RealOPAQUEProvider) GenerateServerKeys() ([]byte, []byte, error) {
-	// Generate new server keys
-	newKeys, err := generateOPAQUEServerKeys()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to generate server keys: %v", err)
-	}
-	return newKeys.ServerPublicKey, newKeys.ServerPrivateKey, nil
+// IsOPAQUEAvailable checks if OPAQUE operations are available
+func IsOPAQUEAvailable() bool {
+	available, _ := GetOPAQUEServer()
+	return available
 }
 
 // OPAQUEUserData represents the server-side storage for libopaque user data
@@ -234,63 +142,6 @@ func loadServerKeys(db *sql.DB) error {
 	}
 
 	return nil
-}
-
-// RegisterUser performs the libopaque registration flow using the one-step method
-func RegisterUser(db *sql.DB, username, password string) error {
-	if serverKeys == nil {
-		return fmt.Errorf("server keys not loaded")
-	}
-
-	// Validate inputs
-	if username == "" {
-		return fmt.Errorf("username cannot be empty")
-	}
-	if password == "" {
-		return fmt.Errorf("password cannot be empty")
-	}
-
-	passwordBytes := []byte(password)
-
-	// Use libopaque's one-step registration with server private key
-	userRecord, exportKey, err := libopaqueRegisterUser(passwordBytes, serverKeys.ServerPrivateKey)
-	if err != nil {
-		return fmt.Errorf("libopaque registration failed: %w", err)
-	}
-
-	// Clear the export key for security (we don't store it)
-	crypto.SecureZeroBytes(exportKey)
-
-	// Store the user record in the database
-	userData := OPAQUEUserData{
-		Username:         username,
-		SerializedRecord: userRecord,
-		CreatedAt:        time.Now(),
-	}
-
-	return storeOPAQUEUserData(db, userData)
-}
-
-// AuthenticateUser performs the libopaque authentication flow using the one-step method
-func AuthenticateUser(db *sql.DB, username, password string) ([]byte, error) {
-	if serverKeys == nil {
-		return nil, fmt.Errorf("server keys not loaded")
-	}
-
-	userData, err := loadOPAQUEUserData(db, username)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load user data: %w", err)
-	}
-
-	passwordBytes := []byte(password)
-
-	// Use libopaque's one-step authentication
-	sessionKey, err := libopaqueAuthenticateUser(passwordBytes, userData.SerializedRecord)
-	if err != nil {
-		return nil, fmt.Errorf("libopaque authentication failed: %w", err)
-	}
-
-	return sessionKey, nil
 }
 
 // storeOPAQUEUserData stores user data with hex encoding for database compatibility
