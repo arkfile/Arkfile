@@ -1,13 +1,14 @@
 /**
- * Login functionality
+ * Login functionality using OPAQUE protocol
  */
 
-import { showError, showSuccess } from '../ui/messages';
-import { showProgressMessage, hideProgress } from '../ui/progress';
-import { setTokens, getUsernameFromToken, clearAllSessionData } from '../utils/auth';
-import { showFileSection } from '../ui/sections';
-import { loadFiles } from '../files/list';
-import { handleTOTPFlow } from './totp';
+import { showError, showSuccess } from '../ui/messages.js';
+import { showProgressMessage, hideProgress } from '../ui/progress.js';
+import { setTokens, getUsernameFromToken, clearAllSessionData } from '../utils/auth.js';
+import { showFileSection } from '../ui/sections.js';
+import { loadFiles } from '../files/list.js';
+import { handleTOTPFlow } from './totp.js';
+import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
 
 export interface LoginCredentials {
   username: string;
@@ -33,7 +34,19 @@ export class LoginManager {
     try {
       showProgressMessage('Authenticating...');
 
-      // Step 1: Send authentication request to get server response
+      // Initialize OPAQUE client
+      const opaqueClient = await getOpaqueClient();
+
+      // Step 1: Generate credential request using OPAQUE
+      const loginInit = await opaqueClient.startLogin({
+        username: credentials.username,
+        password: credentials.password
+      });
+
+      // Store client secret in sessionStorage for step 2
+      storeClientSecret('login_secret', loginInit.clientSecret);
+
+      // Send credential request to server
       const responseStep1 = await fetch('/api/opaque/auth/response', {
         method: 'POST',
         headers: {
@@ -41,12 +54,13 @@ export class LoginManager {
         },
         body: JSON.stringify({
           username: credentials.username,
-          password: credentials.password
+          credential_request: loginInit.requestData
         })
       });
       
       if (!responseStep1.ok) {
         const errorText = await responseStep1.text();
+        clearClientSecret('login_secret');
         hideProgress();
         showError(`Authentication failed: ${errorText}`);
         return;
@@ -54,7 +68,26 @@ export class LoginManager {
       
       const step1Data = await responseStep1.json();
       
-      // Step 2: Finalize authentication with server response
+      // Retrieve client secret from sessionStorage
+      const clientSecret = retrieveClientSecret('login_secret');
+      if (!clientSecret) {
+        hideProgress();
+        showError('Session expired. Please try again.');
+        return;
+      }
+
+      // Step 2: Finalize authentication with server's credential response
+      const loginFinalize = await opaqueClient.finalizeLogin({
+        username: credentials.username,
+        serverResponse: step1Data.credential_response,
+        serverPublicKey: step1Data.server_public_key || null,
+        clientSecret: clientSecret
+      });
+
+      // Clear client secret after use
+      clearClientSecret('login_secret');
+
+      // Send authentication token to server for verification
       const responseStep2 = await fetch('/api/opaque/auth/finalize', {
         method: 'POST',
         headers: {
@@ -62,8 +95,7 @@ export class LoginManager {
         },
         body: JSON.stringify({
           username: credentials.username,
-          password: credentials.password,
-          auth_u_server: step1Data.auth_u_server
+          auth_u: loginFinalize.authData
         })
       });
       
@@ -79,23 +111,30 @@ export class LoginManager {
       // Handle TOTP if required
       if (loginData.requires_totp) {
         hideProgress();
+        // Convert session key to base64 for TOTP flow
+        const sessionKeyBase64 = btoa(String.fromCharCode(...loginFinalize.sessionKey));
         handleTOTPFlow({
           tempToken: loginData.temp_token!,
-          sessionKey: loginData.session_key,
+          sessionKey: sessionKeyBase64,
           username: credentials.username
         });
         return;
       }
       
-      // Complete authentication with tokens from OPAQUE
+      // Convert session key to base64 for storage
+      const sessionKeyBase64 = btoa(String.fromCharCode(...loginFinalize.sessionKey));
+      
+      // Complete authentication with tokens from server
       await this.completeLogin({
         token: loginData.token,
         refresh_token: loginData.refresh_token,
-        session_key: loginData.session_key,
+        session_key: sessionKeyBase64,
         auth_method: 'OPAQUE'
       }, credentials.username);
       
     } catch (error) {
+      // Clean up on error
+      clearClientSecret('login_secret');
       hideProgress();
       console.error('Login error:', error);
       showError('Authentication failed');
@@ -124,14 +163,15 @@ export class LoginManager {
   public static async logout(): Promise<void> {
     try {
       // Use auth manager to handle token cleanup and API call
-      const { logout } = await import('../utils/auth');
+      const { logout } = await import('../utils/auth.js');
       await logout();
       
-      // Clear all session data
+      // Clear all session data including OPAQUE secrets
       clearAllSessionData();
+      clearClientSecret('login_secret');
       
       // Navigate back to auth section
-      const { showAuthSection } = await import('../ui/sections');
+      const { showAuthSection } = await import('../ui/sections.js');
       showAuthSection();
       
       showSuccess('Logged out successfully.');
@@ -140,8 +180,9 @@ export class LoginManager {
       
       // Still attempt cleanup even on error
       clearAllSessionData();
+      clearClientSecret('login_secret');
       
-      const { showAuthSection } = await import('../ui/sections');
+      const { showAuthSection } = await import('../ui/sections.js');
       showAuthSection();
     }
   }

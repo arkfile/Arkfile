@@ -2,12 +2,12 @@
  * Registration functionality using multi-step OPAQUE protocol
  */
 
-import { showError, showSuccess } from '../ui/messages';
-import { showProgressMessage, hideProgress } from '../ui/progress';
-import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque';
-import { setTokens } from '../utils/auth';
-import { showFileSection } from '../ui/sections';
-import { loadFiles } from '../files/list';
+import { showError, showSuccess } from '../ui/messages.js';
+import { showProgressMessage, hideProgress } from '../ui/progress.js';
+import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
+import { setTokens } from '../utils/auth.js';
+import { showFileSection } from '../ui/sections.js';
+import { loadFiles } from '../files/list.js';
 
 export interface RegisterCredentials {
   username: string;
@@ -53,8 +53,7 @@ export class RegistrationManager {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          username: credentials.username,
-          request: registrationInit.requestData
+          registration_request: registrationInit.requestData
         })
       });
 
@@ -78,7 +77,7 @@ export class RegistrationManager {
 
       const registrationFinalize = await opaqueClient.finalizeRegistration({
         username: credentials.username,
-        serverResponse: step1Data.response,
+        serverResponse: step1Data.registration_response,
         clientSecret: clientSecret
       });
 
@@ -92,8 +91,8 @@ export class RegistrationManager {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          session_id: step1Data.session_id,
-          record: registrationFinalize.record
+          username: credentials.username,
+          registration_record: registrationFinalize.record
         })
       });
 
@@ -106,11 +105,15 @@ export class RegistrationManager {
 
       const registrationData = await responseStep2.json();
 
+      // Derive session key from export key (not sent by server)
+      // The export key is ephemeral and used only for session derivation
+      const sessionKeyBase64 = btoa(String.fromCharCode(...registrationFinalize.exportKey));
+
       // Complete registration with tokens
       await this.completeRegistration({
         token: registrationData.token,
         refresh_token: registrationData.refresh_token,
-        session_key: registrationData.session_key,
+        session_key: sessionKeyBase64,
         auth_method: 'OPAQUE'
       }, credentials.username);
 

@@ -400,116 +400,20 @@ func TestOpaqueRegister_UserAlreadyExists(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestOpaqueLogin_TOTPRequired(t *testing.T) {
-	username := "login.user"
-	password := "ValidPassword123!@#"
-
-	reqBody := map[string]interface{}{
-		"username": username,
-		"password": password,
-	}
-	jsonBody, _ := json.Marshal(reqBody)
-
-	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/opaque/login", bytes.NewReader(jsonBody))
-
-	// Mock getting user
-	getUserSQL := `SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
-	rows := sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-		AddRow(1, username, sql.NullString{}, time.Now(), 0, models.DefaultStorageLimit, true, nil, nil, false)
-	mock.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(rows)
-
-	// Mock OPAQUE authentication database operations
-	setupOPAQUEAuthenticationMocks(mock, username)
-
-	// Mock TOTP check (user does NOT have TOTP enabled - this is the expected case)
-	totpCheckSQL := `SELECT enabled, setup_completed FROM user_totp WHERE username = \?`
-	mock.ExpectQuery(totpCheckSQL).WithArgs(username).WillReturnError(sql.ErrNoRows)
-
-	// Execute the handler
-	err := OpaqueLogin(c)
-	require.Error(t, err)
-	httpErr, ok := err.(*echo.HTTPError)
-	require.True(t, ok)
-	assert.Equal(t, http.StatusForbidden, httpErr.Code)
-	assert.Equal(t, "Two-factor authentication setup is required. Please complete TOTP setup before logging in.", httpErr.Message)
-
-	// Verify that mock database expectations were met
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestOpaqueLogin_WithTOTPEnabled_Success(t *testing.T) {
-	username := "login.user"
-	password := "ValidPassword123!@#"
-
-	reqBody := map[string]interface{}{
-		"username": username,
-		"password": password,
-	}
-	jsonBody, _ := json.Marshal(reqBody)
-
-	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/opaque/login", bytes.NewReader(jsonBody))
-
-	// Mock getting user
-	getUserSQL := `SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
-	rows := sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-		AddRow(1, username, sql.NullString{}, time.Now(), 0, models.DefaultStorageLimit, true, nil, nil, false)
-	mock.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(rows)
-
-	// Mock OPAQUE authentication database operations
-	setupOPAQUEAuthenticationMocks(mock, username)
-
-	// Mock TOTP check (user HAS TOTP enabled and setup completed)
-	totpCheckSQL := `SELECT enabled, setup_completed FROM user_totp WHERE username = \?`
-	totpRows := sqlmock.NewRows([]string{"enabled", "setup_completed"}).AddRow(true, true)
-	mock.ExpectQuery(totpCheckSQL).WithArgs(username).WillReturnRows(totpRows)
-
-	// Note: GenerateTemporaryTOTPToken creates a JWT in memory only - no database record
-	// So we don't expect any INSERT INTO refresh_tokens here
-
-	// Mock logging user action
-	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
-	mock.ExpectExec(logActionSQL).
-		WithArgs(username, "OPAQUE auth completed, awaiting TOTP", "").
-		WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Execute the handler
-	err := OpaqueLogin(c)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	// Validate response structure for TOTP authentication required
-	var resp map[string]interface{}
-	err = json.Unmarshal(rec.Body.Bytes(), &resp)
-	require.NoError(t, err)
-
-	// Should return TOTP authentication requirement
-	assert.Equal(t, "OPAQUE authentication successful. TOTP code required.", resp["message"])
-	assert.Equal(t, true, resp["requires_totp"])
-	assert.Contains(t, resp, "temp_token", "Should include temporary token for TOTP completion")
-	assert.Contains(t, resp, "session_key", "Should include session key")
-	assert.Equal(t, "OPAQUE", resp["auth_method"])
-
-	// Verify that mock database expectations were met
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestOpaqueLogin_InvalidCredentials(t *testing.T) {
-	reqBody := map[string]interface{}{
-		"username": "",
-		"password": "ValidPassword123!@#",
-	}
-	jsonBody, _ := json.Marshal(reqBody)
-
-	c, _, _, _ := setupTestEnv(t, http.MethodPost, "/api/opaque/login", bytes.NewReader(jsonBody))
-
-	err := OpaqueLogin(c)
-	require.Error(t, err)
-	httpErr, ok := err.(*echo.HTTPError)
-	require.True(t, ok)
-	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-	assert.Contains(t, httpErr.Message, "Username is required")
-}
-
+// NOTE: OpaqueLogin handler tests removed (November 6, 2025)
+// The OpaqueLogin handler was replaced with multi-step OPAQUE protocol handlers:
+// - OpaqueAuthResponse (step 1: generate credential response)
+// - OpaqueAuthFinalize (step 2: verify and issue tokens)
+//
+// Multi-step authentication testing requires integration tests with actual WASM operations
+// rather than unit tests with mocked database calls. Proper end-to-end testing happens in
+// Phase 6 using dev-reset.sh + test-app-curl.sh.
+//
+// Removed tests:
+// - TestOpaqueLogin_TOTPRequired
+// - TestOpaqueLogin_WithTOTPEnabled_Success
+// - TestOpaqueLogin_InvalidCredentials
+//
 // NOTE: TestOpaqueLogin_UserNotApproved test removed
 // The handler no longer checks user approval during login as per the updated authentication flow
 // Users can complete OPAQUE + TOTP authentication but will be restricted from file operations if unapproved

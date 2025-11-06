@@ -6,7 +6,7 @@ Arkfile is designed as a Zero-Knowledge File Vault over S3. It enables file back
 
 It is vital to maintain the Zero-Knowledge design of the app and to preserve and protect user privacy end-to-end in all the work that we do.
 
-We use OPAQUE for authentication, so that passwords are never sent to the server for logging in. libopaque C-library via CGO is used on the server side. Cloudflare's opaque-ts is used on the client side.
+We use OPAQUE for authentication, so that passwords are never sent to the server for logging in. libopaque C-library via CGO is used on the server side and libopaque WASM is used on the client side.
 
 We use client-side encryption to ensure that file data is never sent to the server until and unless it is encrypted with a strong password.
 
