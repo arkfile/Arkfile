@@ -389,29 +389,191 @@ The authentication code was incorrectly passing OPAQUE export keys as "session k
 **Next Action Required**
 
 #### Objectives
-Update CLI tools to use multi-step OPAQUE authentication.
+Update CLI tools to use multi-step OPAQUE authentication matching the web UI implementation.
 
-#### Required Actions
-1. Update `arkfile-client` authentication flow
-   - Implement multi-step registration
-   - Implement multi-step login
-   - Remove references to deprecated `/api/opaque/login` endpoint
-   
-2. Update `arkfile-admin` authentication flow
-   - Implement multi-step registration
-   - Implement multi-step login
-   - Remove references to deprecated endpoints
+#### CLI Tools Assessment
 
-3. Test CLI tools
-   - Verify registration works
-   - Verify login works
-   - Verify token management
-   - Verify error handling
+##### 1. arkfile-client (`cmd/arkfile-client/main.go`)
+
+**Current Status:** ❌ **BROKEN - Uses Deprecated Endpoints**
+
+**Critical Issues:**
+- Line 267: Uses deprecated `/api/opaque/login` endpoint (removed in Phase 5)
+- Single-step OPAQUE flow incompatible with new multi-step protocol
+- TOTP integration (lines 278-304) tied to old authentication flow
+
+**Required Code Changes:**
+
+1. **Registration Flow** (currently missing):
+   ```go
+   // Need to add registration command with:
+   // - POST /api/opaque/register/start
+   // - POST /api/opaque/register/finish
+   // - OPAQUE client-side operations via Go wrapper
+   ```
+
+2. **Login Flow** (complete rewrite needed):
+   ```go
+   // Replace single POST to /api/opaque/login with:
+   // Step 1: POST /api/opaque/login/start
+   //   - Send username + OPAQUE login request
+   //   - Receive login response + session ID
+   // Step 2: POST /api/opaque/login/finish
+   //   - Send username + session key + session ID
+   //   - Receive JWT tokens
+   ```
+
+3. **TOTP Integration** (adapt existing code):
+   - Current TOTP code (lines 278-304) needs adaptation
+   - Must work with new multi-step flow
+   - Session key handling needs update
+
+**Implementation Complexity:** HIGH
+- Complete authentication flow rewrite required
+- OPAQUE client-side operations need Go implementation
+- State management between init/finalize steps
+- Estimated effort: 2-3 days
+
+**File Encryption Status:** ✅ **NO CHANGES NEEDED**
+- Uses `cryptocli` for password-based encryption (correct)
+- Metadata encryption properly separated (correct)
+- Upload/download flows are sound (correct)
+
+##### 2. arkfile-admin (`cmd/arkfile-admin/main.go`)
+
+**Current Status:** ❌ **BROKEN - Uses Deprecated Endpoints**
+
+**Critical Issues:**
+- Line 267: Uses deprecated `/api/admin/login` endpoint
+- Same single-step OPAQUE issue as arkfile-client
+- TOTP handling (lines 278-304) tied to old flow
+
+**Required Code Changes:**
+
+1. **Admin Authentication Strategy** (needs decision):
+   - Option A: Use same `/api/opaque/login/*` endpoints with admin role verification
+   - Option B: Create separate `/api/admin/auth/*` endpoints
+   - Recommendation: Option A (simpler, consistent with web UI)
+
+2. **Login Flow** (complete rewrite needed):
+   ```go
+   // Same pattern as arkfile-client:
+   // Step 1: POST /api/opaque/login/start
+   // Step 2: POST /api/opaque/login/finish
+   // Verify admin role in response
+   ```
+
+3. **TOTP Integration** (adapt existing code):
+   - Adapt TOTP flow (lines 278-304)
+   - Ensure admin privileges verified after authentication
+
+**Implementation Complexity:** HIGH
+- Similar complexity to arkfile-client
+- Admin role verification needs clarification
+- Estimated effort: 2-3 days
+
+**Admin Operations:** ✅ **NO CHANGES NEEDED**
+- User management commands are sound
+- Storage limit operations are correct
+- Health check commands are appropriate
+
+##### 3. cryptocli (`cmd/cryptocli/main.go`)
+
+**Current Status:** ✅ **EXCELLENT - NO CHANGES NEEDED**
+
+**Why No Changes Required:**
+- Completely offline tool (no network operations)
+- Uses core `crypto` package directly
+- No OPAQUE dependency (uses password-based KDF)
+- Properly implements password-based file encryption/decryption, metadata encryption/decryption, FEK encryption/decryption, and Argon2ID key derivation
+
+**Zero-Knowledge Compliance:** ✅ **FULLY COMPLIANT**
+
+#### Implementation Requirements
+
+##### OPAQUE Client-Side Operations (Go)
+
+Both arkfile-client and arkfile-admin need Go implementations of OPAQUE client operations. Implementation options:
+- Option A: Use existing Go OPAQUE wrapper in `auth/opaque.go` (if client-compatible)
+- Option B: Create new Go client wrapper for libopaque
+- Option C: Use CGO to call libopaque C library directly
+
+##### Multi-Step State Management
+
+CLI tools must maintain state between HTTP requests with proper session management.
+
+##### Endpoint Updates
+
+**Registration Endpoints:**
+- `POST /api/opaque/register/start` - Send username + registration request
+- `POST /api/opaque/register/finish` - Send username + registration record + session ID
+
+**Login Endpoints:**
+- `POST /api/opaque/login/start` - Send username + login request
+- `POST /api/opaque/login/finish` - Send username + session key + session ID
+
+**TOTP Handling:**
+- Integrate with login finalize step
+- Prompt user for TOTP code when required
+- Submit TOTP with session context
+
+#### Zero-Knowledge Architecture Compliance
+
+**Current Status:** ⚠️ **PARTIALLY COMPLIANT**
+
+**What's Working:**
+- ✅ cryptocli is fully zero-knowledge
+- ✅ File encryption happens client-side
+- ✅ Metadata encryption happens client-side
+- ✅ Server never sees plaintext passwords (in web UI)
+
+**What's Broken:**
+- ❌ CLI tools cannot authenticate (deprecated endpoints)
+- ❌ No registration flow in CLI tools
+- ❌ OPAQUE client-side operations not implemented in CLI
+
+**After Refactor:** ✅ **FULLY COMPLIANT**
+- All authentication will be truly zero-knowledge
+- Server never learns passwords
+- OPAQUE protocol properly implemented end-to-end
+- CLI tools will match web UI security model
+
+#### Implementation Order
+
+1. **First:** Implement OPAQUE client operations in Go
+2. **Second:** Update arkfile-client login flow
+3. **Third:** Add arkfile-client registration flow
+4. **Fourth:** Update arkfile-admin authentication
+5. **Fifth:** Code cleanup and compilation verification
+
+#### Key Implementation Questions
+
+1. **OPAQUE Library Access:** Can CLI tools use existing `auth/opaque.go` wrapper, or do they need separate client-side implementation? -> only use existing tools/wrappers if they are well implemented and if it makes sense.
+2. **Admin Authentication Strategy:** Should admin use same `/api/opaque/login/*` endpoints with role verification, or separate `/api/admin/auth/*` endpoints? -> Use a separate set of endpoints for admin logins please.
+3. **State Management:** How to store client secrets between init/finalize steps? (Recommendation: in-memory with proper cleanup)
 
 #### Files to Modify
-- CLI tool source files (location TBD during implementation)
-- CLI authentication modules
-- CLI configuration files
+
+**arkfile-client:**
+- `cmd/arkfile-client/main.go` - Main authentication logic (lines 267-304)
+
+**arkfile-admin:**
+- `cmd/arkfile-admin/main.go` - Main authentication logic (lines 267-304)
+
+**Shared OPAQUE Client (if needed):**
+- Create `auth/opaque_client.go` or extend existing `auth/opaque.go`
+
+#### Success Criteria
+
+- [ ] arkfile-client can register new users
+- [ ] arkfile-client can login with multi-step OPAQUE
+- [ ] arkfile-client TOTP integration works
+- [ ] arkfile-admin can login with multi-step OPAQUE
+- [ ] arkfile-admin TOTP integration works
+- [ ] arkfile-admin admin role verified
+- [ ] All CLI tools compile without errors
+- [ ] No deprecated endpoint references remain
+- [ ] Code passes `go fmt` and `go vet`
 
 ### Part D: Provider Interface Review ⏳
 
