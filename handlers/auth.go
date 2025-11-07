@@ -10,7 +10,6 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/models"
@@ -614,11 +613,6 @@ func OpaqueAuthFinalize(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
 
-	// For multi-step OPAQUE, we don't have the export key available
-	// The session key will need to be derived on the client side from the export key
-	// that the client obtained during the OPAQUE protocol
-	// So we don't return a session_key here - the client already has it
-
 	// Log partial authentication
 	database.LogUserAction(request.Username, "OPAQUE auth completed (multi-step), awaiting TOTP", "")
 	logging.InfoLogger.Printf("OPAQUE user authenticated (multi-step), TOTP required: %s", request.Username)
@@ -667,7 +661,7 @@ func OpaqueHealthCheck(c echo.Context) error {
 
 // TOTPSetupRequest represents the request for TOTP setup
 type TOTPSetupRequest struct {
-	SessionKey string `json:"session_key"`
+	// No session key needed - JWT token provides authentication
 }
 
 // TOTPSetupResponse represents the response for TOTP setup
@@ -680,20 +674,8 @@ type TOTPSetupResponse struct {
 
 // TOTPSetup initializes TOTP setup for a user
 func TOTPSetup(c echo.Context) error {
-	var request TOTPSetupRequest
-	if err := c.Bind(&request); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
-	}
-
 	// Get username from JWT token
 	username := auth.GetUsernameFromToken(c)
-
-	// Decode session key
-	sessionKey, err := base64.StdEncoding.DecodeString(request.SessionKey)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid session key format")
-	}
-	defer crypto.SecureZeroSessionKey(sessionKey)
 
 	// Check if user already has TOTP enabled
 	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, username)
@@ -733,9 +715,8 @@ func TOTPSetup(c echo.Context) error {
 
 // TOTPVerifyRequest represents the request for TOTP verification
 type TOTPVerifyRequest struct {
-	Code       string `json:"code"`
-	SessionKey string `json:"session_key"`
-	IsBackup   bool   `json:"is_backup,omitempty"`
+	Code     string `json:"code"`
+	IsBackup bool   `json:"is_backup,omitempty"`
 }
 
 // TOTPVerify completes TOTP setup by verifying a test code
@@ -760,13 +741,6 @@ func TOTPVerify(c echo.Context) error {
 	if request.IsBackup && len(request.Code) != 10 {
 		return echo.NewHTTPError(http.StatusBadRequest, "Backup code must be 10 characters")
 	}
-
-	// Decode session key
-	sessionKey, err := base64.StdEncoding.DecodeString(request.SessionKey)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid session key format")
-	}
-	defer crypto.SecureZeroSessionKey(sessionKey)
 
 	// Complete TOTP setup
 	if err := auth.CompleteTOTPSetup(database.DB, username, request.Code); err != nil {
@@ -809,9 +783,6 @@ func TOTPVerify(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user details")
 		}
 
-		// Encode session key for response
-		sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
-
 		logging.InfoLogger.Printf("Registration completed with TOTP setup for user: %s", username)
 
 		return c.JSON(http.StatusOK, map[string]interface{}{
@@ -819,7 +790,6 @@ func TOTPVerify(c echo.Context) error {
 			"enabled":       true,
 			"access_token":  token,
 			"refresh_token": refreshToken,
-			"session_key":   sessionKeyB64,
 			"auth_method":   "OPAQUE+TOTP",
 			"user": map[string]interface{}{
 				"username":        user.Username,
@@ -842,9 +812,8 @@ func TOTPVerify(c echo.Context) error {
 
 // TOTPAuthRequest represents the request for TOTP authentication
 type TOTPAuthRequest struct {
-	Code       string `json:"code"`
-	SessionKey string `json:"session_key"`
-	IsBackup   bool   `json:"is_backup,omitempty"`
+	Code     string `json:"code"`
+	IsBackup bool   `json:"is_backup,omitempty"`
 }
 
 // TOTPAuth validates a TOTP code and completes authentication
@@ -874,13 +843,6 @@ func TOTPAuth(c echo.Context) error {
 	if request.IsBackup && len(request.Code) != 10 {
 		return echo.NewHTTPError(http.StatusBadRequest, "Backup code must be 10 characters")
 	}
-
-	// Decode session key
-	sessionKey, err := base64.StdEncoding.DecodeString(request.SessionKey)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid session key format")
-	}
-	defer crypto.SecureZeroSessionKey(sessionKey)
 
 	// Validate TOTP code or backup code
 	if request.IsBackup {
@@ -952,9 +914,6 @@ func TOTPAuth(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create session")
 	}
 
-	// Encode session key for response
-	sessionKeyB64 := base64.StdEncoding.EncodeToString(sessionKey)
-
 	// Log successful authentication
 	database.LogUserAction(username, "completed TOTP authentication", "")
 	logging.InfoLogger.Printf("TOTP authentication completed for user: %s", username)
@@ -962,7 +921,6 @@ func TOTPAuth(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"token":         token,
 		"refresh_token": refreshToken,
-		"session_key":   sessionKeyB64,
 		"auth_method":   "OPAQUE+TOTP",
 		"user": map[string]interface{}{
 			"username":        user.Username,
@@ -979,7 +937,6 @@ func TOTPAuth(c echo.Context) error {
 // TOTPDisableRequest represents the request for TOTP disabling
 type TOTPDisableRequest struct {
 	CurrentCode string `json:"current_code"`
-	SessionKey  string `json:"session_key"`
 }
 
 // TOTPDisable disables TOTP for a user
@@ -996,13 +953,6 @@ func TOTPDisable(c echo.Context) error {
 	if request.CurrentCode == "" || len(request.CurrentCode) != 6 {
 		return echo.NewHTTPError(http.StatusBadRequest, "Current TOTP code is required")
 	}
-
-	// Decode session key
-	sessionKey, err := base64.StdEncoding.DecodeString(request.SessionKey)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid session key format")
-	}
-	defer crypto.SecureZeroSessionKey(sessionKey)
 
 	// Disable TOTP (this validates the current code)
 	if err := auth.DisableTOTP(database.DB, username, request.CurrentCode); err != nil {

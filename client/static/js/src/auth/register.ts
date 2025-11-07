@@ -17,7 +17,6 @@ export interface RegisterCredentials {
 export interface RegistrationResponse {
   token: string;
   refresh_token: string;
-  session_key: string;
   auth_method: 'OPAQUE';
 }
 
@@ -105,15 +104,16 @@ export class RegistrationManager {
 
       const registrationData = await responseStep2.json();
 
-      // Derive session key from export key (not sent by server)
-      // The export key is ephemeral and used only for session derivation
-      const sessionKeyBase64 = btoa(String.fromCharCode(...registrationFinalize.exportKey));
+      // Discard export key immediately (not needed for this application)
+      // JWT tokens handle all session management
+      if (registrationFinalize.exportKey) {
+        registrationFinalize.exportKey.fill(0);
+      }
 
       // Complete registration with tokens
       await this.completeRegistration({
         token: registrationData.token,
         refresh_token: registrationData.refresh_token,
-        session_key: sessionKeyBase64,
         auth_method: 'OPAQUE'
       }, credentials.username);
 

@@ -339,6 +339,50 @@ CGO_CFLAGS="-I/usr/local/include"
 CGO_LDFLAGS="-L/usr/local/lib -lopaque -lsodium"
 ```
 
+### Part B.1: Session Key Removal (Security Fix) ✅
+
+**Status:** COMPLETE  
+**Date Completed:** November 7, 2025
+
+#### Objectives
+Remove incorrect session key handling from OPAQUE authentication flow.
+
+#### Problem Identified
+The authentication code was incorrectly passing OPAQUE export keys as "session keys" through the authentication flow, creating confusion and potential security issues. JWT tokens already provide session management, making these session keys redundant and potentially dangerous.
+
+#### Actions Completed
+1. ✅ Removed export key disposal from `register.ts`
+2. ✅ Updated `completeRegistration()` call to not pass session keys
+3. ✅ Updated `RegistrationResponse` interface to remove session key
+4. ✅ Removed session key disposal from `login.ts`
+5. ✅ Updated `completeLogin()` call to not pass session keys
+6. ✅ Updated `handleTOTPFlow()` calls to not pass session keys
+7. ✅ Updated `LoginResponse` interface to remove session key
+8. ✅ Updated `handleTOTPFlow()` signature in `totp.ts` to remove session key parameter
+9. ✅ Verified no session key usage remains in `totp.ts`
+10. ✅ Updated comments in `auth.go` to clarify JWT-based authentication
+
+#### Implementation Details
+
+**Client-Side Changes (TypeScript):**
+- `client/static/js/src/auth/register.ts`: Removed export key disposal and session key passing
+- `client/static/js/src/auth/login.ts`: Removed session key disposal and updated function calls
+- `client/static/js/src/auth/totp.ts`: Removed session key parameter from `handleTOTPFlow()` function
+
+**Server-Side Changes (Go):**
+- `handlers/auth.go`: Updated comments to clarify JWT-based authentication approach
+
+#### Security Impact
+- **Before**: Export keys were being passed as "session keys" creating confusion about authentication mechanism
+- **After**: Clean separation - OPAQUE handles authentication, JWT tokens handle sessions
+- **Result**: Clearer code, no unused cryptographic material, proper zero-knowledge implementation
+
+#### Verification
+- TypeScript compilation successful with `bun run build`
+- Go compilation successful with `go fmt` and `go vet`
+- All session key references removed from codebase
+- Authentication flow now correctly uses only JWT tokens for session management
+
 ### Part C: CLI Tools Migration ⏳
 
 **Status:** PENDING  
@@ -712,7 +756,7 @@ Document architecture decisions for future maintainers.
 
 ## Progress Summary
 
-### Overall Progress: 62% Complete (8/13 major items)
+### Overall Progress: 69% Complete (9/13 major items)
 
 #### Completed ✅
 1. Phase 1: Verify libopaque.js WASM setup
@@ -722,15 +766,16 @@ Document architecture decisions for future maintainers.
 5. Phase 5: Deprecated code removal
 6. Phase 6 Part A: Session management
 7. Phase 6 Part B: CGO compilation fixes
+8. Phase 6 Part B.1: Session key removal (security fix)
 
 #### In Progress 🔄
-8. Phase 6 Part C: CLI tools migration (NEXT)
+9. Phase 6 Part C: CLI tools migration (NEXT)
 
 #### Pending 📋
-9. Phase 6 Part D: Provider interface review
-10. Phase 6 Part E: Final code cleanup
-11. Phase 7: Testing & Validation (ALL TESTING)
-12. Phase 8: Documentation & Finalization (AFTER TESTING)
+10. Phase 6 Part D: Provider interface review
+11. Phase 6 Part E: Final code cleanup
+12. Phase 7: Testing & Validation (ALL TESTING)
+13. Phase 8: Documentation & Finalization (AFTER TESTING)
 
 ### Current Focus
 **Phase 6 Part C: CLI Tools Migration**

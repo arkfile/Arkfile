@@ -17,7 +17,6 @@ if (typeof window !== 'undefined') {
 
 export interface TOTPFlowData {
   tempToken: string;
-  sessionKey: string;
   username: string;
 }
 
@@ -31,7 +30,6 @@ export interface TOTPSetupData {
 export interface TOTPLoginResponse {
   token: string;
   refresh_token: string;
-  session_key: string;
   auth_method: string;
   user: any;
 }
@@ -196,7 +194,6 @@ async function verifyTOTPLogin(): Promise<void> {
       },
       body: JSON.stringify({
         code: code,
-        session_key: totpLoginData.sessionKey,
         is_backup: isBackup
       }),
     });
@@ -208,7 +205,6 @@ async function verifyTOTPLogin(): Promise<void> {
       await LoginManager.completeLogin({
         token: data.token,
         refresh_token: data.refresh_token,
-        session_key: data.session_key,
         auth_method: 'OPAQUE'
       }, totpLoginData.username);
       
@@ -233,7 +229,7 @@ async function verifyTOTPLogin(): Promise<void> {
 }
 
 // TOTP Setup Functions
-export async function initiateTOTPSetup(sessionKey: string): Promise<TOTPSetupData | null> {
+export async function initiateTOTPSetup(): Promise<TOTPSetupData | null> {
   try {
     showProgressMessage('Setting up TOTP...');
     
@@ -250,9 +246,7 @@ export async function initiateTOTPSetup(sessionKey: string): Promise<TOTPSetupDa
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      body: JSON.stringify({
-        session_key: sessionKey
-      }),
+      body: JSON.stringify({}),
     });
     
     hideProgress();
@@ -278,7 +272,7 @@ export async function initiateTOTPSetup(sessionKey: string): Promise<TOTPSetupDa
   }
 }
 
-export async function completeTOTPSetup(code: string, sessionKey: string): Promise<boolean> {
+export async function completeTOTPSetup(code: string): Promise<boolean> {
   try {
     showProgressMessage('Completing TOTP setup...');
     
@@ -296,8 +290,7 @@ export async function completeTOTPSetup(code: string, sessionKey: string): Promi
         'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
-        code: code,
-        session_key: sessionKey
+        code: code
       }),
     });
     
@@ -348,7 +341,7 @@ export async function getTOTPStatus(): Promise<{enabled: boolean, setupRequired:
   }
 }
 
-export async function disableTOTP(currentCode: string, sessionKey: string): Promise<boolean> {
+export async function disableTOTP(currentCode: string): Promise<boolean> {
   try {
     showProgressMessage('Disabling TOTP...');
     
@@ -366,8 +359,7 @@ export async function disableTOTP(currentCode: string, sessionKey: string): Prom
         'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify({
-        current_code: currentCode,
-        session_key: sessionKey
+        current_code: currentCode
       }),
     });
     
@@ -390,7 +382,7 @@ export async function disableTOTP(currentCode: string, sessionKey: string): Prom
 }
 
 // TOTP Setup Modal
-export function showTOTPSetupModal(sessionKey: string): void {
+export function showTOTPSetupModal(): void {
   const modal = showModal({
     title: "Setup Two-Factor Authentication",
     message: "Setting up TOTP will add an extra layer of security to your account.",
@@ -426,16 +418,16 @@ export function showTOTPSetupModal(sessionKey: string): void {
   }
 
   // Initialize TOTP setup
-  initiateTOTPSetup(sessionKey).then(setupData => {
+  initiateTOTPSetup().then(setupData => {
     if (setupData) {
-      showTOTPSetupData(modalContent, setupData, sessionKey);
+      showTOTPSetupData(modalContent, setupData);
     } else {
       modal.remove();
     }
   });
 }
 
-function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData, sessionKey: string): void {
+function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData): void {
   modalContent.innerHTML = `
     <h3 style="margin: 0 0 20px 0;">Setup Two-Factor Authentication</h3>
     <div style="margin-bottom: 20px;">
@@ -529,12 +521,12 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData, sess
     
     setupCodeInput.addEventListener('keypress', function(e) {
       if (e.key === 'Enter' && this.value.length === 6) {
-        completeTOTPSetupFlow(setupCodeInput.value, sessionKey);
+        completeTOTPSetupFlow(setupCodeInput.value);
       }
     });
     
     completeButton.addEventListener('click', () => {
-      completeTOTPSetupFlow(setupCodeInput.value, sessionKey);
+      completeTOTPSetupFlow(setupCodeInput.value);
     });
     
     // Focus the input
@@ -542,8 +534,8 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData, sess
   }
 }
 
-async function completeTOTPSetupFlow(code: string, sessionKey: string): Promise<void> {
-  const success = await completeTOTPSetup(code, sessionKey);
+async function completeTOTPSetupFlow(code: string): Promise<void> {
+  const success = await completeTOTPSetup(code);
   if (success) {
     document.querySelector('.modal-overlay')?.remove();
   }

@@ -18,7 +18,6 @@ export interface LoginCredentials {
 export interface LoginResponse {
   token: string;
   refresh_token: string;
-  session_key: string;
   auth_method: 'OPAQUE';
   requires_totp?: boolean;
   temp_token?: string;
@@ -108,27 +107,26 @@ export class LoginManager {
       
       const loginData = await responseStep2.json();
       
+      // Discard session key immediately (not needed for this application)
+      // JWT tokens handle all session management
+      if (loginFinalize.sessionKey) {
+        loginFinalize.sessionKey.fill(0);
+      }
+      
       // Handle TOTP if required
       if (loginData.requires_totp) {
         hideProgress();
-        // Convert session key to base64 for TOTP flow
-        const sessionKeyBase64 = btoa(String.fromCharCode(...loginFinalize.sessionKey));
         handleTOTPFlow({
           tempToken: loginData.temp_token!,
-          sessionKey: sessionKeyBase64,
           username: credentials.username
         });
         return;
       }
       
-      // Convert session key to base64 for storage
-      const sessionKeyBase64 = btoa(String.fromCharCode(...loginFinalize.sessionKey));
-      
       // Complete authentication with tokens from server
       await this.completeLogin({
         token: loginData.token,
         refresh_token: loginData.refresh_token,
-        session_key: sessionKeyBase64,
         auth_method: 'OPAQUE'
       }, credentials.username);
       
