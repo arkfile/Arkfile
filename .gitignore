@@ -156,6 +156,10 @@ client/static/js/.buildcache
 dist/
 .tsbuildinfo
 
+# libopaque WASM/JS files (built from vendor submodule during deployment)
+client/static/js/libopaque.js
+client/static/js/libopaque.debug.js
+
 # Build cache files
 .vendor_cache
 

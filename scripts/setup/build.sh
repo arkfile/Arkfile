@@ -306,6 +306,51 @@ fi
 mkdir -p ${BUILD_DIR}
 echo -e "${GREEN}Building in directory: $(pwd)${NC}"
 
+# Build libopaque WASM/JS from vendor submodule
+echo -e "${YELLOW}Building libopaque WASM/JS from vendor submodule...${NC}"
+
+# Check if emscripten is available
+if ! command -v emcc >/dev/null 2>&1; then
+    echo -e "${RED}[X] Emscripten (emcc) is required to build libopaque.js${NC}"
+    echo -e "${YELLOW}Install Emscripten: https://emscripten.org/docs/getting_started/downloads.html${NC}"
+    exit 1
+fi
+
+# Build libopaque.js in the vendor submodule
+cd vendor/stef/libopaque/js
+
+# Check if node_modules exists, install if needed
+if [ ! -d "node_modules" ]; then
+    echo "Installing npm dependencies for libopaque.js build..."
+    npm install || {
+        echo -e "${RED}[X] Failed to install npm dependencies for libopaque.js${NC}"
+        exit 1
+    }
+fi
+
+# Build libopaque.js
+echo "Building libopaque.js and libopaque.debug.js..."
+if ! make libopaquejs; then
+    echo -e "${RED}[X] Failed to build libopaque.js${NC}"
+    exit 1
+fi
+
+# Verify build output
+if [ ! -f "dist/libopaque.js" ] || [ ! -f "dist/libopaque.debug.js" ]; then
+    echo -e "${RED}[X] libopaque.js build output missing${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}[OK] libopaque.js built successfully${NC}"
+
+# Copy to client static directory
+echo "Copying libopaque.js files to client/static/js/..."
+cd ../../../../
+cp vendor/stef/libopaque/js/dist/libopaque.js client/static/js/
+cp vendor/stef/libopaque/js/dist/libopaque.debug.js client/static/js/
+
+echo -e "${GREEN}[OK] libopaque.js files copied to client/static/js/${NC}"
+
 # Build TypeScript Frontend (Mandatory)
 echo "Building TypeScript frontend..."
 
