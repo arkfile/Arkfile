@@ -1,0 +1,11 @@
+# Mark vendor directory as vendored code (excluded from language statistics)
+vendor/** linguist-vendored
+
+# Mark generated/built files as vendored
+client/static/js/dist/** linguist-generated
+*.min.js linguist-generated
+*.bundle.js linguist-generated
+
+# Documentation
+*.md linguist-documentation
+docs/** linguist-documentation
