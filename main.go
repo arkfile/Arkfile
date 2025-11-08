@@ -327,33 +327,15 @@ func initializeAdminUser() error {
 		return nil
 	}
 
-	log.Printf("No existing admin user found - creating fresh admin user '%s' for development/testing...", adminUsername)
+	// NOTE: Automatic admin user creation is deprecated.
+	// Admin users must now be created manually using the multi-step OPAQUE protocol:
+	// 1. Use the web UI registration flow at /register
+	// 2. Or use the arkfile-admin CLI tool for admin user management
+	// 3. Ensure ADMIN_USERNAMES environment variable includes the username
 
-	// Create fresh admin user
-	log.Printf("Creating admin user '%s' for development/testing...", adminUsername)
-
-	// Use a secure default password for the admin user
-	// In a real deployment, this should be changed immediately
-	defaultAdminPassword := "DevAdmin2025!SecureInitialPassword"
-
-	// Create admin user with OPAQUE authentication
-	adminUser, err := models.CreateUserWithOPAQUE(database.DB, adminUsername, defaultAdminPassword, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create admin user with OPAQUE: %w", err)
-	}
-
-	log.Printf("Admin user '%s' created successfully with ID: %d", adminUsername, adminUser.ID)
-	log.Printf("SECURITY: Default admin password has been set - change it immediately after first login")
-
-	// Set up TOTP for the new admin user
-	if err := setupAdminTOTP(adminUser); err != nil {
-		return fmt.Errorf("failed to setup TOTP for new admin user: %w", err)
-	}
-
-	// FINAL VALIDATION: Test complete TOTP workflow for admin user
-	if err := validateAdminTOTPWorkflow(adminUser); err != nil {
-		return fmt.Errorf("admin TOTP workflow validation failed: %w", err)
-	}
+	log.Printf("NOTE: Automatic admin user initialization is deprecated")
+	log.Printf("Admin users must be created manually via web UI or CLI tools")
+	log.Printf("Please register admin user '%s' via the web interface", adminUsername)
 
 	return nil
 }
@@ -365,7 +347,6 @@ func initializeTestUser() error {
 	}
 
 	testUsername := "arkfile-dev-test-user"
-	testPassword := "password"
 
 	log.Printf("Checking if test user '%s' needs initialization...", testUsername)
 
@@ -380,15 +361,15 @@ func initializeTestUser() error {
 		return nil
 	}
 
-	log.Printf("Creating test user '%s' for development...", testUsername)
+	// NOTE: Automatic test user creation is deprecated.
+	// Test users must now be created manually using the multi-step OPAQUE protocol:
+	// 1. Use the web UI registration flow at /register
+	// 2. Or use CLI tools for user management
 
-	// Create user with OPAQUE
-	_, err = models.CreateUserWithOPAQUE(database.DB, testUsername, testPassword, nil)
-	if err != nil {
-		return fmt.Errorf("failed to create test user with OPAQUE: %w", err)
-	}
+	log.Printf("NOTE: Automatic test user initialization is deprecated")
+	log.Printf("Test users must be created manually via the web interface")
+	log.Printf("Please register test user '%s' via the web interface if needed", testUsername)
 
-	log.Printf("Test user '%s' created successfully.", testUsername)
 	return nil
 }
 

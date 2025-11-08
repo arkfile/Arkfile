@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/utils"
 )
@@ -324,225 +323,18 @@ func getEnvOrDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
-// OPAQUE Integration - Comprehensive OPAQUE lifecycle management
-
-// OPAQUEAccountStatus represents the OPAQUE authentication status for a user
-type OPAQUEAccountStatus struct {
-	HasAccountPassword bool       `json:"has_account_password"`
-	FilePasswordCount  int        `json:"file_password_count"`
-	SharePasswordCount int        `json:"share_password_count"`
-	LastOPAQUEAuth     *time.Time `json:"last_opaque_auth"`
-	OPAQUECreatedAt    *time.Time `json:"opaque_created_at"`
-}
-
-// CreateUserWithOPAQUE creates user AND registers OPAQUE account in single transaction
-func CreateUserWithOPAQUE(db *sql.DB, username, password string, email *string) (*User, error) {
-	// Start transaction to ensure atomicity
-	tx, err := db.Begin()
-	if err != nil {
-		return nil, fmt.Errorf("failed to start transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Create user record first
-	isAdmin := isAdminUsername(username)
-	result, err := tx.Exec(
-		`INSERT INTO users (
-			username, email, storage_limit_bytes, is_admin, is_approved
-		) VALUES (?, ?, ?, ?, ?)`,
-		username, email, DefaultStorageLimit, isAdmin, isAdmin,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create user: %w", err)
-	}
-
-	_, err = result.LastInsertId()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get user ID: %w", err)
-	}
-
-	// Check if OPAQUE is available
-	if !auth.IsOPAQUEAvailable() {
-		return nil, fmt.Errorf("OPAQUE not available")
-	}
-
-	// TODO: Implement multi-step OPAQUE registration here
-	// For now, return error indicating this needs to be implemented
-	return nil, fmt.Errorf("multi-step OPAQUE registration not yet implemented in CreateUserWithOPAQUE")
-}
-
-// RegisterOPAQUEAccount registers an OPAQUE account for an existing user
-func (u *User) RegisterOPAQUEAccount(db *sql.DB, password string) error {
-	// Check if OPAQUE is available
-	if !auth.IsOPAQUEAvailable() {
-		return fmt.Errorf("OPAQUE not available")
-	}
-
-	// TODO: Implement multi-step OPAQUE registration here
-	// For now, return error indicating this needs to be implemented
-	return fmt.Errorf("multi-step OPAQUE registration not yet implemented in RegisterOPAQUEAccount")
-}
-
-// AuthenticateOPAQUE authenticates the user's account password via OPAQUE
-func (u *User) AuthenticateOPAQUE(db *sql.DB, password string) ([]byte, error) {
-	// Use unified password manager for account password authentication
-	recordIdentifier := u.Username // Account passwords now use username as identifier
-
-	opm := auth.GetOPAQUEPasswordManagerWithDB(db)
-
-	exportKey, err := opm.AuthenticatePassword(recordIdentifier, password)
-	if err != nil {
-		return nil, fmt.Errorf("account password authentication failed: %w", err)
-	}
-
-	return exportKey, nil
-}
-
-// GetOPAQUEExportKey retrieves the export key after successful authentication
-// This method should only be called immediately after successful AuthenticateOPAQUE
-func (u *User) GetOPAQUEExportKey(db *sql.DB, password string) ([]byte, error) {
-	// This method is essentially the same as AuthenticateOPAQUE but with clearer naming
-	// for Phase 5A export key integration
-	return u.AuthenticateOPAQUE(db, password)
-}
-
-// ValidateOPAQUEExportKey validates that an export key has the expected properties
-func (u *User) ValidateOPAQUEExportKey(exportKey []byte) error {
-	if len(exportKey) == 0 {
-		return fmt.Errorf("OPAQUE export key cannot be empty")
-	}
-
-	// OPAQUE export keys should be 64 bytes (512 bits) as per the protocol specification
-	if len(exportKey) != 64 {
-		return fmt.Errorf("OPAQUE export key must be exactly 64 bytes, got %d", len(exportKey))
-	}
-
-	// Check that the key is not all zeros
-	allZero := true
-	for _, b := range exportKey {
-		if b != 0 {
-			allZero = false
-			break
-		}
-	}
-	if allZero {
-		return fmt.Errorf("OPAQUE export key cannot be all zeros")
-	}
-
-	return nil
-}
-
-// SecureZeroExportKey securely clears export key material from memory
-func (u *User) SecureZeroExportKey(exportKey []byte) {
-	if exportKey != nil {
-		for i := range exportKey {
-			exportKey[i] = 0
-		}
-	}
-}
-
 // HasOPAQUEAccount checks if the user has an OPAQUE account registered
+// Uses the RFC-compliant opaque_user_data table
 func (u *User) HasOPAQUEAccount(db *sql.DB) (bool, error) {
-	// Check database for OPAQUE records
 	var count int
-	err := db.QueryRow(`
-		SELECT COUNT(*) FROM opaque_password_records 
-		WHERE record_type = 'account' AND record_identifier = ? AND is_active = true`,
-		u.Username).Scan(&count)
+	err := db.QueryRow(`SELECT COUNT(*) FROM opaque_user_data WHERE username = ?`, u.Username).Scan(&count)
 	if err != nil {
 		return false, err
 	}
 	return count > 0, nil
 }
 
-// DeleteOPAQUEAccount deactivates all OPAQUE records for this user
-func (u *User) DeleteOPAQUEAccount(db *sql.DB) error {
-	// Deactivate all OPAQUE records for this user
-	_, err := db.Exec(`
-		UPDATE opaque_password_records 
-		SET is_active = false 
-		WHERE associated_username = ? OR record_identifier = ?`,
-		u.Username, u.Username)
-	if err != nil {
-		return fmt.Errorf("failed to deactivate OPAQUE records: %w", err)
-	}
-	return nil
-}
-
-// GetOPAQUEAccountStatus returns comprehensive OPAQUE status for the user
-func (u *User) GetOPAQUEAccountStatus(db *sql.DB) (*OPAQUEAccountStatus, error) {
-	// Query database for actual statistics
-	status := &OPAQUEAccountStatus{}
-
-	// Check for account password
-	var accountCount int
-	err := db.QueryRow(`
-		SELECT COUNT(*) FROM opaque_password_records 
-		WHERE record_type = 'account' AND record_identifier = ? AND is_active = true`,
-		u.Username).Scan(&accountCount)
-	if err != nil {
-		return nil, err
-	}
-	status.HasAccountPassword = accountCount > 0
-
-	// Count file passwords
-	var fileCount int
-	err = db.QueryRow(`
-		SELECT COUNT(*) FROM opaque_password_records 
-		WHERE record_type = 'file' AND associated_username = ? AND is_active = true`,
-		u.Username).Scan(&fileCount)
-	if err != nil {
-		return nil, err
-	}
-	status.FilePasswordCount = fileCount
-
-	// Get timestamps if account exists
-	if status.HasAccountPassword {
-		var createdAt, lastUsed sql.NullTime
-		err = db.QueryRow(`
-			SELECT created_at, last_used_at FROM opaque_password_records 
-			WHERE record_type = 'account' AND record_identifier = ? AND is_active = true LIMIT 1`,
-			u.Username).Scan(&createdAt, &lastUsed)
-		if err == nil {
-			if createdAt.Valid {
-				status.OPAQUECreatedAt = &createdAt.Time
-			}
-			if lastUsed.Valid {
-				status.LastOPAQUEAuth = &lastUsed.Time
-			}
-		}
-	}
-
-	return status, nil
-}
-
-// GetFilePasswordRecords gets all password records for a specific file owned by this user
-func (u *User) GetFilePasswordRecords(db *sql.DB, fileID string) ([]*auth.OPAQUEPasswordRecord, error) {
-	opm := auth.GetOPAQUEPasswordManagerWithDB(db)
-	return opm.GetFilePasswordRecords(fileID)
-}
-
-// AuthenticateFilePassword authenticates a file-specific password and returns the export key
-func (u *User) AuthenticateFilePassword(db *sql.DB, fileID, password string) ([]byte, error) {
-	recordIdentifier := fmt.Sprintf("%s:file:%s", u.Username, fileID)
-	opm := auth.GetOPAQUEPasswordManagerWithDB(db)
-
-	exportKey, err := opm.AuthenticatePassword(recordIdentifier, password)
-	if err != nil {
-		return nil, fmt.Errorf("file password authentication failed: %w", err)
-	}
-
-	return exportKey, nil
-}
-
-// DeleteFilePassword removes a specific file password record
-func (u *User) DeleteFilePassword(db *sql.DB, fileID, keyLabel string) error {
-	recordIdentifier := fmt.Sprintf("%s:file:%s", u.Username, fileID)
-	opm := auth.GetOPAQUEPasswordManagerWithDB(db)
-	return opm.DeletePasswordRecord(recordIdentifier)
-}
-
-// Delete removes the user and all associated OPAQUE records
+// Delete removes the user and all associated data
 func (u *User) Delete(db *sql.DB) error {
 	// Start transaction for atomic deletion
 	tx, err := db.Begin()

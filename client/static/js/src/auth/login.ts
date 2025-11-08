@@ -46,7 +46,7 @@ export class LoginManager {
       storeClientSecret('login_secret', loginInit.clientSecret);
 
       // Send credential request to server
-      const responseStep1 = await fetch('/api/opaque/auth/response', {
+      const responseStep1 = await fetch('/api/opaque/login/response', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -87,7 +87,7 @@ export class LoginManager {
       clearClientSecret('login_secret');
 
       // Send authentication token to server for verification
-      const responseStep2 = await fetch('/api/opaque/auth/finalize', {
+      const responseStep2 = await fetch('/api/opaque/login/finalize', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'

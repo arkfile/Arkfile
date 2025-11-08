@@ -35,9 +35,13 @@ func RegisterRoutes() {
 	// OPAQUE Authentication (Multi-Step Protocol) - with rate limiting protection
 	Echo.POST("/api/opaque/register/response", RegisterRateLimitMiddleware(OpaqueRegisterResponse))
 	Echo.POST("/api/opaque/register/finalize", RegisterRateLimitMiddleware(OpaqueRegisterFinalize))
-	Echo.POST("/api/opaque/auth/response", LoginRateLimitMiddleware(OpaqueAuthResponse))
-	Echo.POST("/api/opaque/auth/finalize", LoginRateLimitMiddleware(OpaqueAuthFinalize))
+	Echo.POST("/api/opaque/login/response", LoginRateLimitMiddleware(OpaqueAuthResponse))
+	Echo.POST("/api/opaque/login/finalize", LoginRateLimitMiddleware(OpaqueAuthFinalize))
 	Echo.GET("/api/opaque/health", OpaqueHealthCheck)
+
+	// Admin OPAQUE Authentication (Multi-Step Protocol) - separate endpoints with admin verification
+	Echo.POST("/api/admin/login/response", LoginRateLimitMiddleware(AdminOpaqueAuthResponse))
+	Echo.POST("/api/admin/login/finalize", LoginRateLimitMiddleware(AdminOpaqueAuthFinalize))
 
 	// TOTP Authentication - requires authentication with rate limiting protection
 	auth.Echo.POST("/api/totp/setup", TOTPSetup)

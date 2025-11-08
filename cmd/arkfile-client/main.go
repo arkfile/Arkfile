@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/84adam/Arkfile/auth"
 	"golang.org/x/term"
 )
 
@@ -42,6 +44,7 @@ USAGE:
     arkfile-client [global options] command [command options] [arguments...]
 
 COMMANDS:
+    register      Register a new account with arkfile server
     login         Authenticate with arkfile server
     upload        Upload pre-encrypted file to server
     download      Download encrypted file from server  
@@ -62,12 +65,14 @@ IMPORTANT:
     Use 'cryptocli' for all cryptographic operations.
 
 WORKFLOW:
-    1. Encrypt file: cryptocli encrypt-password --file doc.pdf --username alice
-    2. Upload: arkfile-client upload --file doc.pdf.enc --metadata metadata.json
-    3. Download: arkfile-client download --file-id xyz --output encrypted.dat
-    4. Decrypt: cryptocli decrypt-password --file encrypted.dat --username alice
+    1. Register: arkfile-client register --username alice --email alice@example.com
+    2. Encrypt file: cryptocli encrypt-password --file doc.pdf --username alice
+    3. Upload: arkfile-client upload --file doc.pdf.enc --metadata metadata.json
+    4. Download: arkfile-client download --file-id xyz --output encrypted.dat
+    5. Decrypt: cryptocli decrypt-password --file encrypted.dat --username alice
 
 EXAMPLES:
+    arkfile-client register --username alice --email alice@example.com
     arkfile-client login --username alice
     arkfile-client upload --file document.pdf.enc --metadata metadata.json
     arkfile-client download --file-id abc123 --output downloaded.enc
@@ -190,6 +195,11 @@ func main() {
 
 	// Execute command
 	switch command {
+	case "register":
+		if err := handleRegisterCommand(client, config, args); err != nil {
+			logError("Registration failed: %v", err)
+			os.Exit(1)
+		}
 	case "login":
 		if err := handleLoginCommand(client, config, args); err != nil {
 			logError("Login failed: %v", err)
@@ -298,6 +308,155 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 	return &apiResp, nil
 }
 
+// handleRegisterCommand processes registration command
+func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+	fs := flag.NewFlagSet("register", flag.ExitOnError)
+	var (
+		usernameFlag = fs.String("username", config.Username, "Username for registration")
+		emailFlag    = fs.String("email", "", "Email address for registration")
+		autoLogin    = fs.Bool("auto-login", true, "Automatically login after successful registration")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-client register [FLAGS]
+
+Register a new account with arkfile server using OPAQUE protocol.
+
+FLAGS:
+    --username USER    Username for registration (required)
+    --email EMAIL      Email address for registration (required)
+    --auto-login       Automatically login after registration (default: true)
+    --help            Show this help message
+
+EXAMPLES:
+    arkfile-client register --username alice --email alice@example.com
+    arkfile-client register --username bob --email bob@example.com --auto-login=false
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *usernameFlag == "" {
+		return fmt.Errorf("username is required")
+	}
+
+	if *emailFlag == "" {
+		return fmt.Errorf("email is required")
+	}
+
+	// Get password securely
+	password, err := readPassword(fmt.Sprintf("Enter password for new user %s: ", *usernameFlag))
+	if err != nil {
+		return fmt.Errorf("failed to read password: %w", err)
+	}
+
+	// Confirm password
+	passwordConfirm, err := readPassword("Confirm password: ")
+	if err != nil {
+		// Clear first password
+		for i := range password {
+			password[i] = 0
+		}
+		return fmt.Errorf("failed to read password confirmation: %w", err)
+	}
+
+	// Verify passwords match
+	if !bytes.Equal(password, passwordConfirm) {
+		// Clear both passwords
+		for i := range password {
+			password[i] = 0
+		}
+		for i := range passwordConfirm {
+			passwordConfirm[i] = 0
+		}
+		return fmt.Errorf("passwords do not match")
+	}
+
+	// Clear confirmation password (no longer needed)
+	for i := range passwordConfirm {
+		passwordConfirm[i] = 0
+	}
+
+	// Perform OPAQUE multi-step registration
+	logVerbose("Starting OPAQUE registration for user: %s", *usernameFlag)
+
+	// Step 1: Create registration request (client-side)
+	clientSecret, registrationRequest, err := auth.ClientCreateRegistrationRequest(password)
+	if err != nil {
+		// Securely clear password
+		for i := range password {
+			password[i] = 0
+		}
+		return fmt.Errorf("failed to create registration request: %w", err)
+	}
+
+	// Securely clear the password from memory after creating registration request
+	for i := range password {
+		password[i] = 0
+	}
+
+	// Encode registration request for transmission
+	registrationRequestB64 := base64.StdEncoding.EncodeToString(registrationRequest)
+
+	// Step 2: Send registration request to server
+	regReq := map[string]string{
+		"username":             *usernameFlag,
+		"email":                *emailFlag,
+		"registration_request": registrationRequestB64,
+	}
+
+	regResp, err := client.makeRequest("POST", "/api/opaque/register/response", regReq, "")
+	if err != nil {
+		return fmt.Errorf("OPAQUE registration failed: %w", err)
+	}
+
+	// Step 3: Decode server's registration response
+	registrationResponseB64, ok := regResp.Data["registration_response"].(string)
+	if !ok {
+		return fmt.Errorf("invalid server response: missing registration_response")
+	}
+
+	registrationResponse, err := base64.StdEncoding.DecodeString(registrationResponseB64)
+	if err != nil {
+		return fmt.Errorf("failed to decode registration response: %w", err)
+	}
+
+	// Step 4: Finalize registration (client-side)
+	registrationRecord, _, err := auth.ClientFinalizeRegistration(clientSecret, registrationResponse)
+	if err != nil {
+		return fmt.Errorf("failed to finalize registration: %w", err)
+	}
+
+	// Encode registration record for transmission
+	registrationRecordB64 := base64.StdEncoding.EncodeToString(registrationRecord)
+
+	// Step 5: Send registration record to server to complete registration
+	finalizeReq := map[string]string{
+		"session_id":          regResp.SessionID,
+		"username":            *usernameFlag,
+		"registration_record": registrationRecordB64,
+	}
+
+	_, err = client.makeRequest("POST", "/api/opaque/register/finalize", finalizeReq, "")
+	if err != nil {
+		return fmt.Errorf("OPAQUE registration finalization failed: %w", err)
+	}
+
+	fmt.Printf("Registration successful for user: %s\n", *usernameFlag)
+	fmt.Printf("Email: %s\n", *emailFlag)
+
+	// Auto-login if requested
+	if *autoLogin {
+		// Note: We cannot auto-login because we've already cleared the password
+		// User will need to login manually
+		fmt.Printf("\nPlease login manually with: arkfile-client login --username %s\n", *usernameFlag)
+	}
+
+	return nil
+}
+
 // handleLoginCommand processes login command
 func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
@@ -341,21 +500,68 @@ EXAMPLES:
 		return fmt.Errorf("failed to read password: %w", err)
 	}
 
-	// Perform OPAQUE login
+	// Perform OPAQUE multi-step authentication
 	logVerbose("Starting OPAQUE authentication for user: %s", *usernameFlag)
 
-	loginReq := map[string]string{
-		"username": *usernameFlag,
-		"password": string(password),
+	// Step 1: Create credential request (client-side)
+	clientSecret, credentialRequest, err := auth.ClientCreateCredentialRequest(password)
+	if err != nil {
+		// Securely clear password
+		for i := range password {
+			password[i] = 0
+		}
+		return fmt.Errorf("failed to create credential request: %w", err)
 	}
-	// Securely clear the password from memory after it's used for loginReq
+
+	// Securely clear the password from memory after creating credential request
 	for i := range password {
 		password[i] = 0
 	}
 
-	loginResp, err := client.makeRequest("POST", "/api/opaque/login", loginReq, "")
+	// Encode credential request for transmission
+	credentialRequestB64 := base64.StdEncoding.EncodeToString(credentialRequest)
+
+	// Step 2: Send credential request to server
+	authReq := map[string]string{
+		"username":           *usernameFlag,
+		"credential_request": credentialRequestB64,
+	}
+
+	authResp, err := client.makeRequest("POST", "/api/opaque/login/response", authReq, "")
 	if err != nil {
-		return fmt.Errorf("OPAQUE login failed: %w", err)
+		return fmt.Errorf("OPAQUE authentication failed: %w", err)
+	}
+
+	// Step 3: Decode server's credential response
+	credentialResponseB64, ok := authResp.Data["credential_response"].(string)
+	if !ok {
+		return fmt.Errorf("invalid server response: missing credential_response")
+	}
+
+	credentialResponse, err := base64.StdEncoding.DecodeString(credentialResponseB64)
+	if err != nil {
+		return fmt.Errorf("failed to decode credential response: %w", err)
+	}
+
+	// Step 4: Recover credentials and generate authU (client-side)
+	_, authU, _, err := auth.ClientRecoverCredentials(clientSecret, credentialResponse)
+	if err != nil {
+		return fmt.Errorf("failed to recover credentials: %w", err)
+	}
+
+	// Encode authU for transmission
+	authUB64 := base64.StdEncoding.EncodeToString(authU)
+
+	// Step 5: Send authU to server to finalize authentication
+	finalizeReq := map[string]string{
+		"session_id": authResp.SessionID,
+		"username":   *usernameFlag,
+		"auth_u":     authUB64,
+	}
+
+	loginResp, err := client.makeRequest("POST", "/api/opaque/login/finalize", finalizeReq, "")
+	if err != nil {
+		return fmt.Errorf("OPAQUE authentication finalization failed: %w", err)
 	}
 
 	// Handle TOTP requirement

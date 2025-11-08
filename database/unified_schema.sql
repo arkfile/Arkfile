@@ -1,5 +1,4 @@
 -- Arkfile Complete Database Schema
--- Single comprehensive schema with proper dependency ordering
 
 -- =====================================================
 -- PHASE 1: CORE USER AND FILE MANAGEMENT TABLES
@@ -16,7 +15,9 @@ CREATE TABLE IF NOT EXISTS users (
     is_approved BOOLEAN NOT NULL DEFAULT false,
     approved_by TEXT,
     approved_at TIMESTAMP,
-    is_admin BOOLEAN NOT NULL DEFAULT false
+    is_admin BOOLEAN NOT NULL DEFAULT false,
+    last_login TIMESTAMP,
+    registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- File metadata table (core file information with encrypted metadata)
@@ -36,67 +37,63 @@ CREATE TABLE IF NOT EXISTS file_metadata (
     size_bytes BIGINT NOT NULL DEFAULT 0,
     padded_size BIGINT,                         -- Size with padding for privacy/security
     upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (owner_username) REFERENCES users(username)
+    FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 -- =====================================================
--- PHASE 2: AUTHENTICATION AND SECURITY TABLES
+-- PHASE 2: RFC-COMPLIANT OPAQUE AUTHENTICATION
 -- =====================================================
 
 -- OPAQUE server keys (single row table for server-wide keys)
 CREATE TABLE IF NOT EXISTS opaque_server_keys (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY CHECK (id = 1),      -- Enforce single row
     server_secret_key BLOB NOT NULL,
     server_public_key BLOB NOT NULL,
     oprf_seed BLOB NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- OPAQUE user authentication records
+-- RFC-compliant OPAQUE user authentication records
+-- This is the ONLY table for OPAQUE user data - no file-specific OPAQUE records
 CREATE TABLE IF NOT EXISTS opaque_user_data (
     username TEXT PRIMARY KEY,
-    serialized_record BLOB NOT NULL,
-    created_at DATETIME NOT NULL,
+    opaque_user_record BLOB NOT NULL,           -- Serialized OPAQUE registration record
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
--- OPAQUE password records for files and accounts
-CREATE TABLE IF NOT EXISTS opaque_password_records (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    record_type TEXT NOT NULL,           -- 'account', 'file_custom' (NO 'share' type)
-    record_identifier TEXT NOT NULL UNIQUE, -- username, 'user:file:filename'
-    opaque_user_record BLOB NOT NULL,    -- OPAQUE registration data
-    associated_file_id TEXT,             -- NULL for account, filename for file_custom
-    associated_username TEXT,            -- User who created this record
-    key_label TEXT,                      -- Human-readable label
-    password_hint_encrypted BLOB,        -- Encrypted with export key
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_used_at TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE
-);
-
--- OPAQUE authentication sessions (multi-step protocol state)
+-- Multi-step OPAQUE authentication sessions
+-- Stores intermediate state during the 3-step authentication protocol
 CREATE TABLE IF NOT EXISTS opaque_auth_sessions (
-    username TEXT PRIMARY KEY,
-    auth_u_server TEXT NOT NULL,         -- base64-encoded server authentication token
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    session_id TEXT PRIMARY KEY,                -- UUID for session identification
+    username TEXT NOT NULL,
+    session_type TEXT NOT NULL,                 -- 'user_authentication', 'admin_authentication'
+    auth_u_server BLOB NOT NULL,                -- Server's authentication state
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,              -- Sessions expire after 15 minutes
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
--- JWT token management
+-- =====================================================
+-- PHASE 3: JWT TOKEN MANAGEMENT
+-- =====================================================
+
 CREATE TABLE IF NOT EXISTS refresh_tokens (
     id TEXT PRIMARY KEY,
     username TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     expires_at TIMESTAMP NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_revoked BOOLEAN DEFAULT FALSE,
-    is_used BOOLEAN DEFAULT FALSE,
+    revoked BOOLEAN DEFAULT FALSE,
+    last_used TIMESTAMP,
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS revoked_tokens (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    token_id TEXT NOT NULL UNIQUE,  -- the jti claim value
+    token_id TEXT NOT NULL UNIQUE,              -- the jti claim value
     username TEXT NOT NULL,
     revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP NOT NULL,
@@ -105,17 +102,17 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
 );
 
 -- =====================================================
--- PHASE 3: TOTP TWO-FACTOR AUTHENTICATION
+-- PHASE 4: TOTP TWO-FACTOR AUTHENTICATION
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS user_totp (
     username TEXT PRIMARY KEY,
-    secret_encrypted BLOB NOT NULL,           -- AES-GCM encrypted with user-specific TOTP key
-    backup_codes_encrypted BLOB,              -- JSON array of codes, encrypted
+    secret_encrypted BLOB NOT NULL,             -- AES-GCM encrypted with user-specific TOTP key
+    backup_codes_encrypted BLOB,                -- JSON array of codes, encrypted
     enabled BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_used TIMESTAMP,
-    setup_completed BOOLEAN DEFAULT FALSE,    -- Two-phase setup
+    setup_completed BOOLEAN DEFAULT FALSE,      -- Two-phase setup
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
@@ -123,9 +120,9 @@ CREATE TABLE IF NOT EXISTS user_totp (
 CREATE TABLE IF NOT EXISTS totp_usage_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL,
-    code_hash TEXT NOT NULL,                  -- SHA-256 hash of used code
+    code_hash TEXT NOT NULL,                    -- SHA-256 hash of used code
     used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    window_start INTEGER NOT NULL,            -- Unix timestamp of 30s window
+    window_start INTEGER NOT NULL,              -- Unix timestamp of 30s window
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
@@ -133,43 +130,45 @@ CREATE TABLE IF NOT EXISTS totp_usage_log (
 CREATE TABLE IF NOT EXISTS totp_backup_usage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL,
-    code_hash TEXT NOT NULL,                  -- SHA-256 hash of used backup code
+    code_hash TEXT NOT NULL,                    -- SHA-256 hash of used backup code
     used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 -- =====================================================
--- PHASE 4: FILE SHARING AND ENCRYPTION
+-- PHASE 5: FILE SHARING AND ENCRYPTION
 -- =====================================================
 
 -- File share keys (Argon2id-based anonymous shares)
 CREATE TABLE IF NOT EXISTS file_share_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    share_id TEXT NOT NULL UNIQUE,        -- 256-bit crypto-secure identifier
-    file_id TEXT NOT NULL,                -- Reference to the shared file
-    owner_username TEXT NOT NULL,         -- User who created the share
-    salt TEXT NOT NULL,                   -- base64-encoded 32-byte random salt for Argon2id
-    encrypted_fek TEXT NOT NULL,          -- base64-encoded FEK encrypted with Argon2id-derived share key
+    share_id TEXT NOT NULL UNIQUE,              -- 256-bit crypto-secure identifier
+    file_id TEXT NOT NULL,                      -- Reference to the shared file
+    owner_username TEXT NOT NULL,               -- User who created the share
+    salt TEXT NOT NULL,                         -- base64-encoded 32-byte random salt for Argon2id
+    encrypted_fek TEXT NOT NULL,                -- base64-encoded FEK encrypted with Argon2id-derived share key
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at DATETIME,                  -- Optional expiration
-    FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE
+    expires_at DATETIME,                        -- Optional expiration
+    access_count INTEGER DEFAULT 0,             -- Track number of accesses
+    max_accesses INTEGER,                       -- Optional access limit
+    FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES file_metadata(file_id) ON DELETE CASCADE
 );
 
--- File encryption keys
-CREATE TABLE IF NOT EXISTS file_encryption_keys (
+-- File shares (legacy table for compatibility - may be deprecated in future)
+CREATE TABLE IF NOT EXISTS file_shares (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    share_id TEXT NOT NULL UNIQUE,
     file_id TEXT NOT NULL,
-    key_id TEXT NOT NULL,
-    key_type TEXT NOT NULL,  -- 'account' or 'custom'
-    key_label TEXT NOT NULL, -- User-friendly name
-    password_hint TEXT,      -- Optional hint for custom passwords
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_primary BOOLEAN DEFAULT FALSE,
+    owner_username TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME,
+    FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE,
     FOREIGN KEY (file_id) REFERENCES file_metadata(file_id) ON DELETE CASCADE
 );
 
 -- =====================================================
--- PHASE 5: CHUNKED UPLOAD SYSTEM
+-- PHASE 6: CHUNKED UPLOAD SYSTEM
 -- =====================================================
 
 -- Upload sessions for chunked uploads
@@ -195,7 +194,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,
-    FOREIGN KEY (owner_username) REFERENCES users(username)
+    FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 -- Individual chunk tracking
@@ -212,7 +211,7 @@ CREATE TABLE IF NOT EXISTS upload_chunks (
 );
 
 -- =====================================================
--- PHASE 6: SECURITY AND MONITORING
+-- PHASE 7: SECURITY AND MONITORING
 -- =====================================================
 
 -- Security events with privacy-preserving entity identification
@@ -220,19 +219,19 @@ CREATE TABLE IF NOT EXISTS security_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     event_type TEXT NOT NULL,
-    entity_id TEXT NOT NULL,           -- HMAC-based, privacy-preserving
-    time_window TEXT NOT NULL,         -- "2025-06-20"
-    username TEXT,                     -- Only for authenticated events
-    device_profile TEXT,               -- Argon2ID profile
+    entity_id TEXT NOT NULL,                    -- HMAC-based, privacy-preserving
+    time_window TEXT NOT NULL,                  -- "2025-06-20"
+    username TEXT,                              -- Only for authenticated events
+    device_profile TEXT,                        -- Argon2ID profile
     severity TEXT NOT NULL DEFAULT 'INFO',
-    details TEXT,                      -- Changed from JSON to TEXT for rqlite compatibility
+    details TEXT,                               -- JSON stored as TEXT for rqlite compatibility
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Rate limiting state with entity ID privacy protection
 CREATE TABLE IF NOT EXISTS rate_limit_state (
     entity_id TEXT NOT NULL,
-    time_window TEXT NOT NULL,         -- "2025-06-20"
+    time_window TEXT NOT NULL,                  -- "2025-06-20"
     endpoint TEXT NOT NULL,
     device_profile TEXT,
     request_count INTEGER NOT NULL DEFAULT 0,
@@ -258,14 +257,14 @@ CREATE TABLE IF NOT EXISTS share_access_attempts (
 );
 
 -- =====================================================
--- PHASE 7: OPERATIONAL MONITORING
+-- PHASE 8: OPERATIONAL MONITORING
 -- =====================================================
 
 -- Entity ID configuration and master secret storage
 CREATE TABLE IF NOT EXISTS entity_id_config (
-    id INTEGER PRIMARY KEY,
-    master_secret_hash TEXT NOT NULL,  -- Hash of master secret for health checks
-    rotation_schedule TEXT NOT NULL,   -- "daily"
+    id INTEGER PRIMARY KEY CHECK (id = 1),      -- Enforce single row
+    master_secret_hash TEXT NOT NULL,           -- Hash of master secret for health checks
+    rotation_schedule TEXT NOT NULL,            -- "daily"
     last_rotation DATETIME,
     next_rotation DATETIME,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -275,10 +274,10 @@ CREATE TABLE IF NOT EXISTS entity_id_config (
 -- Key health monitoring status
 CREATE TABLE IF NOT EXISTS key_health_status (
     component TEXT PRIMARY KEY,
-    status TEXT NOT NULL,              -- "healthy", "warning", "critical"
+    status TEXT NOT NULL,                       -- "healthy", "warning", "critical"
     last_checked DATETIME NOT NULL,
     next_check DATETIME NOT NULL,
-    details TEXT,                      -- Changed from JSON to TEXT
+    details TEXT,                               -- JSON stored as TEXT
     alert_level TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -289,10 +288,10 @@ CREATE TABLE IF NOT EXISTS security_alerts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     alert_type TEXT NOT NULL,
     severity TEXT NOT NULL,
-    entity_id TEXT,                    -- Optional entity association
+    entity_id TEXT,                             -- Optional entity association
     time_window TEXT,
     message TEXT NOT NULL,
-    details TEXT,                      -- Changed from JSON to TEXT
+    details TEXT,                               -- JSON stored as TEXT
     acknowledged BOOLEAN DEFAULT FALSE,
     acknowledged_by TEXT,
     acknowledged_at DATETIME,
@@ -300,7 +299,7 @@ CREATE TABLE IF NOT EXISTS security_alerts (
 );
 
 -- =====================================================
--- PHASE 8: ACTIVITY LOGGING
+-- PHASE 9: ACTIVITY LOGGING
 -- =====================================================
 
 -- User activity tracking
@@ -310,7 +309,7 @@ CREATE TABLE IF NOT EXISTS user_activity (
     action TEXT NOT NULL,
     target TEXT,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (username) REFERENCES users(username)
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 -- Admin actions logs
@@ -318,40 +317,74 @@ CREATE TABLE IF NOT EXISTS admin_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     admin_username TEXT NOT NULL,
     action TEXT NOT NULL,
-    target_username TEXT NOT NULL,
+    target_username TEXT,
     details TEXT,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (admin_username) REFERENCES users(username),
-    FOREIGN KEY (target_username) REFERENCES users(username)
+    FOREIGN KEY (admin_username) REFERENCES users(username) ON DELETE CASCADE
 );
 
 -- =====================================================
--- PHASE 9: INDEXES FOR PERFORMANCE
+-- PHASE 10: CREDITS AND BILLING SYSTEM
+-- =====================================================
+
+-- User credits balance table
+CREATE TABLE IF NOT EXISTS user_credits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL,
+    balance_usd_cents INTEGER NOT NULL DEFAULT 0,  -- Store as cents to avoid floating point issues
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE,
+    UNIQUE(username)
+);
+
+-- Credit transactions log with full audit trail
+CREATE TABLE IF NOT EXISTS credit_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    transaction_id TEXT,                        -- External transaction ID (Bitcoin, PayPal, etc.)
+    username TEXT NOT NULL,
+    amount_usd_cents INTEGER NOT NULL,          -- Positive for credits, negative for debits
+    balance_after_usd_cents INTEGER NOT NULL,   -- Balance after this transaction
+    transaction_type TEXT NOT NULL,             -- 'credit', 'debit', 'adjustment', 'refund'
+    reason TEXT,                                -- Human-readable reason for transaction
+    admin_username TEXT,                        -- NULL for user transactions, filled for admin adjustments
+    metadata TEXT,                              -- JSON for additional details
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+-- =====================================================
+-- PHASE 11: INDEXES FOR PERFORMANCE
 -- =====================================================
 
 -- Core table indexes
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_users_is_approved ON users(is_approved);
+CREATE INDEX IF NOT EXISTS idx_users_is_admin ON users(is_admin);
+
 CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata(file_id);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_storage_id ON file_metadata(storage_id);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_owner ON file_metadata(owner_username);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_upload_date ON file_metadata(upload_date);
 
--- Authentication indexes
+-- OPAQUE authentication indexes
 CREATE INDEX IF NOT EXISTS idx_opaque_user_data_username ON opaque_user_data(username);
-CREATE INDEX IF NOT EXISTS idx_opaque_passwords_type ON opaque_password_records(record_type);
-CREATE INDEX IF NOT EXISTS idx_opaque_passwords_identifier ON opaque_password_records(record_identifier);
-CREATE INDEX IF NOT EXISTS idx_opaque_passwords_file ON opaque_password_records(associated_file_id);
-CREATE INDEX IF NOT EXISTS idx_opaque_passwords_user ON opaque_password_records(associated_username);
-CREATE INDEX IF NOT EXISTS idx_opaque_passwords_active ON opaque_password_records(is_active);
+CREATE INDEX IF NOT EXISTS idx_opaque_auth_sessions_username ON opaque_auth_sessions(username);
+CREATE INDEX IF NOT EXISTS idx_opaque_auth_sessions_expires ON opaque_auth_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_opaque_auth_sessions_type ON opaque_auth_sessions(session_type);
 
 -- Token management indexes
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(username);
 CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_expires ON refresh_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_jti ON revoked_tokens(token_id);
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_user ON revoked_tokens(username);
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_at);
 
 -- TOTP indexes
 CREATE INDEX IF NOT EXISTS idx_user_totp_username ON user_totp(username);
+CREATE INDEX IF NOT EXISTS idx_user_totp_enabled ON user_totp(enabled);
 CREATE INDEX IF NOT EXISTS idx_totp_usage_cleanup ON totp_usage_log(used_at);
 CREATE INDEX IF NOT EXISTS idx_totp_usage_user_window ON totp_usage_log(username, window_start);
 CREATE INDEX IF NOT EXISTS idx_totp_backup_user ON totp_backup_usage(username);
@@ -362,14 +395,14 @@ CREATE INDEX IF NOT EXISTS idx_file_share_keys_share_id ON file_share_keys(share
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_file_id ON file_share_keys(file_id);
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_owner ON file_share_keys(owner_username);
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_expires_at ON file_share_keys(expires_at);
-
--- File encryption keys indexes
-CREATE INDEX IF NOT EXISTS idx_file_encryption_keys_file ON file_encryption_keys(file_id);
-CREATE INDEX IF NOT EXISTS idx_file_encryption_keys_key ON file_encryption_keys(key_id);
+CREATE INDEX IF NOT EXISTS idx_file_shares_share_id ON file_shares(share_id);
+CREATE INDEX IF NOT EXISTS idx_file_shares_file_id ON file_shares(file_id);
+CREATE INDEX IF NOT EXISTS idx_file_shares_owner ON file_shares(owner_username);
 
 -- Upload session indexes
 CREATE INDEX IF NOT EXISTS idx_upload_sessions_owner ON upload_sessions(owner_username);
 CREATE INDEX IF NOT EXISTS idx_upload_sessions_status ON upload_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_upload_sessions_expires ON upload_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_upload_chunks_session ON upload_chunks(session_id);
 
 -- Security and monitoring indexes
@@ -377,6 +410,7 @@ CREATE INDEX IF NOT EXISTS idx_events_window ON security_events(time_window, eve
 CREATE INDEX IF NOT EXISTS idx_events_entity ON security_events(entity_id, time_window);
 CREATE INDEX IF NOT EXISTS idx_events_severity ON security_events(severity, timestamp);
 CREATE INDEX IF NOT EXISTS idx_events_type ON security_events(event_type, timestamp);
+CREATE INDEX IF NOT EXISTS idx_events_username ON security_events(username);
 
 -- Rate limiting indexes
 CREATE INDEX IF NOT EXISTS idx_rate_limit_cleanup ON rate_limit_state(time_window);
@@ -394,51 +428,12 @@ CREATE INDEX IF NOT EXISTS idx_alerts_severity ON security_alerts(severity, crea
 CREATE INDEX IF NOT EXISTS idx_alerts_unack ON security_alerts(acknowledged, created_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_entity ON security_alerts(entity_id, time_window);
 
-
--- =====================================================
--- PHASE 10: TRIGGERS FOR AUTOMATIC UPDATES
--- =====================================================
-
--- Update trigger to maintain updated_at timestamp for share_access_attempts
-CREATE TRIGGER IF NOT EXISTS update_share_access_attempts_updated_at
-    AFTER UPDATE ON share_access_attempts
-    FOR EACH ROW
-BEGIN
-    UPDATE share_access_attempts 
-    SET updated_at = CURRENT_TIMESTAMP 
-    WHERE id = NEW.id;
-END;
-
-
--- =====================================================
--- PHASE 11: CREDITS AND BILLING SYSTEM
--- =====================================================
-
--- User credits balance table
-CREATE TABLE IF NOT EXISTS user_credits (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL,
-    balance_usd_cents INTEGER NOT NULL DEFAULT 0,  -- Store as cents to avoid floating point issues
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE,
-    UNIQUE(username)
-);
-
--- Credit transactions log with full audit trail
-CREATE TABLE IF NOT EXISTS credit_transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    transaction_id TEXT,                          -- External transaction ID (Bitcoin, PayPal, etc.)
-    username TEXT NOT NULL,
-    amount_usd_cents INTEGER NOT NULL,            -- Positive for credits, negative for debits
-    balance_after_usd_cents INTEGER NOT NULL,     -- Balance after this transaction
-    transaction_type TEXT NOT NULL,               -- 'credit', 'debit', 'adjustment', 'refund'
-    reason TEXT,                                  -- Human-readable reason for transaction
-    admin_username TEXT,                          -- NULL for user transactions, filled for admin adjustments
-    metadata TEXT,                                -- JSON for additional details
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
-);
+-- Activity logging indexes
+CREATE INDEX IF NOT EXISTS idx_user_activity_username ON user_activity(username);
+CREATE INDEX IF NOT EXISTS idx_user_activity_timestamp ON user_activity(timestamp);
+CREATE INDEX IF NOT EXISTS idx_admin_logs_admin ON admin_logs(admin_username);
+CREATE INDEX IF NOT EXISTS idx_admin_logs_target ON admin_logs(target_username);
+CREATE INDEX IF NOT EXISTS idx_admin_logs_timestamp ON admin_logs(timestamp);
 
 -- Credits system indexes
 CREATE INDEX IF NOT EXISTS idx_user_credits_username ON user_credits(username);
@@ -448,7 +443,51 @@ CREATE INDEX IF NOT EXISTS idx_credit_transactions_type ON credit_transactions(t
 CREATE INDEX IF NOT EXISTS idx_credit_transactions_created_at ON credit_transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_credit_transactions_admin ON credit_transactions(admin_username);
 
--- Update trigger to maintain updated_at timestamp for user_credits
+-- =====================================================
+-- PHASE 12: TRIGGERS FOR AUTOMATIC UPDATES
+-- =====================================================
+
+-- Update trigger for opaque_user_data
+CREATE TRIGGER IF NOT EXISTS update_opaque_user_data_updated_at
+    AFTER UPDATE ON opaque_user_data
+    FOR EACH ROW
+BEGIN
+    UPDATE opaque_user_data 
+    SET updated_at = CURRENT_TIMESTAMP 
+    WHERE username = NEW.username;
+END;
+
+-- Update trigger for opaque_server_keys
+CREATE TRIGGER IF NOT EXISTS update_opaque_server_keys_updated_at
+    AFTER UPDATE ON opaque_server_keys
+    FOR EACH ROW
+BEGIN
+    UPDATE opaque_server_keys 
+    SET updated_at = CURRENT_TIMESTAMP 
+    WHERE id = NEW.id;
+END;
+
+-- Update trigger for upload_sessions
+CREATE TRIGGER IF NOT EXISTS update_upload_sessions_updated_at
+    AFTER UPDATE ON upload_sessions
+    FOR EACH ROW
+BEGIN
+    UPDATE upload_sessions 
+    SET updated_at = CURRENT_TIMESTAMP 
+    WHERE id = NEW.id;
+END;
+
+-- Update trigger for share_access_attempts
+CREATE TRIGGER IF NOT EXISTS update_share_access_attempts_updated_at
+    AFTER UPDATE ON share_access_attempts
+    FOR EACH ROW
+BEGIN
+    UPDATE share_access_attempts 
+    SET updated_at = CURRENT_TIMESTAMP 
+    WHERE id = NEW.id;
+END;
+
+-- Update trigger for user_credits
 CREATE TRIGGER IF NOT EXISTS update_user_credits_updated_at
     AFTER UPDATE ON user_credits
     FOR EACH ROW
@@ -458,8 +497,20 @@ BEGIN
     WHERE id = NEW.id;
 END;
 
+-- Update trigger for rate_limit_state
+CREATE TRIGGER IF NOT EXISTS update_rate_limit_state_updated_at
+    AFTER UPDATE ON rate_limit_state
+    FOR EACH ROW
+BEGIN
+    UPDATE rate_limit_state 
+    SET updated_at = CURRENT_TIMESTAMP 
+    WHERE entity_id = NEW.entity_id 
+      AND time_window = NEW.time_window 
+      AND endpoint = NEW.endpoint;
+END;
+
 -- =====================================================
--- PHASE 12: MONITORING VIEWS
+-- PHASE 13: MONITORING VIEWS
 -- =====================================================
 
 -- View for monitoring rate limiting activity
@@ -487,3 +538,19 @@ SELECT
 FROM share_access_attempts
 GROUP BY share_id
 ORDER BY total_failures DESC, total_attempts DESC;
+
+-- View for user authentication status
+CREATE VIEW IF NOT EXISTS user_auth_status AS
+SELECT 
+    u.username,
+    u.is_approved,
+    u.is_admin,
+    u.created_at as user_created_at,
+    u.last_login,
+    CASE WHEN oud.username IS NOT NULL THEN 1 ELSE 0 END as has_opaque_account,
+    CASE WHEN ut.username IS NOT NULL THEN 1 ELSE 0 END as has_totp,
+    ut.enabled as totp_enabled,
+    ut.setup_completed as totp_setup_completed
+FROM users u
+LEFT JOIN opaque_user_data oud ON u.username = oud.username
+LEFT JOIN user_totp ut ON u.username = ut.username;

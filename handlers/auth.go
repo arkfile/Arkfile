@@ -423,12 +423,12 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "User creation failed")
 	}
 
-	// Store OPAQUE record in opaque_password_records table
+	// Store OPAQUE record in RFC-compliant opaque_user_data table
 	_, err = tx.Exec(`
-		INSERT INTO opaque_password_records 
-		(record_type, record_identifier, opaque_user_record, associated_username, is_active)
-		VALUES (?, ?, ?, ?, ?)`,
-		"account", request.Username, userRecord, request.Username, true)
+		INSERT INTO opaque_user_data 
+		(username, opaque_user_record, created_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)`,
+		request.Username, userRecord)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to store OPAQUE record for %s: %v", request.Username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to store OPAQUE record")
@@ -498,11 +498,11 @@ func OpaqueAuthResponse(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Username is required")
 	}
 
-	// Get user record from database
+	// Get user record from RFC-compliant opaque_user_data table
 	var userRecord []byte
 	err := database.DB.QueryRow(`
-		SELECT opaque_user_record FROM opaque_password_records 
-		WHERE record_type = 'account' AND record_identifier = ? AND is_active = true`,
+		SELECT opaque_user_record FROM opaque_user_data 
+		WHERE username = ?`,
 		request.Username).Scan(&userRecord)
 	if err != nil {
 		logging.ErrorLogger.Printf("User not found for auth: %s", request.Username)

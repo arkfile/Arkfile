@@ -126,7 +126,7 @@ func AdminCleanupTestUser(c echo.Context) error {
 	}{
 		{"users", "DELETE FROM users WHERE username = ?"},
 		{"opaque_user_data", "DELETE FROM opaque_user_data WHERE username = ?"},
-		{"opaque_password_records", "DELETE FROM opaque_password_records WHERE record_identifier = ? OR associated_username = ?"},
+		{"opaque_user_data", "DELETE FROM opaque_user_data WHERE username = ?"},
 		{"user_totp", "DELETE FROM user_totp WHERE username = ?"},
 		{"refresh_tokens", "DELETE FROM refresh_tokens WHERE username = ?"},
 		{"totp_usage_log", "DELETE FROM totp_usage_log WHERE username = ?"},
@@ -140,8 +140,8 @@ func AdminCleanupTestUser(c echo.Context) error {
 		var err error
 
 		// Handle tables that need different parameter patterns
-		if op.table == "opaque_password_records" {
-			result, err = tx.Exec(op.query, req.Username, req.Username)
+		if op.table == "opaque_user_data" {
+			result, err = tx.Exec(op.query, req.Username)
 		} else {
 			result, err = tx.Exec(op.query, req.Username)
 		}
@@ -381,8 +381,8 @@ func AdminGetUserStatus(c echo.Context) error {
 		}
 	}
 
-	// Get OPAQUE status
-	opaqueStatus, err := user.GetOPAQUEAccountStatus(database.DB)
+	// Get OPAQUE status using RFC-compliant opaque_user_data table
+	hasAccount, err := user.HasOPAQUEAccount(database.DB)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get OPAQUE status for %s: %v", targetUsername, err)
 		if response.Details == nil {
@@ -391,8 +391,8 @@ func AdminGetUserStatus(c echo.Context) error {
 		response.Details["opaque_status_error"] = "Failed to retrieve OPAQUE status"
 	} else {
 		response.OPAQUE = &AdminOPAQUEStatus{
-			HasAccount:   opaqueStatus.HasAccountPassword,
-			RecordsCount: opaqueStatus.FilePasswordCount,
+			HasAccount:   hasAccount,
+			RecordsCount: 0, // No longer tracking file-specific OPAQUE records in RFC-compliant design
 		}
 	}
 

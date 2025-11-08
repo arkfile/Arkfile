@@ -12,7 +12,6 @@ import (
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
-	"github.com/84adam/Arkfile/models"
 	"github.com/84adam/Arkfile/storage"
 )
 
@@ -457,25 +456,16 @@ func GetFileDecryptionKey(c echo.Context) error {
 
 	switch request.KeyType {
 	case "account":
-		// Get user object and authenticate via user model
-		user, err := models.GetUserByUsername(database.DB, username)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "User not found")
-		}
-
-		// Authenticate user's account password via user model
-		accountExportKey, err := user.AuthenticateOPAQUE(database.DB, request.Password)
-		if err != nil {
-			logging.ErrorLogger.Printf("Account authentication failed: %v", err)
-			return echo.NewHTTPError(http.StatusUnauthorized, "Invalid account password")
-		}
-		defer secureZeroBytes(accountExportKey)
-
-		// Derive file-specific encryption key from account export key
-		encryptionKey, err = deriveAccountFileKey(accountExportKey, username, fileID)
-		if err != nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "Key derivation failed")
-		}
+		// NOTE: This endpoint is deprecated and should not be used.
+		// File decryption should be handled client-side using the export key
+		// obtained from the multi-step OPAQUE authentication flow.
+		// The client should:
+		// 1. Authenticate via /api/auth/login/init and /api/auth/login/finalize
+		// 2. Receive the export key in the finalize response
+		// 3. Derive file-specific keys client-side using HKDF
+		// 4. Decrypt files locally without sending passwords to server
+		return echo.NewHTTPError(http.StatusNotImplemented,
+			"This endpoint is deprecated. Use client-side decryption with export key from authentication.")
 
 	default:
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid key type")

@@ -16,8 +16,8 @@ func setupOPAQUEMocks(mock sqlmock.Sqlmock, username string) {
 	// These mocks align with our opaque_password_records table structure
 	recordIdentifier := username // For account passwords
 
-	// Mock OPAQUE password record retrieval for authentication
-	mock.ExpectQuery(`SELECT opaque_user_record FROM opaque_password_records WHERE record_identifier = \? AND is_active = TRUE`).
+	// Mock RFC-compliant OPAQUE user data retrieval for authentication
+	mock.ExpectQuery(`SELECT opaque_user_record FROM opaque_user_data WHERE username = \?`).
 		WithArgs(recordIdentifier).
 		WillReturnRows(sqlmock.NewRows([]string{"opaque_user_record"}).
 			AddRow("mock-opaque-user-record"))
@@ -28,9 +28,9 @@ func expectOPAQUERegistration(mock sqlmock.Sqlmock, username string) {
 	// Mock expectations for account password registration in unified system
 	// Note: Account passwords use username as record_identifier
 
-	// Mock OPAQUE password record insertion
-	mock.ExpectExec(`INSERT INTO opaque_password_records`).
-		WithArgs(sqlmock.AnyArg(), username, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+	// Mock RFC-compliant OPAQUE user data insertion
+	mock.ExpectExec(`INSERT INTO opaque_user_data`).
+		WithArgs(username, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 }
 
@@ -39,16 +39,11 @@ func expectOPAQUEAuthentication(mock sqlmock.Sqlmock, username string) {
 	// Mock expectations for unified OPAQUE password system authentication
 	recordIdentifier := username // For account passwords
 
-	// Mock OPAQUE password record retrieval
-	mock.ExpectQuery(`SELECT opaque_user_record FROM opaque_password_records WHERE record_identifier = \? AND is_active = TRUE`).
+	// Mock RFC-compliant OPAQUE user data retrieval
+	mock.ExpectQuery(`SELECT opaque_user_record FROM opaque_user_data WHERE username = \?`).
 		WithArgs(recordIdentifier).
 		WillReturnRows(sqlmock.NewRows([]string{"opaque_user_record"}).
 			AddRow("mock-opaque-user-record"))
-
-	// Mock updating last used timestamp
-	mock.ExpectExec(`UPDATE opaque_password_records SET last_used_at = CURRENT_TIMESTAMP WHERE record_identifier = \?`).
-		WithArgs(recordIdentifier).
-		WillReturnResult(sqlmock.NewResult(1, 1))
 }
 
 // mockOPAQUESuccess simulates successful OPAQUE operations for testing handler logic
@@ -76,22 +71,12 @@ func validateOPAQUEHealthy(t *testing.T) {
 // Integration Test Helpers (for when libopaque.so is available)
 
 // setupOPAQUETestUser creates a test user with OPAQUE authentication
-// Note: Requires actual database connection and OPAQUE library
+// Note: DEPRECATED - This function used the old unified OPAQUE flow
+// New tests should use multi-step OPAQUE protocol via HTTP endpoints
 func setupOPAQUETestUser(t *testing.T, db *sql.DB, email, password string) *models.User {
 	t.Helper()
-
-	if db == nil {
-		t.Skip("Integration test requires real database connection")
-		return nil
-	}
-
-	// Create user with OPAQUE account in atomic transaction
-	// Create user with OPAQUE account in atomic transaction
-	user, err := models.CreateUserWithOPAQUE(db, email, password, &email)
-	require.NoError(t, err, "Failed to create OPAQUE test user")
-	require.NotNil(t, user, "Created user should not be nil")
-
-	return user
+	t.Skip("DEPRECATED: Use multi-step OPAQUE protocol via HTTP endpoints instead")
+	return nil
 }
 
 // expectOPAQUERegistrationSuccess validates that OPAQUE registration succeeded
@@ -104,51 +89,27 @@ func expectOPAQUERegistrationSuccess(t *testing.T, db *sql.DB, user *models.User
 		return
 	}
 
-	// Check that user has OPAQUE account
+	// Check that user has OPAQUE account using RFC-compliant opaque_user_data table
 	hasAccount, err := user.HasOPAQUEAccount(db)
 	require.NoError(t, err, "Failed to check OPAQUE account status")
 	require.True(t, hasAccount, "User should have OPAQUE account after registration")
-
-	// Verify OPAQUE account status
-	status, err := user.GetOPAQUEAccountStatus(db)
-	require.NoError(t, err, "Failed to get OPAQUE status")
-	require.True(t, status.HasAccountPassword, "Should have account password")
-	require.NotNil(t, status.OPAQUECreatedAt, "Should have creation timestamp")
 }
 
 // expectOPAQUEAuthenticationSuccess validates OPAQUE authentication and returns export key
-// Note: Requires actual database connection and OPAQUE library
+// Note: DEPRECATED - This function used the old unified OPAQUE flow
+// New tests should use multi-step OPAQUE protocol via HTTP endpoints
 func expectOPAQUEAuthenticationSuccess(t *testing.T, db *sql.DB, user *models.User, password string) []byte {
 	t.Helper()
-
-	if db == nil {
-		t.Skip("Integration test requires real database connection")
-		return nil
-	}
-
-	// Authenticate with OPAQUE
-	exportKey, err := user.AuthenticateOPAQUE(db, password)
-	require.NoError(t, err, "OPAQUE authentication should succeed")
-	require.NotNil(t, exportKey, "Export key should not be nil")
-	require.Len(t, exportKey, 64, "Export key should be 64 bytes")
-
-	return exportKey
+	t.Skip("DEPRECATED: Use multi-step OPAQUE protocol via HTTP endpoints instead")
+	return nil
 }
 
 // expectOPAQUEAuthenticationFailure validates that OPAQUE authentication fails
-// Note: Requires actual database connection and OPAQUE library
+// Note: DEPRECATED - This function used the old unified OPAQUE flow
+// New tests should use multi-step OPAQUE protocol via HTTP endpoints
 func expectOPAQUEAuthenticationFailure(t *testing.T, db *sql.DB, user *models.User, wrongPassword string) {
 	t.Helper()
-
-	if db == nil {
-		t.Skip("Integration test requires real database connection")
-		return
-	}
-
-	// Attempt authentication with wrong password
-	exportKey, err := user.AuthenticateOPAQUE(db, wrongPassword)
-	require.Error(t, err, "OPAQUE authentication should fail with wrong password")
-	require.Nil(t, exportKey, "Export key should be nil on failed authentication")
+	t.Skip("DEPRECATED: Use multi-step OPAQUE protocol via HTTP endpoints instead")
 }
 
 // cleanupOPAQUETestUser removes test user and all OPAQUE records

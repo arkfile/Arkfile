@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -19,6 +20,8 @@ import (
 	"time"
 
 	"golang.org/x/term"
+
+	"github.com/84adam/Arkfile/auth"
 )
 
 const (
@@ -381,18 +384,56 @@ EXAMPLES:
 		return fmt.Errorf("failed to read password: %w", err)
 	}
 
-	// Perform OPAQUE login with admin verification
-	logVerbose("Starting OPAQUE authentication for admin user: %s", *usernameFlag)
+	// Perform multi-step OPAQUE login with admin verification
+	logVerbose("Starting multi-step OPAQUE authentication for admin user: %s", *usernameFlag)
 
-	loginReq := map[string]string{
-		"username": *usernameFlag,
-		"password": string(password),
-	}
-
-	loginResp, err := client.makeRequest("POST", "/api/admin/login", loginReq, "")
+	// Step 1: Create credential request
+	clientState, credentialRequest, err := auth.ClientCreateCredentialRequest([]byte(password))
 	if err != nil {
-		return fmt.Errorf("admin login failed: %w", err)
+		return fmt.Errorf("failed to create credential request: %w", err)
 	}
+
+	// Step 2: Send credential request to server
+	authStartReq := map[string]string{
+		"username":           *usernameFlag,
+		"credential_request": base64.StdEncoding.EncodeToString(credentialRequest),
+	}
+
+	authStartResp, err := client.makeRequest("POST", "/api/admin/login/response", authStartReq, "")
+	if err != nil {
+		return fmt.Errorf("admin authentication start failed: %w", err)
+	}
+
+	sessionID, ok := authStartResp.Data["session_id"].(string)
+	if !ok {
+		return fmt.Errorf("invalid session ID in response")
+	}
+
+	credentialResponse, ok := authStartResp.Data["credential_response"].(string)
+	if !ok {
+		return fmt.Errorf("invalid credential response")
+	}
+
+	// Step 3: Recover credentials and create auth token
+	_, authU, exportKey, err := auth.ClientRecoverCredentials(clientState, []byte(credentialResponse))
+	if err != nil {
+		return fmt.Errorf("failed to recover credentials: %w", err)
+	}
+
+	// Step 4: Finalize authentication
+	authFinishReq := map[string]string{
+		"session_id": sessionID,
+		"username":   *usernameFlag,
+		"auth_u":     base64.StdEncoding.EncodeToString(authU),
+	}
+
+	loginResp, err := client.makeRequest("POST", "/api/admin/login/finalize", authFinishReq, "")
+	if err != nil {
+		return fmt.Errorf("admin authentication finalization failed: %w", err)
+	}
+
+	// Store export key for future use
+	loginResp.OPAQUEExport = base64.StdEncoding.EncodeToString(exportKey)
 
 	// Handle TOTP requirement
 	if loginResp.RequiresTOTP {
