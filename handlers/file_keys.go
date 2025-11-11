@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"database/sql"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -443,55 +442,21 @@ func GetFileDecryptionKey(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
-	var request struct {
-		Password string `json:"password"`
-		KeyType  string `json:"key_type"` // 'account' or 'custom'
-	}
-
-	if err := c.Bind(&request); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
-	}
-
-	var encryptionKey []byte
-
-	switch request.KeyType {
-	case "account":
-		// NOTE: This endpoint is deprecated and should not be used.
-		// File decryption should be handled client-side using the export key
-		// obtained from the multi-step OPAQUE authentication flow.
-		// The client should:
-		// 1. Authenticate via /api/auth/login/init and /api/auth/login/finalize
-		// 2. Receive the export key in the finalize response
-		// 3. Derive file-specific keys client-side using HKDF
-		// 4. Decrypt files locally without sending passwords to server
-		return echo.NewHTTPError(http.StatusNotImplemented,
-			"This endpoint is deprecated. Use client-side decryption with export key from authentication.")
-
-	default:
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid key type")
-	}
-
-	defer secureZeroBytes(encryptionKey)
-
-	// Return key as hex for client-side decryption
-	keyHex := fmt.Sprintf("%x", encryptionKey)
-
-	logging.InfoLogger.Printf("File decryption key provided: %s (%s) for %s", fileID, request.KeyType, username)
-
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"encryptionKey": keyHex,
-		"keyType":       request.KeyType,
-	})
-}
-
-// Helper functions for OPAQUE integration
-func secureZeroBytes(data []byte) {
-	for i := range data {
-		data[i] = 0
-	}
-}
-
-func deriveAccountFileKey(exportKey []byte, username, fileID string) ([]byte, error) {
-	// This would use HKDF with proper domain separation
-	return make([]byte, 32), nil
+	// NOTE: This endpoint is deprecated and should not be used.
+	// File encryption/decryption MUST be handled entirely client-side.
+	//
+	// CRITICAL SECURITY PRINCIPLE:
+	// - OPAQUE export keys are ONLY for authentication, NEVER for file encryption
+	// - File encryption uses the user's account password via Argon2id KDF (client-side only)
+	// - The account password serves TWO separate purposes:
+	//   1. OPAQUE authentication (zero-knowledge, server never sees password)
+	//   2. Client-side key derivation for file encryption (Argon2id, server never sees this)
+	//
+	// The client should:
+	// 1. Use the account password locally with Argon2id to derive file encryption keys
+	// 2. Encrypt/decrypt files entirely client-side
+	// 3. NEVER send passwords or derived keys to the server
+	// 4. Use OPAQUE only for authentication, completely separate from file encryption
+	return echo.NewHTTPError(http.StatusNotImplemented,
+		"This endpoint is deprecated. File encryption must be handled entirely client-side using Argon2id KDF with the account password. NEVER use OPAQUE export keys for file encryption.")
 }

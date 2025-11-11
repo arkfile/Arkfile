@@ -30,30 +30,12 @@ func TestFileKeyResponse_Structure(t *testing.T) {
 	assert.Equal(t, "2025-01-29T10:00:00Z", response.CreatedAt)
 }
 
-func TestSecureZeroBytes(t *testing.T) {
-	// Test that secureZeroBytes properly zeros out byte arrays
-	testData := []byte{0x01, 0x02, 0x03, 0x04}
-
-	secureZeroBytes(testData)
-
-	for i, b := range testData {
-		assert.Equal(t, byte(0), b, "Byte at index %d should be zero", i)
-	}
-}
-
-func TestDeriveAccountFileKey_PlaceholderBehavior(t *testing.T) {
-	// Test placeholder implementation returns 32-byte key
-	exportKey := make([]byte, 64) // Typical OPAQUE export key size
-	username := "test@example.com"
-	fileID := "test-file.txt"
-
-	derivedKey, err := deriveAccountFileKey(exportKey, username, fileID)
-
-	assert.NoError(t, err)
-	assert.Equal(t, 32, len(derivedKey), "Derived key should be 32 bytes (AES-256)")
-}
-
-// Note: Full integration tests would require:
+// Note: Tests for OPAQUE-based file encryption were removed because:
+// CRITICAL: OPAQUE export keys must NEVER be used for file encryption.
+// File encryption uses the account password via Argon2id KDF (client-side only).
+// OPAQUE is only for authentication, completely separate from file encryption.
+//
+// Full integration tests would require:
 // 1. Test database setup
 // 2. OPAQUE library environment
 // 3. Mock authentication tokens
