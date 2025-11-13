@@ -12,24 +12,62 @@
 /**
  * SINGLE SOURCE OF TRUTH: config/argon2id-params.json
  * 
- * All Argon2id parameters are defined in config/argon2id-params.json
- * and imported here to ensure consistency across the entire application
- * (TypeScript client, Go CLI tools, etc.)
+ * All Argon2id parameters are loaded from config/argon2id-params.json at runtime.
+ * This ensures consistency across the entire application.
  * 
  * CRITICAL: These parameters are used for deterministic file encryption keys.
  * Changing them will make existing encrypted files unreadable.
  */
-import argon2Params from '../../../../config/argon2id-params.json';
 
-export const ARGON2_PARAMS = {
-  FILE_ENCRYPTION: {
-    memoryCost: argon2Params.memoryCostKiB,
-    timeCost: argon2Params.timeCost,
-    parallelism: argon2Params.parallelism,
-    keyLength: argon2Params.keyLength,
+interface Argon2Config {
+  memoryCostKiB: number;
+  timeCost: number;
+  parallelism: number;
+  keyLength: number;
+}
+
+let cachedArgon2Config: Argon2Config | null = null;
+
+/**
+ * Load Argon2id parameters from config file
+ */
+async function loadArgon2Config(): Promise<Argon2Config> {
+  if (cachedArgon2Config !== null) {
+    return cachedArgon2Config;
+  }
+
+  try {
+    const response = await fetch('/config/argon2id-params.json');
+    if (!response.ok) {
+      throw new Error(`Failed to load Argon2 config: ${response.statusText}`);
+    }
+    cachedArgon2Config = await response.json();
+    return cachedArgon2Config;
+  } catch (error) {
+    throw new Error(`Failed to load Argon2id parameters from config: ${error}`);
+  }
+}
+
+/**
+ * Get Argon2id parameters for file encryption
+ * This function loads the config on first call and caches it
+ */
+export async function getArgon2Params(): Promise<{
+  memoryCost: number;
+  timeCost: number;
+  parallelism: number;
+  keyLength: number;
+  variant: 2;
+}> {
+  const config = await loadArgon2Config();
+  return {
+    memoryCost: config.memoryCostKiB,
+    timeCost: config.timeCost,
+    parallelism: config.parallelism,
+    keyLength: config.keyLength,
     variant: 2 as const, // Argon2id
-  },
-} as const;
+  };
+}
 
 // ============================================================================
 // Key Sizes

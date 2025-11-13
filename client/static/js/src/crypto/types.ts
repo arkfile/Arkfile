@@ -182,11 +182,20 @@ export interface EncryptedFileData {
 }
 
 /**
+ * Password context types for domain separation
+ * These match the Go implementation in crypto/key_derivation.go
+ */
+export type PasswordContext = 'account' | 'custom' | 'share';
+
+/**
  * Options for file encryption
  */
 export interface FileEncryptionOptions {
   /** Additional authenticated data (optional) */
   additionalData?: Uint8Array;
+  
+  /** Password context for domain separation (default: 'account') */
+  context?: PasswordContext;
 }
 
 /**
@@ -195,6 +204,9 @@ export interface FileEncryptionOptions {
 export interface FileDecryptionOptions {
   /** Additional authenticated data (must match encryption) */
   additionalData?: Uint8Array;
+  
+  /** Password context for domain separation (default: 'account') */
+  context?: PasswordContext;
 }
 
 /**

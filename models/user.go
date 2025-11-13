@@ -345,11 +345,11 @@ func (u *User) Delete(db *sql.DB) error {
 
 	// First, clean up all OPAQUE records using the transaction
 	_, err = tx.Exec(`
-		DELETE FROM opaque_password_records 
-		WHERE associated_username = ? OR record_identifier = ?`,
-		u.Username, u.Username)
+		DELETE FROM opaque_user_data 
+		WHERE username = ?`,
+		u.Username)
 	if err != nil {
-		return fmt.Errorf("failed to delete OPAQUE records: %w", err)
+		return fmt.Errorf("failed to delete OPAQUE user data: %w", err)
 	}
 
 	// Delete user record

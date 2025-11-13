@@ -10,7 +10,6 @@ import { argon2id } from '@noble/hashes/argon2.js';
 import {
   KEY_SIZES,
   AES_GCM_CONFIG,
-  ARGON2_PARAMS,
   LIMITS,
 } from './constants';
 import {

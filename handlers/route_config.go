@@ -32,6 +32,10 @@ func RegisterRoutes() {
 		return c.File("client/static/favicon.ico")
 	})
 
+	// Configuration endpoints (public - needed for client-side crypto)
+	Echo.GET("/api/config/argon2", GetArgon2Config)
+	Echo.GET("/api/config/password-requirements", GetPasswordRequirements)
+
 	// OPAQUE Authentication (Multi-Step Protocol) - with rate limiting protection
 	Echo.POST("/api/opaque/register/response", RegisterRateLimitMiddleware(OpaqueRegisterResponse))
 	Echo.POST("/api/opaque/register/finalize", RegisterRateLimitMiddleware(OpaqueRegisterFinalize))

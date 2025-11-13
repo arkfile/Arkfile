@@ -1,19 +1,78 @@
 package crypto
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"sync"
 
 	"github.com/trustelem/zxcvbn"
 )
 
-// Password requirement constants - single source of truth
-const (
-	MinAccountPasswordLength = 14
-	MinCustomPasswordLength  = 14
-	MinSharePasswordLength   = 18
-	MinEntropyBits           = 60.0
+// PasswordRequirements holds password validation configuration
+type PasswordRequirements struct {
+	MinAccountPasswordLength int     `json:"minAccountPasswordLength"`
+	MinCustomPasswordLength  int     `json:"minCustomPasswordLength"`
+	MinSharePasswordLength   int     `json:"minSharePasswordLength"`
+	MinEntropyBits           float64 `json:"minEntropyBits"`
+	RequireUppercase         bool    `json:"requireUppercase"`
+	RequireLowercase         bool    `json:"requireLowercase"`
+	RequireNumber            bool    `json:"requireNumber"`
+	RequireSpecial           bool    `json:"requireSpecial"`
+}
+
+var (
+	passwordRequirements     *PasswordRequirements
+	passwordRequirementsOnce sync.Once
+	passwordRequirementsErr  error
 )
+
+// LoadPasswordRequirements loads password requirements from config file
+func LoadPasswordRequirements() (*PasswordRequirements, error) {
+	passwordRequirementsOnce.Do(func() {
+		// Default values (fallback if config file doesn't exist)
+		passwordRequirements = &PasswordRequirements{
+			MinAccountPasswordLength: 14,
+			MinCustomPasswordLength:  14,
+			MinSharePasswordLength:   18,
+			MinEntropyBits:           60.0,
+			RequireUppercase:         true,
+			RequireLowercase:         true,
+			RequireNumber:            true,
+			RequireSpecial:           true,
+		}
+
+		// Try to load from config file
+		configPath := "config/password-requirements.json"
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			// If file doesn't exist, use defaults (not an error)
+			if os.IsNotExist(err) {
+				return
+			}
+			passwordRequirementsErr = fmt.Errorf("failed to read password requirements config: %w", err)
+			return
+		}
+
+		// Parse JSON
+		if err := json.Unmarshal(data, passwordRequirements); err != nil {
+			passwordRequirementsErr = fmt.Errorf("failed to parse password requirements config: %w", err)
+			return
+		}
+	})
+
+	return passwordRequirements, passwordRequirementsErr
+}
+
+// GetPasswordRequirements returns the loaded password requirements (panics if not loaded)
+func GetPasswordRequirements() *PasswordRequirements {
+	reqs, err := LoadPasswordRequirements()
+	if err != nil {
+		panic(fmt.Sprintf("Failed to load password requirements: %v", err))
+	}
+	return reqs
+}
 
 // PasswordValidationResult represents the result of password validation
 type PasswordValidationResult struct {
@@ -233,17 +292,20 @@ func ValidatePasswordEntropy(password string, minLength int, minEntropy float64)
 	}
 }
 
-// ValidateAccountPassword validates account passwords with 14+ characters and 60+ bit entropy requirement
+// ValidateAccountPassword validates account passwords using config requirements
 func ValidateAccountPassword(password string) *PasswordValidationResult {
-	return ValidatePasswordEntropy(password, MinAccountPasswordLength, MinEntropyBits)
+	reqs := GetPasswordRequirements()
+	return ValidatePasswordEntropy(password, reqs.MinAccountPasswordLength, reqs.MinEntropyBits)
 }
 
-// ValidateSharePassword validates share passwords with 18+ characters and 60+ bit entropy requirement
+// ValidateSharePassword validates share passwords using config requirements
 func ValidateSharePassword(password string) *PasswordValidationResult {
-	return ValidatePasswordEntropy(password, MinSharePasswordLength, MinEntropyBits)
+	reqs := GetPasswordRequirements()
+	return ValidatePasswordEntropy(password, reqs.MinSharePasswordLength, reqs.MinEntropyBits)
 }
 
-// ValidateCustomPassword validates custom passwords with 14+ characters and 60+ bit entropy requirement
+// ValidateCustomPassword validates custom passwords using config requirements
 func ValidateCustomPassword(password string) *PasswordValidationResult {
-	return ValidatePasswordEntropy(password, MinCustomPasswordLength, MinEntropyBits)
+	reqs := GetPasswordRequirements()
+	return ValidatePasswordEntropy(password, reqs.MinCustomPasswordLength, reqs.MinEntropyBits)
 }

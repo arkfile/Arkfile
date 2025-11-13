@@ -5,6 +5,9 @@ import (
 )
 
 func TestValidatePasswordEntropy(t *testing.T) {
+	// Load password requirements for testing
+	reqs := GetPasswordRequirements()
+
 	tests := []struct {
 		name           string
 		password       string
@@ -44,7 +47,7 @@ func TestValidatePasswordEntropy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ValidatePasswordEntropy(tt.password, MinAccountPasswordLength, tt.minEntropy)
+			result := ValidatePasswordEntropy(tt.password, reqs.MinAccountPasswordLength, tt.minEntropy)
 
 			if len(tt.password) != tt.expectMinChars {
 				t.Errorf("Password length = %d, expected %d", len(tt.password), tt.expectMinChars)
@@ -89,6 +92,9 @@ func TestSharePasswordValidation(t *testing.T) {
 }
 
 func TestPatternDetection(t *testing.T) {
+	// Load password requirements for testing
+	reqs := GetPasswordRequirements()
+
 	tests := []struct {
 		name     string
 		password string
@@ -123,7 +129,7 @@ func TestPatternDetection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ValidatePasswordEntropy(tt.password, MinAccountPasswordLength, 60.0)
+			result := ValidatePasswordEntropy(tt.password, reqs.MinAccountPasswordLength, 60.0)
 
 			hasPenalties := len(result.PatternPenalties) > 0
 			if tt.hasIssue && !hasPenalties {

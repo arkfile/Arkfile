@@ -12,8 +12,8 @@ import (
 
 // setupOPAQUEMocks sets up standardized mock expectations for OPAQUE database operations
 func setupOPAQUEMocks(mock sqlmock.Sqlmock, username string) {
-	// Mock expectations for unified OPAQUE password system
-	// These mocks align with our opaque_password_records table structure
+	// Mock expectations for RFC-compliant OPAQUE authentication
+	// These mocks align with our opaque_user_data table structure
 	recordIdentifier := username // For account passwords
 
 	// Mock RFC-compliant OPAQUE user data retrieval for authentication

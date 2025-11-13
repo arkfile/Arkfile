@@ -20,7 +20,7 @@ import {
 } from './primitives';
 import {
   KEY_SIZES,
-  ARGON2_PARAMS,
+  getArgon2Params,
   FILE_ENCRYPTION_VERSION,
   LIMITS,
 } from './constants';
@@ -46,26 +46,51 @@ import type {
 // ============================================================================
 
 /**
- * Derives a deterministic salt from username
- * 
- * This ensures the same username always produces the same salt,
- * which is critical for deterministic key derivation.
- * 
- * Security note: The salt is derived from the username using SHA-256.
- * While this makes the salt predictable for a given username, it's
- * acceptable because:
- * 1. Argon2id is designed to be secure even with known salts
- * 2. The high memory/time cost makes brute force attacks impractical
- * 3. This enables offline decryption without server-stored salts
+ * Password context types for domain separation
+ * These match the Go implementation in crypto/key_derivation.go
  */
-export function deriveSaltFromUsername(username: string): Uint8Array {
+export type PasswordContext = 'account' | 'custom' | 'share';
+
+/**
+ * Domain prefixes for salt derivation
+ * CRITICAL: These MUST match the Go implementation exactly for cross-platform compatibility
+ * See: crypto/key_derivation.go - DeriveAccountPasswordKey, DeriveCustomPasswordKey, DeriveSharePasswordKey
+ */
+const SALT_DOMAIN_PREFIXES: Record<PasswordContext, string> = {
+  account: 'arkfile-account-key-salt:',
+  custom: 'arkfile-custom-key-salt:',
+  share: 'arkfile-share-key-salt:',
+} as const;
+
+/**
+ * Derives a deterministic salt from username with domain separation
+ * 
+ * This ensures the same username + context always produces the same salt,
+ * which is critical for deterministic key derivation and cross-platform compatibility.
+ * 
+ * IMPORTANT: This implementation MUST match the Go implementation in crypto/key_derivation.go
+ * to ensure files encrypted by the browser can be decrypted by CLI tools and vice versa.
+ * 
+ * Security note: The salt is derived from the username using SHA-256 with domain separation.
+ * While this makes the salt predictable for a given username + context, it's acceptable because:
+ * 1. Argon2id is designed to be secure even with known salts
+ * 2. The high memory/time cost (256MB, 8 iterations) makes brute force attacks impractical
+ * 3. Domain separation ensures different contexts produce different keys
+ * 4. This enables offline decryption without server-stored salts
+ * 
+ * @param username - The user's username
+ * @param context - The password context (account, custom, or share)
+ * @returns A deterministic 32-byte salt
+ */
+export function deriveSaltFromUsername(username: string, context: PasswordContext = 'account'): Uint8Array {
   // Validate username
   if (!username || username.trim().length === 0) {
     throw new InvalidUsernameError('Username cannot be empty');
   }
   
   // Normalize username (lowercase, trim whitespace)
-  const normalizedUsername = username.toLowerCase().trim();
+  // NOTE: Go does NOT normalize to lowercase, so we need to match that behavior
+  const normalizedUsername = username.trim();
   
   if (normalizedUsername.length < 3) {
     throw new InvalidUsernameError('Username must be at least 3 characters');
@@ -76,15 +101,22 @@ export function deriveSaltFromUsername(username: string): Uint8Array {
   }
   
   try {
-    // Hash the normalized username to get a deterministic salt
-    const hash = hashString(normalizedUsername);
+    // Get domain prefix for this context
+    const domainPrefix = SALT_DOMAIN_PREFIXES[context];
+    
+    // Construct salt input: "arkfile-{context}-key-salt:{username}"
+    // This MUST match Go's implementation exactly
+    const saltInput = domainPrefix + normalizedUsername;
+    
+    // Hash the salt input to get a deterministic salt
+    const hash = hashString(saltInput);
     
     // Take the first 32 bytes as the salt
     return hash.slice(0, KEY_SIZES.SALT);
   } catch (error) {
     throw new SaltDerivationError(
       'Failed to derive salt from username',
-      { username: normalizedUsername, error: String(error) }
+      { username: normalizedUsername, context, error: String(error) }
     );
   }
 }
@@ -97,21 +129,32 @@ export function deriveSaltFromUsername(username: string): Uint8Array {
  * Derives a file encryption key from password and username
  * 
  * This is the core function that enables offline decryption.
- * The same password + username will always produce the same key.
+ * The same password + username + context will always produce the same key.
+ * 
+ * IMPORTANT: This must match the Go implementation for cross-platform compatibility.
+ * 
+ * @param password - The user's password
+ * @param username - The user's username
+ * @param context - The password context (account, custom, or share)
+ * @returns A 32-byte encryption key
  */
 export async function deriveFileEncryptionKey(
   password: string,
-  username: string
+  username: string,
+  context: PasswordContext = 'account'
 ): Promise<Uint8Array> {
-  // Derive deterministic salt from username
-  const salt = deriveSaltFromUsername(username);
+  // Derive deterministic salt from username with domain separation
+  const salt = deriveSaltFromUsername(username, context);
   
   try {
+    // Get Argon2id parameters from config
+    const argon2Params = await getArgon2Params();
+    
     // Derive key using Argon2id
     const result = await deriveKeyArgon2id({
       password,
       salt,
-      params: ARGON2_PARAMS.FILE_ENCRYPTION,
+      params: argon2Params,
     });
     
     return result.key;
@@ -145,8 +188,12 @@ export async function encryptFile(
   }
   
   try {
-    // Derive encryption key
-    const key = await deriveFileEncryptionKey(password, username);
+    // Derive encryption key with context (default to 'account')
+    const context = options.context || 'account';
+    const key = await deriveFileEncryptionKey(password, username, context);
+    
+    // Get Argon2id parameters from config for metadata
+    const argon2Params = await getArgon2Params();
     
     // Encrypt the file
     const encryptionResult = await encryptAESGCM({
@@ -161,9 +208,9 @@ export async function encryptFile(
       algorithm: 'AES-256-GCM',
       kdf: 'Argon2id',
       kdfParams: {
-        memoryCost: ARGON2_PARAMS.FILE_ENCRYPTION.memoryCost,
-        timeCost: ARGON2_PARAMS.FILE_ENCRYPTION.timeCost,
-        parallelism: ARGON2_PARAMS.FILE_ENCRYPTION.parallelism,
+        memoryCost: argon2Params.memoryCost,
+        timeCost: argon2Params.timeCost,
+        parallelism: argon2Params.parallelism,
       },
       timestamp: Date.now(),
       originalSize: file.length,
@@ -253,8 +300,9 @@ export async function decryptFile(
       );
     }
     
-    // Derive decryption key (same as encryption key)
-    const key = await deriveFileEncryptionKey(password, username);
+    // Derive decryption key (same as encryption key) with context
+    const context = options.context || 'account';
+    const key = await deriveFileEncryptionKey(password, username, context);
     
     // Decrypt the file
     const decryptionResult = await decryptAESGCM({
@@ -418,22 +466,31 @@ export function clearAllCachedKeys(): void {
  * 
  * This is the recommended way to derive keys, as it will use
  * a cached key if available, avoiding expensive Argon2id computation.
+ * 
+ * @param password - The user's password
+ * @param username - The user's username
+ * @param context - The password context (account, custom, or share)
+ * @returns A 32-byte encryption key
  */
 export async function deriveFileEncryptionKeyWithCache(
   password: string,
-  username: string
+  username: string,
+  context: PasswordContext = 'account'
 ): Promise<Uint8Array> {
+  // Create cache key that includes context
+  const cacheKey = `${username}:${context}`;
+  
   // Try to get cached key
-  const cachedKey = getCachedFileEncryptionKey(username);
+  const cachedKey = getCachedFileEncryptionKey(cacheKey);
   if (cachedKey) {
     return cachedKey;
   }
   
   // Derive new key
-  const key = await deriveFileEncryptionKey(password, username);
+  const key = await deriveFileEncryptionKey(password, username, context);
   
   // Cache it
-  cacheFileEncryptionKey(username, key);
+  cacheFileEncryptionKey(cacheKey, key);
   
   return key;
 }

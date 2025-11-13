@@ -18,10 +18,12 @@
     "build:prod": "bun build src/app.ts --outdir dist --target browser --format iife --minify --sourcemap=external"
   },
   "devDependencies": {
+    "@types/zxcvbn": "^4.4.5",
     "bun-types": "^1.2.21",
     "typescript": "^5.9.2"
   },
   "dependencies": {
-    "@noble/hashes": "^2.0.1"
+    "@noble/hashes": "^2.0.1",
+    "zxcvbn": "^4.4.2"
   }
 }
