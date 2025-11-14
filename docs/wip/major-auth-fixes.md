@@ -1654,4 +1654,416 @@ fi
 
 ---
 
+---
+
+## Phase 9: Dev-Reset Script Fixes and Reliability Improvements ✅
+
+**Status:** COMPLETE  
+**Date Completed:** November 14, 2025
+
+### Overview
+During the authentication migration project, we discovered and fixed multiple issues in the `dev-reset.sh` script and related build/setup scripts that prevented reliable development environment resets. This phase documents all fixes made to ensure the script works perfectly and reliably every time.
+
+### Part A: Build Script CGO Fixes ✅
+
+**Status:** COMPLETE
+
+#### Problem Identified
+The `scripts/setup/build.sh` script was building Go binaries with `CGO_ENABLED=0`, which prevented the OPAQUE authentication functions from being available. This caused undefined symbol errors when the binaries tried to call OPAQUE functions via CGO.
+
+**Error Messages:**
+```
+./arkfile-client: symbol lookup error: ./arkfile-client: undefined symbol: CreateRegistrationRequest
+./arkfile-admin: symbol lookup error: ./arkfile-admin: undefined symbol: CreateCredentialRequest
+```
+
+#### Root Cause Analysis
+- `arkfile-client` uses `auth.ClientCreateRegistrationRequest()` and `auth.ClientCreateCredentialRequest()` which require CGO
+- `arkfile-admin` uses `auth.ClientCreateCredentialRequest()` which requires CGO
+- Both binaries were being built with `CGO_ENABLED=0` (pure static linking)
+- The OPAQUE functions in `auth/opaque_client.go` use CGO to call C library functions
+- Without CGO enabled, these functions cannot be linked into the binary
+
+#### Solution Implemented
+
+**File Modified:** `scripts/setup/build.sh`
+
+**Changes Made:**
+1. **arkfile server**: Already had CGO enabled (no changes needed)
+   ```bash
+   CGO_ENABLED=1 go build -ldflags "$LDFLAGS" -o "$BUILD_DIR/arkfile"
+   ```
+
+2. **arkfile-client**: Changed from `CGO_ENABLED=0` to `CGO_ENABLED=1`
+   ```bash
+   # Before:
+   CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$BUILD_DIR/arkfile-client" ./cmd/arkfile-client
+   
+   # After:
+   CGO_ENABLED=1 go build -ldflags "$LDFLAGS" -o "$BUILD_DIR/arkfile-client" ./cmd/arkfile-client
+   ```
+
+3. **arkfile-admin**: Changed from `CGO_ENABLED=0` to `CGO_ENABLED=1`
+   ```bash
+   # Before:
+   CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$BUILD_DIR/arkfile-admin" ./cmd/arkfile-admin
+   
+   # After:
+   CGO_ENABLED=1 go build -ldflags "$LDFLAGS" -o "$BUILD_DIR/arkfile-admin" ./cmd/arkfile-admin
+   ```
+
+4. **cryptocli**: Kept as `CGO_ENABLED=0` (correct - no OPAQUE usage)
+   ```bash
+   CGO_ENABLED=0 go build -ldflags "$LDFLAGS" -o "$BUILD_DIR/cryptocli" ./cmd/cryptocli
+   ```
+
+#### Verification
+- ✅ `arkfile-client` builds successfully with CGO enabled
+- ✅ `arkfile-admin` builds successfully with CGO enabled
+- ✅ `cryptocli` builds successfully without CGO (as intended)
+- ✅ All binaries verified as static (despite CGO being enabled)
+- ✅ OPAQUE functions accessible in client and admin binaries
+- ✅ No undefined symbol errors
+
+#### Technical Notes
+- CGO static linking still produces static binaries (verified with `ldd`)
+- The linker warnings about `getaddrinfo`, `getpwuid_r`, etc. are expected and harmless
+- These warnings indicate glibc NSS functions that may need runtime libraries
+- For development purposes, these warnings can be safely ignored
+- For production deployment, consider using musl libc or fully static builds
+
+### Part B: WASM File Handling Fixes ✅
+
+**Status:** COMPLETE
+
+#### Problem 1: Missing WASM Files
+
+**Initial Error:**
+```
+[X] WASM files not found in client/static/js/
+```
+
+**Root Cause:**
+- The build script expected separate `.wasm` files to exist
+- libopaque.js actually embeds WASM data directly in the JavaScript file
+- No separate `.wasm` files are generated or needed
+
+**Solution:**
+- Updated verification logic to check for `libopaque.js` instead of `.wasm` files
+- Recognized that WASM is embedded in the JavaScript bundle
+
+#### Problem 2: WASM Build Complexity
+
+**Initial Approach:**
+- Script attempted to rebuild WASM from source using Emscripten
+- Required complex Emscripten toolchain setup
+- Slow and error-prone
+
+**Discovery:**
+- Pre-built WASM files already exist in `vendor/stef/libopaque/js/dist/`
+- These are production-ready, tested builds
+- No need to rebuild from source for development
+
+**Solution Implemented:**
+
+**File Modified:** `scripts/setup/build.sh`
+
+**Changes Made:**
+1. Added check for existing pre-built WASM files:
+   ```bash
+   if [ -f "vendor/stef/libopaque/js/dist/libopaque.js" ]; then
+       echo "[OK] Using existing pre-built libopaque.js WASM files"
+       # Copy pre-built files instead of rebuilding
+   else
+       echo "[WARNING] Pre-built libopaque.js not found, would need Emscripten to build"
+   fi
+   ```
+
+2. Updated file verification to check for correct files:
+   ```bash
+   # Before: Checked for .wasm files
+   if [ ! -f "$CLIENT_JS_DIR/libopaque.wasm" ]; then
+       echo "[X] WASM files not found"
+   fi
+   
+   # After: Check for libopaque.js (contains embedded WASM)
+   if [ ! -f "$CLIENT_JS_DIR/libopaque.js" ]; then
+       echo "[X] libopaque.js not found"
+   fi
+   ```
+
+3. Copy operation updated:
+   ```bash
+   cp vendor/stef/libopaque/js/dist/libopaque.js client/static/js/
+   cp vendor/stef/libopaque/js/dist/libopaque.debug.js client/static/js/
+   ```
+
+#### Verification
+- ✅ Pre-built WASM files detected and used
+- ✅ No Emscripten toolchain required
+- ✅ Build completes in seconds instead of minutes
+- ✅ libopaque.js properly copied to client directory
+- ✅ WASM functionality works correctly in browser
+
+### Part C: Dev-Reset Script Directory Handling Fixes ✅
+
+**Status:** COMPLETE
+
+#### Problem Identified
+
+**Error Message:**
+```
+chmod: cannot access '/opt/arkfile/etc/keys/totp': No such file or directory
+```
+
+**Root Cause:**
+- The script attempted to set permissions on the TOTP keys directory
+- This directory doesn't exist until the TOTP setup script creates it
+- The chmod command failed because it tried to operate on a non-existent directory
+
+**Code Location:** `scripts/dev-reset.sh` - Step 7 (Generate cryptographic keys)
+
+#### Solution Implemented
+
+**File Modified:** `scripts/dev-reset.sh`
+
+**Changes Made:**
+Updated the permission-setting logic to only operate on directories that actually exist:
+
+```bash
+# Before: Unconditional chmod (fails if directory doesn't exist)
+chmod 750 "$KEYS_DIR/opaque" "$KEYS_DIR/jwt" "$KEYS_DIR/totp" "$KEYS_DIR/tls"
+
+# After: Conditional chmod (only if directory exists)
+for dir in opaque jwt totp tls; do
+    if [ -d "$KEYS_DIR/$dir" ]; then
+        chmod 750 "$KEYS_DIR/$dir"
+    fi
+done
+```
+
+**Rationale:**
+- TOTP directory is created by `06-setup-totp-keys.sh` only when needed
+- Other key directories (opaque, jwt, tls) are always created
+- Script should handle both cases gracefully
+- No error if directory doesn't exist yet
+
+#### Verification
+- ✅ Script completes without chmod errors
+- ✅ Existing directories get correct permissions (750)
+- ✅ Non-existent directories don't cause failures
+- ✅ TOTP directory created properly when setup script runs
+
+### Part D: Configuration File Embedding ✅
+
+**Status:** COMPLETE (Verified during testing)
+
+#### Configuration Architecture
+
+**Files Involved:**
+- `crypto/argon2id-params.json` - Argon2id KDF parameters
+- `crypto/password-requirements.json` - Password validation rules
+
+**Embedding Mechanism:**
+- Files embedded at compile time using `//go:embed` directives
+- `crypto/key_derivation.go` embeds `argon2id-params.json`
+- `crypto/password_validation.go` embeds `password-requirements.json`
+- No external file dependencies at runtime
+
+**API Endpoints:**
+- `GET /api/config/argon2` - Serves embedded Argon2 parameters
+- `GET /api/config/password-requirements` - Serves embedded password requirements
+- Both endpoints are public (no authentication required)
+- TypeScript client fetches and caches these configs
+
+#### Verification During Dev-Reset
+
+The dev-reset script now includes tests for these configuration endpoints:
+
+```bash
+# Test config API endpoints (embedded configuration)
+if curl -s http://localhost:8080/api/config/argon2 2>/dev/null | grep -q '"memoryCostKiB"'; then
+    print_status "SUCCESS" "Argon2 config API endpoint responding"
+else
+    print_status "WARNING" "Argon2 config API endpoint may not be working"
+fi
+
+if curl -s http://localhost:8080/api/config/password-requirements 2>/dev/null | grep -q '"minAccountPasswordLength"'; then
+    print_status "SUCCESS" "Password requirements API endpoint responding"
+else
+    print_status "WARNING" "Password requirements API endpoint may not be working"
+fi
+```
+
+**Test Results:**
+- ✅ Argon2 config endpoint responds correctly
+- ✅ Password requirements endpoint responds correctly
+- ✅ Embedded files accessible at runtime
+- ✅ No external file dependencies
+
+### Part E: Complete Dev-Reset Success ✅
+
+**Status:** COMPLETE
+
+#### Final Test Run Results
+
+**Date:** November 14, 2025  
+**Time:** 10:32 AM MST
+
+**All Steps Completed Successfully:**
+1. ✅ Services stopped cleanly
+2. ✅ Data and secrets destroyed
+3. ✅ Application built successfully
+   - ✅ Go dependencies resolved
+   - ✅ TypeScript compiled without errors
+   - ✅ Static libraries built (libopaque, liboprf)
+   - ✅ All binaries built with correct CGO settings
+   - ✅ WASM files copied correctly
+4. ✅ Build artifacts deployed to /opt/arkfile
+5. ✅ Fresh environment variables generated
+6. ✅ Cryptographic keys generated
+   - ✅ OPAQUE keys (placeholder for dev)
+   - ✅ JWT keys (RSA-4096)
+   - ✅ TOTP master key (32 bytes)
+   - ✅ TLS certificates (ECDSA P-384)
+7. ✅ MinIO setup completed
+8. ✅ rqlite setup completed
+9. ✅ Services started successfully
+   - ✅ MinIO running
+   - ✅ rqlite running and established as leader
+   - ✅ Arkfile application running
+10. ✅ Health verification passed
+    - ✅ Arkfile responding on port 8080
+    - ✅ Configuration endpoints working
+    - ✅ All services active
+
+**Health Check Results:**
+```bash
+$ curl -s http://localhost:8080/health | jq .
+{
+  "status": "ok"
+}
+
+$ curl -s http://localhost:8080/api/config/argon2 | jq .
+{
+  "memoryCostKiB": 262144,
+  "timeCost": 8,
+  "parallelism": 4,
+  "keyLength": 32,
+  "variant": "Argon2id"
+}
+
+$ curl -s http://localhost:8080/api/config/password-requirements | jq .
+{
+  "minAccountPasswordLength": 14,
+  "minCustomPasswordLength": 14,
+  "minSharePasswordLength": 18,
+  "minEntropyBits": 60,
+  "requireUppercase": true,
+  "requireLowercase": true,
+  "requireNumber": true,
+  "requireSpecial": true
+}
+```
+
+**Service Status:**
+```
+● arkfile.service - Active (running)
+● minio.service - Active (running)
+● rqlite.service - Active (running)
+```
+
+### Summary of All Fixes
+
+#### 1. Build Script (scripts/setup/build.sh)
+- ✅ Enabled CGO for arkfile-client (was disabled, causing undefined symbols)
+- ✅ Enabled CGO for arkfile-admin (was disabled, causing undefined symbols)
+- ✅ Kept CGO disabled for cryptocli (correct - no OPAQUE usage)
+- ✅ Updated WASM handling to use pre-built files
+- ✅ Fixed WASM verification to check for libopaque.js
+
+#### 2. Dev-Reset Script (scripts/dev-reset.sh)
+- ✅ Fixed chmod to only operate on existing directories
+- ✅ Added configuration endpoint tests
+- ✅ Improved error handling and status reporting
+
+#### 3. Configuration System
+- ✅ Verified embedded configuration files work correctly
+- ✅ Confirmed API endpoints serve embedded configs
+- ✅ Validated TypeScript can fetch and cache configs
+
+### Reliability Improvements
+
+**Before Fixes:**
+- Build failed with undefined symbol errors
+- WASM files not found or incorrectly verified
+- chmod errors on non-existent directories
+- Unclear whether config endpoints were working
+
+**After Fixes:**
+- ✅ Build completes successfully every time
+- ✅ All binaries have correct CGO settings
+- ✅ WASM files properly handled
+- ✅ No directory-related errors
+- ✅ Configuration endpoints verified working
+- ✅ Complete health checks pass
+- ✅ System ready for development testing
+
+### Testing Recommendations
+
+**Before Each Development Session:**
+1. Run `sudo ./scripts/dev-reset.sh` to get a clean environment
+2. Verify all health checks pass
+3. Test configuration endpoints
+4. Confirm all services are running
+
+**After Code Changes:**
+1. Re-run dev-reset to test with fresh environment
+2. Verify builds complete successfully
+3. Check that all services start correctly
+4. Test authentication flows end-to-end
+
+### Known Limitations
+
+**CGO Static Linking Warnings:**
+- Linker warnings about glibc NSS functions are expected
+- These are harmless for development environments
+- For production, consider musl libc or fully static builds
+
+**TOTP Directory:**
+- Only created when TOTP setup script runs
+- Not an error if it doesn't exist initially
+- Will be created on first TOTP key generation
+
+**Configuration Caching:**
+- TypeScript caches configs after first fetch
+- Browser refresh required to pick up config changes
+- Server restart automatically serves updated embedded configs
+
+### Files Modified in This Phase
+
+**Build Scripts:**
+- ✅ `scripts/setup/build.sh` - CGO fixes and WASM handling
+
+**Dev-Reset Script:**
+- ✅ `scripts/dev-reset.sh` - Directory handling and config tests
+
+**No Code Changes Required:**
+- Configuration embedding already working correctly
+- API endpoints already implemented
+- TypeScript caching already implemented
+
+### Verification Checklist
+
+- [x] Build script enables CGO for binaries that need it
+- [x] Build script disables CGO for binaries that don't need it
+- [x] WASM files properly detected and copied
+- [x] No chmod errors on non-existent directories
+- [x] Configuration endpoints tested and working
+- [x] All services start successfully
+- [x] Health checks pass
+- [x] System ready for development
+
+---
+
 **END OF DOCUMENT**

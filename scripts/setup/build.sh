@@ -307,45 +307,61 @@ mkdir -p ${BUILD_DIR}
 echo -e "${GREEN}Building in directory: $(pwd)${NC}"
 
 # Build libopaque WASM/JS from vendor submodule
-echo -e "${YELLOW}Building libopaque WASM/JS from vendor submodule...${NC}"
+echo -e "${YELLOW}Checking libopaque WASM/JS files...${NC}"
 
-# Check if emscripten is available
-if ! command -v emcc >/dev/null 2>&1; then
-    echo -e "${RED}[X] Emscripten (emcc) is required to build libopaque.js${NC}"
-    echo -e "${YELLOW}Install Emscripten: https://emscripten.org/docs/getting_started/downloads.html${NC}"
-    exit 1
+# Check if pre-built WASM files already exist
+if [ -f "vendor/stef/libopaque/js/dist/libopaque.js" ] && [ -f "vendor/stef/libopaque/js/dist/libopaque.debug.js" ]; then
+    echo -e "${GREEN}[OK] Using existing pre-built libopaque.js WASM files${NC}"
+    SKIP_WASM_BUILD=true
+else
+    echo -e "${YELLOW}Pre-built WASM files not found, will build with Emscripten${NC}"
+    SKIP_WASM_BUILD=false
 fi
 
-# Build libopaque.js in the vendor submodule
-cd vendor/stef/libopaque/js
-
-# Check if node_modules exists, install if needed
-if [ ! -d "node_modules" ]; then
-    echo "Installing npm dependencies for libopaque.js build..."
-    npm install || {
-        echo -e "${RED}[X] Failed to install npm dependencies for libopaque.js${NC}"
+# Only build if needed
+if [ "$SKIP_WASM_BUILD" != "true" ]; then
+    echo -e "${YELLOW}Building libopaque WASM/JS from vendor submodule...${NC}"
+    
+    # Check if emscripten is available
+    if ! command -v emcc >/dev/null 2>&1; then
+        echo -e "${RED}[X] Emscripten (emcc) is required to build libopaque.js${NC}"
+        echo -e "${YELLOW}Install Emscripten: https://emscripten.org/docs/getting_started/downloads.html${NC}"
         exit 1
-    }
+    fi
+
+    # Build libopaque.js in the vendor submodule
+    cd vendor/stef/libopaque/js
+
+    # Check if node_modules exists, install if needed
+    if [ ! -d "node_modules" ]; then
+        echo "Installing npm dependencies for libopaque.js build..."
+        npm install || {
+            echo -e "${RED}[X] Failed to install npm dependencies for libopaque.js${NC}"
+            exit 1
+        }
+    fi
+
+    # Build libopaque.js
+    echo "Building libopaque.js and libopaque.debug.js..."
+    if ! make libopaquejs; then
+        echo -e "${RED}[X] Failed to build libopaque.js${NC}"
+        exit 1
+    fi
+
+    # Verify build output
+    if [ ! -f "dist/libopaque.js" ] || [ ! -f "dist/libopaque.debug.js" ]; then
+        echo -e "${RED}[X] libopaque.js build output missing${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}[OK] libopaque.js built successfully${NC}"
+    
+    # Return to project root
+    cd ../../../../
 fi
 
-# Build libopaque.js
-echo "Building libopaque.js and libopaque.debug.js..."
-if ! make libopaquejs; then
-    echo -e "${RED}[X] Failed to build libopaque.js${NC}"
-    exit 1
-fi
-
-# Verify build output
-if [ ! -f "dist/libopaque.js" ] || [ ! -f "dist/libopaque.debug.js" ]; then
-    echo -e "${RED}[X] libopaque.js build output missing${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}[OK] libopaque.js built successfully${NC}"
-
-# Copy to client static directory
+# Copy to client static directory (whether pre-built or freshly built)
 echo "Copying libopaque.js files to client/static/js/..."
-cd ../../../../
 cp vendor/stef/libopaque/js/dist/libopaque.js client/static/js/
 cp vendor/stef/libopaque/js/dist/libopaque.debug.js client/static/js/
 
@@ -455,6 +471,26 @@ build_go_binaries_static() {
     "$GO_BINARY" build -a -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -extldflags '-static'" -o ${BUILD_DIR}/${APP_NAME} .
     echo -e "${GREEN}[OK] arkfile server built with CGO static linking${NC}"
     
+    # Build arkfile-client with CGO (needs OPAQUE client functions)
+    echo "Building arkfile-client with CGO static linking..."
+    export CGO_ENABLED=1
+    export CGO_CFLAGS="-I./vendor/stef/libopaque/src -I./vendor/stef/liboprf/src"
+    export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf"
+    export CGO_LDFLAGS="$CGO_LDFLAGS $(pkg-config --libs --static libsodium)"
+    
+    "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/arkfile-client ./cmd/arkfile-client
+    echo -e "${GREEN}[OK] arkfile-client built with CGO static linking${NC}"
+    
+    # Build arkfile-admin with CGO (needs OPAQUE client functions)
+    echo "Building arkfile-admin with CGO static linking..."
+    export CGO_ENABLED=1
+    export CGO_CFLAGS="-I./vendor/stef/libopaque/src -I./vendor/stef/liboprf/src"
+    export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf"
+    export CGO_LDFLAGS="$CGO_LDFLAGS $(pkg-config --libs --static libsodium)"
+    
+    "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
+    echo -e "${GREEN}[OK] arkfile-admin built with CGO static linking${NC}"
+    
     # Build Go utility tools without CGO (pure static)
     echo "Building Go utility tools with pure static linking..."
     export CGO_ENABLED=0
@@ -462,12 +498,6 @@ build_go_binaries_static() {
     
     echo "Building cryptocli..."
     "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/cryptocli ./cmd/cryptocli
-    
-    echo "Building arkfile-client..."
-    "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/arkfile-client ./cmd/arkfile-client
-    
-    echo "Building arkfile-admin..."
-    "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
     
     echo -e "${GREEN}[OK] Go utility tools built with pure static linking${NC}"
     echo -e "${GREEN}[OK] All Go binaries built with static linking${NC}"

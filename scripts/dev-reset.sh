@@ -358,27 +358,28 @@ print_status "SUCCESS" "Application build and deployment complete"
 # Verify critical files are in place and fix if needed
 print_status "INFO" "Verifying critical files are in place..."
 
-# Ensure WASM binary is available in working directory
-if [ ! -f "$ARKFILE_DIR/client/static/main.wasm" ]; then
-    print_status "ERROR" "WASM binary missing from working directory."
-    echo "    Expected location: $ARKFILE_DIR/client/static/main.wasm"
-    if [ -f "build/client/static/main.wasm" ]; then
-        echo "    Found in build directory: build/client/static/main.wasm"
+# Ensure libopaque.js is available (contains embedded WASM)
+if [ ! -f "$ARKFILE_DIR/client/static/js/libopaque.js" ]; then
+    print_status "ERROR" "libopaque.js missing from working directory."
+    echo "    Expected location: $ARKFILE_DIR/client/static/js/libopaque.js"
+    if [ -f "build/client/static/js/libopaque.js" ]; then
+        echo "    Found in build directory: build/client/static/js/libopaque.js"
         echo "    The build script should have deployed this automatically."
     fi
     print_status "ERROR" "The build likely failed or deployment step was skipped."
     exit 1
 else
-    print_status "SUCCESS" "WASM binary verified in working directory"
+    print_status "SUCCESS" "libopaque.js verified in working directory"
 fi
 
-# Ensure wasm_exec.js is available
-if [ ! -f "$ARKFILE_DIR/client/static/wasm_exec.js" ]; then
-    print_status "ERROR" "wasm_exec.js missing from working directory. The build likely failed."
-    # The build script should place this file here directly.
+# Ensure TypeScript bundle is available
+if [ ! -f "$ARKFILE_DIR/client/static/js/dist/app.js" ]; then
+    print_status "ERROR" "TypeScript bundle missing from working directory."
+    echo "    Expected location: $ARKFILE_DIR/client/static/js/dist/app.js"
+    print_status "ERROR" "The build likely failed or deployment step was skipped."
     exit 1
 else
-    print_status "SUCCESS" "wasm_exec.js verified in working directory"
+    print_status "SUCCESS" "TypeScript bundle verified in working directory"
 fi
 
 print_status "SUCCESS" "Critical file verification complete"
@@ -407,19 +408,19 @@ echo "===================================="
 print_status "INFO" "Ensuring correct ownership of all directories..."
 chown -R arkfile:arkfile "$ARKFILE_DIR"
 
-# Preserve specific permissions for sensitive directories
+# Preserve specific permissions for sensitive directories (only if they exist)
 chmod 700 "$ARKFILE_DIR/etc/keys"
-chmod 700 "$ARKFILE_DIR/etc/keys/jwt"
-chmod 700 "$ARKFILE_DIR/etc/keys/jwt/current"
-chmod 700 "$ARKFILE_DIR/etc/keys/jwt/backup"
-chmod 700 "$ARKFILE_DIR/etc/keys/opaque"
-chmod 700 "$ARKFILE_DIR/etc/keys/tls"
-chmod 700 "$ARKFILE_DIR/etc/keys/tls/ca"
-chmod 700 "$ARKFILE_DIR/etc/keys/tls/arkfile"
-chmod 700 "$ARKFILE_DIR/etc/keys/tls/rqlite"
-chmod 700 "$ARKFILE_DIR/etc/keys/tls/minio"
-chmod 700 "$ARKFILE_DIR/etc/keys/backups"
-chmod 700 "$ARKFILE_DIR/etc/keys/totp"
+[ -d "$ARKFILE_DIR/etc/keys/jwt" ] && chmod 700 "$ARKFILE_DIR/etc/keys/jwt"
+[ -d "$ARKFILE_DIR/etc/keys/jwt/current" ] && chmod 700 "$ARKFILE_DIR/etc/keys/jwt/current"
+[ -d "$ARKFILE_DIR/etc/keys/jwt/backup" ] && chmod 700 "$ARKFILE_DIR/etc/keys/jwt/backup"
+[ -d "$ARKFILE_DIR/etc/keys/opaque" ] && chmod 700 "$ARKFILE_DIR/etc/keys/opaque"
+[ -d "$ARKFILE_DIR/etc/keys/tls" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls"
+[ -d "$ARKFILE_DIR/etc/keys/tls/ca" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/ca"
+[ -d "$ARKFILE_DIR/etc/keys/tls/arkfile" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/arkfile"
+[ -d "$ARKFILE_DIR/etc/keys/tls/rqlite" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/rqlite"
+[ -d "$ARKFILE_DIR/etc/keys/tls/minio" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/minio"
+[ -d "$ARKFILE_DIR/etc/keys/backups" ] && chmod 700 "$ARKFILE_DIR/etc/keys/backups"
+[ -d "$ARKFILE_DIR/etc/keys/totp" ] && chmod 700 "$ARKFILE_DIR/etc/keys/totp"
 
 print_status "SUCCESS" "Directory ownership verified"
 
