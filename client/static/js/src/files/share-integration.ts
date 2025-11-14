@@ -136,7 +136,7 @@ function setupShareFormEventListeners(formDiv: HTMLElement, fileId: string): voi
 /**
  * Handles real-time password validation
  */
-function handlePasswordInput(formDiv: HTMLElement): void {
+async function handlePasswordInput(formDiv: HTMLElement): Promise<void> {
   if (!currentShareCreator) return;
 
   const passwordInput = formDiv.querySelector('#share-password') as HTMLInputElement;
@@ -151,7 +151,7 @@ function handlePasswordInput(formDiv: HTMLElement): void {
     return;
   }
 
-  const validation = currentShareCreator.validatePassword(password);
+  const validation = await currentShareCreator.validatePassword(password);
   
   // Update strength indicator
   const strengthClass = getStrengthClass(validation.strength_score);

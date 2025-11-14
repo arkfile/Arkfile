@@ -13,6 +13,26 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+# Function to verify no root-owned files exist in /opt/arkfile
+verify_ownership() {
+    local check_dir="$1"
+    echo -e "${BLUE}[VERIFY] Checking directory ownership for $check_dir...${NC}"
+    
+    # Find any root-owned files/directories
+    local root_owned=$(find "$check_dir" -user root 2>/dev/null | grep -v "^$" || true)
+    
+    if [ -n "$root_owned" ]; then
+        echo -e "${RED}[X] Found root-owned files/directories:${NC}"
+        echo "$root_owned" | while read -r file; do
+            echo "  - $file"
+        done
+        return 1
+    fi
+    
+    echo -e "${GREEN}[OK] All files in $check_dir owned by arkfile user${NC}"
+    return 0
+}
+
 echo -e "${GREEN}Deploying ${APP_NAME} locally...${NC}"
 
 # Verify we have build artifacts
@@ -50,6 +70,18 @@ sudo systemctl daemon-reload
 # Enable services (but don't auto-start)
 echo -e "${YELLOW}[INFO] Enabling services (without auto-start)...${NC}"
 sudo systemctl enable ${APP_NAME} 2>/dev/null || true
+
+# Verify ownership after deployment
+if ! verify_ownership "$BASE_DIR"; then
+    echo -e "${RED}[X] Ownership verification failed after deployment${NC}"
+    echo -e "${YELLOW}[FIX] Attempting to fix ownership...${NC}"
+    sudo chown -R arkfile:arkfile "$BASE_DIR"
+    
+    if ! verify_ownership "$BASE_DIR"; then
+        echo -e "${RED}[X] Failed to fix ownership issues${NC}"
+        exit 1
+    fi
+fi
 
 # Services can be started manually by the user when ready
 echo -e "${GREEN}[OK] Deployment complete!${NC}"

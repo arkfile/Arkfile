@@ -2,10 +2,10 @@ package crypto
 
 import (
 	"crypto/sha256"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 
 	"golang.org/x/crypto/argon2"
@@ -20,7 +20,7 @@ type UnifiedArgonProfile struct {
 	KeyLen  uint32 // output length in bytes
 }
 
-// argon2ParamsJSON matches the structure of config/argon2id-params.json
+// argon2ParamsJSON matches the structure of crypto/argon2id-params.json
 type argon2ParamsJSON struct {
 	MemoryCostKiB int    `json:"memoryCostKiB"`
 	TimeCost      int    `json:"timeCost"`
@@ -29,24 +29,22 @@ type argon2ParamsJSON struct {
 	Variant       string `json:"variant"`
 }
 
+//go:embed argon2id-params.json
+var embeddedArgon2Params []byte
+
 var (
 	// UnifiedArgonSecure is the profile for all file encryption contexts
-	// SINGLE SOURCE OF TRUTH: Loaded from config/argon2id-params.json
+	// SINGLE SOURCE OF TRUTH: Embedded from crypto/argon2id-params.json at build time
 	UnifiedArgonSecure UnifiedArgonProfile
 	argonLoadOnce      sync.Once
 	argonLoadErr       error
 )
 
-// loadArgon2Params loads Argon2ID parameters from config/argon2id-params.json
+// loadArgon2Params loads Argon2ID parameters from embedded config
 func loadArgon2Params() error {
-	file, err := os.ReadFile("config/argon2id-params.json")
-	if err != nil {
-		return fmt.Errorf("failed to read argon2id params: %w", err)
-	}
-
 	var params argon2ParamsJSON
-	if err := json.Unmarshal(file, &params); err != nil {
-		return fmt.Errorf("failed to parse argon2id params: %w", err)
+	if err := json.Unmarshal(embeddedArgon2Params, &params); err != nil {
+		return fmt.Errorf("failed to parse embedded argon2id params: %w", err)
 	}
 
 	// Validate variant
@@ -75,6 +73,11 @@ func init() {
 	if argonLoadErr != nil {
 		panic(fmt.Sprintf("FATAL: Failed to load Argon2ID parameters: %v", argonLoadErr))
 	}
+}
+
+// GetEmbeddedArgon2ParamsJSON returns the raw embedded JSON for API serving
+func GetEmbeddedArgon2ParamsJSON() []byte {
+	return embeddedArgon2Params
 }
 
 // Static salts for FEK wrapping

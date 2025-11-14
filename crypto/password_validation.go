@@ -1,14 +1,17 @@
 package crypto
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"sync"
 
 	"github.com/trustelem/zxcvbn"
 )
+
+//go:embed password-requirements.json
+var embeddedPasswordRequirements []byte
 
 // PasswordRequirements holds password validation configuration
 type PasswordRequirements struct {
@@ -28,10 +31,10 @@ var (
 	passwordRequirementsErr  error
 )
 
-// LoadPasswordRequirements loads password requirements from config file
+// LoadPasswordRequirements loads password requirements from embedded config
 func LoadPasswordRequirements() (*PasswordRequirements, error) {
 	passwordRequirementsOnce.Do(func() {
-		// Default values (fallback if config file doesn't exist)
+		// Default values (fallback)
 		passwordRequirements = &PasswordRequirements{
 			MinAccountPasswordLength: 14,
 			MinCustomPasswordLength:  14,
@@ -43,21 +46,9 @@ func LoadPasswordRequirements() (*PasswordRequirements, error) {
 			RequireSpecial:           true,
 		}
 
-		// Try to load from config file
-		configPath := "config/password-requirements.json"
-		data, err := os.ReadFile(configPath)
-		if err != nil {
-			// If file doesn't exist, use defaults (not an error)
-			if os.IsNotExist(err) {
-				return
-			}
-			passwordRequirementsErr = fmt.Errorf("failed to read password requirements config: %w", err)
-			return
-		}
-
-		// Parse JSON
-		if err := json.Unmarshal(data, passwordRequirements); err != nil {
-			passwordRequirementsErr = fmt.Errorf("failed to parse password requirements config: %w", err)
+		// Parse embedded JSON
+		if err := json.Unmarshal(embeddedPasswordRequirements, passwordRequirements); err != nil {
+			passwordRequirementsErr = fmt.Errorf("failed to parse embedded password requirements: %w", err)
 			return
 		}
 	})
@@ -72,6 +63,11 @@ func GetPasswordRequirements() *PasswordRequirements {
 		panic(fmt.Sprintf("Failed to load password requirements: %v", err))
 	}
 	return reqs
+}
+
+// GetEmbeddedPasswordRequirementsJSON returns the raw embedded JSON for API serving
+func GetEmbeddedPasswordRequirementsJSON() []byte {
+	return embeddedPasswordRequirements
 }
 
 // PasswordValidationResult represents the result of password validation

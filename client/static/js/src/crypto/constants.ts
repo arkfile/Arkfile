@@ -29,7 +29,8 @@ interface Argon2Config {
 let cachedArgon2Config: Argon2Config | null = null;
 
 /**
- * Load Argon2id parameters from config file
+ * Load Argon2id parameters from API endpoint
+ * This ensures client and server always use the same embedded configuration
  */
 async function loadArgon2Config(): Promise<Argon2Config> {
   if (cachedArgon2Config !== null) {
@@ -37,14 +38,15 @@ async function loadArgon2Config(): Promise<Argon2Config> {
   }
 
   try {
-    const response = await fetch('/config/argon2id-params.json');
+    const response = await fetch('/api/config/argon2');
     if (!response.ok) {
       throw new Error(`Failed to load Argon2 config: ${response.statusText}`);
     }
-    cachedArgon2Config = await response.json();
-    return cachedArgon2Config;
+    const config: Argon2Config = await response.json();
+    cachedArgon2Config = config;
+    return config;
   } catch (error) {
-    throw new Error(`Failed to load Argon2id parameters from config: ${error}`);
+    throw new Error(`Failed to load Argon2id parameters from API: ${error}`);
   }
 }
 

@@ -111,6 +111,26 @@ print_status() {
     esac
 }
 
+# Function to verify no root-owned files exist in /opt/arkfile
+verify_ownership() {
+    local check_dir="$1"
+    print_status "INFO" "Verifying directory ownership for $check_dir..."
+    
+    # Find any root-owned files/directories
+    local root_owned=$(find "$check_dir" -user root 2>/dev/null | grep -v "^$" || true)
+    
+    if [ -n "$root_owned" ]; then
+        print_status "ERROR" "Found root-owned files/directories:"
+        echo "$root_owned" | while read -r file; do
+            echo "  - $file"
+        done
+        return 1
+    fi
+    
+    print_status "SUCCESS" "All files in $check_dir owned by arkfile user"
+    return 0
+}
+
 # Find and verify Go binary before proceeding
 echo -e "${YELLOW}Detecting Go installation...${NC}"
 if ! GO_BINARY=$(find_go_binary); then
@@ -378,6 +398,30 @@ if ! ./scripts/setup/02-setup-directories.sh; then
     exit 1
 fi
 print_status "SUCCESS" "Base directory structure created"
+echo
+
+# Step 5: Ensure correct ownership of all directories
+echo -e "${CYAN}Step 5: Ensuring correct ownership${NC}"
+echo "===================================="
+
+print_status "INFO" "Ensuring correct ownership of all directories..."
+chown -R arkfile:arkfile "$ARKFILE_DIR"
+
+# Preserve specific permissions for sensitive directories
+chmod 700 "$ARKFILE_DIR/etc/keys"
+chmod 700 "$ARKFILE_DIR/etc/keys/jwt"
+chmod 700 "$ARKFILE_DIR/etc/keys/jwt/current"
+chmod 700 "$ARKFILE_DIR/etc/keys/jwt/backup"
+chmod 700 "$ARKFILE_DIR/etc/keys/opaque"
+chmod 700 "$ARKFILE_DIR/etc/keys/tls"
+chmod 700 "$ARKFILE_DIR/etc/keys/tls/ca"
+chmod 700 "$ARKFILE_DIR/etc/keys/tls/arkfile"
+chmod 700 "$ARKFILE_DIR/etc/keys/tls/rqlite"
+chmod 700 "$ARKFILE_DIR/etc/keys/tls/minio"
+chmod 700 "$ARKFILE_DIR/etc/keys/backups"
+chmod 700 "$ARKFILE_DIR/etc/keys/totp"
+
+print_status "SUCCESS" "Directory ownership verified"
 
 # Explicitly create and permission the log directory
 print_status "INFO" "Ensuring log directory exists and has correct permissions..."
@@ -387,8 +431,8 @@ chmod 775 "$ARKFILE_DIR/var/log"
 print_status "SUCCESS" "Log directory configured at $ARKFILE_DIR/var/log"
 echo
 
-# Step 5: Generate fresh secrets
-echo -e "${CYAN}Step 5: Generating fresh secrets${NC}"
+# Step 6: Generate fresh secrets
+echo -e "${CYAN}Step 6: Generating fresh secrets${NC}"
 echo "================================="
 
 # Generate random JWT secret for security
@@ -463,8 +507,8 @@ print_status "SUCCESS" "Fresh rqlite authentication created"
 print_status "SUCCESS" "Secret generation complete"
 echo
 
-# Step 6: Generate cryptographic keys
-echo -e "${CYAN}Step 6: Generate cryptographic keys${NC}"
+# Step 7: Generate cryptographic keys
+echo -e "${CYAN}Step 7: Generate cryptographic keys${NC}"
 echo "====================================="
 
 # Generate OPAQUE server keys
@@ -499,11 +543,23 @@ if ! ./scripts/setup/05-setup-tls-certs.sh; then
 fi
 print_status "SUCCESS" "TLS certificates generated"
 
+# Verify ownership after key generation
+if ! verify_ownership "$ARKFILE_DIR"; then
+    print_status "ERROR" "Ownership verification failed after key generation"
+    print_status "INFO" "Attempting to fix ownership..."
+    chown -R arkfile:arkfile "$ARKFILE_DIR"
+    
+    if ! verify_ownership "$ARKFILE_DIR"; then
+        print_status "ERROR" "Failed to fix ownership issues"
+        exit 1
+    fi
+fi
+
 print_status "SUCCESS" "Cryptographic key generation complete"
 echo
 
-# Step 7: Setup MinIO and rqlite
-echo -e "${CYAN}Step 7: Setting up MinIO and rqlite${NC}"
+# Step 8: Setup MinIO and rqlite
+echo -e "${CYAN}Step 8: Setting up MinIO and rqlite${NC}"
 echo "==================================="
 
 # Setup MinIO directories and service
@@ -523,8 +579,8 @@ fi
 print_status "SUCCESS" "rqlite setup complete"
 echo
 
-# Step 8: Start services
-echo -e "${CYAN}Step 8: Starting services${NC}"
+# Step 9: Start services
+echo -e "${CYAN}Step 9: Starting services${NC}"
 echo "========================="
 
 # Install/update systemd service file
@@ -592,9 +648,9 @@ else
 fi
 echo
 
-# Step 9: Health verification
-echo -e "${CYAN}Step 9: Health verification${NC}"
-echo "============================"
+# Step 10: Health verification
+echo -e "${CYAN}Step 10: Health verification${NC}"
+echo "============================="
 
 # Wait for Arkfile to be ready
 print_status "INFO" "Waiting for Arkfile to start and be ready..."
@@ -614,6 +670,21 @@ if [ $attempt -eq $max_attempts ]; then
     exit 1
 fi
 
+# Test config API endpoints (embedded configuration)
+print_status "INFO" "Testing configuration API endpoints..."
+
+if curl -s http://localhost:8080/api/config/argon2 2>/dev/null | grep -q '"memory"'; then
+    print_status "SUCCESS" "Argon2 config API endpoint responding"
+else
+    print_status "WARNING" "Argon2 config API endpoint may not be working"
+fi
+
+if curl -s http://localhost:8080/api/config/password-requirements 2>/dev/null | grep -q '"account"'; then
+    print_status "SUCCESS" "Password requirements API endpoint responding"
+else
+    print_status "WARNING" "Password requirements API endpoint may not be working"
+fi
+
 # Service status check
 minio_status=$(systemctl is-active minio 2>/dev/null || echo "failed")
 rqlite_status=$(systemctl is-active rqlite 2>/dev/null || echo "failed")
@@ -628,6 +699,15 @@ echo "    Arkfile: ${arkfile_status}"
 if [ "$minio_status" != "active" ] || [ "$rqlite_status" != "active" ] || [ "$arkfile_status" != "active" ]; then
     print_status "ERROR" "One or more services failed to start properly"
     exit 1
+fi
+
+# Final ownership verification
+print_status "INFO" "Performing final ownership verification..."
+if ! verify_ownership "$ARKFILE_DIR"; then
+    print_status "WARNING" "Some files may have incorrect ownership"
+    print_status "INFO" "This may cause permission issues at runtime"
+else
+    print_status "SUCCESS" "All ownership checks passed"
 fi
 
 echo

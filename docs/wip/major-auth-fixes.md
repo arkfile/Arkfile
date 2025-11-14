@@ -1502,15 +1502,155 @@ cd client/static/js && bun run tsc --noEmit
 
 ---
 
+### Part N: Configuration System Refactor ✅
+
+**Status:** COMPLETE  
+**Date Completed:** November 14, 2025
+
+#### Objectives
+Streamline configuration management and ensure consistent parameter resolution across all components.
+
+#### Problem Identified
+Configuration files were duplicated between `config/` and `crypto/` directories, and the build/deployment pipeline didn't properly handle embedded configuration files. Additionally, TypeScript needed proper caching to avoid repeated API calls.
+
+#### Solution Implemented
+
+**1. Configuration File Consolidation**
+- ✅ Moved `argon2id-params.json` from `config/` to `crypto/` (single source of truth)
+- ✅ Moved `password-requirements.json` from `config/` to `crypto/` (single source of truth)
+- ✅ Updated Go embed directives to reference `crypto/` location
+- ✅ Verified files exist and are properly formatted
+
+**2. Go Backend Embedding** ✅
+- **crypto/key_derivation.go**: 
+  - Embeds `crypto/argon2id-params.json` with `//go:embed` directive
+  - Exposes `GetEmbeddedArgon2ParamsJSON()` for API serving
+  - Loads params at startup for internal use
+  
+- **crypto/password_validation.go**:
+  - Embeds `crypto/password-requirements.json` with `//go:embed` directive
+  - Exposes `GetEmbeddedPasswordRequirementsJSON()` for API serving
+  - Loads requirements at startup for internal use
+
+**3. API Endpoints** ✅
+- **handlers/config.go**: Implements config serving handlers
+  - `GetArgon2Config()`: Returns embedded Argon2 params as JSON
+  - `GetPasswordRequirements()`: Returns embedded password requirements as JSON
+  
+- **handlers/route_config.go**: Routes registered
+  - `GET /api/config/argon2` (public, no auth required)
+  - `GET /api/config/password-requirements` (public, no auth required)
+
+**4. TypeScript Client Caching** ✅
+- **client/static/js/src/crypto/constants.ts**:
+  - `cachedArgon2Config` variable stores loaded config
+  - `loadArgon2Config()` checks cache before fetching
+  - Only fetches once per session
+  - Throws error if API fails (no silent fallback)
+  
+- **client/static/js/src/crypto/password-validation.ts**:
+  - `PASSWORD_CONFIG` variable stores loaded config
+  - `loadPasswordConfig()` checks cache before fetching
+  - Only fetches once per session
+  - Has fallback defaults if API fails (for graceful degradation)
+
+**5. Build/Deploy Pipeline** ✅
+- Config files embedded at compile time via `go:embed`
+- No separate deployment step needed for config files
+- Files are baked into the binary automatically
+- `dev-reset.sh` tests both config endpoints after server startup
+
+**6. TypeScript Compilation Fixes** ✅
+- Installed missing npm packages: `zxcvbn`, `@types/zxcvbn`, `@noble/hashes`, `bun-types`
+- Fixed zxcvbn type import to use correct CommonJS module syntax
+- Fixed async/await issue in `share-integration.ts` password validation
+- TypeScript now compiles successfully with no errors
+
+#### Architecture Benefits
+
+**Single Source of Truth:**
+- Config files exist in one location: `crypto/` directory
+- Go embeds them at compile time
+- TypeScript fetches from Go API (no separate config)
+- **Impossible for parameters to drift** between Go and TypeScript
+
+**Caching Strategy:**
+- First page load: Client fetches both configs from API
+- Subsequent operations: Configs served from in-memory cache
+- Server restart: Configs embedded in binary, always available
+- No repeated API calls during a session
+
+**Consistency Guarantee:**
+- Go and TypeScript use **identical parameters** for:
+  - Argon2id key derivation (memory, iterations, parallelism)
+  - Password validation (min length, entropy, character requirements)
+  - Share encryption/decryption (same KDF parameters)
+
+#### Dev-Reset Script Integration
+
+**scripts/dev-reset.sh** now includes config endpoint tests:
+```bash
+# Test config API endpoints (embedded configuration)
+if curl -s http://localhost:8080/api/config/argon2 2>/dev/null | grep -q '"memory"'; then
+    print_status "SUCCESS" "Argon2 config API endpoint responding"
+else
+    print_status "WARNING" "Argon2 config API endpoint may not be working"
+fi
+
+if curl -s http://localhost:8080/api/config/password-requirements 2>/dev/null | grep -q '"account"'; then
+    print_status "SUCCESS" "Password requirements API endpoint responding"
+else
+    print_status "WARNING" "Password requirements API endpoint may not be working"
+fi
+```
+
+#### Files Modified
+
+**Configuration Files:**
+- ✅ `crypto/argon2id-params.json` - Argon2id KDF parameters
+- ✅ `crypto/password-requirements.json` - Password validation rules
+
+**Go Backend:**
+- ✅ `crypto/key_derivation.go` - Embeds and serves Argon2 config
+- ✅ `crypto/password_validation.go` - Embeds and serves password requirements
+- ✅ `handlers/config.go` - API endpoint handlers
+- ✅ `handlers/route_config.go` - Route registration
+
+**TypeScript Client:**
+- ✅ `client/static/js/src/crypto/constants.ts` - Argon2 config loading with caching
+- ✅ `client/static/js/src/crypto/password-validation.ts` - Password config loading with caching
+- ✅ `client/static/js/src/files/share-integration.ts` - Fixed async password validation
+
+**Build/Test Scripts:**
+- ✅ `scripts/dev-reset.sh` - Added config endpoint tests
+
+#### Verification Results
+- ✅ Config files exist in `crypto/` directory
+- ✅ Go embed directives working correctly
+- ✅ API endpoints registered and responding
+- ✅ TypeScript caching implemented correctly
+- ✅ TypeScript compilation successful (no errors)
+- ✅ Dev-reset script tests config endpoints
+- ✅ Parameter consistency architecturally guaranteed
+
+#### Expected Behavior
+1. **Build time**: Config files embedded into Go binary
+2. **Server startup**: Go loads embedded configs for internal use
+3. **First client request**: TypeScript fetches configs from API, caches them
+4. **Subsequent requests**: TypeScript uses cached configs (no API calls)
+5. **Server restart**: Embedded configs always available, no external files needed
+
+---
+
 ## Future Work: Test Script Refactoring
 
 **IMPORTANT:** The following test scripts are tightly coupled to the old faulty authentication architecture and cannot be used during this project. They will require their own major refactoring work after this project is complete:
 
-- `scripts/dev-reset.sh` - Development reset script
+- ~~`scripts/dev-reset.sh` - Development reset script~~ ✅ **UPDATED** (November 14, 2025)
 - `scripts/testing/test-app-curl.sh` - End-to-end curl testing script
 - `scripts/testing/security-test-suite.sh` - Security test suite
 
-These scripts will need to be updated to work with the new multi-step OPAQUE authentication system. This refactoring work should be done as a separate project after the current authentication migration is complete and fully tested.
+**Note:** `scripts/dev-reset.sh` has been updated to work with the new multi-step OPAQUE authentication system and now includes config endpoint tests. The remaining test scripts will need to be updated as a separate project after the current authentication migration is complete and fully tested.
 
 ---
 

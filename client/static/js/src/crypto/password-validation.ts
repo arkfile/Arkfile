@@ -7,7 +7,9 @@
  * Uses unified config from config/password-requirements.json
  */
 
-import type { ZXCVBNResult } from 'zxcvbn';
+import type zxcvbn from 'zxcvbn';
+
+type ZXCVBNResult = zxcvbn.ZXCVBNResult;
 
 /**
  * Password requirements configuration
@@ -27,7 +29,8 @@ interface PasswordConfig {
 let PASSWORD_CONFIG: PasswordConfig | null = null;
 
 /**
- * Load password requirements from config file
+ * Load password requirements from API endpoint
+ * This ensures client and server always use the same embedded configuration
  */
 async function loadPasswordConfig(): Promise<PasswordConfig> {
   if (PASSWORD_CONFIG !== null) {
@@ -35,12 +38,13 @@ async function loadPasswordConfig(): Promise<PasswordConfig> {
   }
 
   try {
-    const response = await fetch('/config/password-requirements.json');
+    const response = await fetch('/api/config/password-requirements');
     if (!response.ok) {
       throw new Error(`Failed to load password config: ${response.statusText}`);
     }
-    PASSWORD_CONFIG = await response.json();
-    return PASSWORD_CONFIG;
+    const config: PasswordConfig = await response.json();
+    PASSWORD_CONFIG = config;
+    return config;
   } catch (error) {
     console.error('Failed to load password requirements config, using defaults:', error);
     // Fallback to defaults if config file can't be loaded

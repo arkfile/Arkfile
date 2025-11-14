@@ -579,20 +579,24 @@ cp -r database/* "${BUILD_DIR}/database/"
 
 # Deploy systemd service files to production location
 echo "Deploying systemd service files to ${BASE_DIR}/systemd/..."
-sudo mkdir -p "${BASE_DIR}/systemd"
-sudo cp "${BUILD_DIR}/systemd/"* "${BASE_DIR}/systemd/"
+sudo install -d -m 755 -o arkfile -g arkfile "${BASE_DIR}/systemd"
+for file in "${BUILD_DIR}/systemd/"*; do
+    sudo install -m 644 -o arkfile -g arkfile "$file" "${BASE_DIR}/systemd/"
+done
 
 # Deploy database schema to production location
 echo "Deploying database schema to ${BASE_DIR}/database/..."
-sudo mkdir -p "${BASE_DIR}/database"
-sudo cp "${BUILD_DIR}/database/"* "${BASE_DIR}/database/"
+sudo install -d -m 755 -o arkfile -g arkfile "${BASE_DIR}/database"
+for file in "${BUILD_DIR}/database/"*; do
+    sudo install -m 644 -o arkfile -g arkfile "$file" "${BASE_DIR}/database/"
+done
 
 # Deploy binaries to production location for key setup scripts
 echo "Deploying binaries to ${BASE_DIR}/bin/..."
-sudo mkdir -p "${BASE_DIR}/bin"
-sudo cp "${BUILD_DIR}/bin/"* "${BASE_DIR}/bin/"
-sudo chown root:root "${BASE_DIR}/bin/"*
-sudo chmod 755 "${BASE_DIR}/bin/"*
+sudo install -d -m 755 -o arkfile -g arkfile "${BASE_DIR}/bin"
+for file in "${BUILD_DIR}/bin/"*; do
+    sudo install -m 755 -o arkfile -g arkfile "$file" "${BASE_DIR}/bin/"
+done
 
 echo -e "${GREEN}Build complete!${NC}"
 echo "Build artifacts are ready in the '${BUILD_DIR}' directory."
