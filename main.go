@@ -159,11 +159,6 @@ func main() {
 		// Don't crash the app - admin user can be set up manually later
 	}
 
-	// Initialize test user if needed
-	if err := initializeTestUser(); err != nil {
-		log.Printf("Warning: Failed to initialize test user: %v", err)
-	}
-
 	// Create Echo instance
 	e := echo.New()
 
@@ -339,42 +334,6 @@ func initializeAdminUser() error {
 
 	log.Printf("=== Dev admin user initialization complete ===")
 	log.Printf("Username: %s", devAdminUsername)
-	log.Printf("Password: %s", devAdminPassword)
-	log.Printf("TOTP Secret: %s", devAdminTOTPSecret)
-	log.Printf("SECURITY: These are fixed credentials for development/testing only!")
-
-	return nil
-}
-
-// initializeTestUser creates a standard test user for development if needed
-func initializeTestUser() error {
-	if utils.IsProductionEnvironment() {
-		return nil // Do not create test users in production
-	}
-
-	testUsername := "arkfile-dev-test-user"
-
-	log.Printf("Checking if test user '%s' needs initialization...", testUsername)
-
-	// Check if user exists
-	existingUser, err := models.GetUserByUsername(database.DB, testUsername)
-	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("failed to check test user existence: %w", err)
-	}
-
-	if existingUser != nil {
-		log.Printf("Test user '%s' already exists (ID: %d), skipping initialization", testUsername, existingUser.ID)
-		return nil
-	}
-
-	// NOTE: Automatic test user creation is deprecated.
-	// Test users must now be created manually using the multi-step OPAQUE protocol:
-	// 1. Use the web UI registration flow at /register
-	// 2. Or use CLI tools for user management
-
-	log.Printf("NOTE: Automatic test user initialization is deprecated")
-	log.Printf("Test users must be created manually via the web interface")
-	log.Printf("Please register test user '%s' via the web interface if needed", testUsername)
 
 	return nil
 }

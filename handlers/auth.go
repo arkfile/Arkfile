@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"net/http"
 	"os"
 	"strings"
@@ -499,11 +500,12 @@ func OpaqueAuthResponse(c echo.Context) error {
 	}
 
 	// Get user record from RFC-compliant opaque_user_data table
-	var userRecord []byte
+	// Note: opaque_user_record is stored as hex-encoded string in database
+	var userRecordHex string
 	err := database.DB.QueryRow(`
-		SELECT opaque_user_record FROM opaque_user_data 
+		SELECT opaque_user_record FROM opaque_user_data
 		WHERE username = ?`,
-		request.Username).Scan(&userRecord)
+		request.Username).Scan(&userRecordHex)
 	if err != nil {
 		logging.ErrorLogger.Printf("User not found for auth: %s", request.Username)
 		// Record failed login attempt
@@ -512,6 +514,13 @@ func OpaqueAuthResponse(c echo.Context) error {
 			logging.ErrorLogger.Printf("Failed to record login failure: %v", recordErr)
 		}
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid credentials")
+	}
+
+	// Decode hex-encoded user record from database
+	userRecord, err := hex.DecodeString(userRecordHex)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to decode OPAQUE user record for %s: %v", request.Username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// Decode credential request from client

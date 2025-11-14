@@ -23,8 +23,7 @@
   },
   "include": [
     "client/static/js/src/**/*",
-    "client/static/js/src/types/**/*.d.ts",
-    "config/argon2id-params.json"
+    "client/static/js/src/types/**/*.d.ts"
   ],
   "exclude": [
     "node_modules",

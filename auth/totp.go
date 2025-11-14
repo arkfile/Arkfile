@@ -577,11 +577,11 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 
 func decryptTOTPSecret(encrypted []byte, username string) (string, error) {
 	// Debug logging for TOTP decryption attempts
-	if isDebugMode() && logging.ErrorLogger != nil {
-		logging.ErrorLogger.Printf("TOTP decrypt attempt for user: %s, encrypted_data_len: %d",
+	if isDebugMode() && logging.DebugLogger != nil {
+		logging.DebugLogger.Printf("TOTP decrypt attempt for user: %s, encrypted_data_len: %d",
 			username, len(encrypted))
 		if len(encrypted) > 0 {
-			logging.ErrorLogger.Printf("TOTP decrypt data preview: first_8_bytes=%x, last_8_bytes=%x",
+			logging.DebugLogger.Printf("TOTP decrypt data preview: first_8_bytes=%x, last_8_bytes=%x",
 				encrypted[:min(8, len(encrypted))],
 				encrypted[max(0, len(encrypted)-8):])
 		}
@@ -598,14 +598,14 @@ func decryptTOTPSecret(encrypted []byte, username string) (string, error) {
 	defer crypto.SecureZeroTOTPKey(totpKey)
 
 	// Debug logging for derived key validation
-	if isDebugMode() && logging.ErrorLogger != nil {
+	if isDebugMode() && logging.DebugLogger != nil {
 		if len(totpKey) == 32 {
 			// Log key hash for debugging (never log actual key)
 			keyHash := hashString(string(totpKey))
-			logging.ErrorLogger.Printf("TOTP key derived successfully for user: %s, key_hash: %s",
+			logging.DebugLogger.Printf("TOTP key derived successfully for user: %s, key_hash: %s",
 				username, keyHash[:16])
 		} else {
-			logging.ErrorLogger.Printf("TOTP key derivation issue for user: %s, unexpected key length: %d",
+			logging.DebugLogger.Printf("TOTP key derivation issue for user: %s, unexpected key length: %d",
 				username, len(totpKey))
 		}
 	}
@@ -613,17 +613,17 @@ func decryptTOTPSecret(encrypted []byte, username string) (string, error) {
 	// Decrypt using AES-GCM
 	decrypted, err := crypto.DecryptGCM(encrypted, totpKey)
 	if err != nil {
-		if isDebugMode() && logging.ErrorLogger != nil {
-			logging.ErrorLogger.Printf("TOTP GCM decryption failed for user: %s, error: %v", username, err)
-			logging.ErrorLogger.Printf("TOTP GCM decrypt context: key_len=%d, data_len=%d",
+		if isDebugMode() && logging.DebugLogger != nil {
+			logging.DebugLogger.Printf("TOTP GCM decryption failed for user: %s, error: %v", username, err)
+			logging.DebugLogger.Printf("TOTP GCM decrypt context: key_len=%d, data_len=%d",
 				len(totpKey), len(encrypted))
 		}
 		return "", err
 	}
 
 	// Debug logging for successful decryption
-	if isDebugMode() && logging.ErrorLogger != nil {
-		logging.ErrorLogger.Printf("TOTP decrypt successful for user: %s, decrypted_len: %d",
+	if isDebugMode() && logging.DebugLogger != nil {
+		logging.DebugLogger.Printf("TOTP decrypt successful for user: %s, decrypted_len: %d",
 			username, len(decrypted))
 	}
 

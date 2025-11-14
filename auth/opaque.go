@@ -150,10 +150,10 @@ func storeOPAQUEUserData(db *sql.DB, userData OPAQUEUserData) error {
 
 	_, err := db.Exec(`
 		INSERT INTO opaque_user_data (
-			username, serialized_record, created_at
+			username, opaque_user_record, created_at
 		) VALUES (?, ?, ?)
 		ON CONFLICT(username) DO UPDATE SET
-		serialized_record=excluded.serialized_record;`,
+		opaque_user_record=excluded.opaque_user_record;`,
 		userData.Username, recordHex, userData.CreatedAt,
 	)
 	return err
@@ -165,7 +165,7 @@ func loadOPAQUEUserData(db *sql.DB, username string) (*OPAQUEUserData, error) {
 	var recordHex string
 	var createdAt sql.NullString // Use NullString to handle potential NULLs
 
-	err := db.QueryRow("SELECT username, serialized_record, created_at FROM opaque_user_data WHERE username = ?", username).Scan(
+	err := db.QueryRow("SELECT username, opaque_user_record, created_at FROM opaque_user_data WHERE username = ?", username).Scan(
 		&userData.Username, &recordHex, &createdAt,
 	)
 
@@ -175,7 +175,7 @@ func loadOPAQUEUserData(db *sql.DB, username string) (*OPAQUEUserData, error) {
 
 	userData.SerializedRecord, err = hex.DecodeString(recordHex)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode serialized record: %w", err)
+		return nil, fmt.Errorf("failed to decode opaque user record: %w", err)
 	}
 
 	if createdAt.Valid {

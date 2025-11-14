@@ -38,14 +38,9 @@ NETWORK COMMANDS (Admin API - localhost only):
     approve-user      Approve user account (dev-test env only)
     set-storage       Set user storage limit (via credits API)
 
-LOCAL COMMANDS (Direct system access - server endpoints not yet available):
-    backup            Create system backup (local implementation)
-    restore           Restore from backup (local implementation)
-    monitor           Performance monitoring (local implementation)
-    audit             Security audit (local implementation)
-    key-rotation      Rotate cryptographic keys (local implementation)
-    health-check      System health check (local implementation)
-    system-status     System status overview (local implementation)
+SYSTEM COMMANDS:
+    system-status     System status overview
+    health-check      System health check
     version           Show version information
 
 GLOBAL OPTIONS:
@@ -57,15 +52,17 @@ GLOBAL OPTIONS:
     --help, -h          Show help
 
 EXAMPLES:
-    # Network-based admin operations:
+    # Admin authentication:
     arkfile-admin login --username admin
+    
+    # User management:
     arkfile-admin list-users
     arkfile-admin approve-user --username alice
+    arkfile-admin set-storage --username alice --limit 10GB
     
-    # Local system operations:
-    arkfile-admin backup --output backup.tar.gz
+    # System monitoring:
+    arkfile-admin system-status
     arkfile-admin health-check --detailed
-    arkfile-admin key-rotation --type jwt
 `
 )
 
@@ -213,7 +210,7 @@ func main() {
 			os.Exit(1)
 		}
 
-	// Network-based system monitoring commands
+	// System monitoring commands
 	case "system-status":
 		if err := handleSystemStatusCommand(client, config, args); err != nil {
 			logError("System status failed: %v", err)
@@ -222,46 +219,6 @@ func main() {
 	case "health-check":
 		if err := handleHealthCheckCommand(client, config, args); err != nil {
 			logError("Health check failed: %v", err)
-			os.Exit(1)
-		}
-
-	// Local commands (server endpoints not yet available)
-	case "backup":
-		fmt.Printf("Using local implementation - server endpoint not yet available\n")
-		if err := handleBackupCommand(config, args); err != nil {
-			logError("Backup failed: %v", err)
-			os.Exit(1)
-		}
-	case "restore":
-		fmt.Printf("Using local implementation - server endpoint not yet available\n")
-		if err := handleRestoreCommand(config, args); err != nil {
-			logError("Restore failed: %v", err)
-			os.Exit(1)
-		}
-	case "monitor":
-		fmt.Printf("Using local implementation - server endpoint not yet available\n")
-		if err := handleMonitorCommand(config, args); err != nil {
-			logError("Monitor failed: %v", err)
-			os.Exit(1)
-		}
-	case "audit":
-		fmt.Printf("Using local implementation - server endpoint not yet available\n")
-		if err := handleAuditCommand(config, args); err != nil {
-			logError("Audit failed: %v", err)
-			os.Exit(1)
-		}
-	case "key-rotation":
-		fmt.Printf("Using local implementation - server endpoint not yet available\n")
-		if err := handleKeyRotationCommand(client, config, args); err != nil {
-			logError("Key rotation failed: %v", err)
-			os.Exit(1)
-		}
-
-	// Legacy commands that were removed from network - keeping for compatibility
-	case "revoke-user":
-		fmt.Printf("Command deprecated - use network API when available\n")
-		if err := handleRevokeUserCommand(client, config, args); err != nil {
-			logError("Revoke user failed: %v", err)
 			os.Exit(1)
 		}
 
@@ -1246,176 +1203,32 @@ func parseStorageLimit(limit string) (int64, error) {
 	return bytes, nil
 }
 
-// Local command handlers (using local file system access)
-
-// handleBackupCommand creates a system backup
-func handleBackupCommand(config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("backup", flag.ExitOnError)
-	var (
-		output  = fs.String("output", "arkfile-backup.tar.gz", "Output backup file")
-		baseDir = fs.String("base-dir", "/opt/arkfile", "Installation base directory")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin backup [FLAGS]
-
-Create a system backup including configuration, keys, and data.
-
-FLAGS:
-    --output FILE       Output backup file (default: arkfile-backup.tar.gz)
-    --base-dir DIR      Installation base directory (default: /opt/arkfile)
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin backup --output backup-$(date +%%Y%%m%%d).tar.gz
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	fmt.Printf("Creating system backup...\n")
-	fmt.Printf("Output file: %s\n", *output)
-	fmt.Printf("Base directory: %s\n", *baseDir)
-
-	// TODO: Implement actual backup logic
-	fmt.Printf("Backup functionality requires server endpoint implementation\n")
-	fmt.Printf("Would backup: config files, keys, database, user data\n")
-
-	return fmt.Errorf("backup endpoint not yet implemented on server")
-}
-
-// handleRestoreCommand restores from a system backup
-func handleRestoreCommand(config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("restore", flag.ExitOnError)
-	var (
-		input   = fs.String("input", "", "Input backup file (required)")
-		baseDir = fs.String("base-dir", "/opt/arkfile", "Installation base directory")
-		force   = fs.Bool("force", false, "Force restore without confirmation")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin restore [FLAGS]
-
-Restore system from backup file.
-
-FLAGS:
-    --input FILE        Input backup file (required)
-    --base-dir DIR      Installation base directory (default: /opt/arkfile)
-    --force            Force restore without confirmation
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin restore --input backup-20240814.tar.gz
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *input == "" {
-		return fmt.Errorf("input backup file is required")
-	}
-
-	fmt.Printf("Restoring from backup...\n")
-	fmt.Printf("Input file: %s\n", *input)
-	fmt.Printf("Base directory: %s\n", *baseDir)
-	fmt.Printf("Force mode: %v\n", *force)
-
-	// TODO: Implement actual restore logic
-	fmt.Printf("Restore functionality requires server endpoint implementation\n")
-	fmt.Printf("Would restore: config files, keys, database, user data\n")
-
-	return fmt.Errorf("restore endpoint not yet implemented on server")
-}
-
-// handleMonitorCommand performs performance monitoring
-func handleMonitorCommand(config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("monitor", flag.ExitOnError)
-	var (
-		duration = fs.Duration("duration", 60*time.Second, "Monitoring duration")
-		interval = fs.Duration("interval", 5*time.Second, "Sampling interval")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin monitor [FLAGS]
-
-Perform real-time performance monitoring.
-
-FLAGS:
-    --duration DURATION Monitoring duration (default: 60s)
-    --interval DURATION Sampling interval (default: 5s)
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin monitor --duration 5m --interval 10s
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	fmt.Printf("Starting performance monitoring...\n")
-	fmt.Printf("Duration: %s\n", *duration)
-	fmt.Printf("Interval: %s\n", *interval)
-
-	// TODO: Implement actual monitoring logic
-	fmt.Printf("Monitoring functionality requires server endpoint implementation\n")
-	fmt.Printf("Would monitor: CPU, memory, disk I/O, network, database performance\n")
-
-	return fmt.Errorf("monitoring endpoint not yet implemented on server")
-}
-
-// handleAuditCommand performs security audit
-func handleAuditCommand(config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("audit", flag.ExitOnError)
-	var (
-		detailed = fs.Bool("detailed", false, "Show detailed audit information")
-		output   = fs.String("output", "", "Save audit report to file")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin audit [FLAGS]
-
-Perform comprehensive security audit.
-
-FLAGS:
-    --detailed          Show detailed audit information
-    --output FILE       Save audit report to file
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin audit --detailed --output audit-report.txt
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	fmt.Printf("Performing security audit...\n")
-	fmt.Printf("Detailed mode: %v\n", *detailed)
-	if *output != "" {
-		fmt.Printf("Output file: %s\n", *output)
-	}
-
-	// TODO: Implement actual audit logic
-	fmt.Printf("Audit functionality requires server endpoint implementation\n")
-	fmt.Printf("Would audit: file permissions, key security, user access, configuration\n")
-
-	return fmt.Errorf("audit endpoint not yet implemented on server")
-}
-
-// readPassword reads a password from stdin without echoing using terminal controls
+// readPassword reads a password from stdin. If stdin is a terminal, it will
+// read without echoing. If stdin is a pipe, it will read directly.
 func readPassword() (string, error) {
-	fmt.Print("")
-	bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+	fi, err := os.Stdin.Stat()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to stat stdin: %w", err)
 	}
-	fmt.Println() // Add newline after password input
-	return string(bytePassword), nil
+
+	// Check if stdin is a Character Device, which indicates a terminal
+	if (fi.Mode() & os.ModeCharDevice) != 0 {
+		// Terminal mode: read password without echoing
+		bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+		if err != nil {
+			return "", err
+		}
+		// Add a newline because terminal reads don't echo the Enter key
+		fmt.Println()
+		return string(bytePassword), nil
+	}
+
+	// Not a terminal, so read from stdin (likely a pipe)
+	reader := bufio.NewReader(os.Stdin)
+	password, err := reader.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", fmt.Errorf("failed to read password from stdin: %w", err)
+	}
+	// Trim trailing newline characters which are common in piped input
+	return strings.TrimRight(password, "\r\n"), nil
 }

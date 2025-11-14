@@ -155,6 +155,13 @@ func SetupDevAdminTOTP(db *sql.DB, user *models.User, totpSecret string) error {
 
 	if isDebug {
 		log.Printf("Generated %d backup codes for dev admin", len(backupCodes))
+
+		// Log backup codes for testing/debugging TOTP reset functionality
+		log.Printf("Backup codes:")
+		for i, code := range backupCodes {
+			log.Printf("- %d: %s", i+1, code)
+		}
+
 	}
 
 	// Derive user-specific TOTP key from server master key
@@ -348,18 +355,10 @@ func ValidateDevAdminTOTPWorkflow(db *sql.DB, user *models.User, totpSecret stri
 }
 
 // generateDevAdminBackupCodes generates backup codes for dev admin
+// SECURITY: Even for dev/testing, backup codes MUST be cryptographically random
+// to prevent predictable patterns that could be exploited
 func generateDevAdminBackupCodes(count int) []string {
-	const charset = "ACDEFGHJKLMNPQRTUVWXY34679"
-	codes := make([]string, count)
-
-	for i := 0; i < count; i++ {
-		code := make([]byte, 10)
-		for j := 0; j < 10; j++ {
-			// Deterministic for testing consistency
-			code[j] = charset[(i*10+j)%len(charset)]
-		}
-		codes[i] = string(code)
-	}
-
-	return codes
+	// Use the same secure random generation as production
+	// This ensures dev environment matches production behavior
+	return generateBackupCodes(count)
 }
