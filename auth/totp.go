@@ -315,25 +315,62 @@ func IsUserTOTPEnabled(db *sql.DB, username string) (bool, error) {
 	return enabled && setupCompleted, nil
 }
 
-// DisableTOTP disables TOTP for a user (requires current TOTP code)
-func DisableTOTP(db *sql.DB, username, currentCode string) error {
-	// Validate current code first
-	if err := ValidateTOTPCode(db, username, currentCode); err != nil {
-		return fmt.Errorf("invalid current TOTP code: %w", err)
+// ResetTOTP resets TOTP for a user (requires valid backup code)
+// This generates a new TOTP secret and new backup codes while keeping TOTP enabled
+func ResetTOTP(db *sql.DB, username, backupCode string) (*TOTPSetup, error) {
+	// Validate backup code first (this also marks it as used)
+	if err := ValidateBackupCode(db, username, backupCode); err != nil {
+		return nil, fmt.Errorf("invalid backup code: %w", err)
 	}
 
-	// Disable TOTP
-	_, err := db.Exec("DELETE FROM user_totp WHERE username = ?", username)
+	// Generate new TOTP setup
+	setup, err := GenerateTOTPSetup(username)
 	if err != nil {
-		return fmt.Errorf("failed to disable TOTP: %w", err)
+		return nil, fmt.Errorf("failed to generate new TOTP setup: %w", err)
 	}
 
-	// Log the action
+	// Derive user-specific TOTP encryption key from server master key
+	totpKey, err := crypto.DeriveTOTPUserKey(username)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive TOTP user key: %w", err)
+	}
+	defer crypto.SecureZeroTOTPKey(totpKey)
+
+	// Encrypt the new TOTP secret
+	secretEncrypted, err := crypto.EncryptGCM([]byte(setup.Secret), totpKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt TOTP secret: %w", err)
+	}
+
+	// Convert new backup codes to JSON and encrypt
+	backupCodesJSON, err := json.Marshal(setup.BackupCodes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal backup codes: %w", err)
+	}
+
+	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt backup codes: %w", err)
+	}
+
+	// Update database with new encrypted data (keep enabled=true, setup_completed=true)
+	_, err = db.Exec(`
+		UPDATE user_totp 
+		SET secret_encrypted = ?, backup_codes_encrypted = ?, created_at = ?
+		WHERE username = ?`,
+		secretEncrypted, backupCodesEncrypted, time.Now(), username,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to update TOTP data: %w", err)
+	}
+
+	// Log the security event
 	if logging.InfoLogger != nil {
-		logging.InfoLogger.Printf("TOTP disabled for user: %s", username)
+		logging.InfoLogger.Printf("SECURITY: TOTP reset for user: %s", username)
 	}
 
-	return nil
+	return setup, nil
 }
 
 // CleanupTOTPLogs removes old TOTP usage logs

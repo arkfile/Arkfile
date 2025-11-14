@@ -934,14 +934,23 @@ func TOTPAuth(c echo.Context) error {
 	})
 }
 
-// TOTPDisableRequest represents the request for TOTP disabling
-type TOTPDisableRequest struct {
-	CurrentCode string `json:"current_code"`
+// TOTPResetRequest represents the request for TOTP reset
+type TOTPResetRequest struct {
+	BackupCode string `json:"backup_code"`
 }
 
-// TOTPDisable disables TOTP for a user
-func TOTPDisable(c echo.Context) error {
-	var request TOTPDisableRequest
+// TOTPResetResponse represents the response for TOTP reset
+type TOTPResetResponse struct {
+	Secret      string   `json:"secret"`
+	QRCodeURL   string   `json:"qr_code_url"`
+	BackupCodes []string `json:"backup_codes"`
+	ManualEntry string   `json:"manual_entry"`
+	Message     string   `json:"message"`
+}
+
+// TOTPReset resets TOTP for a user (requires valid backup code)
+func TOTPReset(c echo.Context) error {
+	var request TOTPResetRequest
 	if err := c.Bind(&request); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
 	}
@@ -950,23 +959,32 @@ func TOTPDisable(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 
 	// Validate input
-	if request.CurrentCode == "" || len(request.CurrentCode) != 6 {
-		return echo.NewHTTPError(http.StatusBadRequest, "Current TOTP code is required")
+	if request.BackupCode == "" || len(request.BackupCode) != 10 {
+		return echo.NewHTTPError(http.StatusBadRequest, "Valid backup code is required (10 characters)")
 	}
 
-	// Disable TOTP (this validates the current code)
-	if err := auth.DisableTOTP(database.DB, username, request.CurrentCode); err != nil {
-		logging.ErrorLogger.Printf("Failed to disable TOTP for %s: %v", username, err)
-		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid TOTP code")
+	// Reset TOTP (this validates the backup code and generates new setup)
+	setup, err := auth.ResetTOTP(database.DB, username, request.BackupCode)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to reset TOTP for %s: %v", username, err)
+		// Record failed TOTP reset attempt
+		entityID := logging.GetOrCreateEntityID(c)
+		if recordErr := recordAuthFailedAttempt("totp_reset", entityID); recordErr != nil {
+			logging.ErrorLogger.Printf("Failed to record TOTP reset failure: %v", recordErr)
+		}
+		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid backup code or TOTP reset failed")
 	}
 
-	// Log TOTP disabling
-	database.LogUserAction(username, "disabled TOTP", "")
-	logging.InfoLogger.Printf("TOTP disabled for user: %s", username)
+	// Log TOTP reset
+	database.LogUserAction(username, "reset TOTP with backup code", "")
+	logging.InfoLogger.Printf("SECURITY: TOTP reset for user: %s", username)
 
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"message": "TOTP disabled successfully",
-		"enabled": false,
+	return c.JSON(http.StatusOK, TOTPResetResponse{
+		Secret:      setup.Secret,
+		QRCodeURL:   setup.QRCodeURL,
+		BackupCodes: setup.BackupCodes,
+		ManualEntry: setup.ManualEntry,
+		Message:     "TOTP has been reset successfully. Please update your authenticator app immediately with the new secret.",
 	})
 }
 

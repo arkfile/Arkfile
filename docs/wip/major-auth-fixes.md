@@ -2066,4 +2066,24 @@ $ curl -s http://localhost:8080/api/config/password-requirements | jq .
 
 ---
 
+## Phase 10: TOTP System Enhancements ✅
+
+**Status:** COMPLETE  
+**Date Completed:** November 14, 2025
+
+### Summary
+
+- TOTP is **MANDATORY** for all users - registration and login both require TOTP
+- Server provides TOTP endpoints: `/api/totp/setup`, `/api/totp/verify`, `/api/totp/status`, `/api/totp/reset`, `/api/totp/auth`
+- TOTP secrets derived from master key using HKDF (not from user password)
+- Replay prevention: used codes tracked in database with 30-second expiration
+- Backup codes: 10 single-use codes (Argon2id hashed) for account recovery
+- CLI tool (`arkfile-client`) includes TOTP commands: `setup`, `verify`, `reset`
+- Registration flow: OPAQUE auth → temporary token → TOTP setup required → full access tokens
+- Login flow: OPAQUE auth → check TOTP enabled → if not enabled return 403 → if enabled require TOTP code → full access tokens
+- Zero-knowledge maintained: TOTP separate from OPAQUE, no password exposure
+- Files: `auth/totp.go`, `crypto/totp_keys.go`, `handlers/auth.go`, `handlers/route_config.go`
+
+---
+
 **END OF DOCUMENT**

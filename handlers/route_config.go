@@ -51,7 +51,7 @@ func RegisterRoutes() {
 	auth.Echo.POST("/api/totp/setup", TOTPSetup)
 	auth.Echo.POST("/api/totp/verify", TOTPRateLimitMiddleware("totp_verify")(TOTPVerify))
 	auth.Echo.GET("/api/totp/status", TOTPStatus)
-	auth.Echo.POST("/api/totp/disable", TOTPDisable)
+	auth.Echo.POST("/api/totp/reset", TOTPReset)
 
 	// TOTP Authentication completion - requires temporary TOTP token with rate limiting
 	totpGroup := Echo.Group("/api/totp")
