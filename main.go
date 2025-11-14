@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/pquerna/otp/totp"
 
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/config"
@@ -128,15 +126,12 @@ func main() {
 
 	// Start TOTP cleanup routine
 	go func() {
-		ticker := time.NewTicker(5 * time.Minute) // Clean every 5 minutes
+		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 
-		for {
-			select {
-			case <-ticker.C:
-				if err := auth.CleanupTOTPLogs(database.DB); err != nil {
-					logging.ErrorLogger.Printf("Failed to cleanup TOTP logs: %v", err)
-				}
+		for range ticker.C {
+			if err := auth.CleanupTOTPLogs(database.DB); err != nil {
+				logging.ErrorLogger.Printf("Failed to cleanup TOTP logs: %v", err)
 			}
 		}
 	}()
@@ -292,50 +287,61 @@ func initializeAdminUser() error {
 		return nil
 	}
 
-	// SECURITY CHECK #3: Block dev admin accounts if somehow we're in production
-	devAdminAccounts := []string{"arkfile-dev-admin", "admin.dev.user", "admin.demo.user", "dev-admin", "test-admin"}
-	for _, devAccount := range devAdminAccounts {
-		if strings.Contains(adminUsernames, devAccount) {
-			if utils.IsProductionEnvironment() {
-				logging.ErrorLogger.Printf("CRITICAL SECURITY: Dev admin account '%s' blocked in production", devAccount)
-				return fmt.Errorf("SECURITY: Dev admin accounts not allowed in production")
-			}
-		}
-	}
+	// Fixed dev admin credentials for testing
+	const devAdminUsername = "arkfile-dev-admin"
+	const devAdminPassword = "DevAdmin2025!SecureInitialPassword"
+	const devAdminTOTPSecret = "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"
 
-	// Get first admin username (for development, we typically use one admin user)
-	adminUsernameList := strings.Split(adminUsernames, ",")
-	if len(adminUsernameList) == 0 {
+	// SECURITY CHECK #3: Only auto-create if arkfile-dev-admin is in ADMIN_USERNAMES
+	if !strings.Contains(adminUsernames, devAdminUsername) {
+		log.Printf("Dev admin username '%s' not in ADMIN_USERNAMES, skipping auto-creation", devAdminUsername)
 		return nil
 	}
 
-	adminUsername := strings.TrimSpace(adminUsernameList[0])
-	if adminUsername == "" {
-		return nil
-	}
-
-	log.Printf("Checking if admin user '%s' needs initialization...", adminUsername)
+	log.Printf("Checking if dev admin user '%s' needs initialization...", devAdminUsername)
 
 	// Check if admin user already exists
-	existingUser, err := models.GetUserByUsername(database.DB, adminUsername)
+	existingUser, err := models.GetUserByUsername(database.DB, devAdminUsername)
 	if err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("failed to check admin user existence: %w", err)
 	}
 
 	if existingUser != nil {
-		log.Printf("Admin user '%s' already exists (ID: %d), skipping initialization", adminUsername, existingUser.ID)
+		log.Printf("Dev admin user '%s' already exists (ID: %d), skipping initialization", devAdminUsername, existingUser.ID)
 		return nil
 	}
 
-	// NOTE: Automatic admin user creation is deprecated.
-	// Admin users must now be created manually using the multi-step OPAQUE protocol:
-	// 1. Use the web UI registration flow at /register
-	// 2. Or use the arkfile-admin CLI tool for admin user management
-	// 3. Ensure ADMIN_USERNAMES environment variable includes the username
+	// Create dev admin user with OPAQUE protocol
+	log.Printf("Creating dev admin user with OPAQUE registration...")
+	user, err := auth.CreateDevAdminWithOPAQUE(database.DB, devAdminUsername, devAdminPassword)
+	if err != nil {
+		return fmt.Errorf("failed to create dev admin user: %w", err)
+	}
 
-	log.Printf("NOTE: Automatic admin user initialization is deprecated")
-	log.Printf("Admin users must be created manually via web UI or CLI tools")
-	log.Printf("Please register admin user '%s' via the web interface", adminUsername)
+	log.Printf("Dev admin user created successfully: %s (ID: %d)", user.Username, user.ID)
+
+	// Setup TOTP with fixed secret
+	log.Printf("Setting up TOTP for dev admin user...")
+	if err := auth.SetupDevAdminTOTP(database.DB, user, devAdminTOTPSecret); err != nil {
+		return fmt.Errorf("failed to setup dev admin TOTP: %w", err)
+	}
+
+	log.Printf("Dev admin TOTP setup completed successfully")
+
+	// Validate the complete TOTP workflow
+	log.Printf("Validating dev admin TOTP workflow...")
+	if err := auth.ValidateDevAdminTOTPWorkflow(database.DB, user, devAdminTOTPSecret); err != nil {
+		log.Printf("Warning: Dev admin TOTP workflow validation failed: %v", err)
+		// Don't fail - allow server to start even if validation fails
+	} else {
+		log.Printf("Dev admin TOTP workflow validation passed")
+	}
+
+	log.Printf("=== Dev admin user initialization complete ===")
+	log.Printf("Username: %s", devAdminUsername)
+	log.Printf("Password: %s", devAdminPassword)
+	log.Printf("TOTP Secret: %s", devAdminTOTPSecret)
+	log.Printf("SECURITY: These are fixed credentials for development/testing only!")
 
 	return nil
 }
@@ -371,336 +377,4 @@ func initializeTestUser() error {
 	log.Printf("Please register test user '%s' via the web interface if needed", testUsername)
 
 	return nil
-}
-
-// isProductionEnvironment checks multiple indicators to determine if we're in production
-func isProductionEnvironment() bool {
-	// Check environment variables that indicate production
-	env := strings.ToLower(os.Getenv("ENVIRONMENT"))
-	goEnv := strings.ToLower(os.Getenv("GO_ENV"))
-	appEnv := strings.ToLower(os.Getenv("APP_ENV"))
-
-	// Production indicators
-	productionIndicators := []string{"production", "prod", "live", "release"}
-
-	for _, indicator := range productionIndicators {
-		if env == indicator || goEnv == indicator || appEnv == indicator {
-			return true
-		}
-	}
-
-	// Check if DEBUG_MODE is explicitly disabled (production setting)
-	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
-	if debugMode == "false" || debugMode == "0" {
-		// Additional check - if debug is disabled AND we don't have explicit dev indicators
-		devIndicators := []string{"development", "dev", "test", "testing", "local"}
-		hasDevIndicator := false
-
-		for _, devIndicator := range devIndicators {
-			if env == devIndicator || goEnv == devIndicator || appEnv == devIndicator {
-				hasDevIndicator = true
-				break
-			}
-		}
-
-		if !hasDevIndicator {
-			return true // Likely production
-		}
-	}
-
-	return false
-}
-
-// setupAdminTOTP sets up TOTP for the admin user with a fixed secret for testing
-func setupAdminTOTP(user *models.User) error {
-	// SECURITY CHECK: Double-check production environment (defense in depth)
-	if utils.IsProductionEnvironment() {
-		logging.ErrorLogger.Printf("CRITICAL SECURITY: setupAdminTOTP() blocked in production environment")
-		return fmt.Errorf("SECURITY: Admin TOTP setup blocked in production environment")
-	}
-
-	// Enhanced debug logging for admin TOTP setup timing and key status
-	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
-	isDebug := debugMode == "true" || debugMode == "1"
-
-	if isDebug {
-		log.Printf("=== ADMIN TOTP SETUP DEBUG START ===")
-		log.Printf("Admin TOTP setup initiated for user: %s", user.Username)
-
-		// Check TOTP master key status before proceeding
-		masterKeyReady, keyLen := crypto.GetTOTPMasterKeyStatus()
-		log.Printf("TOTP master key status: ready=%t, length=%d", masterKeyReady, keyLen)
-
-		if !masterKeyReady {
-			log.Printf("ERROR: TOTP master key not ready during admin setup - BLOCKING setup")
-			return fmt.Errorf("TOTP master key not ready for admin setup")
-		}
-
-		// CRITICAL: Test master key integrity before creating admin TOTP records
-		if err := validateTOTPMasterKeyIntegrity(); err != nil {
-			log.Printf("ERROR: TOTP master key integrity validation failed: %v", err)
-			return fmt.Errorf("TOTP master key integrity validation failed: %w", err)
-		}
-		log.Printf("TOTP master key integrity validation passed")
-	}
-
-	// Fixed TOTP secret for predictable testing (base32 encoded)
-	// This is a 32-character standard Base32 secret (160 bits) for dev/test admin user
-	fixedTOTPSecret := "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"
-
-	log.Printf("Setting up TOTP for admin user '%s' with fixed secret for testing", user.Username)
-
-	// Generate backup codes
-	backupCodes := generateAdminBackupCodes(10)
-
-	if isDebug {
-		log.Printf("Generated %d backup codes for admin user", len(backupCodes))
-	}
-
-	// Server-managed TOTP master key; per-user keys via HKDF; no OPAQUE sessionKey at rest
-	// This ensures deterministic TOTP decryption independent of OPAQUE sessions
-
-	// Derive user-specific TOTP key from server master key
-	totpKey, err := crypto.DeriveTOTPUserKey(user.Username)
-	if err != nil {
-		if isDebug {
-			log.Printf("ERROR: Failed to derive TOTP user key for admin: %v", err)
-		}
-		return fmt.Errorf("failed to derive TOTP user key: %w", err)
-	}
-	defer crypto.SecureZeroTOTPKey(totpKey)
-
-	if isDebug {
-		log.Printf("Successfully derived TOTP user key for admin, key_length=%d", len(totpKey))
-	}
-
-	// Encrypt TOTP secret
-	secretEncrypted, err := crypto.EncryptGCM([]byte(fixedTOTPSecret), totpKey)
-	if err != nil {
-		if isDebug {
-			log.Printf("ERROR: Failed to encrypt TOTP secret for admin: %v", err)
-		}
-		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
-	}
-
-	if isDebug {
-		log.Printf("TOTP secret encrypted successfully, encrypted_length=%d", len(secretEncrypted))
-	}
-
-	// Encrypt backup codes
-	backupCodesJSON, err := json.Marshal(backupCodes)
-	if err != nil {
-		return fmt.Errorf("failed to marshal backup codes: %w", err)
-	}
-
-	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
-	if err != nil {
-		if isDebug {
-			log.Printf("ERROR: Failed to encrypt backup codes for admin: %v", err)
-		}
-		return fmt.Errorf("failed to encrypt backup codes: %w", err)
-	}
-
-	if isDebug {
-		log.Printf("Backup codes encrypted successfully, encrypted_length=%d", len(backupCodesEncrypted))
-	}
-
-	// Store TOTP data directly in database (bypass normal setup flow)
-	_, err = database.DB.Exec(`
-		INSERT OR REPLACE INTO user_totp (
-			username, secret_encrypted, backup_codes_encrypted, 
-			enabled, setup_completed, created_at, last_used
-		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		user.Username, secretEncrypted, backupCodesEncrypted,
-		true, true, time.Now(), nil,
-	)
-
-	if err != nil {
-		if isDebug {
-			log.Printf("ERROR: Failed to store admin TOTP in database: %v", err)
-		}
-		return fmt.Errorf("failed to store admin TOTP setup: %w", err)
-	}
-
-	if isDebug {
-		log.Printf("TOTP data stored successfully in database")
-
-		// Test decryption immediately to verify the setup
-		log.Printf("Testing TOTP decryption immediately after setup...")
-		testDecrypted, testErr := crypto.DecryptGCM(secretEncrypted, totpKey)
-		if testErr != nil {
-			log.Printf("ERROR: Immediate TOTP decryption test failed: %v", testErr)
-		} else {
-			log.Printf("SUCCESS: Immediate TOTP decryption test passed, decrypted_secret_length=%d", len(testDecrypted))
-		}
-
-		log.Printf("=== ADMIN TOTP SETUP DEBUG END ===")
-	}
-
-	// Log setup completion
-	log.Printf("TOTP setup completed for admin user '%s'", user.Username)
-	log.Printf(" SECURITY: TOTP configured with fixed secret for development/testing only!")
-	log.Printf("Use a TOTP app to scan QR code or manually enter the secret for authentication")
-
-	return nil
-}
-
-// validateTOTPMasterKeyIntegrity performs an end-to-end test of TOTP master key functionality
-// This ensures the key can be used for encryption/decryption before creating admin records
-func validateTOTPMasterKeyIntegrity() error {
-	testUsername := "totp-integrity-test-user"
-	testData := []byte("TOTP_INTEGRITY_TEST_DATA_2025")
-
-	// Test 1: Derive a user key
-	userKey, err := crypto.DeriveTOTPUserKey(testUsername)
-	if err != nil {
-		return fmt.Errorf("failed to derive test user key: %w", err)
-	}
-	defer crypto.SecureZeroTOTPKey(userKey)
-
-	if len(userKey) != 32 {
-		return fmt.Errorf("derived key has wrong length: expected 32, got %d", len(userKey))
-	}
-
-	// Test 2: Encrypt test data
-	encrypted, err := crypto.EncryptGCM(testData, userKey)
-	if err != nil {
-		return fmt.Errorf("failed to encrypt test data: %w", err)
-	}
-
-	if len(encrypted) == 0 {
-		return fmt.Errorf("encrypted data is empty")
-	}
-
-	// Test 3: Decrypt test data
-	decrypted, err := crypto.DecryptGCM(encrypted, userKey)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt test data: %w", err)
-	}
-
-	// Test 4: Verify data integrity
-	if string(decrypted) != string(testData) {
-		return fmt.Errorf("data integrity check failed: decrypted data doesn't match original")
-	}
-
-	log.Printf("TOTP master key integrity test passed: encrypt/decrypt cycle successful")
-	return nil
-}
-
-// validateAdminTOTPWorkflow performs a complete end-to-end TOTP validation test
-// This simulates an actual login attempt to ensure the TOTP system works correctly
-func validateAdminTOTPWorkflow(user *models.User) error {
-	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
-	isDebug := debugMode == "true" || debugMode == "1"
-
-	if isDebug {
-		log.Printf("=== ADMIN TOTP WORKFLOW VALIDATION START ===")
-		log.Printf("Testing complete TOTP workflow for admin user: %s", user.Username)
-	}
-
-	// Step 1: Check if TOTP is enabled for the admin user
-	enabled, err := auth.IsUserTOTPEnabled(database.DB, user.Username)
-	if err != nil {
-		return fmt.Errorf("failed to check TOTP enabled status: %w", err)
-	}
-
-	if !enabled {
-		return fmt.Errorf("TOTP not enabled for admin user after setup")
-	}
-
-	if isDebug {
-		log.Printf("Step 1: TOTP is enabled for admin user")
-	}
-
-	// Step 2: Test the complete TOTP decryption workflow using auth.CanDecryptTOTPSecret
-	present, decryptable, totpEnabled, setupCompleted, err := auth.CanDecryptTOTPSecret(database.DB, user.Username)
-	if err != nil {
-		return fmt.Errorf("TOTP decryption test failed: %w", err)
-	}
-
-	if !present {
-		return fmt.Errorf("TOTP data not present for admin user")
-	}
-
-	if !decryptable {
-		return fmt.Errorf("TOTP secret cannot be decrypted for admin user")
-	}
-
-	if !totpEnabled {
-		return fmt.Errorf("TOTP not enabled according to decryption test")
-	}
-
-	if !setupCompleted {
-		return fmt.Errorf("TOTP setup not completed according to decryption test")
-	}
-
-	if isDebug {
-		log.Printf("Step 2: TOTP decryption workflow validated successfully")
-		log.Printf("   - TOTP present: %t", present)
-		log.Printf("   - TOTP decryptable: %t", decryptable)
-		log.Printf("   - TOTP enabled: %t", totpEnabled)
-		log.Printf("   - Setup completed: %t", setupCompleted)
-	}
-
-	// Step 3: Generate a valid TOTP code for the fixed admin secret and test validation
-	// The admin uses a fixed secret: "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"
-	// We can generate a valid code using the current time and test the validation
-	fixedTOTPSecret := "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"
-
-	// Generate current TOTP code for validation test
-	currentCode, err := generateTOTPCode(fixedTOTPSecret)
-	if err != nil {
-		return fmt.Errorf("failed to generate test TOTP code: %w", err)
-	}
-
-	if isDebug {
-		log.Printf("Step 3: Generated test TOTP code for validation: %s", currentCode)
-	}
-
-	// Step 4: Test TOTP validation using the actual auth.ValidateTOTPCode function
-	// This simulates a real login attempt with the generated TOTP code
-	if err := auth.ValidateTOTPCode(database.DB, user.Username, currentCode); err != nil {
-		if isDebug {
-			log.Printf("FAILED: TOTP code validation failed: %v", err)
-		}
-		return fmt.Errorf("TOTP code validation failed during startup test: %w", err)
-	}
-
-	if isDebug {
-		log.Printf("SUCCESS: TOTP code validation passed - admin login workflow confirmed working")
-		log.Printf("=== ADMIN TOTP WORKFLOW VALIDATION COMPLETE ===")
-	}
-
-	log.Printf("Complete TOTP workflow validation passed for admin user '%s'", user.Username)
-	log.Printf("Admin login system validated: OPAQUE auth + TOTP validation working end-to-end")
-	return nil
-}
-
-// generateTOTPCode generates a TOTP code for a given secret (for testing purposes)
-func generateTOTPCode(secret string) (string, error) {
-	// Use the same TOTP library that the validation uses to ensure compatibility
-	code, err := totp.GenerateCode(secret, time.Now())
-	if err != nil {
-		return "", fmt.Errorf("failed to generate TOTP code: %w", err)
-	}
-	return code, nil
-}
-
-// generateAdminBackupCodes generates backup codes for admin user
-func generateAdminBackupCodes(count int) []string {
-	// Use a simple charset for backup codes
-	const charset = "ACDEFGHJKLMNPQRTUVWXY34679"
-	codes := make([]string, count)
-
-	for i := 0; i < count; i++ {
-		code := make([]byte, 10)
-		for j := 0; j < 10; j++ {
-			// Use a deterministic approach for testing consistency
-			// In real deployment, this would use crypto/rand
-			code[j] = charset[(i*10+j)%len(charset)]
-		}
-		codes[i] = string(code)
-	}
-
-	return codes
 }

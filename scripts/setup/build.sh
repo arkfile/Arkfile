@@ -362,10 +362,37 @@ fi
 
 # Copy to client static directory (whether pre-built or freshly built)
 echo "Copying libopaque.js files to client/static/js/..."
-cp vendor/stef/libopaque/js/dist/libopaque.js client/static/js/
-cp vendor/stef/libopaque/js/dist/libopaque.debug.js client/static/js/
 
-echo -e "${GREEN}[OK] libopaque.js files copied to client/static/js/${NC}"
+# Ensure target directory exists with correct ownership
+mkdir -p client/static/js/
+
+# Fix ownership of existing files if they're root-owned (prevents permission denied)
+if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+    # Running as root via sudo - fix any existing root-owned files first
+    if [ -f "client/static/js/libopaque.js" ]; then
+        chown "$SUDO_USER:$SUDO_USER" client/static/js/libopaque.js 2>/dev/null || true
+    fi
+    if [ -f "client/static/js/libopaque.debug.js" ]; then
+        chown "$SUDO_USER:$SUDO_USER" client/static/js/libopaque.debug.js 2>/dev/null || true
+    fi
+    # Ensure directory ownership is correct
+    chown "$SUDO_USER:$SUDO_USER" client/static/js/ 2>/dev/null || true
+fi
+
+# Copy files with proper ownership handling
+if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+    # Running as root via sudo - copy as the original user
+    cp vendor/stef/libopaque/js/dist/libopaque.js client/static/js/
+    cp vendor/stef/libopaque/js/dist/libopaque.debug.js client/static/js/
+    chown "$SUDO_USER:$SUDO_USER" client/static/js/libopaque.js
+    chown "$SUDO_USER:$SUDO_USER" client/static/js/libopaque.debug.js
+    echo -e "${GREEN}[OK] libopaque.js files copied with ownership set to $SUDO_USER${NC}"
+else
+    # Running as normal user - just copy
+    cp vendor/stef/libopaque/js/dist/libopaque.js client/static/js/
+    cp vendor/stef/libopaque/js/dist/libopaque.debug.js client/static/js/
+    echo -e "${GREEN}[OK] libopaque.js files copied to client/static/js/${NC}"
+fi
 
 # Build TypeScript Frontend (Mandatory)
 echo "Building TypeScript frontend..."
@@ -627,6 +654,20 @@ sudo install -d -m 755 -o arkfile -g arkfile "${BASE_DIR}/bin"
 for file in "${BUILD_DIR}/bin/"*; do
     sudo install -m 755 -o arkfile -g arkfile "$file" "${BASE_DIR}/bin/"
 done
+
+# Fix any root-owned files in the source tree (final cleanup)
+if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+    echo -e "${YELLOW}Performing final ownership verification and cleanup...${NC}"
+    
+    # Fix ownership of key directories that may have been touched during build
+    chown -R "$SUDO_USER:$SUDO_USER" client/static/js/ 2>/dev/null || true
+    chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
+    chown "$SUDO_USER:$SUDO_USER" go.mod go.sum 2>/dev/null || true
+    [ -f ".vendor_cache" ] && chown "$SUDO_USER:$SUDO_USER" .vendor_cache 2>/dev/null || true
+    [ -f "client/static/js/.buildcache" ] && chown "$SUDO_USER:$SUDO_USER" client/static/js/.buildcache 2>/dev/null || true
+    
+    echo -e "${GREEN}[OK] Source tree ownership restored to $SUDO_USER${NC}"
+fi
 
 echo -e "${GREEN}Build complete!${NC}"
 echo "Build artifacts are ready in the '${BUILD_DIR}' directory."

@@ -47,13 +47,22 @@ if [ ! "$(ls -A $BUILD_DIR)" ]; then
     exit 1
 fi
 
-# Copy build artifacts to installation directory
+# Copy build artifacts to installation directory with proper ownership
 echo -e "${YELLOW}Copying build artifacts to ${BASE_DIR}...${NC}"
-sudo cp -r ${BUILD_DIR}/* ${BASE_DIR}/
 
-# Set proper ownership
-echo -e "${YELLOW}[KEY] Setting permissions...${NC}"
-sudo chown -R arkfile:arkfile ${BASE_DIR}
+# Check if rsync is available (preferred method)
+if command -v rsync >/dev/null 2>&1; then
+    echo -e "${BLUE}Using rsync for ownership-preserving copy...${NC}"
+    sudo rsync -a --chown=arkfile:arkfile ${BUILD_DIR}/ ${BASE_DIR}/
+else
+    echo -e "${YELLOW}rsync not available, using cp with chown...${NC}"
+    sudo cp -r ${BUILD_DIR}/* ${BASE_DIR}/
+    # Set proper ownership after copy
+    echo -e "${YELLOW}[KEY] Setting permissions...${NC}"
+    sudo chown -R arkfile:arkfile ${BASE_DIR}
+fi
+
+# Ensure executable permissions on binaries
 sudo find ${BASE_DIR} -type f -executable -exec chmod 755 {} \;
 
 # Copy systemd service files
