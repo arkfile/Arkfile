@@ -362,3 +362,118 @@ func generateDevAdminBackupCodes(count int) []string {
 	// This ensures dev environment matches production behavior
 	return generateBackupCodes(count)
 }
+
+// waitForNextTOTPWindow calculates minimum time to wait for next TOTP window
+// This ensures we don't trigger replay detection when validating TOTP multiple times
+func waitForNextTOTPWindow() time.Duration {
+	now := time.Now().UTC()
+	currentWindowStart := now.Truncate(30 * time.Second)
+	nextWindowStart := currentWindowStart.Add(30 * time.Second)
+	waitDuration := nextWindowStart.Sub(now)
+
+	// Add 100ms buffer to ensure we're solidly in new window
+	return waitDuration + (100 * time.Millisecond)
+}
+
+// ValidateDevAdminAuthentication performs complete end-to-end validation of dev admin authentication
+// This function simulates the entire OPAQUE authentication flow internally to ensure
+// the dev admin registration was successful and the system is working properly
+func ValidateDevAdminAuthentication(db *sql.DB, username, password, totpSecret string) error {
+	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
+	isDebug := debugMode == "true" || debugMode == "1"
+
+	if isDebug {
+		log.Printf("=== DEV ADMIN AUTHENTICATION VALIDATION START ===")
+		log.Printf("Validating complete authentication flow for: %s", username)
+	}
+
+	// Step 1: Simulate client credential request
+	if isDebug {
+		log.Printf("Step 1: Creating client credential request...")
+	}
+	sec, pub, err := ClientCreateCredentialRequest([]byte(password))
+	if err != nil {
+		return fmt.Errorf("credential request failed: %w", err)
+	}
+	if isDebug {
+		log.Printf("Step 1: Client credential request created successfully")
+	}
+
+	// Step 2: Get user record and create server response
+	if isDebug {
+		log.Printf("Step 2: Loading user record and creating server response...")
+	}
+	userRecord, err := loadOPAQUEUserData(db, username)
+	if err != nil {
+		return fmt.Errorf("failed to load user record: %w", err)
+	}
+
+	credentialResponse, authUServer, err := CreateCredentialResponse(pub, userRecord.SerializedRecord)
+	if err != nil {
+		return fmt.Errorf("server credential response failed: %w", err)
+	}
+	if isDebug {
+		log.Printf("Step 2: Server credential response created successfully")
+	}
+
+	// Step 3: Client recovers credentials
+	if isDebug {
+		log.Printf("Step 3: Client recovering credentials...")
+	}
+	_, authUClient, _, err := ClientRecoverCredentials(sec, credentialResponse)
+	if err != nil {
+		return fmt.Errorf("client credential recovery failed: %w", err)
+	}
+	if isDebug {
+		log.Printf("Step 3: Client credentials recovered successfully")
+	}
+
+	// Step 4: Verify authentication tokens match
+	if isDebug {
+		log.Printf("Step 4: Verifying authentication tokens...")
+	}
+	if err := UserAuth(authUServer, authUClient); err != nil {
+		return fmt.Errorf("authentication token verification failed: %w", err)
+	}
+	if isDebug {
+		log.Printf("Step 4: Authentication tokens verified successfully")
+	}
+
+	// Step 5: Smart wait for next TOTP window to avoid replay detection
+	waitDuration := waitForNextTOTPWindow()
+	if isDebug {
+		log.Printf("Step 5: Waiting %v for next TOTP window to avoid replay detection...", waitDuration.Round(time.Millisecond))
+	} else {
+		log.Printf("[DEV-ADMIN] Waiting %v for next TOTP window...", waitDuration.Round(time.Millisecond))
+	}
+	time.Sleep(waitDuration)
+
+	// Step 6: Validate TOTP in new window
+	if isDebug {
+		log.Printf("Step 6: Validating TOTP in new window...")
+	}
+	// Generate TOTP code for current time (now in new window)
+	currentTime := time.Now()
+	currentCode, err := totp.GenerateCode(totpSecret, currentTime)
+	if err != nil {
+		return fmt.Errorf("TOTP code generation failed: %w", err)
+	}
+	if isDebug {
+		log.Printf("Step 6: Generated TOTP code for new window: %s", currentCode)
+	}
+
+	if err := ValidateTOTPCode(db, username, currentCode); err != nil {
+		return fmt.Errorf("TOTP validation failed: %w", err)
+	}
+	if isDebug {
+		log.Printf("Step 6: TOTP validation successful")
+	}
+
+	if isDebug {
+		log.Printf("=== DEV ADMIN AUTHENTICATION VALIDATION COMPLETE ===")
+		log.Printf("SUCCESS: Complete authentication flow validated for %s", username)
+	}
+
+	log.Printf("Dev admin authentication validation passed for '%s'", username)
+	return nil
+}

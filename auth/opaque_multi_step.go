@@ -106,11 +106,11 @@ func StoreUserRecord(rsec []byte, rrec []byte) ([]byte, error) {
 // Multi-step OPAQUE authentication flow
 
 // CreateCredentialResponse handles server-side step of authentication
-// Takes client's credential request and user record, returns server response
-func CreateCredentialResponse(requestData []byte, userRecord []byte) ([]byte, []byte, error) {
-	if len(requestData) != OPAQUE_USER_SESSION_PUBLIC_LEN {
+// Takes client's credential request (pub) and user record (rec), returns server response
+func CreateCredentialResponse(credentialRequest []byte, userRecord []byte) ([]byte, []byte, error) {
+	if len(credentialRequest) != OPAQUE_USER_SESSION_PUBLIC_LEN {
 		return nil, nil, fmt.Errorf("invalid credential request length: expected %d, got %d",
-			OPAQUE_USER_SESSION_PUBLIC_LEN, len(requestData))
+			OPAQUE_USER_SESSION_PUBLIC_LEN, len(credentialRequest))
 	}
 
 	if len(userRecord) != OPAQUE_USER_RECORD_LEN {
@@ -123,48 +123,31 @@ func CreateCredentialResponse(requestData []byte, userRecord []byte) ([]byte, []
 	sk := make([]byte, OPAQUE_SHARED_SECRETBYTES)
 	authU := make([]byte, 64) // crypto_auth_hmacsha512_BYTES
 
-	// Prepare Opaque_Ids structure
-	ids := make([]byte, 20) // sizeof(Opaque_Ids) = 4 + 8 + 2 + 8 = 22 bytes, but we'll use 20 for safety
-	ids[0] = 4              // idU_len
-	ids[2] = 'u'
-	ids[3] = 's'
-	ids[4] = 'e'
-	ids[5] = 'r'
-	ids[6] = 6 // idS_len
-	ids[8] = 's'
-	ids[9] = 'e'
-	ids[10] = 'r'
-	ids[11] = 'v'
-	ids[12] = 'e'
-	ids[13] = 'r'
-
 	// Prepare context
 	context := []byte("arkfile_auth")
 	contextLen := uint16(len(context))
 
 	// Convert Go slices to C pointers
-	cRequestData := C.CBytes(requestData)
-	defer C.free(cRequestData)
+	cCredentialRequest := C.CBytes(credentialRequest)
+	defer C.free(cCredentialRequest)
 
 	cUserRecord := C.CBytes(userRecord)
 	defer C.free(cUserRecord)
-
-	cIds := C.CBytes(ids)
-	defer C.free(cIds)
 
 	cContext := C.CBytes(context)
 	defer C.free(cContext)
 
 	// Call C function with correct parameters
+	// Note: ids parameter is now ignored in C wrapper, hardcoded values are used instead
 	ret := C.wrap_opaque_create_credential_response(
-		(*C.uint8_t)(cRequestData),
-		(*C.uint8_t)(cUserRecord),
-		(*C.uint8_t)(cIds),
-		(*C.uint8_t)(cContext),
-		C.uint16_t(contextLen),
-		(*C.uint8_t)(unsafe.Pointer(&resp[0])),
-		(*C.uint8_t)(unsafe.Pointer(&sk[0])),
-		(*C.uint8_t)(unsafe.Pointer(&authU[0])),
+		(*C.uint8_t)(cCredentialRequest),        // pub: client's credential request public key
+		(*C.uint8_t)(cUserRecord),               // rec: user record from database
+		nil,                                     // ids: ignored (hardcoded in C wrapper)
+		(*C.uint8_t)(cContext),                  // ctx: context string
+		C.uint16_t(contextLen),                  // ctx_len: context length
+		(*C.uint8_t)(unsafe.Pointer(&resp[0])),  // resp: server response
+		(*C.uint8_t)(unsafe.Pointer(&sk[0])),    // sk: session key
+		(*C.uint8_t)(unsafe.Pointer(&authU[0])), // authU: authentication token
 	)
 
 	if ret != 0 {
@@ -210,7 +193,7 @@ func CreateAuthSession(db *sql.DB, username string, flowType string, serverPubli
 	sessionID := uuid.New().String()
 	expiresAt := time.Now().Add(15 * time.Minute)
 
-	query := "INSERT INTO opaque_auth_sessions (session_id, username, flow_type, server_public_key, expires_at) VALUES (?, ?, ?, ?, ?)"
+	query := "INSERT INTO opaque_auth_sessions (session_id, username, session_type, auth_u_server, expires_at) VALUES (?, ?, ?, ?, ?)"
 
 	_, err := db.Exec(query, sessionID, username, flowType, serverPublicKey, expiresAt)
 	if err != nil {
@@ -222,7 +205,7 @@ func CreateAuthSession(db *sql.DB, username string, flowType string, serverPubli
 
 // ValidateAuthSession validates and retrieves session data
 func ValidateAuthSession(db *sql.DB, sessionID string, expectedFlowType string) (username string, serverPk []byte, err error) {
-	query := "SELECT username, server_public_key FROM opaque_auth_sessions WHERE session_id = ? AND flow_type = ? AND expires_at > CURRENT_TIMESTAMP"
+	query := "SELECT username, auth_u_server FROM opaque_auth_sessions WHERE session_id = ? AND session_type = ? AND expires_at > CURRENT_TIMESTAMP"
 
 	err = db.QueryRow(query, sessionID, expectedFlowType).Scan(&username, &serverPk)
 	if err != nil {
