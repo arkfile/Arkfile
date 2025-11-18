@@ -43,18 +43,12 @@ int wrap_opaque_create_credential_request(const uint8_t* password, uint16_t pwd_
 
 // Multi-step authentication - Step 2: Create credential response (server-side)
 int wrap_opaque_create_credential_response(const uint8_t* pub, const uint8_t* rec,
+                                          const uint8_t* ids, const uint8_t* ctx, uint16_t ctx_len,
                                           uint8_t* resp, uint8_t* sk, uint8_t* authU) {
-    Opaque_Ids ids = {
-        .idU_len = 4,
-        .idU = (uint8_t*)"user",
-        .idS_len = 6,
-        .idS = (uint8_t*)"server"
-    };
+    // Cast the ids pointer to Opaque_Ids structure
+    const Opaque_Ids* opaque_ids = (const Opaque_Ids*)ids;
     
-    const uint8_t context[] = "arkfile_auth";
-    const uint16_t context_len = sizeof(context) - 1;
-    
-    return opaque_CreateCredentialResponse(pub, rec, &ids, context, context_len, resp, sk, authU);
+    return opaque_CreateCredentialResponse(pub, rec, opaque_ids, ctx, ctx_len, resp, sk, authU);
 }
 
 // Multi-step authentication - Step 3: Recover credentials (client-side)

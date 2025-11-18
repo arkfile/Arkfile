@@ -34,6 +34,7 @@ int wrap_opaque_create_credential_request(const uint8_t* password, uint16_t pwd_
                                          uint8_t* sec, uint8_t* pub);
 
 int wrap_opaque_create_credential_response(const uint8_t* pub, const uint8_t* rec,
+                                          const uint8_t* ids, const uint8_t* ctx, uint16_t ctx_len,
                                           uint8_t* resp, uint8_t* sk, uint8_t* authU);
 
 int wrap_opaque_recover_credentials(const uint8_t* resp, const uint8_t* usr,

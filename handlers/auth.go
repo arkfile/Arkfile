@@ -324,14 +324,14 @@ func OpaqueRegisterResponse(c echo.Context) error {
 	}
 
 	// Create server registration response
-	registrationResponse, err := auth.CreateRegistrationResponse(registrationRequest)
+	registrationResponse, registrationSecret, err := auth.CreateRegistrationResponse(registrationRequest)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create registration response: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Registration response creation failed")
 	}
 
-	// Create session for multi-step protocol
-	sessionID, err := auth.CreateAuthSession(database.DB, request.Username, "registration", registrationResponse)
+	// Create session for multi-step protocol (store the secret for later use in StoreUserRecord)
+	sessionID, err := auth.CreateAuthSession(database.DB, request.Username, "registration", registrationSecret)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create registration session for %s: %v", request.Username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Session creation failed")
@@ -359,8 +359,8 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
 	}
 
-	// Validate session
-	sessionUsername, _, err := auth.ValidateAuthSession(database.DB, request.SessionID, "registration")
+	// Validate session and get registration secret
+	sessionUsername, registrationSecret, err := auth.ValidateAuthSession(database.DB, request.SessionID, "registration")
 	if err != nil {
 		logging.ErrorLogger.Printf("Invalid registration session: %v", err)
 		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid or expired session")
@@ -396,8 +396,8 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid registration record encoding")
 	}
 
-	// Store user record
-	userRecord, err := auth.StoreUserRecord(registrationRecord)
+	// Store user record with server secret
+	userRecord, err := auth.StoreUserRecord(registrationSecret, registrationRecord)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to store user record for %s: %v", request.Username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to store user record")

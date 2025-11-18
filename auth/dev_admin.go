@@ -53,7 +53,7 @@ func CreateDevAdminWithOPAQUE(db *sql.DB, username, password string) (*models.Us
 	}
 
 	// Step 2: Server creates registration response
-	rpub, err := CreateRegistrationResponse(M)
+	rpub, rsec, err := CreateRegistrationResponse(M)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create registration response: %w", err)
 	}
@@ -65,7 +65,7 @@ func CreateDevAdminWithOPAQUE(db *sql.DB, username, password string) (*models.Us
 	}
 
 	// Step 4: Server stores user record
-	userRecord, err := StoreUserRecord(rrec)
+	userRecord, err := StoreUserRecord(rsec, rrec)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store user record: %w", err)
 	}

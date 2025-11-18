@@ -28,8 +28,8 @@ func ClientCreateRegistrationRequest(password []byte) ([]byte, []byte, error) {
 		return nil, nil, fmt.Errorf("password cannot be empty")
 	}
 
-	// Allocate buffers
-	usrCtx := make([]byte, OPAQUE_REGISTER_USER_SEC_LEN)
+	// Allocate buffers - usrCtx must be OPAQUE_REGISTER_USER_SEC_LEN + password length
+	usrCtx := make([]byte, OPAQUE_REGISTER_USER_SEC_LEN+len(password))
 	M := make([]byte, OPAQUE_REGISTER_PUBLIC_LEN)
 
 	// Convert Go slices to C pointers
@@ -56,8 +56,9 @@ func ClientCreateRegistrationRequest(password []byte) ([]byte, []byte, error) {
 // Input: usrCtx (client context from step 1), serverResponse (rpub from server)
 // Output: rrec (registration record to send to server), exportKey (client export key)
 func ClientFinalizeRegistration(usrCtx []byte, serverResponse []byte) ([]byte, []byte, error) {
-	if len(usrCtx) != OPAQUE_REGISTER_USER_SEC_LEN {
-		return nil, nil, fmt.Errorf("invalid user context length: expected %d, got %d",
+	// usrCtx length should be at least OPAQUE_REGISTER_USER_SEC_LEN (may be larger due to password)
+	if len(usrCtx) < OPAQUE_REGISTER_USER_SEC_LEN {
+		return nil, nil, fmt.Errorf("invalid user context length: expected at least %d, got %d",
 			OPAQUE_REGISTER_USER_SEC_LEN, len(usrCtx))
 	}
 
@@ -103,8 +104,8 @@ func ClientCreateCredentialRequest(password []byte) ([]byte, []byte, error) {
 		return nil, nil, fmt.Errorf("password cannot be empty")
 	}
 
-	// Allocate buffers
-	sec := make([]byte, OPAQUE_USER_SESSION_SECRET_LEN)
+	// Allocate buffers - sec must be OPAQUE_USER_SESSION_SECRET_LEN + password length
+	sec := make([]byte, OPAQUE_USER_SESSION_SECRET_LEN+len(password))
 	pub := make([]byte, OPAQUE_USER_SESSION_PUBLIC_LEN)
 
 	// Convert Go slices to C pointers
@@ -131,8 +132,9 @@ func ClientCreateCredentialRequest(password []byte) ([]byte, []byte, error) {
 // Input: sec (client secret from step 1), serverResponse (credential response from server)
 // Output: sk (session key), authU (authentication token to send to server), exportKey (client export key)
 func ClientRecoverCredentials(sec []byte, serverResponse []byte) ([]byte, []byte, []byte, error) {
-	if len(sec) != OPAQUE_USER_SESSION_SECRET_LEN {
-		return nil, nil, nil, fmt.Errorf("invalid client secret length: expected %d, got %d",
+	// sec length should be at least OPAQUE_USER_SESSION_SECRET_LEN (may be larger due to password)
+	if len(sec) < OPAQUE_USER_SESSION_SECRET_LEN {
+		return nil, nil, nil, fmt.Errorf("invalid client secret length: expected at least %d, got %d",
 			OPAQUE_USER_SESSION_SECRET_LEN, len(sec))
 	}
 

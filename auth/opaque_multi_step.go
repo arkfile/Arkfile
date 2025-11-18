@@ -20,17 +20,17 @@ import (
 // Multi-step OPAQUE registration flow
 
 // CreateRegistrationResponse handles server-side step of registration
-// Takes client's registration request (M) and returns server response (rpub)
-func CreateRegistrationResponse(requestData []byte) ([]byte, error) {
+// Takes client's registration request (M) and returns server response (rpub) and secret (rsec)
+func CreateRegistrationResponse(requestData []byte) ([]byte, []byte, error) {
 	if len(requestData) != OPAQUE_REGISTER_PUBLIC_LEN {
-		return nil, fmt.Errorf("invalid registration request length: expected %d, got %d",
+		return nil, nil, fmt.Errorf("invalid registration request length: expected %d, got %d",
 			OPAQUE_REGISTER_PUBLIC_LEN, len(requestData))
 	}
 
 	// Get server private key
 	_, serverPrivateKey, err := GetServerKeys()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get server keys: %w", err)
+		return nil, nil, fmt.Errorf("failed to get server keys: %w", err)
 	}
 
 	// Allocate buffers for server response
@@ -53,29 +53,52 @@ func CreateRegistrationResponse(requestData []byte) ([]byte, error) {
 	)
 
 	if ret != 0 {
-		return nil, fmt.Errorf("registration response creation failed: error code %d", ret)
+		return nil, nil, fmt.Errorf("registration response creation failed: error code %d", ret)
 	}
 
-	// Note: responseSecret is server-side secret, not returned to client
-	// Only responsePublic is sent to client
-	return responsePublic, nil
+	// Return both the public response (sent to client) and secret (kept by server)
+	return responsePublic, responseSecret, nil
 }
 
 // StoreUserRecord finalizes registration by storing the user record
-// Takes the finalized registration record from client and stores it
-func StoreUserRecord(rrec []byte) ([]byte, error) {
+// Takes the server secret and client's finalized registration record, returns complete user record
+func StoreUserRecord(rsec []byte, rrec []byte) ([]byte, error) {
+	if len(rsec) != OPAQUE_REGISTER_SECRET_LEN {
+		return nil, fmt.Errorf("invalid server secret length: expected %d, got %d",
+			OPAQUE_REGISTER_SECRET_LEN, len(rsec))
+	}
+
 	if len(rrec) != OPAQUE_REGISTRATION_RECORD_LEN {
 		return nil, fmt.Errorf("invalid registration record length: expected %d, got %d",
 			OPAQUE_REGISTRATION_RECORD_LEN, len(rrec))
 	}
 
-	// For libopaque, the registration record IS the user record
-	// No additional processing needed - just validate and return
+	// Allocate buffer for final user record
 	userRecord := make([]byte, OPAQUE_USER_RECORD_LEN)
 
-	// The rrec from client contains the full user record
-	// Copy it to our buffer (validation happens in C library)
-	copy(userRecord, rrec)
+	// Convert Go slices to C pointers
+	cServerSecret := C.CBytes(rsec)
+	defer C.free(cServerSecret)
+
+	cClientRecord := C.CBytes(rrec)
+	defer C.free(cClientRecord)
+
+	cUserRecord := C.CBytes(userRecord)
+	defer C.free(cUserRecord)
+
+	// Call libopaque's StoreUserRecord function
+	ret := C.wrap_opaque_store_user_record(
+		(*C.uint8_t)(cServerSecret),
+		(*C.uint8_t)(cClientRecord),
+		(*C.uint8_t)(cUserRecord),
+	)
+
+	if ret != 0 {
+		return nil, fmt.Errorf("user record storage failed: error code %d", ret)
+	}
+
+	// Copy the result back to our slice
+	copy(userRecord, C.GoBytes(unsafe.Pointer(cUserRecord), C.int(OPAQUE_USER_RECORD_LEN)))
 
 	return userRecord, nil
 }
@@ -100,6 +123,25 @@ func CreateCredentialResponse(requestData []byte, userRecord []byte) ([]byte, []
 	sk := make([]byte, OPAQUE_SHARED_SECRETBYTES)
 	authU := make([]byte, 64) // crypto_auth_hmacsha512_BYTES
 
+	// Prepare Opaque_Ids structure
+	ids := make([]byte, 20) // sizeof(Opaque_Ids) = 4 + 8 + 2 + 8 = 22 bytes, but we'll use 20 for safety
+	ids[0] = 4              // idU_len
+	ids[2] = 'u'
+	ids[3] = 's'
+	ids[4] = 'e'
+	ids[5] = 'r'
+	ids[6] = 6 // idS_len
+	ids[8] = 's'
+	ids[9] = 'e'
+	ids[10] = 'r'
+	ids[11] = 'v'
+	ids[12] = 'e'
+	ids[13] = 'r'
+
+	// Prepare context
+	context := []byte("arkfile_auth")
+	contextLen := uint16(len(context))
+
 	// Convert Go slices to C pointers
 	cRequestData := C.CBytes(requestData)
 	defer C.free(cRequestData)
@@ -107,10 +149,19 @@ func CreateCredentialResponse(requestData []byte, userRecord []byte) ([]byte, []
 	cUserRecord := C.CBytes(userRecord)
 	defer C.free(cUserRecord)
 
-	// Call C function
+	cIds := C.CBytes(ids)
+	defer C.free(cIds)
+
+	cContext := C.CBytes(context)
+	defer C.free(cContext)
+
+	// Call C function with correct parameters
 	ret := C.wrap_opaque_create_credential_response(
 		(*C.uint8_t)(cRequestData),
 		(*C.uint8_t)(cUserRecord),
+		(*C.uint8_t)(cIds),
+		(*C.uint8_t)(cContext),
+		C.uint16_t(contextLen),
 		(*C.uint8_t)(unsafe.Pointer(&resp[0])),
 		(*C.uint8_t)(unsafe.Pointer(&sk[0])),
 		(*C.uint8_t)(unsafe.Pointer(&authU[0])),
