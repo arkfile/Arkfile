@@ -530,7 +530,7 @@ func OpaqueAuthResponse(c echo.Context) error {
 	}
 
 	// Create server credential response
-	credentialResponse, authUServer, err := auth.CreateCredentialResponse(credentialRequest, userRecord)
+	credentialResponse, authUServer, err := auth.CreateCredentialResponse(credentialRequest, userRecord, request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create credential response for %s: %v", request.Username, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Authentication response creation failed")

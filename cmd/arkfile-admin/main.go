@@ -372,7 +372,7 @@ EXAMPLES:
 	}
 
 	// Step 3: Recover credentials and create auth token
-	_, authU, exportKey, err := auth.ClientRecoverCredentials(clientState, []byte(credentialResponse))
+	_, authU, exportKey, err := auth.ClientRecoverCredentials(clientState, []byte(credentialResponse), *usernameFlag)
 	if err != nil {
 		return fmt.Errorf("failed to recover credentials: %w", err)
 	}

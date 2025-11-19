@@ -53,9 +53,9 @@ func ClientCreateRegistrationRequest(password []byte) ([]byte, []byte, error) {
 
 // ClientFinalizeRegistration finalizes the registration process
 // This is Step 3 of the registration flow (client-side)
-// Input: usrCtx (client context from step 1), serverResponse (rpub from server)
+// Input: usrCtx (client context from step 1), serverResponse (rpub from server), username
 // Output: rrec (registration record to send to server), exportKey (client export key)
-func ClientFinalizeRegistration(usrCtx []byte, serverResponse []byte) ([]byte, []byte, error) {
+func ClientFinalizeRegistration(usrCtx []byte, serverResponse []byte, username string) ([]byte, []byte, error) {
 	// usrCtx length should be at least OPAQUE_REGISTER_USER_SEC_LEN (may be larger due to password)
 	if len(usrCtx) < OPAQUE_REGISTER_USER_SEC_LEN {
 		return nil, nil, fmt.Errorf("invalid user context length: expected at least %d, got %d",
@@ -71,6 +71,14 @@ func ClientFinalizeRegistration(usrCtx []byte, serverResponse []byte) ([]byte, [
 	rrec := make([]byte, OPAQUE_REGISTRATION_RECORD_LEN)
 	exportKey := make([]byte, 32) // crypto_hash_sha256_BYTES
 
+	// Prepare IDs
+	idU := []byte(username)
+	idULen := uint16(len(idU))
+
+	// Use default server ID "server" for now
+	idS := []byte("server")
+	idSLen := uint16(len(idS))
+
 	// Convert Go slices to C pointers
 	cUsrCtx := C.CBytes(usrCtx)
 	defer C.free(cUsrCtx)
@@ -78,10 +86,20 @@ func ClientFinalizeRegistration(usrCtx []byte, serverResponse []byte) ([]byte, [
 	cServerResponse := C.CBytes(serverResponse)
 	defer C.free(cServerResponse)
 
+	cIdU := C.CBytes(idU)
+	defer C.free(cIdU)
+
+	cIdS := C.CBytes(idS)
+	defer C.free(cIdS)
+
 	// Call C function
 	ret := C.wrap_opaque_finalize_request(
 		(*C.uint8_t)(cUsrCtx),
 		(*C.uint8_t)(cServerResponse),
+		(*C.uint8_t)(cIdU),
+		C.uint16_t(idULen),
+		(*C.uint8_t)(cIdS),
+		C.uint16_t(idSLen),
 		(*C.uint8_t)(unsafe.Pointer(&rrec[0])),
 		(*C.uint8_t)(unsafe.Pointer(&exportKey[0])),
 	)
@@ -129,9 +147,9 @@ func ClientCreateCredentialRequest(password []byte) ([]byte, []byte, error) {
 
 // ClientRecoverCredentials recovers credentials from server response
 // This is Step 3 of the authentication flow (client-side)
-// Input: sec (client secret from step 1), serverResponse (credential response from server)
+// Input: sec (client secret from step 1), serverResponse (credential response from server), username
 // Output: sk (session key), authU (authentication token to send to server), exportKey (client export key)
-func ClientRecoverCredentials(sec []byte, serverResponse []byte) ([]byte, []byte, []byte, error) {
+func ClientRecoverCredentials(sec []byte, serverResponse []byte, username string) ([]byte, []byte, []byte, error) {
 	// sec length should be at least OPAQUE_USER_SESSION_SECRET_LEN (may be larger due to password)
 	if len(sec) < OPAQUE_USER_SESSION_SECRET_LEN {
 		return nil, nil, nil, fmt.Errorf("invalid client secret length: expected at least %d, got %d",
@@ -148,6 +166,18 @@ func ClientRecoverCredentials(sec []byte, serverResponse []byte) ([]byte, []byte
 	authU := make([]byte, 64)     // crypto_auth_hmacsha512_BYTES
 	exportKey := make([]byte, 32) // crypto_hash_sha256_BYTES
 
+	// Prepare IDs
+	idU := []byte(username)
+	idULen := uint16(len(idU))
+
+	// Use default server ID "server" for now
+	idS := []byte("server")
+	idSLen := uint16(len(idS))
+
+	// Prepare context
+	context := []byte("arkfile_auth")
+	contextLen := uint16(len(context))
+
 	// Convert Go slices to C pointers
 	cSec := C.CBytes(sec)
 	defer C.free(cSec)
@@ -155,10 +185,25 @@ func ClientRecoverCredentials(sec []byte, serverResponse []byte) ([]byte, []byte
 	cServerResponse := C.CBytes(serverResponse)
 	defer C.free(cServerResponse)
 
+	cIdU := C.CBytes(idU)
+	defer C.free(cIdU)
+
+	cIdS := C.CBytes(idS)
+	defer C.free(cIdS)
+
+	cContext := C.CBytes(context)
+	defer C.free(cContext)
+
 	// Call C function
 	ret := C.wrap_opaque_recover_credentials(
 		(*C.uint8_t)(cServerResponse),
 		(*C.uint8_t)(cSec),
+		(*C.uint8_t)(cContext),
+		C.uint16_t(contextLen),
+		(*C.uint8_t)(cIdU),
+		C.uint16_t(idULen),
+		(*C.uint8_t)(cIdS),
+		C.uint16_t(idSLen),
 		(*C.uint8_t)(unsafe.Pointer(&sk[0])),
 		(*C.uint8_t)(unsafe.Pointer(&authU[0])),
 		(*C.uint8_t)(unsafe.Pointer(&exportKey[0])),

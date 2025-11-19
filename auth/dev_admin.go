@@ -59,7 +59,7 @@ func CreateDevAdminWithOPAQUE(db *sql.DB, username, password string) (*models.Us
 	}
 
 	// Step 3: Client finalizes registration
-	rrec, exportKey, err := ClientFinalizeRegistration(usrCtx, rpub)
+	rrec, exportKey, err := ClientFinalizeRegistration(usrCtx, rpub, username)
 	if err != nil {
 		return nil, fmt.Errorf("failed to finalize registration: %w", err)
 	}
@@ -408,7 +408,7 @@ func ValidateDevAdminAuthentication(db *sql.DB, username, password, totpSecret s
 		return fmt.Errorf("failed to load user record: %w", err)
 	}
 
-	credentialResponse, authUServer, err := CreateCredentialResponse(pub, userRecord.SerializedRecord)
+	credentialResponse, authUServer, err := CreateCredentialResponse(pub, userRecord.SerializedRecord, username)
 	if err != nil {
 		return fmt.Errorf("server credential response failed: %w", err)
 	}
@@ -420,7 +420,7 @@ func ValidateDevAdminAuthentication(db *sql.DB, username, password, totpSecret s
 	if isDebug {
 		log.Printf("Step 3: Client recovering credentials...")
 	}
-	_, authUClient, _, err := ClientRecoverCredentials(sec, credentialResponse)
+	_, authUClient, _, err := ClientRecoverCredentials(sec, credentialResponse, username)
 	if err != nil {
 		return fmt.Errorf("client credential recovery failed: %w", err)
 	}

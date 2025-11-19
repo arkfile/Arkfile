@@ -424,7 +424,7 @@ EXAMPLES:
 	}
 
 	// Step 4: Finalize registration (client-side)
-	registrationRecord, _, err := auth.ClientFinalizeRegistration(clientSecret, registrationResponse)
+	registrationRecord, _, err := auth.ClientFinalizeRegistration(clientSecret, registrationResponse, *usernameFlag)
 	if err != nil {
 		return fmt.Errorf("failed to finalize registration: %w", err)
 	}
@@ -544,7 +544,7 @@ EXAMPLES:
 	}
 
 	// Step 4: Recover credentials and generate authU (client-side)
-	_, authU, _, err := auth.ClientRecoverCredentials(clientSecret, credentialResponse)
+	_, authU, _, err := auth.ClientRecoverCredentials(clientSecret, credentialResponse, *usernameFlag)
 	if err != nil {
 		return fmt.Errorf("failed to recover credentials: %w", err)
 	}

@@ -114,6 +114,11 @@ func main() {
 
 	// Start session cleanup goroutine
 	go func() {
+		// Perform initial cleanup on startup
+		if err := auth.CleanupExpiredSessions(database.DB); err != nil {
+			logging.ErrorLogger.Printf("Failed to perform initial session cleanup: %v", err)
+		}
+
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 

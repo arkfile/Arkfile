@@ -106,8 +106,8 @@ func StoreUserRecord(rsec []byte, rrec []byte) ([]byte, error) {
 // Multi-step OPAQUE authentication flow
 
 // CreateCredentialResponse handles server-side step of authentication
-// Takes client's credential request (pub) and user record (rec), returns server response
-func CreateCredentialResponse(credentialRequest []byte, userRecord []byte) ([]byte, []byte, error) {
+// Takes client's credential request (pub), user record (rec), and username, returns server response
+func CreateCredentialResponse(credentialRequest []byte, userRecord []byte, username string) ([]byte, []byte, error) {
 	if len(credentialRequest) != OPAQUE_USER_SESSION_PUBLIC_LEN {
 		return nil, nil, fmt.Errorf("invalid credential request length: expected %d, got %d",
 			OPAQUE_USER_SESSION_PUBLIC_LEN, len(credentialRequest))
@@ -127,6 +127,14 @@ func CreateCredentialResponse(credentialRequest []byte, userRecord []byte) ([]by
 	context := []byte("arkfile_auth")
 	contextLen := uint16(len(context))
 
+	// Prepare IDs
+	idU := []byte(username)
+	idULen := uint16(len(idU))
+
+	// Use default server ID "server" for now, could be configurable later
+	idS := []byte("server")
+	idSLen := uint16(len(idS))
+
 	// Convert Go slices to C pointers
 	cCredentialRequest := C.CBytes(credentialRequest)
 	defer C.free(cCredentialRequest)
@@ -137,12 +145,20 @@ func CreateCredentialResponse(credentialRequest []byte, userRecord []byte) ([]by
 	cContext := C.CBytes(context)
 	defer C.free(cContext)
 
+	cIdU := C.CBytes(idU)
+	defer C.free(cIdU)
+
+	cIdS := C.CBytes(idS)
+	defer C.free(cIdS)
+
 	// Call C function with correct parameters
-	// Note: ids parameter is now ignored in C wrapper, hardcoded values are used instead
 	ret := C.wrap_opaque_create_credential_response(
 		(*C.uint8_t)(cCredentialRequest),        // pub: client's credential request public key
 		(*C.uint8_t)(cUserRecord),               // rec: user record from database
-		nil,                                     // ids: ignored (hardcoded in C wrapper)
+		(*C.uint8_t)(cIdU),                      // idU: username
+		C.uint16_t(idULen),                      // idU_len: username length
+		(*C.uint8_t)(cIdS),                      // idS: server ID
+		C.uint16_t(idSLen),                      // idS_len: server ID length
 		(*C.uint8_t)(cContext),                  // ctx: context string
 		C.uint16_t(contextLen),                  // ctx_len: context length
 		(*C.uint8_t)(unsafe.Pointer(&resp[0])),  // resp: server response
