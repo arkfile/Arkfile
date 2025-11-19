@@ -123,72 +123,22 @@ func SetupDevAdminTOTP(db *sql.DB, user *models.User, totpSecret string) error {
 		return fmt.Errorf("SECURITY: Dev admin TOTP setup blocked in production environment")
 	}
 
-	// Enhanced debug logging
-	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
-	isDebug := debugMode == "true" || debugMode == "1"
-
-	if isDebug {
-		log.Printf("=== DEV ADMIN TOTP SETUP START ===")
-		log.Printf("Setting up TOTP for user: %s", user.Username)
-
-		// Check TOTP master key status
-		masterKeyReady, keyLen := crypto.GetTOTPMasterKeyStatus()
-		log.Printf("TOTP master key status: ready=%t, length=%d", masterKeyReady, keyLen)
-
-		if !masterKeyReady {
-			log.Printf("ERROR: TOTP master key not ready - BLOCKING setup")
-			return fmt.Errorf("TOTP master key not ready for admin setup")
-		}
-
-		// Test master key integrity
-		if err := validateTOTPMasterKeyIntegrity(); err != nil {
-			log.Printf("ERROR: TOTP master key integrity validation failed: %v", err)
-			return fmt.Errorf("TOTP master key integrity validation failed: %w", err)
-		}
-		log.Printf("TOTP master key integrity validation passed")
-	}
-
 	log.Printf("Setting up TOTP for dev admin '%s' with fixed secret", user.Username)
 
 	// Generate backup codes
 	backupCodes := generateDevAdminBackupCodes(10)
 
-	if isDebug {
-		log.Printf("Generated %d backup codes for dev admin", len(backupCodes))
-
-		// Log backup codes for testing/debugging TOTP reset functionality
-		log.Printf("Backup codes:")
-		for i, code := range backupCodes {
-			log.Printf("- %d: %s", i+1, code)
-		}
-
-	}
-
 	// Derive user-specific TOTP key from server master key
 	totpKey, err := crypto.DeriveTOTPUserKey(user.Username)
 	if err != nil {
-		if isDebug {
-			log.Printf("ERROR: Failed to derive TOTP user key: %v", err)
-		}
 		return fmt.Errorf("failed to derive TOTP user key: %w", err)
 	}
 	defer crypto.SecureZeroTOTPKey(totpKey)
 
-	if isDebug {
-		log.Printf("Successfully derived TOTP user key, key_length=%d", len(totpKey))
-	}
-
 	// Encrypt TOTP secret
 	secretEncrypted, err := crypto.EncryptGCM([]byte(totpSecret), totpKey)
 	if err != nil {
-		if isDebug {
-			log.Printf("ERROR: Failed to encrypt TOTP secret: %v", err)
-		}
 		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
-	}
-
-	if isDebug {
-		log.Printf("TOTP secret encrypted successfully, encrypted_length=%d", len(secretEncrypted))
 	}
 
 	// Encrypt backup codes
@@ -199,14 +149,7 @@ func SetupDevAdminTOTP(db *sql.DB, user *models.User, totpSecret string) error {
 
 	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
 	if err != nil {
-		if isDebug {
-			log.Printf("ERROR: Failed to encrypt backup codes: %v", err)
-		}
 		return fmt.Errorf("failed to encrypt backup codes: %w", err)
-	}
-
-	if isDebug {
-		log.Printf("Backup codes encrypted successfully, encrypted_length=%d", len(backupCodesEncrypted))
 	}
 
 	// Store TOTP data in database
@@ -220,25 +163,7 @@ func SetupDevAdminTOTP(db *sql.DB, user *models.User, totpSecret string) error {
 	)
 
 	if err != nil {
-		if isDebug {
-			log.Printf("ERROR: Failed to store TOTP in database: %v", err)
-		}
 		return fmt.Errorf("failed to store TOTP setup: %w", err)
-	}
-
-	if isDebug {
-		log.Printf("TOTP data stored successfully in database")
-
-		// Test decryption immediately
-		log.Printf("Testing TOTP decryption immediately after setup...")
-		testDecrypted, testErr := crypto.DecryptGCM(secretEncrypted, totpKey)
-		if testErr != nil {
-			log.Printf("ERROR: Immediate TOTP decryption test failed: %v", testErr)
-		} else {
-			log.Printf("SUCCESS: Immediate TOTP decryption test passed, decrypted_length=%d", len(testDecrypted))
-		}
-
-		log.Printf("=== DEV ADMIN TOTP SETUP END ===")
 	}
 
 	log.Printf("TOTP setup completed for dev admin '%s'", user.Username)
@@ -290,15 +215,7 @@ func validateTOTPMasterKeyIntegrity() error {
 
 // ValidateDevAdminTOTPWorkflow performs complete end-to-end TOTP validation
 func ValidateDevAdminTOTPWorkflow(db *sql.DB, user *models.User, totpSecret string) error {
-	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
-	isDebug := debugMode == "true" || debugMode == "1"
-
-	if isDebug {
-		log.Printf("=== DEV ADMIN TOTP WORKFLOW VALIDATION START ===")
-		log.Printf("Testing complete TOTP workflow for: %s", user.Username)
-	}
-
-	// Step 1: Check if TOTP is enabled
+	// Check if TOTP is enabled
 	enabled, err := IsUserTOTPEnabled(db, user.Username)
 	if err != nil {
 		return fmt.Errorf("failed to check TOTP enabled status: %w", err)
@@ -308,11 +225,7 @@ func ValidateDevAdminTOTPWorkflow(db *sql.DB, user *models.User, totpSecret stri
 		return fmt.Errorf("TOTP not enabled after setup")
 	}
 
-	if isDebug {
-		log.Printf("Step 1: TOTP is enabled")
-	}
-
-	// Step 2: Test TOTP decryption workflow
+	// Test TOTP decryption workflow
 	present, decryptable, totpEnabled, setupCompleted, err := CanDecryptTOTPSecret(db, user.Username)
 	if err != nil {
 		return fmt.Errorf("TOTP decryption test failed: %w", err)
@@ -323,31 +236,15 @@ func ValidateDevAdminTOTPWorkflow(db *sql.DB, user *models.User, totpSecret stri
 			present, decryptable, totpEnabled, setupCompleted)
 	}
 
-	if isDebug {
-		log.Printf("Step 2: TOTP decryption workflow validated")
-	}
-
-	// Step 3: Generate and validate TOTP code
+	// Generate and validate TOTP code
 	currentCode, err := totp.GenerateCode(totpSecret, time.Now())
 	if err != nil {
 		return fmt.Errorf("failed to generate test TOTP code: %w", err)
 	}
 
-	if isDebug {
-		log.Printf("Step 3: Generated test TOTP code: %s", currentCode)
-	}
-
-	// Step 4: Test TOTP validation
+	// Test TOTP validation
 	if err := ValidateTOTPCode(db, user.Username, currentCode); err != nil {
-		if isDebug {
-			log.Printf("FAILED: TOTP code validation failed: %v", err)
-		}
 		return fmt.Errorf("TOTP code validation failed: %w", err)
-	}
-
-	if isDebug {
-		log.Printf("SUCCESS: TOTP code validation passed")
-		log.Printf("=== DEV ADMIN TOTP WORKFLOW VALIDATION COMPLETE ===")
 	}
 
 	log.Printf("Complete TOTP workflow validation passed for '%s'", user.Username)
@@ -379,30 +276,13 @@ func waitForNextTOTPWindow() time.Duration {
 // This function simulates the entire OPAQUE authentication flow internally to ensure
 // the dev admin registration was successful and the system is working properly
 func ValidateDevAdminAuthentication(db *sql.DB, username, password, totpSecret string) error {
-	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
-	isDebug := debugMode == "true" || debugMode == "1"
-
-	if isDebug {
-		log.Printf("=== DEV ADMIN AUTHENTICATION VALIDATION START ===")
-		log.Printf("Validating complete authentication flow for: %s", username)
-	}
-
-	// Step 1: Simulate client credential request
-	if isDebug {
-		log.Printf("Step 1: Creating client credential request...")
-	}
+	// Simulate client credential request
 	sec, pub, err := ClientCreateCredentialRequest([]byte(password))
 	if err != nil {
 		return fmt.Errorf("credential request failed: %w", err)
 	}
-	if isDebug {
-		log.Printf("Step 1: Client credential request created successfully")
-	}
 
-	// Step 2: Get user record and create server response
-	if isDebug {
-		log.Printf("Step 2: Loading user record and creating server response...")
-	}
+	// Get user record and create server response
 	userRecord, err := loadOPAQUEUserData(db, username)
 	if err != nil {
 		return fmt.Errorf("failed to load user record: %w", err)
@@ -412,66 +292,33 @@ func ValidateDevAdminAuthentication(db *sql.DB, username, password, totpSecret s
 	if err != nil {
 		return fmt.Errorf("server credential response failed: %w", err)
 	}
-	if isDebug {
-		log.Printf("Step 2: Server credential response created successfully")
-	}
 
-	// Step 3: Client recovers credentials
-	if isDebug {
-		log.Printf("Step 3: Client recovering credentials...")
-	}
+	// Client recovers credentials
 	_, authUClient, _, err := ClientRecoverCredentials(sec, credentialResponse, username)
 	if err != nil {
 		return fmt.Errorf("client credential recovery failed: %w", err)
 	}
-	if isDebug {
-		log.Printf("Step 3: Client credentials recovered successfully")
-	}
 
-	// Step 4: Verify authentication tokens match
-	if isDebug {
-		log.Printf("Step 4: Verifying authentication tokens...")
-	}
+	// Verify authentication tokens match
 	if err := UserAuth(authUServer, authUClient); err != nil {
 		return fmt.Errorf("authentication token verification failed: %w", err)
 	}
-	if isDebug {
-		log.Printf("Step 4: Authentication tokens verified successfully")
-	}
 
-	// Step 5: Smart wait for next TOTP window to avoid replay detection
+	// Smart wait for next TOTP window to avoid replay detection
 	waitDuration := waitForNextTOTPWindow()
-	if isDebug {
-		log.Printf("Step 5: Waiting %v for next TOTP window to avoid replay detection...", waitDuration.Round(time.Millisecond))
-	} else {
-		log.Printf("[DEV-ADMIN] Waiting %v for next TOTP window...", waitDuration.Round(time.Millisecond))
-	}
+	log.Printf("[DEV-ADMIN] Waiting %v for next TOTP window...", waitDuration.Round(time.Millisecond))
 	time.Sleep(waitDuration)
 
-	// Step 6: Validate TOTP in new window
-	if isDebug {
-		log.Printf("Step 6: Validating TOTP in new window...")
-	}
+	// Validate TOTP in new window
 	// Generate TOTP code for current time (now in new window)
 	currentTime := time.Now()
 	currentCode, err := totp.GenerateCode(totpSecret, currentTime)
 	if err != nil {
 		return fmt.Errorf("TOTP code generation failed: %w", err)
 	}
-	if isDebug {
-		log.Printf("Step 6: Generated TOTP code for new window: %s", currentCode)
-	}
 
 	if err := ValidateTOTPCode(db, username, currentCode); err != nil {
 		return fmt.Errorf("TOTP validation failed: %w", err)
-	}
-	if isDebug {
-		log.Printf("Step 6: TOTP validation successful")
-	}
-
-	if isDebug {
-		log.Printf("=== DEV ADMIN AUTHENTICATION VALIDATION COMPLETE ===")
-		log.Printf("SUCCESS: Complete authentication flow validated for %s", username)
 	}
 
 	log.Printf("Dev admin authentication validation passed for '%s'", username)

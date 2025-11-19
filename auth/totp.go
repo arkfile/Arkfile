@@ -533,25 +533,12 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 
 	// CRITICAL FIX: rqlite driver returns BLOB data as base64-encoded strings
 	// We need to decode them back to binary data for proper GCM decryption
-	if isDebugMode() {
-		fmt.Printf("getTOTPData: Raw data lengths - secret=%d, backup_codes=%d\n",
-			len(data.SecretEncrypted), len(data.BackupCodesEncrypted))
-	}
-
 	// Detect and decode base64-encoded data
 	if decodedSecret, err := decodeBase64IfNeeded(data.SecretEncrypted); err == nil {
-		if isDebugMode() && len(decodedSecret) != len(data.SecretEncrypted) {
-			fmt.Printf("TOTP: Decoded secret from %d to %d bytes (was base64)\n",
-				len(data.SecretEncrypted), len(decodedSecret))
-		}
 		data.SecretEncrypted = decodedSecret
 	}
 
 	if decodedBackup, err := decodeBase64IfNeeded(data.BackupCodesEncrypted); err == nil {
-		if isDebugMode() && len(decodedBackup) != len(data.BackupCodesEncrypted) {
-			fmt.Printf("TOTP: Decoded backup codes from %d to %d bytes (was base64)\n",
-				len(data.BackupCodesEncrypted), len(decodedBackup))
-		}
 		data.BackupCodesEncrypted = decodedBackup
 	}
 
@@ -576,17 +563,6 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 }
 
 func decryptTOTPSecret(encrypted []byte, username string) (string, error) {
-	// Debug logging for TOTP decryption attempts
-	if isDebugMode() && logging.DebugLogger != nil {
-		logging.DebugLogger.Printf("TOTP decrypt attempt for user: %s, encrypted_data_len: %d",
-			username, len(encrypted))
-		if len(encrypted) > 0 {
-			logging.DebugLogger.Printf("TOTP decrypt data preview: first_8_bytes=%x, last_8_bytes=%x",
-				encrypted[:min(8, len(encrypted))],
-				encrypted[max(0, len(encrypted)-8):])
-		}
-	}
-
 	// Use user-specific persistent key derived from server TOTP master key
 	totpKey, err := crypto.DeriveTOTPUserKey(username)
 	if err != nil {
@@ -597,34 +573,10 @@ func decryptTOTPSecret(encrypted []byte, username string) (string, error) {
 	}
 	defer crypto.SecureZeroTOTPKey(totpKey)
 
-	// Debug logging for derived key validation
-	if isDebugMode() && logging.DebugLogger != nil {
-		if len(totpKey) == 32 {
-			// Log key hash for debugging (never log actual key)
-			keyHash := hashString(string(totpKey))
-			logging.DebugLogger.Printf("TOTP key derived successfully for user: %s, key_hash: %s",
-				username, keyHash[:16])
-		} else {
-			logging.DebugLogger.Printf("TOTP key derivation issue for user: %s, unexpected key length: %d",
-				username, len(totpKey))
-		}
-	}
-
 	// Decrypt using AES-GCM
 	decrypted, err := crypto.DecryptGCM(encrypted, totpKey)
 	if err != nil {
-		if isDebugMode() && logging.DebugLogger != nil {
-			logging.DebugLogger.Printf("TOTP GCM decryption failed for user: %s, error: %v", username, err)
-			logging.DebugLogger.Printf("TOTP GCM decrypt context: key_len=%d, data_len=%d",
-				len(totpKey), len(encrypted))
-		}
 		return "", err
-	}
-
-	// Debug logging for successful decryption
-	if isDebugMode() && logging.DebugLogger != nil {
-		logging.DebugLogger.Printf("TOTP decrypt successful for user: %s, decrypted_len: %d",
-			username, len(decrypted))
 	}
 
 	return string(decrypted), nil
@@ -669,22 +621,11 @@ func isDebugMode() bool {
 // CanDecryptTOTPSecret checks if a user's TOTP secret can be decrypted (dev diagnostic helper)
 // This is exported for use by dev-only diagnostic endpoints
 func CanDecryptTOTPSecret(db *sql.DB, username string) (present bool, decryptable bool, enabled bool, setupCompleted bool, err error) {
-	// Enhanced debug logging for CanDecryptTOTPSecret function
-	if isDebugMode() {
-		fmt.Printf("=== CanDecryptTOTPSecret DEBUG START for user: %s ===\n", username)
-	}
-
 	// Get stored TOTP data
 	totpData, err := getTOTPData(db, username)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			if isDebugMode() {
-				fmt.Printf("CanDecryptTOTPSecret: No TOTP data found for user: %s\n", username)
-			}
 			return false, false, false, false, nil // User has no TOTP data
-		}
-		if isDebugMode() {
-			fmt.Printf("CanDecryptTOTPSecret: Database error for user %s: %v\n", username, err)
 		}
 		return false, false, false, false, err
 	}
@@ -693,23 +634,9 @@ func CanDecryptTOTPSecret(db *sql.DB, username string) (present bool, decryptabl
 	enabled = totpData.Enabled
 	setupCompleted = totpData.SetupCompleted
 
-	if isDebugMode() {
-		fmt.Printf("CanDecryptTOTPSecret: TOTP data found - enabled=%t, setupCompleted=%t, encrypted_len=%d\n",
-			enabled, setupCompleted, len(totpData.SecretEncrypted))
-	}
-
-	// Try to decrypt the secret with enhanced debug logging
-	decryptedSecret, decryptErr := decryptTOTPSecret(totpData.SecretEncrypted, username)
+	// Try to decrypt the secret
+	_, decryptErr := decryptTOTPSecret(totpData.SecretEncrypted, username)
 	decryptable = (decryptErr == nil)
-
-	if isDebugMode() {
-		if decryptErr != nil {
-			fmt.Printf("CanDecryptTOTPSecret: Decryption FAILED for user %s: %v\n", username, decryptErr)
-		} else {
-			fmt.Printf("CanDecryptTOTPSecret: Decryption SUCCESS for user %s, secret_len=%d\n", username, len(decryptedSecret))
-		}
-		fmt.Printf("=== CanDecryptTOTPSecret DEBUG END for user: %s ===\n", username)
-	}
 
 	return present, decryptable, enabled, setupCompleted, nil
 }

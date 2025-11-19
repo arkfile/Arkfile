@@ -45,6 +45,7 @@ USAGE:
 
 COMMANDS:
     register      Register a new account with arkfile server
+    setup-totp    Setup Two-Factor Authentication (TOTP)
     login         Authenticate with arkfile server
     upload        Upload pre-encrypted file to server
     download      Download encrypted file from server  
@@ -97,6 +98,7 @@ type AuthSession struct {
 	Username       string    `json:"username"`
 	AccessToken    string    `json:"access_token"`
 	RefreshToken   string    `json:"refresh_token"`
+	TempToken      string    `json:"temp_token,omitempty"`
 	ExpiresAt      time.Time `json:"expires_at"`
 	ServerURL      string    `json:"server_url"`
 	SessionCreated time.Time `json:"session_created"`
@@ -198,6 +200,11 @@ func main() {
 	case "register":
 		if err := handleRegisterCommand(client, config, args); err != nil {
 			logError("Registration failed: %v", err)
+			os.Exit(1)
+		}
+	case "setup-totp":
+		if err := handleSetupTOTPCommand(client, config, args); err != nil {
+			logError("TOTP setup failed: %v", err)
 			os.Exit(1)
 		}
 	case "login":
@@ -439,7 +446,7 @@ EXAMPLES:
 		"registration_record": registrationRecordB64,
 	}
 
-	_, err = client.makeRequest("POST", "/api/opaque/register/finalize", finalizeReq, "")
+	regFinalizeResp, err := client.makeRequest("POST", "/api/opaque/register/finalize", finalizeReq, "")
 	if err != nil {
 		return fmt.Errorf("OPAQUE registration finalization failed: %w", err)
 	}
@@ -447,11 +454,157 @@ EXAMPLES:
 	fmt.Printf("Registration successful for user: %s\n", *usernameFlag)
 	fmt.Printf("Email: %s\n", *emailFlag)
 
-	// Auto-login if requested
-	if *autoLogin {
+	// Handle TOTP requirement or auto-login
+	if regFinalizeResp.RequiresTOTP && regFinalizeResp.TempToken != "" {
+		// Save session with temp token for TOTP setup
+		session := &AuthSession{
+			Username:       *usernameFlag,
+			TempToken:      regFinalizeResp.TempToken,
+			ServerURL:      config.ServerURL,
+			SessionCreated: time.Now(),
+			ExpiresAt:      time.Now().Add(15 * time.Minute), // Temp token usually short-lived
+		}
+
+		if err := saveAuthSession(session, config.TokenFile); err != nil {
+			logError("Warning: Failed to save session for TOTP setup: %v", err)
+		} else {
+			fmt.Printf("\nTOTP setup required. Session saved.\n")
+			fmt.Printf("Please run 'arkfile-client setup-totp' to complete account setup.\n")
+		}
+	} else if *autoLogin {
 		// Note: We cannot auto-login because we've already cleared the password
 		// User will need to login manually
 		fmt.Printf("\nPlease login manually with: arkfile-client login --username %s\n", *usernameFlag)
+	}
+
+	return nil
+}
+
+// handleSetupTOTPCommand processes TOTP setup command
+func handleSetupTOTPCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+	fs := flag.NewFlagSet("setup-totp", flag.ExitOnError)
+	var (
+		showSecret = fs.Bool("show-secret", false, "Only show the secret (for automation)")
+		verifyCode = fs.String("verify", "", "Verify the setup with a code")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-client setup-totp [FLAGS]
+
+Setup Two-Factor Authentication (TOTP) for the account.
+This is usually required immediately after registration.
+
+FLAGS:
+    --show-secret     Only show the secret key and exit (for automation)
+    --verify CODE     Verify the setup with a code (for automation)
+    --help            Show this help message
+
+EXAMPLES:
+    arkfile-client setup-totp
+    arkfile-client setup-totp --show-secret
+    arkfile-client setup-totp --verify 123456
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	// Load session
+	session, err := loadAuthSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in (use 'arkfile-client login' or 'register'): %w", err)
+	}
+
+	// Determine which token to use
+	// If we have a TempToken, we are in the setup flow
+	// If we have an AccessToken, we might be re-configuring or finishing setup
+	token := session.TempToken
+	if token == "" {
+		token = session.AccessToken
+	}
+
+	if token == "" {
+		return fmt.Errorf("no valid session found. Please register or login first")
+	}
+
+	// If verifying, we skip the setup call and go straight to verification
+	if *verifyCode != "" {
+		return verifyTOTP(client, config, session, token, *verifyCode)
+	}
+
+	// Step 1: Call setup endpoint to get secret
+	setupResp, err := client.makeRequest("POST", "/api/totp/setup", nil, token)
+	if err != nil {
+		return fmt.Errorf("failed to initiate TOTP setup: %w", err)
+	}
+
+	secret, ok := setupResp.Data["secret"].(string)
+	if !ok {
+		return fmt.Errorf("invalid server response: missing secret")
+	}
+
+	// Output secret
+	if *showSecret {
+		// For automation, print in a parseable format
+		fmt.Printf("TOTP_SECRET:%s\n", secret)
+		return nil
+	}
+
+	// Interactive mode
+	fmt.Println("=== Two-Factor Authentication Setup ===")
+	fmt.Println("1. Open your authenticator app (Google Authenticator, Authy, etc.)")
+	fmt.Println("2. Add a new account manually")
+	fmt.Printf("3. Enter this secret key: %s\n", secret)
+	fmt.Println("=======================================")
+	fmt.Println()
+
+	// Prompt for code
+	fmt.Print("Enter the 6-digit code from your app: ")
+	reader := bufio.NewReader(os.Stdin)
+	code, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read code: %w", err)
+	}
+	code = strings.TrimSpace(code)
+
+	return verifyTOTP(client, config, session, token, code)
+}
+
+func verifyTOTP(client *HTTPClient, config *ClientConfig, session *AuthSession, token, code string) error {
+	verifyReq := map[string]string{
+		"code": code,
+	}
+
+	verifyResp, err := client.makeRequest("POST", "/api/totp/verify", verifyReq, token)
+	if err != nil {
+		return fmt.Errorf("failed to verify TOTP code: %w", err)
+	}
+
+	// Update session with final tokens
+	if verifyResp.Token != "" {
+		session.AccessToken = verifyResp.Token
+		session.RefreshToken = verifyResp.RefreshToken
+		session.ExpiresAt = verifyResp.ExpiresAt
+		session.TempToken = "" // Clear temp token
+	}
+
+	if err := saveAuthSession(session, config.TokenFile); err != nil {
+		logError("Warning: Failed to save updated session: %v", err)
+	}
+
+	fmt.Println("TOTP Setup Complete!")
+
+	// Display backup codes if available
+	if backupCodes, ok := verifyResp.Data["backup_codes"].([]interface{}); ok {
+		fmt.Println("\n=== BACKUP CODES ===")
+		fmt.Println("SAVE THESE CODES IN A SAFE PLACE!")
+		fmt.Println("You can use these to login if you lose your authenticator device.")
+		fmt.Println("--------------------")
+		for _, code := range backupCodes {
+			fmt.Println(code)
+		}
+		fmt.Println("--------------------")
 	}
 
 	return nil

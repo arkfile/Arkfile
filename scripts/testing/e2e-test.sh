@@ -304,14 +304,58 @@ phase_4_totp_setup() {
     
     section "Setting up TOTP for user: $TEST_USERNAME"
     
-    # Note: The arkfile-client doesn't have a direct TOTP setup command that works
-    # without being logged in. The TOTP setup happens during the registration flow
-    # or first login. For now, we'll document this limitation.
+    # Step 1: Get the secret
+    info "Initiating TOTP setup..."
+    local setup_output
+    setup_output=$($BUILD_DIR/arkfile-client setup-totp --show-secret 2>&1)
     
-    warning "TOTP setup via CLI requires login flow - will be tested in Phase 6"
-    record_test "TOTP setup preparation" "PASS"
+    if [ $? -ne 0 ]; then
+        record_test "TOTP setup initiation" "FAIL"
+        error "Failed to initiate TOTP setup: $setup_output"
+        exit 1
+    fi
     
-    success "TOTP setup phase complete (will verify during login)"
+    # Extract secret
+    local secret
+    secret=$(echo "$setup_output" | grep "TOTP_SECRET:" | cut -d':' -f2)
+    
+    if [ -z "$secret" ]; then
+        record_test "TOTP setup initiation" "FAIL"
+        error "Failed to extract TOTP secret from output: $setup_output"
+        exit 1
+    fi
+    
+    record_test "TOTP setup initiation" "PASS"
+    info "Got TOTP secret: $secret"
+    
+    # Step 2: Generate code
+    local code
+    code=$(generate_totp "$secret")
+    
+    if [ -z "$code" ]; then
+        record_test "TOTP code generation" "FAIL"
+        error "Failed to generate TOTP code"
+        exit 1
+    fi
+    
+    info "Generated verification code: $code"
+    
+    # Step 3: Verify and finalize
+    if $BUILD_DIR/arkfile-client setup-totp --verify "$code" 2>&1 | tee /tmp/totp_verify.log; then
+        if grep -q "TOTP Setup Complete" /tmp/totp_verify.log; then
+            record_test "TOTP verification" "PASS"
+        else
+            record_test "TOTP verification" "FAIL"
+            error "TOTP verification failed - check /tmp/totp_verify.log"
+            exit 1
+        fi
+    else
+        record_test "TOTP verification" "FAIL"
+        error "TOTP verification command failed"
+        exit 1
+    fi
+    
+    success "TOTP setup phase complete"
 }
 
 # Phase 5: Admin Approval of Regular User
