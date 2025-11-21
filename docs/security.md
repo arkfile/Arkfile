@@ -622,7 +622,7 @@ done
 ```bash
 # Generate security metrics report
 DATE=$(date +"%Y-%m-%d")
-echo "=== Arkfile Security Metrics Report - $DATE ==="
+echo "Arkfile Security Metrics Report - $DATE"
 
 # Authentication metrics (Last 24 hours)
 echo "Authentication Metrics:"

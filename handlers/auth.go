@@ -60,7 +60,7 @@ func RefreshToken(c echo.Context) error {
 	}
 
 	// Generate new JWT token
-	token, err := auth.GenerateToken(username)
+	token, expirationTime, err := auth.GenerateToken(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create new token", err.Error())
@@ -86,6 +86,7 @@ func RefreshToken(c echo.Context) error {
 	return JSONResponse(c, http.StatusOK, "Token refreshed successfully", map[string]interface{}{
 		"token":         token,
 		"refresh_token": refreshToken,
+		"expires_at":    expirationTime,
 	})
 }
 
@@ -355,7 +356,7 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	sessionUsername, registrationSecret, err := auth.ValidateAuthSession(database.DB, request.SessionID, "registration")
 	if err != nil {
 		logging.ErrorLogger.Printf("Invalid registration session: %v", err)
-		return JSONError(c, http.StatusUnauthorized, "Invalid or expired session", err.Error())
+		return JSONError(c, http.StatusUnauthorized, "Invalid or expired session: "+err.Error(), err.Error())
 	}
 
 	// Verify username matches session
@@ -440,7 +441,7 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	}
 
 	// Generate temporary token for TOTP setup
-	tempToken, err := auth.GenerateTemporaryTOTPToken(request.Username)
+	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup token creation failed", err.Error())
@@ -452,6 +453,7 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 
 	return JSONResponse(c, http.StatusCreated, "Account created successfully. Two-factor authentication setup is required to complete registration.", map[string]interface{}{
 		"requires_totp_setup": true,
+		"requires_totp":       true, // Added for client compatibility
 		"temp_token":          tempToken,
 		"auth_method":         "OPAQUE",
 		"username":            request.Username,
@@ -607,7 +609,7 @@ func OpaqueAuthFinalize(c echo.Context) error {
 	}
 
 	// Generate temporary token that requires TOTP completion
-	tempToken, err := auth.GenerateTemporaryTOTPToken(request.Username)
+	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed", err.Error())
@@ -762,7 +764,7 @@ func TOTPVerify(c echo.Context) error {
 	// If this is a temporary TOTP token from registration, provide full access tokens
 	if isTemporaryToken {
 		// Generate full access token
-		token, err := auth.GenerateFullAccessToken(username)
+		token, expirationTime, err := auth.GenerateFullAccessToken(username)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
 			return JSONError(c, http.StatusInternalServerError, "Failed to create session", err.Error())
@@ -786,8 +788,9 @@ func TOTPVerify(c echo.Context) error {
 
 		return JSONResponse(c, http.StatusOK, "TOTP setup and registration completed successfully", map[string]interface{}{
 			"enabled":       true,
-			"access_token":  token,
+			"token":         token, // Changed from access_token to token for consistency
 			"refresh_token": refreshToken,
+			"expires_at":    expirationTime,
 			"auth_method":   "OPAQUE+TOTP",
 			"user": map[string]interface{}{
 				"username":        user.Username,
@@ -898,7 +901,7 @@ func TOTPAuth(c echo.Context) error {
 	}
 
 	// Generate full access token
-	token, err := auth.GenerateFullAccessToken(username)
+	token, expirationTime, err := auth.GenerateFullAccessToken(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session", err.Error())
@@ -918,6 +921,7 @@ func TOTPAuth(c echo.Context) error {
 	return JSONResponse(c, http.StatusOK, "TOTP authentication completed", map[string]interface{}{
 		"token":         token,
 		"refresh_token": refreshToken,
+		"expires_at":    expirationTime,
 		"auth_method":   "OPAQUE+TOTP",
 		"user": map[string]interface{}{
 			"username":        user.Username,

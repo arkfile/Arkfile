@@ -89,7 +89,7 @@ func TestGetPendingUsers_Success_Admin(t *testing.T) {
 
 // --- Additional Test Case Suggestions ---
 //
-// === General for all Admin Endpoints ===
+// General for all Admin Endpoints
 // - Test with an expired admin JWT token.
 // - Test with a JWT token that is valid but belongs to a user who was an admin but has since had their admin rights revoked
 //   (depends on token validation and user status check logic).
@@ -98,16 +98,16 @@ func TestGetPendingUsers_Success_Admin(t *testing.T) {
 // - Test for correct and detailed logging of admin actions in various scenarios (successes, failures, specific errors).
 // - If admin actions are rate-limited, add tests to verify rate-limiting behavior.
 //
-// === For GetPendingUsers ===
+// For GetPendingUsers
 // - TestGetPendingUsers_NoPendingUsers: Ensure it returns an empty list and HTTP 200 OK when no users are pending approval.
 // - TestGetPendingUsers_Pagination: If pagination is ever added, test various page sizes, page numbers, and edge cases.
 //
-// === For ApproveUser (now part of UpdateUser if `isApproved: true` is sent) ===
+// For ApproveUser (now part of UpdateUser if `isApproved: true` is sent)
 // - (Covered by UpdateUser tests, but if ApproveUser were a standalone endpoint again):
 //   - TestApproveUser_AlreadyApproved: Attempt to approve a user who is already approved.
 //     The behavior should be idempotent (e.g., return success without change) or a specific status/error.
 //
-// === For UpdateUser ===
+// For UpdateUser
 // - TestUpdateUser_MultipleFields: Update multiple fields simultaneously (e.g., `isAdmin` and `storageLimitBytes`)
 //   to ensure all changes are applied correctly in one request.
 // - TestUpdateUser_RevokeAdminStatus: Specifically test changing `isAdmin` from `true` to `false`.
@@ -118,24 +118,24 @@ func TestGetPendingUsers_Success_Admin(t *testing.T) {
 //   (Current `InvalidJSON` test covers malformed JSON, this is more about valid JSON structure but wrong data types).
 // - TestUpdateUser_LogDetailsFormat: Ensure the details logged in `admin_logs` correctly reflect all fields changed for various combinations of updates.
 //
-// === For DeleteUser ===
+// For DeleteUser
 // - TestDeleteUser_TargetUserHasNoFiles: Ensure successful deletion of a user who has no files in storage and no file metadata.
 // - TestDeleteUser_LogAdminActionFailure: Simulate an error during the `LogAdminAction` step to see how the handler
 //   behaves (ideally, the core delete operation should still succeed, and the logging failure noted). This is lower priority.
 // - TestDeleteUser_TargetUserNotFoundInDB: Ensure it handles the case where the user to be deleted doesn't exist in the DB,
 //   returning a 404 Not Found or similar appropriate error (currently tested by checking target user existence via SELECT 1).
 //
-// === For ListUsers ===
+// For ListUsers
 // - TestListUsers_PaginationAndFiltering: If pagination or filtering (e.g., by approval status, admin status) is added,
 //   test these features thoroughly.
 // - TestListUsers_UserWithMaxStorage: Include a test case where a user has storage usage exactly equal to their limit to check percentage calculations.
 // - TestListUsers_UserWithNullLastLogin: Covered by existing success case, but ensure it's always handled gracefully.
 //
-// === For UpdateUserStorageLimit (subset of UpdateUser, but if treated as specific endpoint) ===
+// For UpdateUserStorageLimit (subset of UpdateUser, but if treated as specific endpoint)
 // - TestUpdateUserStorageLimit_BelowCurrentUsage: Try to set storage limit below the user's current actual usage.
 //   This should ideally be a bad request (HTTP 400).
 //
-// === Other Potential Admin Functions (if they exist or are planned) ===
+// Other Potential Admin Functions (if they exist or are planned)
 // - RevokeUserApproval (if separate from UpdateUser isApproved:false):
 //   - Success, target not found, already revoked, DB errors.
 //   - Test if associated refresh tokens are revoked.

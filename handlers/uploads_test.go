@@ -430,7 +430,7 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 
 // --- Additional Test Case Suggestions ---
 //
-// === For UploadFile Handler (Simple Upload - handlers.UploadFile) ===
+// For UploadFile Handler (Simple Upload - handlers.UploadFile)
 // - TestUploadFile_InvalidRequest_MissingFields: Test with missing required fields in the JSON request (e.g., `filename`, `data`, `sha256sum`).
 // - TestUploadFile_EmptyFile: Upload a file where `data` is an empty string and `fileSize` is 0. This should usually succeed.
 // - TestUploadFile_InvalidSHA256Format: Provide an SHA256 sum that is not a 64-character hexadecimal string.
@@ -444,7 +444,7 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 //   The core upload should still be considered successful.
 // - TestUploadFile_UnapprovedUser: Attempt an upload by a user whose `is_approved` status is false. (Depends on middleware or handler checks).
 //
-// === For Chunked Upload Handlers (if tests are to be added to this file) ===
+// For Chunked Upload Handlers (if tests are to be added to this file)
 //   (Handlers: InitiateChunkedUpload, UploadChunk, CompleteChunkedUpload, GetUploadSessionStatus, ListChunks, AbortChunkedUpload)
 //
 //   **InitiateChunkedUpload:**

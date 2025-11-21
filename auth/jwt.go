@@ -23,14 +23,15 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func GenerateToken(username string) (string, error) {
+func GenerateToken(username string) (string, time.Time, error) {
 	// Generate a unique token ID
 	tokenID := uuid.New().String()
+	expirationTime := time.Now().Add(utils.GetJWTTokenLifetime())
 
 	claims := &Claims{
 		Username: username,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(utils.GetJWTTokenLifetime())), // Token expires based on environment config
+			ExpiresAt: jwt.NewNumericDate(expirationTime), // Token expires based on environment config
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    "arkfile-auth",          // Add issuer claim
@@ -41,7 +42,8 @@ func GenerateToken(username string) (string, error) {
 
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
 	// Use Ed25519 private key for signing
-	return token.SignedString(GetJWTPrivateKey())
+	tokenString, err := token.SignedString(GetJWTPrivateKey())
+	return tokenString, expirationTime, err
 }
 
 func JWTMiddleware() echo.MiddlewareFunc {
@@ -94,14 +96,15 @@ func HashToken(token string) (string, error) {
 }
 
 // GenerateTemporaryTOTPToken creates a temporary JWT token that requires TOTP completion
-func GenerateTemporaryTOTPToken(username string) (string, error) {
+func GenerateTemporaryTOTPToken(username string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
+	expirationTime := time.Now().Add(5 * time.Minute)
 
 	claims := &Claims{
 		Username:     username,
 		RequiresTOTP: true,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(5 * time.Minute)), // 5 minute expiry
+			ExpiresAt: jwt.NewNumericDate(expirationTime), // 5 minute expiry
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    "arkfile-auth",
@@ -111,18 +114,20 @@ func GenerateTemporaryTOTPToken(username string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	return token.SignedString(GetJWTPrivateKey())
+	tokenString, err := token.SignedString(GetJWTPrivateKey())
+	return tokenString, expirationTime, err
 }
 
 // GenerateFullAccessToken creates a full access JWT token after TOTP validation
-func GenerateFullAccessToken(username string) (string, error) {
+func GenerateFullAccessToken(username string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
+	expirationTime := time.Now().Add(utils.GetJWTTokenLifetime())
 
 	claims := &Claims{
 		Username:     username,
 		RequiresTOTP: false,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(utils.GetJWTTokenLifetime())), // Configurable expiry time
+			ExpiresAt: jwt.NewNumericDate(expirationTime), // Configurable expiry time
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    "arkfile-auth",
@@ -132,7 +137,8 @@ func GenerateFullAccessToken(username string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	return token.SignedString(GetJWTPrivateKey())
+	tokenString, err := token.SignedString(GetJWTPrivateKey())
+	return tokenString, expirationTime, err
 }
 
 // RequiresTOTPFromToken checks if the token requires TOTP completion

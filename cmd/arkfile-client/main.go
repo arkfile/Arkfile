@@ -308,6 +308,43 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
+	// Extract fields from Data map if present (server wraps data in "data" field)
+	if apiResp.Data != nil {
+		if val, ok := apiResp.Data["requires_totp"].(bool); ok {
+			apiResp.RequiresTOTP = val
+		}
+		if val, ok := apiResp.Data["temp_token"].(string); ok {
+			apiResp.TempToken = val
+		}
+		if val, ok := apiResp.Data["token"].(string); ok {
+			apiResp.Token = val
+		}
+		if val, ok := apiResp.Data["refresh_token"].(string); ok {
+			apiResp.RefreshToken = val
+		}
+		if val, ok := apiResp.Data["session_id"].(string); ok {
+			apiResp.SessionID = val
+		}
+		if val, ok := apiResp.Data["file_id"].(string); ok {
+			apiResp.FileID = val
+		}
+		if val, ok := apiResp.Data["storage_id"].(string); ok {
+			apiResp.StorageID = val
+		}
+		if val, ok := apiResp.Data["encrypted_file_sha256"].(string); ok {
+			apiResp.EncryptedFileSHA256 = val
+		}
+
+		// Handle expiration time
+		if val, ok := apiResp.Data["expires_at"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, val); err == nil {
+				apiResp.ExpiresAt = t
+			} else if t, err := time.Parse(time.RFC3339Nano, val); err == nil {
+				apiResp.ExpiresAt = t
+			}
+		}
+	}
+
 	if resp.StatusCode >= 400 {
 		return &apiResp, fmt.Errorf("HTTP %d: %s", resp.StatusCode, apiResp.Error)
 	}
@@ -425,6 +462,15 @@ EXAMPLES:
 		return fmt.Errorf("invalid server response: missing registration_response")
 	}
 
+	// Extract session_id from Data if present, otherwise fallback to top-level SessionID
+	sessionID, ok := regResp.Data["session_id"].(string)
+	if !ok || sessionID == "" {
+		sessionID = regResp.SessionID
+	}
+	if sessionID == "" {
+		return fmt.Errorf("invalid server response: missing session_id")
+	}
+
 	registrationResponse, err := base64.StdEncoding.DecodeString(registrationResponseB64)
 	if err != nil {
 		return fmt.Errorf("failed to decode registration response: %w", err)
@@ -441,7 +487,7 @@ EXAMPLES:
 
 	// Step 5: Send registration record to server to complete registration
 	finalizeReq := map[string]string{
-		"session_id":          regResp.SessionID,
+		"session_id":          sessionID,
 		"username":            *usernameFlag,
 		"registration_record": registrationRecordB64,
 	}
@@ -691,6 +737,15 @@ EXAMPLES:
 		return fmt.Errorf("invalid server response: missing credential_response")
 	}
 
+	// Extract session_id from Data if present, otherwise fallback to top-level SessionID
+	sessionID, ok := authResp.Data["session_id"].(string)
+	if !ok || sessionID == "" {
+		sessionID = authResp.SessionID
+	}
+	if sessionID == "" {
+		return fmt.Errorf("invalid server response: missing session_id")
+	}
+
 	credentialResponse, err := base64.StdEncoding.DecodeString(credentialResponseB64)
 	if err != nil {
 		return fmt.Errorf("failed to decode credential response: %w", err)
@@ -707,7 +762,7 @@ EXAMPLES:
 
 	// Step 5: Send authU to server to finalize authentication
 	finalizeReq := map[string]string{
-		"session_id": authResp.SessionID,
+		"session_id": sessionID,
 		"username":   *usernameFlag,
 		"auth_u":     authUB64,
 	}
@@ -1413,10 +1468,24 @@ func readPassword(prompt string) ([]byte, error) {
 	}
 
 	// Not a terminal, so read from stdin (likely a pipe)
-	bytePassword, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read password from stdin: %w", err)
+	// Read byte-by-byte to avoid buffering more than the line (which would consume subsequent inputs like TOTP)
+	var passwordBytes []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("failed to read password from stdin: %w", err)
+		}
+		if n > 0 {
+			if buf[0] == '\n' {
+				break
+			}
+			passwordBytes = append(passwordBytes, buf[0])
+		}
 	}
-	// Trim trailing newline characters which are common in piped input
-	return bytes.TrimRight(bytePassword, "\r\n"), nil
+	// Trim trailing carriage return if present
+	return bytes.TrimRight(passwordBytes, "\r"), nil
 }

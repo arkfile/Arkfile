@@ -349,12 +349,9 @@ func initializeAdminUser() error {
 		log.Printf("CRITICAL: Dev admin authentication validation failed: %v", err)
 		// This is critical - if authentication doesn't work, the system is broken
 		return fmt.Errorf("dev admin authentication validation failed: %w", err)
-	} else {
-		log.Printf("SUCCESS: Dev admin authentication validation passed")
 	}
 
-	log.Printf("=== Dev admin user initialization complete ===")
-	log.Printf("Username: %s", devAdminUsername)
+	log.Printf("SUCCESS: Full OPAQUE Auth + TOTP validation complete for '%s' user.", devAdminUsername)
 
 	return nil
 }

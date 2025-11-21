@@ -3,7 +3,7 @@
 
 set -e
 
-echo "=== Arkfile Static Library Build System ==="
+echo "Arkfile Static Library Build System"
 
 # Robust cross-platform tool detection
 find_pkg_config() {

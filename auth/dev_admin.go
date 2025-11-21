@@ -293,15 +293,37 @@ func ValidateDevAdminAuthentication(db *sql.DB, username, password, totpSecret s
 		return fmt.Errorf("server credential response failed: %w", err)
 	}
 
+	// Create auth session to test database serialization (round-trip test)
+	sessionID, err := CreateAuthSession(db, username, "dev_admin_validation", authUServer)
+	if err != nil {
+		return fmt.Errorf("failed to create validation session: %w", err)
+	}
+
+	// Retrieve auth session to verify database storage/retrieval
+	retrievedUsername, retrievedAuthUServer, err := ValidateAuthSession(db, sessionID, "dev_admin_validation")
+	if err != nil {
+		return fmt.Errorf("failed to validate validation session: %w", err)
+	}
+
+	if retrievedUsername != username {
+		return fmt.Errorf("username mismatch in validation session")
+	}
+
+	// Clean up session
+	if err := DeleteAuthSession(db, sessionID); err != nil {
+		log.Printf("Warning: failed to cleanup validation session: %v", err)
+	}
+
 	// Client recovers credentials
 	_, authUClient, _, err := ClientRecoverCredentials(sec, credentialResponse, username)
 	if err != nil {
 		return fmt.Errorf("client credential recovery failed: %w", err)
 	}
 
-	// Verify authentication tokens match
-	if err := UserAuth(authUServer, authUClient); err != nil {
-		return fmt.Errorf("authentication token verification failed: %w", err)
+	// Verify authentication tokens match using the RETRIEVED server token
+	// This ensures the token survived the database round-trip intact
+	if err := UserAuth(retrievedAuthUServer, authUClient); err != nil {
+		return fmt.Errorf("authentication token verification failed (db round-trip): %w", err)
 	}
 
 	// Smart wait for next TOTP window to avoid replay detection
@@ -321,6 +343,37 @@ func ValidateDevAdminAuthentication(db *sql.DB, username, password, totpSecret s
 		return fmt.Errorf("TOTP validation failed: %w", err)
 	}
 
-	log.Printf("Dev admin authentication validation passed for '%s'", username)
+	// Validate Refresh Token Lifecycle
+	// This ensures the token database schema and logic are correct
+	log.Printf("[DEV-ADMIN] Validating refresh token lifecycle...")
+
+	// 1. Create Token
+	token, err := models.CreateRefreshToken(db, username)
+	if err != nil {
+		return fmt.Errorf("failed to create test refresh token: %w", err)
+	}
+
+	// 2. Validate Token
+	valUser, err := models.ValidateRefreshToken(db, token)
+	if err != nil {
+		return fmt.Errorf("failed to validate test refresh token: %w", err)
+	}
+	if valUser != username {
+		return fmt.Errorf("refresh token validation returned wrong user: expected %s, got %s", username, valUser)
+	}
+
+	// 3. Revoke Token
+	if err := models.RevokeRefreshToken(db, token); err != nil {
+		return fmt.Errorf("failed to revoke test refresh token: %w", err)
+	}
+
+	// 4. Verify Revocation
+	_, err = models.ValidateRefreshToken(db, token)
+	if err != models.ErrRefreshTokenNotFound {
+		return fmt.Errorf("revoked token should be invalid, got error: %v", err)
+	}
+
+	log.Printf("[DEV-ADMIN] Refresh token lifecycle validation passed")
+
 	return nil
 }

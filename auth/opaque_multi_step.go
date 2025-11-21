@@ -10,6 +10,7 @@ package auth
 import "C"
 import (
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"time"
 	"unsafe"
@@ -221,14 +222,34 @@ func CreateAuthSession(db *sql.DB, username string, flowType string, serverPubli
 
 // ValidateAuthSession validates and retrieves session data
 func ValidateAuthSession(db *sql.DB, sessionID string, expectedFlowType string) (username string, serverPk []byte, err error) {
-	query := "SELECT username, auth_u_server FROM opaque_auth_sessions WHERE session_id = ? AND session_type = ? AND expires_at > CURRENT_TIMESTAMP"
+	// Use Go's time.Now() for comparison to ensure consistency with how expires_at was stored
+	// This avoids issues with SQLite's CURRENT_TIMESTAMP being UTC vs local time storage
+	query := "SELECT username, auth_u_server FROM opaque_auth_sessions WHERE session_id = ? AND session_type = ? AND expires_at > ?"
 
-	err = db.QueryRow(query, sessionID, expectedFlowType).Scan(&username, &serverPk)
+	err = db.QueryRow(query, sessionID, expectedFlowType, time.Now()).Scan(&username, &serverPk)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return "", nil, fmt.Errorf("invalid or expired session")
+			// Check if it's expired or just not found/wrong type
+			var count int
+			checkErr := db.QueryRow("SELECT COUNT(*) FROM opaque_auth_sessions WHERE session_id = ?", sessionID).Scan(&count)
+			if checkErr == nil && count > 0 {
+				return "", nil, fmt.Errorf("session expired or invalid type")
+			}
+			return "", nil, fmt.Errorf("invalid or expired session (not found)")
 		}
 		return "", nil, fmt.Errorf("session validation failed: %w", err)
+	}
+
+	// Fix for rqlite/sqlite driver issue where BLOBs might be returned as Base64 strings
+	// If the length is not 64 bytes (likely ~88 bytes for Base64), try to decode it
+	if len(serverPk) != 64 {
+		// Try to decode as Base64
+		decoded, err := base64.StdEncoding.DecodeString(string(serverPk))
+		if err == nil && len(decoded) == 64 {
+			serverPk = decoded
+		}
+		// If decoding fails or length is still wrong, we leave it as is
+		// UserAuth will catch the invalid length later
 	}
 
 	return username, serverPk, nil

@@ -27,8 +27,8 @@ type RefreshToken struct {
 	TokenHash string
 	ExpiresAt time.Time
 	CreatedAt time.Time
-	IsRevoked bool
-	IsUsed    bool
+	Revoked   bool
+	LastUsed  *time.Time
 }
 
 // CreateRefreshToken generates a new refresh token for a user
@@ -49,8 +49,8 @@ func CreateRefreshToken(db *sql.DB, username string) (string, error) {
 	// Insert token into database.
 	createdAt := time.Now()
 	_, err := db.Exec(
-		`INSERT INTO refresh_tokens (id, username, token_hash, expires_at, created_at, is_revoked, is_used) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, username, tokenHash, expiresAt, createdAt, false, false,
+		`INSERT INTO refresh_tokens (id, username, token_hash, expires_at, created_at, revoked, last_used) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, username, tokenHash, expiresAt, createdAt, false, nil,
 	)
 	if err != nil {
 		return "", err
@@ -76,16 +76,16 @@ func ValidateRefreshToken(db *sql.DB, tokenString string) (string, error) {
 		id           string
 		username     string
 		expiresAtStr string // Scan as string first to handle RQLite timestamp format
-		isRevoked    bool
-		isUsed       bool
+		revoked      bool
+		lastUsedStr  sql.NullString // Scan as string first to handle RQLite timestamp format
 	)
 
 	err := db.QueryRow(
-		`SELECT id, username, expires_at, is_revoked, is_used 
+		`SELECT id, username, expires_at, revoked, last_used 
 		 FROM refresh_tokens 
 		 WHERE token_hash = ?`,
 		tokenHash,
-	).Scan(&id, &username, &expiresAtStr, &isRevoked, &isUsed)
+	).Scan(&id, &username, &expiresAtStr, &revoked, &lastUsedStr)
 
 	if err != nil {
 		if debugMode == "true" || debugMode == "1" {
@@ -114,8 +114,8 @@ func ValidateRefreshToken(db *sql.DB, tokenString string) (string, error) {
 	}
 
 	if debugMode == "true" || debugMode == "1" {
-		fmt.Printf("[DEBUG] ValidateRefreshToken: found token - id=%s, username=%s, expires_at=%s, is_revoked=%t, is_used=%t\n",
-			id, username, expiresAt.Format(time.RFC3339), isRevoked, isUsed)
+		fmt.Printf("[DEBUG] ValidateRefreshToken: found token - id=%s, username=%s, expires_at=%s, revoked=%t, last_used=%v\n",
+			id, username, expiresAt.Format(time.RFC3339), revoked, lastUsedStr)
 	}
 
 	// Check if token is expired
@@ -128,7 +128,7 @@ func ValidateRefreshToken(db *sql.DB, tokenString string) (string, error) {
 	}
 
 	// Check if token is revoked
-	if isRevoked {
+	if revoked {
 		if debugMode == "true" || debugMode == "1" {
 			fmt.Printf("[DEBUG] ValidateRefreshToken: token is revoked\n")
 		}
@@ -141,10 +141,11 @@ func ValidateRefreshToken(db *sql.DB, tokenString string) (string, error) {
 	// Implement sliding window: extend the expiry time on successful use
 	// This provides a balance between security and usability
 	newExpiresAt := time.Now().Add(14 * 24 * time.Hour) // 14-day sliding window
+	now := time.Now()
 
 	_, err = db.Exec(
-		"UPDATE refresh_tokens SET expires_at = ? WHERE id = ?",
-		newExpiresAt, id,
+		"UPDATE refresh_tokens SET expires_at = ?, last_used = ? WHERE id = ?",
+		newExpiresAt, now, id,
 	)
 	if err != nil {
 		if debugMode == "true" || debugMode == "1" {
@@ -167,7 +168,7 @@ func RevokeRefreshToken(db *sql.DB, tokenString string) error {
 	tokenHash := hex.EncodeToString(hash[:])
 
 	result, err := db.Exec(
-		"UPDATE refresh_tokens SET is_revoked = true WHERE token_hash = ?",
+		"UPDATE refresh_tokens SET revoked = true WHERE token_hash = ?",
 		tokenHash,
 	)
 	if err != nil {
@@ -189,7 +190,7 @@ func RevokeRefreshToken(db *sql.DB, tokenString string) error {
 // RevokeAllUserTokens revokes all refresh tokens for a user
 func RevokeAllUserTokens(db *sql.DB, username string) error {
 	_, err := db.Exec(
-		"UPDATE refresh_tokens SET is_revoked = true WHERE username = ?",
+		"UPDATE refresh_tokens SET revoked = true WHERE username = ?",
 		username,
 	)
 	return err

@@ -164,7 +164,7 @@ func TestGenerateToken(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Execute
-			tokenString, err := GenerateToken(tc.username)
+			tokenString, _, err := GenerateToken(tc.username)
 
 			// Assert: Check for errors and non-empty token
 			assert.NoError(t, err)

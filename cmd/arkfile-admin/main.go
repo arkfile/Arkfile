@@ -1246,11 +1246,24 @@ func readPassword() (string, error) {
 	}
 
 	// Not a terminal, so read from stdin (likely a pipe)
-	reader := bufio.NewReader(os.Stdin)
-	password, err := reader.ReadString('\n')
-	if err != nil && err != io.EOF {
-		return "", fmt.Errorf("failed to read password from stdin: %w", err)
+	// Read byte-by-byte to avoid buffering more than the line (which would consume subsequent inputs like TOTP)
+	var passwordBytes []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return "", fmt.Errorf("failed to read password from stdin: %w", err)
+		}
+		if n > 0 {
+			if buf[0] == '\n' {
+				break
+			}
+			passwordBytes = append(passwordBytes, buf[0])
+		}
 	}
-	// Trim trailing newline characters which are common in piped input
-	return strings.TrimRight(password, "\r\n"), nil
+	// Trim trailing carriage return if present
+	return strings.TrimRight(string(passwordBytes), "\r"), nil
 }

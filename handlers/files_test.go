@@ -244,7 +244,7 @@ func TestDeleteFile_StorageError(t *testing.T) {
 
 // --- Additional Test Case Suggestions ---
 //
-// === For DownloadFile Handler (handlers.DownloadFile) ===
+// For DownloadFile Handler (handlers.DownloadFile)
 // - TestDownloadFile_MetadataNotFound: File metadata doesn't exist in 'file_metadata' table (sql.ErrNoRows on owner check).
 // - TestDownloadFile_NotOwner: Authenticated user is not the owner of the file.
 // - TestDownloadFile_DBOwnerQueryError: General DB error when querying for file owner.
@@ -253,7 +253,7 @@ func TestDeleteFile_StorageError(t *testing.T) {
 // - TestDownloadFile_StorageObjectReadError: io.ReadAll(object) fails after successfully obtaining the object stream.
 // - TestDownloadFile_LogUserActionFailure: (Lower priority) Simulate failure in database.LogUserAction, ensure download still proceeds.
 //
-// === For ListFiles Handler (handlers.ListFiles) ===
+// For ListFiles Handler (handlers.ListFiles)
 // - TestListFiles_Success_NoFiles: User has no files; API should return an empty list for "files" and correct storage info.
 // - TestListFiles_Success_WithFiles: User has multiple files; verify all files are listed with correct metadata (filename, hints, type, hash, size, readable size, date).
 // - TestListFiles_Success_StorageCalculations: Verify the 'storage' part of the response (total, limit, available, usage_percent) is accurate for various scenarios (empty, partially full, full). Check formatBytes helper implicitly.
@@ -263,7 +263,7 @@ func TestDeleteFile_StorageError(t *testing.T) {
 // - TestListFiles_Pagination: If pagination is implemented, test different page sizes, page numbers, and edge cases.
 // - TestListFiles_Sorting: If sorting options are implemented (e.g., by date, name, size), test them.
 //
-// === For DeleteFile Handler (handlers.DeleteFile) ===
+// For DeleteFile Handler (handlers.DeleteFile)
 //   (Existing tests cover Success, NotFound, NotOwner, StorageError)
 // - TestDeleteFile_TransactionBeginError: Simulate failure in database.DB.Begin().
 // - TestDeleteFile_DBOwnerCheckError_Generic: Simulate a generic DB error (not sql.ErrNoRows) during the

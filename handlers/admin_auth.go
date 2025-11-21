@@ -193,7 +193,7 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 	}
 
 	// Generate temporary token that requires TOTP completion
-	tempToken, err := auth.GenerateTemporaryTOTPToken(request.Username)
+	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for admin %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed", err.Error())

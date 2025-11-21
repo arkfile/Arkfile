@@ -230,7 +230,7 @@ echo "OpenSSL version: $(detect_openssl_version)"
 
 # Create Certificate Authority
 echo ""
-echo -e "${BLUE}=== Creating Certificate Authority ===${NC}"
+echo -e "${BLUE}Creating Certificate Authority${NC}"
 ca_algorithm=$(generate_private_key "${TLS_DIR}/ca/ca.key" "Certificate Authority" 4096)
 if [ $? -ne 0 ]; then
     echo -e "${RED}Failed to generate CA private key${NC}"
@@ -256,7 +256,7 @@ fi
 
 # Create Arkfile application certificate
 echo ""
-echo -e "${BLUE}=== Creating Arkfile Application Certificate ===${NC}"
+echo -e "${BLUE}Creating Arkfile Application Certificate${NC}"
 arkfile_algorithm=$(generate_private_key "${TLS_DIR}/arkfile/server-key.pem" "Arkfile Application" 2048)
 if [ $? -ne 0 ]; then
     echo -e "${RED}Failed to generate Arkfile private key${NC}"
@@ -276,7 +276,7 @@ fi
 
 # Create rqlite certificate
 echo ""
-echo -e "${BLUE}=== Creating rqlite Database Certificate ===${NC}"
+echo -e "${BLUE}Creating rqlite Database Certificate${NC}"
 rqlite_algorithm=$(generate_private_key "${TLS_DIR}/rqlite/server-key.pem" "rqlite Database" 2048)
 if [ $? -ne 0 ]; then
     echo -e "${RED}Failed to generate rqlite private key${NC}"
@@ -301,7 +301,7 @@ fi
 
 # Create MinIO certificate
 echo ""
-echo -e "${BLUE}=== Creating MinIO Storage Certificate ===${NC}"
+echo -e "${BLUE}Creating MinIO Storage Certificate${NC}"
 minio_algorithm=$(generate_private_key "${TLS_DIR}/minio/server-key.pem" "MinIO Storage" 2048)
 if [ $? -ne 0 ]; then
     echo -e "${RED}Failed to generate MinIO private key${NC}"
@@ -326,7 +326,7 @@ fi
 
 # Create certificate bundles
 echo ""
-echo -e "${BLUE}=== Creating Certificate Bundles ===${NC}"
+echo -e "${BLUE}Creating Certificate Bundles${NC}"
 for service in arkfile rqlite minio; do
     bundle_path="${TLS_DIR}/${service}/server-bundle.pem"
     echo "Creating certificate bundle for ${service}..."
@@ -340,7 +340,7 @@ done
 
 # Set proper permissions
 echo ""
-echo -e "${BLUE}=== Setting File Permissions ===${NC}"
+echo -e "${BLUE}Setting File Permissions${NC}"
 echo "Setting secure file permissions..."
 
 # Set ownership
@@ -370,7 +370,7 @@ echo -e "  ${GREEN}[OK] File permissions set securely${NC}"
 
 # Validate all certificates
 echo ""
-echo -e "${BLUE}=== Validating Certificates ===${NC}"
+echo -e "${BLUE}Validating Certificates${NC}"
 all_valid=true
 
 validate_certificate "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "Certificate Authority"
@@ -387,7 +387,7 @@ if [ $? -ne 0 ]; then all_valid=false; fi
 
 # Create certificate metadata AFTER all certificates are generated
 echo ""
-echo -e "${BLUE}=== Creating Certificate Metadata ===${NC}"
+echo -e "${BLUE}Creating Certificate Metadata${NC}"
 
 # Extract certificate expiration dates safely
 ca_expires=""

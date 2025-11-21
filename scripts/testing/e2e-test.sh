@@ -1,9 +1,7 @@
 #!/bin/bash
 
-# auth-e2e-test.sh - End-to-End Authentication Testing Using CLI Tools
-# 
-# This is a NEW comprehensive test script for the refactored authentication system.
-# Uses arkfile-client and arkfile-admin CLI tools instead of raw curl commands.
+# auth-e2e-test.sh - End-to-End Testing
+# - Uses arkfile-client and arkfile-admin CLI tools instead of raw curl commands.
 #
 # Flow:
 #   1. Environment verification (server, CLI tools, TOTP generator)
@@ -60,7 +58,7 @@ success() { echo -e "${GREEN}[OK] $1${NC}"; }
 error() { echo -e "${RED}[X] $1${NC}"; }
 warning() { echo -e "${YELLOW}[!] $1${NC}"; }
 info() { echo -e "${CYAN}[i] $1${NC}"; }
-section() { echo -e "\n${BLUE}=== $1 ===${NC}"; }
+section() { echo -e "\n${BLUE}$1${NC}"; }
 phase() { echo -e "\n${CYAN}>>> PHASE: $1${NC}\n"; }
 
 # ============================================================================
@@ -267,7 +265,7 @@ phase_3_user_registration() {
     section "Registering user: $TEST_USERNAME"
     
     # Register user using arkfile-client
-    if printf "%s\n" "$TEST_PASSWORD" | $BUILD_DIR/arkfile-client \
+    if printf "%s\n%s\n" "$TEST_PASSWORD" "$TEST_PASSWORD" | $BUILD_DIR/arkfile-client \
         --server-url "$SERVER_URL" \
         --tls-insecure \
         register \
@@ -650,11 +648,7 @@ phase_11_summary() {
 # ============================================================================
 
 main() {
-    echo ""
-    echo -e "${CYAN}========================================${NC}"
     echo -e "${CYAN}  ARKFILE E2E AUTHENTICATION TEST      ${NC}"
-    echo -e "${CYAN}  Using CLI Tools (NEW)                ${NC}"
-    echo -e "${CYAN}========================================${NC}"
     echo ""
     
     info "Server URL: $SERVER_URL"
