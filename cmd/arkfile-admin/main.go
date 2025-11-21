@@ -99,17 +99,10 @@ type HTTPClient struct {
 
 // Response represents a generic API response
 type Response struct {
-	Success      bool                   `json:"success"`
-	Message      string                 `json:"message"`
-	Data         map[string]interface{} `json:"data"`
-	Error        string                 `json:"error"`
-	TempToken    string                 `json:"temp_token"`
-	SessionKey   string                 `json:"session_key"`
-	RequiresTOTP bool                   `json:"requires_totp"`
-	Token        string                 `json:"token"`
-	RefreshToken string                 `json:"refresh_token"`
-	ExpiresAt    time.Time              `json:"expires_at"`
-	OPAQUEExport string                 `json:"opaque_export"`
+	Success bool                   `json:"success"`
+	Message string                 `json:"message"`
+	Data    map[string]interface{} `json:"data"`
+	Error   string                 `json:"error"`
 }
 
 // User represents user information
@@ -366,13 +359,19 @@ EXAMPLES:
 		return fmt.Errorf("invalid session ID in response")
 	}
 
-	credentialResponse, ok := authStartResp.Data["credential_response"].(string)
+	credentialResponseStr, ok := authStartResp.Data["credential_response"].(string)
 	if !ok {
 		return fmt.Errorf("invalid credential response")
 	}
 
+	// Decode base64 credential response
+	credentialResponse, err := base64.StdEncoding.DecodeString(credentialResponseStr)
+	if err != nil {
+		return fmt.Errorf("failed to decode credential response: %w", err)
+	}
+
 	// Step 3: Recover credentials and create auth token
-	_, authU, exportKey, err := auth.ClientRecoverCredentials(clientState, []byte(credentialResponse), *usernameFlag)
+	_, authU, exportKey, err := auth.ClientRecoverCredentials(clientState, credentialResponse, *usernameFlag)
 	if err != nil {
 		return fmt.Errorf("failed to recover credentials: %w", err)
 	}
@@ -389,11 +388,17 @@ EXAMPLES:
 		return fmt.Errorf("admin authentication finalization failed: %w", err)
 	}
 
-	// Store export key for future use
-	loginResp.OPAQUEExport = base64.StdEncoding.EncodeToString(exportKey)
+	// Extract data from login response
+	var accessToken, refreshToken, opaqueExport string
+	var expiresAt time.Time
 
-	// Handle TOTP requirement
-	if loginResp.RequiresTOTP {
+	// Check if TOTP is required
+	requiresTOTP, _ := loginResp.Data["requires_totp"].(bool)
+
+	if requiresTOTP {
+		sessionKey, _ := loginResp.Data["session_key"].(string)
+		tempToken, _ := loginResp.Data["temp_token"].(string)
+
 		fmt.Print("Enter TOTP code: ")
 		reader := bufio.NewReader(os.Stdin)
 		totpCode, err := reader.ReadString('\n')
@@ -404,29 +409,46 @@ EXAMPLES:
 
 		totpReq := map[string]interface{}{
 			"code":        totpCode,
-			"session_key": loginResp.SessionKey,
+			"session_key": sessionKey,
 			"is_backup":   false,
 		}
 
-		totpResp, err := client.makeRequest("POST", "/api/totp/auth", totpReq, loginResp.TempToken)
+		totpResp, err := client.makeRequest("POST", "/api/totp/auth", totpReq, tempToken)
 		if err != nil {
 			return fmt.Errorf("TOTP authentication failed: %w", err)
 		}
 
-		// Update response with final tokens
-		loginResp.Token = totpResp.Token
-		loginResp.RefreshToken = totpResp.RefreshToken
-		loginResp.ExpiresAt = totpResp.ExpiresAt
-		loginResp.OPAQUEExport = totpResp.OPAQUEExport
+		// Get tokens from TOTP response
+		accessToken, _ = totpResp.Data["token"].(string)
+		refreshToken, _ = totpResp.Data["refresh_token"].(string)
+		opaqueExport, _ = totpResp.Data["opaque_export"].(string)
+
+		if expiresStr, ok := totpResp.Data["expires_at"].(string); ok {
+			expiresAt, _ = time.Parse(time.RFC3339, expiresStr)
+		}
+	} else {
+		// Get tokens directly from login response
+		accessToken, _ = loginResp.Data["token"].(string)
+		refreshToken, _ = loginResp.Data["refresh_token"].(string)
+		// Use the export key we derived locally if not provided by server
+		if export, ok := loginResp.Data["opaque_export"].(string); ok {
+			opaqueExport = export
+		} else {
+			opaqueExport = base64.StdEncoding.EncodeToString(exportKey)
+		}
+
+		if expiresStr, ok := loginResp.Data["expires_at"].(string); ok {
+			expiresAt, _ = time.Parse(time.RFC3339, expiresStr)
+		}
 	}
 
 	// Create admin session
 	session := &AdminSession{
 		Username:       *usernameFlag,
-		AccessToken:    loginResp.Token,
-		RefreshToken:   loginResp.RefreshToken,
-		ExpiresAt:      loginResp.ExpiresAt,
-		OPAQUEExport:   loginResp.OPAQUEExport,
+		AccessToken:    accessToken,
+		RefreshToken:   refreshToken,
+		ExpiresAt:      expiresAt,
+		OPAQUEExport:   opaqueExport,
 		ServerURL:      config.ServerURL,
 		SessionCreated: time.Now(),
 		IsAdmin:        true,
