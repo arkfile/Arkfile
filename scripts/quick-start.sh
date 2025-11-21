@@ -212,6 +212,7 @@ RQLITE_PASSWORD=TestPassword123_Secure
 
 # Arkfile Application Configuration
 PORT=8080
+CORS_ALLOWED_ORIGINS=http://localhost:8080,https://localhost:8443
 JWT_SECRET=${JWT_SECRET}
 
 # JWT Token Configuration (Netflix/Spotify model: 30-minute tokens)
@@ -219,7 +220,7 @@ JWT_TOKEN_LIFETIME_MINUTES=30
 
 # TLS Configuration
 TLS_ENABLED=true
-TLS_PORT=4443
+TLS_PORT=8443
 TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server-cert.pem
 TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server-key.pem
 
@@ -361,7 +362,7 @@ if [ "$arkfile_status" = "active" ]; then
     # Get the TLS port from config or use default
     arkfile_tls_port=$(sudo grep -o 'TLS_PORT=[0-9]*' /opt/arkfile/etc/secrets.env 2>/dev/null | cut -d= -f2)
     if [ -z "$arkfile_tls_port" ]; then
-        arkfile_tls_port="4443"
+        arkfile_tls_port="8443"
     fi
     
     # Check if TLS is enabled

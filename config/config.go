@@ -21,12 +21,13 @@ var (
 
 type Config struct {
 	Server struct {
-		Port       string `json:"port"`
-		TLSPort    string `json:"tls_port"`
-		Host       string `json:"host"`
-		BaseURL    string `json:"base_url"`
-		LogLevel   string `json:"log_level"`
-		TLSEnabled bool   `json:"tls_enabled"`
+		Port           string   `json:"port"`
+		TLSPort        string   `json:"tls_port"`
+		Host           string   `json:"host"`
+		BaseURL        string   `json:"base_url"`
+		LogLevel       string   `json:"log_level"`
+		TLSEnabled     bool     `json:"tls_enabled"`
+		AllowedOrigins []string `json:"allowed_origins"`
 	} `json:"server"`
 
 	Database struct {
@@ -51,9 +52,6 @@ type Config struct {
 		RefreshTokenDuration    time.Duration `json:"refresh_token_duration"`
 		RefreshTokenCookieName  string        `json:"refresh_token_cookie_name"`
 		RevokeUsedRefreshTokens bool          `json:"revoke_used_refresh_tokens"`
-		PasswordMinLength       int           `json:"password_min_length"`
-		MaxFileSize             int64         `json:"max_file_size"`
-		AllowedFileTypes        []string      `json:"allowed_file_types"`
 
 		// Argon2ID configuration removed - using OPAQUE-only authentication
 	} `json:"security"`
@@ -129,7 +127,9 @@ func LoadConfig() (*Config, error) {
 func loadDefaultConfig(cfg *Config) error {
 	// Set default values
 	cfg.Server.Port = "8080"
+	cfg.Server.TLSPort = "8443"
 	cfg.Server.Host = "localhost"
+	cfg.Server.AllowedOrigins = []string{"http://localhost:8080", "https://localhost:8443"}
 	cfg.Database.Path = "./arkfile.db"
 	cfg.Security.JWTPrivateKeyPath = "/opt/arkfile/etc/keys/jwt/current/signing.key"
 	cfg.Security.JWTPublicKeyPath = "/opt/arkfile/etc/keys/jwt/current/public.key"
@@ -137,9 +137,6 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Security.RefreshTokenDuration = 24 * 7 * time.Hour // Default to 7 days
 	cfg.Security.RefreshTokenCookieName = "refreshToken"
 	cfg.Security.RevokeUsedRefreshTokens = true
-	cfg.Security.PasswordMinLength = 8
-	cfg.Security.MaxFileSize = 100 * 1024 * 1024 // 100MB
-	cfg.Security.AllowedFileTypes = []string{".jpg", ".jpeg", ".png", ".pdf", ".iso"}
 
 	// Argon2ID defaults removed - using OPAQUE-only authentication
 
@@ -188,6 +185,17 @@ func loadEnvConfig(cfg *Config) error {
 		}
 	}
 
+	if allowedOrigins := os.Getenv("CORS_ALLOWED_ORIGINS"); allowedOrigins != "" {
+		// Parse comma-separated list of allowed origins
+		origins := strings.Split(allowedOrigins, ",")
+		cfg.Server.AllowedOrigins = make([]string, 0, len(origins))
+		for _, origin := range origins {
+			if trimmed := strings.TrimSpace(origin); trimmed != "" {
+				cfg.Server.AllowedOrigins = append(cfg.Server.AllowedOrigins, trimmed)
+			}
+		}
+	}
+
 	// Storage configuration
 	cfg.Storage.Provider = os.Getenv("STORAGE_PROVIDER")
 	if cfg.Storage.Provider == "" {
@@ -208,6 +216,12 @@ func loadEnvConfig(cfg *Config) error {
 		cfg.Storage.AccessKeyID = os.Getenv("BACKBLAZE_KEY_ID")
 		cfg.Storage.SecretAccessKey = os.Getenv("BACKBLAZE_APPLICATION_KEY")
 		cfg.Storage.BucketName = os.Getenv("BACKBLAZE_BUCKET_NAME")
+		cfg.Storage.UseSSL = true
+	case "cloudflare-r2":
+		cfg.Storage.Endpoint = os.Getenv("CLOUDFLARE_ENDPOINT")
+		cfg.Storage.AccessKeyID = os.Getenv("CLOUDFLARE_ACCESS_KEY_ID")
+		cfg.Storage.SecretAccessKey = os.Getenv("CLOUDFLARE_SECRET_ACCESS_KEY")
+		cfg.Storage.BucketName = os.Getenv("CLOUDFLARE_BUCKET_NAME")
 		cfg.Storage.UseSSL = true
 	case "wasabi":
 		cfg.Storage.Region = os.Getenv("WASABI_REGION")
@@ -362,6 +376,11 @@ func validateConfig(cfg *Config) error {
 		if cfg.Storage.Endpoint == "" || cfg.Storage.AccessKeyID == "" ||
 			cfg.Storage.SecretAccessKey == "" || cfg.Storage.BucketName == "" {
 			return fmt.Errorf("Backblaze storage requires endpoint, access key, secret key, and bucket name")
+		}
+	case "cloudflare-r2":
+		if cfg.Storage.Endpoint == "" || cfg.Storage.AccessKeyID == "" ||
+			cfg.Storage.SecretAccessKey == "" || cfg.Storage.BucketName == "" {
+			return fmt.Errorf("Cloudflare R2 storage requires endpoint, access key, secret key, and bucket name")
 		}
 	case "wasabi", "vultr":
 		if cfg.Storage.AccessKeyID == "" || cfg.Storage.SecretAccessKey == "" ||

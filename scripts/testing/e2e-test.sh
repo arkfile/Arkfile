@@ -325,6 +325,9 @@ phase_4_totp_setup() {
         exit 1
     fi
     
+    # Export secret globally for use in login phase
+    export TEST_USER_TOTP_SECRET="$secret"
+    
     record_test "TOTP setup initiation" "PASS"
     info "Got TOTP secret: $secret"
     
@@ -395,11 +398,35 @@ phase_6_user_login() {
     
     section "Logging in as user: $TEST_USERNAME"
     
-    # First attempt login to trigger TOTP setup if needed
-    info "Attempting login (may trigger TOTP setup)..."
+    # Check if we have the secret from Phase 4
+    if [ -z "$TEST_USER_TOTP_SECRET" ]; then
+        record_test "User login" "FAIL"
+        error "Missing TOTP secret from setup phase"
+        exit 1
+    fi
+
+    # Smart Wait: Wait for next TOTP window to avoid replay protection
+    # Calculate seconds into current 30s window
+    local current_seconds=$(date +%s)
+    local seconds_into_window=$((current_seconds % 30))
+    local seconds_to_wait=$((30 - seconds_into_window))
     
-    # Login will prompt for TOTP if already set up, or guide through setup
-    if printf "%s\n" "$TEST_PASSWORD" | $BUILD_DIR/arkfile-client \
+    info "Waiting ${seconds_to_wait}.5 seconds for next TOTP window (replay protection)..."
+    sleep "${seconds_to_wait}.5"
+    
+    # Generate NEW TOTP code for the new window
+    local user_totp_code
+    user_totp_code=$(generate_totp "$TEST_USER_TOTP_SECRET")
+    
+    if [ -z "$user_totp_code" ]; then
+        record_test "User TOTP generation" "FAIL"
+        error "Failed to generate user TOTP code"
+        exit 1
+    fi
+    info "Generated new TOTP code for login: $user_totp_code"
+    
+    # Perform full login with Password AND TOTP code
+    if printf "%s\n%s\n" "$TEST_PASSWORD" "$user_totp_code" | $BUILD_DIR/arkfile-client \
         --server-url "$SERVER_URL" \
         --tls-insecure \
         --username "$TEST_USERNAME" \
@@ -409,17 +436,10 @@ phase_6_user_login() {
         if grep -q "Login successful" /tmp/user_login.log; then
             record_test "User login" "PASS"
         else
-            # Check if TOTP setup is required
-            if grep -q "TOTP" /tmp/user_login.log || grep -q "two-factor" /tmp/user_login.log; then
-                warning "TOTP setup or verification required"
-                # This is expected for first login
-                record_test "User login (TOTP required)" "PASS"
-            else
-                record_test "User login" "FAIL"
-                error "User login failed - check /tmp/user_login.log"
-                cat /tmp/user_login.log
-                exit 1
-            fi
+            record_test "User login" "FAIL"
+            error "User login failed - check /tmp/user_login.log"
+            cat /tmp/user_login.log
+            exit 1
         fi
     else
         record_test "User login" "FAIL"

@@ -63,7 +63,7 @@ COMMANDS:
     admin-ops       Phase 5: Admin operations workflow only
 
 GLOBAL OPTIONS:
-    --server-url URL     Server URL (default: https://localhost:4443)
+    --server-url URL     Server URL (default: https://localhost:8443)
     --verbose, -v        Verbose output with command details
     --performance        Enable performance timing and benchmarks
     --cleanup            Cleanup test files after completion
@@ -87,7 +87,7 @@ type Config struct {
 
 func main() {
     config := &Config{
-        ServerURL:    "https://localhost:4443",
+        ServerURL:    "https://localhost:8443",
         TestFileSize: "100MB",
         BaseDir:      ".",
         TestUser:     "testuser",

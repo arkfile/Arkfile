@@ -189,7 +189,13 @@ func main() {
 
 	// Additional middleware
 	e.Use(middleware.Logger())
-	e.Use(middleware.CORS())
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins:     cfg.Server.AllowedOrigins,
+		AllowMethods:     []string{http.MethodGet, http.MethodPut, http.MethodPost, http.MethodDelete, http.MethodOptions},
+		AllowHeaders:     []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "X-Requested-With"},
+		AllowCredentials: true,
+		MaxAge:           300, // 5 minutes
+	}))
 
 	// Host-based routing using a custom middleware
 	// Currently unused but available for future environment-specific features
@@ -247,7 +253,7 @@ func main() {
 
 		if tlsEnabled {
 			if tlsPort == "" {
-				tlsPort = "4443" // Default HTTPS port for demo
+				tlsPort = "8443" // Default HTTPS port for demo
 			}
 
 			// Start HTTPS server in goroutine

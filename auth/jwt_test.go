@@ -102,10 +102,11 @@ func TestMain(m *testing.M) {
 	// Store original env vars and set test values
 	originalEnv := map[string]string{}
 	testEnv := map[string]string{
-		"STORAGE_PROVIDER":    "local",          // Set storage provider to local (supports MinIO)
-		"MINIO_ROOT_USER":     "test-user-auth", // Provide dummy values for all required fields
-		"MINIO_ROOT_PASSWORD": "test-password-auth",
-		"LOCAL_STORAGE_PATH":  "/tmp/test-storage-auth", // Required for local storage
+		"STORAGE_PROVIDER":           "local",          // Set storage provider to local (supports MinIO)
+		"MINIO_ROOT_USER":            "test-user-auth", // Provide dummy values for all required fields
+		"MINIO_ROOT_PASSWORD":        "test-password-auth",
+		"LOCAL_STORAGE_PATH":         "/tmp/test-storage-auth", // Required for local storage
+		"JWT_TOKEN_LIFETIME_MINUTES": "1440",                   // Set to 24 hours for tests
 		// JWT keys will use default paths for test keys (created below)
 	}
 

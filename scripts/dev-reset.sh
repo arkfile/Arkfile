@@ -455,11 +455,12 @@ RQLITE_PASSWORD=DevPassword123_$(openssl rand -hex 8)
 
 # Arkfile Application Configuration
 PORT=8080
+CORS_ALLOWED_ORIGINS=http://localhost:8080,https://localhost:8443
 JWT_SECRET=${JWT_SECRET}
 
 # TLS Configuration
 TLS_ENABLED=true
-TLS_PORT=4443
+TLS_PORT=8443
 TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server-cert.pem
 TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server-key.pem
 
@@ -719,7 +720,7 @@ echo "=========================="
 echo
 echo -e "${BLUE}Your fresh Arkfile system is now running:${NC}"
 echo -e "${GREEN}  HTTP Interface: http://localhost:8080${NC}"
-echo -e "${GREEN}  HTTPS Interface: https://localhost:4443${NC}"
+echo -e "${GREEN}  HTTPS Interface: https://localhost:8443${NC}"
 echo -e "${BLUE}     (Accept self-signed certificate warning)${NC}"
 echo
 echo -e "${BLUE}What was nuked:${NC}"

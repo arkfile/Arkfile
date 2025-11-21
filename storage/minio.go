@@ -27,12 +27,13 @@ var _ ObjectStorageProvider = (*MinioStorage)(nil)
 type StorageProvider string
 
 const (
-	ProviderBackblaze StorageProvider = "backblaze"
-	ProviderWasabi    StorageProvider = "wasabi"
-	ProviderVultr     StorageProvider = "vultr"
-	ProviderAmazonS3  StorageProvider = "aws-s3"
-	ProviderLocal     StorageProvider = "local"
-	ProviderCluster   StorageProvider = "cluster"
+	ProviderBackblaze    StorageProvider = "backblaze"
+	ProviderWasabi       StorageProvider = "wasabi"
+	ProviderVultr        StorageProvider = "vultr"
+	ProviderCloudflareR2 StorageProvider = "cloudflare-r2"
+	ProviderAmazonS3     StorageProvider = "aws-s3"
+	ProviderLocal        StorageProvider = "local"
+	ProviderCluster      StorageProvider = "cluster"
 )
 
 type StorageConfig struct {
@@ -55,6 +56,8 @@ func getProviderEndpoint(provider StorageProvider, region string) string {
 		return fmt.Sprintf("s3.%s.wasabi.com", region)
 	case ProviderVultr:
 		return fmt.Sprintf("%s.vultrobjects.com", region)
+	case ProviderCloudflareR2:
+		return os.Getenv("CLOUDFLARE_ENDPOINT")
 	case ProviderAmazonS3:
 		if region == "us-east-1" {
 			return "s3.amazonaws.com"
@@ -129,6 +132,16 @@ func InitMinio() error {
 		// Validate required fields for AWS S3
 		if config.AccessKeyID == "" || config.SecretAccessKey == "" || config.BucketName == "" {
 			return fmt.Errorf("missing required storage configuration for AWS S3: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_S3_BUCKET_NAME are required")
+		}
+
+	case ProviderCloudflareR2:
+		config.Endpoint = os.Getenv("CLOUDFLARE_ENDPOINT")
+		config.AccessKeyID = os.Getenv("CLOUDFLARE_ACCESS_KEY_ID")
+		config.SecretAccessKey = os.Getenv("CLOUDFLARE_SECRET_ACCESS_KEY")
+		config.BucketName = os.Getenv("CLOUDFLARE_BUCKET_NAME")
+
+		if config.Endpoint == "" || config.AccessKeyID == "" || config.SecretAccessKey == "" || config.BucketName == "" {
+			return fmt.Errorf("missing required storage configuration for Cloudflare R2: CLOUDFLARE_ENDPOINT, CLOUDFLARE_ACCESS_KEY_ID, CLOUDFLARE_SECRET_ACCESS_KEY, and CLOUDFLARE_BUCKET_NAME are required")
 		}
 
 	default: // External providers (Backblaze, Wasabi, Vultr)

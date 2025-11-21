@@ -238,8 +238,8 @@ func TestManifestSerialization(t *testing.T) {
 	jsonStr := string(jsonData)
 	expectedFields := []string{
 		`"envelope":"0102"`,
-		`"totalChunks":3`,
-		`"chunkSize":1024`,
+		`"total_chunks":3`,
+		`"chunk_size":1024`,
 		`"chunks":[`,
 		`"index":0`,
 		`"file":"chunk_0.enc"`,

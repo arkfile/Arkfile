@@ -77,7 +77,7 @@ COMMANDS:
     version       Show version information
 
 GLOBAL OPTIONS:
-    --server-url URL    Server URL (default: https://localhost:4443)
+    --server-url URL    Server URL (default: https://localhost:8443)
     --config FILE       Configuration file path
     --tls-insecure      Skip TLS certificate verification (localhost only)
     --tls-min-version   Minimum TLS version: 1.2 or 1.3 (default: 1.3)
@@ -588,7 +588,7 @@ COMMANDS:
 
 EXAMPLES:
     integration-test full-suite --verbose --performance
-    integration-test auth-flow --test-user alice --server-url https://localhost:4443
+    integration-test auth-flow --test-user alice --server-url https://localhost:8443
     integration-test benchmark --file-size 100MB --performance
 `
 )
