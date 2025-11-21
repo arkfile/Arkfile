@@ -217,6 +217,15 @@ phase_2_admin_authentication() {
     
     section "Authenticating admin user: $ADMIN_USERNAME"
     
+    # Smart Wait: Wait for next TOTP window to avoid replay protection
+    # Calculate seconds into current 30s window
+    local current_seconds=$(date +%s)
+    local seconds_into_window=$((current_seconds % 30))
+    local seconds_to_wait=$((30 - seconds_into_window))
+    
+    info "Waiting ${seconds_to_wait}.5 seconds for next TOTP window (replay protection)..."
+    sleep "${seconds_to_wait}.5"
+
     # Generate TOTP code for admin
     local admin_totp_code
     admin_totp_code=$(generate_totp "$ADMIN_TOTP_SECRET")
