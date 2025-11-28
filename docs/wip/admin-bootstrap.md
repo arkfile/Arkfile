@@ -10,7 +10,7 @@ To ensure the security of the deployment, the bootstrap process adheres to the f
     *   *Container Strategy:* In containerized environments (Docker/Podman), the bootstrap tool MUST be run **inside the container** (e.g., `docker exec -it ...`). This guarantees the request originates from the container's internal loopback interface (`127.0.0.1`), bypassing the need for complex trusted proxy configuration for this specific feature.
 *   **Single-Outcome Token:** The process relies on a high-entropy `BOOTSTRAP_TOKEN` generated at server startup. This token is valid for **exactly one successful admin creation**.
     *   *Note:* Since the OPAQUE protocol is a two-step process, the token must be presented and validated **twice** (once for `/response`, once for `/finalize`). It is NOT invalidated after the first use.
-*   **Atomic Invalidation:** Upon successful creation of the admin user (completion of `/finalize`), the token is immediately cleared from memory, disabling the bootstrap endpoints permanently for the lifetime of the process.
+*   **Atomic Invalidation:** The bootstrap token is cleared from memory **only after a successful admin login** is detected. This ensures that the bootstrap process remains available until "Proof of Life" is established. Once the first admin successfully authenticates (updating `last_login`), the token is wiped, disabling the bootstrap endpoints permanently for the lifetime of the process.
 *   **Conditional Activation:** The bootstrap mechanism is **disabled by default** if any administrator accounts already exist in the database. This prevents accidental or malicious re-initialization.
     *   *Override:* This check can be bypassed by setting the environment variable `ARKFILE_FORCE_ADMIN_BOOTSTRAP=true` at startup, allowing for emergency recovery.
 *   **Proof of Life (Loopback Verification):** The bootstrap process is NOT complete until the created admin successfully logs in. The `arkfile-admin` tool MUST perform a full authentication flow immediately after creation. The server records this by updating the `last_login` timestamp. A non-null `last_login` is the cryptographic proof that the admin credentials were correctly generated, stored, and are usable.
@@ -332,9 +332,8 @@ func AdminBootstrapFinalize(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to store TOTP")
 	}
 
-	// 4. Clear Token (Invalidate)
-	ClearBootstrapToken()
-	logging.InfoLogger.Printf("Bootstrap complete. Admin '%s' created. Awaiting proof-of-life login.", req.Username)
+	// 4. Log Success (Token remains valid until login)
+	logging.InfoLogger.Printf("Bootstrap user '%s' created. Awaiting proof-of-life login to finalize bootstrap sequence.", req.Username)
 
 	return c.JSON(http.StatusOK, BootstrapFinalizeResponse{
 		Success:    true,
@@ -370,6 +369,12 @@ _, err = database.DB.Exec("UPDATE users SET last_login = ? WHERE username = ?", 
 if err != nil {
     logging.ErrorLogger.Printf("Failed to update last_login for %s: %v", username, err)
     // Non-critical error, proceed
+}
+
+// Proof of Life Complete: Clear bootstrap token if it exists
+if bootstrapToken != "" {
+    ClearBootstrapToken()
+    logging.InfoLogger.Println("Admin Proof-of-Life verified. Bootstrap token cleared.")
 }
 
 // ... proceed to issue JWT ...
