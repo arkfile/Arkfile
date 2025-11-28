@@ -7,12 +7,13 @@ This document outlines the design and implementation plan for bootstrapping an a
 To ensure the security of the deployment, the bootstrap process adheres to the following strict constraints:
 
 *   **Localhost Only:** The bootstrap API endpoints (`/api/admin/bootstrap/*`) MUST only accept requests from `127.0.0.1` or `::1`. Any external access attempts will be rejected.
+    *   *Container Strategy:* In containerized environments (Docker/Podman), the bootstrap tool MUST be run **inside the container** (e.g., `docker exec -it ...`). This guarantees the request originates from the container's internal loopback interface (`127.0.0.1`), bypassing the need for complex trusted proxy configuration for this specific feature.
 *   **Single-Outcome Token:** The process relies on a high-entropy `BOOTSTRAP_TOKEN` generated at server startup. This token is valid for **exactly one successful admin creation**.
-    *   *Note:* Since the OPAQUE protocol is a two-step process, the token must be presented and validated **twice** (once for `/init`, once for `/finalize`). It is NOT invalidated after the first use.
+    *   *Note:* Since the OPAQUE protocol is a two-step process, the token must be presented and validated **twice** (once for `/response`, once for `/finalize`). It is NOT invalidated after the first use.
 *   **Atomic Invalidation:** Upon successful creation of the admin user (completion of `/finalize`), the token is immediately cleared from memory, disabling the bootstrap endpoints permanently for the lifetime of the process.
 *   **Conditional Activation:** The bootstrap mechanism is **disabled by default** if any administrator accounts already exist in the database. This prevents accidental or malicious re-initialization.
     *   *Override:* This check can be bypassed by setting the environment variable `ARKFILE_FORCE_ADMIN_BOOTSTRAP=true` at startup, allowing for emergency recovery.
-*   **Admin-Only Tool:** The client-side operations are encapsulated in the `arkfile-admin` utility, which is designed to be run by a system administrator with shell access to the host.
+*   **Proof of Life (Loopback Verification):** The bootstrap process is NOT complete until the created admin successfully logs in. The `arkfile-admin` tool MUST perform a full authentication flow immediately after creation. The server records this by updating the `last_login` timestamp. A non-null `last_login` is the cryptographic proof that the admin credentials were correctly generated, stored, and are usable.
 
 ## 2. Architecture
 
@@ -20,12 +21,13 @@ The solution consists of three main components:
 
 1.  **Server-Side (`handlers/admin_bootstrap.go`):**
     *   Manages the lifecycle of the `BOOTSTRAP_TOKEN`.
-    *   Exposes endpoints for the OPAQUE registration flow (Init/Finalize).
+    *   Exposes endpoints for the OPAQUE registration flow (Response/Finalize).
     *   Enforces IP restrictions and token validation.
 2.  **Client-Side (`cmd/arkfile-admin`):**
     *   Implements the `bootstrap` command.
     *   Handles the client-side OPAQUE cryptography (hashing, blinding).
     *   Interacts with the local API to register the user.
+    *   **Performs "Loopback Login" to verify credentials.**
 3.  **Shared (`auth` package):**
     *   Provides the underlying cryptographic primitives for OPAQUE and TOTP.
 
@@ -35,9 +37,10 @@ The solution consists of three main components:
 *   **File:** `main.go`
 *   **Logic:**
     1.  Check environment variable `ARKFILE_FORCE_ADMIN_BOOTSTRAP`.
-    2.  Query database for existing admins (`SELECT COUNT(*) FROM users WHERE is_admin = true`).
+    2.  Query database for existing **active** admins (`SELECT COUNT(*) FROM users WHERE is_admin = true AND last_login IS NOT NULL`).
+        *   *Rationale:* If an admin exists but has `last_login` as NULL, it is considered a "Zombie Admin" (failed bootstrap). We should allow re-bootstrapping in this case to recover.
     3.  **Decision:**
-        *   IF `ARKFILE_FORCE_ADMIN_BOOTSTRAP == "true"` OR `AdminCount == 0`:
+        *   IF `ARKFILE_FORCE_ADMIN_BOOTSTRAP == "true"` OR `ActiveAdminCount == 0`:
             *   Generate random 32-byte hex string (`BOOTSTRAP_TOKEN`).
             *   Log token to `stdout` (INFO level).
             *   Store in `handlers` package.
@@ -48,7 +51,7 @@ The solution consists of three main components:
 ### Step 2: API Endpoints
 *   **File:** `handlers/route_config.go`
 *   **Endpoints:**
-    *   `POST /api/admin/bootstrap/init`: Accepts OPAQUE registration request.
+    *   `POST /api/admin/bootstrap/response`: Accepts OPAQUE registration request.
     *   `POST /api/admin/bootstrap/finalize`: Accepts OPAQUE record and creates user.
 
 ### Step 3: Request Handling Logic
@@ -73,16 +76,21 @@ The solution consists of three main components:
     }
     ```
 
-### Step 4: Client Implementation
+### Step 4: Client Implementation (The "Proof of Life")
 *   **File:** `cmd/arkfile-admin/main.go`
 *   **Command:** `arkfile-admin bootstrap --username <user> --token <token>`
 *   **Flow:**
     1.  Prompt for password (secure input).
     2.  Generate OPAQUE request (`auth.ClientCreateRegistrationRequest`).
-    3.  POST to `/init` (Token Use #1).
+    3.  POST to `/response` (Token Use #1).
     4.  Process response (`auth.ClientFinalizeRegistration`).
     5.  POST to `/finalize` (Token Use #2).
-    6.  Display success message and TOTP secret/QR code URL.
+    6.  **Receive TOTP Secret.**
+    7.  **VERIFICATION PHASE:**
+        *   Generate TOTP code using the secret.
+        *   Perform OPAQUE Login (`/api/admin/login/response` -> `/finalize`).
+        *   Perform TOTP Login (`/api/totp/auth`).
+    8.  **Success:** If login succeeds, display success message and TOTP QR code URL. If login fails, display error and exit with non-zero status (indicating "Zombie Admin" state).
 
 ## 4. Code Specifications
 
@@ -110,7 +118,7 @@ import (
 var (
 	bootstrapToken      string
 	bootstrapTokenMutex sync.RWMutex
-	// Temporary storage for OPAQUE secrets between Init and Finalize steps
+	// Temporary storage for OPAQUE secrets between Response and Finalize steps
 	// Key: username, Value: server_secret (rsec)
 	bootstrapSessions      = make(map[string][]byte)
 	bootstrapSessionsMutex sync.Mutex
@@ -138,11 +146,16 @@ func ClearBootstrapToken() {
 // validateBootstrapRequest checks IP and token
 func validateBootstrapRequest(c echo.Context, providedToken string) error {
 	// 1. Check Localhost
+	// We strictly check the direct remote IP. In containerized setups, 
+	// the admin tool must be run INSIDE the container (docker exec) 
+	// to appear as 127.0.0.1. We do NOT rely on X-Forwarded-For here 
+	// to avoid misconfiguration risks.
 	ip := c.RealIP()
+	
 	// Allow IPv4 localhost and IPv6 localhost
 	if ip != "127.0.0.1" && ip != "::1" {
 		logging.SecurityLogger.Printf("Security Alert: Bootstrap attempt from non-local IP: %s", ip)
-		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
+		return echo.NewHTTPError(http.StatusForbidden, "Access denied. Non-local IP detected.")
 	}
 
 	// 2. Check Token
@@ -162,19 +175,19 @@ func validateBootstrapRequest(c echo.Context, providedToken string) error {
 	return nil
 }
 
-type BootstrapInitRequest struct {
+type BootstrapResponseRequest struct {
 	Username       string `json:"username"`
 	OpaqueRequest  string `json:"opaque_request"` // Base64
 	BootstrapToken string `json:"bootstrap_token"`
 }
 
-type BootstrapInitResponse struct {
+type BootstrapResponse struct {
 	OpaqueResponse string `json:"opaque_response"` // Base64
 }
 
-// AdminBootstrapInit handles the first step of OPAQUE registration
-func AdminBootstrapInit(c echo.Context) error {
-	var req BootstrapInitRequest
+// AdminBootstrapResponse handles the first step of OPAQUE registration
+func AdminBootstrapResponse(c echo.Context) error {
+	var req BootstrapResponseRequest
 	if err := c.Bind(&req); err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request format")
 	}
@@ -201,7 +214,7 @@ func AdminBootstrapInit(c echo.Context) error {
 	bootstrapSessions[req.Username] = responseSecret
 	bootstrapSessionsMutex.Unlock()
 
-	return c.JSON(http.StatusOK, BootstrapInitResponse{
+	return c.JSON(http.StatusOK, BootstrapResponse{
 		OpaqueResponse: base64.StdEncoding.EncodeToString(responsePublic),
 	})
 }
@@ -258,6 +271,7 @@ func AdminBootstrapFinalize(c echo.Context) error {
 		IsAdmin:    true,
 		IsApproved: true,
 		CreatedAt:  time.Now(),
+		// LastLogin remains NULL here - it is set only upon successful login
 	}
 	
 	// Insert user
@@ -320,7 +334,7 @@ func AdminBootstrapFinalize(c echo.Context) error {
 
 	// 4. Clear Token (Invalidate)
 	ClearBootstrapToken()
-	logging.InfoLogger.Printf("Bootstrap complete. Admin '%s' created.", req.Username)
+	logging.InfoLogger.Printf("Bootstrap complete. Admin '%s' created. Awaiting proof-of-life login.", req.Username)
 
 	return c.JSON(http.StatusOK, BootstrapFinalizeResponse{
 		Success:    true,
@@ -330,21 +344,38 @@ func AdminBootstrapFinalize(c echo.Context) error {
 }
 ```
 
-### 4.2. `auth/opaque.go`
+### 4.2. `models/user.go` (Update)
 
 ```go
-// SaveOPAQUEUser saves the OPAQUE user record to the database
-// This is an exported wrapper for storeOPAQUEUserData
-func SaveOPAQUEUser(db *sql.DB, username string, record []byte) error {
-	return storeOPAQUEUserData(db, OPAQUEUserData{
-		Username:         username,
-		SerializedRecord: record,
-		CreatedAt:        time.Now(),
-	})
+type User struct {
+	ID         int64      `json:"id"`
+	Username   string     `json:"username"`
+	IsApproved bool       `json:"is_approved"`
+	IsAdmin    bool       `json:"is_admin"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LastLogin  *time.Time `json:"last_login"` // Pointer to allow NULL
 }
 ```
 
-### 4.3. `cmd/arkfile-admin/main.go`
+### 4.3. `handlers/auth.go` (Update Logic)
+
+```go
+// In TOTPAuth function (Login Handler):
+
+// ... after successful TOTP validation ...
+
+// Update Last Login
+now := time.Now()
+_, err = database.DB.Exec("UPDATE users SET last_login = ? WHERE username = ?", now, username)
+if err != nil {
+    logging.ErrorLogger.Printf("Failed to update last_login for %s: %v", username, err)
+    // Non-critical error, proceed
+}
+
+// ... proceed to issue JWT ...
+```
+
+### 4.4. `cmd/arkfile-admin/main.go`
 
 ```go
 // Add to main() switch case:
@@ -363,17 +394,29 @@ case "bootstrap":
     runBootstrap(config.ServerURL, *username, *token)
 
 // Implementation of runBootstrap...
-// (Follows the flow described in Architecture section)
+// 1. Perform OPAQUE Registration (Response/Finalize)
+// 2. Get TOTP Secret
+// 3. fmt.Println("Verifying credentials...")
+// 4. Perform OPAQUE Login (Init/Finalize)
+// 5. Perform TOTP Login
+// 6. If Success:
+//    fmt.Println("SUCCESS: Admin user created and verified.")
+//    fmt.Printf("TOTP Secret: %s\n", secret)
+// Else:
+//    fmt.Println("CRITICAL ERROR: Admin created but login failed. Credentials may be invalid.")
+//    os.Exit(1)
 ```
 
-### 4.4. `main.go` (Server Startup Logic)
+### 4.5. `main.go` (Server Startup Logic)
 
 ```go
 // In main() function, before starting server:
 
-// Check for existing admins
-var adminCount int
-err := database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE is_admin = true").Scan(&adminCount)
+// Check for existing ACTIVE admins (Proof of Life check)
+// We only count admins who have successfully logged in at least once.
+// This prevents "Zombie Admins" (failed bootstraps) from locking out the system.
+var activeAdminCount int
+err := database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE is_admin = true AND last_login IS NOT NULL").Scan(&activeAdminCount)
 if err != nil {
     logging.ErrorLogger.Printf("Failed to check admin count: %v", err)
 }
@@ -381,7 +424,7 @@ if err != nil {
 // Check environment override
 forceBootstrap := os.Getenv("ARKFILE_FORCE_ADMIN_BOOTSTRAP") == "true"
 
-if adminCount == 0 || forceBootstrap {
+if activeAdminCount == 0 || forceBootstrap {
     // Generate Bootstrap Token
     bootstrapToken := crypto.GenerateRandomString(32)
     handlers.SetBootstrapToken(bootstrapToken)
