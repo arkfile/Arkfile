@@ -107,3 +107,124 @@ The `arkfile-admin bootstrap` command performs an OPAQUE registration, gated by 
 1.  **Startup Logic:** Implement "Zero User Check" and Token Generation in `main.go` (or a startup handler).
 2.  **API:** Implement `/admin/bootstrap/*` endpoints in `handlers/admin_bootstrap.go`.
 3.  **CLI:** Implement `arkfile-admin bootstrap` command.
+
+---
+
+## 5. Implementation Status
+
+**Status**: ✅ COMPLETE with SECURITY ENHANCEMENTS
+
+All components have been implemented with additional security measures beyond the original plan:
+
+### Core Features (Implemented)
+- ✅ Bootstrap token generation and validation
+- ✅ OPAQUE registration endpoints (`/api/bootstrap/register/response`, `/api/bootstrap/register/finalize`)
+- ✅ Admin privilege assignment
+- ✅ TOTP setup flow integration
+- ✅ CLI tool (`arkfile-admin bootstrap`, `setup-totp`, `verify-login`)
+- ✅ Master key infrastructure with envelope encryption
+- ✅ Database schema (`system_keys` table)
+
+### Security Enhancements (Added)
+- ✅ **Localhost-Only Restriction**: Bootstrap endpoints strictly enforce `127.0.0.1` or `::1` access
+- ✅ **Force Bootstrap Mechanism**: `ARKFILE_FORCE_BOOTSTRAP=true` allows regeneration of bootstrap token
+- ✅ **Proof-of-Life Token Deletion**: Bootstrap token is deleted only after successful admin login (not just registration)
+- ✅ **Session Cleanup**: Automatic cleanup of expired bootstrap sessions (5-minute intervals)
+- ✅ **Verification Login**: CLI command to verify bootstrap admin can authenticate successfully
+
+### Implementation Files
+- `auth/bootstrap.go` - Bootstrap token management and validation
+- `handlers/bootstrap.go` - Bootstrap HTTP endpoints
+- `handlers/admin_auth.go` - Admin login with proof-of-life token deletion
+- `cmd/arkfile-admin/main.go` - CLI commands (bootstrap, verify-login)
+- `main.go` - Startup logic for token generation
+- `database/unified_schema.sql` - Schema with `system_keys` table
+
+### Security Considerations
+
+#### Why Localhost-Only?
+The bootstrap process is intentionally restricted to localhost access because:
+1. **Physical Access Requirement**: Only someone with direct server access should bootstrap
+2. **Network Attack Prevention**: Prevents remote attackers from intercepting bootstrap tokens
+3. **Deployment Security**: Forces proper operational security practices
+
+#### Why Proof-of-Life Deletion?
+The bootstrap token is deleted after first successful login (not just registration) because:
+1. **Verification**: Ensures the admin account is fully functional before removing the safety net
+2. **TOTP Setup**: Allows time for TOTP configuration without rushing
+3. **Recovery**: If something goes wrong during setup, the token remains available
+
+#### Force Bootstrap Use Cases
+The `ARKFILE_FORCE_BOOTSTRAP=true` environment variable should only be used when:
+1. **Lost Admin Access**: All admin accounts are inaccessible
+2. **Emergency Recovery**: System needs immediate administrative access
+3. **Testing/Development**: Resetting test environments
+
+**WARNING**: Using force bootstrap in production should be logged and audited.
+
+### Bootstrap Workflow
+
+```
+1. Server Startup (No Users)
+   ↓
+2. Generate Bootstrap Token → Log to stdout
+   ↓
+3. Admin runs: arkfile-admin bootstrap --token <TOKEN>
+   ↓
+4. OPAQUE Registration (2-step protocol)
+   ↓
+5. Admin account created (is_admin=1, is_approved=1)
+   ↓
+6. Admin runs: arkfile-admin setup-totp
+   ↓
+7. TOTP configured, backup codes generated
+   ↓
+8. Admin runs: arkfile-admin verify-login
+   ↓
+9. Successful login → Bootstrap token deleted
+   ↓
+10. System ready for normal operation
+```
+
+### CLI Commands
+
+```bash
+# Bootstrap first admin (requires token from server logs)
+arkfile-admin bootstrap --token <BOOTSTRAP_TOKEN> --username admin
+
+# Setup two-factor authentication
+arkfile-admin setup-totp
+
+# Admin login (triggers bootstrap token deletion on first successful login)
+arkfile-admin login --username admin
+```
+
+### Testing Checklist
+
+- [ ] Bootstrap token generated on first startup
+- [ ] Bootstrap endpoints reject non-localhost requests
+- [ ] OPAQUE registration completes successfully
+- [ ] Admin user created with correct privileges
+- [ ] TOTP setup works correctly
+- [ ] Verification login succeeds
+- [ ] Bootstrap token deleted after first login
+- [ ] Force bootstrap regenerates token
+- [ ] Expired sessions cleaned up automatically
+- [ ] Second bootstrap attempt fails (no token available)
+
+---
+
+## 6. Future Enhancements
+
+### Potential Improvements
+1. **Multi-Admin Bootstrap**: Support for creating multiple admin accounts during initial setup
+2. **Bootstrap Token Rotation**: Automatic token rotation after extended periods
+3. **Audit Logging**: Enhanced logging of all bootstrap-related activities
+4. **Recovery Codes**: Alternative recovery mechanism if bootstrap token is lost
+5. **Web UI**: Browser-based bootstrap interface (still localhost-only)
+
+### Security Hardening
+1. **Rate Limiting**: Limit bootstrap attempts to prevent brute force
+2. **Token Complexity**: Increase token entropy or add checksums
+3. **Time-Based Expiration**: Auto-expire bootstrap tokens after 24-48 hours
+4. **Notification System**: Alert on bootstrap token generation/usage

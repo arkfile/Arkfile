@@ -11,6 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/models"
@@ -884,6 +885,37 @@ func TOTPAuth(c echo.Context) error {
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get user record for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed", err.Error())
+	}
+
+	// Update last_login timestamp (proof-of-life)
+	now := time.Now()
+	_, err = database.DB.Exec(
+		"UPDATE users SET last_login = ? WHERE username = ?",
+		now, username,
+	)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to update last_login for %s: %v", username, err)
+		// Non-critical, continue
+	}
+
+	// Proof-of-Life: Check if this is the first admin login
+	if user.IsAdmin {
+		var activeAdminCount int
+		database.DB.QueryRow(
+			"SELECT COUNT(*) FROM users WHERE is_admin = true AND last_login IS NOT NULL",
+		).Scan(&activeAdminCount)
+
+		if activeAdminCount == 1 {
+			// First admin just logged in - clear bootstrap token
+			km, kmErr := crypto.GetKeyManager()
+			if kmErr == nil {
+				if err := km.DeleteKey("bootstrap_token"); err != nil {
+					logging.ErrorLogger.Printf("Failed to delete bootstrap token: %v", err)
+				} else {
+					logging.InfoLogger.Printf("Bootstrap token cleared after first admin proof-of-life login")
+				}
+			}
+		}
 	}
 
 	// Generate full access token

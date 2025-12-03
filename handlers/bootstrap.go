@@ -7,7 +7,6 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/models"
@@ -31,6 +30,13 @@ type BootstrapRegisterFinalizeRequest struct {
 
 // BootstrapRegisterResponse handles the first step of OPAQUE registration for the bootstrap admin.
 func BootstrapRegisterResponse(c echo.Context) error {
+	// SECURITY: Strict localhost-only check
+	ip := c.RealIP()
+	if ip != "127.0.0.1" && ip != "::1" {
+		logging.ErrorLogger.Printf("SECURITY ALERT: Bootstrap attempt from non-local IP: %s", ip)
+		return JSONError(c, http.StatusForbidden, "Bootstrap endpoints only accessible from localhost", "")
+	}
+
 	var request BootstrapRegisterInitRequest
 	if err := c.Bind(&request); err != nil {
 		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
@@ -95,6 +101,13 @@ func BootstrapRegisterResponse(c echo.Context) error {
 
 // BootstrapRegisterFinalize completes the OPAQUE registration for the bootstrap admin.
 func BootstrapRegisterFinalize(c echo.Context) error {
+	// SECURITY: Strict localhost-only check
+	ip := c.RealIP()
+	if ip != "127.0.0.1" && ip != "::1" {
+		logging.ErrorLogger.Printf("SECURITY ALERT: Bootstrap attempt from non-local IP: %s", ip)
+		return JSONError(c, http.StatusForbidden, "Bootstrap endpoints only accessible from localhost", "")
+	}
+
 	var request BootstrapRegisterFinalizeRequest
 	if err := c.Bind(&request); err != nil {
 		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
@@ -176,12 +189,7 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	// 7. Cleanup Session
 	auth.DeleteAuthSession(database.DB, request.SessionID)
 
-	// 8. Cleanup Bootstrap Token (One-time use)
-	// We delete the token so no one else can use it.
-	km, err := crypto.GetKeyManager() // Helper to get key manager
-	if err == nil {
-		km.DeleteKey("bootstrap_token")
-	}
+	// 8. DO NOT delete bootstrap token yet - it will be deleted after first admin login (proof-of-life)
 
 	// 9. Generate temporary token for TOTP setup
 	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
