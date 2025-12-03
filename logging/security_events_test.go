@@ -51,10 +51,9 @@ func TestSecurityEventLogging(t *testing.T) {
 
 	// Initialize entity ID service for tests
 	entityConfig := EntityIDConfig{
-		MasterSecretPath: "",
-		RotationPeriod:   24 * time.Hour,
-		RetentionDays:    90,
-		CleanupInterval:  1 * time.Hour,
+		RotationPeriod:  24 * time.Hour,
+		RetentionDays:   90,
+		CleanupInterval: 1 * time.Hour,
 	}
 
 	entityService, err := NewEntityIDService(entityConfig)
@@ -282,10 +281,9 @@ func TestSecurityEventSensitiveDataExclusion(t *testing.T) {
 
 	// Initialize services for tests
 	entityConfig := EntityIDConfig{
-		MasterSecretPath: "",
-		RotationPeriod:   24 * time.Hour,
-		RetentionDays:    90,
-		CleanupInterval:  1 * time.Hour,
+		RotationPeriod:  24 * time.Hour,
+		RetentionDays:   90,
+		CleanupInterval: 1 * time.Hour,
 	}
 
 	entityService, err := NewEntityIDService(entityConfig)
@@ -344,10 +342,9 @@ func TestSecurityEventQueryPerformance(t *testing.T) {
 
 	// Initialize services for tests
 	entityConfig := EntityIDConfig{
-		MasterSecretPath: "",
-		RotationPeriod:   24 * time.Hour,
-		RetentionDays:    90,
-		CleanupInterval:  1 * time.Hour,
+		RotationPeriod:  24 * time.Hour,
+		RetentionDays:   90,
+		CleanupInterval: 1 * time.Hour,
 	}
 
 	entityService, err := NewEntityIDService(entityConfig)

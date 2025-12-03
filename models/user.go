@@ -23,7 +23,6 @@ type DBTX interface {
 type User struct {
 	ID                int64          `json:"id"`
 	Username          string         `json:"username"`
-	Email             *string        `json:"email,omitempty"`
 	CreatedAt         time.Time      `json:"created_at"`
 	TotalStorageBytes int64          `json:"total_storage_bytes"`
 	StorageLimitBytes int64          `json:"storage_limit_bytes"`
@@ -63,7 +62,7 @@ func isAdminUsername(username string) bool {
 }
 
 // CreateUser creates a new user in the database for OPAQUE authentication
-func CreateUser(dbtx DBTX, username string, email *string) (*User, error) {
+func CreateUser(dbtx DBTX, username string) (*User, error) {
 	// Validate username
 	if err := validateUsername(username); err != nil {
 		return nil, fmt.Errorf("invalid username: %w", err)
@@ -72,9 +71,9 @@ func CreateUser(dbtx DBTX, username string, email *string) (*User, error) {
 	isAdmin := isAdminUsername(username)
 	result, err := dbtx.Exec(
 		`INSERT INTO users (
-			username, email, storage_limit_bytes, is_admin, is_approved
-		) VALUES (?, ?, ?, ?, ?)`,
-		username, email, DefaultStorageLimit, isAdmin, isAdmin, // Auto-approve admin usernames
+			username, storage_limit_bytes, is_admin, is_approved
+		) VALUES (?, ?, ?, ?)`,
+		username, DefaultStorageLimit, isAdmin, isAdmin, // Auto-approve admin usernames
 	)
 	if err != nil {
 		return nil, err
@@ -88,7 +87,6 @@ func CreateUser(dbtx DBTX, username string, email *string) (*User, error) {
 	return &User{
 		ID:                id,
 		Username:          username,
-		Email:             email,
 		StorageLimitBytes: DefaultStorageLimit,
 		CreatedAt:         time.Now(),
 		IsApproved:        isAdmin,
@@ -105,15 +103,14 @@ func GetUserByUsername(dbtx DBTX, username string) (*User, error) {
 	var approvedAtStr sql.NullString
 	var totalStorageInterface interface{}
 	var storageLimitInterface interface{}
-	var emailStr sql.NullString
 
-	query := `SELECT id, username, email, created_at,
+	query := `SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`
 
 	err := dbtx.QueryRow(query, username).Scan(
-		&user.ID, &user.Username, &emailStr, &createdAtStr,
+		&user.ID, &user.Username, &createdAtStr,
 		&totalStorageInterface, &storageLimitInterface,
 		&user.IsApproved, &user.ApprovedBy, &approvedAtStr, &user.IsAdmin,
 	)
@@ -127,11 +124,6 @@ func GetUserByUsername(dbtx DBTX, username string) (*User, error) {
 
 	// DEBUG: Log when user is found
 	fmt.Printf("DEBUG: Found user '%s' with ID %d\n", user.Username, user.ID)
-
-	// Handle optional email field
-	if emailStr.Valid {
-		user.Email = &emailStr.String
-	}
 
 	// Parse the timestamp strings
 	if createdAtStr != "" {
@@ -174,6 +166,16 @@ func GetUserByUsername(dbtx DBTX, username string) (*User, error) {
 	}
 
 	return user, nil
+}
+
+// UserExists checks if a user exists by username
+func UserExists(dbtx DBTX, username string) (bool, error) {
+	var count int
+	err := dbtx.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", username).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // HasAdminPrivileges checks if a user has admin privileges
@@ -245,7 +247,7 @@ func (u *User) GetStorageUsagePercent() float64 {
 // GetPendingUsers retrieves users pending approval (admin only)
 func GetPendingUsers(dbtx DBTX) ([]*User, error) {
 	rows, err := dbtx.Query(`
-		SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes
+		SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes
 		FROM users
 		WHERE is_approved = false
 		ORDER BY created_at ASC`,
@@ -258,20 +260,14 @@ func GetPendingUsers(dbtx DBTX) ([]*User, error) {
 	var users []*User
 	for rows.Next() {
 		user := &User{}
-		var emailStr sql.NullString
 		var createdAtStr string                                      // Scan as string first to handle RQLite timestamp format
 		var totalStorageInterface, storageLimitInterface interface{} // Handle numeric types
 		err := rows.Scan(
-			&user.ID, &user.Username, &emailStr, &createdAtStr,
+			&user.ID, &user.Username, &createdAtStr,
 			&totalStorageInterface, &storageLimitInterface,
 		)
 		if err != nil {
 			return nil, err
-		}
-
-		// Handle optional email field
-		if emailStr.Valid {
-			user.Email = &emailStr.String
 		}
 
 		// Parse timestamp string to time.Time

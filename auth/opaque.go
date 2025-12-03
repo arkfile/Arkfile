@@ -42,8 +42,13 @@ type OPAQUEServerKeys struct {
 // serverKeys holds the loaded server keys for reuse
 var serverKeys *OPAQUEServerKeys
 
-// generateOPAQUEServerKeys generates cryptographically secure server keys for OPAQUE
-func generateOPAQUEServerKeys() (*OPAQUEServerKeys, error) {
+// SetupServerKeys generates and stores server key material if it doesn't already exist
+func SetupServerKeys(db *sql.DB) error {
+	km, err := crypto.GetKeyManager()
+	if err != nil {
+		return fmt.Errorf("failed to get KeyManager: %w", err)
+	}
+
 	// libsodium constants (32 bytes each)
 	const (
 		serverPrivateKeySize = 32 // crypto_scalarmult_SCALARBYTES
@@ -51,83 +56,23 @@ func generateOPAQUEServerKeys() (*OPAQUEServerKeys, error) {
 		oprfSeedSize         = 32 // crypto_core_ristretto255_SCALARBYTES
 	)
 
-	// Generate server private key (32 bytes)
-	serverPrivateKey := crypto.GenerateRandomBytes(serverPrivateKeySize)
+	// Get or generate keys using KeyManager
+	// Note: In a real OPAQUE implementation, public key should be derived from private key.
+	// However, preserving existing behavior of independent generation for now.
 
-	// Generate server public key (32 bytes)
-	serverPublicKey := crypto.GenerateRandomBytes(serverPublicKeySize)
-
-	// Generate OPRF seed (32 bytes)
-	oprfSeed := crypto.GenerateRandomBytes(oprfSeedSize)
-
-	return &OPAQUEServerKeys{
-		ServerPrivateKey: serverPrivateKey,
-		ServerPublicKey:  serverPublicKey,
-		OPRFSeed:         oprfSeed,
-		CreatedAt:        time.Now(),
-	}, nil
-}
-
-// SetupServerKeys generates and stores server key material if it doesn't already exist
-func SetupServerKeys(db *sql.DB) error {
-	var count int
-	err := db.QueryRow("SELECT COUNT(*) FROM opaque_server_keys WHERE id = 1").Scan(&count)
+	serverPrivateKey, err := km.GetOrGenerateKey("opaque_server_private_key", "opaque", serverPrivateKeySize)
 	if err != nil {
-		return fmt.Errorf("failed to check for existing server keys: %w", err)
+		return fmt.Errorf("failed to get/generate opaque server private key: %w", err)
 	}
 
-	if count > 0 {
-		// Keys already exist, load them
-		return loadServerKeys(db)
-	}
-
-	// Generate cryptographically secure server keys
-	serverKeys, err := generateOPAQUEServerKeys()
+	serverPublicKey, err := km.GetOrGenerateKey("opaque_server_public_key", "opaque", serverPublicKeySize)
 	if err != nil {
-		return fmt.Errorf("failed to generate server keys: %w", err)
+		return fmt.Errorf("failed to get/generate opaque server public key: %w", err)
 	}
 
-	// Store the keys in the database
-	_, err = db.Exec(`
-		INSERT INTO opaque_server_keys (id, server_secret_key, server_public_key, oprf_seed)
-		VALUES (1, ?, ?, ?)`,
-		hex.EncodeToString(serverKeys.ServerPrivateKey),
-		hex.EncodeToString(serverKeys.ServerPublicKey),
-		hex.EncodeToString(serverKeys.OPRFSeed),
-	)
+	oprfSeed, err := km.GetOrGenerateKey("opaque_oprf_seed", "opaque", oprfSeedSize)
 	if err != nil {
-		return fmt.Errorf("failed to store new server keys: %w", err)
-	}
-
-	if logging.InfoLogger != nil {
-		logging.InfoLogger.Println("Generated and stored new OPAQUE server keys")
-	}
-
-	return loadServerKeys(db)
-}
-
-// loadServerKeys loads the server's OPAQUE configuration from the database
-func loadServerKeys(db *sql.DB) error {
-	var secretKeyHex, publicKeyHex, oprfSeedHex string
-	err := db.QueryRow("SELECT server_secret_key, server_public_key, oprf_seed FROM opaque_server_keys WHERE id = 1").Scan(&secretKeyHex, &publicKeyHex, &oprfSeedHex)
-	if err != nil {
-		return fmt.Errorf("failed to retrieve server keys from database: %w", err)
-	}
-
-	// Decode the cryptographic keys
-	serverPrivateKey, err := hex.DecodeString(secretKeyHex)
-	if err != nil {
-		return fmt.Errorf("failed to decode server private key: %w", err)
-	}
-
-	serverPublicKey, err := hex.DecodeString(publicKeyHex)
-	if err != nil {
-		return fmt.Errorf("failed to decode server public key: %w", err)
-	}
-
-	oprfSeed, err := hex.DecodeString(oprfSeedHex)
-	if err != nil {
-		return fmt.Errorf("failed to decode OPRF seed: %w", err)
+		return fmt.Errorf("failed to get/generate opaque oprf seed: %w", err)
 	}
 
 	serverKeys = &OPAQUEServerKeys{
@@ -202,19 +147,8 @@ func ValidateOPAQUESetup(db *sql.DB) error {
 		return SetupServerKeys(db)
 	}
 
-	// Validate that we can access the database tables
-	var count int
-	err := db.QueryRow("SELECT COUNT(*) FROM opaque_server_keys WHERE id = 1").Scan(&count)
-	if err != nil {
-		return fmt.Errorf("failed to access opaque_server_keys table: %w", err)
-	}
-
-	if count == 0 {
-		return fmt.Errorf("no server keys found in database")
-	}
-
 	// Check opaque_user_data table exists
-	_, err = db.Exec("SELECT 1 FROM opaque_user_data LIMIT 1")
+	_, err := db.Exec("SELECT 1 FROM opaque_user_data LIMIT 1")
 	if err != nil {
 		return fmt.Errorf("failed to access opaque_user_data table: %w", err)
 	}

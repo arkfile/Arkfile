@@ -357,7 +357,6 @@ func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []stri
 	fs := flag.NewFlagSet("register", flag.ExitOnError)
 	var (
 		usernameFlag = fs.String("username", config.Username, "Username for registration")
-		emailFlag    = fs.String("email", "", "Email address for registration")
 		autoLogin    = fs.Bool("auto-login", true, "Automatically login after successful registration")
 	)
 
@@ -368,13 +367,12 @@ Register a new account with arkfile server using OPAQUE protocol.
 
 FLAGS:
     --username USER    Username for registration (required)
-    --email EMAIL      Email address for registration (required)
     --auto-login       Automatically login after registration (default: true)
     --help            Show this help message
 
 EXAMPLES:
-    arkfile-client register --username alice --email alice@example.com
-    arkfile-client register --username bob --email bob@example.com --auto-login=false
+    arkfile-client register --username alice
+    arkfile-client register --username bob --auto-login=false
 `)
 	}
 
@@ -384,10 +382,6 @@ EXAMPLES:
 
 	if *usernameFlag == "" {
 		return fmt.Errorf("username is required")
-	}
-
-	if *emailFlag == "" {
-		return fmt.Errorf("email is required")
 	}
 
 	// Get password securely
@@ -447,7 +441,6 @@ EXAMPLES:
 	// Step 2: Send registration request to server
 	regReq := map[string]string{
 		"username":             *usernameFlag,
-		"email":                *emailFlag,
 		"registration_request": registrationRequestB64,
 	}
 
@@ -498,7 +491,6 @@ EXAMPLES:
 	}
 
 	fmt.Printf("Registration successful for user: %s\n", *usernameFlag)
-	fmt.Printf("Email: %s\n", *emailFlag)
 
 	// Handle TOTP requirement or auto-login
 	if regFinalizeResp.RequiresTOTP && regFinalizeResp.TempToken != "" {

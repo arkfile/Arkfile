@@ -1,19 +1,67 @@
 package logging
 
 import (
-	"log"
+	"database/sql"
+	"fmt"
 	"net"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/84adam/Arkfile/crypto"
+	_ "github.com/mattn/go-sqlite3"
 )
+
+func TestMain(m *testing.M) {
+	// Setup in-memory SQLite DB for KeyManager
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		fmt.Printf("FATAL: Failed to open in-memory DB: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	// Create system_keys table
+	_, err = db.Exec(`
+		CREATE TABLE system_keys (
+			key_id TEXT PRIMARY KEY,
+			key_type TEXT NOT NULL,
+			encrypted_data BLOB NOT NULL,
+			nonce BLOB NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+	`)
+	if err != nil {
+		fmt.Printf("FATAL: Failed to create system_keys table: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Set Master Key for KeyManager
+	masterKey := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+	os.Setenv("ARKFILE_MASTER_KEY", masterKey)
+
+	// Initialize KeyManager
+	if err := crypto.InitKeyManager(db); err != nil {
+		fmt.Printf("FATAL: Failed to initialize KeyManager: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Initialize Loggers
+	InitFallbackConsoleLogging()
+
+	// Run tests
+	exitCode := m.Run()
+
+	// Cleanup
+	os.Unsetenv("ARKFILE_MASTER_KEY")
+	os.Exit(exitCode)
+}
 
 func createTestService(t *testing.T) *EntityIDService {
 	config := EntityIDConfig{
-		MasterSecretPath: "", // Will auto-generate
-		RotationPeriod:   24 * time.Hour,
-		RetentionDays:    90,
-		CleanupInterval:  24 * time.Hour,
+		RotationPeriod:  24 * time.Hour,
+		RetentionDays:   90,
+		CleanupInterval: 24 * time.Hour,
 	}
 
 	service, err := NewEntityIDService(config)
@@ -126,12 +174,17 @@ func TestEntityIDMasterKeyImpact(t *testing.T) {
 	service1 := createTestService(t)
 	service2 := createTestService(t)
 
+	// Manually change the master secret of service2 to simulate a different service
+	// In a real scenario, different services would have different master keys in the DB
+	// or use different key IDs.
+	service2.masterSecret = []byte("different_master_secret_for_test_01")
+
 	testIP := net.ParseIP("192.168.1.100")
 
 	entityID1 := service1.GetEntityID(testIP)
 	entityID2 := service2.GetEntityID(testIP)
 
-	// Since they have different auto-generated master keys, entity IDs should be different
+	// Since they have different master keys, entity IDs should be different
 	if entityID1 == entityID2 {
 		t.Errorf("Different services should produce different entity IDs for same IP: %s == %s", entityID1, entityID2)
 	}
@@ -177,10 +230,9 @@ func TestEntityIDConsistencyAcrossTimeWindows(t *testing.T) {
 func TestEntityIDServiceInitialization(t *testing.T) {
 	// Test basic initialization
 	config := EntityIDConfig{
-		MasterSecretPath: "",
-		RotationPeriod:   24 * time.Hour,
-		RetentionDays:    90,
-		CleanupInterval:  1 * time.Hour,
+		RotationPeriod:  24 * time.Hour,
+		RetentionDays:   90,
+		CleanupInterval: 1 * time.Hour,
 	}
 
 	service, err := NewEntityIDService(config)
@@ -256,35 +308,6 @@ func TestEntityIDValidation(t *testing.T) {
 	}
 }
 
-func TestEntityIDServiceKeyRotation(t *testing.T) {
-	// Initialize logging for tests
-	if InfoLogger == nil {
-		err := InitLogging(nil)
-		if err != nil {
-			t.Logf("Failed to initialize logging: %v", err)
-			// Create a simple logger for testing
-			InfoLogger = log.New(os.Stdout, "INFO: ", log.LstdFlags)
-		}
-	}
-
-	service := createTestService(t)
-
-	testIP := net.ParseIP("192.168.1.100")
-	originalID := service.GetEntityID(testIP)
-
-	// Perform key rotation
-	err := service.RotateKeys()
-	if err != nil {
-		t.Fatalf("Key rotation failed: %v", err)
-	}
-
-	// Entity ID should be different after rotation
-	newID := service.GetEntityID(testIP)
-	if originalID == newID {
-		t.Errorf("Entity ID should change after key rotation: %s == %s", originalID, newID)
-	}
-}
-
 func TestEntityIDServiceCleanup(t *testing.T) {
 	service := createTestService(t)
 
@@ -334,9 +357,8 @@ func longestCommonPrefix(s1, s2 string) string {
 
 func BenchmarkEntityIDGeneration(b *testing.B) {
 	config := EntityIDConfig{
-		MasterSecretPath: "",
-		RotationPeriod:   24 * time.Hour,
-		RetentionDays:    90,
+		RotationPeriod: 24 * time.Hour,
+		RetentionDays:  90,
 	}
 
 	service, err := NewEntityIDService(config)
@@ -354,9 +376,8 @@ func BenchmarkEntityIDGeneration(b *testing.B) {
 
 func BenchmarkEntityIDGenerationDifferentIPs(b *testing.B) {
 	config := EntityIDConfig{
-		MasterSecretPath: "",
-		RotationPeriod:   24 * time.Hour,
-		RetentionDays:    90,
+		RotationPeriod: 24 * time.Hour,
+		RetentionDays:  90,
 	}
 
 	service, err := NewEntityIDService(config)

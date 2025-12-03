@@ -70,7 +70,6 @@ func setupTestDB_User(t *testing.T) *sql.DB {
 	CREATE TABLE users (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		username TEXT UNIQUE NOT NULL,
-		email TEXT,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		total_storage_bytes INTEGER DEFAULT 0,
 		storage_limit_bytes INTEGER NOT NULL,
@@ -97,31 +96,24 @@ func TestCreateUser(t *testing.T) {
 	testCases := []struct {
 		name           string
 		username       string
-		email          *string
 		expectAdmin    bool
 		expectApproved bool
 		expectError    bool
 	}{
-		{"Regular User", "test.user.regular", stringPtr("test@example.com"), false, false, false},
-		{"Admin User", "admin.superuser", stringPtr("admin@example.com"), true, true, false},
-		{"User without email", "noemailuser", nil, false, false, false},
+		{"Regular User", "test.user.regular", false, false, false},
+		{"Admin User", "admin.superuser", true, true, false},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Execute CreateUser
-			user, err := CreateUser(db, tc.username, tc.email)
+			user, err := CreateUser(db, tc.username)
 
 			assert.NoError(t, err, "Did not expect an error for "+tc.name)
 			require.NotNil(t, user, "User object should not be nil for "+tc.name)
 
 			// Assert User Properties
 			assert.Equal(t, tc.username, user.Username, "Username should match")
-			if tc.email != nil {
-				assert.Equal(t, *tc.email, *user.Email, "Email should match")
-			} else {
-				assert.Nil(t, user.Email, "Email should be nil")
-			}
 			assert.Equal(t, DefaultStorageLimit, user.StorageLimitBytes, "Storage limit should be default")
 			assert.Equal(t, tc.expectAdmin, user.IsAdmin, "Admin status mismatch")
 			assert.Equal(t, tc.expectApproved, user.IsApproved, "Approved status mismatch")
@@ -135,11 +127,11 @@ func TestCreateUser(t *testing.T) {
 	// Test Duplicate Username specifically
 	t.Run("Duplicate Username", func(t *testing.T) {
 		// First creation should succeed
-		_, err := CreateUser(db, "duplicate.user.test", stringPtr("duplicate@example.com"))
+		_, err := CreateUser(db, "duplicate.user.test")
 		require.NoError(t, err)
 
 		// Second creation with the same username should fail
-		_, err = CreateUser(db, "duplicate.user.test", stringPtr("duplicate2@example.com"))
+		_, err = CreateUser(db, "duplicate.user.test")
 		assert.Error(t, err, "Expected an error for duplicate username")
 		if err != nil {
 			assert.Contains(t, err.Error(), "UNIQUE constraint failed", "Error should be about uniqueness")
@@ -153,8 +145,7 @@ func TestGetUserByUsername(t *testing.T) {
 
 	// Create a test user first
 	username := "findme.user.test"
-	email := stringPtr("findme@example.com")
-	createdUser, err := CreateUser(db, username, email)
+	createdUser, err := CreateUser(db, username)
 	require.NoError(t, err)
 	require.NotNil(t, createdUser)
 
@@ -222,7 +213,7 @@ func TestApproveUser(t *testing.T) {
 	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	// Create a user to approve
-	userToApprove, err := CreateUser(db, "pending.user.test", stringPtr("pending@example.com"))
+	userToApprove, err := CreateUser(db, "pending.user.test")
 	require.NoError(t, err)
 	require.False(t, userToApprove.IsApproved, "User should initially be unapproved")
 
@@ -275,7 +266,7 @@ func TestUpdateStorageUsage(t *testing.T) {
 	defer db.Close()
 
 	// Create user with initial storage
-	user, err := CreateUser(db, "storageuser", stringPtr("storage@example.com"))
+	user, err := CreateUser(db, "storageuser")
 	require.NoError(t, err)
 	initialStorage := int64(1024 * 1024) // 1MB initial
 	_, err = db.Exec("UPDATE users SET total_storage_bytes = ? WHERE id = ?", initialStorage, user.ID)
@@ -325,17 +316,17 @@ func TestGetPendingUsers(t *testing.T) {
 	defer os.Setenv("ADMIN_USERNAMES", originalAdmins)
 
 	// Create users: 2 pending, 1 approved, 1 admin (auto-approved)
-	_, err := CreateUser(db, "pending1.user.test", stringPtr("pending1@example.com"))
+	_, err := CreateUser(db, "pending1.user.test")
 	require.NoError(t, err)
-	_, err = CreateUser(db, "pending2.user.test", stringPtr("pending2@example.com"))
+	_, err = CreateUser(db, "pending2.user.test")
 	require.NoError(t, err)
-	approvedUser, err := CreateUser(db, "approved.user.test", stringPtr("approved@example.com"))
+	approvedUser, err := CreateUser(db, "approved.user.test")
 	require.NoError(t, err)
 	// Manually approve this one
 	_, err = db.Exec("UPDATE users SET is_approved = TRUE WHERE username = ?", approvedUser.Username)
 	require.NoError(t, err)
 	// Admin username should be auto-approved
-	_, err = CreateUser(db, "adminuser.test", stringPtr("admin@pending.com"))
+	_, err = CreateUser(db, "adminuser.test")
 	require.NoError(t, err)
 
 	// Execute GetPendingUsers
@@ -376,9 +367,4 @@ func TestIsAdminUsername(t *testing.T) {
 	// Test unset ADMIN_USERNAMES (uses default "")
 	os.Unsetenv("ADMIN_USERNAMES")
 	assert.False(t, isAdminUsername("admin1"), "Should not be admin if env var is unset")
-}
-
-// Helper function to create string pointer
-func stringPtr(s string) *string {
-	return &s
 }

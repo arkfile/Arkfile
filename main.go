@@ -143,7 +143,6 @@ func main() {
 
 	// Initialize Entity ID service for rate limiting
 	entityIDConfig := logging.EntityIDConfig{
-		MasterSecretPath:  "",             // Will generate random secret
 		RotationPeriod:    24 * time.Hour, // Daily rotation
 		RetentionDays:     90,             // 90 days retention
 		CleanupInterval:   24 * time.Hour, // Daily cleanup
@@ -157,7 +156,12 @@ func main() {
 	// Initialize storage
 	storage.InitMinio()
 
-	// Initialize admin user if needed
+	// Check for bootstrap condition (Zero Users)
+	if err := auth.CheckAndGenerateBootstrapToken(database.DB); err != nil {
+		log.Fatalf("Failed to check/generate bootstrap token: %v", err)
+	}
+
+	// Initialize admin user if needed (Dev/Test only)
 	if err := initializeAdminUser(); err != nil {
 		log.Printf("Warning: Failed to initialize admin user: %v", err)
 		log.Printf("Application will continue running without admin user setup")

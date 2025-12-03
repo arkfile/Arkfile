@@ -280,7 +280,6 @@ type OpaqueRegisterResponseRequest struct {
 type OpaqueRegisterFinalizeRequest struct {
 	Username           string `json:"username"`
 	RegistrationRecord string `json:"registration_record"` // base64 encoded
-	Email              string `json:"email,omitempty"`
 }
 
 // OpaqueHealthCheckResponse represents the health status of OPAQUE system
@@ -345,7 +344,6 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		SessionID          string `json:"session_id"`
 		Username           string `json:"username"`
 		RegistrationRecord string `json:"registration_record"` // base64 encoded
-		Email              string `json:"email,omitempty"`
 	}
 	if err := c.Bind(&request); err != nil {
 		logging.ErrorLogger.Printf("OPAQUE registration finalize bind error: %v", err)
@@ -370,11 +368,6 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Invalid username: "+err.Error(), err.Error())
 	}
 
-	// Validate email if provided
-	if request.Email != "" && !strings.Contains(request.Email, "@") {
-		return JSONError(c, http.StatusBadRequest, "Provided email is not valid", "")
-	}
-
 	// Check if user already exists
 	_, err = models.GetUserByUsername(database.DB, request.Username)
 	if err == nil {
@@ -396,12 +389,6 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Failed to store user record", err.Error())
 	}
 
-	// Create user in database
-	var emailPtr *string
-	if request.Email != "" {
-		emailPtr = &request.Email
-	}
-
 	// Start transaction for atomic user + OPAQUE record creation
 	tx, err := database.DB.Begin()
 	if err != nil {
@@ -411,7 +398,7 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	defer tx.Rollback()
 
 	// Create user record
-	_, err = models.CreateUser(tx, request.Username, emailPtr)
+	_, err = models.CreateUser(tx, request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create user %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "User creation failed", err.Error())
@@ -794,7 +781,6 @@ func TOTPVerify(c echo.Context) error {
 			"auth_method":   "OPAQUE+TOTP",
 			"user": map[string]interface{}{
 				"username":        user.Username,
-				"email":           user.Email,
 				"is_approved":     user.IsApproved,
 				"is_admin":        user.IsAdmin,
 				"total_storage":   user.TotalStorageBytes,
@@ -925,7 +911,6 @@ func TOTPAuth(c echo.Context) error {
 		"auth_method":   "OPAQUE+TOTP",
 		"user": map[string]interface{}{
 			"username":        user.Username,
-			"email":           user.Email,
 			"is_approved":     user.IsApproved,
 			"is_admin":        user.IsAdmin,
 			"total_storage":   user.TotalStorageBytes,

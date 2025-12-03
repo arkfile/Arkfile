@@ -41,7 +41,22 @@ CREATE TABLE IF NOT EXISTS file_metadata (
 );
 
 -- =====================================================
--- PHASE 2: RFC-COMPLIANT OPAQUE AUTHENTICATION
+-- PHASE 2: SYSTEM SECRETS (MASTER KEY ARCHITECTURE)
+-- =====================================================
+
+-- Encrypted system keys (JWT, TOTP, OPAQUE, Bootstrap)
+-- Encrypted using Envelope Encryption with ARKFILE_MASTER_KEY
+CREATE TABLE IF NOT EXISTS system_keys (
+    key_id TEXT PRIMARY KEY,      -- e.g., "jwt_signing_key_v1", "bootstrap_token"
+    key_type TEXT NOT NULL,       -- e.g., "jwt", "totp", "opaque", "bootstrap"
+    encrypted_data BLOB NOT NULL, -- The encrypted secret
+    nonce BLOB NOT NULL,          -- The nonce used for encryption (AES-GCM)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP          -- Optional (for Bootstrap Token)
+);
+
+-- =====================================================
+-- PHASE 3: RFC-COMPLIANT OPAQUE AUTHENTICATION
 -- =====================================================
 
 -- OPAQUE server keys (single row table for server-wide keys)
@@ -77,7 +92,7 @@ CREATE TABLE IF NOT EXISTS opaque_auth_sessions (
 );
 
 -- =====================================================
--- PHASE 3: JWT TOKEN MANAGEMENT
+-- PHASE 4: JWT TOKEN MANAGEMENT
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -102,7 +117,7 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
 );
 
 -- =====================================================
--- PHASE 4: TOTP TWO-FACTOR AUTHENTICATION
+-- PHASE 5: TOTP TWO-FACTOR AUTHENTICATION
 -- =====================================================
 
 CREATE TABLE IF NOT EXISTS user_totp (
@@ -136,7 +151,7 @@ CREATE TABLE IF NOT EXISTS totp_backup_usage (
 );
 
 -- =====================================================
--- PHASE 5: FILE SHARING AND ENCRYPTION
+-- PHASE 6: FILE SHARING AND ENCRYPTION
 -- =====================================================
 
 -- File share keys (Argon2id-based anonymous shares)
@@ -168,7 +183,7 @@ CREATE TABLE IF NOT EXISTS file_shares (
 );
 
 -- =====================================================
--- PHASE 6: CHUNKED UPLOAD SYSTEM
+-- PHASE 7: CHUNKED UPLOAD SYSTEM
 -- =====================================================
 
 -- Upload sessions for chunked uploads
@@ -211,7 +226,7 @@ CREATE TABLE IF NOT EXISTS upload_chunks (
 );
 
 -- =====================================================
--- PHASE 7: SECURITY AND MONITORING
+-- PHASE 8: SECURITY AND MONITORING
 -- =====================================================
 
 -- Security events with privacy-preserving entity identification
@@ -257,7 +272,7 @@ CREATE TABLE IF NOT EXISTS share_access_attempts (
 );
 
 -- =====================================================
--- PHASE 8: OPERATIONAL MONITORING
+-- PHASE 9: OPERATIONAL MONITORING
 -- =====================================================
 
 -- Entity ID configuration and master secret storage
@@ -299,7 +314,7 @@ CREATE TABLE IF NOT EXISTS security_alerts (
 );
 
 -- =====================================================
--- PHASE 9: ACTIVITY LOGGING
+-- PHASE 10: ACTIVITY LOGGING
 -- =====================================================
 
 -- User activity tracking
@@ -324,7 +339,7 @@ CREATE TABLE IF NOT EXISTS admin_logs (
 );
 
 -- =====================================================
--- PHASE 10: CREDITS AND BILLING SYSTEM
+-- PHASE 11: CREDITS AND BILLING SYSTEM
 -- =====================================================
 
 -- User credits balance table
@@ -354,7 +369,7 @@ CREATE TABLE IF NOT EXISTS credit_transactions (
 );
 
 -- =====================================================
--- PHASE 11: INDEXES FOR PERFORMANCE
+-- PHASE 12: INDEXES FOR PERFORMANCE
 -- =====================================================
 
 -- Core table indexes
@@ -444,7 +459,7 @@ CREATE INDEX IF NOT EXISTS idx_credit_transactions_created_at ON credit_transact
 CREATE INDEX IF NOT EXISTS idx_credit_transactions_admin ON credit_transactions(admin_username);
 
 -- =====================================================
--- PHASE 12: TRIGGERS FOR AUTOMATIC UPDATES
+-- PHASE 13: TRIGGERS FOR AUTOMATIC UPDATES
 -- =====================================================
 
 -- Update trigger for opaque_user_data
@@ -510,7 +525,7 @@ BEGIN
 END;
 
 -- =====================================================
--- PHASE 13: MONITORING VIEWS
+-- PHASE 14: MONITORING VIEWS
 -- =====================================================
 
 -- View for monitoring rate limiting activity

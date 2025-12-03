@@ -47,6 +47,10 @@ func RegisterRoutes() {
 	Echo.POST("/api/admin/login/response", LoginRateLimitMiddleware(AdminOpaqueAuthResponse))
 	Echo.POST("/api/admin/login/finalize", LoginRateLimitMiddleware(AdminOpaqueAuthFinalize))
 
+	// Bootstrap Registration (OPAQUE) - Initial Admin Setup
+	Echo.POST("/api/bootstrap/register/response", RegisterRateLimitMiddleware(BootstrapRegisterResponse))
+	Echo.POST("/api/bootstrap/register/finalize", RegisterRateLimitMiddleware(BootstrapRegisterFinalize))
+
 	// TOTP Authentication - requires authentication with rate limiting protection
 	auth.Echo.POST("/api/totp/setup", TOTPSetup)
 	auth.Echo.POST("/api/totp/verify", TOTPRateLimitMiddleware("totp_verify")(TOTPVerify))

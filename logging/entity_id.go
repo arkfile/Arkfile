@@ -2,7 +2,6 @@ package logging
 
 import (
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -10,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/84adam/Arkfile/crypto"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -25,7 +25,6 @@ type EntityIDService struct {
 
 // EntityIDConfig configures the entity ID service
 type EntityIDConfig struct {
-	MasterSecretPath  string        `json:"master_secret_path"`
 	RotationPeriod    time.Duration `json:"rotation_period"`    // 24 * time.Hour
 	RetentionDays     int           `json:"retention_days"`     // 90
 	CleanupInterval   time.Duration `json:"cleanup_interval"`   // 24 * time.Hour
@@ -41,7 +40,7 @@ func NewEntityIDService(config EntityIDConfig) (*EntityIDService, error) {
 	}
 
 	// Generate or load master secret
-	if err := service.initializeMasterSecret(config.MasterSecretPath); err != nil {
+	if err := service.initializeMasterSecret(); err != nil {
 		return nil, fmt.Errorf("failed to initialize master secret: %w", err)
 	}
 
@@ -79,30 +78,6 @@ func (e *EntityIDService) GetCurrentTimeWindow() string {
 // GetTimeWindowForTime returns the time window identifier for a specific time
 func (e *EntityIDService) GetTimeWindowForTime(t time.Time) string {
 	return t.UTC().Format("2006-01-02")
-}
-
-// RotateKeys performs emergency rotation of the master secret
-// This invalidates all current entity IDs and rate limiting state
-func (e *EntityIDService) RotateKeys() error {
-	e.cacheMutex.Lock()
-	defer e.cacheMutex.Unlock()
-
-	// Generate new master secret
-	newSecret := make([]byte, 32)
-	if _, err := rand.Read(newSecret); err != nil {
-		return fmt.Errorf("failed to generate new master secret: %w", err)
-	}
-
-	// Update master secret
-	e.masterSecret = newSecret
-
-	// Clear key cache to force re-derivation
-	e.keyCache = make(map[string][]byte)
-
-	// Log emergency rotation event
-	InfoLogger.Printf("Emergency entity ID key rotation completed")
-
-	return nil
 }
 
 // CleanupOldWindows removes old time window data beyond retention period
@@ -172,16 +147,25 @@ func (e *EntityIDService) getDailyKey(timeWindow string) []byte {
 	return key
 }
 
-// initializeMasterSecret loads or generates the master secret
-func (e *EntityIDService) initializeMasterSecret(secretPath string) error {
-	// For now, generate a random master secret
-	// In production, this would load from secure storage
-	masterSecret := make([]byte, 32)
-	if _, err := rand.Read(masterSecret); err != nil {
-		return fmt.Errorf("failed to generate master secret: %w", err)
+// initializeMasterSecret loads or generates the master secret using KeyManager
+func (e *EntityIDService) initializeMasterSecret() error {
+	km, err := crypto.GetKeyManager()
+	if err != nil {
+		return fmt.Errorf("failed to get KeyManager: %w", err)
 	}
 
-	e.masterSecret = masterSecret
+	// Retrieve or generate the 32-byte master key
+	// We use "entity_id_master_key_v1" as the ID and "entity_id" as the type context
+	key, err := km.GetOrGenerateKey("entity_id_master_key_v1", "entity_id", 32)
+	if err != nil {
+		return fmt.Errorf("failed to get/generate entity ID master key: %w", err)
+	}
+
+	if len(key) != 32 {
+		return fmt.Errorf("invalid entity ID master key length: expected 32 bytes, got %d", len(key))
+	}
+
+	e.masterSecret = key
 	return nil
 }
 

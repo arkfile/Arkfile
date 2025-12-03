@@ -20,10 +20,10 @@ import (
 func TestCreateFileShare_Success(t *testing.T) {
 	// Setup test environment
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/share/create", bytes.NewReader([]byte(`{
-		"fileId": "test-file-123",
+		"file_id": "test-file-123",
 		"salt": "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=",
 		"encrypted_fek": "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==",
-		"expiresAfterHours": 720
+		"expires_after_hours": 720
 	}`)))
 
 	// Set up authenticated user context
@@ -64,9 +64,9 @@ func TestCreateFileShare_Success(t *testing.T) {
 	err = json.Unmarshal(rec.Body.Bytes(), &response)
 	require.NoError(t, err)
 
-	assert.NotEmpty(t, response["shareId"])
-	assert.NotEmpty(t, response["shareUrl"])
-	assert.Contains(t, response["shareUrl"], "/shared/")
+	assert.NotEmpty(t, response["share_id"])
+	assert.NotEmpty(t, response["share_url"])
+	assert.Contains(t, response["share_url"], "/shared/")
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -74,7 +74,7 @@ func TestCreateFileShare_Success(t *testing.T) {
 func TestCreateFileShare_InvalidSalt(t *testing.T) {
 	// Setup test environment with invalid salt - use same endpoint as successful test
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/share/create", bytes.NewReader([]byte(`{
-		"fileId": "test-file-123",
+		"file_id": "test-file-123",
 		"salt": "c2hvcnQtc2FsdA==",
 		"encrypted_fek": "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ=="
 	}`)))
@@ -110,7 +110,7 @@ func TestCreateFileShare_InvalidSalt(t *testing.T) {
 func TestCreateFileShare_FileNotOwned(t *testing.T) {
 	// Setup test environment - use same endpoint as successful test
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/share/create", bytes.NewReader([]byte(`{
-		"fileId": "test-file-456",
+		"file_id": "test-file-456",
 		"salt": "dGVzdC1zYWx0LTMyLWJ5dGVzLWZvci1hcmdvbjJpZA==",
 		"encrypted_fek": "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ=="
 	}`)))
@@ -334,7 +334,7 @@ func TestListShares_Success(t *testing.T) {
 	assert.Equal(t, 1, len(shares))
 
 	share := shares[0].(map[string]interface{})
-	assert.Equal(t, "test-share-id", share["shareId"])
+	assert.Equal(t, "test-share-id", share["share_id"])
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

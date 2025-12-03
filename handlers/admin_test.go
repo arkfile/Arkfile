@@ -62,13 +62,14 @@ func TestGetPendingUsers_Success_Admin(t *testing.T) {
 		{ID: 3, Username: pendingUser2Username, IsApproved: false},
 	}
 	// Construct rows for GetPendingUsers (models/user.go)
-	pendingRows := sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes"}).
-		AddRow(pendingUsersData[0].ID, pendingUsersData[0].Username, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit).
-		AddRow(pendingUsersData[1].ID, pendingUsersData[1].Username, sql.NullString{}, time.Now(), int64(0), models.DefaultStorageLimit)
+	// Note: email is NOT selected in the query, so do not include it here.
+	pendingRows := sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes"}).
+		AddRow(pendingUsersData[0].ID, pendingUsersData[0].Username, time.Now(), int64(0), models.DefaultStorageLimit).
+		AddRow(pendingUsersData[1].ID, pendingUsersData[1].Username, time.Now(), int64(0), models.DefaultStorageLimit)
 
 	// This query must exactly match the one in models.GetPendingUsers
 	mockDB.ExpectQuery(`
-		SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes
+		SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes
 		FROM users
 		WHERE is_approved = false
 		ORDER BY created_at ASC`).WillReturnRows(pendingRows)
@@ -77,12 +78,17 @@ func TestGetPendingUsers_Success_Admin(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var respUsers []models.User
-	err = json.Unmarshal(rec.Body.Bytes(), &respUsers)
+	var response struct {
+		Success bool          `json:"success"`
+		Message string        `json:"message"`
+		Data    []models.User `json:"data"`
+	}
+	err = json.Unmarshal(rec.Body.Bytes(), &response)
 	require.NoError(t, err)
-	assert.Len(t, respUsers, 2)
-	assert.Equal(t, pendingUser1Username, respUsers[0].Username)
-	assert.Equal(t, pendingUser2Username, respUsers[1].Username)
+	assert.True(t, response.Success)
+	assert.Len(t, response.Data, 2)
+	assert.Equal(t, pendingUser1Username, response.Data[0].Username)
+	assert.Equal(t, pendingUser2Username, response.Data[1].Username)
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
@@ -216,7 +222,7 @@ func TestDeleteUser_Success_Admin(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var resp map[string]string
+	var resp map[string]interface{}
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Equal(t, "User deleted successfully", resp["message"])
@@ -660,7 +666,7 @@ func TestUpdateUser_SetAdmin_Success_Admin(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var resp map[string]string
+	var resp map[string]interface{}
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Equal(t, "User updated successfully", resp["message"])
@@ -713,7 +719,7 @@ func TestUpdateUser_SetStorageLimit_Success_Admin(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var resp map[string]string
+	var resp map[string]interface{}
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Equal(t, "User updated successfully", resp["message"])
@@ -961,7 +967,7 @@ func TestUpdateUser_RevokeAccess_Success_Admin(t *testing.T) {
 	// Since token deletion now happens in a goroutine, we can't reliably mock it here in a simple unit test.
 	// We'll trust the handler calls it and test token deletion's effect in an integration test.
 	assert.Equal(t, http.StatusOK, rec.Code)
-	var resp map[string]string
+	var resp map[string]interface{}
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Equal(t, "User updated successfully", resp["message"])
@@ -1553,7 +1559,7 @@ func TestApproveUser_Success_Admin(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var resp map[string]string
+	var resp map[string]interface{}
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Equal(t, "User approved successfully", resp["message"])
@@ -1809,7 +1815,7 @@ func TestUpdateUserStorageLimit_Success_Admin(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var resp map[string]string
+	var resp map[string]interface{}
 	err = json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	assert.Equal(t, "Storage limit updated successfully", resp["message"])

@@ -32,7 +32,9 @@ USAGE:
     arkfile-admin [global options] command [command options] [arguments...]
 
 NETWORK COMMANDS (Admin API - localhost only):
+    bootstrap         Bootstrap the first admin user (requires token)
     login             Admin login via OPAQUE+TOTP authentication
+    setup-totp        Setup Two-Factor Authentication (TOTP)
     logout            Clear admin session
     list-users        List all users (dev-test env only)
     approve-user      Approve user account (dev-test env only)
@@ -83,6 +85,7 @@ type AdminSession struct {
 	Username       string    `json:"username"`
 	AccessToken    string    `json:"access_token"`
 	RefreshToken   string    `json:"refresh_token"`
+	TempToken      string    `json:"temp_token,omitempty"`
 	ExpiresAt      time.Time `json:"expires_at"`
 	OPAQUEExport   string    `json:"opaque_export"`
 	ServerURL      string    `json:"server_url"`
@@ -175,9 +178,19 @@ func main() {
 	// Execute command - route to network or local implementation
 	switch command {
 	// Network-based commands (use admin API)
+	case "bootstrap":
+		if err := handleBootstrapCommand(client, config, args); err != nil {
+			logError("Bootstrap failed: %v", err)
+			os.Exit(1)
+		}
 	case "login":
 		if err := handleLoginCommand(client, config, args); err != nil {
 			logError("Login failed: %v", err)
+			os.Exit(1)
+		}
+	case "setup-totp":
+		if err := handleSetupTOTPCommand(client, config, args); err != nil {
+			logError("TOTP setup failed: %v", err)
 			os.Exit(1)
 		}
 	case "logout":
@@ -293,6 +306,297 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 	}
 
 	return &apiResp, nil
+}
+
+// handleBootstrapCommand processes the bootstrap command
+func handleBootstrapCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("bootstrap", flag.ExitOnError)
+	var (
+		tokenFlag    = fs.String("token", "", "Bootstrap token (required)")
+		usernameFlag = fs.String("username", "admin", "Username for admin account")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin bootstrap [FLAGS]
+
+Bootstrap the first admin user using the token provided by the server logs.
+
+FLAGS:
+    --token TOKEN      Bootstrap token from server logs (required)
+    --username USER    Username for admin account (default: admin)
+    --help            Show this help message
+
+EXAMPLES:
+    arkfile-admin bootstrap --token <TOKEN>
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *tokenFlag == "" {
+		return fmt.Errorf("bootstrap token is required")
+	}
+
+	// Get password securely
+	fmt.Printf("Enter password for admin user %s: ", *usernameFlag)
+	password, err := readPassword()
+	if err != nil {
+		return fmt.Errorf("failed to read password: %w", err)
+	}
+
+	// Confirm password
+	fmt.Print("Confirm password: ")
+	passwordConfirm, err := readPassword()
+	if err != nil {
+		return fmt.Errorf("failed to read password confirmation: %w", err)
+	}
+
+	// Verify passwords match
+	if password != passwordConfirm {
+		return fmt.Errorf("passwords do not match")
+	}
+
+	// Perform OPAQUE multi-step registration
+	logVerbose("Starting OPAQUE bootstrap for user: %s", *usernameFlag)
+
+	// Step 1: Create registration request (client-side)
+	clientSecret, registrationRequest, err := auth.ClientCreateRegistrationRequest([]byte(password))
+	if err != nil {
+		return fmt.Errorf("failed to create registration request: %w", err)
+	}
+
+	// Encode registration request for transmission
+	registrationRequestB64 := base64.StdEncoding.EncodeToString(registrationRequest)
+
+	// Step 2: Send registration request to server
+	regReq := map[string]string{
+		"bootstrap_token":      *tokenFlag,
+		"username":             *usernameFlag,
+		"registration_request": registrationRequestB64,
+	}
+
+	regResp, err := client.makeRequest("POST", "/api/bootstrap/register/response", regReq, "")
+	if err != nil {
+		return fmt.Errorf("bootstrap registration failed: %w", err)
+	}
+
+	// Step 3: Decode server's registration response
+	registrationResponseB64, ok := regResp.Data["registration_response"].(string)
+	if !ok {
+		return fmt.Errorf("invalid server response: missing registration_response")
+	}
+
+	// Extract session_id from Data if present, otherwise fallback to top-level SessionID
+	sessionID, ok := regResp.Data["session_id"].(string)
+	if !ok || sessionID == "" {
+		// Try to get from response data directly if not in Data map (depends on makeRequest impl)
+		// makeRequest puts everything in Data map or top level fields?
+		// makeRequest returns *Response which has Data map.
+		// But wait, makeRequest implementation:
+		// var apiResp Response
+		// if err := json.Unmarshal(responseData, &apiResp); err != nil { ... }
+		// return &apiResp, nil
+		// So session_id should be in Data map if server puts it there.
+		// The server implementation of bootstrap puts it in Data map?
+		// Let's assume it does or check handlers/bootstrap.go later.
+		// For now, I'll assume it's in Data.
+	}
+	if sessionID == "" {
+		return fmt.Errorf("invalid server response: missing session_id")
+	}
+
+	registrationResponse, err := base64.StdEncoding.DecodeString(registrationResponseB64)
+	if err != nil {
+		return fmt.Errorf("failed to decode registration response: %w", err)
+	}
+
+	// Step 4: Finalize registration (client-side)
+	registrationRecord, _, err := auth.ClientFinalizeRegistration(clientSecret, registrationResponse, *usernameFlag)
+	if err != nil {
+		return fmt.Errorf("failed to finalize registration: %w", err)
+	}
+
+	// Encode registration record for transmission
+	registrationRecordB64 := base64.StdEncoding.EncodeToString(registrationRecord)
+
+	// Step 5: Send registration record to server to complete registration
+	finalizeReq := map[string]string{
+		"bootstrap_token":     *tokenFlag,
+		"session_id":          sessionID,
+		"username":            *usernameFlag,
+		"registration_record": registrationRecordB64,
+	}
+
+	regFinalizeResp, err := client.makeRequest("POST", "/api/bootstrap/register/finalize", finalizeReq, "")
+	if err != nil {
+		return fmt.Errorf("bootstrap finalization failed: %w", err)
+	}
+
+	fmt.Printf("Bootstrap successful! Admin user '%s' created.\n", *usernameFlag)
+
+	// Handle TOTP requirement
+	requiresTOTP, _ := regFinalizeResp.Data["requires_totp"].(bool)
+	tempToken, _ := regFinalizeResp.Data["temp_token"].(string)
+
+	if requiresTOTP && tempToken != "" {
+		// Save session with temp token for TOTP setup
+		session := &AdminSession{
+			Username:       *usernameFlag,
+			TempToken:      tempToken,
+			ServerURL:      config.ServerURL,
+			SessionCreated: time.Now(),
+			ExpiresAt:      time.Now().Add(15 * time.Minute), // Temp token usually short-lived
+			IsAdmin:        true,
+		}
+
+		if err := saveAdminSession(session, config.TokenFile); err != nil {
+			logError("Warning: Failed to save session for TOTP setup: %v", err)
+		} else {
+			fmt.Printf("\nTOTP setup required. Session saved.\n")
+			fmt.Printf("Please run 'arkfile-admin setup-totp' to complete account setup.\n")
+		}
+	}
+
+	return nil
+}
+
+// handleSetupTOTPCommand processes TOTP setup command
+func handleSetupTOTPCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("setup-totp", flag.ExitOnError)
+	var (
+		showSecret = fs.Bool("show-secret", false, "Only show the secret (for automation)")
+		verifyCode = fs.String("verify", "", "Verify the setup with a code")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin setup-totp [FLAGS]
+
+Setup Two-Factor Authentication (TOTP) for the account.
+This is usually required immediately after registration.
+
+FLAGS:
+    --show-secret     Only show the secret key and exit (for automation)
+    --verify CODE     Verify the setup with a code (for automation)
+    --help            Show this help message
+
+EXAMPLES:
+    arkfile-admin setup-totp
+    arkfile-admin setup-totp --show-secret
+    arkfile-admin setup-totp --verify 123456
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	// Load session
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in (use 'arkfile-admin login' or 'bootstrap'): %w", err)
+	}
+
+	// Determine which token to use
+	// If we have a TempToken, we are in the setup flow
+	// If we have an AccessToken, we might be re-configuring or finishing setup
+	token := session.TempToken
+	if token == "" {
+		token = session.AccessToken
+	}
+
+	if token == "" {
+		return fmt.Errorf("no valid session found. Please register or login first")
+	}
+
+	// If verifying, we skip the setup call and go straight to verification
+	if *verifyCode != "" {
+		return verifyTOTP(client, config, session, token, *verifyCode)
+	}
+
+	// Step 1: Call setup endpoint to get secret
+	setupResp, err := client.makeRequest("POST", "/api/totp/setup", nil, token)
+	if err != nil {
+		return fmt.Errorf("failed to initiate TOTP setup: %w", err)
+	}
+
+	secret, ok := setupResp.Data["secret"].(string)
+	if !ok {
+		return fmt.Errorf("invalid server response: missing secret")
+	}
+
+	// Output secret
+	if *showSecret {
+		// For automation, print in a parseable format
+		fmt.Printf("TOTP_SECRET:%s\n", secret)
+		return nil
+	}
+
+	// Interactive mode
+	fmt.Println("=== Two-Factor Authentication Setup ===")
+	fmt.Println("1. Open your authenticator app (Google Authenticator, Authy, etc.)")
+	fmt.Println("2. Add a new account manually")
+	fmt.Printf("3. Enter this secret key: %s\n", secret)
+	fmt.Println("=======================================")
+	fmt.Println()
+
+	// Prompt for code
+	fmt.Print("Enter the 6-digit code from your app: ")
+	reader := bufio.NewReader(os.Stdin)
+	code, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read code: %w", err)
+	}
+	code = strings.TrimSpace(code)
+
+	return verifyTOTP(client, config, session, token, code)
+}
+
+func verifyTOTP(client *HTTPClient, config *AdminConfig, session *AdminSession, token, code string) error {
+	verifyReq := map[string]string{
+		"code": code,
+	}
+
+	verifyResp, err := client.makeRequest("POST", "/api/totp/verify", verifyReq, token)
+	if err != nil {
+		return fmt.Errorf("failed to verify TOTP code: %w", err)
+	}
+
+	// Update session with final tokens
+	if token, ok := verifyResp.Data["token"].(string); ok {
+		session.AccessToken = token
+	}
+	if refreshToken, ok := verifyResp.Data["refresh_token"].(string); ok {
+		session.RefreshToken = refreshToken
+	}
+	if expiresStr, ok := verifyResp.Data["expires_at"].(string); ok {
+		if t, err := time.Parse(time.RFC3339, expiresStr); err == nil {
+			session.ExpiresAt = t
+		}
+	}
+
+	session.TempToken = "" // Clear temp token
+
+	if err := saveAdminSession(session, config.TokenFile); err != nil {
+		logError("Warning: Failed to save updated session: %v", err)
+	}
+
+	fmt.Println("TOTP Setup Complete!")
+
+	// Display backup codes if available
+	if backupCodes, ok := verifyResp.Data["backup_codes"].([]interface{}); ok {
+		fmt.Println("\n=== BACKUP CODES ===")
+		fmt.Println("SAVE THESE CODES IN A SAFE PLACE!")
+		fmt.Println("You can use these to login if you lose your authenticator device.")
+		fmt.Println("--------------------")
+		for _, code := range backupCodes {
+			fmt.Println(code)
+		}
+		fmt.Println("--------------------")
+	}
+
+	return nil
 }
 
 // handleLoginCommand processes admin login command

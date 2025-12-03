@@ -25,8 +25,8 @@ func setupTestDB_RefreshToken(t *testing.T) *sql.DB {
 		token_hash TEXT NOT NULL UNIQUE,
 		expires_at TIMESTAMP NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		is_revoked BOOLEAN DEFAULT FALSE,
-		is_used BOOLEAN DEFAULT FALSE
+		revoked BOOLEAN DEFAULT FALSE,
+		last_used TIMESTAMP
 	);
 	`
 	_, err = db.Exec(schema)
@@ -82,11 +82,11 @@ func TestValidateRefreshToken(t *testing.T) {
 		time.Now().Add(-1*time.Hour), hex.EncodeToString(hashExpired[:]))
 	require.NoError(t, err)
 
-	_, err = db.Exec("UPDATE refresh_tokens SET is_used = TRUE WHERE token_hash = ?",
-		hex.EncodeToString(hashUsed[:]))
+	_, err = db.Exec("UPDATE refresh_tokens SET last_used = ? WHERE token_hash = ?",
+		time.Now(), hex.EncodeToString(hashUsed[:]))
 	require.NoError(t, err)
 
-	_, err = db.Exec("UPDATE refresh_tokens SET is_revoked = TRUE WHERE token_hash = ?",
+	_, err = db.Exec("UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = ?",
 		hex.EncodeToString(hashRevoked[:]))
 	require.NoError(t, err)
 
@@ -106,25 +106,25 @@ func TestValidateRefreshToken(t *testing.T) {
 		{
 			name:          "Expired token",
 			token:         expiredTokenString,
-			expectErrText: "token expired",
+			expectErrText: "refresh token has expired",
 			expectUsed:    false, // Should not be marked used if invalid
 		},
 		{
-			name:          "Already used token",
-			token:         usedTokenString,
-			expectErrText: "token already used",
-			expectUsed:    true, // Remains used
+			name:           "Already used token",
+			token:          usedTokenString,
+			expectUsername: username, // Should succeed as tokens are reusable
+			expectUsed:     true,     // Remains used
 		},
 		{
 			name:          "Revoked token",
 			token:         revokedTokenString,
-			expectErrText: "token revoked",
-			expectUsed:    false, // Should not be marked used if invalid
+			expectErrText: "refresh token not found", // Revoked tokens are treated as not found
+			expectUsed:    false,                     // Should not be marked used if invalid
 		},
 		{
 			name:          "Invalid/Non-existent token",
 			token:         "non-existent-token",
-			expectErrText: "token not found",
+			expectErrText: "refresh token not found",
 			expectUsed:    false,
 		},
 	}
@@ -136,7 +136,7 @@ func TestValidateRefreshToken(t *testing.T) {
 
 			// Assert: Error expectation
 			if tc.expectErrText != "" {
-				assert.Error(t, err, "Expected an error")
+				require.Error(t, err, "Expected an error")
 				assert.Contains(t, err.Error(), tc.expectErrText, "Error message mismatch")
 				assert.Empty(t, validatedUsername, "Username should be empty on error")
 			} else {
@@ -144,17 +144,17 @@ func TestValidateRefreshToken(t *testing.T) {
 				assert.Equal(t, tc.expectUsername, validatedUsername, "Validated username mismatch")
 			}
 
-			// Assert: Check 'is_used' status in DB
+			// Assert: Check 'last_used' status in DB
 			hash := sha256.Sum256([]byte(tc.token))
 			tokenHash := hex.EncodeToString(hash[:])
-			var isUsed sql.NullBool // Use NullBool to handle non-existent tokens gracefully
-			dbErr := db.QueryRow("SELECT is_used FROM refresh_tokens WHERE token_hash = ?", tokenHash).Scan(&isUsed)
+			var lastUsed sql.NullTime // Use NullTime to handle non-existent tokens gracefully
+			dbErr := db.QueryRow("SELECT last_used FROM refresh_tokens WHERE token_hash = ?", tokenHash).Scan(&lastUsed)
 
 			if dbErr == sql.ErrNoRows {
 				assert.False(t, tc.expectUsed, "Token should not be marked used if it doesn't exist")
 			} else {
-				assert.NoError(t, dbErr, "DB query for is_used failed")
-				assert.Equal(t, tc.expectUsed, isUsed.Valid && isUsed.Bool, "'is_used' status mismatch in DB")
+				assert.NoError(t, dbErr, "DB query for last_used failed")
+				assert.Equal(t, tc.expectUsed, lastUsed.Valid, "'last_used' status mismatch in DB")
 			}
 		})
 	}
@@ -177,13 +177,13 @@ func TestRevokeRefreshToken(t *testing.T) {
 	// Assert: Check revoked status in DB for the revoked token
 	hashRevoked := sha256.Sum256([]byte(tokenToRevoke))
 	var isRevoked bool
-	err = db.QueryRow("SELECT is_revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hashRevoked[:])).Scan(&isRevoked)
+	err = db.QueryRow("SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hashRevoked[:])).Scan(&isRevoked)
 	assert.NoError(t, err)
 	assert.True(t, isRevoked, "Token should be marked as revoked in DB")
 
 	// Assert: Check revoked status for the token that should NOT be revoked
 	hashKeep := sha256.Sum256([]byte(tokenToKeep))
-	err = db.QueryRow("SELECT is_revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hashKeep[:])).Scan(&isRevoked)
+	err = db.QueryRow("SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hashKeep[:])).Scan(&isRevoked)
 	assert.NoError(t, err)
 	assert.False(t, isRevoked, "Other token for the same user should not be revoked")
 
@@ -215,17 +215,17 @@ func TestRevokeAllUserTokens(t *testing.T) {
 	hash1User1 := sha256.Sum256([]byte(token1User1))
 	hash2User1 := sha256.Sum256([]byte(token2User1))
 	var isRevoked1, isRevoked2 bool
-	err = db.QueryRow("SELECT is_revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hash1User1[:])).Scan(&isRevoked1)
+	err = db.QueryRow("SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hash1User1[:])).Scan(&isRevoked1)
 	assert.NoError(t, err)
 	assert.True(t, isRevoked1, "First token for user1 should be revoked")
-	err = db.QueryRow("SELECT is_revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hash2User1[:])).Scan(&isRevoked2)
+	err = db.QueryRow("SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hash2User1[:])).Scan(&isRevoked2)
 	assert.NoError(t, err)
 	assert.True(t, isRevoked2, "Second token for user1 should be revoked")
 
 	// Assert: Check status for user2's token (should NOT be revoked)
 	hash1User2 := sha256.Sum256([]byte(token1User2))
 	var isRevokedUser2 bool
-	err = db.QueryRow("SELECT is_revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hash1User2[:])).Scan(&isRevokedUser2)
+	err = db.QueryRow("SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hash1User2[:])).Scan(&isRevokedUser2)
 	assert.NoError(t, err)
 	assert.False(t, isRevokedUser2, "Token for user2 should not be revoked")
 }

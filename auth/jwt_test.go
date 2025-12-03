@@ -2,102 +2,61 @@ package auth
 
 import (
 	"crypto/ed25519"
-	"crypto/x509"
-	"encoding/pem"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/84adam/Arkfile/config" // Import config
+	"github.com/84adam/Arkfile/crypto"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 )
-
-// createTestJWTKeys creates Ed25519 keys for testing
-func createTestJWTKeys() error {
-	// Create test key directory
-	keyDir := "/tmp/test-arkfile-keys/jwt/current"
-	if err := os.MkdirAll(keyDir, 0755); err != nil {
-		return fmt.Errorf("failed to create test key directory: %w", err)
-	}
-
-	// Generate Ed25519 key pair
-	publicKey, privateKey, err := ed25519.GenerateKey(nil)
-	if err != nil {
-		return fmt.Errorf("failed to generate Ed25519 key pair: %w", err)
-	}
-
-	// Marshal private key to PKCS8 format
-	privateKeyBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
-	if err != nil {
-		return fmt.Errorf("failed to marshal private key: %w", err)
-	}
-
-	// Marshal public key to PKIX format
-	publicKeyBytes, err := x509.MarshalPKIXPublicKey(publicKey)
-	if err != nil {
-		return fmt.Errorf("failed to marshal public key: %w", err)
-	}
-
-	// Create PEM blocks
-	privateKeyPEM := &pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: privateKeyBytes,
-	}
-
-	publicKeyPEM := &pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: publicKeyBytes,
-	}
-
-	// Write private key
-	privateKeyFile := filepath.Join(keyDir, "signing.key")
-	privateFile, err := os.Create(privateKeyFile)
-	if err != nil {
-		return fmt.Errorf("failed to create private key file: %w", err)
-	}
-	defer privateFile.Close()
-
-	if err := pem.Encode(privateFile, privateKeyPEM); err != nil {
-		return fmt.Errorf("failed to encode private key PEM: %w", err)
-	}
-
-	// Write public key
-	publicKeyFile := filepath.Join(keyDir, "public.key")
-	publicFile, err := os.Create(publicKeyFile)
-	if err != nil {
-		return fmt.Errorf("failed to create public key file: %w", err)
-	}
-	defer publicFile.Close()
-
-	if err := pem.Encode(publicFile, publicKeyPEM); err != nil {
-		return fmt.Errorf("failed to encode public key PEM: %w", err)
-	}
-
-	// Set environment variables to point to test keys
-	os.Setenv("JWT_PRIVATE_KEY_PATH", privateKeyFile)
-	os.Setenv("JWT_PUBLIC_KEY_PATH", publicKeyFile)
-
-	return nil
-}
-
-// cleanupTestJWTKeys removes test keys and directories
-func cleanupTestJWTKeys() {
-	os.RemoveAll("/tmp/test-arkfile-keys")
-	os.Unsetenv("JWT_PRIVATE_KEY_PATH")
-	os.Unsetenv("JWT_PUBLIC_KEY_PATH")
-}
 
 // TestMain sets up necessary environment variables for config loading before running tests
 // and cleans them up afterwards.
 func TestMain(m *testing.M) {
 	// --- Test Config Setup ---
 	config.ResetConfigForTest()
+
+	// Setup in-memory SQLite DB for KeyManager
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		fmt.Printf("FATAL: Failed to open in-memory DB: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	// Create system_keys table
+	_, err = db.Exec(`
+		CREATE TABLE system_keys (
+			key_id TEXT PRIMARY KEY,
+			key_type TEXT NOT NULL,
+			encrypted_data BLOB NOT NULL,
+			nonce BLOB NOT NULL,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+	`)
+	if err != nil {
+		fmt.Printf("FATAL: Failed to create system_keys table: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Set Master Key for KeyManager
+	// 32 bytes hex encoded = 64 chars
+	masterKey := "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+	os.Setenv("ARKFILE_MASTER_KEY", masterKey)
+
+	// Initialize KeyManager
+	if err := crypto.InitKeyManager(db); err != nil {
+		fmt.Printf("FATAL: Failed to initialize KeyManager: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Store original env vars and set test values
 	originalEnv := map[string]string{}
@@ -107,19 +66,11 @@ func TestMain(m *testing.M) {
 		"MINIO_ROOT_PASSWORD":        "test-password-auth",
 		"LOCAL_STORAGE_PATH":         "/tmp/test-storage-auth", // Required for local storage
 		"JWT_TOKEN_LIFETIME_MINUTES": "1440",                   // Set to 24 hours for tests
-		// JWT keys will use default paths for test keys (created below)
 	}
 
 	for key, testValue := range testEnv {
 		originalEnv[key] = os.Getenv(key)
 		os.Setenv(key, testValue)
-	}
-
-	// Create test Ed25519 keys for testing
-	err := createTestJWTKeys()
-	if err != nil {
-		fmt.Printf("FATAL: Failed to create test JWT keys: %v\n", err)
-		os.Exit(1)
 	}
 
 	// Load config with test env vars
@@ -136,7 +87,7 @@ func TestMain(m *testing.M) {
 	exitCode := m.Run()
 
 	// --- Cleanup ---
-	cleanupTestJWTKeys()
+	os.Unsetenv("ARKFILE_MASTER_KEY")
 	for key, originalValue := range originalEnv {
 		if originalValue == "" {
 			os.Unsetenv(key)

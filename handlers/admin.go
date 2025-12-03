@@ -63,7 +63,6 @@ type AdminUserStatusResponse struct {
 type AdminUserInfo struct {
 	ID         int64     `json:"id"`
 	Username   string    `json:"username"`
-	Email      *string   `json:"email,omitempty"`
 	IsApproved bool      `json:"is_approved"`
 	IsAdmin    bool      `json:"is_admin"`
 	CreatedAt  time.Time `json:"created_at"`
@@ -353,7 +352,6 @@ func AdminGetUserStatus(c echo.Context) error {
 	adminUserInfo := &AdminUserInfo{
 		ID:         user.ID,
 		Username:   user.Username,
-		Email:      user.Email,
 		IsApproved: user.IsApproved,
 		IsAdmin:    user.IsAdmin,
 		CreatedAt:  user.CreatedAt,
@@ -679,7 +677,7 @@ func ListUsers(c echo.Context) error {
 
 	// Get all users except the current admin
 	rows, err := database.DB.Query(`
-		SELECT username, email, is_approved, is_admin, storage_limit_bytes, total_storage_bytes,
+		SELECT username, is_approved, is_admin, storage_limit_bytes, total_storage_bytes,
 		       registration_date, last_login
 		FROM users
 		ORDER BY registration_date DESC`)
@@ -695,13 +693,13 @@ func ListUsers(c echo.Context) error {
 
 	var users []map[string]interface{}
 	for rows.Next() {
-		var username, email sql.NullString
+		var username sql.NullString
 		var isApproved, isAdmin bool
 		var storageLimitBytes, totalStorageBytes int64
 		var registrationDate time.Time
 		var lastLogin sql.NullTime
 
-		err := rows.Scan(&username, &email, &isApproved, &isAdmin, &storageLimitBytes, &totalStorageBytes,
+		err := rows.Scan(&username, &isApproved, &isAdmin, &storageLimitBytes, &totalStorageBytes,
 			&registrationDate, &lastLogin)
 		if err != nil {
 			return JSONError(c, http.StatusInternalServerError, "Error processing user data", err.Error())
@@ -729,7 +727,6 @@ func ListUsers(c echo.Context) error {
 
 		user := map[string]interface{}{
 			"username":               username.String,
-			"email":                  email.String,
 			"is_approved":            isApproved,
 			"is_admin":               isAdmin,
 			"storage_limit_bytes":    storageLimitBytes,

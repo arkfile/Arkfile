@@ -29,7 +29,6 @@ type SecurityConfig struct {
 
 // EntityIDConfig configures privacy-preserving entity identification
 type EntityIDConfig struct {
-	MasterSecretPath  string        `json:"master_secret_path"`
 	RotationPeriod    time.Duration `json:"rotation_period"`    // 24 * time.Hour
 	RetentionDays     int           `json:"retention_days"`     // 90
 	CleanupInterval   time.Duration `json:"cleanup_interval"`   // 24 * time.Hour
@@ -138,7 +137,6 @@ type EndpointConfig struct {
 func GetDefaultSecurityConfig() SecurityConfig {
 	return SecurityConfig{
 		EntityID: EntityIDConfig{
-			MasterSecretPath:  "/opt/arkfile/etc/keys/entity_id/master.key",
 			RotationPeriod:    24 * time.Hour,
 			RetentionDays:     90,
 			CleanupInterval:   24 * time.Hour,
@@ -397,7 +395,6 @@ func ValidateSecurityConfig(config SecurityConfig) error {
 func ApplySecurityConfig(config SecurityConfig) error {
 	// Initialize entity ID service
 	if err := logging.InitializeEntityIDService(logging.EntityIDConfig{
-		MasterSecretPath:  config.EntityID.MasterSecretPath,
 		RotationPeriod:    config.EntityID.RotationPeriod,
 		RetentionDays:     config.EntityID.RetentionDays,
 		CleanupInterval:   config.EntityID.CleanupInterval,

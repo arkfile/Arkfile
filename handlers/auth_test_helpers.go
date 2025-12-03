@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/84adam/Arkfile/database"
+	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/storage"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/labstack/echo/v4"
@@ -14,6 +16,9 @@ import (
 
 // setupTestEnv creates a test environment with Echo context, response recorder, mock DB, and mock storage
 func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Context, *httptest.ResponseRecorder, sqlmock.Sqlmock, *storage.MockObjectStorageProvider) {
+	// Initialize loggers for testing
+	logging.InitFallbackConsoleLogging()
+
 	e := echo.New()
 	req := httptest.NewRequest(method, path, body)
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
@@ -25,7 +30,15 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 	if err != nil {
 		t.Fatalf("Failed to create mock database: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+
+	// Replace global DB with mock
+	originalDB := database.DB
+	database.DB = db
+
+	t.Cleanup(func() {
+		database.DB = originalDB
+		db.Close()
+	})
 
 	// Create mock storage
 	mockStorage := &storage.MockObjectStorageProvider{}
