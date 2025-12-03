@@ -43,18 +43,19 @@ func TestDownloadFile_Success(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Check if user is approved - add user query (matches models.GetUserByUsername)
-	getUserSQL := `SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
-	userRows := sqlmock.NewRows([]string{"id", "username", "email", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-		AddRow(1, username, "test@example.com", time.Now(), 1000, 10000000, true, nil, nil, false)
-	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
-
 	// Query matches models.GetFileByFileID function
-	metadataSQL := `SELECT id, file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date FROM file_metadata WHERE file_id = \?`
+	metadataSQL := `SELECT id, file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, upload_date FROM file_metadata WHERE file_id = \?`
 	storageID := "test-storage-id-123"
-	metaRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "password_hint", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "size_bytes", "upload_date"}).
-		AddRow(1, fileID, storageID, username, passwordHint, passwordType, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, fileSize, time.Now())
+	paddedSize := fileSize + 1024 // Mock padded size
+	metaRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "password_hint", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_file_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "upload_date"}).
+		AddRow(1, fileID, storageID, username, passwordHint, passwordType, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, "", "", fileSize, paddedSize, time.Now())
 	mockDB.ExpectQuery(metadataSQL).WithArgs(fileID).WillReturnRows(metaRows)
+
+	// Check if user is approved - add user query (matches models.GetUserByUsername)
+	getUserSQL := `SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
+	userRows := sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+		AddRow(1, username, time.Now(), 1000, 10000000, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
 	mockStorageObject := new(storage.MockMinioObject)
 	mockStorageObject.SetContent(fileContent)
@@ -69,17 +70,11 @@ func TestDownloadFile_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var resp map[string]interface{}
-	err = json.Unmarshal(rec.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	assert.Equal(t, fileContent, resp["data"])
-	assert.Equal(t, passwordHint, resp["passwordHint"])
-	assert.Equal(t, passwordType, resp["passwordType"])
-	// Check encrypted metadata fields are base64 encoded
-	assert.Equal(t, encryptedFilename, resp["encryptedFilename"])
-	assert.Equal(t, filenameNonce, resp["filenameNonce"])
-	assert.Equal(t, encryptedSha256sum, resp["encryptedSha256sum"])
-	assert.Equal(t, sha256sumNonce, resp["sha256sumNonce"])
+	// Verify file content
+	assert.Equal(t, fileContent, rec.Body.String())
+	assert.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"))
+	assert.Equal(t, fmt.Sprintf("attachment; filename=%s", fileID), rec.Header().Get("Content-Disposition"))
+	assert.Equal(t, fmt.Sprintf("%d", fileSize), rec.Header().Get("Content-Length"))
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 	mockStorage.AssertExpectations(t)
@@ -116,13 +111,13 @@ func TestDeleteFile_Success(t *testing.T) {
 	mockDB.ExpectExec(deleteMetaSQL).WithArgs(fileID).WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Query matches models.GetUserByUsername function
-	getUserSQL := `SELECT id, username, email, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
+	getUserSQL := `SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
 	userID := int64(1)
 	userRows := sqlmock.NewRows([]string{
-		"id", "username", "email", "created_at",
+		"id", "username", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, username, "test@example.com", time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
 	updateStorageSQL := `UPDATE users SET total_storage_bytes = \? WHERE id = \?`

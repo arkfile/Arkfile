@@ -8,7 +8,6 @@
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
-    email TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     total_storage_bytes BIGINT NOT NULL DEFAULT 0,
     storage_limit_bytes BIGINT NOT NULL DEFAULT 10737418240,
@@ -374,7 +373,6 @@ CREATE TABLE IF NOT EXISTS credit_transactions (
 
 -- Core table indexes
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_is_approved ON users(is_approved);
 CREATE INDEX IF NOT EXISTS idx_users_is_admin ON users(is_admin);
 

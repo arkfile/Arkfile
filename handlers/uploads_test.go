@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -25,7 +24,7 @@ import (
 
 // TestUploadFile_Success tests successful file upload
 func TestUploadFile_Success(t *testing.T) {
-	email := "uploader@example.com"
+	username := "uploader"
 	fileData := "This is the test file content."
 	passwordHint := "test hint"
 	passwordType := "account" // or "custom"
@@ -35,13 +34,13 @@ func TestUploadFile_Success(t *testing.T) {
 
 	// Create request body with encrypted metadata (mocked for testing)
 	reqBodyMap := map[string]string{
-		"data":               fileData,
-		"passwordHint":       passwordHint,
-		"passwordType":       passwordType,
-		"encryptedFilename":  "ZW5jcnlwdGVkX215LXRlc3QtZmlsZS5kYXQ=", // base64 encoded mock
-		"filenameNonce":      "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
-		"encryptedSha256sum": "ZW5jcnlwdGVkX2YyY2ExYmI2Yzc=",         // base64 encoded mock
-		"sha256sumNonce":     "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
+		"data":                fileData,
+		"password_hint":       passwordHint,
+		"password_type":       passwordType,
+		"encrypted_filename":  "ZW5jcnlwdGVkX215LXRlc3QtZmlsZS5kYXQ=", // base64 encoded mock
+		"filename_nonce":      "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
+		"encrypted_sha256sum": "ZW5jcnlwdGVkX2YyY2ExYmI2Yzc=",         // base64 encoded mock
+		"sha256sum_nonce":     "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
 	}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
@@ -49,24 +48,24 @@ func TestUploadFile_Success(t *testing.T) {
 	c, rec, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody)) // Assuming POST /files is the route
 
 	// Add Authentication context
-	claims := &auth.Claims{Username: email}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// --- Mock GetUserByUsername (for storage check) ---
 	// Uses the *non-transactional* GetUserByUsername outside the transaction
 	getUserSQL := `
-		SELECT id, username, email, created_at,
+		SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`
 	userID := int64(5) // Assume some user ID
 	userRows := sqlmock.NewRows([]string{
-		"id", "username", "email", "created_at",
+		"id", "username", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, sql.NullString{}, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
-	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations (Order based on handler logic) ---
 	mockDB.ExpectBegin()
@@ -91,7 +90,7 @@ func TestUploadFile_Success(t *testing.T) {
 	// 2. Expect Metadata Insertion (after PutObject) - updated for encrypted metadata schema
 	insertMetaSQL := `INSERT INTO file_metadata \(file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), email, passwordHint, passwordType, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), fileSize, sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), username, passwordHint, passwordType, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), fileSize, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// 3. Expect Storage Usage Update (inside user.UpdateStorageUsage)
@@ -105,7 +104,7 @@ func TestUploadFile_Success(t *testing.T) {
 
 	// --- Mock LogUserAction (after commit) - now uses file_id instead of filename
 	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
-	mockDB.ExpectExec(logActionSQL).WithArgs(email, "uploaded", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+	mockDB.ExpectExec(logActionSQL).WithArgs(username, "uploaded", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// --- Execute Handler ---
 	err := UploadFile(c)
@@ -135,7 +134,7 @@ func TestUploadFile_Success(t *testing.T) {
 
 // TestUploadFile_StorageLimitExceeded tests attempting to upload when storage is insufficient
 func TestUploadFile_StorageLimitExceeded(t *testing.T) {
-	email := "limit-exceeder@example.com"
+	username := "limit-exceeder"
 	fileData := "Some data"
 	fileSize := int64(len(fileData)) // e.g., 9 bytes
 	// Set initial storage to be very close to the limit
@@ -143,13 +142,13 @@ func TestUploadFile_StorageLimitExceeded(t *testing.T) {
 	// Uploading fileSize (9 bytes) would exceed the limit (10GB)
 
 	reqBodyMap := map[string]string{
-		"data":               fileData,
-		"passwordHint":       "hint",
-		"passwordType":       "account",
-		"encryptedFilename":  "ZW5jcnlwdGVkX3Rvby1iaWctZmlsZS5kYXQ=", // base64 encoded mock
-		"filenameNonce":      "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
-		"encryptedSha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",     // base64 encoded mock
-		"sha256sumNonce":     "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
+		"data":                fileData,
+		"password_hint":       "hint",
+		"password_type":       "account",
+		"encrypted_filename":  "ZW5jcnlwdGVkX3Rvby1iaWctZmlsZS5kYXQ=", // base64 encoded mock
+		"filename_nonce":      "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
+		"encrypted_sha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",     // base64 encoded mock
+		"sha256sum_nonce":     "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
 	}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
@@ -157,23 +156,23 @@ func TestUploadFile_StorageLimitExceeded(t *testing.T) {
 	c, _, mockDB, _ := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody)) // Storage mock not used here
 
 	// Add Authentication context
-	claims := &auth.Claims{Username: email}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// --- Mock GetUserByUsername (for storage check) ---
 	getUserSQL := `
-		SELECT id, username, email, created_at,
+		SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`
 	userID := int64(6)
 	userRows := sqlmock.NewRows([]string{
-		"id", "username", "email", "created_at",
+		"id", "username", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, sql.NullString{}, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
-	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
 	// Handler should check storage and fail BEFORE starting transaction or calling storage
 
@@ -194,19 +193,19 @@ func TestUploadFile_StorageLimitExceeded(t *testing.T) {
 
 // TestUploadFile_StoragePutError tests failure during storage PutObject
 func TestUploadFile_StoragePutError(t *testing.T) {
-	email := "uploader-stor-err@example.com"
+	username := "uploader-stor-err"
 	fileData := "This data won't make it."
 	fileSize := int64(len(fileData))
 	initialStorage := int64(0)
 
 	reqBodyMap := map[string]string{
-		"data":               fileData,
-		"passwordHint":       "hint",
-		"passwordType":       "account",
-		"encryptedFilename":  "ZW5jcnlwdGVkX2ZhaWwtb24tcHV0LmRhdA==", // base64 encoded mock
-		"filenameNonce":      "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
-		"encryptedSha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",     // base64 encoded mock
-		"sha256sumNonce":     "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
+		"data":                fileData,
+		"password_hint":       "hint",
+		"password_type":       "account",
+		"encrypted_filename":  "ZW5jcnlwdGVkX2ZhaWwtb24tcHV0LmRhdA==", // base64 encoded mock
+		"filename_nonce":      "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
+		"encrypted_sha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",     // base64 encoded mock
+		"sha256sum_nonce":     "YWJjZGVmZ2hpams=",                     // base64 encoded 12-byte mock nonce
 	}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
@@ -214,23 +213,23 @@ func TestUploadFile_StoragePutError(t *testing.T) {
 	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody))
 
 	// Add Authentication context
-	claims := &auth.Claims{Username: email}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// --- Mock GetUserByUsername (for storage check) ---
 	getUserSQL := `
-		SELECT id, username, email, created_at,
+		SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`
 	userID := int64(7)
 	userRows := sqlmock.NewRows([]string{
-		"id", "username", "email", "created_at",
+		"id", "username", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, sql.NullString{}, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
-	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations ---
 	mockDB.ExpectBegin()
@@ -267,19 +266,19 @@ func TestUploadFile_StoragePutError(t *testing.T) {
 
 // TestUploadFile_MetadataInsertError tests failure during DB metadata insertion
 func TestUploadFile_MetadataInsertError(t *testing.T) {
-	email := "uploader-meta-err@example.com"
+	username := "uploader-meta-err"
 	fileData := "This data makes it to storage, but not DB."
 	fileSize := int64(len(fileData))
 	initialStorage := int64(0)
 
 	reqBodyMap := map[string]string{
-		"data":               fileData,
-		"passwordHint":       "hint",
-		"passwordType":       "account",
-		"encryptedFilename":  "ZW5jcnlwdGVkX2ZhaWwtb24tbWV0YS1pbnNlcnQuZGF0", // base64 encoded mock
-		"filenameNonce":      "YWJjZGVmZ2hpams=",                             // base64 encoded 12-byte mock nonce
-		"encryptedSha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",             // base64 encoded mock
-		"sha256sumNonce":     "YWJjZGVmZ2hpams=",                             // base64 encoded 12-byte mock nonce
+		"data":                fileData,
+		"password_hint":       "hint",
+		"password_type":       "account",
+		"encrypted_filename":  "ZW5jcnlwdGVkX2ZhaWwtb24tbWV0YS1pbnNlcnQuZGF0", // base64 encoded mock
+		"filename_nonce":      "YWJjZGVmZ2hpams=",                             // base64 encoded 12-byte mock nonce
+		"encrypted_sha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",             // base64 encoded mock
+		"sha256sum_nonce":     "YWJjZGVmZ2hpams=",                             // base64 encoded 12-byte mock nonce
 	}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
@@ -287,23 +286,23 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody))
 
 	// Add Authentication context
-	claims := &auth.Claims{Username: email}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// --- Mock GetUserByUsername (for storage check) ---
 	getUserSQL := `
-		SELECT id, username, email, created_at,
+		SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`
 	userID := int64(8)
 	userRows := sqlmock.NewRows([]string{
-		"id", "username", "email", "created_at",
+		"id", "username", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, sql.NullString{}, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
-	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations ---
 	mockDB.ExpectBegin()
@@ -317,7 +316,7 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 	dbError := fmt.Errorf("simulated DB metadata insert error")
 	insertMetaSQL := `INSERT INTO file_metadata \(file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), email, "hint", "account", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), fileSize, sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), username, "hint", "account", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), fileSize, sqlmock.AnyArg()).
 		WillReturnError(dbError)
 
 	// 3. Expect Storage Cleanup (RemoveObject) because metadata insert failed
@@ -346,19 +345,19 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 
 // TestUploadFile_UpdateStorageError tests failure during DB user storage update
 func TestUploadFile_UpdateStorageError(t *testing.T) {
-	email := "uploader-upd-stor-err@example.com"
+	username := "uploader-upd-stor-err"
 	fileData := "This data is in storage & meta, but user total is wrong."
 	fileSize := int64(len(fileData))
 	initialStorage := int64(0)
 
 	reqBodyMap := map[string]string{
-		"data":               fileData,
-		"passwordHint":       "hint",
-		"passwordType":       "account",
-		"encryptedFilename":  "ZW5jcnlwdGVkX2ZhaWwtb24tdXBkYXRlLXN0b3JhZ2UuZGF0", // base64 encoded mock
-		"filenameNonce":      "YWJjZGVmZ2hpams=",                                 // base64 encoded 12-byte mock nonce
-		"encryptedSha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",                 // base64 encoded mock
-		"sha256sumNonce":     "YWJjZGVmZ2hpams=",                                 // base64 encoded 12-byte mock nonce
+		"data":                fileData,
+		"password_hint":       "hint",
+		"password_type":       "account",
+		"encrypted_filename":  "ZW5jcnlwdGVkX2ZhaWwtb24tdXBkYXRlLXN0b3JhZ2UuZGF0", // base64 encoded mock
+		"filename_nonce":      "YWJjZGVmZ2hpams=",                                 // base64 encoded 12-byte mock nonce
+		"encrypted_sha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",                 // base64 encoded mock
+		"sha256sum_nonce":     "YWJjZGVmZ2hpams=",                                 // base64 encoded 12-byte mock nonce
 	}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
@@ -366,23 +365,23 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody))
 
 	// Add Authentication context
-	claims := &auth.Claims{Username: email}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// --- Mock GetUserByUsername (for storage check) ---
 	getUserSQL := `
-		SELECT id, username, email, created_at,
+		SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`
 	userID := int64(9)
 	userRows := sqlmock.NewRows([]string{
-		"id", "username", "email", "created_at",
+		"id", "username", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, sql.NullString{}, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
-	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations ---
 	mockDB.ExpectBegin()
@@ -399,7 +398,7 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	// 2. Expect Metadata Insertion to SUCCEED - updated for encrypted metadata schema
 	insertMetaSQL := `INSERT INTO file_metadata \(file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), email, "hint", "account", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), fileSize, sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), username, "hint", "account", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), fileSize, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// 3. Expect Storage Usage Update to FAIL
@@ -493,20 +492,20 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 
 // TestUploadFile_CommitError tests failure during the final DB transaction commit
 func TestUploadFile_CommitError(t *testing.T) {
-	email := "uploader-commit-err@example.com"
+	username := "uploader-commit-err"
 	fileData := "This data is almost committed."
 	fileSize := int64(len(fileData))
 	initialStorage := int64(0)
 	expectedFinalStorage := initialStorage + fileSize
 
 	reqBodyMap := map[string]string{
-		"data":               fileData,
-		"passwordHint":       "hint",
-		"passwordType":       "account",
-		"encryptedFilename":  "ZW5jcnlwdGVkX2ZhaWwtb24tY29tbWl0LmRhdA==", // base64 encoded mock
-		"filenameNonce":      "YWJjZGVmZ2hpams=",                         // base64 encoded 12-byte mock nonce
-		"encryptedSha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",         // base64 encoded mock
-		"sha256sumNonce":     "YWJjZGVmZ2hpams=",                         // base64 encoded 12-byte mock nonce
+		"data":                fileData,
+		"password_hint":       "hint",
+		"password_type":       "account",
+		"encrypted_filename":  "ZW5jcnlwdGVkX2ZhaWwtb24tY29tbWl0LmRhdA==", // base64 encoded mock
+		"filename_nonce":      "YWJjZGVmZ2hpams=",                         // base64 encoded 12-byte mock nonce
+		"encrypted_sha256sum": "ZW5jcnlwdGVkX2FhYWFhYWFhYWFhYQ==",         // base64 encoded mock
+		"sha256sum_nonce":     "YWJjZGVmZ2hpams=",                         // base64 encoded 12-byte mock nonce
 	}
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
@@ -514,23 +513,23 @@ func TestUploadFile_CommitError(t *testing.T) {
 	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody))
 
 	// Add Authentication context
-	claims := &auth.Claims{Username: email}
+	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
 	// --- Mock GetUserByUsername (for storage check) ---
 	getUserSQL := `
-		SELECT id, username, email, created_at,
+		SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
 		FROM users WHERE username = ?`
 	userID := int64(10)
 	userRows := sqlmock.NewRows([]string{
-		"id", "username", "email", "created_at",
+		"id", "username", "created_at",
 		"total_storage_bytes", "storage_limit_bytes",
 		"is_approved", "approved_by", "approved_at", "is_admin",
-	}).AddRow(userID, email, sql.NullString{}, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
-	mockDB.ExpectQuery(getUserSQL).WithArgs(email).WillReturnRows(userRows)
+	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
 	// --- Transactional and Storage Expectations ---
 	mockDB.ExpectBegin()
@@ -543,7 +542,7 @@ func TestUploadFile_CommitError(t *testing.T) {
 	// 2. Expect Metadata Insertion to SUCCEED - updated for encrypted metadata schema
 	insertMetaSQL := `INSERT INTO file_metadata \(file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?, \?, \?, \?\)`
 	mockDB.ExpectExec(insertMetaSQL).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), email, "hint", "account", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), fileSize, sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), username, "hint", "account", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), fileSize, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// 3. Expect Storage Usage Update to SUCCEED

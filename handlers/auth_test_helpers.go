@@ -43,6 +43,14 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 	// Create mock storage
 	mockStorage := &storage.MockObjectStorageProvider{}
 
+	// Replace global storage provider with mock
+	originalStorage := storage.Provider
+	storage.Provider = mockStorage
+
+	t.Cleanup(func() {
+		storage.Provider = originalStorage
+	})
+
 	return c, rec, mock, mockStorage
 }
 

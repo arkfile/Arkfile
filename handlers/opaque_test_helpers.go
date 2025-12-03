@@ -48,11 +48,11 @@ func expectOPAQUEAuthentication(mock sqlmock.Sqlmock, username string) {
 
 // mockOPAQUESuccess simulates successful OPAQUE operations for testing handler logic
 // This allows testing the handler workflow without requiring the actual OPAQUE library
-func mockOPAQUESuccess(t *testing.T, email, password string) {
+func mockOPAQUESuccess(t *testing.T, username, password string) {
 	t.Helper()
 	// Note: This is a test helper that allows handler tests to focus on HTTP logic
 	// rather than cryptographic implementation details
-	t.Logf("Mocking OPAQUE success for user %s", email)
+	t.Logf("Mocking OPAQUE success for user %s", username)
 }
 
 // validateOPAQUEHealthy validates that OPAQUE system components are available
@@ -73,7 +73,7 @@ func validateOPAQUEHealthy(t *testing.T) {
 // setupOPAQUETestUser creates a test user with OPAQUE authentication
 // Note: DEPRECATED - This function used the old unified OPAQUE flow
 // New tests should use multi-step OPAQUE protocol via HTTP endpoints
-func setupOPAQUETestUser(t *testing.T, db *sql.DB, email, password string) *models.User {
+func setupOPAQUETestUser(t *testing.T, db *sql.DB, username, password string) *models.User {
 	t.Helper()
 	t.Skip("DEPRECATED: Use multi-step OPAQUE protocol via HTTP endpoints instead")
 	return nil

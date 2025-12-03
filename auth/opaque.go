@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/84adam/Arkfile/crypto"
@@ -40,53 +41,66 @@ type OPAQUEServerKeys struct {
 }
 
 // serverKeys holds the loaded server keys for reuse
-var serverKeys *OPAQUEServerKeys
+var (
+	serverKeys     *OPAQUEServerKeys
+	opaqueKeysOnce sync.Once
+	opaqueKeysErr  error
+)
 
-// SetupServerKeys generates and stores server key material if it doesn't already exist
+// SetupServerKeys generates and stores server key material if it doesn't already exist.
+// This function is safe for multi-instance deployments - it uses sync.Once to ensure
+// only one goroutine per instance attempts key generation, and handles INSERT conflicts
+// gracefully when multiple instances race to create keys.
 func SetupServerKeys(db *sql.DB) error {
-	km, err := crypto.GetKeyManager()
-	if err != nil {
-		return fmt.Errorf("failed to get KeyManager: %w", err)
-	}
+	opaqueKeysOnce.Do(func() {
+		km, err := crypto.GetKeyManager()
+		if err != nil {
+			opaqueKeysErr = fmt.Errorf("failed to get KeyManager: %w", err)
+			return
+		}
 
-	// libsodium constants (32 bytes each)
-	const (
-		serverPrivateKeySize = 32 // crypto_scalarmult_SCALARBYTES
-		serverPublicKeySize  = 32 // crypto_scalarmult_BYTES
-		oprfSeedSize         = 32 // crypto_core_ristretto255_SCALARBYTES
-	)
+		// libsodium constants (32 bytes each)
+		const (
+			serverPrivateKeySize = 32 // crypto_scalarmult_SCALARBYTES
+			serverPublicKeySize  = 32 // crypto_scalarmult_BYTES
+			oprfSeedSize         = 32 // crypto_core_ristretto255_SCALARBYTES
+		)
 
-	// Get or generate keys using KeyManager
-	// Note: In a real OPAQUE implementation, public key should be derived from private key.
-	// However, preserving existing behavior of independent generation for now.
+		// Get or generate keys using KeyManager
+		// Note: In a real OPAQUE implementation, public key should be derived from private key.
+		// However, preserving existing behavior of independent generation for now.
 
-	serverPrivateKey, err := km.GetOrGenerateKey("opaque_server_private_key", "opaque", serverPrivateKeySize)
-	if err != nil {
-		return fmt.Errorf("failed to get/generate opaque server private key: %w", err)
-	}
+		serverPrivateKey, err := km.GetOrGenerateKey("opaque_server_private_key", "opaque", serverPrivateKeySize)
+		if err != nil {
+			opaqueKeysErr = fmt.Errorf("failed to get/generate opaque server private key: %w", err)
+			return
+		}
 
-	serverPublicKey, err := km.GetOrGenerateKey("opaque_server_public_key", "opaque", serverPublicKeySize)
-	if err != nil {
-		return fmt.Errorf("failed to get/generate opaque server public key: %w", err)
-	}
+		serverPublicKey, err := km.GetOrGenerateKey("opaque_server_public_key", "opaque", serverPublicKeySize)
+		if err != nil {
+			opaqueKeysErr = fmt.Errorf("failed to get/generate opaque server public key: %w", err)
+			return
+		}
 
-	oprfSeed, err := km.GetOrGenerateKey("opaque_oprf_seed", "opaque", oprfSeedSize)
-	if err != nil {
-		return fmt.Errorf("failed to get/generate opaque oprf seed: %w", err)
-	}
+		oprfSeed, err := km.GetOrGenerateKey("opaque_oprf_seed", "opaque", oprfSeedSize)
+		if err != nil {
+			opaqueKeysErr = fmt.Errorf("failed to get/generate opaque oprf seed: %w", err)
+			return
+		}
 
-	serverKeys = &OPAQUEServerKeys{
-		ServerPrivateKey: serverPrivateKey,
-		ServerPublicKey:  serverPublicKey,
-		OPRFSeed:         oprfSeed,
-		CreatedAt:        time.Now(),
-	}
+		serverKeys = &OPAQUEServerKeys{
+			ServerPrivateKey: serverPrivateKey,
+			ServerPublicKey:  serverPublicKey,
+			OPRFSeed:         oprfSeed,
+			CreatedAt:        time.Now(),
+		}
 
-	if logging.InfoLogger != nil {
-		logging.InfoLogger.Println("Loaded OPAQUE server keys into memory")
-	}
+		if logging.InfoLogger != nil {
+			logging.InfoLogger.Println("Loaded OPAQUE server keys into memory")
+		}
+	})
 
-	return nil
+	return opaqueKeysErr
 }
 
 // storeOPAQUEUserData stores user data with hex encoding for database compatibility

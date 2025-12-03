@@ -128,41 +128,68 @@ func (km *KeyManager) DecryptSystemKey(encryptedKey, nonce []byte, keyType strin
 }
 
 // GetOrGenerateKey retrieves a key from the DB or generates/stores it if missing.
+// This function is safe for concurrent access across multiple instances. It uses
+// database transactions to ensure only one instance generates a key during initial
+// deployment, preventing race conditions in multi-instance scenarios.
+//
 // keyID: Unique identifier for the key (e.g., "jwt_signing_key_v1")
 // keyType: Type of key for derivation context (e.g., "jwt", "totp")
 // keySize: Size of key to generate if missing
 func (km *KeyManager) GetOrGenerateKey(keyID string, keyType string, keySize int) ([]byte, error) {
-	// 1. Try to fetch from DB
+	// 1. Try to fetch from DB (fast path, no lock needed)
 	var encryptedData, nonce []byte
 	err := km.db.QueryRow("SELECT encrypted_data, nonce FROM system_keys WHERE key_id = ?", keyID).Scan(&encryptedData, &nonce)
 
 	if err == nil {
-		// Key found, decrypt it
+		// Key found, decrypt and return it
 		return km.DecryptSystemKey(encryptedData, nonce, keyType)
 	} else if err != sql.ErrNoRows {
 		// Database error
 		return nil, fmt.Errorf("failed to query system_keys: %w", err)
 	}
 
-	// 2. Key not found, generate new one
+	// 2. Key not found - use transaction to acquire exclusive lock
+	// This prevents multiple instances from generating different keys simultaneously
+	tx, err := km.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 3. Check again within transaction (another instance may have created it while we waited)
+	err = tx.QueryRow("SELECT encrypted_data, nonce FROM system_keys WHERE key_id = ?", keyID).Scan(&encryptedData, &nonce)
+	if err == nil {
+		// Key was created by another instance while we waited for the lock
+		tx.Rollback()
+		return km.DecryptSystemKey(encryptedData, nonce, keyType)
+	} else if err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to query system_keys in transaction: %w", err)
+	}
+
+	// 4. We have the lock and key still doesn't exist - generate it
 	rawKey := make([]byte, keySize)
 	if _, err := io.ReadFull(rand.Reader, rawKey); err != nil {
 		return nil, fmt.Errorf("failed to generate random key: %w", err)
 	}
 
-	// 3. Encrypt it
+	// 5. Encrypt the key
 	encryptedData, nonce, err = km.EncryptSystemKey(rawKey, keyType)
 	if err != nil {
 		return nil, err
 	}
 
-	// 4. Store in DB
-	_, err = km.db.Exec(
+	// 6. Insert the key within the transaction
+	_, err = tx.Exec(
 		"INSERT INTO system_keys (key_id, key_type, encrypted_data, nonce) VALUES (?, ?, ?, ?)",
 		keyID, keyType, encryptedData, nonce,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to store system key: %w", err)
+		return nil, fmt.Errorf("failed to insert key: %w", err)
+	}
+
+	// 7. Commit transaction (releases lock)
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return rawKey, nil

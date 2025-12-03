@@ -2,6 +2,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -16,6 +17,10 @@ import (
 // Bootstrap mode is enabled when:
 // 1. No ACTIVE admin users exist (users with last_login set), OR
 // 2. ARKFILE_FORCE_ADMIN_BOOTSTRAP environment variable is set to "true"
+//
+// This function is safe for multi-instance deployments - it checks if a bootstrap
+// token already exists before generating a new one, preventing multiple tokens
+// from being logged to different container stdout streams.
 func CheckAndGenerateBootstrapToken(db *sql.DB) error {
 	// Check for force bootstrap override
 	forceBootstrap := strings.ToLower(os.Getenv("ARKFILE_FORCE_ADMIN_BOOTSTRAP")) == "true"
@@ -32,6 +37,18 @@ func CheckAndGenerateBootstrapToken(db *sql.DB) error {
 	km, err := crypto.GetKeyManager()
 	if err != nil {
 		return fmt.Errorf("failed to get key manager: %w", err)
+	}
+
+	// Check if bootstrap token already exists (prevents race condition in multi-instance deployments)
+	existingToken, err := km.GetKey("bootstrap_token", "bootstrap")
+	if err == nil && len(existingToken) > 0 {
+		// Token already exists
+		if !forceBootstrap {
+			log.Printf("[BOOTSTRAP] Bootstrap token already exists. Use ARKFILE_FORCE_ADMIN_BOOTSTRAP=true to regenerate.")
+			return nil
+		}
+		// Force bootstrap requested, will regenerate below
+		log.Printf("[BOOTSTRAP] Force bootstrap enabled - regenerating token")
 	}
 
 	// Only generate token if no active admins OR force flag is set
@@ -52,7 +69,7 @@ func CheckAndGenerateBootstrapToken(db *sql.DB) error {
 		return fmt.Errorf("failed to generate bootstrap token: %w", err)
 	}
 
-	// Store in system_keys
+	// Store in system_keys (REPLACE INTO ensures database-level atomicity)
 	if err := km.StoreKey("bootstrap_token", "bootstrap", token); err != nil {
 		return fmt.Errorf("failed to store bootstrap token: %w", err)
 	}
@@ -69,6 +86,7 @@ func CheckAndGenerateBootstrapToken(db *sql.DB) error {
 }
 
 // ValidateBootstrapToken checks if the provided token matches the stored bootstrap token.
+// Uses constant-time comparison to prevent timing attacks.
 func ValidateBootstrapToken(tokenHex string) (bool, error) {
 	km, err := crypto.GetKeyManager()
 	if err != nil {
@@ -86,18 +104,10 @@ func ValidateBootstrapToken(tokenHex string) (bool, error) {
 		return false, nil // Invalid hex
 	}
 
-	// Constant time comparison would be better, but for a 32-byte random token,
-	// timing attacks are less of a concern than for passwords.
-	// Still, let's use a simple byte comparison.
-	if len(storedToken) != len(providedToken) {
-		return false, nil
+	// Use constant-time comparison to prevent timing attacks
+	if subtle.ConstantTimeCompare(storedToken, providedToken) == 1 {
+		return true, nil
 	}
 
-	for i := range storedToken {
-		if storedToken[i] != providedToken[i] {
-			return false, nil
-		}
-	}
-
-	return true, nil
+	return false, nil
 }

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -45,7 +46,15 @@ func DownloadFile(c echo.Context) error {
 	}
 
 	// Get the complete file from storage using storage_id
-	reader, err := storage.Provider.GetObject(c.Request().Context(), file.StorageID, minio.GetObjectOptions{})
+	// Handle padded files if necessary
+	var reader io.ReadCloser
+
+	if file.PaddedSize.Valid && file.PaddedSize.Int64 > file.SizeBytes {
+		reader, err = storage.Provider.GetObjectWithoutPadding(c.Request().Context(), file.StorageID, file.SizeBytes, minio.GetObjectOptions{})
+	} else {
+		reader, err = storage.Provider.GetObject(c.Request().Context(), file.StorageID, minio.GetObjectOptions{})
+	}
+
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get file %s (storage_id: %s) from storage provider: %v", fileID, file.StorageID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file from storage")

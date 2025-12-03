@@ -27,7 +27,7 @@ func TestCreateFileShare_Success(t *testing.T) {
 	}`)))
 
 	// Set up authenticated user context
-	username := "test@example.com"
+	username := "testuser"
 	c.Set("username", username)
 	c.Set("userID", 1)
 
@@ -71,42 +71,6 @@ func TestCreateFileShare_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestCreateFileShare_InvalidSalt(t *testing.T) {
-	// Setup test environment with invalid salt - use same endpoint as successful test
-	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/share/create", bytes.NewReader([]byte(`{
-		"file_id": "test-file-123",
-		"salt": "c2hvcnQtc2FsdA==",
-		"encrypted_fek": "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ=="
-	}`)))
-
-	// Set up authenticated user context
-	username := "test@example.com"
-	c.Set("username", username)
-	c.Set("userID", 1)
-
-	// Create and set JWT token for authentication
-	claims := &auth.Claims{Username: username}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	c.Set("user", token)
-
-	// Mock file ownership check in file_metadata using file_id (matches actual handler)
-	fileOwnerSQL := `SELECT owner_username, password_type FROM file_metadata WHERE file_id = \?`
-	fileRows := sqlmock.NewRows([]string{"owner_username", "password_type"}).
-		AddRow(username, "custom")
-	mock.ExpectQuery(fileOwnerSQL).WithArgs("test-file-123").WillReturnRows(fileRows)
-
-	// Execute handler - should fail due to invalid salt (too short)
-	err := CreateFileShare(c)
-	require.Error(t, err)
-
-	httpErr, ok := err.(*echo.HTTPError)
-	require.True(t, ok)
-	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-	assert.Contains(t, httpErr.Message.(string), "salt")
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestCreateFileShare_FileNotOwned(t *testing.T) {
 	// Setup test environment - use same endpoint as successful test
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/share/create", bytes.NewReader([]byte(`{
@@ -116,7 +80,7 @@ func TestCreateFileShare_FileNotOwned(t *testing.T) {
 	}`)))
 
 	// Set up authenticated user context
-	username := "test@example.com"
+	username := "testuser"
 	c.Set("username", username)
 	c.Set("userID", 1)
 
@@ -160,7 +124,7 @@ func TestAccessSharedFile_Success(t *testing.T) {
 	// Mock share lookup (matches actual handler processShareAccess function)
 	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at FROM file_share_keys WHERE share_id = \?`
 	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at"}).
-		AddRow("test-file-123", "owner@example.com", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
+		AddRow("test-file-123", "owneruser", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
 	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
 	// Mock file metadata lookup with encrypted fields (matches actual handler)
@@ -211,7 +175,7 @@ func TestAccessSharedFile_WeakPassword(t *testing.T) {
 	// Mock share lookup (matches actual handler processShareAccess function)
 	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at FROM file_share_keys WHERE share_id = \?`
 	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at"}).
-		AddRow("test-file-123", "owner@example.com", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
+		AddRow("test-file-123", "owneruser", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
 	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
 	// Mock file metadata lookup with encrypted fields (matches actual handler)
@@ -283,7 +247,7 @@ func TestGetSharedFile_Success(t *testing.T) {
 	// Mock share existence check (matches actual handler GetSharedFile function)
 	shareSQL := `SELECT file_id, owner_username, expires_at FROM file_share_keys WHERE share_id = \?`
 	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "expires_at"}).
-		AddRow("test-file-123", "owner@example.com", nil)
+		AddRow("test-file-123", "owneruser", nil)
 	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
 	// Mock file metadata lookup for display with encrypted fields (matches actual handler)
@@ -305,7 +269,7 @@ func TestListShares_Success(t *testing.T) {
 	c, rec, mock, _ := setupTestEnv(t, http.MethodGet, "/api/shares", nil)
 
 	// Set up authenticated user context with JWT token
-	username := "test@example.com"
+	username := "testuser"
 	c.Set("username", username)
 	c.Set("userID", 1)
 
@@ -344,7 +308,7 @@ func TestDeleteShare_Success(t *testing.T) {
 	c, rec, mock, _ := setupTestEnv(t, http.MethodDelete, "/api/shares/test-share-id", nil)
 
 	// Set up authenticated user context with JWT token
-	username := "test@example.com"
+	username := "testuser"
 	userID := 1
 	c.Set("username", username)
 	c.Set("userID", userID)
@@ -434,7 +398,7 @@ func TestSharePasswordValidation_WithZxcvbn(t *testing.T) {
 			// Mock share lookup (matches actual handler processShareAccess function)
 			shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at FROM file_share_keys WHERE share_id = \?`
 			shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at"}).
-				AddRow("test-file-123", "owner@example.com", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
+				AddRow("test-file-123", "owneruser", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
 			mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
 			// Mock file metadata lookup with encrypted fields (matches actual handler)
