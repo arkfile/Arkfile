@@ -11,13 +11,13 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
-	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/models"
+	"github.com/84adam/Arkfile/storage"
 )
 
 // --- Test UploadFile ---
@@ -77,14 +77,14 @@ func TestUploadFile_Success(t *testing.T) {
 		mock.AnythingOfType("*strings.Reader"), // Handler wraps data
 		fileSize,
 		mock.AnythingOfType("int64"), // padded size
-		mock.AnythingOfType("minio.PutObjectOptions"),
-	).Return(minio.UploadInfo{}, nil).Once() // Simulate successful upload
+		mock.AnythingOfType("storage.PutObjectOptions"),
+	).Return(storage.UploadInfo{}, nil).Once() // Simulate successful upload
 
 	// Add RemoveObject expectation in case metadata insertion fails
 	mockStorage.On("RemoveObject",
 		mock.Anything,                 // context
 		mock.AnythingOfType("string"), // storage ID (UUID)
-		mock.AnythingOfType("minio.RemoveObjectOptions"),
+		mock.AnythingOfType("storage.RemoveObjectOptions"),
 	).Return(nil).Maybe() // Use Maybe() since it should not be called in success case
 
 	// 2. Expect Metadata Insertion (after PutObject) - updated for encrypted metadata schema
@@ -242,8 +242,8 @@ func TestUploadFile_StoragePutError(t *testing.T) {
 		mock.AnythingOfType("*strings.Reader"),
 		fileSize,
 		mock.AnythingOfType("int64"), // padded size
-		mock.AnythingOfType("minio.PutObjectOptions"),
-	).Return(minio.UploadInfo{}, storageError).Once() // Return the error
+		mock.AnythingOfType("storage.PutObjectOptions"),
+	).Return(storage.UploadInfo{}, storageError).Once() // Return the error
 
 	// 2. Expect Rollback because PutObject failed
 	mockDB.ExpectRollback()
@@ -309,8 +309,8 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 
 	// 1. Expect PutObjectWithPadding call to SUCCEED
 	mockStorage.On("PutObjectWithPadding",
-		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("int64"), mock.AnythingOfType("minio.PutObjectOptions"),
-	).Return(minio.UploadInfo{}, nil).Once()
+		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("int64"), mock.AnythingOfType("storage.PutObjectOptions"),
+	).Return(storage.UploadInfo{}, nil).Once()
 
 	// 2. Expect Metadata Insertion to FAIL - updated for encrypted metadata schema
 	dbError := fmt.Errorf("simulated DB metadata insert error")
@@ -321,7 +321,7 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 
 	// 3. Expect Storage Cleanup (RemoveObject) because metadata insert failed
 	mockStorage.On("RemoveObject",
-		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("minio.RemoveObjectOptions"),
+		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("storage.RemoveObjectOptions"),
 	).Return(nil).Once() // Simulate successful cleanup
 
 	// 4. Expect Rollback
@@ -388,8 +388,8 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 
 	// 1. Expect PutObjectWithPadding call to SUCCEED
 	mockStorage.On("PutObjectWithPadding",
-		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("int64"), mock.AnythingOfType("minio.PutObjectOptions"),
-	).Return(minio.UploadInfo{}, nil).Once()
+		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("int64"), mock.AnythingOfType("storage.PutObjectOptions"),
+	).Return(storage.UploadInfo{}, nil).Once()
 
 	// NOTE: Handler does NOT call RemoveObject on storage update failure
 	// The storage update failure occurs after successful metadata insertion,
@@ -536,8 +536,8 @@ func TestUploadFile_CommitError(t *testing.T) {
 
 	// 1. Expect PutObjectWithPadding call to SUCCEED
 	mockStorage.On("PutObjectWithPadding",
-		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("int64"), mock.AnythingOfType("minio.PutObjectOptions"),
-	).Return(minio.UploadInfo{}, nil).Once()
+		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("*strings.Reader"), fileSize, mock.AnythingOfType("int64"), mock.AnythingOfType("storage.PutObjectOptions"),
+	).Return(storage.UploadInfo{}, nil).Once()
 
 	// 2. Expect Metadata Insertion to SUCCEED - updated for encrypted metadata schema
 	insertMetaSQL := `INSERT INTO file_metadata \(file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes, padded_size\) VALUES \(\?, \?, \?, \?, \?, \?, \?, \?, \?, \?, \?\)`
@@ -557,7 +557,7 @@ func TestUploadFile_CommitError(t *testing.T) {
 
 	// 5. Add RemoveObject expectation in case of commit failure
 	mockStorage.On("RemoveObject",
-		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("minio.RemoveObjectOptions"),
+		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("storage.RemoveObjectOptions"),
 	).Return(nil).Maybe() // Use Maybe() since the handler behavior on commit error may vary
 
 	// --- Execute Handler ---

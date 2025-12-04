@@ -154,7 +154,9 @@ func main() {
 	logging.InfoLogger.Printf("Entity ID service initialized successfully")
 
 	// Initialize storage
-	storage.InitMinio()
+	if err := storage.InitS3(); err != nil {
+		log.Fatalf("Failed to initialize storage: %v", err)
+	}
 
 	// Check for bootstrap condition (Zero Users)
 	if err := auth.CheckAndGenerateBootstrapToken(database.DB); err != nil {

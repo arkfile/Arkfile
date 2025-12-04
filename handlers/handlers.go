@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/labstack/echo/v4"
-	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/database"
@@ -110,7 +109,7 @@ func UploadFile(c echo.Context) error {
 		strings.NewReader(request.Data),
 		fileSize,
 		paddedSize,
-		minio.PutObjectOptions{ContentType: "application/octet-stream"},
+		storage.PutObjectOptions{ContentType: "application/octet-stream"},
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to upload file: %v", err)
@@ -127,7 +126,7 @@ func UploadFile(c echo.Context) error {
 	)
 	if err != nil {
 		// If metadata storage fails, delete the uploaded file using storage.Provider
-		storage.Provider.RemoveObject(c.Request().Context(), storageID, minio.RemoveObjectOptions{})
+		storage.Provider.RemoveObject(c.Request().Context(), storageID, storage.RemoveObjectOptions{})
 		logging.ErrorLogger.Printf("Failed to store file metadata: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process file")
 	}

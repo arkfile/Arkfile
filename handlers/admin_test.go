@@ -191,8 +191,8 @@ func TestDeleteUser_Success_Admin(t *testing.T) {
 		WillReturnRows(fileRows)
 
 	// Mock storage removal for each file
-	mockStorage.On("RemoveObject", mock.Anything, mockFile1, mock.AnythingOfType("minio.RemoveObjectOptions")).Return(nil).Once()
-	mockStorage.On("RemoveObject", mock.Anything, mockFile2, mock.AnythingOfType("minio.RemoveObjectOptions")).Return(nil).Once()
+	mockStorage.On("RemoveObject", mock.Anything, mockFile1, mock.AnythingOfType("storage.RemoveObjectOptions")).Return(nil).Once()
+	mockStorage.On("RemoveObject", mock.Anything, mockFile2, mock.AnythingOfType("storage.RemoveObjectOptions")).Return(nil).Once()
 
 	// Mock deletion of file metadata for each file using file_id (not storage_id)
 	mockDB.ExpectExec("DELETE FROM file_metadata WHERE file_id = ?").WithArgs("file-id-1").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -416,7 +416,7 @@ func TestDeleteUser_Error_StorageRemoveObjectError(t *testing.T) {
 		WillReturnRows(fileRows)
 
 	storageErr := fmt.Errorf("simulated storage RemoveObject error")
-	mockStorage.On("RemoveObject", mock.Anything, fileWithError, mock.AnythingOfType("minio.RemoveObjectOptions")).
+	mockStorage.On("RemoveObject", mock.Anything, fileWithError, mock.AnythingOfType("storage.RemoveObjectOptions")).
 		Return(storageErr).Once()
 
 	mockDB.ExpectRollback()
@@ -462,7 +462,7 @@ func TestDeleteUser_Error_DeleteFileMetadataError(t *testing.T) {
 		WithArgs(targetUsername).
 		WillReturnRows(fileRows)
 
-	mockStorage.On("RemoveObject", mock.Anything, fileWithError, mock.AnythingOfType("minio.RemoveObjectOptions")).
+	mockStorage.On("RemoveObject", mock.Anything, fileWithError, mock.AnythingOfType("storage.RemoveObjectOptions")).
 		Return(nil).Once()
 
 	dbErr := fmt.Errorf("simulated DB error deleting metadata")

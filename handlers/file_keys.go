@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/labstack/echo/v4"
-	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/database"
@@ -77,7 +76,7 @@ func UpdateEncryption(c echo.Context) error {
 		objectName, // bucketName is handled by the provider
 		reader,
 		int64(len(request.EncryptedData)),
-		minio.PutObjectOptions{ContentType: contentType},
+		storage.PutObjectOptions{ContentType: contentType},
 	)
 
 	if err != nil {

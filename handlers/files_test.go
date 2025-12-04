@@ -3,21 +3,21 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
-	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/models"
-	"github.com/84adam/Arkfile/storage"
 )
 
 // --- Test DownloadFile ---
@@ -57,11 +57,8 @@ func TestDownloadFile_Success(t *testing.T) {
 		AddRow(1, username, time.Now(), 1000, 10000000, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
-	mockStorageObject := new(storage.MockMinioObject)
-	mockStorageObject.SetContent(fileContent)
-	mockStorageObject.SetStatInfo(minio.ObjectInfo{Size: fileSize}, nil)
-	mockStorageObject.On("Close").Return(nil)
-	mockStorage.On("GetObjectWithoutPadding", mock.Anything, storageID, fileSize, mock.AnythingOfType("minio.GetObjectOptions")).Return(mockStorageObject, nil).Once()
+	mockStorage.On("GetObjectWithoutPadding", mock.Anything, storageID, fileSize, mock.AnythingOfType("storage.GetObjectOptions")).
+		Return(io.NopCloser(strings.NewReader(fileContent)), nil).Once()
 
 	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mockDB.ExpectExec(logActionSQL).WithArgs(username, "downloaded", fileID).WillReturnResult(sqlmock.NewResult(1, 1))
@@ -78,7 +75,6 @@ func TestDownloadFile_Success(t *testing.T) {
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 	mockStorage.AssertExpectations(t)
-	mockStorageObject.AssertExpectations(t)
 }
 
 // --- Test DeleteFile ---
@@ -105,7 +101,7 @@ func TestDeleteFile_Success(t *testing.T) {
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(fileID).WillReturnRows(ownerRows)
 
 	// DeleteFile removes from storage first, then deletes metadata
-	mockStorage.On("RemoveObject", mock.Anything, storageID, mock.AnythingOfType("minio.RemoveObjectOptions")).Return(nil).Once()
+	mockStorage.On("RemoveObject", mock.Anything, storageID, mock.AnythingOfType("storage.RemoveObjectOptions")).Return(nil).Once()
 
 	deleteMetaSQL := `DELETE FROM file_metadata WHERE file_id = \?`
 	mockDB.ExpectExec(deleteMetaSQL).WithArgs(fileID).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -223,7 +219,7 @@ func TestDeleteFile_StorageError(t *testing.T) {
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(fileID).WillReturnRows(ownerRows)
 
 	storageError := fmt.Errorf("simulated storage layer error")
-	mockStorage.On("RemoveObject", mock.Anything, storageID, mock.AnythingOfType("minio.RemoveObjectOptions")).Return(storageError).Once()
+	mockStorage.On("RemoveObject", mock.Anything, storageID, mock.AnythingOfType("storage.RemoveObjectOptions")).Return(storageError).Once()
 	mockDB.ExpectRollback()
 
 	err := DeleteFile(c)

@@ -35,14 +35,14 @@ type Config struct {
 	} `json:"database"`
 
 	Storage struct {
-		Provider        string `json:"provider"` // "local", "backblaze", "wasabi", "vultr", "aws-s3", "cluster"
+		Provider        string `json:"provider"` // "generic-s3", "backblaze", "wasabi", "vultr", "aws-s3"
 		Endpoint        string `json:"endpoint"`
 		AccessKeyID     string `json:"access_key_id"`
 		SecretAccessKey string `json:"secret_access_key"`
 		BucketName      string `json:"bucket_name"`
 		Region          string `json:"region"`
 		UseSSL          bool   `json:"use_ssl"`
-		LocalPath       string `json:"local_path"` // For local provider
+		ForcePathStyle  bool   `json:"force_path_style"` // Required for many self-hosted S3 (MinIO, SeaweedFS, Ceph)
 	} `json:"storage"`
 
 	Security struct {
@@ -199,18 +199,37 @@ func loadEnvConfig(cfg *Config) error {
 	// Storage configuration
 	cfg.Storage.Provider = os.Getenv("STORAGE_PROVIDER")
 	if cfg.Storage.Provider == "" {
-		cfg.Storage.Provider = "local" // Default to local storage
+		cfg.Storage.Provider = "generic-s3" // Default to generic S3 (works for local/cluster/etc)
 	}
 
 	// Map environment variables based on provider
 	switch cfg.Storage.Provider {
-	case "local":
-		cfg.Storage.AccessKeyID = os.Getenv("MINIO_ROOT_USER")
-		cfg.Storage.SecretAccessKey = os.Getenv("MINIO_ROOT_PASSWORD")
-		cfg.Storage.LocalPath = os.Getenv("LOCAL_STORAGE_PATH")
-		cfg.Storage.BucketName = "arkfile" // Default bucket name for local
-		cfg.Storage.UseSSL = false
-		cfg.Storage.Endpoint = "localhost:9000"
+	case "generic-s3":
+		cfg.Storage.Endpoint = os.Getenv("S3_ENDPOINT")
+		cfg.Storage.AccessKeyID = os.Getenv("S3_ACCESS_KEY")
+		cfg.Storage.SecretAccessKey = os.Getenv("S3_SECRET_KEY")
+		cfg.Storage.BucketName = os.Getenv("S3_BUCKET")
+		cfg.Storage.Region = os.Getenv("S3_REGION")
+		if cfg.Storage.Region == "" {
+			cfg.Storage.Region = "us-east-1" // Default region
+		}
+
+		// Default to path style for generic S3 (safer for self-hosted)
+		cfg.Storage.ForcePathStyle = true
+		if forcePathStyle := os.Getenv("S3_FORCE_PATH_STYLE"); forcePathStyle != "" {
+			if val, err := strconv.ParseBool(forcePathStyle); err == nil {
+				cfg.Storage.ForcePathStyle = val
+			}
+		}
+
+		// SSL defaults to true, but can be disabled (e.g. for local dev)
+		cfg.Storage.UseSSL = true
+		if useSSL := os.Getenv("S3_USE_SSL"); useSSL != "" {
+			if val, err := strconv.ParseBool(useSSL); err == nil {
+				cfg.Storage.UseSSL = val
+			}
+		}
+
 	case "backblaze":
 		cfg.Storage.Endpoint = os.Getenv("BACKBLAZE_ENDPOINT")
 		cfg.Storage.AccessKeyID = os.Getenv("BACKBLAZE_KEY_ID")
@@ -245,15 +264,9 @@ func loadEnvConfig(cfg *Config) error {
 		if cfg.Storage.Region == "" {
 			cfg.Storage.Region = "us-east-1"
 		}
-	case "cluster":
-		cfg.Storage.Endpoint = os.Getenv("MINIO_CLUSTER_NODES")
-		cfg.Storage.AccessKeyID = os.Getenv("MINIO_CLUSTER_ACCESS_KEY")
-		cfg.Storage.SecretAccessKey = os.Getenv("MINIO_CLUSTER_SECRET_KEY")
-		cfg.Storage.BucketName = os.Getenv("MINIO_CLUSTER_BUCKET")
-		cfg.Storage.UseSSL = true
 	}
 
-	// Generic overrides
+	// Generic overrides (still useful for quick overrides)
 	if endpoint := os.Getenv("STORAGE_ENDPOINT"); endpoint != "" {
 		cfg.Storage.Endpoint = endpoint
 	}
@@ -365,12 +378,10 @@ func validateConfig(cfg *Config) error {
 
 	// Validate storage configuration based on provider
 	switch cfg.Storage.Provider {
-	case "local":
-		if cfg.Storage.AccessKeyID == "" || cfg.Storage.SecretAccessKey == "" {
-			return fmt.Errorf("local storage requires MINIO_ROOT_USER and MINIO_ROOT_PASSWORD")
-		}
-		if cfg.Storage.LocalPath == "" {
-			return fmt.Errorf("local storage requires LOCAL_STORAGE_PATH")
+	case "generic-s3":
+		if cfg.Storage.Endpoint == "" || cfg.Storage.AccessKeyID == "" ||
+			cfg.Storage.SecretAccessKey == "" || cfg.Storage.BucketName == "" {
+			return fmt.Errorf("generic-s3 storage requires S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, and S3_BUCKET")
 		}
 	case "backblaze":
 		if cfg.Storage.Endpoint == "" || cfg.Storage.AccessKeyID == "" ||
@@ -395,11 +406,6 @@ func validateConfig(cfg *Config) error {
 		// Region validation for AWS S3 - should have been defaulted to us-east-1 if not provided
 		if cfg.Storage.Region == "" {
 			return fmt.Errorf("AWS S3 storage requires a valid region")
-		}
-	case "cluster":
-		if cfg.Storage.Endpoint == "" || cfg.Storage.AccessKeyID == "" ||
-			cfg.Storage.SecretAccessKey == "" || cfg.Storage.BucketName == "" {
-			return fmt.Errorf("cluster storage requires endpoint, access key, secret key, and bucket name")
 		}
 	default:
 		return fmt.Errorf("unsupported storage provider: %s", cfg.Storage.Provider)

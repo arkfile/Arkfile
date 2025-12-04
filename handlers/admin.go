@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/config"
@@ -519,8 +518,8 @@ func DeleteUser(c echo.Context) error {
 	// Remove files from storage first
 	for i, storageID := range storageIDs {
 		if storageProvider != nil {
-			// Import minio and use proper RemoveObjectOptions type
-			if err := storageProvider.RemoveObject(c.Request().Context(), storageID, minio.RemoveObjectOptions{}); err != nil {
+			// Use proper RemoveObjectOptions type
+			if err := storageProvider.RemoveObject(c.Request().Context(), storageID, storage.RemoveObjectOptions{}); err != nil {
 				return JSONError(c, http.StatusInternalServerError, fmt.Sprintf("Failed to delete user's file from storage: %s", storageID), err.Error())
 			}
 		}

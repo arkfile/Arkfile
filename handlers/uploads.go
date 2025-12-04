@@ -14,7 +14,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
-	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/database"
@@ -153,14 +152,7 @@ func CreateUploadSession(c echo.Context) error {
 		"owner-username": username,
 	}
 
-	// Get the concrete MinioStorage implementation via type assertion
-	minioProvider, ok := storage.Provider.(*storage.MinioStorage)
-	if !ok {
-		logging.ErrorLogger.Print("Storage provider is not the expected Minio implementation for multipart upload")
-		return echo.NewHTTPError(http.StatusInternalServerError, "Storage system configuration error")
-	}
-
-	uploadID, err := minioProvider.InitiateMultipartUpload(c.Request().Context(), storageID, metadata)
+	uploadID, err := storage.Provider.InitiateMultipartUpload(c.Request().Context(), storageID, metadata)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to initiate multipart upload for file_id %s (storage_id: %s) via provider: %v", fileID, storageID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to initialize storage upload")
@@ -173,14 +165,14 @@ func CreateUploadSession(c echo.Context) error {
 	)
 	if err != nil {
 		// Abort the multipart upload if we can't update the database
-		minioProvider.AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
+		storage.Provider.AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update upload session")
 	}
 
 	if err := tx.Commit(); err != nil {
-		// Attempt to abort the storage upload if we can't commit (using minioProvider)
-		if minioProvider != nil && uploadID != "" {
-			minioProvider.AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
+		// Attempt to abort the storage upload if we can't commit
+		if uploadID != "" {
+			storage.Provider.AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
 	}
@@ -477,8 +469,8 @@ func UploadChunk(c echo.Context) error {
 		}
 	}
 
-	// Minio part numbers are 1-based (consistent with Minio SDK, assuming provider implements this detail)
-	minioPartNumber := chunkNumber + 1
+	// Part numbers are 1-based (consistent with S3 API)
+	partNumber := chunkNumber + 1
 
 	// Read the chunk data to calculate hash while streaming to storage
 	chunkData, err := io.ReadAll(c.Request().Body)
@@ -514,12 +506,12 @@ func UploadChunk(c echo.Context) error {
 			c.Request().Context(),
 			storageID, // Use storage ID instead of filename
 			storageUploadID.String,
-			minioPartNumber,
+			partNumber,
 			chunkReader,
 			int64(len(chunkData)), // Use actual chunk data length
 		)
 		if err != nil {
-			logging.ErrorLogger.Printf("Failed to upload chunk %d via storage provider: %v", minioPartNumber, err)
+			logging.ErrorLogger.Printf("Failed to upload chunk %d via storage provider: %v", partNumber, err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to upload chunk to storage")
 		}
 		etag = part.ETag
@@ -647,14 +639,14 @@ func CompleteUpload(c echo.Context) error {
 	}
 	defer rows.Close()
 
-	var parts []minio.CompletePart
+	var parts []storage.CompletePart
 	for rows.Next() {
 		var chunkNumber int
 		var etag string
 		if err := rows.Scan(&chunkNumber, &etag); err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to scan chunk data")
 		}
-		parts = append(parts, minio.CompletePart{PartNumber: chunkNumber + 1, ETag: etag})
+		parts = append(parts, storage.CompletePart{PartNumber: chunkNumber + 1, ETag: etag})
 	}
 	if err = rows.Err(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error reading chunk data")
@@ -779,7 +771,7 @@ func DeleteFile(c echo.Context) error {
 	}
 
 	// Remove from object storage using storage ID
-	err = storage.Provider.RemoveObject(c.Request().Context(), storageID, minio.RemoveObjectOptions{})
+	err = storage.Provider.RemoveObject(c.Request().Context(), storageID, storage.RemoveObjectOptions{})
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to remove file from storage via provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete file from storage")

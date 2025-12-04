@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v4"
-	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/database"
@@ -50,9 +49,9 @@ func DownloadFile(c echo.Context) error {
 	var reader io.ReadCloser
 
 	if file.PaddedSize.Valid && file.PaddedSize.Int64 > file.SizeBytes {
-		reader, err = storage.Provider.GetObjectWithoutPadding(c.Request().Context(), file.StorageID, file.SizeBytes, minio.GetObjectOptions{})
+		reader, err = storage.Provider.GetObjectWithoutPadding(c.Request().Context(), file.StorageID, file.SizeBytes, storage.GetObjectOptions{})
 	} else {
-		reader, err = storage.Provider.GetObject(c.Request().Context(), file.StorageID, minio.GetObjectOptions{})
+		reader, err = storage.Provider.GetObject(c.Request().Context(), file.StorageID, storage.GetObjectOptions{})
 	}
 
 	if err != nil {

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
-	"github.com/minio/minio-go/v7"
 
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/database"
@@ -606,7 +605,7 @@ func DownloadSharedFile(c echo.Context) error {
 	object, err := storage.Provider.GetObject(
 		c.Request().Context(),
 		storageID, // Use storage_id for object storage access
-		minio.GetObjectOptions{},
+		storage.GetObjectOptions{},
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to retrieve file from storage: %v", err)

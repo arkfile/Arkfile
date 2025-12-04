@@ -22,7 +22,6 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
-	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
@@ -307,7 +306,7 @@ func simulateDownloadAndDecrypt(t *testing.T, username, fileID, storageID string
 	ctx := context.Background()
 
 	// Get the file data from storage using storage_id directly
-	reader, err := storage.Provider.GetObject(ctx, storageID, minio.GetObjectOptions{})
+	reader, err := storage.Provider.GetObject(ctx, storageID, storage.GetObjectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get object from storage: %v", err)
 	}
@@ -483,7 +482,7 @@ func simulateCompleteUploadWithMocks(t *testing.T, sessionID string, mockDB sqlm
 	}
 
 	// Mock the storage to return this concatenated data when requested
-	mockStorage.On("GetObject", mock.Anything, storageID, mock.Anything).
+	mockStorage.On("GetObject", mock.Anything, storageID, mock.AnythingOfType("storage.GetObjectOptions")).
 		Return(&mockReader{data: concatenatedData}, nil)
 
 	return storageID, nil
