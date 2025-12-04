@@ -898,21 +898,18 @@ func TOTPAuth(c echo.Context) error {
 		// Non-critical, continue
 	}
 
-	// Proof-of-Life: Check if this is the first admin login
+	// Proof-of-Life: If an admin logs in, ensure bootstrap token is cleared
+	// This handles both initial bootstrap and "force bootstrap" scenarios
 	if user.IsAdmin {
-		var activeAdminCount int
-		database.DB.QueryRow(
-			"SELECT COUNT(*) FROM users WHERE is_admin = true AND last_login IS NOT NULL",
-		).Scan(&activeAdminCount)
-
-		if activeAdminCount == 1 {
-			// First admin just logged in - clear bootstrap token
-			km, kmErr := crypto.GetKeyManager()
-			if kmErr == nil {
+		km, err := crypto.GetKeyManager()
+		if err == nil {
+			// Check if token exists before trying to delete (to avoid noise)
+			_, err := km.GetKey("bootstrap_token", "bootstrap")
+			if err == nil {
 				if err := km.DeleteKey("bootstrap_token"); err != nil {
 					logging.ErrorLogger.Printf("Failed to delete bootstrap token: %v", err)
 				} else {
-					logging.InfoLogger.Printf("Bootstrap token cleared after first admin proof-of-life login")
+					logging.InfoLogger.Printf("Bootstrap token deleted after successful admin login")
 				}
 			}
 		}
