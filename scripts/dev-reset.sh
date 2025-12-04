@@ -220,7 +220,7 @@ echo -e "${CYAN}Step 2: Nuking data and secrets${NC}"
 echo "================================="
 
 if [ -d "$ARKFILE_DIR" ]; then
-    # Delete user data (MinIO storage)
+    # Delete user data (S3-compatible storage - MinIO backend)
     print_status "INFO" "Nuking user data..."
     rm -rf "$ARKFILE_DIR/var/lib/"*/minio/data/* 2>/dev/null || true
     rm -rf "$ARKFILE_DIR/var/lib/"*/storage/* 2>/dev/null || true
@@ -436,9 +436,14 @@ echo
 echo -e "${CYAN}Step 6: Generating fresh secrets${NC}"
 echo "================================="
 
-# Generate random JWT secret for security
+# Generate random secrets for security (use same password for MinIO server and S3 client)
 JWT_SECRET=$(openssl rand -hex 32)
+RQLITE_PASSWORD="DevPassword123_$(openssl rand -hex 8)"
+MINIO_PASSWORD="DevPassword123_$(openssl rand -hex 8)"
+
 print_status "SUCCESS" "Generated fresh JWT secret"
+print_status "SUCCESS" "Generated fresh database password"
+print_status "SUCCESS" "Generated fresh MinIO password"
 
 # Create fresh secrets file
 print_status "INFO" "Creating fresh configuration..."
@@ -451,7 +456,7 @@ cat > "$ARKFILE_DIR/etc/secrets.env" << EOF
 DATABASE_TYPE=rqlite
 RQLITE_ADDRESS=http://localhost:4001
 RQLITE_USERNAME=dev-user
-RQLITE_PASSWORD=DevPassword123_$(openssl rand -hex 8)
+RQLITE_PASSWORD=${RQLITE_PASSWORD}
 
 # Arkfile Application Configuration
 PORT=8080
@@ -464,13 +469,19 @@ TLS_PORT=8443
 TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server-cert.pem
 TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server-key.pem
 
-# Storage Configuration (Local MinIO for dev)
-STORAGE_PROVIDER=local
-MINIO_ROOT_USER=arkfile-dev
-MINIO_ROOT_PASSWORD=DevPassword123_$(openssl rand -hex 8)
-LOCAL_STORAGE_PATH=/opt/arkfile/var/lib/dev/minio/data
+# Storage Configuration - Generic S3 (using local MinIO as S3-compatible backend)
+STORAGE_PROVIDER=generic-s3
+S3_ENDPOINT=http://localhost:9000
+S3_ACCESS_KEY=arkfile-dev
+S3_SECRET_KEY=${MINIO_PASSWORD}
+S3_BUCKET=arkfile-dev
+S3_REGION=us-east-1
+S3_FORCE_PATH_STYLE=true
+S3_USE_SSL=false
 
-# Disable MinIO's automatic server-side encryption to preserve hash integrity.
+# MinIO Server Configuration (for MinIO service itself)
+MINIO_ROOT_USER=arkfile-dev
+MINIO_ROOT_PASSWORD=${MINIO_PASSWORD}
 MINIO_SSE_AUTO_ENCRYPTION=off
 
 # Admin Configuration - DEV ONLY

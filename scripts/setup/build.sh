@@ -427,14 +427,12 @@ export PATH="${BUN_DIR}:${PATH}"
 
 cd client/static/js
 
-# Install dependencies if node_modules doesn't exist
-if [ ! -d "node_modules" ]; then
-    echo "Installing Bun dependencies..."
-    ${BUN_CMD} install || {
-        echo -e "${RED}[X] Failed to install dependencies${NC}"
-        exit 1
-    }
-fi
+# Always ensure dependencies are up to date
+echo "Ensuring Bun dependencies are installed..."
+${BUN_CMD} install || {
+    echo -e "${RED}[X] Failed to install dependencies${NC}"
+    exit 1
+}
 
 # Verify source files exist
 if [ ! -f "src/app.ts" ]; then

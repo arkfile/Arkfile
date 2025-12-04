@@ -13,12 +13,13 @@ EnvironmentFile=/opt/arkfile/etc/secrets.env
 # Environment variables for MinIO server
 Environment=MINIO_ROOT_USER=${MINIO_ROOT_USER}
 Environment=MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+Environment=MINIO_SSE_AUTO_ENCRYPTION=${MINIO_SSE_AUTO_ENCRYPTION}
 
 # Server setup - single-node mode
 ExecStart=/usr/local/bin/minio server \
     --address :9000 \
     --console-address :9001 \
-    ${LOCAL_STORAGE_PATH}
+    /opt/arkfile/var/lib/minio/data
 
 Restart=on-failure
 RestartSec=5
