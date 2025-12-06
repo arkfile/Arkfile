@@ -437,11 +437,9 @@ echo -e "${CYAN}Step 6: Generating fresh secrets${NC}"
 echo "================================="
 
 # Generate random secrets for security (use same password for MinIO server and S3 client)
-JWT_SECRET=$(openssl rand -hex 32)
 RQLITE_PASSWORD="DevPassword123_$(openssl rand -hex 8)"
 MINIO_PASSWORD="DevPassword123_$(openssl rand -hex 8)"
 
-print_status "SUCCESS" "Generated fresh JWT secret"
 print_status "SUCCESS" "Generated fresh database password"
 print_status "SUCCESS" "Generated fresh MinIO password"
 
@@ -461,7 +459,6 @@ RQLITE_PASSWORD=${RQLITE_PASSWORD}
 # Arkfile Application Configuration
 PORT=8080
 CORS_ALLOWED_ORIGINS=http://localhost:8080,https://localhost:8443
-JWT_SECRET=${JWT_SECRET}
 
 # TLS Configuration
 TLS_ENABLED=true
@@ -524,33 +521,17 @@ echo
 echo -e "${CYAN}Step 7: Generate cryptographic keys${NC}"
 echo "====================================="
 
-# Generate OPAQUE server keys
-print_status "INFO" "Generating OPAQUE server keys..."
-if ! ./scripts/setup/03-setup-opaque-keys.sh; then
-    print_status "ERROR" "OPAQUE key generation failed - this is CRITICAL"
+# Generate Master Key (replaces OPAQUE, JWT, and TOTP key files)
+print_status "INFO" "Generating Master Key..."
+if ! ./scripts/setup/03-setup-master-key.sh; then
+    print_status "ERROR" "Master Key generation failed - this is CRITICAL"
     exit 1
 fi
-print_status "SUCCESS" "OPAQUE server keys generated"
-
-# Generate JWT signing keys
-print_status "INFO" "Generating JWT signing keys..."
-if ! ./scripts/setup/04-setup-jwt-keys.sh; then
-    print_status "ERROR" "JWT key generation failed - this is CRITICAL"
-    exit 1
-fi
-print_status "SUCCESS" "JWT signing keys generated"
-
-# Generate TOTP master key
-print_status "INFO" "Generating TOTP master key..."
-if ! ./scripts/setup/06-setup-totp-keys.sh; then
-    print_status "ERROR" "TOTP key generation failed - this is CRITICAL"
-    exit 1
-fi
-print_status "SUCCESS" "TOTP master key generated"
+print_status "SUCCESS" "Master Key generated"
 
 # Generate TLS certificates
 print_status "INFO" "Generating TLS certificates..."
-if ! ./scripts/setup/05-setup-tls-certs.sh; then
+if ! ./scripts/setup/04-setup-tls-certs.sh; then
     print_status "ERROR" "TLS certificate generation failed - this is CRITICAL"
     exit 1
 fi
@@ -577,7 +558,7 @@ echo "==================================="
 
 # Setup MinIO directories and service
 print_status "INFO" "Setting up MinIO..."
-if ! ./scripts/setup/07-setup-minio.sh; then
+if ! ./scripts/setup/05-setup-minio.sh; then
     print_status "ERROR" "MinIO setup failed - this is CRITICAL"
     exit 1
 fi
@@ -585,7 +566,7 @@ print_status "SUCCESS" "MinIO setup complete"
 
 # Setup rqlite service (using build-from-source approach)
 print_status "INFO" "Setting up rqlite (build from source)..."
-if ! ./scripts/setup/08-setup-rqlite-build.sh; then
+if ! ./scripts/setup/06-setup-rqlite-build.sh; then
     print_status "ERROR" "rqlite setup failed - this is CRITICAL"
     exit 1
 fi

@@ -53,7 +53,16 @@ func InitKeyManager(db *sql.DB) error {
 			db:        db,
 		}
 	})
-	return err
+
+	// If initialization failed (either now or in a previous call), return error
+	if globalKeyManager == nil {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("KeyManager initialization failed in a previous call")
+	}
+
+	return nil
 }
 
 // GetKeyManager returns the global KeyManager instance.

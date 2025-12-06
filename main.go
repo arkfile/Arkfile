@@ -93,6 +93,11 @@ func main() {
 	database.InitDB()
 	defer database.DB.Close()
 
+	// Initialize KeyManager (required for all system secrets)
+	if err := crypto.InitKeyManager(database.DB); err != nil {
+		log.Fatalf("Failed to initialize KeyManager: %v", err)
+	}
+
 	// Rate limiting schema is now included in unified_schema.sql
 	// No separate application needed
 

@@ -20,8 +20,9 @@ EnvironmentFile=-/opt/arkfile/etc/secrets.env
 # Static linking eliminates the need for LD_LIBRARY_PATH since all libraries are embedded in the binary
 
 # Systemd credentials for sensitive keys
-LoadCredential=opaque_server_key:/opt/arkfile/etc/keys/opaque/server_private.key
-LoadCredential=jwt_signing_key:/opt/arkfile/etc/keys/jwt/current/signing.key
+# (Obsolete - keys are now managed via KeyManager and database)
+# LoadCredential=opaque_server_key:/opt/arkfile/etc/keys/opaque/server_private.key
+# LoadCredential=jwt_signing_key:/opt/arkfile/etc/keys/jwt/current/signing.key
 
 # Security hardening
 NoNewPrivileges=yes

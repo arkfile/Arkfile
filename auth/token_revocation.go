@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,7 +25,7 @@ var (
 func RevokeToken(db *sql.DB, tokenString, reason string) error {
 	// Parse the token to get claims
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		return []byte(os.Getenv("JWT_SECRET")), nil
+		return GetJWTPublicKey(), nil
 	})
 
 	if err != nil {
