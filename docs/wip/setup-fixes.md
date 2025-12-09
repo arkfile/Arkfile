@@ -411,10 +411,86 @@ These can be removed in a future cleanup, but keeping them doesn't hurt.
 
 ## Status
 
-**Status:** 📝 PLANNING COMPLETE - Ready for Implementation
+**Status:** ✅ COMPLETED - Issue Resolved (December 9, 2025)
 
-**Next Step:** Toggle to Act Mode and implement the changes
-
-**Estimated Time:** 30-45 minutes
+**Resolution Time:** ~5 minutes
 
 **Risk Level:** Low (greenfield app, no existing deployments)
+
+---
+
+## Resolution Summary
+
+### What Was Done
+
+**Date:** December 9, 2025  
+**Issue:** KeyManager initialization failure causing arkfile service to crash on startup
+
+**Root Cause Identified:**
+The `03-setup-master-key.sh` script was writing the master key to the wrong file:
+- **Written to:** `/opt/arkfile/etc/keys/master.key` (separate file)
+- **Loaded from:** `/opt/arkfile/etc/secrets.env` (via systemd EnvironmentFile)
+- **Result:** `ARKFILE_MASTER_KEY` environment variable was never set, causing KeyManager initialization to fail
+
+**Fix Applied:**
+Updated `scripts/setup/03-setup-master-key.sh` to:
+1. Write to `/opt/arkfile/etc/secrets.env` instead of a separate master key file
+2. Check if `ARKFILE_MASTER_KEY` already exists before generating
+3. Append the key to secrets.env (maintaining single source of truth)
+4. Set proper permissions (640, arkfile:arkfile)
+
+**Files Modified:**
+- `scripts/setup/03-setup-master-key.sh` - Fixed to append master key to secrets.env
+
+**Verification:**
+After running `sudo ./scripts/dev-reset.sh`, the service started successfully with:
+```
+✅ KeyManager initialized successfully
+✅ OPAQUE initialized successfully  
+✅ Entity ID service initialized successfully
+✅ Bootstrap token generated
+✅ Dev admin user created and validated
+✅ HTTP server started on port 8080
+✅ HTTPS server started on port 8443
+```
+
+### Key Learnings
+
+1. **Single Source of Truth:** All environment variables should be in one file (`secrets.env`)
+2. **File Location Matters:** Setup scripts must write to the same location that systemd loads from
+3. **Integration Testing:** The `dev-reset.sh` script properly integrates all setup steps
+4. **Master Key Architecture:** The envelope encryption system works correctly once the master key is properly loaded
+
+### Architecture Confirmation
+
+The Master Key Architecture is now fully operational:
+- ✅ Master key generated during setup (32 bytes, 64 hex chars)
+- ✅ Master key stored in `/opt/arkfile/etc/secrets.env`
+- ✅ Systemd loads master key via `EnvironmentFile`
+- ✅ KeyManager initializes with master key
+- ✅ All system keys (OPAQUE, JWT, TOTP, Bootstrap) derived and encrypted
+- ✅ Keys stored encrypted in database using envelope encryption
+- ✅ Multi-instance deployment ready (shared master key + database)
+
+---
+
+## Next Steps (Future Enhancements)
+
+### Immediate (Complete)
+- [x] Create `03-setup-master-key.sh` ✅
+- [x] Fix master key file location ✅
+- [x] Test fresh installation ✅
+- [x] Verify service startup ✅
+
+### Follow-up (Recommended)
+- [ ] Update documentation (scripts-guide.md, setup.md, security.md)
+- [ ] Create master key backup procedures
+- [ ] Implement master key rotation mechanism
+- [ ] Add automated tests for setup scripts
+- [ ] Document disaster recovery procedures
+
+### Nice to Have
+- [ ] Master key escrow/recovery mechanism
+- [ ] Automated key rotation scheduling
+- [ ] Key health monitoring and alerts
+- [ ] Multi-region key distribution strategy
