@@ -484,6 +484,9 @@ MINIO_SSE_AUTO_ENCRYPTION=off
 # Admin Configuration - DEV ONLY
 ADMIN_USERNAMES=arkfile-dev-admin
 
+# Force Admin Bootstrap Mode (False for dev-reset as we use dev admin)
+ARKFILE_FORCE_ADMIN_BOOTSTRAP=false
+
 # Dev/Test Admin API Configuration (CRITICAL: Must be false in production)
 ADMIN_DEV_TEST_API_ENABLED=true
 

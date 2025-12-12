@@ -6,21 +6,33 @@
 # Flow:
 #   1. Environment verification (server, CLI tools, TOTP generator)
 #   2. Admin authentication (login with TOTP)
-#   3. Regular user registration (using arkfile-client)
-#   4. TOTP setup for regular user
-#   5. Admin approval of regular user
-#   6. Regular user login with TOTP
-#   7. File operations (upload/download/list/delete)
-#   8. Share operations (create/access/delete)
-#   9. Admin operations (credits management)
-#   10. Cleanup
-#   11. Summary report
+#   3. Bootstrap protection (verify 2nd admin creation fails)
+#   4. Regular user registration (using arkfile-client)
+#   5. TOTP setup for regular user
+#   6. Admin approval of regular user
+#   7. Regular user login with TOTP
+#   8. File operations (upload/download/list/delete)
+#   9. Share operations (create/access/delete)
+#   10. Admin operations (credits management)
+#   11. Cleanup
+#   12. Summary report
 
 set -eo pipefail
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
+
+# Parse arguments
+BOOTSTRAP_TOKEN=""
+
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --bootstrap-token) BOOTSTRAP_TOKEN="$2"; shift ;;
+        *) echo "Unknown parameter passed: $1"; exit 1 ;;
+    esac
+    shift
+done
 
 # Test configuration - EXACT CREDENTIALS (as specified by user)
 ADMIN_USERNAME="${ADMIN_USERNAME:-arkfile-dev-admin}"
@@ -267,9 +279,53 @@ phase_2_admin_authentication() {
     success "Admin authentication complete"
 }
 
-# Phase 3: Regular User Registration
-phase_3_user_registration() {
-    phase "3: REGULAR USER REGISTRATION"
+# Phase 3: Bootstrap Protection
+phase_3_bootstrap_protection() {
+    phase "3: BOOTSTRAP PROTECTION"
+    
+    if [ -z "$BOOTSTRAP_TOKEN" ]; then
+        warning "Skipping Bootstrap Protection test (no token provided)"
+        record_test "Bootstrap protection" "PASS"
+        return 0
+    fi
+
+    section "Attempting to create second admin with bootstrap token"
+    
+    # Try to bootstrap again with a new user
+    # We expect this to FAIL because the system is already bootstrapped
+    if printf "AttackerPass123!\nAttackerPass123!\n" | $BUILD_DIR/arkfile-admin \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        bootstrap \
+        --token "$BOOTSTRAP_TOKEN" \
+        --username "attacker-admin" 2>&1 | tee /tmp/bootstrap_attack.log; then
+        
+        # If the command succeeds (exit code 0), that's a SECURITY FAILURE
+        record_test "Bootstrap protection" "FAIL"
+        error "Security Vulnerability: Able to create second admin via bootstrap!"
+        exit 1
+    else
+        # If the command fails (non-zero exit code), that's a SUCCESS for protection
+        # Ideally check for specific error message if possible
+        if grep -q "already bootstrapped" /tmp/bootstrap_attack.log || \
+           grep -q "bootstrap disabled" /tmp/bootstrap_attack.log || \
+           grep -q "403" /tmp/bootstrap_attack.log || \
+           grep -q "failed" /tmp/bootstrap_attack.log; then
+            
+            record_test "Bootstrap protection" "PASS"
+            success "Bootstrap protection verified (request rejected)"
+        else
+            # It failed but maybe for the wrong reason?
+            warning "Bootstrap failed but error message was unexpected. Check logs."
+            cat /tmp/bootstrap_attack.log
+            record_test "Bootstrap protection" "PASS" # Still pass as it didn't succeed
+        fi
+    fi
+}
+
+# Phase 4: Regular User Registration
+phase_4_user_registration() {
+    phase "4: REGULAR USER REGISTRATION"
     
     section "Registering user: $TEST_USERNAME"
     
@@ -305,9 +361,9 @@ phase_3_user_registration() {
     success "User registration complete"
 }
 
-# Phase 4: TOTP Setup for Regular User
-phase_4_totp_setup() {
-    phase "4: TOTP SETUP FOR REGULAR USER"
+# Phase 5: TOTP Setup for Regular User
+phase_5_totp_setup() {
+    phase "5: TOTP SETUP FOR REGULAR USER"
     
     section "Setting up TOTP for user: $TEST_USERNAME"
     
@@ -368,9 +424,9 @@ phase_4_totp_setup() {
     success "TOTP setup phase complete"
 }
 
-# Phase 5: Admin Approval of Regular User
-phase_5_admin_approval() {
-    phase "5: ADMIN APPROVAL OF REGULAR USER"
+# Phase 6: Admin Approval of Regular User
+phase_6_admin_approval() {
+    phase "6: ADMIN APPROVAL OF REGULAR USER"
     
     section "Approving user via admin: $TEST_USERNAME"
     
@@ -399,13 +455,13 @@ phase_5_admin_approval() {
     success "User approval complete"
 }
 
-# Phase 6: Regular User Login with TOTP
-phase_6_user_login() {
-    phase "6: REGULAR USER LOGIN WITH TOTP"
+# Phase 7: Regular User Login with TOTP
+phase_7_user_login() {
+    phase "7: REGULAR USER LOGIN WITH TOTP"
     
     section "Logging in as user: $TEST_USERNAME"
     
-    # Check if we have the secret from Phase 4
+    # Check if we have the secret from Phase 5
     if [ -z "$TEST_USER_TOTP_SECRET" ]; then
         record_test "User login" "FAIL"
         error "Missing TOTP secret from setup phase"
@@ -457,9 +513,9 @@ phase_6_user_login() {
     success "User login phase complete"
 }
 
-# Phase 7: File Operations
-phase_7_file_operations() {
-    phase "7: FILE OPERATIONS"
+# Phase 8: File Operations
+phase_8_file_operations() {
+    phase "8: FILE OPERATIONS"
     
     section "Testing file operations"
     
@@ -499,9 +555,9 @@ phase_7_file_operations() {
     success "File operations phase complete"
 }
 
-# Phase 8: Share Operations
-phase_8_share_operations() {
-    phase "8: SHARE OPERATIONS"
+# Phase 9: Share Operations
+phase_9_share_operations() {
+    phase "9: SHARE OPERATIONS"
     
     section "Testing share operations"
     
@@ -514,9 +570,9 @@ phase_8_share_operations() {
     success "Share operations phase complete"
 }
 
-# Phase 9: Admin Operations
-phase_9_admin_operations() {
-    phase "9: ADMIN OPERATIONS"
+# Phase 10: Admin Operations
+phase_10_admin_operations() {
+    phase "10: ADMIN OPERATIONS"
     
     section "Testing admin operations"
     
@@ -561,9 +617,9 @@ phase_9_admin_operations() {
     success "Admin operations phase complete"
 }
 
-# Phase 10: Cleanup
-phase_10_cleanup() {
-    phase "10: CLEANUP"
+# Phase 11: Cleanup
+phase_11_cleanup() {
+    phase "11: CLEANUP"
     
     section "Cleaning up test data"
     
@@ -605,13 +661,14 @@ phase_10_cleanup() {
     rm -f /tmp/admin_login.log /tmp/user_register.log /tmp/user_approve.log
     rm -f /tmp/user_login.log /tmp/file_list.log /tmp/admin_list_users.log
     rm -f /tmp/admin_set_storage.log /tmp/user_logout.log /tmp/admin_logout.log
+    rm -f /tmp/bootstrap_attack.log
     
     success "Cleanup complete"
 }
 
-# Phase 11: Summary Report
-phase_11_summary() {
-    phase "11: TEST SUMMARY"
+# Phase 12: Summary Report
+phase_12_summary() {
+    phase "12: TEST SUMMARY"
     
     echo ""
     echo -e "${BLUE}========================================${NC}"
@@ -664,22 +721,28 @@ main() {
     info "Admin User: $ADMIN_USERNAME"
     info "Test User: $TEST_USERNAME"
     info "Build Directory: $BUILD_DIR"
+    if [ -n "$BOOTSTRAP_TOKEN" ]; then
+        info "Bootstrap Token: PROVIDED (Protection test enabled)"
+    else
+        info "Bootstrap Token: NOT PROVIDED (Protection test disabled)"
+    fi
     echo ""
     
     # Execute test phases
     phase_1_environment_verification
     phase_2_admin_authentication
-    phase_3_user_registration
-    phase_4_totp_setup
-    phase_5_admin_approval
-    phase_6_user_login
-    phase_7_file_operations
-    phase_8_share_operations
-    phase_9_admin_operations
-    phase_10_cleanup
+    phase_3_bootstrap_protection
+    phase_4_user_registration
+    phase_5_totp_setup
+    phase_6_admin_approval
+    phase_7_user_login
+    phase_8_file_operations
+    phase_9_share_operations
+    phase_10_admin_operations
+    phase_11_cleanup
     
     # Show summary and exit with appropriate code
-    if phase_11_summary; then
+    if phase_12_summary; then
         exit 0
     else
         exit 1

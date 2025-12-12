@@ -29,6 +29,14 @@ if [ ! -f "$SECRETS_FILE" ]; then
     chmod 640 "$SECRETS_FILE"
 fi
 
+# Check if ARKFILE_FORCE_ADMIN_BOOTSTRAP exists, if not add it (default to false for foundation setup)
+if ! grep -q "^ARKFILE_FORCE_ADMIN_BOOTSTRAP=" "$SECRETS_FILE"; then
+    print_status "INFO" "Adding ARKFILE_FORCE_ADMIN_BOOTSTRAP=false to secrets.env..."
+    echo "" >> "$SECRETS_FILE"
+    echo "# Force Admin Bootstrap Mode (False by default for foundation setup)" >> "$SECRETS_FILE"
+    echo "ARKFILE_FORCE_ADMIN_BOOTSTRAP=false" >> "$SECRETS_FILE"
+fi
+
 # Check if ARKFILE_MASTER_KEY already exists in secrets.env
 if grep -q "^ARKFILE_MASTER_KEY=" "$SECRETS_FILE"; then
     print_status "INFO" "Master Key already exists in secrets.env"

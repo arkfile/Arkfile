@@ -136,39 +136,24 @@ else
     fi
 fi
 
-# Step 4: Generate OPAQUE keys
-echo -e "${YELLOW}Step 4: Generating OPAQUE server keys...${NC}"
-if is_completed "opaque-keys" && [ "$FORCE_REBUILD" = false ]; then
-    echo -e "${GREEN}[OK] OPAQUE keys already generated (use --force-rebuild to regenerate)${NC}"
+# Step 4: Generate Master Key
+echo -e "${YELLOW}Step 4: Generating Master Key...${NC}"
+if is_completed "master-key" && [ "$FORCE_REBUILD" = false ]; then
+    echo -e "${GREEN}[OK] Master Key already generated (use --force-rebuild to regenerate)${NC}"
 else
-    sudo -E ./scripts/setup/03-setup-opaque-keys.sh
+    sudo -E ./scripts/setup/03-setup-master-key.sh
     if [ $? -eq 0 ]; then
-        echo -e "${GREEN}[OK] OPAQUE key generation completed${NC}"
-        mark_completed "opaque-keys"
+        echo -e "${GREEN}[OK] Master Key generation completed${NC}"
+        mark_completed "master-key"
     else
-        echo -e "${RED}[X] OPAQUE key generation failed${NC}"
+        echo -e "${RED}[X] Master Key generation failed${NC}"
         exit 1
     fi
 fi
 
-# Step 5: Generate JWT keys
-echo -e "${YELLOW}Step 5: Generating JWT signing keys...${NC}"
-if is_completed "jwt-keys" && [ "$FORCE_REBUILD" = false ]; then
-    echo -e "${GREEN}[OK] JWT keys already generated (use --force-rebuild to regenerate)${NC}"
-else
-    sudo -E ./scripts/setup/04-setup-jwt-keys.sh
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}[OK] JWT key generation completed${NC}"
-        mark_completed "jwt-keys"
-    else
-        echo -e "${RED}[X] JWT key generation failed${NC}"
-        exit 1
-    fi
-fi
-
-# Step 6: Generate TLS certificates (optional)
+# Step 5: Generate TLS certificates (optional)
 if [ "$SKIP_TLS" = false ]; then
-    echo -e "${YELLOW}Step 6: Generating TLS certificates...${NC}"
+    echo -e "${YELLOW}Step 5: Generating TLS certificates...${NC}"
     if is_completed "tls-certs" && [ "$FORCE_REBUILD" = false ]; then
         echo -e "${GREEN}[OK] TLS certificates already generated (use --force-rebuild to regenerate)${NC}"
     else
@@ -197,27 +182,12 @@ fi
 echo
 echo -e "${BLUE}Validating foundation setup...${NC}"
 
-# Check key files exist
+# Check Master Key exists
 echo -e "${YELLOW}Checking cryptographic keys...${NC}"
-key_files=(
-    "${BASE_DIR}/etc/keys/opaque/server_private.key"
-    "${BASE_DIR}/etc/keys/jwt/current/signing.key"
-)
-
-all_keys_present=true
-for key_file in "${key_files[@]}"; do
-    if sudo test -f "${key_file}"; then
-        echo -e "${GREEN}[OK] ${key_file}${NC}"
-    else
-        echo -e "${RED}[X] Missing: ${key_file}${NC}"
-        all_keys_present=false
-    fi
-done
-
-if [ "$all_keys_present" = true ]; then
-    echo -e "${GREEN}[OK] All required keys are present${NC}"
+if sudo grep -q "ARKFILE_MASTER_KEY=" "${BASE_DIR}/etc/secrets.env"; then
+    echo -e "${GREEN}[OK] Master Key present in secrets.env${NC}"
 else
-    echo -e "${RED}[X] Some required keys are missing${NC}"
+    echo -e "${RED}[X] Master Key missing from secrets.env${NC}"
     exit 1
 fi
 
@@ -287,8 +257,7 @@ echo "• Binary location: /opt/arkfile/bin/arkfile"
 
 echo
 echo -e "${BLUE}[SECURE] Security Configuration:${NC}"
-echo "• OPAQUE server keys: [OK] Generated and secured"
-echo "• JWT signing keys: [OK] Generated with rotation capability"
+echo "• Master Key: [OK] Generated and secured in secrets.env"
 
 if [ "$SKIP_TLS" = false ]; then
     if is_completed "tls-certs"; then

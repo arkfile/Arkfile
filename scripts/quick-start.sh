@@ -239,6 +239,9 @@ MINIO_SSE_AUTO_ENCRYPTION=off
 # Admin Configuration (comma-separated list)
 ADMIN_USERNAMES=admin.demo.user
 
+# Force Admin Bootstrap Mode (False for demo as we use demo admin)
+ARKFILE_FORCE_ADMIN_BOOTSTRAP=false
+
 # Security Settings for Demo
 REQUIRE_APPROVAL=false
 ENABLE_REGISTRATION=true
