@@ -542,7 +542,7 @@ echo "Hello Arkfile! Test file for validation." > ~/test-file.txt
 **Database Verification:**
 ```bash
 # Check user registration
-rqlite -H localhost:4001 'SELECT email FROM users;'
+rqlite -H localhost:4001 'SELECT username FROM users;'
 
 # Verify file metadata
 rqlite -H localhost:4001 'SELECT file_name, encrypted FROM files;'

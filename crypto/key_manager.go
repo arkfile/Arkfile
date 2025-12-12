@@ -146,11 +146,19 @@ func (km *KeyManager) DecryptSystemKey(encryptedKey, nonce []byte, keyType strin
 // keySize: Size of key to generate if missing
 func (km *KeyManager) GetOrGenerateKey(keyID string, keyType string, keySize int) ([]byte, error) {
 	// 1. Try to fetch from DB (fast path, no lock needed)
-	var encryptedData, nonce []byte
-	err := km.db.QueryRow("SELECT encrypted_data, nonce FROM system_keys WHERE key_id = ?", keyID).Scan(&encryptedData, &nonce)
+	var encryptedDataHex, nonceHex string
+	err := km.db.QueryRow("SELECT encrypted_data, nonce FROM system_keys WHERE key_id = ?", keyID).Scan(&encryptedDataHex, &nonceHex)
 
 	if err == nil {
-		// Key found, decrypt and return it
+		// Key found, decode hex, decrypt and return it
+		encryptedData, err := hex.DecodeString(encryptedDataHex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode encrypted data hex: %w", err)
+		}
+		nonce, err := hex.DecodeString(nonceHex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode nonce hex: %w", err)
+		}
 		return km.DecryptSystemKey(encryptedData, nonce, keyType)
 	} else if err != sql.ErrNoRows {
 		// Database error
@@ -166,10 +174,18 @@ func (km *KeyManager) GetOrGenerateKey(keyID string, keyType string, keySize int
 	defer tx.Rollback()
 
 	// 3. Check again within transaction (another instance may have created it while we waited)
-	err = tx.QueryRow("SELECT encrypted_data, nonce FROM system_keys WHERE key_id = ?", keyID).Scan(&encryptedData, &nonce)
+	err = tx.QueryRow("SELECT encrypted_data, nonce FROM system_keys WHERE key_id = ?", keyID).Scan(&encryptedDataHex, &nonceHex)
 	if err == nil {
 		// Key was created by another instance while we waited for the lock
 		tx.Rollback()
+		encryptedData, err := hex.DecodeString(encryptedDataHex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode encrypted data hex: %w", err)
+		}
+		nonce, err := hex.DecodeString(nonceHex)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode nonce hex: %w", err)
+		}
 		return km.DecryptSystemKey(encryptedData, nonce, keyType)
 	} else if err != sql.ErrNoRows {
 		return nil, fmt.Errorf("failed to query system_keys in transaction: %w", err)
@@ -182,15 +198,16 @@ func (km *KeyManager) GetOrGenerateKey(keyID string, keyType string, keySize int
 	}
 
 	// 5. Encrypt the key
-	encryptedData, nonce, err = km.EncryptSystemKey(rawKey, keyType)
+	encryptedData, nonce, err := km.EncryptSystemKey(rawKey, keyType)
 	if err != nil {
 		return nil, err
 	}
 
 	// 6. Insert the key within the transaction
+	// Use hex encoding for BLOBs to ensure compatibility with rqlite/SQLite
 	_, err = tx.Exec(
 		"INSERT INTO system_keys (key_id, key_type, encrypted_data, nonce) VALUES (?, ?, ?, ?)",
-		keyID, keyType, encryptedData, nonce,
+		keyID, keyType, hex.EncodeToString(encryptedData), hex.EncodeToString(nonce),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert key: %w", err)
@@ -214,9 +231,10 @@ func (km *KeyManager) StoreKey(keyID string, keyType string, rawKey []byte) erro
 
 	// Use UPSERT logic (SQLite specific syntax, but standard SQL usually requires checking existence or ON CONFLICT)
 	// Since we're using standard SQL driver, we'll use REPLACE INTO which works for SQLite
+	// Use hex encoding for BLOBs to ensure compatibility with rqlite/SQLite
 	_, err = km.db.Exec(
 		"REPLACE INTO system_keys (key_id, key_type, encrypted_data, nonce) VALUES (?, ?, ?, ?)",
-		keyID, keyType, encryptedData, nonce,
+		keyID, keyType, hex.EncodeToString(encryptedData), hex.EncodeToString(nonce),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to store system key: %w", err)
@@ -228,14 +246,24 @@ func (km *KeyManager) StoreKey(keyID string, keyType string, rawKey []byte) erro
 // GetKey retrieves and decrypts a key from the database.
 // Returns error if key not found.
 func (km *KeyManager) GetKey(keyID string, keyType string) ([]byte, error) {
-	var encryptedData, nonce []byte
-	err := km.db.QueryRow("SELECT encrypted_data, nonce FROM system_keys WHERE key_id = ?", keyID).Scan(&encryptedData, &nonce)
+	var encryptedDataHex, nonceHex string
+	err := km.db.QueryRow("SELECT encrypted_data, nonce FROM system_keys WHERE key_id = ?", keyID).Scan(&encryptedDataHex, &nonceHex)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("key not found: %s", keyID)
 		}
 		return nil, fmt.Errorf("failed to query system_keys: %w", err)
+	}
+
+	encryptedData, err := hex.DecodeString(encryptedDataHex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode encrypted data hex: %w", err)
+	}
+
+	nonce, err := hex.DecodeString(nonceHex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode nonce hex: %w", err)
 	}
 
 	return km.DecryptSystemKey(encryptedData, nonce, keyType)

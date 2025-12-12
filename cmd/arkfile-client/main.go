@@ -66,14 +66,14 @@ IMPORTANT:
     Use 'cryptocli' for all cryptographic operations.
 
 WORKFLOW:
-    1. Register: arkfile-client register --username alice --email alice@example.com
+    1. Register: arkfile-client register --username alice
     2. Encrypt file: cryptocli encrypt-password --file doc.pdf --username alice
     3. Upload: arkfile-client upload --file doc.pdf.enc --metadata metadata.json
     4. Download: arkfile-client download --file-id xyz --output encrypted.dat
     5. Decrypt: cryptocli decrypt-password --file encrypted.dat --username alice
 
 EXAMPLES:
-    arkfile-client register --username alice --email alice@example.com
+    arkfile-client register --username alice
     arkfile-client login --username alice
     arkfile-client upload --file document.pdf.enc --metadata metadata.json
     arkfile-client download --file-id abc123 --output downloaded.enc
@@ -357,7 +357,6 @@ func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []stri
 	fs := flag.NewFlagSet("register", flag.ExitOnError)
 	var (
 		usernameFlag = fs.String("username", config.Username, "Username for registration")
-		autoLogin    = fs.Bool("auto-login", true, "Automatically login after successful registration")
 	)
 
 	fs.Usage = func() {
@@ -367,12 +366,10 @@ Register a new account with arkfile server using OPAQUE protocol.
 
 FLAGS:
     --username USER    Username for registration (required)
-    --auto-login       Automatically login after registration (default: true)
     --help            Show this help message
 
 EXAMPLES:
     arkfile-client register --username alice
-    arkfile-client register --username bob --auto-login=false
 `)
 	}
 
@@ -492,7 +489,7 @@ EXAMPLES:
 
 	fmt.Printf("Registration successful for user: %s\n", *usernameFlag)
 
-	// Handle TOTP requirement or auto-login
+	// Handle TOTP requirement
 	if regFinalizeResp.RequiresTOTP && regFinalizeResp.TempToken != "" {
 		// Save session with temp token for TOTP setup
 		session := &AuthSession{
@@ -509,9 +506,7 @@ EXAMPLES:
 			fmt.Printf("\nTOTP setup required. Session saved.\n")
 			fmt.Printf("Please run 'arkfile-client setup-totp' to complete account setup.\n")
 		}
-	} else if *autoLogin {
-		// Note: We cannot auto-login because we've already cleared the password
-		// User will need to login manually
+	} else {
 		fmt.Printf("\nPlease login manually with: arkfile-client login --username %s\n", *usernameFlag)
 	}
 

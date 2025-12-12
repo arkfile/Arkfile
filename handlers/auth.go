@@ -410,7 +410,7 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		INSERT INTO opaque_user_data 
 		(username, opaque_user_record, created_at)
 		VALUES (?, ?, CURRENT_TIMESTAMP)`,
-		request.Username, userRecord)
+		request.Username, hex.EncodeToString(userRecord))
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to store OPAQUE record for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to store OPAQUE record", err.Error())

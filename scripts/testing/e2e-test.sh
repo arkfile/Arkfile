@@ -334,9 +334,7 @@ phase_4_user_registration() {
         --server-url "$SERVER_URL" \
         --tls-insecure \
         register \
-        --username "$TEST_USERNAME" \
-        --email "${TEST_USERNAME}@example.com" \
-        --auto-login=false 2>&1 | tee /tmp/user_register.log; then
+        --username "$TEST_USERNAME" 2>&1 | tee /tmp/user_register.log; then
         
         if grep -q "Registration successful" /tmp/user_register.log; then
             record_test "User registration" "PASS"
@@ -357,8 +355,31 @@ phase_4_user_registration() {
         error "User registration command failed"
         exit 1
     fi
+
+    # Perform initial login (required for TOTP setup since auto-login was removed)
+    section "Performing initial login for: $TEST_USERNAME"
+    if printf "%s\n" "$TEST_PASSWORD" | $BUILD_DIR/arkfile-client \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        --username "$TEST_USERNAME" \
+        login \
+        --save-session 2>&1 | tee /tmp/user_initial_login.log; then
+        
+        if grep -q "Login successful" /tmp/user_initial_login.log; then
+            record_test "Initial user login" "PASS"
+        else
+            record_test "Initial user login" "FAIL"
+            error "Initial user login failed - check /tmp/user_initial_login.log"
+            cat /tmp/user_initial_login.log
+            exit 1
+        fi
+    else
+        record_test "Initial user login" "FAIL"
+        error "Initial user login command failed"
+        exit 1
+    fi
     
-    success "User registration complete"
+    success "User registration and initial login complete"
 }
 
 # Phase 5: TOTP Setup for Regular User

@@ -27,7 +27,7 @@
                 </ul>
             </nav>
             <div class="user-menu">
-                <span class="user-email" id="userEmail"></span>
+                <span class="user-username" id="userUsername"></span>
                 <button id="logoutBtn" class="logout-button">Logout</button>
             </div>
         </div>
@@ -45,8 +45,8 @@
                     <h2>Login</h2>
                     <form id="login-form" onsubmit="login(); return false;">
                         <div class="form-group">
-                            <label for="login-email">Email</label>
-                            <input type="email" id="login-email" required>
+                            <label for="login-username">Username</label>
+                            <input type="text" id="login-username" required>
                         </div>
                         <div class="form-group">
                             <label for="login-password">Password</label>
@@ -63,8 +63,8 @@
                     <h2>Register</h2>
                     <form id="register-form" onsubmit="register(); return false;">
                         <div class="form-group">
-                            <label for="register-email">Email</label>
-                            <input type="email" id="register-email" required>
+                            <label for="register-username">Username</label>
+                            <input type="text" id="register-username" required>
                         </div>
                         <div class="form-group password-section">
                             <label for="register-password">Password</label>
@@ -135,17 +135,17 @@
                 document.getElementById('auth-section').classList.add('hidden');
                 document.getElementById('file-section').classList.remove('hidden');
                 
-                // Set up user email display
-                const userEmail = localStorage.getItem('userEmail');
-                if (userEmail) {
-                    document.getElementById('userEmail').textContent = userEmail;
+                // Set up user username display
+                const username = localStorage.getItem('username');
+                if (username) {
+                    document.getElementById('userUsername').textContent = username;
                 }
             }
             
             // Set up logout button
             document.getElementById('logoutBtn').addEventListener('click', function() {
                 localStorage.removeItem('token');
-                localStorage.removeItem('userEmail');
+                localStorage.removeItem('username');
                 window.location.reload();
             });
         });

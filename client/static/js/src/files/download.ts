@@ -2,7 +2,7 @@
  * File download functionality
  */
 
-import { getUserEmailFromToken, authenticatedFetch } from '../utils/auth';
+import { authenticatedFetch } from '../utils/auth';
 import { showError } from '../ui/messages';
 
 export async function downloadFile(filename: string, hint: string, expectedHash: string, passwordType: string): Promise<void> {

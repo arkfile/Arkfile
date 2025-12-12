@@ -136,11 +136,6 @@ export class AuthManager {
     return payload?.username || null;
   }
 
-  // Legacy function for backwards compatibility
-  public static getUserEmailFromToken(): string | null {
-    return this.getUsernameFromToken();
-  }
-
   public static getTokenExpiry(): Date | null {
     const token = this.getToken();
     if (!token) return null;
@@ -182,16 +177,6 @@ export class AuthManager {
 
   public static getAdminContact(): string {
     return this.adminContact;
-  }
-
-  // Legacy function for backwards compatibility
-  public static async fetchAdminEmails(): Promise<string[]> {
-    const contacts = await this.fetchAdminContacts();
-    return [contacts.contact]; // Return contact email for legacy compatibility
-  }
-
-  public static getAdminEmails(): string[] {
-    return [this.adminContact]; // Return contact email for legacy compatibility
   }
 
   // API helpers with authentication
@@ -256,7 +241,6 @@ export const setTokens = AuthManager.setTokens.bind(AuthManager);
 export const clearTokens = AuthManager.clearTokens.bind(AuthManager);
 export const isAuthenticated = AuthManager.isAuthenticated.bind(AuthManager);
 export const getUsernameFromToken = AuthManager.getUsernameFromToken.bind(AuthManager);
-export const getUserEmailFromToken = AuthManager.getUserEmailFromToken.bind(AuthManager); // Legacy compatibility
 export const isTokenExpired = AuthManager.isTokenExpired.bind(AuthManager);
 export const refreshToken = AuthManager.refreshToken.bind(AuthManager);
 export const revokeAllSessions = AuthManager.revokeAllSessions.bind(AuthManager);
@@ -267,5 +251,3 @@ export const clearAllSessionData = AuthManager.clearAllSessionData.bind(AuthMana
 export const fetchAdminContacts = AuthManager.fetchAdminContacts.bind(AuthManager);
 export const getAdminUsernames = AuthManager.getAdminUsernames.bind(AuthManager);
 export const getAdminContact = AuthManager.getAdminContact.bind(AuthManager);
-export const fetchAdminEmails = AuthManager.fetchAdminEmails.bind(AuthManager); // Legacy compatibility
-export const getAdminEmails = AuthManager.getAdminEmails.bind(AuthManager); // Legacy compatibility
