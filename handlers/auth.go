@@ -27,23 +27,23 @@ type RefreshTokenRequest struct {
 func RefreshToken(c echo.Context) error {
 	var request RefreshTokenRequest
 	if err := c.Bind(&request); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request: malformed body", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request: malformed body")
 	}
 
 	if request.RefreshToken == "" {
-		return JSONError(c, http.StatusUnauthorized, "Refresh token not found", "")
+		return JSONError(c, http.StatusUnauthorized, "Refresh token not found")
 	}
 
 	// Validate the refresh token
 	username, err := models.ValidateRefreshToken(database.DB, request.RefreshToken)
 	if err != nil {
 		if err == models.ErrRefreshTokenExpired {
-			return JSONError(c, http.StatusUnauthorized, "Refresh token expired", "")
+			return JSONError(c, http.StatusUnauthorized, "Refresh token expired")
 		}
 		if err == models.ErrUserNotFound {
-			return JSONError(c, http.StatusUnauthorized, "User not found for token", "")
+			return JSONError(c, http.StatusUnauthorized, "User not found for token")
 		}
-		return JSONError(c, http.StatusUnauthorized, "Invalid or expired refresh token", err.Error())
+		return JSONError(c, http.StatusUnauthorized, "Invalid or expired refresh token")
 	}
 
 	// LAZY REVOCATION CHECK: Check for user-wide JWT revocations during refresh token operation
@@ -57,14 +57,14 @@ func RefreshToken(c echo.Context) error {
 	} else if isUserRevoked {
 		// User has been force-revoked - deny refresh and log security event
 		logging.InfoLogger.Printf("SECURITY: Refresh denied for force-revoked user: %s", username)
-		return JSONError(c, http.StatusUnauthorized, "All tokens have been revoked for security reasons", "")
+		return JSONError(c, http.StatusUnauthorized, "All tokens have been revoked for security reasons")
 	}
 
 	// Generate new JWT token
 	token, expirationTime, err := auth.GenerateToken(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate token for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to create new token", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to create new token")
 	}
 
 	// Revoke the old refresh token for security (token rotation)
@@ -77,7 +77,7 @@ func RefreshToken(c echo.Context) error {
 	refreshToken, err := models.CreateRefreshToken(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Could not create new refresh token", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Could not create new refresh token")
 	}
 
 	// Log the token refresh
@@ -100,7 +100,7 @@ type LogoutRequest struct {
 func Logout(c echo.Context) error {
 	var request LogoutRequest
 	if err := c.Bind(&request); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request")
 	}
 
 	// Get username from token (if authenticated)
@@ -113,7 +113,7 @@ func Logout(c echo.Context) error {
 			// If the token is not found, it might already be revoked, which is not a failure for the user.
 			if err != models.ErrRefreshTokenNotFound {
 				logging.ErrorLogger.Printf("Failed to revoke refresh token: %v", err)
-				return JSONError(c, http.StatusInternalServerError, "Failed to revoke refresh token", err.Error())
+				return JSONError(c, http.StatusInternalServerError, "Failed to revoke refresh token")
 			}
 		}
 	}
@@ -148,18 +148,18 @@ func RevokeToken(c echo.Context) error {
 	}
 
 	if err := c.Bind(&request); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request")
 	}
 
 	if request.Token == "" {
-		return JSONError(c, http.StatusBadRequest, "Token is required", "")
+		return JSONError(c, http.StatusBadRequest, "Token is required")
 	}
 
 	// Revoke the token
 	err := auth.RevokeToken(database.DB, request.Token, request.Reason)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to revoke token: %v", err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to revoke token", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to revoke token")
 	}
 
 	database.LogUserAction(username, "revoked token", "")
@@ -176,7 +176,7 @@ func RevokeAllRefreshTokens(c echo.Context) error {
 	err := models.RevokeAllUserTokens(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to revoke all refresh tokens for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to revoke refresh tokens", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to revoke refresh tokens")
 	}
 
 	database.LogUserAction(username, "revoked all refresh tokens", "")
@@ -196,7 +196,7 @@ func ForceRevokeAllTokens(c echo.Context) error {
 	}
 
 	if err := c.Bind(&request); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request")
 	}
 
 	if request.Reason == "" {
@@ -207,7 +207,7 @@ func ForceRevokeAllTokens(c echo.Context) error {
 	err := models.RevokeAllUserTokens(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to revoke all refresh tokens for %s during force revocation: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to revoke tokens", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to revoke tokens")
 	}
 
 	// Step 2: Add user-specific JWT revocation entry
@@ -215,7 +215,7 @@ func ForceRevokeAllTokens(c echo.Context) error {
 	err = auth.RevokeAllUserJWTTokens(database.DB, username, request.Reason)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to revoke all JWT tokens for %s during force revocation: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to revoke active tokens", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to revoke active tokens")
 	}
 
 	// Step 3: Log security event
@@ -234,7 +234,7 @@ func AdminForceLogout(c echo.Context) error {
 	adminUsername := auth.GetUsernameFromToken(c)
 
 	if targetUsername == "" {
-		return JSONError(c, http.StatusBadRequest, "Username is required", "")
+		return JSONError(c, http.StatusBadRequest, "Username is required")
 	}
 
 	// Verify admin privileges (this should be handled by AdminMiddleware)
@@ -242,14 +242,14 @@ func AdminForceLogout(c echo.Context) error {
 	err := models.RevokeAllUserTokens(database.DB, targetUsername)
 	if err != nil {
 		logging.ErrorLogger.Printf("Admin %s failed to revoke tokens for %s: %v", adminUsername, targetUsername, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to revoke user tokens", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to revoke user tokens")
 	}
 
 	// Add user-specific JWT revocation
 	err = auth.RevokeAllUserJWTTokens(database.DB, targetUsername, "admin force logout")
 	if err != nil {
 		logging.ErrorLogger.Printf("Admin %s failed to revoke JWT tokens for %s: %v", adminUsername, targetUsername, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to revoke user JWT tokens", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to revoke user JWT tokens")
 	}
 
 	// Log security event
@@ -302,32 +302,32 @@ func OpaqueRegisterResponse(c echo.Context) error {
 	}
 	if err := c.Bind(&request); err != nil {
 		logging.ErrorLogger.Printf("OPAQUE registration response bind error: %v", err)
-		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Validate username
 	if request.Username == "" {
-		return JSONError(c, http.StatusBadRequest, "Username is required", "")
+		return JSONError(c, http.StatusBadRequest, "Username is required")
 	}
 
 	// Decode registration request from client
 	registrationRequest, err := base64.StdEncoding.DecodeString(request.RegistrationRequest)
 	if err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid registration request encoding", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid registration request encoding")
 	}
 
 	// Create server registration response
 	registrationResponse, registrationSecret, err := auth.CreateRegistrationResponse(registrationRequest)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create registration response: %v", err)
-		return JSONError(c, http.StatusInternalServerError, "Registration response creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Registration response creation failed")
 	}
 
 	// Create session for multi-step protocol (store the secret for later use in StoreUserRecord)
 	sessionID, err := auth.CreateAuthSession(database.DB, request.Username, "registration", registrationSecret)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create registration session for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Session creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Session creation failed")
 	}
 
 	// Encode response for transmission
@@ -348,25 +348,25 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	}
 	if err := c.Bind(&request); err != nil {
 		logging.ErrorLogger.Printf("OPAQUE registration finalize bind error: %v", err)
-		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Validate session and get registration secret
 	sessionUsername, registrationSecret, err := auth.ValidateAuthSession(database.DB, request.SessionID, "registration")
 	if err != nil {
 		logging.ErrorLogger.Printf("Invalid registration session: %v", err)
-		return JSONError(c, http.StatusUnauthorized, "Invalid or expired session: "+err.Error(), err.Error())
+		return JSONError(c, http.StatusUnauthorized, "Invalid or expired session: "+err.Error())
 	}
 
 	// Verify username matches session
 	if sessionUsername != request.Username {
 		logging.ErrorLogger.Printf("Username mismatch in registration: session=%s, request=%s", sessionUsername, request.Username)
-		return JSONError(c, http.StatusBadRequest, "Username mismatch", "")
+		return JSONError(c, http.StatusBadRequest, "Username mismatch")
 	}
 
 	// Validate username
 	if err := utils.ValidateUsername(request.Username); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid username: "+err.Error(), err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid username: "+err.Error())
 	}
 
 	// Check if user already exists
@@ -374,27 +374,27 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	if err == nil {
 		// Clean up session
 		auth.DeleteAuthSession(database.DB, request.SessionID)
-		return JSONError(c, http.StatusConflict, "Username already registered", "")
+		return JSONError(c, http.StatusConflict, "Username already registered")
 	}
 
 	// Decode registration record
 	registrationRecord, err := base64.StdEncoding.DecodeString(request.RegistrationRecord)
 	if err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid registration record encoding", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid registration record encoding")
 	}
 
 	// Store user record with server secret
 	userRecord, err := auth.StoreUserRecord(registrationSecret, registrationRecord)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to store user record for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to store user record", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to store user record")
 	}
 
 	// Start transaction for atomic user + OPAQUE record creation
 	tx, err := database.DB.Begin()
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to start transaction for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "User creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "User creation failed")
 	}
 	defer tx.Rollback()
 
@@ -402,7 +402,7 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	_, err = models.CreateUser(tx, request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create user %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "User creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "User creation failed")
 	}
 
 	// Store OPAQUE record in RFC-compliant opaque_user_data table
@@ -413,13 +413,13 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		request.Username, hex.EncodeToString(userRecord))
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to store OPAQUE record for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to store OPAQUE record", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to store OPAQUE record")
 	}
 
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		logging.ErrorLogger.Printf("Failed to commit transaction for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "User creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "User creation failed")
 	}
 
 	// Clean up session after successful registration
@@ -432,7 +432,7 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup token creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup token creation failed")
 	}
 
 	// Log successful registration
@@ -472,12 +472,12 @@ func OpaqueAuthResponse(c echo.Context) error {
 	var request OpaqueAuthResponseRequest
 	if err := c.Bind(&request); err != nil {
 		logging.ErrorLogger.Printf("OPAQUE auth response bind error: %v", err)
-		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Validate username
 	if request.Username == "" {
-		return JSONError(c, http.StatusBadRequest, "Username is required", "")
+		return JSONError(c, http.StatusBadRequest, "Username is required")
 	}
 
 	// Get user record from RFC-compliant opaque_user_data table
@@ -494,34 +494,34 @@ func OpaqueAuthResponse(c echo.Context) error {
 		if recordErr := recordAuthFailedAttempt("login", entityID); recordErr != nil {
 			logging.ErrorLogger.Printf("Failed to record login failure: %v", recordErr)
 		}
-		return JSONError(c, http.StatusUnauthorized, "Invalid credentials", "")
+		return JSONError(c, http.StatusUnauthorized, "Invalid credentials")
 	}
 
 	// Decode hex-encoded user record from database
 	userRecord, err := hex.DecodeString(userRecordHex)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to decode OPAQUE user record for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// Decode credential request from client
 	credentialRequest, err := base64.StdEncoding.DecodeString(request.CredentialRequest)
 	if err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid credential request encoding", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid credential request encoding")
 	}
 
 	// Create server credential response
 	credentialResponse, authUServer, err := auth.CreateCredentialResponse(credentialRequest, userRecord, request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create credential response for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication response creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Authentication response creation failed")
 	}
 
 	// Create session for multi-step protocol
 	sessionID, err := auth.CreateAuthSession(database.DB, request.Username, "authentication", authUServer)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create auth session for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Session creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Session creation failed")
 	}
 
 	// Encode response for transmission
@@ -542,26 +542,26 @@ func OpaqueAuthFinalize(c echo.Context) error {
 	}
 	if err := c.Bind(&request); err != nil {
 		logging.ErrorLogger.Printf("OPAQUE auth finalize bind error: %v", err)
-		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Validate session
 	sessionUsername, authUServer, err := auth.ValidateAuthSession(database.DB, request.SessionID, "authentication")
 	if err != nil {
 		logging.ErrorLogger.Printf("Invalid auth session: %v", err)
-		return JSONError(c, http.StatusUnauthorized, "Invalid or expired session", err.Error())
+		return JSONError(c, http.StatusUnauthorized, "Invalid or expired session")
 	}
 
 	// Verify username matches session
 	if sessionUsername != request.Username {
 		logging.ErrorLogger.Printf("Username mismatch in auth: session=%s, request=%s", sessionUsername, request.Username)
-		return JSONError(c, http.StatusBadRequest, "Username mismatch", "")
+		return JSONError(c, http.StatusBadRequest, "Username mismatch")
 	}
 
 	// Decode authU from client
 	authUClient, err := base64.StdEncoding.DecodeString(request.AuthU)
 	if err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid client auth token encoding", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid client auth token encoding")
 	}
 
 	// Verify authentication
@@ -574,7 +574,7 @@ func OpaqueAuthFinalize(c echo.Context) error {
 		}
 		// Clean up session
 		auth.DeleteAuthSession(database.DB, request.SessionID)
-		return JSONError(c, http.StatusUnauthorized, "Invalid credentials", "")
+		return JSONError(c, http.StatusUnauthorized, "Invalid credentials")
 	}
 
 	// Clean up auth session after successful authentication
@@ -587,20 +587,20 @@ func OpaqueAuthFinalize(c echo.Context) error {
 	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// MANDATORY TOTP: All users must have TOTP enabled to login
 	if !totpEnabled {
 		logging.ErrorLogger.Printf("User %s attempted login without TOTP setup", request.Username)
-		return JSONError(c, http.StatusForbidden, "Two-factor authentication setup is required", "")
+		return JSONError(c, http.StatusForbidden, "Two-factor authentication setup is required")
 	}
 
 	// Generate temporary token that requires TOTP completion
 	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// Log partial authentication
@@ -670,24 +670,24 @@ func TOTPSetup(c echo.Context) error {
 	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, username)
 	if err != nil && err.Error() != "sql: no rows in result set" {
 		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to check TOTP status", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to check TOTP status")
 	}
 
 	if totpEnabled {
-		return JSONError(c, http.StatusConflict, "TOTP already enabled for this user", "")
+		return JSONError(c, http.StatusConflict, "TOTP already enabled for this user")
 	}
 
 	// Generate TOTP setup
 	setup, err := auth.GenerateTOTPSetup(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate TOTP setup for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to generate TOTP setup", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to generate TOTP setup")
 	}
 
 	// Store TOTP setup in database
 	if err := auth.StoreTOTPSetup(database.DB, username, setup); err != nil {
 		logging.ErrorLogger.Printf("Failed to store TOTP setup for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to store TOTP setup", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to store TOTP setup")
 	}
 
 	// Log TOTP setup initiation
@@ -712,7 +712,7 @@ type TOTPVerifyRequest struct {
 func TOTPVerify(c echo.Context) error {
 	var request TOTPVerifyRequest
 	if err := c.Bind(&request); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Get username from JWT token
@@ -720,15 +720,15 @@ func TOTPVerify(c echo.Context) error {
 
 	// Validate input
 	if request.Code == "" {
-		return JSONError(c, http.StatusBadRequest, "TOTP code is required", "")
+		return JSONError(c, http.StatusBadRequest, "TOTP code is required")
 	}
 
 	if !request.IsBackup && len(request.Code) != 6 {
-		return JSONError(c, http.StatusBadRequest, "TOTP code must be 6 digits", "")
+		return JSONError(c, http.StatusBadRequest, "TOTP code must be 6 digits")
 	}
 
 	if request.IsBackup && len(request.Code) != 10 {
-		return JSONError(c, http.StatusBadRequest, "Backup code must be 10 characters", "")
+		return JSONError(c, http.StatusBadRequest, "Backup code must be 10 characters")
 	}
 
 	// Complete TOTP setup
@@ -739,7 +739,7 @@ func TOTPVerify(c echo.Context) error {
 		if recordErr := recordAuthFailedAttempt("totp_verify", entityID); recordErr != nil {
 			logging.ErrorLogger.Printf("Failed to record TOTP verify failure: %v", recordErr)
 		}
-		return JSONError(c, http.StatusBadRequest, "Invalid TOTP code", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid TOTP code")
 	}
 
 	// Check if this is a temporary TOTP token (registration flow)
@@ -755,21 +755,21 @@ func TOTPVerify(c echo.Context) error {
 		token, expirationTime, err := auth.GenerateFullAccessToken(username)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
-			return JSONError(c, http.StatusInternalServerError, "Failed to create session", err.Error())
+			return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 		}
 
 		// Generate refresh token
 		refreshToken, err := models.CreateRefreshToken(database.DB, username)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
-			return JSONError(c, http.StatusInternalServerError, "Failed to create session", err.Error())
+			return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 		}
 
 		// Get user record for response
 		user, err := models.GetUserByUsername(database.DB, username)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to get user record for %s: %v", username, err)
-			return JSONError(c, http.StatusInternalServerError, "Failed to get user details", err.Error())
+			return JSONError(c, http.StatusInternalServerError, "Failed to get user details")
 		}
 
 		logging.InfoLogger.Printf("Registration completed with TOTP setup for user: %s", username)
@@ -807,7 +807,7 @@ type TOTPAuthRequest struct {
 func TOTPAuth(c echo.Context) error {
 	var request TOTPAuthRequest
 	if err := c.Bind(&request); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Get username from JWT token
@@ -815,20 +815,20 @@ func TOTPAuth(c echo.Context) error {
 
 	// Check if token requires TOTP
 	if !auth.RequiresTOTPFromToken(c) {
-		return JSONError(c, http.StatusBadRequest, "Token does not require TOTP", "")
+		return JSONError(c, http.StatusBadRequest, "Token does not require TOTP")
 	}
 
 	// Validate input
 	if request.Code == "" {
-		return JSONError(c, http.StatusBadRequest, "TOTP code is required", "")
+		return JSONError(c, http.StatusBadRequest, "TOTP code is required")
 	}
 
 	if !request.IsBackup && len(request.Code) != 6 {
-		return JSONError(c, http.StatusBadRequest, "TOTP code must be 6 digits", "")
+		return JSONError(c, http.StatusBadRequest, "TOTP code must be 6 digits")
 	}
 
 	if request.IsBackup && len(request.Code) != 10 {
-		return JSONError(c, http.StatusBadRequest, "Backup code must be 10 characters", "")
+		return JSONError(c, http.StatusBadRequest, "Backup code must be 10 characters")
 	}
 
 	// Validate TOTP code or backup code
@@ -851,7 +851,7 @@ func TOTPAuth(c echo.Context) error {
 			if recordErr := recordAuthFailedAttempt("totp_auth", entityID); recordErr != nil {
 				logging.ErrorLogger.Printf("Failed to record TOTP auth failure: %v", recordErr)
 			}
-			return JSONError(c, http.StatusUnauthorized, "Invalid backup code", err.Error())
+			return JSONError(c, http.StatusUnauthorized, "Invalid backup code")
 		}
 		database.LogUserAction(username, "used backup code", "")
 	} else {
@@ -875,7 +875,7 @@ func TOTPAuth(c echo.Context) error {
 			if recordErr := recordAuthFailedAttempt("totp_auth", entityID); recordErr != nil {
 				logging.ErrorLogger.Printf("Failed to record TOTP auth failure: %v", recordErr)
 			}
-			return JSONError(c, http.StatusUnauthorized, "Invalid TOTP code", err.Error())
+			return JSONError(c, http.StatusUnauthorized, "Invalid TOTP code")
 		}
 		database.LogUserAction(username, "authenticated with TOTP", "")
 	}
@@ -884,7 +884,7 @@ func TOTPAuth(c echo.Context) error {
 	user, err := models.GetUserByUsername(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get user record for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// Update last_login timestamp (proof-of-life)
@@ -919,14 +919,14 @@ func TOTPAuth(c echo.Context) error {
 	token, expirationTime, err := auth.GenerateFullAccessToken(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate full access token for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to create session", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
 
 	// Generate refresh token
 	refreshToken, err := models.CreateRefreshToken(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to create session", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
 
 	// Log successful authentication
@@ -967,7 +967,7 @@ type TOTPResetResponse struct {
 func TOTPReset(c echo.Context) error {
 	var request TOTPResetRequest
 	if err := c.Bind(&request); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Get username from JWT token
@@ -975,7 +975,7 @@ func TOTPReset(c echo.Context) error {
 
 	// Validate input
 	if request.BackupCode == "" || len(request.BackupCode) != 10 {
-		return JSONError(c, http.StatusBadRequest, "Valid backup code is required (10 characters)", "")
+		return JSONError(c, http.StatusBadRequest, "Valid backup code is required (10 characters)")
 	}
 
 	// Reset TOTP (this validates the backup code and generates new setup)
@@ -987,7 +987,7 @@ func TOTPReset(c echo.Context) error {
 		if recordErr := recordAuthFailedAttempt("totp_reset", entityID); recordErr != nil {
 			logging.ErrorLogger.Printf("Failed to record TOTP reset failure: %v", recordErr)
 		}
-		return JSONError(c, http.StatusUnauthorized, "Invalid backup code or TOTP reset failed", err.Error())
+		return JSONError(c, http.StatusUnauthorized, "Invalid backup code or TOTP reset failed")
 	}
 
 	// Log TOTP reset
@@ -1020,7 +1020,7 @@ func TOTPStatus(c echo.Context) error {
 	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to check TOTP status", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to check TOTP status")
 	}
 
 	response := TOTPStatusResponse{

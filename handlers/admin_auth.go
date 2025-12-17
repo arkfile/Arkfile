@@ -29,7 +29,7 @@ func AdminOpaqueAuthResponse(c echo.Context) error {
 
 	// Validate username
 	if request.Username == "" {
-		return JSONError(c, http.StatusBadRequest, "Username is required", "")
+		return JSONError(c, http.StatusBadRequest, "Username is required")
 	}
 
 	// Verify user exists and is an admin BEFORE processing OPAQUE
@@ -41,7 +41,7 @@ func AdminOpaqueAuthResponse(c echo.Context) error {
 		if recordErr := recordAuthFailedAttempt("admin_login", entityID); recordErr != nil {
 			logging.ErrorLogger.Printf("Failed to record admin login failure: %v", recordErr)
 		}
-		return JSONError(c, http.StatusUnauthorized, "Invalid credentials", "")
+		return JSONError(c, http.StatusUnauthorized, "Invalid credentials")
 	}
 
 	// Verify admin privileges
@@ -52,7 +52,7 @@ func AdminOpaqueAuthResponse(c echo.Context) error {
 		if recordErr := recordAuthFailedAttempt("admin_login", entityID); recordErr != nil {
 			logging.ErrorLogger.Printf("Failed to record admin login failure: %v", recordErr)
 		}
-		return JSONError(c, http.StatusForbidden, "Administrative privileges required", "")
+		return JSONError(c, http.StatusForbidden, "Administrative privileges required")
 	}
 
 	// Get user record from RFC-compliant opaque_user_data table
@@ -69,14 +69,14 @@ func AdminOpaqueAuthResponse(c echo.Context) error {
 		if recordErr := recordAuthFailedAttempt("admin_login", entityID); recordErr != nil {
 			logging.ErrorLogger.Printf("Failed to record admin login failure: %v", recordErr)
 		}
-		return JSONError(c, http.StatusUnauthorized, "Invalid credentials", "")
+		return JSONError(c, http.StatusUnauthorized, "Invalid credentials")
 	}
 
 	// Decode hex-encoded user record from database
 	userRecord, err := hex.DecodeString(userRecordHex)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to decode OPAQUE user record for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// Debug: Log the size of the decoded record
@@ -85,21 +85,21 @@ func AdminOpaqueAuthResponse(c echo.Context) error {
 	// Decode credential request from client
 	credentialRequest, err := base64.StdEncoding.DecodeString(request.CredentialRequest)
 	if err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid credential request encoding", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid credential request encoding")
 	}
 
 	// Create server credential response
 	credentialResponse, authUServer, err := auth.CreateCredentialResponse(credentialRequest, userRecord, request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create admin credential response for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication response creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Authentication response creation failed")
 	}
 
 	// Create session for multi-step protocol
 	sessionID, err := auth.CreateAuthSession(database.DB, request.Username, "admin_authentication", authUServer)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create admin auth session for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Session creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Session creation failed")
 	}
 
 	// Encode response for transmission
@@ -129,13 +129,13 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 	sessionUsername, authUServer, err := auth.ValidateAuthSession(database.DB, request.SessionID, "admin_authentication")
 	if err != nil {
 		logging.ErrorLogger.Printf("Invalid admin auth session: %v", err)
-		return JSONError(c, http.StatusUnauthorized, "Invalid or expired session", err.Error())
+		return JSONError(c, http.StatusUnauthorized, "Invalid or expired session")
 	}
 
 	// Verify username matches session
 	if sessionUsername != request.Username {
 		logging.ErrorLogger.Printf("Username mismatch in admin auth: session=%s, request=%s", sessionUsername, request.Username)
-		return JSONError(c, http.StatusBadRequest, "Username mismatch", "")
+		return JSONError(c, http.StatusBadRequest, "Username mismatch")
 	}
 
 	// Verify user is still an admin (double-check)
@@ -144,20 +144,20 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 		logging.ErrorLogger.Printf("Admin user not found during finalization: %s", request.Username)
 		// Clean up session
 		auth.DeleteAuthSession(database.DB, request.SessionID)
-		return JSONError(c, http.StatusUnauthorized, "Invalid credentials", "")
+		return JSONError(c, http.StatusUnauthorized, "Invalid credentials")
 	}
 
 	if !user.IsAdmin {
 		logging.ErrorLogger.Printf("User lost admin privileges during authentication: %s", request.Username)
 		// Clean up session
 		auth.DeleteAuthSession(database.DB, request.SessionID)
-		return JSONError(c, http.StatusForbidden, "Administrative privileges required", "")
+		return JSONError(c, http.StatusForbidden, "Administrative privileges required")
 	}
 
 	// Decode authU from client
 	authUClient, err := base64.StdEncoding.DecodeString(request.AuthU)
 	if err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid client auth token encoding", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid client auth token encoding")
 	}
 
 	// Verify authentication
@@ -170,7 +170,7 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 		}
 		// Clean up session
 		auth.DeleteAuthSession(database.DB, request.SessionID)
-		return JSONError(c, http.StatusUnauthorized, "Invalid credentials", "")
+		return JSONError(c, http.StatusUnauthorized, "Invalid credentials")
 	}
 
 	// Clean up auth session after successful authentication
@@ -183,20 +183,20 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to check TOTP status for admin %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// MANDATORY TOTP: All admin users must have TOTP enabled to login
 	if !totpEnabled {
 		logging.ErrorLogger.Printf("Admin user %s attempted login without TOTP setup", request.Username)
-		return JSONError(c, http.StatusForbidden, "Two-factor authentication setup is required for admin access", "")
+		return JSONError(c, http.StatusForbidden, "Two-factor authentication setup is required for admin access")
 	}
 
 	// Generate temporary token that requires TOTP completion
 	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for admin %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// Log partial admin authentication

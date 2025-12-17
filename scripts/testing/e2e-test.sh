@@ -42,7 +42,7 @@ ADMIN_TOTP_SECRET="ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"  # Fixed dev secret
 TEST_USERNAME="${TEST_USERNAME:-arkfile-dev-test-user}"
 TEST_PASSWORD="${TEST_PASSWORD:-MyVacation2025PhotosForFamily!ExtraSecure}"
 
-SERVER_URL="${SERVER_URL:-http://localhost:8080}"
+SERVER_URL="${SERVER_URL:-https://localhost:8443}"
 
 # Binary location detection - check local build first, then deployed location
 if [ -d "./build/bin" ] && [ -x "./build/bin/arkfile-client" ]; then
@@ -101,6 +101,24 @@ record_test() {
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
+
+# Safe command execution - captures output and exit code without triggering set -e
+safe_exec() {
+    local output_var="$1"
+    local exit_code_var="$2"
+    shift 2
+    
+    local temp_output
+    local temp_exit_code
+    
+    set +e
+    temp_output=$("$@" 2>&1)
+    temp_exit_code=$?
+    set -e
+    
+    eval "$output_var=\$temp_output"
+    eval "$exit_code_var=\$temp_exit_code"
+}
 
 # Generate TOTP code using the totp-generator utility
 generate_totp() {
@@ -164,7 +182,7 @@ phase_1_environment_verification() {
     phase "1: ENVIRONMENT VERIFICATION"
     
     section "Checking server connectivity"
-    if curl -s --connect-timeout 5 "$SERVER_URL/health" >/dev/null 2>&1; then
+    if curl -sk --connect-timeout 5 "$SERVER_URL/health" >/dev/null 2>&1; then
         record_test "Server connectivity" "PASS"
     else
         record_test "Server connectivity" "FAIL"
@@ -235,8 +253,8 @@ phase_2_admin_authentication() {
     local seconds_into_window=$((current_seconds % 30))
     local seconds_to_wait=$((30 - seconds_into_window))
     
-    info "Waiting ${seconds_to_wait}.5 seconds for next TOTP window (replay protection)..."
-    sleep "${seconds_to_wait}.5"
+    info "Waiting ${seconds_to_wait} seconds + 2 second buffer for next TOTP window (replay protection)..."
+    sleep "$((seconds_to_wait + 2))"
 
     # Generate TOTP code for admin
     local admin_totp_code
@@ -252,27 +270,36 @@ phase_2_admin_authentication() {
     # Admin login with TOTP
     info "Logging in as admin with TOTP code: $admin_totp_code"
     
-    # Use expect or printf to provide password non-interactively
-    # Try using printf with newline to simulate password input
-    if printf "%s\n%s\n" "$ADMIN_PASSWORD" "$admin_totp_code" | $BUILD_DIR/arkfile-admin \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        --username "$ADMIN_USERNAME" \
-        login \
-        --save-session 2>&1 | tee /tmp/admin_login.log; then
-        
+    # Use safe_exec to capture output and exit code
+    local login_output
+    local login_exit_code
+    
+    safe_exec login_output login_exit_code \
+        bash -c "printf '%s\n%s\n' '$ADMIN_PASSWORD' '$admin_totp_code' | $BUILD_DIR/arkfile-admin \
+            --server-url '$SERVER_URL' \
+            --tls-insecure \
+            --username '$ADMIN_USERNAME' \
+            login \
+            --save-session"
+    
+    # Save output to log file
+    echo "$login_output" > /tmp/admin_login.log
+    
+    if [ $login_exit_code -eq 0 ]; then
         # Check if login was successful by looking for success message
-        if grep -q "Admin login successful" /tmp/admin_login.log; then
+        if echo "$login_output" | grep -q "Admin login successful"; then
             record_test "Admin login" "PASS"
+            echo "$login_output"
         else
             record_test "Admin login" "FAIL"
-            error "Admin login failed - check /tmp/admin_login.log"
-            cat /tmp/admin_login.log
+            error "Admin login failed - unexpected output:"
+            echo "$login_output"
             exit 1
         fi
     else
         record_test "Admin login" "FAIL"
-        error "Admin login command failed"
+        error "Admin login command failed with exit code $login_exit_code:"
+        echo "$login_output"
         exit 1
     fi
     
@@ -339,16 +366,10 @@ phase_4_user_registration() {
         if grep -q "Registration successful" /tmp/user_register.log; then
             record_test "User registration" "PASS"
         else
-            # Check if user already exists
-            if grep -q "already exists" /tmp/user_register.log; then
-                warning "User already exists, continuing..."
-                record_test "User registration" "PASS"
-            else
-                record_test "User registration" "FAIL"
-                error "User registration failed - check /tmp/user_register.log"
-                cat /tmp/user_register.log
-                exit 1
-            fi
+            record_test "User registration" "FAIL"
+            error "User registration failed - check /tmp/user_register.log"
+            cat /tmp/user_register.log
+            exit 1
         fi
     else
         record_test "User registration" "FAIL"
@@ -356,30 +377,7 @@ phase_4_user_registration() {
         exit 1
     fi
 
-    # Perform initial login (required for TOTP setup since auto-login was removed)
-    section "Performing initial login for: $TEST_USERNAME"
-    if printf "%s\n" "$TEST_PASSWORD" | $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        --username "$TEST_USERNAME" \
-        login \
-        --save-session 2>&1 | tee /tmp/user_initial_login.log; then
-        
-        if grep -q "Login successful" /tmp/user_initial_login.log; then
-            record_test "Initial user login" "PASS"
-        else
-            record_test "Initial user login" "FAIL"
-            error "Initial user login failed - check /tmp/user_initial_login.log"
-            cat /tmp/user_initial_login.log
-            exit 1
-        fi
-    else
-        record_test "Initial user login" "FAIL"
-        error "Initial user login command failed"
-        exit 1
-    fi
-    
-    success "User registration and initial login complete"
+    success "User registration complete"
 }
 
 # Phase 5: TOTP Setup for Regular User
@@ -391,21 +389,31 @@ phase_5_totp_setup() {
     # Step 1: Get the secret
     info "Initiating TOTP setup..."
     local setup_output
-    setup_output=$($BUILD_DIR/arkfile-client setup-totp --show-secret 2>&1)
+    local setup_exit_code
     
-    if [ $? -ne 0 ]; then
+    # Use safe_exec to capture output and exit code
+    safe_exec setup_output setup_exit_code \
+        $BUILD_DIR/arkfile-client --server-url "$SERVER_URL" --tls-insecure setup-totp --show-secret
+    
+    if [ $setup_exit_code -ne 0 ]; then
         record_test "TOTP setup initiation" "FAIL"
-        error "Failed to initiate TOTP setup: $setup_output"
+        error "Failed to initiate TOTP setup (exit code: $setup_exit_code):"
+        echo "$setup_output"
+        info "Possible causes:"
+        info "  - No valid session (temp token from registration)"
+        info "  - Session file missing: ~/.arkfile-session.json"
+        info "  - Temp token expired"
         exit 1
     fi
     
     # Extract secret
     local secret
-    secret=$(echo "$setup_output" | grep "TOTP_SECRET:" | cut -d':' -f2)
+    secret=$(echo "$setup_output" | grep "TOTP_SECRET:" | cut -d':' -f2 | tr -d ' ')
     
     if [ -z "$secret" ]; then
         record_test "TOTP setup initiation" "FAIL"
-        error "Failed to extract TOTP secret from output: $setup_output"
+        error "Failed to extract TOTP secret from output:"
+        echo "$setup_output"
         exit 1
     fi
     
@@ -428,17 +436,29 @@ phase_5_totp_setup() {
     info "Generated verification code: $code"
     
     # Step 3: Verify and finalize
-    if $BUILD_DIR/arkfile-client setup-totp --verify "$code" 2>&1 | tee /tmp/totp_verify.log; then
-        if grep -q "TOTP Setup Complete" /tmp/totp_verify.log; then
+    local verify_output
+    local verify_exit_code
+    
+    safe_exec verify_output verify_exit_code \
+        $BUILD_DIR/arkfile-client --server-url "$SERVER_URL" --tls-insecure setup-totp --verify "$code"
+    
+    # Save output to log file
+    echo "$verify_output" > /tmp/totp_verify.log
+    
+    if [ $verify_exit_code -eq 0 ]; then
+        if echo "$verify_output" | grep -q "TOTP Setup Complete"; then
             record_test "TOTP verification" "PASS"
+            echo "$verify_output"
         else
             record_test "TOTP verification" "FAIL"
-            error "TOTP verification failed - check /tmp/totp_verify.log"
+            error "TOTP verification failed - unexpected output:"
+            echo "$verify_output"
             exit 1
         fi
     else
         record_test "TOTP verification" "FAIL"
-        error "TOTP verification command failed"
+        error "TOTP verification command failed (exit code: $verify_exit_code):"
+        echo "$verify_output"
         exit 1
     fi
     
@@ -452,24 +472,35 @@ phase_6_admin_approval() {
     section "Approving user via admin: $TEST_USERNAME"
     
     # Approve user using arkfile-admin
-    if $BUILD_DIR/arkfile-admin \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        approve-user \
-        --username "$TEST_USERNAME" \
-        --storage "5GB" 2>&1 | tee /tmp/user_approve.log; then
-        
-        if grep -q "approved successfully" /tmp/user_approve.log; then
+    local approve_output
+    local approve_exit_code
+    
+    safe_exec approve_output approve_exit_code \
+        $BUILD_DIR/arkfile-admin \
+            --server-url "$SERVER_URL" \
+            --tls-insecure \
+            approve-user \
+            --username "$TEST_USERNAME" \
+            --storage "5GB"
+    
+    # Save output to log file
+    echo "$approve_output" > /tmp/user_approve.log
+    
+    if [ $approve_exit_code -eq 0 ]; then
+        # Check for success message - the command outputs "User <username> approved successfully"
+        if echo "$approve_output" | grep -q "approved successfully"; then
             record_test "User approval" "PASS"
+            echo "$approve_output"
         else
             record_test "User approval" "FAIL"
-            error "User approval failed - check /tmp/user_approve.log"
-            cat /tmp/user_approve.log
+            error "User approval failed - unexpected output:"
+            echo "$approve_output"
             exit 1
         fi
     else
         record_test "User approval" "FAIL"
-        error "User approval command failed"
+        error "User approval command failed (exit code: $approve_exit_code):"
+        echo "$approve_output"
         exit 1
     fi
     
@@ -495,8 +526,8 @@ phase_7_user_login() {
     local seconds_into_window=$((current_seconds % 30))
     local seconds_to_wait=$((30 - seconds_into_window))
     
-    info "Waiting ${seconds_to_wait}.5 seconds for next TOTP window (replay protection)..."
-    sleep "${seconds_to_wait}.5"
+    info "Waiting ${seconds_to_wait} seconds + 2 second buffer for next TOTP window (replay protection)..."
+    sleep "$((seconds_to_wait + 2))"
     
     # Generate NEW TOTP code for the new window
     local user_totp_code
@@ -510,24 +541,34 @@ phase_7_user_login() {
     info "Generated new TOTP code for login: $user_totp_code"
     
     # Perform full login with Password AND TOTP code
-    if printf "%s\n%s\n" "$TEST_PASSWORD" "$user_totp_code" | $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        --username "$TEST_USERNAME" \
-        login \
-        --save-session 2>&1 | tee /tmp/user_login.log; then
-        
-        if grep -q "Login successful" /tmp/user_login.log; then
+    local user_login_output
+    local user_login_exit_code
+    
+    safe_exec user_login_output user_login_exit_code \
+        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$user_totp_code' | $BUILD_DIR/arkfile-client \
+            --server-url '$SERVER_URL' \
+            --tls-insecure \
+            --username '$TEST_USERNAME' \
+            login \
+            --save-session"
+    
+    # Save output to log file
+    echo "$user_login_output" > /tmp/user_login.log
+    
+    if [ $user_login_exit_code -eq 0 ]; then
+        if echo "$user_login_output" | grep -q "Login successful"; then
             record_test "User login" "PASS"
+            echo "$user_login_output"
         else
             record_test "User login" "FAIL"
-            error "User login failed - check /tmp/user_login.log"
-            cat /tmp/user_login.log
+            error "User login failed - unexpected output:"
+            echo "$user_login_output"
             exit 1
         fi
     else
         record_test "User login" "FAIL"
-        error "User login command failed"
+        error "User login command failed (exit code: $user_login_exit_code):"
+        echo "$user_login_output"
         exit 1
     fi
     

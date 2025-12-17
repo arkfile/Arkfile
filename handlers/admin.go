@@ -92,16 +92,16 @@ func AdminCleanupTestUser(c echo.Context) error {
 	// Parse request
 	var req AdminCleanupRequest
 	if err := c.Bind(&req); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// Validate request
 	if req.Username == "" {
-		return JSONError(c, http.StatusBadRequest, "Username is required", "")
+		return JSONError(c, http.StatusBadRequest, "Username is required")
 	}
 
 	if !req.Confirm {
-		return JSONError(c, http.StatusBadRequest, "Confirmation is required for cleanup operation", "")
+		return JSONError(c, http.StatusBadRequest, "Confirmation is required for cleanup operation")
 	}
 
 	// Get admin username for audit logging
@@ -110,7 +110,7 @@ func AdminCleanupTestUser(c echo.Context) error {
 	// Perform cleanup in a transaction
 	tx, err := database.DB.Begin()
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to start cleanup transaction", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to start cleanup transaction")
 	}
 	defer tx.Rollback()
 
@@ -159,7 +159,7 @@ func AdminCleanupTestUser(c echo.Context) error {
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		logging.ErrorLogger.Printf("Admin cleanup transaction commit failed: %v", err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to complete cleanup operation", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to complete cleanup operation")
 	}
 
 	// Log admin action for audit trail
@@ -194,7 +194,7 @@ func AdminTOTPDecryptCheck(c echo.Context) error {
 	// Only available in debug mode
 	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
 	if debugMode != "true" && debugMode != "1" {
-		return JSONError(c, http.StatusNotFound, "Endpoint not available", "")
+		return JSONError(c, http.StatusNotFound, "Endpoint not available")
 	}
 
 	targetUsername := c.Param("username")
@@ -202,7 +202,7 @@ func AdminTOTPDecryptCheck(c echo.Context) error {
 		// Use current user if no username specified
 		targetUsername = auth.GetUsernameFromToken(c)
 		if targetUsername == "" {
-			return JSONError(c, http.StatusBadRequest, "Username required", "")
+			return JSONError(c, http.StatusBadRequest, "Username required")
 		}
 	}
 
@@ -213,7 +213,7 @@ func AdminTOTPDecryptCheck(c echo.Context) error {
 	present, decryptable, enabled, setupCompleted, err := auth.CanDecryptTOTPSecret(database.DB, targetUsername)
 	if err != nil {
 		logging.ErrorLogger.Printf("TOTP decrypt check failed for %s: %v", targetUsername, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to check TOTP decrypt status", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to check TOTP decrypt status")
 	}
 
 	// Get additional metadata for debugging
@@ -261,17 +261,17 @@ func AdminTOTPDecryptCheck(c echo.Context) error {
 func AdminApproveUser(c echo.Context) error {
 	targetUsername := c.Param("username")
 	if targetUsername == "" {
-		return JSONError(c, http.StatusBadRequest, "Username parameter is required", "")
+		return JSONError(c, http.StatusBadRequest, "Username parameter is required")
 	}
 
 	// Parse request
 	var req AdminApproveRequest
 	if err := c.Bind(&req); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	if req.ApprovedBy == "" {
-		return JSONError(c, http.StatusBadRequest, "approved_by field is required", "")
+		return JSONError(c, http.StatusBadRequest, "approved_by field is required")
 	}
 
 	// Get admin username for audit logging
@@ -281,22 +281,22 @@ func AdminApproveUser(c echo.Context) error {
 	user, err := models.GetUserByUsername(database.DB, targetUsername)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return JSONError(c, http.StatusNotFound, fmt.Sprintf("User '%s' not found", targetUsername), "")
+			return JSONError(c, http.StatusNotFound, fmt.Sprintf("User '%s' not found", targetUsername))
 		}
-		return JSONError(c, http.StatusInternalServerError, "Failed to retrieve user", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to retrieve user")
 	}
 
 	// Approve the user using the existing method
 	if err := user.ApproveUser(database.DB, req.ApprovedBy); err != nil {
 		logging.ErrorLogger.Printf("Admin user approval failed: %v", err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to approve user", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to approve user")
 	}
 
 	// Reload user from database to get updated approval status
 	updatedUser, err := models.GetUserByUsername(database.DB, targetUsername)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to reload user after approval: %v", err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to verify user approval", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to verify user approval")
 	}
 
 	// Log admin action for audit trail
@@ -327,7 +327,7 @@ func AdminApproveUser(c echo.Context) error {
 func AdminGetUserStatus(c echo.Context) error {
 	targetUsername := c.Param("username")
 	if targetUsername == "" {
-		return JSONError(c, http.StatusBadRequest, "Username parameter is required", "")
+		return JSONError(c, http.StatusBadRequest, "Username parameter is required")
 	}
 
 	// Get admin username for audit logging
@@ -344,7 +344,7 @@ func AdminGetUserStatus(c echo.Context) error {
 			}
 			return JSONResponse(c, http.StatusOK, "User not found", response)
 		}
-		return JSONError(c, http.StatusInternalServerError, "Failed to retrieve user", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to retrieve user")
 	}
 
 	// Build comprehensive status response with proper AdminUserInfo mapping
@@ -439,17 +439,17 @@ func GetPendingUsers(c echo.Context) error {
 	adminUsername := auth.GetUsernameFromToken(c)
 	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get user", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to get user")
 	}
 
 	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required", "")
+		return JSONError(c, http.StatusForbidden, "Admin privileges required")
 	}
 
 	// Get pending users
 	pendingUsers, err := models.GetPendingUsers(database.DB)
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get pending users", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to get pending users")
 	}
 
 	return JSONResponse(c, http.StatusOK, "Pending users retrieved", pendingUsers)
@@ -461,21 +461,21 @@ func DeleteUser(c echo.Context) error {
 	adminUsername := auth.GetUsernameFromToken(c)
 	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user")
 	}
 
 	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required", "")
+		return JSONError(c, http.StatusForbidden, "Admin privileges required")
 	}
 
 	targetUsername := c.Param("username")
 	if targetUsername == "" {
-		return JSONError(c, http.StatusBadRequest, "Username parameter required", "")
+		return JSONError(c, http.StatusBadRequest, "Username parameter required")
 	}
 
 	// Prevent self-deletion
 	if adminUsername == targetUsername {
-		return JSONError(c, http.StatusBadRequest, "Cannot delete your own account", "")
+		return JSONError(c, http.StatusBadRequest, "Cannot delete your own account")
 	}
 
 	// Get storage provider from context or use global provider
@@ -492,14 +492,14 @@ func DeleteUser(c echo.Context) error {
 	// Start transaction
 	tx, err := database.DB.Begin()
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to start transaction", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to start transaction")
 	}
 	defer tx.Rollback()
 
 	// Get user's files for cleanup
 	rows, err := tx.Query("SELECT file_id, storage_id FROM file_metadata WHERE owner_username = ?", targetUsername)
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to retrieve user's files", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to retrieve user's files")
 	}
 
 	var fileIDs []string
@@ -508,7 +508,7 @@ func DeleteUser(c echo.Context) error {
 		var fileID, storageID string
 		if err := rows.Scan(&fileID, &storageID); err != nil {
 			rows.Close()
-			return JSONError(c, http.StatusInternalServerError, "Failed to scan file IDs", err.Error())
+			return JSONError(c, http.StatusInternalServerError, "Failed to scan file IDs")
 		}
 		fileIDs = append(fileIDs, fileID)
 		storageIDs = append(storageIDs, storageID)
@@ -520,34 +520,34 @@ func DeleteUser(c echo.Context) error {
 		if storageProvider != nil {
 			// Use proper RemoveObjectOptions type
 			if err := storageProvider.RemoveObject(c.Request().Context(), storageID, storage.RemoveObjectOptions{}); err != nil {
-				return JSONError(c, http.StatusInternalServerError, fmt.Sprintf("Failed to delete user's file from storage: %s", storageID), err.Error())
+				return JSONError(c, http.StatusInternalServerError, fmt.Sprintf("Failed to delete user's file from storage: %s", storageID))
 			}
 		}
 
 		// Remove file metadata after successful storage deletion
 		if _, err := tx.Exec("DELETE FROM file_metadata WHERE file_id = ?", fileIDs[i]); err != nil {
-			return JSONError(c, http.StatusInternalServerError, fmt.Sprintf("Failed to delete file metadata for: %s", storageIDs[i]), err.Error())
+			return JSONError(c, http.StatusInternalServerError, fmt.Sprintf("Failed to delete file metadata for: %s", storageIDs[i]))
 		}
 	}
 
 	// Delete user's file shares
 	if _, err := tx.Exec("DELETE FROM file_shares WHERE owner_username = ?", targetUsername); err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to delete user's file shares", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to delete user's file shares")
 	}
 
 	// Delete user record
 	if _, err := tx.Exec("DELETE FROM users WHERE username = ?", targetUsername); err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to delete user record", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to delete user record")
 	}
 
 	// Log admin action
 	if err := LogAdminAction(tx, adminUsername, "delete_user", targetUsername, ""); err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to log admin action", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to log admin action")
 	}
 
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to commit transaction", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to commit transaction")
 	}
 
 	return JSONResponse(c, http.StatusOK, "User deleted successfully", nil)
@@ -559,16 +559,16 @@ func UpdateUser(c echo.Context) error {
 	adminUsername := auth.GetUsernameFromToken(c)
 	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user")
 	}
 
 	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required", "")
+		return JSONError(c, http.StatusForbidden, "Admin privileges required")
 	}
 
 	targetUsername := c.Param("username")
 	if targetUsername == "" {
-		return JSONError(c, http.StatusBadRequest, "Username parameter required", "")
+		return JSONError(c, http.StatusBadRequest, "Username parameter required")
 	}
 
 	// Parse request body
@@ -579,18 +579,18 @@ func UpdateUser(c echo.Context) error {
 	}
 
 	if err := c.Bind(&req); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request")
 	}
 
 	// Check if any fields to update
 	if req.IsApproved == nil && req.IsAdmin == nil && req.StorageLimitBytes == nil {
-		return JSONError(c, http.StatusBadRequest, "No updatable fields provided", "")
+		return JSONError(c, http.StatusBadRequest, "No updatable fields provided")
 	}
 
 	// Start transaction
 	tx, err := database.DB.Begin()
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to start transaction", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to start transaction")
 	}
 	defer tx.Rollback()
 
@@ -598,9 +598,9 @@ func UpdateUser(c echo.Context) error {
 	var exists int
 	err = tx.QueryRow("SELECT 1 FROM users WHERE username = ?", targetUsername).Scan(&exists)
 	if err == sql.ErrNoRows {
-		return JSONError(c, http.StatusNotFound, "Target user not found", "")
+		return JSONError(c, http.StatusNotFound, "Target user not found")
 	} else if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to check target user", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to check target user")
 	}
 
 	// Build update query and collect details
@@ -611,7 +611,7 @@ func UpdateUser(c echo.Context) error {
 	if req.IsApproved != nil {
 		// Prevent admin from revoking own approval
 		if targetUsername == adminUsername && !*req.IsApproved {
-			return JSONError(c, http.StatusBadRequest, "Admins cannot revoke their own approval status.", "")
+			return JSONError(c, http.StatusBadRequest, "Admins cannot revoke their own approval status.")
 		}
 		setParts = append(setParts, "is_approved = ?")
 		args = append(args, *req.IsApproved)
@@ -636,20 +636,20 @@ func UpdateUser(c echo.Context) error {
 
 	if _, err := tx.Exec(query, args...); err != nil {
 		if req.IsApproved != nil && !*req.IsApproved {
-			return JSONError(c, http.StatusInternalServerError, "Failed to update approval status", err.Error())
+			return JSONError(c, http.StatusInternalServerError, "Failed to update approval status")
 		}
-		return JSONError(c, http.StatusInternalServerError, "Failed to update user", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to update user")
 	}
 
 	// Log admin action
 	detailsStr := "Updated fields: " + strings.Join(details, ", ")
 	if err := LogAdminAction(tx, adminUsername, "update_user", targetUsername, detailsStr); err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to log admin action", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to log admin action")
 	}
 
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to commit transaction", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to commit transaction")
 	}
 
 	// If revoking approval, tokens would be invalidated in a real implementation
@@ -667,11 +667,11 @@ func ListUsers(c echo.Context) error {
 	adminUsername := auth.GetUsernameFromToken(c)
 	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user")
 	}
 
 	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required", "")
+		return JSONError(c, http.StatusForbidden, "Admin privileges required")
 	}
 
 	// Get all users except the current admin
@@ -686,7 +686,7 @@ func ListUsers(c echo.Context) error {
 			"users": []interface{}{},
 		})
 	} else if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to retrieve users", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to retrieve users")
 	}
 	defer rows.Close()
 
@@ -701,7 +701,7 @@ func ListUsers(c echo.Context) error {
 		err := rows.Scan(&username, &isApproved, &isAdmin, &storageLimitBytes, &totalStorageBytes,
 			&registrationDate, &lastLogin)
 		if err != nil {
-			return JSONError(c, http.StatusInternalServerError, "Error processing user data", err.Error())
+			return JSONError(c, http.StatusInternalServerError, "Error processing user data")
 		}
 
 		// Filter out admins from the list (optional, or keep them)
@@ -753,30 +753,30 @@ func ApproveUser(c echo.Context) error {
 	adminUsername := auth.GetUsernameFromToken(c)
 	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user")
 	}
 
 	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required", "")
+		return JSONError(c, http.StatusForbidden, "Admin privileges required")
 	}
 
 	targetUsername := c.Param("username")
 	if targetUsername == "" {
-		return JSONError(c, http.StatusBadRequest, "Username parameter required", "")
+		return JSONError(c, http.StatusBadRequest, "Username parameter required")
 	}
 
 	// Get target user
 	targetUser, err := models.GetUserByUsername(database.DB, targetUsername)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return JSONError(c, http.StatusNotFound, "User not found", "")
+			return JSONError(c, http.StatusNotFound, "User not found")
 		}
-		return JSONError(c, http.StatusNotFound, "User not found", err.Error())
+		return JSONError(c, http.StatusNotFound, "User not found")
 	}
 
 	// Approve user
 	if err := targetUser.ApproveUser(database.DB, adminUsername); err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to approve user", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to approve user")
 	}
 
 	// Log admin action
@@ -791,16 +791,16 @@ func UpdateUserStorageLimit(c echo.Context) error {
 	adminUsername := auth.GetUsernameFromToken(c)
 	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user")
 	}
 
 	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required", "")
+		return JSONError(c, http.StatusForbidden, "Admin privileges required")
 	}
 
 	targetUsername := c.Param("username")
 	if targetUsername == "" {
-		return JSONError(c, http.StatusBadRequest, "Username parameter required", "")
+		return JSONError(c, http.StatusBadRequest, "Username parameter required")
 	}
 
 	// Parse request body
@@ -809,18 +809,18 @@ func UpdateUserStorageLimit(c echo.Context) error {
 	}
 
 	if err := c.Bind(&req); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request")
 	}
 
 	if req.StorageLimitBytes <= 0 {
-		return JSONError(c, http.StatusBadRequest, "Storage limit must be positive", "")
+		return JSONError(c, http.StatusBadRequest, "Storage limit must be positive")
 	}
 
 	// Update storage limit
 	_, err = database.DB.Exec("UPDATE users SET storage_limit_bytes = ? WHERE username = ?",
 		req.StorageLimitBytes, targetUsername)
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to update storage limit", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to update storage limit")
 	}
 
 	// Log admin action
@@ -841,7 +841,7 @@ func AdminSystemHealth(c echo.Context) error {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to load config for health check: %v", err)
-		return JSONError(c, http.StatusInternalServerError, "Configuration error", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Configuration error")
 	}
 
 	healthMonitor := monitoring.NewHealthMonitor(database.DB, cfg, "arkfile-server")
@@ -869,7 +869,7 @@ func AdminSecurityEvents(c echo.Context) error {
 
 	// Use the default security event logger to get recent events
 	if logging.DefaultSecurityEventLogger == nil {
-		return JSONError(c, http.StatusInternalServerError, "Security event logger not initialized", "")
+		return JSONError(c, http.StatusInternalServerError, "Security event logger not initialized")
 	}
 
 	// Create filters for recent events (limit to 100 for performance)
@@ -880,7 +880,7 @@ func AdminSecurityEvents(c echo.Context) error {
 	events, err := logging.DefaultSecurityEventLogger.GetSecurityEvents(filters)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to retrieve security events: %v", err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to retrieve security events", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to retrieve security events")
 	}
 
 	// Log admin action for audit trail

@@ -46,7 +46,7 @@ SYSTEM COMMANDS:
     version           Show version information
 
 GLOBAL OPTIONS:
-    --server-url URL    Server URL for network commands (default: https://localhost:4443)
+    --server-url URL    Server URL for network commands (default: https://localhost:8443)
     --base-dir DIR      Installation directory for local commands (default: /opt/arkfile)
     --config FILE       Configuration file path
     --username USER     Admin username for authentication
@@ -105,7 +105,6 @@ type Response struct {
 	Success bool                   `json:"success"`
 	Message string                 `json:"message"`
 	Data    map[string]interface{} `json:"data"`
-	Error   string                 `json:"error"`
 }
 
 // User represents user information
@@ -123,7 +122,7 @@ type User struct {
 func main() {
 	// Global flags
 	var (
-		serverURL   = flag.String("server-url", "https://localhost:4443", "Server URL")
+		serverURL   = flag.String("server-url", "https://localhost:8443", "Server URL")
 		configFile  = flag.String("config", "", "Configuration file path")
 		tlsInsecure = flag.Bool("tls-insecure", false, "Skip TLS certificate verification (localhost only)")
 		username    = flag.String("username", "", "Admin username for authentication")
@@ -302,7 +301,7 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 	}
 
 	if resp.StatusCode >= 400 {
-		return &apiResp, fmt.Errorf("HTTP %d: %s", resp.StatusCode, apiResp.Error)
+		return &apiResp, fmt.Errorf("HTTP %d: %s", resp.StatusCode, apiResp.Message)
 	}
 
 	return &apiResp, nil
@@ -953,6 +952,7 @@ EXAMPLES:
 	// Approve user
 	approveReq := map[string]interface{}{
 		"storage_limit_bytes": limitBytes,
+		"approved_by":         session.Username,
 	}
 
 	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/approve", approveReq, session.AccessToken)

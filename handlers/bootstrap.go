@@ -34,52 +34,52 @@ func BootstrapRegisterResponse(c echo.Context) error {
 	ip := c.RealIP()
 	if ip != "127.0.0.1" && ip != "::1" {
 		logging.ErrorLogger.Printf("SECURITY ALERT: Bootstrap attempt from non-local IP: %s", ip)
-		return JSONError(c, http.StatusForbidden, "Bootstrap endpoints only accessible from localhost", "")
+		return JSONError(c, http.StatusForbidden, "Bootstrap endpoints only accessible from localhost")
 	}
 
 	var request BootstrapRegisterInitRequest
 	if err := c.Bind(&request); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// 1. Validate Bootstrap Token
 	isValid, err := auth.ValidateBootstrapToken(request.BootstrapToken)
 	if err != nil {
 		logging.ErrorLogger.Printf("Bootstrap token validation error: %v", err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to validate token", "")
+		return JSONError(c, http.StatusInternalServerError, "Failed to validate token")
 	}
 	if !isValid {
-		return JSONError(c, http.StatusUnauthorized, "Invalid bootstrap token", "")
+		return JSONError(c, http.StatusUnauthorized, "Invalid bootstrap token")
 	}
 
 	// 2. Validate Username
 	if request.Username == "" {
-		return JSONError(c, http.StatusBadRequest, "Username is required", "")
+		return JSONError(c, http.StatusBadRequest, "Username is required")
 	}
 	if err := utils.ValidateUsername(request.Username); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid username: "+err.Error(), err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid username: "+err.Error())
 	}
 
 	// 3. Check if user already exists
 	exists, err := models.UserExists(database.DB, request.Username)
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Database error", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Database error")
 	}
 	if exists {
-		return JSONError(c, http.StatusConflict, "User already exists", "")
+		return JSONError(c, http.StatusConflict, "User already exists")
 	}
 
 	// 4. Decode registration request from client
 	registrationRequest, err := base64.StdEncoding.DecodeString(request.RegistrationRequest)
 	if err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid registration request encoding", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid registration request encoding")
 	}
 
 	// 5. Create server registration response (OPAQUE)
 	registrationResponse, registrationSecret, err := auth.CreateRegistrationResponse(registrationRequest)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create registration response: %v", err)
-		return JSONError(c, http.StatusInternalServerError, "Registration response creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Registration response creation failed")
 	}
 
 	// 6. Create session for multi-step protocol
@@ -87,7 +87,7 @@ func BootstrapRegisterResponse(c echo.Context) error {
 	sessionID, err := auth.CreateAuthSession(database.DB, request.Username, "bootstrap_registration", registrationSecret)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create bootstrap session for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Session creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Session creation failed")
 	}
 
 	// 7. Encode response for transmission
@@ -105,54 +105,54 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	ip := c.RealIP()
 	if ip != "127.0.0.1" && ip != "::1" {
 		logging.ErrorLogger.Printf("SECURITY ALERT: Bootstrap attempt from non-local IP: %s", ip)
-		return JSONError(c, http.StatusForbidden, "Bootstrap endpoints only accessible from localhost", "")
+		return JSONError(c, http.StatusForbidden, "Bootstrap endpoints only accessible from localhost")
 	}
 
 	var request BootstrapRegisterFinalizeRequest
 	if err := c.Bind(&request); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request format", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
 	// 1. Validate Bootstrap Token
 	isValid, err := auth.ValidateBootstrapToken(request.BootstrapToken)
 	if err != nil {
 		logging.ErrorLogger.Printf("Bootstrap token validation error: %v", err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to validate token", "")
+		return JSONError(c, http.StatusInternalServerError, "Failed to validate token")
 	}
 	if !isValid {
-		return JSONError(c, http.StatusUnauthorized, "Invalid bootstrap token", "")
+		return JSONError(c, http.StatusUnauthorized, "Invalid bootstrap token")
 	}
 
 	// 2. Validate session and get registration secret
 	sessionUsername, registrationSecret, err := auth.ValidateAuthSession(database.DB, request.SessionID, "bootstrap_registration")
 	if err != nil {
 		logging.ErrorLogger.Printf("Invalid bootstrap session: %v", err)
-		return JSONError(c, http.StatusUnauthorized, "Invalid or expired session", err.Error())
+		return JSONError(c, http.StatusUnauthorized, "Invalid or expired session")
 	}
 
 	// 3. Verify username matches session
 	if sessionUsername != request.Username {
-		return JSONError(c, http.StatusBadRequest, "Username mismatch", "")
+		return JSONError(c, http.StatusBadRequest, "Username mismatch")
 	}
 
 	// 4. Decode registration record
 	registrationRecord, err := base64.StdEncoding.DecodeString(request.RegistrationRecord)
 	if err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid registration record encoding", err.Error())
+		return JSONError(c, http.StatusBadRequest, "Invalid registration record encoding")
 	}
 
 	// 5. Store user record with server secret (OPAQUE)
 	userRecord, err := auth.StoreUserRecord(registrationSecret, registrationRecord)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to store user record for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to store user record", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to store user record")
 	}
 
 	// 6. Create Admin User in Database
 	// Start transaction
 	tx, err := database.DB.Begin()
 	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Transaction failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Transaction failed")
 	}
 	defer tx.Rollback()
 
@@ -160,14 +160,14 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	userID, err := models.CreateUser(tx, request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create user %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "User creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "User creation failed")
 	}
 
 	// Set as Admin and Approved
 	_, err = tx.Exec("UPDATE users SET is_admin = 1, is_approved = 1 WHERE id = ?", userID)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to set admin privileges for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to set admin privileges", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to set admin privileges")
 	}
 
 	// Store OPAQUE record
@@ -178,12 +178,12 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 		request.Username, userRecord)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to store OPAQUE record for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to store OPAQUE record", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Failed to store OPAQUE record")
 	}
 
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Commit failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Commit failed")
 	}
 
 	// 7. Cleanup Session
@@ -195,7 +195,7 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup token creation failed", err.Error())
+		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup token creation failed")
 	}
 
 	logging.InfoLogger.Printf("BOOTSTRAP: Admin user %s created successfully via OPAQUE.", request.Username)

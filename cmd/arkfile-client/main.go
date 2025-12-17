@@ -54,7 +54,7 @@ COMMANDS:
     version       Show version information
 
 GLOBAL OPTIONS:
-    --server-url URL    Server URL (default: https://localhost:4443)
+    --server-url URL    Server URL (default: https://localhost:8443)
     --config FILE       Configuration file path
     --tls-insecure      Skip TLS certificate verification (localhost only)
     --username USER     Username for authentication
@@ -143,7 +143,7 @@ type UploadMetadata struct {
 func main() {
 	// Global flags
 	var (
-		serverURL   = flag.String("server-url", "https://localhost:4443", "Server URL")
+		serverURL   = flag.String("server-url", "https://localhost:8443", "Server URL")
 		configFile  = flag.String("config", "", "Configuration file path")
 		tlsInsecure = flag.Bool("tls-insecure", false, "Skip TLS certificate verification (localhost only)")
 		username    = flag.String("username", "", "Username for authentication")
