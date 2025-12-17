@@ -94,7 +94,7 @@ func RegisterRoutes() {
 
 	// File sharing - require TOTP for creation, anonymous access for usage
 	totpProtectedGroup.POST("/api/files/:fileId/share", CreateFileShare) // Create Argon2id-based anonymous share
-	totpProtectedGroup.GET("/api/user/shares", ListShares)               // List user's shares
+	totpProtectedGroup.GET("/api/users/shares", ListShares)              // List user's shares
 	totpProtectedGroup.DELETE("/api/share/:id", DeleteShare)             // Delete a share
 
 	// Anonymous share access (no authentication required) - with rate limiting and timing protection
@@ -133,8 +133,8 @@ func RegisterRoutes() {
 	adminGroup.PUT("/credits/:username", AdminSetCredits)
 
 	// User management - admin endpoints (migrated from dev/test to production)
-	adminGroup.POST("/user/:username/approve", AdminApproveUser)
-	adminGroup.GET("/user/:username/status", AdminGetUserStatus)
+	adminGroup.POST("/users/:username/approve", AdminApproveUser)
+	adminGroup.GET("/users/:username/status", AdminGetUserStatus)
 
 	// System monitoring - admin endpoints (Phase 2: Bridge existing monitoring infrastructure)
 	adminGroup.GET("/system/health", AdminSystemHealth)
@@ -149,7 +149,7 @@ func RegisterRoutes() {
 		devTestAdminGroup := Echo.Group("/api/admin/dev-test")
 		devTestAdminGroup.Use(auth.JWTMiddleware()) // Add JWT middleware first
 		devTestAdminGroup.Use(AdminMiddleware)      // Then admin middleware
-		devTestAdminGroup.POST("/user/cleanup", AdminCleanupTestUser)
+		devTestAdminGroup.POST("/users/cleanup", AdminCleanupTestUser)
 		devTestAdminGroup.GET("/totp/decrypt-check/:username", AdminTOTPDecryptCheck) // TOTP diagnostic endpoint
 	}
 
