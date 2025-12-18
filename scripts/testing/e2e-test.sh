@@ -95,6 +95,8 @@ record_test() {
     else
         FAIL_COUNT=$((FAIL_COUNT + 1))
         error "$test_name"
+        error "CRITICAL FAILURE: Test '$test_name' failed. Stopping execution."
+        exit 1
     fi
 }
 
@@ -581,38 +583,115 @@ phase_8_file_operations() {
     
     section "Testing file operations"
     
-    # Create a test file
-    local test_file="/tmp/test_upload_file.txt"
-    echo "This is a test file for arkfile e2e testing" > "$test_file"
+    local test_file="test_file.bin"
+    local test_file_enc="${test_file}.enc"
+    local metadata_file="metadata.json"
+    local gen_log="test_file_gen.log"
     
-    if [ ! -f "$test_file" ]; then
-        record_test "Test file creation" "FAIL"
-        error "Failed to create test file"
-        return
-    fi
-    record_test "Test file creation" "PASS"
-    
-    # Note: File upload requires encryption first with cryptocli
-    # This is documented in the arkfile-client usage
-    warning "File upload requires pre-encryption with cryptocli"
-    warning "Skipping upload test (requires cryptocli workflow)"
-    record_test "File upload (requires cryptocli)" "PASS"
-    
-    # Test file listing
-    section "Listing files"
-    if $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        list-files 2>&1 | tee /tmp/file_list.log; then
+    # 1. Generate Test File
+    section "Generating deterministic test file (50MB)"
+    if $BUILD_DIR/cryptocli generate-test-file \
+        --filename "$test_file" \
+        --size 52428800 \
+        --pattern deterministic > "$gen_log"; then
         
-        record_test "File listing" "PASS"
+        record_test "Test file creation" "PASS"
+        
+        # Extract SHA256 from log
+        local sha256_hash
+        sha256_hash=$(grep "SHA-256:" "$gen_log" | awk '{print $2}')
+        info "File SHA-256: $sha256_hash"
+    else
+        record_test "Test file creation" "FAIL"
+    fi
+
+    # 2. Encrypt File
+    section "Encrypting file with cryptocli"
+    # Note: encrypt-password uses the account password directly, so no separate FEK is generated/used for the file content itself.
+    if printf "%s\n" "$TEST_PASSWORD" | $BUILD_DIR/cryptocli encrypt-password \
+        --file "$test_file" \
+        --username "$TEST_USERNAME" \
+        --key-type account \
+        --output "$test_file_enc"; then
+        
+        record_test "File encryption" "PASS"
+    else
+        record_test "File encryption" "FAIL"
+    fi
+
+    # 3. Encrypt Metadata
+    section "Encrypting metadata"
+    local metadata_output
+    if metadata_output=$(printf "%s\n" "$TEST_PASSWORD" | $BUILD_DIR/cryptocli encrypt-metadata \
+        --filename "$test_file" \
+        --sha256sum "$sha256_hash" \
+        --username "$TEST_USERNAME" \
+        --password-source stdin \
+        --output-format separated); then
+        
+        record_test "Metadata encryption" "PASS"
+        
+        # Parse output
+        local filename_nonce=$(echo "$metadata_output" | grep "Filename Nonce:" | awk '{print $3}')
+        local enc_filename=$(echo "$metadata_output" | grep "Encrypted Filename:" | awk '{print $3}')
+        local sha256_nonce=$(echo "$metadata_output" | grep "SHA256 Nonce:" | awk '{print $3}')
+        local enc_sha256=$(echo "$metadata_output" | grep "Encrypted SHA256:" | awk '{print $3}')
+        
+        # Create metadata.json
+        # Note: encrypted_fek is empty because we used encrypt-password (direct key derivation)
+        cat <<EOF > "$metadata_file"
+{
+    "encrypted_filename": "$enc_filename",
+    "filename_nonce": "$filename_nonce",
+    "encrypted_sha256sum": "$enc_sha256",
+    "sha256sum_nonce": "$sha256_nonce",
+    "encrypted_fek": "",
+    "password_type": "account",
+    "password_hint": "test-hint"
+}
+EOF
+    else
+        record_test "Metadata encryption" "FAIL"
+    fi
+
+    # 4. Upload File
+    section "Uploading encrypted file"
+    if $BUILD_DIR/arkfile-client upload \
+        --file "$test_file_enc" \
+        --metadata "$metadata_file" \
+        --server-url "$SERVER_URL" \
+        --tls-insecure 2>&1 | tee /tmp/upload.log; then
+        
+        if grep -q "Upload successful" /tmp/upload.log; then
+            record_test "File upload" "PASS"
+        else
+            record_test "File upload" "FAIL"
+        fi
+    else
+        record_test "File upload" "FAIL"
+    fi
+
+    # 5. List Files
+    section "Listing files to verify upload"
+    if $BUILD_DIR/arkfile-client list-files \
+        --server-url "$SERVER_URL" \
+        --tls-insecure 2>&1 | tee /tmp/file_list.log; then
+        
+        # Check if our file is in the list (it will be the decrypted filename if client handles it, or we check for existence)
+        # The client list-files should show the decrypted filename if we are logged in
+        if grep -q "$test_file" /tmp/file_list.log; then
+            record_test "File listing verification" "PASS"
+        else
+            warning "File not found in list (or name mismatch)"
+            cat /tmp/file_list.log
+            record_test "File listing verification" "FAIL"
+        fi
     else
         record_test "File listing" "FAIL"
-        error "File listing failed"
     fi
     
-    # Cleanup test file
-    rm -f "$test_file"
+    # Cleanup
+    rm -f "$test_file" "$test_file_enc" "$metadata_file" "$gen_log"
     
     success "File operations phase complete"
 }
