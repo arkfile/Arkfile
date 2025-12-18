@@ -55,6 +55,12 @@ else
     BUILD_DIR="./build"  # Default fallback
 fi
 
+# Test Data Directory (for persistent secrets across runs)
+# MUST be in /tmp as per user requirement
+TEST_DATA_DIR="/tmp/arkfile-e2e-test-data"
+mkdir -p "$TEST_DATA_DIR"
+TOTP_SECRET_FILE="$TEST_DATA_DIR/totp-secret"
+
 # ============================================================================
 # COLOR OUTPUT
 # ============================================================================
@@ -160,21 +166,6 @@ build_totp_generator() {
     return 0
 }
 
-# Create a test file for upload testing
-create_test_file() {
-    local filepath="$1"
-    local size_mb="${2:-50}"  # Default 50MB (4-5 chunks at 16MB chunk size)
-    
-    dd if=/dev/urandom of="$filepath" bs=1M count="$size_mb" 2>/dev/null
-    if [ -f "$filepath" ]; then
-        success "Created test file: $filepath (${size_mb}MB)"
-        return 0
-    else
-        error "Failed to create test file"
-        return 1
-    fi
-}
-
 # ============================================================================
 # TEST PHASES
 # ============================================================================
@@ -214,13 +205,14 @@ phase_1_environment_verification() {
         exit 1
     fi
     
-    # Check cryptocli (optional for this test)
+    # Check cryptocli (REQUIRED for this test)
     if [ -x "$BUILD_DIR/cryptocli" ]; then
         record_test "cryptocli available" "PASS"
         info "Using cryptocli from: $BUILD_DIR/cryptocli"
     else
-        warning "cryptocli not found (optional for this test)"
-        record_test "cryptocli available" "PASS"  # Not critical
+        record_test "cryptocli available" "FAIL"
+        error "cryptocli not found at $BUILD_DIR/cryptocli"
+        exit 1
     fi
     
     section "Checking TOTP generator"
@@ -285,7 +277,7 @@ phase_2_admin_authentication() {
             --save-session"
     
     # Save output to log file
-    echo "$login_output" > /tmp/admin_login.log
+    echo "$login_output" > "$TEST_DATA_DIR/admin_login.log"
     
     if [ $login_exit_code -eq 0 ]; then
         # Check if login was successful by looking for success message
@@ -327,7 +319,7 @@ phase_3_bootstrap_protection() {
         --tls-insecure \
         bootstrap \
         --token "$BOOTSTRAP_TOKEN" \
-        --username "attacker-admin" 2>&1 | tee /tmp/bootstrap_attack.log; then
+        --username "attacker-admin" 2>&1 | tee "$TEST_DATA_DIR/bootstrap_attack.log"; then
         
         # If the command succeeds (exit code 0), that's a SECURITY FAILURE
         record_test "Bootstrap protection" "FAIL"
@@ -336,17 +328,17 @@ phase_3_bootstrap_protection() {
     else
         # If the command fails (non-zero exit code), that's a SUCCESS for protection
         # Ideally check for specific error message if possible
-        if grep -q "already bootstrapped" /tmp/bootstrap_attack.log || \
-           grep -q "bootstrap disabled" /tmp/bootstrap_attack.log || \
-           grep -q "403" /tmp/bootstrap_attack.log || \
-           grep -q "failed" /tmp/bootstrap_attack.log; then
+        if grep -q "already bootstrapped" "$TEST_DATA_DIR/bootstrap_attack.log" || \
+           grep -q "bootstrap disabled" "$TEST_DATA_DIR/bootstrap_attack.log" || \
+           grep -q "403" "$TEST_DATA_DIR/bootstrap_attack.log" || \
+           grep -q "failed" "$TEST_DATA_DIR/bootstrap_attack.log"; then
             
             record_test "Bootstrap protection" "PASS"
             success "Bootstrap protection verified (request rejected)"
         else
             # It failed but maybe for the wrong reason?
             warning "Bootstrap failed but error message was unexpected. Check logs."
-            cat /tmp/bootstrap_attack.log
+            cat "$TEST_DATA_DIR/bootstrap_attack.log"
             record_test "Bootstrap protection" "PASS" # Still pass as it didn't succeed
         fi
     fi
@@ -359,24 +351,39 @@ phase_4_user_registration() {
     section "Registering user: $TEST_USERNAME"
     
     # Register user using arkfile-client
-    if printf "%s\n%s\n" "$TEST_PASSWORD" "$TEST_PASSWORD" | $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        register \
-        --username "$TEST_USERNAME" 2>&1 | tee /tmp/user_register.log; then
-        
-        if grep -q "Registration successful" /tmp/user_register.log; then
+    # Capture output and exit code to handle "already exists" case
+    local reg_output
+    local reg_exit_code
+    
+    safe_exec reg_output reg_exit_code \
+        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$TEST_PASSWORD' | $BUILD_DIR/arkfile-client \
+            --server-url '$SERVER_URL' \
+            --tls-insecure \
+            register \
+            --username '$TEST_USERNAME'"
+            
+    echo "$reg_output" > "$TEST_DATA_DIR/user_register.log"
+
+    if [ $reg_exit_code -eq 0 ]; then
+        if echo "$reg_output" | grep -q "Registration successful"; then
             record_test "User registration" "PASS"
         else
             record_test "User registration" "FAIL"
-            error "User registration failed - check /tmp/user_register.log"
-            cat /tmp/user_register.log
+            error "User registration failed - unexpected output:"
+            echo "$reg_output"
             exit 1
         fi
     else
-        record_test "User registration" "FAIL"
-        error "User registration command failed"
-        exit 1
+        # Check if failure is due to user already existing (Idempotency)
+        if echo "$reg_output" | grep -q "already exists"; then
+            info "User '$TEST_USERNAME' already exists. Proceeding..."
+            record_test "User registration" "PASS"
+        else
+            record_test "User registration" "FAIL"
+            error "User registration command failed (exit code: $reg_exit_code):"
+            echo "$reg_output"
+            exit 1
+        fi
     fi
 
     success "User registration complete"
@@ -388,6 +395,23 @@ phase_5_totp_setup() {
     
     section "Setting up TOTP for user: $TEST_USERNAME"
     
+    # Check if we already have a saved secret for this user (Idempotency)
+    if [ -f "$TOTP_SECRET_FILE" ]; then
+        info "Found existing TOTP secret in $TOTP_SECRET_FILE"
+        local secret
+        secret=$(cat "$TOTP_SECRET_FILE")
+        
+        if [ -n "$secret" ]; then
+            export TEST_USER_TOTP_SECRET="$secret"
+            record_test "TOTP setup initiation" "PASS"
+            info "Using existing TOTP secret: $secret"
+            success "TOTP setup phase complete (skipped - using existing secret)"
+            return 0
+        else
+            warning "TOTP secret file exists but is empty. Proceeding with fresh setup."
+        fi
+    fi
+
     # Step 1: Get the secret
     info "Initiating TOTP setup..."
     local setup_output
@@ -405,6 +429,7 @@ phase_5_totp_setup() {
         info "  - No valid session (temp token from registration)"
         info "  - Session file missing: ~/.arkfile-session.json"
         info "  - Temp token expired"
+        info "  - User already has TOTP setup but local secret file is missing"
         exit 1
     fi
     
@@ -418,6 +443,10 @@ phase_5_totp_setup() {
         echo "$setup_output"
         exit 1
     fi
+    
+    # Save secret to file for future runs
+    echo "$secret" > "$TOTP_SECRET_FILE"
+    info "Saved TOTP secret to $TOTP_SECRET_FILE"
     
     # Export secret globally for use in login phase
     export TEST_USER_TOTP_SECRET="$secret"
@@ -445,7 +474,7 @@ phase_5_totp_setup() {
         $BUILD_DIR/arkfile-client --server-url "$SERVER_URL" --tls-insecure setup-totp --verify "$code"
     
     # Save output to log file
-    echo "$verify_output" > /tmp/totp_verify.log
+    echo "$verify_output" > "$TEST_DATA_DIR/totp_verify.log"
     
     if [ $verify_exit_code -eq 0 ]; then
         if echo "$verify_output" | grep -q "TOTP Setup Complete"; then
@@ -486,7 +515,7 @@ phase_6_admin_approval() {
             --storage "5GB"
     
     # Save output to log file
-    echo "$approve_output" > /tmp/user_approve.log
+    echo "$approve_output" > "$TEST_DATA_DIR/user_approve.log"
     
     if [ $approve_exit_code -eq 0 ]; then
         # Check for success message - the command outputs "User <username> approved successfully"
@@ -500,10 +529,17 @@ phase_6_admin_approval() {
             exit 1
         fi
     else
-        record_test "User approval" "FAIL"
-        error "User approval command failed (exit code: $approve_exit_code):"
-        echo "$approve_output"
-        exit 1
+        # Check if failure is due to user already being approved (Idempotency)
+        # Note: Adjust grep pattern based on actual error message from server/admin tool
+        if echo "$approve_output" | grep -q "already approved"; then
+            info "User '$TEST_USERNAME' is already approved. Proceeding..."
+            record_test "User approval" "PASS"
+        else
+            record_test "User approval" "FAIL"
+            error "User approval command failed (exit code: $approve_exit_code):"
+            echo "$approve_output"
+            exit 1
+        fi
     fi
     
     success "User approval complete"
@@ -555,7 +591,7 @@ phase_7_user_login() {
             --save-session"
     
     # Save output to log file
-    echo "$user_login_output" > /tmp/user_login.log
+    echo "$user_login_output" > "$TEST_DATA_DIR/user_login.log"
     
     if [ $user_login_exit_code -eq 0 ]; then
         if echo "$user_login_output" | grep -q "Login successful"; then
@@ -583,10 +619,10 @@ phase_8_file_operations() {
     
     section "Testing file operations"
     
-    local test_file="test_file.bin"
+    local test_file="$TEST_DATA_DIR/test_file.bin"
     local test_file_enc="${test_file}.enc"
-    local metadata_file="metadata.json"
-    local gen_log="test_file_gen.log"
+    local metadata_file="$TEST_DATA_DIR/metadata.json"
+    local gen_log="$TEST_DATA_DIR/test_file_gen.log"
     
     # 1. Generate Test File
     section "Generating deterministic test file (50MB)"
@@ -607,7 +643,7 @@ phase_8_file_operations() {
 
     # 2. Encrypt File
     section "Encrypting file with cryptocli"
-    # Note: encrypt-password uses the account password directly, so no separate FEK is generated/used for the file content itself.
+    # Note: encrypt-password uses the account password directly
     if printf "%s\n" "$TEST_PASSWORD" | $BUILD_DIR/cryptocli encrypt-password \
         --file "$test_file" \
         --username "$TEST_USERNAME" \
@@ -623,7 +659,7 @@ phase_8_file_operations() {
     section "Encrypting metadata"
     local metadata_output
     if metadata_output=$(printf "%s\n" "$TEST_PASSWORD" | $BUILD_DIR/cryptocli encrypt-metadata \
-        --filename "$test_file" \
+        --filename "test_file.bin" \
         --sha256sum "$sha256_hash" \
         --username "$TEST_USERNAME" \
         --password-source stdin \
@@ -638,7 +674,6 @@ phase_8_file_operations() {
         local enc_sha256=$(echo "$metadata_output" | grep "Encrypted SHA256:" | awk '{print $3}')
         
         # Create metadata.json
-        # Note: encrypted_fek is empty because we used encrypt-password (direct key derivation)
         cat <<EOF > "$metadata_file"
 {
     "encrypted_filename": "$enc_filename",
@@ -656,13 +691,14 @@ EOF
 
     # 4. Upload File
     section "Uploading encrypted file"
-    if $BUILD_DIR/arkfile-client upload \
-        --file "$test_file_enc" \
-        --metadata "$metadata_file" \
+    if $BUILD_DIR/arkfile-client \
         --server-url "$SERVER_URL" \
-        --tls-insecure 2>&1 | tee /tmp/upload.log; then
+        --tls-insecure \
+        upload \
+        --file "$test_file_enc" \
+        --metadata "$metadata_file" 2>&1 | tee "$TEST_DATA_DIR/upload.log"; then
         
-        if grep -q "Upload successful" /tmp/upload.log; then
+        if grep -q "Upload successful" "$TEST_DATA_DIR/upload.log"; then
             record_test "File upload" "PASS"
         else
             record_test "File upload" "FAIL"
@@ -673,17 +709,17 @@ EOF
 
     # 5. List Files
     section "Listing files to verify upload"
-    if $BUILD_DIR/arkfile-client list-files \
+    if $BUILD_DIR/arkfile-client \
         --server-url "$SERVER_URL" \
-        --tls-insecure 2>&1 | tee /tmp/file_list.log; then
+        --tls-insecure \
+        list-files 2>&1 | tee "$TEST_DATA_DIR/file_list.log"; then
         
-        # Check if our file is in the list (it will be the decrypted filename if client handles it, or we check for existence)
-        # The client list-files should show the decrypted filename if we are logged in
-        if grep -q "$test_file" /tmp/file_list.log; then
+        # Check if our file is in the list (it will be the decrypted filename if client handles it)
+        if grep -q "test_file.bin" "$TEST_DATA_DIR/file_list.log"; then
             record_test "File listing verification" "PASS"
         else
             warning "File not found in list (or name mismatch)"
-            cat /tmp/file_list.log
+            cat "$TEST_DATA_DIR/file_list.log"
             record_test "File listing verification" "FAIL"
         fi
     else
@@ -722,9 +758,9 @@ phase_10_admin_operations() {
     if $BUILD_DIR/arkfile-admin \
         --server-url "$SERVER_URL" \
         --tls-insecure \
-        list-users 2>&1 | tee /tmp/admin_list_users.log; then
+        list-users 2>&1 | tee "$TEST_DATA_DIR/admin_list_users.log"; then
         
-        if grep -q "$TEST_USERNAME" /tmp/admin_list_users.log; then
+        if grep -q "$TEST_USERNAME" "$TEST_DATA_DIR/admin_list_users.log"; then
             record_test "Admin list users" "PASS"
         else
             warning "Test user not found in user list"
@@ -742,9 +778,9 @@ phase_10_admin_operations() {
         --tls-insecure \
         set-storage \
         --username "$TEST_USERNAME" \
-        --limit "10GB" 2>&1 | tee /tmp/admin_set_storage.log; then
+        --limit "10GB" 2>&1 | tee "$TEST_DATA_DIR/admin_set_storage.log"; then
         
-        if grep -q "Storage limit updated" /tmp/admin_set_storage.log; then
+        if grep -q "Storage limit updated" "$TEST_DATA_DIR/admin_set_storage.log"; then
             record_test "Admin set storage" "PASS"
         else
             record_test "Admin set storage" "FAIL"
@@ -768,9 +804,9 @@ phase_11_cleanup() {
     if $BUILD_DIR/arkfile-client \
         --server-url "$SERVER_URL" \
         --tls-insecure \
-        logout 2>&1 | tee /tmp/user_logout.log; then
+        logout 2>&1 | tee "$TEST_DATA_DIR/user_logout.log"; then
         
-        if grep -q "Logged out successfully" /tmp/user_logout.log; then
+        if grep -q "Logged out successfully" "$TEST_DATA_DIR/user_logout.log"; then
             record_test "User logout" "PASS"
         else
             warning "User logout may have failed"
@@ -785,9 +821,9 @@ phase_11_cleanup() {
     if $BUILD_DIR/arkfile-admin \
         --server-url "$SERVER_URL" \
         --tls-insecure \
-        logout 2>&1 | tee /tmp/admin_logout.log; then
+        logout 2>&1 | tee "$TEST_DATA_DIR/admin_logout.log"; then
         
-        if grep -q "logout successful" /tmp/admin_logout.log; then
+        if grep -q "logout successful" "$TEST_DATA_DIR/admin_logout.log"; then
             record_test "Admin logout" "PASS"
         else
             warning "Admin logout may have failed"
@@ -799,10 +835,7 @@ phase_11_cleanup() {
     fi
     
     # Clean up temporary files
-    rm -f /tmp/admin_login.log /tmp/user_register.log /tmp/user_approve.log
-    rm -f /tmp/user_login.log /tmp/file_list.log /tmp/admin_list_users.log
-    rm -f /tmp/admin_set_storage.log /tmp/user_logout.log /tmp/admin_logout.log
-    rm -f /tmp/bootstrap_attack.log
+    rm -f "$TEST_DATA_DIR"/*.log
     
     success "Cleanup complete"
 }

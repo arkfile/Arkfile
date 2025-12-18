@@ -168,6 +168,7 @@ fix_go_ownership() {
         chown -R "$SUDO_USER:$SUDO_USER" go.mod go.sum 2>/dev/null || true
         [ -d "vendor" ] && chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
         [ -f ".vendor_cache" ] && chown "$SUDO_USER:$SUDO_USER" .vendor_cache 2>/dev/null || true
+        [ -d "build" ] && chown -R "$SUDO_USER:$SUDO_USER" build/ 2>/dev/null || true
         print_status "SUCCESS" "Go file ownership restored"
     fi
 }
@@ -338,12 +339,13 @@ echo
 # Ensure ownership is correct before build
 fix_go_ownership
 
-if ! ./scripts/setup/build.sh; then
+# Run build script as the original user to prevent root-owned artifacts
+if ! run_as_user ./scripts/setup/build.sh; then
     print_status "ERROR" "Build script failed - this is CRITICAL"
     exit 1
 fi
 
-# Fix ownership after build as well
+# Fix ownership after build as well (just in case)
 fix_go_ownership
 
 # Deploy the build artifacts to /opt/arkfile
