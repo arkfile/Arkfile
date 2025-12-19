@@ -1,6 +1,17 @@
 #!/bin/bash
 set -e
 
+# Parse arguments
+BUILD_ONLY=false
+for arg in "$@"; do
+    case $arg in
+        --build-only)
+            BUILD_ONLY=true
+            shift
+            ;;
+    esac
+done
+
 # Configuration
 APP_NAME="arkfile"
 BUILD_DIR="build"
@@ -279,7 +290,8 @@ fi
 echo -e "${GREEN}Building ${APP_NAME} version ${VERSION}${NC}"
 
 # Stop arkfile service if it's running to avoid "text file busy" errors
-if systemctl is-active --quiet arkfile 2>/dev/null; then
+# Skip this step if --build-only is set (assumes caller handles service management)
+if [ "$BUILD_ONLY" = "false" ] && systemctl is-active --quiet arkfile 2>/dev/null; then
     echo -e "${YELLOW}Stopping arkfile service for rebuild...${NC}"
     sudo systemctl stop arkfile
     # Wait a moment for the service to fully stop
@@ -632,26 +644,30 @@ cp -r database/* "${BUILD_DIR}/database/"
 
 # version.json is already in build/
 
-# Deploy systemd service files to production location
-echo "Deploying systemd service files to ${BASE_DIR}/systemd/..."
-sudo install -d -m 755 -o arkfile -g arkfile "${BASE_DIR}/systemd"
-for file in "${BUILD_DIR}/systemd/"*; do
-    sudo install -m 644 -o arkfile -g arkfile "$file" "${BASE_DIR}/systemd/"
-done
+if [ "$BUILD_ONLY" = "true" ]; then
+    echo -e "${GREEN}Build-only mode: Skipping deployment steps${NC}"
+else
+    # Deploy systemd service files to production location
+    echo "Deploying systemd service files to ${BASE_DIR}/systemd/..."
+    sudo install -d -m 755 -o arkfile -g arkfile "${BASE_DIR}/systemd"
+    for file in "${BUILD_DIR}/systemd/"*; do
+        sudo install -m 644 -o arkfile -g arkfile "$file" "${BASE_DIR}/systemd/"
+    done
 
-# Deploy database schema to production location
-echo "Deploying database schema to ${BASE_DIR}/database/..."
-sudo install -d -m 755 -o arkfile -g arkfile "${BASE_DIR}/database"
-for file in "${BUILD_DIR}/database/"*; do
-    sudo install -m 644 -o arkfile -g arkfile "$file" "${BASE_DIR}/database/"
-done
+    # Deploy database schema to production location
+    echo "Deploying database schema to ${BASE_DIR}/database/..."
+    sudo install -d -m 755 -o arkfile -g arkfile "${BASE_DIR}/database"
+    for file in "${BUILD_DIR}/database/"*; do
+        sudo install -m 644 -o arkfile -g arkfile "$file" "${BASE_DIR}/database/"
+    done
 
-# Deploy binaries to production location for key setup scripts
-echo "Deploying binaries to ${BASE_DIR}/bin/..."
-sudo install -d -m 755 -o arkfile -g arkfile "${BASE_DIR}/bin"
-for file in "${BUILD_DIR}/bin/"*; do
-    sudo install -m 755 -o arkfile -g arkfile "$file" "${BASE_DIR}/bin/"
-done
+    # Deploy binaries to production location for key setup scripts
+    echo "Deploying binaries to ${BASE_DIR}/bin/..."
+    sudo install -d -m 755 -o arkfile -g arkfile "${BASE_DIR}/bin"
+    for file in "${BUILD_DIR}/bin/"*; do
+        sudo install -m 755 -o arkfile -g arkfile "$file" "${BASE_DIR}/bin/"
+    done
+fi
 
 # Fix any root-owned files in the source tree (final cleanup)
 if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then

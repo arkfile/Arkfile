@@ -60,6 +60,10 @@ fi
 TEST_DATA_DIR="/tmp/arkfile-e2e-test-data"
 mkdir -p "$TEST_DATA_DIR"
 TOTP_SECRET_FILE="$TEST_DATA_DIR/totp-secret"
+LOG_FILE="$TEST_DATA_DIR/e2e-test.log"
+
+# Initialize log file
+echo "=== ARKFILE E2E TEST LOG - $(date) ===" > "$LOG_FILE"
 
 # ============================================================================
 # COLOR OUTPUT
@@ -72,12 +76,12 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-success() { echo -e "${GREEN}[OK] $1${NC}"; }
-error() { echo -e "${RED}[X] $1${NC}"; }
-warning() { echo -e "${YELLOW}[!] $1${NC}"; }
-info() { echo -e "${CYAN}[i] $1${NC}"; }
-section() { echo -e "\n${BLUE}$1${NC}"; }
-phase() { echo -e "\n${CYAN}>>> PHASE: $1${NC}\n"; }
+success() { echo -e "${GREEN}[OK] $1${NC}"; echo "[OK] $1" >> "$LOG_FILE"; }
+error() { echo -e "${RED}[X] $1${NC}"; echo "[ERROR] $1" >> "$LOG_FILE"; }
+warning() { echo -e "${YELLOW}[!] $1${NC}"; echo "[WARN] $1" >> "$LOG_FILE"; }
+info() { echo -e "${CYAN}[i] $1${NC}"; echo "[INFO] $1" >> "$LOG_FILE"; }
+section() { echo -e "\n${BLUE}$1${NC}"; echo -e "\n=== $1 ===" >> "$LOG_FILE"; }
+phase() { echo -e "\n${CYAN}>>> PHASE: $1${NC}\n"; echo -e "\n>>> PHASE: $1" >> "$LOG_FILE"; }
 
 # ============================================================================
 # TEST RESULT TRACKING
@@ -111,6 +115,7 @@ record_test() {
 # ============================================================================
 
 # Safe command execution - captures output and exit code without triggering set -e
+# Also logs output to the main log file
 safe_exec() {
     local output_var="$1"
     local exit_code_var="$2"
@@ -119,10 +124,18 @@ safe_exec() {
     local temp_output
     local temp_exit_code
     
+    # Log the command being executed
+    echo "[EXEC] $*" >> "$LOG_FILE"
+    
     set +e
     temp_output=$("$@" 2>&1)
     temp_exit_code=$?
     set -e
+    
+    # Log the output
+    echo "$temp_output" >> "$LOG_FILE"
+    echo "[EXIT] Code: $temp_exit_code" >> "$LOG_FILE"
+    echo "----------------------------------------" >> "$LOG_FILE"
     
     eval "$output_var=\$temp_output"
     eval "$exit_code_var=\$temp_exit_code"
@@ -276,9 +289,6 @@ phase_2_admin_authentication() {
             login \
             --save-session"
     
-    # Save output to log file
-    echo "$login_output" > "$TEST_DATA_DIR/admin_login.log"
-    
     if [ $login_exit_code -eq 0 ]; then
         # Check if login was successful by looking for success message
         if echo "$login_output" | grep -q "Admin login successful"; then
@@ -312,13 +322,18 @@ phase_3_bootstrap_protection() {
     
     # Try to bootstrap again with a new user
     # We expect this to FAIL because the system is already bootstrapped
-    if printf "AttackerPass123!\nAttackerPass123!\n" | $BUILD_DIR/arkfile-admin \
-        --server-url "$SERVER_URL" \
+    local boot_output
+    local boot_exit_code
+    
+    safe_exec boot_output boot_exit_code \
+        bash -c "printf 'AttackerPass123!\nAttackerPass123!\n' | $BUILD_DIR/arkfile-admin \
+        --server-url '$SERVER_URL' \
         --tls-insecure \
         bootstrap \
-        --token "$BOOTSTRAP_TOKEN" \
-        --username "attacker-admin" 2>&1 | tee "$TEST_DATA_DIR/bootstrap_attack.log"; then
+        --token '$BOOTSTRAP_TOKEN' \
+        --username 'attacker-admin'"
         
+    if [ $boot_exit_code -eq 0 ]; then
         # If the command succeeds (exit code 0), that's a SECURITY FAILURE
         record_test "Bootstrap protection" "FAIL"
         error "Security Vulnerability: Able to create second admin via bootstrap!"
@@ -326,17 +341,17 @@ phase_3_bootstrap_protection() {
     else
         # If the command fails (non-zero exit code), that's a SUCCESS for protection
         # Ideally check for specific error message if possible
-        if grep -q "already bootstrapped" "$TEST_DATA_DIR/bootstrap_attack.log" || \
-           grep -q "bootstrap disabled" "$TEST_DATA_DIR/bootstrap_attack.log" || \
-           grep -q "403" "$TEST_DATA_DIR/bootstrap_attack.log" || \
-           grep -q "failed" "$TEST_DATA_DIR/bootstrap_attack.log"; then
+        if echo "$boot_output" | grep -q "already bootstrapped" || \
+           echo "$boot_output" | grep -q "bootstrap disabled" || \
+           echo "$boot_output" | grep -q "403" || \
+           echo "$boot_output" | grep -q "failed"; then
             
             record_test "Bootstrap protection" "PASS"
             success "Bootstrap protection verified (request rejected)"
         else
             # It failed but maybe for the wrong reason?
             warning "Bootstrap failed but error message was unexpected. Check logs."
-            cat "$TEST_DATA_DIR/bootstrap_attack.log"
+            echo "$boot_output"
             record_test "Bootstrap protection" "PASS" # Still pass as it didn't succeed
         fi
     fi
@@ -359,8 +374,6 @@ phase_4_user_registration() {
             --tls-insecure \
             register \
             --username '$TEST_USERNAME'"
-            
-    echo "$reg_output" > "$TEST_DATA_DIR/user_register.log"
 
     if [ $reg_exit_code -eq 0 ]; then
         if echo "$reg_output" | grep -q "Registration successful"; then
@@ -373,7 +386,7 @@ phase_4_user_registration() {
     else
         # Check if failure is due to user already existing (Idempotency)
         # We check for "already exists", "already registered", or HTTP 409 Conflict
-        if echo "$reg_output" | grep -E -q "already exists|already registered|HTTP 409"; then
+        if echo "$reg_output" | grep -E -i -q "already exists|already registered|HTTP 409|conflict"; then
             info "User '$TEST_USERNAME' already exists. Proceeding..."
             record_test "User registration" "PASS"
         else
@@ -469,9 +482,6 @@ phase_5_totp_setup() {
     safe_exec verify_output verify_exit_code \
         $BUILD_DIR/arkfile-client --server-url "$SERVER_URL" --tls-insecure setup-totp --verify "$code"
     
-    # Save output to log file
-    echo "$verify_output" > "$TEST_DATA_DIR/totp_verify.log"
-    
     if [ $verify_exit_code -eq 0 ]; then
         if echo "$verify_output" | grep -q "TOTP Setup Complete"; then
             record_test "TOTP verification" "PASS"
@@ -507,9 +517,6 @@ phase_6_admin_approval() {
             approve-user \
             --username "$TEST_USERNAME" \
             --storage "5GB"
-    
-    # Save output to log file
-    echo "$approve_output" > "$TEST_DATA_DIR/user_approve.log"
     
     if [ $approve_exit_code -eq 0 ]; then
         # Check for success message - the command outputs "User <username> approved successfully"
@@ -582,9 +589,6 @@ phase_7_user_login() {
             login \
             --save-session"
     
-    # Save output to log file
-    echo "$user_login_output" > "$TEST_DATA_DIR/user_login.log"
-    
     if [ $user_login_exit_code -eq 0 ]; then
         if echo "$user_login_output" | grep -q "Login successful"; then
             record_test "User login" "PASS"
@@ -612,49 +616,80 @@ phase_8_file_operations() {
     local test_file="$TEST_DATA_DIR/test_file.bin"
     local test_file_enc="${test_file}.enc"
     local metadata_file="$TEST_DATA_DIR/metadata.json"
-    local gen_log="$TEST_DATA_DIR/test_file_gen.log"
     
     # 1. Generate Test File
     section "Generating deterministic test file (50MB)"
-    if $BUILD_DIR/cryptocli generate-test-file \
+    local gen_output
+    local gen_exit_code
+    
+    safe_exec gen_output gen_exit_code \
+        $BUILD_DIR/cryptocli generate-test-file \
         --filename "$test_file" \
         --size 52428800 \
-        --pattern deterministic > "$gen_log"; then
+        --pattern deterministic
         
+    if [ $gen_exit_code -eq 0 ]; then
         record_test "Test file creation" "PASS"
         
-        # Extract SHA256 from log
+        # Extract SHA256 from output
         local sha256_hash
-        sha256_hash=$(grep "SHA-256:" "$gen_log" | awk '{print $2}')
+        sha256_hash=$(echo "$gen_output" | grep "SHA-256:" | awk '{print $2}')
         info "File SHA-256: $sha256_hash"
     else
         record_test "Test file creation" "FAIL"
+        error "Failed to generate test file"
+        echo "$gen_output"
     fi
 
     # 2. Encrypt File
     section "Encrypting file with cryptocli"
     # Note: encrypt-password uses the account password directly
-    if printf "%s\n" "$TEST_PASSWORD" | $BUILD_DIR/cryptocli encrypt-password \
-        --file "$test_file" \
-        --username "$TEST_USERNAME" \
+    local enc_output
+    local enc_exit_code
+    
+    safe_exec enc_output enc_exit_code \
+        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli encrypt-password \
+        --file '$test_file' \
+        --username '$TEST_USERNAME' \
         --key-type account \
-        --output "$test_file_enc"; then
+        --output '$test_file_enc'"
         
+    if [ $enc_exit_code -eq 0 ]; then
         record_test "File encryption" "PASS"
+        
+        # Verify encryption actually changed the file (Confidentiality Check)
+        local enc_hash
+        enc_hash=$(sha256sum "$test_file_enc" | awk '{print $1}')
+        info "Encrypted File SHA-256: $enc_hash"
+        
+        if [ "$sha256_hash" != "$enc_hash" ]; then
+            record_test "Encryption confidentiality (hash mismatch)" "PASS"
+            info "Confirmed: Encrypted file is different from original"
+        else
+            record_test "Encryption confidentiality (hash mismatch)" "FAIL"
+            error "Security Failure: Encrypted file is identical to original!"
+            exit 1
+        fi
     else
         record_test "File encryption" "FAIL"
+        error "Failed to encrypt file"
+        echo "$enc_output"
     fi
 
     # 3. Encrypt Metadata
     section "Encrypting metadata"
     local metadata_output
-    if metadata_output=$(printf "%s\n" "$TEST_PASSWORD" | $BUILD_DIR/cryptocli encrypt-metadata \
-        --filename "test_file.bin" \
-        --sha256sum "$sha256_hash" \
-        --username "$TEST_USERNAME" \
+    local meta_exit_code
+    
+    safe_exec metadata_output meta_exit_code \
+        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli encrypt-metadata \
+        --filename 'test_file.bin' \
+        --sha256sum '$sha256_hash' \
+        --username '$TEST_USERNAME' \
         --password-source stdin \
-        --output-format separated); then
+        --output-format separated"
         
+    if [ $meta_exit_code -eq 0 ]; then
         record_test "Metadata encryption" "PASS"
         
         # Parse output
@@ -662,6 +697,10 @@ phase_8_file_operations() {
         local enc_filename=$(echo "$metadata_output" | grep "Encrypted Filename:" | awk '{print $3}')
         local sha256_nonce=$(echo "$metadata_output" | grep "SHA256 Nonce:" | awk '{print $3}')
         local enc_sha256=$(echo "$metadata_output" | grep "Encrypted SHA256:" | awk '{print $3}')
+        
+        # Log encrypted values for verification
+        info "Encrypted Filename: $enc_filename"
+        info "Encrypted SHA256: $enc_sha256"
         
         # Create metadata.json
         cat <<EOF > "$metadata_file"
@@ -677,47 +716,145 @@ phase_8_file_operations() {
 EOF
     else
         record_test "Metadata encryption" "FAIL"
+        error "Failed to encrypt metadata"
+        echo "$metadata_output"
     fi
 
     # 4. Upload File
     section "Uploading encrypted file"
-    if $BUILD_DIR/arkfile-client \
+    local upload_output
+    local upload_exit_code
+    
+    safe_exec upload_output upload_exit_code \
+        $BUILD_DIR/arkfile-client \
         --server-url "$SERVER_URL" \
         --tls-insecure \
         upload \
         --file "$test_file_enc" \
-        --metadata "$metadata_file" 2>&1 | tee "$TEST_DATA_DIR/upload.log"; then
+        --metadata "$metadata_file"
         
-        if grep -q "Upload successful" "$TEST_DATA_DIR/upload.log"; then
+    if [ $upload_exit_code -eq 0 ]; then
+        # Check for "Upload completed successfully" (Corrected from "Upload successful")
+        if echo "$upload_output" | grep -q "Upload completed successfully"; then
             record_test "File upload" "PASS"
+            
+            # Extract File ID for verification
+            local file_id
+            file_id=$(echo "$upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+            info "Uploaded File ID: $file_id"
+            
+            if [ -z "$file_id" ]; then
+                warning "Could not extract File ID from upload output"
+            fi
         else
             record_test "File upload" "FAIL"
+            error "Upload failed - unexpected output:"
+            echo "$upload_output"
         fi
     else
         record_test "File upload" "FAIL"
+        error "Upload command failed"
+        echo "$upload_output"
     fi
 
     # 5. List Files
     section "Listing files to verify upload"
-    if $BUILD_DIR/arkfile-client \
+    local list_output
+    local list_exit_code
+    
+    safe_exec list_output list_exit_code \
+        $BUILD_DIR/arkfile-client \
         --server-url "$SERVER_URL" \
         --tls-insecure \
-        list-files 2>&1 | tee "$TEST_DATA_DIR/file_list.log"; then
+        list-files
         
-        # Check if our file is in the list (it will be the decrypted filename if client handles it)
-        if grep -q "test_file.bin" "$TEST_DATA_DIR/file_list.log"; then
+    if [ $list_exit_code -eq 0 ]; then
+        # Check if our file ID is in the list (filenames are encrypted)
+        if [ -n "$file_id" ] && echo "$list_output" | grep -q "$file_id"; then
             record_test "File listing verification" "PASS"
+            info "Verified File ID $file_id in file list"
         else
-            warning "File not found in list (or name mismatch)"
-            cat "$TEST_DATA_DIR/file_list.log"
+            warning "File ID not found in list (or ID extraction failed)"
+            echo "$list_output"
             record_test "File listing verification" "FAIL"
         fi
     else
         record_test "File listing" "FAIL"
+        error "List files command failed"
+        echo "$list_output"
+    fi
+
+    # 6. Download File
+    section "Downloading file"
+    local download_output
+    local download_exit_code
+    local downloaded_file="$TEST_DATA_DIR/downloaded.enc"
+    
+    safe_exec download_output download_exit_code \
+        $BUILD_DIR/arkfile-client \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        download \
+        --file-id "$file_id" \
+        --output "$downloaded_file"
+        
+    if [ $download_exit_code -eq 0 ]; then
+        record_test "File download" "PASS"
+    else
+        record_test "File download" "FAIL"
+        error "Download failed"
+        echo "$download_output"
+    fi
+
+    # 7. Verify Metadata File
+    section "Verifying downloaded metadata"
+    local downloaded_meta="$downloaded_file.metadata.json"
+    if [ -f "$downloaded_meta" ]; then
+        record_test "Metadata download" "PASS"
+        info "Found metadata file: $downloaded_meta"
+    else
+        record_test "Metadata download" "FAIL"
+        error "Metadata file not found"
+    fi
+
+    # 8. Decrypt File
+    section "Decrypting downloaded file"
+    local decrypted_file="$TEST_DATA_DIR/decrypted.bin"
+    local decrypt_output
+    local decrypt_exit_code
+    
+    safe_exec decrypt_output decrypt_exit_code \
+        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli decrypt-password \
+        --file '$downloaded_file' \
+        --username '$TEST_USERNAME' \
+        --output '$decrypted_file'"
+        
+    if [ $decrypt_exit_code -eq 0 ]; then
+        record_test "File decryption" "PASS"
+    else
+        record_test "File decryption" "FAIL"
+        error "Decryption failed"
+        echo "$decrypt_output"
+    fi
+
+    # 9. Verify Content
+    section "Verifying file content"
+    # We need to re-calculate original sum because we might have lost it if we didn't capture it well, 
+    # but we did capture it in sha256_hash variable earlier.
+    # However, let's verify against the actual file on disk to be sure.
+    local original_sum_check=$(sha256sum "$test_file" | awk '{print $1}')
+    local decrypted_sum=$(sha256sum "$decrypted_file" | awk '{print $1}')
+    
+    if [ "$original_sum_check" == "$decrypted_sum" ]; then
+        record_test "Content verification" "PASS"
+        info "SHA256 matches: $decrypted_sum"
+    else
+        record_test "Content verification" "FAIL"
+        error "SHA256 mismatch! Original: $original_sum_check, Decrypted: $decrypted_sum"
     fi
     
     # Cleanup
-    rm -f "$test_file" "$test_file_enc" "$metadata_file" "$gen_log"
+    rm -f "$test_file" "$test_file_enc" "$metadata_file" "$downloaded_file" "$downloaded_meta" "$decrypted_file"
     
     success "File operations phase complete"
 }
@@ -737,52 +874,6 @@ phase_9_share_operations() {
     success "Share operations phase complete"
 }
 
-# Phase 10: Admin Operations
-phase_10_admin_operations() {
-    phase "10: ADMIN OPERATIONS"
-    
-    section "Testing admin operations"
-    
-    # List users
-    section "Listing users"
-    if $BUILD_DIR/arkfile-admin \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        list-users 2>&1 | tee "$TEST_DATA_DIR/admin_list_users.log"; then
-        
-        if grep -q "$TEST_USERNAME" "$TEST_DATA_DIR/admin_list_users.log"; then
-            record_test "Admin list users" "PASS"
-        else
-            warning "Test user not found in user list"
-            record_test "Admin list users" "PASS"  # Still pass if command worked
-        fi
-    else
-        record_test "Admin list users" "FAIL"
-        error "Admin list users failed"
-    fi
-    
-    # Set storage limit
-    section "Setting storage limit"
-    if $BUILD_DIR/arkfile-admin \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        set-storage \
-        --username "$TEST_USERNAME" \
-        --limit "10GB" 2>&1 | tee "$TEST_DATA_DIR/admin_set_storage.log"; then
-        
-        if grep -q "Storage limit updated" "$TEST_DATA_DIR/admin_set_storage.log"; then
-            record_test "Admin set storage" "PASS"
-        else
-            record_test "Admin set storage" "FAIL"
-            error "Admin set storage failed"
-        fi
-    else
-        record_test "Admin set storage" "FAIL"
-        error "Admin set storage command failed"
-    fi
-    
-    success "Admin operations phase complete"
-}
 
 # Phase 11: Cleanup
 phase_11_cleanup() {
@@ -791,12 +882,17 @@ phase_11_cleanup() {
     section "Cleaning up test data"
     
     # Logout user
-    if $BUILD_DIR/arkfile-client \
+    local user_logout_output
+    local user_logout_exit_code
+    
+    safe_exec user_logout_output user_logout_exit_code \
+        $BUILD_DIR/arkfile-client \
         --server-url "$SERVER_URL" \
         --tls-insecure \
-        logout 2>&1 | tee "$TEST_DATA_DIR/user_logout.log"; then
+        logout
         
-        if grep -q "Logged out successfully" "$TEST_DATA_DIR/user_logout.log"; then
+    if [ $user_logout_exit_code -eq 0 ]; then
+        if echo "$user_logout_output" | grep -q "Logged out successfully"; then
             record_test "User logout" "PASS"
         else
             warning "User logout may have failed"
@@ -808,12 +904,17 @@ phase_11_cleanup() {
     fi
     
     # Logout admin
-    if $BUILD_DIR/arkfile-admin \
+    local admin_logout_output
+    local admin_logout_exit_code
+    
+    safe_exec admin_logout_output admin_logout_exit_code \
+        $BUILD_DIR/arkfile-admin \
         --server-url "$SERVER_URL" \
         --tls-insecure \
-        logout 2>&1 | tee "$TEST_DATA_DIR/admin_logout.log"; then
+        logout
         
-        if grep -q "logout successful" "$TEST_DATA_DIR/admin_logout.log"; then
+    if [ $admin_logout_exit_code -eq 0 ]; then
+        if echo "$admin_logout_output" | grep -q "logout successful"; then
             record_test "Admin logout" "PASS"
         else
             warning "Admin logout may have failed"
@@ -824,8 +925,8 @@ phase_11_cleanup() {
         record_test "Admin logout" "PASS"  # Not critical
     fi
     
-    # Clean up temporary files
-    rm -f "$TEST_DATA_DIR"/*.log
+    # Clean up temporary files (except the main log)
+    # rm -f "$TEST_DATA_DIR"/*.log # We keep the main log now
     
     success "Cleanup complete"
 }
@@ -902,7 +1003,7 @@ main() {
     phase_7_user_login
     phase_8_file_operations
     phase_9_share_operations
-    phase_10_admin_operations
+    # phase_10_admin_operations - Removed as per user request
     phase_11_cleanup
     
     # Show summary and exit with appropriate code

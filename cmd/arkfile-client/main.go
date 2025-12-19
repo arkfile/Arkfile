@@ -1066,36 +1066,38 @@ EXAMPLES:
 
 	logVerbose("Starting download for file: %s", *fileID)
 
-	// STEP 1: Get file metadata (optional - for progress display and size info)
+	// STEP 1: Get file metadata (Always fetch to save alongside file)
 	var expectedSize int64
-	if *showProgress {
-		metaURL := fmt.Sprintf("/api/files/%s/meta", *fileID)
-		logVerbose("Fetching file metadata from: %s", metaURL)
+	var metaData []byte
 
-		req, err := http.NewRequest("GET", client.baseURL+metaURL, nil)
-		if err != nil {
-			return fmt.Errorf("failed to create metadata request: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+	metaURL := fmt.Sprintf("/api/files/%s/meta", *fileID)
+	logVerbose("Fetching file metadata from: %s", metaURL)
 
-		metaResp, err := client.client.Do(req)
-		if err != nil {
-			// If metadata fails, continue without progress info
-			logVerbose("Warning: metadata request failed: %v", err)
-		} else {
-			defer metaResp.Body.Close()
-			if metaResp.StatusCode == http.StatusOK {
-				metaData, err := io.ReadAll(metaResp.Body)
-				if err == nil {
-					var meta map[string]interface{}
-					if json.Unmarshal(metaData, &meta) == nil {
-						if size, ok := meta["size_bytes"].(float64); ok {
-							expectedSize = int64(size)
-							logVerbose("Expected file size: %d bytes", expectedSize)
-						}
+	req, err := http.NewRequest("GET", client.baseURL+metaURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create metadata request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+
+	metaResp, err := client.client.Do(req)
+	if err != nil {
+		// If metadata fails, continue without progress info but warn
+		logVerbose("Warning: metadata request failed: %v", err)
+	} else {
+		defer metaResp.Body.Close()
+		if metaResp.StatusCode == http.StatusOK {
+			metaData, err = io.ReadAll(metaResp.Body)
+			if err == nil {
+				var meta map[string]interface{}
+				if json.Unmarshal(metaData, &meta) == nil {
+					if size, ok := meta["size_bytes"].(float64); ok {
+						expectedSize = int64(size)
+						logVerbose("Expected file size: %d bytes", expectedSize)
 					}
 				}
 			}
+		} else {
+			logVerbose("Warning: metadata request returned status %d", metaResp.StatusCode)
 		}
 	}
 
@@ -1103,13 +1105,13 @@ EXAMPLES:
 	downloadURL := fmt.Sprintf("/api/files/%s", *fileID)
 	logVerbose("Downloading file from: %s", downloadURL)
 
-	req, err := http.NewRequest("GET", client.baseURL+downloadURL, nil)
+	downloadReq, err := http.NewRequest("GET", client.baseURL+downloadURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create download request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+	downloadReq.Header.Set("Authorization", "Bearer "+session.AccessToken)
 
-	downloadResp, err := client.client.Do(req)
+	downloadResp, err := client.client.Do(downloadReq)
 	if err != nil {
 		return fmt.Errorf("download request failed: %w", err)
 	}
@@ -1174,6 +1176,17 @@ EXAMPLES:
 	fmt.Printf("Encrypted file downloaded successfully\n")
 	fmt.Printf("File ID: %s\n", *fileID)
 	fmt.Printf("Saved to: %s\n", *outputPath)
+
+	// Save metadata file if we successfully fetched it
+	if len(metaData) > 0 {
+		metaPath := *outputPath + ".metadata.json"
+		if err := os.WriteFile(metaPath, metaData, 0644); err != nil {
+			fmt.Printf("Warning: Failed to save metadata file: %v\n", err)
+		} else {
+			fmt.Printf("Metadata saved to: %s\n", metaPath)
+		}
+	}
+
 	fmt.Printf("Size: %s\n", formatFileSize(totalBytesDownloaded))
 	fmt.Printf("\nUse 'cryptocli decrypt-password' to decrypt the file.\n")
 

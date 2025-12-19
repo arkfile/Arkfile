@@ -340,7 +340,8 @@ echo
 fix_go_ownership
 
 # Run build script as the original user to prevent root-owned artifacts
-if ! run_as_user ./scripts/setup/build.sh; then
+# Use --build-only to skip redundant sudo calls (service stopping and deployment)
+if ! run_as_user ./scripts/setup/build.sh --build-only; then
     print_status "ERROR" "Build script failed - this is CRITICAL"
     exit 1
 fi
