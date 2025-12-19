@@ -285,16 +285,14 @@ phase_2_admin_authentication() {
             record_test "Admin login" "PASS"
             echo "$login_output"
         else
-            record_test "Admin login" "FAIL"
             error "Admin login failed - unexpected output:"
             echo "$login_output"
-            exit 1
+            record_test "Admin login" "FAIL"
         fi
     else
-        record_test "Admin login" "FAIL"
         error "Admin login command failed with exit code $login_exit_code:"
         echo "$login_output"
-        exit 1
+        record_test "Admin login" "FAIL"
     fi
     
     success "Admin authentication complete"
@@ -368,21 +366,20 @@ phase_4_user_registration() {
         if echo "$reg_output" | grep -q "Registration successful"; then
             record_test "User registration" "PASS"
         else
-            record_test "User registration" "FAIL"
             error "User registration failed - unexpected output:"
             echo "$reg_output"
-            exit 1
+            record_test "User registration" "FAIL"
         fi
     else
         # Check if failure is due to user already existing (Idempotency)
-        if echo "$reg_output" | grep -q "already exists"; then
+        # We check for "already exists", "already registered", or HTTP 409 Conflict
+        if echo "$reg_output" | grep -E -q "already exists|already registered|HTTP 409"; then
             info "User '$TEST_USERNAME' already exists. Proceeding..."
             record_test "User registration" "PASS"
         else
-            record_test "User registration" "FAIL"
             error "User registration command failed (exit code: $reg_exit_code):"
             echo "$reg_output"
-            exit 1
+            record_test "User registration" "FAIL"
         fi
     fi
 
@@ -422,7 +419,6 @@ phase_5_totp_setup() {
         $BUILD_DIR/arkfile-client --server-url "$SERVER_URL" --tls-insecure setup-totp --show-secret
     
     if [ $setup_exit_code -ne 0 ]; then
-        record_test "TOTP setup initiation" "FAIL"
         error "Failed to initiate TOTP setup (exit code: $setup_exit_code):"
         echo "$setup_output"
         info "Possible causes:"
@@ -430,7 +426,7 @@ phase_5_totp_setup() {
         info "  - Session file missing: ~/.arkfile-session.json"
         info "  - Temp token expired"
         info "  - User already has TOTP setup but local secret file is missing"
-        exit 1
+        record_test "TOTP setup initiation" "FAIL"
     fi
     
     # Extract secret
@@ -481,16 +477,14 @@ phase_5_totp_setup() {
             record_test "TOTP verification" "PASS"
             echo "$verify_output"
         else
-            record_test "TOTP verification" "FAIL"
             error "TOTP verification failed - unexpected output:"
             echo "$verify_output"
-            exit 1
+            record_test "TOTP verification" "FAIL"
         fi
     else
-        record_test "TOTP verification" "FAIL"
         error "TOTP verification command failed (exit code: $verify_exit_code):"
         echo "$verify_output"
-        exit 1
+        record_test "TOTP verification" "FAIL"
     fi
     
     success "TOTP setup phase complete"
@@ -523,10 +517,9 @@ phase_6_admin_approval() {
             record_test "User approval" "PASS"
             echo "$approve_output"
         else
-            record_test "User approval" "FAIL"
             error "User approval failed - unexpected output:"
             echo "$approve_output"
-            exit 1
+            record_test "User approval" "FAIL"
         fi
     else
         # Check if failure is due to user already being approved (Idempotency)
@@ -535,10 +528,9 @@ phase_6_admin_approval() {
             info "User '$TEST_USERNAME' is already approved. Proceeding..."
             record_test "User approval" "PASS"
         else
-            record_test "User approval" "FAIL"
             error "User approval command failed (exit code: $approve_exit_code):"
             echo "$approve_output"
-            exit 1
+            record_test "User approval" "FAIL"
         fi
     fi
     
@@ -598,16 +590,14 @@ phase_7_user_login() {
             record_test "User login" "PASS"
             echo "$user_login_output"
         else
-            record_test "User login" "FAIL"
             error "User login failed - unexpected output:"
             echo "$user_login_output"
-            exit 1
+            record_test "User login" "FAIL"
         fi
     else
-        record_test "User login" "FAIL"
         error "User login command failed (exit code: $user_login_exit_code):"
         echo "$user_login_output"
-        exit 1
+        record_test "User login" "FAIL"
     fi
     
     success "User login phase complete"
