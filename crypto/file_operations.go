@@ -626,3 +626,55 @@ func DecryptFEKFromEnvelope(encryptedFEK, password []byte) ([]byte, error) {
 
 	return fek, nil
 }
+
+// DecryptFileWithKey decrypts file data using a raw key (FEK)
+// This bypasses password derivation and uses the provided key directly.
+// It still parses the envelope to ensure valid format but ignores the key type.
+func DecryptFileWithKey(encryptedData []byte, key []byte) ([]byte, error) {
+	if len(encryptedData) < 2 {
+		return nil, fmt.Errorf("encrypted data too short: need at least 2 bytes for envelope, got %d", len(encryptedData))
+	}
+
+	if len(key) == 0 {
+		return nil, fmt.Errorf("key cannot be empty")
+	}
+
+	// Parse envelope (just to validate format)
+	envelope := encryptedData[:2]
+	ciphertext := encryptedData[2:]
+
+	_, _, err := ParsePasswordEnvelope(envelope)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse envelope: %w", err)
+	}
+
+	// Decrypt the data using the provided key
+	plaintext, err := DecryptGCM(ciphertext, key)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	}
+
+	return plaintext, nil
+}
+
+// DecryptFileFromPathWithKey decrypts a file using a raw key and writes to disk
+func DecryptFileFromPathWithKey(inputPath, outputPath string, key []byte) error {
+	// Read encrypted file
+	encryptedData, err := os.ReadFile(inputPath)
+	if err != nil {
+		return fmt.Errorf("failed to read encrypted file: %w", err)
+	}
+
+	// Decrypt data
+	plaintext, err := DecryptFileWithKey(encryptedData, key)
+	if err != nil {
+		return fmt.Errorf("decryption failed: %w", err)
+	}
+
+	// Write decrypted data to output file
+	if err := os.WriteFile(outputPath, plaintext, 0600); err != nil {
+		return fmt.Errorf("failed to write decrypted file: %w", err)
+	}
+
+	return nil
+}

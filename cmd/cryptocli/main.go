@@ -31,6 +31,9 @@ COMMANDS:
     decrypt-metadata  Decrypt file metadata (filename, hash) using password-derived key
     encrypt-fek       Encrypt a File Encryption Key (FEK) using password-derived key
     decrypt-fek       Decrypt a File Encryption Key (FEK) using password-derived key
+    encrypt-share-key Encrypt a FEK for sharing using a share password
+    decrypt-share-key Decrypt a shared FEK using a share password
+    decrypt-file-key  Decrypt a file using a raw File Encryption Key (FEK)
     hash              Calculate SHA-256 hash of files
     generate-key      Generate random AES keys
     generate-test-file Generate test files with deterministic patterns
@@ -127,6 +130,21 @@ func main() {
 	case "decrypt-fek":
 		if err := handleDecryptFEKCommand(args); err != nil {
 			logError("FEK decryption failed: %v", err)
+			os.Exit(1)
+		}
+	case "encrypt-share-key":
+		if err := handleEncryptShareKeyCommand(args); err != nil {
+			logError("Share key encryption failed: %v", err)
+			os.Exit(1)
+		}
+	case "decrypt-share-key":
+		if err := handleDecryptShareKeyCommand(args); err != nil {
+			logError("Share key decryption failed: %v", err)
+			os.Exit(1)
+		}
+	case "decrypt-file-key":
+		if err := handleDecryptFileKeyCommand(args); err != nil {
+			logError("File decryption with key failed: %v", err)
 			os.Exit(1)
 		}
 	case "derive-export-key":
@@ -1079,6 +1097,264 @@ EXAMPLE:
 	// Print result
 	fmt.Printf("FEK decrypted successfully\n")
 	fmt.Printf("Decrypted FEK (hex): %s\n", hex.EncodeToString(fekBytes))
+
+	return nil
+}
+
+// handleEncryptShareKeyCommand processes the encrypt-share-key command
+func handleEncryptShareKeyCommand(args []string) error {
+	fs := flag.NewFlagSet("encrypt-share-key", flag.ExitOnError)
+	var (
+		fekHex         = fs.String("fek", "", "File Encryption Key in hex format (required)")
+		passwordSource = fs.String("password-source", "prompt", "Password source: prompt or stdin")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli encrypt-share-key [FLAGS]
+
+Encrypts a File Encryption Key (FEK) using a share password.
+Generates a random salt and uses Argon2id for key derivation.
+Outputs JSON with encrypted FEK and salt.
+
+FLAGS:
+    --fek HEX              File Encryption Key in hex format (required)
+    --password-source SRC  Password source: prompt or stdin (default: prompt)
+    --help                 Show this help message
+
+EXAMPLE:
+    cryptocli encrypt-share-key --fek "abc123..."
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *fekHex == "" {
+		fs.Usage()
+		return fmt.Errorf("fek is required")
+	}
+
+	// Decode FEK from hex
+	fek, err := hex.DecodeString(*fekHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode FEK from hex: %w", err)
+	}
+
+	// Validate FEK length
+	if len(fek) != 32 {
+		return fmt.Errorf("FEK must be 32 bytes (256 bits) for AES-256, got %d bytes", len(fek))
+	}
+
+	// Read password
+	var password []byte
+	if *passwordSource == "stdin" {
+		reader := bufio.NewReader(os.Stdin)
+		passwordStr, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read password from stdin: %w", err)
+		}
+		password = []byte(strings.TrimSpace(passwordStr))
+	} else {
+		password, err = readPassword("Enter share password: ")
+		if err != nil {
+			return fmt.Errorf("failed to read password: %w", err)
+		}
+	}
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	if len(password) == 0 {
+		return fmt.Errorf("password cannot be empty")
+	}
+
+	// Generate random salt (32 bytes)
+	salt, err := crypto.GenerateSecureSalt(32)
+	if err != nil {
+		return fmt.Errorf("failed to generate salt: %w", err)
+	}
+
+	// Derive key using share password and salt
+	encryptionKey := crypto.DeriveShareKey(password, salt)
+	logVerbose("Derived share encryption key using Argon2id")
+
+	// Encrypt FEK
+	encryptedFEK, err := crypto.EncryptGCM(fek, encryptionKey)
+	if err != nil {
+		return fmt.Errorf("FEK encryption failed: %w", err)
+	}
+
+	// Output JSON
+	fmt.Printf("{\n")
+	fmt.Printf("  \"encrypted_fek\": \"%s\",\n", base64.StdEncoding.EncodeToString(encryptedFEK))
+	fmt.Printf("  \"salt\": \"%s\"\n", base64.StdEncoding.EncodeToString(salt))
+	fmt.Printf("}\n")
+
+	return nil
+}
+
+// handleDecryptShareKeyCommand processes the decrypt-share-key command
+func handleDecryptShareKeyCommand(args []string) error {
+	fs := flag.NewFlagSet("decrypt-share-key", flag.ExitOnError)
+	var (
+		encryptedFEK   = fs.String("encrypted-fek", "", "Base64 encoded encrypted FEK (required)")
+		salt           = fs.String("salt", "", "Base64 encoded salt (required)")
+		passwordSource = fs.String("password-source", "prompt", "Password source: prompt or stdin")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli decrypt-share-key [FLAGS]
+
+Decrypts a shared File Encryption Key (FEK) using a share password and salt.
+
+FLAGS:
+    --encrypted-fek B64    Base64 encoded encrypted FEK (required)
+    --salt B64             Base64 encoded salt (required)
+    --password-source SRC  Password source: prompt or stdin (default: prompt)
+    --help                 Show this help message
+
+EXAMPLE:
+    cryptocli decrypt-share-key --encrypted-fek "..." --salt "..."
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *encryptedFEK == "" || *salt == "" {
+		fs.Usage()
+		return fmt.Errorf("encrypted-fek and salt are required")
+	}
+
+	// Decode encrypted FEK
+	fekEnc, err := base64.StdEncoding.DecodeString(*encryptedFEK)
+	if err != nil {
+		return fmt.Errorf("failed to decode encrypted FEK: %w", err)
+	}
+
+	// Decode salt
+	saltBytes, err := base64.StdEncoding.DecodeString(*salt)
+	if err != nil {
+		return fmt.Errorf("failed to decode salt: %w", err)
+	}
+
+	// Read password
+	var password []byte
+	if *passwordSource == "stdin" {
+		reader := bufio.NewReader(os.Stdin)
+		passwordStr, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read password from stdin: %w", err)
+		}
+		password = []byte(strings.TrimSpace(passwordStr))
+	} else {
+		password, err = readPassword("Enter share password: ")
+		if err != nil {
+			return fmt.Errorf("failed to read password: %w", err)
+		}
+	}
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	if len(password) == 0 {
+		return fmt.Errorf("password cannot be empty")
+	}
+
+	// Derive key using share password and salt
+	decryptionKey := crypto.DeriveShareKey(password, saltBytes)
+	logVerbose("Derived share decryption key using Argon2id")
+
+	// Decrypt FEK
+	fekBytes, err := crypto.DecryptGCM(fekEnc, decryptionKey)
+	if err != nil {
+		return fmt.Errorf("FEK decryption failed: %w", err)
+	}
+
+	// Validate FEK length
+	if len(fekBytes) != 32 {
+		return fmt.Errorf("decrypted FEK must be 32 bytes (256 bits) for AES-256, got %d bytes", len(fekBytes))
+	}
+
+	// Print result
+	fmt.Printf("FEK decrypted successfully\n")
+	fmt.Printf("Decrypted FEK (hex): %s\n", hex.EncodeToString(fekBytes))
+
+	return nil
+}
+
+// handleDecryptFileKeyCommand processes the decrypt-file-key command
+func handleDecryptFileKeyCommand(args []string) error {
+	fs := flag.NewFlagSet("decrypt-file-key", flag.ExitOnError)
+	var (
+		filePath   = fs.String("file", "", "File to decrypt (required)")
+		fekHex     = fs.String("fek", "", "File Encryption Key in hex format (required)")
+		outputPath = fs.String("output", "", "Output file path (optional)")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli decrypt-file-key [FLAGS]
+
+Decrypts a file using a raw File Encryption Key (FEK).
+This is used when the FEK has been decrypted separately (e.g., from a share).
+
+FLAGS:
+    --file FILE         File to decrypt (required)
+    --fek HEX           File Encryption Key in hex format (required)
+    --output FILE       Output file path (optional, defaults to input.dec)
+    --help              Show this help message
+
+EXAMPLE:
+    cryptocli decrypt-file-key --file document.pdf.enc --fek "abc123..."
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *filePath == "" || *fekHex == "" {
+		fs.Usage()
+		return fmt.Errorf("file and fek are required")
+	}
+
+	// Decode FEK from hex
+	fek, err := hex.DecodeString(*fekHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode FEK from hex: %w", err)
+	}
+
+	// Validate FEK length
+	if len(fek) != 32 {
+		return fmt.Errorf("FEK must be 32 bytes (256 bits) for AES-256, got %d bytes", len(fek))
+	}
+
+	// Determine output path
+	outputFilePath := getOutputPath(*filePath, *outputPath)
+
+	// Decrypt file
+	if err := crypto.DecryptFileFromPathWithKey(*filePath, outputFilePath, fek); err != nil {
+		return fmt.Errorf("decryption failed: %w", err)
+	}
+
+	// Get file sizes for reporting
+	inputInfo, err := os.Stat(*filePath)
+	if err != nil {
+		return fmt.Errorf("failed to get input file info: %w", err)
+	}
+
+	outputInfo, err := os.Stat(outputFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to get output file info: %w", err)
+	}
+
+	fmt.Printf("File decryption completed successfully\n")
+	fmt.Printf("Input file: %s (%d bytes)\n", *filePath, inputInfo.Size())
+	fmt.Printf("Output file: %s (%d bytes)\n", outputFilePath, outputInfo.Size())
 
 	return nil
 }

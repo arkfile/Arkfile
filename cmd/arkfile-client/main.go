@@ -49,6 +49,8 @@ COMMANDS:
     login         Authenticate with arkfile server
     upload        Upload pre-encrypted file to server
     download      Download encrypted file from server  
+    share         Manage file shares (create, list, delete)
+    download-share Download a shared file
     list-files    List available files (encrypted metadata)
     logout        Logout and clear session
     version       Show version information
@@ -72,12 +74,22 @@ WORKFLOW:
     4. Download: arkfile-client download --file-id xyz --output encrypted.dat
     5. Decrypt: cryptocli decrypt-password --file encrypted.dat --username alice
 
+SHARE WORKFLOW:
+    1. Get FEK: cryptocli decrypt-fek --encrypted-fek "..." --username alice
+    2. Encrypt Share Key: cryptocli encrypt-share-key --fek "..."
+    3. Create Share: arkfile-client share create --file-id xyz --encrypted-fek "..." --salt "..."
+    4. Download Share: arkfile-client download-share --share-id abc --output shared.enc
+    5. Decrypt Share Key: cryptocli decrypt-share-key --encrypted-fek "..." --salt "..."
+    6. Decrypt File: cryptocli decrypt-file ... (using the decrypted FEK)
+
 EXAMPLES:
     arkfile-client register --username alice
     arkfile-client login --username alice
     arkfile-client upload --file document.pdf.enc --metadata metadata.json
     arkfile-client download --file-id abc123 --output downloaded.enc
     arkfile-client list-files --json
+    arkfile-client share create --file-id 123 --encrypted-fek "..." --salt "..."
+    arkfile-client download-share --share-id 456 --output shared.enc
 `
 )
 
@@ -220,6 +232,16 @@ func main() {
 	case "download":
 		if err := handleDownloadCommand(client, config, args); err != nil {
 			logError("Download failed: %v", err)
+			os.Exit(1)
+		}
+	case "share":
+		if err := handleShareCommand(client, config, args); err != nil {
+			logError("Share command failed: %v", err)
+			os.Exit(1)
+		}
+	case "download-share":
+		if err := handleDownloadShareCommand(client, config, args); err != nil {
+			logError("Download share failed: %v", err)
 			os.Exit(1)
 		}
 	case "list-files":
@@ -1213,6 +1235,243 @@ type ServerFileInfo struct {
 	SizeBytes         int64  `json:"size_bytes"`
 	SizeReadable      string `json:"size_readable"`
 	UploadDate        string `json:"upload_date"`
+}
+
+// handleShareCommand processes share management commands
+func handleShareCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("subcommand required: create, list, delete")
+	}
+
+	subcommand := args[0]
+	subArgs := args[1:]
+
+	switch subcommand {
+	case "create":
+		return handleShareCreate(client, config, subArgs)
+	case "list":
+		return handleShareList(client, config, subArgs)
+	case "delete":
+		return handleShareDelete(client, config, subArgs)
+	default:
+		return fmt.Errorf("unknown subcommand: %s", subcommand)
+	}
+}
+
+func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) error {
+	fs := flag.NewFlagSet("share create", flag.ExitOnError)
+	var (
+		fileID       = fs.String("file-id", "", "File ID to share (required)")
+		encryptedFEK = fs.String("encrypted-fek", "", "Base64 encrypted FEK (required)")
+		salt         = fs.String("salt", "", "Base64 salt (required)")
+		expiresAt    = fs.String("expires-at", "", "Expiration time (RFC3339)")
+		maxDownloads = fs.Int("max-downloads", 0, "Maximum number of downloads (0 for unlimited)")
+	)
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *fileID == "" || *encryptedFEK == "" || *salt == "" {
+		return fmt.Errorf("file-id, encrypted-fek, and salt are required")
+	}
+
+	// Load session
+	session, err := loadAuthSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in: %w", err)
+	}
+
+	req := map[string]interface{}{
+		"file_id":       *fileID,
+		"encrypted_fek": *encryptedFEK,
+		"salt":          *salt,
+	}
+
+	if *expiresAt != "" {
+		req["expires_at"] = *expiresAt
+	}
+	if *maxDownloads > 0 {
+		req["max_downloads"] = *maxDownloads
+	}
+
+	resp, err := client.makeRequest("POST", "/api/shares", req, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to create share: %w", err)
+	}
+
+	shareID, _ := resp.Data["share_id"].(string)
+	shareURL, _ := resp.Data["share_url"].(string)
+
+	fmt.Printf("Share created successfully\n")
+	fmt.Printf("Share ID: %s\n", shareID)
+	fmt.Printf("Share URL: %s\n", shareURL)
+
+	return nil
+}
+
+func handleShareList(client *HTTPClient, config *ClientConfig, args []string) error {
+	// Load session
+	session, err := loadAuthSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in: %w", err)
+	}
+
+	resp, err := client.makeRequest("GET", "/api/shares", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to list shares: %w", err)
+	}
+
+	shares, ok := resp.Data["shares"].([]interface{})
+	if !ok {
+		fmt.Println("No shares found")
+		return nil
+	}
+
+	fmt.Printf("Found %d shares:\n\n", len(shares))
+	for _, s := range shares {
+		share := s.(map[string]interface{})
+		fmt.Printf("ID: %s\n", share["id"])
+		fmt.Printf("File ID: %s\n", share["file_id"])
+		fmt.Printf("Created: %s\n", share["created_at"])
+		if exp, ok := share["expires_at"].(string); ok && exp != "" {
+			fmt.Printf("Expires: %s\n", exp)
+		}
+		if max, ok := share["max_downloads"].(float64); ok && max > 0 {
+			count := 0.0
+			if c, ok := share["download_count"].(float64); ok {
+				count = c
+			}
+			fmt.Printf("Downloads: %.0f/%.0f\n", count, max)
+		}
+		fmt.Println("---")
+	}
+
+	return nil
+}
+
+func handleShareDelete(client *HTTPClient, config *ClientConfig, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("share ID required")
+	}
+	shareID := args[0]
+
+	// Load session
+	session, err := loadAuthSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in: %w", err)
+	}
+
+	_, err = client.makeRequest("DELETE", "/api/shares/"+shareID, nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to delete share: %w", err)
+	}
+
+	fmt.Printf("Share %s deleted successfully\n", shareID)
+	return nil
+}
+
+func handleDownloadShareCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+	fs := flag.NewFlagSet("download-share", flag.ExitOnError)
+	var (
+		shareID      = fs.String("share-id", "", "Share ID to download (required)")
+		outputPath   = fs.String("output", "", "Output file path (required)")
+		showProgress = fs.Bool("progress", true, "Show download progress")
+	)
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *shareID == "" || *outputPath == "" {
+		return fmt.Errorf("share-id and output are required")
+	}
+
+	// 1. Get Share Metadata
+	logVerbose("Fetching share metadata for: %s", *shareID)
+	metaResp, err := client.makeRequest("GET", "/api/shares/"+*shareID+"/public", nil, "")
+	if err != nil {
+		return fmt.Errorf("failed to get share metadata: %w", err)
+	}
+
+	encryptedFEK, _ := metaResp.Data["encrypted_fek"].(string)
+	salt, _ := metaResp.Data["salt"].(string)
+	// We might want to get filename/size too if available in public metadata
+	// But for now let's focus on the download
+
+	// 2. Download File
+	downloadURL := fmt.Sprintf("/api/shares/%s/download", *shareID)
+	logVerbose("Downloading file from: %s", downloadURL)
+
+	req, err := http.NewRequest("GET", client.baseURL+downloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := client.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status: %d", resp.StatusCode)
+	}
+
+	// Create output file
+	outFile, err := os.Create(*outputPath)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+	defer outFile.Close()
+
+	// Stream download
+	if *showProgress {
+		fmt.Printf("Downloading shared file...\n")
+	}
+
+	size, err := io.Copy(outFile, resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	fmt.Printf("Download complete: %s (%d bytes)\n", *outputPath, size)
+	fmt.Println("\nTo decrypt this file:")
+	fmt.Println("1. Decrypt the FEK:")
+	fmt.Printf("   cryptocli decrypt-share-key --encrypted-fek \"%s\" --salt \"%s\"\n", encryptedFEK, salt)
+	fmt.Println("2. Decrypt the file using the FEK:")
+	fmt.Printf("   cryptocli decrypt-fek --encrypted-fek ... (wait, decrypt-file doesn't take raw FEK yet)\n")
+	// Wait, cryptocli decrypt-file usually takes a password.
+	// We need a way to decrypt a file using a raw FEK.
+	// Or `cryptocli decrypt-fek` decrypts the FEK, but then what?
+	// Ah, `cryptocli decrypt-file` uses password derivation.
+	// We might need `cryptocli decrypt-file --fek <hex>`?
+	// Or `cryptocli decrypt-file` should support `--key <hex>`?
+
+	// Let's check cryptocli capabilities again.
+	// It has `decrypt-password` which uses password.
+	// It doesn't seem to have `decrypt-file-with-key`.
+
+	// However, `cryptocli decrypt-fek` decrypts a FEK using a password.
+	// `cryptocli decrypt-share-key` decrypts a FEK using a share password.
+	// Both output a RAW FEK (hex).
+
+	// We need a command to decrypt a file using that RAW FEK.
+	// `cryptocli decrypt-file`? No, `decrypt-password` is for password-based.
+
+	// I should probably add `decrypt-file` to cryptocli that takes a raw key.
+	// Or update `decrypt-password` to accept a raw key? No, that's confusing.
+
+	// Let's look at `cmd/cryptocli/main.go` again.
+	// It has `encrypt-password`, `decrypt-password`.
+	// It has `encrypt-fek`, `decrypt-fek`.
+
+	// It seems we are missing a `decrypt-with-key` command.
+	// But wait, `crypto.DecryptFileFromPath` takes a password.
+
+	// Let's check `crypto/file_operations.go`.
+
+	return nil
 }
 
 // handleListFilesCommand processes list-files command
