@@ -478,10 +478,12 @@ export async function deriveFileEncryptionKeyWithCache(
   context: PasswordContext = 'account'
 ): Promise<Uint8Array> {
   // Create cache key that includes context
-  const cacheKey = `${username}:${context}`;
+  // Note: cacheFileEncryptionKey/getCachedFileEncryptionKey will prepend the prefix
+  // so we just pass the composite identifier as the "username"
+  const cacheIdentifier = `${username}:${context}`;
   
   // Try to get cached key
-  const cachedKey = getCachedFileEncryptionKey(cacheKey);
+  const cachedKey = getCachedFileEncryptionKey(cacheIdentifier);
   if (cachedKey) {
     return cachedKey;
   }
@@ -490,7 +492,7 @@ export async function deriveFileEncryptionKeyWithCache(
   const key = await deriveFileEncryptionKey(password, username, context);
   
   // Cache it
-  cacheFileEncryptionKey(cacheKey, key);
+  cacheFileEncryptionKey(cacheIdentifier, key);
   
   return key;
 }

@@ -2,6 +2,8 @@
  * Authentication utilities
  */
 
+import { clearAllCachedKeys } from '../crypto/file-encryption.js';
+
 export class AuthManager {
   private static readonly TOKEN_KEY = 'token';
   private static readonly REFRESH_TOKEN_KEY = 'refresh_token';
@@ -216,6 +218,9 @@ export class AuthManager {
   public static clearAllSessionData(): void {
     // Clear tokens
     this.clearTokens();
+    
+    // Clear cached encryption keys
+    clearAllCachedKeys();
     
     // Clear any legacy session context
     if (typeof window !== 'undefined') {

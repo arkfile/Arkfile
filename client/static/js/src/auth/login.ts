@@ -9,6 +9,7 @@ import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleTOTPFlow } from './totp.js';
 import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
+import { deriveFileEncryptionKeyWithCache } from '../crypto/file-encryption.js';
 
 export interface LoginCredentials {
   username: string;
@@ -111,6 +112,16 @@ export class LoginManager {
       // JWT tokens handle all session management
       if (loginFinalize.sessionKey) {
         loginFinalize.sessionKey.fill(0);
+      }
+
+      // Cache the account key for file operations
+      // This ensures the user doesn't need to re-enter their password for file operations
+      // The key is stored in sessionStorage and cleared on logout/tab close
+      try {
+        await deriveFileEncryptionKeyWithCache(credentials.password, credentials.username, 'account');
+      } catch (error) {
+        console.warn('Failed to cache account key:', error);
+        // Non-fatal error, user will just be prompted later if needed
       }
       
       // Handle TOTP if required
