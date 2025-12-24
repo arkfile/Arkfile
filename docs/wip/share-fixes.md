@@ -1,4 +1,4 @@
-# Implementation Plan: Unified Share System (Final)
+# Implementation Plan: Unified Share System (HUMAN + GEMINI 3.0 LLM PLAN)
 
 **Objective**: Implement a unified, Zero-Knowledge share workflow that supports both Account-Encrypted and Custom-Encrypted files. The system will enforce bandwidth protection via Download Tokens and provide a secure, consistent user experience across Web and CLI clients.
 
@@ -122,7 +122,7 @@
 
 ---
 
-# ADDITIONAL CONSIDERATIONS, SUGGESTED EDITS & ADDITIONS BY ANOTHER LLM:
+# ADDITIONAL CONSIDERATIONS, SUGGESTED EDITS & ADDITIONS BY ANOTHER LLM (CLAUDE SONNET 4.5):
 
 ### **Add to Phase 1 (Database Schema Update):**
 
@@ -167,7 +167,101 @@
 ### **Add in controls server side to ensure share expiration/invalidation happens as requested by the owner:**
 
 - If owner at any time wishes, he may invalidate/force-expire the share
-- If download count (access count) equals max accesses, we must immediately invalidate the share
+- If download count (access count) equals max accesses, we must immediately invalidate the share (on completion of the current download)
 - download_token should be either deleted or overwritten with a new random value to prevent further downloads (implementation TBD; please advise) at the time that the share is rendered invalid or expires
+- The owner should be able to list/view all the shares he has created at any time, and update them (delete/invalidate/extend) at any time from both the CLI and the Web App
+
+---
+
+# ADDITIONAL CONSIDERATIONS, SUGGESTED EDITS & ADDITIONS BY ANOTHER LLM (GPT-5.2):
+
+## Key gaps / areas to improve
+
+1. **Download endpoint is currently bypassable (bandwidth protection missing)**
+   - `handlers/file_shares.go:DownloadSharedFile` currently requires only `share_id` (no `X-Download-Token`, no server-side gating), so an attacker can skip any “password verification” flow and directly download encrypted bytes if they guess/obtain the share URL.
+   - This is the central reason the Download Token design exists; it must be enforced server-side.
+
+2. **Account-encrypted files cannot be shared in current implementation**
+   - `CreateFileShare` explicitly blocks `passwordType == "account"` and requires the user to first add a custom password.
+   - That conflicts with the “unified” design where account-encrypted shares should use the cached AccountKey (web) / agent-held key (CLI).
+
+3. **DB already has `access_count` / `max_accesses`, but handlers don’t enforce it**
+   - `database/unified_schema.sql` includes `access_count` and `max_accesses` but `DownloadSharedFile` doesn’t check or increment them.
+   - Any max-downloads feature should be enforced server-side with an atomic update (transaction) to avoid race conditions.
+
+4. **Share access UI appears incomplete / inconsistent**
+   - `client/static/shared.html` attempts to dynamically import `/js/dist/shares/share-access.js` and instantiate `ShareAccessUI`, but there is no corresponding TS source under `client/static/js/src/shares/`.
+   - That suggests the recipient-side share flow (decrypt envelope, present token, download, decrypt file) is either missing or lives elsewhere.
+
+5. **Share creation obtains FEK via a “download” path (likely wrong primitive)**
+   - `client/static/js/src/files/share-integration.ts:getFileInfo` calls `/api/files/<filename>/download` and expects JSON containing `encryptedFEK`.
+   - A “download” endpoint typically returns file bytes; FEK retrieval should be a separate metadata/key endpoint that returns the *owner envelope* (encrypted FEK) + `password_type` + any nonces needed.
+
+6. **Server returns whole encrypted object base64-encoded in JSON**
+   - `DownloadSharedFile` reads the entire object into memory (`io.ReadAll`) and returns base64 in JSON.
+   - This will be a scalability and latency problem for large files, and it increases memory pressure and DOS risk. Prefer streaming bytes and letting the client decrypt as it downloads.
+
+7. **Crypto format/versioning isn’t explicitly planned (yet)**
+   - share-fixes.md proposes a decrypted JSON `{fek, download_token}` inside a “Share Envelope”.
+   - You likely want an explicit envelope “version” + explicit KDF params included so old shares remain decryptable if Argon2 params change.
+
+8. **Logging sensitivity**
+   - The system is privacy-oriented; note that **share IDs are bearer secrets**. Logging full share IDs in plaintext is risky. Consider logging hashes/truncated IDs.
+
+9. **Project-wide “no emojis” rule**
+   - `client/static/shared.html` contains a “📄” icon. AGENTS.md says no emojis in code/docs/responses. Worth cleaning up to keep the repo consistent.
+
+## 1. Preventing download bypass (must-have)
+- The server must not allow downloading a shared file using only `share_id`.
+- `DownloadSharedFile` must require an `X-Download-Token` header and verify it against `download_token_hash` using constant-time comparison.
+- Treat missing/invalid tokens as `403 Forbidden` without revealing extra details.
+
+## 2. Atomic enforcement of max-downloads / access_count
+- If `max_accesses` is implemented, enforcement must be server-side.
+- Use a transaction (or a single conditional UPDATE) to:
+  1) verify `access_count < max_accesses` (or max is NULL),
+  2) increment `access_count`,
+  3) optionally invalidate the share when the limit is reached.
+- Consider race conditions: concurrent downloads must not allow exceeding the max.
+
+## 3. Share invalidation / revocation lifecycle
+- Define a clear server-side “revoked/disabled” state for shares (recommended: `revoked_at`, `revoked_reason`, `deleted_at` or a boolean `is_active`).
+- Owner must be able to revoke a share at any time (web + CLI).
+- When a share expires or hits max downloads, it should be immediately invalidated.
+- Prefer invalidation by deleting the row or marking it revoked (keeping an audit trail); do not rely on client-side behavior.
+
+## 4. Streaming downloads (avoid base64-in-JSON for large files)
+- Avoid `io.ReadAll` + base64 encoding for shared downloads.
+- Prefer streaming the encrypted bytes as the HTTP response body (or implement chunked/ranged download) to reduce memory usage and improve performance.
+- Ensure the recipient can still decrypt locally (the share envelope + FEK are enough).
+
+## 5. Envelope format versioning and future-proofing
+- Add an explicit envelope version and algorithm identifiers, for example:
+  - `envelope_version`
+  - `kdf: argon2id`
+  - `argon2_params` used for that share (memory, iterations, parallelism)
+  - `aead: aes-256-gcm`
+- Consider using AEAD AAD to bind the envelope to `share_id` and/or `file_id` (prevents envelope swapping).
+
+## 6. Client/server separation of responsibilities
+- Share password verification remains client-side (zero-knowledge), but the server must enforce bandwidth protection (download token) regardless.
+- Add a dedicated API for retrieving share envelope metadata vs downloading bytes. Avoid mixing “download” and “key retrieval” semantics.
+
+## 7. Rate limiting beyond password attempts
+- Current `share_access_attempts` protects the password-guessing endpoint.
+- Also rate limit the shared download endpoint (by share_id + entity_id) to mitigate bandwidth abuse even with correct tokens.
+
+## 8. Observability without leaking bearer secrets
+- Share IDs and download tokens are bearer secrets.
+- Avoid logging full share IDs/tokens. Prefer truncated IDs or a one-way hash for correlation.
+
+## 9. Web share recipient UI completeness
+- Ensure there is a concrete recipient-side implementation that:
+  1) fetches the encrypted Share Envelope,
+  2) prompts for Share Password,
+  3) decrypts envelope to obtain FEK + Download Token,
+  4) downloads encrypted file using `X-Download-Token`,
+  5) decrypts file locally.
+- Verify `shared.html` imports a real built artifact (a TS source should exist for it).
 
 ---
