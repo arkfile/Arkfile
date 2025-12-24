@@ -265,3 +265,70 @@
 - Verify `shared.html` imports a real built artifact (a TS source should exist for it).
 
 ---
+
+# ADDITIONAL CONSIDERATIONS, SUGGESTED EDITS & ADDITIONS BY ANOTHER LLM (GROK-4.1-FAST):
+
+## Phase 0: PREPARATION & CLEANUP (New)
+
+2. **Logging Privacy:** Truncate share_id in all logs: `share_id=abc123...wxyz` (SHA256[:8]+[:4]).
+
+3. **TS Build:** `bun run build` → verify /js/dist/shares/share-access.js exists.
+
+## Phase 1: Server/DB (Unique Enhancements)
+
+1. **Schema (`unified_schema.sql` - Append):**
+   ```
+   ALTER TABLE file_share_keys ADD COLUMN download_token_hash TEXT NOT NULL DEFAULT '';
+   ALTER TABLE file_share_keys ADD COLUMN revoked_at TIMESTAMP NULL;
+   CREATE INDEX idx_file_share_keys_revoked ON file_share_keys(revoked_at);
+   CREATE INDEX idx_file_share_keys_token_hash ON file_share_keys(download_token_hash);
+   ```
+
+2. **New Endpoint:** `GET /api/shares/{id}/envelope` → `{salt_b64, encrypted_envelope_b64}` (rate-limited, check revoked_at/expires).
+
+3. **DownloadSharedFile Tx (rqlite Atomic):**
+   ```
+   BEGIN TRANSACTION;
+   SELECT access_count, max_accesses, revoked_at FROM file_share_keys WHERE share_id=? FOR UPDATE;
+   -- Verify: revoked_at IS NULL AND (max_accesses IS NULL OR access_count < max_accesses)
+   UPDATE file_share_keys SET access_count = access_count + 1;
+   -- If access_count == max_accesses: SET revoked_at = CURRENT_TIMESTAMP;
+   COMMIT;
+   ```
+   - Header `X-Download-Token` req'd; const-time SHA256(base64(token)) == hash.
+   - **Stream:** `c.Stream(http.StatusOK, "application/octet-stream", object)` + `Content-Disposition: attachment; filename="shared-file.enc"`, `Content-Length: size_bytes`, `Accept-Ranges: bytes`.
+
+4. **Rate-Limit Downloads:** entity_id + share_id in rate_limit_state.
+
+## Phase 2: Crypto (Versioning Details)
+
+1. **Envelope v1 (Unique Params):**
+   ```json
+   {"version":1,"kdf":"argon2id","kdf_params":{"memoryKiB":262144,"time":8,"parallelism":4},"aead":"AES-256-GCM","fek":"...","download_token":"..."}
+   ```
+   - AAD: `share_id + file_id`.
+
+2. **Owner Endpoint:** `GET /api/files/{file_id}/envelope` (auth): `{password_type, encrypted_fek_b64, filename_nonce_b64, sha256sum_nonce_b64}`.
+
+## Phase 3: Web (Missing Impl)
+
+1. **share-integration.ts:** `getFileInfo` → `/api/files/{file_id}/envelope`.
+
+2. **ListShares UI:** Revoke btn → `PATCH /api/shares/{id}/revoke` (set revoked_at).
+
+## Phase 4: CLI (API Spec)
+
+1. **Agent JSON-RPC:** `~/.arkfile/agent.sock`
+   ```
+   POST: {"jsonrpc":"2.0","method":"decryptOwnerEnvelope","params":{"type":"account|custom","envelope_b64":"...","pw_b64":"..."},"id":1}
+   RESP: {"jsonrpc":"2.0","result":{"fek_b64":"..."},"id":1}
+   ```
+
+## Phase 5: Testing (Unique Scenarios)
+
+1. **e2e-test.sh Add:**
+   - Invalid/missing token → 403 (no download).
+   - Streaming large file (>100MB) → no OOM, ranges work.
+   - Revoke mid-flow → 403.
+
+---
