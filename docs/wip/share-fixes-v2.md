@@ -192,7 +192,6 @@ authenticated.PATCH("/shares/:id/revoke", RevokeShare)
 ```go
 type ShareRequest struct {
     FileID               string `json:"file_id"`
-    SharePassword        string `json:"share_password"`      // NOT sent to server (client-side only comment)
     Salt                 string `json:"salt"`                // Base64-encoded 32-byte salt
     EncryptedEnvelope    string `json:"encrypted_envelope"`  // Base64-encoded encrypted Share Envelope v1
     DownloadTokenHash    string `json:"download_token_hash"` // Base64-encoded SHA-256 hash
@@ -770,13 +769,16 @@ async function unlockFEK(envelope: OwnerEnvelope, fileId: string): Promise<Uint8
         const accountKey = base64ToUint8Array(accountKeyB64);
         const encryptedFEK = base64ToUint8Array(envelope.encryptedFEK);
         
-        // Decrypt Owner Envelope with AccountKey
+        // Decrypt Owner Envelope with AccountKey (no password prompt needed)
         const fek = await decryptWithKey(encryptedFEK, accountKey);
         return fek;
         
     } else if (envelope.passwordType === 'custom') {
-        // Prompt user for original custom password
-        const customPassword = await promptForPassword('Enter the original custom password for this file:');
+        // Prompt user ONCE for original custom password
+        const customPassword = await promptForPassword(
+            'Enter the original custom password for this file:',
+            'This is the password you used when uploading the file.'
+        );
         
         // Derive custom key (use existing deriveCustomKey function)
         const customKey = await deriveCustomKey(customPassword, fileId);
@@ -791,6 +793,13 @@ async function unlockFEK(envelope: OwnerEnvelope, fileId: string): Promise<Uint8
     }
 }
 ```
+
+**Password Prompting Strategy**:
+- **Account-Encrypted files**: NO password prompt (uses cached AccountKey from login)
+- **Custom-Encrypted files**: ONE password prompt for the original custom password
+- **Share Password**: Separate prompt for the new share password (happens after FEK is unlocked)
+- Total prompts for custom-encrypted file sharing: 2 (original custom password + new share password)
+- Total prompts for account-encrypted file sharing: 1 (new share password only)
 
 **Note**: Use existing crypto functions from `crypto/file-encryption.ts` or `crypto/primitives.ts` for decryption.
 
@@ -899,6 +908,8 @@ export async function getArgon2Params(): Promise<Argon2Params> {
 ```
 
 **Note**: This ensures TypeScript and Go always use the same Argon2id parameters by fetching from the server's `/api/config/argon2` endpoint, which returns the embedded `crypto/argon2id-params.json` data.
+
+**Backend Endpoint Required**: Add `GET /api/config/argon2` endpoint in `handlers/config.go` to serve the Argon2id parameters from `crypto/argon2id-params.json`. (DOUBLE CHECK: Do we actually need this or do we already have endpoints to server up these configs?)
 
 #### 5.1.6 Complete Share Creation Flow
 
@@ -1128,12 +1139,18 @@ async function accessSharedFile(shareId: string, sharePassword: string) {
 
 Update the page to:
 1. Extract `share_id` from URL path
-2. Prompt user for Share Password
-3. Call `accessSharedFile(shareId, sharePassword)`
-4. Display progress and errors
-5. Handle decrypted filename and SHA-256 metadata if needed
+2. Prompt user for Share Password (minimum 18 characters, must meet requirements)
+3. Validate share password meets requirements before attempting decryption
+4. Call `accessSharedFile(shareId, sharePassword)`
+5. Display progress and errors
+6. Handle decrypted filename and sha256sum metadata if needed
 
-**Note**: May need to decrypt filename and SHA-256 from metadata for display. This requires fetching the encrypted metadata and decrypting it with the FEK.
+**Password Requirements for Share Password**:
+- Minimum 18 characters (from `crypto/password-requirements.json`)
+- At least 60 bits of entropy
+- Must contain: uppercase, lowercase, number, special character
+
+**Note**: May need to decrypt filename and sha256sum from metadata for display. This requires fetching the encrypted metadata and decrypting it with the FEK.
 
 ---
 
@@ -2021,11 +2038,66 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 
 ---
 
-## 9. OPEN QUESTIONS
+## 9. OPEN QUESTIONS & RECOMMENDATIONS
 
-1. **AAD Binding**: Should we bind Share Envelope to `share_id + file_id` using AEAD AAD to prevent envelope swapping attacks? This would require passing share_id to the encryption function, which isn't available at share creation time (generated server-side). Alternative: Bind to `file_id` only. Alternative: Can we allow the owner/client to provide/generate a suitable share_id himself, client-side, instead of this happening on the server?
+### 9.1 AAD Binding for Share Envelope
 
-2. **Agent Lifecycle**: The agent must not persist across reboots. It is meant to run as a background process during CLI session only. On logout, reboot or shutdown it must be cleared/stopped/invalidated. Double-check that this is what we should exptect to happen under the current plan above.
+**Question**: Should we bind Share Envelope to `share_id + file_id` using AEAD AAD to prevent envelope swapping attacks?
+
+**Challenge**: `share_id` is generated server-side, so it's not available at encryption time on the client.
+
+**Options**:
+1. **Bind to `file_id` only**: Prevents cross-file envelope swapping but not same-file share swapping
+2. **Client-generated `share_id`**: Allow client to generate UUID for `share_id`, send to server
+3. **No AAD binding**: Rely on Download Token uniqueness to prevent swapping
+
+**Recommendation**: Implement Option 2 (client-generated `share_id`) for maximum security. The client generates a cryptographically secure UUID, uses it for AAD binding during encryption, and sends it to the server. Server validates UUID format and uniqueness.
+
+### 9.2 Agent Lifecycle
+
+**Question**: Should the agent persist across reboots?
+
+**Answer**: NO. The agent is designed as a session-only background process.
+
+**Expected Behavior**:
+- Agent starts automatically when CLI is first used
+- Agent stores AccountKey in memory only (never on disk)
+- Agent clears on explicit logout command
+- Agent terminates on system reboot/shutdown (Unix socket is ephemeral)
+- Agent does NOT persist across reboots (no systemd service, no autostart)
+
+**Current Plan Verification**: ✅ The plan correctly implements session-only behavior:
+- Unix socket in `~/.arkfile/agent.sock` (not persistent)
+- No systemd service or autostart mechanism
+- Memory-only storage (no disk writes)
+- Socket permissions 0600 (owner-only access)
+
+### 9.3 Storage Padding Handling
+
+**Verification Needed**: Ensure `storage.Provider.GetObjectWithoutPadding()` exists and correctly strips padding bytes.
+
+**Current Status**: The plan references this function in section 3.5, but we need to verify it exists in `storage/storage.go` or `storage/s3.go`.
+
+**If Missing**: Implement padding-aware streaming:
+```go
+// Read full object including padding
+object, err := storage.Provider.GetObject(ctx, storageID, opts)
+
+// Wrap in LimitReader to only stream actual file bytes
+limitedReader := io.LimitReader(object, fileSize)
+
+// Stream limited reader (excludes padding)
+io.Copy(c.Response().Writer, limitedReader)
+```
+
+### 9.4 Rate Limiting Configuration
+
+**Recommendation**: Document rate limit values for share endpoints:
+- `GET /api/shares/{id}/envelope`: 10 requests per minute per entity_id
+- `GET /api/shares/{id}/download`: 5 downloads per minute per entity_id
+- `POST /api/shares`: 5 share creations per minute per user
+
+**Action**: Add rate limit configuration to `config/security_config.go` or document in `docs/security.md`.
 
 ---
 
