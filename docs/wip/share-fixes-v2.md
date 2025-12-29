@@ -2217,7 +2217,7 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 
 ## 9. OPEN QUESTIONS & RECOMMENDATIONS
 
-### 9.1 AAD Binding for Share Envelope ✅ IMPLEMENTED
+### 9.1 AAD Binding for Share Envelope [IMPLEMENTED]
 
 **Decision**: Client-side `share_id` generation with AAD binding (Option 2)
 
@@ -2233,7 +2233,7 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 - Decryption automatically fails if AAD doesn't match (tamper detection)
 - Zero-knowledge preserved: server never sees relationship between share_id and envelope content
 
-### 9.2 Agent Lifecycle ✅ VERIFIED
+### 9.2 Agent Lifecycle [VERIFIED]
 
 **Decision**: Session-only background process (no persistence across reboots)
 
@@ -2251,7 +2251,7 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 - Permission validation: Reject connection if permissions are not exactly 0600
 - Defense-in-depth: UID in path + ownership check + permission check
 
-### 9.3 Storage Padding Handling ✅ VERIFIED
+### 9.3 Storage Padding Handling [VERIFIED]
 
 **Status**: `storage.Provider.GetObjectWithoutPadding()` EXISTS and works correctly
 
@@ -2273,9 +2273,9 @@ func (s *S3AWSStorage) GetObjectWithoutPadding(ctx context.Context, storageID st
 
 **Helper**: Uses `limitedReadCloser` from `storage/helpers.go` which wraps the reader and stops at `originalSize`
 
-**Verification**: ✅ Function exists and correctly strips padding bytes. No changes needed.
+**Verification**: Function exists and correctly strips padding bytes. No changes needed.
 
-### 9.4 Rate Limiting Configuration ✅ SPECIFIED
+### 9.4 Rate Limiting Configuration [SPECIFIED]
 
 **Rate Limit Values** (requests per minute per entity_id):
 - `GET /api/shares/{id}/envelope`: **30 requests/minute**
