@@ -15,12 +15,15 @@
 4. **Revocation System**: Allow owners to manually revoke shares or auto-revoke on expiration/max downloads
 5. **Access Limits**: Enforce max_accesses with atomic counting and auto-revocation
 6. **Zero-Knowledge Architecture**: Server never receives passwords, FEKs, or decrypted metadata
+7. **Client-Side share_id Generation**: Generate share_id on client with AAD binding to prevent envelope swapping
 
 ### Key Principles
 - All cryptographic operations happen client-side (browser or CLI)
 - Server only stores encrypted data and enforces access control via Download Tokens
 - Argon2id parameters are unified across the entire system (from `crypto/argon2id-params.json`)
 - Share Envelope contains both FEK and Download Token, encrypted with Share Password
+- Share Envelope is bound to `share_id + file_id` using AEAD AAD for tamper protection
+- Client generates share_id before encryption to enable AAD binding
 
 ---
 
@@ -32,7 +35,7 @@
 
 ```sql
 -- Download Token enforcement
-ALTER TABLE file_share_keys ADD COLUMN download_token_hash TEXT;
+ALTER TABLE file_share_keys ADD COLUMN download_token_hash TEXT NOT NULL;
 
 -- Revocation system
 ALTER TABLE file_share_keys ADD COLUMN revoked_at TIMESTAMP NULL;
@@ -51,11 +54,11 @@ CREATE INDEX IF NOT EXISTS idx_file_share_keys_token_hash ON file_share_keys(dow
 ```
 
 ### Notes
-- `download_token_hash`: SHA-256 hash of the 32-byte Download Token (base64 encoded)
+- `download_token_hash`: SHA-256 hash of the 32-byte Download Token (base64 encoded) - REQUIRED for all new shares
 - `revoked_at`: Timestamp when share was revoked (NULL = active)
 - `revoked_reason`: Why share was revoked (e.g., "manual_revocation", "max_downloads_reached", "expired")
 - `max_accesses`: NULL means unlimited downloads
-- For new shares, `download_token_hash` should be NOT NULL (enforce in application logic)
+- `access_count`: Atomically incremented on each download, enforced via database transactions
 
 ---
 
@@ -191,9 +194,10 @@ authenticated.PATCH("/shares/:id/revoke", RevokeShare)
 **Changes to `ShareRequest` struct**:
 ```go
 type ShareRequest struct {
+    ShareID              string `json:"share_id"`            // Client-generated 43-char base64url share ID
     FileID               string `json:"file_id"`
     Salt                 string `json:"salt"`                // Base64-encoded 32-byte salt
-    EncryptedEnvelope    string `json:"encrypted_envelope"`  // Base64-encoded encrypted Share Envelope v1
+    EncryptedEnvelope    string `json:"encrypted_envelope"`  // Base64-encoded encrypted Share Envelope (with AAD)
     DownloadTokenHash    string `json:"download_token_hash"` // Base64-encoded SHA-256 hash
     MaxAccesses          *int   `json:"max_accesses"`        // Optional: NULL = unlimited
     ExpiresAfterHours    int    `json:"expires_after_hours"` // Optional expiration
@@ -211,7 +215,35 @@ type ShareRequest struct {
      }
      ```
 
-2. **Add validation for new required fields**:
+2. **Add validation for client-provided share_id**:
+   ```go
+   // Validate share_id format (must be 43-char base64url)
+   if !isValidShareID(request.ShareID) {
+       return echo.NewHTTPError(http.StatusBadRequest, "Invalid share_id format")
+   }
+   
+   // Check uniqueness
+   var exists bool
+   err := database.DB.QueryRow("SELECT 1 FROM file_share_keys WHERE share_id = ?", request.ShareID).Scan(&exists)
+   if err != sql.ErrNoRows {
+       return echo.NewHTTPError(http.StatusConflict, "Share ID already exists - please retry")
+   }
+   ```
+
+3. **Add helper function for share_id validation**:
+   ```go
+   func isValidShareID(shareID string) bool {
+       // Must be exactly 43 characters (32 bytes base64url without padding)
+       if len(shareID) != 43 {
+           return false
+       }
+       // Must be valid base64url characters
+       matched, _ := regexp.MatchString(`^[A-Za-z0-9_-]{43}$`, shareID)
+       return matched
+   }
+   ```
+
+4. **Add validation for other required fields**:
    ```go
    if request.DownloadTokenHash == "" {
        return echo.NewHTTPError(http.StatusBadRequest, "Download token hash is required")
@@ -221,7 +253,7 @@ type ShareRequest struct {
    }
    ```
 
-3. **Update database INSERT**:
+5. **Update database INSERT** (use client-provided share_id):
    ```sql
    INSERT INTO file_share_keys (
        share_id, file_id, owner_username, salt, encrypted_fek,
@@ -229,13 +261,18 @@ type ShareRequest struct {
    )
    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
    ```
-   - Note: `encrypted_fek` column now stores the encrypted Share Envelope
+   - Note: `encrypted_fek` column now stores the encrypted Share Envelope (with AAD binding)
+   - Use `request.ShareID` (client-generated) instead of server-generated ID
    - Add `request.DownloadTokenHash` and `request.MaxAccesses` to values
 
-4. **Update logging**:
+6. **Remove server-side share_id generation**:
+   - Delete the `generateShareID()` function call
+   - Delete the `generateShareID()` function entirely (no longer needed)
+
+7. **Update logging**:
    ```go
    logging.InfoLogger.Printf("Share created: file=%s, share_id=%s..., owner=%s, max_accesses=%v",
-       request.FileID, shareID[:8], username, request.MaxAccesses)
+       request.FileID, request.ShareID[:8], username, request.MaxAccesses)
    ```
 
 **Security Notes**:
@@ -393,6 +430,7 @@ type ShareRequest struct {
    }
    
    // Get file from storage with padding handling
+   // NOTE: GetObjectWithoutPadding exists in storage/s3.go and correctly strips padding
    var object io.ReadCloser
    
    if paddedSize.Valid && paddedSize.Int64 > fileSize {
@@ -449,7 +487,7 @@ type ShareRequest struct {
 - Transaction ensures atomic access_count increment (prevents race conditions)
 - Auto-revocation happens immediately when max_accesses is reached
 - Streaming reduces memory usage and improves performance for large files
-- Padding is properly handled: Files with padding are streamed without the padding bytes, ensuring recipients receive the original file size
+- Padding is properly handled via `GetObjectWithoutPadding()` (verified to exist in storage/s3.go)
 - Content-Length header reflects the actual file size (not padded size)
 
 ---
@@ -556,9 +594,14 @@ type ShareRequest struct {
 
 ---
 
-### 3.7 Rate Limiting Enhancement
+### 3.7 Rate Limiting Configuration
 
-**File**: `handlers/file_shares.go`
+**File**: `config/security_config.go` or `handlers/rate_limiting.go`
+
+**Rate Limit Values**:
+- **Envelope Access** (`GET /api/shares/{id}/envelope`): 30 requests/minute per entity_id
+- **File Downloads** (`GET /api/shares/{id}/download`): 30 requests/minute per entity_id  
+- **Share Creation** (`POST /api/shares`): 120 requests/minute per entity_id (authenticated users)
 
 **Add rate limiting to download endpoint**:
 
@@ -584,11 +627,11 @@ if rateLimitErr != nil {
 
 ## 4. CRYPTO LAYER (Go)
 
-### 4.1 Share Envelope Format
+### 4.1 Share Envelope Format with AAD Binding
 
 **File**: `crypto/share_kdf.go` (or create new `crypto/share_envelope.go`)
 
-**Define simplified Share Envelope structure**:
+**Define Share Envelope structure with AAD binding**:
 
 ```go
 package crypto
@@ -630,12 +673,20 @@ func ParseShareEnvelope(envelopeJSON []byte) (*ShareEnvelope, error) {
     
     return &envelope, nil
 }
+
+// CreateAAD creates the Additional Authenticated Data for envelope encryption
+// AAD = share_id + file_id (UTF-8 encoded concatenation)
+func CreateAAD(shareID, fileID string) []byte {
+    return []byte(shareID + fileID)
+}
 ```
 
 **Notes**:
 - Simple JSON structure with just FEK and Download Token
-- Encrypted with Share Password using Argon2id (UnifiedArgonSecure params) + AES-256-GCM
+- Encrypted with Share Password using Argon2id (UnifiedArgonSecure params) + AES-256-GCM **with AAD**
+- AAD = `share_id + file_id` prevents envelope swapping attacks
 - Salt is stored separately in database, not in envelope
+- Client generates share_id before encryption to enable AAD binding
 
 ---
 
@@ -704,9 +755,21 @@ func DeriveShareKey(password string, salt []byte) ([]byte, error) {
 }
 ```
 
-**Encryption/Decryption**:
+**Encryption/Decryption with AAD**:
 
-The Share Envelope is encrypted using the derived Share Key with AES-256-GCM (use existing `EncryptWithKey` and `DecryptWithKey` functions from `crypto/gcm.go`).
+The Share Envelope is encrypted using the derived Share Key with AES-256-GCM **with AAD binding**:
+
+```go
+// Encryption (in share creation flow)
+aad := CreateAAD(shareID, fileID)
+encryptedEnvelope, err := EncryptWithKeyAndAAD(envelopeJSON, shareKey, aad)
+
+// Decryption (in share access flow)
+aad := CreateAAD(shareID, fileID)
+envelopeJSON, err := DecryptWithKeyAndAAD(encryptedEnvelope, shareKey, aad)
+```
+
+**Note**: May need to add `EncryptWithKeyAndAAD` and `DecryptWithKeyAndAAD` functions to `crypto/gcm.go` if they don't exist. These should use AES-256-GCM with the AAD parameter.
 
 ---
 
@@ -719,7 +782,33 @@ The Share Envelope is encrypted using the derived Share Key with AES-256-GCM (us
 - `client/static/js/src/shares/share-creation.ts`
 - `client/static/js/src/crypto/share-crypto.ts`
 
-#### 5.1.1 Fetch Owner Envelope
+#### 5.1.1 Generate Share ID (Client-Side)
+
+**In `share-integration.ts` or `share-creation.ts`**:
+
+```typescript
+function generateShareID(): string {
+    // Generate cryptographically secure 32-byte share_id
+    const shareIdBytes = new Uint8Array(32);
+    crypto.getRandomValues(shareIdBytes);
+    
+    // Use base64url encoding without padding (43 characters)
+    return base64UrlEncode(shareIdBytes);
+}
+
+function base64UrlEncode(bytes: Uint8Array): string {
+    const base64 = uint8ArrayToBase64(bytes);
+    // Convert base64 to base64url
+    return base64
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=/g, '');
+}
+```
+
+**Note**: Share ID must be generated BEFORE encrypting the envelope so it can be used in AAD binding.
+
+#### 5.1.2 Fetch Owner Envelope
 
 **In `share-integration.ts` or `share-creation.ts`**:
 
@@ -819,7 +908,7 @@ async function hashDownloadToken(token: Uint8Array): Promise<string> {
 }
 ```
 
-#### 5.1.4 Create Share Envelope
+#### 5.1.4 Create Share Envelope with AAD
 
 **In `crypto/share-crypto.ts`**:
 
@@ -837,17 +926,24 @@ async function createShareEnvelope(fek: Uint8Array, downloadToken: Uint8Array): 
     
     return JSON.stringify(envelope);
 }
+
+function createAAD(shareId: string, fileId: string): Uint8Array {
+    // AAD = share_id + file_id (UTF-8 encoded concatenation)
+    return new TextEncoder().encode(shareId + fileId);
+}
 ```
 
 ---
 
-#### 5.1.5 Encrypt Share Envelope with Share Password
+#### 5.1.5 Encrypt Share Envelope with Share Password and AAD
 
 ```typescript
 async function encryptShareEnvelope(
     envelopeJSON: string,
     sharePassword: string,
-    salt: Uint8Array
+    salt: Uint8Array,
+    shareId: string,
+    fileId: string
 ): Promise<Uint8Array> {
     // Fetch Argon2id params from server
     const params = await getArgon2Params();
@@ -861,15 +957,18 @@ async function encryptShareEnvelope(
         params.parallelism
     );
     
-    // Encrypt envelope JSON with AES-256-GCM
+    // Create AAD for binding
+    const aad = createAAD(shareId, fileId);
+    
+    // Encrypt envelope JSON with AES-256-GCM with AAD
     const envelopeBytes = new TextEncoder().encode(envelopeJSON);
-    const encryptedEnvelope = await encryptWithKey(envelopeBytes, shareKey);
+    const encryptedEnvelope = await encryptWithKeyAndAAD(envelopeBytes, shareKey, aad);
     
     return encryptedEnvelope;
 }
 ```
 
-**Note**: Uses existing `deriveArgon2idKey` and `encryptWithKey` functions from `crypto/primitives.ts`.
+**Note**: Uses `encryptWithKeyAndAAD` function (may need to add to `crypto/primitives.ts` if not exists).
 
 ---
 
@@ -890,7 +989,7 @@ export async function getArgon2Params(): Promise<Argon2Params> {
         return cachedParams;
     }
     
-    // Fetch from server endpoint
+    // Fetch from server endpoint (VERIFIED: exists in handlers/config.go)
     const response = await fetch('/api/config/argon2');
     if (!response.ok) {
         throw new Error('Failed to fetch Argon2 parameters from server');
@@ -907,36 +1006,43 @@ export async function getArgon2Params(): Promise<Argon2Params> {
 }
 ```
 
-**Note**: This ensures TypeScript and Go always use the same Argon2id parameters by fetching from the server's `/api/config/argon2` endpoint, which returns the embedded `crypto/argon2id-params.json` data.
+**Note**: This ensures TypeScript and Go always use the same Argon2id parameters by fetching from the server's `/api/config/argon2` endpoint (verified to exist in `handlers/config.go`), which returns the embedded `crypto/argon2id-params.json` data.
 
-**Backend Endpoint Required**: Add `GET /api/config/argon2` endpoint in `handlers/config.go` to serve the Argon2id parameters from `crypto/argon2id-params.json`. (DOUBLE CHECK: Do we actually need this or do we already have endpoints to server up these configs?)
-
-#### 5.1.6 Complete Share Creation Flow
+#### 5.1.6 Complete Share Creation Flow with Client-Side share_id
 
 ```typescript
 async function createShare(fileId: string, sharePassword: string, maxAccesses?: number, expiresAfterHours?: number) {
     try {
-        // 1. Fetch Owner Envelope
+        // 1. Generate share_id FIRST (needed for AAD binding)
+        const shareId = generateShareID();
+        
+        // 2. Fetch Owner Envelope
         const ownerEnvelope = await getOwnerEnvelope(fileId);
         
-        // 2. Unlock FEK
+        // 3. Unlock FEK
         const fek = await unlockFEK(ownerEnvelope, fileId);
         
-        // 3. Generate Download Token
+        // 4. Generate Download Token
         const downloadToken = generateDownloadToken();
         const downloadTokenHash = await hashDownloadToken(downloadToken);
         
-        // 4. Create Share Envelope
+        // 5. Create Share Envelope
         const envelopeJSON = await createShareEnvelope(fek, downloadToken);
         
-        // 5. Generate salt for Share Password
+        // 6. Generate salt for Share Password
         const salt = new Uint8Array(32);
         crypto.getRandomValues(salt);
         
-        // 6. Encrypt Share Envelope
-        const encryptedEnvelope = await encryptShareEnvelope(envelopeJSON, sharePassword, salt);
+        // 7. Encrypt Share Envelope with AAD binding
+        const encryptedEnvelope = await encryptShareEnvelope(
+            envelopeJSON,
+            sharePassword,
+            salt,
+            shareId,  // For AAD binding
+            fileId    // For AAD binding
+        );
         
-        // 7. Send to server
+        // 8. Send to server (including client-generated share_id)
         const response = await fetch('/api/shares', {
             method: 'POST',
             headers: {
@@ -944,6 +1050,7 @@ async function createShare(fileId: string, sharePassword: string, maxAccesses?: 
                 'Authorization': `Bearer ${getAccessToken()}`,
             },
             body: JSON.stringify({
+                share_id: shareId,  // Client-generated
                 file_id: fileId,
                 salt: uint8ArrayToBase64(salt),
                 encrypted_envelope: uint8ArrayToBase64(encryptedEnvelope),
@@ -954,6 +1061,11 @@ async function createShare(fileId: string, sharePassword: string, maxAccesses?: 
         });
         
         if (!response.ok) {
+            if (response.status === 409) {
+                // Collision - retry with new share_id
+                console.warn('Share ID collision detected, retrying...');
+                return createShare(fileId, sharePassword, maxAccesses, expiresAfterHours);
+            }
             throw new Error(`Failed to create share: ${response.statusText}`);
         }
         
@@ -1009,13 +1121,15 @@ interface ShareEnvelopeData {
 }
 ```
 
-#### 5.2.2 Decrypt Share Envelope
+#### 5.2.2 Decrypt Share Envelope with AAD Verification
 
 ```typescript
 async function decryptShareEnvelope(
     encryptedEnvelopeB64: string,
     sharePassword: string,
-    saltB64: string
+    saltB64: string,
+    shareId: string,
+    fileId: string
 ): Promise<{ fek: Uint8Array; downloadToken: Uint8Array }> {
     // Decode base64
     const encryptedEnvelope = base64ToUint8Array(encryptedEnvelopeB64);
@@ -1031,8 +1145,11 @@ async function decryptShareEnvelope(
         params.parallelism
     );
     
-    // Decrypt envelope
-    const envelopeBytes = await decryptWithKey(encryptedEnvelope, shareKey);
+    // Create AAD for verification
+    const aad = createAAD(shareId, fileId);
+    
+    // Decrypt envelope with AAD verification
+    const envelopeBytes = await decryptWithKeyAndAAD(encryptedEnvelope, shareKey, aad);
     const envelopeJSON = new TextDecoder().decode(envelopeBytes);
     
     // Parse envelope
@@ -1045,6 +1162,8 @@ async function decryptShareEnvelope(
     return { fek, downloadToken };
 }
 ```
+
+**Note**: AAD verification will automatically fail if the envelope was swapped or tampered with.
 
 #### 5.2.3 Download Encrypted File with Token
 
@@ -1090,10 +1209,10 @@ async function decryptFileWithFEK(encryptedFile: Uint8Array, fek: Uint8Array): P
 
 **Note**: Reuse existing file decryption functions. May need to refactor to accept FEK directly.
 
-#### 5.2.5 Complete Share Access Flow
+#### 5.2.5 Complete Share Access Flow with AAD Verification
 
 ```typescript
-async function accessSharedFile(shareId: string, sharePassword: string) {
+async function accessSharedFile(shareId: string, fileId: string, sharePassword: string) {
     try {
         // 1. Fetch Share Envelope
         const envelopeData = await fetchShareEnvelope(shareId);
@@ -1102,11 +1221,13 @@ async function accessSharedFile(shareId: string, sharePassword: string) {
         // add corresponding file size info in web app at opportune locations so user can review before downloading
         console.log(`File size: ${formatFileSize(envelopeData.fileSize)}`);
         
-        // 3. Decrypt Share Envelope
+        // 3. Decrypt Share Envelope with AAD verification
         const { fek, downloadToken } = await decryptShareEnvelope(
             envelopeData.encryptedEnvelope,
             sharePassword,
-            envelopeData.salt
+            envelopeData.salt,
+            shareId,  // For AAD verification
+            fileId    // For AAD verification
         );
         
         // 4. Download encrypted file
@@ -1240,11 +1361,16 @@ async function revokeShare(shareId: string) {
 
 ## 6. CLI CLIENT IMPLEMENTATION
 
-### 6.1 Agent Architecture
+### 6.1 Agent Architecture with Enhanced Security
 
 **New file**: `cmd/arkfile-client/agent.go`
 
 **Purpose**: Background daemon to securely hold AccountKey in memory
+
+**Socket Security**:
+- Path: `~/.arkfile/agent-{UID}.sock` (UID-specific to prevent multi-user conflicts)
+- Permissions: 0600 (owner read/write only)
+- Validation: Verify socket owner matches current UID before connecting
 
 **Implementation**:
 
@@ -1258,6 +1384,7 @@ import (
     "os"
     "path/filepath"
     "sync"
+    "syscall"
 )
 
 type Agent struct {
@@ -1293,7 +1420,9 @@ func StartAgent() error {
         return fmt.Errorf("failed to create .arkfile directory: %w", err)
     }
     
-    socketPath := filepath.Join(arkfileDir, "agent.sock")
+    // Use UID-specific socket path for multi-user isolation
+    uid := os.Getuid()
+    socketPath := filepath.Join(arkfileDir, fmt.Sprintf("agent-%d.sock", uid))
     
     // Check if agent is already running
     if _, err := os.Stat(socketPath); err == nil {
@@ -1486,14 +1615,20 @@ func (a *Agent) sendError(conn net.Conn, errMsg string) {
     json.NewEncoder(conn).Encode(resp)
 }
 
-// ConnectToAgent connects to the running agent
+// ConnectToAgent connects to the running agent with security validation
 func ConnectToAgent() (net.Conn, error) {
     homeDir, err := os.UserHomeDir()
     if err != nil {
         return nil, fmt.Errorf("failed to get home directory: %w", err)
     }
     
-    socketPath := filepath.Join(homeDir, ".arkfile", "agent.sock")
+    uid := os.Getuid()
+    socketPath := filepath.Join(homeDir, ".arkfile", fmt.Sprintf("agent-%d.sock", uid))
+    
+    // Validate socket ownership and permissions before connecting
+    if err := validateSocketSecurity(socketPath, uid); err != nil {
+        return nil, fmt.Errorf("socket security validation failed: %w", err)
+    }
     
     conn, err := net.Dial("unix", socketPath)
     if err != nil {
@@ -1501,6 +1636,27 @@ func ConnectToAgent() (net.Conn, error) {
     }
     
     return conn, nil
+}
+
+// validateSocketSecurity ensures socket is owned by current user with correct permissions
+func validateSocketSecurity(socketPath string, expectedUID int) error {
+    info, err := os.Stat(socketPath)
+    if err != nil {
+        return fmt.Errorf("failed to stat socket: %w", err)
+    }
+    
+    // Check ownership
+    stat := info.Sys().(*syscall.Stat_t)
+    if int(stat.Uid) != expectedUID {
+        return fmt.Errorf("socket owner mismatch: expected UID %d, got %d", expectedUID, stat.Uid)
+    }
+    
+    // Check permissions (must be exactly 0600)
+    if info.Mode().Perm() != 0600 {
+        return fmt.Errorf("insecure socket permissions: %o (expected 0600)", info.Mode().Perm())
+    }
+    
+    return nil
 }
 
 // SendAgentRequest sends a request to the agent and returns the response
@@ -1967,19 +2123,22 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 
 ### Phase 1: Database & Core Backend
 
-- [ ] Update `database/unified_schema.sql` with new columns (`download_token_hash`, `revoked_at`, `revoked_reason`)
+- [ ] Update `database/unified_schema.sql` with new columns (`download_token_hash NOT NULL`, `revoked_at`, `revoked_reason`)
 - [ ] Add indexes for performance (`idx_file_share_keys_revoked`, `idx_file_share_keys_token_hash`)
 - [ ] Add `GET /api/files/{file_id}/envelope` endpoint in `handlers/files.go`
 - [ ] Add `GET /api/shares/{id}/envelope` endpoint in `handlers/file_shares.go`
 - [ ] Add `PATCH /api/shares/{id}/revoke` endpoint in `handlers/file_shares.go`
-- [ ] Modify `POST /api/shares` (CreateFileShare) to accept `download_token_hash` and `max_accesses`
+- [ ] Modify `POST /api/shares` (CreateFileShare) to accept client-generated `share_id`
+- [ ] Add `isValidShareID()` helper function (validate 43-char base64url format)
+- [ ] Add share_id uniqueness check in CreateFileShare (return 409 on collision)
+- [ ] Remove server-side `generateShareID()` function (no longer needed)
 - [ ] Remove Account-Encrypted file blocking in CreateFileShare
 - [ ] Implement Download Token validation in DownloadSharedFile (constant-time comparison)
-- [ ] Implement streaming download in DownloadSharedFile (remove base64-in-JSON)
+- [ ] Implement streaming download in DownloadSharedFile (use verified `GetObjectWithoutPadding()`)
 - [ ] Implement atomic access_count transaction with auto-revocation in DownloadSharedFile
 - [ ] Add revocation checks to all share access paths
 - [ ] Update ListShares to include revocation data (`revoked_at`, `revoked_reason`, `access_count`, `max_accesses`)
-- [ ] Add rate limiting to download endpoint
+- [ ] Add rate limiting to download endpoint (30 req/min)
 - [ ] Update all logging to use truncated share_id
 
 ### Phase 2: Crypto Layer (Go)
@@ -1987,12 +2146,18 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 - [ ] Define `ShareEnvelope` struct in `crypto/share_kdf.go` or new file
 - [ ] Implement `CreateShareEnvelope` function
 - [ ] Implement `ParseShareEnvelope` function
+- [ ] Implement `CreateAAD(shareID, fileID string) []byte` helper function
+- [ ] Add `EncryptWithKeyAndAAD` function to `crypto/gcm.go` (if not exists)
+- [ ] Add `DecryptWithKeyAndAAD` function to `crypto/gcm.go` (if not exists)
 - [ ] Implement `GenerateDownloadToken` function
 - [ ] Implement `HashDownloadToken` function
 - [ ] Verify all Argon2id usage references `UnifiedArgonSecure` params (no hardcoded values)
 
 ### Phase 3: Web Client
 
+- [ ] Implement `generateShareID()` function (32-byte cryptographically secure, base64url encoded)
+- [ ] Implement `base64UrlEncode()` helper function
+- [ ] Implement `createAAD(shareId, fileId)` helper function
 - [ ] Add `getOwnerEnvelope` function to fetch Owner Envelope from new endpoint
 - [ ] Implement `unlockFEK` function to handle both Account and Custom encryption types
 - [ ] Implement Account-Encrypted file FEK unlocking (use cached AccountKey from sessionStorage)
@@ -2000,29 +2165,38 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 - [ ] Implement `generateDownloadToken` function
 - [ ] Implement `hashDownloadToken` function (SHA-256)
 - [ ] Implement `createShareEnvelope` function (Share Envelope structure)
-- [ ] Implement `encryptShareEnvelope` function (Argon2id + AES-256-GCM)
-- [ ] Update share creation flow to use new functions
-- [ ] Update share creation API call with new fields (`encrypted_envelope`, `download_token_hash`, `max_accesses`)
+- [ ] Add `encryptWithKeyAndAAD` function to `crypto/primitives.ts` (if not exists)
+- [ ] Add `decryptWithKeyAndAAD` function to `crypto/primitives.ts` (if not exists)
+- [ ] Implement `encryptShareEnvelope` function (Argon2id + AES-256-GCM with AAD)
+- [ ] Update share creation flow: generate share_id FIRST, then encrypt with AAD
+- [ ] Update share creation API call with new fields (`share_id`, `encrypted_envelope`, `download_token_hash`, `max_accesses`)
+- [ ] Add retry logic for share_id collision (409 response)
 - [ ] Implement `fetchShareEnvelope` function for recipients
-- [ ] Implement `decryptShareEnvelope` function
+- [ ] Implement `decryptShareEnvelope` function with AAD verification
 - [ ] Implement `downloadSharedFile` function with `X-Download-Token` header
 - [ ] Implement `decryptFileWithFEK` function (reuse existing file decryption logic)
-- [ ] Update `shared.html` to use new recipient flow
+- [ ] Update `shared.html` to use new recipient flow with AAD verification
 - [ ] Add share management UI (revoke button, access count display, revocation status)
+- [ ] Verify `GET /api/config/argon2` endpoint is used (already exists in handlers/config.go)
 - [ ] Review and delete redundant files if any (e.g., duplicate share-crypto.ts)
 
 ### Phase 4: CLI Client
 
 - [ ] Create `cmd/arkfile-client/agent.go` with agent implementation
+- [ ] Implement UID-specific socket path: `~/.arkfile/agent-{UID}.sock`
 - [ ] Implement Unix socket listener with 0600 permissions
+- [ ] Implement `validateSocketSecurity()` function (ownership + permission checks)
+- [ ] Update `ConnectToAgent()` to validate socket security before connecting
 - [ ] Implement agent methods: `store_account_key`, `get_account_key`, `decrypt_owner_envelope`, `clear`, `stop`
 - [ ] Add agent auto-start to `main()` function
 - [ ] Store AccountKey in agent after login
 - [ ] Clear AccountKey from agent on logout
-- [ ] Implement `share create` command with agent integration
+- [ ] Implement `generateShareID()` function in CLI (32-byte, base64url)
+- [ ] Implement `share create` command with client-side share_id generation and AAD binding
+- [ ] Add retry logic for share_id collision in CLI
 - [ ] Implement `share list` command
 - [ ] Implement `share revoke` command
-- [ ] Implement `share download` command
+- [ ] Implement `share download` command with AAD verification
 - [ ] Verify zero-knowledge: no passwords/FEKs sent to server in CLI
 
 ### Phase 5: E2E Validation
@@ -2033,6 +2207,9 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 - [ ] Update `scripts/testing/e2e-test.sh` to test max_accesses enforcement
 - [ ] Update `scripts/testing/e2e-test.sh` to test manual revocation
 - [ ] Update `scripts/testing/e2e-test.sh` to test streaming large files (>100MB)
+- [ ] Update `scripts/testing/e2e-test.sh` to test AAD binding (envelope swapping prevention)
+- [ ] Update `scripts/testing/e2e-test.sh` to test share_id collision handling
+- [ ] Update `scripts/testing/e2e-test.sh` to test agent socket security (multi-user isolation)
 - [ ] Run `dev-reset.sh` to deploy all changes
 - [ ] Run `e2e-test.sh` to validate end-to-end functionality
 
@@ -2040,24 +2217,25 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 
 ## 9. OPEN QUESTIONS & RECOMMENDATIONS
 
-### 9.1 AAD Binding for Share Envelope
+### 9.1 AAD Binding for Share Envelope ✅ IMPLEMENTED
 
-**Question**: Should we bind Share Envelope to `share_id + file_id` using AEAD AAD to prevent envelope swapping attacks?
+**Decision**: Client-side `share_id` generation with AAD binding (Option 2)
 
-**Challenge**: `share_id` is generated server-side, so it's not available at encryption time on the client.
+**Implementation**:
+- Client generates cryptographically secure 32-byte share_id (base64url encoded = 43 chars)
+- Share Envelope is encrypted with AAD = `share_id + file_id` (UTF-8 concatenation)
+- Server validates share_id format (exactly 43 chars, base64url alphabet) and uniqueness
+- AAD verification prevents envelope swapping attacks (both cross-file and same-file)
 
-**Options**:
-1. **Bind to `file_id` only**: Prevents cross-file envelope swapping but not same-file share swapping
-2. **Client-generated `share_id`**: Allow client to generate UUID for `share_id`, send to server
-3. **No AAD binding**: Rely on Download Token uniqueness to prevent swapping
+**Security Benefits**:
+- Prevents attacker from swapping envelopes between different shares
+- Prevents attacker from swapping envelopes between different files
+- Decryption automatically fails if AAD doesn't match (tamper detection)
+- Zero-knowledge preserved: server never sees relationship between share_id and envelope content
 
-**Recommendation**: Implement Option 2 (client-generated `share_id`) for maximum security. The client generates a cryptographically secure UUID, uses it for AAD binding during encryption, and sends it to the server. Server validates UUID format and uniqueness.
+### 9.2 Agent Lifecycle ✅ VERIFIED
 
-### 9.2 Agent Lifecycle
-
-**Question**: Should the agent persist across reboots?
-
-**Answer**: NO. The agent is designed as a session-only background process.
+**Decision**: Session-only background process (no persistence across reboots)
 
 **Expected Behavior**:
 - Agent starts automatically when CLI is first used
@@ -2066,38 +2244,85 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 - Agent terminates on system reboot/shutdown (Unix socket is ephemeral)
 - Agent does NOT persist across reboots (no systemd service, no autostart)
 
-**Current Plan Verification**: ✅ The plan correctly implements session-only behavior:
-- Unix socket in `~/.arkfile/agent.sock` (not persistent)
-- No systemd service or autostart mechanism
-- Memory-only storage (no disk writes)
-- Socket permissions 0600 (owner-only access)
+**Security Enhancements**:
+- Socket path: `~/.arkfile/agent-{UID}.sock` (UID-specific for multi-user isolation)
+- Socket permissions: 0600 (owner read/write only)
+- Ownership validation: Verify socket owner matches current UID before connecting
+- Permission validation: Reject connection if permissions are not exactly 0600
+- Defense-in-depth: UID in path + ownership check + permission check
 
-### 9.3 Storage Padding Handling
+### 9.3 Storage Padding Handling ✅ VERIFIED
 
-**Verification Needed**: Ensure `storage.Provider.GetObjectWithoutPadding()` exists and correctly strips padding bytes.
+**Status**: `storage.Provider.GetObjectWithoutPadding()` EXISTS and works correctly
 
-**Current Status**: The plan references this function in section 3.5, but we need to verify it exists in `storage/storage.go` or `storage/s3.go`.
+**Location**: `storage/s3.go`
 
-**If Missing**: Implement padding-aware streaming:
+**Implementation**:
 ```go
-// Read full object including padding
-object, err := storage.Provider.GetObject(ctx, storageID, opts)
-
-// Wrap in LimitReader to only stream actual file bytes
-limitedReader := io.LimitReader(object, fileSize)
-
-// Stream limited reader (excludes padding)
-io.Copy(c.Response().Writer, limitedReader)
+func (s *S3AWSStorage) GetObjectWithoutPadding(ctx context.Context, storageID string, originalSize int64, opts GetObjectOptions) (io.ReadCloser, error) {
+    object, err := s.GetObject(ctx, storageID, opts)
+    if err != nil {
+        return nil, err
+    }
+    return &limitedReadCloser{
+        ReadCloser: object,
+        limit:      originalSize,
+    }, nil
+}
 ```
 
-### 9.4 Rate Limiting Configuration
+**Helper**: Uses `limitedReadCloser` from `storage/helpers.go` which wraps the reader and stops at `originalSize`
 
-**Recommendation**: Document rate limit values for share endpoints:
-- `GET /api/shares/{id}/envelope`: 10 requests per minute per entity_id
-- `GET /api/shares/{id}/download`: 5 downloads per minute per entity_id
-- `POST /api/shares`: 5 share creations per minute per user
+**Verification**: ✅ Function exists and correctly strips padding bytes. No changes needed.
 
-**Action**: Add rate limit configuration to `config/security_config.go` or document in `docs/security.md`.
+### 9.4 Rate Limiting Configuration ✅ SPECIFIED
+
+**Rate Limit Values** (requests per minute per entity_id):
+- `GET /api/shares/{id}/envelope`: **30 requests/minute**
+- `GET /api/shares/{id}/download`: **30 requests/minute**
+- `POST /api/shares`: **120 requests/minute** (authenticated users only)
+
+**Rationale**:
+- Envelope access: Allows multiple password attempts while preventing brute-force
+- Downloads: Balances legitimate use with bandwidth protection
+- Share creation: Higher limit for authenticated users (trusted, rate-limited by JWT)
+
+**Implementation**: Add to `config/security_config.go` or configure in `handlers/rate_limiting.go`
+
+### 9.5 Share Extension Feature (OPTIONAL)
+
+**New Endpoint**: `PATCH /api/shares/{id}/extend`
+
+**Purpose**: Allow share owners to extend expiration or increase max_accesses
+
+**Request Body**:
+```json
+{
+    "new_expiration": "2024-12-31T23:59:59Z",  // Optional
+    "new_max_accesses": 100                     // Optional
+}
+```
+
+**Validation**:
+- User must own the share
+- Share must not be revoked
+- `new_expiration` must be in the future
+- `new_max_accesses` must be >= current `access_count`
+
+**Response**:
+```json
+{
+    "success": true,
+    "share_id": "abc123...",
+    "expires_at": "2024-12-31T23:59:59Z",
+    "max_accesses": 100,
+    "access_count": 42
+}
+```
+
+**UI Considerations**:
+- Add "Extend" button next to active shares in web UI
+- Add `arkfile-client share extend --share-id=... --expires-hours=... --max-downloads=...` CLI command
 
 ---
 
@@ -2105,8 +2330,11 @@ io.Copy(c.Response().Writer, limitedReader)
 
 - This implementation plan targets the ideal Arkfile file sharing system as described in the SHARED FILE LIFECYCLE section of `unify-share-file.md`
 - All changes maintain zero-knowledge architecture: server never receives passwords, FEKs, or decrypted metadata
-- Argon2id parameters are unified across the entire system via `crypto/argon2id-params.json`
+- Argon2id parameters are unified across the entire system via `crypto/argon2id-params.json` (served via verified `/api/config/argon2` endpoint)
 - Download Token enforcement provides bandwidth protection while maintaining privacy
-- Streaming downloads improve performance and reduce memory usage
+- Streaming downloads improve performance and reduce memory usage (verified `GetObjectWithoutPadding()` exists)
 - Revocation system provides owners with full control over share lifecycle
 - Agent architecture enables secure CLI sharing of Account-Encrypted files without exposing AccountKey
+- **Client-side share_id generation with AAD binding** prevents envelope swapping attacks
+- **UID-specific agent sockets with validation** provide defense-in-depth for multi-user systems
+- **Rate limiting** (30/30/120 req/min) balances usability with security
