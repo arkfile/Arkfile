@@ -2126,13 +2126,13 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 - [ ] Update `database/unified_schema.sql` with new columns (`download_token_hash NOT NULL`, `revoked_at`, `revoked_reason`)
 - [ ] Add indexes for performance (`idx_file_share_keys_revoked`, `idx_file_share_keys_token_hash`)
 - [ ] Add `GET /api/files/{file_id}/envelope` endpoint in `handlers/files.go`
-- [ ] Add `GET /api/shares/{id}/envelope` endpoint in `handlers/file_shares.go`
+- [x] Add `GET /api/shares/{id}/envelope` endpoint in `handlers/file_shares.go` (PARTIAL: implemented as GetSharePublic, missing Download Token)
 - [ ] Add `PATCH /api/shares/{id}/revoke` endpoint in `handlers/file_shares.go`
-- [ ] Modify `POST /api/shares` (CreateFileShare) to accept client-generated `share_id`
+- [ ] Modify `POST /api/shares` (CreateFileShare) to accept client-generated `share_id` (DEVIATION: server generates share_id)
 - [ ] Add `isValidShareID()` helper function (validate 43-char base64url format)
 - [ ] Add share_id uniqueness check in CreateFileShare (return 409 on collision)
 - [ ] Remove server-side `generateShareID()` function (no longer needed)
-- [ ] Remove Account-Encrypted file blocking in CreateFileShare
+- [x] Remove Account-Encrypted file blocking in CreateFileShare (DONE: both types supported)
 - [ ] Implement Download Token validation in DownloadSharedFile (constant-time comparison)
 - [ ] Implement streaming download in DownloadSharedFile (use verified `GetObjectWithoutPadding()`)
 - [ ] Implement atomic access_count transaction with auto-revocation in DownloadSharedFile
@@ -2140,18 +2140,19 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 - [ ] Update ListShares to include revocation data (`revoked_at`, `revoked_reason`, `access_count`, `max_accesses`)
 - [ ] Add rate limiting to download endpoint (30 req/min)
 - [ ] Update all logging to use truncated share_id
+- [x] Standardize all share endpoints to /api/shares/... (FIXED: routes and frontend updated)
 
 ### Phase 2: Crypto Layer (Go)
 
-- [ ] Define `ShareEnvelope` struct in `crypto/share_kdf.go` or new file
-- [ ] Implement `CreateShareEnvelope` function
-- [ ] Implement `ParseShareEnvelope` function
+- [x] Define `ShareEnvelope` struct in `crypto/share_kdf.go` or new file (PARTIAL: basic structure, missing DownloadToken field)
+- [x] Implement `CreateShareEnvelope` function (PARTIAL: encrypts FEK only, no Download Token)
+- [x] Implement `ParseShareEnvelope` function (PARTIAL: decrypts FEK only)
 - [ ] Implement `CreateAAD(shareID, fileID string) []byte` helper function
 - [ ] Add `EncryptWithKeyAndAAD` function to `crypto/gcm.go` (if not exists)
 - [ ] Add `DecryptWithKeyAndAAD` function to `crypto/gcm.go` (if not exists)
 - [ ] Implement `GenerateDownloadToken` function
 - [ ] Implement `HashDownloadToken` function
-- [ ] Verify all Argon2id usage references `UnifiedArgonSecure` params (no hardcoded values)
+- [x] Verify all Argon2id usage references `UnifiedArgonSecure` params (DONE: DeriveShareKey uses global params)
 
 ### Phase 3: Web Client
 
@@ -2159,25 +2160,25 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 - [ ] Implement `base64UrlEncode()` helper function
 - [ ] Implement `createAAD(shareId, fileId)` helper function
 - [ ] Add `getOwnerEnvelope` function to fetch Owner Envelope from new endpoint
-- [ ] Implement `unlockFEK` function to handle both Account and Custom encryption types
-- [ ] Implement Account-Encrypted file FEK unlocking (use cached AccountKey from sessionStorage)
-- [ ] Implement Custom-Encrypted file FEK unlocking (prompt for password, derive key)
+- [x] Implement `unlockFEK` function to handle both Account and Custom encryption types (DONE: in share-creation.ts)
+- [x] Implement Account-Encrypted file FEK unlocking (use cached AccountKey from sessionStorage) (DONE)
+- [x] Implement Custom-Encrypted file FEK unlocking (prompt for password, derive key) (DONE)
 - [ ] Implement `generateDownloadToken` function
 - [ ] Implement `hashDownloadToken` function (SHA-256)
-- [ ] Implement `createShareEnvelope` function (Share Envelope structure)
+- [x] Implement `createShareEnvelope` function (Share Envelope structure) (PARTIAL: FEK only, no Download Token)
 - [ ] Add `encryptWithKeyAndAAD` function to `crypto/primitives.ts` (if not exists)
 - [ ] Add `decryptWithKeyAndAAD` function to `crypto/primitives.ts` (if not exists)
-- [ ] Implement `encryptShareEnvelope` function (Argon2id + AES-256-GCM with AAD)
+- [x] Implement `encryptShareEnvelope` function (Argon2id + AES-256-GCM with AAD) (PARTIAL: no AAD binding)
 - [ ] Update share creation flow: generate share_id FIRST, then encrypt with AAD
-- [ ] Update share creation API call with new fields (`share_id`, `encrypted_envelope`, `download_token_hash`, `max_accesses`)
+- [x] Update share creation API call with new fields (`share_id`, `encrypted_envelope`, `download_token_hash`, `max_accesses`) (PARTIAL: missing share_id, download_token_hash)
 - [ ] Add retry logic for share_id collision (409 response)
-- [ ] Implement `fetchShareEnvelope` function for recipients
-- [ ] Implement `decryptShareEnvelope` function with AAD verification
+- [x] Implement `fetchShareEnvelope` function for recipients (DONE: in share-access.ts)
+- [x] Implement `decryptShareEnvelope` function with AAD verification (PARTIAL: no AAD verification)
 - [ ] Implement `downloadSharedFile` function with `X-Download-Token` header
-- [ ] Implement `decryptFileWithFEK` function (reuse existing file decryption logic)
-- [ ] Update `shared.html` to use new recipient flow with AAD verification
+- [x] Implement `decryptFileWithFEK` function (reuse existing file decryption logic) (DONE)
+- [x] Update `shared.html` to use new recipient flow with AAD verification (PARTIAL: no AAD verification)
 - [ ] Add share management UI (revoke button, access count display, revocation status)
-- [ ] Verify `GET /api/config/argon2` endpoint is used (already exists in handlers/config.go)
+- [x] Verify `GET /api/config/argon2` endpoint is used (already exists in handlers/config.go) (VERIFIED)
 - [ ] Review and delete redundant files if any (e.g., duplicate share-crypto.ts)
 
 ### Phase 4: CLI Client
@@ -2194,10 +2195,11 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 - [ ] Implement `generateShareID()` function in CLI (32-byte, base64url)
 - [ ] Implement `share create` command with client-side share_id generation and AAD binding
 - [ ] Add retry logic for share_id collision in CLI
-- [ ] Implement `share list` command
+- [x] Implement `share list` command (DONE: in arkfile-client)
 - [ ] Implement `share revoke` command
-- [ ] Implement `share download` command with AAD verification
-- [ ] Verify zero-knowledge: no passwords/FEKs sent to server in CLI
+- [x] Implement `share download` command with AAD verification (PARTIAL: no AAD verification, in arkfile-client)
+- [x] Verify zero-knowledge: no passwords/FEKs sent to server in CLI (VERIFIED)
+- [x] Add cryptocli share key encryption/decryption commands (DONE: encrypt-share-key, decrypt-share-key, decrypt-file-key)
 
 ### Phase 5: E2E Validation
 
@@ -2341,27 +2343,29 @@ func (s *S3AWSStorage) GetObjectWithoutPadding(ctx context.Context, storageID st
 
 ---
 
-# Share Fixes V2 - Implementation Progress - JAN 7, 2026 - Gemini 3.0 Pro Preview
+# Share Fixes V2 - Implementation Progress - JAN 7, 2026
 
-## Status
+## Gemini 3.0 Pro Preview - Initial Implementation
+
+### Status
 - [x] **Phase 1: Analysis & Design** (Completed)
-- [x] **Phase 2: Backend Implementation** (Completed)
-- [x] **Phase 3: Frontend Implementation** (Completed)
-- [x] **Phase 4: CLI Implementation** (Completed)
+- [x] **Phase 2: Backend Implementation** (Partial - basic functionality only)
+- [x] **Phase 3: Frontend Implementation** (Partial - basic functionality only)
+- [x] **Phase 4: CLI Implementation** (Partial - cryptocli only, agent not implemented)
 - [ ] **Phase 5: Verification** (Pending)
 
-## Completed Changes
+### Completed Changes
 
-### 1. Backend (Go)
+#### 1. Backend (Go)
 - **`crypto/share_kdf.go`**:
   - Implemented `DeriveShareKey` using global Argon2id parameters (Time=8, Memory=256MB, Threads=4).
   - Added `ValidateSharePassword` to enforce password strength.
 - **`handlers/file_shares.go`**:
-  - Updated `CreateShare` to validate share passwords.
+  - Updated `CreateShare` to validate share passwords and support both Account/Custom encryption.
   - Updated `GetSharePublic` to return salt and encrypted FEK.
   - Updated `DownloadSharedFile` to serve encrypted content.
 
-### 2. Frontend (TypeScript)
+#### 2. Frontend (TypeScript)
 - **`client/static/js/src/shares/share-crypto.ts`**:
   - Implemented `deriveShareKey` using WebCrypto (Argon2id via WASM/libopaque).
   - Added `encryptFEKForShare` and `decryptFEKFromShare`.
@@ -2369,6 +2373,7 @@ func (s *S3AWSStorage) GetObjectWithoutPadding(ctx context.Context, storageID st
 - **`client/static/js/src/shares/share-creation.ts`**:
   - Updated `ShareCreator` to use new crypto functions.
   - Added password strength validation.
+  - Supports both Account-Encrypted and Custom-Encrypted files.
 - **`client/static/js/src/shares/share-access.ts`**:
   - Implemented `ShareAccessUI` to handle password prompt, key derivation, and file decryption.
 - **`client/static/file-share.html`**:
@@ -2376,7 +2381,7 @@ func (s *S3AWSStorage) GetObjectWithoutPadding(ctx context.Context, storageID st
 - **`client/static/shared.html`**:
   - Updated UI for accessing shared files.
 
-### 3. CLI Tools
+#### 3. CLI Tools
 - **`cmd/cryptocli/main.go`**:
   - Added `encrypt-share-key` command to encrypt FEK with share password.
   - Added `decrypt-share-key` command to decrypt FEK with share password.
@@ -2385,7 +2390,36 @@ func (s *S3AWSStorage) GetObjectWithoutPadding(ctx context.Context, storageID st
   - Added `share create` command.
   - Added `download-share` command.
 
-## Notes
+### Notes
 - Error handling in the frontend has been improved to provide user-friendly messages for wrong passwords.
+
+---
+
+## Claude - Verification & Fixes (JAN 7, 2026)
+
+### Verification Findings
+
+**What Works:**
+- Basic password-protected share creation and access
+- Both Account-Encrypted and Custom-Encrypted file sharing
+- Frontend crypto using Argon2id via WASM
+- CLI tools for share key operations
+- Zero-knowledge architecture maintained (no passwords/FEKs sent to server)
+
+**Deviations from Original Plan:**
+1. **Download Token System**: NOT IMPLEMENTED - Missing bandwidth protection
+2. **AAD Binding**: NOT IMPLEMENTED - Missing envelope swapping protection
+3. **Client-Side share_id Generation**: NOT IMPLEMENTED - Server generates share_id
+4. **Revocation System**: NOT IMPLEMENTED - No revoke endpoint or database columns
+5. **Access Count Enforcement**: NOT IMPLEMENTED - max_accesses not enforced
+6. **Streaming Downloads**: NOT VERIFIED - GetObjectWithoutPadding exists but usage unclear
+7. **Agent Architecture**: NOT IMPLEMENTED - Cannot share Account-Encrypted files via CLI without re-entering password
+
+**Fixes Applied:**
+- Standardized all share endpoints to `/api/shares/...` (was mixed `/api/share/...` and `/api/shares/...`)
+- Updated `handlers/route_config.go` to use consistent `/api/shares/...` prefix
+- Updated frontend `share-access.ts` to use `/api/shares/{id}/envelope` and `/api/shares/{id}/download`
+
+**Completion Estimate:** Approximately 30% of original plan implemented. Core sharing works but lacks security features (Download Token, AAD binding, revocation) and management features (access limits, agent architecture).
 
 ---

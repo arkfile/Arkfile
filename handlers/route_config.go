@@ -101,11 +101,11 @@ func RegisterRoutes() {
 
 	// Anonymous share access (no authentication required) - with rate limiting and timing protection
 	shareGroup := Echo.Group("/api")
-	shareGroup.Use(ShareRateLimitMiddleware)                // Apply rate limiting FIRST (fail fast for abusers)
-	shareGroup.Use(TimingProtectionMiddleware)              // Then timing protection (for valid requests)
-	shareGroup.GET("/shared/:id", GetSharedFile)            // Share access page
-	shareGroup.GET("/share/:id/envelope", GetShareEnvelope) // Get share envelope for client-side decryption
-	shareGroup.GET("/shared/:id/download", DownloadSharedFile)
+	shareGroup.Use(ShareRateLimitMiddleware)                   // Apply rate limiting FIRST (fail fast for abusers)
+	shareGroup.Use(TimingProtectionMiddleware)                 // Then timing protection (for valid requests)
+	shareGroup.GET("/shares/:id", GetSharedFile)               // Share access page
+	shareGroup.GET("/shares/:id/envelope", GetShareEnvelope)   // Get share envelope for client-side decryption
+	shareGroup.GET("/shares/:id/download", DownloadSharedFile) // Download shared file
 
 	// File encryption key management - require TOTP
 	totpProtectedGroup.POST("/api/files/:fileId/update-encryption", UpdateEncryption)
