@@ -144,24 +144,30 @@ func DerivePasswordMetadataKey(password []byte, salt []byte, username string) ([
 	return hkdfExpand(baseKey, []byte(info), 32)
 }
 
+// GenerateUserKeySalt generates a deterministic salt based on username and key type
+func GenerateUserKeySalt(username, keyType string) []byte {
+	salt := sha256.Sum256([]byte(fmt.Sprintf("arkfile-%s-key-salt:%s", keyType, username)))
+	return salt[:]
+}
+
 // DeriveAccountPasswordKey derives a key from an account password
 func DeriveAccountPasswordKey(password []byte, username string) []byte {
-	salt := sha256.Sum256([]byte("arkfile-account-key-salt:" + username))
-	key, _ := DeriveArgon2IDKey(password, salt[:], UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
+	salt := GenerateUserKeySalt(username, "account")
+	key, _ := DeriveArgon2IDKey(password, salt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
 	return key
 }
 
 // DeriveCustomPasswordKey derives a key from a custom file password
 func DeriveCustomPasswordKey(password []byte, username string) []byte {
-	salt := sha256.Sum256([]byte("arkfile-custom-key-salt:" + username))
-	key, _ := DeriveArgon2IDKey(password, salt[:], UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
+	salt := GenerateUserKeySalt(username, "custom")
+	key, _ := DeriveArgon2IDKey(password, salt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
 	return key
 }
 
 // DeriveSharePasswordKey derives a key from a share password
 func DeriveSharePasswordKey(password []byte, username string) []byte {
-	salt := sha256.Sum256([]byte("arkfile-share-key-salt:" + username))
-	key, _ := DeriveArgon2IDKey(password, salt[:], UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
+	salt := GenerateUserKeySalt(username, "share")
+	key, _ := DeriveArgon2IDKey(password, salt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
 	return key
 }
 

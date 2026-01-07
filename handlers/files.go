@@ -64,6 +64,34 @@ func GetFileMeta(c echo.Context) error {
 	})
 }
 
+// GetFileEnvelope returns the encrypted FEK and metadata for a file (for share creation)
+func GetFileEnvelope(c echo.Context) error {
+	username := auth.GetUsernameFromToken(c)
+	fileID := c.Param("fileId")
+
+	// Get file metadata
+	file, err := models.GetFileByFileID(database.DB, fileID)
+	if err != nil {
+		if err.Error() == "file not found" {
+			return echo.NewHTTPError(http.StatusNotFound, "File not found")
+		}
+		logging.ErrorLogger.Printf("Database error during envelope retrieval: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+	}
+
+	// Verify ownership
+	if file.OwnerUsername != username {
+		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
+	}
+
+	// Return the envelope data needed for client-side re-encryption
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"file_id":       file.FileID,
+		"encrypted_fek": file.EncryptedFEK,
+		"password_type": file.PasswordType,
+	})
+}
+
 // ListFiles returns a list of files owned by the user with encrypted metadata
 func ListFiles(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)

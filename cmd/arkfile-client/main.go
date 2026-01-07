@@ -1437,39 +1437,11 @@ func handleDownloadShareCommand(client *HTTPClient, config *ClientConfig, args [
 
 	fmt.Printf("Download complete: %s (%d bytes)\n", *outputPath, size)
 	fmt.Println("\nTo decrypt this file:")
-	fmt.Println("1. Decrypt the FEK:")
+	fmt.Println("1. Decrypt the FEK (File Encryption Key):")
 	fmt.Printf("   cryptocli decrypt-share-key --encrypted-fek \"%s\" --salt \"%s\"\n", encryptedFEK, salt)
-	fmt.Println("2. Decrypt the file using the FEK:")
-	fmt.Printf("   cryptocli decrypt-fek --encrypted-fek ... (wait, decrypt-file doesn't take raw FEK yet)\n")
-	// Wait, cryptocli decrypt-file usually takes a password.
-	// We need a way to decrypt a file using a raw FEK.
-	// Or `cryptocli decrypt-fek` decrypts the FEK, but then what?
-	// Ah, `cryptocli decrypt-file` uses password derivation.
-	// We might need `cryptocli decrypt-file --fek <hex>`?
-	// Or `cryptocli decrypt-file` should support `--key <hex>`?
-
-	// Let's check cryptocli capabilities again.
-	// It has `decrypt-password` which uses password.
-	// It doesn't seem to have `decrypt-file-with-key`.
-
-	// However, `cryptocli decrypt-fek` decrypts a FEK using a password.
-	// `cryptocli decrypt-share-key` decrypts a FEK using a share password.
-	// Both output a RAW FEK (hex).
-
-	// We need a command to decrypt a file using that RAW FEK.
-	// `cryptocli decrypt-file`? No, `decrypt-password` is for password-based.
-
-	// I should probably add `decrypt-file` to cryptocli that takes a raw key.
-	// Or update `decrypt-password` to accept a raw key? No, that's confusing.
-
-	// Let's look at `cmd/cryptocli/main.go` again.
-	// It has `encrypt-password`, `decrypt-password`.
-	// It has `encrypt-fek`, `decrypt-fek`.
-
-	// It seems we are missing a `decrypt-with-key` command.
-	// But wait, `crypto.DecryptFileFromPath` takes a password.
-
-	// Let's check `crypto/file_operations.go`.
+	fmt.Println("   (This will output the decrypted FEK in hex format)")
+	fmt.Println("2. Decrypt the file using the decrypted FEK:")
+	fmt.Printf("   cryptocli decrypt-file-key --file \"%s\" --fek <DECRYPTED_FEK_HEX>\n", *outputPath)
 
 	return nil
 }

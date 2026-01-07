@@ -1171,13 +1171,20 @@ EXAMPLE:
 	}
 
 	// Generate random salt (32 bytes)
-	salt, err := crypto.GenerateSecureSalt(32)
-	if err != nil {
-		return fmt.Errorf("failed to generate salt: %w", err)
-	}
+	salt := crypto.GenerateRandomBytes(32)
 
 	// Derive key using share password and salt
-	encryptionKey := crypto.DeriveShareKey(password, salt)
+	encryptionKey, err := crypto.DeriveArgon2IDKey(
+		password,
+		salt,
+		crypto.UnifiedArgonSecure.KeyLen,
+		crypto.UnifiedArgonSecure.Memory,
+		crypto.UnifiedArgonSecure.Time,
+		crypto.UnifiedArgonSecure.Threads,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to derive share key: %w", err)
+	}
 	logVerbose("Derived share encryption key using Argon2id")
 
 	// Encrypt FEK
@@ -1266,7 +1273,17 @@ EXAMPLE:
 	}
 
 	// Derive key using share password and salt
-	decryptionKey := crypto.DeriveShareKey(password, saltBytes)
+	decryptionKey, err := crypto.DeriveArgon2IDKey(
+		password,
+		saltBytes,
+		crypto.UnifiedArgonSecure.KeyLen,
+		crypto.UnifiedArgonSecure.Memory,
+		crypto.UnifiedArgonSecure.Time,
+		crypto.UnifiedArgonSecure.Threads,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to derive share key: %w", err)
+	}
 	logVerbose("Derived share decryption key using Argon2id")
 
 	// Decrypt FEK

@@ -93,20 +93,18 @@ func RegisterRoutes() {
 	totpProtectedGroup.DELETE("/api/uploads/:fileId", CancelUpload)
 
 	// File sharing - require TOTP for creation, anonymous access for usage
-	totpProtectedGroup.POST("/api/files/:fileId/share", CreateFileShare) // Create Argon2id-based anonymous share
-	totpProtectedGroup.GET("/api/users/shares", ListShares)              // List user's shares
-	totpProtectedGroup.DELETE("/api/share/:id", DeleteShare)             // Delete a share
+	totpProtectedGroup.GET("/api/files/:fileId/envelope", GetFileEnvelope) // Get file envelope for share creation
+	totpProtectedGroup.POST("/api/files/:fileId/share", CreateFileShare)   // Create Argon2id-based anonymous share
+	totpProtectedGroup.GET("/api/users/shares", ListShares)                // List user's shares
+	totpProtectedGroup.DELETE("/api/share/:id", DeleteShare)               // Delete a share
+	totpProtectedGroup.POST("/api/share/:id/revoke", RevokeShare)          // Revoke a share
 
 	// Anonymous share access (no authentication required) - with rate limiting and timing protection
 	shareGroup := Echo.Group("/api")
-	shareGroup.Use(ShareRateLimitMiddleware)        // Apply rate limiting FIRST (fail fast for abusers)
-	shareGroup.Use(TimingProtectionMiddleware)      // Then timing protection (for valid requests)
-	shareGroup.GET("/shared/:id", GetSharedFile)    // Share access page
-	shareGroup.GET("/share/:id", GetShareInfo)      // Get share metadata
-	shareGroup.POST("/share/:id", AccessSharedFile) // Anonymous share access with password
-	// Alternative routes for frontend compatibility
-	shareGroup.GET("/shared/:id/info", GetShareInfo)
-	shareGroup.POST("/shared/:id/access", AccessSharedFile)
+	shareGroup.Use(ShareRateLimitMiddleware)                // Apply rate limiting FIRST (fail fast for abusers)
+	shareGroup.Use(TimingProtectionMiddleware)              // Then timing protection (for valid requests)
+	shareGroup.GET("/shared/:id", GetSharedFile)            // Share access page
+	shareGroup.GET("/share/:id/envelope", GetShareEnvelope) // Get share envelope for client-side decryption
 	shareGroup.GET("/shared/:id/download", DownloadSharedFile)
 
 	// File encryption key management - require TOTP

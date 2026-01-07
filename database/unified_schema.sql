@@ -156,15 +156,18 @@ CREATE TABLE IF NOT EXISTS totp_backup_usage (
 -- File share keys (Argon2id-based anonymous shares)
 CREATE TABLE IF NOT EXISTS file_share_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    share_id TEXT NOT NULL UNIQUE,              -- 256-bit crypto-secure identifier
+    share_id TEXT NOT NULL UNIQUE,              -- 256-bit crypto-secure identifier (Client-generated)
     file_id TEXT NOT NULL,                      -- Reference to the shared file
     owner_username TEXT NOT NULL,               -- User who created the share
     salt TEXT NOT NULL,                         -- base64-encoded 32-byte random salt for Argon2id
     encrypted_fek TEXT NOT NULL,                -- base64-encoded FEK encrypted with Argon2id-derived share key
+    download_token_hash TEXT,                   -- SHA-256 hash of the Download Token (for revocation/access control)
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     expires_at DATETIME,                        -- Optional expiration
     access_count INTEGER DEFAULT 0,             -- Track number of accesses
     max_accesses INTEGER,                       -- Optional access limit
+    revoked_at DATETIME,                        -- Timestamp when the share was revoked
+    revoked_reason TEXT,                        -- Reason for revocation
     FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE,
     FOREIGN KEY (file_id) REFERENCES file_metadata(file_id) ON DELETE CASCADE
 );

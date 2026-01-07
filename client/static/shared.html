@@ -131,7 +131,9 @@
             // Initialize share access UI using the TypeScript module
             try {
                 // Wait for modules to load
-                const { ShareAccessUI } = await import('/js/dist/shares/share-access.js');
+                await waitForModules();
+                
+                const ShareAccessUI = window.arkfile.shares.ShareAccessUI;
                 
                 // Replace the existing content with the proper share access interface
                 const mainContainer = document.querySelector('main .container .card');
@@ -148,6 +150,20 @@
                 showError('Failed to initialize share access interface. Please refresh the page.');
             }
         });
+
+        // Wait for dynamic imports in app.js to complete
+        async function waitForModules() {
+            return new Promise(resolve => {
+                const check = () => {
+                    if (window.arkfile && window.arkfile.shares && window.arkfile.shares.ShareAccessUI) {
+                        resolve();
+                    } else {
+                        setTimeout(check, 100);
+                    }
+                };
+                check();
+            });
+        }
         
         // Simple error display function (fallback)
         function showError(message) {

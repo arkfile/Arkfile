@@ -20,10 +20,11 @@ import (
 
 // ShareRequest represents a file sharing request (Argon2id-based anonymous shares)
 type ShareRequest struct {
+	ShareID           string `json:"share_id"` // Client-generated share ID
 	FileID            string `json:"file_id"`
-	SharePassword     string `json:"share_password"`      // Share password for Argon2id derivation (client-side only)
 	Salt              string `json:"salt"`                // Base64-encoded 32-byte salt
 	EncryptedFEK      string `json:"encrypted_fek"`       // Base64-encoded FEK encrypted with Argon2id-derived key
+	DownloadTokenHash string `json:"download_token_hash"` // SHA-256 hash of the Download Token
 	ExpiresAfterHours int    `json:"expires_after_hours"` // Optional expiration
 }
 
@@ -69,6 +70,9 @@ func CreateFileShare(c echo.Context) error {
 	}
 
 	// Validate required fields
+	if request.ShareID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Share ID is required")
+	}
 	if request.FileID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "File ID is required")
 	}
@@ -77,6 +81,9 @@ func CreateFileShare(c echo.Context) error {
 	}
 	if request.EncryptedFEK == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "Encrypted FEK is required")
+	}
+	if request.DownloadTokenHash == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Download Token Hash is required")
 	}
 
 	// Validate that the user owns the file using the new encrypted schema
@@ -99,22 +106,6 @@ func CreateFileShare(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to share this file")
 	}
 
-	// For account-encrypted files, require custom password for sharing
-	if passwordType == "account" {
-		return echo.NewHTTPError(http.StatusBadRequest,
-			"This file is encrypted with your account password. To share it, first add a custom password for this file.")
-	}
-
-	// Basic validation - ensure required fields are not empty
-	// Salt validation removed for Phase 1A - client is responsible for providing valid base64 strings
-
-	// Generate cryptographically secure share ID
-	shareID, err := generateShareID()
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate share ID: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create share")
-	}
-
 	// Calculate expiration time
 	var expiresAt *time.Time
 	if request.ExpiresAfterHours > 0 {
@@ -124,9 +115,9 @@ func CreateFileShare(c echo.Context) error {
 
 	// Create file share record - store salt as base64 string directly
 	_, err = database.DB.Exec(`
-		INSERT INTO file_share_keys (share_id, file_id, owner_username, salt, encrypted_fek, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
-		shareID, request.FileID, username, request.Salt, request.EncryptedFEK, expiresAt,
+		INSERT INTO file_share_keys (share_id, file_id, owner_username, salt, encrypted_fek, download_token_hash, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
+		request.ShareID, request.FileID, username, request.Salt, request.EncryptedFEK, request.DownloadTokenHash, expiresAt,
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create file share record for file %s: %v", request.FileID, err)
@@ -160,22 +151,22 @@ func CreateFileShare(c echo.Context) error {
 	} else {
 		baseURL = scheme + "://" + host
 	}
-	shareURL := baseURL + "/shared/" + shareID
+	shareURL := baseURL + "/shared/" + request.ShareID
 
 	createdAt := time.Now()
-	logging.InfoLogger.Printf("Anonymous share created: file=%s, share_id=%s, owner=%s", request.FileID, shareID, username)
-	database.LogUserAction(username, "created_share", fmt.Sprintf("file:%s, share:%s", request.FileID, shareID))
+	logging.InfoLogger.Printf("Anonymous share created: file=%s, share_id=%s, owner=%s", request.FileID, request.ShareID, username)
+	database.LogUserAction(username, "created_share", fmt.Sprintf("file:%s, share:%s", request.FileID, request.ShareID))
 
 	return c.JSON(http.StatusOK, ShareResponse{
-		ShareID:   shareID,
+		ShareID:   request.ShareID,
 		ShareURL:  shareURL,
 		CreatedAt: createdAt,
 		ExpiresAt: expiresAt,
 	})
 }
 
-// GetShareInfo gets share metadata without password verification for frontend initialization
-func GetShareInfo(c echo.Context) error {
+// GetShareEnvelope returns the encrypted FEK and metadata for a share (for client-side decryption)
+func GetShareEnvelope(c echo.Context) error {
 	shareID := c.Param("id")
 	if shareID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "Share ID is required")
@@ -194,111 +185,19 @@ func GetShareInfo(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusTooManyRequests, "Too many requests")
 	}
 
-	// Query share data from database (no password required for metadata)
+	// Query share data from database
 	var share struct {
 		FileID        string
 		OwnerUsername string
-		ExpiresAt     *time.Time
-	}
-
-	err := database.DB.QueryRow(`
-		SELECT file_id, owner_username, expires_at
-		FROM file_share_keys 
-		WHERE share_id = ?
-	`, shareID).Scan(
-		&share.FileID,
-		&share.OwnerUsername,
-		&share.ExpiresAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
-	} else if err != nil {
-		logging.ErrorLogger.Printf("Database error accessing share %s: %v", shareID, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
-	}
-
-	// Check if share has expired
-	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
-		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
-	}
-
-	// Get file metadata for display (encrypted metadata needs client-side decryption)
-	var fileInfo ShareFileInfo
-	var size sql.NullInt64
-	var encryptedFilename string
-	var encryptedSha256sum string
-
-	err = database.DB.QueryRow(`
-		SELECT encrypted_filename, size_bytes, encrypted_sha256sum
-		FROM file_metadata
-		WHERE file_id = ?
-	`, share.FileID).Scan(
-		&encryptedFilename,
-		&size,
-		&encryptedSha256sum,
-	)
-
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
-		// Use fallback file info - filename will be decrypted client-side
-		fileInfo.Filename = "encrypted_file"
-		fileInfo.Size = 0
-		fileInfo.SHA256Sum = "encrypted"
-	} else {
-		// For share info, we can't decrypt the filename/sha256sum server-side
-		// Client will need to decrypt these after successful password verification
-		fileInfo.Filename = "encrypted_file"
-		fileInfo.SHA256Sum = "encrypted"
-		if size.Valid {
-			fileInfo.Size = size.Int64
-		}
-	}
-
-	// Log metadata access
-	logging.InfoLogger.Printf("Share info accessed: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
-
-	// Return share metadata (no sensitive data like salt or encrypted FEK)
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"success":           true,
-		"share_id":          shareID,
-		"file_info":         &fileInfo,
-		"requires_password": true, // All Argon2id shares require password
-	})
-}
-
-// AccessSharedFile handles anonymous share access with Argon2id password verification
-func AccessSharedFile(c echo.Context) error {
-	shareID := c.Param("id")
-
-	var request ShareAccessRequest
-	if err := c.Bind(&request); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request")
-	}
-
-	if request.Password == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Password is required")
-	}
-
-	// Use rate limiting wrapper to ensure failed attempts are recorded
-	return RateLimitShareAccess(shareID, c, func() error {
-		return processShareAccess(shareID, request, c)
-	})
-}
-
-// processShareAccess processes the actual share access logic
-func processShareAccess(shareID string, request ShareAccessRequest, c echo.Context) error {
-	// Validate share exists and isn't expired
-	var share struct {
-		FileID        string
-		OwnerUsername string
-		Salt          string // Now stored as base64 string directly
+		Salt          string
 		EncryptedFEK  string
 		ExpiresAt     *time.Time
+		RevokedAt     *time.Time
+		RevokedReason sql.NullString
 	}
 
 	err := database.DB.QueryRow(`
-		SELECT file_id, owner_username, salt, encrypted_fek, expires_at
+		SELECT file_id, owner_username, salt, encrypted_fek, expires_at, revoked_at, revoked_reason
 		FROM file_share_keys 
 		WHERE share_id = ?
 	`, shareID).Scan(
@@ -307,6 +206,8 @@ func processShareAccess(shareID string, request ShareAccessRequest, c echo.Conte
 		&share.Salt,
 		&share.EncryptedFEK,
 		&share.ExpiresAt,
+		&share.RevokedAt,
+		&share.RevokedReason,
 	)
 
 	if err == sql.ErrNoRows {
@@ -321,7 +222,16 @@ func processShareAccess(shareID string, request ShareAccessRequest, c echo.Conte
 		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
 	}
 
-	// Get file metadata with encrypted fields (stored as base64 strings)
+	// Check if share has been revoked
+	if share.RevokedAt != nil {
+		reason := "Share has been revoked"
+		if share.RevokedReason.Valid && share.RevokedReason.String != "" {
+			reason += ": " + share.RevokedReason.String
+		}
+		return echo.NewHTTPError(http.StatusForbidden, reason)
+	}
+
+	// Get file metadata for display (encrypted metadata needs client-side decryption)
 	var fileInfo ShareFileInfo
 	var size sql.NullInt64
 	var encryptedFilename string
@@ -346,27 +256,77 @@ func processShareAccess(shareID string, request ShareAccessRequest, c echo.Conte
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
 	}
 
-	// Return encrypted metadata for client-side decryption (already base64 strings)
-	fileInfo.Filename = encryptedFilename   // Already base64 - no encoding needed
-	fileInfo.SHA256Sum = encryptedSha256sum // Already base64 - no encoding needed
+	// Populate file info
+	fileInfo.Filename = encryptedFilename   // Already base64
+	fileInfo.SHA256Sum = encryptedSha256sum // Already base64
 	if size.Valid {
 		fileInfo.Size = size.Int64
 	}
 
-	// NOTE: Password verification is done CLIENT-SIDE with Argon2id
-	// Server never sees the actual password, only provides salt + encrypted_fek
-	// Client must derive Argon2id key and attempt FEK decryption
+	// Log metadata access
+	logging.InfoLogger.Printf("Share envelope accessed: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
 
-	// Log successful access
-	entityID := logging.GetOrCreateEntityID(c)
-	logging.InfoLogger.Printf("Share accessed: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
+	// Return share envelope data
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"share_id":            shareID,
+		"file_id":             share.FileID,
+		"salt":                share.Salt,
+		"encrypted_fek":       share.EncryptedFEK,
+		"encrypted_filename":  encryptedFilename,
+		"filename_nonce":      filenameNonce,
+		"encrypted_sha256sum": encryptedSha256sum,
+		"sha256sum_nonce":     sha256sumNonce,
+		"size_bytes":          fileInfo.Size,
+	})
+}
 
-	// Return salt and encrypted FEK for client-side Argon2id decryption
-	return c.JSON(http.StatusOK, ShareAccessResponse{
-		Success:      true,
-		Salt:         share.Salt, // Already base64 string - no encoding needed
-		EncryptedFEK: share.EncryptedFEK,
-		FileInfo:     &fileInfo,
+// RevokeShare revokes a share
+func RevokeShare(c echo.Context) error {
+	username := auth.GetUsernameFromToken(c)
+	shareID := c.Param("id")
+
+	var request struct {
+		Reason string `json:"reason"`
+	}
+	if err := c.Bind(&request); err != nil {
+		// Reason is optional, so ignore bind errors
+	}
+
+	// Check if share exists and belongs to user
+	var ownerUsername string
+	err := database.DB.QueryRow(
+		"SELECT owner_username FROM file_share_keys WHERE share_id = ?",
+		shareID,
+	).Scan(&ownerUsername)
+
+	if err == sql.ErrNoRows {
+		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
+	} else if err != nil {
+		logging.ErrorLogger.Printf("Database error checking share ownership: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+	}
+
+	if ownerUsername != username {
+		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
+	}
+
+	// Revoke share
+	_, err = database.DB.Exec(`
+		UPDATE file_share_keys 
+		SET revoked_at = CURRENT_TIMESTAMP, revoked_reason = ? 
+		WHERE share_id = ?
+	`, request.Reason, shareID)
+
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to revoke share: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to revoke share")
+	}
+
+	database.LogUserAction(username, "revoked_share", shareID)
+	logging.InfoLogger.Printf("Share revoked: %s by %s", shareID, username)
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "Share revoked successfully",
 	})
 }
 

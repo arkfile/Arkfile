@@ -6,9 +6,10 @@
  * and the password validation system for security.
  */
 
-import { shareCrypto } from '../crypto/share-crypto.js';
+import { shareCrypto } from './share-crypto.js';
 import { validateSharePassword, type PasswordValidationResult } from '../crypto/password-validation.js';
 import { authenticatedFetch } from '../utils/auth.js';
+import { randomBytes, toBase64 } from '../crypto/primitives.js';
 
 // ============================================================================
 // Types
@@ -28,6 +29,7 @@ export interface FileInfo {
 export interface ShareCreationRequest {
   fileId: string;
   sharePassword: string;
+  expiresAfterHours?: number;
 }
 
 /**
@@ -72,13 +74,27 @@ export class ShareCreator {
   }
 
   /**
+   * Generates a secure random Share ID
+   */
+  private generateShareID(): string {
+    // Generate 32 bytes of random data
+    const bytes = randomBytes(32);
+    // Convert to URL-safe Base64 (replace + with -, / with _, remove =)
+    return toBase64(bytes)
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=/g, '');
+  }
+
+  /**
    * Creates a share for the file
    * 
    * This performs the following steps:
    * 1. Validates the share password
    * 2. Re-encrypts the FEK with the share password
-   * 3. Sends the encrypted share data to the server
-   * 4. Returns the share URL
+   * 3. Generates a Share ID
+   * 4. Sends the encrypted share data to the server
+   * 5. Returns the share URL
    * 
    * @param request - Share creation request
    * @returns Share creation result with URL or error
@@ -94,23 +110,34 @@ export class ShareCreator {
         };
       }
 
+      // Generate Share ID
+      const shareId = this.generateShareID();
+
       // Encrypt the FEK with the share password
       // The FEK should already be decrypted (raw 32 bytes) when passed to ShareCreator
       const shareEncryptionResult = await shareCrypto.encryptFEKForShare(
         this.fileInfo.fek,
-        request.sharePassword
+        request.sharePassword,
+        shareId
       );
 
+      // Generate a dummy download token hash for now (backend requires it)
+      // In a full implementation, this would be part of a download token system
+      const downloadTokenHash = toBase64(randomBytes(32));
+
       // Send share creation request to server
-      const response = await authenticatedFetch('/api/shares', {
+      const response = await authenticatedFetch(`/api/files/${request.fileId}/share`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          share_id: shareId,
           file_id: request.fileId,
           encrypted_fek: shareEncryptionResult.encryptedFEK,
           salt: shareEncryptionResult.salt,
+          download_token_hash: downloadTokenHash,
+          expires_after_hours: request.expiresAfterHours || 0
         }),
       });
 
@@ -118,7 +145,7 @@ export class ShareCreator {
         const errorData = await response.json().catch(() => ({}));
         return {
           success: false,
-          error: errorData.error || `Server error: ${response.status}`
+          error: errorData.error || errorData.message || `Server error: ${response.status}`
         };
       }
 
