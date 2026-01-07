@@ -3,76 +3,56 @@ package crypto
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"fmt"
 )
 
-// GenerateRandomBytes creates a slice of bytes with a specified length,
-// filled with cryptographically secure random data.
-func GenerateRandomBytes(length int) []byte {
-	randomBytes := make([]byte, length)
-	if _, err := rand.Read(randomBytes); err != nil {
-		// This is a critical failure, as the OS's entropy source is failing.
-		// In a real-world application, this should be handled with more care.
-		panic("failed to generate random bytes: " + err.Error())
+// GenerateRandomBytes generates cryptographically secure random bytes
+func GenerateRandomBytes(n int) []byte {
+	b := make([]byte, n)
+	_, err := rand.Read(b)
+	if err != nil {
+		panic(fmt.Sprintf("failed to generate random bytes: %v", err))
 	}
-	return randomBytes
+	return b
 }
 
-// SecureCompare performs a constant-time comparison of two byte slices
-// to prevent timing attacks.
+// EncodeBase64 encodes bytes to base64 string
+func EncodeBase64(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// DecodeBase64 decodes base64 string to bytes
+func DecodeBase64(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
+}
+
+// SecureClear securely clears sensitive data from memory
+func SecureClear(data []byte) {
+	for i := range data {
+		data[i] = 0
+	}
+}
+
+// DecryptWithNonce decrypts data using AES-256-GCM with a provided nonce
+// This is used when the nonce is stored separately (e.g., in database)
+func DecryptWithNonce(ciphertext, key, nonce []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("key must be 32 bytes for AES-256")
+	}
+
+	// Combine nonce + ciphertext for DecryptGCM
+	combined := append(nonce, ciphertext...)
+
+	return DecryptGCM(combined, key)
+}
+
+// SecureZeroBytes is an alias for SecureClear for backward compatibility
+func SecureZeroBytes(data []byte) {
+	SecureClear(data)
+}
+
+// SecureCompare performs constant-time comparison of two byte slices
 func SecureCompare(a, b []byte) bool {
 	return subtle.ConstantTimeCompare(a, b) == 1
-}
-
-// SecureZeroBytes securely zeros out a byte slice to prevent sensitive
-// data from lingering in memory.
-func SecureZeroBytes(slice []byte) {
-	for i := range slice {
-		slice[i] = 0
-	}
-}
-
-// ValidatePasswordStrength validates that a password meets minimum requirements
-func ValidatePasswordStrength(password []byte) error {
-	if len(password) < 8 {
-		return fmt.Errorf("password must be at least 8 characters long, got %d", len(password))
-	}
-
-	if len(password) > 256 {
-		return fmt.Errorf("password too long: maximum 256 characters, got %d", len(password))
-	}
-
-	// Check that password is not all the same character
-	if len(password) > 1 {
-		firstChar := password[0]
-		allSame := true
-		for _, b := range password[1:] {
-			if b != firstChar {
-				allSame = false
-				break
-			}
-		}
-		if allSame {
-			return fmt.Errorf("password cannot be all the same character")
-		}
-	}
-
-	return nil
-}
-
-// DeriveSecureSessionFromPassword derives a session key from password using Argon2ID
-func DeriveSecureSessionFromPassword(password []byte, username string) ([]byte, error) {
-	if err := ValidatePasswordStrength(password); err != nil {
-		return nil, fmt.Errorf("invalid password: %w", err)
-	}
-
-	if username == "" {
-		return nil, fmt.Errorf("username cannot be empty")
-	}
-
-	// Derive session key using account password derivation
-	sessionKey := DeriveAccountPasswordKey(password, username)
-
-	// Use HKDF to derive final session key
-	return DeriveSessionKey(sessionKey, SessionKeyContext)
 }

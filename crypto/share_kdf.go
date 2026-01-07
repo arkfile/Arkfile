@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 
 	"golang.org/x/crypto/argon2"
@@ -88,4 +89,57 @@ func VerifyDownloadToken(downloadTokenBase64 string, expectedHashBase64 string) 
 		return false, err
 	}
 	return hash == expectedHashBase64, nil
+}
+
+// ShareEnvelope represents the decrypted content of a Share Envelope
+// This is a JSON structure containing the FEK and Download Token
+type ShareEnvelope struct {
+	FEK           string `json:"fek"`            // base64-encoded FEK
+	DownloadToken string `json:"download_token"` // base64-encoded Download Token
+}
+
+// GenerateDownloadToken generates a cryptographically secure 32-byte Download Token
+func GenerateDownloadToken() ([]byte, error) {
+	token := make([]byte, 32)
+	if _, err := rand.Read(token); err != nil {
+		return nil, fmt.Errorf("failed to generate download token: %w", err)
+	}
+	return token, nil
+}
+
+// CreateShareEnvelope creates a Share Envelope JSON payload
+func CreateShareEnvelope(fek, downloadToken []byte) ([]byte, error) {
+	envelope := ShareEnvelope{
+		FEK:           base64.StdEncoding.EncodeToString(fek),
+		DownloadToken: base64.StdEncoding.EncodeToString(downloadToken),
+	}
+
+	envelopeJSON, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal share envelope: %w", err)
+	}
+
+	return envelopeJSON, nil
+}
+
+// ParseShareEnvelope parses a Share Envelope JSON payload
+func ParseShareEnvelope(envelopeJSON []byte) (*ShareEnvelope, error) {
+	var envelope ShareEnvelope
+	if err := json.Unmarshal(envelopeJSON, &envelope); err != nil {
+		return nil, fmt.Errorf("failed to parse share envelope: %w", err)
+	}
+
+	// Validate required fields
+	if envelope.FEK == "" || envelope.DownloadToken == "" {
+		return nil, fmt.Errorf("invalid envelope: missing required fields")
+	}
+
+	return &envelope, nil
+}
+
+// CreateAAD creates the Additional Authenticated Data for envelope encryption
+// AAD = share_id + file_id (UTF-8 encoded concatenation)
+// This binds the encrypted envelope to specific share_id and file_id
+func CreateAAD(shareID, fileID string) []byte {
+	return []byte(shareID + fileID)
 }

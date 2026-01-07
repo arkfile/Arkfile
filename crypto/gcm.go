@@ -262,3 +262,91 @@ func GenerateAESKey() ([]byte, error) {
 	}
 	return key, nil
 }
+
+// EncryptGCMWithAAD encrypts data using AES-256-GCM with Additional Authenticated Data
+// AAD is authenticated but not encrypted - used to bind ciphertext to context
+// Returns: nonce + ciphertext + tag (all concatenated)
+func EncryptGCMWithAAD(data, key, aad []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("key must be 32 bytes for AES-256")
+	}
+
+	// Create AES cipher
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	// Create GCM mode
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	// Generate random nonce
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	// Encrypt data with AAD
+	ciphertext := gcm.Seal(nonce, nonce, data, aad)
+	return ciphertext, nil
+}
+
+// DecryptGCMWithAAD decrypts data using AES-256-GCM with Additional Authenticated Data
+// AAD must match the value used during encryption or decryption will fail
+// Expects: nonce + ciphertext + tag (all concatenated)
+func DecryptGCMWithAAD(data, key, aad []byte) ([]byte, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("key must be 32 bytes for AES-256")
+	}
+
+	// Create AES cipher
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	// Create GCM mode
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	// Check minimum length (nonce + tag)
+	nonceSize := gcm.NonceSize()
+	tagSize := 16 // GCM tag size is always 16 bytes
+	minSize := nonceSize + tagSize
+
+	if len(data) < minSize {
+		if isDebugMode() {
+			fmt.Printf("GCM-AAD decrypt: insufficient data length %d, need at least %d\n", len(data), minSize)
+		}
+		return nil, fmt.Errorf("ciphertext too short: got %d bytes, need at least %d", len(data), minSize)
+	}
+
+	// Extract nonce and ciphertext
+	nonce := data[:nonceSize]
+	ciphertext := data[nonceSize:]
+
+	if isDebugMode() {
+		fmt.Printf("GCM-AAD decrypt: data=%d, nonce=%d, ciphertext=%d, aad=%d\n",
+			len(data), len(nonce), len(ciphertext), len(aad))
+	}
+
+	// Decrypt data with AAD verification
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, aad)
+	if err != nil {
+		if isDebugMode() {
+			fmt.Printf("GCM-AAD decryption failed (AAD mismatch or tampering): %v\n", err)
+		}
+		return nil, fmt.Errorf("failed to decrypt with AAD (tampering detected or wrong context): %w", err)
+	}
+
+	if isDebugMode() {
+		fmt.Printf("GCM-AAD decrypt successful: plaintext_len=%d\n", len(plaintext))
+	}
+
+	return plaintext, nil
+}

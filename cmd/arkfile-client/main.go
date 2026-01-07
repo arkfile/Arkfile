@@ -53,6 +53,7 @@ COMMANDS:
     download-share Download a shared file
     list-files    List available files (encrypted metadata)
     logout        Logout and clear session
+    agent         Manage the agent (start, stop, status)
     version       Show version information
 
 GLOBAL OPTIONS:
@@ -152,6 +153,8 @@ type UploadMetadata struct {
 	PasswordHint       string `json:"password_hint"`
 }
 
+var globalAgent *Agent
+
 func main() {
 	// Global flags
 	var (
@@ -207,6 +210,13 @@ func main() {
 	command := flag.Arg(0)
 	args := flag.Args()[1:]
 
+	// Auto-start agent for most commands (except agent management commands)
+	if command != "agent" && command != "version" && command != "" {
+		if err := ensureAgentRunning(); err != nil {
+			logVerbose("Warning: Failed to start agent: %v", err)
+		}
+	}
+
 	// Execute command
 	switch command {
 	case "register":
@@ -252,6 +262,11 @@ func main() {
 	case "logout":
 		if err := handleLogoutCommand(config, args); err != nil {
 			logError("Logout failed: %v", err)
+			os.Exit(1)
+		}
+	case "agent":
+		if err := handleAgentCommand(args); err != nil {
+			logError("Agent command failed: %v", err)
 			os.Exit(1)
 		}
 	case "version":
@@ -1719,4 +1734,125 @@ func readPassword(prompt string) ([]byte, error) {
 	}
 	// Trim trailing carriage return if present
 	return bytes.TrimRight(passwordBytes, "\r"), nil
+}
+
+// ensureAgentRunning starts the agent if it's not already running
+func ensureAgentRunning() error {
+	// Try to ping existing agent
+	client, err := NewAgentClient()
+	if err != nil {
+		return fmt.Errorf("failed to create agent client: %w", err)
+	}
+
+	if err := client.Ping(); err == nil {
+		// Agent is already running
+		logVerbose("Agent is already running")
+		return nil
+	}
+
+	// Agent not running, start it
+	logVerbose("Starting agent...")
+	agent, err := NewAgent()
+	if err != nil {
+		return fmt.Errorf("failed to create agent: %w", err)
+	}
+
+	if err := agent.Start(); err != nil {
+		return fmt.Errorf("failed to start agent: %w", err)
+	}
+
+	globalAgent = agent
+	logVerbose("Agent started successfully at: %s", agent.GetSocketPath())
+
+	return nil
+}
+
+// handleAgentCommand processes agent management commands
+func handleAgentCommand(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("subcommand required: start, stop, status")
+	}
+
+	subcommand := args[0]
+
+	switch subcommand {
+	case "start":
+		return handleAgentStart()
+	case "stop":
+		return handleAgentStop()
+	case "status":
+		return handleAgentStatus()
+	default:
+		return fmt.Errorf("unknown subcommand: %s", subcommand)
+	}
+}
+
+func handleAgentStart() error {
+	// Check if already running
+	client, err := NewAgentClient()
+	if err != nil {
+		return fmt.Errorf("failed to create agent client: %w", err)
+	}
+
+	if err := client.Ping(); err == nil {
+		fmt.Println("Agent is already running")
+		return nil
+	}
+
+	// Start agent
+	agent, err := NewAgent()
+	if err != nil {
+		return fmt.Errorf("failed to create agent: %w", err)
+	}
+
+	if err := agent.Start(); err != nil {
+		return fmt.Errorf("failed to start agent: %w", err)
+	}
+
+	globalAgent = agent
+	fmt.Printf("Agent started successfully\n")
+	fmt.Printf("Socket: %s\n", agent.GetSocketPath())
+
+	// Keep agent running
+	fmt.Println("Agent is running. Press Ctrl+C to stop.")
+	select {}
+}
+
+func handleAgentStop() error {
+	client, err := NewAgentClient()
+	if err != nil {
+		return fmt.Errorf("failed to create agent client: %w", err)
+	}
+
+	// Try to clear and stop via client
+	if err := client.Clear(); err != nil {
+		logVerbose("Warning: Failed to clear agent: %v", err)
+	}
+
+	// If we have a global agent, stop it
+	if globalAgent != nil {
+		if err := globalAgent.Stop(); err != nil {
+			return fmt.Errorf("failed to stop agent: %w", err)
+		}
+		globalAgent = nil
+	}
+
+	fmt.Println("Agent stopped successfully")
+	return nil
+}
+
+func handleAgentStatus() error {
+	client, err := NewAgentClient()
+	if err != nil {
+		return fmt.Errorf("failed to create agent client: %w", err)
+	}
+
+	if err := client.Ping(); err != nil {
+		fmt.Println("Agent Status: NOT RUNNING")
+		return nil
+	}
+
+	fmt.Println("Agent Status: RUNNING")
+	fmt.Printf("Socket: %s\n", client.socketPath)
+	return nil
 }

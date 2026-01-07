@@ -160,14 +160,14 @@ CREATE TABLE IF NOT EXISTS file_share_keys (
     file_id TEXT NOT NULL,                      -- Reference to the shared file
     owner_username TEXT NOT NULL,               -- User who created the share
     salt TEXT NOT NULL,                         -- base64-encoded 32-byte random salt for Argon2id
-    encrypted_fek TEXT NOT NULL,                -- base64-encoded FEK encrypted with Argon2id-derived share key
-    download_token_hash TEXT,                   -- SHA-256 hash of the Download Token (for revocation/access control)
+    encrypted_fek TEXT NOT NULL,                -- base64-encoded Share Envelope (FEK + Download Token) encrypted with AAD
+    download_token_hash TEXT NOT NULL,          -- SHA-256 hash of the Download Token (REQUIRED for bandwidth protection)
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     expires_at DATETIME,                        -- Optional expiration
     access_count INTEGER DEFAULT 0,             -- Track number of accesses
     max_accesses INTEGER,                       -- Optional access limit
     revoked_at DATETIME,                        -- Timestamp when the share was revoked
-    revoked_reason TEXT,                        -- Reason for revocation
+    revoked_reason TEXT,                        -- Reason for revocation (e.g., 'manual_revocation', 'max_downloads_reached')
     FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE,
     FOREIGN KEY (file_id) REFERENCES file_metadata(file_id) ON DELETE CASCADE
 );
@@ -411,6 +411,8 @@ CREATE INDEX IF NOT EXISTS idx_file_share_keys_share_id ON file_share_keys(share
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_file_id ON file_share_keys(file_id);
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_owner ON file_share_keys(owner_username);
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_expires_at ON file_share_keys(expires_at);
+CREATE INDEX IF NOT EXISTS idx_file_share_keys_revoked ON file_share_keys(revoked_at);
+CREATE INDEX IF NOT EXISTS idx_file_share_keys_token_hash ON file_share_keys(download_token_hash);
 CREATE INDEX IF NOT EXISTS idx_file_shares_share_id ON file_shares(share_id);
 CREATE INDEX IF NOT EXISTS idx_file_shares_file_id ON file_shares(file_id);
 CREATE INDEX IF NOT EXISTS idx_file_shares_owner ON file_shares(owner_username);

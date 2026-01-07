@@ -34,6 +34,10 @@ COMMANDS:
     encrypt-share-key Encrypt a FEK for sharing using a share password
     decrypt-share-key Decrypt a shared FEK using a share password
     decrypt-file-key  Decrypt a file using a raw File Encryption Key (FEK)
+    generate-share-id Generate a cryptographically secure share ID
+    generate-download-token Generate a download token and its hash
+    create-share-envelope Create a complete share envelope with AAD binding
+    decrypt-share-envelope Decrypt a share envelope and extract FEK
     hash              Calculate SHA-256 hash of files
     generate-key      Generate random AES keys
     generate-test-file Generate test files with deterministic patterns
@@ -145,6 +149,26 @@ func main() {
 	case "decrypt-file-key":
 		if err := handleDecryptFileKeyCommand(args); err != nil {
 			logError("File decryption with key failed: %v", err)
+			os.Exit(1)
+		}
+	case "generate-share-id":
+		if err := handleGenerateShareIDCommand(args); err != nil {
+			logError("Share ID generation failed: %v", err)
+			os.Exit(1)
+		}
+	case "generate-download-token":
+		if err := handleGenerateDownloadTokenCommand(args); err != nil {
+			logError("Download token generation failed: %v", err)
+			os.Exit(1)
+		}
+	case "create-share-envelope":
+		if err := handleCreateShareEnvelopeCommand(args); err != nil {
+			logError("Share envelope creation failed: %v", err)
+			os.Exit(1)
+		}
+	case "decrypt-share-envelope":
+		if err := handleDecryptShareEnvelopeCommand(args); err != nil {
+			logError("Share envelope decryption failed: %v", err)
 			os.Exit(1)
 		}
 	case "derive-export-key":
@@ -1372,6 +1396,323 @@ EXAMPLE:
 	fmt.Printf("File decryption completed successfully\n")
 	fmt.Printf("Input file: %s (%d bytes)\n", *filePath, inputInfo.Size())
 	fmt.Printf("Output file: %s (%d bytes)\n", outputFilePath, outputInfo.Size())
+
+	return nil
+}
+
+// handleGenerateShareIDCommand generates a cryptographically secure share ID
+func handleGenerateShareIDCommand(args []string) error {
+	fs := flag.NewFlagSet("generate-share-id", flag.ExitOnError)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli generate-share-id
+
+Generate a cryptographically secure share ID (32 bytes, base64url encoded = 43 chars).
+This ID is used to uniquely identify a share and is part of the AAD binding.
+
+EXAMPLES:
+    cryptocli generate-share-id
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	// Generate 32-byte random share ID
+	shareIDBytes := crypto.GenerateRandomBytes(32)
+
+	// Base64url encode (no padding)
+	shareID := base64.RawURLEncoding.EncodeToString(shareIDBytes)
+
+	fmt.Printf("Share ID: %s\n", shareID)
+	logVerbose("Generated 32-byte share ID, base64url encoded to %d characters", len(shareID))
+
+	return nil
+}
+
+// handleGenerateDownloadTokenCommand generates a download token and its hash
+func handleGenerateDownloadTokenCommand(args []string) error {
+	fs := flag.NewFlagSet("generate-download-token", flag.ExitOnError)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli generate-download-token
+
+Generate a download token (32 bytes) and its SHA-256 hash.
+The token is sent to the recipient, while the hash is stored in the database.
+
+EXAMPLES:
+    cryptocli generate-download-token
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	// Generate 32-byte download token
+	downloadToken := crypto.GenerateRandomBytes(32)
+
+	// Hash the token with SHA-256
+	hasher := sha256.New()
+	hasher.Write(downloadToken)
+	tokenHash := hasher.Sum(nil)
+
+	// Output both token and hash
+	fmt.Printf("Download Token (base64): %s\n", base64.StdEncoding.EncodeToString(downloadToken))
+	fmt.Printf("Token Hash (base64): %s\n", base64.StdEncoding.EncodeToString(tokenHash))
+
+	logVerbose("Generated 32-byte download token and SHA-256 hash")
+
+	return nil
+}
+
+// handleCreateShareEnvelopeCommand creates a complete share envelope with AAD binding
+func handleCreateShareEnvelopeCommand(args []string) error {
+	fs := flag.NewFlagSet("create-share-envelope", flag.ExitOnError)
+	var (
+		fekHex         = fs.String("fek", "", "File Encryption Key in hex format (required)")
+		shareID        = fs.String("share-id", "", "Share ID (43-char base64url, required)")
+		fileID         = fs.String("file-id", "", "File ID (required)")
+		passwordSource = fs.String("password-source", "prompt", "Password source: prompt or stdin")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli create-share-envelope [FLAGS]
+
+Create a complete share envelope with AAD binding.
+Generates salt, derives key from share password, encrypts FEK with AAD binding,
+and generates a download token.
+
+FLAGS:
+    --fek HEX              File Encryption Key in hex format (required)
+    --share-id ID          Share ID (43-char base64url, required)
+    --file-id ID           File ID (required)
+    --password-source SRC  Password source: prompt or stdin (default: prompt)
+    --help                 Show this help message
+
+OUTPUT:
+    JSON with encrypted_fek, salt, download_token, and download_token_hash
+
+EXAMPLE:
+    cryptocli create-share-envelope --fek "abc..." --share-id "xyz..." --file-id "123"
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *fekHex == "" || *shareID == "" || *fileID == "" {
+		fs.Usage()
+		return fmt.Errorf("fek, share-id, and file-id are required")
+	}
+
+	// Validate share ID format (should be 43 characters, base64url)
+	if len(*shareID) != 43 {
+		return fmt.Errorf("share ID must be 43 characters (32 bytes base64url encoded), got %d", len(*shareID))
+	}
+
+	// Decode FEK from hex
+	fek, err := hex.DecodeString(*fekHex)
+	if err != nil {
+		return fmt.Errorf("failed to decode FEK from hex: %w", err)
+	}
+
+	if len(fek) != 32 {
+		return fmt.Errorf("FEK must be 32 bytes (256 bits) for AES-256, got %d bytes", len(fek))
+	}
+
+	// Read share password
+	var password []byte
+	if *passwordSource == "stdin" {
+		reader := bufio.NewReader(os.Stdin)
+		passwordStr, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read password from stdin: %w", err)
+		}
+		password = []byte(strings.TrimSpace(passwordStr))
+	} else {
+		password, err = readPassword("Enter share password: ")
+		if err != nil {
+			return fmt.Errorf("failed to read password: %w", err)
+		}
+	}
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	if len(password) == 0 {
+		return fmt.Errorf("password cannot be empty")
+	}
+
+	// Generate random salt (32 bytes)
+	salt := crypto.GenerateRandomBytes(32)
+
+	// Derive key using share password and salt
+	shareKey, err := crypto.DeriveArgon2IDKey(
+		password,
+		salt,
+		crypto.UnifiedArgonSecure.KeyLen,
+		crypto.UnifiedArgonSecure.Memory,
+		crypto.UnifiedArgonSecure.Time,
+		crypto.UnifiedArgonSecure.Threads,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to derive share key: %w", err)
+	}
+	logVerbose("Derived share encryption key using Argon2id")
+
+	// Create AAD: share_id || file_id
+	aad := []byte(*shareID + *fileID)
+	logVerbose("Created AAD from share_id and file_id (%d bytes)", len(aad))
+
+	// Encrypt FEK with AAD binding
+	encryptedFEK, err := crypto.EncryptGCMWithAAD(fek, shareKey, aad)
+	if err != nil {
+		return fmt.Errorf("FEK encryption with AAD failed: %w", err)
+	}
+
+	// Generate download token
+	downloadToken := crypto.GenerateRandomBytes(32)
+
+	// Hash the download token
+	hasher := sha256.New()
+	hasher.Write(downloadToken)
+	tokenHash := hasher.Sum(nil)
+
+	// Output JSON
+	fmt.Printf("{\n")
+	fmt.Printf("  \"encrypted_fek\": \"%s\",\n", base64.StdEncoding.EncodeToString(encryptedFEK))
+	fmt.Printf("  \"salt\": \"%s\",\n", base64.StdEncoding.EncodeToString(salt))
+	fmt.Printf("  \"download_token\": \"%s\",\n", base64.StdEncoding.EncodeToString(downloadToken))
+	fmt.Printf("  \"download_token_hash\": \"%s\"\n", base64.StdEncoding.EncodeToString(tokenHash))
+	fmt.Printf("}\n")
+
+	logVerbose("Share envelope created successfully with AAD binding")
+
+	return nil
+}
+
+// handleDecryptShareEnvelopeCommand decrypts a share envelope and extracts the FEK
+func handleDecryptShareEnvelopeCommand(args []string) error {
+	fs := flag.NewFlagSet("decrypt-share-envelope", flag.ExitOnError)
+	var (
+		encryptedFEK   = fs.String("encrypted-fek", "", "Base64 encoded encrypted FEK (required)")
+		salt           = fs.String("salt", "", "Base64 encoded salt (required)")
+		shareID        = fs.String("share-id", "", "Share ID (43-char base64url, required)")
+		fileID         = fs.String("file-id", "", "File ID (required)")
+		passwordSource = fs.String("password-source", "prompt", "Password source: prompt or stdin")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: cryptocli decrypt-share-envelope [FLAGS]
+
+Decrypt a share envelope and extract the FEK using AAD verification.
+Verifies that the share_id and file_id match the AAD used during encryption.
+
+FLAGS:
+    --encrypted-fek B64    Base64 encoded encrypted FEK (required)
+    --salt B64             Base64 encoded salt (required)
+    --share-id ID          Share ID (43-char base64url, required)
+    --file-id ID           File ID (required)
+    --password-source SRC  Password source: prompt or stdin (default: prompt)
+    --help                 Show this help message
+
+EXAMPLE:
+    cryptocli decrypt-share-envelope \
+        --encrypted-fek "..." \
+        --salt "..." \
+        --share-id "xyz..." \
+        --file-id "123"
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *encryptedFEK == "" || *salt == "" || *shareID == "" || *fileID == "" {
+		fs.Usage()
+		return fmt.Errorf("encrypted-fek, salt, share-id, and file-id are required")
+	}
+
+	// Validate share ID format
+	if len(*shareID) != 43 {
+		return fmt.Errorf("share ID must be 43 characters (32 bytes base64url encoded), got %d", len(*shareID))
+	}
+
+	// Decode encrypted FEK
+	fekEnc, err := base64.StdEncoding.DecodeString(*encryptedFEK)
+	if err != nil {
+		return fmt.Errorf("failed to decode encrypted FEK: %w", err)
+	}
+
+	// Decode salt
+	saltBytes, err := base64.StdEncoding.DecodeString(*salt)
+	if err != nil {
+		return fmt.Errorf("failed to decode salt: %w", err)
+	}
+
+	// Read share password
+	var password []byte
+	if *passwordSource == "stdin" {
+		reader := bufio.NewReader(os.Stdin)
+		passwordStr, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read password from stdin: %w", err)
+		}
+		password = []byte(strings.TrimSpace(passwordStr))
+	} else {
+		password, err = readPassword("Enter share password: ")
+		if err != nil {
+			return fmt.Errorf("failed to read password: %w", err)
+		}
+	}
+	defer func() {
+		for i := range password {
+			password[i] = 0
+		}
+	}()
+	if len(password) == 0 {
+		return fmt.Errorf("password cannot be empty")
+	}
+
+	// Derive key using share password and salt
+	shareKey, err := crypto.DeriveArgon2IDKey(
+		password,
+		saltBytes,
+		crypto.UnifiedArgonSecure.KeyLen,
+		crypto.UnifiedArgonSecure.Memory,
+		crypto.UnifiedArgonSecure.Time,
+		crypto.UnifiedArgonSecure.Threads,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to derive share key: %w", err)
+	}
+	logVerbose("Derived share decryption key using Argon2id")
+
+	// Create AAD: share_id || file_id
+	aad := []byte(*shareID + *fileID)
+	logVerbose("Created AAD from share_id and file_id (%d bytes)", len(aad))
+
+	// Decrypt FEK with AAD verification
+	fekBytes, err := crypto.DecryptGCMWithAAD(fekEnc, shareKey, aad)
+	if err != nil {
+		return fmt.Errorf("FEK decryption with AAD failed (wrong password or tampered data): %w", err)
+	}
+
+	// Validate FEK length
+	if len(fekBytes) != 32 {
+		return fmt.Errorf("decrypted FEK must be 32 bytes (256 bits) for AES-256, got %d bytes", len(fekBytes))
+	}
+
+	// Print result
+	fmt.Printf("FEK decrypted successfully (AAD verified)\n")
+	fmt.Printf("Decrypted FEK (hex): %s\n", hex.EncodeToString(fekBytes))
+
+	logVerbose("Share envelope decrypted successfully with AAD verification")
 
 	return nil
 }

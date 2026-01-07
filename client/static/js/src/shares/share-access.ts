@@ -11,12 +11,14 @@ interface ShareEnvelope {
   encrypted_sha256sum: string;
   sha256sum_nonce: string;
   size_bytes: number;
+  download_token?: string; // Will be decrypted from the envelope
 }
 
 export class ShareAccessUI {
   private containerId: string;
   private shareId: string;
   private envelope: ShareEnvelope | null = null;
+  private downloadToken: string | null = null; // Store Download Token after decryption
 
   constructor(containerId: string, shareId: string) {
     this.containerId = containerId;
@@ -85,23 +87,26 @@ export class ShareAccessUI {
 
       if (!this.envelope) throw new Error('No envelope data');
 
-      // 2. Decrypt FEK (implicitly derives key from password)
-      // We construct the metadata object expected by decryptFEKFromShare
-      const fek = await shareCrypto.decryptFEKFromShare({
-        encryptedFEK: this.envelope.encrypted_fek,
-        salt: this.envelope.salt,
-        nonce: '' // Not used by decryptFEKFromShare as it extracts nonce from encryptedFEK
-      }, password, this.shareId);
+      // 2. Decrypt Share Envelope to get FEK and Download Token
+      const decryptedEnvelope = await shareCrypto.decryptShareEnvelope(
+        this.envelope.encrypted_fek,
+        password,
+        this.shareId,
+        this.envelope.salt
+      );
 
-      // 4. Decrypt Filename
+      // Store the Download Token for later use
+      this.downloadToken = decryptedEnvelope.downloadToken;
+
+      // 3. Decrypt Filename
       const filename = await shareCrypto.decryptMetadata(
         this.envelope.encrypted_filename,
         this.envelope.filename_nonce,
-        fek
+        decryptedEnvelope.fek
       );
 
-      // 5. Show file details and enable download
-      this.showFileDetails(filename, this.envelope.size_bytes, fek);
+      // 4. Show file details and enable download
+      this.showFileDetails(filename, this.envelope.size_bytes, decryptedEnvelope.fek);
       
       if (statusDiv) statusDiv.className = 'hidden';
 
@@ -139,24 +144,35 @@ export class ShareAccessUI {
     }
 
     try {
-      // Request download (this might need a token or just the share ID)
-      // The backend `DownloadSharedFile` returns encrypted data
-      const response = await fetch(`/api/shares/${this.shareId}/download`);
+      // Validate we have the Download Token
+      if (!this.downloadToken) {
+        throw new Error('Download token not available');
+      }
+
+      // Request download with Download Token in header
+      const response = await fetch(`/api/shares/${this.shareId}/download`, {
+        headers: {
+          'X-Download-Token': this.downloadToken
+        }
+      });
+      
       if (!response.ok) {
+        if (response.status === 403) {
+          throw new Error('Download token invalid or share has been revoked');
+        }
         throw new Error('Download failed');
       }
 
-      const data = await response.json();
+      // Get encrypted file data as binary stream
+      const encryptedArrayBuffer = await response.arrayBuffer();
+      const encryptedData = new Uint8Array(encryptedArrayBuffer);
       
-      // Decrypt content
-      // The data.data is base64 encoded encrypted content
-      // We need to use the FEK to decrypt the content.
+      // Decrypt content using FEK
+      const decryptedContent = await shareCrypto.decryptFileData(encryptedData, fek);
       
-      const encryptedContent = data.data; // Base64
-      const decryptedContent = await shareCrypto.decryptData(encryptedContent, fek);
-      
-      // Trigger download
-      const blob = new Blob([decryptedContent as unknown as BlobPart], { type: 'application/octet-stream' });
+      // Trigger download (create new Uint8Array to ensure proper ArrayBuffer type)
+      const downloadData = new Uint8Array(decryptedContent);
+      const blob = new Blob([downloadData], { type: 'application/octet-stream' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

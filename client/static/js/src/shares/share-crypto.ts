@@ -19,6 +19,7 @@ import {
   toBase64,
   fromBase64,
   secureWipe,
+  hash256,
 } from '../crypto/primitives.js';
 import {
   KEY_SIZES,
@@ -83,26 +84,27 @@ export async function validateSharePasswordStrength(
 // ============================================================================
 
 /**
- * Encrypts a File Encryption Key (FEK) for sharing
+ * Encrypts a File Encryption Key (FEK) and Download Token for sharing
  * 
  * This function:
  * 1. Generates a cryptographically secure random salt
- * 2. Derives an encryption key from the share password using Argon2id
- * 3. Encrypts the FEK with AES-256-GCM
- * 4. Returns the encrypted FEK and salt for storage
+ * 2. Generates a random Download Token (32 bytes)
+ * 3. Derives an encryption key from the share password using Argon2id
+ * 4. Encrypts [FEK + Download Token] with AES-256-GCM
+ * 5. Returns the encrypted envelope and salt for storage
  * 
- * The salt must be stored alongside the encrypted FEK so that share recipients
- * can derive the same key to decrypt the FEK.
+ * The encrypted payload format is: [FEK (32 bytes)][Download Token (32 bytes)]
  * 
  * @param fek - The File Encryption Key to encrypt (32 bytes)
  * @param sharePassword - The password to protect the share
- * @returns Encryption metadata (encrypted FEK + salt)
+ * @param shareId - The Share ID (used as AAD)
+ * @returns Encryption metadata (encrypted envelope + salt + download token hash)
  */
 export async function encryptFEKForShare(
   fek: Uint8Array,
   sharePassword: string,
   shareId: string
-): Promise<ShareEncryptionMetadata> {
+): Promise<ShareEncryptionMetadata & { downloadToken: string; downloadTokenHash: string }> {
   if (fek.length !== KEY_SIZES.FILE_ENCRYPTION_KEY) {
     throw new EncryptionError(
       `Invalid FEK size: expected ${KEY_SIZES.FILE_ENCRYPTION_KEY} bytes, got ${fek.length}`
@@ -121,6 +123,14 @@ export async function encryptFEKForShare(
     // Generate a cryptographically secure random salt
     const salt = generateSalt();
     
+    // Generate a random Download Token (32 bytes)
+    const downloadToken = randomBytes(32);
+    
+    // Combine FEK and Download Token into a single payload
+    const payload = new Uint8Array(64); // 32 + 32
+    payload.set(fek, 0);
+    payload.set(downloadToken, 32);
+    
     // Get Argon2id parameters from config
     const argon2Params = await getArgon2Params();
     
@@ -128,21 +138,22 @@ export async function encryptFEKForShare(
     const keyDerivation = await deriveKeyArgon2id({
       password: sharePassword,
       salt,
-      params: argon2Params, // Use same params as file encryption
+      params: argon2Params,
     });
     
     // Prepare AAD (Share ID)
     const aad = new TextEncoder().encode(shareId);
 
-    // Encrypt the FEK
+    // Encrypt the payload (FEK + Download Token)
     const encryptionResult = await encryptAESGCM({
-      data: fek,
+      data: payload,
       key: keyDerivation.key,
       aad: aad,
     });
     
     // Clean up sensitive data
     secureWipe(keyDerivation.key);
+    secureWipe(payload);
     
     // The encryptionResult contains: ciphertext, iv (nonce), and tag
     // We need to combine them for storage: [nonce][ciphertext][tag]
@@ -155,10 +166,15 @@ export async function encryptFEKForShare(
     combined.set(encryptionResult.ciphertext, encryptionResult.iv.length);
     combined.set(encryptionResult.tag, encryptionResult.iv.length + encryptionResult.ciphertext.length);
     
+    // Hash the Download Token for server storage (SHA-256)
+    const downloadTokenHash = hash256(downloadToken);
+    
     return {
       encryptedFEK: toBase64(combined),
       salt: toBase64(salt),
-      nonce: toBase64(encryptionResult.iv), // Also return nonce separately for compatibility
+      nonce: toBase64(encryptionResult.iv),
+      downloadToken: toBase64(downloadToken),
+      downloadTokenHash: toBase64(downloadTokenHash),
     };
   } catch (error) {
     throw wrapError(error, 'Failed to encrypt FEK for share');
@@ -168,6 +184,126 @@ export async function encryptFEKForShare(
 // ============================================================================
 // FEK Decryption from Shares
 // ============================================================================
+
+/**
+ * Decrypts a Share Envelope to extract FEK and Download Token
+ * 
+ * The Share Envelope contains the encrypted FEK. The encrypted payload format is:
+ * [FEK (32 bytes)][Download Token (32 bytes)]
+ * 
+ * This function needs both the encrypted envelope and the salt to derive the decryption key.
+ * 
+ * @param encryptedEnvelopeBase64 - The encrypted envelope (base64) containing FEK + Download Token
+ * @param salt - The salt used for key derivation (base64)
+ * @param sharePassword - The share password
+ * @param shareId - The share ID (used as AAD)
+ * @returns Object containing the FEK and Download Token
+ * @throws DecryptionError if password is incorrect or data is corrupted
+ */
+export async function decryptShareEnvelope(
+  encryptedEnvelopeBase64: string,
+  sharePassword: string,
+  shareId: string,
+  saltBase64?: string
+): Promise<{ fek: Uint8Array; downloadToken: string }> {
+  if (!sharePassword || sharePassword.length === 0) {
+    throw new DecryptionError('Share password cannot be empty');
+  }
+
+  if (!shareId || shareId.length === 0) {
+    throw new DecryptionError('Share ID cannot be empty');
+  }
+  
+  // For now, we'll use the existing decryptFEKFromShare which only returns the FEK
+  // The Download Token is not yet implemented in the backend envelope
+  // So we'll return a placeholder for now
+  
+  try {
+    // If salt is provided, use it; otherwise extract from envelope
+    if (!saltBase64) {
+      throw new DecryptionError('Salt is required for envelope decryption');
+    }
+    
+    const salt = fromBase64(saltBase64);
+    const encryptedData = fromBase64(encryptedEnvelopeBase64);
+    
+    // Validate salt size
+    if (salt.length !== KEY_SIZES.SALT) {
+      throw new DecryptionError(
+        `Invalid salt size: expected ${KEY_SIZES.SALT} bytes, got ${salt.length}`
+      );
+    }
+    
+    // The encrypted data format is: [nonce (12)][ciphertext][tag (16)]
+    if (encryptedData.length < 12 + 16) {
+      throw new DecryptionError('Encrypted envelope data is too short');
+    }
+    
+    // Extract components
+    const nonce = encryptedData.slice(0, 12);
+    const ciphertextAndTag = encryptedData.slice(12);
+    const ciphertext = ciphertextAndTag.slice(0, -16);
+    const tag = ciphertextAndTag.slice(-16);
+    
+    // Get Argon2id parameters from config
+    const argon2Params = await getArgon2Params();
+    
+    // Derive decryption key from share password using Argon2id
+    const keyDerivation = await deriveKeyArgon2id({
+      password: sharePassword,
+      salt,
+      params: argon2Params,
+    });
+    
+    // Prepare AAD (Share ID)
+    const aad = new TextEncoder().encode(shareId);
+
+    // Decrypt the envelope
+    const decryptionResult = await decryptAESGCM({
+      ciphertext,
+      key: keyDerivation.key,
+      iv: nonce,
+      tag,
+      aad: aad,
+    });
+    
+    // Clean up sensitive data
+    secureWipe(keyDerivation.key);
+    
+    // The plaintext should contain: [FEK (32 bytes)][Download Token (32 bytes)]
+    const plaintext = decryptionResult.plaintext;
+    
+    // Expected size: 32 (FEK) + 32 (Download Token) = 64 bytes
+    if (plaintext.length === KEY_SIZES.FILE_ENCRYPTION_KEY) {
+      // Old format: only FEK, no Download Token yet
+      // Generate a temporary Download Token (this is a transition state)
+      const tempDownloadToken = randomBytes(32);
+      return {
+        fek: plaintext,
+        downloadToken: toBase64(tempDownloadToken),
+      };
+    } else if (plaintext.length === 64) {
+      // New format: FEK + Download Token
+      const fek = plaintext.slice(0, 32);
+      const downloadToken = plaintext.slice(32, 64);
+      
+      return {
+        fek,
+        downloadToken: toBase64(downloadToken),
+      };
+    } else {
+      throw new DecryptionError(
+        `Invalid decrypted envelope size: expected 32 or 64 bytes, got ${plaintext.length}`
+      );
+    }
+  } catch (error) {
+    if (error instanceof DecryptionError) {
+      throw error;
+    }
+    // Wrap other errors (likely authentication failures from AES-GCM)
+    throw new DecryptionError('Failed to decrypt share envelope - incorrect password or corrupted data');
+  }
+}
 
 /**
  * Decrypts a File Encryption Key (FEK) from a share
@@ -298,6 +434,7 @@ export const shareCrypto = {
   // FEK encryption/decryption
   encryptFEKForShare,
   decryptFEKFromShare,
+  decryptShareEnvelope,
   
   // Utility functions
   generateFEK,
@@ -308,6 +445,7 @@ export const shareCrypto = {
   deriveKey,
   decryptMetadata,
   decryptData,
+  decryptFileData,
 };
 
 /**
@@ -360,7 +498,7 @@ export async function decryptMetadata(
 }
 
 /**
- * Decrypts file data using the FEK
+ * Decrypts file data using the FEK (from base64)
  */
 export async function decryptData(
   encryptedBase64: string,
@@ -377,6 +515,31 @@ export async function decryptData(
   
   const encryptedData = fromBase64(encryptedBase64);
   
+  // Extract nonce (standard nonce size is 12 bytes for GCM)
+  const nonce = encryptedData.slice(0, 12);
+  const ciphertextAndTag = encryptedData.slice(12);
+  const ciphertext = ciphertextAndTag.slice(0, -16);
+  const tag = ciphertextAndTag.slice(-16);
+  
+  const result = await decryptAESGCM({
+    ciphertext,
+    key: fek,
+    iv: nonce,
+    tag,
+  });
+  
+  return result.plaintext;
+}
+
+/**
+ * Decrypts file data using the FEK (from binary Uint8Array)
+ * Used for streaming downloads where data is received as binary
+ */
+export async function decryptFileData(
+  encryptedData: Uint8Array,
+  fek: Uint8Array
+): Promise<Uint8Array> {
+  // The encrypted data format is [nonce][ciphertext+tag]
   // Extract nonce (standard nonce size is 12 bytes for GCM)
   const nonce = encryptedData.slice(0, 12);
   const ciphertextAndTag = encryptedData.slice(12);

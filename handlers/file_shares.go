@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"fmt"
@@ -73,6 +75,24 @@ func CreateFileShare(c echo.Context) error {
 	if request.ShareID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "Share ID is required")
 	}
+
+	// Validate share_id format (43-character base64url without padding)
+	if !isValidShareID(request.ShareID) {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid share ID format")
+	}
+
+	// Check for share_id uniqueness (prevent collisions)
+	var existingShareID string
+	err := database.DB.QueryRow("SELECT share_id FROM file_share_keys WHERE share_id = ?", request.ShareID).Scan(&existingShareID)
+	if err == nil {
+		// Share ID already exists - return 409 Conflict
+		logging.WarningLogger.Printf("Share ID collision detected: %s", request.ShareID[:8])
+		return echo.NewHTTPError(http.StatusConflict, "Share ID already exists, please retry")
+	} else if err != sql.ErrNoRows {
+		logging.ErrorLogger.Printf("Database error checking share_id uniqueness: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to validate share ID")
+	}
+
 	if request.FileID == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "File ID is required")
 	}
@@ -90,7 +110,7 @@ func CreateFileShare(c echo.Context) error {
 	var ownerUsername string
 	var passwordType string
 
-	err := database.DB.QueryRow(
+	err = database.DB.QueryRow(
 		"SELECT owner_username, password_type FROM file_metadata WHERE file_id = ?",
 		request.FileID,
 	).Scan(&ownerUsername, &passwordType)
@@ -154,8 +174,8 @@ func CreateFileShare(c echo.Context) error {
 	shareURL := baseURL + "/shared/" + request.ShareID
 
 	createdAt := time.Now()
-	logging.InfoLogger.Printf("Anonymous share created: file=%s, share_id=%s, owner=%s", request.FileID, request.ShareID, username)
-	database.LogUserAction(username, "created_share", fmt.Sprintf("file:%s, share:%s", request.FileID, request.ShareID))
+	logging.InfoLogger.Printf("Anonymous share created: file=%s, share_id=%s..., owner=%s", request.FileID, request.ShareID[:8], username)
+	database.LogUserAction(username, "created_share", fmt.Sprintf("file:%s, share:%s...", request.FileID, request.ShareID[:8]))
 
 	return c.JSON(http.StatusOK, ShareResponse{
 		ShareID:   request.ShareID,
@@ -264,7 +284,7 @@ func GetShareEnvelope(c echo.Context) error {
 	}
 
 	// Log metadata access
-	logging.InfoLogger.Printf("Share envelope accessed: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
+	logging.InfoLogger.Printf("Share envelope accessed: share_id=%s..., file=%s, entity_id=%s", shareID[:8], share.FileID, entityID)
 
 	// Return share envelope data
 	return c.JSON(http.StatusOK, map[string]interface{}{
@@ -378,7 +398,7 @@ func GetSharedFile(c echo.Context) error {
 
 	// Log page access (no password required)
 	entityID := logging.GetOrCreateEntityID(c)
-	logging.InfoLogger.Printf("Share page accessed: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
+	logging.InfoLogger.Printf("Share page accessed: share_id=%s..., file=%s, entity_id=%s", shareID[:8], share.FileID, entityID)
 
 	// Serve the static shared.html file
 	return c.File("client/static/shared.html")
@@ -513,21 +533,39 @@ func DeleteShare(c echo.Context) error {
 func DownloadSharedFile(c echo.Context) error {
 	shareID := c.Param("id")
 
-	// Validate share exists and isn't expired
+	// Get Download Token from header
+	downloadToken := c.Request().Header.Get("X-Download-Token")
+	if downloadToken == "" {
+		logging.WarningLogger.Printf("Download attempt without token: share_id=%s", shareID[:8])
+		return echo.NewHTTPError(http.StatusForbidden, "Download token required")
+	}
+
+	// Validate share exists and isn't expired/revoked
 	var share struct {
-		FileID        string
-		OwnerUsername string
-		ExpiresAt     *time.Time
+		FileID            string
+		OwnerUsername     string
+		ExpiresAt         *time.Time
+		RevokedAt         *time.Time
+		RevokedReason     sql.NullString
+		DownloadTokenHash string
+		AccessCount       int
+		MaxAccesses       sql.NullInt64
 	}
 
 	err := database.DB.QueryRow(`
-		SELECT file_id, owner_username, expires_at
+		SELECT file_id, owner_username, expires_at, revoked_at, revoked_reason, 
+		       download_token_hash, access_count, max_accesses
 		FROM file_share_keys 
 		WHERE share_id = ?
 	`, shareID).Scan(
 		&share.FileID,
 		&share.OwnerUsername,
 		&share.ExpiresAt,
+		&share.RevokedAt,
+		&share.RevokedReason,
+		&share.DownloadTokenHash,
+		&share.AccessCount,
+		&share.MaxAccesses,
 	)
 
 	if err == sql.ErrNoRows {
@@ -537,9 +575,82 @@ func DownloadSharedFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
 	}
 
+	// Check if share has been revoked
+	if share.RevokedAt != nil {
+		reason := "Share has been revoked"
+		if share.RevokedReason.Valid && share.RevokedReason.String != "" {
+			reason += ": " + share.RevokedReason.String
+		}
+		logging.WarningLogger.Printf("Download attempt on revoked share: share_id=%s", shareID[:8])
+		return echo.NewHTTPError(http.StatusForbidden, reason)
+	}
+
 	// Check if share has expired
 	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
+		logging.WarningLogger.Printf("Download attempt on expired share: share_id=%s", shareID[:8])
 		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
+	}
+
+	// Validate Download Token using constant-time comparison
+	computedHash, err := hashDownloadToken(downloadToken)
+	if err != nil {
+		logging.WarningLogger.Printf("Invalid download token format: share_id=%s, error=%v", shareID[:8], err)
+		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
+	}
+
+	if !constantTimeCompare(computedHash, share.DownloadTokenHash) {
+		logging.WarningLogger.Printf("Invalid download token: share_id=%s", shareID[:8])
+		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
+	}
+
+	// Check if max accesses limit has been reached
+	if share.MaxAccesses.Valid && share.AccessCount >= int(share.MaxAccesses.Int64) {
+		logging.WarningLogger.Printf("Download attempt on exhausted share: share_id=%s", shareID[:8])
+		return echo.NewHTTPError(http.StatusForbidden, "Download limit reached")
+	}
+
+	// Increment access count atomically using a transaction
+	tx, err := database.DB.Begin()
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to begin transaction: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+	}
+	defer tx.Rollback()
+
+	// Lock the row and increment access_count
+	var newAccessCount int
+	err = tx.QueryRow(`
+		UPDATE file_share_keys 
+		SET access_count = access_count + 1 
+		WHERE share_id = ? 
+		RETURNING access_count
+	`, shareID).Scan(&newAccessCount)
+
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to increment access count: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+	}
+
+	// Check if we've reached max_accesses and auto-revoke if so
+	if share.MaxAccesses.Valid && newAccessCount >= int(share.MaxAccesses.Int64) {
+		_, err = tx.Exec(`
+			UPDATE file_share_keys 
+			SET revoked_at = CURRENT_TIMESTAMP, revoked_reason = ? 
+			WHERE share_id = ?
+		`, "max_downloads_reached", shareID)
+
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to auto-revoke share: %v", err)
+			// Continue anyway - the download should still succeed
+		} else {
+			logging.InfoLogger.Printf("Share auto-revoked (max downloads): share_id=%s", shareID[:8])
+		}
+	}
+
+	// Commit the transaction
+	if err = tx.Commit(); err != nil {
+		logging.ErrorLogger.Printf("Failed to commit transaction: %v", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
 	}
 
 	// Get file metadata using the new encrypted schema (stored as base64 strings)
@@ -573,30 +684,30 @@ func DownloadSharedFile(c echo.Context) error {
 	}
 	defer object.Close()
 
-	data, err := io.ReadAll(object)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to read file: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read file")
-	}
-
 	// Log download
 	entityID := logging.GetOrCreateEntityID(c)
-	logging.InfoLogger.Printf("Shared file downloaded: share_id=%s, file=%s, entity_id=%s", shareID, share.FileID, entityID)
+	logging.InfoLogger.Printf("Shared file downloaded: share_id=%s..., file=%s, entity_id=%s", shareID[:8], share.FileID, entityID)
 
-	// Return encrypted file data and encrypted metadata for client-side decryption (encrypted metadata already base64)
-	response := map[string]interface{}{
-		"data":                base64.StdEncoding.EncodeToString(data), // Data needs encoding as it's binary
-		"encrypted_filename":  encryptedFilename,                       // Already base64 - no encoding needed
-		"filename_nonce":      filenameNonce,                           // Already base64 - no encoding needed
-		"encrypted_sha256sum": encryptedSha256sum,                      // Already base64 - no encoding needed
-		"sha256sum_nonce":     sha256sumNonce,                          // Already base64 - no encoding needed
-	}
+	// Set response headers for binary streaming
+	c.Response().Header().Set("Content-Type", "application/octet-stream")
+	c.Response().Header().Set("X-Encrypted-Filename", encryptedFilename)
+	c.Response().Header().Set("X-Filename-Nonce", filenameNonce)
+	c.Response().Header().Set("X-Encrypted-SHA256", encryptedSha256sum)
+	c.Response().Header().Set("X-SHA256-Nonce", sha256sumNonce)
 
 	if size.Valid {
-		response["size"] = size.Int64
+		c.Response().Header().Set("Content-Length", fmt.Sprintf("%d", size.Int64))
 	}
 
-	return c.JSON(http.StatusOK, response)
+	// Stream the encrypted file data directly
+	c.Response().WriteHeader(http.StatusOK)
+	_, err = io.Copy(c.Response().Writer, object)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to stream file: %v", err)
+		return err
+	}
+
+	return nil
 }
 
 // generateShareID creates a cryptographically secure 256-bit share ID using Base64 URL-safe encoding
@@ -609,4 +720,52 @@ func generateShareID() (string, error) {
 
 	// Use Base64 URL-safe encoding without padding for clean URLs (43 characters)
 	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(randomBytes), nil
+}
+
+// hashDownloadToken computes SHA-256 hash of a Download Token
+func hashDownloadToken(downloadTokenBase64 string) (string, error) {
+	// Decode the base64 token
+	token, err := base64.StdEncoding.DecodeString(downloadTokenBase64)
+	if err != nil {
+		return "", fmt.Errorf("invalid download token encoding: %w", err)
+	}
+
+	// Compute SHA-256 hash
+	hash := sha256.Sum256(token)
+
+	// Return as base64
+	return base64.StdEncoding.EncodeToString(hash[:]), nil
+}
+
+// constantTimeCompare performs constant-time comparison of two base64-encoded hashes
+func constantTimeCompare(hash1Base64, hash2Base64 string) bool {
+	// Decode both hashes
+	hash1, err1 := base64.StdEncoding.DecodeString(hash1Base64)
+	hash2, err2 := base64.StdEncoding.DecodeString(hash2Base64)
+
+	// If either decode fails, return false
+	if err1 != nil || err2 != nil {
+		return false
+	}
+
+	// Use crypto/subtle for constant-time comparison
+	return subtle.ConstantTimeCompare(hash1, hash2) == 1
+}
+
+// isValidShareID validates that a share_id is in the correct format
+// Expected format: 43-character base64url string (32 bytes without padding)
+func isValidShareID(shareID string) bool {
+	// Check length (32 bytes base64url encoded without padding = 43 characters)
+	if len(shareID) != 43 {
+		return false
+	}
+
+	// Check that it only contains valid base64url characters (A-Z, a-z, 0-9, -, _)
+	for _, c := range shareID {
+		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return false
+		}
+	}
+
+	return true
 }

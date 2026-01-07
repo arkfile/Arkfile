@@ -9,7 +9,7 @@
 import { shareCrypto } from './share-crypto.js';
 import { validateSharePassword, type PasswordValidationResult } from '../crypto/password-validation.js';
 import { authenticatedFetch } from '../utils/auth.js';
-import { randomBytes, toBase64 } from '../crypto/primitives.js';
+import { randomBytes, toBase64, hash256, deriveKeyHKDF } from '../crypto/primitives.js';
 
 // ============================================================================
 // Types
@@ -21,6 +21,15 @@ import { randomBytes, toBase64 } from '../crypto/primitives.js';
 export interface FileInfo {
   filename: string;
   fek: Uint8Array; // Raw FEK bytes (32 bytes)
+}
+
+/**
+ * Share Envelope structure
+ * Contains all data needed by recipient to download the file
+ */
+export interface ShareEnvelope {
+  encryptedFEK: string;     // Base64-encoded encrypted FEK
+  downloadToken: string;    // Base64-encoded Download Token (32 bytes)
 }
 
 /**
@@ -87,6 +96,61 @@ export class ShareCreator {
   }
 
   /**
+   * Generates a Download Token from the share key using HKDF
+   * 
+   * @param shareKey - The derived share key (32 bytes)
+   * @returns Base64-encoded Download Token (32 bytes)
+   */
+  private async generateDownloadToken(shareKey: Uint8Array): Promise<string> {
+    // Use HKDF to derive Download Token from share key
+    // This ensures the token is cryptographically tied to the share password
+    const salt = new Uint8Array(0); // Empty salt for HKDF
+    const info = new TextEncoder().encode('download_token');
+    const downloadToken = await deriveKeyHKDF(shareKey, salt, info, 32);
+    return toBase64(downloadToken);
+  }
+
+  /**
+   * Hashes a Download Token using SHA-256
+   * 
+   * @param downloadTokenBase64 - Base64-encoded Download Token
+   * @returns Base64-encoded SHA-256 hash
+   */
+  private hashDownloadToken(downloadTokenBase64: string): string {
+    const token = new Uint8Array(atob(downloadTokenBase64).split('').map(c => c.charCodeAt(0)));
+    const hash = hash256(token);
+    return toBase64(hash);
+  }
+
+  /**
+   * Creates a Share Envelope containing encrypted FEK and Download Token
+   * 
+   * @param shareKey - The derived share key
+   * @param shareId - The Share ID
+   * @returns Share Envelope with encrypted data
+   */
+  private async createShareEnvelope(shareKey: Uint8Array, shareId: string): Promise<ShareEnvelope> {
+    // Generate Download Token from share key
+    const downloadToken = await this.generateDownloadToken(shareKey);
+
+    // Encrypt the FEK with AAD binding
+    const shareEncryptionResult = await shareCrypto.encryptFEKForShare(
+      this.fileInfo.fek,
+      '', // Password not needed here - we already have the key
+      shareId
+    );
+
+    // Note: We need to modify encryptFEKForShare to accept a key directly
+    // For now, we'll use the existing password-based approach
+    // This will be refactored in the next iteration
+
+    return {
+      encryptedFEK: shareEncryptionResult.encryptedFEK,
+      downloadToken: downloadToken,
+    };
+  }
+
+  /**
    * Creates a share for the file
    * 
    * This performs the following steps:
@@ -110,50 +174,63 @@ export class ShareCreator {
         };
       }
 
-      // Generate Share ID
-      const shareId = this.generateShareID();
+      // Retry logic for share ID collisions (409 Conflict)
+      const maxRetries = 3;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        // Generate Share ID
+        const shareId = this.generateShareID();
 
-      // Encrypt the FEK with the share password
-      // The FEK should already be decrypted (raw 32 bytes) when passed to ShareCreator
-      const shareEncryptionResult = await shareCrypto.encryptFEKForShare(
-        this.fileInfo.fek,
-        request.sharePassword,
-        shareId
-      );
+        // Encrypt the FEK with the share password and generate Download Token
+        // The encryptFEKForShare function now returns both the encrypted envelope
+        // and the Download Token (both plaintext and hash)
+        const shareEncryptionResult = await shareCrypto.encryptFEKForShare(
+          this.fileInfo.fek,
+          request.sharePassword,
+          shareId
+        );
 
-      // Generate a dummy download token hash for now (backend requires it)
-      // In a full implementation, this would be part of a download token system
-      const downloadTokenHash = toBase64(randomBytes(32));
+        // Send share creation request to server
+        const response = await authenticatedFetch(`/api/files/${request.fileId}/share`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            share_id: shareId,
+            file_id: request.fileId,
+            encrypted_fek: shareEncryptionResult.encryptedFEK,
+            salt: shareEncryptionResult.salt,
+            download_token_hash: shareEncryptionResult.downloadTokenHash,
+            expires_after_hours: request.expiresAfterHours || 0
+          }),
+        });
 
-      // Send share creation request to server
-      const response = await authenticatedFetch(`/api/files/${request.fileId}/share`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          share_id: shareId,
-          file_id: request.fileId,
-          encrypted_fek: shareEncryptionResult.encryptedFEK,
-          salt: shareEncryptionResult.salt,
-          download_token_hash: downloadTokenHash,
-          expires_after_hours: request.expiresAfterHours || 0
-        }),
-      });
+        // Handle 409 Conflict (share ID collision) - retry with new ID
+        if (response.status === 409) {
+          console.warn(`Share ID collision on attempt ${attempt + 1}, retrying...`);
+          continue; // Retry with a new share ID
+        }
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          return {
+            success: false,
+            error: errorData.error || errorData.message || `Server error: ${response.status}`
+          };
+        }
+
+        const data: ShareCreationAPIResponse = await response.json();
+
         return {
-          success: false,
-          error: errorData.error || errorData.message || `Server error: ${response.status}`
+          success: true,
+          shareUrl: data.share_url
         };
       }
 
-      const data: ShareCreationAPIResponse = await response.json();
-
+      // If we exhausted all retries
       return {
-        success: true,
-        shareUrl: data.share_url
+        success: false,
+        error: 'Failed to create share after multiple attempts (ID collision). Please try again.'
       };
 
     } catch (error) {
