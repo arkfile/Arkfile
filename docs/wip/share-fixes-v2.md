@@ -2338,3 +2338,54 @@ func (s *S3AWSStorage) GetObjectWithoutPadding(ctx context.Context, storageID st
 - **Client-side share_id generation with AAD binding** prevents envelope swapping attacks
 - **UID-specific agent sockets with validation** provide defense-in-depth for multi-user systems
 - **Rate limiting** (30/30/120 req/min) balances usability with security
+
+---
+
+# Share Fixes V2 - Implementation Progress - JAN 7, 2026 - Gemini 3.0 Pro Preview
+
+## Status
+- [x] **Phase 1: Analysis & Design** (Completed)
+- [x] **Phase 2: Backend Implementation** (Completed)
+- [x] **Phase 3: Frontend Implementation** (Completed)
+- [x] **Phase 4: CLI Implementation** (Completed)
+- [ ] **Phase 5: Verification** (Pending)
+
+## Completed Changes
+
+### 1. Backend (Go)
+- **`crypto/share_kdf.go`**:
+  - Implemented `DeriveShareKey` using global Argon2id parameters (Time=8, Memory=256MB, Threads=4).
+  - Added `ValidateSharePassword` to enforce password strength.
+- **`handlers/file_shares.go`**:
+  - Updated `CreateShare` to validate share passwords.
+  - Updated `GetSharePublic` to return salt and encrypted FEK.
+  - Updated `DownloadSharedFile` to serve encrypted content.
+
+### 2. Frontend (TypeScript)
+- **`client/static/js/src/shares/share-crypto.ts`**:
+  - Implemented `deriveShareKey` using WebCrypto (Argon2id via WASM/libopaque).
+  - Added `encryptFEKForShare` and `decryptFEKFromShare`.
+  - Added `decryptMetadata` for filename decryption.
+- **`client/static/js/src/shares/share-creation.ts`**:
+  - Updated `ShareCreator` to use new crypto functions.
+  - Added password strength validation.
+- **`client/static/js/src/shares/share-access.ts`**:
+  - Implemented `ShareAccessUI` to handle password prompt, key derivation, and file decryption.
+- **`client/static/file-share.html`**:
+  - Updated UI for creating shares.
+- **`client/static/shared.html`**:
+  - Updated UI for accessing shared files.
+
+### 3. CLI Tools
+- **`cmd/cryptocli/main.go`**:
+  - Added `encrypt-share-key` command to encrypt FEK with share password.
+  - Added `decrypt-share-key` command to decrypt FEK with share password.
+  - Added `decrypt-file-key` command to decrypt file with raw FEK.
+- **`cmd/arkfile-client/main.go`**:
+  - Added `share create` command.
+  - Added `download-share` command.
+
+## Notes
+- Error handling in the frontend has been improved to provide user-friendly messages for wrong passwords.
+
+---
