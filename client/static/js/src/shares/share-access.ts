@@ -87,11 +87,12 @@ export class ShareAccessUI {
 
       if (!this.envelope) throw new Error('No envelope data');
 
-      // 2. Decrypt Share Envelope to get FEK and Download Token
+      // 2. Decrypt Share Envelope to get FEK and Download Token (with AAD binding)
       const decryptedEnvelope = await shareCrypto.decryptShareEnvelope(
         this.envelope.encrypted_envelope,
         password,
         this.shareId,
+        this.envelope.file_id,
         this.envelope.salt
       );
 

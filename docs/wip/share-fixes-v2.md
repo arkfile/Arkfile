@@ -3263,3 +3263,49 @@ After implementation, verify:
 This plan completes the remaining 15% of work to achieve the full vision outlined in the v2 implementation document.
 
 ---
+
+# PROGRESS UPDATE, JAN 8 2026, part 2:
+
+# Code Changes Made
+
+### 1. **client/static/css/home.css**
+- Added ~230 lines of CSS for the new share list UI component
+- Includes styles for share items, action buttons, status badges, responsive design
+
+### 2. **client/static/index.html**
+- Added a new "Your Shares" section to the homepage
+- Includes share list container and refresh button
+
+### 3. **client/static/js/src/app.ts**
+- Added `loadUserShares()` method to load shares when user logs in
+- Integrated share-list module import and initialization
+
+### 4. **client/static/js/src/shares/share-crypto.ts**
+- Modified `encryptFEKForShare()`: added `fileId` parameter, changed AAD to `share_id|file_id`
+- Modified `decryptShareEnvelope()`: added `fileId` parameter, changed AAD to `share_id|file_id`
+
+### 5. **client/static/js/src/shares/share-creation.ts**
+- Updated `createShare()` to pass `fileId` to `encryptFEKForShare()`
+
+### 6. **client/static/js/src/shares/share-access.ts**
+- Modified `handleShareAccess()` to extract `file_id` from API response
+- Updated call to `decryptShareEnvelope()` to pass `fileId`
+
+### 7. **cmd/arkfile-client/main.go**
+- Added AccountKey storage in agent after successful login
+- Added AccountKey clearing from agent on logout
+- Added secure memory clearing for accountKey
+
+### 8. **handlers/file_shares_test.go**
+- Fixed test: changed `AccessSharedFile` call to `GetShareEnvelope`
+
+### 9. **docs/wip/share-fixes-v2.md**
+- Added progress update documenting the changes made
+
+### 10. **client/static/js/src/shares/share-list.ts** (NEW FILE)
+- Complete share list management UI implementation
+- Functions: initializeShareList, loadShares, renderShares, copyShareLink, revokeShare, deleteShare
+
+### 11. ran `dev-reset.sh` with `sudo` [OK]. ran `e2e-test.sh` with current set of defined tests (not including sharing related tests), which ran fine, proves auth and basic file encryption/decryption work for file owners [OK]
+
+---

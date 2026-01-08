@@ -138,7 +138,7 @@ func TestAccessSharedFile_Success(t *testing.T) {
 	mock.ExpectExec(rateLimitResetSQL).WithArgs("test-share-id", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Execute handler
-	err := AccessSharedFile(c)
+	err := GetShareEnvelope(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 

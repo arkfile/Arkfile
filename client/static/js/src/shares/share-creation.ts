@@ -137,7 +137,8 @@ export class ShareCreator {
     const shareEncryptionResult = await shareCrypto.encryptFEKForShare(
       this.fileInfo.fek,
       '', // Password not needed here - we already have the key
-      shareId
+      shareId,
+      '' // fileId - TODO: pass actual fileId when refactoring
     );
 
     // Note: We need to modify encryptFEKForShare to accept a key directly
@@ -186,7 +187,8 @@ export class ShareCreator {
         const shareEncryptionResult = await shareCrypto.encryptFEKForShare(
           this.fileInfo.fek,
           request.sharePassword,
-          shareId
+          shareId,
+          request.fileId
         );
 
         // Send share creation request to server

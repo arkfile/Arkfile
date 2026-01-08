@@ -223,6 +223,235 @@ body {
     }
 }
 
+/* Share List Styles */
+.share-list-section {
+    max-width: 1200px;
+    margin: 40px auto;
+    padding: 0 20px;
+}
+
+.share-list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.share-list-title {
+    font-size: 1.8rem;
+    font-weight: 600;
+    color: #2c3e50;
+    margin: 0;
+}
+
+.share-list-refresh {
+    padding: 10px 20px;
+    background: #dc2626;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: all 0.3s ease;
+}
+
+.share-list-refresh:hover {
+    background: #b91c1c;
+    transform: translateY(-1px);
+}
+
+.share-list-container {
+    background: white;
+    border-radius: 12px;
+    border: 1px solid #e0e4e7;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    overflow: hidden;
+}
+
+.share-item {
+    padding: 20px;
+    border-bottom: 1px solid #e0e4e7;
+    transition: background 0.2s ease;
+}
+
+.share-item:last-child {
+    border-bottom: none;
+}
+
+.share-item:hover {
+    background: #f8f9fa;
+}
+
+.share-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+}
+
+.share-item-info {
+    flex: 1;
+}
+
+.share-item-id {
+    font-size: 0.9rem;
+    color: #6b7280;
+    font-family: 'Courier New', monospace;
+    margin-bottom: 4px;
+}
+
+.share-item-file {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #2c3e50;
+    margin-bottom: 8px;
+}
+
+.share-item-meta {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    font-size: 0.85rem;
+    color: #6b7280;
+}
+
+.share-item-meta-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.share-item-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.share-action-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.share-action-btn.copy {
+    background: #3b82f6;
+    color: white;
+}
+
+.share-action-btn.copy:hover {
+    background: #2563eb;
+}
+
+.share-action-btn.revoke {
+    background: #f59e0b;
+    color: white;
+}
+
+.share-action-btn.revoke:hover {
+    background: #d97706;
+}
+
+.share-action-btn.delete {
+    background: #ef4444;
+    color: white;
+}
+
+.share-action-btn.delete:hover {
+    background: #dc2626;
+}
+
+.share-action-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.share-status-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.share-status-badge.active {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.share-status-badge.revoked {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.share-status-badge.expired {
+    background: #e5e7eb;
+    color: #374151;
+}
+
+.share-list-empty {
+    padding: 60px 20px;
+    text-align: center;
+    color: #6b7280;
+}
+
+.share-list-empty-icon {
+    font-size: 3rem;
+    margin-bottom: 15px;
+    opacity: 0.5;
+}
+
+.share-list-empty-text {
+    font-size: 1.1rem;
+    margin-bottom: 10px;
+}
+
+.share-list-error {
+    padding: 20px;
+    background: #fee2e2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    color: #991b1b;
+    margin-bottom: 20px;
+}
+
+.share-list-loading {
+    padding: 40px;
+    text-align: center;
+    color: #6b7280;
+}
+
+@media (max-width: 768px) {
+    .share-list-header {
+        flex-direction: column;
+        gap: 15px;
+        align-items: stretch;
+    }
+    
+    .share-item-header {
+        flex-direction: column;
+        gap: 15px;
+    }
+    
+    .share-item-actions {
+        width: 100%;
+        justify-content: stretch;
+    }
+    
+    .share-action-btn {
+        flex: 1;
+    }
+    
+    .share-item-meta {
+        flex-direction: column;
+        gap: 8px;
+    }
+}
+
 @media (max-width: 480px) {
     .hero-section {
         padding: 60px 15px 40px;
@@ -242,5 +471,17 @@ body {
     
     .feature-description {
         font-size: 0.9rem;
+    }
+    
+    .share-list-section {
+        padding: 0 10px;
+    }
+    
+    .share-item {
+        padding: 15px;
+    }
+    
+    .share-item-actions {
+        flex-direction: column;
     }
 }

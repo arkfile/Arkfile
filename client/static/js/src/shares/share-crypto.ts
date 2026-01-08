@@ -90,20 +90,23 @@ export async function validateSharePasswordStrength(
  * 1. Generates a cryptographically secure random salt
  * 2. Generates a random Download Token (32 bytes)
  * 3. Derives an encryption key from the share password using Argon2id
- * 4. Encrypts [FEK + Download Token] with AES-256-GCM
+ * 4. Encrypts [FEK + Download Token] with AES-256-GCM with AAD binding
  * 5. Returns the encrypted envelope and salt for storage
  * 
  * The encrypted payload format is: [FEK (32 bytes)][Download Token (32 bytes)]
+ * AAD binding: share_id + file_id prevents envelope swapping attacks
  * 
  * @param fek - The File Encryption Key to encrypt (32 bytes)
  * @param sharePassword - The password to protect the share
  * @param shareId - The Share ID (used as AAD)
+ * @param fileId - The File ID (used as AAD binding)
  * @returns Encryption metadata (encrypted envelope + salt + download token hash)
  */
 export async function encryptFEKForShare(
   fek: Uint8Array,
   sharePassword: string,
-  shareId: string
+  shareId: string,
+  fileId: string
 ): Promise<ShareEncryptionMetadata & { downloadToken: string; downloadTokenHash: string }> {
   if (fek.length !== KEY_SIZES.FILE_ENCRYPTION_KEY) {
     throw new EncryptionError(
@@ -141,10 +144,10 @@ export async function encryptFEKForShare(
       params: argon2Params,
     });
     
-    // Prepare AAD (Share ID)
-    const aad = new TextEncoder().encode(shareId);
+    // Prepare AAD (Share ID + File ID for binding)
+    const aad = new TextEncoder().encode(shareId + fileId);
 
-    // Encrypt the payload (FEK + Download Token)
+    // Encrypt the payload (FEK + Download Token) with AAD binding
     const encryptionResult = await encryptAESGCM({
       data: payload,
       key: keyDerivation.key,
@@ -194,9 +197,10 @@ export async function encryptFEKForShare(
  * This function needs both the encrypted envelope and the salt to derive the decryption key.
  * 
  * @param encryptedEnvelopeBase64 - The encrypted envelope (base64) containing FEK + Download Token
- * @param salt - The salt used for key derivation (base64)
  * @param sharePassword - The share password
  * @param shareId - The share ID (used as AAD)
+ * @param fileId - The file ID (used as AAD binding)
+ * @param saltBase64 - The salt used for key derivation (base64)
  * @returns Object containing the FEK and Download Token
  * @throws DecryptionError if password is incorrect or data is corrupted
  */
@@ -204,6 +208,7 @@ export async function decryptShareEnvelope(
   encryptedEnvelopeBase64: string,
   sharePassword: string,
   shareId: string,
+  fileId: string,
   saltBase64?: string
 ): Promise<{ fek: Uint8Array; downloadToken: string }> {
   if (!sharePassword || sharePassword.length === 0) {
@@ -255,10 +260,10 @@ export async function decryptShareEnvelope(
       params: argon2Params,
     });
     
-    // Prepare AAD (Share ID)
-    const aad = new TextEncoder().encode(shareId);
+    // Prepare AAD (Share ID + File ID for binding)
+    const aad = new TextEncoder().encode(shareId + fileId);
 
-    // Decrypt the envelope
+    // Decrypt the envelope with AAD verification
     const decryptionResult = await decryptAESGCM({
       ciphertext,
       key: keyDerivation.key,

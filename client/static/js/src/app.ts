@@ -313,9 +313,22 @@ class ArkFileApp {
     try {
       const response = await loadFiles();
       // Files will be displayed by the loadFiles function
+      
+      // Also load shares
+      await this.loadUserShares();
     } catch (error) {
       console.error('Error loading user files:', error);
       showError('Failed to load your files. Please refresh the page.');
+    }
+  }
+
+  private async loadUserShares(): Promise<void> {
+    try {
+      const { initializeShareList } = await import('./shares/share-list');
+      await initializeShareList();
+    } catch (error) {
+      console.error('Error loading user shares:', error);
+      // Don't show error to user - shares are optional
     }
   }
 

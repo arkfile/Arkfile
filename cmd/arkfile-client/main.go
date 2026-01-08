@@ -776,7 +776,7 @@ EXAMPLES:
 	}
 
 	// Step 4: Recover credentials and generate authU (client-side)
-	_, authU, _, err := auth.ClientRecoverCredentials(clientSecret, credentialResponse, *usernameFlag)
+	accountKey, authU, _, err := auth.ClientRecoverCredentials(clientSecret, credentialResponse, *usernameFlag)
 	if err != nil {
 		return fmt.Errorf("failed to recover credentials: %w", err)
 	}
@@ -855,6 +855,25 @@ EXAMPLES:
 			logVerbose("Session saved to: %s", config.TokenFile)
 		}
 	}
+
+	// Store AccountKey in agent for future use
+	agentClient, err := NewAgentClient()
+	if err != nil {
+		logVerbose("Warning: Failed to create agent client: %v", err)
+	} else {
+		if err := agentClient.StoreAccountKey(accountKey); err != nil {
+			logVerbose("Warning: Failed to store account key in agent: %v", err)
+		} else {
+			logVerbose("Account key stored in agent successfully")
+		}
+	}
+
+	// Securely clear accountKey from memory after storing in agent
+	defer func() {
+		for i := range accountKey {
+			accountKey[i] = 0
+		}
+	}()
 
 	fmt.Printf("Login successful for user: %s\n", *usernameFlag)
 	fmt.Printf("Session expires: %s\n", session.ExpiresAt.Format("2006-01-02 15:04:05"))
@@ -1633,6 +1652,18 @@ EXAMPLES:
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	// Clear AccountKey from agent
+	agentClient, err := NewAgentClient()
+	if err != nil {
+		logVerbose("Warning: Failed to create agent client: %v", err)
+	} else {
+		if err := agentClient.Clear(); err != nil {
+			logVerbose("Warning: Failed to clear agent: %v", err)
+		} else {
+			logVerbose("Account key cleared from agent")
+		}
 	}
 
 	// Remove session file
