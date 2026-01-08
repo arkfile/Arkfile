@@ -77,11 +77,11 @@ WORKFLOW:
 
 SHARE WORKFLOW:
     1. Get FEK: cryptocli decrypt-fek --encrypted-fek "..." --username alice
-    2. Encrypt Share Key: cryptocli encrypt-share-key --fek "..."
-    3. Create Share: arkfile-client share create --file-id xyz --encrypted-fek "..." --salt "..."
+    2. Create Share Envelope: cryptocli create-share-envelope --fek "..." --share-id "..." --file-id "..."
+    3. Create Share: arkfile-client share create --file-id xyz --encrypted-envelope "..." --salt "..."
     4. Download Share: arkfile-client download-share --share-id abc --output shared.enc
-    5. Decrypt Share Key: cryptocli decrypt-share-key --encrypted-fek "..." --salt "..."
-    6. Decrypt File: cryptocli decrypt-file ... (using the decrypted FEK)
+    5. Decrypt Share Envelope: cryptocli decrypt-share-envelope --encrypted-envelope "..." --salt "..." --share-id "..." --file-id "..."
+    6. Decrypt File: cryptocli decrypt-file-key --file ... --fek <DECRYPTED_FEK_HEX>
 
 EXAMPLES:
     arkfile-client register --username alice
@@ -89,7 +89,7 @@ EXAMPLES:
     arkfile-client upload --file document.pdf.enc --metadata metadata.json
     arkfile-client download --file-id abc123 --output downloaded.enc
     arkfile-client list-files --json
-    arkfile-client share create --file-id 123 --encrypted-fek "..." --salt "..."
+    arkfile-client share create --file-id 123 --encrypted-envelope "..." --salt "..."
     arkfile-client download-share --share-id 456 --output shared.enc
 `
 )
@@ -1255,7 +1255,7 @@ type ServerFileInfo struct {
 // handleShareCommand processes share management commands
 func handleShareCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("subcommand required: create, list, delete")
+		return fmt.Errorf("subcommand required: create, list, delete, revoke")
 	}
 
 	subcommand := args[0]
@@ -1268,6 +1268,8 @@ func handleShareCommand(client *HTTPClient, config *ClientConfig, args []string)
 		return handleShareList(client, config, subArgs)
 	case "delete":
 		return handleShareDelete(client, config, subArgs)
+	case "revoke":
+		return handleShareRevoke(client, config, subArgs)
 	default:
 		return fmt.Errorf("unknown subcommand: %s", subcommand)
 	}
@@ -1276,19 +1278,19 @@ func handleShareCommand(client *HTTPClient, config *ClientConfig, args []string)
 func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("share create", flag.ExitOnError)
 	var (
-		fileID       = fs.String("file-id", "", "File ID to share (required)")
-		encryptedFEK = fs.String("encrypted-fek", "", "Base64 encrypted FEK (required)")
-		salt         = fs.String("salt", "", "Base64 salt (required)")
-		expiresAt    = fs.String("expires-at", "", "Expiration time (RFC3339)")
-		maxDownloads = fs.Int("max-downloads", 0, "Maximum number of downloads (0 for unlimited)")
+		fileID            = fs.String("file-id", "", "File ID to share (required)")
+		encryptedEnvelope = fs.String("encrypted-envelope", "", "Base64 encrypted envelope (required)")
+		salt              = fs.String("salt", "", "Base64 salt (required)")
+		expiresAt         = fs.String("expires-at", "", "Expiration time (RFC3339)")
+		maxDownloads      = fs.Int("max-downloads", 0, "Maximum number of downloads (0 for unlimited)")
 	)
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	if *fileID == "" || *encryptedFEK == "" || *salt == "" {
-		return fmt.Errorf("file-id, encrypted-fek, and salt are required")
+	if *fileID == "" || *encryptedEnvelope == "" || *salt == "" {
+		return fmt.Errorf("file-id, encrypted-envelope, and salt are required")
 	}
 
 	// Load session
@@ -1298,9 +1300,9 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 	}
 
 	req := map[string]interface{}{
-		"file_id":       *fileID,
-		"encrypted_fek": *encryptedFEK,
-		"salt":          *salt,
+		"file_id":            *fileID,
+		"encrypted_envelope": *encryptedEnvelope,
+		"salt":               *salt,
 	}
 
 	if *expiresAt != "" {
@@ -1386,6 +1388,40 @@ func handleShareDelete(client *HTTPClient, config *ClientConfig, args []string) 
 	return nil
 }
 
+func handleShareRevoke(client *HTTPClient, config *ClientConfig, args []string) error {
+	fs := flag.NewFlagSet("share revoke", flag.ExitOnError)
+	var (
+		reason = fs.String("reason", "owner_revoked", "Revocation reason")
+	)
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if fs.NArg() < 1 {
+		return fmt.Errorf("share ID required")
+	}
+	shareID := fs.Arg(0)
+
+	// Load session
+	session, err := loadAuthSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in: %w", err)
+	}
+
+	req := map[string]interface{}{
+		"reason": *reason,
+	}
+
+	_, err = client.makeRequest("PATCH", "/api/shares/"+shareID+"/revoke", req, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to revoke share: %w", err)
+	}
+
+	fmt.Printf("Share %s revoked successfully (reason: %s)\n", shareID, *reason)
+	return nil
+}
+
 func handleDownloadShareCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("download-share", flag.ExitOnError)
 	var (
@@ -1402,14 +1438,14 @@ func handleDownloadShareCommand(client *HTTPClient, config *ClientConfig, args [
 		return fmt.Errorf("share-id and output are required")
 	}
 
-	// 1. Get Share Metadata
-	logVerbose("Fetching share metadata for: %s", *shareID)
-	metaResp, err := client.makeRequest("GET", "/api/shares/"+*shareID+"/public", nil, "")
+	// 1. Get Share Envelope
+	logVerbose("Fetching share envelope for: %s", *shareID)
+	metaResp, err := client.makeRequest("GET", "/api/shares/"+*shareID+"/envelope", nil, "")
 	if err != nil {
-		return fmt.Errorf("failed to get share metadata: %w", err)
+		return fmt.Errorf("failed to get share envelope: %w", err)
 	}
 
-	encryptedFEK, _ := metaResp.Data["encrypted_fek"].(string)
+	encryptedEnvelope, _ := metaResp.Data["encrypted_envelope"].(string)
 	salt, _ := metaResp.Data["salt"].(string)
 	// We might want to get filename/size too if available in public metadata
 	// But for now let's focus on the download
@@ -1452,8 +1488,8 @@ func handleDownloadShareCommand(client *HTTPClient, config *ClientConfig, args [
 
 	fmt.Printf("Download complete: %s (%d bytes)\n", *outputPath, size)
 	fmt.Println("\nTo decrypt this file:")
-	fmt.Println("1. Decrypt the FEK (File Encryption Key):")
-	fmt.Printf("   cryptocli decrypt-share-key --encrypted-fek \"%s\" --salt \"%s\"\n", encryptedFEK, salt)
+	fmt.Println("1. Decrypt the share envelope to get the FEK:")
+	fmt.Printf("   cryptocli decrypt-share-envelope --encrypted-envelope \"%s\" --salt \"%s\" --share-id \"%s\" --file-id <FILE_ID>\n", encryptedEnvelope, salt, *shareID)
 	fmt.Println("   (This will output the decrypted FEK in hex format)")
 	fmt.Println("2. Decrypt the file using the decrypted FEK:")
 	fmt.Printf("   cryptocli decrypt-file-key --file \"%s\" --fek <DECRYPTED_FEK_HEX>\n", *outputPath)

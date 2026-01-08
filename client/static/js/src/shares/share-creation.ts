@@ -198,7 +198,7 @@ export class ShareCreator {
           body: JSON.stringify({
             share_id: shareId,
             file_id: request.fileId,
-            encrypted_fek: shareEncryptionResult.encryptedFEK,
+            encrypted_envelope: shareEncryptionResult.encryptedFEK,
             salt: shareEncryptionResult.salt,
             download_token_hash: shareEncryptionResult.downloadTokenHash,
             expires_after_hours: request.expiresAfterHours || 0

@@ -25,7 +25,7 @@ type ShareRequest struct {
 	ShareID           string `json:"share_id"` // Client-generated share ID
 	FileID            string `json:"file_id"`
 	Salt              string `json:"salt"`                // Base64-encoded 32-byte salt
-	EncryptedFEK      string `json:"encrypted_fek"`       // Base64-encoded FEK encrypted with Argon2id-derived key
+	EncryptedEnvelope string `json:"encrypted_envelope"`  // Base64-encoded Share Envelope (FEK + Download Token) encrypted with AAD
 	DownloadTokenHash string `json:"download_token_hash"` // SHA-256 hash of the Download Token
 	ExpiresAfterHours int    `json:"expires_after_hours"` // Optional expiration
 }
@@ -99,8 +99,8 @@ func CreateFileShare(c echo.Context) error {
 	if request.Salt == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "Salt is required")
 	}
-	if request.EncryptedFEK == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Encrypted FEK is required")
+	if request.EncryptedEnvelope == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Encrypted envelope is required")
 	}
 	if request.DownloadTokenHash == "" {
 		return echo.NewHTTPError(http.StatusBadRequest, "Download Token Hash is required")
@@ -137,7 +137,7 @@ func CreateFileShare(c echo.Context) error {
 	_, err = database.DB.Exec(`
 		INSERT INTO file_share_keys (share_id, file_id, owner_username, salt, encrypted_fek, download_token_hash, created_at, expires_at)
 		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
-		request.ShareID, request.FileID, username, request.Salt, request.EncryptedFEK, request.DownloadTokenHash, expiresAt,
+		request.ShareID, request.FileID, username, request.Salt, request.EncryptedEnvelope, request.DownloadTokenHash, expiresAt,
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create file share record for file %s: %v", request.FileID, err)
@@ -207,13 +207,13 @@ func GetShareEnvelope(c echo.Context) error {
 
 	// Query share data from database
 	var share struct {
-		FileID        string
-		OwnerUsername string
-		Salt          string
-		EncryptedFEK  string
-		ExpiresAt     *time.Time
-		RevokedAt     *time.Time
-		RevokedReason sql.NullString
+		FileID            string
+		OwnerUsername     string
+		Salt              string
+		EncryptedEnvelope string
+		ExpiresAt         *time.Time
+		RevokedAt         *time.Time
+		RevokedReason     sql.NullString
 	}
 
 	err := database.DB.QueryRow(`
@@ -224,7 +224,7 @@ func GetShareEnvelope(c echo.Context) error {
 		&share.FileID,
 		&share.OwnerUsername,
 		&share.Salt,
-		&share.EncryptedFEK,
+		&share.EncryptedEnvelope,
 		&share.ExpiresAt,
 		&share.RevokedAt,
 		&share.RevokedReason,
@@ -291,7 +291,7 @@ func GetShareEnvelope(c echo.Context) error {
 		"share_id":            shareID,
 		"file_id":             share.FileID,
 		"salt":                share.Salt,
-		"encrypted_fek":       share.EncryptedFEK,
+		"encrypted_envelope":  share.EncryptedEnvelope,
 		"encrypted_filename":  encryptedFilename,
 		"filename_nonce":      filenameNonce,
 		"encrypted_sha256sum": encryptedSha256sum,

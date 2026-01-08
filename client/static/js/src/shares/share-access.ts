@@ -5,7 +5,7 @@ interface ShareEnvelope {
   share_id: string;
   file_id: string;
   salt: string;
-  encrypted_fek: string;
+  encrypted_envelope: string;
   encrypted_filename: string;
   filename_nonce: string;
   encrypted_sha256sum: string;
@@ -89,7 +89,7 @@ export class ShareAccessUI {
 
       // 2. Decrypt Share Envelope to get FEK and Download Token
       const decryptedEnvelope = await shareCrypto.decryptShareEnvelope(
-        this.envelope.encrypted_fek,
+        this.envelope.encrypted_envelope,
         password,
         this.shareId,
         this.envelope.salt

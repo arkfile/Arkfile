@@ -426,23 +426,73 @@
             let html = '';
             
             activeShares.forEach(share => {
+                // Determine status
+                let statusText = 'Active';
+                let statusClass = 'status-active';
+                
+                if (share.revoked_at) {
+                    statusText = `Revoked (${share.revoked_reason || 'manual'})`;
+                    statusClass = 'status-revoked';
+                } else if (share.expiresAt && new Date(share.expiresAt) < new Date()) {
+                    statusText = 'Expired';
+                    statusClass = 'status-expired';
+                }
+                
+                // Format download count
+                let downloadInfo = '';
+                if (share.max_accesses) {
+                    downloadInfo = `${share.access_count || 0} / ${share.max_accesses} downloads`;
+                } else {
+                    downloadInfo = `${share.access_count || 0} downloads (unlimited)`;
+                }
+                
                 html += `
-                    <div class="share-item">
+                    <div class="share-item ${statusClass}">
                         <div class="share-link">${share.shareUrl}</div>
                         <div>
+                            <strong>Status:</strong> <span class="${statusClass}">${statusText}</span><br>
+                            <strong>Downloads:</strong> ${downloadInfo}<br>
                             <strong>Created:</strong> ${new Date(share.createdAt).toLocaleString()}<br>
                             ${share.expiresAt ? `<strong>Expires:</strong> ${new Date(share.expiresAt).toLocaleString()}<br>` : ''}
                             ${share.lastAccessed ? `<strong>Last Accessed:</strong> ${new Date(share.lastAccessed).toLocaleString()}<br>` : ''}
                         </div>
                         <div class="share-actions">
                             <button class="btn secondary sm" onclick="navigator.clipboard.writeText('${share.shareUrl}')">Copy Link</button>
-                            <button class="btn warning sm" onclick="deleteShare('${share.id}')">Delete</button>
+                            ${!share.revoked_at ? `<button class="btn warning sm" onclick="revokeShare('${share.id}')">Revoke</button>` : ''}
+                            <button class="btn danger sm" onclick="deleteShare('${share.id}')">Delete</button>
                         </div>
                     </div>
                 `;
             });
             
             sharesListEl.innerHTML = html;
+        }
+        
+        // Revoke a share
+        async function revokeShare(shareId) {
+            if (!confirm('Are you sure you want to revoke this share link? It will no longer be accessible.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/shares/${shareId}/revoke`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ reason: 'owner_revoked' })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to revoke share');
+                }
+                
+                await loadShares();
+                alert('Share link revoked successfully');
+            } catch (error) {
+                showError('Error revoking share: ' + error.message);
+            }
         }
         
         // Delete a share

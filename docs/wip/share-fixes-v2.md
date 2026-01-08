@@ -2715,3 +2715,551 @@ This document provides an accurate assessment of the Share System implementation
 - Security features (tokens, revocation, AAD) are robust
 - Streaming downloads working correctly
 - Rate limiting and logging in place
+
+---
+
+# PROGRESS UPDATE, JAN 8 2026:
+
+Based on my comprehensive review of all three documents (AGENTS.md, unify-share-file.md, and share-fixes-v2.md), I can now present a detailed implementation plan for completing the remaining work.
+
+## DETAILED IMPLEMENTATION PLAN: Share System Completion
+
+### CURRENT STATUS SUMMARY
+
+After analyzing the codebase and documentation, here's what's been accomplished:
+
+**COMPLETED (85%)**:
+- Download Token system (backend + frontend)
+- Client-side share_id generation
+- AAD binding (Go backend only)
+- Revocation system (backend only)
+- Access count enforcement (backend)
+- Owner Envelope endpoint
+- Streaming downloads
+- CLI Agent architecture (implemented but not integrated)
+- Privacy-preserving logging
+
+**REMAINING WORK (15%)**:
+1. Frontend AAD binding integration
+2. Share list UI with revocation controls
+3. CLI agent workflow integration
+4. Minor polish and testing
+
+---
+
+## PHASE 1: Frontend AAD Binding Integration [CRITICAL - 2-3 hours]
+
+### Why This Matters
+AAD (Additional Authenticated Data) binding prevents envelope swapping attacks where an attacker could substitute one share's encrypted envelope for another. This is a critical security feature.
+
+### Files to Modify
+
+**1. `client/static/js/src/crypto/primitives.ts`**
+
+Add AAD-aware encryption/decryption functions:
+
+```typescript
+/**
+ * Encrypt data with AES-256-GCM using AAD for binding
+ */
+export async function encryptGCMWithAAD(
+    data: Uint8Array,
+    key: Uint8Array,
+    aad: Uint8Array
+): Promise<{ ciphertext: Uint8Array; nonce: Uint8Array; tag: Uint8Array }> {
+    const nonce = new Uint8Array(12);
+    crypto.getRandomValues(nonce);
+    
+    const cryptoKey = await crypto.subtle.importKey(
+        'raw',
+        key,
+        { name: 'AES-GCM' },
+        false,
+        ['encrypt']
+    );
+    
+    const encrypted = await crypto.subtle.encrypt(
+        {
+            name: 'AES-GCM',
+            iv: nonce,
+            additionalData: aad,
+            tagLength: 128
+        },
+        cryptoKey,
+        data
+    );
+    
+    const encryptedArray = new Uint8Array(encrypted);
+    const ciphertext = encryptedArray.slice(0, -16);
+    const tag = encryptedArray.slice(-16);
+    
+    return { ciphertext, nonce, tag };
+}
+
+/**
+ * Decrypt data with AES-256-GCM using AAD for verification
+ */
+export async function decryptGCMWithAAD(
+    ciphertext: Uint8Array,
+    key: Uint8Array,
+    nonce: Uint8Array,
+    tag: Uint8Array,
+    aad: Uint8Array
+): Promise<Uint8Array> {
+    const cryptoKey = await crypto.subtle.importKey(
+        'raw',
+        key,
+        { name: 'AES-GCM' },
+        false,
+        ['decrypt']
+    );
+    
+    // Combine ciphertext and tag
+    const combined = new Uint8Array(ciphertext.length + tag.length);
+    combined.set(ciphertext, 0);
+    combined.set(tag, ciphertext.length);
+    
+    const decrypted = await crypto.subtle.decrypt(
+        {
+            name: 'AES-GCM',
+            iv: nonce,
+            additionalData: aad,
+            tagLength: 128
+        },
+        cryptoKey,
+        combined
+    );
+    
+    return new Uint8Array(decrypted);
+}
+```
+
+**2. `client/static/js/src/shares/share-crypto.ts`**
+
+Add AAD helper and update encryption/decryption:
+
+```typescript
+/**
+ * Create AAD for envelope binding (share_id + file_id)
+ */
+function createAAD(shareId: string, fileId: string): Uint8Array {
+    return new TextEncoder().encode(shareId + fileId);
+}
+
+// Update encryptFEKForShare to use AAD
+export async function encryptFEKForShare(
+    fek: Uint8Array,
+    sharePassword: string,
+    shareId: string,
+    fileId: string  // NEW PARAMETER
+): Promise<ShareEncryptionMetadata & { downloadToken: string; downloadTokenHash: string }> {
+    // ... existing code for salt, downloadToken, payload, key derivation ...
+    
+    // Create AAD for binding
+    const aad = createAAD(shareId, fileId);
+    
+    // Encrypt with AAD
+    const encryptionResult = await encryptGCMWithAAD(payload, keyDerivation.key, aad);
+    
+    // ... rest of function ...
+}
+
+// Update decryptShareEnvelope to verify AAD
+export async function decryptShareEnvelope(
+    encryptedEnvelopeBase64: string,
+    sharePassword: string,
+    shareId: string,
+    fileId: string,  // NEW PARAMETER
+    saltBase64?: string
+): Promise<{ fek: Uint8Array; downloadToken: string }> {
+    // ... existing code for salt, encrypted data extraction ...
+    
+    // Create AAD for verification
+    const aad = createAAD(shareId, fileId);
+    
+    // Decrypt with AAD verification
+    const decryptionResult = await decryptGCMWithAAD(
+        ciphertext,
+        keyDerivation.key,
+        nonce,
+        tag,
+        aad
+    );
+    
+    // ... rest of function ...
+}
+```
+
+**3. `client/static/js/src/shares/share-creation.ts`**
+
+Update share creation to pass fileId:
+
+```typescript
+// In createShare function
+const result = await encryptFEKForShare(
+    fek,
+    sharePassword,
+    shareId,
+    fileId  // ADD THIS
+);
+```
+
+**4. `client/static/js/src/shares/share-access.ts`**
+
+Update share access to pass fileId:
+
+```typescript
+// In ShareAccessUI.decryptEnvelope
+const { fek, downloadToken } = await decryptShareEnvelope(
+    this.envelopeData.encryptedEnvelope,
+    password,
+    this.shareId,
+    this.fileId,  // ADD THIS (need to fetch from envelope metadata)
+    this.envelopeData.salt
+);
+```
+
+**Note**: You'll need to update `GetShareEnvelope` backend to return `file_id` in the response.
+
+---
+
+## PHASE 2: Share List UI with Revocation [HIGH PRIORITY - 3 hours]
+
+### Files to Modify
+
+**1. `handlers/file_shares.go`**
+
+Update `ListShares` to include all necessary data:
+
+```go
+// Already implemented - verify response includes:
+// - revoked_at, revoked_reason
+// - access_count, max_accesses
+// - is_active (computed field)
+```
+
+**2. Create `client/static/js/src/shares/share-list.ts`**
+
+New file for share management UI:
+
+```typescript
+export class ShareListUI {
+    private container: HTMLElement;
+    
+    constructor(containerId: string) {
+        this.container = document.getElementById(containerId);
+    }
+    
+    async loadShares(): Promise<void> {
+        const response = await fetch('/api/shares', {
+            headers: {
+                'Authorization': `Bearer ${getAccessToken()}`
+            }
+        });
+        
+        const data = await response.json();
+        this.renderShares(data.shares);
+    }
+    
+    private renderShares(shares: any[]): void {
+        if (!shares || shares.length === 0) {
+            this.container.innerHTML = '<p>No shares found</p>';
+            return;
+        }
+        
+        const html = shares.map(share => this.renderShareItem(share)).join('');
+        this.container.innerHTML = `<div class="share-list">${html}</div>`;
+        
+        // Attach event listeners
+        shares.forEach(share => {
+            if (share.is_active) {
+                const btn = document.getElementById(`revoke-${share.share_id}`);
+                btn?.addEventListener('click', () => this.revokeShare(share.share_id));
+            }
+        });
+    }
+    
+    private renderShareItem(share: any): string {
+        const statusClass = share.is_active ? 'status-active' : 'status-revoked';
+        const statusText = share.is_active ? 'Active' : `Revoked: ${share.revoked_reason}`;
+        
+        const accessText = share.max_accesses
+            ? `${share.access_count} / ${share.max_accesses} downloads`
+            : `${share.access_count} downloads (unlimited)`;
+        
+        const expiresText = share.expires_at
+            ? `Expires: ${new Date(share.expires_at).toLocaleString()}`
+            : 'Never expires';
+        
+        return `
+            <div class="share-item">
+                <div class="share-header">
+                    <span class="share-status ${statusClass}">${statusText}</span>
+                    <span class="share-id">${share.share_id.substring(0, 8)}...</span>
+                </div>
+                <div class="share-details">
+                    <div class="share-url">
+                        <strong>URL:</strong>
+                        <input type="text" readonly value="${share.share_url}" 
+                               onclick="this.select()" />
+                        <button onclick="navigator.clipboard.writeText('${share.share_url}')">
+                            Copy
+                        </button>
+                    </div>
+                    <div class="share-stats">
+                        <span>${accessText}</span>
+                        <span>${expiresText}</span>
+                    </div>
+                </div>
+                ${share.is_active ? `
+                    <button id="revoke-${share.share_id}" class="btn-revoke">
+                        Revoke Share
+                    </button>
+                ` : ''}
+            </div>
+        `;
+    }
+    
+    private async revokeShare(shareId: string): Promise<void> {
+        if (!confirm('Revoke this share? This cannot be undone.')) {
+            return;
+        }
+        
+        try {
+            const response = await fetch(`/api/shares/${shareId}/revoke`, {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': `Bearer ${getAccessToken()}`
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error('Failed to revoke share');
+            }
+            
+            alert('Share revoked successfully');
+            await this.loadShares(); // Refresh list
+            
+        } catch (error) {
+            console.error('Revocation failed:', error);
+            alert('Failed to revoke share. Please try again.');
+        }
+    }
+}
+```
+
+**3. `client/static/index.html` or relevant page**
+
+Add share list section:
+
+```html
+<section id="shares-section">
+    <h2>My Shares</h2>
+    <div id="share-list-container"></div>
+</section>
+
+<script type="module">
+    import { ShareListUI } from '/js/dist/shares/share-list.js';
+    
+    document.addEventListener('DOMContentLoaded', () => {
+        const shareList = new ShareListUI('share-list-container');
+        shareList.loadShares();
+    });
+</script>
+```
+
+---
+
+## PHASE 3: CLI Agent Integration [MEDIUM PRIORITY - 2 hours]
+
+### Files to Modify
+
+**1. `cmd/arkfile-client/main.go`**
+
+Add agent auto-start and integration:
+
+```go
+func main() {
+    // ... existing flag parsing ...
+    
+    // Auto-start agent for most commands (except agent management)
+    command := flag.Arg(0)
+    if command != "agent" && command != "version" && command != "" {
+        if err := ensureAgentRunning(); err != nil {
+            logVerbose("Warning: Failed to start agent: %v", err)
+        }
+    }
+    
+    // ... rest of main ...
+}
+
+// ensureAgentRunning starts the agent if not already running
+func ensureAgentRunning() error {
+    client, err := NewAgentClient()
+    if err != nil {
+        return fmt.Errorf("failed to create agent client: %w", err)
+    }
+    
+    if err := client.Ping(); err == nil {
+        // Agent already running
+        logVerbose("Agent is already running")
+        return nil
+    }
+    
+    // Start agent
+    logVerbose("Starting agent...")
+    agent, err := NewAgent()
+    if err != nil {
+        return fmt.Errorf("failed to create agent: %w", err)
+    }
+    
+    if err := agent.Start(); err != nil {
+        return fmt.Errorf("failed to start agent: %w", err)
+    }
+    
+    globalAgent = agent
+    logVerbose("Agent started at: %s", agent.GetSocketPath())
+    
+    return nil
+}
+```
+
+**2. Update login handler to store AccountKey**
+
+```go
+// In handleLoginCommand, after successful login:
+if passwordType == "account" {
+    // Derive AccountKey
+    accountKey := deriveAccountKey(username, password)
+    
+    // Store in agent
+    resp, err := SendAgentRequest("store_account_key", map[string]interface{}{
+        "account_key": base64.StdEncoding.EncodeToString(accountKey),
+    })
+    if err != nil {
+        logVerbose("Warning: Failed to store key in agent: %v", err)
+    } else {
+        fmt.Println("Account key cached in agent for seamless sharing")
+    }
+}
+```
+
+**3. Update logout handler to clear agent**
+
+```go
+// In handleLogoutCommand:
+resp, err := SendAgentRequest("clear", nil)
+if err != nil {
+    logVerbose("Warning: Failed to clear agent: %v", err)
+}
+```
+
+**4. Update share create command to use agent**
+
+```go
+// In createShare function:
+if envelope.PasswordType == "account" {
+    // Try to get FEK from agent
+    resp, err := SendAgentRequest("decrypt_owner_envelope", map[string]interface{}{
+        "encrypted_fek": envelope.EncryptedFEK,
+    })
+    if err != nil {
+        return fmt.Errorf("failed to decrypt with agent (try logging in again): %w", err)
+    }
+    // ... use FEK from agent ...
+}
+```
+
+---
+
+## PHASE 4: Final Polish & Testing [1-2 hours]
+
+### 1. Add CLI revoke command
+
+```go
+func handleShareRevoke(client *HTTPClient, config *ClientConfig, args []string) error {
+    fs := flag.NewFlagSet("share revoke", flag.ExitOnError)
+    shareID := fs.String("share-id", "", "Share ID to revoke")
+    
+    if err := fs.Parse(args); err != nil {
+        return err
+    }
+    
+    if *shareID == "" {
+        return fmt.Errorf("share-id required")
+    }
+    
+    _, err := client.makeRequest("PATCH", "/api/shares/"+*shareID+"/revoke", nil, session.AccessToken)
+    if err != nil {
+        return fmt.Errorf("failed to revoke share: %w", err)
+    }
+    
+    fmt.Printf("Share %s revoked successfully\n", *shareID)
+    return nil
+}
+```
+
+### 2. Update e2e-test.sh
+
+Add tests for:
+- Account-encrypted file sharing
+- Custom-encrypted file sharing
+- Download token enforcement
+- Max accesses enforcement
+- Manual revocation
+- AAD binding (envelope swapping prevention)
+
+### 3. Run deployment and testing
+
+```bash
+# Deploy all changes
+sudo bash scripts/dev-reset.sh
+
+# Run comprehensive tests
+sudo bash scripts/testing/e2e-test.sh
+```
+
+---
+
+## IMPLEMENTATION ORDER & TIME ESTIMATES
+
+1. **Frontend AAD Integration** [2-3 hours] - CRITICAL for security
+2. **Share List UI** [3 hours] - HIGH visibility feature
+3. **CLI Agent Integration** [2 hours] - Completes CLI workflow
+4. **CLI Revoke Command** [30 min] - Quick win
+5. **Testing & Polish** [1-2 hours] - Validation
+
+**Total Estimated Time: 8-10 hours**
+
+---
+
+## TESTING CHECKLIST
+
+After implementation, verify:
+
+- [ ] Share creation with Account-encrypted files (no password prompt)
+- [ ] Share creation with Custom-encrypted files (one password prompt)
+- [ ] Share access with correct password (successful download)
+- [ ] Share access with wrong password (immediate failure, no bandwidth used)
+- [ ] Download token enforcement (reject invalid tokens)
+- [ ] AAD binding (envelope swapping fails decryption)
+- [ ] Max accesses enforcement (auto-revoke after limit)
+- [ ] Manual revocation (share becomes inaccessible)
+- [ ] Share list UI shows correct status
+- [ ] CLI agent stores/retrieves AccountKey correctly
+- [ ] Multi-user agent isolation (UID-specific sockets)
+
+---
+
+## NOTES
+
+- All changes maintain zero-knowledge architecture
+- No passwords, FEKs, or decrypted metadata sent to server
+- Agent provides seamless Account-encrypted file sharing via CLI
+- AAD binding prevents envelope swapping attacks
+- Download tokens protect bandwidth
+- Revocation system gives owners full control
+
+This plan completes the remaining 15% of work to achieve the full vision outlined in the v2 implementation document.
+
+---
