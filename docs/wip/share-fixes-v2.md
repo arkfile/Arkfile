@@ -3309,3 +3309,33 @@ This plan completes the remaining 15% of work to achieve the full vision outline
 ### 11. ran `dev-reset.sh` with `sudo` [OK]. ran `e2e-test.sh` with current set of defined tests (not including sharing related tests), which ran fine, proves auth and basic file encryption/decryption work for file owners [OK]
 
 ---
+
+# PROGRESS UPDATE - JAN 8, 2026 part 3 - OPUS 4.5
+
+## Code Changes
+
+### Legacy Code Cleanup - Completed
+
+**1. `client/static/js/src/shares/share-crypto.ts`**
+- Removed 32-byte fallback in `decryptShareEnvelope()` - now strictly requires 64-byte envelope format (FEK + Download Token)
+- Removed deprecated `decryptFEKFromShare` function
+- Updated exports to remove `decryptFEKFromShare`
+
+**2. `client/static/js/src/shares/share-creation.ts`**
+- Removed unused `generateDownloadToken()` method (dead code)
+- Removed unused `hashDownloadToken()` method (dead code)
+- Removed unused `createShareEnvelope()` method (dead code)
+- Removed unused imports: `hash256`, `deriveKeyHKDF`
+
+### Verification
+- ✅ TypeScript compiles without errors (`bunx tsc --noEmit`)
+- ✅ Go compiles without errors (`go build ./...`)
+
+### Architecture Status
+The share system now has a clean, consistent architecture:
+- **AAD binding**: Share ID + File ID prevents envelope swapping attacks
+- **64-byte envelope**: FEK (32) + Download Token (32) - no legacy fallbacks
+- **Download Token hash**: Server stores only the hash, never the plaintext token
+- **Argon2id KDF**: Strong password-based key derivation with 128MB memory requirement
+
+---

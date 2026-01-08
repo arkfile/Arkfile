@@ -9,7 +9,7 @@
 import { shareCrypto } from './share-crypto.js';
 import { validateSharePassword, type PasswordValidationResult } from '../crypto/password-validation.js';
 import { authenticatedFetch } from '../utils/auth.js';
-import { randomBytes, toBase64, hash256, deriveKeyHKDF } from '../crypto/primitives.js';
+import { randomBytes, toBase64 } from '../crypto/primitives.js';
 
 // ============================================================================
 // Types
@@ -93,62 +93,6 @@ export class ShareCreator {
       .replace(/\+/g, '-')
       .replace(/\//g, '_')
       .replace(/=/g, '');
-  }
-
-  /**
-   * Generates a Download Token from the share key using HKDF
-   * 
-   * @param shareKey - The derived share key (32 bytes)
-   * @returns Base64-encoded Download Token (32 bytes)
-   */
-  private async generateDownloadToken(shareKey: Uint8Array): Promise<string> {
-    // Use HKDF to derive Download Token from share key
-    // This ensures the token is cryptographically tied to the share password
-    const salt = new Uint8Array(0); // Empty salt for HKDF
-    const info = new TextEncoder().encode('download_token');
-    const downloadToken = await deriveKeyHKDF(shareKey, salt, info, 32);
-    return toBase64(downloadToken);
-  }
-
-  /**
-   * Hashes a Download Token using SHA-256
-   * 
-   * @param downloadTokenBase64 - Base64-encoded Download Token
-   * @returns Base64-encoded SHA-256 hash
-   */
-  private hashDownloadToken(downloadTokenBase64: string): string {
-    const token = new Uint8Array(atob(downloadTokenBase64).split('').map(c => c.charCodeAt(0)));
-    const hash = hash256(token);
-    return toBase64(hash);
-  }
-
-  /**
-   * Creates a Share Envelope containing encrypted FEK and Download Token
-   * 
-   * @param shareKey - The derived share key
-   * @param shareId - The Share ID
-   * @returns Share Envelope with encrypted data
-   */
-  private async createShareEnvelope(shareKey: Uint8Array, shareId: string): Promise<ShareEnvelope> {
-    // Generate Download Token from share key
-    const downloadToken = await this.generateDownloadToken(shareKey);
-
-    // Encrypt the FEK with AAD binding
-    const shareEncryptionResult = await shareCrypto.encryptFEKForShare(
-      this.fileInfo.fek,
-      '', // Password not needed here - we already have the key
-      shareId,
-      '' // fileId - TODO: pass actual fileId when refactoring
-    );
-
-    // Note: We need to modify encryptFEKForShare to accept a key directly
-    // For now, we'll use the existing password-based approach
-    // This will be refactored in the next iteration
-
-    return {
-      encryptedFEK: shareEncryptionResult.encryptedFEK,
-      downloadToken: downloadToken,
-    };
   }
 
   /**

@@ -279,28 +279,20 @@ export async function decryptShareEnvelope(
     const plaintext = decryptionResult.plaintext;
     
     // Expected size: 32 (FEK) + 32 (Download Token) = 64 bytes
-    if (plaintext.length === KEY_SIZES.FILE_ENCRYPTION_KEY) {
-      // Old format: only FEK, no Download Token yet
-      // Generate a temporary Download Token (this is a transition state)
-      const tempDownloadToken = randomBytes(32);
-      return {
-        fek: plaintext,
-        downloadToken: toBase64(tempDownloadToken),
-      };
-    } else if (plaintext.length === 64) {
-      // New format: FEK + Download Token
-      const fek = plaintext.slice(0, 32);
-      const downloadToken = plaintext.slice(32, 64);
-      
-      return {
-        fek,
-        downloadToken: toBase64(downloadToken),
-      };
-    } else {
+    if (plaintext.length !== 64) {
       throw new DecryptionError(
-        `Invalid decrypted envelope size: expected 32 or 64 bytes, got ${plaintext.length}`
+        `Invalid envelope format: expected 64 bytes (FEK + Download Token), got ${plaintext.length} bytes`
       );
     }
+    
+    // Extract FEK and Download Token
+    const fek = plaintext.slice(0, 32);
+    const downloadToken = plaintext.slice(32, 64);
+    
+    return {
+      fek,
+      downloadToken: toBase64(downloadToken),
+    };
   } catch (error) {
     if (error instanceof DecryptionError) {
       throw error;
@@ -310,96 +302,6 @@ export async function decryptShareEnvelope(
   }
 }
 
-/**
- * Decrypts a File Encryption Key (FEK) from a share
- * 
- * This function:
- * 1. Derives the decryption key from the share password and stored salt
- * 2. Decrypts the FEK using AES-256-GCM
- * 3. Returns the decrypted FEK for file decryption
- * 
- * @param metadata - Share encryption metadata (encrypted FEK + salt)
- * @param sharePassword - The share password
- * @returns The decrypted FEK (32 bytes)
- * @throws DecryptionError if password is incorrect or data is corrupted
- */
-export async function decryptFEKFromShare(
-  metadata: ShareEncryptionMetadata,
-  sharePassword: string,
-  shareId: string
-): Promise<Uint8Array> {
-  if (!sharePassword || sharePassword.length === 0) {
-    throw new DecryptionError('Share password cannot be empty');
-  }
-
-  if (!shareId || shareId.length === 0) {
-    throw new DecryptionError('Share ID cannot be empty');
-  }
-  
-  try {
-    // Decode the salt and encrypted FEK
-    const salt = fromBase64(metadata.salt);
-    const encryptedData = fromBase64(metadata.encryptedFEK);
-    
-    // Validate salt size
-    if (salt.length !== KEY_SIZES.SALT) {
-      throw new DecryptionError(
-        `Invalid salt size: expected ${KEY_SIZES.SALT} bytes, got ${salt.length}`
-      );
-    }
-    
-    // The encrypted data format is: [nonce (12)][ciphertext][tag (16)]
-    if (encryptedData.length < 12 + 16) {
-      throw new DecryptionError('Encrypted FEK data is too short');
-    }
-    
-    // Extract components
-    const nonce = encryptedData.slice(0, 12);
-    const ciphertextAndTag = encryptedData.slice(12);
-    const ciphertext = ciphertextAndTag.slice(0, -16);
-    const tag = ciphertextAndTag.slice(-16);
-    
-    // Get Argon2id parameters from config
-    const argon2Params = await getArgon2Params();
-    
-    // Derive decryption key from share password using Argon2id
-    const keyDerivation = await deriveKeyArgon2id({
-      password: sharePassword,
-      salt,
-      params: argon2Params,
-    });
-    
-    // Prepare AAD (Share ID)
-    const aad = new TextEncoder().encode(shareId);
-
-    // Decrypt the FEK
-    const decryptionResult = await decryptAESGCM({
-      ciphertext,
-      key: keyDerivation.key,
-      iv: nonce,
-      tag,
-      aad: aad,
-    });
-    
-    // Clean up sensitive data
-    secureWipe(keyDerivation.key);
-    
-    // Validate FEK size
-    if (decryptionResult.plaintext.length !== KEY_SIZES.FILE_ENCRYPTION_KEY) {
-      throw new DecryptionError(
-        `Invalid decrypted FEK size: expected ${KEY_SIZES.FILE_ENCRYPTION_KEY} bytes, got ${decryptionResult.plaintext.length}`
-      );
-    }
-    
-    return decryptionResult.plaintext;
-  } catch (error) {
-    if (error instanceof DecryptionError) {
-      throw error;
-    }
-    // Wrap other errors (likely authentication failures from AES-GCM)
-    throw new DecryptionError('Failed to decrypt FEK - incorrect password or corrupted data');
-  }
-}
 
 // ============================================================================
 // Utility Functions
@@ -438,7 +340,6 @@ export const shareCrypto = {
   
   // FEK encryption/decryption
   encryptFEKForShare,
-  decryptFEKFromShare,
   decryptShareEnvelope,
   
   // Utility functions
