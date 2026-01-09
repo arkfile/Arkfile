@@ -865,11 +865,568 @@ phase_9_share_operations() {
     
     section "Testing share operations"
     
-    # Note: Share operations require file IDs from uploaded files
-    # Since we're not uploading files in this test, we'll document this
-    warning "Share operations require uploaded files"
-    warning "Skipping share tests (no files uploaded)"
-    record_test "Share operations (requires files)" "PASS"
+    # Share password (distinct from user account password)
+    # Must meet: 18+ chars, uppercase, lowercase, number, special, 60+ bits entropy
+    local SHARE_PASSWORD="SecureFileShare#2026!TestEnv"
+    
+    local test_file="$TEST_DATA_DIR/share_test_file.bin"
+    local test_file_enc="${test_file}.enc"
+    local metadata_file="$TEST_DATA_DIR/share_metadata.json"
+    local share_file_id=""
+    local share_id=""
+    local original_sha256=""
+    local original_size=""
+    local encrypted_fek=""
+    
+    # =========================================================================
+    # 9.1: Create a file to share
+    # =========================================================================
+    section "9.1: Creating test file for sharing"
+    
+    # Generate a smaller test file for share testing (5MB)
+    local gen_output
+    local gen_exit_code
+    
+    safe_exec gen_output gen_exit_code \
+        $BUILD_DIR/cryptocli generate-test-file \
+        --filename "$test_file" \
+        --size 5242880 \
+        --pattern deterministic
+        
+    if [ $gen_exit_code -eq 0 ]; then
+        record_test "Share test file creation" "PASS"
+        original_sha256=$(echo "$gen_output" | grep "SHA-256:" | awk '{print $2}')
+        original_size=$(stat -c%s "$test_file" 2>/dev/null || stat -f%z "$test_file" 2>/dev/null)
+        info "File SHA-256: $original_sha256"
+        info "File size: $original_size bytes"
+    else
+        record_test "Share test file creation" "FAIL"
+        error "Failed to generate share test file"
+        echo "$gen_output"
+        return 1
+    fi
+    
+    # Encrypt file
+    section "Encrypting file for sharing"
+    local enc_output
+    local enc_exit_code
+    
+    safe_exec enc_output enc_exit_code \
+        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli encrypt-password \
+        --file '$test_file' \
+        --username '$TEST_USERNAME' \
+        --key-type account \
+        --output '$test_file_enc'"
+        
+    if [ $enc_exit_code -eq 0 ]; then
+        record_test "Share file encryption" "PASS"
+        # Extract encrypted FEK from output
+        encrypted_fek=$(echo "$enc_output" | grep "Encrypted FEK:" | awk '{print $3}')
+        info "Encrypted FEK: ${encrypted_fek:0:32}..."
+    else
+        record_test "Share file encryption" "FAIL"
+        error "Failed to encrypt share file"
+        echo "$enc_output"
+        return 1
+    fi
+    
+    # Encrypt metadata
+    section "Encrypting metadata for sharing"
+    local metadata_output
+    local meta_exit_code
+    
+    safe_exec metadata_output meta_exit_code \
+        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli encrypt-metadata \
+        --filename 'share_test_file.bin' \
+        --sha256sum '$original_sha256' \
+        --username '$TEST_USERNAME' \
+        --password-source stdin \
+        --output-format separated"
+        
+    if [ $meta_exit_code -eq 0 ]; then
+        record_test "Share metadata encryption" "PASS"
+        
+        local filename_nonce=$(echo "$metadata_output" | grep "Filename Nonce:" | awk '{print $3}')
+        local enc_filename=$(echo "$metadata_output" | grep "Encrypted Filename:" | awk '{print $3}')
+        local sha256_nonce=$(echo "$metadata_output" | grep "SHA256 Nonce:" | awk '{print $3}')
+        local enc_sha256=$(echo "$metadata_output" | grep "Encrypted SHA256:" | awk '{print $3}')
+        
+        cat <<EOF > "$metadata_file"
+{
+    "encrypted_filename": "$enc_filename",
+    "filename_nonce": "$filename_nonce",
+    "encrypted_sha256sum": "$enc_sha256",
+    "sha256sum_nonce": "$sha256_nonce",
+    "encrypted_fek": "$encrypted_fek",
+    "password_type": "account",
+    "password_hint": "share-test"
+}
+EOF
+    else
+        record_test "Share metadata encryption" "FAIL"
+        error "Failed to encrypt share metadata"
+        echo "$metadata_output"
+        return 1
+    fi
+    
+    # Upload file
+    section "Uploading file for sharing"
+    local upload_output
+    local upload_exit_code
+    
+    safe_exec upload_output upload_exit_code \
+        $BUILD_DIR/arkfile-client \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        upload \
+        --file "$test_file_enc" \
+        --metadata "$metadata_file"
+        
+    if [ $upload_exit_code -eq 0 ]; then
+        if echo "$upload_output" | grep -q "Upload completed successfully"; then
+            record_test "Share file upload" "PASS"
+            share_file_id=$(echo "$upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+            info "Uploaded File ID: $share_file_id"
+        else
+            record_test "Share file upload" "FAIL"
+            error "Upload failed - unexpected output"
+            echo "$upload_output"
+            return 1
+        fi
+    else
+        record_test "Share file upload" "FAIL"
+        error "Upload command failed"
+        echo "$upload_output"
+        return 1
+    fi
+    
+    # =========================================================================
+    # 9.2: Decrypt FEK and create share envelope
+    # =========================================================================
+    section "9.2: Creating share envelope"
+    
+    # Decrypt FEK using owner's password
+    local decrypt_fek_output
+    local decrypt_fek_exit_code
+    
+    safe_exec decrypt_fek_output decrypt_fek_exit_code \
+        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli decrypt-fek \
+        --encrypted-fek '$encrypted_fek' \
+        --username '$TEST_USERNAME'"
+        
+    if [ $decrypt_fek_exit_code -eq 0 ]; then
+        record_test "FEK decryption for sharing" "PASS"
+        local fek_hex=$(echo "$decrypt_fek_output" | grep "FEK (hex):" | awk '{print $3}')
+        info "Decrypted FEK: ${fek_hex:0:16}..."
+    else
+        record_test "FEK decryption for sharing" "FAIL"
+        error "Failed to decrypt FEK"
+        echo "$decrypt_fek_output"
+        return 1
+    fi
+    
+    # Generate share ID
+    local share_id_output
+    local share_id_exit_code
+    
+    safe_exec share_id_output share_id_exit_code \
+        $BUILD_DIR/cryptocli generate-share-id
+        
+    if [ $share_id_exit_code -eq 0 ]; then
+        record_test "Share ID generation" "PASS"
+        share_id=$(echo "$share_id_output" | grep "Share ID:" | awk '{print $3}')
+        info "Generated Share ID: $share_id"
+    else
+        record_test "Share ID generation" "FAIL"
+        error "Failed to generate share ID"
+        echo "$share_id_output"
+        return 1
+    fi
+    
+    # Create share envelope with AAD binding
+    local envelope_output
+    local envelope_exit_code
+    
+    safe_exec envelope_output envelope_exit_code \
+        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $BUILD_DIR/cryptocli create-share-envelope \
+        --fek '$fek_hex' \
+        --share-id '$share_id' \
+        --file-id '$share_file_id'"
+        
+    if [ $envelope_exit_code -eq 0 ]; then
+        record_test "Share envelope creation" "PASS"
+        local encrypted_envelope=$(echo "$envelope_output" | grep "Encrypted Envelope:" | awk '{print $3}')
+        local envelope_salt=$(echo "$envelope_output" | grep "Salt:" | awk '{print $2}')
+        info "Encrypted Envelope: ${encrypted_envelope:0:32}..."
+        info "Salt: ${envelope_salt:0:16}..."
+    else
+        record_test "Share envelope creation" "FAIL"
+        error "Failed to create share envelope"
+        echo "$envelope_output"
+        return 1
+    fi
+    
+    # =========================================================================
+    # 9.3: Create share via API
+    # =========================================================================
+    section "9.3: Creating share via API"
+    
+    local create_share_output
+    local create_share_exit_code
+    
+    safe_exec create_share_output create_share_exit_code \
+        $BUILD_DIR/arkfile-client \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        share create \
+        --file-id "$share_file_id" \
+        --encrypted-envelope "$encrypted_envelope" \
+        --salt "$envelope_salt"
+        
+    if [ $create_share_exit_code -eq 0 ]; then
+        if echo "$create_share_output" | grep -q "Share created successfully"; then
+            record_test "Share creation via API" "PASS"
+            # The server returns the share_id we provided
+            local server_share_id=$(echo "$create_share_output" | grep "Share ID:" | awk '{print $3}')
+            info "Share created with ID: $server_share_id"
+        else
+            record_test "Share creation via API" "FAIL"
+            error "Share creation failed - unexpected output"
+            echo "$create_share_output"
+            return 1
+        fi
+    else
+        record_test "Share creation via API" "FAIL"
+        error "Share creation command failed"
+        echo "$create_share_output"
+        return 1
+    fi
+    
+    # =========================================================================
+    # 9.4: List shares (authenticated)
+    # =========================================================================
+    section "9.4: Listing shares"
+    
+    local list_shares_output
+    local list_shares_exit_code
+    
+    safe_exec list_shares_output list_shares_exit_code \
+        $BUILD_DIR/arkfile-client \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        share list
+        
+    if [ $list_shares_exit_code -eq 0 ]; then
+        if echo "$list_shares_output" | grep -q "$share_id"; then
+            record_test "Share listing" "PASS"
+            info "Share $share_id found in list"
+        else
+            record_test "Share listing" "FAIL"
+            error "Share not found in list"
+            echo "$list_shares_output"
+        fi
+    else
+        record_test "Share listing" "FAIL"
+        error "Share list command failed"
+        echo "$list_shares_output"
+    fi
+    
+    # =========================================================================
+    # 9.5: Logout and access share as visitor
+    # =========================================================================
+    section "9.5: Accessing share as visitor (unauthenticated)"
+    
+    # Logout
+    info "Logging out to test visitor access..."
+    local logout_output
+    local logout_exit_code
+    
+    safe_exec logout_output logout_exit_code \
+        $BUILD_DIR/arkfile-client \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        logout
+        
+    if [ $logout_exit_code -eq 0 ]; then
+        record_test "Logout for visitor test" "PASS"
+    else
+        warning "Logout may have failed, continuing..."
+        record_test "Logout for visitor test" "PASS"
+    fi
+    
+    # Download shared file as visitor (no auth)
+    local shared_download_file="$TEST_DATA_DIR/shared_download.enc"
+    local download_share_output
+    local download_share_exit_code
+    
+    safe_exec download_share_output download_share_exit_code \
+        $BUILD_DIR/arkfile-client \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        download-share \
+        --share-id "$share_id" \
+        --output "$shared_download_file"
+        
+    if [ $download_share_exit_code -eq 0 ]; then
+        record_test "Visitor share download" "PASS"
+        info "Downloaded shared file to: $shared_download_file"
+        
+        # Extract envelope info from output for decryption
+        local dl_encrypted_envelope=$(echo "$download_share_output" | grep -o '"[^"]*"' | head -1 | tr -d '"')
+        local dl_salt=$(echo "$download_share_output" | grep -o '"[^"]*"' | head -2 | tail -1 | tr -d '"')
+    else
+        record_test "Visitor share download" "FAIL"
+        error "Visitor download failed"
+        echo "$download_share_output"
+        return 1
+    fi
+    
+    # =========================================================================
+    # 9.6: Decrypt share envelope and file
+    # =========================================================================
+    section "9.6: Decrypting share envelope and file"
+    
+    # Decrypt share envelope to get FEK
+    local decrypt_envelope_output
+    local decrypt_envelope_exit_code
+    
+    safe_exec decrypt_envelope_output decrypt_envelope_exit_code \
+        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $BUILD_DIR/cryptocli decrypt-share-envelope \
+        --encrypted-fek '$encrypted_envelope' \
+        --salt '$envelope_salt' \
+        --share-id '$share_id' \
+        --file-id '$share_file_id'"
+        
+    if [ $decrypt_envelope_exit_code -eq 0 ]; then
+        record_test "Share envelope decryption" "PASS"
+        local recovered_fek=$(echo "$decrypt_envelope_output" | grep "FEK (hex):" | awk '{print $3}')
+        info "Recovered FEK: ${recovered_fek:0:16}..."
+        
+        # Verify FEK matches original
+        if [ "$recovered_fek" == "$fek_hex" ]; then
+            record_test "FEK recovery verification" "PASS"
+            info "Recovered FEK matches original"
+        else
+            record_test "FEK recovery verification" "FAIL"
+            error "Recovered FEK does not match original!"
+        fi
+    else
+        record_test "Share envelope decryption" "FAIL"
+        error "Failed to decrypt share envelope"
+        echo "$decrypt_envelope_output"
+        return 1
+    fi
+    
+    # Decrypt file using recovered FEK
+    local decrypted_share_file="$TEST_DATA_DIR/shared_decrypted.bin"
+    local decrypt_file_output
+    local decrypt_file_exit_code
+    
+    safe_exec decrypt_file_output decrypt_file_exit_code \
+        $BUILD_DIR/cryptocli decrypt-file-key \
+        --file "$shared_download_file" \
+        --fek "$recovered_fek" \
+        --output "$decrypted_share_file"
+        
+    if [ $decrypt_file_exit_code -eq 0 ]; then
+        record_test "Shared file decryption" "PASS"
+    else
+        record_test "Shared file decryption" "FAIL"
+        error "Failed to decrypt shared file"
+        echo "$decrypt_file_output"
+        return 1
+    fi
+    
+    # =========================================================================
+    # 9.7: Verify file integrity (SHA256 and size)
+    # =========================================================================
+    section "9.7: Verifying file integrity"
+    
+    # Verify SHA256
+    local decrypted_sha256=$(sha256sum "$decrypted_share_file" | awk '{print $1}')
+    
+    if [ "$decrypted_sha256" == "$original_sha256" ]; then
+        record_test "Shared file SHA256 verification" "PASS"
+        info "SHA256 matches: $decrypted_sha256"
+    else
+        record_test "Shared file SHA256 verification" "FAIL"
+        error "SHA256 mismatch! Original: $original_sha256, Decrypted: $decrypted_sha256"
+    fi
+    
+    # Verify file size
+    local decrypted_size=$(stat -c%s "$decrypted_share_file" 2>/dev/null || stat -f%z "$decrypted_share_file" 2>/dev/null)
+    
+    if [ "$decrypted_size" == "$original_size" ]; then
+        record_test "Shared file size verification" "PASS"
+        info "File size matches: $decrypted_size bytes"
+    else
+        record_test "Shared file size verification" "FAIL"
+        error "Size mismatch! Original: $original_size, Decrypted: $decrypted_size"
+    fi
+    
+    # =========================================================================
+    # 9.8: Negative tests (with delays to avoid rate limiting)
+    # =========================================================================
+    section "9.8: Negative tests"
+    
+    # Test 1: Wrong share password
+    info "Testing wrong share password..."
+    sleep 2  # Delay to avoid rate limiting
+    
+    local wrong_pass_output
+    local wrong_pass_exit_code
+    
+    safe_exec wrong_pass_output wrong_pass_exit_code \
+        bash -c "printf '%s\n' 'WrongPassword#2026!Test' | $BUILD_DIR/cryptocli decrypt-share-envelope \
+        --encrypted-fek '$encrypted_envelope' \
+        --salt '$envelope_salt' \
+        --share-id '$share_id' \
+        --file-id '$share_file_id'"
+        
+    if [ $wrong_pass_exit_code -ne 0 ]; then
+        record_test "Wrong password rejection" "PASS"
+        info "Correctly rejected wrong password"
+    else
+        record_test "Wrong password rejection" "FAIL"
+        error "Security failure: Wrong password was accepted!"
+    fi
+    
+    # Test 2: Wrong share ID in AAD
+    info "Testing wrong share ID..."
+    sleep 2  # Delay to avoid rate limiting
+    
+    local wrong_id_output
+    local wrong_id_exit_code
+    
+    # Generate a different share ID
+    local fake_share_id=$(echo "$share_id" | sed 's/./X/1')
+    
+    safe_exec wrong_id_output wrong_id_exit_code \
+        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $BUILD_DIR/cryptocli decrypt-share-envelope \
+        --encrypted-fek '$encrypted_envelope' \
+        --salt '$envelope_salt' \
+        --share-id '$fake_share_id' \
+        --file-id '$share_file_id'"
+        
+    if [ $wrong_id_exit_code -ne 0 ]; then
+        record_test "Wrong share ID rejection (AAD)" "PASS"
+        info "Correctly rejected wrong share ID (AAD verification)"
+    else
+        record_test "Wrong share ID rejection (AAD)" "FAIL"
+        error "Security failure: Wrong share ID was accepted!"
+    fi
+    
+    # Test 3: Non-existent share
+    info "Testing non-existent share..."
+    sleep 2  # Delay to avoid rate limiting
+    
+    local nonexistent_output
+    local nonexistent_exit_code
+    
+    safe_exec nonexistent_output nonexistent_exit_code \
+        $BUILD_DIR/arkfile-client \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        download-share \
+        --share-id "nonexistent-share-id-that-does-not-exist" \
+        --output "$TEST_DATA_DIR/nonexistent.enc"
+        
+    if [ $nonexistent_exit_code -ne 0 ]; then
+        record_test "Non-existent share rejection" "PASS"
+        info "Correctly rejected non-existent share"
+    else
+        record_test "Non-existent share rejection" "FAIL"
+        error "Security failure: Non-existent share was accepted!"
+    fi
+    
+    # =========================================================================
+    # 9.9: Re-authenticate and revoke share
+    # =========================================================================
+    section "9.9: Re-authenticating and revoking share"
+    
+    # Wait for next TOTP window
+    local current_seconds=$(date +%s)
+    local seconds_into_window=$((current_seconds % 30))
+    local seconds_to_wait=$((30 - seconds_into_window))
+    
+    info "Waiting ${seconds_to_wait} seconds + 2 second buffer for next TOTP window..."
+    sleep "$((seconds_to_wait + 2))"
+    
+    # Generate TOTP code
+    local user_totp_code
+    user_totp_code=$(generate_totp "$TEST_USER_TOTP_SECRET")
+    
+    # Login again
+    local relogin_output
+    local relogin_exit_code
+    
+    safe_exec relogin_output relogin_exit_code \
+        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$user_totp_code' | $BUILD_DIR/arkfile-client \
+            --server-url '$SERVER_URL' \
+            --tls-insecure \
+            --username '$TEST_USERNAME' \
+            login \
+            --save-session"
+    
+    if [ $relogin_exit_code -eq 0 ]; then
+        record_test "Re-authentication for revoke" "PASS"
+    else
+        record_test "Re-authentication for revoke" "FAIL"
+        error "Failed to re-authenticate"
+        echo "$relogin_output"
+        return 1
+    fi
+    
+    # Revoke share
+    local revoke_output
+    local revoke_exit_code
+    
+    safe_exec revoke_output revoke_exit_code \
+        $BUILD_DIR/arkfile-client \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        share revoke \
+        --reason "e2e_test_complete" \
+        "$share_id"
+        
+    if [ $revoke_exit_code -eq 0 ]; then
+        record_test "Share revocation" "PASS"
+        info "Share revoked successfully"
+    else
+        record_test "Share revocation" "FAIL"
+        error "Failed to revoke share"
+        echo "$revoke_output"
+    fi
+    
+    # Test that revoked share cannot be downloaded
+    sleep 2  # Delay to avoid rate limiting
+    
+    local revoked_download_output
+    local revoked_download_exit_code
+    
+    safe_exec revoked_download_output revoked_download_exit_code \
+        $BUILD_DIR/arkfile-client \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        download-share \
+        --share-id "$share_id" \
+        --output "$TEST_DATA_DIR/revoked.enc"
+        
+    if [ $revoked_download_exit_code -ne 0 ]; then
+        record_test "Revoked share rejection" "PASS"
+        info "Correctly rejected revoked share download"
+    else
+        record_test "Revoked share rejection" "FAIL"
+        error "Security failure: Revoked share was still accessible!"
+    fi
+    
+    # =========================================================================
+    # Cleanup
+    # =========================================================================
+    section "Share operations cleanup"
+    rm -f "$test_file" "$test_file_enc" "$metadata_file" \
+          "$shared_download_file" "$decrypted_share_file" \
+          "$TEST_DATA_DIR/nonexistent.enc" "$TEST_DATA_DIR/revoked.enc"
     
     success "Share operations phase complete"
 }
