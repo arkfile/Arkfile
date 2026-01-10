@@ -1113,3 +1113,176 @@ This implementation provides:
 4. **Cross-platform**: Works in browsers (TypeScript) and CLI (Go)
 5. **Secure**: AES-GCM authentication prevents tampering
 6. **Standard APIs**: Uses Web Crypto and Streams API (no WASM required)
+
+---
+
+## List of all files to modify/create/delete:
+
+### **DATABASE SCHEMA**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `database/unified_schema.sql` | **MODIFY** | Add `chunk_size_bytes INTEGER NOT NULL` column to `file_metadata` table |
+
+---
+
+### **GO BACKEND - Models**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `models/file.go` | **MODIFY** | Add `ChunkSizeBytes int64` field to `File` struct, update all query functions (`CreateFile`, `GetFileByFileID`, `GetFileByStorageID`, `GetFilesByOwner`), update `FileMetadataForClient` and `ToClientMetadata()` |
+
+---
+
+### **GO BACKEND - Crypto Constants**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `crypto/constants.go` | **CREATE** | New file with `DefaultChunkSizeBytes`, `AESGCMOverhead`, `EncryptedChunkSize` constants |
+| `crypto/gcm.go` | **MODIFY** | May need to reference new constants |
+
+---
+
+### **GO BACKEND - Storage Layer**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `storage/storage.go` | **MODIFY** | Add `GetObjectRange(ctx, storageID, startByte, endByte, opts)` to `ObjectStorageProvider` interface |
+| `storage/s3.go` | **MODIFY** | Implement `GetObjectRange` method using S3 Range header |
+| `storage/mock_storage.go` | **MODIFY** | Add mock implementation of `GetObjectRange` for testing |
+| `storage/types.go` | **MODIFY** | May need new types for range requests |
+
+---
+
+### **GO BACKEND - Handlers**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `handlers/downloads.go` | **MODIFY** | Add `DownloadChunk` handler, add `GetFileDownloadMetadata` handler |
+| `handlers/route_config.go` | **MODIFY** | Add routes for `/api/files/:fileId/chunks/:chunkIndex` and `/api/files/:fileId/metadata` |
+| `handlers/uploads.go` | **MODIFY** | Store `chunk_size_bytes` when creating file metadata during upload completion |
+
+---
+
+### **GO BACKEND - Unit Tests**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `handlers/chunked_download_test.go` | **CREATE** | New test file for chunked download handlers |
+| `handlers/downloads_test.go` | **CREATE** | Tests for download handlers (if doesn't exist) |
+| `storage/s3_test.go` | **CREATE/MODIFY** | Tests for `GetObjectRange` |
+
+---
+
+### **GO CLI CLIENT**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `cmd/arkfile-client/main.go` | **MODIFY** | Add chunked download command with progress and resume support |
+| `cmd/arkfile-client/crypto/streaming_decryptor.go` | **CREATE** | New file with `StreamingDecryptor` struct |
+| `cmd/arkfile-client/download/streaming_download.go` | **CREATE** | New file with `StreamingDownloader` and `DownloadFileResumable` |
+
+---
+
+### **GO CLI - cryptocli**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `cmd/cryptocli/main.go` | **MODIFY** | May need new commands for chunk decryption testing |
+| `cmd/cryptocli/commands/commands.go` | **MODIFY** | Add chunk-related crypto commands if needed |
+
+---
+
+### **TYPESCRIPT CLIENT - Types**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `client/static/js/src/types/api.d.ts` | **MODIFY** | Add `FileDownloadMetadata`, `DownloadProgress`, `ChunkDecryptionResult` interfaces |
+| `client/static/js/src/crypto/types.ts` | **MODIFY** | Add crypto-related types for streaming decryption |
+
+---
+
+### **TYPESCRIPT CLIENT - Crypto**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `client/static/js/src/crypto/aes-gcm.ts` | **CREATE** | New file with `AESGCMDecryptor` class using Web Crypto API |
+| `client/static/js/src/crypto/constants.ts` | **MODIFY** | Add `AES_GCM_NONCE_SIZE`, `AES_GCM_TAG_SIZE`, `AES_GCM_OVERHEAD` constants |
+
+---
+
+### **TYPESCRIPT CLIENT - Download**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `client/static/js/src/files/download.ts` | **MODIFY** | Refactor to use `StreamingDownloadManager`, add progress callbacks |
+| `client/static/js/src/files/streaming-download.ts` | **CREATE** | New file with `StreamingDownloadManager` class |
+| `client/static/js/src/files/transform-stream-decryptor.ts` | **CREATE** | New file with `createDecryptionTransformStream` for advanced streaming |
+| `client/static/js/src/files/retry-handler.ts` | **CREATE** | New file with `downloadChunkWithRetry` for error recovery |
+
+---
+
+### **TYPESCRIPT CLIENT - UI**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `client/static/js/src/ui/progress.ts` | **MODIFY** | Add download progress UI components |
+| `client/static/js/src/ui/messages.ts` | **MODIFY** | Add chunk download status messages |
+
+---
+
+### **TYPESCRIPT CLIENT - Shares (if applicable)**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `client/static/js/src/shares/share-access.ts` | **MODIFY** | Update share download to use chunked approach |
+
+---
+
+### **E2E TESTING**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `scripts/testing/e2e-test.sh` | **MODIFY** | Add Phase 8.5 or update Phase 8 to test chunked downloads, verify resume capability, test progress reporting |
+
+---
+
+### **TYPESCRIPT UNIT TESTS**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `client/static/js/src/__tests__/crypto/aes-gcm.test.ts` | **CREATE** | Unit tests for `AESGCMDecryptor` |
+| `client/static/js/src/__tests__/files/streaming-download.test.ts` | **CREATE** | Unit tests for `StreamingDownloadManager` |
+
+---
+
+### **DOCUMENTATION**
+
+| File | Action | Description |
+|------|--------|-------------|
+| `docs/api.md` | **MODIFY** | Document new `/api/files/:fileId/chunks/:chunkIndex` and `/api/files/:fileId/metadata` endpoints |
+| `docs/wip/chunk-download.md` | **MODIFY** | Update with implementation notes as work progresses |
+
+---
+
+### Files/Code to DELETE or REPLACE Entirely
+
+| File | Action | Reason |
+|------|--------|--------| 
+| `handlers/downloads.go` | __REPLACE__ | Current `DownloadFile()` handler will be replaced with chunked download handlers only | 
+| `client/static/js/src/files/download.ts` | __REPLACE__ | Current full-file-in-memory approach replaced with streaming |
+
+---
+
+## Implementation Order Recommendation
+
+1. **Phase 1**: Database schema + Models (`unified_schema.sql`, `models/file.go`)
+2. **Phase 2**: Storage layer (`storage/storage.go`, `storage/s3.go`, `storage/mock_storage.go`)
+3. **Phase 3**: Backend handlers + routes (`handlers/downloads.go`, `handlers/route_config.go`, `handlers/uploads.go`)
+4. **Phase 4**: Go CLI client (`cmd/arkfile-client/...`)
+5. **Phase 5**: TypeScript crypto + download (`client/static/js/src/crypto/...`, `client/static/js/src/files/...`)
+6. **Phase 6**: UI updates (`client/static/js/src/ui/...`)
+7. **Phase 7**: Tests (`handlers/*_test.go`, `scripts/testing/e2e-test.sh`, TypeScript tests)
+8. **Phase 8**: Documentation updates
+
+---
