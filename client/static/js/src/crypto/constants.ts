@@ -148,6 +148,33 @@ export const AES_GCM_CONFIG = {
 } as const;
 
 // ============================================================================
+// Chunked Download Constants
+// ============================================================================
+
+/**
+ * AES-GCM overhead constants for chunked encryption/decryption
+ */
+/** Nonce size in bytes for AES-GCM */
+export const AES_GCM_NONCE_SIZE = 12;
+
+/** Authentication tag size in bytes for AES-GCM */
+export const AES_GCM_TAG_SIZE = 16;
+
+/** Total overhead per encrypted chunk (nonce + tag) */
+export const AES_GCM_OVERHEAD = AES_GCM_NONCE_SIZE + AES_GCM_TAG_SIZE; // 28 bytes
+
+/**
+ * Default chunk size for file encryption (16 MiB plaintext)
+ * This matches the server-side DefaultChunkSizeBytes constant
+ */
+export const DEFAULT_CHUNK_SIZE_BYTES = 16 * 1024 * 1024; // 16,777,216 bytes
+
+/**
+ * Size of each encrypted chunk (plaintext chunk + overhead)
+ */
+export const ENCRYPTED_CHUNK_SIZE = DEFAULT_CHUNK_SIZE_BYTES + AES_GCM_OVERHEAD; // 16,777,244 bytes
+
+// ============================================================================
 // Salt Generation
 // ============================================================================
 

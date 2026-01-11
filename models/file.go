@@ -9,6 +9,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// DefaultChunkSizeBytes is the default chunk size for chunked downloads (16MB)
+const DefaultChunkSizeBytes = 16 * 1024 * 1024 // 16MB
+
 type File struct {
 	ID                     int64          `json:"id"`
 	FileID                 string         `json:"file_id"`    // UUID v4 for file identification
@@ -22,8 +25,10 @@ type File struct {
 	EncryptedSha256sum     string         // Now stored as base64 strings directly
 	EncryptedFileSha256sum sql.NullString `json:"-"` // Hidden from JSON - server-side hash (nullable)
 	EncryptedFEK           string         // Now stored as base64 strings directly
-	SizeBytes              int64          `json:"size_bytes"`  // Original file size
-	PaddedSize             sql.NullInt64  `json:"padded_size"` // Size with padding for privacy/security
+	SizeBytes              int64          `json:"size_bytes"`       // Original file size
+	PaddedSize             sql.NullInt64  `json:"padded_size"`      // Size with padding for privacy/security
+	ChunkCount             int64          `json:"chunk_count"`      // Number of 16MB chunks for chunked downloads
+	ChunkSizeBytes         int64          `json:"chunk_size_bytes"` // Size of each chunk (16MB default)
 	UploadDate             time.Time      `json:"upload_date"`
 }
 
@@ -37,17 +42,40 @@ func GenerateFileID() string {
 	return uuid.New().String()
 }
 
+// CalculateChunkCount calculates the number of chunks needed for a file of given size
+func CalculateChunkCount(sizeBytes int64, chunkSizeBytes int64) int64 {
+	if sizeBytes <= 0 {
+		return 1
+	}
+	if chunkSizeBytes <= 0 {
+		chunkSizeBytes = DefaultChunkSizeBytes
+	}
+	count := sizeBytes / chunkSizeBytes
+	if sizeBytes%chunkSizeBytes != 0 {
+		count++
+	}
+	if count == 0 {
+		count = 1
+	}
+	return count
+}
+
 // CreateFile creates a new file record in the database with encrypted metadata (base64 strings)
 func CreateFile(db *sql.DB, fileID, storageID, ownerUsername, passwordHint, passwordType string,
 	filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum string, sizeBytes int64) (*File, error) {
 
+	chunkSizeBytes := int64(DefaultChunkSizeBytes)
+	chunkCount := CalculateChunkCount(sizeBytes, chunkSizeBytes)
+
 	result, err := db.Exec(`
 		INSERT INTO file_metadata (
 			file_id, storage_id, owner_username, password_hint, password_type,
-			filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, size_bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
+			size_bytes, chunk_count, chunk_size_bytes
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		fileID, storageID, ownerUsername, passwordHint, passwordType,
-		filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, sizeBytes,
+		filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum,
+		sizeBytes, chunkCount, chunkSizeBytes,
 	)
 	if err != nil {
 		return nil, err
@@ -70,6 +98,8 @@ func CreateFile(db *sql.DB, fileID, storageID, ownerUsername, passwordHint, pass
 		Sha256sumNonce:     sha256sumNonce,     // Already base64 strings
 		EncryptedSha256sum: encryptedSha256sum, // Already base64 strings
 		SizeBytes:          sizeBytes,
+		ChunkCount:         chunkCount,
+		ChunkSizeBytes:     chunkSizeBytes,
 		UploadDate:         time.Now(),
 	}, nil
 }
@@ -78,22 +108,26 @@ func CreateFile(db *sql.DB, fileID, storageID, ownerUsername, passwordHint, pass
 func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	file := &File{}
 	var encryptedFileSha256sum string
-	var sizeBytes interface{} // Use interface{} to handle both int64 and float64
-	var uploadDateStr string  // Scan as string first to handle RQLite timestamp format
+	var sizeBytes interface{}      // Use interface{} to handle both int64 and float64
+	var chunkCount interface{}     // Use interface{} to handle both int64 and float64
+	var chunkSizeBytes interface{} // Use interface{} to handle both int64 and float64
+	var uploadDateStr string       // Scan as string first to handle RQLite timestamp format
 
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
-			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size, upload_date
+			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
+			   chunk_count, chunk_size_bytes, upload_date
 		FROM file_metadata WHERE file_id = ?`,
 		fileID,
 	).Scan(
 		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 		&file.PasswordHint, &file.PasswordType,
-		&file.FilenameNonce, &file.EncryptedFilename, // Scan directly into string fields
-		&file.Sha256sumNonce, &file.EncryptedSha256sum, // Scan directly into string fields
-		&encryptedFileSha256sum, &file.EncryptedFEK, // Scan directly into string fields
-		&sizeBytes, &file.PaddedSize, &uploadDateStr,
+		&file.FilenameNonce, &file.EncryptedFilename,
+		&file.Sha256sumNonce, &file.EncryptedSha256sum,
+		&encryptedFileSha256sum, &file.EncryptedFEK,
+		&sizeBytes, &file.PaddedSize,
+		&chunkCount, &chunkSizeBytes, &uploadDateStr,
 	)
 
 	if err == sql.ErrNoRows {
@@ -113,6 +147,30 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		file.SizeBytes = 0
 	default:
 		return nil, fmt.Errorf("GetFileByFileID: unexpected type for size_bytes: %T", v)
+	}
+
+	// Convert chunkCount from interface{} to int64
+	switch v := chunkCount.(type) {
+	case int64:
+		file.ChunkCount = v
+	case float64:
+		file.ChunkCount = int64(v)
+	case nil:
+		file.ChunkCount = 1
+	default:
+		file.ChunkCount = 1
+	}
+
+	// Convert chunkSizeBytes from interface{} to int64
+	switch v := chunkSizeBytes.(type) {
+	case int64:
+		file.ChunkSizeBytes = v
+	case float64:
+		file.ChunkSizeBytes = int64(v)
+	case nil:
+		file.ChunkSizeBytes = DefaultChunkSizeBytes
+	default:
+		file.ChunkSizeBytes = DefaultChunkSizeBytes
 	}
 
 	// Parse timestamp string to time.Time
@@ -147,22 +205,26 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	file := &File{}
 	var encryptedFileSha256sum string
-	var sizeBytes interface{} // Use interface{} to handle both int64 and float64
-	var uploadDateStr string  // Scan as string first to handle RQLite timestamp format
+	var sizeBytes interface{}      // Use interface{} to handle both int64 and float64
+	var chunkCount interface{}     // Use interface{} to handle both int64 and float64
+	var chunkSizeBytes interface{} // Use interface{} to handle both int64 and float64
+	var uploadDateStr string       // Scan as string first to handle RQLite timestamp format
 
 	err := db.QueryRow(`
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum,
-			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size, upload_date
+			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
+			   chunk_count, chunk_size_bytes, upload_date
 		FROM file_metadata WHERE storage_id = ?`,
 		storageID,
 	).Scan(
 		&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 		&file.PasswordHint, &file.PasswordType,
-		&file.FilenameNonce, &file.EncryptedFilename, // Scan directly into string fields
-		&file.Sha256sumNonce, &file.EncryptedSha256sum, // Scan directly into string fields
-		&encryptedFileSha256sum, &file.EncryptedFEK, // Scan directly into string fields
-		&sizeBytes, &file.PaddedSize, &uploadDateStr,
+		&file.FilenameNonce, &file.EncryptedFilename,
+		&file.Sha256sumNonce, &file.EncryptedSha256sum,
+		&encryptedFileSha256sum, &file.EncryptedFEK,
+		&sizeBytes, &file.PaddedSize,
+		&chunkCount, &chunkSizeBytes, &uploadDateStr,
 	)
 
 	if err == sql.ErrNoRows {
@@ -182,6 +244,30 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		file.SizeBytes = 0
 	default:
 		return nil, fmt.Errorf("GetFileByStorageID: unexpected type for size_bytes: %T", v)
+	}
+
+	// Convert chunkCount from interface{} to int64
+	switch v := chunkCount.(type) {
+	case int64:
+		file.ChunkCount = v
+	case float64:
+		file.ChunkCount = int64(v)
+	case nil:
+		file.ChunkCount = 1
+	default:
+		file.ChunkCount = 1
+	}
+
+	// Convert chunkSizeBytes from interface{} to int64
+	switch v := chunkSizeBytes.(type) {
+	case int64:
+		file.ChunkSizeBytes = v
+	case float64:
+		file.ChunkSizeBytes = int64(v)
+	case nil:
+		file.ChunkSizeBytes = DefaultChunkSizeBytes
+	default:
+		file.ChunkSizeBytes = DefaultChunkSizeBytes
 	}
 
 	// Parse timestamp string to time.Time
@@ -221,7 +307,8 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 	query := `
 		SELECT id, file_id, storage_id, owner_username, password_hint, password_type,
 			   filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
-			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size, upload_date 
+			   COALESCE(encrypted_file_sha256sum, ''), encrypted_fek, size_bytes, padded_size,
+			   chunk_count, chunk_size_bytes, upload_date 
 		FROM file_metadata WHERE owner_username = ? ORDER BY upload_date DESC`
 
 	rows, err := db.Query(query, ownerUsername)
@@ -235,15 +322,18 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 		file := &File{}
 		var encryptedFileSha256sum string
 		var sizeBytes interface{}
+		var chunkCount interface{}
+		var chunkSizeBytes interface{}
 		var uploadDateStr string
 
 		err := rows.Scan(
 			&file.ID, &file.FileID, &file.StorageID, &file.OwnerUsername,
 			&file.PasswordHint, &file.PasswordType,
-			&file.FilenameNonce, &file.EncryptedFilename, // Scan directly into string fields
-			&file.Sha256sumNonce, &file.EncryptedSha256sum, // Scan directly into string fields
-			&encryptedFileSha256sum, &file.EncryptedFEK, // Scan directly into string fields
-			&sizeBytes, &file.PaddedSize, &uploadDateStr,
+			&file.FilenameNonce, &file.EncryptedFilename,
+			&file.Sha256sumNonce, &file.EncryptedSha256sum,
+			&encryptedFileSha256sum, &file.EncryptedFEK,
+			&sizeBytes, &file.PaddedSize,
+			&chunkCount, &chunkSizeBytes, &uploadDateStr,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan row for user '%s': %w", ownerUsername, err)
@@ -259,6 +349,30 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 			file.SizeBytes = 0
 		default:
 			return nil, fmt.Errorf("unexpected type for size_bytes: %T", v)
+		}
+
+		// Convert chunkCount from interface{} to int64
+		switch v := chunkCount.(type) {
+		case int64:
+			file.ChunkCount = v
+		case float64:
+			file.ChunkCount = int64(v)
+		case nil:
+			file.ChunkCount = 1
+		default:
+			file.ChunkCount = 1
+		}
+
+		// Convert chunkSizeBytes from interface{} to int64
+		switch v := chunkSizeBytes.(type) {
+		case int64:
+			file.ChunkSizeBytes = v
+		case float64:
+			file.ChunkSizeBytes = int64(v)
+		case nil:
+			file.ChunkSizeBytes = DefaultChunkSizeBytes
+		default:
+			file.ChunkSizeBytes = DefaultChunkSizeBytes
 		}
 
 		// Parse timestamp string to time.Time

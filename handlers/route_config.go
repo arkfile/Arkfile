@@ -85,6 +85,10 @@ func RegisterRoutes() {
 	totpProtectedGroup.GET("/api/files/:fileId", DownloadFile)
 	totpProtectedGroup.DELETE("/api/files/:fileId", DeleteFile)
 
+	// Chunked downloads - require TOTP
+	totpProtectedGroup.GET("/api/files/:fileId/metadata", GetFileDownloadMetadata)
+	totpProtectedGroup.GET("/api/files/:fileId/chunks/:chunkIndex", DownloadFileChunk)
+
 	// Chunked uploads - require TOTP
 	totpProtectedGroup.POST("/api/uploads/init", CreateUploadSession)
 	totpProtectedGroup.POST("/api/uploads/:sessionId/chunks/:chunkNumber", UploadChunk)
@@ -101,11 +105,13 @@ func RegisterRoutes() {
 
 	// Anonymous share access (no authentication required) - with rate limiting and timing protection
 	shareGroup := Echo.Group("/api")
-	shareGroup.Use(ShareRateLimitMiddleware)                   // Apply rate limiting FIRST (fail fast for abusers)
-	shareGroup.Use(TimingProtectionMiddleware)                 // Then timing protection (for valid requests)
-	shareGroup.GET("/shares/:id", GetSharedFile)               // Share access page
-	shareGroup.GET("/shares/:id/envelope", GetShareEnvelope)   // Get share envelope for client-side decryption
-	shareGroup.GET("/shares/:id/download", DownloadSharedFile) // Download shared file
+	shareGroup.Use(ShareRateLimitMiddleware)                             // Apply rate limiting FIRST (fail fast for abusers)
+	shareGroup.Use(TimingProtectionMiddleware)                           // Then timing protection (for valid requests)
+	shareGroup.GET("/shares/:id", GetSharedFile)                         // Share access page
+	shareGroup.GET("/shares/:id/envelope", GetShareEnvelope)             // Get share envelope for client-side decryption
+	shareGroup.GET("/shares/:id/download", DownloadSharedFile)           // Download shared file
+	shareGroup.GET("/shares/:id/metadata", GetShareDownloadMetadata)     // Get metadata for shared file download
+	shareGroup.GET("/shares/:id/chunks/:chunkIndex", DownloadShareChunk) // Download chunk of shared file
 
 	// File encryption key management - require TOTP
 	totpProtectedGroup.POST("/api/files/:fileId/update-encryption", UpdateEncryption)

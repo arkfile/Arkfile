@@ -693,11 +693,30 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update session status")
 	}
 
-	// Create the final file metadata record.
+	// Get chunk size from session for calculating chunk_count
+	var chunkSizeFloat sql.NullFloat64
+	err = database.DB.QueryRow("SELECT chunk_size FROM upload_sessions WHERE id = ?", sessionID).Scan(&chunkSizeFloat)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get chunk_size for session %s: %v", sessionID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get chunk size")
+	}
+
+	var chunkSizeBytes int64 = 16 * 1024 * 1024 // Default 16MB
+	if chunkSizeFloat.Valid && chunkSizeFloat.Float64 > 0 {
+		chunkSizeBytes = int64(chunkSizeFloat.Float64)
+	}
+
+	// Calculate chunk_count based on file size and chunk size
+	var chunkCount int64 = 1
+	if totalSize > 0 && chunkSizeBytes > 0 {
+		chunkCount = (totalSize + chunkSizeBytes - 1) / chunkSizeBytes
+	}
+
+	// Create the final file metadata record with chunk info for resumable downloads.
 	_, err = tx.Exec(`
-		INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_file_sha256sum, encrypted_fek, size_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, encryptedFek, totalSize,
+		INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_file_sha256sum, encrypted_fek, size_bytes, chunk_count, chunk_size_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, encryptedFek, totalSize, chunkCount, chunkSizeBytes,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "file_id") {

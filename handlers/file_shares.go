@@ -710,6 +710,303 @@ func DownloadSharedFile(c echo.Context) error {
 	return nil
 }
 
+// GetShareDownloadMetadata returns metadata about a shared file's chunks for resumable downloads
+// GET /api/shares/:id/metadata
+func GetShareDownloadMetadata(c echo.Context) error {
+	shareID := c.Param("id")
+	if shareID == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Share ID is required")
+	}
+
+	// Get EntityID for rate limiting
+	entityID := logging.GetOrCreateEntityID(c)
+
+	// Check basic rate limiting for metadata requests
+	allowed, delay, rateLimitErr := checkRateLimit(shareID, entityID)
+	if rateLimitErr != nil {
+		logging.ErrorLogger.Printf("Rate limit check failed: %v", rateLimitErr)
+	} else if !allowed {
+		c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", int(delay.Seconds())))
+		return echo.NewHTTPError(http.StatusTooManyRequests, "Too many requests")
+	}
+
+	// Query share data from database
+	var share struct {
+		FileID        string
+		ExpiresAt     *time.Time
+		RevokedAt     *time.Time
+		RevokedReason sql.NullString
+	}
+
+	err := database.DB.QueryRow(`
+		SELECT file_id, expires_at, revoked_at, revoked_reason
+		FROM file_share_keys 
+		WHERE share_id = ?
+	`, shareID).Scan(
+		&share.FileID,
+		&share.ExpiresAt,
+		&share.RevokedAt,
+		&share.RevokedReason,
+	)
+
+	if err == sql.ErrNoRows {
+		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
+	} else if err != nil {
+		logging.ErrorLogger.Printf("Database error accessing share %s: %v", shareID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+	}
+
+	// Check if share has expired
+	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
+		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
+	}
+
+	// Check if share has been revoked
+	if share.RevokedAt != nil {
+		reason := "Share has been revoked"
+		if share.RevokedReason.Valid && share.RevokedReason.String != "" {
+			reason += ": " + share.RevokedReason.String
+		}
+		return echo.NewHTTPError(http.StatusForbidden, reason)
+	}
+
+	// Get file chunk info
+	var sizeBytes int64
+	var chunkCount int64
+	var chunkSizeBytes int64
+
+	err = database.DB.QueryRow(`
+		SELECT size_bytes, chunk_count, chunk_size_bytes
+		FROM file_metadata
+		WHERE file_id = ?
+	`, share.FileID).Scan(&sizeBytes, &chunkCount, &chunkSizeBytes)
+
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
+	}
+
+	// Handle legacy files without chunk info
+	if chunkCount == 0 {
+		chunkCount = 1
+	}
+	if chunkSizeBytes == 0 {
+		chunkSizeBytes = 16 * 1024 * 1024 // 16MB default
+	}
+
+	logging.InfoLogger.Printf("Share chunk info accessed: share_id=%s..., file=%s, entity_id=%s", shareID[:8], share.FileID, entityID)
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"file_id":          share.FileID,
+		"size_bytes":       sizeBytes,
+		"chunk_count":      chunkCount,
+		"chunk_size_bytes": chunkSizeBytes,
+	})
+}
+
+// DownloadShareChunk handles downloading a specific chunk of a shared file
+// GET /api/shares/:id/chunks/:chunkIndex
+func DownloadShareChunk(c echo.Context) error {
+	shareID := c.Param("id")
+	chunkIndexStr := c.Param("chunkIndex")
+
+	// Parse chunk index
+	chunkIndex, err := parseChunkIndex(chunkIndexStr)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk index")
+	}
+
+	// Get Download Token from header
+	downloadToken := c.Request().Header.Get("X-Download-Token")
+	if downloadToken == "" {
+		logging.WarningLogger.Printf("Chunk download attempt without token: share_id=%s", shareID[:8])
+		return echo.NewHTTPError(http.StatusForbidden, "Download token required")
+	}
+
+	// Validate share exists and isn't expired/revoked
+	var share struct {
+		FileID            string
+		OwnerUsername     string
+		ExpiresAt         *time.Time
+		RevokedAt         *time.Time
+		RevokedReason     sql.NullString
+		DownloadTokenHash string
+		AccessCount       int
+		MaxAccesses       sql.NullInt64
+	}
+
+	err = database.DB.QueryRow(`
+		SELECT file_id, owner_username, expires_at, revoked_at, revoked_reason, 
+		       download_token_hash, access_count, max_accesses
+		FROM file_share_keys 
+		WHERE share_id = ?
+	`, shareID).Scan(
+		&share.FileID,
+		&share.OwnerUsername,
+		&share.ExpiresAt,
+		&share.RevokedAt,
+		&share.RevokedReason,
+		&share.DownloadTokenHash,
+		&share.AccessCount,
+		&share.MaxAccesses,
+	)
+
+	if err == sql.ErrNoRows {
+		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
+	} else if err != nil {
+		logging.ErrorLogger.Printf("Database error accessing share %s: %v", shareID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+	}
+
+	// Check if share has been revoked
+	if share.RevokedAt != nil {
+		reason := "Share has been revoked"
+		if share.RevokedReason.Valid && share.RevokedReason.String != "" {
+			reason += ": " + share.RevokedReason.String
+		}
+		logging.WarningLogger.Printf("Chunk download attempt on revoked share: share_id=%s", shareID[:8])
+		return echo.NewHTTPError(http.StatusForbidden, reason)
+	}
+
+	// Check if share has expired
+	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
+		logging.WarningLogger.Printf("Chunk download attempt on expired share: share_id=%s", shareID[:8])
+		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
+	}
+
+	// Validate Download Token using constant-time comparison
+	computedHash, err := hashDownloadToken(downloadToken)
+	if err != nil {
+		logging.WarningLogger.Printf("Invalid download token format: share_id=%s, error=%v", shareID[:8], err)
+		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
+	}
+
+	if !constantTimeCompare(computedHash, share.DownloadTokenHash) {
+		logging.WarningLogger.Printf("Invalid download token: share_id=%s", shareID[:8])
+		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
+	}
+
+	// Check if max accesses limit has been reached (only count on first chunk to avoid over-counting)
+	if share.MaxAccesses.Valid && share.AccessCount >= int(share.MaxAccesses.Int64) {
+		logging.WarningLogger.Printf("Chunk download attempt on exhausted share: share_id=%s", shareID[:8])
+		return echo.NewHTTPError(http.StatusForbidden, "Download limit reached")
+	}
+
+	// Get file metadata
+	var storageID string
+	var sizeBytes int64
+	var chunkCount int64
+	var chunkSizeBytes int64
+
+	err = database.DB.QueryRow(`
+		SELECT storage_id, size_bytes, chunk_count, chunk_size_bytes
+		FROM file_metadata
+		WHERE file_id = ?
+	`, share.FileID).Scan(&storageID, &sizeBytes, &chunkCount, &chunkSizeBytes)
+
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
+	}
+
+	// Handle legacy files without chunk info
+	if chunkCount == 0 {
+		chunkCount = 1
+	}
+	if chunkSizeBytes == 0 {
+		chunkSizeBytes = 16 * 1024 * 1024 // 16MB default
+	}
+
+	// Validate chunk index
+	if chunkIndex < 0 || chunkIndex >= chunkCount {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid chunk index: must be between 0 and %d", chunkCount-1))
+	}
+
+	// Calculate byte range for this chunk
+	startByte := chunkIndex * chunkSizeBytes
+	endByte := startByte + chunkSizeBytes - 1
+
+	// Adjust for last chunk
+	if endByte >= sizeBytes {
+		endByte = sizeBytes - 1
+	}
+
+	// Calculate actual chunk size
+	actualChunkSize := endByte - startByte + 1
+	if actualChunkSize <= 0 {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk range")
+	}
+
+	// Increment access count only on first chunk download
+	if chunkIndex == 0 {
+		tx, err := database.DB.Begin()
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to begin transaction: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+		}
+		defer tx.Rollback()
+
+		var newAccessCount int
+		err = tx.QueryRow(`
+			UPDATE file_share_keys 
+			SET access_count = access_count + 1 
+			WHERE share_id = ? 
+			RETURNING access_count
+		`, shareID).Scan(&newAccessCount)
+
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to increment access count: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+		}
+
+		// Check if we've reached max_accesses and auto-revoke if so
+		if share.MaxAccesses.Valid && newAccessCount >= int(share.MaxAccesses.Int64) {
+			_, err = tx.Exec(`
+				UPDATE file_share_keys 
+				SET revoked_at = CURRENT_TIMESTAMP, revoked_reason = ? 
+				WHERE share_id = ?
+			`, "max_downloads_reached", shareID)
+
+			if err != nil {
+				logging.ErrorLogger.Printf("Failed to auto-revoke share: %v", err)
+			} else {
+				logging.InfoLogger.Printf("Share auto-revoked (max downloads): share_id=%s", shareID[:8])
+			}
+		}
+
+		if err = tx.Commit(); err != nil {
+			logging.ErrorLogger.Printf("Failed to commit transaction: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+		}
+	}
+
+	// Get the chunk from storage
+	reader, err := storage.Provider.GetObjectChunk(c.Request().Context(), storageID, startByte, actualChunkSize)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get chunk %d of file %s from storage: %v", chunkIndex, share.FileID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve chunk from storage")
+	}
+	defer reader.Close()
+
+	// Set headers for chunk download
+	c.Response().Header().Set("Content-Type", "application/octet-stream")
+	c.Response().Header().Set("Content-Length", fmt.Sprintf("%d", actualChunkSize))
+	c.Response().Header().Set("X-Chunk-Index", fmt.Sprintf("%d", chunkIndex))
+	c.Response().Header().Set("X-Total-Chunks", fmt.Sprintf("%d", chunkCount))
+	c.Response().Header().Set("X-Chunk-Size", fmt.Sprintf("%d", chunkSizeBytes))
+	c.Response().Header().Set("X-File-Size", fmt.Sprintf("%d", sizeBytes))
+	c.Response().Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", startByte, endByte, sizeBytes))
+
+	// Log chunk download (only first and last to reduce noise)
+	if chunkIndex == 0 || chunkIndex == chunkCount-1 {
+		entityID := logging.GetOrCreateEntityID(c)
+		logging.InfoLogger.Printf("Share chunk download: share_id=%s..., chunk=%d/%d, entity_id=%s", shareID[:8], chunkIndex, chunkCount, entityID)
+	}
+
+	// Stream the chunk
+	return c.Stream(http.StatusOK, "application/octet-stream", reader)
+}
+
 // generateShareID creates a cryptographically secure 256-bit share ID using Base64 URL-safe encoding
 func generateShareID() (string, error) {
 	// Generate 256-bit (32 bytes) of cryptographically secure randomness

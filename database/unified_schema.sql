@@ -35,6 +35,8 @@ CREATE TABLE IF NOT EXISTS file_metadata (
     encrypted_fek TEXT,                         -- base64-encoded AES-GCM encrypted File Encryption Key
     size_bytes BIGINT NOT NULL DEFAULT 0,
     padded_size BIGINT,                         -- Size with padding for privacy/security
+    chunk_count INTEGER NOT NULL DEFAULT 1,     -- Number of 16MB chunks for chunked downloads
+    chunk_size_bytes INTEGER NOT NULL DEFAULT 16777216, -- Size of each chunk (16MB default, last chunk may be smaller)
     upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE
 );
