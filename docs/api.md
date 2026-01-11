@@ -79,7 +79,7 @@ Setting up TOTP requires an existing authenticated session. The `/api/totp/setup
 | GET  | `/api/download/:filename` | Download a file | Access | `curl -H "Authorization: Bearer $TOK" -O http://localhost:8080/api/download/report.pdf` |
 | DELETE | `/api/files/:filename` | Delete a file | Access | `curl -X DELETE -H "Authorization: Bearer $TOK" http://localhost:8080/api/files/report.pdf` |
 
-#### Chunked Uploads (large files)
+#### Chunked Uploads
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
@@ -88,6 +88,41 @@ Setting up TOTP requires an existing authenticated session. The `/api/totp/setup
 | POST | `/api/uploads/:sessionId/complete` | Finish the upload and assemble the file | Access |
 | GET  | `/api/uploads/:sessionId/status` | Check progress | Access |
 | DELETE | `/api/uploads/:sessionId` | Cancel and discard the session | Access |
+
+#### Chunked Downloads
+
+All file downloads use the chunked download API. Files are stored and downloaded in encrypted chunks, with each chunk independently encrypted using AES-GCM. This provides per-chunk authentication and enables client-side decryption.
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| GET | `/api/files/:fileId/metadata` | Get file metadata for download | Access |
+| GET | `/api/files/:fileId/chunks/:chunkIndex` | Download a specific encrypted chunk | Access |
+| GET | `/api/files/:fileId/key` | Get decrypted FEK for account-encrypted files | Access |
+| POST | `/api/files/:fileId/key` | Get decrypted FEK for custom-password files | Access |
+
+**Metadata Response:**
+```json
+{
+  "fileId": "uuid",
+  "storageId": "storage-path",
+  "encryptedFilename": "base64...",
+  "filenameNonce": "base64...",
+  "encryptedSha256sum": "base64...",
+  "sha256sumNonce": "base64...",
+  "sizeBytes": 52428800,
+  "totalChunks": 10,
+  "chunkSizeBytes": 5242880,
+  "contentType": "application/octet-stream"
+}
+```
+
+**Download Flow:**
+1. Fetch metadata to get `totalChunks` and chunk size
+2. Download each chunk sequentially (0 to totalChunks-1)
+3. Decrypt each chunk using AES-GCM with the FEK
+4. Combine decrypted chunks into the final file
+
+Each chunk includes a 12-byte nonce prefix and 16-byte authentication tag (28 bytes overhead per chunk).
 
 ### 4 • Sharing
 
@@ -102,11 +137,18 @@ Public endpoints for the recipients of a share:
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
 | GET  | `/shared/:id` | HTML landing page for a share | Public |
-| POST | `/shared/:id/auth` | Provide share password, receive token | Public |
-| GET  | `/shared/:id/download` | Download the shared file | Public |
-| GET  | `/api/shared/:shareId` | JSON metadata for the share | Public |
-| POST | `/api/shared/:shareId/auth` | Same as `/shared/:id/auth` but JSON | Public |
-| GET  | `/api/shared/:shareId/download` | File download via API | Public |
+| GET  | `/api/shares/:shareId/envelope` | Get share envelope (encrypted FEK + metadata) | Public |
+| GET  | `/api/shares/:shareId/metadata` | Get share metadata for chunked download | Download Token |
+| GET  | `/api/shares/:shareId/chunks/:chunkIndex` | Download a specific encrypted chunk | Download Token |
+
+**Share Download Flow:**
+1. Get share envelope from `/api/shares/:shareId/envelope`
+2. Decrypt envelope with share password to obtain FEK and Download Token
+3. Fetch metadata using Download Token in `X-Download-Token` header
+4. Download each chunk sequentially using the Download Token
+5. Decrypt each chunk using AES-GCM with the FEK
+
+The Download Token is cryptographically bound to the share via AAD (Additional Authenticated Data), preventing token reuse across different shares.
 
 ### 5 • File Keys (Encryption Management)
 

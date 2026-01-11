@@ -1,5 +1,17 @@
+/**
+ * Share Access UI with Chunked Download Support
+ * 
+ * Handles accessing shared files with password-based decryption
+ * and chunked download for efficient, resumable downloads.
+ */
+
 import { shareCrypto } from './share-crypto';
 import { showError } from '../ui/messages';
+import { 
+  downloadSharedFileChunked, 
+  triggerBrowserDownload,
+  StreamingDownloadResult 
+} from '../files/streaming-download';
 
 interface ShareEnvelope {
   share_id: string;
@@ -150,44 +162,54 @@ export class ShareAccessUI {
         throw new Error('Download token not available');
       }
 
-      // Request download with Download Token in header
-      const response = await fetch(`/api/shares/${this.shareId}/download`, {
-        headers: {
-          'X-Download-Token': this.downloadToken
+      // Use chunked download with progress tracking
+      const result: StreamingDownloadResult = await downloadSharedFileChunked(
+        this.shareId,
+        fek,
+        this.downloadToken,
+        {
+          showProgressUI: true,
+          onProgress: (progress) => {
+            // Update status with progress info
+            if (statusDiv && progress.stage === 'downloading') {
+              const percentage = Math.round(progress.percentage);
+              statusDiv.textContent = `Downloading... ${percentage}%`;
+              statusDiv.className = '';
+            } else if (progress.stage === 'error') {
+              console.error('Download error:', progress.error);
+            }
+          },
         }
-      });
-      
-      if (!response.ok) {
-        if (response.status === 403) {
+      );
+
+      if (!result.success) {
+        if (result.error?.includes('403') || result.error?.includes('invalid')) {
           throw new Error('Download token invalid or share has been revoked');
         }
-        throw new Error('Download failed');
+        throw new Error(result.error || 'Download failed');
       }
 
-      // Get encrypted file data as binary stream
-      const encryptedArrayBuffer = await response.arrayBuffer();
-      const encryptedData = new Uint8Array(encryptedArrayBuffer);
+      if (!result.data) {
+        throw new Error('Download completed but data is missing');
+      }
+
+      // Use the decrypted filename from the result, or fall back to the one we already have
+      const downloadFilename = result.filename || filename;
       
-      // Decrypt content using FEK
-      const decryptedContent = await shareCrypto.decryptFileData(encryptedData, fek);
+      // Trigger browser download
+      triggerBrowserDownload(result.data, downloadFilename);
       
-      // Trigger download (create new Uint8Array to ensure proper ArrayBuffer type)
-      const downloadData = new Uint8Array(decryptedContent);
-      const blob = new Blob([downloadData], { type: 'application/octet-stream' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      
-      if (statusDiv) statusDiv.textContent = 'Download complete!';
+      if (statusDiv) {
+        statusDiv.textContent = 'Download complete!';
+        statusDiv.className = 'success-message';
+      }
 
     } catch (error) {
       console.error('Download error:', error);
-      if (statusDiv) statusDiv.textContent = 'Download failed.';
+      if (statusDiv) {
+        statusDiv.textContent = error instanceof Error ? error.message : 'Download failed.';
+        statusDiv.className = 'error-message';
+      }
     }
   }
 

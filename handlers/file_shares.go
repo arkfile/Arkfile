@@ -886,8 +886,10 @@ func DownloadShareChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
 	}
 
-	// Check if max accesses limit has been reached (only count on first chunk to avoid over-counting)
-	if share.MaxAccesses.Valid && share.AccessCount >= int(share.MaxAccesses.Int64) {
+	// Check if max accesses limit has been reached (only block NEW downloads on chunk 0)
+	// For chunks 1+, allow the download to continue even if limit was just reached
+	// This ensures in-progress downloads can complete all chunks
+	if chunkIndex == 0 && share.MaxAccesses.Valid && share.AccessCount >= int(share.MaxAccesses.Int64) {
 		logging.WarningLogger.Printf("Chunk download attempt on exhausted share: share_id=%s", shareID[:8])
 		return echo.NewHTTPError(http.StatusForbidden, "Download limit reached")
 	}
@@ -938,45 +940,24 @@ func DownloadShareChunk(c echo.Context) error {
 	}
 
 	// Increment access count only on first chunk download
+	// NOTE: We do NOT auto-revoke here because that would block subsequent chunks
+	// for the user who just started downloading. The access_count check above
+	// (only applied to chunk 0) is sufficient to prevent new downloads.
 	if chunkIndex == 0 {
-		tx, err := database.DB.Begin()
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to begin transaction: %v", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
-		}
-		defer tx.Rollback()
-
-		var newAccessCount int
-		err = tx.QueryRow(`
+		_, err = database.DB.Exec(`
 			UPDATE file_share_keys 
 			SET access_count = access_count + 1 
-			WHERE share_id = ? 
-			RETURNING access_count
-		`, shareID).Scan(&newAccessCount)
+			WHERE share_id = ?
+		`, shareID)
 
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to increment access count: %v", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
 		}
 
-		// Check if we've reached max_accesses and auto-revoke if so
-		if share.MaxAccesses.Valid && newAccessCount >= int(share.MaxAccesses.Int64) {
-			_, err = tx.Exec(`
-				UPDATE file_share_keys 
-				SET revoked_at = CURRENT_TIMESTAMP, revoked_reason = ? 
-				WHERE share_id = ?
-			`, "max_downloads_reached", shareID)
-
-			if err != nil {
-				logging.ErrorLogger.Printf("Failed to auto-revoke share: %v", err)
-			} else {
-				logging.InfoLogger.Printf("Share auto-revoked (max downloads): share_id=%s", shareID[:8])
-			}
-		}
-
-		if err = tx.Commit(); err != nil {
-			logging.ErrorLogger.Printf("Failed to commit transaction: %v", err)
-			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+		// Log if this was the last allowed download
+		if share.MaxAccesses.Valid && share.AccessCount+1 >= int(share.MaxAccesses.Int64) {
+			logging.InfoLogger.Printf("Share exhausted (max downloads reached): share_id=%s", shareID[:8])
 		}
 	}
 
