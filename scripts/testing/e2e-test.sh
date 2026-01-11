@@ -920,9 +920,8 @@ phase_9_share_operations() {
         
     if [ $enc_exit_code -eq 0 ]; then
         record_test "Share file encryption" "PASS"
-        # Extract encrypted FEK from output
-        encrypted_fek=$(echo "$enc_output" | grep "Encrypted FEK:" | awk '{print $3}')
-        info "Encrypted FEK: ${encrypted_fek:0:32}..."
+        # Note: encrypted_fek will be obtained from server response after upload
+        info "File encrypted successfully"
     else
         record_test "Share file encryption" "FAIL"
         error "Failed to encrypt share file"
@@ -997,6 +996,38 @@ EOF
         record_test "Share file upload" "FAIL"
         error "Upload command failed"
         echo "$upload_output"
+        return 1
+    fi
+    
+    # Fetch encrypted_fek from server's file metadata
+    section "Fetching encrypted FEK from server"
+    local metadata_fetch_output
+    local metadata_fetch_exit_code
+    
+    safe_exec metadata_fetch_output metadata_fetch_exit_code \
+        $BUILD_DIR/arkfile-client \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        get-file-metadata \
+        --file-id "$share_file_id" \
+        --json
+        
+    if [ $metadata_fetch_exit_code -eq 0 ]; then
+        record_test "Fetch file metadata" "PASS"
+        # Extract encrypted_fek from JSON response
+        encrypted_fek=$(echo "$metadata_fetch_output" | grep -o '"encrypted_fek"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"encrypted_fek"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        if [ -n "$encrypted_fek" ]; then
+            info "Encrypted FEK: ${encrypted_fek:0:32}..."
+        else
+            record_test "Fetch file metadata" "FAIL"
+            error "Could not extract encrypted_fek from metadata response"
+            echo "$metadata_fetch_output"
+            return 1
+        fi
+    else
+        record_test "Fetch file metadata" "FAIL"
+        error "Failed to fetch file metadata"
+        echo "$metadata_fetch_output"
         return 1
     fi
     

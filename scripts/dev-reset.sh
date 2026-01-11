@@ -257,6 +257,14 @@ if [ -d "$ARKFILE_DIR" ]; then
 else
     print_status "WARNING" "Arkfile directory not found, skipping data destruction"
 fi
+
+# Delete E2E test cached data (stale TOTP secrets, tokens, etc.)
+# This is stored in /tmp and must be cleaned when the database is reset
+if [ -d "/tmp/arkfile-e2e-test-data" ]; then
+    print_status "INFO" "Nuking E2E test cached data..."
+    rm -rf /tmp/arkfile-e2e-test-data 2>/dev/null || true
+    print_status "SUCCESS" "E2E test cache destroyed"
+fi
 echo
 
 # Step 3: Build application in user directory

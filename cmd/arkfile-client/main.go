@@ -52,6 +52,7 @@ COMMANDS:
     share         Manage file shares (create, list, delete)
     download-share Download a shared file
     list-files    List available files (encrypted metadata)
+    get-file-metadata  Get metadata for a specific file (includes encrypted_fek)
     logout        Logout and clear session
     agent         Manage the agent (start, stop, status)
     version       Show version information
@@ -257,6 +258,11 @@ func main() {
 	case "list-files":
 		if err := handleListFilesCommand(client, config, args); err != nil {
 			logError("List files failed: %v", err)
+			os.Exit(1)
+		}
+	case "get-file-metadata":
+		if err := handleGetFileMetadataCommand(client, config, args); err != nil {
+			logError("Get file metadata failed: %v", err)
 			os.Exit(1)
 		}
 	case "logout":
@@ -1789,6 +1795,116 @@ EXAMPLES:
 
 	fmt.Printf("\nNote: Metadata is encrypted. Use 'cryptocli decrypt-metadata' to decrypt filenames.\n")
 	fmt.Printf("Use --json flag to get raw metadata for decryption.\n")
+
+	return nil
+}
+
+// handleGetFileMetadataCommand fetches metadata for a specific file
+func handleGetFileMetadataCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+	fs := flag.NewFlagSet("get-file-metadata", flag.ExitOnError)
+	var (
+		fileID = fs.String("file-id", "", "File ID to get metadata for (required)")
+		asJSON = fs.Bool("json", false, "Output as raw JSON")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-client get-file-metadata [FLAGS]
+
+Get encrypted metadata for a specific file, including encrypted_fek.
+This is useful for share creation workflows.
+
+FLAGS:
+    --file-id ID    File ID to get metadata for (required)
+    --json          Output as raw JSON
+    --help          Show this help message
+
+EXAMPLES:
+    arkfile-client get-file-metadata --file-id "abc123..."
+    arkfile-client get-file-metadata --file-id "abc123..." --json
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *fileID == "" {
+		return fmt.Errorf("file-id is required")
+	}
+
+	// Load session
+	session, err := loadAuthSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in (use 'arkfile-client login'): %w", err)
+	}
+
+	// Check if session is expired
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("session expired, please login again")
+	}
+
+	// Fetch file metadata
+	endpoint := fmt.Sprintf("/api/files/%s/meta", *fileID)
+	url := client.baseURL + endpoint
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	if client.verbose {
+		logVerbose("Making GET request to %s", url)
+	}
+
+	httpResp, err := client.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	responseData, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if client.verbose {
+		logVerbose("Response status: %d", httpResp.StatusCode)
+		logVerbose("Raw response body: %s", string(responseData))
+	}
+
+	if httpResp.StatusCode != 200 {
+		return fmt.Errorf("server returned status %d: %s", httpResp.StatusCode, string(responseData))
+	}
+
+	// If --json flag is set, output the raw JSON
+	if *asJSON {
+		fmt.Println(string(responseData))
+		return nil
+	}
+
+	// Parse and display human-readable output
+	var fileMeta ServerFileInfo
+	if err := json.Unmarshal(responseData, &fileMeta); err != nil {
+		return fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	fmt.Printf("File Metadata for: %s\n", *fileID)
+	fmt.Println("----------------------------------------")
+	fmt.Printf("File ID:           %s\n", fileMeta.FileID)
+	fmt.Printf("Storage ID:        %s\n", fileMeta.StorageID)
+	fmt.Printf("Size:              %s (%d bytes)\n", fileMeta.SizeReadable, fileMeta.SizeBytes)
+	fmt.Printf("Upload Date:       %s\n", fileMeta.UploadDate)
+	fmt.Printf("Password Type:     %s\n", fileMeta.PasswordType)
+	fmt.Printf("Password Hint:     %s\n", fileMeta.PasswordHint)
+	fmt.Println("----------------------------------------")
+	fmt.Printf("Encrypted FEK:     %s\n", fileMeta.EncryptedFEK)
+	fmt.Printf("Encrypted Filename: %s\n", fileMeta.EncryptedFilename)
+	fmt.Printf("Filename Nonce:    %s\n", fileMeta.FilenameNonce)
+	fmt.Printf("Encrypted SHA256:  %s\n", fileMeta.EncryptedSHA256)
+	fmt.Printf("SHA256 Nonce:      %s\n", fileMeta.SHA256Nonce)
 
 	return nil
 }
