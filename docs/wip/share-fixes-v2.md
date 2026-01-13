@@ -3369,3 +3369,211 @@ I've implemented comprehensive Phase 9 share operations tests in `scripts/testin
 - Full cleanup of temporary files
 
 ---
+
+# ADDITIONAL FIXES/UPDATES REQUIRED: JAN 13, 2026 - OPUS 4.5
+
+## Comprehensive Implementation Plan: Completing the Unified Share System Refactor
+
+Based on my analysis of the codebase, here's the complete plan to align cryptocli with the unified share system and clean up deprecated code.
+
+---
+
+## Current State Summary
+
+### What Exists in cryptocli (cmd/cryptocli/main.go)
+
+| Command | Status | Notes |
+|---------|--------|-------|
+| `encrypt-password` | **DEPRECATED** | Direct password encryption, no FEK - REMOVE |
+| `decrypt-password` | **DEPRECATED** | Direct password decryption - REMOVE |
+| `encrypt-share-key` | **DEPRECATED** | No AAD binding - REMOVE |
+| `decrypt-share-key` | **DEPRECATED** | No AAD binding - REMOVE |
+| `encrypt-metadata` | ✅ Keep | Works correctly |
+| `decrypt-metadata` | ✅ Keep | Works correctly |
+| `encrypt-fek` | ✅ Keep | For Owner Envelope |
+| `decrypt-fek` | ✅ Keep | For Owner Envelope |
+| `decrypt-file-key` | ✅ Keep | Decrypt with raw FEK |
+| `generate-share-id` | ✅ Keep | Works correctly |
+| `generate-download-token` | ✅ Keep | Works correctly |
+| `create-share-envelope` | ✅ Keep | Has AAD binding |
+| `decrypt-share-envelope` | ✅ Keep | Has AAD binding |
+
+### What's Missing (Critical Gaps)
+
+1. **`generate-fek`** - Generate a random 32-byte FEK
+2. **`encrypt-file-key`** - Encrypt file WITH a FEK (the critical missing piece!)
+3. **`encrypt-file-fek`** - Combined workflow: generate FEK, encrypt file, encrypt FEK
+
+---
+
+## Implementation Plan
+
+### Phase 1: Add Missing Commands to cryptocli
+
+#### 1.1 Add `generate-fek` Command
+```bash
+cryptocli generate-fek [--format hex|base64]
+```
+- Generate cryptographically secure 32-byte FEK
+- Output in hex (default) or base64
+
+#### 1.2 Add `encrypt-file-key` Command (CRITICAL)
+```bash
+cryptocli encrypt-file-key \
+    --file input.bin \
+    --fek <hex> \
+    --output output.enc
+```
+- Encrypt file using raw FEK (not password-derived)
+- Create envelope header (version 0x02 for FEK-based encryption)
+- This is the inverse of existing `decrypt-file-key`
+
+#### 1.3 Add `encrypt-file-fek` Command (Convenience)
+```bash
+cryptocli encrypt-file-fek \
+    --file input.bin \
+    --username alice \
+    --output output.enc
+```
+- Complete FEK-based encryption workflow in one command
+- Generates FEK, encrypts file, encrypts FEK with password
+- Outputs JSON with all needed values
+
+### Phase 2: Add Crypto Layer Functions
+
+In `crypto/file_operations.go`, add:
+
+#### 2.1 `CreateFEKEnvelope()` 
+```go
+func CreateFEKEnvelope() []byte {
+    envelope := make([]byte, 2)
+    envelope[0] = 0x02 // Version 2 - FEK-based encryption
+    envelope[1] = 0x00 // Reserved
+    return envelope
+}
+```
+
+#### 2.2 `EncryptFileWithKey()`
+```go
+func EncryptFileWithKey(data []byte, key []byte) ([]byte, error)
+```
+- Encrypt file data using raw FEK
+- Prepend FEK envelope (version 0x02)
+
+#### 2.3 `EncryptFileToPathWithKey()`
+```go
+func EncryptFileToPathWithKey(inputPath, outputPath string, key []byte) error
+```
+- File-based wrapper for `EncryptFileWithKey`
+
+### Phase 3: Remove Deprecated Commands
+
+Remove from cryptocli:
+1. `encrypt-password` - Direct password encryption without FEK
+2. `decrypt-password` - Direct password decryption
+3. `encrypt-share-key` - No AAD binding
+4. `decrypt-share-key` - No AAD binding
+
+Also remove from crypto/file_operations.go:
+1. `EncryptFileWithPassword()` - No longer needed
+2. `DecryptFileWithPassword()` - No longer needed
+3. `EncryptFileToPath()` - Password-based, deprecated
+4. `DecryptFileFromPath()` - Password-based, deprecated
+
+### Phase 4: Update e2e-test.sh
+
+The current e2e-test.sh uses deprecated commands. Update Phase 8 to use:
+
+**Before (deprecated):**
+```bash
+cryptocli encrypt-password --file test.bin --username alice --key-type account
+```
+
+**After (FEK-based):**
+```bash
+# Generate FEK
+FEK=$(cryptocli generate-fek --format hex | grep "FEK" | awk '{print $3}')
+
+# Encrypt file with FEK
+cryptocli encrypt-file-key --file test.bin --fek "$FEK" --output test.bin.enc
+
+# Encrypt FEK with password for storage
+cryptocli encrypt-fek --fek "$FEK" --username alice
+```
+
+Or use the convenience command:
+```bash
+cryptocli encrypt-file-fek --file test.bin --username alice --output test.bin.enc
+```
+
+---
+
+## Files to Modify
+
+1. **`crypto/file_operations.go`**
+   - Add `CreateFEKEnvelope()`
+   - Add `EncryptFileWithKey()`
+   - Add `EncryptFileToPathWithKey()`
+   - Remove deprecated password-based functions
+
+2. **`cmd/cryptocli/main.go`**
+   - Add `generate-fek` command
+   - Add `encrypt-file-key` command
+   - Add `encrypt-file-fek` command
+   - Remove `encrypt-password` command
+   - Remove `decrypt-password` command
+   - Remove `encrypt-share-key` command
+   - Remove `decrypt-share-key` command
+   - Update help text
+
+3. **`scripts/testing/e2e-test.sh`**
+   - Update Phase 8 to use FEK-based encryption
+   - Update Phase 9 share operations if needed
+
+---
+
+## Command Reference After Changes
+
+### File Encryption Commands
+| Command | Purpose |
+|---------|---------|
+| `generate-fek` | Generate random 32-byte FEK |
+| `encrypt-file-key` | Encrypt file with raw FEK |
+| `decrypt-file-key` | Decrypt file with raw FEK |
+| `encrypt-file-fek` | Full FEK workflow (convenience) |
+| `encrypt-fek` | Encrypt FEK with password (Owner Envelope) |
+| `decrypt-fek` | Decrypt FEK with password |
+
+### Metadata Commands
+| Command | Purpose |
+|---------|---------|
+| `encrypt-metadata` | Encrypt filename/SHA256 |
+| `decrypt-metadata` | Decrypt filename/SHA256 |
+
+### Share Commands
+| Command | Purpose |
+|---------|---------|
+| `generate-share-id` | Generate 43-char share ID |
+| `generate-download-token` | Generate token + hash |
+| `create-share-envelope` | Create AAD-bound share envelope |
+| `decrypt-share-envelope` | Decrypt with AAD verification |
+
+### Utility Commands
+| Command | Purpose |
+|---------|---------|
+| `hash` | Calculate SHA-256 |
+| `generate-key` | Generate random key |
+| `generate-test-file` | Generate test files |
+
+---
+
+## Implementation Order
+
+1. **First**: Add new functions to `crypto/file_operations.go`
+2. **Second**: Add new commands to `cmd/cryptocli/main.go`
+3. **Third**: Remove deprecated commands from cryptocli
+4. **Fourth**: Remove deprecated functions from crypto layer
+5. **Fifth**: Update `e2e-test.sh` to use new commands
+6. **Sixth**: Test the complete flow
+
+---
