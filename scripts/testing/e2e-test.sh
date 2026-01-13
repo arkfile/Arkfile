@@ -607,6 +607,12 @@ phase_7_user_login() {
     success "User login phase complete"
 }
 
+# Global variables for file reuse between phases
+UPLOADED_FILE_ID=""
+UPLOADED_FILE_SHA256=""
+UPLOADED_FILE_SIZE=""
+UPLOADED_FILE_ENC_FEK=""
+
 # Phase 8: File Operations
 phase_8_file_operations() {
     phase "8: FILE OPERATIONS"
@@ -631,10 +637,13 @@ phase_8_file_operations() {
     if [ $gen_exit_code -eq 0 ]; then
         record_test "Test file creation" "PASS"
         
-        # Extract SHA256 from output
+        # Extract SHA256 from output and save to global for Phase 9
         local sha256_hash
         sha256_hash=$(echo "$gen_output" | grep "SHA-256:" | awk '{print $2}')
+        UPLOADED_FILE_SHA256="$sha256_hash"
+        UPLOADED_FILE_SIZE=$(stat -c%s "$test_file" 2>/dev/null || stat -f%z "$test_file" 2>/dev/null)
         info "File SHA-256: $sha256_hash"
+        info "File size: $UPLOADED_FILE_SIZE bytes"
     else
         record_test "Test file creation" "FAIL"
         error "Failed to generate test file"
@@ -738,9 +747,10 @@ EOF
         if echo "$upload_output" | grep -q "Upload completed successfully"; then
             record_test "File upload" "PASS"
             
-            # Extract File ID for verification
+            # Extract File ID and save to global for Phase 9
             local file_id
             file_id=$(echo "$upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+            UPLOADED_FILE_ID="$file_id"
             info "Uploaded File ID: $file_id"
             
             if [ -z "$file_id" ]; then
@@ -853,7 +863,34 @@ EOF
         error "SHA256 mismatch! Original: $original_sum_check, Decrypted: $decrypted_sum"
     fi
     
-    # Cleanup
+    # Fetch encrypted_fek for Phase 9 share operations
+    section "Fetching encrypted FEK for share operations"
+    local metadata_fetch_output
+    local metadata_fetch_exit_code
+    
+    safe_exec metadata_fetch_output metadata_fetch_exit_code \
+        $BUILD_DIR/arkfile-client \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        get-file-metadata \
+        --file-id "$UPLOADED_FILE_ID" \
+        --json
+        
+    if [ $metadata_fetch_exit_code -eq 0 ]; then
+        UPLOADED_FILE_ENC_FEK=$(echo "$metadata_fetch_output" | grep -o '"encrypted_fek"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"encrypted_fek"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+        if [ -n "$UPLOADED_FILE_ENC_FEK" ]; then
+            record_test "Fetch encrypted FEK for sharing" "PASS"
+            info "Encrypted FEK saved for Phase 9: ${UPLOADED_FILE_ENC_FEK:0:32}..."
+        else
+            record_test "Fetch encrypted FEK for sharing" "FAIL"
+            error "Could not extract encrypted_fek"
+        fi
+    else
+        record_test "Fetch encrypted FEK for sharing" "FAIL"
+        error "Failed to fetch file metadata for sharing"
+    fi
+    
+    # Cleanup local files only (keep file on server for Phase 9)
     rm -f "$test_file" "$test_file_enc" "$metadata_file" "$downloaded_file" "$downloaded_meta" "$decrypted_file"
     
     success "File operations phase complete"
@@ -863,173 +900,32 @@ EOF
 phase_9_share_operations() {
     phase "9: SHARE OPERATIONS"
     
-    section "Testing share operations"
+    section "Testing share operations - using file from Phase 8"
     
     # Share password (distinct from user account password)
     # Must meet: 18+ chars, uppercase, lowercase, number, special, 60+ bits entropy
     local SHARE_PASSWORD="SecureFileShare#2026!TestEnv"
     
-    local test_file="$TEST_DATA_DIR/share_test_file.bin"
-    local test_file_enc="${test_file}.enc"
-    local metadata_file="$TEST_DATA_DIR/share_metadata.json"
-    local share_file_id=""
+    # Use file from Phase 8 (no new file creation/upload needed)
+    local share_file_id="$UPLOADED_FILE_ID"
+    local original_sha256="$UPLOADED_FILE_SHA256"
+    local original_size="$UPLOADED_FILE_SIZE"
+    local encrypted_fek="$UPLOADED_FILE_ENC_FEK"
     local share_id=""
-    local original_sha256=""
-    local original_size=""
-    local encrypted_fek=""
     
-    # =========================================================================
-    # 9.1: Create a file to share
-    # =========================================================================
-    section "9.1: Creating test file for sharing"
-    
-    # Generate a smaller test file for share testing (5MB)
-    local gen_output
-    local gen_exit_code
-    
-    safe_exec gen_output gen_exit_code \
-        $BUILD_DIR/cryptocli generate-test-file \
-        --filename "$test_file" \
-        --size 5242880 \
-        --pattern deterministic
-        
-    if [ $gen_exit_code -eq 0 ]; then
-        record_test "Share test file creation" "PASS"
-        original_sha256=$(echo "$gen_output" | grep "SHA-256:" | awk '{print $2}')
-        original_size=$(stat -c%s "$test_file" 2>/dev/null || stat -f%z "$test_file" 2>/dev/null)
-        info "File SHA-256: $original_sha256"
-        info "File size: $original_size bytes"
-    else
-        record_test "Share test file creation" "FAIL"
-        error "Failed to generate share test file"
-        echo "$gen_output"
+    # Verify we have the required data from Phase 8
+    if [ -z "$share_file_id" ] || [ -z "$encrypted_fek" ]; then
+        record_test "Phase 8 file data available" "FAIL"
+        error "Missing file data from Phase 8. File ID: $share_file_id, Encrypted FEK: ${encrypted_fek:0:16}..."
         return 1
     fi
     
-    # Encrypt file
-    section "Encrypting file for sharing"
-    local enc_output
-    local enc_exit_code
-    
-    safe_exec enc_output enc_exit_code \
-        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli encrypt-password \
-        --file '$test_file' \
-        --username '$TEST_USERNAME' \
-        --key-type account \
-        --output '$test_file_enc'"
-        
-    if [ $enc_exit_code -eq 0 ]; then
-        record_test "Share file encryption" "PASS"
-        # Note: encrypted_fek will be obtained from server response after upload
-        info "File encrypted successfully"
-    else
-        record_test "Share file encryption" "FAIL"
-        error "Failed to encrypt share file"
-        echo "$enc_output"
-        return 1
-    fi
-    
-    # Encrypt metadata
-    section "Encrypting metadata for sharing"
-    local metadata_output
-    local meta_exit_code
-    
-    safe_exec metadata_output meta_exit_code \
-        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli encrypt-metadata \
-        --filename 'share_test_file.bin' \
-        --sha256sum '$original_sha256' \
-        --username '$TEST_USERNAME' \
-        --password-source stdin \
-        --output-format separated"
-        
-    if [ $meta_exit_code -eq 0 ]; then
-        record_test "Share metadata encryption" "PASS"
-        
-        local filename_nonce=$(echo "$metadata_output" | grep "Filename Nonce:" | awk '{print $3}')
-        local enc_filename=$(echo "$metadata_output" | grep "Encrypted Filename:" | awk '{print $3}')
-        local sha256_nonce=$(echo "$metadata_output" | grep "SHA256 Nonce:" | awk '{print $3}')
-        local enc_sha256=$(echo "$metadata_output" | grep "Encrypted SHA256:" | awk '{print $3}')
-        
-        cat <<EOF > "$metadata_file"
-{
-    "encrypted_filename": "$enc_filename",
-    "filename_nonce": "$filename_nonce",
-    "encrypted_sha256sum": "$enc_sha256",
-    "sha256sum_nonce": "$sha256_nonce",
-    "encrypted_fek": "$encrypted_fek",
-    "password_type": "account",
-    "password_hint": "share-test"
-}
-EOF
-    else
-        record_test "Share metadata encryption" "FAIL"
-        error "Failed to encrypt share metadata"
-        echo "$metadata_output"
-        return 1
-    fi
-    
-    # Upload file
-    section "Uploading file for sharing"
-    local upload_output
-    local upload_exit_code
-    
-    safe_exec upload_output upload_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        upload \
-        --file "$test_file_enc" \
-        --metadata "$metadata_file"
-        
-    if [ $upload_exit_code -eq 0 ]; then
-        if echo "$upload_output" | grep -q "Upload completed successfully"; then
-            record_test "Share file upload" "PASS"
-            share_file_id=$(echo "$upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
-            info "Uploaded File ID: $share_file_id"
-        else
-            record_test "Share file upload" "FAIL"
-            error "Upload failed - unexpected output"
-            echo "$upload_output"
-            return 1
-        fi
-    else
-        record_test "Share file upload" "FAIL"
-        error "Upload command failed"
-        echo "$upload_output"
-        return 1
-    fi
-    
-    # Fetch encrypted_fek from server's file metadata
-    section "Fetching encrypted FEK from server"
-    local metadata_fetch_output
-    local metadata_fetch_exit_code
-    
-    safe_exec metadata_fetch_output metadata_fetch_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        get-file-metadata \
-        --file-id "$share_file_id" \
-        --json
-        
-    if [ $metadata_fetch_exit_code -eq 0 ]; then
-        record_test "Fetch file metadata" "PASS"
-        # Extract encrypted_fek from JSON response
-        encrypted_fek=$(echo "$metadata_fetch_output" | grep -o '"encrypted_fek"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"encrypted_fek"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-        if [ -n "$encrypted_fek" ]; then
-            info "Encrypted FEK: ${encrypted_fek:0:32}..."
-        else
-            record_test "Fetch file metadata" "FAIL"
-            error "Could not extract encrypted_fek from metadata response"
-            echo "$metadata_fetch_output"
-            return 1
-        fi
-    else
-        record_test "Fetch file metadata" "FAIL"
-        error "Failed to fetch file metadata"
-        echo "$metadata_fetch_output"
-        return 1
-    fi
+    record_test "Phase 8 file data available" "PASS"
+    info "Using file from Phase 8:"
+    info "  File ID: $share_file_id"
+    info "  SHA256: $original_sha256"
+    info "  Size: $original_size bytes"
+    info "  Encrypted FEK: ${encrypted_fek:0:32}..."
     
     # =========================================================================
     # 9.2: Decrypt FEK and create share envelope
