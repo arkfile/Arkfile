@@ -300,10 +300,6 @@ if [ $attempt -eq $max_attempts ]; then
     exit 1
 fi
 
-# Database schema will be handled automatically by arkfile application
-echo "Database schema will be created automatically by arkfile application..."
-echo "  Using unified schema approach - no separate database setup needed"
-
 echo "Starting Arkfile application..."
 sudo systemctl start arkfile
 sudo systemctl enable arkfile

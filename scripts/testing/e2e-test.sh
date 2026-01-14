@@ -650,21 +650,29 @@ phase_8_file_operations() {
         echo "$gen_output"
     fi
 
-    # 2. Encrypt File
-    section "Encrypting file with cryptocli"
-    # Note: encrypt-password uses the account password directly
+    # 2. Encrypt File using FEK-based workflow (FEK never exposed)
+    section "Encrypting file with cryptocli (FEK never exposed)"
     local enc_output
     local enc_exit_code
     
     safe_exec enc_output enc_exit_code \
-        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli encrypt-password \
+        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli encrypt-file \
         --file '$test_file' \
         --username '$TEST_USERNAME' \
         --key-type account \
-        --output '$test_file_enc'"
+        --output '$test_file_enc' \
+        --password-source stdin"
         
     if [ $enc_exit_code -eq 0 ]; then
-        record_test "File encryption" "PASS"
+        record_test "File encryption (FEK never exposed)" "PASS"
+        
+        # Extract encrypted_fek from JSON output (FEK is never exposed)
+        local encrypted_fek=$(echo "$enc_output" | grep '"encrypted_fek"' | sed 's/.*"encrypted_fek": "\([^"]*\)".*/\1/')
+        
+        # Save for Phase 9 share operations
+        UPLOADED_FILE_ENC_FEK="$encrypted_fek"
+        
+        info "Encrypted FEK (Owner Envelope): ${encrypted_fek:0:32}..."
         
         # Verify encryption actually changed the file (Confidentiality Check)
         local enc_hash
@@ -680,7 +688,7 @@ phase_8_file_operations() {
             exit 1
         fi
     else
-        record_test "File encryption" "FAIL"
+        record_test "File encryption (FEK workflow)" "FAIL"
         error "Failed to encrypt file"
         echo "$enc_output"
     fi
@@ -827,22 +835,33 @@ EOF
         error "Metadata file not found"
     fi
 
-    # 8. Decrypt File
-    section "Decrypting downloaded file"
+    # 8. Decrypt File using encrypted FEK (single command - FEK never exposed)
+    section "Decrypting downloaded file (FEK never exposed)"
     local decrypted_file="$TEST_DATA_DIR/decrypted.bin"
     local decrypt_output
     local decrypt_exit_code
     
+    # Get the encrypted_fek from the downloaded metadata
+    local downloaded_enc_fek=$(cat "$downloaded_meta" 2>/dev/null | grep -o '"encrypted_fek"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"encrypted_fek"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+    
+    # If not in metadata, use the one we saved during encryption
+    if [ -z "$downloaded_enc_fek" ] || [ "$downloaded_enc_fek" == "" ]; then
+        downloaded_enc_fek="$UPLOADED_FILE_ENC_FEK"
+    fi
+    
     safe_exec decrypt_output decrypt_exit_code \
-        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli decrypt-password \
+        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli decrypt-file \
         --file '$downloaded_file' \
+        --encrypted-fek '$downloaded_enc_fek' \
         --username '$TEST_USERNAME' \
-        --output '$decrypted_file'"
+        --output '$decrypted_file' \
+        --password-source stdin"
         
     if [ $decrypt_exit_code -eq 0 ]; then
-        record_test "File decryption" "PASS"
+        record_test "File decryption (FEK never exposed)" "PASS"
+        info "File decrypted successfully"
     else
-        record_test "File decryption" "FAIL"
+        record_test "File decryption (FEK never exposed)" "FAIL"
         error "Decryption failed"
         echo "$decrypt_output"
     fi
@@ -928,68 +947,40 @@ phase_9_share_operations() {
     info "  Encrypted FEK: ${encrypted_fek:0:32}..."
     
     # =========================================================================
-    # 9.2: Decrypt FEK and create share envelope
+    # 9.2: Create share envelope (FEK never exposed - single command)
     # =========================================================================
-    section "9.2: Creating share envelope"
+    section "9.2: Creating share envelope (FEK never exposed)"
     
-    # Decrypt FEK using owner's password
-    local decrypt_fek_output
-    local decrypt_fek_exit_code
+    # Use create-share command which handles FEK internally
+    # Input: owner password (line 1), share password (line 2)
+    local create_share_crypto_output
+    local create_share_crypto_exit_code
     
-    safe_exec decrypt_fek_output decrypt_fek_exit_code \
-        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli decrypt-fek \
+    safe_exec create_share_crypto_output create_share_crypto_exit_code \
+        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$SHARE_PASSWORD' | $BUILD_DIR/cryptocli create-share \
         --encrypted-fek '$encrypted_fek' \
-        --username '$TEST_USERNAME'"
+        --username '$TEST_USERNAME' \
+        --file-id '$share_file_id' \
+        --password-source stdin"
         
-    if [ $decrypt_fek_exit_code -eq 0 ]; then
-        record_test "FEK decryption for sharing" "PASS"
-        local fek_hex=$(echo "$decrypt_fek_output" | grep "FEK (hex):" | awk '{print $3}')
-        info "Decrypted FEK: ${fek_hex:0:16}..."
-    else
-        record_test "FEK decryption for sharing" "FAIL"
-        error "Failed to decrypt FEK"
-        echo "$decrypt_fek_output"
-        return 1
-    fi
-    
-    # Generate share ID
-    local share_id_output
-    local share_id_exit_code
-    
-    safe_exec share_id_output share_id_exit_code \
-        $BUILD_DIR/cryptocli generate-share-id
+    if [ $create_share_crypto_exit_code -eq 0 ]; then
+        record_test "Share envelope creation (FEK never exposed)" "PASS"
         
-    if [ $share_id_exit_code -eq 0 ]; then
-        record_test "Share ID generation" "PASS"
-        share_id=$(echo "$share_id_output" | grep "Share ID:" | awk '{print $3}')
-        info "Generated Share ID: $share_id"
-    else
-        record_test "Share ID generation" "FAIL"
-        error "Failed to generate share ID"
-        echo "$share_id_output"
-        return 1
-    fi
-    
-    # Create share envelope with AAD binding
-    local envelope_output
-    local envelope_exit_code
-    
-    safe_exec envelope_output envelope_exit_code \
-        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $BUILD_DIR/cryptocli create-share-envelope \
-        --fek '$fek_hex' \
-        --share-id '$share_id' \
-        --file-id '$share_file_id'"
+        # Extract values from JSON output
+        share_id=$(echo "$create_share_crypto_output" | grep '"share_id"' | sed 's/.*"share_id": "\([^"]*\)".*/\1/')
+        local encrypted_envelope=$(echo "$create_share_crypto_output" | grep '"encrypted_envelope"' | sed 's/.*"encrypted_envelope": "\([^"]*\)".*/\1/')
+        local envelope_salt=$(echo "$create_share_crypto_output" | grep '"salt"' | sed 's/.*"salt": "\([^"]*\)".*/\1/')
+        local download_token=$(echo "$create_share_crypto_output" | grep '"download_token"' | sed 's/.*"download_token": "\([^"]*\)".*/\1/')
+        local download_token_hash=$(echo "$create_share_crypto_output" | grep '"download_token_hash"' | sed 's/.*"download_token_hash": "\([^"]*\)".*/\1/')
         
-    if [ $envelope_exit_code -eq 0 ]; then
-        record_test "Share envelope creation" "PASS"
-        local encrypted_envelope=$(echo "$envelope_output" | grep "Encrypted Envelope:" | awk '{print $3}')
-        local envelope_salt=$(echo "$envelope_output" | grep "Salt:" | awk '{print $2}')
+        info "Share ID: $share_id"
         info "Encrypted Envelope: ${encrypted_envelope:0:32}..."
         info "Salt: ${envelope_salt:0:16}..."
+        info "Download Token: ${download_token:0:16}..."
     else
-        record_test "Share envelope creation" "FAIL"
+        record_test "Share envelope creation (FEK never exposed)" "FAIL"
         error "Failed to create share envelope"
-        echo "$envelope_output"
+        echo "$create_share_crypto_output"
         return 1
     fi
     
@@ -1109,58 +1100,33 @@ phase_9_share_operations() {
     fi
     
     # =========================================================================
-    # 9.6: Decrypt share envelope and file
+    # 9.6: Decrypt share and file (FEK never exposed - single command)
     # =========================================================================
-    section "9.6: Decrypting share envelope and file"
+    section "9.6: Decrypting share and file (FEK never exposed)"
     
-    # Decrypt share envelope to get FEK
-    local decrypt_envelope_output
-    local decrypt_envelope_exit_code
+    local decrypted_share_file="$TEST_DATA_DIR/shared_decrypted.bin"
     
-    safe_exec decrypt_envelope_output decrypt_envelope_exit_code \
-        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $BUILD_DIR/cryptocli decrypt-share-envelope \
-        --encrypted-fek '$encrypted_envelope' \
+    # Use decrypt-share command which handles FEK internally
+    local decrypt_share_output
+    local decrypt_share_exit_code
+    
+    safe_exec decrypt_share_output decrypt_share_exit_code \
+        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $BUILD_DIR/cryptocli decrypt-share \
+        --file '$shared_download_file' \
+        --encrypted-envelope '$encrypted_envelope' \
         --salt '$envelope_salt' \
         --share-id '$share_id' \
-        --file-id '$share_file_id'"
+        --file-id '$share_file_id' \
+        --output '$decrypted_share_file' \
+        --password-source stdin"
         
-    if [ $decrypt_envelope_exit_code -eq 0 ]; then
-        record_test "Share envelope decryption" "PASS"
-        local recovered_fek=$(echo "$decrypt_envelope_output" | grep "FEK (hex):" | awk '{print $3}')
-        info "Recovered FEK: ${recovered_fek:0:16}..."
-        
-        # Verify FEK matches original
-        if [ "$recovered_fek" == "$fek_hex" ]; then
-            record_test "FEK recovery verification" "PASS"
-            info "Recovered FEK matches original"
-        else
-            record_test "FEK recovery verification" "FAIL"
-            error "Recovered FEK does not match original!"
-        fi
+    if [ $decrypt_share_exit_code -eq 0 ]; then
+        record_test "Share decryption (FEK never exposed)" "PASS"
+        info "Shared file decrypted successfully"
     else
-        record_test "Share envelope decryption" "FAIL"
-        error "Failed to decrypt share envelope"
-        echo "$decrypt_envelope_output"
-        return 1
-    fi
-    
-    # Decrypt file using recovered FEK
-    local decrypted_share_file="$TEST_DATA_DIR/shared_decrypted.bin"
-    local decrypt_file_output
-    local decrypt_file_exit_code
-    
-    safe_exec decrypt_file_output decrypt_file_exit_code \
-        $BUILD_DIR/cryptocli decrypt-file-key \
-        --file "$shared_download_file" \
-        --fek "$recovered_fek" \
-        --output "$decrypted_share_file"
-        
-    if [ $decrypt_file_exit_code -eq 0 ]; then
-        record_test "Shared file decryption" "PASS"
-    else
-        record_test "Shared file decryption" "FAIL"
+        record_test "Share decryption (FEK never exposed)" "FAIL"
         error "Failed to decrypt shared file"
-        echo "$decrypt_file_output"
+        echo "$decrypt_share_output"
         return 1
     fi
     

@@ -236,10 +236,27 @@ func VerifyFileIntegrity(filePath string, expectedHash string, expectedSize int6
 	return nil
 }
 
-// CreatePasswordEnvelope creates an envelope header for password-based encryption
-func CreatePasswordEnvelope(keyType string) []byte {
+// =============================================================================
+// ENVELOPE FORMAT (Version 0x01 - Unified FEK-based encryption)
+// =============================================================================
+//
+// All encrypted data uses the same envelope format:
+// [0x01][key_type][nonce (12 bytes)][ciphertext][auth_tag (16 bytes)]
+//
+// Where key_type indicates what password was used to encrypt the FEK:
+//   0x01 = account password
+//   0x02 = custom password
+//   0x03 = share password
+//
+// Files are ALWAYS encrypted with a random FEK, then the FEK is encrypted
+// with the user's password. This enables file sharing without re-encryption.
+// =============================================================================
+
+// CreateEnvelope creates an envelope header for FEK-based encryption
+// keyType: "account", "custom", or "share"
+func CreateEnvelope(keyType string) []byte {
 	envelope := make([]byte, 2)
-	envelope[0] = 0x01 // Version 1 - Password-based Argon2ID encryption
+	envelope[0] = 0x01 // Version 1 - Unified FEK-based encryption
 
 	switch keyType {
 	case "account":
@@ -255,15 +272,15 @@ func CreatePasswordEnvelope(keyType string) []byte {
 	return envelope
 }
 
-// ParsePasswordEnvelope parses a password-based envelope header
-func ParsePasswordEnvelope(envelope []byte) (version byte, keyType string, err error) {
+// ParseEnvelope parses an envelope header and returns the key type
+func ParseEnvelope(envelope []byte) (version byte, keyType string, err error) {
 	if len(envelope) < 2 {
 		return 0, "", fmt.Errorf("envelope too short: need at least 2 bytes, got %d", len(envelope))
 	}
 
 	version = envelope[0]
 	if version != 0x01 {
-		return 0, "", fmt.Errorf("unsupported version: 0x%02x (expected 0x01 for password-based encryption)", version)
+		return 0, "", fmt.Errorf("unsupported envelope version: 0x%02x (expected 0x01)", version)
 	}
 
 	switch envelope[1] {
@@ -280,144 +297,24 @@ func ParsePasswordEnvelope(envelope []byte) (version byte, keyType string, err e
 	return version, keyType, nil
 }
 
-// EncryptFileWithPassword encrypts file data using password-based key derivation
-func EncryptFileWithPassword(data []byte, password []byte, username, keyType string) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, fmt.Errorf("cannot encrypt empty data")
+// =============================================================================
+// FEK (File Encryption Key) OPERATIONS
+// =============================================================================
+
+// GenerateFEK generates a cryptographically secure 32-byte File Encryption Key
+func GenerateFEK() ([]byte, error) {
+	fek := make([]byte, 32)
+	if _, err := rand.Read(fek); err != nil {
+		return nil, fmt.Errorf("failed to generate FEK: %w", err)
 	}
-
-	if len(password) == 0 {
-		return nil, fmt.Errorf("password cannot be empty")
-	}
-
-	if username == "" {
-		return nil, fmt.Errorf("username cannot be empty")
-	}
-
-	// Derive key based on key type
-	var derivedKey []byte
-	switch keyType {
-	case "account":
-		derivedKey = DeriveAccountPasswordKey(password, username)
-	case "custom":
-		derivedKey = DeriveCustomPasswordKey(password, username)
-	case "share":
-		derivedKey = DeriveSharePasswordKey(password, username)
-	default:
-		return nil, fmt.Errorf("unsupported key type: %s (supported: account, custom, share)", keyType)
-	}
-
-	// Create envelope header using password-based envelope function
-	envelope := CreatePasswordEnvelope(keyType)
-
-	// Encrypt the data
-	encryptedData, err := EncryptGCM(data, derivedKey)
-	if err != nil {
-		return nil, fmt.Errorf("encryption failed: %w", err)
-	}
-
-	// Prepend envelope to encrypted data
-	result := make([]byte, len(envelope)+len(encryptedData))
-	copy(result, envelope)
-	copy(result[len(envelope):], encryptedData)
-
-	return result, nil
+	return fek, nil
 }
 
-// DecryptFileWithPassword decrypts file data using password-based key derivation
-func DecryptFileWithPassword(encryptedData []byte, password []byte, username string) ([]byte, string, error) {
-	if len(encryptedData) < 2 {
-		return nil, "", fmt.Errorf("encrypted data too short: need at least 2 bytes for envelope, got %d", len(encryptedData))
-	}
-
-	if len(password) == 0 {
-		return nil, "", fmt.Errorf("password cannot be empty")
-	}
-
-	if username == "" {
-		return nil, "", fmt.Errorf("username cannot be empty")
-	}
-
-	// Parse envelope
-	envelope := encryptedData[:2]
-	ciphertext := encryptedData[2:]
-
-	_, keyType, err := ParsePasswordEnvelope(envelope)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to parse envelope: %w", err)
-	}
-
-	// Derive key based on key type from envelope
-	var derivedKey []byte
-	switch keyType {
-	case "account":
-		derivedKey = DeriveAccountPasswordKey(password, username)
-	case "custom":
-		derivedKey = DeriveCustomPasswordKey(password, username)
-	case "share":
-		derivedKey = DeriveSharePasswordKey(password, username)
-	default:
-		return nil, "", fmt.Errorf("unsupported key type: %s", keyType)
-	}
-
-	// Decrypt the data
-	plaintext, err := DecryptGCM(ciphertext, derivedKey)
-	if err != nil {
-		return nil, "", fmt.Errorf("decryption failed: %w", err)
-	}
-
-	return plaintext, keyType, nil
-}
-
-// EncryptFileToPath encrypts a file using password-based key derivation and writes to disk
-func EncryptFileToPath(inputPath, outputPath string, password []byte, username, keyType string) error {
-	// Read input file
-	inputData, err := os.ReadFile(inputPath)
-	if err != nil {
-		return fmt.Errorf("failed to read input file: %w", err)
-	}
-
-	// Encrypt data
-	encryptedData, err := EncryptFileWithPassword(inputData, password, username, keyType)
-	if err != nil {
-		return fmt.Errorf("encryption failed: %w", err)
-	}
-
-	// Write encrypted data to output file
-	if err := os.WriteFile(outputPath, encryptedData, 0600); err != nil {
-		return fmt.Errorf("failed to write encrypted file: %w", err)
-	}
-
-	return nil
-}
-
-// DecryptFileFromPath decrypts a file using password-based key derivation and writes to disk
-func DecryptFileFromPath(inputPath, outputPath string, password []byte, username string) (string, error) {
-	// Read encrypted file
-	encryptedData, err := os.ReadFile(inputPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read encrypted file: %w", err)
-	}
-
-	// Decrypt data
-	plaintext, keyType, err := DecryptFileWithPassword(encryptedData, password, username)
-	if err != nil {
-		return "", fmt.Errorf("decryption failed: %w", err)
-	}
-
-	// Write decrypted data to output file
-	if err := os.WriteFile(outputPath, plaintext, 0600); err != nil {
-		return "", fmt.Errorf("failed to write decrypted file: %w", err)
-	}
-
-	return keyType, nil
-}
-
-// EncryptFEKWithPassword encrypts a File Encryption Key (FEK) using a key derived from
-// the user's password via Argon2ID.
-func EncryptFEKWithPassword(fek []byte, password []byte, username, keyType string) ([]byte, error) {
-	if len(fek) == 0 {
-		return nil, fmt.Errorf("FEK cannot be empty")
+// EncryptFEK encrypts a File Encryption Key (FEK) using a key derived from
+// the user's password via Argon2ID. This creates the "Owner Envelope".
+func EncryptFEK(fek []byte, password []byte, username, keyType string) ([]byte, error) {
+	if len(fek) != 32 {
+		return nil, fmt.Errorf("FEK must be 32 bytes, got %d", len(fek))
 	}
 	if len(password) == 0 {
 		return nil, fmt.Errorf("password cannot be empty")
@@ -440,7 +337,7 @@ func EncryptFEKWithPassword(fek []byte, password []byte, username, keyType strin
 	}
 
 	// Create envelope header
-	envelope := CreatePasswordEnvelope(keyType)
+	envelope := CreateEnvelope(keyType)
 
 	// Encrypt the FEK
 	encryptedFEK, err := EncryptGCM(fek, derivedKey)
@@ -456,9 +353,9 @@ func EncryptFEKWithPassword(fek []byte, password []byte, username, keyType strin
 	return result, nil
 }
 
-// DecryptFEKWithPassword decrypts a File Encryption Key (FEK) using a key derived from
-// the user's password via Argon2ID. It returns the decrypted FEK and the key type.
-func DecryptFEKWithPassword(encryptedFEK []byte, password []byte, username string) ([]byte, string, error) {
+// DecryptFEK decrypts a File Encryption Key (FEK) using a key derived from
+// the user's password via Argon2ID. Returns the decrypted FEK and the key type.
+func DecryptFEK(encryptedFEK []byte, password []byte, username string) ([]byte, string, error) {
 	if len(encryptedFEK) < 2 {
 		return nil, "", fmt.Errorf("encrypted FEK too short: need at least 2 bytes for envelope, got %d", len(encryptedFEK))
 	}
@@ -473,7 +370,7 @@ func DecryptFEKWithPassword(encryptedFEK []byte, password []byte, username strin
 	envelope := encryptedFEK[:2]
 	ciphertext := encryptedFEK[2:]
 
-	_, keyType, err := ParsePasswordEnvelope(envelope)
+	_, keyType, err := ParseEnvelope(envelope)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to parse FEK envelope: %w", err)
 	}
@@ -500,6 +397,162 @@ func DecryptFEKWithPassword(encryptedFEK []byte, password []byte, username strin
 	return fek, keyType, nil
 }
 
+// =============================================================================
+// FILE ENCRYPTION/DECRYPTION (FEK-based only)
+// =============================================================================
+
+// EncryptFile encrypts file data using a FEK (File Encryption Key)
+// The keyType parameter indicates what password type will be used to encrypt the FEK
+func EncryptFile(data []byte, fek []byte, keyType string) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("cannot encrypt empty data")
+	}
+
+	if len(fek) != 32 {
+		return nil, fmt.Errorf("FEK must be 32 bytes for AES-256, got %d", len(fek))
+	}
+
+	// Create envelope header
+	envelope := CreateEnvelope(keyType)
+
+	// Encrypt the data with FEK
+	encryptedData, err := EncryptGCM(data, fek)
+	if err != nil {
+		return nil, fmt.Errorf("encryption failed: %w", err)
+	}
+
+	// Prepend envelope to encrypted data
+	result := make([]byte, len(envelope)+len(encryptedData))
+	copy(result, envelope)
+	copy(result[len(envelope):], encryptedData)
+
+	return result, nil
+}
+
+// DecryptFile decrypts file data using a FEK (File Encryption Key)
+func DecryptFile(encryptedData []byte, fek []byte) ([]byte, error) {
+	if len(encryptedData) < 2 {
+		return nil, fmt.Errorf("encrypted data too short: need at least 2 bytes for envelope, got %d", len(encryptedData))
+	}
+
+	if len(fek) != 32 {
+		return nil, fmt.Errorf("FEK must be 32 bytes, got %d", len(fek))
+	}
+
+	// Parse envelope (validate format)
+	envelope := encryptedData[:2]
+	ciphertext := encryptedData[2:]
+
+	_, _, err := ParseEnvelope(envelope)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse envelope: %w", err)
+	}
+
+	// Decrypt the data using the FEK
+	plaintext, err := DecryptGCM(ciphertext, fek)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	}
+
+	return plaintext, nil
+}
+
+// EncryptFileToPath encrypts a file using a FEK and writes to disk
+func EncryptFileToPath(inputPath, outputPath string, fek []byte, keyType string) error {
+	// Read input file
+	inputData, err := os.ReadFile(inputPath)
+	if err != nil {
+		return fmt.Errorf("failed to read input file: %w", err)
+	}
+
+	// Encrypt data
+	encryptedData, err := EncryptFile(inputData, fek, keyType)
+	if err != nil {
+		return fmt.Errorf("encryption failed: %w", err)
+	}
+
+	// Write encrypted data to output file
+	if err := os.WriteFile(outputPath, encryptedData, 0600); err != nil {
+		return fmt.Errorf("failed to write encrypted file: %w", err)
+	}
+
+	return nil
+}
+
+// DecryptFileFromPath decrypts a file using a FEK and writes to disk
+func DecryptFileFromPath(inputPath, outputPath string, fek []byte) error {
+	// Read encrypted file
+	encryptedData, err := os.ReadFile(inputPath)
+	if err != nil {
+		return fmt.Errorf("failed to read encrypted file: %w", err)
+	}
+
+	// Decrypt data
+	plaintext, err := DecryptFile(encryptedData, fek)
+	if err != nil {
+		return fmt.Errorf("decryption failed: %w", err)
+	}
+
+	// Write decrypted data to output file
+	if err := os.WriteFile(outputPath, plaintext, 0600); err != nil {
+		return fmt.Errorf("failed to write decrypted file: %w", err)
+	}
+
+	return nil
+}
+
+// =============================================================================
+// COMPLETE FEK WORKFLOW
+// =============================================================================
+
+// EncryptFileWorkflow performs the complete FEK-based encryption workflow:
+// 1. Generates a random FEK
+// 2. Encrypts the file with the FEK
+// 3. Encrypts the FEK with the user's password (Owner Envelope)
+// Returns the encrypted FEK (for storage in metadata) and the FEK itself (for immediate use)
+func EncryptFileWorkflow(inputPath, outputPath string, password []byte, username, keyType string) (encryptedFEK []byte, fek []byte, err error) {
+	// Generate random FEK
+	fek, err = GenerateFEK()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate FEK: %w", err)
+	}
+
+	// Encrypt file with FEK
+	if err := EncryptFileToPath(inputPath, outputPath, fek, keyType); err != nil {
+		return nil, nil, fmt.Errorf("failed to encrypt file: %w", err)
+	}
+
+	// Encrypt FEK with password (Owner Envelope)
+	encryptedFEK, err = EncryptFEK(fek, password, username, keyType)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to encrypt FEK: %w", err)
+	}
+
+	return encryptedFEK, fek, nil
+}
+
+// DecryptFileWorkflow performs the complete FEK-based decryption workflow:
+// 1. Decrypts the FEK using the user's password
+// 2. Decrypts the file with the FEK
+func DecryptFileWorkflow(inputPath, outputPath string, encryptedFEK []byte, password []byte, username string) error {
+	// Decrypt FEK
+	fek, _, err := DecryptFEK(encryptedFEK, password, username)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt FEK: %w", err)
+	}
+
+	// Decrypt file with FEK
+	if err := DecryptFileFromPath(inputPath, outputPath, fek); err != nil {
+		return fmt.Errorf("failed to decrypt file: %w", err)
+	}
+
+	return nil
+}
+
+// =============================================================================
+// METADATA OPERATIONS
+// =============================================================================
+
 // DecryptedFileMetadata represents decrypted file metadata
 type DecryptedFileMetadata struct {
 	FileID       string `json:"file_id"`
@@ -525,7 +578,6 @@ func DecryptFileMetadata(filenameNonce, encryptedFilename, sha256Nonce, encrypte
 	}
 
 	// Use account password derivation (default for file metadata)
-	// The database stores password_type separately, but for now we assume "account"
 	derivedKey := DeriveAccountPasswordKey([]byte(password), username)
 
 	// Decrypt filename
@@ -539,16 +591,16 @@ func DecryptFileMetadata(filenameNonce, encryptedFilename, sha256Nonce, encrypte
 	}
 
 	// Decrypt SHA256
-	var sha256 string
+	var sha256sum string
 	if len(encryptedSHA256) > 0 && len(sha256Nonce) > 0 {
 		decryptedSHA256, err := DecryptMetadataWithDerivedKey(derivedKey, sha256Nonce, encryptedSHA256)
 		if err != nil {
 			return "", "", fmt.Errorf("failed to decrypt SHA256: %w", err)
 		}
-		sha256 = string(decryptedSHA256)
+		sha256sum = string(decryptedSHA256)
 	}
 
-	return filename, sha256, nil
+	return filename, sha256sum, nil
 }
 
 // DecryptMetadataWithDerivedKey decrypts file metadata using a pre-derived key
@@ -581,100 +633,4 @@ func DecryptMetadataWithDerivedKey(derivedKey []byte, nonce, encryptedData []byt
 
 	// Now decrypt using the reconstructed data
 	return DecryptGCM(gcmData, derivedKey)
-}
-
-// DecryptFEKFromEnvelope decrypts a File Encryption Key (FEK) from its envelope using a password.
-// This is the missing link for client-side metadata decryption.
-func DecryptFEKFromEnvelope(encryptedFEK, password []byte) ([]byte, error) {
-	if len(encryptedFEK) < 2 {
-		return nil, fmt.Errorf("encrypted FEK too short for envelope")
-	}
-
-	// Parse the envelope to determine key type
-	_, keyType, err := ParsePasswordEnvelope(encryptedFEK)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse FEK envelope: %w", err)
-	}
-
-	// The actual encrypted data starts after the 2-byte envelope
-	ciphertext := encryptedFEK[2:]
-
-	// Derive the key used to wrap the FEK.
-	// NOTE: The salt for FEK wrapping *does not* include the username. This is a critical detail.
-	// It uses a static salt based on the key type.
-	var fekWrappingKey []byte
-	switch keyType {
-	case "account":
-		fekWrappingKey, err = DeriveArgon2IDKey(password, FEKAccountSalt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
-	case "custom":
-		fekWrappingKey, err = DeriveArgon2IDKey(password, FEKCustomSalt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
-	case "share":
-		// Share key derivation may have other inputs; for now, align with others.
-		fekWrappingKey, err = DeriveArgon2IDKey(password, FEKShareSalt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
-	default:
-		return nil, fmt.Errorf("unsupported key type from envelope: %s", keyType)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to derive FEK wrapping key: %w", err)
-	}
-
-	// Decrypt the FEK.
-	fek, err := DecryptGCM(ciphertext, fekWrappingKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt FEK: %w", err)
-	}
-
-	return fek, nil
-}
-
-// DecryptFileWithKey decrypts file data using a raw key (FEK)
-// This bypasses password derivation and uses the provided key directly.
-// It still parses the envelope to ensure valid format but ignores the key type.
-func DecryptFileWithKey(encryptedData []byte, key []byte) ([]byte, error) {
-	if len(encryptedData) < 2 {
-		return nil, fmt.Errorf("encrypted data too short: need at least 2 bytes for envelope, got %d", len(encryptedData))
-	}
-
-	if len(key) == 0 {
-		return nil, fmt.Errorf("key cannot be empty")
-	}
-
-	// Parse envelope (just to validate format)
-	envelope := encryptedData[:2]
-	ciphertext := encryptedData[2:]
-
-	_, _, err := ParsePasswordEnvelope(envelope)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse envelope: %w", err)
-	}
-
-	// Decrypt the data using the provided key
-	plaintext, err := DecryptGCM(ciphertext, key)
-	if err != nil {
-		return nil, fmt.Errorf("decryption failed: %w", err)
-	}
-
-	return plaintext, nil
-}
-
-// DecryptFileFromPathWithKey decrypts a file using a raw key and writes to disk
-func DecryptFileFromPathWithKey(inputPath, outputPath string, key []byte) error {
-	// Read encrypted file
-	encryptedData, err := os.ReadFile(inputPath)
-	if err != nil {
-		return fmt.Errorf("failed to read encrypted file: %w", err)
-	}
-
-	// Decrypt data
-	plaintext, err := DecryptFileWithKey(encryptedData, key)
-	if err != nil {
-		return fmt.Errorf("decryption failed: %w", err)
-	}
-
-	// Write decrypted data to output file
-	if err := os.WriteFile(outputPath, plaintext, 0600); err != nil {
-		return fmt.Errorf("failed to write decrypted file: %w", err)
-	}
-
-	return nil
 }

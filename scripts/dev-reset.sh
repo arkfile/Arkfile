@@ -637,11 +637,6 @@ if [ $attempt -eq $max_attempts ]; then
     exit 1
 fi
 
-# Database schema will be handled by the application using unified schema
-print_status "INFO" "Database schema will be created by arkfile application on startup..."
-print_status "INFO" "Using unified schema approach - no separate database setup needed"
-print_status "SUCCESS" "Database setup delegated to application"
-
 # Start Arkfile
 print_status "INFO" "Starting Arkfile application..."
 systemctl start arkfile
