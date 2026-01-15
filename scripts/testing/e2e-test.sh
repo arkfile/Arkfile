@@ -703,8 +703,7 @@ phase_8_file_operations() {
         --filename 'test_file.bin' \
         --sha256sum '$sha256_hash' \
         --username '$TEST_USERNAME' \
-        --password-source stdin \
-        --output-format separated"
+        --password-source stdin"
         
     if [ $meta_exit_code -eq 0 ]; then
         record_test "Metadata encryption" "PASS"
@@ -719,14 +718,14 @@ phase_8_file_operations() {
         info "Encrypted Filename: $enc_filename"
         info "Encrypted SHA256: $enc_sha256"
         
-        # Create metadata.json
+        # Create metadata.json (include encrypted_fek so server stores it for future access)
         cat <<EOF > "$metadata_file"
 {
     "encrypted_filename": "$enc_filename",
     "filename_nonce": "$filename_nonce",
     "encrypted_sha256sum": "$enc_sha256",
     "sha256sum_nonce": "$sha256_nonce",
-    "encrypted_fek": "",
+    "encrypted_fek": "$UPLOADED_FILE_ENC_FEK",
     "password_type": "account",
     "password_hint": "test-hint"
 }
@@ -966,12 +965,12 @@ phase_9_share_operations() {
     if [ $create_share_crypto_exit_code -eq 0 ]; then
         record_test "Share envelope creation (FEK never exposed)" "PASS"
         
-        # Extract values from JSON output
+        # Extract values from JSON output (no 'local' - needed in later sections)
         share_id=$(echo "$create_share_crypto_output" | grep '"share_id"' | sed 's/.*"share_id": "\([^"]*\)".*/\1/')
-        local encrypted_envelope=$(echo "$create_share_crypto_output" | grep '"encrypted_envelope"' | sed 's/.*"encrypted_envelope": "\([^"]*\)".*/\1/')
-        local envelope_salt=$(echo "$create_share_crypto_output" | grep '"salt"' | sed 's/.*"salt": "\([^"]*\)".*/\1/')
-        local download_token=$(echo "$create_share_crypto_output" | grep '"download_token"' | sed 's/.*"download_token": "\([^"]*\)".*/\1/')
-        local download_token_hash=$(echo "$create_share_crypto_output" | grep '"download_token_hash"' | sed 's/.*"download_token_hash": "\([^"]*\)".*/\1/')
+        encrypted_envelope=$(echo "$create_share_crypto_output" | grep '"encrypted_envelope"' | sed 's/.*"encrypted_envelope": "\([^"]*\)".*/\1/')
+        envelope_salt=$(echo "$create_share_crypto_output" | grep '"salt"' | sed 's/.*"salt": "\([^"]*\)".*/\1/')
+        download_token=$(echo "$create_share_crypto_output" | grep '"download_token"' | sed 's/.*"download_token": "\([^"]*\)".*/\1/')
+        download_token_hash=$(echo "$create_share_crypto_output" | grep '"download_token_hash"' | sed 's/.*"download_token_hash": "\([^"]*\)".*/\1/')
         
         info "Share ID: $share_id"
         info "Encrypted Envelope: ${encrypted_envelope:0:32}..."
@@ -997,9 +996,11 @@ phase_9_share_operations() {
         --server-url "$SERVER_URL" \
         --tls-insecure \
         share create \
+        --share-id "$share_id" \
         --file-id "$share_file_id" \
         --encrypted-envelope "$encrypted_envelope" \
-        --salt "$envelope_salt"
+        --salt "$envelope_salt" \
+        --download-token-hash "$download_token_hash"
         
     if [ $create_share_exit_code -eq 0 ]; then
         if echo "$create_share_output" | grep -q "Share created successfully"; then
@@ -1083,15 +1084,12 @@ phase_9_share_operations() {
         --tls-insecure \
         download-share \
         --share-id "$share_id" \
+        --download-token "$download_token" \
         --output "$shared_download_file"
         
     if [ $download_share_exit_code -eq 0 ]; then
         record_test "Visitor share download" "PASS"
         info "Downloaded shared file to: $shared_download_file"
-        
-        # Extract envelope info from output for decryption
-        local dl_encrypted_envelope=$(echo "$download_share_output" | grep -o '"[^"]*"' | head -1 | tr -d '"')
-        local dl_salt=$(echo "$download_share_output" | grep -o '"[^"]*"' | head -2 | tail -1 | tr -d '"')
     else
         record_test "Visitor share download" "FAIL"
         error "Visitor download failed"
@@ -1170,11 +1168,14 @@ phase_9_share_operations() {
     local wrong_pass_exit_code
     
     safe_exec wrong_pass_output wrong_pass_exit_code \
-        bash -c "printf '%s\n' 'WrongPassword#2026!Test' | $BUILD_DIR/cryptocli decrypt-share-envelope \
-        --encrypted-fek '$encrypted_envelope' \
+        bash -c "printf '%s\n' 'WrongPassword#2026!Test' | $BUILD_DIR/cryptocli decrypt-share \
+        --file '$shared_download_file' \
+        --encrypted-envelope '$encrypted_envelope' \
         --salt '$envelope_salt' \
         --share-id '$share_id' \
-        --file-id '$share_file_id'"
+        --file-id '$share_file_id' \
+        --output '$TEST_DATA_DIR/wrong_pass_test.bin' \
+        --password-source stdin"
         
     if [ $wrong_pass_exit_code -ne 0 ]; then
         record_test "Wrong password rejection" "PASS"
@@ -1195,11 +1196,14 @@ phase_9_share_operations() {
     local fake_share_id=$(echo "$share_id" | sed 's/./X/1')
     
     safe_exec wrong_id_output wrong_id_exit_code \
-        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $BUILD_DIR/cryptocli decrypt-share-envelope \
-        --encrypted-fek '$encrypted_envelope' \
+        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $BUILD_DIR/cryptocli decrypt-share \
+        --file '$shared_download_file' \
+        --encrypted-envelope '$encrypted_envelope' \
         --salt '$envelope_salt' \
         --share-id '$fake_share_id' \
-        --file-id '$share_file_id'"
+        --file-id '$share_file_id' \
+        --output '$TEST_DATA_DIR/wrong_id_test.bin' \
+        --password-source stdin"
         
     if [ $wrong_id_exit_code -ne 0 ]; then
         record_test "Wrong share ID rejection (AAD)" "PASS"
@@ -1216,12 +1220,16 @@ phase_9_share_operations() {
     local nonexistent_output
     local nonexistent_exit_code
     
+    # Use a fake download token for the non-existent share test
+    local fake_download_token=$(echo "fake-token-for-testing" | base64)
+    
     safe_exec nonexistent_output nonexistent_exit_code \
         $BUILD_DIR/arkfile-client \
         --server-url "$SERVER_URL" \
         --tls-insecure \
         download-share \
         --share-id "nonexistent-share-id-that-does-not-exist" \
+        --download-token "$fake_download_token" \
         --output "$TEST_DATA_DIR/nonexistent.enc"
         
     if [ $nonexistent_exit_code -ne 0 ]; then
@@ -1303,6 +1311,7 @@ phase_9_share_operations() {
         --tls-insecure \
         download-share \
         --share-id "$share_id" \
+        --download-token "$download_token" \
         --output "$TEST_DATA_DIR/revoked.enc"
         
     if [ $revoked_download_exit_code -ne 0 ]; then
@@ -1317,9 +1326,9 @@ phase_9_share_operations() {
     # Cleanup
     # =========================================================================
     section "Share operations cleanup"
-    rm -f "$test_file" "$test_file_enc" "$metadata_file" \
-          "$shared_download_file" "$decrypted_share_file" \
-          "$TEST_DATA_DIR/nonexistent.enc" "$TEST_DATA_DIR/revoked.enc"
+    rm -f "$shared_download_file" "$decrypted_share_file" \
+          "$TEST_DATA_DIR/nonexistent.enc" "$TEST_DATA_DIR/revoked.enc" \
+          "$TEST_DATA_DIR/wrong_pass_test.bin" "$TEST_DATA_DIR/wrong_id_test.bin"
     
     success "Share operations phase complete"
 }

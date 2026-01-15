@@ -1352,9 +1352,11 @@ func handleShareCommand(client *HTTPClient, config *ClientConfig, args []string)
 func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("share create", flag.ExitOnError)
 	var (
+		shareID           = fs.String("share-id", "", "Client-generated share ID (required)")
 		fileID            = fs.String("file-id", "", "File ID to share (required)")
 		encryptedEnvelope = fs.String("encrypted-envelope", "", "Base64 encrypted envelope (required)")
 		salt              = fs.String("salt", "", "Base64 salt (required)")
+		downloadTokenHash = fs.String("download-token-hash", "", "Base64 SHA256 hash of download token (required)")
 		expiresAt         = fs.String("expires-at", "", "Expiration time (RFC3339)")
 		maxDownloads      = fs.Int("max-downloads", 0, "Maximum number of downloads (0 for unlimited)")
 	)
@@ -1363,8 +1365,8 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 		return err
 	}
 
-	if *fileID == "" || *encryptedEnvelope == "" || *salt == "" {
-		return fmt.Errorf("file-id, encrypted-envelope, and salt are required")
+	if *shareID == "" || *fileID == "" || *encryptedEnvelope == "" || *salt == "" || *downloadTokenHash == "" {
+		return fmt.Errorf("share-id, file-id, encrypted-envelope, salt, and download-token-hash are required")
 	}
 
 	// Load session
@@ -1374,9 +1376,11 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 	}
 
 	req := map[string]interface{}{
-		"file_id":            *fileID,
-		"encrypted_envelope": *encryptedEnvelope,
-		"salt":               *salt,
+		"share_id":            *shareID,
+		"file_id":             *fileID,
+		"encrypted_envelope":  *encryptedEnvelope,
+		"salt":                *salt,
+		"download_token_hash": *downloadTokenHash,
 	}
 
 	if *expiresAt != "" {
@@ -1391,11 +1395,11 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 		return fmt.Errorf("failed to create share: %w", err)
 	}
 
-	shareID, _ := resp.Data["share_id"].(string)
+	respShareID, _ := resp.Data["share_id"].(string)
 	shareURL, _ := resp.Data["share_url"].(string)
 
 	fmt.Printf("Share created successfully\n")
-	fmt.Printf("Share ID: %s\n", shareID)
+	fmt.Printf("Share ID: %s\n", respShareID)
 	fmt.Printf("Share URL: %s\n", shareURL)
 
 	return nil
