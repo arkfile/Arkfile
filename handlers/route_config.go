@@ -99,6 +99,7 @@ func RegisterRoutes() {
 	// File sharing - require TOTP for creation, anonymous access for usage
 	totpProtectedGroup.GET("/api/files/:fileId/envelope", GetFileEnvelope) // Get file envelope for share creation
 	totpProtectedGroup.POST("/api/files/:fileId/share", CreateFileShare)   // Create Argon2id-based anonymous share
+	totpProtectedGroup.POST("/api/shares", CreateFileShare)                // Create anonymous share (file_id in body)
 	totpProtectedGroup.GET("/api/users/shares", ListShares)                // List user's shares
 	totpProtectedGroup.DELETE("/api/share/:id", DeleteShare)               // Delete a share
 	totpProtectedGroup.POST("/api/share/:id/revoke", RevokeShare)          // Revoke a share
