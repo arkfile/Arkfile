@@ -1433,7 +1433,7 @@ func handleShareList(client *HTTPClient, config *ClientConfig, args []string) er
 	fmt.Printf("Found %d shares:\n\n", len(shares))
 	for _, s := range shares {
 		share := s.(map[string]interface{})
-		fmt.Printf("ID: %s\n", share["id"])
+		fmt.Printf("ID: %s\n", share["share_id"])
 		fmt.Printf("File ID: %s\n", share["file_id"])
 		fmt.Printf("Created: %s\n", share["created_at"])
 		if exp, ok := share["expires_at"].(string); ok && exp != "" {

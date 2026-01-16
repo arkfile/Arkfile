@@ -487,7 +487,9 @@ func ListShares(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"shares": shares,
+		"data": map[string]interface{}{
+			"shares": shares,
+		},
 	})
 }
 
