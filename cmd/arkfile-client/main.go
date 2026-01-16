@@ -1395,8 +1395,15 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 		return fmt.Errorf("failed to create share: %w", err)
 	}
 
+	// Response fields may be at top level or in Data map
 	respShareID, _ := resp.Data["share_id"].(string)
 	shareURL, _ := resp.Data["share_url"].(string)
+
+	// If not in Data, the response struct fields are directly in the JSON
+	// The makeRequest function doesn't parse ShareResponse, so we use the input share_id
+	if respShareID == "" {
+		respShareID = *shareID // Use the client-provided share_id
+	}
 
 	fmt.Printf("Share created successfully\n")
 	fmt.Printf("Share ID: %s\n", respShareID)
@@ -1491,7 +1498,7 @@ func handleShareRevoke(client *HTTPClient, config *ClientConfig, args []string) 
 		"reason": *reason,
 	}
 
-	_, err = client.makeRequest("PATCH", "/api/shares/"+shareID+"/revoke", req, session.AccessToken)
+	_, err = client.makeRequest("POST", "/api/shares/"+shareID+"/revoke", req, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to revoke share: %w", err)
 	}
@@ -1545,8 +1552,8 @@ EXAMPLES:
 
 	logVerbose("Starting chunked download for share: %s", *shareID)
 
-	// STEP 1: Get chunk metadata for the share
-	metadataURL := fmt.Sprintf("/api/shares/%s/metadata", *shareID)
+	// STEP 1: Get chunk metadata for the share (public endpoint - no auth required)
+	metadataURL := fmt.Sprintf("/api/public/shares/%s/metadata", *shareID)
 	logVerbose("Fetching share chunk metadata from: %s", metadataURL)
 
 	metadataReq, err := http.NewRequest("GET", client.baseURL+metadataURL, nil)
@@ -1631,7 +1638,7 @@ EXAMPLES:
 	totalBytesDownloaded := existingSize
 
 	for chunkIndex := startChunk; chunkIndex < chunkMeta.ChunkCount; chunkIndex++ {
-		chunkURL := fmt.Sprintf("/api/shares/%s/chunks/%d", *shareID, chunkIndex)
+		chunkURL := fmt.Sprintf("/api/public/shares/%s/chunks/%d", *shareID, chunkIndex)
 
 		chunkReq, err := http.NewRequest("GET", client.baseURL+chunkURL, nil)
 		if err != nil {

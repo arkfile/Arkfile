@@ -90,7 +90,7 @@ export class ShareAccessUI {
     try {
       // 1. Get share envelope (public metadata + encrypted FEK)
       if (!this.envelope) {
-        const response = await fetch(`/api/shares/${this.shareId}/envelope`);
+        const response = await fetch(`/api/public/shares/${this.shareId}/envelope`);
         if (!response.ok) {
           throw new Error('Failed to retrieve share data');
         }

@@ -14,7 +14,7 @@ Arkfile implements a **Netflix/Spotify-style authentication model** using JSON W
 - **Lazy revocation checking**: Revocation only checked during token refresh for optimal performance
 - **Security-critical revocation**: Immediate revocation for critical security scenarios
 
-Tokens can be obtained by making a POST request to the `/api/opaque/login` endpoint with a valid username and password. Arkfile uses a username-based authentication system where users create accounts with usernames rather than email addresses, enhancing privacy by reducing personal information stored on servers.
+Tokens can be obtained by completing the OPAQUE authentication flow via the `/api/opaque/login/*` endpoints. Arkfile uses a username-based authentication system where users create accounts with usernames rather than email addresses, enhancing privacy by reducing personal information stored on servers.
 
 **Performance Optimization:**
 Normal API requests do not check token revocation status for maximum speed. Revocation checking is performed only during token refresh operations, providing the optimal balance between security and performance similar to Netflix and Spotify's authentication models.
@@ -22,83 +22,129 @@ Normal API requests do not check token revocation status for maximum speed. Revo
 ## Endpoints
 
 The tables below list every current HTTP endpoint exposed by Arkfile v1.  
-`AUTH` column shows whether the request needs an **Access Token**, **Admin Token** or is **Public**.
+`AUTH` column shows whether the request needs an **Access Token**, **TOTP Token**, **Admin Token** or is **Public**.
 
-### 1 • Authentication & Session
+---
 
-| Method | Path | Purpose | Auth | Example |
-|--------|------|---------|------|---------|
-| POST | `/api/opaque/register` | Create a new user using the OPAQUE PAKE flow with password validation | Public | `curl -X POST -d @register.json http://localhost:8080/api/opaque/register` |
-| POST | `/api/opaque/login` | Log in and receive access / refresh tokens | Public | `curl -X POST -d @login.json http://localhost:8080/api/opaque/login` |
-| GET  | `/api/opaque/health` | Simple health probe for the OPAQUE service | Public | `curl http://localhost:8080/api/opaque/health` |
-| POST | `/api/refresh` | Exchange a refresh token for a new access token | Access | `curl -X POST --cookie "refresh=…" http://localhost:8080/api/refresh` |
-| POST | `/api/logout` | Invalidate current session and revoke tokens immediately | Access | `curl -X POST -H "Authorization: Bearer $TOK" http://localhost:8080/api/logout` |
-| POST | `/api/revoke-token` | Revoke an arbitrary token (self-service) | Access | `curl -X POST -H "Authorization: Bearer $TOK" -d '{"token":"…"}' http://localhost:8080/api/revoke-token` |
-| POST | `/api/revoke-all` | Revoke **all** tokens belonging to the user | Access | `curl -X POST -H "Authorization: Bearer $TOK" http://localhost:8080/api/revoke-all` |
+### 1 • Configuration (Public)
 
-#### Token Refresh Behavior
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| GET | `/api/config/argon2` | Get Argon2 parameters for client-side crypto | Public |
+| GET | `/api/config/password-requirements` | Get password validation requirements | Public |
 
-The `/api/refresh` endpoint implements lazy revocation checking as part of the Netflix/Spotify authentication model:
+---
 
-- **Normal requests**: API endpoints do not check token revocation status for optimal performance
-- **Refresh operations**: Token revocation is checked during refresh to ensure security
-- **30-minute lifecycle**: Tokens expire after 30 minutes and are automatically refreshed by the client at 25 minutes
-- **Edge case revocations**: Critical security revocations (logout, revoke-all, admin actions) are processed immediately
-- **Performance benefit**: This approach provides maximum API performance while maintaining security
+### 2 • Authentication & Session
 
-When a token is revoked via `/api/logout`, `/api/revoke-all`, or administrative actions, the revocation takes effect immediately for security-critical operations but is lazily checked for normal API requests during the next refresh cycle.
+Arkfile uses the OPAQUE PAKE (Password-Authenticated Key Exchange) protocol for secure authentication without transmitting passwords.
 
-### 2 • Multi-Factor Authentication (TOTP)
+#### User Registration (Multi-Step OPAQUE)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/opaque/register/response` | OPAQUE registration step 1 - server response | Public |
+| POST | `/api/opaque/register/finalize` | OPAQUE registration step 2 - finalize registration | Public |
+
+#### User Login (Multi-Step OPAQUE)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/opaque/login/response` | OPAQUE login step 1 - server response | Public |
+| POST | `/api/opaque/login/finalize` | OPAQUE login step 2 - finalize and get tokens | Public |
+| GET | `/api/opaque/health` | Health probe for OPAQUE service | Public |
+
+#### Admin Login (Multi-Step OPAQUE)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/admin/login/response` | Admin OPAQUE login step 1 | Public |
+| POST | `/api/admin/login/finalize` | Admin OPAQUE login step 2 | Public |
+
+#### Bootstrap Registration (Initial Admin Setup)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/bootstrap/register/response` | Bootstrap registration step 1 | Public |
+| POST | `/api/bootstrap/register/finalize` | Bootstrap registration step 2 | Public |
+
+#### Session Management
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/refresh` | Exchange refresh token for new access token | Refresh Cookie |
+| POST | `/api/logout` | Invalidate session and revoke tokens | Access |
+
+#### Token Revocation (Require TOTP)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/revoke-token` | Revoke a specific token | TOTP |
+| POST | `/api/revoke-all` | Revoke all tokens for the user | TOTP |
+
+---
+
+### 3 • Multi-Factor Authentication (TOTP)
 
 Arkfile supports Time-based One-Time Password (TOTP) as a second factor of authentication. When TOTP is enabled, users must complete both OPAQUE authentication and provide a valid TOTP code to access their account.
 
-| Method | Path | Purpose | Auth | Example |
-|--------|------|---------|------|---------|
-| POST | `/api/totp/setup` | Initialize TOTP setup for user account | Access | `curl -X POST -H "Authorization: Bearer $TOK" -d '{"sessionKey":"..."}' http://localhost:8080/api/totp/setup` |
-| POST | `/api/totp/verify` | Complete TOTP setup by verifying a test code | Access | `curl -X POST -H "Authorization: Bearer $TOK" -d '{"code":"123456","sessionKey":"..."}' http://localhost:8080/api/totp/verify` |
-| GET  | `/api/totp/status` | Check TOTP enablement status for user | Access | `curl -H "Authorization: Bearer $TOK" http://localhost:8080/api/totp/status` |
-| POST | `/api/totp/disable` | Disable TOTP for user account | Access | `curl -X POST -H "Authorization: Bearer $TOK" -d '{"currentCode":"123456","sessionKey":"..."}' http://localhost:8080/api/totp/disable` |
-| POST | `/api/totp/auth` | Complete TOTP authentication flow | TOTP Token | `curl -X POST -H "Authorization: Bearer $TOTP_TOK" -d '{"code":"123456","sessionKey":"..."}' http://localhost:8080/api/totp/auth` |
+#### TOTP Setup & Management (Require Access Token)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/totp/setup` | Initialize TOTP setup for user account | Access |
+| POST | `/api/totp/verify` | Complete TOTP setup by verifying a test code | Access |
+| GET | `/api/totp/status` | Check TOTP enablement status for user | Access |
+| POST | `/api/totp/reset` | Reset TOTP configuration | Access |
+
+#### TOTP Authentication (Require TOTP Token)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/totp/auth` | Complete TOTP authentication flow | TOTP Token |
 
 #### TOTP Authentication Flow
 
-When TOTP is enabled for a user account, the authentication process involves two steps. First, the user performs OPAQUE authentication via `/api/opaque/login`. If TOTP is enabled, this endpoint returns a temporary token and session key instead of a full access token. The response includes `requiresTOTP: true` to indicate that additional authentication is required.
+When TOTP is enabled for a user account, the authentication process involves two steps:
 
-Second, the user must provide a TOTP code via `/api/totp/auth` using the temporary token. Upon successful verification, this endpoint returns the full access token and refresh token needed for subsequent API calls. The system also supports backup codes for recovery when the TOTP device is unavailable.
+1. **OPAQUE Authentication**: User performs OPAQUE login via `/api/opaque/login/*`. If TOTP is enabled, this returns a temporary TOTP token and `requiresTOTP: true`.
 
-#### TOTP Setup Process
+2. **TOTP Verification**: User provides a TOTP code via `/api/totp/auth` using the temporary token. Upon success, this returns the full access token and refresh token.
 
-Setting up TOTP requires an existing authenticated session. The `/api/totp/setup` endpoint generates a secret key, QR code URL, and backup codes. The user must scan the QR code with their authenticator app and then verify the setup by providing a test code via `/api/totp/verify`. This two-step process ensures the TOTP configuration is working correctly before enabling it for the account.
+---
 
-### 3 • Files
+### 4 • Files
 
-| Method | Path | Purpose | Auth | Example |
-|--------|------|---------|------|---------|
-| GET  | `/api/files` | List files owned by the user | Access | `curl -H "Authorization: Bearer $TOK" http://localhost:8080/api/files` |
-| POST | `/api/upload` | Upload a small file in one request | Access | `curl -H "Authorization: Bearer $TOK" -F "file=@photo.jpg" http://localhost:8080/api/upload` |
-| GET  | `/api/download/:filename` | Download a file | Access | `curl -H "Authorization: Bearer $TOK" -O http://localhost:8080/api/download/report.pdf` |
-| DELETE | `/api/files/:filename` | Delete a file | Access | `curl -X DELETE -H "Authorization: Bearer $TOK" http://localhost:8080/api/files/report.pdf` |
+All file operations require TOTP authentication.
+
+#### Basic File Operations
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| GET | `/api/files` | List files owned by the user | TOTP |
+| POST | `/api/upload` | Upload a small file in one request | TOTP |
+| GET | `/api/files/:fileId` | Download a file | TOTP |
+| GET | `/api/files/:fileId/meta` | Get file metadata | TOTP |
+| DELETE | `/api/files/:fileId` | Delete a file | TOTP |
 
 #### Chunked Uploads
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| POST | `/api/uploads/init` | Begin a multi-part upload, returns `sessionId` | Access |
-| POST | `/api/uploads/:sessionId/chunks/:chunkNumber` | Upload numbered chunk | Access |
-| POST | `/api/uploads/:sessionId/complete` | Finish the upload and assemble the file | Access |
-| GET  | `/api/uploads/:sessionId/status` | Check progress | Access |
-| DELETE | `/api/uploads/:sessionId` | Cancel and discard the session | Access |
+| POST | `/api/uploads/init` | Begin a multi-part upload, returns `sessionId` | TOTP |
+| POST | `/api/uploads/:sessionId/chunks/:chunkNumber` | Upload numbered chunk | TOTP |
+| POST | `/api/uploads/:sessionId/complete` | Finish the upload and assemble the file | TOTP |
+| GET | `/api/uploads/:sessionId/status` | Check upload progress | TOTP |
+| DELETE | `/api/uploads/:fileId` | Cancel and discard the upload session | TOTP |
 
 #### Chunked Downloads
 
-All file downloads use the chunked download API. Files are stored and downloaded in encrypted chunks, with each chunk independently encrypted using AES-GCM. This provides per-chunk authentication and enables client-side decryption.
+All file downloads use the chunked download API. Files are stored and downloaded in encrypted chunks, with each chunk independently encrypted using AES-GCM.
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET | `/api/files/:fileId/metadata` | Get file metadata for download | Access |
-| GET | `/api/files/:fileId/chunks/:chunkIndex` | Download a specific encrypted chunk | Access |
-| GET | `/api/files/:fileId/key` | Get decrypted FEK for account-encrypted files | Access |
-| POST | `/api/files/:fileId/key` | Get decrypted FEK for custom-password files | Access |
+| GET | `/api/files/:fileId/metadata` | Get file metadata for download | TOTP |
+| GET | `/api/files/:fileId/chunks/:chunkIndex` | Download a specific encrypted chunk | TOTP |
 
 **Metadata Response:**
 ```json
@@ -124,25 +170,37 @@ All file downloads use the chunked download API. Files are stored and downloaded
 
 Each chunk includes a 12-byte nonce prefix and 16-byte authentication tag (28 bytes overhead per chunk).
 
-### 4 • Sharing
+---
+
+### 5 • File Sharing
+
+File sharing is split into two namespaces:
+- **Authenticated endpoints** (`/api/shares`) - for share owners to manage shares
+- **Public endpoints** (`/api/public/shares`) - for recipients to access shared files
+
+#### Authenticated Share Management (Require TOTP)
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| POST | `/api/share` | Create a share link for an existing file | Access |
-| GET  | `/api/user/shares` | List shares you have created | Access |
-| DELETE | `/api/share/:id` | Delete / revoke a share link | Access |
+| GET | `/api/files/:fileId/envelope` | Get file envelope for share creation | TOTP |
+| POST | `/api/shares` | Create a new share (file_id in body) | TOTP |
+| GET | `/api/shares` | List shares owned by user | TOTP |
+| GET | `/api/users/shares` | List shares (legacy endpoint) | TOTP |
+| DELETE | `/api/shares/:id` | Delete a share | TOTP |
+| POST | `/api/shares/:id/revoke` | Revoke a share (soft delete) | TOTP |
 
-Public endpoints for the recipients of a share:
+#### Public Share Access (Rate-Limited, No Auth)
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET  | `/shared/:id` | HTML landing page for a share | Public |
-| GET  | `/api/shares/:shareId/envelope` | Get share envelope (encrypted FEK + metadata) | Public |
-| GET  | `/api/shares/:shareId/metadata` | Get share metadata for chunked download | Download Token |
-| GET  | `/api/shares/:shareId/chunks/:chunkIndex` | Download a specific encrypted chunk | Download Token |
+| GET | `/api/public/shares/:id` | Share access page | Public |
+| GET | `/api/public/shares/:id/envelope` | Get share envelope (encrypted FEK + metadata) | Public |
+| GET | `/api/public/shares/:id/download` | Download shared file (single request) | Download Token |
+| GET | `/api/public/shares/:id/metadata` | Get metadata for chunked download | Download Token |
+| GET | `/api/public/shares/:id/chunks/:chunkIndex` | Download a specific encrypted chunk | Download Token |
 
 **Share Download Flow:**
-1. Get share envelope from `/api/shares/:shareId/envelope`
+1. Get share envelope from `/api/public/shares/:id/envelope`
 2. Decrypt envelope with share password to obtain FEK and Download Token
 3. Fetch metadata using Download Token in `X-Download-Token` header
 4. Download each chunk sequentially using the Download Token
@@ -150,27 +208,72 @@ Public endpoints for the recipients of a share:
 
 The Download Token is cryptographically bound to the share via AAD (Additional Authenticated Data), preventing token reuse across different shares.
 
-### 5 • File Keys (Encryption Management)
+---
+
+### 6 • File Encryption Key Management
+
+All key management operations require TOTP authentication.
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET  | `/api/files/:filename/keys` | List encryption keys for a file | Access |
-| POST | `/api/files/:filename/update-encryption` | Re-encrypt a file with new parameters | Access |
-| DELETE | `/api/files/:filename/keys/:keyId` | Remove a key | Access |
-| PATCH | `/api/files/:filename/keys/:keyId` | Edit key metadata | Access |
-| POST | `/api/files/:filename/keys/:keyId/set-primary` | Mark a key as primary | Access |
+| GET | `/api/files/:fileId/keys` | List encryption keys for a file | TOTP |
+| POST | `/api/files/:fileId/update-encryption` | Re-encrypt a file with new parameters | TOTP |
+| DELETE | `/api/files/:fileId/keys/:keyId` | Remove a key | TOTP |
+| PATCH | `/api/files/:fileId/keys/:keyId` | Edit key metadata | TOTP |
+| POST | `/api/files/:fileId/keys/:keyId/set-primary` | Mark a key as primary | TOTP |
+| POST | `/api/files/:fileId/get-decryption-key` | Get decrypted FEK for file | TOTP |
 
-### 6 • Administration (Requires **Admin Token**)
+---
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| GET  | `/api/admin/users` | List all users |
-| PATCH | `/api/admin/users/:username` | Update a user (roles, status) |
-| DELETE | `/api/admin/users/:username` | Delete a user |
-| GET  | `/api/admin/stats` | System statistics |
-| GET  | `/api/admin/activity` | Security & activity logs |
+### 7 • Credits System
 
-### 7 • Miscellaneous
+#### User Endpoints (Require TOTP)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| GET | `/api/credits` | Get current user's credit balance | TOTP |
+
+#### Admin Endpoints (Require Admin Token)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| GET | `/api/admin/credits` | Get all users' credits | Admin |
+| GET | `/api/admin/credits/:username` | Get specific user's credits | Admin |
+| POST | `/api/admin/credits/:username` | Adjust user's credits (add/subtract) | Admin |
+| PUT | `/api/admin/credits/:username` | Set user's credits to specific value | Admin |
+
+---
+
+### 8 • Administration
+
+All admin endpoints require JWT authentication with admin privileges.
+
+#### User Management
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/admin/users/:username/approve` | Approve a pending user | Admin |
+| GET | `/api/admin/users/:username/status` | Get user approval status | Admin |
+
+#### System Monitoring
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| GET | `/api/admin/system/health` | Get system health status | Admin |
+| GET | `/api/admin/security/events` | Get security event logs | Admin |
+
+#### Development/Testing Endpoints
+
+These endpoints are only available when `ADMIN_DEV_TEST_API_ENABLED=true`:
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/admin/dev-test/users/cleanup` | Clean up test user data | Admin |
+| GET | `/api/admin/dev-test/totp/decrypt-check/:username` | TOTP diagnostic endpoint | Admin |
+
+---
+
+### 9 • Miscellaneous
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
@@ -178,10 +281,11 @@ The Download Token is cryptographically bound to the share via AAD (Additional A
 
 ---
 
-### Error Handling
+## Error Handling
 
-* 401 Unauthorized – missing or bad token  
-* 403 Forbidden – valid token but not enough privilege  
+* 400 Bad Request – invalid request parameters
+* 401 Unauthorized – missing or invalid token  
+* 403 Forbidden – valid token but insufficient privileges  
 * 404 Not Found – resource does not exist  
 * 429 Too Many Requests – rate limit exceeded  
 * 5xx – internal server errors
@@ -194,9 +298,11 @@ All error responses use the structure:
 }
 ```
 
-### Pagination & Common Query Params
+---
 
-Endpoints returning lists (`/api/files`, `/api/user/shares`, `/api/admin/users`, etc.) accept:
+## Pagination & Common Query Params
+
+Endpoints returning lists (`/api/files`, `/api/shares`, `/api/admin/credits`, etc.) accept:
 
 * `?page=` (1-based)  
 * `?size=` (max 100)  
@@ -208,7 +314,9 @@ curl -H "Authorization: Bearer $TOK" \
   "http://localhost:8080/api/files?page=2&size=25"
 ```
 
-### Versioning
+---
+
+## Versioning
 
 The current API is **v1**.  
 Breaking changes will be announced in release notes; clients should pin a minor version via the `X-Arkfile-Version` header when that becomes available in future releases.

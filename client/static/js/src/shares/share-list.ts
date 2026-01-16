@@ -252,7 +252,7 @@ export class ShareListUI {
 
     try {
       const response = await fetch(`/api/shares/${shareId}/revoke`, {
-        method: 'PATCH',
+        method: 'POST',
         headers: {
           'Authorization': `Bearer ${getToken()}`,
         },

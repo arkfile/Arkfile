@@ -274,7 +274,7 @@ export class StreamingDownloadManager {
       headers['X-Download-Token'] = this.options.downloadToken;
     }
 
-    const response = await fetch(`${this.baseUrl}/api/shares/${shareId}/metadata`, {
+    const response = await fetch(`${this.baseUrl}/api/public/shares/${shareId}/metadata`, {
       method: 'GET',
       headers,
     });
@@ -382,7 +382,7 @@ export class StreamingDownloadManager {
 
       // Download chunk with retry
       const encryptedChunk = await downloadChunkWithRetry(
-        `${this.baseUrl}/api/shares/${shareId}/chunks/${chunkIndex}`,
+        `${this.baseUrl}/api/public/shares/${shareId}/chunks/${chunkIndex}`,
         headers,
         this.options.retryConfig,
         (attempt, error, delay) => {

@@ -435,7 +435,7 @@ func ListShares(c echo.Context) error {
 			FilenameNonce      string
 			EncryptedSha256sum string
 			Sha256sumNonce     string
-			Size               sql.NullInt64
+			Size               sql.NullFloat64 // rqlite returns numbers as float64
 		}
 
 		if err := rows.Scan(
@@ -474,7 +474,7 @@ func ListShares(c echo.Context) error {
 		}
 
 		if share.Size.Valid {
-			shareData["size"] = share.Size.Int64
+			shareData["size"] = int64(share.Size.Float64)
 		}
 
 		if share.ExpiresAt.Valid {

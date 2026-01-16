@@ -123,7 +123,7 @@ func GetUserByUsername(dbtx DBTX, username string) (*User, error) {
 	}
 
 	// DEBUG: Log when user is found
-	fmt.Printf("DEBUG: Found user '%s' with ID %d\n", user.Username, user.ID)
+	// fmt.Printf("DEBUG: Found user '%s' with ID %d\n", user.Username, user.ID)
 
 	// Parse the timestamp strings
 	if createdAtStr != "" {

@@ -221,7 +221,9 @@ func ShareRateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 		shareID := c.Param("id")
 		if shareID == "" {
-			return echo.NewHTTPError(http.StatusBadRequest, "Share ID required")
+			// No share ID in route - this middleware doesn't apply to this route
+			// (e.g., authenticated ListShares endpoint at /api/shares without :id)
+			return next(c)
 		}
 
 		// Get Entity ID for this request

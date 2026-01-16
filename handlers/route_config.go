@@ -96,23 +96,24 @@ func RegisterRoutes() {
 	totpProtectedGroup.GET("/api/uploads/:sessionId/status", GetUploadStatus)
 	totpProtectedGroup.DELETE("/api/uploads/:fileId", CancelUpload)
 
-	// File sharing - require TOTP for creation, anonymous access for usage
+	// File sharing - authenticated endpoints (require TOTP)
 	totpProtectedGroup.GET("/api/files/:fileId/envelope", GetFileEnvelope) // Get file envelope for share creation
-	totpProtectedGroup.POST("/api/files/:fileId/share", CreateFileShare)   // Create Argon2id-based anonymous share
 	totpProtectedGroup.POST("/api/shares", CreateFileShare)                // Create anonymous share (file_id in body)
-	totpProtectedGroup.GET("/api/users/shares", ListShares)                // List user's shares
-	totpProtectedGroup.DELETE("/api/share/:id", DeleteShare)               // Delete a share
-	totpProtectedGroup.POST("/api/share/:id/revoke", RevokeShare)          // Revoke a share
+	totpProtectedGroup.GET("/api/shares", ListShares)                      // List user's shares
+	totpProtectedGroup.GET("/api/users/shares", ListShares)                // List user's shares (legacy endpoint)
+	totpProtectedGroup.DELETE("/api/shares/:id", DeleteShare)              // Delete a share
+	totpProtectedGroup.POST("/api/shares/:id/revoke", RevokeShare)         // Revoke a share
 
-	// Anonymous share access (no authentication required) - with rate limiting and timing protection
-	shareGroup := Echo.Group("/api")
-	shareGroup.Use(ShareRateLimitMiddleware)                             // Apply rate limiting FIRST (fail fast for abusers)
-	shareGroup.Use(TimingProtectionMiddleware)                           // Then timing protection (for valid requests)
-	shareGroup.GET("/shares/:id", GetSharedFile)                         // Share access page
-	shareGroup.GET("/shares/:id/envelope", GetShareEnvelope)             // Get share envelope for client-side decryption
-	shareGroup.GET("/shares/:id/download", DownloadSharedFile)           // Download shared file
-	shareGroup.GET("/shares/:id/metadata", GetShareDownloadMetadata)     // Get metadata for shared file download
-	shareGroup.GET("/shares/:id/chunks/:chunkIndex", DownloadShareChunk) // Download chunk of shared file
+	// Anonymous share access (no authentication required) - separate namespace with rate limiting
+	// Using /api/public/shares to avoid conflicts with authenticated /api/shares routes
+	publicShareGroup := Echo.Group("/api/public/shares")
+	publicShareGroup.Use(ShareRateLimitMiddleware)                      // Apply rate limiting FIRST (fail fast for abusers)
+	publicShareGroup.Use(TimingProtectionMiddleware)                    // Then timing protection (for valid requests)
+	publicShareGroup.GET("/:id", GetSharedFile)                         // Share access page
+	publicShareGroup.GET("/:id/envelope", GetShareEnvelope)             // Get share envelope for client-side decryption
+	publicShareGroup.GET("/:id/download", DownloadSharedFile)           // Download shared file
+	publicShareGroup.GET("/:id/metadata", GetShareDownloadMetadata)     // Get metadata for shared file download
+	publicShareGroup.GET("/:id/chunks/:chunkIndex", DownloadShareChunk) // Download chunk of shared file
 
 	// File encryption key management - require TOTP
 	totpProtectedGroup.POST("/api/files/:fileId/update-encryption", UpdateEncryption)
