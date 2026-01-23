@@ -55,9 +55,7 @@ interface LibOpaqueModule {
   recoverCredentials(params: {
     resp: Uint8Array;
     sec: Uint8Array;
-    pkS: Uint8Array | null;
-    cfg: OpaqueConfig;
-    infos: OpaqueInfos;
+    context: string;
     ids: { idS: string; idU: string };
   }): {
     authU: Uint8Array;
@@ -72,11 +70,6 @@ interface OpaqueConfig {
   pkS: number;
   idS: number;
   idU: number;
-}
-
-interface OpaqueInfos {
-  info: string | null;
-  einfo: string | null;
 }
 
 // Registration flow types
@@ -153,7 +146,7 @@ function base64ToUint8Array(base64: string): Uint8Array {
 export class OpaqueClient {
   private module: LibOpaqueModule | null = null;
   private config: OpaqueConfig;
-  private infos: OpaqueInfos;
+  private readonly context = 'arkfile_auth'; // Must match server-side context
   private readonly serverId = 'server';
   
   constructor() {
@@ -164,13 +157,6 @@ export class OpaqueClient {
       pkS: 1, // Will be set to InSecEnv after module loads
       idS: 0, // Will be set to NotPackaged after module loads
       idU: 0, // Will be set to NotPackaged after module loads
-    };
-    
-    // Context must match server-side: "arkfile_auth"
-    // libopaque.js expects info as a string, not Uint8Array
-    this.infos = {
-      info: "arkfile_auth",
-      einfo: null,
     };
   }
   
@@ -330,16 +316,12 @@ export class OpaqueClient {
       const resp = base64ToUint8Array(serverResponse);
       // Decode client secret from hex (internal storage format)
       const sec = this.module.hexToUint8Array(clientSecret);
-      // Decode server public key from base64 if provided
-      const pkS = serverPublicKey ? base64ToUint8Array(serverPublicKey) : null;
       
-      // Recover credentials
+      // Recover credentials using context (must match server-side "arkfile_auth")
       const credentials = this.module.recoverCredentials({
         resp,
         sec,
-        pkS,
-        cfg: this.config,
-        infos: this.infos,
+        context: this.context,
         ids: { idS: this.serverId, idU: username },
       });
       
