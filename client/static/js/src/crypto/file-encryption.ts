@@ -363,103 +363,35 @@ export async function decryptFileFromBase64(
 // Key Caching (Session Storage)
 // ============================================================================
 
-const KEY_CACHE_PREFIX = 'arkfile_file_key_';
-const KEY_CACHE_EXPIRY = 3600000; // 1 hour in milliseconds
+// Import the new Account Key cache module for consistent caching
+import {
+  cacheAccountKey,
+  getCachedAccountKey,
+  clearCachedAccountKey,
+  clearAllCachedAccountKeys,
+  isAccountKeyCached,
+  cachedAccountKeyExpiresAt,
+  lockAccountKey,
+  unlockAccountKey,
+  isAccountKeyLocked,
+  cleanupAccountKeyCache,
+  type CacheDurationHours,
+} from './account-key-cache.js';
 
-interface CachedKey {
-  key: string; // base64-encoded key
-  expiresAt: number;
-  username: string;
-}
-
-/**
- * Caches a derived file encryption key in sessionStorage
- * 
- * This improves performance by avoiding repeated Argon2id derivations
- * during a single session. The key is automatically cleared when the
- * browser tab is closed.
- */
-export function cacheFileEncryptionKey(
-  username: string,
-  key: Uint8Array
-): void {
-  try {
-    const cached: CachedKey = {
-      key: toBase64(key),
-      expiresAt: Date.now() + KEY_CACHE_EXPIRY,
-      username,
-    };
-    
-    const cacheKey = KEY_CACHE_PREFIX + username;
-    sessionStorage.setItem(cacheKey, JSON.stringify(cached));
-  } catch (error) {
-    // Silently fail if sessionStorage is not available
-    console.warn('Failed to cache file encryption key:', error);
-  }
-}
-
-/**
- * Retrieves a cached file encryption key from sessionStorage
- * 
- * Returns null if the key is not cached or has expired.
- */
-export function getCachedFileEncryptionKey(username: string): Uint8Array | null {
-  try {
-    const cacheKey = KEY_CACHE_PREFIX + username;
-    const cached = sessionStorage.getItem(cacheKey);
-    
-    if (!cached) {
-      return null;
-    }
-    
-    const parsed: CachedKey = JSON.parse(cached);
-    
-    // Check if expired
-    if (Date.now() > parsed.expiresAt) {
-      sessionStorage.removeItem(cacheKey);
-      return null;
-    }
-    
-    // Verify username matches
-    if (parsed.username !== username) {
-      sessionStorage.removeItem(cacheKey);
-      return null;
-    }
-    
-    return fromBase64(parsed.key);
-  } catch (error) {
-    // Silently fail and return null
-    return null;
-  }
-}
-
-/**
- * Clears the cached file encryption key for a user
- */
-export function clearCachedFileEncryptionKey(username: string): void {
-  try {
-    const cacheKey = KEY_CACHE_PREFIX + username;
-    sessionStorage.removeItem(cacheKey);
-  } catch (error) {
-    // Silently fail
-  }
-}
-
-/**
- * Clears all cached file encryption keys
- */
-export function clearAllCachedKeys(): void {
-  try {
-    const keys = Object.keys(sessionStorage);
-    for (const key of keys) {
-      if (key.startsWith(KEY_CACHE_PREFIX)) {
-        sessionStorage.removeItem(key);
-      }
-    }
-  } catch (error) {
-    // Silently fail
-  }
-}
+// Re-export Account Key cache functions for convenience
+export {
+  cacheAccountKey,
+  getCachedAccountKey,
+  clearCachedAccountKey,
+  clearAllCachedAccountKeys,
+  isAccountKeyCached,
+  cachedAccountKeyExpiresAt,
+  lockAccountKey,
+  unlockAccountKey,
+  isAccountKeyLocked,
+  cleanupAccountKeyCache,
+  type CacheDurationHours,
+};
 
 /**
  * Derives a file encryption key with caching
@@ -467,34 +399,59 @@ export function clearAllCachedKeys(): void {
  * This is the recommended way to derive keys, as it will use
  * a cached key if available, avoiding expensive Argon2id computation.
  * 
+ * For 'account' context, uses the new Account Key cache.
+ * For 'custom' and 'share' contexts, derives fresh keys (no caching).
+ * 
  * @param password - The user's password
  * @param username - The user's username
  * @param context - The password context (account, custom, or share)
+ * @param cacheDuration - Optional cache duration in hours (1-4, only for 'account' context)
  * @returns A 32-byte encryption key
  */
 export async function deriveFileEncryptionKeyWithCache(
   password: string,
   username: string,
-  context: PasswordContext = 'account'
+  context: PasswordContext = 'account',
+  cacheDuration?: CacheDurationHours
 ): Promise<Uint8Array> {
-  // Create cache key that includes context
-  // Note: cacheFileEncryptionKey/getCachedFileEncryptionKey will prepend the prefix
-  // so we just pass the composite identifier as the "username"
-  const cacheIdentifier = `${username}:${context}`;
-  
-  // Try to get cached key
-  const cachedKey = getCachedFileEncryptionKey(cacheIdentifier);
-  if (cachedKey) {
-    return cachedKey;
+  // Only cache 'account' context keys
+  if (context === 'account') {
+    // Try to get cached Account Key
+    const cachedKey = getCachedAccountKey(username);
+    if (cachedKey) {
+      return cachedKey;
+    }
+    
+    // Derive new key
+    const key = await deriveFileEncryptionKey(password, username, context);
+    
+    // Cache it with specified duration
+    cacheAccountKey(username, key, cacheDuration);
+    
+    return key;
   }
   
-  // Derive new key
-  const key = await deriveFileEncryptionKey(password, username, context);
-  
-  // Cache it
-  cacheFileEncryptionKey(cacheIdentifier, key);
-  
-  return key;
+  // For 'custom' and 'share' contexts, always derive fresh (no caching)
+  return deriveFileEncryptionKey(password, username, context);
+}
+
+/**
+ * Derives an Account Key with caching
+ * 
+ * This is a convenience wrapper for deriveFileEncryptionKeyWithCache
+ * specifically for the 'account' context.
+ * 
+ * @param password - The user's account password
+ * @param username - The user's username
+ * @param cacheDuration - Optional cache duration in hours (1-4)
+ * @returns A 32-byte Account Key
+ */
+export async function deriveAccountKeyWithCache(
+  password: string,
+  username: string,
+  cacheDuration?: CacheDurationHours
+): Promise<Uint8Array> {
+  return deriveFileEncryptionKeyWithCache(password, username, 'account', cacheDuration);
 }
 
 // ============================================================================
@@ -508,6 +465,7 @@ export const fileEncryption = {
   // Key derivation
   deriveFileEncryptionKey,
   deriveFileEncryptionKeyWithCache,
+  deriveAccountKeyWithCache,
   
   // Encryption
   encryptFile,
@@ -517,9 +475,15 @@ export const fileEncryption = {
   decryptFile,
   decryptFileFromBase64,
   
-  // Key caching
-  cacheFileEncryptionKey,
-  getCachedFileEncryptionKey,
-  clearCachedFileEncryptionKey,
-  clearAllCachedKeys,
+  // Account Key caching
+  cacheAccountKey,
+  getCachedAccountKey,
+  clearCachedAccountKey,
+  clearAllCachedAccountKeys,
+  isAccountKeyCached,
+  cachedAccountKeyExpiresAt,
+  lockAccountKey,
+  unlockAccountKey,
+  isAccountKeyLocked,
+  cleanupAccountKeyCache,
 };

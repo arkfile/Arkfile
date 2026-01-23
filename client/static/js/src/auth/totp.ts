@@ -540,3 +540,60 @@ async function completeTOTPSetupFlow(code: string): Promise<void> {
     document.querySelector('.modal-overlay')?.remove();
   }
 }
+
+/**
+ * Download backup codes as a text file
+ * Retrieves backup codes from the DOM (displayed during TOTP setup) and triggers download
+ */
+export function downloadBackupCodes(): void {
+  // Try to find backup codes in the TOTP setup modal - look for the container with monospace font
+  const backupCodesContainer = document.querySelector('[style*="font-family: monospace"]');
+  if (!backupCodesContainer) {
+    // No backup codes displayed - user may need to regenerate them
+    showError('No backup codes available. Complete TOTP setup first.');
+    return;
+  }
+
+  // Extract backup codes from the container
+  const codeElements = backupCodesContainer.querySelectorAll('div');
+  const codes: string[] = [];
+  codeElements.forEach(el => {
+    const code = el.textContent?.trim();
+    if (code && code.length > 0) {
+      codes.push(code);
+    }
+  });
+
+  if (codes.length === 0) {
+    showError('No backup codes found.');
+    return;
+  }
+
+  // Create file content
+  const content = [
+    'ARKFILE TOTP BACKUP CODES',
+    '========================',
+    '',
+    'Store these codes in a secure location.',
+    'Each code can only be used once.',
+    '',
+    'Generated: ' + new Date().toISOString(),
+    '',
+    ...codes.map((code, i) => `${i + 1}. ${code}`),
+    '',
+    'WARNING: Keep these codes secret!',
+  ].join('\n');
+
+  // Create and trigger download
+  const blob = new Blob([content], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'arkfile-backup-codes.txt';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  showSuccess('Backup codes downloaded.');
+}

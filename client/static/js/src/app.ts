@@ -5,6 +5,7 @@
  */
 
 import { validateToken, isAuthenticated, clearAllSessionData } from './utils/auth';
+import { lockAccountKey, registerAccountKeyCleanupHandlers } from './crypto/account-key-cache';
 import { showError, showSuccess } from './ui/messages';
 import { showFileSection, showAuthSection, toggleAuthForm } from './ui/sections';
 import { loadFiles, displayFiles } from './files/list';
@@ -18,6 +19,9 @@ class ArkFileApp {
     if (this.initialized) return;
 
     try {
+      // Register cleanup handlers for account key cache
+      registerAccountKeyCleanupHandlers();
+      
       // Check if we're on the home page or app page
       if (this.isHomePage()) {
         this.setupHomePageListeners();
@@ -157,6 +161,16 @@ class ArkFileApp {
       });
     }
 
+    // Lock encryption key
+    const lockKeyBtn = document.getElementById('lock-key-btn');
+    if (lockKeyBtn) {
+      lockKeyBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        lockAccountKey();
+        showSuccess('Encryption key locked. You will need to re-enter your password for the next file operation.');
+      });
+    }
+
     // Revoke all sessions
     const revokeButton = document.getElementById('revoke-sessions-btn');
     if (revokeButton) {
@@ -179,8 +193,8 @@ class ArkFileApp {
     if (uploadFileBtn) {
       uploadFileBtn.addEventListener('click', async (e) => {
         e.preventDefault();
-        const { uploadFile } = await import('./files/upload');
-        await uploadFile();
+        const { handleFileUpload } = await import('./files/upload');
+        await handleFileUpload();
       });
     }
 
@@ -245,8 +259,9 @@ class ArkFileApp {
     // Download backup codes
     const downloadBackupCodesBtn = document.getElementById('download-backup-codes-btn');
     if (downloadBackupCodesBtn) {
-      downloadBackupCodesBtn.addEventListener('click', () => {
-        console.log('Download backup codes functionality needs implementation');
+      downloadBackupCodesBtn.addEventListener('click', async () => {
+        const { downloadBackupCodes } = await import('./auth/totp');
+        downloadBackupCodes();
       });
     }
   }

@@ -2,7 +2,7 @@
  * Authentication utilities
  */
 
-import { clearAllCachedKeys } from '../crypto/file-encryption.js';
+import { clearAllCachedAccountKeys } from '../crypto/file-encryption.js';
 
 export class AuthManager {
   private static readonly TOKEN_KEY = 'token';
@@ -220,7 +220,7 @@ export class AuthManager {
     this.clearTokens();
     
     // Clear cached encryption keys
-    clearAllCachedKeys();
+    clearAllCachedAccountKeys();
     
     // Clear any legacy session context
     if (typeof window !== 'undefined') {

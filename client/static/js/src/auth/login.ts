@@ -9,7 +9,14 @@ import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleTOTPFlow } from './totp.js';
 import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
-import { deriveFileEncryptionKeyWithCache } from '../crypto/file-encryption.js';
+import { 
+  deriveAccountKeyWithCache,
+  deriveFileEncryptionKeyWithCache,
+  cleanupAccountKeyCache,
+} from '../crypto/file-encryption.js';
+import { registerAccountKeyCleanupHandlers } from '../crypto/account-key-cache.js';
+import { showPasswordPrompt } from '../ui/password-modal.js';
+import type { CacheDurationHours } from '../crypto/account-key-cache.js';
 
 export interface LoginCredentials {
   username: string;
@@ -175,9 +182,10 @@ export class LoginManager {
       const { logout } = await import('../utils/auth.js');
       await logout();
       
-      // Clear all session data including OPAQUE secrets
+      // Clear all session data including OPAQUE secrets and Account Key cache
       clearAllSessionData();
       clearClientSecret('login_secret');
+      cleanupAccountKeyCache();
       
       // Navigate back to auth section
       const { showAuthSection } = await import('../ui/sections.js');
@@ -190,6 +198,7 @@ export class LoginManager {
       // Still attempt cleanup even on error
       clearAllSessionData();
       clearClientSecret('login_secret');
+      cleanupAccountKeyCache();
       
       const { showAuthSection } = await import('../ui/sections.js');
       showAuthSection();

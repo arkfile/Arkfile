@@ -3,38 +3,139 @@
  * 
  * This module provides file download capabilities using the chunked download
  * infrastructure for efficient, resumable downloads with client-side decryption.
+ * 
+ * SECURITY: All FEK decryption happens client-side using Argon2id-derived keys.
+ * The server NEVER sees the plaintext FEK or the user's password.
  */
 
-import { authenticatedFetch, getToken } from '../utils/auth';
+import { authenticatedFetch, getToken, getUsernameFromToken } from '../utils/auth';
 import { showError, showSuccess } from '../ui/messages';
 import { 
   downloadFileChunked, 
   triggerBrowserDownload,
   StreamingDownloadResult 
 } from './streaming-download';
+import { 
+  getCachedAccountKey,
+  isAccountKeyLocked,
+  deriveFileEncryptionKeyWithCache,
+  type CacheDurationHours,
+} from '../crypto/file-encryption';
+import { promptForAccountKeyPassword } from '../ui/password-modal';
+import { decryptChunk } from '../crypto/aes-gcm';
 
 /**
- * Download metadata response from the server
+ * File metadata response from the server
  */
-interface FileDownloadMetadata {
-  file_id: string;
-  encrypted_fek: string;
-  fek_nonce: string;
+interface FileMetaResponse {
   encrypted_filename: string;
   filename_nonce: string;
   encrypted_sha256sum: string;
   sha256sum_nonce: string;
+  encrypted_fek: string;
+  password_hint: string;
+  password_type: string;
   size_bytes: number;
-  chunk_count: number;
-  chunk_size_bytes: number;
-  hint?: string;
+  chunk_size: number;
+  total_chunks: number;
+}
+
+/**
+ * Convert base64 string to Uint8Array
+ */
+function base64ToBytes(base64: string): Uint8Array {
+  const binaryString = atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
+ * Get the Account Key for decrypting the FEK
+ * 
+ * This function:
+ * 1. Checks if the Account Key is cached and not locked
+ * 2. If not cached or locked, prompts the user for their password
+ * 3. Derives the Account Key using Argon2id
+ * 4. Optionally caches the key based on user preference
+ * 
+ * @param username - The user's username
+ * @returns The Account Key, or null if the user cancelled
+ */
+async function getAccountKey(username: string): Promise<Uint8Array | null> {
+  // Check if Account Key is locked (user manually locked it)
+  if (isAccountKeyLocked()) {
+    showError('Account Key is locked. Please unlock it first.');
+    return null;
+  }
+
+  // Try to get cached Account Key
+  const cachedKey = getCachedAccountKey(username);
+  if (cachedKey) {
+    return cachedKey;
+  }
+  
+  // No cached key - prompt for password
+  const result = await promptForAccountKeyPassword();
+  if (!result) {
+    // User cancelled
+    return null;
+  }
+  
+  try {
+    // Derive Account Key using Argon2id with caching
+    const accountKey = await deriveFileEncryptionKeyWithCache(
+      result.password,
+      username,
+      'account',
+      result.cacheDuration as CacheDurationHours | undefined
+    );
+    
+    return accountKey;
+  } catch (error) {
+    console.error('Failed to derive Account Key:', error);
+    showError('Failed to derive encryption key. Please check your password.');
+    return null;
+  }
+}
+
+/**
+ * Decrypt the FEK using the Account Key
+ * 
+ * The encrypted FEK format is: [nonce (12 bytes)][ciphertext][auth tag (16 bytes)]
+ * This is the same format used for chunk encryption.
+ * 
+ * @param encryptedFekBase64 - Base64-encoded encrypted FEK
+ * @param accountKey - The Account Key (32 bytes)
+ * @returns The decrypted FEK (32 bytes)
+ */
+async function decryptFEK(encryptedFekBase64: string, accountKey: Uint8Array): Promise<Uint8Array> {
+  const encryptedFek = base64ToBytes(encryptedFekBase64);
+  
+  // Use the same decryption function as for chunks
+  // Format: [nonce (12 bytes)][ciphertext][auth tag (16 bytes)]
+  const fek = await decryptChunk(encryptedFek, accountKey);
+  
+  if (fek.length !== 32) {
+    throw new Error(`Invalid FEK length: expected 32 bytes, got ${fek.length}`);
+  }
+  
+  return fek;
 }
 
 /**
  * Download a file using chunked download with client-side decryption
  * 
+ * This function:
+ * 1. Fetches file metadata including the encrypted FEK
+ * 2. Gets the Account Key (from cache or by prompting for password)
+ * 3. Decrypts the FEK client-side
+ * 4. Uses the FEK to download and decrypt the file chunks
+ * 
  * @param fileId - The file ID to download
- * @param hint - Optional password hint to display
+ * @param hint - Optional password hint to display (unused for account-encrypted files)
  * @param expectedHash - Expected SHA256 hash for verification (encrypted, will be decrypted)
  * @param passwordType - 'account' or 'custom' indicating encryption type
  */
@@ -45,59 +146,77 @@ export async function downloadFile(
   passwordType: string
 ): Promise<void> {
   try {
-    // Show hint if provided
-    if (hint) {
-      alert(`Password Hint: ${hint}`);
-    }
-
     // Get auth token for authenticated requests
     const authToken = getToken();
     if (!authToken) {
       showError('Not authenticated. Please log in again.');
       return;
     }
+    
+    // Get username for key derivation
+    const username = getUsernameFromToken();
+    if (!username) {
+      showError('Username not found. Please log in again.');
+      return;
+    }
 
+    // Fetch file metadata including encrypted FEK
+    const metaResponse = await authenticatedFetch(`/api/files/${fileId}/meta`);
+    if (!metaResponse.ok) {
+      const errorData = await metaResponse.json().catch(() => ({}));
+      showError(errorData.message || 'Failed to retrieve file metadata.');
+      return;
+    }
+    
+    const meta: FileMetaResponse = await metaResponse.json();
+    
     let fek: Uint8Array;
 
-    if (passwordType === 'account') {
-      // For account-encrypted files, get the FEK from the server
-      // The server decrypts the FEK using the user's account key
-      const fekResponse = await authenticatedFetch(`/api/files/${fileId}/key`);
+    if (passwordType === 'account' || meta.password_type === 'account') {
+      // For account-encrypted files:
+      // 1. Get Account Key (from cache or prompt for password)
+      // 2. Decrypt FEK client-side
       
-      if (!fekResponse.ok) {
-        const errorData = await fekResponse.json().catch(() => ({}));
-        showError(errorData.message || 'Failed to retrieve file key.');
+      const accountKey = await getAccountKey(username);
+      if (!accountKey) {
+        // User cancelled password prompt
         return;
       }
       
-      const fekData = await fekResponse.json();
-      fek = base64ToBytes(fekData.fek);
+      try {
+        fek = await decryptFEK(meta.encrypted_fek, accountKey);
+      } catch (error) {
+        console.error('Failed to decrypt FEK:', error);
+        showError('Failed to decrypt file key. Your password may be incorrect.');
+        return;
+      }
       
     } else {
-      // For custom password-encrypted files, derive FEK from password
+      // For custom password-encrypted files:
+      // Show hint if provided
+      if (hint || meta.password_hint) {
+        alert(`Password Hint: ${hint || meta.password_hint}`);
+      }
+      
+      // Prompt for custom password
       const password = prompt('Enter the file password:');
       if (!password) return;
 
-      // Get the salt and encrypted FEK from the server
-      const fekResponse = await authenticatedFetch(`/api/files/${fileId}/key`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ password }),
-      });
-
-      if (!fekResponse.ok) {
-        const errorData = await fekResponse.json().catch(() => ({}));
-        showError(errorData.message || 'Failed to retrieve file key. Check your password.');
+      try {
+        // Derive custom key using Argon2id with 'custom' context
+        const { deriveFileEncryptionKey } = await import('../crypto/file-encryption');
+        const customKey = await deriveFileEncryptionKey(password, username, 'custom');
+        
+        // Decrypt FEK with custom key
+        fek = await decryptFEK(meta.encrypted_fek, customKey);
+      } catch (error) {
+        console.error('Failed to decrypt FEK with custom password:', error);
+        showError('Failed to decrypt file key. Check your password.');
         return;
       }
-
-      const fekData = await fekResponse.json();
-      fek = base64ToBytes(fekData.fek);
     }
 
-    // Use chunked download with the FEK
+    // Use chunked download with the decrypted FEK
     const result: StreamingDownloadResult = await downloadFileChunked(
       fileId,
       fek,
@@ -190,16 +309,4 @@ export async function downloadFileByName(
     console.error('Download error:', error);
     showError('An error occurred during file download.');
   }
-}
-
-/**
- * Convert base64 string to Uint8Array
- */
-function base64ToBytes(base64: string): Uint8Array {
-  const binaryString = atob(base64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes;
 }
