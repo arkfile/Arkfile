@@ -75,8 +75,8 @@ interface OpaqueConfig {
 }
 
 interface OpaqueInfos {
-  info: Uint8Array | null;
-  einfo: Uint8Array | null;
+  info: string | null;
+  einfo: string | null;
 }
 
 // Registration flow types
@@ -167,9 +167,9 @@ export class OpaqueClient {
     };
     
     // Context must match server-side: "arkfile_auth"
-    const contextBytes = new TextEncoder().encode("arkfile_auth");
+    // libopaque.js expects info as a string, not Uint8Array
     this.infos = {
-      info: contextBytes,
+      info: "arkfile_auth",
       einfo: null,
     };
   }
