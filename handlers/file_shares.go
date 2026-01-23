@@ -773,9 +773,10 @@ func GetShareDownloadMetadata(c echo.Context) error {
 	}
 
 	// Get file chunk info
-	var sizeBytes int64
-	var chunkCount int64
-	var chunkSizeBytes int64
+	// Note: rqlite returns numbers as float64, so we scan into float64 and convert
+	var sizeBytes float64
+	var chunkCount float64
+	var chunkSizeBytes float64
 
 	err = database.DB.QueryRow(`
 		SELECT size_bytes, chunk_count, chunk_size_bytes
@@ -788,21 +789,26 @@ func GetShareDownloadMetadata(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
 	}
 
+	// Convert to int64 for use
+	sizeBytesInt := int64(sizeBytes)
+	chunkCountInt := int64(chunkCount)
+	chunkSizeBytesInt := int64(chunkSizeBytes)
+
 	// Handle legacy files without chunk info
-	if chunkCount == 0 {
-		chunkCount = 1
+	if chunkCountInt == 0 {
+		chunkCountInt = 1
 	}
-	if chunkSizeBytes == 0 {
-		chunkSizeBytes = 16 * 1024 * 1024 // 16MB default
+	if chunkSizeBytesInt == 0 {
+		chunkSizeBytesInt = 16 * 1024 * 1024 // 16MB default
 	}
 
 	logging.InfoLogger.Printf("Share chunk info accessed: share_id=%s..., file=%s, entity_id=%s", shareID[:8], share.FileID, entityID)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"file_id":          share.FileID,
-		"size_bytes":       sizeBytes,
-		"chunk_count":      chunkCount,
-		"chunk_size_bytes": chunkSizeBytes,
+		"size_bytes":       sizeBytesInt,
+		"chunk_count":      chunkCountInt,
+		"chunk_size_bytes": chunkSizeBytesInt,
 	})
 }
 
@@ -897,21 +903,27 @@ func DownloadShareChunk(c echo.Context) error {
 	}
 
 	// Get file metadata
+	// Note: rqlite returns numbers as float64, so we scan into float64 and convert
 	var storageID string
-	var sizeBytes int64
-	var chunkCount int64
-	var chunkSizeBytes int64
+	var sizeBytesF float64
+	var chunkCountF float64
+	var chunkSizeBytesF float64
 
 	err = database.DB.QueryRow(`
 		SELECT storage_id, size_bytes, chunk_count, chunk_size_bytes
 		FROM file_metadata
 		WHERE file_id = ?
-	`, share.FileID).Scan(&storageID, &sizeBytes, &chunkCount, &chunkSizeBytes)
+	`, share.FileID).Scan(&storageID, &sizeBytesF, &chunkCountF, &chunkSizeBytesF)
 
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
 	}
+
+	// Convert to int64 for use
+	sizeBytes := int64(sizeBytesF)
+	chunkCount := int64(chunkCountF)
+	chunkSizeBytes := int64(chunkSizeBytesF)
 
 	// Handle legacy files without chunk info
 	if chunkCount == 0 {
