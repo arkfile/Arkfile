@@ -312,11 +312,13 @@ func RateLimitMiddleware(endpointConfig config.EndpointConfig) echo.MiddlewareFu
 func CSPMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		// CSP policy with strict security
+		// Note: 'wasm-unsafe-eval' is required for OPAQUE WebAssembly authentication
+		// data: and blob: in connect-src are required for WASM module loading
 		csp := "default-src 'self'; " +
-			"script-src 'self'; " +
-			"style-src 'self'; " +
+			"script-src 'self' 'wasm-unsafe-eval'; " +
+			"style-src 'self' 'unsafe-inline'; " +
 			"img-src 'self' data:; " +
-			"connect-src 'self'; " +
+			"connect-src 'self' data: blob:; " +
 			"font-src 'self'; " +
 			"object-src 'none'; " +
 			"base-uri 'self'; " +

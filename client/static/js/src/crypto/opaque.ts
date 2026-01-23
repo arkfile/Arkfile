@@ -11,6 +11,9 @@
  * - Compatible with libopaque C library on server side
  * 
  * IMPORTANT: This is ONLY for authentication. File encryption uses separate Argon2id system.
+ * 
+ * ENCODING NOTE: All data sent to/from the server uses BASE64 encoding.
+ * Internal storage (sessionStorage) uses HEX encoding for client secrets.
  */
 
 import { CryptoError, OpaqueRegistrationError, OpaqueAuthenticationError } from './errors.js';
@@ -83,18 +86,18 @@ export interface RegistrationInitRequest {
 }
 
 export interface RegistrationInitResponse {
-  requestData: string; // hex-encoded M
+  requestData: string; // base64-encoded M (for server)
   clientSecret: string; // hex-encoded sec (stored in sessionStorage)
 }
 
 export interface RegistrationFinalizeRequest {
   username: string;
-  serverResponse: string; // hex-encoded pub from server
+  serverResponse: string; // base64-encoded pub from server
   clientSecret: string; // hex-encoded sec from sessionStorage
 }
 
 export interface RegistrationFinalizeResponse {
-  record: string; // hex-encoded rec to send to server
+  record: string; // base64-encoded rec to send to server
   exportKey: Uint8Array; // for session key derivation
 }
 
@@ -105,21 +108,41 @@ export interface LoginInitRequest {
 }
 
 export interface LoginInitResponse {
-  requestData: string; // hex-encoded pub
+  requestData: string; // base64-encoded pub (for server)
   clientSecret: string; // hex-encoded sec (stored in sessionStorage)
 }
 
 export interface LoginFinalizeRequest {
   username: string;
-  serverResponse: string; // hex-encoded resp from server
-  serverPublicKey: string | null; // hex-encoded pkS (if NotPackaged)
+  serverResponse: string; // base64-encoded resp from server
+  serverPublicKey: string | null; // base64-encoded pkS (if NotPackaged)
   clientSecret: string; // hex-encoded sec from sessionStorage
 }
 
 export interface LoginFinalizeResponse {
-  authData: string; // hex-encoded authU to send to server
+  authData: string; // base64-encoded authU to send to server
   exportKey: Uint8Array; // for session key derivation
   sessionKey: Uint8Array; // derived from export_key
+}
+
+// Base64 encoding/decoding utilities
+function uint8ArrayToBase64(arr: Uint8Array): string {
+  // Convert Uint8Array to binary string, then to base64
+  let binary = '';
+  for (let i = 0; i < arr.length; i++) {
+    binary += String.fromCharCode(arr[i]);
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8Array(base64: string): Uint8Array {
+  // Decode base64 to binary string, then to Uint8Array
+  const binary = atob(base64);
+  const arr = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    arr[i] = binary.charCodeAt(i);
+  }
+  return arr;
 }
 
 /**
@@ -143,8 +166,10 @@ export class OpaqueClient {
       idU: 0, // Will be set to NotPackaged after module loads
     };
     
+    // Context must match server-side: "arkfile_auth"
+    const contextBytes = new TextEncoder().encode("arkfile_auth");
     this.infos = {
-      info: null,
+      info: contextBytes,
       einfo: null,
     };
   }
@@ -203,8 +228,9 @@ export class OpaqueClient {
       // Create registration request
       const request = this.module.createRegistrationRequest({ pwdU: password });
       
-      // Convert to hex for transmission and storage
-      const requestData = this.module.uint8ArrayToHex(request.M);
+      // Convert M to base64 for server transmission
+      const requestData = uint8ArrayToBase64(request.M);
+      // Keep sec as hex for internal storage (sessionStorage)
       const clientSecret = this.module.uint8ArrayToHex(request.sec);
       
       return {
@@ -230,8 +256,9 @@ export class OpaqueClient {
     try {
       const { username, serverResponse, clientSecret } = params;
       
-      // Convert from hex
-      const pub = this.module.hexToUint8Array(serverResponse);
+      // Decode server response from base64
+      const pub = base64ToUint8Array(serverResponse);
+      // Decode client secret from hex (internal storage format)
       const sec = this.module.hexToUint8Array(clientSecret);
       
       // Finalize registration
@@ -242,8 +269,8 @@ export class OpaqueClient {
         ids: { idS: this.serverId, idU: username },
       });
       
-      // Convert record to hex for transmission
-      const record = this.module.uint8ArrayToHex(result.rec);
+      // Convert record to base64 for server transmission
+      const record = uint8ArrayToBase64(result.rec);
       
       return {
         record,
@@ -271,8 +298,9 @@ export class OpaqueClient {
       // Create credential request
       const request = this.module.createCredentialRequest({ pwdU: password });
       
-      // Convert to hex for transmission and storage
-      const requestData = this.module.uint8ArrayToHex(request.pub);
+      // Convert pub to base64 for server transmission
+      const requestData = uint8ArrayToBase64(request.pub);
+      // Keep sec as hex for internal storage (sessionStorage)
       const clientSecret = this.module.uint8ArrayToHex(request.sec);
       
       return {
@@ -298,10 +326,12 @@ export class OpaqueClient {
     try {
       const { username, serverResponse, serverPublicKey, clientSecret } = params;
       
-      // Convert from hex
-      const resp = this.module.hexToUint8Array(serverResponse);
+      // Decode server response from base64
+      const resp = base64ToUint8Array(serverResponse);
+      // Decode client secret from hex (internal storage format)
       const sec = this.module.hexToUint8Array(clientSecret);
-      const pkS = serverPublicKey ? this.module.hexToUint8Array(serverPublicKey) : null;
+      // Decode server public key from base64 if provided
+      const pkS = serverPublicKey ? base64ToUint8Array(serverPublicKey) : null;
       
       // Recover credentials
       const credentials = this.module.recoverCredentials({
@@ -313,8 +343,8 @@ export class OpaqueClient {
         ids: { idS: this.serverId, idU: username },
       });
       
-      // Convert authU to hex for transmission
-      const authData = this.module.uint8ArrayToHex(credentials.authU);
+      // Convert authU to base64 for server transmission
+      const authData = uint8ArrayToBase64(credentials.authU);
       
       // Derive session key from export key (simple hash for now)
       const sessionKey = await this.deriveSessionKey(credentials.export_key);

@@ -75,6 +75,14 @@ export class LoginManager {
       
       const step1Data = await responseStep1.json();
       
+      // Extract data from standard API response structure
+      const responseData = step1Data.data;
+      if (!responseData || !responseData.credential_response || !responseData.session_id) {
+        hideProgress();
+        showError('Invalid server response: missing credential data');
+        return;
+      }
+      
       // Retrieve client secret from sessionStorage
       const clientSecret = retrieveClientSecret('login_secret');
       if (!clientSecret) {
@@ -86,8 +94,8 @@ export class LoginManager {
       // Step 2: Finalize authentication with server's credential response
       const loginFinalize = await opaqueClient.finalizeLogin({
         username: credentials.username,
-        serverResponse: step1Data.credential_response,
-        serverPublicKey: step1Data.server_public_key || null,
+        serverResponse: responseData.credential_response,
+        serverPublicKey: null, // Server public key is packaged in credential response (InSecEnv mode)
         clientSecret: clientSecret
       });
 
@@ -101,6 +109,7 @@ export class LoginManager {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
+          session_id: responseData.session_id,
           username: credentials.username,
           auth_u: loginFinalize.authData
         })
@@ -113,7 +122,8 @@ export class LoginManager {
         return;
       }
       
-      const loginData = await responseStep2.json();
+      const loginResponse = await responseStep2.json();
+      const loginData = loginResponse.data || loginResponse;
       
       // Discard session key immediately (not needed for this application)
       // JWT tokens handle all session management

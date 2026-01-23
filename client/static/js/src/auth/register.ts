@@ -65,6 +65,14 @@ export class RegistrationManager {
       }
 
       const step1Data = await responseStep1.json();
+      
+      // Extract data from standard API response structure
+      const responseData = step1Data.data;
+      if (!responseData || !responseData.registration_response) {
+        hideProgress();
+        showError('Invalid server response: missing registration data');
+        return;
+      }
 
       // Step 2: Finalize registration - process server response
       const clientSecret = retrieveClientSecret('registration_secret');
@@ -76,7 +84,7 @@ export class RegistrationManager {
 
       const registrationFinalize = await opaqueClient.finalizeRegistration({
         username: credentials.username,
-        serverResponse: step1Data.registration_response,
+        serverResponse: responseData.registration_response,
         clientSecret: clientSecret
       });
 
@@ -102,7 +110,8 @@ export class RegistrationManager {
         return;
       }
 
-      const registrationData = await responseStep2.json();
+      const registrationResponse = await responseStep2.json();
+      const registrationData = registrationResponse.data || registrationResponse;
 
       // Discard export key immediately (not needed for this application)
       // JWT tokens handle all session management

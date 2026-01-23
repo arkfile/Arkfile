@@ -26,6 +26,9 @@ func RegisterRoutes() {
 	Echo.Static("/css", "client/static/css")
 	Echo.Static("/errors", "client/static/errors")
 
+	// Serve libopaque.js for OPAQUE authentication
+	Echo.File("/js/libopaque.js", "client/static/js/libopaque.js")
+
 	// Individual static files needed by frontend with HEAD support
 	Echo.File("/favicon.ico", "client/static/favicon.ico")
 	Echo.HEAD("/favicon.ico", func(c echo.Context) error {
