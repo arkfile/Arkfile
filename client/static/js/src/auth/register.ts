@@ -52,6 +52,7 @@ export class RegistrationManager {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
+          username: credentials.username,
           registration_request: registrationInit.requestData
         })
       });
@@ -98,6 +99,7 @@ export class RegistrationManager {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
+          session_id: responseData.session_id,
           username: credentials.username,
           registration_record: registrationFinalize.record
         })
