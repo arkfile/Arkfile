@@ -318,92 +318,29 @@ fi
 mkdir -p ${BUILD_DIR}
 echo -e "${GREEN}Building in directory: $(pwd)${NC}"
 
-# Build libopaque WASM/JS from vendor submodule
-echo -e "${YELLOW}Checking libopaque WASM/JS files...${NC}"
+# Build libopaque WASM/JS library
+echo -e "${YELLOW}Building libopaque WASM/JS library...${NC}"
 
-# Check if pre-built WASM files already exist
-if [ -f "vendor/stef/libopaque/js/dist/libopaque.js" ] && [ -f "vendor/stef/libopaque/js/dist/libopaque.debug.js" ]; then
-    echo -e "${GREEN}[OK] Using existing pre-built libopaque.js WASM files${NC}"
-    SKIP_WASM_BUILD=true
+# Check if we should skip WASM library building (respects SKIP_C_LIBS flag)
+if [ "${SKIP_C_LIBS}" = "true" ]; then
+    # Verify WASM files exist in client directory
+    if [ -f "client/static/js/libopaque.js" ] && [ -f "client/static/js/libopaque.debug.js" ]; then
+        echo -e "${GREEN}[OK] Skipping WASM library rebuild (libraries already exist)${NC}"
+    else
+        echo -e "${YELLOW}[WARNING] Expected WASM libraries missing, forcing rebuild...${NC}"
+        SKIP_C_LIBS="false"
+    fi
+fi
+
+if [ "${SKIP_C_LIBS}" != "true" ]; then
+    # Use the dedicated WASM build script (includes validation and proper error handling)
+    if ! ./scripts/setup/build-libopaque-wasm.sh; then
+        echo -e "${RED}[X] Failed to build libopaque WASM library${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}[OK] libopaque WASM library built successfully${NC}"
 else
-    echo -e "${YELLOW}Pre-built WASM files not found, will build with Emscripten${NC}"
-    SKIP_WASM_BUILD=false
-fi
-
-# Only build if needed
-if [ "$SKIP_WASM_BUILD" != "true" ]; then
-    echo -e "${YELLOW}Building libopaque WASM/JS from vendor submodule...${NC}"
-    
-    # Check if emscripten is available
-    if ! command -v emcc >/dev/null 2>&1; then
-        echo -e "${RED}[X] Emscripten (emcc) is required to build libopaque.js${NC}"
-        echo -e "${YELLOW}Install Emscripten: https://emscripten.org/docs/getting_started/downloads.html${NC}"
-        exit 1
-    fi
-
-    # Build libopaque.js in the vendor submodule
-    cd vendor/stef/libopaque/js
-
-    # Check if node_modules exists, install if needed
-    if [ ! -d "node_modules" ]; then
-        echo "Installing npm dependencies for libopaque.js build..."
-        npm install || {
-            echo -e "${RED}[X] Failed to install npm dependencies for libopaque.js${NC}"
-            exit 1
-        }
-    fi
-
-    # Build libopaque.js
-    echo "Building libopaque.js and libopaque.debug.js..."
-    if ! make libopaquejs; then
-        echo -e "${RED}[X] Failed to build libopaque.js${NC}"
-        exit 1
-    fi
-
-    # Verify build output
-    if [ ! -f "dist/libopaque.js" ] || [ ! -f "dist/libopaque.debug.js" ]; then
-        echo -e "${RED}[X] libopaque.js build output missing${NC}"
-        exit 1
-    fi
-
-    echo -e "${GREEN}[OK] libopaque.js built successfully${NC}"
-    
-    # Return to project root
-    cd ../../../../
-fi
-
-# Copy to client static directory (whether pre-built or freshly built)
-echo "Copying libopaque.js files to client/static/js/..."
-
-# Ensure target directory exists with correct ownership
-mkdir -p client/static/js/
-
-# Fix ownership of existing files if they're root-owned (prevents permission denied)
-if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-    # Running as root via sudo - fix any existing root-owned files first
-    if [ -f "client/static/js/libopaque.js" ]; then
-        chown "$SUDO_USER:$SUDO_USER" client/static/js/libopaque.js 2>/dev/null || true
-    fi
-    if [ -f "client/static/js/libopaque.debug.js" ]; then
-        chown "$SUDO_USER:$SUDO_USER" client/static/js/libopaque.debug.js 2>/dev/null || true
-    fi
-    # Ensure directory ownership is correct
-    chown "$SUDO_USER:$SUDO_USER" client/static/js/ 2>/dev/null || true
-fi
-
-# Copy files with proper ownership handling
-if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-    # Running as root via sudo - copy as the original user
-    cp vendor/stef/libopaque/js/dist/libopaque.js client/static/js/
-    cp vendor/stef/libopaque/js/dist/libopaque.debug.js client/static/js/
-    chown "$SUDO_USER:$SUDO_USER" client/static/js/libopaque.js
-    chown "$SUDO_USER:$SUDO_USER" client/static/js/libopaque.debug.js
-    echo -e "${GREEN}[OK] libopaque.js files copied with ownership set to $SUDO_USER${NC}"
-else
-    # Running as normal user - just copy
-    cp vendor/stef/libopaque/js/dist/libopaque.js client/static/js/
-    cp vendor/stef/libopaque/js/dist/libopaque.debug.js client/static/js/
-    echo -e "${GREEN}[OK] libopaque.js files copied to client/static/js/${NC}"
+    echo -e "${GREEN}[OK] Using existing libopaque WASM library${NC}"
 fi
 
 # Build TypeScript Frontend (Mandatory)

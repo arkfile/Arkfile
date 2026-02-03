@@ -344,6 +344,34 @@ if [ -d "build" ]; then
 fi
 echo
 
+# Validate libopaque.js Makefile configuration before building
+print_status "INFO" "Validating libopaque.js Makefile configuration..."
+MAKEFILE_PATH="vendor/stef/libopaque/js/Makefile"
+
+if [ -f "$MAKEFILE_PATH" ]; then
+    if grep -q "DEFINES=.*-DNORANDOM" "$MAKEFILE_PATH"; then
+        print_status "ERROR" "CRITICAL: Invalid libopaque.js configuration detected!"
+        echo ""
+        echo -e "${RED}The Makefile contains the -DNORANDOM flag which:${NC}"
+        echo -e "${RED}  1. Makes OPAQUE deterministic (insecure for production)${NC}"
+        echo -e "${RED}  2. Changes protocol data structures (breaks backend compatibility)${NC}"
+        echo ""
+        echo -e "${YELLOW}The backend Go code uses standard libopaque without -DNORANDOM.${NC}"
+        echo -e "${YELLOW}Frontend and backend MUST use matching configurations.${NC}"
+        echo ""
+        echo -e "${BLUE}To fix:${NC}"
+        echo "  Edit: $MAKEFILE_PATH"
+        echo "  Change: DEFINES=-DTRACE -DNORANDOM"
+        echo "  To:     DEFINES=-DTRACE"
+        echo ""
+        exit 1
+    fi
+    print_status "SUCCESS" "libopaque.js Makefile configuration is valid"
+else
+    print_status "WARNING" "libopaque.js Makefile not found - will be initialized during build"
+fi
+echo
+
 # Ensure ownership is correct before build
 fix_go_ownership
 
