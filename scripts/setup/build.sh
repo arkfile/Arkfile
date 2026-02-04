@@ -119,11 +119,19 @@ fix_vendor_ownership() {
         VENDOR_OWNER=$(stat -c '%U' vendor 2>/dev/null || echo "unknown")
         CURRENT_USER=$(whoami)
         if [ "$VENDOR_OWNER" = "root" ] && [ "$CURRENT_USER" != "root" ]; then
-            echo -e "${YELLOW}Vendor directory owned by root, fixing with sudo...${NC}"
-            sudo chown -R "$CURRENT_USER:$CURRENT_USER" vendor/ 2>/dev/null || true
-            sudo chown -R "$CURRENT_USER:$CURRENT_USER" go.mod go.sum 2>/dev/null || true
-            [ -f ".vendor_cache" ] && sudo chown "$CURRENT_USER:$CURRENT_USER" .vendor_cache 2>/dev/null || true
-            echo -e "${GREEN}[OK] Vendor directory ownership restored to $CURRENT_USER${NC}"
+            # Only attempt sudo fix if we're NOT being called from a parent sudo context
+            # (indicated by SUDO_USER being set in the environment)
+            if [ -z "$SUDO_USER" ]; then
+                echo -e "${YELLOW}Vendor directory owned by root, fixing with sudo...${NC}"
+                sudo chown -R "$CURRENT_USER:$CURRENT_USER" vendor/ 2>/dev/null || true
+                sudo chown -R "$CURRENT_USER:$CURRENT_USER" go.mod go.sum 2>/dev/null || true
+                [ -f ".vendor_cache" ] && sudo chown "$CURRENT_USER:$CURRENT_USER" .vendor_cache 2>/dev/null || true
+                echo -e "${GREEN}[OK] Vendor directory ownership restored to $CURRENT_USER${NC}"
+            else
+                # We're being called via sudo -u from a parent script that's already root
+                # The parent script should handle ownership fixes
+                echo -e "${YELLOW}Vendor directory owned by root (parent script will fix)${NC}"
+            fi
         fi
     fi
 }

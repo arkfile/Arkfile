@@ -16,6 +16,17 @@ NC='\033[0m'
 echo -e "${BLUE}Building libopaque.js WASM library${NC}"
 echo "===================================="
 
+# Configuration - Latest stable versions
+EMSCRIPTEN_VERSION="3.1.74"
+LIBSODIUM_JS_VERSION="0.7.15"
+
+# Build configuration - passed to make (not modifying submodule Makefile)
+# LIBOPRFHOME: Path to liboprf source (relative to js/ directory)
+# DEFINES: Compiler defines (-DTRACE for debug logging, empty for production)
+#          IMPORTANT: Do NOT include -DNORANDOM - it makes OPAQUE deterministic (insecure)
+LIBOPRFHOME_PATH="../../liboprf/src"
+BUILD_DEFINES="-DTRACE"
+
 # Function to print status messages
 print_status() {
     local status=$1
@@ -37,125 +48,16 @@ print_status() {
     esac
 }
 
-# Enhanced cross-platform system detection (matching build-libopaque.sh)
-detect_system_and_packages() {
-    OS=""
-    PACKAGE_MANAGER=""
-    INSTALL_CMD=""
-    EMSCRIPTEN_PKG=""
-    
-    # Enhanced OS detection with multiple methods
-    if [[ "$OSTYPE" == "linux-gnu"* ]] || [[ "$OSTYPE" == "linux-musl"* ]] || [ -f /etc/os-release ]; then
-        # Alpine Linux detection
-        if [ -f /etc/alpine-release ] || grep -q "Alpine" /etc/os-release 2>/dev/null; then
-            OS="alpine"
-            PACKAGE_MANAGER="apk"
-            INSTALL_CMD="apk add --no-cache"
-            EMSCRIPTEN_PKG="emscripten"
-        # Debian/Ubuntu detection
-        elif command -v apt-get >/dev/null || [ -f /etc/debian_version ] || grep -qE "(Ubuntu|Debian)" /etc/os-release 2>/dev/null; then
-            OS="debian"
-            PACKAGE_MANAGER="apt"
-            INSTALL_CMD="apt-get update && apt-get install -y"
-            EMSCRIPTEN_PKG="emscripten"
-        # RHEL family detection
-        elif command -v dnf >/dev/null || command -v yum >/dev/null || [ -f /etc/redhat-release ] || grep -qE "(Red Hat|CentOS|AlmaLinux|Rocky)" /etc/os-release 2>/dev/null; then
-            OS="rhel"
-            if command -v dnf >/dev/null; then
-                PACKAGE_MANAGER="dnf"
-                INSTALL_CMD="dnf install -y"
-            else
-                PACKAGE_MANAGER="yum"
-                INSTALL_CMD="yum install -y"
-            fi
-            EMSCRIPTEN_PKG="emscripten"
-        # Arch Linux detection
-        elif command -v pacman >/dev/null || [ -f /etc/arch-release ] || grep -q "Arch" /etc/os-release 2>/dev/null; then
-            OS="arch"
-            PACKAGE_MANAGER="pacman"
-            INSTALL_CMD="pacman -S --noconfirm"
-            EMSCRIPTEN_PKG="emscripten"
-        else
-            OS="unknown-linux"
-        fi
-    elif [[ "$OSTYPE" == "freebsd"* ]] || uname | grep -q FreeBSD; then
-        OS="freebsd"
-        PACKAGE_MANAGER="pkg"
-        INSTALL_CMD="pkg install -y"
-        EMSCRIPTEN_PKG="emscripten"
-    elif [[ "$OSTYPE" == "openbsd"* ]] || uname | grep -q OpenBSD; then
-        OS="openbsd"
-        PACKAGE_MANAGER="pkg_add"
-        INSTALL_CMD="pkg_add"
-        EMSCRIPTEN_PKG="emscripten"
-    elif [[ "$OSTYPE" == "netbsd"* ]] || uname | grep -q NetBSD; then
-        OS="netbsd"
-        PACKAGE_MANAGER="pkgin"
-        INSTALL_CMD="pkgin -y install"
-        EMSCRIPTEN_PKG="emscripten"
-    else
-        OS="unknown"
-    fi
-    
-    print_status "INFO" "Detected OS: $OS"
+# Check if we're running under sudo (to avoid nested sudo calls)
+is_running_as_root() {
+    [ "$EUID" -eq 0 ]
 }
 
-# Install Emscripten via package manager
-install_emscripten_package() {
-    print_status "INFO" "Attempting to install Emscripten via $PACKAGE_MANAGER..."
-    
-    case $PACKAGE_MANAGER in
-        apk)
-            if sudo $INSTALL_CMD $EMSCRIPTEN_PKG; then
-                return 0
-            fi
-            ;;
-        apt)
-            if sudo $INSTALL_CMD $EMSCRIPTEN_PKG; then
-                return 0
-            fi
-            ;;
-        dnf|yum)
-            # RHEL family may need EPEL repository
-            print_status "INFO" "Enabling EPEL repository for Emscripten..."
-            sudo $INSTALL_CMD epel-release 2>/dev/null || true
-            if sudo $INSTALL_CMD $EMSCRIPTEN_PKG; then
-                return 0
-            fi
-            ;;
-        pacman)
-            if sudo $INSTALL_CMD $EMSCRIPTEN_PKG; then
-                return 0
-            fi
-            ;;
-        pkg)
-            if sudo $INSTALL_CMD $EMSCRIPTEN_PKG; then
-                return 0
-            fi
-            ;;
-        pkg_add)
-            if sudo $INSTALL_CMD $EMSCRIPTEN_PKG; then
-                return 0
-            fi
-            ;;
-        pkgin)
-            if sudo $INSTALL_CMD $EMSCRIPTEN_PKG; then
-                return 0
-            fi
-            ;;
-    esac
-    
-    return 1
-}
-
-# Install Emscripten via emsdk (fallback method)
+# Install Emscripten via emsdk (local installation - no sudo needed)
 install_emscripten_emsdk() {
-    print_status "INFO" "Installing Emscripten via emsdk (fallback method)..."
+    print_status "INFO" "Installing Emscripten $EMSCRIPTEN_VERSION via emsdk..."
     
     local EMSDK_DIR="vendor/emsdk"
-    # Use Emscripten 3.1.45 for compatibility with libsodium.js
-    # (Emscripten 5.0+ has breaking API changes)
-    local EMSCRIPTEN_VERSION="3.1.45"
     
     # Clone emsdk if not already present
     if [ ! -d "$EMSDK_DIR" ]; then
@@ -167,14 +69,27 @@ install_emscripten_emsdk() {
     else
         print_status "INFO" "emsdk directory already exists, updating..."
         cd "$EMSDK_DIR"
-        git pull || true
+        git fetch --all || true
         cd ../..
     fi
     
-    # Install and activate Emscripten 3.1.45
     cd "$EMSDK_DIR"
     
-    print_status "INFO" "Installing Emscripten $EMSCRIPTEN_VERSION (compatible with libsodium.js)..."
+    # Check if the desired version is already installed and active
+    if [ -f ".emscripten" ]; then
+        CURRENT_VERSION=$(./emsdk list 2>/dev/null | grep -E "^\s*\*" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1 || echo "")
+        if [ "$CURRENT_VERSION" = "$EMSCRIPTEN_VERSION" ]; then
+            print_status "INFO" "Emscripten $EMSCRIPTEN_VERSION already installed and active"
+            source ./emsdk_env.sh 2>/dev/null || true
+            cd ../..
+            return 0
+        else
+            print_status "INFO" "Current version ($CURRENT_VERSION) differs from target ($EMSCRIPTEN_VERSION), updating..."
+        fi
+    fi
+    
+    # Install and activate the target version
+    print_status "INFO" "Installing Emscripten $EMSCRIPTEN_VERSION..."
     if ! ./emsdk install "$EMSCRIPTEN_VERSION"; then
         print_status "ERROR" "Failed to install Emscripten via emsdk"
         cd ../..
@@ -202,7 +117,7 @@ install_emscripten_emsdk() {
     
     # Verify emcc is now available
     if command -v emcc >/dev/null 2>&1; then
-        print_status "SUCCESS" "Emscripten installed successfully via emsdk"
+        print_status "SUCCESS" "Emscripten $EMSCRIPTEN_VERSION installed successfully via emsdk"
         return 0
     else
         print_status "ERROR" "Emscripten installation via emsdk failed"
@@ -214,14 +129,7 @@ install_emscripten_emsdk() {
 ensure_emscripten() {
     print_status "INFO" "Checking for Emscripten..."
     
-    # Check if already installed
-    if command -v emcc >/dev/null 2>&1; then
-        EMCC_VERSION=$(emcc --version | head -n1)
-        print_status "SUCCESS" "Found Emscripten: $EMCC_VERSION"
-        return 0
-    fi
-    
-    # Check if emsdk is already installed locally
+    # Priority 1: Check if local emsdk is already installed
     if [ -f "vendor/emsdk/emsdk_env.sh" ]; then
         print_status "INFO" "Found local emsdk installation, loading environment..."
         cd vendor/emsdk
@@ -231,37 +139,35 @@ ensure_emscripten() {
         if command -v emcc >/dev/null 2>&1; then
             EMCC_VERSION=$(emcc --version | head -n1)
             print_status "SUCCESS" "Loaded Emscripten from local emsdk: $EMCC_VERSION"
+            
+            # Check if version matches target
+            CURRENT_VER=$(echo "$EMCC_VERSION" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+            if [ "$CURRENT_VER" != "$EMSCRIPTEN_VERSION" ]; then
+                print_status "WARNING" "Installed version ($CURRENT_VER) differs from target ($EMSCRIPTEN_VERSION)"
+                print_status "INFO" "Updating to target version..."
+                if ! install_emscripten_emsdk; then
+                    print_status "WARNING" "Failed to update, continuing with current version"
+                fi
+            fi
             return 0
         fi
     fi
     
-    # Emscripten not found, attempt installation
-    print_status "WARNING" "Emscripten not found, attempting automatic installation..."
-    
-    # Detect system
-    detect_system_and_packages
-    
-    # Try package manager first (faster and cleaner)
-    if [ "$OS" != "unknown" ] && [ "$OS" != "unknown-linux" ]; then
-        if install_emscripten_package; then
-            # Verify installation
-            if command -v emcc >/dev/null 2>&1; then
-                EMCC_VERSION=$(emcc --version | head -n1)
-                print_status "SUCCESS" "Emscripten installed via package manager: $EMCC_VERSION"
-                return 0
-            fi
-        fi
-        
-        print_status "WARNING" "Package manager installation failed, trying emsdk..."
+    # Priority 2: Check if system emcc is available
+    if command -v emcc >/dev/null 2>&1; then
+        EMCC_VERSION=$(emcc --version | head -n1)
+        print_status "SUCCESS" "Found system Emscripten: $EMCC_VERSION"
+        return 0
     fi
     
-    # Fallback to emsdk
+    # Priority 3: Install via emsdk (no sudo needed)
+    print_status "WARNING" "Emscripten not found, installing via emsdk..."
     if install_emscripten_emsdk; then
         return 0
     fi
     
     # All installation methods failed
-    print_status "ERROR" "Failed to install Emscripten automatically"
+    print_status "ERROR" "Failed to install Emscripten"
     echo ""
     echo "Please install Emscripten manually:"
     echo "  https://emscripten.org/docs/getting_started/downloads.html"
@@ -269,39 +175,59 @@ ensure_emscripten() {
     return 1
 }
 
-# Validate Makefile configuration
-validate_makefile() {
-    print_status "INFO" "Validating Makefile configuration..."
-    local MAKEFILE_PATH="vendor/stef/libopaque/js/Makefile"
+# Update libsodium.js to target version
+update_libsodium_js() {
+    local LIBSODIUM_DIR="vendor/stef/libopaque/js/libsodium.js"
     
-    if [ ! -f "$MAKEFILE_PATH" ]; then
-        print_status "ERROR" "Makefile not found at $MAKEFILE_PATH"
-        exit 1
+    if [ ! -d "$LIBSODIUM_DIR" ]; then
+        print_status "INFO" "libsodium.js not found, will be initialized during build"
+        return 0
     fi
     
-    # Check for dangerous -DNORANDOM flag
-    if grep -q "DEFINES=.*-DNORANDOM" "$MAKEFILE_PATH"; then
-        print_status "ERROR" "Invalid libopaque.js configuration detected!"
+    print_status "INFO" "Checking libsodium.js version..."
+    
+    cd "$LIBSODIUM_DIR"
+    
+    # Fetch latest tags
+    git fetch --tags 2>/dev/null || true
+    
+    # Check current version
+    CURRENT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "unknown")
+    
+    if [ "$CURRENT_TAG" = "$LIBSODIUM_JS_VERSION" ]; then
+        print_status "SUCCESS" "libsodium.js already at version $LIBSODIUM_JS_VERSION"
+        cd ../../../../..
+        return 0
+    fi
+    
+    print_status "INFO" "Updating libsodium.js from $CURRENT_TAG to $LIBSODIUM_JS_VERSION..."
+    
+    # Checkout the target version
+    if git checkout "$LIBSODIUM_JS_VERSION" 2>/dev/null; then
+        print_status "SUCCESS" "libsodium.js updated to $LIBSODIUM_JS_VERSION"
+    else
+        print_status "WARNING" "Could not checkout $LIBSODIUM_JS_VERSION, using current version"
+    fi
+    
+    cd ../../../../..
+    return 0
+}
+
+# Validate that we're not using -DNORANDOM (security check)
+validate_build_config() {
+    print_status "INFO" "Validating build configuration..."
+    
+    if echo "$BUILD_DEFINES" | grep -q "NORANDOM"; then
+        print_status "ERROR" "CRITICAL: BUILD_DEFINES contains -DNORANDOM!"
         echo ""
-        echo -e "${RED}The Makefile contains the -DNORANDOM flag which:${NC}"
+        echo -e "${RED}The -DNORANDOM flag:${NC}"
         echo -e "${RED}  1. Makes OPAQUE deterministic (insecure for production)${NC}"
         echo -e "${RED}  2. Changes protocol data structures (breaks backend compatibility)${NC}"
         echo ""
-        echo -e "${YELLOW}The backend Go code uses standard libopaque without -DNORANDOM.${NC}"
-        echo -e "${YELLOW}Frontend and backend MUST use matching configurations.${NC}"
-        echo ""
-        echo -e "${BLUE}To fix:${NC}"
-        echo "  Edit: $MAKEFILE_PATH"
-        echo "  Change: DEFINES=-DTRACE -DNORANDOM"
-        echo "  To:     DEFINES=-DTRACE"
-        echo ""
-        echo -e "${BLUE}Or for production (no trace logging):${NC}"
-        echo "  To:     DEFINES="
-        echo ""
         exit 1
     fi
     
-    print_status "SUCCESS" "Makefile configuration is valid"
+    print_status "SUCCESS" "Build configuration is secure (no -DNORANDOM)"
 }
 
 # Build the WASM library
@@ -312,6 +238,7 @@ build_wasm_library() {
     # Clean previous builds
     print_status "INFO" "Cleaning previous WASM builds..."
     make clean-libopaquejs >/dev/null 2>&1 || true
+    rm -f libopaque.so  # Also clean the WASM shared library
     
     # Build libsodium.js dependency if needed
     if [ ! -f "libsodium.js/libsodium/src/libsodium/.libs/libsodium.a" ]; then
@@ -325,9 +252,38 @@ build_wasm_library() {
         print_status "INFO" "libsodium.js already built, skipping"
     fi
     
-    # Build libopaque.js WASM library
+    # WASM-compatible CFLAGS - same as upstream but without -march=native
+    # The $(SODIUMDIR), $(LIBOPRFHOME), and $(DEFINES) are expanded by make
+    WASM_LIBOPAQUE_CFLAGS='-I$(SODIUMDIR)/include -I$(LIBOPRFHOME) -Wall -O2 -g -fno-stack-protector -D_FORTIFY_SOURCE=2 -fasynchronous-unwind-tables -fpic -Werror=format-security -Werror=implicit-function-declaration -ftrapv $(DEFINES)'
+    
+    # Step 1: Build libopaque.so with emcc (WASM shared library)
+    # This is CRITICAL - we must build libopaque with emcc, not use the native libopaque.a from ../src/
+    print_status "INFO" "Building libopaque.so with emcc (WASM shared library)..."
+    print_status "INFO" "  LIBOPRFHOME=$LIBOPRFHOME_PATH"
+    print_status "INFO" "  DEFINES=$BUILD_DEFINES"
+    
+    if ! make LIBOPRFHOME="$LIBOPRFHOME_PATH" DEFINES="$BUILD_DEFINES" LIBOPAQUE_CFLAGS="$WASM_LIBOPAQUE_CFLAGS" libopaque; then
+        print_status "ERROR" "Failed to build libopaque.so (WASM shared library)"
+        exit 1
+    fi
+    
+    # Verify libopaque.so was built
+    if [ ! -f "libopaque.so" ]; then
+        print_status "ERROR" "libopaque.so not found after build"
+        exit 1
+    fi
+    print_status "SUCCESS" "libopaque.so built with emcc"
+    
+    # Step 2: Build libopaque.js WASM library
+    # Override LDFLAGS to link against local libopaque.so (not ../src/libopaque.a which is native x86)
     print_status "INFO" "Building libopaque.js WASM library..."
-    if ! make libopaquejs; then
+    print_status "INFO" "  LDFLAGS=-L. -lopaque (using local WASM libopaque.so)"
+    
+    # LDFLAGS must use -L. to link against the local libopaque.so we just built with emcc
+    # The upstream Makefile has -L../src which would link against native x86 libopaque.a
+    WASM_LDFLAGS='-L. -lopaque -Wl,-z,defs -Wl,-z,relro -Wl,-z,noexecstack'
+    
+    if ! make LIBOPRFHOME="$LIBOPRFHOME_PATH" DEFINES="$BUILD_DEFINES" LIBOPAQUE_CFLAGS="$WASM_LIBOPAQUE_CFLAGS" LDFLAGS="$WASM_LDFLAGS" libopaquejs; then
         print_status "ERROR" "Failed to build libopaque.js"
         exit 1
     fi
@@ -375,6 +331,8 @@ deploy_wasm_files() {
     
     echo ""
     echo -e "${GREEN}Build complete!${NC}"
+    echo "  Emscripten version: $EMSCRIPTEN_VERSION"
+    echo "  libsodium.js version: $LIBSODIUM_JS_VERSION"
     echo "  libopaque.js (minified): $MINIFIED_SIZE"
     echo "  libopaque.debug.js (unminified): $DEBUG_SIZE"
     echo ""
@@ -382,13 +340,16 @@ deploy_wasm_files() {
 
 # Main execution
 main() {
-    # Ensure Emscripten is available (install if needed)
+    # Validate build configuration (security check)
+    validate_build_config
+    
+    # Ensure Emscripten is available (install if needed - no sudo)
     if ! ensure_emscripten; then
         exit 1
     fi
     
-    # Validate Makefile configuration
-    validate_makefile
+    # Update libsodium.js to target version
+    update_libsodium_js
     
     # Build the WASM library
     build_wasm_library
