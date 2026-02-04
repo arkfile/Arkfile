@@ -1,10 +1,14 @@
 #!/bin/bash
 set -e
 
+# Source shared build configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/build-config.sh"
+
 # Configuration
 APP_NAME="arkfile"
 BASE_DIR="/opt/arkfile"
-BUILD_DIR="build"
+BUILD_DIR="$BUILD_ROOT"  # Use BUILD_ROOT from build-config.sh
 
 # Colors for output
 RED='\033[0;31m'
@@ -46,6 +50,23 @@ if [ ! "$(ls -A $BUILD_DIR)" ]; then
     echo -e "${RED}[X] Build directory ${BUILD_DIR} is empty. Run build first.${NC}"
     exit 1
 fi
+
+# Verify critical files exist in build directory
+echo -e "${YELLOW}Verifying critical build artifacts...${NC}"
+if [ ! -f "$BUILD_DIR/client/static/js/dist/app.js" ]; then
+    echo -e "${RED}[X] TypeScript bundle missing from build directory${NC}"
+    echo "Expected: $BUILD_DIR/client/static/js/dist/app.js"
+    echo "Build directory contents:"
+    find "$BUILD_DIR" -name "*.js" -type f 2>/dev/null | head -20
+    exit 1
+fi
+echo -e "${GREEN}[OK] TypeScript bundle found in build directory${NC}"
+
+if [ ! -f "$BUILD_DIR/client/static/js/libopaque.js" ]; then
+    echo -e "${RED}[X] libopaque.js missing from build directory${NC}"
+    exit 1
+fi
+echo -e "${GREEN}[OK] libopaque.js found in build directory${NC}"
 
 # Copy build artifacts to installation directory with proper ownership
 echo -e "${YELLOW}Copying build artifacts to ${BASE_DIR}...${NC}"

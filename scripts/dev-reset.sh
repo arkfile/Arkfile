@@ -12,6 +12,10 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Source shared build configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/setup/build-config.sh"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -168,7 +172,7 @@ fix_go_ownership() {
         chown -R "$SUDO_USER:$SUDO_USER" go.mod go.sum 2>/dev/null || true
         [ -d "vendor" ] && chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
         [ -f ".vendor_cache" ] && chown "$SUDO_USER:$SUDO_USER" .vendor_cache 2>/dev/null || true
-        [ -d "build" ] && chown -R "$SUDO_USER:$SUDO_USER" build/ 2>/dev/null || true
+        [ -d "$BUILD_ROOT" ] && chown -R "$SUDO_USER:$SUDO_USER" "$BUILD_ROOT/" 2>/dev/null || true
         print_status "SUCCESS" "Go file ownership restored"
     fi
 }
@@ -337,9 +341,9 @@ rm -rf client/static/js/dist/*
 
 # Clean build artifacts to prevent directory conflicts
 print_status "INFO" "Removing any existing build artifacts to ensure clean build..."
-if [ -d "build" ]; then
-    print_status "INFO" "Removing existing build directory..."
-    rm -rf build
+if [ -d "$BUILD_ROOT" ]; then
+    print_status "INFO" "Removing existing build directory ($BUILD_ROOT)..."
+    rm -rf "$BUILD_ROOT"
     print_status "SUCCESS" "Build artifacts cleaned"
 fi
 echo
@@ -379,8 +383,8 @@ print_status "INFO" "Verifying critical files are in place..."
 if [ ! -f "$ARKFILE_DIR/client/static/js/libopaque.js" ]; then
     print_status "ERROR" "libopaque.js missing from working directory."
     echo "    Expected location: $ARKFILE_DIR/client/static/js/libopaque.js"
-    if [ -f "build/client/static/js/libopaque.js" ]; then
-        echo "    Found in build directory: build/client/static/js/libopaque.js"
+    if [ -f "$BUILD_ROOT/client/static/js/libopaque.js" ]; then
+        echo "    Found in build directory: $BUILD_ROOT/client/static/js/libopaque.js"
         echo "    The build script should have deployed this automatically."
     fi
     print_status "ERROR" "The build likely failed or deployment step was skipped."

@@ -1,6 +1,10 @@
 #!/bin/bash
 set -e
 
+# Source shared build configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/build-config.sh"
+
 # Parse arguments
 BUILD_ONLY=false
 for arg in "$@"; do
@@ -14,7 +18,7 @@ done
 
 # Configuration
 APP_NAME="arkfile"
-BUILD_DIR="build"
+BUILD_DIR="$BUILD_ROOT"  # Use BUILD_ROOT from build-config.sh
 VERSION=${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo "unknown")}
 BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 BASE_DIR="/opt/arkfile"
@@ -322,9 +326,10 @@ if [ "$BUILD_ONLY" = "false" ] && systemctl is-active --quiet arkfile 2>/dev/nul
     echo -e "${GREEN}Service stopped successfully${NC}"
 fi
 
-# Create build directory
-mkdir -p ${BUILD_DIR}
-echo -e "${GREEN}Building in directory: $(pwd)${NC}"
+# Create build directory using shared helper
+ensure_build_dir
+echo -e "${GREEN}Building in directory: ${BUILD_DIR}${NC}"
+echo -e "${GREEN}Source directory: $(pwd)${NC}"
 
 # Build libopaque WASM/JS library
 echo -e "${YELLOW}Building libopaque WASM/JS library...${NC}"
@@ -526,18 +531,37 @@ build_go_binaries_static
 # Verify static linking
 verify_static_binaries
 
-# Copy static files
+# Copy static files directly to final client location (using BUILD_CLIENT from build-config.sh)
 echo "Copying static files..."
-cp -r client/static ${BUILD_DIR}/static
+mkdir -p "${BUILD_CLIENT}/static"
+cp -r client/static/css "${BUILD_CLIENT}/static/" 2>/dev/null || true
+cp -r client/static/errors "${BUILD_CLIENT}/static/" 2>/dev/null || true
+cp client/static/*.html "${BUILD_CLIENT}/static/" 2>/dev/null || true
+cp client/static/*.ico "${BUILD_CLIENT}/static/" 2>/dev/null || true
 
-# Ensure TypeScript dist files are copied (they're built in source, not build dir)
-if [ -d "client/static/js/dist" ]; then
-    echo "Copying TypeScript build artifacts..."
-    mkdir -p ${BUILD_DIR}/static/js/dist
-    cp -r client/static/js/dist/* ${BUILD_DIR}/static/js/dist/
-    echo -e "${GREEN}[OK] TypeScript dist files copied to build directory${NC}"
+# Copy JS files (libopaque.js, etc.) but handle dist separately
+mkdir -p "${BUILD_CLIENT_JS}"
+cp client/static/js/*.js "${BUILD_CLIENT_JS}/" 2>/dev/null || true
+
+# Explicitly copy TypeScript dist files (critical - these are the compiled app)
+echo "Copying TypeScript build artifacts..."
+if [ -d "client/static/js/dist" ] && [ -f "client/static/js/dist/app.js" ]; then
+    mkdir -p "${BUILD_CLIENT_JS_DIST}"
+    cp -v client/static/js/dist/app.js "${BUILD_CLIENT_JS_DIST}/"
+    cp -v client/static/js/dist/app.js.map "${BUILD_CLIENT_JS_DIST}/" 2>/dev/null || true
+    
+    # Verify the copy succeeded
+    if [ -f "${BUILD_CLIENT_JS_DIST}/app.js" ]; then
+        echo -e "${GREEN}[OK] TypeScript dist files copied to build directory${NC}"
+        ls -la "${BUILD_CLIENT_JS_DIST}/"
+    else
+        echo -e "${RED}[X] Failed to copy TypeScript dist files${NC}"
+        exit 1
+    fi
 else
-    echo -e "${RED}[X] TypeScript dist directory not found - build may have failed${NC}"
+    echo -e "${RED}[X] TypeScript dist directory or app.js not found - build may have failed${NC}"
+    echo "Expected: client/static/js/dist/app.js"
+    ls -la client/static/js/dist/ 2>/dev/null || echo "dist directory does not exist"
     exit 1
 fi
 
@@ -571,15 +595,8 @@ mv "${BUILD_DIR}/cryptocli" "${BUILD_DIR}/bin/"
 mv "${BUILD_DIR}/arkfile-client" "${BUILD_DIR}/bin/"
 mv "${BUILD_DIR}/arkfile-admin" "${BUILD_DIR}/bin/"
 
-# Client files and WASM deployment
-mkdir -p "${BUILD_DIR}/client"
-mv "${BUILD_DIR}/static" "${BUILD_DIR}/client/static"
-
-# Move the js directory with compiled TypeScript to the correct location
-if [ -d "${BUILD_DIR}/client/js" ]; then
-    mv "${BUILD_DIR}/client/js" "${BUILD_DIR}/client/static/"
-    echo -e "${GREEN}[OK] Moved compiled TypeScript to client/static/js/${NC}"
-fi
+# Client files are already in the correct location (BUILD_CLIENT = BUILD_ROOT/client)
+# No need to move - we copied directly to BUILD_CLIENT/static earlier
 
 # Database files
 mkdir -p "${BUILD_DIR}/database"
