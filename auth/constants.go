@@ -11,6 +11,7 @@ const (
 
 	// Multi-step registration constants
 	OPAQUE_REGISTER_USER_SEC_LEN = 34 // 32 (r) + 2 (pwdU_len)
-	OPAQUE_REGISTER_PUBLIC_LEN   = 64 // 32 (Z) + 32 (pkS)
+	OPAQUE_REGISTER_REQUEST_LEN  = 32 // crypto_core_ristretto255_BYTES (blinded element M)
+	OPAQUE_REGISTER_PUBLIC_LEN   = 64 // 32 (Z) + 32 (pkS) - server response
 	OPAQUE_REGISTER_SECRET_LEN   = 64 // 32 (skS) + 32 (kU)
 )

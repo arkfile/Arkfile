@@ -23,9 +23,9 @@ import (
 // CreateRegistrationResponse handles server-side step of registration
 // Takes client's registration request (M) and returns server response (rpub) and secret (rsec)
 func CreateRegistrationResponse(requestData []byte) ([]byte, []byte, error) {
-	if len(requestData) != OPAQUE_REGISTER_PUBLIC_LEN {
+	if len(requestData) != OPAQUE_REGISTER_REQUEST_LEN {
 		return nil, nil, fmt.Errorf("invalid registration request length: expected %d, got %d",
-			OPAQUE_REGISTER_PUBLIC_LEN, len(requestData))
+			OPAQUE_REGISTER_REQUEST_LEN, len(requestData))
 	}
 
 	// Get server private key

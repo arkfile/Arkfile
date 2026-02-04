@@ -30,7 +30,7 @@ func ClientCreateRegistrationRequest(password []byte) ([]byte, []byte, error) {
 
 	// Allocate buffers - usrCtx must be OPAQUE_REGISTER_USER_SEC_LEN + password length
 	usrCtx := make([]byte, OPAQUE_REGISTER_USER_SEC_LEN+len(password))
-	M := make([]byte, OPAQUE_REGISTER_PUBLIC_LEN)
+	M := make([]byte, OPAQUE_REGISTER_REQUEST_LEN)
 
 	// Convert Go slices to C pointers
 	cPassword := C.CBytes(password)
