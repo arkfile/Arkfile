@@ -8,6 +8,7 @@ import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSe
 import { setTokens } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
+import { handleTOTPSetupFlow } from './totp-setup.js';
 
 export interface RegisterCredentials {
   username: string;
@@ -121,7 +122,17 @@ export class RegistrationManager {
         registrationFinalize.exportKey.fill(0);
       }
 
-      // Complete registration with tokens
+      // Check if TOTP setup is required (new users need to set up 2FA)
+      if (registrationData.requires_totp_setup && registrationData.temp_token) {
+        hideProgress();
+        handleTOTPSetupFlow({
+          tempToken: registrationData.temp_token,
+          username: credentials.username
+        });
+        return;
+      }
+
+      // Complete registration with tokens (if TOTP not required)
       await this.completeRegistration({
         token: registrationData.token,
         refresh_token: registrationData.refresh_token,
