@@ -29,6 +29,7 @@ export interface LoginResponse {
   auth_method: 'OPAQUE';
   requires_totp?: boolean;
   temp_token?: string;
+  is_approved?: boolean;
 }
 
 export class LoginManager {
@@ -173,6 +174,16 @@ export class LoginManager {
       setTokens(data.token, data.refresh_token);
       
       hideProgress();
+      
+      // Check if user is approved
+      if (data.is_approved === false) {
+        // User is not approved - show pending approval section
+        const { showPendingApprovalSection } = await import('../ui/sections.js');
+        showPendingApprovalSection();
+        showSuccess('Account created. Awaiting administrator approval.');
+        return;
+      }
+      
       showSuccess('Login successful');
       
       // Navigate to file section and load files

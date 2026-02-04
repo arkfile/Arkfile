@@ -151,6 +151,16 @@ class ArkFileApp {
       });
     }
 
+    // Pending approval logout button
+    const pendingLogoutBtn = document.getElementById('pending-logout-btn');
+    if (pendingLogoutBtn) {
+      pendingLogoutBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        await logout();
+        this.showHome(); // Return to home page after logout
+      });
+    }
+
     // Security settings toggle
     const securityToggle = document.getElementById('security-settings-toggle');
     if (securityToggle) {

@@ -23,6 +23,7 @@ export interface TOTPSetupFlowData {
 export interface TOTPSetupData {
   secret: string;
   qr_code_url: string;
+  qr_code_image: string; // Base64 data URI for QR code PNG
   backup_codes: string[];
   manual_entry: string;
 }
@@ -120,6 +121,7 @@ async function initiateTOTPSetupForRegistration(tempToken: string): Promise<TOTP
       return {
         secret: data.secret,
         qr_code_url: data.qr_code_url,
+        qr_code_image: data.qr_code_image || '',
         backup_codes: data.backup_codes,
         manual_entry: data.manual_entry
       };
@@ -147,7 +149,10 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
     <div class="totp-step">
       <h3>Step 1: Scan QR Code</h3>
       <div class="qr-code-container">
-        <img src="${setupData.qr_code_url}" alt="TOTP QR Code">
+        ${setupData.qr_code_image 
+          ? `<img src="${setupData.qr_code_image}" alt="TOTP QR Code" style="width: 200px; height: 200px;">`
+          : `<div style="padding: 1rem; background: #f8d7da; color: #721c24; border-radius: 4px;">QR code unavailable. Please use manual entry below.</div>`
+        }
       </div>
       <p style="font-size: 0.9rem; color: var(--muted-text-color); text-align: center;">
         Scan this QR code with your authenticator app.
@@ -172,9 +177,9 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
         <strong>[!] Important:</strong> Save these backup codes in a secure location.
       </p>
       <div class="backup-codes-container">
-        <ul id="backup-codes-list">
-          ${setupData.backup_codes.map((code: string) => `<li>${code}</li>`).join('')}
-        </ul>
+        <div class="backup-codes-grid">
+          ${setupData.backup_codes.map((code: string) => `<span class="backup-code">${code}</span>`).join('')}
+        </div>
       </div>
       <p style="font-size: 0.9rem; color: #856404;">
         Use these codes if you lose access to your authenticator app. Each code can only be used once.

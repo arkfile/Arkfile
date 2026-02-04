@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -9,12 +10,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"image/png"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/logging"
+	"github.com/boombuler/barcode"
+	"github.com/boombuler/barcode/qr"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 )
@@ -35,6 +39,7 @@ const BackupCodeCharset = "ACDEFGHJKLMNPQRTUVWXY34679"
 type TOTPSetup struct {
 	Secret      string   `json:"secret"`
 	QRCodeURL   string   `json:"qr_code_url"`
+	QRCodeImage string   `json:"qr_code_image"` // Base64 data URI for QR code PNG
 	BackupCodes []string `json:"backup_codes"`
 	ManualEntry string   `json:"manual_entry"`
 }
@@ -70,9 +75,20 @@ func GenerateTOTPSetup(username string) (*TOTPSetup, error) {
 	// Generate backup codes
 	backupCodes := generateBackupCodes(BackupCodeCount)
 
+	// Generate QR code image as base64 data URI
+	qrImage, err := generateQRCodeDataURI(qrURL)
+	if err != nil {
+		// Log but don't fail - QR URL is still available for manual entry
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("Failed to generate QR code image: %v", err)
+		}
+		qrImage = "" // Empty string signals frontend to use fallback
+	}
+
 	return &TOTPSetup{
 		Secret:      secretB32,
 		QRCodeURL:   qrURL,
+		QRCodeImage: qrImage,
 		BackupCodes: backupCodes,
 		ManualEntry: formatManualEntry(secretB32),
 	}, nil
@@ -418,6 +434,31 @@ func generateSingleBackupCode() string {
 		code[i] = BackupCodeCharset[int(randomBytes[0])%charsetLen]
 	}
 	return string(code)
+}
+
+// generateQRCodeDataURI creates a QR code PNG and returns it as a base64 data URI
+func generateQRCodeDataURI(content string) (string, error) {
+	// Create QR code
+	qrCode, err := qr.Encode(content, qr.M, qr.Auto)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode QR code: %w", err)
+	}
+
+	// Scale to 200x200 pixels for good visibility
+	qrCode, err = barcode.Scale(qrCode, 200, 200)
+	if err != nil {
+		return "", fmt.Errorf("failed to scale QR code: %w", err)
+	}
+
+	// Encode as PNG to buffer
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, qrCode); err != nil {
+		return "", fmt.Errorf("failed to encode PNG: %w", err)
+	}
+
+	// Convert to base64 data URI
+	b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+	return "data:image/png;base64," + b64, nil
 }
 
 func formatManualEntry(secret string) string {

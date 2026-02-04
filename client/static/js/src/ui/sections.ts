@@ -73,3 +73,45 @@ export function toggleSecuritySettings(): void {
     securityPanel.classList.toggle('hidden');
   }
 }
+
+export function showPendingApprovalSection(): void {
+  // Hide all other auth-related sections
+  const loginForm = document.getElementById('login-form');
+  const registerForm = document.getElementById('register-form');
+  const totpSetupForm = document.getElementById('totp-setup-form');
+  const pendingApprovalSection = document.getElementById('pending-approval-section');
+  const fileSection = document.getElementById('file-section');
+  
+  if (loginForm) {
+    loginForm.classList.add('hidden');
+  }
+  
+  if (registerForm) {
+    registerForm.classList.add('hidden');
+  }
+  
+  if (totpSetupForm) {
+    totpSetupForm.classList.add('hidden');
+  }
+  
+  if (fileSection) {
+    fileSection.classList.add('hidden');
+  }
+  
+  if (pendingApprovalSection) {
+    pendingApprovalSection.classList.remove('hidden');
+  }
+}
+
+export function hidePendingApprovalSection(): void {
+  const pendingApprovalSection = document.getElementById('pending-approval-section');
+  const loginForm = document.getElementById('login-form');
+  
+  if (pendingApprovalSection) {
+    pendingApprovalSection.classList.add('hidden');
+  }
+  
+  if (loginForm) {
+    loginForm.classList.remove('hidden');
+  }
+}

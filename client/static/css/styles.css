@@ -1342,3 +1342,60 @@ button:hover {
 .password-section .password-input-wrapper {
     margin-bottom: 0.5rem;
 }
+
+/* Pending Approval Section */
+.pending-approval-section {
+    background: white;
+    padding: 2rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    max-width: 600px;
+    margin: 0 auto;
+    text-align: center;
+}
+
+.pending-approval-section h2 {
+    color: var(--primary-color);
+    margin-bottom: 1.5rem;
+}
+
+.pending-approval-content {
+    background-color: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 8px;
+    padding: 2rem;
+    margin-bottom: 1.5rem;
+}
+
+.pending-icon {
+    font-size: 3rem;
+    color: #856404;
+    margin-bottom: 1rem;
+}
+
+.pending-message {
+    font-size: 1.1rem;
+    color: #856404;
+    margin-bottom: 1rem;
+}
+
+.pending-details {
+    color: #856404;
+    margin-bottom: 1rem;
+    line-height: 1.6;
+}
+
+.pending-info {
+    color: #6c757d;
+    font-size: 0.9rem;
+    font-style: italic;
+}
+
+.pending-actions {
+    margin-top: 1.5rem;
+}
+
+.pending-actions button {
+    max-width: 200px;
+    margin: 0 auto;
+}

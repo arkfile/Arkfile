@@ -657,6 +657,7 @@ type TOTPSetupRequest struct {
 type TOTPSetupResponse struct {
 	Secret      string   `json:"secret"`
 	QRCodeURL   string   `json:"qr_code_url"`
+	QRCodeImage string   `json:"qr_code_image"` // Base64 data URI for QR code PNG
 	BackupCodes []string `json:"backup_codes"`
 	ManualEntry string   `json:"manual_entry"`
 }
@@ -697,6 +698,7 @@ func TOTPSetup(c echo.Context) error {
 	return JSONResponse(c, http.StatusOK, "TOTP setup initiated", TOTPSetupResponse{
 		Secret:      setup.Secret,
 		QRCodeURL:   setup.QRCodeURL,
+		QRCodeImage: setup.QRCodeImage,
 		BackupCodes: setup.BackupCodes,
 		ManualEntry: setup.ManualEntry,
 	})

@@ -54,15 +54,15 @@ func RegisterRoutes() {
 	Echo.POST("/api/bootstrap/register/response", RegisterRateLimitMiddleware(BootstrapRegisterResponse))
 	Echo.POST("/api/bootstrap/register/finalize", RegisterRateLimitMiddleware(BootstrapRegisterFinalize))
 
-	// TOTP Authentication - requires authentication with rate limiting protection
-	auth.Echo.POST("/api/totp/setup", TOTPSetup)
-	auth.Echo.POST("/api/totp/verify", TOTPRateLimitMiddleware("totp_verify")(TOTPVerify))
+	// TOTP Status and Reset - requires full authentication (standard JWT)
 	auth.Echo.GET("/api/totp/status", TOTPStatus)
 	auth.Echo.POST("/api/totp/reset", TOTPReset)
 
-	// TOTP Authentication completion - requires temporary TOTP token with rate limiting
+	// TOTP Setup/Verify/Auth - requires temporary TOTP token (arkfile-totp audience)
 	totpGroup := Echo.Group("/api/totp")
 	totpGroup.Use(auth.TOTPJWTMiddleware())
+	totpGroup.POST("/setup", TOTPSetup)
+	totpGroup.POST("/verify", TOTPRateLimitMiddleware("totp_verify")(TOTPVerify))
 	totpGroup.POST("/auth", TOTPRateLimitMiddleware("totp_auth")(TOTPAuth))
 
 	// Admin contacts (public - no auth required)

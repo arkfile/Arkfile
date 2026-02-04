@@ -29,13 +29,46 @@ export class ModalManager {
       background: white;
       padding: 30px;
       border-radius: 8px;
-      max-width: 500px;
+      max-width: 80%;
       width: 90%;
-      max-height: 80vh;
+      max-height: 85vh;
       overflow-y: auto;
       box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
       ${options.className ? `additional-class: ${options.className};` : ''}
     `;
+
+    // Add TOTP-specific styles for backup codes grid
+    if (!document.getElementById('modal-totp-styles')) {
+      const style = document.createElement('style');
+      style.id = 'modal-totp-styles';
+      style.textContent = `
+        .backup-codes-grid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 8px;
+          padding: 12px;
+          background: #fffbea;
+          border-radius: 4px;
+          border: 1px solid #ffc107;
+        }
+        .backup-code {
+          font-family: 'Courier New', monospace;
+          font-size: 14px;
+          font-weight: bold;
+          padding: 6px 10px;
+          background: white;
+          border-radius: 3px;
+          text-align: center;
+          letter-spacing: 1px;
+        }
+        @media (max-width: 480px) {
+          .backup-codes-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+      `;
+      document.head.appendChild(style);
+    }
 
     // Title
     const title = document.createElement('h3');
