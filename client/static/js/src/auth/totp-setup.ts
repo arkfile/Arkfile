@@ -233,8 +233,12 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
       completeTOTPSetupForRegistration(setupCodeInput.value, flowData);
     });
     
-    // Focus the input
-    setTimeout(() => setupCodeInput.focus(), 100);
+    // Focus the input, then scroll modal to top so user sees QR code first
+    setTimeout(() => {
+      setupCodeInput.focus();
+      // Scroll modal content back to top after focus (focus causes auto-scroll to input)
+      modalContent.scrollTop = 0;
+    }, 100);
   }
   
   if (downloadButton) {
