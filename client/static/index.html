@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="x-tls-version" content="">  <!-- Will be populated by server middleware -->
-    <title>Arkfile - Zero-knowledge Encrypted File Vault</title>
+    <title>Arkfile - Private File Vault</title>
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="stylesheet" href="/css/styles.css">
     <link rel="stylesheet" href="/css/home.css">
@@ -14,7 +14,7 @@
         <!-- Hero Section -->
         <section class="hero-section">
             <h1 class="hero-title">Arkfile</h1>
-            <p class="hero-tagline">Zero-knowledge Encrypted File Vault</p>
+            <p class="hero-tagline">Private File Vault</p>
             <div class="hero-buttons">
                 <button class="hero-btn primary" id="get-started-btn">Get Started</button>
                 <button class="hero-btn secondary" id="login-btn">Login</button>
@@ -28,7 +28,7 @@
                 <div class="feature-card security-highlight">
                     <h3 class="feature-title">Client-Side Encryption</h3>
                     <p class="feature-description">
-                        All files are encrypted in your browser before upload. Your data is protected by AES-256-GCM encryption, ensuring that even admins cannot access your files.
+                        All files and metadata are encrypted in your browser before upload. Your data is protected by AES-256 encryption, ensuring that even admins cannot access your files.
                     </p>
                 </div>
 
@@ -49,7 +49,7 @@
                 <div class="feature-card">
                     <h3 class="feature-title">Secure File Sharing</h3>
                     <p class="feature-description">
-                        Share files with additional password protection using Argon2id key derivation. Recipients don't need accounts - just the link and the share password.
+                        Share files with additional password protection and download limits. Recipients don't need an account - just the link and the share password.
                     </p>
                 </div>
 
@@ -80,7 +80,7 @@
     <!-- Authentication Modal (hidden by default) -->
     <div class="container hidden" id="app-container">
         <header>
-            <h1>Arkfile - Secure File Vault</h1>
+            <h1>Arkfile - Private File Vault</h1>
         </header>
 
         <div class="auth-section" id="auth-section">

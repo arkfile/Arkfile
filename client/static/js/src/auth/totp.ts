@@ -199,13 +199,17 @@ async function verifyTOTPLogin(): Promise<void> {
     });
     
     if (response.ok) {
-      const data: TOTPLoginResponse = await response.json();
+      const responseData = await response.json();
+      // Handle standard API response structure: { data: { ... } }
+      const data: TOTPLoginResponse = responseData.data || responseData;
       
       // Complete authentication using LoginManager
+      // Pass is_approved from user object in response
       await LoginManager.completeLogin({
         token: data.token,
         refresh_token: data.refresh_token,
-        auth_method: 'OPAQUE'
+        auth_method: 'OPAQUE',
+        is_approved: data.user?.is_approved
       }, totpLoginData.username);
       
       // Clean up

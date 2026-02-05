@@ -206,7 +206,7 @@ echo -e "${CYAN}Testing URL: ${TEST_URL}${NC}"
 echo
 
 wait_for_user "1. Open your browser to: ${TEST_URL}
-2. Verify the page loads with 'Secure File Vault' title
+2. Verify the page loads with 'Private File Vault' title
 3. Check browser console (F12 → Console) for any red errors
 4. Confirm OPAQUE WebAssembly loads without errors"
 

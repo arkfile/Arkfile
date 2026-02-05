@@ -1,6 +1,6 @@
 # Implementation Plan: Unified Share System (HUMAN + GEMINI 3.0 LLM PLAN)
 
-**Objective**: Implement a unified, Zero-Knowledge share workflow that supports both Account-Encrypted and Custom-Encrypted files. The system will enforce bandwidth protection via Download Tokens and provide a secure, consistent user experience across Web and CLI clients.
+**Objective**: Implement a unified, privacy-preserving share workflow that supports both Account-Encrypted and Custom-Encrypted files. The system will enforce bandwidth protection via Download Tokens and provide a secure, consistent user experience across Web and CLI clients.
 
 ---
 
@@ -244,7 +244,7 @@
 - Consider using AEAD AAD to bind the envelope to `share_id` and/or `file_id` (prevents envelope swapping).
 
 ## 6. Client/server separation of responsibilities
-- Share password verification remains client-side (zero-knowledge), but the server must enforce bandwidth protection (download token) regardless.
+- Share password verification remains client-side (privacy-preserving), but the server must enforce bandwidth protection (download token) regardless.
 - Add a dedicated API for retrieving share envelope metadata vs downloading bytes. Avoid mixing “download” and “key retrieval” semantics.
 
 ## 7. Rate limiting beyond password attempts

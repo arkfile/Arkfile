@@ -4,7 +4,7 @@
 Completely remove the `github.com/minio/minio-go/v7` dependency from the Arkfile server codebase and replace it with the vendor-neutral `github.com/aws/aws-sdk-go-v2`. This ensures the project is not reliant on a single vendor's library while maintaining compatibility with S3-compatible storage providers (Wasabi, Backblaze, etc.).
 
 ## Core Principles
-*   **Zero-Knowledge Preservation:** The refactor MUST NOT introduce any server-side decryption or encryption of user data. The server must continue to treat files and metadata as opaque blobs.
+*   **Privacy-First Preservation:** The refactor MUST NOT introduce any server-side decryption or encryption of user data. The server must continue to treat files and metadata as opaque blobs.
 *   **Vendor Neutrality:** The new storage implementation must use standard S3 APIs via the official AWS SDK.
 *   **Interface Abstraction:** The `ObjectStorageProvider` interface must be decoupled from any specific implementation details (no `minio.*` types in the interface).
 *   **Padding Logic Preservation:** The custom padding logic used for encrypted files (adding random bytes to obfuscate exact file size) MUST be preserved exactly as implemented in the original MinIO-based code.

@@ -1,4 +1,4 @@
-// arkfile-client - Secure file sharing client with OPAQUE authentication
+// arkfile-client - file vault management and sharing client with OPAQUE authentication
 // This tool provides authenticated server communication for file operations
 // NOTE: This client does NOT perform any encryption/decryption operations
 // All crypto operations must be done with the cryptocli tool
@@ -38,7 +38,7 @@ type DownloadFileMetaResponse struct {
 
 const (
 	Version = "2.0.0-static"
-	Usage   = `arkfile-client - Secure file sharing client with OPAQUE authentication
+	Usage   = `arkfile-client - File vault management and sharing client with OPAQUE authentication
 
 USAGE:
     arkfile-client [global options] command [command options] [arguments...]
@@ -1965,7 +1965,7 @@ EXAMPLES:
 
 func printVersion() {
 	fmt.Printf("arkfile-client version %s\n", Version)
-	fmt.Printf("Secure file sharing client (crypto operations via cryptocli)\n")
+	fmt.Printf("File vault management and sharing client (crypto operations via cryptocli)\n")
 }
 
 func printUsage() {

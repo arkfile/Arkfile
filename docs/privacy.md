@@ -2,7 +2,7 @@
 
 This document explains, in plain language, how Arkfile keeps user data private.
 
-## 1. Zero-Knowledge Philosophy
+## 1. Privacy-First Philosophy
 
 Arkfile is designed so the server never sees unencrypted content or user passwords.
 
@@ -108,7 +108,7 @@ Encrypted file data is opaque to the storage provider; none of them receive decr
 
 ## 10. Glossary
 
-- **Zero-knowledge:** The server never possesses the information needed to decrypt user data.
+- **Privacy-First:** The server never possesses the information needed to decrypt user data.
 - **OPAQUE:** A protocol that lets users prove they know their password without revealing it.
 - **AES-256-GCM:** An encryption mode that hides data and detects tampering in one step.
 - **HMAC:** A keyed hash that turns input (e.g., an IP address) into an irreversible digest.

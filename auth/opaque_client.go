@@ -15,7 +15,7 @@ import (
 
 // Client-side OPAQUE operations for CLI tools
 // These functions implement the client-side of the OPAQUE protocol
-// and maintain zero-knowledge properties by never sending passwords to the server
+// and maintain privacy-first properties by never sending passwords to the server
 
 // Registration Flow - Client Side
 

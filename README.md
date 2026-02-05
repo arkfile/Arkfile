@@ -1,6 +1,6 @@
 # Arkfile
 
-*Zero-Knowledge Encrypted File Vault over S3*
+*Private File Vault over S3*
 
 ## 1. What Is Arkfile?
 
@@ -8,7 +8,7 @@ Arkfile is an open-source service that lets you store and share files while keep
 
 Before any file leaves your computer it is **encrypted**, so the Arkfile server never sees your data.
 
-Because of this “zero-knowledge” design, only you – and anyone with whom you choose to share – can access and open your files.
+Because of this privacy-first design, only you – and anyone with whom you choose to share – can access and open your files.
 
 ## 2. Why People Use It
 
@@ -35,7 +35,7 @@ Once it finishes, open the URL and create your first account.
 
 ## 4. Key Concepts (Glossary)
 
-- **Zero-knowledge:** The server never learns your files or passwords because everything is encrypted before upload.
+- **Privacy-First:** The server never learns your files or passwords because everything is encrypted before upload.
 - **Encryption (AES-256-GCM):** A modern algorithm that scrambles data and checks its integrity at the same time.
 - **OPAQUE:** A password authentication protocol where the server never sees your password in any form, with built-in validation to ensure strong password security.
 - **TOTP:** Time-based One-Time Password - generates temporary codes on your phone for extra security.

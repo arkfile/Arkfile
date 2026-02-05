@@ -2,9 +2,9 @@
 
 # Arkfile: Overview for Agents
 
-Arkfile is designed as a Zero-Knowledge File Vault over S3. It enables file backup for file owners, with client-side encryption happening via the Web Crypto API in browsers or using the `cryptocli` tool on the command-line (prior to uploading with `arkfile-client` to the server). It uses Minio as a gateway to interface with any number of backend storage systems that are S3 compatible in order to store client-side encrypted files.
+Arkfile is designed as a Privacy-First File Vault over S3. It enables file backup for file owners, with client-side encryption happening via the Web Crypto API in browsers or using the `cryptocli` tool on the command-line (prior to uploading with `arkfile-client` to the server). It uses Minio as a gateway to interface with any number of backend storage systems that are S3 compatible in order to store client-side encrypted files.
 
-It is vital to maintain the Zero-Knowledge design of the app and to preserve and protect user privacy end-to-end in all the work that we do.
+It is vital to maintain the Privacy-First design of the app and to preserve and protect user privacy end-to-end in all the work that we do.
 
 We use OPAQUE for authentication, so that passwords are never sent to the server for logging in. libopaque C-library via CGO is used on the server side and libopaque WASM is used on the client side.
 
@@ -27,7 +27,7 @@ There are no current deployments of this app anywhere at present. No need to bui
 - Is it merely a stub function or otherwise incomplete?
 - Is it well placed, in the right file or area of the app?
 - Does it require additional review, updates, moving or potentially deletion?
-- Does it align with the vision and intended design of the app as being zero-knowledge and privacy preserving for users end-to-end?
+- Does it align with the vision and intended design of the app as being privacy preserving for users end-to-end?
 
 ## Key Tools for Development
 

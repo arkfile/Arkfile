@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines advanced Go-based tooling and utilities for the Arkfile secure file vault system. These tools provide comprehensive administrative capabilities, client tooling, and enhanced testing frameworks, all designed around the principle of strict separation between OPAQUE authentication and Argon2ID password-based file encryption.
+This document outlines advanced Go-based tooling and utilities for the Arkfile priavte file vault system. These tools provide comprehensive administrative capabilities, client tooling, and enhanced testing frameworks, all designed around the principle of strict separation between OPAQUE authentication and Argon2ID password-based file encryption.
 
 ## Architecture Overview
 
@@ -63,7 +63,7 @@ import (
 
 const (
 	Version = "1.0.0-static"
-	Usage = `arkfile-client - Secure file sharing client with OPAQUE authentication and Argon2ID file encryption
+	Usage = `arkfile-client - File vault management and sharing client with OPAQUE authentication and Argon2ID file encryption
 
 USAGE:
     arkfile-client [global options] command [command options] [arguments...]

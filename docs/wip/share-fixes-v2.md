@@ -1,6 +1,6 @@
 # Implementation Plan: Unified Share System v2
 
-**Objective**: Implement a complete, zero-knowledge file sharing system that supports both Account-Encrypted and Custom-Encrypted files with Download Token enforcement, streaming downloads, revocation capabilities, and access limits.
+**Objective**: Implement a complete, privacy-first file sharing system that supports both Account-Encrypted and Custom-Encrypted files with Download Token enforcement, streaming downloads, revocation capabilities, and access limits.
 
 **Reference**: See `unify-share-file.md` for the complete SHARED FILE LIFECYCLE that this implementation plan targets.
 
@@ -162,7 +162,7 @@ $ ./build/cryptocli --help
 3. **Streaming Downloads**: Stream encrypted file bytes directly instead of base64-in-JSON
 4. **Revocation System**: Allow owners to manually revoke shares or auto-revoke on expiration/max downloads
 5. **Access Limits**: Enforce max_accesses with atomic counting and auto-revocation
-6. **Zero-Knowledge Architecture**: Server never receives passwords, FEKs, or decrypted metadata
+6. **Privacy-First Architecture**: Server never receives passwords, FEKs, or decrypted metadata
 7. **Client-Side share_id Generation**: Generate share_id on client with AAD binding to prevent envelope swapping
 
 ### Key Principles
@@ -2346,7 +2346,7 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 - [x] Implement `share list` command (DONE: in arkfile-client)
 - [ ] Implement `share revoke` command
 - [x] Implement `share download` command with AAD verification (PARTIAL: no AAD verification, in arkfile-client)
-- [x] Verify zero-knowledge: no passwords/FEKs sent to server in CLI (VERIFIED)
+- [x] Verify privacy protections: no passwords/FEKs sent to server in CLI (VERIFIED)
 - [x] Add cryptocli share key encryption/decryption commands (DONE: encrypt-share-key, decrypt-share-key, decrypt-file-key)
 
 ### Phase 5: E2E Validation
@@ -2381,7 +2381,7 @@ logging.InfoLogger.Printf("Share created: share_id=%s...", shareID[:8])
 - Prevents attacker from swapping envelopes between different shares
 - Prevents attacker from swapping envelopes between different files
 - Decryption automatically fails if AAD doesn't match (tamper detection)
-- Zero-knowledge preserved: server never sees relationship between share_id and envelope content
+- Privacy protections preserved: server never sees relationship between share_id and envelope content
 
 ### 9.2 Agent Lifecycle [VERIFIED]
 
@@ -2479,7 +2479,7 @@ func (s *S3AWSStorage) GetObjectWithoutPadding(ctx context.Context, storageID st
 ## NOTES
 
 - This implementation plan targets the ideal Arkfile file sharing system as described in the SHARED FILE LIFECYCLE section of `unify-share-file.md`
-- All changes maintain zero-knowledge architecture: server never receives passwords, FEKs, or decrypted metadata
+- All changes maintain privacy-first architecture: server never receives passwords, FEKs, or decrypted metadata
 - Argon2id parameters are unified across the entire system via `crypto/argon2id-params.json` (served via verified `/api/config/argon2` endpoint)
 - Download Token enforcement provides bandwidth protection while maintaining privacy
 - Streaming downloads improve performance and reduce memory usage (verified `GetObjectWithoutPadding()` exists)
@@ -2552,7 +2552,7 @@ func (s *S3AWSStorage) GetObjectWithoutPadding(ctx context.Context, storageID st
 - Both Account-Encrypted and Custom-Encrypted file sharing
 - Frontend crypto using Argon2id via WASM
 - CLI tools for share key operations
-- Zero-knowledge architecture maintained (no passwords/FEKs sent to server)
+- Privacy-first architecture maintained (no passwords/FEKs sent to server)
 
 **Deviations from Original Plan:**
 1. **Download Token System**: NOT IMPLEMENTED - Missing bandwidth protection
@@ -3401,7 +3401,7 @@ After implementation, verify:
 
 ## NOTES
 
-- All changes maintain zero-knowledge architecture
+- All changes maintain privacy-first architecture
 - No passwords, FEKs, or decrypted metadata sent to server
 - Agent provides seamless Account-encrypted file sharing via CLI
 - AAD binding prevents envelope swapping attacks

@@ -7,7 +7,7 @@ import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { showModal, showTOTPAppsModal } from '../ui/modals.js';
 import { setTokens } from '../utils/auth.js';
-import { showFileSection } from '../ui/sections.js';
+import { showFileSection, showPendingApprovalSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 
 // Make showTOTPAppsModal available globally for inline onclick handlers
@@ -281,9 +281,17 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
       hideProgress();
       showSuccess('Registration complete! Welcome to Arkfile.');
       
-      // Navigate to file section
-      showFileSection();
-      await loadFiles();
+      // Check if user is approved - if not, show pending approval section
+      const isApproved = data.user?.is_approved ?? data.is_approved ?? false;
+      
+      if (!isApproved) {
+        // User needs admin approval before accessing files
+        showPendingApprovalSection();
+      } else {
+        // Navigate to file section
+        showFileSection();
+        await loadFiles();
+      }
       
     } else {
       hideProgress();

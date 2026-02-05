@@ -426,7 +426,7 @@ curl -s http://localhost:8080/health | jq '.'
 
 2. **Web Interface Access:**
    - Navigate to `http://localhost:8080`
-   - Verify page loads with "Secure File Vault" title
+   - Verify page loads with "Private File Vault" title
    - Check browser console for JavaScript errors
 
 3. **User Registration Test:**

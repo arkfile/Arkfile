@@ -206,7 +206,7 @@ func (s *IntegrationSuite) runEnvironmentValidation() error {
         if err != nil {
             return fmt.Errorf("arkfile-client not available: %v", err)
         }
-        if !strings.Contains(result.Stdout, "arkfile-client - Secure file sharing client") {
+        if !strings.Contains(result.Stdout, "arkfile-client - File vault management and sharing client") {
             return fmt.Errorf("arkfile-client help output invalid")
         }
         return nil
