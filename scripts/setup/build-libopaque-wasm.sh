@@ -18,7 +18,7 @@ echo "===================================="
 
 # Configuration - Latest stable versions
 EMSCRIPTEN_VERSION="3.1.74"
-LIBSODIUM_JS_VERSION="0.7.15"
+LIBSODIUM_JS_VERSION="0.7.16"
 
 # Build configuration - passed to make (not modifying submodule Makefile)
 # LIBOPRFHOME: Path to liboprf source (relative to js/ directory)
@@ -107,6 +107,8 @@ install_emscripten_emsdk() {
     print_status "INFO" "Loading Emscripten environment..."
     if [ -f "./emsdk_env.sh" ]; then
         source ./emsdk_env.sh
+        # Restore bun to PATH (emsdk clobbers user paths)
+        [ -d "$HOME/.bun/bin" ] && export PATH="$HOME/.bun/bin:$PATH"
     else
         print_status "ERROR" "emsdk_env.sh not found"
         cd ../..
@@ -134,6 +136,8 @@ ensure_emscripten() {
         print_status "INFO" "Found local emsdk installation, loading environment..."
         cd vendor/emsdk
         source ./emsdk_env.sh
+        # Restore bun to PATH (emsdk clobbers user paths)
+        [ -d "$HOME/.bun/bin" ] && export PATH="$HOME/.bun/bin:$PATH"
         cd ../..
         
         if command -v emcc >/dev/null 2>&1; then
@@ -228,6 +232,45 @@ validate_build_config() {
     fi
     
     print_status "SUCCESS" "Build configuration is secure (no -DNORANDOM)"
+}
+
+# Patch emscripten.sh for compatibility with Emscripten 3.1.74+
+# The upstream libsodium (1.0.18) emscripten.sh uses flags that are incompatible
+# with modern Emscripten's upstream LLVM backend. Rather than modifying the
+# submodule directly, we apply a sed patch at build time.
+# Flags removed:
+#   -sRUNNING_JS_OPTS=1              - removed from Emscripten, causes "not a valid option" error
+#   --llvm-lto 1                     - no-op with upstream LLVM backend (Emscripten 2.x+)
+#   -sAGGRESSIVE_VARIABLE_ELIMINATION=1 - removed from Emscripten
+#   -sALIASING_FUNCTION_POINTERS=1   - removed from Emscripten
+#   -sDISABLE_EXCEPTION_CATCHING=1   - now default behavior, flag removed
+patch_emscripten_for_modern_emcc() {
+    local EMSCRIPTEN_SH="vendor/stef/libopaque/js/libsodium.js/libsodium/dist-build/emscripten.sh"
+
+    if [ ! -f "$EMSCRIPTEN_SH" ]; then
+        print_status "WARNING" "emscripten.sh not found, skipping patch"
+        return 0
+    fi
+
+    # Check if already patched (idempotent)
+    if grep -q "# ARKFILE-PATCHED" "$EMSCRIPTEN_SH"; then
+        print_status "INFO" "emscripten.sh already patched for modern Emscripten"
+        return 0
+    fi
+
+    print_status "INFO" "Patching emscripten.sh for Emscripten $EMSCRIPTEN_VERSION compatibility..."
+
+    # Remove flags incompatible with upstream LLVM backend (Emscripten 3.x)
+    sed -i \
+        -e 's/-sRUNNING_JS_OPTS=1//g' \
+        -e 's/--llvm-lto 1//g' \
+        -e 's/-sAGGRESSIVE_VARIABLE_ELIMINATION=1//g' \
+        -e 's/-sALIASING_FUNCTION_POINTERS=1//g' \
+        -e 's/-sDISABLE_EXCEPTION_CATCHING=1//g' \
+        -e '1s/^/# ARKFILE-PATCHED for Emscripten 3.x compatibility\n/' \
+        "$EMSCRIPTEN_SH"
+
+    print_status "SUCCESS" "emscripten.sh patched for modern Emscripten"
 }
 
 # Build the WASM library
@@ -350,6 +393,9 @@ main() {
     
     # Update libsodium.js to target version
     update_libsodium_js
+    
+    # Patch emscripten.sh for modern Emscripten compatibility (idempotent)
+    patch_emscripten_for_modern_emcc
     
     # Build the WASM library
     build_wasm_library

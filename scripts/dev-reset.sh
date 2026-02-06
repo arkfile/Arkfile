@@ -8,9 +8,34 @@ set -e
 # Check if running as root first
 if [ "$EUID" -ne 0 ]; then
     echo -e "\033[0;31mERROR: This script must be run with sudo privileges\033[0m"
-    echo "Usage: sudo ./scripts/dev-reset.sh"
+    echo "Usage: sudo ./scripts/dev-reset.sh [--force-rebuild-all]"
     exit 1
 fi
+
+# Parse command line arguments
+FORCE_REBUILD_ALL=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --force-rebuild-all)
+            FORCE_REBUILD_ALL=true
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: sudo ./scripts/dev-reset.sh [--force-rebuild-all]"
+            echo ""
+            echo "Options:"
+            echo "  --force-rebuild-all  Force rebuild of ALL C libraries (libopaque, liboprf)"
+            echo "                       Use this after updating libsodium or moving to a new machine"
+            echo "  -h, --help           Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: sudo ./scripts/dev-reset.sh [--force-rebuild-all]"
+            exit 1
+            ;;
+    esac
+done
 
 # Source shared build configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -325,9 +350,14 @@ FALLBACK_VERSION="dev-$(date +%Y%m%d-%H%M%S)"
 
 # Check if C libraries already exist to skip expensive rebuild
 SKIP_C_LIBS=false
-if [ -f "vendor/stef/liboprf/src/liboprf.so" ] && [ -f "vendor/stef/libopaque/src/libopaque.so" ]; then
+if [ "$FORCE_REBUILD_ALL" = "true" ]; then
+    print_status "INFO" "--force-rebuild-all specified: Deleting entire build directory"
+    rm -rf "$BUILD_ROOT"
+    print_status "SUCCESS" "Build directory deleted - will rebuild everything from source"
+elif c_libs_exist; then
     SKIP_C_LIBS=true
     print_status "INFO" "Found existing C libraries - will skip rebuild for faster development iteration"
+    print_status "INFO" "Use --force-rebuild-all if you updated libsodium or moved to a new machine"
 fi
 
 # Build using existing build script
@@ -340,11 +370,22 @@ rm -f client/static/js/.buildcache
 rm -rf client/static/js/dist/*
 
 # Clean build artifacts to prevent directory conflicts
-print_status "INFO" "Removing any existing build artifacts to ensure clean build..."
+# BUT preserve C libraries unless --force-rebuild-all was specified
+print_status "INFO" "Removing build artifacts to ensure clean build..."
 if [ -d "$BUILD_ROOT" ]; then
-    print_status "INFO" "Removing existing build directory ($BUILD_ROOT)..."
-    rm -rf "$BUILD_ROOT"
-    print_status "SUCCESS" "Build artifacts cleaned"
+    if [ "$SKIP_C_LIBS" = "true" ]; then
+        # Preserve C libraries - only clean other build artifacts
+        print_status "INFO" "Preserving C libraries in $BUILD_CLIBS (use --force-rebuild-all to rebuild)"
+        rm -rf "$BUILD_BIN" "$BUILD_CLIENT" "$BUILD_DATABASE" "$BUILD_SYSTEMD" "$BUILD_WEBROOT" 2>/dev/null || true
+        rm -f "$BUILD_ROOT/version.json" 2>/dev/null || true
+        # Note: WASM is preserved too since it depends on the same libsodium
+        print_status "SUCCESS" "Build artifacts cleaned (C libraries preserved)"
+    else
+        # Full clean - remove everything including C libraries
+        print_status "INFO" "Removing entire build directory ($BUILD_ROOT)..."
+        rm -rf "$BUILD_ROOT"
+        print_status "SUCCESS" "Build artifacts cleaned (including C libraries)"
+    fi
 fi
 echo
 
