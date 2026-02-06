@@ -9,11 +9,11 @@
 #   3. Bootstrap protection (verify 2nd admin creation fails)
 #   4. Regular user registration (using arkfile-client)
 #   5. TOTP setup for regular user
-#   6. Admin approval of regular user
+#   6. Admin user management (list-users, user-status, approve-user)
 #   7. Regular user login with TOTP
 #   8. File operations (upload/download/list/delete)
 #   9. Share operations (create/access/delete)
-#   10. Admin operations (credits management)
+#   10. Admin system status
 #   11. Cleanup
 #   12. Summary report
 
@@ -500,10 +500,69 @@ phase_5_totp_setup() {
     success "TOTP setup phase complete"
 }
 
-# Phase 6: Admin Approval of Regular User
+# Phase 6: Admin User Management (list-users, user-status, approve-user)
 phase_6_admin_approval() {
-    phase "6: ADMIN APPROVAL OF REGULAR USER"
+    phase "6: ADMIN USER MANAGEMENT"
     
+    # =========================================================================
+    # 6.1: List all users (admin command)
+    # =========================================================================
+    section "Listing all users (admin)"
+    
+    local list_users_output
+    local list_users_exit_code
+    
+    safe_exec list_users_output list_users_exit_code \
+        $BUILD_DIR/arkfile-admin \
+            --server-url "$SERVER_URL" \
+            --tls-insecure \
+            list-users
+    
+    if [ $list_users_exit_code -eq 0 ]; then
+        # Verify the test user appears in the list
+        if echo "$list_users_output" | grep -q "$TEST_USERNAME"; then
+            record_test "Admin list-users" "PASS"
+            info "Test user '$TEST_USERNAME' found in user list"
+            echo "$list_users_output"
+        else
+            error "Test user '$TEST_USERNAME' not found in user list:"
+            echo "$list_users_output"
+            record_test "Admin list-users" "FAIL"
+        fi
+    else
+        error "list-users command failed (exit code: $list_users_exit_code):"
+        echo "$list_users_output"
+        record_test "Admin list-users" "FAIL"
+    fi
+    
+    # =========================================================================
+    # 6.2: Get user status (admin command) - before approval
+    # =========================================================================
+    section "Getting user status for: $TEST_USERNAME (pre-approval)"
+    
+    local user_status_output
+    local user_status_exit_code
+    
+    safe_exec user_status_output user_status_exit_code \
+        $BUILD_DIR/arkfile-admin \
+            --server-url "$SERVER_URL" \
+            --tls-insecure \
+            user-status \
+            --username "$TEST_USERNAME"
+    
+    if [ $user_status_exit_code -eq 0 ]; then
+        record_test "Admin user-status" "PASS"
+        info "User status retrieved for '$TEST_USERNAME'"
+        echo "$user_status_output"
+    else
+        error "user-status command failed (exit code: $user_status_exit_code):"
+        echo "$user_status_output"
+        record_test "Admin user-status" "FAIL"
+    fi
+    
+    # =========================================================================
+    # 6.3: Approve user
+    # =========================================================================
     section "Approving user via admin: $TEST_USERNAME"
     
     # Approve user using arkfile-admin
@@ -1334,6 +1393,37 @@ phase_9_share_operations() {
 }
 
 
+# Phase 10: Admin System Status
+phase_10_admin_system_status() {
+    phase "10: ADMIN SYSTEM STATUS"
+    
+    section "Retrieving system status via admin CLI"
+    
+    # The admin session from Phase 2 should still be valid (JWT tokens last longer than the test run).
+    # If it has expired, this test will fail gracefully.
+    
+    local system_status_output
+    local system_status_exit_code
+    
+    safe_exec system_status_output system_status_exit_code \
+        $BUILD_DIR/arkfile-admin \
+            --server-url "$SERVER_URL" \
+            --tls-insecure \
+            system-status
+    
+    if [ $system_status_exit_code -eq 0 ]; then
+        record_test "Admin system-status" "PASS"
+        info "System status retrieved successfully"
+        echo "$system_status_output"
+    else
+        error "system-status command failed (exit code: $system_status_exit_code):"
+        echo "$system_status_output"
+        record_test "Admin system-status" "FAIL"
+    fi
+    
+    success "Admin system status phase complete"
+}
+
 # Phase 11: Cleanup
 phase_11_cleanup() {
     phase "11: CLEANUP"
@@ -1462,7 +1552,7 @@ main() {
     phase_7_user_login
     phase_8_file_operations
     phase_9_share_operations
-    # phase_10_admin_operations - Removed as per user request
+    phase_10_admin_system_status
     phase_11_cleanup
     
     # Show summary and exit with appropriate code

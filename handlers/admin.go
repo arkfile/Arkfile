@@ -693,14 +693,15 @@ func ListUsers(c echo.Context) error {
 	var users []map[string]interface{}
 	for rows.Next() {
 		var username sql.NullString
-		var isApproved, isAdmin bool
-		var storageLimitBytes, totalStorageBytes int64
-		var registrationDate time.Time
+		var isApproved, isAdmin sql.NullBool
+		var storageLimitBytes, totalStorageBytes sql.NullInt64
+		var registrationDate sql.NullTime
 		var lastLogin sql.NullTime
 
 		err := rows.Scan(&username, &isApproved, &isAdmin, &storageLimitBytes, &totalStorageBytes,
 			&registrationDate, &lastLogin)
 		if err != nil {
+			logging.ErrorLogger.Printf("ListUsers scan error: %v", err)
 			return JSONError(c, http.StatusInternalServerError, "Error processing user data")
 		}
 
@@ -709,14 +710,30 @@ func ListUsers(c echo.Context) error {
 			continue // Skip the current admin user
 		}
 
+		// Extract values with safe defaults for NULL columns
+		storageLimit := int64(0)
+		if storageLimitBytes.Valid {
+			storageLimit = storageLimitBytes.Int64
+		}
+		totalStorage := int64(0)
+		if totalStorageBytes.Valid {
+			totalStorage = totalStorageBytes.Int64
+		}
+
 		// Calculate storage usage percentage
 		var usagePercent float64
-		if storageLimitBytes > 0 {
-			usagePercent = (float64(totalStorageBytes) / float64(storageLimitBytes)) * 100
+		if storageLimit > 0 {
+			usagePercent = (float64(totalStorage) / float64(storageLimit)) * 100
 		}
 
 		// Format total storage for display
-		totalStorageReadable := formatBytes(totalStorageBytes)
+		totalStorageReadable := formatBytes(totalStorage)
+
+		// Format registration date
+		var registrationDateFormatted string
+		if registrationDate.Valid {
+			registrationDateFormatted = registrationDate.Time.Format("2006-01-02")
+		}
 
 		// Format last login
 		var lastLoginFormatted string
@@ -726,13 +743,13 @@ func ListUsers(c echo.Context) error {
 
 		user := map[string]interface{}{
 			"username":               username.String,
-			"is_approved":            isApproved,
-			"is_admin":               isAdmin,
-			"storage_limit_bytes":    storageLimitBytes,
-			"total_storage_bytes":    totalStorageBytes,
+			"is_approved":            isApproved.Valid && isApproved.Bool,
+			"is_admin":               isAdmin.Valid && isAdmin.Bool,
+			"storage_limit_bytes":    storageLimit,
+			"total_storage_bytes":    totalStorage,
 			"total_storage_readable": totalStorageReadable,
 			"usage_percent":          usagePercent,
-			"registration_date":      registrationDate.Format("2006-01-02"),
+			"registration_date":      registrationDateFormatted,
 			"last_login":             lastLoginFormatted,
 		}
 
@@ -828,6 +845,138 @@ func UpdateUserStorageLimit(c echo.Context) error {
 	LogAdminAction(database.DB, adminUsername, "update_storage_limit", targetUsername, details)
 
 	return JSONResponse(c, http.StatusOK, "Storage limit updated successfully", nil)
+}
+
+// AdminRevokeUser revokes a user's access by setting is_approved to false
+func AdminRevokeUser(c echo.Context) error {
+	targetUsername := c.Param("username")
+	if targetUsername == "" {
+		return JSONError(c, http.StatusBadRequest, "Username parameter is required")
+	}
+
+	// Get admin username for audit logging
+	adminUsername := auth.GetUsernameFromToken(c)
+
+	// Prevent admin from revoking themselves
+	if targetUsername == adminUsername {
+		return JSONError(c, http.StatusBadRequest, "Cannot revoke your own access")
+	}
+
+	// Verify target user exists
+	user, err := models.GetUserByUsername(database.DB, targetUsername)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return JSONError(c, http.StatusNotFound, fmt.Sprintf("User '%s' not found", targetUsername))
+		}
+		return JSONError(c, http.StatusInternalServerError, "Failed to retrieve user")
+	}
+
+	// Check if already revoked
+	if !user.IsApproved {
+		return JSONResponse(c, http.StatusOK, "User is already revoked", map[string]interface{}{
+			"username":    targetUsername,
+			"is_approved": false,
+		})
+	}
+
+	// Revoke user by setting is_approved to false
+	_, err = database.DB.Exec("UPDATE users SET is_approved = 0 WHERE username = ?", targetUsername)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to revoke user %s: %v", targetUsername, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to revoke user")
+	}
+
+	// Log admin action for audit trail
+	logging.LogSecurityEvent(
+		logging.EventAdminAccess,
+		nil,
+		&adminUsername,
+		nil,
+		map[string]interface{}{
+			"operation":       "user_revoke",
+			"target_username": targetUsername,
+		},
+	)
+
+	LogAdminAction(database.DB, adminUsername, "revoke_user", targetUsername, "User access revoked")
+
+	return JSONResponse(c, http.StatusOK, "User access revoked successfully", map[string]interface{}{
+		"username":    targetUsername,
+		"is_approved": false,
+		"revoked_by":  adminUsername,
+	})
+}
+
+// AdminSystemStatus returns system status overview including uptime, version, storage and user statistics
+func AdminSystemStatus(c echo.Context) error {
+	// Get admin username for audit logging
+	adminUsername := auth.GetUsernameFromToken(c)
+
+	// Gather user statistics
+	var totalUsers, activeUsers, adminUsers, pendingUsers int
+	err := database.DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&totalUsers)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to count total users: %v", err)
+	}
+	err = database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE is_approved = 1").Scan(&activeUsers)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to count active users: %v", err)
+	}
+	err = database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE is_admin = 1").Scan(&adminUsers)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to count admin users: %v", err)
+	}
+	err = database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE is_approved = 0").Scan(&pendingUsers)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to count pending users: %v", err)
+	}
+
+	// Gather storage statistics
+	var totalFiles int
+	var totalSizeBytes, avgFileSizeBytes int64
+	err = database.DB.QueryRow("SELECT COUNT(*), COALESCE(SUM(file_size), 0), COALESCE(AVG(file_size), 0) FROM file_metadata").Scan(&totalFiles, &totalSizeBytes, &avgFileSizeBytes)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to get storage stats: %v", err)
+	}
+
+	// Gather TOTP statistics
+	var totpEnabledUsers int
+	err = database.DB.QueryRow("SELECT COUNT(*) FROM user_totp WHERE setup_completed = 1").Scan(&totpEnabledUsers)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to count TOTP users: %v", err)
+	}
+
+	response := map[string]interface{}{
+		"version":    "1.0.0",
+		"go_version": "go1.24",
+		"users": map[string]interface{}{
+			"total_users":      totalUsers,
+			"active_users":     activeUsers,
+			"admin_users":      adminUsers,
+			"pending_approval": pendingUsers,
+		},
+		"storage": map[string]interface{}{
+			"total_files":             totalFiles,
+			"total_size_bytes":        totalSizeBytes,
+			"average_file_size_bytes": avgFileSizeBytes,
+		},
+		"security": map[string]interface{}{
+			"totp_enabled_users": totpEnabledUsers,
+		},
+	}
+
+	// Log admin action for audit trail
+	logging.LogSecurityEvent(
+		logging.EventAdminAccess,
+		nil,
+		&adminUsername,
+		nil,
+		map[string]interface{}{
+			"operation": "system_status",
+		},
+	)
+
+	return JSONResponse(c, http.StatusOK, "System status retrieved", response)
 }
 
 // AdminSystemHealth bridges existing monitoring infrastructure to admin API endpoints

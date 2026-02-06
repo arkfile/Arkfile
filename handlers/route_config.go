@@ -141,10 +141,14 @@ func RegisterRoutes() {
 	adminGroup.PUT("/credits/:username", AdminSetCredits)
 
 	// User management - admin endpoints (migrated from dev/test to production)
+	adminGroup.GET("/users", ListUsers)
 	adminGroup.POST("/users/:username/approve", AdminApproveUser)
 	adminGroup.GET("/users/:username/status", AdminGetUserStatus)
+	adminGroup.PUT("/users/:username/storage", UpdateUserStorageLimit)
+	adminGroup.POST("/users/:username/revoke", AdminRevokeUser)
 
 	// System monitoring - admin endpoints (Phase 2: Bridge existing monitoring infrastructure)
+	adminGroup.GET("/system/status", AdminSystemStatus)
 	adminGroup.GET("/system/health", AdminSystemHealth)
 	adminGroup.GET("/security/events", AdminSecurityEvents)
 

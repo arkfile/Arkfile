@@ -36,9 +36,11 @@ NETWORK COMMANDS (Admin API - localhost only):
     login             Admin login via OPAQUE+TOTP authentication
     setup-totp        Setup Two-Factor Authentication (TOTP)
     logout            Clear admin session
-    list-users        List all users (dev-test env only)
-    approve-user      Approve user account (dev-test env only)
-    set-storage       Set user storage limit (via credits API)
+    list-users        List all users
+    approve-user      Approve user account
+    user-status       Get status of a specific user
+    set-storage       Set user storage limit
+    revoke-user       Revoke user access and disable account
 
 SYSTEM COMMANDS:
     system-status     System status overview
@@ -198,13 +200,11 @@ func main() {
 			os.Exit(1)
 		}
 	case "list-users":
-		fmt.Printf("Dev-test environment only - using network implementation\n")
 		if err := handleListUsersCommand(client, config, args); err != nil {
 			logError("List users failed: %v", err)
 			os.Exit(1)
 		}
 	case "approve-user":
-		fmt.Printf("Dev-test environment only - using network implementation\n")
 		if err := handleApproveUserCommand(client, config, args); err != nil {
 			logError("Approve user failed: %v", err)
 			os.Exit(1)
@@ -212,6 +212,16 @@ func main() {
 	case "set-storage":
 		if err := handleSetStorageCommand(client, config, args); err != nil {
 			logError("Set storage failed: %v", err)
+			os.Exit(1)
+		}
+	case "revoke-user":
+		if err := handleRevokeUserCommand(client, config, args); err != nil {
+			logError("Revoke user failed: %v", err)
+			os.Exit(1)
+		}
+	case "user-status":
+		if err := handleUserStatusCommand(client, config, args); err != nil {
+			logError("User status failed: %v", err)
 			os.Exit(1)
 		}
 
@@ -1032,6 +1042,85 @@ EXAMPLES:
 	}
 
 	fmt.Printf("User %s access revoked successfully\n", *usernameFlag)
+
+	return nil
+}
+
+// handleUserStatusCommand gets the status of a specific user
+func handleUserStatusCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("user-status", flag.ExitOnError)
+	var (
+		usernameFlag = fs.String("username", "", "Username to check status for (required)")
+	)
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin user-status [FLAGS]
+
+Get the status and details of a specific user account.
+
+FLAGS:
+    --username USER     Username to check (required)
+    --help             Show this help message
+
+EXAMPLES:
+    arkfile-admin user-status --username alice
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *usernameFlag == "" {
+		return fmt.Errorf("username is required")
+	}
+
+	// Load admin session
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+
+	// Check if session is expired
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	// Get user status
+	resp, err := client.makeRequest("GET", "/api/admin/users/"+*usernameFlag+"/status", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to get user status: %w", err)
+	}
+
+	// Display user status
+	data := resp.Data
+	fmt.Printf("User Status: %s\n", *usernameFlag)
+	fmt.Printf("========================\n")
+
+	if username, ok := data["username"].(string); ok {
+		fmt.Printf("Username:       %s\n", username)
+	}
+	if isAdmin, ok := data["is_admin"].(bool); ok {
+		fmt.Printf("Admin:          %v\n", isAdmin)
+	}
+	if isApproved, ok := data["is_approved"].(bool); ok {
+		fmt.Printf("Approved:       %v\n", isApproved)
+	}
+	if totpEnabled, ok := data["totp_enabled"].(bool); ok {
+		fmt.Printf("TOTP Enabled:   %v\n", totpEnabled)
+	}
+	if storageLimit, ok := data["storage_limit_bytes"].(float64); ok {
+		fmt.Printf("Storage Limit:  %s\n", formatFileSize(int64(storageLimit)))
+	}
+	if storageUsed, ok := data["total_storage_bytes"].(float64); ok {
+		fmt.Printf("Storage Used:   %s\n", formatFileSize(int64(storageUsed)))
+	}
+	if createdAt, ok := data["created_at"].(string); ok {
+		fmt.Printf("Created:        %s\n", createdAt)
+	}
+	if lastLogin, ok := data["last_login_at"].(string); ok && lastLogin != "" {
+		fmt.Printf("Last Login:     %s\n", lastLogin)
+	}
 
 	return nil
 }
