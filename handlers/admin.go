@@ -693,8 +693,8 @@ func ListUsers(c echo.Context) error {
 	var users []map[string]interface{}
 	for rows.Next() {
 		var username sql.NullString
-		var isApproved, isAdmin sql.NullBool
-		var storageLimitBytes, totalStorageBytes sql.NullInt64
+		var isApproved, isAdmin sql.NullInt64
+		var storageLimitBytes, totalStorageBytes sql.NullFloat64
 		var registrationDate sql.NullTime
 		var lastLogin sql.NullTime
 
@@ -713,11 +713,11 @@ func ListUsers(c echo.Context) error {
 		// Extract values with safe defaults for NULL columns
 		storageLimit := int64(0)
 		if storageLimitBytes.Valid {
-			storageLimit = storageLimitBytes.Int64
+			storageLimit = int64(storageLimitBytes.Float64)
 		}
 		totalStorage := int64(0)
 		if totalStorageBytes.Valid {
-			totalStorage = totalStorageBytes.Int64
+			totalStorage = int64(totalStorageBytes.Float64)
 		}
 
 		// Calculate storage usage percentage
@@ -743,8 +743,8 @@ func ListUsers(c echo.Context) error {
 
 		user := map[string]interface{}{
 			"username":               username.String,
-			"is_approved":            isApproved.Valid && isApproved.Bool,
-			"is_admin":               isAdmin.Valid && isAdmin.Bool,
+			"is_approved":            isApproved.Valid && isApproved.Int64 == 1,
+			"is_admin":               isAdmin.Valid && isAdmin.Int64 == 1,
 			"storage_limit_bytes":    storageLimit,
 			"total_storage_bytes":    totalStorage,
 			"total_storage_readable": totalStorageReadable,
@@ -934,7 +934,7 @@ func AdminSystemStatus(c echo.Context) error {
 	// Gather storage statistics
 	var totalFiles int
 	var totalSizeBytes, avgFileSizeBytes int64
-	err = database.DB.QueryRow("SELECT COUNT(*), COALESCE(SUM(file_size), 0), COALESCE(AVG(file_size), 0) FROM file_metadata").Scan(&totalFiles, &totalSizeBytes, &avgFileSizeBytes)
+	err = database.DB.QueryRow("SELECT COUNT(*), COALESCE(SUM(size_bytes), 0), COALESCE(AVG(size_bytes), 0) FROM file_metadata").Scan(&totalFiles, &totalSizeBytes, &avgFileSizeBytes)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get storage stats: %v", err)
 	}
