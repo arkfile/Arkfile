@@ -116,8 +116,8 @@ type User struct {
 	IsApproved        bool      `json:"is_approved"`
 	StorageLimitBytes int64     `json:"storage_limit_bytes"`
 	TotalStorageBytes int64     `json:"total_storage_bytes"`
-	CreatedAt         time.Time `json:"created_at"`
-	LastLoginAt       time.Time `json:"last_login_at"`
+	RegistrationDate  time.Time `json:"registration_date"`
+	LastLogin         time.Time `json:"last_login"`
 	TOTPEnabled       bool      `json:"totp_enabled"`
 }
 
@@ -872,9 +872,9 @@ EXAMPLES:
 			fmt.Printf("   Storage: %s / %s\n",
 				formatFileSize(int64(userMap["total_storage_bytes"].(float64))),
 				formatFileSize(int64(userMap["storage_limit_bytes"].(float64))))
-			fmt.Printf("   Created: %s\n", userMap["created_at"])
-			if userMap["last_login_at"] != nil {
-				fmt.Printf("   Last Login: %s\n", userMap["last_login_at"])
+			fmt.Printf("   Created: %s\n", userMap["registration_date"])
+			if userMap["last_login"] != nil {
+				fmt.Printf("   Last Login: %s\n", userMap["last_login"])
 			}
 			fmt.Println()
 		}
@@ -901,7 +901,7 @@ EXAMPLES:
 
 			fmt.Printf("%-3d %-20s %-8s %-8s %-6s %-15s %s\n",
 				i+1, userMap["username"], adminStr, approvedStr, totpStr,
-				storageUsed, userMap["created_at"])
+				storageUsed, userMap["registration_date"])
 		}
 	}
 
@@ -1115,10 +1115,10 @@ EXAMPLES:
 	if storageUsed, ok := data["total_storage_bytes"].(float64); ok {
 		fmt.Printf("Storage Used:   %s\n", formatFileSize(int64(storageUsed)))
 	}
-	if createdAt, ok := data["created_at"].(string); ok {
-		fmt.Printf("Created:        %s\n", createdAt)
+	if regDate, ok := data["registration_date"].(string); ok {
+		fmt.Printf("Created:        %s\n", regDate)
 	}
-	if lastLogin, ok := data["last_login_at"].(string); ok && lastLogin != "" {
+	if lastLogin, ok := data["last_login"].(string); ok && lastLogin != "" {
 		fmt.Printf("Last Login:     %s\n", lastLogin)
 	}
 

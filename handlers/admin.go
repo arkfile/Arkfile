@@ -674,12 +674,14 @@ func ListUsers(c echo.Context) error {
 		return JSONError(c, http.StatusForbidden, "Admin privileges required")
 	}
 
-	// Get all users except the current admin
+	// Get all users except the current admin (LEFT JOIN user_totp to get TOTP status)
 	rows, err := database.DB.Query(`
-		SELECT username, is_approved, is_admin, storage_limit_bytes, total_storage_bytes,
-		       registration_date, last_login
-		FROM users
-		ORDER BY registration_date DESC`)
+		SELECT u.username, u.is_approved, u.is_admin, u.storage_limit_bytes, u.total_storage_bytes,
+		       u.registration_date, u.last_login,
+		       CASE WHEN ut.setup_completed = 1 THEN 1 ELSE 0 END AS totp_enabled
+		FROM users u
+		LEFT JOIN user_totp ut ON u.username = ut.username
+		ORDER BY u.registration_date DESC`)
 
 	if err == sql.ErrNoRows {
 		return JSONResponse(c, http.StatusOK, "Users retrieved", map[string]interface{}{
@@ -693,17 +695,22 @@ func ListUsers(c echo.Context) error {
 	var users []map[string]interface{}
 	for rows.Next() {
 		var username sql.NullString
-		var isApproved, isAdmin sql.NullInt64
+		var isApprovedRaw, isAdminRaw, totpEnabledRaw interface{}
 		var storageLimitBytes, totalStorageBytes sql.NullFloat64
-		var registrationDate sql.NullTime
-		var lastLogin sql.NullTime
+		var registrationDate sql.NullString
+		var lastLogin sql.NullString
 
-		err := rows.Scan(&username, &isApproved, &isAdmin, &storageLimitBytes, &totalStorageBytes,
-			&registrationDate, &lastLogin)
+		err := rows.Scan(&username, &isApprovedRaw, &isAdminRaw, &storageLimitBytes, &totalStorageBytes,
+			&registrationDate, &lastLogin, &totpEnabledRaw)
 		if err != nil {
 			logging.ErrorLogger.Printf("ListUsers scan error: %v", err)
 			return JSONError(c, http.StatusInternalServerError, "Error processing user data")
 		}
+
+		// Convert boolean values from rqlite driver (may come as bool, int64, or string)
+		isApproved := toBool(isApprovedRaw)
+		isAdmin := toBool(isAdminRaw)
+		totpEnabled := toBool(totpEnabledRaw)
 
 		// Filter out admins from the list (optional, or keep them)
 		if username.String == adminUsername {
@@ -729,22 +736,36 @@ func ListUsers(c echo.Context) error {
 		// Format total storage for display
 		totalStorageReadable := formatBytes(totalStorage)
 
-		// Format registration date
+		// Format registration date (rqlite returns timestamps as strings)
 		var registrationDateFormatted string
-		if registrationDate.Valid {
-			registrationDateFormatted = registrationDate.Time.Format("2006-01-02")
+		if registrationDate.Valid && registrationDate.String != "" {
+			// Try to parse and reformat, otherwise use raw string
+			if t, err := time.Parse("2006-01-02 15:04:05", registrationDate.String); err == nil {
+				registrationDateFormatted = t.Format("2006-01-02")
+			} else if t, err := time.Parse(time.RFC3339, registrationDate.String); err == nil {
+				registrationDateFormatted = t.Format("2006-01-02")
+			} else {
+				registrationDateFormatted = registrationDate.String
+			}
 		}
 
-		// Format last login
+		// Format last login (rqlite returns timestamps as strings)
 		var lastLoginFormatted string
-		if lastLogin.Valid {
-			lastLoginFormatted = lastLogin.Time.Format("2006-01-02 15:04:05")
+		if lastLogin.Valid && lastLogin.String != "" {
+			if t, err := time.Parse("2006-01-02 15:04:05", lastLogin.String); err == nil {
+				lastLoginFormatted = t.Format("2006-01-02 15:04:05")
+			} else if t, err := time.Parse(time.RFC3339, lastLogin.String); err == nil {
+				lastLoginFormatted = t.Format("2006-01-02 15:04:05")
+			} else {
+				lastLoginFormatted = lastLogin.String
+			}
 		}
 
 		user := map[string]interface{}{
 			"username":               username.String,
-			"is_approved":            isApproved.Valid && isApproved.Int64 == 1,
-			"is_admin":               isAdmin.Valid && isAdmin.Int64 == 1,
+			"is_approved":            isApproved,
+			"is_admin":               isAdmin,
+			"totp_enabled":           totpEnabled,
 			"storage_limit_bytes":    storageLimit,
 			"total_storage_bytes":    totalStorage,
 			"total_storage_readable": totalStorageReadable,
@@ -1051,6 +1072,26 @@ func AdminSecurityEvents(c echo.Context) error {
 	}
 
 	return JSONResponse(c, http.StatusOK, "Security events retrieved", response)
+}
+
+// toBool converts an interface{} value to bool, handling the various types
+// that rqlite driver may return for BOOLEAN columns (bool, int64, float64, string).
+func toBool(v interface{}) bool {
+	if v == nil {
+		return false
+	}
+	switch val := v.(type) {
+	case bool:
+		return val
+	case int64:
+		return val != 0
+	case float64:
+		return val != 0
+	case string:
+		return val == "1" || val == "true" || val == "TRUE"
+	default:
+		return false
+	}
 }
 
 // LogAdminAction logs an admin action to the admin_logs table
