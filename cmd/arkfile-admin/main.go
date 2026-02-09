@@ -879,29 +879,28 @@ EXAMPLES:
 			fmt.Println()
 		}
 	} else {
-		fmt.Printf("%-3s %-20s %-8s %-8s %-6s %-15s %s\n",
+		fmt.Printf("%-3s %-20s %-8s %-8s %-6s %-20s %s\n",
 			"#", "Username", "Admin", "Approved", "TOTP", "Storage", "Created")
-		fmt.Println(strings.Repeat("-", 80))
+		fmt.Println(strings.Repeat("-", 85))
 
 		for i, userData := range usersData {
 			userMap := userData.(map[string]interface{})
-			adminStr := "No"
-			if userMap["is_admin"].(bool) {
-				adminStr = "Yes"
-			}
-			approvedStr := "No"
-			if userMap["is_approved"].(bool) {
-				approvedStr = "Yes"
-			}
-			totpStr := "No"
-			if userMap["totp_enabled"].(bool) {
-				totpStr = "Yes"
-			}
+			adminStr := boolYesNo(userMap["is_admin"].(bool))
+			approvedStr := boolYesNo(userMap["is_approved"].(bool))
+			totpStr := boolYesNo(userMap["totp_enabled"].(bool))
 			storageUsed := formatFileSize(int64(userMap["total_storage_bytes"].(float64)))
+			storageLimit := formatFileSize(int64(userMap["storage_limit_bytes"].(float64)))
+			storageStr := fmt.Sprintf("%s / %s", storageUsed, storageLimit)
 
-			fmt.Printf("%-3d %-20s %-8s %-8s %-6s %-15s %s\n",
+			// Format registration_date to just the date portion
+			regDate := fmt.Sprintf("%v", userMap["registration_date"])
+			if t, err := time.Parse(time.RFC3339, regDate); err == nil {
+				regDate = t.Format("2006-01-02")
+			}
+
+			fmt.Printf("%-3d %-20s %-8s %-8s %-6s %-20s %s\n",
 				i+1, userMap["username"], adminStr, approvedStr, totpStr,
-				storageUsed, userMap["registration_date"])
+				storageStr, regDate)
 		}
 	}
 
@@ -1092,34 +1091,97 @@ EXAMPLES:
 		return fmt.Errorf("failed to get user status: %w", err)
 	}
 
-	// Display user status
+	// Display user status from nested response structure
 	data := resp.Data
-	fmt.Printf("User Status: %s\n", *usernameFlag)
-	fmt.Printf("========================\n")
 
-	if username, ok := data["username"].(string); ok {
-		fmt.Printf("Username:       %s\n", username)
+	// Top-level fields
+	exists := false
+	if v, ok := data["exists"].(bool); ok {
+		exists = v
 	}
-	if isAdmin, ok := data["is_admin"].(bool); ok {
-		fmt.Printf("Admin:          %v\n", isAdmin)
+
+	fmt.Printf("User Status: %s\n", *usernameFlag)
+	fmt.Println("--------------------------")
+
+	if !exists {
+		fmt.Printf("Exists:          No\n")
+		return nil
 	}
-	if isApproved, ok := data["is_approved"].(bool); ok {
-		fmt.Printf("Approved:       %v\n", isApproved)
+
+	// Parse nested "user" object
+	username := *usernameFlag
+	isAdmin := false
+	isApproved := false
+	createdAt := ""
+	if userObj, ok := data["user"].(map[string]interface{}); ok {
+		if v, ok := userObj["username"].(string); ok {
+			username = v
+		}
+		if v, ok := userObj["is_admin"].(bool); ok {
+			isAdmin = v
+		}
+		if v, ok := userObj["is_approved"].(bool); ok {
+			isApproved = v
+		}
+		if v, ok := userObj["created_at"].(string); ok {
+			createdAt = v
+		}
 	}
-	if totpEnabled, ok := data["totp_enabled"].(bool); ok {
-		fmt.Printf("TOTP Enabled:   %v\n", totpEnabled)
+
+	// Format created_at for display
+	createdFormatted := createdAt
+	if createdAt != "" {
+		if t, err := time.Parse(time.RFC3339, createdAt); err == nil {
+			createdFormatted = t.Format("2006-01-02 15:04:05")
+		} else if t, err := time.Parse("2006-01-02T15:04:05Z", createdAt); err == nil {
+			createdFormatted = t.Format("2006-01-02 15:04:05")
+		}
 	}
-	if storageLimit, ok := data["storage_limit_bytes"].(float64); ok {
-		fmt.Printf("Storage Limit:  %s\n", formatFileSize(int64(storageLimit)))
+
+	fmt.Printf("Username:        %s\n", username)
+	fmt.Printf("Exists:          Yes\n")
+	fmt.Printf("Admin:           %s\n", boolYesNo(isAdmin))
+	fmt.Printf("Approved:        %s\n", boolYesNo(isApproved))
+	if createdFormatted != "" {
+		fmt.Printf("Created:         %s\n", createdFormatted)
 	}
-	if storageUsed, ok := data["total_storage_bytes"].(float64); ok {
-		fmt.Printf("Storage Used:   %s\n", formatFileSize(int64(storageUsed)))
+
+	// Parse nested "totp" object
+	if totpObj, ok := data["totp"].(map[string]interface{}); ok {
+		fmt.Printf("\nTOTP Status\n")
+		fmt.Println("--------------------------")
+		present, _ := totpObj["present"].(bool)
+		decryptable, _ := totpObj["decryptable"].(bool)
+		enabled, _ := totpObj["enabled"].(bool)
+		setupCompleted, _ := totpObj["setup_completed"].(bool)
+		fmt.Printf("Present:         %s\n", boolYesNo(present))
+		fmt.Printf("Decryptable:     %s\n", boolYesNo(decryptable))
+		fmt.Printf("Enabled:         %s\n", boolYesNo(enabled))
+		fmt.Printf("Setup Completed: %s\n", boolYesNo(setupCompleted))
 	}
-	if regDate, ok := data["registration_date"].(string); ok {
-		fmt.Printf("Created:        %s\n", regDate)
+
+	// Parse nested "opaque" object
+	if opaqueObj, ok := data["opaque"].(map[string]interface{}); ok {
+		fmt.Printf("\nOPAQUE Status\n")
+		fmt.Println("--------------------------")
+		hasAccount, _ := opaqueObj["has_account"].(bool)
+		fmt.Printf("Has Account:     %s\n", boolYesNo(hasAccount))
 	}
-	if lastLogin, ok := data["last_login"].(string); ok && lastLogin != "" {
-		fmt.Printf("Last Login:     %s\n", lastLogin)
+
+	// Parse nested "tokens" object
+	if tokensObj, ok := data["tokens"].(map[string]interface{}); ok {
+		fmt.Printf("\nTokens\n")
+		fmt.Println("--------------------------")
+		activeRefresh := int(0)
+		if v, ok := tokensObj["active_refresh_tokens"].(float64); ok {
+			activeRefresh = int(v)
+		}
+		revoked := int(0)
+		if v, ok := tokensObj["revoked_tokens"].(float64); ok {
+			revoked = int(v)
+		}
+		fmt.Printf("Active Refresh:  %d\n", activeRefresh)
+		fmt.Printf("Revoked:         %d\n", revoked)
 	}
 
 	return nil
@@ -1565,6 +1627,14 @@ func formatFileSize(bytes int64) string {
 	}
 
 	return fmt.Sprintf("%.1f %s", float64(bytes)/float64(div), units[exp])
+}
+
+// boolYesNo returns "Yes" or "No" for a boolean value
+func boolYesNo(v bool) string {
+	if v {
+		return "Yes"
+	}
+	return "No"
 }
 
 func parseStorageLimit(limit string) (int64, error) {
