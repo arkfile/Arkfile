@@ -201,9 +201,9 @@ go version
 
 **Option 2: Manual Install (Latest Version)**
 ```bash
-# Install Go 1.24.2 or later
-wget https://go.dev/dl/go1.24.2.linux-amd64.tar.gz
-sudo tar -C /usr/local -xzf go1.24.2.linux-amd64.tar.gz
+# Install Go 1.26.0 or later
+wget https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.26.0.linux-amd64.tar.gz
 
 # Add Go to PATH for manual installs
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc

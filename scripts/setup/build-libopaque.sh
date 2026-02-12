@@ -163,13 +163,13 @@ find_go_binary() {
 # Go version verification
 check_go_version() {
     local required_major=1
-    local required_minor=24
+    local required_minor=26
     
     local go_binary
     if ! go_binary=$(find_go_binary); then
         echo "[X] Go compiler not found in standard locations:"
         echo "   Checked: PATH, /usr/bin/go, /usr/local/bin/go, /usr/local/go/bin/go"
-        echo "   Please install Go 1.24+ via package manager or from https://golang.org"
+        echo "   Please install Go 1.26+ via package manager or from https://golang.org"
         echo ""
         echo "   Package manager installs:"
         echo "   • Debian/Ubuntu: apt install golang-go"
@@ -190,7 +190,7 @@ check_go_version() {
        ([ "$current_major" -eq "$required_major" ] && [ "$current_minor" -lt "$required_minor" ]); then
         echo "[X] Go version $current_version is too old"
         echo "Required: Go ${required_major}.${required_minor}+ (from go.mod)"
-        echo "Please update Go to version 1.24 or later"
+        echo "Please update Go to version 1.26 or later"
         exit 1
     fi
     

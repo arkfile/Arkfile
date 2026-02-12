@@ -388,7 +388,7 @@ Many scripts support environment variables for customization:
 ## Script Dependencies
 
 ### Prerequisites
-- Go 1.24.2+ (for building)
+- Go 1.26.0+ (for building)
 - Bun (for WebAssembly tests and TypeScript compilation)
 - Python 3 (for some maintenance scripts)
 - curl (for health checks)

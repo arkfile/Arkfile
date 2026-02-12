@@ -100,7 +100,7 @@ install_dependencies() {
         MAJOR=$(echo $GO_VERSION | cut -d. -f1)
         MINOR=$(echo $GO_VERSION | cut -d. -f2)
         
-        if [ "$MAJOR" -gt 1 ] || ([ "$MAJOR" -eq 1 ] && [ "$MINOR" -ge 24 ]); then
+        if [ "$MAJOR" -gt 1 ] || ([ "$MAJOR" -eq 1 ] && [ "$MINOR" -ge 26 ]); then
             echo "Compatible Go version $GO_VERSION already installed, skipping Go installation"
             GO_SKIP="true"
         else
@@ -131,7 +131,7 @@ install_dependencies() {
         
         if [ "$GO_SKIP" != "true" ]; then
             echo "Warning: Distro Go packages are often outdated. Consider installing Go manually from https://golang.org/dl/"
-            echo "Skipping golang-go package due to version concerns. Please ensure Go 1.24+ is installed."
+            echo "Skipping golang-go package due to version concerns. Please ensure Go 1.26+ is installed."
         fi
     elif command -v dnf &> /dev/null; then
         echo "Using dnf package manager..."
@@ -171,7 +171,7 @@ install_dependencies() {
         fi
     else
         echo -e "${RED}No supported package manager found${NC}"
-        echo "Please install manually: git, go (1.24+), make, gcc, ca-certificates, curl"
+        echo "Please install manually: git, go (1.26+), make, gcc, ca-certificates, curl"
         echo "Detected OS: $OS"
         exit 1
     fi
@@ -209,7 +209,7 @@ compare_go_versions() {
 
 # Function to get minimum required Go version from go.mod files
 get_minimum_go_version() {
-    local min_version="1.24"  # Default fallback
+    local min_version="1.26"  # Default fallback
     
     # Check project's go.mod
     if [ -f "go.mod" ]; then
@@ -221,7 +221,7 @@ get_minimum_go_version() {
     
     # Check rqlite's requirements (we know it requires 1.24.0)
     # In a real implementation, this could fetch from their repo
-    local rqlite_version="1.24.0"
+    local rqlite_version="1.26.0"
     
     # Use the higher of the two requirements
     if compare_go_versions "$rqlite_version" "$min_version"; then

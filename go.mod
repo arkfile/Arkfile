@@ -1,6 +1,6 @@
 module github.com/84adam/Arkfile
 
-go 1.24.4
+go 1.26
 
 require (
 	github.com/joho/godotenv v1.5.1
@@ -25,7 +25,7 @@ require (
 	golang.org/x/term v0.37.0
 )
 
-require github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
+require github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc
 
 require (
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.4 // indirect

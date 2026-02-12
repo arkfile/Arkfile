@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -969,7 +970,7 @@ func AdminSystemStatus(c echo.Context) error {
 
 	response := map[string]interface{}{
 		"version":    "1.0.0",
-		"go_version": "go1.24",
+		"go_version": runtime.Version(),
 		"users": map[string]interface{}{
 			"total_users":      totalUsers,
 			"active_users":     activeUsers,
