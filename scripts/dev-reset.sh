@@ -8,30 +8,39 @@ set -e
 # Check if running as root first
 if [ "$EUID" -ne 0 ]; then
     echo -e "\033[0;31mERROR: This script must be run with sudo privileges\033[0m"
-    echo "Usage: sudo ./scripts/dev-reset.sh [--force-rebuild-all]"
+    echo "Usage: sudo ./scripts/dev-reset.sh [--force-rebuild-all] [--force-rebuild-rqlite]"
     exit 1
 fi
 
 # Parse command line arguments
 FORCE_REBUILD_ALL=false
+FORCE_REBUILD_RQLITE=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --force-rebuild-all)
             FORCE_REBUILD_ALL=true
+            FORCE_REBUILD_RQLITE=true
+            shift
+            ;;
+        --force-rebuild-rqlite)
+            FORCE_REBUILD_RQLITE=true
             shift
             ;;
         -h|--help)
-            echo "Usage: sudo ./scripts/dev-reset.sh [--force-rebuild-all]"
+            echo "Usage: sudo ./scripts/dev-reset.sh [--force-rebuild-all] [--force-rebuild-rqlite]"
             echo ""
             echo "Options:"
-            echo "  --force-rebuild-all  Force rebuild of ALL C libraries (libopaque, liboprf)"
-            echo "                       Use this after updating libsodium or moving to a new machine"
-            echo "  -h, --help           Show this help message"
+            echo "  --force-rebuild-all     Force rebuild of ALL C libraries (libopaque, liboprf)"
+            echo "                          Use this after updating libsodium or moving to a new machine"
+            echo "                          Also forces rqlite rebuild"
+            echo "  --force-rebuild-rqlite  Force rebuild of rqlite even if same major version exists"
+            echo "                          Use this after updating the rqlite version in the build script"
+            echo "  -h, --help              Show this help message"
             exit 0
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: sudo ./scripts/dev-reset.sh [--force-rebuild-all]"
+            echo "Usage: sudo ./scripts/dev-reset.sh [--force-rebuild-all] [--force-rebuild-rqlite]"
             exit 1
             ;;
     esac
@@ -630,8 +639,14 @@ fi
 print_status "SUCCESS" "MinIO setup complete"
 
 # Setup rqlite service (using build-from-source approach)
-print_status "INFO" "Setting up rqlite (build from source)..."
-if ! ./scripts/setup/06-setup-rqlite-build.sh; then
+RQLITE_BUILD_ARGS=""
+if [ "$FORCE_REBUILD_RQLITE" = "true" ]; then
+    RQLITE_BUILD_ARGS="--force"
+    print_status "INFO" "Setting up rqlite (build from source, forced rebuild)..."
+else
+    print_status "INFO" "Setting up rqlite (build from source)..."
+fi
+if ! ./scripts/setup/06-setup-rqlite-build.sh $RQLITE_BUILD_ARGS; then
     print_status "ERROR" "rqlite setup failed - this is CRITICAL"
     exit 1
 fi
