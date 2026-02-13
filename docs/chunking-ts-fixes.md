@@ -5,7 +5,112 @@
 
 ## Context
 
-The e2e-test.sh (Go CLI → server) passes all tests. The frontend TypeScript client needs fixes to match the working server API for encrypting files client-side and uploading them via the chunked upload API. Additionally, `cryptocli` needs to be updated to use streaming per-chunk encryption (no `.enc` temp files, no full-file memory buffering).
+The e2e-test.sh (Go CLI → server) passes all tests (100%). The frontend TypeScript client needs fixes to match the working server API for encrypting files client-side and uploading them via the chunked upload API. Additionally, `cryptocli` needs to be updated to use streaming per-chunk encryption (no `.enc` temp files, no full-file memory buffering).
+
+---
+
+## Phase 0: Unified Chunking Constants (Single Source of Truth)
+
+### Problem: Constants Are Scattered Across 9+ Locations
+
+The same chunk size (`16 * 1024 * 1024`) is hardcoded in at least:
+- `crypto/gcm.go` → `const ChunkSize`
+- `models/file.go` → `const DefaultChunkSizeBytes`
+- `handlers/uploads.go` → inline `16 * 1024 * 1024` (2 places)
+- `handlers/files.go` → local `const chunkSize`
+- `handlers/file_shares.go` → inline (2 places)
+- `handlers/downloads.go` → uses DB value, no constant
+- `cmd/arkfile-client/main.go` → CLI default flag
+- `client/static/js/src/crypto/constants.ts` → `DEFAULT_CHUNK_SIZE_BYTES`
+
+AES-GCM constants (nonce=12, tag=16) are similarly scattered with inline magic numbers.
+
+### Solution: Create `crypto/chunking-params.json`
+
+Following the proven pattern of `crypto/argon2id-params.json` and `crypto/password-requirements.json`:
+
+```json
+{
+  "plaintextChunkSizeBytes": 16777216,
+  "envelope": {
+    "version": 1,
+    "headerSizeBytes": 2,
+    "keyTypes": {
+      "account": 1,
+      "custom": 2
+    }
+  },
+  "aesGcm": {
+    "nonceSizeBytes": 12,
+    "tagSizeBytes": 16,
+    "keySizeBytes": 32
+  }
+}
+```
+
+**Distribution pipeline (same as argon2id-params.json):**
+
+1. **Go**: `//go:embed chunking-params.json` in a new `crypto/chunking_constants.go`
+   - All Go code references the embedded struct
+   - Replace all 9+ hardcoded `16 * 1024 * 1024` with loaded value
+2. **API**: `GET /api/config/chunking` → new handler in `handlers/config.go` returns raw JSON
+3. **TS**: `loadChunkingConfig()` in `crypto/constants.ts` fetches from API, caches in memory
+   - Replace hardcoded `DEFAULT_CHUNK_SIZE_BYTES`, `AES_GCM_NONCE_SIZE`, `AES_GCM_TAG_SIZE`
+
+**What is NOT in this file**: Salt domain prefixes (`arkfile-account-key-salt:`, `arkfile-custom-key-salt:`) remain in their respective modules (`crypto/key_derivation.go`, `client/static/js/src/crypto/file-encryption.ts`) — each prefix appears in exactly 1 place per language and they already match, so a JSON file for two static strings is over-engineering. Share-specific crypto (`share_kdf.go`) is a completely separate system and has no overlap with chunking.
+
+### Implementation Steps
+
+1. Create `crypto/chunking-params.json`
+2. Create `crypto/chunking_constants.go` with `//go:embed` and `GetEmbeddedChunkingParamsJSON()`
+3. Add `GetChunkingConfig` handler in `handlers/config.go`
+4. Add route `publicGroup.GET("/api/config/chunking", GetChunkingConfig)` in `handlers/route_config.go`
+5. Update `crypto/constants.ts` to fetch and cache from `/api/config/chunking`
+6. Replace all hardcoded chunk/crypto constants across Go and TS with references to the loaded values
+7. Run `go test ./...` — no behavior change, only constant sourcing change
+8. Run `e2e-test.sh` — must still pass 100%
+
+---
+
+## Phase 0.5: Unify the Two Go Envelope Implementations
+
+### Problem: Two Competing FEK Envelope Formats in Go
+
+There are currently TWO different Go functions that create encrypted FEK envelopes:
+
+1. **`crypto/file_operations.go`** → `EncryptFEK()` / `DecryptFEK()`
+   - Format: `[version(1)][keyType(1)][nonce+ciphertext+tag]`
+   - **This is what the e2e test currently uses** (via cryptocli)
+
+2. **`crypto/envelope.go`** → `CreatePasswordKeyEnvelope()` / `ExtractFEKFromPasswordEnvelope()`
+   - Format: `[version(1)][keyType(1)][salt(32)][nonce+ciphertext+tag]`
+   - Includes a 32-byte deterministic salt in the envelope (redundant since salt is derivable from username+keyType)
+
+These produce **incompatible** encrypted FEK blobs. The server stores whatever `encrypted_fek` the client sends, so both could exist in the DB depending on which code path was used.
+
+### Decision
+
+Keep the simpler format from `file_operations.go` (`[version][keyType][encrypted_fek]` without redundant salt). This is what the working e2e test uses, and the salt is always derivable from `username + keyType`.
+
+### Dead Code Removal: `share` Key Type (0x03)
+
+The `share` key type (`0x03`) exists in both `envelope.go` and `file_operations.go` but is **never used by the actual share system**. The share system uses a completely different mechanism (random salt + AES-GCM-AAD via `share_kdf.go`). The `DeriveSharePasswordKey()` function in `key_derivation.go` and `share: 'arkfile-share-key-salt:'` in TS `file-encryption.ts` are similarly dead code.
+
+Per project policy: no unused code hanging around for "potential future use."
+
+### Implementation Steps
+
+1. **Remove dead `share` key type code:**
+   - `crypto/envelope.go`: Remove `KeyTypeShare = 0x03` constant, remove `case KeyTypeShare:` branches from all switch statements
+   - `crypto/file_operations.go`: Remove `case "share": envelope[1] = 0x03` and `case 0x03: keyType = "share"` branches
+   - `crypto/key_derivation.go`: Remove `DeriveSharePasswordKey()` function (dead — share system uses `share_kdf.go` directly)
+   - `client/static/js/src/crypto/file-encryption.ts`: Remove `share: 'arkfile-share-key-salt:'` from `SALT_DOMAIN_PREFIXES`
+2. **Remove competing envelope functions:**
+   - Remove `CreatePasswordKeyEnvelope()` and `ExtractFEKFromPasswordEnvelope()` from `envelope.go` (dead code — nothing calls them)
+   - Keep `envelope.go`'s remaining type constants (`KeyTypeAccount = 0x01`, `KeyTypeCustom = 0x02`) — these are correct and useful, and will now be sourced from `chunking-params.json` via Phase 0
+3. Verify no callers reference removed functions: `grep -r "CreatePasswordKeyEnvelope\|ExtractFEKFromPasswordEnvelope\|DeriveSharePasswordKey\|KeyTypeShare" --include="*.go" --include="*.ts"`
+4. Run `go test ./...` — must pass
+5. Run `e2e-test.sh` — must still pass 100%
 
 ---
 
@@ -64,7 +169,6 @@ salt := sha256.Sum256([]byte(fmt.Sprintf("arkfile-%s-key-salt:%s", keyType, user
 const SALT_DOMAIN_PREFIXES = {
   account: 'arkfile-account-key-salt:',
   custom: 'arkfile-custom-key-salt:',
-  share: 'arkfile-share-key-salt:',
 };
 // salt = SHA256(prefix + username).slice(0, 32)
 ```
@@ -77,14 +181,21 @@ Both produce `SHA256("arkfile-{context}-key-salt:{username}")` → 32-byte salt.
 
 ## Password Contexts (Account / Custom)
 
-The upload system supports 2 password contexts:
+The upload system supports 2 password contexts for file encryption:
 
-| Context | Salt Prefix | Use Case |
+| Context | Salt Derivation | Use Case |
 |---|---|---|
-| `account` | `arkfile-account-key-salt:{username}` | Default — uses login password |
-| `custom` | `arkfile-custom-key-salt:{username}` | User-chosen per-file password |
+| `account` | Deterministic: `SHA256("arkfile-account-key-salt:{username}")` | Default — uses login password |
+| `custom` | Deterministic: `SHA256("arkfile-custom-key-salt:{username}")` | User-chosen per-file password |
 
-**Note**: `share` is a separate workflow for share creation, not for file upload. The server's `CreateUploadSession` only accepts `password_type` of `account` or `custom`.
+**Note**: The `share` context uses a completely different mechanism. Share passwords do NOT use `DeriveSharePasswordKey()` or deterministic username-based salts. Instead, the share system:
+1. Generates a **random salt** (via `crypto.GenerateShareSalt()`)
+2. Derives a key via `Argon2id(share_password, random_salt)`
+3. Encrypts a **Share Envelope** (`{fek, download_token}` as JSON) with AES-GCM-AAD
+4. AAD = `share_id + file_id` for context binding
+5. The recipient uses the same random salt (retrieved from server) + share password to decrypt
+
+The server's `CreateUploadSession` only accepts `password_type` of `account` or `custom`. Share operations are handled by completely separate endpoints (`/api/shares/*`).
 
 ### Key Caching Behavior
 
@@ -106,7 +217,7 @@ The `/api/uploads/init` endpoint expects:
 
 ---
 
-## Existing TS Code: What Needs Fixing
+## Phase 1: Fix Existing TS Upload Module
 
 ### Fix 1: API URL Paths and HTTP Methods in `upload.ts`
 
@@ -132,9 +243,9 @@ The server's `UploadChunk` handler expects:
 
 The TS client must NOT use `FormData` or multipart. It should send the chunk as a raw `ArrayBuffer`/`Blob` body with the hash header.
 
-### Fix 3: Remove `file_hash` from Complete Upload
+### Fix 3: Complete Upload Body
 
-The `POST /api/uploads/{sessionId}/complete` endpoint has **no JSON body**. The server computes the encrypted file hash via streaming. Do not send `file_hash` or any other fields in the complete request.
+The `POST /api/uploads/{sessionId}/complete` endpoint has **no JSON body**. The server computes the encrypted file hash via streaming. The current TS code already sends no body — **this is already correct, no change needed**.
 
 ### Fix 4: Chunk Hash Is SHA-256 of Encrypted Chunk Bytes
 
@@ -144,9 +255,60 @@ Each chunk's hash must be SHA-256 of the **encrypted chunk bytes** (including en
 
 The TS `upload.ts` already encrypts **each plaintext chunk separately** with AES-GCM. This is the correct approach and matches the server's chunk validation expectations. Each chunk gets its own random nonce. Chunk 0 gets the 2-byte envelope prefix prepended.
 
+### Fix 6: Envelope Key Type Byte Must Reflect Password Type
+
+The TS `upload.ts` currently hardcodes `ENVELOPE_TYPE_AES_GCM = 0x01` for all uploads. This means the envelope always writes `[0x01, 0x01]` regardless of password type. **This is wrong for custom password uploads.**
+
+The envelope byte should be:
+- `[0x01, 0x01]` for `account` password
+- `[0x01, 0x02]` for `custom` password
+
+Fix: Use the `passwordType` option to set the correct key_type byte in the envelope header.
+
+### Fix 7: Ensure `password_type` Only Sends `account` or `custom`
+
+The upload init request must not send `share` as `password_type`. Only `account` and `custom` are valid for file uploads.
+
 ---
 
-## Cryptocli Streaming Encryption (No `.enc` Files, No Full-File Memory)
+## Phase 2: Verify TS Download Module
+
+### Verify 1: Metadata Field Decryption Matches Server Storage Format
+
+`streaming-download.ts` combines nonce + encrypted data as `[nonce][encrypted]` before decryption. This must match the server's storage format where nonce and ciphertext+tag are stored separately. The current implementation looks correct: it reconstructs `[nonce][ciphertext+tag]` which is the format `AESGCMDecryptor.decryptChunk()` expects.
+
+### Verify 2: Envelope Stripping on Chunk 0 ⚠️ CRITICAL
+
+**This is a bug that the plan previously missed.** When downloading chunks:
+- The server returns raw byte ranges from the stored S3 object via `DownloadFileChunk()`
+- Chunk 0 of the stored data includes the 2-byte envelope header: `[0x01][key_type][nonce][ciphertext][tag]`
+- The TS `AESGCMDecryptor.decryptChunk()` expects `[nonce][ciphertext][tag]` — it does NOT strip the envelope
+
+**Fix needed**: The download code must strip the 2-byte envelope header from chunk 0 before passing it to `decryptChunk()`. For chunks 1-N, no stripping is needed.
+
+### Verify 3: FEK Decryption Must Strip Envelope Header ⚠️ CRITICAL
+
+**Another bug found in `download.ts`.** The `decryptFEK()` function does:
+```typescript
+const encryptedFek = base64ToBytes(encryptedFekBase64);
+const fek = await decryptChunk(encryptedFek, accountKey);
+```
+
+This assumes the encrypted FEK is `[nonce][ciphertext][tag]`. But the Go server stores `encrypted_fek` with the 2-byte envelope header: `[version(1)][keyType(1)][nonce(12)][ciphertext][tag(16)]` (produced by `crypto.EncryptFEK()`).
+
+**Fix needed**: Strip the first 2 bytes (envelope header) from `encryptedFek` before passing to `decryptChunk()`. The envelope header can also be used to determine the password context (account vs custom) for key derivation.
+
+### Verify 4: The `/api/files/{fileId}/metadata` Endpoint
+
+The `GetFileDownloadMetadata` handler returns only: `{file_id, size_bytes, chunk_count, chunk_size_bytes}`. It does NOT return encrypted filename/nonce/sha256 fields. The TS client needs to get those from a different source (likely the file list endpoint or a separate metadata endpoint). Verify this data flow.
+
+### Verify 5: Cross-Platform Test
+
+Upload via Go CLI, download via TS client → verify identical plaintext output.
+
+---
+
+## Phase 3: Update Cryptocli to Streaming Encrypt+Upload
 
 ### Goal
 
@@ -155,6 +317,21 @@ Update `cryptocli` so Go CLI users can encrypt and upload files **streaming chun
 ### Current Limitation
 
 The current CLI workflow uses `crypto.EncryptFileWorkflow` which reads the **entire file** into memory, encrypts it as one AES-GCM blob, writes a `.enc` file, then `arkfile-client upload` reads the `.enc` file fully into memory and chunks it for transport. This is not scalable and wastes disk space.
+
+### ⚠️ CRITICAL: This Changes the Encrypted Data Format
+
+Currently, `cryptocli encrypt-file` produces a single AES-GCM blob: `[2-byte envelope][nonce][entire-file-ciphertext][tag]`. The `arkfile-client upload` then splits this blob into transport chunks (raw byte ranges).
+
+The new streaming model produces **per-chunk encrypted data**: each chunk is independently encrypted with its own nonce. These are fundamentally different formats:
+
+| Aspect | Old Format | New Format |
+|---|---|---|
+| Encryption granularity | Whole file = one AES-GCM operation | Per-chunk = one AES-GCM per 16 MiB |
+| Nonces | 1 nonce for entire file | 1 nonce per chunk |
+| Server storage | Raw byte ranges of one big blob | Per-chunk encrypted segments |
+| Decryption | Need entire blob to decrypt | Can decrypt chunk-by-chunk |
+
+**Files uploaded with the old format cannot be decrypted with new format logic, and vice versa.** Per AGENTS.md: "No need to build in backwards compatibility" — this is acceptable. A `dev-reset.sh` must be run to clear test data when switching.
 
 ### Target Streaming Model
 
@@ -182,108 +359,54 @@ The current CLI workflow uses `crypto.EncryptFileWorkflow` which reads the **ent
 
 ### Download (Streaming Decryption)
 
-`cryptocli decrypt-file` must also switch to streaming:
+`cryptocli download` (new command) must also use streaming:
 1. Download chunks via `GET /api/files/{fileId}/chunks/{chunkIndex}`
-2. Parse 2-byte envelope from chunk 0
+2. Strip 2-byte envelope from chunk 0
 3. Decrypt each chunk independently (each has its own nonce)
 4. Write plaintext streaming to output
 5. No full encrypted file ever assembled in memory or on disk
 
-### Changes to e2e-test.sh
+### `encrypted_fek` Output Requirement
 
-The e2e test must be updated to reflect the new streaming workflow:
-- **Remove**: `cryptocli encrypt-file` step (no more `.enc` file creation)
-- **Replace with**: A single `cryptocli upload` command that streams encrypt+upload
-- **Remove**: `arkfile-client upload --file *.enc` step
-- **Update**: Download step to use streaming decryption
-- **Keep**: All SHA-256 and content verification checks
-- **Keep**: All share operation tests (unchanged)
+The new `cryptocli upload` command **must output `encrypted_fek`** (base64) to stdout or in its JSON output. This is required because:
+- The e2e test's share operations need the `encrypted_fek` to create share envelopes
+- Currently, `cryptocli encrypt-file` outputs this value in its JSON metadata file
+- The new `cryptocli upload` must provide it equivalently (e.g., output a JSON summary on success that includes `file_id` and `encrypted_fek`)
 
 ---
 
-## Download Flow (TS Client)
+## Phase 4: Update e2e-test.sh
 
-The TS `streaming-download.ts` already exists and handles chunked downloads. It uses:
-- `GET /api/files/{fileId}/metadata` — chunk count, sizes
-- `GET /api/files/{fileId}/chunks/{chunkIndex}` — individual encrypted chunk data
+### ⚠️ CRITICAL: Must Ship Atomically with Phase 3
 
-The download module:
-1. Fetches metadata (chunk count, sizes, encrypted filename/SHA-256/nonces)
-2. Downloads each encrypted chunk
-3. Decrypts each chunk independently using FEK via `AESGCMDecryptor.decryptChunk`
-4. Decrypts filename and SHA-256 from metadata using FEK
-5. Combines decrypted chunks and triggers browser download
+If Phase 3 changes `cryptocli` commands but Phase 4 isn't updated simultaneously, the e2e test will break. These two phases must be implemented and committed together.
 
-**Potential issue to verify**: `decryptMetadataField` in `streaming-download.ts` combines nonce + encrypted data as `[nonce][encrypted]` before decryption. This must match the server's storage format where nonce and ciphertext+tag are stored separately.
+### Changes Required
 
----
+1. **Remove**: `cryptocli encrypt-file` step (no more `.enc` file creation)
+2. **Replace with**: A single `cryptocli upload` command that streams encrypt+upload
+3. **Remove**: `arkfile-client upload --file *.enc` step
+4. **Update**: Download step to use `cryptocli download` (streaming decryption)
+5. **Remove**: `cryptocli decrypt-file` step
+6. **Keep**: All SHA-256 and content verification checks
+7. **Keep**: All share operation tests (shares use the FEK from upload output)
+8. **Update**: Parse `encrypted_fek` from `cryptocli upload` output instead of from `.enc.json` metadata file
+9. **Run `dev-reset.sh` before testing** — old encrypted data format is incompatible
 
-## Constants Reference
+### Post-Update Verification
 
-| Constant | Value | Source |
-|---|---|---|
-| Chunk size (plaintext) | 16 MiB (16,777,216 bytes) | `crypto/constants.ts`, `handlers/uploads.go` |
-| AES-GCM nonce | 12 bytes | Both |
-| AES-GCM tag | 16 bytes | Both |
-| AES-GCM overhead per chunk | 28 bytes (nonce + tag) | Both |
-| Envelope header | 2 bytes (chunk 0 only) | Both |
-| Argon2id memory | 262,144 KiB (256 MiB) | `crypto/argon2id-params.json` |
-| Argon2id time | 8 iterations | `crypto/argon2id-params.json` |
-| Argon2id parallelism | 4 | `crypto/argon2id-params.json` |
-| Key length | 32 bytes | `crypto/argon2id-params.json` |
-| Salt length | 32 bytes | Both |
-| Salt domain (account) | `arkfile-account-key-salt:` | Both Go and TS ✅ |
-| Salt domain (custom) | `arkfile-custom-key-salt:` | Both Go and TS ✅ |
-| Salt domain (share) | `arkfile-share-key-salt:` | Both Go and TS ✅ |
-| Salt algorithm | SHA-256 of `{prefix}{username}` | Both Go and TS ✅ |
+After Phase 3+4, `e2e-test.sh` must pass 100% with all existing test phases:
+- Phase 1-4: Auth (register, login, TOTP)
+- Phase 5: Upload (now via `cryptocli upload`)
+- Phase 6: List files
+- Phase 7: Download + verify (now via `cryptocli download`)
+- Phase 8: File key management
+- Phase 9: Share operations (uses `encrypted_fek` from upload output)
+- Phase 10-11: Cleanup
 
 ---
 
-## Implementation Plan
-
-### Phase 1: Fix Existing TS Upload Module
-
-1. Fix API paths in `client/static/js/src/files/upload.ts`:
-   - `/api/upload/init` → `/api/uploads/init`
-   - `/api/upload/${sessionId}/chunk/${i}` → `/api/uploads/${sessionId}/chunks/${i}`
-   - `/api/upload/${sessionId}/complete` → `/api/uploads/${sessionId}/complete`
-2. Fix HTTP method: chunk upload from `PUT` to `POST`
-3. Fix chunk upload format: raw binary body + `X-Chunk-Hash` header (not multipart form)
-4. Remove any `file_hash` from complete upload request body
-5. Ensure per-chunk encryption with envelope on chunk 0
-6. Ensure `password_type` only sends `account` or `custom` (not `share`)
-
-### Phase 2: Verify TS Download Module
-
-1. Verify `streaming-download.ts` metadata field decryption matches server storage format
-2. Verify per-chunk decryption handles envelope stripping on chunk 0
-3. Test cross-platform: upload via Go CLI, download via TS client
-
-### Phase 3: Update Cryptocli to Streaming Encrypt+Upload
-
-1. Create new `cryptocli upload` command that:
-   - Reads plaintext file streaming
-   - Computes SHA-256 of plaintext (streaming)
-   - Encrypts metadata, FEK
-   - Calls `/api/uploads/init`
-   - Encrypts each 16 MiB chunk with FEK (per-chunk AES-GCM)
-   - Uploads each chunk immediately with `X-Chunk-Hash`
-   - Calls `/api/uploads/{sessionId}/complete`
-2. Create new `cryptocli download` command that:
-   - Downloads chunks via API
-   - Decrypts each chunk streaming
-   - Writes plaintext to stdout or file
-3. Remove old `encrypt-file` / `decrypt-file` commands (no `.enc` files)
-4. Update `encrypt-metadata` and `decrypt-metadata` to work with the new flow
-
-### Phase 4: Update e2e-test.sh
-
-1. Replace `cryptocli encrypt-file` + `arkfile-client upload` with `cryptocli upload`
-2. Replace `arkfile-client download` + `cryptocli decrypt-file` with `cryptocli download`
-3. Keep all verification checks (SHA-256, content match, share operations)
-4. Ensure all tests still pass
-
-### Phase 5: Wire Up UI
+## Phase 5: Wire Up UI
 
 1. Connect fixed upload module to `chunked-upload.html` UI
 2. Connect download module to file list UI in `index.html`
@@ -293,7 +416,9 @@ The download module:
    - Download + decryption (show progress bar)
 4. Add custom password UI toggle
 
-### Phase 6: Cross-Platform Testing
+---
+
+## Phase 6: Cross-Platform Testing
 
 1. Upload file via TS client, download via Go CLI → verify identical
 2. Upload file via Go CLI, download via TS client → verify identical
@@ -303,13 +428,63 @@ The download module:
 
 ---
 
+## Constants Reference
+
+All values sourced from `crypto/chunking-params.json` (after Phase 0) and `crypto/argon2id-params.json`:
+
+| Constant | Value | Source |
+|---|---|---|
+| Chunk size (plaintext) | 16 MiB (16,777,216 bytes) | `crypto/chunking-params.json` |
+| AES-GCM nonce | 12 bytes | `crypto/chunking-params.json` |
+| AES-GCM tag | 16 bytes | `crypto/chunking-params.json` |
+| AES-GCM key | 32 bytes | `crypto/chunking-params.json` |
+| AES-GCM overhead per chunk | 28 bytes (nonce + tag) | Derived |
+| Envelope version | `0x01` | `crypto/chunking-params.json` |
+| Envelope header size | 2 bytes (chunk 0 only) | `crypto/chunking-params.json` |
+| Key type: account | `0x01` | `crypto/chunking-params.json` |
+| Key type: custom | `0x02` | `crypto/chunking-params.json` |
+| Argon2id memory | 262,144 KiB (256 MiB) | `crypto/argon2id-params.json` |
+| Argon2id time | 8 iterations | `crypto/argon2id-params.json` |
+| Argon2id parallelism | 4 | `crypto/argon2id-params.json` |
+| Key length | 32 bytes | `crypto/argon2id-params.json` |
+| Salt length | 32 bytes | Fixed (SHA-256 output) |
+| Salt domain (account) | `arkfile-account-key-salt:` | `crypto/key_derivation.go` |
+| Salt domain (custom) | `arkfile-custom-key-salt:` | `crypto/key_derivation.go` |
+| Salt algorithm | SHA-256 of `{prefix}{username}` | `crypto/key_derivation.go` |
+
+**Share-specific constants** (separate system, NOT in chunking-params.json):
+
+| Constant | Value | Source |
+|---|---|---|
+| Share salt | Random 32 bytes | `crypto/share_kdf.go` → `GenerateShareSalt()` |
+| Share KDF | Argon2id with same params as above | `crypto/share_kdf.go` (uses `UnifiedArgonSecure`) |
+| Share envelope | JSON `{fek, download_token}` encrypted with AES-GCM-AAD | `crypto/share_kdf.go` |
+| Share AAD | `share_id + file_id` (UTF-8 concatenation) | `crypto/share_kdf.go` → `CreateAAD()` |
+
+---
+
 ## Priority Order
 
-1. **Fix TS upload module** — Correct paths, methods, format (Phase 1)
-2. **Verify TS download module** — Ensure cross-platform compatibility (Phase 2)
-3. **Streaming cryptocli** — No `.enc` files, no full-file memory (Phase 3)
-4. **Update e2e tests** — Ensure no regressions (Phase 4)
-5. **UI wiring** — User-facing integration (Phase 5)
-6. **Cross-platform testing** — Full validation (Phase 6)
+1. **Phase 0**: Unified constants JSON (prerequisite for all other phases)
+2. **Phase 0.5**: Unify Go envelope implementations (prerequisite for Phase 3)
+3. **Phase 1**: Fix TS upload module — Correct paths, methods, format
+4. **Phase 2**: Verify TS download module — Ensure cross-platform compatibility
+5. **Phase 3 + 4** (ATOMIC): Streaming cryptocli + update e2e tests
+6. **Phase 5**: UI wiring — User-facing integration
+7. **Phase 6**: Cross-platform testing — Full validation
+
+---
+
+## Risk Assessment
+
+| Phase | E2e-test.sh Risk | Notes |
+|---|---|---|
+| Phase 0 | ZERO | Only changes where constants are sourced, not their values |
+| Phase 0.5 | LOW | Must verify `EncryptFEK`/`DecryptFEK` still produce same output |
+| Phase 1 | ZERO | TS-only changes; e2e test uses Go CLI exclusively |
+| Phase 2 | ZERO | TS-only verification and fixes |
+| Phase 3+4 | HIGH | Changes encrypted data format and CLI commands; must be atomic |
+| Phase 5 | ZERO | UI-only changes |
+| Phase 6 | ZERO | Testing only, no code changes |
 
 ---
