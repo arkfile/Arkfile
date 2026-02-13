@@ -488,3 +488,174 @@ All values sourced from `crypto/chunking-params.json` (after Phase 0) and `crypt
 | Phase 6 | ZERO | Testing only, no code changes |
 
 ---
+
+`...`
+
+---
+
+# PLAN REVIEW NOTES: THINGS TO UPDATE & IMPROVE
+
+**prompt:** please read README.md and AGENTS.md and e2e-test.sh and then the implementation plan: docs/wip/chunking-ts-fixes.md -- we need to make sure the refactor plan is accurate, realistic and will not lead to regressions in e2e-test.sh (which is currently FULLY passing 100%). please advise.
+
+---
+
+
+## Analysis of `chunking-ts-fixes.md` Implementation Plan
+
+I've thoroughly reviewed all four documents and cross-referenced the plan's claims against the actual source code. Here is my assessment:
+
+---
+
+## OVERALL VERDICT: The plan is well-researched, accurate, and realistic, with a few corrections and risk clarifications needed.
+
+---
+
+## Phase 0: Unified Chunking Constants -- ACCURATE, LOW RISK
+
+**Claims verified:**
+- The `16 * 1024 * 1024` constant IS scattered across 9+ locations. My search confirms hardcoded values in: `crypto/gcm.go`, `models/file.go`, `handlers/uploads.go` (multiple places), `handlers/files.go`, `handlers/file_shares.go` (2 places), `handlers/chunked_upload_100mb_test.go`, `handlers/chunked_upload_integration_test.go`, `cmd/arkfile-client/main.go`, and `client/static/js/src/crypto/constants.ts`.
+- The `argon2id-params.json` pattern (embed + API + TS fetch) already works correctly for Argon2 params (`handlers/config.go` has `GetArgon2Config`, `route_config.go` has the route, `constants.ts` fetches from API). Replicating this pattern for chunking is proven and safe.
+
+**Risk to e2e-test.sh: ZERO** -- Confirmed. Only changes where values come from, not the values themselves.
+
+**One small note:** The plan mentions `LIMITS.ENCRYPTION_CHUNK_SIZE` in `constants.ts` is `64 * 1024 * 1024` (64MB), which is DIFFERENT from the `DEFAULT_CHUNK_SIZE_BYTES` of 16MB. This is a separate constant used for a different purpose (streaming encryption buffer limit). The plan doesn't mention cleaning this up -- it should either be removed or documented as intentionally different.
+
+---
+
+## Phase 0.5: Unify Go Envelope Implementations -- ACCURATE, but NUANCE NEEDED
+
+**Claims verified:**
+- `CreatePasswordKeyEnvelope()`, `ExtractFEKFromPasswordEnvelope()`, and `GetPasswordEnvelopeInfo()` in `envelope.go` are indeed **dead code** -- my search found they are defined in `envelope.go` but NEVER called from anywhere else in the codebase. Safe to remove.
+- The two envelope formats are indeed incompatible: `file_operations.go`'s `EncryptFEK` produces `[version(1)][keyType(1)][nonce+ciphertext+tag]` while `envelope.go`'s `CreatePasswordKeyEnvelope` produces `[version(1)][keyType(1)][salt(32)][nonce+ciphertext+tag]`. The e2e test uses the `file_operations.go` path (via `cryptocli`). Confirmed correct.
+
+**`share` key type removal -- SAFE but needs careful execution:**
+- `DeriveSharePasswordKey()` in `key_derivation.go` is called from `EncryptFEK()` and `DecryptFEK()` in `file_operations.go` (the `case "share":` branches), and from the dead `envelope.go` functions. 
+- The e2e test NEVER passes `share` as a keyType to `EncryptFEK`/`DecryptFEK` -- it always uses `account`. The server's `CreateUploadSession` only accepts `account` or `custom`.
+- **However**, I'd flag a subtle risk: removing the `case "share":` from `EncryptFEK`/`DecryptFEK` changes the function signature behavior (it would now error on `"share"` input instead of processing it). If ANY code path passes `"share"` to these functions, it would break. My search confirms no such caller exists, so this is safe.
+
+**Additional dead code the plan doesn't mention:**
+- `FEKAccountSalt`, `FEKCustomSalt`, and `FEKShareSalt` in `key_derivation.go` are defined but NEVER referenced anywhere. These should also be removed as dead code.
+
+**Risk to e2e-test.sh: LOW** -- Confirmed. The e2e test only uses `account` keyType. But you MUST run `go test ./...` to catch any test files that might reference the removed functions.
+
+---
+
+## Phase 1: Fix TS Upload Module -- ACCURATE
+
+**All claims verified against actual code:**
+
+1. **Wrong API paths** -- CONFIRMED. `upload.ts` uses `/api/upload/init`, `/api/upload/${session.sessionId}/chunk/${i}`, `/api/upload/${session.sessionId}/complete`. The correct routes per `route_config.go` are `/api/uploads/init`, `/api/uploads/:sessionId/chunks/:chunkNumber`, `/api/uploads/:sessionId/complete`. Note the `uploads` (plural) and `chunks` (plural).
+
+2. **Wrong HTTP method** -- CONFIRMED. `upload.ts` uses `PUT` for chunk upload. The route in `route_config.go` is registered as `POST`.
+
+3. **Raw binary body** -- The upload.ts already uses `Blob` body with `Content-Type: application/octet-stream` and `X-Chunk-Hash` header. This is already correct. The plan says it "must NOT use FormData" -- confirmed, it doesn't use FormData. **This fix description is slightly misleading** -- the TS code already sends raw binary correctly.
+
+4. **Envelope key type byte bug** -- CONFIRMED. `createEnvelopeHeader()` hardcodes `[ENVELOPE_VERSION, ENVELOPE_TYPE_AES_GCM]` which is `[0x01, 0x01]` always. This ignores the `passwordType` and would be wrong for custom password uploads.
+
+5. **encrypted_fek envelope header missing** -- CONFIRMED as a bug. The TS `uploadFile()` encrypts the FEK as `[nonce][ciphertext][tag]` but does NOT prepend the 2-byte envelope header `[version][keyType]`. The Go `EncryptFEK()` DOES prepend this header. So the TS-uploaded `encrypted_fek` would be incompatible with Go's `DecryptFEK()`. This is a real cross-platform compatibility issue.
+
+**Risk to e2e-test.sh: ZERO** -- Confirmed. E2e test uses Go CLI exclusively.
+
+---
+
+## Phase 2: Verify TS Download Module -- ACCURATE
+
+The critical bugs identified (envelope stripping on chunk 0 download, FEK envelope header stripping) are real issues for TS client compatibility. These are TS-only fixes.
+
+**Risk to e2e-test.sh: ZERO** -- Confirmed.
+
+---
+
+## Phase 3+4: Streaming Cryptocli + e2e-test.sh Updates -- REALISTIC but HIGH RISK
+
+This is the most complex and dangerous phase. My analysis:
+
+**The format change claim is CRITICAL and CORRECT:**
+- Currently, `cryptocli encrypt-file` calls `EncryptFileWorkflow` which calls `EncryptFileToPath` which calls `EncryptFile`, producing: `[2-byte envelope][nonce][ENTIRE-file-ciphertext][tag]` -- one giant AES-GCM blob.
+- Then `arkfile-client upload` reads this `.enc` file and sends raw byte ranges as chunks to the server.
+- The server's chunk validation in `uploads.go` checks chunk 0 for envelope header (min 31 bytes) and subsequent chunks for nonce+data+tag (min 29 bytes). **But the current upload sends raw slices of one big blob, not independently encrypted chunks!**
+
+**Wait -- this means the current working e2e test has a mismatch with the server's INTENDED per-chunk validation?**
+
+Let me re-examine: The server validates that chunk 0 is >= 31 bytes and subsequent chunks >= 29 bytes, and checks max size. These are loose bounds that the current "big blob sliced into chunks" format happens to pass because each chunk is 16MB of raw encrypted data (well above 29-31 byte minimums). The server doesn't actually verify each chunk is independently AES-GCM encrypted -- it just checks size bounds and hash. So the current format works by accident of the size checks being permissive.
+
+**This is actually a latent bug/design gap that the plan correctly identifies.** The plan's Phase 3 would make the ACTUAL encrypted format match the INTENDED per-chunk design.
+
+**Atomic Phase 3+4 requirement is CORRECT and CRITICAL:**
+- The plan correctly notes these must ship together. The e2e test commands (`cryptocli encrypt-file`, `arkfile-client upload`, `arkfile-client download`, `cryptocli decrypt-file`) would all change.
+- A `dev-reset.sh` must run before testing (clears DB + storage).
+
+**The plan's e2e-test.sh Phase numbering is WRONG:**
+- The plan's "Post-Update Verification" section references "Phase 5: Upload", "Phase 7: Download", "Phase 8: File key management", "Phase 9: Share operations" -- but the actual `e2e-test.sh` has different phase numbering:
+  - Phase 8 = File Operations (upload/download/verify)
+  - Phase 9 = Share Operations
+  - There is no separate "Phase 5: Upload" or "Phase 8: File key management"
+- This is a documentation error in the plan that should be corrected.
+
+**Risk to e2e-test.sh: HIGH** -- Confirmed. This is a format-breaking change. The plan's mitigation (atomic commit, dev-reset) is correct.
+
+---
+
+## Phase 5 & 6: UI Wiring and Cross-Platform Testing -- REASONABLE
+
+No concerns. These don't affect e2e-test.sh.
+
+---
+
+## Summary of Issues Found in the Plan
+
+| # | Issue | Severity | Location |
+|---|---|---|---|
+| 1 | Plan's e2e Phase numbering doesn't match actual test | LOW (doc error) | Phase 4 "Post-Update Verification" |
+| 2 | `FEKAccountSalt`/`FEKCustomSalt`/`FEKShareSalt` dead code not mentioned for removal | LOW | Phase 0.5 |
+| 3 | `LIMITS.ENCRYPTION_CHUNK_SIZE` (64MB) in constants.ts is different from `DEFAULT_CHUNK_SIZE_BYTES` (16MB) -- should be addressed | LOW | Phase 0 |
+| 4 | Phase 1 Fix 2 description slightly misleading -- TS already sends raw binary, the issue is only the API paths and HTTP method | LOW (doc clarity) | Phase 1 |
+| 5 | TS `encrypted_fek` missing 2-byte envelope header is noted in Phase 2 but should also be flagged in Phase 1 (upload creates it) | MEDIUM | Phase 1 |
+| 6 | Current e2e test "works by accident" -- server chunk validation is permissive enough that sliced-big-blob passes the min-size checks even though it's not truly per-chunk encrypted | Important to document | Phase 3 |
+
+---
+
+## Recommendation
+
+The plan is solid and well-researched. I recommend:
+
+1. **Fix the e2e phase numbering** in the Phase 4 section to match actual test phases (8, 9, etc.)
+2. **Add `FEKAccountSalt`/`FEKCustomSalt`/`FEKShareSalt` removal** to Phase 0.5 dead code cleanup
+3. **Add note about `LIMITS.ENCRYPTION_CHUNK_SIZE`** (64MB) being a separate/potentially dead constant
+4. **Clarify in Phase 1** that the TS `encrypted_fek` must also get the 2-byte envelope header prepended during upload (not just stripped during download)
+5. **Proceed with implementation in the stated priority order** -- it's well-structured for incremental progress with Phase 0 and 0.5 being safe first steps
+
+If you'd like me to make these corrections to the plan document, please toggle to Act mode.
+
+
+`[Amazon Bedrock connection lost]`
+
+---
+
+I'll update the document with:
+
+1. All phases renumbered as whole integers starting at 1 (no more "Phase 0" or "Phase 0.5")
+2. Fix e2e-test.sh phase references to match actual test phases (8, 9, etc.)
+3. Add `FEKAccountSalt`/`FEKCustomSalt`/`FEKShareSalt` to dead code removal
+4. Add note about `LIMITS.ENCRYPTION_CHUNK_SIZE` (64MB) constant cleanup
+5. Clarify that TS `encrypted_fek` must get 2-byte envelope header during upload (Phase 3)
+6. Add note about current e2e format working by accident due to permissive size checks
+7. Remove all non-ASCII characters and emojis
+
+`[Amazon Bedrock connection lost]`
+
+---
+
+The updated doc will have:
+
+1. Phases renumbered 1-8 (no more "Phase 0" / "Phase 0.5")
+2. All non-ASCII characters removed (no emojis, no special unicode)
+3. Fixed e2e-test.sh phase references to match actual phases (8, 9, etc.)
+4. Added `FEKAccountSalt`/`FEKCustomSalt`/`FEKShareSalt` to dead code removal
+5. Added note about `LIMITS.ENCRYPTION_CHUNK_SIZE` (64MB) cleanup
+6. Clarified TS `encrypted_fek` must get 2-byte envelope header during upload
+7. Added note about current e2e format working due to permissive server size checks
+
+`[Amazon Bedrock connection lost]`
+
+---
