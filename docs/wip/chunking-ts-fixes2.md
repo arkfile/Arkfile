@@ -202,7 +202,7 @@ The server CreateUploadSession only accepts password_type of account or custom. 
 
 ### Key Caching Behavior
 
-- Account password: Argon2id runs once per session (3 to 8 seconds in browser), then cached in sessionStorage. Subsequent encrypt or decrypt operations are instant.
+- Account password: Argon2id runs once per session (estimated to take between 3 and 8 seconds in browser with curreng Argon2id configuration), then cached in sessionStorage. Subsequent encrypt or decrypt operations are instant.
 - Custom password: Argon2id runs every time (3 to 8 seconds per operation). No caching by design.
 
 ### Upload Init Metadata Fields
@@ -305,9 +305,16 @@ This assumes encrypted_fek is [nonce][ciphertext][tag]. But the server stores en
 
 Fix needed: Strip the first 2 bytes (envelope header) from encryptedFek before passing to decryptChunk. The envelope header can also be used to determine the password context (account vs custom) for key derivation.
 
-### Verify 4: The /api/files/{fileId}/metadata Endpoint
+### Verify 4: Metadata Sources and Actual Endpoints
 
-The GetFileDownloadMetadata handler returns only: {file_id, size_bytes, chunk_count, chunk_size_bytes}. It does not return encrypted filename, nonce, or sha256 fields. The TS client needs to get those from a different source (likely the file list endpoint or a separate metadata endpoint). Verify this data flow.
+There are two distinct endpoints in the Go handlers:
+
+- GET /api/files/:fileId/metadata (handlers/downloads.go -> GetFileDownloadMetadata) returns only chunking info: {file_id, size_bytes, chunk_count, chunk_size_bytes}. It does not include encrypted filename, encrypted sha256, or encrypted FEK.
+- GET /api/files/:fileId/meta (handlers/files.go -> GetFileMeta) returns the encrypted metadata needed for client-side decryption: encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, encrypted_fek, password_type, and size info. It also computes chunk_size and total_chunks server-side.
+
+The TS StreamingDownloadManager currently calls /api/files/:fileId/metadata and expects encryptedFilename, filenameNonce, encryptedSha256sum, sha256sumNonce, totalChunks, and chunkSizeBytes. That is a mismatch.
+
+Action item: either (A) change the TS download path to call /api/files/:fileId/meta and update the expected response shape, or (B) expand /api/files/:fileId/metadata to include the encrypted fields and keep the TS path as-is. Option A aligns with current server routing. Also verify the share path: /api/public/shares/:id/metadata returns only size_bytes, chunk_count, chunk_size_bytes, while encrypted metadata for shares is returned by GetShareEnvelope and/or share list endpoints.
 
 ### Verify 5: Cross-Platform Test
 
@@ -347,8 +354,8 @@ Important note: The current e2e test works by accident because the server chunk 
 cryptocli will handle encryption and upload in a single streaming operation:
 
 1. Generate FEK (random 32 bytes)
-2. Compute plaintext SHA-256 by streaming the file once
-3. Encrypt metadata (filename, SHA-256) with account-derived key
+2. Compute plaintext SHA-256 of original file
+3. Encrypt metadata (filename, SHA-256) with account-derived key (Metadata fields (filename, sha256sum) are always encrypted with the account-derived key. The password_type only governs FEK encryption and chunk encryption. This keeps file lists and metadata readable without requiring custom passwords.)
 4. Encrypt FEK with password-derived KEK -> Owner Envelope (with 2-byte header)
 5. Init upload session via POST /api/uploads/init with encrypted metadata
 6. Stream-encrypt and upload chunks:
