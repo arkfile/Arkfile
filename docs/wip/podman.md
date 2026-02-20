@@ -42,7 +42,7 @@ We use a **3-Stage Build** to create a container with *zero* OS files.
 ```dockerfile
 # --- STAGE 1: Builder ---
 # Use the latest Go version to compile
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /src
 COPY . .
 # Build static binary (CGO_ENABLED=0 is critical for scratch)
@@ -83,7 +83,7 @@ Similar strategy for the database.
 
 ```dockerfile
 # --- STAGE 1: Builder ---
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /src
 RUN apk add --no-cache git
 RUN git clone https://github.com/rqlite/rqlite.git .

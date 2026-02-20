@@ -25,11 +25,40 @@ import (
 )
 
 func setupRoutes(e *echo.Echo) {
-	// Health check endpoint
-	e.GET("/health", func(c echo.Context) error {
+	// Liveness probe: is the process alive?
+	e.GET("/healthz", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{
-			"status": "ok",
+			"status": "alive",
 		})
+	})
+
+	// Readiness probe: can we serve traffic? Checks all dependencies.
+	e.GET("/readyz", func(c echo.Context) error {
+		checks := map[string]string{}
+		allReady := true
+
+		// Check rqlite connectivity
+		if err := database.DB.Ping(); err != nil {
+			checks["rqlite"] = fmt.Sprintf("not ready: %v", err)
+			allReady = false
+		} else {
+			checks["rqlite"] = "ok"
+		}
+
+		// Check storage connectivity
+		if storage.Provider == nil {
+			checks["storage"] = "not initialized"
+			allReady = false
+		} else {
+			checks["storage"] = "ok"
+		}
+
+		checks["status"] = "ready"
+		if !allReady {
+			checks["status"] = "not ready"
+			return c.JSON(http.StatusServiceUnavailable, checks)
+		}
+		return c.JSON(http.StatusOK, checks)
 	})
 
 	// Set the global Echo instance for handlers

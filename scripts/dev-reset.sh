@@ -726,8 +726,8 @@ print_status "INFO" "Waiting for Arkfile to start and be ready..."
 max_attempts=15
 attempt=0
 while [ $attempt -lt $max_attempts ]; do
-    if curl -s http://localhost:8080/health 2>/dev/null | grep -q '"status":"ok"'; then
-        print_status "SUCCESS" "Arkfile is running and responding"
+    if curl -s http://localhost:8080/readyz 2>/dev/null | grep -q '"status":"ready"'; then
+        print_status "SUCCESS" "Arkfile is running and all dependencies ready"
         break
     fi
     sleep 3
@@ -742,13 +742,13 @@ fi
 # Test config API endpoints (embedded configuration)
 print_status "INFO" "Testing configuration API endpoints..."
 
-if curl -s http://localhost:8080/api/config/argon2 2>/dev/null | grep -q '"memory"'; then
+if curl -s http://localhost:8080/api/config/argon2 2>/dev/null | grep -q '"memoryCostKiB"'; then
     print_status "SUCCESS" "Argon2 config API endpoint responding"
 else
     print_status "WARNING" "Argon2 config API endpoint may not be working"
 fi
 
-if curl -s http://localhost:8080/api/config/password-requirements 2>/dev/null | grep -q '"account"'; then
+if curl -s http://localhost:8080/api/config/password-requirements 2>/dev/null | grep -q '"minAccountPasswordLength"'; then
     print_status "SUCCESS" "Password requirements API endpoint responding"
 else
     print_status "WARNING" "Password requirements API endpoint may not be working"

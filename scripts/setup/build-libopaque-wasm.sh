@@ -53,6 +53,15 @@ is_running_as_root() {
     [ "$EUID" -eq 0 ]
 }
 
+# Function to run git commands with proper user context (avoids "dubious ownership" errors)
+run_git_as_user() {
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        sudo -u "$SUDO_USER" git "$@"
+    else
+        git "$@"
+    fi
+}
+
 # Install Emscripten via emsdk (local installation - no sudo needed)
 install_emscripten_emsdk() {
     print_status "INFO" "Installing Emscripten $EMSCRIPTEN_VERSION via emsdk..."
@@ -62,14 +71,14 @@ install_emscripten_emsdk() {
     # Clone emsdk if not already present
     if [ ! -d "$EMSDK_DIR" ]; then
         print_status "INFO" "Cloning emsdk repository..."
-        if ! git clone https://github.com/emscripten-core/emsdk.git "$EMSDK_DIR"; then
+        if ! run_git_as_user clone https://github.com/emscripten-core/emsdk.git "$EMSDK_DIR"; then
             print_status "ERROR" "Failed to clone emsdk repository"
             return 1
         fi
     else
         print_status "INFO" "emsdk directory already exists, updating..."
         cd "$EMSDK_DIR"
-        git fetch --all || true
+        run_git_as_user fetch --all || true
         cd ../..
     fi
     
@@ -193,10 +202,10 @@ update_libsodium_js() {
     cd "$LIBSODIUM_DIR"
     
     # Fetch latest tags
-    git fetch --tags 2>/dev/null || true
+    run_git_as_user fetch --tags 2>/dev/null || true
     
     # Check current version
-    CURRENT_TAG=$(git describe --tags --exact-match 2>/dev/null || echo "unknown")
+    CURRENT_TAG=$(run_git_as_user describe --tags --exact-match 2>/dev/null || echo "unknown")
     
     if [ "$CURRENT_TAG" = "$LIBSODIUM_JS_VERSION" ]; then
         print_status "SUCCESS" "libsodium.js already at version $LIBSODIUM_JS_VERSION"
@@ -207,7 +216,7 @@ update_libsodium_js() {
     print_status "INFO" "Updating libsodium.js from $CURRENT_TAG to $LIBSODIUM_JS_VERSION..."
     
     # Checkout the target version
-    if git checkout "$LIBSODIUM_JS_VERSION" 2>/dev/null; then
+    if run_git_as_user checkout "$LIBSODIUM_JS_VERSION" 2>/dev/null; then
         print_status "SUCCESS" "libsodium.js updated to $LIBSODIUM_JS_VERSION"
     else
         print_status "WARNING" "Could not checkout $LIBSODIUM_JS_VERSION, using current version"

@@ -265,6 +265,15 @@ find_go_binary() {
     return 1
 }
 
+# Function to run git commands with proper user context (avoids "dubious ownership" errors)
+run_git_as_user() {
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        sudo -u "$SUDO_USER" git "$@"
+    else
+        git "$@"
+    fi
+}
+
 # Function to run Go commands with proper user context and binary path
 run_go_as_user() {
     if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
@@ -397,11 +406,19 @@ setup_source() {
     
     if [ -d "${SOURCE_DIR}" ]; then
         echo "Updating existing source repository..."
+        # Fix ownership and parent dir permissions before git ops to avoid "dubious ownership" / permission errors
+        if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+            sudo chown -R "$SUDO_USER:$SUDO_USER" "${SOURCE_DIR}"
+            # Ensure parent directories are traversable by the original user
+            sudo chmod 755 "${CACHE_DIR}"
+            sudo chmod 755 "$(dirname "${CACHE_DIR}")"
+            sudo chmod 755 "$(dirname "$(dirname "${CACHE_DIR}")")"
+        fi
         cd "${SOURCE_DIR}"
-        git fetch --tags
+        run_git_as_user fetch --tags
     else
         echo "Cloning rqlite repository..."
-        git clone https://github.com/rqlite/rqlite.git "${SOURCE_DIR}"
+        run_git_as_user clone https://github.com/rqlite/rqlite.git "${SOURCE_DIR}"
         cd "${SOURCE_DIR}"
     fi
     
@@ -414,7 +431,7 @@ verify_source() {
     cd "${SOURCE_DIR}"
     
     # Verify we're using the official repository
-    ORIGIN_URL=$(git remote get-url origin)
+    ORIGIN_URL=$(run_git_as_user remote get-url origin)
     if [[ ! "$ORIGIN_URL" =~ github\.com[/:]rqlite/rqlite ]]; then
         echo -e "${RED}[X] Repository origin is not official: $ORIGIN_URL${NC}"
         exit 1
@@ -423,10 +440,10 @@ verify_source() {
     
     # Checkout the specific version
     echo "Checking out version v${VERSION}..."
-    git checkout "v${VERSION}"
+    run_git_as_user checkout "v${VERSION}"
     
     # Verify the commit hash
-    ACTUAL_COMMIT=$(git rev-parse HEAD)
+    ACTUAL_COMMIT=$(run_git_as_user rev-parse HEAD)
     if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
         echo -e "${RED}[X] Commit hash verification failed${NC}"
         echo "Expected: $EXPECTED_COMMIT"
@@ -454,10 +471,10 @@ verify_source() {
     
     # Display version info
     echo -e "${BLUE}Source Information:${NC}"
-    echo "• Repository: $(git remote get-url origin)"
+    echo "• Repository: $(run_git_as_user remote get-url origin)"
     echo "• Tag: v${VERSION}"
     echo "• Commit: $ACTUAL_COMMIT"
-    echo "• Date: $(git log -1 --format=%cd --date=short)"
+    echo "• Date: $(run_git_as_user log -1 --format=%cd --date=short)"
 }
 
 # Build rqlite

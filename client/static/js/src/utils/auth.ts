@@ -4,6 +4,17 @@
 
 import { clearAllCachedAccountKeys } from '../crypto/file-encryption.js';
 
+/**
+ * Custom error for 503 Service Unavailable responses.
+ * Thrown when the backend readiness probe (/readyz) fails or API returns 503.
+ */
+export class ServiceUnavailableError extends Error {
+  constructor(message = 'Service is temporarily unavailable. Please try again in a moment.') {
+    super(message);
+    this.name = 'ServiceUnavailableError';
+  }
+}
+
 export class AuthManager {
   private static readonly TOKEN_KEY = 'token';
   private static readonly REFRESH_TOKEN_KEY = 'refresh_token';
@@ -181,6 +192,26 @@ export class AuthManager {
     return this.adminContact;
   }
 
+  // Auto-refresh timer management
+  public static startAutoRefresh(): void {
+    this.stopAutoRefresh();
+    this.autoRefreshTimer = window.setInterval(async () => {
+      if (this.isAuthenticated() && !this.isTokenExpired()) {
+        const success = await this.refreshToken();
+        if (!success) {
+          console.warn('Auto-refresh failed, session may expire soon');
+        }
+      }
+    }, this.AUTO_REFRESH_INTERVAL);
+  }
+
+  public static stopAutoRefresh(): void {
+    if (this.autoRefreshTimer !== null) {
+      clearInterval(this.autoRefreshTimer);
+      this.autoRefreshTimer = null;
+    }
+  }
+
   // API helpers with authentication
   public static async authenticatedFetch(
     url: string, 
@@ -197,10 +228,17 @@ export class AuthManager {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    return fetch(url, {
+    const response = await fetch(url, {
       ...options,
       headers,
     });
+
+    // Handle 503 Service Unavailable globally
+    if (response.status === 503) {
+      throw new ServiceUnavailableError();
+    }
+
+    return response;
   }
 
   // Token validation by making API call
@@ -256,3 +294,5 @@ export const clearAllSessionData = AuthManager.clearAllSessionData.bind(AuthMana
 export const fetchAdminContacts = AuthManager.fetchAdminContacts.bind(AuthManager);
 export const getAdminUsernames = AuthManager.getAdminUsernames.bind(AuthManager);
 export const getAdminContact = AuthManager.getAdminContact.bind(AuthManager);
+export const startAutoRefresh = AuthManager.startAutoRefresh.bind(AuthManager);
+export const stopAutoRefresh = AuthManager.stopAutoRefresh.bind(AuthManager);

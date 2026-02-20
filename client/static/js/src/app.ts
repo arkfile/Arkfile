@@ -4,7 +4,7 @@
  * Updated for new home page with proper event listeners
  */
 
-import { validateToken, isAuthenticated, clearAllSessionData } from './utils/auth';
+import { validateToken, isAuthenticated, clearAllSessionData, startAutoRefresh, stopAutoRefresh, ServiceUnavailableError } from './utils/auth';
 import { lockAccountKey, registerAccountKeyCleanupHandlers } from './crypto/account-key-cache';
 import { showError, showSuccess } from './ui/messages';
 import { showFileSection, showAuthSection, toggleAuthForm } from './ui/sections';
@@ -15,12 +15,32 @@ import { setupRegisterForm, register } from './auth/register';
 class ArkFileApp {
   private initialized = false;
 
+  /**
+   * Check if the backend is ready to serve traffic.
+   * Calls the /readyz endpoint which verifies rqlite + storage connectivity.
+   */
+  private async checkServiceReady(): Promise<boolean> {
+    try {
+      const response = await fetch('/readyz');
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
   public async initialize(): Promise<void> {
     if (this.initialized) return;
 
     try {
       // Register cleanup handlers for account key cache
       registerAccountKeyCleanupHandlers();
+
+      // Check if backend is ready before proceeding
+      const ready = await this.checkServiceReady();
+      if (!ready) {
+        showError('Service is starting up. Please refresh the page in a moment.');
+        return;
+      }
       
       // Check if we're on the home page or app page
       if (this.isHomePage()) {
@@ -33,6 +53,7 @@ class ArkFileApp {
             // User is logged in, show app directly
             this.showApp();
             showFileSection();
+            startAutoRefresh();
             await this.loadUserFiles();
           }
         }
@@ -146,6 +167,7 @@ class ArkFileApp {
     if (logoutLink) {
       logoutLink.addEventListener('click', async (e) => {
         e.preventDefault();
+        stopAutoRefresh();
         await logout();
         this.showHome(); // Return to home page after logout
       });
@@ -156,6 +178,7 @@ class ArkFileApp {
     if (pendingLogoutBtn) {
       pendingLogoutBtn.addEventListener('click', async (e) => {
         e.preventDefault();
+        stopAutoRefresh();
         await logout();
         this.showHome(); // Return to home page after logout
       });
@@ -314,6 +337,7 @@ class ArkFileApp {
         if (tokenValid) {
           // Token is valid, show file section and load files
           showFileSection();
+          startAutoRefresh();
           await this.loadUserFiles();
         } else {
           // Token is invalid, clear storage and show auth

@@ -124,7 +124,7 @@ subjectKeyIdentifier = hash
 subjectAltName = @alt_names
 
 [alt_names]
-${alt_names}
+$(echo "${alt_names}" | tr ',' '\n')
 
 [v3_ca]
 basicConstraints = critical, CA:TRUE, pathlen:0

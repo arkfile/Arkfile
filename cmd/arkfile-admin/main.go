@@ -49,6 +49,7 @@ SYSTEM COMMANDS:
 
 GLOBAL OPTIONS:
     --server-url URL    Server URL for network commands (default: https://localhost:8443)
+    --tls-insecure      Skip TLS certificate verification (dev/localhost only)
     --base-dir DIR      Installation directory for local commands (default: /opt/arkfile)
     --config FILE       Configuration file path
     --username USER     Admin username for authentication

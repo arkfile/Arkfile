@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	_ "github.com/rqlite/gorqlite/stdlib"
 )
@@ -48,15 +49,27 @@ func InitDB() {
 		}
 	}
 
-	// Open connection to rqlite cluster
-	DB, err = sql.Open("rqlite", dsn)
-	if err != nil {
-		log.Fatal("Failed to connect to rqlite:", err)
-	}
+	// Connect to rqlite with retry logic
+	// rqlite may not be ready immediately (container startup, Raft leader election)
+	const maxRetries = 30
+	const retryInterval = 2 * time.Second
 
-	// Test connection
-	if err = DB.Ping(); err != nil {
-		log.Fatal("Failed to ping rqlite:", err)
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		DB, err = sql.Open("rqlite", dsn)
+		if err == nil {
+			err = DB.Ping()
+		}
+		if err == nil {
+			log.Printf("Connected to rqlite successfully (attempt %d/%d)", attempt, maxRetries)
+			break
+		}
+		if attempt < maxRetries {
+			log.Printf("Waiting for rqlite (attempt %d/%d): %v", attempt, maxRetries, err)
+			time.Sleep(retryInterval)
+		}
+	}
+	if err != nil {
+		log.Fatalf("Failed to connect to rqlite after %d attempts (~%ds): %v", maxRetries, maxRetries*2, err)
 	}
 
 	createTables()
