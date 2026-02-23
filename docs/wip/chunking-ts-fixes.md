@@ -1,6 +1,6 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: PLAN - Pending Implementation
+## Status: IN PROGRESS - Phase 1 TS Side Complete, Go Side Pending
 
 ## Context
 
@@ -562,3 +562,41 @@ After Phase 8, e2e-test.sh must pass 100 percent with all existing test phases:
 | Phase 7 | Zero | UI-only changes |
 | Phase 8 | High | e2e-test must be updated to reflect all code changes |
 | Phase 9 | Zero | Testing only, no code changes |
+
+---
+
+## Implementation Progress
+
+### Phase 1: Unified Chunking Constants
+
+**TS side: COMPLETE** (2026-02-23)
+
+Files created:
+- `crypto/chunking-params.json` — single source of truth JSON
+- `crypto/chunking_constants.go` — Go embed with `GetEmbeddedChunkingParamsJSON()`
+- `handlers/config.go` — `GetChunkingConfig` handler added
+- `handlers/route_config.go` — route `GET /api/config/chunking` added
+
+Files updated (TS):
+- `client/static/js/src/crypto/constants.ts` — removed all legacy synchronous chunking constants (`DEFAULT_CHUNK_SIZE_BYTES`, `AES_GCM_NONCE_SIZE`, `AES_GCM_TAG_SIZE`, `AES_GCM_OVERHEAD`, `ENVELOPE_VERSION`, `ENVELOPE_TYPE_AES_GCM`, `LIMITS.ENCRYPTION_CHUNK_SIZE`). Added `getChunkingParams()` async fetcher with in-memory cache. Exports `ChunkingParams` type.
+- `client/static/js/src/crypto/aes-gcm.ts` — `AESGCMDecryptor.decryptChunk()` now calls `getChunkingParams()` for nonce/tag sizes instead of using module-level constants.
+- `client/static/js/src/files/streaming-download.ts` — `StreamingDownloadManager` loads config at start of `downloadFile()` and passes sizes to decryptor.
+- `client/static/js/src/files/upload.ts` — both `uploadFile()` and `uploadFileWithKey()` load config at start. `createEnvelopeHeader()` now takes `(version, keyType)` parameters from config. Chunk size calculation uses config values.
+
+Zero old constant references remain in TS (`AES_GCM_NONCE_SIZE`, `AES_GCM_TAG_SIZE`, `CHUNK_SIZE`, `DEFAULT_CHUNK_SIZE_BYTES`, `ENVELOPE_VERSION`, `ENVELOPE_TYPE_AES_GCM` — all confirmed absent via search).
+
+**Go side: NOT STARTED**
+
+17 hardcoded `16 * 1024 * 1024` references remain across Go files:
+- `crypto/gcm.go` — `const ChunkSize`
+- `models/file.go` — `const DefaultChunkSizeBytes`
+- `handlers/uploads.go` — 3 inline references
+- `handlers/files.go` — 1 local const
+- `handlers/file_shares.go` — 2 inline references
+- `cmd/arkfile-client/main.go` — CLI default flag
+- `handlers/chunked_upload_100mb_test.go` — 3 references
+- `handlers/chunked_upload_integration_test.go` — 5 references
+
+These should all reference `crypto.GetChunkingParams().PlaintextChunkSizeBytes` (or a package-level var initialized from it). Similarly, hardcoded `tagSize := 16` in `crypto/gcm.go` (3 occurrences) should use the embedded config.
+
+### Phases 2-9: NOT STARTED

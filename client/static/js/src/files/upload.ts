@@ -33,9 +33,7 @@ import {
 import { promptForAccountKeyPassword } from '../ui/password-modal.js';
 import {
   KEY_SIZES,
-  DEFAULT_CHUNK_SIZE_BYTES,
-  AES_GCM_NONCE_SIZE,
-  AES_GCM_TAG_SIZE,
+  getChunkingParams,
 } from '../crypto/constants.js';
 import { showError, showSuccess, showInfo } from '../ui/messages.js';
 
@@ -111,17 +109,12 @@ interface UploadSession {
 }
 
 // ============================================================================
-// Constants
+// Constants (envelope values loaded from config at runtime)
 // ============================================================================
 
-/** Chunk size for encryption (16 MiB plaintext) - matches server */
-const CHUNK_SIZE = DEFAULT_CHUNK_SIZE_BYTES;
-
-/** Envelope version byte */
-const ENVELOPE_VERSION = 0x01;
-
-/** Envelope type: AES-256-GCM */
-const ENVELOPE_TYPE_AES_GCM = 0x01;
+// NOTE: CHUNK_SIZE and envelope constants are loaded from the server's
+// single source of truth (crypto/chunking-params.json) via getChunkingParams()
+// at the start of each upload operation.
 
 // ============================================================================
 // Helper Functions
@@ -216,10 +209,11 @@ async function encryptMetadata(
 
 /**
  * Creates the 2-byte envelope header for chunk 0
- * Format: [version (1 byte)][type (1 byte)]
+ * Format: [version (1 byte)][keyType (1 byte)]
+ * Values loaded from chunking config (single source of truth)
  */
-function createEnvelopeHeader(): Uint8Array {
-  return new Uint8Array([ENVELOPE_VERSION, ENVELOPE_TYPE_AES_GCM]);
+function createEnvelopeHeader(envelopeVersion: number, keyType: number): Uint8Array {
+  return new Uint8Array([envelopeVersion, keyType]);
 }
 
 // ============================================================================
@@ -260,6 +254,16 @@ export async function uploadFile(
   };
 
   try {
+    // Load chunking config from single source of truth
+    const chunkCfg = await getChunkingParams();
+    const CHUNK_SIZE = chunkCfg.plaintextChunkSizeBytes;
+    const nonceSize = chunkCfg.aesGcm.nonceSizeBytes;
+    const tagSize = chunkCfg.aesGcm.tagSizeBytes;
+    const envelopeVersion = chunkCfg.envelope.version;
+    const keyType = passwordType === 'account'
+      ? chunkCfg.envelope.keyTypes.account
+      : chunkCfg.envelope.keyTypes.custom;
+
     // Phase 1: Generate keys and prepare encryption
     reportProgress({ phase: 'encrypting', percent: 0 });
 
@@ -307,7 +311,7 @@ export async function uploadFile(
 
       // For chunk 0, prepend the envelope header
       if (i === 0) {
-        const envelope = createEnvelopeHeader();
+        const envelope = createEnvelopeHeader(envelopeVersion, keyType);
         encryptedChunks.push(concatBytes(envelope, encryptedChunk));
       } else {
         encryptedChunks.push(encryptedChunk);
@@ -342,7 +346,7 @@ export async function uploadFile(
         sha256sum_nonce: encryptedSha256.nonce,
         encrypted_fek: toBase64(encryptedFek),
         total_size: totalEncryptedSize,
-        chunk_size: CHUNK_SIZE + AES_GCM_NONCE_SIZE + AES_GCM_TAG_SIZE + 2, // Include overhead
+        chunk_size: CHUNK_SIZE + nonceSize + tagSize + chunkCfg.envelope.headerSizeBytes,
         password_hint: passwordHint || '',
         password_type: passwordType,
       }),
@@ -456,6 +460,16 @@ export async function uploadFileWithKey(
   };
 
   try {
+    // Load chunking config from single source of truth
+    const chunkCfg = await getChunkingParams();
+    const CHUNK_SIZE = chunkCfg.plaintextChunkSizeBytes;
+    const nonceSize = chunkCfg.aesGcm.nonceSizeBytes;
+    const tagSize = chunkCfg.aesGcm.tagSizeBytes;
+    const envelopeVersion = chunkCfg.envelope.version;
+    const keyTypeVal = passwordType === 'account'
+      ? chunkCfg.envelope.keyTypes.account
+      : chunkCfg.envelope.keyTypes.custom;
+
     // Phase 1: Generate FEK and prepare encryption
     reportProgress({ phase: 'encrypting', percent: 0 });
 
@@ -502,7 +516,7 @@ export async function uploadFileWithKey(
 
       // For chunk 0, prepend the envelope header
       if (i === 0) {
-        const envelope = createEnvelopeHeader();
+        const envelope = createEnvelopeHeader(envelopeVersion, keyTypeVal);
         encryptedChunks.push(concatBytes(envelope, encryptedChunk));
       } else {
         encryptedChunks.push(encryptedChunk);
@@ -537,7 +551,7 @@ export async function uploadFileWithKey(
         sha256sum_nonce: encryptedSha256.nonce,
         encrypted_fek: toBase64(encryptedFek),
         total_size: totalEncryptedSize,
-        chunk_size: CHUNK_SIZE + AES_GCM_NONCE_SIZE + AES_GCM_TAG_SIZE + 2,
+        chunk_size: CHUNK_SIZE + nonceSize + tagSize + chunkCfg.envelope.headerSizeBytes,
         password_hint: passwordHint || '',
         password_type: passwordType,
       }),

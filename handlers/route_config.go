@@ -38,6 +38,7 @@ func RegisterRoutes() {
 	// Configuration endpoints (public - needed for client-side crypto)
 	Echo.GET("/api/config/argon2", GetArgon2Config)
 	Echo.GET("/api/config/password-requirements", GetPasswordRequirements)
+	Echo.GET("/api/config/chunking", GetChunkingConfig)
 
 	// OPAQUE Authentication (Multi-Step Protocol) - with rate limiting protection
 	Echo.POST("/api/opaque/register/response", RegisterRateLimitMiddleware(OpaqueRegisterResponse))

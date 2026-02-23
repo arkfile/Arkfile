@@ -22,3 +22,11 @@ func GetPasswordRequirements(c echo.Context) error {
 	data := crypto.GetEmbeddedPasswordRequirementsJSON()
 	return c.JSONBlob(http.StatusOK, data)
 }
+
+// GetChunkingConfig returns the chunking parameters configuration from embedded data
+// This ensures TypeScript and Go use the same chunk sizes, envelope format, and AES-GCM parameters
+func GetChunkingConfig(c echo.Context) error {
+	// Return the raw embedded JSON directly
+	data := crypto.GetEmbeddedChunkingParamsJSON()
+	return c.JSONBlob(http.StatusOK, data)
+}

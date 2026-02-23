@@ -148,31 +148,66 @@ export const AES_GCM_CONFIG = {
 } as const;
 
 // ============================================================================
-// Chunked Download Constants
+// Chunked Upload/Download Constants (loaded from single source of truth)
 // ============================================================================
 
 /**
- * AES-GCM overhead constants for chunked encryption/decryption
+ * SINGLE SOURCE OF TRUTH: crypto/chunking-params.json
+ *
+ * All chunking parameters are loaded from crypto/chunking-params.json at runtime
+ * via the /api/config/chunking endpoint. This ensures consistency across
+ * the entire application (Go server, Go CLI, and TypeScript client).
  */
-/** Nonce size in bytes for AES-GCM */
-export const AES_GCM_NONCE_SIZE = 12;
 
-/** Authentication tag size in bytes for AES-GCM */
-export const AES_GCM_TAG_SIZE = 16;
+export interface ChunkingConfig {
+  plaintextChunkSizeBytes: number;
+  envelope: {
+    version: number;
+    headerSizeBytes: number;
+    keyTypes: {
+      account: number;
+      custom: number;
+    };
+  };
+  aesGcm: {
+    nonceSizeBytes: number;
+    tagSizeBytes: number;
+    keySizeBytes: number;
+  };
+}
 
-/** Total overhead per encrypted chunk (nonce + tag) */
-export const AES_GCM_OVERHEAD = AES_GCM_NONCE_SIZE + AES_GCM_TAG_SIZE; // 28 bytes
+let cachedChunkingConfig: ChunkingConfig | null = null;
 
 /**
- * Default chunk size for file encryption (16 MiB plaintext)
- * This matches the server-side DefaultChunkSizeBytes constant
+ * Load chunking parameters from API endpoint
+ * This ensures client and server always use the same embedded configuration
  */
-export const DEFAULT_CHUNK_SIZE_BYTES = 16 * 1024 * 1024; // 16,777,216 bytes
+async function loadChunkingConfig(): Promise<ChunkingConfig> {
+  if (cachedChunkingConfig !== null) {
+    return cachedChunkingConfig;
+  }
+
+  try {
+    const response = await fetch('/api/config/chunking');
+    if (!response.ok) {
+      throw new Error(`Failed to load chunking config: ${response.statusText}`);
+    }
+    const config: ChunkingConfig = await response.json();
+    cachedChunkingConfig = config;
+    return config;
+  } catch (error) {
+    throw new Error(`Failed to load chunking parameters from API: ${error}`);
+  }
+}
 
 /**
- * Size of each encrypted chunk (plaintext chunk + overhead)
+ * Get chunking parameters for file encryption/decryption
+ * This function loads the config on first call and caches it
  */
-export const ENCRYPTED_CHUNK_SIZE = DEFAULT_CHUNK_SIZE_BYTES + AES_GCM_OVERHEAD; // 16,777,244 bytes
+export async function getChunkingParams(): Promise<ChunkingConfig> {
+  return loadChunkingConfig();
+}
+
 
 // ============================================================================
 // Salt Generation
@@ -240,9 +275,6 @@ export const LIMITS = {
   
   /** Maximum file size for client-side encryption (bytes) - 5GB */
   MAX_FILE_SIZE: 5 * 1024 * 1024 * 1024,
-  
-  /** Chunk size for streaming encryption (bytes) - 64MB */
-  ENCRYPTION_CHUNK_SIZE: 64 * 1024 * 1024,
 } as const;
 
 // ============================================================================

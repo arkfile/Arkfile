@@ -8,7 +8,7 @@
  * Chunk format: [nonce (12 bytes)][ciphertext][auth tag (16 bytes)]
  */
 
-import { AES_GCM_NONCE_SIZE, AES_GCM_TAG_SIZE, AES_GCM_OVERHEAD } from './constants';
+import { getChunkingParams } from './constants';
 
 /**
  * AES-GCM Decryptor for streaming chunk decryption
@@ -18,13 +18,22 @@ import { AES_GCM_NONCE_SIZE, AES_GCM_TAG_SIZE, AES_GCM_OVERHEAD } from './consta
  */
 export class AESGCMDecryptor {
   private key: CryptoKey;
+  private nonceSize: number;
+  private tagSize: number;
+  private overhead: number;
 
-  private constructor(key: CryptoKey) {
+  private constructor(key: CryptoKey, nonceSize: number, tagSize: number) {
     this.key = key;
+    this.nonceSize = nonceSize;
+    this.tagSize = tagSize;
+    this.overhead = nonceSize + tagSize;
   }
 
   /**
    * Create a decryptor from a raw 256-bit key
+   * 
+   * Loads AES-GCM parameters from the server's single source of truth
+   * (crypto/chunking-params.json via /api/config/chunking).
    * 
    * @param keyBytes - 32-byte AES-256 key
    * @returns Promise resolving to an AESGCMDecryptor instance
@@ -34,6 +43,9 @@ export class AESGCMDecryptor {
     if (keyBytes.length !== 32) {
       throw new Error(`Invalid key length: expected 32 bytes, got ${keyBytes.length}`);
     }
+
+    // Load chunking params from single source of truth
+    const config = await getChunkingParams();
 
     // Create a new Uint8Array copy to ensure we have a proper ArrayBuffer
     const keyCopy = new Uint8Array(keyBytes);
@@ -46,7 +58,7 @@ export class AESGCMDecryptor {
       ['decrypt']
     );
 
-    return new AESGCMDecryptor(key);
+    return new AESGCMDecryptor(key, config.aesGcm.nonceSizeBytes, config.aesGcm.tagSizeBytes);
   }
 
   /**
@@ -60,23 +72,23 @@ export class AESGCMDecryptor {
    * @throws Error if chunk is too small or decryption fails
    */
   async decryptChunk(encryptedChunk: Uint8Array): Promise<Uint8Array> {
-    if (encryptedChunk.length < AES_GCM_OVERHEAD) {
-      throw new Error(`Encrypted chunk too small: expected at least ${AES_GCM_OVERHEAD} bytes, got ${encryptedChunk.length}`);
+    if (encryptedChunk.length < this.overhead) {
+      throw new Error(`Encrypted chunk too small: expected at least ${this.overhead} bytes, got ${encryptedChunk.length}`);
     }
 
-    // Extract nonce (first 12 bytes)
-    const nonce = encryptedChunk.slice(0, AES_GCM_NONCE_SIZE);
+    // Extract nonce (first nonceSize bytes)
+    const nonce = encryptedChunk.slice(0, this.nonceSize);
     
     // Extract ciphertext + tag (remaining bytes)
     // Web Crypto expects ciphertext with tag appended
-    const ciphertextWithTag = encryptedChunk.slice(AES_GCM_NONCE_SIZE);
+    const ciphertextWithTag = encryptedChunk.slice(this.nonceSize);
 
     try {
       const decrypted = await crypto.subtle.decrypt(
         {
           name: 'AES-GCM',
           iv: nonce,
-          tagLength: AES_GCM_TAG_SIZE * 8, // in bits
+          tagLength: this.tagSize * 8, // in bits
         },
         this.key,
         ciphertextWithTag

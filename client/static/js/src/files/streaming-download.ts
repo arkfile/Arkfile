@@ -9,7 +9,7 @@
  */
 
 import { AESGCMDecryptor } from '../crypto/aes-gcm';
-import { AES_GCM_OVERHEAD, DEFAULT_CHUNK_SIZE_BYTES } from '../crypto/constants';
+import { getChunkingParams, type ChunkingConfig } from '../crypto/constants';
 import { downloadChunkWithRetry, RetryConfig } from './retry-handler';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress';
 
@@ -85,6 +85,7 @@ export class StreamingDownloadManager {
   private options: StreamingDownloadOptions;
   private startTime: number = 0;
   private bytesDownloaded: number = 0;
+  private chunkingConfig: ChunkingConfig | null = null;
 
   constructor(baseUrl: string = '', options: StreamingDownloadOptions = {}) {
     this.baseUrl = baseUrl;
@@ -92,6 +93,22 @@ export class StreamingDownloadManager {
       showProgressUI: true,
       ...options,
     };
+  }
+
+  /**
+   * Ensure chunking config is loaded from single source of truth
+   */
+  private async ensureConfig(): Promise<ChunkingConfig> {
+    if (!this.chunkingConfig) {
+      this.chunkingConfig = await getChunkingParams();
+    }
+    return this.chunkingConfig;
+  }
+
+  /** AES-GCM overhead (nonce + tag) from config */
+  private get aesGcmOverhead(): number {
+    if (!this.chunkingConfig) throw new Error('Chunking config not loaded');
+    return this.chunkingConfig.aesGcm.nonceSizeBytes + this.chunkingConfig.aesGcm.tagSizeBytes;
   }
 
   /**
@@ -103,6 +120,9 @@ export class StreamingDownloadManager {
    */
   async downloadFile(fileId: string, fek: Uint8Array): Promise<StreamingDownloadResult> {
     try {
+      // Ensure chunking config is loaded from single source of truth
+      await this.ensureConfig();
+
       // Show progress UI if enabled
       if (this.options.showProgressUI) {
         showProgress({
@@ -467,8 +487,8 @@ export class StreamingDownloadManager {
    * Calculate total encrypted size from metadata
    */
   private calculateTotalEncryptedSize(metadata: ChunkedDownloadMetadata): number {
-    // Each chunk has AES-GCM overhead
-    return metadata.sizeBytes + (metadata.totalChunks * AES_GCM_OVERHEAD);
+    // Each chunk has AES-GCM overhead (nonce + tag)
+    return metadata.sizeBytes + (metadata.totalChunks * this.aesGcmOverhead);
   }
 
   /**
@@ -485,7 +505,7 @@ export class StreamingDownloadManager {
    */
   private calculateRemainingTime(remainingChunks: number, speed: number, chunkSize: number): number {
     if (speed === 0) return 0;
-    const remainingBytes = remainingChunks * (chunkSize + AES_GCM_OVERHEAD);
+    const remainingBytes = remainingChunks * (chunkSize + this.aesGcmOverhead);
     return Math.round(remainingBytes / speed);
   }
 
@@ -514,7 +534,7 @@ export class StreamingDownloadManager {
         remainingTime: stage === 'downloading' ? this.calculateRemainingTime(
           totalChunks - currentChunk,
           this.calculateSpeed(),
-          DEFAULT_CHUNK_SIZE_BYTES
+          this.chunkingConfig!.plaintextChunkSizeBytes
         ) : undefined,
         error,
       });
