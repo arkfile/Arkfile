@@ -662,7 +662,7 @@ func (s *IntegrationSuite) runAdminOperationsWorkflow() error {
         if err != nil {
             // Expected if server endpoints not implemented yet
             if strings.Contains(result.Stderr, "server endpoint not yet available") {
-                fmt.Printf("ℹ️  Health check endpoint not yet implemented (expected)\n")
+                fmt.Printf("[ℹ] Health check endpoint not yet implemented (expected)\n")
                 return nil
             }
             return fmt.Errorf("health check failed: %v\nStderr: %s", err, result.Stderr)
