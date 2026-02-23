@@ -180,7 +180,7 @@ func (s *IntegrationSuite) executeCommand(tool string, args ...string) (*ExecRes
 }
 
 func (s *IntegrationSuite) runTest(name string, testFunc func() error) {
-    fmt.Printf("🧪 Running: %s\n", name)
+    fmt.Printf(" Running: %s\n", name)
     
     if err := testFunc(); err != nil {
         fmt.Printf("FAILED: %s - %v\n", name, err)

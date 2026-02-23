@@ -251,7 +251,7 @@ perform_breaking_change_rotation() {
 
 # Function to test new keys before full deployment
 test_new_keys() {
-    echo -e "${BLUE}🧪 Testing new OPAQUE keys...${NC}"
+    echo -e "${BLUE} Testing new OPAQUE keys...${NC}"
     
     # TODO: Implement key testing
     # - Test new keys can be loaded by application
@@ -512,7 +512,7 @@ main() {
             ;;
         "dual-key")
             if [ "$TEST_MODE" = true ]; then
-                echo -e "${BLUE}🧪 Running in test mode...${NC}"
+                echo -e "${BLUE} Running in test mode...${NC}"
                 validate_current_setup
                 assess_user_impact
                 create_rotation_backup
@@ -534,7 +534,7 @@ main() {
             ;;
         "versioned")
             if [ "$TEST_MODE" = true ]; then
-                echo -e "${BLUE}🧪 Running versioned migration test...${NC}"
+                echo -e "${BLUE} Running versioned migration test...${NC}"
                 validate_current_setup
                 assess_user_impact
                 create_rotation_backup
@@ -561,7 +561,7 @@ main() {
             fi
             
             if [ "$TEST_MODE" = true ]; then
-                echo -e "${BLUE}🧪 Running breaking change test...${NC}"
+                echo -e "${BLUE} Running breaking change test...${NC}"
                 validate_current_setup
                 assess_user_impact
                 create_rotation_backup

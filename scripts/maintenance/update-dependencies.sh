@@ -281,7 +281,7 @@ handle_choice() {
             ;;
         "$TEST_OPTION")
             if [[ -n "$TEST_OPTION" ]]; then
-                echo -e "${BLUE}🧪 Running tests...${NC}"
+                echo -e "${BLUE} Running tests...${NC}"
                 cd "$PROJECT_ROOT"
                 if go test ./...; then
                     echo -e "${GREEN}[OK] All tests passed${NC}"

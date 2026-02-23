@@ -587,7 +587,7 @@ if [ $COMPONENTS_REMOVED -gt 0 ]; then
         echo -e "${YELLOW}Some components were preserved based on your choices.${NC}"
     fi
 else
-    echo -e "${BLUE}ℹ️  No components were removed${NC}"
+    echo -e "${BLUE}[i] No components were removed${NC}"
     echo "All Arkfile components remain on your system."
 fi
 

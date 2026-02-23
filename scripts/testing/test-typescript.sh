@@ -45,7 +45,7 @@ run_type_check() {
 
 # Function to run Bun tests
 run_bun_tests() {
-    echo -e "\n${BLUE}🧪 Running Bun Test Suite...${NC}"
+    echo -e "\n${BLUE} Running Bun Test Suite...${NC}"
     cd client/static/js
     
     if bun test; then

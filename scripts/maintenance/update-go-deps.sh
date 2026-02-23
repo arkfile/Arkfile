@@ -140,7 +140,7 @@ get_updates() {
 
 # Run tests
 run_tests() {
-    echo -e "${BLUE}🧪 Running tests...${NC}"
+    echo -e "${BLUE} Running tests...${NC}"
     
     if go test ./... -timeout=30s; then
         echo -e "${GREEN}[OK] All tests passed${NC}"

@@ -221,7 +221,7 @@ restart_services() {
         
         echo -e "${GREEN}[OK] ${services_healthy} services are running and healthy${NC}"
     else
-        echo -e "${BLUE}ℹ️  No services were restarted (none were running)${NC}"
+        echo -e "${BLUE}[i] No services were restarted (none were running)${NC}"
     fi
 }
 

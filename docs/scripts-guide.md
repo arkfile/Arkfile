@@ -15,45 +15,44 @@ For new users, start with these main entry points:
 scripts/
 ├── quick-start.sh                    # Main entry point for quick setup
 ├── complete-setup-test.sh            # Complete setup with testing
+├── dev-reset.sh                      # Development environment reset
 ├── setup/                            # Setup and deployment scripts
 │   ├── 00-setup-foundation.sh        # Foundation setup (users, dirs, keys)
 │   ├── 01-setup-users.sh             # Create arkfile system user
 │   ├── 02-setup-directories.sh       # Create directory structure
-│   ├── 03-setup-opaque-keys.sh       # Generate OPAQUE server keys
-│   ├── 04-setup-jwt-keys.sh          # Generate JWT signing keys
-│   ├── 05-setup-tls-certs.sh         # Generate TLS certificates
-│   ├── 06-setup-totp-keys.sh         # Generate TOTP keys
-│   ├── 07-setup-minio.sh             # Configure MinIO storage
-│   ├── 08-setup-rqlite.sh            # Configure rqlite database
-│   ├── build-libopaque.sh            # Build libopaque library
-│   ├── build.sh                      # Build application
+│   ├── 03-setup-master-key.sh        # Generate master encryption key
+│   ├── 04-setup-tls-certs.sh         # Generate TLS certificates
+│   ├── 05-setup-minio.sh             # Configure MinIO storage
+│   ├── 06-setup-rqlite-build.sh      # Build and configure rqlite database
+│   ├── build-config.sh               # Build configuration helper
+│   ├── build-libopaque.sh            # Build libopaque static library
+│   ├── build-libopaque-wasm.sh       # Build libopaque WASM module
+│   ├── build.sh                      # Build application binary
 │   ├── deploy.sh                     # Deploy to production
 │   └── uninstall.sh                  # Remove system installation
-├── dev-reset.sh                      # Development environment reset
 ├── testing/                          # Testing and validation scripts
-│   ├── admin-auth-test.sh            # Admin OPAQUE authentication + TOTP tests
-│   ├── test-app-curl.sh              # Comprehensive application testing
 │   ├── alpine-build-test.sh          # Alpine Linux compatibility testing
+│   ├── e2e-test.sh                   # End-to-end testing
 │   ├── security-test-suite.sh        # Consolidated security testing
-│   ├── test-credits-system.sh        # Credits system testing
-│   ├── test-share-workflow-complete.sh # Share workflow testing
 │   ├── test-typescript.sh            # TypeScript testing suite
 │   └── totp-generator.go             # Helper utility for TOTP (2FA) testing
 ├── maintenance/                      # Maintenance and operational scripts
-│   ├── health-check.sh               # System health monitoring
-│   ├── security-audit.sh             # Security auditing
+│   ├── admin-validation-guide.sh     # Interactive admin validation
 │   ├── backup-keys.sh                # Backup cryptographic keys
-│   ├── rotate-jwt-keys.sh            # Rotate JWT signing keys
-│   ├── renew-certificates.sh         # Renew TLS certificates
 │   ├── check-updates.sh              # Check for updates
+│   ├── download-minio.sh             # Download MinIO binaries
+│   ├── emergency-procedures.sh       # Emergency response procedures
+│   ├── health-check.sh               # System health monitoring
+│   ├── renew-certificates.sh         # Renew TLS certificates
+│   ├── rotate-jwt-keys.sh            # Rotate JWT signing keys
+│   ├── rotate-opaque-keys.sh         # Rotate OPAQUE server keys
+│   ├── security-audit.sh             # Security auditing
+│   ├── security-cleanup.sh           # Security cleanup utilities
 │   ├── update-dependencies.sh        # Update system dependencies
 │   ├── update-go-deps.sh             # Update Go modules
-│   ├── validate-deployment.sh        # Validate deployment
 │   ├── validate-certificates.sh      # Validate TLS certificates
-│   ├── admin-validation-guide.sh     # Interactive admin validation
-│   ├── download-minio.sh             # Download MinIO binaries
-│   └── emergency-procedures.sh       # Emergency response procedures
-└── deprecated/                       # Legacy scripts (preserved for safety)
+│   └── validate-deployment.sh        # Validate deployment
+└── wip/                              # Work-in-progress scripts
 ```
 
 ## Script Categories
@@ -100,45 +99,31 @@ The setup scripts are numbered to show their logical dependency order:
 **Dependencies**: arkfile user  
 **Creates**: `/opt/arkfile/` tree with proper permissions
 
-#### `03-setup-opaque-keys.sh`
-**Purpose**: Generate OPAQUE server keys  
-**Usage**: `sudo ./scripts/setup/03-setup-opaque-keys.sh`  
+#### `03-setup-master-key.sh`
+**Purpose**: Generate master encryption key  
+**Usage**: `sudo ./scripts/setup/03-setup-master-key.sh`  
 **Dependencies**: Directories  
-**Creates**: OPAQUE server private/public keys
+**Creates**: Master encryption key used for OPAQUE, JWT, and TOTP key derivation
 
-#### `04-setup-jwt-keys.sh`
-**Purpose**: Generate JWT signing keys  
-**Usage**: `sudo ./scripts/setup/04-setup-jwt-keys.sh`  
-**Dependencies**: Directories  
-**Creates**: JWT signing keys with rotation capability
-
-#### `05-setup-tls-certs.sh`
+#### `04-setup-tls-certs.sh`
 **Purpose**: Generate TLS certificates  
-**Usage**: `sudo ./scripts/setup/05-setup-tls-certs.sh`  
+**Usage**: `sudo ./scripts/setup/04-setup-tls-certs.sh`  
 **Dependencies**: Directories  
-**Creates**: Self-signed TLS certificates
+**Creates**: Self-signed TLS certificates for all services
 
-#### `06-setup-totp-keys.sh`
-**Purpose**: Generate TOTP master keys for 2FA functionality  
-**Usage**: `sudo ./scripts/setup/06-setup-totp-keys.sh`  
-**Dependencies**: Directories  
-**Creates**: TOTP master keys for backup code generation and validation
-
-**Note**: Database schema setup is now handled automatically by the arkfile application using the unified schema approach. The application reads `database/unified_schema.sql` and creates all tables, indexes, and triggers on startup. No separate database setup script is needed.
-
-#### `07-setup-minio.sh`
+#### `05-setup-minio.sh`
 **Purpose**: Configure MinIO object storage  
-**Usage**: `sudo ./scripts/setup/07-setup-minio.sh`  
+**Usage**: `sudo ./scripts/setup/05-setup-minio.sh`  
 **Dependencies**: Directories  
 **Creates**: MinIO configuration and systemd service
 
-#### `08-setup-rqlite-build.sh`
+#### `06-setup-rqlite-build.sh`
 **Purpose**: Build and configure rqlite database from source  
-**Usage**: `sudo ./scripts/setup/08-setup-rqlite-build.sh`  
+**Usage**: `sudo ./scripts/setup/06-setup-rqlite-build.sh`  
 **Dependencies**: Directories, Go compiler  
 **Creates**: rqlite binary (built from source), configuration, and systemd service
 
-**Note**: This script builds rqlite from source to ensure compatibility and latest features. The older `08-setup-rqlite.sh` downloads pre-built binaries and is kept for compatibility but `08-setup-rqlite-build.sh` is now the recommended approach.
+**Note**: Database schema setup is handled automatically by the arkfile application using the unified schema approach. The application reads `database/unified_schema.sql` and creates all tables, indexes, and triggers on startup. No separate database setup script is needed.
 
 #### Other Setup Scripts
 
@@ -334,8 +319,12 @@ go build -o totp-generator totp-generator.go
 ./scripts/setup/00-setup-foundation.sh
 
 # Then services
-sudo ./scripts/setup/07-setup-minio.sh
-sudo ./scripts/setup/08-setup-rqlite-build.sh
+sudo ./scripts/setup/05-setup-minio.sh
+sudo ./scripts/setup/06-setup-rqlite-build.sh
+
+# Build and deploy
+./scripts/setup/build.sh
+./scripts/setup/deploy.sh prod
 
 # Start services
 sudo systemctl start arkfile

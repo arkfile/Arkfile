@@ -73,7 +73,7 @@ is_completed() {
 
 # Run tests first unless skipped
 if [ "$SKIP_TESTS" = false ]; then
-    echo -e "${BLUE}🧪 Running tests before foundation setup...${NC}"
+    echo -e "${BLUE} Running tests before foundation setup...${NC}"
     
     if [ -x "./scripts/testing/test-only.sh" ]; then
         ./scripts/testing/test-only.sh --skip-performance --skip-golden
@@ -170,12 +170,12 @@ if [ "$SKIP_TLS" = false ]; then
             fi
         else
             echo -e "${YELLOW}[WARNING]  TLS certificate generation had issues (non-critical for core functionality)${NC}"
-            echo -e "${BLUE}ℹ️  Note: TLS certificates are for internal service communication${NC}"
-            echo -e "${BLUE}ℹ️  Core Arkfile functionality (OPAQUE auth, file encryption) works independently${NC}"
+            echo -e "${BLUE}[i] Note: TLS certificates are for internal service communication${NC}"
+            echo -e "${BLUE}[i] Core Arkfile functionality (OPAQUE auth, file encryption) works independently${NC}"
         fi
     fi
 else
-    echo -e "${YELLOW}️  Skipping TLS certificate generation as requested${NC}"
+    echo -e "${YELLOW} Skipping TLS certificate generation as requested${NC}"
 fi
 
 # Step 7: Validate foundation setup

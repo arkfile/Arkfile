@@ -29,7 +29,7 @@ if sudo systemctl is-active --quiet arkfile; then
     sudo systemctl stop arkfile
     echo -e "${GREEN}[OK] Arkfile service stopped${NC}"
 else
-    echo -e "${YELLOW}ℹ️  Arkfile service was not running${NC}"
+    echo -e "${YELLOW}[i] Arkfile service was not running${NC}"
 fi
 
 # Step 2: Generate new JWT secret

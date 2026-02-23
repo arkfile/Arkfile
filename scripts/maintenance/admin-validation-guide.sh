@@ -399,7 +399,7 @@ else
     echo -e "${RED}║  Please address the failed tests before using in production.                 ║${NC}"
     echo -e "${RED}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo
-    echo -e "${BLUE}🛠️  TROUBLESHOOTING STEPS:${NC}"
+    echo -e "${BLUE} TROUBLESHOOTING STEPS:${NC}"
     echo "1. Review all failed tests above"
     echo "2. Check service status: sudo systemctl status arkfile caddy minio rqlite"
     echo "3. Review service logs: sudo journalctl -u arkfile"

@@ -81,7 +81,7 @@ elif [ "$SETUP_CONFIRM" = "FOUNDATION" ]; then
     echo -e "${YELLOW}This will create infrastructure but not start services${NC}"
     echo -e "${YELLOW}You will be prompted for sudo password as needed${NC}"
 else
-    echo -e "${BLUE}ℹ️  Running in testing-only mode${NC}"
+    echo -e "${BLUE}[i] Running in testing-only mode${NC}"
 fi
 
 # Display active skip options
@@ -129,7 +129,7 @@ fi
 echo
 echo -e "\n${BLUE}Validating TypeScript build...${NC}"
 ./scripts/testing/test-typescript.sh build
-echo -e "${BLUE}🧪 Running comprehensive Go unit test suite...${NC}"
+echo -e "${BLUE} Running comprehensive Go unit test suite...${NC}"
 
 # Test crypto module
 echo -e "${YELLOW}Testing crypto module...${NC}"
@@ -287,8 +287,8 @@ if [ "$FULL_SETUP" = true ]; then
         fi
     else
         echo -e "${YELLOW}[WARNING]  TLS certificate setup had issues (non-critical for core functionality)${NC}"
-        echo -e "${BLUE}ℹ️  Note: TLS certificates are for internal service communication${NC}"
-        echo -e "${BLUE}ℹ️  Core Arkfile functionality (OPAQUE auth, file encryption) works independently${NC}"
+        echo -e "${BLUE}[i] Note: TLS certificates are for internal service communication${NC}"
+        echo -e "${BLUE}[i] Core Arkfile functionality (OPAQUE auth, file encryption) works independently${NC}"
     fi
     
     # If complete setup is requested, install and configure services
@@ -456,7 +456,7 @@ if [ "$FULL_SETUP" = true ]; then
         echo "• Health Dashboard: http://localhost:8080/health"
         echo "• All services configured and started"
         echo
-        echo -e "${YELLOW}🧪 NEXT STEP: Interactive Admin Validation${NC}"
+        echo -e "${YELLOW} NEXT STEP: Interactive Admin Validation${NC}"
         echo
         echo "The system is set up, but you should validate that everything works"
         echo "with real user interactions. Our interactive guide will walk you through:"
@@ -817,7 +817,7 @@ if [ "$FULL_SETUP" = true ]; then
     echo "• As needed: Key rotation, emergency procedures"
     
 else
-    echo -e "${BLUE}🧪 TEST-ONLY MODE COMPLETED${NC}"
+    echo -e "${BLUE} TEST-ONLY MODE COMPLETED${NC}"
     echo
     echo -e "${GREEN}[OK] Validation Results:${NC}"
     echo "• All core functionality verified"

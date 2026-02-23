@@ -130,8 +130,8 @@ curl http://localhost:8080/health
 ./scripts/setup/00-setup-foundation.sh
 
 # Add services manually
-sudo ./scripts/setup/07-setup-minio.sh
-sudo ./scripts/setup/08-setup-rqlite-build.sh
+sudo ./scripts/setup/05-setup-minio.sh
+sudo ./scripts/setup/06-setup-rqlite-build.sh
 
 # Build and deploy
 ./scripts/setup/build.sh
@@ -218,11 +218,29 @@ go version
 **System Dependencies:**
 ```bash
 # Debian/Ubuntu
-sudo apt update
-sudo apt install -y curl wget git build-essential sqlite3 openssl
+sudo apt update && sudo apt install -y \
+  curl wget git build-essential pkg-config cmake \
+  sqlite3 openssl ca-certificates \
+  libsodium-dev tar gzip
 
-# RHEL/AlmaLinux/Rocky
-sudo dnf install -y curl wget git gcc make sqlite openssl
+# RHEL 9 / AlmaLinux 9 / Rocky Linux 9 (EPEL required for libsodium-devel)
+sudo dnf install -y epel-release
+sudo dnf install -y \
+  curl wget git gcc gcc-c++ make cmake pkgconf \
+  sqlite openssl ca-certificates \
+  libsodium-devel tar gzip
+
+# Fedora (EPEL not needed)
+sudo dnf install -y \
+  curl wget git gcc gcc-c++ make cmake pkgconf \
+  sqlite openssl ca-certificates \
+  libsodium-devel tar gzip
+
+# Alpine Linux
+sudo apk add --no-cache \
+  curl wget git gcc musl-dev make cmake pkgconf-dev \
+  sqlite openssl ca-certificates \
+  libsodium-dev libsodium-static tar gzip
 ```
 
 **Development Dependencies (Optional):**
@@ -344,17 +362,17 @@ storage:
 **Development Certificates:**
 ```bash
 # Generate self-signed certificates
-sudo ./scripts/setup/05-setup-tls-certs.sh
+sudo ./scripts/setup/04-setup-tls-certs.sh
 
 # Validate certificates
-./scripts/validate-certificates.sh
+./scripts/maintenance/validate-certificates.sh
 ```
 
 **Production Certificates:**
 ```bash
 # Set domain for production
 export ARKFILE_DOMAIN=yourdomain.com
-sudo -E ./scripts/setup/05-setup-tls-certs.sh
+sudo -E ./scripts/setup/04-setup-tls-certs.sh
 
 # For Let's Encrypt (when available)
 sudo ./scripts/setup/setup-letsencrypt.sh

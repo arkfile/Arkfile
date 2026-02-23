@@ -85,8 +85,8 @@ detect_system_and_packages() {
                 INSTALL_CMD="yum install -y"
             fi
             SODIUM_PKG="libsodium-devel"
-            # Try pkgconf-devel first, fallback to pkg-config
-            PKG_CONFIG_PKG="pkgconf-devel"
+            # On RHEL 9/AlmaLinux 9/Rocky 9, the package is just "pkgconf"
+            PKG_CONFIG_PKG="pkgconf"
             BUILD_TOOLS_PKG="gcc make cmake"
             LIBC="glibc"
         # Arch Linux detection
@@ -228,13 +228,24 @@ install_dependencies_universal() {
             fi
             ;;
         dnf|yum)
+            # EPEL is required for libsodium-devel on RHEL 9/AlmaLinux 9/Rocky 9
+            echo "Enabling EPEL repository (required for libsodium-devel)..."
+            sudo $INSTALL_CMD epel-release 2>/dev/null || {
+                echo "[WARNING] epel-release not available via package manager, trying manual EPEL setup..."
+                # For RHEL (not AlmaLinux/Rocky which include epel-release)
+                local rhel_version
+                rhel_version=$(rpm -E %rhel 2>/dev/null || echo "9")
+                sudo $INSTALL_CMD "https://dl.fedoraproject.org/pub/epel/epel-release-latest-${rhel_version}.noarch.rpm" 2>/dev/null || true
+            }
             if ! sudo $INSTALL_CMD $packages; then
                 echo "[WARNING]  Primary package installation failed, trying alternatives..."
                 # Try alternative package names for RHEL family
-                if ! sudo $INSTALL_CMD libsodium-devel pkg-config gcc make cmake; then
-                    # Final fallback - try pkgconfig instead of pkg-config
+                if ! sudo $INSTALL_CMD libsodium-devel pkgconf gcc make cmake; then
+                    # Final fallback - try pkgconfig (compat name)
                     sudo $INSTALL_CMD libsodium-devel pkgconfig gcc make cmake || {
                         echo "[X] Failed to install required packages on RHEL family"
+                        echo "    Ensure EPEL is enabled: sudo dnf install -y epel-release"
+                        echo "    Then retry: sudo dnf install -y libsodium-devel pkgconf gcc make cmake"
                         exit 1
                     }
                 fi
