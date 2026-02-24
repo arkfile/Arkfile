@@ -10,13 +10,11 @@ import (
 // Session key contexts for domain separation
 const (
 	SessionKeyContext     = "ARKFILE_SESSION_KEY"
-	FileEncryptionContext = "ARKFILE_FILE_ENCRYPTION"
 	JWTSigningContext     = "ARKFILE_JWT_SIGNING"
 	TOTPEncryptionContext = "ARKFILE_TOTP_ENCRYPTION"
 )
 
 // DeriveSessionKey derives a session key from OPAQUE export key with domain separation
-// This ensures session keys are cryptographically distinct from file encryption keys
 func DeriveSessionKey(opaqueExportKey []byte, context string) ([]byte, error) {
 
 	if len(opaqueExportKey) == 0 {
@@ -32,29 +30,6 @@ func DeriveSessionKey(opaqueExportKey []byte, context string) ([]byte, error) {
 	}
 
 	return sessionKey, nil
-}
-
-// DeriveFileEncryptionKey derives a file encryption key from session key
-// This provides an additional layer of domain separation for file encryption
-func DeriveFileEncryptionKey(sessionKey []byte, fileID string) ([]byte, error) {
-	if len(sessionKey) != 32 {
-		return nil, fmt.Errorf("session key must be 32 bytes")
-	}
-	if fileID == "" {
-		return nil, fmt.Errorf("file ID cannot be empty")
-	}
-
-	// Create context with file ID for per-file key derivation
-	context := fmt.Sprintf("%s:%s", FileEncryptionContext, fileID)
-
-	hkdf := hkdf.New(sha256.New, sessionKey, nil, []byte(context))
-
-	fileKey := make([]byte, 32) // 256-bit file encryption key
-	if _, err := hkdf.Read(fileKey); err != nil {
-		return nil, fmt.Errorf("failed to derive file encryption key: %w", err)
-	}
-
-	return fileKey, nil
 }
 
 // DeriveJWTSigningMaterial derives JWT signing material from session key

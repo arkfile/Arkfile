@@ -130,7 +130,6 @@ func DeriveArgon2IDKey(password, salt []byte, keyLen uint32, memory, time uint32
 }
 
 // Password-based key derivation functions using Argon2ID
-// These replace the old OPAQUE export key based functions
 
 // DerivePasswordMetadataKey derives a metadata encryption key from password using Argon2ID
 func DerivePasswordMetadataKey(password []byte, salt []byte, username string) ([]byte, error) {

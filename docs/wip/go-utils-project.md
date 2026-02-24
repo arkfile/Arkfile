@@ -38,7 +38,7 @@ The Go utilities maintain separation of concerns while enabling secure integrati
 
 Tools integrate through secure, well-defined patterns:
 1. `arkfile-client` performs OPAQUE authentication, handling session keys internally for server communication.
-2. `cryptocli` performs offline file encryption/decryption using **passwords (and Argon2ID)**, with no reliance on OPAQUE export keys for this purpose.
+2. `cryptocli` performs offline file encryption/decryption using **passwords (and Argon2ID)**
 3. `arkfile-client` handles all network communication with encrypted payloads (encrypted using password-derived keys).
 4. Administrative tools coordinate system operations using consistent static binaries.
 
@@ -134,8 +134,7 @@ func performOPAQUEAuthentication(client *http.Client, config *ClientConfig) (*Au
 		}
 	}
 	
-	// Step 4: Authentication complete; no OPAQUE key export for file encryption.
-	// OPAQUE Export Keys are for server-side use only.
+	// Step 4: Authentication complete
 	session := &AuthSession{
 		Username:     username,
 		AccessToken:  authResp.AccessToken,
@@ -675,13 +674,13 @@ phase_file_operations_go_tools() {
     # Ensure Go tools are built with static linking
     build_go_tools_static
     
-    # Export authentication data for Go tools (no OPAQUE export keys for file encryption)
+    # Export authentication data for Go tools
     export_auth_data_for_go_tools
     
     # Step 1: Generate 100MB test file with cryptocli
     generate_large_test_file_with_cryptocli
     
-    # Step 2: Authenticate with arkfile-client (no OPAQUE export key for file encryption)
+    # Step 2: Authenticate with arkfile-client
     authenticate_with_arkfile_client
     
     # Step 3: Encrypt file using password-derived (Argon2ID) keys
@@ -804,7 +803,7 @@ phase_file_operations_go_tools() {
 - arkfile-client can authenticate, upload, download files successfully
 - Session management works across tool invocations
 - Integration with existing dev-reset + test-app-curl.sh workflow
-- File encryption uses Argon2ID password-derived keys, not OPAQUE export keys
+- File encryption uses Argon2ID password-derived keys
 
 ### Phase 5 Success (Administrative Tools)
 - arkfile-setup can perform fresh installations across platforms
@@ -920,7 +919,6 @@ The critical refresh token validation failure in testing scripts has been resolv
 #### cryptocli Integration Enhancement
 - **Status**: **PARTIALLY IMPLEMENTED**
 - **File**: `cmd/cryptocli/main.go` exists but may need updates for client integration
-- **TODO**: Verify OPAQUE export key compatibility with arkfile-client (This task is now irrelevant, as OPAQUE export keys are not used for file encryption.)
 
 #### Client Tool Testing and Validation
 - **Status**: **NOT YET TESTED**

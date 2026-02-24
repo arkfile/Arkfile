@@ -30,16 +30,7 @@ func TestFileKeyResponse_Structure(t *testing.T) {
 	assert.Equal(t, "2025-01-29T10:00:00Z", response.CreatedAt)
 }
 
-// Note: Tests for OPAQUE-based file encryption were removed because:
-// CRITICAL: OPAQUE export keys must NEVER be used for file encryption.
 // File encryption uses the account password via Argon2id KDF (client-side only).
-// OPAQUE is only for authentication, completely separate from file encryption.
-//
-// Full integration tests would require:
-// 1. Test database setup
-// 2. OPAQUE library environment
-// 3. Mock authentication tokens
-// 4. File metadata in database
 //
 // These tests focus on the core logic that can be tested without external dependencies.
 
