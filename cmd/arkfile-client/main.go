@@ -27,16 +27,6 @@ import (
 	"golang.org/x/term"
 )
 
-// DownloadFileMetaResponse represents the metadata response for a file download
-type DownloadFileMetaResponse struct {
-	FileID      string `json:"file_id"`
-	TotalSize   int64  `json:"total_size"`
-	ChunkSize   int    `json:"chunk_size"`
-	TotalChunks int    `json:"total_chunks"`
-	Filename    string `json:"filename"` // Will be encrypted
-	SHA256      string `json:"sha256"`   // Will be encrypted
-}
-
 const (
 	Version = "2.0.0-static"
 	Usage   = `arkfile-client - File vault management and sharing client with OPAQUE authentication
@@ -1139,8 +1129,8 @@ EXAMPLES:
 
 	logVerbose("Starting chunked download for file: %s", *fileID)
 
-	// STEP 1: Get chunk metadata
-	metadataURL := fmt.Sprintf("/api/files/%s/metadata", *fileID)
+	// STEP 1: Get chunk metadata from the unified /meta endpoint
+	metadataURL := fmt.Sprintf("/api/files/%s/meta", *fileID)
 	logVerbose("Fetching chunk metadata from: %s", metadataURL)
 
 	metadataReq, err := http.NewRequest("GET", client.baseURL+metadataURL, nil)
@@ -1155,13 +1145,17 @@ EXAMPLES:
 	}
 	defer metadataResp.Body.Close()
 
+	metaRawBytes, err := io.ReadAll(metadataResp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read metadata response: %w", err)
+	}
+
 	if metadataResp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(metadataResp.Body)
-		return fmt.Errorf("metadata request failed with status %d: %s", metadataResp.StatusCode, string(bodyBytes))
+		return fmt.Errorf("metadata request failed with status %d: %s", metadataResp.StatusCode, string(metaRawBytes))
 	}
 
 	var chunkMeta ChunkDownloadMetadata
-	if err := json.NewDecoder(metadataResp.Body).Decode(&chunkMeta); err != nil {
+	if err := json.Unmarshal(metaRawBytes, &chunkMeta); err != nil {
 		return fmt.Errorf("failed to parse chunk metadata: %w", err)
 	}
 
@@ -1274,26 +1268,12 @@ EXAMPLES:
 
 	logVerbose("Successfully downloaded %d bytes to %s", totalBytesDownloaded, *outputPath)
 
-	// STEP 5: Also fetch file meta for decryption info
-	fileMetaURL := fmt.Sprintf("/api/files/%s/meta", *fileID)
-	fileMetaReq, err := http.NewRequest("GET", client.baseURL+fileMetaURL, nil)
-	if err == nil {
-		fileMetaReq.Header.Set("Authorization", "Bearer "+session.AccessToken)
-		fileMetaResp, err := client.client.Do(fileMetaReq)
-		if err == nil && fileMetaResp.StatusCode == http.StatusOK {
-			metaData, _ := io.ReadAll(fileMetaResp.Body)
-			fileMetaResp.Body.Close()
-			if len(metaData) > 0 {
-				metaPath := *outputPath + ".metadata.json"
-				if err := os.WriteFile(metaPath, metaData, 0644); err != nil {
-					fmt.Printf("Warning: Failed to save metadata file: %v\n", err)
-				} else {
-					fmt.Printf("Metadata saved to: %s\n", metaPath)
-				}
-			}
-		} else if fileMetaResp != nil {
-			fileMetaResp.Body.Close()
-		}
+	// STEP 5: Save file metadata for decryption (reuse response from STEP 1)
+	metaPath := *outputPath + ".metadata.json"
+	if err := os.WriteFile(metaPath, metaRawBytes, 0644); err != nil {
+		fmt.Printf("Warning: Failed to save metadata file: %v\n", err)
+	} else {
+		fmt.Printf("Metadata saved to: %s\n", metaPath)
 	}
 
 	fmt.Printf("Encrypted file downloaded successfully\n")

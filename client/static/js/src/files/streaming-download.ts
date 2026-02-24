@@ -14,19 +14,23 @@ import { downloadChunkWithRetry, RetryConfig } from './retry-handler';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress';
 
 /**
- * Metadata returned from the download metadata endpoint
+ * Metadata returned from the /meta endpoint (snake_case matches JSON response)
  */
 export interface ChunkedDownloadMetadata {
-  fileId: string;
-  storageId: string;
-  encryptedFilename: string;
-  filenameNonce: string;
-  encryptedSha256sum: string;
-  sha256sumNonce: string;
-  sizeBytes: number;
-  totalChunks: number;
-  chunkSizeBytes: number;
-  contentType: string;
+  file_id: string;
+  encrypted_filename: string;
+  filename_nonce: string;
+  encrypted_sha256sum: string;
+  sha256sum_nonce: string;
+  encrypted_fek: string;
+  password_hint: string;
+  password_type: string;
+  size_bytes: number;
+  chunk_size: number;
+  total_chunks: number;
+  chunk_count: number;
+  chunk_size_bytes: number;
+  encrypted_file_sha256: boolean;
 }
 
 /**
@@ -146,18 +150,18 @@ export class StreamingDownloadManager {
 
       // 3. Decrypt filename and sha256sum using FEK
       const filename = await this.decryptMetadataField(
-        metadata.encryptedFilename,
-        metadata.filenameNonce,
+        metadata.encrypted_filename,
+        metadata.filename_nonce,
         fek
       );
       
       const sha256sum = await this.decryptMetadataField(
-        metadata.encryptedSha256sum,
-        metadata.sha256sumNonce,
+        metadata.encrypted_sha256sum,
+        metadata.sha256sum_nonce,
         fek
       );
 
-      this.reportProgress('complete', metadata.totalChunks, metadata.totalChunks, metadata.sizeBytes, metadata.sizeBytes);
+      this.reportProgress('complete', metadata.total_chunks, metadata.total_chunks, metadata.size_bytes, metadata.size_bytes);
 
       if (this.options.showProgressUI) {
         hideProgress();
@@ -218,18 +222,18 @@ export class StreamingDownloadManager {
 
       // 3. Decrypt filename and sha256sum using FEK
       const filename = await this.decryptMetadataField(
-        metadata.encryptedFilename,
-        metadata.filenameNonce,
+        metadata.encrypted_filename,
+        metadata.filename_nonce,
         fek
       );
       
       const sha256sum = await this.decryptMetadataField(
-        metadata.encryptedSha256sum,
-        metadata.sha256sumNonce,
+        metadata.encrypted_sha256sum,
+        metadata.sha256sum_nonce,
         fek
       );
 
-      this.reportProgress('complete', metadata.totalChunks, metadata.totalChunks, metadata.sizeBytes, metadata.sizeBytes);
+      this.reportProgress('complete', metadata.total_chunks, metadata.total_chunks, metadata.size_bytes, metadata.size_bytes);
 
       if (this.options.showProgressUI) {
         hideProgress();
@@ -270,7 +274,7 @@ export class StreamingDownloadManager {
       headers['Authorization'] = `Bearer ${this.options.authToken}`;
     }
 
-    const response = await fetch(`${this.baseUrl}/api/files/${fileId}/metadata`, {
+    const response = await fetch(`${this.baseUrl}/api/files/${fileId}/meta`, {
       method: 'GET',
       headers,
     });
@@ -325,7 +329,7 @@ export class StreamingDownloadManager {
       headers['Authorization'] = `Bearer ${this.options.authToken}`;
     }
 
-    for (let chunkIndex = 0; chunkIndex < metadata.totalChunks; chunkIndex++) {
+    for (let chunkIndex = 0; chunkIndex < metadata.total_chunks; chunkIndex++) {
       // Check for cancellation
       if (this.options.abortController?.signal.aborted) {
         throw new Error('Download cancelled');
@@ -350,20 +354,20 @@ export class StreamingDownloadManager {
       this.reportProgress(
         'downloading',
         chunkIndex + 1,
-        metadata.totalChunks,
+        metadata.total_chunks,
         this.bytesDownloaded,
         this.calculateTotalEncryptedSize(metadata)
       );
 
       // Update UI
       if (this.options.showProgressUI) {
-        const percentage = ((chunkIndex + 1) / metadata.totalChunks) * 100;
+        const percentage = ((chunkIndex + 1) / metadata.total_chunks) * 100;
         const speed = this.calculateSpeed();
-        const remaining = this.calculateRemainingTime(metadata.totalChunks - chunkIndex - 1, speed, metadata.chunkSizeBytes);
+        const remaining = this.calculateRemainingTime(metadata.total_chunks - chunkIndex - 1, speed, metadata.chunk_size_bytes);
         
         updateProgress({
           title: 'Downloading File',
-          message: `Chunk ${chunkIndex + 1} of ${metadata.totalChunks}`,
+          message: `Chunk ${chunkIndex + 1} of ${metadata.total_chunks}`,
           percentage,
           speed,
           remainingTime: remaining,
@@ -394,7 +398,7 @@ export class StreamingDownloadManager {
       headers['X-Download-Token'] = this.options.downloadToken;
     }
 
-    for (let chunkIndex = 0; chunkIndex < metadata.totalChunks; chunkIndex++) {
+    for (let chunkIndex = 0; chunkIndex < metadata.total_chunks; chunkIndex++) {
       // Check for cancellation
       if (this.options.abortController?.signal.aborted) {
         throw new Error('Download cancelled');
@@ -419,20 +423,20 @@ export class StreamingDownloadManager {
       this.reportProgress(
         'downloading',
         chunkIndex + 1,
-        metadata.totalChunks,
+        metadata.total_chunks,
         this.bytesDownloaded,
         this.calculateTotalEncryptedSize(metadata)
       );
 
       // Update UI
       if (this.options.showProgressUI) {
-        const percentage = ((chunkIndex + 1) / metadata.totalChunks) * 100;
+        const percentage = ((chunkIndex + 1) / metadata.total_chunks) * 100;
         const speed = this.calculateSpeed();
-        const remaining = this.calculateRemainingTime(metadata.totalChunks - chunkIndex - 1, speed, metadata.chunkSizeBytes);
+        const remaining = this.calculateRemainingTime(metadata.total_chunks - chunkIndex - 1, speed, metadata.chunk_size_bytes);
         
         updateProgress({
           title: 'Downloading Shared File',
-          message: `Chunk ${chunkIndex + 1} of ${metadata.totalChunks}`,
+          message: `Chunk ${chunkIndex + 1} of ${metadata.total_chunks}`,
           percentage,
           speed,
           remainingTime: remaining,
@@ -488,7 +492,7 @@ export class StreamingDownloadManager {
    */
   private calculateTotalEncryptedSize(metadata: ChunkedDownloadMetadata): number {
     // Each chunk has AES-GCM overhead (nonce + tag)
-    return metadata.sizeBytes + (metadata.totalChunks * this.aesGcmOverhead);
+    return metadata.size_bytes + (metadata.total_chunks * this.aesGcmOverhead);
   }
 
   /**

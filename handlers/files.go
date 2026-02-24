@@ -51,6 +51,7 @@ func GetFileMeta(c echo.Context) error {
 	logging.InfoLogger.Printf("File metadata requested: file_id %s by %s (size: %d bytes, chunks: %d)", fileID, username, file.SizeBytes, totalChunks)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
+		"file_id":               file.FileID,
 		"encrypted_filename":    file.EncryptedFilename,  // Already base64 strings
 		"filename_nonce":        file.FilenameNonce,      // Already base64 strings
 		"encrypted_sha256sum":   file.EncryptedSha256sum, // Already base64 strings
@@ -61,6 +62,8 @@ func GetFileMeta(c echo.Context) error {
 		"size_bytes":            file.SizeBytes,
 		"chunk_size":            chunkSize,
 		"total_chunks":          totalChunks,
+		"chunk_count":           file.ChunkCount,
+		"chunk_size_bytes":      file.ChunkSizeBytes,
 		"encrypted_file_sha256": file.EncryptedFileSha256sum.Valid && file.EncryptedFileSha256sum.String != "",
 	})
 }

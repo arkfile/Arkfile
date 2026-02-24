@@ -1,6 +1,6 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: IN PROGRESS - Phase 1 COMPLETE, Phase 2 COMPLETE, Phase 3 COMPLETE, Phases 4-9 Not Started
+## Status: IN PROGRESS - Phases 1-3 COMPLETE, Phase 4 PARTIALLY COMPLETE (Verify 4 done), Phases 5-9 Not Started
 
 ## Context
 
@@ -686,4 +686,31 @@ Full rewrite of `client/static/js/src/files/upload.ts` implementing all 8 fixes:
 **Verification:**
 - `bunx tsc --noEmit` passes (no type errors)
 
-### Phases 4-9: NOT STARTED
+### Phase 4: Verify TS Download Module
+
+**Verify 4 (Metadata Endpoint Unification): COMPLETE** (2026-02-24)
+
+Resolved the dual-endpoint problem identified in Verify 4. Chose Option A: unified on `/api/files/:fileId/meta` and removed the redundant `/api/files/:fileId/metadata` endpoint entirely.
+
+**Server-side changes:**
+- `handlers/files.go` — `GetFileMeta` now returns `chunk_count`, `chunk_size_bytes`, and `file_id` fields in addition to existing encrypted metadata fields. This single endpoint now serves both metadata needs (encrypted fields for decryption + chunking info for download coordination).
+- `handlers/downloads.go` — removed `GetFileDownloadMetadata()` function entirely (was the `/metadata` endpoint handler). Also removed the unused `DownloadFileMetaResponse` struct.
+- `handlers/route_config.go` — removed `GET /api/files/:fileId/metadata` route.
+
+**Client-side changes (TS):**
+- `client/static/js/src/files/streaming-download.ts` — `StreamingDownloadManager.downloadFile()` now fetches from `/api/files/${fileId}/meta` instead of `/api/files/${fileId}/metadata`. Updated response field mapping: `total_chunks` → `totalChunks`, `chunk_size_bytes` → `chunkSizeBytes`, `encrypted_filename` → `encryptedFilename`, etc.
+
+**Client-side changes (Go CLI):**
+- `cmd/arkfile-client/main.go` — `handleDownloadCommand` now uses only `/api/files/{fileId}/meta` (was fetching `/metadata` separately). Removed duplicate `/meta` fetch in STEP 5 — reuses the response body from STEP 1. Parses `chunk_count` and `chunk_size_bytes` from the unified `/meta` response.
+
+**Verification:**
+- `go build ./...` passes
+- `bunx tsc --noEmit` passes (no type errors)
+
+**Remaining Phase 4 items: NOT STARTED**
+- Verify 1: Metadata field decryption matches server storage format
+- Verify 2: Envelope stripping on chunk 0
+- Verify 3: FEK decryption must strip envelope header
+- Verify 5: Cross-platform test
+
+### Phases 5-9: NOT STARTED
