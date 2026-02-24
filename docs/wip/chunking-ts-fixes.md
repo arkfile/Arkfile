@@ -1,6 +1,6 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: IN PROGRESS - Phase 1 COMPLETE, Phase 2 COMPLETE, Phases 3-9 Not Started
+## Status: IN PROGRESS - Phase 1 COMPLETE, Phase 2 COMPLETE, Phase 3 COMPLETE, Phases 4-9 Not Started
 
 ## Context
 
@@ -640,4 +640,51 @@ All four implementation steps completed and verified:
 - `bunx tsc --noEmit` passes (no type errors)
 - No stale `arkfile.*.v1` salt domain strings remain anywhere in the codebase
 
-### Phases 3-9: NOT STARTED
+### Phase 3: Fix Existing TS Upload Module
+
+**COMPLETE** (2026-02-24)
+
+Full rewrite of `client/static/js/src/files/upload.ts` implementing all 8 fixes:
+
+**Fix 1: API URL Paths and HTTP Methods — DONE**
+- Init: `/api/uploads/init` (was `/api/upload/init`)
+- Chunks: `POST /api/uploads/{sessionId}/chunks/{i}` (was `PUT /api/upload/{sessionId}/chunk/{i}`)
+- Complete: `/api/uploads/{sessionId}/complete` (was `/api/upload/{sessionId}/complete`)
+
+**Fix 2: Chunk Upload Is Raw Binary — DONE**
+- Sends `new Blob([chunkBuffer])` with `Content-Type: application/octet-stream` and `X-Chunk-Hash` header
+- No FormData or multipart encoding
+
+**Fix 3: Complete Upload Body — DONE (was already correct)**
+- No body sent on complete, just `method: 'POST'`
+
+**Fix 4: Chunk Hash Is SHA-256 of Encrypted Chunk Bytes — DONE**
+- `toHex(hash256(chunk))` computed on the encrypted chunk (including envelope on chunk 0)
+
+**Fix 5: Per-Chunk Encryption — DONE (was already correct)**
+- Each plaintext chunk encrypted independently with `encryptChunk(chunk, fek)` using unique random nonce
+- Chunk 0 gets 2-byte envelope header prepended after encryption
+
+**Fix 6: Envelope Key Type Byte Reflects Password Type — DONE**
+- `keyTypeVal` set from `chunkCfg.envelope.keyTypes.account` or `.custom` based on `passwordType`
+- Envelope header: `[envelopeVersion, keyTypeVal]`
+
+**Fix 7: password_type Only Sends account or custom — DONE**
+- Validation: `if (passwordType !== 'account' && passwordType !== 'custom')` throws error early
+
+**Fix 8: encrypted_fek Includes 2-Byte Envelope Header — DONE**
+- `concatBytes(envelopeHeader, encryptedFekResult.iv, encryptedFekResult.ciphertext, encryptedFekResult.tag)`
+- Matches `crypto.EncryptFEK()` format: `[version(1)][keyType(1)][nonce(12)][ciphertext][tag(16)]`
+
+**Additional improvements in rewrite:**
+- Removed duplicate `uploadFileWithKey()` — single `uploadFile()` entry point with `UploadOptions` interface
+- Metadata (filename, SHA256) always encrypted with account key, not FEK (matches Go CLI)
+- `resolveAccountKey()` helper: checks provided key → cache → password derivation
+- All constants loaded from `getChunkingParams()` (single source of truth from Phase 1)
+- Simplified `handleFileUpload()` UI function with proper account key caching flow
+- Progress reporting with phases: `deriving-key`, `encrypting`, `uploading`, `completing`
+
+**Verification:**
+- `bunx tsc --noEmit` passes (no type errors)
+
+### Phases 4-9: NOT STARTED
