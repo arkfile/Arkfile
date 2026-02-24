@@ -9,9 +9,6 @@ import (
 	"os"
 )
 
-// ChunkSize for streaming operations (16MB)
-const ChunkSize = 16 * 1024 * 1024
-
 // EncryptGCM encrypts data using AES-256-GCM
 // Returns: nonce + ciphertext + tag (all concatenated)
 func EncryptGCM(data, key []byte) ([]byte, error) {
@@ -144,7 +141,7 @@ func EncryptStreamGCM(reader io.Reader, writer io.Writer, key []byte) error {
 		return fmt.Errorf("failed to create GCM: %w", err)
 	}
 
-	buffer := make([]byte, ChunkSize)
+	buffer := make([]byte, int(PlaintextChunkSize()))
 	chunkIndex := 0
 
 	for {
@@ -207,7 +204,7 @@ func DecryptStreamGCM(reader io.Reader, writer io.Writer, key []byte) error {
 	minChunkSize := nonceSize + tagSize
 
 	// Buffer for reading chunks
-	buffer := make([]byte, ChunkSize+minChunkSize)
+	buffer := make([]byte, int(PlaintextChunkSize())+minChunkSize)
 	chunkIndex := 0
 
 	for {

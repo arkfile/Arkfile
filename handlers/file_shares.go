@@ -15,6 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/84adam/Arkfile/auth"
+	arkcrypto "github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/storage"
@@ -799,7 +800,7 @@ func GetShareDownloadMetadata(c echo.Context) error {
 		chunkCountInt = 1
 	}
 	if chunkSizeBytesInt == 0 {
-		chunkSizeBytesInt = 16 * 1024 * 1024 // 16MB default
+		chunkSizeBytesInt = arkcrypto.PlaintextChunkSize() // default from config
 	}
 
 	logging.InfoLogger.Printf("Share chunk info accessed: share_id=%s..., file=%s, entity_id=%s", shareID[:8], share.FileID, entityID)
@@ -930,7 +931,7 @@ func DownloadShareChunk(c echo.Context) error {
 		chunkCount = 1
 	}
 	if chunkSizeBytes == 0 {
-		chunkSizeBytes = 16 * 1024 * 1024 // 16MB default
+		chunkSizeBytes = arkcrypto.PlaintextChunkSize() // default from config
 	}
 
 	// Validate chunk index

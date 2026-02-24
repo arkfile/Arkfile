@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/crypto"
 	"golang.org/x/term"
 )
 
@@ -893,7 +894,7 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 	var (
 		filePath     = fs.String("file", "", "Pre-encrypted file to upload (required)")
 		metadataFile = fs.String("metadata", "", "JSON file with encrypted metadata (required)")
-		chunkSize    = fs.Int("chunk-size", 16*1024*1024, "Chunk size in bytes")
+		chunkSize    = fs.Int("chunk-size", int(crypto.PlaintextChunkSize()), "Chunk size in bytes")
 		showProgress = fs.Bool("progress", true, "Show upload progress")
 		// Raw metadata flags for when not using a metadata file
 		encFilename = fs.String("encrypted-filename", "", "Base64 encrypted filename")
@@ -916,7 +917,7 @@ FLAGS:
     --encrypted-fek         Base64 encrypted FEK
     --password-type TYPE    Password type: account/custom/share (default: account)
     
-    --chunk-size SIZE       Chunk size in bytes (default: 16777216 = 16MB)
+    --chunk-size SIZE       Chunk size in bytes (default: from chunking-params.json)
     --progress             Show upload progress (default: true)
     --help                 Show this help message
 

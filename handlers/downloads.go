@@ -8,6 +8,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/models"
@@ -123,7 +124,7 @@ func DownloadFileChunk(c echo.Context) error {
 	// Calculate byte range for this chunk
 	chunkSizeBytes := file.ChunkSizeBytes
 	if chunkSizeBytes <= 0 {
-		chunkSizeBytes = models.DefaultChunkSizeBytes
+		chunkSizeBytes = crypto.PlaintextChunkSize()
 	}
 
 	startByte := chunkIndex * chunkSizeBytes

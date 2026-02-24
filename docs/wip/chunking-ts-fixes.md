@@ -1,6 +1,6 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: IN PROGRESS - Phase 1 TS Side Complete, Go Side Pending
+## Status: IN PROGRESS - Phase 1 Complete (TS + Go), Phases 2-9 Not Started
 
 ## Context
 
@@ -585,18 +585,25 @@ Files updated (TS):
 
 Zero old constant references remain in TS (`AES_GCM_NONCE_SIZE`, `AES_GCM_TAG_SIZE`, `CHUNK_SIZE`, `DEFAULT_CHUNK_SIZE_BYTES`, `ENVELOPE_VERSION`, `ENVELOPE_TYPE_AES_GCM` — all confirmed absent via search).
 
-**Go side: NOT STARTED**
+**Go side: COMPLETE** (2026-02-24)
 
-17 hardcoded `16 * 1024 * 1024` references remain across Go files:
-- `crypto/gcm.go` — `const ChunkSize`
-- `models/file.go` — `const DefaultChunkSizeBytes`
-- `handlers/uploads.go` — 3 inline references
-- `handlers/files.go` — 1 local const
-- `handlers/file_shares.go` — 2 inline references
-- `cmd/arkfile-client/main.go` — CLI default flag
+All non-test Go files updated to use `crypto.GetChunkingParams()` or convenience functions (`crypto.PlaintextChunkSize()`, `crypto.AESGCMNonceSize()`, `crypto.AESGCMTagSize()`, `crypto.EnvelopeHeaderSize()`, `crypto.EnvelopeVersion()`, `crypto.KeyTypeAccount()`, `crypto.KeyTypeCustom()`). Build verified (`go build ./...` passes).
+
+Files updated (Go):
+- `crypto/gcm.go` — removed `const ChunkSize = 16 * 1024 * 1024`. `EncryptChunks()` and `DecryptChunks()` now use `PlaintextChunkSize()`. All 3 hardcoded `tagSize := 16` replaced with `AESGCMTagSize()`. Nonce sizes use `AESGCMNonceSize()`. Envelope header sizes use `EnvelopeHeaderSize()`.
+- `models/file.go` — removed `const DefaultChunkSizeBytes = 16 * 1024 * 1024`. `CalculateChunkCount()` now uses `crypto.PlaintextChunkSize()`.
+- `handlers/uploads.go` — all 3 inline `16 * 1024 * 1024` references replaced with `crypto.PlaintextChunkSize()`. Envelope/nonce/tag sizes use crypto functions.
+- `handlers/files.go` — removed local `const chunkSize = 16 * 1024 * 1024`. `GetFileMeta` now uses `crypto.PlaintextChunkSize()`.
+- `handlers/file_shares.go` — both inline `16 * 1024 * 1024` references replaced with `crypto.PlaintextChunkSize()`.
+- `handlers/downloads.go` — already used DB value for chunk size; no hardcoded constant to replace.
+- `cmd/arkfile-client/main.go` — CLI default flag now uses `int(crypto.PlaintextChunkSize())` instead of `16*1024*1024`. Added `crypto` import.
+
+**Test files: NOT YET UPDATED**
+
+8 hardcoded references remain in test files only:
 - `handlers/chunked_upload_100mb_test.go` — 3 references
 - `handlers/chunked_upload_integration_test.go` — 5 references
 
-These should all reference `crypto.GetChunkingParams().PlaintextChunkSizeBytes` (or a package-level var initialized from it). Similarly, hardcoded `tagSize := 16` in `crypto/gcm.go` (3 occurrences) should use the embedded config.
+These should be updated to use `crypto.PlaintextChunkSize()` but are lower priority since they don't affect production behavior.
 
 ### Phases 2-9: NOT STARTED

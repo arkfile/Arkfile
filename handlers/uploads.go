@@ -16,6 +16,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/models"
@@ -90,8 +91,8 @@ func CreateUploadSession(c echo.Context) error {
 
 	// Validate and set default chunk size to prevent divide by zero
 	if request.ChunkSize <= 0 {
-		logging.InfoLogger.Printf("Invalid chunk_size %d received, defaulting to 16MB (16,777,216 bytes)", request.ChunkSize)
-		request.ChunkSize = 16 * 1024 * 1024 // 16MB default
+		logging.InfoLogger.Printf("Invalid chunk_size %d received, defaulting to configured plaintext chunk size", request.ChunkSize)
+		request.ChunkSize = int(crypto.PlaintextChunkSize())
 	}
 
 	totalChunks := (request.TotalSize + int64(request.ChunkSize) - 1) / int64(request.ChunkSize)
@@ -463,7 +464,7 @@ func UploadChunk(c echo.Context) error {
 		if chunkNumber != 0 {
 			maxEnvelopeOverhead = 0
 		}
-		maxChunkSize := int64(16*1024*1024) + maxEnvelopeOverhead + 28
+		maxChunkSize := crypto.PlaintextChunkSize() + maxEnvelopeOverhead + 28
 		if contentLength > maxChunkSize {
 			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Chunk %d too large: maximum %d bytes allowed", chunkNumber, maxChunkSize))
 		}
@@ -701,7 +702,7 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get chunk size")
 	}
 
-	var chunkSizeBytes int64 = 16 * 1024 * 1024 // Default 16MB
+	var chunkSizeBytes int64 = crypto.PlaintextChunkSize() // Default from config
 	if chunkSizeFloat.Valid && chunkSizeFloat.Float64 > 0 {
 		chunkSizeBytes = int64(chunkSizeFloat.Float64)
 	}

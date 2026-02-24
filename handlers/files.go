@@ -8,6 +8,7 @@ import (
 
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/config"
+	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/models"
@@ -43,8 +44,8 @@ func GetFileMeta(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Account pending approval. File downloads are restricted until your account is approved by an administrator. You can still access other features of your account.")
 	}
 
-	// Calculate chunk size and total chunks (16MB = 16 * 1024 * 1024 = 16777216)
-	const chunkSize int64 = 16 * 1024 * 1024
+	// Calculate chunk size and total chunks from config
+	chunkSize := crypto.PlaintextChunkSize()
 	totalChunks := (file.SizeBytes + chunkSize - 1) / chunkSize
 
 	logging.InfoLogger.Printf("File metadata requested: file_id %s by %s (size: %d bytes, chunks: %d)", fileID, username, file.SizeBytes, totalChunks)

@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/84adam/Arkfile/crypto"
 	"github.com/google/uuid"
 )
-
-// DefaultChunkSizeBytes is the default chunk size for chunked downloads (16MB)
-const DefaultChunkSizeBytes = 16 * 1024 * 1024 // 16MB
 
 type File struct {
 	ID                     int64          `json:"id"`
@@ -48,7 +46,7 @@ func CalculateChunkCount(sizeBytes int64, chunkSizeBytes int64) int64 {
 		return 1
 	}
 	if chunkSizeBytes <= 0 {
-		chunkSizeBytes = DefaultChunkSizeBytes
+		chunkSizeBytes = crypto.PlaintextChunkSize()
 	}
 	count := sizeBytes / chunkSizeBytes
 	if sizeBytes%chunkSizeBytes != 0 {
@@ -64,7 +62,7 @@ func CalculateChunkCount(sizeBytes int64, chunkSizeBytes int64) int64 {
 func CreateFile(db *sql.DB, fileID, storageID, ownerUsername, passwordHint, passwordType string,
 	filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum string, sizeBytes int64) (*File, error) {
 
-	chunkSizeBytes := int64(DefaultChunkSizeBytes)
+	chunkSizeBytes := crypto.PlaintextChunkSize()
 	chunkCount := CalculateChunkCount(sizeBytes, chunkSizeBytes)
 
 	result, err := db.Exec(`
@@ -168,9 +166,9 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	case float64:
 		file.ChunkSizeBytes = int64(v)
 	case nil:
-		file.ChunkSizeBytes = DefaultChunkSizeBytes
+		file.ChunkSizeBytes = crypto.PlaintextChunkSize()
 	default:
-		file.ChunkSizeBytes = DefaultChunkSizeBytes
+		file.ChunkSizeBytes = crypto.PlaintextChunkSize()
 	}
 
 	// Parse timestamp string to time.Time
@@ -265,9 +263,9 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	case float64:
 		file.ChunkSizeBytes = int64(v)
 	case nil:
-		file.ChunkSizeBytes = DefaultChunkSizeBytes
+		file.ChunkSizeBytes = crypto.PlaintextChunkSize()
 	default:
-		file.ChunkSizeBytes = DefaultChunkSizeBytes
+		file.ChunkSizeBytes = crypto.PlaintextChunkSize()
 	}
 
 	// Parse timestamp string to time.Time
@@ -370,9 +368,9 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 		case float64:
 			file.ChunkSizeBytes = int64(v)
 		case nil:
-			file.ChunkSizeBytes = DefaultChunkSizeBytes
+			file.ChunkSizeBytes = crypto.PlaintextChunkSize()
 		default:
-			file.ChunkSizeBytes = DefaultChunkSizeBytes
+			file.ChunkSizeBytes = crypto.PlaintextChunkSize()
 		}
 
 		// Parse timestamp string to time.Time
