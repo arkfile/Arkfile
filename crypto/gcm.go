@@ -60,7 +60,7 @@ func DecryptGCM(data, key []byte) ([]byte, error) {
 
 	// Check minimum length (nonce + tag)
 	nonceSize := gcm.NonceSize()
-	tagSize := 16 // GCM tag size is always 16 bytes
+	tagSize := AesGcmTagSize()
 	minSize := nonceSize + tagSize
 
 	if len(data) < minSize {
@@ -200,7 +200,7 @@ func DecryptStreamGCM(reader io.Reader, writer io.Writer, key []byte) error {
 	}
 
 	nonceSize := gcm.NonceSize()
-	tagSize := 16 // GCM tag size
+	tagSize := AesGcmTagSize()
 	minChunkSize := nonceSize + tagSize
 
 	// Buffer for reading chunks
@@ -313,7 +313,7 @@ func DecryptGCMWithAAD(data, key, aad []byte) ([]byte, error) {
 
 	// Check minimum length (nonce + tag)
 	nonceSize := gcm.NonceSize()
-	tagSize := 16 // GCM tag size is always 16 bytes
+	tagSize := AesGcmTagSize()
 	minSize := nonceSize + tagSize
 
 	if len(data) < minSize {

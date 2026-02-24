@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/84adam/Arkfile/crypto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,7 +47,7 @@ func TestChunkedUpload100MB(t *testing.T) {
 	envelope, encryptedChunks, err := simulateClientEncryption(originalData, exportKey, username, fileID, "account")
 	require.NoError(t, err)
 
-	expectedChunkCount := (fileSize + 16*1024*1024 - 1) / (16 * 1024 * 1024) // Ceiling division
+	expectedChunkCount := (fileSize + int(crypto.PlaintextChunkSize()) - 1) / int(crypto.PlaintextChunkSize()) // Ceiling division
 	require.Equal(t, expectedChunkCount, len(encryptedChunks), "Chunk count should match expected")
 
 	t.Logf("Client encryption: created %d chunks with envelope (expected %d)", len(encryptedChunks), expectedChunkCount)
@@ -88,7 +89,7 @@ func TestChunkedUpload100MB(t *testing.T) {
 	}
 
 	// Verify chunks across different positions in the large file
-	chunkSize := 16 * 1024 * 1024
+	chunkSize := int(crypto.PlaintextChunkSize())
 	for chunkIdx := 0; chunkIdx < len(encryptedChunks); chunkIdx++ {
 		startByte := chunkIdx * chunkSize
 		endByte := startByte + chunkSize

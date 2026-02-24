@@ -87,6 +87,16 @@ func EnvelopeHeaderSize() int {
 	return MustGetChunkingParams().Envelope.HeaderSizeBytes
 }
 
+// AesGcmTagSize returns the AES-GCM authentication tag size in bytes
+func AesGcmTagSize() int {
+	return MustGetChunkingParams().AesGcm.TagSizeBytes
+}
+
+// AesGcmNonceSize returns the AES-GCM nonce size in bytes
+func AesGcmNonceSize() int {
+	return MustGetChunkingParams().AesGcm.NonceSizeBytes
+}
+
 // KeyTypeForContext returns the envelope key type byte for a given password context
 func KeyTypeForContext(passwordType string) (byte, error) {
 	p := MustGetChunkingParams()

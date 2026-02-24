@@ -438,33 +438,35 @@ func UploadChunk(c echo.Context) error {
 	}
 
 	// Phase 2: Validate chunk format based on chunk number
-	// Chunk 0: [2-byte envelope][nonce][encrypted_data][tag] = 2 + 12 + 1 + 16 = 31 bytes minimum
-	// Chunks 1-N: [nonce][encrypted_data][tag] = 12 + 1 + 16 = 29 bytes minimum
+	// Chunk 0: [envelope][nonce][encrypted_data][tag] = envelope + nonce + 1 + tag bytes minimum
+	// Chunks 1-N: [nonce][encrypted_data][tag] = nonce + 1 + tag bytes minimum
 	contentLength := c.Request().ContentLength
+	gcmOverhead := int64(crypto.AesGcmOverhead()) // nonce + tag
+	envelopeSize := int64(crypto.EnvelopeHeaderSize())
 	if contentLength != -1 {
 		var minChunkSize int64
 		var description string
 
 		if chunkNumber == 0 {
-			// Chunk 0 includes envelope: 2 (envelope) + 12 (nonce) + 1 (data) + 16 (tag) = 31 bytes
-			minChunkSize = 31
-			description = "minimum 31 bytes required (includes envelope)"
+			// Chunk 0 includes envelope header + nonce + at least 1 byte data + tag
+			minChunkSize = envelopeSize + gcmOverhead + 1
+			description = fmt.Sprintf("minimum %d bytes required (includes envelope)", minChunkSize)
 		} else {
-			// Regular chunks: 12 (nonce) + 1 (data) + 16 (tag) = 29 bytes
-			minChunkSize = 29
-			description = "minimum 29 bytes required"
+			// Regular chunks: nonce + at least 1 byte data + tag
+			minChunkSize = gcmOverhead + 1
+			description = fmt.Sprintf("minimum %d bytes required", minChunkSize)
 		}
 
 		if contentLength < minChunkSize {
 			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Chunk %d too small: %s", chunkNumber, description))
 		}
 
-		// Maximum chunk size: 16MB + envelope overhead (2 bytes for chunk 0) + crypto overhead (28 bytes)
-		maxEnvelopeOverhead := int64(2) // Only for chunk 0
+		// Maximum chunk size: plaintext chunk size + envelope overhead (chunk 0 only) + crypto overhead
+		maxEnvelopeOverhead := envelopeSize // Only for chunk 0
 		if chunkNumber != 0 {
 			maxEnvelopeOverhead = 0
 		}
-		maxChunkSize := crypto.PlaintextChunkSize() + maxEnvelopeOverhead + 28
+		maxChunkSize := crypto.PlaintextChunkSize() + maxEnvelopeOverhead + gcmOverhead
 		if contentLength > maxChunkSize {
 			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Chunk %d too large: maximum %d bytes allowed", chunkNumber, maxChunkSize))
 		}

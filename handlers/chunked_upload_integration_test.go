@@ -154,7 +154,7 @@ func simulateClientEncryption(data []byte, exportKey []byte, username, fileID, k
 	}
 
 	// Split into 16MB chunks and encrypt each
-	chunkSize := 16 * 1024 * 1024
+	chunkSize := int(crypto.PlaintextChunkSize())
 	var encryptedChunks [][]byte
 
 	for offset := 0; offset < len(data); offset += chunkSize {
@@ -186,7 +186,7 @@ func simulateCreateUploadSession(t *testing.T, username, fileID, storageID strin
 		"fileId":       fileID,
 		"storageId":    storageID,
 		"totalSize":    totalSize,
-		"chunkSize":    16 * 1024 * 1024,
+		"chunkSize":    int(crypto.PlaintextChunkSize()),
 		"originalHash": originalHash,
 		"passwordHint": "",
 		"passwordType": "account",
@@ -400,7 +400,7 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, usernam
 
 		// Try expected chunk sizes first (much faster)
 		expectedSizes := []int{
-			16*1024*1024 + 16,  // 16MB + tag (most common)
+			int(crypto.PlaintextChunkSize()) + crypto.AesGcmTagSize(), // chunk size + tag (most common)
 			len(remainingData), // Last chunk (entire remaining data)
 		}
 
@@ -423,7 +423,7 @@ func simulateClientDecryption(concatenatedData []byte, exportKey []byte, usernam
 		// Fallback to brute force if expected sizes didn't work
 		if !found {
 			fmt.Printf("Trying brute force for chunk %d...\n", chunkNumber)
-			maxChunkDataSize := 16*1024*1024 + 100 // Some tolerance
+			maxChunkDataSize := int(crypto.PlaintextChunkSize()) + 100 // Some tolerance
 
 			for chunkDataSize := 1; chunkDataSize <= len(remainingData) && chunkDataSize <= maxChunkDataSize; chunkDataSize++ {
 				if chunkDataSize%1000000 == 0 { // Progress every MB
