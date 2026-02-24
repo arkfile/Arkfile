@@ -11,7 +11,7 @@
     "test:integration": "bun run tests/integration/test-runner.ts",
     "dev": "bun build src/app.ts --outdir dist --target browser --watch",
     "clean": "rm -rf dist/*",
-    "lint": "bun tsc --noEmit && echo '✅ TypeScript checks passed'",
+    "lint": "bun tsc --noEmit && echo '[OK] TypeScript checks passed'",
     "test:unit": "bun test tests/unit/",
     "test:all": "bun test",
     "build:dev": "bun build src/app.ts --outdir dist --target browser --format iife --sourcemap",

@@ -21,9 +21,9 @@ echo -e "${YELLOW}This is NOT suitable for production use without security harde
 echo -e "${YELLOW}For production, regenerate ALL credentials and certificates.${NC}"
 echo
 echo -e "${BLUE}Demo credentials will be created:${NC}"
-echo -e "${YELLOW}  • MinIO: arkfile-demo / TestPassword123_SecureMinIO${NC}"
-echo -e "${YELLOW}  • JWT: Random secret (generated automatically)${NC}"
-echo -e "${YELLOW}  • Admin: admin@arkfile.demo${NC}"
+echo -e "${YELLOW}  - MinIO: arkfile-demo / TestPassword123_SecureMinIO${NC}"
+echo -e "${YELLOW}  - JWT: Random secret (generated automatically)${NC}"
+echo -e "${YELLOW}  - Admin: admin@arkfile.demo${NC}"
 echo
 read -p "Continue with demo setup? [y/N]: " -n 1 -r
 echo
@@ -396,7 +396,7 @@ if [ "$arkfile_status" = "active" ]; then
     echo "1. Open your web browser"
     if [ -n "$tls_enabled" ]; then
         echo "2. Go to: https://localhost:${arkfile_tls_port} (recommended) or http://localhost:${arkfile_port}"
-        echo "   • For HTTPS: Accept the self-signed certificate warning"
+        echo "   - For HTTPS: Accept the self-signed certificate warning"
     else
         echo "2. Go to: http://localhost:${arkfile_port}"
     fi
@@ -405,16 +405,16 @@ if [ "$arkfile_status" = "active" ]; then
     echo "5. Create a file share to test sharing functionality"
     echo
     echo -e "${BLUE}Administrative Commands:${NC}"
-    echo "• View logs: sudo journalctl -u arkfile -f"
-    echo "• Restart services: sudo systemctl restart arkfile"
-    echo "• Check status: sudo systemctl status arkfile"
-    echo "• Security audit: ./scripts/maintenance/security-audit.sh"
+    echo "- View logs: sudo journalctl -u arkfile -f"
+    echo "- Restart services: sudo systemctl restart arkfile"
+    echo "- Check status: sudo systemctl status arkfile"
+    echo "- Security audit: ./scripts/maintenance/security-audit.sh"
     echo
     echo -e "${BLUE}Configuration Files:${NC}"
-    echo "• Main config: /opt/arkfile/etc/secrets.env"
-    echo "• Service logs: /opt/arkfile/var/log/"
-    echo "• Database: rqlite cluster (port 4001)"
-    echo "• Object storage: /opt/arkfile/var/lib/minio/data"
+    echo "- Main config: /opt/arkfile/etc/secrets.env"
+    echo "- Service logs: /opt/arkfile/var/log/"
+    echo "- Database: rqlite cluster (port 4001)"
+    echo "- Object storage: /opt/arkfile/var/lib/minio/data"
     echo
     echo -e "${GREEN}[OK] System is ready for use!${NC}"
     

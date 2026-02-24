@@ -87,6 +87,6 @@ func GetTOTPMasterKeyStatus() (bool, int) {
 // SecureZeroTOTPKey clears a TOTP key from memory
 func SecureZeroTOTPKey(key []byte) {
 	if key != nil {
-		SecureZeroBytes(key)
+		SecureClear(key)
 	}
 }

@@ -80,22 +80,22 @@ func SanitizeUsername(username string) string {
 // GetUsernameValidationRules returns a human-readable description of username rules
 func GetUsernameValidationRules() string {
 	return fmt.Sprintf(`Username Requirements:
-• Length: %d-%d characters
-• Allowed characters: letters (a-z, A-Z), numbers (0-9), underscore (_), hyphen (-), period (.), comma (,)
-• Cannot start or end with special characters (_, -, ., ,)
-• Cannot contain consecutive special characters
-• Case-sensitive (usernames are stored exactly as entered)
-• Must be unique across the system
+- Length: %d-%d characters
+- Allowed characters: letters (a-z, A-Z), numbers (0-9), underscore (_), hyphen (-), period (.), comma (,)
+- Cannot start or end with special characters (_, -, ., ,)
+- Cannot contain consecutive special characters
+- Case-sensitive (usernames are stored exactly as entered)
+- Must be unique across the system
 
 Valid examples:
-• john.doe.2024
-• user_name_123
-• alice,bob,charlie
-• my-project.v1
+- john.doe.2024
+- user_name_123
+- alice,bob,charlie
+- my-project.v1
 
 Invalid examples:
-• short123 (too short)
-• .username (starts with period)
-• user..name (consecutive periods)
-• user@domain (contains @)`, MinUsernameLength, MaxUsernameLength)
+- short123 (too short)
+- .username (starts with period)
+- user..name (consecutive periods)
+- user@domain (contains @)`, MinUsernameLength, MaxUsernameLength)
 }

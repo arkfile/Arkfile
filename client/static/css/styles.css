@@ -240,7 +240,7 @@ button:hover {
 }
 
 .requirements-list li::before {
-    content: "•";
+    content: "-";
     color: #999;
 }
 

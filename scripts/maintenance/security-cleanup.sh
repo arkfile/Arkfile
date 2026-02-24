@@ -151,9 +151,9 @@ echo
 echo -e "${RED}OR USERS CAN USE INCOGNITO/PRIVATE BROWSING MODE${NC}"
 echo
 echo -e "${YELLOW}ADMINISTRATORS SHOULD NOTIFY ALL USERS TO:${NC}"
-echo "• Clear their browser storage (instructions above)"
-echo "• Log in again with their credentials"
-echo "• Set up TOTP again if they had it enabled"
+echo "- Clear their browser storage (instructions above)"
+echo "- Log in again with their credentials"
+echo "- Set up TOTP again if they had it enabled"
 echo
 echo -e "${GREEN}[OK] Security cleanup completed successfully${NC}"
 echo -e "${BLUE}New JWT secret: ${NEW_JWT_SECRET:0:16}... (truncated for security)${NC}"

@@ -32,13 +32,13 @@ echo -e "${YELLOW}[WARNING]  WARNING: This script will help you remove Arkfile f
 echo -e "${YELLOW}You will be prompted before each component is removed.${NC}"
 echo
 echo -e "${BLUE}Components that may be removed:${NC}"
-echo "• Arkfile services (arkfile, minio, rqlite)"
-echo "• System user and group (arkfile)"
-echo "• Installation directory (/opt/arkfile)"
-echo "• Cryptographic keys and certificates"
-echo "• Downloaded binaries (MinIO, rqlite)"
-echo "• Systemd service files"
-echo "• Configuration and log files"
+echo "- Arkfile services (arkfile, minio, rqlite)"
+echo "- System user and group (arkfile)"
+echo "- Installation directory (/opt/arkfile)"
+echo "- Cryptographic keys and certificates"
+echo "- Downloaded binaries (MinIO, rqlite)"
+echo "- Systemd service files"
+echo "- Configuration and log files"
 echo
 echo -e "${CYAN}A backup of cryptographic keys can be created before removal.${NC}"
 echo
@@ -213,9 +213,9 @@ if [ -d "$ARKFILE_DIR/etc/keys" ]; then
             echo -e "${GREEN}[INFO] Backup created successfully!${NC}"
             echo "Keys backed up to: $BACKUP_DIR/keys"
             echo "This backup includes:"
-            echo "• OPAQUE server keys"
-            echo "• JWT signing keys"
-            echo "• TLS certificates"
+            echo "- OPAQUE server keys"
+            echo "- JWT signing keys"
+            echo "- TLS certificates"
             echo
         else
             print_status "ERROR" "Failed to create key backup"
@@ -309,7 +309,7 @@ done
 if [ ${#FOUND_SERVICE_FILES[@]} -gt 0 ]; then
     echo "Service files found:"
     for file in "${FOUND_SERVICE_FILES[@]}"; do
-        echo "  • $file"
+        echo "  - $file"
     done
     
     if ask_yes_no "Remove systemd service files?"; then
@@ -339,11 +339,11 @@ if [ -d "$ARKFILE_DIR" ]; then
     echo
     echo -e "${RED}[WARNING]  WARNING: This will delete all uploaded files and databases!${NC}"
     echo "This includes:"
-    echo "• User uploaded files"
-    echo "• Database content"
-    echo "• Configuration files"
-    echo "• Log files"
-    echo "• Cryptographic keys (unless backed up above)"
+    echo "- User uploaded files"
+    echo "- Database content"
+    echo "- Configuration files"
+    echo "- Log files"
+    echo "- Cryptographic keys (unless backed up above)"
     echo
     
     if ask_yes_no "Remove installation directory and all data?"; then
@@ -413,7 +413,7 @@ done
 if [ ${#FOUND_BINARIES[@]} -gt 0 ]; then
     echo "Downloaded binaries found:"
     for binary in "${FOUND_BINARIES[@]}"; do
-        echo "  • $binary"
+        echo "  - $binary"
     done
     
     if ask_yes_no "Remove downloaded binaries?"; then

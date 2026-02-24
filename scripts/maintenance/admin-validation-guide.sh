@@ -175,16 +175,16 @@ echo
 echo "You can test the system using either:"
 echo
 echo -e "${GREEN}Option A: HTTP Testing (Recommended for validation)${NC}"
-echo "   • URL: http://localhost:8080"
-echo "   • No certificate warnings"
-echo "   • Same OPAQUE security"
-echo "   • Faster for testing"
+echo "   - URL: http://localhost:8080"
+echo "   - No certificate warnings"
+echo "   - Same OPAQUE security"
+echo "   - Faster for testing"
 echo
 echo -e "${CYAN}Option B: HTTPS Testing (Production-like)${NC}"
-echo "   • URL: https://localhost"
-echo "   • Certificate warnings expected"
-echo "   • Full TLS stack testing"
-echo "   • More realistic production test"
+echo "   - URL: https://localhost"
+echo "   - Certificate warnings expected"
+echo "   - Full TLS stack testing"
+echo "   - More realistic production test"
 echo
 read -p "Choose testing method (A/B) [A]: " TESTING_METHOD
 TESTING_METHOD=${TESTING_METHOD:-A}
@@ -370,10 +370,10 @@ if [ $TESTS_FAILED -eq 0 ]; then
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo
     echo -e "${BLUE}[START] NEXT STEPS:${NC}"
-    echo "• Your system is ready for production use"
-    echo "• Consider running security audit: ./scripts/security-audit.sh"
-    echo "• Set up monitoring and backups for production deployment"
-    echo "• Upgrade to production TLS certificates when ready"
+    echo "- Your system is ready for production use"
+    echo "- Consider running security audit: ./scripts/security-audit.sh"
+    echo "- Set up monitoring and backups for production deployment"
+    echo "- Upgrade to production TLS certificates when ready"
     
 elif [ $TESTS_FAILED -le 2 ]; then
     echo -e "${YELLOW}[WARNING]  VALIDATION COMPLETED WITH MINOR ISSUES${NC}"
@@ -385,10 +385,10 @@ elif [ $TESTS_FAILED -le 2 ]; then
     echo -e "${YELLOW}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo
     echo -e "${BLUE}RECOMMENDED ACTIONS:${NC}"
-    echo "• Review failed tests above and address issues"
-    echo "• Run deployment validation: ./scripts/validate-deployment.sh"
-    echo "• Check service logs: sudo journalctl -u arkfile"
-    echo "• Most functionality should work despite minor issues"
+    echo "- Review failed tests above and address issues"
+    echo "- Run deployment validation: ./scripts/validate-deployment.sh"
+    echo "- Check service logs: sudo journalctl -u arkfile"
+    echo "- Most functionality should work despite minor issues"
     
 else
     echo -e "${RED}[X] VALIDATION FAILED${NC}"
@@ -410,11 +410,11 @@ fi
 
 echo
 echo -e "${BLUE}ADDITIONAL RESOURCES:${NC}"
-echo "• Admin Testing Guide: docs/admin-testing-guide.md"
-echo "• Deployment Guide: docs/deployment-guide.md"
-echo "• Security Operations: docs/security-operations.md"
-echo "• Health Dashboard: ${TEST_URL}/health"
-echo "• System Logs: sudo journalctl -u arkfile -f"
+echo "- Admin Testing Guide: docs/admin-testing-guide.md"
+echo "- Deployment Guide: docs/deployment-guide.md"
+echo "- Security Operations: docs/security-operations.md"
+echo "- Health Dashboard: ${TEST_URL}/health"
+echo "- System Logs: sudo journalctl -u arkfile -f"
 
 echo
 echo -e "${CYAN}Validation completed at: $(date)${NC}"

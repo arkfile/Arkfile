@@ -47,11 +47,6 @@ func DecryptWithNonce(ciphertext, key, nonce []byte) ([]byte, error) {
 	return DecryptGCM(combined, key)
 }
 
-// SecureZeroBytes is an alias for SecureClear for backward compatibility
-func SecureZeroBytes(data []byte) {
-	SecureClear(data)
-}
-
 // SecureCompare performs constant-time comparison of two byte slices
 func SecureCompare(a, b []byte) bool {
 	return subtle.ConstantTimeCompare(a, b) == 1

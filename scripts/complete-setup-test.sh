@@ -42,22 +42,22 @@ echo "2. Foundation setup - Create user, directories, keys, certificates"
 echo "3. Complete setup - Foundation + MinIO + rqlite + Caddy + start services"
 echo
 echo -e "${BLUE}[INFO] Environment Variables for Customization:${NC}"
-echo "• SKIP_TESTS=1        - Skip all test execution"
-echo "• SKIP_PERFORMANCE=1  - Skip performance benchmarks"
-echo "• SKIP_GOLDEN=1       - Skip golden test preservation"
-echo "• SKIP_BUILD=1        - Skip application build"
-echo "• SKIP_TLS=1          - Skip TLS certificate generation"
-echo "• SKIP_DOWNLOAD=1     - Skip MinIO downloads (use cached)"
-echo "• FORCE_REBUILD=1     - Force rebuild all components"
+echo "- SKIP_TESTS=1        - Skip all test execution"
+echo "- SKIP_PERFORMANCE=1  - Skip performance benchmarks"
+echo "- SKIP_GOLDEN=1       - Skip golden test preservation"
+echo "- SKIP_BUILD=1        - Skip application build"
+echo "- SKIP_TLS=1          - Skip TLS certificate generation"
+echo "- SKIP_DOWNLOAD=1     - Skip MinIO downloads (use cached)"
+echo "- FORCE_REBUILD=1     - Force rebuild all components"
 echo
 echo -e "${RED}WARNING: Full/Complete setup will make system changes including:${NC}"
-echo "• Creating 'arkfile' system user and group"
-echo "• Creating directories in /opt/arkfile and /etc/arkfile"
-echo "• Setting up proper permissions and ownership"
-echo "• Installing systemd service files"
-echo "• Installing and configuring MinIO, rqlite (Complete mode only)"
-echo "• Installing and configuring Caddy reverse proxy (Complete mode only)"
-echo "• Starting all services (Complete mode only)"
+echo "- Creating 'arkfile' system user and group"
+echo "- Creating directories in /opt/arkfile and /etc/arkfile"
+echo "- Setting up proper permissions and ownership"
+echo "- Installing systemd service files"
+echo "- Installing and configuring MinIO, rqlite (Complete mode only)"
+echo "- Installing and configuring Caddy reverse proxy (Complete mode only)"
+echo "- Starting all services (Complete mode only)"
 echo
 echo "Choose setup level:"
 echo "- Type 'FOUNDATION' for foundation setup only"
@@ -87,13 +87,13 @@ fi
 # Display active skip options
 if [ "$SKIP_TESTS" = "1" ] || [ "$SKIP_PERFORMANCE" = "1" ] || [ "$SKIP_GOLDEN" = "1" ] || [ "$SKIP_BUILD" = "1" ] || [ "$SKIP_TLS" = "1" ] || [ "$SKIP_DOWNLOAD" = "1" ] || [ "$FORCE_REBUILD" = "1" ]; then
     echo -e "${YELLOW}Active Environment Variables:${NC}"
-    [ "$SKIP_TESTS" = "1" ] && echo "  • SKIP_TESTS=1 - Test execution disabled"
-    [ "$SKIP_PERFORMANCE" = "1" ] && echo "  • SKIP_PERFORMANCE=1 - Performance benchmarks disabled"
-    [ "$SKIP_GOLDEN" = "1" ] && echo "  • SKIP_GOLDEN=1 - Golden test preservation disabled"
-    [ "$SKIP_BUILD" = "1" ] && echo "  • SKIP_BUILD=1 - Application build disabled"
-    [ "$SKIP_TLS" = "1" ] && echo "  • SKIP_TLS=1 - TLS certificate generation disabled"
-    [ "$SKIP_DOWNLOAD" = "1" ] && echo "  • SKIP_DOWNLOAD=1 - Will use cached downloads"
-    [ "$FORCE_REBUILD" = "1" ] && echo "  • FORCE_REBUILD=1 - Force rebuild all components"
+    [ "$SKIP_TESTS" = "1" ] && echo "  - SKIP_TESTS=1 - Test execution disabled"
+    [ "$SKIP_PERFORMANCE" = "1" ] && echo "  - SKIP_PERFORMANCE=1 - Performance benchmarks disabled"
+    [ "$SKIP_GOLDEN" = "1" ] && echo "  - SKIP_GOLDEN=1 - Golden test preservation disabled"
+    [ "$SKIP_BUILD" = "1" ] && echo "  - SKIP_BUILD=1 - Application build disabled"
+    [ "$SKIP_TLS" = "1" ] && echo "  - SKIP_TLS=1 - TLS certificate generation disabled"
+    [ "$SKIP_DOWNLOAD" = "1" ] && echo "  - SKIP_DOWNLOAD=1 - Will use cached downloads"
+    [ "$FORCE_REBUILD" = "1" ] && echo "  - FORCE_REBUILD=1 - Force rebuild all components"
     echo
 fi
 echo
@@ -451,10 +451,10 @@ if [ "$FULL_SETUP" = true ]; then
         echo -e "${BLUE}Your complete Arkfile system is now deployed and ready for testing!${NC}"
         echo
         echo -e "${CYAN}[INFO] Quick System Status:${NC}"
-        echo "• Arkfile Web Interface: http://localhost:8080"
-        echo "• HTTPS Interface: https://localhost (with certificate warnings)"
-        echo "• Health Dashboard: http://localhost:8080/health"
-        echo "• All services configured and started"
+        echo "- Arkfile Web Interface: http://localhost:8080"
+        echo "- HTTPS Interface: https://localhost (with certificate warnings)"
+        echo "- Health Dashboard: http://localhost:8080/health"
+        echo "- All services configured and started"
         echo
         echo -e "${YELLOW} NEXT STEP: Interactive Admin Validation${NC}"
         echo
@@ -596,10 +596,10 @@ echo
 echo -e "${GREEN}All comprehensive integration tests passed!${NC}"
 echo
 echo -e "${BLUE}[INFO] Test Coverage Achieved:${NC}"
-echo "• Unit Tests: 100% pass rate across all modules"
-echo "• Performance: Production-scale 1GB file validation"
-echo "• Format Compatibility: 72/72 test vectors validated"
-echo "• Deployment: Key generation and health checks verified"
+echo "- Unit Tests: 100% pass rate across all modules"
+echo "- Performance: Production-scale 1GB file validation"
+echo "- Format Compatibility: 72/72 test vectors validated"
+echo "- Deployment: Key generation and health checks verified"
 
 # Generate comprehensive test report
 echo
@@ -616,36 +616,36 @@ echo
 echo -e "${GREEN}[OK] TEST RESULTS SUMMARY${NC}"
 echo "----------------------------------------"
 echo "[INFO] Unit Tests:"
-echo "  • Crypto Module: [OK] PASSED (modular crypto core)"
-echo "  • Auth Module: [OK] PASSED (OPAQUE, JWT, Argon2ID)"
-echo "  • Logging Module: [OK] PASSED (security events, privacy)"
-echo "  • Models Module: [OK] PASSED (user management, tokens)"
-echo "  • Utils Module: [OK] PASSED (validation, helpers)"
+echo "  - Crypto Module: [OK] PASSED (modular crypto core)"
+echo "  - Auth Module: [OK] PASSED (OPAQUE, JWT, Argon2ID)"
+echo "  - Logging Module: [OK] PASSED (security events, privacy)"
+echo "  - Models Module: [OK] PASSED (user management, tokens)"
+echo "  - Utils Module: [OK] PASSED (validation, helpers)"
 
 echo
 echo "[FAST] Performance Benchmarks:"
-echo "  • Cryptographic Operations: [OK] COMPLETED"
-echo "  • File I/O Performance: [OK] VALIDATED"
-echo "  • 1GB File Testing: [OK] PRODUCTION-SCALE"
-echo "  • Memory Usage: [OK] WITHIN LIMITS"
+echo "  - Cryptographic Operations: [OK] COMPLETED"
+echo "  - File I/O Performance: [OK] VALIDATED"
+echo "  - 1GB File Testing: [OK] PRODUCTION-SCALE"
+echo "  - Memory Usage: [OK] WITHIN LIMITS"
 
 echo
 echo "Format Compatibility:"
-echo "  • Golden Test Vectors: [OK] 72/72 VALIDATED"
-echo "  • Backward Compatibility: [OK] 100% PRESERVED"
-echo "  • File Format Integrity: [OK] BYTE-PERFECT"
+echo "  - Golden Test Vectors: [OK] 72/72 VALIDATED"
+echo "  - Backward Compatibility: [OK] 100% PRESERVED"
+echo "  - File Format Integrity: [OK] BYTE-PERFECT"
 
 echo
 echo "️  Build & Deployment:"
-echo "  • Application Build: [OK] SUCCESSFUL"
-echo "  • Static Assets: [OK] DEPLOYED"
+echo "  - Application Build: [OK] SUCCESSFUL"
+echo "  - Static Assets: [OK] DEPLOYED"
 
 if [ "$FULL_SETUP" = true ]; then
-    echo "  • System Setup: [OK] COMPLETED"
-    echo "  • User Creation: [OK] arkfile user configured"
-    echo "  • Directory Structure: [OK] /opt/arkfile ready"
-    echo "  • Key Generation: [OK] OPAQUE & JWT keys secured"
-    echo "  • Permissions: [OK] Production-ready security"
+    echo "  - System Setup: [OK] COMPLETED"
+    echo "  - User Creation: [OK] arkfile user configured"
+    echo "  - Directory Structure: [OK] /opt/arkfile ready"
+    echo "  - Key Generation: [OK] OPAQUE & JWT keys secured"
+    echo "  - Permissions: [OK] Production-ready security"
 fi
 
 echo
@@ -657,56 +657,56 @@ if [ "$FULL_SETUP" = true ]; then
         echo -e "${GREEN}[START] COMPLETE SYSTEM DEPLOYED${NC}"
         echo
         echo -e "${BLUE}[OK] Infrastructure Completed:${NC}"
-        echo "• System user: arkfile ($(id arkfile))"
-        echo "• Base directory: /opt/arkfile ($(ls -ld /opt/arkfile | awk '{print $3":"$4" "$1}'))"
-        echo "• Key storage: /opt/arkfile/etc/keys ($(ls -ld /opt/arkfile/etc/keys 2>/dev/null | awk '{print $1}' || echo 'configured'))"
-        echo "• Binary location: /opt/arkfile/bin/arkfile"
+        echo "- System user: arkfile ($(id arkfile))"
+        echo "- Base directory: /opt/arkfile ($(ls -ld /opt/arkfile | awk '{print $3":"$4" "$1}'))"
+        echo "- Key storage: /opt/arkfile/etc/keys ($(ls -ld /opt/arkfile/etc/keys 2>/dev/null | awk '{print $1}' || echo 'configured'))"
+        echo "- Binary location: /opt/arkfile/bin/arkfile"
         
         echo
         echo -e "${BLUE}[SECURE] Security Configuration:${NC}"
-        echo "• OPAQUE server keys: [OK] Generated and secured"
-        echo "• JWT signing keys: [OK] Generated with rotation capability"
-        echo "• TLS certificates: [OK] Self-signed for development"
-        echo "• File permissions: [OK] Production security standards"
-        echo "• Service isolation: [OK] Dedicated arkfile user"
+        echo "- OPAQUE server keys: [OK] Generated and secured"
+        echo "- JWT signing keys: [OK] Generated with rotation capability"
+        echo "- TLS certificates: [OK] Self-signed for development"
+        echo "- File permissions: [OK] Production security standards"
+        echo "- Service isolation: [OK] Dedicated arkfile user"
         
         echo
         echo -e "${BLUE}️  Services Status:${NC}"
         # Check actual service status
         if systemctl is-active --quiet arkfile; then
-            echo "• Arkfile: [OK] RUNNING"
+            echo "- Arkfile: [OK] RUNNING"
         else
-            echo "• Arkfile: [WARNING]  STOPPED (may need configuration)"
+            echo "- Arkfile: [WARNING]  STOPPED (may need configuration)"
         fi
         
         if systemctl is-active --quiet minio; then
-            echo "• MinIO: [OK] RUNNING"
+            echo "- MinIO: [OK] RUNNING"
         else
-            echo "• MinIO: [WARNING]  STOPPED (may need configuration)"
+            echo "- MinIO: [WARNING]  STOPPED (may need configuration)"
         fi
         
         if systemctl is-active --quiet rqlite; then
-            echo "• rqlite: [OK] RUNNING"  
+            echo "- rqlite: [OK] RUNNING"  
         else
-            echo "• rqlite: [WARNING]  STOPPED (may need configuration)"
+            echo "- rqlite: [WARNING]  STOPPED (may need configuration)"
         fi
         
         if systemctl is-active --quiet caddy; then
-            echo "• Caddy: [OK] RUNNING"
+            echo "- Caddy: [OK] RUNNING"
         else
-            echo "• Caddy: [WARNING]  STOPPED (may need configuration)"
+            echo "- Caddy: [WARNING]  STOPPED (may need configuration)"
         fi
         
         echo
         echo -e "${BLUE}[STATS] System Health Check:${NC}"
         if ./scripts/maintenance/health-check.sh --quick >/dev/null 2>&1; then
-            echo "• Health monitoring: [OK] Operational"
+            echo "- Health monitoring: [OK] Operational"
         else
-            echo "• Health monitoring: [WARNING]  Configure services for full health checks"
+            echo "- Health monitoring: [WARNING]  Configure services for full health checks"
         fi
-        echo "• Test coverage: [OK] 100% validation complete"
-        echo "• Performance validation: [OK] Production-scale verified"
-        echo "• Format compatibility: [OK] Long-term stability assured"
+        echo "- Test coverage: [OK] 100% validation complete"
+        echo "- Performance validation: [OK] Production-scale verified"
+        echo "- Format compatibility: [OK] Long-term stability assured"
         
         echo
         echo -e "${GREEN}[TARGET] SYSTEM READY FOR USE${NC}"
@@ -725,38 +725,38 @@ if [ "$FULL_SETUP" = true ]; then
         echo "4. Upload and test file encryption/sharing"
         echo
         echo -e "${YELLOW}Optional Production Hardening:${NC}"
-        echo "• Configure firewall rules"
-        echo "• Set up monitoring and alerting"
-        echo "• Configure automated backups"
-        echo "• Run security audit: ./scripts/maintenance/security-audit.sh"
+        echo "- Configure firewall rules"
+        echo "- Set up monitoring and alerting"
+        echo "- Configure automated backups"
+        echo "- Run security audit: ./scripts/maintenance/security-audit.sh"
         
     else
         echo -e "${GREEN}[START] FOUNDATION SYSTEM READY${NC}"
         echo
         echo -e "${BLUE}[OK] Infrastructure Completed:${NC}"
-        echo "• System user: arkfile ($(id arkfile))"
-        echo "• Base directory: /opt/arkfile ($(ls -ld /opt/arkfile | awk '{print $3":"$4" "$1}'))"
-        echo "• Key storage: /opt/arkfile/etc/keys ($(ls -ld /opt/arkfile/etc/keys 2>/dev/null | awk '{print $1}' || echo 'configured'))"
-        echo "• Binary location: /opt/arkfile/bin/arkfile"
+        echo "- System user: arkfile ($(id arkfile))"
+        echo "- Base directory: /opt/arkfile ($(ls -ld /opt/arkfile | awk '{print $3":"$4" "$1}'))"
+        echo "- Key storage: /opt/arkfile/etc/keys ($(ls -ld /opt/arkfile/etc/keys 2>/dev/null | awk '{print $1}' || echo 'configured'))"
+        echo "- Binary location: /opt/arkfile/bin/arkfile"
         
         echo
         echo -e "${BLUE}[SECURE] Security Configuration:${NC}"
-        echo "• OPAQUE server keys: [OK] Generated and secured"
-        echo "• JWT signing keys: [OK] Generated with rotation capability"
-        echo "• TLS certificates: [OK] Self-signed for development"
-        echo "• File permissions: [OK] Production security standards"
-        echo "• Service isolation: [OK] Dedicated arkfile user"
+        echo "- OPAQUE server keys: [OK] Generated and secured"
+        echo "- JWT signing keys: [OK] Generated with rotation capability"
+        echo "- TLS certificates: [OK] Self-signed for development"
+        echo "- File permissions: [OK] Production security standards"
+        echo "- Service isolation: [OK] Dedicated arkfile user"
         
         echo
         echo -e "${BLUE}[STATS] System Health Check:${NC}"
         if ./scripts/maintenance/health-check.sh --quick >/dev/null 2>&1; then
-            echo "• Health monitoring: [OK] Operational"
+            echo "- Health monitoring: [OK] Operational"
         else
-            echo "• Health monitoring: [WARNING]  Available (configure services for full health checks)"
+            echo "- Health monitoring: [WARNING]  Available (configure services for full health checks)"
         fi
-        echo "• Test coverage: [OK] 100% validation complete"
-        echo "• Performance validation: [OK] Production-scale verified"
-        echo "• Format compatibility: [OK] Long-term stability assured"
+        echo "- Test coverage: [OK] 100% validation complete"
+        echo "- Performance validation: [OK] Production-scale verified"
+        echo "- Format compatibility: [OK] Long-term stability assured"
         
         echo
         echo -e "${GREEN}[START] NEXT STEPS FOR COMPLETE SYSTEM${NC}"
@@ -804,27 +804,27 @@ if [ "$FULL_SETUP" = true ]; then
     echo
     echo -e "${GREEN}DOCUMENTATION REFERENCES${NC}"
     echo "========================================"
-    echo "• Production Deployment: docs/deployment-guide.md"
-    echo "• Security Operations: docs/security-operations.md"
-    echo "• API Documentation: docs/api.md"
-    echo "• Emergency Procedures: scripts/maintenance/emergency-procedures.sh"
+    echo "- Production Deployment: docs/deployment-guide.md"
+    echo "- Security Operations: docs/security-operations.md"
+    echo "- API Documentation: docs/api.md"
+    echo "- Emergency Procedures: scripts/maintenance/emergency-procedures.sh"
     echo
     echo -e "${BLUE}MAINTENANCE SCHEDULE${NC}"
     echo "========================================"
-    echo "• Daily: Health checks (automated)"
-    echo "• Weekly: Security audits, key backups"
-    echo "• Monthly: Performance benchmarks, updates"
-    echo "• As needed: Key rotation, emergency procedures"
+    echo "- Daily: Health checks (automated)"
+    echo "- Weekly: Security audits, key backups"
+    echo "- Monthly: Performance benchmarks, updates"
+    echo "- As needed: Key rotation, emergency procedures"
     
 else
     echo -e "${BLUE} TEST-ONLY MODE COMPLETED${NC}"
     echo
     echo -e "${GREEN}[OK] Validation Results:${NC}"
-    echo "• All core functionality verified"
-    echo "• Security mechanisms validated" 
-    echo "• Performance benchmarks completed"
-    echo "• Cross-browser compatibility confirmed"
-    echo "• Deployment scripts tested"
+    echo "- All core functionality verified"
+    echo "- Security mechanisms validated" 
+    echo "- Performance benchmarks completed"
+    echo "- Cross-browser compatibility confirmed"
+    echo "- Deployment scripts tested"
     echo
     echo -e "${YELLOW}[START] READY FOR PRODUCTION SETUP${NC}"
     echo "========================================"
@@ -865,12 +865,12 @@ fi
 echo
 echo -e "${GREEN}SUPPORT & RESOURCES${NC}"
 echo "========================================"
-echo "• Documentation: docs/ directory"
-echo "• Health monitoring: curl http://localhost:8080/health"
-echo "• Security audit: ./scripts/maintenance/security-audit.sh"
-echo "• Emergency help: ./scripts/maintenance/emergency-procedures.sh"
-echo "• Performance testing: ./scripts/testing/performance-benchmark.sh"
-echo "• Issues & support: GitHub issues or arkfile [at] pm [dot] me"
+echo "- Documentation: docs/ directory"
+echo "- Health monitoring: curl http://localhost:8080/health"
+echo "- Security audit: ./scripts/maintenance/security-audit.sh"
+echo "- Emergency help: ./scripts/maintenance/emergency-procedures.sh"
+echo "- Performance testing: ./scripts/testing/performance-benchmark.sh"
+echo "- Issues & support: GitHub issues or arkfile [at] pm [dot] me"
 
 echo
 if [ "$FULL_SETUP" = true ]; then

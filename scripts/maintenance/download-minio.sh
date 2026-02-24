@@ -319,14 +319,14 @@ if install_minio "${MINIO_BINARY}"; then
     echo -e "${GREEN}MinIO download, verification, and installation completed successfully!${NC}"
     echo ""
     echo -e "${BLUE}[INFO] Summary:${NC}"
-    echo "• Version: ${MINIO_VERSION}"
-    echo "• Binary location: /usr/local/bin/minio"
-    echo "• Cached in: ${MINIO_BINARY}"
-    echo "• SHA256 verified: [OK]"
+    echo "- Version: ${MINIO_VERSION}"
+    echo "- Binary location: /usr/local/bin/minio"
+    echo "- Cached in: ${MINIO_BINARY}"
+    echo "- SHA256 verified: [OK]"
     if [ -f "${MINIO_SIGNATURE}" ]; then
-        echo "• PGP signature checked: [OK]"
+        echo "- PGP signature checked: [OK]"
     else
-        echo "• PGP signature: [WARNING]  Not available"
+        echo "- PGP signature: [WARNING]  Not available"
     fi
     echo ""
     echo -e "${YELLOW}Next steps:${NC}"

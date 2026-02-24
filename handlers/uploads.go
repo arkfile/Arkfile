@@ -190,12 +190,6 @@ func CreateUploadSession(c echo.Context) error {
 	})
 }
 
-// GetSharedFileByShareID is deprecated - use the new anonymous share system in file_shares.go
-// This function is kept temporarily for backwards compatibility but should not be used
-func GetSharedFileByShareID(c echo.Context) error {
-	return echo.NewHTTPError(http.StatusNotImplemented, "This endpoint has been replaced by the new anonymous share system. Please use /api/share/:id instead.")
-}
-
 // CancelUpload aborts an in-progress upload session
 func CancelUpload(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
@@ -425,7 +419,7 @@ func UploadChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk number")
 	}
 
-	// Get chunk hash from headers (IV header maintained for backwards compatibility)
+	// Get chunk hash from header (SHA-256 hex of encrypted chunk bytes)
 	chunkHash := c.Request().Header.Get("X-Chunk-Hash")
 
 	if chunkHash == "" {

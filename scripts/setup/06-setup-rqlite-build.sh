@@ -471,10 +471,10 @@ verify_source() {
     
     # Display version info
     echo -e "${BLUE}Source Information:${NC}"
-    echo "• Repository: $(run_git_as_user remote get-url origin)"
-    echo "• Tag: v${VERSION}"
-    echo "• Commit: $ACTUAL_COMMIT"
-    echo "• Date: $(run_git_as_user log -1 --format=%cd --date=short)"
+    echo "- Repository: $(run_git_as_user remote get-url origin)"
+    echo "- Tag: v${VERSION}"
+    echo "- Commit: $ACTUAL_COMMIT"
+    echo "- Date: $(run_git_as_user log -1 --format=%cd --date=short)"
 }
 
 # Build rqlite
@@ -509,11 +509,11 @@ build_rqlite() {
     fi
     
     echo "Build configuration:"
-    echo "• OS: $GOOS"
-    echo "• Architecture: $GOARCH"
-    echo "• CGO: $CGO_ENABLED"
-    echo "• Build flags: $BUILD_FLAGS"
-    echo "• LD flags: $LDFLAGS"
+    echo "- OS: $GOOS"
+    echo "- Architecture: $GOARCH"
+    echo "- CGO: $CGO_ENABLED"
+    echo "- Build flags: $BUILD_FLAGS"
+    echo "- LD flags: $LDFLAGS"
     
     # Build rqlited (the server) - run as original user
     echo "Building rqlited..."
@@ -535,8 +535,8 @@ build_rqlite() {
     
     # Display build information
     echo -e "${BLUE}Build Results:${NC}"
-    echo "• rqlited: $(ls -lh "${BUILD_DIR}/rqlited" | awk '{print $5, $9}')"
-    echo "• rqlite: $(ls -lh "${BUILD_DIR}/rqlite" | awk '{print $5, $9}')"
+    echo "- rqlited: $(ls -lh "${BUILD_DIR}/rqlited" | awk '{print $5, $9}')"
+    echo "- rqlite: $(ls -lh "${BUILD_DIR}/rqlite" | awk '{print $5, $9}')"
 }
 
 # Install binaries
@@ -554,8 +554,8 @@ install_binaries() {
         RQLITED_VERSION=$(rqlited -version | head -n1)
         RQLITE_VERSION=$(rqlite -version | head -n1)
         echo -e "${GREEN}[OK] Installation verified:${NC}"
-        echo "• rqlited: ${RQLITED_VERSION}"
-        echo "• rqlite: ${RQLITE_VERSION}"
+        echo "- rqlited: ${RQLITED_VERSION}"
+        echo "- rqlite: ${RQLITE_VERSION}"
     else
         echo -e "${RED}[X] Installation verification failed${NC}"
         exit 1
@@ -610,11 +610,11 @@ main() {
     echo -e "${GREEN}rqlite cluster database build and setup complete!${NC}"
     echo
     echo -e "${BLUE}[INFO] Installation Summary:${NC}"
-    echo "• Version: ${VERSION}"
-    echo "• Binaries: /usr/local/bin/rqlited, /usr/local/bin/rqlite"
-    echo "• SHA256: [OK] Verified (source build)"
-    echo "• PGP: [WARNING]  Not available from upstream"
-    echo "• Cached: ${SOURCE_DIR}"
+    echo "- Version: ${VERSION}"
+    echo "- Binaries: /usr/local/bin/rqlited, /usr/local/bin/rqlite"
+    echo "- SHA256: [OK] Verified (source build)"
+    echo "- PGP: [WARNING]  Not available from upstream"
+    echo "- Cached: ${SOURCE_DIR}"
     
     echo
     echo -e "${BLUE}[START] Next Steps:${NC}"
@@ -640,10 +640,10 @@ main() {
     fi
     echo
     echo -e "${BLUE}Tips:${NC}"
-    echo "• Source code cached at: ${SOURCE_DIR}"
-    echo "• To rebuild: $0 --force"
-    echo "• To clean cache: rm -rf ${CACHE_DIR}"
-    echo "• For multi-platform builds, repeat on target systems"
+    echo "- Source code cached at: ${SOURCE_DIR}"
+    echo "- To rebuild: $0 --force"
+    echo "- To clean cache: rm -rf ${CACHE_DIR}"
+    echo "- For multi-platform builds, repeat on target systems"
     echo
 }
 

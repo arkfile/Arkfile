@@ -153,7 +153,7 @@ export class ProgressManager {
         infoParts.push(`${this.formatTime(state.remainingTime)} remaining`);
       }
       
-      infoElement.textContent = infoParts.join(' • ');
+      infoElement.textContent = infoParts.join(' - ');
     }
 
     // Handle error state

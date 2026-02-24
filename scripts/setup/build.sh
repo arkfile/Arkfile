@@ -71,11 +71,11 @@ check_go_version() {
         echo "   Please install Go $required_version+ via package manager or from https://golang.org"
         echo ""
         echo "   Package manager installs:"
-        echo "   • Debian/Ubuntu: apt install golang-go"
-        echo "   • Alpine: apk add go"
-        echo "   • Alma/RHEL: dnf install golang"
-        echo "   • FreeBSD: pkg install go"
-        echo "   • OpenBSD: pkg_add go"
+        echo "   - Debian/Ubuntu: apt install golang-go"
+        echo "   - Alpine: apk add go"
+        echo "   - Alma/RHEL: dnf install golang"
+        echo "   - FreeBSD: pkg install go"
+        echo "   - OpenBSD: pkg_add go"
         exit 1
     fi
     

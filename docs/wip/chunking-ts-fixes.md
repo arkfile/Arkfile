@@ -633,7 +633,6 @@ All four implementation steps completed and verified:
 **Additional cleanup (TS consolidation):**
 - `client/static/js/src/crypto/types.ts` — removed duplicate `PasswordContext` type definition; now imports and re-exports from `constants.ts` (single source of truth)
 - `client/static/js/src/crypto/file-encryption.ts` — reordered import/export of `PasswordContext` (import before export)
-- Removed misleading "backward compatibility" comment from `types.ts`
 
 **Verification:**
 - `go build ./...` passes (warnings only, no errors)

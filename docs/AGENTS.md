@@ -18,7 +18,7 @@ The server must know nothing about the nature of the data belonging to clients, 
 
 ## Greenfield App
 
-There are no current deployments of this app anywhere at present. No need to build in "backwards compatibility" at this stage when refactoring. The focus at this stage is on fixing and proving the correct implementation of the system as it is designed and intended.
+There are no current deployments of this app anywhere at present. No need to build in "backwards compatibility" at this stage when refactoring. The focus at this stage is on fixing and proving the correct implementation of the system as it is designed and intended. Be wary and flag it to the dev anytime you come across deprecated/disabled/stub/bad/backwards-compatibility functions or comments, or any technical debt that could make it hard to work with this codebase in the future.
 
 ## Function Review Sanity Checks
 

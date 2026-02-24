@@ -181,7 +181,7 @@ echo "========================================"
 
 # Check CA certificate
 total_checks=$((total_checks + 1))
-if check_certificate_expiry "${TLS_DIR}/ca/ca-cert.pem" "Certificate Authority" ${WARNING_DAYS}; then
+if check_certificate_expiry "${TLS_DIR}/ca/ca.crt" "Certificate Authority" ${WARNING_DAYS}; then
     case $? in
         0) passed_checks=$((passed_checks + 1)) ;;
         2) warning_checks=$((warning_checks + 1)) ;;
@@ -214,7 +214,7 @@ echo "========================================"
 
 # Validate CA key pair
 total_checks=$((total_checks + 1))
-if validate_key_pair "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "Certificate Authority"; then
+if validate_key_pair "${TLS_DIR}/ca/ca.crt" "${TLS_DIR}/ca/ca.key" "Certificate Authority"; then
     passed_checks=$((passed_checks + 1))
 else
     failed_checks=$((failed_checks + 1))
@@ -239,7 +239,7 @@ echo -e "${BLUE}Certificate Chain Validation:${NC}"
 echo "========================================"
 
 # Validate certificate chains
-ca_cert="${TLS_DIR}/ca/ca-cert.pem"
+ca_cert="${TLS_DIR}/ca/ca.crt"
 if [ -f "${ca_cert}" ]; then
     for service in arkfile rqlite minio; do
         cert_path="${TLS_DIR}/${service}/server-cert.pem"
@@ -260,7 +260,7 @@ if [ "$1" = "--details" ] || [ "$1" = "-d" ]; then
     echo -e "${BLUE}Certificate Details:${NC}"
     echo "========================================"
     
-    get_certificate_details "${TLS_DIR}/ca/ca-cert.pem" "Certificate Authority"
+    get_certificate_details "${TLS_DIR}/ca/ca.crt" "Certificate Authority"
     
     for service in arkfile rqlite minio; do
         cert_path="${TLS_DIR}/${service}/server-cert.pem"
@@ -288,31 +288,31 @@ echo ""
 if [ ${failed_checks} -gt 0 ]; then
     echo -e "${RED}[X] Certificate validation failed!${NC}"
     echo -e "${YELLOW}Recommendations:${NC}"
-    echo "• Regenerate failed certificates: sudo ./scripts/setup/05-setup-tls-certs.sh"
-    echo "• Check file permissions and ownership"
-    echo "• Verify certificate authority integrity"
+    echo "- Regenerate failed certificates: sudo ./scripts/setup/05-setup-tls-certs.sh"
+    echo "- Check file permissions and ownership"
+    echo "- Verify certificate authority integrity"
     exit 1
 elif [ ${warning_checks} -gt 0 ]; then
     echo -e "${YELLOW}[WARNING]  Certificate renewal recommended${NC}"
     echo -e "${YELLOW}Recommendations:${NC}"
-    echo "• Plan certificate renewal before expiration"
-    echo "• Create calendar reminders for renewal"
-    echo "• Consider automated renewal setup"
+    echo "- Plan certificate renewal before expiration"
+    echo "- Create calendar reminders for renewal"
+    echo "- Consider automated renewal setup"
     exit 2
 else
     echo -e "${GREEN}[OK] All certificates are valid and healthy!${NC}"
     echo -e "${BLUE}Recommendations:${NC}"
-    echo "• Set up automated monitoring"
-    echo "• Schedule regular validation checks"
-    echo "• Plan renewal process before expiration"
+    echo "- Set up automated monitoring"
+    echo "- Schedule regular validation checks"
+    echo "- Plan renewal process before expiration"
 fi
 
 echo ""
 echo -e "${BLUE}Support Commands:${NC}"
 echo "========================================"
-echo "• Regenerate certificates: sudo ./scripts/setup/05-setup-tls-certs.sh"
-echo "• Detailed validation: ./scripts/maintenance/validate-certificates.sh --details"
-echo "• Certificate renewal: ./scripts/maintenance/renew-certificates.sh (when available)"
-echo "• Emergency help: ./scripts/maintenance/emergency-procedures.sh"
+echo "- Regenerate certificates: sudo ./scripts/setup/05-setup-tls-certs.sh"
+echo "- Detailed validation: ./scripts/maintenance/validate-certificates.sh --details"
+echo "- Certificate renewal: ./scripts/maintenance/renew-certificates.sh (when available)"
+echo "- Emergency help: ./scripts/maintenance/emergency-procedures.sh"
 
 exit 0

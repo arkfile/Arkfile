@@ -100,6 +100,6 @@ func CreateSessionKeyInfo(username, context string, sessionKey []byte) SessionKe
 // SecureZeroSessionKey securely clears session key material
 func SecureZeroSessionKey(sessionKey []byte) {
 	if sessionKey != nil {
-		SecureZeroBytes(sessionKey)
+		SecureClear(sessionKey)
 	}
 }

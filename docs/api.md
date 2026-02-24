@@ -26,7 +26,7 @@ The tables below list every current HTTP endpoint exposed by Arkfile v1.
 
 ---
 
-### 1 • Configuration (Public)
+### 1 - Configuration (Public)
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
@@ -35,7 +35,7 @@ The tables below list every current HTTP endpoint exposed by Arkfile v1.
 
 ---
 
-### 2 • Authentication & Session
+### 2 - Authentication & Session
 
 Arkfile uses the OPAQUE PAKE (Password-Authenticated Key Exchange) protocol for secure authentication without transmitting passwords.
 
@@ -84,7 +84,7 @@ Arkfile uses the OPAQUE PAKE (Password-Authenticated Key Exchange) protocol for 
 
 ---
 
-### 3 • Multi-Factor Authentication (TOTP)
+### 3 - Multi-Factor Authentication (TOTP)
 
 Arkfile supports Time-based One-Time Password (TOTP) as a second factor of authentication. When TOTP is enabled, users must complete both OPAQUE authentication and provide a valid TOTP code to access their account.
 
@@ -113,7 +113,7 @@ When TOTP is enabled for a user account, the authentication process involves two
 
 ---
 
-### 4 • Files
+### 4 - Files
 
 All file operations require TOTP authentication.
 
@@ -172,7 +172,7 @@ Each chunk includes a 12-byte nonce prefix and 16-byte authentication tag (28 by
 
 ---
 
-### 5 • File Sharing
+### 5 - File Sharing
 
 File sharing is split into two namespaces:
 - **Authenticated endpoints** (`/api/shares`) - for share owners to manage shares
@@ -210,7 +210,7 @@ The Download Token is cryptographically bound to the share via AAD (Additional A
 
 ---
 
-### 6 • File Encryption Key Management
+### 6 - File Encryption Key Management
 
 All key management operations require TOTP authentication.
 
@@ -225,7 +225,7 @@ All key management operations require TOTP authentication.
 
 ---
 
-### 7 • Credits System
+### 7 - Credits System
 
 #### User Endpoints (Require TOTP)
 
@@ -244,7 +244,7 @@ All key management operations require TOTP authentication.
 
 ---
 
-### 8 • Administration
+### 8 - Administration
 
 All admin endpoints require JWT authentication with admin privileges.
 
@@ -273,7 +273,7 @@ These endpoints are only available when `ADMIN_DEV_TEST_API_ENABLED=true`:
 
 ---
 
-### 9 • Miscellaneous
+### 9 - Miscellaneous
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|

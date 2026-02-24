@@ -215,7 +215,7 @@ if [ ! -d "${TLS_DIR}" ]; then
 fi
 
 # Check if certificates already exist
-if [ -f "${TLS_DIR}/ca/ca-cert.pem" ]; then
+if [ -f "${TLS_DIR}/ca/ca.crt" ]; then
     echo -e "${YELLOW}TLS certificates already exist. Skipping generation.${NC}"
     echo "To regenerate certificates, remove existing files first:"
     echo "  sudo rm -rf ${TLS_DIR}/ca/* ${TLS_DIR}/*/server-* ${TLS_DIR}/*/client-*"
@@ -244,11 +244,6 @@ ca_alt_names="DNS.1=ca.internal.arkfile,DNS.2=ca.${DOMAIN}"
 if create_certificate "${TLS_DIR}/ca/ca.key" "${TLS_DIR}/ca/ca.crt" \
     "${ca_cn}" "${ca_alt_names}" "" "" "Certificate Authority"; then
     echo -e "${GREEN}[OK] Certificate Authority created successfully${NC}"
-    
-    # Create legacy filename copies for backward compatibility
-    sudo -u ${USER} cp "${TLS_DIR}/ca/ca.crt" "${TLS_DIR}/ca/ca-cert.pem"
-    sudo -u ${USER} cp "${TLS_DIR}/ca/ca.key" "${TLS_DIR}/ca/ca-key.pem"
-    echo -e "${GREEN}[OK] Legacy CA filenames created for compatibility${NC}"
 else
     echo -e "${RED}[X] Failed to create Certificate Authority${NC}"
     exit 1
@@ -267,7 +262,7 @@ arkfile_cn="arkfile.${DOMAIN}"
 arkfile_alt_names="DNS.1=arkfile.${DOMAIN},DNS.2=${DOMAIN},DNS.3=localhost,DNS.4=arkfile.internal,IP.1=127.0.0.1,IP.2=::1"
 
 if create_certificate "${TLS_DIR}/arkfile/server-key.pem" "${TLS_DIR}/arkfile/server-cert.pem" \
-    "${arkfile_cn}" "${arkfile_alt_names}" "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "Arkfile Application"; then
+    "${arkfile_cn}" "${arkfile_alt_names}" "${TLS_DIR}/ca/ca.crt" "${TLS_DIR}/ca/ca.key" "Arkfile Application"; then
     echo -e "${GREEN}[OK] Arkfile certificate created successfully${NC}"
 else
     echo -e "${RED}[X] Failed to create Arkfile certificate${NC}"
@@ -330,7 +325,7 @@ echo -e "${BLUE}Creating Certificate Bundles${NC}"
 for service in arkfile rqlite minio; do
     bundle_path="${TLS_DIR}/${service}/server-bundle.pem"
     echo "Creating certificate bundle for ${service}..."
-    sudo -u ${USER} cat "${TLS_DIR}/${service}/server-cert.pem" "${TLS_DIR}/ca/ca-cert.pem" > "${bundle_path}"
+    sudo -u ${USER} cat "${TLS_DIR}/${service}/server-cert.pem" "${TLS_DIR}/ca/ca.crt" > "${bundle_path}"
     if [ $? -eq 0 ]; then
         echo -e "  ${GREEN}[OK] ${service} bundle created${NC}"
     else
@@ -346,9 +341,9 @@ echo "Setting secure file permissions..."
 # Set ownership
 sudo chown -R ${USER}:${GROUP} ${TLS_DIR}
 
-# Set permissions for CA files (both naming conventions)
-sudo chmod 600 ${TLS_DIR}/ca/ca.key ${TLS_DIR}/ca/ca-key.pem
-sudo chmod 644 ${TLS_DIR}/ca/ca.crt ${TLS_DIR}/ca/ca-cert.pem
+# Set permissions for CA files
+sudo chmod 600 ${TLS_DIR}/ca/ca.key
+sudo chmod 644 ${TLS_DIR}/ca/ca.crt
 
 # Set permissions for service certificates (both naming conventions)
 for service in arkfile rqlite minio; do
@@ -373,7 +368,7 @@ echo ""
 echo -e "${BLUE}Validating Certificates${NC}"
 all_valid=true
 
-validate_certificate "${TLS_DIR}/ca/ca-cert.pem" "${TLS_DIR}/ca/ca-key.pem" "Certificate Authority"
+validate_certificate "${TLS_DIR}/ca/ca.crt" "${TLS_DIR}/ca/ca.key" "Certificate Authority"
 if [ $? -ne 0 ]; then all_valid=false; fi
 
 validate_certificate "${TLS_DIR}/arkfile/server-cert.pem" "${TLS_DIR}/arkfile/server-key.pem" "Arkfile Application"
@@ -395,8 +390,8 @@ arkfile_expires=""
 rqlite_expires=""
 minio_expires=""
 
-if [ -f "${TLS_DIR}/ca/ca-cert.pem" ]; then
-    ca_expires=$(sudo -u ${USER} openssl x509 -in "${TLS_DIR}/ca/ca-cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2 || echo "Unknown")
+if [ -f "${TLS_DIR}/ca/ca.crt" ]; then
+    ca_expires=$(sudo -u ${USER} openssl x509 -in "${TLS_DIR}/ca/ca.crt" -noout -enddate 2>/dev/null | cut -d= -f2 || echo "Unknown")
 fi
 
 if [ -f "${TLS_DIR}/arkfile/server-cert.pem" ]; then
@@ -423,8 +418,8 @@ sudo -u ${USER} cat > "${TLS_DIR}/metadata.json" << EOF
     "ca": {
       "subject": "CN=Arkfile-CA,O=Arkfile,C=US",
       "algorithm": "${ca_algorithm}",
-      "key_file": "ca/ca-key.pem",
-      "cert_file": "ca/ca-cert.pem",
+      "key_file": "ca/ca.key",
+      "cert_file": "ca/ca.crt",
       "expires": "${ca_expires}"
     },
     "arkfile": {
@@ -475,8 +470,8 @@ echo ""
 echo -e "${BLUE}[INFO] Certificate Summary:${NC}"
 echo "========================================"
 echo "Certificate Authority:"
-echo "  Key: ${TLS_DIR}/ca/ca-key.pem"
-echo "  Certificate: ${TLS_DIR}/ca/ca-cert.pem"
+echo "  Key: ${TLS_DIR}/ca/ca.key"
+echo "  Certificate: ${TLS_DIR}/ca/ca.crt"
 echo "  Algorithm: ${ca_algorithm^^}"
 echo ""
 echo "Application Services:"
@@ -496,28 +491,28 @@ echo "========================================"
 echo "1. Configure Arkfile application:"
 echo "   TLS_CERT_FILE=${TLS_DIR}/arkfile/server-cert.pem"
 echo "   TLS_KEY_FILE=${TLS_DIR}/arkfile/server-key.pem"
-echo "   TLS_CA_FILE=${TLS_DIR}/ca/ca-cert.pem"
+echo "   TLS_CA_FILE=${TLS_DIR}/ca/ca.crt"
 echo ""
 echo "2. Configure rqlite cluster:"
 echo "   -node-cert=${TLS_DIR}/rqlite/server-cert.pem"
 echo "   -node-key=${TLS_DIR}/rqlite/server-key.pem"
-echo "   -node-ca-cert=${TLS_DIR}/ca/ca-cert.pem"
+echo "   -node-ca-cert=${TLS_DIR}/ca/ca.crt"
 echo ""
 echo "3. Configure MinIO storage:"
 echo "   MINIO_SERVER_CERT=${TLS_DIR}/minio/server-cert.pem"
 echo "   MINIO_SERVER_KEY=${TLS_DIR}/minio/server-key.pem"
 echo ""
 echo "4. Distribute CA certificate to clients:"
-echo "   ${TLS_DIR}/ca/ca-cert.pem"
+echo "   ${TLS_DIR}/ca/ca.crt"
 echo ""
 echo -e "${YELLOW}Certificate Lifecycle:${NC}"
 echo "========================================"
-echo "• Validity: ${VALIDITY_DAYS} days"
+echo "- Validity: ${VALIDITY_DAYS} days"
 renewal_days=$((VALIDITY_DAYS - 30))
 renewal_date=$(date -d "+${renewal_days} days" '+%Y-%m-%d' 2>/dev/null || echo "N/A")
-echo "• Renewal needed before: ${renewal_date}"
-echo "• Use ./scripts/renew-certificates.sh for renewal"
-echo "• Monitor expiration with ./scripts/validate-certificates.sh"
+echo "- Renewal needed before: ${renewal_date}"
+echo "- Use ./scripts/renew-certificates.sh for renewal"
+echo "- Monitor expiration with ./scripts/validate-certificates.sh"
 echo ""
 echo -e "${GREEN}[OK] Modern TLS certificates ready for production use!${NC}"
 

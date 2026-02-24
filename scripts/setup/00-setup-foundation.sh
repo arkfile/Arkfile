@@ -250,34 +250,34 @@ echo "Setup Duration: $(($(date +%s) - START_TIME)) seconds"
 echo
 
 echo -e "${BLUE}[OK] Foundation Infrastructure Completed:${NC}"
-echo "• System user: arkfile ($(id arkfile 2>/dev/null || echo 'configured'))"
-echo "• Base directory: /opt/arkfile ($(ls -ld /opt/arkfile 2>/dev/null | awk '{print $3":"$4" "$1}' || echo 'configured'))"
-echo "• Key storage: /opt/arkfile/etc/keys ($(ls -ld /opt/arkfile/etc/keys 2>/dev/null | awk '{print $1}' || echo 'configured'))"
-echo "• Binary location: /opt/arkfile/bin/arkfile"
+echo "- System user: arkfile ($(id arkfile 2>/dev/null || echo 'configured'))"
+echo "- Base directory: /opt/arkfile ($(ls -ld /opt/arkfile 2>/dev/null | awk '{print $3":"$4" "$1}' || echo 'configured'))"
+echo "- Key storage: /opt/arkfile/etc/keys ($(ls -ld /opt/arkfile/etc/keys 2>/dev/null | awk '{print $1}' || echo 'configured'))"
+echo "- Binary location: /opt/arkfile/bin/arkfile"
 
 echo
 echo -e "${BLUE}[SECURE] Security Configuration:${NC}"
-echo "• Master Key: [OK] Generated and secured in secrets.env"
+echo "- Master Key: [OK] Generated and secured in secrets.env"
 
 if [ "$SKIP_TLS" = false ]; then
     if is_completed "tls-certs"; then
-        echo "• TLS certificates: [OK] Self-signed for development"
+        echo "- TLS certificates: [OK] Self-signed for development"
     else
-        echo "• TLS certificates: [WARNING]  Generation had issues (non-critical)"
+        echo "- TLS certificates: [WARNING]  Generation had issues (non-critical)"
     fi
 else
-    echo "• TLS certificates: ️  Skipped"
+    echo "- TLS certificates: ️  Skipped"
 fi
 
-echo "• File permissions: [OK] Production security standards"
-echo "• Service isolation: [OK] Dedicated arkfile user"
+echo "- File permissions: [OK] Production security standards"
+echo "- Service isolation: [OK] Dedicated arkfile user"
 
 echo
 echo -e "${BLUE}[STATS] Foundation Health:${NC}"
-echo "• Infrastructure: [OK] Ready for service configuration"
-echo "• Cryptographic keys: [OK] Secured and validated"
-echo "• Build system: [OK] Application compiled and deployed"
-echo "• Permissions: [OK] Production-ready security"
+echo "- Infrastructure: [OK] Ready for service configuration"
+echo "- Cryptographic keys: [OK] Secured and validated"
+echo "- Build system: [OK] Application compiled and deployed"
+echo "- Permissions: [OK] Production-ready security"
 
 echo
 echo -e "${GREEN}[START] NEXT STEP - GET ARKFILE RUNNING${NC}"
@@ -287,10 +287,10 @@ echo
 echo -e "${GREEN}  ./scripts/quick-start.sh${NC}"
 echo
 echo "This single command will:"
-echo "• Set up MinIO object storage"
-echo "• Set up rqlite database"
-echo "• Start all services"
-echo "• Give you the web interface URL"
+echo "- Set up MinIO object storage"
+echo "- Set up rqlite database"
+echo "- Start all services"
+echo "- Give you the web interface URL"
 echo
 echo -e "${BLUE}OR, for manual setup:${NC}"
 echo "1. Set up services: sudo ./scripts/setup/07-setup-minio.sh && sudo ./scripts/setup/08-setup-rqlite-build.sh"

@@ -239,7 +239,7 @@ certificates_to_renew=()
 renewal_reasons=()
 
 # Check CA certificate
-if check_certificate_expiry "${TLS_DIR}/ca/ca-cert.pem" "Certificate Authority" ${WARNING_DAYS}; then
+if check_certificate_expiry "${TLS_DIR}/ca/ca.crt" "Certificate Authority" ${WARNING_DAYS}; then
     case $? in
         2|3)
             certificates_to_renew+=("ca")
@@ -279,26 +279,26 @@ echo ""
 echo -e "${YELLOW}[INFO] Certificate Renewal Summary${NC}"
 echo "========================================"
 for i in "${!certificates_to_renew[@]}"; do
-    echo "• ${certificates_to_renew[$i]}: ${renewal_reasons[$i]}"
+    echo "- ${certificates_to_renew[$i]}: ${renewal_reasons[$i]}"
 done
 
 echo ""
 echo -e "${YELLOW}[WARNING]  This will renew the following certificates:${NC}"
 for cert in "${certificates_to_renew[@]}"; do
     case "${cert}" in
-        ca) echo "  • Certificate Authority (affects all service certificates)" ;;
-        arkfile) echo "  • Arkfile application server" ;;
-        rqlite) echo "  • rqlite database cluster" ;;
-        minio) echo "  • MinIO object storage" ;;
+        ca) echo "  - Certificate Authority (affects all service certificates)" ;;
+        arkfile) echo "  - Arkfile application server" ;;
+        rqlite) echo "  - rqlite database cluster" ;;
+        minio) echo "  - MinIO object storage" ;;
     esac
 done
 
 echo ""
 echo -e "${RED}WARNING: Certificate renewal will:${NC}"
-echo "• Create a backup of existing certificates"
-echo "• Generate new certificates with the same configuration"
-echo "• Restart services using the certificates"
-echo "• May cause brief service interruption"
+echo "- Create a backup of existing certificates"
+echo "- Generate new certificates with the same configuration"
+echo "- Restart services using the certificates"
+echo "- May cause brief service interruption"
 
 echo ""
 read -p "Do you want to proceed with certificate renewal? [y/N] " -n 1 -r
@@ -408,8 +408,8 @@ for service in arkfile rqlite minio; do
 done
 
 # Test CA certificate
-if [ -f "${TLS_DIR}/ca/ca-cert.pem" ]; then
-    if sudo -u ${USER} openssl x509 -in "${TLS_DIR}/ca/ca-cert.pem" -noout -text >/dev/null 2>&1; then
+if [ -f "${TLS_DIR}/ca/ca.crt" ]; then
+    if sudo -u ${USER} openssl x509 -in "${TLS_DIR}/ca/ca.crt" -noout -text >/dev/null 2>&1; then
         echo -e "  ${GREEN}[OK] CA: Certificate loads correctly${NC}"
     else
         echo -e "  ${RED}[X] CA: Certificate loading failed${NC}"
@@ -460,10 +460,10 @@ fi
 echo ""
 echo -e "${BLUE}[INFO] Renewal Summary:${NC}"
 echo "========================================"
-echo "• Certificates renewed: ${#certificates_to_renew[@]}"
-echo "• Backup created: ${BACKUP_DIR}"
-echo "• Services restarted: $(systemctl is-active arkfile minio rqlite 2>/dev/null | grep -c "^active" || echo "0")"
-echo "• Next renewal check: $(date -d "+$((VALIDITY_DAYS - WARNING_DAYS)) days" "+%Y-%m-%d")"
+echo "- Certificates renewed: ${#certificates_to_renew[@]}"
+echo "- Backup created: ${BACKUP_DIR}"
+echo "- Services restarted: $(systemctl is-active arkfile minio rqlite 2>/dev/null | grep -c "^active" || echo "0")"
+echo "- Next renewal check: $(date -d "+$((VALIDITY_DAYS - WARNING_DAYS)) days" "+%Y-%m-%d")"
 
 echo ""
 echo -e "${BLUE}Certificate Details:${NC}"
@@ -471,10 +471,10 @@ echo "========================================"
 for service in ca arkfile rqlite minio; do
     case "${service}" in
         ca)
-            cert_file="${TLS_DIR}/ca/ca-cert.pem"
+            cert_file="${TLS_DIR}/ca/ca.crt"
             if [ -f "${cert_file}" ]; then
                 expires=$(sudo -u ${USER} openssl x509 -in "${cert_file}" -noout -enddate 2>/dev/null | cut -d= -f2)
-                echo "• Certificate Authority: expires ${expires}"
+                echo "- Certificate Authority: expires ${expires}"
             fi
             ;;
         *)
@@ -482,7 +482,7 @@ for service in ca arkfile rqlite minio; do
             if [ -f "${cert_file}" ]; then
                 expires=$(sudo -u ${USER} openssl x509 -in "${cert_file}" -noout -enddate 2>/dev/null | cut -d= -f2)
                 algorithm=$(sudo -u ${USER} openssl x509 -in "${cert_file}" -noout -text 2>/dev/null | grep "Public Key Algorithm" | head -1 | awk -F': ' '{print $2}')
-                echo "• ${service}: ${algorithm}, expires ${expires}"
+                echo "- ${service}: ${algorithm}, expires ${expires}"
             fi
             ;;
     esac
@@ -491,18 +491,18 @@ done
 echo ""
 echo -e "${BLUE}Maintenance Schedule:${NC}"
 echo "========================================"
-echo "• Next automatic check: $(date -d "+$((WARNING_DAYS/2)) days" "+%Y-%m-%d")"
-echo "• Recommended renewal: $(date -d "+$((VALIDITY_DAYS - WARNING_DAYS)) days" "+%Y-%m-%d")"
-echo "• Certificate expiry: $(date -d "+${VALIDITY_DAYS} days" "+%Y-%m-%d")"
+echo "- Next automatic check: $(date -d "+$((WARNING_DAYS/2)) days" "+%Y-%m-%d")"
+echo "- Recommended renewal: $(date -d "+$((VALIDITY_DAYS - WARNING_DAYS)) days" "+%Y-%m-%d")"
+echo "- Certificate expiry: $(date -d "+${VALIDITY_DAYS} days" "+%Y-%m-%d")"
 
 echo ""
 echo -e "${BLUE}Support Commands:${NC}"
 echo "========================================"
-echo "• Validate certificates: ./scripts/maintenance/validate-certificates.sh"
-echo "• View certificate details: ./scripts/maintenance/validate-certificates.sh --details"
-echo "• Rollback if needed: Restore from ${BACKUP_DIR}"
-echo "• Emergency procedures: ./scripts/maintenance/emergency-procedures.sh"
-echo "• Next renewal: ./scripts/maintenance/renew-certificates.sh"
+echo "- Validate certificates: ./scripts/maintenance/validate-certificates.sh"
+echo "- View certificate details: ./scripts/maintenance/validate-certificates.sh --details"
+echo "- Rollback if needed: Restore from ${BACKUP_DIR}"
+echo "- Emergency procedures: ./scripts/maintenance/emergency-procedures.sh"
+echo "- Next renewal: ./scripts/maintenance/renew-certificates.sh"
 
 echo ""
 echo -e "${GREEN}[OK] Certificate renewal process completed successfully!${NC}"

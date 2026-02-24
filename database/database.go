@@ -240,10 +240,3 @@ func LogAdminActionWithTx(tx *sql.Tx, adminUsername, action, targetUsername, det
 	)
 	return err
 }
-
-// ApplyRateLimitingSchema is deprecated - rate limiting schema is now included in unified_schema.sql
-// This function is kept for backwards compatibility but does nothing
-func ApplyRateLimitingSchema() error {
-	log.Println("Rate limiting schema is now included in unified schema - no separate application needed")
-	return nil
-}

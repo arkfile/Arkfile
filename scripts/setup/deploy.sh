@@ -109,9 +109,9 @@ fi
 echo -e "${GREEN}[OK] Deployment complete!${NC}"
 echo
 echo -e "${YELLOW}[STATS] Deployment Summary:${NC}"
-echo "• Build artifacts copied to: ${BASE_DIR}"
-echo "• Permissions set for arkfile:arkfile user"
-echo "• Systemd services installed and enabled"
+echo "- Build artifacts copied to: ${BASE_DIR}"
+echo "- Permissions set for arkfile:arkfile user"
+echo "- Systemd services installed and enabled"
 echo
 echo -e "${BLUE}[START] To start the services:${NC}"
 echo "  sudo systemctl start ${APP_NAME}"
