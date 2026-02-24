@@ -23,7 +23,10 @@ import {
   getArgon2Params,
   FILE_ENCRYPTION_VERSION,
   LIMITS,
+  SALT_DOMAIN_PREFIXES,
 } from './constants';
+import type { PasswordContext } from './constants';
+export type { PasswordContext } from './constants';
 import {
   FileTooLargeError,
   InvalidUsernameError,
@@ -46,23 +49,6 @@ import type {
 // ============================================================================
 
 /**
- * Password context types for domain separation
- * These match the Go implementation in crypto/key_derivation.go
- */
-export type PasswordContext = 'account' | 'custom' | 'share';
-
-/**
- * Domain prefixes for salt derivation
- * CRITICAL: These MUST match the Go implementation exactly for cross-platform compatibility
- * See: crypto/key_derivation.go - DeriveAccountPasswordKey, DeriveCustomPasswordKey, DeriveSharePasswordKey
- */
-const SALT_DOMAIN_PREFIXES: Record<PasswordContext, string> = {
-  account: 'arkfile-account-key-salt:',
-  custom: 'arkfile-custom-key-salt:',
-  share: 'arkfile-share-key-salt:',
-} as const;
-
-/**
  * Derives a deterministic salt from username with domain separation
  * 
  * This ensures the same username + context always produces the same salt,
@@ -79,7 +65,7 @@ const SALT_DOMAIN_PREFIXES: Record<PasswordContext, string> = {
  * 4. This enables offline decryption without server-stored salts
  * 
  * @param username - The user's username
- * @param context - The password context (account, custom, or share)
+ * @param context - The password context (account or custom)
  * @returns A deterministic 32-byte salt
  */
 export function deriveSaltFromUsername(username: string, context: PasswordContext = 'account'): Uint8Array {
@@ -135,7 +121,7 @@ export function deriveSaltFromUsername(username: string, context: PasswordContex
  * 
  * @param password - The user's password
  * @param username - The user's username
- * @param context - The password context (account, custom, or share)
+ * @param context - The password context (account or custom)
  * @returns A 32-byte encryption key
  */
 export async function deriveFileEncryptionKey(
@@ -400,11 +386,11 @@ export {
  * a cached key if available, avoiding expensive Argon2id computation.
  * 
  * For 'account' context, uses the new Account Key cache.
- * For 'custom' and 'share' contexts, derives fresh keys (no caching).
+ * For 'custom' context, derives fresh keys (no caching).
  * 
  * @param password - The user's password
  * @param username - The user's username
- * @param context - The password context (account, custom, or share)
+ * @param context - The password context (account or custom)
  * @param cacheDuration - Optional cache duration in hours (1-4, only for 'account' context)
  * @returns A 32-byte encryption key
  */
@@ -431,7 +417,7 @@ export async function deriveFileEncryptionKeyWithCache(
     return key;
   }
   
-  // For 'custom' and 'share' contexts, always derive fresh (no caching)
+  // For 'custom' context, always derive fresh (no caching)
   return deriveFileEncryptionKey(password, username, context);
 }
 

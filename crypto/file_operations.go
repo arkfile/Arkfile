@@ -246,14 +246,19 @@ func VerifyFileIntegrity(filePath string, expectedHash string, expectedSize int6
 // Where key_type indicates what password was used to encrypt the FEK:
 //   0x01 = account password
 //   0x02 = custom password
-//   0x03 = share password
+//
+// Key type values are sourced from crypto/chunking-params.json via
+// chunking_constants.go (KeyTypeForContext).
 //
 // Files are ALWAYS encrypted with a random FEK, then the FEK is encrypted
 // with the user's password. This enables file sharing without re-encryption.
+//
+// Share operations use a separate mechanism with random salts and AES-GCM-AAD
+// (see crypto/share_kdf.go). They do NOT use the envelope key type system.
 // =============================================================================
 
 // CreateEnvelope creates an envelope header for FEK-based encryption
-// keyType: "account", "custom", or "share"
+// keyType: "account" or "custom"
 func CreateEnvelope(keyType string) []byte {
 	envelope := make([]byte, 2)
 	envelope[0] = 0x01 // Version 1 - Unified FEK-based encryption
@@ -263,8 +268,6 @@ func CreateEnvelope(keyType string) []byte {
 		envelope[1] = 0x01
 	case "custom":
 		envelope[1] = 0x02
-	case "share":
-		envelope[1] = 0x03
 	default:
 		envelope[1] = 0x00 // Unknown
 	}
@@ -288,8 +291,6 @@ func ParseEnvelope(envelope []byte) (version byte, keyType string, err error) {
 		keyType = "account"
 	case 0x02:
 		keyType = "custom"
-	case 0x03:
-		keyType = "share"
 	default:
 		keyType = "unknown"
 	}
@@ -330,10 +331,8 @@ func EncryptFEK(fek []byte, password []byte, username, keyType string) ([]byte, 
 		derivedKey = DeriveAccountPasswordKey(password, username)
 	case "custom":
 		derivedKey = DeriveCustomPasswordKey(password, username)
-	case "share":
-		derivedKey = DeriveSharePasswordKey(password, username)
 	default:
-		return nil, fmt.Errorf("unsupported key type: %s (supported: account, custom, share)", keyType)
+		return nil, fmt.Errorf("unsupported key type: %s (supported: account, custom)", keyType)
 	}
 
 	// Create envelope header
@@ -382,8 +381,6 @@ func DecryptFEK(encryptedFEK []byte, password []byte, username string) ([]byte, 
 		derivedKey = DeriveAccountPasswordKey(password, username)
 	case "custom":
 		derivedKey = DeriveCustomPasswordKey(password, username)
-	case "share":
-		derivedKey = DeriveSharePasswordKey(password, username)
 	default:
 		return nil, "", fmt.Errorf("unsupported key type: %s", keyType)
 	}

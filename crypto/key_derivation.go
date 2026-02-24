@@ -80,9 +80,9 @@ func GetEmbeddedArgon2ParamsJSON() []byte {
 	return embeddedArgon2Params
 }
 
-// Static salts for FEK wrapping
+// SECURITY NOTE on deterministic salts:
 //
-// SECURITY NOTE: These salts are intentionally static and deterministic.
+// GenerateUserKeySalt() produces deterministic salts from username + key type.
 // This design is SAFE because:
 //
 // 1. Security Model: Password → Argon2ID → KEK → wraps random FEK → encrypts file
@@ -100,7 +100,7 @@ func GetEmbeddedArgon2ParamsJSON() []byte {
 // 3. Benefits of This Design:
 //   - Allows password changes without re-encrypting all files
 //   - Each user gets a unique KEK via username-based salt derivation (see Derive*PasswordKey functions)
-//   - Maintains separation between account, custom, and share password contexts
+//   - Maintains separation between account and custom password contexts
 //
 // 4. Defense in Depth:
 //   - Even if an attacker knows the salt, they still face Argon2ID's memory-hard function
@@ -108,11 +108,6 @@ func GetEmbeddedArgon2ParamsJSON() []byte {
 //   - The randomly-generated FEKs provide an additional layer of security
 //
 // This is a well-established pattern in cryptographic key management systems.
-var (
-	FEKAccountSalt = []byte("arkfile-fek-account-salt-v1")
-	FEKCustomSalt  = []byte("arkfile-fek-custom-salt-v1")
-	FEKShareSalt   = []byte("arkfile-fek-share-salt-v1")
-)
 
 // DeriveArgon2IDKey derives a key using Argon2ID with specified parameters
 func DeriveArgon2IDKey(password, salt []byte, keyLen uint32, memory, time uint32, threads uint8) ([]byte, error) {
@@ -127,20 +122,6 @@ func DeriveArgon2IDKey(password, salt []byte, keyLen uint32, memory, time uint32
 	}
 
 	return argon2.IDKey(password, salt, time, memory, threads, keyLen), nil
-}
-
-// Password-based key derivation functions using Argon2ID
-
-// DerivePasswordMetadataKey derives a metadata encryption key from password using Argon2ID
-func DerivePasswordMetadataKey(password []byte, salt []byte, username string) ([]byte, error) {
-	// Use unified Argon2ID parameters
-	baseKey, err := DeriveArgon2IDKey(password, salt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
-	if err != nil {
-		return nil, fmt.Errorf("argon2id derivation failed: %w", err)
-	}
-
-	info := fmt.Sprintf("arkfile-metadata-encryption:%s", username)
-	return hkdfExpand(baseKey, []byte(info), 32)
 }
 
 // GenerateUserKeySalt generates a deterministic salt based on username and key type
@@ -159,13 +140,6 @@ func DeriveAccountPasswordKey(password []byte, username string) []byte {
 // DeriveCustomPasswordKey derives a key from a custom file password
 func DeriveCustomPasswordKey(password []byte, username string) []byte {
 	salt := GenerateUserKeySalt(username, "custom")
-	key, _ := DeriveArgon2IDKey(password, salt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
-	return key
-}
-
-// DeriveSharePasswordKey derives a key from a share password
-func DeriveSharePasswordKey(password []byte, username string) []byte {
-	salt := GenerateUserKeySalt(username, "share")
 	key, _ := DeriveArgon2IDKey(password, salt, UnifiedArgonSecure.KeyLen, UnifiedArgonSecure.Memory, UnifiedArgonSecure.Time, UnifiedArgonSecure.Threads)
 	return key
 }

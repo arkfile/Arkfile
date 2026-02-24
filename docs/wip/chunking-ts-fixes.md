@@ -1,6 +1,6 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: IN PROGRESS - Phase 1 COMPLETE (TS + Go + Tests), Phases 2-9 Not Started
+## Status: IN PROGRESS - Phase 1 COMPLETE, Phase 2 COMPLETE, Phases 3-9 Not Started
 
 ## Context
 
@@ -605,4 +605,39 @@ All 8 hardcoded references in test files updated:
 
 Build verified: `go build ./...` passes with no errors.
 
-### Phases 2-9: NOT STARTED
+### Phase 2: Unify Go Envelope Implementations
+
+**COMPLETE** (2026-02-24)
+
+All four implementation steps completed and verified:
+
+**Step 1: Remove dead share key type code — DONE**
+- `crypto/envelope.go` — removed `KeyTypeShare = 0x03` constant and all `case KeyTypeShare` / `case 0x03` branches
+- `crypto/file_operations.go` — removed `case "share"` and `case 0x03` branches from `EncryptFEK()` and `DecryptFEK()`
+- `crypto/key_derivation.go` — removed `DeriveSharePasswordKey()` function entirely
+- `client/static/js/src/crypto/constants.ts` — replaced stale `SALT_DOMAINS` object (which had `account`, `custom`, `share` entries with old `arkfile.*.v1` format strings) with correct `SALT_DOMAIN_PREFIXES` containing only `account` and `custom` entries matching Go's format (`arkfile-account-key-salt:`, `arkfile-custom-key-salt:`)
+- `client/static/js/src/crypto/file-encryption.ts` — already used `SALT_DOMAIN_PREFIXES` from constants.ts with only `account` and `custom`; no share prefix present
+
+**Step 2: Remove competing envelope functions — DONE**
+- `crypto/envelope.go` — removed `CreatePasswordKeyEnvelope()` and `ExtractFEKFromPasswordEnvelope()` (the salt-embedding variants)
+- Kept `KeyTypeAccount = 0x01` and `KeyTypeCustom = 0x02` constants (now sourced from chunking-params.json via Phase 1)
+- The simpler `EncryptFEK()` / `DecryptFEK()` in `crypto/file_operations.go` remain as the single implementation
+
+**Step 3: Remove unused FEK salt constants — DONE**
+- `crypto/key_derivation.go` — removed `FEKAccountSalt`, `FEKCustomSalt`, and `FEKShareSalt` constants
+
+**Step 4: Verify no callers reference removed functions — DONE**
+- `grep -r` confirmed zero references to: `CreatePasswordKeyEnvelope`, `ExtractFEKFromPasswordEnvelope`, `DeriveSharePasswordKey`, `KeyTypeShare`, `FEKAccountSalt`, `FEKCustomSalt`, `FEKShareSalt`
+- Note: `case "share":` in `cmd/arkfile-client/main.go` is the CLI share *command* (create share links), not the dead key type — this is legitimate and was correctly left in place
+
+**Additional cleanup (TS consolidation):**
+- `client/static/js/src/crypto/types.ts` — removed duplicate `PasswordContext` type definition; now imports and re-exports from `constants.ts` (single source of truth)
+- `client/static/js/src/crypto/file-encryption.ts` — reordered import/export of `PasswordContext` (import before export)
+- Removed misleading "backward compatibility" comment from `types.ts`
+
+**Verification:**
+- `go build ./...` passes (warnings only, no errors)
+- `bunx tsc --noEmit` passes (no type errors)
+- No stale `arkfile.*.v1` salt domain strings remain anywhere in the codebase
+
+### Phases 3-9: NOT STARTED

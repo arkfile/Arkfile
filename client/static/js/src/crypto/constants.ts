@@ -210,19 +210,25 @@ export async function getChunkingParams(): Promise<ChunkingConfig> {
 
 
 // ============================================================================
-// Salt Generation
+// Salt Domain Prefixes
 // ============================================================================
 
 /**
- * Domain separation strings for different salt derivations
- * These ensure that salts for different purposes are cryptographically independent
+ * Domain separation prefixes for deterministic salt derivation
+ * 
+ * CRITICAL: These MUST match the Go implementation in crypto/key_derivation.go
+ * Format: SHA-256("arkfile-{context}-key-salt:{username}") → first 32 bytes = salt
+ * 
+ * See: GenerateUserKeySalt() in crypto/key_derivation.go
  */
-export const SALT_DOMAINS = {
-  /** Domain for file encryption salt derivation */
-  FILE_ENCRYPTION: 'arkfile.file-encryption.v1',
+export type PasswordContext = 'account' | 'custom';
+
+export const SALT_DOMAIN_PREFIXES: Record<PasswordContext, string> = {
+  /** Salt prefix for account password key derivation */
+  account: 'arkfile-account-key-salt:',
   
-  /** Domain for OPAQUE protocol */
-  OPAQUE: 'arkfile.opaque.v1',
+  /** Salt prefix for custom password key derivation */
+  custom: 'arkfile-custom-key-salt:',
 } as const;
 
 // ============================================================================

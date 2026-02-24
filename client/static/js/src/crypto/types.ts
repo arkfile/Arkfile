@@ -181,11 +181,9 @@ export interface EncryptedFileData {
   tag: Uint8Array;
 }
 
-/**
- * Password context types for domain separation
- * These match the Go implementation in crypto/key_derivation.go
- */
-export type PasswordContext = 'account' | 'custom' | 'share';
+// PasswordContext: single source of truth is constants.ts
+import type { PasswordContext } from './constants';
+export type { PasswordContext } from './constants';
 
 /**
  * Options for file encryption
