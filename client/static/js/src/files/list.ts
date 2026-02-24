@@ -4,6 +4,7 @@
 
 import { authenticatedFetch } from '../utils/auth';
 import { showError } from '../ui/messages';
+import { downloadFile } from './download';
 
 export interface FileMetadata {
   file_id: string;
@@ -49,18 +50,38 @@ export function displayFiles(data: FilesResponse): void {
   data.files.forEach(file => {
     const fileElement = document.createElement('div');
     fileElement.className = 'file-item';
-    fileElement.innerHTML = `
-      <div class="file-info">
-        <strong>${escapeHtml(file.filename)}</strong>
-        <span class="file-size">${escapeHtml(file.size_readable)}</span>
-        <span class="file-date">${escapeHtml(new Date(file.uploadDate).toLocaleString())}</span>
-        <span class="encryption-type">${file.passwordType === 'account' ? 'Account Password' : 'Custom Password'}</span>
-      </div>
-      <div class="file-actions">
-        <button onclick="downloadFile('${escapeHtml(file.filename)}', '${escapeHtml(file.passwordHint || '')}', '${escapeHtml(file.sha256sum)}', '${escapeHtml(file.passwordType)}')">Download</button>
-        <button onclick="window.location.href='/file-share.html?file=${encodeURIComponent(file.file_id)}'">Share</button>
-      </div>
+
+    // Build DOM structure
+    const fileInfo = document.createElement('div');
+    fileInfo.className = 'file-info';
+    fileInfo.innerHTML = `
+      <strong>${escapeHtml(file.filename)}</strong>
+      <span class="file-size">${escapeHtml(file.size_readable)}</span>
+      <span class="file-date">${escapeHtml(new Date(file.uploadDate).toLocaleString())}</span>
+      <span class="encryption-type">${file.passwordType === 'account' ? 'Account Password' : 'Custom Password'}</span>
     `;
+
+    const fileActions = document.createElement('div');
+    fileActions.className = 'file-actions';
+
+    // Download button with proper event listener
+    const downloadBtn = document.createElement('button');
+    downloadBtn.textContent = 'Download';
+    downloadBtn.addEventListener('click', () => {
+      downloadFile(file.file_id, file.passwordHint || '', file.sha256sum, file.passwordType);
+    });
+
+    // Share button with proper event listener
+    const shareBtn = document.createElement('button');
+    shareBtn.textContent = 'Share';
+    shareBtn.addEventListener('click', () => {
+      window.location.href = `/file-share.html?file=${encodeURIComponent(file.file_id)}`;
+    });
+
+    fileActions.appendChild(downloadBtn);
+    fileActions.appendChild(shareBtn);
+    fileElement.appendChild(fileInfo);
+    fileElement.appendChild(fileActions);
     filesList.appendChild(fileElement);
   });
 
@@ -90,18 +111,4 @@ function escapeHtml(unsafe: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
-}
-
-// Make downloadFile available globally for onclick handlers
-// This is a temporary solution until we convert to proper event handling
-declare global {
-  function downloadFile(filename: string, hint: string, expectedHash: string, passwordType: string): void;
-}
-
-// Export for global access (temporary compatibility)
-if (typeof window !== 'undefined') {
-  (window as any).downloadFile = async (filename: string, hint: string, expectedHash: string, passwordType: string) => {
-    const { downloadFile } = await import('./download');
-    downloadFile(filename, hint, expectedHash, passwordType);
-  };
 }

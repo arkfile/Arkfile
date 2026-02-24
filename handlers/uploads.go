@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,7 +31,6 @@ var (
 
 // CreateUploadSession initializes a new chunked upload
 func CreateUploadSession(c echo.Context) error {
-	log.Printf("CREATE_UPLOAD_SESSION_HANDLER_START: func called")
 	username := auth.GetUsernameFromToken(c)
 
 	var request struct {
@@ -122,21 +120,8 @@ func CreateUploadSession(c echo.Context) error {
 	sha256sumNonce := request.Sha256sumNonce
 	encryptedFek := request.EncryptedFek
 
-	// METADATA TRACKING: Simplified checkpoint logging to test if basic printf works
-	logging.InfoLogger.Printf("LOG_TEST_001: UploadSession created: %s", sessionID)
-	logging.InfoLogger.Printf("LOG_TEST_002: User: %s", username)
-	logging.InfoLogger.Printf("LOG_TEST_003: Metadata received")
-
-	// METADATA TRACKING: Log metadata as it goes to database
-	logging.InfoLogger.Printf("UploadSession %s - Storing metadata in database (PRE-DATABASE):", sessionID)
-	logging.InfoLogger.Printf("  filename_nonce (to DB): '%s' (length: %d)", filenameNonce, len(filenameNonce))
-	logging.InfoLogger.Printf("  encrypted_filename (to DB): '%s' (length: %d)", encryptedFilename, len(encryptedFilename))
-	logging.InfoLogger.Printf("  sha256sum_nonce (to DB): '%s' (length: %d)", sha256sumNonce, len(sha256sumNonce))
-	logging.InfoLogger.Printf("  encrypted_sha256sum (to DB): '%s' (length: %d)", encryptedSha256sum, len(encryptedSha256sum))
-
-	// CRITICAL: Do NOT base64 encode these values - they arrive from client already base64-encoded
-	// The double-encoding bug was caused by calling base64.StdEncoding.EncodeToString() on these values
-	// Since cryptocli now expects base64-encoded data from server, we must maintain single-encoding
+	// Note: Encrypted metadata values arrive from client already base64-encoded.
+	// Do NOT re-encode them — store as-is to prevent double-encoding.
 
 	// Create upload session record with encrypted metadata
 	_, err = tx.Exec(
@@ -513,10 +498,8 @@ func UploadChunk(c echo.Context) error {
 		}
 		etag = part.ETag
 	} else {
-		// For small files, we store chunks temporarily and will use PutObject during completion
-		// For now, we just generate a fake etag to satisfy the database constraint
-		etag = fmt.Sprintf("chunk-%d-%s", chunkNumber, sessionID[:8])
-		logging.InfoLogger.Printf("Storing chunk %d for regular upload (small file)", chunkNumber+1)
+		logging.ErrorLogger.Printf("Upload session %s has no storage upload ID", sessionID)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Upload session has no storage upload ID")
 	}
 
 	// Get the actual chunk size from the request content length

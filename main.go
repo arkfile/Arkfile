@@ -67,7 +67,7 @@ func setupRoutes(e *echo.Echo) {
 	// Set up auth Echo instance
 	auth.Echo = e.Group("")
 	auth.Echo.Use(auth.JWTMiddleware())
-	// auth.Echo.Use(auth.TokenRevocationMiddleware(database.DB)) // Temporarily disabled for testing
+	auth.Echo.Use(auth.TokenRevocationMiddleware(database.DB))
 	auth.Echo.Use(handlers.RequireApproved)
 
 	// Register all routes
