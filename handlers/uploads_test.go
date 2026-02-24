@@ -20,7 +20,7 @@ import (
 	"github.com/84adam/Arkfile/storage"
 )
 
-// --- Test UploadFile ---
+// Test UploadFile
 
 // TestUploadFile_Success tests successful file upload
 func TestUploadFile_Success(t *testing.T) {
@@ -52,7 +52,7 @@ func TestUploadFile_Success(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// --- Mock GetUserByUsername (for storage check) ---
+	// Mock GetUserByUsername (for storage check)
 	// Uses the *non-transactional* GetUserByUsername outside the transaction
 	getUserSQL := `
 		SELECT id, username, created_at,
@@ -67,7 +67,7 @@ func TestUploadFile_Success(t *testing.T) {
 	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
-	// --- Transactional and Storage Expectations (Order based on handler logic) ---
+	// Transactional and Storage Expectations (Order based on handler logic)
 	mockDB.ExpectBegin()
 
 	// 1. Expect PutObjectWithPadding call first (as per actual handler logic)
@@ -102,14 +102,14 @@ func TestUploadFile_Success(t *testing.T) {
 	// 4. Expect Commit
 	mockDB.ExpectCommit()
 
-	// --- Mock LogUserAction (after commit) - now uses file_id instead of filename
+	// Mock LogUserAction (after commit) - now uses file_id instead of filename
 	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mockDB.ExpectExec(logActionSQL).WithArgs(username, "uploaded", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// --- Execute Handler ---
+	// Execute Handler
 	err := UploadFile(c)
 
-	// --- Assertions ---
+	// Assertions
 	require.NoError(t, err, "UploadFile handler failed")
 	assert.Equal(t, http.StatusOK, rec.Code, "Expected status OK")
 
@@ -160,7 +160,7 @@ func TestUploadFile_StorageLimitExceeded(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// --- Mock GetUserByUsername (for storage check) ---
+	// Mock GetUserByUsername (for storage check)
 	getUserSQL := `
 		SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
@@ -176,10 +176,10 @@ func TestUploadFile_StorageLimitExceeded(t *testing.T) {
 
 	// Handler should check storage and fail BEFORE starting transaction or calling storage
 
-	// --- Execute Handler ---
+	// Execute Handler
 	err := UploadFile(c)
 
-	// --- Assertions ---
+	// Assertions
 	require.Error(t, err, "Expected an error for storage limit exceeded")
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok, "Error should be an echo.HTTPError")
@@ -217,7 +217,7 @@ func TestUploadFile_StoragePutError(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// --- Mock GetUserByUsername (for storage check) ---
+	// Mock GetUserByUsername (for storage check)
 	getUserSQL := `
 		SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
@@ -231,7 +231,7 @@ func TestUploadFile_StoragePutError(t *testing.T) {
 	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
-	// --- Transactional and Storage Expectations ---
+	// Transactional and Storage Expectations
 	mockDB.ExpectBegin()
 
 	// 1. Expect PutObjectWithPadding call to FAIL
@@ -248,10 +248,10 @@ func TestUploadFile_StoragePutError(t *testing.T) {
 	// 2. Expect Rollback because PutObject failed
 	mockDB.ExpectRollback()
 
-	// --- Execute Handler ---
+	// Execute Handler
 	err := UploadFile(c)
 
-	// --- Assertions ---
+	// Assertions
 	require.Error(t, err, "Expected an error for storage PutObject failure")
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok, "Error should be an echo.HTTPError")
@@ -290,7 +290,7 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// --- Mock GetUserByUsername (for storage check) ---
+	// Mock GetUserByUsername (for storage check)
 	getUserSQL := `
 		SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
@@ -304,7 +304,7 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
-	// --- Transactional and Storage Expectations ---
+	// Transactional and Storage Expectations
 	mockDB.ExpectBegin()
 
 	// 1. Expect PutObjectWithPadding call to SUCCEED
@@ -327,10 +327,10 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 	// 4. Expect Rollback
 	mockDB.ExpectRollback()
 
-	// --- Execute Handler ---
+	// Execute Handler
 	err := UploadFile(c)
 
-	// --- Assertions ---
+	// Assertions
 	require.Error(t, err, "Expected an error for metadata insert failure")
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok, "Error should be an echo.HTTPError")
@@ -369,7 +369,7 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// --- Mock GetUserByUsername (for storage check) ---
+	// Mock GetUserByUsername (for storage check)
 	getUserSQL := `
 		SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
@@ -383,7 +383,7 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
-	// --- Transactional and Storage Expectations ---
+	// Transactional and Storage Expectations
 	mockDB.ExpectBegin()
 
 	// 1. Expect PutObjectWithPadding call to SUCCEED
@@ -411,10 +411,10 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	// 4. Expect Rollback because storage update failed
 	mockDB.ExpectRollback()
 
-	// --- Execute Handler ---
+	// Execute Handler
 	err := UploadFile(c)
 
-	// --- Assertions ---
+	// Assertions
 	require.Error(t, err, "Expected an error for update storage failure")
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok, "Error should be an echo.HTTPError")
@@ -427,7 +427,7 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	mockStorage.AssertExpectations(t) // Check PutObject was called
 }
 
-// --- Additional Test Case Suggestions ---
+// Additional Test Case Suggestions
 //
 // For UploadFile Handler (Simple Upload - handlers.UploadFile)
 // - TestUploadFile_InvalidRequest_MissingFields: Test with missing required fields in the JSON request (e.g., `filename`, `data`, `sha256sum`).
@@ -517,7 +517,7 @@ func TestUploadFile_CommitError(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// --- Mock GetUserByUsername (for storage check) ---
+	// Mock GetUserByUsername (for storage check)
 	getUserSQL := `
 		SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
@@ -531,7 +531,7 @@ func TestUploadFile_CommitError(t *testing.T) {
 	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
 	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
 
-	// --- Transactional and Storage Expectations ---
+	// Transactional and Storage Expectations
 	mockDB.ExpectBegin()
 
 	// 1. Expect PutObjectWithPadding call to SUCCEED
@@ -560,10 +560,10 @@ func TestUploadFile_CommitError(t *testing.T) {
 		mock.Anything, mock.AnythingOfType("string"), mock.AnythingOfType("storage.RemoveObjectOptions"),
 	).Return(nil).Maybe() // Use Maybe() since the handler behavior on commit error may vary
 
-	// --- Execute Handler ---
+	// Execute Handler
 	err := UploadFile(c)
 
-	// --- Assertions ---
+	// Assertions
 	require.Error(t, err, "Expected an error for commit failure")
 	httpErr, ok := err.(*echo.HTTPError)
 	require.True(t, ok, "Error should be an echo.HTTPError")

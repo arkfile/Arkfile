@@ -250,7 +250,7 @@ fi
 
 # Check service certificates
 for service in arkfile rqlite minio; do
-    cert_path="${TLS_DIR}/${service}/server-cert.pem"
+    cert_path="${TLS_DIR}/${service}/server.crt"
     if [ -f "${cert_path}" ]; then
         if check_certificate_expiry "${cert_path}" "${service}" ${WARNING_DAYS}; then
             case $? in
@@ -385,8 +385,8 @@ echo -e "${BLUE}Final system verification...${NC}"
 verification_failed=false
 
 for service in arkfile rqlite minio; do
-    cert_path="${TLS_DIR}/${service}/server-cert.pem"
-    key_path="${TLS_DIR}/${service}/server-key.pem"
+    cert_path="${TLS_DIR}/${service}/server.crt"
+    key_path="${TLS_DIR}/${service}/server.key"
     
     if [ -f "${cert_path}" ] && [ -f "${key_path}" ]; then
         # Test certificate loading
@@ -478,7 +478,7 @@ for service in ca arkfile rqlite minio; do
             fi
             ;;
         *)
-            cert_file="${TLS_DIR}/${service}/server-cert.pem"
+            cert_file="${TLS_DIR}/${service}/server.crt"
             if [ -f "${cert_file}" ]; then
                 expires=$(sudo -u ${USER} openssl x509 -in "${cert_file}" -noout -enddate 2>/dev/null | cut -d= -f2)
                 algorithm=$(sudo -u ${USER} openssl x509 -in "${cert_file}" -noout -text 2>/dev/null | grep "Public Key Algorithm" | head -1 | awk -F': ' '{print $2}')

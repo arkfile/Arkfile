@@ -118,7 +118,7 @@ func (m *MockObjectStorageProvider) CompleteMultipartUploadWithEnvelope(ctx cont
 	return args.Error(0)
 }
 
-// --- Mock Stored Object ---
+// Mock Stored Object
 // MockStoredObject mocks the object returned by GetObject
 type MockStoredObject struct {
 	mock.Mock
@@ -155,7 +155,7 @@ func (m *MockStoredObject) Stat() (ObjectInfo, error) {
 	return m.Info, m.StatErr
 }
 
-// --- Helpers to set content and stat info for MockStoredObject ---
+// Helpers to set content and stat info for MockStoredObject
 
 // SetStatInfo sets the ObjectInfo and error to be returned by Stat()
 func (m *MockStoredObject) SetStatInfo(info ObjectInfo, err error) {

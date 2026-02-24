@@ -24,14 +24,14 @@ We will use a **multi-stage Dockerfile** to build a custom Caddy binary and then
 Create a new file named `Dockerfile.caddy` in the project root:
 
 ```dockerfile
-# --- Stage 1: Builder ---
+# Stage 1: Builder
 FROM caddy:builder-alpine AS builder
 
 # Build Caddy with the deSEC DNS module
 RUN xcaddy build \
     --with github.com/caddy-dns/desec
 
-# --- Stage 2: Final ---
+# Stage 2: Final
 FROM caddy:alpine
 
 # Copy the custom binary from the builder stage

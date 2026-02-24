@@ -288,8 +288,8 @@ services:
       - RQLITE_USERNAME=arkfile
       - PORT=8080
       - TLS_ENABLED=true
-      - TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/server-cert.pem
-      - TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/server-key.pem
+      - TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/server.crt
+      - TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/server.key
       # Secret file references (read by getSecretOrEnv)
       - MASTER_KEY_FILE=/run/secrets/arkfile_master_key
       - RQLITE_PASSWORD_FILE=/run/secrets/rqlite_password

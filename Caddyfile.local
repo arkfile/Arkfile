@@ -4,7 +4,7 @@
 # Local development site
 localhost:8443 {
 	# Use local TLS certificates
-	tls /opt/arkfile/etc/keys/tls/arkfile/server-cert.pem /opt/arkfile/etc/keys/tls/arkfile/server-key.pem
+	tls /opt/arkfile/etc/keys/tls/arkfile/server.crt /opt/arkfile/etc/keys/tls/arkfile/server.key
 	
 	# Basic security headers
 	header {
@@ -61,7 +61,7 @@ localhost:8080 {
 # Alternative localhost names
 127.0.0.1:8443 {
 	# Use local TLS certificates
-	tls /opt/arkfile/etc/keys/tls/arkfile/server-cert.pem /opt/arkfile/etc/keys/tls/arkfile/server-key.pem
+	tls /opt/arkfile/etc/keys/tls/arkfile/server.crt /opt/arkfile/etc/keys/tls/arkfile/server.key
 	
 	# Basic security headers
 	header {

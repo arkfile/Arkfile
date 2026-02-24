@@ -221,8 +221,8 @@ JWT_TOKEN_LIFETIME_MINUTES=30
 # TLS Configuration
 TLS_ENABLED=true
 TLS_PORT=8443
-TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server-cert.pem
-TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server-key.pem
+TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.crt
+TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.key
 
 # Storage Configuration (Local MinIO for demo)
 STORAGE_PROVIDER=local

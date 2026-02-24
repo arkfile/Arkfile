@@ -534,8 +534,8 @@ CORS_ALLOWED_ORIGINS=http://localhost:8080,https://localhost:8443
 # TLS Configuration
 TLS_ENABLED=true
 TLS_PORT=8443
-TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server-cert.pem
-TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server-key.pem
+TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.crt
+TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.key
 
 # Storage Configuration - Generic S3 (using local MinIO as S3-compatible backend)
 STORAGE_PROVIDER=generic-s3

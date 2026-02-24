@@ -699,7 +699,7 @@ sudo -u arkfile ls -la /opt/arkfile/var/lib/rqlite/
 ./scripts/validate-certificates.sh
 
 # Check certificate expiration
-openssl x509 -in /opt/arkfile/etc/keys/tls/arkfile/server-cert.pem -noout -dates
+openssl x509 -in /opt/arkfile/etc/keys/tls/arkfile/server.crt -noout -dates
 
 # Test TLS connection
 openssl s_client -connect localhost:443 -servername yourdomain.com

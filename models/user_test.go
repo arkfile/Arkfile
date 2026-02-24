@@ -17,7 +17,7 @@ import (
 // TestMain sets up necessary environment variables for config loading before running tests
 // and cleans them up afterwards.
 func TestMain(m *testing.M) {
-	// --- Test Config Setup ---
+	// Test Config Setup
 	config.ResetConfigForTest()
 
 	// Store original env vars and set test values
@@ -46,7 +46,7 @@ func TestMain(m *testing.M) {
 	// Run tests
 	exitCode := m.Run()
 
-	// --- Cleanup ---
+	// Cleanup
 	// Restore original env vars
 	for key, originalValue := range originalEnv {
 		if originalValue == "" {

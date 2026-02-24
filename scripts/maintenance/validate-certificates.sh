@@ -193,7 +193,7 @@ fi
 
 # Check service certificates
 for service in arkfile rqlite minio; do
-    cert_path="${TLS_DIR}/${service}/server-cert.pem"
+    cert_path="${TLS_DIR}/${service}/server.crt"
     if [ -f "${cert_path}" ]; then
         total_checks=$((total_checks + 1))
         if check_certificate_expiry "${cert_path}" "${service}" ${WARNING_DAYS}; then
@@ -222,8 +222,8 @@ fi
 
 # Validate service key pairs
 for service in arkfile rqlite minio; do
-    cert_path="${TLS_DIR}/${service}/server-cert.pem"
-    key_path="${TLS_DIR}/${service}/server-key.pem"
+    cert_path="${TLS_DIR}/${service}/server.crt"
+    key_path="${TLS_DIR}/${service}/server.key"
     if [ -f "${cert_path}" ] && [ -f "${key_path}" ]; then
         total_checks=$((total_checks + 1))
         if validate_key_pair "${cert_path}" "${key_path}" "${service}"; then
@@ -242,7 +242,7 @@ echo "========================================"
 ca_cert="${TLS_DIR}/ca/ca.crt"
 if [ -f "${ca_cert}" ]; then
     for service in arkfile rqlite minio; do
-        cert_path="${TLS_DIR}/${service}/server-cert.pem"
+        cert_path="${TLS_DIR}/${service}/server.crt"
         if [ -f "${cert_path}" ]; then
             total_checks=$((total_checks + 1))
             if validate_certificate_chain "${cert_path}" "${ca_cert}" "${service}"; then
@@ -263,7 +263,7 @@ if [ "$1" = "--details" ] || [ "$1" = "-d" ]; then
     get_certificate_details "${TLS_DIR}/ca/ca.crt" "Certificate Authority"
     
     for service in arkfile rqlite minio; do
-        cert_path="${TLS_DIR}/${service}/server-cert.pem"
+        cert_path="${TLS_DIR}/${service}/server.crt"
         if [ -f "${cert_path}" ]; then
             get_certificate_details "${cert_path}" "${service}"
         fi

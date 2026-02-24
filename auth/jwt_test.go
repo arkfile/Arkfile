@@ -21,7 +21,7 @@ import (
 // TestMain sets up necessary environment variables for config loading before running tests
 // and cleans them up afterwards.
 func TestMain(m *testing.M) {
-	// --- Test Config Setup ---
+	// Test Config Setup
 	config.ResetConfigForTest()
 
 	// Setup in-memory SQLite DB for KeyManager
@@ -86,7 +86,7 @@ func TestMain(m *testing.M) {
 	// Run tests
 	exitCode := m.Run()
 
-	// --- Cleanup ---
+	// Cleanup
 	os.Unsetenv("ARKFILE_MASTER_KEY")
 	for key, originalValue := range originalEnv {
 		if originalValue == "" {

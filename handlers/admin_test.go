@@ -31,7 +31,7 @@ func setupAdminEnv(adminUsername string) func() {
 	}
 }
 
-// --- Admin Handler Tests ---
+// Admin Handler Tests
 
 // TestGetPendingUsers_Success_Admin tests successful retrieval of pending users by an admin.
 func TestGetPendingUsers_Success_Admin(t *testing.T) {
@@ -91,7 +91,7 @@ func TestGetPendingUsers_Success_Admin(t *testing.T) {
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
-// --- Additional Test Case Suggestions ---
+// Additional Test Case Suggestions
 //
 // General for all Admin Endpoints
 // - Test with an expired admin JWT token.

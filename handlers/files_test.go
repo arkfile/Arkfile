@@ -20,7 +20,7 @@ import (
 	"github.com/84adam/Arkfile/models"
 )
 
-// --- Test DownloadFile ---
+// Test DownloadFile
 
 // TestDownloadFile_Success tests successful file download with encrypted metadata
 func TestDownloadFile_Success(t *testing.T) {
@@ -77,7 +77,7 @@ func TestDownloadFile_Success(t *testing.T) {
 	mockStorage.AssertExpectations(t)
 }
 
-// --- Test DeleteFile ---
+// Test DeleteFile
 
 // TestDeleteFile_Success tests successful file deletion
 func TestDeleteFile_Success(t *testing.T) {
@@ -233,7 +233,7 @@ func TestDeleteFile_StorageError(t *testing.T) {
 	mockStorage.AssertExpectations(t)
 }
 
-// --- Additional Test Case Suggestions ---
+// Additional Test Case Suggestions
 //
 // For DownloadFile Handler (handlers.DownloadFile)
 // - TestDownloadFile_MetadataNotFound: File metadata doesn't exist in 'file_metadata' table (sql.ErrNoRows on owner check).

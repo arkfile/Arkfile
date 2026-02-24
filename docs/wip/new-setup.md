@@ -207,8 +207,8 @@ RQLITE_PASSWORD=${RQLITE_PASSWORD}
 PORT=8080
 TLS_ENABLED=${TLS_ENABLED}
 TLS_PORT=8443
-TLS_CERT_FILE=${BASE_DIR}/etc/keys/tls/arkfile/server-cert.pem
-TLS_KEY_FILE=${BASE_DIR}/etc/keys/tls/arkfile/server-key.pem
+TLS_CERT_FILE=${BASE_DIR}/etc/keys/tls/arkfile/server.crt
+TLS_KEY_FILE=${BASE_DIR}/etc/keys/tls/arkfile/server.key
 
 # Storage (MinIO/S3)
 STORAGE_PROVIDER=generic-s3
