@@ -360,7 +360,7 @@ Upload via Go CLI, download via TS client, then verify identical plaintext outpu
 
 ---
 
-## Phase 5: Update Cryptocli to Streaming Encrypt and Upload
+## Phase 5: Update Cryptocli to Support Streaming Encrypt and Upload
 
 ### Goal
 
@@ -714,3 +714,139 @@ Resolved the dual-endpoint problem identified in Verify 4. Chose Option A: unifi
 - Verify 5: Cross-platform test
 
 ### Phases 5-9: NOT STARTED
+
+---
+
+`...`
+
+---
+
+# HOLD UP
+
+## Phase 4 Detailed Assessment & New Decisions (2025-02-25)
+
+### Progress Re-Assessment
+
+**Verify 4 (Metadata Endpoint Unification): COMPLETE [OK]**
+- `GetFileDownloadMetadata` removed from `downloads.go`
+- `/api/files/:fileId/metadata` route removed
+- `GetFileMeta` in `files.go` now returns unified response with `file_id`, `chunk_count`, `chunk_size_bytes`, `total_chunks` plus all encrypted metadata fields
+- Both TS `streaming-download.ts` and Go CLI `main.go` use `/api/files/{fileId}/meta`
+
+**Verify 1 (Metadata Field Decryption): NOT COMPLETE [X]**
+- In `streaming-download.ts`, `decryptMetadataField()` receives `fek` as the decryption key
+- But metadata (filename, sha256sum) is encrypted with the **account key** (Argon2id derived from account password + username), NOT the FEK
+- Both Go (`DecryptFileMetadata` in `crypto/file_operations.go`) and TS (`upload.ts`) confirm: metadata is ALWAYS encrypted with the account key
+- Fix: owner download path must use account key for metadata decryption
+
+**Verify 2 (Envelope Stripping on Chunk 0): NOT COMPLETE [X]**
+- In `streaming-download.ts`, `downloadAndDecryptChunks()` passes raw downloaded chunk data directly to `decryptor.decryptChunk()`
+- Chunk 0 from the server contains `[0x01][keyType][nonce][ciphertext][tag]` (2-byte envelope header prepended)
+- `AESGCMDecryptor.decryptChunk()` expects `[nonce][ciphertext][tag]` format
+- First 2 bytes will be misinterpreted as nonce bytes → decryption will fail
+- Same issue in `downloadAndDecryptShareChunks()`
+- Fix: strip 2-byte envelope header from chunk 0 before decryption
+
+**Verify 3 (FEK Decryption Must Strip Envelope Header): NOT COMPLETE [X]**
+- In `download.ts`, `decryptFEK()` passes the full `encrypted_fek` bytes to `decryptChunk()`
+- The comment says format is `[nonce][ciphertext][tag]` but the actual format (confirmed in both `upload.ts` and Go `EncryptFEK`) is `[version(1)][keyType(1)][nonce(12)][ciphertext][tag(16)]`
+- 2-byte envelope header must be stripped before AES-GCM decryption
+- Fix: strip first 2 bytes, optionally validate version and key type
+
+**Verify 5 (Cross-Platform Test): BLOCKED** by Verify 1-3
+
+### New Discovery: Share Metadata Gap
+
+**Problem identified**: The e2e test (`scripts/testing/e2e-test.sh`) Phase 9.7 verifies share download integrity by comparing against shell variables captured during upload (Phase 8). It does NOT verify that a share recipient can access the file's metadata (filename, size, SHA256 digest) through the share mechanism itself.
+
+The server returns encrypted metadata fields (`encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce`) in `GetShareEnvelope`, but these are encrypted with the **owner's account key**. A share recipient has only the share password — they cannot derive the owner's account key and therefore cannot decrypt these metadata fields.
+
+**Impact**: Share recipients have no way to:
+1. See the filename before downloading
+2. See the file size before downloading (useful for large files)
+3. Verify SHA256 digest after downloading and decrypting
+
+### Decision: Extend ShareEnvelope with File Metadata
+
+**Current `ShareEnvelope` structure** (`crypto/share_kdf.go`):
+```json
+{
+  "fek": "base64-encoded-FEK",
+  "download_token": "base64-encoded-download-token"
+}
+```
+
+**New `ShareEnvelope` structure**:
+```json
+{
+  "fek": "base64-encoded-FEK",
+  "download_token": "base64-encoded-download-token",
+  "filename": "document.pdf",
+  "size_bytes": 52428800,
+  "sha256": "abcdef0123456789..."
+}
+```
+
+**How it works**:
+1. During share creation, the **owner** (who has the account key) decrypts the file metadata
+2. The plaintext filename, size, and SHA256 are included in the `ShareEnvelope` JSON
+3. The entire envelope is AES-GCM encrypted with the share key (Argon2id from share password + random salt) using AAD (share_id + file_id)
+4. The encrypted envelope blob is stored on the server (opaque to the server)
+5. Share recipient enters share password → derives share key → decrypts envelope → sees filename/size/sha256 PLUS gets FEK and download token
+6. Recipient can preview metadata before downloading, and verify SHA256 after decrypting
+
+### Zero-Knowledge Privacy Analysis
+
+**What the server knows** (unchanged by this change):
+- File size (needed for byte-range chunk serving)
+- Storage ID (internal reference to S3 object)
+- Encrypted metadata blobs (filename, sha256sum — encrypted with account key, opaque to server)
+- Encrypted FEK blob (encrypted with account key, opaque to server)
+- Encrypted share envelope blob (encrypted with share key, opaque to server)
+- Download token hash (SHA-256, one-way — server cannot derive the token)
+- Share ID, file ID, owner username, timestamps
+
+**What the server CANNOT know** (preserved):
+- Plaintext filename — still encrypted with account key in `file_metadata` table; now ALSO inside the share envelope, but the share envelope itself is AES-GCM encrypted with the share key derived from the share password. The server never has the share password.
+- Plaintext SHA256 digest — same protection as filename
+- File Encryption Key (FEK) — encrypted inside both the owner envelope (account key) and share envelope (share key). Server never has either password.
+- File contents — encrypted with FEK, which server never has
+- Share password — never transmitted; only the salt is stored; key derivation happens client-side
+- Download token — server only stores the SHA-256 hash; token itself is inside the encrypted share envelope
+
+**Net effect**: Adding metadata to the share envelope does NOT degrade zero-knowledge properties. The plaintext metadata was already present on the client side during share creation (the owner decrypted it to display in the UI). The metadata simply moves from "only available to owner" to "available to anyone with the share password," which is the intended access model. The server sees only the same opaque encrypted blob — just slightly larger.
+
+### Implementation Plan
+
+#### Phase 4A: Fix TS Download Basics (Verify 2, 3) — TS only, no server changes
+- [ ] `download.ts` → `decryptFEK()`: strip 2-byte envelope header before AES-GCM decryption
+- [ ] `streaming-download.ts` → `downloadAndDecryptChunks()`: strip 2-byte header from chunk 0
+- [ ] `streaming-download.ts` → `downloadAndDecryptShareChunks()`: same chunk 0 fix
+
+#### Phase 4B: Fix Metadata Key for Owner Downloads (Verify 1) — TS only
+- [ ] Owner download path: use account key (not FEK) for metadata decryption
+- [ ] Ensure account key is available in the download flow (from cache or prompt)
+
+#### Phase 4C: Share Envelope Metadata — Go + TS
+**Go changes:**
+- [ ] `crypto/share_kdf.go`: Add `Filename`, `SizeBytes`, `SHA256` fields to `ShareEnvelope` struct
+- [ ] `crypto/share_kdf.go`: Update `CreateShareEnvelope()` signature to accept metadata
+- [ ] `cryptocli create-share`: Decrypt owner metadata (account key), include plaintext in envelope
+- [ ] `cryptocli decrypt-share`: Output filename/size/sha256 from decrypted envelope
+
+**TS changes:**
+- [ ] `shares/share-creation.ts` or `shares/share-crypto.ts`: Include metadata in envelope JSON before encryption
+- [ ] `shares/share-access.ts`: Extract and display filename/size/sha256 from decrypted envelope
+- [ ] Share download UI: Show filename/size before download, verify SHA256 after
+
+**E2E test:**
+- [ ] Phase 9.6/9.7: Verify `cryptocli decrypt-share` outputs correct filename and sha256
+- [ ] Compare against original values from Phase 8
+
+#### Phase 4D: Cross-Platform Test (Verify 5)
+- [ ] Go CLI upload → TS browser download (owner flow)
+- [ ] TS browser upload → Go CLI download (owner flow)
+- [ ] Go CLI share create → TS browser share access
+- [ ] TS browser share create → Go CLI share access
+
+---
