@@ -43,7 +43,7 @@ In order to slowly build up the core functionality of the system and prove its c
 
 ## Using Git
 
-- Do not add files to commit, nor create any commits yourself at any time. This is up to the developers. Encourage saving progress during large projects, but DO NOT COMMIT or PUSH code to git at any time by yourself.
+Do not add files to commit, nor create any commits yourself at any time. This is up to the developers. Encourage saving progress during large projects, but DO NOT COMMIT or PUSH code to git at any time by yourself.
 
 ## No Emojis
 
@@ -51,7 +51,7 @@ No emojis in any code, documentation, or responses please. If needed, instead of
 
 ## Comment/Log/Print Formatting
 
-No "===" or "---" characters for formatting in log/print statements or comments please. Keep comments short and concise and focused on the intended or established functionality of the app in its ideal form. (NOTE: If you find yourself beginning to write something to the effect of "keeping this for backwards compatibility" or "keep this as a fallback" stop and immediately flag this to the developers.Refer to 'Greenfield App' and 'Function Review Sanity Checks' sections for more information.)
+No "===" or "---" characters for formatting in log/print statements or comments please. Keep comments short and concise and focused on the intended or established functionality of the app in its ideal form. (NOTE: If you find yourself beginning to write something to the effect of "keeping this for backwards compatibility" or "keep this as a fallback" stop and immediately flag this to the developers. Refer to 'Greenfield App' and 'Function Review Sanity Checks' sections for more information.)
 
 ## Honesty and Transparency
 
