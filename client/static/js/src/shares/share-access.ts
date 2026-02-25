@@ -18,12 +18,7 @@ interface ShareEnvelope {
   file_id: string;
   salt: string;
   encrypted_envelope: string;
-  encrypted_filename: string;
-  filename_nonce: string;
-  encrypted_sha256sum: string;
-  sha256sum_nonce: string;
   size_bytes: number;
-  download_token?: string; // Will be decrypted from the envelope
 }
 
 export class ShareAccessUI {
@@ -111,15 +106,16 @@ export class ShareAccessUI {
       // Store the Download Token for later use
       this.downloadToken = decryptedEnvelope.downloadToken;
 
-      // 3. Decrypt Filename
-      const filename = await shareCrypto.decryptMetadata(
-        this.envelope.encrypted_filename,
-        this.envelope.filename_nonce,
-        decryptedEnvelope.fek
-      );
+      // 3. Get filename from the decrypted ShareEnvelope metadata
+      // Share recipients cannot decrypt server-side encrypted_filename because
+      // it's encrypted with the owner's account key. Instead, the filename
+      // is included in the ShareEnvelope JSON (encrypted with share password).
+      const filename = decryptedEnvelope.metadata?.filename || 'shared-file';
+      const sha256 = decryptedEnvelope.metadata?.sha256;
+      const sizeBytes = decryptedEnvelope.metadata?.sizeBytes || this.envelope.size_bytes;
 
       // 4. Show file details and enable download
-      this.showFileDetails(filename, this.envelope.size_bytes, decryptedEnvelope.fek);
+      this.showFileDetails(filename, sizeBytes, decryptedEnvelope.fek, sha256);
       
       if (statusDiv) statusDiv.className = 'hidden';
 
@@ -132,7 +128,7 @@ export class ShareAccessUI {
     }
   }
 
-  private showFileDetails(filename: string, size: number, fek: Uint8Array): void {
+  private showFileDetails(filename: string, size: number, fek: Uint8Array, sha256?: string): void {
     const form = document.getElementById('shareAccessForm');
     const details = document.getElementById('fileDetails');
     const nameDisplay = document.getElementById('fileNameDisplay');
@@ -145,11 +141,11 @@ export class ShareAccessUI {
     if (sizeDisplay) sizeDisplay.textContent = this.formatBytes(size);
 
     if (downloadBtn) {
-      downloadBtn.onclick = () => this.downloadFile(filename, fek);
+      downloadBtn.onclick = () => this.downloadFile(filename, fek, sha256);
     }
   }
 
-  private async downloadFile(filename: string, fek: Uint8Array): Promise<void> {
+  private async downloadFile(filename: string, fek: Uint8Array, sha256?: string): Promise<void> {
     const statusDiv = document.getElementById('shareStatus');
     if (statusDiv) {
       statusDiv.textContent = 'Downloading...';
@@ -163,13 +159,16 @@ export class ShareAccessUI {
       }
 
       // Use chunked download with progress tracking
+      // Pass share metadata (from decrypted envelope) so the download manager
+      // can include filename/sha256 in the result without needing the account key
       const result: StreamingDownloadResult = await downloadSharedFileChunked(
         this.shareId,
         fek,
         this.downloadToken,
+        { filename, sha256 },
         {
           showProgressUI: true,
-          onProgress: (progress) => {
+          onProgress: (progress: { stage: string; percentage: number; error?: string | undefined }) => {
             // Update status with progress info
             if (statusDiv && progress.stage === 'downloading') {
               const percentage = Math.round(progress.percentage);

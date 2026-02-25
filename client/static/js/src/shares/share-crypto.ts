@@ -84,29 +84,57 @@ export async function validateSharePasswordStrength(
 // ============================================================================
 
 /**
- * Encrypts a File Encryption Key (FEK) and Download Token for sharing
+ * Share Envelope JSON structure (matches Go's crypto.ShareEnvelope)
+ * 
+ * This JSON payload is encrypted with AES-GCM-AAD before storage.
+ * The share recipient decrypts it to get the FEK, download token, and file metadata.
+ */
+interface ShareEnvelopeJSON {
+  fek: string;            // base64-encoded FEK
+  download_token: string; // base64-encoded Download Token
+  filename?: string;      // plaintext filename (for preview before download)
+  size_bytes?: number;    // file size in bytes (for preview before download)
+  sha256?: string;        // plaintext SHA256 hex digest (for post-download verification)
+}
+
+/**
+ * File metadata to include in the share envelope
+ */
+export interface ShareFileMetadata {
+  filename: string;
+  sizeBytes: number;
+  sha256: string;
+}
+
+/**
+ * Encrypts a File Encryption Key (FEK), Download Token, and file metadata for sharing
  * 
  * This function:
  * 1. Generates a cryptographically secure random salt
  * 2. Generates a random Download Token (32 bytes)
  * 3. Derives an encryption key from the share password using Argon2id
- * 4. Encrypts [FEK + Download Token] with AES-256-GCM with AAD binding
- * 5. Returns the encrypted envelope and salt for storage
+ * 4. Creates a JSON envelope with FEK, Download Token, and file metadata
+ * 5. Encrypts the JSON envelope with AES-256-GCM with AAD binding
+ * 6. Returns the encrypted envelope and salt for storage
  * 
- * The encrypted payload format is: [FEK (32 bytes)][Download Token (32 bytes)]
+ * The JSON envelope format matches Go's crypto.ShareEnvelope for cross-platform compatibility:
+ *   {"fek":"base64...","download_token":"base64...","filename":"...","size_bytes":N,"sha256":"..."}
+ * 
  * AAD binding: share_id + file_id prevents envelope swapping attacks
  * 
  * @param fek - The File Encryption Key to encrypt (32 bytes)
  * @param sharePassword - The password to protect the share
  * @param shareId - The Share ID (used as AAD)
  * @param fileId - The File ID (used as AAD binding)
+ * @param metadata - File metadata to include in the envelope (filename, size, sha256)
  * @returns Encryption metadata (encrypted envelope + salt + download token hash)
  */
 export async function encryptFEKForShare(
   fek: Uint8Array,
   sharePassword: string,
   shareId: string,
-  fileId: string
+  fileId: string,
+  metadata?: ShareFileMetadata
 ): Promise<ShareEncryptionMetadata & { downloadToken: string; downloadTokenHash: string }> {
   if (fek.length !== KEY_SIZES.FILE_ENCRYPTION_KEY) {
     throw new EncryptionError(
@@ -129,10 +157,21 @@ export async function encryptFEKForShare(
     // Generate a random Download Token (32 bytes)
     const downloadToken = randomBytes(32);
     
-    // Combine FEK and Download Token into a single payload
-    const payload = new Uint8Array(64); // 32 + 32
-    payload.set(fek, 0);
-    payload.set(downloadToken, 32);
+    // Build JSON envelope matching Go's crypto.ShareEnvelope format
+    const envelopeJSON: ShareEnvelopeJSON = {
+      fek: toBase64(fek),
+      download_token: toBase64(downloadToken),
+    };
+    
+    // Include file metadata if provided
+    if (metadata) {
+      envelopeJSON.filename = metadata.filename;
+      envelopeJSON.size_bytes = metadata.sizeBytes;
+      envelopeJSON.sha256 = metadata.sha256;
+    }
+    
+    // Serialize to JSON bytes (matches Go's json.Marshal)
+    const payload = new TextEncoder().encode(JSON.stringify(envelopeJSON));
     
     // Get Argon2id parameters from config
     const argon2Params = await getArgon2Params();
@@ -147,7 +186,7 @@ export async function encryptFEKForShare(
     // Prepare AAD (Share ID + File ID for binding)
     const aad = new TextEncoder().encode(shareId + fileId);
 
-    // Encrypt the payload (FEK + Download Token) with AAD binding
+    // Encrypt the JSON envelope with AAD binding
     const encryptionResult = await encryptAESGCM({
       data: payload,
       key: keyDerivation.key,
@@ -156,7 +195,6 @@ export async function encryptFEKForShare(
     
     // Clean up sensitive data
     secureWipe(keyDerivation.key);
-    secureWipe(payload);
     
     // The encryptionResult contains: ciphertext, iv (nonce), and tag
     // We need to combine them for storage: [nonce][ciphertext][tag]
@@ -189,19 +227,34 @@ export async function encryptFEKForShare(
 // ============================================================================
 
 /**
- * Decrypts a Share Envelope to extract FEK and Download Token
+ * Result of decrypting a share envelope
+ * Includes FEK, download token, and optional file metadata
+ */
+export interface DecryptedShareEnvelope {
+  fek: Uint8Array;
+  downloadToken: string;
+  /** File metadata from the envelope (available if included during share creation) */
+  metadata?: {
+    filename?: string;
+    sizeBytes?: number;
+    sha256?: string;
+  };
+}
+
+/**
+ * Decrypts a Share Envelope to extract FEK, Download Token, and file metadata
  * 
- * The Share Envelope contains the encrypted FEK. The encrypted payload format is:
- * [FEK (32 bytes)][Download Token (32 bytes)]
+ * The Share Envelope is a JSON payload encrypted with AES-GCM-AAD:
+ *   {"fek":"base64...","download_token":"base64...","filename":"...","size_bytes":N,"sha256":"..."}
  * 
- * This function needs both the encrypted envelope and the salt to derive the decryption key.
+ * This format matches Go's crypto.ShareEnvelope for cross-platform compatibility.
  * 
- * @param encryptedEnvelopeBase64 - The encrypted envelope (base64) containing FEK + Download Token
+ * @param encryptedEnvelopeBase64 - The encrypted envelope (base64)
  * @param sharePassword - The share password
  * @param shareId - The share ID (used as AAD)
  * @param fileId - The file ID (used as AAD binding)
  * @param saltBase64 - The salt used for key derivation (base64)
- * @returns Object containing the FEK and Download Token
+ * @returns Object containing the FEK, Download Token, and optional file metadata
  * @throws DecryptionError if password is incorrect or data is corrupted
  */
 export async function decryptShareEnvelope(
@@ -210,7 +263,7 @@ export async function decryptShareEnvelope(
   shareId: string,
   fileId: string,
   saltBase64?: string
-): Promise<{ fek: Uint8Array; downloadToken: string }> {
+): Promise<DecryptedShareEnvelope> {
   if (!sharePassword || sharePassword.length === 0) {
     throw new DecryptionError('Share password cannot be empty');
   }
@@ -219,12 +272,7 @@ export async function decryptShareEnvelope(
     throw new DecryptionError('Share ID cannot be empty');
   }
   
-  // For now, we'll use the existing decryptFEKFromShare which only returns the FEK
-  // The Download Token is not yet implemented in the backend envelope
-  // So we'll return a placeholder for now
-  
   try {
-    // If salt is provided, use it; otherwise extract from envelope
     if (!saltBase64) {
       throw new DecryptionError('Salt is required for envelope decryption');
     }
@@ -275,24 +323,45 @@ export async function decryptShareEnvelope(
     // Clean up sensitive data
     secureWipe(keyDerivation.key);
     
-    // The plaintext should contain: [FEK (32 bytes)][Download Token (32 bytes)]
+    // Parse the JSON envelope (matches Go's crypto.ShareEnvelope)
     const plaintext = decryptionResult.plaintext;
+    const envelopeText = new TextDecoder().decode(plaintext);
     
-    // Expected size: 32 (FEK) + 32 (Download Token) = 64 bytes
-    if (plaintext.length !== 64) {
+    let envelope: ShareEnvelopeJSON;
+    try {
+      envelope = JSON.parse(envelopeText) as ShareEnvelopeJSON;
+    } catch {
+      throw new DecryptionError('Invalid share envelope format: not valid JSON');
+    }
+    
+    // Validate required fields
+    if (!envelope.fek || !envelope.download_token) {
+      throw new DecryptionError('Invalid share envelope: missing fek or download_token');
+    }
+    
+    // Decode FEK from base64
+    const fek = fromBase64(envelope.fek);
+    if (fek.length !== KEY_SIZES.FILE_ENCRYPTION_KEY) {
       throw new DecryptionError(
-        `Invalid envelope format: expected 64 bytes (FEK + Download Token), got ${plaintext.length} bytes`
+        `Invalid FEK size in envelope: expected ${KEY_SIZES.FILE_ENCRYPTION_KEY} bytes, got ${fek.length}`
       );
     }
     
-    // Extract FEK and Download Token
-    const fek = plaintext.slice(0, 32);
-    const downloadToken = plaintext.slice(32, 64);
-    
-    return {
+    // Build result with optional metadata
+    const result: DecryptedShareEnvelope = {
       fek,
-      downloadToken: toBase64(downloadToken),
+      downloadToken: envelope.download_token,
     };
+    
+    // Include metadata if present in the envelope
+    if (envelope.filename || envelope.size_bytes || envelope.sha256) {
+      result.metadata = {};
+      if (envelope.filename) result.metadata.filename = envelope.filename;
+      if (envelope.size_bytes) result.metadata.sizeBytes = envelope.size_bytes;
+      if (envelope.sha256) result.metadata.sha256 = envelope.sha256;
+    }
+    
+    return result;
   } catch (error) {
     if (error instanceof DecryptionError) {
       throw error;
@@ -346,118 +415,4 @@ export const shareCrypto = {
   generateFEK,
   encodeFEK,
   decodeFEK,
-
-  // Additional helpers for share access
-  deriveKey,
-  decryptMetadata,
-  decryptData,
-  decryptFileData,
 };
-
-/**
- * Derives a key from a password and salt using Argon2id
- */
-export async function deriveKey(password: string, saltBase64: string): Promise<Uint8Array> {
-  const salt = fromBase64(saltBase64);
-  const argon2Params = await getArgon2Params();
-  const result = await deriveKeyArgon2id({
-    password,
-    salt,
-    params: argon2Params,
-  });
-  return result.key;
-}
-
-/**
- * Decrypts metadata (like filename) using the FEK
- */
-export async function decryptMetadata(
-  encryptedBase64: string,
-  nonceBase64: string,
-  fek: Uint8Array
-): Promise<string> {
-  const ciphertext = fromBase64(encryptedBase64);
-  const nonce = fromBase64(nonceBase64);
-  
-  // The ciphertext likely includes the tag at the end?
-  // In Go's GCM, Seal appends the tag.
-  // So we need to split it if our decryptAESGCM expects separate tag.
-  // Let's check decryptAESGCM signature in primitives.js (implied by usage above)
-  
-  // Usage in decryptFEKFromShare:
-  // const ciphertext = ciphertextAndTag.slice(0, -16);
-  // const tag = ciphertextAndTag.slice(-16);
-  // decryptAESGCM({ ciphertext, key, iv, tag })
-  
-  // So we need to split the tag here too.
-  const tag = ciphertext.slice(-16);
-  const actualCiphertext = ciphertext.slice(0, -16);
-  
-  const result = await decryptAESGCM({
-    ciphertext: actualCiphertext,
-    key: fek,
-    iv: nonce,
-    tag,
-  });
-  
-  return new TextDecoder().decode(result.plaintext);
-}
-
-/**
- * Decrypts file data using the FEK (from base64)
- */
-export async function decryptData(
-  encryptedBase64: string,
-  fek: Uint8Array
-): Promise<Uint8Array> {
-  // The encrypted data from DownloadSharedFile is base64 encoded.
-  // It was encrypted using storage.PutObject which uses crypto.EncryptFile?
-  // No, `handlers/file_shares.go` says:
-  // "Return encrypted file data and encrypted metadata for client-side decryption"
-  // It reads the object directly from storage.
-  // The object in storage was encrypted using `crypto.EncryptFile` (presumably).
-  // `crypto.EncryptFile` uses `gcm.Seal(nonce, nonce, data, nil)`.
-  // So the data in storage is [nonce][ciphertext+tag].
-  
-  const encryptedData = fromBase64(encryptedBase64);
-  
-  // Extract nonce (standard nonce size is 12 bytes for GCM)
-  const nonce = encryptedData.slice(0, 12);
-  const ciphertextAndTag = encryptedData.slice(12);
-  const ciphertext = ciphertextAndTag.slice(0, -16);
-  const tag = ciphertextAndTag.slice(-16);
-  
-  const result = await decryptAESGCM({
-    ciphertext,
-    key: fek,
-    iv: nonce,
-    tag,
-  });
-  
-  return result.plaintext;
-}
-
-/**
- * Decrypts file data using the FEK (from binary Uint8Array)
- * Used for streaming downloads where data is received as binary
- */
-export async function decryptFileData(
-  encryptedData: Uint8Array,
-  fek: Uint8Array
-): Promise<Uint8Array> {
-  // The encrypted data format is [nonce][ciphertext+tag]
-  // Extract nonce (standard nonce size is 12 bytes for GCM)
-  const nonce = encryptedData.slice(0, 12);
-  const ciphertextAndTag = encryptedData.slice(12);
-  const ciphertext = ciphertextAndTag.slice(0, -16);
-  const tag = ciphertextAndTag.slice(-16);
-  
-  const result = await decryptAESGCM({
-    ciphertext,
-    key: fek,
-    iv: nonce,
-    tag,
-  });
-  
-  return result.plaintext;
-}

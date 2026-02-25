@@ -20,7 +20,9 @@ import { randomBytes, toBase64 } from '../crypto/primitives.js';
  */
 export interface FileInfo {
   filename: string;
-  fek: Uint8Array; // Raw FEK bytes (32 bytes)
+  fek: Uint8Array;    // Raw FEK bytes (32 bytes)
+  sizeBytes?: number; // File size in bytes (for share envelope metadata)
+  sha256?: string;    // SHA256 hex digest (for share envelope metadata)
 }
 
 /**
@@ -126,13 +128,18 @@ export class ShareCreator {
         const shareId = this.generateShareID();
 
         // Encrypt the FEK with the share password and generate Download Token
-        // The encryptFEKForShare function now returns both the encrypted envelope
-        // and the Download Token (both plaintext and hash)
+        // Include file metadata in the envelope so share recipients can preview
+        // file info and verify integrity without needing the owner's account key
         const shareEncryptionResult = await shareCrypto.encryptFEKForShare(
           this.fileInfo.fek,
           request.sharePassword,
           shareId,
-          request.fileId
+          request.fileId,
+          {
+            filename: this.fileInfo.filename,
+            sizeBytes: this.fileInfo.sizeBytes || 0,
+            sha256: this.fileInfo.sha256 || '',
+          }
         );
 
         // Send share creation request to server

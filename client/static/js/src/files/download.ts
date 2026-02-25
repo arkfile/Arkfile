@@ -104,19 +104,41 @@ async function getAccountKey(username: string): Promise<Uint8Array | null> {
 /**
  * Decrypt the FEK using the Account Key
  * 
- * The encrypted FEK format is: [nonce (12 bytes)][ciphertext][auth tag (16 bytes)]
- * This is the same format used for chunk encryption.
+ * The encrypted FEK format is: [version (1 byte)][keyType (1 byte)][nonce (12 bytes)][ciphertext][auth tag (16 bytes)]
+ * The 2-byte envelope header must be stripped before AES-GCM decryption.
  * 
- * @param encryptedFekBase64 - Base64-encoded encrypted FEK
+ * Envelope format (from crypto/file_operations.go):
+ *   version = 0x01 (Unified FEK-based encryption)
+ *   keyType = 0x01 (account) or 0x02 (custom)
+ * 
+ * @param encryptedFekBase64 - Base64-encoded encrypted FEK (with envelope header)
  * @param accountKey - The Account Key (32 bytes)
  * @returns The decrypted FEK (32 bytes)
  */
 async function decryptFEK(encryptedFekBase64: string, accountKey: Uint8Array): Promise<Uint8Array> {
   const encryptedFek = base64ToBytes(encryptedFekBase64);
   
-  // Use the same decryption function as for chunks
-  // Format: [nonce (12 bytes)][ciphertext][auth tag (16 bytes)]
-  const fek = await decryptChunk(encryptedFek, accountKey);
+  // Validate minimum length: 2 (envelope) + 12 (nonce) + 16 (tag) + 1 (min ciphertext) = 31
+  if (encryptedFek.length < 31) {
+    throw new Error(`Encrypted FEK too short: expected at least 31 bytes, got ${encryptedFek.length}`);
+  }
+  
+  // Validate envelope header
+  const version = encryptedFek[0];
+  const keyType = encryptedFek[1];
+  
+  if (version !== 0x01) {
+    throw new Error(`Unsupported envelope version: 0x${version.toString(16).padStart(2, '0')} (expected 0x01)`);
+  }
+  
+  if (keyType !== 0x01 && keyType !== 0x02) {
+    console.warn(`Unknown key type in FEK envelope: 0x${keyType.toString(16).padStart(2, '0')}`);
+  }
+  
+  // Strip the 2-byte envelope header, then decrypt
+  // Remaining format: [nonce (12 bytes)][ciphertext][auth tag (16 bytes)]
+  const fekCiphertext = encryptedFek.slice(2);
+  const fek = await decryptChunk(fekCiphertext, accountKey);
   
   if (fek.length !== 32) {
     throw new Error(`Invalid FEK length: expected 32 bytes, got ${fek.length}`);
@@ -171,6 +193,7 @@ export async function downloadFile(
     const meta: FileMetaResponse = await metaResponse.json();
     
     let fek: Uint8Array;
+    let metadataDecryptionKey: Uint8Array; // Account key — always needed for metadata decryption
 
     if (passwordType === 'account' || meta.password_type === 'account') {
       // For account-encrypted files:
@@ -183,6 +206,8 @@ export async function downloadFile(
         return;
       }
       
+      metadataDecryptionKey = accountKey;
+      
       try {
         fek = await decryptFEK(meta.encrypted_fek, accountKey);
       } catch (error) {
@@ -193,6 +218,15 @@ export async function downloadFile(
       
     } else {
       // For custom password-encrypted files:
+      // We need BOTH the account key (for metadata) AND the custom key (for FEK)
+      
+      // First, get the account key for metadata decryption
+      const accountKey = await getAccountKey(username);
+      if (!accountKey) {
+        return;
+      }
+      metadataDecryptionKey = accountKey;
+      
       // Show hint if provided
       if (hint || meta.password_hint) {
         alert(`Password Hint: ${hint || meta.password_hint}`);
@@ -217,11 +251,13 @@ export async function downloadFile(
     }
 
     // Use chunked download with the decrypted FEK
+    // Pass account key for metadata decryption (filename, sha256sum are encrypted with account key)
     const result: StreamingDownloadResult = await downloadFileChunked(
       fileId,
       fek,
       authToken,
       {
+        accountKey: metadataDecryptionKey,
         showProgressUI: true,
         onProgress: (progress) => {
           // Progress is handled by the built-in UI

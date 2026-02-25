@@ -58,6 +58,8 @@ export interface StreamingDownloadOptions {
   authToken?: string;
   /** Download token for share downloads */
   downloadToken?: string;
+  /** Account key for metadata decryption (owner downloads only) */
+  accountKey?: Uint8Array;
   /** Retry configuration */
   retryConfig?: Partial<RetryConfig>;
   /** Progress callback */
@@ -73,10 +75,10 @@ export interface StreamingDownloadOptions {
  */
 export interface StreamingDownloadResult {
   success: boolean;
-  data?: Uint8Array;
-  filename?: string;
-  sha256sum?: string;
-  error?: string;
+  data?: Uint8Array | undefined;
+  filename?: string | undefined;
+  sha256sum?: string | undefined;
+  error?: string | undefined;
 }
 
 /**
@@ -148,17 +150,25 @@ export class StreamingDownloadManager {
         fek
       );
 
-      // 3. Decrypt filename and sha256sum using FEK
+      // 3. Decrypt filename and sha256sum using ACCOUNT KEY (not FEK!)
+      // Metadata (filename, sha256sum) is always encrypted with the account key
+      // (Argon2id derived from account password + username), matching Go's
+      // DecryptFileMetadata() which uses DeriveAccountPasswordKey().
+      const metadataKey = this.options.accountKey;
+      if (!metadataKey) {
+        throw new Error('Account key required for metadata decryption (owner download)');
+      }
+
       const filename = await this.decryptMetadataField(
         metadata.encrypted_filename,
         metadata.filename_nonce,
-        fek
+        metadataKey
       );
       
       const sha256sum = await this.decryptMetadataField(
         metadata.encrypted_sha256sum,
         metadata.sha256sum_nonce,
-        fek
+        metadataKey
       );
 
       this.reportProgress('complete', metadata.total_chunks, metadata.total_chunks, metadata.size_bytes, metadata.size_bytes);
@@ -194,11 +204,22 @@ export class StreamingDownloadManager {
   /**
    * Download a shared file using chunked download with decryption
    * 
+   * Share recipients do NOT have the owner's account key, so server-side
+   * encrypted metadata (filename, sha256sum) cannot be decrypted here.
+   * Instead, metadata comes from the ShareEnvelope (decrypted by the caller
+   * using the share password). The caller should pass filename/sha256 via
+   * the ShareEnvelope and handle display separately.
+   * 
    * @param shareId - The share ID
    * @param fek - The File Encryption Key (32 bytes)
+   * @param shareMetadata - Optional pre-decrypted metadata from ShareEnvelope
    * @returns Promise resolving to the download result
    */
-  async downloadSharedFile(shareId: string, fek: Uint8Array): Promise<StreamingDownloadResult> {
+  async downloadSharedFile(
+    shareId: string, 
+    fek: Uint8Array,
+    shareMetadata?: { filename?: string | undefined; sha256?: string | undefined }
+  ): Promise<StreamingDownloadResult> {
     try {
       if (this.options.showProgressUI) {
         showProgress({
@@ -210,7 +231,7 @@ export class StreamingDownloadManager {
 
       this.reportProgress('metadata', 0, 0, 0, 0);
 
-      // 1. Fetch share download metadata
+      // 1. Fetch share download metadata (chunk info for download)
       const metadata = await this.fetchShareMetadata(shareId);
       
       // 2. Download and decrypt all chunks
@@ -220,18 +241,11 @@ export class StreamingDownloadManager {
         fek
       );
 
-      // 3. Decrypt filename and sha256sum using FEK
-      const filename = await this.decryptMetadataField(
-        metadata.encrypted_filename,
-        metadata.filename_nonce,
-        fek
-      );
-      
-      const sha256sum = await this.decryptMetadataField(
-        metadata.encrypted_sha256sum,
-        metadata.sha256sum_nonce,
-        fek
-      );
+      // 3. Use metadata from the decrypted ShareEnvelope (provided by caller)
+      // Share recipients cannot decrypt server-side encrypted_filename/encrypted_sha256sum
+      // because those are encrypted with the owner's account key.
+      const filename = shareMetadata?.filename;
+      const sha256sum = shareMetadata?.sha256;
 
       this.reportProgress('complete', metadata.total_chunks, metadata.total_chunks, metadata.size_bytes, metadata.size_bytes);
 
@@ -312,12 +326,20 @@ export class StreamingDownloadManager {
 
   /**
    * Download and decrypt all chunks for a file
+   * 
+   * IMPORTANT: Chunk 0 has a 2-byte envelope header prepended during upload:
+   *   [version (1 byte)][keyType (1 byte)][nonce (12 bytes)][ciphertext][tag (16 bytes)]
+   * Chunks 1-N have no envelope header:
+   *   [nonce (12 bytes)][ciphertext][tag (16 bytes)]
+   * The envelope header must be stripped from chunk 0 before AES-GCM decryption.
    */
   private async downloadAndDecryptChunks(
     fileId: string,
     metadata: ChunkedDownloadMetadata,
     fek: Uint8Array
   ): Promise<Uint8Array> {
+    const config = await this.ensureConfig();
+    const envelopeHeaderSize = config.envelope.headerSizeBytes; // 2 bytes
     const decryptor = await AESGCMDecryptor.fromRawKey(fek);
     const decryptedChunks: Uint8Array[] = [];
     
@@ -345,8 +367,22 @@ export class StreamingDownloadManager {
         }
       );
 
-      // Decrypt chunk
-      const decryptedChunk = await decryptor.decryptChunk(encryptedChunk);
+      // Strip 2-byte envelope header from chunk 0 before decryption
+      let chunkData = encryptedChunk;
+      if (chunkIndex === 0) {
+        // Validate envelope header
+        if (encryptedChunk.length < envelopeHeaderSize) {
+          throw new Error(`Chunk 0 too short: expected at least ${envelopeHeaderSize} bytes for envelope, got ${encryptedChunk.length}`);
+        }
+        const version = encryptedChunk[0];
+        if (version !== 0x01) {
+          throw new Error(`Unsupported envelope version on chunk 0: 0x${version.toString(16).padStart(2, '0')} (expected 0x01)`);
+        }
+        chunkData = encryptedChunk.slice(envelopeHeaderSize);
+      }
+
+      // Decrypt chunk (format after stripping: [nonce][ciphertext][tag])
+      const decryptedChunk = await decryptor.decryptChunk(chunkData);
       decryptedChunks.push(decryptedChunk);
 
       // Update progress
@@ -381,12 +417,20 @@ export class StreamingDownloadManager {
 
   /**
    * Download and decrypt all chunks for a shared file
+   * 
+   * IMPORTANT: Chunk 0 has a 2-byte envelope header prepended during upload:
+   *   [version (1 byte)][keyType (1 byte)][nonce (12 bytes)][ciphertext][tag (16 bytes)]
+   * Chunks 1-N have no envelope header:
+   *   [nonce (12 bytes)][ciphertext][tag (16 bytes)]
+   * The envelope header must be stripped from chunk 0 before AES-GCM decryption.
    */
   private async downloadAndDecryptShareChunks(
     shareId: string,
     metadata: ChunkedDownloadMetadata,
     fek: Uint8Array
   ): Promise<Uint8Array> {
+    const config = await this.ensureConfig();
+    const envelopeHeaderSize = config.envelope.headerSizeBytes; // 2 bytes
     const decryptor = await AESGCMDecryptor.fromRawKey(fek);
     const decryptedChunks: Uint8Array[] = [];
     
@@ -414,8 +458,22 @@ export class StreamingDownloadManager {
         }
       );
 
-      // Decrypt chunk
-      const decryptedChunk = await decryptor.decryptChunk(encryptedChunk);
+      // Strip 2-byte envelope header from chunk 0 before decryption
+      let chunkData = encryptedChunk;
+      if (chunkIndex === 0) {
+        // Validate envelope header
+        if (encryptedChunk.length < envelopeHeaderSize) {
+          throw new Error(`Share chunk 0 too short: expected at least ${envelopeHeaderSize} bytes for envelope, got ${encryptedChunk.length}`);
+        }
+        const version = encryptedChunk[0];
+        if (version !== 0x01) {
+          throw new Error(`Unsupported envelope version on share chunk 0: 0x${version.toString(16).padStart(2, '0')} (expected 0x01)`);
+        }
+        chunkData = encryptedChunk.slice(envelopeHeaderSize);
+      }
+
+      // Decrypt chunk (format after stripping: [nonce][ciphertext][tag])
+      const decryptedChunk = await decryptor.decryptChunk(chunkData);
       decryptedChunks.push(decryptedChunk);
 
       // Update progress
@@ -450,22 +508,32 @@ export class StreamingDownloadManager {
 
   /**
    * Decrypt a metadata field (filename or sha256sum)
+   * 
+   * Metadata is always encrypted with the account key (Argon2id derived from
+   * account password + username), NOT the FEK. The caller must pass the correct key.
+   * 
+   * The server stores: [nonce (12 bytes)] separately from [ciphertext + auth_tag (16 bytes)]
+   * We reassemble into [nonce][ciphertext][tag] for AES-GCM decryption.
+   * 
+   * @param encryptedBase64 - Base64-encoded encrypted data (ciphertext + auth tag)
+   * @param nonceBase64 - Base64-encoded nonce (12 bytes)
+   * @param key - The decryption key (account key for owner, NOT the FEK)
    */
   private async decryptMetadataField(
     encryptedBase64: string,
     nonceBase64: string,
-    fek: Uint8Array
+    key: Uint8Array
   ): Promise<string> {
-    // Import from primitives for base64 decoding
     const encrypted = this.base64ToBytes(encryptedBase64);
     const nonce = this.base64ToBytes(nonceBase64);
     
     // Combine nonce + ciphertext for decryption
+    // Format: [nonce (12 bytes)][ciphertext][auth tag (16 bytes)]
     const combined = new Uint8Array(nonce.length + encrypted.length);
     combined.set(nonce, 0);
     combined.set(encrypted, nonce.length);
     
-    const decryptor = await AESGCMDecryptor.fromRawKey(fek);
+    const decryptor = await AESGCMDecryptor.fromRawKey(key);
     const decrypted = await decryptor.decryptChunk(combined);
     
     return new TextDecoder().decode(decrypted);
@@ -576,18 +644,25 @@ export async function downloadFileChunked(
 
 /**
  * Convenience function to download a shared file with chunked download
+ * 
+ * @param shareId - The share ID
+ * @param fek - The File Encryption Key (32 bytes, from decrypted ShareEnvelope)
+ * @param downloadToken - Download token (from decrypted ShareEnvelope)
+ * @param shareMetadata - Pre-decrypted metadata from ShareEnvelope (filename, sha256)
+ * @param options - Additional streaming download options
  */
 export async function downloadSharedFileChunked(
   shareId: string,
   fek: Uint8Array,
   downloadToken: string,
+  shareMetadata?: { filename?: string | undefined; sha256?: string | undefined },
   options: Partial<StreamingDownloadOptions> = {}
 ): Promise<StreamingDownloadResult> {
   const manager = new StreamingDownloadManager('', {
     downloadToken,
     ...options,
   });
-  return manager.downloadSharedFile(shareId, fek);
+  return manager.downloadSharedFile(shareId, fek, shareMetadata);
 }
 
 /**

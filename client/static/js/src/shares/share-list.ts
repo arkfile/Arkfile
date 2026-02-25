@@ -15,10 +15,6 @@ import { showError, showSuccess } from '../ui/messages.js';
 interface Share {
   share_id: string;
   file_id: string;
-  encrypted_filename: string;
-  filename_nonce: string;
-  encrypted_sha256sum: string;
-  sha256sum_nonce: string;
   share_url: string;
   created_at: string;
   expires_at: string | null;

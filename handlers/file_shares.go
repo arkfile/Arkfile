@@ -39,30 +39,6 @@ type ShareResponse struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
-// ShareAccessRequest represents an anonymous share access request
-type ShareAccessRequest struct {
-	Password string `json:"password"` // Share password for client-side Argon2id derivation
-}
-
-// ShareAccessResponse represents the response for anonymous share access
-type ShareAccessResponse struct {
-	Success      bool           `json:"success"`
-	Salt         string         `json:"salt,omitempty"`          // Base64-encoded salt for Argon2id
-	EncryptedFEK string         `json:"encrypted_fek,omitempty"` // Base64-encoded encrypted FEK
-	FileInfo     *ShareFileInfo `json:"file_info,omitempty"`
-	Error        string         `json:"error,omitempty"`
-	Message      string         `json:"message,omitempty"`
-	RetryAfter   int            `json:"retry_after,omitempty"` // For rate limiting
-}
-
-// ShareFileInfo contains metadata about the shared file
-type ShareFileInfo struct {
-	Filename    string `json:"filename"`
-	Size        int64  `json:"size"`
-	ContentType string `json:"content_type"`
-	SHA256Sum   string `json:"sha256sum,omitempty"`
-}
-
 // CreateFileShare creates a new Argon2id-based anonymous file share
 func CreateFileShare(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
@@ -252,52 +228,36 @@ func GetShareEnvelope(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, reason)
 	}
 
-	// Get file metadata for display (encrypted metadata needs client-side decryption)
-	var fileInfo ShareFileInfo
+	// Get file size (plaintext metadata like filename/sha256 is inside the encrypted
+	// ShareEnvelope, decrypted client-side with the share password — no need to send
+	// server-side encrypted metadata that share recipients cannot decrypt)
 	var size sql.NullInt64
-	var encryptedFilename string
-	var encryptedSha256sum string
-	var filenameNonce string
-	var sha256sumNonce string
-
 	err = database.DB.QueryRow(`
-		SELECT encrypted_filename, size_bytes, encrypted_sha256sum, filename_nonce, sha256sum_nonce
+		SELECT size_bytes
 		FROM file_metadata
 		WHERE file_id = ?
-	`, share.FileID).Scan(
-		&encryptedFilename,
-		&size,
-		&encryptedSha256sum,
-		&filenameNonce,
-		&sha256sumNonce,
-	)
+	`, share.FileID).Scan(&size)
 
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
 	}
 
-	// Populate file info
-	fileInfo.Filename = encryptedFilename   // Already base64
-	fileInfo.SHA256Sum = encryptedSha256sum // Already base64
+	var sizeBytes int64
 	if size.Valid {
-		fileInfo.Size = size.Int64
+		sizeBytes = size.Int64
 	}
 
 	// Log metadata access
 	logging.InfoLogger.Printf("Share envelope accessed: share_id=%s..., file=%s, entity_id=%s", shareID[:8], share.FileID, entityID)
 
-	// Return share envelope data
+	// Return share envelope data (metadata is inside the encrypted envelope)
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"share_id":            shareID,
-		"file_id":             share.FileID,
-		"salt":                share.Salt,
-		"encrypted_envelope":  share.EncryptedEnvelope,
-		"encrypted_filename":  encryptedFilename,
-		"filename_nonce":      filenameNonce,
-		"encrypted_sha256sum": encryptedSha256sum,
-		"sha256sum_nonce":     sha256sumNonce,
-		"size_bytes":          fileInfo.Size,
+		"share_id":           shareID,
+		"file_id":            share.FileID,
+		"salt":               share.Salt,
+		"encrypted_envelope": share.EncryptedEnvelope,
+		"size_bytes":         sizeBytes,
 	})
 }
 
@@ -409,10 +369,10 @@ func GetSharedFile(c echo.Context) error {
 func ListShares(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 
-	// Query shares with encrypted metadata (stored as base64 strings)
+	// Query shares (owner already has file metadata via /api/files endpoints —
+	// no need to duplicate encrypted metadata here)
 	rows, err := database.DB.Query(`
-		SELECT sk.share_id, sk.file_id, sk.created_at, sk.expires_at,
-			   fm.encrypted_filename, fm.filename_nonce, fm.encrypted_sha256sum, fm.sha256sum_nonce, fm.size_bytes
+		SELECT sk.share_id, sk.file_id, sk.created_at, sk.expires_at, fm.size_bytes
 		FROM file_share_keys sk
 		JOIN file_metadata fm ON sk.file_id = fm.file_id
 		WHERE sk.owner_username = ?
@@ -428,15 +388,11 @@ func ListShares(c echo.Context) error {
 	var shares []map[string]interface{}
 	for rows.Next() {
 		var share struct {
-			ShareID            string
-			FileID             string
-			CreatedAt          string
-			ExpiresAt          sql.NullString
-			EncryptedFilename  string
-			FilenameNonce      string
-			EncryptedSha256sum string
-			Sha256sumNonce     string
-			Size               sql.NullFloat64 // rqlite returns numbers as float64
+			ShareID   string
+			FileID    string
+			CreatedAt string
+			ExpiresAt sql.NullString
+			Size      sql.NullFloat64 // rqlite returns numbers as float64
 		}
 
 		if err := rows.Scan(
@@ -444,10 +400,6 @@ func ListShares(c echo.Context) error {
 			&share.FileID,
 			&share.CreatedAt,
 			&share.ExpiresAt,
-			&share.EncryptedFilename,
-			&share.FilenameNonce,
-			&share.EncryptedSha256sum,
-			&share.Sha256sumNonce,
 			&share.Size,
 		); err != nil {
 			logging.ErrorLogger.Printf("Error scanning share row: %v", err)
@@ -462,16 +414,11 @@ func ListShares(c echo.Context) error {
 
 		shareURL := baseURL + "/shared/" + share.ShareID
 
-		// Format response with encrypted metadata for client-side decryption (already base64 strings)
 		shareData := map[string]interface{}{
-			"share_id":            share.ShareID,
-			"file_id":             share.FileID,
-			"encrypted_filename":  share.EncryptedFilename,  // Already base64 - no encoding needed
-			"filename_nonce":      share.FilenameNonce,      // Already base64 - no encoding needed
-			"encrypted_sha256sum": share.EncryptedSha256sum, // Already base64 - no encoding needed
-			"sha256sum_nonce":     share.Sha256sumNonce,     // Already base64 - no encoding needed
-			"share_url":           shareURL,
-			"created_at":          share.CreatedAt,
+			"share_id":   share.ShareID,
+			"file_id":    share.FileID,
+			"share_url":  shareURL,
+			"created_at": share.CreatedAt,
 		}
 
 		if share.Size.Valid {
@@ -656,19 +603,16 @@ func DownloadSharedFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
 	}
 
-	// Get file metadata using the new encrypted schema (stored as base64 strings)
+	// Get file storage info (metadata like filename/sha256 is inside the encrypted
+	// ShareEnvelope, decrypted client-side — no need to send encrypted metadata headers)
 	var storageID string
 	var size sql.NullInt64
-	var encryptedFilename string
-	var filenameNonce string
-	var encryptedSha256sum string
-	var sha256sumNonce string
 
 	err = database.DB.QueryRow(`
-		SELECT storage_id, size_bytes, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce
+		SELECT storage_id, size_bytes
 		FROM file_metadata
 		WHERE file_id = ?
-	`, share.FileID).Scan(&storageID, &size, &encryptedFilename, &filenameNonce, &encryptedSha256sum, &sha256sumNonce)
+	`, share.FileID).Scan(&storageID, &size)
 
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
@@ -693,10 +637,6 @@ func DownloadSharedFile(c echo.Context) error {
 
 	// Set response headers for binary streaming
 	c.Response().Header().Set("Content-Type", "application/octet-stream")
-	c.Response().Header().Set("X-Encrypted-Filename", encryptedFilename)
-	c.Response().Header().Set("X-Filename-Nonce", filenameNonce)
-	c.Response().Header().Set("X-Encrypted-SHA256", encryptedSha256sum)
-	c.Response().Header().Set("X-SHA256-Nonce", sha256sumNonce)
 
 	if size.Valid {
 		c.Response().Header().Set("Content-Length", fmt.Sprintf("%d", size.Int64))

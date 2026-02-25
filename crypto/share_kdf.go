@@ -92,10 +92,19 @@ func VerifyDownloadToken(downloadTokenBase64 string, expectedHashBase64 string) 
 }
 
 // ShareEnvelope represents the decrypted content of a Share Envelope
-// This is a JSON structure containing the FEK and Download Token
+// This is a JSON structure containing the FEK, Download Token, and file metadata.
+// File metadata (filename, size, sha256) is included so share recipients can:
+//   - Preview the file before downloading (filename, size)
+//   - Verify integrity after decryption (sha256)
+//
+// The metadata is protected by the same AES-GCM-AAD encryption as the FEK,
+// so only someone with the share password can access it.
 type ShareEnvelope struct {
-	FEK           string `json:"fek"`            // base64-encoded FEK
-	DownloadToken string `json:"download_token"` // base64-encoded Download Token
+	FEK           string `json:"fek"`                  // base64-encoded FEK
+	DownloadToken string `json:"download_token"`       // base64-encoded Download Token
+	Filename      string `json:"filename,omitempty"`   // plaintext filename (optional for backward compat)
+	SizeBytes     int64  `json:"size_bytes,omitempty"` // file size in bytes (optional for backward compat)
+	SHA256        string `json:"sha256,omitempty"`     // plaintext SHA256 hex digest (optional for backward compat)
 }
 
 // GenerateDownloadToken generates a cryptographically secure 32-byte Download Token
@@ -107,11 +116,16 @@ func GenerateDownloadToken() ([]byte, error) {
 	return token, nil
 }
 
-// CreateShareEnvelope creates a Share Envelope JSON payload
-func CreateShareEnvelope(fek, downloadToken []byte) ([]byte, error) {
+// CreateShareEnvelope creates a Share Envelope JSON payload with file metadata.
+// The metadata (filename, sizeBytes, sha256) allows share recipients to preview
+// file info before downloading and verify integrity after decryption.
+func CreateShareEnvelope(fek, downloadToken []byte, filename string, sizeBytes int64, sha256hex string) ([]byte, error) {
 	envelope := ShareEnvelope{
 		FEK:           base64.StdEncoding.EncodeToString(fek),
 		DownloadToken: base64.StdEncoding.EncodeToString(downloadToken),
+		Filename:      filename,
+		SizeBytes:     sizeBytes,
+		SHA256:        sha256hex,
 	}
 
 	envelopeJSON, err := json.Marshal(envelope)

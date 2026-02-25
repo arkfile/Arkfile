@@ -1,6 +1,6 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: IN PROGRESS - Phases 1-3 COMPLETE, Phase 4 PARTIALLY COMPLETE (Verify 4 done), Phases 5-9 Not Started
+## Status: IN PROGRESS - Phases 1-4 COMPLETE (including share metadata cleanup), Phases 5-9 Not Started
 
 ## Context
 
@@ -138,7 +138,7 @@ Share-specific constants (separate system, not in chunking-params.json):
 |---|---|---|
 | Share salt | Random 32 bytes | crypto/share_kdf.go -> GenerateShareSalt() |
 | Share KDF | Argon2id with same params as above | crypto/share_kdf.go (uses UnifiedArgonSecure) |
-| Share envelope | JSON {fek, download_token} encrypted with AES-GCM-AAD | crypto/share_kdf.go |
+| Share envelope | JSON {fek, download_token, filename, size_bytes, sha256} encrypted with AES-GCM-AAD | crypto/share_kdf.go |
 | Share AAD | share_id + file_id (UTF-8 concatenation) | crypto/share_kdf.go -> CreateAAD() |
 
 ---
@@ -707,11 +707,49 @@ Resolved the dual-endpoint problem identified in Verify 4. Chose Option A: unifi
 - `go build ./...` passes
 - `bunx tsc --noEmit` passes (no type errors)
 
-**Remaining Phase 4 items: NOT STARTED**
-- Verify 1: Metadata field decryption matches server storage format
-- Verify 2: Envelope stripping on chunk 0
-- Verify 3: FEK decryption must strip envelope header
-- Verify 5: Cross-platform test
+**Verify 1 (Metadata Field Decryption): COMPLETE** (2026-02-25)
+
+Owner download path in `streaming-download.ts` now uses account key (not FEK) for metadata decryption. The `downloadAndDecryptChunks()` function accepts an `accountKey` parameter and uses it for `decryptMetadataField()`.
+
+**Verify 2 (Envelope Stripping on Chunk 0): COMPLETE** (2026-02-25)
+
+- `streaming-download.ts` → `downloadAndDecryptChunks()`: strips 2-byte envelope header from chunk 0 before passing to `decryptor.decryptChunk()`
+- `streaming-download.ts` → `downloadAndDecryptShareChunks()`: same chunk 0 envelope stripping fix
+
+**Verify 3 (FEK Decryption): COMPLETE** (2026-02-25)
+
+- `download.ts` → `decryptFEK()`: strips 2-byte envelope header `[version][keyType]` from encrypted_fek before AES-GCM decryption. Also validates version byte (0x01) and extracts key type for informational purposes.
+
+**Phase 4C (Share Envelope Metadata): COMPLETE** (2026-02-25)
+
+Go changes:
+- `crypto/share_kdf.go` — `ShareEnvelope` struct extended with `Filename`, `SizeBytes`, `SHA256` fields. `CreateShareEnvelope()` signature updated to accept metadata params.
+
+TS changes:
+- `shares/share-crypto.ts` — `encryptFEKForShare()` accepts optional `ShareFileMetadata` parameter and includes `filename`, `size_bytes`, `sha256` in the JSON envelope. `decryptShareEnvelope()` parses and returns metadata from decrypted envelope.
+- `shares/share-access.ts` — Uses `decryptedEnvelope.metadata?.filename` for display (instead of trying to decrypt server-side encrypted_filename which share recipients can't access)
+- `shares/share-creation.ts` — Passes file metadata when creating share envelope
+
+**Share Metadata Cleanup: COMPLETE** (2026-02-25)
+
+Removed dead/useless encrypted metadata that share recipients could never decrypt:
+
+Go server (`handlers/file_shares.go`):
+- `GetShareEnvelope` — removed `encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce` from response. Recipients get metadata from the decrypted share envelope instead.
+- `DownloadSharedFile` — removed `X-Encrypted-Filename`, `X-Filename-Nonce`, `X-Encrypted-SHA256`, `X-SHA256-Nonce` response headers. Simplified DB query to only `storage_id`, `size_bytes`.
+- `ListShares` — removed `encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce` from query and response. Owner already has file metadata via `/api/files` endpoints.
+- Deleted unused structs: `ShareAccessRequest`, `ShareAccessResponse`, `ShareFileInfo` — all had zero callers.
+
+TS client:
+- `share-access.ts` — removed `encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce` from `ShareEnvelope` interface
+- `share-list.ts` — removed same 4 fields from `Share` interface
+- `share-crypto.ts` — removed dead helper functions `decryptMetadata`, `decryptData`, `decryptFileData`, `deriveKey` and their entries in the `shareCrypto` export object (zero callers confirmed)
+
+**Verification:**
+- `go build ./...` passes
+- `bunx tsc --noEmit` passes
+
+**Verify 5 (Cross-Platform Test): NOT STARTED** — blocked on Phase 5 (streaming cryptocli)
 
 ### Phases 5-9: NOT STARTED
 
@@ -818,32 +856,39 @@ The server returns encrypted metadata fields (`encrypted_filename`, `filename_no
 
 ### Implementation Plan
 
-#### Phase 4A: Fix TS Download Basics (Verify 2, 3) — TS only, no server changes
-- [ ] `download.ts` → `decryptFEK()`: strip 2-byte envelope header before AES-GCM decryption
-- [ ] `streaming-download.ts` → `downloadAndDecryptChunks()`: strip 2-byte header from chunk 0
-- [ ] `streaming-download.ts` → `downloadAndDecryptShareChunks()`: same chunk 0 fix
+#### Phase 4A: Fix TS Download Basics (Verify 2, 3) — TS only, no server changes — COMPLETE
+- [x] `download.ts` → `decryptFEK()`: strip 2-byte envelope header before AES-GCM decryption
+- [x] `streaming-download.ts` → `downloadAndDecryptChunks()`: strip 2-byte header from chunk 0
+- [x] `streaming-download.ts` → `downloadAndDecryptShareChunks()`: same chunk 0 fix
 
-#### Phase 4B: Fix Metadata Key for Owner Downloads (Verify 1) — TS only
-- [ ] Owner download path: use account key (not FEK) for metadata decryption
-- [ ] Ensure account key is available in the download flow (from cache or prompt)
+#### Phase 4B: Fix Metadata Key for Owner Downloads (Verify 1) — TS only — COMPLETE
+- [x] Owner download path: use account key (not FEK) for metadata decryption
+- [x] Ensure account key is available in the download flow (from cache or prompt)
 
-#### Phase 4C: Share Envelope Metadata — Go + TS
+#### Phase 4C: Share Envelope Metadata — Go + TS — COMPLETE
 **Go changes:**
-- [ ] `crypto/share_kdf.go`: Add `Filename`, `SizeBytes`, `SHA256` fields to `ShareEnvelope` struct
-- [ ] `crypto/share_kdf.go`: Update `CreateShareEnvelope()` signature to accept metadata
-- [ ] `cryptocli create-share`: Decrypt owner metadata (account key), include plaintext in envelope
-- [ ] `cryptocli decrypt-share`: Output filename/size/sha256 from decrypted envelope
+- [x] `crypto/share_kdf.go`: Add `Filename`, `SizeBytes`, `SHA256` fields to `ShareEnvelope` struct
+- [x] `crypto/share_kdf.go`: Update `CreateShareEnvelope()` signature to accept metadata
+- [ ] `cryptocli create-share`: Decrypt owner metadata (account key), include plaintext in envelope — deferred to Phase 5
+- [ ] `cryptocli decrypt-share`: Output filename/size/sha256 from decrypted envelope — deferred to Phase 5
 
 **TS changes:**
-- [ ] `shares/share-creation.ts` or `shares/share-crypto.ts`: Include metadata in envelope JSON before encryption
-- [ ] `shares/share-access.ts`: Extract and display filename/size/sha256 from decrypted envelope
-- [ ] Share download UI: Show filename/size before download, verify SHA256 after
+- [x] `shares/share-crypto.ts`: Include metadata in envelope JSON before encryption
+- [x] `shares/share-access.ts`: Extract and display filename/size/sha256 from decrypted envelope
+- [x] Share download UI: Show filename/size before download
+
+**Share metadata cleanup:**
+- [x] Removed encrypted metadata from `GetShareEnvelope` response (recipients can't decrypt owner's account-key data)
+- [x] Removed `X-Encrypted-*` headers from `DownloadSharedFile`
+- [x] Removed encrypted metadata from `ListShares` (owner has it via `/api/files`)
+- [x] Deleted unused structs: `ShareAccessRequest`, `ShareAccessResponse`, `ShareFileInfo`
+- [x] Removed dead TS functions: `decryptMetadata`, `decryptData`, `decryptFileData`, `deriveKey`
 
 **E2E test:**
-- [ ] Phase 9.6/9.7: Verify `cryptocli decrypt-share` outputs correct filename and sha256
-- [ ] Compare against original values from Phase 8
+- [ ] Phase 9.6/9.7: Verify `cryptocli decrypt-share` outputs correct filename and sha256 — deferred to Phase 8
+- [ ] Compare against original values from Phase 8 — deferred to Phase 8
 
-#### Phase 4D: Cross-Platform Test (Verify 5)
+#### Phase 4D: Cross-Platform Test (Verify 5) — NOT STARTED (blocked on Phase 5)
 - [ ] Go CLI upload → TS browser download (owner flow)
 - [ ] TS browser upload → Go CLI download (owner flow)
 - [ ] Go CLI share create → TS browser share access
