@@ -41,6 +41,14 @@ In order to slowly build up the core functionality of the system and prove its c
 
 - `sudo bash /scripts/testing/e2e-test.sh` - This is the main testing script used for proving out the correct implementation and functionality of the system via in-depth, end-to-end testing of all critical app functions using a combination of `curl` and `arkfile-client` and `cryptocli`. This script is the main way that we demonstrate that the app does what it is designed to do right now. `e2e-test.sh` must not be used immediately after changes have been made to the app itself; instead use `dev-reset.sh` first, then run the test script.
 
+## Key Configurations & Constants
+
+Certain parameters, constants and variables are used throughout the codebase in frontend, Go CLI utils and server backend. As much as possible, these should be unified and read from common sources (such as dedicated API endpoints). Examples of existing params, constants and config files in this category are:
+
+- crypto/argon2id-params.json: defines argon2id parameters to use for key derivation across all clients
+- crypto/chunking-params.json: defines chunk size and key types used in chunking/streaming/encryption
+- crypto/password-requirements.json: defines password complexity, strength and character requirements to use for various password types (account login password, account file encryption key, custom file encryption key, and share passwords).
+
 ## Using Git
 
 Do not add files to commit, nor create any commits yourself at any time. This is up to the developers. Encourage saving progress during large projects, but DO NOT COMMIT or PUSH code to git at any time by yourself.
