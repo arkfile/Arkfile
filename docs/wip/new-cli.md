@@ -12,6 +12,142 @@ The current Go CLI workflow uses two separate tools:
 
 This separation forces a multi-step workflow with `.enc` temp files and whole-file AES-GCM encryption. The whole-file format does not match the server's intended per-chunk AES-GCM design, and the `.enc` temp files double disk usage (unacceptable for large files up to 100 GB).
 
+## Design Policies
+
+### No Hardcoded Crypto/Chunking Values
+
+All crypto parameters, chunking sizes, and password requirements MUST be sourced from
+the centralized JSON config files via the `crypto` package's accessor functions. Never
+use literal values in `arkfile-client` code.
+
+| Parameter | Source | Accessor |
+|---|---|---|
+| Plaintext chunk size | `crypto/chunking-params.json` | `crypto.PlaintextChunkSize()` |
+| AES-GCM overhead (nonce + tag) | `crypto/chunking-params.json` | `crypto.AesGcmOverhead()` |
+| AES-GCM nonce size | `crypto/chunking-params.json` | `crypto.AesGcmNonceSize()` |
+| AES-GCM tag size | `crypto/chunking-params.json` | `crypto.AesGcmTagSize()` |
+| Envelope header size | `crypto/chunking-params.json` | `crypto.EnvelopeHeaderSize()` |
+| Key type for context | `crypto/chunking-params.json` | `crypto.KeyTypeForContext("account"\|"custom")` |
+| Argon2id params | `crypto/argon2id-params.json` | `crypto.UnifiedArgonSecure` (loaded at init) |
+| Password min lengths | `crypto/password-requirements.json` | `crypto.GetPasswordRequirements()` |
+| Password min entropy | `crypto/password-requirements.json` | `crypto.GetPasswordRequirements().MinEntropyBits` |
+
+These JSON files are embedded at build time via `//go:embed`. The `arkfile-client` binary
+imports the `crypto` package and gets all params automatically. No API calls needed.
+
+**Forbidden patterns:**
+```go
+// WRONG - hardcoded values
+chunkSize := 16777216
+overhead := 28
+nonceSize := 12
+
+// RIGHT - use accessors
+chunkSize := crypto.PlaintextChunkSize()
+overhead := crypto.AesGcmOverhead()
+nonceSize := crypto.AesGcmNonceSize()
+```
+
+### AAD (Additional Authenticated Data) Policy
+
+Currently AAD is used only for share envelope encryption (`EncryptGCMWithAAD` / `DecryptGCMWithAAD`
+with `CreateAAD(shareID, fileID)`). No changes to AAD scope in this refactor. Regular file
+chunk encryption, FEK wrapping, and metadata encryption continue to use `EncryptGCM` / `DecryptGCM`
+without AAD.
+
+### Secure Password Entry
+
+All password prompts MUST use `golang.org/x/term.ReadPassword()` which disables terminal echo.
+Password byte slices MUST be zeroed immediately after use:
+
+```go
+import "golang.org/x/term"
+
+password, err := term.ReadPassword(int(syscall.Stdin))
+defer func() {
+    for i := range password {
+        password[i] = 0
+    }
+}()
+// Derive key, then password is zeroed by defer
+```
+
+**Memory clearing rules:**
+- Account password: zeroed after Argon2id derivation completes (account key goes to agent)
+- Custom password: zeroed after custom key derivation completes
+- Share password: zeroed after share key derivation completes
+- FEK: zeroed after upload/download operation completes (not cached anywhere)
+- Account key: the ONLY secret that persists (in the agent process memory)
+
+### Password Strength Feedback (CLI)
+
+After password entry, validate using `crypto.ValidatePasswordEntropy()` and display
+results using ASCII-only indicators. No Unicode symbols or emoji.
+
+**Strength labels** (from zxcvbn score 0-4):
+```
+Score 0: "VERY WEAK"
+Score 1: "WEAK"
+Score 2: "FAIR"
+Score 3: "STRONG"
+Score 4: "VERY STRONG"
+```
+
+**Example output (password not meeting requirements):**
+```
+Enter password:
+Password strength: WEAK (score 1/4)
+  [X] Length: 8/14 characters (need 6 more)
+  [OK] Uppercase letter present
+  [OK] Lowercase letter present
+  [X] Missing: number (0-9)
+  [X] Missing: special character
+  [!] WARNING: Contains dictionary word - try something unique
+  [!] Entropy too low (32.5 bits, need 60.0 bits)
+
+Enter password (try again):
+```
+
+**Example output (password meeting requirements):**
+```
+Enter password:
+Password strength: VERY STRONG (score 4/4)
+  [OK] Length: 22/14 characters
+  [OK] Uppercase letter present
+  [OK] Lowercase letter present
+  [OK] Number present
+  [OK] Special character present
+  [OK] Entropy: 89.3 bits (need 60.0 bits)
+
+Confirm password:
+```
+
+Loop until requirements are met. Use the appropriate validator for context:
+- `crypto.ValidateAccountPassword()` for account passwords
+- `crypto.ValidateCustomPassword()` for custom file passwords
+- `crypto.ValidateSharePassword()` for share passwords
+
+### rqlite Data Format Reference
+
+When reading from or writing to rqlite (via the server API), follow these conventions:
+
+| Data Type | Storage Format | Go Encoding | Go Decoding |
+|---|---|---|---|
+| Binary blobs (keys, nonces, ciphertext) | Base64 string | `base64.StdEncoding.EncodeToString()` | `base64.StdEncoding.DecodeString()` |
+| SHA-256 hashes | Hex string | `hex.EncodeToString()` | `hex.DecodeString()` |
+| Booleans | Integer (0 or 1) | `0` / `1` in SQL | Cast to `bool` on read |
+| Timestamps | ISO 8601 string | `time.Now().UTC().Format(time.RFC3339)` | `time.Parse(time.RFC3339, s)` |
+| UUIDs | String | Direct string | Direct string |
+| File sizes | Integer | Direct int64 | Direct int64 |
+
+**Critical:** Always use parameterized queries, never string interpolation.
+The JSON API responses from the server use base64 for binary data. When the CLI
+receives these, decode with `base64.StdEncoding.DecodeString()` before passing
+to crypto functions. When sending data to the server, encode with
+`base64.StdEncoding.EncodeToString()`.
+
+---
+
 ## Decision: Merge into Single `arkfile-client` Binary
 
 `arkfile-client` becomes the unified CLI tool handling both crypto and network operations. `cryptocli` is removed as a separate binary.
@@ -99,8 +235,32 @@ arkfile-client upload --file doc.pdf --username alice
 When `--password-type custom` is specified:
 - Prompt for custom password (in addition to account password)
 - Account key still used for metadata encryption (filename, sha256 -- keeps file lists readable)
-- Custom key used for FEK encryption and as the key_type byte in the envelope header (0x02)
-- The FEK itself encrypts the file chunks (FEK is random, not derived from any password)
+- Custom password is Argon2id-derived into a Custom Key (KEK) used for FEK wrapping
+- The envelope header key_type byte is set to 0x02 (custom)
+
+### FEK vs KEK (Key Encryption Key) Architecture
+
+The FEK (File Encryption Key) is ALWAYS a random 32-byte key generated via `crypto/rand`.
+It is never derived from any password. The password-derived key is a KEK that wraps the FEK:
+
+```
+Account password flow:
+  account_password --> Argon2id --> AccountKey (KEK, 32 bytes)
+  FEK = crypto/rand (32 bytes)              <-- truly random
+  encrypted_fek = AES-GCM(FEK, AccountKey)  <-- KEK wraps FEK
+  each chunk = AES-GCM(plaintext, FEK)      <-- FEK encrypts file data
+
+Custom password flow:
+  custom_password --> Argon2id --> CustomKey (KEK, 32 bytes)
+  FEK = crypto/rand (32 bytes)              <-- truly random (same as above)
+  encrypted_fek = AES-GCM(FEK, CustomKey)   <-- KEK wraps FEK
+  each chunk = AES-GCM(plaintext, FEK)      <-- FEK encrypts file data
+```
+
+This design enables:
+- **File sharing** without re-encrypting the file (re-wrap FEK with share key)
+- **Password changes** without re-encrypting all files (re-wrap FEKs with new KEK)
+- **Per-file unique encryption** even if the same password is used for multiple files
 
 ---
 
@@ -174,7 +334,7 @@ arkfile-client share download --share-id abc123 --output doc.pdf
 2. **Prompt for share password**
 3. **Derive share key** -- Argon2id(share_password, salt)
 4. **Decrypt envelope** -- AES-GCM with share key, AAD = share_id + file_id -> get FEK, download_token, filename, size_bytes, sha256
-5. **Display info** -- show filename, size before downloading
+5. **Display info** -- show filename, size, sha256 digest before downloading
 6. **Get chunk metadata** -- GET `/api/public/shares/{shareId}/metadata` -> chunk_count, chunk_size_bytes
 7. **Stream download + decrypt** -- for each chunk:
    - GET `/api/public/shares/{shareId}/chunks/{chunkIndex}` with `X-Download-Token` header
@@ -182,7 +342,7 @@ arkfile-client share download --share-id abc123 --output doc.pdf
    - Decrypt with FEK
    - Write plaintext to output
 8. **Verify SHA-256** -- compare against sha256 from envelope
-9. **Output** -- print filename, size, verification result
+9. **Output** -- print filename, size, sha256 digest, verification result
 
 ---
 
@@ -232,6 +392,7 @@ Before encrypting and uploading, the client:
 2. Retrieves digest cache from agent
 3. Compares against all cached digests
 4. If match found:
+   - Ask server to confirm encrypted file is still present and intact in backend storage system
    - Fetches encrypted metadata for the matching file from server
    - Decrypts filename with account key
    - Displays: `Duplicate file detected. File with name <FILENAME> and matching plaintext SHA-256 digest <HASH> has been uploaded previously.`
@@ -266,6 +427,8 @@ Where:
 ---
 
 ## e2e-test.sh Changes
+
+**NOTE: Do not start on any changes to e2e-test.sh until the full chunking-ts-fixes.md project is done. This is for reference only so we can return to it later and know what needs to be updated.**
 
 ### Current Flow (Multiple Tools)
 
@@ -385,7 +548,15 @@ verify SHA-256 match (should already be verified by share download command)
 2. Update `dev-reset.sh` build script to not build cryptocli
 3. Update any documentation referencing cryptocli
 
-### Phase H: Update e2e-test.sh
+### Phase H: TS Browser Dedup
+
+1. After login, fetch file list and decrypt sha256 values
+2. Cache in `sessionStorage`
+3. Before upload, check cache for duplicate
+4. Update cache after successful upload
+5. Display duplicate message to user if match found
+
+### Phase I: Update e2e-test.sh -- DO NOT ATTEMPT UNTIL CONFIRMED THAT chunking-ts-fixes.md PROJECT 100% DONE:
 
 1. Replace all `cryptocli` invocations with `arkfile-client` commands
 2. Remove `.enc` file steps
@@ -393,14 +564,6 @@ verify SHA-256 match (should already be verified by share download command)
 4. Add dedup test (upload same file twice, verify rejection)
 5. Update share workflow to use single-command create and download
 6. Run `dev-reset.sh` then verify all tests pass
-
-### Phase I: TS Browser Dedup
-
-1. After login, fetch file list and decrypt sha256 values
-2. Cache in `sessionStorage`
-3. Before upload, check cache for duplicate
-4. Update cache after successful upload
-5. Display duplicate message to user if match found
 
 ---
 
@@ -415,8 +578,8 @@ verify SHA-256 match (should already be verified by share download command)
 | Phase E | Medium | Share commands change, envelope format already updated |
 | Phase F | Low | New feature addition after login |
 | Phase G | Medium | Must ensure nothing still references cryptocli |
-| Phase H | High | e2e test must be updated to match all code changes |
-| Phase I | Low | TS-only, independent of Go changes |
+| Phase H | Low | TS-only, independent of Go changes |
+| Phase I | High | e2e test must be updated to match all code changes, but only after full refactor project done |
 
 ---
 
@@ -425,9 +588,9 @@ verify SHA-256 match (should already be verified by share download command)
 ### Modified
 - `cmd/arkfile-client/main.go` -- major rewrite of upload, download, share commands
 - `cmd/arkfile-client/agent.go` -- add digest cache support
-- `scripts/testing/e2e-test.sh` -- update all test phases
 - `scripts/dev-reset.sh` -- remove cryptocli build step
 - `scripts/setup/build.sh` -- remove cryptocli build target
+- `scripts/testing/e2e-test.sh` -- update all test phases (later)
 
 ### Deleted
 - `cryptocli` source files (location TBD -- check build scripts)
@@ -440,6 +603,90 @@ verify SHA-256 match (should already be verified by share download command)
 ### TS Changes (Phase I)
 - `client/static/js/src/files/upload.ts` -- add dedup check before upload
 - `client/static/js/src/utils/digest-cache.ts` -- new module for sessionStorage digest cache
+
+---
+
+## Parallelism-Ready Architecture
+
+The streaming upload/download code should be structured to support future parallel
+chunk operations. Even though Phase 1 (this refactor) is sequential, the architecture
+should use Go channels and goroutines so that parallelism can be added later by
+changing only the consumer/producer count.
+
+### Go Upload Pipeline
+
+```go
+// Types for the pipeline
+type PlaintextChunk struct {
+    Index int
+    Data  []byte
+}
+
+type EncryptedChunk struct {
+    Index      int
+    Data       []byte
+    SHA256Hash string
+}
+
+// Phase 1 (this refactor): Sequential, channel-based
+readChan := make(chan PlaintextChunk, 2)    // buffered for overlap
+encChan  := make(chan EncryptedChunk, 2)    // buffered for overlap
+
+go readChunks(file, readChan)               // producer: reads file sequentially
+go encryptChunks(readChan, encChan, fek)    // transformer: encrypts each chunk
+uploadChunksSequential(encChan, client)     // consumer: uploads one at a time
+
+// Phase 2 (future): Parallel uploads -- only change the consumer
+go uploadChunksParallel(encChan, client, workers=4)
+```
+
+### Go Download Pipeline
+
+```go
+// Phase 1: Sequential
+chunkChan := make(chan EncryptedChunk, 2)
+plainChan := make(chan PlaintextChunk, 2)
+
+go downloadChunksSequential(client, fileID, chunkCount, chunkChan)
+go decryptChunks(chunkChan, plainChan, fek)
+writeChunks(plainChan, outputFile, sha256Hasher)
+
+// Phase 2 (future): Parallel downloads
+go downloadChunksParallel(client, fileID, chunkCount, chunkChan, workers=4)
+```
+
+### Key Design Rules for Parallelism Readiness
+
+1. **Each chunk is self-contained**: carries its own index, data, and hash
+2. **Chunks can arrive out of order**: writer must reassemble by index
+3. **No shared mutable state**: each goroutine operates on its own chunk
+4. **Channel-based communication**: producer -> transformer -> consumer
+5. **Buffered channels**: allow pipeline stages to overlap (read while encrypting)
+6. **Server already supports out-of-order chunks**: chunks stored by index, not arrival order
+
+### TS Browser Parallel Readiness
+
+Same principle for the TypeScript frontend:
+
+```typescript
+// Phase 1: Sequential upload
+for (let i = 0; i < chunkCount; i++) {
+    const plaintext = await readChunk(file, i);
+    const encrypted = await encryptChunk(plaintext, fek, i);
+    await uploadChunk(sessionId, i, encrypted);
+}
+
+// Phase 2 (future): Parallel upload with concurrency limit
+const queue = new ChunkQueue(chunkCount, concurrency=4);
+await queue.process(async (i) => {
+    const plaintext = await readChunk(file, i);
+    const encrypted = await encryptChunk(plaintext, fek, i);
+    await uploadChunk(sessionId, i, encrypted);
+});
+```
+
+Both Go and TS implementations should follow this same pattern: independent chunk
+operations that can be dispatched to a worker pool without architectural changes.
 
 ---
 
