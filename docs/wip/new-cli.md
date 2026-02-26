@@ -177,7 +177,7 @@ arkfile-client share delete <id>
 arkfile-client share revoke <id>
 arkfile-client logout
 arkfile-client agent start|stop|status
-arkfile-client generate-test-file --filename <path> --size <bytes> --pattern deterministic
+arkfile-client generate-test-file --filename <path> --size <bytes> --pattern deterministic  (max 10 GB)
 arkfile-client version
 ```
 
@@ -194,6 +194,18 @@ All `cryptocli` commands are absorbed into `arkfile-client`:
 
 ---
 
+## HTTP Client Configuration
+
+The HTTP client timeout MUST be set to 120 seconds (up from the current 30 seconds) to
+accommodate large chunk uploads/downloads over slower connections. Each chunk operation
+is a separate HTTP request, so this is the per-request timeout, not a total operation timeout.
+
+```go
+client: &http.Client{Transport: tr, Timeout: 120 * time.Second},
+```
+
+---
+
 ## Upload Flow (Streaming Per-Chunk Encryption)
 
 ```
@@ -204,7 +216,7 @@ arkfile-client upload --file doc.pdf --username alice
 
 1. **Load session** -- verify auth token is valid
 2. **Get account key** -- from agent cache, or prompt for password + Argon2id derivation
-3. **Pass 1: Compute plaintext SHA-256** -- stream-read the file in 16 MiB chunks, compute SHA-256 incrementally. Only ~16 MiB in memory at any point.
+3. **Pass 1: Compute plaintext SHA-256 (dedup check)** -- stream-read the file in 16 MiB chunks, compute SHA-256 incrementally. Only ~16 MiB in memory at any point. The primary purpose of this pass is upload deduplication (compare digest against cached digests before encrypting). **Requires a seekable file** (regular file on disk, not stdin/pipe) so the file can be re-read in pass 2.
 4. **Dedup check** -- retrieve digest cache from agent. Compare plaintext SHA-256 against cached digests. If match found:
    - Fetch file metadata for the matching file_id from server (`GET /api/files/{fileId}/meta`)
    - Decrypt filename with account key
@@ -301,7 +313,7 @@ arkfile-client share create --file-id abc123
 3. **Decrypt metadata** -- decrypt filename, sha256 with account key
 4. **Decrypt FEK** -- strip envelope, decrypt with account key (or custom key if custom password_type -- prompt if needed)
 5. **Prompt for share password** -- interactive prompt, confirm
-6. **Generate share ID** -- random UUID
+6. **Generate share ID** -- random 32 bytes, base64url encoded (43 chars, no padding)
 7. **Generate download token** -- random bytes
 8. **Generate share salt** -- random 32 bytes via `crypto.GenerateShareSalt()`
 9. **Derive share key** -- Argon2id(share_password, share_salt)
@@ -399,7 +411,11 @@ Before encrypting and uploading, the client:
    - Exits with non-zero status
 5. If no match: proceeds with encrypt + upload
 
-No force-upload option. Duplicates are always blocked.
+No force-upload option. Duplicates are always blocked regardless of password type
+(account or custom). The dedup check operates on the plaintext SHA-256 digest,
+which is independent of the encryption key used. If the same plaintext file was
+previously uploaded with `--password-type account` and is now attempted with
+`--password-type custom`, the upload is still rejected.
 
 ### TS Browser Behavior
 
@@ -482,7 +498,8 @@ verify SHA-256 match (should already be verified by share download command)
 2. Add `store_digest_cache`, `get_digest_cache`, `add_digest`, `remove_digest` methods
 3. Update `handleClear` to also zero and nil `digestCache`
 4. Add corresponding `AgentClient` methods
-5. Verify: agent start, store, retrieve, clear cycle works
+5. **Delete `decrypt_owner_envelope`** -- remove `handleDecryptOwnerEnvelope` from agent and `DecryptOwnerEnvelope` from `AgentClient`. The new arkfile-client retrieves the account key via `get_account_key` and calls `crypto.DecryptFEK()` directly. The agent should be a pure key/cache store, not perform crypto operations.
+6. Verify: agent start, store, retrieve, clear cycle works
 
 ### Phase B: Merge Crypto into arkfile-client
 
@@ -542,11 +559,21 @@ verify SHA-256 match (should already be verified by share download command)
    - Store `{fileId: plaintextSHA256}` map in agent via `store_digest_cache`
 2. Handle empty file list gracefully
 
-### Phase G: Remove cryptocli
+### Phase G: Remove cryptocli and Dead Code
 
-1. Delete `cryptocli` source files (identify location -- likely part of the build but separate from `cmd/arkfile-client/`)
-2. Update `dev-reset.sh` build script to not build cryptocli
-3. Update any documentation referencing cryptocli
+1. Delete `cryptocli` source files (`cmd/cryptocli/main.go`, `cmd/cryptocli/commands/commands.go`)
+2. Delete whole-file crypto functions that are no longer used:
+   - `crypto.EncryptFileWorkflow()` in `crypto/file_operations.go`
+   - `crypto.DecryptFileFromPath()` in `crypto/file_operations.go`
+   - `TestEncryptFileWorkflow` in `crypto/file_operations_test.go`
+3. Drop all `cryptocli` admin/diagnostic commands (all are stubs or server-side concerns):
+   - `InspectEnvelope` -- stub ("not_implemented")
+   - `ValidateFileFormat` -- stub (placeholder logic)
+   - `HealthCheck` -- depends on `database.DB` and `auth.GetOPAQUEServer()` (server-side, not client)
+   - `OPAQUEStatus` -- prints static text
+   - Do NOT port these to `arkfile-client`. They are deleted with no replacement.
+4. Update `dev-reset.sh` build script to not build cryptocli
+5. Update any documentation referencing cryptocli
 
 ### Phase H: TS Browser Dedup
 
