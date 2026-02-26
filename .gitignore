@@ -3,7 +3,6 @@
 # Compiled binaries
 arkfile
 arkfile-alpine
-cryptocli
 /arkfile-client
 arkfile-admin
 totp-generator

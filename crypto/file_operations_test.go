@@ -154,7 +154,6 @@ func TestFEKFileEncryption(t *testing.T) {
 	}{
 		{"Account key", "account"},
 		{"Custom key", "custom"},
-		{"Share key", "share"},
 	}
 
 	for _, tt := range tests {
@@ -187,14 +186,9 @@ func TestFEKFileEncryption(t *testing.T) {
 			}
 
 			// Decrypt data using FEK
-			decryptedData, returnedKeyType, err := DecryptFile(encryptedData, fek)
+			decryptedData, err := DecryptFile(encryptedData, fek)
 			if err != nil {
 				t.Fatalf("Decryption failed: %v", err)
-			}
-
-			// Verify key type matches
-			if returnedKeyType != tt.keyType {
-				t.Errorf("Returned key type mismatch: expected %s, got %s", tt.keyType, returnedKeyType)
 			}
 
 			// Verify data integrity
@@ -216,7 +210,6 @@ func TestFEKEncryptDecrypt(t *testing.T) {
 	}{
 		{"Account key", "account"},
 		{"Custom key", "custom"},
-		{"Share key", "share"},
 	}
 
 	for _, tt := range tests {
@@ -249,70 +242,6 @@ func TestFEKEncryptDecrypt(t *testing.T) {
 				t.Errorf("Decrypted FEK mismatch")
 			}
 		})
-	}
-}
-
-// TestEncryptFileWorkflow tests the complete FEK-based encryption workflow
-func TestEncryptFileWorkflow(t *testing.T) {
-	tempDir := t.TempDir()
-	username := "workflow-test-user"
-	password := []byte("workflow-test-password-123")
-
-	// Create test file
-	testData := []byte("This is test data for the complete FEK workflow")
-	inputPath := filepath.Join(tempDir, "input.txt")
-	outputPath := filepath.Join(tempDir, "output.enc")
-	decryptedPath := filepath.Join(tempDir, "decrypted.txt")
-
-	err := os.WriteFile(inputPath, testData, 0644)
-	if err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-
-	// Run encryption workflow
-	encryptedFEK, fek, err := EncryptFileWorkflow(inputPath, outputPath, password, username, "account")
-	if err != nil {
-		t.Fatalf("EncryptFileWorkflow failed: %v", err)
-	}
-
-	// Verify FEK is 32 bytes
-	if len(fek) != 32 {
-		t.Errorf("FEK should be 32 bytes, got %d", len(fek))
-	}
-
-	// Verify encrypted file exists
-	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
-		t.Fatal("Encrypted file was not created")
-	}
-
-	// Decrypt FEK
-	decryptedFEK, keyType, err := DecryptFEK(encryptedFEK, password, username)
-	if err != nil {
-		t.Fatalf("FEK decryption failed: %v", err)
-	}
-
-	if keyType != "account" {
-		t.Errorf("Expected key type 'account', got %s", keyType)
-	}
-
-	if !bytes.Equal(fek, decryptedFEK) {
-		t.Error("Decrypted FEK doesn't match original")
-	}
-
-	// Decrypt file
-	err = DecryptFileFromPath(outputPath, decryptedPath, decryptedFEK)
-	if err != nil {
-		t.Fatalf("File decryption failed: %v", err)
-	}
-
-	// Verify decrypted content
-	decryptedData, err := os.ReadFile(decryptedPath)
-	if err != nil {
-		t.Fatalf("Failed to read decrypted file: %v", err)
-	}
-
-	if !bytes.Equal(testData, decryptedData) {
-		t.Errorf("Decrypted data mismatch: expected %q, got %q", string(testData), string(decryptedData))
 	}
 }
 
@@ -653,7 +582,6 @@ func TestCreateAndParsePasswordEnvelope(t *testing.T) {
 	}{
 		{"account", 0x01, "account"},
 		{"custom", 0x01, "custom"},
-		{"share", 0x01, "share"},
 		{"unknown_type", 0x01, "unknown"},
 	}
 
@@ -759,59 +687,5 @@ func TestDeterministicGeneration(t *testing.T) {
 				t.Errorf("hashes should be identical for deterministic pattern: %s != %s", hash1, hash2)
 			}
 		})
-	}
-}
-
-// TestFilePathEncryptDecrypt tests file path-based encryption/decryption
-func TestFilePathEncryptDecrypt(t *testing.T) {
-	tempDir := t.TempDir()
-
-	// Create test file
-	testData := []byte("Test data for file path encryption/decryption")
-	inputPath := filepath.Join(tempDir, "input.txt")
-	encryptedPath := filepath.Join(tempDir, "encrypted.enc")
-	decryptedPath := filepath.Join(tempDir, "decrypted.txt")
-
-	err := os.WriteFile(inputPath, testData, 0644)
-	if err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-
-	// Generate FEK
-	fek, err := GenerateFEK()
-	if err != nil {
-		t.Fatalf("FEK generation failed: %v", err)
-	}
-
-	// Encrypt file
-	err = EncryptFileToPath(inputPath, encryptedPath, fek, "account")
-	if err != nil {
-		t.Fatalf("File encryption failed: %v", err)
-	}
-
-	// Verify encrypted file exists and is larger than original
-	encInfo, err := os.Stat(encryptedPath)
-	if err != nil {
-		t.Fatalf("Encrypted file not found: %v", err)
-	}
-
-	if encInfo.Size() <= int64(len(testData)) {
-		t.Error("Encrypted file should be larger than original (includes envelope + nonce + tag)")
-	}
-
-	// Decrypt file
-	err = DecryptFileFromPath(encryptedPath, decryptedPath, fek)
-	if err != nil {
-		t.Fatalf("File decryption failed: %v", err)
-	}
-
-	// Verify decrypted content
-	decryptedData, err := os.ReadFile(decryptedPath)
-	if err != nil {
-		t.Fatalf("Failed to read decrypted file: %v", err)
-	}
-
-	if !bytes.Equal(testData, decryptedData) {
-		t.Errorf("Decrypted data mismatch: expected %q, got %q", string(testData), string(decryptedData))
 	}
 }

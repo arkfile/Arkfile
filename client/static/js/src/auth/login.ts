@@ -17,6 +17,7 @@ import {
 import { registerAccountKeyCleanupHandlers } from '../crypto/account-key-cache.js';
 import { showPasswordPrompt } from '../ui/password-modal.js';
 import type { CacheDurationHours } from '../crypto/account-key-cache.js';
+import { populateDigestCache, clearDigestCache, type RawFileEntry } from '../utils/digest-cache.js';
 
 export interface LoginCredentials {
   username: string;
@@ -135,13 +136,35 @@ export class LoginManager {
       // Cache the account key for file operations
       // This ensures the user doesn't need to re-enter their password for file operations
       // The key is stored in sessionStorage and cleared on logout/tab close
+      let cachedAccountKey: Uint8Array | undefined;
       try {
-        await deriveFileEncryptionKeyWithCache(credentials.password, credentials.username, 'account');
+        cachedAccountKey = await deriveFileEncryptionKeyWithCache(credentials.password, credentials.username, 'account');
       } catch (error) {
         console.warn('Failed to cache account key:', error);
         // Non-fatal error, user will just be prompted later if needed
       }
       
+      // Populate digest cache for deduplication (non-fatal if it fails)
+      if (cachedAccountKey) {
+        try {
+          const token = sessionStorage.getItem('arkfile.sessionToken') ||
+                        localStorage.getItem('arkfile.sessionToken') ||
+                        loginData.token;
+          if (token) {
+            const filesResp = await fetch('/api/files', {
+              headers: { 'Authorization': `Bearer ${token}` },
+            });
+            if (filesResp.ok) {
+              const filesData = await filesResp.json();
+              const files: RawFileEntry[] = (filesData.files || filesData.data?.files || []);
+              await populateDigestCache(cachedAccountKey, files);
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to populate digest cache:', err);
+        }
+      }
+
       // Handle TOTP if required
       if (loginData.requires_totp) {
         hideProgress();
@@ -203,10 +226,11 @@ export class LoginManager {
       const { logout } = await import('../utils/auth.js');
       await logout();
       
-      // Clear all session data including OPAQUE secrets and Account Key cache
+      // Clear all session data including OPAQUE secrets, Account Key cache, and digest cache
       clearAllSessionData();
       clearClientSecret('login_secret');
       cleanupAccountKeyCache();
+      clearDigestCache();
       
       // Navigate back to auth section
       const { showAuthSection } = await import('../ui/sections.js');
@@ -220,6 +244,7 @@ export class LoginManager {
       clearAllSessionData();
       clearClientSecret('login_secret');
       cleanupAccountKeyCache();
+      clearDigestCache();
       
       const { showAuthSection } = await import('../ui/sections.js');
       showAuthSection();

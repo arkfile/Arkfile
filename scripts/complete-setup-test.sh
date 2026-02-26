@@ -413,36 +413,6 @@ if [ "$FULL_SETUP" = true ]; then
             echo -e "${YELLOW}[WARNING]  rqlite health check failed - may need configuration${NC}"
         fi
         
-        # Enhanced: Test with cryptocli administrative tool
-        echo
-        echo -e "${BLUE}Running cryptocli system health validation...${NC}"
-        if [ -f "./cryptocli" ] || command -v go &> /dev/null; then
-            # Build cryptocli if not already built
-            if [ ! -f "./cryptocli" ]; then
-                echo -e "${YELLOW}Building cryptocli administrative tool...${NC}"
-                go build -o cryptocli ./cmd/cryptocli
-            fi
-            
-            if [ -f "./cryptocli" ]; then
-                echo -e "${YELLOW}Running comprehensive OPAQUE system health check...${NC}"
-                ./cryptocli health
-                
-                echo
-                echo -e "${YELLOW}Testing device capability detection...${NC}"
-                ./cryptocli capability
-                
-                echo
-                echo -e "${YELLOW}Checking post-quantum migration readiness...${NC}"
-                ./cryptocli pq-status
-                
-                echo -e "${GREEN}[OK] cryptocli administrative tool validation completed${NC}"
-            else
-                echo -e "${YELLOW}[WARNING]  cryptocli build failed - skipping admin tool validation${NC}"
-            fi
-        else
-            echo -e "${YELLOW}[WARNING]  Go not available - skipping cryptocli validation${NC}"
-        fi
-        
         # NEW: Offer interactive admin validation
         echo
         echo -e "${GREEN}[TARGET] SYSTEM DEPLOYED - READY FOR ADMIN VALIDATION${NC}"

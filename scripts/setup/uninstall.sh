@@ -479,7 +479,6 @@ LIBOPAQUE_ARTIFACTS=(
 
 PROJECT_ARTIFACTS=(
     "./arkfile"
-    "./cryptocli"
     "./client/static/wasm/"
 )
 

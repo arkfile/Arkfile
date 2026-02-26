@@ -483,9 +483,6 @@ build_go_binaries_static() {
     export CGO_ENABLED=0
     unset CGO_CFLAGS CGO_LDFLAGS
     
-    echo "Building cryptocli..."
-    "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/cryptocli ./cmd/cryptocli
-    
     echo -e "${GREEN}[OK] Go utility tools built with pure static linking${NC}"
     echo -e "${GREEN}[OK] All Go binaries built with static linking${NC}"
 }
@@ -494,7 +491,7 @@ build_go_binaries_static() {
 verify_static_binaries() {
     echo -e "${YELLOW}Verifying static binaries...${NC}"
     
-    for binary in ${BUILD_DIR}/${APP_NAME} ${BUILD_DIR}/cryptocli ${BUILD_DIR}/arkfile-client ${BUILD_DIR}/arkfile-admin; do
+    for binary in ${BUILD_DIR}/${APP_NAME} ${BUILD_DIR}/arkfile-client ${BUILD_DIR}/arkfile-admin; do
         if [ -f "$binary" ]; then
             # Use appropriate verification for platform
             if [[ "$OSTYPE" == "freebsd"* ]] || [[ "$OSTYPE" == "openbsd"* ]]; then
@@ -591,7 +588,6 @@ echo "Arranging final artifacts in build directory..."
 # Binaries
 mkdir -p "${BUILD_DIR}/bin"
 mv "${BUILD_DIR}/${APP_NAME}" "${BUILD_DIR}/bin/"
-mv "${BUILD_DIR}/cryptocli" "${BUILD_DIR}/bin/"
 mv "${BUILD_DIR}/arkfile-client" "${BUILD_DIR}/bin/"
 mv "${BUILD_DIR}/arkfile-admin" "${BUILD_DIR}/bin/"
 

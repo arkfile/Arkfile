@@ -454,98 +454,6 @@ func DecryptFile(encryptedData []byte, fek []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// EncryptFileToPath encrypts a file using a FEK and writes to disk
-func EncryptFileToPath(inputPath, outputPath string, fek []byte, keyType string) error {
-	// Read input file
-	inputData, err := os.ReadFile(inputPath)
-	if err != nil {
-		return fmt.Errorf("failed to read input file: %w", err)
-	}
-
-	// Encrypt data
-	encryptedData, err := EncryptFile(inputData, fek, keyType)
-	if err != nil {
-		return fmt.Errorf("encryption failed: %w", err)
-	}
-
-	// Write encrypted data to output file
-	if err := os.WriteFile(outputPath, encryptedData, 0600); err != nil {
-		return fmt.Errorf("failed to write encrypted file: %w", err)
-	}
-
-	return nil
-}
-
-// DecryptFileFromPath decrypts a file using a FEK and writes to disk
-func DecryptFileFromPath(inputPath, outputPath string, fek []byte) error {
-	// Read encrypted file
-	encryptedData, err := os.ReadFile(inputPath)
-	if err != nil {
-		return fmt.Errorf("failed to read encrypted file: %w", err)
-	}
-
-	// Decrypt data
-	plaintext, err := DecryptFile(encryptedData, fek)
-	if err != nil {
-		return fmt.Errorf("decryption failed: %w", err)
-	}
-
-	// Write decrypted data to output file
-	if err := os.WriteFile(outputPath, plaintext, 0600); err != nil {
-		return fmt.Errorf("failed to write decrypted file: %w", err)
-	}
-
-	return nil
-}
-
-// =============================================================================
-// COMPLETE FEK WORKFLOW
-// =============================================================================
-
-// EncryptFileWorkflow performs the complete FEK-based encryption workflow:
-// 1. Generates a random FEK
-// 2. Encrypts the file with the FEK
-// 3. Encrypts the FEK with the user's password (Owner Envelope)
-// Returns the encrypted FEK (for storage in metadata) and the FEK itself (for immediate use)
-func EncryptFileWorkflow(inputPath, outputPath string, password []byte, username, keyType string) (encryptedFEK []byte, fek []byte, err error) {
-	// Generate random FEK
-	fek, err = GenerateFEK()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to generate FEK: %w", err)
-	}
-
-	// Encrypt file with FEK
-	if err := EncryptFileToPath(inputPath, outputPath, fek, keyType); err != nil {
-		return nil, nil, fmt.Errorf("failed to encrypt file: %w", err)
-	}
-
-	// Encrypt FEK with password (Owner Envelope)
-	encryptedFEK, err = EncryptFEK(fek, password, username, keyType)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to encrypt FEK: %w", err)
-	}
-
-	return encryptedFEK, fek, nil
-}
-
-// DecryptFileWorkflow performs the complete FEK-based decryption workflow:
-// 1. Decrypts the FEK using the user's password
-// 2. Decrypts the file with the FEK
-func DecryptFileWorkflow(inputPath, outputPath string, encryptedFEK []byte, password []byte, username string) error {
-	// Decrypt FEK
-	fek, _, err := DecryptFEK(encryptedFEK, password, username)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt FEK: %w", err)
-	}
-
-	// Decrypt file with FEK
-	if err := DecryptFileFromPath(inputPath, outputPath, fek); err != nil {
-		return fmt.Errorf("failed to decrypt file: %w", err)
-	}
-
-	return nil
-}
-
 // =============================================================================
 // METADATA OPERATIONS
 // =============================================================================
@@ -601,7 +509,7 @@ func DecryptFileMetadata(filenameNonce, encryptedFilename, sha256Nonce, encrypte
 }
 
 // DecryptMetadataWithDerivedKey decrypts file metadata using a pre-derived key
-// This function is used by cryptocli and expects separate nonce and encrypted data parameters
+// Expects separate nonce and encrypted data parameters (split from GCM output).
 func DecryptMetadataWithDerivedKey(derivedKey []byte, nonce, encryptedData []byte) ([]byte, error) {
 	// Validate input lengths
 	if len(nonce) != 12 {

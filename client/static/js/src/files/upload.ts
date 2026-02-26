@@ -42,6 +42,7 @@ import {
   getChunkingParams,
 } from '../crypto/constants.js';
 import { showError, showSuccess, showInfo } from '../ui/messages.js';
+import { checkDuplicate, addDigest } from '../utils/digest-cache.js';
 
 // ============================================================================
 // Types
@@ -317,6 +318,18 @@ export async function uploadFile(
     const plaintextHash = hash256(fileBytes);
     const plaintextHashHex = toHex(plaintextHash);
 
+    // ----------------------------------------------------------------
+    // Deduplication check: abort early if file already exists
+    // ----------------------------------------------------------------
+    const existingFileId = checkDuplicate(plaintextHashHex);
+    if (existingFileId) {
+      secureWipe(fek);
+      throw new Error(
+        `Duplicate file detected (already uploaded as ${existingFileId}). ` +
+        'Delete the existing copy before uploading again.'
+      );
+    }
+
     // Encrypt metadata with ACCOUNT key (always, regardless of password type)
     const encryptedFilename = await encryptMetadata(file.name, accountKey);
     const encryptedSha256 = await encryptMetadata(plaintextHashHex, accountKey);
@@ -461,6 +474,9 @@ export async function uploadFile(
     });
 
     reportProgress({ phase: 'completing', percent: 100 });
+
+    // Update digest cache so subsequent uploads in this session are deduped
+    addDigest(result.file_id, plaintextHashHex);
 
     return {
       fileId: result.file_id,

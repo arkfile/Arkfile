@@ -2,7 +2,7 @@
 
 # Arkfile: Overview for Agents
 
-Arkfile is designed as a Privacy-First File Vault over S3. It enables file backup for file owners, with client-side encryption happening via the Web Crypto API in browsers or using the `cryptocli` tool on the command-line (prior to uploading with `arkfile-client` to the server). It can interface with any number of backend storage systems that are S3 compatible in order to store client-side encrypted files.
+Arkfile is designed as a Privacy-First File Vault over S3. It enables file backup for file owners, with client-side encryption happening via the Web Crypto API in browsers or using the `arkfile-client` CLI tool (which handles both encryption and upload/download in a single streaming operation). It can interface with any number of backend storage systems that are S3 compatible in order to store client-side encrypted files.
 
 It is vital to maintain the Privacy-First design of the app and to preserve and protect user privacy end-to-end in all the work that we do.
 
@@ -39,7 +39,7 @@ In order to slowly build up the core functionality of the system and prove its c
 
 - `sudo bash /scripts/dev-reset.sh` - This tool peforms a full recompilation of the app, including static-linking of OPAQUE Auth libraries, and redeploys the app and starts app services, including the local S3 storage server (current: MinIO; future: SeaweedFS) used for testing and rqlite for the database. We should use `dev-reset.sh` every time we make a change to the app itself, in order to redeploy it consistently. Do not attempt to rebuild the app using any other build scripts or manual compilation commands, including for the CLI utils written in Go. `dev-reset.sh` does all of this for you. Use it every time. If attempting to recompile typescript assets, use `bun` or `bunx` instead of `npm`/`pnpm`/`npx`/etc.
 
-- `sudo bash /scripts/testing/e2e-test.sh` - This is the main testing script used for proving out the correct implementation and functionality of the system via in-depth, end-to-end testing of all critical app functions using a combination of `curl` and `arkfile-client` and `cryptocli`. This script is the main way that we demonstrate that the app does what it is designed to do right now. `e2e-test.sh` must not be used immediately after changes have been made to the app itself; instead use `dev-reset.sh` first, then run the test script.
+- `sudo bash /scripts/testing/e2e-test.sh` - This is the main testing script used for proving out the correct implementation and functionality of the system via in-depth, end-to-end testing of all critical app functions using a combination of `curl` and `arkfile-client`. This script is the main way that we demonstrate that the app does what it is designed to do right now. `e2e-test.sh` must not be used immediately after changes have been made to the app itself; instead use `dev-reset.sh` first, then run the test script.
 
 ## Key Configurations & Constants
 

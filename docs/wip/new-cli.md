@@ -1,6 +1,6 @@
 # Unified arkfile-client: Streaming Crypto + Network CLI
 
-## Status: PLANNING (Decisions finalized 2026-02-26)
+## Status: IN PROGRESS (Decisions finalized 2026-02-26; Phases G + H complete as of 2026-02-26)
 
 ## Context
 
@@ -573,31 +573,47 @@ verify SHA-256 match (should already be verified by share download command)
    - Store `{fileId: plaintextSHA256}` map in agent via `store_digest_cache`
 2. Handle empty file list gracefully
 
-### Phase G: Remove cryptocli and Dead Code
+### Phase G: Remove cryptocli and Dead Code [COMPLETE ✓ 2026-02-26]
 
-1. Delete `cryptocli` source files (`cmd/cryptocli/main.go`, `cmd/cryptocli/commands/commands.go`)
-2. Delete whole-file crypto functions that are no longer used:
-   - `crypto.EncryptFileWorkflow()` in `crypto/file_operations.go`
-   - `crypto.DecryptFileFromPath()` in `crypto/file_operations.go`
-   - `crypto.EncryptStreamGCM()` in `crypto/gcm.go` (dead code -- whole-file streaming, not per-chunk)
-   - `crypto.DecryptStreamGCM()` in `crypto/gcm.go` (dead code -- whole-file streaming, not per-chunk)
-   - `TestEncryptFileWorkflow` in `crypto/file_operations_test.go`
-3. Drop all `cryptocli` admin/diagnostic commands (all are stubs or server-side concerns):
+1. ~~Delete `cryptocli` source files (`cmd/cryptocli/main.go`, `cmd/cryptocli/commands/commands.go`)~~ DONE
+2. ~~Delete whole-file crypto functions that are no longer used:~~ DONE
+   - ~~`crypto.EncryptFileWorkflow()` in `crypto/file_operations.go`~~ DELETED
+   - ~~`crypto.DecryptFileWorkflow()` in `crypto/file_operations.go`~~ DELETED
+   - ~~`crypto.DecryptFileFromPath()` in `crypto/file_operations.go`~~ DELETED
+   - ~~`crypto.EncryptFileToPath()` in `crypto/file_operations.go`~~ DELETED
+   - ~~`crypto.EncryptStreamGCM()` in `crypto/gcm.go`~~ DELETED
+   - ~~`crypto.DecryptStreamGCM()` in `crypto/gcm.go`~~ DELETED
+3. ~~Remove dead tests:~~ DONE
+   - ~~`TestEncryptFileWorkflow` in `crypto/file_operations_test.go`~~ DELETED
+   - ~~`TestFilePathEncryptDecrypt` in `crypto/file_operations_test.go`~~ DELETED
+   - Fixed remaining tests: `DecryptFile` signature corrected (returns `([]byte, error)`, not 3 values); removed invalid `"share"` key-type test cases from `TestFEKFileEncryption`, `TestFEKEncryptDecrypt`, `TestCreateAndParsePasswordEnvelope` (share keys use `share_kdf.go`, not `EncryptFile`/`EncryptFEK`)
+   - All `crypto` package tests pass: `go test ./crypto/... ok`
+4. Drop all `cryptocli` admin/diagnostic commands (all are stubs or server-side concerns):
    - `InspectEnvelope` -- stub ("not_implemented")
    - `ValidateFileFormat` -- stub (placeholder logic)
    - `HealthCheck` -- depends on `database.DB` and `auth.GetOPAQUEServer()` (server-side, not client)
    - `OPAQUEStatus` -- prints static text
    - Do NOT port these to `arkfile-client`. They are deleted with no replacement.
-4. Update `dev-reset.sh` build script to not build cryptocli
-5. Update any documentation referencing cryptocli
+5. ~~Update `dev-reset.sh` / `build.sh` build scripts to not build cryptocli~~ No cryptocli references found in those scripts — already clean
+6. Update any documentation referencing cryptocli
 
-### Phase H: TS Browser Dedup
+### Phase H: TS Browser Dedup [COMPLETE ✓ 2026-02-26]
 
-1. After login, fetch file list and decrypt sha256 values
-2. Cache in `sessionStorage`
-3. Before upload, check cache for duplicate
-4. Update cache after successful upload
-5. Display duplicate message to user if match found
+1. ~~After login, fetch file list and decrypt sha256 values~~ DONE
+   - `client/static/js/src/auth/login.ts`: after account key is cached, fetches `/api/files`, decrypts each `encrypted_sha256sum` via `populateDigestCache()`
+2. ~~Cache in `sessionStorage`~~ DONE
+   - New module `client/static/js/src/utils/digest-cache.ts` — sessionStorage-backed map of `fileId → plaintextSHA256Hex`
+   - Functions: `populateDigestCache`, `checkDuplicate`, `addDigest`, `removeDigest`, `clearDigestCache`
+   - Privacy: plaintext SHA-256 values never sent to server; decrypted client-side only
+3. ~~Before upload, check cache for duplicate~~ DONE
+   - `client/static/js/src/files/upload.ts`: computes plaintext SHA-256, calls `checkDuplicate()` before any encryption or network I/O; throws error with existing `fileId` if duplicate detected; FEK is securely wiped before throwing
+4. ~~Update cache after successful upload~~ DONE
+   - `upload.ts`: calls `addDigest(result.file_id, plaintextHashHex)` after successful upload completion
+5. ~~Display duplicate message to user if match found~~ DONE
+   - Error propagates to `handleFileUpload()` which calls `showError(message)` with the file ID
+6. ~~Logout clears digest cache~~ DONE
+   - `login.ts`: `clearDigestCache()` called on both normal and error-path logout
+7. TypeScript compiles cleanly: `bunx tsc --noEmit` → EXIT:0
 
 ### Phase I: Update e2e-test.sh -- DO NOT ATTEMPT UNTIL CONFIRMED THAT chunking-ts-fixes.md PROJECT 100% DONE:
 
@@ -643,9 +659,10 @@ verify SHA-256 match (should already be verified by share download command)
 - `cmd/arkfile-client/crypto_ops.go` -- helper functions wrapping crypto package calls for upload/download/share operations (keeps main.go manageable)
 - `cmd/arkfile-client/dedup.go` -- dedup check logic
 
-### TS Changes (Phase I)
-- `client/static/js/src/files/upload.ts` -- add dedup check before upload
-- `client/static/js/src/utils/digest-cache.ts` -- new module for sessionStorage digest cache
+### TS Changes (Phase H — COMPLETE ✓ 2026-02-26)
+- `client/static/js/src/files/upload.ts` -- dedup check added before upload; digest added after upload ✓
+- `client/static/js/src/auth/login.ts` -- populates digest cache after login; clears on logout ✓
+- `client/static/js/src/utils/digest-cache.ts` -- new module for sessionStorage digest cache ✓ (CREATED)
 
 ---
 
@@ -852,17 +869,27 @@ All decisions below were confirmed by project owner and are final for this refac
 ## Summary: Files That MUST Change for This Refactor
 
 ### Phase 1: Code Changes (the actual refactor)
-1. `cmd/arkfile-client/main.go` — **MAJOR REWRITE**
-2. `cmd/arkfile-client/agent.go` — **MODIFY** (digest cache)
-3. New: `cmd/arkfile-client/crypto_utils.go` — **CREATE** (crypto helpers)
-4. New: `cmd/arkfile-client/dedup.go` — **CREATE** (dedup logic)
+1. `cmd/arkfile-client/main.go` — **MAJOR REWRITE** (Phases C, D, E)
+2. `cmd/arkfile-client/agent.go` — **MODIFY** (Phase A: digest cache) — existing file, needs `digestCache` field + methods
+3. New: `cmd/arkfile-client/crypto_utils.go` — **CREATE** (Phase B: crypto helpers) — already exists, verify completeness
+4. New: `cmd/arkfile-client/dedup.go` — **CREATE** (Phase C: dedup logic) — already exists, verify uses agent cache
 
 ### Phase 2: Build/Deploy Changes
-5. `scripts/setup/build.sh` — remove cryptocli build
+5. `scripts/setup/build.sh` — remove cryptocli build (verify: no cryptocli references found)
 6. `scripts/setup/uninstall.sh` — remove cryptocli reference
 7. `scripts/complete-setup-test.sh` — remove cryptocli health/capability/pq-status
 
-### Phase 3: Doc Updates (AFTER code is working)
+### Phase 3: TS Changes (COMPLETE ✓)
+- `client/static/js/src/utils/digest-cache.ts` — CREATED ✓
+- `client/static/js/src/auth/login.ts` — UPDATED ✓ (populate + clear digest cache)
+- `client/static/js/src/files/upload.ts` — UPDATED ✓ (dedup check + post-upload addDigest)
+
+### Phase 4: Go Dead Code Removal (COMPLETE ✓)
+- `crypto/file_operations.go` — `EncryptFileWorkflow`, `DecryptFileWorkflow`, `DecryptFileFromPath`, `EncryptFileToPath` DELETED ✓
+- `crypto/gcm.go` — `EncryptStreamGCM`, `DecryptStreamGCM` DELETED ✓
+- `crypto/file_operations_test.go` — dead tests removed, signatures fixed, all tests pass ✓
+
+### Phase 5: Doc Updates (AFTER code is working)
 8. `docs/AGENTS.md` — update tool descriptions
 9. `docs/wip/chunking-ts-fixes.md` — update to reflect completion
 
