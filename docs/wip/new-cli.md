@@ -702,3 +702,77 @@ operations that can be dispatched to a worker pool without architectural changes
 - [x] Digest cache is in-memory only (never written to disk)
 - [x] Share envelope metadata is inside AES-GCM-AAD encryption (opaque to server)
 - [x] Download token is inside encrypted envelope (server only stores SHA-256 hash)
+
+
+---
+
+# Additional Discussion & Review
+
+## 1. All Files Mentioning `arkfile-client`
+
+### Source Code (to be modified)
+| File | Type | Notes |
+|---|---|---|
+| `cmd/arkfile-client/main.go` | **MAJOR REWRITE** | Core client — all upload/download/share commands rewritten |
+| `cmd/arkfile-client/agent.go` | **MODIFY** | Add digest cache support |
+| `client/static/js/package.json` | **MODIFY** | Has `"name": "arkfile-client"` — cosmetic, low priority |
+| `client/static/js/bun.lock` | Auto-generated | Will update when package.json changes |
+
+### Scripts (to be modified)
+| File | Notes |
+|---|---|
+| `scripts/setup/build.sh` | Remove cryptocli build, keep arkfile-client build |
+| `scripts/testing/e2e-test.sh` | **DO NOT TOUCH** until full refactor done — heavy arkfile-client usage throughout |
+| `.gitignore` | Already has `/arkfile-client` entry — fine |
+
+### Docs (to be updated after code work)
+| File | Notes |
+|---|---|
+| `docs/AGENTS.md` | Mentions `arkfile-client` and `cryptocli` workflow — update |
+| `docs/wip/new-cli.md` | Our planning doc — already current |
+| `docs/wip/chunking-ts-fixes.md` | References old workflow — update when done |
+
+---
+
+## 2. All Files Mentioning `cryptocli`
+
+### Source Code (to be DELETED, only at the very END of this refactor, with explicit user permission only)
+| File | Action |
+|---|---|
+| `cmd/cryptocli/main.go` | **DELETE** — all functionality absorbed into arkfile-client |
+| `cmd/cryptocli/commands/commands.go` | **DELETE** |
+
+### Scripts (to be modified)
+| File | Notes |
+|---|---|
+| `scripts/setup/build.sh` | Remove `cryptocli` build step and binary move |
+| `scripts/setup/uninstall.sh` | Remove `./cryptocli` from cleanup list |
+| `scripts/complete-setup-test.sh` | Remove `cryptocli health`, `cryptocli capability`, `cryptocli pq-status` tests |
+| `scripts/testing/e2e-test.sh` | **DO NOT TOUCH** until full refactor done |
+
+### Docs (to be updated)
+| File | Notes |
+|---|---|
+| `docs/AGENTS.md` | "using the `cryptocli` tool on the command-line" — update |
+| `docs/wip/chunking-ts-fixes.md` | Heavy cryptocli references — update when refactor complete |
+
+## Summary: Files That MUST Change for This Refactor
+
+### Phase 1: Code Changes (the actual refactor)
+1. `cmd/arkfile-client/main.go` — **MAJOR REWRITE**
+2. `cmd/arkfile-client/agent.go` — **MODIFY** (digest cache)
+3. New: `cmd/arkfile-client/crypto_utils.go` — **CREATE** (crypto helpers)
+4. New: `cmd/arkfile-client/dedup.go` — **CREATE** (dedup logic)
+
+### Phase 2: Build/Deploy Changes
+5. `scripts/setup/build.sh` — remove cryptocli build
+6. `scripts/setup/uninstall.sh` — remove cryptocli reference
+7. `scripts/complete-setup-test.sh` — remove cryptocli health/capability/pq-status
+
+### Phase 3: Doc Updates (AFTER code is working)
+8. `docs/AGENTS.md` — update tool descriptions
+9. `docs/wip/chunking-ts-fixes.md` — update to reflect completion
+
+**IMPORTANT: Do not delete any existing cryptocli code files until we have confirmed all required functionality has been ported over to or merge into the new, updated arkfile-client side. You must get EXPLICIT permission from the user before deleting those files!**
+
+---
