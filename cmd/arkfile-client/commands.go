@@ -229,14 +229,21 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 		"chunk_size_bytes":   int64(chunkSize),
 	}
 
-	initResp, err := client.makeRequest("POST", "/api/upload/chunked/init", initPayload, session.AccessToken)
+	initResp, err := client.makeRequest("POST", "/api/uploads/init", initPayload, session.AccessToken)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize upload: %w", err)
 	}
 
-	uploadID, ok := initResp.Data["upload_id"].(string)
+	uploadID, ok := initResp.Data["session_id"].(string)
 	if !ok || uploadID == "" {
-		return "", fmt.Errorf("server did not return upload_id")
+		// Try upload_id as fallback
+		uploadID, ok = initResp.Data["upload_id"].(string)
+	}
+	if !ok || uploadID == "" {
+		uploadID = initResp.SessionID
+	}
+	if uploadID == "" {
+		return "", fmt.Errorf("server did not return session_id")
 	}
 
 	logVerbose("Upload initialized with ID: %s", uploadID)
@@ -291,7 +298,7 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 		"total_chunks": chunkIndex,
 	}
 
-	finalizeResp, err := client.makeRequest("POST", "/api/upload/chunked/finalize", finalizePayload, session.AccessToken)
+	finalizeResp, err := client.makeRequest("POST", "/api/uploads/"+uploadID+"/complete", finalizePayload, session.AccessToken)
 	if err != nil {
 		return "", fmt.Errorf("failed to finalize upload: %w", err)
 	}
@@ -334,7 +341,7 @@ func uploadChunk(client *HTTPClient, session *AuthSession, uploadID string, chun
 		}
 	}()
 
-	req, err := http.NewRequest("POST", client.baseURL+"/api/upload/chunked/chunk", pr)
+	req, err := http.NewRequest("POST", client.baseURL+"/api/uploads/"+uploadID+"/chunks/"+fmt.Sprintf("%d", chunkIndex), pr)
 	if err != nil {
 		return fmt.Errorf("failed to create chunk request: %w", err)
 	}
@@ -505,7 +512,7 @@ func doChunkedDownload(client *HTTPClient, session *AuthSession, fileID string, 
 
 	for i := int64(0); i < chunkCount; i++ {
 		// Download chunk
-		chunkURL := fmt.Sprintf("%s/api/download/%s/chunk/%d", client.baseURL, fileID, i)
+		chunkURL := fmt.Sprintf("%s/api/files/%s/chunks/%d", client.baseURL, fileID, i)
 		chunkReq, err := http.NewRequest("GET", chunkURL, nil)
 		if err != nil {
 			return fmt.Errorf("failed to create chunk request for chunk %d: %w", i, err)
@@ -1063,8 +1070,8 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	}
 
 	// Step 1: Fetch share envelope (no auth required — public endpoint)
-	// GET /api/shares/:id/envelope -> {share_id, file_id, salt, encrypted_envelope, size_bytes}
-	envelopeURL := client.baseURL + "/api/shares/" + *shareID + "/envelope"
+	// GET /api/public/shares/:id/envelope -> {share_id, file_id, salt, encrypted_envelope, size_bytes}
+	envelopeURL := client.baseURL + "/api/public/shares/" + *shareID + "/envelope"
 	envelopeReq, err := http.NewRequest("GET", envelopeURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create envelope request: %w", err)
@@ -1148,8 +1155,8 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	downloadTokenB64 := encodeBase64(downloadToken)
 
 	// Step 5: Get chunk metadata
-	// GET /api/shares/:id/metadata -> {file_id, size_bytes, chunk_count, chunk_size_bytes}
-	chunkMetaURL := client.baseURL + "/api/shares/" + *shareID + "/metadata"
+	// GET /api/public/shares/:id/metadata -> {file_id, size_bytes, chunk_count, chunk_size_bytes}
+	chunkMetaURL := client.baseURL + "/api/public/shares/" + *shareID + "/metadata"
 	chunkMetaReq, err := http.NewRequest("GET", chunkMetaURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create chunk metadata request: %w", err)
@@ -1209,10 +1216,10 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 	}
 
 	// Step 7: Stream download + decrypt each chunk
-	// GET /api/shares/:id/chunks/:chunkIndex with X-Download-Token header
+	// GET /api/public/shares/:id/chunks/:chunkIndex with X-Download-Token header
 	downloadFailed := false
 	for i := int64(0); i < chunkCount; i++ {
-		chunkURL := fmt.Sprintf("%s/api/shares/%s/chunks/%d", client.baseURL, *shareID, i)
+		chunkURL := fmt.Sprintf("%s/api/public/shares/%s/chunks/%d", client.baseURL, *shareID, i)
 		chunkReq, err := http.NewRequest("GET", chunkURL, nil)
 		if err != nil {
 			outFile.Close()
