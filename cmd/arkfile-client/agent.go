@@ -1,6 +1,6 @@
-// arkfile-client agent - Background daemon to securely hold AccountKey in memory
-// This agent provides secure key storage for CLI operations without requiring
-// repeated password entry for account-encrypted file operations.
+// arkfile-client agent - Background daemon to securely hold AccountKey and digest cache in memory
+// This agent provides secure key storage and dedup digest caching for CLI operations
+// without requiring repeated password entry for account-encrypted file operations.
 
 package main
 
@@ -13,18 +13,17 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
-
-	"github.com/84adam/Arkfile/crypto"
 )
 
-// Agent holds the AccountKey in memory and serves requests via Unix socket
+// Agent holds the AccountKey and digest cache in memory and serves requests via Unix socket
 type Agent struct {
-	socketPath string
-	listener   net.Listener
-	accountKey []byte
-	mu         sync.RWMutex
-	running    bool
-	stopChan   chan struct{}
+	socketPath  string
+	listener    net.Listener
+	accountKey  []byte
+	digestCache map[string]string // fileID -> plaintext SHA-256 hex digest
+	mu          sync.RWMutex
+	running     bool
+	stopChan    chan struct{}
 }
 
 // AgentRequest represents a request to the agent
@@ -53,8 +52,9 @@ func NewAgent() (*Agent, error) {
 	}
 
 	return &Agent{
-		socketPath: socketPath,
-		stopChan:   make(chan struct{}),
+		socketPath:  socketPath,
+		digestCache: make(map[string]string),
+		stopChan:    make(chan struct{}),
 	}, nil
 }
 
@@ -120,7 +120,7 @@ func (a *Agent) Stop() error {
 		a.listener.Close()
 	}
 
-	// Securely clear the account key
+	// Securely clear the account key and digest cache
 	a.mu.Lock()
 	if a.accountKey != nil {
 		for i := range a.accountKey {
@@ -128,6 +128,7 @@ func (a *Agent) Stop() error {
 		}
 		a.accountKey = nil
 	}
+	a.digestCache = nil
 	a.mu.Unlock()
 
 	// Remove socket file
@@ -177,8 +178,14 @@ func (a *Agent) handleConnection(conn net.Conn) {
 		a.handleStoreAccountKey(conn, req.Params)
 	case "get_account_key":
 		a.handleGetAccountKey(conn)
-	case "decrypt_owner_envelope":
-		a.handleDecryptOwnerEnvelope(conn, req.Params)
+	case "store_digest_cache":
+		a.handleStoreDigestCache(conn, req.Params)
+	case "get_digest_cache":
+		a.handleGetDigestCache(conn)
+	case "add_digest":
+		a.handleAddDigest(conn, req.Params)
+	case "remove_digest":
+		a.handleRemoveDigest(conn, req.Params)
 	case "clear":
 		a.handleClear(conn)
 	case "stop":
@@ -239,43 +246,82 @@ func (a *Agent) handleGetAccountKey(conn net.Conn) {
 	a.sendSuccess(conn, result)
 }
 
-// handleDecryptOwnerEnvelope decrypts an Owner Envelope with AccountKey
-func (a *Agent) handleDecryptOwnerEnvelope(conn net.Conn, params map[string]interface{}) {
+// handleStoreDigestCache bulk-stores the digest cache (used after login)
+func (a *Agent) handleStoreDigestCache(conn net.Conn, params map[string]interface{}) {
+	cacheRaw, ok := params["digest_cache"].(map[string]interface{})
+	if !ok {
+		a.sendError(conn, "digest_cache parameter required (map of fileID -> sha256hex)")
+		return
+	}
+
+	a.mu.Lock()
+	a.digestCache = make(map[string]string, len(cacheRaw))
+	for fileID, hashVal := range cacheRaw {
+		if hashStr, ok := hashVal.(string); ok {
+			a.digestCache[fileID] = hashStr
+		}
+	}
+	a.mu.Unlock()
+
+	a.sendSuccess(conn, nil)
+}
+
+// handleGetDigestCache retrieves the full digest cache
+func (a *Agent) handleGetDigestCache(conn net.Conn) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	if a.accountKey == nil {
-		a.sendError(conn, "account key not set")
-		return
+	// Convert to interface map for JSON serialization
+	cacheResult := make(map[string]interface{}, len(a.digestCache))
+	for k, v := range a.digestCache {
+		cacheResult[k] = v
 	}
 
-	envelopeB64, ok := params["encrypted_fek"].(string)
-	if !ok {
-		a.sendError(conn, "encrypted_fek parameter required")
-		return
-	}
-
-	encryptedFEK, err := base64.StdEncoding.DecodeString(envelopeB64)
-	if err != nil {
-		a.sendError(conn, fmt.Sprintf("invalid base64: %v", err))
-		return
-	}
-
-	// Decrypt FEK with AccountKey using AES-GCM
-	fek, err := crypto.DecryptGCM(encryptedFEK, a.accountKey)
-	if err != nil {
-		a.sendError(conn, fmt.Sprintf("decryption failed: %v", err))
-		return
-	}
-
-	result := map[string]interface{}{
-		"fek": base64.StdEncoding.EncodeToString(fek),
-	}
-
-	a.sendSuccess(conn, result)
+	a.sendSuccess(conn, map[string]interface{}{
+		"digest_cache": cacheResult,
+	})
 }
 
-// handleClear clears the AccountKey from memory
+// handleAddDigest adds a single digest entry (used after successful upload)
+func (a *Agent) handleAddDigest(conn net.Conn, params map[string]interface{}) {
+	fileID, ok := params["file_id"].(string)
+	if !ok || fileID == "" {
+		a.sendError(conn, "file_id parameter required")
+		return
+	}
+
+	sha256hex, ok := params["sha256hex"].(string)
+	if !ok || sha256hex == "" {
+		a.sendError(conn, "sha256hex parameter required")
+		return
+	}
+
+	a.mu.Lock()
+	if a.digestCache == nil {
+		a.digestCache = make(map[string]string)
+	}
+	a.digestCache[fileID] = sha256hex
+	a.mu.Unlock()
+
+	a.sendSuccess(conn, nil)
+}
+
+// handleRemoveDigest removes a single digest entry (used after file deletion)
+func (a *Agent) handleRemoveDigest(conn net.Conn, params map[string]interface{}) {
+	fileID, ok := params["file_id"].(string)
+	if !ok || fileID == "" {
+		a.sendError(conn, "file_id parameter required")
+		return
+	}
+
+	a.mu.Lock()
+	delete(a.digestCache, fileID)
+	a.mu.Unlock()
+
+	a.sendSuccess(conn, nil)
+}
+
+// handleClear clears the AccountKey and digest cache from memory
 func (a *Agent) handleClear(conn net.Conn) {
 	a.mu.Lock()
 	if a.accountKey != nil {
@@ -284,6 +330,7 @@ func (a *Agent) handleClear(conn net.Conn) {
 		}
 		a.accountKey = nil
 	}
+	a.digestCache = nil
 	a.mu.Unlock()
 
 	a.sendSuccess(conn, nil)
@@ -442,28 +489,88 @@ func (c *AgentClient) GetAccountKey() ([]byte, error) {
 	return base64.StdEncoding.DecodeString(accountKeyB64)
 }
 
-// DecryptOwnerEnvelope decrypts an encrypted FEK using the stored account key
-func (c *AgentClient) DecryptOwnerEnvelope(encryptedFEK []byte) ([]byte, error) {
-	resp, err := c.sendRequest("decrypt_owner_envelope", map[string]interface{}{
-		"encrypted_fek": base64.StdEncoding.EncodeToString(encryptedFEK),
+// StoreDigestCache bulk-stores the digest cache in the agent (used after login)
+func (c *AgentClient) StoreDigestCache(cache map[string]string) error {
+	// Convert to interface map for JSON serialization
+	cacheParam := make(map[string]interface{}, len(cache))
+	for k, v := range cache {
+		cacheParam[k] = v
+	}
+
+	resp, err := c.sendRequest("store_digest_cache", map[string]interface{}{
+		"digest_cache": cacheParam,
 	})
+	if err != nil {
+		return err
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("store digest cache failed: %s", resp.Error)
+	}
+
+	return nil
+}
+
+// GetDigestCache retrieves the full digest cache from the agent
+func (c *AgentClient) GetDigestCache() (map[string]string, error) {
+	resp, err := c.sendRequest("get_digest_cache", nil)
 	if err != nil {
 		return nil, err
 	}
 
 	if !resp.Success {
-		return nil, fmt.Errorf("decrypt failed: %s", resp.Error)
+		return nil, fmt.Errorf("get digest cache failed: %s", resp.Error)
 	}
 
-	fekB64, ok := resp.Result["fek"].(string)
+	cacheRaw, ok := resp.Result["digest_cache"].(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("invalid response: missing fek")
+		return nil, fmt.Errorf("invalid response: missing digest_cache")
 	}
 
-	return base64.StdEncoding.DecodeString(fekB64)
+	cache := make(map[string]string, len(cacheRaw))
+	for k, v := range cacheRaw {
+		if str, ok := v.(string); ok {
+			cache[k] = str
+		}
+	}
+
+	return cache, nil
 }
 
-// Clear clears the account key from the agent
+// AddDigest adds a single digest entry to the agent cache (used after successful upload)
+func (c *AgentClient) AddDigest(fileID, sha256hex string) error {
+	resp, err := c.sendRequest("add_digest", map[string]interface{}{
+		"file_id":   fileID,
+		"sha256hex": sha256hex,
+	})
+	if err != nil {
+		return err
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("add digest failed: %s", resp.Error)
+	}
+
+	return nil
+}
+
+// RemoveDigest removes a single digest entry from the agent cache (used after file deletion)
+func (c *AgentClient) RemoveDigest(fileID string) error {
+	resp, err := c.sendRequest("remove_digest", map[string]interface{}{
+		"file_id": fileID,
+	})
+	if err != nil {
+		return err
+	}
+
+	if !resp.Success {
+		return fmt.Errorf("remove digest failed: %s", resp.Error)
+	}
+
+	return nil
+}
+
+// Clear clears the account key and digest cache from the agent
 func (c *AgentClient) Clear() error {
 	resp, err := c.sendRequest("clear", nil)
 	if err != nil {
