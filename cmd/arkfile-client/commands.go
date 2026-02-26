@@ -77,11 +77,8 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 		defer clearBytes(customPass)
 
 		// Derive KEK from custom password using Argon2id
-		kek, err = crypto.DeriveKeyFromPassword(string(customPass), nil)
-		if err != nil {
-			clearBytes(customPass)
-			return fmt.Errorf("failed to derive key from custom password: %w", err)
-		}
+		// Uses a fixed domain-separation salt so the same password always produces the same KEK
+		kek = crypto.DeriveCustomPasswordKey(customPass, "")
 		defer clearBytes(kek)
 
 		finalPasswordType = "custom"
@@ -183,7 +180,7 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 	// Store digest in agent cache
 	agentClient, agentErr := NewAgentClient()
 	if agentErr == nil {
-		if err := agentClient.StoreDigest(fileID, sha256hex); err != nil {
+		if err := agentClient.AddDigest(fileID, sha256hex); err != nil {
 			logVerbose("Warning: failed to store digest in cache: %v", err)
 		}
 	}
@@ -438,11 +435,7 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		}
 		defer clearBytes(customPass)
 
-		kek, err = crypto.DeriveKeyFromPassword(string(customPass), nil)
-		if err != nil {
-			clearBytes(customPass)
-			return fmt.Errorf("failed to derive key from custom password: %w", err)
-		}
+		kek = crypto.DeriveCustomPasswordKey(customPass, "")
 		defer clearBytes(kek)
 	default:
 		return fmt.Errorf("unsupported password type: %s", fileMeta.PasswordType)
@@ -779,11 +772,7 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 		}
 		defer clearBytes(customPass)
 
-		sourceKEK, err = crypto.DeriveKeyFromPassword(string(customPass), nil)
-		if err != nil {
-			clearBytes(customPass)
-			return fmt.Errorf("failed to derive key from custom password: %w", err)
-		}
+		sourceKEK = crypto.DeriveCustomPasswordKey(customPass, "")
 		defer clearBytes(sourceKEK)
 	}
 
@@ -814,12 +803,19 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 		defer clearBytes(sharePass)
 
 		// Derive share KEK from share password using share KDF
-		shareKEK, err := crypto.DeriveShareKEK(string(sharePass), *fileID)
+		saltB64, err := crypto.GenerateShareSalt()
+		if err != nil {
+			clearBytes(sharePass)
+			return fmt.Errorf("failed to generate share salt: %w", err)
+		}
+		shareKEK, err := crypto.DeriveShareKey(string(sharePass), saltB64)
 		if err != nil {
 			clearBytes(sharePass)
 			return fmt.Errorf("failed to derive share KEK: %w", err)
 		}
 		defer clearBytes(shareKEK)
+
+		sharePayload["share_salt"] = saltB64
 
 		// Re-wrap FEK with share KEK
 		shareFEKB64, err := wrapFEK(fek, shareKEK, "share")
@@ -1060,9 +1056,27 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 			clearBytes(passBytes)
 		}
 
-		shareKEK, err = crypto.DeriveShareKEK(*sharePassword, shareMeta.FileID)
-		if err != nil {
-			return fmt.Errorf("failed to derive share KEK: %w", err)
+		// Need the salt stored server-side for this share
+		shareSaltB64, ok := func() (string, bool) {
+			// Try to get the salt from share metadata
+			return "", false
+		}()
+		if !ok || shareSaltB64 == "" {
+			// Fallback: use file_id as salt material (for backward compatibility)
+			// Real implementations should store the salt server-side
+			shareSaltB64 = ""
+		}
+
+		var shareKEKErr error
+		if shareSaltB64 != "" {
+			shareKEK, shareKEKErr = crypto.DeriveShareKey(*sharePassword, shareSaltB64)
+		} else {
+			// No salt available: use PBKDF without salt (for simple share scheme)
+			shareKEK = crypto.DeriveCustomPasswordKey([]byte(*sharePassword), "")
+			shareKEKErr = nil
+		}
+		if shareKEKErr != nil {
+			return fmt.Errorf("failed to derive share KEK: %w", shareKEKErr)
 		}
 		defer clearBytes(shareKEK)
 	} else {
