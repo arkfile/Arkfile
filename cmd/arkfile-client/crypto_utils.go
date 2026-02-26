@@ -280,6 +280,12 @@ func calculateTotalEncryptedSize(plaintextSize int64) int64 {
 	return totalEncrypted
 }
 
+// base64URLEncode encodes bytes to URL-safe base64 without padding (43 chars for 32 bytes)
+// Used for generating share IDs per server spec.
+func base64URLEncode(data []byte) string {
+	return base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(data)
+}
+
 // generateFEK generates a random 32-byte File Encryption Key.
 func generateFEK() ([]byte, error) {
 	fek := make([]byte, 32)

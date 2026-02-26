@@ -469,9 +469,29 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		return fmt.Errorf("download failed: %w", err)
 	}
 
+	// Close file before computing SHA-256
+	outFile.Close()
+
 	fmt.Printf("Download complete!\n")
 	fmt.Printf("  Saved to: %s\n", *outputPath)
 	fmt.Printf("  Size: %s\n", formatFileSize(fileMeta.SizeBytes))
+
+	// Verify SHA-256 integrity
+	if fileMeta.EncryptedSHA256 != "" && fileMeta.SHA256Nonce != "" {
+		expectedSHA256, err := decryptMetadataField(fileMeta.EncryptedSHA256, fileMeta.SHA256Nonce, accountKey)
+		if err != nil {
+			fmt.Printf("  [!] WARNING: Could not decrypt expected SHA-256: %v\n", err)
+		} else {
+			actualSHA256, err := computeStreamingSHA256(*outputPath)
+			if err != nil {
+				fmt.Printf("  [!] WARNING: Could not compute SHA-256 of output: %v\n", err)
+			} else if actualSHA256 == expectedSHA256 {
+				fmt.Printf("  [OK] SHA-256 verified: %s\n", actualSHA256)
+			} else {
+				return fmt.Errorf("[FAIL] SHA-256 mismatch!\n  Expected: %s\n  Got:      %s\n  File may be corrupt", expectedSHA256, actualSHA256)
+			}
+		}
+	}
 
 	return nil
 }
@@ -717,7 +737,6 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 	fileID := fs.String("file-id", "", "File ID to share")
 	expiresHours := fs.Int("expires", 24, "Share expiry in hours (default: 24, 0 = no expiry)")
 	maxDownloads := fs.Int("max-downloads", 0, "Maximum download count (0 = unlimited)")
-	withPassword := fs.Bool("password", false, "Protect share with a password")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -738,7 +757,7 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 	}
 	defer clearBytes(accountKey)
 
-	// Fetch file metadata to get FEK
+	// Fetch file metadata to get encrypted FEK and metadata
 	metaReq, err := http.NewRequest("GET", client.baseURL+"/api/files/"+*fileID+"/meta", nil)
 	if err != nil {
 		return fmt.Errorf("failed to create metadata request: %w", err)
@@ -760,7 +779,7 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 		return fmt.Errorf("failed to decode file metadata: %w", err)
 	}
 
-	// Determine source KEK
+	// Determine source KEK to unwrap the FEK
 	var sourceKEK []byte
 	switch fileMeta.PasswordType {
 	case "account", "":
@@ -771,7 +790,6 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 			return fmt.Errorf("failed to read custom password: %w", err)
 		}
 		defer clearBytes(customPass)
-
 		sourceKEK = crypto.DeriveCustomPasswordKey(customPass, "")
 		defer clearBytes(sourceKEK)
 	}
@@ -783,73 +801,109 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 	}
 	defer clearBytes(fek)
 
-	// Build share payload
+	// Decrypt plaintext filename and SHA-256 (always encrypted with account key)
+	filename := "[unknown]"
+	if fileMeta.EncryptedFilename != "" && fileMeta.FilenameNonce != "" {
+		if name, err := decryptMetadataField(fileMeta.EncryptedFilename, fileMeta.FilenameNonce, accountKey); err == nil {
+			filename = name
+		} else {
+			logVerbose("Warning: could not decrypt filename: %v", err)
+		}
+	}
+
+	sha256hex := ""
+	if fileMeta.EncryptedSHA256 != "" && fileMeta.SHA256Nonce != "" {
+		if hash, err := decryptMetadataField(fileMeta.EncryptedSHA256, fileMeta.SHA256Nonce, accountKey); err == nil {
+			sha256hex = hash
+		} else {
+			logVerbose("Warning: could not decrypt SHA-256: %v", err)
+		}
+	}
+
+	// Generate client-side share ID: 32 random bytes -> base64url without padding (43 chars)
+	shareIDBytes := make([]byte, 32)
+	if _, err := rand.Read(shareIDBytes); err != nil {
+		return fmt.Errorf("failed to generate share ID: %w", err)
+	}
+	shareID := base64URLEncode(shareIDBytes)
+
+	// Generate download token
+	downloadToken, err := crypto.GenerateDownloadToken()
+	if err != nil {
+		return fmt.Errorf("failed to generate download token: %w", err)
+	}
+
+	// Always prompt for share password (shares require password per design)
+	sharePass, err := readPasswordWithStrengthCheck("Enter share password: ", "share")
+	if err != nil {
+		return fmt.Errorf("failed to read share password: %w", err)
+	}
+	defer clearBytes(sharePass)
+
+	// Generate share salt and derive share KEK
+	saltB64, err := crypto.GenerateShareSalt()
+	if err != nil {
+		return fmt.Errorf("failed to generate share salt: %w", err)
+	}
+
+	shareKEK, err := crypto.DeriveShareKey(string(sharePass), saltB64)
+	if err != nil {
+		return fmt.Errorf("failed to derive share KEK: %w", err)
+	}
+	defer clearBytes(shareKEK)
+
+	// Build the ShareEnvelope JSON: {fek, download_token, filename, size_bytes, sha256}
+	envelopeJSON, err := crypto.CreateShareEnvelope(fek, downloadToken, filename, fileMeta.SizeBytes, sha256hex)
+	if err != nil {
+		return fmt.Errorf("failed to create share envelope: %w", err)
+	}
+
+	// Encrypt envelope with AES-GCM-AAD, binding it to this specific share_id + file_id
+	aad := crypto.CreateAAD(shareID, *fileID)
+	encryptedEnvelope, err := crypto.EncryptGCMWithAAD(envelopeJSON, shareKEK, aad)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt share envelope: %w", err)
+	}
+
+	// Encode encrypted envelope and download token for server storage
+	encryptedEnvelopeB64 := encodeBase64(encryptedEnvelope)
+	downloadTokenB64 := encodeBase64(downloadToken)
+
+	// Hash the download token for server-side verification
+	downloadTokenHash, err := crypto.HashDownloadToken(downloadTokenB64)
+	if err != nil {
+		return fmt.Errorf("failed to hash download token: %w", err)
+	}
+
+	// Build the request payload matching the server's ShareRequest struct
 	sharePayload := map[string]interface{}{
-		"file_id":       *fileID,
-		"max_downloads": *maxDownloads,
+		"share_id":            shareID,
+		"file_id":             *fileID,
+		"salt":                saltB64,
+		"encrypted_envelope":  encryptedEnvelopeB64,
+		"download_token_hash": downloadTokenHash,
+	}
+
+	if *maxDownloads > 0 {
+		sharePayload["max_accesses"] = *maxDownloads
 	}
 
 	if *expiresHours > 0 {
-		expiresAt := time.Now().Add(time.Duration(*expiresHours) * time.Hour)
-		sharePayload["expires_at"] = expiresAt.UTC().Format(time.RFC3339)
+		sharePayload["expires_after_hours"] = *expiresHours
 	}
 
-	// Handle share password
-	if *withPassword {
-		sharePass, err := readPasswordWithStrengthCheck("Enter share password: ", "share")
-		if err != nil {
-			return fmt.Errorf("failed to read share password: %w", err)
-		}
-		defer clearBytes(sharePass)
-
-		// Derive share KEK from share password using share KDF
-		saltB64, err := crypto.GenerateShareSalt()
-		if err != nil {
-			clearBytes(sharePass)
-			return fmt.Errorf("failed to generate share salt: %w", err)
-		}
-		shareKEK, err := crypto.DeriveShareKey(string(sharePass), saltB64)
-		if err != nil {
-			clearBytes(sharePass)
-			return fmt.Errorf("failed to derive share KEK: %w", err)
-		}
-		defer clearBytes(shareKEK)
-
-		sharePayload["share_salt"] = saltB64
-
-		// Re-wrap FEK with share KEK
-		shareFEKB64, err := wrapFEK(fek, shareKEK, "share")
-		if err != nil {
-			return fmt.Errorf("failed to wrap FEK with share key: %w", err)
-		}
-
-		sharePayload["password_protected"] = true
-		sharePayload["encrypted_share_fek"] = shareFEKB64
-	} else {
-		// No password: wrap FEK with a random ephemeral key stored server-side
-		shareFEKB64, err := wrapFEK(fek, accountKey, "account")
-		if err != nil {
-			return fmt.Errorf("failed to wrap FEK for share: %w", err)
-		}
-		sharePayload["password_protected"] = false
-		sharePayload["encrypted_share_fek"] = shareFEKB64
-	}
-
-	createResp, err := client.makeRequest("POST", "/api/files/"+*fileID+"/shares", sharePayload, session.AccessToken)
+	createResp, err := client.makeRequest("POST", "/api/shares", sharePayload, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to create share: %w", err)
 	}
 
-	shareID := ""
 	shareURL := ""
-	if val, ok := createResp.Data["share_id"].(string); ok {
-		shareID = val
-	}
 	if val, ok := createResp.Data["share_url"].(string); ok {
 		shareURL = val
 	}
 
 	fmt.Printf("Share created!\n")
+	fmt.Printf("  File: %s\n", filename)
 	fmt.Printf("  Share ID: %s\n", shareID)
 	if shareURL != "" {
 		fmt.Printf("  Share URL: %s\n", shareURL)
@@ -859,9 +913,7 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 	} else {
 		fmt.Printf("  Expires: never\n")
 	}
-	if *withPassword {
-		fmt.Printf("  Password protected: yes\n")
-	}
+	fmt.Printf("  Password protected: yes\n")
 
 	return nil
 }
@@ -1000,8 +1052,7 @@ func handleShareRevoke(client *HTTPClient, config *ClientConfig, args []string) 
 func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("share download", flag.ExitOnError)
 	shareID := fs.String("share-id", "", "Share ID to download")
-	outputPath := fs.String("output", "", "Output file path")
-	sharePassword := fs.String("password", "", "Share password (if required)")
+	outputPath := fs.String("output", "", "Output file path (default: filename from envelope)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -1011,182 +1062,228 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 		return fmt.Errorf("--share-id is required")
 	}
 
-	// Fetch share metadata (no auth required)
-	shareMetaURL := client.baseURL + "/api/share/" + *shareID
-	shareMetaReq, err := http.NewRequest("GET", shareMetaURL, nil)
+	// Step 1: Fetch share envelope (no auth required — public endpoint)
+	// GET /api/shares/:id/envelope -> {share_id, file_id, salt, encrypted_envelope, size_bytes}
+	envelopeURL := client.baseURL + "/api/shares/" + *shareID + "/envelope"
+	envelopeReq, err := http.NewRequest("GET", envelopeURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to create share metadata request: %w", err)
+		return fmt.Errorf("failed to create envelope request: %w", err)
 	}
 
-	shareMetaResp, err := client.client.Do(shareMetaReq)
+	envelopeResp, err := client.client.Do(envelopeReq)
 	if err != nil {
-		return fmt.Errorf("failed to fetch share metadata: %w", err)
+		return fmt.Errorf("failed to fetch share envelope: %w", err)
 	}
-	defer shareMetaResp.Body.Close()
+	defer envelopeResp.Body.Close()
 
-	if shareMetaResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("share not found or expired (HTTP %d)", shareMetaResp.StatusCode)
+	if envelopeResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(envelopeResp.Body)
+		return fmt.Errorf("share not found or expired (HTTP %d): %s", envelopeResp.StatusCode, string(body))
 	}
 
-	var shareMeta struct {
+	var shareEnvelopeData struct {
 		ShareID           string `json:"share_id"`
 		FileID            string `json:"file_id"`
-		HasPassword       bool   `json:"has_password"`
-		EncryptedFEK      string `json:"encrypted_fek"`
-		EncryptedFEKB64   string `json:"encrypted_fek_b64"`
-		FilenameNonce     string `json:"filename_nonce"`
-		EncryptedFilename string `json:"encrypted_filename"`
+		Salt              string `json:"salt"`
+		EncryptedEnvelope string `json:"encrypted_envelope"`
 		SizeBytes         int64  `json:"size_bytes"`
-		ChunkCount        int64  `json:"chunk_count"`
-		PasswordType      string `json:"password_type"`
 	}
-	if err := decodeJSONResponse(shareMetaResp, &shareMeta); err != nil {
-		return fmt.Errorf("failed to decode share metadata: %w", err)
+	if err := decodeJSONResponse(envelopeResp, &shareEnvelopeData); err != nil {
+		return fmt.Errorf("failed to decode share envelope response: %w", err)
 	}
 
-	// Determine KEK for share
-	var shareKEK []byte
-	if shareMeta.HasPassword {
-		if *sharePassword == "" {
-			passBytes, err := readPassword("Enter share password: ")
-			if err != nil {
-				return fmt.Errorf("failed to read share password: %w", err)
-			}
-			*sharePassword = string(passBytes)
-			clearBytes(passBytes)
-		}
-
-		// Need the salt stored server-side for this share
-		shareSaltB64, ok := func() (string, bool) {
-			// Try to get the salt from share metadata
-			return "", false
-		}()
-		if !ok || shareSaltB64 == "" {
-			// Fallback: use file_id as salt material (for backward compatibility)
-			// Real implementations should store the salt server-side
-			shareSaltB64 = ""
-		}
-
-		var shareKEKErr error
-		if shareSaltB64 != "" {
-			shareKEK, shareKEKErr = crypto.DeriveShareKey(*sharePassword, shareSaltB64)
-		} else {
-			// No salt available: use PBKDF without salt (for simple share scheme)
-			shareKEK = crypto.DeriveCustomPasswordKey([]byte(*sharePassword), "")
-			shareKEKErr = nil
-		}
-		if shareKEKErr != nil {
-			return fmt.Errorf("failed to derive share KEK: %w", shareKEKErr)
-		}
-		defer clearBytes(shareKEK)
-	} else {
-		// For non-password shares, we need the user to be authenticated
-		// and use their account key
-		accountKey, err := requireAccountKey()
-		if err != nil {
-			return fmt.Errorf("share has no password but requires authentication: %w", err)
-		}
-		defer clearBytes(accountKey)
-		shareKEK = accountKey
+	if shareEnvelopeData.Salt == "" {
+		return fmt.Errorf("share envelope missing salt")
+	}
+	if shareEnvelopeData.EncryptedEnvelope == "" {
+		return fmt.Errorf("share envelope missing encrypted_envelope")
+	}
+	if shareEnvelopeData.FileID == "" {
+		return fmt.Errorf("share envelope missing file_id")
 	}
 
-	// Get encrypted FEK
-	encFEK := shareMeta.EncryptedFEK
-	if encFEK == "" {
-		encFEK = shareMeta.EncryptedFEKB64
-	}
-	if encFEK == "" {
-		return fmt.Errorf("share metadata missing encrypted FEK")
-	}
-
-	// Unwrap FEK
-	fek, _, err := unwrapFEK(encFEK, shareKEK)
+	// Step 2: Prompt for share password and derive share KEK
+	sharePass, err := readPassword("Enter share password: ")
 	if err != nil {
-		return fmt.Errorf("failed to unwrap FEK (wrong password?): %w", err)
+		return fmt.Errorf("failed to read share password: %w", err)
+	}
+	defer clearBytes(sharePass)
+
+	shareKEK, err := crypto.DeriveShareKey(string(sharePass), shareEnvelopeData.Salt)
+	if err != nil {
+		return fmt.Errorf("failed to derive share KEK: %w", err)
+	}
+	defer clearBytes(shareKEK)
+
+	// Step 3: Decrypt the share envelope with AES-GCM-AAD
+	// AAD = shareID + fileID (binds envelope to this specific share)
+	encryptedEnvelope, err := decodeBase64(shareEnvelopeData.EncryptedEnvelope)
+	if err != nil {
+		return fmt.Errorf("failed to decode encrypted envelope: %w", err)
+	}
+
+	aad := crypto.CreateAAD(shareEnvelopeData.ShareID, shareEnvelopeData.FileID)
+	envelopeJSON, err := crypto.DecryptGCMWithAAD(encryptedEnvelope, shareKEK, aad)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt share envelope (wrong password?): %w", err)
+	}
+
+	// Step 4: Parse the share envelope JSON to get FEK, download token, filename, sha256
+	envelope, err := crypto.ParseShareEnvelope(envelopeJSON)
+	if err != nil {
+		return fmt.Errorf("failed to parse share envelope: %w", err)
+	}
+
+	// Decode FEK and download token from envelope
+	fek, err := decodeBase64(envelope.FEK)
+	if err != nil {
+		return fmt.Errorf("failed to decode FEK from envelope: %w", err)
 	}
 	defer clearBytes(fek)
 
-	// Determine output path
-	if *outputPath == "" {
-		if shareMeta.EncryptedFilename != "" && shareMeta.FilenameNonce != "" {
-			// Try to decrypt filename with share KEK or account key
-			if name, err := decryptMetadataField(shareMeta.EncryptedFilename, shareMeta.FilenameNonce, shareKEK); err == nil {
-				*outputPath = name
-			} else {
-				*outputPath = shareMeta.ShareID + ".bin"
-			}
-		} else {
-			*outputPath = shareMeta.ShareID + ".bin"
-		}
-	}
-
-	logVerbose("Downloading shared file to %s...", *outputPath)
-
-	// Create output file
-	outFile, err := os.OpenFile(*outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	downloadToken, err := decodeBase64(envelope.DownloadToken)
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		return fmt.Errorf("failed to decode download token from envelope: %w", err)
 	}
-	defer outFile.Close()
+	downloadTokenB64 := encodeBase64(downloadToken)
 
-	// Download chunks (no auth needed for public shares)
-	chunkCount := shareMeta.ChunkCount
+	// Step 5: Get chunk metadata
+	// GET /api/shares/:id/metadata -> {file_id, size_bytes, chunk_count, chunk_size_bytes}
+	chunkMetaURL := client.baseURL + "/api/shares/" + *shareID + "/metadata"
+	chunkMetaReq, err := http.NewRequest("GET", chunkMetaURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create chunk metadata request: %w", err)
+	}
+
+	chunkMetaResp, err := client.client.Do(chunkMetaReq)
+	if err != nil {
+		return fmt.Errorf("failed to fetch chunk metadata: %w", err)
+	}
+	defer chunkMetaResp.Body.Close()
+
+	if chunkMetaResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to get chunk metadata (HTTP %d)", chunkMetaResp.StatusCode)
+	}
+
+	var chunkMeta struct {
+		FileID         string `json:"file_id"`
+		SizeBytes      int64  `json:"size_bytes"`
+		ChunkCount     int64  `json:"chunk_count"`
+		ChunkSizeBytes int64  `json:"chunk_size_bytes"`
+	}
+	if err := decodeJSONResponse(chunkMetaResp, &chunkMeta); err != nil {
+		return fmt.Errorf("failed to decode chunk metadata: %w", err)
+	}
+
+	chunkCount := chunkMeta.ChunkCount
 	if chunkCount == 0 {
 		chunkCount = 1
 	}
 
+	// Determine output path from envelope filename
+	filename := envelope.Filename
+	if *outputPath == "" {
+		if filename != "" {
+			*outputPath = filename
+		} else {
+			*outputPath = *shareID + ".bin"
+		}
+	}
+
+	sizeBytes := shareEnvelopeData.SizeBytes
+	if sizeBytes == 0 {
+		sizeBytes = chunkMeta.SizeBytes
+	}
+
+	fmt.Printf("Downloading shared file...\n")
+	if filename != "" {
+		fmt.Printf("  Filename: %s\n", filename)
+	}
+	fmt.Printf("  Size: %s\n", formatFileSize(sizeBytes))
+	fmt.Printf("  Chunks: %d\n", chunkCount)
+
+	// Step 6: Create output file
+	outFile, err := os.OpenFile(*outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+
+	// Step 7: Stream download + decrypt each chunk
+	// GET /api/shares/:id/chunks/:chunkIndex with X-Download-Token header
+	downloadFailed := false
 	for i := int64(0); i < chunkCount; i++ {
-		chunkURL := fmt.Sprintf("%s/api/share/%s/chunk/%d", client.baseURL, *shareID, i)
+		chunkURL := fmt.Sprintf("%s/api/shares/%s/chunks/%d", client.baseURL, *shareID, i)
 		chunkReq, err := http.NewRequest("GET", chunkURL, nil)
 		if err != nil {
 			outFile.Close()
 			os.Remove(*outputPath)
 			return fmt.Errorf("failed to create chunk request: %w", err)
 		}
+		// Download token authenticates the chunk download (no user auth required)
+		chunkReq.Header.Set("X-Download-Token", downloadTokenB64)
 
 		chunkResp, err := client.client.Do(chunkReq)
 		if err != nil {
-			outFile.Close()
-			os.Remove(*outputPath)
-			return fmt.Errorf("failed to download chunk %d: %w", i, err)
+			downloadFailed = true
+			break
 		}
 
 		if chunkResp.StatusCode != http.StatusOK {
 			chunkResp.Body.Close()
-			outFile.Close()
-			os.Remove(*outputPath)
-			return fmt.Errorf("server returned HTTP %d for chunk %d", chunkResp.StatusCode, i)
+			downloadFailed = true
+			err = fmt.Errorf("server returned HTTP %d for chunk %d", chunkResp.StatusCode, i)
+			break
 		}
 
-		encChunk, err := io.ReadAll(chunkResp.Body)
+		encChunk, readErr := io.ReadAll(chunkResp.Body)
 		chunkResp.Body.Close()
-		if err != nil {
-			outFile.Close()
-			os.Remove(*outputPath)
-			return fmt.Errorf("failed to read chunk %d: %w", i, err)
+		if readErr != nil {
+			downloadFailed = true
+			err = fmt.Errorf("failed to read chunk %d: %w", i, readErr)
+			break
 		}
 
-		plaintext, err := decryptChunk(encChunk, fek, int(i))
-		if err != nil {
-			outFile.Close()
-			os.Remove(*outputPath)
-			return fmt.Errorf("failed to decrypt chunk %d: %w", i, err)
+		plaintext, decErr := decryptChunk(encChunk, fek, int(i))
+		if decErr != nil {
+			downloadFailed = true
+			err = fmt.Errorf("failed to decrypt chunk %d: %w", i, decErr)
+			break
 		}
 
-		if _, err := outFile.Write(plaintext); err != nil {
-			outFile.Close()
-			os.Remove(*outputPath)
-			return fmt.Errorf("failed to write chunk %d: %w", i, err)
+		if _, writeErr := outFile.Write(plaintext); writeErr != nil {
+			downloadFailed = true
+			err = fmt.Errorf("failed to write chunk %d: %w", i, writeErr)
+			break
 		}
 
 		if verbose {
-			logVerbose("  Chunk %d/%d downloaded", i+1, chunkCount)
+			progress := float64(i+1) / float64(chunkCount) * 100
+			logVerbose("  Chunk %d/%d (%.1f%%)", i+1, chunkCount, progress)
 		}
+	}
+
+	outFile.Close()
+
+	if downloadFailed {
+		os.Remove(*outputPath)
+		return fmt.Errorf("download failed: %w", err)
 	}
 
 	fmt.Printf("Download complete!\n")
 	fmt.Printf("  Saved to: %s\n", *outputPath)
-	fmt.Printf("  Size: %s\n", formatFileSize(shareMeta.SizeBytes))
+	fmt.Printf("  Size: %s\n", formatFileSize(sizeBytes))
+
+	// Step 8: Verify SHA-256 integrity against envelope hash
+	if envelope.SHA256 != "" {
+		actualSHA256, shaErr := computeStreamingSHA256(*outputPath)
+		if shaErr != nil {
+			fmt.Printf("  [!] WARNING: Could not compute SHA-256 for verification: %v\n", shaErr)
+		} else if actualSHA256 == envelope.SHA256 {
+			fmt.Printf("  [OK] SHA-256 verified: %s\n", actualSHA256)
+		} else {
+			return fmt.Errorf("[FAIL] SHA-256 mismatch!\n  Expected: %s\n  Got:      %s\n  File may be corrupt or tampered", envelope.SHA256, actualSHA256)
+		}
+	}
 
 	return nil
 }
