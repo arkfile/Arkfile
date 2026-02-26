@@ -1,6 +1,6 @@
 # Unified arkfile-client: Streaming Crypto + Network CLI
 
-## Status: PLANNING
+## Status: PLANNING (Decisions finalized 2026-02-26)
 
 ## Context
 
@@ -167,9 +167,9 @@ to crypto functions. When sending data to the server, encode with
 ```
 arkfile-client register --username <user>
 arkfile-client login --username <user>
-arkfile-client upload --file <path> --username <user> [--password-type account|custom]
+arkfile-client upload --file <path> --username <user> [--password-type account|custom] [--force]
 arkfile-client download --file-id <id> --output <path> --username <user>
-arkfile-client list-files [--json]
+arkfile-client list-files [--json] [--raw]   # auto-decrypts filenames/metadata with account key; --raw shows encrypted values
 arkfile-client share create --file-id <id>
 arkfile-client share download --share-id <id> --output <path>
 arkfile-client share list
@@ -177,7 +177,7 @@ arkfile-client share delete <id>
 arkfile-client share revoke <id>
 arkfile-client logout
 arkfile-client agent start|stop|status
-arkfile-client generate-test-file --filename <path> --size <bytes> --pattern deterministic  (max 10 GB)
+arkfile-client generate-test-file --filename <path> --size <bytes> --pattern deterministic  (max 10 GB, streaming writes)
 arkfile-client version
 ```
 
@@ -196,13 +196,21 @@ All `cryptocli` commands are absorbed into `arkfile-client`:
 
 ## HTTP Client Configuration
 
-The HTTP client timeout MUST be set to 120 seconds (up from the current 30 seconds) to
+The HTTP client timeout defaults to 120 seconds (up from the current 30 seconds) to
 accommodate large chunk uploads/downloads over slower connections. Each chunk operation
 is a separate HTTP request, so this is the per-request timeout, not a total operation timeout.
 
-```go
-client: &http.Client{Transport: tr, Timeout: 120 * time.Second},
+The timeout is configurable via a global `--timeout` flag:
+
 ```
+arkfile-client --timeout 300 upload --file bigfile.bin --username alice
+```
+
+```go
+client: &http.Client{Transport: tr, Timeout: time.Duration(timeoutSecs) * time.Second},
+```
+
+Default: 120 seconds. Minimum: 10 seconds. Maximum: 600 seconds.
 
 ---
 
@@ -214,9 +222,9 @@ arkfile-client upload --file doc.pdf --username alice
 
 ### Internal Steps
 
-1. **Load session** -- verify auth token is valid
+1. **Load session** -- verify auth token is valid (user MUST be logged in; upload rejects with clear error if no active session)
 2. **Get account key** -- from agent cache, or prompt for password + Argon2id derivation
-3. **Pass 1: Compute plaintext SHA-256 (dedup check)** -- stream-read the file in 16 MiB chunks, compute SHA-256 incrementally. Only ~16 MiB in memory at any point. The primary purpose of this pass is upload deduplication (compare digest against cached digests before encrypting). **Requires a seekable file** (regular file on disk, not stdin/pipe) so the file can be re-read in pass 2.
+3. **Pass 1: Compute plaintext SHA-256 (dedup check)** -- stream-read the file in 16 MiB chunks, compute SHA-256 incrementally. Only ~16 MiB in memory at any point. The primary purpose of this pass is upload deduplication (compare digest against cached digests before encrypting). **Requires a seekable file** (regular file on disk, not stdin/pipe) so the file can be re-read in pass 2. Non-seekable inputs (stdin, pipes) MUST be rejected with a clear error message: `"Error: upload requires a seekable file (regular file on disk). Stdin/pipe input is not supported."`
 4. **Dedup check** -- retrieve digest cache from agent. Compare plaintext SHA-256 against cached digests. If match found:
    - Fetch file metadata for the matching file_id from server (`GET /api/files/{fileId}/meta`)
    - Decrypt filename with account key
@@ -411,11 +419,17 @@ Before encrypting and uploading, the client:
    - Exits with non-zero status
 5. If no match: proceeds with encrypt + upload
 
-No force-upload option. Duplicates are always blocked regardless of password type
-(account or custom). The dedup check operates on the plaintext SHA-256 digest,
-which is independent of the encryption key used. If the same plaintext file was
-previously uploaded with `--password-type account` and is now attempted with
-`--password-type custom`, the upload is still rejected.
+A `--force` flag is available to override dedup and upload anyway. Without `--force`,
+duplicates are blocked regardless of password type (account or custom). The dedup check
+operates on the plaintext SHA-256 digest, which is independent of the encryption key used.
+If the same plaintext file was previously uploaded with `--password-type account` and is
+now attempted with `--password-type custom`, the upload is still rejected (unless `--force`).
+
+The dedup check includes server-side storage verification: when a cache match is found,
+the client asks the server to confirm the encrypted file is still present and intact in
+the backend storage system. If the server reports the file is missing or corrupt (e.g.,
+the user deleted it through another mechanism), the stale digest cache entry is removed
+and the upload proceeds normally.
 
 ### TS Browser Behavior
 
@@ -565,6 +579,8 @@ verify SHA-256 match (should already be verified by share download command)
 2. Delete whole-file crypto functions that are no longer used:
    - `crypto.EncryptFileWorkflow()` in `crypto/file_operations.go`
    - `crypto.DecryptFileFromPath()` in `crypto/file_operations.go`
+   - `crypto.EncryptStreamGCM()` in `crypto/gcm.go` (dead code -- whole-file streaming, not per-chunk)
+   - `crypto.DecryptStreamGCM()` in `crypto/gcm.go` (dead code -- whole-file streaming, not per-chunk)
    - `TestEncryptFileWorkflow` in `crypto/file_operations_test.go`
 3. Drop all `cryptocli` admin/diagnostic commands (all are stubs or server-side concerns):
    - `InspectEnvelope` -- stub ("not_implemented")
@@ -730,6 +746,56 @@ operations that can be dispatched to a worker pool without architectural changes
 - [x] Share envelope metadata is inside AES-GCM-AAD encryption (opaque to server)
 - [x] Download token is inside encrypted envelope (server only stores SHA-256 hash)
 
+
+---
+
+## `list-files` Command Details
+
+`list-files` automatically decrypts filenames and metadata using the account key from
+the agent. The user must be logged in (account key in agent).
+
+**Default behavior:**
+```
+$ arkfile-client list-files
+ID                                    Filename         Size       Uploaded
+────────────────────────────────────  ───────────────  ─────────  ─────────────────
+a1b2c3d4-...                          report.pdf       52.4 MB    2026-02-25T10:30Z
+e5f6g7h8-...                          photo.jpg        3.2 MB     2026-02-24T14:15Z
+```
+
+**`--json` flag:** outputs machine-readable JSON with decrypted values.
+
+**`--raw` flag:** shows the encrypted (base64) values without decryption, useful for debugging.
+
+---
+
+## `generate-test-file` Command Details
+
+`generate-test-file` MUST use streaming writes to support files up to 10 GB without
+loading the entire file into memory. Write data in chunks (e.g., 1 MiB at a time)
+using a deterministic PRNG seeded from the filename, so the same filename+size always
+produces the same file content (enables SHA-256 verification without storing expected hashes).
+
+Maximum size: 10 GB. Reject sizes above this with a clear error.
+
+---
+
+## Design Decisions Log (2026-02-26)
+
+All decisions below were confirmed by project owner and are final for this refactor.
+
+| # | Topic | Decision |
+|---|---|---|
+| 1 | E2E test timing | e2e-test.sh rework happens AFTER both new-cli.md and chunking-ts-fixes.md are complete |
+| 2 | Non-seekable input | Fail fast with clear error message if input is not a seekable file (no stdin/pipe support) |
+| 3 | Dedup override | `--force` flag to upload anyway; dedup includes server-side storage verification of matched file |
+| 4 | Auth requirement | User MUST be logged in before upload; reject with clear error if no active session |
+| 5 | HTTP timeout | Default 120s, configurable via `--timeout` flag (min 10s, max 600s) |
+| 6 | Test file generation | `generate-test-file` MUST use streaming writes; max 10 GB |
+| 7 | `EncryptStreamGCM`/`DecryptStreamGCM` | Dead code — delete in Phase G alongside other whole-file crypto |
+| 8 | Pipeline architecture | Channel-based (goroutines + channels) from the start, not refactored in later |
+| 9 | `list-files` decryption | Auto-decrypts filenames and metadata using account key; `--raw` flag for encrypted values |
+| 10 | Implementation order | Whatever order makes most sense for agents; everything ASAP, test after full completion |
 
 ---
 
