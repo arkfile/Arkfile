@@ -1,10 +1,10 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: IN PROGRESS - Phases 1-4 COMPLETE (including share metadata cleanup), Phases 5-9 Not Started
+## Status: IN PROGRESS - Phases 1-5 COMPLETE (including share metadata cleanup and Go CLI unification), Phases 6-9 Not Started
 
 ## Context
 
-Previous to this refactor, the e2e-test.sh (Go CLI to server) passed all tests (100 percent). The frontend TypeScript client needs fixes to match the working server API for encrypting files client-side and uploading them via the chunked upload API. Additionally, cryptocli needs to be updated to use streaming per-chunk encryption (no .enc temp files, no full-file memory buffering).
+Previous to this refactor, the e2e-test.sh (Go CLI to server) passed all tests (100 percent). The frontend TypeScript client needs fixes to match the working server API for encrypting files client-side and uploading them via the chunked upload API. Additionally, the Go CLI needed to be refactored to use streaming per-chunk encryption (no .enc temp files, no full-file memory buffering). This has been completed via the new-cli.md refactor — `cryptocli` has been eliminated and `arkfile-client` is now the unified CLI handling both crypto and network operations.
 
 ---
 
@@ -360,72 +360,39 @@ Upload via Go CLI, download via TS client, then verify identical plaintext outpu
 
 ---
 
-## Phase 5: Update Cryptocli to Support Streaming Encrypt and Upload
+## Phase 5: Go CLI Unification (Streaming Encrypt + Upload) [COMPLETE ✓ 2026-02-26]
 
-### Goal
+### Summary
 
-Update cryptocli so Go CLI users can encrypt and upload files streaming chunk-by-chunk, without holding the full plaintext or full encrypted file in memory. No .enc temp files are produced.
+`cryptocli` has been eliminated. `arkfile-client` is now the unified CLI tool handling both crypto operations and server communication. See `docs/wip/new-cli.md` for the full implementation record.
 
-### Current Limitation
+**What was done:**
+- `cmd/cryptocli/` deleted (source files removed)
+- `crypto/file_operations.go` — `EncryptFileWorkflow`, `DecryptFileWorkflow`, `DecryptFileFromPath`, `EncryptFileToPath` deleted (whole-file crypto dead code)
+- `crypto/gcm.go` — `EncryptStreamGCM`, `DecryptStreamGCM` deleted
+- `cmd/arkfile-client/commands.go` — `handleUploadCommand` / `doChunkedUpload` implement streaming per-chunk AES-GCM upload (init → stream encrypt+upload → finalize). No `.enc` files. Peak memory ~32 MiB regardless of file size.
+- `cmd/arkfile-client/commands.go` — `handleDownloadCommand` / `doChunkedDownload` implement streaming per-chunk AES-GCM download + decrypt
+- `cmd/arkfile-client/commands.go` — `handleShareCreate` / `handleShareDownload` implement share envelope creation and share download (both items previously deferred from Phase 4C)
+- `cmd/arkfile-client/crypto_utils.go` — all crypto helpers using `crypto` package accessors (no hardcoded constants)
+- `cmd/arkfile-client/dedup.go` — full dedup workflow: plaintext SHA-256 check against agent digest cache, server-side storage verification for stale entries, `--force` override
+- `cmd/arkfile-client/agent.go` — digest cache extensions: `store_digest_cache`, `get_digest_cache`, `add_digest`, `remove_digest`
+- Login populates digest cache: `populateDigestCache()` called after successful auth, stores decrypted SHA-256 map in agent
 
-The current CLI workflow uses crypto.EncryptFileWorkflow which reads the entire file into memory, encrypts it as one AES-GCM blob, writes a .enc file, then arkfile-client upload reads the .enc file fully into memory and chunks it for transport. This is not scalable and wastes disk space.
+**New command equivalents:**
 
-### Critical: This Changes the Encrypted Data Format
+| Old `cryptocli` command | New `arkfile-client` command |
+|---|---|
+| `cryptocli encrypt-file` + `arkfile-client upload` | `arkfile-client upload --file FILE` |
+| `arkfile-client download` + `cryptocli decrypt-file` | `arkfile-client download --file-id ID` |
+| `cryptocli create-share` + `arkfile-client share create` | `arkfile-client share create --file-id ID` |
+| `cryptocli decrypt-share` + `arkfile-client download-share` | `arkfile-client share download --share-id ID` |
+| `cryptocli generate-test-file` | `arkfile-client generate-test-file` |
 
-Currently, cryptocli encrypt-file produces a single AES-GCM blob: [2-byte envelope][nonce][entire-file-ciphertext][tag]. The arkfile-client upload then splits this blob into transport chunks (raw byte ranges).
+**Phase 4C deferred items — now complete:**
+- ~~`cryptocli create-share`: Decrypt owner metadata, include in envelope~~ DONE — `handleShareCreate` fetches metadata, unwraps FEK, builds `ShareEnvelope{fek, download_token, filename, size_bytes, sha256}`, encrypts with `crypto.EncryptGCMWithAAD`
+- ~~`cryptocli decrypt-share`: Output filename/size/sha256 from envelope~~ DONE — `handleShareDownload` decrypts envelope, displays filename/size before download, verifies SHA-256 after
 
-The new streaming model produces per-chunk encrypted data: each chunk is independently encrypted with its own nonce. These are different formats:
-
-| Aspect | Old Format | New Format |
-|---|---|---|
-| Encryption granularity | Whole file = one AES-GCM operation | Per-chunk = one AES-GCM per 16 MiB |
-| Nonces | 1 nonce for entire file | 1 nonce per chunk |
-| Server storage | Raw byte ranges of one big blob | Per-chunk encrypted segments |
-| Decryption | Need entire blob to decrypt | Can decrypt chunk-by-chunk |
-
-Per AGENTS.md: no need to build backwards compatibility.
-
-Important note: The older e2e test worked by accident because the server chunk validation only checked minimum sizes and hashes. It did not verify that each chunk was independently AES-GCM encrypted. The new streaming model makes the data format match the server's intended per-chunk design.
-
-### Target Streaming Model
-
-cryptocli will handle encryption and upload in a single streaming operation:
-
-1. Generate FEK (random 32 bytes)
-2. Compute plaintext SHA-256 of original file
-3. Encrypt metadata (filename, SHA-256) with account-derived key (Metadata fields (filename, sha256sum) are always encrypted with the account-derived key. The password_type only governs FEK encryption and chunk encryption. This keeps file lists and metadata readable without requiring custom passwords.)
-4. Encrypt FEK with password-derived KEK -> Owner Envelope (with 2-byte header)
-5. Init upload session via POST /api/uploads/init with encrypted metadata
-6. Stream-encrypt and upload chunks:
-   - Read plaintext in 16 MiB chunks
-   - Encrypt each chunk with FEK using AES-GCM (unique nonce per chunk)
-   - Prepend 2-byte envelope header to chunk 0
-   - Compute SHA-256 of each encrypted chunk
-   - Upload each chunk immediately via POST /api/uploads/{sessionId}/chunks/{chunkNumber} with X-Chunk-Hash
-7. Complete upload via POST /api/uploads/{sessionId}/complete
-
-### Compatibility Guarantees
-
-- Server already validates chunk hashes and computes streaming file hash
-- Server already expects chunk 0 envelope header and per-chunk AES-GCM format
-- This aligns with the TS client's per-chunk encryption path
-- Both TS and Go CLI produce identical encrypted chunk formats
-
-### Download (Streaming Decryption)
-
-cryptocli download (new command) must also use streaming:
-1. Download chunks via GET /api/files/{fileId}/chunks/{chunkIndex}
-2. Strip 2-byte envelope from chunk 0
-3. Decrypt each chunk independently (each has its own nonce)
-4. Write plaintext streaming to output
-5. No full encrypted file ever assembled in memory or on disk
-
-### encrypted_fek Output Requirement
-
-The new cryptocli upload command must output encrypted_fek (base64) to stdout or in JSON output. This is required because:
-- The e2e test share operations need encrypted_fek to create share envelopes
-- Currently, cryptocli encrypt-file outputs this value in its JSON metadata file
-- The new cryptocli upload must provide it equivalently (for example, output a JSON summary on success that includes file_id and encrypted_fek)
+**`encrypted_fek` output:** `arkfile-client upload` prints `file_id` and the upload is fully self-contained (no external JSON metadata file needed). Share create reads FEK directly from the live file metadata endpoint.
 
 ---
 
@@ -496,41 +463,47 @@ Net: With the existing schema, the only strictly required change is behavioral (
 
 ## Phase 8: Update e2e-test.sh
 
-Critical: Phase 1 through Phase 7 are code changes. The e2e-test.sh update must come after all code changes are complete.
+**NOTE: Do not start on any changes to e2e-test.sh until the full chunking-ts-fixes.md project (Phases 1-7) is confirmed done. This section is for reference only. See also `docs/wip/new-cli.md` Phase I for the identical requirement.**
 
-If Phase 5 changes cryptocli commands but Phase 8 is not updated to reflect the updated flow, the e2e test will break. The final e2e-test.sh must reflect all code changes from Phases 1 through 7.
+Critical: Phase 1 through Phase 7 are code changes. The e2e-test.sh update must come after all code changes are complete.
 
 ### Changes Required
 
-1. Remove: cryptocli encrypt-file step (no more .enc file creation)
-2. Replace with: a single cryptocli upload command that streams encrypt and upload
-3. Remove: arkfile-client upload --file *.enc step
-4. Update: download step to use cryptocli download (streaming decryption)
-5. Remove: cryptocli decrypt-file step
-6. Keep: all SHA-256 and content verification checks
-7. Keep: all share operation tests (shares use the FEK from upload output)
-8. Update: parse encrypted_fek from cryptocli upload output instead of from .enc.json metadata file
-9. Run dev-reset.sh before testing (old encrypted data format is incompatible)
-10. Optional: add out-of-order upload or download tests (if Phase 6 adds the required idempotency and status endpoints)
+1. ~~Remove: cryptocli encrypt-file step (no more .enc file creation)~~ → Phase 5 complete; `arkfile-client upload` is the replacement
+2. Remove: all remaining `cryptocli` invocations (currently in `scripts/testing/e2e-test.sh` — verified present via grep)
+3. Replace with `arkfile-client` single-command equivalents:
+   - `arkfile-client generate-test-file --filename test.bin --size-mb 10`
+   - `arkfile-client upload --file test.bin --username alice`
+   - `arkfile-client download --file-id FILE_ID --output downloaded.bin --username alice`
+   - `arkfile-client share create --file-id FILE_ID`
+   - `arkfile-client share download --share-id SHARE_ID --output shared.bin`
+4. Remove: `.enc` file steps (no temp files)
+5. Remove: `metadata.json` construction steps
+6. Keep: all SHA-256 and content verification checks (download command verifies internally; add external check too)
+7. Keep: all share operation negative tests (wrong password, wrong share ID → decrypt fails)
+8. Add: dedup test (upload same file twice, verify second upload rejected; upload with `--force`, verify success)
+9. Run `dev-reset.sh` before testing (old encrypted data format is incompatible)
+10. Optional: add out-of-order upload/download tests if Phase 6 idempotency endpoints are added
 
 ### Post-Update Verification
 
 After Phase 8, e2e-test.sh must pass 100 percent with all existing test phases:
 - Phase 1-4: Auth (register, login, TOTP)
 - Phase 5-7: Server checks and basic operations
-- Phase 8: File operations (upload, download, verify) now using streaming crypto
-- Phase 9: Share operations (uses encrypted_fek from upload output)
+- Phase 8: File operations (upload, download, verify) using `arkfile-client` streaming crypto
+- Phase 9: Share operations using `arkfile-client share create/download`
 - Phase 10-11: Cleanup
 
 ---
 
 ## Phase 9: Cross-Platform Testing
 
-1. Upload file via TS client, download via Go CLI, verify identical
-2. Upload file via Go CLI, download via TS client, verify identical
+1. Upload file via TS client, download via `arkfile-client`, verify identical
+2. Upload file via `arkfile-client`, download via TS client, verify identical
 3. Test with various file sizes (small, exactly 16 MiB, multi-chunk, 50+ MB)
-4. Test custom password: encrypt with custom password in TS, decrypt in Go CLI
+4. Test custom password: encrypt with custom password in TS, decrypt via `arkfile-client download`, and vice versa
 5. Test error cases (network failure mid-upload, wrong password, wrong context)
+6. Test dedup: upload same file twice via `arkfile-client`, verify second upload rejected; `--force` bypasses
 
 ---
 
@@ -749,9 +722,11 @@ TS client:
 - `go build ./...` passes
 - `bunx tsc --noEmit` passes
 
-**Verify 5 (Cross-Platform Test): NOT STARTED** — blocked on Phase 5 (streaming cryptocli)
+**Verify 5 (Cross-Platform Test): NOT STARTED** — was blocked on Phase 5; now unblocked (pending live server availability)
 
-### Phases 5-9: NOT STARTED
+### Phase 5: COMPLETE ✓ 2026-02-26 (see Phase 5 section above)
+
+### Phases 6-9: NOT STARTED
 
 ---
 
@@ -869,8 +844,8 @@ The server returns encrypted metadata fields (`encrypted_filename`, `filename_no
 **Go changes:**
 - [x] `crypto/share_kdf.go`: Add `Filename`, `SizeBytes`, `SHA256` fields to `ShareEnvelope` struct
 - [x] `crypto/share_kdf.go`: Update `CreateShareEnvelope()` signature to accept metadata
-- [ ] `cryptocli create-share`: Decrypt owner metadata (account key), include plaintext in envelope — deferred to Phase 5
-- [ ] `cryptocli decrypt-share`: Output filename/size/sha256 from decrypted envelope — deferred to Phase 5
+- [x] `arkfile-client share create`: Decrypt owner metadata (account key), include plaintext in envelope — DONE (was deferred to Phase 5; completed in new-cli.md refactor)
+- [x] `arkfile-client share download`: Output filename/size/sha256 from decrypted envelope — DONE (was deferred to Phase 5; completed in new-cli.md refactor)
 
 **TS changes:**
 - [x] `shares/share-crypto.ts`: Include metadata in envelope JSON before encryption
@@ -885,10 +860,10 @@ The server returns encrypted metadata fields (`encrypted_filename`, `filename_no
 - [x] Removed dead TS functions: `decryptMetadata`, `decryptData`, `decryptFileData`, `deriveKey`
 
 **E2E test:**
-- [ ] Phase 9.6/9.7: Verify `cryptocli decrypt-share` outputs correct filename and sha256 — deferred to Phase 8
+- [ ] Phase 9.6/9.7: Verify `arkfile-client share download` outputs correct filename and sha256 — deferred to Phase 8
 - [ ] Compare against original values from Phase 8 — deferred to Phase 8
 
-#### Phase 4D: Cross-Platform Test (Verify 5) — NOT STARTED (blocked on Phase 5)
+#### Phase 4D: Cross-Platform Test (Verify 5) — NOT STARTED (unblocked — Phase 5 complete)
 - [ ] Go CLI upload → TS browser download (owner flow)
 - [ ] TS browser upload → Go CLI download (owner flow)
 - [ ] Go CLI share create → TS browser share access
