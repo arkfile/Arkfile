@@ -377,6 +377,18 @@ fi
 # Fix ownership after build as well (just in case)
 fix_go_ownership
 
+# Ensure users and directory structure exist before deploying
+print_status "INFO" "Ensuring system user and directory structure exist..."
+if ! ./scripts/setup/01-setup-users.sh; then
+    print_status "ERROR" "User setup failed - this is CRITICAL"
+    exit 1
+fi
+if ! ./scripts/setup/02-setup-directories.sh; then
+    print_status "ERROR" "Directory setup failed - this is CRITICAL"
+    exit 1
+fi
+print_status "SUCCESS" "System user and directory structure ready"
+
 # Deploy the build artifacts to /opt/arkfile
 print_status "INFO" "Deploying build artifacts to $ARKFILE_DIR..."
 if ! ./scripts/setup/deploy.sh; then
@@ -416,24 +428,8 @@ fi
 print_status "SUCCESS" "Critical file verification complete"
 echo
 
-echo -e "${CYAN}Step 4: Ensuring directory structure${NC}"
-echo "======================================"
-
-# Ensure all directories exist before trying to write files
-print_status "INFO" "Setting up directory structure via external scripts..."
-if ! ./scripts/setup/01-setup-users.sh; then
-    print_status "ERROR" "User setup failed - this is CRITICAL"
-    exit 1
-fi
-if ! ./scripts/setup/02-setup-directories.sh; then
-    print_status "ERROR" "Directory setup failed - this is CRITICAL"
-    exit 1
-fi
-print_status "SUCCESS" "Base directory structure created"
-echo
-
-# Step 5: Ensure correct ownership of all directories
-echo -e "${CYAN}Step 5: Ensuring correct ownership${NC}"
+# Step 4: Ensure correct ownership of all directories
+echo -e "${CYAN}Step 4: Ensuring correct ownership${NC}"
 echo "===================================="
 
 print_status "INFO" "Ensuring correct ownership of all directories..."
@@ -463,8 +459,8 @@ chmod 775 "$ARKFILE_DIR/var/log"
 print_status "SUCCESS" "Log directory configured at $ARKFILE_DIR/var/log"
 echo
 
-# Step 6: Generate fresh secrets
-echo -e "${CYAN}Step 6: Generating fresh secrets${NC}"
+# Step 5: Generate fresh secrets
+echo -e "${CYAN}Step 5: Generating fresh secrets${NC}"
 echo "================================="
 
 # Generate random secrets for security (use same password for MinIO server and S3 client)
@@ -551,8 +547,8 @@ print_status "SUCCESS" "Fresh rqlite authentication created"
 print_status "SUCCESS" "Secret generation complete"
 echo
 
-# Step 7: Generate cryptographic keys
-echo -e "${CYAN}Step 7: Generate cryptographic keys${NC}"
+# Step 6: Generate cryptographic keys
+echo -e "${CYAN}Step 6: Generate cryptographic keys${NC}"
 echo "====================================="
 
 # Generate Master Key (replaces OPAQUE, JWT, and TOTP key files)
@@ -586,8 +582,8 @@ fi
 print_status "SUCCESS" "Cryptographic key generation complete"
 echo
 
-# Step 8: Setup MinIO and rqlite
-echo -e "${CYAN}Step 8: Setting up MinIO and rqlite${NC}"
+# Step 7: Setup MinIO and rqlite
+echo -e "${CYAN}Step 7: Setting up MinIO and rqlite${NC}"
 echo "==================================="
 
 # Setup MinIO directories and service
@@ -613,8 +609,8 @@ fi
 print_status "SUCCESS" "rqlite setup complete"
 echo
 
-# Step 9: Start services
-echo -e "${CYAN}Step 9: Starting services${NC}"
+# Step 8: Start services
+echo -e "${CYAN}Step 8: Starting services${NC}"
 echo "========================="
 
 # Install/update systemd service file
@@ -677,8 +673,8 @@ else
 fi
 echo
 
-# Step 10: Health verification
-echo -e "${CYAN}Step 10: Health verification${NC}"
+# Step 9: Health verification
+echo -e "${CYAN}Step 9: Health verification${NC}"
 echo "============================="
 
 # Wait for Arkfile to be ready

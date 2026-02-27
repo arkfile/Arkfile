@@ -39,6 +39,13 @@ verify_ownership() {
 
 echo -e "${GREEN}Deploying ${APP_NAME} locally...${NC}"
 
+# Pre-flight: verify deployment target exists
+if [ ! -d "$BASE_DIR" ]; then
+    echo -e "${RED}[X] Deployment target ${BASE_DIR} does not exist.${NC}"
+    echo -e "${YELLOW}    Run scripts/setup/01-setup-users.sh and scripts/setup/02-setup-directories.sh first.${NC}"
+    exit 1
+fi
+
 # Verify we have build artifacts
 if [ ! -d "$BUILD_DIR" ]; then
     echo -e "${RED}[X] Build directory ${BUILD_DIR} not found. Run build first.${NC}"
