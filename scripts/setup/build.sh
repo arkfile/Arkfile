@@ -292,8 +292,8 @@ else
     echo -e "${GREEN}[OK] Using existing static C dependencies${NC}"
 fi
 
-# Run user and directory setup if needed
-if [ ! -d "${BASE_DIR}" ]; then
+# Run user and directory setup if needed (skip in --build-only mode, caller handles setup)
+if [ "$BUILD_ONLY" = "false" ] && [ ! -d "${BASE_DIR}" ]; then
     echo -e "${YELLOW}Setting up initial directory structure...${NC}"
     ./scripts/setup/01-setup-users.sh
     ./scripts/setup/02-setup-directories.sh

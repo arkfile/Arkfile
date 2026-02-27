@@ -311,48 +311,8 @@ echo "==========================="
 
 print_status "INFO" "Building application in current directory..."
 
-# Resolving Go dependencies
-print_status "INFO" "Resolving Go dependencies..."
-print_status "INFO" "Ensuring Go dependencies are properly resolved with correct permissions..."
-
-# Fix any existing ownership issues first
+# Fix any existing ownership issues before build
 fix_go_ownership
-
-# Resolve Go module dependencies as the original user (not root)
-print_status "INFO" "Running go mod download as user $ORIGINAL_USER..."
-if ! run_go_as_user mod download; then
-    print_status "WARNING" "go mod download failed, attempting go mod tidy..."
-    if ! run_go_as_user mod tidy; then
-        print_status "ERROR" "Failed to resolve Go module dependencies"
-        exit 1
-    fi
-    # Try download again after tidy
-    if ! run_go_as_user mod download; then
-        print_status "ERROR" "Still unable to download dependencies after go mod tidy"
-        exit 1
-    fi
-fi
-
-# Ensure all internal packages are available (including auth)
-print_status "INFO" "Verifying internal package availability..."
-if ! run_go_as_user list -m github.com/84adam/Arkfile >/dev/null 2>&1; then
-    print_status "WARNING" "Main module not properly recognized, running go mod tidy..."
-    run_go_as_user mod tidy
-fi
-
-# Verify the auth package is accessible
-print_status "INFO" "Verifying auth package accessibility..."
-if run_go_as_user list ./auth >/dev/null 2>&1; then
-    print_status "SUCCESS" "Auth package is accessible"
-else
-    print_status "WARNING" "Auth package not immediately accessible - will be resolved during build"
-fi
-
-# Fix ownership again after Go operations
-fix_go_ownership
-
-print_status "SUCCESS" "Go dependencies resolved successfully"
-echo
 
 # Set a fallback version for development
 FALLBACK_VERSION="dev-$(date +%Y%m%d-%H%M%S)"
@@ -752,6 +712,12 @@ if curl -s http://localhost:8080/api/config/password-requirements 2>/dev/null | 
     print_status "SUCCESS" "Password requirements API endpoint responding"
 else
     print_status "WARNING" "Password requirements API endpoint may not be working"
+fi
+
+if curl -s http://localhost:8080/api/config/chunking 2>/dev/null | grep -q '"chunkSize"'; then
+    print_status "SUCCESS" "Chunking config API endpoint responding"
+else
+    print_status "WARNING" "Chunking config API endpoint may not be working"
 fi
 
 # Service status check

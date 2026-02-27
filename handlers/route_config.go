@@ -8,9 +8,6 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// Import other handler packages for routing
-// This allows routing to use functions from the separated handlers
-
 // RegisterRoutes initializes all routes for the application
 func RegisterRoutes() {
 	// Explicitly serve index.html at root with HEAD support
@@ -103,7 +100,6 @@ func RegisterRoutes() {
 	totpProtectedGroup.GET("/api/files/:fileId/envelope", GetFileEnvelope) // Get file envelope for share creation
 	totpProtectedGroup.POST("/api/shares", CreateFileShare)                // Create anonymous share (file_id in body)
 	totpProtectedGroup.GET("/api/shares", ListShares)                      // List user's shares
-	totpProtectedGroup.GET("/api/users/shares", ListShares)                // List user's shares (legacy endpoint)
 	totpProtectedGroup.DELETE("/api/shares/:id", DeleteShare)              // Delete a share
 	totpProtectedGroup.POST("/api/shares/:id/revoke", RevokeShare)         // Revoke a share
 
@@ -152,9 +148,6 @@ func RegisterRoutes() {
 	adminGroup.GET("/system/health", AdminSystemHealth)
 	adminGroup.GET("/security/events", AdminSecurityEvents)
 
-	// Future production admin endpoints will go here
-	//          adminGroup.GET("/users/pending", AdminPendingUsers)
-
 	// Development/Testing admin endpoints (gated by ADMIN_DEV_TEST_API_ENABLED)
 	// SECURITY: These endpoints are ONLY for development and testing
 	if isDevTestAdminAPIEnabled() {
@@ -164,15 +157,6 @@ func RegisterRoutes() {
 		devTestAdminGroup.POST("/users/cleanup", AdminCleanupTestUser)
 		devTestAdminGroup.GET("/totp/decrypt-check/:username", AdminTOTPDecryptCheck) // TOTP diagnostic endpoint
 	}
-
-	// User management (admin only) - require TOTP (commented out until implemented)
-	// totpProtectedGroup.GET("/api/admin/users", RequireAdmin(ListUsers))
-	// totpProtectedGroup.PATCH("/api/admin/users/:username", RequireAdmin(UpdateUser))
-	// totpProtectedGroup.DELETE("/api/admin/users/:username", RequireAdmin(DeleteUser))
-
-	// System statistics (admin only) - require TOTP (commented out until implemented)
-	// totpProtectedGroup.GET("/api/admin/stats", RequireAdmin(GetSystemStats))
-	// totpProtectedGroup.GET("/api/admin/activity", RequireAdmin(GetActivityLogs))
 }
 
 // isDevTestAdminAPIEnabled checks if development/testing admin API endpoints should be enabled
