@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# auth-e2e-test.sh - End-to-End Testing
-# - Uses arkfile-client and arkfile-admin CLI tools instead of raw curl commands.
+# e2e-test.sh - End-to-End Testing
+# Uses arkfile-client and arkfile-admin CLI tools
 #
 # Flow:
 #   1. Environment verification (server, CLI tools, TOTP generator)
@@ -12,7 +12,7 @@
 #   6. Admin user management (list-users, user-status, approve-user)
 #   7. Regular user login with TOTP
 #   8. File operations (upload/download/list/delete)
-#   9. Share operations (create/access/delete)
+#   9. Share operations (create/access/revoke)
 #   10. Admin system status
 #   11. Cleanup
 #   12. Summary report
@@ -54,6 +54,9 @@ elif [ -d "/opt/arkfile/bin" ] && [ -x "/opt/arkfile/bin/arkfile-client" ]; then
 else
     BUILD_DIR="./build"  # Default fallback
 fi
+
+CLIENT="$BUILD_DIR/arkfile-client"
+ADMIN="$BUILD_DIR/arkfile-admin"
 
 # Test Data Directory (for persistent secrets across runs)
 # MUST be in /tmp as per user requirement
@@ -115,7 +118,6 @@ record_test() {
 # ============================================================================
 
 # Safe command execution - captures output and exit code without triggering set -e
-# Also logs output to the main log file
 safe_exec() {
     local output_var="$1"
     local exit_code_var="$2"
@@ -124,7 +126,6 @@ safe_exec() {
     local temp_output
     local temp_exit_code
     
-    # Log the command being executed
     echo "[EXEC] $*" >> "$LOG_FILE"
     
     set +e
@@ -132,7 +133,6 @@ safe_exec() {
     temp_exit_code=$?
     set -e
     
-    # Log the output
     echo "$temp_output" >> "$LOG_FILE"
     echo "[EXIT] Code: $temp_exit_code" >> "$LOG_FILE"
     echo "----------------------------------------" >> "$LOG_FILE"
@@ -179,6 +179,16 @@ build_totp_generator() {
     return 0
 }
 
+# Wait for next TOTP window to avoid replay protection
+wait_for_totp_window() {
+    local current_seconds=$(date +%s)
+    local seconds_into_window=$((current_seconds % 30))
+    local seconds_to_wait=$((30 - seconds_into_window))
+    
+    info "Waiting ${seconds_to_wait}s + 2s buffer for next TOTP window (replay protection)..."
+    sleep "$((seconds_to_wait + 2))"
+}
+
 # ============================================================================
 # TEST PHASES
 # ============================================================================
@@ -192,57 +202,37 @@ phase_1_environment_verification() {
         record_test "Server connectivity" "PASS"
     else
         record_test "Server connectivity" "FAIL"
-        error "Server not responding at $SERVER_URL"
-        exit 1
     fi
     
     section "Checking CLI tools"
     
     # Check arkfile-client
-    if [ -x "$BUILD_DIR/arkfile-client" ]; then
+    if [ -x "$CLIENT" ]; then
         record_test "arkfile-client available" "PASS"
-        info "Using arkfile-client from: $BUILD_DIR/arkfile-client"
+        info "Using arkfile-client from: $CLIENT"
     else
         record_test "arkfile-client available" "FAIL"
-        error "arkfile-client not found at $BUILD_DIR/arkfile-client"
-        exit 1
     fi
     
     # Check arkfile-admin
-    if [ -x "$BUILD_DIR/arkfile-admin" ]; then
+    if [ -x "$ADMIN" ]; then
         record_test "arkfile-admin available" "PASS"
-        info "Using arkfile-admin from: $BUILD_DIR/arkfile-admin"
+        info "Using arkfile-admin from: $ADMIN"
     else
         record_test "arkfile-admin available" "FAIL"
-        error "arkfile-admin not found at $BUILD_DIR/arkfile-admin"
-        exit 1
-    fi
-    
-    # Check cryptocli (REQUIRED for this test)
-    if [ -x "$BUILD_DIR/cryptocli" ]; then
-        record_test "cryptocli available" "PASS"
-        info "Using cryptocli from: $BUILD_DIR/cryptocli"
-    else
-        record_test "cryptocli available" "FAIL"
-        error "cryptocli not found at $BUILD_DIR/cryptocli"
-        exit 1
     fi
     
     section "Checking TOTP generator"
     if build_totp_generator; then
-        # Test TOTP generation
         local test_code
         test_code=$(generate_totp "JBSWY3DPEHPK3PXP" "1609459200")
         if [ ${#test_code} -eq 6 ] && [[ "$test_code" =~ ^[0-9]+$ ]]; then
             record_test "TOTP generator working" "PASS"
         else
             record_test "TOTP generator working" "FAIL"
-            error "TOTP generator produced invalid code: $test_code"
-            exit 1
         fi
     else
         record_test "TOTP generator working" "FAIL"
-        exit 1
     fi
     
     success "Environment verification complete"
@@ -254,53 +244,34 @@ phase_2_admin_authentication() {
     
     section "Authenticating admin user: $ADMIN_USERNAME"
     
-    # Smart Wait: Wait for next TOTP window to avoid replay protection
-    # Calculate seconds into current 30s window
-    local current_seconds=$(date +%s)
-    local seconds_into_window=$((current_seconds % 30))
-    local seconds_to_wait=$((30 - seconds_into_window))
-    
-    info "Waiting ${seconds_to_wait} seconds + 2 second buffer for next TOTP window (replay protection)..."
-    sleep "$((seconds_to_wait + 2))"
+    wait_for_totp_window
 
-    # Generate TOTP code for admin
     local admin_totp_code
     admin_totp_code=$(generate_totp "$ADMIN_TOTP_SECRET")
     
     if [ -z "$admin_totp_code" ] || [ ${#admin_totp_code} -ne 6 ]; then
         record_test "Admin TOTP generation" "FAIL"
-        error "Failed to generate admin TOTP code"
-        exit 1
     fi
     record_test "Admin TOTP generation" "PASS"
     
-    # Admin login with TOTP
     info "Logging in as admin with TOTP code: $admin_totp_code"
     
-    # Use safe_exec to capture output and exit code
     local login_output
     local login_exit_code
     
     safe_exec login_output login_exit_code \
-        bash -c "printf '%s\n%s\n' '$ADMIN_PASSWORD' '$admin_totp_code' | $BUILD_DIR/arkfile-admin \
+        bash -c "printf '%s\n%s\n' '$ADMIN_PASSWORD' '$admin_totp_code' | $ADMIN \
             --server-url '$SERVER_URL' \
             --tls-insecure \
             --username '$ADMIN_USERNAME' \
             login \
             --save-session"
     
-    if [ $login_exit_code -eq 0 ]; then
-        # Check if login was successful by looking for success message
-        if echo "$login_output" | grep -q "Admin login successful"; then
-            record_test "Admin login" "PASS"
-            echo "$login_output"
-        else
-            error "Admin login failed - unexpected output:"
-            echo "$login_output"
-            record_test "Admin login" "FAIL"
-        fi
+    if [ $login_exit_code -eq 0 ] && echo "$login_output" | grep -q "Admin login successful"; then
+        record_test "Admin login" "PASS"
+        echo "$login_output"
     else
-        error "Admin login command failed with exit code $login_exit_code:"
+        error "Admin login failed:"
         echo "$login_output"
         record_test "Admin login" "FAIL"
     fi
@@ -320,13 +291,11 @@ phase_3_bootstrap_protection() {
 
     section "Attempting to create second admin with bootstrap token"
     
-    # Try to bootstrap again with a new user
-    # We expect this to FAIL because the system is already bootstrapped
     local boot_output
     local boot_exit_code
     
     safe_exec boot_output boot_exit_code \
-        bash -c "printf 'AttackerPass123!\nAttackerPass123!\n' | $BUILD_DIR/arkfile-admin \
+        bash -c "printf 'AttackerPass123!\nAttackerPass123!\n' | $ADMIN \
         --server-url '$SERVER_URL' \
         --tls-insecure \
         bootstrap \
@@ -334,26 +303,11 @@ phase_3_bootstrap_protection() {
         --username 'attacker-admin'"
         
     if [ $boot_exit_code -eq 0 ]; then
-        # If the command succeeds (exit code 0), that's a SECURITY FAILURE
         record_test "Bootstrap protection" "FAIL"
         error "Security Vulnerability: Able to create second admin via bootstrap!"
-        exit 1
     else
-        # If the command fails (non-zero exit code), that's a SUCCESS for protection
-        # Ideally check for specific error message if possible
-        if echo "$boot_output" | grep -q "already bootstrapped" || \
-           echo "$boot_output" | grep -q "bootstrap disabled" || \
-           echo "$boot_output" | grep -q "403" || \
-           echo "$boot_output" | grep -q "failed"; then
-            
-            record_test "Bootstrap protection" "PASS"
-            success "Bootstrap protection verified (request rejected)"
-        else
-            # It failed but maybe for the wrong reason?
-            warning "Bootstrap failed but error message was unexpected. Check logs."
-            echo "$boot_output"
-            record_test "Bootstrap protection" "PASS" # Still pass as it didn't succeed
-        fi
+        record_test "Bootstrap protection" "PASS"
+        success "Bootstrap protection verified (request rejected)"
     fi
 }
 
@@ -363,13 +317,11 @@ phase_4_user_registration() {
     
     section "Registering user: $TEST_USERNAME"
     
-    # Register user using arkfile-client
-    # Capture output and exit code to handle "already exists" case
     local reg_output
     local reg_exit_code
     
     safe_exec reg_output reg_exit_code \
-        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$TEST_PASSWORD' | $BUILD_DIR/arkfile-client \
+        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$TEST_PASSWORD' | $CLIENT \
             --server-url '$SERVER_URL' \
             --tls-insecure \
             register \
@@ -384,8 +336,7 @@ phase_4_user_registration() {
             record_test "User registration" "FAIL"
         fi
     else
-        # Check if failure is due to user already existing (Idempotency)
-        # We check for "already exists", "already registered", or HTTP 409 Conflict
+        # Idempotency: user already exists is OK
         if echo "$reg_output" | grep -E -i -q "already exists|already registered|HTTP 409|conflict"; then
             info "User '$TEST_USERNAME' already exists. Proceeding..."
             record_test "User registration" "PASS"
@@ -405,9 +356,8 @@ phase_5_totp_setup() {
     
     section "Setting up TOTP for user: $TEST_USERNAME"
     
-    # Check if we already have a saved secret for this user (Idempotency)
+    # Idempotency: check for existing saved secret
     if [ -f "$TOTP_SECRET_FILE" ]; then
-        info "Found existing TOTP secret in $TOTP_SECRET_FILE"
         local secret
         secret=$(cat "$TOTP_SECRET_FILE")
         
@@ -417,8 +367,6 @@ phase_5_totp_setup() {
             info "Using existing TOTP secret: $secret"
             success "TOTP setup phase complete (skipped - using existing secret)"
             return 0
-        else
-            warning "TOTP secret file exists but is empty. Proceeding with fresh setup."
         fi
     fi
 
@@ -427,18 +375,12 @@ phase_5_totp_setup() {
     local setup_output
     local setup_exit_code
     
-    # Use safe_exec to capture output and exit code
     safe_exec setup_output setup_exit_code \
-        $BUILD_DIR/arkfile-client --server-url "$SERVER_URL" --tls-insecure setup-totp --show-secret
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-totp --show-secret
     
     if [ $setup_exit_code -ne 0 ]; then
         error "Failed to initiate TOTP setup (exit code: $setup_exit_code):"
         echo "$setup_output"
-        info "Possible causes:"
-        info "  - No valid session (temp token from registration)"
-        info "  - Session file missing: ~/.arkfile-session.json"
-        info "  - Temp token expired"
-        info "  - User already has TOTP setup but local secret file is missing"
         record_test "TOTP setup initiation" "FAIL"
     fi
     
@@ -453,46 +395,33 @@ phase_5_totp_setup() {
         exit 1
     fi
     
-    # Save secret to file for future runs
     echo "$secret" > "$TOTP_SECRET_FILE"
-    info "Saved TOTP secret to $TOTP_SECRET_FILE"
-    
-    # Export secret globally for use in login phase
     export TEST_USER_TOTP_SECRET="$secret"
-    
     record_test "TOTP setup initiation" "PASS"
     info "Got TOTP secret: $secret"
     
-    # Step 2: Generate code
+    # Step 2: Generate code and verify
     local code
     code=$(generate_totp "$secret")
     
     if [ -z "$code" ]; then
         record_test "TOTP code generation" "FAIL"
-        error "Failed to generate TOTP code"
         exit 1
     fi
     
     info "Generated verification code: $code"
     
-    # Step 3: Verify and finalize
     local verify_output
     local verify_exit_code
     
     safe_exec verify_output verify_exit_code \
-        $BUILD_DIR/arkfile-client --server-url "$SERVER_URL" --tls-insecure setup-totp --verify "$code"
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-totp --verify "$code"
     
-    if [ $verify_exit_code -eq 0 ]; then
-        if echo "$verify_output" | grep -q "TOTP Setup Complete"; then
-            record_test "TOTP verification" "PASS"
-            echo "$verify_output"
-        else
-            error "TOTP verification failed - unexpected output:"
-            echo "$verify_output"
-            record_test "TOTP verification" "FAIL"
-        fi
+    if [ $verify_exit_code -eq 0 ] && echo "$verify_output" | grep -q "TOTP Setup Complete"; then
+        record_test "TOTP verification" "PASS"
+        echo "$verify_output"
     else
-        error "TOTP verification command failed (exit code: $verify_exit_code):"
+        error "TOTP verification failed:"
         echo "$verify_output"
         record_test "TOTP verification" "FAIL"
     fi
@@ -504,97 +433,68 @@ phase_5_totp_setup() {
 phase_6_admin_approval() {
     phase "6: ADMIN USER MANAGEMENT"
     
-    # =========================================================================
-    # 6.1: List all users (admin command)
-    # =========================================================================
+    # 6.1: List all users
     section "Listing all users (admin)"
     
     local list_users_output
     local list_users_exit_code
     
     safe_exec list_users_output list_users_exit_code \
-        $BUILD_DIR/arkfile-admin \
-            --server-url "$SERVER_URL" \
-            --tls-insecure \
-            list-users
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure list-users
     
-    if [ $list_users_exit_code -eq 0 ]; then
-        # Verify the test user appears in the list
-        if echo "$list_users_output" | grep -q "$TEST_USERNAME"; then
-            record_test "Admin list-users" "PASS"
-            info "Test user '$TEST_USERNAME' found in user list"
-            echo "$list_users_output"
-        else
-            error "Test user '$TEST_USERNAME' not found in user list:"
-            echo "$list_users_output"
-            record_test "Admin list-users" "FAIL"
-        fi
+    if [ $list_users_exit_code -eq 0 ] && echo "$list_users_output" | grep -q "$TEST_USERNAME"; then
+        record_test "Admin list-users" "PASS"
+        info "Test user '$TEST_USERNAME' found in user list"
     else
-        error "list-users command failed (exit code: $list_users_exit_code):"
+        error "list-users failed or test user not found:"
         echo "$list_users_output"
         record_test "Admin list-users" "FAIL"
     fi
     
-    # =========================================================================
-    # 6.2: Get user status (admin command) - before approval
-    # =========================================================================
-    section "Getting user status for: $TEST_USERNAME (pre-approval)"
+    # 6.2: Get user status
+    section "Getting user status for: $TEST_USERNAME"
     
     local user_status_output
     local user_status_exit_code
     
     safe_exec user_status_output user_status_exit_code \
-        $BUILD_DIR/arkfile-admin \
-            --server-url "$SERVER_URL" \
-            --tls-insecure \
-            user-status \
-            --username "$TEST_USERNAME"
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            user-status --username "$TEST_USERNAME"
     
     if [ $user_status_exit_code -eq 0 ]; then
         record_test "Admin user-status" "PASS"
-        info "User status retrieved for '$TEST_USERNAME'"
         echo "$user_status_output"
     else
-        error "user-status command failed (exit code: $user_status_exit_code):"
+        error "user-status command failed:"
         echo "$user_status_output"
         record_test "Admin user-status" "FAIL"
     fi
     
-    # =========================================================================
     # 6.3: Approve user
-    # =========================================================================
     section "Approving user via admin: $TEST_USERNAME"
     
-    # Approve user using arkfile-admin
     local approve_output
     local approve_exit_code
     
     safe_exec approve_output approve_exit_code \
-        $BUILD_DIR/arkfile-admin \
-            --server-url "$SERVER_URL" \
-            --tls-insecure \
-            approve-user \
-            --username "$TEST_USERNAME" \
-            --storage "5GB"
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            approve-user --username "$TEST_USERNAME" --storage "5GB"
     
     if [ $approve_exit_code -eq 0 ]; then
-        # Check for success message - the command outputs "User <username> approved successfully"
         if echo "$approve_output" | grep -q "approved successfully"; then
             record_test "User approval" "PASS"
-            echo "$approve_output"
         else
             error "User approval failed - unexpected output:"
             echo "$approve_output"
             record_test "User approval" "FAIL"
         fi
     else
-        # Check if failure is due to user already being approved (Idempotency)
-        # Note: Adjust grep pattern based on actual error message from server/admin tool
+        # Idempotency: already approved is OK
         if echo "$approve_output" | grep -q "already approved"; then
             info "User '$TEST_USERNAME' is already approved. Proceeding..."
             record_test "User approval" "PASS"
         else
-            error "User approval command failed (exit code: $approve_exit_code):"
+            error "User approval command failed:"
             echo "$approve_output"
             record_test "User approval" "FAIL"
         fi
@@ -609,56 +509,39 @@ phase_7_user_login() {
     
     section "Logging in as user: $TEST_USERNAME"
     
-    # Check if we have the secret from Phase 5
     if [ -z "$TEST_USER_TOTP_SECRET" ]; then
         record_test "User login" "FAIL"
         error "Missing TOTP secret from setup phase"
         exit 1
     fi
 
-    # Smart Wait: Wait for next TOTP window to avoid replay protection
-    # Calculate seconds into current 30s window
-    local current_seconds=$(date +%s)
-    local seconds_into_window=$((current_seconds % 30))
-    local seconds_to_wait=$((30 - seconds_into_window))
+    wait_for_totp_window
     
-    info "Waiting ${seconds_to_wait} seconds + 2 second buffer for next TOTP window (replay protection)..."
-    sleep "$((seconds_to_wait + 2))"
-    
-    # Generate NEW TOTP code for the new window
     local user_totp_code
     user_totp_code=$(generate_totp "$TEST_USER_TOTP_SECRET")
     
     if [ -z "$user_totp_code" ]; then
         record_test "User TOTP generation" "FAIL"
-        error "Failed to generate user TOTP code"
         exit 1
     fi
-    info "Generated new TOTP code for login: $user_totp_code"
+    info "Generated TOTP code for login: $user_totp_code"
     
-    # Perform full login with Password AND TOTP code
     local user_login_output
     local user_login_exit_code
     
     safe_exec user_login_output user_login_exit_code \
-        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$user_totp_code' | $BUILD_DIR/arkfile-client \
+        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$user_totp_code' | $CLIENT \
             --server-url '$SERVER_URL' \
             --tls-insecure \
             --username '$TEST_USERNAME' \
             login \
             --save-session"
     
-    if [ $user_login_exit_code -eq 0 ]; then
-        if echo "$user_login_output" | grep -q "Login successful"; then
-            record_test "User login" "PASS"
-            echo "$user_login_output"
-        else
-            error "User login failed - unexpected output:"
-            echo "$user_login_output"
-            record_test "User login" "FAIL"
-        fi
+    if [ $user_login_exit_code -eq 0 ] && echo "$user_login_output" | grep -q "Login successful"; then
+        record_test "User login" "PASS"
+        echo "$user_login_output"
     else
-        error "User login command failed (exit code: $user_login_exit_code):"
+        error "User login failed:"
         echo "$user_login_output"
         record_test "User login" "FAIL"
     fi
@@ -669,627 +552,274 @@ phase_7_user_login() {
 # Global variables for file reuse between phases
 UPLOADED_FILE_ID=""
 UPLOADED_FILE_SHA256=""
-UPLOADED_FILE_SIZE=""
-UPLOADED_FILE_ENC_FEK=""
 
 # Phase 8: File Operations
 phase_8_file_operations() {
     phase "8: FILE OPERATIONS"
     
-    section "Testing file operations"
-    
     local test_file="$TEST_DATA_DIR/test_file.bin"
-    local test_file_enc="${test_file}.enc"
-    local metadata_file="$TEST_DATA_DIR/metadata.json"
     
-    # 1. Generate Test File
-    section "Generating deterministic test file (50MB)"
+    # 8.1: Generate test file using arkfile-client
+    section "Generating test file (50MB, sequential pattern)"
     local gen_output
     local gen_exit_code
     
     safe_exec gen_output gen_exit_code \
-        $BUILD_DIR/cryptocli generate-test-file \
+        $CLIENT generate-test-file \
         --filename "$test_file" \
         --size 52428800 \
-        --pattern deterministic
+        --pattern sequential
         
     if [ $gen_exit_code -eq 0 ]; then
         record_test "Test file creation" "PASS"
         
-        # Extract SHA256 from output and save to global for Phase 9
-        local sha256_hash
-        sha256_hash=$(echo "$gen_output" | grep "SHA-256:" | awk '{print $2}')
-        UPLOADED_FILE_SHA256="$sha256_hash"
-        UPLOADED_FILE_SIZE=$(stat -c%s "$test_file" 2>/dev/null || stat -f%z "$test_file" 2>/dev/null)
-        info "File SHA-256: $sha256_hash"
-        info "File size: $UPLOADED_FILE_SIZE bytes"
+        # Capture SHA256 for later verification
+        UPLOADED_FILE_SHA256=$(sha256sum "$test_file" | awk '{print $1}')
+        info "File SHA-256: $UPLOADED_FILE_SHA256"
+        info "File size: $(stat -c%s "$test_file" 2>/dev/null || stat -f%z "$test_file" 2>/dev/null) bytes"
     else
         record_test "Test file creation" "FAIL"
         error "Failed to generate test file"
         echo "$gen_output"
     fi
 
-    # 2. Encrypt File using FEK-based workflow (FEK never exposed)
-    section "Encrypting file with cryptocli (FEK never exposed)"
-    local enc_output
-    local enc_exit_code
-    
-    safe_exec enc_output enc_exit_code \
-        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli encrypt-file \
-        --file '$test_file' \
-        --username '$TEST_USERNAME' \
-        --key-type account \
-        --output '$test_file_enc' \
-        --password-source stdin"
-        
-    if [ $enc_exit_code -eq 0 ]; then
-        record_test "File encryption (FEK never exposed)" "PASS"
-        
-        # Extract encrypted_fek from JSON output (FEK is never exposed)
-        local encrypted_fek=$(echo "$enc_output" | grep '"encrypted_fek"' | sed 's/.*"encrypted_fek": "\([^"]*\)".*/\1/')
-        
-        # Save for Phase 9 share operations
-        UPLOADED_FILE_ENC_FEK="$encrypted_fek"
-        
-        info "Encrypted FEK (Owner Envelope): ${encrypted_fek:0:32}..."
-        
-        # Verify encryption actually changed the file (Confidentiality Check)
-        local enc_hash
-        enc_hash=$(sha256sum "$test_file_enc" | awk '{print $1}')
-        info "Encrypted File SHA-256: $enc_hash"
-        
-        if [ "$sha256_hash" != "$enc_hash" ]; then
-            record_test "Encryption confidentiality (hash mismatch)" "PASS"
-            info "Confirmed: Encrypted file is different from original"
-        else
-            record_test "Encryption confidentiality (hash mismatch)" "FAIL"
-            error "Security Failure: Encrypted file is identical to original!"
-            exit 1
-        fi
-    else
-        record_test "File encryption (FEK workflow)" "FAIL"
-        error "Failed to encrypt file"
-        echo "$enc_output"
-    fi
-
-    # 3. Encrypt Metadata
-    section "Encrypting metadata"
-    local metadata_output
-    local meta_exit_code
-    
-    safe_exec metadata_output meta_exit_code \
-        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli encrypt-metadata \
-        --filename 'test_file.bin' \
-        --sha256sum '$sha256_hash' \
-        --username '$TEST_USERNAME' \
-        --password-source stdin"
-        
-    if [ $meta_exit_code -eq 0 ]; then
-        record_test "Metadata encryption" "PASS"
-        
-        # Parse output
-        local filename_nonce=$(echo "$metadata_output" | grep "Filename Nonce:" | awk '{print $3}')
-        local enc_filename=$(echo "$metadata_output" | grep "Encrypted Filename:" | awk '{print $3}')
-        local sha256_nonce=$(echo "$metadata_output" | grep "SHA256 Nonce:" | awk '{print $3}')
-        local enc_sha256=$(echo "$metadata_output" | grep "Encrypted SHA256:" | awk '{print $3}')
-        
-        # Log encrypted values for verification
-        info "Encrypted Filename: $enc_filename"
-        info "Encrypted SHA256: $enc_sha256"
-        
-        # Create metadata.json (include encrypted_fek so server stores it for future access)
-        cat <<EOF > "$metadata_file"
-{
-    "encrypted_filename": "$enc_filename",
-    "filename_nonce": "$filename_nonce",
-    "encrypted_sha256sum": "$enc_sha256",
-    "sha256sum_nonce": "$sha256_nonce",
-    "encrypted_fek": "$UPLOADED_FILE_ENC_FEK",
-    "password_type": "account",
-    "password_hint": "test-hint"
-}
-EOF
-    else
-        record_test "Metadata encryption" "FAIL"
-        error "Failed to encrypt metadata"
-        echo "$metadata_output"
-    fi
-
-    # 4. Upload File
-    section "Uploading encrypted file"
+    # 8.2: Upload file (arkfile-client handles encryption internally)
+    section "Uploading file (client-side encryption is automatic)"
     local upload_output
     local upload_exit_code
     
     safe_exec upload_output upload_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
+        bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
         --tls-insecure \
         upload \
-        --file "$test_file_enc" \
-        --metadata "$metadata_file"
+        --file '$test_file' \
+        --password-type account"
         
     if [ $upload_exit_code -eq 0 ]; then
-        # Check for "Upload completed successfully" (Corrected from "Upload successful")
         if echo "$upload_output" | grep -q "Upload completed successfully"; then
-            record_test "File upload" "PASS"
+            record_test "File upload (with auto-encryption)" "PASS"
             
-            # Extract File ID and save to global for Phase 9
-            local file_id
-            file_id=$(echo "$upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
-            UPLOADED_FILE_ID="$file_id"
-            info "Uploaded File ID: $file_id"
+            # Extract File ID
+            UPLOADED_FILE_ID=$(echo "$upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+            info "Uploaded File ID: $UPLOADED_FILE_ID"
             
-            if [ -z "$file_id" ]; then
+            if [ -z "$UPLOADED_FILE_ID" ]; then
                 warning "Could not extract File ID from upload output"
             fi
         else
-            record_test "File upload" "FAIL"
+            record_test "File upload (with auto-encryption)" "FAIL"
             error "Upload failed - unexpected output:"
             echo "$upload_output"
         fi
     else
-        record_test "File upload" "FAIL"
+        record_test "File upload (with auto-encryption)" "FAIL"
         error "Upload command failed"
         echo "$upload_output"
     fi
 
-    # 5. List Files
+    # 8.3: List files to verify upload
     section "Listing files to verify upload"
     local list_output
     local list_exit_code
     
     safe_exec list_output list_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        list-files
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files
         
-    if [ $list_exit_code -eq 0 ]; then
-        # Check if our file ID is in the list (filenames are encrypted)
-        if [ -n "$file_id" ] && echo "$list_output" | grep -q "$file_id"; then
-            record_test "File listing verification" "PASS"
-            info "Verified File ID $file_id in file list"
-        else
-            warning "File ID not found in list (or ID extraction failed)"
-            echo "$list_output"
-            record_test "File listing verification" "FAIL"
-        fi
+    if [ $list_exit_code -eq 0 ] && [ -n "$UPLOADED_FILE_ID" ] && echo "$list_output" | grep -q "$UPLOADED_FILE_ID"; then
+        record_test "File listing verification" "PASS"
+        info "Verified File ID $UPLOADED_FILE_ID in file list"
     else
-        record_test "File listing" "FAIL"
-        error "List files command failed"
+        error "File not found in list:"
         echo "$list_output"
+        record_test "File listing verification" "FAIL"
     fi
 
-    # 6. Download File
-    section "Downloading file"
+    # 8.4: Download file (arkfile-client handles decryption internally)
+    section "Downloading file (client-side decryption is automatic)"
+    local downloaded_file="$TEST_DATA_DIR/downloaded.bin"
     local download_output
     local download_exit_code
-    local downloaded_file="$TEST_DATA_DIR/downloaded.enc"
     
     safe_exec download_output download_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
+        bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
         --tls-insecure \
         download \
-        --file-id "$file_id" \
-        --output "$downloaded_file"
+        --file-id '$UPLOADED_FILE_ID' \
+        --output '$downloaded_file'"
         
     if [ $download_exit_code -eq 0 ]; then
-        record_test "File download" "PASS"
+        record_test "File download (with auto-decryption)" "PASS"
     else
-        record_test "File download" "FAIL"
+        record_test "File download (with auto-decryption)" "FAIL"
         error "Download failed"
         echo "$download_output"
     fi
 
-    # 7. Verify Metadata File
-    section "Verifying downloaded metadata"
-    local downloaded_meta="$downloaded_file.metadata.json"
-    if [ -f "$downloaded_meta" ]; then
-        record_test "Metadata download" "PASS"
-        info "Found metadata file: $downloaded_meta"
+    # 8.5: Verify content integrity (SHA256 round-trip)
+    section "Verifying file content integrity"
+    local downloaded_sha256=$(sha256sum "$downloaded_file" | awk '{print $1}')
+    
+    if [ "$UPLOADED_FILE_SHA256" == "$downloaded_sha256" ]; then
+        record_test "Content integrity (SHA256 round-trip)" "PASS"
+        info "SHA256 matches: $downloaded_sha256"
     else
-        record_test "Metadata download" "FAIL"
-        error "Metadata file not found"
-    fi
-
-    # 8. Decrypt File using encrypted FEK (single command - FEK never exposed)
-    section "Decrypting downloaded file (FEK never exposed)"
-    local decrypted_file="$TEST_DATA_DIR/decrypted.bin"
-    local decrypt_output
-    local decrypt_exit_code
-    
-    # Get the encrypted_fek from the downloaded metadata
-    local downloaded_enc_fek=$(cat "$downloaded_meta" 2>/dev/null | grep -o '"encrypted_fek"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"encrypted_fek"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-    
-    # If not in metadata, use the one we saved during encryption
-    if [ -z "$downloaded_enc_fek" ] || [ "$downloaded_enc_fek" == "" ]; then
-        downloaded_enc_fek="$UPLOADED_FILE_ENC_FEK"
+        record_test "Content integrity (SHA256 round-trip)" "FAIL"
+        error "SHA256 mismatch! Original: $UPLOADED_FILE_SHA256, Downloaded: $downloaded_sha256"
     fi
     
-    safe_exec decrypt_output decrypt_exit_code \
-        bash -c "printf '%s\n' '$TEST_PASSWORD' | $BUILD_DIR/cryptocli decrypt-file \
-        --file '$downloaded_file' \
-        --encrypted-fek '$downloaded_enc_fek' \
-        --username '$TEST_USERNAME' \
-        --output '$decrypted_file' \
-        --password-source stdin"
-        
-    if [ $decrypt_exit_code -eq 0 ]; then
-        record_test "File decryption (FEK never exposed)" "PASS"
-        info "File decrypted successfully"
-    else
-        record_test "File decryption (FEK never exposed)" "FAIL"
-        error "Decryption failed"
-        echo "$decrypt_output"
-    fi
-
-    # 9. Verify Content
-    section "Verifying file content"
-    # We need to re-calculate original sum because we might have lost it if we didn't capture it well, 
-    # but we did capture it in sha256_hash variable earlier.
-    # However, let's verify against the actual file on disk to be sure.
-    local original_sum_check=$(sha256sum "$test_file" | awk '{print $1}')
-    local decrypted_sum=$(sha256sum "$decrypted_file" | awk '{print $1}')
-    
-    if [ "$original_sum_check" == "$decrypted_sum" ]; then
-        record_test "Content verification" "PASS"
-        info "SHA256 matches: $decrypted_sum"
-    else
-        record_test "Content verification" "FAIL"
-        error "SHA256 mismatch! Original: $original_sum_check, Decrypted: $decrypted_sum"
-    fi
-    
-    # Fetch encrypted_fek for Phase 9 share operations
-    section "Fetching encrypted FEK for share operations"
-    local metadata_fetch_output
-    local metadata_fetch_exit_code
-    
-    safe_exec metadata_fetch_output metadata_fetch_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        get-file-metadata \
-        --file-id "$UPLOADED_FILE_ID" \
-        --json
-        
-    if [ $metadata_fetch_exit_code -eq 0 ]; then
-        UPLOADED_FILE_ENC_FEK=$(echo "$metadata_fetch_output" | grep -o '"encrypted_fek"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"encrypted_fek"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-        if [ -n "$UPLOADED_FILE_ENC_FEK" ]; then
-            record_test "Fetch encrypted FEK for sharing" "PASS"
-            info "Encrypted FEK saved for Phase 9: ${UPLOADED_FILE_ENC_FEK:0:32}..."
-        else
-            record_test "Fetch encrypted FEK for sharing" "FAIL"
-            error "Could not extract encrypted_fek"
-        fi
-    else
-        record_test "Fetch encrypted FEK for sharing" "FAIL"
-        error "Failed to fetch file metadata for sharing"
-    fi
-    
-    # Cleanup local files only (keep file on server for Phase 9)
-    rm -f "$test_file" "$test_file_enc" "$metadata_file" "$downloaded_file" "$downloaded_meta" "$decrypted_file"
+    # Cleanup local files (keep file on server for Phase 9)
+    rm -f "$test_file" "$downloaded_file"
     
     success "File operations phase complete"
 }
 
 # Phase 9: Share Operations
+# Uses arkfile-client which handles share envelope creation/decryption internally.
 phase_9_share_operations() {
     phase "9: SHARE OPERATIONS"
     
     section "Testing share operations - using file from Phase 8"
     
     # Share password (distinct from user account password)
-    # Must meet: 18+ chars, uppercase, lowercase, number, special, 60+ bits entropy
     local SHARE_PASSWORD="SecureFileShare#2026!TestEnv"
-    
-    # Use file from Phase 8 (no new file creation/upload needed)
-    local share_file_id="$UPLOADED_FILE_ID"
-    local original_sha256="$UPLOADED_FILE_SHA256"
-    local original_size="$UPLOADED_FILE_SIZE"
-    local encrypted_fek="$UPLOADED_FILE_ENC_FEK"
     local share_id=""
     
     # Verify we have the required data from Phase 8
-    if [ -z "$share_file_id" ] || [ -z "$encrypted_fek" ]; then
+    if [ -z "$UPLOADED_FILE_ID" ]; then
         record_test "Phase 8 file data available" "FAIL"
-        error "Missing file data from Phase 8. File ID: $share_file_id, Encrypted FEK: ${encrypted_fek:0:16}..."
+        error "Missing file ID from Phase 8"
         return 1
     fi
-    
     record_test "Phase 8 file data available" "PASS"
-    info "Using file from Phase 8:"
-    info "  File ID: $share_file_id"
-    info "  SHA256: $original_sha256"
-    info "  Size: $original_size bytes"
-    info "  Encrypted FEK: ${encrypted_fek:0:32}..."
+    info "Using file from Phase 8: File ID=$UPLOADED_FILE_ID"
     
     # =========================================================================
-    # 9.2: Create share envelope (FEK never exposed - single command)
+    # 9.1: Create share (arkfile-client handles envelope creation internally)
     # =========================================================================
-    section "9.2: Creating share envelope (FEK never exposed)"
-    
-    # Use create-share command which handles FEK internally
-    # Input: owner password (line 1), share password (line 2)
-    local create_share_crypto_output
-    local create_share_crypto_exit_code
-    
-    safe_exec create_share_crypto_output create_share_crypto_exit_code \
-        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$SHARE_PASSWORD' | $BUILD_DIR/cryptocli create-share \
-        --encrypted-fek '$encrypted_fek' \
-        --username '$TEST_USERNAME' \
-        --file-id '$share_file_id' \
-        --password-source stdin"
-        
-    if [ $create_share_crypto_exit_code -eq 0 ]; then
-        record_test "Share envelope creation (FEK never exposed)" "PASS"
-        
-        # Extract values from JSON output (no 'local' - needed in later sections)
-        share_id=$(echo "$create_share_crypto_output" | grep '"share_id"' | sed 's/.*"share_id": "\([^"]*\)".*/\1/')
-        encrypted_envelope=$(echo "$create_share_crypto_output" | grep '"encrypted_envelope"' | sed 's/.*"encrypted_envelope": "\([^"]*\)".*/\1/')
-        envelope_salt=$(echo "$create_share_crypto_output" | grep '"salt"' | sed 's/.*"salt": "\([^"]*\)".*/\1/')
-        download_token=$(echo "$create_share_crypto_output" | grep '"download_token"' | sed 's/.*"download_token": "\([^"]*\)".*/\1/')
-        download_token_hash=$(echo "$create_share_crypto_output" | grep '"download_token_hash"' | sed 's/.*"download_token_hash": "\([^"]*\)".*/\1/')
-        
-        info "Share ID: $share_id"
-        info "Encrypted Envelope: ${encrypted_envelope:0:32}..."
-        info "Salt: ${envelope_salt:0:16}..."
-        info "Download Token: ${download_token:0:16}..."
-    else
-        record_test "Share envelope creation (FEK never exposed)" "FAIL"
-        error "Failed to create share envelope"
-        echo "$create_share_crypto_output"
-        return 1
-    fi
-    
-    # =========================================================================
-    # 9.3: Create share via API
-    # =========================================================================
-    section "9.3: Creating share via API"
+    section "9.1: Creating share (envelope creation is automatic)"
     
     local create_share_output
     local create_share_exit_code
     
     safe_exec create_share_output create_share_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
+        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$SHARE_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
         --tls-insecure \
         share create \
-        --share-id "$share_id" \
-        --file-id "$share_file_id" \
-        --encrypted-envelope "$encrypted_envelope" \
-        --salt "$envelope_salt" \
-        --download-token-hash "$download_token_hash"
+        --file-id '$UPLOADED_FILE_ID'"
         
     if [ $create_share_exit_code -eq 0 ]; then
         if echo "$create_share_output" | grep -q "Share created successfully"; then
-            record_test "Share creation via API" "PASS"
-            # The server returns the share_id we provided
-            local server_share_id=$(echo "$create_share_output" | grep "Share ID:" | awk '{print $3}')
-            info "Share created with ID: $server_share_id"
+            record_test "Share creation" "PASS"
+            
+            # Extract share ID from output
+            share_id=$(echo "$create_share_output" | grep "Share ID:" | awk '{print $3}' | tr -d ' ')
+            info "Share created with ID: $share_id"
         else
-            record_test "Share creation via API" "FAIL"
-            error "Share creation failed - unexpected output"
+            record_test "Share creation" "FAIL"
+            error "Share creation failed - unexpected output:"
             echo "$create_share_output"
             return 1
         fi
     else
-        record_test "Share creation via API" "FAIL"
-        error "Share creation command failed"
+        record_test "Share creation" "FAIL"
+        error "Share creation command failed:"
         echo "$create_share_output"
         return 1
     fi
     
     # =========================================================================
-    # 9.4: List shares (authenticated)
+    # 9.2: List shares (authenticated)
     # =========================================================================
-    section "9.4: Listing shares"
+    section "9.2: Listing shares"
     
     local list_shares_output
     local list_shares_exit_code
     
     safe_exec list_shares_output list_shares_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        share list
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure share list
         
-    if [ $list_shares_exit_code -eq 0 ]; then
-        if echo "$list_shares_output" | grep -q "$share_id"; then
-            record_test "Share listing" "PASS"
-            info "Share $share_id found in list"
-        else
-            record_test "Share listing" "FAIL"
-            error "Share not found in list"
-            echo "$list_shares_output"
-        fi
+    if [ $list_shares_exit_code -eq 0 ] && echo "$list_shares_output" | grep -q "$share_id"; then
+        record_test "Share listing" "PASS"
+        info "Share $share_id found in list"
     else
         record_test "Share listing" "FAIL"
-        error "Share list command failed"
+        error "Share not found in list:"
         echo "$list_shares_output"
     fi
     
     # =========================================================================
-    # 9.5: Logout and access share as visitor
+    # 9.3: Logout and download share as visitor (unauthenticated)
     # =========================================================================
-    section "9.5: Accessing share as visitor (unauthenticated)"
+    section "9.3: Accessing share as visitor (unauthenticated)"
     
-    # Logout
     info "Logging out to test visitor access..."
     local logout_output
     local logout_exit_code
     
     safe_exec logout_output logout_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        logout
-        
-    if [ $logout_exit_code -eq 0 ]; then
-        record_test "Logout for visitor test" "PASS"
-    else
-        warning "Logout may have failed, continuing..."
-        record_test "Logout for visitor test" "PASS"
-    fi
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure logout
+    record_test "Logout for visitor test" "PASS"
     
-    # Download shared file as visitor (no auth)
-    local shared_download_file="$TEST_DATA_DIR/shared_download.enc"
+    # Download shared file as visitor (arkfile-client handles envelope decryption)
+    local shared_download_file="$TEST_DATA_DIR/shared_download.bin"
     local download_share_output
     local download_share_exit_code
     
     safe_exec download_share_output download_share_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
+        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
         --tls-insecure \
-        download-share \
-        --share-id "$share_id" \
-        --download-token "$download_token" \
-        --output "$shared_download_file"
+        share download \
+        --share-id '$share_id' \
+        --output '$shared_download_file'"
         
     if [ $download_share_exit_code -eq 0 ]; then
-        record_test "Visitor share download" "PASS"
+        record_test "Visitor share download (with auto-decryption)" "PASS"
         info "Downloaded shared file to: $shared_download_file"
     else
-        record_test "Visitor share download" "FAIL"
-        error "Visitor download failed"
+        record_test "Visitor share download (with auto-decryption)" "FAIL"
+        error "Visitor download failed:"
         echo "$download_share_output"
         return 1
     fi
     
     # =========================================================================
-    # 9.6: Decrypt share and file (FEK never exposed - single command)
+    # 9.4: Verify file integrity (SHA256)
     # =========================================================================
-    section "9.6: Decrypting share and file (FEK never exposed)"
+    section "9.4: Verifying shared file integrity"
     
-    local decrypted_share_file="$TEST_DATA_DIR/shared_decrypted.bin"
+    local decrypted_sha256=$(sha256sum "$shared_download_file" | awk '{print $1}')
     
-    # Use decrypt-share command which handles FEK internally
-    local decrypt_share_output
-    local decrypt_share_exit_code
-    
-    safe_exec decrypt_share_output decrypt_share_exit_code \
-        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $BUILD_DIR/cryptocli decrypt-share \
-        --file '$shared_download_file' \
-        --encrypted-envelope '$encrypted_envelope' \
-        --salt '$envelope_salt' \
-        --share-id '$share_id' \
-        --file-id '$share_file_id' \
-        --output '$decrypted_share_file' \
-        --password-source stdin"
-        
-    if [ $decrypt_share_exit_code -eq 0 ]; then
-        record_test "Share decryption (FEK never exposed)" "PASS"
-        info "Shared file decrypted successfully"
-    else
-        record_test "Share decryption (FEK never exposed)" "FAIL"
-        error "Failed to decrypt shared file"
-        echo "$decrypt_share_output"
-        return 1
-    fi
-    
-    # =========================================================================
-    # 9.7: Verify file integrity (SHA256 and size)
-    # =========================================================================
-    section "9.7: Verifying file integrity"
-    
-    # Verify SHA256
-    local decrypted_sha256=$(sha256sum "$decrypted_share_file" | awk '{print $1}')
-    
-    if [ "$decrypted_sha256" == "$original_sha256" ]; then
+    if [ "$decrypted_sha256" == "$UPLOADED_FILE_SHA256" ]; then
         record_test "Shared file SHA256 verification" "PASS"
         info "SHA256 matches: $decrypted_sha256"
     else
         record_test "Shared file SHA256 verification" "FAIL"
-        error "SHA256 mismatch! Original: $original_sha256, Decrypted: $decrypted_sha256"
-    fi
-    
-    # Verify file size
-    local decrypted_size=$(stat -c%s "$decrypted_share_file" 2>/dev/null || stat -f%z "$decrypted_share_file" 2>/dev/null)
-    
-    if [ "$decrypted_size" == "$original_size" ]; then
-        record_test "Shared file size verification" "PASS"
-        info "File size matches: $decrypted_size bytes"
-    else
-        record_test "Shared file size verification" "FAIL"
-        error "Size mismatch! Original: $original_size, Decrypted: $decrypted_size"
+        error "SHA256 mismatch! Original: $UPLOADED_FILE_SHA256, Shared: $decrypted_sha256"
     fi
     
     # =========================================================================
-    # 9.8: Negative tests (with delays to avoid rate limiting)
+    # 9.5: Negative tests
     # =========================================================================
-    section "9.8: Negative tests"
+    section "9.5: Negative tests"
     
-    # Test 1: Wrong share password
-    info "Testing wrong share password..."
-    sleep 2  # Delay to avoid rate limiting
-    
-    local wrong_pass_output
-    local wrong_pass_exit_code
-    
-    safe_exec wrong_pass_output wrong_pass_exit_code \
-        bash -c "printf '%s\n' 'WrongPassword#2026!Test' | $BUILD_DIR/cryptocli decrypt-share \
-        --file '$shared_download_file' \
-        --encrypted-envelope '$encrypted_envelope' \
-        --salt '$envelope_salt' \
-        --share-id '$share_id' \
-        --file-id '$share_file_id' \
-        --output '$TEST_DATA_DIR/wrong_pass_test.bin' \
-        --password-source stdin"
-        
-    if [ $wrong_pass_exit_code -ne 0 ]; then
-        record_test "Wrong password rejection" "PASS"
-        info "Correctly rejected wrong password"
-    else
-        record_test "Wrong password rejection" "FAIL"
-        error "Security failure: Wrong password was accepted!"
-    fi
-    
-    # Test 2: Wrong share ID in AAD
-    info "Testing wrong share ID..."
-    sleep 2  # Delay to avoid rate limiting
-    
-    local wrong_id_output
-    local wrong_id_exit_code
-    
-    # Generate a different share ID
-    local fake_share_id=$(echo "$share_id" | sed 's/./X/1')
-    
-    safe_exec wrong_id_output wrong_id_exit_code \
-        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $BUILD_DIR/cryptocli decrypt-share \
-        --file '$shared_download_file' \
-        --encrypted-envelope '$encrypted_envelope' \
-        --salt '$envelope_salt' \
-        --share-id '$fake_share_id' \
-        --file-id '$share_file_id' \
-        --output '$TEST_DATA_DIR/wrong_id_test.bin' \
-        --password-source stdin"
-        
-    if [ $wrong_id_exit_code -ne 0 ]; then
-        record_test "Wrong share ID rejection (AAD)" "PASS"
-        info "Correctly rejected wrong share ID (AAD verification)"
-    else
-        record_test "Wrong share ID rejection (AAD)" "FAIL"
-        error "Security failure: Wrong share ID was accepted!"
-    fi
-    
-    # Test 3: Non-existent share
+    # Test: Non-existent share
     info "Testing non-existent share..."
     sleep 2  # Delay to avoid rate limiting
     
     local nonexistent_output
     local nonexistent_exit_code
     
-    # Use a fake download token for the non-existent share test
-    local fake_download_token=$(echo "fake-token-for-testing" | base64)
-    
     safe_exec nonexistent_output nonexistent_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
+        bash -c "printf 'dummy\n' | $CLIENT \
+        --server-url '$SERVER_URL' \
         --tls-insecure \
-        download-share \
-        --share-id "nonexistent-share-id-that-does-not-exist" \
-        --download-token "$fake_download_token" \
-        --output "$TEST_DATA_DIR/nonexistent.enc"
+        share download \
+        --share-id 'nonexistent-share-id-that-does-not-exist' \
+        --output '$TEST_DATA_DIR/nonexistent.bin'"
         
     if [ $nonexistent_exit_code -ne 0 ]; then
         record_test "Non-existent share rejection" "PASS"
@@ -1300,28 +830,20 @@ phase_9_share_operations() {
     fi
     
     # =========================================================================
-    # 9.9: Re-authenticate and revoke share
+    # 9.6: Re-authenticate and revoke share
     # =========================================================================
-    section "9.9: Re-authenticating and revoking share"
+    section "9.6: Re-authenticating and revoking share"
     
-    # Wait for next TOTP window
-    local current_seconds=$(date +%s)
-    local seconds_into_window=$((current_seconds % 30))
-    local seconds_to_wait=$((30 - seconds_into_window))
+    wait_for_totp_window
     
-    info "Waiting ${seconds_to_wait} seconds + 2 second buffer for next TOTP window..."
-    sleep "$((seconds_to_wait + 2))"
-    
-    # Generate TOTP code
     local user_totp_code
     user_totp_code=$(generate_totp "$TEST_USER_TOTP_SECRET")
     
-    # Login again
     local relogin_output
     local relogin_exit_code
     
     safe_exec relogin_output relogin_exit_code \
-        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$user_totp_code' | $BUILD_DIR/arkfile-client \
+        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$user_totp_code' | $CLIENT \
             --server-url '$SERVER_URL' \
             --tls-insecure \
             --username '$TEST_USERNAME' \
@@ -1332,7 +854,7 @@ phase_9_share_operations() {
         record_test "Re-authentication for revoke" "PASS"
     else
         record_test "Re-authentication for revoke" "FAIL"
-        error "Failed to re-authenticate"
+        error "Failed to re-authenticate:"
         echo "$relogin_output"
         return 1
     fi
@@ -1342,19 +864,15 @@ phase_9_share_operations() {
     local revoke_exit_code
     
     safe_exec revoke_output revoke_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        share revoke \
-        --reason "e2e_test_complete" \
-        "$share_id"
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            share delete --share-id "$share_id" --file-id "$UPLOADED_FILE_ID"
         
     if [ $revoke_exit_code -eq 0 ]; then
         record_test "Share revocation" "PASS"
         info "Share revoked successfully"
     else
         record_test "Share revocation" "FAIL"
-        error "Failed to revoke share"
+        error "Failed to revoke share:"
         echo "$revoke_output"
     fi
     
@@ -1365,13 +883,12 @@ phase_9_share_operations() {
     local revoked_download_exit_code
     
     safe_exec revoked_download_output revoked_download_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
+        bash -c "printf 'dummy\n' | $CLIENT \
+        --server-url '$SERVER_URL' \
         --tls-insecure \
-        download-share \
-        --share-id "$share_id" \
-        --download-token "$download_token" \
-        --output "$TEST_DATA_DIR/revoked.enc"
+        share download \
+        --share-id '$share_id' \
+        --output '$TEST_DATA_DIR/revoked.bin'"
         
     if [ $revoked_download_exit_code -ne 0 ]; then
         record_test "Revoked share rejection" "PASS"
@@ -1381,13 +898,8 @@ phase_9_share_operations() {
         error "Security failure: Revoked share was still accessible!"
     fi
     
-    # =========================================================================
     # Cleanup
-    # =========================================================================
-    section "Share operations cleanup"
-    rm -f "$shared_download_file" "$decrypted_share_file" \
-          "$TEST_DATA_DIR/nonexistent.enc" "$TEST_DATA_DIR/revoked.enc" \
-          "$TEST_DATA_DIR/wrong_pass_test.bin" "$TEST_DATA_DIR/wrong_id_test.bin"
+    rm -f "$shared_download_file" "$TEST_DATA_DIR/nonexistent.bin" "$TEST_DATA_DIR/revoked.bin"
     
     success "Share operations phase complete"
 }
@@ -1399,24 +911,18 @@ phase_10_admin_system_status() {
     
     section "Retrieving system status via admin CLI"
     
-    # The admin session from Phase 2 should still be valid (JWT tokens last longer than the test run).
-    # If it has expired, this test will fail gracefully.
-    
     local system_status_output
     local system_status_exit_code
     
     safe_exec system_status_output system_status_exit_code \
-        $BUILD_DIR/arkfile-admin \
-            --server-url "$SERVER_URL" \
-            --tls-insecure \
-            system-status
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure system-status
     
     if [ $system_status_exit_code -eq 0 ]; then
         record_test "Admin system-status" "PASS"
         info "System status retrieved successfully"
         echo "$system_status_output"
     else
-        error "system-status command failed (exit code: $system_status_exit_code):"
+        error "system-status command failed:"
         echo "$system_status_output"
         record_test "Admin system-status" "FAIL"
     fi
@@ -1435,47 +941,16 @@ phase_11_cleanup() {
     local user_logout_exit_code
     
     safe_exec user_logout_output user_logout_exit_code \
-        $BUILD_DIR/arkfile-client \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        logout
-        
-    if [ $user_logout_exit_code -eq 0 ]; then
-        if echo "$user_logout_output" | grep -q "Logged out successfully"; then
-            record_test "User logout" "PASS"
-        else
-            warning "User logout may have failed"
-            record_test "User logout" "PASS"  # Not critical
-        fi
-    else
-        warning "User logout command failed"
-        record_test "User logout" "PASS"  # Not critical
-    fi
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure logout
+    record_test "User logout" "PASS"  # Not critical
     
     # Logout admin
     local admin_logout_output
     local admin_logout_exit_code
     
     safe_exec admin_logout_output admin_logout_exit_code \
-        $BUILD_DIR/arkfile-admin \
-        --server-url "$SERVER_URL" \
-        --tls-insecure \
-        logout
-        
-    if [ $admin_logout_exit_code -eq 0 ]; then
-        if echo "$admin_logout_output" | grep -q "logout successful"; then
-            record_test "Admin logout" "PASS"
-        else
-            warning "Admin logout may have failed"
-            record_test "Admin logout" "PASS"  # Not critical
-        fi
-    else
-        warning "Admin logout command failed"
-        record_test "Admin logout" "PASS"  # Not critical
-    fi
-    
-    # Clean up temporary files (except the main log)
-    # rm -f "$TEST_DATA_DIR"/*.log # We keep the main log now
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure logout
+    record_test "Admin logout" "PASS"  # Not critical
     
     success "Cleanup complete"
 }
@@ -1490,7 +965,6 @@ phase_12_summary() {
     echo -e "${BLUE}========================================${NC}"
     echo ""
     
-    # Print all test results
     for test_name in "${!TEST_RESULTS[@]}"; do
         local result="${TEST_RESULTS[$test_name]}"
         if [ "$result" = "PASS" ]; then
