@@ -870,3 +870,68 @@ The server returns encrypted metadata fields (`encrypted_filename`, `filename_no
 - [ ] TS browser share create → Go CLI share access
 
 ---
+
+# MORE STUFF DISCOVERED DURING FRONT END REFACTOR (2/27/26):
+
+Here's the full plan, properly prioritized:
+
+---
+
+## Priority 1: Server-side — Accept `max_accesses` in `CreateFileShare`
+
+**File: `handlers/file_shares.go`**
+
+The `ShareRequest` struct is missing `max_accesses`. The DB column exists, `DownloadShareChunk` already enforces it, but `CreateFileShare` never writes it. Fix:
+
+1. Add `MaxAccesses *int `json:"max_accesses"`` to `ShareRequest` struct
+2. Add server-side validation: if provided, must be >= 1 (no zero, no negative)
+3. Pass it through to the INSERT statement (the column already exists in the schema)
+
+That's ~10 lines of Go changes.
+
+---
+
+## Priority 2: Client-side share.ts — No hardcoded values, full feature set
+
+**File: `client/static/js/src/files/share.ts`**
+
+Current problems:
+- **Hardcoded `14` for min password length** — must use `validateSharePassword()` from `password-validation.ts` which loads from `/api/config/password-requirements` (where `minSharePasswordLength` = 18)
+- **No max downloads UI** — the server will now accept it, so expose it
+- **No real-time password validation feedback** — just a dumb length check
+
+Fix:
+1. Import `validateSharePassword` from `../crypto/password-validation`
+2. On password input, call `validateSharePassword()` and show real-time feedback (requirements met/unmet)
+3. Remove the hardcoded `pw.length < 14` check — use the validation result's `meets_requirements` instead
+4. Add a "Max Downloads" input field to the modal (optional, defaults to unlimited)
+5. Pass `maxDownloads` through to `ShareCreator.createShare()`
+
+---
+
+## Priority 3: ShareCreator — Pass `max_accesses` to server
+
+**File: `client/static/js/src/shares/share-creation.ts`**
+
+1. Add `maxAccesses?: number` to `ShareCreationRequest`
+2. Include `max_accesses` in the JSON body sent to the server
+
+---
+
+## Priority 4: Fix share button in list.ts
+
+**File: `client/static/js/src/files/list.ts`**
+
+The share button currently does `window.location.href = '/file-share.html?...'` — that page was deleted. Change it to call `shareFile(file.file_id, file.password_type)` from the new `share.ts` module.
+
+---
+
+## Priority 5: Dead code cleanup
+
+1. **`download.ts`** — Remove `downloadFileByName()` if it's dead
+2. **`app.ts`** — Remove dead `window.arkfile` share exports that reference deleted pages
+3. **Build** — Rebuild the JS bundle
+
+---
+
+## Priority 6: Go back to e2e-test.sh and add in tests for max_accesses and expires_after restraints.

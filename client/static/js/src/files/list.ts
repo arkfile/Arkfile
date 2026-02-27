@@ -5,6 +5,7 @@
 import { authenticatedFetch } from '../utils/auth';
 import { showError } from '../ui/messages';
 import { downloadFile } from './download';
+import { shareFile } from './share';
 
 export interface FileMetadata {
   file_id: string;
@@ -75,7 +76,7 @@ export function displayFiles(data: FilesResponse): void {
     const shareBtn = document.createElement('button');
     shareBtn.textContent = 'Share';
     shareBtn.addEventListener('click', () => {
-      window.location.href = `/file-share.html?file=${encodeURIComponent(file.file_id)}`;
+      shareFile(file.file_id, file.passwordType);
     });
 
     fileActions.appendChild(downloadBtn);

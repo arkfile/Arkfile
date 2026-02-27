@@ -29,6 +29,7 @@ type ShareRequest struct {
 	EncryptedEnvelope string `json:"encrypted_envelope"`  // Base64-encoded Share Envelope (FEK + Download Token) encrypted with AAD
 	DownloadTokenHash string `json:"download_token_hash"` // SHA-256 hash of the Download Token
 	ExpiresAfterHours int    `json:"expires_after_hours"` // Optional expiration
+	MaxAccesses       *int   `json:"max_accesses"`        // Optional download limit (nil = unlimited)
 }
 
 // ShareResponse represents a file share creation response
@@ -83,6 +84,11 @@ func CreateFileShare(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Download Token Hash is required")
 	}
 
+	// Validate max_accesses if provided (must be >= 1)
+	if request.MaxAccesses != nil && *request.MaxAccesses < 1 {
+		return echo.NewHTTPError(http.StatusBadRequest, "Max accesses must be at least 1")
+	}
+
 	// Validate that the user owns the file using the new encrypted schema
 	var ownerUsername string
 	var passwordType string
@@ -110,11 +116,17 @@ func CreateFileShare(c echo.Context) error {
 		expiresAt = &expiry
 	}
 
+	// Convert max_accesses pointer to sql.NullInt64 for the INSERT
+	var maxAccesses sql.NullInt64
+	if request.MaxAccesses != nil {
+		maxAccesses = sql.NullInt64{Int64: int64(*request.MaxAccesses), Valid: true}
+	}
+
 	// Create file share record - store salt as base64 string directly
 	_, err = database.DB.Exec(`
-		INSERT INTO file_share_keys (share_id, file_id, owner_username, salt, encrypted_fek, download_token_hash, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)`,
-		request.ShareID, request.FileID, username, request.Salt, request.EncryptedEnvelope, request.DownloadTokenHash, expiresAt,
+		INSERT INTO file_share_keys (share_id, file_id, owner_username, salt, encrypted_fek, download_token_hash, created_at, expires_at, max_accesses)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)`,
+		request.ShareID, request.FileID, username, request.Salt, request.EncryptedEnvelope, request.DownloadTokenHash, expiresAt, maxAccesses,
 	)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create file share record for file %s: %v", request.FileID, err)

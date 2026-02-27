@@ -41,6 +41,7 @@ export interface ShareCreationRequest {
   fileId: string;
   sharePassword: string;
   expiresAfterHours?: number;
+  maxAccesses?: number; // Optional download limit (undefined = unlimited)
 }
 
 /**
@@ -154,7 +155,8 @@ export class ShareCreator {
             encrypted_envelope: shareEncryptionResult.encryptedFEK,
             salt: shareEncryptionResult.salt,
             download_token_hash: shareEncryptionResult.downloadTokenHash,
-            expires_after_hours: request.expiresAfterHours || 0
+            expires_after_hours: request.expiresAfterHours || 0,
+            ...(request.maxAccesses !== undefined ? { max_accesses: request.maxAccesses } : {}),
           }),
         });
 
