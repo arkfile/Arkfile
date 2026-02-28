@@ -213,7 +213,11 @@ func validateTOTPMasterKeyIntegrity() error {
 	return nil
 }
 
-// ValidateDevAdminTOTPWorkflow performs complete end-to-end TOTP validation
+// ValidateDevAdminTOTPWorkflow performs end-to-end TOTP validation for dev admin bootstrap.
+// It verifies that the TOTP secret was stored correctly and can be decrypted, but does NOT
+// generate or validate an actual TOTP code. This avoids "burning" a TOTP window during
+// server startup, which would cause replay-detection failures if an admin login attempt
+// happens within the same 30-second window (e.g., during e2e testing).
 func ValidateDevAdminTOTPWorkflow(db *sql.DB, user *models.User, totpSecret string) error {
 	// Check if TOTP is enabled
 	enabled, err := IsUserTOTPEnabled(db, user.Username)
@@ -225,7 +229,9 @@ func ValidateDevAdminTOTPWorkflow(db *sql.DB, user *models.User, totpSecret stri
 		return fmt.Errorf("TOTP not enabled after setup")
 	}
 
-	// Test TOTP decryption workflow
+	// Test TOTP decryption workflow — this proves the master key derivation,
+	// encryption, and database storage are all working correctly without
+	// consuming a TOTP code window in the replay log.
 	present, decryptable, totpEnabled, setupCompleted, err := CanDecryptTOTPSecret(db, user.Username)
 	if err != nil {
 		return fmt.Errorf("TOTP decryption test failed: %w", err)
@@ -236,18 +242,7 @@ func ValidateDevAdminTOTPWorkflow(db *sql.DB, user *models.User, totpSecret stri
 			present, decryptable, totpEnabled, setupCompleted)
 	}
 
-	// Generate and validate TOTP code
-	currentCode, err := totp.GenerateCode(totpSecret, time.Now())
-	if err != nil {
-		return fmt.Errorf("failed to generate test TOTP code: %w", err)
-	}
-
-	// Test TOTP validation
-	if err := ValidateTOTPCode(db, user.Username, currentCode); err != nil {
-		return fmt.Errorf("TOTP code validation failed: %w", err)
-	}
-
-	log.Printf("Complete TOTP workflow validation passed for '%s'", user.Username)
+	log.Printf("TOTP workflow validation passed for '%s' (decrypt-only, no code burned)", user.Username)
 	return nil
 }
 

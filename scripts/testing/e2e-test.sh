@@ -142,6 +142,25 @@ safe_exec() {
 }
 
 # ============================================================================
+# TOTP WINDOW MANAGEMENT
+# ============================================================================
+
+# Wait for next TOTP window to avoid replay protection.
+# The server records each used TOTP code and rejects reuse within the same
+# 30-second window. This is needed before any login that uses --totp-secret,
+# since a previous operation (e.g., server bootstrap validation, or a prior
+# login in the same test run) may have consumed the current window.
+wait_for_totp_window() {
+    local current_seconds
+    current_seconds=$(date +%s)
+    local seconds_into_window=$((current_seconds % 30))
+    local seconds_to_wait=$((30 - seconds_into_window))
+
+    info "Waiting ${seconds_to_wait}s + 2s buffer for next TOTP window (replay protection)..."
+    sleep "$((seconds_to_wait + 2))"
+}
+
+# ============================================================================
 # AGENT LIFECYCLE
 # ============================================================================
 
@@ -208,6 +227,8 @@ phase_2_admin_authentication() {
     phase "2: ADMIN AUTHENTICATION"
 
     section "Authenticating admin user: $ADMIN_USERNAME"
+
+    wait_for_totp_window
 
     local login_output
     local login_exit_code
@@ -462,6 +483,8 @@ phase_7_user_login() {
     phase "7: REGULAR USER LOGIN WITH TOTP"
 
     section "Logging in as user: $TEST_USERNAME"
+
+    wait_for_totp_window
 
     if [ -z "$TEST_USER_TOTP_SECRET" ]; then
         error "Missing TOTP secret from setup phase"
@@ -740,6 +763,8 @@ phase_9_share_operations() {
 
     # 9.6: Re-authenticate and revoke share
     section "9.6: Re-authenticating and revoking share"
+
+    wait_for_totp_window
 
     local relogin_output
     local relogin_exit_code
