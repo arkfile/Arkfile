@@ -935,3 +935,102 @@ The share button currently does `window.location.href = '/file-share.html?...'` 
 ---
 
 ## Priority 6: Go back to e2e-test.sh and add in tests for max_accesses and expires_after restraints.
+
+---
+
+# SECURITY ENHANCEMENTS TO THE AGENTS/SessionStorage OF ACCOUNT KEYS & FILE DIGESTS
+
+## Implementation Plan
+
+TypeScript only (no JS), POSIX-compatible Go (no Linux-specific syscalls like `SO_PEERCRED`), and session binding on both sides. Finalized plan:
+
+---
+
+### Deliverables
+
+#### 1. Go Agent: Time-Based Expiration (1–4 hours)
+
+**Files changed:** `cmd/arkfile-client/agent.go`, `cmd/arkfile-client/main.go`
+
+- Add `storedAt`, `expiresAt`, `username` fields alongside `accountKey` in the Agent struct
+- `store_account_key` method now accepts `{"account_key": "<b64>", "username": "alice", "ttl_hours": 1}`
+- `get_account_key` checks expiration, returns error `"account key expired"` if past TTL, auto-wipes
+- Background goroutine: check every 60s, auto-wipe if expired (POSIX-safe — just `time.NewTicker`)
+- `get_account_key` response now includes `username`, `stored_at`, `expires_at` (unified shape)
+- `--key-ttl` flag on `login` command (default 1, clamped 1–4)
+- On expired key error, print: `"Account key expired. Please run: arkfile-client login --username <user>"`
+
+#### 2. TypeScript: Ephemeral Wrapping Key for Account Key Cache
+
+**Files changed:** `client/static/js/src/crypto/account-key-cache.ts`
+
+- Module-level `let wrappingKey: Uint8Array | null = null` (never persisted)
+- `cacheAccountKey()`: generate random 32-byte wrapping key → AES-GCM encrypt account key → store **ciphertext + IV + tag** in sessionStorage (account key never stored as plaintext base64)
+- `getCachedAccountKey()`: decrypt from sessionStorage using in-memory wrapping key
+- `lockAccountKey()` / `cleanupAccountKeyCache()`: `secureWipe(wrappingKey); wrappingKey = null` → sessionStorage ciphertext becomes useless
+- All code will be TypeScript (`.ts` files, typed interfaces, no `.js` source)
+
+#### 3. Unified JSON Data Shape (Both Sides)
+
+**Account key structure (conceptual — adapted to each storage backend):**
+```json
+{
+  "account_key": "<base64 key or ciphertext>",
+  "username": "alice",
+  "context": "account",
+  "stored_at": "<ISO 8601>",
+  "expires_at": "<ISO 8601>",
+  "ttl_hours": 1
+}
+```
+
+**Go agent:** `store_account_key` and `get_account_key` will use this shape in their JSON params/results.
+
+**TypeScript:** `AccountKeyCache` interface updated to match this shape (with `storedAt`, `ttlHours` fields added).
+
+**Digest cache stays the same on both:** `{ "<file_id>": "<sha256hex>" }`
+
+#### 4. Top 3 Additional Security Enhancements Per Platform
+
+##### Go CLI Agent — Top 3 (POSIX-compatible, ranked by security impact):
+
+| Rank | Enhancement | Why | Implementation |
+|------|------------|-----|---------------|
+| **1** | **Session binding** | Ties cached key to the specific auth session. If session token changes/expires, key is auto-wiped. Prevents stale keys from being used after re-auth with different credentials. | Store a hash of the access token alongside the key. On `get_account_key`, caller passes current token hash; agent compares. Mismatch → auto-wipe + error. |
+| **2** | **Memory locking (`mlock`)** | Prevents account key from being swapped to disk. POSIX standard (`mlock(2)`), works on Linux, FreeBSD, OpenBSD, Alpine. Go's `syscall.Mlock()` wraps this portably. | Call `syscall.Mlock()` on the account key byte slice after storing. Call `syscall.Munlock()` before wiping. Fail gracefully if unprivileged (some BSDs require privileges). |
+| **3** | **Socket UID ownership validation + access counter** | Already validates UID/permissions. Add an access counter exposed via `agent status` so users can audit access patterns. Simple, maintainable, no platform-specific APIs. | Add `accessCount uint64` field, increment on each `get_account_key`. Include in `status` response. Log warning if >10 accesses/minute. |
+
+##### TypeScript Frontend — Top 3 (ranked by security impact):
+
+| Rank | Enhancement | Why | Implementation |
+|------|------------|-----|---------------|
+| **1** | **Session binding** | Ties cached key to the current JWT. If token is refreshed or changes, the wrapping key is discarded, forcing re-derivation. Prevents key reuse across sessions. | On cache: store `SHA-256(accessToken)` alongside ciphertext. On retrieve: compare against current token hash. Mismatch → auto-lock. |
+| **2** | **Inactivity auto-lock** | If user walks away, key is automatically wiped after configurable idle timeout (default 15 min). Industry standard for sensitive web apps (banking, password managers). | Track last activity via `mousemove`/`keydown`/`click` events (debounced). `setInterval` every 60s checks if idle > threshold → `lockAccountKey()`. |
+| **3** | **Storage event monitoring** | Detects if another tab/context (or XSS in another tab) modifies the account key entry. Immediately locks and alerts. | `window.addEventListener('storage', ...)` — if the account key sessionStorage entry is modified externally, force lock + show security warning. Note: `storage` events fire for `localStorage` changes from *other* tabs; for `sessionStorage` this is same-tab only, so we'd add a periodic integrity check (HMAC of stored value) instead. |
+
+**Revised #3 for TS (since `storage` event doesn't work across tabs for sessionStorage):**
+
+| **3** | **Integrity HMAC** | Detect tampering of sessionStorage entries. On store: compute HMAC of ciphertext using wrapping key, store alongside. On retrieve: verify HMAC before decrypting. If mismatch → force lock + alert. | Use `@noble/hashes` HMAC-SHA256. Store `hmac` field in the cache entry. Verify on every read. |
+
+---
+
+### Implementation Order
+
+1. **Go agent TTL + unified shape** (`agent.go`, `main.go`)
+2. **Go session binding** (`agent.go`, `main.go`)
+3. **Go mlock** (`agent.go`) — with graceful fallback
+4. **Go access counter** (`agent.go`)
+5. **TS ephemeral wrapping key** (`account-key-cache.ts`)
+6. **TS session binding** (`account-key-cache.ts`)
+7. **TS inactivity auto-lock** (`account-key-cache.ts`)
+8. **TS integrity HMAC** (`account-key-cache.ts`)
+9. **TS unified shape alignment** (`account-key-cache.ts`)
+
+---
+
+### Files to be modified:
+- `cmd/arkfile-client/agent.go` — TTL, session binding, mlock, access counter, unified shape
+- `cmd/arkfile-client/main.go` — `--key-ttl` flag, session token hash passing, expired key handling
+- `client/static/js/src/crypto/account-key-cache.ts` — wrapping key, session binding, inactivity lock, HMAC integrity, unified shape
+
+---
