@@ -34,6 +34,7 @@ USAGE:
 COMMANDS:
     register          Register a new account
     setup-totp        Setup Two-Factor Authentication (TOTP)
+    generate-totp     Generate a TOTP code from a base32 secret (for scripting)
     login             Authenticate with arkfile server
     upload            Encrypt and upload a file (streaming, per-chunk AES-GCM)
     download          Download and decrypt a file (streaming, per-chunk AES-GCM)
@@ -243,6 +244,11 @@ func main() {
 	case "share":
 		if err := handleShareCommand(client, config, args); err != nil {
 			logError("Share command failed: %v", err)
+			os.Exit(1)
+		}
+	case "generate-totp":
+		if err := handleGenerateTOTPCommand(args); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 	case "generate-test-file":
@@ -625,6 +631,7 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 	usernameFlag := fs.String("username", config.Username, "Username")
 	saveSession := fs.Bool("save-session", true, "Save session for future use")
 	totpCode := fs.String("totp-code", "", "TOTP code for non-interactive login")
+	totpSecret := fs.String("totp-secret", "", "TOTP secret — CLI generates the code internally (for scripted/test use)")
 	nonInteractive := fs.Bool("non-interactive", false, "Don't prompt for input")
 
 	if err := fs.Parse(args); err != nil {
@@ -694,10 +701,20 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 	if loginResp.RequiresTOTP {
 		var userTotpCode string
 		if *totpCode != "" {
+			// Explicit code provided
 			userTotpCode = *totpCode
+		} else if *totpSecret != "" {
+			// Secret provided — generate code internally (waits for clean TOTP window)
+			code, err := generateTOTPCode(*totpSecret)
+			if err != nil {
+				clearBytes(accountKey)
+				return fmt.Errorf("failed to generate TOTP code from secret: %w", err)
+			}
+			userTotpCode = code
+			logVerbose("Generated TOTP code from secret")
 		} else if *nonInteractive {
 			clearBytes(accountKey)
-			return fmt.Errorf("non-interactive mode: --totp-code required")
+			return fmt.Errorf("non-interactive mode: --totp-code or --totp-secret required")
 		} else {
 			fmt.Print("Enter TOTP code: ")
 			reader := bufio.NewReader(os.Stdin)

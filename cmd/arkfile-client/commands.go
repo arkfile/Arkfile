@@ -1282,6 +1282,26 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 // GENERATE TEST FILE COMMAND
 // ============================================================
 
+func handleGenerateTOTPCommand(args []string) error {
+	fs := flag.NewFlagSet("generate-totp", flag.ExitOnError)
+	secret := fs.String("secret", "", "Base32 TOTP secret")
+	fs.Usage = func() {
+		fmt.Printf("Usage: arkfile-client generate-totp --secret SECRET\n\nGenerate a current TOTP code from a base32 secret.\n")
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *secret == "" {
+		return fmt.Errorf("--secret is required")
+	}
+	code, err := generateTOTPCode(*secret)
+	if err != nil {
+		return err
+	}
+	fmt.Println(code)
+	return nil
+}
+
 func handleGenerateTestFileCommand(args []string) error {
 	fs := flag.NewFlagSet("generate-test-file", flag.ExitOnError)
 	filename := fs.String("filename", "test.bin", "Output filename")

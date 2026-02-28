@@ -14,8 +14,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/84adam/Arkfile/crypto"
+	"github.com/pquerna/otp/totp"
 )
 
 // encryptChunk encrypts a single plaintext chunk with FEK using AES-GCM.
@@ -308,4 +310,14 @@ func isSeekableFile(filePath string) error {
 	}
 
 	return nil
+}
+
+// generateTOTPCode generates a current TOTP code from a base32 secret.
+// Used by --totp-secret flag on login to avoid needing a separate TOTP binary.
+func generateTOTPCode(secret string) (string, error) {
+	code, err := totp.GenerateCode(secret, time.Now().UTC())
+	if err != nil {
+		return "", fmt.Errorf("failed to generate TOTP code: %w", err)
+	}
+	return code, nil
 }
