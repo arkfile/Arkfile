@@ -22,6 +22,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/pquerna/otp/totp"
 )
 
 const (
@@ -609,12 +610,30 @@ func verifyTOTP(client *HTTPClient, config *AdminConfig, session *AdminSession, 
 	return nil
 }
 
+// generateTOTPCode generates a current TOTP code from a base32 secret.
+// It waits up to one full period to ensure the code is valid for at least 5 seconds.
+func generateTOTPCode(secret string) (string, error) {
+	now := time.Now()
+	remaining := 30 - (now.Unix() % 30)
+	if remaining < 5 {
+		time.Sleep(time.Duration(remaining+1) * time.Second)
+	}
+	code, err := totp.GenerateCode(secret, time.Now())
+	if err != nil {
+		return "", fmt.Errorf("failed to generate TOTP code: %w", err)
+	}
+	return code, nil
+}
+
 // handleLoginCommand processes admin login command
 func handleLoginCommand(client *HTTPClient, config *AdminConfig, args []string) error {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
 	var (
-		usernameFlag = fs.String("username", config.Username, "Admin username for login")
-		saveSession  = fs.Bool("save-session", true, "Save session for future use")
+		usernameFlag   = fs.String("username", config.Username, "Admin username for login")
+		saveSession    = fs.Bool("save-session", true, "Save session for future use")
+		totpCode       = fs.String("totp-code", "", "TOTP code for non-interactive login")
+		totpSecret     = fs.String("totp-secret", "", "TOTP secret — CLI generates the code internally (for scripted/test use)")
+		nonInteractive = fs.Bool("non-interactive", false, "Don't prompt for input")
 	)
 
 	fs.Usage = func() {
@@ -625,11 +644,15 @@ Authenticate as administrator using OPAQUE protocol.
 FLAGS:
     --username USER     Admin username for authentication (required)
     --save-session      Save session for future use (default: true)
+    --totp-code CODE    TOTP code for non-interactive login
+    --totp-secret SEC   TOTP secret — CLI generates code internally (for scripted/test use)
+    --non-interactive   Don't prompt for input
     --help             Show this help message
 
 EXAMPLES:
     arkfile-admin login --username admin
     arkfile-admin login --username root --save-session=false
+    arkfile-admin login --username admin --totp-secret YOURSECRETHERE
 `)
 	}
 
@@ -713,16 +736,30 @@ EXAMPLES:
 		sessionKey, _ := loginResp.Data["session_key"].(string)
 		tempToken, _ := loginResp.Data["temp_token"].(string)
 
-		fmt.Print("Enter TOTP code: ")
-		reader := bufio.NewReader(os.Stdin)
-		totpCode, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read TOTP code: %w", err)
+		var userTotpCode string
+		if *totpCode != "" {
+			userTotpCode = *totpCode
+		} else if *totpSecret != "" {
+			code, err := generateTOTPCode(*totpSecret)
+			if err != nil {
+				return fmt.Errorf("failed to generate TOTP code from secret: %w", err)
+			}
+			userTotpCode = code
+			logVerbose("Generated TOTP code from secret")
+		} else if *nonInteractive {
+			return fmt.Errorf("non-interactive mode: --totp-code or --totp-secret required")
+		} else {
+			fmt.Print("Enter TOTP code: ")
+			reader := bufio.NewReader(os.Stdin)
+			input, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("failed to read TOTP code: %w", err)
+			}
+			userTotpCode = strings.TrimSpace(input)
 		}
-		totpCode = strings.TrimSpace(totpCode)
 
 		totpReq := map[string]interface{}{
-			"code":        totpCode,
+			"code":        userTotpCode,
 			"session_key": sessionKey,
 			"is_backup":   false,
 		}

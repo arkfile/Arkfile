@@ -654,18 +654,21 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		clearBytes(password)
 		return fmt.Errorf("failed to create credential request: %w", err)
 	}
-	clearBytes(password)
+	// NOTE: Do NOT zero password here — it is needed after OPAQUE completes
+	// to derive the Argon2id account key for file encryption.
 
 	authResp, err := client.makeRequest("POST", "/api/opaque/login/response", map[string]string{
 		"username":           *usernameFlag,
 		"credential_request": encodeBase64(credentialRequest),
 	}, "")
 	if err != nil {
+		clearBytes(password)
 		return fmt.Errorf("OPAQUE authentication failed: %w", err)
 	}
 
 	credentialResponseB64, ok := authResp.Data["credential_response"].(string)
 	if !ok {
+		clearBytes(password)
 		return fmt.Errorf("invalid server response: missing credential_response")
 	}
 
@@ -674,18 +677,24 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		sessionID = authResp.SessionID
 	}
 	if sessionID == "" {
+		clearBytes(password)
 		return fmt.Errorf("invalid server response: missing session_id")
 	}
 
 	credentialResponse, err := decodeBase64(credentialResponseB64)
 	if err != nil {
+		clearBytes(password)
 		return fmt.Errorf("failed to decode credential response: %w", err)
 	}
 
-	accountKey, authU, _, err := auth.ClientRecoverCredentials(clientSecret, credentialResponse, *usernameFlag)
+	// sk is the OPAQUE session key — used only to prove authentication to the server.
+	// It has no role in file encryption and is discarded after login finalize.
+	sk, authU, _, err := auth.ClientRecoverCredentials(clientSecret, credentialResponse, *usernameFlag)
 	if err != nil {
+		clearBytes(password)
 		return fmt.Errorf("failed to recover credentials: %w", err)
 	}
+	defer clearBytes(sk)
 
 	loginResp, err := client.makeRequest("POST", "/api/opaque/login/finalize", map[string]string{
 		"session_id": sessionID,
@@ -693,7 +702,7 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		"auth_u":     encodeBase64(authU),
 	}, "")
 	if err != nil {
-		clearBytes(accountKey)
+		clearBytes(password)
 		return fmt.Errorf("OPAQUE authentication finalization failed: %w", err)
 	}
 
@@ -707,20 +716,20 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 			// Secret provided — generate code internally (waits for clean TOTP window)
 			code, err := generateTOTPCode(*totpSecret)
 			if err != nil {
-				clearBytes(accountKey)
+				clearBytes(password)
 				return fmt.Errorf("failed to generate TOTP code from secret: %w", err)
 			}
 			userTotpCode = code
 			logVerbose("Generated TOTP code from secret")
 		} else if *nonInteractive {
-			clearBytes(accountKey)
+			clearBytes(password)
 			return fmt.Errorf("non-interactive mode: --totp-code or --totp-secret required")
 		} else {
 			fmt.Print("Enter TOTP code: ")
 			reader := bufio.NewReader(os.Stdin)
 			totpInput, err := reader.ReadString('\n')
 			if err != nil {
-				clearBytes(accountKey)
+				clearBytes(password)
 				return fmt.Errorf("failed to read TOTP code: %w", err)
 			}
 			userTotpCode = strings.TrimSpace(totpInput)
@@ -732,7 +741,7 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 			"isBackup":   false,
 		}, loginResp.TempToken)
 		if err != nil {
-			clearBytes(accountKey)
+			clearBytes(password)
 			return fmt.Errorf("TOTP authentication failed: %w", err)
 		}
 
@@ -740,6 +749,14 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		loginResp.RefreshToken = totpResp.RefreshToken
 		loginResp.ExpiresAt = totpResp.ExpiresAt
 	}
+
+	// Derive the account key for file encryption using Argon2id.
+	// This is completely separate from OPAQUE — OPAQUE is only for authentication.
+	// The account key is derived from the user's password + username using the
+	// embedded Argon2id parameters, matching the TypeScript frontend exactly.
+	accountKey := crypto.DeriveAccountPasswordKey(password, *usernameFlag)
+	clearBytes(password)
+	defer clearBytes(accountKey)
 
 	session := &AuthSession{
 		Username:       *usernameFlag,
@@ -772,8 +789,6 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 			logVerbose("Warning: Failed to populate digest cache: %v", err)
 		}
 	}
-
-	defer clearBytes(accountKey)
 
 	fmt.Printf("Login successful for user: %s\n", *usernameFlag)
 	fmt.Printf("Session expires: %s\n", session.ExpiresAt.Format("2006-01-02 15:04:05"))
