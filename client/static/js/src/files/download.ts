@@ -72,7 +72,7 @@ async function getAccountKey(username: string): Promise<Uint8Array | null> {
   }
 
   // Try to get cached Account Key
-  const cachedKey = getCachedAccountKey(username);
+  const cachedKey = await getCachedAccountKey(username, getToken() ?? undefined);
   if (cachedKey) {
     return cachedKey;
   }
@@ -90,6 +90,7 @@ async function getAccountKey(username: string): Promise<Uint8Array | null> {
       result.password,
       username,
       'account',
+      getToken() ?? undefined,
       result.cacheDuration as CacheDurationHours | undefined
     );
     

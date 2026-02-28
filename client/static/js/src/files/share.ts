@@ -60,7 +60,7 @@ async function getAccountKey(username: string): Promise<Uint8Array | null> {
     showError('Account Key is locked. Please unlock it first.');
     return null;
   }
-  const cached = getCachedAccountKey(username);
+  const cached = await getCachedAccountKey(username, getToken() ?? undefined);
   if (cached) return cached;
 
   const result = await promptForAccountKeyPassword();
@@ -71,6 +71,7 @@ async function getAccountKey(username: string): Promise<Uint8Array | null> {
       result.password,
       username,
       'account',
+      getToken() ?? undefined,
       result.cacheDuration as CacheDurationHours | undefined,
     );
   } catch (err) {

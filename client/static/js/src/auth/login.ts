@@ -138,7 +138,7 @@ export class LoginManager {
       // The key is stored in sessionStorage and cleared on logout/tab close
       let cachedAccountKey: Uint8Array | undefined;
       try {
-        cachedAccountKey = await deriveFileEncryptionKeyWithCache(credentials.password, credentials.username, 'account');
+        cachedAccountKey = await deriveFileEncryptionKeyWithCache(credentials.password, credentials.username, 'account', loginData.token);
       } catch (error) {
         console.warn('Failed to cache account key:', error);
         // Non-fatal error, user will just be prompted later if needed

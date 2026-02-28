@@ -391,6 +391,7 @@ export {
  * @param password - The user's password
  * @param username - The user's username
  * @param context - The password context (account or custom)
+ * @param accessToken - The current JWT access token (for session binding)
  * @param cacheDuration - Optional cache duration in hours (1-4, only for 'account' context)
  * @returns A 32-byte encryption key
  */
@@ -398,12 +399,13 @@ export async function deriveFileEncryptionKeyWithCache(
   password: string,
   username: string,
   context: PasswordContext = 'account',
+  accessToken?: string,
   cacheDuration?: CacheDurationHours
 ): Promise<Uint8Array> {
   // Only cache 'account' context keys
   if (context === 'account') {
     // Try to get cached Account Key
-    const cachedKey = getCachedAccountKey(username);
+    const cachedKey = await getCachedAccountKey(username, accessToken);
     if (cachedKey) {
       return cachedKey;
     }
@@ -411,8 +413,10 @@ export async function deriveFileEncryptionKeyWithCache(
     // Derive new key
     const key = await deriveFileEncryptionKey(password, username, context);
     
-    // Cache it with specified duration
-    cacheAccountKey(username, key, cacheDuration);
+    // Cache it with specified duration (requires accessToken for session binding)
+    if (accessToken) {
+      await cacheAccountKey(username, key, accessToken, cacheDuration);
+    }
     
     return key;
   }
@@ -429,15 +433,17 @@ export async function deriveFileEncryptionKeyWithCache(
  * 
  * @param password - The user's account password
  * @param username - The user's username
+ * @param accessToken - The current JWT access token (for session binding)
  * @param cacheDuration - Optional cache duration in hours (1-4)
  * @returns A 32-byte Account Key
  */
 export async function deriveAccountKeyWithCache(
   password: string,
   username: string,
+  accessToken?: string,
   cacheDuration?: CacheDurationHours
 ): Promise<Uint8Array> {
-  return deriveFileEncryptionKeyWithCache(password, username, 'account', cacheDuration);
+  return deriveFileEncryptionKeyWithCache(password, username, 'account', accessToken, cacheDuration);
 }
 
 // ============================================================================

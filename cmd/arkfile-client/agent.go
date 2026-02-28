@@ -1,29 +1,71 @@
 // arkfile-client agent - Background daemon to securely hold AccountKey and digest cache in memory
 // This agent provides secure key storage and dedup digest caching for CLI operations
 // without requiring repeated password entry for account-encrypted file operations.
+//
+// Security features:
+// - Unix socket with 0600 permissions and UID ownership validation
+// - Time-based key expiration (1-4 hours, default 1 hour)
+// - Session binding via token hash (key auto-wipes on session mismatch)
+// - Memory locking via mlock(2) to prevent key swap to disk (POSIX)
+// - Access counter for audit and anomaly detection
+// - Secure byte-zeroing on all key wipe operations
 
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 )
+
+// Default and limits for account key TTL
+const (
+	DefaultKeyTTLHours = 1
+	MinKeyTTLHours     = 1
+	MaxKeyTTLHours     = 4
+
+	// Expiration check interval for background watcher
+	expirationCheckInterval = 60 * time.Second
+
+	// Access rate limit: warn if more than this many accesses per minute
+	accessRateWarnThreshold = 10
+)
+
+// accountKeyEntry holds the account key along with metadata for TTL, session binding, and auditing.
+// This structure uses the unified JSON shape shared with the TypeScript frontend.
+type accountKeyEntry struct {
+	key       []byte    // raw key material (mlock'd when possible)
+	username  string    // username this key belongs to
+	context   string    // always "account"
+	tokenHash string    // SHA-256 hex of the session access token (session binding)
+	storedAt  time.Time // when the key was stored
+	expiresAt time.Time // when the key expires
+	ttlHours  int       // configured TTL in hours
+	mlocked   bool      // whether mlock succeeded on the key slice
+}
 
 // Agent holds the AccountKey and digest cache in memory and serves requests via Unix socket
 type Agent struct {
 	socketPath  string
 	listener    net.Listener
-	accountKey  []byte
+	keyEntry    *accountKeyEntry
 	digestCache map[string]string // fileID -> plaintext SHA-256 hex digest
 	mu          sync.RWMutex
 	running     bool
 	stopChan    chan struct{}
+
+	// Access counter for auditing
+	accessCount      atomic.Uint64
+	accessCountReset atomic.Int64 // unix timestamp of last rate window start
 }
 
 // AgentRequest represents a request to the agent
@@ -51,11 +93,14 @@ func NewAgent() (*Agent, error) {
 		return nil, err
 	}
 
-	return &Agent{
+	agent := &Agent{
 		socketPath:  socketPath,
 		digestCache: make(map[string]string),
 		stopChan:    make(chan struct{}),
-	}, nil
+	}
+	agent.accessCountReset.Store(time.Now().Unix())
+
+	return agent, nil
 }
 
 // getAgentSocketPath returns the UID-specific socket path
@@ -108,7 +153,60 @@ func (a *Agent) Start() error {
 	// Run agent in background goroutine
 	go a.serve()
 
+	// Start background expiration watcher
+	go a.expirationWatcher()
+
 	return nil
+}
+
+// expirationWatcher periodically checks if the account key has expired and auto-wipes it
+func (a *Agent) expirationWatcher() {
+	ticker := time.NewTicker(expirationCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			a.checkAndExpireKey()
+		case <-a.stopChan:
+			return
+		}
+	}
+}
+
+// checkAndExpireKey checks if the account key has expired and wipes it if so
+func (a *Agent) checkAndExpireKey() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.keyEntry == nil {
+		return
+	}
+
+	if time.Now().After(a.keyEntry.expiresAt) {
+		logVerbose("Account key expired (TTL %d hours). Auto-wiping.", a.keyEntry.ttlHours)
+		a.wipeKeyLocked()
+	}
+}
+
+// wipeKeyLocked securely wipes the account key. Caller must hold a.mu write lock.
+func (a *Agent) wipeKeyLocked() {
+	if a.keyEntry == nil {
+		return
+	}
+
+	// Unlock memory if it was mlocked
+	if a.keyEntry.mlocked && len(a.keyEntry.key) > 0 {
+		// munlock - ignore errors (best effort, POSIX)
+		_ = syscall.Munlock(a.keyEntry.key)
+	}
+
+	// Securely zero the key bytes
+	for i := range a.keyEntry.key {
+		a.keyEntry.key[i] = 0
+	}
+
+	a.keyEntry = nil
 }
 
 // Stop stops the agent daemon
@@ -122,12 +220,7 @@ func (a *Agent) Stop() error {
 
 	// Securely clear the account key and digest cache
 	a.mu.Lock()
-	if a.accountKey != nil {
-		for i := range a.accountKey {
-			a.accountKey[i] = 0
-		}
-		a.accountKey = nil
-	}
+	a.wipeKeyLocked()
 	a.digestCache = nil
 	a.mu.Unlock()
 
@@ -177,7 +270,7 @@ func (a *Agent) handleConnection(conn net.Conn) {
 	case "store_account_key":
 		a.handleStoreAccountKey(conn, req.Params)
 	case "get_account_key":
-		a.handleGetAccountKey(conn)
+		a.handleGetAccountKey(conn, req.Params)
 	case "store_digest_cache":
 		a.handleStoreDigestCache(conn, req.Params)
 	case "get_digest_cache":
@@ -186,6 +279,8 @@ func (a *Agent) handleConnection(conn net.Conn) {
 		a.handleAddDigest(conn, req.Params)
 	case "remove_digest":
 		a.handleRemoveDigest(conn, req.Params)
+	case "status":
+		a.handleStatus(conn)
 	case "clear":
 		a.handleClear(conn)
 	case "stop":
@@ -202,10 +297,19 @@ func (a *Agent) handlePing(conn net.Conn) {
 	})
 }
 
-// handleStoreAccountKey stores the AccountKey in memory
+// handleStoreAccountKey stores the AccountKey in memory with TTL, session binding, and mlock.
+//
+// Expected params (unified shape):
+//
+//	{
+//	  "account_key": "<base64>",
+//	  "username": "alice",
+//	  "token_hash": "<sha256 hex of access token>",
+//	  "ttl_hours": 1
+//	}
 func (a *Agent) handleStoreAccountKey(conn net.Conn, params map[string]interface{}) {
 	accountKeyB64, ok := params["account_key"].(string)
-	if !ok {
+	if !ok || accountKeyB64 == "" {
 		a.sendError(conn, "account_key parameter required")
 		return
 	}
@@ -216,32 +320,178 @@ func (a *Agent) handleStoreAccountKey(conn net.Conn, params map[string]interface
 		return
 	}
 
-	a.mu.Lock()
-	// Clear any existing key first
-	if a.accountKey != nil {
-		for i := range a.accountKey {
-			a.accountKey[i] = 0
+	// Extract username (required)
+	username, _ := params["username"].(string)
+	if username == "" {
+		a.sendError(conn, "username parameter required")
+		// Zero the decoded key before returning
+		for i := range accountKey {
+			accountKey[i] = 0
+		}
+		return
+	}
+
+	// Extract session token hash (required for session binding)
+	tokenHash, _ := params["token_hash"].(string)
+	if tokenHash == "" {
+		a.sendError(conn, "token_hash parameter required")
+		for i := range accountKey {
+			accountKey[i] = 0
+		}
+		return
+	}
+
+	// Extract TTL (optional, default 1 hour, clamped 1-4)
+	ttlHours := DefaultKeyTTLHours
+	if ttlRaw, ok := params["ttl_hours"].(float64); ok {
+		ttlHours = int(ttlRaw)
+	}
+	if ttlHours < MinKeyTTLHours {
+		ttlHours = MinKeyTTLHours
+	}
+	if ttlHours > MaxKeyTTLHours {
+		ttlHours = MaxKeyTTLHours
+	}
+
+	now := time.Now()
+	entry := &accountKeyEntry{
+		key:       accountKey,
+		username:  username,
+		context:   "account",
+		tokenHash: tokenHash,
+		storedAt:  now,
+		expiresAt: now.Add(time.Duration(ttlHours) * time.Hour),
+		ttlHours:  ttlHours,
+		mlocked:   false,
+	}
+
+	// Attempt to mlock the key to prevent swapping to disk (POSIX mlock(2))
+	// This is best-effort: on some BSDs or unprivileged environments it may fail.
+	if len(accountKey) > 0 {
+		if err := syscall.Mlock(accountKey); err == nil {
+			entry.mlocked = true
+			logVerbose("Account key memory locked (mlock)")
+		} else {
+			logVerbose("Warning: mlock failed (non-fatal): %v", err)
 		}
 	}
-	a.accountKey = accountKey
+
+	a.mu.Lock()
+	// Wipe any existing key first
+	a.wipeKeyLocked()
+	a.keyEntry = entry
+	// Reset access counter
+	a.accessCount.Store(0)
+	a.accessCountReset.Store(now.Unix())
 	a.mu.Unlock()
 
 	a.sendSuccess(conn, nil)
 }
 
-// handleGetAccountKey retrieves the AccountKey
-func (a *Agent) handleGetAccountKey(conn net.Conn) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+// handleGetAccountKey retrieves the AccountKey with expiration check and session binding validation.
+//
+// Expected params:
+//
+//	{
+//	  "token_hash": "<sha256 hex of current access token>"
+//	}
+//
+// Returns unified shape:
+//
+//	{
+//	  "account_key": "<base64>",
+//	  "username": "alice",
+//	  "context": "account",
+//	  "stored_at": "<RFC3339>",
+//	  "expires_at": "<RFC3339>",
+//	  "ttl_hours": 1
+//	}
+func (a *Agent) handleGetAccountKey(conn net.Conn, params map[string]interface{}) {
+	// Track access for rate monitoring
+	count := a.accessCount.Add(1)
+	resetTime := time.Unix(a.accessCountReset.Load(), 0)
+	elapsed := time.Since(resetTime)
+	if elapsed >= time.Minute {
+		// Reset the rate window
+		a.accessCount.Store(1)
+		a.accessCountReset.Store(time.Now().Unix())
+	} else if count > accessRateWarnThreshold {
+		logVerbose("Warning: unusual account key access rate (%d accesses in %v)", count, elapsed.Round(time.Second))
+	}
 
-	if a.accountKey == nil {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.keyEntry == nil {
 		a.sendError(conn, "account key not set")
 		return
 	}
 
-	result := map[string]interface{}{
-		"account_key": base64.StdEncoding.EncodeToString(a.accountKey),
+	// Check expiration
+	if time.Now().After(a.keyEntry.expiresAt) {
+		ttl := a.keyEntry.ttlHours
+		a.wipeKeyLocked()
+		a.sendError(conn, fmt.Sprintf("account key expired (after %d hours). Please login again", ttl))
+		return
 	}
+
+	// Session binding: validate token hash matches
+	if params != nil {
+		if tokenHash, ok := params["token_hash"].(string); ok && tokenHash != "" {
+			if tokenHash != a.keyEntry.tokenHash {
+				a.wipeKeyLocked()
+				a.sendError(conn, "session mismatch: account key wiped for security. Please login again")
+				return
+			}
+		}
+	}
+
+	result := map[string]interface{}{
+		"account_key": base64.StdEncoding.EncodeToString(a.keyEntry.key),
+		"username":    a.keyEntry.username,
+		"context":     a.keyEntry.context,
+		"stored_at":   a.keyEntry.storedAt.Format(time.RFC3339),
+		"expires_at":  a.keyEntry.expiresAt.Format(time.RFC3339),
+		"ttl_hours":   a.keyEntry.ttlHours,
+	}
+
+	a.sendSuccess(conn, result)
+}
+
+// handleStatus returns agent status including key state and access counter
+func (a *Agent) handleStatus(conn net.Conn) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	result := map[string]interface{}{
+		"running":      a.running,
+		"socket":       a.socketPath,
+		"access_count": a.accessCount.Load(),
+	}
+
+	if a.keyEntry != nil {
+		result["key_stored"] = true
+		result["key_username"] = a.keyEntry.username
+		result["key_stored_at"] = a.keyEntry.storedAt.Format(time.RFC3339)
+		result["key_expires_at"] = a.keyEntry.expiresAt.Format(time.RFC3339)
+		result["key_ttl_hours"] = a.keyEntry.ttlHours
+		result["key_mlocked"] = a.keyEntry.mlocked
+
+		remaining := time.Until(a.keyEntry.expiresAt)
+		if remaining > 0 {
+			result["key_time_remaining"] = remaining.Round(time.Second).String()
+		} else {
+			result["key_time_remaining"] = "expired"
+		}
+	} else {
+		result["key_stored"] = false
+	}
+
+	digestCount := 0
+	if a.digestCache != nil {
+		digestCount = len(a.digestCache)
+	}
+	result["digest_cache_entries"] = digestCount
 
 	a.sendSuccess(conn, result)
 }
@@ -324,12 +574,7 @@ func (a *Agent) handleRemoveDigest(conn net.Conn, params map[string]interface{})
 // handleClear clears the AccountKey and digest cache from memory
 func (a *Agent) handleClear(conn net.Conn) {
 	a.mu.Lock()
-	if a.accountKey != nil {
-		for i := range a.accountKey {
-			a.accountKey[i] = 0
-		}
-		a.accountKey = nil
-	}
+	a.wipeKeyLocked()
 	a.digestCache = nil
 	a.mu.Unlock()
 
@@ -361,6 +606,10 @@ func (a *Agent) sendError(conn net.Conn, errMsg string) {
 	json.NewEncoder(conn).Encode(resp)
 }
 
+// ============================================================
+// AGENT CLIENT
+// ============================================================
+
 // NewAgentClient creates a new agent client
 func NewAgentClient() (*AgentClient, error) {
 	socketPath, err := getAgentSocketPath()
@@ -380,7 +629,7 @@ func validateSocketSecurity(socketPath string, expectedUID int) error {
 		return fmt.Errorf("failed to stat socket: %w", err)
 	}
 
-	// Check ownership
+	// Check ownership (POSIX: works on Linux, FreeBSD, OpenBSD, Alpine)
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return fmt.Errorf("failed to get socket stat info")
@@ -440,6 +689,13 @@ func (c *AgentClient) sendRequest(method string, params map[string]interface{}) 
 	return &resp, nil
 }
 
+// hashToken computes SHA-256 hex hash of an access token for session binding.
+// This avoids storing the raw token in the agent.
+func hashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
+
 // Ping checks if the agent is running
 func (c *AgentClient) Ping() error {
 	resp, err := c.sendRequest("ping", nil)
@@ -454,10 +710,13 @@ func (c *AgentClient) Ping() error {
 	return nil
 }
 
-// StoreAccountKey stores the account key in the agent
-func (c *AgentClient) StoreAccountKey(accountKey []byte) error {
+// StoreAccountKey stores the account key in the agent with TTL, session binding, and metadata.
+func (c *AgentClient) StoreAccountKey(accountKey []byte, username string, accessToken string, ttlHours int) error {
 	resp, err := c.sendRequest("store_account_key", map[string]interface{}{
 		"account_key": base64.StdEncoding.EncodeToString(accountKey),
+		"username":    username,
+		"token_hash":  hashToken(accessToken),
+		"ttl_hours":   ttlHours,
 	})
 	if err != nil {
 		return err
@@ -470,9 +729,14 @@ func (c *AgentClient) StoreAccountKey(accountKey []byte) error {
 	return nil
 }
 
-// GetAccountKey retrieves the account key from the agent
-func (c *AgentClient) GetAccountKey() ([]byte, error) {
-	resp, err := c.sendRequest("get_account_key", nil)
+// GetAccountKey retrieves the account key from the agent with session binding validation.
+func (c *AgentClient) GetAccountKey(accessToken string) ([]byte, error) {
+	params := map[string]interface{}{}
+	if accessToken != "" {
+		params["token_hash"] = hashToken(accessToken)
+	}
+
+	resp, err := c.sendRequest("get_account_key", params)
 	if err != nil {
 		return nil, err
 	}
@@ -487,6 +751,20 @@ func (c *AgentClient) GetAccountKey() ([]byte, error) {
 	}
 
 	return base64.StdEncoding.DecodeString(accountKeyB64)
+}
+
+// Status retrieves the agent status including key state and access count.
+func (c *AgentClient) Status() (map[string]interface{}, error) {
+	resp, err := c.sendRequest("status", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if !resp.Success {
+		return nil, fmt.Errorf("status failed: %s", resp.Error)
+	}
+
+	return resp.Result, nil
 }
 
 // StoreDigestCache bulk-stores the digest cache in the agent (used after login)

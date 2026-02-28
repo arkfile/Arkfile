@@ -222,7 +222,7 @@ async function resolveAccountKey(
 
   // 2. Check cache
   if (isAccountKeyCached(username) && !isAccountKeyLocked()) {
-    const cached = getCachedAccountKey(username);
+    const cached = await getCachedAccountKey(username, getAuthToken() ?? undefined);
     if (cached) {
       return cached;
     }
@@ -553,7 +553,7 @@ export async function handleFileUpload(): Promise<void> {
   // Resolve account key / password (always needed for metadata)
   if (isAccountKeyCached(username) && !isAccountKeyLocked()) {
     // Account key is cached — use it directly
-    const cachedKey = getCachedAccountKey(username);
+    const cachedKey = await getCachedAccountKey(username, getAuthToken() ?? undefined);
     if (cachedKey) {
       uploadOptions.accountKey = cachedKey;
     }
@@ -576,7 +576,7 @@ export async function handleFileUpload(): Promise<void> {
       // If user chose to remember, derive and cache the key
       if (result.cacheDuration) {
         const derivedKey = await deriveFileEncryptionKeyWithCache(
-          accountPassword, username, 'account', result.cacheDuration
+          accountPassword, username, 'account', getAuthToken() ?? undefined, result.cacheDuration
         );
         uploadOptions.accountKey = derivedKey;
       }

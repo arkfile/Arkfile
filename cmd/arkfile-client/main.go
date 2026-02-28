@@ -409,17 +409,23 @@ func requireSession(config *ClientConfig) (*AuthSession, error) {
 	return session, nil
 }
 
-// requireAccountKey gets the account key from the agent.
-// Returns a clear error if agent is not running or key is not set.
+// requireAccountKey gets the account key from the agent with session binding validation.
+// Returns a clear error if agent is not running, key is not set, or session has expired/mismatched.
 func requireAccountKey() ([]byte, error) {
 	agentClient, err := NewAgentClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to agent: %w", err)
 	}
 
-	accountKey, err := agentClient.GetAccountKey()
+	// Load current session to get access token for session binding
+	session, err := loadAuthSession(getSessionFilePath())
 	if err != nil {
-		return nil, fmt.Errorf("account key not found in agent. Please run: arkfile-client login --username <user>")
+		return nil, fmt.Errorf("not logged in. Please run: arkfile-client login --username <user>")
+	}
+
+	accountKey, err := agentClient.GetAccountKey(session.AccessToken)
+	if err != nil {
+		return nil, fmt.Errorf("account key not available: %v\nPlease run: arkfile-client login --username <user>", err)
 	}
 
 	return accountKey, nil
@@ -630,6 +636,7 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
 	usernameFlag := fs.String("username", config.Username, "Username")
 	saveSession := fs.Bool("save-session", true, "Save session for future use")
+	keyTTL := fs.Int("key-ttl", DefaultKeyTTLHours, "Account key TTL in hours (1-4, default 1)")
 	totpCode := fs.String("totp-code", "", "TOTP code for non-interactive login")
 	totpSecret := fs.String("totp-secret", "", "TOTP secret — CLI generates the code internally (for scripted/test use)")
 	nonInteractive := fs.Bool("non-interactive", false, "Don't prompt for input")
@@ -773,15 +780,24 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		}
 	}
 
-	// Store account key in agent
+	// Clamp key TTL to valid range
+	keyTTLHours := *keyTTL
+	if keyTTLHours < MinKeyTTLHours {
+		keyTTLHours = MinKeyTTLHours
+	}
+	if keyTTLHours > MaxKeyTTLHours {
+		keyTTLHours = MaxKeyTTLHours
+	}
+
+	// Store account key in agent with TTL and session binding
 	agentClient, err := NewAgentClient()
 	if err != nil {
 		logVerbose("Warning: Failed to create agent client: %v", err)
 	} else {
-		if err := agentClient.StoreAccountKey(accountKey); err != nil {
+		if err := agentClient.StoreAccountKey(accountKey, *usernameFlag, session.AccessToken, keyTTLHours); err != nil {
 			logVerbose("Warning: Failed to store account key in agent: %v", err)
 		} else {
-			logVerbose("Account key stored in agent")
+			logVerbose("Account key stored in agent (TTL: %d hours)", keyTTLHours)
 		}
 
 		// Populate digest cache from existing files

@@ -79,8 +79,8 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 		defer clearBytes(customPass)
 
 		// Derive KEK from custom password using Argon2id
-		// Uses a fixed domain-separation salt so the same password always produces the same KEK
-		kek = crypto.DeriveCustomPasswordKey(customPass, "")
+		// Uses username-based domain-separation salt so the same password+username always produces the same KEK
+		kek = crypto.DeriveCustomPasswordKey(customPass, config.Username)
 		defer clearBytes(kek)
 
 		finalPasswordType = "custom"
@@ -425,7 +425,7 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		}
 		defer clearBytes(customPass)
 
-		kek = crypto.DeriveCustomPasswordKey(customPass, "")
+		kek = crypto.DeriveCustomPasswordKey(customPass, config.Username)
 		defer clearBytes(kek)
 	default:
 		return fmt.Errorf("unsupported password type: %s", fileMeta.PasswordType)
@@ -606,7 +606,8 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 		var accountKey []byte
 		agentClient, agentErr := NewAgentClient()
 		if agentErr == nil {
-			accountKey, _ = agentClient.GetAccountKey()
+			// Pass empty token for read-only listing (no session binding check)
+			accountKey, _ = agentClient.GetAccountKey("")
 		}
 
 		decryptedFiles := make([]DecryptedFile, 0, len(fileList.Files))
@@ -645,7 +646,8 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 	var accountKey []byte
 	agentClient, agentErr := NewAgentClient()
 	if agentErr == nil {
-		accountKey, _ = agentClient.GetAccountKey()
+		// Pass empty token for read-only listing (no session binding check)
+		accountKey, _ = agentClient.GetAccountKey("")
 	}
 
 	fmt.Printf("%-36s  %-30s  %-10s  %-20s  %-8s\n",
@@ -780,7 +782,7 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 			return fmt.Errorf("failed to read custom password: %w", err)
 		}
 		defer clearBytes(customPass)
-		sourceKEK = crypto.DeriveCustomPasswordKey(customPass, "")
+		sourceKEK = crypto.DeriveCustomPasswordKey(customPass, config.Username)
 		defer clearBytes(sourceKEK)
 	}
 
