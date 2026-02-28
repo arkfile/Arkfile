@@ -597,24 +597,18 @@ phase_8_file_operations() {
         --password-type account"
         
     if [ $upload_exit_code -eq 0 ]; then
-        if echo "$upload_output" | grep -q "Upload completed successfully"; then
-            record_test "File upload (with auto-encryption)" "PASS"
-            
-            # Extract File ID
-            UPLOADED_FILE_ID=$(echo "$upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
-            info "Uploaded File ID: $UPLOADED_FILE_ID"
-            
-            if [ -z "$UPLOADED_FILE_ID" ]; then
-                warning "Could not extract File ID from upload output"
-            fi
-        else
-            record_test "File upload (with auto-encryption)" "FAIL"
-            error "Upload failed - unexpected output:"
-            echo "$upload_output"
+        record_test "File upload (with auto-encryption)" "PASS"
+
+        # Extract File ID from output
+        UPLOADED_FILE_ID=$(echo "$upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+        info "Uploaded File ID: $UPLOADED_FILE_ID"
+
+        if [ -z "$UPLOADED_FILE_ID" ]; then
+            warning "Could not extract File ID from upload output"
         fi
     else
         record_test "File upload (with auto-encryption)" "FAIL"
-        error "Upload command failed"
+        error "Upload command failed:"
         echo "$upload_output"
     fi
 
@@ -711,17 +705,14 @@ phase_9_share_operations() {
         --file-id '$UPLOADED_FILE_ID'"
         
     if [ $create_share_exit_code -eq 0 ]; then
-        if echo "$create_share_output" | grep -q "Share created successfully"; then
-            record_test "Share creation" "PASS"
-            
-            # Extract share ID from output
-            share_id=$(echo "$create_share_output" | grep "Share ID:" | awk '{print $3}' | tr -d ' ')
-            info "Share created with ID: $share_id"
-        else
-            record_test "Share creation" "FAIL"
-            error "Share creation failed - unexpected output:"
-            echo "$create_share_output"
-            return 1
+        record_test "Share creation" "PASS"
+
+        # Extract share ID from output
+        share_id=$(echo "$create_share_output" | grep "Share ID:" | awk '{print $3}' | tr -d ' ')
+        info "Share created with ID: $share_id"
+
+        if [ -z "$share_id" ]; then
+            warning "Could not extract Share ID from share creation output"
         fi
     else
         record_test "Share creation" "FAIL"

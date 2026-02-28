@@ -4,12 +4,14 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -212,21 +214,17 @@ type ChunkedUploadParams struct {
 func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUploadParams) (string, error) {
 	chunkSize := crypto.PlaintextChunkSize()
 
-	// Step 1: Initialize upload session
+	// Step 1: Initialize upload session - send exactly what the server expects
 	initPayload := map[string]interface{}{
-		"filename":           filepath.Base(params.FilePath),
-		"total_size":         params.TotalEncSize,
-		"chunk_size":         params.TotalEncSize / params.ChunkCount,
-		"total_chunks":       params.ChunkCount,
-		"encrypted_fek":      params.EncryptedFEKB64,
-		"encrypted_filename": params.EncFilenameB64,
-		"filename_nonce":     params.FnNonceB64,
-		"encrypted_sha256":   params.EncSHA256B64,
-		"sha256_nonce":       params.ShaNonceB64,
-		"password_type":      params.PasswordType,
-		"password_hint":      params.PasswordHint,
-		"chunk_count":        params.ChunkCount,
-		"chunk_size_bytes":   int64(chunkSize),
+		"encrypted_filename":  params.EncFilenameB64,
+		"filename_nonce":      params.FnNonceB64,
+		"encrypted_sha256sum": params.EncSHA256B64,
+		"sha256sum_nonce":     params.ShaNonceB64,
+		"encrypted_fek":       params.EncryptedFEKB64,
+		"total_size":          params.TotalEncSize,
+		"chunk_size":          int64(chunkSize),
+		"password_type":       params.PasswordType,
+		"password_hint":       params.PasswordHint,
 	}
 
 	initResp, err := client.makeRequest("POST", "/api/uploads/init", initPayload, session.AccessToken)
@@ -316,38 +314,23 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 	return fileID, nil
 }
 
-// uploadChunk sends a single encrypted chunk to the server using multipart form
+// uploadChunk sends a single encrypted chunk to the server as raw bytes.
+// Computes SHA-256 of the encrypted chunk and sends it as X-Chunk-Hash header,
+// as required by the server's UploadChunk handler.
 func uploadChunk(client *HTTPClient, session *AuthSession, uploadID string, chunkIndex int64, data []byte) error {
-	pr, pw := io.Pipe()
+	h := sha256.Sum256(data)
+	chunkHash := hex.EncodeToString(h[:])
 
-	mw := multipart.NewWriter(pw)
-
-	go func() {
-		defer pw.Close()
-		defer mw.Close()
-
-		_ = mw.WriteField("upload_id", uploadID)
-		_ = mw.WriteField("chunk_index", fmt.Sprintf("%d", chunkIndex))
-
-		fw, err := mw.CreateFormFile("chunk", fmt.Sprintf("chunk_%d", chunkIndex))
-		if err != nil {
-			pw.CloseWithError(err)
-			return
-		}
-
-		if _, err := fw.Write(data); err != nil {
-			pw.CloseWithError(err)
-			return
-		}
-	}()
-
-	req, err := http.NewRequest("POST", client.baseURL+"/api/uploads/"+uploadID+"/chunks/"+fmt.Sprintf("%d", chunkIndex), pr)
+	url := fmt.Sprintf("%s/api/uploads/%s/chunks/%d", client.baseURL, uploadID, chunkIndex)
+	req, err := http.NewRequest("POST", url, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("failed to create chunk request: %w", err)
 	}
 
 	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("X-Chunk-Hash", chunkHash)
+	req.ContentLength = int64(len(data))
 
 	resp, err := client.client.Do(req)
 	if err != nil {

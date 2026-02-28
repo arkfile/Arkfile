@@ -286,6 +286,7 @@ if [ -d "$ARKFILE_DIR" ]; then
     rm -rf "$ARKFILE_DIR/etc/keys/jwt"* 2>/dev/null || true
     rm -rf "$ARKFILE_DIR/etc/keys/opaque"* 2>/dev/null || true
     rm -f "$ARKFILE_DIR/etc/keys/totp_master.key" 2>/dev/null || true
+    rm -rf "$ARKFILE_DIR/etc/keys/tls"* 2>/dev/null || true
     
     # Delete old client static files (including stale TypeScript builds)
     print_status "INFO" "Nuking old client static files..."
@@ -756,6 +757,7 @@ echo -e "${BLUE}What was nuked:${NC}"
 echo -e "${RED}  All user data and files${NC}"
 echo -e "${RED}  All database content${NC}"
 echo -e "${RED}  All secrets and credentials${NC}"
+echo -e "${RED}  All cryptographic keys (JWT, OPAQUE, TOTP, TLS)${NC}"
 echo -e "${RED}  All logs${NC}"
 echo
 echo -e "${BLUE}What was preserved:${NC}"

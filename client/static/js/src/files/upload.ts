@@ -512,8 +512,8 @@ export async function uploadFile(
  * - Also needs the account key (from cache or prompt) for metadata encryption
  */
 export async function handleFileUpload(): Promise<void> {
-  // Get file input
-  const fileInput = document.getElementById('file-input') as HTMLInputElement | null;
+  // Get file input — HTML uses id="fileInput"
+  const fileInput = document.getElementById('fileInput') as HTMLInputElement | null;
   if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
     showError('Please select a file to upload');
     return;
@@ -529,18 +529,19 @@ export async function handleFileUpload(): Promise<void> {
     return;
   }
 
-  // Get password type
-  const passwordTypeSelect = document.getElementById('password-type') as HTMLSelectElement | null;
-  const passwordType = (passwordTypeSelect?.value || 'account') as PasswordContext;
+  // Get password type — HTML uses radio buttons named "passwordType"
+  const passwordTypeRadio = document.querySelector<HTMLInputElement>('input[name="passwordType"]:checked');
+  const passwordType = (passwordTypeRadio?.value || 'account') as PasswordContext;
 
-  // Get password hint
-  const hintInput = document.getElementById('password-hint') as HTMLInputElement | null;
+  // Get password hint — HTML uses id="passwordHint"
+  const hintInput = document.getElementById('passwordHint') as HTMLInputElement | null;
   const passwordHint = hintInput?.value || '';
 
   // Get progress elements
   const progressBar = document.getElementById('upload-progress') as HTMLProgressElement | null;
   const progressText = document.getElementById('upload-progress-text') as HTMLElement | null;
-  const uploadButton = document.getElementById('upload-button') as HTMLButtonElement | null;
+  // Upload button — HTML uses id="upload-file-btn"
+  const uploadButton = document.getElementById('upload-file-btn') as HTMLButtonElement | null;
 
   // Build upload options
   const uploadOptions: UploadOptions = {
@@ -587,9 +588,9 @@ export async function handleFileUpload(): Promise<void> {
     }
   }
 
-  // For custom password type, get the custom password
+  // For custom password type, get the custom password — HTML uses id="filePassword"
   if (passwordType === 'custom') {
-    const customPasswordInput = document.getElementById('custom-password') as HTMLInputElement | null;
+    const customPasswordInput = document.getElementById('filePassword') as HTMLInputElement | null;
     const customPassword = customPasswordInput?.value;
     if (!customPassword) {
       showError('Please enter your custom password for file encryption');
@@ -624,9 +625,7 @@ export async function handleFileUpload(): Promise<void> {
 
     // Clear the form
     if (fileInput) fileInput.value = '';
-    const passwordInput = document.getElementById('upload-password') as HTMLInputElement | null;
-    if (passwordInput) passwordInput.value = '';
-    const customPasswordInput = document.getElementById('custom-password') as HTMLInputElement | null;
+    const customPasswordInput = document.getElementById('filePassword') as HTMLInputElement | null;
     if (customPasswordInput) customPasswordInput.value = '';
     if (hintInput) hintInput.value = '';
     if (progressBar) progressBar.value = 0;
