@@ -18,28 +18,28 @@ func TestValidatePasswordEntropy(t *testing.T) {
 		{
 			name:           "Very weak password",
 			password:       "weak",
-			minEntropy:     60.0,
+			minEntropy:     reqs.MinEntropyBits,
 			expectMeetsReq: false,
 			expectMinChars: 4,
 		},
 		{
 			name:           "Medium strength password",
 			password:       "MyPasswordIs18Chars!",
-			minEntropy:     60.0,
+			minEntropy:     reqs.MinEntropyBits,
 			expectMeetsReq: false, // Contains "password" dictionary word
 			expectMinChars: 20,
 		},
 		{
 			name:           "Strong password",
 			password:       "MyVacation2025PhotosForFamily!ExtraSecure",
-			minEntropy:     60.0,
+			minEntropy:     reqs.MinEntropyBits,
 			expectMeetsReq: true,
 			expectMinChars: 41, // Actual length is 41, not 40
 		},
 		{
 			name:           "Empty password",
 			password:       "",
-			minEntropy:     60.0,
+			minEntropy:     reqs.MinEntropyBits,
 			expectMeetsReq: false,
 			expectMinChars: 0,
 		},
@@ -129,7 +129,7 @@ func TestPatternDetection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := ValidatePasswordEntropy(tt.password, reqs.MinAccountPasswordLength, 60.0)
+			result := ValidatePasswordEntropy(tt.password, reqs.MinAccountPasswordLength, reqs.MinEntropyBits)
 
 			hasPenalties := len(result.PatternPenalties) > 0
 			if tt.hasIssue && !hasPenalties {

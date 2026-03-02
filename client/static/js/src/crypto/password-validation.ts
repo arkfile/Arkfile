@@ -46,19 +46,9 @@ async function loadPasswordConfig(): Promise<PasswordConfig> {
     PASSWORD_CONFIG = config;
     return config;
   } catch (error) {
-    console.error('Failed to load password requirements config, using defaults:', error);
-    // Fallback to defaults if config file can't be loaded
-    PASSWORD_CONFIG = {
-      minAccountPasswordLength: 14,
-      minCustomPasswordLength: 14,
-      minSharePasswordLength: 18,
-      minEntropyBits: 60.0,
-      requireUppercase: true,
-      requireLowercase: true,
-      requireNumber: true,
-      requireSpecial: true,
-    };
-    return PASSWORD_CONFIG;
+    // If the API is unreachable, password validation cannot proceed.
+    // (The user can't register/login without the server anyway.)
+    throw new Error(`Failed to load password requirements from API: ${error}`);
   }
 }
 
@@ -323,7 +313,7 @@ export async function validatePasswordEntropy(
 }
 
 /**
- * Validate account password (14+ characters, 60+ bit entropy)
+ * Validate account password using config requirements
  */
 export async function validateAccountPassword(
   password: string,
@@ -339,7 +329,7 @@ export async function validateAccountPassword(
 }
 
 /**
- * Validate share password (18+ characters, 60+ bit entropy)
+ * Validate share password using config requirements
  */
 export async function validateSharePassword(
   password: string,
@@ -355,7 +345,7 @@ export async function validateSharePassword(
 }
 
 /**
- * Validate custom password (14+ characters, 60+ bit entropy)
+ * Validate custom password using config requirements
  */
 export async function validateCustomPassword(
   password: string,

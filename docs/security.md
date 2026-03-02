@@ -176,19 +176,43 @@ TOTP secrets are encrypted using the user's OPAQUE-derived session key, ensuring
 Arkfile enforces different password requirements based on the authentication context, with comprehensive entropy validation and pattern detection to ensure strong security.
 
 **Account and Custom Password Requirements:**
-- Minimum 14+ characters with 60+ bit entropy validation
+- Minimum 14+ characters with 64+ bit entropy validation
 - Advanced pattern detection penalizes common weaknesses including repeating characters, sequential patterns, dictionary words, and predictable substitutions
 - Real-time validation provides immediate feedback during password creation
 - Uses OPAQUE protocol providing complete zero-knowledge authentication
 
 **Share Password Requirements:**
-- Minimum 18+ characters with 60+ bit entropy validation  
+- Minimum 18+ characters with 64+ bit entropy validation  
 - Same advanced pattern detection as account passwords
-- Uses Argon2id with 128MB memory requirement for anonymous access
+- Uses Argon2id with 128 MiB memory cost for anonymous access
 - Limited attack surface affecting only shared files
 
 **Entropy Calculation and Pattern Detection:**
 The system performs sophisticated analysis of password entropy that goes beyond simple character counting. Pattern penalties are applied for weak constructions such as repeated character sequences (90% penalty), common keyboard patterns like "qwerty" or sequential numbers (70% penalty), dictionary words and predictable substitutions (variable penalties), ensuring that passwords meet genuine randomness requirements rather than superficial complexity rules.
+
+### Password Contexts and Key Derivation
+
+Arkfile uses the same account password for two completely independent purposes: OPAQUE authentication and file encryption key derivation. These two uses are cryptographically separated and never interact.
+
+**Account Password for Authentication (OPAQUE).** The account password is used with the OPAQUE protocol to authenticate the user. OPAQUE performs a password-authenticated key exchange in which the client proves knowledge of the password without ever transmitting it. The server never learns the password at any point during registration or login. OPAQUE has its own internal key derivation and does not use Argon2id. The output of a successful OPAQUE authentication is a set of session keys used for JWT token issuance and session management.
+
+**Account Password for File Encryption (Argon2id -> Account Key).** The same account password is used separately, entirely on the client side, to derive an Account Key via Argon2id. This Account Key serves as a Key Encryption Key (KEK). For each file, a cryptographically random 256-bit File Encryption Key (FEK) is generated, and the FEK is wrapped (encrypted) by the KEK using AES-256-GCM. The file data itself is encrypted with the FEK. The salt for this derivation is deterministic, computed as `SHA-256("arkfile-account-key-salt:{username}")`. This is safe because the Argon2id-derived key only wraps the FEK — the actual file encryption uses random FEKs with unique nonces, and the memory-hard properties of Argon2id protect the KEK even with a known salt.
+
+**Custom Password for File Encryption (Argon2id -> Custom Key).** Users may optionally provide a custom password instead of using their account key to encrypt a file. This custom password goes through the same Argon2id derivation with a different deterministic salt (`SHA-256("arkfile-custom-key-salt:{username}")`), producing a Custom Key (KEK) that wraps the FEK. The encrypted envelope format distinguishes account-wrapped from custom-wrapped FEKs via a key type byte (0x01 for account, 0x02 for custom), so the client knows which password to request at decryption time.
+
+**Share Password for Secure Sharing (Argon2id -> Share Key).** When a user creates a share link, a separate share password is required. Unlike account and custom passwords, share passwords use a random 32-byte salt (not deterministic). The share password is processed through Argon2id to derive a Share Key, which encrypts a Share Envelope containing the FEK, a download token, and file metadata (filename, size, SHA-256 hash). The encryption uses AES-GCM with Additional Authenticated Data (AAD = share_id + file_id) to cryptographically bind the envelope to a specific share. Recipients enter the share password, derive the same key, decrypt the envelope, extract the FEK, and decrypt the file. The share password is never sent to the server.
+
+### Argon2id Key Derivation Parameters
+
+All password-based key derivation contexts (account key, custom key, and share key) use the same unified Argon2id profile, defined as a single source of truth in `crypto/argon2id-params.json` and embedded at build time into both the Go server and the TypeScript client:
+
+- **Variant:** Argon2id (resistant to both side-channel and GPU-based attacks)
+- **Memory cost:** 128 MiB (131,072 KiB)
+- **Time cost:** 4 iterations
+- **Parallelism:** 1 thread
+- **Output key length:** 32 bytes (256 bits)
+
+These parameters exceed the strongest OWASP-recommended configuration for Argon2id (m=47,104 KiB / 46 MiB, t=1, p=1) as of 2026 by using significantly more memory and more iterations. Parallelism is set to 1 because the client-side key derivation runs in a browser WebAssembly context, which is single-threaded. Setting parallelism higher than 1 would not actually parallelize the computation in a browser — it would instead multiply the sequential work, increasing latency without improving security. With p=1 and t=4 at 128 MiB, the derivation is expected to take approximately 1–3 seconds in modern browsers, which is practical for interactive authentication while being extremely costly for attackers to brute-force.
 
 ## Session Management
 

@@ -86,7 +86,7 @@ func GetEmbeddedArgon2ParamsJSON() []byte {
 // This design is SAFE because:
 //
 // 1. Security Model: Password → Argon2ID → KEK → wraps random FEK → encrypts file
-//   - User passwords are processed through Argon2ID (256MB memory, 8 iterations)
+//   - User passwords are processed through Argon2ID (see crypto/argon2id-params.json)
 //   - This derives a Key Encryption Key (KEK) which wraps the File Encryption Key (FEK)
 //   - Each file has a randomly-generated FEK (true entropy, not password-derived)
 //   - The FEK is what actually encrypts the file data
@@ -104,7 +104,7 @@ func GetEmbeddedArgon2ParamsJSON() []byte {
 //
 // 4. Defense in Depth:
 //   - Even if an attacker knows the salt, they still face Argon2ID's memory-hard function
-//   - The 256MB memory requirement makes parallel attacks expensive
+//   - The high memory requirement makes parallel attacks expensive
 //   - The randomly-generated FEKs provide an additional layer of security
 //
 // This is a well-established pattern in cryptographic key management systems.

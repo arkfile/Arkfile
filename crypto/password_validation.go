@@ -32,21 +32,10 @@ var (
 )
 
 // LoadPasswordRequirements loads password requirements from embedded config
+// The JSON is embedded at build time from crypto/password-requirements.json.
 func LoadPasswordRequirements() (*PasswordRequirements, error) {
 	passwordRequirementsOnce.Do(func() {
-		// Default values (fallback)
-		passwordRequirements = &PasswordRequirements{
-			MinAccountPasswordLength: 14,
-			MinCustomPasswordLength:  14,
-			MinSharePasswordLength:   18,
-			MinEntropyBits:           60.0,
-			RequireUppercase:         true,
-			RequireLowercase:         true,
-			RequireNumber:            true,
-			RequireSpecial:           true,
-		}
-
-		// Parse embedded JSON
+		passwordRequirements = &PasswordRequirements{}
 		if err := json.Unmarshal(embeddedPasswordRequirements, passwordRequirements); err != nil {
 			passwordRequirementsErr = fmt.Errorf("failed to parse embedded password requirements: %w", err)
 			return

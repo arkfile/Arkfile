@@ -14,9 +14,9 @@ Arkfile uses different password protection approaches depending on the type of a
 
 **Account Password for Authentication** uses the **OPAQUE** protocol to ensure your password is never sent to the server. Instead a password-authenticated key exchange is performed in a multi-step process to allow registration and login. The Account Password is also used separately to derive an **Account Key** which is the default means of encrypting user files. This Account Key is never sent to the server either, however.
 
-**Custom File Encryption Passwords** are separate passwords that can be used to encrypt files client-side if you choose not to use the default Account Key generated after registration. Both Account Passwords and Custom File Encryption Passwords use Argon2id for key derivation and require 14+ characters and high entropy for strong security guarantees. 
+**Custom File Encryption Passwords** are separate passwords that can be used to encrypt files client-side if you choose not to use the default Account Key generated after registration. Both Account Passwords and Custom File Encryption Passwords use Argon2id for key derivation and require 14+ characters with 64+ bit entropy for strong security guarantees. 
 
-**Share Passwords** are used when sharing previously uploaded files with others. These also use Argon2id for key derivation, but require 18+ characters for the encryption of the Share Envelope and File Encryption Key, which grant access to users with the proper sharing link and password.
+**Share Passwords** are used when sharing previously uploaded files with others. These also use Argon2id for key derivation, but require 18+ characters with 64+ bit entropy for the encryption of the Share Envelope and File Encryption Key, which grant access to users with the proper sharing link and password.
 
 Again, none of the user passwords or private keys are ever sent to the server in raw form.
 
