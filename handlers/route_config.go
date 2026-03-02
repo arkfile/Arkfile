@@ -100,7 +100,6 @@ func RegisterRoutes() {
 	totpProtectedGroup.GET("/api/files/:fileId/envelope", GetFileEnvelope) // Get file envelope for share creation
 	totpProtectedGroup.POST("/api/shares", CreateFileShare)                // Create anonymous share (file_id in body)
 	totpProtectedGroup.GET("/api/shares", ListShares)                      // List user's shares
-	totpProtectedGroup.DELETE("/api/shares/:id", DeleteShare)              // Delete a share
 	totpProtectedGroup.POST("/api/shares/:id/revoke", RevokeShare)         // Revoke a share
 
 	// Anonymous share access (no authentication required) - separate namespace with rate limiting

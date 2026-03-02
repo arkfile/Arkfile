@@ -792,7 +792,7 @@ phase_9_share_operations() {
 
     safe_exec revoke_output revoke_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-            share delete --share-id "$share_id" --file-id "$UPLOADED_FILE_ID"
+            share revoke --share-id "$share_id"
 
     if [ $revoke_exit_code -eq 0 ]; then
         record_test "Share revocation" "PASS"

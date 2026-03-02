@@ -285,6 +285,10 @@ func RevokeShare(c echo.Context) error {
 		// Reason is optional, so ignore bind errors
 	}
 
+	if request.Reason == "" {
+		request.Reason = "manual"
+	}
+
 	// Check if share exists and belongs to user
 	var ownerUsername string
 	err := database.DB.QueryRow(
@@ -384,7 +388,9 @@ func ListShares(c echo.Context) error {
 	// Query shares (owner already has file metadata via /api/files endpoints —
 	// no need to duplicate encrypted metadata here)
 	rows, err := database.DB.Query(`
-		SELECT sk.share_id, sk.file_id, sk.created_at, sk.expires_at, fm.size_bytes
+		SELECT sk.share_id, sk.file_id, sk.created_at, sk.expires_at,
+		       sk.revoked_at, sk.revoked_reason, sk.access_count, sk.max_accesses,
+		       fm.size_bytes
 		FROM file_share_keys sk
 		JOIN file_metadata fm ON sk.file_id = fm.file_id
 		WHERE sk.owner_username = ?
@@ -400,11 +406,15 @@ func ListShares(c echo.Context) error {
 	var shares []map[string]interface{}
 	for rows.Next() {
 		var share struct {
-			ShareID   string
-			FileID    string
-			CreatedAt string
-			ExpiresAt sql.NullString
-			Size      sql.NullFloat64 // rqlite returns numbers as float64
+			ShareID       string
+			FileID        string
+			CreatedAt     string
+			ExpiresAt     sql.NullString
+			RevokedAt     sql.NullString
+			RevokedReason sql.NullString
+			AccessCount   sql.NullFloat64
+			MaxAccesses   sql.NullFloat64
+			Size          sql.NullFloat64 // rqlite returns numbers as float64
 		}
 
 		if err := rows.Scan(
@@ -412,6 +422,10 @@ func ListShares(c echo.Context) error {
 			&share.FileID,
 			&share.CreatedAt,
 			&share.ExpiresAt,
+			&share.RevokedAt,
+			&share.RevokedReason,
+			&share.AccessCount,
+			&share.MaxAccesses,
 			&share.Size,
 		); err != nil {
 			logging.ErrorLogger.Printf("Error scanning share row: %v", err)
@@ -426,15 +440,39 @@ func ListShares(c echo.Context) error {
 
 		shareURL := baseURL + "/shared/" + share.ShareID
 
+		// Compute is_active: not revoked and not expired
+		isActive := true
+		if share.RevokedAt.Valid {
+			isActive = false
+		}
+		if share.ExpiresAt.Valid && share.ExpiresAt.String != "" {
+			if expiry, err := time.Parse(time.RFC3339, share.ExpiresAt.String); err == nil {
+				if time.Now().After(expiry) {
+					isActive = false
+					if !share.RevokedAt.Valid {
+						database.DB.Exec(`
+							UPDATE file_share_keys
+							SET revoked_at = CURRENT_TIMESTAMP, revoked_reason = 'time'
+							WHERE share_id = ?
+						`, share.ShareID)
+						share.RevokedAt = sql.NullString{String: time.Now().Format(time.RFC3339), Valid: true}
+						share.RevokedReason = sql.NullString{String: "time", Valid: true}
+					}
+				}
+			}
+		}
+
 		shareData := map[string]interface{}{
-			"share_id":   share.ShareID,
-			"file_id":    share.FileID,
-			"share_url":  shareURL,
-			"created_at": share.CreatedAt,
+			"share_id":     share.ShareID,
+			"file_id":      share.FileID,
+			"share_url":    shareURL,
+			"created_at":   share.CreatedAt,
+			"access_count": int64(share.AccessCount.Float64),
+			"is_active":    isActive,
 		}
 
 		if share.Size.Valid {
-			shareData["size"] = int64(share.Size.Float64)
+			shareData["size_bytes"] = int64(share.Size.Float64)
 		}
 
 		if share.ExpiresAt.Valid {
@@ -443,51 +481,29 @@ func ListShares(c echo.Context) error {
 			shareData["expires_at"] = nil
 		}
 
+		if share.RevokedAt.Valid {
+			shareData["revoked_at"] = share.RevokedAt.String
+		} else {
+			shareData["revoked_at"] = nil
+		}
+
+		if share.RevokedReason.Valid {
+			shareData["revoked_reason"] = share.RevokedReason.String
+		} else {
+			shareData["revoked_reason"] = nil
+		}
+
+		if share.MaxAccesses.Valid {
+			shareData["max_accesses"] = int64(share.MaxAccesses.Float64)
+		} else {
+			shareData["max_accesses"] = nil
+		}
+
 		shares = append(shares, shareData)
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"data": map[string]interface{}{
-			"shares": shares,
-		},
-	})
-}
-
-// DeleteShare deletes a share
-func DeleteShare(c echo.Context) error {
-	username := auth.GetUsernameFromToken(c)
-	shareID := c.Param("id")
-
-	// Check if share exists and belongs to user
-	var ownerUsername string
-	err := database.DB.QueryRow(
-		"SELECT owner_username FROM file_share_keys WHERE share_id = ?",
-		shareID,
-	).Scan(&ownerUsername)
-
-	if err == sql.ErrNoRows {
-		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
-	} else if err != nil {
-		logging.ErrorLogger.Printf("Database error checking share ownership: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
-	}
-
-	if ownerUsername != username {
-		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
-	}
-
-	// Delete share
-	_, err = database.DB.Exec("DELETE FROM file_share_keys WHERE share_id = ?", shareID)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to delete share: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete share")
-	}
-
-	database.LogUserAction(username, "deleted_share", shareID)
-	logging.InfoLogger.Printf("Share deleted: %s by %s", shareID, username)
-
-	return c.JSON(http.StatusOK, map[string]string{
-		"message": "Share deleted successfully",
+		"shares": shares,
 	})
 }
 
@@ -599,7 +615,7 @@ func DownloadSharedFile(c echo.Context) error {
 			UPDATE file_share_keys 
 			SET revoked_at = CURRENT_TIMESTAMP, revoked_reason = ? 
 			WHERE share_id = ?
-		`, "max_downloads_reached", shareID)
+		`, "access_count", shareID)
 
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to auto-revoke share: %v", err)

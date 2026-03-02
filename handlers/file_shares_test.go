@@ -303,9 +303,9 @@ func TestListShares_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestDeleteShare_Success(t *testing.T) {
+func TestRevokeShare_Success(t *testing.T) {
 	// Setup test environment
-	c, rec, mock, _ := setupTestEnv(t, http.MethodDelete, "/api/shares/test-share-id", nil)
+	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/shares/test-share-id/revoke", bytes.NewReader([]byte(`{"reason":"manual"}`)))
 
 	// Set up authenticated user context with JWT token
 	username := "testuser"
@@ -320,23 +320,23 @@ func TestDeleteShare_Success(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Mock share ownership verification (matches actual handler DeleteShare function)
+	// Mock share ownership verification (matches actual handler RevokeShare function)
 	shareOwnerSQL := `SELECT owner_username FROM file_share_keys WHERE share_id = \?`
 	shareRows := sqlmock.NewRows([]string{"owner_username"}).AddRow(username)
 	mock.ExpectQuery(shareOwnerSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
 
-	// Mock share deletion
-	deleteSQL := `DELETE FROM file_share_keys WHERE share_id = \?`
-	mock.ExpectExec(deleteSQL).WithArgs("test-share-id").WillReturnResult(sqlmock.NewResult(1, 1))
+	// Mock share revocation
+	revokeSQL := `UPDATE file_share_keys SET revoked_at = CURRENT_TIMESTAMP, revoked_reason = \? WHERE share_id = \?`
+	mock.ExpectExec(revokeSQL).WithArgs("manual", "test-share-id").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock user action logging
 	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mock.ExpectExec(logActionSQL).
-		WithArgs(username, "deleted_share", "test-share-id").
+		WithArgs(username, "revoked_share", "test-share-id").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Execute handler
-	err := DeleteShare(c)
+	err := RevokeShare(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
@@ -345,7 +345,7 @@ func TestDeleteShare_Success(t *testing.T) {
 	err = json.Unmarshal(rec.Body.Bytes(), &response)
 	require.NoError(t, err)
 
-	assert.Equal(t, "Share deleted successfully", response["message"])
+	assert.Equal(t, "Share revoked successfully", response["message"])
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

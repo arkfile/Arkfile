@@ -692,19 +692,22 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 
 // ShareInfo represents share metadata from server
 type ShareInfo struct {
-	ShareID     string    `json:"share_id"`
-	FileID      string    `json:"file_id"`
-	ShareURL    string    `json:"share_url"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	MaxDownload int       `json:"max_downloads"`
-	Downloads   int       `json:"download_count"`
-	HasPassword bool      `json:"has_password"`
-	CreatedAt   time.Time `json:"created_at"`
+	ShareID       string      `json:"share_id"`
+	FileID        string      `json:"file_id"`
+	ShareURL      string      `json:"share_url"`
+	CreatedAt     string      `json:"created_at"`
+	ExpiresAt     interface{} `json:"expires_at"`
+	RevokedAt     interface{} `json:"revoked_at"`
+	RevokedReason interface{} `json:"revoked_reason"`
+	AccessCount   int         `json:"access_count"`
+	MaxAccesses   interface{} `json:"max_accesses"`
+	SizeBytes     int64       `json:"size_bytes"`
+	IsActive      bool        `json:"is_active"`
 }
 
 func handleShareCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("subcommand required: create, list, delete, revoke, download")
+		return fmt.Errorf("subcommand required: create, list, revoke, download")
 	}
 
 	subcommand := args[0]
@@ -715,12 +718,12 @@ func handleShareCommand(client *HTTPClient, config *ClientConfig, args []string)
 		return handleShareCreate(client, config, subArgs)
 	case "list":
 		return handleShareList(client, config, subArgs)
-	case "delete", "revoke":
+	case "revoke":
 		return handleShareRevoke(client, config, subArgs)
 	case "download":
 		return handleShareDownload(client, config, subArgs)
 	default:
-		return fmt.Errorf("unknown share subcommand: %s (use create, list, delete, revoke, or download)", subcommand)
+		return fmt.Errorf("unknown share subcommand: %s (use create, list, revoke, or download)", subcommand)
 	}
 }
 
@@ -912,7 +915,6 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 
 func handleShareList(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("share list", flag.ExitOnError)
-	fileID := fs.String("file-id", "", "Filter by file ID (optional)")
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
 
 	if err := fs.Parse(args); err != nil {
@@ -925,9 +927,6 @@ func handleShareList(client *HTTPClient, config *ClientConfig, args []string) er
 	}
 
 	url := "/api/shares"
-	if *fileID != "" {
-		url = "/api/files/" + *fileID + "/shares"
-	}
 
 	req, err := http.NewRequest("GET", client.baseURL+url, nil)
 	if err != nil {
@@ -970,37 +969,49 @@ func handleShareList(client *HTTPClient, config *ClientConfig, args []string) er
 		return nil
 	}
 
-	fmt.Printf("%-36s  %-36s  %-20s  %-5s  %-5s\n",
-		"SHARE ID", "FILE ID", "EXPIRES", "DL", "PWD")
-	fmt.Println(strings.Repeat("-", 110))
+	fmt.Printf("%-43s  %-36s  %-20s  %-8s  %-6s\n",
+		"SHARE ID", "FILE ID", "EXPIRES", "DL", "ACTIVE")
+	fmt.Println(strings.Repeat("-", 120))
 
 	for _, s := range sharesResp.Shares {
 		expires := "never"
-		if !s.ExpiresAt.IsZero() {
-			expires = s.ExpiresAt.Format("2006-01-02 15:04")
+		if s.ExpiresAt != nil {
+			if expStr, ok := s.ExpiresAt.(string); ok && expStr != "" {
+				if len(expStr) > 16 {
+					expires = expStr[:16]
+				} else {
+					expires = expStr
+				}
+			}
 		}
 
-		hasPass := "no"
-		if s.HasPassword {
-			hasPass = "yes"
+		downloads := fmt.Sprintf("%d", s.AccessCount)
+		if s.MaxAccesses != nil {
+			if maxF, ok := s.MaxAccesses.(float64); ok && maxF > 0 {
+				downloads = fmt.Sprintf("%d/%d", s.AccessCount, int(maxF))
+			}
 		}
 
-		downloads := fmt.Sprintf("%d", s.Downloads)
-		if s.MaxDownload > 0 {
-			downloads = fmt.Sprintf("%d/%d", s.Downloads, s.MaxDownload)
+		active := "yes"
+		if !s.IsActive {
+			active = "no"
 		}
 
-		fmt.Printf("%-36s  %-36s  %-20s  %-5s  %-5s\n",
-			s.ShareID, s.FileID, expires, downloads, hasPass)
+		shareIDDisplay := s.ShareID
+		if len(shareIDDisplay) > 43 {
+			shareIDDisplay = shareIDDisplay[:43]
+		}
+
+		fmt.Printf("%-43s  %-36s  %-20s  %-8s  %-6s\n",
+			shareIDDisplay, s.FileID, expires, downloads, active)
 	}
 
 	return nil
 }
 
 func handleShareRevoke(client *HTTPClient, config *ClientConfig, args []string) error {
-	fs := flag.NewFlagSet("share delete", flag.ExitOnError)
+	fs := flag.NewFlagSet("share revoke", flag.ExitOnError)
 	shareID := fs.String("share-id", "", "Share ID to revoke")
-	fileID := fs.String("file-id", "", "File ID (required with share-id)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -1015,16 +1026,14 @@ func handleShareRevoke(client *HTTPClient, config *ClientConfig, args []string) 
 		return err
 	}
 
-	url := "/api/shares/" + *shareID
-	if *fileID != "" {
-		url = "/api/files/" + *fileID + "/shares/" + *shareID
-	}
-
-	req, err := http.NewRequest("DELETE", client.baseURL+url, nil)
+	// POST /api/shares/:id/revoke with reason
+	body := bytes.NewBufferString(`{"reason":"manual"}`)
+	req, err := http.NewRequest("POST", client.baseURL+"/api/shares/"+*shareID+"/revoke", body)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.client.Do(req)
 	if err != nil {
@@ -1032,9 +1041,9 @@ func handleShareRevoke(client *HTTPClient, config *ClientConfig, args []string) 
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server returned HTTP %d: %s", resp.StatusCode, string(body))
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	fmt.Printf("Share %s revoked successfully\n", *shareID)
