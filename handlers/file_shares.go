@@ -615,8 +615,8 @@ func DownloadSharedFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
 	}
 
-	// Get file storage info (metadata like filename/sha256 is inside the encrypted
-	// ShareEnvelope, decrypted client-side — no need to send encrypted metadata headers)
+	// Get file storage info. Metadata like filename/sha256 is inside
+	// the encrypted ShareEnvelope, decrypted client-side.
 	var storageID string
 	var size sql.NullInt64
 
@@ -892,8 +892,28 @@ func DownloadShareChunk(c echo.Context) error {
 	}
 
 	// Calculate byte range for this chunk
-	startByte := chunkIndex * chunkSizeBytes
-	endByte := startByte + chunkSizeBytes - 1
+	// IMPORTANT: chunk_size_bytes in the DB is the PLAINTEXT chunk size, but the
+	// stored object contains ENCRYPTED chunks. Each encrypted chunk is larger due to:
+	//   - Chunk 0: envelope header (2 bytes) + AES-GCM nonce (12 bytes) + plaintext + GCM tag (16 bytes)
+	//   - Chunk 1+: AES-GCM nonce (12 bytes) + plaintext + GCM tag (16 bytes)
+	// We must use encrypted chunk sizes for byte-range calculations in storage.
+	gcmOverhead := int64(arkcrypto.AesGcmOverhead())        // nonce (12) + tag (16) = 28
+	envelopeHeader := int64(arkcrypto.EnvelopeHeaderSize()) // 2 bytes (chunk 0 only)
+
+	// Encrypted chunk sizes
+	chunk0EncSize := envelopeHeader + gcmOverhead + chunkSizeBytes
+	regularEncSize := gcmOverhead + chunkSizeBytes
+
+	var startByte, encChunkSize int64
+	if chunkIndex == 0 {
+		startByte = 0
+		encChunkSize = chunk0EncSize
+	} else {
+		startByte = chunk0EncSize + (chunkIndex-1)*regularEncSize
+		encChunkSize = regularEncSize
+	}
+
+	endByte := startByte + encChunkSize - 1
 
 	// Adjust for last chunk
 	if endByte >= sizeBytes {

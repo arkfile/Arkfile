@@ -122,15 +122,35 @@ func DownloadFileChunk(c echo.Context) error {
 	}
 
 	// Calculate byte range for this chunk
-	chunkSizeBytes := file.ChunkSizeBytes
-	if chunkSizeBytes <= 0 {
-		chunkSizeBytes = crypto.PlaintextChunkSize()
+	// IMPORTANT: chunk_size_bytes in the DB is the PLAINTEXT chunk size, but the
+	// stored object contains ENCRYPTED chunks. Each encrypted chunk is larger due to:
+	//   - Chunk 0: envelope header (2 bytes) + AES-GCM nonce (12 bytes) + plaintext + GCM tag (16 bytes)
+	//   - Chunk 1+: AES-GCM nonce (12 bytes) + plaintext + GCM tag (16 bytes)
+	// We must use encrypted chunk sizes for byte-range calculations in storage.
+	plaintextChunkSize := file.ChunkSizeBytes
+	if plaintextChunkSize <= 0 {
+		plaintextChunkSize = crypto.PlaintextChunkSize()
 	}
 
-	startByte := chunkIndex * chunkSizeBytes
-	endByte := startByte + chunkSizeBytes - 1
+	gcmOverhead := int64(crypto.AesGcmOverhead())        // nonce (12) + tag (16) = 28
+	envelopeHeader := int64(crypto.EnvelopeHeaderSize()) // 2 bytes (chunk 0 only)
 
-	// Adjust for padded files - use original size for range calculation
+	// Encrypted chunk sizes
+	chunk0EncSize := envelopeHeader + gcmOverhead + plaintextChunkSize
+	regularEncSize := gcmOverhead + plaintextChunkSize
+
+	var startByte, encChunkSize int64
+	if chunkIndex == 0 {
+		startByte = 0
+		encChunkSize = chunk0EncSize
+	} else {
+		startByte = chunk0EncSize + (chunkIndex-1)*regularEncSize
+		encChunkSize = regularEncSize
+	}
+
+	endByte := startByte + encChunkSize - 1
+
+	// Adjust for padded files or last chunk - use actual stored size
 	actualFileSize := file.SizeBytes
 	if file.PaddedSize.Valid && file.PaddedSize.Int64 > file.SizeBytes {
 		// File is padded, we need to ensure we don't read past the original size
@@ -164,7 +184,7 @@ func DownloadFileChunk(c echo.Context) error {
 	c.Response().Header().Set("Content-Length", fmt.Sprintf("%d", actualChunkSize))
 	c.Response().Header().Set("X-Chunk-Index", fmt.Sprintf("%d", chunkIndex))
 	c.Response().Header().Set("X-Total-Chunks", fmt.Sprintf("%d", file.ChunkCount))
-	c.Response().Header().Set("X-Chunk-Size", fmt.Sprintf("%d", chunkSizeBytes))
+	c.Response().Header().Set("X-Chunk-Size", fmt.Sprintf("%d", plaintextChunkSize))
 	c.Response().Header().Set("X-File-Size", fmt.Sprintf("%d", file.SizeBytes))
 	c.Response().Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", startByte, endByte, file.SizeBytes))
 
