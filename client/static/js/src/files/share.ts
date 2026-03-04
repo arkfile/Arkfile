@@ -15,6 +15,7 @@
 
 import { authenticatedFetch, getToken, getUsernameFromToken } from '../utils/auth';
 import { showError, showSuccess } from '../ui/messages';
+import { showProgress, hideProgress } from '../ui/progress';
 import { promptForAccountKeyPassword } from '../ui/password-modal';
 import {
   getCachedAccountKey,
@@ -67,14 +68,24 @@ async function getAccountKey(username: string): Promise<Uint8Array | null> {
   if (!result) return null;
 
   try {
-    return await deriveFileEncryptionKeyWithCache(
+    showProgress({
+      title: 'Deriving Account Key',
+      message: 'Running Argon2id key derivation — this may take a few seconds…',
+      indeterminate: true,
+    });
+
+    const key = await deriveFileEncryptionKeyWithCache(
       result.password,
       username,
       'account',
       getToken() ?? undefined,
       result.cacheDuration as CacheDurationHours | undefined,
     );
+
+    hideProgress();
+    return key;
   } catch (err) {
+    hideProgress();
     console.error('Failed to derive Account Key:', err);
     showError('Failed to derive encryption key. Please check your password.');
     return null;
@@ -116,7 +127,7 @@ async function decryptMetadataField(
  * Show a modal that asks for a share password and optional expiry.
  * Returns null if the user cancels.
  */
-function promptForSharePassword(): Promise<{ password: string; expiresHours: number; maxAccesses?: number } | null> {
+function promptForSharePassword(): Promise<{ password: string; expiresMinutes: number; maxAccesses?: number } | null> {
   return new Promise((resolve) => {
     const OVERLAY_ID = 'arkfile-share-modal-overlay';
 
@@ -149,14 +160,17 @@ function promptForSharePassword(): Promise<{ password: string; expiresHours: num
                      placeholder="Confirm password" required />
             </div>
             <div class="password-modal-duration">
-              <label for="share-expiry-select">Expires after</label>
-              <select id="share-expiry-select" class="password-modal-select">
-                <option value="24">24 hours</option>
-                <option value="72">3 days</option>
-                <option value="168">7 days</option>
-                <option value="720">30 days</option>
-                <option value="0">Never</option>
-              </select>
+              <label for="share-expiry-value">Expires after</label>
+              <div style="display: flex; gap: 8px; align-items: center;">
+                <input type="number" id="share-expiry-value" class="password-modal-input"
+                       min="0" max="99999" value="24" style="width: 80px;" />
+                <select id="share-expiry-unit" class="password-modal-select" style="width: auto;">
+                  <option value="minutes">minutes</option>
+                  <option value="hours" selected>hours</option>
+                  <option value="days">days</option>
+                </select>
+                <span style="font-size: 0.85em; color: var(--text-muted, #888);">(0 = never)</span>
+              </div>
             </div>
             <div class="password-modal-field">
               <label for="share-max-downloads">Max downloads (0 = unlimited)</label>
@@ -178,7 +192,6 @@ function promptForSharePassword(): Promise<{ password: string; expiresHours: num
     const form = document.getElementById('share-modal-form') as HTMLFormElement;
     const pwInput = document.getElementById('share-password-input') as HTMLInputElement;
     const confirmInput = document.getElementById('share-password-confirm') as HTMLInputElement;
-    const expirySelect = document.getElementById('share-expiry-select') as HTMLSelectElement;
     const maxDownloadsInput = document.getElementById('share-max-downloads') as HTMLInputElement;
     const feedbackEl = document.getElementById('share-pw-feedback') as HTMLUListElement;
     const errorEl = document.getElementById('share-modal-error') as HTMLElement;
@@ -249,9 +262,24 @@ function promptForSharePassword(): Promise<{ password: string; expiresHours: num
       }
 
       const maxDl = parseInt(maxDownloadsInput.value, 10);
-      const result: { password: string; expiresHours: number; maxAccesses?: number } = {
+
+      // Convert expiry value + unit to minutes
+      const expiryValueEl = document.getElementById('share-expiry-value') as HTMLInputElement;
+      const expiryUnitEl = document.getElementById('share-expiry-unit') as HTMLSelectElement;
+      const expiryValue = parseInt(expiryValueEl.value, 10) || 0;
+      const expiryUnit = expiryUnitEl.value;
+      let expiresMinutes = 0;
+      if (expiryValue > 0) {
+        switch (expiryUnit) {
+          case 'minutes': expiresMinutes = expiryValue; break;
+          case 'hours':   expiresMinutes = expiryValue * 60; break;
+          case 'days':    expiresMinutes = expiryValue * 60 * 24; break;
+        }
+      }
+
+      const result: { password: string; expiresMinutes: number; maxAccesses?: number } = {
         password: pw,
-        expiresHours: parseInt(expirySelect.value, 10),
+        expiresMinutes,
       };
       if (maxDl > 0) result.maxAccesses = maxDl;
 
@@ -382,10 +410,20 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
       const customPw = prompt('Enter the file password:');
       if (!customPw) return;
       try {
+        showProgress({
+          title: 'Deriving Custom Key',
+          message: 'Running Argon2id key derivation — this may take a few seconds…',
+          indeterminate: true,
+        });
+
         const { deriveFileEncryptionKey } = await import('../crypto/file-encryption');
         const customKey = await deriveFileEncryptionKey(customPw, username, 'custom');
+
+        hideProgress();
+
         fek = await decryptFEK(meta.encrypted_fek, customKey);
       } catch (err) {
+        hideProgress();
         console.error('Failed to decrypt FEK with custom password:', err);
         showError('Failed to decrypt file key. Check your password.');
         return;
@@ -432,7 +470,7 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
     const shareRequest: Parameters<typeof creator.createShare>[0] = {
       fileId,
       sharePassword: shareInput.password,
-      expiresAfterHours: shareInput.expiresHours,
+      expiresAfterMinutes: shareInput.expiresMinutes,
     };
     if (shareInput.maxAccesses !== undefined) {
       shareRequest.maxAccesses = shareInput.maxAccesses;

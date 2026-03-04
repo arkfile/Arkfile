@@ -640,6 +640,8 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 	totpCode := fs.String("totp-code", "", "TOTP code for non-interactive login")
 	totpSecret := fs.String("totp-secret", "", "TOTP secret — CLI generates the code internally (for scripted/test use)")
 	nonInteractive := fs.Bool("non-interactive", false, "Don't prompt for input")
+	cacheKey := fs.Bool("cache-key", false, "Cache account key in agent (skips prompt)")
+	noCacheKey := fs.Bool("no-cache-key", false, "Do not cache account key in agent (skips prompt)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -789,21 +791,47 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		keyTTLHours = MaxKeyTTLHours
 	}
 
-	// Store account key in agent with TTL and session binding
-	agentClient, err := NewAgentClient()
-	if err != nil {
-		logVerbose("Warning: Failed to create agent client: %v", err)
+	// Determine whether to cache account key in agent.
+	// --cache-key: always cache (for scripted/e2e use)
+	// --no-cache-key: never cache (for scripted/e2e use)
+	// Neither: prompt interactively (default N for security)
+	shouldCache := false
+	if *cacheKey && *noCacheKey {
+		return fmt.Errorf("cannot use both --cache-key and --no-cache-key")
+	} else if *cacheKey {
+		shouldCache = true
+	} else if *noCacheKey {
+		shouldCache = false
+	} else if *nonInteractive {
+		// Non-interactive mode without explicit flag: don't cache
+		shouldCache = false
 	} else {
-		if err := agentClient.StoreAccountKey(accountKey, *usernameFlag, session.AccessToken, keyTTLHours); err != nil {
-			logVerbose("Warning: Failed to store account key in agent: %v", err)
-		} else {
-			logVerbose("Account key stored in agent (TTL: %d hours)", keyTTLHours)
-		}
+		// Interactive prompt
+		fmt.Print("Cache account key in agent for this session? (y/N): ")
+		reader := bufio.NewReader(os.Stdin)
+		answer, _ := reader.ReadString('\n')
+		answer = strings.TrimSpace(strings.ToLower(answer))
+		shouldCache = (answer == "y" || answer == "yes")
+	}
 
-		// Populate digest cache from existing files
-		if err := populateDigestCache(client, session, accountKey, agentClient); err != nil {
-			logVerbose("Warning: Failed to populate digest cache: %v", err)
+	if shouldCache {
+		agentClient, err := NewAgentClient()
+		if err != nil {
+			logVerbose("Warning: Failed to create agent client: %v", err)
+		} else {
+			if err := agentClient.StoreAccountKey(accountKey, *usernameFlag, session.AccessToken, keyTTLHours); err != nil {
+				logVerbose("Warning: Failed to store account key in agent: %v", err)
+			} else {
+				fmt.Printf("Account key cached in agent (TTL: %d hours)\n", keyTTLHours)
+			}
+
+			// Populate digest cache from existing files
+			if err := populateDigestCache(client, session, accountKey, agentClient); err != nil {
+				logVerbose("Warning: Failed to populate digest cache: %v", err)
+			}
 		}
+	} else {
+		logVerbose("Account key not cached (user opted out)")
 	}
 
 	fmt.Printf("Login successful for user: %s\n", *usernameFlag)

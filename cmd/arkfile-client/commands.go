@@ -727,14 +727,56 @@ func handleShareCommand(client *HTTPClient, config *ClientConfig, args []string)
 	}
 }
 
+// parseDuration parses a human-friendly duration string like "2m", "24h", "7d"
+// into minutes. Supported suffixes: m (minutes), h (hours), d (days).
+// Returns 0 for empty string or "0" (no expiry).
+func parseDuration(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "0" {
+		return 0, nil
+	}
+
+	if len(s) < 2 {
+		return 0, fmt.Errorf("invalid duration format: %q (use e.g. 2m, 24h, 7d)", s)
+	}
+
+	unit := s[len(s)-1]
+	numStr := s[:len(s)-1]
+
+	var num int
+	if _, err := fmt.Sscanf(numStr, "%d", &num); err != nil {
+		return 0, fmt.Errorf("invalid duration number: %q", numStr)
+	}
+	if num < 0 {
+		return 0, fmt.Errorf("duration must be non-negative")
+	}
+
+	switch unit {
+	case 'm':
+		return num, nil
+	case 'h':
+		return num * 60, nil
+	case 'd':
+		return num * 60 * 24, nil
+	default:
+		return 0, fmt.Errorf("invalid duration unit %q (use m, h, or d)", string(unit))
+	}
+}
+
 func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("share create", flag.ExitOnError)
 	fileID := fs.String("file-id", "", "File ID to share")
-	expiresHours := fs.Int("expires", 24, "Share expiry in hours (default: 24, 0 = no expiry)")
+	expiresStr := fs.String("expires", "24h", "Share expiry duration (e.g. 2m, 24h, 7d; 0 = no expiry)")
 	maxDownloads := fs.Int("max-downloads", 0, "Maximum download count (0 = unlimited)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	// Parse duration string into minutes
+	expiresMinutes, err := parseDuration(*expiresStr)
+	if err != nil {
+		return fmt.Errorf("invalid --expires value: %w", err)
 	}
 
 	if *fileID == "" {
@@ -883,8 +925,8 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 		sharePayload["max_accesses"] = *maxDownloads
 	}
 
-	if *expiresHours > 0 {
-		sharePayload["expires_after_hours"] = *expiresHours
+	if expiresMinutes > 0 {
+		sharePayload["expires_after_minutes"] = expiresMinutes
 	}
 
 	createResp, err := client.makeRequest("POST", "/api/shares", sharePayload, session.AccessToken)
@@ -903,8 +945,8 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 	if shareURL != "" {
 		fmt.Printf("  Share URL: %s\n", shareURL)
 	}
-	if *expiresHours > 0 {
-		fmt.Printf("  Expires: %s\n", time.Now().Add(time.Duration(*expiresHours)*time.Hour).Format("2006-01-02 15:04:05"))
+	if expiresMinutes > 0 {
+		fmt.Printf("  Expires: %s\n", time.Now().Add(time.Duration(expiresMinutes)*time.Minute).Format("2006-01-02 15:04:05"))
 	} else {
 		fmt.Printf("  Expires: never\n")
 	}

@@ -22,13 +22,13 @@ import (
 
 // ShareRequest represents a file sharing request (Argon2id-based anonymous shares)
 type ShareRequest struct {
-	ShareID           string `json:"share_id"` // Client-generated share ID
-	FileID            string `json:"file_id"`
-	Salt              string `json:"salt"`                // Base64-encoded 32-byte salt
-	EncryptedEnvelope string `json:"encrypted_envelope"`  // Base64-encoded Share Envelope (FEK + Download Token) encrypted with AAD
-	DownloadTokenHash string `json:"download_token_hash"` // SHA-256 hash of the Download Token
-	ExpiresAfterHours int    `json:"expires_after_hours"` // Optional expiration
-	MaxAccesses       *int   `json:"max_accesses"`        // Optional download limit (nil = unlimited)
+	ShareID             string `json:"share_id"` // Client-generated share ID
+	FileID              string `json:"file_id"`
+	Salt                string `json:"salt"`                  // Base64-encoded 32-byte salt
+	EncryptedEnvelope   string `json:"encrypted_envelope"`    // Base64-encoded Share Envelope (FEK + Download Token) encrypted with AAD
+	DownloadTokenHash   string `json:"download_token_hash"`   // SHA-256 hash of the Download Token
+	ExpiresAfterMinutes int    `json:"expires_after_minutes"` // Optional expiration in minutes (0 = no expiration)
+	MaxAccesses         *int   `json:"max_accesses"`          // Optional download limit (nil = unlimited)
 }
 
 // ShareResponse represents a file share creation response
@@ -110,8 +110,8 @@ func CreateFileShare(c echo.Context) error {
 
 	// Calculate expiration time
 	var expiresAt *time.Time
-	if request.ExpiresAfterHours > 0 {
-		expiry := time.Now().Add(time.Duration(request.ExpiresAfterHours) * time.Hour)
+	if request.ExpiresAfterMinutes > 0 {
+		expiry := time.Now().Add(time.Duration(request.ExpiresAfterMinutes) * time.Minute)
 		expiresAt = &expiry
 	}
 

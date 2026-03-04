@@ -23,7 +23,7 @@ func TestCreateFileShare_Success(t *testing.T) {
 		"file_id": "test-file-123",
 		"salt": "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=",
 		"encrypted_fek": "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==",
-		"expires_after_hours": 720
+		"expires_after_minutes": 43200
 	}`)))
 
 	// Set up authenticated user context

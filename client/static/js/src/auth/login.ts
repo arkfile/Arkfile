@@ -4,19 +4,16 @@
 
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
-import { setTokens, getUsernameFromToken, clearAllSessionData } from '../utils/auth.js';
+import { setTokens, clearAllSessionData } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleTOTPFlow } from './totp.js';
 import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
 import { 
-  deriveAccountKeyWithCache,
   deriveFileEncryptionKeyWithCache,
   cleanupAccountKeyCache,
 } from '../crypto/file-encryption.js';
-import { registerAccountKeyCleanupHandlers } from '../crypto/account-key-cache.js';
-import { showPasswordPrompt } from '../ui/password-modal.js';
-import type { CacheDurationHours } from '../crypto/account-key-cache.js';
+import { promptForCacheOptIn } from '../ui/password-modal.js';
 import { populateDigestCache, clearDigestCache, type RawFileEntry } from '../utils/digest-cache.js';
 
 export interface LoginCredentials {
@@ -133,17 +130,27 @@ export class LoginManager {
         loginFinalize.sessionKey.fill(0);
       }
 
-      // Cache the account key for file operations
-      // This ensures the user doesn't need to re-enter their password for file operations
-      // The key is stored in sessionStorage and cleared on logout/tab close
+      // Ask user if they want to cache their account key for this session.
+      // The key is never cached silently — user must explicitly opt-in.
       let cachedAccountKey: Uint8Array | undefined;
-      try {
-        cachedAccountKey = await deriveFileEncryptionKeyWithCache(credentials.password, credentials.username, 'account', loginData.token);
-      } catch (error) {
-        console.warn('Failed to cache account key:', error);
-        // Non-fatal error, user will just be prompted later if needed
+      hideProgress();
+      const cacheChoice = await promptForCacheOptIn();
+
+      if (cacheChoice && cacheChoice.cacheDuration) {
+        try {
+          showProgressMessage('Deriving Account Key (Argon2id) -- this may take a few seconds...');
+          cachedAccountKey = await deriveFileEncryptionKeyWithCache(
+            credentials.password, credentials.username, 'account',
+            loginData.token, cacheChoice.cacheDuration,
+          );
+          hideProgress();
+        } catch (error) {
+          hideProgress();
+          console.warn('Failed to cache account key:', error);
+          // Non-fatal — user will be prompted per-operation
+        }
       }
-      
+
       // Populate digest cache for deduplication (non-fatal if it fails)
       if (cachedAccountKey) {
         try {

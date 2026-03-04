@@ -10,6 +10,7 @@
 
 import { authenticatedFetch, getToken, getUsernameFromToken } from '../utils/auth';
 import { showError, showSuccess } from '../ui/messages';
+import { showProgress, updateProgress, hideProgress } from '../ui/progress';
 import { 
   downloadFileChunked, 
   triggerBrowserDownload,
@@ -85,7 +86,13 @@ async function getAccountKey(username: string): Promise<Uint8Array | null> {
   }
   
   try {
-    // Derive Account Key using Argon2id with caching
+    // Show progress during Argon2id derivation (takes 3-8 seconds)
+    showProgress({
+      title: 'Deriving Account Key',
+      message: 'Running Argon2id key derivation — this may take a few seconds…',
+      indeterminate: true,
+    });
+
     const accountKey = await deriveFileEncryptionKeyWithCache(
       result.password,
       username,
@@ -93,9 +100,11 @@ async function getAccountKey(username: string): Promise<Uint8Array | null> {
       getToken() ?? undefined,
       result.cacheDuration as CacheDurationHours | undefined
     );
-    
+
+    hideProgress();
     return accountKey;
   } catch (error) {
+    hideProgress();
     console.error('Failed to derive Account Key:', error);
     showError('Failed to derive encryption key. Please check your password.');
     return null;
@@ -238,13 +247,22 @@ export async function downloadFile(
       if (!password) return;
 
       try {
-        // Derive custom key using Argon2id with 'custom' context
+        // Show progress during Argon2id derivation (takes 3-8 seconds)
+        showProgress({
+          title: 'Deriving Custom Key',
+          message: 'Running Argon2id key derivation — this may take a few seconds…',
+          indeterminate: true,
+        });
+
         const { deriveFileEncryptionKey } = await import('../crypto/file-encryption');
         const customKey = await deriveFileEncryptionKey(password, username, 'custom');
-        
+
+        hideProgress();
+
         // Decrypt FEK with custom key
         fek = await decryptFEK(meta.encrypted_fek, customKey);
       } catch (error) {
+        hideProgress();
         console.error('Failed to decrypt FEK with custom password:', error);
         showError('Failed to decrypt file key. Check your password.');
         return;

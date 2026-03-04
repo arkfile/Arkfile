@@ -501,7 +501,8 @@ phase_7_user_login() {
             --username '$TEST_USERNAME' \
             login \
             --totp-secret '$TEST_USER_TOTP_SECRET' \
-            --save-session"
+            --save-session \
+            --cache-key"
 
     if [ $user_login_exit_code -eq 0 ] && echo "$user_login_output" | grep -q "Login successful"; then
         record_test "User login" "PASS"
@@ -630,14 +631,24 @@ phase_8_file_operations() {
     success "File operations phase complete"
 }
 
-# Phase 9: Share Operations
+# Phase 9: Share Operations — 3 shares with different constraints
+#
+# Share A: No limits (unlimited access, no expiry)
+# Share B: max_accesses=2
+# Share C: expires_after=2m (2 minutes)
+#
+# Each share uses a unique 18+ char password meeting share password requirements.
 phase_9_share_operations() {
     phase "9: SHARE OPERATIONS"
 
-    section "Testing share operations - using file from Phase 8"
+    # --- Passwords (18+ chars, uppercase, digits, special) ---
+    local SHARE_A_PASSWORD="UnlimitedShare#2026!Abc"
+    local SHARE_B_PASSWORD="MaxAccessShare#2026!Xyz"
+    local SHARE_C_PASSWORD="ExpiringShare#2026!Qrs"
 
-    local SHARE_PASSWORD="SecureFileShare#2026!TestEnv"
-    local share_id=""
+    local SHARE_A_ID=""
+    local SHARE_B_ID=""
+    local SHARE_C_ID=""
 
     if [ -z "$UPLOADED_FILE_ID" ]; then
         error "Missing file ID from Phase 8"
@@ -646,107 +657,274 @@ phase_9_share_operations() {
     record_test "Phase 8 file data available" "PASS"
     info "Using file from Phase 8: File ID=$UPLOADED_FILE_ID"
 
-    # 9.1: Create share
-    section "9.1: Creating share"
+    # ================================================================
+    # 9.1: Create Share A — no limits (--expires 0 = no expiry)
+    # ================================================================
+    section "9.1: Creating Share A (no limits)"
 
-    local create_share_output
-    local create_share_exit_code
-
-    safe_exec create_share_output create_share_exit_code \
-        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $CLIENT \
+    local create_a_output create_a_exit_code
+    safe_exec create_a_output create_a_exit_code \
+        bash -c "printf '%s\n' '$SHARE_A_PASSWORD' | $CLIENT \
         --server-url '$SERVER_URL' \
         --tls-insecure \
         share create \
-        --file-id '$UPLOADED_FILE_ID'"
+        --file-id '$UPLOADED_FILE_ID' \
+        --expires 0"
 
-    if [ $create_share_exit_code -eq 0 ]; then
-        share_id=$(echo "$create_share_output" | grep "Share ID:" | awk '{print $3}' | tr -d ' ')
-        info "Share created with ID: $share_id"
-        if [ -z "$share_id" ]; then
-            warning "Could not extract Share ID from share creation output"
-        fi
-        record_test "Share creation" "PASS"
+    if [ $create_a_exit_code -eq 0 ]; then
+        SHARE_A_ID=$(echo "$create_a_output" | grep "Share ID:" | awk '{print $3}' | tr -d ' ')
+        info "Share A created: $SHARE_A_ID"
+        record_test "Share A creation (no limits)" "PASS"
     else
-        error "Share creation command failed:"
-        echo "$create_share_output"
-        record_test "Share creation" "FAIL"
+        error "Share A creation failed:"; echo "$create_a_output"
+        record_test "Share A creation (no limits)" "FAIL"
     fi
 
-    # 9.2: List shares
-    section "9.2: Listing shares"
+    # ================================================================
+    # 9.2: Create Share B — max_accesses=2
+    # ================================================================
+    section "9.2: Creating Share B (max_accesses=2)"
 
-    local list_shares_output
-    local list_shares_exit_code
+    local create_b_output create_b_exit_code
+    safe_exec create_b_output create_b_exit_code \
+        bash -c "printf '%s\n' '$SHARE_B_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        share create \
+        --file-id '$UPLOADED_FILE_ID' \
+        --expires 0 \
+        --max-downloads 2"
 
+    if [ $create_b_exit_code -eq 0 ]; then
+        SHARE_B_ID=$(echo "$create_b_output" | grep "Share ID:" | awk '{print $3}' | tr -d ' ')
+        info "Share B created: $SHARE_B_ID"
+        record_test "Share B creation (max_accesses=2)" "PASS"
+    else
+        error "Share B creation failed:"; echo "$create_b_output"
+        record_test "Share B creation (max_accesses=2)" "FAIL"
+    fi
+
+    # ================================================================
+    # 9.3: Create Share C — expires_after=2m
+    # Record creation timestamp for smart sleep later.
+    # ================================================================
+    section "9.3: Creating Share C (expires_after=2m)"
+
+    local SHARE_C_CREATED_AT
+    SHARE_C_CREATED_AT=$(date +%s)
+
+    local create_c_output create_c_exit_code
+    safe_exec create_c_output create_c_exit_code \
+        bash -c "printf '%s\n' '$SHARE_C_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        share create \
+        --file-id '$UPLOADED_FILE_ID' \
+        --expires 2m"
+
+    if [ $create_c_exit_code -eq 0 ]; then
+        SHARE_C_ID=$(echo "$create_c_output" | grep "Share ID:" | awk '{print $3}' | tr -d ' ')
+        info "Share C created: $SHARE_C_ID (expires in 2 min)"
+        record_test "Share C creation (expires_after=2m)" "PASS"
+    else
+        error "Share C creation failed:"; echo "$create_c_output"
+        record_test "Share C creation (expires_after=2m)" "FAIL"
+    fi
+
+    # ================================================================
+    # 9.4: List shares — verify all 3 appear
+    # ================================================================
+    section "9.4: Listing shares"
+
+    local list_shares_output list_shares_exit_code
     safe_exec list_shares_output list_shares_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure share list
 
-    if [ $list_shares_exit_code -eq 0 ] && echo "$list_shares_output" | grep -q "$share_id"; then
-        record_test "Share listing" "PASS"
-        info "Share $share_id found in list"
+    if [ $list_shares_exit_code -eq 0 ] \
+        && echo "$list_shares_output" | grep -q "$SHARE_A_ID" \
+        && echo "$list_shares_output" | grep -q "$SHARE_B_ID" \
+        && echo "$list_shares_output" | grep -q "$SHARE_C_ID"; then
+        record_test "Share listing (all 3 shares)" "PASS"
     else
-        error "Share not found in list:"
-        echo "$list_shares_output"
-        record_test "Share listing" "FAIL"
+        error "Not all shares found in list:"; echo "$list_shares_output"
+        record_test "Share listing (all 3 shares)" "FAIL"
     fi
 
-    # 9.3: Logout and download share as visitor (unauthenticated)
-    section "9.3: Accessing share as visitor (unauthenticated)"
+    # ================================================================
+    # 9.5: Logout for anonymous visitor tests
+    # ================================================================
+    section "9.5: Logging out for anonymous visitor tests"
 
-    info "Logging out to test visitor access..."
-    local logout_output
-    local logout_exit_code
-
+    local logout_output logout_exit_code
     safe_exec logout_output logout_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure logout
-    record_test "Logout for visitor test" "PASS"
+    record_test "Logout for visitor tests" "PASS"
 
-    local shared_download_file="$TEST_DATA_DIR/shared_download.bin"
-    local download_share_output
-    local download_share_exit_code
+    # ================================================================
+    # 9.6: Visitor — Share A (unlimited) — should succeed
+    # ================================================================
+    section "9.6: Visitor downloads Share A (unlimited)"
 
-    safe_exec download_share_output download_share_exit_code \
-        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $CLIENT \
+    local dl_a_file="$TEST_DATA_DIR/share_a_download.bin"
+    local dl_a_output dl_a_exit_code
+    safe_exec dl_a_output dl_a_exit_code \
+        bash -c "printf '%s\n' '$SHARE_A_PASSWORD' | $CLIENT \
         --server-url '$SERVER_URL' \
         --tls-insecure \
         share download \
-        --share-id '$share_id' \
-        --output '$shared_download_file'"
+        --share-id '$SHARE_A_ID' \
+        --output '$dl_a_file'"
 
-    if [ $download_share_exit_code -eq 0 ]; then
-        record_test "Visitor share download" "PASS"
-        info "Downloaded shared file to: $shared_download_file"
+    if [ $dl_a_exit_code -eq 0 ]; then
+        record_test "Visitor download Share A" "PASS"
     else
-        error "Visitor download failed:"
-        echo "$download_share_output"
-        record_test "Visitor share download" "FAIL"
+        error "Visitor download Share A failed:"; echo "$dl_a_output"
+        record_test "Visitor download Share A" "FAIL"
     fi
 
-    # 9.4: Verify file integrity
-    section "9.4: Verifying shared file integrity"
-
-    local decrypted_sha256
-    decrypted_sha256=$(sha256sum "$shared_download_file" | awk '{print $1}')
-
-    if [ "$decrypted_sha256" = "$UPLOADED_FILE_SHA256" ]; then
-        record_test "Shared file SHA256 verification" "PASS"
-        info "SHA256 matches: $decrypted_sha256"
+    # Verify SHA256
+    local dl_a_sha256
+    dl_a_sha256=$(sha256sum "$dl_a_file" | awk '{print $1}')
+    if [ "$dl_a_sha256" = "$UPLOADED_FILE_SHA256" ]; then
+        record_test "Share A SHA256 integrity" "PASS"
     else
-        error "SHA256 mismatch! Original: $UPLOADED_FILE_SHA256, Shared: $decrypted_sha256"
-        record_test "Shared file SHA256 verification" "FAIL"
+        error "Share A SHA256 mismatch! Expected: $UPLOADED_FILE_SHA256, Got: $dl_a_sha256"
+        record_test "Share A SHA256 integrity" "FAIL"
     fi
+    rm -f "$dl_a_file"
 
-    # 9.5: Negative tests
-    section "9.5: Negative tests"
+    # ================================================================
+    # 9.7: Visitor — Share B (max_accesses=2) — download twice OK, 3rd fails
+    # ================================================================
+    section "9.7: Visitor tests Share B (max_accesses=2)"
 
-    info "Testing non-existent share..."
-    sleep 2  # Delay to avoid rate limiting
+    # Download 1 of 2
+    local dl_b1_file="$TEST_DATA_DIR/share_b_dl1.bin"
+    local dl_b1_output dl_b1_exit_code
+    safe_exec dl_b1_output dl_b1_exit_code \
+        bash -c "printf '%s\n' '$SHARE_B_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        share download \
+        --share-id '$SHARE_B_ID' \
+        --output '$dl_b1_file'"
 
-    local nonexistent_output
-    local nonexistent_exit_code
+    if [ $dl_b1_exit_code -eq 0 ]; then
+        record_test "Share B download 1/2" "PASS"
+    else
+        error "Share B download 1/2 failed:"; echo "$dl_b1_output"
+        record_test "Share B download 1/2" "FAIL"
+    fi
+    rm -f "$dl_b1_file"
 
+    sleep 2  # Rate limit buffer
+
+    # Download 2 of 2
+    local dl_b2_file="$TEST_DATA_DIR/share_b_dl2.bin"
+    local dl_b2_output dl_b2_exit_code
+    safe_exec dl_b2_output dl_b2_exit_code \
+        bash -c "printf '%s\n' '$SHARE_B_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        share download \
+        --share-id '$SHARE_B_ID' \
+        --output '$dl_b2_file'"
+
+    if [ $dl_b2_exit_code -eq 0 ]; then
+        record_test "Share B download 2/2" "PASS"
+    else
+        error "Share B download 2/2 failed:"; echo "$dl_b2_output"
+        record_test "Share B download 2/2" "FAIL"
+    fi
+    rm -f "$dl_b2_file"
+
+    sleep 2  # Rate limit buffer
+
+    # Download 3 — should FAIL (max_accesses exceeded)
+    local dl_b3_file="$TEST_DATA_DIR/share_b_dl3.bin"
+    local dl_b3_output dl_b3_exit_code
+    safe_exec dl_b3_output dl_b3_exit_code \
+        bash -c "printf '%s\n' '$SHARE_B_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        share download \
+        --share-id '$SHARE_B_ID' \
+        --output '$dl_b3_file'"
+
+    if [ $dl_b3_exit_code -ne 0 ]; then
+        record_test "Share B download 3 rejected (max_accesses)" "PASS"
+        info "Correctly rejected 3rd download on max_accesses=2 share"
+    else
+        error "Security failure: 3rd download on max_accesses=2 share succeeded!"
+        record_test "Share B download 3 rejected (max_accesses)" "FAIL"
+    fi
+    rm -f "$dl_b3_file"
+
+    # ================================================================
+    # 9.8: Visitor — Share C (expires_after=2m) — download before expiry OK
+    # ================================================================
+    section "9.8: Visitor tests Share C (expires_after=2m)"
+
+    # Download before expiry — should succeed
+    local dl_c1_file="$TEST_DATA_DIR/share_c_dl1.bin"
+    local dl_c1_output dl_c1_exit_code
+    safe_exec dl_c1_output dl_c1_exit_code \
+        bash -c "printf '%s\n' '$SHARE_C_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        share download \
+        --share-id '$SHARE_C_ID' \
+        --output '$dl_c1_file'"
+
+    if [ $dl_c1_exit_code -eq 0 ]; then
+        record_test "Share C download before expiry" "PASS"
+    else
+        error "Share C download before expiry failed:"; echo "$dl_c1_output"
+        record_test "Share C download before expiry" "FAIL"
+    fi
+    rm -f "$dl_c1_file"
+
+    # Smart sleep: wait only the remaining time until 2 min after creation + 5s buffer
+    local now_ts
+    now_ts=$(date +%s)
+    local expiry_ts=$((SHARE_C_CREATED_AT + 120 + 5))
+    local wait_seconds=$((expiry_ts - now_ts))
+    if [ $wait_seconds -lt 0 ]; then
+        wait_seconds=0
+    fi
+    info "Smart sleep: waiting ${wait_seconds}s for Share C to expire..."
+    sleep "$wait_seconds"
+
+    # Download after expiry — should FAIL
+    local dl_c2_file="$TEST_DATA_DIR/share_c_dl2.bin"
+    local dl_c2_output dl_c2_exit_code
+    safe_exec dl_c2_output dl_c2_exit_code \
+        bash -c "printf '%s\n' '$SHARE_C_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        share download \
+        --share-id '$SHARE_C_ID' \
+        --output '$dl_c2_file'"
+
+    if [ $dl_c2_exit_code -ne 0 ]; then
+        record_test "Share C download after expiry rejected" "PASS"
+        info "Correctly rejected download on expired share"
+    else
+        error "Security failure: Expired share was still accessible!"
+        record_test "Share C download after expiry rejected" "FAIL"
+    fi
+    rm -f "$dl_c2_file"
+
+    # ================================================================
+    # 9.9: Negative test — non-existent share
+    # ================================================================
+    section "9.9: Negative test — non-existent share"
+
+    sleep 2  # Rate limit buffer
+
+    local nonexistent_output nonexistent_exit_code
     safe_exec nonexistent_output nonexistent_exit_code \
-        bash -c "printf 'dummy\n' | $CLIENT \
+        bash -c "printf 'DummyPassword#2026!Nope' | $CLIENT \
         --server-url '$SERVER_URL' \
         --tls-insecure \
         share download \
@@ -755,20 +933,20 @@ phase_9_share_operations() {
 
     if [ $nonexistent_exit_code -ne 0 ]; then
         record_test "Non-existent share rejection" "PASS"
-        info "Correctly rejected non-existent share"
     else
         error "Security failure: Non-existent share was accepted!"
         record_test "Non-existent share rejection" "FAIL"
     fi
+    rm -f "$TEST_DATA_DIR/nonexistent.bin"
 
-    # 9.6: Re-authenticate and revoke share
-    section "9.6: Re-authenticating and revoking share"
+    # ================================================================
+    # 9.10: Re-login, revoke Share A, verify revoked share fails
+    # ================================================================
+    section "9.10: Re-authenticating to revoke Share A"
 
     wait_for_totp_window
 
-    local relogin_output
-    local relogin_exit_code
-
+    local relogin_output relogin_exit_code
     safe_exec relogin_output relogin_exit_code \
         bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
             --server-url '$SERVER_URL' \
@@ -776,56 +954,50 @@ phase_9_share_operations() {
             --username '$TEST_USERNAME' \
             login \
             --totp-secret '$TEST_USER_TOTP_SECRET' \
-            --save-session"
+            --save-session \
+            --cache-key"
 
     if [ $relogin_exit_code -eq 0 ]; then
         record_test "Re-authentication for revoke" "PASS"
     else
-        error "Failed to re-authenticate:"
-        echo "$relogin_output"
+        error "Failed to re-authenticate:"; echo "$relogin_output"
         record_test "Re-authentication for revoke" "FAIL"
     fi
 
-    # Revoke share
-    local revoke_output
-    local revoke_exit_code
-
+    # Revoke Share A
+    local revoke_output revoke_exit_code
     safe_exec revoke_output revoke_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-            share revoke --share-id "$share_id"
+            share revoke --share-id "$SHARE_A_ID"
 
     if [ $revoke_exit_code -eq 0 ]; then
-        record_test "Share revocation" "PASS"
-        info "Share revoked successfully"
+        record_test "Share A revocation" "PASS"
+        info "Share A revoked successfully"
     else
-        error "Failed to revoke share:"
-        echo "$revoke_output"
-        record_test "Share revocation" "FAIL"
+        error "Failed to revoke Share A:"; echo "$revoke_output"
+        record_test "Share A revocation" "FAIL"
     fi
 
-    # Test that revoked share cannot be downloaded
+    # Verify revoked share cannot be downloaded
     sleep 2
 
-    local revoked_download_output
-    local revoked_download_exit_code
-
-    safe_exec revoked_download_output revoked_download_exit_code \
-        bash -c "printf 'dummy\n' | $CLIENT \
+    local revoked_dl_output revoked_dl_exit_code
+    safe_exec revoked_dl_output revoked_dl_exit_code \
+        bash -c "printf '%s\n' '$SHARE_A_PASSWORD' | $CLIENT \
         --server-url '$SERVER_URL' \
         --tls-insecure \
         share download \
-        --share-id '$share_id' \
+        --share-id '$SHARE_A_ID' \
         --output '$TEST_DATA_DIR/revoked.bin'"
 
-    if [ $revoked_download_exit_code -ne 0 ]; then
-        record_test "Revoked share rejection" "PASS"
+    if [ $revoked_dl_exit_code -ne 0 ]; then
+        record_test "Revoked Share A download rejected" "PASS"
         info "Correctly rejected revoked share download"
     else
         error "Security failure: Revoked share was still accessible!"
-        record_test "Revoked share rejection" "FAIL"
+        record_test "Revoked Share A download rejected" "FAIL"
     fi
-
-    rm -f "$shared_download_file" "$TEST_DATA_DIR/nonexistent.bin" "$TEST_DATA_DIR/revoked.bin"
+    rm -f "$TEST_DATA_DIR/revoked.bin"
 
     success "Share operations phase complete"
 }

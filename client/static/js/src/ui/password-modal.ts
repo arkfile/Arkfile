@@ -488,6 +488,105 @@ export function promptForAccountKeyCaching(): Promise<PasswordPromptResult | nul
   });
 }
 
+/**
+ * Result from the cache opt-in prompt (no password needed)
+ */
+export interface CacheOptInResult {
+  /** Selected cache duration, or undefined if user declined */
+  cacheDuration?: CacheDurationHours;
+}
+
+/**
+ * Shows a lightweight opt-in dialog for Account Key caching after login.
+ * Unlike showPasswordPrompt, this does NOT ask for a password — the caller
+ * already has the password from the login flow.
+ *
+ * @returns Promise resolving to the chosen duration, or null if user skipped
+ */
+export function promptForCacheOptIn(): Promise<CacheOptInResult | null> {
+  return new Promise((resolve) => {
+    // Inject styles if needed
+    injectStyles();
+
+    const overlayId = 'arkfile-cache-optin-overlay';
+
+    // Remove any existing overlay
+    const existing = document.getElementById(overlayId);
+    if (existing) existing.remove();
+
+    const html = `
+      <div id="${overlayId}" class="password-modal-overlay">
+        <div class="password-modal" role="dialog" aria-modal="true" aria-labelledby="cache-optin-title">
+          <div class="password-modal-header">
+            <h2 id="cache-optin-title">Cache Account Key?</h2>
+            <button type="button" class="password-modal-close" aria-label="Close" id="cache-optin-close-btn">
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </div>
+          <div class="password-modal-body">
+            <p class="password-modal-message">
+              Cache your Account Key for this session so you can encrypt and
+              decrypt files without re-entering your password each time.
+              The key is protected in memory and cleared on logout or tab close.
+            </p>
+            <div class="password-modal-duration">
+              <label for="cache-optin-duration">Remember for:</label>
+              <select id="cache-optin-duration" class="password-modal-select">
+                <option value="1" selected>1 hour</option>
+                <option value="2">2 hours</option>
+                <option value="3">3 hours</option>
+                <option value="4">4 hours</option>
+              </select>
+            </div>
+          </div>
+          <div class="password-modal-footer">
+            <button type="button" class="password-modal-btn password-modal-btn-cancel" id="cache-optin-skip-btn">
+              Skip
+            </button>
+            <button type="button" class="password-modal-btn password-modal-btn-submit" id="cache-optin-ok-btn">
+              Cache Key
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    document.body.appendChild(container.firstElementChild!);
+
+    const overlay = document.getElementById(overlayId)!;
+    const durationSelect = document.getElementById('cache-optin-duration') as HTMLSelectElement;
+    const okBtn = document.getElementById('cache-optin-ok-btn')!;
+    const skipBtn = document.getElementById('cache-optin-skip-btn')!;
+    const closeBtn = document.getElementById('cache-optin-close-btn')!;
+
+    const cleanup = () => { overlay.remove(); };
+
+    const handleOk = () => {
+      const val = parseInt(durationSelect.value, 10) as CacheDurationHours;
+      cleanup();
+      resolve({ cacheDuration: val });
+    };
+
+    const handleSkip = () => {
+      cleanup();
+      resolve(null);
+    };
+
+    okBtn.addEventListener('click', handleOk);
+    skipBtn.addEventListener('click', handleSkip);
+    closeBtn.addEventListener('click', handleSkip);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) handleSkip(); });
+    document.addEventListener('keydown', function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        document.removeEventListener('keydown', onKey);
+        handleSkip();
+      }
+    });
+  });
+}
+
 // ============================================================================
 // Exports
 // ============================================================================

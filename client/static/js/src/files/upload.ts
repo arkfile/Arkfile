@@ -42,6 +42,7 @@ import {
   getChunkingParams,
 } from '../crypto/constants.js';
 import { showError, showSuccess, showInfo } from '../ui/messages.js';
+import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
 import { checkDuplicate, addDigest } from '../utils/digest-cache.js';
 
 // ============================================================================
@@ -575,9 +576,15 @@ export async function handleFileUpload(): Promise<void> {
 
       // If user chose to remember, derive and cache the key
       if (result.cacheDuration) {
+        showProgress({
+          title: 'Deriving Account Key',
+          message: 'Running Argon2id key derivation -- this may take a few seconds...',
+          indeterminate: true,
+        });
         const derivedKey = await deriveFileEncryptionKeyWithCache(
           accountPassword, username, 'account', getAuthToken() ?? undefined, result.cacheDuration
         );
+        hideProgress();
         uploadOptions.accountKey = derivedKey;
       }
     }
@@ -604,10 +611,35 @@ export async function handleFileUpload(): Promise<void> {
     uploadButton.disabled = true;
   }
 
-  try {
-    showInfo(`Uploading ${file.name}...`);
+  // Show ProgressManager overlay for upload
+  showProgress({
+    title: 'Uploading File',
+    message: file.name,
+    indeterminate: true,
+  });
 
+  try {
     uploadOptions.onProgress = (progress) => {
+      // Update ProgressManager overlay
+      const phaseLabels: Record<string, string> = {
+        'deriving-key': 'Deriving encryption key…',
+        'encrypting': 'Encrypting file…',
+        'uploading': 'Uploading…',
+        'completing': 'Finalizing…',
+      };
+      const phaseMessage = phaseLabels[progress.phase] || progress.phase;
+      let message = phaseMessage;
+      if (progress.currentChunk && progress.totalChunks) {
+        message += ` (chunk ${progress.currentChunk}/${progress.totalChunks})`;
+      }
+      updateProgress({
+        title: 'Uploading File',
+        message,
+        percentage: progress.percent,
+        stage: progress.phase,
+      });
+
+      // Also update legacy DOM elements if present
       if (progressBar) {
         progressBar.value = progress.percent;
       }
@@ -621,6 +653,8 @@ export async function handleFileUpload(): Promise<void> {
     };
 
     const result = await uploadFile(file, uploadOptions);
+
+    hideProgress();
     showSuccess(`File uploaded successfully! File ID: ${result.fileId}`);
 
     // Clear the form
@@ -638,6 +672,8 @@ export async function handleFileUpload(): Promise<void> {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Upload failed';
+    updateProgress({ error: message });
+    setTimeout(() => hideProgress(), 3000);
     showError(message);
   } finally {
     if (uploadButton) {
