@@ -1,48 +1,31 @@
 /**
- * File Encryption System
+ * File Encryption Key Derivation & Caching
  * 
- * High-level API for encrypting and decrypting files using Argon2id-based key derivation.
- * This system is completely independent from OPAQUE authentication and enables:
+ * Provides Argon2id-based key derivation and Account Key caching for the
+ * chunked encryption system. This module is completely independent from
+ * OPAQUE authentication and enables:
  * - Offline decryption (no server required)
  * - Data portability (decrypt anywhere with password + username)
  * - Deterministic key derivation (same password always produces same key)
+ * 
  */
 
 import {
   deriveKeyArgon2id,
-  encryptAESGCM,
-  decryptAESGCM,
   hashString,
-  generateSalt,
-  toBase64,
-  fromBase64,
-  secureWipe,
 } from './primitives';
 import {
   KEY_SIZES,
   getArgon2Params,
-  FILE_ENCRYPTION_VERSION,
-  LIMITS,
   SALT_DOMAIN_PREFIXES,
 } from './constants';
 import type { PasswordContext } from './constants';
 export type { PasswordContext } from './constants';
 import {
-  FileTooLargeError,
   InvalidUsernameError,
   SaltDerivationError,
-  EncryptionError,
-  DecryptionError,
-  UnsupportedProtocolVersionError,
-  CorruptedDataError,
   wrapError,
 } from './errors';
-import type {
-  FileEncryptionMetadata,
-  EncryptedFileData,
-  FileEncryptionOptions,
-  FileDecryptionOptions,
-} from './types';
 
 // ============================================================================
 // Salt Derivation
@@ -146,202 +129,6 @@ export async function deriveFileEncryptionKey(
     return result.key;
   } catch (error) {
     throw wrapError(error, 'Failed to derive file encryption key');
-  }
-}
-
-// ============================================================================
-// File Encryption
-// ============================================================================
-
-/**
- * Encrypts a file using password-based encryption
- * 
- * @param file - The file to encrypt (as Uint8Array)
- * @param password - The user's password
- * @param username - The user's username (used for deterministic salt)
- * @param options - Optional encryption parameters
- * @returns Encrypted file data with metadata
- */
-export async function encryptFile(
-  file: Uint8Array,
-  password: string,
-  username: string,
-  options: FileEncryptionOptions = {}
-): Promise<EncryptedFileData> {
-  // Validate file size
-  if (file.length > LIMITS.MAX_FILE_SIZE) {
-    throw new FileTooLargeError(file.length, LIMITS.MAX_FILE_SIZE);
-  }
-  
-  try {
-    // Derive encryption key with context (default to 'account')
-    const context = options.context || 'account';
-    const key = await deriveFileEncryptionKey(password, username, context);
-    
-    // Get Argon2id parameters from config for metadata
-    const argon2Params = await getArgon2Params();
-    
-    // Encrypt the file
-    const encryptionResult = await encryptAESGCM({
-      data: file,
-      key,
-      ...(options.additionalData && { aad: options.additionalData }),
-    });
-    
-    // Create metadata
-    const metadata: FileEncryptionMetadata = {
-      version: FILE_ENCRYPTION_VERSION,
-      algorithm: 'AES-256-GCM',
-      kdf: 'Argon2id',
-      kdfParams: {
-        memoryCost: argon2Params.memoryCost,
-        timeCost: argon2Params.timeCost,
-        parallelism: argon2Params.parallelism,
-      },
-      timestamp: Date.now(),
-      originalSize: file.length,
-    };
-    
-    // Clean up sensitive data
-    secureWipe(key);
-    
-    return {
-      metadata,
-      ciphertext: encryptionResult.ciphertext,
-      iv: encryptionResult.iv,
-      tag: encryptionResult.tag,
-    };
-  } catch (error) {
-    throw wrapError(error, 'File encryption failed');
-  }
-}
-
-/**
- * Encrypts a file and returns it as a base64-encoded string
- * 
- * This is useful for storing encrypted files in JSON or sending over HTTP.
- */
-export async function encryptFileToBase64(
-  file: Uint8Array,
-  password: string,
-  username: string,
-  options: FileEncryptionOptions = {}
-): Promise<string> {
-  const encrypted = await encryptFile(file, password, username, options);
-  
-  // Serialize to JSON
-  const serialized = {
-    metadata: encrypted.metadata,
-    ciphertext: toBase64(encrypted.ciphertext),
-    iv: toBase64(encrypted.iv),
-    tag: toBase64(encrypted.tag),
-  };
-  
-  return JSON.stringify(serialized);
-}
-
-// ============================================================================
-// File Decryption
-// ============================================================================
-
-/**
- * Decrypts a file using password-based decryption
- * 
- * This function works completely offline - no server required.
- * As long as the user has the correct password and username,
- * they can decrypt their files anywhere.
- * 
- * @param encryptedData - The encrypted file data
- * @param password - The user's password
- * @param username - The user's username
- * @param options - Optional decryption parameters
- * @returns The decrypted file
- */
-export async function decryptFile(
-  encryptedData: EncryptedFileData,
-  password: string,
-  username: string,
-  options: FileDecryptionOptions = {}
-): Promise<Uint8Array> {
-  try {
-    // Validate version
-    if (encryptedData.metadata.version !== FILE_ENCRYPTION_VERSION) {
-      throw new UnsupportedProtocolVersionError(
-        encryptedData.metadata.version,
-        FILE_ENCRYPTION_VERSION
-      );
-    }
-    
-    // Validate algorithm
-    if (encryptedData.metadata.algorithm !== 'AES-256-GCM') {
-      throw new CorruptedDataError(
-        `Unsupported algorithm: ${encryptedData.metadata.algorithm}`
-      );
-    }
-    
-    // Validate KDF
-    if (encryptedData.metadata.kdf !== 'Argon2id') {
-      throw new CorruptedDataError(
-        `Unsupported KDF: ${encryptedData.metadata.kdf}`
-      );
-    }
-    
-    // Derive decryption key (same as encryption key) with context
-    const context = options.context || 'account';
-    const key = await deriveFileEncryptionKey(password, username, context);
-    
-    // Decrypt the file
-    const decryptionResult = await decryptAESGCM({
-      ciphertext: encryptedData.ciphertext,
-      key,
-      iv: encryptedData.iv,
-      tag: encryptedData.tag,
-      ...(options.additionalData && { aad: options.additionalData }),
-    });
-    
-    // Validate decrypted size matches metadata
-    if (decryptionResult.plaintext.length !== encryptedData.metadata.originalSize) {
-      throw new CorruptedDataError(
-        `Size mismatch: expected ${encryptedData.metadata.originalSize}, got ${decryptionResult.plaintext.length}`
-      );
-    }
-    
-    // Clean up sensitive data
-    secureWipe(key);
-    
-    return decryptionResult.plaintext;
-  } catch (error) {
-    throw wrapError(error, 'File decryption failed');
-  }
-}
-
-/**
- * Decrypts a base64-encoded encrypted file
- */
-export async function decryptFileFromBase64(
-  base64Data: string,
-  password: string,
-  username: string,
-  options: FileDecryptionOptions = {}
-): Promise<Uint8Array> {
-  try {
-    // Parse JSON
-    const parsed = JSON.parse(base64Data);
-    
-    // Reconstruct EncryptedFileData
-    const encryptedData: EncryptedFileData = {
-      metadata: parsed.metadata,
-      ciphertext: fromBase64(parsed.ciphertext),
-      iv: fromBase64(parsed.iv),
-      tag: fromBase64(parsed.tag),
-    };
-    
-    return await decryptFile(encryptedData, password, username, options);
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw new CorruptedDataError('Invalid JSON format');
-    }
-    throw error;
   }
 }
 
@@ -458,14 +245,6 @@ export const fileEncryption = {
   deriveFileEncryptionKey,
   deriveFileEncryptionKeyWithCache,
   deriveAccountKeyWithCache,
-  
-  // Encryption
-  encryptFile,
-  encryptFileToBase64,
-  
-  // Decryption
-  decryptFile,
-  decryptFileFromBase64,
   
   // Account Key caching
   cacheAccountKey,

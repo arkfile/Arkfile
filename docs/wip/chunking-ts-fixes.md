@@ -1,6 +1,6 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: IN PROGRESS - Phases 1-5, 8 COMPLETE (all e2e tests passing 100%). Priority 1-5 from "MORE STUFF" COMPLETE. Security Enhancements COMPLETE (Go agent TTL/session-binding/mlock/access-counter + TS wrapping-key/session-binding/inactivity-lock/HMAC). Remaining: Phase 6 (parallel uploads — future), Phase 7 (UI progress polish), Phase 9 (cross-platform TS↔Go testing), Priority 6 (e2e max_accesses/expires_after tests).
+## Status: IN PROGRESS - Phases 1-5, 8 COMPLETE (all e2e tests passing 100%). Priority 1-5 from "MORE STUFF" COMPLETE. Security Enhancements COMPLETE (Go agent TTL/session-binding/mlock/access-counter + TS wrapping-key/session-binding/inactivity-lock/HMAC). Dead code cleanup COMPLETE (file-encryption.ts whole-file encrypt/decrypt removed, server handlers removed). Remaining: Phase 6 (parallel uploads — future), Phase 7 (UI progress polish), Phase 9 (cross-platform TS↔Go testing), Priority 6 (e2e max_accesses/expires_after tests).
 
 ## Context
 
@@ -939,6 +939,7 @@ The share button was doing `window.location.href = '/file-share.html?...'` — t
 2. **`download.ts`** — `downloadFileByName()` confirmed already removed (not present in codebase)
 3. **`app.ts`** — `window.arkfile` share exports confirmed NOT dead code — they are actively used by `shared.html` (`window.arkfile.shares.ShareAccessUI`). No removal needed.
 4. **`list.ts`** — Fixed null guard bug in `renderFileList()`: added `file?.file_id` check to prevent crash when API returns null entries (2026-03-04)
+5. **`file-encryption.ts` dead code removed (2026-03-04):** Removed 4 whole-file encrypt/decrypt functions (`encryptFile`, `decryptFile`, `encryptFileToBase64`, `decryptFileFromBase64`) and their export entries — zero external callers confirmed via grep. Removed unused imports (`secureWipe`, `encryptAESGCM`, `decryptAESGCM`, `toBase64`, `fromBase64`, `LIMITS`, `FILE_ENCRYPTION_VERSION`, and 5 error/type imports from `types.ts`). Updated module doc comment to reflect new purpose (key derivation & caching only). `bunx tsc --noEmit` passes clean.
 
 ---
 
