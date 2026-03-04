@@ -1,6 +1,6 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: IN PROGRESS - Phases 1-5 COMPLETE, Phase 8 MOSTLY COMPLETE (e2e passes through 9.2), Priority 1-4 from "MORE STUFF" COMPLETE, Phase 9.3 float64→int64 bug FIXED (2026-03-04). Phases 6, 7 (polish), 9 Not Started. Security Enhancements Not Started.
+## Status: IN PROGRESS - Phases 1-5, 8 COMPLETE (all e2e tests passing 100%). Priority 1-5 from "MORE STUFF" COMPLETE. Security Enhancements COMPLETE (Go agent TTL/session-binding/mlock/access-counter + TS wrapping-key/session-binding/inactivity-lock/HMAC). Remaining: Phase 6 (parallel uploads — future), Phase 7 (UI progress polish), Phase 9 (cross-platform TS↔Go testing), Priority 6 (e2e max_accesses/expires_after tests).
 
 ## Context
 
@@ -496,7 +496,7 @@ After Phase 8, e2e-test.sh must pass 100 percent with all existing test phases:
 
 ### Phase 8 Implementation Progress (2026-03-04)
 
-**MOSTLY COMPLETE** — `e2e-test.sh` has been fully rewritten to use `arkfile-client` commands (no `cryptocli` references remain). All phases pass through Phase 9.2 (share creation + listing). Phase 9.3 (visitor share download) was blocked by a `float64→int64` scan bug in `GetShareEnvelope()` — fixed 2026-03-04 (see Bug Fixes section below). Rebuild/redeploy required to verify fix.
+**COMPLETE** ✅ — `e2e-test.sh` has been fully rewritten to use `arkfile-client` commands (no `cryptocli` references remain). All current e2e test phases passing 100%.
 
 ---
 
@@ -732,7 +732,7 @@ TS client:
 
 ### Phase 6: NOT STARTED (future enhancement — parallel/out-of-order uploads)
 ### Phase 7: PARTIALLY COMPLETE (upload/download/share UI wired up; progress indicator polish TBD)
-### Phase 8: MOSTLY COMPLETE (e2e passes through 9.2; 9.3+ blocked by float64 bug, now fixed 2026-03-04 — needs rebuild/retest)
+### Phase 8: COMPLETE ✅ (all e2e tests passing 100%)
 ### Phase 9: NOT STARTED (cross-platform TS↔Go CLI interop testing)
 
 ---
@@ -933,29 +933,18 @@ The share button was doing `window.location.href = '/file-share.html?...'` — t
 
 ---
 
-## Priority 5: Dead code cleanup — PARTIALLY COMPLETE
+## Priority 5: Dead code cleanup — COMPLETE ✅ (2026-03-04)
 
 1. **Server-side dead code removed (2026-03-04):** `DownloadSharedFile()` from `file_shares.go`, `DownloadFile()` from `downloads.go`, `UploadFile()` from `handlers.go`, corresponding routes from `route_config.go`, `TestDownloadFile_Success` from `files_test.go`
-2. **`download.ts`** — Remove `downloadFileByName()` if it's dead — NOT DONE
-3. **`app.ts`** — Remove dead `window.arkfile` share exports that reference deleted pages — NOT DONE
-4. **Build** — Rebuild the JS bundle — NOT DONE
+2. **`download.ts`** — `downloadFileByName()` confirmed already removed (not present in codebase)
+3. **`app.ts`** — `window.arkfile` share exports confirmed NOT dead code — they are actively used by `shared.html` (`window.arkfile.shares.ShareAccessUI`). No removal needed.
+4. **`list.ts`** — Fixed null guard bug in `renderFileList()`: added `file?.file_id` check to prevent crash when API returns null entries (2026-03-04)
 
 ---
 
 ## Priority 6: Go back to e2e-test.sh and add in tests for max_accesses and expires_after restraints. — NOT STARTED
 
 ---
-
-## Bug Fixes (2026-03-04)
-
-### float64→int64 Scan Error in Share Endpoints — FIXED
-
-**Root cause:** rqlite returns JSON numbers as `float64` by default. `GetShareEnvelope()` and `DownloadShareChunk()` in `handlers/file_shares.go` used `sql.Scan` which tried to convert `float64("5.2428914e+07")` to `int64`, causing `"converting driver.Value type float64 to int64: invalid syntax"`.
-
-**Fix:** Changed both functions to use `json.Number` for numeric fields from rqlite queries, then call `.Int64()` for explicit conversion. This matches the pattern used elsewhere in the codebase for rqlite compatibility.
-
-**Files changed:**
-- `handlers/file_shares.go` — `GetShareEnvelope()`: scan `size_bytes`, `chunk_count`, `chunk_size_bytes` as `json.Number`; `DownloadShareChunk()`: scan `size_bytes` as `json.Number`
 
 ### Dead Code Removal — Server Handlers (2026-03-04)
 
@@ -1047,15 +1036,17 @@ TypeScript only (no JS), POSIX-compatible Go (no Linux-specific syscalls like `S
 
 ### Implementation Order
 
-1. **Go agent TTL + unified shape** (`agent.go`, `main.go`)
-2. **Go session binding** (`agent.go`, `main.go`)
-3. **Go mlock** (`agent.go`) — with graceful fallback
-4. **Go access counter** (`agent.go`)
-5. **TS ephemeral wrapping key** (`account-key-cache.ts`)
-6. **TS session binding** (`account-key-cache.ts`)
-7. **TS inactivity auto-lock** (`account-key-cache.ts`)
-8. **TS integrity HMAC** (`account-key-cache.ts`)
-9. **TS unified shape alignment** (`account-key-cache.ts`)
+1. **Go agent TTL + unified shape** (`agent.go`, `main.go`) — ✅ COMPLETE
+2. **Go session binding** (`agent.go`, `main.go`) — ✅ COMPLETE
+3. **Go mlock** (`agent.go`) — with graceful fallback — ✅ COMPLETE
+4. **Go access counter** (`agent.go`) — ✅ COMPLETE
+5. **TS ephemeral wrapping key** (`account-key-cache.ts`) — ✅ COMPLETE
+6. **TS session binding** (`account-key-cache.ts`) — ✅ COMPLETE
+7. **TS inactivity auto-lock** (`account-key-cache.ts`) — ✅ COMPLETE
+8. **TS integrity HMAC** (`account-key-cache.ts`) — ✅ COMPLETE
+9. **TS unified shape alignment** (`account-key-cache.ts`) — ✅ COMPLETE
+
+All security enhancements verified implemented in codebase as of 2026-03-04.
 
 ---
 

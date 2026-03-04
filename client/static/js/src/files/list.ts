@@ -48,6 +48,12 @@ export function displayFiles(data: FilesResponse): void {
 
   filesList.innerHTML = '';
 
+  if (!data.files || data.files.length === 0) {
+    filesList.innerHTML = '<div class="no-files">No files uploaded yet.</div>';
+    updateStorageInfo(data.storage);
+    return;
+  }
+
   data.files.forEach(file => {
     const fileElement = document.createElement('div');
     fileElement.className = 'file-item';
