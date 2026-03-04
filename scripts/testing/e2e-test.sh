@@ -653,7 +653,7 @@ phase_9_share_operations() {
     local create_share_exit_code
 
     safe_exec create_share_output create_share_exit_code \
-        bash -c "printf '%s\n%s\n' '$TEST_PASSWORD' '$SHARE_PASSWORD' | $CLIENT \
+        bash -c "printf '%s\n' '$SHARE_PASSWORD' | $CLIENT \
         --server-url '$SERVER_URL' \
         --tls-insecure \
         share create \
