@@ -1,6 +1,6 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: IN PROGRESS - Phases 1-5, 8 COMPLETE (all e2e tests passing 100%). Priority 1-5 from "MORE STUFF" COMPLETE. Security Enhancements COMPLETE (Go agent TTL/session-binding/mlock/access-counter + TS wrapping-key/session-binding/inactivity-lock/HMAC). Dead code cleanup COMPLETE (file-encryption.ts whole-file encrypt/decrypt removed, server handlers removed). Remaining: Phase 6 (parallel uploads — future), Phase 7 (UI progress polish), Phase 9 (cross-platform TS↔Go testing), Priority 6 (e2e max_accesses/expires_after tests).
+## Status: IN PROGRESS - Phases 1-5, 8 COMPLETE (all e2e tests passing 100%). Priority 1-6 from "MORE STUFF" COMPLETE. Security Enhancements COMPLETE (Go agent TTL/session-binding/mlock/access-counter + TS wrapping-key/session-binding/inactivity-lock/HMAC). Dead code cleanup COMPLETE (file-encryption.ts whole-file encrypt/decrypt removed, server handlers removed). CLI account key cache opt-in COMPLETE (`--cache-key`/`--no-cache-key` flags + interactive prompt). Server `expires_after_minutes` COMPLETE (replaced `expires_after_hours`). CLI `--expires` duration parsing COMPLETE (`2m`/`24h`/`7d` style). TS expiration UI COMPLETE (radio buttons + numeric input). TS ProgressManager wired into upload flow COMPLETE. Account key derivation UI indicator COMPLETE. Remaining: Phase 6 (parallel uploads — future), Phase 7 (UI progress polish — partially complete), Phase 9 (cross-platform TS↔Go testing).
 
 ## Context
 
@@ -943,7 +943,44 @@ The share button was doing `window.location.href = '/file-share.html?...'` — t
 
 ---
 
-## Priority 6: Go back to e2e-test.sh and add in tests for max_accesses and expires_after restraints. — NOT STARTED
+## Priority 6: e2e-test.sh — max_accesses and expires_after tests — COMPLETE ✅ (2026-03-04)
+
+**File: `scripts/testing/e2e-test.sh`**
+
+Phase 9 (Share Operations) fully rewritten with comprehensive share constraint testing:
+
+**3 shares created with different constraints:**
+- **Share A** — No limits (unlimited access, no expiry, `--expires 0`)
+- **Share B** — `--max-downloads 2` (access-limited)
+- **Share C** — `--expires 2m` (time-limited, 2 minutes)
+
+**Each share uses a unique 18+ char password** meeting all share password requirements (uppercase, digits, special chars).
+
+**Anonymous visitor tests (logged out):**
+- Share A: unlimited download succeeds + SHA256 integrity verified
+- Share B: downloads 1/2 and 2/2 succeed, 3rd download correctly rejected (max_accesses enforced)
+- Share C: download before expiry succeeds, smart sleep waits for expiry, download after expiry correctly rejected
+
+**Smart sleep implementation:** Records `$SHARE_C_CREATED_AT` timestamp at creation, computes `wait_seconds = (created_at + 120 + 5_buffer) - now`, sleeps only the remaining time. If share creation + earlier tests took 30s, only sleeps 95s more.
+
+**Re-login, revoke, verify:**
+- Re-authenticates with `--cache-key` flag
+- Revokes Share A
+- Verifies revoked share download is rejected
+
+**Additional tests:**
+- Non-existent share ID rejection (negative test)
+- `--cache-key` flag added to Phase 7 login and Phase 9.10 re-login for account key caching
+
+**Also added during this session:**
+- CLI `--cache-key` / `--no-cache-key` flags (`cmd/arkfile-client/main.go`) — interactive prompt for account key caching with non-interactive override flags
+- Server `expires_after_minutes` (`handlers/file_shares.go`) — replaced `expires_after_hours` with minutes-based expiration
+- CLI `--expires` duration parsing (`cmd/arkfile-client/commands.go`) — accepts `2m`/`24h`/`7d` style, `0 = no expiry`
+- TS expiration UI (`client/static/js/src/files/share.ts`) — radio buttons for minutes/hours/days + numeric input
+- TS `expiresAfterMinutes` in share-creation (`client/static/js/src/shares/share-creation.ts`)
+- TS ProgressManager wired into upload flow (`client/static/js/src/files/upload.ts`)
+- Account key derivation UI indicator (spinner during Argon2id)
+- Account key cache opt-in UI (explicit user confirmation)
 
 ---
 
