@@ -7,7 +7,6 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -243,12 +242,13 @@ func GetShareEnvelope(c echo.Context) error {
 	// Get file size (plaintext metadata like filename/sha256 is inside the encrypted
 	// ShareEnvelope, decrypted client-side with the share password — no need to send
 	// server-side encrypted metadata that share recipients cannot decrypt)
-	var size sql.NullInt64
+	// Note: rqlite returns numbers as float64, so we scan into float64 and convert
+	var sizeF sql.NullFloat64
 	err = database.DB.QueryRow(`
 		SELECT size_bytes
 		FROM file_metadata
 		WHERE file_id = ?
-	`, share.FileID).Scan(&size)
+	`, share.FileID).Scan(&sizeF)
 
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
@@ -256,8 +256,8 @@ func GetShareEnvelope(c echo.Context) error {
 	}
 
 	var sizeBytes int64
-	if size.Valid {
-		sizeBytes = size.Int64
+	if sizeF.Valid {
+		sizeBytes = int64(sizeF.Float64)
 	}
 
 	// Log metadata access
@@ -505,180 +505,6 @@ func ListShares(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"shares": shares,
 	})
-}
-
-// DownloadSharedFile handles downloading a shared file (after successful password verification)
-func DownloadSharedFile(c echo.Context) error {
-	shareID := c.Param("id")
-
-	// Get Download Token from header
-	downloadToken := c.Request().Header.Get("X-Download-Token")
-	if downloadToken == "" {
-		logging.WarningLogger.Printf("Download attempt without token: share_id=%s", shareID[:8])
-		return echo.NewHTTPError(http.StatusForbidden, "Download token required")
-	}
-
-	// Validate share exists and isn't expired/revoked
-	var share struct {
-		FileID            string
-		OwnerUsername     string
-		ExpiresAt         *time.Time
-		RevokedAt         *time.Time
-		RevokedReason     sql.NullString
-		DownloadTokenHash string
-		AccessCount       int
-		MaxAccesses       sql.NullInt64
-	}
-
-	err := database.DB.QueryRow(`
-		SELECT file_id, owner_username, expires_at, revoked_at, revoked_reason, 
-		       download_token_hash, access_count, max_accesses
-		FROM file_share_keys 
-		WHERE share_id = ?
-	`, shareID).Scan(
-		&share.FileID,
-		&share.OwnerUsername,
-		&share.ExpiresAt,
-		&share.RevokedAt,
-		&share.RevokedReason,
-		&share.DownloadTokenHash,
-		&share.AccessCount,
-		&share.MaxAccesses,
-	)
-
-	if err == sql.ErrNoRows {
-		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
-	} else if err != nil {
-		logging.ErrorLogger.Printf("Database error accessing share %s: %v", shareID, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
-	}
-
-	// Check if share has been revoked
-	if share.RevokedAt != nil {
-		reason := "Share has been revoked"
-		if share.RevokedReason.Valid && share.RevokedReason.String != "" {
-			reason += ": " + share.RevokedReason.String
-		}
-		logging.WarningLogger.Printf("Download attempt on revoked share: share_id=%s", shareID[:8])
-		return echo.NewHTTPError(http.StatusForbidden, reason)
-	}
-
-	// Check if share has expired
-	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
-		logging.WarningLogger.Printf("Download attempt on expired share: share_id=%s", shareID[:8])
-		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
-	}
-
-	// Validate Download Token using constant-time comparison
-	computedHash, err := hashDownloadToken(downloadToken)
-	if err != nil {
-		logging.WarningLogger.Printf("Invalid download token format: share_id=%s, error=%v", shareID[:8], err)
-		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
-	}
-
-	if !constantTimeCompare(computedHash, share.DownloadTokenHash) {
-		logging.WarningLogger.Printf("Invalid download token: share_id=%s", shareID[:8])
-		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
-	}
-
-	// Check if max accesses limit has been reached
-	if share.MaxAccesses.Valid && share.AccessCount >= int(share.MaxAccesses.Int64) {
-		logging.WarningLogger.Printf("Download attempt on exhausted share: share_id=%s", shareID[:8])
-		return echo.NewHTTPError(http.StatusForbidden, "Download limit reached")
-	}
-
-	// Increment access count atomically using a transaction
-	tx, err := database.DB.Begin()
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to begin transaction: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
-	}
-	defer tx.Rollback()
-
-	// Lock the row and increment access_count
-	var newAccessCount int
-	err = tx.QueryRow(`
-		UPDATE file_share_keys 
-		SET access_count = access_count + 1 
-		WHERE share_id = ? 
-		RETURNING access_count
-	`, shareID).Scan(&newAccessCount)
-
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to increment access count: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
-	}
-
-	// Check if we've reached max_accesses and auto-revoke if so
-	if share.MaxAccesses.Valid && newAccessCount >= int(share.MaxAccesses.Int64) {
-		_, err = tx.Exec(`
-			UPDATE file_share_keys 
-			SET revoked_at = CURRENT_TIMESTAMP, revoked_reason = ? 
-			WHERE share_id = ?
-		`, "access_count", shareID)
-
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to auto-revoke share: %v", err)
-			// Continue anyway - the download should still succeed
-		} else {
-			logging.InfoLogger.Printf("Share auto-revoked (max downloads): share_id=%s", shareID[:8])
-		}
-	}
-
-	// Commit the transaction
-	if err = tx.Commit(); err != nil {
-		logging.ErrorLogger.Printf("Failed to commit transaction: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
-	}
-
-	// Get file storage info. Metadata like filename/sha256 is inside
-	// the encrypted ShareEnvelope, decrypted client-side.
-	var storageID string
-	var size sql.NullInt64
-
-	err = database.DB.QueryRow(`
-		SELECT storage_id, size_bytes
-		FROM file_metadata
-		WHERE file_id = ?
-	`, share.FileID).Scan(&storageID, &size)
-
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get file metadata for %s: %v", share.FileID, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
-	}
-
-	// Get file from object storage using storage_id
-	object, err := storage.Provider.GetObject(
-		c.Request().Context(),
-		storageID, // Use storage_id for object storage access
-		storage.GetObjectOptions{},
-	)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to retrieve file from storage: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file")
-	}
-	defer object.Close()
-
-	// Log download
-	entityID := logging.GetOrCreateEntityID(c)
-	logging.InfoLogger.Printf("Shared file downloaded: share_id=%s..., file=%s, entity_id=%s", shareID[:8], share.FileID, entityID)
-
-	// Set response headers for binary streaming
-	c.Response().Header().Set("Content-Type", "application/octet-stream")
-
-	if size.Valid {
-		c.Response().Header().Set("Content-Length", fmt.Sprintf("%d", size.Int64))
-	}
-
-	// Stream the encrypted file data directly
-	c.Response().WriteHeader(http.StatusOK)
-	_, err = io.Copy(c.Response().Writer, object)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to stream file: %v", err)
-		return err
-	}
-
-	return nil
 }
 
 // GetShareDownloadMetadata returns metadata about a shared file's chunks for resumable downloads

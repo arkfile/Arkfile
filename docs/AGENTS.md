@@ -61,6 +61,10 @@ Arkfile uses the same Account Password for two completely independent purposes: 
 
 **Share Password for Secure Sharing (Argon2id -> Share Key).** When a user creates a share link, a separate share password is required. Unlike account and custom passwords, share passwords use a random 32-byte salt (not deterministic). The share password is processed through Argon2id to derive a Share Key, which encrypts a Share Envelope containing the FEK, a download token, and file metadata (filename, size, SHA-256 hash). The encryption uses AES-GCM with Additional Authenticated Data (AAD = share_id + file_id) to cryptographically bind the envelope to a specific share. Recipients enter the share password, derive the same key, decrypt the envelope, extract the FEK, and decrypt the file. The share password is never sent to the server.
 
+## Use Cases & Consistency
+
+At all times consider an essential example of a user on a mobile device with 3 GB of RAM, attempting to encrypt/decrypt/upload/download a 6 GB file. Same for sharing: Consider an anonymous recipient trying to download and decrypt said 6 GB shared file on his mobile device with 3 GB of RAM. The app must work for all such users on contrained devices while respecting our security and privacy requirements. This means all file operations must used chunked streaming strategies, for example. There also must be only one way to do things for a given client type. e.g. for a Go CLI client, there must be only one way to encrypt and upload files, and download and decrypt files. Same for the TypeScript Web App frontend client functions. As much as possible strive to ensure that the Go CLI client functions and the TypeScript frontend functions mirror each other in naming, structure and logic for said critical functions too.
+
 ## Using Git
 
 Do not add files to commit, nor create any commits yourself at any time. This is up to the developers. Encourage saving progress during large projects, but DO NOT COMMIT or PUSH code to git at any time by yourself.

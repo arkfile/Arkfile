@@ -81,9 +81,7 @@ func RegisterRoutes() {
 	// Files - require authentication AND TOTP
 
 	totpProtectedGroup.GET("/api/files", ListFiles)
-	totpProtectedGroup.POST("/api/upload", UploadFile)
 	totpProtectedGroup.GET("/api/files/:fileId/meta", GetFileMeta)
-	totpProtectedGroup.GET("/api/files/:fileId", DownloadFile)
 	totpProtectedGroup.DELETE("/api/files/:fileId", DeleteFile)
 
 	// Chunked downloads - require TOTP
@@ -109,7 +107,6 @@ func RegisterRoutes() {
 	publicShareGroup.Use(TimingProtectionMiddleware)                    // Then timing protection (for valid requests)
 	publicShareGroup.GET("/:id", GetSharedFile)                         // Share access page
 	publicShareGroup.GET("/:id/envelope", GetShareEnvelope)             // Get share envelope for client-side decryption
-	publicShareGroup.GET("/:id/download", DownloadSharedFile)           // Download shared file
 	publicShareGroup.GET("/:id/metadata", GetShareDownloadMetadata)     // Get metadata for shared file download
 	publicShareGroup.GET("/:id/chunks/:chunkIndex", DownloadShareChunk) // Download chunk of shared file
 

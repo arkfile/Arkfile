@@ -1,6 +1,6 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: IN PROGRESS - Phases 1-5 COMPLETE (including share metadata cleanup and Go CLI unification), Phases 6-9 Not Started
+## Status: IN PROGRESS - Phases 1-5 COMPLETE, Phase 8 MOSTLY COMPLETE (e2e passes through 9.2), Priority 1-4 from "MORE STUFF" COMPLETE, Phase 9.3 float64→int64 bug FIXED (2026-03-04). Phases 6, 7 (polish), 9 Not Started. Security Enhancements Not Started.
 
 ## Context
 
@@ -494,6 +494,10 @@ After Phase 8, e2e-test.sh must pass 100 percent with all existing test phases:
 - Phase 9: Share operations using `arkfile-client share create/download`
 - Phase 10-11: Cleanup
 
+### Phase 8 Implementation Progress (2026-03-04)
+
+**MOSTLY COMPLETE** — `e2e-test.sh` has been fully rewritten to use `arkfile-client` commands (no `cryptocli` references remain). All phases pass through Phase 9.2 (share creation + listing). Phase 9.3 (visitor share download) was blocked by a `float64→int64` scan bug in `GetShareEnvelope()` — fixed 2026-03-04 (see Bug Fixes section below). Rebuild/redeploy required to verify fix.
+
 ---
 
 ## Phase 9: Cross-Platform Testing
@@ -726,7 +730,10 @@ TS client:
 
 ### Phase 5: COMPLETE ✓ 2026-02-26 (see Phase 5 section above)
 
-### Phases 6-9: NOT STARTED
+### Phase 6: NOT STARTED (future enhancement — parallel/out-of-order uploads)
+### Phase 7: PARTIALLY COMPLETE (upload/download/share UI wired up; progress indicator polish TBD)
+### Phase 8: MOSTLY COMPLETE (e2e passes through 9.2; 9.3+ blocked by float64 bug, now fixed 2026-03-04 — needs rebuild/retest)
+### Phase 9: NOT STARTED (cross-platform TS↔Go CLI interop testing)
 
 ---
 
@@ -877,25 +884,25 @@ Here's the full plan, properly prioritized:
 
 ---
 
-## Priority 1: Server-side — Accept `max_accesses` in `CreateFileShare`
+## Priority 1: Server-side — Accept `max_accesses` in `CreateFileShare` — COMPLETE ✓ (2026-02-27)
 
 **File: `handlers/file_shares.go`**
 
-The `ShareRequest` struct is missing `max_accesses`. The DB column exists, `DownloadShareChunk` already enforces it, but `CreateFileShare` never writes it. Fix:
+The `ShareRequest` struct was missing `max_accesses`. The DB column exists, `DownloadShareChunk` already enforces it, but `CreateFileShare` never wrote it. Fix:
 
 1. Add `MaxAccesses *int `json:"max_accesses"`` to `ShareRequest` struct
 2. Add server-side validation: if provided, must be >= 1 (no zero, no negative)
 3. Pass it through to the INSERT statement (the column already exists in the schema)
 
-That's ~10 lines of Go changes.
+That was ~10 lines of Go changes.
 
 ---
 
-## Priority 2: Client-side share.ts — No hardcoded values, full feature set
+## Priority 2: Client-side share.ts — No hardcoded values, full feature set — COMPLETE ✓ (2026-02-27)
 
 **File: `client/static/js/src/files/share.ts`**
 
-Current problems:
+Current problems (all fixed):
 - **Hardcoded `14` for min password length** — must use `validateSharePassword()` from `password-validation.ts` which loads from `/api/config/password-requirements` (where `minSharePasswordLength` = 18)
 - **No max downloads UI** — the server will now accept it, so expose it
 - **No real-time password validation feedback** — just a dumb length check
@@ -909,7 +916,7 @@ Fix:
 
 ---
 
-## Priority 3: ShareCreator — Pass `max_accesses` to server
+## Priority 3: ShareCreator — Pass `max_accesses` to server — COMPLETE ✓ (2026-02-27)
 
 **File: `client/static/js/src/shares/share-creation.ts`**
 
@@ -918,23 +925,47 @@ Fix:
 
 ---
 
-## Priority 4: Fix share button in list.ts
+## Priority 4: Fix share button in list.ts — COMPLETE ✓ (2026-02-27)
 
 **File: `client/static/js/src/files/list.ts`**
 
-The share button currently does `window.location.href = '/file-share.html?...'` — that page was deleted. Change it to call `shareFile(file.file_id, file.password_type)` from the new `share.ts` module.
+The share button was doing `window.location.href = '/file-share.html?...'` — that page was deleted. Changed to call `shareFile(file.file_id, file.password_type)` from the new `share.ts` module.
 
 ---
 
-## Priority 5: Dead code cleanup
+## Priority 5: Dead code cleanup — PARTIALLY COMPLETE
 
-1. **`download.ts`** — Remove `downloadFileByName()` if it's dead
-2. **`app.ts`** — Remove dead `window.arkfile` share exports that reference deleted pages
-3. **Build** — Rebuild the JS bundle
+1. **Server-side dead code removed (2026-03-04):** `DownloadSharedFile()` from `file_shares.go`, `DownloadFile()` from `downloads.go`, `UploadFile()` from `handlers.go`, corresponding routes from `route_config.go`, `TestDownloadFile_Success` from `files_test.go`
+2. **`download.ts`** — Remove `downloadFileByName()` if it's dead — NOT DONE
+3. **`app.ts`** — Remove dead `window.arkfile` share exports that reference deleted pages — NOT DONE
+4. **Build** — Rebuild the JS bundle — NOT DONE
 
 ---
 
-## Priority 6: Go back to e2e-test.sh and add in tests for max_accesses and expires_after restraints.
+## Priority 6: Go back to e2e-test.sh and add in tests for max_accesses and expires_after restraints. — NOT STARTED
+
+---
+
+## Bug Fixes (2026-03-04)
+
+### float64→int64 Scan Error in Share Endpoints — FIXED
+
+**Root cause:** rqlite returns JSON numbers as `float64` by default. `GetShareEnvelope()` and `DownloadShareChunk()` in `handlers/file_shares.go` used `sql.Scan` which tried to convert `float64("5.2428914e+07")` to `int64`, causing `"converting driver.Value type float64 to int64: invalid syntax"`.
+
+**Fix:** Changed both functions to use `json.Number` for numeric fields from rqlite queries, then call `.Int64()` for explicit conversion. This matches the pattern used elsewhere in the codebase for rqlite compatibility.
+
+**Files changed:**
+- `handlers/file_shares.go` — `GetShareEnvelope()`: scan `size_bytes`, `chunk_count`, `chunk_size_bytes` as `json.Number`; `DownloadShareChunk()`: scan `size_bytes` as `json.Number`
+
+### Dead Code Removal — Server Handlers (2026-03-04)
+
+Removed functions and routes that were superseded by the chunked upload/download system:
+
+- `handlers/file_shares.go` — removed `DownloadSharedFile()` (old whole-file share download, replaced by `DownloadShareChunk`)
+- `handlers/downloads.go` — removed `DownloadFile()` (old whole-file download, replaced by `DownloadFileChunk`)
+- `handlers/handlers.go` — removed `UploadFile()` (old whole-file upload, replaced by chunked upload system)
+- `handlers/route_config.go` — removed corresponding routes: `GET /api/files/:fileId/download`, `GET /api/shares/:shareId/download`
+- `handlers/files_test.go` — removed `TestDownloadFile_Success` (tested deleted function)
 
 ---
 

@@ -3,9 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -19,63 +17,6 @@ import (
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/models"
 )
-
-// Test DownloadFile
-
-// TestDownloadFile_Success tests successful file download with encrypted metadata
-func TestDownloadFile_Success(t *testing.T) {
-	username := "downloader"
-	fileID := "test-file-id-123"
-	fileContent := "This is the content to be downloaded."
-	fileSize := int64(len(fileContent))
-	passwordHint := "download hint"
-	passwordType := "account"
-	// Base64 encoded encrypted metadata for testing
-	encryptedFilename := "ZW5jcnlwdGVkRmlsZW5hbWU=" // "encryptedFilename" in base64
-	filenameNonce := "bm9uY2VGaWxlbmFtZQ=="         // "nonceFilename" in base64
-	encryptedSha256sum := "ZW5jcnlwdGVkU2hhMjU2"    // "encryptedSha256" in base64
-	sha256sumNonce := "bm9uY2VTaGEyNTY="            // "nonceSha256" in base64
-
-	c, rec, mockDB, mockStorage := setupTestEnv(t, http.MethodGet, "/files/:fileId", nil)
-	c.SetParamNames("fileId")
-	c.SetParamValues(fileID)
-	claims := &auth.Claims{Username: username}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	c.Set("user", token)
-
-	// Query matches models.GetFileByFileID function
-	metadataSQL := `SELECT id, file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, COALESCE\(encrypted_file_sha256sum, ''\), encrypted_fek, size_bytes, padded_size, upload_date FROM file_metadata WHERE file_id = \?`
-	storageID := "test-storage-id-123"
-	paddedSize := fileSize + 1024 // Mock padded size
-	metaRows := sqlmock.NewRows([]string{"id", "file_id", "storage_id", "owner_username", "password_hint", "password_type", "filename_nonce", "encrypted_filename", "sha256sum_nonce", "encrypted_sha256sum", "encrypted_file_sha256sum", "encrypted_fek", "size_bytes", "padded_size", "upload_date"}).
-		AddRow(1, fileID, storageID, username, passwordHint, passwordType, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, "", "", fileSize, paddedSize, time.Now())
-	mockDB.ExpectQuery(metadataSQL).WithArgs(fileID).WillReturnRows(metaRows)
-
-	// Check if user is approved - add user query (matches models.GetUserByUsername)
-	getUserSQL := `SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
-	userRows := sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-		AddRow(1, username, time.Now(), 1000, 10000000, true, nil, nil, false)
-	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
-
-	mockStorage.On("GetObjectWithoutPadding", mock.Anything, storageID, fileSize, mock.AnythingOfType("storage.GetObjectOptions")).
-		Return(io.NopCloser(strings.NewReader(fileContent)), nil).Once()
-
-	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
-	mockDB.ExpectExec(logActionSQL).WithArgs(username, "downloaded", fileID).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	err := DownloadFile(c)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	// Verify file content
-	assert.Equal(t, fileContent, rec.Body.String())
-	assert.Equal(t, "application/octet-stream", rec.Header().Get("Content-Type"))
-	assert.Equal(t, fmt.Sprintf("attachment; filename=%s", fileID), rec.Header().Get("Content-Disposition"))
-	assert.Equal(t, fmt.Sprintf("%d", fileSize), rec.Header().Get("Content-Length"))
-
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-	mockStorage.AssertExpectations(t)
-}
 
 // Test DeleteFile
 
