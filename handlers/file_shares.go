@@ -634,8 +634,8 @@ func DownloadShareChunk(c echo.Context) error {
 		RevokedAt         *time.Time
 		RevokedReason     sql.NullString
 		DownloadTokenHash string
-		AccessCount       int
-		MaxAccesses       sql.NullInt64
+		AccessCount       float64
+		MaxAccesses       sql.NullFloat64
 	}
 
 	err = database.DB.QueryRow(`
@@ -692,7 +692,7 @@ func DownloadShareChunk(c echo.Context) error {
 	// Check if max accesses limit has been reached (only block NEW downloads on chunk 0)
 	// For chunks 1+, allow the download to continue even if limit was just reached
 	// This ensures in-progress downloads can complete all chunks
-	if chunkIndex == 0 && share.MaxAccesses.Valid && share.AccessCount >= int(share.MaxAccesses.Int64) {
+	if chunkIndex == 0 && share.MaxAccesses.Valid && int64(share.AccessCount) >= int64(share.MaxAccesses.Float64) {
 		logging.WarningLogger.Printf("Chunk download attempt on exhausted share: share_id=%s", shareID[:8])
 		return echo.NewHTTPError(http.StatusForbidden, "Download limit reached")
 	}
@@ -785,7 +785,7 @@ func DownloadShareChunk(c echo.Context) error {
 		}
 
 		// Log if this was the last allowed download
-		if share.MaxAccesses.Valid && share.AccessCount+1 >= int(share.MaxAccesses.Int64) {
+		if share.MaxAccesses.Valid && int64(share.AccessCount)+1 >= int64(share.MaxAccesses.Float64) {
 			logging.InfoLogger.Printf("Share exhausted (max downloads reached): share_id=%s", shareID[:8])
 		}
 	}
