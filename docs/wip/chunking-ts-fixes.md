@@ -1,6 +1,6 @@
 # Chunked Upload and Download: TS and Go CLI Client Fixes Plan
 
-## Status: IN PROGRESS - Phases 1-5, 8 COMPLETE (all e2e tests passing 100%). Priority 1-6 from "MORE STUFF" COMPLETE. Security Enhancements COMPLETE (Go agent TTL/session-binding/mlock/access-counter + TS wrapping-key/session-binding/inactivity-lock/HMAC). Dead code cleanup COMPLETE (file-encryption.ts whole-file encrypt/decrypt removed, server handlers removed). CLI account key cache opt-in COMPLETE (`--cache-key`/`--no-cache-key` flags + interactive prompt). Server `expires_after_minutes` COMPLETE (replaced `expires_after_hours`). CLI `--expires` duration parsing COMPLETE (`2m`/`24h`/`7d` style). TS expiration UI COMPLETE (radio buttons + numeric input). TS ProgressManager wired into upload flow COMPLETE. Account key derivation UI indicator COMPLETE. Remaining: Phase 6 (parallel uploads — future), Phase 7 (UI progress polish — partially complete), Phase 9 (cross-platform TS↔Go testing).
+## Status: IN PROGRESS - Phases 1-5, 7-8 COMPLETE (all e2e tests passing 100%). Priority 1-6 from "MORE STUFF" COMPLETE. Security Enhancements COMPLETE (Go agent TTL/session-binding/mlock/access-counter + TS wrapping-key/session-binding/inactivity-lock/HMAC). Dead code cleanup COMPLETE (file-encryption.ts whole-file encrypt/decrypt removed, server handlers removed). CLI account key cache opt-in COMPLETE (`--cache-key`/`--no-cache-key` flags + interactive prompt). Server `expires_after_minutes` COMPLETE (replaced `expires_after_hours`). CLI `--expires` duration parsing COMPLETE (`2m`/`24h`/`7d` style). TS expiration UI COMPLETE (radio buttons + numeric input). TS ProgressManager wired into upload flow COMPLETE. Account key derivation UI indicator COMPLETE. Phase 7 UI polish COMPLETE (download progress + custom password toggle verified). Remaining: Phase 6 (parallel uploads — future), Phase 9 (cross-platform TS↔Go testing).
 
 ## Context
 
@@ -731,7 +731,33 @@ TS client:
 ### Phase 5: COMPLETE ✓ 2026-02-26 (see Phase 5 section above)
 
 ### Phase 6: NOT STARTED (future enhancement — parallel/out-of-order uploads)
-### Phase 7: PARTIALLY COMPLETE (upload/download/share UI wired up; progress indicator polish TBD)
+
+### Phase 7: COMPLETE ✅ (2026-03-05)
+
+All four Phase 7 deliverables verified complete:
+
+**1. Upload progress indicators — ALREADY COMPLETE (from Priority 6 work)**
+- `upload.ts`: ProgressManager wired in with phases: `deriving-key` (indeterminate), `encrypting` (per-chunk %), `uploading` (per-chunk %), `completing`
+- Account key derivation spinner shown during Argon2id (3-8 seconds)
+
+**2. Download progress indicators — ALREADY COMPLETE**
+- `download.ts`: `showProgress()` with indeterminate mode during Argon2id key derivation (both account and custom paths), `hideProgress()` after derivation
+- `streaming-download.ts` → `downloadFile()`: indeterminate progress for metadata fetch → per-chunk percentage updates with speed/remaining time → `hideProgress()` on completion
+- `streaming-download.ts` → `downloadSharedFile()`: same full progress treatment for share downloads
+- Error states handled with `updateProgress({ error })` + 3-second delay before `hideProgress()`
+
+**3. Share download progress — ALREADY COMPLETE**
+- `share-access.ts`: passes `showProgressUI: true` to `downloadSharedFileChunked()`, with `onProgress` callback updating status div
+- `StreamingDownloadManager` handles the full progress overlay for share chunk downloads
+
+**4. Custom password UI toggle — ALREADY COMPLETE**
+- `app.ts`: radio buttons `input[name="passwordType"]` have `change` event listener
+- Selecting "custom" shows `#customPasswordSection` div (removes `.hidden` class)
+- Selecting "account" hides `#customPasswordSection` and clears `#filePassword` input
+- `index.html`: correct structure with radio buttons → hidden section → password + hint inputs
+
+**Audit method:** Read-only code audit of `download.ts`, `streaming-download.ts`, `share-access.ts`, `app.ts`, and `index.html`. All ProgressManager integration and custom password toggle logic confirmed present and functional. No code changes needed.
+
 ### Phase 8: COMPLETE ✅ (all e2e tests passing 100%)
 ### Phase 9: NOT STARTED (cross-platform TS↔Go CLI interop testing)
 
