@@ -173,22 +173,20 @@ TOTP secrets are encrypted using the user's OPAQUE-derived session key, ensuring
 
 ### Password Validation and Security Requirements
 
-Arkfile enforces different password requirements based on the authentication context, with comprehensive entropy validation and pattern detection to ensure strong security.
+Arkfile enforces different password requirements based on the authentication context. All requirements are defined in a single source of truth (`crypto/password-requirements.json`) and embedded at build time into both the Go server/CLI and the TypeScript client. Validation is deterministic: a password either meets the minimum length and character class requirements or it does not.
 
 **Account and Custom Password Requirements:**
-- Minimum 14+ characters with 64+ bit entropy validation
-- Advanced pattern detection penalizes common weaknesses including repeating characters, sequential patterns, dictionary words, and predictable substitutions
+- Minimum 15 characters with at least 2 of 4 character classes (uppercase, lowercase, number, special character)
 - Real-time validation provides immediate feedback during password creation
 - Uses OPAQUE protocol providing complete zero-knowledge authentication
 
 **Share Password Requirements:**
-- Minimum 18+ characters with 64+ bit entropy validation  
-- Same advanced pattern detection as account passwords
+- Minimum 20 characters with at least 2 of 4 character classes (uppercase, lowercase, number, special character)
 - Uses Argon2id with 128 MiB memory cost for anonymous access
 - Limited attack surface affecting only shared files
 
-**Entropy Calculation and Pattern Detection:**
-The system performs sophisticated analysis of password entropy that goes beyond simple character counting. Pattern penalties are applied for weak constructions such as repeated character sequences (90% penalty), common keyboard patterns like "qwerty" or sequential numbers (70% penalty), dictionary words and predictable substitutions (variable penalties), ensuring that passwords meet genuine randomness requirements rather than superficial complexity rules.
+**Validation Approach:**
+The system uses a straightforward, deterministic check: passwords must meet the minimum length for their context and contain characters from at least 2 of the 4 character classes (uppercase letters, lowercase letters, numbers, special characters). This approach provides clear, predictable requirements that users can easily satisfy while still ensuring strong passwords through generous minimum lengths and the memory-hard Argon2id key derivation that makes brute-force attacks impractical.
 
 ### Password Contexts and Key Derivation
 

@@ -450,7 +450,7 @@ curl -s http://localhost:8080/health | jq '.'
 3. **User Registration Test:**
    - Click "Register" on web interface
    - Enter test credentials: `admin@test.local` / `AdminTest123!SecurePassword2025`
-   - Verify registration success and password meets entropy requirements
+   - Verify registration success and password meets requirements
 
 4. **File Operations Test:**
    - Upload a test file
@@ -507,7 +507,7 @@ echo "Hello Arkfile! Test file for validation." > ~/test-file.txt
 - Click 'Create Account'
 - **Expected**: Registration success message and redirect to dashboard
 - **If registration fails**:
-  - Check password meets requirements (18+ chars, high entropy)
+  - Check password meets requirements (15+ chars, 2+ character classes)
   - Verify database is writable
   - Check browser console for JavaScript errors
 
