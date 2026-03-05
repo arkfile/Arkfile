@@ -68,13 +68,12 @@ export interface SharePasswordValidation {
  * @returns Validation result with feedback
  */
 export async function validateSharePasswordStrength(
-  password: string,
-  userInputs?: string[]
+  password: string
 ): Promise<SharePasswordValidation> {
-  const result = await validateSharePassword(password, userInputs);
+  const result = await validateSharePassword(password);
   
   return {
-    valid: result.meets_requirements && result.strength_score >= 3,
+    valid: result.meets_requirements,
     result,
   };
 }

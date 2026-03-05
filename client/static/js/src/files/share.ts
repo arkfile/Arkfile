@@ -220,7 +220,7 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
         }
         const result = await validateSharePassword(pw);
         passwordValid = result.meets_requirements;
-        // Build feedback list
+        // Build feedback list from requirement checks
         const items: string[] = [];
         const req = result.requirements;
         const icon = (met: boolean) => met ? '✅' : '❌';
@@ -229,11 +229,10 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
         items.push(`<li>${icon(req.lowercase.met)} ${req.lowercase.message}</li>`);
         items.push(`<li>${icon(req.number.met)} ${req.number.message}</li>`);
         items.push(`<li>${icon(req.special.met)} ${req.special.message}</li>`);
-        // Entropy / strength
-        const strengthLabels = ['Very weak', 'Weak', 'Fair', 'Good', 'Strong'];
-        const label = strengthLabels[result.strength_score] || 'Unknown';
+        // Overall status
         const color = result.meets_requirements ? 'var(--success-color, #22c55e)' : 'var(--error-color, #ef4444)';
-        items.push(`<li style="color:${color}; margin-top:4px;">Strength: ${label} (${Math.round(result.entropy)} bits)</li>`);
+        const statusLabel = result.meets_requirements ? 'Requirements met' : 'Requirements not met';
+        items.push(`<li style="color:${color}; margin-top:4px;">${statusLabel}</li>`);
         feedbackEl.innerHTML = items.join('');
       }, 300);
     });
@@ -254,7 +253,7 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
       submitBtn.textContent = 'Validating…';
       const validation = await validateSharePassword(pw);
       if (!validation.meets_requirements) {
-        errorEl.textContent = validation.suggestions.join('. ') || 'Password does not meet requirements.';
+        errorEl.textContent = validation.reasons.join('. ') || 'Password does not meet requirements.';
         errorEl.style.display = 'block';
         submitBtn.disabled = false;
         submitBtn.textContent = 'Create Share';

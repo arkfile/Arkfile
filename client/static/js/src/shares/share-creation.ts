@@ -118,7 +118,7 @@ export class ShareCreator {
       if (!validation.meets_requirements) {
         return {
           success: false,
-          error: 'Password does not meet requirements: ' + validation.feedback.join('. ')
+          error: 'Password does not meet requirements: ' + validation.reasons.join('. ')
         };
       }
 

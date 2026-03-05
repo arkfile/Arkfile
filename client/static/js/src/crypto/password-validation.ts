@@ -1,36 +1,30 @@
 /**
  * Password Validation Module
- * 
- * Provides client-side password validation using zxcvbn library.
- * Matches the Go backend validation logic for consistent UX.
- * 
- * Uses unified config from config/password-requirements.json
+ *
+ * Deterministic password validation: length + character class checks.
+ * Matches the Go backend (crypto/password_validation.go) exactly.
+ *
+ * Uses unified config from crypto/password-requirements.json served via API.
+ * No zxcvbn, no entropy, no strength scores — pass/fail only.
  */
 
-import type zxcvbn from 'zxcvbn';
-
-type ZXCVBNResult = zxcvbn.ZXCVBNResult;
-
 /**
- * Password requirements configuration
+ * Password requirements configuration (matches Go PasswordRequirements)
  */
 interface PasswordConfig {
   minAccountPasswordLength: number;
   minCustomPasswordLength: number;
   minSharePasswordLength: number;
-  minEntropyBits: number;
-  requireUppercase: boolean;
-  requireLowercase: boolean;
-  requireNumber: boolean;
-  requireSpecial: boolean;
+  minCharacterClassesRequired: number;
+  specialCharacters: string;
 }
 
 // Password requirements - loaded from config file
 let PASSWORD_CONFIG: PasswordConfig | null = null;
 
 /**
- * Load password requirements from API endpoint
- * This ensures client and server always use the same embedded configuration
+ * Load password requirements from API endpoint.
+ * Ensures client and server always use the same embedded configuration.
  */
 async function loadPasswordConfig(): Promise<PasswordConfig> {
   if (PASSWORD_CONFIG !== null) {
@@ -46,8 +40,6 @@ async function loadPasswordConfig(): Promise<PasswordConfig> {
     PASSWORD_CONFIG = config;
     return config;
   } catch (error) {
-    // If the API is unreachable, password validation cannot proceed.
-    // (The user can't register/login without the server anyway.)
     throw new Error(`Failed to load password requirements from API: ${error}`);
   }
 }
@@ -63,7 +55,7 @@ export interface RequirementStatus {
 }
 
 /**
- * Individual requirement checks
+ * Individual requirement checks (matches Go RequirementChecks)
  */
 export interface RequirementChecks {
   length: RequirementStatus;
@@ -71,39 +63,29 @@ export interface RequirementChecks {
   lowercase: RequirementStatus;
   number: RequirementStatus;
   special: RequirementStatus;
+  class_count: number;
+  classes_required: number;
 }
 
 /**
- * Password validation result - matches Go's PasswordValidationResult
+ * Password validation result (matches Go PasswordValidationResult)
  */
 export interface PasswordValidationResult {
-  entropy: number;
-  strength_score: number;
-  feedback: string[];
   meets_requirements: boolean;
-  pattern_penalties?: string[];
   requirements: RequirementChecks;
-  suggestions: string[];
-}
-
-// Lazy-loaded zxcvbn module
-let zxcvbnModule: ((password: string, userInputs?: string[]) => ZXCVBNResult) | null = null;
-
-/**
- * Lazy load zxcvbn library (only when needed)
- */
-async function getZxcvbn(): Promise<(password: string, userInputs?: string[]) => ZXCVBNResult> {
-  if (!zxcvbnModule) {
-    const module = await import('zxcvbn');
-    zxcvbnModule = module.default;
-  }
-  return zxcvbnModule;
+  reasons: string[];
 }
 
 /**
- * Check individual password requirements
+ * Check password requirements deterministically.
+ * Pass = (length >= minLength) AND (character classes >= minClasses)
  */
-function checkPasswordRequirements(password: string, minLength: number): RequirementChecks {
+function checkPassword(
+  password: string,
+  minLength: number,
+  minClasses: number,
+  specialChars: string
+): PasswordValidationResult {
   const length = password.length;
   let hasUpper = false;
   let hasLower = false;
@@ -113,28 +95,30 @@ function checkPasswordRequirements(password: string, minLength: number): Require
   for (const char of password) {
     const code = char.charCodeAt(0);
     if (code >= 65 && code <= 90) {
-      // A-Z
       hasUpper = true;
     } else if (code >= 97 && code <= 122) {
-      // a-z
       hasLower = true;
     } else if (code >= 48 && code <= 57) {
-      // 0-9
       hasNumber = true;
-    } else if (
-      (code >= 33 && code <= 47) ||
-      (code >= 58 && code <= 64) ||
-      (code >= 91 && code <= 96) ||
-      (code >= 123 && code <= 126)
-    ) {
-      // Special characters
+    } else if (specialChars.includes(char)) {
       hasSpecial = true;
     }
   }
 
+  let classCount = 0;
+  if (hasUpper) classCount++;
+  if (hasLower) classCount++;
+  if (hasNumber) classCount++;
+  if (hasSpecial) classCount++;
+
+  const lengthOK = length >= minLength;
+  const classesOK = classCount >= minClasses;
+  const meetsRequirements = lengthOK && classesOK;
+
+  // Build requirement checks
   const checks: RequirementChecks = {
     length: {
-      met: length >= minLength,
+      met: lengthOK,
       current: length,
       needed: minLength,
       message: '',
@@ -155,6 +139,8 @@ function checkPasswordRequirements(password: string, minLength: number): Require
       met: hasSpecial,
       message: '',
     },
+    class_count: classCount,
+    classes_required: minClasses,
   };
 
   // Set messages
@@ -165,166 +151,86 @@ function checkPasswordRequirements(password: string, minLength: number): Require
     checks.length.message = `Add ${remaining} more character${remaining !== 1 ? 's' : ''} (currently ${length}/${minLength})`;
   }
 
-  checks.uppercase.message = checks.uppercase.met
+  checks.uppercase.message = hasUpper
     ? 'Uppercase letter present'
     : 'Missing: uppercase letter (A-Z)';
 
-  checks.lowercase.message = checks.lowercase.met
+  checks.lowercase.message = hasLower
     ? 'Lowercase letter present'
     : 'Missing: lowercase letter (a-z)';
 
-  checks.number.message = checks.number.met
+  checks.number.message = hasNumber
     ? 'Number present'
     : 'Missing: number (0-9)';
 
-  checks.special.message = checks.special.met
+  checks.special.message = hasSpecial
     ? 'Special character present'
     : 'Missing: special character';
 
-  return checks;
+  // Build failure reasons
+  const reasons: string[] = [];
+  if (!lengthOK) {
+    reasons.push(checks.length.message);
+  }
+  if (!classesOK) {
+    const missing: string[] = [];
+    if (!hasUpper) missing.push('uppercase (A-Z)');
+    if (!hasLower) missing.push('lowercase (a-z)');
+    if (!hasNumber) missing.push('number (0-9)');
+    if (!hasSpecial) missing.push('special character');
+    reasons.push(`Need ${minClasses} character classes, have ${classCount}`);
+    if (missing.length > 0) {
+      reasons.push(`Missing: ${missing.join(', ')}`);
+    }
+  }
+
+  return {
+    meets_requirements: meetsRequirements,
+    requirements: checks,
+    reasons,
+  };
 }
 
 /**
- * Validate password entropy using zxcvbn
- * Matches Go's ValidatePasswordEntropy function
+ * Validate password with explicit parameters
  */
-export async function validatePasswordEntropy(
+export function validatePassword(
   password: string,
   minLength: number,
-  minEntropy: number,
-  userInputs?: string[]
-): Promise<PasswordValidationResult> {
+  minClasses: number,
+  specialChars: string
+): PasswordValidationResult {
   if (password === '') {
     return {
-      entropy: 0,
-      strength_score: 0,
-      feedback: ['Password cannot be empty'],
       meets_requirements: false,
-      requirements: checkPasswordRequirements(password, minLength),
-      suggestions: [`Enter a password (minimum ${minLength} characters)`],
+      requirements: {
+        length: { met: false, current: 0, needed: minLength, message: `Enter a password (minimum ${minLength} characters)` },
+        uppercase: { met: false, message: 'Missing: uppercase letter (A-Z)' },
+        lowercase: { met: false, message: 'Missing: lowercase letter (a-z)' },
+        number: { met: false, message: 'Missing: number (0-9)' },
+        special: { met: false, message: 'Missing: special character' },
+        class_count: 0,
+        classes_required: minClasses,
+      },
+      reasons: [`Enter a password (minimum ${minLength} characters)`],
     };
   }
 
-  // Load zxcvbn and analyze password
-  const zxcvbn = await getZxcvbn();
-  const result = zxcvbn(password, userInputs);
-
-  // Convert zxcvbn guesses to entropy bits: log2(guesses)
-  const entropyBits = result.guesses > 0 ? Math.log2(result.guesses) : 0;
-
-  // Generate user-friendly feedback based on zxcvbn score
-  const feedback: string[] = [];
-
-  switch (result.score) {
-    case 0:
-      feedback.push('This is a very weak password');
-      break;
-    case 1:
-      feedback.push('This is a weak password');
-      break;
-    case 2:
-      feedback.push('This is a fair password');
-      break;
-  }
-
-  // Add length recommendation if password is short
-  if (password.length < minLength) {
-    feedback.push(`Consider using ${minLength}+ characters for better security`);
-  }
-
-  // Add entropy feedback if below threshold
-  if (entropyBits < minEntropy) {
-    feedback.push('Password entropy is too low - add more varied characters');
-  }
-
-  // Extract pattern penalties from zxcvbn sequence analysis
-  const penalties: string[] = [];
-  for (const seq of result.sequence) {
-    if (seq.pattern === 'dictionary') {
-      penalties.push('Contains common dictionary words');
-    } else if (seq.pattern === 'spatial') {
-      penalties.push('Contains keyboard patterns');
-    } else if (seq.pattern === 'repeat') {
-      penalties.push('Contains repeated characters');
-    } else if (seq.pattern === 'sequence') {
-      penalties.push('Contains sequential patterns');
-    }
-  }
-
-  // Positive feedback for strong passwords
-  if (entropyBits >= minEntropy && feedback.length === 0) {
-    feedback.push('Strong password!');
-  }
-
-  // Check individual requirements
-  const requirements = checkPasswordRequirements(password, minLength);
-
-  // Build suggestions based on what's missing
-  const suggestions: string[] = [];
-  if (!requirements.length.met) {
-    suggestions.push(requirements.length.message);
-  }
-  if (!requirements.uppercase.met) {
-    suggestions.push(requirements.uppercase.message);
-  }
-  if (!requirements.lowercase.met) {
-    suggestions.push(requirements.lowercase.message);
-  }
-  if (!requirements.number.met) {
-    suggestions.push(requirements.number.message);
-  }
-  if (!requirements.special.met) {
-    suggestions.push(requirements.special.message);
-  }
-
-  // Add pattern-based suggestions
-  for (const penalty of penalties) {
-    if (penalty === 'Contains common dictionary words') {
-      suggestions.push('WARNING: Contains dictionary word - try something unique');
-    } else if (penalty === 'Contains keyboard patterns') {
-      suggestions.push('WARNING: Contains keyboard pattern - mix it up');
-    } else if (penalty === 'Contains repeated characters') {
-      suggestions.push('WARNING: Contains repeated sequence - add variety');
-    } else if (penalty === 'Contains sequential patterns') {
-      suggestions.push('WARNING: Contains sequential pattern - add variety');
-    }
-  }
-
-  // If all requirements met, provide positive message
-  if (suggestions.length === 0 && entropyBits >= minEntropy) {
-    suggestions.push('Strong password! All requirements met');
-  }
-
-  const validationResult: PasswordValidationResult = {
-    entropy: entropyBits,
-    strength_score: result.score,
-    feedback,
-    meets_requirements: entropyBits >= minEntropy,
-    requirements,
-    suggestions,
-  };
-
-  // Only add pattern_penalties if there are any
-  if (penalties.length > 0) {
-    validationResult.pattern_penalties = penalties;
-  }
-
-  return validationResult;
+  return checkPassword(password, minLength, minClasses, specialChars);
 }
 
 /**
  * Validate account password using config requirements
  */
 export async function validateAccountPassword(
-  password: string,
-  userInputs?: string[]
+  password: string
 ): Promise<PasswordValidationResult> {
   const config = await loadPasswordConfig();
-  return validatePasswordEntropy(
+  return validatePassword(
     password,
     config.minAccountPasswordLength,
-    config.minEntropyBits,
-    userInputs
+    config.minCharacterClassesRequired,
+    config.specialCharacters
   );
 }
 
@@ -332,15 +238,14 @@ export async function validateAccountPassword(
  * Validate share password using config requirements
  */
 export async function validateSharePassword(
-  password: string,
-  userInputs?: string[]
+  password: string
 ): Promise<PasswordValidationResult> {
   const config = await loadPasswordConfig();
-  return validatePasswordEntropy(
+  return validatePassword(
     password,
     config.minSharePasswordLength,
-    config.minEntropyBits,
-    userInputs
+    config.minCharacterClassesRequired,
+    config.specialCharacters
   );
 }
 
@@ -348,36 +253,29 @@ export async function validateSharePassword(
  * Validate custom password using config requirements
  */
 export async function validateCustomPassword(
-  password: string,
-  userInputs?: string[]
+  password: string
 ): Promise<PasswordValidationResult> {
   const config = await loadPasswordConfig();
-  return validatePasswordEntropy(
+  return validatePassword(
     password,
     config.minCustomPasswordLength,
-    config.minEntropyBits,
-    userInputs
+    config.minCharacterClassesRequired,
+    config.specialCharacters
   );
 }
 
 /**
- * Synchronous basic validation (for immediate feedback before zxcvbn loads)
- * Only checks length and character requirements, not entropy
+ * Synchronous basic validation (for immediate feedback before async config loads).
+ * Uses hardcoded defaults matching the JSON config.
  */
 export function validatePasswordBasic(password: string, minLength: number): {
   meetsBasicRequirements: boolean;
   requirements: RequirementChecks;
 } {
-  const requirements = checkPasswordRequirements(password, minLength);
-  const meetsBasicRequirements =
-    requirements.length.met &&
-    requirements.uppercase.met &&
-    requirements.lowercase.met &&
-    requirements.number.met &&
-    requirements.special.met;
-
+  // Use default special chars and 4 classes required as fallback
+  const result = checkPassword(password, minLength, 4, '!@#$%^&*()_+-=[]{}|;:\'",.<>?/`~');
   return {
-    meetsBasicRequirements,
-    requirements,
+    meetsBasicRequirements: result.meets_requirements,
+    requirements: result.requirements,
   };
 }

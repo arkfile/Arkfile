@@ -1162,6 +1162,7 @@ func readPassword(prompt string) ([]byte, error) {
 
 // readPasswordWithStrengthCheck prompts for password, validates strength, loops until valid.
 // Limited to MaxPasswordAttempts to prevent infinite loops when stdin is piped.
+// Validation is deterministic: length >= minimum AND character classes >= required.
 func readPasswordWithStrengthCheck(prompt, context string) ([]byte, error) {
 	for attempt := 1; attempt <= MaxPasswordAttempts; attempt++ {
 		password, err := readPassword(prompt)
@@ -1181,45 +1182,20 @@ func readPasswordWithStrengthCheck(prompt, context string) ([]byte, error) {
 			result = crypto.ValidateAccountPassword(string(password))
 		}
 
-		// Display strength feedback
-		scoreLabels := []string{"VERY WEAK", "WEAK", "FAIR", "STRONG", "VERY STRONG"}
-		label := scoreLabels[0]
-		if result.StrengthScore >= 0 && result.StrengthScore < len(scoreLabels) {
-			label = scoreLabels[result.StrengthScore]
-		}
-		fmt.Printf("Password strength: %s (score %d/4)\n", label, result.StrengthScore)
-
-		if result.Requirements.Length.Met {
-			fmt.Printf("  [OK] %s\n", result.Requirements.Length.Message)
-		} else {
-			fmt.Printf("  [X] %s\n", result.Requirements.Length.Message)
-		}
-		if result.Requirements.Uppercase.Met {
-			fmt.Printf("  [OK] %s\n", result.Requirements.Uppercase.Message)
-		} else {
-			fmt.Printf("  [X] %s\n", result.Requirements.Uppercase.Message)
-		}
-		if result.Requirements.Lowercase.Met {
-			fmt.Printf("  [OK] %s\n", result.Requirements.Lowercase.Message)
-		} else {
-			fmt.Printf("  [X] %s\n", result.Requirements.Lowercase.Message)
-		}
-		if result.Requirements.Number.Met {
-			fmt.Printf("  [OK] %s\n", result.Requirements.Number.Message)
-		} else {
-			fmt.Printf("  [X] %s\n", result.Requirements.Number.Message)
-		}
-		if result.Requirements.Special.Met {
-			fmt.Printf("  [OK] %s\n", result.Requirements.Special.Message)
-		} else {
-			fmt.Printf("  [X] %s\n", result.Requirements.Special.Message)
-		}
-		for _, suggestion := range result.Suggestions {
-			fmt.Printf("  [i] %s\n", suggestion)
-		}
+		// Display requirement checks
+		printReqCheck(result.Requirements.Length.Met, result.Requirements.Length.Message)
+		printReqCheck(result.Requirements.Uppercase.Met, result.Requirements.Uppercase.Message)
+		printReqCheck(result.Requirements.Lowercase.Met, result.Requirements.Lowercase.Message)
+		printReqCheck(result.Requirements.Number.Met, result.Requirements.Number.Message)
+		printReqCheck(result.Requirements.Special.Met, result.Requirements.Special.Message)
 
 		if result.MeetsRequirement {
 			return password, nil
+		}
+
+		// Show failure reasons
+		for _, reason := range result.Reasons {
+			fmt.Printf("  [i] %s\n", reason)
 		}
 
 		fmt.Println()
@@ -1227,6 +1203,15 @@ func readPasswordWithStrengthCheck(prompt, context string) ([]byte, error) {
 		clearBytes(password)
 	}
 	return nil, fmt.Errorf("maximum password attempts exceeded (%d)", MaxPasswordAttempts)
+}
+
+// printReqCheck prints a single requirement check line
+func printReqCheck(met bool, message string) {
+	if met {
+		fmt.Printf("  [OK] %s\n", message)
+	} else {
+		fmt.Printf("  [X] %s\n", message)
+	}
 }
 
 func ensureAgentRunning() error {
