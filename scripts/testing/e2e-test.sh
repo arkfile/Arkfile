@@ -34,14 +34,34 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-# Test configuration
+# --- Test Credentials ---------------------------------------------------
+# Account passwords: min 14 chars, uppercase + lowercase + number + special, 64+ entropy bits
+# Share passwords:   min 18 chars, uppercase + lowercase + number + special, 64+ entropy bits
+# (See: crypto/password-requirements.json)
+
+# Admin credentials
 ADMIN_USERNAME="${ADMIN_USERNAME:-arkfile-dev-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-DevAdmin2025!SecureInitialPassword}"
 ADMIN_TOTP_SECRET="ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"  # Fixed dev secret
 
+# Regular test user credentials
 TEST_USERNAME="${TEST_USERNAME:-arkfile-dev-test-user}"
 TEST_PASSWORD="${TEST_PASSWORD:-MyVacation2025PhotosForFamily!ExtraSecure}"
 
+# Bootstrap protection test (attacker simulation — tries to create 2nd admin)
+ATTACKER_ADMIN_USERNAME="attacker-admin"
+ATTACKER_ADMIN_PASSWORD="AttackerPass123!SecureEnough"
+
+# Share passwords (18+ chars, meets share password requirements)
+SHARE_A_PASSWORD='MyShareP@ssw0rd-789q&*(::1'
+SHARE_B_PASSWORD='MyShareP@ssw0rd-789q&*(::2'
+SHARE_C_PASSWORD='MyShareP@ssw0rd-789q&*(::3'
+
+# Negative test data (non-existent share)
+NONEXISTENT_SHARE_ID="nonexistent-share-id-that-does-not-exist"
+DUMMY_SHARE_PASSWORD='DummyP@ssw0rd#2026!Nope'
+
+# --- Server & Paths -----------------------------------------------------
 SERVER_URL="${SERVER_URL:-https://localhost:8443}"
 
 # Binary location detection - check local build first, then deployed location
@@ -270,12 +290,12 @@ phase_3_bootstrap_protection() {
     local boot_exit_code
 
     safe_exec boot_output boot_exit_code \
-        bash -c "printf 'AttackerPass123!\nAttackerPass123!\n' | $ADMIN \
+        bash -c "printf '%s\n%s\n' '$ATTACKER_ADMIN_PASSWORD' '$ATTACKER_ADMIN_PASSWORD' | $ADMIN \
         --server-url '$SERVER_URL' \
         --tls-insecure \
         bootstrap \
         --token '$BOOTSTRAP_TOKEN' \
-        --username 'attacker-admin'"
+        --username '$ATTACKER_ADMIN_USERNAME'"
 
     if [ $boot_exit_code -eq 0 ]; then
         error "Security Vulnerability: Able to create second admin via bootstrap!"
@@ -641,11 +661,6 @@ phase_8_file_operations() {
 phase_9_share_operations() {
     phase "9: SHARE OPERATIONS"
 
-    # --- Passwords (18+ chars, uppercase, digits, special) ---
-    local SHARE_A_PASSWORD="UnlimitedShare#2026!Abc"
-    local SHARE_B_PASSWORD="MaxAccessShare#2026!Xyz"
-    local SHARE_C_PASSWORD="ExpiringShare#2026!Qrs"
-
     local SHARE_A_ID=""
     local SHARE_B_ID=""
     local SHARE_C_ID=""
@@ -924,11 +939,11 @@ phase_9_share_operations() {
 
     local nonexistent_output nonexistent_exit_code
     safe_exec nonexistent_output nonexistent_exit_code \
-        bash -c "printf 'DummyPassword#2026!Nope' | $CLIENT \
+        bash -c "printf '%s\n' '$DUMMY_SHARE_PASSWORD' | $CLIENT \
         --server-url '$SERVER_URL' \
         --tls-insecure \
         share download \
-        --share-id 'nonexistent-share-id-that-does-not-exist' \
+        --share-id '$NONEXISTENT_SHARE_ID' \
         --output '$TEST_DATA_DIR/nonexistent.bin'"
 
     if [ $nonexistent_exit_code -ne 0 ]; then

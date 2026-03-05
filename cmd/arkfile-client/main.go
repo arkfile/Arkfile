@@ -26,6 +26,13 @@ import (
 
 const Version = "3.0.0"
 
+// Password entry timeouts and limits
+const (
+	PasswordTimeoutInteractive = 60 * time.Second // TTY prompt timeout
+	PasswordTimeoutPipe        = 10 * time.Second // Piped stdin timeout
+	MaxPasswordAttempts        = 3                // Max strength-check retries
+)
+
 const Usage = `arkfile-client - Unified file vault CLI with streaming encryption
 
 USAGE:
@@ -1080,7 +1087,9 @@ func decodeBase64(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
 }
 
-// readPassword reads a password securely from terminal (no echo) or stdin
+// readPassword reads a password securely from terminal (no echo) or stdin.
+// Includes a timeout to prevent indefinite hangs when stdin is a pipe that
+// gets exhausted, or when a user walks away from an interactive prompt.
 func readPassword(prompt string) ([]byte, error) {
 	fi, err := os.Stdin.Stat()
 	if err != nil {
@@ -1088,41 +1097,73 @@ func readPassword(prompt string) ([]byte, error) {
 	}
 
 	if (fi.Mode() & os.ModeCharDevice) != 0 {
+		// Interactive terminal mode with timeout
 		if prompt != "" {
 			fmt.Print(prompt)
 		}
-		bytePassword, err := term.ReadPassword(int(syscall.Stdin))
-		if err != nil {
-			return nil, err
+		type readResult struct {
+			data []byte
+			err  error
 		}
-		fmt.Println()
-		return bytePassword, nil
+		ch := make(chan readResult, 1)
+		go func() {
+			bytePassword, err := term.ReadPassword(int(syscall.Stdin))
+			ch <- readResult{bytePassword, err}
+		}()
+		select {
+		case result := <-ch:
+			if result.err != nil {
+				fmt.Println()
+				return nil, result.err
+			}
+			fmt.Println()
+			return result.data, nil
+		case <-time.After(PasswordTimeoutInteractive):
+			fmt.Println("\nPassword entry timed out")
+			return nil, fmt.Errorf("password entry timed out after %v", PasswordTimeoutInteractive)
+		}
 	}
 
-	// Not a terminal: read from stdin byte-by-byte
-	var passwordBytes []byte
-	buf := make([]byte, 1)
-	for {
-		n, err := os.Stdin.Read(buf)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return nil, fmt.Errorf("failed to read password: %w", err)
-		}
-		if n > 0 {
-			if buf[0] == '\n' {
-				break
-			}
-			passwordBytes = append(passwordBytes, buf[0])
-		}
+	// Not a terminal (pipe mode) with timeout
+	type readResult struct {
+		data []byte
+		err  error
 	}
-	return bytes.TrimRight(passwordBytes, "\r"), nil
+	ch := make(chan readResult, 1)
+	go func() {
+		var passwordBytes []byte
+		buf := make([]byte, 1)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if err != nil {
+				if err == io.EOF {
+					ch <- readResult{bytes.TrimRight(passwordBytes, "\r"), nil}
+					return
+				}
+				ch <- readResult{nil, fmt.Errorf("failed to read password: %w", err)}
+				return
+			}
+			if n > 0 {
+				if buf[0] == '\n' {
+					break
+				}
+				passwordBytes = append(passwordBytes, buf[0])
+			}
+		}
+		ch <- readResult{bytes.TrimRight(passwordBytes, "\r"), nil}
+	}()
+	select {
+	case result := <-ch:
+		return result.data, result.err
+	case <-time.After(PasswordTimeoutPipe):
+		return nil, fmt.Errorf("password entry timed out after %v (pipe mode)", PasswordTimeoutPipe)
+	}
 }
 
-// readPasswordWithStrengthCheck prompts for password, validates strength, loops until valid
+// readPasswordWithStrengthCheck prompts for password, validates strength, loops until valid.
+// Limited to MaxPasswordAttempts to prevent infinite loops when stdin is piped.
 func readPasswordWithStrengthCheck(prompt, context string) ([]byte, error) {
-	for {
+	for attempt := 1; attempt <= MaxPasswordAttempts; attempt++ {
 		password, err := readPassword(prompt)
 		if err != nil {
 			return nil, err
@@ -1182,9 +1223,10 @@ func readPasswordWithStrengthCheck(prompt, context string) ([]byte, error) {
 		}
 
 		fmt.Println()
-		fmt.Println("Password does not meet requirements. Please try again.")
+		fmt.Printf("Password does not meet requirements. Please try again. (%d/%d attempts)\n", attempt, MaxPasswordAttempts)
 		clearBytes(password)
 	}
+	return nil, fmt.Errorf("maximum password attempts exceeded (%d)", MaxPasswordAttempts)
 }
 
 func ensureAgentRunning() error {
