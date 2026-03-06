@@ -707,11 +707,11 @@ type ShareInfo struct {
 }
 
 type ShareListResponse struct {
-	Shares    []ShareInfo `json:"shares"`
-	Limit     int         `json:"limit"`
-	Offset    int         `json:"offset"`
-	Returned  int         `json:"returned"`
-	HasMore   bool        `json:"has_more"`
+	Shares   []ShareInfo `json:"shares"`
+	Limit    int         `json:"limit"`
+	Offset   int         `json:"offset"`
+	Returned int         `json:"returned"`
+	HasMore  bool        `json:"has_more"`
 }
 
 type FileMetadataBatchResponse struct {
@@ -1006,7 +1006,6 @@ func handleShareList(client *HTTPClient, config *ClientConfig, args []string) er
 	}
 
 	url := fmt.Sprintf("/api/shares?limit=%d&offset=%d", *limit, *offset)
-
 	req, err := http.NewRequest("GET", client.baseURL+url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
@@ -1015,39 +1014,54 @@ func handleShareList(client *HTTPClient, config *ClientConfig, args []string) er
 
 	resp, err := client.client.Do(req)
 	if err != nil {
-	if *rawOutput {
+		return fmt.Errorf("failed to fetch shares: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-	var sharesResp ShareListResponse
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
-	if *jsonOutput {
-		fmt.Println(string(body))
-	enrichedShares, err := enrichShareList(client, session, sharesResp.Shares)
-	if err != nil {
-		return err
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("server returned HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
+	if *rawOutput {
+		fmt.Println(string(body))
 		return nil
 	}
 
-	// Parse and display shares
-	var sharesResp struct {
+	var sharesResp ShareListResponse
+	if err := json.Unmarshal(body, &sharesResp); err != nil {
+		fmt.Println(string(body))
+		return nil
+	}
+
+	enrichedShares := make([]EnrichedShareInfo, 0)
+	if len(sharesResp.Shares) > 0 {
+		enrichedShares, err = enrichShareList(client, session, sharesResp.Shares)
+		if err != nil {
+			return err
+		}
+	}
+
 	if *jsonOutput {
 		output := map[string]interface{}{
-			"shares":    enrichedShares,
-			"limit":     sharesResp.Limit,
-			"offset":    sharesResp.Offset,
-			"returned":  sharesResp.Returned,
-			"has_more":  sharesResp.HasMore,
+			"shares":   enrichedShares,
+			"limit":    sharesResp.Limit,
+			"offset":   sharesResp.Offset,
+			"returned": sharesResp.Returned,
+			"has_more": sharesResp.HasMore,
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(output)
+	}
+
+	if len(enrichedShares) == 0 {
+		fmt.Println("No shares found.")
+		return nil
 	}
 
 	fmt.Printf("%-43s  %-18s  %-8s  %-6s  %-18s  %-12s  %-14s  %-8s\n",
@@ -1107,14 +1121,16 @@ func enrichShareList(client *HTTPClient, session *AuthSession, shares []ShareInf
 	enriched := make([]EnrichedShareInfo, 0, len(shares))
 	for _, share := range shares {
 		item := EnrichedShareInfo{
-			ShareID:      share.ShareID,
-			FileID:       share.FileID,
-			ShareURL:     share.ShareURL,
-			CreatedAt:    share.CreatedAt,
-			AccessCount:  share.AccessCount,
-			SizeBytes:    share.SizeBytes,
-			IsActive:     share.IsActive,
-			FilenameLocal: "[encrypted]",
+			ShareID:           share.ShareID,
+			FileID:            share.FileID,
+			ShareURL:          share.ShareURL,
+			CreatedAt:         share.CreatedAt,
+			AccessCount:       share.AccessCount,
+			SizeBytes:         share.SizeBytes,
+			IsActive:          share.IsActive,
+			FilenameLocal:     "[encrypted]",
+			SizeBytesLocal:    share.SizeBytes,
+			SizeReadableLocal: formatFileSize(share.SizeBytes),
 		}
 
 		if expStr, ok := share.ExpiresAt.(string); ok {
@@ -1135,9 +1151,9 @@ func enrichShareList(client *HTTPClient, session *AuthSession, shares []ShareInf
 			item.PasswordType = meta.PasswordType
 			if meta.SizeBytes > 0 {
 				item.SizeBytes = meta.SizeBytes
+				item.SizeBytesLocal = meta.SizeBytes
+				item.SizeReadableLocal = formatFileSize(meta.SizeBytes)
 			}
-			item.SizeBytesLocal = item.SizeBytes
-			item.SizeReadableLocal = formatFileSize(item.SizeBytes)
 
 			if accountKey != nil {
 				filename, filenameErr := decryptMetadataField(meta.EncryptedFilename, meta.FilenameNonce, accountKey)
@@ -1151,9 +1167,6 @@ func enrichShareList(client *HTTPClient, session *AuthSession, shares []ShareInf
 				}
 				item.MetadataDecrypted = filenameErr == nil || shaErr == nil
 			}
-		} else {
-			item.SizeBytesLocal = item.SizeBytes
-			item.SizeReadableLocal = formatFileSize(item.SizeBytes)
 		}
 
 		enriched = append(enriched, item)
