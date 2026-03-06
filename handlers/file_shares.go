@@ -384,6 +384,10 @@ func GetSharedFile(c echo.Context) error {
 // ListShares returns all shares created by a user
 func ListShares(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
+	limit, offset, err := parseLimitOffset(c, defaultMetadataPageLimit, maxMetadataPageLimit)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
 
 	// Query shares (owner already has file metadata via /api/files endpoints —
 	// no need to duplicate encrypted metadata here)
@@ -395,7 +399,8 @@ func ListShares(c echo.Context) error {
 		JOIN file_metadata fm ON sk.file_id = fm.file_id
 		WHERE sk.owner_username = ?
 		ORDER BY sk.created_at DESC
-	`, username)
+		LIMIT ? OFFSET ?
+	`, username, limit, offset)
 
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to query shares: %v", err)
@@ -503,7 +508,11 @@ func ListShares(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"shares": shares,
+		"shares":   shares,
+		"limit":    limit,
+		"offset":   offset,
+		"returned": len(shares),
+		"has_more": len(shares) == limit,
 	})
 }
 

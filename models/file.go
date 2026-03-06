@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/84adam/Arkfile/crypto"
@@ -28,6 +29,19 @@ type File struct {
 	ChunkCount             int64          `json:"chunk_count"`      // Number of 16MB chunks for chunked downloads
 	ChunkSizeBytes         int64          `json:"chunk_size_bytes"` // Size of each chunk (16MB default)
 	UploadDate             time.Time      `json:"upload_date"`
+}
+
+// FileMetadataListItem is a lightweight owner-only metadata shape for listing
+// and local client-side decryption workflows.
+type FileMetadataListItem struct {
+	FileID             string    `json:"file_id"`
+	PasswordType       string    `json:"password_type"`
+	FilenameNonce      string    `json:"filename_nonce"`
+	EncryptedFilename  string    `json:"encrypted_filename"`
+	Sha256sumNonce     string    `json:"sha256sum_nonce"`
+	EncryptedSha256sum string    `json:"encrypted_sha256sum"`
+	SizeBytes          int64     `json:"size_bytes"`
+	UploadDate         time.Time `json:"upload_date"`
 }
 
 // GenerateStorageID creates a new UUID v4 for storage
@@ -395,6 +409,130 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 	}
 
 	return files, nil
+}
+
+// GetRecentFileMetadataByOwner retrieves a paginated recent metadata view for
+// files owned by a specific user, ordered by upload date descending.
+func GetRecentFileMetadataByOwner(db *sql.DB, ownerUsername string, limit, offset int) ([]*FileMetadataListItem, error) {
+	if db == nil {
+		return nil, errors.New("database connection is nil")
+	}
+
+	query := `
+		SELECT file_id, password_type, filename_nonce, encrypted_filename,
+		       sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date
+		FROM file_metadata
+		WHERE owner_username = ?
+		ORDER BY upload_date DESC
+		LIMIT ? OFFSET ?`
+
+	rows, err := db.Query(query, ownerUsername, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("recent metadata query failed for user '%s': %w", ownerUsername, err)
+	}
+	defer rows.Close()
+
+	var files []*FileMetadataListItem
+	for rows.Next() {
+		item, err := scanFileMetadataListItem(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan recent metadata row for user '%s': %w", ownerUsername, err)
+		}
+		files = append(files, item)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("recent metadata rows iteration error for user '%s': %w", ownerUsername, err)
+	}
+
+	return files, nil
+}
+
+// GetFileMetadataBatchByOwner retrieves lightweight metadata for an explicit
+// batch of file IDs owned by a specific user.
+func GetFileMetadataBatchByOwner(db *sql.DB, ownerUsername string, fileIDs []string) ([]*FileMetadataListItem, error) {
+	if db == nil {
+		return nil, errors.New("database connection is nil")
+	}
+
+	if len(fileIDs) == 0 {
+		return []*FileMetadataListItem{}, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(fileIDs)), ",")
+	query := fmt.Sprintf(`
+		SELECT file_id, password_type, filename_nonce, encrypted_filename,
+		       sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date
+		FROM file_metadata
+		WHERE owner_username = ? AND file_id IN (%s)`, placeholders)
+
+	args := make([]interface{}, 0, len(fileIDs)+1)
+	args = append(args, ownerUsername)
+	for _, fileID := range fileIDs {
+		args = append(args, fileID)
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch metadata query failed for user '%s': %w", ownerUsername, err)
+	}
+	defer rows.Close()
+
+	var files []*FileMetadataListItem
+	for rows.Next() {
+		item, err := scanFileMetadataListItem(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan batch metadata row for user '%s': %w", ownerUsername, err)
+		}
+		files = append(files, item)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("batch metadata rows iteration error for user '%s': %w", ownerUsername, err)
+	}
+
+	return files, nil
+}
+
+func scanFileMetadataListItem(scanner interface {
+	Scan(dest ...interface{}) error
+}) (*FileMetadataListItem, error) {
+	item := &FileMetadataListItem{}
+	var sizeBytes interface{}
+	var uploadDateStr string
+
+	err := scanner.Scan(
+		&item.FileID,
+		&item.PasswordType,
+		&item.FilenameNonce,
+		&item.EncryptedFilename,
+		&item.Sha256sumNonce,
+		&item.EncryptedSha256sum,
+		&sizeBytes,
+		&uploadDateStr,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	switch v := sizeBytes.(type) {
+	case int64:
+		item.SizeBytes = v
+	case float64:
+		item.SizeBytes = int64(v)
+	case nil:
+		item.SizeBytes = 0
+	default:
+		return nil, fmt.Errorf("unexpected type for size_bytes: %T", v)
+	}
+
+	if parsedTime, parseErr := time.Parse("2006-01-02 15:04:05", uploadDateStr); parseErr == nil {
+		item.UploadDate = parsedTime
+	} else if parsedTime, parseErr := time.Parse(time.RFC3339, uploadDateStr); parseErr == nil {
+		item.UploadDate = parsedTime
+	}
+
+	return item, nil
 }
 
 // DeleteFile removes a file record from the database by file_id

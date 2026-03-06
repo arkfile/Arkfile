@@ -489,3 +489,220 @@ Expected result:
 - Keep the script suitable for repeated local development use, since it is one of the primary proof tools for Arkfile.
 - Keep default CLI output useful for legitimate owners while using raw/API-level checks to prove that the server still does not expose plaintext metadata.
 - For share creation from a custom-password file, account for the current CLI stdin order: custom password first, then share password.
+
+---
+
+# First things first...
+
+NOTE: We need to add two new endpoints to allow fetching batched and paginated metadata of files to facilitate the new `share list` command improvements, and speed up metadata fetching/decryption for both Go CLi and Frontend TypeScript clients.
+
+This is the most recent version of the plan to do that, which should be done before any other tasks are started in this project:
+
+## Final API Direction: New File Metadata Endpoints Plan
+
+We will prepare to implement two authenticated owner-only metadata endpoints:
+
+1. `GET /api/files/metadata?limit=100&offset=0`
+   - paginated recent metadata listing
+   - ordered by `upload_date DESC`
+   - general-purpose owner metadata listing primitive
+
+2. `POST /api/files/metadata/batch`
+   - targeted metadata lookup by exact `file_ids`
+   - intended primarily for `share list` enrichment
+
+This is the cleanest split for both CLI and frontend work.
+
+## Exact implementation plan
+
+## Phase 1: Server models/helpers
+
+Add model-layer support for both retrieval modes.
+
+### 1. Add a lightweight file metadata listing struct
+In `models/file.go` or a nearby appropriate place, add a listing-focused struct containing only fields needed for local metadata decryption/display:
+- `file_id`
+- `password_type`
+- `filename_nonce`
+- `encrypted_filename`
+- `sha256sum_nonce`
+- `encrypted_sha256sum`
+- `size_bytes`
+- `upload_date`
+
+Do not include FEK or chunk/download-specific data.
+
+### 2. Add paginated recent-metadata query helper
+Add a model/helper function roughly like:
+- `GetRecentFileMetadataByOwner(db, username, limit, offset)`
+
+Behavior:
+- query `file_metadata`
+- filter `owner_username = ?`
+- order by `upload_date DESC`
+- apply `LIMIT ? OFFSET ?`
+- return lightweight metadata records
+
+### 3. Add batch metadata query helper
+Add a model/helper function roughly like:
+- `GetFileMetadataBatchByOwner(db, username, fileIDs)`
+
+Behavior:
+- only return records owned by the authenticated user
+- return lightweight metadata records
+- ideally keyed or easily keyed by `file_id`
+
+## Phase 2: Server handlers/routes
+
+### 4. Add `GET /api/files/metadata`
+Add a new authenticated handler for recent metadata listing.
+
+Expected query params:
+- `limit`
+- `offset`
+
+Behavior:
+- defaults: `limit=100`, `offset=0`
+- clamp `limit` to server max
+- return:
+  - `files`
+  - `limit`
+  - `offset`
+  - `returned`
+  - optionally `has_more`
+
+### 5. Add `POST /api/files/metadata/batch`
+Add a new authenticated handler with body:
+```json
+{ "file_ids": ["..."] }
+```
+
+Behavior:
+- require authenticated owner
+- validate file id count against max batch size
+- return only owned file metadata
+- recommended response shape:
+```json
+{
+  "files": {
+    "file_id_1": { ...metadata... },
+    "file_id_2": { ...metadata... }
+  },
+  "missing": []
+}
+```
+
+### 6. Add route registrations
+In route config:
+- register `GET /api/files/metadata`
+- register `POST /api/files/metadata/batch`
+
+Both should be in the same authenticated/TOTP-protected group as the current file routes.
+
+## Phase 3: CLI implementation
+
+### 7. Update `arkfile-client share list`
+Enhance `handleShareList` to use the new batch endpoint.
+
+Add flags:
+- `--json`
+- `--raw`
+- `--limit`
+- `--offset`
+
+Behavior:
+- `--raw`
+  - fetch paginated `/api/shares`
+  - print raw response only
+- default / `--json`
+  - fetch paginated `/api/shares`
+  - collect `file_id`s from the returned share page
+  - call `POST /api/files/metadata/batch`
+  - attempt local metadata decryption with account key
+  - render enriched output
+
+### 8. Add CLI helper for local metadata enrichment
+Add a helper to join share rows with batch metadata rows and locally decrypt:
+- filename
+- sha256
+- size
+- password type
+
+Use placeholders if account key is unavailable.
+
+### 9. Enrich CLI output
+Default table output should show:
+- share-management columns on left
+- local/decrypted file metadata columns on right
+
+JSON output should include explicit local field names such as:
+- `filename_local`
+- `size_bytes_local`
+- `sha256_local`
+- `metadata_decrypted`
+
+## Phase 4: Frontend TypeScript implementation
+
+### 10. Update frontend share list flow
+In `client/static/js/src/shares/share-list.ts`:
+- fetch paginated `/api/shares`
+- collect `file_id`s
+- call `POST /api/files/metadata/batch`
+- locally decrypt metadata using the account key
+- merge metadata into share rows before rendering
+
+### 11. Add TypeScript types for both new server responses
+Add types for:
+- paginated share list response
+- recent metadata response
+- batch metadata response
+- enriched share row used by rendering
+
+### 12. Update frontend rendering
+Show:
+- original filename
+- original size
+- original SHA-256
+- password type
+- optionally a subtle label that these values are locally decrypted
+
+Keep existing share URL and revoke UI.
+
+### 13. Leave room for later file-list convergence
+The new generic `GET /api/files/metadata` endpoint may later become useful for frontend/CLI file listing too.
+
+I would not force that refactor immediately, but I would keep the response shape aligned enough that it can be reused later.
+
+## Phase 5: Tests to prepare for later
+
+### 14. Server tests
+Add tests for:
+- `GET /api/files/metadata` pagination and ordering
+- `POST /api/files/metadata/batch` ownership filtering and response shape
+- limits/clamping behavior
+
+### 15. CLI/E2E implications later
+Once implemented, later update `e2e-test.sh` to verify:
+- enriched `share list` output for account-password shared files
+- enriched `share list` output for custom-password shared files
+- `share list --raw` does not expose plaintext metadata or secrets
+
+## Design notes to preserve during implementation
+
+- No plaintext metadata should be added to server-side share listing responses.
+- Local metadata decryption for share listing must always use the account key, even for custom-password files.
+- No custom-password prompt should be required for share listing.
+- `share list` should enrich only the current share page, not the entire account.
+- The generic recent metadata listing endpoint should remain useful beyond this single feature.
+
+## Recommended implementation order in Act mode
+
+1. server model helpers
+2. `GET /api/files/metadata`
+3. `POST /api/files/metadata/batch`
+4. route wiring
+5. CLI `share list`
+6. frontend TypeScript share list
+7. tests later after feature behavior is settled
+
+---

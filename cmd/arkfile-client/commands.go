@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -705,6 +706,39 @@ type ShareInfo struct {
 	IsActive      bool        `json:"is_active"`
 }
 
+type ShareListResponse struct {
+	Shares    []ShareInfo `json:"shares"`
+	Limit     int         `json:"limit"`
+	Offset    int         `json:"offset"`
+	Returned  int         `json:"returned"`
+	HasMore   bool        `json:"has_more"`
+}
+
+type FileMetadataBatchResponse struct {
+	Files   map[string]ServerFileInfo `json:"files"`
+	Missing []string                  `json:"missing"`
+}
+
+type EnrichedShareInfo struct {
+	ShareID           string `json:"share_id"`
+	FileID            string `json:"file_id"`
+	ShareURL          string `json:"share_url"`
+	CreatedAt         string `json:"created_at"`
+	ExpiresAt         string `json:"expires_at,omitempty"`
+	RevokedAt         string `json:"revoked_at,omitempty"`
+	RevokedReason     string `json:"revoked_reason,omitempty"`
+	AccessCount       int    `json:"access_count"`
+	MaxAccesses       *int   `json:"max_accesses,omitempty"`
+	SizeBytes         int64  `json:"size_bytes"`
+	IsActive          bool   `json:"is_active"`
+	PasswordType      string `json:"password_type,omitempty"`
+	FilenameLocal     string `json:"filename_local,omitempty"`
+	SizeBytesLocal    int64  `json:"size_bytes_local,omitempty"`
+	SizeReadableLocal string `json:"size_readable_local,omitempty"`
+	SHA256Local       string `json:"sha256_local,omitempty"`
+	MetadataDecrypted bool   `json:"metadata_decrypted"`
+}
+
 func handleShareCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("subcommand required: create, list, revoke, download")
@@ -958,6 +992,9 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 func handleShareList(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("share list", flag.ExitOnError)
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
+	rawOutput := fs.Bool("raw", false, "Output raw server response (no metadata enrichment)")
+	limit := fs.Int("limit", 100, "Maximum number of shares to list")
+	offset := fs.Int("offset", 0, "Offset for pagination")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -968,7 +1005,7 @@ func handleShareList(client *HTTPClient, config *ClientConfig, args []string) er
 		return err
 	}
 
-	url := "/api/shares"
+	url := fmt.Sprintf("/api/shares?limit=%d&offset=%d", *limit, *offset)
 
 	req, err := http.NewRequest("GET", client.baseURL+url, nil)
 	if err != nil {
@@ -978,60 +1015,54 @@ func handleShareList(client *HTTPClient, config *ClientConfig, args []string) er
 
 	resp, err := client.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to fetch shares: %w", err)
+	if *rawOutput {
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned HTTP %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	var sharesResp ShareListResponse
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
 	if *jsonOutput {
 		fmt.Println(string(body))
+	enrichedShares, err := enrichShareList(client, session, sharesResp.Shares)
+	if err != nil {
+		return err
+	}
+
 		return nil
 	}
 
 	// Parse and display shares
 	var sharesResp struct {
-		Shares []ShareInfo `json:"shares"`
-	}
-	if err := json.Unmarshal(body, &sharesResp); err != nil {
-		// If parsing fails, just print the raw response
-		fmt.Println(string(body))
-		return nil
+	if *jsonOutput {
+		output := map[string]interface{}{
+			"shares":    enrichedShares,
+			"limit":     sharesResp.Limit,
+			"offset":    sharesResp.Offset,
+			"returned":  sharesResp.Returned,
+			"has_more":  sharesResp.HasMore,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(output)
 	}
 
-	if len(sharesResp.Shares) == 0 {
-		fmt.Println("No shares found.")
-		return nil
-	}
+	fmt.Printf("%-43s  %-18s  %-8s  %-6s  %-18s  %-12s  %-14s  %-8s\n",
+		"SHARE ID", "EXPIRES", "DL", "ACTIVE", "FILENAME [local]", "SIZE [local]", "SHA256 [local]", "TYPE")
+	fmt.Println(strings.Repeat("-", 145))
 
-	fmt.Printf("%-43s  %-36s  %-20s  %-8s  %-6s\n",
-		"SHARE ID", "FILE ID", "EXPIRES", "DL", "ACTIVE")
-	fmt.Println(strings.Repeat("-", 120))
-
-	for _, s := range sharesResp.Shares {
+	for _, s := range enrichedShares {
 		expires := "never"
-		if s.ExpiresAt != nil {
-			if expStr, ok := s.ExpiresAt.(string); ok && expStr != "" {
-				if len(expStr) > 16 {
-					expires = expStr[:16]
-				} else {
-					expires = expStr
-				}
-			}
+		if s.ExpiresAt != "" {
+			expires = truncateString(s.ExpiresAt, 18)
 		}
 
 		downloads := fmt.Sprintf("%d", s.AccessCount)
-		if s.MaxAccesses != nil {
-			if maxF, ok := s.MaxAccesses.(float64); ok && maxF > 0 {
-				downloads = fmt.Sprintf("%d/%d", s.AccessCount, int(maxF))
-			}
+		if s.MaxAccesses != nil && *s.MaxAccesses > 0 {
+			downloads = fmt.Sprintf("%d/%d", s.AccessCount, *s.MaxAccesses)
 		}
 
 		active := "yes"
@@ -1039,16 +1070,170 @@ func handleShareList(client *HTTPClient, config *ClientConfig, args []string) er
 			active = "no"
 		}
 
-		shareIDDisplay := s.ShareID
-		if len(shareIDDisplay) > 43 {
-			shareIDDisplay = shareIDDisplay[:43]
-		}
+		fmt.Printf("%-43s  %-18s  %-8s  %-6s  %-18s  %-12s  %-14s  %-8s\n",
+			truncateString(s.ShareID, 43),
+			expires,
+			downloads,
+			active,
+			truncateString(defaultString(s.FilenameLocal, "[encrypted]"), 18),
+			truncateString(defaultString(s.SizeReadableLocal, formatFileSize(s.SizeBytes)), 12),
+			truncateString(defaultString(s.SHA256Local, "[encrypted]"), 14),
+			defaultString(s.PasswordType, "unknown"),
+		)
+	}
 
-		fmt.Printf("%-43s  %-36s  %-20s  %-8s  %-6s\n",
-			shareIDDisplay, s.FileID, expires, downloads, active)
+	if sharesResp.HasMore {
+		fmt.Printf("\nShowing %d shares starting at offset %d. More results available.\n", sharesResp.Returned, sharesResp.Offset)
+	} else {
+		fmt.Printf("\nTotal shown: %d shares\n", sharesResp.Returned)
 	}
 
 	return nil
+}
+
+func enrichShareList(client *HTTPClient, session *AuthSession, shares []ShareInfo) ([]EnrichedShareInfo, error) {
+	fileIDs := collectShareFileIDs(shares)
+	metadataByFileID, err := fetchMetadataBatchForShares(client, session, fileIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	var accountKey []byte
+	agentClient, agentErr := NewAgentClient()
+	if agentErr == nil {
+		accountKey, _ = agentClient.GetAccountKey("")
+	}
+
+	enriched := make([]EnrichedShareInfo, 0, len(shares))
+	for _, share := range shares {
+		item := EnrichedShareInfo{
+			ShareID:      share.ShareID,
+			FileID:       share.FileID,
+			ShareURL:     share.ShareURL,
+			CreatedAt:    share.CreatedAt,
+			AccessCount:  share.AccessCount,
+			SizeBytes:    share.SizeBytes,
+			IsActive:     share.IsActive,
+			FilenameLocal: "[encrypted]",
+		}
+
+		if expStr, ok := share.ExpiresAt.(string); ok {
+			item.ExpiresAt = expStr
+		}
+		if revokedStr, ok := share.RevokedAt.(string); ok {
+			item.RevokedAt = revokedStr
+		}
+		if reasonStr, ok := share.RevokedReason.(string); ok {
+			item.RevokedReason = reasonStr
+		}
+		if maxF, ok := share.MaxAccesses.(float64); ok {
+			max := int(maxF)
+			item.MaxAccesses = &max
+		}
+
+		if meta, ok := metadataByFileID[share.FileID]; ok {
+			item.PasswordType = meta.PasswordType
+			if meta.SizeBytes > 0 {
+				item.SizeBytes = meta.SizeBytes
+			}
+			item.SizeBytesLocal = item.SizeBytes
+			item.SizeReadableLocal = formatFileSize(item.SizeBytes)
+
+			if accountKey != nil {
+				filename, filenameErr := decryptMetadataField(meta.EncryptedFilename, meta.FilenameNonce, accountKey)
+				sha256sum, shaErr := decryptMetadataField(meta.EncryptedSHA256, meta.SHA256Nonce, accountKey)
+
+				if filenameErr == nil {
+					item.FilenameLocal = filename
+				}
+				if shaErr == nil {
+					item.SHA256Local = sha256sum
+				}
+				item.MetadataDecrypted = filenameErr == nil || shaErr == nil
+			}
+		} else {
+			item.SizeBytesLocal = item.SizeBytes
+			item.SizeReadableLocal = formatFileSize(item.SizeBytes)
+		}
+
+		enriched = append(enriched, item)
+	}
+
+	return enriched, nil
+}
+
+func collectShareFileIDs(shares []ShareInfo) []string {
+	seen := make(map[string]struct{}, len(shares))
+	fileIDs := make([]string, 0, len(shares))
+	for _, share := range shares {
+		if share.FileID == "" {
+			continue
+		}
+		if _, ok := seen[share.FileID]; ok {
+			continue
+		}
+		seen[share.FileID] = struct{}{}
+		fileIDs = append(fileIDs, share.FileID)
+	}
+	sort.Strings(fileIDs)
+	return fileIDs
+}
+
+func fetchMetadataBatchForShares(client *HTTPClient, session *AuthSession, fileIDs []string) (map[string]ServerFileInfo, error) {
+	if len(fileIDs) == 0 {
+		return map[string]ServerFileInfo{}, nil
+	}
+
+	payload, err := json.Marshal(map[string]interface{}{"file_ids": fileIDs})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal metadata batch request: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", client.baseURL+"/api/files/metadata/batch", bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create metadata batch request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch metadata batch: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("metadata batch returned HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	var batchResp FileMetadataBatchResponse
+	if err := decodeJSONResponse(resp, &batchResp); err != nil {
+		return nil, fmt.Errorf("failed to decode metadata batch response: %w", err)
+	}
+
+	if batchResp.Files == nil {
+		return map[string]ServerFileInfo{}, nil
+	}
+
+	return batchResp.Files, nil
+}
+
+func truncateString(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max <= 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
+}
+
+func defaultString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func handleShareRevoke(client *HTTPClient, config *ClientConfig, args []string) error {

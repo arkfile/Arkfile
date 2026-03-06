@@ -81,6 +81,8 @@ func RegisterRoutes() {
 	// Files - require authentication AND TOTP
 
 	totpProtectedGroup.GET("/api/files", ListFiles)
+	totpProtectedGroup.GET("/api/files/metadata", ListRecentFileMetadata)
+	totpProtectedGroup.POST("/api/files/metadata/batch", GetFileMetadataBatch)
 	totpProtectedGroup.GET("/api/files/:fileId/meta", GetFileMeta)
 	totpProtectedGroup.DELETE("/api/files/:fileId", DeleteFile)
 

@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
 
@@ -13,6 +14,48 @@ import (
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/models"
 )
+
+const (
+	defaultMetadataPageLimit = 100
+	maxMetadataPageLimit     = 500
+	maxMetadataBatchSize     = 500
+)
+
+type FileMetadataBatchRequest struct {
+	FileIDs []string `json:"file_ids"`
+}
+
+func parseLimitOffset(c echo.Context, defaultLimit, maxLimit int) (int, int, error) {
+	limit := defaultLimit
+	offset := 0
+
+	if limitStr := c.QueryParam("limit"); limitStr != "" {
+		parsed, err := strconv.Atoi(limitStr)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid limit")
+		}
+		if parsed < 1 {
+			return 0, 0, fmt.Errorf("limit must be at least 1")
+		}
+		if parsed > maxLimit {
+			parsed = maxLimit
+		}
+		limit = parsed
+	}
+
+	if offsetStr := c.QueryParam("offset"); offsetStr != "" {
+		parsed, err := strconv.Atoi(offsetStr)
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid offset")
+		}
+		if parsed < 0 {
+			return 0, 0, fmt.Errorf("offset must be non-negative")
+		}
+		offset = parsed
+	}
+
+	return limit, offset, nil
+}
 
 // GetFileMeta returns encrypted file metadata needed for download initialization
 func GetFileMeta(c echo.Context) error {
@@ -65,6 +108,78 @@ func GetFileMeta(c echo.Context) error {
 		"chunk_count":           file.ChunkCount,
 		"chunk_size_bytes":      file.ChunkSizeBytes,
 		"encrypted_file_sha256": file.EncryptedFileSha256sum.Valid && file.EncryptedFileSha256sum.String != "",
+	})
+}
+
+// ListRecentFileMetadata returns a paginated recent metadata listing for the
+// authenticated owner. This endpoint is intended for owner-side local metadata
+// decryption workflows and does not expose FEKs or chunk/download details.
+func ListRecentFileMetadata(c echo.Context) error {
+	username := auth.GetUsernameFromToken(c)
+	if username == "" {
+		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid authentication token")
+	}
+
+	limit, offset, err := parseLimitOffset(c, defaultMetadataPageLimit, maxMetadataPageLimit)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+
+	files, err := models.GetRecentFileMetadataByOwner(database.DB, username, limit, offset)
+	if err != nil {
+		logging.ErrorLogger.Printf("ListRecentFileMetadata failed for user '%s': %v", username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata")
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"files":    files,
+		"limit":    limit,
+		"offset":   offset,
+		"returned": len(files),
+		"has_more": len(files) == limit,
+	})
+}
+
+// GetFileMetadataBatch returns lightweight encrypted metadata for an explicit
+// batch of owner-owned file IDs.
+func GetFileMetadataBatch(c echo.Context) error {
+	username := auth.GetUsernameFromToken(c)
+	if username == "" {
+		return echo.NewHTTPError(http.StatusUnauthorized, "Invalid authentication token")
+	}
+
+	var request FileMetadataBatchRequest
+	if err := c.Bind(&request); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body: "+err.Error())
+	}
+
+	if len(request.FileIDs) > maxMetadataBatchSize {
+		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("file_ids batch size exceeds maximum of %d", maxMetadataBatchSize))
+	}
+
+	files, err := models.GetFileMetadataBatchByOwner(database.DB, username, request.FileIDs)
+	if err != nil {
+		logging.ErrorLogger.Printf("GetFileMetadataBatch failed for user '%s': %v", username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file metadata batch")
+	}
+
+	fileMap := make(map[string]interface{}, len(files))
+	returned := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		fileMap[file.FileID] = file
+		returned[file.FileID] = struct{}{}
+	}
+
+	missing := make([]string, 0)
+	for _, fileID := range request.FileIDs {
+		if _, ok := returned[fileID]; !ok {
+			missing = append(missing, fileID)
+		}
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"files":   fileMap,
+		"missing": missing,
 	})
 }
 
