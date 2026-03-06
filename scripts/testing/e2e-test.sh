@@ -19,9 +19,7 @@
 
 set -eo pipefail
 
-# ============================================================================
 # CONFIGURATION
-# ============================================================================
 
 # Parse arguments
 BOOTSTRAP_TOKEN=""
@@ -34,9 +32,9 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-# --- Test Credentials ---------------------------------------------------
-# Account passwords: min 14 chars, uppercase + lowercase + number + special, 64+ entropy bits
-# Share passwords:   min 18 chars, uppercase + lowercase + number + special, 64+ entropy bits
+# Test Credentials
+# Account & Custom passwords: min 15 chars, any 2 of uppercase / lowercase / number / special
+# Share passwords: min 20 chars, any 2 of uppercase / lowercase / number / special
 # (See: crypto/password-requirements.json)
 
 # Admin credentials
@@ -61,7 +59,7 @@ SHARE_C_PASSWORD='MyShareP@ssw0rd-789q&*(::3'
 NONEXISTENT_SHARE_ID="nonexistent-share-id-that-does-not-exist"
 DUMMY_SHARE_PASSWORD='DummyP@ssw0rd#2026!Nope'
 
-# --- Server & Paths -----------------------------------------------------
+# Server & Paths
 SERVER_URL="${SERVER_URL:-https://localhost:8443}"
 
 # Binary location detection - check local build first, then deployed location
@@ -88,9 +86,7 @@ LOG_FILE="$TEST_DATA_DIR/e2e-test.log"
 # Initialize log file
 echo "=== ARKFILE E2E TEST LOG - $(date) ===" > "$LOG_FILE"
 
-# ============================================================================
 # COLOR OUTPUT
-# ============================================================================
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -104,13 +100,12 @@ error()   { echo -e "${RED}[X] $1${NC}"; echo "[ERROR] $1" >> "$LOG_FILE"; }
 warning() { echo -e "${YELLOW}[!] $1${NC}"; echo "[WARN] $1" >> "$LOG_FILE"; }
 info()    { echo -e "${CYAN}[i] $1${NC}"; echo "[INFO] $1" >> "$LOG_FILE"; }
 section() { echo -e "\n${BLUE}$1${NC}"; echo -e "\n=== $1 ===" >> "$LOG_FILE"; }
-phase()   { echo -e "\n${CYAN}>>> PHASE: $1${NC}\n"; echo -e "\n>>> PHASE: $1" >> "$LOG_FILE"; }
+phase()   { echo -e "\n${CYAN}# $1${NC}\n"; echo -e "\n# $1" >> "$LOG_FILE"; }
 
-# ============================================================================
 # TEST RESULT TRACKING
-# ============================================================================
 
 declare -A TEST_RESULTS
+declare -a TEST_ORDER
 TEST_COUNT=0
 PASS_COUNT=0
 FAIL_COUNT=0
@@ -120,6 +115,7 @@ record_test() {
     local result="$2"  # "PASS" or "FAIL"
 
     TEST_RESULTS["$test_name"]="$result"
+    TEST_ORDER+=("$test_name")
     TEST_COUNT=$((TEST_COUNT + 1))
 
     if [ "$result" = "PASS" ]; then
@@ -133,9 +129,7 @@ record_test() {
     fi
 }
 
-# ============================================================================
 # HELPER FUNCTIONS
-# ============================================================================
 
 # Safe command execution - captures output and exit code without triggering set -e
 safe_exec() {
@@ -161,9 +155,7 @@ safe_exec() {
     eval "$exit_code_var=\$temp_exit_code"
 }
 
-# ============================================================================
 # TOTP WINDOW MANAGEMENT
-# ============================================================================
 
 # Wait for next TOTP window to avoid replay protection.
 # The server records each used TOTP code and rejects reuse within the same
@@ -176,41 +168,20 @@ wait_for_totp_window() {
     local seconds_into_window=$((current_seconds % 30))
     local seconds_to_wait=$((30 - seconds_into_window))
 
-    info "Waiting ${seconds_to_wait}s + 2s buffer for next TOTP window (replay protection)..."
-    sleep "$((seconds_to_wait + 2))"
+    info "Waiting ${seconds_to_wait}s + 1s buffer for next TOTP window (replay protection)..."
+    sleep "$((seconds_to_wait + 1))"
 }
 
-# ============================================================================
 # AGENT LIFECYCLE
-# ============================================================================
 
 AGENT_PID=""
 
-start_agent() {
-    info "Starting arkfile-client agent..."
-    "$CLIENT" agent start &
-    AGENT_PID=$!
-    sleep 2  # Give it time to bind the socket
-
-    if "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
-        success "Agent started (PID: $AGENT_PID)"
-    else
-        error "Agent failed to start"
-        exit 1
-    fi
-}
-
 stop_agent() {
-    if [ -n "$AGENT_PID" ]; then
-        info "Stopping agent (PID: $AGENT_PID)..."
-        kill "$AGENT_PID" 2>/dev/null || true
-        AGENT_PID=""
-    fi
+    info "Stopping agent (if running)..."
+    safe_exec _ _ "$CLIENT" agent stop || true
 }
 
-# ============================================================================
 # TEST PHASES
-# ============================================================================
 
 # Phase 1: Environment Verification
 phase_1_environment_verification() {
@@ -672,9 +643,7 @@ phase_9_share_operations() {
     record_test "Phase 8 file data available" "PASS"
     info "Using file from Phase 8: File ID=$UPLOADED_FILE_ID"
 
-    # ================================================================
     # 9.1: Create Share A — no limits (--expires 0 = no expiry)
-    # ================================================================
     section "9.1: Creating Share A (no limits)"
 
     local create_a_output create_a_exit_code
@@ -695,9 +664,7 @@ phase_9_share_operations() {
         record_test "Share A creation (no limits)" "FAIL"
     fi
 
-    # ================================================================
     # 9.2: Create Share B — max_accesses=2
-    # ================================================================
     section "9.2: Creating Share B (max_accesses=2)"
 
     local create_b_output create_b_exit_code
@@ -718,12 +685,10 @@ phase_9_share_operations() {
         error "Share B creation failed:"; echo "$create_b_output"
         record_test "Share B creation (max_accesses=2)" "FAIL"
     fi
-
-    # ================================================================
+    
     # 9.3: Create Share C — expires_after=2m
-    # Record creation timestamp for smart sleep later.
-    # ================================================================
-    section "9.3: Creating Share C (expires_after=2m)"
+    
+    section "9.3: Creating Share C (expires_after=1m)"
 
     local SHARE_C_CREATED_AT
     SHARE_C_CREATED_AT=$(date +%s)
@@ -735,20 +700,18 @@ phase_9_share_operations() {
         --tls-insecure \
         share create \
         --file-id '$UPLOADED_FILE_ID' \
-        --expires 2m"
+        --expires 1m"
 
     if [ $create_c_exit_code -eq 0 ]; then
         SHARE_C_ID=$(echo "$create_c_output" | grep "Share ID:" | awk '{print $3}' | tr -d ' ')
-        info "Share C created: $SHARE_C_ID (expires in 2 min)"
-        record_test "Share C creation (expires_after=2m)" "PASS"
+        info "Share C created: $SHARE_C_ID (expires in 1 min)"
+        record_test "Share C creation (expires_after=1m)" "PASS"
     else
         error "Share C creation failed:"; echo "$create_c_output"
-        record_test "Share C creation (expires_after=2m)" "FAIL"
+        record_test "Share C creation (expires_after=1m)" "FAIL"
     fi
 
-    # ================================================================
     # 9.4: List shares — verify all 3 appear
-    # ================================================================
     section "9.4: Listing shares"
 
     local list_shares_output list_shares_exit_code
@@ -765,9 +728,7 @@ phase_9_share_operations() {
         record_test "Share listing (all 3 shares)" "FAIL"
     fi
 
-    # ================================================================
     # 9.5: Logout for anonymous visitor tests
-    # ================================================================
     section "9.5: Logging out for anonymous visitor tests"
 
     local logout_output logout_exit_code
@@ -775,9 +736,7 @@ phase_9_share_operations() {
         $CLIENT --server-url "$SERVER_URL" --tls-insecure logout
     record_test "Logout for visitor tests" "PASS"
 
-    # ================================================================
     # 9.6: Visitor — Share A (unlimited) — should succeed
-    # ================================================================
     section "9.6: Visitor downloads Share A (unlimited)"
 
     local dl_a_file="$TEST_DATA_DIR/share_a_download.bin"
@@ -808,9 +767,7 @@ phase_9_share_operations() {
     fi
     rm -f "$dl_a_file"
 
-    # ================================================================
     # 9.7: Visitor — Share B (max_accesses=2) — download twice OK, 3rd fails
-    # ================================================================
     section "9.7: Visitor tests Share B (max_accesses=2)"
 
     # Download 1 of 2
@@ -875,10 +832,8 @@ phase_9_share_operations() {
     fi
     rm -f "$dl_b3_file"
 
-    # ================================================================
-    # 9.8: Visitor — Share C (expires_after=2m) — download before expiry OK
-    # ================================================================
-    section "9.8: Visitor tests Share C (expires_after=2m)"
+    # 9.8: Visitor — Share C (expires_after=1m) — download before expiry OK
+    section "9.8: Visitor tests Share C (expires_after=1m)"
 
     # Download before expiry — should succeed
     local dl_c1_file="$TEST_DATA_DIR/share_c_dl1.bin"
@@ -899,10 +854,10 @@ phase_9_share_operations() {
     fi
     rm -f "$dl_c1_file"
 
-    # Smart sleep: wait only the remaining time until 2 min after creation + 5s buffer
+    # Smart sleep: wait only the remaining time until 1 min after creation + 5s buffer
     local now_ts
     now_ts=$(date +%s)
-    local expiry_ts=$((SHARE_C_CREATED_AT + 120 + 5))
+    local expiry_ts=$((SHARE_C_CREATED_AT + 60 + 5))
     local wait_seconds=$((expiry_ts - now_ts))
     if [ $wait_seconds -lt 0 ]; then
         wait_seconds=0
@@ -930,9 +885,7 @@ phase_9_share_operations() {
     fi
     rm -f "$dl_c2_file"
 
-    # ================================================================
     # 9.9: Negative test — non-existent share
-    # ================================================================
     section "9.9: Negative test — non-existent share"
 
     sleep 2  # Rate limit buffer
@@ -954,9 +907,7 @@ phase_9_share_operations() {
     fi
     rm -f "$TEST_DATA_DIR/nonexistent.bin"
 
-    # ================================================================
     # 9.10: Re-login, revoke Share A, verify revoked share fails
-    # ================================================================
     section "9.10: Re-authenticating to revoke Share A"
 
     wait_for_totp_window
@@ -1077,7 +1028,7 @@ phase_12_summary() {
     echo -e "${BLUE}========================================${NC}"
     echo ""
 
-    for test_name in "${!TEST_RESULTS[@]}"; do
+    for test_name in "${TEST_ORDER[@]}"; do
         local result="${TEST_RESULTS[$test_name]}"
         if [ "$result" = "PASS" ]; then
             success "$test_name"
@@ -1095,9 +1046,7 @@ phase_12_summary() {
     echo ""
 
     if [ $FAIL_COUNT -eq 0 ]; then
-        echo -e "${GREEN}========================================${NC}"
         echo -e "${GREEN}  ALL TESTS PASSED SUCCESSFULLY!       ${NC}"
-        echo -e "${GREEN}========================================${NC}"
         echo ""
         return 0
     else
@@ -1109,9 +1058,7 @@ phase_12_summary() {
     fi
 }
 
-# ============================================================================
 # MAIN EXECUTION
-# ============================================================================
 
 # Ensure agent is stopped on exit (covers error paths too)
 trap stop_agent EXIT
@@ -1132,7 +1079,7 @@ main() {
     echo ""
 
     # Start the persistent agent before any CLI commands
-    start_agent
+    # (Agent auto-starts on login now per improved behavior)
 
     # Execute test phases
     phase_1_environment_verification
