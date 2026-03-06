@@ -1,5 +1,7 @@
 # Better E2E Plan for `scripts/testing/e2e-test.sh`
 
+`NOTE: Agentic coding agents & LLMs *MUST* read AGENTS.md prior to beginning or resuming any coding/implementation work on this project. The developer will run dev-reset.sh himself after any changes to the project/app code, and e2e-test.sh himself after changes to the test script.`
+
 ## Goal
 
 Improve `scripts/testing/e2e-test.sh` so that it:
@@ -61,7 +63,8 @@ This is the target execution shape after refactor.
 - run custom-password file flow, including owner round-trip validation
 - create shares
 - ensure at least one share is created from the custom-password-encrypted file
-- list shares and inspect visible output for privacy expectations
+- run enriched `share list` and verify useful owner-visible output
+- run raw/API-level share-list checks for privacy expectations
 - logout primary user
 
 ### 5. Anonymous Share-Access Block
@@ -96,8 +99,9 @@ This is the target execution shape after refactor.
 
 ### 9. Cleanup and Summary Block
 
-- stop agent cleanly
-- remove temp files and outputs
+- verify the agent auto-started during normal CLI use
+- stop agent cleanly at the end
+- verify the agent is no longer running after cleanup
 - keep summary ordering deterministic
 - return a clear success/failure exit code
 
@@ -117,7 +121,7 @@ Current issue:
 Planned change:
 
 - run environment verification first
-- start the agent only once the script has confirmed server reachability and binary availability
+- the agent starts implicitly on first login; make sure we pass the option to cache account key and file digests whenever the test user logs in
 
 ### 2. Reduce TOTP window buffer to 1 second
 
@@ -152,14 +156,13 @@ Expected result:
 
 Current issue:
 
-- cleanup logs out users but does not fully manage temp artifacts
-- agent shutdown currently relies on PID kill behavior only
+- the old script-managed agent lifecycle is likely more complex than needed
 
 Planned change:
 
-- centralize cleanup in a stronger cleanup routine used by the exit trap
-- remove temp output files created during success and failure paths
-- stop the agent via CLI if supported, then verify shutdown status
+- allow the CLI to auto-start the agent during normal commands
+- verify agent status once after a command path that should have started it
+- stop the agent via CLI during cleanup and verify shutdown status
 - keep cleanup idempotent so failure paths stay safe
 
 ### 5. Make summary output deterministic
@@ -180,7 +183,7 @@ Expected result:
 
 Current issue:
 
-- some comments and log banners use formatting styles that do not align with the guidance in `AGENTS.md`
+- some comments and log banners use formatting styles that do not align with the guidance in `AGENTS.md`, like `# ---` or `# ===`
 
 Planned change:
 
@@ -199,7 +202,11 @@ Add focused helpers for repeated behaviors such as:
 - `user_login_with_totp`
 - `logout_user_session`
 - `logout_admin_session`
+- `assert_agent_running`
+- `assert_agent_not_running`
 - `share_download_with_password`
+- `share_create_for_account_file`
+- `share_create_for_custom_file`
 - `assert_output_file_exists`
 - `assert_output_file_absent_or_empty`
 - `assert_sha256_matches`
@@ -238,6 +245,7 @@ Planned additions:
 Important constraint:
 
 - do not alter any existing credential values already present in the script
+- passwords (even incorrect ones) must meet all strength/complexity requirements as defined in password-requirements.json for the given password type, except in the case that we are explicitly trying to test a WEAK password specifically
 
 ### 4. Separate stored IDs and artifacts by scenario
 
@@ -262,8 +270,9 @@ Goal:
 
 Planned assertions:
 
-- inspect `list-files` output and verify it does not expose original plaintext filename unless that visibility is explicitly intended client-side
-- verify no raw encryption envelope data or other obviously sensitive internals leak into normal listing output
+- use `list-files --raw` to verify the raw server-returned data does not expose original plaintext filename or SHA-256 metadata
+- use normal `list-files` to verify the owner can still see locally decrypted filename information as intended
+- verify no raw encryption envelope data or other obviously sensitive internals leak into the raw output
 
 Note:
 
@@ -273,13 +282,18 @@ Note:
 
 Goal:
 
-- confirm share listing does not expose recipient secrets, raw share envelope material, or other unintended plaintext internals
+- make `share list` useful to owners while still proving raw server-side privacy properties
 
 Planned assertions:
 
-- verify share password material never appears
-- verify raw encrypted blob data is not printed in normal list output
-- verify only intended management-visible fields appear
+- improve default `arkfile-client share list` so it fetches owner share records, then fetches file metadata for each `file_id`, then locally decrypts and displays useful owner-visible fields
+- display server-visible share-management fields on the left and locally decrypted owner-visible file metadata on the right
+- include original filename, original size, and original SHA-256 in that owner-visible section
+- clearly indicate that those fields are locally decrypted / client-side derived values
+- verify default `share list` shows those useful locally decrypted values for both an account-password shared file and a custom-password shared file
+- add a 'key type' or 'type' field to indicate which type of password was used by the owner for encryption originally: account or custom
+- separately verify the raw/API-level share list data does not expose plaintext filename, plaintext SHA-256, share password, custom password, or share-envelope contents
+- once code changes are made to the arkfile-client for the improved `share list` command the developer will redeploy with `dev-reset.sh` prior to re-running `e2e-test.sh`
 
 ### 3. Add wrong share password rejection for an existing share
 
@@ -291,6 +305,7 @@ Planned assertions:
 
 - create or reuse a valid share
 - attempt anonymous download with an intentionally wrong share password
+- attempt anonymous download with an intentionally wrong and WEAK share password as well (app behavior should be identical as far as 'attacker' is concerned)
 - verify the command fails
 - verify no plaintext output file remains behind
 
@@ -340,6 +355,8 @@ Planned steps:
 - upload a file using the primary user's custom password path
 - verify upload succeeds
 - verify owner can still see and manage the file's metadata in normal authenticated flows
+- verify `list-files --raw` does not expose the file's plaintext metadata
+- verify normal `list-files` does show the owner-visible decrypted filename as intended
 - download as the owner using the correct custom password
 - verify round-trip SHA-256 integrity
 
@@ -356,6 +373,7 @@ Planned steps:
 Planned steps:
 
 - create at least one share from the custom-password-encrypted file rather than only from account-password-encrypted files
+- during share creation for that file, provide the custom password first and the share password second, matching the CLI's current prompt order
 - verify anonymous recipient download still succeeds through the share-password flow
 - keep this separate from owner-side custom-password assertions so both paths are explicitly proven
 
@@ -369,6 +387,7 @@ Planned assertions:
 
 - verify the custom-password file still participates correctly in normal authenticated file management flows
 - verify the owner can view/list that file with normal account-authenticated operations even though file-content decryption still requires the custom password
+- verify the same account-key-based metadata decryptability also enables enriched owner-visible `share list` output for shares created from that custom-password file
 
 ## Priority 5: Add Authorization and Session Coverage
 
@@ -411,6 +430,12 @@ Planned assertions:
 - after logout, verify saved session state no longer authorizes protected actions
 - after logout, verify cached key behavior does not silently continue to unlock protected flows
 
+Implementation note:
+
+- simplify the overall agent/session coverage by relying on normal CLI auto-start behavior instead of manually starting the agent early in the script
+- keep one explicit status check after a command path that should have started the agent
+- keep one explicit stop-and-verify check during cleanup
+
 ### 4. Validate post-revocation and post-expiry share state
 
 Planned assertions:
@@ -442,17 +467,19 @@ Expected result:
 1. Reorganize execution order so environment verification runs before agent startup.
 2. Keep the current auth ordering: register the primary user, complete TOTP setup immediately, then log out before the first admin approval block.
 3. Reduce TOTP buffer to 1 second and Share C expiry to 1 minute.
-4. Refactor repeated login, logout, share-download, and file-assertion logic into helpers.
-5. Group tests by actor/session block to reduce churn and make coverage easier to extend.
-6. Add explicit owner round-trip coverage for the custom-password file, including correct-password success, SHA-256 integrity, and wrong-password rejection.
-7. Ensure at least one share scenario uses the custom-password-encrypted file.
-8. Add wrong-share-password rejection and failed-download output hygiene checks.
-9. Add privacy-focused assertions for `list-files` and `share list` output.
-10. Add post-logout unauthorized-command and session/cache-key invalidation checks.
-11. Add admin negative-access tests against user-owned resources.
-12. Strengthen bootstrap protection assertions and make summary ordering deterministic.
-13. Clean up formatting and cleanup behavior to align with project guidance.
-14. Update `dev-reset.sh` to remove stale E2E temp artifacts.
+4. Simplify agent handling by relying on normal CLI auto-start behavior, then verify agent status once during the run and once after explicit cleanup shutdown.
+5. Refactor repeated login, logout, share-download, share-create, and file-assertion logic into helpers.
+6. Group tests by actor/session block to reduce churn and make coverage easier to extend.
+7. Add explicit owner round-trip coverage for the custom-password file, including correct-password success, SHA-256 integrity, raw-list privacy checks, decrypted owner-visible metadata checks, and wrong-password rejection.
+8. Ensure at least one share scenario uses the custom-password-encrypted file.
+9. Improve default `share list` so it shows useful owner-visible locally decrypted filename, size, and SHA-256 fields for shared files.
+10. Add raw/API-level privacy assertions for `list-files` and `share list` output.
+11. Add wrong-share-password rejection and failed-download output hygiene checks.
+12. Add post-logout unauthorized-command and session/cache-key invalidation checks.
+13. Add admin negative-access tests against user-owned resources.
+14. Strengthen bootstrap protection assertions and make summary ordering deterministic.
+15. Clean up formatting and cleanup behavior to align with project guidance.
+16. Update `dev-reset.sh` to remove stale E2E temp artifacts.
 
 ## Notes for Implementation
 
@@ -460,3 +487,5 @@ Expected result:
 - Prefer explicit assertions over broad success/failure assumptions.
 - When a test is intended to prove a security or privacy property, make the expected failure mode part of the assertion.
 - Keep the script suitable for repeated local development use, since it is one of the primary proof tools for Arkfile.
+- Keep default CLI output useful for legitimate owners while using raw/API-level checks to prove that the server still does not expose plaintext metadata.
+- For share creation from a custom-password file, account for the current CLI stdin order: custom password first, then share password.
