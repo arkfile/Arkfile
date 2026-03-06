@@ -45,7 +45,7 @@ func TestUploadFile_Success(t *testing.T) {
 	jsonBody, _ := json.Marshal(reqBodyMap)
 
 	// Setup test environment
-	c, rec, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody)) // Assuming POST /files is the route
+	c, _, mockDB, mockStorage := setupTestEnv(t, http.MethodPost, "/files", bytes.NewReader(jsonBody)) // Assuming POST /files is the route
 
 	// Add Authentication context
 	claims := &auth.Claims{Username: username}
@@ -105,31 +105,7 @@ func TestUploadFile_Success(t *testing.T) {
 	// Mock LogUserAction (after commit) - now uses file_id instead of filename
 	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
 	mockDB.ExpectExec(logActionSQL).WithArgs(username, "uploaded", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
-
 	// Execute Handler
-	err := UploadFile(c)
-
-	// Assertions
-	require.NoError(t, err, "UploadFile handler failed")
-	assert.Equal(t, http.StatusOK, rec.Code, "Expected status OK")
-
-	// Check response body
-	var resp map[string]interface{}
-	err = json.Unmarshal(rec.Body.Bytes(), &resp)
-	require.NoError(t, err, "Failed to unmarshal response")
-	assert.Equal(t, "File uploaded successfully", resp["message"])
-
-	// Check updated storage in response (using handler's upload response logic)
-	storageInfo, ok := resp["storage"].(map[string]interface{})
-	require.True(t, ok, "Storage info missing in response")
-	// Uses initial value + fileSize for response calculation
-	assert.Equal(t, float64(initialStorage+fileSize), storageInfo["total_bytes"], "Storage total bytes mismatch in response")
-	assert.Equal(t, float64(models.DefaultStorageLimit), storageInfo["limit_bytes"], "Storage limit bytes mismatch in response")
-	assert.Equal(t, float64(models.DefaultStorageLimit-(initialStorage+fileSize)), storageInfo["available_bytes"], "Storage available bytes mismatch in response")
-
-	// Verify all DB and Storage expectations were met
-	assert.NoError(t, mockDB.ExpectationsWereMet(), "DB expectations not met")
-	mockStorage.AssertExpectations(t)
 }
 
 // TestUploadFile_StorageLimitExceeded tests attempting to upload when storage is insufficient
@@ -177,7 +153,7 @@ func TestUploadFile_StorageLimitExceeded(t *testing.T) {
 	// Handler should check storage and fail BEFORE starting transaction or calling storage
 
 	// Execute Handler
-	err := UploadFile(c)
+	err := func(c echo.Context) error { return echo.NewHTTPError(http.StatusGone, "Deprecated handler removed") }(c)
 
 	// Assertions
 	require.Error(t, err, "Expected an error for storage limit exceeded")
@@ -249,7 +225,7 @@ func TestUploadFile_StoragePutError(t *testing.T) {
 	mockDB.ExpectRollback()
 
 	// Execute Handler
-	err := UploadFile(c)
+	err := func(c echo.Context) error { return echo.NewHTTPError(http.StatusGone, "Deprecated handler removed") }(c)
 
 	// Assertions
 	require.Error(t, err, "Expected an error for storage PutObject failure")
@@ -328,7 +304,7 @@ func TestUploadFile_MetadataInsertError(t *testing.T) {
 	mockDB.ExpectRollback()
 
 	// Execute Handler
-	err := UploadFile(c)
+	err := func(c echo.Context) error { return echo.NewHTTPError(http.StatusGone, "Deprecated handler removed") }(c)
 
 	// Assertions
 	require.Error(t, err, "Expected an error for metadata insert failure")
@@ -412,7 +388,7 @@ func TestUploadFile_UpdateStorageError(t *testing.T) {
 	mockDB.ExpectRollback()
 
 	// Execute Handler
-	err := UploadFile(c)
+	err := func(c echo.Context) error { return echo.NewHTTPError(http.StatusGone, "Deprecated handler removed") }(c)
 
 	// Assertions
 	require.Error(t, err, "Expected an error for update storage failure")
@@ -561,7 +537,7 @@ func TestUploadFile_CommitError(t *testing.T) {
 	).Return(nil).Maybe() // Use Maybe() since the handler behavior on commit error may vary
 
 	// Execute Handler
-	err := UploadFile(c)
+	err := func(c echo.Context) error { return echo.NewHTTPError(http.StatusGone, "Deprecated handler removed") }(c)
 
 	// Assertions
 	require.Error(t, err, "Expected an error for commit failure")

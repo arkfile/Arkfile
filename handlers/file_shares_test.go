@@ -190,7 +190,7 @@ func TestAccessSharedFile_WeakPassword(t *testing.T) {
 
 	// Execute handler - should work since handler doesn't actually validate password strength
 	// (Password validation happens client-side per the design)
-	err := AccessSharedFile(c)
+	err := GetShareEnvelope(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
@@ -227,7 +227,7 @@ func TestAccessSharedFile_NonexistentShare(t *testing.T) {
 	mock.ExpectExec(rateLimitUpdateSQL).WithArgs(1, sqlmock.AnyArg(), "nonexistent", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Execute handler - should fail with 404
-	err := AccessSharedFile(c)
+	err := GetShareEnvelope(c)
 	require.Error(t, err)
 
 	httpErr, ok := err.(*echo.HTTPError)
@@ -412,7 +412,7 @@ func TestSharePasswordValidation_WithZxcvbn(t *testing.T) {
 			mock.ExpectExec(rateLimitResetSQL).WithArgs("test-share-id", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 			// Execute handler - should always succeed (server doesn't validate passwords)
-			err := AccessSharedFile(c)
+			err := GetShareEnvelope(c)
 			require.NoError(t, err)
 			assert.Equal(t, http.StatusOK, rec.Code)
 

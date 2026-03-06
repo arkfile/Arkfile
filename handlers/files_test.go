@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -172,6 +173,105 @@ func TestDeleteFile_StorageError(t *testing.T) {
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 	mockStorage.AssertExpectations(t)
+}
+
+// TestListRecentFileMetadata tests the GET /api/files/metadata endpoint
+func TestListRecentFileMetadata(t *testing.T) {
+	username := "testuser"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodGet, "/api/files/metadata", nil)
+	c.SetParamNames("limit", "offset")
+
+	claims := &auth.Claims{Username: username}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// Setup mock DB response for models.GetRecentFileMetadataByOwner
+	query := `SELECT file_id, password_type, filename_nonce, encrypted_filename,
+		       sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date
+		FROM file_metadata
+		WHERE owner_username = \?
+		ORDER BY upload_date DESC
+		LIMIT \? OFFSET \?`
+
+	rows := sqlmock.NewRows([]string{
+		"file_id", "password_type", "filename_nonce", "encrypted_filename",
+		"sha256sum_nonce", "encrypted_sha256sum", "size_bytes", "upload_date",
+	}).AddRow(
+		"file-1", "account", "nonce1", "encName1", "shaNonce1", "encSha1", 1024, "2024-01-01 12:00:00",
+	)
+
+	mockDB.ExpectQuery(query).WithArgs(username, 100, 0).WillReturnRows(rows)
+
+	err := ListRecentFileMetadata(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	err = json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, float64(100), resp["limit"])
+	assert.Equal(t, float64(0), resp["offset"])
+	assert.Equal(t, float64(1), resp["returned"])
+	assert.Equal(t, false, resp["has_more"])
+
+	files := resp["files"].([]interface{})
+	assert.Len(t, files, 1)
+	file0 := files[0].(map[string]interface{})
+	assert.Equal(t, "file-1", file0["file_id"])
+	assert.Equal(t, "encName1", file0["encrypted_filename"])
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+// TestGetFileMetadataBatch tests the POST /api/files/metadata/batch endpoint
+func TestGetFileMetadataBatch(t *testing.T) {
+	username := "testuser"
+	reqBody := `{"file_ids": ["file-1", "file-2", "file-999"]}`
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPost, "/api/files/metadata/batch", bytes.NewReader([]byte(reqBody)))
+
+	claims := &auth.Claims{Username: username}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// Setup mock DB response for models.GetFileMetadataBatchByOwner
+	query := `SELECT file_id, password_type, filename_nonce, encrypted_filename,
+		       sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date
+		FROM file_metadata
+		WHERE owner_username = \? AND file_id IN \(\?,\?,\?\)`
+
+	rows := sqlmock.NewRows([]string{
+		"file_id", "password_type", "filename_nonce", "encrypted_filename",
+		"sha256sum_nonce", "encrypted_sha256sum", "size_bytes", "upload_date",
+	}).AddRow(
+		"file-1", "account", "nonce1", "encName1", "shaNonce1", "encSha1", 1024, "2024-01-01 12:00:00",
+	).AddRow(
+		"file-2", "custom", "nonce2", "encName2", "shaNonce2", "encSha2", 2048, "2024-01-02 12:00:00",
+	)
+	// Specifically omitting file-999 to test missing logic
+
+	mockDB.ExpectQuery(query).WithArgs(username, "file-1", "file-2", "file-999").WillReturnRows(rows)
+
+	err := GetFileMetadataBatch(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	err = json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	filesMap := resp["files"].(map[string]interface{})
+	assert.Contains(t, filesMap, "file-1")
+	assert.Contains(t, filesMap, "file-2")
+	assert.NotContains(t, filesMap, "file-999")
+
+	missing := resp["missing"].([]interface{})
+	assert.Len(t, missing, 1)
+	assert.Equal(t, "file-999", missing[0])
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
 // Additional Test Case Suggestions
