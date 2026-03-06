@@ -131,6 +131,168 @@ record_test() {
 
 # HELPER FUNCTIONS
 
+admin_login_with_totp() {
+    local test_name="$1"
+    wait_for_totp_window
+    
+    local out code
+    safe_exec out code bash -c "printf '%s\n' '$ADMIN_PASSWORD' | $ADMIN \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        --username '$ADMIN_USERNAME' \
+        login \
+        --totp-secret '$ADMIN_TOTP_SECRET' \
+        --save-session"
+        
+    if [ $code -eq 0 ] && echo "$out" | grep -q "Admin login successful"; then
+        record_test "$test_name" "PASS"
+        echo "$out"
+    else
+        error "$test_name failed with output:"
+        echo "$out"
+        record_test "$test_name" "FAIL"
+    fi
+}
+
+user_login_with_totp() {
+    local test_name="$1"
+    wait_for_totp_window
+    
+    if [ -z "$TEST_USER_TOTP_SECRET" ]; then
+        error "Missing TOTP secret from setup phase"
+        record_test "$test_name" "FAIL"
+        return
+    fi
+
+    local out code
+    safe_exec out code bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        --username '$TEST_USERNAME' \
+        login \
+        --totp-secret '$TEST_USER_TOTP_SECRET' \
+        --save-session \
+        --cache-key"
+
+    if [ $code -eq 0 ] && echo "$out" | grep -q "Login successful"; then
+        record_test "$test_name" "PASS"
+        echo "$out"
+    else
+        error "$test_name failed with output:"
+        echo "$out"
+        record_test "$test_name" "FAIL"
+    fi
+}
+
+logout_user_session() {
+    local test_name="$1"
+    local out code
+    safe_exec out code $CLIENT --server-url "$SERVER_URL" --tls-insecure logout
+    if [ $code -eq 0 ]; then
+        record_test "$test_name" "PASS"
+    else
+        error "$test_name failed:"
+        echo "$out"
+        record_test "$test_name" "FAIL"
+    fi
+}
+
+logout_admin_session() {
+    local test_name="$1"
+    local out code
+    safe_exec out code $ADMIN --server-url "$SERVER_URL" --tls-insecure logout
+    if [ $code -eq 0 ]; then
+        record_test "$test_name" "PASS"
+    else
+        error "$test_name failed:"
+        echo "$out"
+        record_test "$test_name" "FAIL"
+    fi
+}
+
+assert_agent_running() {
+    local test_name="$1"
+    if pgrep -x "arkfile-client" > /dev/null || "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
+        record_test "$test_name" "PASS"
+    else
+        error "$test_name failed: Agent is not running."
+        record_test "$test_name" "FAIL"
+    fi
+}
+
+assert_agent_not_running() {
+    local test_name="$1"
+    if pgrep -x "arkfile-client" > /dev/null || "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
+        error "$test_name failed: Agent is still running."
+        record_test "$test_name" "FAIL"
+    else
+        record_test "$test_name" "PASS"
+    fi
+}
+
+share_download_with_password() {
+    local share_pass="$1"
+    local share_id="$2"
+    local output_file="$3"
+    local test_name="$4"
+    local expect_fail="${5:-false}"
+    
+    local out code
+    safe_exec out code bash -c "printf '%s\n' '$share_pass' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        share download \
+        --share-id '$share_id' \
+        --output '$output_file'"
+        
+    if [ "$expect_fail" = "true" ]; then
+        if [ $code -ne 0 ]; then
+            record_test "$test_name" "PASS"
+        else
+            error "Security failure: $test_name unexpectedly succeeded!"
+            echo "$out"
+            record_test "$test_name" "FAIL"
+        fi
+    else
+        if [ $code -eq 0 ]; then
+            record_test "$test_name" "PASS"
+        else
+            error "$test_name failed:"
+            echo "$out"
+            record_test "$test_name" "FAIL"
+        fi
+    fi
+}
+
+assert_output_file_absent_or_empty() {
+    local file_path="$1"
+    local test_name="$2"
+    
+    if [ ! -f "$file_path" ] || [ ! -s "$file_path" ]; then
+        record_test "$test_name" "PASS"
+        rm -f "$file_path"
+    else
+        error "Security failure: $test_name failed! File exists and has content."
+        record_test "$test_name" "FAIL"
+        rm -f "$file_path"
+    fi
+}
+
+assert_sha256_matches() {
+    local file_path="$1"
+    local expected_hash="$2"
+    local test_name="$3"
+    
+    local actual_hash
+    actual_hash=$(sha256sum "$file_path" | awk '{print $1}')
+    if [ "$actual_hash" = "$expected_hash" ]; then
+        record_test "$test_name" "PASS"
+    else
+        error "$test_name mismatch! Expected: $expected_hash, Got: $actual_hash"
+        record_test "$test_name" "FAIL"
+    fi
+}
+
 # Safe command execution - captures output and exit code without triggering set -e
 safe_exec() {
     local output_var="$1"
@@ -218,29 +380,7 @@ phase_2_admin_authentication() {
     phase "2: ADMIN AUTHENTICATION"
 
     section "Authenticating admin user: $ADMIN_USERNAME"
-
-    wait_for_totp_window
-
-    local login_output
-    local login_exit_code
-
-    safe_exec login_output login_exit_code \
-        bash -c "printf '%s\n' '$ADMIN_PASSWORD' | $ADMIN \
-            --server-url '$SERVER_URL' \
-            --tls-insecure \
-            --username '$ADMIN_USERNAME' \
-            login \
-            --totp-secret '$ADMIN_TOTP_SECRET' \
-            --save-session"
-
-    if [ $login_exit_code -eq 0 ] && echo "$login_output" | grep -q "Admin login successful"; then
-        record_test "Admin login" "PASS"
-        echo "$login_output"
-    else
-        error "Admin login failed with output:"
-        echo "$login_output"
-        record_test "Admin login" "FAIL"
-    fi
+    admin_login_with_totp "Admin login"
 
     success "Admin authentication complete"
 }
@@ -268,12 +408,12 @@ phase_3_bootstrap_protection() {
         --token '$BOOTSTRAP_TOKEN' \
         --username '$ATTACKER_ADMIN_USERNAME'"
 
-    if [ $boot_exit_code -eq 0 ]; then
-        error "Security Vulnerability: Able to create second admin via bootstrap!"
-        record_test "Bootstrap protection" "FAIL"
-    else
+    if [ $boot_exit_code -ne 0 ] && echo "$boot_output" | grep -E -q "already initialized|unauthorized"; then
         record_test "Bootstrap protection" "PASS"
         success "Bootstrap protection verified (request rejected)"
+    else
+        error "Security Vulnerability: Able to create second admin via bootstrap!"
+        record_test "Bootstrap protection" "FAIL"
     fi
 }
 
@@ -474,35 +614,10 @@ phase_7_user_login() {
     phase "7: REGULAR USER LOGIN WITH TOTP"
 
     section "Logging in as user: $TEST_USERNAME"
-
-    wait_for_totp_window
-
-    if [ -z "$TEST_USER_TOTP_SECRET" ]; then
-        error "Missing TOTP secret from setup phase"
-        record_test "User login" "FAIL"
-    fi
-
-    local user_login_output
-    local user_login_exit_code
-
-    safe_exec user_login_output user_login_exit_code \
-        bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
-            --server-url '$SERVER_URL' \
-            --tls-insecure \
-            --username '$TEST_USERNAME' \
-            login \
-            --totp-secret '$TEST_USER_TOTP_SECRET' \
-            --save-session \
-            --cache-key"
-
-    if [ $user_login_exit_code -eq 0 ] && echo "$user_login_output" | grep -q "Login successful"; then
-        record_test "User login" "PASS"
-        echo "$user_login_output"
-    else
-        error "User login failed with output:"
-        echo "$user_login_output"
-        record_test "User login" "FAIL"
-    fi
+    user_login_with_totp "User login"
+    
+    # Verify agent started automatically in the background
+    assert_agent_running "Agent auto-start verification"
 
     success "User login phase complete"
 }
@@ -581,6 +696,32 @@ phase_8_file_operations() {
         echo "$list_output"
         record_test "File listing verification" "FAIL"
     fi
+    
+    # 8.3.1: Verify raw API privacy
+    section "Verifying list-files --raw API privacy"
+    local list_raw_output list_raw_exit_code
+    safe_exec list_raw_output list_raw_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --raw
+        
+    if echo "$list_raw_output" | grep -q "$UPLOADED_FILE_SHA256" || echo "$list_raw_output" | grep -q "test_file.bin"; then
+        error "Security failure: Raw API list exposed plaintext filename or hashes!"
+        record_test "Raw List API Privacy" "FAIL"
+    else
+        record_test "Raw List API Privacy" "PASS"
+    fi
+
+    # 8.3.2: Verify GET /api/files/metadata raw privacy
+    section "Verifying GET /api/files/metadata API privacy"
+    local metadata_api_output
+    
+    # We use curl with the agent token to verify the core API
+    metadata_api_output=$(curl -sk -H "Authorization: Bearer $("$CLIENT" agent token)" "$SERVER_URL/api/files/metadata")
+    if echo "$metadata_api_output" | grep -q "$UPLOADED_FILE_SHA256" || echo "$metadata_api_output" | grep -q "test_file.bin"; then
+        error "Security failure: Raw metadata API exposed plaintext filename or hashes!"
+        record_test "Raw Metadata API Privacy" "FAIL"
+    else
+        record_test "Raw Metadata API Privacy" "PASS"
+    fi
 
     # 8.4: Download file
     section "Downloading file (decryption handled by arkfile-client)"
@@ -605,17 +746,7 @@ phase_8_file_operations() {
     fi
 
     # 8.5: Verify content integrity (SHA256 round-trip)
-    section "Verifying file content integrity"
-    local downloaded_sha256
-    downloaded_sha256=$(sha256sum "$downloaded_file" | awk '{print $1}')
-
-    if [ "$UPLOADED_FILE_SHA256" = "$downloaded_sha256" ]; then
-        record_test "Content integrity (SHA256 round-trip)" "PASS"
-        info "SHA256 matches: $downloaded_sha256"
-    else
-        error "SHA256 mismatch! Original: $UPLOADED_FILE_SHA256, Downloaded: $downloaded_sha256"
-        record_test "Content integrity (SHA256 round-trip)" "FAIL"
-    fi
+    assert_sha256_matches "$downloaded_file" "$UPLOADED_FILE_SHA256" "Content integrity (SHA256 round-trip)"
 
     rm -f "$test_file" "$downloaded_file"
 
@@ -728,130 +859,72 @@ phase_9_share_operations() {
         record_test "Share listing (all 3 shares)" "FAIL"
     fi
 
+    # 9.4.1: Share List Privacy Checks
+    section "9.4.1: Verifying share list --raw API privacy"
+    
+    local list_shares_raw_output list_shares_raw_exit_code
+    safe_exec list_shares_raw_output list_shares_raw_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure share list --raw
+        
+    # Raw response from GET /api/shares shouldn't contain the decrypted metadata directly
+    if echo "$list_shares_raw_output" | grep -q "test_file.bin"; then
+        error "Security failure: Raw shares API list exposed plaintext filename!"
+        record_test "Raw Shares API Privacy" "FAIL"
+    else
+        record_test "Raw Shares API Privacy" "PASS"
+    fi
+
     # 9.5: Logout for anonymous visitor tests
     section "9.5: Logging out for anonymous visitor tests"
-
-    local logout_output logout_exit_code
-    safe_exec logout_output logout_exit_code \
-        $CLIENT --server-url "$SERVER_URL" --tls-insecure logout
-    record_test "Logout for visitor tests" "PASS"
+    logout_user_session "Logout for visitor tests"
 
     # 9.6: Visitor — Share A (unlimited) — should succeed
     section "9.6: Visitor downloads Share A (unlimited)"
 
     local dl_a_file="$TEST_DATA_DIR/share_a_download.bin"
-    local dl_a_output dl_a_exit_code
-    safe_exec dl_a_output dl_a_exit_code \
-        bash -c "printf '%s\n' '$SHARE_A_PASSWORD' | $CLIENT \
-        --server-url '$SERVER_URL' \
-        --tls-insecure \
-        share download \
-        --share-id '$SHARE_A_ID' \
-        --output '$dl_a_file'"
-
-    if [ $dl_a_exit_code -eq 0 ]; then
-        record_test "Visitor download Share A" "PASS"
-    else
-        error "Visitor download Share A failed:"; echo "$dl_a_output"
-        record_test "Visitor download Share A" "FAIL"
-    fi
+    share_download_with_password "$SHARE_A_PASSWORD" "$SHARE_A_ID" "$dl_a_file" "Visitor download Share A" "false"
 
     # Verify SHA256
-    local dl_a_sha256
-    dl_a_sha256=$(sha256sum "$dl_a_file" | awk '{print $1}')
-    if [ "$dl_a_sha256" = "$UPLOADED_FILE_SHA256" ]; then
-        record_test "Share A SHA256 integrity" "PASS"
-    else
-        error "Share A SHA256 mismatch! Expected: $UPLOADED_FILE_SHA256, Got: $dl_a_sha256"
-        record_test "Share A SHA256 integrity" "FAIL"
-    fi
+    assert_sha256_matches "$dl_a_file" "$UPLOADED_FILE_SHA256" "Share A SHA256 integrity"
     rm -f "$dl_a_file"
+
+    # 9.6.1: Visitor — Share A — intentionally wrong weak password
+    section "9.6.1: Visitor attempts Share A with intentionall wrong weak password"
+    
+    sleep 2 # Rate limit buffer
+    
+    local dl_a_bad_file="$TEST_DATA_DIR/share_a_bad.bin"
+    share_download_with_password "weakpassword123" "$SHARE_A_ID" "$dl_a_bad_file" "Visitor rejected with wrong bad password" "true"
+    assert_output_file_absent_or_empty "$dl_a_bad_file" "Share A bad password file hygiene"
 
     # 9.7: Visitor — Share B (max_accesses=2) — download twice OK, 3rd fails
     section "9.7: Visitor tests Share B (max_accesses=2)"
 
     # Download 1 of 2
     local dl_b1_file="$TEST_DATA_DIR/share_b_dl1.bin"
-    local dl_b1_output dl_b1_exit_code
-    safe_exec dl_b1_output dl_b1_exit_code \
-        bash -c "printf '%s\n' '$SHARE_B_PASSWORD' | $CLIENT \
-        --server-url '$SERVER_URL' \
-        --tls-insecure \
-        share download \
-        --share-id '$SHARE_B_ID' \
-        --output '$dl_b1_file'"
-
-    if [ $dl_b1_exit_code -eq 0 ]; then
-        record_test "Share B download 1/2" "PASS"
-    else
-        error "Share B download 1/2 failed:"; echo "$dl_b1_output"
-        record_test "Share B download 1/2" "FAIL"
-    fi
+    share_download_with_password "$SHARE_B_PASSWORD" "$SHARE_B_ID" "$dl_b1_file" "Share B download 1/2" "false"
     rm -f "$dl_b1_file"
 
     sleep 2  # Rate limit buffer
 
     # Download 2 of 2
     local dl_b2_file="$TEST_DATA_DIR/share_b_dl2.bin"
-    local dl_b2_output dl_b2_exit_code
-    safe_exec dl_b2_output dl_b2_exit_code \
-        bash -c "printf '%s\n' '$SHARE_B_PASSWORD' | $CLIENT \
-        --server-url '$SERVER_URL' \
-        --tls-insecure \
-        share download \
-        --share-id '$SHARE_B_ID' \
-        --output '$dl_b2_file'"
-
-    if [ $dl_b2_exit_code -eq 0 ]; then
-        record_test "Share B download 2/2" "PASS"
-    else
-        error "Share B download 2/2 failed:"; echo "$dl_b2_output"
-        record_test "Share B download 2/2" "FAIL"
-    fi
+    share_download_with_password "$SHARE_B_PASSWORD" "$SHARE_B_ID" "$dl_b2_file" "Share B download 2/2" "false"
     rm -f "$dl_b2_file"
 
     sleep 2  # Rate limit buffer
 
     # Download 3 — should FAIL (max_accesses exceeded)
     local dl_b3_file="$TEST_DATA_DIR/share_b_dl3.bin"
-    local dl_b3_output dl_b3_exit_code
-    safe_exec dl_b3_output dl_b3_exit_code \
-        bash -c "printf '%s\n' '$SHARE_B_PASSWORD' | $CLIENT \
-        --server-url '$SERVER_URL' \
-        --tls-insecure \
-        share download \
-        --share-id '$SHARE_B_ID' \
-        --output '$dl_b3_file'"
-
-    if [ $dl_b3_exit_code -ne 0 ]; then
-        record_test "Share B download 3 rejected (max_accesses)" "PASS"
-        info "Correctly rejected 3rd download on max_accesses=2 share"
-    else
-        error "Security failure: 3rd download on max_accesses=2 share succeeded!"
-        record_test "Share B download 3 rejected (max_accesses)" "FAIL"
-    fi
-    rm -f "$dl_b3_file"
+    share_download_with_password "$SHARE_B_PASSWORD" "$SHARE_B_ID" "$dl_b3_file" "Share B download 3 rejected (max_accesses)" "true"
+    assert_output_file_absent_or_empty "$dl_b3_file" "Share B rejected file hygiene"
 
     # 9.8: Visitor — Share C (expires_after=1m) — download before expiry OK
     section "9.8: Visitor tests Share C (expires_after=1m)"
 
     # Download before expiry — should succeed
     local dl_c1_file="$TEST_DATA_DIR/share_c_dl1.bin"
-    local dl_c1_output dl_c1_exit_code
-    safe_exec dl_c1_output dl_c1_exit_code \
-        bash -c "printf '%s\n' '$SHARE_C_PASSWORD' | $CLIENT \
-        --server-url '$SERVER_URL' \
-        --tls-insecure \
-        share download \
-        --share-id '$SHARE_C_ID' \
-        --output '$dl_c1_file'"
-
-    if [ $dl_c1_exit_code -eq 0 ]; then
-        record_test "Share C download before expiry" "PASS"
-    else
-        error "Share C download before expiry failed:"; echo "$dl_c1_output"
-        record_test "Share C download before expiry" "FAIL"
-    fi
+    share_download_with_password "$SHARE_C_PASSWORD" "$SHARE_C_ID" "$dl_c1_file" "Share C download before expiry" "false"
     rm -f "$dl_c1_file"
 
     # Smart sleep: wait only the remaining time until 1 min after creation + 5s buffer
@@ -867,68 +940,20 @@ phase_9_share_operations() {
 
     # Download after expiry — should FAIL
     local dl_c2_file="$TEST_DATA_DIR/share_c_dl2.bin"
-    local dl_c2_output dl_c2_exit_code
-    safe_exec dl_c2_output dl_c2_exit_code \
-        bash -c "printf '%s\n' '$SHARE_C_PASSWORD' | $CLIENT \
-        --server-url '$SERVER_URL' \
-        --tls-insecure \
-        share download \
-        --share-id '$SHARE_C_ID' \
-        --output '$dl_c2_file'"
-
-    if [ $dl_c2_exit_code -ne 0 ]; then
-        record_test "Share C download after expiry rejected" "PASS"
-        info "Correctly rejected download on expired share"
-    else
-        error "Security failure: Expired share was still accessible!"
-        record_test "Share C download after expiry rejected" "FAIL"
-    fi
-    rm -f "$dl_c2_file"
+    share_download_with_password "$SHARE_C_PASSWORD" "$SHARE_C_ID" "$dl_c2_file" "Share C download after expiry rejected" "true"
+    assert_output_file_absent_or_empty "$dl_c2_file" "Share C rejected file hygiene"
 
     # 9.9: Negative test — non-existent share
     section "9.9: Negative test — non-existent share"
 
     sleep 2  # Rate limit buffer
 
-    local nonexistent_output nonexistent_exit_code
-    safe_exec nonexistent_output nonexistent_exit_code \
-        bash -c "printf '%s\n' '$DUMMY_SHARE_PASSWORD' | $CLIENT \
-        --server-url '$SERVER_URL' \
-        --tls-insecure \
-        share download \
-        --share-id '$NONEXISTENT_SHARE_ID' \
-        --output '$TEST_DATA_DIR/nonexistent.bin'"
-
-    if [ $nonexistent_exit_code -ne 0 ]; then
-        record_test "Non-existent share rejection" "PASS"
-    else
-        error "Security failure: Non-existent share was accepted!"
-        record_test "Non-existent share rejection" "FAIL"
-    fi
-    rm -f "$TEST_DATA_DIR/nonexistent.bin"
+    share_download_with_password "$DUMMY_SHARE_PASSWORD" "$NONEXISTENT_SHARE_ID" "$TEST_DATA_DIR/nonexistent.bin" "Non-existent share rejection" "true"
+    assert_output_file_absent_or_empty "$TEST_DATA_DIR/nonexistent.bin" "Non-existent share file hygiene"
 
     # 9.10: Re-login, revoke Share A, verify revoked share fails
     section "9.10: Re-authenticating to revoke Share A"
-
-    wait_for_totp_window
-
-    local relogin_output relogin_exit_code
-    safe_exec relogin_output relogin_exit_code \
-        bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
-            --server-url '$SERVER_URL' \
-            --tls-insecure \
-            --username '$TEST_USERNAME' \
-            login \
-            --totp-secret '$TEST_USER_TOTP_SECRET' \
-            --save-session \
-            --cache-key"
-
-    if [ $relogin_exit_code -eq 0 ]; then
-        record_test "Re-authentication for revoke" "PASS"
-    else
-        error "Failed to re-authenticate:"; echo "$relogin_output"
-        record_test "Re-authentication for revoke" "FAIL"
-    fi
+    user_login_with_totp "Re-authentication for revoke"
 
     # Revoke Share A
     local revoke_output revoke_exit_code
@@ -948,22 +973,8 @@ phase_9_share_operations() {
     sleep 2
 
     local revoked_dl_output revoked_dl_exit_code
-    safe_exec revoked_dl_output revoked_dl_exit_code \
-        bash -c "printf '%s\n' '$SHARE_A_PASSWORD' | $CLIENT \
-        --server-url '$SERVER_URL' \
-        --tls-insecure \
-        share download \
-        --share-id '$SHARE_A_ID' \
-        --output '$TEST_DATA_DIR/revoked.bin'"
-
-    if [ $revoked_dl_exit_code -ne 0 ]; then
-        record_test "Revoked Share A download rejected" "PASS"
-        info "Correctly rejected revoked share download"
-    else
-        error "Security failure: Revoked share was still accessible!"
-        record_test "Revoked Share A download rejected" "FAIL"
-    fi
-    rm -f "$TEST_DATA_DIR/revoked.bin"
+    share_download_with_password "$SHARE_A_PASSWORD" "$SHARE_A_ID" "$TEST_DATA_DIR/revoked.bin" "Revoked Share A download rejected" "true"
+    assert_output_file_absent_or_empty "$TEST_DATA_DIR/revoked.bin" "Revoked Share A file hygiene"
 
     success "Share operations phase complete"
 }
@@ -999,21 +1010,12 @@ phase_11_cleanup() {
 
     section "Cleaning up test data"
 
-    local user_logout_output
-    local user_logout_exit_code
-
-    safe_exec user_logout_output user_logout_exit_code \
-        $CLIENT --server-url "$SERVER_URL" --tls-insecure logout
-    record_test "User logout" "PASS"
-
-    local admin_logout_output
-    local admin_logout_exit_code
-
-    safe_exec admin_logout_output admin_logout_exit_code \
-        $ADMIN --server-url "$SERVER_URL" --tls-insecure logout
-    record_test "Admin logout" "PASS"
+    logout_user_session "User logout"
+    logout_admin_session "Admin logout"
 
     stop_agent
+
+    assert_agent_not_running "Agent graceful shutdown via CLI"
 
     success "Cleanup complete"
 }
