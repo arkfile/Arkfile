@@ -426,6 +426,20 @@ else
     print_status "SUCCESS" "TypeScript bundle verified in working directory"
 fi
 
+# Ensure arkfile-client binary is available
+if [ ! -x "/opt/arkfile/bin/arkfile-client" ]; then
+    print_status "ERROR" "arkfile-client binary missing or not executable."
+    echo "    Expected location: /opt/arkfile/bin/arkfile-client"
+    if [ -f "$BUILD_BIN/arkfile-client" ]; then
+        echo "    Found in build directory: $BUILD_BIN/arkfile-client"
+        echo "    The deploy script should have copied this automatically."
+    fi
+    print_status "ERROR" "The build or deployment likely failed."
+    exit 1
+else
+    print_status "SUCCESS" "arkfile-client binary verified at /opt/arkfile/bin/arkfile-client"
+fi
+
 print_status "SUCCESS" "Critical file verification complete"
 echo
 

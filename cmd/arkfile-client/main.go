@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -211,7 +212,7 @@ func main() {
 	args := flag.Args()[1:]
 
 	// Auto-start agent for most commands
-	if command != "agent" && command != "version" && command != "" {
+	if command != "agent" && command != "__agent-daemon" && command != "version" && command != "" {
 		if err := ensureAgentRunning(); err != nil {
 			logVerbose("Warning: Failed to start agent: %v", err)
 		}
@@ -273,6 +274,21 @@ func main() {
 			logError("Agent command failed: %v", err)
 			os.Exit(1)
 		}
+	case "__agent-daemon":
+		// Internal command: run agent in foreground as a daemon process.
+		// Not intended for direct user invocation — used by ensureAgentRunning().
+		agent, err := NewAgent()
+		if err != nil {
+			logError("Agent daemon failed: %v", err)
+			os.Exit(1)
+		}
+		if err := agent.Start(); err != nil {
+			logError("Agent daemon failed: %v", err)
+			os.Exit(1)
+		}
+		// Block until agent is stopped via socket command
+		<-agent.stopChan
+		os.Exit(0)
 	case "version":
 		printVersion()
 	default:
@@ -964,15 +980,20 @@ func handleAgentStop() error {
 		return fmt.Errorf("failed to create agent client: %w", err)
 	}
 
+	// Check if agent is running
+	if err := client.Ping(); err != nil {
+		fmt.Println("Agent is not running")
+		return nil
+	}
+
+	// Clear keys from memory first
 	if err := client.Clear(); err != nil {
 		logVerbose("Warning: Failed to clear agent: %v", err)
 	}
 
-	if globalAgent != nil {
-		if err := globalAgent.Stop(); err != nil {
-			return fmt.Errorf("failed to stop agent: %w", err)
-		}
-		globalAgent = nil
+	// Send stop command via socket — this tells the daemon process to exit
+	if err := client.Stop(); err != nil {
+		logVerbose("Warning: Failed to stop agent via socket: %v", err)
 	}
 
 	fmt.Println("Agent stopped")
@@ -1225,17 +1246,33 @@ func ensureAgentRunning() error {
 		return nil
 	}
 
-	logVerbose("Starting agent...")
-	agent, err := NewAgent()
+	logVerbose("Starting agent daemon...")
+
+	// Fork a separate long-lived daemon process so the agent survives
+	// after the current CLI command exits.
+	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("failed to create agent: %w", err)
+		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	if err := agent.Start(); err != nil {
-		return fmt.Errorf("failed to start agent: %w", err)
+	cmd := exec.Command(exe, "__agent-daemon")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detach from parent session
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.Stdin = nil
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start agent daemon: %w", err)
 	}
 
-	globalAgent = agent
-	logVerbose("Agent started at: %s", agent.GetSocketPath())
-	return nil
+	// Wait for daemon to be ready (up to 1 second)
+	for i := 0; i < 20; i++ {
+		time.Sleep(50 * time.Millisecond)
+		if err := agentClient.Ping(); err == nil {
+			logVerbose("Agent daemon started (PID: %d)", cmd.Process.Pid)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("agent daemon started but not responding")
 }

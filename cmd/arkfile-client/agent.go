@@ -585,7 +585,10 @@ func (a *Agent) handleClear(conn net.Conn) {
 func (a *Agent) handleStop(conn net.Conn) {
 	a.sendSuccess(conn, nil)
 	a.running = false
-	a.listener.Close()
+	close(a.stopChan)
+	if a.listener != nil {
+		a.listener.Close()
+	}
 }
 
 // sendSuccess sends a success response

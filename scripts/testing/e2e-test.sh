@@ -62,15 +62,12 @@ DUMMY_SHARE_PASSWORD='DummyP@ssw0rd#2026!Nope'
 # Server & Paths
 SERVER_URL="${SERVER_URL:-https://localhost:8443}"
 
-# Binary location detection - check local build first, then deployed location
-if [ -d "./build/bin" ] && [ -x "./build/bin/arkfile-client" ]; then
-    BUILD_DIR="./build/bin"
-elif [ -d "./build" ] && [ -x "./build/arkfile-client" ]; then
-    BUILD_DIR="./build"
-elif [ -d "/opt/arkfile/bin" ] && [ -x "/opt/arkfile/bin/arkfile-client" ]; then
-    BUILD_DIR="/opt/arkfile/bin"
-else
-    BUILD_DIR="./build"  # Default fallback
+# Binary location - require deployed location
+BUILD_DIR="/opt/arkfile/bin"
+if [ ! -x "$BUILD_DIR/arkfile-client" ]; then
+    echo "[X] arkfile-client binary not found or not executable at $BUILD_DIR/arkfile-client"
+    echo "    Run 'sudo ./scripts/dev-reset.sh' to build and deploy first."
+    exit 1
 fi
 
 CLIENT="$BUILD_DIR/arkfile-client"
