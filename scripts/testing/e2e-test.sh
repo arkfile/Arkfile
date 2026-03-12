@@ -11,11 +11,12 @@
 #   5. TOTP setup for regular user
 #   6. Admin user management (list-users, user-status, approve-user)
 #   7. Regular user login with TOTP
-#   8. File operations (upload/download/list/delete)
-#   9. Share operations (create/access/revoke)
-#   10. Admin system status
-#   11. Cleanup
-#   12. Summary report
+#   8. File operations (account-password, upload/download/integrity/privacy)
+#   9. Custom-password file operations (custom-key upload/download/privacy)
+#   10. Share operations (create/access/revoke/privacy)
+#   11. Admin system status
+#   12. Cleanup
+#   13. Summary report
 
 set -eo pipefail
 
@@ -46,7 +47,7 @@ ADMIN_TOTP_SECRET="ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D"  # Fixed dev secret
 TEST_USERNAME="${TEST_USERNAME:-arkfile-dev-test-user}"
 TEST_PASSWORD="${TEST_PASSWORD:-MyVacation2025PhotosForFamily!ExtraSecure}"
 
-# Bootstrap protection test (attacker simulation — tries to create 2nd admin)
+# Bootstrap protection test (attacker simulation - tries to create 2nd admin)
 ATTACKER_ADMIN_USERNAME="attacker-admin"
 ATTACKER_ADMIN_PASSWORD="AttackerPass123!SecureEnough"
 
@@ -59,7 +60,7 @@ SHARE_C_PASSWORD='MyShareP@ssw0rd-789q&*(::3'
 CUSTOM_FILE_PASSWORD='Tr0pic@lSunset2025!SecureCustomKey'
 WRONG_CUSTOM_FILE_PASSWORD='WrongCust0mPwd2025!NotTheKey'
 
-# Share D — created from custom-password-encrypted file
+# Share D - created from custom-password-encrypted file
 SHARE_D_PASSWORD='MyShareP@ssw0rd-789q&*(::4'
 
 # Negative test data (non-existent share)
@@ -634,16 +635,16 @@ UPLOADED_FILE_SHA256=""
 CUSTOM_FILE_ID=""
 CUSTOM_FILE_SHA256=""
 
-# Share D ID — share created from custom-password file (populated by phase_10)
+# Share D ID - share created from custom-password file (populated by phase_10)
 SHARE_D_ID=""
 
 # Phase 9: Custom-Password File Operations
 phase_9_custom_password_file_operations() {
-    phase "9: CUSTOM-PASSWORD FILE OPERATIONS"
+    phase "9: CUSTOM-PASSWORD FILE OPERATIONS (account-key wrapped FEK)"
 
     local custom_test_file="$TEST_DATA_DIR/custom_test_file.bin"
 
-    # 8b.1: Generate a small test file
+    # 9.1: Generate a small test file
     section "Generating custom-password test file (1MB, random)"
     local gen_output gen_exit_code
     safe_exec gen_output gen_exit_code \
@@ -661,7 +662,7 @@ phase_9_custom_password_file_operations() {
         record_test "Custom test file creation" "FAIL"
     fi
 
-    # 8b.2: Upload with custom password
+    # 9.2: Upload with custom password
     # CLI prompts for: custom password (once) + confirmation (once)
     section "Uploading file with custom password"
     local custom_upload_output custom_upload_exit_code
@@ -685,7 +686,7 @@ phase_9_custom_password_file_operations() {
         record_test "Custom file upload" "FAIL"
     fi
 
-    # 8b.3: Verify raw API privacy — plaintext filename must not appear in raw list output
+    # 9.3: Verify raw API privacy - plaintext filename must not appear in raw list output
     section "Verifying raw API privacy for custom-password file"
     local list_raw_output list_raw_exit_code
     safe_exec list_raw_output list_raw_exit_code \
@@ -698,7 +699,7 @@ phase_9_custom_password_file_operations() {
         record_test "Raw List API Privacy (custom file)" "PASS"
     fi
 
-    # 8b.4: Verify custom file is accessible via normal list-files (account-key metadata context works)
+    # 9.4: Verify custom file is accessible via normal list-files (account-key metadata context works)
     # This proves the server-side metadata record is reachable through the CLI's own decryption flow.
     section "Verifying custom-password file is accessible via list-files"
     local custom_list_output custom_list_exit_code
@@ -714,7 +715,7 @@ phase_9_custom_password_file_operations() {
         record_test "Custom file accessible via list-files" "FAIL"
     fi
 
-    # 8b.5: Download with correct custom password — owner round-trip
+    # 9.5: Download with correct custom password - owner round-trip
     section "Downloading custom-password file (correct password)"
     local custom_dl_file="$TEST_DATA_DIR/custom_downloaded.bin"
     local custom_dl_output custom_dl_exit_code
@@ -733,12 +734,12 @@ phase_9_custom_password_file_operations() {
         record_test "Custom file download (correct password)" "FAIL"
     fi
 
-    # 8b.6: SHA-256 round-trip integrity
+    # 9.6: SHA-256 round-trip integrity
     assert_sha256_matches "$custom_dl_file" "$CUSTOM_FILE_SHA256" "Custom file SHA256 integrity"
     rm -f "$custom_dl_file"
 
-    # 8b.7: Download with wrong custom password — must fail
-    section "Downloading custom-password file (wrong password — must fail)"
+    # 9.7: Download with wrong custom password - must fail
+    section "Downloading custom-password file (wrong password - must fail)"
     local custom_dl_bad_file="$TEST_DATA_DIR/custom_bad_dl.bin"
     local custom_dl_bad_output custom_dl_bad_exit_code
     safe_exec custom_dl_bad_output custom_dl_bad_exit_code \
@@ -833,7 +834,7 @@ phase_8_file_operations() {
         record_test "File listing verification" "FAIL"
     fi
     
-    # 8.3.1: Verify raw API privacy
+    # 8.4: Verify raw API privacy
     section "Verifying list-files --raw API privacy"
     local list_raw_output list_raw_exit_code
     safe_exec list_raw_output list_raw_exit_code \
@@ -846,7 +847,7 @@ phase_8_file_operations() {
         record_test "Raw List API Privacy" "PASS"
     fi
 
-    # 8.4: Download file
+    # 8.5: Download file
     section "Downloading file (decryption handled by arkfile-client)"
     local downloaded_file="$TEST_DATA_DIR/downloaded.bin"
     local download_output
@@ -868,7 +869,7 @@ phase_8_file_operations() {
         record_test "File download" "FAIL"
     fi
 
-    # 8.5: Verify content integrity (SHA256 round-trip)
+    # 8.6: Verify content integrity (SHA256 round-trip)
     assert_sha256_matches "$downloaded_file" "$UPLOADED_FILE_SHA256" "Content integrity (SHA256 round-trip)"
 
     rm -f "$test_file" "$downloaded_file"
@@ -876,15 +877,16 @@ phase_8_file_operations() {
     success "File operations phase complete"
 }
 
-# Phase 9: Share Operations — 3 shares with different constraints
+# Phase 10: Share Operations
 #
 # Share A: No limits (unlimited access, no expiry)
 # Share B: max_accesses=2
-# Share C: expires_after=2m (2 minutes)
+# Share C: expires_after=1m
+# Share D: from custom-password-encrypted file (no expiry)
 #
-# Each share uses a unique 18+ char password meeting share password requirements.
-phase_9_share_operations() {
-    phase "9: SHARE OPERATIONS"
+# Each share uses a unique password meeting share password requirements.
+phase_10_share_operations() {
+    phase "10: SHARE OPERATIONS"
 
     local SHARE_A_ID=""
     local SHARE_B_ID=""
@@ -897,8 +899,8 @@ phase_9_share_operations() {
     record_test "Phase 8 file data available" "PASS"
     info "Using file from Phase 8: File ID=$UPLOADED_FILE_ID"
 
-    # 9.1: Create Share A — no limits (--expires 0 = no expiry)
-    section "9.1: Creating Share A (no limits)"
+    # 10.1: Create Share A - no limits (--expires 0 = no expiry)
+    section "10.1: Creating Share A (no limits)"
 
     local create_a_output create_a_exit_code
     safe_exec create_a_output create_a_exit_code \
@@ -918,8 +920,8 @@ phase_9_share_operations() {
         record_test "Share A creation (no limits)" "FAIL"
     fi
 
-    # 9.2: Create Share B — max_accesses=2
-    section "9.2: Creating Share B (max_accesses=2)"
+    # 10.2: Create Share B - max_accesses=2
+    section "10.2: Creating Share B (max_accesses=2)"
 
     local create_b_output create_b_exit_code
     safe_exec create_b_output create_b_exit_code \
@@ -940,9 +942,8 @@ phase_9_share_operations() {
         record_test "Share B creation (max_accesses=2)" "FAIL"
     fi
     
-    # 9.3: Create Share C — expires_after=2m
-    
-    section "9.3: Creating Share C (expires_after=1m)"
+    # 10.3: Create Share C - expires_after=1m
+    section "10.3: Creating Share C (expires_after=1m)"
 
     local SHARE_C_CREATED_AT
     SHARE_C_CREATED_AT=$(date +%s)
@@ -965,9 +966,9 @@ phase_9_share_operations() {
         record_test "Share C creation (expires_after=1m)" "FAIL"
     fi
 
-    # 9.3.1: Create Share D — from custom-password-encrypted file (no expiry)
+    # 10.4: Create Share D - from custom-password-encrypted file (no expiry)
     # CLI stdin order for a custom-file share: custom password first, share password second
-    section "9.3.1: Creating Share D (custom-password file, no expiry)"
+    section "10.4: Creating Share D (custom-password file, no expiry)"
 
     local create_d_output create_d_exit_code
     safe_exec create_d_output create_d_exit_code \
@@ -987,8 +988,8 @@ phase_9_share_operations() {
         record_test "Share D creation (custom-password file)" "FAIL"
     fi
 
-    # 9.4: List shares — verify all 4 appear
-    section "9.4: Listing shares"
+    # 10.5: List shares - verify all 4 appear
+    section "10.5: Listing shares"
 
     local list_shares_output list_shares_exit_code
     safe_exec list_shares_output list_shares_exit_code \
@@ -1005,8 +1006,8 @@ phase_9_share_operations() {
         record_test "Share listing (all 4 shares)" "FAIL"
     fi
 
-    # 9.4.1: Share List Privacy Checks
-    section "9.4.1: Verifying share list --raw API privacy"
+    # 10.6: Share List Privacy Checks
+    section "10.6: Verifying share list --raw API privacy"
     
     local list_shares_raw_output list_shares_raw_exit_code
     safe_exec list_shares_raw_output list_shares_raw_exit_code \
@@ -1020,12 +1021,12 @@ phase_9_share_operations() {
         record_test "Raw Shares API Privacy" "PASS"
     fi
 
-    # 9.5: Logout for anonymous visitor tests
-    section "9.5: Logging out for anonymous visitor tests"
+    # 10.7: Logout for anonymous visitor tests
+    section "10.7: Logging out for anonymous visitor tests"
     logout_user_session "Logout for visitor tests"
 
-    # 9.6: Visitor — Share A (unlimited) — should succeed
-    section "9.6: Visitor downloads Share A (unlimited)"
+    # 10.8: Visitor - Share A (unlimited) - should succeed
+    section "10.8: Visitor downloads Share A (unlimited)"
 
     local dl_a_file="$TEST_DATA_DIR/share_a_download.bin"
     share_download_with_password "$SHARE_A_PASSWORD" "$SHARE_A_ID" "$dl_a_file" "Visitor download Share A" "false"
@@ -1034,8 +1035,8 @@ phase_9_share_operations() {
     assert_sha256_matches "$dl_a_file" "$UPLOADED_FILE_SHA256" "Share A SHA256 integrity"
     rm -f "$dl_a_file"
 
-    # 9.6.2: Visitor — Share D (from custom-password file) — correct share password
-    section "9.6.2: Visitor downloads Share D (custom-password file, correct share password)"
+    # 10.9: Visitor - Share D (from custom-password file) - correct share password
+    section "10.9: Visitor downloads Share D (custom-password file, correct share password)"
 
     sleep 2 # Rate limit buffer
 
@@ -1046,8 +1047,8 @@ phase_9_share_operations() {
     assert_sha256_matches "$dl_d_file" "$CUSTOM_FILE_SHA256" "Share D SHA256 integrity"
     rm -f "$dl_d_file"
 
-    # 9.6.1: Visitor — Share A — intentionally wrong weak password
-    section "9.6.1: Visitor attempts Share A with intentionall wrong weak password"
+    # 10.10: Visitor - Share A - intentionally wrong weak password
+    section "10.10: Visitor attempts Share A with wrong weak password"
     
     sleep 2 # Rate limit buffer
     
@@ -1055,8 +1056,8 @@ phase_9_share_operations() {
     share_download_with_password "weakpassword123" "$SHARE_A_ID" "$dl_a_bad_file" "Visitor rejected with wrong bad password" "true"
     assert_output_file_absent_or_empty "$dl_a_bad_file" "Share A bad password file hygiene"
 
-    # 9.7: Visitor — Share B (max_accesses=2) — download twice OK, 3rd fails
-    section "9.7: Visitor tests Share B (max_accesses=2)"
+    # 10.11: Visitor - Share B (max_accesses=2) - download twice OK, 3rd fails
+    section "10.11: Visitor tests Share B (max_accesses=2)"
 
     # Download 1 of 2
     local dl_b1_file="$TEST_DATA_DIR/share_b_dl1.bin"
@@ -1072,15 +1073,15 @@ phase_9_share_operations() {
 
     sleep 2  # Rate limit buffer
 
-    # Download 3 — should FAIL (max_accesses exceeded)
+    # Download 3 - should FAIL (max_accesses exceeded)
     local dl_b3_file="$TEST_DATA_DIR/share_b_dl3.bin"
     share_download_with_password "$SHARE_B_PASSWORD" "$SHARE_B_ID" "$dl_b3_file" "Share B download 3 rejected (max_accesses)" "true"
     assert_output_file_absent_or_empty "$dl_b3_file" "Share B rejected file hygiene"
 
-    # 9.8: Visitor — Share C (expires_after=1m) — download before expiry OK
-    section "9.8: Visitor tests Share C (expires_after=1m)"
+    # 10.12: Visitor - Share C (expires_after=1m) - download before expiry OK
+    section "10.12: Visitor tests Share C (expires_after=1m)"
 
-    # Download before expiry — should succeed
+    # Download before expiry - should succeed
     local dl_c1_file="$TEST_DATA_DIR/share_c_dl1.bin"
     share_download_with_password "$SHARE_C_PASSWORD" "$SHARE_C_ID" "$dl_c1_file" "Share C download before expiry" "false"
     rm -f "$dl_c1_file"
@@ -1096,21 +1097,21 @@ phase_9_share_operations() {
     info "Smart sleep: waiting ${wait_seconds}s for Share C to expire..."
     sleep "$wait_seconds"
 
-    # Download after expiry — should FAIL
+    # Download after expiry - should FAIL
     local dl_c2_file="$TEST_DATA_DIR/share_c_dl2.bin"
     share_download_with_password "$SHARE_C_PASSWORD" "$SHARE_C_ID" "$dl_c2_file" "Share C download after expiry rejected" "true"
     assert_output_file_absent_or_empty "$dl_c2_file" "Share C rejected file hygiene"
 
-    # 9.9: Negative test — non-existent share
-    section "9.9: Negative test — non-existent share"
+    # 10.13: Negative test - non-existent share
+    section "10.13: Negative test - non-existent share"
 
     sleep 2  # Rate limit buffer
 
     share_download_with_password "$DUMMY_SHARE_PASSWORD" "$NONEXISTENT_SHARE_ID" "$TEST_DATA_DIR/nonexistent.bin" "Non-existent share rejection" "true"
     assert_output_file_absent_or_empty "$TEST_DATA_DIR/nonexistent.bin" "Non-existent share file hygiene"
 
-    # 9.10: Re-login, revoke Share A, verify revoked share fails
-    section "9.10: Re-authenticating to revoke Share A"
+    # 10.14: Re-login, revoke Share A, verify revoked share fails
+    section "10.14: Re-authenticating to revoke Share A"
     user_login_with_totp "Re-authentication for revoke"
 
     # Revoke Share A
@@ -1137,9 +1138,9 @@ phase_9_share_operations() {
     success "Share operations phase complete"
 }
 
-# Phase 10: Admin System Status
-phase_10_admin_system_status() {
-    phase "10: ADMIN SYSTEM STATUS"
+# Phase 11: Admin System Status
+phase_11_admin_system_status() {
+    phase "11: ADMIN SYSTEM STATUS"
 
     section "Retrieving system status via admin CLI"
 
@@ -1162,9 +1163,9 @@ phase_10_admin_system_status() {
     success "Admin system status phase complete"
 }
 
-# Phase 11: Cleanup
-phase_11_cleanup() {
-    phase "11: CLEANUP"
+# Phase 12: Cleanup
+phase_12_cleanup() {
+    phase "12: CLEANUP"
 
     section "Cleaning up test data"
 
@@ -1178,9 +1179,9 @@ phase_11_cleanup() {
     success "Cleanup complete"
 }
 
-# Phase 12: Summary Report
-phase_12_summary() {
-    phase "12: TEST SUMMARY"
+# Phase 13: Summary Report
+phase_13_summary() {
+    phase "13: TEST SUMMARY"
 
     echo ""
     echo -e "${BLUE}========================================${NC}"
@@ -1250,13 +1251,13 @@ main() {
     phase_6_admin_approval
     phase_7_user_login
     phase_8_file_operations
-    phase_8b_custom_password_file_operations
-    phase_9_share_operations
-    phase_10_admin_system_status
-    phase_11_cleanup
+    phase_9_custom_password_file_operations
+    phase_10_share_operations
+    phase_11_admin_system_status
+    phase_12_cleanup
 
     # Show summary and exit with appropriate code
-    if phase_12_summary; then
+    if phase_13_summary; then
         exit 0
     else
         exit 1
