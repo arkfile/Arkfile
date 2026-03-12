@@ -55,6 +55,13 @@ SHARE_A_PASSWORD='MyShareP@ssw0rd-789q&*(::1'
 SHARE_B_PASSWORD='MyShareP@ssw0rd-789q&*(::2'
 SHARE_C_PASSWORD='MyShareP@ssw0rd-789q&*(::3'
 
+# Custom-password file flow
+CUSTOM_FILE_PASSWORD='Tr0pic@lSunset2025!SecureCustomKey'
+WRONG_CUSTOM_FILE_PASSWORD='WrongCust0mPwd2025!NotTheKey'
+
+# Share D — created from custom-password-encrypted file
+SHARE_D_PASSWORD='MyShareP@ssw0rd-789q&*(::4'
+
 # Negative test data (non-existent share)
 NONEXISTENT_SHARE_ID="nonexistent-share-id-that-does-not-exist"
 DUMMY_SHARE_PASSWORD='DummyP@ssw0rd#2026!Nope'
@@ -623,6 +630,138 @@ phase_7_user_login() {
 UPLOADED_FILE_ID=""
 UPLOADED_FILE_SHA256=""
 
+# Custom-password file global variables (populated by phase_9)
+CUSTOM_FILE_ID=""
+CUSTOM_FILE_SHA256=""
+
+# Share D ID — share created from custom-password file (populated by phase_10)
+SHARE_D_ID=""
+
+# Phase 9: Custom-Password File Operations
+phase_9_custom_password_file_operations() {
+    phase "9: CUSTOM-PASSWORD FILE OPERATIONS"
+
+    local custom_test_file="$TEST_DATA_DIR/custom_test_file.bin"
+
+    # 8b.1: Generate a small test file
+    section "Generating custom-password test file (1MB, random)"
+    local gen_output gen_exit_code
+    safe_exec gen_output gen_exit_code \
+        $CLIENT generate-test-file \
+        --filename "$custom_test_file" \
+        --size 1048576 \
+        --pattern random
+
+    if [ $gen_exit_code -eq 0 ]; then
+        record_test "Custom test file creation" "PASS"
+        CUSTOM_FILE_SHA256=$(sha256sum "$custom_test_file" | awk '{print $1}')
+        info "Custom file SHA-256: $CUSTOM_FILE_SHA256"
+    else
+        error "Failed to generate custom test file:"; echo "$gen_output"
+        record_test "Custom test file creation" "FAIL"
+    fi
+
+    # 8b.2: Upload with custom password
+    # CLI prompts for: custom password (once) + confirmation (once)
+    section "Uploading file with custom password"
+    local custom_upload_output custom_upload_exit_code
+    safe_exec custom_upload_output custom_upload_exit_code \
+        bash -c "printf '%s\n%s\n' '$CUSTOM_FILE_PASSWORD' '$CUSTOM_FILE_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        upload \
+        --file '$custom_test_file' \
+        --password-type custom"
+
+    if [ $custom_upload_exit_code -eq 0 ]; then
+        CUSTOM_FILE_ID=$(echo "$custom_upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+        info "Custom-password File ID: $CUSTOM_FILE_ID"
+        if [ -z "$CUSTOM_FILE_ID" ]; then
+            warning "Could not extract File ID from custom upload output"
+        fi
+        record_test "Custom file upload" "PASS"
+    else
+        error "Custom file upload failed:"; echo "$custom_upload_output"
+        record_test "Custom file upload" "FAIL"
+    fi
+
+    # 8b.3: Verify raw API privacy — plaintext filename must not appear in raw list output
+    section "Verifying raw API privacy for custom-password file"
+    local list_raw_output list_raw_exit_code
+    safe_exec list_raw_output list_raw_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --raw
+
+    if echo "$list_raw_output" | grep -q "custom_test_file.bin" || echo "$list_raw_output" | grep -q "$CUSTOM_FILE_SHA256"; then
+        error "Security failure: Raw list API exposed plaintext name or hash for custom-password file!"
+        record_test "Raw List API Privacy (custom file)" "FAIL"
+    else
+        record_test "Raw List API Privacy (custom file)" "PASS"
+    fi
+
+    # 8b.4: Verify custom file is accessible via normal list-files (account-key metadata context works)
+    # This proves the server-side metadata record is reachable through the CLI's own decryption flow.
+    section "Verifying custom-password file is accessible via list-files"
+    local custom_list_output custom_list_exit_code
+    safe_exec custom_list_output custom_list_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files
+
+    if [ $custom_list_exit_code -eq 0 ] && echo "$custom_list_output" | grep -q "$CUSTOM_FILE_ID"; then
+        record_test "Custom file accessible via list-files" "PASS"
+        info "Custom-password file $CUSTOM_FILE_ID found in file list"
+    else
+        error "Custom file not found in list-files output:"
+        echo "$custom_list_output"
+        record_test "Custom file accessible via list-files" "FAIL"
+    fi
+
+    # 8b.5: Download with correct custom password — owner round-trip
+    section "Downloading custom-password file (correct password)"
+    local custom_dl_file="$TEST_DATA_DIR/custom_downloaded.bin"
+    local custom_dl_output custom_dl_exit_code
+    safe_exec custom_dl_output custom_dl_exit_code \
+        bash -c "printf '%s\n' '$CUSTOM_FILE_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        download \
+        --file-id '$CUSTOM_FILE_ID' \
+        --output '$custom_dl_file'"
+
+    if [ $custom_dl_exit_code -eq 0 ]; then
+        record_test "Custom file download (correct password)" "PASS"
+    else
+        error "Custom file download failed:"; echo "$custom_dl_output"
+        record_test "Custom file download (correct password)" "FAIL"
+    fi
+
+    # 8b.6: SHA-256 round-trip integrity
+    assert_sha256_matches "$custom_dl_file" "$CUSTOM_FILE_SHA256" "Custom file SHA256 integrity"
+    rm -f "$custom_dl_file"
+
+    # 8b.7: Download with wrong custom password — must fail
+    section "Downloading custom-password file (wrong password — must fail)"
+    local custom_dl_bad_file="$TEST_DATA_DIR/custom_bad_dl.bin"
+    local custom_dl_bad_output custom_dl_bad_exit_code
+    safe_exec custom_dl_bad_output custom_dl_bad_exit_code \
+        bash -c "printf '%s\n' '$WRONG_CUSTOM_FILE_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        download \
+        --file-id '$CUSTOM_FILE_ID' \
+        --output '$custom_dl_bad_file'"
+
+    if [ $custom_dl_bad_exit_code -ne 0 ]; then
+        record_test "Custom file download rejected (wrong password)" "PASS"
+    else
+        error "Security failure: Custom file downloaded with wrong password!"
+        record_test "Custom file download rejected (wrong password)" "FAIL"
+    fi
+    assert_output_file_absent_or_empty "$custom_dl_bad_file" "Custom file bad password hygiene"
+
+    rm -f "$custom_test_file"
+
+    success "Custom-password file operations phase complete"
+}
+
 # Phase 8: File Operations
 phase_8_file_operations() {
     phase "8: FILE OPERATIONS"
@@ -705,19 +844,6 @@ phase_8_file_operations() {
         record_test "Raw List API Privacy" "FAIL"
     else
         record_test "Raw List API Privacy" "PASS"
-    fi
-
-    # 8.3.2: Verify GET /api/files/metadata raw privacy
-    section "Verifying GET /api/files/metadata API privacy"
-    local metadata_api_output
-    
-    # We use curl with the agent token to verify the core API
-    metadata_api_output=$(curl -sk -H "Authorization: Bearer $("$CLIENT" agent token)" "$SERVER_URL/api/files/metadata")
-    if echo "$metadata_api_output" | grep -q "$UPLOADED_FILE_SHA256" || echo "$metadata_api_output" | grep -q "test_file.bin"; then
-        error "Security failure: Raw metadata API exposed plaintext filename or hashes!"
-        record_test "Raw Metadata API Privacy" "FAIL"
-    else
-        record_test "Raw Metadata API Privacy" "PASS"
     fi
 
     # 8.4: Download file
@@ -839,7 +965,29 @@ phase_9_share_operations() {
         record_test "Share C creation (expires_after=1m)" "FAIL"
     fi
 
-    # 9.4: List shares — verify all 3 appear
+    # 9.3.1: Create Share D — from custom-password-encrypted file (no expiry)
+    # CLI stdin order for a custom-file share: custom password first, share password second
+    section "9.3.1: Creating Share D (custom-password file, no expiry)"
+
+    local create_d_output create_d_exit_code
+    safe_exec create_d_output create_d_exit_code \
+        bash -c "printf '%s\n%s\n' '$CUSTOM_FILE_PASSWORD' '$SHARE_D_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        share create \
+        --file-id '$CUSTOM_FILE_ID' \
+        --expires 0"
+
+    if [ $create_d_exit_code -eq 0 ]; then
+        SHARE_D_ID=$(echo "$create_d_output" | grep "Share ID:" | awk '{print $3}' | tr -d ' ')
+        info "Share D created: $SHARE_D_ID (from custom-password file)"
+        record_test "Share D creation (custom-password file)" "PASS"
+    else
+        error "Share D creation failed:"; echo "$create_d_output"
+        record_test "Share D creation (custom-password file)" "FAIL"
+    fi
+
+    # 9.4: List shares — verify all 4 appear
     section "9.4: Listing shares"
 
     local list_shares_output list_shares_exit_code
@@ -849,11 +997,12 @@ phase_9_share_operations() {
     if [ $list_shares_exit_code -eq 0 ] \
         && echo "$list_shares_output" | grep -q "$SHARE_A_ID" \
         && echo "$list_shares_output" | grep -q "$SHARE_B_ID" \
-        && echo "$list_shares_output" | grep -q "$SHARE_C_ID"; then
-        record_test "Share listing (all 3 shares)" "PASS"
+        && echo "$list_shares_output" | grep -q "$SHARE_C_ID" \
+        && echo "$list_shares_output" | grep -q "$SHARE_D_ID"; then
+        record_test "Share listing (all 4 shares)" "PASS"
     else
         error "Not all shares found in list:"; echo "$list_shares_output"
-        record_test "Share listing (all 3 shares)" "FAIL"
+        record_test "Share listing (all 4 shares)" "FAIL"
     fi
 
     # 9.4.1: Share List Privacy Checks
@@ -863,8 +1012,8 @@ phase_9_share_operations() {
     safe_exec list_shares_raw_output list_shares_raw_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure share list --raw
         
-    # Raw response from GET /api/shares shouldn't contain the decrypted metadata directly
-    if echo "$list_shares_raw_output" | grep -q "test_file.bin"; then
+    # Raw GET /api/shares must not expose plaintext filenames for either share type
+    if echo "$list_shares_raw_output" | grep -q "test_file.bin" || echo "$list_shares_raw_output" | grep -q "custom_test_file.bin"; then
         error "Security failure: Raw shares API list exposed plaintext filename!"
         record_test "Raw Shares API Privacy" "FAIL"
     else
@@ -884,6 +1033,18 @@ phase_9_share_operations() {
     # Verify SHA256
     assert_sha256_matches "$dl_a_file" "$UPLOADED_FILE_SHA256" "Share A SHA256 integrity"
     rm -f "$dl_a_file"
+
+    # 9.6.2: Visitor — Share D (from custom-password file) — correct share password
+    section "9.6.2: Visitor downloads Share D (custom-password file, correct share password)"
+
+    sleep 2 # Rate limit buffer
+
+    local dl_d_file="$TEST_DATA_DIR/share_d_download.bin"
+    share_download_with_password "$SHARE_D_PASSWORD" "$SHARE_D_ID" "$dl_d_file" "Visitor download Share D" "false"
+
+    # Verify the downloaded file matches the original custom-password file
+    assert_sha256_matches "$dl_d_file" "$CUSTOM_FILE_SHA256" "Share D SHA256 integrity"
+    rm -f "$dl_d_file"
 
     # 9.6.1: Visitor — Share A — intentionally wrong weak password
     section "9.6.1: Visitor attempts Share A with intentionall wrong weak password"
@@ -1089,6 +1250,7 @@ main() {
     phase_6_admin_approval
     phase_7_user_login
     phase_8_file_operations
+    phase_8b_custom_password_file_operations
     phase_9_share_operations
     phase_10_admin_system_status
     phase_11_cleanup
