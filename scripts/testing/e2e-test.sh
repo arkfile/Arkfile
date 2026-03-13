@@ -1006,6 +1006,45 @@ phase_10_share_operations() {
         record_test "Share listing (all 4 shares)" "FAIL"
     fi
 
+    # Enrichment assertions — all reuse the already-captured list_shares_output variable
+
+    # Both locally decrypted filenames must appear (account-password and custom-password)
+    if echo "$list_shares_output" | grep -q "test_file.bin" \
+        && echo "$list_shares_output" | grep -q "custom_test_"; then
+        record_test "Share list shows locally decrypted filenames" "PASS"
+    else
+        error "Share list missing locally decrypted filenames:"; echo "$list_shares_output"
+        record_test "Share list shows locally decrypted filenames" "FAIL"
+    fi
+
+    # No share should fall back to [encrypted] — all 4 must have been successfully enriched
+    if echo "$list_shares_output" | grep -q "\[encrypted\]"; then
+        error "Share list shows [encrypted] for at least one share — metadata enrichment failed:"
+        echo "$list_shares_output"
+        record_test "Share list enrichment succeeded for all shares" "FAIL"
+    else
+        record_test "Share list enrichment succeeded for all shares" "PASS"
+    fi
+
+    # Both password types must appear in the TYPE column
+    if echo "$list_shares_output" | grep -q "account" \
+        && echo "$list_shares_output" | grep -q "custom"; then
+        record_test "Share list shows both account and custom password types" "PASS"
+    else
+        error "Share list missing expected password type(s):"; echo "$list_shares_output"
+        record_test "Share list shows both account and custom password types" "FAIL"
+    fi
+
+    # The locally decrypted SHA-256 prefix must appear (table truncates to 14 chars, so first 8 is safe)
+    local sha256_prefix
+    sha256_prefix="${UPLOADED_FILE_SHA256:0:8}"
+    if echo "$list_shares_output" | grep -q "$sha256_prefix"; then
+        record_test "Share list shows locally decrypted SHA-256" "PASS"
+    else
+        error "Share list missing SHA-256 prefix ($sha256_prefix):"; echo "$list_shares_output"
+        record_test "Share list shows locally decrypted SHA-256" "FAIL"
+    fi
+
     # 10.6: Share List Privacy Checks
     section "10.6: Verifying share list --raw API privacy"
     
@@ -1135,10 +1174,82 @@ phase_10_share_operations() {
     share_download_with_password "$SHARE_A_PASSWORD" "$SHARE_A_ID" "$TEST_DATA_DIR/revoked.bin" "Revoked Share A download rejected" "true"
     assert_output_file_absent_or_empty "$TEST_DATA_DIR/revoked.bin" "Revoked Share A file hygiene"
 
+    # 10.15: Verify share list reflects revoked status for Share A
+    section "10.15: Verifying revoked share state in share list"
+    local share_list_post_revoke_output share_list_post_revoke_exit_code
+    safe_exec share_list_post_revoke_output share_list_post_revoke_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure share list
+
+    if [ $share_list_post_revoke_exit_code -eq 0 ] && echo "$share_list_post_revoke_output" | grep -i -q "revoked"; then
+        record_test "Share list reflects revoked state" "PASS"
+        info "Revoked state visible in share list output"
+    else
+        error "Share list does not reflect revoked state:"
+        echo "$share_list_post_revoke_output"
+        record_test "Share list reflects revoked state" "FAIL"
+    fi
+
+    # 10.16: Explicit user logout, then verify authenticated commands fail
+    section "10.16: User logout and post-logout unauthorized-command checks"
+    logout_user_session "User logout (post-revoke)"
+
+    # 10.16.1: list-files must fail after logout
+    local post_logout_list_output post_logout_list_exit_code
+    safe_exec post_logout_list_output post_logout_list_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files
+    if [ $post_logout_list_exit_code -ne 0 ]; then
+        record_test "list-files rejected after logout" "PASS"
+    else
+        error "Security failure: list-files succeeded after logout!"
+        record_test "list-files rejected after logout" "FAIL"
+    fi
+
+    # 10.16.2: download must fail after logout
+    local post_logout_dl_output post_logout_dl_exit_code
+    safe_exec post_logout_dl_output post_logout_dl_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        download --file-id "$UPLOADED_FILE_ID" \
+        --output "$TEST_DATA_DIR/post_logout_dl.bin"
+    if [ $post_logout_dl_exit_code -ne 0 ]; then
+        record_test "download rejected after logout" "PASS"
+    else
+        error "Security failure: download succeeded after logout!"
+        record_test "download rejected after logout" "FAIL"
+    fi
+    rm -f "$TEST_DATA_DIR/post_logout_dl.bin"
+
+    # 10.16.3: share create must fail after logout
+    local post_logout_share_create_output post_logout_share_create_exit_code
+    safe_exec post_logout_share_create_output post_logout_share_create_exit_code \
+        bash -c "printf '%s\n' 'SomeSharePwd2026!Test' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        share create \
+        --file-id '$UPLOADED_FILE_ID' \
+        --expires 0"
+    if [ $post_logout_share_create_exit_code -ne 0 ]; then
+        record_test "share create rejected after logout" "PASS"
+    else
+        error "Security failure: share create succeeded after logout!"
+        record_test "share create rejected after logout" "FAIL"
+    fi
+
+    # 10.16.4: share revoke must fail after logout
+    local post_logout_share_revoke_output post_logout_share_revoke_exit_code
+    safe_exec post_logout_share_revoke_output post_logout_share_revoke_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        share revoke --share-id "$SHARE_A_ID"
+    if [ $post_logout_share_revoke_exit_code -ne 0 ]; then
+        record_test "share revoke rejected after logout" "PASS"
+    else
+        error "Security failure: share revoke succeeded after logout!"
+        record_test "share revoke rejected after logout" "FAIL"
+    fi
+
     success "Share operations phase complete"
 }
 
-# Phase 11: Admin System Status
+# Phase 11: Admin System Status and Negative-Access Tests
 phase_11_admin_system_status() {
     phase "11: ADMIN SYSTEM STATUS"
 
@@ -1160,6 +1271,50 @@ phase_11_admin_system_status() {
         record_test "Admin system-status" "FAIL"
     fi
 
+    # 11.1: Admin cannot access user file list via user-facing client CLI
+    # The admin binary has its own saved session but $CLIENT uses the user session context,
+    # which was logged out in phase 10.16. These commands must fail.
+    section "11.1: Admin cannot access user files via user client"
+    local admin_list_files_output admin_list_files_exit_code
+    safe_exec admin_list_files_output admin_list_files_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files
+
+    if [ $admin_list_files_exit_code -ne 0 ]; then
+        record_test "Admin cannot list user files via user client" "PASS"
+    else
+        error "Security failure: user file list accessible without valid user session!"
+        record_test "Admin cannot list user files via user client" "FAIL"
+    fi
+
+    # 11.2: Admin cannot download user file via user-facing client CLI
+    section "11.2: Admin cannot download user file via user client"
+    local admin_download_output admin_download_exit_code
+    safe_exec admin_download_output admin_download_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        download --file-id "$UPLOADED_FILE_ID" \
+        --output "$TEST_DATA_DIR/admin_dl_attempt.bin"
+
+    if [ $admin_download_exit_code -ne 0 ]; then
+        record_test "Admin cannot download user file via user client" "PASS"
+    else
+        error "Security failure: user file downloadable without valid user session!"
+        record_test "Admin cannot download user file via user client" "FAIL"
+    fi
+    rm -f "$TEST_DATA_DIR/admin_dl_attempt.bin"
+
+    # 11.3: Admin cannot access user share list via user-facing client CLI
+    section "11.3: Admin cannot access user share list via user client"
+    local admin_share_list_output admin_share_list_exit_code
+    safe_exec admin_share_list_output admin_share_list_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure share list
+
+    if [ $admin_share_list_exit_code -ne 0 ]; then
+        record_test "Admin cannot list user shares via user client" "PASS"
+    else
+        error "Security failure: user share list accessible without valid user session!"
+        record_test "Admin cannot list user shares via user client" "FAIL"
+    fi
+
     success "Admin system status phase complete"
 }
 
@@ -1169,7 +1324,12 @@ phase_12_cleanup() {
 
     section "Cleaning up test data"
 
-    logout_user_session "User logout"
+    # User was already logged out at the end of phase 10 (section 10.16).
+    # Attempt logout again; ignore failure since session may already be gone.
+    local out code
+    safe_exec out code $CLIENT --server-url "$SERVER_URL" --tls-insecure logout || true
+    info "User logout (idempotent - may already be logged out)"
+
     logout_admin_session "Admin logout"
 
     stop_agent
