@@ -576,3 +576,163 @@ These assertions reuse the already-captured `list_shares_output` variable at zer
 - Keep the script suitable for repeated local development use, since it is one of the primary proof tools for Arkfile.
 - Keep default CLI output useful for legitimate owners while using raw/API-level checks to prove that the server still does not expose plaintext metadata.
 - For share creation from a custom-password file, account for the current CLI stdin order: custom password first, then share password.
+
+---
+
+# ADDITIONAL ISSUES SURFACED DURING TESTING:
+
+## Issue 1: Agent shutdown failure — root cause and fix
+
+### Root cause
+
+`assert_agent_not_running` uses `pgrep -x "arkfile-client"` as its primary check. This is wrong for two reasons:
+
+1. The agent daemon is a spawned subprocess of the same binary — `pgrep -x "arkfile-client"` matches any running `arkfile-client` process, including the currently executing test CLI call itself. It will almost always find at least one.
+2. After `agent stop` sends the stop socket command, the daemon goroutine closes the listener and the stopChan, but the OS process does not exit synchronously from the caller's perspective. Even without reason 1, there is a race window.
+
+The correct check is a socket ping: `"$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"`. If the socket is gone or the daemon is not responding, that returns nothing — a clean, authoritative signal.
+
+Additionally, `stop_agent` needs a 1-second pause after sending the stop command to allow the daemon process to fully exit before `assert_agent_not_running` pings the socket.
+
+### Fix in e2e-test.sh
+
+**`stop_agent`** — add `sleep 1` after the stop call:
+```bash
+stop_agent() {
+    info "Stopping agent (if running)..."
+    safe_exec _ _ "$CLIENT" agent stop || true
+    sleep 1
+}
+```
+
+**`assert_agent_not_running`** — remove `pgrep`, use socket status only:
+```bash
+assert_agent_not_running() {
+    local test_name="$1"
+    if "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
+        error "$test_name failed: Agent is still running."
+        record_test "$test_name" "FAIL"
+    else
+        record_test "$test_name" "PASS"
+    fi
+}
+```
+
+**`assert_agent_running`** — same cleanup, use socket status only:
+```bash
+assert_agent_running() {
+    local test_name="$1"
+    if "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
+        record_test "$test_name" "PASS"
+    else
+        error "$test_name failed: Agent is not running."
+        record_test "$test_name" "FAIL"
+    fi
+}
+```
+
+---
+
+## Issue 2: Storage Statistics shows "0 B" — root cause and fix
+
+### Root cause
+
+The flow is:
+
+1. Client sends `total_size: params.TotalEncSize` — the **total encrypted size**, computed by `calculateTotalEncryptedSize(plaintextSize)`.
+2. Server stores that value as `total_size` in the upload session.
+3. `CompleteUpload` reads it back as `totalSizeFloat` and inserts it into `file_metadata` as `size_bytes`.
+4. `AdminSystemStatus` queries `SUM(size_bytes)` — and gets `0 B`.
+
+So the question is: what is `totalSizeFloat` at step 3? Looking at the INSERT in `CompleteUpload`:
+
+```go
+var totalSize int64
+if totalSizeFloat.Valid {
+    totalSize = int64(totalSizeFloat.Float64)
+}
+```
+
+And the INSERT:
+```go
+INSERT INTO file_metadata (..., size_bytes, ...) VALUES (..., totalSize, ...)
+```
+
+This should be non-zero — `TotalEncSize` for a 50 MB file would be around 50 MB + chunk overhead. So why is the DB returning 0?
+
+The answer is rqlite's handling of `BIGINT` columns. When rqlite returns a very large integer (e.g., ~52 MB = 54,771,856 bytes), it may return it as a float in scientific notation (e.g., `5.477e7`). The `sql.NullFloat64` scan handles this correctly for the in-memory conversion. However, rqlite's `COALESCE(SUM(size_bytes), 0)` and `COALESCE(AVG(size_bytes), 0)` over `BIGINT` columns sometimes returns `0` when the stored value was written via a `float64` cast that got rounded or when rqlite treats the value as a floating-point `0` internally.
+
+Actually, looking more carefully: `totalSizeFloat.Float64` is cast with `int64(totalSizeFloat.Float64)`. If rqlite returns the value in scientific notation and the `NullFloat64` scan rounds or truncates it, the result is still non-zero. But there is another possibility: if `totalSizeFloat.Valid` is `false` (which happens when rqlite returns NULL for that column), then `totalSize` stays at `0`, and `0` is inserted into `size_bytes`.
+
+This is the most likely actual failure: rqlite is returning `NULL` or an unexpected type for `total_size` from `upload_sessions`, causing `totalSizeFloat.Valid = false`, so `totalSize = 0` gets inserted into `file_metadata.size_bytes`.
+
+### What should `size_bytes` store?
+
+There are two reasonable interpretations:
+- **Plaintext file size** — useful to users and for storage quota accounting of logical data
+- **Encrypted blob size** — useful to sysadmins for actual storage consumption
+
+Right now the code attempts to store the encrypted size (`TotalEncSize`), but it is also what is used for user storage quota accounting via `user.UpdateStorageUsage(tx, totalSize)`. Using the encrypted size for quota accounting is fine and honest (you are storing the encrypted blob). For the admin system status, showing the encrypted blob size is also the right number — it's what is actually on disk.
+
+The real fix is: **make the `total_size` scan robust in `CompleteUpload`**. Use a `sql.NullString` scan and manual parse as a fallback, or use direct `int64` scan rather than relying on `sql.NullFloat64`. Alternatively, store the total size redundantly as a plain `INTEGER` (not BIGINT) in the session if BIGINT causes rqlite type issues. But the cleaner fix is to make the server re-derive the value from what it actually knows — the sum of all uploaded chunk sizes — rather than trusting the client-provided `total_size`.
+
+### Proposed server-side fix in `CompleteUpload` (`handlers/uploads.go`)
+
+After the multipart upload completes, compute `actualStoredSize` as the sum of `chunk_size` values from `upload_chunks` for this session:
+
+```go
+var actualStoredSize int64
+err = database.DB.QueryRow(
+    "SELECT COALESCE(SUM(chunk_size), 0) FROM upload_chunks WHERE session_id = ?",
+    sessionID,
+).Scan(&actualStoredSize)
+if err != nil || actualStoredSize == 0 {
+    // Fall back to client-provided total_size
+    actualStoredSize = totalSize
+}
+```
+
+Then use `actualStoredSize` for the `size_bytes` INSERT and for `UpdateStorageUsage`. This is more accurate (it is the actual bytes stored in the object store) and avoids the BIGINT/float64 rqlite parsing issue entirely, since chunk sizes are stored as individual row values that are easier to sum correctly.
+
+### Fix in e2e-test.sh (Phase 11 assertion)
+
+After printing the system status, add an assertion to make this kind of bug visible as a test failure rather than a silent anomaly:
+
+```bash
+if echo "$system_status_output" | grep -q "Total Files: 2"; then
+    record_test "Admin system-status file count" "PASS"
+else
+    error "Storage stats: expected Total Files: 2"
+    record_test "Admin system-status file count" "FAIL"
+fi
+
+if echo "$system_status_output" | grep -E -q "Total Size: 0 B|Total Size: 0B"; then
+    error "Storage stats: Total Size is zero - size_bytes not being stored correctly"
+    record_test "Admin system-status storage size non-zero" "FAIL"
+else
+    record_test "Admin system-status storage size non-zero" "PASS"
+fi
+```
+
+---
+
+## Issue 3: Share list output not printed
+
+In Phase 10 section 10.5, after the enrichment assertions, add `echo "$list_shares_output"` unconditionally so you can inspect it during every test run. Same for section 10.15 post-revoke list.
+
+---
+
+## Summary of all changes
+
+**`scripts/testing/e2e-test.sh`** (4 changes):
+1. `stop_agent`: add `sleep 1` after `agent stop`
+2. `assert_agent_not_running`: remove `pgrep`, use socket status only
+3. `assert_agent_running`: remove `pgrep`, use socket status only
+4. Phase 10 section 10.5: print `$list_shares_output` after assertions
+5. Phase 10 section 10.15: print `$share_list_post_revoke_output` after assertions
+6. Phase 11: add `file count` and `storage size non-zero` assertions
+
+**`handlers/uploads.go`** (1 change):
+- In `CompleteUpload`, compute `actualStoredSize` from `SUM(chunk_size)` of the uploaded chunks and use that for `size_bytes` and `UpdateStorageUsage`, falling back to `totalSize` only if the sum is unavailable
+
+This requires a `dev-reset.sh` run after the Go change.
