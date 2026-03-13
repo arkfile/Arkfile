@@ -1180,11 +1180,15 @@ phase_10_share_operations() {
     safe_exec share_list_post_revoke_output share_list_post_revoke_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure share list
 
-    if [ $share_list_post_revoke_exit_code -eq 0 ] && echo "$share_list_post_revoke_output" | grep -i -q "revoked"; then
+    # The CLI renders revoked/inactive shares as "no" in the ACTIVE column (%-6s padded).
+    # Assert the revoked share ID appears AND its row contains "  no  " (column padding pattern).
+    if [ $share_list_post_revoke_exit_code -eq 0 ] \
+        && echo "$share_list_post_revoke_output" | grep -q "$SHARE_A_ID" \
+        && echo "$share_list_post_revoke_output" | grep "$SHARE_A_ID" | grep -q "  no  "; then
         record_test "Share list reflects revoked state" "PASS"
-        info "Revoked state visible in share list output"
+        info "Revoked Share A shows ACTIVE=no in share list"
     else
-        error "Share list does not reflect revoked state:"
+        error "Share list does not show Share A as inactive:"
         echo "$share_list_post_revoke_output"
         record_test "Share list reflects revoked state" "FAIL"
     fi
