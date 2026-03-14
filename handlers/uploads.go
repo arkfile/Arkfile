@@ -693,14 +693,25 @@ func CompleteUpload(c echo.Context) error {
 
 	// Compute actual stored size from the server's own chunk records.
 	// This is the authoritative byte count of what was actually received and stored.
-	var actualStoredSize int64
+	// Scan as interface{} because rqlite returns large sums as float64 in scientific notation.
+	var actualStoredSizeRaw interface{}
 	err = database.DB.QueryRow(
 		"SELECT COALESCE(SUM(chunk_size), 0) FROM upload_chunks WHERE session_id = ?",
 		sessionID,
-	).Scan(&actualStoredSize)
+	).Scan(&actualStoredSizeRaw)
 	if err != nil {
 		logging.ErrorLogger.Printf("CompleteUpload: failed to sum chunk sizes for session %s: %v", sessionID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to calculate stored size")
+	}
+	var actualStoredSize int64
+	switch v := actualStoredSizeRaw.(type) {
+	case int64:
+		actualStoredSize = v
+	case float64:
+		actualStoredSize = int64(v)
+	default:
+		logging.ErrorLogger.Printf("CompleteUpload: unexpected type %T for SUM(chunk_size) in session %s", actualStoredSizeRaw, sessionID)
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to read stored size: unexpected type %T", actualStoredSizeRaw))
 	}
 
 	// Validate: client-declared size must match server-received bytes exactly.

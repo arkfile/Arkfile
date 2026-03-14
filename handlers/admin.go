@@ -954,12 +954,15 @@ func AdminSystemStatus(c echo.Context) error {
 	}
 
 	// Gather storage statistics
-	var totalFiles int
-	var totalSizeBytes, avgFileSizeBytes int64
-	err = database.DB.QueryRow("SELECT COUNT(*), COALESCE(SUM(size_bytes), 0), COALESCE(AVG(size_bytes), 0) FROM file_metadata").Scan(&totalFiles, &totalSizeBytes, &avgFileSizeBytes)
+	// Scan as interface{} because rqlite returns large aggregates as float64 in scientific notation.
+	var totalFilesRaw, totalSizeBytesRaw, avgFileSizeBytesRaw interface{}
+	err = database.DB.QueryRow("SELECT COUNT(*), COALESCE(SUM(size_bytes), 0), COALESCE(AVG(size_bytes), 0) FROM file_metadata").Scan(&totalFilesRaw, &totalSizeBytesRaw, &avgFileSizeBytesRaw)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get storage stats: %v", err)
 	}
+	totalFiles := toInt64(totalFilesRaw)
+	totalSizeBytes := toInt64(totalSizeBytesRaw)
+	avgFileSizeBytes := toInt64(avgFileSizeBytesRaw)
 
 	// Gather TOTP statistics
 	var totpEnabledUsers int
@@ -1073,6 +1076,25 @@ func AdminSecurityEvents(c echo.Context) error {
 	}
 
 	return JSONResponse(c, http.StatusOK, "Security events retrieved", response)
+}
+
+// toInt64 converts an interface{} value to int64, handling the various types
+// that rqlite driver may return for numeric columns (int64, float64).
+// Returns 0 for nil or unrecognized types.
+func toInt64(v interface{}) int64 {
+	if v == nil {
+		return 0
+	}
+	switch val := v.(type) {
+	case int64:
+		return val
+	case float64:
+		return int64(val)
+	case int:
+		return int64(val)
+	default:
+		return 0
+	}
 }
 
 // toBool converts an interface{} value to bool, handling the various types
