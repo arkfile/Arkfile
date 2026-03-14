@@ -346,7 +346,13 @@ AGENT_PID=""
 stop_agent() {
     info "Stopping agent (if running)..."
     safe_exec _ _ "$CLIENT" agent stop || true
-    sleep 1
+    # Poll up to 3 seconds for daemon to fully exit
+    for i in 1 2 3 4 5 6; do
+        sleep 0.5
+        if ! "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
+            return 0
+        fi
+    done
 }
 
 # TEST PHASES
