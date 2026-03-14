@@ -3,6 +3,7 @@
  */
 
 import { clearAllCachedAccountKeys } from '../crypto/file-encryption.js';
+import { clearDigestCache } from './digest-cache.js';
 
 /**
  * Custom error for 503 Service Unavailable responses.
@@ -259,6 +260,9 @@ export class AuthManager {
     
     // Clear cached encryption keys
     clearAllCachedAccountKeys();
+    
+    // Clear digest cache (SHA-256 digests are sensitive — content fingerprinting)
+    clearDigestCache();
     
     // Clear any legacy session context
     if (typeof window !== 'undefined') {

@@ -33,6 +33,7 @@ import {
 } from './primitives.js';
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
+import { clearDigestCache } from '../utils/digest-cache.js';
 
 // ============================================================================
 // Types (Unified shape — matches Go agent's accountKeyEntry)
@@ -550,6 +551,9 @@ export function lockAccountKey(): void {
     // Clear all cached Account Keys from sessionStorage
     clearAllCachedAccountKeys();
     
+    // Clear digest cache (SHA-256 digests are sensitive — content fingerprinting)
+    clearDigestCache();
+    
     // Set locked state
     sessionStorage.setItem(ACCOUNT_KEY_LOCKED, 'true');
     
@@ -688,6 +692,10 @@ export function cleanupAccountKeyCache(): void {
     }
     
     clearAllCachedAccountKeys();
+    
+    // Clear digest cache (SHA-256 digests are sensitive — content fingerprinting)
+    clearDigestCache();
+    
     sessionStorage.removeItem(ACCOUNT_KEY_CONFIG);
     sessionStorage.removeItem(ACCOUNT_KEY_LOCKED);
     
