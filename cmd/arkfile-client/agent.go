@@ -185,28 +185,26 @@ func (a *Agent) checkAndExpireKey() {
 
 	if time.Now().After(a.keyEntry.expiresAt) {
 		logVerbose("Account key expired (TTL %d hours). Auto-wiping.", a.keyEntry.ttlHours)
-		a.wipeKeyLocked()
+		a.wipeAllSensitiveDataLocked()
 	}
 }
 
-// wipeKeyLocked securely wipes the account key. Caller must hold a.mu write lock.
-func (a *Agent) wipeKeyLocked() {
-	if a.keyEntry == nil {
-		return
+// wipeAllSensitiveDataLocked securely wipes the account key and digest cache.
+// Both are sensitive: the key is encryption material, and SHA-256 digests can
+// be used for content fingerprinting. Caller must hold a.mu write lock.
+func (a *Agent) wipeAllSensitiveDataLocked() {
+	// Wipe account key
+	if a.keyEntry != nil {
+		if a.keyEntry.mlocked && len(a.keyEntry.key) > 0 {
+			_ = syscall.Munlock(a.keyEntry.key)
+		}
+		for i := range a.keyEntry.key {
+			a.keyEntry.key[i] = 0
+		}
+		a.keyEntry = nil
 	}
-
-	// Unlock memory if it was mlocked
-	if a.keyEntry.mlocked && len(a.keyEntry.key) > 0 {
-		// munlock - ignore errors (best effort, POSIX)
-		_ = syscall.Munlock(a.keyEntry.key)
-	}
-
-	// Securely zero the key bytes
-	for i := range a.keyEntry.key {
-		a.keyEntry.key[i] = 0
-	}
-
-	a.keyEntry = nil
+	// Wipe digest cache
+	a.digestCache = nil
 }
 
 // Stop stops the agent daemon
@@ -218,10 +216,9 @@ func (a *Agent) Stop() error {
 		a.listener.Close()
 	}
 
-	// Securely clear the account key and digest cache
+	// Securely clear all sensitive data
 	a.mu.Lock()
-	a.wipeKeyLocked()
-	a.digestCache = nil
+	a.wipeAllSensitiveDataLocked()
 	a.mu.Unlock()
 
 	// Remove socket file
@@ -377,8 +374,8 @@ func (a *Agent) handleStoreAccountKey(conn net.Conn, params map[string]interface
 	}
 
 	a.mu.Lock()
-	// Wipe any existing key first
-	a.wipeKeyLocked()
+	// Wipe any existing sensitive data first
+	a.wipeAllSensitiveDataLocked()
 	a.keyEntry = entry
 	// Reset access counter
 	a.accessCount.Store(0)
@@ -430,7 +427,7 @@ func (a *Agent) handleGetAccountKey(conn net.Conn, params map[string]interface{}
 	// Check expiration
 	if time.Now().After(a.keyEntry.expiresAt) {
 		ttl := a.keyEntry.ttlHours
-		a.wipeKeyLocked()
+		a.wipeAllSensitiveDataLocked()
 		a.sendError(conn, fmt.Sprintf("account key expired (after %d hours). Please login again", ttl))
 		return
 	}
@@ -439,8 +436,8 @@ func (a *Agent) handleGetAccountKey(conn net.Conn, params map[string]interface{}
 	if params != nil {
 		if tokenHash, ok := params["token_hash"].(string); ok && tokenHash != "" {
 			if tokenHash != a.keyEntry.tokenHash {
-				a.wipeKeyLocked()
-				a.sendError(conn, "session mismatch: account key wiped for security. Please login again")
+				a.wipeAllSensitiveDataLocked()
+				a.sendError(conn, "session mismatch: all sensitive data wiped for security. Please login again")
 				return
 			}
 		}
@@ -571,24 +568,30 @@ func (a *Agent) handleRemoveDigest(conn net.Conn, params map[string]interface{})
 	a.sendSuccess(conn, nil)
 }
 
-// handleClear clears the AccountKey and digest cache from memory
+// handleClear clears all sensitive data from memory
 func (a *Agent) handleClear(conn net.Conn) {
 	a.mu.Lock()
-	a.wipeKeyLocked()
-	a.digestCache = nil
+	a.wipeAllSensitiveDataLocked()
 	a.mu.Unlock()
 
 	a.sendSuccess(conn, nil)
 }
 
-// handleStop stops the agent
+// handleStop wipes all sensitive data, removes the socket, and terminates the daemon process.
+// Uses os.Exit(0) directly to guarantee the process dies immediately.
 func (a *Agent) handleStop(conn net.Conn) {
 	a.sendSuccess(conn, nil)
-	a.running = false
-	close(a.stopChan)
-	if a.listener != nil {
-		a.listener.Close()
-	}
+
+	// Wipe all sensitive data before exiting
+	a.mu.Lock()
+	a.wipeAllSensitiveDataLocked()
+	a.mu.Unlock()
+
+	// Remove socket file (os.Exit skips defers, so we must do it here)
+	os.Remove(a.socketPath)
+
+	// Terminate the daemon process
+	os.Exit(0)
 }
 
 // sendSuccess sends a success response

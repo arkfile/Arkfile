@@ -217,10 +217,12 @@ logout_admin_session() {
 
 assert_agent_running() {
     local test_name="$1"
-    if "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
+    local status_out
+    status_out=$("$CLIENT" agent status 2>&1) || true
+    if echo "$status_out" | grep -q "RUNNING"; then
         record_test "$test_name" "PASS"
     else
-        error "$test_name failed: Agent is not running."
+        echo "[AGENT STATUS] $status_out" >> "$LOG_FILE"
         record_test "$test_name" "FAIL"
     fi
 }
@@ -229,14 +231,10 @@ assert_agent_not_running() {
     local test_name="$1"
     local status_out
     status_out=$("$CLIENT" agent status 2>&1) || true
+    echo "[AGENT STATUS] $status_out" >> "$LOG_FILE"
     if echo "$status_out" | grep -q "RUNNING"; then
-        error "$test_name failed: Agent is still running."
-        info "agent status output: $status_out"
-        info "Socket file check: $(ls -la /root/.arkfile/agent-*.sock 2>&1 || echo 'no socket files')"
-        info "arkfile-client processes: $(ps aux | grep arkfile-client | grep -v grep || echo 'none')"
         record_test "$test_name" "FAIL"
     else
-        info "agent status output: $status_out"
         record_test "$test_name" "PASS"
     fi
 }
@@ -352,16 +350,9 @@ AGENT_PID=""
 stop_agent() {
     info "Stopping agent (if running)..."
 
-    # Check pre-stop status
-    local pre_status
-    pre_status=$("$CLIENT" agent status 2>&1) || true
-    info "Pre-stop agent status: $pre_status"
-
-    # Send stop command
+    # Send stop command (details go to log only)
     local stop_out stop_code
     safe_exec stop_out stop_code "$CLIENT" agent stop
-    info "Agent stop exit code: $stop_code"
-    info "Agent stop output: $stop_out"
 
     # Poll up to 5 seconds for daemon to fully exit
     for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -369,11 +360,11 @@ stop_agent() {
         local poll_status
         poll_status=$("$CLIENT" agent status 2>&1) || true
         if ! echo "$poll_status" | grep -q "RUNNING"; then
-            info "Agent confirmed stopped after $i polls"
+            info "Agent stopped"
             return 0
         fi
     done
-    warning "Agent still running after 5s polling"
+    warning "Agent may still be running after stop attempt"
 }
 
 # TEST PHASES

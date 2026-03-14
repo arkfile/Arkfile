@@ -286,7 +286,13 @@ func main() {
 			logError("Agent daemon failed: %v", err)
 			os.Exit(1)
 		}
-		// Block until agent is stopped via socket command
+		// If Start() returned nil because agent was already running,
+		// this process did not start a new listener. Exit immediately
+		// to avoid zombie daemon processes blocking on stopChan forever.
+		if agent.listener == nil {
+			os.Exit(0)
+		}
+		// Block until agent is stopped via socket command (handleStop calls os.Exit directly)
 		<-agent.stopChan
 		os.Exit(0)
 	case "version":
@@ -986,15 +992,14 @@ func handleAgentStop() error {
 		return nil
 	}
 
-	// Clear keys from memory first
-	if err := client.Clear(); err != nil {
-		logVerbose("Warning: Failed to clear agent: %v", err)
-	}
+	// Send stop command via socket.
+	// handleStop in the daemon wipes all sensitive data, removes the socket,
+	// and calls os.Exit(0). The client may get a connection error if the
+	// daemon exits before the response is fully read — that is expected.
+	_ = client.Stop()
 
-	// Send stop command via socket — this tells the daemon process to exit
-	if err := client.Stop(); err != nil {
-		logVerbose("Warning: Failed to stop agent via socket: %v", err)
-	}
+	// Clean up socket file if the daemon's os.Exit didn't remove it
+	os.Remove(client.socketPath)
 
 	fmt.Println("Agent stopped")
 	return nil
