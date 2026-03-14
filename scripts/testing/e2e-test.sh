@@ -219,11 +219,15 @@ assert_agent_running() {
     local test_name="$1"
     local status_out
     status_out=$("$CLIENT" agent status 2>&1) || true
-    if echo "$status_out" | grep -q "RUNNING"; then
-        record_test "$test_name" "PASS"
-    else
-        echo "[AGENT STATUS] $status_out" >> "$LOG_FILE"
+    echo "[AGENT STATUS] $status_out" >> "$LOG_FILE"
+    if echo "$status_out" | grep -q "NOT RUNNING"; then
         record_test "$test_name" "FAIL"
+    else
+        if echo "$status_out" | grep -q "RUNNING"; then
+            record_test "$test_name" "PASS"
+        else
+            record_test "$test_name" "FAIL"
+        fi
     fi
 }
 
@@ -232,10 +236,10 @@ assert_agent_not_running() {
     local status_out
     status_out=$("$CLIENT" agent status 2>&1) || true
     echo "[AGENT STATUS] $status_out" >> "$LOG_FILE"
-    if echo "$status_out" | grep -q "RUNNING"; then
-        record_test "$test_name" "FAIL"
-    else
+    if echo "$status_out" | grep -q "NOT RUNNING"; then
         record_test "$test_name" "PASS"
+    else
+        record_test "$test_name" "FAIL"
     fi
 }
 
@@ -359,7 +363,7 @@ stop_agent() {
         sleep 0.5
         local poll_status
         poll_status=$("$CLIENT" agent status 2>&1) || true
-        if ! echo "$poll_status" | grep -q "RUNNING"; then
+        if echo "$poll_status" | grep -q "NOT RUNNING"; then
             info "Agent stopped"
             return 0
         fi
@@ -1405,6 +1409,13 @@ phase_12_cleanup() {
     stop_agent
 
     assert_agent_not_running "Agent graceful shutdown via CLI"
+
+    # Print detailed agent status for manual audit
+    section "Post-shutdown agent status"
+    local final_status
+    final_status=$("$CLIENT" agent status 2>&1) || true
+    echo "$final_status"
+    echo "$final_status" >> "$LOG_FILE"
 
     success "Cleanup complete"
 }

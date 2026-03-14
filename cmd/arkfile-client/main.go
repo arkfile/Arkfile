@@ -1013,6 +1013,49 @@ func handleAgentStatus() error {
 
 	if err := client.Ping(); err != nil {
 		fmt.Println("Agent Status: NOT RUNNING")
+
+		// Socket file audit
+		if _, statErr := os.Stat(client.socketPath); os.IsNotExist(statErr) {
+			fmt.Printf("Socket: %s (not found)\n", client.socketPath)
+		} else {
+			fmt.Printf("Socket: %s (stale, attempting removal)\n", client.socketPath)
+			if rmErr := os.Remove(client.socketPath); rmErr != nil {
+				fmt.Printf("Socket: CRITICAL — failed to remove stale socket: %v\n", rmErr)
+				fmt.Println("  This may indicate a permissions issue or filesystem problem.")
+				fmt.Printf("  Manual action required: rm %s\n", client.socketPath)
+				fmt.Println("  Until removed, the agent cannot be restarted.")
+			} else {
+				fmt.Println("Socket: removed successfully")
+			}
+		}
+
+		// Daemon process audit — scan /proc for orphaned __agent-daemon processes
+		var orphanPIDs []string
+		entries, _ := os.ReadDir("/proc")
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			cmdlinePath := filepath.Join("/proc", entry.Name(), "cmdline")
+			data, readErr := os.ReadFile(cmdlinePath)
+			if readErr != nil {
+				continue
+			}
+			if strings.Contains(string(data), "__agent-daemon") {
+				orphanPIDs = append(orphanPIDs, entry.Name())
+			}
+		}
+		if len(orphanPIDs) == 0 {
+			fmt.Println("Process: no daemon process detected")
+		} else {
+			for _, pid := range orphanPIDs {
+				fmt.Printf("Process: CRITICAL — orphaned daemon process detected (PID %s)\n", pid)
+			}
+			fmt.Println("  The daemon process is alive but not responding on its socket.")
+			fmt.Println("  Key material may still be in process memory.")
+			fmt.Printf("  Manual action required: kill %s\n", strings.Join(orphanPIDs, " "))
+		}
+
 		return nil
 	}
 
