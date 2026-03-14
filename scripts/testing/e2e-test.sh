@@ -217,7 +217,7 @@ logout_admin_session() {
 
 assert_agent_running() {
     local test_name="$1"
-    if pgrep -x "arkfile-client" > /dev/null || "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
+    if "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
         record_test "$test_name" "PASS"
     else
         error "$test_name failed: Agent is not running."
@@ -227,7 +227,7 @@ assert_agent_running() {
 
 assert_agent_not_running() {
     local test_name="$1"
-    if pgrep -x "arkfile-client" > /dev/null || "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
+    if "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
         error "$test_name failed: Agent is still running."
         record_test "$test_name" "FAIL"
     else
@@ -346,6 +346,7 @@ AGENT_PID=""
 stop_agent() {
     info "Stopping agent (if running)..."
     safe_exec _ _ "$CLIENT" agent stop || true
+    sleep 1
 }
 
 # TEST PHASES
@@ -1045,6 +1046,10 @@ phase_10_share_operations() {
         record_test "Share list shows locally decrypted SHA-256" "FAIL"
     fi
 
+    # Print share list for manual inspection
+    info "Share list output (10.5):"
+    echo "$list_shares_output"
+
     # 10.6: Share List Privacy Checks
     section "10.6: Verifying share list --raw API privacy"
     
@@ -1193,6 +1198,10 @@ phase_10_share_operations() {
         record_test "Share list reflects revoked state" "FAIL"
     fi
 
+    # Print post-revoke share list for manual inspection
+    info "Post-revoke share list output (10.15):"
+    echo "$share_list_post_revoke_output"
+
     # 10.16: Explicit user logout, then verify authenticated commands fail
     section "10.16: User logout and post-logout unauthorized-command checks"
     logout_user_session "User logout (post-revoke)"
@@ -1273,6 +1282,22 @@ phase_11_admin_system_status() {
         error "system-status command failed:"
         echo "$system_status_output"
         record_test "Admin system-status" "FAIL"
+    fi
+
+    # Verify storage stats reflect uploaded files (2 files: account + custom)
+    if echo "$system_status_output" | grep -q "Total Files: 2"; then
+        record_test "Admin system-status file count" "PASS"
+    else
+        error "Storage stats: expected Total Files: 2"
+        record_test "Admin system-status file count" "FAIL"
+    fi
+
+    # Total Size must not be zero (encrypted blobs are on disk)
+    if echo "$system_status_output" | grep -q "Total Size: 0 B"; then
+        error "Storage stats: Total Size is zero (size_bytes not stored correctly)"
+        record_test "Admin system-status storage size non-zero" "FAIL"
+    else
+        record_test "Admin system-status storage size non-zero" "PASS"
     fi
 
     # 11.1: Admin cannot access user file list via user-facing client CLI

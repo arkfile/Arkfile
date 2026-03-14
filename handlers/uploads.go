@@ -531,27 +531,26 @@ func CompleteUpload(c echo.Context) error {
 
 	logging.InfoLogger.Printf("Attempting to complete upload for sessionID: '%s' by user: '%s'", sessionID, username)
 
-	// Step 1: Get session details (excluding BLOBs) without a transaction first.
+	// Step 1: Get session details without a transaction first.
+	// Numeric columns are scanned as interface{} to handle rqlite returning
+	// int64 or float64 depending on value magnitude. Type switches convert
+	// them cleanly — no NullFloat64 workarounds.
 	var (
-		ownerUsername      string
-		fileID             sql.NullString
-		storageID          sql.NullString
-		storageUploadID    sql.NullString
-		paddedSizeFloat    sql.NullFloat64 // Handle scientific notation from DB
-		status             string
-		totalChunks        int
-		totalSizeFloat     sql.NullFloat64 // Handle scientific notation from DB
-		passwordHint       sql.NullString
-		passwordType       sql.NullString
-		encryptedFilename  string // Now stored as base64 strings directly
-		filenameNonce      string // Now stored as base64 strings directly
-		encryptedSha256sum string // Now stored as base64 strings directly
-		sha256sumNonce     string // Now stored as base64 strings directly
-		encryptedFek       string // Now stored as base64 strings directly
+		ownerUsername   string
+		fileID          sql.NullString
+		storageID       sql.NullString
+		storageUploadID sql.NullString
+		status          string
+		totalChunks     int
+		passwordHint    sql.NullString
+		passwordType    sql.NullString
 	)
 
-	// Query for most data, keeping BLOBs separate. Read large numbers as floats.
-	// Use []byte for metadata fields to prevent automatic double-encoding during JSON marshaling
+	// interface{} scans for numeric fields (rqlite may return int64 or float64)
+	var totalSizeRaw interface{}
+	var chunkSizeRaw interface{}
+
+	// []byte scans for metadata fields to prevent double-encoding during JSON marshaling
 	var encryptedFilenameBytes []byte
 	var filenameNonceBytes []byte
 	var encryptedSha256sumBytes []byte
@@ -559,38 +558,57 @@ func CompleteUpload(c echo.Context) error {
 	var encryptedFekBytes []byte
 
 	err := database.DB.QueryRow(
-		`SELECT owner_username, file_id, storage_id, storage_upload_id, padded_size, status, total_chunks,
-                total_size, password_hint, password_type, encrypted_filename, filename_nonce,
+		`SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks,
+                total_size, chunk_size, password_hint, password_type, encrypted_filename, filename_nonce,
                 encrypted_sha256sum, sha256sum_nonce, encrypted_fek
          FROM upload_sessions WHERE id = ?`,
 		sessionID,
 	).Scan(
-		&ownerUsername, &fileID, &storageID, &storageUploadID, &paddedSizeFloat, &status, &totalChunks,
-		&totalSizeFloat, &passwordHint, &passwordType, &encryptedFilenameBytes, &filenameNonceBytes, &encryptedSha256sumBytes, &sha256sumNonceBytes, &encryptedFekBytes,
+		&ownerUsername, &fileID, &storageID, &storageUploadID, &status, &totalChunks,
+		&totalSizeRaw, &chunkSizeRaw, &passwordHint, &passwordType,
+		&encryptedFilenameBytes, &filenameNonceBytes, &encryptedSha256sumBytes, &sha256sumNonceBytes, &encryptedFekBytes,
 	)
 
-	// Convert []byte to string to ensure single-encoding for file_metadata table
-	encryptedFilename = string(encryptedFilenameBytes)
-	filenameNonce = string(filenameNonceBytes)
-	encryptedSha256sum = string(encryptedSha256sumBytes)
-	sha256sumNonce = string(sha256sumNonceBytes)
-	encryptedFek = string(encryptedFekBytes)
-
 	if err == sql.ErrNoRows {
-		logging.ErrorLogger.Printf("CompleteUpload Error: Session not found in database for sessionID: '%s'. This is the point of failure.", sessionID)
+		logging.ErrorLogger.Printf("CompleteUpload: session not found for sessionID: '%s'", sessionID)
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
 	} else if err != nil {
-		logging.ErrorLogger.Printf("Failed to get upload session details (part 1) for sessionID %s: %v", sessionID, err)
+		logging.ErrorLogger.Printf("CompleteUpload: failed to read session %s: %v", sessionID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get session details")
 	}
 
-	// Manually cast float64 values from DB to int64.
-	var totalSize int64
-	if totalSizeFloat.Valid {
-		totalSize = int64(totalSizeFloat.Float64)
+	// Convert []byte to string for file_metadata table
+	encryptedFilename := string(encryptedFilenameBytes)
+	filenameNonce := string(filenameNonceBytes)
+	encryptedSha256sum := string(encryptedSha256sumBytes)
+	sha256sumNonce := string(sha256sumNonceBytes)
+	encryptedFek := string(encryptedFekBytes)
+
+	// Convert total_size with explicit type handling
+	var declaredSize int64
+	switch v := totalSizeRaw.(type) {
+	case int64:
+		declaredSize = v
+	case float64:
+		declaredSize = int64(v)
+	default:
+		logging.ErrorLogger.Printf("CompleteUpload: unexpected type %T for total_size in session %s", totalSizeRaw, sessionID)
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to read total_size: unexpected type %T", totalSizeRaw))
 	}
 
-	logging.InfoLogger.Printf("CompleteUpload: DB query (part 1) successful for sessionID: '%s'. Status: '%s'.", sessionID, status)
+	// Convert chunk_size with explicit type handling
+	var chunkSizeBytes int64
+	switch v := chunkSizeRaw.(type) {
+	case int64:
+		chunkSizeBytes = v
+	case float64:
+		chunkSizeBytes = int64(v)
+	default:
+		logging.ErrorLogger.Printf("CompleteUpload: unexpected type %T for chunk_size in session %s", chunkSizeRaw, sessionID)
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to read chunk_size: unexpected type %T", chunkSizeRaw))
+	}
+
+	logging.InfoLogger.Printf("CompleteUpload: session %s read OK. Status: '%s', declared size: %d", sessionID, status, declaredSize)
 
 	// Step 2: Envelope handling removed - envelope is now part of chunk 0
 
@@ -673,30 +691,40 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update session status")
 	}
 
-	// Get chunk size from session for calculating chunk_count
-	var chunkSizeFloat sql.NullFloat64
-	err = database.DB.QueryRow("SELECT chunk_size FROM upload_sessions WHERE id = ?", sessionID).Scan(&chunkSizeFloat)
+	// Compute actual stored size from the server's own chunk records.
+	// This is the authoritative byte count of what was actually received and stored.
+	var actualStoredSize int64
+	err = database.DB.QueryRow(
+		"SELECT COALESCE(SUM(chunk_size), 0) FROM upload_chunks WHERE session_id = ?",
+		sessionID,
+	).Scan(&actualStoredSize)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get chunk_size for session %s: %v", sessionID, err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get chunk size")
+		logging.ErrorLogger.Printf("CompleteUpload: failed to sum chunk sizes for session %s: %v", sessionID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to calculate stored size")
 	}
 
-	var chunkSizeBytes int64 = crypto.PlaintextChunkSize() // Default from config
-	if chunkSizeFloat.Valid && chunkSizeFloat.Float64 > 0 {
-		chunkSizeBytes = int64(chunkSizeFloat.Float64)
+	// Validate: client-declared size must match server-received bytes exactly.
+	if actualStoredSize != declaredSize {
+		logging.ErrorLogger.Printf(
+			"Upload size mismatch for session %s: client declared %d bytes, server received %d bytes",
+			sessionID, declaredSize, actualStoredSize,
+		)
+		storage.Provider.RemoveObject(c.Request().Context(), storageID.String, storage.RemoveObjectOptions{})
+		return echo.NewHTTPError(http.StatusBadRequest, "Upload size mismatch: declared size does not match received bytes")
 	}
 
-	// Calculate chunk_count based on file size and chunk size
+	// Calculate chunk_count from the authoritative stored size
 	var chunkCount int64 = 1
-	if totalSize > 0 && chunkSizeBytes > 0 {
-		chunkCount = (totalSize + chunkSizeBytes - 1) / chunkSizeBytes
+	if actualStoredSize > 0 && chunkSizeBytes > 0 {
+		chunkCount = (actualStoredSize + chunkSizeBytes - 1) / chunkSizeBytes
 	}
 
 	// Create the final file metadata record with chunk info for resumable downloads.
+	// size_bytes = actualStoredSize (the encrypted blob size on disk).
 	_, err = tx.Exec(`
 		INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_file_sha256sum, encrypted_fek, size_bytes, chunk_count, chunk_size_bytes)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, encryptedFek, totalSize, chunkCount, chunkSizeBytes,
+		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, encryptedFek, actualStoredSize, chunkCount, chunkSizeBytes,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "file_id") {
@@ -705,12 +733,12 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create file metadata")
 	}
 
-	// Update user's storage usage.
+	// Update user's storage usage with the actual stored size.
 	user, err := models.GetUserByUsername(tx, username)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user")
 	}
-	if err := user.UpdateStorageUsage(tx, totalSize); err != nil {
+	if err := user.UpdateStorageUsage(tx, actualStoredSize); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage usage")
 	}
 
@@ -719,13 +747,13 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
 	}
 
-	logging.InfoLogger.Printf("Upload completed: %s, file_id: %s by %s (size: %d bytes)", sessionID, fileID.String, username, totalSize)
+	logging.InfoLogger.Printf("Upload completed: %s, file_id: %s by %s (size: %d bytes)", sessionID, fileID.String, username, actualStoredSize)
 	database.LogUserAction(username, "uploaded", fileID.String)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message":               "File uploaded successfully",
 		"file_id":               fileID.String,
-		"storage_id":            storageID.String, // Expose storage ID for test verification
+		"storage_id":            storageID.String,
 		"encrypted_file_sha256": serverCalculatedHash,
 		"storage": map[string]interface{}{
 			"total_bytes":     user.TotalStorageBytes,
