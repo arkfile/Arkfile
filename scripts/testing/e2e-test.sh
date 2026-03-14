@@ -227,10 +227,16 @@ assert_agent_running() {
 
 assert_agent_not_running() {
     local test_name="$1"
-    if "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
+    local status_out
+    status_out=$("$CLIENT" agent status 2>&1) || true
+    if echo "$status_out" | grep -q "RUNNING"; then
         error "$test_name failed: Agent is still running."
+        info "agent status output: $status_out"
+        info "Socket file check: $(ls -la /root/.arkfile/agent-*.sock 2>&1 || echo 'no socket files')"
+        info "arkfile-client processes: $(ps aux | grep arkfile-client | grep -v grep || echo 'none')"
         record_test "$test_name" "FAIL"
     else
+        info "agent status output: $status_out"
         record_test "$test_name" "PASS"
     fi
 }
@@ -345,14 +351,29 @@ AGENT_PID=""
 
 stop_agent() {
     info "Stopping agent (if running)..."
-    safe_exec _ _ "$CLIENT" agent stop || true
-    # Poll up to 3 seconds for daemon to fully exit
-    for i in 1 2 3 4 5 6; do
+
+    # Check pre-stop status
+    local pre_status
+    pre_status=$("$CLIENT" agent status 2>&1) || true
+    info "Pre-stop agent status: $pre_status"
+
+    # Send stop command
+    local stop_out stop_code
+    safe_exec stop_out stop_code "$CLIENT" agent stop
+    info "Agent stop exit code: $stop_code"
+    info "Agent stop output: $stop_out"
+
+    # Poll up to 5 seconds for daemon to fully exit
+    for i in 1 2 3 4 5 6 7 8 9 10; do
         sleep 0.5
-        if ! "$CLIENT" agent status 2>/dev/null | grep -q "RUNNING"; then
+        local poll_status
+        poll_status=$("$CLIENT" agent status 2>&1) || true
+        if ! echo "$poll_status" | grep -q "RUNNING"; then
+            info "Agent confirmed stopped after $i polls"
             return 0
         fi
     done
+    warning "Agent still running after 5s polling"
 }
 
 # TEST PHASES
@@ -879,7 +900,30 @@ phase_8_file_operations() {
     # 8.6: Verify content integrity (SHA256 round-trip)
     assert_sha256_matches "$downloaded_file" "$UPLOADED_FILE_SHA256" "Content integrity (SHA256 round-trip)"
 
-    rm -f "$test_file" "$downloaded_file"
+    rm -f "$downloaded_file"
+
+    # 8.7: Duplicate upload rejection (dedup via digest cache)
+    # The test file was uploaded in 8.2 and its SHA-256 is in the agent's digest cache.
+    # Re-uploading the same file without --force must fail.
+    section "Re-uploading same file (dedup rejection expected)"
+    local dedup_upload_output dedup_upload_exit_code
+    safe_exec dedup_upload_output dedup_upload_exit_code \
+        $CLIENT \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        upload \
+        --file "$test_file" \
+        --password-type account
+
+    if [ $dedup_upload_exit_code -ne 0 ] && echo "$dedup_upload_output" | grep -q "duplicate"; then
+        record_test "Duplicate upload rejected (dedup)" "PASS"
+    else
+        error "Dedup failure: re-upload of identical file was not rejected!"
+        echo "$dedup_upload_output"
+        record_test "Duplicate upload rejected (dedup)" "FAIL"
+    fi
+
+    rm -f "$test_file"
 
     success "File operations phase complete"
 }

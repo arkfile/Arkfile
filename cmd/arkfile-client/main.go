@@ -1013,6 +1013,54 @@ func handleAgentStatus() error {
 
 	fmt.Println("Agent Status: RUNNING")
 	fmt.Printf("Socket: %s\n", client.socketPath)
+
+	// Fetch and display full status metadata
+	status, err := client.Status()
+	if err != nil {
+		fmt.Printf("(Could not fetch detailed status: %v)\n", err)
+		return nil
+	}
+
+	fmt.Println()
+	fmt.Println("Account Key")
+	if stored, ok := status["key_stored"].(bool); ok && stored {
+		if v, ok := status["key_username"].(string); ok {
+			fmt.Printf("  Username:       %s\n", v)
+		}
+		if v, ok := status["key_stored_at"].(string); ok {
+			fmt.Printf("  Stored At:      %s\n", v)
+		}
+		if v, ok := status["key_expires_at"].(string); ok {
+			fmt.Printf("  Expires At:     %s\n", v)
+		}
+		if v, ok := status["key_time_remaining"].(string); ok {
+			fmt.Printf("  Time Remaining: %s\n", v)
+		}
+		if v, ok := status["key_ttl_hours"].(float64); ok {
+			fmt.Printf("  TTL Hours:      %.0f\n", v)
+		}
+		if v, ok := status["key_mlocked"].(bool); ok {
+			fmt.Printf("  Memory Locked:  %v\n", v)
+		}
+	} else {
+		fmt.Println("  (no key stored)")
+	}
+
+	if v, ok := status["access_count"].(float64); ok {
+		fmt.Printf("  Access Count:   %.0f\n", v)
+	}
+
+	// Fetch and display digest cache
+	digestCache, err := client.GetDigestCache()
+	if err != nil {
+		fmt.Printf("\nDigest Cache: (error: %v)\n", err)
+	} else {
+		fmt.Printf("\nDigest Cache (%d entries)\n", len(digestCache))
+		for fileID, sha256hex := range digestCache {
+			fmt.Printf("  %s -> %s\n", fileID, sha256hex)
+		}
+	}
+
 	return nil
 }
 
