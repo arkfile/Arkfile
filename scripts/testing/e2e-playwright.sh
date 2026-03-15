@@ -128,31 +128,30 @@ phase "GENERATING TEST FILES"
 
 mkdir -p "$PLAYWRIGHT_TEMP_DIR"
 
-TEST_FILE_PATH="$PLAYWRIGHT_TEMP_DIR/pw_test_upload.txt"
-CUSTOM_FILE_PATH="$PLAYWRIGHT_TEMP_DIR/pw_custom_upload.txt"
+TEST_FILE_PATH="$PLAYWRIGHT_TEMP_DIR/pw_test_upload.bin"
+CUSTOM_FILE_PATH="$PLAYWRIGHT_TEMP_DIR/pw_custom_upload.bin"
 
-section "Creating test files"
+section "Creating test files via arkfile-client"
 
-# Generate a small test file with known content (account-password upload)
-echo "Arkfile Playwright E2E Test File - Account Password" > "$TEST_FILE_PATH"
-echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$TEST_FILE_PATH"
-echo "Purpose: Verify upload/download/integrity via browser frontend" >> "$TEST_FILE_PATH"
-# Add some random data to make the hash unique per run
-head -c 512 /dev/urandom | base64 >> "$TEST_FILE_PATH"
+# Account-password test file: 100KB, sequential pattern (deterministic, reproducible)
+$CLIENT generate-test-file \
+    --filename "$TEST_FILE_PATH" \
+    --size 102400 \
+    --pattern sequential
 
 TEST_FILE_SHA256=$(sha256sum "$TEST_FILE_PATH" | awk '{print $1}')
 TEST_FILE_NAME=$(basename "$TEST_FILE_PATH")
-success "Test file created: $TEST_FILE_PATH (SHA-256: ${TEST_FILE_SHA256:0:16}...)"
+success "Test file: $TEST_FILE_PATH (SHA-256: ${TEST_FILE_SHA256:0:16}...)"
 
-# Generate a different test file for custom-password upload
-echo "Arkfile Playwright E2E Test File - Custom Password" > "$CUSTOM_FILE_PATH"
-echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$CUSTOM_FILE_PATH"
-echo "Purpose: Verify custom-password upload/download via browser frontend" >> "$CUSTOM_FILE_PATH"
-head -c 512 /dev/urandom | base64 >> "$CUSTOM_FILE_PATH"
+# Custom-password test file: 50KB, zeros pattern (deterministic, different from above)
+$CLIENT generate-test-file \
+    --filename "$CUSTOM_FILE_PATH" \
+    --size 51200 \
+    --pattern zeros
 
 CUSTOM_FILE_SHA256=$(sha256sum "$CUSTOM_FILE_PATH" | awk '{print $1}')
 CUSTOM_FILE_NAME=$(basename "$CUSTOM_FILE_PATH")
-success "Custom file created: $CUSTOM_FILE_PATH (SHA-256: ${CUSTOM_FILE_SHA256:0:16}...)"
+success "Custom file: $CUSTOM_FILE_PATH (SHA-256: ${CUSTOM_FILE_SHA256:0:16}...)"
 
 # RUN PLAYWRIGHT TESTS
 
