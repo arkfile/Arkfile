@@ -162,6 +162,12 @@ client/static/js/libopaque.debug.js
 # Build cache files
 .vendor_cache
 
+# Playwright artifacts
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
 # Runtime artifacts
 pid/
 *.pid
