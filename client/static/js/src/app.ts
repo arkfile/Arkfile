@@ -408,25 +408,25 @@ if (document.readyState === 'loading') {
 
 // Export for global access
 if (typeof window !== 'undefined') {
-  (window as any).arkfileApp = app;
+  window.arkfileApp = app;
   
   // Export modules needed for standalone pages like file-share.html
   // We use dynamic imports to ensure they are available
-  (window as any).arkfile = (window as any).arkfile || {};
+  window.arkfile = window.arkfile || {};
   
   import('./shares/share-creation').then(module => {
-    (window as any).arkfile.shares = { ...((window as any).arkfile.shares || {}), ...module };
+    window.arkfile!.shares = { ...(window.arkfile!.shares || {}), ...module };
   });
 
   import('./shares/share-access').then(module => {
-    (window as any).arkfile.shares = { ...((window as any).arkfile.shares || {}), ...module };
+    window.arkfile!.shares = { ...(window.arkfile!.shares || {}), ...module };
   });
   
   import('./crypto/file-encryption').then(module => {
-    (window as any).arkfile.encryption = module;
+    window.arkfile!.encryption = module as unknown as Record<string, unknown>;
   });
 
   import('./utils/auth').then(module => {
-    (window as any).arkfile.auth = module;
+    window.arkfile!.auth = module as unknown as Record<string, unknown>;
   });
 }

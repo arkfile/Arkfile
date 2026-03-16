@@ -44,6 +44,7 @@ import {
 import { showError, showSuccess, showInfo } from '../ui/messages.js';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
 import { checkDuplicate, addDigest } from '../utils/digest-cache.js';
+import { getToken, getUsernameFromToken } from '../utils/auth.js';
 
 // ============================================================================
 // Types
@@ -109,21 +110,13 @@ interface UploadSession {
 // ============================================================================
 
 /**
- * Gets the authentication token from storage
- */
-function getAuthToken(): string | null {
-  return sessionStorage.getItem('arkfile.sessionToken') || 
-         localStorage.getItem('arkfile.sessionToken');
-}
-
-/**
  * Makes an authenticated API request
  */
 async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const token = getAuthToken();
+  const token = getToken();
   if (!token) {
     throw new Error('Not authenticated');
   }
@@ -223,7 +216,7 @@ async function resolveAccountKey(
 
   // 2. Check cache
   if (isAccountKeyCached(username) && !isAccountKeyLocked()) {
-    const cached = await getCachedAccountKey(username, getAuthToken() ?? undefined);
+    const cached = await getCachedAccountKey(username, getToken() ?? undefined);
     if (cached) {
       return cached;
     }
@@ -522,9 +515,8 @@ export async function handleFileUpload(): Promise<void> {
 
   const file = fileInput.files[0];
 
-  // Get username from session
-  const username = sessionStorage.getItem('arkfile.username') || 
-                   localStorage.getItem('arkfile.username');
+  // Get username from JWT token (shared auth module)
+  const username = getUsernameFromToken();
   if (!username) {
     showError('Not logged in. Please log in first.');
     return;
@@ -554,7 +546,7 @@ export async function handleFileUpload(): Promise<void> {
   // Resolve account key / password (always needed for metadata)
   if (isAccountKeyCached(username) && !isAccountKeyLocked()) {
     // Account key is cached — use it directly
-    const cachedKey = await getCachedAccountKey(username, getAuthToken() ?? undefined);
+    const cachedKey = await getCachedAccountKey(username, getToken() ?? undefined);
     if (cachedKey) {
       uploadOptions.accountKey = cachedKey;
     }
@@ -582,7 +574,7 @@ export async function handleFileUpload(): Promise<void> {
           indeterminate: true,
         });
         const derivedKey = await deriveFileEncryptionKeyWithCache(
-          accountPassword, username, 'account', getAuthToken() ?? undefined, result.cacheDuration
+          accountPassword, username, 'account', getToken() ?? undefined, result.cacheDuration
         );
         hideProgress();
         uploadOptions.accountKey = derivedKey;

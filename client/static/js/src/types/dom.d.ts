@@ -2,6 +2,42 @@
  * TypeScript definitions for DOM utilities and UI components
  */
 
+// Window interface extensions for Arkfile global state
+interface ArkfileSharesModule {
+  ShareCreator?: unknown;
+  ShareAccessUI?: unknown;
+  ShareCrypto?: unknown;
+  [key: string]: unknown;
+}
+
+interface ArkfileNamespace {
+  shares?: ArkfileSharesModule;
+  encryption?: Record<string, unknown>;
+  auth?: Record<string, unknown>;
+}
+
+interface TOTPFlowData {
+  tempToken: string;
+  username: string;
+}
+
+interface TOTPSetupFlowData {
+  tempToken: string;
+  username: string;
+}
+
+declare global {
+  interface Window {
+    arkfileApp?: unknown;
+    arkfile?: ArkfileNamespace;
+    arkfileSecurityContext?: unknown;
+    registrationData?: unknown;
+    totpLoginData?: TOTPFlowData;
+    totpSetupData?: TOTPSetupFlowData;
+    showTOTPAppsModal?: () => void;
+  }
+}
+
 // Modal types
 interface ModalButton {
   text: string;
@@ -70,7 +106,7 @@ interface FormFieldValidation {
 
 interface ValidationRule {
   type: 'required' | 'email' | 'minLength' | 'maxLength' | 'pattern' | 'custom' | 'password' | 'confirmation';
-  value?: any;
+  value?: string | number | RegExp;
   message: string;
   validator?: (value: string, element: HTMLElement) => boolean | Promise<boolean>;
 }
@@ -123,7 +159,7 @@ interface TableColumn<T> {
   key: keyof T;
   label: string;
   sortable?: boolean;
-  formatter?: (value: any, row: T) => string | HTMLElement;
+  formatter?: (value: T[keyof T], row: T) => string | HTMLElement;
   className?: string;
 }
 
@@ -240,7 +276,7 @@ interface EventListenerConfig {
 }
 
 // Storage types
-interface StorageItem<T = any> {
+interface StorageItem<T = unknown> {
   key: string;
   value: T;
   expires?: number; // timestamp

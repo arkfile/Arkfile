@@ -12,7 +12,7 @@ import { loadFiles } from '../files/list.js';
 
 // Make showTOTPAppsModal available globally for inline onclick handlers
 if (typeof window !== 'undefined') {
-  (window as any).showTOTPAppsModal = showTOTPAppsModal;
+  window.showTOTPAppsModal = showTOTPAppsModal;
 }
 
 export interface TOTPSetupFlowData {
@@ -35,7 +35,7 @@ export interface TOTPSetupData {
 export function handleTOTPSetupFlow(data: TOTPSetupFlowData): void {
   // Store the registration data temporarily
   if (typeof window !== 'undefined') {
-    (window as any).totpSetupData = data;
+    window.totpSetupData = data;
   }
   
   hideProgress();
@@ -278,7 +278,7 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
       
       // Clean up
       if (typeof window !== 'undefined') {
-        delete (window as any).totpSetupData;
+        delete window.totpSetupData;
       }
       document.querySelector('.modal-overlay')?.remove();
       

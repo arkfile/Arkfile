@@ -4,7 +4,7 @@
 
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
-import { setTokens, clearAllSessionData } from '../utils/auth.js';
+import { setTokens, clearAllSessionData, getToken } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleTOTPFlow } from './totp.js';
@@ -154,9 +154,7 @@ export class LoginManager {
       // Populate digest cache for deduplication (non-fatal if it fails)
       if (cachedAccountKey) {
         try {
-          const token = sessionStorage.getItem('arkfile.sessionToken') ||
-                        localStorage.getItem('arkfile.sessionToken') ||
-                        loginData.token;
+          const token = getToken() || loginData.token;
           if (token) {
             const filesResp = await fetch('/api/files', {
               headers: { 'Authorization': `Bearer ${token}` },

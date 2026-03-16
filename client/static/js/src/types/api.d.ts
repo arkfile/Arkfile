@@ -3,7 +3,7 @@
  */
 
 // Common API response structure
-interface ApiResponse<T = any> {
+interface ApiResponse<T = unknown> {
   success?: boolean;
   error?: string;
   message?: string;

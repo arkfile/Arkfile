@@ -12,7 +12,7 @@ import { LoginManager } from './login';
 
 // Make showTOTPAppsModal available globally for inline onclick handlers
 if (typeof window !== 'undefined') {
-  (window as any).showTOTPAppsModal = showTOTPAppsModal;
+  window.showTOTPAppsModal = showTOTPAppsModal;
 }
 
 export interface TOTPFlowData {
@@ -44,7 +44,7 @@ export interface TOTPSetupResponse {
 export function handleTOTPFlow(data: TOTPFlowData): void {
   // Store the partial login data temporarily
   if (typeof window !== 'undefined') {
-    (window as any).totpLoginData = data;
+    window.totpLoginData = data;
   }
   
   // Show TOTP input modal
@@ -57,7 +57,7 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
         action: () => {
           // Clean up temporary data
           if (typeof window !== 'undefined') {
-            delete (window as any).totpLoginData;
+            delete window.totpLoginData;
           }
         },
         variant: 'secondary'
@@ -177,7 +177,7 @@ async function verifyTOTPLogin(): Promise<void> {
   }
   
   // Get stored login data
-  const totpLoginData = typeof window !== 'undefined' ? (window as any).totpLoginData : null;
+  const totpLoginData = typeof window !== 'undefined' ? window.totpLoginData : null;
   if (!totpLoginData) {
     showError('Login session expired (30 minutes). Please try again.');
     return;
@@ -214,7 +214,7 @@ async function verifyTOTPLogin(): Promise<void> {
       
       // Clean up
       if (typeof window !== 'undefined') {
-        delete (window as any).totpLoginData;
+        delete window.totpLoginData;
       }
       document.querySelector('.modal-overlay')?.remove();
       

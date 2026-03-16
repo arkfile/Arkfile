@@ -232,27 +232,6 @@ export const SALT_DOMAIN_PREFIXES: Record<PasswordContext, string> = {
 } as const;
 
 // ============================================================================
-// Storage Keys
-// ============================================================================
-
-/**
- * Keys used for sessionStorage/localStorage
- */
-export const STORAGE_KEYS = {
-  /** Cached file encryption key (sessionStorage only) */
-  FILE_ENCRYPTION_KEY: 'arkfile.fileEncryptionKey',
-  
-  /** OPAQUE client state during registration/login */
-  OPAQUE_STATE: 'arkfile.opaqueState',
-  
-  /** Session token */
-  SESSION_TOKEN: 'arkfile.sessionToken',
-  
-  /** Refresh token */
-  REFRESH_TOKEN: 'arkfile.refreshToken',
-} as const;
-
-// ============================================================================
 // Protocol Version
 // ============================================================================
 

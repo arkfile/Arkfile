@@ -6,6 +6,18 @@ import { clearAllCachedAccountKeys } from '../crypto/file-encryption.js';
 import { clearDigestCache } from './digest-cache.js';
 
 /**
+ * JWT payload structure from Arkfile server tokens
+ */
+export interface JwtPayload {
+  username: string;
+  exp: number;
+  iat: number;
+  sub?: string;
+  jti?: string;
+  is_admin?: boolean;
+}
+
+/**
  * Custom error for 503 Service Unavailable responses.
  * Thrown when the backend readiness probe (/readyz) fails or API returns 503.
  */
@@ -129,13 +141,26 @@ export class AuthManager {
   }
 
   // JWT token parsing
-  public static parseJwtToken(token: string): any | null {
+  public static parseJwtToken(token: string): JwtPayload | null {
     try {
       const parts = token.split('.');
       if (parts.length !== 3) return null;
       
-      const payload = JSON.parse(atob(parts[1]));
-      return payload;
+      const payload: unknown = JSON.parse(atob(parts[1]));
+      
+      // Validate the payload has the expected shape
+      if (
+        typeof payload === 'object' &&
+        payload !== null &&
+        'username' in payload &&
+        typeof (payload as JwtPayload).username === 'string' &&
+        'exp' in payload &&
+        typeof (payload as JwtPayload).exp === 'number'
+      ) {
+        return payload as JwtPayload;
+      }
+      
+      return null;
     } catch (error) {
       console.error('Error parsing JWT token:', error);
       return null;
