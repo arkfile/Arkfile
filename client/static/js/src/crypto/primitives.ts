@@ -159,6 +159,9 @@ export async function deriveKeyArgon2id(
     if (error instanceof KeyDerivationTimeoutError) {
       throw error;
     }
+    if (error instanceof KeyDerivationError) {
+      throw error;
+    }
     throw new KeyDerivationError(
       'Failed to derive key using Argon2id',
       { error: String(error) }
