@@ -61,12 +61,12 @@ export function deriveSaltFromUsername(username: string, context: PasswordContex
   // NOTE: Go does NOT normalize to lowercase, so we need to match that behavior
   const normalizedUsername = username.trim();
   
-  if (normalizedUsername.length < 3) {
-    throw new InvalidUsernameError('Username must be at least 3 characters');
+  if (normalizedUsername.length < 10) {
+    throw new InvalidUsernameError('Username must be at least 10 characters');
   }
   
-  if (normalizedUsername.length > 64) {
-    throw new InvalidUsernameError('Username must be at most 64 characters');
+  if (normalizedUsername.length > 50) {
+    throw new InvalidUsernameError('Username must be at most 50 characters');
   }
   
   try {
