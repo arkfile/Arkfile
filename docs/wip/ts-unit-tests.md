@@ -21,6 +21,9 @@ These modules have thorough unit tests with edge cases, error paths, and known-a
 | **File Encryption / Key Derivation** (`crypto/file-encryption.ts`) | `file-encryption.test.ts` | 21 | `deriveSaltFromUsername` determinism, different usernames/contexts, manual SHA-256 verification, whitespace trimming, case sensitivity (matches Go), boundary validation (10-50 chars), `deriveFileEncryptionKey` determinism + different passwords/usernames/contexts + invalid username rejection |
 | **Account Key Cache** (`crypto/account-key-cache.ts`) | `account-key-cache.test.ts` | 20 | `cacheAccountKey`/`getCachedAccountKey` round-trip, null for uncached/wrong user, `isAccountKeyCached` true/false/after-clear, `clearCachedAccountKey` specific user, `clearAllCachedAccountKeys`, `lockAccountKey`/`unlockAccountKey`/`isAccountKeyLocked`, session binding (mismatched token auto-locks), `getAccountKeyCacheConfig`/`setAccountKeyCacheConfig` round-trip + clamping, `cleanupAccountKeyCache` |
 | **Digest Cache** (`utils/digest-cache.ts`) | `digest-cache.test.ts` | 13 | `addDigest`/`checkDuplicate` round-trip + null for missing + multiple entries + overwrite, `removeDigest` specific/no-op, `clearDigestCache` all/empty, `populateDigestCache` from encrypted entries + skip missing fields + skip decryption failures |
+| **Share Crypto** (`shares/share-crypto.ts`) | `share-crypto.test.ts` | 17 | `generateFEK` (32 bytes, unique), `encodeFEK`/`decodeFEK` round-trip + valid base64, `encryptFEKForShare`→`decryptShareEnvelope` full round-trip, metadata round-trip (filename, sizeBytes, sha256), download token presence, rejects invalid FEK size / empty password / empty shareId, wrong password → DecryptionError, wrong shareId/fileId AAD mismatch → DecryptionError, empty password/shareId rejection on decrypt, missing salt rejection, truncated data rejection |
+| **Password Validation** (`crypto/password-validation.ts`) | `password-validation.test.ts` | 24 | `validatePassword` core logic (empty, too short, class counting, boundary length, special char recognition, failure reasons), `validateAccountPassword` (15+ chars, 2+ classes, fails each), `validateSharePassword` (20+ chars, 2+ classes, fails each), `validateCustomPassword` (custom min length), `validatePasswordBasic` (hardcoded 4-class requirement). Includes inline `fetch` mock returning `password-requirements.json` config. |
+| **Auth Manager** (`utils/auth.ts`) | `auth-manager.test.ts` | 28 | `setTokens`/`getToken`/`getRefreshToken`/`clearTokens` localStorage round-trip, `isAuthenticated` true/false, `parseJwtToken` (valid decode, malformed JWT, invalid base64, missing username/exp, wrong types), `getUsernameFromToken`, `getTokenExpiry` (Date object, null), `isTokenExpired` (no token, future, past), `clearAllSessionData` (clears localStorage + sessionStorage), `ServiceUnavailableError` (name, default/custom message, instanceof), `getAdminUsernames`/`getAdminContact` defaults. Includes inline `localStorage` mock (Map-backed). |
 
 ### No Unit Test Coverage
 
@@ -28,13 +31,10 @@ These modules have **zero** unit tests. Some are better suited for e2e/integrati
 
 | Module | Source File(s) | Testable Functions | Notes |
 |--------|---------------|-------------------|-------|
-| **Share Crypto** | `shares/share-crypto.ts` | `encryptFEKForShare`/`decryptShareEnvelope` round-trip, AAD binding (wrong shareId/fileId fails), wrong password fails, `generateFEK` (32 bytes, unique), `encodeFEK`/`decodeFEK` round-trip, empty password/shareId rejection, envelope JSON structure, `validateSharePasswordStrength` | **High priority** - pure crypto, no DOM deps, fully testable |
-| **Password Validation** | `crypto/password-validation.ts` | `validatePassword`, `validateAccountPassword`, `validateSharePassword`, `validatePasswordBasic` | **High priority** - pure logic, loads config via fetch (mockable) |
 | **AES-GCM Decryptor** | `crypto/aes-gcm.ts` | `AESGCMDecryptor.fromRawKey`, `decryptChunk`, `decryptChunks`, `verifyChunk` | **Medium priority** - pure crypto, testable with synthetic chunks |
 | **Retry Handler** | `files/retry-handler.ts` | `isRetryableError`, `calculateDelay`, `withRetry`, `fetchWithRetry` | **Medium priority** - pure logic (delay calculation, error classification), fetch-dependent parts need mocking |
 | **Crypto Types** | `crypto/types.ts` | `isFileEncryptionKey`, `isOpaqueExportKey`, `isSessionKey`, `isSuccess`, `isFailure` | **Low priority** - simple type guards, but easy to test |
 | **Constants Loader** | `crypto/constants.ts` | `getArgon2Params`, `getChunkingParams`, `isValidArgon2Variant`, `isValidKeyLength` | **Low priority** - config loading (fetch-dependent), validators are simple |
-| **Auth Manager** | `utils/auth.ts` | `parseJwtToken`, `getUsernameFromToken`, `isTokenExpired`, `getTokenExpiry` | **Medium priority** - JWT parsing is pure logic; token storage and refresh need localStorage/fetch mocks |
 | **OPAQUE Client** | `crypto/opaque.ts` | `storeClientSecret`/`retrieveClientSecret`/`clearClientSecret` | **Low priority** - WASM-dependent for core functions; only secret storage helpers are testable |
 | **Login/Register** | `auth/login.ts`, `auth/register.ts` | - | DOM + fetch + OPAQUE WASM; **e2e only** |
 | **TOTP** | `auth/totp.ts`, `auth/totp-setup.ts` | - | DOM + fetch; **e2e only** |
@@ -53,60 +53,6 @@ These modules have **zero** unit tests. Some are better suited for e2e/integrati
 ---
 
 ## Section 2: Remaining Unit Tests to Add (Priority Order)
-
-### Phase 1: Share Crypto (HIGH - next to implement)
-
-**File:** `client/static/js/src/__tests__/share-crypto.test.ts`
-
-`shares/share-crypto.ts` is fully written, has zero DOM dependencies, and is the most critical untested pure-crypto module. Estimated ~15 tests:
-
-- `generateFEK()` - returns 32 bytes, unique each call
-- `encodeFEK()` / `decodeFEK()` - round-trip, correct base64
-- `encryptFEKForShare()` → `decryptShareEnvelope()` - full round-trip
-- `encryptFEKForShare()` - rejects invalid FEK size, empty password, empty shareId
-- `decryptShareEnvelope()` - wrong password → `DecryptionError`
-- `decryptShareEnvelope()` - wrong shareId (AAD mismatch) → `DecryptionError`
-- `decryptShareEnvelope()` - wrong fileId (AAD mismatch) → `DecryptionError`
-- `decryptShareEnvelope()` - empty password/shareId rejection
-- `decryptShareEnvelope()` - truncated data rejection
-- Envelope structure - JSON contains `fek`, `download_token`, optional `filename`/`size_bytes`/`sha256`
-- Metadata round-trip - filename, sizeBytes, sha256 survive encrypt→decrypt
-- Download token - returned from encrypt, present in decrypted envelope
-
-**Note:** These tests will be slow (~200ms each) due to Argon2id. Use `getArgon2Params()` mock or accept the latency.
-
-### Phase 2: Password Validation (HIGH)
-
-**File:** `client/static/js/src/__tests__/password-validation.test.ts`
-
-`crypto/password-validation.ts` loads `password-requirements.json` via fetch, then does pure validation. Estimated ~12 tests:
-
-- `validatePasswordBasic()` - meets/fails minimum length
-- `validateAccountPassword()` - meets all requirements (length, uppercase, lowercase, digit, special)
-- `validateAccountPassword()` - fails each requirement individually
-- `validateSharePassword()` - meets/fails share-specific requirements
-- `validateCustomPassword()` - custom min length
-- Empty password rejection
-- Unicode password handling
-
-**Requires:** Mock `fetch` to return `password-requirements.json` content.
-
-### Phase 3: Auth Manager Pure Logic (MEDIUM)
-
-**File:** `client/static/js/src/__tests__/auth-manager.test.ts`
-
-The JWT-parsing functions in `utils/auth.ts` are pure logic. Estimated ~10 tests:
-
-- `parseJwtToken()` - decodes valid JWT, returns null for garbage/empty
-- `getUsernameFromToken()` - extracts `sub` claim
-- `getTokenExpiry()` - extracts `exp` claim as Date
-- `isTokenExpired()` - true for past exp, false for future exp
-- `setTokens()` / `getToken()` / `getRefreshToken()` - localStorage round-trip
-- `clearTokens()` - removes both keys
-- `isAuthenticated()` - true when token exists, false when cleared
-- `clearAllSessionData()` - clears everything
-
-**Requires:** Mock `localStorage` (similar to existing `sessionStorage` mock in `setup.ts`).
 
 ### Phase 4: AES-GCM Chunk Decryptor (MEDIUM)
 
@@ -156,11 +102,16 @@ The JWT-parsing functions in `utils/auth.ts` are pure logic. Estimated ~10 tests
 - No Web Crypto mock needed - Bun provides `crypto.subtle` natively
 - Argon2id works via `@noble/hashes/argon2` (pure JS, no WASM)
 
-### What Would Need to Be Added
+### Inline Mocks in Individual Test Files
 
-- **`localStorage` mock** - needed for Phase 3 (AuthManager) and Phase 5 (retry handler)
-- **`fetch` mock** - needed for Phase 2 (password validation config loading) and Phase 5 (retry handler)
-- **Consider reducing Argon2 params for tests** - current params make share-crypto tests slow; could mock `getArgon2Params()` to return lighter params in test environment
+- **`auth-manager.test.ts`** — carries its own `localStorage` mock (Map-backed `MockLocalStorage` class, installed on `globalThis` before imports)
+- **`password-validation.test.ts`** — carries its own `fetch` mock (intercepts requests for `password-requirements.json`, returns production config values)
+
+### What Would Need to Be Added for Remaining Phases
+
+- **`fetch` mock** — needed for Phase 5 (retry handler `fetchWithRetry` tests); could reuse the pattern from password-validation.test.ts
+- **Consider reducing Argon2 params for tests** — share-crypto tests are slow (~200ms each) due to Argon2id; could mock `getArgon2Params()` to return lighter params in test environment
+- **Consider centralizing `localStorage` mock in setup.ts** — currently only auth-manager.test.ts needs it, but if more tests require it, moving to setup.ts would reduce duplication
 
 ---
 
@@ -168,16 +119,18 @@ The JWT-parsing functions in `utils/auth.ts` are pure logic. Estimated ~10 tests
 
 | Status | Area | Tests |
 |--------|------|-------|
-| Done | Crypto primitives | 40 |
-| Done | Error hierarchy | 35 |
-| Done | File encryption / key derivation | 21 |
-| Done | Account key cache | 20 |
-| Done | Digest cache | 13 |
-| Phase 1 | Share crypto | ~15 |
-| Phase 2 | Password validation | ~12 |
-| Phase 3 | Auth manager (JWT parsing) | ~10 |
+| ✅ Done | Crypto primitives | 40 |
+| ✅ Done | Error hierarchy | 35 |
+| ✅ Done | File encryption / key derivation | 21 |
+| ✅ Done | Account key cache | 20 |
+| ✅ Done | Digest cache | 13 |
+| ✅ Done | Share crypto | 17 |
+| ✅ Done | Password validation | 24 |
+| ✅ Done | Auth manager (JWT, tokens, errors) | 28 |
 | Phase 4 | AES-GCM chunk decryptor | ~8 |
 | Phase 5 | Retry handler | ~8 |
 | Phase 6 | Crypto type guards | ~10 |
 | - | DOM/UI modules | e2e only |
-| **Total** | | **136 done + ~63 planned** |
+| **Total** | | **198 done + ~26 planned** |
+
+> **Note:** `bun test` reports 205 passing (as of last run). The 7-test difference vs. the grep count above is due to parameterized/nested test cases that expand at runtime. The grep count of 198 reflects unique `test()` call sites in source.
