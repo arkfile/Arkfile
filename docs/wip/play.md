@@ -302,3 +302,21 @@ Please read the following files first to understand the project, then write the 
 
 # PROGRESS UPDATES
 
+## 2026-03-18: Initial Implementation Complete
+
+The Playwright test spec `scripts/testing/e2e-playwright.ts` has been written covering all 13 phases from the plan above. Key implementation details:
+
+**Structure:** Single `test.describe.serial` block with 13 test cases, each corresponding to a phase in this plan. A `performLogin()` helper handles the full OPAQUE + TOTP + cache opt-in flow and is reused across phases that need an authenticated session.
+
+**TOTP handling:** `waitForTotpWindow()` calculates sleep time identically to e2e-test.sh (`30 - (seconds % 30) + 1`). `generateTotpCode()` calls `arkfile-client generate-totp --secret ...` via `execSync()` after the window wait.
+
+**Download verification:** Uses Playwright's `page.waitForEvent('download')` to capture downloads triggered by `triggerBrowserDownload()` (blob URL + hidden anchor click). Files are saved to `PLAYWRIGHT_TEMP_DIR/downloads/` and verified via Node's `crypto.createHash('sha256')`.
+
+**Dialog handling:** `page.on('dialog')` registered before clicks that trigger `prompt()` (custom password download) and `confirm()` (share revocation). Listeners are cleaned up with `page.removeAllListeners('dialog')` between sub-phases.
+
+**Share creation flow:** Uses the share modal DOM IDs (`#arkfile-share-modal-overlay`, `#share-password-input`, `#share-password-confirm`, `#share-expiry-value`, `#share-expiry-unit`, `#share-max-downloads`, `#share-modal-submit`) and extracts share URLs from `#share-result-url`.
+
+**Share access controls:** Phase 11 tests max_downloads (Share B: 2 downloads succeed, 3rd fails), expiry (Share C: download before expiry succeeds, 65s wait, download after expiry fails), and non-existent share (bogus URL shows error).
+
+**Status:** Ready for first test run. Next step: run `sudo bash scripts/testing/e2e-playwright.sh` and iterate on any timing or selector issues discovered during live execution.
+
