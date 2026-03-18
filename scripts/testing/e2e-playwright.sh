@@ -86,13 +86,61 @@ else
     exit 1
 fi
 
-# Check bun
+# Check bun (handle sudo: bun is often installed per-user at ~/.bun/bin/)
 section "Checking bun runtime"
-if command -v bun >/dev/null 2>&1; then
-    success "bun available: $(bun --version)"
+if ! command -v bun >/dev/null 2>&1; then
+    # bun not in PATH -- attempt to locate and symlink (common when running under sudo)
+    BUN_FOUND=""
+
+    # Check the invoking user's home directory first (sudo preserves SUDO_USER)
+    if [ -n "$SUDO_USER" ] && [ -x "/home/$SUDO_USER/.bun/bin/bun" ]; then
+        BUN_FOUND="/home/$SUDO_USER/.bun/bin/bun"
+    fi
+
+    # Fallback: scan /home/*/.bun/bin/bun
+    if [ -z "$BUN_FOUND" ]; then
+        for candidate in /home/*/.bun/bin/bun; do
+            if [ -x "$candidate" ]; then
+                BUN_FOUND="$candidate"
+                break
+            fi
+        done
+    fi
+
+    if [ -n "$BUN_FOUND" ]; then
+        info "Found bun at $BUN_FOUND (not in root PATH)"
+        # Create/update symlink idempotently
+        SYMLINK_TARGET="/usr/local/bin/bun"
+        if [ -L "$SYMLINK_TARGET" ] && [ "$(readlink -f "$SYMLINK_TARGET")" = "$(readlink -f "$BUN_FOUND")" ]; then
+            info "Symlink already correct: $SYMLINK_TARGET -> $BUN_FOUND"
+        else
+            ln -sf "$BUN_FOUND" "$SYMLINK_TARGET"
+            success "Created symlink: $SYMLINK_TARGET -> $BUN_FOUND"
+        fi
+
+        # Also symlink bunx if present alongside bun
+        BUN_DIR="$(dirname "$BUN_FOUND")"
+        if [ -x "$BUN_DIR/bunx" ]; then
+            if [ -L "/usr/local/bin/bunx" ] && [ "$(readlink -f /usr/local/bin/bunx)" = "$(readlink -f "$BUN_DIR/bunx")" ]; then
+                : # already correct
+            else
+                ln -sf "$BUN_DIR/bunx" /usr/local/bin/bunx
+            fi
+        fi
+
+        # Verify it works now
+        if command -v bun >/dev/null 2>&1; then
+            success "bun available: $(bun --version)"
+        else
+            error "bun symlinked but still not found in PATH"
+            exit 1
+        fi
+    else
+        error "bun not found. Install bun first: curl -fsSL https://bun.sh/install | bash"
+        exit 1
+    fi
 else
-    error "bun not found. Install bun first."
-    exit 1
+    success "bun available: $(bun --version)"
 fi
 
 # INSTALL PLAYWRIGHT (if needed)
