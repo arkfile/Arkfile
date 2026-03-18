@@ -270,12 +270,17 @@ patch_emscripten_for_modern_emcc() {
     print_status "INFO" "Patching emscripten.sh for Emscripten $EMSCRIPTEN_VERSION compatibility..."
 
     # Remove flags incompatible with upstream LLVM backend (Emscripten 3.x)
+    # Handle both "-sFLAG=1" and "-s FLAG=1" forms (libsodium uses the space form)
     sed -i \
         -e 's/-sRUNNING_JS_OPTS=1//g' \
+        -e 's/-s RUNNING_JS_OPTS=1//g' \
         -e 's/--llvm-lto 1//g' \
         -e 's/-sAGGRESSIVE_VARIABLE_ELIMINATION=1//g' \
+        -e 's/-s AGGRESSIVE_VARIABLE_ELIMINATION=1//g' \
         -e 's/-sALIASING_FUNCTION_POINTERS=1//g' \
+        -e 's/-s ALIASING_FUNCTION_POINTERS=1//g' \
         -e 's/-sDISABLE_EXCEPTION_CATCHING=1//g' \
+        -e 's/-s DISABLE_EXCEPTION_CATCHING=1//g' \
         -e '1s/^/# ARKFILE-PATCHED for Emscripten 3.x compatibility\n/' \
         "$EMSCRIPTEN_SH"
 

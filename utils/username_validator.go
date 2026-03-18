@@ -31,6 +31,14 @@ func ValidateUsername(username string) error {
 		return fmt.Errorf("username must be at most %d characters", MaxUsernameLength)
 	}
 
+	// Defensive character validation (runs before regex as CGO safety measure)
+	for _, r := range username {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' || r == ',') {
+			return fmt.Errorf("username can only contain letters, numbers, underscores, hyphens, periods, and commas")
+		}
+	}
+
 	if !usernameRegex.MatchString(username) {
 		return fmt.Errorf("username can only contain letters, numbers, underscores, hyphens, periods, and commas")
 	}

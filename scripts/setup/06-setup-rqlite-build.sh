@@ -383,36 +383,19 @@ check_existing_installation() {
 setup_source() {
     echo -e "${BLUE}Setting up rqlite source code...${NC}"
     
-    # Cache directory should already exist from 02-setup-directories.sh
-    if [ ! -d "${CACHE_DIR}" ]; then
-        echo -e "${RED}[X] Cache directory not found: ${CACHE_DIR}${NC}"
-        echo "Please run 02-setup-directories.sh first"
-        exit 1
-    fi
-    
-    # Build directory is always temporary, create with current user ownership
-    mkdir -p "${BUILD_DIR}"
-    
-    # Ensure build directory is writable by the original user
+    # Ensure cache and build directories exist with correct ownership.
+    # When running under sudo, git/go operations run as $SUDO_USER, so
+    # both directories must be writable by that user.
+    sudo mkdir -p "${CACHE_DIR}" "${BUILD_DIR}"
     if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        sudo chown -R "$SUDO_USER:$SUDO_USER" "${BUILD_DIR}"
-    fi
-    
-    # Ensure we can write to the cache directory (temporarily grant access if needed)
-    if [ ! -w "${CACHE_DIR}" ]; then
-        sudo chown -R $(whoami):$(whoami) "${CACHE_DIR}"
-        RESTORE_OWNERSHIP=true
+        sudo chown -R "$SUDO_USER:$SUDO_USER" "${CACHE_DIR}"
     fi
     
     if [ -d "${SOURCE_DIR}" ]; then
         echo "Updating existing source repository..."
-        # Fix ownership and parent dir permissions before git ops to avoid "dubious ownership" / permission errors
+        # Fix ownership before git ops to avoid "dubious ownership" errors
         if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
             sudo chown -R "$SUDO_USER:$SUDO_USER" "${SOURCE_DIR}"
-            # Ensure parent directories are traversable by the original user
-            sudo chmod 755 "${CACHE_DIR}"
-            sudo chmod 755 "$(dirname "${CACHE_DIR}")"
-            sudo chmod 755 "$(dirname "$(dirname "${CACHE_DIR}")")"
         fi
         cd "${SOURCE_DIR}"
         run_git_as_user fetch --tags
@@ -460,13 +443,9 @@ verify_source() {
     # Get the original user who invoked sudo
     ORIGINAL_USER=${SUDO_USER:-$(whoami)}
     
-    # Ensure source directory and parent directories are accessible to original user
+    # Ensure source directory is accessible to original user
     if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
         sudo chown -R "$SUDO_USER:$SUDO_USER" "${SOURCE_DIR}"
-        # Also ensure parent directories are accessible
-        sudo chmod 755 "${CACHE_DIR}"
-        sudo chmod 755 "$(dirname "${CACHE_DIR}")"
-        sudo chmod 755 "$(dirname "$(dirname "${CACHE_DIR}")")"
     fi
     
     # Display version info
