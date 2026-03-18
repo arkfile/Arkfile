@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ArkFile - Shared File</title>
+    <title>Arkfile - Shared File</title>
     <link rel="stylesheet" href="/css/styles.css">
     <style>
         .card {
@@ -14,51 +14,12 @@
             padding: 20px;
         }
         .hidden { display: none; }
-        .file-info {
-            margin-bottom: 20px;
-        }
-        .password-form {
-            margin: 20px 0;
-        }
-        .spinner {
-            border: 4px solid rgba(0, 0, 0, 0.1);
-            border-radius: 50%;
-            border-top: 4px solid #007bff;
-            width: 20px;
-            height: 20px;
-            animation: spin 1s linear infinite;
-            display: inline-block;
-            vertical-align: middle;
-            margin-right: 10px;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .progress-bar {
-            width: 100%;
-            background-color: #e0e0e0;
-            border-radius: 4px;
-            margin-bottom: 10px;
-        }
-        .progress-bar-fill {
-            height: 10px;
-            background-color: #4CAF50;
-            border-radius: 4px;
-            transition: width 0.3s ease;
-            width: 0%;
-        }
-        .file-icon {
-            font-size: 48px;
-            color: #666;
-            margin-bottom: 10px;
-        }
     </style>
 </head>
 <body>
     <header>
         <div class="container">
-            <h1>ArkFile</h1>
+            <h1>Arkfile</h1>
             <nav>
                 <a href="/">Home</a>
             </nav>
@@ -67,49 +28,10 @@
 
     <main class="container">
         <div class="card">
-            <h2>Shared File</h2>
-            <div class="file-info">
-                <div class="file-icon">📄</div>
-                <h3 id="fileName">Loading...</h3>
-                <p id="fileDetails"></p>
-                <p id="passwordHint" class="hidden"></p>
+            <div id="share-access-container">
+                <h2>Shared File</h2>
+                <p>Loading...</p>
             </div>
-
-            <div id="passwordForm" class="password-form hidden">
-                <h4>This file is password protected</h4>
-                <p>Enter the password provided by the file owner to access this file.</p>
-                <form id="sharePasswordForm">
-                    <div class="form-group">
-                        <label for="password">Password:</label>
-                        <input type="password" id="password" placeholder="Enter file password" required>
-                    </div>
-                    <button type="submit" class="btn primary">Verify Password</button>
-                </form>
-            </div>
-
-            <div id="extraPasswordForm" class="password-form hidden">
-                <h4>Share Link Password Required</h4>
-                <p>This share link requires an additional password.</p>
-                <form id="shareAccessForm">
-                    <div class="form-group">
-                        <label for="accessPassword">Access Password:</label>
-                        <input type="password" id="accessPassword" placeholder="Enter share access password" required>
-                    </div>
-                    <button type="submit" class="btn primary">Access File</button>
-                </form>
-            </div>
-
-            <div id="downloadSection" class="hidden">
-                <div class="progress-container hidden">
-                    <div class="progress-bar">
-                        <div class="progress-bar-fill" id="progressBar"></div>
-                    </div>
-                    <p id="progressText">0%</p>
-                </div>
-                <button id="downloadBtn" class="btn primary">Download File</button>
-            </div>
-
-            <div id="statusMessage" class="hidden"></div>
         </div>
     </main>
 
@@ -120,31 +42,21 @@
         // Parse share ID from URL path
         const pathSegments = window.location.pathname.split('/');
         const shareId = pathSegments[pathSegments.length - 1];
-        
+
         // DOM ready handler
         document.addEventListener('DOMContentLoaded', async () => {
             if (!shareId) {
                 showError('Invalid share link');
                 return;
             }
-            
+
             // Initialize share access UI using the TypeScript module
             try {
-                // Wait for modules to load
                 await waitForModules();
-                
+
                 const ShareAccessUI = window.arkfile.shares.ShareAccessUI;
-                
-                // Replace the existing content with the proper share access interface
-                const mainContainer = document.querySelector('main .container .card');
-                if (mainContainer) {
-                    mainContainer.innerHTML = '<div id="share-access-container"></div>';
-                    
-                    // Initialize the ShareAccessUI
-                    const shareAccessUI = new ShareAccessUI('share-access-container', shareId);
-                    await shareAccessUI.initialize();
-                }
-                
+                const shareAccessUI = new ShareAccessUI('share-access-container', shareId);
+                await shareAccessUI.initialize();
             } catch (error) {
                 console.error('Error initializing share access:', error);
                 showError('Failed to initialize share access interface. Please refresh the page.');
@@ -164,20 +76,14 @@
                 check();
             });
         }
-        
+
         // Simple error display function (fallback)
         function showError(message) {
-            const fileNameEl = document.getElementById('fileName');
-            const fileDetailsEl = document.getElementById('fileDetails');
-            
-            if (fileNameEl) fileNameEl.textContent = 'Error';
-            if (fileDetailsEl) fileDetailsEl.innerHTML = `<p style="color: #e74c3c;">${message}</p>`;
-            
-            // Hide all forms
-            const forms = ['passwordForm', 'extraPasswordForm', 'downloadSection'];
-            forms.forEach(id => {
-                const el = document.getElementById(id);
-                if (el) el.classList.add('hidden');
-            });
+            const container = document.getElementById('share-access-container');
+            if (container) {
+                container.innerHTML = `<h2>Error</h2><p style="color: #e74c3c;">${message}</p>`;
+            }
         }
     </script>
+</body>
+</html>

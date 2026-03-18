@@ -5,11 +5,10 @@
  * Provides UI for viewing share status, copying URLs, and revoking shares.
  */
 
-import { getToken } from '../utils/auth.js';
+import { getToken, getUsernameFromToken } from '../utils/auth.js';
 import { showError, showSuccess } from '../ui/messages.js';
 import { getCachedAccountKey } from '../crypto/file-encryption.js';
-import { getUsernameFromToken } from '../utils/auth.js';
-import { decryptChunk } from '../crypto/aes-gcm.js';
+import { decryptMetadataField } from '../crypto/metadata-helpers.js';
 
 // ============================================================================
 // Types
@@ -69,26 +68,6 @@ export class ShareListUI {
     this.container = container;
   }
 
-  /** Decrypt a metadata field (filename / sha256) that uses its own nonce */
-  private async decryptMetadataField(ciphertextB64: string, nonceB64: string, key: Uint8Array): Promise<string> {
-    const nonce = this.base64ToBytes(nonceB64);
-    const ciphertext = this.base64ToBytes(ciphertextB64);
-    
-    // Metadata is encrypted as nonce‖ciphertext‖tag but server returns them separately
-    const combined = new Uint8Array(nonce.length + ciphertext.length);
-    combined.set(nonce, 0);
-    combined.set(ciphertext, nonce.length);
-    
-    const plainBytes = await decryptChunk(combined, key);
-    return new TextDecoder().decode(plainBytes);
-  }
-
-  private base64ToBytes(base64: string): Uint8Array {
-    const bin = atob(base64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return bytes;
-  }
 
   /**
    * Loads and displays the share list
@@ -171,8 +150,8 @@ export class ShareListUI {
 
           if (accountKey) {
             try {
-              enrichedShare.filename_local = await this.decryptMetadataField(meta.encrypted_filename, meta.filename_nonce, accountKey);
-              enrichedShare.sha256_local = await this.decryptMetadataField(meta.encrypted_sha256sum, meta.sha256sum_nonce, accountKey);
+              enrichedShare.filename_local = await decryptMetadataField(meta.encrypted_filename, meta.filename_nonce, accountKey);
+              enrichedShare.sha256_local = await decryptMetadataField(meta.encrypted_sha256sum, meta.sha256sum_nonce, accountKey);
               enrichedShare.metadata_decrypted = true;
             } catch (err) {
               console.warn(`Failed to decrypt metadata for file ${share.file_id}`, err);
@@ -273,7 +252,7 @@ export class ShareListUI {
                 data-share-id="${share.share_id}"
                 title="Copy to clipboard"
               >
-                📋 Copy
+                Copy
               </button>
             </div>
           </div>
@@ -308,7 +287,7 @@ export class ShareListUI {
               class="btn-revoke" 
               data-share-id="${share.share_id}"
             >
-              🚫 Revoke Share
+              Revoke Share
             </button>
           </div>
         ` : ''}

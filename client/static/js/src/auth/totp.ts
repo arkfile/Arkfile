@@ -18,6 +18,8 @@ if (typeof window !== 'undefined') {
 export interface TOTPFlowData {
   tempToken: string;
   username: string;
+  /** Account password carried through for post-auth key derivation (wiped after use) */
+  password?: string;
 }
 
 export interface TOTPSetupData {
@@ -203,16 +205,24 @@ async function verifyTOTPLogin(): Promise<void> {
       // Handle standard API response structure: { data: { ... } }
       const data: TOTPLoginResponse = responseData.data || responseData;
       
-      // Complete authentication using LoginManager
-      // Pass is_approved from user object in response
+      // Extract password before cleanup (for post-auth key derivation)
+      const carriedPassword = totpLoginData.password;
+
+      // Wipe password from the flow data object immediately
+      if (totpLoginData.password) {
+        totpLoginData.password = '';
+      }
+      delete (totpLoginData as any).password;
+
+      // Complete authentication using LoginManager (with password for key derivation)
       await LoginManager.completeLogin({
         token: data.token,
         refresh_token: data.refresh_token,
         auth_method: 'OPAQUE',
         is_approved: data.user?.is_approved
-      }, totpLoginData.username);
-      
-      // Clean up
+      }, totpLoginData.username, carriedPassword);
+
+      // Clean up the entire flow data object from window
       if (typeof window !== 'undefined') {
         delete window.totpLoginData;
       }

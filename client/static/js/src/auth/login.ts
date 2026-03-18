@@ -1,5 +1,11 @@
 /**
  * Login functionality using OPAQUE protocol
+ *
+ * Login flow:
+ * 1. OPAQUE two-step authentication (password never sent to server)
+ * 2. If TOTP required: hand off to TOTP modal with password carried through
+ * 3. After full authentication: cache opt-in, Account Key derivation, digest cache
+ * 4. Show file section and load files
  */
 
 import { showError, showSuccess } from '../ui/messages.js';
@@ -9,7 +15,7 @@ import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleTOTPFlow } from './totp.js';
 import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
-import { 
+import {
   deriveFileEncryptionKeyWithCache,
   cleanupAccountKeyCache,
 } from '../crypto/file-encryption.js';
@@ -63,7 +69,7 @@ export class LoginManager {
           credential_request: loginInit.requestData
         })
       });
-      
+
       if (!responseStep1.ok) {
         const errorText = await responseStep1.text();
         clearClientSecret('login_secret');
@@ -71,9 +77,9 @@ export class LoginManager {
         showError(`Authentication failed: ${errorText}`);
         return;
       }
-      
+
       const step1Data = await responseStep1.json();
-      
+
       // Extract data from standard API response structure
       const responseData = step1Data.data;
       if (!responseData || !responseData.credential_response || !responseData.session_id) {
@@ -81,7 +87,7 @@ export class LoginManager {
         showError('Invalid server response: missing credential data');
         return;
       }
-      
+
       // Retrieve client secret from sessionStorage
       const clientSecret = retrieveClientSecret('login_secret');
       if (!clientSecret) {
@@ -94,7 +100,7 @@ export class LoginManager {
       const loginFinalize = await opaqueClient.finalizeLogin({
         username: credentials.username,
         serverResponse: responseData.credential_response,
-        serverPublicKey: null, // Server public key is packaged in credential response (InSecEnv mode)
+        serverPublicKey: null,
         clientSecret: clientSecret
       });
 
@@ -113,80 +119,42 @@ export class LoginManager {
           auth_u: loginFinalize.authData
         })
       });
-      
+
       if (!responseStep2.ok) {
         const errorText = await responseStep2.text();
         hideProgress();
         showError(`Authentication finalization failed: ${errorText}`);
         return;
       }
-      
+
       const loginResponse = await responseStep2.json();
       const loginData = loginResponse.data || loginResponse;
-      
+
       // Discard session key immediately (not needed for this application)
-      // JWT tokens handle all session management
       if (loginFinalize.sessionKey) {
         loginFinalize.sessionKey.fill(0);
       }
 
-      // Ask user if they want to cache their account key for this session.
-      // The key is never cached silently — user must explicitly opt-in.
-      let cachedAccountKey: Uint8Array | undefined;
       hideProgress();
-      const cacheChoice = await promptForCacheOptIn();
 
-      if (cacheChoice && cacheChoice.cacheDuration) {
-        try {
-          showProgressMessage('Deriving Account Key (Argon2id) -- this may take a few seconds...');
-          cachedAccountKey = await deriveFileEncryptionKeyWithCache(
-            credentials.password, credentials.username, 'account',
-            loginData.token, cacheChoice.cacheDuration,
-          );
-          hideProgress();
-        } catch (error) {
-          hideProgress();
-          console.warn('Failed to cache account key:', error);
-          // Non-fatal — user will be prompted per-operation
-        }
-      }
-
-      // Populate digest cache for deduplication (non-fatal if it fails)
-      if (cachedAccountKey) {
-        try {
-          const token = getToken() || loginData.token;
-          if (token) {
-            const filesResp = await fetch('/api/files', {
-              headers: { 'Authorization': `Bearer ${token}` },
-            });
-            if (filesResp.ok) {
-              const filesData = await filesResp.json();
-              const files: RawFileEntry[] = (filesData.files || filesData.data?.files || []);
-              await populateDigestCache(cachedAccountKey, files);
-            }
-          }
-        } catch (err) {
-          console.warn('Failed to populate digest cache:', err);
-        }
-      }
-
-      // Handle TOTP if required
+      // Check TOTP FIRST, before any cache/digest operations
       if (loginData.requires_totp) {
-        hideProgress();
         handleTOTPFlow({
           tempToken: loginData.temp_token!,
-          username: credentials.username
+          username: credentials.username,
+          password: credentials.password,
         });
         return;
       }
-      
-      // Complete authentication with tokens from server
+
+      // No TOTP required: complete login with post-auth steps
       await this.completeLogin({
         token: loginData.token,
         refresh_token: loginData.refresh_token,
-        auth_method: 'OPAQUE'
-      }, credentials.username);
-      
+        auth_method: 'OPAQUE',
+        is_approved: loginData.is_approved,
+      }, credentials.username, credentials.password);
+
     } catch (error) {
       // Clean up on error
       clearClientSecret('login_secret');
@@ -196,28 +164,84 @@ export class LoginManager {
     }
   }
 
-  public static async completeLogin(data: LoginResponse, username: string): Promise<void> {
+  /**
+   * Complete login after full authentication (OPAQUE + TOTP if required).
+   *
+   * This is called either:
+   * - Directly from login() when TOTP is not required
+   * - From verifyTOTPLogin() in totp.ts after successful TOTP verification
+   *
+   * Post-authentication steps:
+   * 1. Store JWT tokens
+   * 2. Cache opt-in prompt + Argon2id Account Key derivation
+   * 3. Populate digest cache for deduplication
+   * 4. Navigate to file section
+   *
+   * @param data     - Login response with tokens
+   * @param username - Authenticated username
+   * @param password - Account password (for key derivation; wiped after use)
+   */
+  public static async completeLogin(
+    data: LoginResponse,
+    username: string,
+    password?: string,
+  ): Promise<void> {
     try {
       // Store authentication tokens
       setTokens(data.token, data.refresh_token);
-      
-      hideProgress();
-      
+
       // Check if user is approved
       if (data.is_approved === false) {
-        // User is not approved - show pending approval section
         const { showPendingApprovalSection } = await import('../ui/sections.js');
         showPendingApprovalSection();
         showSuccess('Account created. Awaiting administrator approval.');
         return;
       }
-      
+
+      // Post-auth: Account Key caching (only if password is available)
+      let cachedAccountKey: Uint8Array | undefined;
+      if (password) {
+        const cacheChoice = await promptForCacheOptIn();
+        if (cacheChoice && cacheChoice.cacheDuration) {
+          try {
+            showProgressMessage('Deriving Account Key (Argon2id) -- this may take a few seconds...');
+            cachedAccountKey = await deriveFileEncryptionKeyWithCache(
+              password, username, 'account',
+              data.token, cacheChoice.cacheDuration,
+            );
+            hideProgress();
+          } catch (error) {
+            hideProgress();
+            console.warn('Failed to cache account key:', error);
+          }
+        }
+      }
+
+      // Post-auth: Populate digest cache for deduplication
+      if (cachedAccountKey) {
+        try {
+          const token = getToken() || data.token;
+          if (token) {
+            const filesResp = await fetch('/api/files', {
+              headers: { 'Authorization': `Bearer ${token}` },
+            });
+            if (filesResp.ok) {
+              const filesData = await filesResp.json();
+              const files: RawFileEntry[] = (filesData.files || []);
+              await populateDigestCache(cachedAccountKey, files);
+            }
+          }
+        } catch (err) {
+          console.warn('Failed to populate digest cache:', err);
+        }
+      }
+
       showSuccess('Login successful');
-      
+
       // Navigate to file section and load files
       showFileSection();
       await loadFiles();
-      
+
     } catch (error) {
       hideProgress();
       console.error('Login completion error:', error);
@@ -230,27 +254,27 @@ export class LoginManager {
       // Use auth manager to handle token cleanup and API call
       const { logout } = await import('../utils/auth.js');
       await logout();
-      
+
       // Clear all session data including OPAQUE secrets, Account Key cache, and digest cache
       clearAllSessionData();
       clearClientSecret('login_secret');
       cleanupAccountKeyCache();
       clearDigestCache();
-      
+
       // Navigate back to auth section
       const { showAuthSection } = await import('../ui/sections.js');
       showAuthSection();
-      
+
       showSuccess('Logged out successfully.');
     } catch (error) {
       console.error('Logout error:', error);
-      
+
       // Still attempt cleanup even on error
       clearAllSessionData();
       clearClientSecret('login_secret');
       cleanupAccountKeyCache();
       clearDigestCache();
-      
+
       const { showAuthSection } = await import('../ui/sections.js');
       showAuthSection();
     }
@@ -271,7 +295,7 @@ export function setupLoginForm(): void {
   // Handle form submission
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
-    
+
     const credentials: LoginCredentials = {
       username: usernameInput.value.trim(),
       password: passwordInput.value
@@ -282,7 +306,7 @@ export function setupLoginForm(): void {
 
   // Add event listeners
   loginForm.addEventListener('submit', handleSubmit);
-  
+
   // Handle Enter key in form fields
   [usernameInput, passwordInput].forEach(input => {
     input.addEventListener('keypress', (e) => {
@@ -304,7 +328,7 @@ export function setupLoginForm(): void {
 export async function login(): Promise<void> {
   const usernameInput = document.getElementById('login-username') as HTMLInputElement;
   const passwordInput = document.getElementById('login-password') as HTMLInputElement;
-  
+
   if (!usernameInput || !passwordInput) {
     showError('Login form not found.');
     return;

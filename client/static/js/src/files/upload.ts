@@ -404,7 +404,7 @@ export async function uploadFile(
         sha256sum_nonce: encryptedSha256.nonce,
         encrypted_fek: toBase64(encryptedFek),
         total_size: totalEncryptedSize,
-        chunk_size: CHUNK_SIZE + nonceSize + tagSize + chunkCfg.envelope.headerSizeBytes,
+        chunk_size: CHUNK_SIZE,
         password_hint: passwordHint || '',
         password_type: passwordType,
       }),

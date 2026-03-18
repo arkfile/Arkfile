@@ -260,36 +260,16 @@ class ArkFileApp {
   }
 
   private setupTOTPListeners(): void {
-    // TOTP generation
-    const generateTOTPBtn = document.getElementById('generate-totp-btn');
-    if (generateTOTPBtn) {
-      generateTOTPBtn.addEventListener('click', async () => {
-        const { initiateTOTPSetup } = await import('./auth/totp');
-        // This needs to be called with proper session context
-        console.log('TOTP setup initiated');
-      });
-    }
-
-    // TOTP verification
-    const verifyTOTPBtn = document.getElementById('verify-totp-btn');
-    if (verifyTOTPBtn) {
-      verifyTOTPBtn.addEventListener('click', async () => {
-        const { completeTOTPSetup } = await import('./auth/totp');
-        // This needs proper implementation
-        console.log('TOTP verification attempted');
-      });
-    }
-
-    // Cancel registration
+    // Cancel registration (returns to login form)
     const cancelRegistrationBtn = document.getElementById('cancel-registration-btn');
     if (cancelRegistrationBtn) {
       cancelRegistrationBtn.addEventListener('click', () => {
         showAuthSection();
-        toggleAuthForm(); // Switch back to login
+        toggleAuthForm();
       });
     }
 
-    // Download backup codes
+    // Download backup codes (from TOTP setup modal)
     const downloadBackupCodesBtn = document.getElementById('download-backup-codes-btn');
     if (downloadBackupCodesBtn) {
       downloadBackupCodesBtn.addEventListener('click', async () => {

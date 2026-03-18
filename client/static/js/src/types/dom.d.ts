@@ -19,6 +19,8 @@ interface ArkfileNamespace {
 interface TOTPFlowData {
   tempToken: string;
   username: string;
+  /** Account password carried through for post-auth key derivation (wiped after use) */
+  password?: string;
 }
 
 interface TOTPSetupFlowData {

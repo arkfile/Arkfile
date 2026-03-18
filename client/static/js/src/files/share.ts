@@ -1,5 +1,5 @@
 /**
- * File sharing functionality — inline share creation from the file list
+ * File sharing functionality -- inline share creation from the file list
  *
  * This module handles the complete share creation flow:
  * 1. Fetch file metadata (encrypted FEK, filename, size, hash)
@@ -16,14 +16,12 @@
 import { authenticatedFetch, getToken, getUsernameFromToken } from '../utils/auth';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgress, hideProgress } from '../ui/progress';
-import { promptForAccountKeyPassword } from '../ui/password-modal';
+import { deriveFileEncryptionKey } from '../crypto/file-encryption';
 import {
-  getCachedAccountKey,
-  isAccountKeyLocked,
-  deriveFileEncryptionKeyWithCache,
-  type CacheDurationHours,
-} from '../crypto/file-encryption';
-import { decryptChunk } from '../crypto/aes-gcm';
+  getAccountKey,
+  decryptFEK,
+  decryptMetadataField,
+} from '../crypto/metadata-helpers';
 import { ShareCreator, type FileInfo } from '../shares/share-creation';
 import { validateSharePassword } from '../crypto/password-validation';
 
@@ -31,7 +29,7 @@ import { validateSharePassword } from '../crypto/password-validation';
 // Types
 // ============================================================================
 
-/** Mirrors the /api/files/:id/meta response */
+/** Mirrors the /api/files/:id/meta response (snake_case) */
 interface FileMetaResponse {
   encrypted_filename: string;
   filename_nonce: string;
@@ -43,80 +41,6 @@ interface FileMetaResponse {
   size_bytes: number;
   chunk_size: number;
   total_chunks: number;
-}
-
-// ============================================================================
-// Helpers (shared with download.ts — keep in sync or extract later)
-// ============================================================================
-
-function base64ToBytes(base64: string): Uint8Array {
-  const bin = atob(base64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
-
-async function getAccountKey(username: string): Promise<Uint8Array | null> {
-  if (isAccountKeyLocked()) {
-    showError('Account Key is locked. Please unlock it first.');
-    return null;
-  }
-  const cached = await getCachedAccountKey(username, getToken() ?? undefined);
-  if (cached) return cached;
-
-  const result = await promptForAccountKeyPassword();
-  if (!result) return null;
-
-  try {
-    showProgress({
-      title: 'Deriving Account Key',
-      message: 'Running Argon2id key derivation — this may take a few seconds…',
-      indeterminate: true,
-    });
-
-    const key = await deriveFileEncryptionKeyWithCache(
-      result.password,
-      username,
-      'account',
-      getToken() ?? undefined,
-      result.cacheDuration as CacheDurationHours | undefined,
-    );
-
-    hideProgress();
-    return key;
-  } catch (err) {
-    hideProgress();
-    console.error('Failed to derive Account Key:', err);
-    showError('Failed to derive encryption key. Please check your password.');
-    return null;
-  }
-}
-
-async function decryptFEK(encryptedFekBase64: string, accountKey: Uint8Array): Promise<Uint8Array> {
-  const raw = base64ToBytes(encryptedFekBase64);
-  if (raw.length < 31) throw new Error(`Encrypted FEK too short: ${raw.length}`);
-  if (raw[0] !== 0x01) throw new Error(`Unsupported envelope version: 0x${raw[0].toString(16)}`);
-  const fek = await decryptChunk(raw.slice(2), accountKey);
-  if (fek.length !== 32) throw new Error(`Invalid FEK length: ${fek.length}`);
-  return fek;
-}
-
-/** Decrypt a metadata field (filename / sha256) that uses its own nonce */
-async function decryptMetadataField(
-  ciphertextB64: string,
-  nonceB64: string,
-  key: Uint8Array,
-): Promise<string> {
-  const nonce = base64ToBytes(nonceB64);
-  const ciphertext = base64ToBytes(ciphertextB64);
-  // Metadata is encrypted as nonce‖ciphertext‖tag but the server returns them
-  // separately, so we need to reassemble for decryptChunk which expects
-  // [nonce (12)][ciphertext][tag (16)]
-  const combined = new Uint8Array(nonce.length + ciphertext.length);
-  combined.set(nonce, 0);
-  combined.set(ciphertext, nonce.length);
-  const plainBytes = await decryptChunk(combined, key);
-  return new TextDecoder().decode(plainBytes);
 }
 
 // ============================================================================
@@ -197,7 +121,6 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
     const errorEl = document.getElementById('share-modal-error') as HTMLElement;
     const submitBtn = document.getElementById('share-modal-submit') as HTMLButtonElement;
 
-    // Track whether the password currently meets requirements
     let passwordValid = false;
 
     const cleanup = () => {
@@ -220,16 +143,14 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
         }
         const result = await validateSharePassword(pw);
         passwordValid = result.meets_requirements;
-        // Build feedback list from requirement checks
         const items: string[] = [];
         const req = result.requirements;
-        const icon = (met: boolean) => met ? '✅' : '❌';
+        const icon = (met: boolean) => met ? '[OK]' : '[X]';
         items.push(`<li>${icon(req.length.met)} ${req.length.message}</li>`);
         items.push(`<li>${icon(req.uppercase.met)} ${req.uppercase.message}</li>`);
         items.push(`<li>${icon(req.lowercase.met)} ${req.lowercase.message}</li>`);
         items.push(`<li>${icon(req.number.met)} ${req.number.message}</li>`);
         items.push(`<li>${icon(req.special.met)} ${req.special.message}</li>`);
-        // Overall status
         const color = result.meets_requirements ? 'var(--success-color, #22c55e)' : 'var(--error-color, #ef4444)';
         const statusLabel = result.meets_requirements ? 'Requirements met' : 'Requirements not met';
         items.push(`<li style="color:${color}; margin-top:4px;">${statusLabel}</li>`);
@@ -248,9 +169,8 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
         return;
       }
 
-      // Run full validation (in case debounce hasn't fired yet)
       submitBtn.disabled = true;
-      submitBtn.textContent = 'Validating…';
+      submitBtn.textContent = 'Validating...';
       const validation = await validateSharePassword(pw);
       if (!validation.meets_requirements) {
         errorEl.textContent = validation.reasons.join('. ') || 'Password does not meet requirements.';
@@ -262,7 +182,6 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
 
       const maxDl = parseInt(maxDownloadsInput.value, 10);
 
-      // Convert expiry value + unit to minutes
       const expiryValueEl = document.getElementById('share-expiry-value') as HTMLInputElement;
       const expiryUnitEl = document.getElementById('share-expiry-unit') as HTMLSelectElement;
       const expiryValue = parseInt(expiryValueEl.value, 10) || 0;
@@ -390,7 +309,7 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
 
     // 2. Get Account Key
     const accountKey = await getAccountKey(username);
-    if (!accountKey) return; // user cancelled
+    if (!accountKey) return;
 
     // 3. Decrypt FEK
     let fek: Uint8Array;
@@ -403,7 +322,6 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
         return;
       }
     } else {
-      // Custom-password file: need the custom password to decrypt the FEK
       const hint = meta.password_hint;
       if (hint) alert(`Password Hint: ${hint}`);
       const customPw = prompt('Enter the file password:');
@@ -411,15 +329,11 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
       try {
         showProgress({
           title: 'Deriving Custom Key',
-          message: 'Running Argon2id key derivation — this may take a few seconds…',
+          message: 'Running Argon2id key derivation -- this may take a few seconds...',
           indeterminate: true,
         });
-
-        const { deriveFileEncryptionKey } = await import('../crypto/file-encryption');
         const customKey = await deriveFileEncryptionKey(customPw, username, 'custom');
-
         hideProgress();
-
         fek = await decryptFEK(meta.encrypted_fek, customKey);
       } catch (err) {
         hideProgress();
@@ -455,7 +369,7 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
 
     // 6. Prompt for share password
     const shareInput = await promptForSharePassword();
-    if (!shareInput) return; // user cancelled
+    if (!shareInput) return;
 
     // 7. Build FileInfo and create the share
     const fileInfo: FileInfo = {
