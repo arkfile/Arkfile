@@ -1,7 +1,5 @@
 # Playwright E2E Frontend Test Plan
 
-Status: Implementation complete.
-
 ## Overview
 
 A Playwright-based frontend E2E test that exercises the web frontend (`client/static/`) against
@@ -248,3 +246,59 @@ For shares A (no limits), B (max_downloads=2), C (expires=1m):
 | `scripts/testing/e2e-playwright.ts` | [x] Done | Playwright test spec |
 | `package.json` | [x] Done | Added `@playwright/test` devDependency |
 | `.gitignore` | [x] Done | Added Playwright artifact directories |
+
+
+---
+
+# PROMPT FOR CONTINUING WORK ON THIS PROJECT/TASK:
+
+## Task: Write the Playwright E2E Frontend Test Spec
+
+Please read the following files first to understand the project, then write the Playwright test spec:
+
+1. **`docs/AGENTS.md`** -- Project overview, design philosophy, key rules
+2. **`docs/wip/play.md`** (this doc) -- The comprehensive 13-phase Playwright test plan (your primary specification)
+3. **`scripts/testing/e2e-test.sh`** -- The working curl/CLI e2e test that all Playwright phases mirror
+4. **`scripts/testing/e2e-playwright.sh`** -- The bash wrapper that sets up env vars, generates test files, and invokes Playwright
+5. **`playwright.config.ts`** -- Playwright configuration (base URL, timeouts, browser settings)
+6. **`client/static/index.html`** -- Main app HTML with all DOM element IDs the test will interact with
+7. **`client/static/shared.html`** -- Share access page HTML
+8. **`client/static/js/src/auth/login.ts`** -- Login flow (OPAQUE + TOTP) to understand the modal sequence
+9. **`client/static/js/src/auth/totp.ts`** -- TOTP modal flow and DOM element IDs
+10. **`client/static/js/src/ui/password-modal.ts`** -- Cache opt-in modal DOM element IDs
+11. **`client/static/js/src/files/list.ts`** -- File list rendering (how files appear in DOM after decryption)
+12. **`client/static/js/src/files/share.ts`** -- Share creation modal DOM element IDs
+13. **`client/static/js/src/shares/share-access.ts`** -- Share access UI (password form, file details, download button)
+14. **`client/static/js/src/shares/share-list.ts`** -- Share list rendering with revoke buttons
+
+**What to create:** Write `scripts/testing/e2e-playwright.ts` -- the Playwright test spec that covers all 13 phases defined in `play.md` (this doc; above).
+
+**Key technical details:**
+- The test spec is run by `bunx playwright test` via the bash wrapper `e2e-playwright.sh`
+- All test credentials, file paths, and SHA-256 hashes are passed via environment variables (defined in `e2e-playwright.sh`)
+- TOTP codes are generated mid-test via `execSync('/opt/arkfile/bin/arkfile-client generate-totp --secret ...')` after a `waitForTotpWindow()` delay
+- Tests must be sequential (`test.describe.serial`) since state carries between phases
+- File downloads use Playwright's download event API and SHA-256 verification via Node crypto
+- Dialog handling (`prompt()`, `confirm()`) uses `page.on('dialog')`
+- All phases in `play.md` are the specification -- implement them faithfully
+- The server runs at `https://localhost:8443` with self-signed TLS (`ignoreHTTPSErrors: true`)
+- The test user already exists and has TOTP configured (created by `e2e-test.sh`)
+- Use `[OK]`, `[X]`, `[!]`, `[i]` markers per AGENTS.md -- no emojis anywhere
+
+**Important context from recent frontend work:**
+- `list.ts` now decrypts file metadata client-side using the cached Account Key (files show as `[Encrypted]` if key is not cached)
+- After login + TOTP, the cache opt-in modal appears (`#cache-optin-ok-btn`) -- clicking this caches the key so file names decrypt
+- The login flow is: OPAQUE auth -> TOTP modal -> cache opt-in modal -> file section visible
+- Share creation modal uses `#arkfile-share-modal-overlay`, `#share-password-input`, `#share-password-confirm`, `#share-modal-submit`
+- Share result modal shows URL in `#share-result-url`, close with `#share-result-done`
+- Share list has `.share-item[data-share-id]`, `.btn-revoke`, uses `confirm()` dialog for revocation
+- Share access page (`/shared/:id`) has `#share-access-container`, `#sharePassword`, `#fileDetails`, `#downloadBtn`
+
+**NOTE: The developer must run dev-reset.sh and e2e-test.sh prior to the playright tests so that the admin and test user are set up fully and we know the app is running correctly.**
+
+**NOTE: Add notes on our progress implementing the remainder of this project in the PROGRESS UPDATES section below.**
+
+---
+
+# PROGRESS UPDATES
+
