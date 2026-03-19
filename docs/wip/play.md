@@ -320,3 +320,84 @@ The Playwright test spec `scripts/testing/e2e-playwright.ts` has been written co
 
 **Status:** Ready for first test run. Next step: run `sudo bash scripts/testing/e2e-playwright.sh` and iterate on any timing or selector issues discovered during live execution.
 
+## 2026-03-19: Some improvements can be made
+
+### Architecture Changes
+
+#### 1. Single Login Session with `storageState` Persistence
+
+Instead of calling `performLogin()` at the start of every test (which burns 20-30s on TOTP each time), we:
+
+- **Phase 1 (Login):** Perform the full OPAQUE + TOTP + cache opt-in flow, then save the browser state via `page.context().storageState()` to a temp file.
+- **Phases 2-9 (Authenticated):** Load the saved `storageState` and navigate to `SERVER_URL` -- the app reads the JWT from sessionStorage and skips to the file section. No TOTP needed. No Argon2id re-derivation needed (the account key cache persists in sessionStorage).
+- **Phase 10 (Anonymous):** Explicitly log out, then test share access as an anonymous visitor.
+- **Phase 12 (Re-login):** One more TOTP login to test revocation from the authenticated side.
+- **Phase 13 (Logout):** One final login then explicit logout + verification.
+
+This cuts login/TOTP cycles from ~13 down to ~3 (Phase 1, Phase 12, Phase 13).
+
+#### 2. Console Log Forwarding for Detailed Output
+
+Listen to `page.on('console')` to forward all browser console messages (including the upload progress updates from `upload.ts`) to the Playwright test output. This gives the operator visibility into:
+- Argon2id key derivation progress
+- AES-GCM encryption progress (chunk N/M)
+- Upload progress (chunk N/M, bytes uploaded)
+- Any warnings or errors
+
+Additionally, add explicit `console.log()` timing markers in the test itself for each critical phase transition.
+
+#### 3. Upload Wait Strategy Fix (Root Cause of Phase 2 Failure)
+
+The current code waits for *any* `.file-item .file-info strong` to appear, which is immediately satisfied by the pre-existing files from `e2e-test.sh`. Then it checks for the specific filename with only a 30s timeout.
+
+**Fix:** After clicking upload, wait for the upload to complete by monitoring for either:
+- The success message text ("uploaded successfully")
+- OR the progress overlay to disappear AND the specific filename to appear in the list
+
+Use `page.waitForFunction()` that checks for the specific filename in the DOM, with a 180s timeout to account for Argon2id + encryption + upload on a VM.
+
+#### 4. Idempotency Within Playwright Scope
+
+The digest cache (sessionStorage-based) is populated at login from the existing files. When the Playwright test uploads `pw_test_upload.bin`, the SHA-256 gets added to the digest cache. On a re-run, the file already exists on the server, so:
+
+- The digest cache (rebuilt from server files at login) would contain the SHA-256 of `pw_test_upload.bin`
+- The upload would be rejected as a duplicate
+
+**Fix for re-run idempotency:** Before uploading, check if the file already exists in the file list. If it does, skip the upload and mark the test as passed. This mirrors the idempotent approach in `e2e-test.sh` (which checks "already exists" responses). Alternatively, we can delete the Playwright test files from the server at the start of the test if they exist.
+
+Actually, the cleanest approach: At the start of Phase 2, check if `pw_test_upload.bin` already appears in the file list (from a previous Playwright run). If yes, skip the upload. Same for Phase 5 with the custom file. This makes the test rerunnable without `dev-reset.sh`.
+
+#### 5. Detailed Test Output
+
+For each critical phase, emit structured console output like:
+```
+[Phase 2] Upload: Setting file input...
+[Phase 2] Upload: Clicked upload button
+[Phase 2] Upload: Waiting for Argon2id + encryption + upload (timeout: 180s)...
+[Phase 2] Upload: [browser] Deriving encryption key...
+[Phase 2] Upload: [browser] Encrypting file... (chunk 1/1)
+[Phase 2] Upload: [browser] Uploading... (chunk 1/1)
+[Phase 2] Upload: [browser] Finalizing...
+[Phase 2] Upload: File "pw_test_upload.bin" appeared in file list
+[OK] Phase 2: Account-password file uploaded successfully
+```
+
+### Specific Code Changes
+
+**`e2e-playwright.ts`:**
+1. Add `storageState` persistence after Phase 1 login
+2. Replace `performLogin()` calls in Phases 2-9 with `restoreSession()` (loads storageState, navigates to app, waits for file section)
+3. Add `page.on('console')` forwarding in each test
+4. Fix Phase 2/5 upload waiting (use `waitForFunction` with specific filename, 180s timeout)
+5. Add idempotency checks (skip upload if file already in list)
+6. Add timing/progress logging throughout
+7. Phase 4 (duplicate rejection): handle case where file was already uploaded (from previous run or this run)
+
+**`e2e-playwright.sh`:**
+- No major changes needed, but add a note about idempotency
+
+**`playwright.config.ts`:**
+- Maybe increase global timeout from 300s to 360s given the browser-side Argon2id overhead
+
+---
+
