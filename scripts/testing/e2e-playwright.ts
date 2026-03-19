@@ -4,6 +4,18 @@
  * Exercises the Arkfile web frontend against a live local server,
  * mirroring the functional coverage of scripts/testing/e2e-test.sh.
  *
+ * Architecture note:
+ *   All authenticated phases (1-9, 12, 13) run on a SINGLE shared page.
+ *   This is critical because the Account Key cache uses a two-part design:
+ *   - Part 1 (AES-GCM ciphertext) lives in sessionStorage
+ *   - Part 2 (ephemeral wrapping key) lives in JS heap memory
+ *   If we close the page and open a new one, Part 2 is lost and every
+ *   file operation would prompt for the account password again.
+ *   By staying on one page throughout, the wrapping key remains alive.
+ *
+ * Only anonymous visitor tests (Phases 10, 11) use isolated contexts.
+ * Phase 12 (revocation) and Phase 13 (logout) reuse the same shared page.
+ *
  * Prerequisites:
  *   - Server deployed via scripts/dev-reset.sh
  *   - scripts/testing/e2e-test.sh has run (test user exists, approved, TOTP configured)
@@ -41,7 +53,6 @@ const CLIENT_BIN = '/opt/arkfile/bin/arkfile-client';
 
 // Directories
 const DOWNLOADS_DIR = join(PLAYWRIGHT_TEMP_DIR, 'downloads');
-const STORAGE_STATE_PATH = join(PLAYWRIGHT_TEMP_DIR, 'auth.json');
 
 // ============================================================================
 // Shared State (carried between sequential tests)
@@ -51,8 +62,6 @@ let shareAUrl = '';
 let shareBUrl = '';
 let shareCUrl = '';
 let shareAId = '';
-let shareBId = '';
-let shareCId = '';
 
 // ============================================================================
 // Helper Functions
@@ -63,14 +72,14 @@ function logStep(phase: string, message: string) {
 }
 
 /**
- * Attaches console listener to forward browser logs to stdout
+ * Attaches console listener to forward browser logs to stdout.
+ * Should only be called once per page (not called for every phase).
  */
-function attachConsoleListener(page: Page, phase: string) {
+function attachConsoleListener(page: Page, label: string) {
   page.on('console', msg => {
-    // Filter out some noisy things if needed, but otherwise forward
     const type = msg.type();
     if (type === 'error' || type === 'warning' || type === 'log' || type === 'info') {
-      console.log(`[browser:${type}] [Phase ${phase}] ${msg.text()}`);
+      console.log(`[browser:${type}] [${label}] ${msg.text()}`);
     }
   });
 }
@@ -109,54 +118,44 @@ function computeSha256(filePath: string): string {
 }
 
 /**
- * Perform the full login flow: OPAQUE auth + TOTP + cache opt-in.
- * Used to establish initial session and for explicit re-login tests.
+ * Perform the full login flow on the given page: OPAQUE auth + TOTP + cache opt-in.
+ * After this returns, the Account Key wrapping key is live in the page's JS heap.
  */
 async function performLogin(page: Page, phase: string): Promise<void> {
   logStep(phase, 'Navigating to app and initiating login...');
   await page.goto(SERVER_URL);
 
-  // Wait for home page to load, click Login
   await page.waitForSelector('#login-btn', { state: 'visible', timeout: 15_000 });
   await page.click('#login-btn');
 
-  // Wait for login form to appear
   await page.waitForSelector('#login-username', { state: 'visible', timeout: 10_000 });
-
-  // Fill credentials
   await page.fill('#login-username', TEST_USERNAME);
   await page.fill('#login-password', TEST_PASSWORD);
 
   logStep(phase, 'Submitting OPAQUE authentication...');
   await page.click('#login-submit-btn');
 
-  // Wait for TOTP modal (dynamically created)
   await page.waitForSelector('#totp-login-code', { state: 'visible', timeout: 60_000 });
 
-  // Wait for TOTP window, then generate code
   await waitForTotpWindow(phase);
   const totpCode = generateTotpCode(phase);
 
-  // Type TOTP code
   await page.fill('#totp-login-code', totpCode);
 
-  // Wait for verify button to become enabled
   logStep(phase, 'Verifying TOTP code...');
   await page.waitForSelector('#verify-totp-login:not([disabled])', { timeout: 5_000 });
   await page.click('#verify-totp-login');
 
-  // Wait for cache opt-in modal
-  logStep(phase, 'Opting into Account Key cache...');
+  logStep(phase, 'Opting into Account Key cache (Argon2id derivation running)...');
   await page.waitForSelector('#cache-optin-ok-btn', { state: 'visible', timeout: 120_000 });
   await page.click('#cache-optin-ok-btn');
 
-  // Wait for file section to become visible (login complete)
   await page.waitForSelector('#file-section', { state: 'visible', timeout: 120_000 });
-  logStep(phase, 'Login complete -- file section visible');
+  logStep(phase, 'Login complete -- file section visible, Account Key cached in JS heap');
 }
 
 /**
- * Checks if a specific filename is already present in the UI file list
+ * Checks if a specific filename is already present in the UI file list.
  */
 async function fileExistsInList(page: Page, filename: string): Promise<boolean> {
   return await page.evaluate((name) => {
@@ -188,7 +187,6 @@ async function saveDownload(download: Download, filename: string): Promise<strin
 
 /**
  * Find a file item in the file list by filename text content.
- * Returns the .file-item element locator.
  */
 function findFileItem(page: Page, filename: string) {
   return page.locator('.file-item').filter({
@@ -222,7 +220,6 @@ test.beforeAll(() => {
     }
   }
 
-  // Verify test files exist
   if (!existsSync(TEST_FILE_PATH)) {
     throw new Error(`Test file not found: ${TEST_FILE_PATH}`);
   }
@@ -230,7 +227,6 @@ test.beforeAll(() => {
     throw new Error(`Custom test file not found: ${CUSTOM_FILE_PATH}`);
   }
 
-  // Create downloads directory
   execSync(`mkdir -p "${DOWNLOADS_DIR}"`);
 
   console.log('[OK] Environment validated');
@@ -241,20 +237,23 @@ test.beforeAll(() => {
 });
 
 // ============================================================================
-// Test Phases (sequential)
+// Test Phases (sequential, single shared page for authenticated phases)
 // ============================================================================
 
 test.describe.serial('Arkfile Playwright E2E', () => {
 
-  // We use a single persistent context for phases 1-9 to avoid repeated logins
+  // Single shared page for all authenticated phases.
+  // Account Key wrapping key stays alive in JS heap as long as this page lives.
+  let sharedPage: Page;
   let sharedContext: BrowserContext;
-  
+
   test.beforeAll(async ({ browser }) => {
-    // Create base context that uses our config
     sharedContext = await browser.newContext({
       baseURL: SERVER_URL,
       ignoreHTTPSErrors: true,
     });
+    sharedPage = await sharedContext.newPage();
+    attachConsoleListener(sharedPage, 'shared');
   });
 
   test.afterAll(async () => {
@@ -262,112 +261,41 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   });
 
   // --------------------------------------------------------------------------
-  // Phase 1: Login & Session Establishment
+  // Phase 1: Login
   // --------------------------------------------------------------------------
   test('Phase 1: Login (OPAQUE + TOTP + cache opt-in)', async () => {
-    const page = await sharedContext.newPage();
-    attachConsoleListener(page, '1');
-    
-    await performLogin(page, '1');
+    await performLogin(sharedPage, '1');
 
-    // Wait for the files list to fully load before saving state
-    // so we don't save a mid-load state if the network is slow
-    await expect(page.locator('#filesList')).toBeVisible({ timeout: 15_000 });
-    // Also wait a beat for digest cache to populate from the API response
-    await page.waitForTimeout(1000);
+    await expect(sharedPage.locator('#filesList')).toBeVisible({ timeout: 15_000 });
+    // Wait a beat for the digest cache to populate from the files API response
+    await sharedPage.waitForTimeout(1500);
 
-    // Save state for idempotency testing downstream
-    await sharedContext.storageState({ path: STORAGE_STATE_PATH });
-
-    await page.close();
-    console.log('[OK] Phase 1: Login successful, session established');
+    console.log('[OK] Phase 1: Login successful, Account Key cached in page heap');
   });
-
-  // Helper to load storage state
-  async function restoreSession(context: BrowserContext, page: Page, phase: string) {
-    logStep(phase, 'Restoring authenticated session and navigating to app...');
-    
-    // Read the saved storage state
-    if (existsSync(STORAGE_STATE_PATH)) {
-      const stateStr = readFileSync(STORAGE_STATE_PATH, 'utf-8');
-      const state = JSON.parse(stateStr);
-      
-      // Inject sessionStorage data before navigating
-      await page.addInitScript((sessionData) => {
-        for (const origin of sessionData.origins || []) {
-          for (const item of origin.localStorage || []) {
-            sessionStorage.setItem(item.name, item.value);
-            localStorage.setItem(item.name, item.value); // App might use localStorage too
-          }
-        }
-      }, state);
-    }
-    
-    await page.goto(SERVER_URL);
-    
-    // Also inject directly after navigation just in case
-    if (existsSync(STORAGE_STATE_PATH)) {
-      const stateStr = readFileSync(STORAGE_STATE_PATH, 'utf-8');
-      const state = JSON.parse(stateStr);
-      await page.evaluate((sessionData) => {
-        for (const origin of sessionData.origins || []) {
-          for (const item of origin.localStorage || []) {
-            sessionStorage.setItem(item.name, item.value);
-            localStorage.setItem(item.name, item.value);
-          }
-        }
-      }, state);
-      
-      // Force reload to pick up the injected storage
-      await page.reload();
-    }
-
-    await expect(page.locator('#file-section')).toBeVisible({ timeout: 15_000 });
-  }
 
   // --------------------------------------------------------------------------
   // Phase 2: File Upload (Account Password)
   // --------------------------------------------------------------------------
   test('Phase 2: Upload file with account password', async () => {
-    const page = await sharedContext.newPage();
-    attachConsoleListener(page, '2');
-    await restoreSession(sharedContext, page, '2');
-
-    // Idempotency check: did we already upload this file in a previous run?
-    const alreadyExists = await fileExistsInList(page, TEST_FILE_NAME);
+    // Idempotency check: skip if already uploaded in a previous run
+    const alreadyExists = await fileExistsInList(sharedPage, TEST_FILE_NAME);
     if (alreadyExists) {
-      logStep('2', `File ${TEST_FILE_NAME} already exists in list (idempotent run). Skipping upload.`);
+      logStep('2', `File ${TEST_FILE_NAME} already in list (idempotent run). Skipping.`);
       console.log('[OK] Phase 2: Account-password file upload (Skipped - already exists)');
-      await page.close();
       return;
     }
 
-    logStep('2', `Initiating upload for ${TEST_FILE_NAME}...`);
+    logStep('2', `Uploading ${TEST_FILE_NAME}...`);
+    await sharedPage.setInputFiles('#fileInput', TEST_FILE_PATH);
+    await expect(sharedPage.locator('#useAccountPassword')).toBeChecked();
+    await sharedPage.click('#upload-file-btn');
 
-    // Set file input
-    await page.setInputFiles('#fileInput', TEST_FILE_PATH);
-
-    // Verify account password radio is checked by default
-    await expect(page.locator('#useAccountPassword')).toBeChecked();
-
-    // Click upload
-    await page.click('#upload-file-btn');
-
-    // Wait for the specific file to appear OR success message
-    // Since file derivation from browser can take a long time, we wait up to 3 minutes
-    logStep('2', `Waiting for Argon2id derivation, encryption, and upload (timeout: 180s)...`);
-    
-    await page.waitForFunction(
+    logStep('2', 'Waiting for Argon2id derivation check, AES encryption, and upload (timeout: 180s)...');
+    await sharedPage.waitForFunction(
       (filename) => {
-        // Option 1: File appears in list
         const items = document.querySelectorAll('.file-item .file-info strong');
         for (const item of items) {
           if (item.textContent === filename) return true;
-        }
-        // Option 2: Success toast appears
-        const toasts = document.querySelectorAll('.toast-success');
-        for (const toast of toasts) {
-          if (toast.textContent && toast.textContent.includes('successfully')) return true;
         }
         return false;
       },
@@ -375,13 +303,10 @@ test.describe.serial('Arkfile Playwright E2E', () => {
       { timeout: 180_000 },
     );
 
-    logStep('2', `File ${TEST_FILE_NAME} found in file list.`);
-
-    // Verify encryption type shows "Account Password"
-    const fileItem = findFileItem(page, TEST_FILE_NAME);
+    logStep('2', `File ${TEST_FILE_NAME} found in file list`);
+    const fileItem = findFileItem(sharedPage, TEST_FILE_NAME);
     await expect(fileItem.locator('.encryption-type')).toContainText('Account Password');
 
-    await page.close();
     console.log('[OK] Phase 2: Account-password file uploaded successfully');
   });
 
@@ -389,33 +314,20 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Phase 3: File Download + Integrity
   // --------------------------------------------------------------------------
   test('Phase 3: Download file and verify SHA-256 integrity', async () => {
-    const page = await sharedContext.newPage();
-    attachConsoleListener(page, '3');
-    await restoreSession(sharedContext, page, '3');
-
-    // Wait for file list to load with our file
-    const fileItem = findFileItem(page, TEST_FILE_NAME);
+    const fileItem = findFileItem(sharedPage, TEST_FILE_NAME);
     await expect(fileItem).toBeVisible({ timeout: 60_000 });
 
-    logStep('3', `Initiating download of ${TEST_FILE_NAME}...`);
+    logStep('3', `Downloading ${TEST_FILE_NAME}...`);
+    const downloadPromise = sharedPage.waitForEvent('download', { timeout: 120_000 });
+    await clickFileAction(sharedPage, TEST_FILE_NAME, 'Download');
 
-    // Set up download listener BEFORE clicking
-    const downloadPromise = page.waitForEvent('download', { timeout: 120_000 });
-
-    // Click Download button for our file
-    await clickFileAction(page, TEST_FILE_NAME, 'Download');
-
-    // Wait for the download to complete
     const download = await downloadPromise;
     const savePath = await saveDownload(download, 'phase3_download.bin');
 
-    logStep('3', 'Download complete, verifying hash...');
-
-    // Verify SHA-256 integrity
+    logStep('3', 'Download complete, verifying SHA-256...');
     const actualHash = computeSha256(savePath);
     expect(actualHash).toBe(TEST_FILE_SHA256);
 
-    await page.close();
     console.log(`[OK] Phase 3: Download integrity verified (SHA-256: ${actualHash.substring(0, 16)}...)`);
   });
 
@@ -423,39 +335,23 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Phase 4: Duplicate Upload Rejection
   // --------------------------------------------------------------------------
   test('Phase 4: Duplicate upload rejection', async () => {
-    const page = await sharedContext.newPage();
-    attachConsoleListener(page, '4');
-    await restoreSession(sharedContext, page, '4');
+    await expect(findFileItem(sharedPage, TEST_FILE_NAME)).toBeVisible({ timeout: 60_000 });
 
-    // Wait for file list
-    const fileItem = findFileItem(page, TEST_FILE_NAME);
-    await expect(fileItem).toBeVisible({ timeout: 60_000 });
-
-    // Since we now skip Phase 2 if the file exists, the internal UI digest cache might not
-    // have the file hash if it wasn't uploaded in this exact session. Let's explicitly
-    // try the upload. The server will reject it if the UI doesn't catch it first.
     logStep('4', `Attempting duplicate upload of ${TEST_FILE_NAME}...`);
+    await sharedPage.setInputFiles('#fileInput', TEST_FILE_PATH);
+    await sharedPage.click('#upload-file-btn');
 
-    // Try to upload the same file again
-    await page.setInputFiles('#fileInput', TEST_FILE_PATH);
-    await page.click('#upload-file-btn');
-
-    // Wait for error message containing "duplicate" or "exists" or "error"
-    // The UI checks the digest cache directly during upload now, so the error
-    // might be immediate if the digest cache was populated on login.
-    logStep('4', `Waiting for duplicate error...`);
-    await page.waitForFunction(
+    logStep('4', 'Waiting for duplicate error message...');
+    await sharedPage.waitForFunction(
       () => {
-        // Look for common error keywords indicating rejection
         const body = document.body.innerText.toLowerCase();
-        return body.includes('duplicate') || 
-               body.includes('already uploaded') || 
-               body.includes('exists');
+        return body.includes('duplicate') ||
+               body.includes('already uploaded') ||
+               body.includes('already exists');
       },
       { timeout: 30_000 },
     );
 
-    await page.close();
     console.log('[OK] Phase 4: Duplicate upload correctly rejected');
   });
 
@@ -463,48 +359,26 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Phase 5: Custom-Password Upload
   // --------------------------------------------------------------------------
   test('Phase 5: Upload file with custom password', async () => {
-    const page = await sharedContext.newPage();
-    attachConsoleListener(page, '5');
-    await restoreSession(sharedContext, page, '5');
-
-    // Idempotency check
-    const alreadyExists = await fileExistsInList(page, CUSTOM_FILE_NAME);
+    const alreadyExists = await fileExistsInList(sharedPage, CUSTOM_FILE_NAME);
     if (alreadyExists) {
-      logStep('5', `File ${CUSTOM_FILE_NAME} already exists in list. Skipping upload.`);
+      logStep('5', `File ${CUSTOM_FILE_NAME} already in list. Skipping.`);
       console.log('[OK] Phase 5: Custom-password file upload (Skipped - already exists)');
-      await page.close();
       return;
     }
 
-    logStep('5', `Initiating custom-password upload for ${CUSTOM_FILE_NAME}...`);
+    logStep('5', `Uploading ${CUSTOM_FILE_NAME} with custom password...`);
+    await sharedPage.setInputFiles('#fileInput', CUSTOM_FILE_PATH);
+    await sharedPage.click('#useCustomPassword');
+    await sharedPage.waitForSelector('#customPasswordSection:not(.hidden)', { timeout: 5_000 });
+    await sharedPage.fill('#filePassword', CUSTOM_FILE_PASSWORD);
+    await sharedPage.click('#upload-file-btn');
 
-    // Set custom file
-    await page.setInputFiles('#fileInput', CUSTOM_FILE_PATH);
-
-    // Select custom password radio
-    await page.click('#useCustomPassword');
-
-    // Wait for custom password section to appear
-    await page.waitForSelector('#customPasswordSection:not(.hidden)', { timeout: 5_000 });
-
-    // Fill custom password
-    await page.fill('#filePassword', CUSTOM_FILE_PASSWORD);
-
-    // Click upload
-    await page.click('#upload-file-btn');
-
-    logStep('5', `Waiting for Argon2id derivation, encryption, and upload (timeout: 180s)...`);
-
-    // Wait for the custom file to appear in the list OR success message
-    await page.waitForFunction(
+    logStep('5', 'Waiting for Argon2id derivation, AES encryption, and upload (timeout: 180s)...');
+    await sharedPage.waitForFunction(
       (filename) => {
         const items = document.querySelectorAll('.file-item .file-info strong');
         for (const item of items) {
           if (item.textContent === filename) return true;
-        }
-        const toasts = document.querySelectorAll('.toast-success');
-        for (const toast of toasts) {
-          if (toast.textContent && toast.textContent.includes('successfully')) return true;
         }
         return false;
       },
@@ -512,13 +386,10 @@ test.describe.serial('Arkfile Playwright E2E', () => {
       { timeout: 180_000 }
     );
 
-    logStep('5', `File ${CUSTOM_FILE_NAME} found in file list.`);
-
-    // Verify encryption type shows "Custom Password"
-    const customFileItem = findFileItem(page, CUSTOM_FILE_NAME);
+    logStep('5', `File ${CUSTOM_FILE_NAME} found in file list`);
+    const customFileItem = findFileItem(sharedPage, CUSTOM_FILE_NAME);
     await expect(customFileItem.locator('.encryption-type')).toContainText('Custom Password');
 
-    await page.close();
     console.log('[OK] Phase 5: Custom-password file uploaded successfully');
   });
 
@@ -526,54 +397,45 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Phase 6: Custom-Password Download
   // --------------------------------------------------------------------------
   test('Phase 6: Custom-password download (correct + wrong password)', async () => {
-    const page = await sharedContext.newPage();
-    attachConsoleListener(page, '6');
-    await restoreSession(sharedContext, page, '6');
-
-    // Wait for custom file in list
-    const customFileItem = findFileItem(page, CUSTOM_FILE_NAME);
+    const customFileItem = findFileItem(sharedPage, CUSTOM_FILE_NAME);
     await expect(customFileItem).toBeVisible({ timeout: 60_000 });
 
-    // 6a: Download with correct custom password
+    // 6a: correct password
     logStep('6', 'Testing download with correct custom password...');
-    page.on('dialog', async (dialog) => {
+    sharedPage.on('dialog', async (dialog) => {
       if (dialog.type() === 'prompt') {
-        logStep('6', 'Handling password prompt dialog (providing correct password)');
+        logStep('6', 'Password prompt dialog -- providing correct password');
         await dialog.accept(CUSTOM_FILE_PASSWORD);
       } else if (dialog.type() === 'alert') {
         await dialog.accept();
       }
     });
 
-    const downloadPromise = page.waitForEvent('download', { timeout: 120_000 });
-    await clickFileAction(page, CUSTOM_FILE_NAME, 'Download');
-
+    const downloadPromise = sharedPage.waitForEvent('download', { timeout: 120_000 });
+    await clickFileAction(sharedPage, CUSTOM_FILE_NAME, 'Download');
     const download = await downloadPromise;
     const savePath = await saveDownload(download, 'phase6_custom_download.bin');
 
     const actualHash = computeSha256(savePath);
     expect(actualHash).toBe(CUSTOM_FILE_SHA256);
-    console.log(`[OK] Phase 6a: Custom-password download integrity verified`);
+    console.log('[OK] Phase 6a: Custom-password download integrity verified');
 
-    // Remove all dialog listeners before setting up wrong-password test
-    page.removeAllListeners('dialog');
+    sharedPage.removeAllListeners('dialog');
 
-    // 6b: Download with wrong password
-    logStep('6', 'Testing download with incorrect custom password...');
-    page.on('dialog', async (dialog) => {
+    // 6b: wrong password
+    logStep('6', 'Testing download with wrong custom password...');
+    sharedPage.on('dialog', async (dialog) => {
       if (dialog.type() === 'prompt') {
-        logStep('6', 'Handling password prompt dialog (providing WRONG password)');
+        logStep('6', 'Password prompt dialog -- providing WRONG password');
         await dialog.accept('WrongPassword123!NotCorrect');
       } else if (dialog.type() === 'alert') {
         await dialog.accept();
       }
     });
 
-    // Click download again for the custom file
-    await clickFileAction(page, CUSTOM_FILE_NAME, 'Download');
+    await clickFileAction(sharedPage, CUSTOM_FILE_NAME, 'Download');
 
-    // Wait for error message about decryption failure
-    await page.waitForFunction(
+    await sharedPage.waitForFunction(
       () => {
         const body = document.body.innerText.toLowerCase();
         return body.includes('failed') || body.includes('error') || body.includes('incorrect');
@@ -581,8 +443,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
       { timeout: 60_000 },
     );
 
-    page.removeAllListeners('dialog');
-    await page.close();
+    sharedPage.removeAllListeners('dialog');
     console.log('[OK] Phase 6b: Wrong custom password correctly rejected');
   });
 
@@ -590,14 +451,9 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Phase 7: Raw API Privacy
   // --------------------------------------------------------------------------
   test('Phase 7: Raw API privacy verification', async () => {
-    const page = await sharedContext.newPage();
-    attachConsoleListener(page, '7');
-    await restoreSession(sharedContext, page, '7');
+    logStep('7', 'Fetching /api/files raw JSON...');
 
-    logStep('7', 'Fetching /api/files raw json...');
-
-    // Call /api/files via page.evaluate() with the JWT from sessionStorage
-    const apiResponse = await page.evaluate(async () => {
+    const apiResponse = await sharedPage.evaluate(async () => {
       const token =
         sessionStorage.getItem('arkfile.sessionToken') ||
         localStorage.getItem('arkfile.sessionToken');
@@ -612,22 +468,14 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     expect(apiResponse).not.toHaveProperty('error');
 
-    // Stringify the API response to search for plaintext leaks
     const responseStr = JSON.stringify(apiResponse);
-
-    // Plaintext filenames must NOT appear in raw API response
     expect(responseStr).not.toContain(TEST_FILE_NAME);
     expect(responseStr).not.toContain(CUSTOM_FILE_NAME);
-
-    // Plaintext SHA-256 hashes must NOT appear
     expect(responseStr).not.toContain(TEST_FILE_SHA256);
     expect(responseStr).not.toContain(CUSTOM_FILE_SHA256);
-
-    // Encrypted fields MUST be present
     expect(responseStr).toContain('encrypted_filename');
     expect(responseStr).toContain('encrypted_sha256sum');
 
-    await page.close();
     console.log('[OK] Phase 7: Raw API does not expose plaintext filenames or hashes');
   });
 
@@ -635,100 +483,57 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Phase 8: Share Creation (A, B, C)
   // --------------------------------------------------------------------------
   test('Phase 8: Create shares A (no limits), B (max_downloads=2), C (expires=1m)', async () => {
-    const page = await sharedContext.newPage();
-    attachConsoleListener(page, '8');
-    await restoreSession(sharedContext, page, '8');
-
-    // Wait for file list with account-password file
-    const fileItem = findFileItem(page, TEST_FILE_NAME);
+    const fileItem = findFileItem(sharedPage, TEST_FILE_NAME);
     await expect(fileItem).toBeVisible({ timeout: 60_000 });
 
-    // Helper: create a share with given parameters
     async function createShare(
       targetFilename: string,
       password: string,
       opts: { expiryValue?: number; expiryUnit?: string; maxDownloads?: number },
     ): Promise<string> {
-      // Click Share button
-      await clickFileAction(page, targetFilename, 'Share');
+      await clickFileAction(sharedPage, targetFilename, 'Share');
+      await sharedPage.waitForSelector('#arkfile-share-modal-overlay', { state: 'visible', timeout: 15_000 });
+      await sharedPage.fill('#share-password-input', password);
+      await sharedPage.fill('#share-password-confirm', password);
 
-      // Wait for share modal
-      await page.waitForSelector('#arkfile-share-modal-overlay', {
-        state: 'visible',
-        timeout: 15_000,
-      });
-
-      // Fill share password
-      await page.fill('#share-password-input', password);
-      await page.fill('#share-password-confirm', password);
-
-      // Set expiry if specified
       if (opts.expiryValue !== undefined) {
-        await page.fill('#share-expiry-value', String(opts.expiryValue));
+        await sharedPage.fill('#share-expiry-value', String(opts.expiryValue));
       }
       if (opts.expiryUnit) {
-        await page.selectOption('#share-expiry-unit', opts.expiryUnit);
+        await sharedPage.selectOption('#share-expiry-unit', opts.expiryUnit);
       }
-
-      // Set max downloads if specified
       if (opts.maxDownloads !== undefined) {
-        await page.fill('#share-max-downloads', String(opts.maxDownloads));
+        await sharedPage.fill('#share-max-downloads', String(opts.maxDownloads));
       }
 
-      // Submit
-      await page.click('#share-modal-submit');
+      await sharedPage.click('#share-modal-submit');
 
-      // Wait for result modal with share URL
-      await page.waitForSelector('#share-result-url', {
-        state: 'visible',
-        timeout: 120_000, // Derivation/encryption takes time
-      });
-
-      // Extract share URL
-      const shareUrl = await page.inputValue('#share-result-url');
+      await sharedPage.waitForSelector('#share-result-url', { state: 'visible', timeout: 120_000 });
+      const shareUrl = await sharedPage.inputValue('#share-result-url');
       expect(shareUrl).toBeTruthy();
       expect(shareUrl).toContain('/shared/');
 
-      // Close result modal
-      await page.click('#share-result-done');
-
-      // Wait for modal to disappear
-      await page.waitForSelector('#arkfile-share-result-overlay', {
-        state: 'detached',
-        timeout: 5_000,
-      }).catch(() => {});
+      await sharedPage.click('#share-result-done');
+      await sharedPage.waitForSelector('#arkfile-share-result-overlay', { state: 'detached', timeout: 5_000 }).catch(() => {});
 
       return shareUrl;
     }
 
-    logStep('8', 'Creating Share A...');
-    shareAUrl = await createShare(TEST_FILE_NAME, SHARE_A_PASSWORD, {
-      expiryValue: 0,
-      expiryUnit: 'hours',
-      maxDownloads: 0,
-    });
+    logStep('8', 'Creating Share A (no limits)...');
+    shareAUrl = await createShare(TEST_FILE_NAME, SHARE_A_PASSWORD, { expiryValue: 0, expiryUnit: 'hours', maxDownloads: 0 });
     shareAId = extractShareId(shareAUrl);
-    console.log(`[OK] Share A created: ${shareAId} (no limits)`);
+    console.log(`[OK] Share A created: ${shareAId}`);
 
-    logStep('8', 'Creating Share B...');
-    shareBUrl = await createShare(TEST_FILE_NAME, SHARE_B_PASSWORD, {
-      expiryValue: 0,
-      expiryUnit: 'hours',
-      maxDownloads: 2,
-    });
-    shareBId = extractShareId(shareBUrl);
-    console.log(`[OK] Share B created: ${shareBId} (max_downloads=2)`);
+    logStep('8', 'Creating Share B (max_downloads=2)...');
+    shareBUrl = await createShare(TEST_FILE_NAME, SHARE_B_PASSWORD, { expiryValue: 0, expiryUnit: 'hours', maxDownloads: 2 });
+    const shareBId = extractShareId(shareBUrl);
+    console.log(`[OK] Share B created: ${shareBId}`);
 
-    logStep('8', 'Creating Share C...');
-    shareCUrl = await createShare(TEST_FILE_NAME, SHARE_C_PASSWORD, {
-      expiryValue: 1,
-      expiryUnit: 'minutes',
-      maxDownloads: 0,
-    });
-    shareCId = extractShareId(shareCUrl);
-    console.log(`[OK] Share C created: ${shareCId} (expires=1m)`);
+    logStep('8', 'Creating Share C (expires=1m)...');
+    shareCUrl = await createShare(TEST_FILE_NAME, SHARE_C_PASSWORD, { expiryValue: 1, expiryUnit: 'minutes', maxDownloads: 0 });
+    const shareCId = extractShareId(shareCUrl);
+    console.log(`[OK] Share C created: ${shareCId}`);
 
-    await page.close();
     console.log('[OK] Phase 8: All three shares created successfully');
   });
 
@@ -736,39 +541,20 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Phase 9: Share List Verification
   // --------------------------------------------------------------------------
   test('Phase 9: Share list verification (decrypted metadata)', async () => {
-    const page = await sharedContext.newPage();
-    attachConsoleListener(page, '9');
-    await restoreSession(sharedContext, page, '9');
-
     logStep('9', 'Refreshing share list...');
-    // Click refresh shares
-    await page.click('#refresh-shares-btn');
+    await sharedPage.click('#refresh-shares-btn');
+    await sharedPage.waitForSelector('.share-item', { state: 'visible', timeout: 30_000 });
 
-    // Wait for share list to populate
-    await page.waitForSelector('.share-item', {
-      state: 'visible',
-      timeout: 30_000,
-    });
-
-    // Get all share items
-    const shareItems = page.locator('.share-item');
+    const shareItems = sharedPage.locator('.share-item');
     const count = await shareItems.count();
-    // E2E test might have populated shares too, so assert at least 3
     expect(count).toBeGreaterThanOrEqual(3);
 
-    // Verify decrypted filenames appear (not [Encrypted])
-    const sharesText = await page.locator('#sharesList').innerText();
+    const sharesText = await sharedPage.locator('#sharesList').innerText();
     expect(sharesText).toContain(TEST_FILE_NAME);
     expect(sharesText).not.toContain('[Encrypted]');
-
-    // Verify key type is shown
     expect(sharesText.toLowerCase()).toContain('account');
+    expect(sharesText).toContain(TEST_FILE_SHA256.substring(0, 8));
 
-    // Verify SHA-256 prefix is visible (share list shows first 16 chars)
-    const sha256Prefix = TEST_FILE_SHA256.substring(0, 8);
-    expect(sharesText).toContain(sha256Prefix);
-
-    await page.close();
     console.log('[OK] Phase 9: Share list shows decrypted filenames, key types, and SHA-256');
   });
 
@@ -776,51 +562,35 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Phase 10: Anonymous Share Download
   // --------------------------------------------------------------------------
   test('Phase 10: Anonymous share download (Share A)', async ({ browser }) => {
-    // For anonymous visitor, use a completely isolated browser context
+    // Log out on sharedPage first so shares can be tested anonymously
+    logStep('10', 'Logging out on shared page for anonymous test...');
+    await sharedPage.click('#logout-link');
+    await sharedPage.waitForSelector('.home-container', { state: 'visible', timeout: 15_000 });
+
+    // Anonymous visitor in isolated context
     const anonContext = await browser.newContext({ baseURL: SERVER_URL, ignoreHTTPSErrors: true });
     const page = await anonContext.newPage();
-    attachConsoleListener(page, '10');
+    attachConsoleListener(page, '10-anon');
 
     logStep('10', `Navigating to Share A (${shareAUrl}) as anonymous...`);
     await page.goto(shareAUrl);
-
-    // Wait for share access container
-    await page.waitForSelector('#share-access-container', {
-      state: 'visible',
-      timeout: 15_000,
-    });
-
-    // Wait for the password form to render
-    await page.waitForSelector('#sharePassword', {
-      state: 'visible',
-      timeout: 15_000,
-    });
-
-    // Enter share password
+    await page.waitForSelector('#share-access-container', { state: 'visible', timeout: 15_000 });
+    await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
     await page.fill('#sharePassword', SHARE_A_PASSWORD);
 
     logStep('10', 'Submitting share password...');
     await page.click('#shareAccessForm button[type="submit"]');
+    await page.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
 
-    // Wait for file details to appear (decryption successful)
-    await page.waitForSelector('#fileDetails', {
-      state: 'visible',
-      timeout: 120_000,
-    });
-
-    // Verify filename is displayed
     const filenameText = await page.locator('#fileNameDisplay').innerText();
     expect(filenameText).toBeTruthy();
 
-    logStep('10', 'Initiating download...');
-    // Click download
+    logStep('10', 'Initiating anonymous download...');
     const downloadPromise = page.waitForEvent('download', { timeout: 120_000 });
     await page.click('#downloadBtn');
-
     const download = await downloadPromise;
     const savePath = await saveDownload(download, 'phase10_share_download.bin');
 
-    // Verify SHA-256
     const actualHash = computeSha256(savePath);
     expect(actualHash).toBe(TEST_FILE_SHA256);
 
@@ -834,98 +604,75 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   test('Phase 11: Share access controls (max downloads, expiry, non-existent)', async ({ browser }) => {
     const anonContext = await browser.newContext({ baseURL: SERVER_URL, ignoreHTTPSErrors: true });
     const page = await anonContext.newPage();
-    attachConsoleListener(page, '11');
+    attachConsoleListener(page, '11-anon');
 
-    // 11a: Share B - max_downloads = 2
+    // 11a: Share B max_downloads=2
     console.log('[i] [Phase 11a] Testing Share B max_downloads=2');
-    
-    // Download 1/2
+
     await page.goto(shareBUrl);
     await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
     await page.fill('#sharePassword', SHARE_B_PASSWORD);
     await page.click('#shareAccessForm button[type="submit"]');
     await page.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
 
-    let downloadPromise = page.waitForEvent('download', { timeout: 120_000 });
+    let dlPromise = page.waitForEvent('download', { timeout: 120_000 });
     await page.click('#downloadBtn');
-    let download = await downloadPromise;
-    await saveDownload(download, 'phase11_b_dl1.bin');
+    await saveDownload(await dlPromise, 'phase11_b_dl1.bin');
     console.log('[OK] Share B download 1/2');
 
-    // Download 2/2 -- reload the share page for a fresh session
     await page.goto(shareBUrl);
     await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
     await page.fill('#sharePassword', SHARE_B_PASSWORD);
     await page.click('#shareAccessForm button[type="submit"]');
     await page.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
 
-    downloadPromise = page.waitForEvent('download', { timeout: 120_000 });
+    dlPromise = page.waitForEvent('download', { timeout: 120_000 });
     await page.click('#downloadBtn');
-    download = await downloadPromise;
-    await saveDownload(download, 'phase11_b_dl2.bin');
+    await saveDownload(await dlPromise, 'phase11_b_dl2.bin');
     console.log('[OK] Share B download 2/2');
 
-    // Download 3 -- should fail (max downloads exceeded)
     logStep('11a', 'Attempting 3rd download (should fail)...');
     await page.goto(shareBUrl);
     await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
     await page.fill('#sharePassword', SHARE_B_PASSWORD);
     await page.click('#shareAccessForm button[type="submit"]');
-
-    // Expect an error -- either the envelope fetch fails or download is rejected
     await page.waitForFunction(
       () => {
         const text = document.body.innerText.toLowerCase();
-        return (
-          text.includes('error') ||
-          text.includes('exceeded') ||
-          text.includes('limit') ||
-          text.includes('no longer') ||
-          text.includes('invalid') ||
-          text.includes('failed')
-        );
+        return text.includes('error') || text.includes('exceeded') || text.includes('limit') ||
+               text.includes('no longer') || text.includes('invalid') || text.includes('failed');
       },
       { timeout: 30_000 },
     );
     console.log('[OK] Share B download 3 correctly rejected (max_downloads exceeded)');
 
-    // 11b: Share C - expires in 1 minute
+    // 11b: Share C expiry
     console.log('[i] [Phase 11b] Testing Share C expiry');
 
-    // Download before expiry -- should succeed
     await page.goto(shareCUrl);
     await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
     await page.fill('#sharePassword', SHARE_C_PASSWORD);
     await page.click('#shareAccessForm button[type="submit"]');
     await page.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
 
-    downloadPromise = page.waitForEvent('download', { timeout: 120_000 });
+    dlPromise = page.waitForEvent('download', { timeout: 120_000 });
     await page.click('#downloadBtn');
-    download = await downloadPromise;
-    await saveDownload(download, 'phase11_c_dl1.bin');
+    await saveDownload(await dlPromise, 'phase11_c_dl1.bin');
     console.log('[OK] Share C download before expiry succeeded');
 
-    // Wait for expiry (65 seconds to be safe)
     logStep('11b', 'Waiting 65s for Share C to expire...');
     await new Promise((resolve) => setTimeout(resolve, 65_000));
 
-    // Attempt download after expiry -- should fail
     logStep('11b', 'Attempting download after expiry...');
     await page.goto(shareCUrl);
     await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
     await page.fill('#sharePassword', SHARE_C_PASSWORD);
     await page.click('#shareAccessForm button[type="submit"]');
-
     await page.waitForFunction(
       () => {
         const text = document.body.innerText.toLowerCase();
-        return (
-          text.includes('error') ||
-          text.includes('expired') ||
-          text.includes('no longer') ||
-          text.includes('invalid') ||
-          text.includes('failed')
-        );
+        return text.includes('error') || text.includes('expired') || text.includes('no longer') ||
+               text.includes('invalid') || text.includes('failed');
       },
       { timeout: 30_000 },
     );
@@ -934,16 +681,10 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     // 11c: Non-existent share
     console.log('[i] [Phase 11c] Testing non-existent share');
     await page.goto(`${SERVER_URL}/shared/nonexistent-share-id-that-does-not-exist`);
-
     await page.waitForFunction(
       () => {
         const text = document.body.innerText.toLowerCase();
-        return (
-          text.includes('error') ||
-          text.includes('not found') ||
-          text.includes('invalid') ||
-          text.includes('failed')
-        );
+        return text.includes('error') || text.includes('not found') || text.includes('invalid') || text.includes('failed');
       },
       { timeout: 30_000 },
     );
@@ -957,35 +698,25 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Phase 12: Share Revocation
   // --------------------------------------------------------------------------
   test('Phase 12: Share revocation (revoke Share A, verify access denied)', async () => {
-    const page = await sharedContext.newPage();
-    attachConsoleListener(page, '12');
-    await restoreSession(sharedContext, page, '12');
+    // Re-login on sharedPage (we logged out in Phase 10)
+    logStep('12', 'Re-logging in for revocation test...');
+    await performLogin(sharedPage, '12');
 
-    // Refresh share list
     logStep('12', 'Refreshing share list...');
-    await page.click('#refresh-shares-btn');
-    await page.waitForSelector('.share-item', {
-      state: 'visible',
-      timeout: 30_000,
-    });
+    await sharedPage.click('#refresh-shares-btn');
+    await sharedPage.waitForSelector('.share-item', { state: 'visible', timeout: 30_000 });
 
-    // Find Share A by data-share-id attribute
-    const shareAItem = page.locator(`.share-item[data-share-id="${shareAId}"]`);
+    const shareAItem = sharedPage.locator(`.share-item[data-share-id="${shareAId}"]`);
     await expect(shareAItem).toBeVisible({ timeout: 10_000 });
 
-    logStep('12', 'Clicking revoke on Share A...');
-    // Set up dialog handler for confirm() BEFORE clicking revoke
-    page.on('dialog', async (dialog) => {
-      if (dialog.type() === 'confirm') {
-        await dialog.accept();
-      }
+    logStep('12', 'Revoking Share A...');
+    sharedPage.on('dialog', async (dialog) => {
+      if (dialog.type() === 'confirm') await dialog.accept();
     });
 
-    // Click the revoke button for Share A
     await shareAItem.locator('.btn-revoke').click();
 
-    // Wait for the share list to refresh and show revoked status
-    await page.waitForFunction(
+    await sharedPage.waitForFunction(
       (shareId: string) => {
         const item = document.querySelector(`.share-item[data-share-id="${shareId}"]`);
         if (!item) return false;
@@ -996,37 +727,28 @@ test.describe.serial('Arkfile Playwright E2E', () => {
       { timeout: 15_000 },
     );
 
-    console.log('[OK] Share A revoked successfully on authenticated side');
+    console.log('[OK] Share A revoked successfully');
+    sharedPage.removeAllListeners('dialog');
 
-    page.removeAllListeners('dialog');
-    
-    // Explicit logout
-    await page.click('#logout-link');
-    await page.waitForSelector('.home-container', { state: 'visible', timeout: 15_000 });
+    // Log out and verify Share A is denied
+    await sharedPage.click('#logout-link');
+    await sharedPage.waitForSelector('.home-container', { state: 'visible', timeout: 15_000 });
 
-    // Attempt to access revoked Share A
     logStep('12', 'Verifying access denied to revoked Share A...');
-    await page.goto(shareAUrl);
-    await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
-    await page.fill('#sharePassword', SHARE_A_PASSWORD);
-    await page.click('#shareAccessForm button[type="submit"]');
+    await sharedPage.goto(shareAUrl);
+    await sharedPage.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
+    await sharedPage.fill('#sharePassword', SHARE_A_PASSWORD);
+    await sharedPage.click('#shareAccessForm button[type="submit"]');
 
-    // Should get an error (revoked)
-    await page.waitForFunction(
+    await sharedPage.waitForFunction(
       () => {
         const text = document.body.innerText.toLowerCase();
-        return (
-          text.includes('error') ||
-          text.includes('revoked') ||
-          text.includes('invalid') ||
-          text.includes('no longer') ||
-          text.includes('failed')
-        );
+        return text.includes('error') || text.includes('revoked') || text.includes('invalid') ||
+               text.includes('no longer') || text.includes('failed');
       },
       { timeout: 30_000 },
     );
 
-    await page.close();
     console.log('[OK] Phase 12: Revoked share correctly denied access');
   });
 
@@ -1034,41 +756,31 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Phase 13: Logout + Post-Logout Checks
   // --------------------------------------------------------------------------
   test('Phase 13: Logout and post-logout security checks', async () => {
-    // We already have a valid session in sharedContext
-    const page = await sharedContext.newPage();
-    attachConsoleListener(page, '13');
-    await restoreSession(sharedContext, page, '13');
+    // Re-login one final time to test logout
+    logStep('13', 'Re-logging in for logout test...');
+    await performLogin(sharedPage, '13');
 
-    // Logout
-    logStep('13', 'Clicking explicit logout link...');
-    await page.click('#logout-link');
+    logStep('13', 'Clicking logout...');
+    await sharedPage.click('#logout-link');
 
-    // Verify home page is visible
-    await page.waitForSelector('.home-container', { state: 'visible', timeout: 15_000 });
-    await expect(page.locator('.home-container')).toBeVisible();
+    await sharedPage.waitForSelector('.home-container', { state: 'visible', timeout: 15_000 });
+    await expect(sharedPage.locator('.home-container')).toBeVisible();
 
     logStep('13', 'Verifying session and cache cleanup...');
 
-    // Verify sessionStorage has no session token
-    const hasSessionToken = await page.evaluate(() => {
-      return (
-        sessionStorage.getItem('arkfile.sessionToken') !== null ||
-        sessionStorage.getItem('arkfile_session_token') !== null
-      );
-    });
+    const hasSessionToken = await sharedPage.evaluate(() =>
+      sessionStorage.getItem('arkfile.sessionToken') !== null ||
+      sessionStorage.getItem('arkfile_session_token') !== null
+    );
     expect(hasSessionToken).toBe(false);
 
-    // Verify localStorage token is also cleared
-    const hasLocalToken = await page.evaluate(() => {
-      return (
-        localStorage.getItem('arkfile.sessionToken') !== null ||
-        localStorage.getItem('arkfile_session_token') !== null
-      );
-    });
+    const hasLocalToken = await sharedPage.evaluate(() =>
+      localStorage.getItem('arkfile.sessionToken') !== null ||
+      localStorage.getItem('arkfile_session_token') !== null
+    );
     expect(hasLocalToken).toBe(false);
 
-    // Verify no account key cache or digest cache entries remain
-    const hasCacheData = await page.evaluate(() => {
+    const hasCacheData = await sharedPage.evaluate(() => {
       for (let i = 0; i < sessionStorage.length; i++) {
         const key = sessionStorage.key(i);
         if (key && (key.includes('arkfile') || key.includes('account') || key.includes('digest'))) {
@@ -1079,8 +791,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     });
     expect(hasCacheData).toBe(false);
 
-    // Attempt authenticated API fetch with invalid token -- should get 401
-    const apiStatus = await page.evaluate(async () => {
+    const apiStatus = await sharedPage.evaluate(async () => {
       try {
         const resp = await fetch('/api/files', {
           headers: { Authorization: 'Bearer invalid-token-12345' },
@@ -1092,7 +803,6 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     });
     expect(apiStatus).toBe(401);
 
-    await page.close();
     console.log('[OK] Phase 13: Logout verified -- session cleared, API returns 401');
   });
 });

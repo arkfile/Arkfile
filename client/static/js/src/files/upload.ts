@@ -98,11 +98,11 @@ export interface UploadResult {
 }
 
 interface UploadSession {
-  sessionId: string;
-  fileId: string;
-  chunkSize: number;
-  totalChunks: number;
-  expiresAt: string;
+  session_id: string;
+  file_id: string;
+  chunk_size: number;
+  total_chunks: number;
+  expires_at: string;
 }
 
 // ============================================================================
@@ -427,7 +427,7 @@ export async function uploadFile(
         chunk.byteOffset + chunk.byteLength
       ) as ArrayBuffer;
       
-      await apiRequest(`/api/uploads/${session.sessionId}/chunks/${i}`, {
+      await apiRequest(`/api/uploads/${session.session_id}/chunks/${i}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/octet-stream',
@@ -463,7 +463,7 @@ export async function uploadFile(
         limit_bytes: number;
         available_bytes: number;
       };
-    }>(`/api/uploads/${session.sessionId}/complete`, {
+    }>(`/api/uploads/${session.session_id}/complete`, {
       method: 'POST',
     });
 
@@ -471,6 +471,8 @@ export async function uploadFile(
 
     // Update digest cache so subsequent uploads in this session are deduped
     addDigest(result.file_id, plaintextHashHex);
+
+    console.log(`[upload] File uploaded successfully: file_id=${result.file_id}, session_id=${session.session_id}`);
 
     return {
       fileId: result.file_id,
