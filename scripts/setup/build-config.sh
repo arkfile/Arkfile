@@ -43,6 +43,58 @@ export LIBOPRF_A="$BUILD_CLIBS/liboprf.a"
 export NOISE_XK_A="$BUILD_CLIBS/liboprf-noiseXK.a"
 
 # =============================================================================
+# GO TOOLCHAIN FUNCTIONS
+# =============================================================================
+
+# POSIX-compatible Go detection with fallbacks
+find_go_binary() {
+    # Try command -v first (respects PATH, aliases, functions)
+    if command -v go >/dev/null 2>&1; then
+        command -v go
+        return 0
+    fi
+    
+    # Fallback to common installation paths
+    local go_candidates=(
+        "/usr/bin/go"                       # Linux package managers
+        "/usr/local/bin/go"                 # BSD package managers  
+        "/usr/local/go/bin/go"              # Manual golang.org installs
+    )
+    
+    for go_path in "${go_candidates[@]}"; do
+        if [ -x "$go_path" ]; then
+            echo "$go_path"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
+# Fix ownership of Go-related files when running as root via sudo
+fix_go_ownership() {
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        chown -R "$SUDO_USER:$SUDO_USER" go.mod go.sum 2>/dev/null || true
+        [ -d "vendor" ] && chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
+        [ -f ".vendor_cache" ] && chown "$SUDO_USER:$SUDO_USER" .vendor_cache 2>/dev/null || true
+        [ -d "$BUILD_ROOT" ] && chown -R "$SUDO_USER:$SUDO_USER" "$BUILD_ROOT/" 2>/dev/null || true
+    fi
+}
+
+# Run Go commands with proper user context (non-root when called via sudo)
+run_go_as_user() {
+    if [ -z "$GO_BINARY" ]; then
+        echo "ERROR: GO_BINARY not set. Call find_go_binary first." >&2
+        return 1
+    fi
+    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        sudo -u "$SUDO_USER" -H "$GO_BINARY" "$@"
+    else
+        "$GO_BINARY" "$@"
+    fi
+}
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 

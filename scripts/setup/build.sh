@@ -30,29 +30,23 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# POSIX-compatible Go detection with fallbacks
-find_go_binary() {
-    # Try command -v first (respects PATH, aliases, functions)
-    if command -v go >/dev/null 2>&1; then
-        command -v go
-        return 0
-    fi
-    
-    # Fallback to common installation paths
-    local go_candidates=(
-        "/usr/bin/go"                       # Linux package managers
-        "/usr/local/bin/go"                 # BSD package managers  
-        "/usr/local/go/bin/go"              # Manual golang.org installs
-    )
-    
-    for go_path in "${go_candidates[@]}"; do
-        if [ -x "$go_path" ]; then
-            echo "$go_path"
-            return 0
+# find_go_binary, fix_go_ownership, run_go_as_user are provided by build-config.sh
+
+# Extended ownership fix for standalone build.sh usage (adds non-root recovery)
+fix_vendor_ownership() {
+    # Use shared function for the root-via-sudo case
+    fix_go_ownership
+
+    # Additional fix: when running as non-root, check if vendor is root-owned
+    if [ "$EUID" -ne 0 ] && [ -d "vendor" ]; then
+        VENDOR_OWNER=$(stat -c '%U' vendor 2>/dev/null || echo "unknown")
+        CURRENT_USER=$(whoami)
+        if [ "$VENDOR_OWNER" = "root" ] && [ "$CURRENT_USER" != "root" ] && [ -z "$SUDO_USER" ]; then
+            echo -e "${YELLOW}Vendor directory owned by root, fixing with sudo...${NC}"
+            sudo chown -R "$CURRENT_USER:$CURRENT_USER" vendor/ go.mod go.sum 2>/dev/null || true
+            [ -f ".vendor_cache" ] && sudo chown "$CURRENT_USER:$CURRENT_USER" .vendor_cache 2>/dev/null || true
         fi
-    done
-    
-    return 1
+    fi
 }
 
 # Function to check Go version requirements from go.mod
@@ -110,45 +104,6 @@ check_go_version() {
     export GO_BINARY="$go_binary"
 }
 
-# Function to fix vendor directory ownership
-fix_vendor_ownership() {
-    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        echo -e "${YELLOW}Fixing vendor directory ownership (running as root)...${NC}"
-        chown -R "$SUDO_USER:$SUDO_USER" vendor/ 2>/dev/null || true
-        chown -R "$SUDO_USER:$SUDO_USER" go.mod go.sum 2>/dev/null || true
-        [ -f ".vendor_cache" ] && chown "$SUDO_USER:$SUDO_USER" .vendor_cache 2>/dev/null || true
-        echo -e "${GREEN}[OK] Vendor directory ownership restored to $SUDO_USER${NC}"
-    elif [ "$EUID" -ne 0 ] && [ -d "vendor" ]; then
-        # Check if vendor directory has wrong ownership
-        VENDOR_OWNER=$(stat -c '%U' vendor 2>/dev/null || echo "unknown")
-        CURRENT_USER=$(whoami)
-        if [ "$VENDOR_OWNER" = "root" ] && [ "$CURRENT_USER" != "root" ]; then
-            # Only attempt sudo fix if we're NOT being called from a parent sudo context
-            # (indicated by SUDO_USER being set in the environment)
-            if [ -z "$SUDO_USER" ]; then
-                echo -e "${YELLOW}Vendor directory owned by root, fixing with sudo...${NC}"
-                sudo chown -R "$CURRENT_USER:$CURRENT_USER" vendor/ 2>/dev/null || true
-                sudo chown -R "$CURRENT_USER:$CURRENT_USER" go.mod go.sum 2>/dev/null || true
-                [ -f ".vendor_cache" ] && sudo chown "$CURRENT_USER:$CURRENT_USER" .vendor_cache 2>/dev/null || true
-                echo -e "${GREEN}[OK] Vendor directory ownership restored to $CURRENT_USER${NC}"
-            else
-                # We're being called via sudo -u from a parent script that's already root
-                # The parent script should handle ownership fixes
-                echo -e "${YELLOW}Vendor directory owned by root (parent script will fix)${NC}"
-            fi
-        fi
-    fi
-}
-
-# Function to run Go commands with proper user context
-run_go_as_user() {
-    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" -H "$GO_BINARY" "$@"
-    else
-        "$GO_BINARY" "$@"
-    fi
-}
-
 # Ensure required tools are installed and get Go binary path
 check_go_version
 
@@ -186,14 +141,15 @@ else
     C_LIBS_BACKUP=""
     if [ -d "vendor/stef" ]; then
         C_LIBS_BACKUP=$(mktemp -d)
+        # Ensure temp backup is cleaned up on exit
+        trap 'rm -rf "$C_LIBS_BACKUP" 2>/dev/null || true' EXIT
         echo -e "${YELLOW}Backing up C libraries to: $C_LIBS_BACKUP${NC}"
         cp -r vendor/stef "$C_LIBS_BACKUP/" 2>/dev/null || true
     fi
     
     if ! run_go_as_user mod vendor; then
-        echo -e "${YELLOW}Vendor sync failed, attempting to fix missing dependencies...${NC}"
-        # Try to get missing dependencies that might not be in go.sum
-        run_go_as_user get -d ./...
+        echo -e "${YELLOW}Vendor sync failed, attempting to fix with go mod tidy...${NC}"
+        run_go_as_user mod tidy
         fix_vendor_ownership
         if ! run_go_as_user mod vendor; then
             echo -e "${RED}Failed to sync vendor directory${NC}" >&2
@@ -213,10 +169,9 @@ else
         echo -e "${YELLOW}No C libraries to restore - will initialize via submodules${NC}"
     fi
     
-    # Cache the successful sync
-    if [ -n "$CURRENT_HASH" ]; then
-        echo "$CURRENT_HASH" > "$VENDOR_CACHE"
-    fi
+    # Cache the successful sync (recompute hash since go mod tidy may have changed go.sum)
+    CURRENT_HASH=$(sha256sum go.sum | cut -d' ' -f1)
+    echo "$CURRENT_HASH" > "$VENDOR_CACHE"
     echo -e "${GREEN}[OK] Vendor directory synced with dependencies${NC}"
 fi
 
@@ -274,8 +229,8 @@ if [ "${SKIP_C_LIBS}" != "true" ]; then
             exit 1
         fi
         
-    # Fix ownership immediately after any root operations
-    fix_vendor_ownership
+        # Fix ownership immediately after any root operations
+        fix_vendor_ownership
         echo -e "${GREEN}[OK] Git submodules initialized${NC}"
         
         # Verify source files are now available
@@ -387,7 +342,7 @@ echo -e "${GREEN}Using Bun $(${BUN_CMD} --version) for TypeScript compilation${N
 BUN_DIR=$(dirname "${BUN_CMD}")
 export PATH="${BUN_DIR}:${PATH}"
 
-cd client/static/js
+pushd client/static/js > /dev/null
 
 # Always ensure dependencies are up to date
 echo "Ensuring Bun dependencies are installed..."
@@ -433,7 +388,7 @@ else
     echo "${TS_HASH}" > ${CACHE_FILE}
 fi
 
-cd ../../..
+popd > /dev/null
 
 # Validate final JS path
 JS_PATH="client/static/js/dist/app.js"
@@ -448,42 +403,32 @@ echo -e "${GREEN}[OK] TypeScript frontend built successfully${NC}"
 build_go_binaries_static() {
     echo -e "${YELLOW}Building Go binaries with static linking...${NC}"
     
-    # Build main arkfile server with CGO (needs libopaque)
-    echo "Building arkfile server with CGO static linking..."
+    # Set CGO flags once for all CGO-linked builds
     export CGO_ENABLED=1
     export CGO_CFLAGS="-I./vendor/stef/libopaque/src -I./vendor/stef/liboprf/src"
-    export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf"
-    export CGO_LDFLAGS="$CGO_LDFLAGS $(pkg-config --libs --static libsodium)"
+    export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf $(pkg-config --libs --static libsodium)"
     
-    "$GO_BINARY" build -a -ldflags "-X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -extldflags '-static'" -o ${BUILD_DIR}/${APP_NAME} .
-    echo -e "${GREEN}[OK] arkfile server built with CGO static linking${NC}"
+    # All binaries use the same static linking flags
+    # NOTE: Version uses const in Go source, so -X ldflags has no effect currently.
+    # To enable build-time version injection, change Go source to use var instead of const.
+    local STATIC_LDFLAGS='-extldflags "-static"'
     
-    # Build arkfile-client with CGO (needs OPAQUE client functions)
-    echo "Building arkfile-client with CGO static linking..."
-    export CGO_ENABLED=1
-    export CGO_CFLAGS="-I./vendor/stef/libopaque/src -I./vendor/stef/liboprf/src"
-    export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf"
-    export CGO_LDFLAGS="$CGO_LDFLAGS $(pkg-config --libs --static libsodium)"
+    echo "Building arkfile server..."
+    "$GO_BINARY" build -a -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/${APP_NAME} .
+    echo -e "${GREEN}[OK] arkfile server built${NC}"
     
-    "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/arkfile-client ./cmd/arkfile-client
-    echo -e "${GREEN}[OK] arkfile-client built with CGO static linking${NC}"
+    echo "Building arkfile-client..."
+    "$GO_BINARY" build -a -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/arkfile-client ./cmd/arkfile-client
+    echo -e "${GREEN}[OK] arkfile-client built${NC}"
     
-    # Build arkfile-admin with CGO (needs OPAQUE client functions)
-    echo "Building arkfile-admin with CGO static linking..."
-    export CGO_ENABLED=1
-    export CGO_CFLAGS="-I./vendor/stef/libopaque/src -I./vendor/stef/liboprf/src"
-    export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf"
-    export CGO_LDFLAGS="$CGO_LDFLAGS $(pkg-config --libs --static libsodium)"
+    echo "Building arkfile-admin..."
+    "$GO_BINARY" build -a -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
+    echo -e "${GREEN}[OK] arkfile-admin built${NC}"
     
-    "$GO_BINARY" build -a -ldflags '-extldflags "-static"' -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
-    echo -e "${GREEN}[OK] arkfile-admin built with CGO static linking${NC}"
-    
-    # Build Go utility tools without CGO (pure static)
-    echo "Building Go utility tools with pure static linking..."
+    # Reset CGO state
     export CGO_ENABLED=0
     unset CGO_CFLAGS CGO_LDFLAGS
     
-    echo -e "${GREEN}[OK] Go utility tools built with pure static linking${NC}"
     echo -e "${GREEN}[OK] All Go binaries built with static linking${NC}"
 }
 

@@ -103,30 +103,7 @@ echo
 echo -e "${RED}NUKING EVERYTHING!${NC}"
 echo
 
-# POSIX-compatible Go detection with fallbacks
-find_go_binary() {
-    # Try command -v first (respects PATH, aliases, functions)
-    if command -v go >/dev/null 2>&1; then
-        command -v go
-        return 0
-    fi
-    
-    # Fallback to common installation paths
-    local go_candidates=(
-        "/usr/bin/go"                       # Linux package managers
-        "/usr/local/bin/go"                 # BSD package managers  
-        "/usr/local/go/bin/go"              # Manual golang.org installs
-    )
-    
-    for go_path in "${go_candidates[@]}"; do
-        if [ -x "$go_path" ]; then
-            echo "$go_path"
-            return 0
-        fi
-    done
-    
-    return 1
-}
+# find_go_binary, fix_go_ownership, run_go_as_user are provided by build-config.sh
 
 # Function to print status messages
 print_status() {
@@ -190,16 +167,9 @@ run_as_user() {
     fi
 }
 
-# Function to run Go commands with proper user context and binary path
-run_go_as_user() {
-    if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
-        sudo -u "$SUDO_USER" -H "$GO_BINARY" "$@"
-    else
-        "$GO_BINARY" "$@"
-    fi
-}
+# run_go_as_user is provided by build-config.sh
 
-# Function to fix ownership of Go-related files
+# Verbose wrapper around shared fix_go_ownership (adds print_status messages)
 fix_go_ownership() {
     if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
         print_status "INFO" "Fixing Go file ownership for user $SUDO_USER..."
