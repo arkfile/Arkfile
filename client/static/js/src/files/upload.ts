@@ -45,6 +45,7 @@ import { showError, showSuccess, showInfo } from '../ui/messages.js';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
 import { checkDuplicate, addDigest } from '../utils/digest-cache.js';
 import { getToken, getUsernameFromToken } from '../utils/auth.js';
+import { loadFiles } from './list.js';
 
 // ============================================================================
 // Types
@@ -659,11 +660,8 @@ export async function handleFileUpload(): Promise<void> {
     if (progressBar) progressBar.value = 0;
     if (progressText) progressText.textContent = '';
 
-    // Refresh file list if available
-    const refreshButton = document.getElementById('refresh-files');
-    if (refreshButton) {
-      refreshButton.click();
-    }
+    // Refresh file list after successful upload
+    await loadFiles();
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Upload failed';
     updateProgress({ error: message });

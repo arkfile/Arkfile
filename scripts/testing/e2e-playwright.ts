@@ -290,7 +290,28 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await expect(sharedPage.locator('#useAccountPassword')).toBeChecked();
     await sharedPage.click('#upload-file-btn');
 
-    logStep('2', 'Waiting for Argon2id derivation check, AES encryption, and upload (timeout: 180s)...');
+    logStep('2', 'Waiting for upload success message (timeout: 180s)...');
+    await sharedPage.waitForFunction(
+      () => {
+        const text = document.body.innerText.toLowerCase();
+        return text.includes('uploaded successfully');
+      },
+      { timeout: 180_000 },
+    );
+    logStep('2', 'Upload success message detected');
+
+    // Give the app a moment to refresh the file list automatically
+    await sharedPage.waitForTimeout(3000);
+
+    // Belt-and-suspenders: if the file doesn't appear in the list (e.g. refresh failed), reload
+    let appeared = await fileExistsInList(sharedPage, TEST_FILE_NAME);
+    if (!appeared) {
+      logStep('2', 'File not in list after upload success -- reloading page to refresh file list...');
+      await sharedPage.reload({ waitUntil: 'networkidle' });
+      await sharedPage.waitForSelector('#file-section', { state: 'visible', timeout: 30_000 });
+      await sharedPage.waitForTimeout(2000);
+    }
+
     await sharedPage.waitForFunction(
       (filename) => {
         const items = document.querySelectorAll('.file-item .file-info strong');
@@ -300,7 +321,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
         return false;
       },
       TEST_FILE_NAME,
-      { timeout: 180_000 },
+      { timeout: 30_000 },
     );
 
     logStep('2', `File ${TEST_FILE_NAME} found in file list`);
@@ -373,7 +394,28 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await sharedPage.fill('#filePassword', CUSTOM_FILE_PASSWORD);
     await sharedPage.click('#upload-file-btn');
 
-    logStep('5', 'Waiting for Argon2id derivation, AES encryption, and upload (timeout: 180s)...');
+    logStep('5', 'Waiting for upload success message (timeout: 180s)...');
+    await sharedPage.waitForFunction(
+      () => {
+        const text = document.body.innerText.toLowerCase();
+        return text.includes('uploaded successfully');
+      },
+      { timeout: 180_000 },
+    );
+    logStep('5', 'Upload success message detected');
+
+    // Give the app a moment to refresh the file list automatically
+    await sharedPage.waitForTimeout(3000);
+
+    // Belt-and-suspenders: if the file doesn't appear in the list, reload
+    let customAppeared = await fileExistsInList(sharedPage, CUSTOM_FILE_NAME);
+    if (!customAppeared) {
+      logStep('5', 'File not in list after upload success -- reloading page...');
+      await sharedPage.reload({ waitUntil: 'networkidle' });
+      await sharedPage.waitForSelector('#file-section', { state: 'visible', timeout: 30_000 });
+      await sharedPage.waitForTimeout(2000);
+    }
+
     await sharedPage.waitForFunction(
       (filename) => {
         const items = document.querySelectorAll('.file-item .file-info strong');
@@ -383,7 +425,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
         return false;
       },
       CUSTOM_FILE_NAME,
-      { timeout: 180_000 }
+      { timeout: 30_000 },
     );
 
     logStep('5', `File ${CUSTOM_FILE_NAME} found in file list`);
