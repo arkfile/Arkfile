@@ -355,46 +355,6 @@ export async function getTOTPStatus(): Promise<{enabled: boolean, setupRequired:
   }
 }
 
-export async function disableTOTP(currentCode: string): Promise<boolean> {
-  try {
-    showProgressMessage('Disabling TOTP...');
-    
-    const token = getToken();
-    if (!token) {
-      hideProgress();
-      showError('Authentication required');
-      return false;
-    }
-    
-    const response = await fetch('/api/totp/disable', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        current_code: currentCode
-      }),
-    });
-    
-    hideProgress();
-    
-    if (response.ok) {
-      showSuccess('TOTP disabled successfully');
-      return true;
-    } else {
-      const errorData = await response.json().catch(() => ({}));
-      showError(errorData.message || 'Failed to disable TOTP');
-      return false;
-    }
-  } catch (error) {
-    hideProgress();
-    console.error('TOTP disable error:', error);
-    showError('Failed to disable TOTP');
-    return false;
-  }
-}
-
 // TOTP Setup Modal
 export function showTOTPSetupModal(): void {
   const modal = showModal({

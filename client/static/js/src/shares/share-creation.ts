@@ -144,7 +144,7 @@ export class ShareCreator {
         );
 
         // Send share creation request to server
-        const response = await authenticatedFetch(`/api/files/${request.fileId}/share`, {
+        const response = await authenticatedFetch('/api/shares', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
