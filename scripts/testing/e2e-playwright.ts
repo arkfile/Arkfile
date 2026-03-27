@@ -496,9 +496,8 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     logStep('7', 'Fetching /api/files raw JSON...');
 
     const apiResponse = await sharedPage.evaluate(async () => {
-      const token =
-        sessionStorage.getItem('arkfile.sessionToken') ||
-        localStorage.getItem('arkfile.sessionToken');
+      // AuthManager stores JWT in localStorage under 'token'
+      const token = localStorage.getItem('token');
       if (!token) return { error: 'no token' };
 
       const resp = await fetch('/api/files', {
@@ -810,18 +809,18 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     logStep('13', 'Verifying session and cache cleanup...');
 
-    const hasSessionToken = await sharedPage.evaluate(() =>
-      sessionStorage.getItem('arkfile.sessionToken') !== null ||
-      sessionStorage.getItem('arkfile_session_token') !== null
+    // AuthManager stores JWT as 'token' and refresh as 'refresh_token' in localStorage
+    const hasToken = await sharedPage.evaluate(() =>
+      localStorage.getItem('token') !== null
     );
-    expect(hasSessionToken).toBe(false);
+    expect(hasToken).toBe(false);
 
-    const hasLocalToken = await sharedPage.evaluate(() =>
-      localStorage.getItem('arkfile.sessionToken') !== null ||
-      localStorage.getItem('arkfile_session_token') !== null
+    const hasRefreshToken = await sharedPage.evaluate(() =>
+      localStorage.getItem('refresh_token') !== null
     );
-    expect(hasLocalToken).toBe(false);
+    expect(hasRefreshToken).toBe(false);
 
+    // Account key cache parts live in sessionStorage (cleared by clearAllSessionData)
     const hasCacheData = await sharedPage.evaluate(() => {
       for (let i = 0; i < sessionStorage.length; i++) {
         const key = sessionStorage.key(i);
