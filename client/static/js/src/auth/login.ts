@@ -242,6 +242,14 @@ export class LoginManager {
       showFileSection();
       await loadFiles();
 
+      // Initialize share list UI (refresh button handler + initial load)
+      try {
+        const { initializeShareList } = await import('../shares/share-list.js');
+        await initializeShareList();
+      } catch (err) {
+        console.warn('Failed to initialize share list:', err);
+      }
+
     } catch (error) {
       hideProgress();
       console.error('Login completion error:', error);
