@@ -37,53 +37,7 @@
 
     <!-- Compiled TypeScript application -->
     <script src="/js/dist/app.js"></script>
-
-    <script>
-        // Parse share ID from URL path
-        const pathSegments = window.location.pathname.split('/');
-        const shareId = pathSegments[pathSegments.length - 1];
-
-        // DOM ready handler
-        document.addEventListener('DOMContentLoaded', async () => {
-            if (!shareId) {
-                showError('Invalid share link');
-                return;
-            }
-
-            // Initialize share access UI using the TypeScript module
-            try {
-                await waitForModules();
-
-                const ShareAccessUI = window.arkfile.shares.ShareAccessUI;
-                const shareAccessUI = new ShareAccessUI('share-access-container', shareId);
-                await shareAccessUI.initialize();
-            } catch (error) {
-                console.error('Error initializing share access:', error);
-                showError('Failed to initialize share access interface. Please refresh the page.');
-            }
-        });
-
-        // Wait for dynamic imports in app.js to complete
-        async function waitForModules() {
-            return new Promise(resolve => {
-                const check = () => {
-                    if (window.arkfile && window.arkfile.shares && window.arkfile.shares.ShareAccessUI) {
-                        resolve();
-                    } else {
-                        setTimeout(check, 100);
-                    }
-                };
-                check();
-            });
-        }
-
-        // Simple error display function (fallback)
-        function showError(message) {
-            const container = document.getElementById('share-access-container');
-            if (container) {
-                container.innerHTML = `<h2>Error</h2><p style="color: #e74c3c;">${message}</p>`;
-            }
-        }
-    </script>
+    <!-- Share page initialization (external to comply with CSP) -->
+    <script src="/js/shared-init.js"></script>
 </body>
 </html>

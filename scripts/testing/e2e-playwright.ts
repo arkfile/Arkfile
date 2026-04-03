@@ -672,16 +672,21 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await saveDownload(await dlPromise, 'phase11_b_dl2.bin');
     console.log('[OK] Share B download 2/2');
 
-    logStep('11a', 'Attempting 3rd download (should fail)...');
+    logStep('11a', 'Attempting 3rd download (should fail at chunk level)...');
     await page.goto(shareBUrl);
     await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
     await page.fill('#sharePassword', SHARE_B_PASSWORD);
     await page.click('#shareAccessForm button[type="submit"]');
+    // Envelope fetch succeeds (max_accesses not checked there), file details appear
+    await page.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
+    // Click download -- this triggers chunk download which checks max_accesses on chunk 0
+    await page.click('#downloadBtn');
     await page.waitForFunction(
       () => {
         const text = document.body.innerText.toLowerCase();
         return text.includes('error') || text.includes('exceeded') || text.includes('limit') ||
-               text.includes('no longer') || text.includes('invalid') || text.includes('failed');
+               text.includes('no longer') || text.includes('invalid') || text.includes('failed') ||
+               text.includes('revoked') || text.includes('download');
       },
       { timeout: 30_000 },
     );
@@ -719,9 +724,9 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     );
     console.log('[OK] Share C download after expiry correctly rejected');
 
-    // 11c: Non-existent share
+    // 11c: Non-existent share (43-char base64url format matching real share IDs)
     console.log('[i] [Phase 11c] Testing non-existent share');
-    await page.goto(`${SERVER_URL}/shared/nonexistent-share-id-that-does-not-exist`);
+    await page.goto(`${SERVER_URL}/shared/xQ7mN9kR2pL5vB8wY1cF3hJ6tA0eG4iK9oU2sD5fW7`);
     await page.waitForFunction(
       () => {
         const text = document.body.innerText.toLowerCase();

@@ -26,6 +26,9 @@ func RegisterRoutes() {
 	// Serve libopaque.js for OPAQUE authentication
 	Echo.File("/js/libopaque.js", "client/static/js/libopaque.js")
 
+	// Serve shared-init.js for share page initialization (CSP-compliant external script)
+	Echo.File("/js/shared-init.js", "client/static/js/shared-init.js")
+
 	// Individual static files needed by frontend with HEAD support
 	Echo.File("/favicon.ico", "client/static/favicon.ico")
 	Echo.HEAD("/favicon.ico", func(c echo.Context) error {
@@ -101,6 +104,9 @@ func RegisterRoutes() {
 	totpProtectedGroup.POST("/api/shares", CreateFileShare)                // Create anonymous share (file_id in body)
 	totpProtectedGroup.GET("/api/shares", ListShares)                      // List user's shares
 	totpProtectedGroup.POST("/api/shares/:id/revoke", RevokeShare)         // Revoke a share
+
+	// Share page (serves shared.html for /shared/:id URLs - no authentication required)
+	Echo.GET("/shared/:id", GetSharedFile)
 
 	// Anonymous share access (no authentication required) - separate namespace with rate limiting
 	// Using /api/public/shares to avoid conflicts with authenticated /api/shares routes
