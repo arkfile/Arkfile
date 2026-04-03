@@ -608,8 +608,12 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await sharedPage.click('#logout-link');
     await sharedPage.waitForSelector('.home-container', { state: 'visible', timeout: 15_000 });
 
-    // Anonymous visitor in isolated context
-    const anonContext = await browser.newContext({ baseURL: SERVER_URL, ignoreHTTPSErrors: true });
+    // Anonymous visitor in isolated context (acceptDownloads required for blob URL downloads)
+    const anonContext = await browser.newContext({
+      baseURL: SERVER_URL,
+      ignoreHTTPSErrors: true,
+      acceptDownloads: true,
+    });
     const page = await anonContext.newPage();
     attachConsoleListener(page, '10-anon');
 
@@ -633,6 +637,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     const savePath = await saveDownload(download, 'phase10_share_download.bin');
 
     const actualHash = computeSha256(savePath);
+    logStep('10', `Downloaded ${readFileSync(savePath).length} bytes, SHA-256: ${actualHash.substring(0, 16)}...`);
     expect(actualHash).toBe(TEST_FILE_SHA256);
 
     await anonContext.close();

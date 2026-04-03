@@ -680,7 +680,12 @@ export function triggerBrowserDownload(data: Uint8Array, filename: string, conte
   document.body.appendChild(a);
   a.click();
   
-  // Cleanup
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // Delay cleanup to give the browser time to initiate the download.
+  // Revoking the blob URL synchronously after click() can race with the
+  // download pipeline, causing 0-byte downloads or page navigation in
+  // headless browsers and some slow clients.
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 1000);
 }
