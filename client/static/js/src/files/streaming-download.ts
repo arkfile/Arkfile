@@ -247,7 +247,7 @@ export class StreamingDownloadManager {
       const filename = shareMetadata?.filename;
       const sha256sum = shareMetadata?.sha256;
 
-      this.reportProgress('complete', metadata.total_chunks, metadata.total_chunks, metadata.size_bytes, metadata.size_bytes);
+      this.reportProgress('complete', metadata.chunk_count, metadata.chunk_count, metadata.size_bytes, metadata.size_bytes);
 
       if (this.options.showProgressUI) {
         hideProgress();
@@ -442,7 +442,7 @@ export class StreamingDownloadManager {
       headers['X-Download-Token'] = this.options.downloadToken;
     }
 
-    for (let chunkIndex = 0; chunkIndex < metadata.total_chunks; chunkIndex++) {
+    for (let chunkIndex = 0; chunkIndex < metadata.chunk_count; chunkIndex++) {
       // Check for cancellation
       if (this.options.abortController?.signal.aborted) {
         throw new Error('Download cancelled');
@@ -481,20 +481,20 @@ export class StreamingDownloadManager {
       this.reportProgress(
         'downloading',
         chunkIndex + 1,
-        metadata.total_chunks,
+        metadata.chunk_count,
         this.bytesDownloaded,
         this.calculateTotalEncryptedSize(metadata)
       );
 
       // Update UI
       if (this.options.showProgressUI) {
-        const percentage = ((chunkIndex + 1) / metadata.total_chunks) * 100;
+        const percentage = ((chunkIndex + 1) / metadata.chunk_count) * 100;
         const speed = this.calculateSpeed();
-        const remaining = this.calculateRemainingTime(metadata.total_chunks - chunkIndex - 1, speed, metadata.chunk_size_bytes);
+        const remaining = this.calculateRemainingTime(metadata.chunk_count - chunkIndex - 1, speed, metadata.chunk_size_bytes);
         
         updateProgress({
           title: 'Downloading Shared File',
-          message: `Chunk ${chunkIndex + 1} of ${metadata.total_chunks}`,
+          message: `Chunk ${chunkIndex + 1} of ${metadata.chunk_count}`,
           percentage,
           speed,
           remainingTime: remaining,
