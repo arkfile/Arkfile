@@ -37,11 +37,22 @@ export interface LoginResponse {
 }
 
 export class LoginManager {
+  private static loginInProgress = false;
+
   public static async login(credentials: LoginCredentials): Promise<void> {
     if (!credentials.username || !credentials.password) {
       showError('Please enter both username and password.');
       return;
     }
+
+    // Re-entrancy guard: OPAQUE is a stateful multi-step protocol.
+    // Parallel login attempts create conflicting server sessions and
+    // cause RecoverCredentials failures. Reject if already in flight.
+    if (LoginManager.loginInProgress) {
+      console.warn('Login already in progress, ignoring duplicate call');
+      return;
+    }
+    LoginManager.loginInProgress = true;
 
     try {
       showProgressMessage('Authenticating...');
@@ -161,6 +172,8 @@ export class LoginManager {
       hideProgress();
       console.error('Login error:', error);
       showError('Authentication failed');
+    } finally {
+      LoginManager.loginInProgress = false;
     }
   }
 

@@ -31,6 +31,40 @@ This guide provides comprehensive instructions for installing, configuring, and 
 **Time:** ~5 minutes  
 **Requirements:** Linux with sudo access
 
+### Local Dev Test Setup
+
+Run the following:
+
+1. `sudo ./scripts/dev-reset.sh` - idempotent setup/reset of local dev testing environment (creates admin user)
+2. `./scripts/testing/e2e-test.sh` - full, end-to-end functional test suite using Go CLI client utils
+3. Register a new user locally in the browser via: https://localhost:8443/ [Get Started]
+4. Approve the new user using the `arkfile-admin` Go CLI tool:
+
+4a. Login as arkfile-dev-admin:
+
+```
+$ printf 'DevAdmin2025!SecureInitialPassword\n' | /opt/arkfile/bin/arkfile-admin \
+    --server-url https://localhost:8443 --tls-insecure \
+    login --username arkfile-dev-admin \
+    --totp-secret "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D" \
+    --save-session
+Enter admin password for arkfile-dev-admin: Admin login successful for user: arkfile-dev-admin
+Session expires: 2026-04-04 16:04:04
+Administrative privileges active
+```
+
+4b. Approve the new user and set a storage quota:
+
+```
+$ /opt/arkfile/bin/arkfile-admin \
+    --server-url https://localhost:8443 --tls-insecure \
+    approve-user --username <USERNAME00> --storage "5GB"
+User <USERNAME00> approved successfully
+Storage limit set to: 5.0 GB
+```
+
+5. Refresh the browser tab for your user with the 'pending approval'. You should now have full access locally in the browser.
+
 ### Alternative: Comprehensive Setup
 
 For full system setup with complete validation:

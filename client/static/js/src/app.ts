@@ -141,14 +141,9 @@ class ArkFileApp {
       });
     }
 
-    // Login form submission
-    const loginSubmitBtn = document.getElementById('login-submit-btn');
-    if (loginSubmitBtn) {
-      loginSubmitBtn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        await login();
-      });
-    }
+    // Login form submission is handled by setupLoginForm() above (form submit event).
+    // Do NOT add a separate click handler on login-submit-btn here -- that causes
+    // a double-submit (click + form submit both fire), which breaks OPAQUE auth.
 
     // Setup registration form
     setupRegisterForm();

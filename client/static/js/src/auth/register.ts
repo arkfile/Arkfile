@@ -22,6 +22,8 @@ export interface RegistrationResponse {
 }
 
 export class RegistrationManager {
+  private static registrationInProgress = false;
+
   /**
    * Register a new user using multi-step OPAQUE protocol
    */
@@ -30,6 +32,14 @@ export class RegistrationManager {
       showError('Please enter both username and password.');
       return;
     }
+
+    // Re-entrancy guard: OPAQUE is a stateful multi-step protocol.
+    // Parallel registration attempts create conflicting server sessions.
+    if (RegistrationManager.registrationInProgress) {
+      console.warn('Registration already in progress, ignoring duplicate call');
+      return;
+    }
+    RegistrationManager.registrationInProgress = true;
 
     try {
       showProgressMessage('Creating account...');
@@ -145,6 +155,8 @@ export class RegistrationManager {
       hideProgress();
       console.error('Registration error:', error);
       showError('Registration failed. Please try again.');
+    } finally {
+      RegistrationManager.registrationInProgress = false;
     }
   }
 
