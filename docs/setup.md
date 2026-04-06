@@ -4,7 +4,7 @@ This guide provides comprehensive instructions for installing, configuring, and 
 
 ## Table of Contents
 
-1. [Quick Start](#quick-start)
+1. [Local Dev Test Setup](#local-dev-test-setup)
 2. [Architecture Overview](#architecture-overview)
 3. [Installation Methods](#installation-methods)
 4. [Production Deployment](#production-deployment)
@@ -13,57 +13,85 @@ This guide provides comprehensive instructions for installing, configuring, and 
 7. [Maintenance and Operations](#maintenance-and-operations)
 8. [Troubleshooting](#troubleshooting)
 
-## Quick Start
-
-### Just Want to Try Arkfile?
-
-**Run this single command:**
-```bash
-./scripts/quick-start.sh
-```
-
-**What it does:**
-- Sets up everything automatically
-- Gives you a working web interface at http://localhost:8080
-- Provides clear testing instructions
-- Uses local MinIO and rqlite (no external dependencies)
-
-**Time:** ~5 minutes  
-**Requirements:** Linux with sudo access
-
 ### Local Dev Test Setup
 
 Run the following:
 
-1. `sudo ./scripts/dev-reset.sh` - idempotent setup/reset of local dev testing environment (creates admin user)
-2. `./scripts/testing/e2e-test.sh` - full, end-to-end functional test suite using Go CLI client utils
-3. Register a new user locally in the browser via: https://localhost:8443/ [Get Started]
-4. Approve the new user using the `arkfile-admin` Go CLI tool:
+- `sudo ./scripts/dev-reset.sh` -- idempotent setup/reset of local dev testing environment (creates `arkfile-dev-admin` user)
 
-4a. Login as arkfile-dev-admin:
+- `./scripts/testing/e2e-test.sh` -- full, end-to-end functional test suite using Go CLI client utils
+
+- Register a new user, e.g. `USERNAME00`, locally in the browser via: https://localhost:8443/ [Get Started]
+
+- Approve the new user using the `arkfile-admin` Go CLI tool:
+
+- Login as arkfile-dev-admin:
 
 ```
-$ printf 'DevAdmin2025!SecureInitialPassword\n' | /opt/arkfile/bin/arkfile-admin \
-    --server-url https://localhost:8443 --tls-insecure \
-    login --username arkfile-dev-admin \
-    --totp-secret "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D" \
-    --save-session
+printf 'DevAdmin2025!SecureInitialPassword\n' | /opt/arkfile/bin/arkfile-admin \
+  --server-url https://localhost:8443 --tls-insecure \
+  login --username arkfile-dev-admin \
+  --totp-secret "ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D" \
+  --save-session
+```
+
+Example output:
+
+```
 Enter admin password for arkfile-dev-admin: Admin login successful for user: arkfile-dev-admin
 Session expires: 2026-04-04 16:04:04
 Administrative privileges active
 ```
 
-4b. Approve the new user and set a storage quota:
+- Approve the new user and set a storage quota:
 
 ```
-$ /opt/arkfile/bin/arkfile-admin \
-    --server-url https://localhost:8443 --tls-insecure \
-    approve-user --username <USERNAME00> --storage "5GB"
-User <USERNAME00> approved successfully
+/opt/arkfile/bin/arkfile-admin \
+  --server-url https://localhost:8443 --tls-insecure \
+  approve-user --username USERNAME00 --storage "5GB"
+```
+
+Example output:
+
+```
+User USERNAME00 approved successfully
 Storage limit set to: 5.0 GB
 ```
 
-5. Refresh the browser tab for your user with the 'pending approval'. You should now have full access locally in the browser.
+- Refresh the browser tab for your user with the 'pending approval'. You should now have full access locally in the browser.
+
+- Alternatively, try logging in using `arkfile-client`:
+
+- Log in as USERNAME00
+
+```
+printf 'MyFancyP@ssw0rd-123\n' | /opt/arkfile/bin/arkfile-client \
+  --server-url https://localhost:8443 --tls-insecure \
+  login --username USERNAME00 \
+  --non-interactive \
+  --totp-code 012345
+```
+
+Example output:
+
+```
+Login successful for user: USERNAME00
+Session expires: 2026-05-05 17:05:05
+```
+
+- List files for USERNAME00
+
+```
+/opt/arkfile/bin/arkfile-client \
+  --server-url https://localhost:8443 --tls-insecure
+  list-files
+```
+
+Example output:
+
+```
+No files found.
+```
 
 ### Alternative: Comprehensive Setup
 

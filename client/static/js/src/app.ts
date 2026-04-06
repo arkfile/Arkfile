@@ -14,6 +14,7 @@ import { setupRegisterForm, register } from './auth/register';
 
 class ArkFileApp {
   private initialized = false;
+  private appListenersAttached = false;
 
   /**
    * Check if the backend is ready to serve traffic.
@@ -102,7 +103,14 @@ class ArkFileApp {
   }
 
   private setupAppListeners(): void {
-    // Set up login form
+    // Guard: register all event listeners exactly once to prevent handler stacking.
+    // showApp() calls this method on every navigation, and addEventListener
+    // stacks duplicate handlers (it does not replace them). Without this guard,
+    // buttons fire N times after N navigations, breaking OPAQUE auth.
+    if (this.appListenersAttached) return;
+    this.appListenersAttached = true;
+
+    // Set up login form (Enter key handlers)
     setupLoginForm();
     
     // Navigation between login and register
@@ -141,9 +149,15 @@ class ArkFileApp {
       });
     }
 
-    // Login form submission is handled by setupLoginForm() above (form submit event).
-    // Do NOT add a separate click handler on login-submit-btn here -- that causes
-    // a double-submit (click + form submit both fire), which breaks OPAQUE auth.
+    // Login button click handler (the button is type="button", not type="submit",
+    // so the form submit event does not fire on click -- this is the only handler)
+    const loginSubmitBtn = document.getElementById('login-submit-btn');
+    if (loginSubmitBtn) {
+      loginSubmitBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        await login();
+      });
+    }
 
     // Setup registration form
     setupRegisterForm();

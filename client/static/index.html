@@ -97,16 +97,16 @@
                 <h2>Register</h2>
                 <input type="text" id="register-username" placeholder="Username (letters, numbers, dots, dashes only)">
                 <div class="password-section">
-                    <input type="password" id="register-password" placeholder="Password (min. 14 characters)">
+                    <input type="password" id="register-password" placeholder="Password (min. 15 characters)">
                     <div class="password-requirements">
                         <div id="register-password-strength" class="strength-meter"></div>
                         <ul class="requirements-list">
-                            <li>At least 14 characters</li>
-                            <li>At least one uppercase letter</li>
-                            <li>At least one lowercase letter</li>
-                            <li>At least one number</li>
-                            <li>At least one special character: `~!@#$%^&*()-_=+[]{}|;:,.<>?</li>
-                            <li id="entropy-requirement">Minimum entropy: 60 bits</li>
+                            <li>At least 15 characters</li>
+                            <li>At least 2 of the following character types:</li>
+                            <li>Uppercase letter (A-Z)</li>
+                            <li>Lowercase letter (a-z)</li>
+                            <li>Number (0-9)</li>
+                            <li>Special character: `~!@#$%^&amp;*()-_=+[]{}|;:,.&lt;&gt;? (space)</li>
                         </ul>
                     </div>
                     <input type="password" id="register-password-confirm" placeholder="Confirm Password">
@@ -237,15 +237,16 @@
                 </div>
                 
                 <div id="customPasswordSection" class="hidden">
-                    <input type="password" id="filePassword" placeholder="Custom File Password (min. 14 characters)">
+                    <input type="password" id="filePassword" placeholder="Custom File Password (min. 15 characters)">
                     <div class="password-requirements">
                         <div id="password-strength" class="strength-meter"></div>
                         <ul class="requirements-list">
-                            <li>At least 14 characters</li>
-                            <li>At least one uppercase letter</li>
-                            <li>At least one lowercase letter</li>
-                            <li>At least one number</li>
-                            <li>At least one special character: `~!@#$%^&*()-_=+[]{}|;:,.<>?</li>
+                            <li>At least 15 characters</li>
+                            <li>At least 2 of the following character types:</li>
+                            <li>Uppercase letter (A-Z)</li>
+                            <li>Lowercase letter (a-z)</li>
+                            <li>Number (0-9)</li>
+                            <li>Special character: `~!@#$%^&amp;*()-_=+[]{}|;:,.&lt;&gt;? (space)</li>
                         </ul>
                     </div>
                 </div>

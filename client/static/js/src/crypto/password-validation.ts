@@ -264,18 +264,3 @@ export async function validateCustomPassword(
   );
 }
 
-/**
- * Synchronous basic validation (for immediate feedback before async config loads).
- * Uses hardcoded defaults matching the JSON config.
- */
-export function validatePasswordBasic(password: string, minLength: number): {
-  meetsBasicRequirements: boolean;
-  requirements: RequirementChecks;
-} {
-  // Use default special chars and 4 classes required as fallback
-  const result = checkPassword(password, minLength, 4, '!@#$%^&*()_+-=[]{}|;:\'",.<>?/`~');
-  return {
-    meetsBasicRequirements: result.meets_requirements,
-    requirements: result.requirements,
-  };
-}

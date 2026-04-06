@@ -211,9 +211,9 @@ export function setupRegisterForm(): void {
       return;
     }
 
-    // Validate password strength (basic check - server will do full validation)
-    if (password.length < 14) {
-      showError('Password must be at least 14 characters long.');
+    // Validate password strength (basic length check matching unified config)
+    if (password.length < 15) {
+      showError('Password must be at least 15 characters long.');
       return;
     }
 
@@ -260,7 +260,7 @@ function updatePasswordStrength(password: string): void {
   let strength = 0;
   
   // Check length
-  if (password.length >= 14) strength++;
+  if (password.length >= 15) strength++;
   if (password.length >= 20) strength++;
   
   // Check character types

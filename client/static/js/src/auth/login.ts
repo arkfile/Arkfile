@@ -303,7 +303,12 @@ export class LoginManager {
 }
 
 // Form handling utilities
+let loginFormSetupDone = false;
+
 export function setupLoginForm(): void {
+  if (loginFormSetupDone) return;
+  loginFormSetupDone = true;
+
   const loginForm = document.getElementById('login-form');
   if (!loginForm) return;
 

@@ -2,7 +2,7 @@
  * Unit Tests -- Password Validation
  *
  * Tests for: validatePassword, validateAccountPassword, validateSharePassword,
- *            validateCustomPassword, validatePasswordBasic
+ *            validateCustomPassword
  *
  * Deterministic pass/fail: length + character class checks.
  * Matches Go backend (crypto/password_validation.go) exactly.
@@ -22,7 +22,6 @@ import {
   validateAccountPassword,
   validateSharePassword,
   validateCustomPassword,
-  validatePasswordBasic,
 } from '../crypto/password-validation';
 
 // ============================================================================
@@ -236,33 +235,3 @@ describe('validateCustomPassword', () => {
   });
 });
 
-// ============================================================================
-// validatePasswordBasic (synchronous fallback)
-// ============================================================================
-
-describe('validatePasswordBasic', () => {
-  test('uses hardcoded defaults (4 classes required)', () => {
-    // 4 classes required by basic validation
-    const result = validatePasswordBasic('Abcdefghij123!x', 15);
-    expect(result.meetsBasicRequirements).toBe(true);
-    expect(result.requirements.class_count).toBe(4);
-  });
-
-  test('fails with only 3 classes (basic requires 4)', () => {
-    // lowercase + uppercase + number = 3 classes, basic needs 4
-    const result = validatePasswordBasic('Abcdefghij12345', 15);
-    expect(result.meetsBasicRequirements).toBe(false);
-    expect(result.requirements.class_count).toBe(3);
-  });
-
-  test('fails with short password', () => {
-    const result = validatePasswordBasic('Ab1!', 15);
-    expect(result.meetsBasicRequirements).toBe(false);
-    expect(result.requirements.length.met).toBe(false);
-  });
-
-  test('passes with all 4 classes and sufficient length', () => {
-    const result = validatePasswordBasic('MyPassword123!!', 15);
-    expect(result.meetsBasicRequirements).toBe(true);
-  });
-});
