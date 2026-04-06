@@ -1466,7 +1466,7 @@ phase_13_summary() {
 trap stop_agent EXIT
 
 main() {
-    echo -e "${CYAN}  ARKFILE E2E AUTHENTICATION TEST      ${NC}"
+    echo -e "${CYAN}  ARKFILE E2E GO CLI CLIENT TEST      ${NC}"
     echo ""
 
     info "Server URL: $SERVER_URL"

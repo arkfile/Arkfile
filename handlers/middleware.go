@@ -403,15 +403,13 @@ func TLSVersionCheck(next echo.HandlerFunc) echo.HandlerFunc {
 				"HTTPS required for this operation")
 		}
 
-		// Get TLS version string
+		// Get TLS version string (TLS 1.3 only)
 		var versionStr string
 		switch c.Request().TLS.Version {
 		case tls.VersionTLS13:
 			versionStr = "1.3"
-		case tls.VersionTLS12:
-			versionStr = "1.2"
 		default:
-			versionStr = fmt.Sprintf("unknown (%d)", c.Request().TLS.Version)
+			versionStr = fmt.Sprintf("unexpected (%d)", c.Request().TLS.Version)
 		}
 
 		// Add TLS version to response headers for client detection

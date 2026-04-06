@@ -393,7 +393,7 @@ sudo ./scripts/setup/setup-letsencrypt.sh
 **Modern Cryptographic Standards:**
 - **Key Algorithm**: ECDSA P-384 (secp384r1)
 - **Signature Algorithm**: ECDSA-SHA384
-- **TLS Protocols**: TLS 1.3 preferred, TLS 1.2 minimum
+- **TLS Protocols**: TLS 1.3 only (with X25519MLKEM768 post-quantum key exchange)
 - **Cipher Suites**: AES-256-GCM, ChaCha20-Poly1305
 
 ### Certificate Management

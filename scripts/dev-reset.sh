@@ -470,7 +470,7 @@ RQLITE_PASSWORD=${RQLITE_PASSWORD}
 
 # Arkfile Application Configuration
 PORT=8080
-CORS_ALLOWED_ORIGINS=http://localhost:8080,https://localhost:8443
+CORS_ALLOWED_ORIGINS=https://localhost:8443
 
 # TLS Configuration
 TLS_ENABLED=true
@@ -667,7 +667,7 @@ print_status "INFO" "Waiting for Arkfile to start and be ready..."
 max_attempts=15
 attempt=0
 while [ $attempt -lt $max_attempts ]; do
-    if curl -s http://localhost:8080/readyz 2>/dev/null | grep -q '"status":"ready"'; then
+    if curl -sk https://localhost:8443/readyz 2>/dev/null | grep -q '"status":"ready"'; then
         print_status "SUCCESS" "Arkfile is running and all dependencies ready"
         break
     fi
@@ -683,19 +683,19 @@ fi
 # Test config API endpoints (embedded configuration)
 print_status "INFO" "Testing configuration API endpoints..."
 
-if curl -s http://localhost:8080/api/config/argon2 2>/dev/null | grep -q '"memoryCostKiB"'; then
+if curl -sk https://localhost:8443/api/config/argon2 2>/dev/null | grep -q '"memoryCostKiB"'; then
     print_status "SUCCESS" "Argon2 config API endpoint responding"
 else
     print_status "WARNING" "Argon2 config API endpoint may not be working"
 fi
 
-if curl -s http://localhost:8080/api/config/password-requirements 2>/dev/null | grep -q '"minAccountPasswordLength"'; then
+if curl -sk https://localhost:8443/api/config/password-requirements 2>/dev/null | grep -q '"minAccountPasswordLength"'; then
     print_status "SUCCESS" "Password requirements API endpoint responding"
 else
     print_status "WARNING" "Password requirements API endpoint may not be working"
 fi
 
-if curl -s http://localhost:8080/api/config/chunking 2>/dev/null | grep -q '"chunkSize"'; then
+if curl -sk https://localhost:8443/api/config/chunking 2>/dev/null | grep -q '"plaintextChunkSizeBytes"'; then
     print_status "SUCCESS" "Chunking config API endpoint responding"
 else
     print_status "WARNING" "Chunking config API endpoint may not be working"
@@ -733,9 +733,9 @@ echo -e "${GREEN}DEVELOPMENT RESET COMPLETE${NC}"
 echo "=========================="
 echo
 echo -e "${BLUE}Your fresh Arkfile system is now running:${NC}"
-echo -e "${GREEN}  HTTP Interface: http://localhost:8080${NC}"
 echo -e "${GREEN}  HTTPS Interface: https://localhost:8443${NC}"
 echo -e "${BLUE}     (Accept self-signed certificate warning)${NC}"
+echo -e "${BLUE}     HTTP on port 8080 redirects to HTTPS${NC}"
 echo
 echo -e "${BLUE}What was nuked:${NC}"
 echo -e "${RED}  All user data and files${NC}"

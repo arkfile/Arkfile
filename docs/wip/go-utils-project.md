@@ -80,7 +80,7 @@ GLOBAL OPTIONS:
     --server-url URL    Server URL (default: https://localhost:8443)
     --config FILE       Configuration file path
     --tls-insecure      Skip TLS certificate verification (localhost only)
-    --tls-min-version   Minimum TLS version: 1.2 or 1.3 (default: 1.3)
+    --tls-min-version   Minimum TLS version: 1.3 (default: 1.3)
     --username USER     Username for authentication
     --help, -h          Show help
 
@@ -861,7 +861,7 @@ The following section contains historical implementation status and todos as of 
   - File upload/download operations with chunked support
   - Share creation and management
   - Session management with token persistence
-  - TLS configuration (1.2/1.3 support)
+  - TLS configuration (TLS 1.3 only)
   - Verbose logging and error handling
   - Cross-platform configuration management
 - **Binary Status**: Successfully compiles (arkfile-client binary exists)

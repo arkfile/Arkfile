@@ -129,7 +129,7 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Server.Port = "8080"
 	cfg.Server.TLSPort = "8443"
 	cfg.Server.Host = "localhost"
-	cfg.Server.AllowedOrigins = []string{"http://localhost:8080", "https://localhost:8443"}
+	cfg.Server.AllowedOrigins = []string{"https://localhost:8443"}
 	cfg.Database.Path = "./arkfile.db"
 	cfg.Security.JWTPrivateKeyPath = "/opt/arkfile/etc/keys/jwt/current/signing.key"
 	cfg.Security.JWTPublicKeyPath = "/opt/arkfile/etc/keys/jwt/current/public.key"

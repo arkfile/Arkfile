@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"database/sql"
 	"fmt"
 	"log"
@@ -219,8 +220,8 @@ func main() {
 	}))
 
 	// Force HTTPS and check TLS version
-	// e.Pre(middleware.HTTPSRedirect()) // Commented out for demo - TLS certificates need to be properly configured
-	// e.Use(handlers.TLSVersionCheck) // Apply TLS check to all routes
+	e.Pre(middleware.HTTPSRedirect())
+	e.Use(handlers.TLSVersionCheck)
 
 	// Phase 5F: Enhanced security middleware
 	e.Use(handlers.CSPMiddleware)
@@ -296,9 +297,14 @@ func main() {
 				tlsPort = "8443" // Default HTTPS port for demo
 			}
 
+			// Enforce TLS 1.3 only (PQ key exchange via X25519MLKEM768 requires TLS 1.3)
+			e.TLSServer.TLSConfig = &tls.Config{
+				MinVersion: tls.VersionTLS13,
+			}
+
 			// Start HTTPS server in goroutine
 			go func() {
-				log.Printf("Starting HTTPS server on port %s", tlsPort)
+				log.Printf("Starting HTTPS server on port %s (TLS 1.3 only)", tlsPort)
 				if err := e.StartTLS(":"+tlsPort, certFile, keyFile); err != nil {
 					logging.ErrorLogger.Printf("Failed to start HTTPS server: %v", err)
 				}
