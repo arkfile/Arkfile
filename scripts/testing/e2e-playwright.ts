@@ -715,17 +715,16 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await new Promise((resolve) => setTimeout(resolve, 65_000));
 
     logStep('11b', 'Attempting download after expiry...');
+    // Server returns 403 at page level for expired shares (before rendering shared.html)
+    // so the password form never appears -- verify the error/expired response directly
     await page.goto(shareCUrl);
-    await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
-    await page.fill('#sharePassword', SHARE_C_PASSWORD);
-    await page.click('#shareAccessForm button[type="submit"]');
     await page.waitForFunction(
       () => {
         const text = document.body.innerText.toLowerCase();
-        return text.includes('error') || text.includes('expired') || text.includes('no longer') ||
-               text.includes('invalid') || text.includes('failed');
+        return text.includes('expired') || text.includes('forbidden') ||
+               text.includes('error') || text.includes('403');
       },
-      { timeout: 30_000 },
+      { timeout: 15_000 },
     );
     console.log('[OK] Share C download after expiry correctly rejected');
 
