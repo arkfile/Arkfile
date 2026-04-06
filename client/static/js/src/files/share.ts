@@ -76,7 +76,7 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
               <label for="share-password-input">Share Password</label>
               <input type="password" id="share-password-input" class="password-modal-input"
                      placeholder="Strong password (18+ chars recommended)" required autofocus />
-              <ul id="share-pw-feedback" style="list-style: none; padding: 0; margin: 6px 0 0 0; font-size: 0.85em;"></ul>
+              <ul id="share-pw-feedback" style="list-style: none; padding: 0; margin: 6px 0 0 0; font-size: 0.85em; color: var(--text-secondary, #ccc);"></ul>
             </div>
             <div class="password-modal-field">
               <label for="share-password-confirm">Confirm Password</label>
@@ -145,12 +145,16 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
         passwordValid = result.meets_requirements;
         const items: string[] = [];
         const req = result.requirements;
-        const icon = (met: boolean) => met ? '[OK]' : '[X]';
-        items.push(`<li>${icon(req.length.met)} ${req.length.message}</li>`);
-        items.push(`<li>${icon(req.uppercase.met)} ${req.uppercase.message}</li>`);
-        items.push(`<li>${icon(req.lowercase.met)} ${req.lowercase.message}</li>`);
-        items.push(`<li>${icon(req.number.met)} ${req.number.message}</li>`);
-        items.push(`<li>${icon(req.special.met)} ${req.special.message}</li>`);
+        const line = (met: boolean, msg: string) => {
+          const icon = met ? '[OK]' : '[X]';
+          const c = met ? 'var(--success-color, #22c55e)' : 'var(--text-secondary, #ccc)';
+          return `<li style="color:${c}">${icon} ${msg}</li>`;
+        };
+        items.push(line(req.length.met, req.length.message));
+        items.push(line(req.uppercase.met, req.uppercase.message));
+        items.push(line(req.lowercase.met, req.lowercase.message));
+        items.push(line(req.number.met, req.number.message));
+        items.push(line(req.special.met, req.special.message));
         const color = result.meets_requirements ? 'var(--success-color, #22c55e)' : 'var(--error-color, #ef4444)';
         const statusLabel = result.meets_requirements ? 'Requirements met' : 'Requirements not met';
         items.push(`<li style="color:${color}; margin-top:4px;">${statusLabel}</li>`);
