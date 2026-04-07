@@ -298,7 +298,7 @@ audit_tls_certificates() {
     fi
     
     # Check certificates
-    for cert_name in "server" "minio" "rqlite"; do
+    for cert_name in "server" "seaweedfs" "rqlite"; do
         cert_file="$TLS_DIR/${cert_name}.crt"
         key_file="$TLS_DIR/${cert_name}.key"
         
@@ -354,7 +354,7 @@ audit_service_configuration() {
     log_header "Service Configuration Audit"
     
     # Check systemd service files
-    for service in "arkfile" "rqlite" "minio"; do
+    for service in "arkfile" "rqlite" "seaweedfs"; do
         service_file="/etc/systemd/system/${service}.service"
         if [[ -f "$service_file" ]]; then
             log_success "Systemd service file exists: $service"
@@ -445,7 +445,7 @@ audit_network_security() {
         fi
         
         # Check for database ports (should be restricted)
-        for port in "4001" "4002" "9000" "9001"; do
+        for port in "4001" "4002" "9332" "9333"; do
             if ss -tlnp | grep -q ":$port"; then
                 log_warning "Database/storage port $port is listening (ensure firewall rules)"
             else
@@ -529,7 +529,7 @@ audit_logging_monitoring() {
     fi
     
     # Check journald for systemd services
-    for service in "arkfile" "rqlite" "minio"; do
+    for service in "arkfile" "rqlite" "seaweedfs"; do
         if journalctl -u "$service" --since "1 day ago" -q --no-pager >/dev/null 2>&1; then
             log_success "Systemd journal available for service: $service"
         else

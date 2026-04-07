@@ -126,7 +126,7 @@ echo
 
 # Test 2: Service status
 echo -e "${PURPLE}Checking service status...${NC}"
-services=("arkfile" "caddy" "minio" "rqlite")
+services=("arkfile" "caddy" "seaweedfs" "rqlite")
 services_ok=0
 
 for service in "${services[@]}"; do
@@ -336,7 +336,7 @@ validate_backend "database_schema" "users" "sqlite3 /opt/arkfile/var/lib/databas
 
 # Check storage connectivity
 if command -v curl >/dev/null 2>&1; then
-    validate_backend "minio_health" "200" "curl -s -o /dev/null -w '%{http_code}' http://localhost:9000/minio/health/ready" "MinIO storage health"
+    validate_backend "seaweedfs_health" "200" "curl -s -o /dev/null -w '%{http_code}' http://localhost:9332/status" "SeaweedFS storage health"
 fi
 
 echo -e "${BLUE}[STATS] FINAL VALIDATION SUMMARY${NC}"
@@ -401,7 +401,7 @@ else
     echo
     echo -e "${BLUE} TROUBLESHOOTING STEPS:${NC}"
     echo "1. Review all failed tests above"
-    echo "2. Check service status: sudo systemctl status arkfile caddy minio rqlite"
+    echo "2. Check service status: sudo systemctl status arkfile caddy seaweedfs rqlite"
     echo "3. Review service logs: sudo journalctl -u arkfile"
     echo "4. Run health check: ./scripts/health-check.sh"
     echo "5. Validate deployment: ./scripts/validate-deployment.sh"

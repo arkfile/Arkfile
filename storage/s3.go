@@ -116,7 +116,7 @@ func InitS3() error {
 		endpoint := os.Getenv("S3_ENDPOINT")
 		if endpoint == "" {
 			// Default to localhost if not specified (dev mode)
-			endpoint = "http://localhost:9000"
+			endpoint = "http://localhost:9332"
 		}
 
 		endpointResolver = func(service, region string, options ...interface{}) (aws.Endpoint, error) {

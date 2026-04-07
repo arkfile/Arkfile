@@ -21,7 +21,7 @@ show_help() {
     echo
     echo "Options:"
     echo "  --rqlite     Check rqlite only"
-    echo "  --minio      Check MinIO only"
+    echo "  --seaweedfs  Check SeaweedFS only"
     echo "  --go         Check Go modules only"
     echo "  --json       Output in JSON format"
     echo "  --help       Show this help"
@@ -34,7 +34,7 @@ show_help() {
 
 # Parse command line arguments
 CHECK_RQLITE=true
-CHECK_MINIO=true
+CHECK_SEAWEEDFS=true
 CHECK_GO=true
 JSON_OUTPUT=false
 
@@ -42,19 +42,19 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --rqlite)
             CHECK_RQLITE=true
-            CHECK_MINIO=false
+            CHECK_SEAWEEDFS=false
             CHECK_GO=false
             shift
             ;;
-        --minio)
+        --seaweedfs)
             CHECK_RQLITE=false
-            CHECK_MINIO=true
+            CHECK_SEAWEEDFS=true
             CHECK_GO=false
             shift
             ;;
         --go)
             CHECK_RQLITE=false
-            CHECK_MINIO=false
+            CHECK_SEAWEEDFS=false
             CHECK_GO=true
             shift
             ;;
@@ -103,11 +103,11 @@ get_current_rqlite_version() {
     fi
 }
 
-# Get current MinIO version from setup script
-get_current_minio_version() {
-    local setup_script="${SCRIPT_DIR}/setup-minio.sh"
+# Get current SeaweedFS version from setup script
+get_current_seaweedfs_version() {
+    local setup_script="${SCRIPT_DIR}/05-setup-seaweedfs.sh"
     if [[ -f "$setup_script" ]]; then
-        grep '^MINIO_VERSION=' "$setup_script" | head -1 | cut -d'"' -f2
+        grep '^SEAWEEDFS_VERSION=' "$setup_script" | head -1 | cut -d'"' -f2
     else
         echo "unknown"
     fi
@@ -147,13 +147,13 @@ check_rqlite() {
     fi
 }
 
-# Check MinIO version
-check_minio() {
-    local current="$(get_current_minio_version)"
+# Check SeaweedFS version
+check_seaweedfs() {
+    local current="$(get_current_seaweedfs_version)"
     local latest=""
     local status=""
     
-    # Get latest version from MinIO SHA256 file
+    # Get latest version from GitHub API
     if latest=$(curl -s "https://dl.min.io/server/minio/release/linux-amd64/minio.sha256sum" | grep -o 'RELEASE[^[:space:]]*' | head -1 2>/dev/null); then
         if [[ -z "$latest" ]]; then
             latest="unknown"
@@ -177,7 +177,7 @@ check_minio() {
             "update_available") icon="️ " ;;
             "error") icon="[X]" ;;
         esac
-        printf "  %-10s %s → %s %s\n" "MinIO:" "$current" "$latest" "$icon"
+        printf "  %-10s %s → %s %s\n" "SeaweedFS:" "$current" "$latest" "$icon"
     fi
 }
 
@@ -256,8 +256,8 @@ main() {
             check_rqlite
         fi
         
-        if [[ "$CHECK_MINIO" == "true" ]]; then
-            check_minio
+        if [[ "$CHECK_SEAWEEDFS" == "true" ]]; then
+            check_seaweedfs
         fi
         
         if [[ "$CHECK_GO" == "true" ]]; then
@@ -271,15 +271,15 @@ main() {
         echo -e "${BLUE}Checking Arkfile Dependencies...${NC}"
         echo
         
-        if [[ "$CHECK_RQLITE" == "true" || "$CHECK_MINIO" == "true" ]]; then
+        if [[ "$CHECK_RQLITE" == "true" || "$CHECK_SEAWEEDFS" == "true" ]]; then
             echo -e "${CYAN}System Dependencies:${NC}"
             
             if [[ "$CHECK_RQLITE" == "true" ]]; then
                 check_rqlite
             fi
             
-            if [[ "$CHECK_MINIO" == "true" ]]; then
-                check_minio
+            if [[ "$CHECK_SEAWEEDFS" == "true" ]]; then
+                check_seaweedfs
             fi
         fi
         
@@ -295,8 +295,8 @@ main() {
             echo "  ./scripts/setup-rqlite-build.sh     # Update rqlite"
         fi
         
-        if [[ "$CHECK_MINIO" == "true" ]]; then
-            echo "  ./scripts/setup-minio.sh      # Update MinIO"
+        if [[ "$CHECK_SEAWEEDFS" == "true" ]]; then
+            echo "  ./scripts/05-setup-seaweedfs.sh      # Update SeaweedFS"
         fi
         
         if [[ "$CHECK_GO" == "true" ]]; then

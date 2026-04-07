@@ -89,7 +89,7 @@ sudo find ${BASE_DIR} -type f -executable -exec chmod 755 {} \;
 echo -e "${YELLOW}[CONFIG]  Installing systemd services...${NC}"
 sudo cp ${BASE_DIR}/systemd/${APP_NAME}.service /etc/systemd/system/
 sudo cp ${BASE_DIR}/systemd/rqlite.service /etc/systemd/system/ 2>/dev/null || true
-sudo cp ${BASE_DIR}/systemd/minio.service /etc/systemd/system/ 2>/dev/null || true
+sudo cp ${BASE_DIR}/systemd/seaweedfs.service /etc/systemd/system/ 2>/dev/null || true
 sudo cp ${BASE_DIR}/systemd/caddy.service /etc/systemd/system/ 2>/dev/null || true
 
 # Reload systemd daemon
@@ -123,7 +123,7 @@ echo
 echo -e "${BLUE}[START] To start the services:${NC}"
 echo "  sudo systemctl start ${APP_NAME}"
 echo "  sudo systemctl start rqlite 2>/dev/null || true"
-echo "  sudo systemctl start minio 2>/dev/null || true"
+echo "  sudo systemctl start seaweedfs 2>/dev/null || true"
 echo "  sudo systemctl start caddy 2>/dev/null || true"
 echo
 echo -e "${BLUE}[INFO] Check service status:${NC}"

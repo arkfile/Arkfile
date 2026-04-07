@@ -286,8 +286,8 @@ check_cryptographic_keys() {
         "$ARKFILE_DIR/etc/keys/tls/ca/ca.key:600"
         "$ARKFILE_DIR/etc/keys/tls/rqlite/server.crt:644"
         "$ARKFILE_DIR/etc/keys/tls/rqlite/server.key:600"
-        "$ARKFILE_DIR/etc/keys/tls/minio/server.crt:644"
-        "$ARKFILE_DIR/etc/keys/tls/minio/server.key:600"
+        "$ARKFILE_DIR/etc/keys/tls/seaweedfs/server.crt:644"
+        "$ARKFILE_DIR/etc/keys/tls/seaweedfs/server.key:600"
     )
     
     for cert_spec in "${tls_certs[@]}"; do

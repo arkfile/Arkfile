@@ -104,7 +104,7 @@ backup_certificates() {
     sudo -u ${USER} mkdir -p "${BACKUP_DIR}"
     
     # Backup all certificate files
-    for service in ca arkfile rqlite minio; do
+    for service in ca arkfile rqlite seaweedfs; do
         if [ -d "${TLS_DIR}/${service}" ]; then
             sudo -u ${USER} cp -r "${TLS_DIR}/${service}" "${BACKUP_DIR}/"
             echo -e "  ${GREEN}[OK] Backed up ${service} certificates${NC}"
@@ -130,7 +130,7 @@ rollback_certificates() {
     fi
     
     # Restore from backup
-    for service in ca arkfile rqlite minio; do
+    for service in ca arkfile rqlite seaweedfs; do
         if [ -d "${BACKUP_DIR}/${service}" ]; then
             sudo -u ${USER} rm -rf "${TLS_DIR}/${service}"
             sudo -u ${USER} cp -r "${BACKUP_DIR}/${service}" "${TLS_DIR}/"
@@ -164,14 +164,14 @@ restart_services() {
         fi
     fi
     
-    # Restart MinIO service
-    if systemctl is-active --quiet minio; then
-        echo -e "${YELLOW}Restarting minio service...${NC}"
-        if sudo systemctl restart minio; then
-            echo -e "  ${GREEN}[OK] minio service restarted${NC}"
+    # Restart SeaweedFS service
+    if systemctl is-active --quiet seaweedfs; then
+        echo -e "${YELLOW}Restarting seaweedfs service...${NC}"
+        if sudo systemctl restart seaweedfs; then
+            echo -e "  ${GREEN}[OK] seaweedfs service restarted${NC}"
             services_restarted=$((services_restarted + 1))
         else
-            echo -e "  ${RED}[X] minio service restart failed${NC}"
+            echo -e "  ${RED}[X] seaweedfs service restart failed${NC}"
         fi
     fi
     
@@ -211,7 +211,7 @@ restart_services() {
             services_healthy=$((services_healthy + 1))
         fi
         
-        if systemctl is-active --quiet minio; then
+        if systemctl is-active --quiet seaweedfs; then
             services_healthy=$((services_healthy + 1))
         fi
         
@@ -249,7 +249,7 @@ if check_certificate_expiry "${TLS_DIR}/ca/ca.crt" "Certificate Authority" ${WAR
 fi
 
 # Check service certificates
-for service in arkfile rqlite minio; do
+for service in arkfile rqlite seaweedfs; do
     cert_path="${TLS_DIR}/${service}/server.crt"
     if [ -f "${cert_path}" ]; then
         if check_certificate_expiry "${cert_path}" "${service}" ${WARNING_DAYS}; then
@@ -265,7 +265,7 @@ done
 
 # Determine if renewal is needed
 if [ "$FORCE_RENEWAL" = true ]; then
-    certificates_to_renew=("ca" "arkfile" "rqlite" "minio")
+    certificates_to_renew=("ca" "arkfile" "rqlite" "seaweedfs")
     renewal_reasons=("Force renewal requested")
     echo -e "${YELLOW}[WARNING]  Force renewal: All certificates will be renewed${NC}"
 elif [ ${#certificates_to_renew[@]} -eq 0 ]; then
@@ -289,7 +289,7 @@ for cert in "${certificates_to_renew[@]}"; do
         ca) echo "  - Certificate Authority (affects all service certificates)" ;;
         arkfile) echo "  - Arkfile application server" ;;
         rqlite) echo "  - rqlite database cluster" ;;
-        minio) echo "  - MinIO object storage" ;;
+        minio) echo "  - SeaweedFS object storage" ;;
     esac
 done
 
@@ -321,7 +321,7 @@ if [[ " ${certificates_to_renew[@]} " =~ " ca " ]]; then
     
     # Remove existing certificates
     sudo -u ${USER} rm -f "${TLS_DIR}/ca/"*
-    for service in arkfile rqlite minio; do
+    for service in arkfile rqlite seaweedfs; do
         if [ -d "${TLS_DIR}/${service}" ]; then
             sudo -u ${USER} rm -f "${TLS_DIR}/${service}/server-"*
         fi
@@ -384,7 +384,7 @@ echo -e "${BLUE}Final system verification...${NC}"
 # Test certificate loading
 verification_failed=false
 
-for service in arkfile rqlite minio; do
+for service in arkfile rqlite seaweedfs; do
     cert_path="${TLS_DIR}/${service}/server.crt"
     key_path="${TLS_DIR}/${service}/server.key"
     
@@ -427,12 +427,12 @@ if systemctl is-active --quiet arkfile; then
     fi
 fi
 
-if systemctl is-active --quiet minio; then
-    echo -e "${YELLOW}Testing MinIO health endpoint...${NC}"
-    if curl -f http://localhost:9000/minio/health/ready >/dev/null 2>&1; then
-        echo -e "  ${GREEN}[OK] MinIO: Health check passed${NC}"
+if systemctl is-active --quiet seaweedfs; then
+    echo -e "${YELLOW}Testing SeaweedFS health endpoint...${NC}"
+    if curl -f http://localhost:9332/status >/dev/null 2>&1; then
+        echo -e "  ${GREEN}[OK] SeaweedFS: Health check passed${NC}"
     else
-        echo -e "  ${YELLOW}[WARNING] MinIO: Health check failed (service may still be starting)${NC}"
+        echo -e "  ${YELLOW}[WARNING] SeaweedFS: Health check failed (service may still be starting)${NC}"
     fi
 fi
 
@@ -462,13 +462,13 @@ echo -e "${BLUE}[INFO] Renewal Summary:${NC}"
 echo "========================================"
 echo "- Certificates renewed: ${#certificates_to_renew[@]}"
 echo "- Backup created: ${BACKUP_DIR}"
-echo "- Services restarted: $(systemctl is-active arkfile minio rqlite 2>/dev/null | grep -c "^active" || echo "0")"
+echo "- Services restarted: $(systemctl is-active arkfile seaweedfs rqlite 2>/dev/null | grep -c "^active" || echo "0")"
 echo "- Next renewal check: $(date -d "+$((VALIDITY_DAYS - WARNING_DAYS)) days" "+%Y-%m-%d")"
 
 echo ""
 echo -e "${BLUE}Certificate Details:${NC}"
 echo "========================================"
-for service in ca arkfile rqlite minio; do
+for service in ca arkfile rqlite seaweedfs; do
     case "${service}" in
         ca)
             cert_file="${TLS_DIR}/ca/ca.crt"

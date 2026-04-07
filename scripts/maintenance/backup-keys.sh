@@ -84,8 +84,8 @@ sudo -u ${USER} bash -c "cat > '${BACKUP_DIR}/backup_${TIMESTAMP}.json' << EOF
     \"tls/ca/ca.crt\",
     \"tls/rqlite/server.key\",
     \"tls/rqlite/server.crt\",
-    \"tls/minio/server.key\",
-    \"tls/minio/server.crt\"
+    \"tls/seaweedfs/server.key\",
+    \"tls/seaweedfs/server.crt\"
   ],
   \"encryption\": \"AES-256-CBC with PBKDF2\",
   \"verification\": \"$(sha256sum '${BACKUP_PATH}' | cut -d' ' -f1)\"

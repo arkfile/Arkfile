@@ -32,11 +32,11 @@ echo -e "${YELLOW}[WARNING]  WARNING: This script will help you remove Arkfile f
 echo -e "${YELLOW}You will be prompted before each component is removed.${NC}"
 echo
 echo -e "${BLUE}Components that may be removed:${NC}"
-echo "- Arkfile services (arkfile, minio, rqlite)"
+echo "- Arkfile services (arkfile, seaweedfs, rqlite)"
 echo "- System user and group (arkfile)"
 echo "- Installation directory (/opt/arkfile)"
 echo "- Cryptographic keys and certificates"
-echo "- Downloaded binaries (MinIO, rqlite)"
+echo "- Downloaded binaries (SeaweedFS, rqlite)"
 echo "- Systemd service files"
 echo "- Configuration and log files"
 echo
@@ -123,10 +123,10 @@ else
     print_status "NOT_FOUND" "arkfile.service not found"
 fi
 
-if systemctl list-unit-files | grep -q "minio.service"; then
-    print_status "FOUND" "minio.service found"
+if systemctl list-unit-files | grep -q "seaweedfs.service"; then
+    print_status "FOUND" "seaweedfs.service found"
 else
-    print_status "NOT_FOUND" "minio.service not found"
+    print_status "NOT_FOUND" "seaweedfs.service not found"
 fi
 
 if systemctl list-unit-files | grep -q "rqlite.service"; then
@@ -161,9 +161,9 @@ fi
 # Check for binaries
 echo -e "${BLUE}Downloaded Binaries:${NC}"
 BINARIES_FOUND=false
-for location in "/usr/local/bin/minio" "/opt/minio/bin/minio" "$ARKFILE_DIR/bin/minio"; do
+for location in "/usr/local/bin/weed" "/opt/arkfile/bin/weed" "$ARKFILE_DIR/bin/weed"; do
     if [ -f "$location" ]; then
-        print_status "FOUND" "MinIO binary: $location"
+        print_status "FOUND" "SeaweedFS binary: $location"
         BINARIES_FOUND=true
     fi
 done
@@ -235,8 +235,8 @@ SERVICES_TO_STOP=()
 if systemctl is-active --quiet arkfile 2>/dev/null; then
     SERVICES_TO_STOP+=("arkfile")
 fi
-if systemctl is-active --quiet minio 2>/dev/null; then
-    SERVICES_TO_STOP+=("minio")
+if systemctl is-active --quiet seaweedfs 2>/dev/null; then
+    SERVICES_TO_STOP+=("seaweedfs")
 fi
 if systemctl is-active --quiet rqlite 2>/dev/null; then
     SERVICES_TO_STOP+=("rqlite")
@@ -263,8 +263,8 @@ SERVICES_TO_DISABLE=()
 if systemctl is-enabled --quiet arkfile 2>/dev/null; then
     SERVICES_TO_DISABLE+=("arkfile")
 fi
-if systemctl is-enabled --quiet minio 2>/dev/null; then
-    SERVICES_TO_DISABLE+=("minio")
+if systemctl is-enabled --quiet seaweedfs 2>/dev/null; then
+    SERVICES_TO_DISABLE+=("seaweedfs")
 fi
 if systemctl is-enabled --quiet rqlite 2>/dev/null; then
     SERVICES_TO_DISABLE+=("rqlite")
@@ -293,9 +293,9 @@ echo "========================"
 
 SERVICE_FILES=(
     "/etc/systemd/system/arkfile.service"
-    "/etc/systemd/system/minio.service"
+    "/etc/systemd/system/seaweedfs.service"
     "/etc/systemd/system/rqlite.service"
-    "/etc/systemd/system/minio"
+    "/etc/systemd/system/seaweedfs"
     "/etc/systemd/system/rqlite"
 )
 
@@ -397,10 +397,10 @@ echo -e "${CYAN}Downloaded Binaries${NC}"
 echo "====================="
 
 BINARY_LOCATIONS=(
-    "/usr/local/bin/minio"
+    "/usr/local/bin/weed"
     "/usr/local/bin/rqlite"
     "/usr/local/bin/rqlited"
-    "/opt/minio/bin/minio"
+    "/opt/arkfile/bin/weed"
 )
 
 FOUND_BINARIES=()
@@ -435,7 +435,7 @@ echo -e "${CYAN}[CLEANUP] Temporary Files and Caches${NC}"
 echo "============================="
 
 TEMP_LOCATIONS=(
-    "/tmp/minio*"
+    "/tmp/seaweedfs*"
     "/tmp/rqlite*"
     "/tmp/arkfile*"
 )
