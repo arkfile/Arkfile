@@ -1,33 +1,23 @@
 {
   "version": "1.0",
   "description": "Verified dependency checksums for Arkfile project",
-  "last_updated": "2025-07-02",
+  "last_updated": "2026-04-07",
   "dependencies": {
-    "minio": {
-      "RELEASE.2025-06-13T11-33-47Z": {
+    "seaweedfs": {
+      "4.18": {
         "linux-amd64": {
-          "url": "https://dl.min.io/server/minio/release/linux-amd64/archive/minio.RELEASE.2025-06-13T11-33-47Z",
-          "sha256": "668d3fa0334da86a481da79cc88740f751bf60d8cf15ff988f4bceafa22ca4b0",
-          "sha256_url": "https://dl.min.io/server/minio/release/linux-amd64/archive/minio.RELEASE.2025-06-13T11-33-47Z.sha256sum",
-          "verified_date": "2025-07-02",
-          "verification_method": "official_checksum",
-          "notes": "MinIO provides official SHA256 checksums and PGP signatures"
-        }
-      },
-      "RELEASE.2024-03-10T02-53-48Z": {
-        "linux-amd64": {
-          "url": "https://dl.min.io/server/minio/release/linux-amd64/archive/minio.RELEASE.2024-03-10T02-53-48Z", 
-          "sha256": "previous_version_hash_placeholder",
-          "verified_date": "2025-07-02",
-          "verification_method": "official_checksum",
-          "notes": "Previous version for rollback compatibility"
+          "url": "https://github.com/seaweedfs/seaweedfs/releases/download/4.18/linux_amd64.tar.gz",
+          "md5_url": "https://github.com/seaweedfs/seaweedfs/releases/download/4.18/linux_amd64.tar.gz.md5",
+          "verified_date": "2026-04-07",
+          "verification_method": "official_md5",
+          "notes": "SeaweedFS provides official MD5 checksums for each release on GitHub"
         }
       }
     }
   },
   "verification_notes": {
-    "minio": "MinIO provides both SHA256 checksums and PGP signatures for verification.",
-    "rqlite": "rqlite is now built from source (see scripts/setup/08-setup-rqlite-build.sh) and no longer uses pre-built binaries.",
+    "seaweedfs": "SeaweedFS provides MD5 checksums for each GitHub release. The setup script verifies the checksum on every install.",
+    "rqlite": "rqlite is built from source (see scripts/setup/06-setup-rqlite-build.sh) and does not use pre-built binaries.",
     "security_policy": "All hashes in this file have been manually verified. Do not trust this file if it has been modified outside of version control."
   }
 }

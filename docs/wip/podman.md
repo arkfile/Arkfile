@@ -6,7 +6,7 @@ This deployment strategy targets **production self-hosted environments** with ma
 
 1. **Minimal Images:** Application containers use Alpine-based multi-stage builds. The rqlite container uses `FROM scratch` (pure Go, no CGO). No full distros, no shell access in final images where possible.
 2. **Rootless (Podman):** All containers run as a non-root user on the host. Even if a container is compromised, the attacker gains no privileges on the host system.
-3. **Daemonless:** Podman requires no central root daemon — containers are child processes of your user session.
+3. **Daemonless:** Podman requires no central root daemon -- containers are child processes of your user session.
 4. **Separation of Concerns:** Each component (App, DB, Proxy, Storage) runs in its own isolated container with network segmentation.
 
 ## 2. Why Podman over Docker?
@@ -21,27 +21,25 @@ This deployment strategy targets **production self-hosted environments** with ma
 ### Production with Wasabi Cloud Storage (3 Containers)
 
 ```
-Internet ──HTTPS/443──▶ Caddy ──HTTP/8080──▶ Arkfile ──TCP/4001──▶ rqlite
-                         (public net)         │ (internal net)      (internal net)
-                                              │
-                                              └──HTTPS──▶ Wasabi Cloud
+Internet --HTTPS/443--> Caddy --HTTP/8080--> Arkfile --TCP/4001--> rqlite
+                         (public net)         | (internal net)      (internal net)
+                                              |
+                                              +--HTTPS--> Wasabi Cloud
 ```
 
 ### Self-Hosted with Local S3-Compatible Storage (4 Containers)
 
 ```
-Internet ──HTTPS/443──▶ Caddy ──HTTP/8080──▶ Arkfile ──TCP/4001──▶ rqlite
-                         (public net)         │ (internal net)      (internal net)
-                                              │
-                                              └──HTTP/9000──▶ MinIO/SeaweedFS
+Internet --HTTPS/443--> Caddy --HTTP/8080--> Arkfile --TCP/4001--> rqlite
+                         (public net)         | (internal net)      (internal net)
+                                              |
+                                              +--HTTP/9332--> SeaweedFS
                                                               (internal net)
 ```
 
-> **Note on MinIO:** MinIO is currently used as the local S3-compatible storage backend. However, MinIO has moved away from open-source licensing (now BSL/AGPL). For future single-node self-hosted deployments, we plan to migrate to [SeaweedFS](https://github.com/seaweedfs/seaweedfs) which provides S3-compatible storage under the Apache 2.0 license. The Arkfile storage layer uses a generic S3 interface (`STORAGE_PROVIDER=generic-s3`), so this migration will be transparent — only the storage container changes, no application code modifications needed.
-
 ## 4. Container Specifications
 
-### A. Arkfile (The App) — Alpine Multi-Stage Build
+### A. Arkfile (The App) -- Alpine Multi-Stage Build
 
 **Why not `FROM scratch`?** Arkfile requires CGO (`CGO_ENABLED=1`) because the OPAQUE authentication protocol is implemented via C FFI bindings to libopaque (which depends on libsodium). A `CGO_ENABLED=0` build would fail to compile. We use Alpine with static linking to keep the image minimal.
 
@@ -129,9 +127,9 @@ EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/arkfile"]
 ```
 
-### B. rqlite (The DB) — `FROM scratch`
+### B. rqlite (The DB) -- `FROM scratch`
 
-rqlite is pure Go — `CGO_ENABLED=0` works perfectly. This is a true minimal scratch build.
+rqlite is pure Go -- `CGO_ENABLED=0` works perfectly. This is a true minimal scratch build.
 
 ```dockerfile
 # === STAGE 1: Builder ===
@@ -165,11 +163,27 @@ ENTRYPOINT ["/bin/rqlited"]
 CMD ["-http-addr", "0.0.0.0:4001", "-raft-addr", "0.0.0.0:4002", "/data"]
 ```
 
-### C. Caddy (The Proxy) — `caddy:alpine`
+### C. Caddy (The Proxy) -- `caddy:alpine`
 
 We use the official Alpine-based Caddy image. It provides useful debugging tools if network issues arise, and the attack surface is still very small (Alpine, not Debian/Ubuntu).
 
-No custom Dockerfile needed — configured via `Caddyfile` bind mount.
+No custom Dockerfile needed -- configured via `Caddyfile` bind mount.
+
+### D. SeaweedFS (Local S3 Storage) -- Official Image
+
+SeaweedFS provides official Docker Hub images at `chrislusf/seaweedfs`. The `4.18` tag (~95MB) includes the `weed` binary with master, volume, filer, and S3 gateway in a single image. No custom Dockerfile needed.
+
+**Container image:** `chrislusf/seaweedfs:4.18`
+**License:** Apache 2.0
+**Available tags:**
+
+| Tag | Notes |
+|---|---|
+| `4.18` | Current stable release (recommended) |
+| `4.18_large_disk` | For volumes >8TB |
+| `latest` | Tracks latest stable |
+
+The container runs in "single server" mode with the S3 gateway enabled. S3 credentials are configured via a JSON config file mounted into the container.
 
 ## 5. Secrets Management
 
@@ -180,14 +194,42 @@ Secrets are injected via **Podman Secrets** (encrypted at rest, mounted as files
 ### Creating Secrets on the Host
 
 ```bash
-# One-time setup — generate and store secrets
+# One-time setup -- generate and store secrets
 openssl rand -hex 32 | podman secret create arkfile_master_key -
 openssl rand -hex 32 | podman secret create rqlite_password -
 echo "your-wasabi-access-key" | podman secret create s3_access_key -
 echo "your-wasabi-secret-key" | podman secret create s3_secret_key -
 
-# For local storage profile (MinIO/SeaweedFS)
-openssl rand -hex 32 | podman secret create minio_root_password -
+# For local storage profile (SeaweedFS)
+# S3 credentials are configured in seaweedfs-s3.json (bind mounted, not a secret)
+# Generate the S3 secret key:
+S3_SECRET=$(openssl rand -hex 32)
+echo "$S3_SECRET" | podman secret create seaweedfs_s3_secret_key -
+
+# Create the SeaweedFS S3 auth config file
+cat > seaweedfs-s3.json << EOF
+{
+  "identities": [
+    {
+      "name": "arkfile",
+      "credentials": [
+        {
+          "accessKey": "arkfile",
+          "secretKey": "$S3_SECRET"
+        }
+      ],
+      "actions": [
+        "Admin",
+        "Read",
+        "Write",
+        "List",
+        "Tagging"
+      ]
+    }
+  ]
+}
+EOF
+chmod 600 seaweedfs-s3.json
 ```
 
 ### Reading Secrets in Go (Code Change Required)
@@ -209,11 +251,11 @@ func getSecretOrEnv(envKey string) string {
 }
 ```
 
-Use `getSecretOrEnv("MASTER_KEY")` instead of `os.Getenv("MASTER_KEY")` for all sensitive values. This is backward-compatible — bare-metal deployments using env vars continue to work unchanged.
+Use `getSecretOrEnv("MASTER_KEY")` instead of `os.Getenv("MASTER_KEY")` for all sensitive values. This is backward-compatible -- bare-metal deployments using env vars continue to work unchanged.
 
 ### TLS Certificates
 
-TLS certs are multi-file and binary — they work better as read-only bind mounts rather than Podman secrets:
+TLS certs are multi-file and binary -- they work better as read-only bind mounts rather than Podman secrets:
 
 ```yaml
 volumes:
@@ -229,11 +271,11 @@ Generate certs on the host using the existing `scripts/setup/04-setup-tls-certs.
 
 | Secret Type | Mechanism | Visible in `podman inspect`? |
 |---|---|---|
-| Master key | Podman Secret → `/run/secrets/` | No |
-| DB password | Podman Secret → `/run/secrets/` | No |
-| S3 credentials | Podman Secret → `/run/secrets/` | No |
+| Master key | Podman Secret -> `/run/secrets/` | No |
+| DB password | Podman Secret -> `/run/secrets/` | No |
+| S3 credentials | Podman Secret + bind-mounted JSON config | No |
 | TLS certs/keys | Read-only bind mount | Mount path visible, content not |
-| Non-secret config | Environment variables | Yes (fine — not sensitive) |
+| Non-secret config | Environment variables | Yes (fine -- not sensitive) |
 
 ## 6. Orchestration (`compose.yaml`)
 
@@ -315,27 +357,30 @@ services:
 
   # === 4. Local S3 Storage (optional profile) ===
   # Activate with: podman-compose --profile local-storage up -d
-  #
-  # NOTE: MinIO is used currently but is no longer open source (BSL/AGPL).
-  # We plan to migrate to SeaweedFS (Apache 2.0) for single-node self-hosted
-  # deployments. The Arkfile storage layer uses generic S3, so this migration
-  # only requires swapping this container — no application code changes.
-  minio:
-    image: minio/minio:latest
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.18
     profiles: ["local-storage"]
-    command: server /data --console-address ":9001"
-    secrets:
-      - minio_root_password
-    environment:
-      - MINIO_ROOT_USER=arkfile
-      - MINIO_ROOT_PASSWORD_FILE=/run/secrets/minio_root_password
+    command: >
+      server
+      -dir=/data
+      -s3
+      -s3.port=9332
+      -s3.config=/etc/seaweedfs/s3.json
+      -master.port=9334
+      -volume.port=18080
+      -filer.port=9333
+      -ip.bind=0.0.0.0
     volumes:
-      - minio_data:/data
+      - seaweedfs_data:/data
+      - type: bind
+        source: ./seaweedfs-s3.json
+        target: /etc/seaweedfs/s3.json
+        read_only: true
     networks:
       - internal
     restart: always
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:9332/status"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -348,14 +393,14 @@ networks:
   internal:
     driver: bridge
     internal: true
-    # App, DB, and storage communicate here — no internet access
+    # App, DB, and storage communicate here -- no internet access
 
 # === Persistent Volumes ===
 volumes:
   caddy_data:
   caddy_config:
   rqlite_data:
-  minio_data:
+  seaweedfs_data:
 
 # === Podman Secrets (must be created before first run) ===
 secrets:
@@ -366,8 +411,6 @@ secrets:
   s3_access_key:
     external: true
   s3_secret_key:
-    external: true
-  minio_root_password:
     external: true
 ```
 
@@ -395,16 +438,18 @@ mkdir -p tls/arkfile
 # 2. Create Podman secrets
 openssl rand -hex 32 | podman secret create arkfile_master_key -
 openssl rand -hex 32 | podman secret create rqlite_password -
-# For Wasabi:
+
+# For Wasabi (cloud storage):
 echo "your-wasabi-access-key" | podman secret create s3_access_key -
 echo "your-wasabi-secret-key" | podman secret create s3_secret_key -
-# For local storage:
-openssl rand -hex 32 | podman secret create minio_root_password -
+
+# For local storage (SeaweedFS):
+# Generate S3 credentials and create seaweedfs-s3.json (see Section 5)
 
 # 3. Build and start (Wasabi mode)
 podman-compose up -d --build
 
-# 3. OR: Build and start (local storage mode)
+# 3. OR: Build and start (local storage mode with SeaweedFS)
 podman-compose --profile local-storage up -d --build
 ```
 
@@ -467,12 +512,3 @@ In production, there is **no dev admin user** seeded automatically. The first ad
 4. Remove `ARKFILE_FORCE_ADMIN_BOOTSTRAP` and restart
 
 See `docs/wip/admin-bootstrap.md` for the full procedure.
-
-## 9. Future: SeaweedFS Migration
-
-For self-hosted single-node deployments, MinIO will be replaced with [SeaweedFS](https://github.com/seaweedfs/seaweedfs):
-
-- **Why:** MinIO moved to BSL/AGPL licensing — no longer truly open source
-- **SeaweedFS:** Apache 2.0 license, S3-compatible API, designed for single-node and small-cluster use
-- **Impact:** Only the storage container in `compose.yaml` changes. Arkfile's `STORAGE_PROVIDER=generic-s3` interface remains the same
-- **Timeline:** Planned for a future release. The storage abstraction layer is already generic S3, so the migration is straightforward

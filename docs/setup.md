@@ -1,12 +1,12 @@
 # Arkfile Setup Guide
 
-This guide provides comprehensive instructions for installing, configuring, and managing Arkfile. It covers everything from quick testing to production deployment, ensuring a secure and reliable setup.
+This guide provides comprehensive instructions for installing, configuring, and managing Arkfile. It covers everything from local development to production deployment.
 
 ## Table of Contents
 
 1. [Local Dev Test Setup](#local-dev-test-setup)
 2. [Architecture Overview](#architecture-overview)
-3. [Installation Methods](#installation-methods)
+3. [Deployment Methods](#deployment-methods)
 4. [Production Deployment](#production-deployment)
 5. [TLS Configuration](#tls-configuration)
 6. [Administrative Validation](#administrative-validation)
@@ -93,26 +93,13 @@ Example output:
 No files found.
 ```
 
-### Alternative: Comprehensive Setup
-
-For full system setup with complete validation:
-```bash
-./scripts/complete-setup-test.sh
-```
-
-When prompted, choose "COMPLETE" for full system setup. This will:
-- Run complete test suite to validate functionality
-- Create system users and directory structure
-- Generate all required cryptographic keys
-- Configure services and validate deployment
-
 ## Architecture Overview
 
 ### System Components
 
 Arkfile's architecture consists of a client-side web interface, a server-side Go application, and external services for storage and security. The client-side component uses WebAssembly for in-browser encryption and decryption. The server-side application handles user authentication, manages metadata, and interfaces with storage backends.
 
-External services include S3-compatible object storage, a distributed rqlite database cluster for metadata, and a Caddy web server for TLS and reverse proxying.
+External services include S3-compatible object storage (SeaweedFS for self-hosted, or any external S3 provider), a distributed rqlite database for metadata, and a Caddy web server for TLS and reverse proxying.
 
 ### Directory Structure and Service Users
 
@@ -122,19 +109,17 @@ The system operates with the `arkfile` user for running services, and the `arkfi
 
 ### Storage Architecture
 
-Arkfile supports multiple storage backends:
-- **Local MinIO** - Filesystem-based storage for development
-- **MinIO Cluster** - Distributed storage for production
-- **External S3** - Backblaze B2, Wasabi, Vultr Object Storage
-- **Self-hosted** - Any S3-compatible storage provider
+Arkfile supports multiple storage backends through a generic S3 interface (`STORAGE_PROVIDER=generic-s3`):
 
-#### Server-Side Encryption (SSE)
+- **SeaweedFS** (default) - Local S3-compatible storage (Apache 2.0 license), single-node or clustered
+- **Amazon S3** - AWS native object storage
+- **Backblaze B2** - S3-compatible cloud storage
+- **Wasabi** - S3-compatible cloud storage
+- **Vultr Object Storage** - S3-compatible cloud storage
+- **Cloudflare R2** - S3-compatible cloud storage
+- **Any S3-compatible provider** - Works with any backend that implements the S3 API
 
-By default, Arkfile is configured to disable MinIO's automatic server-side encryption (`MINIO_SSE_AUTO_ENCRYPTION=off`). This is the recommended setting for the following reason:
-
-- **Hash Integrity:** Arkfile performs end-to-end encryption on the client-side. The server then calculates a SHA256 hash of the encrypted file just before it's sent to the storage backend. This hash is stored in the database as a verifiable record of the object's integrity. Disabling MinIO's SSE ensures that the on-disk object is identical to the object received by the server, guaranteeing that the hashes will match.
-
-If you are an advanced user and wish to enable MinIO's SSE (for example, by integrating with an external Key Management Service like Vault), you can do so by modifying the environment configuration. However, be aware that this will cause the final on-disk hash to differ from the hash stored and verified by the Arkfile application.
+Arkfile performs end-to-end encryption on the client-side before upload. The storage backend receives only opaque encrypted blobs and never sees plaintext file data. No server-side encryption is needed or used.
 
 ### Database Architecture
 
@@ -144,46 +129,56 @@ The system uses rqlite, a distributed SQLite database, for all metadata storage.
 - High availability with automatic failover
 - Consistent data across nodes
 
-## Installation Methods
+## Deployment Methods
 
-### Method 1: Quick Start (Development/Testing)
+Arkfile provides three deployment scripts for different use cases:
 
-**Best for:** First-time users, development, testing
+### dev-reset.sh (Development)
+
+**Best for:** Local development and iterative testing
 
 ```bash
-# Single command setup [DEPRECATED]
-./scripts/quick-start.sh
-
-# Check if everything is working
-curl http://localhost:8080/health
+sudo ./scripts/dev-reset.sh
 ```
 
 **What you get:**
-- Working web interface at http://localhost:8080
-- Local MinIO storage
+- Working HTTPS interface at https://localhost:8443
+- Local SeaweedFS storage (S3 gateway on port 9332, localhost only)
 - Single-node rqlite database
-- All required keys generated
-- Ready for immediate testing
+- All cryptographic keys generated fresh
+- Dev admin user (`arkfile-dev-admin`) auto-created
+- Ready for immediate testing with `e2e-test.sh`
 
-### Method 2: Integration Test (Complete Setup)
+### local-deploy.sh (Self-Hosted Single Node)
 
-**Best for:** Production-ready installations, comprehensive validation
+**Best for:** Personal/small-team self-hosted deployments
 
 ```bash
-# Run comprehensive setup
-./scripts/integration-test.sh
-
-# When prompted, type "COMPLETE" for full system setup
+sudo ./scripts/local-deploy.sh
 ```
 
 **What you get:**
-- Complete test suite validation (100+ tests)
-- Production-ready configuration
-- Comprehensive system validation
-- Full administrative capabilities
-- TLS certificates generated
+- Production-grade single-node deployment
+- SeaweedFS local storage with proper data directories
+- TLS certificates (self-signed or Let's Encrypt via Caddy)
+- Admin bootstrap flow for first admin account creation
+- Systemd services for all components
 
-### Method 3: Manual Step-by-Step
+### test-deploy.sh (Beta/Staging)
+
+**Best for:** Beta testing, staging environments, pre-production validation
+
+```bash
+sudo ./scripts/test-deploy.sh
+```
+
+**What you get:**
+- Multi-user beta deployment
+- External DNS and TLS via Caddy
+- Comprehensive health checks and monitoring
+- Production-equivalent security configuration
+
+### Manual Step-by-Step Setup
 
 **Best for:** Custom configurations, learning the system
 
@@ -192,20 +187,20 @@ curl http://localhost:8080/health
 ./scripts/setup/00-setup-foundation.sh
 
 # Add services manually
-sudo ./scripts/setup/05-setup-minio.sh
+sudo ./scripts/setup/05-setup-seaweedfs.sh
 sudo ./scripts/setup/06-setup-rqlite-build.sh
 
 # Build and deploy
 ./scripts/setup/build.sh
-./scripts/setup/deploy.sh prod
+./scripts/setup/deploy.sh
 ```
 
-## ️ CRITICAL PRODUCTION SECURITY NOTICE
+## CRITICAL PRODUCTION SECURITY NOTICE
 
 ### Dev Admin Accounts
 The following accounts are **DEVELOPMENT ONLY** and are automatically blocked in production:
 - `arkfile-dev-admin`
-- `admin.dev.user` 
+- `admin.dev.user`
 - `admin.demo.user`
 
 ### Production Deployment Checklist
@@ -224,15 +219,13 @@ The following accounts are **DEVELOPMENT ONLY** and are automatically blocked in
 - **Recommended**: 4 vCPU, 8GB RAM, 100GB SSD storage
 - **High Load**: 8+ vCPU, 16GB+ RAM, 500GB+ NVMe storage
 
-NOTE: Storage needs vary based on storage backend; minio local/cluster modes require the most storage space.
-
 **Operating System Support:**
 - **Linux**: Debian, Ubuntu, Alma/Rocky Linux, RHEL, Fedora, Alpine
 - **BSD**: FreeBSD, OpenBSD
 - **Architecture**: x86_64 (amd64)
 
 **Network Requirements:**
-- **Ports**: 8080 (HTTP), 443 (HTTPS), 4001 (rqlite), 9000 (MinIO)
+- **Ports**: 8080 (HTTP), 8443 (HTTPS/TLS), 4001 (rqlite, localhost only), 9332 (SeaweedFS S3, localhost only)
 - **Outbound**: Access to package repositories
 - **DNS**: Proper FQDN resolution for TLS certificates
 
@@ -249,6 +242,9 @@ sudo apt update && sudo apt install golang-go
 sudo apk add go
 
 # Alma/RHEL/Rocky Linux
+sudo dnf install golang
+
+# Fedora
 sudo dnf install golang
 
 # FreeBSD
@@ -316,105 +312,58 @@ source ~/.bashrc
 bun --version
 ```
 
-### Production Installation
-
-**Option 1: Integration Test Script (Recommended)**
-
-```bash
-# Clone repository
-cd /opt/arkfile
-sudo -u arkfile git clone https://github.com/84adam/Arkfile.git src
-cd src
-
-# Run comprehensive setup
-sudo ./scripts/complete-setup-test.sh
-# Type "COMPLETE" when prompted for full system setup
-```
-
-**Option 2: Manual Production Setup**
-
-```bash
-# Clone and build
-cd /opt/arkfile
-sudo -u arkfile git clone https://github.com/84adam/Arkfile.git src
-cd src
-sudo -u arkfile ./scripts/setup/build.sh
-
-# Install binary
-sudo cp arkfile /opt/arkfile/bin/
-sudo chown arkfile:arkfile /opt/arkfile/bin/arkfile
-
-# Run setup
-sudo -u arkfile ./scripts/deprecated/first-time-setup.sh
-```
-
 ### Configuration
 
 **Environment Configuration:**
 
-Create `/etc/arkfile/config.yaml`:
-```yaml
-server:
-  host: "0.0.0.0"
-  port: 8080
-  read_timeout: "30s"
-  write_timeout: "30s"
-  idle_timeout: "120s"
+Arkfile uses environment variables loaded from `/opt/arkfile/etc/secrets.env`. The deployment scripts (`dev-reset.sh`, `local-deploy.sh`, `test-deploy.sh`) generate this file automatically with appropriate values.
 
-database:
-  driver: "rqlite"
-  connection: "http://localhost:4001"
-  max_connections: 25
-  max_idle_connections: 5
+Key configuration variables:
 
-storage:
-  backend: "minio"
-  endpoint: "localhost:9000"
-  bucket_name: "arkfile-storage"
-  key_id: "minioadmin"
-  access_key: "minioadmin"
-  use_ssl: false
+```bash
+# Storage Configuration (Generic S3 with local SeaweedFS)
+STORAGE_PROVIDER=generic-s3
+S3_ENDPOINT=http://localhost:9332
+S3_ACCESS_KEY=arkfile-dev
+S3_SECRET_KEY=<randomly-generated>
+S3_BUCKET=arkfile-dev
+S3_REGION=us-east-1
+S3_FORCE_PATH_STYLE=true
+S3_USE_SSL=false
 
-security:
-  max_file_size: "1073741824" # 1GB
-  allowed_origins: ["https://your-domain.com"]
-  rate_limit_requests: 100
-  rate_limit_window: "1h"
-  
-# JWT Authentication Model (Netflix/Spotify-style)
-jwt:
-  token_duration: "30m"        # 30-minute token lifecycle
-  refresh_threshold: "25m"     # Auto-refresh at 25 minutes
-  lazy_revocation: true        # Enable lazy revocation checking
-  immediate_revocation:        # Security-critical operations
-    - "logout"
-    - "admin_revoke"
-    - "security_incident"
+# Database Configuration
+DATABASE_TYPE=rqlite
+RQLITE_ADDRESS=http://localhost:4001
+RQLITE_USERNAME=<configured-user>
+RQLITE_PASSWORD=<randomly-generated>
+
+# TLS Configuration
+TLS_ENABLED=true
+TLS_PORT=8443
+TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.crt
+TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.key
 ```
 
-**Storage Provider Configuration:**
+SeaweedFS S3 credentials are also stored in `/opt/arkfile/etc/seaweedfs-s3.json`, which is generated by the deployment scripts alongside `secrets.env`.
 
-For external S3-compatible providers:
-```yaml
-storage:
-  backend: "backblaze"  # or "wasabi", "vultr", "aws-s3"
-  endpoint: "s3.us-west-002.backblazeb2.com"
-  region: "us-west-002"
-  bucket_name: "your-bucket"
-  key_id: "your-access-key"
-  access_key: "your-secret-key"
-  use_ssl: true
-```
+**External S3 Provider Configuration:**
 
-**Amazon S3 Configuration:**
-```yaml
-storage:
-  backend: "aws-s3"
-  region: "us-west-2"  # Required, defaults to us-east-1 if not specified
-  bucket_name: "your-s3-bucket"
-  key_id: "your-aws-access-key-id"
-  access_key: "your-aws-secret-access-key"
-  use_ssl: true
+For external S3-compatible providers, set `STORAGE_PROVIDER` and the appropriate credentials in `secrets.env`:
+
+```bash
+# Backblaze B2
+STORAGE_PROVIDER=backblaze
+BACKBLAZE_ENDPOINT=s3.us-west-002.backblazeb2.com
+BACKBLAZE_KEY_ID=your-access-key
+BACKBLAZE_APPLICATION_KEY=your-secret-key
+BACKBLAZE_BUCKET_NAME=your-bucket
+
+# Amazon S3
+STORAGE_PROVIDER=aws-s3
+AWS_REGION=us-west-2
+AWS_ACCESS_KEY_ID=your-access-key-id
+AWS_SECRET_ACCESS_KEY=your-secret-access-key
+AWS_S3_BUCKET_NAME=your-s3-bucket
 ```
 
 ## TLS Configuration
@@ -435,9 +384,6 @@ sudo ./scripts/setup/04-setup-tls-certs.sh
 # Set domain for production
 export ARKFILE_DOMAIN=yourdomain.com
 sudo -E ./scripts/setup/04-setup-tls-certs.sh
-
-# For Let's Encrypt (when available)
-sudo ./scripts/setup/setup-letsencrypt.sh
 ```
 
 ### Certificate Architecture
@@ -448,7 +394,7 @@ sudo ./scripts/setup/setup-letsencrypt.sh
 ├── ca/                     # Certificate Authority
 ├── arkfile/                # Main application certificates
 ├── rqlite/                 # Database TLS certificates
-├── minio/                  # Storage TLS certificates
+├── seaweedfs/              # Storage TLS certificates
 └── backup/                 # Certificate backups
 ```
 
@@ -484,9 +430,6 @@ sudo ./scripts/setup/setup-letsencrypt.sh
 
 **Automated Validation:**
 ```bash
-# Run comprehensive admin testing
-./scripts/testing/admin-integration-test.sh
-
 # Quick health check
 ./scripts/maintenance/health-check.sh
 ```
@@ -498,20 +441,20 @@ sudo ./scripts/setup/setup-letsencrypt.sh
 # Check service status
 sudo systemctl status arkfile
 sudo systemctl status rqlite
-sudo systemctl status minio
+sudo systemctl status seaweedfs
 
 # Verify health endpoint
-curl -s http://localhost:8080/health | jq '.'
+curl -sk https://localhost:8443/readyz | jq '.'
 ```
 
 2. **Web Interface Access:**
-   - Navigate to `http://localhost:8080`
+   - Navigate to `https://localhost:8443`
    - Verify page loads with "Private File Vault" title
    - Check browser console for JavaScript errors
 
 3. **User Registration Test:**
-   - Click "Register" on web interface
-   - Enter test credentials: `admin@test.local` / `AdminTest123!SecurePassword2025`
+   - Click "Get Started" on web interface
+   - Enter test credentials
    - Verify registration success and password meets requirements
 
 4. **File Operations Test:**
@@ -531,7 +474,6 @@ echo "Hello Arkfile! Test file for validation." > ~/test-file.txt
 2. **Upload and Encrypt:**
    - Use web interface to upload file
    - Select "Use my account password"
-   - Add password hint: "Test file"
 
 3. **Download and Decrypt:**
    - Click download on uploaded file
@@ -540,9 +482,10 @@ echo "Hello Arkfile! Test file for validation." > ~/test-file.txt
 
 4. **File Sharing Test:**
    - Click "Share" on uploaded file
+   - Set a share password
    - Copy generated share link
    - Open incognito browser window
-   - Visit share link and verify file downloads
+   - Visit share link, enter share password, verify file downloads
 
 5. **TOTP Multi-Factor Authentication Test:**
    - Navigate to user settings or account page
@@ -551,90 +494,22 @@ echo "Hello Arkfile! Test file for validation." > ~/test-file.txt
    - Log out and log back in to verify TOTP requirement
    - Test backup codes for account recovery
 
-### Interactive Web Interface Testing
-
-**Manual Testing Workflow (Administrative Validation):**
-
-**Step 1: Access Web Interface**
-- Open your web browser
-- Navigate to: `http://localhost:8080` (or your configured address)
-- You should see the Arkfile login/registration page
-- **Expected**: Clean web interface with Register/Login options
-- **If page doesn't load**: Check if Arkfile service is running
-
-**Step 2: User Registration**
-- Click the 'Register' button  
-- Enter username: `admin-test-user`
-- Enter password: `TestPassword123_Secure`
-- Click 'Create Account'
-- **Expected**: Registration success message and redirect to dashboard
-- **If registration fails**:
-  - Check password meets requirements (15+ chars, 2+ character classes)
-  - Verify database is writable
-  - Check browser console for JavaScript errors
-
-**Step 3: File Upload Test**
-- Look for an 'Upload File' button or drag-and-drop area
-- Upload your test file: `~/test-file.txt`
-- Wait for upload to complete
-- **Expected**: File appears in your file list with an encrypted/lock icon
-- **If upload fails**:
-  - Check MinIO service is running: `sudo systemctl status minio`
-  - Verify file permissions in `/opt/arkfile/var/lib/`
-  - Check browser console for upload errors
-
-**Step 4: File Download Test**
-- Click on the file name in your file list
-- File should download automatically
-- Open the downloaded file in a text editor
-- Verify content matches: `Hello Arkfile! Test file for validation.`
-- **Expected**: Downloaded file content exactly matches original
-- **If content differs or download fails**:
-  - File encryption/decryption may be broken
-  - Check application logs: `sudo journalctl -u arkfile -f`
-  - Verify cryptographic keys are properly generated
-
-**Step 5: File Sharing Test**
-- Look for a 'Share' button or link next to your uploaded file
-- Click to generate a share link
-- Copy the generated share URL
-- Open an incognito/private browser window
-- Paste the share link in the incognito window
-- File should download without requiring login
-- **Expected**: File downloads in incognito mode without authentication
-- **If sharing fails**:
-  - Share link generation may be broken
-  - Check if anonymous access is properly configured
-  - Verify share tokens are being generated correctly
-
-**Step 6: Authentication Test**
-- In your original browser window, log out of Arkfile
-- Log back in using the same credentials
-- Verify your uploaded file is still visible in the file list
-- **Expected**: Login successful, files persistent across sessions
-- **If login fails**:
-  - OPAQUE authentication may be broken
-  - Check database integrity
-  - Verify session management is working
-
 ### Backend Verification
 
 **Database Verification:**
 ```bash
-# Check user registration
-rqlite -H localhost:4001 'SELECT username FROM users;'
-
-# Verify file metadata
-rqlite -H localhost:4001 'SELECT file_name, encrypted FROM files;'
+# Check user count
+curl -u "dev-user:$RQLITE_PASSWORD" \
+  'http://localhost:4001/db/query?q=SELECT+COUNT(*)+FROM+users'
 ```
 
 **Storage Verification:**
 ```bash
-# Check MinIO connectivity
-curl -I http://localhost:9000/minio/health/ready
+# Check SeaweedFS S3 gateway status
+curl http://localhost:9332/status
 
 # List storage objects
-ls -la /opt/arkfile/var/lib/storage/
+ls -la /opt/arkfile/var/lib/seaweedfs/data/
 ```
 
 **Key Verification:**
@@ -653,7 +528,7 @@ ls -la /opt/arkfile/etc/keys/jwt/current/
 **Daily:**
 ```bash
 # Health check
-./scripts/health-check.sh
+./scripts/maintenance/health-check.sh
 
 # Check service logs
 sudo journalctl -u arkfile --since "24 hours ago"
@@ -664,9 +539,6 @@ sudo journalctl -u arkfile --since "24 hours ago"
 # Security audit
 ./scripts/maintenance/security-audit.sh
 
-# Key rotation (automated via systemd timer)
-sudo systemctl status arkfile-key-rotation.timer
-
 # Backup keys
 ./scripts/maintenance/backup-keys.sh
 ```
@@ -676,11 +548,11 @@ sudo systemctl status arkfile-key-rotation.timer
 # System updates
 sudo apt update && sudo apt upgrade
 
-# Performance benchmark
-./scripts/testing/performance-benchmark.sh
-
 # Certificate validation
 ./scripts/maintenance/validate-certificates.sh
+
+# Check for dependency updates
+./scripts/maintenance/check-updates.sh
 ```
 
 ### Backup Procedures
@@ -688,10 +560,7 @@ sudo apt update && sudo apt upgrade
 **Database Backup:**
 ```bash
 # Manual backup
-rqlite -H localhost:4001 '.backup /opt/arkfile/backups/db-backup-$(date +%Y%m%d).db'
-
-# Automated backup (add to crontab)
-0 2 * * * /opt/arkfile/scripts/maintenance/backup-keys.sh
+curl -s http://localhost:4001/db/backup -o /opt/arkfile/backups/db-backup-$(date +%Y%m%d).db
 ```
 
 **Key Backup:**
@@ -707,11 +576,11 @@ tar -tzf /opt/arkfile/backups/keys-backup-$(date +%Y%m%d).tar.gz
 
 **Health Monitoring:**
 ```bash
-# Health endpoint
-curl -H "Accept: application/json" http://localhost:8080/health
+# Readiness endpoint
+curl -sk https://localhost:8443/readyz
 
-# Service metrics
-curl http://localhost:8080/metrics
+# Health endpoint
+curl -sk https://localhost:8443/health
 ```
 
 **Log Monitoring:**
@@ -723,7 +592,7 @@ sudo journalctl -u arkfile -f
 sudo journalctl -u rqlite -f
 
 # Storage logs
-sudo journalctl -u minio -f
+sudo journalctl -u seaweedfs -f
 ```
 
 ## Troubleshooting
@@ -736,17 +605,14 @@ sudo journalctl -u minio -f
 sudo systemctl status arkfile
 sudo journalctl -u arkfile -f
 
-# Verify configuration
-sudo -u arkfile /opt/arkfile/bin/arkfile --config /etc/arkfile/config.yaml --validate
-
 # Check port availability
-sudo netstat -tlnp | grep :8080
+sudo ss -tlnp | grep -E '8080|8443'
 ```
 
 **Database Connection Issues:**
 ```bash
 # Test rqlite connectivity
-rqlite -H localhost:4001 'SELECT 1'
+curl http://localhost:4001/status
 
 # Check database service
 sudo systemctl status rqlite
@@ -758,25 +624,25 @@ sudo -u arkfile ls -la /opt/arkfile/var/lib/rqlite/
 **TLS Certificate Issues:**
 ```bash
 # Validate certificates
-./scripts/validate-certificates.sh
+./scripts/maintenance/validate-certificates.sh
 
 # Check certificate expiration
 openssl x509 -in /opt/arkfile/etc/keys/tls/arkfile/server.crt -noout -dates
 
 # Test TLS connection
-openssl s_client -connect localhost:443 -servername yourdomain.com
+openssl s_client -connect localhost:8443
 ```
 
 **File Upload/Download Issues:**
 ```bash
-# Check MinIO service
-sudo systemctl status minio
+# Check SeaweedFS service
+sudo systemctl status seaweedfs
 
-# Verify storage permissions
-sudo -u arkfile ls -la /opt/arkfile/var/lib/storage/
+# Verify storage is accessible
+curl http://localhost:9332/status
 
-# Test MinIO connectivity
-curl -I http://localhost:9000/minio/health/ready
+# Check storage data directory
+sudo -u arkfile ls -la /opt/arkfile/var/lib/seaweedfs/data/
 ```
 
 ### Performance Issues
@@ -789,18 +655,12 @@ df -h
 
 # Check memory usage
 free -h
-
-# Review performance metrics
-./scripts/performance-benchmark.sh
 ```
 
 **Database Performance:**
 ```bash
 # Check database size
 du -sh /opt/arkfile/var/lib/rqlite/
-
-# Monitor database queries
-rqlite -H localhost:4001 '.timer on' 'SELECT COUNT(*) FROM users;'
 ```
 
 ### Emergency Procedures
@@ -812,19 +672,7 @@ sudo systemctl stop arkfile
 sudo systemctl start arkfile
 
 # Check service health
-./scripts/health-check.sh
-```
-
-**Database Recovery:**
-```bash
-# Stop service
-sudo systemctl stop arkfile
-
-# Restore from backup
-sudo -u arkfile cp /opt/arkfile/backups/db-backup-YYYYMMDD.db /opt/arkfile/var/lib/rqlite/
-
-# Restart service
-sudo systemctl start arkfile
+./scripts/maintenance/health-check.sh
 ```
 
 **Key Compromise Response:**
@@ -840,29 +688,23 @@ sudo systemctl start arkfile
 
 **Debug Information:**
 ```bash
-# Generate debug report
-./scripts/health-check.sh --debug
+# Check system health
+./scripts/maintenance/health-check.sh
 
-# Check system configuration
+# Validate deployment
 ./scripts/maintenance/validate-deployment.sh
 
 # Review logs
 sudo journalctl -u arkfile --since "1 hour ago"
 ```
 
-**Support Resources:**
-- **Health Dashboard**: `http://localhost:8080/health`
-- **Security Audit**: `./scripts/maintenance/security-audit.sh`
-- **Performance Testing**: `./scripts/testing/performance-benchmark.sh`
-- **Log Files**: `/var/log/arkfile/` and `sudo journalctl -u arkfile`
-
 **File Locations:**
 - **Binary**: `/opt/arkfile/bin/arkfile`
-- **Configuration**: `/etc/arkfile/config.yaml`
+- **Configuration**: `/opt/arkfile/etc/secrets.env`
+- **S3 Auth**: `/opt/arkfile/etc/seaweedfs-s3.json`
 - **Keys**: `/opt/arkfile/etc/keys/`
 - **Data**: `/opt/arkfile/var/lib/`
-- **Logs**: `/var/log/arkfile/`
-- **Backups**: `/opt/arkfile/backups/`
+- **Logs**: `/opt/arkfile/var/log/`
 
 ## Quick Reference
 
@@ -873,22 +715,19 @@ sudo journalctl -u arkfile --since "1 hour ago"
 sudo systemctl {start|stop|restart|status} arkfile
 
 # Health checks
-curl http://localhost:8080/health
-./scripts/health-check.sh
-
-# Administrative testing
-./scripts/testing/admin-integration-test.sh
+curl -sk https://localhost:8443/readyz
+./scripts/maintenance/health-check.sh
 
 # Security operations
-./scripts/security-audit.sh
-./scripts/backup-keys.sh
+./scripts/maintenance/security-audit.sh
+./scripts/maintenance/backup-keys.sh
 ```
 
 ### Success Criteria
 
 **System is ready when:**
 - All services show "active (running)" status
-- Health endpoint returns "healthy" for all checks
+- Health endpoint returns "ready" for all checks
 - User can register with OPAQUE authentication
 - File upload, encryption, and download work correctly
 - File sharing links work in incognito mode

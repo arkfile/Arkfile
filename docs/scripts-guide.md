@@ -21,7 +21,7 @@ scripts/
 │   ├── 02-setup-directories.sh       # Create directory structure
 │   ├── 03-setup-master-key.sh        # Generate master encryption key
 │   ├── 04-setup-tls-certs.sh         # Generate TLS certificates
-│   ├── 05-setup-minio.sh             # Configure MinIO storage
+│   ├── 05-setup-seaweedfs.sh         # Configure SeaweedFS storage
 │   ├── 06-setup-rqlite-build.sh      # Build and configure rqlite database
 │   ├── build-config.sh               # Build configuration helper
 │   ├── build-libopaque.sh            # Build libopaque static library
@@ -38,8 +38,7 @@ scripts/
 ├── maintenance/                      # Maintenance and operational scripts
 │   ├── admin-validation-guide.sh     # Interactive admin validation
 │   ├── backup-keys.sh                # Backup cryptographic keys
-│   ├── check-updates.sh              # Check for updates
-│   ├── download-minio.sh             # Download MinIO binaries
+│   ├── check-updates.sh              # Check for dependency updates
 │   ├── emergency-procedures.sh       # Emergency response procedures
 │   ├── health-check.sh               # System health monitoring
 │   ├── renew-certificates.sh         # Renew TLS certificates
@@ -64,7 +63,7 @@ scripts/
 **What it does**:
 - Stops any existing services
 - Runs foundation setup (users, directories, keys)
-- Sets up MinIO and rqlite
+- Sets up SeaweedFS and rqlite
 - Starts all services
 - Provides web interface URL
 
@@ -110,11 +109,11 @@ The setup scripts are numbered to show their logical dependency order:
 **Dependencies**: Directories  
 **Creates**: Self-signed TLS certificates for all services
 
-#### `05-setup-minio.sh`
-**Purpose**: Configure MinIO object storage  
-**Usage**: `sudo ./scripts/setup/05-setup-minio.sh`  
+#### `05-setup-seaweedfs.sh`
+**Purpose**: Configure SeaweedFS object storage  
+**Usage**: `sudo ./scripts/setup/05-setup-seaweedfs.sh`  
 **Dependencies**: Directories  
-**Creates**: MinIO configuration and systemd service
+**Creates**: SeaweedFS configuration and systemd service
 
 #### `06-setup-rqlite-build.sh`
 **Purpose**: Build and configure rqlite database from source  
@@ -290,11 +289,6 @@ go build -o totp-generator totp-generator.go
 **Usage**: `./scripts/maintenance/admin-validation-guide.sh`  
 **Guides**: Manual testing, browser validation
 
-#### `download-minio.sh`
-**Purpose**: Download MinIO binaries  
-**Usage**: `./scripts/maintenance/download-minio.sh`  
-**Downloads**: Latest MinIO server and client
-
 #### `emergency-procedures.sh`
 **Purpose**: Emergency response procedures  
 **Usage**: `./scripts/maintenance/emergency-procedures.sh`  
@@ -318,7 +312,7 @@ go build -o totp-generator totp-generator.go
 ./scripts/setup/00-setup-foundation.sh
 
 # Then services
-sudo ./scripts/setup/05-setup-minio.sh
+sudo ./scripts/setup/05-setup-seaweedfs.sh
 sudo ./scripts/setup/06-setup-rqlite-build.sh
 
 # Build and deploy
@@ -370,7 +364,7 @@ Many scripts support environment variables for customization:
 
 ### Setup Scripts
 - `SKIP_TLS=1` - Skip TLS certificate generation
-- `SKIP_DOWNLOAD=1` - Skip MinIO downloads
+- `SKIP_DOWNLOAD=1` - Skip SeaweedFS downloads
 - `FORCE_REBUILD=1` - Force rebuild components
 
 ## Script Dependencies
@@ -384,7 +378,7 @@ Many scripts support environment variables for customization:
 
 ### Internal Dependencies
 1. **Foundation** → Users → Directories → Keys
-2. **Services** → MinIO, rqlite (can be parallel)
+2. **Services** → SeaweedFS, rqlite (can be parallel)
 3. **Testing** → Built application
 4. **Maintenance** → Running services
 
