@@ -637,6 +637,25 @@ else
     exit 1
 fi
 
+# Wait for SeaweedFS S3 gateway to be ready
+print_status "INFO" "Waiting for SeaweedFS S3 gateway to be ready..."
+max_attempts=20
+attempt=0
+while [ $attempt -lt $max_attempts ]; do
+    if curl -s http://localhost:9332/status >/dev/null 2>&1; then
+        print_status "SUCCESS" "SeaweedFS S3 gateway is ready on port 9332"
+        break
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+done
+
+if [ $attempt -eq $max_attempts ]; then
+    print_status "ERROR" "SeaweedFS S3 gateway failed to respond on port 9332 within timeout"
+    print_status "ERROR" "Check logs: sudo journalctl -u seaweedfs -f"
+    exit 1
+fi
+
 # Start rqlite
 print_status "INFO" "Starting rqlite..."
 systemctl start rqlite

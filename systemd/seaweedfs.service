@@ -18,6 +18,7 @@ ExecStart=/usr/local/bin/weed server \
     -master.port=9334 \
     -volume.port=18080 \
     -filer.port=9333 \
+    -ip=127.0.0.1 \
     -ip.bind=127.0.0.1 \
     -s3.ip.bind=127.0.0.1
 
