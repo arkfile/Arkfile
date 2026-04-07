@@ -5,15 +5,10 @@ Status: Research Complete, Phases 1-2 Complete
 
 ## Background
 
-Filippo Valsorda's April 2026 analysis (https://words.filippo.io/crqc-timeline/) shifts
-the CRQC (Cryptographically Relevant Quantum Computer) timeline dramatically forward.
-Google and Heather Adkins set 2029 as their deadline. New papers show 256-bit elliptic
-curves can be broken with far fewer qubits than previously estimated. The risk framing
-is no longer "will CRQCs exist?" but "can you guarantee they WON'T exist by 2030?"
+Filippo Valsorda's April 2026 analysis (https://words.filippo.io/crqc-timeline/) shifts the CRQC (Cryptographically Relevant Quantum Computer) timeline dramatically forward. Google and Heather Adkins set 2029 as their deadline. New papers show 256-bit elliptic curves can be broken with far fewer qubits than previously estimated. The risk framing is no longer "will CRQCs exist?" but "can you guarantee they WON'T exist by 2030?"
 
 Key guidance from Filippo:
-- Symmetric crypto (AES-256, SHA-256, Argon2id, HKDF) is safe. Grover's algorithm
-  does not meaningfully threaten symmetric primitives at 128+ bit security levels.
+- Symmetric crypto (AES-256, SHA-256, Argon2id, HKDF) is safe. Grover's algorithm does not meaningfully threaten symmetric primitives at 128+ bit security levels.
 - All asymmetric/ECC crypto must migrate to ML-KEM (key exchange) and ML-DSA (signatures).
 - Non-PQ key exchange should be treated as potential active compromise.
 - File encryption is especially vulnerable to store-now-decrypt-later (SNDL) attacks.
@@ -37,9 +32,7 @@ Reference: age v1.3.0 added PQ recipients; age will soon warn/error on non-PQ ty
 | Share envelope encryption | AES-256-GCM-AAD | Symmetric |
 | Metadata encryption | AES-256-GCM | Symmetric |
 
-Arkfile's core advantage: the entire file encryption chain
-(password -> Argon2id -> KEK -> AES-256-GCM(FEK) -> AES-256-GCM(data))
-is 100% quantum-safe. Files stored in S3 are NOT vulnerable to SNDL attacks.
+Arkfile's core advantage: the entire file encryption chain (password -> Argon2id -> KEK -> AES-256-GCM(FEK) -> AES-256-GCM(data)) is 100% quantum-safe. Files stored in S3 are NOT vulnerable to SNDL attacks.
 
 ### VULNERABLE (Requires PQ Migration)
 
@@ -49,7 +42,7 @@ is 100% quantum-safe. Files stored in S3 are NOT vulnerable to SNDL attacks.
 | TLS certificates | ECDSA P-384, RSA 4096 | Shor breaks ECDSA/RSA; enables active MitM | HIGH |
 | OPAQUE auth | Ristretto255, X25519 (libsodium) | Shor breaks all ECC-based OPRF/key exchange | CRITICAL (but no PQ replacement exists) |
 | JWT signing | Ed25519 | Shor breaks EdDSA; enables token forgery | HIGH |
-| Internal TLS (rqlite, MinIO) | ECDSA P-384 | Same as external TLS | HIGH |
+| Internal TLS (rqlite, SeaweedFS) | ECDSA P-384 | Same as external TLS | HIGH |
 
 ## Migration Phases
 
@@ -66,13 +59,9 @@ Actions:
 - [x] arkfile-client CLI: already enforces TLS 1.3 with Go 1.26.1 default curves
 - [ ] Verify PQ key exchange negotiation with a test client
 
-How it works: X25519MLKEM768 is a hybrid key exchange combining classical X25519
-with ML-KEM-768 (post-quantum lattice-based KEM). TLS session keys are derived from
-both, so security holds if either one is unbroken. This is transparent to application
-code -- only the TLS handshake changes.
+How it works: X25519MLKEM768 is a hybrid key exchange combining classical X25519 with ML-KEM-768 (post-quantum lattice-based KEM). TLS session keys are derived from both, so security holds if either one is unbroken. This is transparent to application code -- only the TLS handshake changes.
 
-Browser support: Chrome 124+, Firefox 131+, Edge 124+, Safari 18+ all support
-ML-KEM/X25519MLKEM768 in TLS 1.3.
+Browser support: Chrome 124+, Firefox 131+, Edge 124+, Safari 18+ all support ML-KEM/X25519MLKEM768 in TLS 1.3.
 
 ### Phase 2: TLS 1.3 Only [DONE]
 
@@ -103,8 +92,7 @@ Requirements:
 - All JWT middleware and verification must be updated
 - Token rotation during migration
 
-Since Arkfile is greenfield with no deployments, this can be a clean switch
-rather than a gradual migration. No backwards compatibility needed.
+Since Arkfile is greenfield with no deployments, this can be a clean switch rather than a gradual migration. No backwards compatibility needed.
 
 ### Phase 4: TLS Certificate Signatures (Future)
 
@@ -121,8 +109,7 @@ Blockers:
 - WebPKI is working on Merkle Tree Certificates but not widely deployed
 - Client certificate validation libraries need ML-DSA support
 
-Internal services (rqlite, MinIO) are easier to migrate since we control both
-endpoints and the CA.
+Internal services (rqlite, SeaweedFS) are easier to migrate since we control both endpoints and the CA.
 
 ### Phase 5: OPAQUE Authentication (Future -- Hardest)
 
@@ -144,27 +131,20 @@ Options being tracked:
 3. SRP-like protocols adapted for PQ (would lose OPAQUE's strong properties)
 4. Interim: rely on PQ TLS tunnel to protect OPAQUE exchanges (Phase 1)
 
-The PQ TLS tunnel from Phase 1 provides meaningful interim protection:
-an attacker would need a CRQC operating in real-time AND the ability to
-perform active MitM (which requires breaking TLS certificates too).
-Passive recording of OPAQUE exchanges over a PQ-TLS tunnel yields nothing
-useful to a future CRQC.
+The PQ TLS tunnel from Phase 1 provides meaningful interim protection: an attacker would need a CRQC operating in real-time AND the ability to perform active MitM (which requires breaking TLS certificates too). Passive recording of OPAQUE exchanges over a PQ-TLS tunnel yields nothing useful to a future CRQC.
 
 ## Risk Assessment Summary
 
 With Phase 1 complete (PQ TLS key exchange):
 - SNDL attacks on recorded traffic: MITIGATED (PQ key exchange)
-- Active MitM with future CRQC: PARTIALLY MITIGATED (attacker needs to also
-  forge ECDSA certificates, which requires real-time CRQC + certificate forgery)
+- Active MitM with future CRQC: PARTIALLY MITIGATED (attacker needs to also forge ECDSA certificates, which requires real-time CRQC + certificate forgery)
 - Stored encrypted files in S3: SAFE (symmetric crypto)
 - Share envelopes: SAFE (symmetric crypto)
-- Authentication protocol: VULNERABLE to real-time CRQC attack, but protected
-  by PQ TLS tunnel against passive recording
+- Authentication protocol: VULNERABLE to real-time CRQC attack, but protected by PQ TLS tunnel against passive recording
 
 ## References
 
-- Filippo Valsorda, "A Cryptography Engineer's Perspective on Quantum Computing
-  Timelines" (April 6, 2026): https://words.filippo.io/crqc-timeline/
+- Filippo Valsorda, "A Cryptography Engineer's Perspective on Quantum Computing Timelines" (April 6, 2026): https://words.filippo.io/crqc-timeline/
 - age file encryption PQ support (v1.3.0): https://github.com/FiloSottile/age
 - Go crypto/tls X25519MLKEM768: added in Go 1.24, default in Go 1.24+
 - Caddy x25519mlkem768 support: in default curves list (requires Go 1.24+ build)

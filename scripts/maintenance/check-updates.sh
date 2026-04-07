@@ -154,7 +154,7 @@ check_seaweedfs() {
     local status=""
     
     # Get latest version from GitHub API
-    if latest=$(curl -s "https://dl.min.io/server/minio/release/linux-amd64/minio.sha256sum" | grep -o 'RELEASE[^[:space:]]*' | head -1 2>/dev/null); then
+    if latest=$(curl -s "https://api.github.com/repos/seaweedfs/seaweedfs/releases/latest" | jq -r '.tag_name' 2>/dev/null); then
         if [[ -z "$latest" ]]; then
             latest="unknown"
             status="error"
@@ -169,7 +169,7 @@ check_seaweedfs() {
     fi
     
     if [[ "$JSON_OUTPUT" == "true" ]]; then
-        echo "\"minio\": {\"current\": \"$current\", \"latest\": \"$latest\", \"status\": \"$status\"},"
+        echo "\"seaweedfs\": {\"current\": \"$current\", \"latest\": \"$latest\", \"status\": \"$status\"},"
     else
         local icon
         case $status in

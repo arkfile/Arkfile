@@ -15,7 +15,7 @@ Because of this privacy-first design, only you – and anyone with whom you choo
 1. **Privacy-first** – files are encrypted on your device.  
 2. **Share safely** – you can create sharing links with share passwords for friends or co-workers without giving them your main password.
 3. **Multi-factor security** – Time-based One-Time Passwords (TOTP authentication) is used to provide two-factor protection for all accounts.
-4. **Pick your storage** – use the built-in MinIO server for single-node or self-hosted cluster deployments, or point Arkfile at Amazon S3, Backblaze B2, Wasabi, Vultr Object Storage, and other S3-compatible storage back-ends.
+4. **Pick your storage** – use the built-in SeaweedFS server for single-node or self-hosted cluster deployments, or point Arkfile at Amazon S3, Backblaze B2, Wasabi, Vultr Object Storage, and other S3-compatible storage back-ends.
 5. **Runs anywhere** – one binary, no external database. (Arkfile uses the lightweight rqlite engine under the hood.)  
 6. **Open source** – anyone can inspect or improve the code.
 
@@ -29,7 +29,7 @@ The script will:
 
 * Install all dependencies
 * Set up arkfile system user
-* Start a local MinIO bucket  
+* Start a local SeaweedFS bucket  
 * Start a single-node rqlite database  
 * Start arkfile app
 * Create arkfile-dev-admin user
@@ -41,7 +41,7 @@ The script will:
 - **OPAQUE:** A password authentication protocol where the server never sees your password in any form, with built-in validation to ensure strong password security.
 - **TOTP:** Time-based One-Time Password - generates temporary codes on your phone for extra security.
 - **rqlite:** A small database that keeps data in sync across nodes without extra setup.
-- **MinIO:** An open-source S3-compatible storage server that works as a single node or in a cluster.
+- **SeaweedFS:** An open-source S3-compatible storage server that works as a single node or in a cluster.
 - **S3-type Storage Backends:** Any number of redundant data backup solutions that use erasure coding to ensure extremely high availability of your data.
 
 ## 5. Need More Details?

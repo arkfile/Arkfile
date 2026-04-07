@@ -65,8 +65,8 @@ check_scripts() {
         missing_scripts+=("setup-rqlite-build.sh")
     fi
     
-    if [[ ! -f "$SCRIPT_DIR/setup-minio.sh" ]]; then
-        missing_scripts+=("setup-minio.sh")
+    if [[ ! -f "$SCRIPT_DIR/../setup/05-setup-seaweedfs.sh" ]]; then
+        missing_scripts+=("05-setup-seaweedfs.sh")
     fi
     
     if [[ ${#missing_scripts[@]} -gt 0 ]]; then
@@ -80,7 +80,7 @@ check_scripts() {
 check_for_updates() {
     local check_output
     local rqlite_updates=false
-    local minio_updates=false
+    local seaweedfs_updates=false
     local go_updates=false
     
     echo -e "${BLUE}Checking for available updates...${NC}"
@@ -95,8 +95,8 @@ check_for_updates() {
             rqlite_updates=true
         fi
         
-        if echo "$check_output" | grep -q "^  MinIO:.*️"; then
-            minio_updates=true
+        if echo "$check_output" | grep -q "^  SeaweedFS:.*️"; then
+            seaweedfs_updates=true
         fi
         
         if echo "$check_output" | grep -q "Go Module Updates:" || echo "$check_output" | grep -q "️.*patch)"; then
@@ -105,11 +105,11 @@ check_for_updates() {
         
         # Set global variables for menu
         export RQLITE_UPDATES=$rqlite_updates
-        export MINIO_UPDATES=$minio_updates
+        export SEAWEEDFS_UPDATES=$seaweedfs_updates
         export GO_UPDATES=$go_updates
         
         # Return true if any updates available
-        if [[ "$rqlite_updates" == "true" || "$minio_updates" == "true" || "$go_updates" == "true" ]]; then
+        if [[ "$rqlite_updates" == "true" || "$seaweedfs_updates" == "true" || "$go_updates" == "true" ]]; then
             return 0
         else
             return 1
@@ -128,7 +128,7 @@ show_menu() {
     option=1
     
     # Clear all option variables first
-    unset RQLITE_OPTION MINIO_OPTION GO_OPTION ALL_SYSTEM_OPTION ALL_OPTION RECHECK_OPTION TEST_OPTION
+    unset RQLITE_OPTION SEAWEEDFS_OPTION GO_OPTION ALL_SYSTEM_OPTION ALL_OPTION RECHECK_OPTION TEST_OPTION
     
     # System dependency options
     if [[ "$RQLITE_UPDATES" == "true" ]]; then
@@ -137,9 +137,9 @@ show_menu() {
         option=$((option + 1))
     fi
     
-    if [[ "$MINIO_UPDATES" == "true" ]]; then
-        echo -e "  [$option] Update MinIO"
-        export MINIO_OPTION=$option
+    if [[ "$SEAWEEDFS_UPDATES" == "true" ]]; then
+        echo -e "  [$option] Update SeaweedFS"
+        export SEAWEEDFS_OPTION=$option
         option=$((option + 1))
     fi
     
@@ -153,7 +153,7 @@ show_menu() {
     # Combined options if multiple updates available
     update_count=0
     if [[ "$RQLITE_UPDATES" == "true" ]]; then update_count=$((update_count + 1)); fi
-    if [[ "$MINIO_UPDATES" == "true" ]]; then update_count=$((update_count + 1)); fi
+    if [[ "$SEAWEEDFS_UPDATES" == "true" ]]; then update_count=$((update_count + 1)); fi
     if [[ "$GO_UPDATES" == "true" ]]; then update_count=$((update_count + 1)); fi
     
     if [[ $update_count -gt 1 ]]; then
@@ -203,13 +203,13 @@ handle_choice() {
                 echo "Invalid choice"
             fi
             ;;
-        "$MINIO_OPTION")
-            if [[ -n "$MINIO_OPTION" ]]; then
-                echo -e "${BLUE}Updating MinIO...${NC}"
-                if "$SCRIPT_DIR/setup-minio.sh"; then
-                    echo -e "${GREEN}[OK] MinIO updated successfully${NC}"
+        "$SEAWEEDFS_OPTION")
+            if [[ -n "$SEAWEEDFS_OPTION" ]]; then
+                echo -e "${BLUE}Updating SeaweedFS...${NC}"
+                if "$SCRIPT_DIR/../setup/05-setup-seaweedfs.sh"; then
+                    echo -e "${GREEN}[OK] SeaweedFS updated successfully${NC}"
                 else
-                    echo -e "${RED}[X] MinIO update failed${NC}"
+                    echo -e "${RED}[X] SeaweedFS update failed${NC}"
                 fi
             else
                 echo "Invalid choice"
@@ -235,9 +235,9 @@ handle_choice() {
                     fi
                 fi
                 
-                if [[ "$MINIO_UPDATES" == "true" ]]; then
-                    echo -e "${CYAN}Updating MinIO...${NC}"
-                    if ! "$SCRIPT_DIR/setup-minio.sh"; then
+                if [[ "$SEAWEEDFS_UPDATES" == "true" ]]; then
+                    echo -e "${CYAN}Updating SeaweedFS...${NC}"
+                    if ! "$SCRIPT_DIR/../setup/05-setup-seaweedfs.sh"; then
                         success=false
                     fi
                 fi
@@ -256,7 +256,7 @@ handle_choice() {
                 echo -e "${BLUE}Updating all dependencies...${NC}"
                 
                 # Update system dependencies first
-                if [[ "$RQLITE_UPDATES" == "true" || "$MINIO_UPDATES" == "true" ]]; then
+                if [[ "$RQLITE_UPDATES" == "true" || "$SEAWEEDFS_UPDATES" == "true" ]]; then
                     handle_choice "$ALL_SYSTEM_OPTION"
                 fi
                 

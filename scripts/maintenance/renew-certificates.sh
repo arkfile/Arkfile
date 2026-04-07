@@ -289,7 +289,7 @@ for cert in "${certificates_to_renew[@]}"; do
         ca) echo "  - Certificate Authority (affects all service certificates)" ;;
         arkfile) echo "  - Arkfile application server" ;;
         rqlite) echo "  - rqlite database cluster" ;;
-        minio) echo "  - SeaweedFS object storage" ;;
+        seaweedfs) echo "  - SeaweedFS object storage" ;;
     esac
 done
 

@@ -99,14 +99,14 @@ To prevent attackers from identifying files by their exact size, Arkfile impleme
 Files are padded using a tiered approach that balances privacy protection with storage efficiency. The system applies padding to the nearest size tier, with tiers defined as 64KB, 1MB, 10MB, and 100MB blocks. Within each tier, an additional random padding of 0-10% is applied to prevent exact size correlation attacks.
 
 **Storage Layer Implementation:**
-The padding occurs exclusively at the storage backend level, meaning that encrypted file data stored in MinIO or other S3-compatible services includes this privacy-enhancing padding. However, all user-facing interfaces, storage quotas, and utilization calculations operate on the original file sizes, ensuring users are not penalized for privacy protection.
+The padding occurs exclusively at the storage backend level, meaning that encrypted file data stored in SeaweedFS or other S3-compatible services includes this privacy-enhancing padding. However, all user-facing interfaces, storage quotas, and utilization calculations operate on the original file sizes, ensuring users are not penalized for privacy protection.
 
 **Privacy Benefits:**
 This approach prevents several classes of attacks including file fingerprinting based on exact byte counts, correlation attacks across multiple uploads of the same file, and metadata inference attacks that attempt to determine file types or contents based on size patterns. The random component within each tier ensures that even identical files do not produce identical storage footprints.
 
 ## 9. Storage Back-Ends
 
-Arkfile supports multiple storage backends including Amazon S3, MinIO, Backblaze B2, Wasabi, and Vultr Object Storage.
+Arkfile supports multiple storage backends including Amazon S3, SeaweedFS, Backblaze B2, Wasabi, and Vultr Object Storage.
 
 Encrypted file data is opaque to the storage provider; none of them receive decryption keys.
 

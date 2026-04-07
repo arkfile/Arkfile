@@ -441,7 +441,7 @@ create_forensic_snapshot() {
     # System journal for arkfile services
     log_action "Capturing systemd journal..."
     journalctl -u arkfile --since "7 days ago" > "$snapshot_dir/arkfile_journal.log" 2>/dev/null || true
-    journalctl -u "minio*" --since "7 days ago" > "$snapshot_dir/seaweedfs_journal.log" 2>/dev/null || true
+    journalctl -u "seaweedfs*" --since "7 days ago" > "$snapshot_dir/seaweedfs_journal.log" 2>/dev/null || true
     journalctl -u "rqlite*" --since "7 days ago" > "$snapshot_dir/rqlite_journal.log" 2>/dev/null || true
     
     # Database snapshot (if accessible)

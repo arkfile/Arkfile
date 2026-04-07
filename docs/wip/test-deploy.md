@@ -475,11 +475,8 @@ This mirrors how `dev-reset.sh` handles rebuilds but without the NUKE step.
 
 ## Cleanup: What Else Should Change
 
-### Delete quick-start.sh
-`scripts/quick-start.sh` is stale and broken (references non-existent scripts `07-setup-minio.sh` and `08-setup-rqlite-build.sh`, missing TLS, missing Master Key, wrong storage config, wrong CORS, wrong health endpoint). It should be deleted from the repository.
-
 ### Update 00-setup-foundation.sh
-Its "NEXT STEP" output still references `quick-start.sh` and the non-existent `07-setup-minio.sh` / `08-setup-rqlite-build.sh`. Update to reference `dev-reset.sh` for local dev or `test-deploy.sh` for beta deployment.
+Its "NEXT STEP" output still references `quick-start.sh` and other non-existent component setup scripts. Update to reference `dev-reset.sh` for local dev test or `local-deploy.sh` for local non-dev deployment or `test-deploy.sh` for beta deployment.
 
 ### Update setup.md
 Multiple stale references:
