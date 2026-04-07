@@ -3,7 +3,6 @@ package handlers
 // Import log package
 
 // Use alias for clarity
-// Import minio
 
 // Import testify/mock
 

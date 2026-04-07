@@ -79,7 +79,7 @@ echo -e "${RED}    - ALL CREDENTIALS (passwords, tokens)${NC}"
 echo -e "${RED}    - ALL LOGS${NC}"
 echo
 echo -e "${BLUE}This will PRESERVE (for speed):${NC}"
-echo -e "${GREEN}    - Downloaded MinIO/rqlite binaries${NC}"
+echo -e "${GREEN}    - Downloaded SeaweedFS/rqlite binaries${NC}"
 echo -e "${GREEN}    - Compiled libopaque libraries${NC}"
 echo -e "${GREEN}    - System users and directory structure${NC}"
 echo
@@ -203,21 +203,21 @@ echo "=================================================="
 
 # Stop services using the proven pattern from quick-start.sh
 stop_service_if_running "arkfile"
-stop_service_if_running "minio"
+stop_service_if_running "seaweedfs"
 stop_service_if_running "rqlite"
 stop_service_if_running "caddy"
 
-# Kill any lingering arkfile processes
-print_status "INFO" "Killing any lingering arkfile processes..."
+# Kill any lingering processes
+print_status "INFO" "Killing any lingering processes..."
 pkill -f "arkfile" 2>/dev/null || true
-pkill -f "minio" 2>/dev/null || true
+pkill -f "weed" 2>/dev/null || true
 pkill -f "rqlited" 2>/dev/null || true
 sleep 2
 
 # Force kill if still running
-if pgrep -f "arkfile\|minio\|rqlited" > /dev/null; then
+if pgrep -f "arkfile\|weed\|rqlited" > /dev/null; then
     print_status "WARNING" "Force killing remaining processes..."
-    pkill -9 -f "arkfile\|minio\|rqlited" 2>/dev/null || true
+    pkill -9 -f "arkfile\|weed\|rqlited" 2>/dev/null || true
     sleep 1
 fi
 
@@ -229,9 +229,9 @@ echo -e "${CYAN}Step 2: Nuking data and secrets${NC}"
 echo "================================="
 
 if [ -d "$ARKFILE_DIR" ]; then
-    # Delete user data (S3-compatible storage - MinIO backend)
+    # Delete user data (S3-compatible storage - SeaweedFS backend)
     print_status "INFO" "Nuking user data..."
-    rm -rf "$ARKFILE_DIR/var/lib/"*/minio/data/* 2>/dev/null || true
+    rm -rf "$ARKFILE_DIR/var/lib/seaweedfs/data"/* 2>/dev/null || true
     rm -rf "$ARKFILE_DIR/var/lib/"*/storage/* 2>/dev/null || true
     
     # Delete database
@@ -430,7 +430,7 @@ chmod 700 "$ARKFILE_DIR/etc/keys"
 [ -d "$ARKFILE_DIR/etc/keys/tls/ca" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/ca"
 [ -d "$ARKFILE_DIR/etc/keys/tls/arkfile" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/arkfile"
 [ -d "$ARKFILE_DIR/etc/keys/tls/rqlite" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/rqlite"
-[ -d "$ARKFILE_DIR/etc/keys/tls/minio" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/minio"
+[ -d "$ARKFILE_DIR/etc/keys/tls/seaweedfs" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/seaweedfs"
 [ -d "$ARKFILE_DIR/etc/keys/backups" ] && chmod 700 "$ARKFILE_DIR/etc/keys/backups"
 [ -d "$ARKFILE_DIR/etc/keys/totp" ] && chmod 700 "$ARKFILE_DIR/etc/keys/totp"
 
@@ -448,12 +448,12 @@ echo
 echo -e "${CYAN}Step 5: Generating fresh secrets${NC}"
 echo "================================="
 
-# Generate random secrets for security (use same password for MinIO server and S3 client)
+# Generate random secrets for security
 RQLITE_PASSWORD="DevPassword123_$(openssl rand -hex 8)"
-MINIO_PASSWORD="DevPassword123_$(openssl rand -hex 8)"
+S3_PASSWORD="DevPassword123_$(openssl rand -hex 8)"
 
 print_status "SUCCESS" "Generated fresh database password"
-print_status "SUCCESS" "Generated fresh MinIO password"
+print_status "SUCCESS" "Generated fresh S3 password"
 
 # Create fresh secrets file
 print_status "INFO" "Creating fresh configuration..."
@@ -478,20 +478,15 @@ TLS_PORT=8443
 TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.crt
 TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.key
 
-# Storage Configuration - Generic S3 (using local MinIO as S3-compatible backend)
+# Storage Configuration - Generic S3 (using local SeaweedFS as S3-compatible backend)
 STORAGE_PROVIDER=generic-s3
-S3_ENDPOINT=http://localhost:9000
+S3_ENDPOINT=http://localhost:9332
 S3_ACCESS_KEY=arkfile-dev
-S3_SECRET_KEY=${MINIO_PASSWORD}
+S3_SECRET_KEY=${S3_PASSWORD}
 S3_BUCKET=arkfile-dev
 S3_REGION=us-east-1
 S3_FORCE_PATH_STYLE=true
 S3_USE_SSL=false
-
-# MinIO Server Configuration (for MinIO service itself)
-MINIO_ROOT_USER=arkfile-dev
-MINIO_ROOT_PASSWORD=${MINIO_PASSWORD}
-MINIO_SSE_AUTO_ENCRYPTION=off
 
 # Admin Configuration - DEV ONLY
 ADMIN_USERNAMES=arkfile-dev-admin
@@ -512,6 +507,35 @@ EOF
 chown "$USER:$GROUP" "$ARKFILE_DIR/etc/secrets.env"
 chmod 640 "$ARKFILE_DIR/etc/secrets.env"
 print_status "SUCCESS" "Fresh configuration created"
+
+# Create SeaweedFS S3 auth config
+print_status "INFO" "Creating SeaweedFS S3 auth configuration..."
+cat > "$ARKFILE_DIR/etc/seaweedfs-s3.json" << EOF
+{
+  "identities": [
+    {
+      "name": "arkfile",
+      "credentials": [
+        {
+          "accessKey": "arkfile-dev",
+          "secretKey": "${S3_PASSWORD}"
+        }
+      ],
+      "actions": [
+        "Admin",
+        "Read",
+        "Write",
+        "List",
+        "Tagging"
+      ]
+    }
+  ]
+}
+EOF
+
+chown "$USER:$GROUP" "$ARKFILE_DIR/etc/seaweedfs-s3.json"
+chmod 640 "$ARKFILE_DIR/etc/seaweedfs-s3.json"
+print_status "SUCCESS" "SeaweedFS S3 auth configuration created"
 
 # Create fresh rqlite auth
 RQLITE_PASSWORD=$(grep RQLITE_PASSWORD "$ARKFILE_DIR/etc/secrets.env" | cut -d= -f2)
@@ -567,17 +591,17 @@ fi
 print_status "SUCCESS" "Cryptographic key generation complete"
 echo
 
-# Step 7: Setup MinIO and rqlite
-echo -e "${CYAN}Step 7: Setting up MinIO and rqlite${NC}"
+# Step 7: Setup SeaweedFS and rqlite
+echo -e "${CYAN}Step 7: Setting up SeaweedFS and rqlite${NC}"
 echo "==================================="
 
-# Setup MinIO directories and service
-print_status "INFO" "Setting up MinIO..."
-if ! ./scripts/setup/05-setup-minio.sh; then
-    print_status "ERROR" "MinIO setup failed - this is CRITICAL"
+# Setup SeaweedFS directories and service
+print_status "INFO" "Setting up SeaweedFS..."
+if ! ./scripts/setup/05-setup-seaweedfs.sh; then
+    print_status "ERROR" "SeaweedFS setup failed - this is CRITICAL"
     exit 1
 fi
-print_status "SUCCESS" "MinIO setup complete"
+print_status "SUCCESS" "SeaweedFS setup complete"
 
 # Setup rqlite service (using build-from-source approach)
 RQLITE_BUILD_ARGS=""
@@ -601,15 +625,15 @@ echo "========================="
 # Install/update systemd service file
 systemctl daemon-reload
 
-# Start MinIO
-print_status "INFO" "Starting MinIO..."
-systemctl start minio
-systemctl enable minio
+# Start SeaweedFS
+print_status "INFO" "Starting SeaweedFS..."
+systemctl start seaweedfs
+systemctl enable seaweedfs
 
-if systemctl is-active --quiet minio; then
-    print_status "SUCCESS" "MinIO started"
+if systemctl is-active --quiet seaweedfs; then
+    print_status "SUCCESS" "SeaweedFS started"
 else
-    print_status "ERROR" "MinIO failed to start"
+    print_status "ERROR" "SeaweedFS failed to start"
     exit 1
 fi
 
@@ -702,17 +726,17 @@ else
 fi
 
 # Service status check
-minio_status=$(systemctl is-active minio 2>/dev/null || echo "failed")
+seaweedfs_status=$(systemctl is-active seaweedfs 2>/dev/null || echo "failed")
 rqlite_status=$(systemctl is-active rqlite 2>/dev/null || echo "failed")
 arkfile_status=$(systemctl is-active arkfile 2>/dev/null || echo "failed")
 
 print_status "INFO" "Final service status:"
-echo "    MinIO: ${minio_status}"
+echo "    SeaweedFS: ${seaweedfs_status}"
 echo "    rqlite: ${rqlite_status}"
 echo "    Arkfile: ${arkfile_status}"
 
 # Verify all services are actually active
-if [ "$minio_status" != "active" ] || [ "$rqlite_status" != "active" ] || [ "$arkfile_status" != "active" ]; then
+if [ "$seaweedfs_status" != "active" ] || [ "$rqlite_status" != "active" ] || [ "$arkfile_status" != "active" ]; then
     print_status "ERROR" "One or more services failed to start properly"
     exit 1
 fi
@@ -745,7 +769,7 @@ echo -e "${RED}  All cryptographic keys (JWT, OPAQUE, TOTP, TLS)${NC}"
 echo -e "${RED}  All logs${NC}"
 echo
 echo -e "${BLUE}What was preserved:${NC}"
-echo -e "${GREEN}  Downloaded binaries (MinIO, rqlite)${NC}"
+echo -e "${GREEN}  Downloaded binaries (SeaweedFS, rqlite)${NC}"
 echo -e "${GREEN}  Compiled libraries (libopaque) - CACHED for speed${NC}"
 echo -e "${GREEN}  System users and directory structure${NC}"
 echo

@@ -1,0 +1,38 @@
+[Unit]
+Description=SeaweedFS Server (S3-compatible storage)
+Documentation=https://github.com/seaweedfs/seaweedfs
+After=network.target
+
+[Service]
+Type=simple
+User=arkfile
+Group=arkfile
+WorkingDirectory=/opt/arkfile/var/lib/seaweedfs
+EnvironmentFile=/opt/arkfile/etc/secrets.env
+
+ExecStart=/usr/local/bin/weed server \
+    -dir=/opt/arkfile/var/lib/seaweedfs/data \
+    -s3 \
+    -s3.port=9332 \
+    -s3.config=/opt/arkfile/etc/seaweedfs-s3.json \
+    -master.port=9334 \
+    -volume.port=18080 \
+    -filer.port=9333 \
+    -ip.bind=127.0.0.1 \
+    -s3.ip.bind=127.0.0.1
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

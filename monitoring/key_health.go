@@ -107,9 +107,9 @@ func (khm *KeyHealthMonitor) PerformHealthCheck() {
 			Path: "/opt/arkfile/etc/tls/server.crt",
 		},
 		{
-			Name: "MinIO TLS Certificate",
+			Name: "Storage TLS Certificate",
 			Type: "tls_cert",
-			Path: "/opt/arkfile/etc/tls/minio.crt",
+			Path: "/opt/arkfile/etc/keys/tls/seaweedfs/server.crt",
 		},
 		{
 			Name: "rqlite TLS Certificate",

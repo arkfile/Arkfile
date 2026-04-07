@@ -35,6 +35,6 @@ type ObjectStorageProvider interface {
 	CompleteMultipartUploadWithPadding(ctx context.Context, storageID, uploadID string, parts []CompletePart, originalSize, paddedSize int64) error
 }
 
-// Global object storage provider instance (will be initialized with Minio or mock)
+// Global object storage provider instance (will be initialized with S3-compatible backend or mock)
 // Consider using dependency injection instead for larger applications.
 var Provider ObjectStorageProvider

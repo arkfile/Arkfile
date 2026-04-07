@@ -42,7 +42,7 @@ type Config struct {
 		BucketName      string `json:"bucket_name"`
 		Region          string `json:"region"`
 		UseSSL          bool   `json:"use_ssl"`
-		ForcePathStyle  bool   `json:"force_path_style"` // Required for many self-hosted S3 (MinIO, SeaweedFS, Ceph)
+		ForcePathStyle  bool   `json:"force_path_style"` // Required for many self-hosted S3 (SeaweedFS, Ceph, MinIO)
 	} `json:"storage"`
 
 	Security struct {

@@ -23,11 +23,13 @@ func TestMain(m *testing.M) {
 	// Store original env vars and set test values
 	originalEnv := map[string]string{}
 	testEnv := map[string]string{
-		"JWT_SECRET":          "test-jwt-secret-for-models", // Use a different secret to avoid potential clashes if tests run concurrently later
-		"STORAGE_PROVIDER":    "local",                      // Set storage provider to local (supports MinIO)
-		"MINIO_ROOT_USER":     "test-user-models",           // Provide dummy values for all required fields
-		"MINIO_ROOT_PASSWORD": "test-password-models",
-		"LOCAL_STORAGE_PATH":  "/tmp/test-storage-models", // Required for local storage
+		"JWT_SECRET":         "test-jwt-secret-for-models", // Use a different secret to avoid potential clashes if tests run concurrently later
+		"STORAGE_PROVIDER":   "generic-s3",
+		"S3_ENDPOINT":        "http://localhost:9332",
+		"S3_ACCESS_KEY":      "test-user-models",
+		"S3_SECRET_KEY":      "test-password-models",
+		"S3_BUCKET":          "test-bucket-models",
+		"LOCAL_STORAGE_PATH": "/tmp/test-storage-models", // Required for local storage
 	}
 
 	for key, testValue := range testEnv {

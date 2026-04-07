@@ -36,7 +36,7 @@ sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/ca"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/arkfile"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/rqlite"
-sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/minio"
+sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/tls/seaweedfs"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys/backups"
 
 # Create application data directories
