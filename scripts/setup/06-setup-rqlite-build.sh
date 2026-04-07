@@ -386,9 +386,25 @@ setup_source() {
     # Ensure cache and build directories exist with correct ownership.
     # When running under sudo, git/go operations run as $SUDO_USER, so
     # both directories must be writable by that user.
+    #
+    # PERMISSION FIX: 02-setup-directories.sh creates the following with
+    # mode 750 owned by arkfile:arkfile, and dev-reset.sh Step 4 reinforces
+    # this with chown -R arkfile:arkfile /opt/arkfile. The $SUDO_USER cannot
+    # traverse mode-750 directories they don't own. We must fix ownership on
+    # the ENTIRE path from /opt/arkfile/var down to the cache directories,
+    # not just the leaf directories.
+    #
+    # Path permissions that block $SUDO_USER:
+    #   /opt/arkfile/var       = 750 arkfile:arkfile (BLOCKED)
+    #   /opt/arkfile/var/cache = 750 arkfile:arkfile (BLOCKED)
+    #   /opt/arkfile/var/cache/downloads = 750 arkfile:arkfile (BLOCKED)
     sudo mkdir -p "${CACHE_DIR}" "${BUILD_DIR}"
     if [ "$EUID" -eq 0 ] && [ -n "$SUDO_USER" ]; then
+        # Fix ownership of every directory in the path so $SUDO_USER can traverse
+        sudo chown "$SUDO_USER:$SUDO_USER" "${BASE_DIR}/var"
+        sudo chown "$SUDO_USER:$SUDO_USER" "${BASE_DIR}/var/cache"
         sudo chown -R "$SUDO_USER:$SUDO_USER" "${CACHE_DIR}"
+        sudo chown -R "$SUDO_USER:$SUDO_USER" "${BUILD_DIR}"
     fi
     
     if [ -d "${SOURCE_DIR}" ]; then
@@ -584,6 +600,19 @@ main() {
     build_rqlite
     install_binaries
     install_services
+    
+    # Restore /opt/arkfile/var ownership back to arkfile:arkfile.
+    # setup_source() temporarily changed /opt/arkfile/var and /opt/arkfile/var/cache
+    # to $SUDO_USER so git/go could traverse the path. We must restore them so
+    # the arkfile user (which runs SeaweedFS, rqlite, etc.) can access var/lib/,
+    # var/log/, and other runtime directories under /opt/arkfile/var.
+    if [ "$EUID" -eq 0 ]; then
+        echo -e "${BLUE}Restoring /opt/arkfile/var ownership to arkfile:arkfile...${NC}"
+        sudo chown arkfile:arkfile "${BASE_DIR}/var" 2>/dev/null || true
+        sudo chown arkfile:arkfile "${BASE_DIR}/var/cache" 2>/dev/null || true
+        # Note: cache/downloads and its contents stay as-is (only used during builds)
+        echo -e "${GREEN}[OK] Ownership restored${NC}"
+    fi
     
     echo
     echo -e "${GREEN}rqlite cluster database build and setup complete!${NC}"
