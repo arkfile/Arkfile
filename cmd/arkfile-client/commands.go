@@ -892,11 +892,19 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 	}
 
 	// Generate client-side share ID: 32 random bytes -> base64url without padding (43 chars)
+	// Retry if first character is '-' or '_' to avoid issues with shell tools and URL parsers.
+	// Probability of retry: 2/64 (~3%), so this almost always succeeds on the first attempt.
+	var shareID string
 	shareIDBytes := make([]byte, 32)
-	if _, err := rand.Read(shareIDBytes); err != nil {
-		return fmt.Errorf("failed to generate share ID: %w", err)
+	for {
+		if _, err := rand.Read(shareIDBytes); err != nil {
+			return fmt.Errorf("failed to generate share ID: %w", err)
+		}
+		shareID = base64URLEncode(shareIDBytes)
+		if shareID[0] != '-' && shareID[0] != '_' {
+			break
+		}
 	}
-	shareID := base64URLEncode(shareIDBytes)
 
 	// Generate download token
 	downloadToken, err := crypto.GenerateDownloadToken()

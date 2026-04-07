@@ -1042,10 +1042,10 @@ phase_10_share_operations() {
         $CLIENT --server-url "$SERVER_URL" --tls-insecure share list
 
     if [ $list_shares_exit_code -eq 0 ] \
-        && echo "$list_shares_output" | grep -q "$SHARE_A_ID" \
-        && echo "$list_shares_output" | grep -q "$SHARE_B_ID" \
-        && echo "$list_shares_output" | grep -q "$SHARE_C_ID" \
-        && echo "$list_shares_output" | grep -q "$SHARE_D_ID"; then
+        && echo "$list_shares_output" | grep -qF -- "$SHARE_A_ID" \
+        && echo "$list_shares_output" | grep -qF -- "$SHARE_B_ID" \
+        && echo "$list_shares_output" | grep -qF -- "$SHARE_C_ID" \
+        && echo "$list_shares_output" | grep -qF -- "$SHARE_D_ID"; then
         record_test "Share listing (all 4 shares)" "PASS"
     else
         error "Not all shares found in list:"; echo "$list_shares_output"
@@ -1233,8 +1233,8 @@ phase_10_share_operations() {
     # The CLI renders revoked/inactive shares as "no" in the ACTIVE column (%-6s padded).
     # Assert the revoked share ID appears AND its row contains "  no  " (column padding pattern).
     if [ $share_list_post_revoke_exit_code -eq 0 ] \
-        && echo "$share_list_post_revoke_output" | grep -q "$SHARE_A_ID" \
-        && echo "$share_list_post_revoke_output" | grep "$SHARE_A_ID" | grep -q "  no  "; then
+        && echo "$share_list_post_revoke_output" | grep -qF -- "$SHARE_A_ID" \
+        && echo "$share_list_post_revoke_output" | grep -F -- "$SHARE_A_ID" | grep -q "  no  "; then
         record_test "Share list reflects revoked state" "PASS"
         info "Revoked Share A shows ACTIVE=no in share list"
     else

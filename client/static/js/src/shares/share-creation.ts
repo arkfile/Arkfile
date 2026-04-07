@@ -89,13 +89,18 @@ export class ShareCreator {
    * Generates a secure random Share ID
    */
   private generateShareID(): string {
-    // Generate 32 bytes of random data
-    const bytes = randomBytes(32);
-    // Convert to URL-safe Base64 (replace + with -, / with _, remove =)
-    return toBase64(bytes)
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=/g, '');
+    // Generate 32 random bytes -> base64url without padding (43 chars).
+    // Retry if first character is '-' or '_' to avoid issues with shell tools and URL parsers.
+    // Probability of retry: 2/64 (~3%), so this almost always succeeds on the first attempt.
+    let id: string;
+    do {
+      const bytes = randomBytes(32);
+      id = toBase64(bytes)
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=/g, '');
+    } while (id.charAt(0) === '-' || id.charAt(0) === '_');
+    return id;
   }
 
   /**

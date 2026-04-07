@@ -868,8 +868,11 @@ func constantTimeCompare(hash1Base64, hash2Base64 string) bool {
 	return subtle.ConstantTimeCompare(hash1, hash2) == 1
 }
 
-// isValidShareID validates that a share_id is in the correct format
-// Expected format: 43-character base64url string (32 bytes without padding)
+// isValidShareID validates that a share_id is in the correct format.
+// Expected format: 43-character base64url string (32 bytes without padding).
+// NOTE: Clients (Go CLI and TypeScript) ensure the first character is alphanumeric
+// (never '-' or '_') to avoid issues with shell tools and URL parsers.
+// The server accepts all valid base64url characters for robustness.
 func isValidShareID(shareID string) bool {
 	// Check length (32 bytes base64url encoded without padding = 43 characters)
 	if len(shareID) != 43 {
