@@ -99,6 +99,13 @@ Identical to dev-reset.sh Steps 3-4 (post-build user/directory setup).
 - Preserve original user context (SUDO_USER) for Go operations
 - Fix Go file ownership (fix_go_ownership from build-config.sh)
 - Check for existing C libraries (skip rebuild if present, unless --force-rebuild-all)
+- IMPORTANT: Do NOT set LIBOPAQUE_DEFINES (leave unset/empty)
+    - This builds libopaque WASM without -DTRACE, so no cryptographic debug
+      dumps appear in the browser console during OPAQUE authentication
+    - dev-reset.sh sets LIBOPAQUE_DEFINES="-DTRACE" for development;
+      local-deploy.sh must NOT do this
+    - If switching from a dev build, use --force-rebuild-all to recompile
+      WASM without trace logging (the flag is baked into the WASM binary)
 - Force fresh TypeScript rebuild:
     - Remove client/static/js/.buildcache
     - Remove client/static/js/dist/*
@@ -113,7 +120,7 @@ Identical to dev-reset.sh Steps 3-4 (post-build user/directory setup).
     - BUILD_BIN/arkfile-admin (admin CLI)
 ```
 
-Identical to dev-reset.sh Step 3.
+Similar to dev-reset.sh Step 3, but WITHOUT LIBOPAQUE_DEFINES="-DTRACE".
 
 ### Step 3: Deploy Build Artifacts
 
@@ -198,8 +205,7 @@ Generate /opt/arkfile/etc/secrets.env with:
     S3_FORCE_PATH_STYLE=true
     S3_USE_SSL=false
 
-Also generate /opt/arkfile/etc/seaweedfs-s3.json with S3 credentials
-(see docs/wip/swfs-now.md for format)
+Also generate /opt/arkfile/etc/seaweedfs-s3.json with S3 credentials (see docs/wip/swfs-now.md for format)
 
     # Admin Configuration
     ADMIN_USERNAMES=<admin-username from CLI arg>
@@ -375,6 +381,7 @@ Output:
 | **ADMIN_DEV_TEST_API_ENABLED** | true | false |
 | **DEBUG_MODE** | true | false |
 | **LOG_LEVEL** | debug | info |
+| **WASM trace logging** | LIBOPAQUE_DEFINES="-DTRACE" | Unset (no trace) |
 | **REQUIRE_APPROVAL** | false | false (configurable) |
 | **CORS_ALLOWED_ORIGINS** | https://localhost:8443 | https://localhost:TLS_PORT |
 | **Credentials** | Random with `Dev` prefix | Random with `local-` prefix, no dev patterns |

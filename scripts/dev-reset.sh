@@ -329,10 +329,14 @@ if [ -d "$BUILD_ROOT" ]; then
 fi
 echo
 
+# Enable OPAQUE WASM trace logging for development (dumps crypto intermediates to browser console)
+# This is dev-only; local-deploy.sh and test-deploy.sh leave this unset for silent WASM builds
+export LIBOPAQUE_DEFINES="-DTRACE"
+
 # Note: libopaque.js Makefile validation is handled by build-libopaque-wasm.sh
-# The build script passes DEFINES=-DTRACE (without -DNORANDOM) at build time
+# The build script reads LIBOPAQUE_DEFINES env var (without -DNORANDOM) at build time
 # This avoids modifying the submodule and survives git submodule updates
-print_status "INFO" "libopaque.js build configuration will be validated during WASM build"
+print_status "INFO" "libopaque.js WASM build will use DEFINES='$LIBOPAQUE_DEFINES' (dev trace logging enabled)"
 echo
 
 # Ensure ownership is correct before build

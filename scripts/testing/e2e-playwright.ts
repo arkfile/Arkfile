@@ -649,7 +649,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // --------------------------------------------------------------------------
   test('Phase 11: Share access controls (max downloads, expiry, non-existent)', async ({ browser }) => {
     const anonContext = await browser.newContext({ baseURL: SERVER_URL, ignoreHTTPSErrors: true });
-    const page = await anonContext.newPage();
+    let page = await anonContext.newPage();
     attachConsoleListener(page, '11-anon');
 
     // 11a: Share B max_downloads=2
@@ -698,6 +698,10 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     console.log('[OK] Share B download 3 correctly rejected (max_downloads exceeded)');
 
     // 11b: Share C expiry
+    // Use a fresh page to avoid stale fetch errors from Phase 11a's rejected download
+    await page.close();
+    page = await anonContext.newPage();
+    attachConsoleListener(page, '11-anon');
     console.log('[i] [Phase 11b] Testing Share C expiry');
 
     await page.goto(shareCUrl);

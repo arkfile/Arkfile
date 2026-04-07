@@ -24,8 +24,13 @@ LIBSODIUM_JS_VERSION="0.7.16"
 # LIBOPRFHOME: Path to liboprf source (relative to js/ directory)
 # DEFINES: Compiler defines (-DTRACE for debug logging, empty for production)
 #          IMPORTANT: Do NOT include -DNORANDOM - it makes OPAQUE deterministic (insecure)
+#
+# LIBOPAQUE_DEFINES env var controls trace logging:
+#   - dev-reset.sh sets LIBOPAQUE_DEFINES="-DTRACE" for verbose debug output
+#   - local-deploy.sh / test-deploy.sh leave it empty (no trace logging)
+#   - Default: empty (production-safe, no cryptographic debug dumps in browser console)
 LIBOPRFHOME_PATH="../../liboprf/src"
-BUILD_DEFINES="-DTRACE"
+BUILD_DEFINES="${LIBOPAQUE_DEFINES:-}"
 
 # Function to print status messages
 print_status() {

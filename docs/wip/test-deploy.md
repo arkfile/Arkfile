@@ -92,6 +92,14 @@ deSEC is a standalone DNS hosting service, not tied to any VPS provider. You poi
 - Preserve original user context (SUDO_USER) for Go operations
 - Fix Go file ownership (fix_go_ownership from build-config.sh)
 - Check for existing C libraries (skip rebuild if present, unless --force-rebuild-all)
+- IMPORTANT: Do NOT set LIBOPAQUE_DEFINES (leave unset/empty)
+    - This builds libopaque WASM without -DTRACE, so no cryptographic debug
+      dumps appear in the browser console during OPAQUE authentication
+    - dev-reset.sh sets LIBOPAQUE_DEFINES="-DTRACE" for development;
+      test-deploy.sh must NOT do this
+    - If the VPS was previously used for dev builds, use --force-rebuild-all
+      to recompile WASM without trace logging (the flag is baked into the
+      WASM binary at compile time)
 - Force fresh TypeScript rebuild:
     - Remove client/static/js/.buildcache
     - Remove client/static/js/dist/*
@@ -218,9 +226,7 @@ This is the major new component vs. dev-reset.sh.
 ```
 Decision: Bare-metal Caddy vs. Container Caddy
 
-For beta, use bare-metal Caddy with custom build (simpler, matches
-the rest of the bare-metal systemd setup). Container deployment is
-a separate future effort (docs/wip/podman.md).
+For beta, use bare-metal Caddy with custom build (simpler, matches the rest of the bare-metal systemd setup). Container deployment is a separate future effort (docs/wip/podman.md).
 
 A. Build custom Caddy with deSEC module:
     - Use xcaddy to build Caddy with github.com/caddy-dns/desec
@@ -420,6 +426,7 @@ After all services are running, output instructions for admin bootstrap:
 | **ADMIN_DEV_TEST_API_ENABLED** | true | false |
 | **DEBUG_MODE** | true | false |
 | **LOG_LEVEL** | debug | info |
+| **WASM trace logging** | LIBOPAQUE_DEFINES="-DTRACE" | Unset (no trace) |
 | **REQUIRE_APPROVAL** | false | true |
 | **CORS_ALLOWED_ORIGINS** | https://localhost:8443 | https://test.arkfile.net |
 | **Credentials** | Random (dev prefix) | Random (beta prefix) |
