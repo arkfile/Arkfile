@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the design for `scripts/test-deploy.sh`, a first-time deployment script for standing up Arkfile on a real VPS with a real domain (`test.arkfile.net`). It is modeled after the battle-tested `dev-reset.sh` (which passes 100% of e2e tests) but adapted for a non-destructive, production-oriented, TLS 1.3-required deployment with Let's Encrypt certificates via Caddy and deSEC DNS challenge.
+This document outlines the design for `scripts/test-deploy.sh`, a first-time deployment script for standing up Arkfile on a real VPS with a real domain (e.g. `test.arkfile.net`). It is modeled after the battle-tested `dev-reset.sh` (which passes 100% of e2e tests) but adapted for a non-destructive, production-oriented, TLS 1.3-required deployment with Let's Encrypt certificates via Caddy and deSEC DNS challenge.
 
 ## Scope and Non-Goals
 
@@ -11,7 +11,7 @@ This document outlines the design for `scripts/test-deploy.sh`, a first-time dep
 - Real domain TLS via Caddy + deSEC DNS-01 challenge (Let's Encrypt)
 - Admin bootstrap flow (no dev admin seeding)
 - All services running as systemd units under the `arkfile` user
-- MinIO as local S3-compatible storage backend (single-node beta)
+- SeaweedFS as local S3-compatible storage backend (single-node beta, Apache 2.0 license)
 - rqlite as database (single-node beta)
 - Security hardened (no debug mode, no dev test API, proper rate limiting)
 
@@ -19,7 +19,6 @@ This document outlines the design for `scripts/test-deploy.sh`, a first-time dep
 - Container/Podman deployment (documented separately in `docs/wip/podman.md`)
 - Multi-node rqlite clusters
 - External S3 backends (Wasabi, B2, etc.)
-- SeaweedFS migration
 - Automated CI/CD pipeline
 
 ## Prerequisites
@@ -29,18 +28,27 @@ Before running `test-deploy.sh`, the target VPS must have:
 1. **OS**: Debian 12+, Ubuntu 22.04+, Alma/Rocky 9+, or Fedora 39+
 2. **Hardware**: Minimum 2 vCPU, 4GB RAM, 20GB storage
 3. **Network**:
-   - Ports 80 and 443 open (for Caddy/Let's Encrypt)
-   - Port 8443 open (for Arkfile direct TLS -- Caddy proxies to this)
-   - DNS A record for `test.arkfile.net` pointing to the VPS IP
+   - Port 443 open (for Caddy to serve HTTPS to users)
+   - Port 80 is OPTIONAL (only for Caddy's automatic HTTP-to-HTTPS redirect; the deSEC DNS-01 challenge does NOT use port 80 -- it validates via DNS TXT records, so port 80 can remain closed)
+   - Port 8443 should NOT be publicly accessible (Caddy proxies to it internally on localhost)
+   - DNS A record for the intended domain, e.g. `test.arkfile.net`, pointing to the VPS IP
 4. **System packages** (script will verify/install):
-   - Go 1.24+ (from package manager or manual install)
+   - Go 1.26+ (from package manager or manual install)
    - gcc, make, cmake, pkg-config, git
    - libsodium-dev (or libsodium-devel on RHEL-family)
    - openssl, curl, ca-certificates
    - Bun (for TypeScript compilation)
 5. **Caddy** installed with deSEC DNS module (custom build -- see Section 7)
-6. **deSEC API token** for `arkfile.net` DNS management
+6. **deSEC API token** for primary domain, e.g. `arkfile.net`, DNS management (see "About deSEC" below)
 7. **The Arkfile repository** cloned to the VPS
+
+### About deSEC
+
+deSEC (desec.io) is a free, privacy-focused DNS hosting service run by deSEC e.V., a German non-profit based in Berlin, operational since ~2019 and used by privacy-oriented projects and infrastructure providers. If deSEC ever went away, the Caddy DNS challenge plugin is modular -- swapping to any of the ~30+ supported providers (Cloudflare, Route53, Porkbun, Gandi, etc.) requires rebuilding Caddy with a different `caddy-dns/*` module and changing 2-3 lines in the Caddyfile, a ~15 minute migration. Alternatively, you can fall back to HTTP-01 challenge (requires port 80) or bring your own certs via certbot.
+
+### Multi-VPS / Multi-Provider
+
+deSEC is a standalone DNS hosting service, not tied to any VPS provider. You point your registrar's nameservers to deSEC, and deSEC manages all DNS records centrally. You can then point `test.arkfile.net` to VPS-A (provider 1) and `arkfile.net` to VPS-B (provider 2) -- each VPS runs its own Caddy with the same deSEC API token and independently obtains its own Let's Encrypt certificate via DNS-01.
 
 ## Script Outline: test-deploy.sh
 
@@ -52,7 +60,7 @@ Before running `test-deploy.sh`, the target VPS must have:
     --domain <domain>          (required, e.g. "test.arkfile.net")
     --desec-token <token>      (required, deSEC API token)
     --admin-username <name>    (required, production admin username)
-    --storage-backend <type>   (optional, default: "local-minio")
+    --storage-backend <type>   (optional, default: "local-seaweedfs")
     --force-rebuild-all        (optional, rebuild C libraries)
     --force-rebuild-rqlite     (optional, rebuild rqlite)
     -h / --help
@@ -122,7 +130,7 @@ Before running `test-deploy.sh`, the target VPS must have:
     - Verify ARKFILE_MASTER_KEY is in /opt/arkfile/etc/secrets.env
 - Generate internal TLS certificates (for inter-service communication):
     - Run scripts/setup/04-setup-tls-certs.sh
-    - These are self-signed certs for Arkfile<->rqlite, Arkfile<->MinIO internal TLS
+    - These are self-signed certs for Arkfile<->rqlite internal TLS
     - Public-facing TLS is handled by Caddy + Let's Encrypt (Step 7)
 - Set ownership and permissions:
     - chown -R arkfile:arkfile /opt/arkfile
@@ -155,9 +163,9 @@ Generate /opt/arkfile/etc/secrets.env with:
     TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.crt
     TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.key
 
-    # Storage Configuration - Generic S3 (local MinIO backend)
+    # Storage Configuration - Generic S3 (local SeaweedFS backend)
     STORAGE_PROVIDER=generic-s3
-    S3_ENDPOINT=http://localhost:9000
+    S3_ENDPOINT=http://localhost:9332
     S3_ACCESS_KEY=arkfile-beta
     S3_SECRET_KEY=<random: openssl rand -hex 16>
     S3_BUCKET=arkfile-beta
@@ -165,10 +173,8 @@ Generate /opt/arkfile/etc/secrets.env with:
     S3_FORCE_PATH_STYLE=true
     S3_USE_SSL=false
 
-    # MinIO Server Configuration
-    MINIO_ROOT_USER=arkfile-beta
-    MINIO_ROOT_PASSWORD=<same as S3_SECRET_KEY>
-    MINIO_SSE_AUTO_ENCRYPTION=off
+Also generate /opt/arkfile/etc/seaweedfs-s3.json with S3 credentials
+(see docs/wip/swfs-now.md for format)
 
     # Admin Configuration
     ADMIN_USERNAMES=<admin-username from CLI arg>
@@ -296,13 +302,13 @@ Key design decisions for the Caddyfile:
 - TLS 1.3 only, P-384 keys, strong security headers
 - No HTTP redirect block needed -- Caddy auto-redirects HTTP->HTTPS by default
 
-### Step 8: Setup MinIO
+### Step 8: Setup SeaweedFS
 
 ```
-- Run scripts/setup/05-setup-minio.sh
-    - Downloads/configures MinIO binary
-    - Creates MinIO data directories
-    - Installs MinIO systemd service
+- Run scripts/setup/05-setup-seaweedfs.sh
+    - Downloads/configures SeaweedFS binary
+    - Creates SeaweedFS data directories (/opt/arkfile/var/lib/seaweedfs/data)
+    - Installs SeaweedFS systemd service
     - Sets ownership to arkfile:arkfile
 ```
 
@@ -320,10 +326,10 @@ Key design decisions for the Caddyfile:
 ```
 - systemctl daemon-reload
 
-A. Start MinIO:
-    - systemctl start minio
-    - systemctl enable minio
-    - Verify: systemctl is-active minio
+A. Start SeaweedFS:
+    - systemctl start seaweedfs
+    - systemctl enable seaweedfs
+    - Verify: systemctl is-active seaweedfs
 
 B. Start rqlite:
     - systemctl start rqlite
@@ -359,7 +365,7 @@ B. External/public health checks:
     - TLS 1.3 is enforced (test with openssl s_client)
 
 C. Service status verification:
-    - minio: active
+    - seaweedfs: active
     - rqlite: active
     - arkfile: active
     - caddy: active
@@ -440,21 +446,21 @@ Recommendation: **Option A** -- defense in depth. The app enforces TLS 1.3 inter
 Should the script configure firewall rules (ufw/firewalld)?
 - Close all ports except 22 (SSH), 80, 443
 - Port 8443 should NOT be publicly accessible (Caddy proxies to it internally)
-- Ports 4001 (rqlite), 9000 (MinIO) should NOT be publicly accessible
+- Ports 4001 (rqlite), 9332 (SeaweedFS S3) should NOT be publicly accessible
 
 Recommendation: Yes, add a firewall step. Keep it optional with a `--skip-firewall` flag.
 
 ### 4. Storage Backend for Beta
-- **MinIO local** (current plan): Simple, all data on the VPS
+- **SeaweedFS local** (current plan): Simple, all data on the VPS, Apache 2.0 license
 - **External S3** (Wasabi/B2): Data stored externally, VPS is stateless for files
 
-Recommendation: Start with MinIO local for simplicity. Add external S3 support as a future `--storage-backend` option.
+Recommendation: Start with SeaweedFS local for simplicity. Add external S3 support as a future `--storage-backend` option.
 
 ### 5. Backup Strategy
 Beta data will be real (even if limited). Need at minimum:
 - rqlite database backup (cron job)
 - Master key backup (manual, offline)
-- MinIO data backup (optional for beta)
+- SeaweedFS data backup (optional for beta)
 
 Recommendation: Document manual backup procedures in the output. Automate in a future iteration.
 

@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# OUTDATED, LIKELY TO BE DEPRECATED IN FAVOR OF 'test-deploy.sh'
+
 # Quick Start Script for Arkfile - Get everything running quickly
 # This script sets up a complete working Arkfile system for testing
 

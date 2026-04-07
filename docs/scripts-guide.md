@@ -13,7 +13,6 @@ For new users, start with these main entry points:
 
 ```
 scripts/
-├── quick-start.sh                    # Main entry point for quick setup
 ├── complete-setup-test.sh            # Complete setup with testing
 ├── dev-reset.sh                      # Development environment reset
 ├── setup/                            # Setup and deployment scripts
@@ -59,7 +58,7 @@ scripts/
 
 ### Main Entry Points
 
-#### `quick-start.sh`
+#### `quick-start.sh` [DEPRECATED]
 **Purpose**: Get Arkfile running quickly with minimal configuration  
 **Usage**: `./scripts/quick-start.sh`  
 **What it does**:
@@ -305,7 +304,7 @@ go build -o totp-generator totp-generator.go
 
 ### New Installation
 ```bash
-# Quick setup (recommended)
+# Quick setup [DEPRECATED]
 ./scripts/quick-start.sh
 
 # Or with testing

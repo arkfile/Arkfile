@@ -151,7 +151,7 @@ The system uses rqlite, a distributed SQLite database, for all metadata storage.
 **Best for:** First-time users, development, testing
 
 ```bash
-# Single command setup
+# Single command setup [DEPRECATED]
 ./scripts/quick-start.sh
 
 # Check if everything is working

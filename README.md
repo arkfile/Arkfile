@@ -19,19 +19,20 @@ Because of this privacy-first design, only you – and anyone with whom you choo
 5. **Runs anywhere** – one binary, no external database. (Arkfile uses the lightweight rqlite engine under the hood.)  
 6. **Open source** – anyone can inspect or improve the code.
 
-## 3. One-Minute Quick Start
+## 3. Local Dev Test Quick Start
 
 ```bash
-./scripts/quick-start.sh
+sudo ./scripts/dev-reset.sh
 ```
 
 The script will:
 
+* Install all dependencies
+* Set up arkfile system user
 * Start a local MinIO bucket  
 * Start a single-node rqlite database  
-* Launch the web UI at http://localhost:8080
-
-Once it finishes, open the URL and create your first account.
+* Start arkfile app
+* Create arkfile-dev-admin user
 
 ## 4. Key Concepts (Glossary)
 

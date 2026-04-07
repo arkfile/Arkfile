@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# OUTDATED/DEPRECATED LIKELY TO BE REPLACED BY 'test-deploy.sh'
+
 # Integration Test Script for Arkfile Phase 4
 # This script builds the application and runs comprehensive integration tests
 # It can also perform a complete system setup with user creation and deployment
