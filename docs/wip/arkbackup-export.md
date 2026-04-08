@@ -74,7 +74,7 @@ Offset    Size        Field                Description
 
 ### `GET /api/files/:fileId/export`
 
-**Authentication:** JWT (user must own the file)
+**Authentication:** JWT + TOTP (user must own the file)
 
 **Response:** Streaming binary `.arkbackup` file
 
@@ -106,17 +106,22 @@ Content-Length: <total bundle size>
 - 404 if file not found or not owned by user
 - 500 if S3 read fails (with cleanup)
 
-### `GET /api/admin/files/:fileId/export` (Optional)
+### `GET /api/admin/files/:fileId/export`
 
-Same behavior but accessible by admin for any user's file. For disaster recovery when the user cannot log in.
+**Authentication:** JWT + Admin privileges
+
+Same behavior but accessible by admin for any user's file. For disaster recovery when the user cannot log in. The admin can export any user's file, but the admin CANNOT decrypt it (they don't know the user's password). The bundle is useless without the password.
 
 ### Route Registration
 
 In `handlers/route_config.go`:
 ```go
-files.GET("/:fileId/export", handlers.ExportFile)
-// Optional admin route:
-admin.GET("/files/:fileId/export", handlers.AdminExportFile)
+// User export routes (TOTP-protected group):
+totpProtectedGroup.GET("/api/files/:fileId/export", handlers.ExportFile)
+totpProtectedGroup.POST("/api/files/:fileId/export-token", handlers.CreateExportToken)
+
+// Admin export route:
+adminGroup.GET("/files/:fileId/export", handlers.AdminExportFile)
 ```
 
 ---
@@ -251,21 +256,22 @@ Step 2: Obtain Account Key
   - If --use-agent: read from agent Unix socket
   - If --password-stdin: read first line as account password
   - Otherwise: prompt "Enter your account password: " interactively (no echo)
-  - Derive account key: argon2id(password, sha256(username), params)
-    - Parameters from crypto/argon2id-params.json
-    - Salt = SHA-256(username) truncated to configured salt length
+  - Derive account key using crypto.DeriveAccountPasswordKey(password, username)
+    - Parameters from crypto/argon2id-params.json (embedded at build time)
+    - Salt = SHA-256("arkfile-account-key-salt:{username}") (32 bytes, via GenerateUserKeySalt)
 
 Step 3: Unwrap FEK
   - Base64-decode encrypted_fek from metadata
   - Strip 2-byte envelope header [version][keyType]
   - Verify keyType matches password_type ("account"=0x01, "custom"=0x02)
   - If password_type = "account":
-    - Decrypt with account key via AES-256-GCM → 32-byte FEK
+    - Decrypt with account key via AES-256-GCM -> 32-byte FEK
   - If password_type = "custom":
     - If --password-stdin: read second line as custom file password
     - Otherwise: prompt "Enter the file password: " interactively (no echo)
-    - Derive custom KEK: argon2id(custom_password, sha256(username), params)
-    - Decrypt with custom KEK via AES-256-GCM → 32-byte FEK
+    - Derive custom KEK using crypto.DeriveCustomPasswordKey(custom_password, username)
+      - Salt = SHA-256("arkfile-custom-key-salt:{username}") (32 bytes, via GenerateUserKeySalt)
+    - Decrypt with custom KEK via AES-256-GCM -> 32-byte FEK
 
 Step 4: Decrypt File Data
   - Seek to blob offset in bundle (10 + header_length)
@@ -284,7 +290,7 @@ Step 5: Verify & Report
   - Print results:
     "Decrypted: <original_filename>"
     "SHA-256: <computed_hash>"
-    "Verified: ✓ (matches encrypted metadata)" or "MISMATCH: ✗"
+    "Verified: [OK] (matches encrypted metadata)" or "MISMATCH: [X]"
 ```
 
 ### Chunk Splitting Logic
@@ -395,7 +401,7 @@ Browser users can export `.arkbackup` bundles directly from the file list UI. Si
 
 ### Large File Download Challenge
 
-The existing browser download uses `fetch()` → `Blob` → `createObjectURL()`, which buffers the entire response in browser memory. For a 1GB `.arkbackup` bundle, this would consume 1GB of browser RAM — unacceptable.
+The existing browser download uses `fetch()` -> `Blob` -> `createObjectURL()`, which buffers the entire response in browser memory. For a 1GB `.arkbackup` bundle, this would consume 1GB of browser RAM — unacceptable.
 
 **Solution: Short-lived download token**
 
@@ -482,7 +488,7 @@ In `client/static/js/src/files/list.ts`, add an export button for each file in t
 const exportBtn = document.createElement('button');
 exportBtn.className = 'btn btn-sm btn-outline';
 exportBtn.title = 'Export encrypted backup (.arkbackup)';
-exportBtn.textContent = '📦 Export';
+exportBtn.textContent = 'Export Backup';
 exportBtn.addEventListener('click', () => exportBackup(file.file_id));
 actionCell.appendChild(exportBtn);
 ```
@@ -523,13 +529,6 @@ test('export encrypted backup from browser', async ({ page }) => {
 });
 ```
 
-### Additional Server Routes
-
-In `handlers/route_config.go`, add the token endpoint:
-```go
-files.POST("/:fileId/export-token", handlers.CreateExportToken)
-```
-
 ---
 
 ## Files Changed / Created
@@ -537,12 +536,12 @@ files.POST("/:fileId/export-token", handlers.CreateExportToken)
 | File | Status | Description |
 |---|---|---|
 | **Server** | | |
-| `handlers/export.go` | **NEW** | `ExportFile` + `CreateExportToken` handlers |
-| `handlers/route_config.go` | Modified | Add export + export-token routes |
+| `handlers/export.go` | **NEW** | `ExportFile`, `AdminExportFile`, `CreateExportToken` handlers |
+| `handlers/route_config.go` | Modified | Add export, export-token, and admin export routes |
 | **CLI Client** | | |
 | `cmd/arkfile-client/export.go` | **NEW** | `export` command — downloads bundle from server |
 | `cmd/arkfile-client/offline_decrypt.go` | **NEW** | `decrypt-blob` command — offline decryption |
-| `cmd/arkfile-client/commands.go` | Modified | Add `export` and `decrypt-blob` command cases |
+| `cmd/arkfile-client/main.go` | Modified | Add `export` and `decrypt-blob` command dispatch + usage text |
 | **Browser Frontend** | | |
 | `client/static/js/src/files/export.ts` | **NEW** | Export backup helper (token + download trigger) |
 | `client/static/js/src/files/list.ts` | Modified | Add export button to file list UI |
@@ -570,9 +569,9 @@ files.POST("/:fileId/export-token", handlers.CreateExportToken)
 
 4. **Password entry:** Interactive prompt with no echo, or `--password-stdin` for automation. Never as a CLI argument.
 
-5. **Account key derivation:** Uses the same Argon2id parameters as the rest of Arkfile (from `crypto/argon2id-params.json`). The salt is `SHA-256(username)`.
+5. **Account key derivation:** Uses the same Argon2id parameters as the rest of Arkfile (from `crypto/argon2id-params.json`). The salt is `SHA-256("arkfile-account-key-salt:{username}")` (32 bytes, via `GenerateUserKeySalt`). Custom file passwords use `SHA-256("arkfile-custom-key-salt:{username}")`.
 
-6. **Admin export:** If implemented, the admin can export any user's file, but the admin CANNOT decrypt it (they don't know the user's password). The bundle is useless without the password.
+6. **Admin export:** The admin can export any user's file, but the admin CANNOT decrypt it (they don't know the user's password). The bundle is useless without the password.
 
 ---
 
