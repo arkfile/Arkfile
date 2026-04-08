@@ -542,6 +542,8 @@ test('export encrypted backup from browser', async ({ page }) => {
 | `cmd/arkfile-client/export.go` | **NEW** | `export` command — downloads bundle from server |
 | `cmd/arkfile-client/offline_decrypt.go` | **NEW** | `decrypt-blob` command — offline decryption |
 | `cmd/arkfile-client/main.go` | Modified | Add `export` and `decrypt-blob` command dispatch + usage text |
+| **Admin CLI** | | |
+| `cmd/arkfile-admin/main.go` | Modified | Add `export-file` command for admin file export |
 | **Browser Frontend** | | |
 | `client/static/js/src/files/export.ts` | **NEW** | Export backup helper (token + download trigger) |
 | `client/static/js/src/files/list.ts` | Modified | Add export button to file list UI |

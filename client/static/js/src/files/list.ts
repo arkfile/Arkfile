@@ -22,6 +22,7 @@ import { authenticatedFetch, getUsernameFromToken, getToken } from '../utils/aut
 import { showError } from '../ui/messages';
 import { downloadFile } from './download';
 import { shareFile } from './share';
+import { exportBackup } from './export';
 import {
   getAccountKey,
   decryptMetadataField,
@@ -200,8 +201,19 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
       shareFile(file.file_id, file.password_type);
     });
 
+    // Export backup button
+    const exportBtn = document.createElement('button');
+    exportBtn.textContent = 'Export Backup';
+    exportBtn.title = file.password_type === 'custom'
+      ? 'Export encrypted backup. Decrypt offline with arkfile-client using your account password and file password.'
+      : 'Export encrypted backup. Decrypt offline with arkfile-client using your account password.';
+    exportBtn.addEventListener('click', () => {
+      exportBackup(file.file_id);
+    });
+
     fileActions.appendChild(downloadBtn);
     fileActions.appendChild(shareBtn);
+    fileActions.appendChild(exportBtn);
     fileElement.appendChild(fileInfo);
     fileElement.appendChild(fileActions);
     filesList.appendChild(fileElement);

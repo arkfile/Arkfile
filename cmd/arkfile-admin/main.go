@@ -42,6 +42,7 @@ NETWORK COMMANDS (Admin API - localhost only):
     user-status       Get status of a specific user
     set-storage       Set user storage limit
     revoke-user       Revoke user access and disable account
+    export-file       Export a user's encrypted file as .arkbackup bundle
 
 SYSTEM COMMANDS:
     system-status     System status overview
@@ -224,6 +225,11 @@ func main() {
 	case "user-status":
 		if err := handleUserStatusCommand(client, config, args); err != nil {
 			logError("User status failed: %v", err)
+			os.Exit(1)
+		}
+	case "export-file":
+		if err := handleExportFileCommand(client, config, args); err != nil {
+			logError("Export file failed: %v", err)
 			os.Exit(1)
 		}
 
@@ -1290,6 +1296,92 @@ EXAMPLES:
 	fmt.Printf("Storage limit updated for user %s\n", *usernameFlag)
 	fmt.Printf("New limit: %s\n", formatFileSize(limitBytes))
 
+	return nil
+}
+
+// handleExportFileCommand exports a user's encrypted file as a .arkbackup bundle.
+// Uses the admin export endpoint which can export any user's file.
+// The admin CANNOT decrypt the bundle (they don't know the user's password).
+func handleExportFileCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("export-file", flag.ExitOnError)
+	fileID := fs.String("file-id", "", "File ID to export (required)")
+	outputPath := fs.String("output", "", "Output file path (default: <file-id>.arkbackup)")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin export-file --file-id FILE_ID [--output PATH]
+
+Export a user's encrypted file as a .arkbackup bundle for disaster recovery.
+The admin can export any user's file, but cannot decrypt it without the user's password.
+
+FLAGS:
+    --file-id ID        File ID to export (required)
+    --output PATH       Output file path (default: <file-id>.arkbackup)
+    --help             Show this help message
+
+EXAMPLES:
+    arkfile-admin export-file --file-id abc-123-def
+    arkfile-admin export-file --file-id abc-123-def --output backup.arkbackup
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *fileID == "" {
+		return fmt.Errorf("--file-id is required")
+	}
+
+	if *outputPath == "" {
+		*outputPath = *fileID + ".arkbackup"
+	}
+
+	// Load admin session
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	logVerbose("Exporting file %s as .arkbackup bundle (admin export)...", *fileID)
+
+	// Make raw HTTP request (binary response, not JSON)
+	url := fmt.Sprintf("%s/api/admin/files/%s/export", client.baseURL, *fileID)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create export request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+session.AccessToken)
+
+	resp, err := client.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("export request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("export failed (HTTP %d): %s", resp.StatusCode, string(body))
+	}
+
+	// Stream response to output file
+	outFile, err := os.OpenFile(*outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to create output file: %w", err)
+	}
+
+	written, err := io.Copy(outFile, resp.Body)
+	outFile.Close()
+	if err != nil {
+		os.Remove(*outputPath)
+		return fmt.Errorf("failed to write export bundle: %w", err)
+	}
+
+	fmt.Printf("Exported %s to %s (%d bytes)\n", *fileID, *outputPath, written)
+	fmt.Printf("Note: This bundle is encrypted and can only be decrypted by the file owner.\n")
 	return nil
 }
 
