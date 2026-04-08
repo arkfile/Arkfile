@@ -49,6 +49,8 @@ COMMANDS:
     list-files        List files with auto-decrypted filenames
     share             Manage file shares (create, list, delete, revoke)
     share download    Download a shared file (no auth required)
+    export            Export an encrypted file as a .arkbackup bundle
+    decrypt-blob      Decrypt a .arkbackup bundle offline (no network required)
     generate-test-file Generate a test file for upload testing
     logout            Logout and clear session
     agent             Manage the agent (start, stop, status)
@@ -252,6 +254,16 @@ func main() {
 	case "share":
 		if err := handleShareCommand(client, config, args); err != nil {
 			logError("Share command failed: %v", err)
+			os.Exit(1)
+		}
+	case "export":
+		if err := handleExportCommand(client, config, args); err != nil {
+			logError("Export failed: %v", err)
+			os.Exit(1)
+		}
+	case "decrypt-blob":
+		if err := handleDecryptBlobCommand(args); err != nil {
+			logError("Decrypt failed: %v", err)
 			os.Exit(1)
 		}
 	case "generate-totp":

@@ -118,6 +118,10 @@ func RegisterRoutes() {
 	publicShareGroup.GET("/:id/metadata", GetShareDownloadMetadata)     // Get metadata for shared file download
 	publicShareGroup.GET("/:id/chunks/:chunkIndex", DownloadShareChunk) // Download chunk of shared file
 
+	// File export - require authentication AND TOTP
+	totpProtectedGroup.GET("/api/files/:fileId/export", ExportFile)
+	totpProtectedGroup.POST("/api/files/:fileId/export-token", CreateExportToken)
+
 	// Credits system - user endpoints (require TOTP)
 	totpProtectedGroup.GET("/api/credits", GetUserCredits)
 
@@ -139,6 +143,9 @@ func RegisterRoutes() {
 	adminGroup.GET("/users/:username/status", AdminGetUserStatus)
 	adminGroup.PUT("/users/:username/storage", UpdateUserStorageLimit)
 	adminGroup.POST("/users/:username/revoke", AdminRevokeUser)
+
+	// File export - admin endpoints (for disaster recovery)
+	adminGroup.GET("/files/:fileId/export", AdminExportFile)
 
 	// System monitoring - admin endpoints (Phase 2: Bridge existing monitoring infrastructure)
 	adminGroup.GET("/system/status", AdminSystemStatus)
