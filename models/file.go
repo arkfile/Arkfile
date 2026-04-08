@@ -121,6 +121,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 	file := &File{}
 	var encryptedFileSha256sum string
 	var sizeBytes interface{}      // Use interface{} to handle both int64 and float64
+	var paddedSize interface{}     // Use interface{} to handle RQLite float64 returns
 	var chunkCount interface{}     // Use interface{} to handle both int64 and float64
 	var chunkSizeBytes interface{} // Use interface{} to handle both int64 and float64
 	var uploadDateStr string       // Scan as string first to handle RQLite timestamp format
@@ -138,7 +139,7 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
 		&encryptedFileSha256sum, &file.EncryptedFEK,
-		&sizeBytes, &file.PaddedSize,
+		&sizeBytes, &paddedSize,
 		&chunkCount, &chunkSizeBytes, &uploadDateStr,
 	)
 
@@ -159,6 +160,18 @@ func GetFileByFileID(db *sql.DB, fileID string) (*File, error) {
 		file.SizeBytes = 0
 	default:
 		return nil, fmt.Errorf("GetFileByFileID: unexpected type for size_bytes: %T", v)
+	}
+
+	// Convert paddedSize from interface{} to sql.NullInt64
+	switch v := paddedSize.(type) {
+	case int64:
+		file.PaddedSize = sql.NullInt64{Int64: v, Valid: true}
+	case float64:
+		file.PaddedSize = sql.NullInt64{Int64: int64(v), Valid: true}
+	case nil:
+		file.PaddedSize = sql.NullInt64{Valid: false}
+	default:
+		file.PaddedSize = sql.NullInt64{Valid: false}
 	}
 
 	// Convert chunkCount from interface{} to int64
@@ -218,6 +231,7 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 	file := &File{}
 	var encryptedFileSha256sum string
 	var sizeBytes interface{}      // Use interface{} to handle both int64 and float64
+	var paddedSize interface{}     // Use interface{} to handle RQLite float64 returns
 	var chunkCount interface{}     // Use interface{} to handle both int64 and float64
 	var chunkSizeBytes interface{} // Use interface{} to handle both int64 and float64
 	var uploadDateStr string       // Scan as string first to handle RQLite timestamp format
@@ -235,7 +249,7 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		&file.FilenameNonce, &file.EncryptedFilename,
 		&file.Sha256sumNonce, &file.EncryptedSha256sum,
 		&encryptedFileSha256sum, &file.EncryptedFEK,
-		&sizeBytes, &file.PaddedSize,
+		&sizeBytes, &paddedSize,
 		&chunkCount, &chunkSizeBytes, &uploadDateStr,
 	)
 
@@ -256,6 +270,18 @@ func GetFileByStorageID(db *sql.DB, storageID string) (*File, error) {
 		file.SizeBytes = 0
 	default:
 		return nil, fmt.Errorf("GetFileByStorageID: unexpected type for size_bytes: %T", v)
+	}
+
+	// Convert paddedSize from interface{} to sql.NullInt64
+	switch v := paddedSize.(type) {
+	case int64:
+		file.PaddedSize = sql.NullInt64{Int64: v, Valid: true}
+	case float64:
+		file.PaddedSize = sql.NullInt64{Int64: int64(v), Valid: true}
+	case nil:
+		file.PaddedSize = sql.NullInt64{Valid: false}
+	default:
+		file.PaddedSize = sql.NullInt64{Valid: false}
 	}
 
 	// Convert chunkCount from interface{} to int64
@@ -334,6 +360,7 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 		file := &File{}
 		var encryptedFileSha256sum string
 		var sizeBytes interface{}
+		var paddedSize interface{}
 		var chunkCount interface{}
 		var chunkSizeBytes interface{}
 		var uploadDateStr string
@@ -344,7 +371,7 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 			&file.FilenameNonce, &file.EncryptedFilename,
 			&file.Sha256sumNonce, &file.EncryptedSha256sum,
 			&encryptedFileSha256sum, &file.EncryptedFEK,
-			&sizeBytes, &file.PaddedSize,
+			&sizeBytes, &paddedSize,
 			&chunkCount, &chunkSizeBytes, &uploadDateStr,
 		)
 		if err != nil {
@@ -361,6 +388,18 @@ func GetFilesByOwner(db *sql.DB, ownerUsername string) ([]*File, error) {
 			file.SizeBytes = 0
 		default:
 			return nil, fmt.Errorf("unexpected type for size_bytes: %T", v)
+		}
+
+		// Convert paddedSize from interface{} to sql.NullInt64
+		switch v := paddedSize.(type) {
+		case int64:
+			file.PaddedSize = sql.NullInt64{Int64: v, Valid: true}
+		case float64:
+			file.PaddedSize = sql.NullInt64{Int64: int64(v), Valid: true}
+		case nil:
+			file.PaddedSize = sql.NullInt64{Valid: false}
+		default:
+			file.PaddedSize = sql.NullInt64{Valid: false}
 		}
 
 		// Convert chunkCount from interface{} to int64

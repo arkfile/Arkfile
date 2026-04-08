@@ -369,7 +369,8 @@ func UploadChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk number")
 	}
 
-	// Verify session exists and belongs to user
+	// Verify session exists and belongs to user.
+	// Numeric columns use interface{} because rqlite may return int64 or float64.
 	var (
 		ownerUsername   string
 		fileID          string
@@ -377,19 +378,44 @@ func UploadChunk(c echo.Context) error {
 		storageUploadID sql.NullString
 		status          string
 		totalChunks     int
-		totalSize       int64
-		paddedSize      int64
+		totalSizeRaw    interface{}
+		paddedSizeRaw   interface{}
 	)
 
 	err = database.DB.QueryRow(
 		"SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks, total_size, padded_size FROM upload_sessions WHERE id = ?",
 		sessionID,
-	).Scan(&ownerUsername, &fileID, &storageID, &storageUploadID, &status, &totalChunks, &totalSize, &paddedSize)
+	).Scan(&ownerUsername, &fileID, &storageID, &storageUploadID, &status, &totalChunks, &totalSizeRaw, &paddedSizeRaw)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
 	} else if err != nil {
+		logging.ErrorLogger.Printf("UploadChunk: failed to read session %s: %v", sessionID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get session details")
+	}
+
+	// Convert total_size from interface{} to int64
+	var totalSize int64
+	switch v := totalSizeRaw.(type) {
+	case int64:
+		totalSize = v
+	case float64:
+		totalSize = int64(v)
+	default:
+		logging.ErrorLogger.Printf("UploadChunk: unexpected type %T for total_size in session %s", totalSizeRaw, sessionID)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read session total_size")
+	}
+
+	// Convert padded_size from interface{} to int64
+	var paddedSize int64
+	switch v := paddedSizeRaw.(type) {
+	case int64:
+		paddedSize = v
+	case float64:
+		paddedSize = int64(v)
+	default:
+		logging.ErrorLogger.Printf("UploadChunk: unexpected type %T for padded_size in session %s", paddedSizeRaw, sessionID)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read session padded_size")
 	}
 
 	// Verify ownership
