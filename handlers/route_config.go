@@ -118,13 +118,6 @@ func RegisterRoutes() {
 	publicShareGroup.GET("/:id/metadata", GetShareDownloadMetadata)     // Get metadata for shared file download
 	publicShareGroup.GET("/:id/chunks/:chunkIndex", DownloadShareChunk) // Download chunk of shared file
 
-	// File encryption key management - require TOTP
-	totpProtectedGroup.POST("/api/files/:fileId/update-encryption", UpdateEncryption)
-	totpProtectedGroup.GET("/api/files/:fileId/keys", ListKeys)
-	totpProtectedGroup.DELETE("/api/files/:fileId/keys/:keyId", DeleteKey)
-	totpProtectedGroup.PATCH("/api/files/:fileId/keys/:keyId", UpdateKey)
-	totpProtectedGroup.POST("/api/files/:fileId/keys/:keyId/set-primary", SetPrimaryKey)
-
 	// Credits system - user endpoints (require TOTP)
 	totpProtectedGroup.GET("/api/credits", GetUserCredits)
 

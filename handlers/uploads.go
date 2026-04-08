@@ -549,6 +549,7 @@ func CompleteUpload(c echo.Context) error {
 	// interface{} scans for numeric fields (rqlite may return int64 or float64)
 	var totalSizeRaw interface{}
 	var chunkSizeRaw interface{}
+	var paddedSizeRaw interface{}
 
 	// []byte scans for metadata fields to prevent double-encoding during JSON marshaling
 	var encryptedFilenameBytes []byte
@@ -559,13 +560,13 @@ func CompleteUpload(c echo.Context) error {
 
 	err := database.DB.QueryRow(
 		`SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks,
-                total_size, chunk_size, password_hint, password_type, encrypted_filename, filename_nonce,
+                total_size, chunk_size, padded_size, password_hint, password_type, encrypted_filename, filename_nonce,
                 encrypted_sha256sum, sha256sum_nonce, encrypted_fek
          FROM upload_sessions WHERE id = ?`,
 		sessionID,
 	).Scan(
 		&ownerUsername, &fileID, &storageID, &storageUploadID, &status, &totalChunks,
-		&totalSizeRaw, &chunkSizeRaw, &passwordHint, &passwordType,
+		&totalSizeRaw, &chunkSizeRaw, &paddedSizeRaw, &passwordHint, &passwordType,
 		&encryptedFilenameBytes, &filenameNonceBytes, &encryptedSha256sumBytes, &sha256sumNonceBytes, &encryptedFekBytes,
 	)
 
@@ -608,7 +609,23 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to read chunk_size: unexpected type %T", chunkSizeRaw))
 	}
 
-	logging.InfoLogger.Printf("CompleteUpload: session %s read OK. Status: '%s', declared size: %d", sessionID, status, declaredSize)
+	// Convert padded_size with explicit type handling
+	var paddedSize int64
+	switch v := paddedSizeRaw.(type) {
+	case int64:
+		paddedSize = v
+	case float64:
+		paddedSize = int64(v)
+	case nil:
+		// padded_size should always be set; fail if missing
+		logging.ErrorLogger.Printf("CompleteUpload: padded_size is NULL for session %s", sessionID)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Missing padded_size in upload session")
+	default:
+		logging.ErrorLogger.Printf("CompleteUpload: unexpected type %T for padded_size in session %s", paddedSizeRaw, sessionID)
+		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to read padded_size: unexpected type %T", paddedSizeRaw))
+	}
+
+	logging.InfoLogger.Printf("CompleteUpload: session %s read OK. Status: '%s', declared size: %d, padded size: %d", sessionID, status, declaredSize, paddedSize)
 
 	// Step 2: Envelope handling removed - envelope is now part of chunk 0
 
@@ -670,11 +687,15 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Hash calculation failed - no streaming state found")
 	}
 
-	// Step 5: Complete the multipart upload in storage (using streaming hash instead of storage-calculated hash)
-	// Use standard CompleteMultipartUpload since envelope is now part of chunk 0
-	err = storage.Provider.CompleteMultipartUpload(c.Request().Context(), storageID.String, storageUploadID.String, parts)
+	// Step 5: Complete the multipart upload in storage with padding appended.
+	// Padding is always applied to obscure the exact encrypted file size in the
+	// storage backend. The padded_size was calculated during session creation
+	// using tiered random padding (see utils/padding.go). The padding part
+	// contains crypto-random bytes and is uploaded as a final multipart part.
+	// On download, only size_bytes worth of data is served back to the client.
+	err = storage.Provider.CompleteMultipartUploadWithPadding(c.Request().Context(), storageID.String, storageUploadID.String, parts, declaredSize, paddedSize)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to complete storage upload via storage provider: %v", err)
+		logging.ErrorLogger.Printf("Failed to complete storage upload with padding via storage provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
 	}
 
@@ -731,11 +752,12 @@ func CompleteUpload(c echo.Context) error {
 	}
 
 	// Create the final file metadata record with chunk info for resumable downloads.
-	// size_bytes = actualStoredSize (the encrypted blob size on disk).
+	// size_bytes = actualStoredSize (the encrypted ciphertext size, used for chunk byte-range calculations on download).
+	// padded_size = paddedSize (the actual S3 object size, which includes crypto-random padding appended at CompleteMultipartUploadWithPadding).
 	_, err = tx.Exec(`
-		INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_file_sha256sum, encrypted_fek, size_bytes, chunk_count, chunk_size_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, encryptedFek, actualStoredSize, chunkCount, chunkSizeBytes,
+		INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_file_sha256sum, encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, encryptedFek, actualStoredSize, paddedSize, chunkCount, chunkSizeBytes,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "file_id") {
