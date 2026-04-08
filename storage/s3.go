@@ -40,12 +40,7 @@ func (w *awsObjectWrapper) Close() error {
 
 func (w *awsObjectWrapper) Stat() (ObjectInfo, error) {
 	return ObjectInfo{
-		// Key is not available in GetObjectOutput, but usually known by caller.
-		// We might need to pass it or store it if strictly required by interface usage.
-		// For now, we'll leave it empty or see if we can get it.
-		// Actually, the interface definition of Stat() returns ObjectInfo.
-		// The caller of GetObject usually knows the key.
-		// Let's see if we can populate what we have.
+		// Key is not included in GetObjectOutput; the caller knows the key.
 		Size:         *w.ContentLength,
 		ETag:         aws.ToString(w.ETag),
 		LastModified: *w.LastModified,
@@ -158,9 +153,20 @@ func InitS3() error {
 		cfg.EndpointResolverWithOptions = endpointResolver
 	}
 
+	// Detect TLS from endpoint URL. Non-TLS connections (e.g., localhost
+	// SeaweedFS on http://localhost:9332) require relaxed checksum policy
+	// so non-seekable streams (like the padding generator) can be uploaded
+	// without buffering into memory. TLS connections use trailing checksums
+	// natively and keep the default (stricter) behavior.
+	endpoint := os.Getenv("S3_ENDPOINT")
+	endpointIsTLS := len(endpoint) >= 8 && endpoint[:8] == "https://"
+
 	// Create S3 client
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.UsePathStyle = usePathStyle
+		if !endpointIsTLS {
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		}
 	})
 
 	// Create Presign client
@@ -204,7 +210,7 @@ func (s *S3AWSStorage) PutObject(ctx context.Context, objectName string, reader 
 	input := &s3.PutObjectInput{
 		Bucket:        aws.String(s.bucketName),
 		Key:           aws.String(objectName),
-		Body:          reader, // aws-sdk-go-v2 handles io.Reader
+		Body:          reader,
 		ContentLength: aws.Int64(objectSize),
 		ContentType:   aws.String(opts.ContentType),
 		Metadata:      opts.UserMetadata,
@@ -218,7 +224,7 @@ func (s *S3AWSStorage) PutObject(ctx context.Context, objectName string, reader 
 	return UploadInfo{
 		Key:  objectName,
 		ETag: aws.ToString(output.ETag),
-		Size: objectSize, // S3 PutObject output doesn't return size, assume success means full size
+		Size: objectSize,
 	}, nil
 }
 
@@ -290,16 +296,12 @@ func (s *S3AWSStorage) InitiateMultipartUpload(ctx context.Context, objectName s
 	return aws.ToString(output.UploadId), nil
 }
 
-// UploadPart uploads a part in a multipart upload
+// UploadPart uploads a part in a multipart upload.
+// For TLS connections, any io.Reader works (SDK uses trailing checksums).
+// For non-TLS connections, the SDK client is configured with
+// RequestChecksumCalculationWhenRequired so non-seekable readers
+// (e.g., the padding generator) work without memory buffering.
 func (s *S3AWSStorage) UploadPart(ctx context.Context, objectName, uploadID string, partNumber int, reader io.Reader, size int64) (CompletePart, error) {
-	// AWS SDK v2 requires a Seekable reader for UploadPart if possible, but io.Reader works too.
-	// However, for correct signing, it might need to read the body.
-	// Let's try passing the reader directly.
-
-	// Note: AWS SDK v2 might require reading the whole body into memory if it's not a file or bytes.Reader/Buffer
-	// to calculate hash for signing. But we are streaming.
-	// Hopefully the SDK handles streaming uploads correctly.
-
 	input := &s3.UploadPartInput{
 		Bucket:        aws.String(s.bucketName),
 		Key:           aws.String(objectName),

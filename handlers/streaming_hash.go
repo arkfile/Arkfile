@@ -34,40 +34,9 @@ func (s *StreamingHashState) WriteChunk(data []byte) ([]byte, error) {
 	return data, nil
 }
 
-// GetCurrentHash returns the current hash state as a hex string (for debugging)
-func (s *StreamingHashState) GetCurrentHash() string {
-	// Create a copy of the current hash state to avoid affecting the running hash
-	hashCopy := sha256.New()
-	hashCopy.Write(s.hash.Sum(nil)[:0]) // This won't work as intended
-
-	// Better approach: we'll store the hash state in the database after each chunk
-	// and rebuild it when needed. For now, return empty string as this is just for debugging
-	return ""
-}
-
 // FinalizeHash completes the hash calculation and returns the final SHA256 hex string
 func (s *StreamingHashState) FinalizeHash() string {
-	finalHash := s.hash.Sum(nil)
-	return hex.EncodeToString(finalHash)
-}
-
-// UpdateHashInDatabase stores the current hash state in the database
-// This would require serializing the hash state, which is complex
-// Instead, we'll maintain the hash purely in memory during the upload session
-func (s *StreamingHashState) UpdateHashInDatabase() error {
-	// For now, we'll just maintain the hash in memory
-	// In a production system, we might want to persist intermediate hash states
-	// for crash recovery, but that's complex with Go's hash interface
-	return nil
-}
-
-// LoadHashFromDatabase would restore a hash state from the database
-// This is complex because hash.Hash doesn't expose its internal state
-// For simplicity, we'll maintain hash state only in memory during upload
-func LoadHashFromDatabase(sessionID string) (*StreamingHashState, error) {
-	// Return a new hash state - in practice, this means uploads must complete
-	// in a single session without server restarts
-	return NewStreamingHashState(sessionID), nil
+	return hex.EncodeToString(s.hash.Sum(nil))
 }
 
 // StreamingHashTeeReader wraps an io.Reader to calculate hash while reading
