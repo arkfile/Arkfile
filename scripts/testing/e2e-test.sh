@@ -897,7 +897,67 @@ phase_8_file_operations() {
 
     rm -f "$downloaded_file"
 
-    # 8.7: Duplicate upload rejection (dedup via digest cache)
+    # 8.7: Export as .arkbackup bundle
+    section "Exporting file as .arkbackup bundle"
+    local export_bundle="$TEST_DATA_DIR/e2e-export-$$.arkbackup"
+    local export_result export_exit_code
+    safe_exec export_result export_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        export --file-id "$UPLOADED_FILE_ID" --output "$export_bundle"
+
+    if [ $export_exit_code -eq 0 ]; then
+        record_test "File export (.arkbackup)" "PASS"
+    else
+        error "File export failed:"; echo "$export_result"
+        record_test "File export (.arkbackup)" "FAIL"
+    fi
+
+    # 8.8: Verify bundle size is reasonable
+    local bundle_size
+    bundle_size=$(stat -c%s "$export_bundle" 2>/dev/null || echo 0)
+    if [ "$bundle_size" -gt 1000 ]; then
+        record_test "Bundle size check" "PASS"
+        info "Bundle created: $bundle_size bytes"
+    else
+        error "Bundle file too small: $bundle_size bytes"
+        record_test "Bundle size check" "FAIL"
+    fi
+
+    # 8.9: Offline decrypt the bundle (no network needed for decryption)
+    section "Decrypting bundle offline"
+    local decrypt_output="$TEST_DATA_DIR/e2e-decrypt-$$.dat"
+    local decrypt_result decrypt_exit_code
+    safe_exec decrypt_result decrypt_exit_code \
+        bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
+        decrypt-blob \
+        --bundle '$export_bundle' \
+        --username '$TEST_USERNAME' \
+        --password-stdin \
+        --output '$decrypt_output'"
+
+    if [ $decrypt_exit_code -eq 0 ]; then
+        record_test "Offline decrypt (.arkbackup)" "PASS"
+    else
+        error "Offline decrypt failed:"; echo "$decrypt_result"
+        record_test "Offline decrypt (.arkbackup)" "FAIL"
+    fi
+
+    # 8.10: Verify decrypted file matches original plaintext
+    assert_sha256_matches "$decrypt_output" "$UPLOADED_FILE_SHA256" "Offline decrypt SHA-256 integrity"
+
+    local decrypted_size
+    decrypted_size=$(stat -c%s "$decrypt_output" 2>/dev/null || echo 0)
+    if [ "$decrypted_size" -eq 52428800 ]; then
+        record_test "Offline decrypt file size" "PASS"
+        info "Decrypted file size matches original: $decrypted_size bytes"
+    else
+        error "Size mismatch! Expected: 52428800, Got: $decrypted_size"
+        record_test "Offline decrypt file size" "FAIL"
+    fi
+
+    rm -f "$export_bundle" "$decrypt_output"
+
+    # 8.11: Duplicate upload rejection (dedup via digest cache)
     # The test file was uploaded in 8.2 and its SHA-256 is in the agent's digest cache.
     # Re-uploading the same file without --force must fail.
     section "Re-uploading same file (dedup rejection expected)"
@@ -1307,85 +1367,7 @@ phase_10_share_operations() {
     success "Share operations phase complete"
 }
 
-# Phase 11 (insert): Offline Export and Decrypt Verification
-phase_11_export_decrypt_verification() {
-    phase "11: OFFLINE EXPORT & DECRYPT VERIFICATION"
-
-    # Re-login as test user (phase 10 logged out)
-    user_login_with_totp "Re-login for export test"
-
-    # 11.1: Export the account-password file as .arkbackup bundle
-    local export_output="$TEST_DATA_DIR/e2e-export-$$.arkbackup"
-    local decrypt_output="$TEST_DATA_DIR/e2e-decrypt-$$.dat"
-
-    section "11.1: Exporting file as .arkbackup bundle"
-    local export_result export_exit_code
-    safe_exec export_result export_exit_code \
-        $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-        export --file-id "$UPLOADED_FILE_ID" --output "$export_output"
-
-    if [ $export_exit_code -eq 0 ]; then
-        record_test "File export (.arkbackup)" "PASS"
-    else
-        error "File export failed:"; echo "$export_result"
-        record_test "File export (.arkbackup)" "FAIL"
-    fi
-
-    # 11.2: Verify bundle file exists and has reasonable size
-    section "11.2: Verifying bundle size"
-    local bundle_size
-    bundle_size=$(stat -c%s "$export_output" 2>/dev/null || echo 0)
-    if [ "$bundle_size" -gt 1000 ]; then
-        record_test "Bundle size check" "PASS"
-        info "Bundle created: $bundle_size bytes"
-    else
-        error "Bundle file too small: $bundle_size bytes"
-        record_test "Bundle size check" "FAIL"
-    fi
-
-    # 11.3: Decrypt the bundle offline using --password-stdin
-    section "11.3: Decrypting bundle offline (no network needed)"
-    local decrypt_result decrypt_exit_code
-    safe_exec decrypt_result decrypt_exit_code \
-        bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
-        decrypt-blob \
-        --bundle '$export_output' \
-        --username '$TEST_USERNAME' \
-        --password-stdin \
-        --output '$decrypt_output'"
-
-    if [ $decrypt_exit_code -eq 0 ]; then
-        record_test "Offline decrypt (.arkbackup)" "PASS"
-    else
-        error "Offline decrypt failed:"; echo "$decrypt_result"
-        record_test "Offline decrypt (.arkbackup)" "FAIL"
-    fi
-
-    # 11.4: Verify SHA-256 of decrypted file matches original plaintext
-    section "11.4: Verifying decrypted file integrity"
-    assert_sha256_matches "$decrypt_output" "$UPLOADED_FILE_SHA256" "Offline decrypt SHA-256 integrity"
-
-    # 11.5: Verify decrypted file size matches original (50MB = 52428800 bytes)
-    local decrypted_size
-    decrypted_size=$(stat -c%s "$decrypt_output" 2>/dev/null || echo 0)
-    if [ "$decrypted_size" -eq 52428800 ]; then
-        record_test "Offline decrypt file size" "PASS"
-        info "Decrypted file size matches original: $decrypted_size bytes"
-    else
-        error "Size mismatch! Expected: 52428800, Got: $decrypted_size"
-        record_test "Offline decrypt file size" "FAIL"
-    fi
-
-    # Cleanup
-    rm -f "$export_output" "$decrypt_output"
-
-    # Logout for subsequent phases
-    logout_user_session "Logout after export test"
-
-    success "Offline export & decrypt verification complete"
-}
-
-# Phase 11 (continued): Admin System Status and Negative-Access Tests
+# Phase 11: Admin System Status and Negative-Access Tests
 phase_11_admin_system_status() {
     phase "11: ADMIN SYSTEM STATUS"
 
@@ -1572,7 +1554,6 @@ main() {
     phase_8_file_operations
     phase_9_custom_password_file_operations
     phase_10_share_operations
-    phase_11_export_decrypt_verification
     phase_11_admin_system_status
     phase_12_cleanup
 
