@@ -118,9 +118,13 @@ func RegisterRoutes() {
 	publicShareGroup.GET("/:id/metadata", GetShareDownloadMetadata)     // Get metadata for shared file download
 	publicShareGroup.GET("/:id/chunks/:chunkIndex", DownloadShareChunk) // Download chunk of shared file
 
-	// File export - require authentication AND TOTP
-	totpProtectedGroup.GET("/api/files/:fileId/export", ExportFile)
+	// File export token - requires TOTP (creates short-lived download token)
 	totpProtectedGroup.POST("/api/files/:fileId/export-token", CreateExportToken)
+
+	// File export download - registered on public router because browser downloads
+	// use ?token= query param (no Authorization header). The handler validates
+	// auth internally via resolveExportAuth() which checks either JWT or token.
+	Echo.GET("/api/files/:fileId/export", ExportFile)
 
 	// Credits system - user endpoints (require TOTP)
 	totpProtectedGroup.GET("/api/credits", GetUserCredits)
