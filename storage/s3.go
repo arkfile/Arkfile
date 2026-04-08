@@ -80,66 +80,37 @@ func InitS3() error {
 		bucketName = os.Getenv("AWS_S3_BUCKET_NAME")
 	}
 
-	// Handle specific providers
-	var endpointResolver aws.EndpointResolverWithOptionsFunc
+	// Resolve endpoint URL and credentials per provider
+	var endpointURL string
 	usePathStyle := false
 
 	switch provider {
 	case ProviderWasabi:
-		endpointResolver = func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			return aws.Endpoint{
-				URL: fmt.Sprintf("https://s3.%s.wasabi.com", region),
-			}, nil
-		}
+		endpointURL = fmt.Sprintf("https://s3.%s.wasabi.com", region)
 	case ProviderVultr:
-		endpointResolver = func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			return aws.Endpoint{
-				URL: fmt.Sprintf("https://%s.vultrobjects.com", region),
-			}, nil
-		}
+		endpointURL = fmt.Sprintf("https://%s.vultrobjects.com", region)
 	case ProviderCloudflareR2:
-		endpoint := os.Getenv("CLOUDFLARE_ENDPOINT")
+		endpointURL = os.Getenv("CLOUDFLARE_ENDPOINT")
 		accessKey = os.Getenv("CLOUDFLARE_ACCESS_KEY_ID")
 		secretKey = os.Getenv("CLOUDFLARE_SECRET_ACCESS_KEY")
 		bucketName = os.Getenv("CLOUDFLARE_BUCKET_NAME")
-		endpointResolver = func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			return aws.Endpoint{
-				URL: endpoint,
-			}, nil
-		}
+	case ProviderBackblaze:
+		endpointURL = os.Getenv("BACKBLAZE_ENDPOINT")
+		accessKey = os.Getenv("BACKBLAZE_KEY_ID")
+		secretKey = os.Getenv("BACKBLAZE_APPLICATION_KEY")
+		bucketName = os.Getenv("BACKBLAZE_BUCKET_NAME")
 	case ProviderGenericS3:
-		endpoint := os.Getenv("S3_ENDPOINT")
-		if endpoint == "" {
-			// Default to localhost if not specified (dev mode)
-			endpoint = "http://localhost:9332"
+		endpointURL = os.Getenv("S3_ENDPOINT")
+		if endpointURL == "" {
+			endpointURL = "http://localhost:9332"
 		}
-
-		endpointResolver = func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			return aws.Endpoint{
-				URL:           endpoint,
-				SigningRegion: region,
-			}, nil
-		}
-
-		// Check if path style is forced (default true for generic S3)
 		usePathStyle = true
 		if forcePathStyle := os.Getenv("S3_FORCE_PATH_STYLE"); forcePathStyle == "false" {
 			usePathStyle = false
 		}
-
-	case ProviderBackblaze:
-		endpoint := os.Getenv("BACKBLAZE_ENDPOINT")
-		accessKey = os.Getenv("BACKBLAZE_KEY_ID")
-		secretKey = os.Getenv("BACKBLAZE_APPLICATION_KEY")
-		bucketName = os.Getenv("BACKBLAZE_BUCKET_NAME")
-		endpointResolver = func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-			return aws.Endpoint{
-				URL: endpoint,
-			}, nil
-		}
 	}
 
-	// Load configuration
+	// Load AWS SDK configuration
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithRegion(region),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
@@ -148,24 +119,11 @@ func InitS3() error {
 		return fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	// Apply endpoint resolver if set
-	if endpointResolver != nil {
-		cfg.EndpointResolverWithOptions = endpointResolver
-	}
-
-	// Detect TLS from endpoint URL. Non-TLS connections (e.g., localhost
-	// SeaweedFS on http://localhost:9332) require relaxed checksum policy
-	// so non-seekable streams (like the padding generator) can be uploaded
-	// without buffering into memory. TLS connections use trailing checksums
-	// natively and keep the default (stricter) behavior.
-	endpoint := os.Getenv("S3_ENDPOINT")
-	endpointIsTLS := len(endpoint) >= 8 && endpoint[:8] == "https://"
-
-	// Create S3 client
+	// Create S3 client with BaseEndpoint (replaces deprecated EndpointResolver)
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.UsePathStyle = usePathStyle
-		if !endpointIsTLS {
-			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		if endpointURL != "" {
+			o.BaseEndpoint = aws.String(endpointURL)
 		}
 	})
 
@@ -297,10 +255,8 @@ func (s *S3AWSStorage) InitiateMultipartUpload(ctx context.Context, objectName s
 }
 
 // UploadPart uploads a part in a multipart upload.
-// For TLS connections, any io.Reader works (SDK uses trailing checksums).
-// For non-TLS connections, the SDK client is configured with
-// RequestChecksumCalculationWhenRequired so non-seekable readers
-// (e.g., the padding generator) work without memory buffering.
+// Callers must provide a seekable reader (e.g., bytes.NewReader) for
+// compatibility with AWS SDK v2's SigV4 payload signing on non-TLS connections.
 func (s *S3AWSStorage) UploadPart(ctx context.Context, objectName, uploadID string, partNumber int, reader io.Reader, size int64) (CompletePart, error) {
 	input := &s3.UploadPartInput{
 		Bucket:        aws.String(s.bucketName),
@@ -357,80 +313,9 @@ func (s *S3AWSStorage) AbortMultipartUpload(ctx context.Context, objectName, upl
 	return err
 }
 
-// RemoveChunkedFile removes a file and cleans up incomplete uploads
-func (s *S3AWSStorage) RemoveChunkedFile(ctx context.Context, filename string, sessionID string) error {
-	// Remove the object
-	err := s.RemoveObject(ctx, filename, RemoveObjectOptions{})
-	if err != nil {
-		log.Printf("Warning: Failed to remove complete file %s: %v", filename, err)
-	}
-
-	// List incomplete uploads
-	input := &s3.ListMultipartUploadsInput{
-		Bucket: aws.String(s.bucketName),
-		Prefix: aws.String(filename),
-	}
-
-	output, err := s.client.ListMultipartUploads(ctx, input)
-	if err != nil {
-		log.Printf("Warning: Failed to list multipart uploads for %s: %v", filename, err)
-		return nil
-	}
-
-	for _, upload := range output.Uploads {
-		if sessionID != "" && aws.ToString(upload.UploadId) != sessionID {
-			continue
-		}
-
-		// Abort upload
-		err := s.AbortMultipartUpload(ctx, filename, aws.ToString(upload.UploadId))
-		if err != nil {
-			log.Printf("Warning: Failed to abort upload %s: %v", aws.ToString(upload.UploadId), err)
-		} else {
-			log.Printf("Aborted incomplete upload %s for %s", aws.ToString(upload.UploadId), filename)
-		}
-	}
-
-	return nil
-}
-
 // GetObjectChunk retrieves a specific chunk of an object
 func (s *S3AWSStorage) GetObjectChunk(ctx context.Context, objectName string, offset, length int64) (io.ReadCloser, error) {
 	opts := GetObjectOptions{}
 	opts.SetRange(offset, offset+length-1)
 	return s.GetObject(ctx, objectName, opts)
-}
-
-// PutObjectWithPadding uploads an object with padding
-func (s *S3AWSStorage) PutObjectWithPadding(ctx context.Context, storageID string, reader io.Reader, originalSize, paddedSize int64, opts PutObjectOptions) (UploadInfo, error) {
-	paddingSize := paddedSize - originalSize
-	paddedReader := io.MultiReader(reader, &paddingReader{size: paddingSize})
-	return s.PutObject(ctx, storageID, paddedReader, paddedSize, opts)
-}
-
-// GetObjectWithoutPadding retrieves an object without padding
-func (s *S3AWSStorage) GetObjectWithoutPadding(ctx context.Context, storageID string, originalSize int64, opts GetObjectOptions) (io.ReadCloser, error) {
-	object, err := s.GetObject(ctx, storageID, opts)
-	if err != nil {
-		return nil, err
-	}
-	return &limitedReadCloser{
-		ReadCloser: object,
-		limit:      originalSize,
-	}, nil
-}
-
-// CompleteMultipartUploadWithPadding completes a multipart upload with padding
-func (s *S3AWSStorage) CompleteMultipartUploadWithPadding(ctx context.Context, storageID, uploadID string, parts []CompletePart, originalSize, paddedSize int64) error {
-	paddingSize := paddedSize - originalSize
-	if paddingSize > 0 {
-		paddingReader := &paddingReader{size: paddingSize}
-		finalPartNumber := len(parts) + 1
-		paddingPart, err := s.UploadPart(ctx, storageID, uploadID, finalPartNumber, paddingReader, paddingSize)
-		if err != nil {
-			return fmt.Errorf("failed to upload padding part: %w", err)
-		}
-		parts = append(parts, paddingPart)
-	}
-	return s.CompleteMultipartUpload(ctx, storageID, uploadID, parts)
 }

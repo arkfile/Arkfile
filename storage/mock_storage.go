@@ -79,43 +79,11 @@ func (m *MockObjectStorageProvider) AbortMultipartUpload(ctx context.Context, ob
 	return args.Error(0)
 }
 
-// RemoveChunkedFile mocks the RemoveChunkedFile method (example)
-func (m *MockObjectStorageProvider) RemoveChunkedFile(ctx context.Context, filename string, sessionID string) error {
-	args := m.Called(ctx, filename, sessionID)
-	return args.Error(0)
-}
-
-// GetObjectChunk mocks the GetObjectChunk method (example)
+// GetObjectChunk mocks the GetObjectChunk method
 func (m *MockObjectStorageProvider) GetObjectChunk(ctx context.Context, objectName string, offset, length int64) (io.ReadCloser, error) {
 	args := m.Called(ctx, objectName, offset, length)
 	reader, _ := args.Get(0).(io.ReadCloser)
 	return reader, args.Error(1)
-}
-
-// PutObjectWithPadding mocks the PutObjectWithPadding method
-func (m *MockObjectStorageProvider) PutObjectWithPadding(ctx context.Context, storageID string, reader io.Reader, originalSize, paddedSize int64, opts PutObjectOptions) (UploadInfo, error) {
-	args := m.Called(ctx, storageID, reader, originalSize, paddedSize, opts)
-	info, _ := args.Get(0).(UploadInfo)
-	return info, args.Error(1)
-}
-
-// GetObjectWithoutPadding mocks the GetObjectWithoutPadding method
-func (m *MockObjectStorageProvider) GetObjectWithoutPadding(ctx context.Context, storageID string, originalSize int64, opts GetObjectOptions) (io.ReadCloser, error) {
-	args := m.Called(ctx, storageID, originalSize, opts)
-	reader, _ := args.Get(0).(io.ReadCloser)
-	return reader, args.Error(1)
-}
-
-// CompleteMultipartUploadWithPadding mocks the CompleteMultipartUploadWithPadding method
-func (m *MockObjectStorageProvider) CompleteMultipartUploadWithPadding(ctx context.Context, storageID, uploadID string, parts []CompletePart, originalSize, paddedSize int64) error {
-	args := m.Called(ctx, storageID, uploadID, parts, originalSize, paddedSize)
-	return args.Error(0)
-}
-
-// Phase 3: CompleteMultipartUploadWithEnvelope mocks the CompleteMultipartUploadWithEnvelope method
-func (m *MockObjectStorageProvider) CompleteMultipartUploadWithEnvelope(ctx context.Context, storageID, uploadID string, parts []CompletePart, envelope []byte, originalSize, paddedSize int64) error {
-	args := m.Called(ctx, storageID, uploadID, parts, envelope, originalSize, paddedSize)
-	return args.Error(0)
 }
 
 // Mock Stored Object

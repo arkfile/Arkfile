@@ -28,11 +28,6 @@ type ObjectStorageProvider interface {
 	CompleteMultipartUpload(ctx context.Context, objectName, uploadID string, parts []CompletePart) error
 	AbortMultipartUpload(ctx context.Context, objectName, uploadID string) error
 	GetObjectChunk(ctx context.Context, objectName string, offset, length int64) (io.ReadCloser, error)
-
-	// Padding-aware storage methods
-	PutObjectWithPadding(ctx context.Context, storageID string, reader io.Reader, originalSize, paddedSize int64, opts PutObjectOptions) (UploadInfo, error)
-	GetObjectWithoutPadding(ctx context.Context, storageID string, originalSize int64, opts GetObjectOptions) (io.ReadCloser, error)
-	CompleteMultipartUploadWithPadding(ctx context.Context, storageID, uploadID string, parts []CompletePart, originalSize, paddedSize int64) error
 }
 
 // Global object storage provider instance (will be initialized with S3-compatible backend or mock)

@@ -14,32 +14,35 @@ func NewPaddingCalculator() *PaddingCalculator {
 	return &PaddingCalculator{}
 }
 
-// CalculatePaddedSize returns the padded size for a given file size using tiered padding with randomization
+// CalculatePaddedSize returns the padded size for a given file size using
+// percentage-based block alignment with randomized jitter.
+//
+// Block size = 2% of file size (minimum 64KB). The file is rounded up to
+// the nearest block boundary, then random jitter (0 to 10% of block size)
+// is added. This gives a consistent worst-case padding overhead of ~2.2%
+// for files above 3.2MB, with the 64KB minimum floor providing size
+// obfuscation for smaller files at negligible absolute cost.
 func (p *PaddingCalculator) CalculatePaddedSize(originalSize int64) (int64, error) {
-	var blockSize int64
-
-	// Tiered padding based on file size
-	switch {
-	case originalSize < 1*1024*1024: // < 1MB
-		blockSize = 64 * 1024 // 64KB blocks
-	case originalSize < 100*1024*1024: // < 100MB
-		blockSize = 1024 * 1024 // 1MB blocks
-	case originalSize < 1024*1024*1024: // < 1GB
-		blockSize = 10 * 1024 * 1024 // 10MB blocks
-	default:
-		blockSize = 100 * 1024 * 1024 // 100MB blocks
+	// Block size = 2% of file size, minimum 64KB
+	blockSize := originalSize / 50
+	const minBlockSize int64 = 64 * 1024
+	if blockSize < minBlockSize {
+		blockSize = minBlockSize
 	}
 
-	// Generate cryptographically secure random padding (0-10% of block size)
-	maxRandom := big.NewInt(blockSize / 10)
-	randomPadding, err := rand.Int(rand.Reader, maxRandom)
+	// Cryptographically random jitter: 0 to 10% of block size
+	maxJitter := blockSize / 10
+	if maxJitter <= 0 {
+		maxJitter = 1
+	}
+	jitter, err := rand.Int(rand.Reader, big.NewInt(maxJitter))
 	if err != nil {
-		return 0, fmt.Errorf("failed to generate random padding: %w", err)
+		return 0, fmt.Errorf("failed to generate random padding jitter: %w", err)
 	}
 
-	// Round up to block size and add random component
+	// Round up to nearest block boundary and add jitter
 	padded := ((originalSize + blockSize - 1) / blockSize) * blockSize
-	return padded + randomPadding.Int64(), nil
+	return padded + jitter.Int64(), nil
 }
 
 // GeneratePaddingBytes generates cryptographically secure random padding bytes

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	cryptoRand "crypto/rand"
 	"database/sql"
 	"fmt"
 	"io"
@@ -376,12 +377,14 @@ func UploadChunk(c echo.Context) error {
 		storageUploadID sql.NullString
 		status          string
 		totalChunks     int
+		totalSize       int64
+		paddedSize      int64
 	)
 
 	err = database.DB.QueryRow(
-		"SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks FROM upload_sessions WHERE id = ?",
+		"SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks, total_size, padded_size FROM upload_sessions WHERE id = ?",
 		sessionID,
-	).Scan(&ownerUsername, &fileID, &storageID, &storageUploadID, &status, &totalChunks)
+	).Scan(&ownerUsername, &fileID, &storageID, &storageUploadID, &status, &totalChunks, &totalSize, &paddedSize)
 
 	if err == sql.ErrNoRows {
 		return echo.NewHTTPError(http.StatusNotFound, "Upload session not found")
@@ -471,26 +474,43 @@ func UploadChunk(c echo.Context) error {
 	}
 	hashStateMutex.Unlock()
 
-	// Add this chunk to the running hash calculation
+	// Add this chunk to the running hash calculation (hash only real encrypted data, not padding)
 	_, err = hashState.WriteChunk(chunkData)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to update streaming hash for session %s, chunk %d: %v", sessionID, chunkNumber, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to calculate streaming hash")
 	}
 
-	// Create a reader from the chunk data for uploading to storage
-	chunkReader := bytes.NewReader(chunkData)
+	// For the last chunk, append crypto-random padding bytes to obscure file size
+	// in the storage backend. Padding is appended AFTER hashing so the streaming
+	// hash covers only the real encrypted data. The combined (chunk + padding) is
+	// uploaded as a single S3 part, avoiding the S3 5MB minimum part size issue
+	// that would occur if padding were a separate part.
+	uploadData := chunkData
+	if chunkNumber == totalChunks-1 && paddedSize > totalSize {
+		paddingSize := paddedSize - totalSize
+		paddingBytes := make([]byte, paddingSize)
+		if _, randErr := cryptoRand.Read(paddingBytes); randErr != nil {
+			logging.ErrorLogger.Printf("Failed to generate padding bytes for session %s: %v", sessionID, randErr)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate padding")
+		}
+		uploadData = append(chunkData, paddingBytes...)
+		logging.InfoLogger.Printf("Last chunk %d: appended %d bytes of padding (encrypted: %d, padded total: %d)",
+			chunkNumber, paddingSize, totalSize, paddedSize)
+	}
+
+	// Create a seekable reader from the upload data for S3
+	chunkReader := bytes.NewReader(uploadData)
 
 	var etag string
 	if storageUploadID.Valid && storageUploadID.String != "" {
-		// Use multipart upload for large files
 		part, err := storage.Provider.UploadPart(
 			c.Request().Context(),
-			storageID, // Use storage ID instead of filename
+			storageID,
 			storageUploadID.String,
 			partNumber,
 			chunkReader,
-			int64(len(chunkData)), // Use actual chunk data length
+			int64(len(uploadData)),
 		)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to upload chunk %d via storage provider: %v", partNumber, err)
@@ -502,8 +522,8 @@ func UploadChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Upload session has no storage upload ID")
 	}
 
-	// Get the actual chunk size from the request content length
-	chunkSize := c.Request().ContentLength
+	// Record the size of data uploaded (including padding for last chunk)
+	chunkSize := int64(len(uploadData))
 
 	// Record chunk metadata in database
 	// Note: IV is no longer needed since chunks contain their own nonces
@@ -687,15 +707,12 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Hash calculation failed - no streaming state found")
 	}
 
-	// Step 5: Complete the multipart upload in storage with padding appended.
-	// Padding is always applied to obscure the exact encrypted file size in the
-	// storage backend. The padded_size was calculated during session creation
-	// using tiered random padding (see utils/padding.go). The padding part
-	// contains crypto-random bytes and is uploaded as a final multipart part.
-	// On download, only size_bytes worth of data is served back to the client.
-	err = storage.Provider.CompleteMultipartUploadWithPadding(c.Request().Context(), storageID.String, storageUploadID.String, parts, declaredSize, paddedSize)
+	// Step 5: Complete the multipart upload in storage.
+	// Padding was already appended to the last chunk during UploadChunk,
+	// so no separate padding part is needed here.
+	err = storage.Provider.CompleteMultipartUpload(c.Request().Context(), storageID.String, storageUploadID.String, parts)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to complete storage upload with padding via storage provider: %v", err)
+		logging.ErrorLogger.Printf("Failed to complete storage upload via storage provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
 	}
 
@@ -735,29 +752,29 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to read stored size: unexpected type %T", actualStoredSizeRaw))
 	}
 
-	// Validate: client-declared size must match server-received bytes exactly.
-	if actualStoredSize != declaredSize {
+	// Validate: total stored bytes (including padding on last chunk) must equal padded_size.
+	if actualStoredSize != paddedSize {
 		logging.ErrorLogger.Printf(
-			"Upload size mismatch for session %s: client declared %d bytes, server received %d bytes",
-			sessionID, declaredSize, actualStoredSize,
+			"Upload size mismatch for session %s: expected padded size %d bytes, server stored %d bytes",
+			sessionID, paddedSize, actualStoredSize,
 		)
 		storage.Provider.RemoveObject(c.Request().Context(), storageID.String, storage.RemoveObjectOptions{})
-		return echo.NewHTTPError(http.StatusBadRequest, "Upload size mismatch: declared size does not match received bytes")
+		return echo.NewHTTPError(http.StatusBadRequest, "Upload size mismatch: stored size does not match expected padded size")
 	}
 
-	// Calculate chunk_count from the authoritative stored size
+	// Calculate chunk_count from the encrypted data size (not padded)
 	var chunkCount int64 = 1
-	if actualStoredSize > 0 && chunkSizeBytes > 0 {
-		chunkCount = (actualStoredSize + chunkSizeBytes - 1) / chunkSizeBytes
+	if declaredSize > 0 && chunkSizeBytes > 0 {
+		chunkCount = (declaredSize + chunkSizeBytes - 1) / chunkSizeBytes
 	}
 
 	// Create the final file metadata record with chunk info for resumable downloads.
-	// size_bytes = actualStoredSize (the encrypted ciphertext size, used for chunk byte-range calculations on download).
-	// padded_size = paddedSize (the actual S3 object size, which includes crypto-random padding appended at CompleteMultipartUploadWithPadding).
+	// size_bytes = declaredSize (the encrypted ciphertext size, used for chunk byte-range calculations on download).
+	// padded_size = paddedSize (the actual S3 object size, includes crypto-random padding appended to the last chunk).
 	_, err = tx.Exec(`
 		INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_file_sha256sum, encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, encryptedFek, actualStoredSize, paddedSize, chunkCount, chunkSizeBytes,
+		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, encryptedFek, declaredSize, paddedSize, chunkCount, chunkSizeBytes,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "file_id") {
@@ -766,12 +783,13 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create file metadata")
 	}
 
-	// Update user's storage usage with the actual stored size.
+	// Update user's storage usage with the encrypted data size (not padded).
+	// Padding is an infrastructure cost, not counted against user quotas.
 	user, err := models.GetUserByUsername(tx, username)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user")
 	}
-	if err := user.UpdateStorageUsage(tx, actualStoredSize); err != nil {
+	if err := user.UpdateStorageUsage(tx, declaredSize); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage usage")
 	}
 
