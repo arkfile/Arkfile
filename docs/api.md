@@ -32,6 +32,7 @@ The tables below list every current HTTP endpoint exposed by Arkfile v1.
 |--------|------|---------|------|
 | GET | `/api/config/argon2` | Get Argon2 parameters for client-side crypto | Public |
 | GET | `/api/config/password-requirements` | Get password validation requirements | Public |
+| GET | `/api/config/chunking` | Get chunking parameters for uploads/downloads | Public |
 
 ---
 
@@ -115,16 +116,16 @@ When TOTP is enabled for a user account, the authentication process involves two
 
 ### 4 - Files
 
-All file operations require TOTP authentication.
+All file operations require TOTP authentication unless otherwise noted.
 
-#### Basic File Operations
+#### File Listing & Metadata
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
 | GET | `/api/files` | List files owned by the user | TOTP |
-| POST | `/api/upload` | Upload a small file in one request | TOTP |
-| GET | `/api/files/:fileId` | Download a file | TOTP |
-| GET | `/api/files/:fileId/meta` | Get file metadata | TOTP |
+| GET | `/api/files/metadata` | List recent file metadata | TOTP |
+| POST | `/api/files/metadata/batch` | Get metadata for multiple files | TOTP |
+| GET | `/api/files/:fileId/meta` | Get metadata for a single file | TOTP |
 | DELETE | `/api/files/:fileId` | Delete a file | TOTP |
 
 #### Chunked Uploads
@@ -143,32 +144,30 @@ All file downloads use the chunked download API. Files are stored and downloaded
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET | `/api/files/:fileId/metadata` | Get file metadata for download | TOTP |
 | GET | `/api/files/:fileId/chunks/:chunkIndex` | Download a specific encrypted chunk | TOTP |
 
-**Metadata Response:**
-```json
-{
-  "fileId": "uuid",
-  "storageId": "storage-path",
-  "encryptedFilename": "base64...",
-  "filenameNonce": "base64...",
-  "encryptedSha256sum": "base64...",
-  "sha256sumNonce": "base64...",
-  "sizeBytes": 52428800,
-  "totalChunks": 10,
-  "chunkSizeBytes": 5242880,
-  "contentType": "application/octet-stream"
-}
-```
-
 **Download Flow:**
-1. Fetch metadata to get `totalChunks` and chunk size
+1. Fetch file metadata via `GET /api/files/:fileId/meta`
 2. Download each chunk sequentially (0 to totalChunks-1)
 3. Decrypt each chunk using AES-GCM with the FEK
 4. Combine decrypted chunks into the final file
 
-Each chunk includes a 12-byte nonce prefix and 16-byte authentication tag (28 bytes overhead per chunk).
+Each chunk includes a 12-byte nonce prefix and 16-byte authentication tag (28 bytes overhead per chunk). The first chunk also includes a 2-byte envelope header.
+
+#### Backup Export
+
+Export files as self-contained `.arkbackup` bundles for offline decryption. See `docs/wip/arkbackup-export.md` for the full bundle format specification.
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/files/:fileId/export-token` | Get short-lived token for export download | TOTP |
+| GET | `/api/files/:fileId/export` | Download `.arkbackup` bundle | TOTP or Export Token |
+
+**Browser export flow:** The browser requests a short-lived export token via POST, then navigates to the GET URL with `?token=<token>` so the browser handles the download natively (no memory buffering).
+
+**CLI export flow:** `arkfile-client export --file-id <uuid>` sends a standard `Authorization: Bearer` header to the GET endpoint.
+
+**Offline decryption:** `arkfile-client decrypt-blob --bundle <file>.arkbackup --username <user> --output <file>` decrypts a bundle locally with no server access required.
 
 ---
 
@@ -185,8 +184,6 @@ File sharing is split into two namespaces:
 | GET | `/api/files/:fileId/envelope` | Get file envelope for share creation | TOTP |
 | POST | `/api/shares` | Create a new share (file_id in body) | TOTP |
 | GET | `/api/shares` | List shares owned by user | TOTP |
-| GET | `/api/users/shares` | List shares (legacy endpoint) | TOTP |
-| DELETE | `/api/shares/:id` | Delete a share | TOTP |
 | POST | `/api/shares/:id/revoke` | Revoke a share (soft delete) | TOTP |
 
 #### Public Share Access (Rate-Limited, No Auth)
@@ -195,7 +192,6 @@ File sharing is split into two namespaces:
 |--------|------|---------|------|
 | GET | `/api/public/shares/:id` | Share access page | Public |
 | GET | `/api/public/shares/:id/envelope` | Get share envelope (encrypted FEK + metadata) | Public |
-| GET | `/api/public/shares/:id/download` | Download shared file (single request) | Download Token |
 | GET | `/api/public/shares/:id/metadata` | Get metadata for chunked download | Download Token |
 | GET | `/api/public/shares/:id/chunks/:chunkIndex` | Download a specific encrypted chunk | Download Token |
 
@@ -210,22 +206,7 @@ The Download Token is cryptographically bound to the share via AAD (Additional A
 
 ---
 
-### 6 - File Encryption Key Management
-
-All key management operations require TOTP authentication.
-
-| Method | Path | Purpose | Auth |
-|--------|------|---------|------|
-| GET | `/api/files/:fileId/keys` | List encryption keys for a file | TOTP |
-| POST | `/api/files/:fileId/update-encryption` | Re-encrypt a file with new parameters | TOTP |
-| DELETE | `/api/files/:fileId/keys/:keyId` | Remove a key | TOTP |
-| PATCH | `/api/files/:fileId/keys/:keyId` | Edit key metadata | TOTP |
-| POST | `/api/files/:fileId/keys/:keyId/set-primary` | Mark a key as primary | TOTP |
-| POST | `/api/files/:fileId/get-decryption-key` | Get decrypted FEK for file | TOTP |
-
----
-
-### 7 - Credits System
+### 6 - Credits System
 
 #### User Endpoints (Require TOTP)
 
@@ -244,7 +225,7 @@ All key management operations require TOTP authentication.
 
 ---
 
-### 8 - Administration
+### 7 - Administration
 
 All admin endpoints require JWT authentication with admin privileges.
 
@@ -252,13 +233,25 @@ All admin endpoints require JWT authentication with admin privileges.
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
+| GET | `/api/admin/users` | List all users | Admin |
 | POST | `/api/admin/users/:username/approve` | Approve a pending user | Admin |
 | GET | `/api/admin/users/:username/status` | Get user approval status | Admin |
+| PUT | `/api/admin/users/:username/storage` | Update user storage limit | Admin |
+| POST | `/api/admin/users/:username/revoke` | Revoke a user | Admin |
+
+#### File Export (Disaster Recovery)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| GET | `/api/admin/files/:fileId/export` | Export any user's `.arkbackup` bundle | Admin |
+
+The admin can export any user's file as an `.arkbackup` bundle for disaster recovery. The admin cannot decrypt the bundle — it requires the file owner's password.
 
 #### System Monitoring
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
+| GET | `/api/admin/system/status` | Get system status and storage stats | Admin |
 | GET | `/api/admin/system/health` | Get system health status | Admin |
 | GET | `/api/admin/security/events` | Get security event logs | Admin |
 
@@ -273,7 +266,7 @@ These endpoints are only available when `ADMIN_DEV_TEST_API_ENABLED=true`:
 
 ---
 
-### 9 - Miscellaneous
+### 8 - Miscellaneous
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
@@ -304,14 +297,14 @@ All error responses use the structure:
 
 Endpoints returning lists (`/api/files`, `/api/shares`, `/api/admin/credits`, etc.) accept:
 
-* `?page=` (1-based)  
-* `?size=` (max 100)  
+* `?limit=` (default 100, max 100)  
+* `?offset=` (0-based)  
 
 Example:
 
 ```bash
 curl -H "Authorization: Bearer $TOK" \
-  "http://localhost:8080/api/files?page=2&size=25"
+  "https://localhost:8443/api/files?limit=25&offset=50"
 ```
 
 ---
