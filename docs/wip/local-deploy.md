@@ -70,7 +70,11 @@ Optional:
 - Must be run as root (sudo bash scripts/local-deploy.sh)
 - Parse and validate CLI arguments
     - --admin-username is REQUIRED (no default)
-    - Validate username format against existing username validator rules (i.e. 10+ characters)
+    - Validate username format against existing username validator rules:
+        - 10-50 characters
+        - Allowed characters: letters (a-z, A-Z), numbers (0-9), underscore, hyphen, period, comma
+        - Cannot start or end with underscore, hyphen, period, or comma
+        - Cannot contain consecutive special characters (.., --, __, ,,)
 - Detect OS family (debian/rhel) for package manager context
 - Source build-config.sh for shared build paths
 - Detect Go binary (find_go_binary from build-config.sh)
@@ -187,7 +191,7 @@ Generate /opt/arkfile/etc/secrets.env with:
 
     # Arkfile Application Configuration
     PORT=<HTTP_PORT>
-    CORS_ALLOWED_ORIGINS=https://localhost:<TLS_PORT>
+    CORS_ALLOWED_ORIGINS=https://localhost:<TLS_PORT>,https://<LAN_IP>:<TLS_PORT>
 
     # TLS Configuration (Arkfile serves its own TLS directly)
     TLS_ENABLED=true
@@ -205,7 +209,22 @@ Generate /opt/arkfile/etc/secrets.env with:
     S3_FORCE_PATH_STYLE=true
     S3_USE_SSL=false
 
-Also generate /opt/arkfile/etc/seaweedfs-s3.json with S3 credentials (see docs/wip/swfs-now.md for format)
+Also generate /opt/arkfile/etc/seaweedfs-s3.json with matching S3 credentials:
+
+    {
+      "identities": [
+        {
+          "name": "arkfile",
+          "credentials": [
+            {
+              "accessKey": "arkfile-local",
+              "secretKey": "<same S3_SECRET_KEY from secrets.env>"
+            }
+          ],
+          "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+        }
+      ]
+    }
 
     # Admin Configuration
     ADMIN_USERNAMES=<admin-username from CLI arg>
@@ -383,7 +402,7 @@ Output:
 | **LOG_LEVEL** | debug | info |
 | **WASM trace logging** | LIBOPAQUE_DEFINES="-DTRACE" | Unset (no trace) |
 | **REQUIRE_APPROVAL** | false | false (configurable) |
-| **CORS_ALLOWED_ORIGINS** | https://localhost:8443 | https://localhost:TLS_PORT |
+| **CORS_ALLOWED_ORIGINS** | https://localhost:8443 | https://localhost:TLS_PORT,https://LAN_IP:TLS_PORT |
 | **Credentials** | Random with `Dev` prefix | Random with `local-` prefix, no dev patterns |
 | **Idempotent** | Yes (destructive reset) | No (first-time only) |
 | **Reusable sub-scripts** | 01, 02, 03, 04, 05, 06, build.sh, deploy.sh | Same set |
@@ -399,7 +418,7 @@ Output:
 | **DNS verification** | None | Verifies A record resolves to VPS IP |
 | **Caddy build** | N/A | Custom build with xcaddy + deSEC module |
 | **Additional CLI args** | --bind-address, --tls-port | --domain, --desec-token |
-| **CORS_ALLOWED_ORIGINS** | https://localhost:TLS_PORT | https://test.arkfile.net |
+| **CORS_ALLOWED_ORIGINS** | https://localhost:TLS_PORT,https://LAN_IP:TLS_PORT | https://test.arkfile.net |
 | **OS target** | Any supported Linux | VPS (Alma/Rocky/Debian/Ubuntu) |
 
 ## Implementation Notes
