@@ -157,14 +157,14 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	defer tx.Rollback()
 
 	// Create user
-	userID, err := models.CreateUser(tx, request.Username)
+	user, err := models.CreateUser(tx, request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to create user %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "User creation failed")
 	}
 
-	// Set as Admin and Approved
-	_, err = tx.Exec("UPDATE users SET is_admin = 1, is_approved = 1 WHERE id = ?", userID)
+	// Set as Admin and Approved (defensive: ensures admin privileges even if CreateUser logic changes)
+	_, err = tx.Exec("UPDATE users SET is_admin = 1, is_approved = 1 WHERE id = ?", user.ID)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to set admin privileges for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to set admin privileges")

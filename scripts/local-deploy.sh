@@ -95,16 +95,16 @@ validate_username() {
         echo "ERROR: Username must be at most 50 characters (got $len)"
         return 1
     fi
-    if ! echo "$username" | grep -qE '^[a-zA-Z0-9_\-.,]{10,50}$'; then
+    if ! echo "$username" | grep -qE '^[a-zA-Z0-9_.,-]{10,50}$'; then
         echo "ERROR: Username can only contain letters, numbers, underscores, hyphens, periods, and commas"
         return 1
     fi
     # Cannot start or end with special characters
-    if echo "$username" | grep -qE '^[_\-.,]'; then
+    if echo "$username" | grep -qE '^[-_.,]'; then
         echo "ERROR: Username cannot start with a special character"
         return 1
     fi
-    if echo "$username" | grep -qE '[_\-.,]$'; then
+    if echo "$username" | grep -qE '[-_.,]$'; then
         echo "ERROR: Username cannot end with a special character"
         return 1
     fi
@@ -319,10 +319,10 @@ if [ "$EXISTING_DEPLOYMENT" = "true" ]; then
     stop_service_if_running "seaweedfs"
     stop_service_if_running "rqlite"
 
-    # Kill lingering processes
-    pkill -f "arkfile" 2>/dev/null || true
-    pkill -f "weed" 2>/dev/null || true
-    pkill -f "rqlited" 2>/dev/null || true
+    # Kill lingering service processes (exclude this script's own PID)
+    pkill -f "/opt/arkfile/bin/arkfile" 2>/dev/null || true
+    pkill -f "weed " 2>/dev/null || true
+    pkill -f "rqlited " 2>/dev/null || true
     sleep 2
 
     # Wipe data (preserve downloaded binaries and C libraries)
@@ -523,45 +523,11 @@ chmod 775 "$ARKFILE_DIR/var/log"
 print_status "SUCCESS" "Ownership and permissions set"
 echo ""
 
-# Step 5: Generate cryptographic material
-echo -e "${CYAN}Step 5: Generating cryptographic material${NC}"
-echo "==========================================="
-
-print_status "INFO" "Generating Master Key..."
-if ! ./scripts/setup/03-setup-master-key.sh; then
-    print_status "ERROR" "Master Key generation failed"
-    exit 1
-fi
-print_status "SUCCESS" "Master Key generated"
-
-print_status "INFO" "Generating TLS certificates..."
-if ! ./scripts/setup/04-setup-tls-certs.sh; then
-    print_status "ERROR" "TLS certificate generation failed"
-    exit 1
-fi
-print_status "SUCCESS" "TLS certificates generated"
-
-# Fix ownership after key generation
-chown -R arkfile:arkfile "$ARKFILE_DIR"
-chmod 700 "$ARKFILE_DIR/etc/keys"
-[ -d "$ARKFILE_DIR/etc/keys/tls" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls"
-[ -d "$ARKFILE_DIR/etc/keys/tls/ca" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/ca"
-[ -d "$ARKFILE_DIR/etc/keys/tls/arkfile" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/arkfile"
-
-if ! verify_ownership "$ARKFILE_DIR"; then
-    print_status "WARNING" "Fixing ownership after key generation..."
-    chown -R arkfile:arkfile "$ARKFILE_DIR"
-    if ! verify_ownership "$ARKFILE_DIR"; then
-        print_status "ERROR" "Failed to fix ownership"
-        exit 1
-    fi
-fi
-
-print_status "SUCCESS" "Cryptographic material ready"
-echo ""
-
-# Step 6: Generate secrets.env
-echo -e "${CYAN}Step 6: Generating local deployment configuration${NC}"
+# Step 5: Generate secrets and configuration
+# NOTE: secrets.env MUST be written before Step 6 (master key generation),
+# because 03-setup-master-key.sh appends ARKFILE_MASTER_KEY to secrets.env.
+# Writing secrets.env after would overwrite the master key.
+echo -e "${CYAN}Step 5: Generating local deployment configuration${NC}"
 echo "==================================================="
 
 RQLITE_PASSWORD="$(openssl rand -hex 16)"
@@ -648,12 +614,8 @@ EOF
 chown "$USER:$GROUP" "$ARKFILE_DIR/etc/seaweedfs-s3.json"
 chmod 640 "$ARKFILE_DIR/etc/seaweedfs-s3.json"
 print_status "SUCCESS" "SeaweedFS S3 auth configuration created"
-echo ""
 
-# Step 7: Generate rqlite auth file
-echo -e "${CYAN}Step 7: Generating rqlite auth file${NC}"
-echo "====================================="
-
+# rqlite auth file
 cat > "$ARKFILE_DIR/etc/rqlite-auth.json" << EOF
 [
   {
@@ -667,10 +629,50 @@ EOF
 chown "$USER:$GROUP" "$ARKFILE_DIR/etc/rqlite-auth.json"
 chmod 640 "$ARKFILE_DIR/etc/rqlite-auth.json"
 print_status "SUCCESS" "rqlite auth file created"
+
+print_status "SUCCESS" "All configuration files generated"
 echo ""
 
-# Step 8: Setup SeaweedFS and rqlite
-echo -e "${CYAN}Step 8: Setting up SeaweedFS and rqlite${NC}"
+# Step 6: Generate cryptographic material
+# Master key appends to secrets.env (written in Step 5). TLS certs are idempotent.
+echo -e "${CYAN}Step 6: Generating cryptographic material${NC}"
+echo "==========================================="
+
+print_status "INFO" "Generating Master Key..."
+if ! ./scripts/setup/03-setup-master-key.sh; then
+    print_status "ERROR" "Master Key generation failed"
+    exit 1
+fi
+print_status "SUCCESS" "Master Key generated"
+
+print_status "INFO" "Generating TLS certificates..."
+if ! ./scripts/setup/04-setup-tls-certs.sh; then
+    print_status "ERROR" "TLS certificate generation failed"
+    exit 1
+fi
+print_status "SUCCESS" "TLS certificates generated"
+
+# Fix ownership after key generation
+chown -R arkfile:arkfile "$ARKFILE_DIR"
+chmod 700 "$ARKFILE_DIR/etc/keys"
+[ -d "$ARKFILE_DIR/etc/keys/tls" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls"
+[ -d "$ARKFILE_DIR/etc/keys/tls/ca" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/ca"
+[ -d "$ARKFILE_DIR/etc/keys/tls/arkfile" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/arkfile"
+
+if ! verify_ownership "$ARKFILE_DIR"; then
+    print_status "WARNING" "Fixing ownership after key generation..."
+    chown -R arkfile:arkfile "$ARKFILE_DIR"
+    if ! verify_ownership "$ARKFILE_DIR"; then
+        print_status "ERROR" "Failed to fix ownership"
+        exit 1
+    fi
+fi
+
+print_status "SUCCESS" "Cryptographic material ready"
+echo ""
+
+# Step 7: Setup SeaweedFS and rqlite
+echo -e "${CYAN}Step 7: Setting up SeaweedFS and rqlite${NC}"
 echo "========================================="
 
 print_status "INFO" "Setting up SeaweedFS..."
@@ -694,8 +696,8 @@ fi
 print_status "SUCCESS" "rqlite setup complete"
 echo ""
 
-# Step 9: Start services
-echo -e "${CYAN}Step 9: Starting services${NC}"
+# Step 8: Start services
+echo -e "${CYAN}Step 8: Starting services${NC}"
 echo "=========================="
 
 systemctl daemon-reload
@@ -771,8 +773,8 @@ fi
 print_status "SUCCESS" "Arkfile started"
 echo ""
 
-# Step 10: Health verification
-echo -e "${CYAN}Step 10: Health verification${NC}"
+# Step 9: Health verification
+echo -e "${CYAN}Step 9: Health verification${NC}"
 echo "============================="
 
 # Wait for Arkfile readiness
@@ -837,7 +839,7 @@ else
 fi
 echo ""
 
-# Step 11: Output admin bootstrap instructions
+# Step 10: Output admin bootstrap instructions
 echo -e "${GREEN}LOCAL DEPLOYMENT COMPLETE${NC}"
 echo ""
 echo -e "${BLUE}Your Arkfile instance is running at:${NC}"
