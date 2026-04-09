@@ -786,7 +786,7 @@ func ListUsers(c echo.Context) error {
 	})
 }
 
-// ApproveUser approves a user
+// ApproveUser approves a user and optionally updates storage limit
 func ApproveUser(c echo.Context) error {
 	// Get admin user and verify admin privileges first
 	adminUsername := auth.GetUsernameFromToken(c)
@@ -804,6 +804,14 @@ func ApproveUser(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Username parameter required")
 	}
 
+	// Parse optional request body for storage limit
+	var req struct {
+		ApprovedBy        string `json:"approved_by"`
+		StorageLimitBytes *int64 `json:"storage_limit_bytes,omitempty"`
+	}
+	// Bind is optional here; if no body, fields stay at zero values
+	c.Bind(&req)
+
 	// Get target user
 	targetUser, err := models.GetUserByUsername(database.DB, targetUsername)
 	if err != nil {
@@ -818,8 +826,22 @@ func ApproveUser(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Failed to approve user")
 	}
 
+	// Update storage limit if specified in request
+	if req.StorageLimitBytes != nil && *req.StorageLimitBytes > 0 {
+		_, err = database.DB.Exec("UPDATE users SET storage_limit_bytes = ? WHERE username = ?",
+			*req.StorageLimitBytes, targetUsername)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to update storage limit for %s: %v", targetUsername, err)
+			return JSONError(c, http.StatusInternalServerError, "User approved but failed to update storage limit")
+		}
+	}
+
 	// Log admin action
-	LogAdminAction(database.DB, adminUsername, "approve_user", targetUsername, "")
+	details := ""
+	if req.StorageLimitBytes != nil && *req.StorageLimitBytes > 0 {
+		details = fmt.Sprintf("storage_limit_bytes: %d", *req.StorageLimitBytes)
+	}
+	LogAdminAction(database.DB, adminUsername, "approve_user", targetUsername, details)
 
 	return JSONResponse(c, http.StatusOK, "User approved successfully", nil)
 }

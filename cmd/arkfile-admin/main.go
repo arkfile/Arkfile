@@ -961,17 +961,17 @@ func handleApproveUserCommand(client *HTTPClient, config *AdminConfig, args []st
 	fs := flag.NewFlagSet("approve-user", flag.ExitOnError)
 	var (
 		usernameFlag = fs.String("username", "", "Username to approve (required)")
-		storageLimit = fs.String("storage", "5GB", "Storage limit for the user")
+		storageLimit = fs.String("storage", "", "Storage limit override (default: keep current, examples: 1GB, 500MB, 10GB)")
 	)
 
 	fs.Usage = func() {
 		fmt.Printf(`Usage: arkfile-admin approve-user [FLAGS]
 
-Approve a pending user account and set storage limits.
+Approve a pending user account. Optionally set a custom storage limit.
 
 FLAGS:
     --username USER     Username to approve (required)
-    --storage LIMIT     Storage limit (default: 5GB, examples: 1GB, 500MB, 10GB)
+    --storage LIMIT     Storage limit override (optional, default: keep current limit)
     --help             Show this help message
 
 EXAMPLES:
@@ -999,16 +999,18 @@ EXAMPLES:
 		return fmt.Errorf("admin session expired, please login again")
 	}
 
-	// Parse storage limit
-	limitBytes, err := parseStorageLimit(*storageLimit)
-	if err != nil {
-		return fmt.Errorf("invalid storage limit: %w", err)
+	// Build approve request
+	approveReq := map[string]interface{}{
+		"approved_by": session.Username,
 	}
 
-	// Approve user
-	approveReq := map[string]interface{}{
-		"storage_limit_bytes": limitBytes,
-		"approved_by":         session.Username,
+	// Only include storage_limit_bytes if explicitly specified
+	if *storageLimit != "" {
+		limitBytes, err := parseStorageLimit(*storageLimit)
+		if err != nil {
+			return fmt.Errorf("invalid storage limit: %w", err)
+		}
+		approveReq["storage_limit_bytes"] = limitBytes
 	}
 
 	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/approve", approveReq, session.AccessToken)
@@ -1017,7 +1019,12 @@ EXAMPLES:
 	}
 
 	fmt.Printf("User %s approved successfully\n", *usernameFlag)
-	fmt.Printf("Storage limit set to: %s\n", formatFileSize(limitBytes))
+	if *storageLimit != "" {
+		limitBytes, _ := parseStorageLimit(*storageLimit)
+		fmt.Printf("Storage limit set to: %s\n", formatFileSize(limitBytes))
+	} else {
+		fmt.Printf("Storage limit: default (1.1 GB)\n")
+	}
 
 	return nil
 }
