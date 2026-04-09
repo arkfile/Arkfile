@@ -155,17 +155,14 @@ func CreateExportToken(c echo.Context) error {
 }
 
 // resolveExportAuth determines the username for an export request.
-// Checks for a ?token= query parameter first (browser download flow),
-// then falls back to the standard JWT auth from middleware.
+// This endpoint is on the public router (no JWT middleware) to support both:
+//   - CLI clients: send Authorization: Bearer <jwt> header
+//   - Browser downloads: send ?token=<export-token> query param
 func resolveExportAuth(c echo.Context, fileID string) (string, error) {
 	tokenStr := c.QueryParam("token")
 	if tokenStr == "" {
-		// Standard JWT auth (from middleware)
-		username := auth.GetUsernameFromToken(c)
-		if username == "" {
-			return "", echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
-		}
-		return username, nil
+		// No export token -- try Authorization: Bearer header (CLI flow)
+		return resolveExportAuthFromHeader(c)
 	}
 
 	// Parse and validate export token
@@ -190,6 +187,41 @@ func resolveExportAuth(c echo.Context, fileID string) (string, error) {
 	}
 	if claims.FileID != fileID {
 		return "", echo.NewHTTPError(http.StatusUnauthorized, "Token not authorized for this file")
+	}
+
+	return claims.Username, nil
+}
+
+// resolveExportAuthFromHeader parses the JWT from the Authorization: Bearer header.
+// Used when the export endpoint is on the public router (no JWT middleware).
+// This handles CLI clients that send standard Bearer token auth.
+func resolveExportAuthFromHeader(c echo.Context) (string, error) {
+	authHeader := c.Request().Header.Get("Authorization")
+	if authHeader == "" {
+		return "", echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+	}
+
+	// Expect "Bearer <token>"
+	const prefix = "Bearer "
+	if len(authHeader) <= len(prefix) || authHeader[:len(prefix)] != prefix {
+		return "", echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+	}
+	tokenStr := authHeader[len(prefix):]
+
+	// Parse and validate the standard Arkfile JWT
+	token, err := jwt.ParseWithClaims(tokenStr, &auth.Claims{}, func(t *jwt.Token) (interface{}, error) {
+		if t.Method.Alg() != jwt.SigningMethodEdDSA.Alg() {
+			return nil, fmt.Errorf("unexpected signing method: %s", t.Method.Alg())
+		}
+		return auth.GetJWTPublicKey(), nil
+	})
+	if err != nil {
+		return "", echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+	}
+
+	claims, ok := token.Claims.(*auth.Claims)
+	if !ok || !token.Valid || claims.Username == "" {
+		return "", echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
 	}
 
 	return claims.Username, nil

@@ -652,8 +652,45 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     let page = await anonContext.newPage();
     attachConsoleListener(page, '11-anon');
 
-    // 11a: Share B max_downloads=2
-    console.log('[i] [Phase 11a] Testing Share B max_downloads=2');
+    // 11a: Share C expiry (test FIRST -- Share C was created with 1-minute expiry in Phase 8,
+    // so we must download before it expires. Testing this before Share B avoids the
+    // time-consuming max_downloads test consuming the expiry window.)
+    console.log('[i] [Phase 11a] Testing Share C expiry');
+
+    await page.goto(shareCUrl);
+    await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
+    await page.fill('#sharePassword', SHARE_C_PASSWORD);
+    await page.click('#shareAccessForm button[type="submit"]');
+    await page.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
+
+    let dlPromise = page.waitForEvent('download', { timeout: 120_000 });
+    await page.click('#downloadBtn');
+    await saveDownload(await dlPromise, 'phase11_c_dl1.bin');
+    console.log('[OK] Share C download before expiry succeeded');
+
+    logStep('11a', 'Waiting 65s for Share C to expire...');
+    await new Promise((resolve) => setTimeout(resolve, 65_000));
+
+    logStep('11a', 'Attempting download after expiry...');
+    // Server returns 403 at page level for expired shares (before rendering shared.html)
+    // so the password form never appears -- verify the error/expired response directly
+    await page.goto(shareCUrl);
+    await page.waitForFunction(
+      () => {
+        const text = document.body.innerText.toLowerCase();
+        return text.includes('expired') || text.includes('forbidden') ||
+               text.includes('error') || text.includes('403');
+      },
+      { timeout: 15_000 },
+    );
+    console.log('[OK] Share C download after expiry correctly rejected');
+
+    // 11b: Share B max_downloads=2
+    // Use a fresh page to avoid stale state from Share C expiry test
+    await page.close();
+    page = await anonContext.newPage();
+    attachConsoleListener(page, '11-anon');
+    console.log('[i] [Phase 11b] Testing Share B max_downloads=2');
 
     await page.goto(shareBUrl);
     await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
@@ -661,7 +698,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await page.click('#shareAccessForm button[type="submit"]');
     await page.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
 
-    let dlPromise = page.waitForEvent('download', { timeout: 120_000 });
+    dlPromise = page.waitForEvent('download', { timeout: 120_000 });
     await page.click('#downloadBtn');
     await saveDownload(await dlPromise, 'phase11_b_dl1.bin');
     console.log('[OK] Share B download 1/2');
@@ -677,7 +714,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await saveDownload(await dlPromise, 'phase11_b_dl2.bin');
     console.log('[OK] Share B download 2/2');
 
-    logStep('11a', 'Attempting 3rd download (should fail at chunk level)...');
+    logStep('11b', 'Attempting 3rd download (should fail at chunk level)...');
     await page.goto(shareBUrl);
     await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
     await page.fill('#sharePassword', SHARE_B_PASSWORD);
@@ -696,41 +733,6 @@ test.describe.serial('Arkfile Playwright E2E', () => {
       { timeout: 30_000 },
     );
     console.log('[OK] Share B download 3 correctly rejected (max_downloads exceeded)');
-
-    // 11b: Share C expiry
-    // Use a fresh page to avoid stale fetch errors from Phase 11a's rejected download
-    await page.close();
-    page = await anonContext.newPage();
-    attachConsoleListener(page, '11-anon');
-    console.log('[i] [Phase 11b] Testing Share C expiry');
-
-    await page.goto(shareCUrl);
-    await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
-    await page.fill('#sharePassword', SHARE_C_PASSWORD);
-    await page.click('#shareAccessForm button[type="submit"]');
-    await page.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
-
-    dlPromise = page.waitForEvent('download', { timeout: 120_000 });
-    await page.click('#downloadBtn');
-    await saveDownload(await dlPromise, 'phase11_c_dl1.bin');
-    console.log('[OK] Share C download before expiry succeeded');
-
-    logStep('11b', 'Waiting 65s for Share C to expire...');
-    await new Promise((resolve) => setTimeout(resolve, 65_000));
-
-    logStep('11b', 'Attempting download after expiry...');
-    // Server returns 403 at page level for expired shares (before rendering shared.html)
-    // so the password form never appears -- verify the error/expired response directly
-    await page.goto(shareCUrl);
-    await page.waitForFunction(
-      () => {
-        const text = document.body.innerText.toLowerCase();
-        return text.includes('expired') || text.includes('forbidden') ||
-               text.includes('error') || text.includes('403');
-      },
-      { timeout: 15_000 },
-    );
-    console.log('[OK] Share C download after expiry correctly rejected');
 
     // 11c: Non-existent share (43-char base64url format matching real share IDs)
     console.log('[i] [Phase 11c] Testing non-existent share');
