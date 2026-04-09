@@ -146,7 +146,7 @@ func RegisterRoutes() {
 
 	// User management - admin endpoints (migrated from dev/test to production)
 	adminGroup.GET("/users", ListUsers)
-	adminGroup.POST("/users/:username/approve", AdminApproveUser)
+	adminGroup.POST("/users/:username/approve", ApproveUser)
 	adminGroup.GET("/users/:username/status", AdminGetUserStatus)
 	adminGroup.PUT("/users/:username/storage", UpdateUserStorageLimit)
 	adminGroup.POST("/users/:username/revoke", AdminRevokeUser)

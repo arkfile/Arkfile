@@ -36,7 +36,8 @@ type AdminCleanupResponse struct {
 
 // AdminApproveRequest represents the request payload for user approval
 type AdminApproveRequest struct {
-	ApprovedBy string `json:"approved_by" validate:"required"`
+	ApprovedBy        string `json:"approved_by" validate:"required"`
+	StorageLimitBytes *int64 `json:"storage_limit_bytes,omitempty"`
 }
 
 // AdminApproveResponse represents the response from user approval
@@ -258,8 +259,8 @@ func AdminTOTPDecryptCheck(c echo.Context) error {
 	return JSONResponse(c, http.StatusOK, "TOTP decrypt check completed", response)
 }
 
-// AdminApproveUser approves a specific user for testing
-func AdminApproveUser(c echo.Context) error {
+// ApproveUser approves a user and optionally updates their storage limit
+func ApproveUser(c echo.Context) error {
 	targetUsername := c.Param("username")
 	if targetUsername == "" {
 		return JSONError(c, http.StatusBadRequest, "Username parameter is required")
@@ -291,6 +292,16 @@ func AdminApproveUser(c echo.Context) error {
 	if err := user.ApproveUser(database.DB, req.ApprovedBy); err != nil {
 		logging.ErrorLogger.Printf("Admin user approval failed: %v", err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to approve user")
+	}
+
+	// Update storage limit if specified in request
+	if req.StorageLimitBytes != nil && *req.StorageLimitBytes > 0 {
+		_, err = database.DB.Exec("UPDATE users SET storage_limit_bytes = ? WHERE username = ?",
+			*req.StorageLimitBytes, targetUsername)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to update storage limit for %s: %v", targetUsername, err)
+			return JSONError(c, http.StatusInternalServerError, "User approved but failed to update storage limit")
+		}
 	}
 
 	// Reload user from database to get updated approval status
@@ -784,66 +795,6 @@ func ListUsers(c echo.Context) error {
 	return JSONResponse(c, http.StatusOK, "Users retrieved", map[string]interface{}{
 		"users": users,
 	})
-}
-
-// ApproveUser approves a user and optionally updates storage limit
-func ApproveUser(c echo.Context) error {
-	// Get admin user and verify admin privileges first
-	adminUsername := auth.GetUsernameFromToken(c)
-	adminUser, err := models.GetUserByUsername(database.DB, adminUsername)
-	if err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to get admin user")
-	}
-
-	if !adminUser.IsAdmin {
-		return JSONError(c, http.StatusForbidden, "Admin privileges required")
-	}
-
-	targetUsername := c.Param("username")
-	if targetUsername == "" {
-		return JSONError(c, http.StatusBadRequest, "Username parameter required")
-	}
-
-	// Parse optional request body for storage limit
-	var req struct {
-		ApprovedBy        string `json:"approved_by"`
-		StorageLimitBytes *int64 `json:"storage_limit_bytes,omitempty"`
-	}
-	// Bind is optional here; if no body, fields stay at zero values
-	c.Bind(&req)
-
-	// Get target user
-	targetUser, err := models.GetUserByUsername(database.DB, targetUsername)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return JSONError(c, http.StatusNotFound, "User not found")
-		}
-		return JSONError(c, http.StatusNotFound, "User not found")
-	}
-
-	// Approve user
-	if err := targetUser.ApproveUser(database.DB, adminUsername); err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to approve user")
-	}
-
-	// Update storage limit if specified in request
-	if req.StorageLimitBytes != nil && *req.StorageLimitBytes > 0 {
-		_, err = database.DB.Exec("UPDATE users SET storage_limit_bytes = ? WHERE username = ?",
-			*req.StorageLimitBytes, targetUsername)
-		if err != nil {
-			logging.ErrorLogger.Printf("Failed to update storage limit for %s: %v", targetUsername, err)
-			return JSONError(c, http.StatusInternalServerError, "User approved but failed to update storage limit")
-		}
-	}
-
-	// Log admin action
-	details := ""
-	if req.StorageLimitBytes != nil && *req.StorageLimitBytes > 0 {
-		details = fmt.Sprintf("storage_limit_bytes: %d", *req.StorageLimitBytes)
-	}
-	LogAdminAction(database.DB, adminUsername, "approve_user", targetUsername, details)
-
-	return JSONResponse(c, http.StatusOK, "User approved successfully", nil)
 }
 
 // UpdateUserStorageLimit updates a user's storage limit
