@@ -33,6 +33,7 @@ The tables below list every current HTTP endpoint exposed by Arkfile v1.
 | GET | `/api/config/argon2` | Get Argon2 parameters for client-side crypto | Public |
 | GET | `/api/config/password-requirements` | Get password validation requirements | Public |
 | GET | `/api/config/chunking` | Get chunking parameters for uploads/downloads | Public |
+| GET | `/api/version` | Get application version | Public |
 
 ---
 

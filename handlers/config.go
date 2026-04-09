@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 
+	"github.com/84adam/Arkfile/config"
 	"github.com/84adam/Arkfile/crypto"
 	"github.com/labstack/echo/v4"
 )
@@ -29,4 +30,11 @@ func GetChunkingConfig(c echo.Context) error {
 	// Return the raw embedded JSON directly
 	data := crypto.GetEmbeddedChunkingParamsJSON()
 	return c.JSONBlob(http.StatusOK, data)
+}
+
+// GetVersion returns the current Arkfile application version
+func GetVersion(c echo.Context) error {
+	return c.JSON(http.StatusOK, map[string]string{
+		"version": config.Version,
+	})
 }

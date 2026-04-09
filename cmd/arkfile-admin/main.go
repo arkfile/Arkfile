@@ -22,12 +22,12 @@ import (
 	"golang.org/x/term"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/config"
 	"github.com/pquerna/otp/totp"
 )
 
 const (
-	Version = "1.0.0-static"
-	Usage   = `arkfile-admin - Hybrid network/local admin tool for arkfile server management
+	Usage = `arkfile-admin - Hybrid network/local admin tool for arkfile server management
 
 USAGE:
     arkfile-admin [global options] command [command options] [arguments...]
@@ -1682,8 +1682,7 @@ EXAMPLES:
 // Helper functions
 
 func printVersion() {
-	fmt.Printf("arkfile-admin version %s\n", Version)
-	fmt.Printf("Administrative tool for arkfile server management\n")
+	fmt.Printf("arkfile-admin %s\n", config.Version)
 }
 
 func printUsage() {

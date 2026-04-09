@@ -21,11 +21,10 @@ import (
 	"time"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/config"
 	"github.com/84adam/Arkfile/crypto"
 	"golang.org/x/term"
 )
-
-const Version = "3.0.0"
 
 // Password entry timeouts and limits
 const (
@@ -221,6 +220,9 @@ func main() {
 	}
 
 	switch command {
+	case "version", "--version":
+		printVersion()
+		os.Exit(0)
 	case "register":
 		if err := handleRegisterCommand(client, config, args); err != nil {
 			logError("Registration failed: %v", err)
@@ -307,8 +309,6 @@ func main() {
 		// Block until agent is stopped via socket command (handleStop calls os.Exit directly)
 		<-agent.stopChan
 		os.Exit(0)
-	case "version":
-		printVersion()
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
 		printUsage()
@@ -1129,8 +1129,7 @@ func handleAgentStatus() error {
 // ============================================================
 
 func printVersion() {
-	fmt.Printf("arkfile-client version %s\n", Version)
-	fmt.Printf("Unified file vault CLI with streaming per-chunk AES-GCM encryption\n")
+	fmt.Printf("arkfile-client %s\n", config.Version)
 }
 
 func printUsage() {

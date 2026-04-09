@@ -40,6 +40,9 @@ func RegisterRoutes() {
 	Echo.GET("/api/config/password-requirements", GetPasswordRequirements)
 	Echo.GET("/api/config/chunking", GetChunkingConfig)
 
+	// Version endpoint (public)
+	Echo.GET("/api/version", GetVersion)
+
 	// OPAQUE Authentication (Multi-Step Protocol) - with rate limiting protection
 	Echo.POST("/api/opaque/register/response", RegisterRateLimitMiddleware(OpaqueRegisterResponse))
 	Echo.POST("/api/opaque/register/finalize", RegisterRateLimitMiddleware(OpaqueRegisterFinalize))

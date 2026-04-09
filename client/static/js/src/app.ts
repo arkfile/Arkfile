@@ -66,6 +66,9 @@ class ArkFileApp {
       
       this.initialized = true;
       console.log('ArkFile TypeScript application initialized');
+
+      // Populate instance info footer (non-blocking, best-effort)
+      this.loadInstanceInfo();
       
     } catch (error) {
       console.error('Failed to initialize ArkFile application:', error);
@@ -370,6 +373,27 @@ class ArkFileApp {
     }
   }
 
+
+  /**
+   * Fetch server version from /api/version and display instance info in the footer.
+   * Best-effort: silently fails if the endpoint is unreachable.
+   */
+  private async loadInstanceInfo(): Promise<void> {
+    try {
+      const el = document.getElementById('instance-info');
+      if (!el) return;
+
+      const resp = await fetch('/api/version');
+      if (!resp.ok) return;
+
+      const data = await resp.json();
+      const version = data?.version || 'unknown';
+      const hostname = window.location.hostname;
+      el.textContent = `Arkfile Instance: ${hostname} (${version})`;
+    } catch {
+      // Silently ignore - instance info is cosmetic
+    }
+  }
 
   // Public method to show app from home page
   public navigateToApp(): void {

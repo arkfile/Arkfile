@@ -105,6 +105,7 @@ func main() {
 		}
 	}
 
+	log.Printf("Arkfile %s starting", config.Version)
 	log.Printf("Configuration loaded successfully")
 	_ = cfg // Use the config variable to prevent unused variable warning
 
