@@ -904,47 +904,50 @@ EXAMPLES:
 		return nil
 	}
 
-	fmt.Printf("Users (%d found):\n\n", len(usersData))
+	fmt.Printf("Users (%d total):\n\n", len(usersData))
 
 	if *detailed {
 		for i, userData := range usersData {
 			userMap := userData.(map[string]interface{})
 			fmt.Printf("%d. %s\n", i+1, userMap["username"])
-			fmt.Printf("   Admin: %v\n", userMap["is_admin"])
-			fmt.Printf("   Approved: %v\n", userMap["is_approved"])
-			fmt.Printf("   TOTP: %v\n", userMap["totp_enabled"])
-			fmt.Printf("   Storage: %s / %s\n",
-				formatFileSize(int64(userMap["total_storage_bytes"].(float64))),
-				formatFileSize(int64(userMap["storage_limit_bytes"].(float64))))
-			fmt.Printf("   Created: %s\n", userMap["registration_date"])
-			if userMap["last_login"] != nil {
-				fmt.Printf("   Last Login: %s\n", userMap["last_login"])
+			fmt.Printf("   Status: %s\n", statusStr(userMap))
+			fmt.Printf("   Admin: %v\n", safeBool(userMap, "is_admin"))
+			fmt.Printf("   TOTP: %v\n", safeBool(userMap, "totp_enabled"))
+			fmt.Printf("   Files: %d\n", safeInt64(userMap, "file_count"))
+			fmt.Printf("   Storage: %s / %s (%.1f%%)\n",
+				formatFileSize(safeInt64(userMap, "total_storage_bytes")),
+				formatFileSize(safeInt64(userMap, "storage_limit_bytes")),
+				safeFloat64(userMap, "usage_percent"))
+			fmt.Printf("   Registered: %s\n", safeString(userMap, "registration_date"))
+			if login := safeString(userMap, "last_login"); login != "" {
+				fmt.Printf("   Last Login: %s\n", login)
 			}
 			fmt.Println()
 		}
 	} else {
-		fmt.Printf("%-3s %-20s %-8s %-8s %-6s %-20s %s\n",
-			"#", "Username", "Admin", "Approved", "TOTP", "Storage", "Created")
-		fmt.Println(strings.Repeat("-", 85))
+		fmt.Printf("  %-20s %-10s %-6s %-5s %-6s %-12s %-7s %s\n",
+			"USERNAME", "STATUS", "ADMIN", "TOTP", "FILES", "STORAGE", "USAGE", "REGISTERED")
+		fmt.Printf("  %-20s %-10s %-6s %-5s %-6s %-12s %-7s %s\n",
+			strings.Repeat("-", 20), strings.Repeat("-", 10), strings.Repeat("-", 6),
+			strings.Repeat("-", 5), strings.Repeat("-", 6), strings.Repeat("-", 12),
+			strings.Repeat("-", 7), strings.Repeat("-", 10))
 
-		for i, userData := range usersData {
+		for _, userData := range usersData {
 			userMap := userData.(map[string]interface{})
-			adminStr := boolYesNo(userMap["is_admin"].(bool))
-			approvedStr := boolYesNo(userMap["is_approved"].(bool))
-			totpStr := boolYesNo(userMap["totp_enabled"].(bool))
-			storageUsed := formatFileSize(int64(userMap["total_storage_bytes"].(float64)))
-			storageLimit := formatFileSize(int64(userMap["storage_limit_bytes"].(float64)))
-			storageStr := fmt.Sprintf("%s / %s", storageUsed, storageLimit)
-
-			// Format registration_date to just the date portion
-			regDate := fmt.Sprintf("%v", userMap["registration_date"])
-			if t, err := time.Parse(time.RFC3339, regDate); err == nil {
-				regDate = t.Format("2006-01-02")
+			status := statusStr(userMap)
+			adminStr := boolYesNo(safeBool(userMap, "is_admin"))
+			totpStr := boolYesNo(safeBool(userMap, "totp_enabled"))
+			fileCount := safeInt64(userMap, "file_count")
+			storageReadable := safeString(userMap, "total_storage_readable")
+			if storageReadable == "" {
+				storageReadable = formatFileSize(safeInt64(userMap, "total_storage_bytes"))
 			}
+			usagePercent := safeFloat64(userMap, "usage_percent")
+			regDate := safeString(userMap, "registration_date")
 
-			fmt.Printf("%-3d %-20s %-8s %-8s %-6s %-20s %s\n",
-				i+1, userMap["username"], adminStr, approvedStr, totpStr,
-				storageStr, regDate)
+			fmt.Printf("  %-20s %-10s %-6s %-5s %-6d %-12s %-7s %s\n",
+				userMap["username"], status, adminStr, totpStr,
+				fileCount, storageReadable, fmt.Sprintf("%.1f%%", usagePercent), regDate)
 		}
 	}
 
@@ -1815,6 +1818,62 @@ func parseStorageLimit(limit string) (int64, error) {
 	}
 
 	return bytes, nil
+}
+
+// Safe accessor helpers for JSON map[string]interface{} values from API responses
+
+func safeBool(m map[string]interface{}, key string) bool {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return false
+	}
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return false
+}
+
+func safeInt64(m map[string]interface{}, key string) int64 {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0
+	}
+	if f, ok := v.(float64); ok {
+		return int64(f)
+	}
+	if i, ok := v.(int64); ok {
+		return i
+	}
+	return 0
+}
+
+func safeFloat64(m map[string]interface{}, key string) float64 {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0
+	}
+	if f, ok := v.(float64); ok {
+		return f
+	}
+	return 0
+}
+
+func safeString(m map[string]interface{}, key string) string {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+func statusStr(m map[string]interface{}) string {
+	if safeBool(m, "is_approved") {
+		return "approved"
+	}
+	return "pending"
 }
 
 // readPassword reads a password from stdin. If stdin is a terminal, it will

@@ -675,13 +675,15 @@ func ListUsers(c echo.Context) error {
 		return JSONError(c, http.StatusForbidden, "Admin privileges required")
 	}
 
-	// Get all users except the current admin (LEFT JOIN user_totp to get TOTP status)
+	// Get all users with TOTP status and file count
 	rows, err := database.DB.Query(`
 		SELECT u.username, u.is_approved, u.is_admin, u.storage_limit_bytes, u.total_storage_bytes,
 		       u.registration_date, u.last_login,
-		       CASE WHEN ut.setup_completed = 1 THEN 1 ELSE 0 END AS totp_enabled
+		       CASE WHEN ut.setup_completed = 1 THEN 1 ELSE 0 END AS totp_enabled,
+		       COALESCE(fm.file_count, 0) AS file_count
 		FROM users u
 		LEFT JOIN user_totp ut ON u.username = ut.username
+		LEFT JOIN (SELECT owner_username, COUNT(*) AS file_count FROM file_metadata GROUP BY owner_username) fm ON u.username = fm.owner_username
 		ORDER BY u.registration_date DESC`)
 
 	if err == sql.ErrNoRows {
@@ -693,16 +695,16 @@ func ListUsers(c echo.Context) error {
 	}
 	defer rows.Close()
 
-	var users []map[string]interface{}
+	users := make([]map[string]interface{}, 0)
 	for rows.Next() {
 		var username sql.NullString
-		var isApprovedRaw, isAdminRaw, totpEnabledRaw interface{}
+		var isApprovedRaw, isAdminRaw, totpEnabledRaw, fileCountRaw interface{}
 		var storageLimitBytes, totalStorageBytes sql.NullFloat64
 		var registrationDate sql.NullString
 		var lastLogin sql.NullString
 
 		err := rows.Scan(&username, &isApprovedRaw, &isAdminRaw, &storageLimitBytes, &totalStorageBytes,
-			&registrationDate, &lastLogin, &totpEnabledRaw)
+			&registrationDate, &lastLogin, &totpEnabledRaw, &fileCountRaw)
 		if err != nil {
 			logging.ErrorLogger.Printf("ListUsers scan error: %v", err)
 			return JSONError(c, http.StatusInternalServerError, "Error processing user data")
@@ -712,11 +714,6 @@ func ListUsers(c echo.Context) error {
 		isApproved := toBool(isApprovedRaw)
 		isAdmin := toBool(isAdminRaw)
 		totpEnabled := toBool(totpEnabledRaw)
-
-		// Filter out admins from the list (optional, or keep them)
-		if username.String == adminUsername {
-			continue // Skip the current admin user
-		}
 
 		// Extract values with safe defaults for NULL columns
 		storageLimit := int64(0)
@@ -762,11 +759,14 @@ func ListUsers(c echo.Context) error {
 			}
 		}
 
+		fileCount := toInt64(fileCountRaw)
+
 		user := map[string]interface{}{
 			"username":               username.String,
 			"is_approved":            isApproved,
 			"is_admin":               isAdmin,
 			"totp_enabled":           totpEnabled,
+			"file_count":             fileCount,
 			"storage_limit_bytes":    storageLimit,
 			"total_storage_bytes":    totalStorage,
 			"total_storage_readable": totalStorageReadable,
