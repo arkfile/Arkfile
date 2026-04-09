@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -170,12 +171,12 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Failed to set admin privileges")
 	}
 
-	// Store OPAQUE record
+	// Store OPAQUE record (hex-encoded, matching auth.go pattern)
 	_, err = tx.Exec(`
 		INSERT INTO opaque_user_data 
 		(username, opaque_user_record, created_at)
 		VALUES (?, ?, CURRENT_TIMESTAMP)`,
-		request.Username, userRecord)
+		request.Username, hex.EncodeToString(userRecord))
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to store OPAQUE record for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to store OPAQUE record")
