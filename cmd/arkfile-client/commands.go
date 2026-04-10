@@ -1821,6 +1821,65 @@ func handleContactInfoSet(client *HTTPClient, config *ClientConfig, args []strin
 	return nil
 }
 
+// ============================================================
+// DELETE FILE COMMAND
+// ============================================================
+
+func handleDeleteFileCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+	fs := flag.NewFlagSet("delete-file", flag.ExitOnError)
+	fileID := fs.String("file-id", "", "File ID to delete")
+	confirm := fs.Bool("confirm", false, "Skip confirmation prompt")
+
+	fs.Usage = func() {
+		fmt.Printf("Usage: arkfile-client delete-file --file-id FILE_ID [--confirm]\n\nPermanently delete a file from the server.\n")
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *fileID == "" {
+		return fmt.Errorf("--file-id is required")
+	}
+
+	session, err := requireSession(config)
+	if err != nil {
+		return err
+	}
+
+	if !*confirm {
+		fmt.Println("WARNING: This will permanently delete the file from the server.")
+		fmt.Println("Consider using 'export' first to save an offline-decryptable backup (.arkbackup)")
+		fmt.Println("before deleting, if this file is important.")
+		fmt.Printf("\nDelete file %s? Type YES to confirm: ", *fileID)
+		reader := bufio.NewReader(os.Stdin)
+		answer, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read confirmation: %w", err)
+		}
+		if strings.TrimSpace(answer) != "YES" {
+			fmt.Println("Cancelled.")
+			return nil
+		}
+	}
+
+	_, err = client.makeRequest("DELETE", "/api/files/"+*fileID, nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to delete file: %w", err)
+	}
+
+	// Clear digest from agent cache
+	agentClient, agentErr := NewAgentClient()
+	if agentErr == nil {
+		if rmErr := agentClient.RemoveDigest(*fileID); rmErr != nil {
+			logVerbose("Warning: failed to remove digest from cache: %v", rmErr)
+		}
+	}
+
+	fmt.Printf("File %s deleted successfully.\n", *fileID)
+	return nil
+}
+
 func handleContactInfoDelete(client *HTTPClient, config *ClientConfig) error {
 	session, err := requireSession(config)
 	if err != nil {

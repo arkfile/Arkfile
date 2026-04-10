@@ -210,7 +210,7 @@ func ClientRecoverCredentials(sec []byte, serverResponse []byte, username string
 	)
 
 	if ret != 0 {
-		return nil, nil, nil, fmt.Errorf("credential recovery failed: error code %d", ret)
+		return nil, nil, nil, fmt.Errorf("incorrect password or account not found")
 	}
 
 	return sk, authU, exportKey, nil

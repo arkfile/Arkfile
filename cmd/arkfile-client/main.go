@@ -46,6 +46,7 @@ COMMANDS:
     upload            Encrypt and upload a file (streaming, per-chunk AES-GCM)
     download          Download and decrypt a file (streaming, per-chunk AES-GCM)
     list-files        List files with auto-decrypted filenames
+    delete-file       Permanently delete a file from the server
     share             Manage file shares (create, list, delete, revoke)
     share download    Download a shared file (no auth required)
     export            Export an encrypted file as a .arkbackup bundle
@@ -252,6 +253,11 @@ func main() {
 	case "list-files":
 		if err := handleListFilesCommand(client, config, args); err != nil {
 			logError("List files failed: %v", err)
+			os.Exit(1)
+		}
+	case "delete-file":
+		if err := handleDeleteFileCommand(client, config, args); err != nil {
+			logError("Delete file failed: %v", err)
 			os.Exit(1)
 		}
 	case "share":
@@ -743,12 +749,12 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		return fmt.Errorf("failed to decode credential response: %w", err)
 	}
 
-	// sk is the OPAQUE session key — used only to prove authentication to the server.
+	// sk is the OPAQUE session key -- used only to prove authentication to the server.
 	// It has no role in file encryption and is discarded after login finalize.
 	sk, authU, _, err := auth.ClientRecoverCredentials(clientSecret, credentialResponse, *usernameFlag)
 	if err != nil {
 		clearBytes(password)
-		return fmt.Errorf("failed to recover credentials: %w", err)
+		return fmt.Errorf("incorrect password or account not found")
 	}
 	defer clearBytes(sk)
 

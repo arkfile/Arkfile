@@ -342,6 +342,10 @@ button:hover {
     font-size: 0.9rem;
 }
 
+.file-actions .danger-button {
+    margin-top: 0;
+}
+
 /* Custom Password Section */
 #customPasswordSection {
     border: 1px solid #ddd;

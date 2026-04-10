@@ -116,6 +116,8 @@ int wrap_opaque_create_credential_response(const uint8_t* pub, const uint8_t* re
 }
 
 // Multi-step authentication - Step 3: Recover credentials (client-side)
+// Note: failure here typically means wrong password. No stderr logging
+// because this is expected user-facing behavior, not an internal error.
 int wrap_opaque_recover_credentials(const uint8_t* resp, const uint8_t* sec,
                                     const uint8_t* ctx, uint16_t ctx_len,
                                     const uint8_t* idU, uint16_t idU_len,
@@ -135,9 +137,7 @@ int wrap_opaque_recover_credentials(const uint8_t* resp, const uint8_t* sec,
         .idS = (uint8_t*)idS
     };
     
-    int ret = opaque_RecoverCredentials(resp, sec, ctx, ctx_len, &ids, sk, authU, export_key);
-    log_opaque_error("opaque_RecoverCredentials", ret);
-    return ret;
+    return opaque_RecoverCredentials(resp, sec, ctx, ctx_len, &ids, sk, authU, export_key);
 }
 
 // Multi-step authentication - Step 4: Authenticate user (server-side validation)

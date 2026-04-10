@@ -19,7 +19,7 @@
  */
 
 import { authenticatedFetch, getUsernameFromToken, getToken } from '../utils/auth';
-import { showError } from '../ui/messages';
+import { showError, showSuccess } from '../ui/messages';
 import { downloadFile } from './download';
 import { shareFile } from './share';
 import { exportBackup } from './export';
@@ -211,9 +211,19 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
       exportBackup(file.file_id);
     });
 
+    // Delete button
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.className = 'danger-button';
+    deleteBtn.title = 'Permanently delete this file from the server';
+    deleteBtn.addEventListener('click', () => {
+      confirmAndDeleteFile(file.file_id, file.filename);
+    });
+
     fileActions.appendChild(downloadBtn);
     fileActions.appendChild(shareBtn);
     fileActions.appendChild(exportBtn);
+    fileActions.appendChild(deleteBtn);
     fileElement.appendChild(fileInfo);
     fileElement.appendChild(fileActions);
     filesList.appendChild(fileElement);
@@ -239,6 +249,39 @@ export function updateStorageInfo(storage: FilesResponse['storage']): void {
       Used: ${escapeHtml(storage.total_readable)} of ${escapeHtml(storage.limit_readable)} (${storage.usage_percent.toFixed(1)}%)
     </div>
   `;
+}
+
+// ============================================================================
+// File Deletion
+// ============================================================================
+
+async function confirmAndDeleteFile(fileId: string, filename: string): Promise<void> {
+  const displayName = filename === '[Encrypted]' ? fileId : filename;
+  const confirmed = window.confirm(
+    `Are you sure you want to permanently delete "${displayName}"?\n\n` +
+    `This action cannot be undone.\n\n` +
+    `Consider using "Export Backup" first to save an offline-decryptable ` +
+    `copy (.arkbackup) before deleting, if this file is important.`
+  );
+
+  if (!confirmed) return;
+
+  try {
+    const response = await authenticatedFetch(`/api/files/${fileId}`, {
+      method: 'DELETE',
+    });
+
+    if (response.ok) {
+      showSuccess(`File deleted: ${displayName}`);
+      await loadFiles();
+    } else {
+      const data = await response.json().catch(() => ({}));
+      showError(data.message || `Failed to delete file (HTTP ${response.status})`);
+    }
+  } catch (error) {
+    console.error('Delete file error:', error);
+    showError('An error occurred while deleting the file.');
+  }
 }
 
 // ============================================================================

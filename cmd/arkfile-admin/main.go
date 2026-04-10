@@ -722,7 +722,7 @@ EXAMPLES:
 	// Step 3: Recover credentials and create auth token
 	_, authU, exportKey, err := auth.ClientRecoverCredentials(clientState, credentialResponse, *usernameFlag)
 	if err != nil {
-		return fmt.Errorf("failed to recover credentials: %w", err)
+		return fmt.Errorf("incorrect password or account not found")
 	}
 
 	// Step 4: Finalize authentication

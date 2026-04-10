@@ -957,7 +957,57 @@ phase_8_file_operations() {
 
     rm -f "$export_bundle" "$decrypt_output"
 
-    # 8.11: Duplicate upload rejection (dedup via digest cache)
+    # 8.11: File deletion (upload a small file, delete it, verify gone)
+    section "8.11: File deletion test"
+    local delete_test_file="$TEST_DATA_DIR/delete_test.bin"
+    $CLIENT generate-test-file --filename "$delete_test_file" --size 1024 --pattern random >/dev/null 2>&1
+
+    local del_upload_output del_upload_exit_code
+    safe_exec del_upload_output del_upload_exit_code \
+        $CLIENT \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        upload \
+        --file "$delete_test_file" \
+        --password-type account
+
+    if [ $del_upload_exit_code -ne 0 ]; then
+        error "Failed to upload file for deletion test"
+        record_test "File deletion (upload)" "FAIL"
+    else
+        local delete_file_id=$(echo "$del_upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+        info "Uploaded delete-test file: $delete_file_id"
+
+        local del_output del_exit_code
+        safe_exec del_output del_exit_code \
+            $CLIENT \
+            --server-url "$SERVER_URL" \
+            --tls-insecure \
+            delete-file \
+            --file-id "$delete_file_id" \
+            --confirm
+
+        if [ $del_exit_code -eq 0 ] && echo "$del_output" | grep -q "deleted successfully"; then
+            record_test "File deletion" "PASS"
+
+            local post_del_list post_del_list_code
+            safe_exec post_del_list post_del_list_code \
+                $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --json
+
+            if [ $post_del_list_code -eq 0 ] && ! echo "$post_del_list" | grep -q "$delete_file_id"; then
+                record_test "File deletion verified (not in list)" "PASS"
+            else
+                record_test "File deletion verified (not in list)" "FAIL"
+            fi
+        else
+            error "File deletion failed:"
+            echo "$del_output"
+            record_test "File deletion" "FAIL"
+        fi
+    fi
+    rm -f "$delete_test_file"
+
+    # 8.12: Duplicate upload rejection (dedup via digest cache)
     # The test file was uploaded in 8.2 and its SHA-256 is in the agent's digest cache.
     # Re-uploading the same file without --force must fail.
     section "Re-uploading same file (dedup rejection expected)"
