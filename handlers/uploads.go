@@ -853,13 +853,15 @@ func DeleteFile(c echo.Context) error {
 	defer tx.Rollback() // Rollback if not committed
 
 	// Verify file ownership and get file size and storage_id
+	// Note: rqlite returns numbers as float64, so we scan into float64 and convert
 	var ownerUsername string
 	var storageID string
-	var fileSize int64
+	var fileSizeF float64
 	err = tx.QueryRow(
 		"SELECT owner_username, storage_id, size_bytes FROM file_metadata WHERE file_id = ?",
 		fileID,
-	).Scan(&ownerUsername, &storageID, &fileSize)
+	).Scan(&ownerUsername, &storageID, &fileSizeF)
+	fileSize := int64(fileSizeF)
 
 	if err != nil {
 		// If there is any error (including sql.ErrNoRows), treat it as 'not found'.

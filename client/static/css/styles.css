@@ -133,6 +133,35 @@ button:hover {
     margin-top: 2rem;
 }
 
+.decrypt-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    background: var(--bg-secondary, #252540);
+    border: 1px solid var(--border-color, #333);
+    border-radius: 4px;
+    color: var(--text-secondary, #ccc);
+    font-size: 0.9rem;
+}
+
+.decrypt-banner button {
+    white-space: nowrap;
+    padding: 0.5rem 1rem;
+    background: var(--accent-color, #6366f1);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+}
+
+.decrypt-banner button:hover {
+    background: var(--accent-hover, #5558e3);
+}
+
 .file-item {
     background: #f8f9fa;
     padding: 1rem;

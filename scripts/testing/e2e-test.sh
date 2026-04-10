@@ -957,10 +957,12 @@ phase_8_file_operations() {
 
     rm -f "$export_bundle" "$decrypt_output"
 
-    # 8.11: File deletion (upload a small file, delete it, verify gone)
+    # 8.11: File deletion (upload a file, delete it, verify gone)
+    # Uses 2MB to exercise rqlite float64 scanning (numbers > ~1M come back
+    # in scientific notation; a 1024-byte file would not catch that bug).
     section "8.11: File deletion test"
     local delete_test_file="$TEST_DATA_DIR/delete_test.bin"
-    $CLIENT generate-test-file --filename "$delete_test_file" --size 1024 --pattern random >/dev/null 2>&1
+    $CLIENT generate-test-file --filename "$delete_test_file" --size 2097152 --pattern random >/dev/null 2>&1
 
     local del_upload_output del_upload_exit_code
     safe_exec del_upload_output del_upload_exit_code \

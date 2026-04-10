@@ -19,6 +19,7 @@ import {
   deriveFileEncryptionKeyWithCache,
   type CacheDurationHours,
 } from './file-encryption.js';
+import { unlockAccountKey } from './account-key-cache.js';
 import { promptForAccountKeyPassword } from '../ui/password-modal.js';
 
 // ============================================================================
@@ -43,18 +44,22 @@ export function base64ToBytes(base64: string): Uint8Array {
 /**
  * Resolve the Account Key from cache or by prompting the user.
  *
- * 1. If the key is locked, show an error and return null.
+ * 1. If the key is locked (e.g. after page refresh or inactivity), clear
+ *    the locked flag so the password prompt can proceed.
  * 2. If the key is cached, return it.
  * 3. Otherwise, prompt the user for their account password, derive the key
  *    via Argon2id, optionally cache it, and return it.
  *
  * @param username - The authenticated user's username
- * @returns The 32-byte Account Key, or null if the user cancelled / key is locked
+ * @returns The 32-byte Account Key, or null if the user cancelled
  */
 export async function getAccountKey(username: string): Promise<Uint8Array | null> {
+  // If the key is locked (e.g. after page refresh or inactivity timeout),
+  // clear the locked flag and fall through to the password prompt below.
+  // The wrapping key is already gone so there is nothing to "unlock" --
+  // we just need to let the user re-enter their password.
   if (isAccountKeyLocked()) {
-    showError('Account Key is locked. Please unlock it first.');
-    return null;
+    unlockAccountKey();
   }
 
   const cached = await getCachedAccountKey(username, getToken() ?? undefined);

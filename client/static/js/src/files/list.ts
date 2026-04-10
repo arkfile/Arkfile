@@ -108,12 +108,35 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
   }
 
   // Try to get the Account Key for metadata decryption.
-  // If cached, use it silently. If not cached, show files as [Encrypted]
-  // and let the user decrypt on demand (via download/share which prompt).
+  // If cached, use it silently. If not cached (e.g. after page refresh),
+  // show a banner prompting the user to enter their password.
   const username = getUsernameFromToken();
   let accountKey: Uint8Array | null = null;
   if (username) {
     accountKey = await getCachedAccountKey(username, getToken() ?? undefined);
+  }
+
+  // If account key is not available, show a banner to let the user unlock
+  if (!accountKey && username && data.files.length > 0) {
+    const banner = document.createElement('div');
+    banner.className = 'decrypt-banner';
+
+    const bannerText = document.createElement('span');
+    bannerText.textContent = 'File names are encrypted. Enter your account password to decrypt.';
+
+    const decryptBtn = document.createElement('button');
+    decryptBtn.textContent = 'Decrypt File Names';
+    decryptBtn.addEventListener('click', async () => {
+      const key = await getAccountKey(username);
+      if (key) {
+        // Re-render the file list with the newly derived account key
+        await displayFiles(data);
+      }
+    });
+
+    banner.appendChild(bannerText);
+    banner.appendChild(decryptBtn);
+    filesList.appendChild(banner);
   }
 
   // Decrypt metadata for each file (or fall back to placeholders)
