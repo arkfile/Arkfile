@@ -369,24 +369,31 @@ export function showPasswordPrompt(options: PasswordPromptOptions): Promise<Pass
         // value of 0 means "don't remember" - cacheDuration stays undefined
       }
       
+      // Save and clear the resolve reference BEFORE hidePasswordPrompt,
+      // because hidePasswordPrompt calls currentResolve(null) as a safety net.
+      const resolve = currentResolve;
+      currentResolve = null;
+      
       hidePasswordPrompt();
       
-      if (currentResolve) {
-        currentResolve({
+      if (resolve) {
+        resolve({
           password,
           cacheDuration,
         });
-        currentResolve = null;
       }
     };
     
     // Handle cancel
     const handleCancel = () => {
+      // Save and clear the resolve reference BEFORE hidePasswordPrompt
+      const resolve = currentResolve;
+      currentResolve = null;
+      
       hidePasswordPrompt();
       
-      if (currentResolve) {
-        currentResolve(null);
-        currentResolve = null;
+      if (resolve) {
+        resolve(null);
       }
     };
     
