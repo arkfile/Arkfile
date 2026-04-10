@@ -9,3 +9,6 @@ client/static/js/dist/** linguist-generated
 # Documentation
 *.md linguist-documentation
 docs/** linguist-documentation
+
+# WIP and/or To-Be-Deprecated Scripts
+scripts/wip/** linguist-vendored

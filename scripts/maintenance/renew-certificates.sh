@@ -1,4 +1,7 @@
 #!/bin/bash
+
+# WIP
+
 set -e
 
 # Colors for output
