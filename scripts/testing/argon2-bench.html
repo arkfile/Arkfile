@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argon2id Benchmark</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    padding: 20px;
+    max-width: 600px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 16px; color: #fff; }
+  .params {
+    background: #252540;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 16px;
+    font-size: 0.9rem;
+    line-height: 1.6;
+  }
+  .params strong { color: #ccc; }
+  button {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    background: #6366f1;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 16px;
+  }
+  button:hover { background: #5558e3; }
+  button:disabled { background: #444; cursor: not-allowed; }
+  #status {
+    background: #252540;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 16px;
+    min-height: 60px;
+    font-size: 1rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+  }
+  .result-time {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: #22c55e;
+  }
+  .note {
+    margin-top: 16px;
+    font-size: 0.8rem;
+    color: #888;
+    line-height: 1.4;
+  }
+</style>
+</head>
+<body>
+
+<h1>Argon2id Key Derivation Benchmark</h1>
+
+<div class="params">
+  <strong>Parameters (matching Arkfile config):</strong><br>
+  Memory: 128 MB (131072 KiB)<br>
+  Time cost (iterations): 4<br>
+  Parallelism: 1<br>
+  Key length: 32 bytes<br>
+  Variant: Argon2id
+</div>
+
+<button id="runBtn" onclick="runBenchmark()">Run Benchmark</button>
+
+<div id="status">Press the button to start. This will allocate 128 MB of memory and may take 10-60 seconds depending on your device.</div>
+
+<div class="note">
+  This benchmark uses the same @noble/hashes argon2id implementation and
+  parameters as Arkfile. The result reflects how long key derivation takes
+  in the browser on this device. No network requests are made.
+</div>
+
+<script type="module">
+import { argon2id } from 'https://esm.run/@noble/hashes@2.0.1/argon2';
+
+// Expose to onclick handler
+window.runBenchmark = async function() {
+  const btn = document.getElementById('runBtn');
+  const status = document.getElementById('status');
+
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  status.textContent = 'Allocating 128 MB and running Argon2id...\nThis will block the UI -- please wait.';
+
+  // Let the UI update before starting the CPU-intensive work
+  await new Promise(r => setTimeout(r, 100));
+
+  const password = new TextEncoder().encode('BenchmarkPassword2025!TestOnly');
+  const salt = new Uint8Array(32);
+  crypto.getRandomValues(salt);
+
+  try {
+    const startTime = performance.now();
+
+    const key = argon2id(password, salt, {
+      t: 4,          // timeCost: 4 iterations
+      m: 131072,     // memoryCost: 128 MB in KiB
+      p: 1,          // parallelism: 1
+      dkLen: 32,     // keyLength: 32 bytes
+    });
+
+    const elapsed = performance.now() - startTime;
+    const seconds = (elapsed / 1000).toFixed(2);
+
+    status.innerHTML =
+      'SUCCESS!\n\n' +
+      'Derivation time: <span class="result-time">' + seconds + ' seconds</span>\n\n' +
+      'Key (hex): ' + Array.from(key).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 32) + '...\n' +
+      'Device: ' + navigator.userAgent.split(')')[0].split('(')[1];
+
+  } catch (err) {
+    status.textContent = 'ERROR: ' + err.message + '\n\n' +
+      'This may happen on devices with insufficient memory (needs 128 MB free).';
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Run Again';
+};
+</script>
+
+</body>
+</html>

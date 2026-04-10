@@ -16,9 +16,25 @@ DOMAIN="${ARKFILE_DOMAIN:-localhost}"
 VALIDITY_DAYS=365
 PREFERRED_ALGORITHM="${ARKFILE_TLS_ALGORITHM:-ecdsa}"
 
+# Build extra IP SANs for the arkfile service certificate.
+# ARKFILE_EXTRA_IPS is a comma-separated list of IPs (set by local-deploy.sh
+# from auto-detected LAN IP and/or user-provided --extra-ip values).
+EXTRA_IP_SANS=""
+if [ -n "${ARKFILE_EXTRA_IPS:-}" ]; then
+    IP_INDEX=3  # IP.1=127.0.0.1, IP.2=::1 are already present
+    IFS=',' read -ra EXTRA_IP_ARRAY <<< "$ARKFILE_EXTRA_IPS"
+    for ip in "${EXTRA_IP_ARRAY[@]}"; do
+        ip=$(echo "$ip" | tr -d ' ')
+        if [ -n "$ip" ]; then
+            EXTRA_IP_SANS="${EXTRA_IP_SANS},IP.${IP_INDEX}=${ip}"
+            IP_INDEX=$((IP_INDEX + 1))
+        fi
+    done
+fi
+
 # Service definitions: name|cn|alt_names
 SERVICES=(
-    "arkfile|arkfile.${DOMAIN}|DNS.1=arkfile.${DOMAIN},DNS.2=${DOMAIN},DNS.3=localhost,DNS.4=arkfile.internal,IP.1=127.0.0.1,IP.2=::1"
+    "arkfile|arkfile.${DOMAIN}|DNS.1=arkfile.${DOMAIN},DNS.2=${DOMAIN},DNS.3=localhost,DNS.4=arkfile.internal,IP.1=127.0.0.1,IP.2=::1${EXTRA_IP_SANS}"
     "rqlite|rqlite.${DOMAIN}|DNS.1=rqlite.${DOMAIN},DNS.2=rqlite.internal,DNS.3=localhost,IP.1=127.0.0.1,IP.2=::1"
     "seaweedfs|seaweedfs.${DOMAIN}|DNS.1=seaweedfs.${DOMAIN},DNS.2=seaweedfs.internal,DNS.3=localhost,IP.1=127.0.0.1,IP.2=::1"
 )

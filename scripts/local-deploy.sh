@@ -21,6 +21,7 @@ FORCE_REBUILD_RQLITE=false
 BIND_ADDRESS="0.0.0.0"
 TLS_PORT="8443"
 HTTP_PORT="8080"
+ADD_IPS=()
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -50,6 +51,10 @@ while [[ $# -gt 0 ]]; do
             HTTP_PORT="$2"
             shift 2
             ;;
+        --add-ip)
+            ADD_IPS+=("$2")
+            shift 2
+            ;;
         -h|--help)
             echo "Arkfile Local/LAN Deployment Script"
             echo ""
@@ -64,6 +69,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --bind-address <ip>           IP address to bind to (default: 0.0.0.0)"
             echo "  --tls-port <port>             TLS port (default: 8443)"
             echo "  --http-port <port>            HTTP port (default: 8080)"
+            echo "  --add-ip <ip>                 Additional IP for TLS cert SANs (repeatable, e.g. VPS public IP, LAN IP)"
             echo "  -h, --help                    Show this help message"
             exit 0
             ;;
@@ -211,14 +217,37 @@ stop_service_if_running() {
 }
 
 # Helper: detect LAN IP address
+# Prefers a private RFC 1918 IP (192.168.x.x, 10.x.x.x, 172.16-31.x.x) on a
+# physical interface (eth*, enp*, wlan*, wlp*), skipping VPN/tunnel interfaces
+# (wg*, tun*, tap*) which can mislead ip-route-based detection.
 detect_lan_ip() {
     local lan_ip=""
-    # Try ip route method first
-    lan_ip=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' || true)
+
+    # Method 1: Look for a private IP on a physical network interface
+    # Parse 'ip -4 addr' for interfaces that look like physical ethernet or wifi
+    lan_ip=$(ip -4 addr show 2>/dev/null \
+        | awk '/^[0-9]+:/ { iface=$2; gsub(/:/, "", iface) }
+               /inet / {
+                   # Skip loopback, VPN/tunnel interfaces
+                   if (iface ~ /^(lo|wg|tun|tap|veth|docker|br-)/) next
+                   split($2, a, "/")
+                   ip = a[1]
+                   # Match RFC 1918 private ranges
+                   if (ip ~ /^192\.168\./ || ip ~ /^10\./ || ip ~ /^172\.(1[6-9]|2[0-9]|3[01])\./)
+                       print ip
+               }' \
+        | head -1)
+
+    # Method 2: Fallback to ip route (may return VPN IP if VPN is active)
     if [ -z "$lan_ip" ]; then
-        # Fallback to hostname -I
+        lan_ip=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K[0-9.]+' || true)
+    fi
+
+    # Method 3: Fallback to hostname -I
+    if [ -z "$lan_ip" ]; then
         lan_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
     fi
+
     if [ -z "$lan_ip" ]; then
         lan_ip="127.0.0.1"
     fi
@@ -646,6 +675,21 @@ fi
 print_status "SUCCESS" "Master Key generated"
 
 print_status "INFO" "Generating TLS certificates..."
+
+# Build list of extra IPs for TLS certificate SANs:
+# Always include detected LAN IP, plus any user-specified --add-ip values
+ALL_EXTRA_IPS=()
+if [ "$LAN_IP" != "127.0.0.1" ]; then
+    ALL_EXTRA_IPS+=("$LAN_IP")
+fi
+for ip in "${ADD_IPS[@]}"; do
+    ALL_EXTRA_IPS+=("$ip")
+done
+if [ ${#ALL_EXTRA_IPS[@]} -gt 0 ]; then
+    export ARKFILE_EXTRA_IPS=$(IFS=,; echo "${ALL_EXTRA_IPS[*]}")
+    print_status "INFO" "TLS cert extra IP SANs: $ARKFILE_EXTRA_IPS"
+fi
+
 if ! ./scripts/setup/04-setup-tls-certs.sh; then
     print_status "ERROR" "TLS certificate generation failed"
     exit 1
