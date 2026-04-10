@@ -50,6 +50,7 @@ COMMANDS:
     share download    Download a shared file (no auth required)
     export            Export an encrypted file as a .arkbackup bundle
     decrypt-blob      Decrypt a .arkbackup bundle offline (no network required)
+    contact-info      Manage your contact information (get, set, delete)
     generate-test-file Generate a test file for upload testing
     logout            Logout and clear session
     agent             Manage the agent (start, stop, status)
@@ -276,6 +277,11 @@ func main() {
 	case "generate-test-file":
 		if err := handleGenerateTestFileCommand(args); err != nil {
 			logError("Generate test file failed: %v", err)
+			os.Exit(1)
+		}
+	case "contact-info":
+		if err := handleContactInfoCommand(client, config, args); err != nil {
+			logError("Contact info failed: %v", err)
 			os.Exit(1)
 		}
 	case "logout":

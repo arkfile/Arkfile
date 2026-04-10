@@ -40,6 +40,7 @@ NETWORK COMMANDS (Admin API - localhost only):
     list-users        List all users
     approve-user      Approve user account
     user-status       Get status of a specific user
+    user-contact-info View a user's contact information
     set-storage       Set user storage limit
     revoke-user       Revoke user access and disable account
     export-file       Export a user's encrypted file as .arkbackup bundle
@@ -225,6 +226,11 @@ func main() {
 	case "user-status":
 		if err := handleUserStatusCommand(client, config, args); err != nil {
 			logError("User status failed: %v", err)
+			os.Exit(1)
+		}
+	case "user-contact-info":
+		if err := handleUserContactInfoCommand(client, config, args); err != nil {
+			logError("User contact info failed: %v", err)
 			os.Exit(1)
 		}
 	case "export-file":
@@ -1236,6 +1242,110 @@ EXAMPLES:
 		}
 		fmt.Printf("Active Refresh:  %d\n", activeRefresh)
 		fmt.Printf("Revoked:         %d\n", revoked)
+	}
+
+	return nil
+}
+
+// handleUserContactInfoCommand views a user's contact information
+func handleUserContactInfoCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("user-contact-info", flag.ExitOnError)
+	usernameFlag := fs.String("username", "", "Username to view contact info for (required)")
+	jsonOutput := fs.Bool("json", false, "Output as JSON")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin user-contact-info --username USER [--json]
+
+View a user's contact information (decrypted server-side).
+
+FLAGS:
+    --username USER     Username to view contact info for (required)
+    --json              Output as JSON
+    --help             Show this help message
+
+EXAMPLES:
+    arkfile-admin user-contact-info --username alice
+    arkfile-admin user-contact-info --username alice --json
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *usernameFlag == "" {
+		return fmt.Errorf("--username is required")
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	resp, err := client.makeRequest("GET", "/api/admin/users/"+*usernameFlag+"/contact-info", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to get contact info: %w", err)
+	}
+
+	hasInfo, _ := resp.Data["has_contact_info"].(bool)
+	if !hasInfo {
+		fmt.Printf("No contact information set for %s\n", *usernameFlag)
+		return nil
+	}
+
+	contactInfoRaw, ok := resp.Data["contact_info"]
+	if !ok {
+		return fmt.Errorf("invalid response: missing contact_info")
+	}
+
+	if *jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(contactInfoRaw)
+	}
+
+	// Re-marshal and unmarshal for typed access
+	infoJSON, err := json.Marshal(contactInfoRaw)
+	if err != nil {
+		return fmt.Errorf("failed to parse contact info: %w", err)
+	}
+
+	var info struct {
+		DisplayName string `json:"display_name"`
+		Contacts    []struct {
+			Type  string `json:"type"`
+			Value string `json:"value"`
+			Label string `json:"label,omitempty"`
+		} `json:"contacts"`
+		Notes string `json:"notes"`
+	}
+	if err := json.Unmarshal(infoJSON, &info); err != nil {
+		return fmt.Errorf("failed to parse contact info: %w", err)
+	}
+
+	fmt.Printf("Contact Information for %s\n", *usernameFlag)
+	fmt.Println("--------------------------")
+	fmt.Printf("  Display Name: %s\n", info.DisplayName)
+
+	if len(info.Contacts) > 0 {
+		fmt.Println("  Contacts:")
+		for i, c := range info.Contacts {
+			label := c.Type
+			if c.Type == "other" && c.Label != "" {
+				label = c.Label
+			}
+			fmt.Printf("    [%d] %s: %s\n", i+1, label, c.Value)
+		}
+	} else {
+		fmt.Println("  Contacts: (none)")
+	}
+
+	if info.Notes != "" {
+		fmt.Printf("  Notes: %s\n", info.Notes)
 	}
 
 	return nil

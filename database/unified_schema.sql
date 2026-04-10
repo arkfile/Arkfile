@@ -373,7 +373,22 @@ CREATE TABLE IF NOT EXISTS credit_transactions (
 );
 
 -- =====================================================
--- PHASE 12: INDEXES FOR PERFORMANCE
+-- PHASE 12: USER CONTACT INFORMATION
+-- =====================================================
+
+-- Encrypted contact details for admin communication
+-- Contact data is encrypted server-side with a key derived from the master key.
+-- Only the admin can decrypt and read contact information via the API.
+CREATE TABLE IF NOT EXISTS user_contact_info (
+    username TEXT PRIMARY KEY,
+    encrypted_data BLOB NOT NULL,          -- AES-256-GCM encrypted JSON blob
+    nonce TEXT NOT NULL,                    -- base64-encoded 12-byte nonce
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+-- =====================================================
+-- PHASE 13: INDEXES FOR PERFORMANCE
 -- =====================================================
 
 -- Core table indexes
@@ -464,7 +479,7 @@ CREATE INDEX IF NOT EXISTS idx_credit_transactions_created_at ON credit_transact
 CREATE INDEX IF NOT EXISTS idx_credit_transactions_admin ON credit_transactions(admin_username);
 
 -- =====================================================
--- PHASE 13: TRIGGERS FOR AUTOMATIC UPDATES
+-- PHASE 14: TRIGGERS FOR AUTOMATIC UPDATES
 -- =====================================================
 
 -- Update trigger for opaque_user_data
@@ -530,7 +545,7 @@ BEGIN
 END;
 
 -- =====================================================
--- PHASE 14: MONITORING VIEWS
+-- PHASE 15: MONITORING VIEWS
 -- =====================================================
 
 -- View for monitoring rate limiting activity

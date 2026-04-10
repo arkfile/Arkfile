@@ -1307,8 +1307,102 @@ phase_10_share_operations() {
     info "Post-revoke share list output (10.15):"
     echo "$share_list_post_revoke_output"
 
-    # 10.16: Explicit user logout, then verify authenticated commands fail
-    section "10.16: User logout and post-logout unauthorized-command checks"
+    # 10.16: Contact info lifecycle tests (within active user session)
+    section "10.16: Contact info - verify empty initially"
+    local ci_get_empty_output ci_get_empty_code
+    safe_exec ci_get_empty_output ci_get_empty_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure contact-info get
+    if [ $ci_get_empty_code -eq 0 ] && echo "$ci_get_empty_output" | grep -q "No contact information set"; then
+        record_test "contact-info get (empty)" "PASS"
+    else
+        echo "$ci_get_empty_output"
+        record_test "contact-info get (empty)" "FAIL"
+    fi
+
+    section "10.17: Contact info - set with 2 contacts (email + signal)"
+    local CI_JSON_2='{"display_name":"Test User","contacts":[{"type":"email","value":"test@example.com"},{"type":"signal","value":"+1234567890"}],"notes":"Test notes for admin"}'
+    local ci_set2_output ci_set2_code
+    safe_exec ci_set2_output ci_set2_code \
+        bash -c "echo '${CI_JSON_2}' | $CLIENT --server-url '$SERVER_URL' --tls-insecure contact-info set --json -"
+    if [ $ci_set2_code -eq 0 ] && echo "$ci_set2_output" | grep -q "saved successfully"; then
+        record_test "contact-info set (2 contacts)" "PASS"
+    else
+        echo "$ci_set2_output"
+        record_test "contact-info set (2 contacts)" "FAIL"
+    fi
+
+    section "10.18: Contact info - verify 2 contacts"
+    local ci_get2_output ci_get2_code
+    safe_exec ci_get2_output ci_get2_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure contact-info get
+    if [ $ci_get2_code -eq 0 ] \
+        && echo "$ci_get2_output" | grep -q "Test User" \
+        && echo "$ci_get2_output" | grep -q "test@example.com" \
+        && echo "$ci_get2_output" | grep -q "signal"; then
+        record_test "contact-info get (2 contacts)" "PASS"
+    else
+        echo "$ci_get2_output"
+        record_test "contact-info get (2 contacts)" "FAIL"
+    fi
+    info "Contact info output (10.18):"
+    echo "$ci_get2_output"
+
+    section "10.19: Contact info - update to 3 contacts (add telegram)"
+    local CI_JSON_3='{"display_name":"Test User","contacts":[{"type":"email","value":"test@example.com"},{"type":"signal","value":"+1234567890"},{"type":"telegram","value":"@testuser"}],"notes":"Updated notes"}'
+    local ci_set3_output ci_set3_code
+    safe_exec ci_set3_output ci_set3_code \
+        bash -c "echo '${CI_JSON_3}' | $CLIENT --server-url '$SERVER_URL' --tls-insecure contact-info set --json -"
+    if [ $ci_set3_code -eq 0 ] && echo "$ci_set3_output" | grep -q "saved successfully"; then
+        record_test "contact-info set (3 contacts)" "PASS"
+    else
+        echo "$ci_set3_output"
+        record_test "contact-info set (3 contacts)" "FAIL"
+    fi
+
+    section "10.20: Contact info - verify 3 contacts"
+    local ci_get3_output ci_get3_code
+    safe_exec ci_get3_output ci_get3_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure contact-info get
+    if [ $ci_get3_code -eq 0 ] \
+        && echo "$ci_get3_output" | grep -q "test@example.com" \
+        && echo "$ci_get3_output" | grep -q "signal" \
+        && echo "$ci_get3_output" | grep -q "telegram"; then
+        record_test "contact-info get (3 contacts)" "PASS"
+    else
+        echo "$ci_get3_output"
+        record_test "contact-info get (3 contacts)" "FAIL"
+    fi
+
+    section "10.21: Contact info - update to 2 contacts (remove signal, keep email + telegram)"
+    local CI_JSON_FINAL='{"display_name":"Test User","contacts":[{"type":"email","value":"test@example.com"},{"type":"telegram","value":"@testuser"}],"notes":"Final notes for admin"}'
+    local ci_set_final_output ci_set_final_code
+    safe_exec ci_set_final_output ci_set_final_code \
+        bash -c "echo '${CI_JSON_FINAL}' | $CLIENT --server-url '$SERVER_URL' --tls-insecure contact-info set --json -"
+    if [ $ci_set_final_code -eq 0 ] && echo "$ci_set_final_output" | grep -q "saved successfully"; then
+        record_test "contact-info set (final 2 contacts)" "PASS"
+    else
+        echo "$ci_set_final_output"
+        record_test "contact-info set (final 2 contacts)" "FAIL"
+    fi
+
+    section "10.22: Contact info - verify final state (2 contacts, no signal)"
+    local ci_get_final_output ci_get_final_code
+    safe_exec ci_get_final_output ci_get_final_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure contact-info get
+    if [ $ci_get_final_code -eq 0 ] \
+        && echo "$ci_get_final_output" | grep -q "test@example.com" \
+        && echo "$ci_get_final_output" | grep -q "telegram" \
+        && ! echo "$ci_get_final_output" | grep -q "signal"; then
+        record_test "contact-info get (final 2, no signal)" "PASS"
+    else
+        echo "$ci_get_final_output"
+        record_test "contact-info get (final 2, no signal)" "FAIL"
+    fi
+    info "Final contact info output (10.22):"
+    echo "$ci_get_final_output"
+
+    # 10.23: Explicit user logout, then verify authenticated commands fail
+    section "10.23: User logout and post-logout unauthorized-command checks"
     logout_user_session "User logout (post-revoke)"
 
     # 10.16.1: list-files must fail after logout
@@ -1405,7 +1499,26 @@ phase_11_admin_system_status() {
         record_test "Admin system-status storage size non-zero" "PASS"
     fi
 
-    # 11.1: Admin cannot access user file list via user-facing client CLI
+    # 11.1: Admin reads test user's contact info (should see final 2 contacts from phase 10)
+    section "11.1: Admin reads user contact info"
+    local admin_ci_output admin_ci_code
+    safe_exec admin_ci_output admin_ci_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        user-contact-info --username "$TEST_USERNAME"
+    if [ $admin_ci_code -eq 0 ] \
+        && echo "$admin_ci_output" | grep -q "Test User" \
+        && echo "$admin_ci_output" | grep -q "test@example.com" \
+        && echo "$admin_ci_output" | grep -q "telegram" \
+        && ! echo "$admin_ci_output" | grep -q "signal"; then
+        record_test "Admin reads user contact info (2 contacts, no signal)" "PASS"
+    else
+        echo "$admin_ci_output"
+        record_test "Admin reads user contact info (2 contacts, no signal)" "FAIL"
+    fi
+    info "Admin contact info output (11.1):"
+    echo "$admin_ci_output"
+
+    # 11.2: Admin cannot access user file list via user-facing client CLI
     # The admin binary has its own saved session but $CLIENT uses the user session context,
     # which was logged out in phase 10.16. These commands must fail.
     section "11.1: Admin cannot access user files via user client"

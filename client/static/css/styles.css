@@ -502,6 +502,78 @@ button:hover {
     background-color: #c0392b;
 }
 
+/* Contact Info Panel */
+
+.contact-info-notice {
+    font-size: 0.85rem;
+    color: #718096;
+    margin-bottom: 1rem;
+    line-height: 1.4;
+}
+
+.contact-method-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.contact-method-row select.contact-type {
+    width: 120px;
+    padding: 0.4rem;
+    font-size: 0.85rem;
+}
+
+.contact-method-row input.contact-value {
+    flex: 1;
+    padding: 0.4rem;
+    font-size: 0.85rem;
+}
+
+.contact-method-row input.contact-label {
+    width: 100px;
+    padding: 0.4rem;
+    font-size: 0.85rem;
+}
+
+.contact-method-row .remove-contact-btn {
+    background: none;
+    border: 1px solid #e2e8f0;
+    color: #e53e3e;
+    cursor: pointer;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.8rem;
+    border-radius: 4px;
+}
+
+.contact-method-row .remove-contact-btn:hover {
+    background-color: #fed7d7;
+}
+
+#contact-info-panel textarea {
+    width: 100%;
+    padding: 0.5rem;
+    font-size: 0.85rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    resize: vertical;
+    font-family: inherit;
+}
+
+#contact-info-panel input[type="text"] {
+    width: 100%;
+    padding: 0.5rem;
+    font-size: 0.9rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+}
+
+#contact-info-panel label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 0.9rem;
+}
+
 /* OPAQUE Authentication Styles */
 
 /* Modal and Dialog Styles */

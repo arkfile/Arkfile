@@ -129,6 +129,11 @@ func RegisterRoutes() {
 	// auth internally via resolveExportAuth() which checks either JWT or token.
 	Echo.GET("/api/files/:fileId/export", ExportFile)
 
+	// Contact information - user endpoints (require TOTP)
+	totpProtectedGroup.GET("/api/user/contact-info", GetContactInfo)
+	totpProtectedGroup.PUT("/api/user/contact-info", PutContactInfo)
+	totpProtectedGroup.DELETE("/api/user/contact-info", DeleteContactInfo)
+
 	// Credits system - user endpoints (require TOTP)
 	totpProtectedGroup.GET("/api/credits", GetUserCredits)
 
@@ -150,6 +155,9 @@ func RegisterRoutes() {
 	adminGroup.GET("/users/:username/status", AdminGetUserStatus)
 	adminGroup.PUT("/users/:username/storage", UpdateUserStorageLimit)
 	adminGroup.POST("/users/:username/revoke", AdminRevokeUser)
+
+	// Contact information - admin endpoints (view any user's contact info)
+	adminGroup.GET("/users/:username/contact-info", AdminGetContactInfo)
 
 	// File export - admin endpoints (for disaster recovery)
 	adminGroup.GET("/files/:fileId/export", AdminExportFile)

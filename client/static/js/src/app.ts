@@ -203,6 +203,51 @@ class ArkFileApp {
         e.preventDefault();
         const { toggleSecuritySettings } = await import('./ui/sections');
         toggleSecuritySettings();
+        // Close contact info panel if open
+        const contactPanel = document.getElementById('contact-info-panel');
+        if (contactPanel && !contactPanel.classList.contains('hidden')) {
+          contactPanel.classList.add('hidden');
+        }
+      });
+    }
+
+    // Contact info toggle
+    const contactToggle = document.getElementById('contact-info-toggle');
+    if (contactToggle) {
+      contactToggle.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const { toggleContactInfoPanel } = await import('./ui/contact-info');
+        await toggleContactInfoPanel();
+      });
+    }
+
+    // Contact info save button
+    const saveContactBtn = document.getElementById('save-contact-info-btn');
+    if (saveContactBtn) {
+      saveContactBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const { saveContactInfo } = await import('./ui/contact-info');
+        await saveContactInfo();
+      });
+    }
+
+    // Contact info delete button
+    const deleteContactBtn = document.getElementById('delete-contact-info-btn');
+    if (deleteContactBtn) {
+      deleteContactBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const { deleteContactInfo } = await import('./ui/contact-info');
+        await deleteContactInfo();
+      });
+    }
+
+    // Add contact method button
+    const addContactBtn = document.getElementById('add-contact-method-btn');
+    if (addContactBtn) {
+      addContactBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const { addContactMethodRow } = await import('./ui/contact-info');
+        addContactMethodRow();
       });
     }
 

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
@@ -1629,5 +1630,208 @@ func handleGenerateTestFileCommand(args []string) error {
 	fmt.Printf("  Size: %s (%d bytes)\n", formatFileSize(totalBytes), totalBytes)
 	fmt.Printf("  Pattern: %s\n", *pattern)
 
+	return nil
+}
+
+// ============================================================
+// CONTACT INFO COMMAND
+// ============================================================
+
+// ContactInfoResponse represents the API response for contact info endpoints
+type ContactInfoResponse struct {
+	DisplayName string          `json:"display_name"`
+	Contacts    []ContactMethod `json:"contacts"`
+	Notes       string          `json:"notes"`
+}
+
+// ContactMethod represents a single contact method
+type ContactMethod struct {
+	Type  string `json:"type,omitempty"`
+	Value string `json:"value,omitempty"`
+	Label string `json:"label,omitempty"`
+}
+
+func handleContactInfoCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+	if len(args) < 1 {
+		fmt.Println("Usage: arkfile-client contact-info <subcommand>")
+		fmt.Println()
+		fmt.Println("Subcommands:")
+		fmt.Println("  get       View your contact information")
+		fmt.Println("  set       Set your contact information (interactive or --json)")
+		fmt.Println("  delete    Delete your contact information")
+		return nil
+	}
+
+	switch args[0] {
+	case "get":
+		return handleContactInfoGet(client, config)
+	case "set":
+		return handleContactInfoSet(client, config, args[1:])
+	case "delete":
+		return handleContactInfoDelete(client, config)
+	default:
+		return fmt.Errorf("unknown subcommand: %s (use: get, set, delete)", args[0])
+	}
+}
+
+func handleContactInfoGet(client *HTTPClient, config *ClientConfig) error {
+	session, err := requireSession(config)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.makeRequest("GET", "/api/user/contact-info", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to get contact info: %w", err)
+	}
+
+	hasInfo, _ := resp.Data["has_contact_info"].(bool)
+	if !hasInfo {
+		fmt.Println("No contact information set.")
+		fmt.Println("Use 'arkfile-client contact-info set' to add your contact details.")
+		return nil
+	}
+
+	// Extract contact_info from response data
+	contactInfoRaw, ok := resp.Data["contact_info"]
+	if !ok {
+		return fmt.Errorf("invalid response: missing contact_info")
+	}
+
+	// Re-marshal and unmarshal to get typed struct
+	infoJSON, err := json.Marshal(contactInfoRaw)
+	if err != nil {
+		return fmt.Errorf("failed to parse contact info: %w", err)
+	}
+
+	var info ContactInfoResponse
+	if err := json.Unmarshal(infoJSON, &info); err != nil {
+		return fmt.Errorf("failed to parse contact info: %w", err)
+	}
+
+	fmt.Printf("Contact Information for %s\n", session.Username)
+	fmt.Printf("  Display Name: %s\n", info.DisplayName)
+
+	if len(info.Contacts) > 0 {
+		fmt.Println("  Contacts:")
+		for i, c := range info.Contacts {
+			label := c.Type
+			if c.Type == "other" && c.Label != "" {
+				label = c.Label
+			}
+			fmt.Printf("    [%d] %s: %s\n", i+1, label, c.Value)
+		}
+	} else {
+		fmt.Println("  Contacts: (none)")
+	}
+
+	if info.Notes != "" {
+		fmt.Printf("  Notes: %s\n", info.Notes)
+	}
+
+	return nil
+}
+
+func handleContactInfoSet(client *HTTPClient, config *ClientConfig, args []string) error {
+	session, err := requireSession(config)
+	if err != nil {
+		return err
+	}
+
+	fs := flag.NewFlagSet("contact-info set", flag.ExitOnError)
+	jsonFile := fs.String("json", "", "JSON file path (use - for stdin)")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	var info ContactInfoResponse
+
+	if *jsonFile != "" {
+		// Load from JSON file or stdin
+		var data []byte
+		if *jsonFile == "-" {
+			data, err = io.ReadAll(os.Stdin)
+		} else {
+			data, err = os.ReadFile(*jsonFile)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read JSON: %w", err)
+		}
+		if err := json.Unmarshal(data, &info); err != nil {
+			return fmt.Errorf("invalid JSON: %w", err)
+		}
+	} else {
+		// Interactive mode
+		reader := bufio.NewReader(os.Stdin)
+
+		fmt.Print("Display name (what the admin should call you): ")
+		name, _ := reader.ReadString('\n')
+		info.DisplayName = strings.TrimSpace(name)
+
+		if info.DisplayName == "" {
+			return fmt.Errorf("display name is required")
+		}
+
+		// Collect contact methods
+		for {
+			fmt.Print("Add contact method? (y/n): ")
+			answer, _ := reader.ReadString('\n')
+			answer = strings.TrimSpace(strings.ToLower(answer))
+			if answer != "y" && answer != "yes" {
+				break
+			}
+
+			fmt.Print("  Type (email/sms/signal/whatsapp/wechat/telegram/matrix/other): ")
+			cType, _ := reader.ReadString('\n')
+			cType = strings.TrimSpace(strings.ToLower(cType))
+
+			contact := ContactMethod{Type: cType}
+
+			if cType == "other" {
+				fmt.Print("  Label (e.g. Session, Threema): ")
+				label, _ := reader.ReadString('\n')
+				contact.Label = strings.TrimSpace(label)
+			}
+
+			fmt.Print("  Value: ")
+			value, _ := reader.ReadString('\n')
+			contact.Value = strings.TrimSpace(value)
+
+			if contact.Value == "" {
+				fmt.Println("  Skipped (no value provided)")
+				continue
+			}
+
+			info.Contacts = append(info.Contacts, contact)
+		}
+
+		fmt.Print("Notes for admin (optional, press Enter to skip): ")
+		notes, _ := reader.ReadString('\n')
+		info.Notes = strings.TrimSpace(notes)
+	}
+
+	// Send to server
+	_, err = client.makeRequest("PUT", "/api/user/contact-info", info, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to save contact info: %w", err)
+	}
+
+	fmt.Println("Contact information saved successfully.")
+	return nil
+}
+
+func handleContactInfoDelete(client *HTTPClient, config *ClientConfig) error {
+	session, err := requireSession(config)
+	if err != nil {
+		return err
+	}
+
+	_, err = client.makeRequest("DELETE", "/api/user/contact-info", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to delete contact info: %w", err)
+	}
+
+	fmt.Println("Contact information deleted.")
 	return nil
 }

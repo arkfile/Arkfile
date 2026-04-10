@@ -204,9 +204,10 @@
             <div class="user-nav">
                 <div class="user-controls">
                     <a href="#" id="security-settings-toggle" class="nav-link">Security Settings</a>
+                    <a href="#" id="contact-info-toggle" class="nav-link">Contact Info</a>
                     <a href="#" id="logout-link" class="nav-link logout-link">Logout</a>
                 </div>
-                
+
                 <!-- Security settings panel (hidden by default) -->
                 <div id="security-settings" class="security-panel hidden">
                     <h3>Security Settings</h3>
@@ -218,6 +219,34 @@
                         <p><strong>Session Security:</strong> For maximum security, you can revoke access from all devices. This will sign you out everywhere.</p>
                         <button type="button" id="revoke-sessions-btn" class="danger-button">Revoke All Sessions</button>
                     </div>
+                </div>
+
+                <!-- Contact info panel (hidden by default) -->
+                <div id="contact-info-panel" class="security-panel hidden">
+                    <h3>Contact Information</h3>
+                    <p class="contact-info-notice">Contact details you provide here are encrypted at rest and readable only by the instance admin. Used solely for account-related communications.</p>
+
+                    <div class="setting-item">
+                        <label for="contact-display-name"><strong>Display Name</strong> (what should we call you?)</label>
+                        <input type="text" id="contact-display-name" maxlength="100" placeholder="Your name">
+                    </div>
+
+                    <div class="setting-item">
+                        <label><strong>Contact Methods</strong></label>
+                        <div id="contact-methods-list"></div>
+                        <button type="button" id="add-contact-method-btn" class="secondary-button">+ Add Contact Method</button>
+                    </div>
+
+                    <div class="setting-item">
+                        <label for="contact-notes"><strong>Notes for Admin</strong></label>
+                        <textarea id="contact-notes" maxlength="2000" rows="3" placeholder="Notification preferences, best times to reach you, etc."></textarea>
+                    </div>
+
+                    <div class="setting-item" style="display: flex; gap: 10px;">
+                        <button type="button" id="save-contact-info-btn">Save Contact Info</button>
+                        <button type="button" id="delete-contact-info-btn" class="danger-button">Delete</button>
+                    </div>
+                    <div id="contact-info-status"></div>
                 </div>
             </div>
             
