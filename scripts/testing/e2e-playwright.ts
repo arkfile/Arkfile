@@ -377,6 +377,98 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   });
 
   // --------------------------------------------------------------------------
+  // Phase 4b: File Deletion via UI
+  // --------------------------------------------------------------------------
+  test('Phase 4b: File deletion via Delete button', async () => {
+    const deleteFileName = 'pw_delete_test.bin';
+    const deleteFilePath = join(PLAYWRIGHT_TEMP_DIR, deleteFileName);
+
+    // Generate a small throwaway file inline
+    logStep('4b', `Generating ${deleteFileName} for deletion test...`);
+    execSync(`${CLIENT_BIN} generate-test-file --filename "${deleteFilePath}" --size 1024 --pattern random`, {
+      timeout: 10_000,
+    });
+
+    // Upload it via the browser UI
+    logStep('4b', `Uploading ${deleteFileName}...`);
+    await sharedPage.setInputFiles('#fileInput', deleteFilePath);
+    await expect(sharedPage.locator('#useAccountPassword')).toBeChecked();
+    await sharedPage.click('#upload-file-btn');
+
+    await sharedPage.waitForFunction(
+      () => {
+        const text = document.body.innerText.toLowerCase();
+        return text.includes('uploaded successfully');
+      },
+      { timeout: 180_000 },
+    );
+    logStep('4b', 'Delete-test file uploaded');
+
+    await sharedPage.waitForTimeout(3000);
+
+    // Ensure file appears in list (reload if needed)
+    let appeared = await fileExistsInList(sharedPage, deleteFileName);
+    if (!appeared) {
+      await sharedPage.reload({ waitUntil: 'networkidle' });
+      await sharedPage.waitForSelector('#file-section', { state: 'visible', timeout: 30_000 });
+      await sharedPage.waitForTimeout(2000);
+    }
+
+    await sharedPage.waitForFunction(
+      (filename: string) => {
+        const items = document.querySelectorAll('.file-item .file-info strong');
+        for (const item of items) {
+          if (item.textContent === filename) return true;
+        }
+        return false;
+      },
+      deleteFileName,
+      { timeout: 30_000 },
+    );
+
+    // Verify the Delete button exists on this file
+    const deleteFileItem = findFileItem(sharedPage, deleteFileName);
+    const deleteBtn = deleteFileItem.locator('.file-actions button.danger-button', { hasText: 'Delete' });
+    await expect(deleteBtn).toBeVisible({ timeout: 5_000 });
+    logStep('4b', 'Delete button found on file item');
+
+    // Click Delete and accept the confirmation dialog
+    sharedPage.on('dialog', async (dialog) => {
+      if (dialog.type() === 'confirm') {
+        const msg = dialog.message();
+        logStep('4b', `Confirmation dialog: "${msg.substring(0, 80)}..."`);
+        expect(msg).toContain('Export Backup');
+        await dialog.accept();
+      }
+    });
+
+    logStep('4b', 'Clicking Delete button...');
+    await deleteBtn.click();
+
+    // Wait for file to disappear from the list (loadFiles re-renders after deletion)
+    await sharedPage.waitForFunction(
+      (filename: string) => {
+        const items = document.querySelectorAll('.file-item .file-info strong');
+        for (const item of items) {
+          if (item.textContent === filename) return false;
+        }
+        return true;
+      },
+      deleteFileName,
+      { timeout: 15_000 },
+    );
+
+    sharedPage.removeAllListeners('dialog');
+
+    // Verify file is truly gone
+    const stillExists = await fileExistsInList(sharedPage, deleteFileName);
+    expect(stillExists).toBe(false);
+
+    logStep('4b', `File ${deleteFileName} deleted and removed from list`);
+    console.log('[OK] Phase 4b: File deletion via UI verified');
+  });
+
+  // --------------------------------------------------------------------------
   // Phase 5: Custom-Password Upload
   // --------------------------------------------------------------------------
   test('Phase 5: Upload file with custom password', async () => {
