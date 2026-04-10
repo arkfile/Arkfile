@@ -4,7 +4,7 @@
  * Tests for: encryptFEKForShare, decryptShareEnvelope, generateFEK,
  *            encodeFEK, decodeFEK, validateSharePasswordStrength
  *
- * Uses production Argon2id parameters (128 MiB, 4 iterations).
+ * Uses production Argon2id parameters (see crypto/argon2id-params.json).
  * Each encrypt/decrypt round-trip takes ~200-400ms.
  */
 
@@ -28,8 +28,8 @@ import { KEY_SIZES } from '../crypto/constants';
 const originalFetch = globalThis.fetch;
 
 const PROD_ARGON2_CONFIG = {
-  memoryCostKiB: 131072,
-  timeCost: 4,
+  memoryCostKiB: 65536,
+  timeCost: 3,
   parallelism: 1,
   keyLength: 32,
 };

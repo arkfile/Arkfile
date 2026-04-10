@@ -23,7 +23,7 @@ Reference: age v1.3.0 added PQ recipients; age will soon warn/error on non-PQ ty
 | Component | Algorithm | Why Safe |
 |---|---|---|
 | File data encryption | AES-256-GCM | Symmetric; Grover impractical at 256-bit |
-| Key derivation (passwords) | Argon2id (128MB, 4 iter, 32B key) | Symmetric/memory-hard; no quantum advantage |
+| Key derivation (passwords) | Argon2id (see crypto/argon2id-params.json) | Symmetric/memory-hard; no quantum advantage |
 | Hashing | SHA-256, SHA-384, SHA-512 | Symmetric; preimage resistance holds |
 | HKDF key derivation | HKDF-SHA256 | Symmetric (HMAC-based) |
 | FEK wrapping | AES-256-GCM | Symmetric |

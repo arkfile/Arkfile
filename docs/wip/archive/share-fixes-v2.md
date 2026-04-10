@@ -3484,7 +3484,7 @@ The share system now has a clean, consistent architecture:
 - **AAD binding**: Share ID + File ID prevents envelope swapping attacks
 - **64-byte envelope**: FEK (32) + Download Token (32) - no legacy fallbacks
 - **Download Token hash**: Server stores only the hash, never the plaintext token
-- **Argon2id KDF**: Strong password-based key derivation with 128MB memory requirement
+- **Argon2id KDF**: Strong password-based key derivation (see crypto/argon2id-params.json for current parameters)
 
 ---
 

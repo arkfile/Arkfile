@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Argon2id Benchmark</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    padding: 20px;
+    max-width: 600px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 16px; color: #fff; }
+  h2 { font-size: 1.1rem; margin: 16px 0 8px; color: #ccc; }
+  .config {
+    background: #252540;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 16px;
+  }
+  .param-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .param-row label {
+    font-size: 0.9rem;
+    color: #ccc;
+    flex: 1;
+  }
+  .param-row select, .param-row input {
+    background: #1a1a2e;
+    color: #fff;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 8px;
+    font-size: 0.95rem;
+    width: 120px;
+  }
+  .presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .preset-btn {
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    background: #333;
+    color: #ccc;
+    border: 1px solid #444;
+    border-radius: 4px;
+    cursor: pointer;
+    flex: 1;
+    min-width: 100px;
+    text-align: center;
+  }
+  .preset-btn:hover { background: #444; color: #fff; }
+  .preset-btn.active { background: #6366f1; border-color: #6366f1; color: #fff; }
+  button.run {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    background: #6366f1;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 16px;
+  }
+  button.run:hover { background: #5558e3; }
+  button.run:disabled { background: #444; cursor: not-allowed; }
+  #status {
+    background: #252540;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 16px;
+    min-height: 60px;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+  }
+  .result-time {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #22c55e;
+  }
+  .results-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+    font-size: 0.85rem;
+  }
+  .results-table th, .results-table td {
+    padding: 6px 8px;
+    border: 1px solid #333;
+    text-align: left;
+  }
+  .results-table th { background: #333; color: #fff; }
+  .results-table td { color: #ccc; }
+  .note {
+    margin-top: 16px;
+    font-size: 0.8rem;
+    color: #888;
+    line-height: 1.4;
+  }
+</style>
+</head>
+<body>
+
+<h1>Argon2id Key Derivation Benchmark</h1>
+
+<div class="config">
+  <h2>Presets</h2>
+  <div class="presets">
+    <button class="preset-btn active" onclick="setPreset(65536, 3, 1, this)">Arkfile Current<br>64MB / t=3</button>
+    <button class="preset-btn" onclick="setPreset(131072, 4, 1, this)">128MB / t=4</button>
+    <button class="preset-btn" onclick="setPreset(65536, 4, 1, this)">64MB / t=4</button>
+    <button class="preset-btn" onclick="setPreset(131072, 3, 1, this)">128MB / t=3</button>
+    <button class="preset-btn" onclick="setPreset(47104, 1, 1, this)">OWASP Rec<br>46MB / t=1</button>
+  </div>
+
+  <h2>Parameters</h2>
+  <div class="param-row">
+    <label>Memory (MiB):</label>
+    <select id="memory">
+      <option value="19456">19 MB</option>
+      <option value="32768">32 MB</option>
+      <option value="47104">46 MB</option>
+      <option value="65536" selected>64 MB</option>
+      <option value="131072">128 MB</option>
+      <option value="262144">256 MB</option>
+    </select>
+  </div>
+  <div class="param-row">
+    <label>Time cost (iterations):</label>
+    <select id="timeCost">
+      <option value="1">1</option>
+      <option value="2">2</option>
+      <option value="3" selected>3</option>
+      <option value="4">4</option>
+      <option value="5">5</option>
+      <option value="6">6</option>
+      <option value="8">8</option>
+    </select>
+  </div>
+  <div class="param-row">
+    <label>Parallelism:</label>
+    <select id="parallelism">
+      <option value="1" selected>1</option>
+      <option value="2">2</option>
+      <option value="4">4</option>
+    </select>
+  </div>
+</div>
+
+<button class="run" id="runBtn" onclick="runBenchmark()">Run Benchmark</button>
+
+<div id="status">Press the button to start. Choose a preset or adjust parameters above.</div>
+
+<div id="history" style="display:none">
+  <h2>Results History</h2>
+  <table class="results-table">
+    <thead><tr><th>Memory</th><th>t</th><th>p</th><th>Time</th></tr></thead>
+    <tbody id="historyBody"></tbody>
+  </table>
+</div>
+
+<div class="note">
+  Uses the same @noble/hashes argon2id as Arkfile. No network requests during derivation.
+  Key length is always 32 bytes (Argon2id variant).
+</div>
+
+<script type="module">
+import { argon2id } from 'https://esm.run/@noble/hashes@2.0.1/argon2';
+
+window.setPreset = function(m, t, p, btn) {
+  document.getElementById('memory').value = m;
+  document.getElementById('timeCost').value = t;
+  document.getElementById('parallelism').value = p;
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+};
+
+window.runBenchmark = async function() {
+  const btn = document.getElementById('runBtn');
+  const status = document.getElementById('status');
+
+  const m = parseInt(document.getElementById('memory').value);
+  const t = parseInt(document.getElementById('timeCost').value);
+  const p = parseInt(document.getElementById('parallelism').value);
+  const memMB = (m / 1024).toFixed(0);
+
+  btn.disabled = true;
+  btn.textContent = 'Running...';
+  status.textContent = 'Allocating ' + memMB + ' MB and running Argon2id (t=' + t + ', p=' + p + ')...\nThis will block the UI -- please wait.';
+
+  // Clear preset highlight if params were manually changed
+  document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active'));
+
+  await new Promise(r => setTimeout(r, 100));
+
+  const password = new TextEncoder().encode('BenchmarkPassword2025!TestOnly');
+  const salt = new Uint8Array(32);
+  crypto.getRandomValues(salt);
+
+  try {
+    const startTime = performance.now();
+
+    const key = argon2id(password, salt, {
+      t: t,
+      m: m,
+      p: p,
+      dkLen: 32,
+    });
+
+    const elapsed = performance.now() - startTime;
+    const seconds = (elapsed / 1000).toFixed(2);
+
+    status.innerHTML =
+      'SUCCESS!\n\n' +
+      'Config: ' + memMB + ' MB, t=' + t + ', p=' + p + '\n' +
+      'Derivation time: <span class="result-time">' + seconds + ' seconds</span>\n\n' +
+      'Key (hex): ' + Array.from(key).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 32) + '...';
+
+    // Add to history
+    const historyDiv = document.getElementById('history');
+    const historyBody = document.getElementById('historyBody');
+    historyDiv.style.display = 'block';
+    const row = document.createElement('tr');
+    row.innerHTML = '<td>' + memMB + ' MB</td><td>' + t + '</td><td>' + p + '</td><td><strong>' + seconds + 's</strong></td>';
+    historyBody.insertBefore(row, historyBody.firstChild);
+
+  } catch (err) {
+    status.textContent = 'ERROR: ' + err.message + '\n\n' +
+      'This may happen on devices with insufficient memory (needs ' + memMB + ' MB free).';
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Run Benchmark';
+};
+</script>
+
+</body>
+</html>
