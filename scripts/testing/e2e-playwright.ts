@@ -786,6 +786,131 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     console.log('[OK] Share A revoked successfully');
     sharedPage.removeAllListeners('dialog');
 
+    // ---- Contact Info Lifecycle Tests (within current logged-in session) ----
+    logStep('12', 'Contact Info: Navigating to app...');
+    await sharedPage.goto(SERVER_URL);
+    await sharedPage.waitForSelector('#file-section', { state: 'visible', timeout: 15_000 });
+
+    // Open Contact Info panel
+    logStep('12', 'Contact Info: Opening panel...');
+    await sharedPage.click('#contact-info-toggle');
+    await sharedPage.waitForSelector('#contact-info-panel', { state: 'visible', timeout: 5_000 });
+
+    // Clean up any pre-existing contact info (e.g. left by e2e-test.sh CLI tests)
+    const preExistingName = await sharedPage.inputValue('#contact-display-name');
+    if (preExistingName !== '') {
+      logStep('12', `Contact Info: Found pre-existing data (display_name="${preExistingName}"), deleting first...`);
+      sharedPage.on('dialog', async (dialog) => {
+        await dialog.accept();
+      });
+      await sharedPage.click('#delete-contact-info-btn');
+      await sharedPage.waitForTimeout(1_000);
+      sharedPage.removeAllListeners('dialog');
+    }
+
+    // Verify empty state (after cleanup)
+    const cleanName = await sharedPage.inputValue('#contact-display-name');
+    expect(cleanName).toBe('');
+    const cleanRows = await sharedPage.locator('.contact-method-row').count();
+    expect(cleanRows).toBe(0);
+    console.log('[OK] Contact Info: Panel open, empty state verified');
+
+    // Set initial contact info: display name + 1 email + notes
+    logStep('12', 'Contact Info: Setting initial data (1 email)...');
+    await sharedPage.fill('#contact-display-name', 'Playwright User');
+    await sharedPage.click('#add-contact-method-btn');
+    await sharedPage.waitForSelector('.contact-method-row', { state: 'visible', timeout: 3_000 });
+    await sharedPage.selectOption('.contact-method-row:first-child .contact-type', 'email');
+    await sharedPage.fill('.contact-method-row:first-child .contact-value', 'pw-test@example.com');
+    await sharedPage.fill('#contact-notes', 'Initial notes');
+    await sharedPage.click('#save-contact-info-btn');
+    await sharedPage.waitForTimeout(1_000);
+
+    // Verify via API
+    const ciData1 = await sharedPage.evaluate(async () => {
+      const token = localStorage.getItem('token');
+      const resp = await fetch('/api/user/contact-info', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return resp.json();
+    });
+    expect(ciData1.data.has_contact_info).toBe(true);
+    expect(ciData1.data.contact_info.display_name).toBe('Playwright User');
+    expect(ciData1.data.contact_info.contacts.length).toBe(1);
+    expect(ciData1.data.contact_info.contacts[0].type).toBe('email');
+    expect(ciData1.data.contact_info.contacts[0].value).toBe('pw-test@example.com');
+    expect(ciData1.data.contact_info.notes).toBe('Initial notes');
+    console.log('[OK] Contact Info: Initial set verified (1 email, notes)');
+
+    // Update: change only notes (leave email contact unchanged)
+    logStep('12', 'Contact Info: Updating notes...');
+    await sharedPage.fill('#contact-notes', '');
+    await sharedPage.fill('#contact-notes', 'Updated notes from Playwright');
+    await sharedPage.click('#save-contact-info-btn');
+    await sharedPage.waitForTimeout(1_000);
+
+    // Verify update via API
+    const ciData2 = await sharedPage.evaluate(async () => {
+      const token = localStorage.getItem('token');
+      const resp = await fetch('/api/user/contact-info', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return resp.json();
+    });
+    expect(ciData2.data.contact_info.notes).toBe('Updated notes from Playwright');
+    expect(ciData2.data.contact_info.contacts[0].value).toBe('pw-test@example.com');
+    console.log('[OK] Contact Info: Update verified (notes changed, email unchanged)');
+
+    // Delete contact info
+    logStep('12', 'Contact Info: Deleting...');
+    sharedPage.on('dialog', async (dialog) => {
+      await dialog.accept();
+    });
+    await sharedPage.click('#delete-contact-info-btn');
+    await sharedPage.waitForTimeout(1_000);
+    sharedPage.removeAllListeners('dialog');
+
+    // Verify deletion via API
+    const ciData3 = await sharedPage.evaluate(async () => {
+      const token = localStorage.getItem('token');
+      const resp = await fetch('/api/user/contact-info', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return resp.json();
+    });
+    expect(ciData3.data.has_contact_info).toBe(false);
+    console.log('[OK] Contact Info: Deletion verified');
+
+    // Re-set with final contact info (1 signal contact, left in place)
+    logStep('12', 'Contact Info: Re-setting final data (1 signal)...');
+    await sharedPage.fill('#contact-display-name', 'Playwright User Final');
+    await sharedPage.click('#add-contact-method-btn');
+    await sharedPage.waitForSelector('.contact-method-row', { state: 'visible', timeout: 3_000 });
+    await sharedPage.selectOption('.contact-method-row:first-child .contact-type', 'signal');
+    await sharedPage.fill('.contact-method-row:first-child .contact-value', '+9876543210');
+    await sharedPage.fill('#contact-notes', 'Final Playwright notes');
+    await sharedPage.click('#save-contact-info-btn');
+    await sharedPage.waitForTimeout(1_000);
+
+    // Verify final state via API
+    const ciData4 = await sharedPage.evaluate(async () => {
+      const token = localStorage.getItem('token');
+      const resp = await fetch('/api/user/contact-info', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      return resp.json();
+    });
+    expect(ciData4.data.has_contact_info).toBe(true);
+    expect(ciData4.data.contact_info.display_name).toBe('Playwright User Final');
+    expect(ciData4.data.contact_info.contacts.length).toBe(1);
+    expect(ciData4.data.contact_info.contacts[0].type).toBe('signal');
+    expect(ciData4.data.contact_info.contacts[0].value).toBe('+9876543210');
+    expect(ciData4.data.contact_info.notes).toBe('Final Playwright notes');
+    console.log('[OK] Contact Info: Final re-set verified (1 signal contact left in place)');
+
+    console.log('[OK] Phase 12 Contact Info: All contact info lifecycle tests passed');
+    // ---- End Contact Info Tests ----
+
     // Log out and verify Share A is denied
     await sharedPage.click('#logout-link');
     await sharedPage.waitForSelector('.home-container', { state: 'visible', timeout: 15_000 });
