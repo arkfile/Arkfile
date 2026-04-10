@@ -262,9 +262,9 @@ func RateLimitMiddleware(endpointConfig config.EndpointConfig) echo.MiddlewareFu
 				return next(c) // Rate limiting disabled for this endpoint
 			}
 
-			// Get entity ID from IP address (privacy-preserving)
+			// Get composite entity ID (privacy-preserving, NAT-aware)
 			clientIP := parseIPAddress(c.RealIP())
-			entityID := logging.GetEntityIDForIP(clientIP)
+			entityID := logging.GetCompositeEntityIDForRequest(clientIP, c.Request())
 
 			// Check rate limit
 			rateLimited, err := DefaultRateLimitManager.CheckRateLimit(
@@ -532,8 +532,8 @@ func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 			return echo.NewHTTPError(http.StatusForbidden, "Admin endpoints only available from localhost")
 		}
 
-		// 2. For rate limiting and audit logging, use EntityID system
-		entityID := logging.GetEntityIDForIP(clientIP)
+		// 2. For rate limiting and audit logging, use composite EntityID system
+		entityID := logging.GetCompositeEntityIDForRequest(clientIP, c.Request())
 
 		// 3. Check rate limit using existing EntityID system
 		if DefaultRateLimitManager != nil {

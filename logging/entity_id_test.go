@@ -395,3 +395,206 @@ func BenchmarkEntityIDGenerationDifferentIPs(b *testing.B) {
 		service.GetEntityID(ips[i%1000])
 	}
 }
+
+// Composite Entity ID Tests
+
+func TestCompositeEntityID_AuthenticatedUsesUsername(t *testing.T) {
+	service := createTestService(t)
+
+	// Authenticated requests with username should produce consistent entity IDs
+	input := EntityIDInput{
+		IP:       net.ParseIP("192.168.1.100"),
+		Username: "testuser0001",
+	}
+	entityID1 := service.GetCompositeEntityID(input)
+	entityID2 := service.GetCompositeEntityID(input)
+
+	if entityID1 != entityID2 {
+		t.Errorf("Same username should produce consistent entity ID: %s != %s", entityID1, entityID2)
+	}
+
+	if len(entityID1) != 16 {
+		t.Errorf("Entity ID should be 16 characters, got %d", len(entityID1))
+	}
+}
+
+func TestCompositeEntityID_UsernameIgnoresIP(t *testing.T) {
+	service := createTestService(t)
+
+	// Same username from different IPs should produce same entity ID
+	input1 := EntityIDInput{
+		IP:       net.ParseIP("192.168.1.100"),
+		Username: "testuser0001",
+	}
+	input2 := EntityIDInput{
+		IP:       net.ParseIP("10.0.0.50"),
+		Username: "testuser0001",
+	}
+
+	entityID1 := service.GetCompositeEntityID(input1)
+	entityID2 := service.GetCompositeEntityID(input2)
+
+	if entityID1 != entityID2 {
+		t.Errorf("Same username from different IPs should produce same entity ID: %s != %s", entityID1, entityID2)
+	}
+}
+
+func TestCompositeEntityID_DifferentUsernamesDifferentIDs(t *testing.T) {
+	service := createTestService(t)
+
+	input1 := EntityIDInput{Username: "testuser0001"}
+	input2 := EntityIDInput{Username: "testuser0002"}
+
+	entityID1 := service.GetCompositeEntityID(input1)
+	entityID2 := service.GetCompositeEntityID(input2)
+
+	if entityID1 == entityID2 {
+		t.Errorf("Different usernames should produce different entity IDs: %s == %s", entityID1, entityID2)
+	}
+}
+
+func TestCompositeEntityID_NATDisambiguation(t *testing.T) {
+	service := createTestService(t)
+
+	// Same IP, different User-Agents (simulating users behind NAT)
+	sharedIP := net.ParseIP("203.0.113.50")
+
+	input1 := EntityIDInput{
+		IP:             sharedIP,
+		UserAgent:      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0",
+		AcceptLanguage: "en-US,en;q=0.9",
+	}
+	input2 := EntityIDInput{
+		IP:             sharedIP,
+		UserAgent:      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/604.1",
+		AcceptLanguage: "en-US,en;q=0.9",
+	}
+	input3 := EntityIDInput{
+		IP:             sharedIP,
+		UserAgent:      "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0",
+		AcceptLanguage: "de-DE,de;q=0.9,en;q=0.8",
+	}
+
+	entityID1 := service.GetCompositeEntityID(input1)
+	entityID2 := service.GetCompositeEntityID(input2)
+	entityID3 := service.GetCompositeEntityID(input3)
+
+	// All three should be different despite same IP
+	if entityID1 == entityID2 {
+		t.Errorf("Same IP + different UA should produce different entity IDs: %s == %s", entityID1, entityID2)
+	}
+	if entityID1 == entityID3 {
+		t.Errorf("Same IP + different UA should produce different entity IDs: %s == %s", entityID1, entityID3)
+	}
+	if entityID2 == entityID3 {
+		t.Errorf("Same IP + different UA should produce different entity IDs: %s == %s", entityID2, entityID3)
+	}
+}
+
+func TestCompositeEntityID_SameBrowserSameID(t *testing.T) {
+	service := createTestService(t)
+
+	// Same IP + same User-Agent + same Accept-Language = same entity ID
+	input := EntityIDInput{
+		IP:             net.ParseIP("203.0.113.50"),
+		UserAgent:      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
+		AcceptLanguage: "en-US,en;q=0.9",
+	}
+
+	entityID1 := service.GetCompositeEntityID(input)
+	entityID2 := service.GetCompositeEntityID(input)
+
+	if entityID1 != entityID2 {
+		t.Errorf("Same composite input should produce consistent entity ID: %s != %s", entityID1, entityID2)
+	}
+}
+
+func TestCompositeEntityID_DomainSeparation(t *testing.T) {
+	service := createTestService(t)
+
+	// A username-based entity ID should not collide with an IP-based one
+	// even if the username happens to look like an IP composite
+	usernameInput := EntityIDInput{
+		Username: "testuser0001",
+	}
+	ipInput := EntityIDInput{
+		IP:             net.ParseIP("192.168.1.1"),
+		UserAgent:      "testuser0001",
+		AcceptLanguage: "",
+	}
+
+	entityIDUser := service.GetCompositeEntityID(usernameInput)
+	entityIDAnon := service.GetCompositeEntityID(ipInput)
+
+	if entityIDUser == entityIDAnon {
+		t.Errorf("Username-based and IP-based entity IDs should not collide: %s == %s", entityIDUser, entityIDAnon)
+	}
+}
+
+func TestCompositeEntityID_NilIPReturnsUnknown(t *testing.T) {
+	service := createTestService(t)
+
+	input := EntityIDInput{} // No IP, no username
+	entityID := service.GetCompositeEntityID(input)
+
+	if entityID != "unknown" {
+		t.Errorf("Empty input should return 'unknown', got '%s'", entityID)
+	}
+}
+
+func TestCompositeEntityID_AcceptLanguageAffectsID(t *testing.T) {
+	service := createTestService(t)
+
+	ip := net.ParseIP("192.168.1.100")
+	ua := "Mozilla/5.0 Chrome/120.0"
+
+	input1 := EntityIDInput{IP: ip, UserAgent: ua, AcceptLanguage: "en-US"}
+	input2 := EntityIDInput{IP: ip, UserAgent: ua, AcceptLanguage: "fr-FR"}
+
+	entityID1 := service.GetCompositeEntityID(input1)
+	entityID2 := service.GetCompositeEntityID(input2)
+
+	if entityID1 == entityID2 {
+		t.Errorf("Different Accept-Language should produce different entity IDs: %s == %s", entityID1, entityID2)
+	}
+}
+
+func BenchmarkCompositeEntityIDAuthenticated(b *testing.B) {
+	config := EntityIDConfig{
+		RotationPeriod: 24 * time.Hour,
+		RetentionDays:  90,
+	}
+	service, err := NewEntityIDService(config)
+	if err != nil {
+		b.Fatalf("Failed to create service: %v", err)
+	}
+
+	input := EntityIDInput{Username: "benchuser0001"}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		service.GetCompositeEntityID(input)
+	}
+}
+
+func BenchmarkCompositeEntityIDAnonymous(b *testing.B) {
+	config := EntityIDConfig{
+		RotationPeriod: 24 * time.Hour,
+		RetentionDays:  90,
+	}
+	service, err := NewEntityIDService(config)
+	if err != nil {
+		b.Fatalf("Failed to create service: %v", err)
+	}
+
+	input := EntityIDInput{
+		IP:             net.ParseIP("192.168.1.100"),
+		UserAgent:      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
+		AcceptLanguage: "en-US,en;q=0.9",
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		service.GetCompositeEntityID(input)
+	}
+}

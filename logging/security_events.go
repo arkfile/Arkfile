@@ -94,14 +94,22 @@ func NewSecurityEventLogger(db *sql.DB, entityIDService *EntityIDService, config
 	}
 }
 
-// LogSecurityEvent logs a security event with privacy-preserving entity identification
+// LogSecurityEvent logs a security event with privacy-preserving entity identification.
+// When a username is provided, the entity ID is derived from the username for precise
+// per-user identification. For anonymous events, the entity ID is derived from the IP.
 func (sel *SecurityEventLogger) LogSecurityEvent(eventType SecurityEventType, ip net.IP, username *string, deviceProfile *string, details map[string]interface{}) error {
-	// Generate privacy-preserving entity ID
+	// Generate privacy-preserving composite entity ID
 	entityID := ""
 	timeWindow := ""
-	if sel.entityIDService != nil && ip != nil {
-		entityID = sel.entityIDService.GetEntityID(ip)
+	if sel.entityIDService != nil {
 		timeWindow = sel.entityIDService.GetCurrentTimeWindow()
+		input := EntityIDInput{IP: ip}
+		if username != nil && *username != "" {
+			input.Username = *username
+		}
+		if input.Username != "" || input.IP != nil {
+			entityID = sel.entityIDService.GetCompositeEntityID(input)
+		}
 	}
 
 	// Determine severity based on event type
