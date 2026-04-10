@@ -319,6 +319,6 @@ Breaking changes will be announced in release notes; clients should pin a minor 
 
 ## Support
 
-Questions, comments or bug reports? Email **arkfile [at] pm [dot] me** or open an issue on GitHub.  
+Questions, comments or bug reports? Email **arkfile [at] pm [dot] me** / **arkfile [at] tutanota [dot] com** or open an issue on GitHub.  
 
 Please avoid posting sensitive information in public issues.
