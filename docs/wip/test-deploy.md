@@ -1,4 +1,4 @@
-# test-deploy.sh: Beta Deployment Plan for test.arkfile.net
+# test-deploy.sh: Test Deployment Plan for test.arkfile.net
 
 ## Overview
 
@@ -11,8 +11,8 @@ This document outlines the design for `scripts/test-deploy.sh`, a first-time dep
 - Real domain TLS via Caddy + deSEC DNS-01 challenge (Let's Encrypt)
 - Admin bootstrap flow (no dev admin seeding)
 - All services running as systemd units under the `arkfile` user
-- SeaweedFS as local S3-compatible storage backend (single-node beta, Apache 2.0 license)
-- rqlite as database (single-node beta)
+- SeaweedFS as local S3-compatible storage backend (single-node, Apache 2.0 license)
+- rqlite as database (single-node)
 - Security hardened (no debug mode, no dev test API, proper rate limiting)
 
 **Not in scope (future work):**
@@ -25,7 +25,10 @@ This document outlines the design for `scripts/test-deploy.sh`, a first-time dep
 
 Before running `test-deploy.sh`, the target VPS must have:
 
-1. **OS**: Debian 12+, Ubuntu 22.04+, Alma/Rocky 9+, or Fedora 39+
+1. **OS**: Debian 12+, Ubuntu 22.04+, Alma/Rocky 9+, or Fedora 39+ (primary supported targets)
+   Note: Scripts detect OS family (debian/rhel) and use appropriate package managers and
+   firewall tools. FreeBSD, OpenBSD, and Alpine are stretch goals for future adaptation;
+   OS-specific logic in scripts is commented to aid future BSD/Alpine porting.
 2. **Hardware**: Minimum 2 vCPU, 4GB RAM, 20GB storage
 3. **Network**:
    - Port 443 open (for Caddy to serve HTTPS to users)
@@ -49,6 +52,24 @@ deSEC (desec.io) is a free, privacy-focused DNS hosting service run by deSEC e.V
 ### Multi-VPS / Multi-Provider
 
 deSEC is a standalone DNS hosting service, not tied to any VPS provider. You point your registrar's nameservers to deSEC, and deSEC manages all DNS records centrally. You can then point `test.arkfile.net` to VPS-A (provider 1) and `arkfile.net` to VPS-B (provider 2) -- each VPS runs its own Caddy with the same deSEC API token and independently obtains its own Let's Encrypt certificate via DNS-01.
+
+### Pre-VPS Setup: deSEC + DNS Configuration
+
+Complete these steps before running `test-deploy.sh`:
+
+1. Create a deSEC account at desec.io (free)
+2. Add your domain (e.g. `arkfile.net`) to deSEC -- this gives you deSEC nameservers
+3. Point your registrar's nameservers to deSEC's nameservers (`ns1.desec.io`, `ns2.desec.org`)
+   -- this is done at wherever you registered/bought the domain, not at deSEC or Contabo
+4. Create an A record in deSEC: `test.arkfile.net` -> your VPS public IP address
+5. Generate a deSEC API token in the deSEC dashboard (Settings -> Tokens)
+6. Wait for DNS propagation (usually 15 min to a few hours depending on registrar TTL)
+7. Verify from the VPS: `dig test.arkfile.net` should return your VPS IP
+
+The deSEC token is a high-value secret -- it has write access to your DNS records. Keep it offline
+when not in use. The script stores it in `/opt/arkfile/etc/caddy-env` (owned by `caddy:arkfile`,
+mode 640), which is referenced by the Caddy systemd service via `EnvironmentFile`. Do not embed
+it in the Caddyfile or commit it to version control.
 
 ## Script Outline: test-deploy.sh
 
@@ -74,7 +95,41 @@ deSEC is a standalone DNS hosting service, not tied to any VPS provider. You poi
 - Confirm with user before proceeding (no NUKE prompt -- this is constructive)
 ```
 
-### Step 1: System User and Directory Structure
+### Step 1: Firewall Configuration
+
+Mandatory for all VPS deployments. Opens only the ports required for public operation.
+
+```
+- Detect active firewall tool:
+    - RHEL-family (Alma/Rocky/Fedora): firewalld
+    - Debian-family (Debian/Ubuntu): ufw
+
+- If firewalld:
+    - firewall-cmd --permanent --set-default-zone=drop
+    - firewall-cmd --permanent --add-service=ssh
+    - firewall-cmd --permanent --add-service=http
+    - firewall-cmd --permanent --add-service=https
+    - firewall-cmd --reload
+    - Verify: firewall-cmd --list-all
+
+- If ufw:
+    - ufw default deny incoming
+    - ufw default allow outgoing
+    - ufw allow 22/tcp (SSH)
+    - ufw allow 80/tcp (HTTP redirect)
+    - ufw allow 443/tcp (HTTPS)
+    - ufw --force enable
+    - Verify: ufw status verbose
+
+- If neither found: warn and continue (firewall may be managed externally)
+
+Ports that must NOT be publicly accessible:
+    - 8443 (Arkfile internal TLS -- Caddy proxies to this on localhost only)
+    - 4001 (rqlite HTTP API -- localhost only)
+    - 9332 (SeaweedFS S3 gateway -- localhost only)
+```
+
+### Step 2: System User and Directory Structure
 
 ```
 - Run scripts/setup/01-setup-users.sh
@@ -86,7 +141,7 @@ deSEC is a standalone DNS hosting service, not tied to any VPS provider. You poi
     - Creates /var/log/caddy directory for Caddy logs
 ```
 
-### Step 2: Build Application
+### Step 3: Build Application
 
 ```
 - Preserve original user context (SUDO_USER) for Go operations
@@ -114,7 +169,7 @@ deSEC is a standalone DNS hosting service, not tied to any VPS provider. You poi
     - BUILD_BIN/arkfile-admin (admin CLI)
 ```
 
-### Step 3: Deploy Build Artifacts
+### Step 4: Deploy Build Artifacts
 
 ```
 - Run scripts/setup/deploy.sh
@@ -130,7 +185,7 @@ deSEC is a standalone DNS hosting service, not tied to any VPS provider. You poi
     - /opt/arkfile/client/static/js/libopaque.js
 ```
 
-### Step 4: Generate Cryptographic Material
+### Step 5: Generate Cryptographic Material
 
 ```
 - Generate Master Key:
@@ -139,26 +194,26 @@ deSEC is a standalone DNS hosting service, not tied to any VPS provider. You poi
 - Generate internal TLS certificates (for inter-service communication):
     - Run scripts/setup/04-setup-tls-certs.sh
     - These are self-signed certs for Arkfile<->rqlite internal TLS
-    - Public-facing TLS is handled by Caddy + Let's Encrypt (Step 7)
+    - Public-facing TLS is handled by Caddy + Let's Encrypt (Step 8)
 - Set ownership and permissions:
     - chown -R arkfile:arkfile /opt/arkfile
     - chmod 700 on all key directories
 - Verify ownership (no root-owned files in /opt/arkfile)
 ```
 
-### Step 5: Generate secrets.env (Beta Configuration)
+### Step 6: Generate secrets.env (Test Configuration)
 
 ```
 Generate /opt/arkfile/etc/secrets.env with:
 
-    # Beta Deployment Configuration
+    # Test Deployment Configuration
     # Generated: <timestamp>
     # Domain: <DOMAIN>
 
     # Database Configuration
     DATABASE_TYPE=rqlite
     RQLITE_ADDRESS=http://localhost:4001
-    RQLITE_USERNAME=beta-user
+    RQLITE_USERNAME=test-user
     RQLITE_PASSWORD=<random: openssl rand -hex 16>
 
     # Arkfile Application Configuration
@@ -174,9 +229,9 @@ Generate /opt/arkfile/etc/secrets.env with:
     # Storage Configuration - Generic S3 (local SeaweedFS backend)
     STORAGE_PROVIDER=generic-s3
     S3_ENDPOINT=http://localhost:9332
-    S3_ACCESS_KEY=arkfile-beta
+    S3_ACCESS_KEY=arkfile-test
     S3_SECRET_KEY=<random: openssl rand -hex 16>
-    S3_BUCKET=arkfile-beta
+    S3_BUCKET=arkfile-test
     S3_REGION=us-east-1
     S3_FORCE_PATH_STYLE=true
     S3_USE_SSL=false
@@ -190,10 +245,10 @@ Also generate /opt/arkfile/etc/seaweedfs-s3.json with S3 credentials
     # Admin Bootstrap Mode (true for first-time setup)
     ARKFILE_FORCE_ADMIN_BOOTSTRAP=true
 
-    # CRITICAL: Dev/Test API DISABLED for beta
+    # CRITICAL: Dev/Test API DISABLED for test deployments
     ADMIN_DEV_TEST_API_ENABLED=false
 
-    # Beta Settings (NOT development)
+    # Test Settings (NOT development)
     REQUIRE_APPROVAL=true
     ENABLE_REGISTRATION=true
     DEBUG_MODE=false
@@ -203,13 +258,13 @@ Also generate /opt/arkfile/etc/seaweedfs-s3.json with S3 credentials
 - Set permissions: 640
 ```
 
-### Step 6: Generate rqlite Auth File
+### Step 7: Generate rqlite Auth File
 
 ```
 Generate /opt/arkfile/etc/rqlite-auth.json:
     [
       {
-        "username": "beta-user",
+        "username": "test-user",
         "password": "<same RQLITE_PASSWORD from secrets.env>",
         "perms": ["all"]
       }
@@ -219,34 +274,63 @@ Generate /opt/arkfile/etc/rqlite-auth.json:
 - Set permissions: 640
 ```
 
-### Step 7: Setup Caddy with deSEC DNS Challenge
+### Step 8: Setup Caddy with deSEC DNS Challenge
 
 This is the major new component vs. dev-reset.sh.
 
 ```
 Decision: Bare-metal Caddy vs. Container Caddy
 
-For beta, use bare-metal Caddy with custom build (simpler, matches the rest of the bare-metal systemd setup). Container deployment is a separate future effort (docs/wip/podman.md).
+For test, use bare-metal Caddy with custom build (simpler, matches the rest of the bare-metal systemd setup). Container deployment is a separate future effort (docs/wip/podman.md).
 
 A. Build custom Caddy with deSEC module:
-    - Use xcaddy to build Caddy with github.com/caddy-dns/desec
+    - Install xcaddy: go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+      (Go is already a prerequisite, so no additional toolchain needed)
+    - Build: xcaddy build --with github.com/caddy-dns/desec
     - Install to /usr/local/bin/caddy
-    - (Or: download pre-built if available)
+    - Verify: /usr/local/bin/caddy version (should show caddy with desec module)
 
-B. Generate Caddyfile for test.arkfile.net:
-    - Write to /etc/caddy/Caddyfile
-    - Content (see "Caddyfile for Beta" section below)
+B. Generate Caddyfile from Caddyfile.test template:
+    - Caddyfile.test is maintained in the repo root as a reusable template
+      with {DOMAIN} placeholder
+    - script substitutes actual domain via sed and writes to /etc/caddy/Caddyfile
+    - Content (see "Caddyfile for Test Deployment" section below)
 
-C. Configure Caddy systemd service:
+C. Configure Caddy systemd service and token storage:
     - Create caddy user/group if not present
     - Create /var/lib/caddy, /var/log/caddy, /etc/caddy directories
-    - Install systemd/caddy.service (updated for deSEC token)
-    - Set DESEC_TOKEN in caddy service environment or env file
+    - Store deSEC token in /opt/arkfile/etc/caddy-env:
+        DESEC_TOKEN=<token from --desec-token CLI arg>
+      Ownership: caddy:arkfile, permissions: 640
+      (Follows the same secrets-in-files pattern as secrets.env and rqlite-auth.json.
+      caddy user can read it; arkfile group access for operational convenience.)
+    - Install systemd/caddy.service with:
+        EnvironmentFile=/opt/arkfile/etc/caddy-env
+        After=network-online.target (NOT After=arkfile.service;
+        Caddy health-checks Arkfile independently via /readyz)
+    - systemctl daemon-reload
 
-D. Verify Caddy can resolve the domain via DNS-01 challenge
+D. SELinux configuration (RHEL-family only):
+    - Detect: SELINUX_STATUS=$(getenforce 2>/dev/null || echo "Disabled")
+    - If enforcing:
+        - setsebool -P httpd_can_network_connect 1
+          (allows Caddy to proxy to Arkfile on localhost:8443)
+        - semanage fcontext -a -t httpd_config_t "/etc/caddy(/.*)?"
+        - semanage fcontext -a -t httpd_var_lib_t "/var/lib/caddy(/.*)?"
+        - semanage fcontext -a -t httpd_log_t "/var/log/caddy(/.*)?"
+        - semanage fcontext -a -t httpd_exec_t "/usr/local/bin/caddy"
+        - restorecon -R /etc/caddy /var/lib/caddy /var/log/caddy
+        - restorecon /usr/local/bin/caddy
+        - Log all SELinux changes made for auditability
+    - If permissive or disabled: log status, skip SELinux steps
+
+E. Verify Caddy can start and resolve the domain via DNS-01 challenge:
+    - caddy validate --config /etc/caddy/Caddyfile
+    - Start caddy, then poll https://<DOMAIN>/readyz for up to 90s
+      (DNS-01 cert acquisition can take 30-60s on first run)
 ```
 
-#### Caddyfile for Beta (test.arkfile.net)
+#### Caddyfile for Test Deployment (test.arkfile.net)
 
 ```caddy
 {
@@ -308,7 +392,7 @@ Key design decisions for the Caddyfile:
 - TLS 1.3 only, P-384 keys, strong security headers
 - No HTTP redirect block needed -- Caddy auto-redirects HTTP->HTTPS by default
 
-### Step 8: Setup SeaweedFS
+### Step 9: Setup SeaweedFS
 
 ```
 - Run scripts/setup/05-setup-seaweedfs.sh
@@ -318,7 +402,7 @@ Key design decisions for the Caddyfile:
     - Sets ownership to arkfile:arkfile
 ```
 
-### Step 9: Setup rqlite
+### Step 10: Setup rqlite
 
 ```
 - Run scripts/setup/06-setup-rqlite-build.sh [--force if requested]
@@ -327,7 +411,7 @@ Key design decisions for the Caddyfile:
     - Installs rqlite systemd service
 ```
 
-### Step 10: Start Services (Ordered)
+### Step 11: Start Services (Ordered)
 
 ```
 - systemctl daemon-reload
@@ -356,7 +440,7 @@ D. Start Caddy:
     - Verify: curl https://test.arkfile.net/readyz returns "status":"ready"
 ```
 
-### Step 11: Health Verification
+### Step 12: Health Verification
 
 ```
 A. Internal health checks:
@@ -380,7 +464,7 @@ D. Ownership verification:
     - No root-owned files in /opt/arkfile
 ```
 
-### Step 12: Admin Bootstrap Instructions
+### Step 13: Admin Bootstrap Instructions
 
 ```
 After all services are running, output instructions for admin bootstrap:
@@ -416,7 +500,7 @@ After all services are running, output instructions for admin bootstrap:
 
 | Aspect | dev-reset.sh | test-deploy.sh |
 |---|---|---|
-| **Purpose** | Local dev iteration (destroy + rebuild) | First-time beta deployment |
+| **Purpose** | Local dev iteration (destroy + rebuild) | First-time test deployment |
 | **Data handling** | NUKES all data, keys, database | Never destroys data (constructive only) |
 | **TLS (public)** | Self-signed (localhost) | Let's Encrypt via Caddy + deSEC |
 | **TLS (internal)** | Self-signed | Self-signed (same) |
@@ -427,87 +511,83 @@ After all services are running, output instructions for admin bootstrap:
 | **DEBUG_MODE** | true | false |
 | **LOG_LEVEL** | debug | info |
 | **WASM trace logging** | LIBOPAQUE_DEFINES="-DTRACE" | Unset (no trace) |
-| **REQUIRE_APPROVAL** | false | true |
+| **REQUIRE_APPROVAL** | true | true |
 | **CORS_ALLOWED_ORIGINS** | https://localhost:8443 | https://test.arkfile.net |
-| **Credentials** | Random (dev prefix) | Random (beta prefix) |
+| **Credentials** | Random (dev prefix) | Random (test prefix) |
 | **Idempotent** | Yes (destructive reset) | No (first-time only; use separate update script) |
 
-## Open Questions and Decisions Needed
+## Resolved Design Decisions
 
 ### 1. Caddy Build Strategy
-How should the custom Caddy with deSEC module be obtained?
-- **Option A**: Script builds it on the VPS using `xcaddy` (requires Go, which we already have)
-- **Option B**: Pre-build and host a binary somewhere
-- **Option C**: Use Podman to build it in a container, extract the binary
-
-Recommendation: **Option A** -- `xcaddy` is simple and Go is already a prerequisite.
+DECIDED: Build on VPS using `xcaddy` (Go is already a prerequisite).
+`go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest`
+`xcaddy build --with github.com/caddy-dns/desec`
 
 ### 2. Arkfile Internal TLS vs. Caddy-Only TLS
-Currently Arkfile serves its own TLS on 8443 with self-signed certs. Caddy then proxies to it. Two options:
-- **Option A (current plan)**: Keep Arkfile's internal TLS. Caddy uses `tls_insecure_skip_verify` to talk to it. Double encryption in transit.
-- **Option B**: Disable Arkfile's internal TLS, have Caddy proxy to plain HTTP on 8080. Simpler, but internal traffic is unencrypted.
-
-Recommendation: **Option A** -- defense in depth. The app enforces TLS 1.3 internally, and Caddy handles the public-facing cert. If someone bypasses Caddy, Arkfile still requires TLS.
+DECIDED: Keep Arkfile's internal TLS (defense in depth). Caddy uses `tls_insecure_skip_verify`
+to proxy to self-signed internal certs on port 8443. If someone bypasses Caddy, Arkfile
+still requires TLS. This is implemented in Step 8 (Caddy setup).
 
 ### 3. Firewall Configuration
-Should the script configure firewall rules (ufw/firewalld)?
-- Close all ports except 22 (SSH), 80, 443
-- Port 8443 should NOT be publicly accessible (Caddy proxies to it internally)
-- Ports 4001 (rqlite), 9332 (SeaweedFS S3) should NOT be publicly accessible
+DECIDED: Mandatory. Detects `firewalld` (RHEL-family) or `ufw` (Debian-family) and
+opens only ports 22, 80, 443. Implemented as Step 1. No `--skip-firewall` flag -- a
+VPS without a configured firewall is not acceptable.
 
-Recommendation: Yes, add a firewall step. Keep it optional with a `--skip-firewall` flag.
-
-### 4. Storage Backend for Beta
-- **SeaweedFS local** (current plan): Simple, all data on the VPS, Apache 2.0 license
-- **External S3** (Wasabi/B2): Data stored externally, VPS is stateless for files
-
-Recommendation: Start with SeaweedFS local for simplicity. Add external S3 support as a future `--storage-backend` option.
+### 4. Storage Backend
+DECIDED: SeaweedFS local for initial deployment (simple, all data on the VPS, Apache 2.0).
+External S3 support (Wasabi/B2) is future work via `--storage-backend` option.
 
 ### 5. Backup Strategy
-Beta data will be real (even if limited). Need at minimum:
-- rqlite database backup (cron job)
-- Master key backup (manual, offline)
-- SeaweedFS data backup (optional for beta)
-
-Recommendation: Document manual backup procedures in the output. Automate in a future iteration.
+DECIDED: Document manual backup procedures in the script output at completion. Automate
+in a future iteration. At minimum, operators must:
+- Back up the Master Key offline (ARKFILE_MASTER_KEY from /opt/arkfile/etc/secrets.env)
+- Back up the rqlite database periodically (future: cron job)
 
 ### 6. Update/Redeploy Script
-`test-deploy.sh` is for first-time setup. A separate `test-update.sh` (or `beta-update.sh`) will be needed for:
-- Pull latest code
-- Rebuild
-- Deploy new artifacts
-- Restart services (preserving data)
+DECIDED: A separate `test-update.sh` script is needed for rebuilding and redeploying
+without nuking data. This is out of scope for the current effort.
 
-This mirrors how `dev-reset.sh` handles rebuilds but without the NUKE step.
+### 7. deSEC Token Storage
+DECIDED: Store in `/opt/arkfile/etc/caddy-env` (owned by `caddy:arkfile`, mode 640),
+referenced via `EnvironmentFile=` in caddy.service. Follows existing secrets-in-files
+pattern used by secrets.env and rqlite-auth.json.
+
+### 8. Caddyfile Template
+DECIDED: Maintain `Caddyfile.test` in the repo root as a reusable template with `{DOMAIN}`
+placeholder. test-deploy.sh uses `sed` to substitute the actual domain and writes the result
+to `/etc/caddy/Caddyfile`.
+
+## Stale Files Identified During Planning
+
+These files contain outdated references and will be updated as part of this effort:
+
+- `Caddyfile`: References `{$PROD_PORT}`/`{$TEST_PORT}`, cross-environment failover logic,
+  and `health_uri /health` (should be `/readyz`). All stale.
+- `Caddyfile.local`: Uses `health_uri /health` (should be `/readyz`), proxies localhost:8443
+  to itself (broken self-referencing config), and CSP is missing `wasm-unsafe-eval` and
+  `data: blob:`. Stale.
+- `systemd/caddy.service`: References `arkfile@prod.service` and `arkfile@test.service`
+  (template units that do not exist). Stale.
 
 ## Cleanup: What Else Should Change
 
-### Update 00-setup-foundation.sh
-Its "NEXT STEP" output still references `quick-start.sh` and other non-existent component setup scripts. Update to reference `dev-reset.sh` for local dev test or `local-deploy.sh` for local non-dev deployment or `test-deploy.sh` for beta deployment.
+### Update docs/setup.md
+Update stale references to scripts, ports, endpoints, and configuration patterns.
 
-### Update setup.md
-Multiple stale references:
-- Method 1 references `quick-start.sh` and `http://localhost:8080` (plain HTTP)
-- Method 2 references non-existent `integration-test.sh`
-- Method 3 references `00-setup-foundation.sh` with old script numbers
-- Production setup references `scripts/deprecated/first-time-setup.sh`
-- Health checks reference `http://localhost:8080/health` instead of `https://localhost:8443/readyz`
-- Multiple sections describe HTTP-only access patterns
-- Registration example uses email format `admin@test.local` which is invalid for current username validation
+### Fix Caddyfile and Caddyfile.local
+Correct health endpoints (`/health` -> `/readyz`), fix CSP, remove stale cross-environment
+failover logic from `Caddyfile`. Fix self-referencing proxy in `Caddyfile.local`.
 
-### Update Caddyfile (production)
-The production `Caddyfile` references `{$PROD_PORT}` and `{$TEST_PORT}` env vars and has cross-environment failover logic. For the beta this is overkill. The beta Caddyfile should be a standalone, simple config for just `test.arkfile.net`.
-
-### Update systemd/caddy.service
-The current service file references `arkfile@prod.service` and `arkfile@test.service` (template units) which don't exist. For beta, simplify to depend on `arkfile.service`.
+### Fix systemd/caddy.service
+Remove stale `Wants=arkfile@prod.service arkfile@test.service` references.
+Update to `After=network-online.target` with `EnvironmentFile=/opt/arkfile/etc/caddy-env`.
 
 ## Implementation Priority
 
 1. Write `scripts/test-deploy.sh` following this plan
-2. Delete `scripts/quick-start.sh`
-3. Create `Caddyfile.beta` for test.arkfile.net
-4. Update `systemd/caddy.service` for beta (or create `systemd/caddy-beta.service`)
-5. Update `scripts/setup/00-setup-foundation.sh` references
-6. Update `docs/setup.md` to reflect current state
-7. Test on a fresh VPS with `test.arkfile.net` DNS configured
-8. Document admin bootstrap walkthrough with real output
+2. Create `Caddyfile.test` template in repo root
+3. Update `systemd/caddy.service` (remove stale template unit refs, add EnvironmentFile)
+4. Fix stale `Caddyfile` and `Caddyfile.local` (health endpoints, CSP, remove stale logic)
+5. Update `docs/setup.md` to reflect current state
+6. Test on a fresh VPS with `test.arkfile.net` DNS configured
+7. Document admin bootstrap walkthrough with real output

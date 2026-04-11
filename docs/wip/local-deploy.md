@@ -236,7 +236,7 @@ Also generate /opt/arkfile/etc/seaweedfs-s3.json with matching S3 credentials:
     ADMIN_DEV_TEST_API_ENABLED=false
 
     # Local Deployment Settings (NOT development)
-    REQUIRE_APPROVAL=false
+    REQUIRE_APPROVAL=true
     ENABLE_REGISTRATION=true
     DEBUG_MODE=false
     LOG_LEVEL=info
@@ -401,7 +401,7 @@ Output:
 | **DEBUG_MODE** | true | false |
 | **LOG_LEVEL** | debug | info |
 | **WASM trace logging** | LIBOPAQUE_DEFINES="-DTRACE" | Unset (no trace) |
-| **REQUIRE_APPROVAL** | false | false (configurable) |
+| **REQUIRE_APPROVAL** | true | true |
 | **CORS_ALLOWED_ORIGINS** | https://localhost:8443 | https://localhost:TLS_PORT,https://LAN_IP:TLS_PORT |
 | **Credentials** | Random with `Dev` prefix | Random with `local-` prefix, no dev patterns |
 | **Idempotent** | Yes (destructive reset) | No (first-time only) |
