@@ -51,7 +51,7 @@ TEST_PASSWORD="${TEST_PASSWORD:-MyVacation2025PhotosForFamily!ExtraSecure}"
 ATTACKER_ADMIN_USERNAME="attacker-admin"
 ATTACKER_ADMIN_PASSWORD="AttackerPass123!SecureEnough"
 
-# Share passwords (18+ chars, meets share password requirements)
+# Share passwords (20+ chars, meets share password requirements)
 SHARE_A_PASSWORD='MyShareP@ssw0rd-789q&*(::1'
 SHARE_B_PASSWORD='MyShareP@ssw0rd-789q&*(::2'
 SHARE_C_PASSWORD='MyShareP@ssw0rd-789q&*(::3'

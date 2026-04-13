@@ -630,12 +630,14 @@ test.describe.serial('Arkfile Playwright E2E', () => {
       await sharedPage.fill('#share-password-confirm', password);
 
       if (opts.expiryValue !== undefined) {
+        await sharedPage.click('#share-expiry-value');
         await sharedPage.fill('#share-expiry-value', String(opts.expiryValue));
       }
       if (opts.expiryUnit) {
         await sharedPage.selectOption('#share-expiry-unit', opts.expiryUnit);
       }
       if (opts.maxDownloads !== undefined) {
+        await sharedPage.click('#share-max-downloads');
         await sharedPage.fill('#share-max-downloads', String(opts.maxDownloads));
       }
 

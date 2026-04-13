@@ -75,7 +75,7 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
             <div class="password-modal-field">
               <label for="share-password-input">Share Password</label>
               <input type="password" id="share-password-input" class="password-modal-input"
-                     placeholder="Strong password (18+ chars recommended)" required autofocus />
+                     placeholder="Strong share password (20+ chars required)" required />
               <ul id="share-pw-feedback" style="list-style: none; padding: 0; margin: 6px 0 0 0; font-size: 0.85em; color: var(--text-secondary, #ccc);"></ul>
             </div>
             <div class="password-modal-field">
@@ -217,7 +217,7 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
     overlay.addEventListener('click', (e) => { if (e.target === overlay) cancel(); });
     document.addEventListener('keydown', onKey);
 
-    setTimeout(() => pwInput.focus(), 100);
+    pwInput.focus(); // synchronous focus -- no deferred timer to race with form filling
   });
 }
 

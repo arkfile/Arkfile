@@ -9,6 +9,7 @@ import { setTokens } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleTOTPSetupFlow } from './totp-setup.js';
+import { validateAccountPassword } from '../crypto/password-validation.js';
 
 export interface RegisterCredentials {
   username: string;
@@ -211,9 +212,12 @@ export function setupRegisterForm(): void {
       return;
     }
 
-    // Validate password strength (basic length check matching unified config)
-    if (password.length < 15) {
-      showError('Password must be at least 15 characters long.');
+    // Validate password meets requirements using unified config from API.
+    // The password is NEVER sent to the server -- OPAQUE ensures the server
+    // never learns the password, so validation must happen entirely client-side.
+    const validation = await validateAccountPassword(password);
+    if (!validation.meets_requirements) {
+      showError(validation.reasons.join('. ') || 'Password does not meet requirements.');
       return;
     }
 
@@ -243,44 +247,6 @@ export function setupRegisterForm(): void {
       input.classList.remove('error');
     });
   });
-
-  // Password strength indicator (optional enhancement)
-  passwordInput.addEventListener('input', () => {
-    updatePasswordStrength(passwordInput.value);
-  });
-}
-
-/**
- * Update password strength indicator
- */
-function updatePasswordStrength(password: string): void {
-  const strengthMeter = document.getElementById('password-strength');
-  if (!strengthMeter) return;
-
-  let strength = 0;
-  
-  // Check length
-  if (password.length >= 15) strength++;
-  if (password.length >= 20) strength++;
-  
-  // Check character types
-  if (/[a-z]/.test(password)) strength++;
-  if (/[A-Z]/.test(password)) strength++;
-  if (/[0-9]/.test(password)) strength++;
-  if (/[^a-zA-Z0-9]/.test(password)) strength++;
-
-  // Update meter
-  const percentage = Math.min((strength / 6) * 100, 100);
-  strengthMeter.style.width = `${percentage}%`;
-
-  // Update color
-  if (strength < 3) {
-    strengthMeter.style.backgroundColor = '#dc3545'; // red
-  } else if (strength < 5) {
-    strengthMeter.style.backgroundColor = '#ffc107'; // yellow
-  } else {
-    strengthMeter.style.backgroundColor = '#28a745'; // green
-  }
 }
 
 /**
