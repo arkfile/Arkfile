@@ -18,6 +18,10 @@ export function showFileSection(): void {
 export function showAuthSection(): void {
   const authSection = document.getElementById('auth-section');
   const fileSection = document.getElementById('file-section');
+  const loginForm = document.getElementById('login-form');
+  const registerForm = document.getElementById('register-form');
+  const totpSetupForm = document.getElementById('totp-setup-form');
+  const pendingApprovalSection = document.getElementById('pending-approval-section');
   
   if (authSection) {
     authSection.classList.remove('hidden');
@@ -26,6 +30,14 @@ export function showAuthSection(): void {
   if (fileSection) {
     fileSection.classList.add('hidden');
   }
+  
+  // Reset all auth sub-sections to default state: only login form visible.
+  // This prevents stale visibility from pending-approval, TOTP setup, or
+  // register form persisting across logout -> login navigations.
+  if (loginForm) loginForm.classList.remove('hidden');
+  if (registerForm) registerForm.classList.add('hidden');
+  if (totpSetupForm) totpSetupForm.classList.add('hidden');
+  if (pendingApprovalSection) pendingApprovalSection.classList.add('hidden');
 }
 
 export function toggleAuthForm(): void {
