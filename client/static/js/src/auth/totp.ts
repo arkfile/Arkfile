@@ -88,8 +88,8 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
       letter-spacing: 0.2em;
     ">
     <div style="margin-bottom: 15px;">
-      <label style="display: flex; align-items: center; font-size: 14px;">
-        <input type="checkbox" id="use-backup-code" style="margin-right: 8px;">
+      <label style="display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--foam-2); cursor: pointer;">
+        <input type="checkbox" id="use-backup-code" style="margin: 0 8px 0 0; cursor: pointer; width: auto;">
         Use backup code instead
       </label>
     </div>
