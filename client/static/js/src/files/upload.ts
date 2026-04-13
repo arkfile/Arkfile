@@ -654,6 +654,11 @@ export async function handleFileUpload(): Promise<void> {
 
     // Clear the form
     if (fileInput) fileInput.value = '';
+    // Reset custom file input label
+    const fileInputLabel = document.getElementById('fileInputLabel');
+    const fileInputName = document.getElementById('fileInputName');
+    if (fileInputLabel) fileInputLabel.classList.remove('has-file');
+    if (fileInputName) fileInputName.textContent = '';
     const customPasswordInput = document.getElementById('filePassword') as HTMLInputElement | null;
     if (customPasswordInput) customPasswordInput.value = '';
     if (hintInput) hintInput.value = '';

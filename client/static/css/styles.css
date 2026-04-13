@@ -72,12 +72,104 @@ input, .totp-input, .password-modal-input, .contact-value, .contact-label, .cont
     border-radius: 6px;
     font-size: 1rem;
     font-family: inherit;
+    background-color: var(--depth-2);
+    color: var(--foam-1);
+}
+
+input::placeholder {
+    color: var(--foam-2);
+    opacity: 0.7;
 }
 
 input:focus, .totp-input:focus {
     outline: none;
     border-color: var(--current-2);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--current-2) 20%, transparent);
+}
+
+/* Custom File Input */
+input[type="file"] {
+    display: none;
+}
+
+.file-input-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.5rem;
+    background-color: var(--depth-3);
+    color: var(--salt);
+    border: 2px solid var(--depth-4);
+    border-radius: 6px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    margin-bottom: 1rem;
+}
+
+.file-input-label:hover {
+    background-color: var(--depth-4);
+    border-color: var(--current-2);
+}
+
+.file-input-label.has-file {
+    border-color: var(--biolum);
+    color: var(--biolum);
+}
+
+.file-input-name {
+    font-weight: 400;
+    font-size: 0.9rem;
+    color: var(--foam-2);
+    margin-left: 0.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 300px;
+}
+
+/* Select Elements */
+select, .password-modal-select, .contact-type {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-color: var(--depth-2);
+    color: var(--foam-1);
+    border: 2px solid var(--depth-4);
+    border-radius: 6px;
+    padding: 0.75rem;
+    padding-right: 2.5rem;
+    font-size: 1rem;
+    font-family: inherit;
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%238ab8d8' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    background-size: 12px 8px;
+    transition: border-color 0.2s ease;
+}
+
+select:focus, .password-modal-select:focus, .contact-type:focus {
+    outline: none;
+    border-color: var(--current-2);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--current-2) 20%, transparent);
+}
+
+select:hover, .password-modal-select:hover, .contact-type:hover {
+    border-color: var(--current-1);
+}
+
+/* Radio and Checkbox Inputs */
+input[type="radio"],
+input[type="checkbox"] {
+    display: inline-block;
+    width: auto;
+    margin: 0;
+    margin-bottom: 0;
+    padding: 0;
+    accent-color: var(--current-2);
+    cursor: pointer;
 }
 
 .btn, button, .hero-btn, .share-action-btn, .share-list-refresh, .secondary-button, .danger-button, .btn-primary, .btn-secondary, .logout-btn, .nav-link, .password-toggle-btn, .remove-contact-btn, .cancel-button, .progress-modal .cancel-button {

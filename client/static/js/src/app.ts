@@ -288,6 +288,22 @@ class ArkFileApp {
       });
     }
 
+    // File input label update (custom styled file picker)
+    const fileInput = document.getElementById('fileInput') as HTMLInputElement | null;
+    const fileInputLabel = document.getElementById('fileInputLabel');
+    const fileInputName = document.getElementById('fileInputName');
+    if (fileInput && fileInputLabel && fileInputName) {
+      fileInput.addEventListener('change', () => {
+        if (fileInput.files && fileInput.files.length > 0) {
+          fileInputName.textContent = fileInput.files[0].name;
+          fileInputLabel.classList.add('has-file');
+        } else {
+          fileInputName.textContent = '';
+          fileInputLabel.classList.remove('has-file');
+        }
+      });
+    }
+
     // Password type toggle
     this.setupPasswordTypeToggle();
 
