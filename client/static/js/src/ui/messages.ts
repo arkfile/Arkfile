@@ -36,10 +36,10 @@ export class MessageManager {
     toast.style.cssText = `
       padding: 16px 20px;
       border-radius: 8px;
-      color: white;
+      color: var(--salt);
       font-size: 14px;
       line-height: 1.4;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 4px 12px color-mix(in srgb, var(--depth-1) 80%, transparent);
       opacity: 0;
       transform: translateX(100%);
       transition: all 0.3s ease-out;
@@ -49,17 +49,18 @@ export class MessageManager {
     `;
 
     // Set background color based on type
-    let backgroundColor = '#17a2b8'; // info
+    let backgroundColor = 'var(--current-1)'; // info
     switch (options.type) {
       case 'success':
-        backgroundColor = '#28a745';
+        backgroundColor = 'var(--biolum)';
+        toast.style.color = 'var(--depth-1)';
         break;
       case 'error':
-        backgroundColor = '#dc3545';
+        backgroundColor = 'var(--coral)';
         break;
       case 'warning':
-        backgroundColor = '#ffc107';
-        toast.style.color = '#212529'; // Dark text for warning
+        backgroundColor = 'var(--phosphor)';
+        toast.style.color = 'var(--depth-1)';
         break;
     }
     toast.style.backgroundColor = backgroundColor;
@@ -92,8 +93,8 @@ export class MessageManager {
         const actionButton = document.createElement('button');
         actionButton.textContent = actionOption.text;
         actionButton.style.cssText = `
-          background: rgba(255, 255, 255, 0.2);
-          border: 1px solid rgba(255, 255, 255, 0.3);
+          background: color-mix(in srgb, currentColor 16%, transparent);
+          border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
           color: inherit;
           padding: 4px 8px;
           border-radius: 4px;

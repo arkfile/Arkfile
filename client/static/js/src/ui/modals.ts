@@ -16,7 +16,7 @@ export class ModalManager {
       left: 0;
       width: 100%;
       height: 100%;
-      background-color: rgba(0, 0, 0, 0.5);
+      background-color: color-mix(in srgb, var(--depth-1) 70%, transparent);
       display: flex;
       justify-content: center;
       align-items: center;
@@ -26,14 +26,16 @@ export class ModalManager {
     const modalContent = document.createElement('div');
     modalContent.className = 'modal-content';
     modalContent.style.cssText = `
-      background: white;
+      background: var(--depth-3);
+      color: var(--foam-1);
+      border: 1px solid var(--depth-4);
       padding: 30px;
       border-radius: 8px;
       max-width: 80%;
       width: 90%;
       max-height: 85vh;
       overflow-y: auto;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent);
       ${options.className ? `additional-class: ${options.className};` : ''}
     `;
 
@@ -56,8 +58,8 @@ export class ModalManager {
           font-size: 14px;
           font-weight: bold;
           padding: 6px 10px;
-          background: white;
-          color: #000;
+          background: var(--salt);
+          color: var(--depth-1);
           border-radius: 3px;
           text-align: center;
           letter-spacing: 1px;
@@ -282,7 +284,7 @@ export function showTOTPAppsModal(): HTMLElement {
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.5);
+    background-color: color-mix(in srgb, var(--depth-1) 70%, transparent);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -292,14 +294,16 @@ export function showTOTPAppsModal(): HTMLElement {
   const modalContent = document.createElement('div');
   modalContent.className = 'modal-content totp-apps-modal';
   modalContent.style.cssText = `
-    background: white;
+    background: var(--depth-3);
+    color: var(--foam-1);
+    border: 1px solid var(--depth-4);
     padding: 30px;
     border-radius: 8px;
     max-width: 550px;
     width: 90%;
     max-height: 80vh;
     overflow-y: auto;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent);
   `;
 
   const appsData = {
@@ -342,7 +346,7 @@ export function showTOTPAppsModal(): HTMLElement {
                 border-radius: 3px;
                 margin-left: 10px;
                 white-space: nowrap;
-              " onmouseover="this.style.backgroundColor='var(--current-2)'; this.style.color='white';" 
+              " onmouseover="this.style.backgroundColor='var(--current-2)'; this.style.color='var(--salt)';" 
                  onmouseout="this.style.backgroundColor='transparent'; this.style.color='var(--current-2)';">
                 View →
               </a>

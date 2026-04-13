@@ -94,9 +94,9 @@ button, .btn-primary, .hero-btn.primary, .share-action-btn, .share-list-refresh,
     background-color: var(--current-1);
     color: var(--foam-1);
 }
-
+    background-color: color-mix(in srgb, var(--coral) 80%, var(--depth-1));
 button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .share-list-refresh:hover, .secondary-button:hover, .nav-link:hover {
-    background-color: color-mix(in srgb, var(--coral) 80%, #000);
+    background-color: color-mix(in srgb, var(--coral) 80%, var(--depth-1));
     transform: translateY(-1px);
     box-shadow: 0 4px 12px color-mix(in srgb, var(--coral) 30%, transparent);
 }
@@ -125,7 +125,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 
 .logout-link:hover {
     background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
-    color: #b91c1c;
+    color: var(--salt);
 }
 
 .hidden {
@@ -136,8 +136,8 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     position: fixed;
     top: 20px;
     right: 20px;
-    background-color: var(--current-1);
-    color: var(--foam-1);
+    background-color: var(--coral);
+    color: var(--salt);
     padding: 1rem;
     border-radius: 6px;
     z-index: 1100;
@@ -152,7 +152,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     top: 20px;
     right: 20px;
     background-color: var(--biolum);
-    color: var(--foam-1);
+    color: var(--depth-1);
     padding: 1rem;
     border-radius: 6px;
     z-index: 1100;
@@ -342,7 +342,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     display: flex;
     background-color: color-mix(in srgb, var(--biolum) 15%, var(--depth-3));
     color: var(--biolum);
-    border: 1px solid #c3e6cb;
+    border: 1px solid var(--biolum);
 }
 
 .match-status.matching::before {
@@ -355,7 +355,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     display: flex;
     background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
     color: var(--coral);
-    border: 1px solid #f5c6cb;
+    border: 1px solid var(--coral);
 }
 
 .match-status.not-matching::before {
@@ -368,7 +368,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     display: flex;
     background-color: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3));
     color: var(--phosphor);
-    border: 1px solid #ffeaa7;
+    border: 1px solid var(--phosphor);
 }
 
 .match-status.empty::before {
@@ -421,7 +421,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 
 /* Custom Password Section */
 #customPasswordSection {
-    border: 1px solid #ddd;
+    border: 1px solid var(--depth-4);
     padding: 1rem;
     border-radius: 4px;
     margin-bottom: 1rem;
@@ -472,7 +472,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 
 .icon-button {
     background-color: var(--salt);
-    color: var(--salt);
+    color: var(--depth-1);
     width: 40px;
     height: 40px;
     border-radius: 50%;
@@ -487,6 +487,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 
 .icon-button:hover {
     background-color: var(--current-2);
+    color: var(--salt);
 }
 
 /* Specific styling for logout button */
@@ -502,7 +503,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 }
 
 .logout-btn:hover {
-    background-color: color-mix(in srgb, var(--coral) 80%, #000) !important;
+    background-color: color-mix(in srgb, var(--coral) 80%, var(--depth-1)) !important;
     transform: translateY(-1px);
     box-shadow: 0 2px 4px color-mix(in srgb, var(--depth-1) 80%, transparent);
 }
@@ -537,9 +538,9 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 }
 
 .logout-link:hover {
-    background-color: #f1b0b7 !important;
-    border-color: #ed969e !important;
-    color: #491217 !important;
+    background-color: color-mix(in srgb, var(--coral) 25%, var(--depth-3)) !important;
+    border-color: var(--coral) !important;
+    color: var(--salt) !important;
 }
 
 /* Security Settings Panel */
@@ -560,7 +561,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     margin-top: 0;
     margin-bottom: 1rem;
     font-size: 1.2rem;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--depth-4);
     padding-bottom: 0.5rem;
 }
 
@@ -577,7 +578,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 }
 
 .danger-button:hover {
-    background-color: color-mix(in srgb, var(--coral) 80%, #000);
+    background-color: color-mix(in srgb, var(--coral) 80%, var(--depth-1));
 }
 
 /* Contact Info Panel */
@@ -624,7 +625,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 
 .contact-method-row .remove-contact-btn {
     background: none;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--depth-4);
     color: var(--coral);
     cursor: pointer;
     width: auto;
@@ -636,14 +637,16 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 }
 
 .contact-method-row .remove-contact-btn:hover {
-    background-color: #fed7d7;
+    background-color: color-mix(in srgb, var(--coral) 18%, var(--depth-3));
 }
 
 #contact-info-panel textarea {
     width: 100%;
     padding: 0.5rem;
     font-size: 0.85rem;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--depth-4);
+    background-color: var(--depth-2);
+    color: var(--foam-1);
     border-radius: 4px;
     resize: vertical;
     font-family: inherit;
@@ -653,7 +656,9 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     width: 100%;
     padding: 0.5rem;
     font-size: 0.9rem;
-    border: 1px solid #e2e8f0;
+    border: 1px solid var(--depth-4);
+    background-color: var(--depth-2);
+    color: var(--foam-1);
     border-radius: 4px;
 }
 
@@ -762,12 +767,12 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 .btn-secondary {
     background-color: var(--depth-3);
     color: var(--salt);
-    border: 2px solid #ddd;
+    border: 2px solid var(--depth-4);
 }
 
 .btn-secondary:hover {
     background-color: var(--depth-2);
-    border-color: #bbb;
+    border-color: var(--current-2);
 }
 
 /* Progress Messages */
@@ -776,8 +781,8 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    background-color: var(--salt);
-    color: var(--salt);
+    background-color: var(--depth-3);
+    color: var(--foam-1);
     padding: 1.5rem 2rem;
     border-radius: 8px;
     box-shadow: 0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent);
@@ -818,7 +823,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 /* Capability Info Display */
 .capability-info {
     background-color: var(--depth-2);
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--depth-4);
     border-radius: 6px;
     padding: 1rem;
     margin: 1rem 0;
@@ -839,7 +844,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 /* Ensure capability info is properly positioned and readable */
 .capability-info.success-message {
     background-color: color-mix(in srgb, var(--biolum) 15%, var(--depth-3));
-    border: 1px solid #bee5eb;
+    border: 1px solid var(--biolum);
     color: var(--biolum);
     top: 80px;
     z-index: 1050;
@@ -987,7 +992,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 
 .totp-info {
     background-color: color-mix(in srgb, var(--current-2) 15%, var(--depth-3));
-    border: 1px solid #bbdefb;
+    border: 1px solid var(--current-2);
     border-radius: 6px;
     padding: 1rem;
     margin-bottom: 1.5rem;
@@ -1025,7 +1030,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 .qr-code-container img {
     max-width: 200px;
     height: auto;
-    border: 1px solid #ddd;
+    border: 1px solid var(--depth-4);
     border-radius: 4px;
 }
 
@@ -1034,7 +1039,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     padding: 1rem;
     border-radius: 4px;
     margin: 1rem 0;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--depth-4);
 }
 
 .manual-entry code {
@@ -1053,7 +1058,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     letter-spacing: 0.2em;
     width: 120px;
     padding: 0.8rem;
-    border: 2px solid #ddd;
+    border: 2px solid var(--depth-4);
     border-radius: 4px;
     margin-bottom: 1rem;
 }
@@ -1065,7 +1070,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 
 .backup-codes-section {
     background-color: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3));
-    border: 1px solid #ffeaa7;
+    border: 1px solid var(--phosphor);
     border-radius: 6px;
     padding: 1.5rem;
     margin: 1.5rem 0;
@@ -1092,7 +1097,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     margin: 0.3rem 0;
     border-radius: 3px;
     font-size: 0.95rem;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--depth-4);
 }
 
 .totp-navigation {
@@ -1101,7 +1106,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 }
 
 .secondary-button {
-    background-color: var(--foam-2);
+    background-color: var(--depth-4);
     color: var(--salt);
     padding: 0.8rem 1.5rem;
     border: none;
@@ -1113,7 +1118,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 }
 
 .secondary-button:hover {
-    background-color: color-mix(in srgb, var(--depth-4) 70%, #000);
+    background-color: color-mix(in srgb, var(--depth-4) 70%, var(--depth-1));
 }
 
 .secondary-button:disabled {
@@ -1149,7 +1154,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 
 .share-form-container .card {
     background-color: var(--depth-2);
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--depth-4);
     border-radius: 8px;
     padding: 1.5rem;
     margin-left: 2rem;
@@ -1177,7 +1182,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 .share-form-container input[type="password"] {
     width: 100%;
     padding: 0.8rem;
-    border: 1px solid #ddd;
+    border: 1px solid var(--depth-4);
     border-radius: 4px;
     font-size: 1rem;
     margin-bottom: 0.5rem;
@@ -1242,17 +1247,17 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 }
 
 .share-form-container .btn.secondary {
-    background-color: var(--foam-2);
+    background-color: var(--depth-4);
     color: var(--salt);
 }
 
 .share-form-container .btn.secondary:hover {
-    background-color: color-mix(in srgb, var(--depth-4) 70%, #000);
+    background-color: color-mix(in srgb, var(--depth-4) 70%, var(--depth-1));
 }
 
 .share-form-container .success-message {
     background-color: color-mix(in srgb, var(--biolum) 15%, var(--depth-3));
-    border: 1px solid #c3e6cb;
+    border: 1px solid var(--biolum);
     color: var(--biolum);
     padding: 1rem;
     border-radius: 4px;
@@ -1267,7 +1272,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 
 .share-form-container .error-message {
     background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
-    border: 1px solid #f5c6cb;
+    border: 1px solid var(--coral);
     color: var(--coral);
     padding: 1rem;
     border-radius: 4px;
@@ -1293,13 +1298,13 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     font-family: monospace;
     font-size: 0.9rem;
     background-color: var(--depth-3);
-    border: 1px solid #ced4da;
+    border: 1px solid var(--depth-4);
     margin-bottom: 0;
 }
 
 .share-form-container .url-copy-container button {
     background-color: var(--biolum);
-    color: var(--salt);
+    color: var(--depth-1);
     border: none;
     padding: 0.6rem 1rem;
     border-radius: 4px;
@@ -1355,7 +1360,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     z-index: 1500;
     min-width: 300px;
     text-align: center;
-    border: 1px solid #ddd;
+    border: 1px solid var(--depth-4);
 }
 
 .progress-modal h4 {
@@ -1389,7 +1394,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 }
 
 .progress-modal .progress-bar.indeterminate {
-    background: linear-gradient(90deg, transparent 0%, #007bff 50%, transparent 100%);
+    background: linear-gradient(90deg, transparent 0%, var(--current-2) 50%, transparent 100%);
     background-size: 200% 100%;
     animation: indeterminate 1.5s infinite;
     width: 100%;
@@ -1407,7 +1412,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 }
 
 .progress-modal .cancel-button {
-    background-color: var(--foam-2);
+    background-color: var(--depth-4);
     color: var(--salt);
     border: none;
     padding: 8px 16px;
@@ -1417,7 +1422,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 }
 
 .progress-modal .cancel-button:hover {
-    background-color: color-mix(in srgb, var(--depth-4) 70%, #000);
+    background-color: color-mix(in srgb, var(--depth-4) 70%, var(--depth-1));
 }
 
 .progress-modal .progress-info {
@@ -1434,7 +1439,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     padding: 8px;
     background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
     border-radius: 4px;
-    border: 1px solid #f5c6cb;
+    border: 1px solid var(--coral);
 }
 
 .progress-modal.error {
@@ -1532,7 +1537,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 
 .pending-approval-content {
     background-color: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3));
-    border: 1px solid #ffeaa7;
+    border: 1px solid var(--phosphor);
     border-radius: 8px;
     padding: 2rem;
     margin-bottom: 1.5rem;

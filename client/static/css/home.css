@@ -59,14 +59,14 @@ body {
 }
 
 .hero-btn.secondary {
-    background: rgba(255,255,255,0.2);
+    background: color-mix(in srgb, var(--depth-3) 82%, transparent);
     color: var(--foam-1);
-    border: 2px solid rgba(255,255,255,0.3);
+    border: 2px solid var(--depth-4);
 }
 
 .hero-btn:hover {
     transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+    box-shadow: 0 8px 25px color-mix(in srgb, var(--depth-1) 80%, transparent);
 }
 
 .features-section {
@@ -132,15 +132,15 @@ body {
 
 .security-highlight {
     background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
-    border: 2px solid #fecaca;
+    border: 2px solid var(--coral);
 }
 
 .security-highlight:hover {
-    border-color: #fca5a5;
+    border-color: color-mix(in srgb, var(--coral) 75%, var(--salt));
 }
 
 .security-highlight .feature-title::before {
-    background: #991b1b;
+    background: var(--coral);
 }
 
 .section-title {
@@ -161,7 +161,7 @@ body {
     background-color: var(--depth-2);
     padding: 20px 0 30px;
     text-align: center;
-    border-top: 1px solid #e0e4e7;
+    border-top: 1px solid var(--depth-4);
 }
 
 .github-link-container {
@@ -255,21 +255,21 @@ body {
 }
 
 .share-list-refresh:hover {
-    background-color: color-mix(in srgb, var(--coral) 80%, #000);
+    background-color: color-mix(in srgb, var(--coral) 80%, var(--depth-1));
     transform: translateY(-1px);
 }
 
 .share-list-container {
     background-color: var(--depth-3);
     border-radius: 12px;
-    border: 1px solid #e0e4e7;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    border: 1px solid var(--depth-4);
+    box-shadow: 0 2px 8px color-mix(in srgb, var(--depth-1) 80%, transparent);
     overflow: hidden;
 }
 
 .share-item {
     padding: 20px;
-    border-bottom: 1px solid #e0e4e7;
+    border-bottom: 1px solid var(--depth-4);
     transition: background 0.2s ease;
 }
 
@@ -347,11 +347,11 @@ body {
 
 .share-action-btn.revoke {
     background-color: var(--phosphor);
-    color: var(--salt);
+    color: var(--depth-1);
 }
 
 .share-action-btn.revoke:hover {
-    background: #d97706;
+    background: color-mix(in srgb, var(--phosphor) 82%, var(--depth-1));
 }
 
 .share-action-btn.delete {
@@ -389,7 +389,7 @@ body {
 
 .share-status-badge.expired {
     background-color: var(--depth-4);
-    color: #374151;
+    color: var(--foam-1);
 }
 
 .share-list-empty {
@@ -412,7 +412,7 @@ body {
 .share-list-error {
     padding: 20px;
     background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
-    border: 1px solid #fecaca;
+    border: 1px solid var(--coral);
     border-radius: 8px;
     color: var(--coral);
     margin-bottom: 20px;

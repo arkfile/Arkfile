@@ -93,7 +93,7 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
                   <option value="hours" selected>hours</option>
                   <option value="days">days</option>
                 </select>
-                <span style="font-size: 0.85em; color: var(--text-muted, #888);">(0 = never)</span>
+                <span style="font-size: 0.85em; color: var(--foam-2);">(0 = never)</span>
               </div>
             </div>
             <div class="password-modal-field">
@@ -214,7 +214,8 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
     form.addEventListener('submit', submit);
     document.getElementById('share-modal-cancel')!.addEventListener('click', cancel);
     document.getElementById('share-modal-close')!.addEventListener('click', cancel);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) cancel(); });
+    // Do not close this modal on backdrop click: users may lose a long,
+    // carefully-entered share password while tabbing through fields.
     document.addEventListener('keydown', onKey);
 
     pwInput.focus(); // synchronous focus -- no deferred timer to race with form filling

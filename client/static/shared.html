@@ -7,11 +7,29 @@
     <link rel="stylesheet" href="/css/styles.css">
     <style>
         .card {
-            background: #fff;
+            background: var(--depth-3);
+            color: var(--salt);
             border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            border: 1px solid var(--depth-4);
+            box-shadow: 0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent);
             margin-bottom: 20px;
             padding: 20px;
+        }
+        .card h2,
+        .card h3,
+        .card label,
+        .card strong {
+            color: var(--salt);
+        }
+        .card p,
+        .card span,
+        .card div {
+            color: var(--foam-2);
+        }
+        .card input,
+        .card select,
+        .card button {
+            color: inherit;
         }
         .hidden { display: none; }
     </style>

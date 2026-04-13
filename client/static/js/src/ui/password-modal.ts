@@ -122,7 +122,7 @@ const MODAL_STYLES = `
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: rgba(0, 0, 0, 0.5);
+    background-color: color-mix(in srgb, var(--depth-1) 70%, transparent);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -139,7 +139,7 @@ const MODAL_STYLES = `
     background: var(--depth-3);
     border: 1px solid var(--depth-4);
     border-radius: 8px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent);
     max-width: 400px;
     width: 90%;
     max-height: 90vh;
@@ -267,7 +267,7 @@ const MODAL_STYLES = `
   .password-modal-btn-submit {
     background: var(--current-1);
     border: 1px solid var(--current-1);
-    color: #fff;
+    color: var(--salt);
   }
 
   .password-modal-btn-submit:hover {
