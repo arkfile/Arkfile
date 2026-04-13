@@ -441,7 +441,7 @@ func UploadChunk(c echo.Context) error {
 	}
 
 	// Validate chunk hash format
-	if len(chunkHash) != 64 || !utils.IsHexString(chunkHash) {
+	if len(chunkHash) != 64 || !isHexString(chunkHash) {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk hash format")
 	}
 
@@ -838,6 +838,16 @@ func CompleteUpload(c echo.Context) error {
 			"available_bytes": user.StorageLimitBytes - user.TotalStorageBytes,
 		},
 	})
+}
+
+// isHexString checks if a string contains only hexadecimal characters.
+func isHexString(s string) bool {
+	for _, c := range s {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 // DeleteFile handles file deletion
