@@ -1,17 +1,30 @@
 :root {
-    --primary-color: #000000;
-    --secondary-color: #dc2626;
-    --background-color: #f8f9fa;
-    --text-color: #000000;
-    --muted-text-color: #6c757d;
-    --error-color: #dc2626;
-    --success-color: #059669;
-    --weak-password: #dc2626;
-    --moderate-password: #ea580c;
-    --strong-password: #059669;
-    --accent-color: #991b1b;
-    --light-red: #fef2f2;
-    --medium-red: #fecaca;
+    --depth-1: #060d1a;
+    --depth-2: #0a1628;
+    --depth-3: #112240;
+    --depth-4: #1e3a5f;
+    
+    --current-1: #2d6a9f;
+    --current-2: #4a9fd4;
+    
+    --foam-1: #cce7ff;
+    --foam-2: #8ab8d8;
+    
+    --biolum: #00d4aa;
+    --phosphor: #f0a500;
+    --coral: #e05c5c;
+    --salt: #ffffff;
+}
+
+a {
+    color: var(--current-2);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+a:hover {
+    color: var(--salt);
+    text-decoration: underline;
 }
 
 * {
@@ -21,9 +34,9 @@
 }
 
 body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background-color: var(--background-color);
-    color: var(--text-color);
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background-color: var(--depth-1);
+    color: var(--foam-1);
     line-height: 1.6;
 }
 
@@ -38,52 +51,81 @@ header {
     margin-bottom: 2rem;
 }
 
-h1 {
-    color: var(--primary-color);
+h1, h2, h3 {
+    color: var(--salt);
     margin-bottom: 1rem;
 }
 
-h2 {
-    color: var(--primary-color);
-    margin-bottom: 1.5rem;
-}
-
-h3 {
-    color: var(--primary-color);
-    margin: 1.5rem 0 1rem;
-    font-size: 1.1rem;
-}
-
-.auth-section, .file-section {
-    background: white;
+.auth-section, .file-section, .modal-content, .totp-setup-form, .pending-approval-section, .progress-modal, .share-form-container .card, .ui-preview {
+    background: var(--depth-3);
     padding: 2rem;
     border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 4px color-mix(in srgb, var(--depth-4) 30%, transparent);
+    border: 1px solid var(--depth-4);
 }
 
-input {
+input, .totp-input, .password-modal-input, .contact-value, .contact-label, .contact-type {
     width: 100%;
-    padding: 0.8rem;
+    padding: 0.75rem;
     margin-bottom: 1rem;
-    border: 1px solid #ddd;
-    border-radius: 4px;
+    border: 2px solid var(--depth-4);
+    border-radius: 6px;
     font-size: 1rem;
+    font-family: inherit;
 }
 
-button {
-    background-color: var(--secondary-color);
-    color: white;
-    padding: 0.8rem 1.5rem;
-    border: none;
-    border-radius: 4px;
+input:focus, .totp-input:focus {
+    outline: none;
+    border-color: var(--current-2);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--current-2) 20%, transparent);
+}
+
+.btn, button, .hero-btn, .share-action-btn, .share-list-refresh, .secondary-button, .danger-button, .btn-primary, .btn-secondary, .logout-btn, .nav-link, .password-toggle-btn, .remove-contact-btn, .cancel-button, .progress-modal .cancel-button {
+    padding: 0.75rem 1.5rem;
+    border-radius: 6px;
     cursor: pointer;
     font-size: 1rem;
-    width: 100%;
-    transition: background-color 0.3s ease;
+    font-weight: 600;
+    transition: all 0.2s ease;
+    border: none;
 }
 
-button:hover {
-    background-color: var(--accent-color);
+button, .btn-primary, .hero-btn.primary, .share-action-btn, .share-list-refresh, .secondary-button:not(.danger-button), .password-toggle-btn, .remove-contact-btn {
+    background-color: var(--current-1);
+    color: var(--foam-1);
+}
+
+button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .share-list-refresh:hover, .secondary-button:hover, .nav-link:hover {
+    background-color: color-mix(in srgb, var(--coral) 80%, #000);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--coral) 30%, transparent);
+}
+
+.danger-button, .logout-btn, .share-action-btn.delete, .share-action-btn.revoke {
+    background-color: var(--current-1);
+    color: var(--foam-1);
+}
+
+.btn-secondary, .secondary-button, .nav-link, .password-toggle-btn, .remove-contact-btn, .progress-modal .cancel-button {
+    background-color: var(--depth-3);
+    color: var(--salt);
+    border: 2px solid var(--depth-4);
+}
+
+.btn-secondary:hover, .secondary-button:hover, .nav-link:hover, .password-toggle-btn:hover {
+    background-color: var(--depth-1);
+    border-color: var(--current-2);
+}
+
+.logout-link {
+    background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
+    color: var(--current-1);
+    border-color: var(--current-1);
+}
+
+.logout-link:hover {
+    background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
+    color: #b91c1c;
 }
 
 .hidden {
@@ -94,11 +136,12 @@ button:hover {
     position: fixed;
     top: 20px;
     right: 20px;
-    background-color: var(--error-color);
-    color: white;
+    background-color: var(--current-1);
+    color: var(--foam-1);
     padding: 1rem;
-    border-radius: 4px;
+    border-radius: 6px;
     z-index: 1100;
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--coral) 30%, transparent);
     animation: slideIn 0.3s ease-out;
     max-width: 350px;
     word-wrap: break-word;
@@ -108,11 +151,12 @@ button:hover {
     position: fixed;
     top: 20px;
     right: 20px;
-    background-color: var(--success-color);
-    color: white;
+    background-color: var(--biolum);
+    color: var(--foam-1);
     padding: 1rem;
-    border-radius: 4px;
+    border-radius: 6px;
     z-index: 1100;
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--biolum) 30%, transparent);
     animation: slideIn 0.3s ease-out;
     max-width: 350px;
     word-wrap: break-word;
@@ -140,18 +184,18 @@ button:hover {
     gap: 1rem;
     padding: 0.75rem 1rem;
     margin-bottom: 1rem;
-    background: var(--bg-secondary, #252540);
-    border: 1px solid var(--border-color, #333);
+    background: var(--depth-2);
+    border: 1px solid var(--depth-4);
     border-radius: 4px;
-    color: var(--text-secondary, #ccc);
+    color: var(--foam-2);
     font-size: 0.9rem;
 }
 
 .decrypt-banner button {
     white-space: nowrap;
     padding: 0.5rem 1rem;
-    background: var(--accent-color, #6366f1);
-    color: #fff;
+    background: var(--current-1);
+    color: var(--salt);
     border: none;
     border-radius: 4px;
     cursor: pointer;
@@ -159,11 +203,11 @@ button:hover {
 }
 
 .decrypt-banner button:hover {
-    background: var(--accent-hover, #5558e3);
+    background: var(--current-2);
 }
 
 .file-item {
-    background: #f8f9fa;
+    background-color: var(--depth-2);
     padding: 1rem;
     margin-bottom: 0.5rem;
     border-radius: 4px;
@@ -185,17 +229,17 @@ button:hover {
 }
 
 .file-size {
-    color: var(--muted-text-color);
+    color: var(--foam-2);
     font-size: 0.9rem;
 }
 
 .file-date {
-    color: var(--muted-text-color);
+    color: var(--foam-2);
     font-size: 0.9rem;
 }
 
 .encryption-type {
-    background-color: #eee;
+    background-color: var(--depth-4);
     padding: 0.3rem 0.6rem;
     border-radius: 12px;
     font-size: 0.85rem;
@@ -206,7 +250,7 @@ button:hover {
 
 /* Password Options Styles */
 .password-options {
-    background-color: #f8f9fa;
+    background-color: var(--depth-2);
     padding: 1.5rem;
     border-radius: 4px;
     margin: 1rem 0;
@@ -231,7 +275,7 @@ button:hover {
 
 /* Password Requirements Styles */
 .password-requirements {
-    background-color: #f8f9fa;
+    background-color: var(--depth-2);
     padding: 1rem;
     border-radius: 4px;
     margin-bottom: 1rem;
@@ -239,13 +283,13 @@ button:hover {
 
 .strength-meter {
     height: 8px;
-    background-color: #ddd;
+    background-color: var(--depth-4);
     border-radius: 4px;
     margin-bottom: 1rem;
     overflow: hidden;
     transition: all 0.3s ease;
     width: 0;
-    color: white;
+    color: var(--salt);
     font-size: 0.75rem;
     display: flex;
     align-items: center;
@@ -258,7 +302,7 @@ button:hover {
     margin: 0;
     padding: 0;
     font-size: 0.9rem;
-    color: var(--muted-text-color);
+    color: var(--foam-2);
 }
 
 .requirements-list li {
@@ -270,12 +314,12 @@ button:hover {
 
 .requirements-list li::before {
     content: "-";
-    color: #999;
+    color: var(--foam-2);
 }
 
 .requirements-list li.met::before {
     content: "✓";
-    color: var(--success-color);
+    color: var(--biolum);
 }
 
 /* Password Confirmation Styles */
@@ -296,53 +340,53 @@ button:hover {
 
 .match-status.matching {
     display: flex;
-    background-color: #d4edda;
-    color: #155724;
+    background-color: color-mix(in srgb, var(--biolum) 15%, var(--depth-3));
+    color: var(--biolum);
     border: 1px solid #c3e6cb;
 }
 
 .match-status.matching::before {
     content: "✓";
-    color: var(--success-color);
+    color: var(--biolum);
     font-weight: bold;
 }
 
 .match-status.not-matching {
     display: flex;
-    background-color: #f8d7da;
-    color: #721c24;
+    background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
+    color: var(--coral);
     border: 1px solid #f5c6cb;
 }
 
 .match-status.not-matching::before {
     content: "✗";
-    color: var(--error-color);
+    color: var(--coral);
     font-weight: bold;
 }
 
 .match-status.empty {
     display: flex;
-    background-color: #fff3cd;
-    color: #856404;
+    background-color: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3));
+    color: var(--phosphor);
     border: 1px solid #ffeaa7;
 }
 
 .match-status.empty::before {
     content: "⏳";
-    color: #856404;
+    color: var(--phosphor);
 }
 
 /* Storage Info Styles */
 .storage-info {
     margin-top: 2rem;
     padding: 1rem;
-    background-color: #f8f9fa;
+    background-color: var(--depth-2);
     border-radius: 4px;
 }
 
 .storage-bar {
     height: 8px;
-    background-color: #ddd;
+    background-color: var(--depth-4);
     border-radius: 4px;
     margin-bottom: 0.5rem;
     overflow: hidden;
@@ -350,13 +394,13 @@ button:hover {
 
 .storage-bar .used {
     height: 100%;
-    background-color: var(--secondary-color);
+    background-color: var(--current-1);
     transition: width 0.3s ease;
 }
 
 .storage-text {
     font-size: 0.9rem;
-    color: var(--muted-text-color);
+    color: var(--foam-2);
     text-align: right;
 }
 
@@ -389,27 +433,27 @@ button:hover {
 
 /* Password Strength Colors */
 .strength-meter.very-weak {
-    background-color: var(--weak-password);
+    background-color: var(--coral);
     width: 20%;
 }
 
 .strength-meter.weak {
-    background-color: #f59e0b;
+    background-color: var(--phosphor);
     width: 40%;
 }
 
 .strength-meter.moderate {
-    background-color: var(--moderate-password);
+    background-color: var(--phosphor);
     width: 60%;
 }
 
 .strength-meter.strong {
-    background-color: #10b981;
+    background-color: var(--biolum);
     width: 80%;
 }
 
 .strength-meter.very-strong {
-    background-color: var(--strong-password);
+    background-color: var(--biolum);
     width: 100%;
 }
 
@@ -427,8 +471,8 @@ button:hover {
 }
 
 .icon-button {
-    background-color: var(--primary-color);
-    color: white;
+    background-color: var(--salt);
+    color: var(--salt);
     width: 40px;
     height: 40px;
     border-radius: 50%;
@@ -442,13 +486,13 @@ button:hover {
 }
 
 .icon-button:hover {
-    background-color: #435c73;
+    background-color: var(--current-2);
 }
 
 /* Specific styling for logout button */
 .logout-btn {
-    background-color: #e74c3c !important;
-    color: white !important;
+    background-color: var(--coral) !important;
+    color: var(--salt) !important;
     font-size: 0.9rem !important;
     width: auto !important;
     padding: 8px 12px !important;
@@ -458,9 +502,9 @@ button:hover {
 }
 
 .logout-btn:hover {
-    background-color: #c0392b !important;
+    background-color: color-mix(in srgb, var(--coral) 80%, #000) !important;
     transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    box-shadow: 0 2px 4px color-mix(in srgb, var(--depth-1) 80%, transparent);
 }
 
 /* Navigation link styling */
@@ -469,9 +513,9 @@ button:hover {
     padding: 8px 12px;
     margin: 0 4px;
     text-decoration: none;
-    color: var(--primary-color);
-    background-color: #f8f9fa;
-    border: 1px solid #ddd;
+    color: var(--salt);
+    background-color: var(--depth-3);
+    border: 1px solid var(--depth-4);
     border-radius: 4px;
     font-size: 0.9rem;
     transition: all 0.3s ease;
@@ -479,17 +523,17 @@ button:hover {
 }
 
 .nav-link:hover {
-    background-color: #e9ecef;
-    border-color: #adb5bd;
+    background-color: var(--depth-4);
+    border-color: var(--depth-4);
     text-decoration: none;
     transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    box-shadow: 0 2px 4px color-mix(in srgb, var(--depth-1) 80%, transparent);
 }
 
 .logout-link {
-    background-color: #f8d7da !important;
-    color: #721c24 !important;
-    border-color: #f5c6cb !important;
+    background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3)) !important;
+    color: var(--coral) !important;
+    border-color: var(--coral) !important;
 }
 
 .logout-link:hover {
@@ -503,10 +547,10 @@ button:hover {
     position: absolute;
     top: 45px;
     right: 0;
-    background-color: white;
+    background-color: var(--depth-3);
     padding: 1.5rem;
     border-radius: 8px;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 10px color-mix(in srgb, var(--depth-1) 80%, transparent);
     width: 400px;
     max-width: calc(100vw - 1rem);
     z-index: 10;
@@ -525,22 +569,22 @@ button:hover {
 }
 
 .danger-button {
-    background-color: var(--error-color);
-    color: white;
+    background-color: var(--coral);
+    color: var(--salt);
     padding: 0.6rem 1rem;
     margin-top: 0.5rem;
     font-size: 0.9rem;
 }
 
 .danger-button:hover {
-    background-color: #c0392b;
+    background-color: color-mix(in srgb, var(--coral) 80%, #000);
 }
 
 /* Contact Info Panel */
 
 .contact-info-notice {
     font-size: 0.85rem;
-    color: #718096;
+    color: var(--foam-2);
     margin-bottom: 1rem;
     line-height: 1.4;
 }
@@ -581,7 +625,7 @@ button:hover {
 .contact-method-row .remove-contact-btn {
     background: none;
     border: 1px solid #e2e8f0;
-    color: #e53e3e;
+    color: var(--coral);
     cursor: pointer;
     width: auto;
     flex: 0 0 auto;
@@ -638,7 +682,7 @@ button:hover {
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.5);
+    background-color: color-mix(in srgb, var(--depth-1) 80%, transparent);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -646,12 +690,12 @@ button:hover {
 }
 
 .modal-content {
-    background-color: white;
+    background-color: var(--depth-3);
     padding: 2rem;
     border-radius: 8px;
     max-width: 500px;
     width: 90%;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent);
     animation: modalSlideIn 0.3s ease-out;
 }
 
@@ -672,7 +716,7 @@ button:hover {
 }
 
 .capability-consent-dialog h3 {
-    color: var(--primary-color);
+    color: var(--salt);
     margin-bottom: 1rem;
     display: flex;
     align-items: center;
@@ -680,12 +724,12 @@ button:hover {
 }
 
 .consent-message {
-    background-color: #f8f9fa;
+    background-color: var(--depth-2);
     padding: 1.5rem;
     border-radius: 6px;
     margin-bottom: 1.5rem;
     line-height: 1.6;
-    color: #495057;
+    color: var(--foam-1);
     white-space: pre-line;
 }
 
@@ -705,9 +749,9 @@ button:hover {
 }
 
 .btn-primary {
-    background-color: var(--secondary-color);
-    color: white;
-    border: 2px solid var(--secondary-color);
+    background-color: var(--current-1);
+    color: var(--salt);
+    border: 2px solid var(--current-1);
 }
 
 .btn-primary:hover {
@@ -716,13 +760,13 @@ button:hover {
 }
 
 .btn-secondary {
-    background-color: white;
-    color: var(--primary-color);
+    background-color: var(--depth-3);
+    color: var(--salt);
     border: 2px solid #ddd;
 }
 
 .btn-secondary:hover {
-    background-color: #f8f9fa;
+    background-color: var(--depth-2);
     border-color: #bbb;
 }
 
@@ -732,11 +776,11 @@ button:hover {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    background-color: var(--primary-color);
-    color: white;
+    background-color: var(--salt);
+    color: var(--salt);
     padding: 1.5rem 2rem;
     border-radius: 8px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent);
     z-index: 1001;
     display: flex;
     align-items: center;
@@ -773,13 +817,13 @@ button:hover {
 
 /* Capability Info Display */
 .capability-info {
-    background-color: #f8f9fa;
+    background-color: var(--depth-2);
     border: 1px solid #dee2e6;
     border-radius: 6px;
     padding: 1rem;
     margin: 1rem 0;
     font-size: 0.9rem;
-    color: #495057;
+    color: var(--foam-1);
     z-index: 1050;
     position: relative;
 }
@@ -789,20 +833,20 @@ button:hover {
 }
 
 .capability-info strong {
-    color: var(--primary-color);
+    color: var(--salt);
 }
 
 /* Ensure capability info is properly positioned and readable */
 .capability-info.success-message {
-    background-color: #d1ecf1;
+    background-color: color-mix(in srgb, var(--biolum) 15%, var(--depth-3));
     border: 1px solid #bee5eb;
-    color: #0c5460;
+    color: var(--biolum);
     top: 80px;
     z-index: 1050;
 }
 
 .capability-info.success-message strong {
-    color: #0c5460;
+    color: var(--biolum);
 }
 
 /* Authentication Method Indicator */
@@ -810,8 +854,8 @@ button:hover {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    background-color: #e3f2fd;
-    color: #1565c0;
+    background-color: color-mix(in srgb, var(--current-2) 15%, var(--depth-3));
+    color: var(--current-2);
     padding: 0.4rem 0.8rem;
     border-radius: 20px;
     font-size: 0.85rem;
@@ -820,13 +864,13 @@ button:hover {
 }
 
 .auth-method-indicator.opaque {
-    background-color: #e8f5e8;
-    color: #2e7d32;
+    background-color: color-mix(in srgb, var(--biolum) 15%, var(--depth-3));
+    color: var(--biolum);
 }
 
 .auth-method-indicator.legacy {
-    background-color: #fff3e0;
-    color: #ef6c00;
+    background-color: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3));
+    color: var(--phosphor);
 }
 
 .auth-method-indicator::before {
@@ -845,7 +889,7 @@ button:hover {
     content: "[LEGACY]";
     font-size: 0.8em;
     font-weight: bold;
-    color: #ff9800;
+    color: var(--phosphor);
 }
 
 /* Enhanced Form Styling for OPAQUE */
@@ -858,7 +902,7 @@ button:hover {
 }
 
 .form-section h4 {
-    color: var(--primary-color);
+    color: var(--salt);
     margin-bottom: 0.8rem;
     font-size: 1rem;
     font-weight: 600;
@@ -878,7 +922,7 @@ button:hover {
     left: 0.8rem;
     top: 50%;
     transform: translateY(-50%);
-    color: var(--muted-text-color);
+    color: var(--foam-2);
     font-size: 1.1rem;
 }
 
@@ -894,18 +938,18 @@ button:hover {
 }
 
 .security-level.interactive {
-    background-color: #e3f2fd;
-    color: #1565c0;
+    background-color: color-mix(in srgb, var(--current-2) 15%, var(--depth-3));
+    color: var(--current-2);
 }
 
 .security-level.balanced {
-    background-color: #f3e5f5;
-    color: #7b1fa2;
+    background-color: color-mix(in srgb, var(--current-2) 15%, var(--depth-3));
+    color: var(--current-2);
 }
 
 .security-level.maximum {
-    background-color: #e8f5e8;
-    color: #2e7d32;
+    background-color: color-mix(in srgb, var(--biolum) 15%, var(--depth-3));
+    color: var(--biolum);
 }
 
 /* Responsive Design for OPAQUE Elements */
@@ -933,34 +977,34 @@ button:hover {
 
 /* TOTP Setup Styling */
 .totp-setup-form {
-    background: white;
+    background-color: var(--depth-3);
     padding: 2rem;
     border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 4px color-mix(in srgb, var(--depth-1) 80%, transparent);
     max-width: 600px;
     margin: 0 auto;
 }
 
 .totp-info {
-    background-color: #e3f2fd;
+    background-color: color-mix(in srgb, var(--current-2) 15%, var(--depth-3));
     border: 1px solid #bbdefb;
     border-radius: 6px;
     padding: 1rem;
     margin-bottom: 1.5rem;
-    color: #1565c0;
+    color: var(--current-2);
 }
 
 .totp-step {
     margin-bottom: 2rem;
     padding: 1.5rem;
-    background-color: #f8f9fa;
+    background-color: var(--depth-2);
     border-radius: 6px;
-    border-left: 4px solid var(--secondary-color);
+    border-left: 4px solid var(--current-1);
 }
 
 .totp-step h3 {
     margin-top: 0;
-    color: var(--primary-color);
+    color: var(--salt);
     font-size: 1.1rem;
 }
 
@@ -986,7 +1030,7 @@ button:hover {
 }
 
 .manual-entry {
-    background-color: #f8f9fa;
+    background-color: var(--depth-2);
     padding: 1rem;
     border-radius: 4px;
     margin: 1rem 0;
@@ -995,7 +1039,7 @@ button:hover {
 
 .manual-entry code {
     font-family: monospace;
-    background-color: #e9ecef;
+    background-color: var(--depth-4);
     padding: 0.2rem 0.4rem;
     border-radius: 3px;
     font-size: 0.9rem;
@@ -1015,12 +1059,12 @@ button:hover {
 }
 
 .totp-input:focus {
-    border-color: var(--secondary-color);
+    border-color: var(--current-1);
     outline: none;
 }
 
 .backup-codes-section {
-    background-color: #fff3cd;
+    background-color: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3));
     border: 1px solid #ffeaa7;
     border-radius: 6px;
     padding: 1.5rem;
@@ -1029,21 +1073,21 @@ button:hover {
 
 .backup-warning {
     margin-bottom: 1rem;
-    color: #856404;
+    color: var(--phosphor);
 }
 
 .backup-codes-container ul {
     list-style: none;
     padding: 0;
     margin: 1rem 0;
-    background-color: white;
+    background-color: var(--depth-3);
     border-radius: 4px;
     padding: 1rem;
 }
 
 .backup-codes-container li {
     font-family: monospace;
-    background-color: #f8f9fa;
+    background-color: var(--depth-2);
     padding: 0.5rem;
     margin: 0.3rem 0;
     border-radius: 3px;
@@ -1057,8 +1101,8 @@ button:hover {
 }
 
 .secondary-button {
-    background-color: #6c757d;
-    color: white;
+    background-color: var(--foam-2);
+    color: var(--salt);
     padding: 0.8rem 1.5rem;
     border: none;
     border-radius: 4px;
@@ -1069,11 +1113,11 @@ button:hover {
 }
 
 .secondary-button:hover {
-    background-color: #5a6268;
+    background-color: color-mix(in srgb, var(--depth-4) 70%, #000);
 }
 
 .secondary-button:disabled {
-    background-color: #adb5bd;
+    background-color: var(--depth-4);
     cursor: not-allowed;
 }
 
@@ -1104,18 +1148,18 @@ button:hover {
 }
 
 .share-form-container .card {
-    background: #f8f9fa;
+    background-color: var(--depth-2);
     border: 1px solid #dee2e6;
     border-radius: 8px;
     padding: 1.5rem;
     margin-left: 2rem;
-    border-left: 4px solid var(--secondary-color);
+    border-left: 4px solid var(--current-1);
 }
 
 .share-form-container h3 {
     margin-top: 0;
     margin-bottom: 1rem;
-    color: var(--primary-color);
+    color: var(--salt);
     font-size: 1.1rem;
 }
 
@@ -1127,7 +1171,7 @@ button:hover {
     display: block;
     margin-bottom: 0.5rem;
     font-weight: 500;
-    color: var(--primary-color);
+    color: var(--salt);
 }
 
 .share-form-container input[type="password"] {
@@ -1141,8 +1185,8 @@ button:hover {
 
 .share-form-container input[type="password"]:focus {
     outline: none;
-    border-color: var(--secondary-color);
-    box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+    border-color: var(--current-1);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--current-2) 20%, transparent);
 }
 
 .share-form-container .password-strength {
@@ -1159,12 +1203,12 @@ button:hover {
 
 .share-form-container .feedback {
     font-size: 0.8rem;
-    color: var(--muted-text-color);
+    color: var(--foam-2);
     font-style: italic;
 }
 
 .share-form-container small {
-    color: var(--muted-text-color);
+    color: var(--foam-2);
     font-size: 0.85rem;
 }
 
@@ -1184,32 +1228,32 @@ button:hover {
 }
 
 .share-form-container .btn.primary {
-    background-color: var(--secondary-color);
-    color: white;
+    background-color: var(--current-1);
+    color: var(--salt);
 }
 
 .share-form-container .btn.primary:hover:not(:disabled) {
-    background-color: #2980b9;
+    background-color: var(--current-2);
 }
 
 .share-form-container .btn.primary:disabled {
-    background-color: #adb5bd;
+    background-color: var(--depth-4);
     cursor: not-allowed;
 }
 
 .share-form-container .btn.secondary {
-    background-color: #6c757d;
-    color: white;
+    background-color: var(--foam-2);
+    color: var(--salt);
 }
 
 .share-form-container .btn.secondary:hover {
-    background-color: #5a6268;
+    background-color: color-mix(in srgb, var(--depth-4) 70%, #000);
 }
 
 .share-form-container .success-message {
-    background-color: #d4edda;
+    background-color: color-mix(in srgb, var(--biolum) 15%, var(--depth-3));
     border: 1px solid #c3e6cb;
-    color: #155724;
+    color: var(--biolum);
     padding: 1rem;
     border-radius: 4px;
     margin-top: 1rem;
@@ -1218,13 +1262,13 @@ button:hover {
 .share-form-container .success-message h4 {
     margin-top: 0;
     margin-bottom: 0.8rem;
-    color: #155724;
+    color: var(--biolum);
 }
 
 .share-form-container .error-message {
-    background-color: #f8d7da;
+    background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
     border: 1px solid #f5c6cb;
-    color: #721c24;
+    color: var(--coral);
     padding: 1rem;
     border-radius: 4px;
     margin-top: 1rem;
@@ -1248,14 +1292,14 @@ button:hover {
     flex: 1;
     font-family: monospace;
     font-size: 0.9rem;
-    background-color: white;
+    background-color: var(--depth-3);
     border: 1px solid #ced4da;
     margin-bottom: 0;
 }
 
 .share-form-container .url-copy-container button {
-    background-color: var(--success-color);
-    color: white;
+    background-color: var(--biolum);
+    color: var(--salt);
     border: none;
     padding: 0.6rem 1rem;
     border-radius: 4px;
@@ -1265,14 +1309,14 @@ button:hover {
 }
 
 .share-form-container .url-copy-container button:hover {
-    background-color: #219a52;
+    background-color: var(--current-2);
 }
 
 .share-form-container #share-progress {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    color: var(--primary-color);
+    color: var(--salt);
     font-size: 0.9rem;
     margin-top: 1rem;
 }
@@ -1280,14 +1324,14 @@ button:hover {
 .share-form-container #share-progress .progress-bar {
     width: 100px;
     height: 4px;
-    background-color: #e0e0e0;
+    background-color: var(--depth-4);
     border-radius: 2px;
     overflow: hidden;
 }
 
 .share-form-container #share-progress .progress-bar-fill {
     height: 100%;
-    background-color: var(--secondary-color);
+    background-color: var(--current-1);
     border-radius: 2px;
     animation: progress-fill 2s ease-in-out infinite;
 }
@@ -1304,10 +1348,10 @@ button:hover {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    background: white;
+    background-color: var(--depth-3);
     padding: 30px;
     border-radius: 8px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent);
     z-index: 1500;
     min-width: 300px;
     text-align: center;
@@ -1316,13 +1360,13 @@ button:hover {
 
 .progress-modal h4 {
     margin: 0 0 15px 0;
-    color: #333;
+    color: var(--foam-1);
     font-size: 18px;
 }
 
 .progress-modal .progress-message-text {
     margin-bottom: 20px;
-    color: var(--muted-text-color);
+    color: var(--foam-2);
     font-size: 14px;
     line-height: 1.4;
 }
@@ -1330,7 +1374,7 @@ button:hover {
 .progress-modal .progress-container {
     width: 100%;
     height: 8px;
-    background-color: #f0f0f0;
+    background-color: var(--depth-4);
     border-radius: 4px;
     overflow: hidden;
     margin-bottom: 15px;
@@ -1338,7 +1382,7 @@ button:hover {
 
 .progress-modal .progress-bar {
     height: 100%;
-    background-color: #007bff;
+    background-color: var(--current-1);
     border-radius: 4px;
     transition: width 0.3s ease;
     width: var(--progress-width, 0%);
@@ -1358,13 +1402,13 @@ button:hover {
 
 .progress-modal .progress-percentage {
     font-size: 12px;
-    color: #888;
+    color: var(--foam-2);
     margin-bottom: 15px;
 }
 
 .progress-modal .cancel-button {
-    background-color: #6c757d;
-    color: white;
+    background-color: var(--foam-2);
+    color: var(--salt);
     border: none;
     padding: 8px 16px;
     border-radius: 4px;
@@ -1373,28 +1417,28 @@ button:hover {
 }
 
 .progress-modal .cancel-button:hover {
-    background-color: #5a6268;
+    background-color: color-mix(in srgb, var(--depth-4) 70%, #000);
 }
 
 .progress-modal .progress-info {
     font-size: 11px;
-    color: #999;
+    color: var(--foam-2);
     margin-top: 10px;
     line-height: 1.3;
 }
 
 .progress-modal .progress-error {
-    color: #dc3545;
+    color: var(--coral);
     font-size: 13px;
     margin-top: 10px;
     padding: 8px;
-    background-color: #f8d7da;
+    background-color: color-mix(in srgb, var(--coral) 15%, var(--depth-3));
     border-radius: 4px;
     border: 1px solid #f5c6cb;
 }
 
 .progress-modal.error {
-    border-color: #dc3545;
+    border-color: var(--coral);
 }
 
 .progress-backdrop {
@@ -1403,7 +1447,7 @@ button:hover {
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.3);
+    background-color: color-mix(in srgb, var(--depth-1) 80%, transparent);
     z-index: 1400;
 }
 
@@ -1434,7 +1478,7 @@ button:hover {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--muted-text-color);
+    color: var(--foam-2);
     transition: color 0.2s ease;
     width: auto;
     height: auto;
@@ -1442,12 +1486,12 @@ button:hover {
 }
 
 .password-toggle-btn:hover {
-    color: var(--primary-color);
+    color: var(--salt);
     background: none;
 }
 
 .password-toggle-btn:focus {
-    outline: 2px solid var(--secondary-color);
+    outline: 2px solid var(--current-1);
     outline-offset: 2px;
     border-radius: 4px;
 }
@@ -1472,22 +1516,22 @@ button:hover {
 
 /* Pending Approval Section */
 .pending-approval-section {
-    background: white;
+    background-color: var(--depth-3);
     padding: 2rem;
     border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 4px color-mix(in srgb, var(--depth-1) 80%, transparent);
     max-width: 600px;
     margin: 0 auto;
     text-align: center;
 }
 
 .pending-approval-section h2 {
-    color: var(--primary-color);
+    color: var(--salt);
     margin-bottom: 1.5rem;
 }
 
 .pending-approval-content {
-    background-color: #fff3cd;
+    background-color: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3));
     border: 1px solid #ffeaa7;
     border-radius: 8px;
     padding: 2rem;
@@ -1496,24 +1540,24 @@ button:hover {
 
 .pending-icon {
     font-size: 3rem;
-    color: #856404;
+    color: var(--phosphor);
     margin-bottom: 1rem;
 }
 
 .pending-message {
     font-size: 1.1rem;
-    color: #856404;
+    color: var(--phosphor);
     margin-bottom: 1rem;
 }
 
 .pending-details {
-    color: #856404;
+    color: var(--phosphor);
     margin-bottom: 1rem;
     line-height: 1.6;
 }
 
 .pending-info {
-    color: #6c757d;
+    color: var(--foam-2);
     font-size: 0.9rem;
     font-style: italic;
 }
@@ -1525,4 +1569,15 @@ button:hover {
 .pending-actions button {
     max-width: 200px;
     margin: 0 auto;
+}
+
+a {
+    color: var(--current-2);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+a:hover {
+    color: var(--salt);
+    text-decoration: underline;
 }

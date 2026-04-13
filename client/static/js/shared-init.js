@@ -7,7 +7,7 @@
   function showError(message) {
     var container = document.getElementById('share-access-container');
     if (container) {
-      container.innerHTML = '<h2>Error</h2><p style="color: #e74c3c;">' + message + '</p>';
+      container.innerHTML = '<h2>Error</h2><p style="color: var(--coral);">' + message + '</p>';
     }
   }
 

@@ -47,9 +47,9 @@ export class ModalManager {
           grid-template-columns: repeat(2, 1fr);
           gap: 8px;
           padding: 12px;
-          background: #fffbea;
+          background: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3));
           border-radius: 4px;
-          border: 1px solid #ffc107;
+          border: 1px solid var(--phosphor);
         }
         .backup-code {
           font-family: 'Courier New', monospace;
@@ -75,7 +75,7 @@ export class ModalManager {
     title.style.cssText = `
       margin-top: 0;
       margin-bottom: 15px;
-      color: #333;
+      color: var(--salt);
       text-align: center;
     `;
     title.textContent = options.title;
@@ -85,7 +85,7 @@ export class ModalManager {
     message.style.cssText = `
       margin-bottom: 20px;
       line-height: 1.5;
-      color: #666;
+      color: var(--foam-2);
       white-space: pre-line;
     `;
     message.textContent = options.message;
@@ -185,26 +185,26 @@ export class ModalManager {
     switch (options.variant) {
       case 'danger':
         variantStyle = `
-          background-color: #dc3545;
-          color: white;
+          background-color: var(--coral);
+          color: var(--salt);
         `;
         break;
       case 'secondary':
         variantStyle = `
-          background-color: #6c757d;
-          color: white;
+          background-color: var(--depth-4);
+          color: var(--salt);
         `;
         break;
       case 'success':
         variantStyle = `
-          background-color: #28a745;
-          color: white;
+          background-color: var(--biolum);
+          color: var(--salt);
         `;
         break;
       default:
         variantStyle = `
-          background-color: #007bff;
-          color: white;
+          background-color: var(--current-2);
+          color: var(--salt);
         `;
     }
 
@@ -319,30 +319,30 @@ export function showTOTPAppsModal(): HTMLElement {
   const createAppsList = (apps: any[], emoji: string, title: string) => {
     return `
       <div style="margin-bottom: 20px;">
-        <h4 style="margin: 0 0 10px 0; color: #333; font-size: 16px;">
+        <h4 style="margin: 0 0 10px 0; color: var(--salt); font-size: 16px;">
           ${emoji} ${title}
         </h4>
         ${apps.map(app => `
-          <div style="margin-bottom: 8px; padding: 8px; background: #f8f9fa; border-radius: 4px;">
+          <div style="margin-bottom: 8px; padding: 8px; background: var(--depth-2); border-radius: 4px;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
               <div style="flex: 1;">
                 <strong>${app.name}</strong>
                 ${app.platform ? ` (${app.platform})` : ''}
-                <div style="font-size: 12px; color: #666; margin-top: 2px;">
+                <div style="font-size: 12px; color: var(--foam-2); margin-top: 2px;">
                   ${app.desc}
                 </div>
               </div>
               <a href="${app.url}" target="_blank" rel="noopener" style="
-                color: #007bff;
+                color: var(--current-2);
                 text-decoration: none;
                 font-size: 12px;
                 padding: 4px 8px;
-                border: 1px solid #007bff;
+                border: 1px solid var(--current-2);
                 border-radius: 3px;
                 margin-left: 10px;
                 white-space: nowrap;
-              " onmouseover="this.style.backgroundColor='#007bff'; this.style.color='white';" 
-                 onmouseout="this.style.backgroundColor='transparent'; this.style.color='#007bff';">
+              " onmouseover="this.style.backgroundColor='var(--current-2)'; this.style.color='white';" 
+                 onmouseout="this.style.backgroundColor='transparent'; this.style.color='var(--current-2)';">
                 View →
               </a>
             </div>
@@ -353,20 +353,20 @@ export function showTOTPAppsModal(): HTMLElement {
   };
 
   modalContent.innerHTML = `
-    <h3 style="margin: 0 0 20px 0; color: #333; text-align: center;">Recommended TOTP Apps</h3>
+    <h3 style="margin: 0 0 20px 0; color: var(--salt); text-align: center;">Recommended TOTP Apps</h3>
     <div style="margin-bottom: 20px;">
       ${createAppsList(appsData.mobile, '', 'Mobile (Recommended)')}
       ${createAppsList(appsData.desktop, '', 'Desktop')}
       ${createAppsList(appsData.advanced, '️', 'Advanced')}
-      <div style="margin-top: 20px; padding: 15px; background: #e7f3ff; border-radius: 4px; font-size: 14px; color: #0066cc;">
+      <div style="margin-top: 20px; padding: 15px; background: color-mix(in srgb, var(--current-2) 15%, var(--depth-3)); border-radius: 4px; font-size: 14px; color: var(--current-2);">
         <strong>Tip:</strong> All listed apps are fully open source and respect your privacy.
       </div>
     </div>
     <button onclick="this.closest('.modal-overlay').remove();" style="
       width: 100%;
       padding: 10px;
-      background-color: #007bff;
-      color: white;
+      background-color: var(--current-2);
+      color: var(--salt);
       border: none;
       border-radius: 4px;
       cursor: pointer;

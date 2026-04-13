@@ -136,8 +136,8 @@ const MODAL_STYLES = `
   }
 
   .password-modal {
-    background: var(--bg-primary, #1a1a2e);
-    border: 1px solid var(--border-color, #333);
+    background: var(--depth-3);
+    border: 1px solid var(--depth-4);
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
     max-width: 400px;
@@ -157,20 +157,20 @@ const MODAL_STYLES = `
     align-items: center;
     justify-content: space-between;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color, #333);
+    border-bottom: 1px solid var(--depth-4);
   }
 
   .password-modal-header h2 {
     margin: 0;
     font-size: 1.25rem;
-    color: var(--text-primary, #fff);
+    color: var(--salt);
   }
 
   .password-modal-close {
     background: none;
     border: none;
     font-size: 1.5rem;
-    color: var(--text-secondary, #888);
+    color: var(--foam-2);
     cursor: pointer;
     padding: 0;
     line-height: 1;
@@ -178,7 +178,7 @@ const MODAL_STYLES = `
   }
 
   .password-modal-close:hover {
-    color: var(--text-primary, #fff);
+    color: var(--salt);
   }
 
   .password-modal-body {
@@ -187,7 +187,7 @@ const MODAL_STYLES = `
 
   .password-modal-message {
     margin: 0 0 20px 0;
-    color: var(--text-secondary, #ccc);
+    color: var(--foam-2);
     line-height: 1.5;
   }
 
@@ -205,16 +205,16 @@ const MODAL_STYLES = `
 
   .password-modal-field label {
     font-size: 0.875rem;
-    color: var(--text-secondary, #ccc);
+    color: var(--foam-2);
   }
 
   .password-modal-input,
   .password-modal-select {
     padding: 10px 12px;
-    border: 1px solid var(--border-color, #333);
+    border: 1px solid var(--depth-4);
     border-radius: 4px;
-    background: var(--bg-secondary, #252540);
-    color: var(--text-primary, #fff);
+    background: var(--depth-2);
+    color: var(--salt);
     font-size: 1rem;
     transition: border-color 0.2s;
   }
@@ -222,7 +222,7 @@ const MODAL_STYLES = `
   .password-modal-input:focus,
   .password-modal-select:focus {
     outline: none;
-    border-color: var(--accent-color, #6366f1);
+    border-color: var(--current-1);
   }
 
   .password-modal-duration {
@@ -233,7 +233,7 @@ const MODAL_STYLES = `
 
   .password-modal-duration label {
     font-size: 0.875rem;
-    color: var(--text-secondary, #ccc);
+    color: var(--foam-2);
   }
 
   .password-modal-footer {
@@ -241,7 +241,7 @@ const MODAL_STYLES = `
     justify-content: flex-end;
     gap: 12px;
     padding: 16px 20px;
-    border-top: 1px solid var(--border-color, #333);
+    border-top: 1px solid var(--depth-4);
   }
 
   .password-modal-btn {
@@ -255,24 +255,24 @@ const MODAL_STYLES = `
 
   .password-modal-btn-cancel {
     background: transparent;
-    border: 1px solid var(--border-color, #333);
-    color: var(--text-secondary, #ccc);
+    border: 1px solid var(--depth-4);
+    color: var(--foam-2);
   }
 
   .password-modal-btn-cancel:hover {
-    background: var(--bg-secondary, #252540);
-    color: var(--text-primary, #fff);
+    background: var(--depth-2);
+    color: var(--salt);
   }
 
   .password-modal-btn-submit {
-    background: var(--accent-color, #6366f1);
-    border: 1px solid var(--accent-color, #6366f1);
+    background: var(--current-1);
+    border: 1px solid var(--current-1);
     color: #fff;
   }
 
   .password-modal-btn-submit:hover {
-    background: var(--accent-hover, #5558e3);
-    border-color: var(--accent-hover, #5558e3);
+    background: var(--current-2);
+    border-color: var(--current-2);
   }
 
   .password-modal-btn:disabled {

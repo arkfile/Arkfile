@@ -82,7 +82,7 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
       padding: 10px;
       font-size: 18px;
       text-align: center;
-      border: 1px solid #ddd;
+      border: 1px solid var(--depth-4);
       border-radius: 4px;
       margin-bottom: 15px;
       letter-spacing: 0.2em;
@@ -96,8 +96,8 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
     <button id="verify-totp-login" disabled style="
       width: 100%;
       padding: 10px;
-      background-color: #007bff;
-      color: white;
+      background-color: var(--current-2);
+      color: var(--salt);
       border: none;
       border-radius: 4px;
       cursor: pointer;
@@ -107,8 +107,8 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
     <button onclick="this.closest('.modal-overlay').remove(); delete window.totpLoginData;" style="
       width: 100%;
       padding: 10px;
-      background-color: #6c757d;
-      color: white;
+      background-color: var(--depth-4);
+      color: var(--salt);
       border: none;
       border-radius: 4px;
       cursor: pointer;
@@ -373,7 +373,7 @@ export function showTOTPSetupModal(): void {
     <div id="totp-setup-content">
       <div style="text-align: center; padding: 20px;">
         <div style="margin-bottom: 15px;">Initializing TOTP setup...</div>
-        <div style="width: 20px; height: 20px; border: 2px solid #007bff; border-top: 2px solid transparent; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto;"></div>
+        <div style="width: 20px; height: 20px; border: 2px solid var(--current-2); border-top: 2px solid transparent; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto;"></div>
       </div>
     </div>
   `;
@@ -409,9 +409,9 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData): voi
       <div style="text-align: center; margin: 15px 0;">
         <img src="${setupData.qr_code_url}" alt="TOTP QR Code" style="max-width: 200px;">
       </div>
-      <p style="font-size: 14px; color: #666;">
+      <p style="font-size: 14px; color: var(--foam-2);">
         Scan this QR code with your authenticator app 
-        <a href="#" onclick="event.preventDefault(); window.showTOTPAppsModal();" style="color: #007bff; text-decoration: none; font-size: 13px;">
+        <a href="#" onclick="event.preventDefault(); window.showTOTPAppsModal();" style="color: var(--current-2); text-decoration: none; font-size: 13px;">
           Need a TOTP app?
         </a>
       </p>
@@ -419,25 +419,25 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData): voi
     
     <div style="margin-bottom: 20px;">
       <h4>Step 2: Manual Entry (Alternative)</h4>
-      <div style="background: #f5f5f5; padding: 10px; border-radius: 4px; margin: 10px 0;">
+      <div style="background: var(--depth-2); padding: 10px; border-radius: 4px; margin: 10px 0;">
         <code style="font-family: monospace; word-break: break-all;">${setupData.manual_entry}</code>
       </div>
-      <p style="font-size: 14px; color: #666;">
+      <p style="font-size: 14px; color: var(--foam-2);">
         If you can't scan the QR code, enter this code manually in your authenticator app.
       </p>
     </div>
     
     <div style="margin-bottom: 20px;">
       <h4>Step 3: Backup Codes</h4>
-      <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 4px; margin: 10px 0;">
-        <p style="margin: 0 0 10px 0; font-weight: bold; color: #856404;">
+      <div style="background: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3)); border: 1px solid var(--phosphor); padding: 15px; border-radius: 4px; margin: 10px 0;">
+        <p style="margin: 0 0 10px 0; font-weight: bold; color: var(--phosphor);">
           Save these backup codes in a secure location:
         </p>
         <div style="font-family: monospace; font-size: 14px; line-height: 1.5;">
           ${setupData.backup_codes.map((code: string) => `<div>${code}</div>`).join('')}
         </div>
       </div>
-      <p style="font-size: 14px; color: #666;">
+      <p style="font-size: 14px; color: var(--foam-2);">
         Use these codes if you lose access to your authenticator app. Each code can only be used once.
       </p>
     </div>
@@ -449,12 +449,12 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData): voi
         padding: 10px;
         font-size: 18px;
         text-align: center;
-        border: 1px solid #ddd;
+        border: 1px solid var(--depth-4);
         border-radius: 4px;
         margin-bottom: 15px;
         letter-spacing: 0.2em;
       ">
-      <p style="font-size: 14px; color: #666; margin-bottom: 15px;">
+      <p style="font-size: 14px; color: var(--foam-2); margin-bottom: 15px;">
         Enter the 6-digit code from your authenticator app to complete setup.
       </p>
     </div>
@@ -463,8 +463,8 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData): voi
       <button id="complete-totp-setup" disabled style="
         flex: 1;
         padding: 10px;
-        background-color: #28a745;
-        color: white;
+        background-color: var(--biolum);
+        color: var(--salt);
         border: none;
         border-radius: 4px;
         cursor: pointer;
@@ -473,8 +473,8 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData): voi
       <button onclick="this.closest('.modal-overlay').remove();" style="
         flex: 1;
         padding: 10px;
-        background-color: #6c757d;
-        color: white;
+        background-color: var(--depth-4);
+        color: var(--salt);
         border: none;
         border-radius: 4px;
         cursor: pointer;

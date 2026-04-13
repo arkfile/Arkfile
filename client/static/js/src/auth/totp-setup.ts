@@ -56,7 +56,7 @@ export function handleTOTPSetupFlow(data: TOTPSetupFlowData): void {
     <h3 class="totp-setup-title">Setup Two-Factor Authentication</h3>
     <div id="totp-setup-content" class="totp-info">
       <div style="text-align: center; padding: 1.5rem;">
-        <div style="margin-bottom: 1rem; color: var(--muted-text-color);">Initializing TOTP setup...</div>
+        <div style="margin-bottom: 1rem; color: var(--foam-2);">Initializing TOTP setup...</div>
         <div class="spinner"></div>
       </div>
     </div>
@@ -70,8 +70,8 @@ export function handleTOTPSetupFlow(data: TOTPSetupFlowData): void {
       .spinner {
         width: 24px;
         height: 24px;
-        border: 3px solid var(--background-color);
-        border-top: 3px solid var(--secondary-color);
+        border: 3px solid var(--depth-1);
+        border-top: 3px solid var(--current-1);
         border-radius: 50%;
         animation: spin 1s linear infinite;
         margin: 0 auto;
@@ -82,7 +82,7 @@ export function handleTOTPSetupFlow(data: TOTPSetupFlowData): void {
       }
       .totp-setup-title {
         margin: 0 0 1.5rem 0;
-        color: var(--primary-color);
+        color: var(--salt);
         font-size: 1.2rem;
       }
     `;
@@ -142,7 +142,7 @@ async function initiateTOTPSetupForRegistration(tempToken: string): Promise<TOTP
 function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowData: TOTPSetupFlowData): void {
   modalContent.innerHTML = `
     <h3 class="totp-setup-title">Setup Two-Factor Authentication</h3>
-    <p style="margin-bottom: 1.5rem; color: var(--muted-text-color);">
+    <p style="margin-bottom: 1.5rem; color: var(--foam-2);">
       Two-factor authentication adds an extra layer of security to your account.
     </p>
     
@@ -151,12 +151,12 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
       <div class="qr-code-container">
         ${setupData.qr_code_image 
           ? `<img src="${setupData.qr_code_image}" alt="TOTP QR Code" style="width: 200px; height: 200px;">`
-          : `<div style="padding: 1rem; background: #f8d7da; color: #721c24; border-radius: 4px;">QR code unavailable. Please use manual entry below.</div>`
+          : `<div style="padding: 1rem; background: color-mix(in srgb, var(--coral) 15%, var(--depth-3)); color: var(--coral); border-radius: 4px;">QR code unavailable. Please use manual entry below.</div>`
         }
       </div>
-      <p style="font-size: 0.9rem; color: var(--muted-text-color); text-align: center;">
+      <p style="font-size: 0.9rem; color: var(--foam-2); text-align: center;">
         Scan this QR code with your authenticator app.
-        <a href="#" onclick="event.preventDefault(); window.showTOTPAppsModal();" style="color: var(--secondary-color); text-decoration: none;">
+        <a href="#" onclick="event.preventDefault(); window.showTOTPAppsModal();" style="color: var(--current-1); text-decoration: none;">
           Need a TOTP app?
         </a>
       </p>
@@ -167,7 +167,7 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
       <div class="manual-entry">
         <code>${setupData.manual_entry}</code>
       </div>
-      <p style="font-size: 0.9rem; color: var(--muted-text-color);">
+      <p style="font-size: 0.9rem; color: var(--foam-2);">
         If you cannot scan the QR code, enter this code manually in your authenticator app.
       </p>
     </div>
@@ -181,7 +181,7 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
           ${setupData.backup_codes.map((code: string) => `<span class="backup-code">${code}</span>`).join('')}
         </div>
       </div>
-      <p style="font-size: 0.9rem; color: #856404;">
+      <p style="font-size: 0.9rem; color: var(--phosphor);">
         Use these codes if you lose access to your authenticator app. Each code can only be used once.
       </p>
       <button id="download-backup-codes" class="secondary-button" style="width: auto; margin-top: 0.5rem;">
@@ -194,7 +194,7 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
       <div style="text-align: center;">
         <input type="text" id="totp-setup-code" class="totp-input" maxlength="6" placeholder="000000">
       </div>
-      <p style="font-size: 0.9rem; color: var(--muted-text-color); text-align: center;">
+      <p style="font-size: 0.9rem; color: var(--foam-2); text-align: center;">
         Enter the 6-digit code from your authenticator app to complete registration.
       </p>
     </div>
@@ -202,8 +202,8 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
     <button id="complete-totp-setup" disabled style="
       width: 100%;
       padding: 0.8rem 1.5rem;
-      background-color: var(--success-color);
-      color: white;
+      background-color: var(--biolum);
+      color: var(--salt);
       border: none;
       border-radius: 4px;
       cursor: pointer;
