@@ -88,17 +88,14 @@ input:focus, .totp-input:focus {
     font-weight: 600;
     transition: all 0.2s ease;
     border: none;
-}
-
-button, .btn-primary, .hero-btn.primary, .share-action-btn, .share-list-refresh, .secondary-button:not(.danger-button), .password-toggle-btn, .remove-contact-btn {
     background-color: var(--current-1);
     color: var(--foam-1);
 }
-    background-color: color-mix(in srgb, var(--coral) 80%, var(--depth-1));
+
 button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .share-list-refresh:hover, .secondary-button:hover, .nav-link:hover {
-    background-color: color-mix(in srgb, var(--coral) 80%, var(--depth-1));
+    background-color: color-mix(in srgb, var(--current-1) 70%, var(--depth-1));
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px color-mix(in srgb, var(--coral) 30%, transparent);
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--current-1) 30%, transparent);
 }
 
 .danger-button, .logout-btn, .share-action-btn.delete, .share-action-btn.revoke {
@@ -760,8 +757,8 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 }
 
 .btn-primary:hover {
-    background-color: var(--accent-color);
-    border-color: var(--accent-color);
+    background-color: var(--current-2);
+    border-color: var(--current-2);
 }
 
 .btn-secondary {

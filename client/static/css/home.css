@@ -19,7 +19,7 @@ body {
     font-weight: 700;
     margin-bottom: 15px;
     margin-top: 0;
-    text-shadow: 0 2px 4px rgba(0,0,0,0);
+    text-shadow: none;
 }
 
 .hero-tagline {

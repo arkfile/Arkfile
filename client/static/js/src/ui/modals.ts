@@ -201,7 +201,7 @@ export class ModalManager {
       case 'success':
         variantStyle = `
           background-color: var(--biolum);
-          color: var(--salt);
+          color: var(--depth-1);
         `;
         break;
       default:

@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arkfile Theme Preview</title>
+    <style>
+        :root {
+            --depth-1: #060d1a;
+            --depth-2: #0a1628;
+            --depth-3: #112240;
+            --depth-4: #1e3a5f;
+            --current-1: #2d6a9f;
+            --current-2: #4a9fd4;
+            --foam-1: #cce7ff;
+            --foam-2: #8ab8d8;
+            --biolum: #00d4aa;
+            --phosphor: #f0a500;
+            --coral: #e05c5c;
+            --salt: #ffffff;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: var(--depth-1);
+            color: var(--foam-1);
+            line-height: 1.6;
+        }
+
+        a {
+            color: var(--current-2);
+            text-decoration: none;
+        }
+
+        a:hover {
+            color: var(--salt);
+            text-decoration: underline;
+        }
+
+        h1, h2, h3 {
+            color: var(--salt);
+            margin-bottom: 1rem;
+        }
+
+        .preview-container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .preview-section {
+            margin-bottom: 3rem;
+        }
+
+        .preview-section > h2 {
+            border-bottom: 1px solid var(--depth-4);
+            padding-bottom: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        /* Color Swatches */
+        .swatch-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 12px;
+            margin-bottom: 1rem;
+        }
+
+        .swatch {
+            border-radius: 8px;
+            padding: 1rem;
+            text-align: center;
+            font-size: 0.85rem;
+            font-weight: 600;
+            border: 1px solid var(--depth-4);
+        }
+
+        .swatch .swatch-label {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .swatch .swatch-hex {
+            font-family: monospace;
+            font-size: 0.8rem;
+            opacity: 0.8;
+        }
+
+        /* Surface demos */
+        .surface-demo {
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            border: 1px solid var(--depth-4);
+        }
+
+        .surface-demo h4 {
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+        }
+
+        .surface-demo p {
+            margin-bottom: 0.25rem;
+        }
+
+        /* Contrast check grid */
+        .contrast-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 12px;
+        }
+
+        .contrast-item {
+            padding: 1rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            border: 1px solid var(--depth-4);
+        }
+
+        .contrast-item .label {
+            font-size: 0.75rem;
+            opacity: 0.7;
+            margin-top: 4px;
+        }
+
+        /* Button styles */
+        .button-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 1rem;
+        }
+
+        .preview-btn {
+            padding: 0.6rem 1rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+
+        .preview-btn:hover {
+            transform: translateY(-1px);
+        }
+
+        /* Alert demos */
+        .alert-demo {
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 0.75rem;
+            border: 1px solid;
+        }
+
+        /* Input demos */
+        .input-demo {
+            max-width: 400px;
+        }
+
+        .input-demo label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--foam-2);
+            font-size: 0.9rem;
+        }
+
+        .input-demo input {
+            width: 100%;
+            padding: 0.75rem;
+            margin-bottom: 1rem;
+            border: 2px solid var(--depth-4);
+            border-radius: 6px;
+            font-size: 1rem;
+            font-family: inherit;
+            background: var(--depth-2);
+            color: var(--salt);
+        }
+
+        .input-demo input:focus {
+            outline: none;
+            border-color: var(--current-2);
+            box-shadow: 0 0 0 3px color-mix(in srgb, var(--current-2) 20%, transparent);
+        }
+
+        /* Badge demos */
+        .badge-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 1rem;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        /* Section subtitle */
+        .section-subtitle {
+            color: var(--foam-2);
+            font-size: 0.95rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .section-subtitle-spaced {
+            color: var(--foam-2);
+            font-size: 0.95rem;
+            margin-top: 1.5rem;
+            margin-bottom: 0.75rem;
+        }
+
+        /* Policy panel */
+        .policy-panel {
+            background: var(--depth-2);
+            padding: 1.5rem;
+            border-radius: 8px;
+            border: 1px solid var(--depth-4);
+        }
+
+        .policy-panel h3 {
+            margin-top: 1.5rem;
+        }
+
+        .policy-panel h3:first-child {
+            margin-top: 0;
+        }
+
+        .policy-panel ul {
+            color: var(--foam-2);
+            line-height: 1.8;
+            padding-left: 1.5rem;
+        }
+
+        .policy-panel strong {
+            color: var(--salt);
+        }
+    </style>
+</head>
+<body>
+    <div class="preview-container">
+        <header style="text-align: center; margin-bottom: 3rem;">
+            <h1>Arkfile Theme Preview</h1>
+            <p style="color: var(--foam-2);">Ocean depth color palette -- 12 root tokens, consistent across all surfaces</p>
+        </header>
+
+        <!-- 1. Color Palette Swatches -->
+        <div class="preview-section">
+            <h2>1. Color Palette (12 Root Tokens)</h2>
+
+            <h3 class="section-subtitle">Depth (Backgrounds)</h3>
+            <div class="swatch-grid">
+                <div class="swatch" style="background: var(--depth-1); color: var(--salt);">
+                    <span class="swatch-label">depth-1</span>
+                    <span class="swatch-hex">#060d1a</span>
+                </div>
+                <div class="swatch" style="background: var(--depth-2); color: var(--salt);">
+                    <span class="swatch-label">depth-2</span>
+                    <span class="swatch-hex">#0a1628</span>
+                </div>
+                <div class="swatch" style="background: var(--depth-3); color: var(--salt);">
+                    <span class="swatch-label">depth-3</span>
+                    <span class="swatch-hex">#112240</span>
+                </div>
+                <div class="swatch" style="background: var(--depth-4); color: var(--salt);">
+                    <span class="swatch-label">depth-4</span>
+                    <span class="swatch-hex">#1e3a5f</span>
+                </div>
+            </div>
+
+            <h3 class="section-subtitle">Current (Interactive)</h3>
+            <div class="swatch-grid">
+                <div class="swatch" style="background: var(--current-1); color: var(--salt);">
+                    <span class="swatch-label">current-1</span>
+                    <span class="swatch-hex">#2d6a9f</span>
+                </div>
+                <div class="swatch" style="background: var(--current-2); color: var(--salt);">
+                    <span class="swatch-label">current-2</span>
+                    <span class="swatch-hex">#4a9fd4</span>
+                </div>
+            </div>
+
+            <h3 class="section-subtitle">Foam (Text)</h3>
+            <div class="swatch-grid">
+                <div class="swatch" style="background: var(--foam-1); color: var(--depth-1);">
+                    <span class="swatch-label">foam-1</span>
+                    <span class="swatch-hex">#cce7ff</span>
+                </div>
+                <div class="swatch" style="background: var(--foam-2); color: var(--depth-1);">
+                    <span class="swatch-label">foam-2</span>
+                    <span class="swatch-hex">#8ab8d8</span>
+                </div>
+            </div>
+
+            <h3 class="section-subtitle">Semantic</h3>
+            <div class="swatch-grid">
+                <div class="swatch" style="background: var(--biolum); color: var(--depth-1);">
+                    <span class="swatch-label">biolum (success)</span>
+                    <span class="swatch-hex">#00d4aa</span>
+                </div>
+                <div class="swatch" style="background: var(--phosphor); color: var(--depth-1);">
+                    <span class="swatch-label">phosphor (warning)</span>
+                    <span class="swatch-hex">#f0a500</span>
+                </div>
+                <div class="swatch" style="background: var(--coral); color: var(--salt);">
+                    <span class="swatch-label">coral (error)</span>
+                    <span class="swatch-hex">#e05c5c</span>
+                </div>
+                <div class="swatch" style="background: var(--salt); color: var(--depth-1);">
+                    <span class="swatch-label">salt (white)</span>
+                    <span class="swatch-hex">#ffffff</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. Surface Examples -->
+        <div class="preview-section">
+            <h2>2. Dark Surface Examples</h2>
+
+            <div class="surface-demo" style="background: var(--depth-1);">
+                <h4 style="color: var(--salt);">depth-1 Surface (Page Background)</h4>
+                <p style="color: var(--foam-1);">Primary text (foam-1)</p>
+                <p style="color: var(--foam-2);">Secondary text (foam-2)</p>
+                <p style="color: var(--current-2);">Link text (current-2)</p>
+            </div>
+
+            <div class="surface-demo" style="background: var(--depth-2);">
+                <h4 style="color: var(--salt);">depth-2 Surface (Cards, Inputs)</h4>
+                <p style="color: var(--foam-1);">Primary text (foam-1)</p>
+                <p style="color: var(--foam-2);">Muted text (foam-2)</p>
+                <p style="color: var(--biolum);">Success text (biolum)</p>
+                <p style="color: var(--phosphor);">Warning text (phosphor)</p>
+                <p style="color: var(--coral);">Error text (coral)</p>
+            </div>
+
+            <div class="surface-demo" style="background: var(--depth-3);">
+                <h4 style="color: var(--salt);">depth-3 Surface (Modals, Panels)</h4>
+                <p style="color: var(--foam-1);">Primary text (foam-1)</p>
+                <p style="color: var(--foam-2);">Supporting text (foam-2)</p>
+                <p style="color: var(--current-2);">Interactive text (current-2)</p>
+            </div>
+        </div>
+
+        <!-- 3. Buttons -->
+        <div class="preview-section">
+            <h2>3. Buttons</h2>
+
+            <h3 class="section-subtitle">Primary Actions</h3>
+            <div class="button-row">
+                <button class="preview-btn" style="background: var(--current-1); color: var(--salt);">Primary (current-1)</button>
+                <button class="preview-btn" style="background: var(--current-2); color: var(--salt);">Accent (current-2)</button>
+            </div>
+
+            <h3 class="section-subtitle">Secondary Actions</h3>
+            <div class="button-row">
+                <button class="preview-btn" style="background: var(--depth-3); color: var(--salt); border: 2px solid var(--depth-4);">Secondary (depth-3)</button>
+                <button class="preview-btn" style="background: var(--depth-4); color: var(--salt);">Alt Secondary (depth-4)</button>
+            </div>
+
+            <h3 class="section-subtitle">Semantic Actions</h3>
+            <div class="button-row">
+                <button class="preview-btn" style="background: var(--biolum); color: var(--depth-1);">Success (biolum + depth-1)</button>
+                <button class="preview-btn" style="background: var(--phosphor); color: var(--depth-1);">Warning (phosphor + depth-1)</button>
+                <button class="preview-btn" style="background: var(--coral); color: var(--salt);">Danger (coral + salt)</button>
+            </div>
+        </div>
+
+        <!-- 4. Alerts / Status Boxes -->
+        <div class="preview-section">
+            <h2>4. Alerts and Status</h2>
+
+            <div class="alert-demo" style="background: color-mix(in srgb, var(--biolum) 15%, var(--depth-3)); border-color: var(--biolum); color: var(--biolum);">
+                <strong>[OK]</strong> Success alert -- biolum tint on depth-3, biolum text
+            </div>
+
+            <div class="alert-demo" style="background: color-mix(in srgb, var(--current-2) 15%, var(--depth-3)); border-color: var(--current-2); color: var(--current-2);">
+                <strong>[i]</strong> Info alert -- current-2 tint on depth-3, current-2 text
+            </div>
+
+            <div class="alert-demo" style="background: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3)); border-color: var(--phosphor); color: var(--phosphor);">
+                <strong>[!]</strong> Warning alert -- phosphor tint on depth-3, phosphor text
+            </div>
+
+            <div class="alert-demo" style="background: color-mix(in srgb, var(--coral) 15%, var(--depth-3)); border-color: var(--coral); color: var(--coral);">
+                <strong>[X]</strong> Error alert -- coral tint on depth-3, coral text
+            </div>
+        </div>
+
+        <!-- 5. Toast Messages -->
+        <div class="preview-section">
+            <h2>5. Toast Messages</h2>
+            <div style="display: flex; flex-direction: column; gap: 10px; max-width: 400px;">
+                <div style="padding: 16px 20px; border-radius: 8px; background: var(--current-1); color: var(--salt); font-size: 14px;">
+                    Info toast: current-1 bg + salt text
+                </div>
+                <div style="padding: 16px 20px; border-radius: 8px; background: var(--biolum); color: var(--depth-1); font-size: 14px;">
+                    Success toast: biolum bg + depth-1 text
+                </div>
+                <div style="padding: 16px 20px; border-radius: 8px; background: var(--phosphor); color: var(--depth-1); font-size: 14px;">
+                    Warning toast: phosphor bg + depth-1 text
+                </div>
+                <div style="padding: 16px 20px; border-radius: 8px; background: var(--coral); color: var(--salt); font-size: 14px;">
+                    Error toast: coral bg + salt text
+                </div>
+            </div>
+        </div>
+
+        <!-- 6. Badges -->
+        <div class="preview-section">
+            <h2>6. Badges and Status Indicators</h2>
+            <div class="badge-row">
+                <span class="badge" style="background: color-mix(in srgb, var(--biolum) 15%, var(--depth-3)); color: var(--biolum);">ACTIVE</span>
+                <span class="badge" style="background: color-mix(in srgb, var(--coral) 15%, var(--depth-3)); color: var(--coral);">REVOKED</span>
+                <span class="badge" style="background: var(--depth-4); color: var(--foam-1);">EXPIRED</span>
+                <span class="badge" style="background: color-mix(in srgb, var(--current-2) 15%, var(--depth-3)); color: var(--current-2);">SECURE</span>
+                <span class="badge" style="background: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3)); color: var(--phosphor);">LEGACY</span>
+            </div>
+        </div>
+
+        <!-- 7. Form Inputs -->
+        <div class="preview-section">
+            <h2>7. Form Inputs</h2>
+            <div class="input-demo">
+                <label>Text Input (depth-2 surface)</label>
+                <input type="text" placeholder="Placeholder text...">
+                <label>Password Input</label>
+                <input type="password" value="password123">
+            </div>
+        </div>
+
+        <!-- 8. Contrast Check Matrix -->
+        <div class="preview-section">
+            <h2>8. Contrast Verification</h2>
+
+            <h3 class="section-subtitle">Text on Dark Surfaces (Correct)</h3>
+            <div class="contrast-grid">
+                <div class="contrast-item" style="background: var(--depth-3); color: var(--salt);">
+                    salt on depth-3
+                    <div class="label">[OK] Primary text</div>
+                </div>
+                <div class="contrast-item" style="background: var(--depth-3); color: var(--foam-1);">
+                    foam-1 on depth-3
+                    <div class="label">[OK] Secondary text</div>
+                </div>
+                <div class="contrast-item" style="background: var(--depth-3); color: var(--foam-2);">
+                    foam-2 on depth-3
+                    <div class="label">[OK] Muted text</div>
+                </div>
+                <div class="contrast-item" style="background: var(--depth-3); color: var(--current-2);">
+                    current-2 on depth-3
+                    <div class="label">[OK] Links/actions</div>
+                </div>
+                <div class="contrast-item" style="background: var(--depth-3); color: var(--biolum);">
+                    biolum on depth-3
+                    <div class="label">[OK] Success</div>
+                </div>
+                <div class="contrast-item" style="background: var(--depth-3); color: var(--phosphor);">
+                    phosphor on depth-3
+                    <div class="label">[OK] Warning</div>
+                </div>
+                <div class="contrast-item" style="background: var(--depth-3); color: var(--coral);">
+                    coral on depth-3
+                    <div class="label">[OK] Error</div>
+                </div>
+            </div>
+
+            <h3 class="section-subtitle-spaced">Text on Semantic Backgrounds (Correct)</h3>
+            <div class="contrast-grid">
+                <div class="contrast-item" style="background: var(--biolum); color: var(--depth-1); border-color: var(--biolum);">
+                    depth-1 on biolum
+                    <div class="label">[OK] Success surface</div>
+                </div>
+                <div class="contrast-item" style="background: var(--phosphor); color: var(--depth-1); border-color: var(--phosphor);">
+                    depth-1 on phosphor
+                    <div class="label">[OK] Warning surface</div>
+                </div>
+                <div class="contrast-item" style="background: var(--coral); color: var(--salt); border-color: var(--coral);">
+                    salt on coral
+                    <div class="label">[OK] Error surface</div>
+                </div>
+                <div class="contrast-item" style="background: var(--current-1); color: var(--salt); border-color: var(--current-1);">
+                    salt on current-1
+                    <div class="label">[OK] Info surface</div>
+                </div>
+            </div>
+
+            <h3 class="section-subtitle-spaced">Text on Salt Background (Correct)</h3>
+            <div class="contrast-grid">
+                <div class="contrast-item" style="background: var(--salt); color: var(--depth-1); border-color: var(--depth-4);">
+                    depth-1 on salt
+                    <div class="label">[OK] Primary dark text</div>
+                </div>
+                <div class="contrast-item" style="background: var(--salt); color: var(--depth-2); border-color: var(--depth-4);">
+                    depth-2 on salt
+                    <div class="label">[OK] Secondary dark text</div>
+                </div>
+                <div class="contrast-item" style="background: var(--salt); color: var(--depth-3); border-color: var(--depth-4);">
+                    depth-3 on salt
+                    <div class="label">[OK] Tertiary dark text</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 9. Borders & Dividers -->
+        <div class="preview-section">
+            <h2>9. Borders and Dividers</h2>
+            <div style="display: flex; flex-direction: column; gap: 12px;">
+                <div style="padding: 1rem; border: 1px solid var(--depth-4); border-radius: 6px; background: var(--depth-3);">
+                    Default border: depth-4 on depth-3
+                </div>
+                <div style="padding: 1rem; border: 2px solid var(--coral); border-radius: 6px; background: color-mix(in srgb, var(--coral) 15%, var(--depth-3)); color: var(--coral);">
+                    Semantic border: coral (error emphasis)
+                </div>
+                <div style="padding: 1rem; border: 2px solid var(--biolum); border-radius: 6px; background: color-mix(in srgb, var(--biolum) 15%, var(--depth-3)); color: var(--biolum);">
+                    Semantic border: biolum (success emphasis)
+                </div>
+                <div style="padding: 1rem; border: 2px solid var(--phosphor); border-radius: 6px; background: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3)); color: var(--phosphor);">
+                    Semantic border: phosphor (warning emphasis)
+                </div>
+                <div style="padding: 1rem; border: 2px solid var(--current-2); border-radius: 6px; background: color-mix(in srgb, var(--current-2) 15%, var(--depth-3)); color: var(--current-2);">
+                    Semantic border: current-2 (info emphasis)
+                </div>
+            </div>
+        </div>
+
+        <!-- 10. Progress Indicators -->
+        <div class="preview-section">
+            <h2>10. Progress and Strength Meters</h2>
+            <div style="max-width: 400px;">
+                <p style="color: var(--foam-2); font-size: 0.85rem; margin-bottom: 4px;">Storage usage (current-1)</p>
+                <div style="height: 8px; background: var(--depth-4); border-radius: 4px; overflow: hidden; margin-bottom: 1rem;">
+                    <div style="width: 45%; height: 100%; background: var(--current-1); border-radius: 4px;"></div>
+                </div>
+
+                <p style="color: var(--foam-2); font-size: 0.85rem; margin-bottom: 4px;">Password: Very Weak (coral)</p>
+                <div style="height: 8px; background: var(--depth-4); border-radius: 4px; overflow: hidden; margin-bottom: 0.5rem;">
+                    <div style="width: 20%; height: 100%; background: var(--coral); border-radius: 4px;"></div>
+                </div>
+
+                <p style="color: var(--foam-2); font-size: 0.85rem; margin-bottom: 4px;">Password: Moderate (phosphor)</p>
+                <div style="height: 8px; background: var(--depth-4); border-radius: 4px; overflow: hidden; margin-bottom: 0.5rem;">
+                    <div style="width: 60%; height: 100%; background: var(--phosphor); border-radius: 4px;"></div>
+                </div>
+
+                <p style="color: var(--foam-2); font-size: 0.85rem; margin-bottom: 4px;">Password: Very Strong (biolum)</p>
+                <div style="height: 8px; background: var(--depth-4); border-radius: 4px; overflow: hidden; margin-bottom: 0.5rem;">
+                    <div style="width: 100%; height: 100%; background: var(--biolum); border-radius: 4px;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Contrast Policy Summary -->
+        <div class="preview-section">
+            <h2>Contrast Policy Summary</h2>
+            <div class="policy-panel">
+                <h3>On Dark Surfaces (depth-1/2/3/4)</h3>
+                <ul>
+                    <li><strong>Primary text:</strong> <span style="color: var(--salt);">salt</span></li>
+                    <li><strong>Secondary text:</strong> <span style="color: var(--foam-1);">foam-1</span></li>
+                    <li><strong>Muted text:</strong> <span style="color: var(--foam-2);">foam-2</span></li>
+                    <li><strong>Links/actions:</strong> <span style="color: var(--current-2);">current-2</span></li>
+                    <li><strong>Success:</strong> <span style="color: var(--biolum);">biolum</span></li>
+                    <li><strong>Warning:</strong> <span style="color: var(--phosphor);">phosphor</span></li>
+                    <li><strong>Error:</strong> <span style="color: var(--coral);">coral</span></li>
+                </ul>
+
+                <h3>On Semantic Backgrounds</h3>
+                <ul>
+                    <li><strong>biolum bg:</strong> depth-1 text</li>
+                    <li><strong>phosphor bg:</strong> depth-1 text</li>
+                    <li><strong>coral bg:</strong> salt text</li>
+                    <li><strong>current-1 bg:</strong> salt text</li>
+                </ul>
+
+                <h3>On Salt (White) Backgrounds</h3>
+                <ul>
+                    <li>Use only: <span style="color: var(--salt);">depth-1, depth-2, depth-3</span></li>
+                    <li>Never use: foam-1, foam-2, current-*, salt</li>
+                </ul>
+
+                <h3>Borders / Dividers</h3>
+                <ul>
+                    <li><strong>Default:</strong> depth-4</li>
+                    <li><strong>Semantic:</strong> token-matched (coral, phosphor, biolum, current-2)</li>
+                </ul>
+            </div>
+        </div>
+
+        <footer style="text-align: center; padding: 2rem 0; color: var(--foam-2); font-size: 0.85rem; border-top: 1px solid var(--depth-4);">
+            Arkfile Theme Preview -- 12-token ocean depth palette
+        </footer>
+    </div>
+</body>
+</html>
