@@ -57,6 +57,7 @@ export class ModalManager {
           font-weight: bold;
           padding: 6px 10px;
           background: white;
+          color: #000;
           border-radius: 3px;
           text-align: center;
           letter-spacing: 1px;
