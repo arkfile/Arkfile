@@ -315,15 +315,25 @@ S3_FORCE_PATH_STYLE=<true|false>
 
 #### Storage connectivity verification
 
-After collecting credentials for any external backend, the script performs a quick
-verification step before proceeding.
+After collecting credentials for any external backend (and after secrets.env and
+the arkfile-admin binary are deployed), the script uses `arkfile-admin verify-storage`
+to perform a full round-trip verification:
 
 ```
-- Verify the endpoint is reachable
-- Verify credentials are accepted
-- Verify the configured bucket exists and can be addressed
-- Hard-fail early if the storage backend cannot be contacted
+- Upload a 1 MB test object (all zeros) with a known SHA-256 hash
+- Download the object back
+- Verify the SHA-256 hash matches
+- Delete the test object
+- Hard-fail if any step fails
 ```
+
+This reuses the same `storage.InitS3()` code path as the Arkfile server, so it
+tests the exact configuration that will be used in production. The tool reads
+storage config from secrets.env and requires no running Arkfile server.
+
+Note: Secret keys (S3 secret keys, Backblaze app keys, etc.) are prompted with
+hidden input (`read -s`) to avoid leaking credentials to terminal history or
+shoulder-surfing.
 
 #### Effect on the rest of the deployment flow
 
@@ -409,7 +419,7 @@ Ports that must NOT be publicly accessible:
     - BUILD_BIN/arkfile-admin (admin CLI)
 ```
 
-### Step 4: Deploy Build Artifacts
+### Step 4: Deploy Build Artifacts and Set Ownership
 
 ```
 - Run scripts/setup/deploy.sh
@@ -423,25 +433,19 @@ Ports that must NOT be publicly accessible:
     - /opt/arkfile/bin/arkfile-admin (executable)
     - /opt/arkfile/client/static/js/dist/app.js
     - /opt/arkfile/client/static/js/libopaque.js
-```
-
-### Step 5: Generate Cryptographic Material
-
-```
-- Generate Master Key:
-    - Run scripts/setup/03-setup-master-key.sh
-    - Verify ARKFILE_MASTER_KEY is in /opt/arkfile/etc/secrets.env
-- Generate internal TLS certificates (for inter-service communication):
-    - Run scripts/setup/04-setup-tls-certs.sh
-    - These are self-signed certs for Arkfile<->rqlite internal TLS
-    - Public-facing TLS is handled by Caddy + Let's Encrypt (Step 8)
 - Set ownership and permissions:
     - chown -R arkfile:arkfile /opt/arkfile
-    - chmod 700 on all key directories
-- Verify ownership (no root-owned files in /opt/arkfile)
+    - chmod 700 on all key directories (jwt, opaque, tls, backups, totp)
+- Create and permission log directory:
+    - mkdir -p /opt/arkfile/var/log
+    - chown arkfile:arkfile, chmod 775
 ```
 
-### Step 6: Generate secrets.env (Test Configuration)
+### Step 5: Generate secrets.env (Test Configuration)
+
+NOTE: secrets.env MUST be written before Step 6 (master key generation),
+because 03-setup-master-key.sh appends ARKFILE_MASTER_KEY to secrets.env.
+Writing secrets.env after would overwrite the master key.
 
 ```
 Generate /opt/arkfile/etc/secrets.env with:
@@ -526,7 +530,43 @@ When an external backend is selected:
 - Set permissions: 640
 ```
 
-### Step 7: Generate rqlite Auth File
+### Step 6: Generate Cryptographic Material
+
+```
+- Generate Master Key:
+    - Run scripts/setup/03-setup-master-key.sh
+    - This appends ARKFILE_MASTER_KEY to the secrets.env written in Step 5
+- Generate internal TLS certificates (for inter-service communication):
+    - Run scripts/setup/04-setup-tls-certs.sh
+    - These are self-signed certs for Arkfile<->rqlite internal TLS
+    - Public-facing TLS is handled by Caddy + Let's Encrypt (Step 8)
+- Set ownership and permissions:
+    - chown -R arkfile:arkfile /opt/arkfile
+    - chmod 700 on all key directories
+- Verify ownership (no root-owned files in /opt/arkfile)
+```
+
+### Step 7: Verify External Storage (if applicable)
+
+For external storage backends only (not local-seaweedfs), the script uses the
+`arkfile-admin verify-storage` subcommand to perform a full round-trip test:
+
+```
+- Upload a 1 MB test object (all zeros) with a known SHA-256 hash
+- Download the object back
+- Verify the SHA-256 hash matches
+- Delete the test object
+- Hard-fail if any step fails
+```
+
+This uses the same `storage.InitS3()` code path as the Arkfile server, ensuring
+the credentials and endpoint are correct before proceeding with service startup.
+
+The `verify-storage` subcommand is implemented in `cmd/arkfile-admin/verify_storage.go`
+and reads configuration from `/opt/arkfile/etc/secrets.env` (or `--secrets-env` override).
+It can also be used as a standalone operational tool after deployment.
+
+### Step 7a: Generate rqlite Auth File
 
 ```
 Generate /opt/arkfile/etc/rqlite-auth.json:
@@ -726,9 +766,9 @@ A. Internal health checks:
 
 B. External/public health checks:
     - https://test.arkfile.net/readyz returns "status":"ready"
-    - TLS certificate is valid (not self-signed, issued by Let's Encrypt)
-    - TLS 1.3 is enforced (test with openssl s_client)
-    - OCSP stapling is present (test with openssl s_client -status)
+    - (Future work) TLS certificate validation via openssl s_client
+    - (Future work) TLS 1.3 enforcement check
+    - (Future work) OCSP stapling verification
 
 C. Service status verification:
     - seaweedfs: active when using local-seaweedfs
@@ -898,11 +938,12 @@ These files contain outdated references and will be updated as part of this effo
 - `systemd/caddy.service`: References `arkfile@prod.service` and `arkfile@test.service`
   (template units that do not exist). Stale.
 
-## Implementation Priority
+## Implementation Status
 
-1. Complete Phase 0 stale file cleanup
-2. Create `Caddyfile.test` template in repo root
-3. Write `scripts/test-deploy.sh` following this plan
-4. Update `docs/setup.md` to reflect current state
-5. Test on a fresh VPS with `test.arkfile.net` DNS configured
-6. Document admin bootstrap walkthrough with real output
+1. [DONE] Phase 0 stale file cleanup (systemd/caddy.service, Caddyfile, Caddyfile.local)
+2. [DONE] Create `Caddyfile.test` template in repo root
+3. [DONE] Add `arkfile-admin verify-storage` subcommand (cmd/arkfile-admin/verify_storage.go)
+4. [DONE] Write `scripts/test-deploy.sh` following this plan
+5. Update `docs/setup.md` to reflect current state
+6. Test on a fresh VPS with `test.arkfile.net` DNS configured
+7. Document admin bootstrap walkthrough with real output
