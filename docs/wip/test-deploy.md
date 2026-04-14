@@ -770,6 +770,21 @@ B. External/public health checks:
     - (Future work) TLS 1.3 enforcement check
     - (Future work) OCSP stapling verification
 
+        For example, with `openssl s_client`, you'd do something like:
+
+        ```bash
+        # Check TLS version and cert issuer
+        echo | openssl s_client -connect test.arkfile.net:443 -servername test.arkfile.net 2>/dev/null | openssl x509 -noout -issuer
+        # Should show: issuer=... Let's Encrypt ...
+
+        # Check OCSP stapling
+        echo | openssl s_client -connect test.arkfile.net:443 -servername test.arkfile.net -status 2>/dev/null | grep "OCSP Response Status"
+        # Should show: OCSP Response Status: successful
+
+        # Try TLS 1.2 (should fail)
+        echo | openssl s_client -connect test.arkfile.net:443 -tls1_2 2>&1 | grep -i "error\|alert"
+        ```
+
 C. Service status verification:
     - seaweedfs: active when using local-seaweedfs
     - rqlite: active
