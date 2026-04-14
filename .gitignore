@@ -4,7 +4,7 @@
 arkfile
 arkfile-alpine
 /arkfile-client
-arkfile-admin
+/arkfile-admin
 totp-generator
 bin/
 obj/
