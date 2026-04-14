@@ -369,10 +369,19 @@ build_static_libraries() {
     
     cd "$OPRF_DIR/noise_xk"
     $MAKE_CMD clean || true
-    # Store our CFLAGS and let noise_xk use its own optimized CFLAGS
+    # Store our CFLAGS
     SAVED_CFLAGS="$CFLAGS"
-    unset CFLAGS
-    $MAKE_CMD AR=ar ARFLAGS=rcs liboprf-noiseXK.a
+    # Build noise_xk with its own flags but cap FORTIFY_SOURCE at 2 for GCC < 12 compatibility
+    # The noise_xk makefile uses CFLAGS ?= so we must pass CFLAGS explicitly to override it
+    NOISE_XK_CFLAGS="-Wall -Wextra -Werror -std=c11 -Wno-unused-variable \
+        -Wno-unknown-warning-option -Wno-unused-but-set-variable \
+        -Wno-unused-parameter -Wno-infinite-recursion -fpic \
+        -fwrapv -D_BSD_SOURCE -D_DEFAULT_SOURCE -DWITH_SODIUM \
+        -O2 -fstack-protector-strong -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 \
+        -fasynchronous-unwind-tables -fpic \
+        -Werror=format-security -Werror=implicit-function-declaration \
+        -ftrapv"
+    $MAKE_CMD CFLAGS="$NOISE_XK_CFLAGS" AR=ar ARFLAGS=rcs liboprf-noiseXK.a
     
     # Build liboprf static library
     echo "Building liboprf static library..."
