@@ -12,7 +12,6 @@
 			token "{$DESEC_TOKEN}"
 		}
 		protocols tls1.3
-		must_staple
 		key_type p384
 	}
 
