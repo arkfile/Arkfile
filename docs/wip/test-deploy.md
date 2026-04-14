@@ -12,13 +12,15 @@ This document outlines the design for `scripts/test-deploy.sh`, a first-time dep
 - Admin bootstrap flow (no dev admin seeding)
 - All services running as systemd units under the `arkfile` user
 - SeaweedFS as local S3-compatible storage backend (single-node, Apache 2.0 license)
+- External S3-compatible storage backends via `--storage-backend`
+  (Wasabi, Backblaze B2, Vultr Object Storage, Cloudflare R2, AWS S3,
+  generic S3-compatible)
 - rqlite as database (single-node)
 - Security hardened (no debug mode, no dev test API, proper rate limiting)
 
 **Not in scope (future work):**
 - Container/Podman deployment (documented separately in `docs/wip/podman.md`)
 - Multi-node rqlite clusters
-- External S3 backends (Wasabi, B2, etc.)
 - Automated CI/CD pipeline
 
 ## Prerequisites
@@ -41,9 +43,8 @@ Before running `test-deploy.sh`, the target VPS must have:
    - libsodium-dev (or libsodium-devel on RHEL-family)
    - openssl, curl, ca-certificates
    - Bun (for TypeScript compilation)
-5. **Caddy** installed with deSEC DNS module (custom build -- see Section 7)
-6. **deSEC API token** for primary domain, e.g. `arkfile.net`, DNS management (see "About deSEC" below)
-7. **The Arkfile repository** cloned to the VPS
+5. **deSEC API token** for primary domain, e.g. `arkfile.net`, DNS management (see "About deSEC" below)
+6. **The Arkfile repository** cloned to the VPS
 
 ### About deSEC
 
@@ -82,17 +83,256 @@ it in the Caddyfile or commit it to version control.
     --desec-token <token>      (required, deSEC API token)
     --admin-username <name>    (required, production admin username)
     --storage-backend <type>   (optional, default: "local-seaweedfs")
+    --acme-email <email>       (optional, Let's Encrypt expiration notices)
     --force-rebuild-all        (optional, rebuild C libraries)
     --force-rebuild-rqlite     (optional, rebuild rqlite)
     -h / --help
 - Validate all required arguments are provided
-- Detect OS family (debian/rhel/alpine) for package manager
+- Detect OS family (debian/rhel) for package manager and firewall tooling
 - Source build-config.sh for shared build paths
 - Detect Go binary (find_go_binary from build-config.sh)
 - Verify system dependencies are installed
-- Verify DNS resolution: test that $DOMAIN resolves to this machine's IP
+- Detect this VPS's external IP (for example via `curl -s ifconfig.me`)
+- Verify DNS resolution: test that $DOMAIN resolves to this machine's public IP
 - Verify ports 80, 443 are not already in use by another service
-- Confirm with user before proceeding (no NUKE prompt -- this is constructive)
+- Confirm with user before proceeding
+```
+
+#### Step 0a: Existing Deployment Guard
+
+Before making any changes, the script checks for signs of an existing deployment.
+
+```
+- Check if /opt/arkfile/etc/secrets.env already exists
+- Check if the arkfile systemd service already exists or is active
+- If either check indicates an existing deployment:
+    - Warn the user this script is intended for first-time deployment
+    - Explain that a future test-update.sh should be used for updates
+    - Explain that service restarts should use systemctl restart
+    - Require the operator to type REINSTALL to continue
+- If the operator does not type REINSTALL exactly, exit cleanly without changes
+```
+
+This follows the same guard pattern already used by `scripts/local-deploy.sh`.
+
+#### Step 0b: DNS Verification
+
+To avoid deploying onto the wrong VPS or proceeding with stale DNS:
+
+```
+- Detect the VPS public IP using an external lookup
+- Resolve the requested domain via dig +short
+- Compare resolved A record to the detected public IP
+- Hard-fail if they do not match
+```
+
+This is required before attempting Caddy certificate issuance.
+
+### Storage Backend Selection
+
+The script supports a default local storage mode and several external S3-compatible
+providers.
+
+#### Default: local SeaweedFS
+
+If `--storage-backend` is omitted, the script defaults to:
+
+```
+--storage-backend local-seaweedfs
+```
+
+In this mode:
+- SeaweedFS is installed locally on the VPS
+- Arkfile connects to it using the generic S3 provider over localhost
+- The endpoint is `http://localhost:9332`
+- No interactive storage credential prompts are needed
+
+#### External provider modes
+
+If `--storage-backend` is set to one of the external options below, the script
+prompts interactively for the required credentials and writes the matching env vars
+to `secrets.env`.
+
+Supported values:
+
+```
+local-seaweedfs
+wasabi
+backblaze
+vultr
+cloudflare-r2
+aws-s3
+generic-s3
+```
+
+##### Wasabi
+
+Prompt for:
+
+```
+- S3 Region
+- S3 Access Key
+- S3 Secret Key
+- S3 Bucket Name
+```
+
+The endpoint is derived automatically as:
+
+```
+https://s3.<region>.wasabi.com
+```
+
+Write to `secrets.env`:
+
+```
+STORAGE_PROVIDER=wasabi
+S3_REGION=<region>
+S3_ACCESS_KEY=<access-key>
+S3_SECRET_KEY=<secret-key>
+S3_BUCKET=<bucket>
+```
+
+##### Backblaze B2
+
+Prompt for:
+
+```
+- Backblaze Endpoint
+- Backblaze Key ID
+- Backblaze Application Key
+- Backblaze Bucket Name
+```
+
+Write to `secrets.env`:
+
+```
+STORAGE_PROVIDER=backblaze
+BACKBLAZE_ENDPOINT=<endpoint>
+BACKBLAZE_KEY_ID=<key-id>
+BACKBLAZE_APPLICATION_KEY=<application-key>
+BACKBLAZE_BUCKET_NAME=<bucket>
+```
+
+##### Vultr Object Storage
+
+Prompt for:
+
+```
+- Region
+- S3 Access Key
+- S3 Secret Key
+- S3 Bucket Name
+```
+
+The endpoint is derived automatically as:
+
+```
+https://<region>.vultrobjects.com
+```
+
+Write to `secrets.env`:
+
+```
+STORAGE_PROVIDER=vultr
+S3_REGION=<region>
+S3_ACCESS_KEY=<access-key>
+S3_SECRET_KEY=<secret-key>
+S3_BUCKET=<bucket>
+```
+
+##### Cloudflare R2
+
+Prompt for:
+
+```
+- Cloudflare Endpoint
+- Cloudflare Access Key ID
+- Cloudflare Secret Access Key
+- Cloudflare Bucket Name
+```
+
+Write to `secrets.env`:
+
+```
+STORAGE_PROVIDER=cloudflare-r2
+CLOUDFLARE_ENDPOINT=<endpoint>
+CLOUDFLARE_ACCESS_KEY_ID=<access-key-id>
+CLOUDFLARE_SECRET_ACCESS_KEY=<secret-access-key>
+CLOUDFLARE_BUCKET_NAME=<bucket>
+```
+
+##### AWS S3
+
+Prompt for:
+
+```
+- AWS Region
+- S3 Access Key
+- S3 Secret Key
+- S3 Bucket Name
+```
+
+No endpoint prompt is needed. The AWS SDK resolves the correct regional endpoint.
+
+Write to `secrets.env`:
+
+```
+STORAGE_PROVIDER=aws-s3
+S3_REGION=<region>
+S3_ACCESS_KEY=<access-key>
+S3_SECRET_KEY=<secret-key>
+S3_BUCKET=<bucket>
+```
+
+##### Generic S3-compatible
+
+Prompt for:
+
+```
+- S3 Endpoint URL
+- S3 Region
+- S3 Access Key
+- S3 Secret Key
+- S3 Bucket Name
+- Force Path Style? (y/n, default: y)
+```
+
+For external providers, this endpoint should normally be HTTPS. For local
+development-like custom targets, the operator can still provide an HTTP endpoint
+explicitly in the URL.
+
+Write to `secrets.env`:
+
+```
+STORAGE_PROVIDER=generic-s3
+S3_ENDPOINT=<endpoint-url>
+S3_REGION=<region>
+S3_ACCESS_KEY=<access-key>
+S3_SECRET_KEY=<secret-key>
+S3_BUCKET=<bucket>
+S3_FORCE_PATH_STYLE=<true|false>
+```
+
+#### Storage connectivity verification
+
+After collecting credentials for any external backend, the script performs a quick
+verification step before proceeding.
+
+```
+- Verify the endpoint is reachable
+- Verify credentials are accepted
+- Verify the configured bucket exists and can be addressed
+- Hard-fail early if the storage backend cannot be contacted
+```
+
+#### Effect on the rest of the deployment flow
+
+If an external S3 backend is selected:
+
+```
+- Skip SeaweedFS setup entirely
+- Skip SeaweedFS service startup entirely
+- Do not generate local SeaweedFS configuration files
 ```
 
 ### Step 1: Firewall Configuration
@@ -234,10 +474,38 @@ Generate /opt/arkfile/etc/secrets.env with:
     S3_BUCKET=arkfile-test
     S3_REGION=us-east-1
     S3_FORCE_PATH_STYLE=true
-    S3_USE_SSL=false
 
 Also generate /opt/arkfile/etc/seaweedfs-s3.json with S3 credentials
 (see docs/wip/swfs-now.md for format)
+
+For external backends, write the storage section using the provider-specific
+env vars collected in the Storage Backend Selection step instead. Examples:
+
+    # Wasabi
+    STORAGE_PROVIDER=wasabi
+    S3_REGION=<region>
+    S3_ACCESS_KEY=<access-key>
+    S3_SECRET_KEY=<secret-key>
+    S3_BUCKET=<bucket>
+
+    # Backblaze B2
+    STORAGE_PROVIDER=backblaze
+    BACKBLAZE_ENDPOINT=<endpoint>
+    BACKBLAZE_KEY_ID=<key-id>
+    BACKBLAZE_APPLICATION_KEY=<application-key>
+    BACKBLAZE_BUCKET_NAME=<bucket>
+
+    # Cloudflare R2
+    STORAGE_PROVIDER=cloudflare-r2
+    CLOUDFLARE_ENDPOINT=<endpoint>
+    CLOUDFLARE_ACCESS_KEY_ID=<access-key-id>
+    CLOUDFLARE_SECRET_ACCESS_KEY=<secret-access-key>
+    CLOUDFLARE_BUCKET_NAME=<bucket>
+
+When an external backend is selected:
+
+    - Do not generate /opt/arkfile/etc/seaweedfs-s3.json
+    - Do not write localhost SeaweedFS credentials
 
     # Admin Configuration
     ADMIN_USERNAMES=<admin-username from CLI arg>
@@ -293,6 +561,8 @@ A. Build custom Caddy with deSEC module:
 B. Generate Caddyfile from Caddyfile.test template:
     - Caddyfile.test is maintained in the repo root as a reusable template
       with {DOMAIN} placeholder
+    - If --acme-email is provided, also substitute {EMAIL}
+    - If --acme-email is not provided, omit the email line entirely
     - script substitutes actual domain via sed and writes to /etc/caddy/Caddyfile
     - Content (see "Caddyfile for Test Deployment" section below)
 
@@ -330,11 +600,11 @@ E. Verify Caddy can start and resolve the domain via DNS-01 challenge:
       (DNS-01 cert acquisition can take 30-60s on first run)
 ```
 
-#### Caddyfile for Test Deployment (test.arkfile.net)
+#### Caddyfile for Test Deployment (`Caddyfile.test` template)
 
 ```caddy
 {
-    email admin@arkfile.net
+    email {EMAIL}
 
     servers {
         protocols h1 h2 h3
@@ -342,12 +612,13 @@ E. Verify Caddy can start and resolve the domain via DNS-01 challenge:
     }
 }
 
-test.arkfile.net {
+{DOMAIN} {
     tls {
         dns desec {
             token {$DESEC_TOKEN}
         }
         protocols tls1.3
+        must_staple
         key_type p384
     }
 
@@ -390,11 +661,14 @@ Key design decisions for the Caddyfile:
 - `tls_insecure_skip_verify` is used because Arkfile uses self-signed internal certs
 - Health check uses `/readyz` (the current correct endpoint)
 - TLS 1.3 only, P-384 keys, strong security headers
+- `must_staple` is enabled for maximum TLS security
+- If `--acme-email` is omitted, the `email` line is omitted from the rendered file
 - No HTTP redirect block needed -- Caddy auto-redirects HTTP->HTTPS by default
 
 ### Step 9: Setup SeaweedFS
 
 ```
+- Skip this step entirely if --storage-backend is not local-seaweedfs
 - Run scripts/setup/05-setup-seaweedfs.sh
     - Downloads/configures SeaweedFS binary
     - Creates SeaweedFS data directories (/opt/arkfile/var/lib/seaweedfs/data)
@@ -417,6 +691,7 @@ Key design decisions for the Caddyfile:
 - systemctl daemon-reload
 
 A. Start SeaweedFS:
+    - Skip if using an external S3 backend
     - systemctl start seaweedfs
     - systemctl enable seaweedfs
     - Verify: systemctl is-active seaweedfs
@@ -453,9 +728,10 @@ B. External/public health checks:
     - https://test.arkfile.net/readyz returns "status":"ready"
     - TLS certificate is valid (not self-signed, issued by Let's Encrypt)
     - TLS 1.3 is enforced (test with openssl s_client)
+    - OCSP stapling is present (test with openssl s_client -status)
 
 C. Service status verification:
-    - seaweedfs: active
+    - seaweedfs: active when using local-seaweedfs
     - rqlite: active
     - arkfile: active
     - caddy: active
@@ -534,8 +810,9 @@ opens only ports 22, 80, 443. Implemented as Step 1. No `--skip-firewall` flag -
 VPS without a configured firewall is not acceptable.
 
 ### 4. Storage Backend
-DECIDED: SeaweedFS local for initial deployment (simple, all data on the VPS, Apache 2.0).
-External S3 support (Wasabi/B2) is future work via `--storage-backend` option.
+DECIDED: Support both local SeaweedFS and external S3-compatible providers via
+`--storage-backend`. Local SeaweedFS remains the default. External providers are
+configured interactively and verified before continuing.
 
 ### 5. Backup Strategy
 DECIDED: Document manual backup procedures in the script output at completion. Automate
@@ -557,6 +834,58 @@ DECIDED: Maintain `Caddyfile.test` in the repo root as a reusable template with 
 placeholder. test-deploy.sh uses `sed` to substitute the actual domain and writes the result
 to `/etc/caddy/Caddyfile`.
 
+### 9. ACME Email
+DECIDED: `--acme-email` is optional. If provided, the rendered Caddyfile includes the
+global `email` directive so Let's Encrypt can send expiration notices. If omitted,
+the email line is omitted entirely.
+
+### 10. OCSP Must-Staple
+DECIDED: Enable `must_staple` in `Caddyfile.test` for stronger TLS policy. Caddy
+handles OCSP stapling automatically.
+
+### 11. Storage Backend Selection
+DECIDED: Prompt interactively for provider-specific credentials when
+`--storage-backend` is not `local-seaweedfs`. Prompt names and env vars must match
+what `storage/s3.go` actually reads.
+
+### 12. Existing Deployment Guard
+DECIDED: Reuse the `REINSTALL` confirmation pattern from `scripts/local-deploy.sh`
+to guard against accidentally re-running first-time deployment on an existing system.
+
+## Phase 0: Stale File Cleanup (Pre-work)
+
+Before implementing `test-deploy.sh`, clean up the stale reference files so the repo
+has a correct baseline.
+
+### 0a. Fix `systemd/caddy.service`
+
+- Remove stale `Wants=arkfile@prod.service arkfile@test.service`
+- Change `After=network.target` to `After=network-online.target`
+- Add `EnvironmentFile=/opt/arkfile/etc/caddy-env`
+- Keep the existing security hardening directives
+
+### 0b. Fix `Caddyfile`
+
+- Remove stale cross-environment failover logic using `{$PROD_PORT}` and `{$TEST_PORT}`
+- Change `health_uri /health` to `health_uri /readyz`
+- Fix the outdated global `servers` syntax to match current Caddy v2 structure
+- Remove `must_staple` from the generic shared template and keep it specific to
+  `Caddyfile.test`
+- Keep this file as a clean generic reference for future production deployment work
+
+### 0c. Fix `Caddyfile.local`
+
+- Fix the self-referencing proxy loop
+- Change `health_uri /health` to `health_uri /readyz`
+- Update CSP to include `'wasm-unsafe-eval'` and `data: blob:`
+- Keep in mind this file is only a local reference and is not currently used by
+  `local-deploy.sh`
+
+### 0d. Confirm `scripts/setup/deploy.sh`
+
+- Confirm it copies the corrected `systemd/caddy.service` into `/etc/systemd/system/`
+- Check for any other stale Caddy-related assumptions
+
 ## Stale Files Identified During Planning
 
 These files contain outdated references and will be updated as part of this effort:
@@ -569,25 +898,11 @@ These files contain outdated references and will be updated as part of this effo
 - `systemd/caddy.service`: References `arkfile@prod.service` and `arkfile@test.service`
   (template units that do not exist). Stale.
 
-## Cleanup: What Else Should Change
-
-### Update docs/setup.md
-Update stale references to scripts, ports, endpoints, and configuration patterns.
-
-### Fix Caddyfile and Caddyfile.local
-Correct health endpoints (`/health` -> `/readyz`), fix CSP, remove stale cross-environment
-failover logic from `Caddyfile`. Fix self-referencing proxy in `Caddyfile.local`.
-
-### Fix systemd/caddy.service
-Remove stale `Wants=arkfile@prod.service arkfile@test.service` references.
-Update to `After=network-online.target` with `EnvironmentFile=/opt/arkfile/etc/caddy-env`.
-
 ## Implementation Priority
 
-1. Write `scripts/test-deploy.sh` following this plan
+1. Complete Phase 0 stale file cleanup
 2. Create `Caddyfile.test` template in repo root
-3. Update `systemd/caddy.service` (remove stale template unit refs, add EnvironmentFile)
-4. Fix stale `Caddyfile` and `Caddyfile.local` (health endpoints, CSP, remove stale logic)
-5. Update `docs/setup.md` to reflect current state
-6. Test on a fresh VPS with `test.arkfile.net` DNS configured
-7. Document admin bootstrap walkthrough with real output
+3. Write `scripts/test-deploy.sh` following this plan
+4. Update `docs/setup.md` to reflect current state
+5. Test on a fresh VPS with `test.arkfile.net` DNS configured
+6. Document admin bootstrap walkthrough with real output
