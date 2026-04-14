@@ -466,7 +466,7 @@ build_and_install_caddy() {
 
     print_status "INFO" "Building Caddy with deSEC module..."
     rm -f caddy 2>/dev/null || true
-    if ! run_as_user "$xcaddy_bin" build --with github.com/caddy-dns/desec; then
+    if ! run_as_user env PATH="$PATH" "$xcaddy_bin" build --with github.com/caddy-dns/desec; then
         print_status "ERROR" "Failed to build Caddy"
         exit 1
     fi
