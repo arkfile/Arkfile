@@ -502,7 +502,7 @@ EOF2
         fi
     fi
 
-    if ! /usr/local/bin/caddy validate --config /etc/caddy/Caddyfile; then
+    if ! DESEC_TOKEN="$DESEC_TOKEN" /usr/local/bin/caddy validate --config /etc/caddy/Caddyfile; then
         print_status "ERROR" "Caddyfile validation failed"
         exit 1
     fi
