@@ -1,21 +1,16 @@
 # Arkfile Caddyfile - Test Deployment Template
 # Used by scripts/test-deploy.sh
-# Placeholders: {DOMAIN} is replaced by test-deploy.sh via sed
-# The {EMAIL_LINE} placeholder is replaced with "email <addr>" or removed entirely
-# The {$DESEC_TOKEN} is a Caddy env var reference loaded from EnvironmentFile in caddy.service
+# {DOMAIN} is replaced by test-deploy.sh via sed
+# {$DESEC_TOKEN} is a Caddy env var reference loaded from EnvironmentFile in caddy.service
+# The global block is conditionally written by render_caddyfile() when --acme-email is set
 
-{
-	{EMAIL_LINE}
-
-	servers {
-		protocols h1 h2 h3
-		strict_sni_host
-	}
-}
+{GLOBAL_BLOCK}
 
 {DOMAIN} {
 	tls {
-		dns desec {$DESEC_TOKEN}
+		dns desec {
+			token "{$DESEC_TOKEN}"
+		}
 		protocols tls1.3
 		must_staple
 		key_type p384

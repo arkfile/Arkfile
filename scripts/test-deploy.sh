@@ -431,18 +431,48 @@ verify_storage_backend_roundtrip() {
 }
 
 render_caddyfile() {
-    local email_line=""
-    if [ -n "$ACME_EMAIL" ]; then
-        email_line="email ${ACME_EMAIL}"
-    fi
-
     local repo_root
     repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-    sed \
-        -e "s|{DOMAIN}|${DOMAIN}|g" \
-        -e "s|{EMAIL_LINE}|${email_line}|g" \
-        "$repo_root/Caddyfile.test" > /etc/caddy/Caddyfile
+    # Build global block as a real file, then assemble the final Caddyfile
+    # (sed cannot reliably substitute multi-line blocks, so we write it directly)
+    local tmp_global
+    tmp_global=$(mktemp)
+
+    if [ -n "$ACME_EMAIL" ]; then
+        cat > "$tmp_global" <<GLOBALEOF
+{
+	email ${ACME_EMAIL}
+
+	servers {
+		protocols h1 h2 h3
+		strict_sni_host
+	}
+}
+GLOBALEOF
+    else
+        cat > "$tmp_global" <<GLOBALEOF
+{
+	servers {
+		protocols h1 h2 h3
+		strict_sni_host
+	}
+}
+GLOBALEOF
+    fi
+
+    # Replace {GLOBAL_BLOCK} placeholder line with the real global block,
+    # then replace {DOMAIN} with the actual domain
+    awk -v gfile="$tmp_global" '
+        /\{GLOBAL_BLOCK\}/ {
+            while ((getline line < gfile) > 0) print line
+            close(gfile)
+            next
+        }
+        { print }
+    ' "$repo_root/Caddyfile.test" | sed "s|{DOMAIN}|${DOMAIN}|g" > /etc/caddy/Caddyfile
+
+    rm -f "$tmp_global"
 }
 
 build_and_install_caddy() {
@@ -473,6 +503,26 @@ build_and_install_caddy() {
 
     install -m 755 caddy /usr/local/bin/caddy
     rm -f caddy
+
+    # Grant Caddy the capability to bind privileged ports (80, 443) without running as root
+    if command -v setcap >/dev/null 2>&1; then
+        setcap cap_net_bind_service=+ep /usr/local/bin/caddy
+        print_status "SUCCESS" "Granted Caddy cap_net_bind_service capability"
+    else
+        # setcap not available -- install libcap and try again
+        if command -v dnf >/dev/null 2>&1; then
+            dnf install -y libcap 2>/dev/null || true
+        elif command -v apt-get >/dev/null 2>&1; then
+            apt-get install -y libcap2-bin 2>/dev/null || true
+        fi
+        if command -v setcap >/dev/null 2>&1; then
+            setcap cap_net_bind_service=+ep /usr/local/bin/caddy
+            print_status "SUCCESS" "Granted Caddy cap_net_bind_service capability"
+        else
+            print_status "WARNING" "setcap not available; Caddy may not be able to bind port 443 without root"
+        fi
+    fi
+
     print_status "SUCCESS" "Custom Caddy installed at /usr/local/bin/caddy"
 }
 
@@ -496,6 +546,11 @@ EOF2
                 semanage fcontext -a -t httpd_var_lib_t "/var/lib/caddy(/.*)?" 2>/dev/null || true
                 semanage fcontext -a -t httpd_log_t "/var/log/caddy(/.*)?" 2>/dev/null || true
                 semanage fcontext -a -t httpd_exec_t "/usr/local/bin/caddy" 2>/dev/null || true
+                # Allow Caddy to bind port 443 under SELinux
+                semanage port -m -t http_port_t -p tcp 443 2>/dev/null || \
+                    semanage port -a -t http_port_t -p tcp 443 2>/dev/null || true
+                semanage port -m -t http_port_t -p tcp 80 2>/dev/null || \
+                    semanage port -a -t http_port_t -p tcp 80 2>/dev/null || true
             fi
             restorecon -R /etc/caddy /var/lib/caddy /var/log/caddy 2>/dev/null || true
             restorecon /usr/local/bin/caddy 2>/dev/null || true
