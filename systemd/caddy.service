@@ -10,8 +10,8 @@ Group=caddy
 ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
 ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile
 
-# Load deSEC token and other Caddy environment variables
-EnvironmentFile=/opt/arkfile/etc/caddy-env
+# Load deSEC token from caddy-owned directory (caddy user can read it directly)
+EnvironmentFile=/var/lib/caddy/caddy-env
 
 # XDG directories for Caddy certificate storage
 Environment=XDG_DATA_HOME=/var/lib/caddy/.local/share

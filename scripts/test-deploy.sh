@@ -530,11 +530,21 @@ configure_caddy() {
     ensure_caddy_user_and_dirs
     render_caddyfile
 
-    cat > "$ARKFILE_DIR/etc/caddy-env" <<EOF2
+    # Store deSEC token in /var/lib/caddy (owned by caddy:caddy) so the caddy
+    # service user can read it directly without traversing /opt/arkfile/etc/
+    cat > /var/lib/caddy/caddy-env <<EOF2
 DESEC_TOKEN=${DESEC_TOKEN}
 EOF2
-    chown caddy:arkfile "$ARKFILE_DIR/etc/caddy-env"
-    chmod 640 "$ARKFILE_DIR/etc/caddy-env"
+    chown caddy:caddy /var/lib/caddy/caddy-env
+    chmod 600 /var/lib/caddy/caddy-env
+
+    # Update caddy.service EnvironmentFile to point to the new location
+    if [ -f /etc/systemd/system/caddy.service ]; then
+        sed -i 's|EnvironmentFile=.*caddy-env|EnvironmentFile=/var/lib/caddy/caddy-env|' \
+            /etc/systemd/system/caddy.service
+        systemctl daemon-reload
+        print_status "INFO" "Updated caddy.service EnvironmentFile to /var/lib/caddy/caddy-env"
+    fi
 
     if command -v getenforce >/dev/null 2>&1; then
         SELINUX_STATUS=$(getenforce 2>/dev/null || echo "Disabled")
@@ -556,6 +566,12 @@ EOF2
             restorecon /usr/local/bin/caddy 2>/dev/null || true
         fi
     fi
+
+    # Restore correct ownership AFTER restorecon (which can reset permissions)
+    chown caddy:caddy /var/lib/caddy/caddy-env 2>/dev/null || true
+    chown -R caddy:caddy /var/log/caddy 2>/dev/null || true
+    chmod 600 /var/lib/caddy/caddy-env 2>/dev/null || true
+    chmod 755 /var/log/caddy 2>/dev/null || true
 
     if ! DESEC_TOKEN="$DESEC_TOKEN" /usr/local/bin/caddy validate --config /etc/caddy/Caddyfile; then
         print_status "ERROR" "Caddyfile validation failed"
