@@ -28,6 +28,7 @@
   "exclude": [
     "node_modules",
     "client/static/js/dist",
+    "client/static/js/src/__tests__",
     "tests"
   ]
 }
