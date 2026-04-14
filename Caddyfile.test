@@ -1,11 +1,11 @@
-# Arkfile Caddyfile - Generic Production Reference
-# This is a clean reference template for future production deployment work.
-# For test deployments, see Caddyfile.test (used by scripts/test-deploy.sh).
-# For local deployments, see Caddyfile.local (reference only, not used by local-deploy.sh).
+# Arkfile Caddyfile - Test Deployment Template
+# Used by scripts/test-deploy.sh
+# Placeholders: {DOMAIN} is replaced by test-deploy.sh via sed
+# The {EMAIL_LINE} placeholder is replaced with "email <addr>" or removed entirely
+# The {$DESEC_TOKEN} is a Caddy env var reference loaded from EnvironmentFile in caddy.service
 
 {
-	# Set your ACME email for Let's Encrypt expiration notices
-	# email you@example.com
+	{EMAIL_LINE}
 
 	servers {
 		protocols h1 h2 h3
@@ -13,15 +13,13 @@
 	}
 }
 
-# Replace with your actual domain
-your.domain.example {
+{DOMAIN} {
 	tls {
-		# Configure DNS challenge for your DNS provider, e.g.:
-		# dns desec {
-		#     token {$DESEC_TOKEN}
-		# }
-		# dns cloudflare {$CLOUDFLARE_API_TOKEN}
+		dns desec {
+			token {$DESEC_TOKEN}
+		}
 		protocols tls1.3
+		must_staple
 		key_type p384
 	}
 
@@ -48,7 +46,7 @@ your.domain.example {
 	encode gzip
 
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/test-access.log
 		format json
 	}
 

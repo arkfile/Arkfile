@@ -48,6 +48,7 @@ NETWORK COMMANDS (Admin API - localhost only):
 SYSTEM COMMANDS:
     system-status     System status overview
     health-check      System health check
+    verify-storage    Verify S3 storage connectivity (upload/download/delete round-trip)
     version           Show version information
 
 GLOBAL OPTIONS:
@@ -248,6 +249,11 @@ func main() {
 	case "health-check":
 		if err := handleHealthCheckCommand(client, config, args); err != nil {
 			logError("Health check failed: %v", err)
+			os.Exit(1)
+		}
+	case "verify-storage":
+		if err := handleVerifyStorageCommand(args); err != nil {
+			logError("Storage verification failed: %v", err)
 			os.Exit(1)
 		}
 

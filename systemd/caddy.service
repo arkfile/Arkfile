@@ -1,7 +1,7 @@
 [Unit]
 Description=Caddy Web Server
-After=network.target
-Wants=arkfile@prod.service arkfile@test.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -10,18 +10,14 @@ Group=caddy
 ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
 ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile
 
-# Environment configuration
-# DNS challenge configuration - set based on your DNS provider
-# Examples:
-# Environment=CLOUDFLARE_API_TOKEN=your_cloudflare_token
-# Environment=AWS_ACCESS_KEY_ID=your_aws_key_id
-# Environment=AWS_SECRET_ACCESS_KEY=your_aws_secret_key
-# Environment=NAMECHEAP_API_USER=your_namecheap_user
-# Environment=NAMECHEAP_API_KEY=your_namecheap_key
+# Load deSEC token and other Caddy environment variables
+EnvironmentFile=/opt/arkfile/etc/caddy-env
+
+# XDG directories for Caddy certificate storage
 Environment=XDG_DATA_HOME=/var/lib/caddy/.local/share
 Environment=XDG_CONFIG_HOME=/var/lib/caddy/.config
 
-# Security measures
+# Security hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
