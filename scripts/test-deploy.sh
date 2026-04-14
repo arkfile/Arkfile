@@ -5,6 +5,9 @@
 
 set -e
 
+# ensure standard locations always in path regardless of sudo stripping PATH
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/go/bin:${PATH}"
+
 # Source shared build configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/setup/build-config.sh"
