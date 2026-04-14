@@ -169,7 +169,7 @@ configure_firewall() {
     print_status "INFO" "Configuring firewall..."
 
     if [ "$os_family" = "rhel" ] && command -v firewall-cmd >/dev/null 2>&1; then
-        firewall-cmd --permanent --set-default-zone=drop >/dev/null
+        firewall-cmd --set-default-zone=drop >/dev/null
         firewall-cmd --permanent --add-service=ssh >/dev/null
         firewall-cmd --permanent --add-service=http >/dev/null
         firewall-cmd --permanent --add-service=https >/dev/null

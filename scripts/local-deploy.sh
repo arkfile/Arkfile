@@ -7,6 +7,9 @@
 
 set -e
 
+# Ensure standard tool locations are in PATH regardless of sudo stripping it
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/go/bin:${PATH}"
+
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
     echo -e "\033[0;31mERROR: This script must be run with sudo privileges\033[0m"
