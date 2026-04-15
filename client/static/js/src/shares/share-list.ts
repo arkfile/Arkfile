@@ -216,7 +216,11 @@ export class ShareListUI {
       : '<span class="status-encrypted">[Encrypted]</span>';
       
     const sha256Display = share.sha256_local
-      ? `<div class="stat-item"><span class="stat-label">SHA-256:</span><span class="stat-value hash-value" title="${share.sha256_local}">${share.sha256_local.substring(0, 16)}...</span></div>`
+      ? `<div class="stat-item stat-item-hash">
+           <span class="stat-label">SHA-256:</span>
+           <span class="stat-value hash-value" title="${share.sha256_local}">${share.sha256_local}</span>
+           <button class="btn-copy-hash" data-hash="${share.sha256_local}" title="Copy SHA-256 to clipboard">Copy</button>
+         </div>`
       : '';
       
     const pwdTypeDisplay = share.password_type
@@ -306,6 +310,22 @@ export class ShareListUI {
         const shareId = (e.target as HTMLElement).getAttribute('data-share-id');
         if (shareId) {
           this.copyShareURL(shareId);
+        }
+      });
+    });
+
+    // Copy hash button listeners
+    const copyHashButtons = this.container.querySelectorAll('.btn-copy-hash');
+    copyHashButtons.forEach(button => {
+      button.addEventListener('click', async (e) => {
+        const hash = (e.target as HTMLElement).getAttribute('data-hash');
+        if (hash) {
+          try {
+            await navigator.clipboard.writeText(hash);
+            showSuccess('SHA-256 copied to clipboard!');
+          } catch {
+            showError('Please copy the hash manually');
+          }
         }
       });
     });

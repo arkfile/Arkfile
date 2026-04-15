@@ -234,6 +234,17 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
       exportBackup(file.file_id);
     });
 
+    // View Metadata button (only when metadata is decrypted)
+    if (file.metadata_decrypted) {
+      const metaBtn = document.createElement('button');
+      metaBtn.textContent = 'Metadata';
+      metaBtn.title = 'View full file metadata including SHA-256 digest';
+      metaBtn.addEventListener('click', () => {
+        showMetadataModal(file);
+      });
+      fileActions.appendChild(metaBtn);
+    }
+
     // Delete button
     const deleteBtn = document.createElement('button');
     deleteBtn.textContent = 'Delete';
@@ -305,6 +316,97 @@ async function confirmAndDeleteFile(fileId: string, filename: string): Promise<v
     console.error('Delete file error:', error);
     showError('An error occurred while deleting the file.');
   }
+}
+
+// ============================================================================
+// Metadata Modal
+// ============================================================================
+
+function showMetadataModal(file: DecryptedFileEntry): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'metadata-modal-overlay';
+
+  const modal = document.createElement('div');
+  modal.className = 'metadata-modal';
+
+  const makeRow = (label: string, value: string, monospace = false, copyable = false): HTMLElement => {
+    const row = document.createElement('div');
+    row.className = 'metadata-row';
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'metadata-label';
+    labelEl.textContent = label;
+
+    const valueEl = document.createElement('span');
+    valueEl.className = monospace ? 'metadata-value monospace' : 'metadata-value';
+    valueEl.textContent = value;
+
+    row.appendChild(labelEl);
+    row.appendChild(valueEl);
+
+    if (copyable && value) {
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'metadata-copy-btn';
+      copyBtn.textContent = 'Copy';
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          showSuccess('Copied to clipboard!');
+        } catch {
+          showError('Please copy manually');
+        }
+      });
+      row.appendChild(copyBtn);
+    }
+
+    return row;
+  };
+
+  const title = document.createElement('h3');
+  title.textContent = 'File Metadata';
+  modal.appendChild(title);
+
+  modal.appendChild(makeRow('Filename', file.filename));
+  modal.appendChild(makeRow('Size', file.size_readable));
+  modal.appendChild(makeRow('Uploaded', new Date(file.upload_date).toLocaleString()));
+  modal.appendChild(makeRow('Encryption', file.password_type === 'account' ? 'Account Password' : 'Custom Password'));
+  if (file.sha256sum) {
+    modal.appendChild(makeRow('SHA-256', file.sha256sum, true, true));
+  }
+  modal.appendChild(makeRow('File ID', file.file_id, true, true));
+
+  const closeSection = document.createElement('div');
+  closeSection.className = 'metadata-modal-close';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', () => {
+    document.body.removeChild(overlay);
+  });
+  closeSection.appendChild(closeBtn);
+  modal.appendChild(closeSection);
+
+  overlay.appendChild(modal);
+
+  // Close on backdrop click
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) {
+      document.body.removeChild(overlay);
+    }
+  });
+
+  // Close on Escape key
+  const handleKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      if (document.body.contains(overlay)) {
+        document.body.removeChild(overlay);
+      }
+      document.removeEventListener('keydown', handleKey);
+    }
+  };
+  document.addEventListener('keydown', handleKey);
+
+  document.body.appendChild(overlay);
 }
 
 // ============================================================================

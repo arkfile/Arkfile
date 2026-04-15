@@ -16,6 +16,128 @@
     --salt: #ffffff;
 }
 
+/* Hash value display (SHA-256) in shares list */
+.stat-item-hash {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: nowrap;
+}
+
+.hash-value {
+    font-family: monospace;
+    font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 320px;
+    display: inline-block;
+    vertical-align: middle;
+    color: var(--foam-2);
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+.btn-copy-hash {
+    background-color: var(--depth-4);
+    color: var(--salt);
+    border: none;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background-color 0.2s ease;
+}
+
+.btn-copy-hash:hover {
+    background-color: var(--current-1);
+}
+
+/* File metadata modal */
+.metadata-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: color-mix(in srgb, var(--depth-1) 80%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1200;
+}
+
+.metadata-modal {
+    background-color: var(--depth-3);
+    border: 1px solid var(--depth-4);
+    border-radius: 8px;
+    padding: 2rem;
+    max-width: 580px;
+    width: 90%;
+    box-shadow: 0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent);
+    animation: modalSlideIn 0.2s ease-out;
+}
+
+.metadata-modal h3 {
+    color: var(--salt);
+    margin-bottom: 1.5rem;
+    font-size: 1.1rem;
+    border-bottom: 1px solid var(--depth-4);
+    padding-bottom: 0.75rem;
+}
+
+.metadata-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 0.85rem;
+    font-size: 0.9rem;
+}
+
+.metadata-label {
+    color: var(--foam-2);
+    min-width: 110px;
+    flex-shrink: 0;
+    font-weight: 500;
+}
+
+.metadata-value {
+    color: var(--foam-1);
+    word-break: break-all;
+    flex: 1;
+}
+
+.metadata-value.monospace {
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: var(--foam-1);
+}
+
+.metadata-copy-btn {
+    background-color: var(--depth-4);
+    color: var(--salt);
+    border: none;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background-color 0.2s ease;
+}
+
+.metadata-copy-btn:hover {
+    background-color: var(--current-1);
+}
+
+.metadata-modal-close {
+    margin-top: 1.5rem;
+    display: flex;
+    justify-content: flex-end;
+}
+
 a {
     color: var(--current-2);
     text-decoration: none;
