@@ -455,7 +455,7 @@ func ListShares(c echo.Context) error {
 
 		shareURL := baseURL + "/shared/" + share.ShareID
 
-		// Compute is_active: not revoked and not expired
+		// Compute is_active: not revoked, not expired, and not exhausted
 		isActive := true
 		if share.RevokedAt.Valid {
 			isActive = false
@@ -474,6 +474,19 @@ func ListShares(c echo.Context) error {
 						share.RevokedReason = sql.NullString{String: "time", Valid: true}
 					}
 				}
+			}
+		}
+		// Mark exhausted shares as inactive (max download limit reached)
+		if isActive && share.MaxAccesses.Valid && int64(share.AccessCount.Float64) >= int64(share.MaxAccesses.Float64) {
+			isActive = false
+			if !share.RevokedAt.Valid {
+				database.DB.Exec(`
+					UPDATE file_share_keys
+					SET revoked_at = CURRENT_TIMESTAMP, revoked_reason = 'exhausted'
+					WHERE share_id = ?
+				`, share.ShareID)
+				share.RevokedAt = sql.NullString{String: time.Now().Format(time.RFC3339), Valid: true}
+				share.RevokedReason = sql.NullString{String: "exhausted", Valid: true}
 			}
 		}
 

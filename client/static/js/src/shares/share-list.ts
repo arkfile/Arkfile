@@ -215,9 +215,15 @@ export class ShareListUI {
       ? share.filename_local 
       : '<span class="status-encrypted">[Encrypted]</span>';
 
+    const isExhausted = share.max_accesses !== null && share.access_count >= share.max_accesses && share.max_accesses > 0;
+    const isExpired = share.expires_at !== null && new Date(share.expires_at) < new Date();
     const inactiveBadge = !share.is_active
       ? `<span class="share-inactive-badge">${share.revoked_at ? 'Revoked' : 'Expired'}</span>`
-      : '';
+      : isExhausted
+        ? `<span class="share-inactive-badge">Exhausted</span>`
+        : isExpired
+          ? `<span class="share-inactive-badge">Expired</span>`
+          : '';
       
     const sha256Display = share.sha256_local
       ? `<div class="stat-item stat-item-hash">

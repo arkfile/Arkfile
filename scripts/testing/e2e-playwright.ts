@@ -534,19 +534,19 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     const customFileItem = findFileItem(sharedPage, CUSTOM_FILE_NAME);
     await expect(customFileItem).toBeVisible({ timeout: 60_000 });
 
-    // 6a: correct password
+    // 6a: correct password — fill in the themed password modal
     logStep('6', 'Testing download with correct custom password...');
-    sharedPage.on('dialog', async (dialog) => {
-      if (dialog.type() === 'prompt') {
-        logStep('6', 'Password prompt dialog -- providing correct password');
-        await dialog.accept(CUSTOM_FILE_PASSWORD);
-      } else if (dialog.type() === 'alert') {
-        await dialog.accept();
-      }
-    });
 
     const downloadPromise = sharedPage.waitForEvent('download', { timeout: 120_000 });
     await clickFileAction(sharedPage, CUSTOM_FILE_NAME, 'Download');
+
+    // Wait for the themed password modal to appear and fill it in
+    const passwordInput6a = sharedPage.locator('#password-modal-input');
+    await passwordInput6a.waitFor({ state: 'visible', timeout: 15_000 });
+    logStep('6', 'Password modal appeared -- providing correct password');
+    await passwordInput6a.fill(CUSTOM_FILE_PASSWORD);
+    await sharedPage.locator('#password-modal-submit-btn').click();
+
     const download = await downloadPromise;
     const savePath = await saveDownload(download, 'phase6_custom_download.bin');
 
@@ -554,30 +554,26 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     expect(actualHash).toBe(CUSTOM_FILE_SHA256);
     console.log('[OK] Phase 6a: Custom-password download integrity verified');
 
-    sharedPage.removeAllListeners('dialog');
-
     // 6b: wrong password
     logStep('6', 'Testing download with wrong custom password...');
-    sharedPage.on('dialog', async (dialog) => {
-      if (dialog.type() === 'prompt') {
-        logStep('6', 'Password prompt dialog -- providing WRONG password');
-        await dialog.accept('WrongPassword123!NotCorrect');
-      } else if (dialog.type() === 'alert') {
-        await dialog.accept();
-      }
-    });
 
     await clickFileAction(sharedPage, CUSTOM_FILE_NAME, 'Download');
+
+    // Wait for the themed password modal and fill in the wrong password
+    const passwordInput6b = sharedPage.locator('#password-modal-input');
+    await passwordInput6b.waitFor({ state: 'visible', timeout: 15_000 });
+    logStep('6', 'Password modal appeared -- providing WRONG password');
+    await passwordInput6b.fill('WrongPassword123!NotCorrect');
+    await sharedPage.locator('#password-modal-submit-btn').click();
 
     await sharedPage.waitForFunction(
       () => {
         const body = document.body.innerText.toLowerCase();
-        return body.includes('failed') || body.includes('error') || body.includes('incorrect');
+        return body.includes('failed') || body.includes('error') || body.includes('incorrect') || body.includes('check your password');
       },
       { timeout: 60_000 },
     );
 
-    sharedPage.removeAllListeners('dialog');
     console.log('[OK] Phase 6b: Wrong custom password correctly rejected');
   });
 
@@ -808,25 +804,24 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     await saveDownload(await dlPromise, 'phase11_b_dl2.bin');
     console.log('[OK] Share B download 2/2');
 
-    logStep('11b', 'Attempting 3rd download (should fail at chunk level)...');
+    logStep('11b', 'Attempting 3rd download (should fail at envelope level - share revoked after exhaustion)...');
     await page.goto(shareBUrl);
     await page.waitForSelector('#sharePassword', { state: 'visible', timeout: 15_000 });
     await page.fill('#sharePassword', SHARE_B_PASSWORD);
     await page.click('#shareAccessForm button[type="submit"]');
-    // Envelope fetch succeeds (max_accesses not checked there), file details appear
-    await page.waitForSelector('#fileDetails', { state: 'visible', timeout: 120_000 });
-    // Click download -- this triggers chunk download which checks max_accesses on chunk 0
-    await page.click('#downloadBtn');
+    // After the 2nd download the server marks the share revoked_reason='exhausted'.
+    // GetShareEnvelope now returns 403 immediately, so #fileDetails never appears.
+    // share-access.ts shows "This share is no longer valid." directly.
     await page.waitForFunction(
       () => {
         const text = document.body.innerText.toLowerCase();
         return text.includes('error') || text.includes('exceeded') || text.includes('limit') ||
                text.includes('no longer') || text.includes('invalid') || text.includes('failed') ||
-               text.includes('revoked') || text.includes('download');
+               text.includes('revoked');
       },
       { timeout: 30_000 },
     );
-    console.log('[OK] Share B download 3 correctly rejected (max_downloads exceeded)');
+    console.log('[OK] Share B download 3 correctly rejected (max_downloads exceeded, 403 at envelope)');
 
     // 11c: Non-existent share (43-char base64url format matching real share IDs)
     console.log('[i] [Phase 11c] Testing non-existent share');

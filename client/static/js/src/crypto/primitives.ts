@@ -441,7 +441,10 @@ export function constantTimeEqual(a: Uint8Array, b: Uint8Array): boolean {
  * Securely wipes a Uint8Array by overwriting with zeros
  */
 export function secureWipe(data: Uint8Array): void {
-  crypto.getRandomValues(data);
+  // Type assertion required: getRandomValues requires ArrayBuffer-backed view.
+  // In practice every Uint8Array constructed with `new Uint8Array(n)` is
+  // ArrayBuffer-backed; SharedArrayBuffer-backed views are never passed here.
+  crypto.getRandomValues(data as unknown as Uint8Array<ArrayBuffer>);
   data.fill(0);
 }
 

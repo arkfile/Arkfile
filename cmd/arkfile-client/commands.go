@@ -1073,37 +1073,46 @@ func handleShareList(client *HTTPClient, config *ClientConfig, args []string) er
 		return nil
 	}
 
-	fmt.Printf("%-43s  %-18s  %-8s  %-6s  %-18s  %-12s  %-14s  %-8s\n",
-		"SHARE ID", "EXPIRES", "DL", "ACTIVE", "FILENAME [local]", "SIZE [local]", "SHA256 [local]", "TYPE")
-	fmt.Println(strings.Repeat("-", 145))
+	sep := strings.Repeat("-", 80)
+	for i, s := range enrichedShares {
+		fmt.Println(sep)
+		fmt.Printf("Share %d of %d\n", i+1, len(enrichedShares))
+		fmt.Printf("  Share ID:  %s\n", s.ShareID)
+		fmt.Printf("  File ID:   %s\n", s.FileID)
 
-	for _, s := range enrichedShares {
 		expires := "never"
 		if s.ExpiresAt != "" {
-			expires = truncateString(s.ExpiresAt, 18)
+			expires = s.ExpiresAt
 		}
+		fmt.Printf("  Expires:   %s\n", expires)
 
 		downloads := fmt.Sprintf("%d", s.AccessCount)
 		if s.MaxAccesses != nil && *s.MaxAccesses > 0 {
-			downloads = fmt.Sprintf("%d/%d", s.AccessCount, *s.MaxAccesses)
+			downloads = fmt.Sprintf("%d / %d", s.AccessCount, *s.MaxAccesses)
 		}
+		fmt.Printf("  Downloads: %s\n", downloads)
 
 		active := "yes"
 		if !s.IsActive {
 			active = "no"
 		}
+		fmt.Printf("  Active:    %s\n", active)
 
-		fmt.Printf("%-43s  %-18s  %-8s  %-6s  %-18s  %-12s  %-14s  %-8s\n",
-			truncateString(s.ShareID, 43),
-			expires,
-			downloads,
-			active,
-			truncateString(defaultString(s.FilenameLocal, "[encrypted]"), 18),
-			truncateString(defaultString(s.SizeReadableLocal, formatFileSize(s.SizeBytes)), 12),
-			truncateString(defaultString(s.SHA256Local, "[encrypted]"), 14),
-			defaultString(s.PasswordType, "unknown"),
-		)
+		if s.RevokedAt != "" {
+			reason := s.RevokedReason
+			if reason == "" {
+				reason = "unknown"
+			}
+			fmt.Printf("  Revoked:   %s (reason: %s)\n", s.RevokedAt, reason)
+		}
+
+		fmt.Printf("  Filename:  %s\n", defaultString(s.FilenameLocal, "[encrypted]"))
+		fmt.Printf("  Size:      %s\n", defaultString(s.SizeReadableLocal, formatFileSize(s.SizeBytes)))
+		fmt.Printf("  SHA-256:   %s\n", defaultString(s.SHA256Local, "[encrypted]"))
+		fmt.Printf("  Type:      %s\n", defaultString(s.PasswordType, "unknown"))
+		fmt.Printf("  URL:       %s\n", s.ShareURL)
 	}
+	fmt.Println(sep)
 
 	if sharesResp.HasMore {
 		fmt.Printf("\nShowing %d shares starting at offset %d. More results available.\n", sharesResp.Returned, sharesResp.Offset)

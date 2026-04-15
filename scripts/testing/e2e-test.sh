@@ -1193,7 +1193,8 @@ phase_10_share_operations() {
         record_test "Share list shows both account and custom password types" "FAIL"
     fi
 
-    # The locally decrypted SHA-256 prefix must appear (table truncates to 14 chars, so first 8 is safe)
+    # The locally decrypted SHA-256 must appear in full in the block-format output.
+    # Use an 8-char prefix to keep the grep pattern concise and robust.
     local sha256_prefix
     sha256_prefix="${UPLOADED_FILE_SHA256:0:8}"
     if echo "$list_shares_output" | grep -q "$sha256_prefix"; then
@@ -1342,13 +1343,13 @@ phase_10_share_operations() {
     safe_exec share_list_post_revoke_output share_list_post_revoke_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure share list
 
-    # The CLI renders revoked/inactive shares as "no" in the ACTIVE column (%-6s padded).
-    # Assert the revoked share ID appears AND its row contains "  no  " (column padding pattern).
+    # The CLI now renders shares as a per-share block.
+    # Assert the revoked Share A ID appears AND "Active:    no" appears in the output.
     if [ $share_list_post_revoke_exit_code -eq 0 ] \
         && echo "$share_list_post_revoke_output" | grep -qF -- "$SHARE_A_ID" \
-        && echo "$share_list_post_revoke_output" | grep -F -- "$SHARE_A_ID" | grep -q "  no  "; then
+        && echo "$share_list_post_revoke_output" | grep -q "Active:.*no"; then
         record_test "Share list reflects revoked state" "PASS"
-        info "Revoked Share A shows ACTIVE=no in share list"
+        info "Revoked Share A shows Active: no in share list"
     else
         error "Share list does not show Share A as inactive:"
         echo "$share_list_post_revoke_output"
