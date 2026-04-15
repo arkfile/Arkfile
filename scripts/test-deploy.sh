@@ -281,6 +281,7 @@ RQLITE_PASSWORD=${rqlite_password}
 
 # Arkfile Application Configuration
 PORT=8080
+BASE_URL=https://${DOMAIN}
 CORS_ALLOWED_ORIGINS=https://${DOMAIN}
 
 # TLS Configuration

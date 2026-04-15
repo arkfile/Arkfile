@@ -8,12 +8,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/config"
 	arkcrypto "github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
@@ -132,32 +132,26 @@ func CreateFileShare(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create file share")
 	}
 
-	// Construct share URL
-	host := c.Request().Host
-	scheme := "https"
-	if c.Request().Header.Get("X-Forwarded-Proto") == "http" || (c.Echo().Debug && c.Request().TLS == nil) {
-		isHTTP := c.Request().Header.Get("X-Forwarded-Proto") == "http"
-		isHTTPS := c.Request().Header.Get("X-Forwarded-Proto") == "https"
-
-		if c.Echo().Debug && !isHTTPS {
-			scheme = "http"
-		} else if isHTTP {
-			scheme = "http"
-		}
-	}
-
-	origin := c.Request().Header.Get("Origin")
+	// Construct share URL using configured BASE_URL when available.
+	// BASE_URL is the authoritative public-facing base URL set by the operator in secrets.env.
+	// Without it, c.Request().Host reflects the internal proxy address (e.g. localhost:8443)
+	// rather than the public domain, producing broken share URLs behind a reverse proxy.
+	cfg := config.GetConfig()
 	var baseURL string
-	if origin != "" {
-		expectedOriginPrefixHttp := "http://" + host
-		expectedOriginPrefixHttps := "https://" + host
-		if strings.HasPrefix(origin, expectedOriginPrefixHttp) || strings.HasPrefix(origin, expectedOriginPrefixHttps) {
+	if cfg.Server.BaseURL != "" {
+		baseURL = cfg.Server.BaseURL
+	} else {
+		// Fallback for local/dev deployments where BASE_URL is not configured
+		origin := c.Request().Header.Get("Origin")
+		if origin != "" {
 			baseURL = origin
 		} else {
-			baseURL = scheme + "://" + host
+			scheme := "https"
+			if c.Echo().Debug && c.Request().TLS == nil {
+				scheme = "http"
+			}
+			baseURL = scheme + "://" + c.Request().Host
 		}
-	} else {
-		baseURL = scheme + "://" + host
 	}
 	shareURL := baseURL + "/shared/" + request.ShareID
 
@@ -437,10 +431,16 @@ func ListShares(c echo.Context) error {
 			continue
 		}
 
-		// Build share URL
-		baseURL := c.Request().Header.Get("Origin")
-		if baseURL == "" {
-			baseURL = "https://" + c.Request().Host
+		// Build share URL using configured BASE_URL when available (same logic as CreateFileShare)
+		cfg := config.GetConfig()
+		var baseURL string
+		if cfg.Server.BaseURL != "" {
+			baseURL = cfg.Server.BaseURL
+		} else {
+			baseURL = c.Request().Header.Get("Origin")
+			if baseURL == "" {
+				baseURL = "https://" + c.Request().Host
+			}
 		}
 
 		shareURL := baseURL + "/shared/" + share.ShareID
