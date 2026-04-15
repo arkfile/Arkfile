@@ -1033,12 +1033,12 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 
 .security-level.interactive {
     background-color: color-mix(in srgb, var(--current-2) 15%, var(--depth-3));
-    color: var(--current-2);
+    color: var(--foam-1);
 }
 
 .security-level.balanced {
     background-color: color-mix(in srgb, var(--current-2) 15%, var(--depth-3));
-    color: var(--current-2);
+    color: var(--foam-1);
 }
 
 .security-level.maximum {
@@ -1085,7 +1085,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     border-radius: 6px;
     padding: 1rem;
     margin-bottom: 1.5rem;
-    color: var(--current-2);
+    color: var(--foam-1);
 }
 
 .totp-step {

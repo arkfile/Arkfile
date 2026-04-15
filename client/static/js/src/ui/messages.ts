@@ -36,7 +36,6 @@ export class MessageManager {
     toast.style.cssText = `
       padding: 16px 20px;
       border-radius: 8px;
-      color: var(--salt);
       font-size: 14px;
       line-height: 1.4;
       box-shadow: 0 4px 12px color-mix(in srgb, var(--depth-1) 80%, transparent);
@@ -48,19 +47,25 @@ export class MessageManager {
       word-wrap: break-word;
     `;
 
-    // Set background color based on type
+    // Set background and text color based on type.
+    // Text color is always set explicitly here (not in cssText) to ensure
+    // the correct value is applied regardless of bundler ordering.
     let backgroundColor = 'var(--current-1)'; // info
     switch (options.type) {
       case 'success':
         backgroundColor = 'var(--biolum)';
-        toast.style.color = 'var(--depth-1)';
-        break;
-      case 'error':
-        backgroundColor = 'var(--coral)';
+        toast.style.color = 'var(--depth-1)'; // dark text on light green
         break;
       case 'warning':
         backgroundColor = 'var(--phosphor)';
-        toast.style.color = 'var(--depth-1)';
+        toast.style.color = 'var(--depth-1)'; // dark text on amber
+        break;
+      case 'error':
+        backgroundColor = 'var(--coral)';
+        toast.style.color = 'var(--salt)'; // white text on red
+        break;
+      default: // info
+        toast.style.color = 'var(--salt)'; // white text on blue
         break;
     }
     toast.style.backgroundColor = backgroundColor;
