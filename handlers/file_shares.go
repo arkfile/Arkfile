@@ -196,10 +196,13 @@ func GetShareEnvelope(c echo.Context) error {
 		ExpiresAt         *time.Time
 		RevokedAt         *time.Time
 		RevokedReason     sql.NullString
+		AccessCount       float64
+		MaxAccesses       sql.NullFloat64
 	}
 
 	err := database.DB.QueryRow(`
-		SELECT file_id, owner_username, salt, encrypted_fek, expires_at, revoked_at, revoked_reason
+		SELECT file_id, owner_username, salt, encrypted_fek, expires_at, revoked_at, revoked_reason,
+		       access_count, max_accesses
 		FROM file_share_keys 
 		WHERE share_id = ?
 	`, shareID).Scan(
@@ -210,6 +213,8 @@ func GetShareEnvelope(c echo.Context) error {
 		&share.ExpiresAt,
 		&share.RevokedAt,
 		&share.RevokedReason,
+		&share.AccessCount,
+		&share.MaxAccesses,
 	)
 
 	if err == sql.ErrNoRows {
@@ -231,6 +236,11 @@ func GetShareEnvelope(c echo.Context) error {
 			reason += ": " + share.RevokedReason.String
 		}
 		return echo.NewHTTPError(http.StatusForbidden, reason)
+	}
+
+	// Check if max accesses limit has been reached
+	if share.MaxAccesses.Valid && int64(share.AccessCount) >= int64(share.MaxAccesses.Float64) {
+		return echo.NewHTTPError(http.StatusForbidden, "Download limit reached")
 	}
 
 	// Get file size (plaintext metadata like filename/sha256 is inside the encrypted
@@ -542,10 +552,13 @@ func GetShareDownloadMetadata(c echo.Context) error {
 		ExpiresAt     *time.Time
 		RevokedAt     *time.Time
 		RevokedReason sql.NullString
+		AccessCount   float64
+		MaxAccesses   sql.NullFloat64
 	}
 
 	err := database.DB.QueryRow(`
-		SELECT file_id, expires_at, revoked_at, revoked_reason
+		SELECT file_id, expires_at, revoked_at, revoked_reason,
+		       access_count, max_accesses
 		FROM file_share_keys 
 		WHERE share_id = ?
 	`, shareID).Scan(
@@ -553,6 +566,8 @@ func GetShareDownloadMetadata(c echo.Context) error {
 		&share.ExpiresAt,
 		&share.RevokedAt,
 		&share.RevokedReason,
+		&share.AccessCount,
+		&share.MaxAccesses,
 	)
 
 	if err == sql.ErrNoRows {
@@ -574,6 +589,11 @@ func GetShareDownloadMetadata(c echo.Context) error {
 			reason += ": " + share.RevokedReason.String
 		}
 		return echo.NewHTTPError(http.StatusForbidden, reason)
+	}
+
+	// Check if max accesses limit has been reached
+	if share.MaxAccesses.Valid && int64(share.AccessCount) >= int64(share.MaxAccesses.Float64) {
+		return echo.NewHTTPError(http.StatusForbidden, "Download limit reached")
 	}
 
 	// Get file chunk info

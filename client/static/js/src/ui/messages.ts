@@ -62,7 +62,7 @@ export class MessageManager {
         break;
       case 'error':
         backgroundColor = 'var(--coral)';
-        toast.style.color = 'var(--salt)'; // white text on red
+        toast.style.color = 'var(--depth-1)'; // dark text on red (better contrast than white)
         break;
       default: // info
         toast.style.color = 'var(--salt)'; // white text on blue
