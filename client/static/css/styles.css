@@ -479,6 +479,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     font-weight: 500;
     cursor: default;
     user-select: none;
+    margin-left: 0.5rem;
 }
 
 .type-account {
@@ -489,6 +490,36 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 .type-custom {
     background-color: var(--phosphor);
     color: var(--depth-3);
+}
+
+/* Share revoked/expired inline indicator (next to filename) */
+.share-inactive-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.15rem 0.55rem;
+    border-radius: 10px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: default;
+    user-select: none;
+    margin-left: 0.6rem;
+    vertical-align: middle;
+    background-color: var(--coral);
+    color: var(--salt);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+/* Refresh button override - biolum background */
+.share-list-refresh {
+    background-color: var(--biolum) !important;
+    color: var(--depth-2) !important;
+    border: none !important;
+}
+
+.share-list-refresh:hover {
+    background-color: color-mix(in srgb, var(--biolum) 80%, var(--depth-1)) !important;
+    color: var(--depth-2) !important;
 }
 
 /* Password Options Styles */

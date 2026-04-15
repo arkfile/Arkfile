@@ -214,6 +214,10 @@ export class ShareListUI {
     const filenameDisplay = share.filename_local 
       ? share.filename_local 
       : '<span class="status-encrypted">[Encrypted]</span>';
+
+    const inactiveBadge = !share.is_active
+      ? `<span class="share-inactive-badge">${share.revoked_at ? 'Revoked' : 'Expired'}</span>`
+      : '';
       
     const sha256Display = share.sha256_local
       ? `<div class="stat-item stat-item-hash">
@@ -234,7 +238,7 @@ export class ShareListUI {
       <div class="share-item" data-share-id="${share.share_id}">
         <div class="share-header">
           <div class="share-title">
-            <h3>${filenameDisplay}</h3>
+            <h3>${filenameDisplay}${inactiveBadge}</h3>
           </div>
           <div class="share-status-badge ${statusClass}">${statusText}</div>
         </div>
