@@ -226,7 +226,7 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     top: 20px;
     right: 20px;
     background-color: var(--coral);
-    color: var(--salt);
+    color: var(--depth-1);
     padding: 1rem;
     border-radius: 6px;
     z-index: 1100;

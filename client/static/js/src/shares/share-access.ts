@@ -87,6 +87,23 @@ export class ShareAccessUI {
       if (!this.envelope) {
         const response = await fetch(`/api/public/shares/${this.shareId}/envelope`);
         if (!response.ok) {
+          // 403: share is expired, revoked, or download limit reached
+          // 404: share does not exist
+          // Both mean the recipient cannot access this share - show a clear message
+          // and do not attempt decryption (no point running the KDF)
+          if (response.status === 403 || response.status === 404) {
+            if (statusDiv) {
+              statusDiv.textContent = 'This share is no longer valid.';
+              statusDiv.className = 'error-message';
+            }
+            // Disable the password form - retrying will not help
+            const form = document.getElementById('shareAccessForm') as HTMLFormElement | null;
+            if (form) {
+              const submitBtn = form.querySelector('button[type="submit"]') as HTMLButtonElement | null;
+              if (submitBtn) submitBtn.disabled = true;
+            }
+            return;
+          }
           throw new Error('Failed to retrieve share data');
         }
         this.envelope = await response.json();
@@ -95,6 +112,8 @@ export class ShareAccessUI {
       if (!this.envelope) throw new Error('No envelope data');
 
       // 2. Decrypt Share Envelope to get FEK and Download Token (with AAD binding)
+      // This runs Argon2id KDF + AES-GCM decryption client-side.
+      // A decryption failure here means the password is wrong.
       const decryptedEnvelope = await shareCrypto.decryptShareEnvelope(
         this.envelope.encrypted_envelope,
         password,
@@ -122,7 +141,9 @@ export class ShareAccessUI {
     } catch (error) {
       console.error('Unlock failed:', error);
       if (statusDiv) {
-        statusDiv.textContent = 'Incorrect password or invalid share.';
+        // At this point the envelope fetch succeeded (200) but decryption failed:
+        // the password is incorrect.
+        statusDiv.textContent = 'Incorrect password.';
         statusDiv.className = 'error-message';
       }
     }
