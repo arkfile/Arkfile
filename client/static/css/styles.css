@@ -450,13 +450,45 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 }
 
 .encryption-type {
-    background-color: var(--depth-4);
     padding: 0.3rem 0.6rem;
     border-radius: 12px;
     font-size: 0.85rem;
-    display: flex;
+    font-weight: 500;
+    display: inline-flex;
     align-items: center;
     gap: 0.3rem;
+    cursor: default;
+    user-select: none;
+}
+
+.encryption-type-account {
+    background-color: var(--biolum);
+    color: var(--depth-3);
+}
+
+.encryption-type-custom {
+    background-color: var(--phosphor);
+    color: var(--depth-3);
+}
+
+/* Share list key type badges (used in share-list.ts renderShareItem) */
+.type-badge {
+    padding: 0.2rem 0.5rem;
+    border-radius: 10px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: default;
+    user-select: none;
+}
+
+.type-account {
+    background-color: var(--biolum);
+    color: var(--depth-3);
+}
+
+.type-custom {
+    background-color: var(--phosphor);
+    color: var(--depth-3);
 }
 
 /* Password Options Styles */

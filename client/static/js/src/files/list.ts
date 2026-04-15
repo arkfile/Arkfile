@@ -199,7 +199,9 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
     dateEl.textContent = new Date(file.upload_date).toLocaleString();
 
     const typeEl = document.createElement('span');
-    typeEl.className = 'encryption-type';
+    typeEl.className = file.password_type === 'account'
+      ? 'encryption-type encryption-type-account'
+      : 'encryption-type encryption-type-custom';
     typeEl.textContent = file.password_type === 'account' ? 'Account Password' : 'Custom Password';
 
     fileInfo.appendChild(nameEl);

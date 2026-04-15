@@ -11,6 +11,7 @@
 import { authenticatedFetch, getToken, getUsernameFromToken } from '../utils/auth';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgress, hideProgress } from '../ui/progress';
+import { showPasswordPrompt } from '../ui/password-modal';
 import {
   downloadFileChunked,
   triggerBrowserDownload,
@@ -102,12 +103,17 @@ export async function downloadFile(
 
       metadataDecryptionKey = accountKey;
 
-      if (hint || meta.password_hint) {
-        alert(`Password Hint: ${hint || meta.password_hint}`);
-      }
-
-      const password = prompt('Enter the file password:');
-      if (!password) return;
+      const hintText = hint || meta.password_hint || '';
+      const promptResult = await showPasswordPrompt({
+        title: 'File Password Required',
+        message: 'This file is encrypted with a custom password.',
+        ...(hintText ? { hint: hintText } : {}),
+        showCacheDuration: false,
+        submitLabel: 'Decrypt',
+        cancelLabel: 'Cancel',
+      });
+      if (!promptResult) return;
+      const password = promptResult.password;
 
       try {
         showProgress({

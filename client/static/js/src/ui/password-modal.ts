@@ -21,6 +21,8 @@ export interface PasswordPromptOptions {
   title: string;
   /** Message to display to the user */
   message: string;
+  /** Optional password hint to display inside the modal */
+  hint?: string;
   /** Whether to show the cache duration selector */
   showCacheDuration: boolean;
   /** Default cache duration (if showCacheDuration is true) */
@@ -72,6 +74,15 @@ function createModalHTML(options: PasswordPromptOptions): string {
     </div>
   ` : '';
 
+  const hintBlock = options.hint ? `
+    <div class="password-modal-hint">
+      <span class="password-modal-hint-label">Hint:</span>
+      <span class="password-modal-hint-text">${escapeHtml(options.hint)}</span>
+    </div>
+  ` : '';
+
+  const fieldLabel = options.showCacheDuration ? 'Account Password' : 'File Password';
+
   return `
     <div id="${MODAL_OVERLAY_ID}" class="password-modal-overlay">
       <div id="${MODAL_ID}" class="password-modal" role="dialog" aria-modal="true" aria-labelledby="password-modal-title">
@@ -83,9 +94,10 @@ function createModalHTML(options: PasswordPromptOptions): string {
         </div>
         <div class="password-modal-body">
           <p class="password-modal-message">${escapeHtml(options.message)}</p>
+          ${hintBlock}
           <form id="password-modal-form" class="password-modal-form">
             <div class="password-modal-field">
-              <label for="password-modal-input">Account Password</label>
+              <label for="password-modal-input">${escapeHtml(fieldLabel)}</label>
               <input 
                 type="password" 
                 id="password-modal-input" 
@@ -273,6 +285,30 @@ const MODAL_STYLES = `
   .password-modal-btn-submit:hover {
     background: var(--current-2);
     border-color: var(--current-2);
+  }
+
+  .password-modal-hint {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    background: color-mix(in srgb, var(--phosphor) 12%, var(--depth-2));
+    border: 1px solid color-mix(in srgb, var(--phosphor) 40%, transparent);
+    border-radius: 4px;
+    padding: 8px 12px;
+    margin-bottom: 16px;
+    font-size: 0.875rem;
+  }
+
+  .password-modal-hint-label {
+    color: var(--phosphor);
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .password-modal-hint-text {
+    color: var(--foam-1);
+    word-break: break-word;
   }
 
   .password-modal-btn:disabled {

@@ -16,6 +16,7 @@
 import { authenticatedFetch, getToken, getUsernameFromToken } from '../utils/auth';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgress, hideProgress } from '../ui/progress';
+import { showPasswordPrompt } from '../ui/password-modal';
 import { deriveFileEncryptionKey } from '../crypto/file-encryption';
 import {
   getAccountKey,
@@ -85,15 +86,17 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
             </div>
             <div class="password-modal-duration">
               <label for="share-expiry-value">Expires after</label>
-              <div style="display: flex; gap: 8px; align-items: center;">
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: nowrap;">
                 <input type="number" id="share-expiry-value" class="password-modal-input"
-                       min="0" max="99999" value="24" style="width: 80px;" />
-                <select id="share-expiry-unit" class="password-modal-select" style="width: auto;">
+                       min="0" max="99999" value="24"
+                       style="width: 80px; margin-bottom: 0; padding-top: 8px; padding-bottom: 8px;" />
+                <select id="share-expiry-unit" class="password-modal-select"
+                        style="width: auto; padding-top: 8px; padding-bottom: 8px;">
                   <option value="minutes">minutes</option>
                   <option value="hours" selected>hours</option>
                   <option value="days">days</option>
                 </select>
-                <span style="font-size: 0.85em; color: var(--foam-2);">(0 = never)</span>
+                <span style="font-size: 0.85em; color: var(--foam-2); white-space: nowrap;">(0 = never)</span>
               </div>
             </div>
             <div class="password-modal-field">
@@ -327,10 +330,17 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
         return;
       }
     } else {
-      const hint = meta.password_hint;
-      if (hint) alert(`Password Hint: ${hint}`);
-      const customPw = prompt('Enter the file password:');
-      if (!customPw) return;
+      const hintText = meta.password_hint || '';
+      const promptResult = await showPasswordPrompt({
+        title: 'File Password Required',
+        message: 'This file is encrypted with a custom password.',
+        ...(hintText ? { hint: hintText } : {}),
+        showCacheDuration: false,
+        submitLabel: 'Continue',
+        cancelLabel: 'Cancel',
+      });
+      if (!promptResult) return;
+      const customPw = promptResult.password;
       try {
         showProgress({
           title: 'Deriving Custom Key',
