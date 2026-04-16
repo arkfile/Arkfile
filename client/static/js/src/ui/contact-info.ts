@@ -127,9 +127,103 @@ export async function deleteContactInfo(): Promise<void> {
   }
 }
 
-/** Add a new empty contact method row to the form */
+/** Load contact info into the pending-approval section form */
+export async function loadPendingContactInfo(): Promise<void> {
+  const token = getToken();
+  if (!token) return;
+
+  try {
+    const response = await fetch('/api/user/contact-info', {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) return;
+      throw new Error(`Server returned ${response.status}`);
+    }
+
+    const result = await response.json();
+    if (result.data?.has_contact_info && result.data?.contact_info) {
+      populatePendingForm(result.data.contact_info as ContactInfo);
+    } else {
+      clearPendingForm();
+    }
+  } catch (err) {
+    console.error('Failed to load contact info (pending context):', err);
+  }
+}
+
+/** Save the pending-section contact info form to the server */
+export async function savePendingContactInfo(): Promise<void> {
+  const token = getToken();
+  if (!token) {
+    showError('Not authenticated. Please log in.');
+    return;
+  }
+
+  const info = collectPendingFormData();
+  if (!info) return;
+
+  try {
+    const response = await fetch('/api/user/contact-info', {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(info)
+    });
+
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.message || `Server returned ${response.status}`);
+    }
+
+    showSuccess('Contact information saved.');
+  } catch (err) {
+    showError(`Failed to save contact info: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** Delete contact info from the pending-section context */
+export async function deletePendingContactInfo(): Promise<void> {
+  const token = getToken();
+  if (!token) return;
+
+  if (!confirm('Delete your contact information? This cannot be undone.')) return;
+
+  try {
+    const response = await fetch('/api/user/contact-info', {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.message || `Server returned ${response.status}`);
+    }
+
+    clearPendingForm();
+    showSuccess('Contact information deleted.');
+  } catch (err) {
+    showError(`Failed to delete contact info: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** Add a new empty contact method row to the pending-context form */
+export function addPendingContactMethodRow(type = '', value = '', label = ''): void {
+  addContactMethodRowToList('pending-ci-methods-list', type, value, label);
+}
+
+/** Add a new empty contact method row to the main contact-info panel */
 export function addContactMethodRow(type = '', value = '', label = ''): void {
-  const list = document.getElementById('contact-methods-list');
+  addContactMethodRowToList('contact-methods-list', type, value, label);
+}
+
+/** Internal: add a contact method row to the specified list element */
+function addContactMethodRowToList(listId: string, type = '', value = '', label = ''): void {
+  const list = document.getElementById(listId);
   if (!list) return;
 
   const row = document.createElement('div');
@@ -164,6 +258,79 @@ export function addContactMethodRow(type = '', value = '', label = ''): void {
   list.appendChild(row);
 }
 
+/** Collect pending-section form data and validate */
+function collectPendingFormData(): ContactInfo | null {
+  const nameInput = document.getElementById('pending-ci-display-name') as HTMLInputElement;
+  const notesInput = document.getElementById('pending-ci-notes') as HTMLTextAreaElement;
+
+  const displayName = nameInput?.value.trim() || '';
+  if (!displayName) {
+    showError('Display name is required.');
+    nameInput?.focus();
+    return null;
+  }
+
+  const contacts: ContactMethod[] = [];
+  const list = document.getElementById('pending-ci-methods-list');
+  const rows = list ? list.querySelectorAll('.contact-method-row') : [];
+  for (const row of rows) {
+    const typeSelect = row.querySelector('.contact-type') as HTMLSelectElement;
+    const valueInput = row.querySelector('.contact-value') as HTMLInputElement;
+    const labelInput = row.querySelector('.contact-label') as HTMLInputElement;
+
+    const type = typeSelect?.value || '';
+    const value = valueInput?.value.trim() || '';
+    const label = labelInput?.value.trim() || '';
+
+    if (!value) continue;
+
+    const contact: ContactMethod = { type, value };
+    if (type === 'other' && label) {
+      contact.label = label;
+    } else if (type === 'other' && !label) {
+      showError('Label is required for "Other" contact type.');
+      labelInput?.focus();
+      return null;
+    }
+    contacts.push(contact);
+  }
+
+  return {
+    display_name: displayName,
+    contacts,
+    notes: notesInput?.value.trim() || ''
+  };
+}
+
+/** Populate the pending-section form with existing contact info */
+function populatePendingForm(info: ContactInfo): void {
+  const nameInput = document.getElementById('pending-ci-display-name') as HTMLInputElement;
+  const notesInput = document.getElementById('pending-ci-notes') as HTMLTextAreaElement;
+
+  if (nameInput) nameInput.value = info.display_name || '';
+  if (notesInput) notesInput.value = info.notes || '';
+
+  const list = document.getElementById('pending-ci-methods-list');
+  if (list) list.innerHTML = '';
+
+  if (info.contacts && info.contacts.length > 0) {
+    for (const c of info.contacts) {
+      addPendingContactMethodRow(c.type, c.value, c.label || '');
+    }
+  }
+}
+
+/** Clear the pending-section form to empty state */
+function clearPendingForm(): void {
+  const nameInput = document.getElementById('pending-ci-display-name') as HTMLInputElement;
+  const notesInput = document.getElementById('pending-ci-notes') as HTMLTextAreaElement;
+  const list = document.getElementById('pending-ci-methods-list');
+
+  if (nameInput) nameInput.value = '';
+  if (notesInput) notesInput.value = '';
+  if (list) list.innerHTML = '';
+}
+
 /** Collect form data and validate */
 function collectFormData(): ContactInfo | null {
   const nameInput = document.getElementById('contact-display-name') as HTMLInputElement;
@@ -177,7 +344,9 @@ function collectFormData(): ContactInfo | null {
   }
 
   const contacts: ContactMethod[] = [];
-  const rows = document.querySelectorAll('.contact-method-row');
+  // Scope to the main panel list only, not the pending section
+  const panel = document.getElementById('contact-methods-list');
+  const rows = panel ? panel.querySelectorAll('.contact-method-row') : [];
   for (const row of rows) {
     const typeSelect = row.querySelector('.contact-type') as HTMLSelectElement;
     const valueInput = row.querySelector('.contact-value') as HTMLInputElement;

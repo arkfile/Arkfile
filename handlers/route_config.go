@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/database"
 	"github.com/labstack/echo/v4"
 )
 
@@ -129,10 +130,17 @@ func RegisterRoutes() {
 	// auth internally via resolveExportAuth() which checks either JWT or token.
 	Echo.GET("/api/files/:fileId/export", ExportFile)
 
-	// Contact information - user endpoints (require TOTP)
-	totpProtectedGroup.GET("/api/user/contact-info", GetContactInfo)
-	totpProtectedGroup.PUT("/api/user/contact-info", PutContactInfo)
-	totpProtectedGroup.DELETE("/api/user/contact-info", DeleteContactInfo)
+	// Contact information - user endpoints.
+	// These are intentionally NOT in totpProtectedGroup (which inherits RequireApproved)
+	// so that pending users can set their contact info while awaiting approval.
+	// Stack: JWT + TokenRevocation + RequireTOTP (no RequireApproved).
+	pendingAllowedGroup := Echo.Group("")
+	pendingAllowedGroup.Use(auth.JWTMiddleware())
+	pendingAllowedGroup.Use(auth.TokenRevocationMiddleware(database.DB))
+	pendingAllowedGroup.Use(RequireTOTP)
+	pendingAllowedGroup.GET("/api/user/contact-info", GetContactInfo)
+	pendingAllowedGroup.PUT("/api/user/contact-info", PutContactInfo)
+	pendingAllowedGroup.DELETE("/api/user/contact-info", DeleteContactInfo)
 
 	// Credits system - user endpoints (require TOTP)
 	totpProtectedGroup.GET("/api/credits", GetUserCredits)

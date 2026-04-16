@@ -93,26 +93,41 @@ export function showPendingApprovalSection(): void {
   const totpSetupForm = document.getElementById('totp-setup-form');
   const pendingApprovalSection = document.getElementById('pending-approval-section');
   const fileSection = document.getElementById('file-section');
-  
+
   if (loginForm) {
     loginForm.classList.add('hidden');
   }
-  
+
   if (registerForm) {
     registerForm.classList.add('hidden');
   }
-  
+
   if (totpSetupForm) {
     totpSetupForm.classList.add('hidden');
   }
-  
+
   if (fileSection) {
     fileSection.classList.add('hidden');
   }
-  
+
   if (pendingApprovalSection) {
     pendingApprovalSection.classList.remove('hidden');
   }
+
+  // Fetch admin contact info and display it for the pending user (best-effort)
+  import('../utils/auth.js').then(({ fetchAdminContacts }) => {
+    fetchAdminContacts().then(({ contact }) => {
+      const el = document.getElementById('pending-admin-contact-display');
+      if (el && contact && contact !== 'admin@arkfile.demo') {
+        el.textContent = ` You can reach the admin at: ${contact}`;
+      }
+    }).catch(() => {});
+  }).catch(() => {});
+
+  // Load any previously saved contact info into the pending form (best-effort)
+  import('./contact-info.js').then(({ loadPendingContactInfo }) => {
+    loadPendingContactInfo().catch(() => {});
+  }).catch(() => {});
 }
 
 export function hidePendingApprovalSection(): void {

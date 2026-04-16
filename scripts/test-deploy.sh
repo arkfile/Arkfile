@@ -28,6 +28,7 @@ GROUP="arkfile"
 DOMAIN=""
 DESEC_TOKEN=""
 ADMIN_USERNAME=""
+ADMIN_CONTACT=""
 STORAGE_BACKEND="local-seaweedfs"
 ACME_EMAIL=""
 FORCE_REBUILD_ALL=false
@@ -78,6 +79,7 @@ Required:
   --admin-username <name>       Admin username for bootstrap
 
 Optional:
+  --admin-contact <email>       Admin contact email shown to pending users (recommended)
   --storage-backend <type>      Storage backend (default: local-seaweedfs)
   --acme-email <email>          ACME email for Let's Encrypt notices
   --force-rebuild-all           Force rebuild of all C libraries and rqlite
@@ -376,6 +378,7 @@ EOF2
     cat >> "$ARKFILE_DIR/etc/secrets.env" <<EOF2
 # Admin Configuration
 ADMIN_USERNAMES=${ADMIN_USERNAME}
+ARKFILE_ADMIN_CONTACT=${ADMIN_CONTACT}
 
 # Bootstrap mode
 ARKFILE_FORCE_ADMIN_BOOTSTRAP=true
@@ -810,6 +813,10 @@ while [[ $# -gt 0 ]]; do
             ADMIN_USERNAME="$2"
             shift 2
             ;;
+        --admin-contact)
+            ADMIN_CONTACT="$2"
+            shift 2
+            ;;
         --storage-backend)
             STORAGE_BACKEND="$2"
             shift 2
@@ -999,6 +1006,11 @@ echo
 echo -e "${BLUE}Configuration:${NC}"
 echo "  Domain:           $DOMAIN"
 echo "  Admin username:   $ADMIN_USERNAME"
+if [ -n "$ADMIN_CONTACT" ]; then
+    echo "  Admin contact:    $ADMIN_CONTACT"
+else
+    echo "  Admin contact:    (not set - pending users won't have contact info)"
+fi
 echo "  Storage backend:  $STORAGE_BACKEND"
 if [ -n "$ACME_EMAIL" ]; then
     echo "  ACME email:       $ACME_EMAIL"

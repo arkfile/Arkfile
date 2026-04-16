@@ -192,7 +192,35 @@ class ArkFileApp {
         e.preventDefault();
         stopAutoRefresh();
         await logout();
-        this.showHome(); // Return to home page after logout
+        this.showHome();
+      });
+    }
+
+    // Pending approval section: contact info buttons
+    const pendingCiAddMethodBtn = document.getElementById('pending-ci-add-method-btn');
+    if (pendingCiAddMethodBtn) {
+      pendingCiAddMethodBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const { addPendingContactMethodRow } = await import('./ui/contact-info');
+        addPendingContactMethodRow();
+      });
+    }
+
+    const pendingCiSaveBtn = document.getElementById('pending-ci-save-btn');
+    if (pendingCiSaveBtn) {
+      pendingCiSaveBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const { savePendingContactInfo } = await import('./ui/contact-info');
+        await savePendingContactInfo();
+      });
+    }
+
+    const pendingCiDeleteBtn = document.getElementById('pending-ci-delete-btn');
+    if (pendingCiDeleteBtn) {
+      pendingCiDeleteBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const { deletePendingContactInfo } = await import('./ui/contact-info');
+        await deletePendingContactInfo();
       });
     }
 

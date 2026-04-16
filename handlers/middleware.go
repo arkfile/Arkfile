@@ -427,19 +427,14 @@ func TLSVersionCheck(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// RequireApproved ensures the user is approved before allowing access
+// RequireApproved ensures the user is approved before allowing access.
+// Applied to auth.Echo so all routes in that group inherit it.
+// Contact-info endpoints are intentionally placed in a separate group
+// (pendingAllowedGroup in route_config.go) that omits this middleware,
+// allowing pending users to manage their contact information.
 func RequireApproved(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		username := auth.GetUsernameFromToken(c)
-
-		// Allow TOTP setup/verify operations during registration flow
-		// These operations use temporary TOTP tokens and should bypass approval
-		if auth.RequiresTOTPFromToken(c) {
-			path := c.Request().URL.Path
-			if path == "/api/totp/setup" || path == "/api/totp/verify" {
-				return next(c)
-			}
-		}
 
 		// Get user details
 		user, err := models.GetUserByUsername(database.DB, username)
@@ -476,19 +471,12 @@ func RequireAdmin(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// RequireTOTP ensures the user has TOTP enabled before allowing access to protected resources
+// RequireTOTP ensures the user has TOTP enabled before allowing access to protected resources.
+// Note: /api/totp/setup and /api/totp/verify are on a separate route group using TOTPJWTMiddleware
+// and never reach this middleware, so no path-based bypass is needed here.
 func RequireTOTP(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		username := auth.GetUsernameFromToken(c)
-
-		// Allow TOTP setup/verify operations during registration flow
-		// These operations use temporary TOTP tokens and should bypass this check
-		if auth.RequiresTOTPFromToken(c) {
-			path := c.Request().URL.Path
-			if path == "/api/totp/setup" || path == "/api/totp/verify" {
-				return next(c)
-			}
-		}
 
 		// Check if user has TOTP enabled
 		totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, username)

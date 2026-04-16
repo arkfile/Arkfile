@@ -191,8 +191,36 @@
                     </p>
                     <p class="pending-info">
                         Please check back later or contact your administrator if you need immediate access.
+                        <span id="pending-admin-contact-display"></span>
                     </p>
                 </div>
+
+                <!-- Optional contact info for pending users -->
+                <div class="pending-contact-info-section">
+                    <h3>Optionally provide contact information</h3>
+                    <p class="contact-info-notice">
+                        Contact details you provide here are optional. If set, they are encrypted at rest and readable only by the instance admin, for account-related communication. You can update or delete them at any time after logging in.
+                    </p>
+                    <div class="setting-item">
+                        <label for="pending-ci-display-name"><strong>Display Name</strong> (required if submitting)</label>
+                        <input type="text" id="pending-ci-display-name" maxlength="100" placeholder="How you'd like to be addressed">
+                    </div>
+                    <div class="setting-item">
+                        <label><strong>Contact Methods</strong></label>
+                        <div id="pending-ci-methods-list"></div>
+                        <button type="button" id="pending-ci-add-method-btn" class="secondary-button">+ Add Contact Method</button>
+                    </div>
+                    <div class="setting-item">
+                        <label for="pending-ci-notes"><strong>Notes for Admin</strong></label>
+                        <textarea id="pending-ci-notes" maxlength="2000" rows="3" placeholder="Anything you'd like the admin to know"></textarea>
+                    </div>
+                    <div class="setting-item" style="display: flex; gap: 10px;">
+                        <button type="button" id="pending-ci-save-btn" class="btn-primary">Save Contact Info</button>
+                        <button type="button" id="pending-ci-delete-btn" class="danger-button">Delete Contact Info</button>
+                    </div>
+                    <div id="pending-ci-status"></div>
+                </div>
+
                 <div class="pending-actions">
                     <button type="button" id="pending-logout-btn" class="secondary-button">Logout</button>
                 </div>
