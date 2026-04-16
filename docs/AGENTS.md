@@ -20,7 +20,7 @@ When users (file owners) choose to share files with others (anonymous recipients
 
 ## Greenfield App
 
-There are no current deployments of this app anywhere at present. No need to build in "backwards compatibility" at this stage when refactoring. The focus at this stage is on fixing and proving the correct implementation of the system as it is designed and intended. Be wary and flag it to the developers anytime you come across deprecated/disabled/stub/bad/backwards-compatibility functions or comments, or any technical debt that could make it harder to work with this codebase in the future.
+There are no production deployments of this app anywhere at present. For the most part, "backwards compatibility" is not needed at this stage when refactoring. The focus for now is on fixing and proving the correct implementation of the system as it is designed and intended. Be wary and flag it to the developers anytime you come across deprecated/disabled/stub/bad/backwards-compatibility functions or comments, or any technical debt that could make it harder to work with this codebase in the future. There is a test/demo server currently at `test.arkfile.net` with early beta testers using it.
 
 ## Function Review Sanity Checks
 
@@ -89,4 +89,4 @@ Aim for honesty and transparency in all your work, share your full thinking incl
 
 ## REPEAT: Greenfield App
 
-There are no current deployments of this app anywhere at present. No need to build in "backwards compatibility" at this stage when refactoring. The focus at this stage is on fixing and proving the correct implementation of the system as it is designed and intended. Be wary and flag it to the developers anytime you come across deprecated/disabled/stub/bad/backwards-compatibility functions or comments, or any technical debt that could make it harder to work with this codebase in the future.
+There are no production deployments of this app anywhere at present. For the most part, "backwards compatibility" is not needed at this stage when refactoring. The focus for now is on fixing and proving the correct implementation of the system as it is designed and intended. Be wary and flag it to the developers anytime you come across deprecated/disabled/stub/bad/backwards-compatibility functions or comments, or any technical debt that could make it harder to work with this codebase in the future. There is a test/demo server currently at `test.arkfile.net` with early beta testers using it.
