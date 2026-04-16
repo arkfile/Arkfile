@@ -416,34 +416,39 @@ class ArkFileApp {
     }
   }
 
-  private async handleTOTPVerify(code: string, completeTOTPSetup: (code: string) => Promise<boolean>): Promise<void> {
+  private async handleTOTPVerify(code: string, completeTOTPSetup: (code: string) => Promise<Record<string, any> | null>): Promise<void> {
     if (code.length !== 6) return;
-    const success = await completeTOTPSetup(code);
-    if (success) {
+    const verifyResult = await completeTOTPSetup(code);
+    if (verifyResult) {
+      // The server returns tokens + user info on successful TOTP verify.
+      // Extract token, refresh_token, and is_approved from the response.
+      const newToken = verifyResult.token;
+      const newRefreshToken = verifyResult.refresh_token || '';
+      const isApproved = verifyResult.user?.is_approved;
+
+      // Store the new full-access tokens (replacing the temp TOTP token)
+      if (newToken) {
+        const { setTokens } = await import('./utils/auth');
+        setTokens(newToken, newRefreshToken);
+      }
+
       // Check if we came from login flow with incomplete TOTP (window.totpLoginData set)
       const flowData = typeof window !== 'undefined' ? (window as any).totpLoginData : null;
       if (flowData) {
-        const { getToken, getRefreshToken } = await import('./utils/auth');
-        const token = getToken();
-        const refreshToken = getRefreshToken();
-        if (token) {
-          const carriedPassword = flowData.password;
-          if (flowData.password) { flowData.password = ''; }
-          delete (window as any).totpLoginData;
-          await this.completePostTOTP(token, refreshToken || '', flowData.username, carriedPassword);
-        }
+        const carriedPassword = flowData.password;
+        if (flowData.password) { flowData.password = ''; }
+        delete (window as any).totpLoginData;
+
+        const { LoginManager } = await import('./auth/login');
+        await LoginManager.completeLogin({
+          token: newToken || '',
+          refresh_token: newRefreshToken,
+          auth_method: 'OPAQUE',
+          is_approved: isApproved,
+        }, flowData.username, carriedPassword);
       }
       // If from registration, the totp.ts completeTOTPSetup -> handler in register.ts handles navigation
     }
-  }
-
-  private async completePostTOTP(token: string, refreshToken: string, username: string, password?: string): Promise<void> {
-    const { LoginManager } = await import('./auth/login');
-    await LoginManager.completeLogin({
-      token,
-      refresh_token: refreshToken,
-      auth_method: 'OPAQUE',
-    }, username, password);
   }
 
   private showHome(): void {

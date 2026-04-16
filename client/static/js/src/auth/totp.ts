@@ -331,7 +331,11 @@ export async function initiateTOTPSetup(): Promise<TOTPSetupData | null> {
   }
 }
 
-export async function completeTOTPSetup(code: string): Promise<boolean> {
+/**
+ * Complete TOTP setup verification.
+ * Returns the full response data (including tokens and is_approved) on success, or null on failure.
+ */
+export async function completeTOTPSetup(code: string): Promise<Record<string, any> | null> {
   try {
     showProgressMessage('Completing TOTP setup...');
     
@@ -339,7 +343,7 @@ export async function completeTOTPSetup(code: string): Promise<boolean> {
     if (!token) {
       hideProgress();
       showError('Authentication required');
-      return false;
+      return null;
     }
     
     const response = await fetch('/api/totp/verify', {
@@ -356,19 +360,21 @@ export async function completeTOTPSetup(code: string): Promise<boolean> {
     hideProgress();
     
     if (response.ok) {
-      const data = await response.json();
+      const result = await response.json();
+      // Unwrap JSONResponse envelope
+      const data = result.data || result;
       showSuccess('TOTP setup completed successfully!');
-      return true;
+      return data;
     } else {
       const errorData = await response.json().catch(() => ({}));
       showError(errorData.message || 'Invalid TOTP code');
-      return false;
+      return null;
     }
   } catch (error) {
     hideProgress();
     console.error('TOTP verification error:', error);
     showError('Failed to complete TOTP setup');
-    return false;
+    return null;
   }
 }
 
@@ -554,27 +560,35 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData): voi
 }
 
 async function completeTOTPSetupFlow(code: string): Promise<void> {
-  const success = await completeTOTPSetup(code);
-  if (success) {
+  const verifyResult = await completeTOTPSetup(code);
+  if (verifyResult) {
     document.querySelector('.modal-overlay')?.remove();
+
+    // Extract tokens and approval status from the server response
+    const newToken = verifyResult.token;
+    const newRefreshToken = verifyResult.refresh_token || '';
+    const isApproved = verifyResult.user?.is_approved;
+
+    // Store the new full-access tokens
+    if (newToken) {
+      const { setTokens } = await import('../utils/auth.js');
+      setTokens(newToken, newRefreshToken);
+    }
+
     // If we got here from the login flow (incomplete TOTP setup on login),
     // window.totpLoginData holds the password and username. Use them to complete login.
     const flowData = typeof window !== 'undefined' ? window.totpLoginData : null;
     if (flowData) {
       const { LoginManager } = await import('./login.js');
-      const { getToken, getRefreshToken } = await import('../utils/auth.js');
-      const token = getToken();
-      const refreshToken = getRefreshToken();
-      if (token) {
-        const carriedPassword = flowData.password;
-        if (flowData.password) { (flowData as any).password = ''; }
-        delete (window as any).totpLoginData;
-        await LoginManager.completeLogin({
-          token,
-          refresh_token: refreshToken || '',
-          auth_method: 'OPAQUE',
-        }, flowData.username, carriedPassword);
-      }
+      const carriedPassword = flowData.password;
+      if (flowData.password) { (flowData as any).password = ''; }
+      delete (window as any).totpLoginData;
+      await LoginManager.completeLogin({
+        token: newToken || '',
+        refresh_token: newRefreshToken,
+        auth_method: 'OPAQUE',
+        is_approved: isApproved,
+      }, flowData.username, carriedPassword);
     }
   }
 }
