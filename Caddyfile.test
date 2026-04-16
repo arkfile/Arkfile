@@ -16,12 +16,12 @@
 	}
 
 	header {
+		# HSTS: Caddy owns TLS termination so it is the right place for this header.
+		# All other security headers (CSP, X-Frame-Options, etc.) are set by the
+		# Go application's middleware and must NOT be duplicated here.
+		# Duplicate CSP headers cause browsers to enforce the intersection of both,
+		# breaking features like TOTP QR codes (data: URI images).
 		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
-		X-Frame-Options "SAMEORIGIN"
-		X-XSS-Protection "1; mode=block"
-		X-Content-Type-Options "nosniff"
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' data: blob:;"
-		Referrer-Policy "strict-origin-when-cross-origin"
 	}
 
 	reverse_proxy localhost:8443 {

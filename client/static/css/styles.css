@@ -1850,6 +1850,73 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     margin: 0 auto;
 }
 
+/* Pending approval: optional contact info form */
+.pending-contact-info-section {
+    background-color: var(--depth-2);
+    border: 1px solid var(--depth-4);
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-top: 1.5rem;
+    text-align: left;
+}
+
+.pending-contact-info-section h3 {
+    color: var(--salt);
+    margin-bottom: 0.75rem;
+    font-size: 1rem;
+}
+
+.pending-contact-info-section .contact-info-notice {
+    color: var(--foam-2);
+    font-size: 0.85rem;
+    margin-bottom: 1.25rem;
+    line-height: 1.5;
+    font-style: italic;
+}
+
+.pending-contact-info-section .setting-item {
+    margin-bottom: 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.pending-contact-info-section .setting-item label,
+.pending-contact-info-section .setting-item > strong {
+    display: block;
+    color: var(--foam-1);
+    margin-bottom: 0.4rem;
+    font-size: 0.9rem;
+}
+
+.pending-contact-info-section .setting-item input[type="text"],
+.pending-contact-info-section .setting-item textarea {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.pending-contact-info-section .setting-item textarea {
+    resize: vertical;
+    min-height: 80px;
+}
+
+.pending-contact-info-section .setting-item[style*="flex"] {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.pending-contact-info-section .setting-item[style*="flex"] button {
+    flex: 1 1 auto;
+    min-width: 130px;
+    max-width: none;
+    margin: 0;
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+    white-space: nowrap;
+}
+
 a {
     color: var(--current-2);
     text-decoration: none;

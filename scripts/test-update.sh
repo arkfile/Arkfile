@@ -265,6 +265,58 @@ if [ -d "$BUILD_ROOT/database" ]; then
     chown -R "$USER:$GROUP" "$ARKFILE_DIR/database"
 fi
 
+print_status "INFO" "Regenerating Caddyfile from Caddyfile.test template..."
+DESEC_TOKEN_VALUE=$(read_secrets_env_value "DESEC_TOKEN" 2>/dev/null || true)
+ACME_EMAIL_VALUE=$(read_secrets_env_value "CADDY_EMAIL" 2>/dev/null || true)
+
+repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+tmp_global=$(mktemp)
+
+if [ -n "$ACME_EMAIL_VALUE" ]; then
+    cat > "$tmp_global" <<GLOBALEOF
+{
+	email ${ACME_EMAIL_VALUE}
+
+	servers {
+		protocols h1 h2 h3
+		strict_sni_host
+	}
+}
+GLOBALEOF
+else
+    cat > "$tmp_global" <<GLOBALEOF
+{
+	servers {
+		protocols h1 h2 h3
+		strict_sni_host
+	}
+}
+GLOBALEOF
+fi
+
+awk -v gfile="$tmp_global" '
+    /\{GLOBAL_BLOCK\}/ {
+        while ((getline line < gfile) > 0) print line
+        close(gfile)
+        next
+    }
+    { print }
+' "$repo_root/Caddyfile.test" | sed "s|{DOMAIN}|${DOMAIN}|g" > /etc/caddy/Caddyfile
+
+rm -f "$tmp_global"
+
+if [ -f /etc/caddy/Caddyfile ]; then
+    if [ -n "$DESEC_TOKEN_VALUE" ]; then
+        DESEC_TOKEN="$DESEC_TOKEN_VALUE" /usr/local/bin/caddy validate --config /etc/caddy/Caddyfile 2>/dev/null && \
+            print_status "SUCCESS" "Caddyfile updated and validated" || \
+            print_status "WARNING" "Caddyfile updated but validation had warnings (check manually)"
+    else
+        print_status "SUCCESS" "Caddyfile updated (DESEC_TOKEN not in secrets.env, skipping validate)"
+    fi
+else
+    print_status "WARNING" "Could not write /etc/caddy/Caddyfile"
+fi
+
 echo
 echo -e "${CYAN}Step 4: Restart services${NC}"
 

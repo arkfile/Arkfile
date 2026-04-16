@@ -200,8 +200,8 @@ sudo ./scripts/setup/06-setup-rqlite-build.sh
 ### Dev Admin Accounts
 The following accounts are **DEVELOPMENT ONLY** and are automatically blocked in production:
 - `arkfile-dev-admin`
-- `admin.dev.user`
-- `admin.demo.user`
+- `test-admin`
+- `dev-admin`
 
 ### Production Deployment Checklist
 - [ ] Set `ENVIRONMENT=production`

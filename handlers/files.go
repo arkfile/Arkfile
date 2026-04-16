@@ -300,8 +300,8 @@ func AdminContactsHandler(c echo.Context) error {
 		logging.ErrorLogger.Printf("Failed to load config for admin contacts: %v", err)
 		// Fallback to default
 		return c.JSON(http.StatusOK, map[string]interface{}{
-			"adminUsernames": []string{"admin.user.2024"},
-			"adminContact":   "admin@arkfile.demo",
+			"adminUsernames": []string{"default-admin"},
+			"adminContact":   "admin@example.com",
 			"message":        "Contact information for administrators",
 		})
 	}
@@ -311,12 +311,12 @@ func AdminContactsHandler(c echo.Context) error {
 
 	// Fallback if no admin usernames configured
 	if len(adminUsernames) == 0 {
-		adminUsernames = []string{"admin.user.2024"}
+		adminUsernames = []string{"default-admin"}
 	}
 
 	// Fallback for admin contact if not configured
 	if adminContact == "" {
-		adminContact = "admin@arkfile.demo"
+		adminContact = "admin@example.com"
 	}
 
 	return c.JSON(http.StatusOK, map[string]interface{}{

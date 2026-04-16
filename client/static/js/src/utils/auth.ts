@@ -193,16 +193,16 @@ export class AuthManager {
   }
 
   // Admin contact management
-  private static adminUsernames: string[] = ['admin.user.2024'];
-  private static adminContact: string = 'admin@arkfile.demo';
+  private static adminUsernames: string[] = ['default-admin'];
+  private static adminContact: string = 'admin@example.com';
 
   public static async fetchAdminContacts(): Promise<{usernames: string[], contact: string}> {
     try {
       const response = await fetch('/api/admin-contacts');
       if (response.ok) {
         const data = await response.json();
-        this.adminUsernames = data.adminUsernames || ['admin.user.2024'];
-        this.adminContact = data.adminContact || 'admin@arkfile.demo';
+        this.adminUsernames = data.adminUsernames || ['default-admin'];
+        this.adminContact = data.adminContact || 'admin@example.com';
       }
     } catch (error) {
       console.warn('Could not fetch admin contacts:', error);

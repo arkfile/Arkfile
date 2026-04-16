@@ -60,8 +60,6 @@ func isPortProduction() bool {
 func IsDevAdminAccount(username string) bool {
 	devAdminAccounts := []string{
 		"arkfile-dev-admin",
-		"admin.dev.user",
-		"admin.demo.user",
 		"test-admin",
 		"dev-admin",
 	}

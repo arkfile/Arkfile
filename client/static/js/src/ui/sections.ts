@@ -118,7 +118,7 @@ export function showPendingApprovalSection(): void {
   import('../utils/auth.js').then(({ fetchAdminContacts }) => {
     fetchAdminContacts().then(({ contact }) => {
       const el = document.getElementById('pending-admin-contact-display');
-      if (el && contact && contact !== 'admin@arkfile.demo') {
+      if (el && contact && contact !== 'admin@example.com') {
         el.textContent = ` You can reach the admin at: ${contact}`;
       }
     }).catch(() => {});
