@@ -56,14 +56,24 @@ export function toggleAuthForm(): void {
 export function showTOTPSetupSection(): void {
   const registerForm = document.getElementById('register-form');
   const totpSetupForm = document.getElementById('totp-setup-form');
-  
+
   if (registerForm) {
     registerForm.classList.add('hidden');
   }
-  
+
   if (totpSetupForm) {
     totpSetupForm.classList.remove('hidden');
   }
+
+  // Auto-trigger TOTP setup so the QR code appears immediately without requiring
+  // the user to click "Generate Setup Code". The button remains as a regenerate fallback.
+  // Use a short delay to ensure the DOM is fully visible before the API call fires.
+  setTimeout(() => {
+    const generateBtn = document.getElementById('generate-totp-btn') as HTMLButtonElement | null;
+    if (generateBtn) {
+      generateBtn.click();
+    }
+  }, 50);
 }
 
 export function hideTOTPSetupSection(): void {
