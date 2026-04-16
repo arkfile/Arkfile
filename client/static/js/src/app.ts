@@ -432,6 +432,10 @@ class ArkFileApp {
         setTokens(newToken, newRefreshToken);
       }
 
+      // Clear progress modal before proceeding to login completion
+      const { hideProgress } = await import('./ui/progress');
+      hideProgress();
+
       // Check if we came from login flow with incomplete TOTP (window.totpLoginData set)
       const flowData = typeof window !== 'undefined' ? (window as any).totpLoginData : null;
       if (flowData) {

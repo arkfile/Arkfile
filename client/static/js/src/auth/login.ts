@@ -227,6 +227,7 @@ export class LoginManager {
 
       // Check if user is approved
       if (data.is_approved === false) {
+        hideProgress(); // Clear any lingering progress modals before showing pending screen
         const { showPendingApprovalSection } = await import('../ui/sections.js');
         showPendingApprovalSection();
         showSuccess('Account created. Awaiting administrator approval.');
