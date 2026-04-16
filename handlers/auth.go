@@ -590,10 +590,21 @@ func OpaqueAuthFinalize(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
-	// MANDATORY TOTP: All users must have TOTP enabled to login
+	// MANDATORY TOTP: All users must complete TOTP setup to access the app.
+	// If TOTP is not yet set up, issue a temp token and return requires_totp_setup: true
+	// so the client can redirect the user to finish TOTP setup rather than showing a hard error.
 	if !totpEnabled {
-		logging.ErrorLogger.Printf("User %s attempted login without TOTP setup", request.Username)
-		return JSONError(c, http.StatusForbidden, "Two-factor authentication setup is required")
+		logging.InfoLogger.Printf("User %s authenticated via OPAQUE but TOTP setup is incomplete; redirecting to setup", request.Username)
+		tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to generate TOTP setup token for %s: %v", request.Username, err)
+			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+		}
+		return JSONResponse(c, http.StatusOK, "Two-factor authentication setup is required to complete login.", map[string]interface{}{
+			"requires_totp":       true,
+			"requires_totp_setup": true,
+			"temp_token":          tempToken,
+		})
 	}
 
 	// Generate temporary token that requires TOTP completion

@@ -150,6 +150,28 @@ export class LoginManager {
 
       // Check TOTP FIRST, before any cache/digest operations
       if (loginData.requires_totp) {
+        // requires_totp_setup: true means TOTP was never completed during registration.
+        // Route to the setup screen so the user can finish what they started.
+        if (loginData.requires_totp_setup) {
+          // Store the temp token in localStorage so getToken() works during TOTP setup.
+          // The full token will replace it once TOTPVerify completes.
+          setTokens(loginData.temp_token!, '');
+          // Also stash the password in window so completeLogin can derive the account key
+          // once TOTP setup is done (the totp.ts completeTOTPSetupFlow path returns a
+          // full token and calls completeLogin via the registration flow in TOTPVerify).
+          if (typeof window !== 'undefined') {
+            window.totpLoginData = {
+              tempToken: loginData.temp_token!,
+              username: credentials.username,
+              password: credentials.password,
+            };
+          }
+          const { showTOTPSetupSection } = await import('../ui/sections.js');
+          showTOTPSetupSection();
+          showSuccess('Please complete two-factor authentication setup to finish logging in.');
+          return;
+        }
+        // requires_totp (without requires_totp_setup): TOTP is set up, user needs to enter code.
         handleTOTPFlow({
           tempToken: loginData.temp_token!,
           username: credentials.username,

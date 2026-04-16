@@ -512,6 +512,25 @@ async function completeTOTPSetupFlow(code: string): Promise<void> {
   const success = await completeTOTPSetup(code);
   if (success) {
     document.querySelector('.modal-overlay')?.remove();
+    // If we got here from the login flow (incomplete TOTP setup on login),
+    // window.totpLoginData holds the password and username. Use them to complete login.
+    const flowData = typeof window !== 'undefined' ? window.totpLoginData : null;
+    if (flowData) {
+      const { LoginManager } = await import('./login.js');
+      const { getToken, getRefreshToken } = await import('../utils/auth.js');
+      const token = getToken();
+      const refreshToken = getRefreshToken();
+      if (token) {
+        const carriedPassword = flowData.password;
+        if (flowData.password) { (flowData as any).password = ''; }
+        delete (window as any).totpLoginData;
+        await LoginManager.completeLogin({
+          token,
+          refresh_token: refreshToken || '',
+          auth_method: 'OPAQUE',
+        }, flowData.username, carriedPassword);
+      }
+    }
   }
 }
 
