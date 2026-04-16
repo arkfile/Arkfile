@@ -65,15 +65,12 @@ export function showTOTPSetupSection(): void {
     totpSetupForm.classList.remove('hidden');
   }
 
-  // Auto-trigger TOTP setup so the QR code appears immediately without requiring
-  // the user to click "Generate Setup Code". The button remains as a regenerate fallback.
-  // Use a short delay to ensure the DOM is fully visible before the API call fires.
-  setTimeout(() => {
-    const generateBtn = document.getElementById('generate-totp-btn') as HTMLButtonElement | null;
-    if (generateBtn) {
-      generateBtn.click();
-    }
-  }, 50);
+  // Auto-trigger TOTP setup so the QR code appears immediately.
+  // Directly calls generateAndDisplayTOTPSetup() rather than simulating a button click,
+  // because the button's event listener in app.ts may not be attached yet at this point.
+  import('../auth/totp.js').then(({ generateAndDisplayTOTPSetup }) => {
+    generateAndDisplayTOTPSetup().catch(() => {});
+  }).catch(() => {});
 }
 
 export function hideTOTPSetupSection(): void {

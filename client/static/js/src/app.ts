@@ -361,6 +361,42 @@ class ArkFileApp {
   }
 
   private setupTOTPListeners(): void {
+    // Regenerate TOTP setup code button
+    const generateTotpBtn = document.getElementById('generate-totp-btn');
+    if (generateTotpBtn) {
+      generateTotpBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const { generateAndDisplayTOTPSetup } = await import('./auth/totp');
+        await generateAndDisplayTOTPSetup();
+      });
+    }
+
+    // TOTP verify code input: enable button when 6 digits entered
+    const totpVerifyCode = document.getElementById('totp-verify-code') as HTMLInputElement | null;
+    const verifyTotpBtn = document.getElementById('verify-totp-btn') as HTMLButtonElement | null;
+    if (totpVerifyCode && verifyTotpBtn) {
+      totpVerifyCode.addEventListener('input', () => {
+        totpVerifyCode.value = totpVerifyCode.value.replace(/[^0-9]/g, '');
+        verifyTotpBtn.disabled = totpVerifyCode.value.length !== 6;
+      });
+      totpVerifyCode.addEventListener('keypress', async (e) => {
+        if (e.key === 'Enter' && totpVerifyCode.value.length === 6) {
+          const { completeTOTPSetup } = await import('./auth/totp');
+          await this.handleTOTPVerify(totpVerifyCode.value, completeTOTPSetup);
+        }
+      });
+    }
+
+    // Verify & Complete Registration button
+    if (verifyTotpBtn) {
+      verifyTotpBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const code = (document.getElementById('totp-verify-code') as HTMLInputElement)?.value || '';
+        const { completeTOTPSetup } = await import('./auth/totp');
+        await this.handleTOTPVerify(code, completeTOTPSetup);
+      });
+    }
+
     // Cancel registration (returns to login form)
     const cancelRegistrationBtn = document.getElementById('cancel-registration-btn');
     if (cancelRegistrationBtn) {
@@ -370,7 +406,7 @@ class ArkFileApp {
       });
     }
 
-    // Download backup codes (from TOTP setup modal)
+    // Download backup codes (from TOTP setup static form)
     const downloadBackupCodesBtn = document.getElementById('download-backup-codes-btn');
     if (downloadBackupCodesBtn) {
       downloadBackupCodesBtn.addEventListener('click', async () => {
@@ -378,6 +414,36 @@ class ArkFileApp {
         downloadBackupCodes();
       });
     }
+  }
+
+  private async handleTOTPVerify(code: string, completeTOTPSetup: (code: string) => Promise<boolean>): Promise<void> {
+    if (code.length !== 6) return;
+    const success = await completeTOTPSetup(code);
+    if (success) {
+      // Check if we came from login flow with incomplete TOTP (window.totpLoginData set)
+      const flowData = typeof window !== 'undefined' ? (window as any).totpLoginData : null;
+      if (flowData) {
+        const { getToken, getRefreshToken } = await import('./utils/auth');
+        const token = getToken();
+        const refreshToken = getRefreshToken();
+        if (token) {
+          const carriedPassword = flowData.password;
+          if (flowData.password) { flowData.password = ''; }
+          delete (window as any).totpLoginData;
+          await this.completePostTOTP(token, refreshToken || '', flowData.username, carriedPassword);
+        }
+      }
+      // If from registration, the totp.ts completeTOTPSetup -> handler in register.ts handles navigation
+    }
+  }
+
+  private async completePostTOTP(token: string, refreshToken: string, username: string, password?: string): Promise<void> {
+    const { LoginManager } = await import('./auth/login');
+    await LoginManager.completeLogin({
+      token,
+      refresh_token: refreshToken,
+      auth_method: 'OPAQUE',
+    }, username, password);
   }
 
   private showHome(): void {

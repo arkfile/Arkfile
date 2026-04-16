@@ -242,6 +242,48 @@ async function verifyTOTPLogin(): Promise<void> {
   }
 }
 
+/**
+ * Generate TOTP setup data and populate the static #totp-setup-form fields.
+ * Used by both the auto-trigger in showTOTPSetupSection() and the Regenerate button.
+ */
+export async function generateAndDisplayTOTPSetup(): Promise<void> {
+  const generateBtn = document.getElementById('generate-totp-btn') as HTMLButtonElement | null;
+  if (generateBtn) generateBtn.disabled = true;
+
+  const data = await initiateTOTPSetup();
+
+  if (generateBtn) generateBtn.disabled = false;
+
+  if (!data) return; // initiateTOTPSetup already showed an error
+
+  // Populate QR code display
+  const qrDisplay = document.getElementById('qr-code-display');
+  const qrSection = document.getElementById('qr-code-section');
+  const manualCode = document.getElementById('manual-entry-code');
+  const verifyBtn = document.getElementById('verify-totp-btn') as HTMLButtonElement | null;
+  const backupSection = document.getElementById('backup-codes-section');
+  const backupList = document.getElementById('backup-codes-list');
+
+  if (qrDisplay) {
+    qrDisplay.innerHTML = `<img src="${data.qr_code_url}" alt="TOTP QR Code" style="max-width:200px;height:auto;border:1px solid var(--depth-4);border-radius:4px;">`;
+  }
+  if (manualCode) {
+    manualCode.textContent = data.manual_entry;
+  }
+  if (qrSection) {
+    qrSection.classList.remove('hidden');
+  }
+  if (verifyBtn) {
+    verifyBtn.disabled = false;
+  }
+  if (backupList && data.backup_codes?.length) {
+    backupList.innerHTML = data.backup_codes.map(c => `<li>${c}</li>`).join('');
+  }
+  if (backupSection) {
+    backupSection.classList.remove('hidden');
+  }
+}
+
 // TOTP Setup Functions
 export async function initiateTOTPSetup(): Promise<TOTPSetupData | null> {
   try {
