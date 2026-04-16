@@ -35,35 +35,35 @@ func ValidateUsername(username string) error {
 	for _, r := range username {
 		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
 			(r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' || r == ',') {
-			return fmt.Errorf("username can only contain letters, numbers, underscores, hyphens, periods, and commas")
+			return fmt.Errorf("username can only contain: letters (a-z, A-Z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)")
 		}
 	}
 
 	if !usernameRegex.MatchString(username) {
-		return fmt.Errorf("username can only contain letters, numbers, underscores, hyphens, periods, and commas")
+		return fmt.Errorf("username can only contain: letters (a-z, A-Z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)")
 	}
 
 	// Additional checks for reasonable usernames
 	if strings.HasPrefix(username, ".") || strings.HasSuffix(username, ".") {
-		return fmt.Errorf("username cannot start or end with a period")
+		return fmt.Errorf("username cannot start or end with a period (.)")
 	}
 
 	if strings.HasPrefix(username, ",") || strings.HasSuffix(username, ",") {
-		return fmt.Errorf("username cannot start or end with a comma")
+		return fmt.Errorf("username cannot start or end with a comma (,)")
 	}
 
 	if strings.HasPrefix(username, "-") || strings.HasSuffix(username, "-") {
-		return fmt.Errorf("username cannot start or end with a hyphen")
+		return fmt.Errorf("username cannot start or end with a hyphen (-)")
 	}
 
 	if strings.HasPrefix(username, "_") || strings.HasSuffix(username, "_") {
-		return fmt.Errorf("username cannot start or end with an underscore")
+		return fmt.Errorf("username cannot start or end with an underscore (_)")
 	}
 
 	// Check for consecutive special characters
 	if strings.Contains(username, "..") || strings.Contains(username, ",,") ||
 		strings.Contains(username, "__") || strings.Contains(username, "--") {
-		return fmt.Errorf("username cannot contain consecutive special characters")
+		return fmt.Errorf("username cannot contain consecutive special characters (.., ,,, __, --)")
 	}
 
 	return nil

@@ -23,6 +23,7 @@ import (
 
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/config"
+	"github.com/84adam/Arkfile/crypto"
 	"github.com/pquerna/otp/totp"
 )
 
@@ -66,8 +67,8 @@ EXAMPLES:
     
     # User management:
     arkfile-admin list-users
-    arkfile-admin approve-user --username alice
-    arkfile-admin set-storage --username alice --limit 10GB
+    arkfile-admin approve-user --username alice12345
+    arkfile-admin set-storage --username alice12345 --limit 10GB
     
     # System monitoring:
     arkfile-admin system-status
@@ -368,6 +369,11 @@ EXAMPLES:
 		return fmt.Errorf("bootstrap token is required")
 	}
 
+	// Validate username before prompting for password
+	if err := validateAdminUsername(*usernameFlag); err != nil {
+		return err
+	}
+
 	// Get password securely
 	fmt.Printf("Enter password for admin user %s: ", *usernameFlag)
 	password, err := readPassword()
@@ -385,6 +391,19 @@ EXAMPLES:
 	// Verify passwords match
 	if password != passwordConfirm {
 		return fmt.Errorf("passwords do not match")
+	}
+
+	// Validate password meets requirements (min/max length, character classes)
+	validation := crypto.ValidateAccountPassword(password)
+	if !validation.MeetsRequirement {
+		reasons := ""
+		for i, r := range validation.Reasons {
+			if i > 0 {
+				reasons += "; "
+			}
+			reasons += r
+		}
+		return fmt.Errorf("password does not meet requirements: %s", reasons)
 	}
 
 	// Perform OPAQUE multi-step registration
@@ -987,8 +1006,8 @@ FLAGS:
     --help             Show this help message
 
 EXAMPLES:
-    arkfile-admin approve-user --username alice
-    arkfile-admin approve-user --username bob --storage 10GB
+    arkfile-admin approve-user --username alice12345
+    arkfile-admin approve-user --username bob.123.ABC --storage 10GB
 `)
 	}
 
@@ -1060,8 +1079,8 @@ FLAGS:
     --help             Show this help message
 
 EXAMPLES:
-    arkfile-admin revoke-user --username alice
-    arkfile-admin revoke-user --username bob --confirm
+    arkfile-admin revoke-user --username alice12345
+    arkfile-admin revoke-user --username bob.123.ABC --confirm
 `)
 	}
 
@@ -1128,7 +1147,7 @@ FLAGS:
     --help             Show this help message
 
 EXAMPLES:
-    arkfile-admin user-status --username alice
+    arkfile-admin user-status --username alice12345
 `)
 	}
 
@@ -1270,8 +1289,8 @@ FLAGS:
     --help             Show this help message
 
 EXAMPLES:
-    arkfile-admin user-contact-info --username alice
-    arkfile-admin user-contact-info --username alice --json
+    arkfile-admin user-contact-info --username alice12345
+    arkfile-admin user-contact-info --username alice12345 --json
 `)
 	}
 
@@ -1376,8 +1395,8 @@ FLAGS:
     --help             Show this help message
 
 EXAMPLES:
-    arkfile-admin set-storage --username alice --limit 10GB
-    arkfile-admin set-storage --username bob --limit 500MB
+    arkfile-admin set-storage --username alice12345 --limit 10GB
+    arkfile-admin set-storage --username bob.123.ABC --limit 500MB
 `)
 	}
 
@@ -1997,6 +2016,27 @@ func statusStr(m map[string]interface{}) string {
 		return "approved"
 	}
 	return "pending"
+}
+
+// validateAdminUsername validates username requirements locally before prompting for password.
+// Mirrors utils.ValidateUsername() logic without requiring the utils import (which the
+// auto-formatter strips due to naming conflicts with local variables).
+func validateAdminUsername(username string) error {
+	if username == "" {
+		return fmt.Errorf("username is required")
+	}
+	if len(username) < 10 {
+		return fmt.Errorf("invalid username: must be at least 10 characters (currently %d)\n\nUsername requirements: 10-50 characters, allowed: a-z A-Z 0-9 _ - . ,", len(username))
+	}
+	if len(username) > 50 {
+		return fmt.Errorf("invalid username: must be at most 50 characters\n\nUsername requirements: 10-50 characters, allowed: a-z A-Z 0-9 _ - . ,")
+	}
+	for _, r := range username {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' || r == ',') {
+			return fmt.Errorf("invalid username: can only contain letters (a-z, A-Z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)")
+		}
+	}
+	return nil
 }
 
 // readPassword reads a password from stdin. If stdin is a terminal, it will

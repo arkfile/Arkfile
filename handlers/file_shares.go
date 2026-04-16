@@ -167,7 +167,9 @@ func CreateFileShare(c echo.Context) error {
 	})
 }
 
-// GetShareEnvelope returns the encrypted FEK and metadata for a share (for client-side decryption)
+// GetShareEnvelope returns the encrypted envelope and salt for a share.
+// The server does NOT receive or process share passwords. Share key derivation
+// (Argon2id) and envelope decryption happen entirely client-side.
 func GetShareEnvelope(c echo.Context) error {
 	shareID := c.Param("id")
 	if shareID == "" {

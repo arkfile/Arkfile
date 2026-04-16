@@ -46,9 +46,15 @@ func GenerateShareSalt() (string, error) {
 	return base64.StdEncoding.EncodeToString(salt), nil
 }
 
-// DeriveShareKey derives a 256-bit key from a password and salt using Argon2id
-// This is primarily used for testing/validation, as the actual derivation happens client-side
+// DeriveShareKey derives a 256-bit key from a password and salt using Argon2id.
+// This function is used by the CLI client (cmd/arkfile-client) and tests only.
+// It is NEVER called from server handlers -- all share key derivation for
+// clients happens client-side in TypeScript or Go CLI client utils.
 func DeriveShareKey(password string, saltBase64 string) ([]byte, error) {
+	if len(password) > MaxPasswordBytes {
+		return nil, fmt.Errorf("password too long: %d bytes (maximum %d)", len(password), MaxPasswordBytes)
+	}
+
 	salt, err := base64.StdEncoding.DecodeString(saltBase64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid salt encoding: %w", err)
@@ -102,9 +108,9 @@ func VerifyDownloadToken(downloadTokenBase64 string, expectedHashBase64 string) 
 type ShareEnvelope struct {
 	FEK           string `json:"fek"`                  // base64-encoded FEK
 	DownloadToken string `json:"download_token"`       // base64-encoded Download Token
-	Filename      string `json:"filename,omitempty"`   // plaintext filename (optional for backward compat)
-	SizeBytes     int64  `json:"size_bytes,omitempty"` // file size in bytes (optional for backward compat)
-	SHA256        string `json:"sha256,omitempty"`     // plaintext SHA256 hex digest (optional for backward compat)
+	Filename      string `json:"filename,omitempty"`   // plaintext filename (for share recipient preview)
+	SizeBytes     int64  `json:"size_bytes,omitempty"` // file size in bytes (for share recipient preview)
+	SHA256        string `json:"sha256,omitempty"`     // plaintext SHA256 hex digest (for share recipient integrity verification)
 }
 
 // GenerateDownloadToken generates a cryptographically secure 32-byte Download Token

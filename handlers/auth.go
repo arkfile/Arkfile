@@ -48,7 +48,7 @@ func RefreshToken(c echo.Context) error {
 
 	// LAZY REVOCATION CHECK: Check for user-wide JWT revocations during refresh token operation
 	// This implements the Netflix/Spotify model where we only check revocations during refresh,
-	// not on every API request. This catches edge cases like password changes and admin force-logout.
+	// not on every API request. This catches edge cases like credential re-registration and admin force-logout.
 	currentTime := time.Now()
 	isUserRevoked, err := auth.IsUserJWTRevoked(database.DB, username, currentTime)
 	if err != nil {
@@ -187,7 +187,7 @@ func RevokeAllRefreshTokens(c echo.Context) error {
 
 // ForceRevokeAllTokens implements security-critical revocation for edge cases
 // This function revokes BOTH refresh tokens AND active JWT tokens immediately
-// Used for: password changes, admin force-logout, security breaches
+// Used for: OPAQUE credential re-registration, admin force-logout, security breaches
 func ForceRevokeAllTokens(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 
@@ -266,12 +266,6 @@ func AdminForceLogout(c echo.Context) error {
 
 // Multi-Step OPAQUE Registration Types
 
-// OpaqueRegisterInitRequest represents the initial registration request
-type OpaqueRegisterInitRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
 // OpaqueRegisterResponseRequest represents the server response request
 type OpaqueRegisterResponseRequest struct {
 	RegistrationRequest string `json:"registration_request"` // base64 encoded
@@ -305,9 +299,12 @@ func OpaqueRegisterResponse(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
-	// Validate username
+	// Validate username format (fail fast before creating OPAQUE session)
 	if request.Username == "" {
 		return JSONError(c, http.StatusBadRequest, "Username is required")
+	}
+	if err := utils.ValidateUsername(request.Username); err != nil {
+		return JSONError(c, http.StatusBadRequest, "Invalid username: "+err.Error())
 	}
 
 	// Decode registration request from client

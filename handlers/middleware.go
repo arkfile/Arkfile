@@ -372,7 +372,7 @@ func TimingProtectionMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 // requiresTimingProtection checks if an endpoint requires timing protection
 func requiresTimingProtection(path string) bool {
 	protectedEndpoints := []string{
-		"/api/share/", // Share password authentication
+		"/api/share/", // Share envelope access (no auth required, client-side decryption)
 		"/shared/",    // Share page access
 	}
 

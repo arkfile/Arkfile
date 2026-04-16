@@ -109,10 +109,19 @@ func GetEmbeddedArgon2ParamsJSON() []byte {
 //
 // This is a well-established pattern in cryptographic key management systems.
 
+// MaxPasswordBytes is the defense-in-depth limit for password inputs to Argon2id.
+// This prevents absurdly long inputs from wasting memory on string allocation.
+// The primary enforcement is in the validation layer (password_validation.go);
+// this is a safety net in case validation is bypassed.
+const MaxPasswordBytes = 1024
+
 // DeriveArgon2IDKey derives a key using Argon2ID with specified parameters
 func DeriveArgon2IDKey(password, salt []byte, keyLen uint32, memory, time uint32, threads uint8) ([]byte, error) {
 	if len(password) == 0 {
 		return nil, fmt.Errorf("password cannot be empty")
+	}
+	if len(password) > MaxPasswordBytes {
+		return nil, fmt.Errorf("password too long: %d bytes (maximum %d)", len(password), MaxPasswordBytes)
 	}
 	if len(salt) == 0 {
 		return nil, fmt.Errorf("salt cannot be empty")

@@ -16,6 +16,7 @@ type PasswordRequirements struct {
 	MinAccountPasswordLength    int    `json:"minAccountPasswordLength"`
 	MinCustomPasswordLength     int    `json:"minCustomPasswordLength"`
 	MinSharePasswordLength      int    `json:"minSharePasswordLength"`
+	MaxPasswordLength           int    `json:"maxPasswordLength"`
 	MinCharacterClassesRequired int    `json:"minCharacterClassesRequired"`
 	SpecialCharacters           string `json:"specialCharacters"`
 }
@@ -81,9 +82,33 @@ type RequirementStatus struct {
 }
 
 // ValidatePassword performs deterministic password validation.
-// Pass = (length >= minLength) AND (character classes met >= minCharacterClassesRequired)
-func ValidatePassword(password string, minLength int, minClasses int, specialChars string) *PasswordValidationResult {
+// Pass = (length >= minLength) AND (length <= maxLength) AND (character classes met >= minCharacterClassesRequired)
+// maxLength of 0 means no maximum is enforced.
+func ValidatePassword(password string, minLength int, maxLength int, minClasses int, specialChars string) *PasswordValidationResult {
 	length := len(password)
+
+	// Check max length first (fail fast on absurdly long inputs)
+	if maxLength > 0 && length > maxLength {
+		return &PasswordValidationResult{
+			MeetsRequirement: false,
+			Requirements: RequirementChecks{
+				Length: RequirementStatus{
+					Met:     false,
+					Current: length,
+					Needed:  minLength,
+					Message: fmt.Sprintf("Password too long (maximum %d characters)", maxLength),
+				},
+				Uppercase:       RequirementStatus{Met: false, Message: ""},
+				Lowercase:       RequirementStatus{Met: false, Message: ""},
+				Number:          RequirementStatus{Met: false, Message: ""},
+				Special:         RequirementStatus{Met: false, Message: ""},
+				ClassCount:      0,
+				ClassesRequired: minClasses,
+			},
+			Reasons: []string{fmt.Sprintf("Password too long: %d characters (maximum %d)", length, maxLength)},
+		}
+	}
+
 	hasUpper := false
 	hasLower := false
 	hasNumber := false
@@ -205,17 +230,17 @@ func ValidatePassword(password string, minLength int, minClasses int, specialCha
 // ValidateAccountPassword validates account passwords using config requirements
 func ValidateAccountPassword(password string) *PasswordValidationResult {
 	reqs := GetPasswordRequirements()
-	return ValidatePassword(password, reqs.MinAccountPasswordLength, reqs.MinCharacterClassesRequired, reqs.SpecialCharacters)
+	return ValidatePassword(password, reqs.MinAccountPasswordLength, reqs.MaxPasswordLength, reqs.MinCharacterClassesRequired, reqs.SpecialCharacters)
 }
 
 // ValidateSharePassword validates share passwords using config requirements
 func ValidateSharePassword(password string) *PasswordValidationResult {
 	reqs := GetPasswordRequirements()
-	return ValidatePassword(password, reqs.MinSharePasswordLength, reqs.MinCharacterClassesRequired, reqs.SpecialCharacters)
+	return ValidatePassword(password, reqs.MinSharePasswordLength, reqs.MaxPasswordLength, reqs.MinCharacterClassesRequired, reqs.SpecialCharacters)
 }
 
 // ValidateCustomPassword validates custom passwords using config requirements
 func ValidateCustomPassword(password string) *PasswordValidationResult {
 	reqs := GetPasswordRequirements()
-	return ValidatePassword(password, reqs.MinCustomPasswordLength, reqs.MinCharacterClassesRequired, reqs.SpecialCharacters)
+	return ValidatePassword(password, reqs.MinCustomPasswordLength, reqs.MaxPasswordLength, reqs.MinCharacterClassesRequired, reqs.SpecialCharacters)
 }

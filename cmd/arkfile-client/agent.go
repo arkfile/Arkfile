@@ -300,7 +300,7 @@ func (a *Agent) handlePing(conn net.Conn) {
 //
 //	{
 //	  "account_key": "<base64>",
-//	  "username": "alice",
+//	  "username": "alice12345",
 //	  "token_hash": "<sha256 hex of access token>",
 //	  "ttl_hours": 1
 //	}
@@ -397,7 +397,7 @@ func (a *Agent) handleStoreAccountKey(conn net.Conn, params map[string]interface
 //
 //	{
 //	  "account_key": "<base64>",
-//	  "username": "alice",
+//	  "username": "alice12345",
 //	  "context": "account",
 //	  "stored_at": "<RFC3339>",
 //	  "expires_at": "<RFC3339>",

@@ -15,6 +15,7 @@ interface PasswordConfig {
   minAccountPasswordLength: number;
   minCustomPasswordLength: number;
   minSharePasswordLength: number;
+  maxPasswordLength: number;
   minCharacterClassesRequired: number;
   specialCharacters: string;
 }
@@ -78,15 +79,40 @@ export interface PasswordValidationResult {
 
 /**
  * Check password requirements deterministically.
- * Pass = (length >= minLength) AND (character classes >= minClasses)
+ * Pass = (length >= minLength) AND (length <= maxLength) AND (character classes >= minClasses)
+ * maxLength of 0 means no maximum is enforced.
  */
 function checkPassword(
   password: string,
   minLength: number,
+  maxLength: number,
   minClasses: number,
   specialChars: string
 ): PasswordValidationResult {
   const length = password.length;
+
+  // Check max length first (fail fast on absurdly long inputs)
+  if (maxLength > 0 && length > maxLength) {
+    return {
+      meets_requirements: false,
+      requirements: {
+        length: {
+          met: false,
+          current: length,
+          needed: minLength,
+          message: `Password too long (maximum ${maxLength} characters)`,
+        },
+        uppercase: { met: false, message: '' },
+        lowercase: { met: false, message: '' },
+        number: { met: false, message: '' },
+        special: { met: false, message: '' },
+        class_count: 0,
+        classes_required: minClasses,
+      },
+      reasons: [`Password too long: ${length} characters (maximum ${maxLength})`],
+    };
+  }
+
   let hasUpper = false;
   let hasLower = false;
   let hasNumber = false;
@@ -192,11 +218,13 @@ function checkPassword(
 }
 
 /**
- * Validate password with explicit parameters
+ * Validate password with explicit parameters.
+ * maxLength of 0 means no maximum is enforced.
  */
 export function validatePassword(
   password: string,
   minLength: number,
+  maxLength: number,
   minClasses: number,
   specialChars: string
 ): PasswordValidationResult {
@@ -216,7 +244,7 @@ export function validatePassword(
     };
   }
 
-  return checkPassword(password, minLength, minClasses, specialChars);
+  return checkPassword(password, minLength, maxLength, minClasses, specialChars);
 }
 
 /**
@@ -229,6 +257,7 @@ export async function validateAccountPassword(
   return validatePassword(
     password,
     config.minAccountPasswordLength,
+    config.maxPasswordLength,
     config.minCharacterClassesRequired,
     config.specialCharacters
   );
@@ -244,6 +273,7 @@ export async function validateSharePassword(
   return validatePassword(
     password,
     config.minSharePasswordLength,
+    config.maxPasswordLength,
     config.minCharacterClassesRequired,
     config.specialCharacters
   );
@@ -259,6 +289,7 @@ export async function validateCustomPassword(
   return validatePassword(
     password,
     config.minCustomPasswordLength,
+    config.maxPasswordLength,
     config.minCharacterClassesRequired,
     config.specialCharacters
   );

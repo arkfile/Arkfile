@@ -16,6 +16,37 @@ export interface RegisterCredentials {
   password: string;
 }
 
+// Username validation constants (mirrors Go utils/username_validator.go)
+const MIN_USERNAME_LENGTH = 10;
+const MAX_USERNAME_LENGTH = 50;
+const USERNAME_PATTERN = /^[a-zA-Z0-9_\-.,]{10,50}$/;
+
+/**
+ * Client-side username validation. Mirrors Go utils.ValidateUsername() exactly.
+ * Returns null if valid, or an error message string if invalid.
+ */
+function validateUsernameClientSide(username: string): string | null {
+  if (!username) {
+    return 'Username is required.';
+  }
+  if (username.length < MIN_USERNAME_LENGTH) {
+    return `Username must be at least ${MIN_USERNAME_LENGTH} characters (currently ${username.length}).`;
+  }
+  if (username.length > MAX_USERNAME_LENGTH) {
+    return `Username must be at most ${MAX_USERNAME_LENGTH} characters.`;
+  }
+  if (!USERNAME_PATTERN.test(username)) {
+    return 'Username can only contain: letters (a-z, A-Z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)';
+  }
+  if (/^[._,\-]/.test(username) || /[._,\-]$/.test(username)) {
+    return 'Username cannot start or end with special characters (_, -, ., ,).';
+  }
+  if (/\.\.|\,\,|__|--/.test(username)) {
+    return 'Username cannot contain consecutive special characters.';
+  }
+  return null;
+}
+
 export interface RegistrationResponse {
   token: string;
   refresh_token: string;
@@ -206,6 +237,13 @@ export function setupRegisterForm(): void {
     const password = passwordInput.value;
     const confirmPassword = confirmPasswordInput.value;
 
+    // Validate username meets requirements (client-side, mirrors Go utils.ValidateUsername)
+    const usernameError = validateUsernameClientSide(username);
+    if (usernameError) {
+      showError(usernameError);
+      return;
+    }
+
     // Validate passwords match
     if (password !== confirmPassword) {
       showError('Passwords do not match.');
@@ -266,9 +304,25 @@ export async function register(): Promise<void> {
   const password = passwordInput.value;
   const confirmPassword = confirmPasswordInput.value;
 
+  // Validate username meets requirements (client-side, mirrors Go utils.ValidateUsername)
+  const usernameError = validateUsernameClientSide(username);
+  if (usernameError) {
+    showError(usernameError);
+    return;
+  }
+
   // Validate passwords match
   if (password !== confirmPassword) {
     showError('Passwords do not match.');
+    return;
+  }
+
+  // Validate password meets requirements using unified config from API.
+  // The password is NEVER sent to the server -- OPAQUE ensures the server
+  // never learns the password, so validation must happen entirely client-side.
+  const validation = await validateAccountPassword(password);
+  if (!validation.meets_requirements) {
+    showError(validation.reasons.join('. ') || 'Password does not meet requirements.');
     return;
   }
 

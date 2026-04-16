@@ -23,6 +23,7 @@ import (
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/config"
 	"github.com/84adam/Arkfile/crypto"
+	"github.com/84adam/Arkfile/utils"
 	"golang.org/x/term"
 )
 
@@ -66,12 +67,12 @@ GLOBAL OPTIONS:
     --help, -h          Show help
 
 EXAMPLES:
-    arkfile-client register --username alice
-    arkfile-client login --username alice
-    arkfile-client upload --file document.pdf --username alice
-    arkfile-client upload --file document.pdf --username alice --password-type custom
-    arkfile-client upload --file document.pdf --username alice --force
-    arkfile-client download --file-id abc123 --output document.pdf --username alice
+    arkfile-client register --username alice12345
+    arkfile-client login --username alice12345
+    arkfile-client upload --file document.pdf --username alice12345
+    arkfile-client upload --file document.pdf --username alice12345 --password-type custom
+    arkfile-client upload --file document.pdf --username alice12345 --force
+    arkfile-client download --file-id abc123 --output document.pdf --username alice12345
     arkfile-client list-files
     arkfile-client list-files --json
     arkfile-client list-files --raw
@@ -502,6 +503,11 @@ func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []stri
 
 	if *usernameFlag == "" {
 		return fmt.Errorf("username is required")
+	}
+
+	// Validate username before prompting for password
+	if err := utils.ValidateUsername(*usernameFlag); err != nil {
+		return fmt.Errorf("invalid username: %w\n\nUsername requirements: 10-50 characters, allowed: a-z A-Z 0-9 _ - . ,", err)
 	}
 
 	password, err := readPasswordWithStrengthCheck(
