@@ -32,7 +32,6 @@ declare global {
   interface Window {
     arkfileApp?: unknown;
     arkfile?: ArkfileNamespace;
-    arkfileSecurityContext?: unknown;
     registrationData?: unknown;
     totpLoginData?: TOTPFlowData;
     totpSetupData?: TOTPSetupFlowData;

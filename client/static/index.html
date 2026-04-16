@@ -89,8 +89,8 @@
         <div class="auth-section" id="auth-section">
             <div class="login-form" id="login-form">
                 <h2>Login</h2>
-                <input type="text" id="login-username" placeholder="Username">
-                <input type="password" id="login-password" placeholder="Password">
+                <input type="text" id="login-username" placeholder="Username" autocomplete="off">
+                <input type="password" id="login-password" placeholder="Password" autocomplete="off">
                 <button type="button" id="login-submit-btn">Login</button>
                 <p>Don't have an account? <a href="#" id="show-register-link">Register</a></p>
                 <p><a href="#" id="back-to-home-link">← Back to Home</a></p>
@@ -98,9 +98,9 @@
 
             <div class="register-form hidden" id="register-form">
                 <h2>Register</h2>
-                <input type="text" id="register-username" placeholder="Username (10-50 chars: a-z A-Z 0-9 _ - . ,)" minlength="10" maxlength="50" pattern="[a-zA-Z0-9_\-.,]{10,50}">
+                <input type="text" id="register-username" placeholder="Username (10-50 chars: a-z A-Z 0-9 _ - . ,)" minlength="10" maxlength="50" pattern="[a-zA-Z0-9_\-.,]{10,50}" autocomplete="off">
                 <div class="password-section">
-                    <input type="password" id="register-password" placeholder="Password (min. 15 characters)">
+                    <input type="password" id="register-password" placeholder="Password (min. 15 characters)" autocomplete="off">
                     <div class="password-requirements">
                         <div id="register-password-strength" class="strength-meter"></div>
                         <ul class="requirements-list">
@@ -112,7 +112,7 @@
                             <li>Special character: `~!@#$%^&amp;*()-_=+[]{}|;:,.&lt;&gt;? (space)</li>
                         </ul>
                     </div>
-                    <input type="password" id="register-password-confirm" placeholder="Confirm Password">
+                    <input type="password" id="register-password-confirm" placeholder="Confirm Password" autocomplete="off">
                     <div class="password-confirmation">
                         <div id="password-match-status" class="match-status"></div>
                     </div>

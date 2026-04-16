@@ -289,18 +289,10 @@ export class AuthManager {
     // Clear digest cache (SHA-256 digests are sensitive — content fingerprinting)
     clearDigestCache();
     
-    // Clear any legacy session context
+    // Clear window-level auth flow data
     if (typeof window !== 'undefined') {
-      // @ts-ignore - Legacy cleanup
-      delete window.arkfileSecurityContext;
-      
-      // @ts-ignore - Legacy cleanup
       delete window.registrationData;
-      
-      // @ts-ignore - Legacy cleanup
       delete window.totpLoginData;
-      
-      // @ts-ignore - Legacy cleanup
       delete window.totpSetupData;
     }
   }

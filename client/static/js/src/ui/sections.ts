@@ -38,6 +38,16 @@ export function showAuthSection(): void {
   if (registerForm) registerForm.classList.add('hidden');
   if (totpSetupForm) totpSetupForm.classList.add('hidden');
   if (pendingApprovalSection) pendingApprovalSection.classList.add('hidden');
+
+  // Clear all auth form input values so credentials don't persist after logout
+  const authInputIds = [
+    'login-username', 'login-password',
+    'register-username', 'register-password', 'register-password-confirm',
+  ];
+  for (const id of authInputIds) {
+    const input = document.getElementById(id) as HTMLInputElement | null;
+    if (input) input.value = '';
+  }
 }
 
 export function toggleAuthForm(): void {
