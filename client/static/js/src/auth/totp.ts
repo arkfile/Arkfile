@@ -308,10 +308,13 @@ export async function initiateTOTPSetup(): Promise<TOTPSetupData | null> {
     hideProgress();
     
     if (response.ok) {
-      const data: TOTPSetupResponse = await response.json();
+      const result = await response.json();
+      // Unwrap JSONResponse envelope: { success, message, data: { ... } }
+      const data = (result.data || result) as any;
       return {
         secret: data.secret,
-        qr_code_url: data.qr_code_url,
+        // Prefer the base64 data URI (qr_code_image) over the otpauth:// URL (qr_code_url)
+        qr_code_url: data.qr_code_image || data.qr_code_url,
         backup_codes: data.backup_codes,
         manual_entry: data.manual_entry
       };
