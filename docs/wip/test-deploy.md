@@ -962,3 +962,98 @@ These files contain outdated references and will be updated as part of this effo
 5. Update `docs/setup.md` to reflect current state
 6. Test on a fresh VPS with `test.arkfile.net` DNS configured
 7. Document admin bootstrap walkthrough with real output
+
+---
+
+# ADDITIONAL STEPS THAT WERE REQUIRED TO PREPARE A VPS FULLY (`test.arkfile.net`)
+
+1. OS update and reboot
+
+```bash
+dnf update -y
+reboot
+```
+
+2. Create a non-root sudo user
+
+```bash
+useradd -m -s /bin/bash user
+passwd user
+usermod -aG wheel user
+```
+Configure SSH for this user (password login allowed or key-based).
+
+3. Install build dependencies
+
+```bash
+dnf install -y gcc make cmake pkg-config git openssl curl bind-utils
+```
+(`bind-utils` provides `dig`, used by the script for DNS verification)
+
+4. Install libsodium from EPEL
+```bash
+dnf install -y epel-release
+dnf install -y libsodium-devel
+```
+
+5. Enable CRB (CodeReady Builder) and install static libraries
+
+Required for fully static Go binary linking:
+```bash
+dnf config-manager --set-enabled crb
+dnf install -y glibc-static libsodium-static
+```
+
+6. Install Go 1.26+ manually (package manager version too old)
+```bash
+dnf remove -y golang   # remove old version if installed
+cd /tmp
+curl -LO https://go.dev/dl/go1.26.1.linux-amd64.tar.gz
+tar -C /usr/local -xzf go1.26.1.linux-amd64.tar.gz
+cat > /etc/profile.d/golang.sh << 'EOF'
+export PATH=$PATH:/usr/local/go/bin
+EOF
+source /etc/profile.d/golang.sh
+```
+
+7. Install Bun (TypeScript compiler) system-wide
+
+```bash
+# Install as root
+curl -fsSL https://bun.sh/install | bash
+# Copy (not symlink) to /usr/local/bin so all users and sudo can find it
+cp /root/.bun/bin/bun /usr/local/bin/bun
+chmod 755 /usr/local/bin/bun
+```
+Note: symlinking fails because `/root/` is mode 700.
+
+8. DNS and deSEC setup (before running the script)
+
+- Create a deSEC account at desec.io with "Managed domain"
+- Add your domain (e.g. `arkfile.net`) to deSEC
+- Point your registrar's nameservers to `ns1.desec.io` / `ns2.desec.org`
+- Create an A record in deSEC: `test` -> your VPS public IP
+- Generate a deSEC API token (Token Management → Generate New Token)
+  - Set subnet restriction to your VPS public IP for security if you wish
+  - "Can create domains" not required; uncheck for narrower scope
+- Verify DNSSEC chain is intact (all green) following the instructions given
+- Verify DNS resolves: `dig test.arkfile.net` returns VPS IP
+
+9. Clone the repo
+
+```bash
+git clone https://github.com/arkfile/Arkfile.git
+cd Arkfile
+git submodule update --init --recursive
+```
+
+10. Run the deployment script
+
+```bash
+sudo bash scripts/test-deploy.sh \
+  --domain test.arkfile.net \
+  --desec-token <YOUR_DESEC_TOKEN> \
+  --admin-username <YOUR_ADMIN_USERNAME>
+```
+
+---
