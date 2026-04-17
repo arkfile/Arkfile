@@ -229,7 +229,6 @@ func ForceRevokeAllTokens(c echo.Context) error {
 
 // AdminForceLogout allows admin to force-logout a specific user (admin-only endpoint)
 func AdminForceLogout(c echo.Context) error {
-	// This will be used by admin endpoints - placeholder for now
 	targetUsername := c.Param("username")
 	adminUsername := auth.GetUsernameFromToken(c)
 

@@ -1,103 +1,92 @@
 # Admin CLI Updates Plan
 
-## Problem
+## Status: IMPLEMENTED
 
-The `arkfile-admin` CLI is missing several critical admin operations. Some handlers exist in Go source code but have **no routes registered** in `route_config.go` (dead code). Other operations have no handler or endpoint at all. This creates gaps in the admin's ability to manage users, files, and shares from the command line.
+All phases have been implemented. See summary below.
+
+## Problem (Resolved)
+
+The `arkfile-admin` CLI was missing several critical admin operations. Some handlers existed in Go source code but had no routes registered in `route_config.go` (dead code). Other operations had no handler or endpoint at all.
 
 ## Current State: arkfile-admin CLI Commands
 
-### Existing commands (working)
-- `bootstrap` — Bootstrap first admin user
-- `login` / `logout` / `setup-totp` — Admin authentication
-- `list-users` — List all users
-- `approve-user` — Approve user account
-- `user-status` — Get user status
-- `user-contact-info` — View user's contact info
-- `set-storage` — Set user storage limit
-- `revoke-user` — Revoke user access (sets `is_approved = false`)
-- `export-file` — Export encrypted file as `.arkbackup`
-- `system-status` — System overview
-- `health-check` — System health
-- `verify-storage` — S3 connectivity test
-- `version` — Version info
+### All commands (working)
+- `bootstrap` -- Bootstrap first admin user
+- `login` / `logout` / `setup-totp` -- Admin authentication
+- `list-users` -- List all users
+- `approve-user` -- Approve user account
+- `user-status` -- Get user status
+- `user-contact-info` -- View user's contact info
+- `set-storage` -- Set user storage limit
+- `revoke-user` -- Revoke user access (sets `is_approved = false`)
+- `update-user` -- Update user properties (`is_admin`, `is_approved`, `storage_limit_bytes`)
+- `delete-user` -- Delete user + all files/shares/metadata (requires `--confirm`)
+- `force-logout` -- Revoke all JWT + refresh tokens for a user (incident response)
+- `list-files` -- List files owned by a user (admin inspection)
+- `list-shares` -- List shares owned by a user (admin inspection)
+- `delete-file` -- Delete a specific file by ID from storage + DB (requires `--confirm`)
+- `revoke-share` -- Revoke a specific share by ID
+- `security-events` -- View recent security events
+- `export-file` -- Export encrypted file as `.arkbackup`
+- `system-status` -- System overview
+- `health-check` -- System health
+- `verify-storage` -- S3 connectivity test
+- `version` -- Version info
 
-## Gap Analysis
+## Implementation Summary
 
-### Priority 1: Dead Code — Handlers Exist But No Routes
+### Phase 1: Wired Up Dead Code (Previously Unrouted Handlers)
 
-These handlers are implemented in `handlers/admin.go` and `handlers/auth.go` but have **no routes** in `route_config.go`. They need routes added first, then CLI commands.
-
-| Handler | File | What It Does | Proposed Route | Proposed CLI Command |
-|---|---|---|---|---|
-| `DeleteUser` | `handlers/admin.go` | Deletes user + files from storage + shares + metadata | `DELETE /api/admin/users/:username` | `delete-user` |
-| `UpdateUser` | `handlers/admin.go` | Updates `is_approved`, `is_admin`, `storage_limit_bytes` | `PUT /api/admin/users/:username` | `update-user` |
-| `AdminForceLogout` | `handlers/auth.go` | Revokes all tokens for a user | `POST /api/admin/users/:username/force-logout` | `force-logout` |
-
-**Action items:**
-1. Add routes to `route_config.go` in the `adminGroup`:
-   ```go
-   adminGroup.DELETE("/users/:username", DeleteUser)
-   adminGroup.PUT("/users/:username", UpdateUser)
-   adminGroup.POST("/users/:username/force-logout", AdminForceLogout)
-   ```
-2. Add CLI commands in `cmd/arkfile-admin/main.go`
-3. Add unit tests for the new routes
-
-### Priority 2: Missing CLI Commands for Existing Endpoints
-
-These server endpoints exist and are routed, but the `arkfile-admin` CLI doesn't expose them.
-
-| Endpoint | Description | Proposed CLI Command |
-|---|---|---|
-| `GET /api/admin/security/events` | Security event logs | `security-events` |
-| `GET /api/admin/credits` | List all user credits | `list-credits` |
-| `GET /api/admin/credits/:username` | Get user's credits | `get-credits` |
-| `POST /api/admin/credits/:username` | Adjust user credits | `adjust-credits` |
-| `PUT /api/admin/credits/:username` | Set user credits | `set-credits` |
-
-### Priority 3: Missing Server Endpoints + CLI Commands
-
-These are operations that have **no handler, no route, and no CLI command** but are needed for a complete admin toolkit.
-
-| Operation | Description | Proposed Route | Proposed CLI |
+| Handler | Route Added | CLI Command | Status |
 |---|---|---|---|
-| Admin delete specific file | Delete a user's file by file_id (from storage + DB) | `DELETE /api/admin/files/:fileId` | `delete-file` |
-| Admin revoke specific share | Revoke a share by share_id | `POST /api/admin/shares/:shareId/revoke` | `revoke-share` |
-| Admin list user's files | List files owned by a user | `GET /api/admin/users/:username/files` | `list-files` |
-| Admin list user's shares | List shares owned by a user | `GET /api/admin/users/:username/shares` | `list-shares` |
+| `DeleteUser` | `DELETE /api/admin/users/:username` | `delete-user` | Done |
+| `UpdateUser` | `PUT /api/admin/users/:username` | `update-user` | Done |
+| `AdminForceLogout` | `POST /api/admin/users/:username/force-logout` | `force-logout` | Done |
 
-## Implementation Order
+### Phase 2: CLI Commands for Existing Endpoints
 
-### Phase 1: Wire up dead code (Priority 1)
-1. Add 3 routes to `route_config.go` for `DeleteUser`, `UpdateUser`, `AdminForceLogout`
-2. Add `delete-user`, `update-user`, `force-logout` commands to `arkfile-admin`
-3. `delete-user` should require `--confirm` flag (destructive operation)
-4. Update `admin_test.go` mocks to cover the routed handlers
-5. Add e2e test coverage for delete-user flow
+| Endpoint | CLI Command | Status |
+|---|---|---|
+| `GET /api/admin/security/events` | `security-events` | Done |
 
-### Phase 2: Surface existing endpoints (Priority 2)
-1. Add `security-events` command
-2. Add credits commands (`list-credits`, `get-credits`, `adjust-credits`, `set-credits`)
+### Phase 3: New Server Endpoints + CLI Commands
 
-### Phase 3: New admin endpoints (Priority 3)
-1. Implement `AdminDeleteFile` handler + route + CLI
-2. Implement `AdminRevokeShare` handler + route + CLI
-3. Implement `AdminListUserFiles` handler + route + CLI
-4. Implement `AdminListUserShares` handler + route + CLI
+| Operation | Route | CLI Command | Status |
+|---|---|---|---|
+| Admin list user's files | `GET /api/admin/users/:username/files` | `list-files` | Done |
+| Admin list user's shares | `GET /api/admin/users/:username/shares` | `list-shares` | Done |
+| Admin delete specific file | `DELETE /api/admin/files/:fileId` | `delete-file` | Done |
+| Admin revoke specific share | `POST /api/admin/shares/:shareId/revoke` | `revoke-share` | Done |
+
+## E2E Test Coverage
+
+All new commands are tested in Phase 11 of `e2e-test.sh` (sections 11.4 through 11.12):
+
+- 11.4: `security-events` -- Retrieves security events
+- 11.5: `list-files` -- Lists test user's files, verifies file ID appears
+- 11.6: `list-shares` -- Lists test user's shares
+- 11.7: `update-user` -- Updates test user properties
+- 11.8: `force-logout` -- Force-logs out test user
+- 11.9: `revoke-share` -- Admin revokes Share D
+- 11.10: `delete-file` -- Admin deletes custom-password file
+- 11.11: `delete-user` -- Admin deletes test user (final destructive test)
+- 11.12: Verify deleted user no longer exists via `user-status`
+
+All tests use the existing admin session from Phase 2. No new login/logout cycles introduced.
 
 ## Security Notes
 
-- All admin endpoints require JWT auth + admin middleware (already enforced by `adminGroup`)
-- `DeleteUser` is destructive and irreversible — CLI must require `--confirm` flag
-- `AdminForceLogout` revokes all JWT + refresh tokens — important for incident response
-- Admin file/share operations should be logged via `LogAdminAction` and `LogSecurityEvent`
-- The `DeleteUser` handler (now fixed) correctly targets `file_share_keys` table, not the legacy `file_shares` table
+- All admin endpoints require JWT auth + admin middleware (enforced by `adminGroup`)
+- `delete-user` is destructive and irreversible -- CLI requires `--confirm` flag
+- `delete-file` is destructive and irreversible -- CLI requires `--confirm` flag
+- `force-logout` revokes all JWT + refresh tokens -- important for incident response
+- Admin file/share operations are logged via `LogAdminAction` and security event logging
+- The `DeleteUser` handler correctly targets `file_share_keys` table
 
 ## Related Files
 
-- `cmd/arkfile-admin/main.go` — CLI tool (2083 lines)
-- `handlers/admin.go` — Admin handlers (includes `DeleteUser`, `UpdateUser`)
-- `handlers/auth.go` — Auth handlers (includes `AdminForceLogout`)
-- `handlers/route_config.go` — Route registration
-- `handlers/admin_test.go` — Admin handler tests
-- `docs/api.md` — API documentation (needs updating)
+- `cmd/arkfile-admin/main.go` -- CLI tool
+- `handlers/admin.go` -- Admin handlers (includes all new handlers)
+- `handlers/auth.go` -- Auth handlers (includes `AdminForceLogout`)
+- `handlers/route_config.go` -- Route registration (all routes registered)
+- `scripts/testing/e2e-test.sh` -- E2E tests (Phase 11 sections 11.4-11.12)

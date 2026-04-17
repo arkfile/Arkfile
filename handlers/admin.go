@@ -1090,6 +1090,237 @@ func toBool(v interface{}) bool {
 	}
 }
 
+// AdminListUserFiles lists all files owned by a specific user
+func AdminListUserFiles(c echo.Context) error {
+	adminUsername := auth.GetUsernameFromToken(c)
+	targetUsername := c.Param("username")
+
+	if targetUsername == "" {
+		return JSONError(c, http.StatusBadRequest, "Username parameter required")
+	}
+
+	// Verify target user exists
+	_, err := models.GetUserByUsername(database.DB, targetUsername)
+	if err != nil {
+		return JSONError(c, http.StatusNotFound, "User not found")
+	}
+
+	rows, err := database.DB.Query(`
+		SELECT file_id, storage_id, size_bytes, chunk_count, upload_date
+		FROM file_metadata
+		WHERE owner_username = ?
+		ORDER BY upload_date DESC`, targetUsername)
+	if err != nil {
+		logging.ErrorLogger.Printf("Admin %s failed to list files for %s: %v", adminUsername, targetUsername, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to list user files")
+	}
+	defer rows.Close()
+
+	var files []map[string]interface{}
+	for rows.Next() {
+		var fileID, storageID string
+		var sizeBytes int64
+		var chunkCount int
+		var uploadDate string
+		if err := rows.Scan(&fileID, &storageID, &sizeBytes, &chunkCount, &uploadDate); err != nil {
+			logging.ErrorLogger.Printf("Admin %s: scan error listing files for %s: %v", adminUsername, targetUsername, err)
+			continue
+		}
+		files = append(files, map[string]interface{}{
+			"file_id":     fileID,
+			"storage_id":  storageID,
+			"size_bytes":  sizeBytes,
+			"chunk_count": chunkCount,
+			"upload_date": uploadDate,
+		})
+	}
+
+	logging.InfoLogger.Printf("ADMIN: %s listed files for user %s (%d files)", adminUsername, targetUsername, len(files))
+
+	return JSONResponse(c, http.StatusOK, "User files retrieved", map[string]interface{}{
+		"username": targetUsername,
+		"files":    files,
+		"count":    len(files),
+	})
+}
+
+// AdminListUserShares lists all shares owned by a specific user
+func AdminListUserShares(c echo.Context) error {
+	adminUsername := auth.GetUsernameFromToken(c)
+	targetUsername := c.Param("username")
+
+	if targetUsername == "" {
+		return JSONError(c, http.StatusBadRequest, "Username parameter required")
+	}
+
+	// Verify target user exists
+	_, err := models.GetUserByUsername(database.DB, targetUsername)
+	if err != nil {
+		return JSONError(c, http.StatusNotFound, "User not found")
+	}
+
+	rows, err := database.DB.Query(`
+		SELECT share_id, file_id, created_at, expires_at, access_count, max_accesses, revoked_at
+		FROM file_share_keys
+		WHERE owner_username = ?
+		ORDER BY created_at DESC`, targetUsername)
+	if err != nil {
+		logging.ErrorLogger.Printf("Admin %s failed to list shares for %s: %v", adminUsername, targetUsername, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to list user shares")
+	}
+	defer rows.Close()
+
+	var shares []map[string]interface{}
+	for rows.Next() {
+		var shareID, fileID, createdAt string
+		var expiresAt, revokedAt sql.NullString
+		var accessCount int
+		var maxAccesses sql.NullInt64
+		if err := rows.Scan(&shareID, &fileID, &createdAt, &expiresAt, &accessCount, &maxAccesses, &revokedAt); err != nil {
+			logging.ErrorLogger.Printf("Admin %s: scan error listing shares for %s: %v", adminUsername, targetUsername, err)
+			continue
+		}
+		share := map[string]interface{}{
+			"share_id":     shareID,
+			"file_id":      fileID,
+			"created_at":   createdAt,
+			"access_count": accessCount,
+			"is_revoked":   revokedAt.Valid,
+		}
+		if expiresAt.Valid {
+			share["expires_at"] = expiresAt.String
+		}
+		if maxAccesses.Valid {
+			share["max_accesses"] = maxAccesses.Int64
+		}
+		if revokedAt.Valid {
+			share["revoked_at"] = revokedAt.String
+		}
+		shares = append(shares, share)
+	}
+
+	logging.InfoLogger.Printf("ADMIN: %s listed shares for user %s (%d shares)", adminUsername, targetUsername, len(shares))
+
+	return JSONResponse(c, http.StatusOK, "User shares retrieved", map[string]interface{}{
+		"username": targetUsername,
+		"shares":   shares,
+		"count":    len(shares),
+	})
+}
+
+// AdminDeleteFile deletes a specific file by file_id (from storage + DB)
+func AdminDeleteFile(c echo.Context) error {
+	adminUsername := auth.GetUsernameFromToken(c)
+	fileID := c.Param("fileId")
+
+	if fileID == "" {
+		return JSONError(c, http.StatusBadRequest, "File ID parameter required")
+	}
+
+	// Get storage provider
+	var storageProvider storage.ObjectStorageProvider
+	if sp := c.Get("storage"); sp != nil {
+		storageProvider = sp.(storage.ObjectStorageProvider)
+	} else {
+		storageProvider = storage.Provider
+	}
+
+	// Start transaction
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return JSONError(c, http.StatusInternalServerError, "Failed to start transaction")
+	}
+	defer tx.Rollback()
+
+	// Get file metadata
+	var storageID, ownerUsername string
+	err = tx.QueryRow("SELECT storage_id, owner_username FROM file_metadata WHERE file_id = ?", fileID).Scan(&storageID, &ownerUsername)
+	if err == sql.ErrNoRows {
+		return JSONError(c, http.StatusNotFound, "File not found")
+	} else if err != nil {
+		return JSONError(c, http.StatusInternalServerError, "Failed to get file metadata")
+	}
+
+	// Delete from storage
+	if storageProvider != nil {
+		if err := storageProvider.RemoveObject(c.Request().Context(), storageID, storage.RemoveObjectOptions{}); err != nil {
+			logging.ErrorLogger.Printf("Admin %s failed to delete file %s from storage: %v", adminUsername, fileID, err)
+			return JSONError(c, http.StatusInternalServerError, "Failed to delete file from storage")
+		}
+	}
+
+	// Delete associated shares
+	if _, err := tx.Exec("DELETE FROM file_share_keys WHERE file_id = ?", fileID); err != nil {
+		return JSONError(c, http.StatusInternalServerError, "Failed to delete file shares")
+	}
+
+	// Delete file metadata
+	if _, err := tx.Exec("DELETE FROM file_metadata WHERE file_id = ?", fileID); err != nil {
+		return JSONError(c, http.StatusInternalServerError, "Failed to delete file metadata")
+	}
+
+	// Log admin action
+	if err := LogAdminAction(tx, adminUsername, "delete_file", ownerUsername, fmt.Sprintf("file_id: %s", fileID)); err != nil {
+		return JSONError(c, http.StatusInternalServerError, "Failed to log admin action")
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return JSONError(c, http.StatusInternalServerError, "Failed to commit transaction")
+	}
+
+	logging.InfoLogger.Printf("ADMIN: %s deleted file %s (owner: %s)", adminUsername, fileID, ownerUsername)
+
+	return JSONResponse(c, http.StatusOK, "File deleted successfully", map[string]interface{}{
+		"file_id": fileID,
+		"owner":   ownerUsername,
+	})
+}
+
+// AdminRevokeShare revokes a specific share by share_id
+func AdminRevokeShare(c echo.Context) error {
+	adminUsername := auth.GetUsernameFromToken(c)
+	shareID := c.Param("shareId")
+
+	if shareID == "" {
+		return JSONError(c, http.StatusBadRequest, "Share ID parameter required")
+	}
+
+	// Verify share exists and get owner
+	var ownerUsername string
+	var revokedAt sql.NullString
+	err := database.DB.QueryRow(
+		"SELECT owner_username, revoked_at FROM file_share_keys WHERE share_id = ?",
+		shareID).Scan(&ownerUsername, &revokedAt)
+	if err == sql.ErrNoRows {
+		return JSONError(c, http.StatusNotFound, "Share not found")
+	} else if err != nil {
+		return JSONError(c, http.StatusInternalServerError, "Failed to get share info")
+	}
+
+	if revokedAt.Valid {
+		return JSONError(c, http.StatusConflict, "Share is already revoked")
+	}
+
+	// Revoke the share
+	_, err = database.DB.Exec(
+		"UPDATE file_share_keys SET revoked_at = CURRENT_TIMESTAMP, revoked_reason = ? WHERE share_id = ?",
+		"admin_revocation", shareID)
+	if err != nil {
+		logging.ErrorLogger.Printf("Admin %s failed to revoke share %s: %v", adminUsername, shareID, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to revoke share")
+	}
+
+	// Log admin action
+	database.LogUserAction(adminUsername, "admin revoked share", fmt.Sprintf("share_id: %s, owner: %s", shareID, ownerUsername))
+	logging.InfoLogger.Printf("ADMIN: %s revoked share %s (owner: %s)", adminUsername, shareID, ownerUsername)
+
+	return JSONResponse(c, http.StatusOK, "Share revoked successfully", map[string]interface{}{
+		"share_id": shareID,
+		"owner":    ownerUsername,
+	})
+}
+
 // LogAdminAction logs an admin action to the admin_logs table
 func LogAdminAction(db interface {
 	Exec(string, ...interface{}) (sql.Result, error)

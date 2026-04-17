@@ -44,6 +44,14 @@ NETWORK COMMANDS (Admin API - localhost only):
     user-contact-info View a user's contact information
     set-storage       Set user storage limit
     revoke-user       Revoke user access and disable account
+    update-user       Update user properties (admin, approved, storage)
+    delete-user       Delete a user and all associated data
+    force-logout      Force-logout a user (revoke all tokens)
+    list-files        List files owned by a user
+    list-shares       List shares owned by a user
+    delete-file       Delete a specific file by ID
+    revoke-share      Revoke a specific share by ID
+    security-events   View recent security events
     export-file       Export a user's encrypted file as .arkbackup bundle
 
 SYSTEM COMMANDS:
@@ -238,6 +246,48 @@ func main() {
 	case "export-file":
 		if err := handleExportFileCommand(client, config, args); err != nil {
 			logError("Export file failed: %v", err)
+			os.Exit(1)
+		}
+
+	// New admin management commands
+	case "update-user":
+		if err := handleUpdateUserCommand(client, config, args); err != nil {
+			logError("Update user failed: %v", err)
+			os.Exit(1)
+		}
+	case "delete-user":
+		if err := handleDeleteUserCommand(client, config, args); err != nil {
+			logError("Delete user failed: %v", err)
+			os.Exit(1)
+		}
+	case "force-logout":
+		if err := handleForceLogoutCommand(client, config, args); err != nil {
+			logError("Force logout failed: %v", err)
+			os.Exit(1)
+		}
+	case "list-files":
+		if err := handleListFilesCommand(client, config, args); err != nil {
+			logError("List files failed: %v", err)
+			os.Exit(1)
+		}
+	case "list-shares":
+		if err := handleListSharesCommand(client, config, args); err != nil {
+			logError("List shares failed: %v", err)
+			os.Exit(1)
+		}
+	case "delete-file":
+		if err := handleDeleteFileCommand(client, config, args); err != nil {
+			logError("Delete file failed: %v", err)
+			os.Exit(1)
+		}
+	case "revoke-share":
+		if err := handleRevokeShareCommand(client, config, args); err != nil {
+			logError("Revoke share failed: %v", err)
+			os.Exit(1)
+		}
+	case "security-events":
+		if err := handleSecurityEventsCommand(client, config, args); err != nil {
+			logError("Security events failed: %v", err)
 			os.Exit(1)
 		}
 
@@ -1790,6 +1840,515 @@ EXAMPLES:
 			}
 			fmt.Println()
 		}
+	}
+
+	return nil
+}
+
+// handleUpdateUserCommand updates user properties (admin, approved, storage)
+func handleUpdateUserCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("update-user", flag.ExitOnError)
+	usernameFlag := fs.String("username", "", "Username to update (required)")
+	isApproved := fs.String("is-approved", "", "Set approved status (true/false)")
+	isAdmin := fs.String("is-admin", "", "Set admin status (true/false)")
+	storageLimit := fs.String("storage-limit", "", "Set storage limit (e.g. 5GB, 500MB)")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin update-user --username USER [FLAGS]
+
+Update user properties. At least one property flag must be provided.
+
+FLAGS:
+    --username USER         Username to update (required)
+    --is-approved BOOL      Set approved status (true/false)
+    --is-admin BOOL         Set admin status (true/false)
+    --storage-limit LIMIT   Set storage limit (e.g. 5GB, 500MB)
+    --help                  Show this help message
+
+EXAMPLES:
+    arkfile-admin update-user --username alice12345 --is-admin true
+    arkfile-admin update-user --username alice12345 --is-approved false
+    arkfile-admin update-user --username alice12345 --storage-limit 10GB
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *usernameFlag == "" {
+		return fmt.Errorf("--username is required")
+	}
+
+	if *isApproved == "" && *isAdmin == "" && *storageLimit == "" {
+		return fmt.Errorf("at least one of --is-approved, --is-admin, or --storage-limit is required")
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	payload := make(map[string]interface{})
+	if *isApproved != "" {
+		b := strings.ToLower(*isApproved) == "true"
+		payload["is_approved"] = b
+	}
+	if *isAdmin != "" {
+		b := strings.ToLower(*isAdmin) == "true"
+		payload["is_admin"] = b
+	}
+	if *storageLimit != "" {
+		limitBytes, err := parseStorageLimit(*storageLimit)
+		if err != nil {
+			return fmt.Errorf("invalid storage limit: %w", err)
+		}
+		payload["storage_limit_bytes"] = limitBytes
+	}
+
+	_, err = client.makeRequest("PUT", "/api/admin/users/"+*usernameFlag, payload, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("update user failed: %w", err)
+	}
+
+	fmt.Printf("User %s updated successfully\n", *usernameFlag)
+	return nil
+}
+
+// handleDeleteUserCommand deletes a user and all associated data
+func handleDeleteUserCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("delete-user", flag.ExitOnError)
+	usernameFlag := fs.String("username", "", "Username to delete (required)")
+	confirm := fs.Bool("confirm", false, "Confirm deletion without interactive prompt (required)")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin delete-user --username USER --confirm
+
+Permanently delete a user and all associated data (files, shares, metadata).
+This operation is IRREVERSIBLE.
+
+FLAGS:
+    --username USER     Username to delete (required)
+    --confirm           Required flag to confirm this destructive operation
+    --help              Show this help message
+
+EXAMPLES:
+    arkfile-admin delete-user --username alice12345 --confirm
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *usernameFlag == "" {
+		return fmt.Errorf("--username is required")
+	}
+	if !*confirm {
+		return fmt.Errorf("--confirm flag is required for this destructive operation")
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	_, err = client.makeRequest("DELETE", "/api/admin/users/"+*usernameFlag, nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("delete user failed: %w", err)
+	}
+
+	fmt.Printf("User %s deleted successfully (all files, shares, and metadata removed)\n", *usernameFlag)
+	return nil
+}
+
+// handleForceLogoutCommand forces a user logout by revoking all their tokens
+func handleForceLogoutCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("force-logout", flag.ExitOnError)
+	usernameFlag := fs.String("username", "", "Username to force-logout (required)")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin force-logout --username USER
+
+Force-logout a user by revoking all their JWT and refresh tokens.
+Use for incident response when a session may be compromised.
+
+FLAGS:
+    --username USER     Username to force-logout (required)
+    --help              Show this help message
+
+EXAMPLES:
+    arkfile-admin force-logout --username alice12345
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *usernameFlag == "" {
+		return fmt.Errorf("--username is required")
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/force-logout", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("force logout failed: %w", err)
+	}
+
+	fmt.Printf("User %s has been force-logged out (all tokens revoked)\n", *usernameFlag)
+	return nil
+}
+
+// handleListFilesCommand lists files owned by a specific user
+func handleListFilesCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("list-files", flag.ExitOnError)
+	usernameFlag := fs.String("username", "", "Username to list files for (required)")
+	jsonOutput := fs.Bool("json", false, "Output as JSON")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin list-files --username USER [--json]
+
+List all files owned by a specific user.
+
+FLAGS:
+    --username USER     Username to list files for (required)
+    --json              Output as JSON
+    --help              Show this help message
+
+EXAMPLES:
+    arkfile-admin list-files --username alice12345
+    arkfile-admin list-files --username alice12345 --json
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *usernameFlag == "" {
+		return fmt.Errorf("--username is required")
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	resp, err := client.makeRequest("GET", "/api/admin/users/"+*usernameFlag+"/files", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to list files: %w", err)
+	}
+
+	if *jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp.Data)
+	}
+
+	count := safeFloat64(resp.Data, "count")
+	fmt.Printf("Files for user %s (%d total):\n\n", *usernameFlag, int(count))
+
+	filesRaw, ok := resp.Data["files"].([]interface{})
+	if !ok || len(filesRaw) == 0 {
+		fmt.Println("  (no files)")
+		return nil
+	}
+
+	fmt.Printf("  %-38s %-12s %-8s %s\n", "FILE ID", "SIZE", "CHUNKS", "UPLOAD DATE")
+	fmt.Printf("  %-38s %-12s %-8s %s\n",
+		strings.Repeat("-", 38), strings.Repeat("-", 12), strings.Repeat("-", 8), strings.Repeat("-", 19))
+
+	for _, f := range filesRaw {
+		fm := f.(map[string]interface{})
+		fileID := safeString(fm, "file_id")
+		sizeBytes := safeInt64(fm, "size_bytes")
+		chunkCount := safeInt64(fm, "chunk_count")
+		uploadDate := safeString(fm, "upload_date")
+
+		fmt.Printf("  %-38s %-12s %-8d %s\n", fileID, formatFileSize(sizeBytes), chunkCount, uploadDate)
+	}
+
+	return nil
+}
+
+// handleListSharesCommand lists shares owned by a specific user
+func handleListSharesCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("list-shares", flag.ExitOnError)
+	usernameFlag := fs.String("username", "", "Username to list shares for (required)")
+	jsonOutput := fs.Bool("json", false, "Output as JSON")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin list-shares --username USER [--json]
+
+List all shares owned by a specific user.
+
+FLAGS:
+    --username USER     Username to list shares for (required)
+    --json              Output as JSON
+    --help              Show this help message
+
+EXAMPLES:
+    arkfile-admin list-shares --username alice12345
+    arkfile-admin list-shares --username alice12345 --json
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *usernameFlag == "" {
+		return fmt.Errorf("--username is required")
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	resp, err := client.makeRequest("GET", "/api/admin/users/"+*usernameFlag+"/shares", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to list shares: %w", err)
+	}
+
+	if *jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp.Data)
+	}
+
+	count := safeFloat64(resp.Data, "count")
+	fmt.Printf("Shares for user %s (%d total):\n\n", *usernameFlag, int(count))
+
+	sharesRaw, ok := resp.Data["shares"].([]interface{})
+	if !ok || len(sharesRaw) == 0 {
+		fmt.Println("  (no shares)")
+		return nil
+	}
+
+	fmt.Printf("  %-20s %-38s %-8s %-9s %s\n", "SHARE ID", "FILE ID", "ACCESSES", "REVOKED", "CREATED")
+	fmt.Printf("  %-20s %-38s %-8s %-9s %s\n",
+		strings.Repeat("-", 20), strings.Repeat("-", 38), strings.Repeat("-", 8),
+		strings.Repeat("-", 9), strings.Repeat("-", 19))
+
+	for _, s := range sharesRaw {
+		sm := s.(map[string]interface{})
+		shareID := safeString(sm, "share_id")
+		// Truncate share_id for display (they can be very long)
+		if len(shareID) > 20 {
+			shareID = shareID[:17] + "..."
+		}
+		fileID := safeString(sm, "file_id")
+		accessCount := safeInt64(sm, "access_count")
+		isRevoked := safeBool(sm, "is_revoked")
+		createdAt := safeString(sm, "created_at")
+
+		revokedStr := "No"
+		if isRevoked {
+			revokedStr = "Yes"
+		}
+
+		fmt.Printf("  %-20s %-38s %-8d %-9s %s\n", shareID, fileID, accessCount, revokedStr, createdAt)
+	}
+
+	return nil
+}
+
+// handleDeleteFileCommand deletes a specific file by ID
+func handleDeleteFileCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("delete-file", flag.ExitOnError)
+	fileID := fs.String("file-id", "", "File ID to delete (required)")
+	confirm := fs.Bool("confirm", false, "Confirm deletion without interactive prompt (required)")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin delete-file --file-id ID --confirm
+
+Delete a specific file from storage and database. This also removes associated shares.
+This operation is IRREVERSIBLE.
+
+FLAGS:
+    --file-id ID        File ID to delete (required)
+    --confirm           Required flag to confirm this destructive operation
+    --help              Show this help message
+
+EXAMPLES:
+    arkfile-admin delete-file --file-id abc-123-def --confirm
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *fileID == "" {
+		return fmt.Errorf("--file-id is required")
+	}
+	if !*confirm {
+		return fmt.Errorf("--confirm flag is required for this destructive operation")
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	resp, err := client.makeRequest("DELETE", "/api/admin/files/"+*fileID, nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("delete file failed: %w", err)
+	}
+
+	owner := safeString(resp.Data, "owner")
+	fmt.Printf("File %s deleted successfully (owner: %s)\n", *fileID, owner)
+	return nil
+}
+
+// handleRevokeShareCommand revokes a specific share by ID
+func handleRevokeShareCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("revoke-share", flag.ExitOnError)
+	shareID := fs.String("share-id", "", "Share ID to revoke (required)")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin revoke-share --share-id ID
+
+Revoke a specific share, making it inaccessible to anonymous recipients.
+
+FLAGS:
+    --share-id ID       Share ID to revoke (required)
+    --help              Show this help message
+
+EXAMPLES:
+    arkfile-admin revoke-share --share-id abc123def456
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *shareID == "" {
+		return fmt.Errorf("--share-id is required")
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	resp, err := client.makeRequest("POST", "/api/admin/shares/"+*shareID+"/revoke", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("revoke share failed: %w", err)
+	}
+
+	owner := safeString(resp.Data, "owner")
+	fmt.Printf("Share %s revoked successfully (owner: %s)\n", *shareID, owner)
+	return nil
+}
+
+// handleSecurityEventsCommand views recent security events
+func handleSecurityEventsCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("security-events", flag.ExitOnError)
+	jsonOutput := fs.Bool("json", false, "Output as JSON")
+	limit := fs.Int("limit", 20, "Number of events to display")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin security-events [--json] [--limit N]
+
+View recent security events (login attempts, rate limits, admin actions, etc.)
+
+FLAGS:
+    --json              Output as JSON
+    --limit N           Number of events to display (default: 20)
+    --help              Show this help message
+
+EXAMPLES:
+    arkfile-admin security-events
+    arkfile-admin security-events --json
+    arkfile-admin security-events --limit 50
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	resp, err := client.makeRequest("GET", "/api/admin/security/events", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to get security events: %w", err)
+	}
+
+	if *jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp.Data)
+	}
+
+	eventsRaw, ok := resp.Data["events"].([]interface{})
+	if !ok || len(eventsRaw) == 0 {
+		fmt.Println("No security events found")
+		return nil
+	}
+
+	count := len(eventsRaw)
+	displayCount := count
+	if displayCount > *limit {
+		displayCount = *limit
+	}
+
+	fmt.Printf("Security Events (showing %d of %d):\n\n", displayCount, count)
+
+	for i := 0; i < displayCount; i++ {
+		event, ok := eventsRaw[i].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		eventType := safeString(event, "event_type")
+		timestamp := safeString(event, "timestamp")
+		username := safeString(event, "username")
+		details := safeString(event, "details")
+
+		if username != "" {
+			fmt.Printf("  [%s] %s - user: %s", timestamp, eventType, username)
+		} else {
+			fmt.Printf("  [%s] %s", timestamp, eventType)
+		}
+		if details != "" {
+			fmt.Printf(" - %s", details)
+		}
+		fmt.Println()
 	}
 
 	return nil

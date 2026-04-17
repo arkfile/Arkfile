@@ -1615,6 +1615,149 @@ phase_11_admin_system_status() {
         record_test "Admin cannot list user shares via user client" "FAIL"
     fi
 
+    # 11.4: Admin security-events
+    section "11.4: Admin security-events"
+    local sec_events_output sec_events_code
+    safe_exec sec_events_output sec_events_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure security-events
+    if [ $sec_events_code -eq 0 ]; then
+        record_test "Admin security-events" "PASS"
+        info "Security events retrieved successfully"
+    else
+        error "security-events command failed:"
+        echo "$sec_events_output"
+        record_test "Admin security-events" "FAIL"
+    fi
+
+    # 11.5: Admin list-files for test user
+    section "11.5: Admin list-files for test user"
+    local list_files_output list_files_code
+    safe_exec list_files_output list_files_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        list-files --username "$TEST_USERNAME"
+    if [ $list_files_code -eq 0 ] && echo "$list_files_output" | grep -q "$UPLOADED_FILE_ID"; then
+        record_test "Admin list-files (test user)" "PASS"
+        info "Admin listed test user files (found uploaded file ID)"
+    else
+        error "list-files command failed or file ID not found:"
+        echo "$list_files_output"
+        record_test "Admin list-files (test user)" "FAIL"
+    fi
+
+    # 11.6: Admin list-shares for test user
+    section "11.6: Admin list-shares for test user"
+    local list_shares_output list_shares_code
+    safe_exec list_shares_output list_shares_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        list-shares --username "$TEST_USERNAME"
+    if [ $list_shares_code -eq 0 ]; then
+        record_test "Admin list-shares (test user)" "PASS"
+        info "Admin listed test user shares"
+    else
+        error "list-shares command failed:"
+        echo "$list_shares_output"
+        record_test "Admin list-shares (test user)" "FAIL"
+    fi
+
+    # 11.7: Admin update-user (set is_admin=false explicitly, no-op for non-admin test user)
+    section "11.7: Admin update-user"
+    local update_user_output update_user_code
+    safe_exec update_user_output update_user_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        update-user --username "$TEST_USERNAME" --is-admin false
+    if [ $update_user_code -eq 0 ] && echo "$update_user_output" | grep -q "updated successfully"; then
+        record_test "Admin update-user" "PASS"
+        info "Admin updated test user successfully"
+    else
+        error "update-user command failed:"
+        echo "$update_user_output"
+        record_test "Admin update-user" "FAIL"
+    fi
+
+    # 11.8: Admin force-logout (test user already logged out, but tokens may still exist)
+    section "11.8: Admin force-logout"
+    local force_logout_output force_logout_code
+    safe_exec force_logout_output force_logout_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        force-logout --username "$TEST_USERNAME"
+    if [ $force_logout_code -eq 0 ] && echo "$force_logout_output" | grep -q "force-logged out"; then
+        record_test "Admin force-logout" "PASS"
+        info "Admin force-logged out test user"
+    else
+        error "force-logout command failed:"
+        echo "$force_logout_output"
+        record_test "Admin force-logout" "FAIL"
+    fi
+
+    # 11.9: Admin revoke-share (revoke Share D if it exists)
+    section "11.9: Admin revoke-share"
+    if [ -n "$SHARE_D_ID" ]; then
+        local revoke_share_output revoke_share_code
+        safe_exec revoke_share_output revoke_share_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            revoke-share --share-id "$SHARE_D_ID"
+        if [ $revoke_share_code -eq 0 ] && echo "$revoke_share_output" | grep -q "revoked successfully"; then
+            record_test "Admin revoke-share" "PASS"
+            info "Admin revoked share $SHARE_D_ID"
+        else
+            error "revoke-share command failed:"
+            echo "$revoke_share_output"
+            record_test "Admin revoke-share" "FAIL"
+        fi
+    else
+        info "Skipping revoke-share test (SHARE_D_ID not set)"
+        record_test "Admin revoke-share" "SKIP"
+    fi
+
+    # 11.10: Admin delete-file (delete custom-password file)
+    section "11.10: Admin delete-file"
+    if [ -n "$CUSTOM_FILE_ID" ]; then
+        local delete_file_output delete_file_code
+        safe_exec delete_file_output delete_file_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            delete-file --file-id "$CUSTOM_FILE_ID" --confirm
+        if [ $delete_file_code -eq 0 ] && echo "$delete_file_output" | grep -q "deleted successfully"; then
+            record_test "Admin delete-file" "PASS"
+            info "Admin deleted file $CUSTOM_FILE_ID"
+        else
+            error "delete-file command failed:"
+            echo "$delete_file_output"
+            record_test "Admin delete-file" "FAIL"
+        fi
+    else
+        info "Skipping delete-file test (CUSTOM_FILE_ID not set)"
+        record_test "Admin delete-file" "SKIP"
+    fi
+
+    # 11.11: Admin delete-user (delete the test user as final destructive test)
+    section "11.11: Admin delete-user"
+    local delete_user_output delete_user_code
+    safe_exec delete_user_output delete_user_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        delete-user --username "$TEST_USERNAME" --confirm
+    if [ $delete_user_code -eq 0 ] && echo "$delete_user_output" | grep -q "deleted successfully"; then
+        record_test "Admin delete-user" "PASS"
+        info "Admin deleted test user $TEST_USERNAME"
+    else
+        error "delete-user command failed:"
+        echo "$delete_user_output"
+        record_test "Admin delete-user" "FAIL"
+    fi
+
+    # 11.12: Verify deleted user no longer exists
+    section "11.12: Verify deleted user gone"
+    local verify_deleted_output verify_deleted_code
+    safe_exec verify_deleted_output verify_deleted_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        user-status --username "$TEST_USERNAME"
+    if [ $verify_deleted_code -eq 0 ] && echo "$verify_deleted_output" | grep -q "Exists:.*No"; then
+        record_test "Deleted user no longer exists" "PASS"
+    else
+        error "Deleted user still appears to exist:"
+        echo "$verify_deleted_output"
+        record_test "Deleted user no longer exists" "FAIL"
+    fi
+
     success "Admin system status phase complete"
 }
 

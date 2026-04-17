@@ -157,15 +157,26 @@ func RegisterRoutes() {
 	adminGroup.POST("/credits/:username", AdminAdjustCredits)
 	adminGroup.PUT("/credits/:username", AdminSetCredits)
 
-	// User management - admin endpoints (migrated from dev/test to production)
+	// User management - admin endpoints
 	adminGroup.GET("/users", ListUsers)
 	adminGroup.POST("/users/:username/approve", ApproveUser)
 	adminGroup.GET("/users/:username/status", AdminGetUserStatus)
 	adminGroup.PUT("/users/:username/storage", UpdateUserStorageLimit)
 	adminGroup.POST("/users/:username/revoke", AdminRevokeUser)
+	adminGroup.DELETE("/users/:username", DeleteUser)
+	adminGroup.PUT("/users/:username", UpdateUser)
+	adminGroup.POST("/users/:username/force-logout", AdminForceLogout)
+
+	// Admin inspection of user files and shares
+	adminGroup.GET("/users/:username/files", AdminListUserFiles)
+	adminGroup.GET("/users/:username/shares", AdminListUserShares)
 
 	// Contact information - admin endpoints (view any user's contact info)
 	adminGroup.GET("/users/:username/contact-info", AdminGetContactInfo)
+
+	// Admin file/share management
+	adminGroup.DELETE("/files/:fileId", AdminDeleteFile)
+	adminGroup.POST("/shares/:shareId/revoke", AdminRevokeShare)
 
 	// File export - admin endpoints (for disaster recovery)
 	adminGroup.GET("/files/:fileId/export", AdminExportFile)

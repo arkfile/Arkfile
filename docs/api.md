@@ -238,7 +238,25 @@ All admin endpoints require JWT authentication with admin privileges.
 | POST | `/api/admin/users/:username/approve` | Approve a pending user | Admin |
 | GET | `/api/admin/users/:username/status` | Get user approval status | Admin |
 | PUT | `/api/admin/users/:username/storage` | Update user storage limit | Admin |
-| POST | `/api/admin/users/:username/revoke` | Revoke a user | Admin |
+| POST | `/api/admin/users/:username/revoke` | Revoke a user (sets `is_approved = false`) | Admin |
+| DELETE | `/api/admin/users/:username` | Delete user and all associated data | Admin |
+| PUT | `/api/admin/users/:username` | Update user properties (`is_admin`, `is_approved`, `storage_limit_bytes`) | Admin |
+| POST | `/api/admin/users/:username/force-logout` | Revoke all JWT + refresh tokens for a user | Admin |
+
+#### User Inspection (Admin)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| GET | `/api/admin/users/:username/files` | List files owned by a user | Admin |
+| GET | `/api/admin/users/:username/shares` | List shares owned by a user | Admin |
+| GET | `/api/admin/users/:username/contact-info` | View a user's contact information | Admin |
+
+#### File/Share Management (Admin)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| DELETE | `/api/admin/files/:fileId` | Delete a specific file (storage + DB + associated shares) | Admin |
+| POST | `/api/admin/shares/:shareId/revoke` | Revoke a specific share | Admin |
 
 #### File Export (Disaster Recovery)
 
@@ -246,7 +264,7 @@ All admin endpoints require JWT authentication with admin privileges.
 |--------|------|---------|------|
 | GET | `/api/admin/files/:fileId/export` | Export any user's `.arkbackup` bundle | Admin |
 
-The admin can export any user's file as an `.arkbackup` bundle for disaster recovery. The admin cannot decrypt the bundle — it requires the file owner's password.
+The admin can export any user's file as an `.arkbackup` bundle for disaster recovery. The admin cannot decrypt the bundle -- it requires the file owner's password.
 
 #### System Monitoring
 
