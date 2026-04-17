@@ -583,7 +583,7 @@ EXAMPLES:
 
 	// Interactive mode
 	fmt.Println("=== Two-Factor Authentication Setup ===")
-	fmt.Println("1. Open your authenticator app (Google Authenticator, Authy, etc.)")
+	fmt.Println("1. Open your authenticator app (Google Authenticator, Ente Auth, Bitwarden Authenticator, etc.)")
 	fmt.Println("2. Add a new account manually")
 	fmt.Printf("3. Enter this secret key: %s\n", secret)
 	fmt.Println("=======================================")
