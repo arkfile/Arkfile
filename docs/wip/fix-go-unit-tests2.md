@@ -223,3 +223,55 @@ These existing test files are in good shape and align with current source code:
 - `handlers/uploads_test.go` - upload handler with error paths
 - `handlers/file_shares_test.go` - share creation, access, revocation (needs extension for boundaries)
 - `handlers/files_test.go` - delete file, metadata listing (needs extension)
+
+---
+
+# REMAINING WORK
+
+## Section A: handlers/ TestMain + Auth Success-Path Tests
+
+The key unlock is adding a `TestMain` to the handlers package that bootstraps both JWT Ed25519 keys AND TOTP master keys. This follows the exact same pattern as `auth/jwt_test.go`'s TestMain.
+
+**New file:** `handlers/test_main_test.go`
+- Set `ARKFILE_MASTER_KEY` env var (same test key as auth/jwt_test.go)
+- Create in-memory SQLite with `system_keys` table
+- Call `crypto.InitKeyManager(db)` 
+- Set env vars for `config.LoadConfig()`
+- Call `auth.ResetKeysForTest()`
+- Set `TOTP_MASTER_KEY_PATH` to temp dir
+- Call `crypto.InitializeTOTPMasterKey()`
+
+**New tests in `handlers/auth_test.go`** (adding to existing file):
+- `TestRefreshToken_Success` -- mock valid refresh token + user query, verify new JWT is issued
+- `TestTOTPAuth_Success` -- store encrypted TOTP data in mock DB (using real `crypto.DeriveTOTPUserKey` + `crypto.EncryptGCM` with the fixed secret `ARKFILEPKZBXCMJLGB5HM5D2GEVVU32D`), generate a real TOTP code with `totp.GenerateCode()`, call the handler, verify full access JWT is issued
+
+These are the two most security-critical success paths that were missing.
+
+## Section B: Offline Decrypt End-to-End Test
+
+**Add to `cmd/arkfile-client/offline_decrypt_test.go`:**
+- `TestDecryptBundleBlob_Success` -- construct a real `.arkbackup` bundle:
+  1. Generate FEK, wrap it with account KEK (using `crypto.DeriveAccountPasswordKey`)
+  2. Encrypt test plaintext using `encryptChunk()`
+  3. Write bundle in ARKB format (magic + version + header + encrypted blob)
+  4. Call `parseBundle()` to get metadata
+  5. Unwrap FEK, decrypt chunks, verify plaintext matches
+- `TestDecryptBundleBlob_WrongKey` -- same but derive KEK from wrong password, verify decryption fails
+
+## Section C: Storage Calculations + Share Download Token Tests
+
+**Add to `handlers/files_test.go`:**
+- `TestListFiles_StorageCalculations` -- verify storage math (usage_percent, available_bytes) with specific values
+
+**Add to `handlers/file_shares_test.go`:**
+- `TestDownloadShareChunk_ValidToken` -- mock the share + download token hash query, verify chunk download proceeds (requires S3 mock)
+- `TestDownloadShareChunk_InvalidToken` -- wrong token hash, verify rejection
+
+---
+
+**Estimated: ~8-10 new tests across all sections.**
+
+Section A is the highest value because it unlocks auth success-path tests. Section B is the disaster recovery path. Section C is nice-to-have.
+
+---
+

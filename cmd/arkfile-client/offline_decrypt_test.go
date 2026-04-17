@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/84adam/Arkfile/crypto"
 )
 
 // createTestBundle creates a valid .arkbackup bundle file for testing
@@ -203,6 +207,114 @@ func TestParseBundle_NonexistentFile(t *testing.T) {
 	_, _, err := parseBundle("/tmp/nonexistent-arkbackup-test-file-12345.arkbackup")
 	if err == nil {
 		t.Fatal("parseBundle should fail for nonexistent file")
+	}
+}
+
+// -- Section B: End-to-end bundle decrypt tests --
+
+// TestDecryptBundleBlob_Success constructs a real encrypted .arkbackup bundle,
+// then decrypts it end-to-end to verify the disaster recovery path works.
+func TestDecryptBundleBlob_Success(t *testing.T) {
+	username := "bundle-test-user"
+	password := []byte("BundleTestPassword2025!Secure")
+
+	// Step 1: Derive account KEK (same as production)
+	kek := crypto.DeriveAccountPasswordKey(password, username)
+
+	// Step 2: Generate FEK and wrap it
+	fek, err := generateFEK()
+	if err != nil {
+		t.Fatalf("generateFEK failed: %v", err)
+	}
+
+	wrappedFEKB64, err := wrapFEK(fek, kek, "account")
+	if err != nil {
+		t.Fatalf("wrapFEK failed: %v", err)
+	}
+
+	// Step 3: Encrypt plaintext data as a single chunk
+	originalPlaintext := []byte("This is the secret file content for disaster recovery testing. It should survive round-trip.")
+
+	encryptedChunk, err := encryptChunk(originalPlaintext, fek, 0, 0x01)
+	if err != nil {
+		t.Fatalf("encryptChunk failed: %v", err)
+	}
+
+	// Step 4: Create bundle metadata
+	meta := bundleMeta{
+		Version:         1,
+		FileID:          "test-file-bundle-decrypt",
+		EncryptedFEK:    wrappedFEKB64,
+		PasswordType:    "account",
+		SizeBytes:       int64(len(originalPlaintext)),
+		ChunkSizeBytes:  int64(crypto.PlaintextChunkSize()),
+		ChunkCount:      1,
+		EnvelopeVersion: 1,
+	}
+
+	// Step 5: Write the bundle
+	bundlePath := createTestBundle(t, meta, encryptedChunk)
+
+	// Step 6: Parse the bundle back
+	parsedMeta, blobOffset, err := parseBundle(bundlePath)
+	if err != nil {
+		t.Fatalf("parseBundle failed: %v", err)
+	}
+
+	// Step 7: Unwrap FEK using the same account KEK
+	unwrappedFEK, keyType, err := unwrapFEK(parsedMeta.EncryptedFEK, kek)
+	if err != nil {
+		t.Fatalf("unwrapFEK failed: %v", err)
+	}
+	if keyType != "account" {
+		t.Errorf("expected key type 'account', got %q", keyType)
+	}
+
+	// Step 8: Read encrypted blob from file at blobOffset
+	f, err := os.Open(bundlePath)
+	if err != nil {
+		t.Fatalf("failed to open bundle: %v", err)
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(blobOffset, 0); err != nil {
+		t.Fatalf("failed to seek to blob: %v", err)
+	}
+
+	encBlob, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatalf("failed to read blob: %v", err)
+	}
+
+	// Step 9: Decrypt chunk 0
+	decrypted, err := decryptChunk(encBlob, unwrappedFEK, 0)
+	if err != nil {
+		t.Fatalf("decryptChunk failed: %v", err)
+	}
+
+	// Step 10: Verify plaintext matches
+	if !bytes.Equal(originalPlaintext, decrypted) {
+		t.Errorf("decrypted content does not match original: got %d bytes, expected %d bytes",
+			len(decrypted), len(originalPlaintext))
+	}
+}
+
+// TestDecryptBundleBlob_WrongKey verifies that decryption with wrong password fails
+func TestDecryptBundleBlob_WrongKey(t *testing.T) {
+	username := "bundle-wrong-key-user"
+	correctPassword := []byte("CorrectPassword2025!Secure")
+	wrongPassword := []byte("WrongPassword2025!Insecure")
+
+	// Wrap FEK with correct password
+	kek := crypto.DeriveAccountPasswordKey(correctPassword, username)
+	fek, _ := generateFEK()
+	wrappedFEKB64, _ := wrapFEK(fek, kek, "account")
+
+	// Try to unwrap with wrong password
+	wrongKEK := crypto.DeriveAccountPasswordKey(wrongPassword, username)
+	_, _, err := unwrapFEK(wrappedFEKB64, wrongKEK)
+	if err == nil {
+		t.Fatal("unwrapFEK with wrong password should fail")
 	}
 }
 
