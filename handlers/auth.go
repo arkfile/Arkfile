@@ -568,6 +568,15 @@ func OpaqueAuthFinalize(c echo.Context) error {
 		if recordErr := recordAuthFailedAttempt("login", entityID); recordErr != nil {
 			logging.ErrorLogger.Printf("Failed to record login failure: %v", recordErr)
 		}
+		// Log security event for login failure
+		logging.LogSecurityEventWithEntityID(
+			logging.EventOpaqueLoginFailure,
+			entityID,
+			map[string]interface{}{
+				"username": request.Username,
+				"endpoint": "opaque_auth_finalize",
+			},
+		)
 		// Clean up session
 		auth.DeleteAuthSession(database.DB, request.SessionID)
 		return JSONError(c, http.StatusUnauthorized, "Invalid credentials")
@@ -941,6 +950,17 @@ func TOTPAuth(c echo.Context) error {
 	// Log successful authentication
 	database.LogUserAction(username, "completed TOTP authentication", "")
 	logging.InfoLogger.Printf("TOTP authentication completed for user: %s", username)
+
+	// Log security event for successful login (OPAQUE+TOTP complete)
+	loginEntityID := logging.GetOrCreateEntityID(c)
+	logging.LogSecurityEventWithEntityID(
+		logging.EventOpaqueLoginSuccess,
+		loginEntityID,
+		map[string]interface{}{
+			"username":    username,
+			"auth_method": "OPAQUE+TOTP",
+		},
+	)
 
 	return JSONResponse(c, http.StatusOK, "TOTP authentication completed", map[string]interface{}{
 		"token":         token,

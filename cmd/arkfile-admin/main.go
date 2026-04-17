@@ -2071,18 +2071,20 @@ EXAMPLES:
 		return nil
 	}
 
-	fmt.Printf("  %-38s %-12s %-8s %s\n", "FILE ID", "SIZE", "CHUNKS", "UPLOAD DATE")
-	fmt.Printf("  %-38s %-12s %-8s %s\n",
-		strings.Repeat("-", 38), strings.Repeat("-", 12), strings.Repeat("-", 8), strings.Repeat("-", 19))
-
-	for _, f := range filesRaw {
+	sep := strings.Repeat("-", 80)
+	for i, f := range filesRaw {
 		fm := f.(map[string]interface{})
 		fileID := safeString(fm, "file_id")
 		sizeBytes := safeInt64(fm, "size_bytes")
 		chunkCount := safeInt64(fm, "chunk_count")
 		uploadDate := safeString(fm, "upload_date")
 
-		fmt.Printf("  %-38s %-12s %-8d %s\n", fileID, formatFileSize(sizeBytes), chunkCount, uploadDate)
+		fmt.Println(sep)
+		fmt.Printf("File %d of %d\n", i+1, len(filesRaw))
+		fmt.Printf("  File ID:    %s\n", fileID)
+		fmt.Printf("  Size:       %s\n", formatFileSize(sizeBytes))
+		fmt.Printf("  Chunks:     %d\n", chunkCount)
+		fmt.Printf("  Uploaded:   %s\n", uploadDate)
 	}
 
 	return nil
@@ -2146,18 +2148,10 @@ EXAMPLES:
 		return nil
 	}
 
-	fmt.Printf("  %-20s %-38s %-8s %-9s %s\n", "SHARE ID", "FILE ID", "ACCESSES", "REVOKED", "CREATED")
-	fmt.Printf("  %-20s %-38s %-8s %-9s %s\n",
-		strings.Repeat("-", 20), strings.Repeat("-", 38), strings.Repeat("-", 8),
-		strings.Repeat("-", 9), strings.Repeat("-", 19))
-
-	for _, s := range sharesRaw {
+	sep := strings.Repeat("-", 80)
+	for i, s := range sharesRaw {
 		sm := s.(map[string]interface{})
 		shareID := safeString(sm, "share_id")
-		// Truncate share_id for display (they can be very long)
-		if len(shareID) > 20 {
-			shareID = shareID[:17] + "..."
-		}
 		fileID := safeString(sm, "file_id")
 		accessCount := safeInt64(sm, "access_count")
 		isRevoked := safeBool(sm, "is_revoked")
@@ -2168,7 +2162,13 @@ EXAMPLES:
 			revokedStr = "Yes"
 		}
 
-		fmt.Printf("  %-20s %-38s %-8d %-9s %s\n", shareID, fileID, accessCount, revokedStr, createdAt)
+		fmt.Println(sep)
+		fmt.Printf("Share %d of %d\n", i+1, len(sharesRaw))
+		fmt.Printf("  Share ID:   %s\n", shareID)
+		fmt.Printf("  File ID:    %s\n", fileID)
+		fmt.Printf("  Accesses:   %d\n", accessCount)
+		fmt.Printf("  Revoked:    %s\n", revokedStr)
+		fmt.Printf("  Created:    %s\n", createdAt)
 	}
 
 	return nil
@@ -2274,22 +2274,42 @@ EXAMPLES:
 func handleSecurityEventsCommand(client *HTTPClient, config *AdminConfig, args []string) error {
 	fs := flag.NewFlagSet("security-events", flag.ExitOnError)
 	jsonOutput := fs.Bool("json", false, "Output as JSON")
-	limit := fs.Int("limit", 20, "Number of events to display")
+	limit := fs.Int("limit", 50, "Number of events to display (max 500)")
+	filterType := fs.String("type", "", "Filter by event type (e.g. share_not_found, opaque_login_failure)")
+	filterSeverity := fs.String("severity", "", "Filter by severity (INFO, WARNING, CRITICAL)")
+	filterEntityID := fs.String("entity-id", "", "Filter by entity ID (16-char hex)")
 
 	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin security-events [--json] [--limit N]
+		fmt.Printf(`Usage: arkfile-admin security-events [FLAGS]
 
-View recent security events (login attempts, rate limits, admin actions, etc.)
+View recent security events (login attempts, rate limits, share enumeration, admin actions, etc.)
 
 FLAGS:
     --json              Output as JSON
-    --limit N           Number of events to display (default: 20)
+    --limit N           Number of events to display (default: 50, max: 500)
+    --type TYPE         Filter by event type
+    --severity LEVEL    Filter by severity (INFO, WARNING, CRITICAL)
+    --entity-id ID      Filter by entity ID (16-char hex, from HMAC)
     --help              Show this help message
+
+EVENT TYPES:
+    opaque_login_success    Successful OPAQUE+TOTP login
+    opaque_login_failure    Failed OPAQUE authentication
+    share_not_found         Share ID 404 (potential enumeration)
+    share_enumeration       Share ID enumeration detected (progressive penalty applied)
+    invalid_download_token  Invalid download token on share chunk
+    rate_limit_violation    Rate limit triggered
+    endpoint_abuse          Severe share enumeration (32+ unique 404s)
+    unauthorized_access     TOTP bypass attempt
+    admin_access            Admin API action
+    key_health_check        Key health monitoring event
 
 EXAMPLES:
     arkfile-admin security-events
-    arkfile-admin security-events --json
-    arkfile-admin security-events --limit 50
+    arkfile-admin security-events --severity WARNING
+    arkfile-admin security-events --type share_not_found --limit 100
+    arkfile-admin security-events --entity-id a1b2c3d4e5f67890
+    arkfile-admin security-events --json --type opaque_login_failure
 `)
 	}
 
@@ -2305,7 +2325,19 @@ EXAMPLES:
 		return fmt.Errorf("admin session expired, please login again")
 	}
 
-	resp, err := client.makeRequest("GET", "/api/admin/security/events", nil, session.AccessToken)
+	// Build query parameters for filtering
+	endpoint := fmt.Sprintf("/api/admin/security/events?limit=%d", *limit)
+	if *filterType != "" {
+		endpoint += "&type=" + *filterType
+	}
+	if *filterSeverity != "" {
+		endpoint += "&severity=" + *filterSeverity
+	}
+	if *filterEntityID != "" {
+		endpoint += "&entity_id=" + *filterEntityID
+	}
+
+	resp, err := client.makeRequest("GET", endpoint, nil, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("failed to get security events: %w", err)
 	}
@@ -2323,31 +2355,73 @@ EXAMPLES:
 	}
 
 	count := len(eventsRaw)
-	displayCount := count
-	if displayCount > *limit {
-		displayCount = *limit
+
+	// Show active filters
+	filters := []string{}
+	if *filterType != "" {
+		filters = append(filters, "type="+*filterType)
+	}
+	if *filterSeverity != "" {
+		filters = append(filters, "severity="+*filterSeverity)
+	}
+	if *filterEntityID != "" {
+		filters = append(filters, "entity="+*filterEntityID)
 	}
 
-	fmt.Printf("Security Events (showing %d of %d):\n\n", displayCount, count)
+	if len(filters) > 0 {
+		fmt.Printf("Security Events (%d results, filters: %s):\n\n", count, strings.Join(filters, ", "))
+	} else {
+		fmt.Printf("Security Events (%d results):\n\n", count)
+	}
 
-	for i := 0; i < displayCount; i++ {
+	for i := 0; i < count; i++ {
 		event, ok := eventsRaw[i].(map[string]interface{})
 		if !ok {
 			continue
 		}
 		eventType := safeString(event, "event_type")
+		severity := safeString(event, "severity")
 		timestamp := safeString(event, "timestamp")
+		entityID := safeString(event, "entity_id")
 		username := safeString(event, "username")
-		details := safeString(event, "details")
 
+		// Format timestamp (truncate to seconds)
+		if len(timestamp) > 19 {
+			timestamp = timestamp[:19]
+		}
+
+		// Severity indicator
+		severityTag := ""
+		switch severity {
+		case "CRITICAL":
+			severityTag = "[!!]"
+		case "WARNING":
+			severityTag = "[!] "
+		default:
+			severityTag = "    "
+		}
+
+		// Build event line
+		fmt.Printf("  %s [%s] %-28s", severityTag, timestamp, eventType)
+
+		if entityID != "" {
+			fmt.Printf("  entity:%s", entityID)
+		}
 		if username != "" {
-			fmt.Printf("  [%s] %s - user: %s", timestamp, eventType, username)
-		} else {
-			fmt.Printf("  [%s] %s", timestamp, eventType)
+			fmt.Printf("  user:%s", username)
 		}
-		if details != "" {
-			fmt.Printf(" - %s", details)
+
+		// Show details inline (compact)
+		if details, ok := event["details"].(map[string]interface{}); ok && len(details) > 0 {
+			detailParts := []string{}
+			for k, v := range details {
+				detailParts = append(detailParts, fmt.Sprintf("%s=%v", k, v))
+			}
+			if len(detailParts) > 0 {
+				fmt.Printf("  {%s}", strings.Join(detailParts, ", "))
+			}
 		}
+
 		fmt.Println()
 	}
 

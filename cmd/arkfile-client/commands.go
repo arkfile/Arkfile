@@ -652,11 +652,8 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 		accountKey, _ = agentClient.GetAccountKey("")
 	}
 
-	fmt.Printf("%-36s  %-30s  %-10s  %-20s  %-8s\n",
-		"FILE ID", "FILENAME", "SIZE", "UPLOADED", "TYPE")
-	fmt.Println(strings.Repeat("-", 110))
-
-	for _, f := range fileList.Files {
+	sep := strings.Repeat("-", 80)
+	for i, f := range fileList.Files {
 		filename := "[encrypted]"
 		if accountKey != nil && f.EncryptedFilename != "" && f.FilenameNonce != "" {
 			if name, err := decryptMetadataField(f.EncryptedFilename, f.FilenameNonce, accountKey); err == nil {
@@ -664,23 +661,18 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 			}
 		}
 
-		// Truncate long filenames
-		if len(filename) > 30 {
-			filename = filename[:27] + "..."
-		}
-
 		size := f.SizeReadable
 		if size == "" {
 			size = formatFileSize(f.SizeBytes)
 		}
 
-		uploaded := f.UploadDate
-		if len(uploaded) > 20 {
-			uploaded = uploaded[:20]
-		}
-
-		fmt.Printf("%-36s  %-30s  %-10s  %-20s  %-8s\n",
-			f.FileID, filename, size, uploaded, f.PasswordType)
+		fmt.Println(sep)
+		fmt.Printf("File %d of %d\n", i+1, len(fileList.Files))
+		fmt.Printf("  File ID:   %s\n", f.FileID)
+		fmt.Printf("  Filename:  %s\n", filename)
+		fmt.Printf("  Size:      %s\n", size)
+		fmt.Printf("  Uploaded:  %s\n", f.UploadDate)
+		fmt.Printf("  Type:      %s\n", f.PasswordType)
 	}
 
 	fmt.Printf("\nTotal: %d files\n", len(fileList.Files))
@@ -1248,16 +1240,6 @@ func fetchMetadataBatchForShares(client *HTTPClient, session *AuthSession, fileI
 	}
 
 	return batchResp.Files, nil
-}
-
-func truncateString(s string, max int) string {
-	if max <= 0 || len(s) <= max {
-		return s
-	}
-	if max <= 3 {
-		return s[:max]
-	}
-	return s[:max-3] + "..."
 }
 
 func defaultString(value, fallback string) string {

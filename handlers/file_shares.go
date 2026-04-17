@@ -220,6 +220,18 @@ func GetShareEnvelope(c echo.Context) error {
 	)
 
 	if err == sql.ErrNoRows {
+		prefix := shareID[:min(8, len(shareID))]
+		// Log share-not-found for security monitoring (share enumeration detection)
+		logging.LogSecurityEventWithEntityID(
+			logging.EventShareNotFound,
+			entityID,
+			map[string]interface{}{
+				"endpoint":        "get_share_envelope",
+				"share_id_prefix": prefix,
+			},
+		)
+		// Notify enumeration guard for progressive rate limiting
+		NotifyShareNotFound(entityID, prefix)
 		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
 	} else if err != nil {
 		logging.ErrorLogger.Printf("Database error accessing share %s: %v", shareID, err)
@@ -355,6 +367,19 @@ func GetSharedFile(c echo.Context) error {
 	)
 
 	if err == sql.ErrNoRows {
+		prefix := shareID[:min(8, len(shareID))]
+		// Log share-not-found for security monitoring (share enumeration detection)
+		entityID := logging.GetOrCreateEntityID(c)
+		logging.LogSecurityEventWithEntityID(
+			logging.EventShareNotFound,
+			entityID,
+			map[string]interface{}{
+				"endpoint":        "get_shared_file",
+				"share_id_prefix": prefix,
+			},
+		)
+		// Notify enumeration guard for progressive rate limiting
+		NotifyShareNotFound(entityID, prefix)
 		return c.File("client/static/errors/404.html")
 	} else if err != nil {
 		logging.ErrorLogger.Printf("Database error checking share %s: %v", shareID, err)
@@ -586,6 +611,18 @@ func GetShareDownloadMetadata(c echo.Context) error {
 	)
 
 	if err == sql.ErrNoRows {
+		prefix := shareID[:min(8, len(shareID))]
+		// Log share-not-found for security monitoring (share enumeration detection)
+		logging.LogSecurityEventWithEntityID(
+			logging.EventShareNotFound,
+			entityID,
+			map[string]interface{}{
+				"endpoint":        "get_share_download_metadata",
+				"share_id_prefix": prefix,
+			},
+		)
+		// Notify enumeration guard for progressive rate limiting
+		NotifyShareNotFound(entityID, prefix)
 		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
 	} else if err != nil {
 		logging.ErrorLogger.Printf("Database error accessing share %s: %v", shareID, err)
@@ -729,7 +766,17 @@ func DownloadShareChunk(c echo.Context) error {
 	}
 
 	if !constantTimeCompare(computedHash, share.DownloadTokenHash) {
-		logging.WarningLogger.Printf("Invalid download token: share_id=%s", shareID[:8])
+		entityID := logging.GetOrCreateEntityID(c)
+		logging.WarningLogger.Printf("Invalid download token: share_id=%s, entity_id=%s", shareID[:8], entityID)
+		logging.LogSecurityEventWithEntityID(
+			logging.EventInvalidDownloadToken,
+			entityID,
+			map[string]interface{}{
+				"endpoint":        "download_share_chunk",
+				"share_id_prefix": shareID[:min(8, len(shareID))],
+				"chunk_index":     chunkIndex,
+			},
+		)
 		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
 	}
 

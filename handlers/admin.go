@@ -1009,7 +1009,12 @@ func AdminSystemHealth(c echo.Context) error {
 	return JSONResponse(c, http.StatusOK, "System health status retrieved", status)
 }
 
-// AdminSecurityEvents exposes existing security event logs via admin API
+// AdminSecurityEvents exposes existing security event logs via admin API.
+// Supports query parameters for filtering:
+//   - type: filter by event type (e.g. "share_not_found", "opaque_login_failure")
+//   - severity: filter by severity ("INFO", "WARNING", "CRITICAL")
+//   - entity_id: filter by entity ID (HMAC-based, 16-char hex)
+//   - limit: max events to return (default 100, max 500)
 func AdminSecurityEvents(c echo.Context) error {
 	// Get admin username for audit logging
 	adminUsername := auth.GetUsernameFromToken(c)
@@ -1019,9 +1024,34 @@ func AdminSecurityEvents(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Security event logger not initialized")
 	}
 
-	// Create filters for recent events (limit to 100 for performance)
+	// Parse query parameter filters
+	limit := 100
+	if limitStr := c.QueryParam("limit"); limitStr != "" {
+		if parsedLimit, err := fmt.Sscanf(limitStr, "%d", &limit); err != nil || parsedLimit != 1 {
+			limit = 100
+		}
+		if limit < 1 {
+			limit = 1
+		}
+		if limit > 500 {
+			limit = 500
+		}
+	}
+
 	filters := logging.SecurityEventFilters{
-		Limit: 100,
+		Limit: limit,
+	}
+
+	if eventType := c.QueryParam("type"); eventType != "" {
+		filters.EventType = logging.SecurityEventType(eventType)
+	}
+
+	if severity := c.QueryParam("severity"); severity != "" {
+		filters.Severity = logging.SecurityEventSeverity(strings.ToUpper(severity))
+	}
+
+	if entityID := c.QueryParam("entity_id"); entityID != "" {
+		filters.EntityID = entityID
 	}
 
 	events, err := logging.DefaultSecurityEventLogger.GetSecurityEvents(filters)
@@ -1045,7 +1075,7 @@ func AdminSecurityEvents(c echo.Context) error {
 	response := map[string]interface{}{
 		"events": events,
 		"count":  len(events),
-		"limit":  100,
+		"limit":  limit,
 	}
 
 	return JSONResponse(c, http.StatusOK, "Security events retrieved", response)

@@ -110,12 +110,14 @@ func RegisterRoutes() {
 	totpProtectedGroup.POST("/api/shares/:id/revoke", RevokeShare)         // Revoke a share
 
 	// Share page (serves shared.html for /shared/:id URLs - no authentication required)
-	Echo.GET("/shared/:id", GetSharedFile)
+	// Protected by entity-global share enumeration detection
+	Echo.GET("/shared/:id", ShareEnumerationMiddleware(GetSharedFile))
 
 	// Anonymous share access (no authentication required) - separate namespace with rate limiting
 	// Using /api/public/shares to avoid conflicts with authenticated /api/shares routes
 	publicShareGroup := Echo.Group("/api/public/shares")
-	publicShareGroup.Use(ShareRateLimitMiddleware)                      // Apply rate limiting FIRST (fail fast for abusers)
+	publicShareGroup.Use(ShareEnumerationMiddleware)                    // Entity-global enumeration protection FIRST
+	publicShareGroup.Use(ShareRateLimitMiddleware)                      // Then per-share-ID rate limiting (fail fast for abusers)
 	publicShareGroup.Use(TimingProtectionMiddleware)                    // Then timing protection (for valid requests)
 	publicShareGroup.GET("/:id", GetSharedFile)                         // Share access page
 	publicShareGroup.GET("/:id/envelope", GetShareEnvelope)             // Get share envelope for client-side decryption

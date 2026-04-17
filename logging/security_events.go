@@ -28,10 +28,13 @@ const (
 	EventProgressivePenalty SecurityEventType = "progressive_penalty"
 
 	// Access pattern events
-	EventSuspiciousPattern  SecurityEventType = "suspicious_pattern"
-	EventEndpointAbuse      SecurityEventType = "endpoint_abuse"
-	EventUnauthorizedAccess SecurityEventType = "unauthorized_access"
-	EventMultipleFailures   SecurityEventType = "multiple_failures"
+	EventSuspiciousPattern    SecurityEventType = "suspicious_pattern"
+	EventEndpointAbuse        SecurityEventType = "endpoint_abuse"
+	EventUnauthorizedAccess   SecurityEventType = "unauthorized_access"
+	EventMultipleFailures     SecurityEventType = "multiple_failures"
+	EventShareNotFound        SecurityEventType = "share_not_found"
+	EventShareEnumeration     SecurityEventType = "share_enumeration"
+	EventInvalidDownloadToken SecurityEventType = "invalid_download_token"
 
 	// Key health events
 	EventKeyRotation        SecurityEventType = "key_rotation"
@@ -315,7 +318,8 @@ func (sel *SecurityEventLogger) storeSecurityEvent(event SecurityEvent) error {
 // getSeverityForEventType determines the appropriate severity level for an event type
 func (sel *SecurityEventLogger) getSeverityForEventType(eventType SecurityEventType) SecurityEventSeverity {
 	switch eventType {
-	case EventOpaqueLoginFailure, EventJWTRefreshFailure, EventRateLimitViolation:
+	case EventOpaqueLoginFailure, EventJWTRefreshFailure, EventRateLimitViolation,
+		EventShareEnumeration, EventInvalidDownloadToken:
 		return SeverityWarning
 	case EventSuspiciousPattern, EventEndpointAbuse, EventUnauthorizedAccess, EventMultipleFailures, EventEmergencyProcedure:
 		return SeverityCritical
@@ -405,4 +409,45 @@ func LogSecurityEvent(eventType SecurityEventType, ip net.IP, username *string, 
 		return fmt.Errorf("security event logger not initialized")
 	}
 	return DefaultSecurityEventLogger.LogSecurityEvent(eventType, ip, username, deviceProfile, details)
+}
+
+// LogSecurityEventWithEntityID logs a security event using a pre-computed entity ID.
+// Use this when the entity ID is already available (e.g., from share access handlers
+// that compute entity IDs for rate limiting) to avoid redundant HMAC computation.
+func LogSecurityEventWithEntityID(eventType SecurityEventType, entityID string, details map[string]interface{}) error {
+	if DefaultSecurityEventLogger == nil {
+		return fmt.Errorf("security event logger not initialized")
+	}
+	return DefaultSecurityEventLogger.logEventWithEntityID(eventType, entityID, nil, nil, details)
+}
+
+// logEventWithEntityID stores a security event with a pre-computed entity ID
+func (sel *SecurityEventLogger) logEventWithEntityID(eventType SecurityEventType, entityID string, username *string, deviceProfile *string, details map[string]interface{}) error {
+	timeWindow := ""
+	if sel.entityIDService != nil {
+		timeWindow = sel.entityIDService.GetCurrentTimeWindow()
+	}
+
+	severity := sel.getSeverityForEventType(eventType)
+	sanitizedDetails := sel.sanitizeDetails(details)
+
+	event := SecurityEvent{
+		Timestamp:     time.Now().UTC(),
+		EventType:     eventType,
+		EntityID:      entityID,
+		TimeWindow:    timeWindow,
+		Username:      username,
+		DeviceProfile: deviceProfile,
+		Severity:      severity,
+		Details:       sanitizedDetails,
+		CreatedAt:     time.Now().UTC(),
+	}
+
+	if err := sel.storeSecurityEvent(event); err != nil {
+		ErrorLogger.Printf("Failed to store security event: %v", err)
+		return err
+	}
+
+	sel.logToFile(event)
+	return nil
 }
