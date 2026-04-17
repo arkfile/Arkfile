@@ -160,6 +160,113 @@ func TestAccessSharedFile_Success(t *testing.T) {
 // The server does not validate share password strength (that is client-side per design).
 // The test added no unique coverage. See docs/wip/fix-go-unit-tests2.md cleanup item #6.
 
+// -- Priority 4: Share enforcement boundary tests --
+
+func TestGetShareEnvelope_Expired(t *testing.T) {
+	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/share/expired-share", bytes.NewReader([]byte(`{
+		"password": "TestPassword2025!Secure"
+	}`)))
+	c.SetParamNames("id")
+	c.SetParamValues("expired-share")
+
+	// Mock rate limiting check - no prior entry
+	rateLimitSQL := `SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt FROM share_access_attempts WHERE share_id = \? AND entity_id = \?`
+	mock.ExpectQuery(rateLimitSQL).WithArgs("expired-share", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
+	rateLimitInsertSQL := `INSERT INTO share_access_attempts \(share_id, entity_id, failed_count, created_at\) VALUES \(\?, \?, 0, CURRENT_TIMESTAMP\)`
+	mock.ExpectExec(rateLimitInsertSQL).WithArgs("expired-share", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Mock share lookup - returns expired share (expires_at in the past)
+	expiredTime := time.Now().Add(-24 * time.Hour)
+	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at, revoked_at, revoked_reason, access_count, max_accesses FROM file_share_keys WHERE share_id = \?`
+	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at", "revoked_at", "revoked_reason", "access_count", "max_accesses"}).
+		AddRow("test-file-123", "owneruser", "test-salt", "ZW5jcnlwdGVkLWZlaw==", expiredTime, nil, nil, 0, nil)
+	mock.ExpectQuery(shareSQL).WithArgs("expired-share").WillReturnRows(shareRows)
+
+	err := GetShareEnvelope(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusForbidden, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "expired")
+}
+
+func TestGetShareEnvelope_Revoked(t *testing.T) {
+	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/share/revoked-share", bytes.NewReader([]byte(`{
+		"password": "TestPassword2025!Secure"
+	}`)))
+	c.SetParamNames("id")
+	c.SetParamValues("revoked-share")
+
+	// Mock rate limiting
+	rateLimitSQL := `SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt FROM share_access_attempts WHERE share_id = \? AND entity_id = \?`
+	mock.ExpectQuery(rateLimitSQL).WithArgs("revoked-share", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
+	rateLimitInsertSQL := `INSERT INTO share_access_attempts \(share_id, entity_id, failed_count, created_at\) VALUES \(\?, \?, 0, CURRENT_TIMESTAMP\)`
+	mock.ExpectExec(rateLimitInsertSQL).WithArgs("revoked-share", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Mock share lookup - returns revoked share (revoked_at set)
+	revokedTime := time.Now().Add(-1 * time.Hour)
+	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at, revoked_at, revoked_reason, access_count, max_accesses FROM file_share_keys WHERE share_id = \?`
+	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at", "revoked_at", "revoked_reason", "access_count", "max_accesses"}).
+		AddRow("test-file-123", "owneruser", "test-salt", "ZW5jcnlwdGVkLWZlaw==", nil, revokedTime, "manual", 0, nil)
+	mock.ExpectQuery(shareSQL).WithArgs("revoked-share").WillReturnRows(shareRows)
+
+	err := GetShareEnvelope(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusForbidden, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "revoked")
+}
+
+func TestGetShareEnvelope_MaxAccessesExceeded(t *testing.T) {
+	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/share/exhausted-share", bytes.NewReader([]byte(`{
+		"password": "TestPassword2025!Secure"
+	}`)))
+	c.SetParamNames("id")
+	c.SetParamValues("exhausted-share")
+
+	// Mock rate limiting
+	rateLimitSQL := `SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt FROM share_access_attempts WHERE share_id = \? AND entity_id = \?`
+	mock.ExpectQuery(rateLimitSQL).WithArgs("exhausted-share", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
+	rateLimitInsertSQL := `INSERT INTO share_access_attempts \(share_id, entity_id, failed_count, created_at\) VALUES \(\?, \?, 0, CURRENT_TIMESTAMP\)`
+	mock.ExpectExec(rateLimitInsertSQL).WithArgs("exhausted-share", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Mock share lookup - access_count has reached max_accesses (3 of 3)
+	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at, revoked_at, revoked_reason, access_count, max_accesses FROM file_share_keys WHERE share_id = \?`
+	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at", "revoked_at", "revoked_reason", "access_count", "max_accesses"}).
+		AddRow("test-file-123", "owneruser", "test-salt", "ZW5jcnlwdGVkLWZlaw==", nil, nil, nil, float64(3), float64(3))
+	mock.ExpectQuery(shareSQL).WithArgs("exhausted-share").WillReturnRows(shareRows)
+
+	err := GetShareEnvelope(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusForbidden, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "Download limit reached")
+}
+
+func TestGetShareEnvelope_RateLimited(t *testing.T) {
+	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/share/ratelimit-share", bytes.NewReader([]byte(`{
+		"password": "TestPassword2025!Secure"
+	}`)))
+	c.SetParamNames("id")
+	c.SetParamValues("ratelimit-share")
+
+	// Mock rate limiting - entity is rate-limited (next_allowed_attempt in the future)
+	futureTime := time.Now().Add(5 * time.Minute)
+	rateLimitSQL := `SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt FROM share_access_attempts WHERE share_id = \? AND entity_id = \?`
+	rateLimitRows := sqlmock.NewRows([]string{"share_id", "entity_id", "failed_count", "last_failed_attempt", "next_allowed_attempt"}).
+		AddRow("ratelimit-share", "test-entity", 5, time.Now().Add(-1*time.Minute), futureTime)
+	mock.ExpectQuery(rateLimitSQL).WithArgs("ratelimit-share", sqlmock.AnyArg()).WillReturnRows(rateLimitRows)
+
+	err := GetShareEnvelope(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusTooManyRequests, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "Too many requests")
+}
+
 func TestAccessSharedFile_NonexistentShare(t *testing.T) {
 	// Setup test environment
 	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/share/nonexistent", bytes.NewReader([]byte(`{
