@@ -1729,34 +1729,9 @@ phase_11_admin_system_status() {
         record_test "Admin delete-file" "SKIP"
     fi
 
-    # 11.11: Admin delete-user (delete the test user as final destructive test)
-    section "11.11: Admin delete-user"
-    local delete_user_output delete_user_code
-    safe_exec delete_user_output delete_user_code \
-        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        delete-user --username "$TEST_USERNAME" --confirm
-    if [ $delete_user_code -eq 0 ] && echo "$delete_user_output" | grep -q "deleted successfully"; then
-        record_test "Admin delete-user" "PASS"
-        info "Admin deleted test user $TEST_USERNAME"
-    else
-        error "delete-user command failed:"
-        echo "$delete_user_output"
-        record_test "Admin delete-user" "FAIL"
-    fi
-
-    # 11.12: Verify deleted user no longer exists
-    section "11.12: Verify deleted user gone"
-    local verify_deleted_output verify_deleted_code
-    safe_exec verify_deleted_output verify_deleted_code \
-        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        user-status --username "$TEST_USERNAME"
-    if [ $verify_deleted_code -eq 0 ] && echo "$verify_deleted_output" | grep -q "Exists:.*No"; then
-        record_test "Deleted user no longer exists" "PASS"
-    else
-        error "Deleted user still appears to exist:"
-        echo "$verify_deleted_output"
-        record_test "Deleted user no longer exists" "FAIL"
-    fi
+    # NOTE: admin delete-user is NOT tested here because e2e-playwright.sh
+    # depends on the test user still existing after this script completes.
+    # Test delete-user separately or via Go unit tests (handlers/admin_test.go).
 
     success "Admin system status phase complete"
 }
