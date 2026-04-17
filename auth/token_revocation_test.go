@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -52,6 +51,7 @@ func resetCache() {
 }
 
 // createTestToken generates a JWT string for testing revocation.
+// Uses Ed25519 signing to match production (GetJWTPrivateKey/GetJWTPublicKey).
 func createTestToken(t *testing.T, username, tokenID string, expiry time.Time) string {
 	claims := &Claims{
 		Username: username,
@@ -62,20 +62,15 @@ func createTestToken(t *testing.T, username, tokenID string, expiry time.Time) s
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	secret := []byte(os.Getenv("JWT_SECRET")) // Assumes JWT_SECRET is set, needs setup
-	tokenString, err := token.SignedString(secret)
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	tokenString, err := token.SignedString(GetJWTPrivateKey())
 	require.NoError(t, err)
 	return tokenString
 }
 
 func TestRevokeToken(t *testing.T) {
-	// Setup DB and JWT secret
 	db := setupTestDB(t)
 	defer db.Close()
-	originalSecret := os.Getenv("JWT_SECRET")
-	os.Setenv("JWT_SECRET", "test-revocation-secret")
-	defer os.Setenv("JWT_SECRET", originalSecret)
 
 	tokenID := "test-jti-1"
 	username := "revoke_user"
@@ -107,20 +102,16 @@ func TestRevokeToken(t *testing.T) {
 		Username:         username,
 		RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(expiry)}, // No ID
 	}
-	tokenNoJTI := jwt.NewWithClaims(jwt.SigningMethodHS256, claimsNoJTI)
-	tokenStringNoJTI, _ := tokenNoJTI.SignedString([]byte("test-revocation-secret"))
+	tokenNoJTI := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claimsNoJTI)
+	tokenStringNoJTI, _ := tokenNoJTI.SignedString(GetJWTPrivateKey())
 	err = RevokeToken(db, tokenStringNoJTI, "test")
 	assert.Error(t, err, "Should error when token has no JTI")
 	assert.Contains(t, err.Error(), "token has no ID", "Error message should mention missing JTI")
 }
 
 func TestIsRevoked(t *testing.T) {
-	// Setup DB and JWT secret
 	db := setupTestDB(t)
 	defer db.Close()
-	originalSecret := os.Getenv("JWT_SECRET")
-	os.Setenv("JWT_SECRET", "test-revocation-secret")
-	defer os.Setenv("JWT_SECRET", originalSecret)
 
 	revokedTokenID := "revoked-jti"
 	validTokenID := "valid-jti"
@@ -270,12 +261,8 @@ func TestCleanupExpiredTokens(t *testing.T) {
 }
 
 func TestTokenRevocationMiddleware(t *testing.T) {
-	// Setup DB and JWT secret
 	db := setupTestDB(t)
 	defer db.Close()
-	originalSecret := os.Getenv("JWT_SECRET")
-	os.Setenv("JWT_SECRET", "test-middleware-secret")
-	defer os.Setenv("JWT_SECRET", originalSecret)
 
 	// Setup Echo and mock handler
 	e := echo.New()
@@ -288,16 +275,15 @@ func TestTokenRevocationMiddleware(t *testing.T) {
 	// Tokens
 	validTokenID := "valid-for-middleware"
 	revokedTokenID := "revoked-for-middleware"
-	// tokenNoJTI_ID := "token-without-jti" // Unused variable removed
 	username := "middleware_user"
 	expiry := time.Now().Add(1 * time.Hour)
 
 	validTokenString := createTestToken(t, username, validTokenID, expiry)
 	revokedTokenString := createTestToken(t, username, revokedTokenID, expiry)
-	// Token without JTI (ID claim)
+	// Token without JTI (ID claim) -- uses Ed25519 to match production
 	claimsNoJTI := &Claims{Username: username, RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(expiry)}}
-	tokenNoJTI := jwt.NewWithClaims(jwt.SigningMethodHS256, claimsNoJTI)
-	tokenStringNoJTI, _ := tokenNoJTI.SignedString([]byte("test-middleware-secret"))
+	tokenNoJTI := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claimsNoJTI)
+	tokenStringNoJTI, _ := tokenNoJTI.SignedString(GetJWTPrivateKey())
 
 	// Revoke the specific token
 	err := RevokeToken(db, revokedTokenString, "testing middleware")
