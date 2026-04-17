@@ -199,7 +199,7 @@ func TestDeleteUser_Success_Admin(t *testing.T) {
 	mockDB.ExpectExec("DELETE FROM file_metadata WHERE file_id = ?").WithArgs("file-id-2").WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Mock deletion of user shares
-	mockDB.ExpectExec("DELETE FROM file_shares WHERE owner_username = ?").
+	mockDB.ExpectExec("DELETE FROM file_share_keys WHERE owner_username = ?").
 		WithArgs(targetUsername).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -512,7 +512,7 @@ func TestDeleteUser_Error_DeleteFileSharesError(t *testing.T) {
 		WillReturnRows(fileRows)
 
 	dbErr := fmt.Errorf("simulated DB error deleting file shares")
-	mockDB.ExpectExec("DELETE FROM file_shares WHERE owner_username = ?").
+	mockDB.ExpectExec("DELETE FROM file_share_keys WHERE owner_username = ?").
 		WithArgs(targetUsername).
 		WillReturnError(dbErr)
 
@@ -557,7 +557,7 @@ func TestDeleteUser_Error_DeleteUserRecordError(t *testing.T) {
 		WithArgs(targetUsername).
 		WillReturnRows(fileRows)
 
-	mockDB.ExpectExec("DELETE FROM file_shares WHERE owner_username = ?").
+	mockDB.ExpectExec("DELETE FROM file_share_keys WHERE owner_username = ?").
 		WithArgs(targetUsername).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
@@ -601,7 +601,7 @@ func TestDeleteUser_Error_LogAdminActionFailure(t *testing.T) {
 
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT file_id, storage_id FROM file_metadata WHERE owner_username = ?").WithArgs(targetUsername).WillReturnRows(sqlmock.NewRows([]string{"file_id", "storage_id"}))
-	mockDB.ExpectExec("DELETE FROM file_shares WHERE owner_username = ?").WithArgs(targetUsername).WillReturnResult(sqlmock.NewResult(0, 0))
+	mockDB.ExpectExec("DELETE FROM file_share_keys WHERE owner_username = ?").WithArgs(targetUsername).WillReturnResult(sqlmock.NewResult(0, 0))
 	mockDB.ExpectExec("DELETE FROM users WHERE username = ?").WithArgs(targetUsername).WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Mock the logging action to fail.

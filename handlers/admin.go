@@ -542,8 +542,8 @@ func DeleteUser(c echo.Context) error {
 		}
 	}
 
-	// Delete user's file shares
-	if _, err := tx.Exec("DELETE FROM file_shares WHERE owner_username = ?", targetUsername); err != nil {
+	// Delete user's file shares from the current shares table
+	if _, err := tx.Exec("DELETE FROM file_share_keys WHERE owner_username = ?", targetUsername); err != nil {
 		return JSONError(c, http.StatusInternalServerError, "Failed to delete user's file shares")
 	}
 

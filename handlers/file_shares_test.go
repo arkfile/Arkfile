@@ -155,47 +155,10 @@ func TestAccessSharedFile_Success(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestAccessSharedFile_WeakPassword(t *testing.T) {
-	// Setup test environment with weak password
-	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/share/test-share-id", bytes.NewReader([]byte(`{
-		"password": "weak"
-	}`)))
-
-	c.SetParamNames("id")
-	c.SetParamValues("test-share-id")
-
-	// Mock rate limiting check (first call to checkRateLimit)
-	rateLimitSQL := `SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt FROM share_access_attempts WHERE share_id = \? AND entity_id = \?`
-	mock.ExpectQuery(rateLimitSQL).WithArgs("test-share-id", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
-
-	// Mock rate limit entry creation
-	rateLimitInsertSQL := `INSERT INTO share_access_attempts \(share_id, entity_id, failed_count, created_at\) VALUES \(\?, \?, 0, CURRENT_TIMESTAMP\)`
-	mock.ExpectExec(rateLimitInsertSQL).WithArgs("test-share-id", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Mock share lookup (matches actual handler processShareAccess function)
-	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at FROM file_share_keys WHERE share_id = \?`
-	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "salt", "encrypted_fek", "expires_at"}).
-		AddRow("test-file-123", "owneruser", []byte("test-salt-32-bytes-for-argon2id"), "ZW5jcnlwdGVkLWZlay13aXRoLXNoYXJlLWtleQ==", nil)
-	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
-
-	// Mock file metadata lookup with encrypted fields (matches actual handler)
-	fileMetaSQL := `SELECT encrypted_filename, size_bytes, encrypted_sha256sum, filename_nonce, sha256sum_nonce FROM file_metadata WHERE file_id = \?`
-	fileMetaRows := sqlmock.NewRows([]string{"encrypted_filename", "size_bytes", "encrypted_sha256sum", "filename_nonce", "sha256sum_nonce"}).
-		AddRow("encryptedfilename", 1024, "encryptedsha256sum", "testfilenamenonce", "testsha256nonce")
-	mock.ExpectQuery(fileMetaSQL).WithArgs("test-file-123").WillReturnRows(fileMetaRows)
-
-	// Mock rate limit reset on success
-	rateLimitResetSQL := `UPDATE share_access_attempts SET failed_count = 0, last_failed_attempt = NULL, next_allowed_attempt = NULL WHERE share_id = \? AND entity_id = \?`
-	mock.ExpectExec(rateLimitResetSQL).WithArgs("test-share-id", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Execute handler - should work since handler doesn't actually validate password strength
-	// (Password validation happens client-side per the design)
-	err := GetShareEnvelope(c)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
+// NOTE: TestAccessSharedFile_WeakPassword was removed.
+// It was a duplicate of TestAccessSharedFile_Success with a different password string.
+// The server does not validate share password strength (that is client-side per design).
+// The test added no unique coverage. See docs/wip/fix-go-unit-tests2.md cleanup item #6.
 
 func TestAccessSharedFile_NonexistentShare(t *testing.T) {
 	// Setup test environment
