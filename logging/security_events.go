@@ -183,50 +183,42 @@ func (sel *SecurityEventLogger) LogKeyHealthEvent(eventType SecurityEventType, c
 func (sel *SecurityEventLogger) GetSecurityEvents(filters SecurityEventFilters) ([]SecurityEvent, error) {
 	query := `SELECT id, timestamp, event_type, entity_id, time_window, username, device_profile, severity, details, created_at FROM security_events WHERE 1=1`
 	args := []interface{}{}
-	argCount := 0
 
-	// Add filters
+	// Add filters (using ? placeholders for SQLite/rqlite compatibility)
 	if filters.EventType != "" {
-		argCount++
-		query += fmt.Sprintf(" AND event_type = $%d", argCount)
+		query += " AND event_type = ?"
 		args = append(args, string(filters.EventType))
 	}
 
 	if filters.EntityID != "" {
-		argCount++
-		query += fmt.Sprintf(" AND entity_id = $%d", argCount)
+		query += " AND entity_id = ?"
 		args = append(args, filters.EntityID)
 	}
 
 	if filters.TimeWindow != "" {
-		argCount++
-		query += fmt.Sprintf(" AND time_window = $%d", argCount)
+		query += " AND time_window = ?"
 		args = append(args, filters.TimeWindow)
 	}
 
 	if !filters.StartTime.IsZero() {
-		argCount++
-		query += fmt.Sprintf(" AND timestamp >= $%d", argCount)
+		query += " AND timestamp >= ?"
 		args = append(args, filters.StartTime)
 	}
 
 	if !filters.EndTime.IsZero() {
-		argCount++
-		query += fmt.Sprintf(" AND timestamp <= $%d", argCount)
+		query += " AND timestamp <= ?"
 		args = append(args, filters.EndTime)
 	}
 
 	if filters.Severity != "" {
-		argCount++
-		query += fmt.Sprintf(" AND severity = $%d", argCount)
+		query += " AND severity = ?"
 		args = append(args, string(filters.Severity))
 	}
 
 	// Add ordering and limit
 	query += " ORDER BY timestamp DESC"
 	if filters.Limit > 0 {
-		argCount++
-		query += fmt.Sprintf(" LIMIT $%d", argCount)
+		query += " LIMIT ?"
 		args = append(args, filters.Limit)
 	}
 

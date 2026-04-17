@@ -189,6 +189,15 @@ func main() {
 	}
 	logging.InfoLogger.Printf("Entity ID service initialized successfully")
 
+	// Initialize security event logger (requires database + Entity ID service)
+	securityEventConfig := logging.SecurityEventConfig{
+		MaxRetentionDays: 90,
+	}
+	if err := logging.InitializeSecurityEventLogger(securityEventConfig); err != nil {
+		log.Fatalf("Failed to initialize security event logger: %v", err)
+	}
+	logging.InfoLogger.Printf("Security event logger initialized successfully")
+
 	// Initialize storage
 	if err := storage.InitS3(); err != nil {
 		log.Fatalf("Failed to initialize storage: %v", err)
