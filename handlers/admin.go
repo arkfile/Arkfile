@@ -1118,19 +1118,17 @@ func AdminListUserFiles(c echo.Context) error {
 
 	var files []map[string]interface{}
 	for rows.Next() {
-		var fileID, storageID string
-		var sizeBytes int64
-		var chunkCount int
-		var uploadDate string
-		if err := rows.Scan(&fileID, &storageID, &sizeBytes, &chunkCount, &uploadDate); err != nil {
+		var fileID, storageID, uploadDate string
+		var sizeBytesRaw, chunkCountRaw interface{}
+		if err := rows.Scan(&fileID, &storageID, &sizeBytesRaw, &chunkCountRaw, &uploadDate); err != nil {
 			logging.ErrorLogger.Printf("Admin %s: scan error listing files for %s: %v", adminUsername, targetUsername, err)
 			continue
 		}
 		files = append(files, map[string]interface{}{
 			"file_id":     fileID,
 			"storage_id":  storageID,
-			"size_bytes":  sizeBytes,
-			"chunk_count": chunkCount,
+			"size_bytes":  toInt64(sizeBytesRaw),
+			"chunk_count": toInt64(chunkCountRaw),
 			"upload_date": uploadDate,
 		})
 	}
@@ -1174,9 +1172,8 @@ func AdminListUserShares(c echo.Context) error {
 	for rows.Next() {
 		var shareID, fileID, createdAt string
 		var expiresAt, revokedAt sql.NullString
-		var accessCount int
-		var maxAccesses sql.NullInt64
-		if err := rows.Scan(&shareID, &fileID, &createdAt, &expiresAt, &accessCount, &maxAccesses, &revokedAt); err != nil {
+		var accessCountRaw, maxAccessesRaw interface{}
+		if err := rows.Scan(&shareID, &fileID, &createdAt, &expiresAt, &accessCountRaw, &maxAccessesRaw, &revokedAt); err != nil {
 			logging.ErrorLogger.Printf("Admin %s: scan error listing shares for %s: %v", adminUsername, targetUsername, err)
 			continue
 		}
@@ -1184,14 +1181,14 @@ func AdminListUserShares(c echo.Context) error {
 			"share_id":     shareID,
 			"file_id":      fileID,
 			"created_at":   createdAt,
-			"access_count": accessCount,
+			"access_count": toInt64(accessCountRaw),
 			"is_revoked":   revokedAt.Valid,
 		}
 		if expiresAt.Valid {
 			share["expires_at"] = expiresAt.String
 		}
-		if maxAccesses.Valid {
-			share["max_accesses"] = maxAccesses.Int64
+		if maxAccessesRaw != nil {
+			share["max_accesses"] = toInt64(maxAccessesRaw)
 		}
 		if revokedAt.Valid {
 			share["revoked_at"] = revokedAt.String
