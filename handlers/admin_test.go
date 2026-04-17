@@ -2043,3 +2043,535 @@ func TestUpdateUserStorageLimit_DBUpdateError(t *testing.T) {
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
+
+// AdminDeleteFile Tests
+
+func TestAdminDeleteFile_Success(t *testing.T) {
+	adminUsername := "admin.user.test"
+	fileID := "file-to-delete-123"
+	storageID := "storage-id-abc"
+	ownerUsername := "file.owner.user"
+
+	c, rec, mockDB, mockStorage := setupTestEnv(t, http.MethodDelete, "/api/admin/files/:fileId", nil)
+	c.SetParamNames("fileId")
+	c.SetParamValues(fileID)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	mockDB.ExpectBegin()
+
+	// Mock query for file metadata
+	mockDB.ExpectQuery("SELECT storage_id, owner_username FROM file_metadata WHERE file_id = ?").
+		WithArgs(fileID).
+		WillReturnRows(sqlmock.NewRows([]string{"storage_id", "owner_username"}).
+			AddRow(storageID, ownerUsername))
+
+	// Mock storage removal
+	mockStorage.On("RemoveObject", mock.Anything, storageID, mock.AnythingOfType("storage.RemoveObjectOptions")).Return(nil).Once()
+
+	// Mock share cascade delete
+	mockDB.ExpectExec("DELETE FROM file_share_keys WHERE file_id = ?").
+		WithArgs(fileID).WillReturnResult(sqlmock.NewResult(0, 2))
+
+	// Mock file metadata delete
+	mockDB.ExpectExec("DELETE FROM file_metadata WHERE file_id = ?").
+		WithArgs(fileID).WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock LogAdminAction
+	mockDB.ExpectExec(`INSERT INTO admin_logs \(admin_username, action, target_username, details\) VALUES \(\?, \?, \?, \?\)`).
+		WithArgs(adminUsername, "delete_file", ownerUsername, fmt.Sprintf("file_id: %s", fileID)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	mockDB.ExpectCommit()
+
+	err := AdminDeleteFile(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	assert.Equal(t, "File deleted successfully", resp["message"])
+
+	mockStorage.AssertExpectations(t)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestAdminDeleteFile_FileNotFound(t *testing.T) {
+	adminUsername := "admin.user.test"
+	fileID := "nonexistent-file"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodDelete, "/api/admin/files/:fileId", nil)
+	c.SetParamNames("fileId")
+	c.SetParamValues(fileID)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	mockDB.ExpectBegin()
+
+	mockDB.ExpectQuery("SELECT storage_id, owner_username FROM file_metadata WHERE file_id = ?").
+		WithArgs(fileID).WillReturnError(sql.ErrNoRows)
+
+	mockDB.ExpectRollback()
+
+	err := AdminDeleteFile(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestAdminDeleteFile_MissingFileID(t *testing.T) {
+	adminUsername := "admin.user.test"
+
+	c, rec, _, _ := setupTestEnv(t, http.MethodDelete, "/api/admin/files/:fileId", nil)
+	// Do not set param values to simulate missing fileId
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	err := AdminDeleteFile(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestAdminDeleteFile_StorageRemoveError(t *testing.T) {
+	adminUsername := "admin.user.test"
+	fileID := "file-storage-err"
+	storageID := "storage-id-err"
+	ownerUsername := "file.owner.user"
+
+	c, rec, mockDB, mockStorage := setupTestEnv(t, http.MethodDelete, "/api/admin/files/:fileId", nil)
+	c.SetParamNames("fileId")
+	c.SetParamValues(fileID)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	mockDB.ExpectBegin()
+
+	mockDB.ExpectQuery("SELECT storage_id, owner_username FROM file_metadata WHERE file_id = ?").
+		WithArgs(fileID).
+		WillReturnRows(sqlmock.NewRows([]string{"storage_id", "owner_username"}).
+			AddRow(storageID, ownerUsername))
+
+	// Storage removal fails
+	mockStorage.On("RemoveObject", mock.Anything, storageID, mock.AnythingOfType("storage.RemoveObjectOptions")).
+		Return(fmt.Errorf("storage unavailable")).Once()
+
+	mockDB.ExpectRollback()
+
+	err := AdminDeleteFile(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	mockStorage.AssertExpectations(t)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestAdminDeleteFile_ShareCascadeError(t *testing.T) {
+	adminUsername := "admin.user.test"
+	fileID := "file-cascade-err"
+	storageID := "storage-id-cascade"
+	ownerUsername := "file.owner.user"
+
+	c, rec, mockDB, mockStorage := setupTestEnv(t, http.MethodDelete, "/api/admin/files/:fileId", nil)
+	c.SetParamNames("fileId")
+	c.SetParamValues(fileID)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	mockDB.ExpectBegin()
+
+	mockDB.ExpectQuery("SELECT storage_id, owner_username FROM file_metadata WHERE file_id = ?").
+		WithArgs(fileID).
+		WillReturnRows(sqlmock.NewRows([]string{"storage_id", "owner_username"}).
+			AddRow(storageID, ownerUsername))
+
+	mockStorage.On("RemoveObject", mock.Anything, storageID, mock.AnythingOfType("storage.RemoveObjectOptions")).Return(nil).Once()
+
+	// Share cascade delete fails
+	mockDB.ExpectExec("DELETE FROM file_share_keys WHERE file_id = ?").
+		WithArgs(fileID).WillReturnError(fmt.Errorf("cascade error"))
+
+	mockDB.ExpectRollback()
+
+	err := AdminDeleteFile(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	mockStorage.AssertExpectations(t)
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+// AdminRevokeShare Tests
+
+func TestAdminRevokeShare_Success(t *testing.T) {
+	adminUsername := "admin.user.test"
+	shareID := "share-to-revoke-123"
+	ownerUsername := "share.owner.user"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPost, "/api/admin/shares/:shareId/revoke", nil)
+	c.SetParamNames("shareId")
+	c.SetParamValues(shareID)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	// Mock share lookup (not revoked)
+	mockDB.ExpectQuery("SELECT owner_username, revoked_at FROM file_share_keys WHERE share_id = ?").
+		WithArgs(shareID).
+		WillReturnRows(sqlmock.NewRows([]string{"owner_username", "revoked_at"}).
+			AddRow(ownerUsername, nil))
+
+	// Mock share revocation
+	mockDB.ExpectExec("UPDATE file_share_keys SET revoked_at = CURRENT_TIMESTAMP, revoked_reason = ?").
+		WithArgs("admin_revocation", shareID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock LogUserAction
+	mockDB.ExpectExec(`INSERT INTO user_activity`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := AdminRevokeShare(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	assert.Equal(t, "Share revoked successfully", resp["message"])
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestAdminRevokeShare_ShareNotFound(t *testing.T) {
+	adminUsername := "admin.user.test"
+	shareID := "nonexistent-share"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPost, "/api/admin/shares/:shareId/revoke", nil)
+	c.SetParamNames("shareId")
+	c.SetParamValues(shareID)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	mockDB.ExpectQuery("SELECT owner_username, revoked_at FROM file_share_keys WHERE share_id = ?").
+		WithArgs(shareID).WillReturnError(sql.ErrNoRows)
+
+	err := AdminRevokeShare(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestAdminRevokeShare_AlreadyRevoked(t *testing.T) {
+	adminUsername := "admin.user.test"
+	shareID := "already-revoked-share"
+	ownerUsername := "share.owner.user"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPost, "/api/admin/shares/:shareId/revoke", nil)
+	c.SetParamNames("shareId")
+	c.SetParamValues(shareID)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	// Mock share lookup (already revoked - revoked_at has a value)
+	mockDB.ExpectQuery("SELECT owner_username, revoked_at FROM file_share_keys WHERE share_id = ?").
+		WithArgs(shareID).
+		WillReturnRows(sqlmock.NewRows([]string{"owner_username", "revoked_at"}).
+			AddRow(ownerUsername, "2026-04-17 12:00:00"))
+
+	err := AdminRevokeShare(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+
+	var resp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	assert.Contains(t, resp["message"], "already revoked")
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestAdminRevokeShare_MissingShareID(t *testing.T) {
+	adminUsername := "admin.user.test"
+
+	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/admin/shares/:shareId/revoke", nil)
+	// Do not set param values
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	err := AdminRevokeShare(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// AdminListUserFiles Tests
+
+func TestAdminListUserFiles_Success(t *testing.T) {
+	adminUsername := "admin.user.test"
+	targetUsername := "target.user.files"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodGet, "/api/admin/users/:username/files", nil)
+	c.SetParamNames("username")
+	c.SetParamValues(targetUsername)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	// Mock GetUserByUsername for target user existence check
+	mockDB.ExpectQuery(`
+		SELECT id, username, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE username = ?`).WithArgs(targetUsername).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(2, targetUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, false))
+
+	// Mock file listing query (use float64 values to simulate rqlite behavior)
+	fileRows := sqlmock.NewRows([]string{"file_id", "storage_id", "size_bytes", "chunk_count", "upload_date"}).
+		AddRow("file-id-1", "storage-1", float64(1048576), float64(1), "2026-04-17 10:00:00").
+		AddRow("file-id-2", "storage-2", float64(52428800), float64(4), "2026-04-17 11:00:00")
+	mockDB.ExpectQuery("SELECT file_id, storage_id, size_bytes, chunk_count, upload_date FROM file_metadata WHERE owner_username = ?").
+		WithArgs(targetUsername).WillReturnRows(fileRows)
+
+	err := AdminListUserFiles(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	data := resp["data"].(map[string]interface{})
+	assert.Equal(t, float64(2), data["count"])
+
+	files := data["files"].([]interface{})
+	assert.Len(t, files, 2)
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestAdminListUserFiles_NoFiles(t *testing.T) {
+	adminUsername := "admin.user.test"
+	targetUsername := "target.user.nofiles"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodGet, "/api/admin/users/:username/files", nil)
+	c.SetParamNames("username")
+	c.SetParamValues(targetUsername)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	// Mock GetUserByUsername
+	mockDB.ExpectQuery(`
+		SELECT id, username, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE username = ?`).WithArgs(targetUsername).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(2, targetUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, false))
+
+	// Empty file list
+	mockDB.ExpectQuery("SELECT file_id, storage_id, size_bytes, chunk_count, upload_date FROM file_metadata WHERE owner_username = ?").
+		WithArgs(targetUsername).WillReturnRows(sqlmock.NewRows([]string{"file_id", "storage_id", "size_bytes", "chunk_count", "upload_date"}))
+
+	err := AdminListUserFiles(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	data := resp["data"].(map[string]interface{})
+	assert.Equal(t, float64(0), data["count"])
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestAdminListUserFiles_UserNotFound(t *testing.T) {
+	adminUsername := "admin.user.test"
+	targetUsername := "nonexistent.user"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodGet, "/api/admin/users/:username/files", nil)
+	c.SetParamNames("username")
+	c.SetParamValues(targetUsername)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	// Mock user not found
+	mockDB.ExpectQuery(`
+		SELECT id, username, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE username = ?`).WithArgs(targetUsername).WillReturnError(sql.ErrNoRows)
+
+	err := AdminListUserFiles(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestAdminListUserFiles_MissingUsername(t *testing.T) {
+	adminUsername := "admin.user.test"
+
+	c, rec, _, _ := setupTestEnv(t, http.MethodGet, "/api/admin/users/:username/files", nil)
+	// Do not set param values
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	err := AdminListUserFiles(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// AdminListUserShares Tests
+
+func TestAdminListUserShares_Success(t *testing.T) {
+	adminUsername := "admin.user.test"
+	targetUsername := "target.user.shares"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodGet, "/api/admin/users/:username/shares", nil)
+	c.SetParamNames("username")
+	c.SetParamValues(targetUsername)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	// Mock GetUserByUsername
+	mockDB.ExpectQuery(`
+		SELECT id, username, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE username = ?`).WithArgs(targetUsername).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(2, targetUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, false))
+
+	// Mock share listing with various nullable fields
+	shareRows := sqlmock.NewRows([]string{"share_id", "file_id", "created_at", "expires_at", "access_count", "max_accesses", "revoked_at"}).
+		AddRow("share-1", "file-1", "2026-04-17 10:00:00", nil, float64(3), float64(10), nil).
+		AddRow("share-2", "file-2", "2026-04-17 11:00:00", "2026-05-17 11:00:00", float64(0), nil, "2026-04-17 12:00:00")
+	mockDB.ExpectQuery("SELECT share_id, file_id, created_at, expires_at, access_count, max_accesses, revoked_at FROM file_share_keys WHERE owner_username = ?").
+		WithArgs(targetUsername).WillReturnRows(shareRows)
+
+	err := AdminListUserShares(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	data := resp["data"].(map[string]interface{})
+	assert.Equal(t, float64(2), data["count"])
+
+	shares := data["shares"].([]interface{})
+	assert.Len(t, shares, 2)
+
+	// Verify first share (active, has max_accesses)
+	share1 := shares[0].(map[string]interface{})
+	assert.Equal(t, "share-1", share1["share_id"])
+	assert.Equal(t, false, share1["is_revoked"])
+	assert.Equal(t, float64(3), share1["access_count"])
+
+	// Verify second share (revoked, has expires_at)
+	share2 := shares[1].(map[string]interface{})
+	assert.Equal(t, "share-2", share2["share_id"])
+	assert.Equal(t, true, share2["is_revoked"])
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestAdminListUserShares_NoShares(t *testing.T) {
+	adminUsername := "admin.user.test"
+	targetUsername := "target.user.noshares"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodGet, "/api/admin/users/:username/shares", nil)
+	c.SetParamNames("username")
+	c.SetParamValues(targetUsername)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	// Mock GetUserByUsername
+	mockDB.ExpectQuery(`
+		SELECT id, username, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE username = ?`).WithArgs(targetUsername).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
+			AddRow(2, targetUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, false))
+
+	// Empty shares
+	mockDB.ExpectQuery("SELECT share_id, file_id, created_at, expires_at, access_count, max_accesses, revoked_at FROM file_share_keys WHERE owner_username = ?").
+		WithArgs(targetUsername).WillReturnRows(sqlmock.NewRows([]string{"share_id", "file_id", "created_at", "expires_at", "access_count", "max_accesses", "revoked_at"}))
+
+	err := AdminListUserShares(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	data := resp["data"].(map[string]interface{})
+	assert.Equal(t, float64(0), data["count"])
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestAdminListUserShares_UserNotFound(t *testing.T) {
+	adminUsername := "admin.user.test"
+	targetUsername := "nonexistent.user"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodGet, "/api/admin/users/:username/shares", nil)
+	c.SetParamNames("username")
+	c.SetParamValues(targetUsername)
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	mockDB.ExpectQuery(`
+		SELECT id, username, created_at,
+		       total_storage_bytes, storage_limit_bytes,
+		       is_approved, approved_by, approved_at, is_admin
+		FROM users WHERE username = ?`).WithArgs(targetUsername).WillReturnError(sql.ErrNoRows)
+
+	err := AdminListUserShares(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+func TestAdminListUserShares_MissingUsername(t *testing.T) {
+	adminUsername := "admin.user.test"
+
+	c, rec, _, _ := setupTestEnv(t, http.MethodGet, "/api/admin/users/:username/shares", nil)
+	// Do not set param values
+
+	adminClaims := &auth.Claims{Username: adminUsername}
+	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
+	c.Set("user", adminToken)
+
+	err := AdminListUserShares(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}

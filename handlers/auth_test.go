@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -496,6 +497,79 @@ func TestAdminForceLogout_MissingUsername(t *testing.T) {
 	var resp map[string]interface{}
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	assert.Contains(t, resp["message"], "Username is required")
+}
+
+// TestAdminForceLogout_Success verifies successful force-logout revokes tokens and logs events
+func TestAdminForceLogout_Success(t *testing.T) {
+	adminUsername := "admin-force-logout"
+	targetUsername := "target-force-logout"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPost, "/api/admin/users/:username/force-logout", nil)
+	c.SetParamNames("username")
+	c.SetParamValues(targetUsername)
+
+	claims := &auth.Claims{Username: adminUsername}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// Mock RevokeAllUserTokens (updates refresh_tokens)
+	mockDB.ExpectExec(`UPDATE refresh_tokens SET revoked = true WHERE username = \?`).
+		WithArgs(targetUsername).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	// Mock RevokeAllUserJWTTokens (inserts into revoked_tokens)
+	mockDB.ExpectExec(`INSERT INTO revoked_tokens`).
+		WithArgs(sqlmock.AnyArg(), targetUsername, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Mock LogUserAction for target user
+	mockDB.ExpectExec(`INSERT INTO user_activity`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Mock LogUserAction for admin user
+	mockDB.ExpectExec(`INSERT INTO user_activity`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := AdminForceLogout(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	assert.Contains(t, resp["message"], "force-logged out successfully")
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+}
+
+// TestAdminForceLogout_TokenRevocationError verifies 500 when token revocation fails
+func TestAdminForceLogout_TokenRevocationError(t *testing.T) {
+	adminUsername := "admin-force-logout"
+	targetUsername := "target-force-logout"
+
+	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPost, "/api/admin/users/:username/force-logout", nil)
+	c.SetParamNames("username")
+	c.SetParamValues(targetUsername)
+
+	claims := &auth.Claims{Username: adminUsername}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// Mock RevokeAllUserTokens fails
+	mockDB.ExpectExec(`UPDATE refresh_tokens SET revoked = true WHERE username = \?`).
+		WithArgs(targetUsername).
+		WillReturnError(fmt.Errorf("database error"))
+
+	err := AdminForceLogout(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+
+	var resp map[string]interface{}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	assert.Contains(t, resp["message"], "Failed to revoke user tokens")
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
 // -- Success-path tests (require TestMain for JWT Ed25519 keys) --
