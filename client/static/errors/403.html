@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Too Many Requests</title>
+    <title>Share Unavailable</title>
     <style>
         :root {
             --depth-1: #060d1a;
             --depth-3: #112240;
             --depth-4: #1e3a5f;
-            --coral: #e05c5c;
+            --phosphor: #f0a500;
             --foam-1: #cce7ff;
             --foam-2: #8ab8d8;
             --salt: #ffffff;
@@ -29,10 +29,9 @@
             text-align: center;
             max-width: 480px;
         }
-        .status-code {
-            font-size: 4rem;
-            font-weight: 700;
-            color: var(--coral);
+        .status-icon {
+            font-size: 3rem;
+            color: var(--phosphor);
             margin-bottom: 0.5rem;
         }
         h1 {
@@ -43,26 +42,14 @@
         p {
             color: var(--foam-2);
             line-height: 1.6;
-            margin-bottom: 1.5rem;
-        }
-        .hint {
-            background-color: var(--depth-3);
-            border: 1px solid var(--depth-4);
-            border-radius: 6px;
-            padding: 1rem;
-            font-size: 0.9rem;
-            color: var(--foam-2);
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="status-code">429</div>
-        <h1>Too Many Requests</h1>
-        <p>You have made too many requests in a short period.</p>
-        <div class="hint">
-            Please wait at least 5 seconds and then try again.
-        </div>
+        <div class="status-icon">[!]</div>
+        <h1>Resource Unavailable</h1>
+        <p>File is no longer accessible from this share link. It may have expired, been revoked, or reached its download limit.</p>
     </div>
 </body>
 </html>

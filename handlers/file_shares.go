@@ -388,7 +388,7 @@ func GetSharedFile(c echo.Context) error {
 
 	// Check if share has expired
 	if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
-		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
+		return c.HTML(http.StatusForbidden, read403Page())
 	}
 
 	// Verify file exists in the new encrypted metadata schema

@@ -12,11 +12,26 @@ import (
 
 // Cached error page contents (read once at first use)
 var (
+	page403Content string
 	page404Content string
 	page429Content string
+	pageOnce403    sync.Once
 	pageOnce404    sync.Once
 	pageOnce429    sync.Once
 )
+
+// read403Page returns the 403.html content, caching it after the first read
+func read403Page() string {
+	pageOnce403.Do(func() {
+		data, err := os.ReadFile("client/static/errors/403.html")
+		if err != nil {
+			page403Content = "<html><body><h1>Share Unavailable</h1><p>This share link is no longer accessible.</p></body></html>"
+			return
+		}
+		page403Content = string(data)
+	})
+	return page403Content
+}
 
 // read404Page returns the 404.html content, caching it after the first read
 func read404Page() string {
