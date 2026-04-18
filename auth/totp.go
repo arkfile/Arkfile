@@ -94,6 +94,75 @@ func GenerateTOTPSetup(username string) (*TOTPSetup, error) {
 	}, nil
 }
 
+// GetPendingTOTPSetup retrieves an existing pending (unverified) TOTP setup for a user.
+// Returns the decrypted setup data if a pending setup exists, nil if not.
+// This prevents generating a new secret on every login when setup is incomplete,
+// allowing users to continue with the same secret they may have already saved.
+func GetPendingTOTPSetup(db *sql.DB, username string) (*TOTPSetup, error) {
+	var secretEncrypted []byte
+	var backupCodesEncrypted []byte
+	var setupCompleted bool
+
+	err := db.QueryRow(`
+		SELECT secret_encrypted, backup_codes_encrypted, setup_completed
+		FROM user_totp
+		WHERE username = ?`,
+		username,
+	).Scan(&secretEncrypted, &backupCodesEncrypted, &setupCompleted)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // No existing setup
+		}
+		return nil, fmt.Errorf("failed to query pending TOTP setup: %w", err)
+	}
+
+	// If setup is already completed, this isn't a pending setup
+	if setupCompleted {
+		return nil, nil
+	}
+
+	// Decode base64 if needed (rqlite driver quirk)
+	if decoded, err := decodeBase64IfNeeded(secretEncrypted); err == nil {
+		secretEncrypted = decoded
+	}
+	if decoded, err := decodeBase64IfNeeded(backupCodesEncrypted); err == nil {
+		backupCodesEncrypted = decoded
+	}
+
+	// Decrypt secret
+	secret, err := decryptTOTPSecret(secretEncrypted, username)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt pending TOTP secret: %w", err)
+	}
+
+	// Decrypt backup codes
+	var backupCodes []string
+	if err := decryptJSON(backupCodesEncrypted, username, &backupCodes); err != nil {
+		return nil, fmt.Errorf("failed to decrypt pending backup codes: %w", err)
+	}
+
+	// Rebuild QR code URL and image from the existing secret
+	qrURL := fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s&digits=%d&period=%d",
+		TOTPIssuer, username, secret, TOTPIssuer, TOTPDigits, TOTPPeriod)
+
+	qrImage, err := generateQRCodeDataURI(qrURL)
+	if err != nil {
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("Failed to regenerate QR code image for pending setup: %v", err)
+		}
+		qrImage = ""
+	}
+
+	return &TOTPSetup{
+		Secret:      secret,
+		QRCodeURL:   qrURL,
+		QRCodeImage: qrImage,
+		BackupCodes: backupCodes,
+		ManualEntry: formatManualEntry(secret),
+	}, nil
+}
+
 // StoreTOTPSetup stores the TOTP setup data in the database with server-side encryption
 func StoreTOTPSetup(db *sql.DB, username string, setup *TOTPSetup) error {
 	// Derive user-specific TOTP encryption key from server master key

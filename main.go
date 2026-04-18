@@ -238,8 +238,8 @@ func main() {
 	// Note: ShareRateLimitMiddleware and TimingProtectionMiddleware are applied
 	// specifically to share endpoints in route_config.go, not globally
 
-	// Additional middleware
-	e.Use(middleware.Logger())
+	// Privacy-preserving request logger (no raw IP addresses)
+	e.Use(handlers.PrivacyRequestLogger)
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins:     cfg.Server.AllowedOrigins,
 		AllowMethods:     []string{http.MethodGet, http.MethodPut, http.MethodPost, http.MethodDelete, http.MethodOptions},

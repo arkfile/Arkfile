@@ -5,7 +5,7 @@
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
 import { showModal, showTOTPAppsModal } from '../ui/modals';
-import { getToken, clearAllSessionData } from '../utils/auth';
+import { getToken, clearAllSessionData, AuthManager } from '../utils/auth';
 import { showFileSection, showAuthSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { LoginManager } from './login';
@@ -293,6 +293,54 @@ export async function generateAndDisplayTOTPSetup(): Promise<void> {
   if (backupSection) {
     backupSection.classList.remove('hidden');
   }
+
+  // Start session countdown timer for the static TOTP setup form
+  startSetupSessionCountdown();
+}
+
+/**
+ * Start a countdown timer for the static TOTP setup form (#totp-setup-form).
+ * Reads the JWT expiry from the token in localStorage.
+ * Displays when less than 5 minutes remain; auto-logs out and reloads on expiry.
+ */
+function startSetupSessionCountdown(): void {
+  const token = getToken();
+  if (!token) return;
+
+  const payload = AuthManager.parseJwtToken(token);
+  if (!payload?.exp) return;
+
+  const expiryMs = payload.exp * 1000;
+  const SHOW_THRESHOLD = 5 * 60 * 1000; // Show countdown in last 5 minutes
+
+  const timerEl = document.getElementById('totp-setup-session-timer');
+  if (!timerEl) return;
+
+  const intervalId = window.setInterval(() => {
+    const remaining = expiryMs - Date.now();
+
+    if (remaining <= 0) {
+      // Session expired: clean up and force reload
+      clearInterval(intervalId);
+      if (typeof window !== 'undefined') {
+        delete window.totpLoginData;
+        delete window.totpSetupData;
+      }
+      clearAllSessionData();
+      showAuthSection();
+      showError('Setup session expired. Please log in to continue TOTP setup.');
+      setTimeout(() => window.location.reload(), 1500);
+      return;
+    }
+
+    if (remaining <= SHOW_THRESHOLD) {
+      const mins = Math.floor(remaining / 60000);
+      const secs = Math.floor((remaining % 60000) / 1000);
+      const pad = secs < 10 ? '0' : '';
+      timerEl.textContent = `Session expires in ${mins}:${pad}${secs}`;
+      timerEl.style.display = 'block';
+    }
+  }, 1000);
 }
 
 // TOTP Setup Functions

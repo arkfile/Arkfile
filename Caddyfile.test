@@ -37,10 +37,9 @@
 
 	encode gzip
 
-	log {
-		output file /var/log/caddy/test-access.log
-		format json
-	}
+	# Access logs disabled: the Go application handles all request logging
+	# with privacy-preserving entity IDs (no raw IP addresses).
+	# Caddy error-level issues still go to stderr/journalctl by default.
 
 	handle_errors {
 		respond "{http.error.status_code} {http.error.status_text}"

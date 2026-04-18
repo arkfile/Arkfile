@@ -6,7 +6,7 @@
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { showModal, showTOTPAppsModal } from '../ui/modals.js';
-import { setTokens, clearAllSessionData } from '../utils/auth.js';
+import { setTokens, clearAllSessionData, AuthManager } from '../utils/auth.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 
@@ -199,6 +199,8 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
       </p>
     </div>
     
+    <div id="totp-session-timer" style="display: none; text-align: center; margin-bottom: 0.75rem; font-size: 0.85rem; color: var(--phosphor);"></div>
+    
     <button id="complete-totp-setup" disabled style="
       width: 100%;
       padding: 0.8rem 1.5rem;
@@ -246,6 +248,50 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
       downloadBackupCodes(setupData.backup_codes);
     });
   }
+
+  // Start session countdown timer based on JWT expiry
+  startSessionCountdown(flowData.tempToken);
+}
+
+/**
+ * Start a countdown timer that shows remaining session time.
+ * Displays when less than 5 minutes remain; auto-logs out and reloads on expiry.
+ */
+function startSessionCountdown(tempToken: string): void {
+  const payload = AuthManager.parseJwtToken(tempToken);
+  if (!payload?.exp) return;
+
+  const expiryMs = payload.exp * 1000;
+  const SHOW_THRESHOLD = 5 * 60 * 1000; // Show countdown in last 5 minutes
+
+  const timerEl = document.getElementById('totp-session-timer');
+  if (!timerEl) return;
+
+  const intervalId = window.setInterval(() => {
+    const remaining = expiryMs - Date.now();
+
+    if (remaining <= 0) {
+      // Session expired: clean up and force reload
+      clearInterval(intervalId);
+      if (typeof window !== 'undefined') {
+        delete window.totpSetupData;
+      }
+      document.querySelector('.modal-overlay')?.remove();
+      clearAllSessionData();
+      showAuthSection();
+      showError('Setup session expired. Please log in to continue TOTP setup.');
+      setTimeout(() => window.location.reload(), 1500);
+      return;
+    }
+
+    if (remaining <= SHOW_THRESHOLD) {
+      const mins = Math.floor(remaining / 60000);
+      const secs = Math.floor((remaining % 60000) / 1000);
+      const pad = secs < 10 ? '0' : '';
+      timerEl.textContent = `Session expires in ${mins}:${pad}${secs}`;
+      timerEl.style.display = 'block';
+    }
+  }, 1000);
 }
 
 /**

@@ -29,6 +29,43 @@ func parseIPAddress(ipStr string) net.IP {
 	return ip
 }
 
+// PrivacyRequestLogger is an Echo middleware that logs HTTP requests without
+// exposing raw IP addresses. It uses the entity ID system to replace the
+// client IP with a privacy-preserving HMAC-based identifier.
+func PrivacyRequestLogger(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		start := time.Now()
+
+		// Process request
+		err := next(c)
+
+		// Compute entity ID (privacy-preserving, replaces raw IP)
+		entityID := logging.GetOrCreateEntityID(c)
+
+		// Log request with entity ID instead of IP
+		latency := time.Since(start)
+		req := c.Request()
+		res := c.Response()
+
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		}
+
+		logging.InfoLogger.Printf("Request: entity=%s method=%s uri=%s status=%d latency=%s bytes_out=%d error=%q",
+			entityID,
+			req.Method,
+			req.RequestURI,
+			res.Status,
+			latency.String(),
+			res.Size,
+			errMsg,
+		)
+
+		return err
+	}
+}
+
 // RateLimitState represents the current rate limiting state for an entity
 type RateLimitState struct {
 	EntityID       string     `json:"entity_id"`
@@ -415,11 +452,12 @@ func TLSVersionCheck(next echo.HandlerFunc) echo.HandlerFunc {
 		// Add TLS version to response headers for client detection
 		c.Response().Header().Set("X-TLS-Version", versionStr)
 
-		// Log TLS version and cipher suite for analytics
-		logging.InfoLogger.Printf("TLS Connection: version=%s cipher=%s client=%s path=%s",
+		// Log TLS version and cipher suite for analytics (entity ID, not raw IP)
+		entityID := logging.GetOrCreateEntityID(c)
+		logging.InfoLogger.Printf("TLS Connection: version=%s cipher=%s entity=%s path=%s",
 			versionStr,
 			tls.CipherSuiteName(c.Request().TLS.CipherSuite),
-			c.RealIP(),
+			entityID,
 			c.Request().URL.Path,
 		)
 

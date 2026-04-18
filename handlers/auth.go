@@ -694,7 +694,27 @@ func TOTPSetup(c echo.Context) error {
 		return JSONError(c, http.StatusConflict, "TOTP already enabled for this user")
 	}
 
-	// Generate TOTP setup
+	// Check for an existing pending (unverified) setup to avoid regenerating the secret.
+	// This ensures users who saved the QR code / manual entry on their first attempt
+	// can continue using the same secret after session expiry and re-login.
+	pendingSetup, err := auth.GetPendingTOTPSetup(database.DB, username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to check pending TOTP setup for %s: %v", username, err)
+		// Fall through to generate new setup
+	}
+
+	if pendingSetup != nil {
+		logging.InfoLogger.Printf("Returning existing pending TOTP setup for user: %s", username)
+		return JSONResponse(c, http.StatusOK, "TOTP setup resumed", TOTPSetupResponse{
+			Secret:      pendingSetup.Secret,
+			QRCodeURL:   pendingSetup.QRCodeURL,
+			QRCodeImage: pendingSetup.QRCodeImage,
+			BackupCodes: pendingSetup.BackupCodes,
+			ManualEntry: pendingSetup.ManualEntry,
+		})
+	}
+
+	// No pending setup exists, generate a new one
 	setup, err := auth.GenerateTOTPSetup(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate TOTP setup for %s: %v", username, err)
