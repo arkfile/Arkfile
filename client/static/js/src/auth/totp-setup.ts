@@ -6,8 +6,8 @@
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { showModal, showTOTPAppsModal } from '../ui/modals.js';
-import { setTokens } from '../utils/auth.js';
-import { showFileSection, showPendingApprovalSection } from '../ui/sections.js';
+import { setTokens, clearAllSessionData } from '../utils/auth.js';
+import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 
 // Make showTOTPAppsModal available globally for inline onclick handlers
@@ -299,6 +299,17 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
       
     } else {
       hideProgress();
+      // Session expired: clear state and redirect to login
+      if (response.status === 401) {
+        if (typeof window !== 'undefined') {
+          delete window.totpSetupData;
+        }
+        document.querySelector('.modal-overlay')?.remove();
+        clearAllSessionData();
+        showAuthSection();
+        showError('Setup session expired. Please log in to continue TOTP setup.');
+        return;
+      }
       const errorData = await response.json().catch(() => ({}));
       const errorMessage = errorData.message || errorData.error || 'Invalid TOTP code';
       showError(errorMessage);

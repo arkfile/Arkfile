@@ -98,13 +98,13 @@ func HashToken(token string) (string, error) {
 // GenerateTemporaryTOTPToken creates a temporary JWT token that requires TOTP completion
 func GenerateTemporaryTOTPToken(username string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
-	expirationTime := time.Now().Add(5 * time.Minute)
+	expirationTime := time.Now().Add(20 * time.Minute)
 
 	claims := &Claims{
 		Username:     username,
 		RequiresTOTP: true,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expirationTime), // 5 minute expiry
+			ExpiresAt: jwt.NewNumericDate(expirationTime), // 20 minute expiry for TOTP setup/auth
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    "arkfile-auth",

@@ -5,8 +5,8 @@
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
 import { showModal, showTOTPAppsModal } from '../ui/modals';
-import { getToken } from '../utils/auth';
-import { showFileSection } from '../ui/sections';
+import { getToken, clearAllSessionData } from '../utils/auth';
+import { showFileSection, showAuthSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { LoginManager } from './login';
 
@@ -232,6 +232,17 @@ async function verifyTOTPLogin(): Promise<void> {
       
     } else {
       hideProgress();
+      // Session expired: clear state and redirect to login
+      if (response.status === 401) {
+        if (typeof window !== 'undefined') {
+          delete window.totpLoginData;
+        }
+        document.querySelector('.modal-overlay')?.remove();
+        clearAllSessionData();
+        showAuthSection();
+        showError('Session expired. Please log in again.');
+        return;
+      }
       const errorData = await response.json().catch(() => ({}));
       showError(errorData.message || 'TOTP verification failed');
     }
@@ -366,6 +377,18 @@ export async function completeTOTPSetup(code: string): Promise<Record<string, an
       showSuccess('TOTP setup completed successfully!');
       return data;
     } else {
+      // Session expired: clear state and redirect to login
+      if (response.status === 401) {
+        if (typeof window !== 'undefined') {
+          delete window.totpLoginData;
+          delete window.totpSetupData;
+        }
+        document.querySelector('.modal-overlay')?.remove();
+        clearAllSessionData();
+        showAuthSection();
+        showError('Setup session expired. Please log in to continue TOTP setup.');
+        return null;
+      }
       const errorData = await response.json().catch(() => ({}));
       showError(errorData.message || 'Invalid TOTP code');
       return null;
