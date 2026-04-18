@@ -230,8 +230,8 @@ func GetShareEnvelope(c echo.Context) error {
 				"share_id_prefix": prefix,
 			},
 		)
-		// Notify enumeration guard for progressive rate limiting
-		NotifyShareNotFound(entityID, prefix)
+		// Notify enumeration guard with full share ID for accurate uniqueness tracking
+		NotifyShareNotFound(entityID, shareID)
 		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
 	} else if err != nil {
 		logging.ErrorLogger.Printf("Database error accessing share %s: %v", shareID, err)
@@ -378,8 +378,8 @@ func GetSharedFile(c echo.Context) error {
 				"share_id_prefix": prefix,
 			},
 		)
-		// Notify enumeration guard for progressive rate limiting
-		NotifyShareNotFound(entityID, prefix)
+		// Notify enumeration guard with full share ID for accurate uniqueness tracking
+		NotifyShareNotFound(entityID, shareID)
 		return c.HTML(http.StatusNotFound, read404Page())
 	} else if err != nil {
 		logging.ErrorLogger.Printf("Database error checking share %s: %v", shareID, err)
@@ -621,8 +621,8 @@ func GetShareDownloadMetadata(c echo.Context) error {
 				"share_id_prefix": prefix,
 			},
 		)
-		// Notify enumeration guard for progressive rate limiting
-		NotifyShareNotFound(entityID, prefix)
+		// Notify enumeration guard with full share ID for accurate uniqueness tracking
+		NotifyShareNotFound(entityID, shareID)
 		return echo.NewHTTPError(http.StatusNotFound, "Share not found")
 	} else if err != nil {
 		logging.ErrorLogger.Printf("Database error accessing share %s: %v", shareID, err)

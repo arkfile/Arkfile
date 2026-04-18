@@ -195,6 +195,13 @@ func ShareEnumerationMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 		blocked, retryAfter := enumGuard.IsBlocked(entityID)
 		if blocked {
+			// Record this blocked attempt so the counter keeps growing
+			// even while the entity is being rate-limited. This ensures
+			// progressive escalation (5s -> 30s -> 2m -> 10m -> 1h).
+			shareID := c.Param("id")
+			if shareID != "" {
+				enumGuard.RecordShareNotFound(entityID, shareID)
+			}
 			msg := fmt.Sprintf("Too many failed share lookups. Try again in %d seconds.", retryAfter)
 			return ServeRateLimitPage(c, retryAfter, msg)
 		}
