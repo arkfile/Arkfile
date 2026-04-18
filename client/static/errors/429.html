@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Too Many Requests</title>
+    <style>
+        :root {
+            --depth-1: #060d1a;
+            --depth-3: #112240;
+            --depth-4: #1e3a5f;
+            --coral: #e05c5c;
+            --foam-1: #cce7ff;
+            --foam-2: #8ab8d8;
+            --salt: #ffffff;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: var(--depth-1);
+            color: var(--foam-1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        .container {
+            text-align: center;
+            max-width: 480px;
+        }
+        .status-code {
+            font-size: 4rem;
+            font-weight: 700;
+            color: var(--coral);
+            margin-bottom: 0.5rem;
+        }
+        h1 {
+            color: var(--salt);
+            font-size: 1.4rem;
+            margin-bottom: 1rem;
+        }
+        p {
+            color: var(--foam-2);
+            line-height: 1.6;
+            margin-bottom: 1.5rem;
+        }
+        .hint {
+            background-color: var(--depth-3);
+            border: 1px solid var(--depth-4);
+            border-radius: 6px;
+            padding: 1rem;
+            font-size: 0.9rem;
+            color: var(--foam-2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="status-code">429</div>
+        <h1>Too Many Requests</h1>
+        <p>You have made too many requests in a short period. Please wait a moment before trying again.</p>
+        <div class="hint">
+            If you believe this is an error, please wait and try again shortly.
+        </div>
+    </div>
+</body>
+</html>

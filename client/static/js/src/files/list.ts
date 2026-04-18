@@ -277,14 +277,60 @@ export function updateStorageInfo(storage: FilesResponse['storage']): void {
   const storageInfo = document.getElementById('storageInfo');
   if (!storageInfo) return;
 
+  const pct = storage.usage_percent;
+  // Use existing theme colors for storage bar states
+  let barClass = 'storage-bar-normal';
+  if (pct >= 90) {
+    barClass = 'storage-bar-critical';
+  } else if (pct >= 80) {
+    barClass = 'storage-bar-warning';
+  }
+
   storageInfo.innerHTML = `
-    <div class="storage-bar">
-      <div class="used" style="width: ${storage.usage_percent}%"></div>
+    <div class="storage-bar ${barClass}">
+      <div class="used" style="width: ${Math.min(pct, 100)}%"></div>
     </div>
     <div class="storage-text">
-      Used: ${escapeHtml(storage.total_readable)} of ${escapeHtml(storage.limit_readable)} (${storage.usage_percent.toFixed(1)}%)
+      Used: ${escapeHtml(storage.total_readable)} of ${escapeHtml(storage.limit_readable)} (${pct.toFixed(1)}%)
     </div>
+    <div class="storage-contact-note" id="storageContactNote"></div>
   `;
+
+  // Fetch admin contact info (public endpoint) and display note
+  fetchAdminContactForStorage();
+}
+
+// Fetch admin contact info from the public endpoint and display it
+// in the storage section as plain text (not a link)
+async function fetchAdminContactForStorage(): Promise<void> {
+  const noteEl = document.getElementById('storageContactNote');
+  if (!noteEl) return;
+
+  try {
+    const resp = await fetch('/api/admin-contacts');
+    if (!resp.ok) {
+      noteEl.textContent = 'To request a storage limit increase, contact your admin.';
+      return;
+    }
+    const data = await resp.json();
+    const contacts: string[] = [];
+    if (data.data?.admins && Array.isArray(data.data.admins)) {
+      for (const admin of data.data.admins) {
+        if (admin.contacts && Array.isArray(admin.contacts)) {
+          for (const c of admin.contacts) {
+            if (c.value) contacts.push(escapeHtml(c.value));
+          }
+        }
+      }
+    }
+    if (contacts.length > 0) {
+      noteEl.textContent = `To request a storage limit increase, contact the admin: ${contacts.join(', ')}`;
+    } else {
+      noteEl.textContent = 'To request a storage limit increase, contact your admin.';
+    }
+  } catch {
+    noteEl.textContent = 'To request a storage limit increase, contact your admin.';
+  }
 }
 
 // ============================================================================

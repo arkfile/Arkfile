@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"fmt"
-	"net/http"
 	"sync"
 	"time"
 
@@ -196,9 +195,8 @@ func ShareEnumerationMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 		blocked, retryAfter := enumGuard.IsBlocked(entityID)
 		if blocked {
-			c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
-			return echo.NewHTTPError(http.StatusTooManyRequests,
-				fmt.Sprintf("Too many failed share lookups. Try again in %d seconds.", retryAfter))
+			msg := fmt.Sprintf("Too many failed share lookups. Try again in %d seconds.", retryAfter)
+			return ServeRateLimitPage(c, retryAfter, msg)
 		}
 
 		return next(c)

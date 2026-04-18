@@ -672,10 +672,37 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     transition: width 0.3s ease;
 }
 
+.storage-info-section {
+    margin: 1rem 0;
+    padding: 0.75rem 1rem;
+    background-color: var(--depth-2);
+    border-radius: 4px;
+}
+
 .storage-text {
     font-size: 0.9rem;
     color: var(--foam-2);
     text-align: right;
+}
+
+.storage-bar-normal .used {
+    background-color: var(--biolum);
+}
+
+.storage-bar-warning .used {
+    background-color: var(--phosphor);
+}
+
+.storage-bar-critical .used {
+    background-color: var(--coral);
+}
+
+.storage-contact-note {
+    font-size: 0.8rem;
+    color: var(--foam-2);
+    text-align: right;
+    margin-top: 0.25rem;
+    opacity: 0.8;
 }
 
 /* File Actions */

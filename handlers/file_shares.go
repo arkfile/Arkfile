@@ -380,7 +380,7 @@ func GetSharedFile(c echo.Context) error {
 		)
 		// Notify enumeration guard for progressive rate limiting
 		NotifyShareNotFound(entityID, prefix)
-		return c.File("client/static/errors/404.html")
+		return c.HTML(http.StatusNotFound, read404Page())
 	} else if err != nil {
 		logging.ErrorLogger.Printf("Database error checking share %s: %v", shareID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
@@ -777,6 +777,10 @@ func DownloadShareChunk(c echo.Context) error {
 				"chunk_index":     chunkIndex,
 			},
 		)
+		// Record failed attempt for per-share-ID progressive rate limiting
+		if recordErr := recordFailedAttempt(shareID, entityID); recordErr != nil {
+			logging.ErrorLogger.Printf("Failed to record invalid token attempt: %v", recordErr)
+		}
 		return echo.NewHTTPError(http.StatusForbidden, "Invalid download token")
 	}
 
