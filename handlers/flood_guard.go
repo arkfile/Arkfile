@@ -318,9 +318,14 @@ func FloodGuardMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		err := next(c)
 
 		// POST-CHECK: Was the response a 401 or 404 from an unauthenticated request?
-		status := c.Response().Status
-		if (status == 401 || status == 404) && !isAuthenticatedRequest(c) {
-			defaultFloodGuard.RecordUnauthorizedHit(entityID)
+		// Echo returns HTTP errors as *echo.HTTPError from next(c), not via c.Response().Status
+		// (the response status is still 200 at this point in the middleware chain).
+		if err != nil && !isAuthenticatedRequest(c) {
+			if httpErr, ok := err.(*echo.HTTPError); ok {
+				if httpErr.Code == 401 || httpErr.Code == 404 {
+					defaultFloodGuard.RecordUnauthorizedHit(entityID)
+				}
+			}
 		}
 
 		return err
