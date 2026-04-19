@@ -240,6 +240,11 @@ func main() {
 
 	// Privacy-preserving request logger (no raw IP addresses)
 	e.Use(handlers.PrivacyRequestLogger)
+
+	// Unauthorized flood guard: progressive rate limiting for entities that
+	// generate excessive 401/404 responses (vulnerability scanners, path probers)
+	e.Use(handlers.FloodGuardMiddleware)
+
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins:     cfg.Server.AllowedOrigins,
 		AllowMethods:     []string{http.MethodGet, http.MethodPut, http.MethodPost, http.MethodDelete, http.MethodOptions},

@@ -2299,10 +2299,15 @@ EVENT TYPES:
     share_enumeration       Share ID enumeration detected (progressive penalty applied)
     invalid_download_token  Invalid download token on share chunk
     rate_limit_violation    Rate limit triggered
-    endpoint_abuse          Severe share enumeration (32+ unique 404s)
+    suspicious_pattern      Unauthorized flood detected (10-19 bad requests in 10min window)
+    endpoint_abuse          Severe abuse: share enumeration (32+ unique 404s) or
+                            unauthorized flood (40+ bad requests in 10min window)
     unauthorized_access     TOTP bypass attempt
     admin_access            Admin API action
     key_health_check        Key health monitoring event
+
+    Flood guard events (suspicious_pattern, endpoint_abuse) include
+    detection_type:"unauthorized_flood" in the details JSON field.
 
 EXAMPLES:
     arkfile-admin security-events

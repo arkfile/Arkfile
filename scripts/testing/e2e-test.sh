@@ -1826,6 +1826,99 @@ phase_11_admin_system_status() {
     success "Admin system status phase complete"
 }
 
+# Phase 11b: Flood Guard (Unauthorized Request Rate Limiting)
+# Tests that entities generating excessive 401/404 responses get progressively blocked.
+# Uses a distinct User-Agent to isolate this test's entity ID from other curl calls.
+phase_11b_flood_guard() {
+    phase "11b: FLOOD GUARD (UNAUTHORIZED SCANNER DETECTION)"
+
+    local FLOOD_UA="arkfile-flood-test-scanner"
+
+    # 11b.1: Send 9 unauthenticated requests to nonexistent paths (under threshold)
+    section "11b.1: Unauthenticated probes under threshold (9 requests)"
+    local all_under_threshold=true
+    for i in $(seq 1 9); do
+        local probe_code
+        probe_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+            -H "User-Agent: $FLOOD_UA" \
+            "${SERVER_URL}/wp-scan-${i}.php" 2>/dev/null)
+        if [ "$probe_code" = "429" ]; then
+            all_under_threshold=false
+            warning "Probe $i/9 got 429 (unexpected, flood guard triggered too early)"
+        fi
+    done
+    if [ "$all_under_threshold" = true ]; then
+        record_test "Flood guard: 9 probes under threshold (no 429)" "PASS"
+    else
+        record_test "Flood guard: 9 probes under threshold (no 429)" "FAIL"
+    fi
+
+    # 11b.2: Send request 10 (crosses tier 1 threshold)
+    section "11b.2: 10th probe triggers flood guard"
+    local probe_10_code
+    probe_10_code=$(curl -sk -o /dev/null -w '%{http_code}' \
+        -H "User-Agent: $FLOOD_UA" \
+        "${SERVER_URL}/wp-scan-10.php" 2>/dev/null)
+    info "Probe 10: HTTP $probe_10_code"
+    # The 10th request itself may or may not get 429 (depends on whether the middleware
+    # counts the response and blocks in the same request or the next). Record it.
+
+    # 11b.3: Send request 11 -- should definitely get 429 (entity is now blocked)
+    section "11b.3: 11th probe gets 429 (entity blocked)"
+    local probe_11_code probe_11_headers
+    probe_11_headers=$(curl -sk -D - -o /dev/null \
+        -H "User-Agent: $FLOOD_UA" \
+        "${SERVER_URL}/wp-scan-11.php" 2>/dev/null)
+    probe_11_code=$(echo "$probe_11_headers" | head -1 | awk '{print $2}')
+
+    if [ "$probe_11_code" = "429" ]; then
+        record_test "Flood guard: 429 returned after threshold" "PASS"
+        info "Flood guard blocked entity with 429 after 10+ unauthorized requests"
+    else
+        error "Expected 429 on 11th probe, got HTTP $probe_11_code"
+        record_test "Flood guard: 429 returned after threshold" "FAIL"
+    fi
+
+    # 11b.4: Verify Retry-After header is present in 429 response
+    section "11b.4: Verify Retry-After header"
+    if echo "$probe_11_headers" | grep -qi "Retry-After"; then
+        record_test "Flood guard: Retry-After header present" "PASS"
+        local retry_val
+        retry_val=$(echo "$probe_11_headers" | grep -i "Retry-After" | awk '{print $2}' | tr -d '\r')
+        info "Retry-After: ${retry_val}s"
+    else
+        error "429 response missing Retry-After header"
+        record_test "Flood guard: Retry-After header present" "FAIL"
+    fi
+
+    # 11b.5: Admin verifies flood guard security event was recorded
+    section "11b.5: Admin checks security events for flood guard detection"
+    local sec_flood_output sec_flood_code
+    safe_exec sec_flood_output sec_flood_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        security-events --type suspicious_pattern --json
+
+    if [ $sec_flood_code -eq 0 ] && echo "$sec_flood_output" | grep -q "unauthorized_flood"; then
+        record_test "Flood guard: security event recorded (unauthorized_flood)" "PASS"
+        info "Admin can see flood guard event in security-events"
+    else
+        # Also check endpoint_abuse in case the threshold was high enough
+        safe_exec sec_flood_output sec_flood_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            security-events --type endpoint_abuse --json
+        if [ $sec_flood_code -eq 0 ] && echo "$sec_flood_output" | grep -q "unauthorized_flood"; then
+            record_test "Flood guard: security event recorded (unauthorized_flood)" "PASS"
+            info "Admin can see flood guard event in security-events (endpoint_abuse)"
+        else
+            error "Flood guard security event not found in admin security-events"
+            echo "$sec_flood_output"
+            record_test "Flood guard: security event recorded (unauthorized_flood)" "FAIL"
+        fi
+    fi
+
+    success "Flood guard phase complete"
+}
+
 # Phase 12: Cleanup
 phase_12_cleanup() {
     phase "12: CLEANUP"
@@ -1929,6 +2022,7 @@ main() {
     phase_9_custom_password_file_operations
     phase_10_share_operations
     phase_11_admin_system_status
+    phase_11b_flood_guard
     phase_12_cleanup
 
     # Show summary and exit with appropriate code
