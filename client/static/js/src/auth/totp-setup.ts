@@ -5,15 +5,10 @@
 
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
-import { showModal, showTOTPAppsModal } from '../ui/modals.js';
+import { showModal } from '../ui/modals.js';
 import { setTokens, clearAllSessionData, AuthManager } from '../utils/auth.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
-
-// Make showTOTPAppsModal available globally for inline onclick handlers
-if (typeof window !== 'undefined') {
-  window.showTOTPAppsModal = showTOTPAppsModal;
-}
 
 export interface TOTPSetupFlowData {
   tempToken: string;
@@ -156,9 +151,7 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
       </div>
       <p style="font-size: 0.9rem; color: var(--foam-2); text-align: center;">
         Scan this QR code with your authenticator app.
-        <a href="#" onclick="event.preventDefault(); window.showTOTPAppsModal();" style="color: var(--current-1); text-decoration: none;">
-          Need a TOTP app?
-        </a>
+        <span class="totp-app-hint" tabindex="0">Need a TOTP app?<span class="totp-app-tooltip">Try Google Authenticator, Ente Auth, or Bitwarden Authenticator</span></span>
       </p>
     </div>
     

@@ -1335,6 +1335,36 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     border-radius: 4px;
 }
 
+/* TOTP app recommendation tooltip */
+.totp-app-hint {
+    color: var(--current-2);
+    cursor: help;
+    position: relative;
+    border-bottom: 1px dotted var(--current-2);
+}
+
+.totp-app-tooltip {
+    display: none;
+    position: absolute;
+    bottom: 130%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--depth-2);
+    color: var(--foam-1);
+    border: 1px solid var(--depth-4);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    z-index: 1100;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.totp-app-hint:hover .totp-app-tooltip,
+.totp-app-hint:focus .totp-app-tooltip {
+    display: block;
+}
+
 .manual-entry {
     background-color: var(--depth-2);
     padding: 1rem;
