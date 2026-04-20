@@ -4,15 +4,15 @@ Design document for multi-provider storage redundancy in Arkfile.
 
 ## Overview
 
-This feature adds support for up to three simultaneous S3-compatible storage backends (primary, secondary, and tertiary), enabling encrypted blob redundancy, download fallback, and zero-downtime provider migration. The three-tier model provides automatic replication between primary and secondary, manual copy operations to/from any provider including tertiary, and a three-level download fallback chain. All multi-backend operations are admin-only and controlled via the arkfile-admin CLI through the Admin API.
+This feature adds support for two simultaneous S3-compatible storage backends (primary and secondary), enabling encrypted blob redundancy, download fallback, and zero-downtime provider migration. All multi-backend operations are admin-only and controlled via the arkfile-admin CLI through the Admin API.
 
 ## Motivation
 
-1. **Operational resilience**: If the primary storage provider experiences downtime, file downloads automatically fall back to the secondary provider (and then tertiary if secondary also fails). Users experience no interruption.
+1. **Operational resilience**: If the primary storage provider experiences downtime, file downloads automatically fall back to the secondary provider. Users experience no interruption.
 
 2. **Provider risk mitigation**: Storage providers can change pricing, terms, or availability at any time. With multi-backend support, the admin can add a new provider, copy all data to it, and decommission the old provider without any downtime or data loss. This eliminates vendor lock-in.
 
-3. **Data redundancy**: Encrypted blobs stored identically across two or three independent providers provide an additional layer of protection against data loss beyond what any single provider offers.
+3. **Data redundancy**: Encrypted blobs stored identically across two independent providers provide an additional layer of protection against data loss beyond what any single provider offers.
 
 4. **Non-disruptive**: The feature is entirely opt-in. When no secondary provider is configured, the system behaves identically to today (single-provider mode). No changes are required to client-side code, crypto, or user-facing functionality.
 
@@ -22,16 +22,6 @@ This feature adds support for up to three simultaneous S3-compatible storage bac
 - **Admin-only**: All multi-backend management is performed through arkfile-admin CLI commands that hit Admin API endpoints. Nothing is surfaced to end users at this stage.
 - **Encrypted blobs are opaque**: The same client-side-encrypted blob (identified by storage_id) can be PUT to any number of S3-compatible backends. No re-encryption or transformation is needed.
 - **Task-based async operations**: All copy operations (bulk or individual) return a task ID immediately. The server performs the work in background goroutines. The admin polls task status.
-- **Provider-ID is the identity, not provider-type**: Two backends can use the same provider type (e.g., both `wasabi`) with different regions, endpoints, buckets, and credentials. Each is identified by its unique `provider_id` (e.g., `wasabi-us-central-1`, `wasabi-eu-central-2`). The system treats them as fully independent backends.
-- **Three-tier provider roles**: The system supports up to three providers with distinct roles: Primary (receives all uploads), Secondary (auto-replication target, download fallback), and Tertiary (manual copy/move target only, final download fallback). Only Primary and Secondary participate in automatic replication. Tertiary is available for admin-initiated copy operations and serves as a third-tier download fallback. Any provider can be promoted to any role.
-
-### Three-Tier Role Reference
-
-| Role | Uploads | Auto-Replication Target | Download Fallback | Manual Copy Target | Promotable To |
-|-----------|---------|-------------------------|-------------------|--------------------|-------------------|
-| Primary   | Yes     | N/A (source)            | 1st attempt       | Yes                | N/A               |
-| Secondary | No      | Yes (background sync)   | 2nd attempt       | Yes                | Primary           |
-| Tertiary  | No      | No (manual only)        | 3rd attempt       | Yes                | Primary, Secondary|
 
 ## Current Architecture (Single Provider)
 
@@ -67,13 +57,9 @@ S3_FORCE_PATH_STYLE=true
 
 If `STORAGE_PROVIDER_ID` is not set, the system auto-generates it as `"{STORAGE_PROVIDER}:{S3_BUCKET}"` (e.g. `"generic-s3:arkfile-local"`).
 
-Note: For the primary provider, some endpoints can be auto-derived from the region (e.g., Wasabi endpoint from `S3_REGION`, Vultr endpoint from `S3_REGION`). This auto-generation logic lives in the env-var reading code that calls the `NewS3Provider` factory, not inside the factory itself.
-
 ### Secondary Provider (New -- Optional)
 
-The three-tier model supports an optional secondary provider configured with a parallel set of environment variables prefixed with `STORAGE_2_`. The secondary provider serves as the automatic replication target and second-tier download fallback.
-
-For all non-primary providers, `STORAGE_2_ENDPOINT` is required. Unlike the primary provider where some endpoints can be derived from region, secondary and tertiary providers always require an explicit endpoint.
+A secondary provider is configured with a parallel set of environment variables prefixed with `STORAGE_2_`:
 
 ```
 STORAGE_PROVIDER_2=backblaze
@@ -88,36 +74,17 @@ STORAGE_2_FORCE_PATH_STYLE=false
 
 When `STORAGE_PROVIDER_2` is not set or empty, the system operates in single-provider mode. All multi-backend features are disabled and behavior is identical to the current implementation.
 
-### Tertiary Provider (New -- Optional)
-
-An optional tertiary provider is configured with `STORAGE_3_` prefixed environment variables. The tertiary provider is a manual-only copy target and serves as the third-tier download fallback. It does not participate in automatic upload replication.
-
-```
-STORAGE_PROVIDER_3=backblaze
-STORAGE_PROVIDER_3_ID=backblaze-eu-west
-STORAGE_3_ENDPOINT=s3.eu-west-004.backblazeb2.com
-STORAGE_3_ACCESS_KEY=your_key_id
-STORAGE_3_SECRET_KEY=your_application_key
-STORAGE_3_BUCKET=arkfile-archive
-STORAGE_3_REGION=eu-west-004
-STORAGE_3_FORCE_PATH_STYLE=false
-```
-
-When `STORAGE_PROVIDER_3` is not set or empty, the system operates in two-provider mode (or single-provider if secondary is also unconfigured). The tertiary provider requires a configured secondary provider; you cannot have a tertiary without a secondary.
-
 ### Replication Flag
 
 ```
 ENABLE_UPLOAD_REPLICATION=false
 ```
 
-When set to `true` and a secondary provider is configured, newly uploaded files are automatically replicated to the secondary provider only via a background goroutine after the primary upload completes. The tertiary provider is never an automatic replication target. The upload response is returned to the user as soon as the primary upload succeeds; secondary replication happens asynchronously. If secondary replication fails, the file is recorded with status `"active"` on primary and `"failed"` on secondary, and the admin can retry via the `copy-file` command.
-
-To populate the tertiary provider, use manual copy operations (`copy-all`, `copy-user-files`, `copy-file`) via the admin CLI.
+When set to `true` and a secondary provider is configured, newly uploaded files are automatically replicated to the secondary provider via a background goroutine after the primary upload completes. The upload response is returned to the user as soon as the primary upload succeeds; secondary replication happens asynchronously. If secondary replication fails, the file is recorded with status `"active"` on primary and `"failed"` on secondary, and the admin can retry via the `copy-file` command.
 
 ### Provider-Specific Variable Overrides
 
-For providers with their own credential variable names (Cloudflare R2, Backblaze B2), the secondary and tertiary configs use a consistent `STORAGE_2_` / `STORAGE_3_` prefix:
+For providers with their own credential variable names (Cloudflare R2, Backblaze B2), the secondary config uses a consistent `STORAGE_2_` prefix:
 
 ```
 # Cloudflare R2 as secondary
@@ -127,17 +94,15 @@ STORAGE_2_ACCESS_KEY=your_access_key_id
 STORAGE_2_SECRET_KEY=your_secret_access_key
 STORAGE_2_BUCKET=your-bucket-name
 
-# Backblaze B2 as tertiary
-STORAGE_PROVIDER_3=backblaze
-STORAGE_3_ENDPOINT=s3.us-west-004.backblazeb2.com
-STORAGE_3_ACCESS_KEY=your_key_id
-STORAGE_3_SECRET_KEY=your_application_key
-STORAGE_3_BUCKET=your-bucket-name
+# Backblaze B2 as secondary
+STORAGE_PROVIDER_2=backblaze
+STORAGE_2_ENDPOINT=s3.us-west-004.backblazeb2.com
+STORAGE_2_ACCESS_KEY=your_key_id
+STORAGE_2_SECRET_KEY=your_application_key
+STORAGE_2_BUCKET=your-bucket-name
 ```
 
-Note: The same provider type can appear in multiple slots. For example, primary and secondary can both be `wasabi` with different regions, endpoints, buckets, and credentials. Each is uniquely identified by its `provider_id`, not its `provider_type`.
-
-The refactored `InitS3()` function reads env vars for primary, secondary (if configured), and tertiary (if configured), calling `NewS3Provider()` up to three times. It maps the unified `STORAGE_2_` / `STORAGE_3_` variables to the provider-specific SDK configuration internally.
+The `InitS3Secondary()` function maps these unified `STORAGE_2_` variables to the provider-specific SDK configuration internally, following the same pattern as the existing `InitS3()` function.
 
 ---
 
@@ -156,19 +121,17 @@ CREATE TABLE IF NOT EXISTS storage_providers (
     bucket_name TEXT NOT NULL,
     endpoint TEXT NOT NULL,
     region TEXT NOT NULL DEFAULT 'us-east-1',
-    role TEXT NOT NULL DEFAULT 'tertiary',
+    is_primary BOOLEAN NOT NULL DEFAULT false,
     is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_storage_providers_role ON storage_providers(role);
+CREATE INDEX IF NOT EXISTS idx_storage_providers_primary ON storage_providers(is_primary);
 CREATE INDEX IF NOT EXISTS idx_storage_providers_active ON storage_providers(is_active);
 ```
 
-The `role` column replaces the previous `is_primary` boolean design. Valid values are `'primary'`, `'secondary'`, and `'tertiary'`. Constraints: only one provider can have `role = 'primary'`, only one can have `role = 'secondary'`, any number can be `'tertiary'` (though v1 supports at most one tertiary via env vars; the DB schema is N-capable for future expansion).
-
-On startup, the server upserts rows for the configured primary (and optional secondary/tertiary) provider. The `role` field indicates each provider's current role. The `set-primary`, `set-secondary`, and `swap-providers` admin commands update this field.
+On startup, the server upserts rows for the configured primary (and optional secondary) provider. The `is_primary` flag indicates which provider is the current primary for new uploads. The `set-primary` and `swap-providers` admin commands update this flag.
 
 ### `file_storage_locations` Table
 
@@ -242,16 +205,14 @@ Key fields:
 
 ### New File: `storage/registry.go`
 
-The `ProviderRegistry` replaces the single global `storage.Provider` as the primary interface for handler code. It holds references to the primary and optional secondary and tertiary `ObjectStorageProvider` instances and provides high-level methods for redundant operations.
+The `ProviderRegistry` replaces the single global `storage.Provider` as the primary interface for handler code. It holds references to the primary and optional secondary `ObjectStorageProvider` instances and provides high-level methods for redundant operations.
 
 ```go
 type ProviderRegistry struct {
     primary     ObjectStorageProvider
-    secondary   ObjectStorageProvider  // nil in single-provider mode
-    tertiary    ObjectStorageProvider  // nil if not configured
-    primaryID   string                // e.g. "seaweedfs-local"
-    secondaryID string                // e.g. "backblaze-us-west"
-    tertiaryID  string                // e.g. "backblaze-eu-west"
+    secondary   ObjectStorageProvider // nil in single-provider mode
+    primaryID   string               // e.g. "seaweedfs-local"
+    secondaryID string               // e.g. "backblaze-us-west"
 }
 
 var Registry *ProviderRegistry
@@ -267,50 +228,32 @@ The existing `storage.Provider` global is retained as a backward-compatible alia
 
 **Secondary() ObjectStorageProvider** -- Returns the secondary provider, or nil if not configured.
 
-**Tertiary() ObjectStorageProvider** -- Returns the tertiary provider, or nil if not configured.
-
 **HasSecondary() bool** -- Returns true if a secondary provider is configured and active.
 
-**HasTertiary() bool** -- Returns true if a tertiary provider is configured and active.
+**PrimaryID() string** / **SecondaryID() string** -- Return the human-readable provider IDs.
 
-**PrimaryID() string** / **SecondaryID() string** / **TertiaryID() string** -- Return the human-readable provider IDs.
+**GetObjectWithFallback(ctx, objectName, opts) (ReadableStoredObject, string, error)** -- Attempts to GET from primary. On failure, if secondary exists, attempts GET from secondary. Returns the object, the provider ID that served it, and any error. Used by download and share download handlers.
 
-**GetObjectWithFallback(ctx, objectName, opts) (ReadableStoredObject, string, error)** -- Attempts to GET from primary. On failure, if secondary exists, attempts GET from secondary. On failure, if tertiary exists, attempts GET from tertiary. Returns the object, the provider ID that served it, and any error. Used by download and share download handlers.
+**GetObjectChunkWithFallback(ctx, objectName, offset, length) (io.ReadCloser, string, error)** -- Same fallback pattern for chunked reads. Returns the chunk reader, the provider ID that served it, and any error.
 
-**GetObjectChunkWithFallback(ctx, objectName, offset, length) (io.ReadCloser, string, error)** -- Same three-tier fallback pattern for chunked reads. Returns the chunk reader, the provider ID that served it, and any error.
-
-**RemoveObjectAll(ctx, objectName, opts) error** -- Removes the object from all providers that have active `file_storage_locations` records. Logs warnings for partial failures but returns an error only if the primary deletion fails. The caller is responsible for updating `file_storage_locations` records.
+**RemoveObjectBoth(ctx, objectName, opts) error** -- Removes the object from both providers. Logs warnings for partial failures but returns an error only if the primary deletion fails. The caller is responsible for updating `file_storage_locations` records.
 
 ### Modified File: `storage/s3.go`
 
-Extract the S3 client creation logic from `InitS3()` into a reusable factory function that accepts a config struct:
+Extract the S3 client creation logic from `InitS3()` into a reusable factory function:
 
 ```go
-type S3ProviderConfig struct {
-    ProviderType   StorageProvider
-    ProviderID     string
-    Endpoint       string  // Always explicit, no auto-generation inside factory
-    AccessKey      string
-    SecretKey      string
-    Bucket         string
-    Region         string
-    ForcePathStyle bool
-}
-
-func NewS3Provider(config S3ProviderConfig) (*S3AWSStorage, error)
+func NewS3Provider(providerType StorageProvider, endpoint, accessKey, secretKey, bucket, region string, forcePathStyle bool) (*S3AWSStorage, error)
 ```
 
-The factory takes explicit parameters via the config struct rather than reading from environment variables, allowing it to be called up to three times with different configurations (once for primary, once for secondary, once for tertiary).
-
-Note: Endpoint auto-generation for Wasabi/Vultr from region stays in the env-var reading code that *calls* the factory, not inside the factory itself. The factory always receives a fully-resolved endpoint.
+This function takes explicit parameters rather than reading from environment variables, allowing it to be called twice with different configurations (once for primary, once for secondary).
 
 The existing `InitS3()` function is refactored to:
-1. Read primary env vars, auto-generate endpoint if needed, and call `NewS3Provider()` to create the primary provider.
+1. Read primary env vars and call `NewS3Provider()` to create the primary provider.
 2. If `STORAGE_PROVIDER_2` is set, read secondary env vars and call `NewS3Provider()` to create the secondary provider.
-3. If `STORAGE_PROVIDER_3` is set, read tertiary env vars and call `NewS3Provider()` to create the tertiary provider.
-4. Build a `ProviderRegistry` with all configured providers.
-5. Set `Registry = &ProviderRegistry{...}` and `Provider = Registry.primary` for backward compatibility.
-6. Ensure the primary bucket exists (existing behavior). If secondary/tertiary are configured, ensure their buckets exist too (for `generic-s3` / local providers).
+3. Build a `ProviderRegistry` with both (or just primary).
+4. Set `Registry = &ProviderRegistry{...}` and `Provider = Registry.primary` for backward compatibility.
+5. Ensure the primary bucket exists (existing behavior). If secondary is configured, ensure the secondary bucket exists too (for `generic-s3` / local providers).
 
 ### Modified File: `storage/storage.go`
 
@@ -318,12 +261,12 @@ Add the `Registry` global alongside the existing `Provider` global:
 
 ```go
 var Provider ObjectStorageProvider   // Backward-compatible, points to primary
-var Registry *ProviderRegistry       // New: holds primary + optional secondary + optional tertiary
+var Registry *ProviderRegistry       // New: holds primary + optional secondary
 ```
 
 ### Modified File: `storage/mock_storage.go`
 
-Add a `MockProviderRegistry` for testing that wraps up to three `MockObjectStorageProvider` instances and implements the same registry methods. This allows handler tests to verify three-tier fallback behavior, multi-delete behavior, etc.
+Add a `MockProviderRegistry` for testing that wraps two `MockObjectStorageProvider` instances and implements the same registry methods. This allows handler tests to verify fallback behavior, dual-delete behavior, etc.
 
 ---
 
@@ -344,23 +287,22 @@ All 17 `storage.Provider.XXX()` call sites are updated to use the registry. The 
    - Kick off a background goroutine that streams the completed object from primary to secondary using `CopyObjectBetweenProviders()` (a new registry helper).
    - On success, update the secondary location row to `status = "active"`.
    - On failure, update to `status = "failed"` and log the error.
-   - Note: Tertiary is never an auto-replication target. To populate tertiary, use manual copy operations.
 3. The HTTP response is returned immediately after the primary upload completes and the primary location is recorded. The user does not wait for secondary replication.
 
-**CancelUpload** -- The call to `storage.Provider.AbortMultipartUpload()` becomes `storage.Registry.Primary().AbortMultipartUpload()`. No secondary/tertiary involvement since the upload was never completed.
+**CancelUpload** -- The call to `storage.Provider.AbortMultipartUpload()` becomes `storage.Registry.Primary().AbortMultipartUpload()`. No secondary involvement since the upload was never completed.
 
 ### Delete Flow (`handlers/uploads.go` -- `DeleteFile`)
 
 The current single `storage.Provider.RemoveObject()` call is replaced with:
 1. Query `file_storage_locations` for all locations of this file.
-2. For each location with `status = "active"`, call `RemoveObject()` on the corresponding provider (could be 1, 2, or 3 providers).
+2. For each location with `status = "active"`, call `RemoveObject()` on the corresponding provider.
 3. Update each location row to `status = "deleted"` (or delete the row entirely).
-4. If removal fails on one provider but succeeds on others, log a warning but still proceed with the DB record deletion. The file is considered deleted from the user's perspective.
+4. If removal fails on one provider but succeeds on the other, log a warning but still proceed with the DB record deletion. The file is considered deleted from the user's perspective.
 5. Delete the `file_metadata` row and update storage usage as before.
 
 ### Owner Download Flow (`handlers/downloads.go` -- `DownloadFileChunk`)
 
-The call to `storage.Provider.GetObjectChunk()` is replaced with `storage.Registry.GetObjectChunkWithFallback()`. The three-tier fallback logic is transparent to the handler: if the primary fails, the secondary is tried, then the tertiary. The handler receives the chunk reader and streams it to the client as before.
+The call to `storage.Provider.GetObjectChunk()` is replaced with `storage.Registry.GetObjectChunkWithFallback()`. The fallback logic is transparent to the handler: if the primary fails, the secondary is tried automatically. The handler receives the chunk reader and streams it to the client as before.
 
 ### Share Download Flow (`handlers/file_shares.go` -- `DownloadShareChunk`)
 
@@ -368,7 +310,7 @@ Same pattern as owner download. The call to `storage.Provider.GetObjectChunk()` 
 
 ### Export Flow (`handlers/export.go`)
 
-The call to `storage.Provider.GetObject()` becomes `storage.Registry.GetObjectWithFallback()`. Same three-tier fallback pattern.
+The call to `storage.Provider.GetObject()` becomes `storage.Registry.GetObjectWithFallback()`. Same fallback pattern.
 
 ### Size Mismatch Cleanup (`handlers/uploads.go` -- `CompleteUpload`)
 
@@ -384,7 +326,7 @@ The existing `storage.Provider.RemoveObject()` call for size mismatch cleanup be
 | uploads.go | UploadChunk | `Provider.UploadPart()` | `Registry.Primary().UploadPart()` |
 | uploads.go | CompleteUpload | `Provider.CompleteMultipartUpload()` | `Registry.Primary().CompleteMultipartUpload()` |
 | uploads.go | CompleteUpload (mismatch) | `Provider.RemoveObject()` | `Registry.Primary().RemoveObject()` |
-| uploads.go | DeleteFile | `Provider.RemoveObject()` | `Registry.RemoveObjectAll()` + location updates |
+| uploads.go | DeleteFile | `Provider.RemoveObject()` | `Registry.RemoveObjectBoth()` + location updates |
 | downloads.go | DownloadFileChunk | `Provider.GetObjectChunk()` | `Registry.GetObjectChunkWithFallback()` |
 | file_shares.go | DownloadShareChunk | `Provider.GetObjectChunk()` | `Registry.GetObjectChunkWithFallback()` |
 | export.go | ExportFile | `Provider.GetObject()` | `Registry.GetObjectWithFallback()` |
@@ -397,7 +339,7 @@ All endpoints below are admin-only, protected by the existing admin auth middlew
 
 ### `GET /api/admin/storage/status`
 
-Returns the current storage configuration and sync status. The response can include up to 3 providers, each with a `role` field indicating its current role.
+Returns the current storage configuration and sync status.
 
 **Response:**
 ```json
@@ -407,7 +349,7 @@ Returns the current storage configuration and sync status. The response can incl
             "provider_id": "seaweedfs-local",
             "provider_type": "generic-s3",
             "bucket_name": "arkfile-local",
-            "role": "primary",
+            "is_primary": true,
             "is_active": true,
             "file_count": 142,
             "active_count": 142,
@@ -415,26 +357,15 @@ Returns the current storage configuration and sync status. The response can incl
             "failed_count": 0
         },
         {
-            "provider_id": "wasabi-us-central-1",
-            "provider_type": "wasabi",
+            "provider_id": "backblaze-us-west",
+            "provider_type": "backblaze",
             "bucket_name": "arkfile-backup",
-            "role": "secondary",
+            "is_primary": false,
             "is_active": true,
             "file_count": 138,
             "active_count": 138,
             "pending_count": 2,
             "failed_count": 2
-        },
-        {
-            "provider_id": "backblaze-eu-west",
-            "provider_type": "backblaze",
-            "bucket_name": "arkfile-archive",
-            "role": "tertiary",
-            "is_active": true,
-            "file_count": 50,
-            "active_count": 50,
-            "pending_count": 0,
-            "failed_count": 0
         }
     ],
     "total_files": 142,
@@ -454,7 +385,7 @@ Initiates a background task to copy all files from one provider to another.
 ```json
 {
     "source_provider_id": "seaweedfs-local",
-    "destination_provider_id": "wasabi-us-central-1",
+    "destination_provider_id": "backblaze-us-west",
     "verify": true,
     "skip_existing": true
 }
@@ -462,8 +393,6 @@ Initiates a background task to copy all files from one provider to another.
 
 - `verify`: If true, after copying each file, download it from the destination and verify the SHA-256 hash matches the `encrypted_file_sha256sum` in `file_metadata`.
 - `skip_existing`: If true, skip files that already have an `"active"` location on the destination provider.
-
-Note: The source and destination can be any combination of primary/secondary/tertiary providers. This makes copy operations fully flexible for populating any provider from any other.
 
 **Response:**
 ```json
@@ -485,7 +414,7 @@ Same as copy-all but filtered to a single user's files.
 {
     "username": "alice12345",
     "source_provider_id": "seaweedfs-local",
-    "destination_provider_id": "wasabi-us-central-1",
+    "destination_provider_id": "backblaze-us-west",
     "verify": true,
     "skip_existing": true
 }
@@ -502,7 +431,7 @@ Copies a single file from one provider to another. Also returns a task ID for co
 {
     "file_id": "abcd1234-...",
     "source_provider_id": "seaweedfs-local",
-    "destination_provider_id": "wasabi-us-central-1",
+    "destination_provider_id": "backblaze-us-west",
     "verify": true
 }
 ```
@@ -535,7 +464,7 @@ Returns the current status of a background task.
     "error_message": null,
     "details": {
         "source_provider_id": "seaweedfs-local",
-        "destination_provider_id": "wasabi-us-central-1",
+        "destination_provider_id": "backblaze-us-west",
         "verify": true,
         "skip_existing": true,
         "files_skipped": 12,
@@ -569,15 +498,11 @@ Returns a detailed breakdown of which files are on which providers and identifie
     "total_files": 142,
     "on_primary_only": 4,
     "on_secondary_only": 0,
-    "on_all_three": 50,
-    "on_primary_and_secondary": 88,
-    "on_primary_and_tertiary": 0,
-    "on_secondary_and_tertiary": 0,
-    "on_tertiary_only": 0,
+    "on_both": 138,
     "failed_locations": [
         {
             "file_id": "xyz789-...",
-            "provider_id": "wasabi-us-central-1",
+            "provider_id": "backblaze-us-west",
             "status": "failed",
             "owner_username": "alice12345"
         }
@@ -587,7 +512,7 @@ Returns a detailed breakdown of which files are on which providers and identifie
 
 ### `POST /api/admin/storage/add-provider`
 
-Registers a new storage provider in the `storage_providers` table and hot-initializes an S3 client for it. This does not require a server restart. New providers default to `role = 'tertiary'`.
+Registers a new storage provider in the `storage_providers` table and hot-initializes an S3 client for it. This does not require a server restart.
 
 **Request:**
 ```json
@@ -607,7 +532,7 @@ Registers a new storage provider in the `storage_providers` table and hot-initia
 ```json
 {
     "provider_id": "wasabi-eu-central",
-    "role": "tertiary",
+    "is_primary": false,
     "is_active": true,
     "message": "Provider added and connectivity verified"
 }
@@ -615,18 +540,16 @@ Registers a new storage provider in the `storage_providers` table and hot-initia
 
 The endpoint performs a connectivity test (similar to `verify-storage`) before confirming the provider is active. Credentials are stored only in the database `storage_providers` table (encrypted at rest via rqlite disk encryption or the master key -- design TBD). On subsequent server restarts, the provider is re-initialized from the DB record alongside the env-configured providers.
 
-Note: For v1, the simpler approach may be to require env var configuration for providers and use this endpoint only to register/verify them in the DB. Credential storage in the DB can be deferred to v2 if needed. V1 supports at most 3 total providers.
+Note: For v1, the simpler approach may be to require env var configuration for providers and use this endpoint only to register/verify them in the DB. Credential storage in the DB can be deferred to v2 if needed.
 
 ### `POST /api/admin/storage/set-primary`
 
 Promotes a provider to primary. All new uploads will go to this provider. Existing files on other providers are not moved.
 
-When a provider is promoted to primary, the role cascade is automatic: the old primary becomes secondary, and the old secondary becomes tertiary. This ensures no role conflicts.
-
 **Request:**
 ```json
 {
-    "provider_id": "wasabi-us-central-1"
+    "provider_id": "backblaze-us-west"
 }
 ```
 
@@ -634,36 +557,16 @@ When a provider is promoted to primary, the role cascade is automatic: the old p
 ```json
 {
     "previous_primary": "seaweedfs-local",
-    "new_primary": "wasabi-us-central-1",
-    "message": "Primary provider updated. New uploads will use wasabi-us-central-1. Previous primary seaweedfs-local demoted to secondary."
+    "new_primary": "backblaze-us-west",
+    "message": "Primary provider updated. New uploads will use backblaze-us-west."
 }
 ```
 
-This updates the `role` field in `storage_providers` and swaps the registry references in memory. Download fallback continues to work for files on any provider.
-
-### `POST /api/admin/storage/set-secondary`
-
-Promotes a provider to secondary (auto-replication target and second-tier download fallback). If the target was tertiary, it moves to secondary. The displaced old secondary becomes tertiary.
-
-**Request:**
-```json
-{
-    "provider_id": "backblaze-eu-west"
-}
-```
-
-**Response:**
-```json
-{
-    "previous_secondary": "wasabi-us-central-1",
-    "new_secondary": "backblaze-eu-west",
-    "message": "Secondary provider updated. Auto-replication will target backblaze-eu-west. Previous secondary wasabi-us-central-1 demoted to tertiary."
-}
-```
+This updates the `is_primary` flag in `storage_providers` and swaps the `Registry.primary` / `Registry.secondary` references in memory. Download fallback continues to work for files on either provider.
 
 ### `POST /api/admin/storage/swap-providers`
 
-Convenience endpoint that swaps primary and secondary in a single operation. Equivalent to calling `set-primary` with the current secondary's ID. Tertiary is unaffected.
+Convenience endpoint that swaps primary and secondary in a single operation. Equivalent to calling `set-primary` with the current secondary's ID.
 
 **Request:**
 ```json
@@ -674,10 +577,10 @@ Convenience endpoint that swaps primary and secondary in a single operation. Equ
 ```json
 {
     "previous_primary": "seaweedfs-local",
-    "new_primary": "wasabi-us-central-1",
-    "previous_secondary": "wasabi-us-central-1",
+    "new_primary": "backblaze-us-west",
+    "previous_secondary": "backblaze-us-west",
     "new_secondary": "seaweedfs-local",
-    "message": "Providers swapped. New uploads will use wasabi-us-central-1."
+    "message": "Providers swapped. New uploads will use backblaze-us-west."
 }
 ```
 
@@ -702,9 +605,8 @@ STORAGE MANAGEMENT COMMANDS (Admin API):
     cancel-task           Cancel a running background storage task
     add-provider          Register and verify a new storage provider
     set-primary           Promote a provider to primary (new uploads go here)
-    set-secondary         Promote a provider to secondary (auto-replication target)
     swap-providers        Swap primary and secondary provider roles
-    verify-storage        Verify storage connectivity (any provider by --provider-id)
+    verify-storage-2      Verify secondary storage connectivity (round-trip test)
 ```
 
 ### `storage-status`
@@ -719,10 +621,9 @@ Example output:
 ```
 Storage Providers:
 
-  ID                    TYPE         BUCKET           ROLE       ACTIVE  FILES  SYNCED  PENDING  FAILED
-  seaweedfs-local       generic-s3   arkfile-local    primary    yes     142    142     0        0
-  wasabi-us-central-1   wasabi       arkfile-backup   secondary  yes     138    138     2        2
-  backblaze-eu-west     backblaze    arkfile-archive  tertiary   yes     50     50      0        0
+  ID                  TYPE         BUCKET           PRIMARY  ACTIVE  FILES  SYNCED  PENDING  FAILED
+  seaweedfs-local     generic-s3   arkfile-local    yes      yes     142    142     0        0
+  backblaze-us-west   backblaze    arkfile-backup   no       yes     138    138     2        2
 
 Replication: enabled
 Total files: 142 | Fully replicated: 138 | Gaps: 4
@@ -737,16 +638,16 @@ arkfile-admin storage-sync-status
 ```
 
 Flags:
-- `--show-gaps` -- Only show files with replication gaps (not on all configured providers).
+- `--show-gaps` -- Only show files with replication gaps (not on both providers).
 
 ### `copy-all`
 
 Calls `POST /api/admin/storage/copy-all` and displays the returned task ID.
 
 ```
-arkfile-admin copy-all --from seaweedfs-local --to wasabi-us-central-1
-arkfile-admin copy-all --from seaweedfs-local --to wasabi-us-central-1 --verify --skip-existing
-arkfile-admin copy-all --from wasabi-us-central-1 --to backblaze-eu-west
+arkfile-admin copy-all --from seaweedfs-local --to backblaze-us-west
+arkfile-admin copy-all --from seaweedfs-local --to backblaze-us-west --verify --skip-existing
+arkfile-admin copy-all --from backblaze-us-west --to seaweedfs-local
 ```
 
 Flags:
@@ -769,7 +670,7 @@ Use 'arkfile-admin task-status --task-id a1b2c3d4-...' to monitor progress.
 Calls `POST /api/admin/storage/copy-user-files`.
 
 ```
-arkfile-admin copy-user-files --username alice12345 --from seaweedfs-local --to wasabi-us-central-1
+arkfile-admin copy-user-files --username alice12345 --from seaweedfs-local --to backblaze-us-west
 ```
 
 Flags: Same as `copy-all` plus:
@@ -780,7 +681,7 @@ Flags: Same as `copy-all` plus:
 Calls `POST /api/admin/storage/copy-file`.
 
 ```
-arkfile-admin copy-file --file-id abcd1234-... --from seaweedfs-local --to wasabi-us-central-1
+arkfile-admin copy-file --file-id abcd1234-... --from seaweedfs-local --to backblaze-us-west
 ```
 
 Flags:
@@ -822,7 +723,7 @@ arkfile-admin cancel-task --task-id a1b2c3d4-...
 
 ### `add-provider`
 
-Calls `POST /api/admin/storage/add-provider`. Prompts for credentials interactively (they are not passed as CLI flags for security). New providers are added as tertiary by default. After adding, promote with `set-secondary` or `set-primary` as needed.
+Calls `POST /api/admin/storage/add-provider`. Prompts for credentials interactively (they are not passed as CLI flags for security).
 
 ```
 arkfile-admin add-provider --provider-id wasabi-eu --provider-type wasabi --bucket arkfile-eu --region eu-central-1 --endpoint https://s3.eu-central-1.wasabi.com
@@ -843,26 +744,13 @@ The command prompts for access key and secret key via secure terminal input (sam
 Calls `POST /api/admin/storage/set-primary`.
 
 ```
-arkfile-admin set-primary --provider-id wasabi-us-central-1
+arkfile-admin set-primary --provider-id backblaze-us-west
 ```
 
 Flags:
 - `--provider-id ID` -- Provider to promote to primary (required).
 
-Outputs the previous and new primary, notes the role cascade (old primary -> secondary, old secondary -> tertiary), and a reminder that new uploads will now go to the specified provider.
-
-### `set-secondary`
-
-Calls `POST /api/admin/storage/set-secondary`.
-
-```
-arkfile-admin set-secondary --provider-id backblaze-eu-west
-```
-
-Flags:
-- `--provider-id ID` -- Provider to promote to secondary (required).
-
-Outputs the previous and new secondary, notes that auto-replication will now target the specified provider.
+Outputs the previous and new primary, and a reminder that new uploads will now go to the specified provider.
 
 ### `swap-providers`
 
@@ -875,25 +763,20 @@ arkfile-admin swap-providers
 No flags required. Confirms the swap interactively before executing:
 ```
 Current primary: seaweedfs-local
-Current secondary: wasabi-us-central-1
-Swap providers? New uploads will go to wasabi-us-central-1. [y/N]: y
-Providers swapped. New primary: wasabi-us-central-1
+Current secondary: backblaze-us-west
+Swap providers? New uploads will go to backblaze-us-west. [y/N]: y
+Providers swapped. New primary: backblaze-us-west
 ```
 
-### `verify-storage`
+### `verify-storage-2`
 
-Performs a round-trip connectivity test against any configured provider. Generalized from the previous `verify-storage-2` concept to work with any of the three providers by provider ID.
+Performs the same round-trip test as the existing `verify-storage` command but targets the secondary provider. This could be implemented as a flag on the existing command or as a separate command for clarity.
 
 ```
-arkfile-admin verify-storage --provider-id seaweedfs-local
-arkfile-admin verify-storage --provider-id wasabi-us-central-1
-arkfile-admin verify-storage --provider-id backblaze-eu-west
+arkfile-admin verify-storage-2
 ```
 
-Flags:
-- `--provider-id ID` -- Provider to verify (required). Can be any configured provider.
-
-If `--provider-id` is omitted, defaults to verifying the primary provider (backward-compatible with existing `verify-storage` behavior).
+Alternatively: `arkfile-admin verify-storage --provider secondary` or `arkfile-admin verify-storage --provider-id backblaze-us-west`.
 
 ---
 
@@ -963,8 +846,6 @@ The function streams data from source to destination without buffering the entir
 
 This approach keeps memory usage bounded regardless of file size, consistent with the project's design principle of supporting large files on constrained devices.
 
-Note: Copy operations work with any combination of source and destination providers (primary/secondary/tertiary), making them fully flexible for populating any tier from any other.
-
 ### Server Restart Behavior
 
 Tasks that are `"running"` when the server restarts will remain in `"running"` status in the database. On startup, the task runner scans for stale `"running"` tasks and marks them as `"failed"` with a message indicating the server was restarted. The admin can then re-trigger the operation. This is acceptable for v1; more sophisticated resume-from-checkpoint behavior can be added later if needed.
@@ -988,11 +869,11 @@ Run the new `CREATE TABLE IF NOT EXISTS` statements for `storage_providers`, `fi
 On server startup, after `InitS3()` completes, the server upserts the primary provider into `storage_providers`:
 
 ```sql
-INSERT OR IGNORE INTO storage_providers (provider_id, provider_type, bucket_name, endpoint, region, role, is_active)
-VALUES (?, ?, ?, ?, ?, 'primary', true)
+INSERT OR IGNORE INTO storage_providers (provider_id, provider_type, bucket_name, endpoint, region, is_primary, is_active)
+VALUES (?, ?, ?, ?, ?, true, true)
 ```
 
-If a secondary provider is configured, a second upsert is performed with `role = 'secondary'`. If a tertiary provider is configured, a third upsert is performed with `role = 'tertiary'`. This runs on every startup and is idempotent due to the `INSERT OR IGNORE` on the primary key.
+If a secondary provider is configured, a second upsert is performed with `is_primary = false`. This runs on every startup and is idempotent due to the `INSERT OR IGNORE` on the primary key.
 
 ### Step 3: Backfill `file_storage_locations`
 
@@ -1028,55 +909,17 @@ No manual SQL, no data export/import, no downtime beyond the normal restart duri
 
 ---
 
-## Concrete test.arkfile.net Migration Recipe
-
-Step-by-step recipe for migrating the test deployment from SeaweedFS to Wasabi as primary, with optional tertiary archival.
-
-```
-Migration: test.arkfile.net SeaweedFS -> Wasabi Primary
-
-1. SSH into test VPS, git pull latest code
-2. Add to /opt/arkfile/etc/secrets.env:
-   STORAGE_PROVIDER_ID=seaweedfs-test
-   STORAGE_PROVIDER_2=wasabi
-   STORAGE_PROVIDER_2_ID=wasabi-us-central-1
-   STORAGE_2_ENDPOINT=https://s3.us-central-1.wasabi.com
-   STORAGE_2_ACCESS_KEY=<key>
-   STORAGE_2_SECRET_KEY=<secret>
-   STORAGE_2_BUCKET=arkfile-test
-   STORAGE_2_REGION=us-central-1
-   STORAGE_2_FORCE_PATH_STYLE=false
-3. sudo bash scripts/test-update.sh
-4. arkfile-admin storage-status  (verify both providers, backfill complete)
-5. arkfile-admin copy-all --from seaweedfs-test --to wasabi-us-central-1 --verify --skip-existing
-6. arkfile-admin task-status --task-id <id> --watch
-7. arkfile-admin storage-sync-status  (verify all files on both)
-8. arkfile-admin set-primary --provider-id wasabi-us-central-1
-9. Upload new file, verify it goes to Wasabi
-10. Download old file, verify from Wasabi
-11. Verify shared file downloads work
-12. (Optional) Stop SeaweedFS, verify everything via Wasabi alone
-13. (Optional) Add Backblaze B2 as tertiary for archival redundancy:
-    - Add STORAGE_PROVIDER_3=backblaze, STORAGE_PROVIDER_3_ID=backblaze-eu-west,
-      STORAGE_3_ENDPOINT=s3.eu-west-004.backblazeb2.com, etc. to secrets.env
-    - Restart server
-    - arkfile-admin copy-all --from wasabi-us-central-1 --to backblaze-eu-west --verify --skip-existing
-    - arkfile-admin storage-status  (verify three providers)
-```
-
----
-
 ## Testing Strategy
 
-### Local Testing with Multiple S3 Backends
+### Local Testing with Two S3 Backends
 
-The primary testing environment for multi-backend features uses `local-deploy.sh` with multiple local S3-compatible backends. The simplest setup is two SeaweedFS instances on different ports, or one SeaweedFS and one or two MinIO containers.
+The primary testing environment for multi-backend features uses `local-deploy.sh` with two local S3-compatible backends. The simplest setup is two SeaweedFS instances on different ports, or one SeaweedFS and one MinIO container.
 
 **Option A: Two SeaweedFS instances**
 
 The existing `local-deploy.sh` starts SeaweedFS on port 9332 (S3 gateway on 8333). A second instance can run on port 9333 (S3 gateway on 8334) with a separate data directory. This requires adding a second SeaweedFS configuration to the local deploy script.
 
-**Option B: SeaweedFS + MinIO (+ optional second MinIO for tertiary)**
+**Option B: SeaweedFS + MinIO**
 
 Run MinIO as a secondary via podman/docker:
 ```bash
@@ -1097,27 +940,6 @@ STORAGE_2_SECRET_KEY=your_secret_here
 STORAGE_2_BUCKET=arkfile-secondary
 STORAGE_2_FORCE_PATH_STYLE=true
 ```
-
-For tertiary testing, add a second MinIO container on a different port:
-```bash
-podman run -d --name arkfile-minio-tertiary \
-    -p 9002:9000 -p 9003:9001 \
-    -e MINIO_ROOT_USER=arkfile-tertiary \
-    -e MINIO_ROOT_PASSWORD=your_secret_here \
-    minio/minio server /data --console-address ":9001"
-```
-
-```
-STORAGE_PROVIDER_3=generic-s3
-STORAGE_PROVIDER_3_ID=minio-tertiary
-STORAGE_3_ENDPOINT=http://localhost:9002
-STORAGE_3_ACCESS_KEY=arkfile-tertiary
-STORAGE_3_SECRET_KEY=your_secret_here
-STORAGE_3_BUCKET=arkfile-tertiary
-STORAGE_3_FORCE_PATH_STYLE=true
-```
-
-A tertiary provider can also be added at runtime via `arkfile-admin add-provider` during testing.
 
 ### `local-update.sh` Script
 
@@ -1141,20 +963,18 @@ The `--add-secondary-minio` flag would start a MinIO container and add the appro
 **`storage/registry_test.go`**: Tests for the `ProviderRegistry` methods:
 - `GetObjectWithFallback` returns from primary when primary succeeds.
 - `GetObjectWithFallback` returns from secondary when primary fails.
-- `GetObjectWithFallback` returns from tertiary when primary and secondary fail.
-- `GetObjectWithFallback` returns error when all three fail.
-- `GetObjectChunkWithFallback` same three-tier patterns.
-- `RemoveObjectAll` removes from all configured providers, handles partial failures.
+- `GetObjectWithFallback` returns error when both fail.
+- `GetObjectChunkWithFallback` same patterns.
+- `RemoveObjectBoth` removes from both, handles partial failures.
 - `CopyObjectBetweenProviders` streams correctly for small and large objects.
 
 These tests use the existing `MockObjectStorageProvider` and `MockStoredObject` from `storage/mock_storage.go`.
 
 **`handlers/admin_storage_test.go`**: Tests for the admin API endpoints:
-- `storage-status` returns correct provider information with `role` field.
+- `storage-status` returns correct provider information.
 - `copy-file` creates a task and returns a task ID.
 - `task-status` returns correct progress.
-- `set-primary` updates roles correctly with cascade.
-- `set-secondary` updates roles correctly with cascade.
+- `set-primary` swaps the primary flag correctly.
 
 ### e2e Test Extensions
 
@@ -1162,7 +982,7 @@ Add multi-backend test scenarios to `scripts/testing/e2e-test.sh`:
 
 1. **Single-provider mode (existing tests)**: All existing e2e tests continue to pass with no secondary provider configured. This validates backward compatibility.
 
-2. **Multi-provider upload + download**: With `ENABLE_UPLOAD_REPLICATION=true`, upload a file, wait for replication, then verify:
+2. **Dual-provider upload + download**: With `ENABLE_UPLOAD_REPLICATION=true`, upload a file, wait for replication, then verify:
    - `arkfile-admin storage-status` shows the file on both providers.
    - Download succeeds (from primary).
    - Simulate primary failure (stop SeaweedFS), download still succeeds (from secondary fallback).
@@ -1172,11 +992,7 @@ Add multi-backend test scenarios to `scripts/testing/e2e-test.sh`:
 
 4. **Provider swap**: After copy-all, run `arkfile-admin swap-providers`. Upload a new file. Verify it goes to the new primary. Download an old file. Verify fallback works.
 
-5. **Delete**: Delete a file. Verify it is removed from all providers via `storage-sync-status`.
-
-6. **Tertiary provider**: Add a tertiary provider via `add-provider` or env config. Copy files to it. Verify three-tier fallback by stopping primary and secondary, confirming download from tertiary.
-
-7. **Role promotion**: Test `set-secondary` to promote tertiary to secondary. Verify auto-replication targets the new secondary.
+5. **Delete**: Delete a file. Verify it is removed from both providers via `storage-sync-status`.
 
 ### Test Scenarios for Provider Migration
 
@@ -1193,7 +1009,6 @@ A complete provider migration test:
 9. Download old files -- served from MinIO (new primary).
 10. Stop SeaweedFS entirely. All operations still work via MinIO.
 11. Verify shares still work (share download uses fallback).
-12. (Optional) Add a second MinIO as tertiary, copy all files to it, verify three-tier fallback.
 
 ---
 
@@ -1203,13 +1018,13 @@ The implementation is organized into phases that can each be developed, tested, 
 
 ### Phase 1: Storage Layer Foundation
 
-**Goal**: Introduce the provider registry with three-tier support and the config-struct factory function without changing any handler behavior.
+**Goal**: Introduce the provider registry and factory function without changing any handler behavior.
 
 Files changed:
-- `storage/s3.go` -- Extract `NewS3Provider(config S3ProviderConfig)` factory function from `InitS3()`. Config struct replaces positional parameters.
-- `storage/registry.go` -- New file with `ProviderRegistry` struct (three fields: primary, secondary, tertiary), `Primary()`, `Secondary()`, `Tertiary()`, `HasSecondary()`, `HasTertiary()`, `PrimaryID()`, `SecondaryID()`, `TertiaryID()`.
+- `storage/s3.go` -- Extract `NewS3Provider()` factory function from `InitS3()`.
+- `storage/registry.go` -- New file with `ProviderRegistry` struct, `Primary()`, `Secondary()`, `HasSecondary()`, `PrimaryID()`, `SecondaryID()`.
 - `storage/storage.go` -- Add `Registry` global.
-- `storage/mock_storage.go` -- Add `MockProviderRegistry` supporting three providers.
+- `storage/mock_storage.go` -- Add `MockProviderRegistry`.
 - `storage/registry_test.go` -- Unit tests for registry methods.
 
 Verification: All existing e2e tests pass unchanged. `storage.Provider` still points to the primary. No handler code is modified yet.
@@ -1219,7 +1034,7 @@ Verification: All existing e2e tests pass unchanged. `storage.Provider` still po
 **Goal**: Add new database tables and model functions.
 
 Files changed:
-- `database/unified_schema.sql` -- Add `storage_providers` (with `role` column), `file_storage_locations`, `admin_tasks` tables with indexes.
+- `database/unified_schema.sql` -- Add `storage_providers`, `file_storage_locations`, `admin_tasks` tables with indexes.
 - `models/file_storage_location.go` -- New file with `FileStorageLocation` struct and CRUD functions.
 - `models/storage_provider.go` -- New file with `StorageProvider` struct and CRUD functions.
 - `models/admin_task.go` -- New file with `AdminTask` struct and CRUD functions.
@@ -1231,17 +1046,17 @@ Verification: Run `dev-reset.sh`, confirm tables are created. Existing data and 
 **Goal**: On server startup, register the primary provider and backfill location records for all existing files.
 
 Files changed:
-- `main.go` -- After `storage.InitS3()`, upsert provider into `storage_providers` with `role = 'primary'` and run backfill query for `file_storage_locations`.
-- `.env.example` -- Add `STORAGE_PROVIDER_ID`, `STORAGE_PROVIDER_2`, `STORAGE_PROVIDER_2_ID`, `STORAGE_2_*`, `STORAGE_PROVIDER_3`, `STORAGE_PROVIDER_3_ID`, `STORAGE_3_*`, `ENABLE_UPLOAD_REPLICATION` variables (all commented out).
+- `main.go` -- After `storage.InitS3()`, upsert provider into `storage_providers` and run backfill query for `file_storage_locations`.
+- `.env.example` -- Add `STORAGE_PROVIDER_ID`, `STORAGE_PROVIDER_2`, `STORAGE_PROVIDER_2_ID`, `STORAGE_2_*`, `ENABLE_UPLOAD_REPLICATION` variables (all commented out).
 
 Verification: Run `dev-reset.sh` and `e2e-test.sh`. After tests create files, verify `file_storage_locations` has one row per file with `status = "active"` pointing to the primary provider. All existing tests pass.
 
 ### Phase 4: Handler Updates -- Downloads with Fallback
 
-**Goal**: Update download handlers to use `GetObjectChunkWithFallback()` with three-tier fallback.
+**Goal**: Update download handlers to use `GetObjectChunkWithFallback()`.
 
 Files changed:
-- `storage/registry.go` -- Implement `GetObjectWithFallback()` and `GetObjectChunkWithFallback()` with primary -> secondary -> tertiary chain.
+- `storage/registry.go` -- Implement `GetObjectWithFallback()` and `GetObjectChunkWithFallback()`.
 - `handlers/downloads.go` -- Replace `storage.Provider.GetObjectChunk()` with `storage.Registry.GetObjectChunkWithFallback()`.
 - `handlers/file_shares.go` -- Same replacement in `DownloadShareChunk`.
 - `handlers/export.go` -- Replace `storage.Provider.GetObject()` with `storage.Registry.GetObjectWithFallback()`.
@@ -1250,22 +1065,22 @@ Verification: All existing download/share/export tests pass. In single-provider 
 
 ### Phase 5: Handler Updates -- Uploads with Location Recording
 
-**Goal**: Update upload handlers to record locations and optionally replicate to secondary.
+**Goal**: Update upload handlers to record locations and optionally replicate.
 
 Files changed:
-- `handlers/uploads.go` -- In `CompleteUpload`, insert `file_storage_locations` row. If `ENABLE_UPLOAD_REPLICATION=true`, kick off background replication goroutine (targets secondary only, not tertiary).
+- `handlers/uploads.go` -- In `CompleteUpload`, insert `file_storage_locations` row. If `ENABLE_UPLOAD_REPLICATION=true`, kick off background replication goroutine.
 - `storage/registry.go` -- Implement `CopyObjectBetweenProviders()`.
 - Replace all remaining `storage.Provider.XXX()` calls in uploads.go with `storage.Registry.Primary().XXX()`.
 
 Verification: Upload a file, confirm `file_storage_locations` row is created. With replication enabled, confirm the blob appears on both providers.
 
-### Phase 6: Handler Updates -- Deletes from All Providers
+### Phase 6: Handler Updates -- Deletes from Both Providers
 
 **Goal**: Update delete handler to remove from all providers.
 
 Files changed:
-- `handlers/uploads.go` (`DeleteFile`) -- Query `file_storage_locations` for the file, remove from each active provider (could be 1, 2, or 3), update/delete location rows.
-- `storage/registry.go` -- Implement `RemoveObjectAll()`.
+- `handlers/uploads.go` (`DeleteFile`) -- Query `file_storage_locations` for the file, remove from each active provider, update/delete location rows.
+- `storage/registry.go` -- Implement `RemoveObjectBoth()`.
 
 Verification: Upload a file with replication, confirm it is on both providers, delete it, confirm it is removed from both.
 
@@ -1285,7 +1100,7 @@ Verification: Unit tests for task lifecycle (create, run, complete, cancel, fail
 **Goal**: Implement all admin storage management endpoints.
 
 Files changed:
-- `handlers/admin_storage.go` -- New file with all endpoint handlers: `storage-status`, `sync-status`, `copy-all`, `copy-user-files`, `copy-file`, `task-status`, `cancel-task`, `add-provider`, `set-primary`, `set-secondary`, `swap-providers`.
+- `handlers/admin_storage.go` -- New file with all endpoint handlers: `storage-status`, `sync-status`, `copy-all`, `copy-user-files`, `copy-file`, `task-status`, `cancel-task`, `add-provider`, `set-primary`, `swap-providers`.
 - `handlers/route_config.go` -- Register new admin routes.
 
 Verification: Test each endpoint with curl or arkfile-admin CLI.
@@ -1295,10 +1110,10 @@ Verification: Test each endpoint with curl or arkfile-admin CLI.
 **Goal**: Add all storage management commands to the admin CLI.
 
 Files changed:
-- `cmd/arkfile-admin/main.go` -- Add command routing for new storage commands including `set-secondary`.
+- `cmd/arkfile-admin/main.go` -- Add command routing for new storage commands.
 - `cmd/arkfile-admin/storage_commands.go` -- New file with all command handlers.
 
-Verification: Run each command against a local deployment with two or three providers. Test the full provider migration workflow end-to-end.
+Verification: Run each command against a local deployment with two providers. Test the full provider migration workflow end-to-end.
 
 ### Phase 10: local-update.sh and e2e Test Extensions
 
@@ -1306,9 +1121,9 @@ Verification: Run each command against a local deployment with two or three prov
 
 Files changed:
 - `scripts/local-update.sh` -- New script for non-destructive local deployment updates.
-- `scripts/testing/e2e-test.sh` -- Add multi-backend test scenarios (upload with replication, fallback download, copy-all, provider swap, delete from all, tertiary addition, role promotion).
+- `scripts/testing/e2e-test.sh` -- Add multi-backend test scenarios (upload with replication, fallback download, copy-all, provider swap, delete from both).
 
-Verification: Full e2e test suite passes in single-provider, dual-provider, and triple-provider modes.
+Verification: Full e2e test suite passes in both single-provider and dual-provider modes.
 
 ## Files Changed Summary
 
@@ -1323,23 +1138,22 @@ Verification: Full e2e test suite passes in single-provider, dual-provider, and 
 - `handlers/admin_task_runner.go`
 - `cmd/arkfile-admin/storage_commands.go`
 - `scripts/local-update.sh`
-- `docs/wip/multi-backend.md` (original design document)
-- `docs/wip/multi-backend-v2.md` (this document -- updated three-tier design)
+- `docs/wip/multi-backend.md` (this document)
 
 ### Modified Files
-- `storage/s3.go` -- Config struct factory function extraction, `InitS3()` reads three provider configs
+- `storage/s3.go` -- Factory function extraction
 - `storage/storage.go` -- Add Registry global
-- `storage/mock_storage.go` -- Add mock registry with three-provider support
+- `storage/mock_storage.go` -- Add mock registry
 - `main.go` -- Registry init, backfill, task runner init
-- `database/unified_schema.sql` -- New tables with `role` column
-- `.env.example` -- New env var templates including `STORAGE_3_*`
-- `handlers/uploads.go` -- Registry calls, location recording, replication (secondary only)
-- `handlers/downloads.go` -- Three-tier fallback downloads
-- `handlers/file_shares.go` -- Three-tier fallback downloads
-- `handlers/export.go` -- Three-tier fallback downloads
-- `handlers/route_config.go` -- New admin routes including `set-secondary`
-- `cmd/arkfile-admin/main.go` -- New command routing including `set-secondary`
-- `scripts/testing/e2e-test.sh` -- Multi-backend test scenarios including tertiary
+- `database/unified_schema.sql` -- New tables
+- `.env.example` -- New env var templates
+- `handlers/uploads.go` -- Registry calls, location recording, replication
+- `handlers/downloads.go` -- Fallback downloads
+- `handlers/file_shares.go` -- Fallback downloads
+- `handlers/export.go` -- Fallback downloads
+- `handlers/route_config.go` -- New admin routes
+- `cmd/arkfile-admin/main.go` -- New command routing
+- `scripts/testing/e2e-test.sh` -- Multi-backend test scenarios
 
 ### Unchanged
 - All crypto code
@@ -1349,3 +1163,4 @@ Verification: Full e2e test suite passes in single-provider, dual-provider, and 
 - The `arkfile-client` CLI
 
 ---
+
