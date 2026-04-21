@@ -86,7 +86,8 @@ func InitS3() error {
 
 	switch provider {
 	case ProviderWasabi:
-		endpointURL = fmt.Sprintf("https://s3.%s.wasabi.com", region)
+		endpointURL = fmt.Sprintf("https://s3.%s.wasabisys.com", region)
+		usePathStyle = true
 	case ProviderVultr:
 		endpointURL = fmt.Sprintf("https://%s.vultrobjects.com", region)
 	case ProviderCloudflareR2:

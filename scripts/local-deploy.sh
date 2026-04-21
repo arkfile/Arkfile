@@ -26,6 +26,8 @@ BIND_ADDRESS="0.0.0.0"
 TLS_PORT="8443"
 HTTP_PORT="8080"
 ADD_IPS=()
+STORAGE_BACKEND="local-seaweedfs"
+S3_FORCE_PATH_STYLE="true"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -63,6 +65,10 @@ while [[ $# -gt 0 ]]; do
             ADD_IPS+=("$2")
             shift 2
             ;;
+        --storage-backend)
+            STORAGE_BACKEND="$2"
+            shift 2
+            ;;
         -h|--help)
             echo "Arkfile Local/LAN Deployment Script"
             echo ""
@@ -79,6 +85,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --tls-port <port>             TLS port (default: 8443)"
             echo "  --http-port <port>            HTTP port (default: 8080)"
             echo "  --add-ip <ip>                 Additional IP for TLS cert SANs (repeatable, e.g. VPS public IP, LAN IP)"
+            echo "  --storage-backend <type>      Storage backend (default: local-seaweedfs)"
+            echo "                                Options: local-seaweedfs, wasabi, backblaze, vultr,"
+            echo "                                         cloudflare-r2, aws-s3, generic-s3"
             echo "  -h, --help                    Show this help message"
             exit 0
             ;;
@@ -263,6 +272,131 @@ detect_lan_ip() {
     echo "$lan_ip"
 }
 
+# Storage backend validation
+validate_storage_backend() {
+    case "$1" in
+        local-seaweedfs|wasabi|backblaze|vultr|cloudflare-r2|aws-s3|generic-s3)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Prompt helpers for interactive credential collection
+prompt_nonempty() {
+    local prompt_text="$1"
+    local value=""
+    while [ -z "$value" ]; do
+        read -r -p "  $prompt_text" value
+        if [ -z "$value" ]; then
+            echo "  Value cannot be empty."
+        fi
+    done
+    echo "$value"
+}
+
+prompt_secret_nonempty() {
+    local prompt_text="$1"
+    local value=""
+    while [ -z "$value" ]; do
+        read -r -s -p "  $prompt_text" value
+        echo ""
+        if [ -z "$value" ]; then
+            echo "  Value cannot be empty."
+        fi
+    done
+    echo "$value"
+}
+
+# Prompt for storage backend credentials based on provider type
+prompt_storage_backend_config() {
+    case "$STORAGE_BACKEND" in
+        local-seaweedfs)
+            print_status "INFO" "Using local SeaweedFS backend"
+            ;;
+        wasabi)
+            echo ""
+            echo -e "${BLUE}Wasabi Storage Configuration${NC}"
+            S3_REGION=$(prompt_nonempty "Wasabi region: ")
+            S3_ACCESS_KEY=$(prompt_nonempty "Wasabi access key: ")
+            S3_SECRET_KEY=$(prompt_secret_nonempty "Wasabi secret key: ")
+            S3_BUCKET=$(prompt_nonempty "Wasabi bucket name: ")
+            ;;
+        backblaze)
+            echo ""
+            echo -e "${BLUE}Backblaze B2 Storage Configuration${NC}"
+            BACKBLAZE_ENDPOINT=$(prompt_nonempty "Backblaze endpoint: ")
+            BACKBLAZE_KEY_ID=$(prompt_nonempty "Backblaze key ID: ")
+            BACKBLAZE_APPLICATION_KEY=$(prompt_secret_nonempty "Backblaze application key: ")
+            BACKBLAZE_BUCKET_NAME=$(prompt_nonempty "Backblaze bucket name: ")
+            ;;
+        vultr)
+            echo ""
+            echo -e "${BLUE}Vultr Object Storage Configuration${NC}"
+            S3_REGION=$(prompt_nonempty "Vultr region: ")
+            S3_ACCESS_KEY=$(prompt_nonempty "Vultr access key: ")
+            S3_SECRET_KEY=$(prompt_secret_nonempty "Vultr secret key: ")
+            S3_BUCKET=$(prompt_nonempty "Vultr bucket name: ")
+            ;;
+        cloudflare-r2)
+            echo ""
+            echo -e "${BLUE}Cloudflare R2 Storage Configuration${NC}"
+            CLOUDFLARE_ENDPOINT=$(prompt_nonempty "Cloudflare R2 endpoint: ")
+            CLOUDFLARE_ACCESS_KEY_ID=$(prompt_nonempty "Cloudflare R2 access key ID: ")
+            CLOUDFLARE_SECRET_ACCESS_KEY=$(prompt_secret_nonempty "Cloudflare R2 secret access key: ")
+            CLOUDFLARE_BUCKET_NAME=$(prompt_nonempty "Cloudflare R2 bucket name: ")
+            ;;
+        aws-s3)
+            echo ""
+            echo -e "${BLUE}AWS S3 Storage Configuration${NC}"
+            S3_REGION=$(prompt_nonempty "AWS region: ")
+            S3_ACCESS_KEY=$(prompt_nonempty "AWS access key: ")
+            S3_SECRET_KEY=$(prompt_secret_nonempty "AWS secret key: ")
+            S3_BUCKET=$(prompt_nonempty "AWS bucket name: ")
+            ;;
+        generic-s3)
+            echo ""
+            echo -e "${BLUE}Generic S3 Storage Configuration${NC}"
+            S3_ENDPOINT=$(prompt_nonempty "S3 endpoint URL: ")
+            S3_REGION=$(prompt_nonempty "S3 region: ")
+            S3_ACCESS_KEY=$(prompt_nonempty "S3 access key: ")
+            S3_SECRET_KEY=$(prompt_secret_nonempty "S3 secret key: ")
+            S3_BUCKET=$(prompt_nonempty "S3 bucket name: ")
+            read -r -p "  Force path style? [Y/n]: " force_path_style
+            if [[ "$force_path_style" =~ ^[Nn]$ ]]; then
+                S3_FORCE_PATH_STYLE="false"
+            fi
+            ;;
+        *)
+            print_status "ERROR" "Unsupported storage backend: $STORAGE_BACKEND"
+            exit 1
+            ;;
+    esac
+}
+
+# Verify external storage backend with round-trip test
+verify_storage_backend_roundtrip() {
+    if [ "$STORAGE_BACKEND" = "local-seaweedfs" ]; then
+        return 0
+    fi
+
+    print_status "INFO" "Verifying external storage backend with arkfile-admin verify-storage..."
+    if ! "$ARKFILE_DIR/bin/arkfile-admin" verify-storage --secrets-env "$ARKFILE_DIR/etc/secrets.env"; then
+        print_status "ERROR" "External storage verification failed"
+        exit 1
+    fi
+    print_status "SUCCESS" "External storage backend verification passed"
+}
+
+# Validate storage backend
+if ! validate_storage_backend "$STORAGE_BACKEND"; then
+    print_status "ERROR" "Unsupported storage backend: $STORAGE_BACKEND"
+    echo "Supported backends: local-seaweedfs, wasabi, backblaze, vultr, cloudflare-r2, aws-s3, generic-s3"
+    exit 1
+fi
+
 # Step 0: Pre-flight checks
 echo -e "${CYAN}Step 0: Pre-flight checks${NC}"
 echo "=========================="
@@ -339,7 +473,7 @@ if [ "$EXISTING_DEPLOYMENT" = "true" ]; then
     echo -e "${YELLOW}WARNING: An existing Arkfile deployment was detected.${NC}"
     echo -e "${YELLOW}This script is intended for first-time deployment.${NC}"
     echo ""
-    echo "  To update an existing deployment, use local-update.sh (future)"
+    echo "  To update an existing deployment: sudo bash scripts/local-update.sh"
     echo "  To restart services: sudo systemctl restart arkfile"
     echo ""
     echo -e "${RED}To wipe and reinstall, type REINSTALL (this destroys all data):${NC}"
@@ -388,6 +522,9 @@ fi
 LAN_IP=$(detect_lan_ip)
 print_status "INFO" "Detected LAN IP: $LAN_IP"
 
+# Prompt for storage backend credentials (interactive)
+prompt_storage_backend_config
+
 # Display deployment summary
 echo ""
 echo -e "${BLUE}ARKFILE LOCAL DEPLOYMENT${NC}"
@@ -399,6 +536,7 @@ if [ -n "$ADMIN_CONTACT" ]; then
 else
     echo "  Admin contact:   (not set - pending users won't have contact info)"
 fi
+echo "  Storage backend: $STORAGE_BACKEND"
 echo "  Bind address:    $BIND_ADDRESS"
 echo "  TLS port:        $TLS_PORT"
 echo "  HTTP port:       $HTTP_PORT"
@@ -579,6 +717,7 @@ S3_PASSWORD="$(openssl rand -hex 16)"
 print_status "SUCCESS" "Generated fresh database password"
 print_status "SUCCESS" "Generated fresh S3 password"
 
+# Write base secrets.env (common to all backends)
 cat > "$ARKFILE_DIR/etc/secrets.env" << EOF
 # Local Deployment Configuration
 # Generated: $(date)
@@ -600,6 +739,12 @@ TLS_PORT=${TLS_PORT}
 TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.crt
 TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.key
 
+EOF
+
+# Append storage configuration based on backend type
+case "$STORAGE_BACKEND" in
+    local-seaweedfs)
+        cat >> "$ARKFILE_DIR/etc/secrets.env" << EOF
 # Storage Configuration - Generic S3 (local SeaweedFS backend)
 STORAGE_PROVIDER=generic-s3
 S3_ENDPOINT=http://localhost:9332
@@ -610,6 +755,79 @@ S3_REGION=us-east-1
 S3_FORCE_PATH_STYLE=true
 S3_USE_SSL=false
 
+EOF
+
+        # SeaweedFS S3 auth config
+        cat > "$ARKFILE_DIR/etc/seaweedfs-s3.json" << EOF
+{
+  "identities": [
+    {
+      "name": "arkfile",
+      "credentials": [
+        {
+          "accessKey": "arkfile-local",
+          "secretKey": "${S3_PASSWORD}"
+        }
+      ],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}
+EOF
+        chown "$USER:$GROUP" "$ARKFILE_DIR/etc/seaweedfs-s3.json"
+        chmod 640 "$ARKFILE_DIR/etc/seaweedfs-s3.json"
+        print_status "SUCCESS" "SeaweedFS S3 auth configuration created"
+        ;;
+    wasabi|vultr|aws-s3)
+        cat >> "$ARKFILE_DIR/etc/secrets.env" << EOF
+# Storage Configuration - ${STORAGE_BACKEND}
+STORAGE_PROVIDER=${STORAGE_BACKEND}
+S3_REGION=${S3_REGION}
+S3_ACCESS_KEY=${S3_ACCESS_KEY}
+S3_SECRET_KEY=${S3_SECRET_KEY}
+S3_BUCKET=${S3_BUCKET}
+
+EOF
+        ;;
+    backblaze)
+        cat >> "$ARKFILE_DIR/etc/secrets.env" << EOF
+# Storage Configuration - Backblaze B2
+STORAGE_PROVIDER=backblaze
+BACKBLAZE_ENDPOINT=${BACKBLAZE_ENDPOINT}
+BACKBLAZE_KEY_ID=${BACKBLAZE_KEY_ID}
+BACKBLAZE_APPLICATION_KEY=${BACKBLAZE_APPLICATION_KEY}
+BACKBLAZE_BUCKET_NAME=${BACKBLAZE_BUCKET_NAME}
+
+EOF
+        ;;
+    cloudflare-r2)
+        cat >> "$ARKFILE_DIR/etc/secrets.env" << EOF
+# Storage Configuration - Cloudflare R2
+STORAGE_PROVIDER=cloudflare-r2
+CLOUDFLARE_ENDPOINT=${CLOUDFLARE_ENDPOINT}
+CLOUDFLARE_ACCESS_KEY_ID=${CLOUDFLARE_ACCESS_KEY_ID}
+CLOUDFLARE_SECRET_ACCESS_KEY=${CLOUDFLARE_SECRET_ACCESS_KEY}
+CLOUDFLARE_BUCKET_NAME=${CLOUDFLARE_BUCKET_NAME}
+
+EOF
+        ;;
+    generic-s3)
+        cat >> "$ARKFILE_DIR/etc/secrets.env" << EOF
+# Storage Configuration - Generic S3
+STORAGE_PROVIDER=generic-s3
+S3_ENDPOINT=${S3_ENDPOINT}
+S3_REGION=${S3_REGION}
+S3_ACCESS_KEY=${S3_ACCESS_KEY}
+S3_SECRET_KEY=${S3_SECRET_KEY}
+S3_BUCKET=${S3_BUCKET}
+S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE}
+
+EOF
+        ;;
+esac
+
+# Append remaining configuration (common to all backends)
+cat >> "$ARKFILE_DIR/etc/secrets.env" << EOF
 # Admin Configuration
 ADMIN_USERNAMES=${ADMIN_USERNAME}
 ARKFILE_ADMIN_CONTACT=${ADMIN_CONTACT}
@@ -630,34 +848,6 @@ EOF
 chown "$USER:$GROUP" "$ARKFILE_DIR/etc/secrets.env"
 chmod 640 "$ARKFILE_DIR/etc/secrets.env"
 print_status "SUCCESS" "secrets.env created"
-
-# SeaweedFS S3 auth config
-cat > "$ARKFILE_DIR/etc/seaweedfs-s3.json" << EOF
-{
-  "identities": [
-    {
-      "name": "arkfile",
-      "credentials": [
-        {
-          "accessKey": "arkfile-local",
-          "secretKey": "${S3_PASSWORD}"
-        }
-      ],
-      "actions": [
-        "Admin",
-        "Read",
-        "Write",
-        "List",
-        "Tagging"
-      ]
-    }
-  ]
-}
-EOF
-
-chown "$USER:$GROUP" "$ARKFILE_DIR/etc/seaweedfs-s3.json"
-chmod 640 "$ARKFILE_DIR/etc/seaweedfs-s3.json"
-print_status "SUCCESS" "SeaweedFS S3 auth configuration created"
 
 # rqlite auth file
 cat > "$ARKFILE_DIR/etc/rqlite-auth.json" << EOF
@@ -730,16 +920,20 @@ fi
 print_status "SUCCESS" "Cryptographic material ready"
 echo ""
 
-# Step 7: Setup SeaweedFS and rqlite
-echo -e "${CYAN}Step 7: Setting up SeaweedFS and rqlite${NC}"
-echo "========================================="
+# Step 7: Setup storage services and rqlite
+echo -e "${CYAN}Step 7: Setting up storage services and rqlite${NC}"
+echo "================================================="
 
-print_status "INFO" "Setting up SeaweedFS..."
-if ! ./scripts/setup/05-setup-seaweedfs.sh; then
-    print_status "ERROR" "SeaweedFS setup failed"
-    exit 1
+if [ "$STORAGE_BACKEND" = "local-seaweedfs" ]; then
+    print_status "INFO" "Setting up SeaweedFS..."
+    if ! ./scripts/setup/05-setup-seaweedfs.sh; then
+        print_status "ERROR" "SeaweedFS setup failed"
+        exit 1
+    fi
+    print_status "SUCCESS" "SeaweedFS setup complete"
+else
+    print_status "INFO" "Skipping SeaweedFS setup (using external backend: $STORAGE_BACKEND)"
 fi
-print_status "SUCCESS" "SeaweedFS setup complete"
 
 RQLITE_BUILD_ARGS=""
 if [ "$FORCE_REBUILD_RQLITE" = "true" ]; then
@@ -761,33 +955,37 @@ echo "=========================="
 
 systemctl daemon-reload
 
-# A. Start SeaweedFS
-print_status "INFO" "Starting SeaweedFS..."
-systemctl start seaweedfs
-systemctl enable seaweedfs
+# A. Start SeaweedFS (only for local-seaweedfs backend)
+if [ "$STORAGE_BACKEND" = "local-seaweedfs" ]; then
+    print_status "INFO" "Starting SeaweedFS..."
+    systemctl start seaweedfs
+    systemctl enable seaweedfs
 
-if ! systemctl is-active --quiet seaweedfs; then
-    print_status "ERROR" "SeaweedFS failed to start"
-    exit 1
-fi
-print_status "SUCCESS" "SeaweedFS started"
-
-# Wait for SeaweedFS S3 gateway
-print_status "INFO" "Waiting for SeaweedFS S3 gateway..."
-max_attempts=20
-attempt=0
-while [ $attempt -lt $max_attempts ]; do
-    if curl -s http://localhost:9332/status >/dev/null 2>&1; then
-        print_status "SUCCESS" "SeaweedFS S3 gateway ready on port 9332"
-        break
+    if ! systemctl is-active --quiet seaweedfs; then
+        print_status "ERROR" "SeaweedFS failed to start"
+        exit 1
     fi
-    sleep 2
-    attempt=$((attempt + 1))
-done
-if [ $attempt -eq $max_attempts ]; then
-    print_status "ERROR" "SeaweedFS S3 gateway failed to respond within timeout"
-    print_status "ERROR" "Check logs: sudo journalctl -u seaweedfs -f"
-    exit 1
+    print_status "SUCCESS" "SeaweedFS started"
+
+    # Wait for SeaweedFS S3 gateway
+    print_status "INFO" "Waiting for SeaweedFS S3 gateway..."
+    max_attempts=20
+    attempt=0
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -s http://localhost:9332/status >/dev/null 2>&1; then
+            print_status "SUCCESS" "SeaweedFS S3 gateway ready on port 9332"
+            break
+        fi
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+    if [ $attempt -eq $max_attempts ]; then
+        print_status "ERROR" "SeaweedFS S3 gateway failed to respond within timeout"
+        print_status "ERROR" "Check logs: sudo journalctl -u seaweedfs -f"
+        exit 1
+    fi
+else
+    print_status "INFO" "Skipping SeaweedFS startup (using external backend: $STORAGE_BACKEND)"
 fi
 
 # B. Start rqlite
@@ -830,6 +1028,10 @@ if ! systemctl is-active --quiet arkfile; then
     exit 1
 fi
 print_status "SUCCESS" "Arkfile started"
+
+# Verify external storage backend (after Arkfile is running)
+verify_storage_backend_roundtrip
+
 echo ""
 
 # Step 9: Health verification
@@ -876,17 +1078,26 @@ else
 fi
 
 # Service status check
-seaweedfs_status=$(systemctl is-active seaweedfs 2>/dev/null || echo "failed")
 rqlite_status=$(systemctl is-active rqlite 2>/dev/null || echo "failed")
 arkfile_status=$(systemctl is-active arkfile 2>/dev/null || echo "failed")
 
 print_status "INFO" "Service status:"
-echo "    SeaweedFS: ${seaweedfs_status}"
+if [ "$STORAGE_BACKEND" = "local-seaweedfs" ]; then
+    seaweedfs_status=$(systemctl is-active seaweedfs 2>/dev/null || echo "failed")
+    echo "    SeaweedFS: ${seaweedfs_status}"
+else
+    seaweedfs_status="n/a"
+    echo "    Storage:   ${STORAGE_BACKEND} (external)"
+fi
 echo "    rqlite:    ${rqlite_status}"
 echo "    Arkfile:   ${arkfile_status}"
 
-if [ "$seaweedfs_status" != "active" ] || [ "$rqlite_status" != "active" ] || [ "$arkfile_status" != "active" ]; then
+if [ "$rqlite_status" != "active" ] || [ "$arkfile_status" != "active" ]; then
     print_status "ERROR" "One or more services failed to start"
+    exit 1
+fi
+if [ "$STORAGE_BACKEND" = "local-seaweedfs" ] && [ "$seaweedfs_status" != "active" ]; then
+    print_status "ERROR" "SeaweedFS failed to start"
     exit 1
 fi
 
@@ -907,7 +1118,11 @@ echo -e "${GREEN}  HTTPS (LAN): https://${LAN_IP}:${TLS_PORT}${NC}"
 echo -e "${BLUE}  (Accept self-signed certificate warning in browser)${NC}"
 echo ""
 echo -e "${BLUE}Services:${NC}"
-echo "  SeaweedFS: ${seaweedfs_status}"
+if [ "$STORAGE_BACKEND" = "local-seaweedfs" ]; then
+    echo "  SeaweedFS: ${seaweedfs_status}"
+else
+    echo "  Storage:   ${STORAGE_BACKEND} (external)"
+fi
 echo "  rqlite:    ${rqlite_status}"
 echo "  Arkfile:   ${arkfile_status}"
 echo ""

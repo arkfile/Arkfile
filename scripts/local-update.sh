@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Arkfile Test Update Script
+# Arkfile Local Update Script
 # Rebuilds and redeploys app binaries and static assets WITHOUT touching data, keys, or config.
-# Use this to apply code changes to an existing test deployment (test.arkfile.net or similar).
+# Use this to apply code changes to an existing local deployment.
 # Does NOT wipe data, does NOT require re-bootstrapping the admin account.
-# Requires: an existing deployment written by test-deploy.sh
+# Requires: an existing deployment written by local-deploy.sh
 
 set -e
 
@@ -24,6 +24,7 @@ ARKFILE_DIR="/opt/arkfile"
 USER="arkfile"
 GROUP="arkfile"
 SECRETS_ENV="$ARKFILE_DIR/etc/secrets.env"
+TLS_PORT="8443"
 
 FORCE_REBUILD_ALL=false
 
@@ -40,13 +41,13 @@ print_status() {
 
 show_help() {
     cat << EOF2
-Arkfile Test Update Script
+Arkfile Local Update Script
 
 Rebuilds Go binaries, TypeScript frontend, and static assets, then redeploys them
-to an existing test deployment without touching data, keys, or configuration.
+to an existing local deployment without touching data, keys, or configuration.
 
 Usage:
-  sudo bash scripts/test-update.sh [OPTIONS]
+  sudo bash scripts/local-update.sh [OPTIONS]
 
 Options:
   --force-rebuild-all    Force rebuild of C libraries (libopaque/liboprf) and WASM.
@@ -55,9 +56,9 @@ Options:
   -h, --help             Show this help message
 
 Requirements:
-  - An existing deployment written by test-deploy.sh
-  - /opt/arkfile/etc/secrets.env must exist and contain BASE_URL=https://<domain>
-  - The repo must be checked out on the VPS at the current working directory
+  - An existing deployment written by local-deploy.sh
+  - /opt/arkfile/etc/secrets.env must exist
+  - The repo must be checked out at the current working directory
 EOF2
 }
 
@@ -117,37 +118,28 @@ echo -e "${CYAN}Pre-flight checks${NC}"
 
 if [ ! -f "$SECRETS_ENV" ]; then
     print_status "ERROR" "No existing deployment found: $SECRETS_ENV does not exist"
-    print_status "ERROR" "Run scripts/test-deploy.sh first to create a deployment"
+    print_status "ERROR" "Run scripts/local-deploy.sh first to create a deployment"
     exit 1
 fi
 
 if ! systemctl list-unit-files arkfile.service >/dev/null 2>&1; then
     print_status "ERROR" "arkfile.service not found in systemd"
-    print_status "ERROR" "Run scripts/test-deploy.sh first to create a deployment"
+    print_status "ERROR" "Run scripts/local-deploy.sh first to create a deployment"
     exit 1
 fi
 
-# Read domain from existing secrets.env via BASE_URL
-BASE_URL_VALUE=$(read_secrets_env_value "BASE_URL")
-if [ -z "$BASE_URL_VALUE" ]; then
-    print_status "ERROR" "BASE_URL is not set in $SECRETS_ENV"
-    print_status "ERROR" "Add BASE_URL=https://<your-domain> to $SECRETS_ENV before running this script"
-    exit 1
+# Read TLS port from existing secrets.env
+TLS_PORT_VALUE=$(read_secrets_env_value "TLS_PORT")
+if [ -n "$TLS_PORT_VALUE" ]; then
+    TLS_PORT="$TLS_PORT_VALUE"
 fi
-
-# Strip trailing slash if present
-DOMAIN="${BASE_URL_VALUE%/}"
-# Strip scheme
-DOMAIN="${DOMAIN#https://}"
-DOMAIN="${DOMAIN#http://}"
 
 # Detect storage backend from existing secrets.env
 STORAGE_PROVIDER=$(read_secrets_env_value "STORAGE_PROVIDER")
 if [ -z "$STORAGE_PROVIDER" ]; then
     STORAGE_PROVIDER="generic-s3"
 fi
-
-print_status "INFO" "Existing deployment detected for: $DOMAIN (storage: $STORAGE_PROVIDER)"
+print_status "INFO" "Existing deployment detected (storage: $STORAGE_PROVIDER, TLS port: $TLS_PORT)"
 
 if ! GO_BINARY=$(find_go_binary); then
     print_status "ERROR" "Go compiler not found"
@@ -157,16 +149,16 @@ print_status "SUCCESS" "Found Go at: $GO_BINARY"
 export GO_BINARY="$GO_BINARY"
 
 echo
-echo -e "${BLUE}ARKFILE TEST UPDATE${NC}"
+echo -e "${BLUE}ARKFILE LOCAL UPDATE${NC}"
 echo
 echo -e "${BLUE}Configuration:${NC}"
-echo "  Domain:             $DOMAIN"
+echo "  TLS port:           $TLS_PORT"
 echo "  Storage provider:   $STORAGE_PROVIDER"
 echo "  Force rebuild C:    $FORCE_REBUILD_ALL"
 echo "  Data:               PRESERVED (not touched)"
 echo "  Config/keys:        PRESERVED (not touched)"
 echo
-echo -e "${YELLOW}This will: rebuild binaries/frontend, stop arkfile+caddy, deploy, restart.${NC}"
+echo -e "${YELLOW}This will: rebuild binaries/frontend, stop arkfile, deploy, restart.${NC}"
 if [ "$STORAGE_PROVIDER" = "generic-s3" ]; then
     echo -e "${YELLOW}rqlite and seaweedfs will NOT be stopped.${NC}"
 else
@@ -212,6 +204,7 @@ if [ -d "$BUILD_ROOT" ]; then
     fi
 fi
 
+# No WASM trace logging for local deployment
 unset LIBOPAQUE_DEFINES
 
 export VERSION="update-$(date +%Y%m%d-%H%M%S)"
@@ -234,9 +227,8 @@ fix_go_ownership
 print_status "SUCCESS" "Build complete"
 
 echo
-echo -e "${CYAN}Step 2: Stop services (caddy + arkfile)${NC}"
+echo -e "${CYAN}Step 2: Stop arkfile service${NC}"
 
-stop_service_gracefully "caddy"
 stop_service_gracefully "arkfile"
 
 # Brief pause to ensure the binary is not in use
@@ -252,8 +244,6 @@ install -m 755 -o "$USER" -g "$GROUP" "$BUILD_BIN/arkfile-admin"  "$ARKFILE_DIR/
 print_status "SUCCESS" "Binaries deployed"
 
 print_status "INFO" "Deploying static assets..."
-# Sync client/static tree (HTML, CSS, JS, WASM, errors)
-# Using cp -a to preserve structure; chown after to ensure correct ownership
 cp -r "$BUILD_CLIENT/static/." "$ARKFILE_DIR/client/static/"
 chown -R "$USER:$GROUP" "$ARKFILE_DIR/client"
 print_status "SUCCESS" "Static assets deployed"
@@ -261,7 +251,6 @@ print_status "SUCCESS" "Static assets deployed"
 print_status "INFO" "Deploying updated systemd service files..."
 if [ -d "$BUILD_ROOT/systemd" ]; then
     cp "$BUILD_ROOT/systemd/arkfile.service"   /etc/systemd/system/ 2>/dev/null || true
-    cp "$BUILD_ROOT/systemd/caddy.service"     /etc/systemd/system/ 2>/dev/null || true
     cp "$BUILD_ROOT/systemd/rqlite.service"    /etc/systemd/system/ 2>/dev/null || true
     cp "$BUILD_ROOT/systemd/seaweedfs.service" /etc/systemd/system/ 2>/dev/null || true
     systemctl daemon-reload
@@ -276,66 +265,14 @@ if [ -d "$BUILD_ROOT/database" ]; then
     chown -R "$USER:$GROUP" "$ARKFILE_DIR/database"
 fi
 
-print_status "INFO" "Regenerating Caddyfile from Caddyfile.test template..."
-DESEC_TOKEN_VALUE=$(read_secrets_env_value "DESEC_TOKEN" 2>/dev/null || true)
-ACME_EMAIL_VALUE=$(read_secrets_env_value "CADDY_EMAIL" 2>/dev/null || true)
-
-repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
-tmp_global=$(mktemp)
-
-if [ -n "$ACME_EMAIL_VALUE" ]; then
-    cat > "$tmp_global" <<GLOBALEOF
-{
-	email ${ACME_EMAIL_VALUE}
-
-	servers {
-		protocols h1 h2 h3
-		strict_sni_host
-	}
-}
-GLOBALEOF
-else
-    cat > "$tmp_global" <<GLOBALEOF
-{
-	servers {
-		protocols h1 h2 h3
-		strict_sni_host
-	}
-}
-GLOBALEOF
-fi
-
-awk -v gfile="$tmp_global" '
-    /\{GLOBAL_BLOCK\}/ {
-        while ((getline line < gfile) > 0) print line
-        close(gfile)
-        next
-    }
-    { print }
-' "$repo_root/Caddyfile.test" | sed "s|{DOMAIN}|${DOMAIN}|g" > /etc/caddy/Caddyfile
-
-rm -f "$tmp_global"
-
-if [ -f /etc/caddy/Caddyfile ]; then
-    if [ -n "$DESEC_TOKEN_VALUE" ]; then
-        DESEC_TOKEN="$DESEC_TOKEN_VALUE" /usr/local/bin/caddy validate --config /etc/caddy/Caddyfile 2>/dev/null && \
-            print_status "SUCCESS" "Caddyfile updated and validated" || \
-            print_status "WARNING" "Caddyfile updated but validation had warnings (check manually)"
-    else
-        print_status "SUCCESS" "Caddyfile updated (DESEC_TOKEN not in secrets.env, skipping validate)"
-    fi
-else
-    print_status "WARNING" "Could not write /etc/caddy/Caddyfile"
-fi
-
 echo
-echo -e "${CYAN}Step 4: Restart services${NC}"
+echo -e "${CYAN}Step 4: Restart arkfile${NC}"
 
 print_status "INFO" "Starting Arkfile..."
 systemctl start arkfile
 arkfile_ready=false
 for _ in $(seq 1 15); do
-    if curl -sk https://localhost:8443/readyz 2>/dev/null | grep -q '"status":"ready"'; then
+    if curl -sk https://localhost:${TLS_PORT}/readyz 2>/dev/null | grep -q '"status":"ready"'; then
         arkfile_ready=true
         break
     fi
@@ -346,39 +283,22 @@ if [ "$arkfile_ready" != "true" ]; then
     print_status "ERROR" "Check logs: sudo journalctl -u arkfile -f"
     exit 1
 fi
-print_status "SUCCESS" "Arkfile is ready on localhost:8443"
-
-print_status "INFO" "Starting Caddy..."
-systemctl start caddy
-caddy_ready=false
-for _ in $(seq 1 15); do
-    if curl -sk "https://${DOMAIN}/readyz" 2>/dev/null | grep -q '"status":"ready"'; then
-        caddy_ready=true
-        break
-    fi
-    sleep 3
-done
-if [ "$caddy_ready" != "true" ]; then
-    print_status "ERROR" "Caddy failed to pass health check within timeout"
-    print_status "ERROR" "Check logs: sudo journalctl -u caddy -f"
-    exit 1
-fi
-print_status "SUCCESS" "Public HTTPS endpoint is ready at https://${DOMAIN}"
+print_status "SUCCESS" "Arkfile is ready on localhost:${TLS_PORT}"
 
 echo
 echo -e "${CYAN}Step 5: Health verification${NC}"
 
-if curl -sk https://localhost:8443/api/config/argon2 2>/dev/null | grep -q '"memoryCostKiB"'; then
+if curl -sk https://localhost:${TLS_PORT}/api/config/argon2 2>/dev/null | grep -q '"memoryCostKiB"'; then
     print_status "SUCCESS" "Argon2 config endpoint responding"
 else
     print_status "WARNING" "Argon2 config endpoint may not be responding"
 fi
-if curl -sk https://localhost:8443/api/config/password-requirements 2>/dev/null | grep -q '"minAccountPasswordLength"'; then
+if curl -sk https://localhost:${TLS_PORT}/api/config/password-requirements 2>/dev/null | grep -q '"minAccountPasswordLength"'; then
     print_status "SUCCESS" "Password requirements endpoint responding"
 else
     print_status "WARNING" "Password requirements endpoint may not be responding"
 fi
-if curl -sk https://localhost:8443/api/config/chunking 2>/dev/null | grep -q '"plaintextChunkSizeBytes"'; then
+if curl -sk https://localhost:${TLS_PORT}/api/config/chunking 2>/dev/null | grep -q '"plaintextChunkSizeBytes"'; then
     print_status "SUCCESS" "Chunking config endpoint responding"
 else
     print_status "WARNING" "Chunking config endpoint may not be responding"
@@ -386,7 +306,6 @@ fi
 
 print_status "INFO" "Service status:"
 echo "    arkfile:   $(systemctl is-active arkfile 2>/dev/null || echo 'failed')"
-echo "    caddy:     $(systemctl is-active caddy 2>/dev/null || echo 'failed')"
 echo "    rqlite:    $(systemctl is-active rqlite 2>/dev/null || echo 'unknown')"
 if [ "$STORAGE_PROVIDER" = "generic-s3" ]; then
     echo "    seaweedfs: $(systemctl is-active seaweedfs 2>/dev/null || echo 'unknown')"
@@ -397,7 +316,7 @@ fi
 echo
 echo -e "${GREEN}UPDATE COMPLETE${NC}"
 echo
-echo -e "${BLUE}Your Arkfile instance at https://${DOMAIN} has been updated.${NC}"
+echo -e "${BLUE}Your Arkfile instance at https://localhost:${TLS_PORT} has been updated.${NC}"
 echo "Data, keys, and configuration were not modified."
 echo
 

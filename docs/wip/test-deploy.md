@@ -179,7 +179,7 @@ Prompt for:
 The endpoint is derived automatically as:
 
 ```
-https://s3.<region>.wasabi.com
+https://s3.<region>.wasabisys.com
 ```
 
 Write to `secrets.env`:

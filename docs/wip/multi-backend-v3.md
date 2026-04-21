@@ -147,7 +147,7 @@ S3_FORCE_PATH_STYLE=true
 
 If `STORAGE_PROVIDER_ID` is not set, the system auto-generates it as `"{STORAGE_PROVIDER}:{S3_BUCKET}"` (e.g. `"generic-s3:arkfile-local"`).
 
-Note: For the primary provider, some endpoints can be auto-derived from the region (e.g., Wasabi endpoint from `S3_REGION`, Vultr endpoint from `S3_REGION`). This auto-generation logic lives in the env-var reading code that calls the `NewS3Provider` factory, not inside the factory itself.
+Note: For the primary provider, some endpoints can be auto-derived from the region (e.g., Wasabi endpoint `https://s3.{region}.wasabisys.com` from `S3_REGION`, Vultr endpoint from `S3_REGION`). This auto-generation logic lives in the env-var reading code that calls the `NewS3Provider` factory, not inside the factory itself. Wasabi requires path-style addressing (`S3_FORCE_PATH_STYLE=true`).
 
 ### Secondary Provider (New -- Optional)
 
@@ -158,12 +158,12 @@ For all non-primary providers, `STORAGE_2_ENDPOINT` is required. Unlike the prim
 ```
 STORAGE_PROVIDER_2=wasabi
 STORAGE_PROVIDER_2_ID=wasabi-us-central-1  # Optional human-readable ID
-STORAGE_2_ENDPOINT=https://s3.us-central-1.wasabi.com
+STORAGE_2_ENDPOINT=https://s3.us-central-1.wasabisys.com
 STORAGE_2_ACCESS_KEY=your_access_key
 STORAGE_2_SECRET_KEY=your_secret_key
 STORAGE_2_BUCKET=arkfile-backup
 STORAGE_2_REGION=us-central-1
-STORAGE_2_FORCE_PATH_STYLE=false
+STORAGE_2_FORCE_PATH_STYLE=true
 ```
 
 When `STORAGE_PROVIDER_2` is not set or empty, the system operates in single-provider mode. All multi-backend features are disabled and behavior is identical to the current implementation.
@@ -1179,12 +1179,12 @@ Migration: test.arkfile.net SeaweedFS -> Wasabi Primary
    STORAGE_PROVIDER_ID=seaweedfs-test
    STORAGE_PROVIDER_2=wasabi
    STORAGE_PROVIDER_2_ID=wasabi-us-central-1
-   STORAGE_2_ENDPOINT=https://s3.us-central-1.wasabi.com
-   STORAGE_2_ACCESS_KEY=<key>
-   STORAGE_2_SECRET_KEY=<secret>
-   STORAGE_2_BUCKET=arkfile-test
-   STORAGE_2_REGION=us-central-1
-   STORAGE_2_FORCE_PATH_STYLE=false
+    STORAGE_2_ENDPOINT=https://s3.us-central-1.wasabisys.com
+    STORAGE_2_ACCESS_KEY=<key>
+    STORAGE_2_SECRET_KEY=<secret>
+    STORAGE_2_BUCKET=arkfile-test
+    STORAGE_2_REGION=us-central-1
+    STORAGE_2_FORCE_PATH_STYLE=true
 3. sudo bash scripts/test-update.sh
 4. arkfile-admin storage-status  (verify both providers, backfill complete)
 5. arkfile-admin copy-all --from seaweedfs-test --to wasabi-us-central-1 --verify --skip-existing
