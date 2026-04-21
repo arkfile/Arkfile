@@ -1323,8 +1323,7 @@ Verification: Full e2e test suite passes in single-provider, dual-provider, and 
 - `handlers/admin_task_runner.go`
 - `cmd/arkfile-admin/storage_commands.go`
 - `scripts/local-update.sh`
-- `docs/wip/multi-backend.md` (original design document)
-- `docs/wip/multi-backend-v2.md` (this document -- updated three-tier design)
+- `docs/wip/multi-backend.md`
 
 ### Modified Files
 - `storage/s3.go` -- Config struct factory function extraction, `InitS3()` reads three provider configs
