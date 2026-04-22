@@ -47,7 +47,7 @@ func setupRoutes(e *echo.Echo) {
 		}
 
 		// Check storage connectivity
-		if storage.Provider == nil {
+		if storage.Registry == nil || storage.Registry.Primary() == nil {
 			checks["storage"] = "not initialized"
 			allReady = false
 		} else {
@@ -203,6 +203,9 @@ func main() {
 		log.Fatalf("Failed to initialize storage: %v", err)
 	}
 
+	// Register storage providers in the database and backfill location records
+	registerAndBackfillStorageProviders()
+
 	// Run storage verification in the background (logs result, does not block startup)
 	storageProvider := os.Getenv("STORAGE_PROVIDER")
 	if storageProvider == "" {
@@ -342,6 +345,99 @@ func main() {
 	if err := e.Start(":" + port); err != nil {
 		logging.ErrorLogger.Printf("Failed to start HTTP server: %v", err)
 	}
+}
+
+// registerAndBackfillStorageProviders upserts configured storage providers into the
+// database, backfills file_storage_locations for existing files, recalculates provider
+// stats, and marks stale admin tasks as failed. Called once on server startup after
+// storage.InitS3() and database.InitDB().
+func registerAndBackfillStorageProviders() {
+	reg := storage.Registry
+	if reg == nil {
+		log.Printf("Storage: skipping provider registration (no registry)")
+		return
+	}
+
+	// Helper to upsert a provider config into the DB
+	upsertProvider := func(providerID, providerType, bucket, endpoint, region, role, envPrefix string) {
+		record := &models.StorageProviderRecord{
+			ProviderID:   providerID,
+			ProviderType: providerType,
+			BucketName:   bucket,
+			Endpoint:     endpoint,
+			Region:       region,
+			Role:         role,
+			EnvVarPrefix: envPrefix,
+			IsActive:     true,
+		}
+		if err := models.UpsertStorageProvider(database.DB, record); err != nil {
+			log.Printf("Storage: failed to upsert provider %s: %v", providerID, err)
+		}
+	}
+
+	// Read primary provider config from env (same vars InitS3 used)
+	primaryType := os.Getenv("STORAGE_PROVIDER")
+	if primaryType == "" {
+		primaryType = "generic-s3"
+	}
+	primaryBucket := os.Getenv("S3_BUCKET")
+	if primaryBucket == "" {
+		primaryBucket = os.Getenv("AWS_S3_BUCKET_NAME")
+	}
+	primaryEndpoint := os.Getenv("S3_ENDPOINT")
+	primaryRegion := os.Getenv("S3_REGION")
+	if primaryRegion == "" {
+		primaryRegion = "us-east-1"
+	}
+
+	upsertProvider(reg.PrimaryID(), primaryType, primaryBucket, primaryEndpoint, primaryRegion, "primary", "STORAGE")
+
+	// Secondary provider (if configured)
+	if reg.HasSecondary() {
+		secType := os.Getenv("STORAGE_PROVIDER_2")
+		secBucket := os.Getenv("STORAGE_2_BUCKET")
+		secEndpoint := os.Getenv("STORAGE_2_ENDPOINT")
+		secRegion := os.Getenv("STORAGE_2_REGION")
+		if secRegion == "" {
+			secRegion = "us-east-1"
+		}
+		upsertProvider(reg.SecondaryID(), secType, secBucket, secEndpoint, secRegion, "secondary", "STORAGE_2")
+	}
+
+	// Tertiary provider (if configured)
+	if reg.HasTertiary() {
+		terType := os.Getenv("STORAGE_PROVIDER_3")
+		terBucket := os.Getenv("STORAGE_3_BUCKET")
+		terEndpoint := os.Getenv("STORAGE_3_ENDPOINT")
+		terRegion := os.Getenv("STORAGE_3_REGION")
+		if terRegion == "" {
+			terRegion = "us-east-1"
+		}
+		upsertProvider(reg.TertiaryID(), terType, terBucket, terEndpoint, terRegion, "tertiary", "STORAGE_3")
+	}
+
+	// Backfill file_storage_locations for existing files without location records
+	backfilled, err := models.BackfillFileStorageLocations(database.DB, reg.PrimaryID())
+	if err != nil {
+		log.Printf("Storage: backfill failed: %v", err)
+	} else if backfilled > 0 {
+		log.Printf("Storage: backfilled %d file location records for primary provider %s", backfilled, reg.PrimaryID())
+	}
+
+	// Recalculate primary provider stats from actual data
+	if err := models.RecalculateProviderStats(database.DB, reg.PrimaryID()); err != nil {
+		log.Printf("Storage: failed to recalculate primary stats: %v", err)
+	}
+
+	// Mark any stale admin tasks (from previous server crashes) as failed
+	staleTasks, err := models.MarkStaleTasksAsFailed(database.DB)
+	if err != nil {
+		log.Printf("Storage: failed to mark stale tasks: %v", err)
+	} else if staleTasks > 0 {
+		log.Printf("Storage: marked %d stale admin tasks as failed", staleTasks)
+	}
+
+	log.Printf("Storage: provider registration and backfill complete")
 }
 
 // initializeAdminUser creates and configures the designated admin user if needed

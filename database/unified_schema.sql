@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS file_metadata (
     encrypted_filename TEXT NOT NULL,           -- base64-encoded AES-GCM encrypted filename
     sha256sum_nonce TEXT NOT NULL,              -- base64-encoded 12-byte nonce for sha256 encryption  
     encrypted_sha256sum TEXT NOT NULL,          -- base64-encoded AES-GCM encrypted sha256 hash
-    encrypted_file_sha256sum CHAR(64),          -- sha256sum of the final encrypted file in storage
+    encrypted_file_sha256sum CHAR(64),          -- sha256sum of the final encrypted file in storage (pre-padding)
+    stored_blob_sha256sum CHAR(64),             -- sha256sum of the complete S3 object (encrypted data + padding)
     encrypted_fek TEXT,                         -- base64-encoded AES-GCM encrypted File Encryption Key
     size_bytes BIGINT NOT NULL DEFAULT 0,
     padded_size BIGINT,                         -- Size with padding for privacy/security
@@ -155,6 +156,9 @@ CREATE TABLE IF NOT EXISTS totp_backup_usage (
 -- PHASE 6: FILE SHARING AND ENCRYPTION
 -- =====================================================
 
+-- Cleanup: Remove deprecated file_shares table (superseded by file_share_keys)
+DROP TABLE IF EXISTS file_shares;
+
 -- File share keys (Argon2id-based anonymous shares)
 CREATE TABLE IF NOT EXISTS file_share_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,17 +178,6 @@ CREATE TABLE IF NOT EXISTS file_share_keys (
     FOREIGN KEY (file_id) REFERENCES file_metadata(file_id) ON DELETE CASCADE
 );
 
--- File shares (legacy table for compatibility - may be deprecated in future)
-CREATE TABLE IF NOT EXISTS file_shares (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    share_id TEXT NOT NULL UNIQUE,
-    file_id TEXT NOT NULL,
-    owner_username TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    expires_at DATETIME,
-    FOREIGN KEY (owner_username) REFERENCES users(username) ON DELETE CASCADE,
-    FOREIGN KEY (file_id) REFERENCES file_metadata(file_id) ON DELETE CASCADE
-);
 
 -- =====================================================
 -- PHASE 7: CHUNKED UPLOAD SYSTEM
@@ -388,6 +381,65 @@ CREATE TABLE IF NOT EXISTS user_contact_info (
 );
 
 -- =====================================================
+-- PHASE 12B: MULTI-BACKEND STORAGE MANAGEMENT
+-- =====================================================
+
+-- Storage providers: tracks configured S3-compatible backends as first-class entities.
+-- Credentials live in secrets.env only. This table stores metadata and operational state.
+CREATE TABLE IF NOT EXISTS storage_providers (
+    provider_id TEXT PRIMARY KEY,
+    provider_type TEXT NOT NULL,
+    bucket_name TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    region TEXT NOT NULL DEFAULT 'us-east-1',
+    role TEXT NOT NULL DEFAULT 'tertiary',
+    env_var_prefix TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    total_objects INTEGER NOT NULL DEFAULT 0,
+    total_size_bytes BIGINT NOT NULL DEFAULT 0,
+    cost_per_tb_cents INTEGER,
+    last_verified_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- File storage locations: tracks which providers hold a copy of each file's encrypted blob.
+-- Core table for multi-backend awareness.
+CREATE TABLE IF NOT EXISTS file_storage_locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id VARCHAR(36) NOT NULL,
+    provider_id TEXT NOT NULL,
+    storage_id VARCHAR(36) NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    verified_at TIMESTAMP,
+    FOREIGN KEY (file_id) REFERENCES file_metadata(file_id) ON DELETE CASCADE,
+    FOREIGN KEY (provider_id) REFERENCES storage_providers(provider_id)
+);
+
+-- Admin tasks: tracks background task progress for long-running admin operations.
+CREATE TABLE IF NOT EXISTS admin_tasks (
+    task_id TEXT PRIMARY KEY,
+    task_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    admin_username TEXT NOT NULL,
+    progress_current INTEGER NOT NULL DEFAULT 0,
+    progress_total INTEGER NOT NULL DEFAULT 0,
+    started_at TIMESTAMP,
+    completed_at TIMESTAMP,
+    error_message TEXT,
+    details TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (admin_username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+-- Additive column for existing deployments: SHA-256 of the complete S3 object (encrypted data + padding).
+-- rqlite/SQLite ADD COLUMN is a no-op if column already exists in the CREATE TABLE above,
+-- but this handles deployments created before stored_blob_sha256sum was in the schema.
+-- Note: This may produce a harmless "duplicate column name" error on fresh installs.
+
+-- =====================================================
 -- PHASE 13: INDEXES FOR PERFORMANCE
 -- =====================================================
 
@@ -430,9 +482,6 @@ CREATE INDEX IF NOT EXISTS idx_file_share_keys_owner ON file_share_keys(owner_us
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_expires_at ON file_share_keys(expires_at);
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_revoked ON file_share_keys(revoked_at);
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_token_hash ON file_share_keys(download_token_hash);
-CREATE INDEX IF NOT EXISTS idx_file_shares_share_id ON file_shares(share_id);
-CREATE INDEX IF NOT EXISTS idx_file_shares_file_id ON file_shares(file_id);
-CREATE INDEX IF NOT EXISTS idx_file_shares_owner ON file_shares(owner_username);
 
 -- Upload session indexes
 CREATE INDEX IF NOT EXISTS idx_upload_sessions_owner ON upload_sessions(owner_username);
@@ -477,6 +526,19 @@ CREATE INDEX IF NOT EXISTS idx_credit_transactions_transaction_id ON credit_tran
 CREATE INDEX IF NOT EXISTS idx_credit_transactions_type ON credit_transactions(transaction_type);
 CREATE INDEX IF NOT EXISTS idx_credit_transactions_created_at ON credit_transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_credit_transactions_admin ON credit_transactions(admin_username);
+
+-- Multi-backend storage indexes
+CREATE INDEX IF NOT EXISTS idx_storage_providers_role ON storage_providers(role);
+CREATE INDEX IF NOT EXISTS idx_storage_providers_active ON storage_providers(is_active);
+
+CREATE INDEX IF NOT EXISTS idx_fsl_file_id ON file_storage_locations(file_id);
+CREATE INDEX IF NOT EXISTS idx_fsl_provider_id ON file_storage_locations(provider_id);
+CREATE INDEX IF NOT EXISTS idx_fsl_status ON file_storage_locations(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fsl_file_provider ON file_storage_locations(file_id, provider_id);
+
+CREATE INDEX IF NOT EXISTS idx_admin_tasks_status ON admin_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_admin_tasks_type ON admin_tasks(task_type);
+CREATE INDEX IF NOT EXISTS idx_admin_tasks_admin ON admin_tasks(admin_username);
 
 -- =====================================================
 -- PHASE 14: TRIGGERS FOR AUTOMATIC UPDATES

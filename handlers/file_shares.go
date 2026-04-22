@@ -886,7 +886,7 @@ func DownloadShareChunk(c echo.Context) error {
 	}
 
 	// Get the chunk from storage
-	reader, err := storage.Provider.GetObjectChunk(c.Request().Context(), storageID, startByte, actualChunkSize)
+	reader, err := storage.Registry.Primary().GetObjectChunk(c.Request().Context(), storageID, startByte, actualChunkSize)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get chunk %d of file %s from storage: %v", chunkIndex, share.FileID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve chunk from storage")

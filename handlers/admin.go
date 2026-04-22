@@ -497,8 +497,7 @@ func DeleteUser(c echo.Context) error {
 	if sp := c.Get("storage"); sp != nil {
 		storageProvider = sp.(storage.ObjectStorageProvider)
 	} else {
-		// Fallback to global storage provider (used in tests and production)
-		storageProvider = storage.Provider
+		storageProvider = storage.Registry.Primary()
 	}
 
 	// Start transaction
@@ -1249,7 +1248,7 @@ func AdminDeleteFile(c echo.Context) error {
 	if sp := c.Get("storage"); sp != nil {
 		storageProvider = sp.(storage.ObjectStorageProvider)
 	} else {
-		storageProvider = storage.Provider
+		storageProvider = storage.Registry.Primary()
 	}
 
 	// Start transaction

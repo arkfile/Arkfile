@@ -19,7 +19,7 @@ func AdminVerifyStorage(c echo.Context) error {
 		providerName = "generic-s3"
 	}
 
-	result := storage.RunVerification(providerName)
+	result := storage.RunVerification(providerName, storage.Registry.Primary())
 
 	if result.Verified {
 		return c.JSON(http.StatusOK, map[string]interface{}{

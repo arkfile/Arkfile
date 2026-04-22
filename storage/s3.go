@@ -49,20 +49,86 @@ func (w *awsObjectWrapper) Stat() (ObjectInfo, error) {
 	}, nil
 }
 
-// InitS3 initializes the S3 storage provider
-func InitS3() error {
+// S3ProviderConfig holds the configuration needed to create an S3 provider instance.
+// Endpoint auto-generation (e.g. Wasabi from region) is done by the caller before
+// calling NewS3Provider -- the factory always receives a fully-resolved endpoint.
+type S3ProviderConfig struct {
+	ProviderType   StorageProvider
+	ProviderID     string
+	Endpoint       string
+	AccessKey      string
+	SecretKey      string
+	Bucket         string
+	Region         string
+	ForcePathStyle bool
+}
+
+// NewS3Provider creates a new S3AWSStorage instance from the given config.
+// This factory can be called multiple times with different configs for multi-backend.
+func NewS3Provider(cfg S3ProviderConfig) (*S3AWSStorage, error) {
+	region := cfg.Region
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	awsCfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithRegion(region),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, "")),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load AWS config for %s: %w", cfg.ProviderID, err)
+	}
+
+	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+		o.UsePathStyle = cfg.ForcePathStyle
+		if cfg.Endpoint != "" {
+			o.BaseEndpoint = aws.String(cfg.Endpoint)
+		}
+	})
+
+	presignClient := s3.NewPresignClient(client)
+
+	return &S3AWSStorage{
+		client:        client,
+		presignClient: presignClient,
+		bucketName:    cfg.Bucket,
+	}, nil
+}
+
+// ensureBucketExists checks if a bucket exists and creates it if not (for local/generic-s3).
+func ensureBucketExists(client *s3.Client, bucketName string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(bucketName),
+	})
+	if err != nil {
+		_, err = client.CreateBucket(ctx, &s3.CreateBucketInput{
+			Bucket: aws.String(bucketName),
+		})
+		if err != nil {
+			log.Printf("Warning: Failed to create bucket %s: %v", bucketName, err)
+		} else {
+			log.Printf("Created new bucket: %s", bucketName)
+		}
+	}
+}
+
+// readPrimaryEnvVars reads environment variables for the primary storage provider
+// and returns a fully-resolved S3ProviderConfig.
+func readPrimaryEnvVars() S3ProviderConfig {
 	provider := StorageProvider(os.Getenv("STORAGE_PROVIDER"))
 	if provider == "" {
 		provider = ProviderGenericS3
 	}
 
-	// Basic configuration
 	region := os.Getenv("S3_REGION")
 	if region == "" {
 		region = os.Getenv("AWS_REGION")
 	}
 	if region == "" {
-		region = "us-east-1" // Default
+		region = "us-east-1"
 	}
 
 	accessKey := os.Getenv("S3_ACCESS_KEY")
@@ -80,7 +146,6 @@ func InitS3() error {
 		bucketName = os.Getenv("AWS_S3_BUCKET_NAME")
 	}
 
-	// Resolve endpoint URL and credentials per provider
 	var endpointURL string
 	usePathStyle := false
 
@@ -102,7 +167,6 @@ func InitS3() error {
 		bucketName = os.Getenv("BACKBLAZE_BUCKET_NAME")
 	case ProviderAmazonS3:
 		// AWS S3: SDK auto-resolves the endpoint from the region.
-		// No endpoint override, no path-style needed.
 	case ProviderGenericS3:
 		endpointURL = os.Getenv("S3_ENDPOINT")
 		if endpointURL == "" {
@@ -114,52 +178,163 @@ func InitS3() error {
 		}
 	}
 
-	// Load AWS SDK configuration
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
-		config.WithRegion(region),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to load AWS config: %w", err)
+	providerID := os.Getenv("STORAGE_PROVIDER_ID")
+	if providerID == "" {
+		providerID = fmt.Sprintf("%s:%s", provider, bucketName)
 	}
 
-	// Create S3 client with BaseEndpoint (replaces deprecated EndpointResolver)
-	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.UsePathStyle = usePathStyle
-		if endpointURL != "" {
-			o.BaseEndpoint = aws.String(endpointURL)
+	return S3ProviderConfig{
+		ProviderType:   provider,
+		ProviderID:     providerID,
+		Endpoint:       endpointURL,
+		AccessKey:      accessKey,
+		SecretKey:      secretKey,
+		Bucket:         bucketName,
+		Region:         region,
+		ForcePathStyle: usePathStyle,
+	}
+}
+
+// readSecondaryEnvVars reads environment variables for the secondary storage provider.
+// Returns nil config if STORAGE_PROVIDER_2 is not set.
+func readSecondaryEnvVars() *S3ProviderConfig {
+	provider := StorageProvider(os.Getenv("STORAGE_PROVIDER_2"))
+	if provider == "" {
+		return nil
+	}
+
+	region := os.Getenv("STORAGE_2_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	endpointURL := os.Getenv("STORAGE_2_ENDPOINT")
+	accessKey := os.Getenv("STORAGE_2_ACCESS_KEY")
+	secretKey := os.Getenv("STORAGE_2_SECRET_KEY")
+	bucketName := os.Getenv("STORAGE_2_BUCKET")
+	usePathStyle := os.Getenv("STORAGE_2_FORCE_PATH_STYLE") != "false"
+
+	// Endpoint auto-generation for known provider types
+	if endpointURL == "" {
+		switch provider {
+		case ProviderWasabi:
+			endpointURL = fmt.Sprintf("https://s3.%s.wasabisys.com", region)
+		case ProviderVultr:
+			endpointURL = fmt.Sprintf("https://%s.vultrobjects.com", region)
 		}
-	})
-
-	// Create Presign client
-	presignClient := s3.NewPresignClient(client)
-
-	// Assign provider
-	Provider = &S3AWSStorage{
-		client:        client,
-		presignClient: presignClient,
-		bucketName:    bucketName,
 	}
 
-	// Ensure bucket exists (only for generic S3 which includes local/cluster)
-	if provider == ProviderGenericS3 {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+	providerID := os.Getenv("STORAGE_PROVIDER_2_ID")
+	if providerID == "" {
+		providerID = fmt.Sprintf("%s:%s", provider, bucketName)
+	}
 
-		_, err := client.HeadBucket(ctx, &s3.HeadBucketInput{
-			Bucket: aws.String(bucketName),
-		})
+	return &S3ProviderConfig{
+		ProviderType:   provider,
+		ProviderID:     providerID,
+		Endpoint:       endpointURL,
+		AccessKey:      accessKey,
+		SecretKey:      secretKey,
+		Bucket:         bucketName,
+		Region:         region,
+		ForcePathStyle: usePathStyle,
+	}
+}
 
+// readTertiaryEnvVars reads environment variables for the tertiary storage provider.
+// Returns nil config if STORAGE_PROVIDER_3 is not set.
+func readTertiaryEnvVars() *S3ProviderConfig {
+	provider := StorageProvider(os.Getenv("STORAGE_PROVIDER_3"))
+	if provider == "" {
+		return nil
+	}
+
+	region := os.Getenv("STORAGE_3_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	endpointURL := os.Getenv("STORAGE_3_ENDPOINT")
+	accessKey := os.Getenv("STORAGE_3_ACCESS_KEY")
+	secretKey := os.Getenv("STORAGE_3_SECRET_KEY")
+	bucketName := os.Getenv("STORAGE_3_BUCKET")
+	usePathStyle := os.Getenv("STORAGE_3_FORCE_PATH_STYLE") != "false"
+
+	// Endpoint auto-generation for known provider types
+	if endpointURL == "" {
+		switch provider {
+		case ProviderWasabi:
+			endpointURL = fmt.Sprintf("https://s3.%s.wasabisys.com", region)
+		case ProviderVultr:
+			endpointURL = fmt.Sprintf("https://%s.vultrobjects.com", region)
+		}
+	}
+
+	providerID := os.Getenv("STORAGE_PROVIDER_3_ID")
+	if providerID == "" {
+		providerID = fmt.Sprintf("%s:%s", provider, bucketName)
+	}
+
+	return &S3ProviderConfig{
+		ProviderType:   provider,
+		ProviderID:     providerID,
+		Endpoint:       endpointURL,
+		AccessKey:      accessKey,
+		SecretKey:      secretKey,
+		Bucket:         bucketName,
+		Region:         region,
+		ForcePathStyle: usePathStyle,
+	}
+}
+
+// InitS3 initializes the S3 storage provider(s) and builds the ProviderRegistry.
+func InitS3() error {
+	// Read and create primary provider
+	primaryCfg := readPrimaryEnvVars()
+	primaryProvider, err := NewS3Provider(primaryCfg)
+	if err != nil {
+		return fmt.Errorf("failed to initialize primary storage provider: %w", err)
+	}
+
+	// Build registry with primary
+	Registry = NewProviderRegistry(primaryProvider, primaryCfg.ProviderID)
+	log.Printf("Storage: primary provider initialized: %s (type=%s, bucket=%s)", primaryCfg.ProviderID, primaryCfg.ProviderType, primaryCfg.Bucket)
+
+	// Ensure primary bucket exists (for generic-s3 / local providers)
+	if primaryCfg.ProviderType == ProviderGenericS3 {
+		ensureBucketExists(primaryProvider.client, primaryCfg.Bucket)
+	}
+
+	// Read and create optional secondary provider
+	secondaryCfg := readSecondaryEnvVars()
+	if secondaryCfg != nil {
+		secondaryProvider, err := NewS3Provider(*secondaryCfg)
 		if err != nil {
-			// Try to create bucket
-			_, err = client.CreateBucket(ctx, &s3.CreateBucketInput{
-				Bucket: aws.String(bucketName),
-			})
+			log.Printf("Warning: Failed to initialize secondary storage provider %s: %v", secondaryCfg.ProviderID, err)
+		} else {
+			Registry.SetSecondary(secondaryProvider, secondaryCfg.ProviderID)
+			log.Printf("Storage: secondary provider initialized: %s (type=%s, bucket=%s)", secondaryCfg.ProviderID, secondaryCfg.ProviderType, secondaryCfg.Bucket)
+
+			if secondaryCfg.ProviderType == ProviderGenericS3 {
+				ensureBucketExists(secondaryProvider.client, secondaryCfg.Bucket)
+			}
+		}
+	}
+
+	// Read and create optional tertiary provider (requires secondary)
+	if Registry.HasSecondary() {
+		tertiaryCfg := readTertiaryEnvVars()
+		if tertiaryCfg != nil {
+			tertiaryProvider, err := NewS3Provider(*tertiaryCfg)
 			if err != nil {
-				// Just log warning, don't fail - maybe we don't have permissions to create buckets
-				log.Printf("Warning: Failed to create bucket %s: %v", bucketName, err)
+				log.Printf("Warning: Failed to initialize tertiary storage provider %s: %v", tertiaryCfg.ProviderID, err)
 			} else {
-				log.Printf("Created new bucket: %s", bucketName)
+				Registry.SetTertiary(tertiaryProvider, tertiaryCfg.ProviderID)
+				log.Printf("Storage: tertiary provider initialized: %s (type=%s, bucket=%s)", tertiaryCfg.ProviderID, tertiaryCfg.ProviderType, tertiaryCfg.Bucket)
+
+				if tertiaryCfg.ProviderType == ProviderGenericS3 {
+					ensureBucketExists(tertiaryProvider.client, tertiaryCfg.Bucket)
+				}
 			}
 		}
 	}

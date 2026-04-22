@@ -306,7 +306,7 @@ func simulateDownloadAndDecrypt(t *testing.T, username, fileID, storageID string
 	ctx := context.Background()
 
 	// Get the file data from storage using storage_id directly
-	reader, err := storage.Provider.GetObject(ctx, storageID, storage.GetObjectOptions{})
+	reader, err := storage.Registry.Primary().GetObject(ctx, storageID, storage.GetObjectOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get object from storage: %v", err)
 	}

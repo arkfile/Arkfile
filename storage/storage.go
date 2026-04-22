@@ -29,7 +29,3 @@ type ObjectStorageProvider interface {
 	AbortMultipartUpload(ctx context.Context, objectName, uploadID string) error
 	GetObjectChunk(ctx context.Context, objectName string, offset, length int64) (io.ReadCloser, error)
 }
-
-// Global object storage provider instance (will be initialized with S3-compatible backend or mock)
-// Consider using dependency injection instead for larger applications.
-var Provider ObjectStorageProvider

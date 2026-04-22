@@ -38,15 +38,15 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 		db.Close()
 	})
 
-	// Create mock storage
+	// Create mock storage and registry
 	mockStorage := &storage.MockObjectStorageProvider{}
 
-	// Replace global storage provider with mock
-	originalStorage := storage.Provider
-	storage.Provider = mockStorage
+	// Replace global storage registry with mock
+	originalRegistry := storage.Registry
+	storage.Registry = storage.NewProviderRegistry(mockStorage, "mock-test")
 
 	t.Cleanup(func() {
-		storage.Provider = originalStorage
+		storage.Registry = originalRegistry
 	})
 
 	return c, rec, mock, mockStorage

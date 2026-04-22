@@ -139,7 +139,7 @@ func CreateUploadSession(c echo.Context) error {
 		"owner-username": username,
 	}
 
-	uploadID, err := storage.Provider.InitiateMultipartUpload(c.Request().Context(), storageID, metadata)
+	uploadID, err := storage.Registry.Primary().InitiateMultipartUpload(c.Request().Context(), storageID, metadata)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to initiate multipart upload for file_id %s (storage_id: %s) via provider: %v", fileID, storageID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to initialize storage upload")
@@ -152,14 +152,14 @@ func CreateUploadSession(c echo.Context) error {
 	)
 	if err != nil {
 		// Abort the multipart upload if we can't update the database
-		storage.Provider.AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
+		storage.Registry.Primary().AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update upload session")
 	}
 
 	if err := tx.Commit(); err != nil {
 		// Attempt to abort the storage upload if we can't commit
 		if uploadID != "" {
-			storage.Provider.AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
+			storage.Registry.Primary().AbortMultipartUpload(c.Request().Context(), storageID, uploadID)
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
 	}
@@ -230,7 +230,7 @@ func CancelUpload(c echo.Context) error {
 
 	// Abort the multipart upload in storage using storage provider interface
 	if storageUploadID != "" && storageID != "" {
-		err = storage.Provider.AbortMultipartUpload(c.Request().Context(), storageID, storageUploadID)
+		err = storage.Registry.Primary().AbortMultipartUpload(c.Request().Context(), storageID, storageUploadID)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to abort storage upload via storage provider: %v", err)
 			// Continue anyway - we still want to mark the session as canceled in the database
@@ -530,7 +530,7 @@ func UploadChunk(c echo.Context) error {
 
 	var etag string
 	if storageUploadID.Valid && storageUploadID.String != "" {
-		part, err := storage.Provider.UploadPart(
+		part, err := storage.Registry.Primary().UploadPart(
 			c.Request().Context(),
 			storageID,
 			storageUploadID.String,
@@ -736,7 +736,7 @@ func CompleteUpload(c echo.Context) error {
 	// Step 5: Complete the multipart upload in storage.
 	// Padding was already appended to the last chunk during UploadChunk,
 	// so no separate padding part is needed here.
-	err = storage.Provider.CompleteMultipartUpload(c.Request().Context(), storageID.String, storageUploadID.String, parts)
+	err = storage.Registry.Primary().CompleteMultipartUpload(c.Request().Context(), storageID.String, storageUploadID.String, parts)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to complete storage upload via storage provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to complete storage upload: %v", err))
@@ -784,7 +784,7 @@ func CompleteUpload(c echo.Context) error {
 			"Upload size mismatch for session %s: expected padded size %d bytes, server stored %d bytes",
 			sessionID, paddedSize, actualStoredSize,
 		)
-		storage.Provider.RemoveObject(c.Request().Context(), storageID.String, storage.RemoveObjectOptions{})
+		storage.Registry.Primary().RemoveObject(c.Request().Context(), storageID.String, storage.RemoveObjectOptions{})
 		return echo.NewHTTPError(http.StatusBadRequest, "Upload size mismatch: stored size does not match expected padded size")
 	}
 
@@ -887,7 +887,7 @@ func DeleteFile(c echo.Context) error {
 	}
 
 	// Remove from object storage using storage ID
-	err = storage.Provider.RemoveObject(c.Request().Context(), storageID, storage.RemoveObjectOptions{})
+	err = storage.Registry.Primary().RemoveObject(c.Request().Context(), storageID, storage.RemoveObjectOptions{})
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to remove file from storage via provider: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete file from storage")

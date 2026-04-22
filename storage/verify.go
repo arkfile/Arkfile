@@ -46,10 +46,10 @@ func GetLastVerification() *VerificationResult {
 	return &copy
 }
 
-// RunVerification performs a full S3 round-trip test using the global Provider.
+// RunVerification performs a full S3 round-trip test against the given provider.
 // Upload 1 MB of zeros, download, verify SHA-256, delete.
 // Stores the result internally and returns it.
-func RunVerification(providerName string) *VerificationResult {
+func RunVerification(providerName string, provider ObjectStorageProvider) *VerificationResult {
 	start := time.Now()
 	result := &VerificationResult{
 		Provider:  providerName,
@@ -63,7 +63,7 @@ func RunVerification(providerName string) *VerificationResult {
 		verifyMu.Unlock()
 	}()
 
-	if Provider == nil {
+	if provider == nil {
 		result.Error = "storage provider not initialized"
 		return result
 	}
@@ -77,7 +77,7 @@ func RunVerification(providerName string) *VerificationResult {
 	expectedHashHex := hex.EncodeToString(expectedHash[:])
 
 	// Upload
-	_, err := Provider.PutObject(ctx, verifyTestObjectKey, bytes.NewReader(testData), int64(verifyTestSize), PutObjectOptions{
+	_, err := provider.PutObject(ctx, verifyTestObjectKey, bytes.NewReader(testData), int64(verifyTestSize), PutObjectOptions{
 		ContentType: "application/octet-stream",
 	})
 	if err != nil {
@@ -87,9 +87,9 @@ func RunVerification(providerName string) *VerificationResult {
 	result.UploadOK = true
 
 	// Download
-	obj, err := Provider.GetObject(ctx, verifyTestObjectKey, GetObjectOptions{})
+	obj, err := provider.GetObject(ctx, verifyTestObjectKey, GetObjectOptions{})
 	if err != nil {
-		cleanupTestObject(ctx)
+		cleanupTestObject(ctx, provider)
 		result.Error = fmt.Sprintf("download failed: %v", err)
 		return result
 	}
@@ -97,7 +97,7 @@ func RunVerification(providerName string) *VerificationResult {
 	downloadedData, err := io.ReadAll(obj)
 	obj.Close()
 	if err != nil {
-		cleanupTestObject(ctx)
+		cleanupTestObject(ctx, provider)
 		result.Error = fmt.Sprintf("failed to read downloaded data: %v", err)
 		return result
 	}
@@ -107,14 +107,14 @@ func RunVerification(providerName string) *VerificationResult {
 	actualHash := sha256.Sum256(downloadedData)
 	actualHashHex := hex.EncodeToString(actualHash[:])
 	if actualHashHex != expectedHashHex {
-		cleanupTestObject(ctx)
+		cleanupTestObject(ctx, provider)
 		result.Error = fmt.Sprintf("hash mismatch: expected %s, got %s", expectedHashHex, actualHashHex)
 		return result
 	}
 	result.HashMatchOK = true
 
 	// Delete
-	if err := Provider.RemoveObject(ctx, verifyTestObjectKey, RemoveObjectOptions{}); err != nil {
+	if err := provider.RemoveObject(ctx, verifyTestObjectKey, RemoveObjectOptions{}); err != nil {
 		result.Error = fmt.Sprintf("delete failed (test object may remain in bucket): %v", err)
 		return result
 	}
@@ -131,8 +131,13 @@ func RunStartupVerification(providerName string) {
 		// Brief delay to let the server finish starting
 		time.Sleep(2 * time.Second)
 
+		if Registry == nil || Registry.Primary() == nil {
+			log.Printf("Storage verification: skipped (no provider initialized)")
+			return
+		}
+
 		log.Printf("Storage verification: starting round-trip test (provider: %s)...", providerName)
-		result := RunVerification(providerName)
+		result := RunVerification(providerName, Registry.Primary())
 
 		if result.Verified {
 			log.Printf("Storage verification: PASSED (provider: %s, duration: %s)", result.Provider, result.Duration)
@@ -142,8 +147,8 @@ func RunStartupVerification(providerName string) {
 	}()
 }
 
-func cleanupTestObject(ctx context.Context) {
-	if err := Provider.RemoveObject(ctx, verifyTestObjectKey, RemoveObjectOptions{}); err != nil {
+func cleanupTestObject(ctx context.Context, provider ObjectStorageProvider) {
+	if err := provider.RemoveObject(ctx, verifyTestObjectKey, RemoveObjectOptions{}); err != nil {
 		log.Printf("Storage verification: warning: failed to clean up test object: %v", err)
 	}
 }

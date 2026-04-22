@@ -1283,11 +1283,11 @@ Add multi-backend test scenarios to `scripts/testing/e2e-test.sh`:
 
 The implementation is organized into phases that can each be developed, tested, and committed independently.
 
-### Phase 0: Dead Code Cleanup
+### Phase 0: Dead Code Cleanup [COMPLETE]
 
 Remove the `file_shares` legacy table, its indexes, and add a DROP statement for existing deployments. Run `dev-reset.sh` and `e2e-test.sh` to confirm nothing breaks.
 
-### Phase 1: Storage Layer Foundation
+### Phase 1: Storage Layer Foundation [COMPLETE]
 
 Introduce the provider registry and config-struct factory function without changing any handler behavior.
 
@@ -1300,7 +1300,7 @@ Files changed:
 
 Verification: All existing e2e tests pass unchanged. `storage.Registry.Primary()` replaces all `storage.Provider` references.
 
-### Phase 2: Schema and Models
+### Phase 2: Schema and Models [COMPLETE]
 
 Add new database tables, new column, and model functions.
 
@@ -1312,7 +1312,7 @@ Files changed:
 
 Verification: Run `dev-reset.sh`, confirm tables are created. Existing data and functionality unaffected.
 
-### Phase 3: Startup Backfill and Provider Registration
+### Phase 3: Startup Backfill and Provider Registration [COMPLETE]
 
 On server startup, register providers and backfill location records.
 
@@ -1321,6 +1321,8 @@ Files changed:
 - `.env.example` -- Add `STORAGE_PROVIDER_ID`, `STORAGE_PROVIDER_2`, `STORAGE_2_*`, `STORAGE_PROVIDER_3`, `STORAGE_3_*`, `ENABLE_UPLOAD_REPLICATION` variables (all commented out).
 
 Verification: Run `dev-reset.sh` and `e2e-test.sh`. Verify `file_storage_locations` has one row per file. All existing tests pass.
+
+PROGRESS NOTE - 04/22/26 - local deploy/local update are still passing and functional with existing credentials for test wasabi cloud bucket as main (primary and only) storage in the local system
 
 ### Phase 4: Stored Blob Hash (Upload Enhancement)
 
