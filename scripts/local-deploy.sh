@@ -291,7 +291,7 @@ prompt_nonempty() {
     while [ -z "$value" ]; do
         read -r -p "  $prompt_text" value
         if [ -z "$value" ]; then
-            echo "  Value cannot be empty."
+            echo "  Value cannot be empty." >&2
         fi
     done
     echo "$value"
@@ -302,9 +302,9 @@ prompt_secret_nonempty() {
     local value=""
     while [ -z "$value" ]; do
         read -r -s -p "  $prompt_text" value
-        echo ""
+        echo "" >&2
         if [ -z "$value" ]; then
-            echo "  Value cannot be empty."
+            echo "  Value cannot be empty." >&2
         fi
     done
     echo "$value"
@@ -319,6 +319,8 @@ prompt_storage_backend_config() {
         wasabi)
             echo ""
             echo -e "${BLUE}Wasabi Storage Configuration${NC}"
+            echo "  (Endpoint will be constructed as: https://s3.<region>.wasabisys.com)"
+            echo "  (Example regions: us-east-1, us-east-2, us-central-1, us-west-1, eu-central-1, eu-west-1)"
             S3_REGION=$(prompt_nonempty "Wasabi region: ")
             S3_ACCESS_KEY=$(prompt_nonempty "Wasabi access key: ")
             S3_SECRET_KEY=$(prompt_secret_nonempty "Wasabi secret key: ")
@@ -376,19 +378,6 @@ prompt_storage_backend_config() {
     esac
 }
 
-# Verify external storage backend with round-trip test
-verify_storage_backend_roundtrip() {
-    if [ "$STORAGE_BACKEND" = "local-seaweedfs" ]; then
-        return 0
-    fi
-
-    print_status "INFO" "Verifying external storage backend with arkfile-admin verify-storage..."
-    if ! "$ARKFILE_DIR/bin/arkfile-admin" verify-storage --secrets-env "$ARKFILE_DIR/etc/secrets.env"; then
-        print_status "ERROR" "External storage verification failed"
-        exit 1
-    fi
-    print_status "SUCCESS" "External storage backend verification passed"
-}
 
 # Validate storage backend
 if ! validate_storage_backend "$STORAGE_BACKEND"; then
@@ -1028,9 +1017,6 @@ if ! systemctl is-active --quiet arkfile; then
     exit 1
 fi
 print_status "SUCCESS" "Arkfile started"
-
-# Verify external storage backend (after Arkfile is running)
-verify_storage_backend_roundtrip
 
 echo ""
 

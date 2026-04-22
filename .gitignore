@@ -35,6 +35,7 @@ vendor/stef/liboprf/src/noise_xk/*.a
 *.bak
 *.old
 .env
+secrets.env
 build/
 arkfile.db
 arkfile-test.db

@@ -421,18 +421,6 @@ generate_crypto_material() {
     print_status "SUCCESS" "Cryptographic material ready"
 }
 
-verify_storage_backend_roundtrip() {
-    if [ "$STORAGE_BACKEND" = "local-seaweedfs" ]; then
-        return 0
-    fi
-
-    print_status "INFO" "Verifying external storage backend with arkfile-admin verify-storage..."
-    if ! "$ARKFILE_DIR/bin/arkfile-admin" verify-storage --secrets-env "$ARKFILE_DIR/etc/secrets.env"; then
-        print_status "ERROR" "External storage verification failed"
-        exit 1
-    fi
-    print_status "SUCCESS" "External storage backend verification passed"
-}
 
 render_caddyfile() {
     local repo_root
@@ -686,7 +674,7 @@ prompt_nonempty() {
             echo "$value"
             return 0
         fi
-        print_status "WARNING" "A value is required"
+        print_status "WARNING" "A value is required" >&2
     done
 }
 
@@ -695,12 +683,12 @@ prompt_secret_nonempty() {
     local value=""
     while true; do
         read -r -s -p "$prompt_text" value
-        echo
+        echo >&2
         if [ -n "$value" ]; then
             echo "$value"
             return 0
         fi
-        print_status "WARNING" "A value is required"
+        print_status "WARNING" "A value is required" >&2
     done
 }
 
@@ -710,6 +698,8 @@ prompt_storage_backend_config() {
             print_status "INFO" "Using local SeaweedFS backend"
             ;;
         wasabi)
+            echo "  (Endpoint will be constructed as: https://s3.<region>.wasabisys.com)"
+            echo "  (Example regions: us-east-1, us-east-2, us-central-1, us-west-1, eu-central-1, eu-west-1)"
             S3_REGION=$(prompt_nonempty "Wasabi region: ")
             S3_ACCESS_KEY=$(prompt_nonempty "Wasabi access key: ")
             S3_SECRET_KEY=$(prompt_secret_nonempty "Wasabi secret key: ")
@@ -1083,12 +1073,7 @@ echo "========================================"
 generate_crypto_material
 
 echo
-echo -e "${CYAN}Step 7: Verify external storage if needed${NC}"
-echo "========================================="
-verify_storage_backend_roundtrip
-
-echo
-echo -e "${CYAN}Step 8: Setup storage services${NC}"
+echo -e "${CYAN}Step 7: Setup storage services${NC}"
 echo "=============================="
 setup_storage_services
 
@@ -1125,15 +1110,16 @@ else
 fi
 
 print_status "INFO" "Service status:"
-seaweedfs_status="skipped"
-if [ "$STORAGE_BACKEND" = "local-seaweedfs" ]; then
-    seaweedfs_status=$(systemctl is-active seaweedfs 2>/dev/null || echo "failed")
-fi
 rqlite_status=$(systemctl is-active rqlite 2>/dev/null || echo "failed")
 arkfile_status=$(systemctl is-active arkfile 2>/dev/null || echo "failed")
 caddy_status=$(systemctl is-active caddy 2>/dev/null || echo "failed")
 
-echo "    SeaweedFS: ${seaweedfs_status}"
+if [ "$STORAGE_BACKEND" = "local-seaweedfs" ]; then
+    seaweedfs_status=$(systemctl is-active seaweedfs 2>/dev/null || echo "failed")
+    echo "    SeaweedFS: ${seaweedfs_status}"
+else
+    echo "    Storage:   ${STORAGE_BACKEND} (external)"
+fi
 echo "    rqlite:    ${rqlite_status}"
 echo "    Arkfile:   ${arkfile_status}"
 echo "    Caddy:     ${caddy_status}"

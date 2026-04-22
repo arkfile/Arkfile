@@ -147,6 +147,17 @@ if [ -z "$STORAGE_PROVIDER" ]; then
     STORAGE_PROVIDER="generic-s3"
 fi
 
+# Determine if storage is local SeaweedFS or external.
+# Local SeaweedFS deployments use STORAGE_PROVIDER=generic-s3 with S3_ENDPOINT pointing to localhost.
+# External providers use non-localhost endpoints or non-generic-s3 provider names.
+IS_LOCAL_SEAWEEDFS=false
+if [ "$STORAGE_PROVIDER" = "generic-s3" ]; then
+    S3_ENDPOINT_VALUE=$(read_secrets_env_value "S3_ENDPOINT")
+    if echo "$S3_ENDPOINT_VALUE" | grep -qE '(localhost|127\.0\.0\.1)'; then
+        IS_LOCAL_SEAWEEDFS=true
+    fi
+fi
+
 print_status "INFO" "Existing deployment detected for: $DOMAIN (storage: $STORAGE_PROVIDER)"
 
 if ! GO_BINARY=$(find_go_binary); then
@@ -167,7 +178,7 @@ echo "  Data:               PRESERVED (not touched)"
 echo "  Config/keys:        PRESERVED (not touched)"
 echo
 echo -e "${YELLOW}This will: rebuild binaries/frontend, stop arkfile+caddy, deploy, restart.${NC}"
-if [ "$STORAGE_PROVIDER" = "generic-s3" ]; then
+if [ "$IS_LOCAL_SEAWEEDFS" = "true" ]; then
     echo -e "${YELLOW}rqlite and seaweedfs will NOT be stopped.${NC}"
 else
     echo -e "${YELLOW}rqlite will NOT be stopped. Storage backend (${STORAGE_PROVIDER}) is external.${NC}"
@@ -388,7 +399,7 @@ print_status "INFO" "Service status:"
 echo "    arkfile:   $(systemctl is-active arkfile 2>/dev/null || echo 'failed')"
 echo "    caddy:     $(systemctl is-active caddy 2>/dev/null || echo 'failed')"
 echo "    rqlite:    $(systemctl is-active rqlite 2>/dev/null || echo 'unknown')"
-if [ "$STORAGE_PROVIDER" = "generic-s3" ]; then
+if [ "$IS_LOCAL_SEAWEEDFS" = "true" ]; then
     echo "    seaweedfs: $(systemctl is-active seaweedfs 2>/dev/null || echo 'unknown')"
 else
     echo "    storage:   ${STORAGE_PROVIDER} (external)"

@@ -203,6 +203,13 @@ func main() {
 		log.Fatalf("Failed to initialize storage: %v", err)
 	}
 
+	// Run storage verification in the background (logs result, does not block startup)
+	storageProvider := os.Getenv("STORAGE_PROVIDER")
+	if storageProvider == "" {
+		storageProvider = "generic-s3"
+	}
+	storage.RunStartupVerification(storageProvider)
+
 	// Check for bootstrap condition (Zero Users)
 	if err := auth.CheckAndGenerateBootstrapToken(database.DB); err != nil {
 		log.Fatalf("Failed to check/generate bootstrap token: %v", err)

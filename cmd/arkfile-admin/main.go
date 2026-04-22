@@ -303,7 +303,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "verify-storage":
-		if err := handleVerifyStorageCommand(args); err != nil {
+		if err := handleVerifyStorageCommand(client, config, args); err != nil {
 			logError("Storage verification failed: %v", err)
 			os.Exit(1)
 		}
@@ -2075,16 +2075,18 @@ EXAMPLES:
 	for i, f := range filesRaw {
 		fm := f.(map[string]interface{})
 		fileID := safeString(fm, "file_id")
+		storageID := safeString(fm, "storage_id")
 		sizeBytes := safeInt64(fm, "size_bytes")
 		chunkCount := safeInt64(fm, "chunk_count")
 		uploadDate := safeString(fm, "upload_date")
 
 		fmt.Println(sep)
 		fmt.Printf("File %d of %d\n", i+1, len(filesRaw))
-		fmt.Printf("  File ID:    %s\n", fileID)
-		fmt.Printf("  Size:       %s\n", formatFileSize(sizeBytes))
-		fmt.Printf("  Chunks:     %d\n", chunkCount)
-		fmt.Printf("  Uploaded:   %s\n", uploadDate)
+		fmt.Printf("  File ID:      %s\n", fileID)
+		fmt.Printf("  Storage ID:   %s\n", storageID)
+		fmt.Printf("  Size:         %s\n", formatFileSize(sizeBytes))
+		fmt.Printf("  Chunks:       %d\n", chunkCount)
+		fmt.Printf("  Uploaded:     %s\n", uploadDate)
 	}
 
 	return nil

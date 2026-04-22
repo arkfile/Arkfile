@@ -186,6 +186,7 @@ func RegisterRoutes() {
 	// System monitoring - admin endpoints (Phase 2: Bridge existing monitoring infrastructure)
 	adminGroup.GET("/system/status", AdminSystemStatus)
 	adminGroup.GET("/system/health", AdminSystemHealth)
+	adminGroup.POST("/system/verify-storage", AdminVerifyStorage)
 	adminGroup.GET("/security/events", AdminSecurityEvents)
 
 	// Development/Testing admin endpoints (gated by ADMIN_DEV_TEST_API_ENABLED)

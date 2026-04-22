@@ -243,22 +243,22 @@ func loadEnvConfig(cfg *Config) error {
 		cfg.Storage.BucketName = os.Getenv("CLOUDFLARE_BUCKET_NAME")
 		cfg.Storage.UseSSL = true
 	case "wasabi":
-		cfg.Storage.Region = os.Getenv("WASABI_REGION")
-		cfg.Storage.AccessKeyID = os.Getenv("WASABI_ACCESS_KEY_ID")
-		cfg.Storage.SecretAccessKey = os.Getenv("WASABI_SECRET_ACCESS_KEY")
-		cfg.Storage.BucketName = os.Getenv("WASABI_BUCKET_NAME")
+		cfg.Storage.Region = os.Getenv("S3_REGION")
+		cfg.Storage.AccessKeyID = os.Getenv("S3_ACCESS_KEY")
+		cfg.Storage.SecretAccessKey = os.Getenv("S3_SECRET_KEY")
+		cfg.Storage.BucketName = os.Getenv("S3_BUCKET")
 		cfg.Storage.UseSSL = true
 	case "vultr":
-		cfg.Storage.Region = os.Getenv("VULTR_REGION")
-		cfg.Storage.AccessKeyID = os.Getenv("VULTR_ACCESS_KEY_ID")
-		cfg.Storage.SecretAccessKey = os.Getenv("VULTR_SECRET_ACCESS_KEY")
-		cfg.Storage.BucketName = os.Getenv("VULTR_BUCKET_NAME")
+		cfg.Storage.Region = os.Getenv("S3_REGION")
+		cfg.Storage.AccessKeyID = os.Getenv("S3_ACCESS_KEY")
+		cfg.Storage.SecretAccessKey = os.Getenv("S3_SECRET_KEY")
+		cfg.Storage.BucketName = os.Getenv("S3_BUCKET")
 		cfg.Storage.UseSSL = true
 	case "aws-s3":
-		cfg.Storage.Region = os.Getenv("AWS_REGION")
-		cfg.Storage.AccessKeyID = os.Getenv("AWS_ACCESS_KEY_ID")
-		cfg.Storage.SecretAccessKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
-		cfg.Storage.BucketName = os.Getenv("AWS_S3_BUCKET_NAME")
+		cfg.Storage.Region = os.Getenv("S3_REGION")
+		cfg.Storage.AccessKeyID = os.Getenv("S3_ACCESS_KEY")
+		cfg.Storage.SecretAccessKey = os.Getenv("S3_SECRET_KEY")
+		cfg.Storage.BucketName = os.Getenv("S3_BUCKET")
 		cfg.Storage.UseSSL = true
 		// Default to us-east-1 if no region specified
 		if cfg.Storage.Region == "" {

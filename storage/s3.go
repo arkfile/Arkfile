@@ -100,6 +100,9 @@ func InitS3() error {
 		accessKey = os.Getenv("BACKBLAZE_KEY_ID")
 		secretKey = os.Getenv("BACKBLAZE_APPLICATION_KEY")
 		bucketName = os.Getenv("BACKBLAZE_BUCKET_NAME")
+	case ProviderAmazonS3:
+		// AWS S3: SDK auto-resolves the endpoint from the region.
+		// No endpoint override, no path-style needed.
 	case ProviderGenericS3:
 		endpointURL = os.Getenv("S3_ENDPOINT")
 		if endpointURL == "" {
