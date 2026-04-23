@@ -249,7 +249,7 @@ func streamExportBundle(c echo.Context, file *models.File) error {
 	totalSize := fixedHeaderSize + int64(len(metaJSON)) + blobSize
 
 	// Open S3 object for streaming
-	s3Object, err := storage.Registry.Primary().GetObject(c.Request().Context(), file.StorageID, storage.GetObjectOptions{})
+	s3Object, _, err := storage.Registry.GetObjectWithFallback(c.Request().Context(), file.StorageID, storage.GetObjectOptions{})
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to open S3 object for export: file_id=%s storage_id=%s err=%v", file.FileID, file.StorageID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve file from storage")

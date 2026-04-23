@@ -107,11 +107,10 @@ func DownloadFileChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk range")
 	}
 
-	// Get the chunk from storage using byte range
-	// GetObjectChunk takes offset and length, not start and end
-	reader, err := storage.Registry.Primary().GetObjectChunk(c.Request().Context(), file.StorageID, startByte, actualChunkSize)
+	// Get the chunk from storage using byte range with three-tier fallback
+	reader, _, err := storage.Registry.GetObjectChunkWithFallback(c.Request().Context(), file.StorageID, startByte, actualChunkSize)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to get chunk %d of file %s (storage_id: %s) from storage provider: %v", chunkIndex, fileID, file.StorageID, err)
+		logging.ErrorLogger.Printf("Failed to get chunk %d of file %s (storage_id: %s) from all providers: %v", chunkIndex, fileID, file.StorageID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve chunk from storage")
 	}
 	defer reader.Close()

@@ -854,8 +854,9 @@ STORAGE MANAGEMENT COMMANDS (Admin API):
     swap-providers        Swap primary and secondary provider roles
     verify-storage        Verify storage connectivity (any provider by --provider-id)
     set-cost              Set monthly cost per TB for a provider
-    list-user-files       List a user's files with storage location indicators
 ```
+
+Note: The existing `list-files` command will be enhanced to include storage location indicators (provider IDs where each file is stored). No separate `list-user-files` command is needed.
 
 ### `storage-status`
 
@@ -1032,23 +1033,25 @@ arkfile-admin set-cost --provider-id wasabi-us-central-1 --cost 7.99
 
 The `--cost` flag accepts a dollar amount (e.g. 7.99) which is converted to cents internally.
 
-### `list-user-files`
+### Enhanced `list-files` Command
 
-Calls a new `GET /api/admin/storage/user-files/:username` endpoint that joins `file_metadata` with `file_storage_locations` to return file listings with storage location indicators.
+The existing `list-files` command is enhanced to include storage location indicators by joining `file_metadata` with `file_storage_locations`. No separate `list-user-files` command is needed -- one command shows all important info for a user's files.
 
 ```
-arkfile-admin list-user-files --username alice12345
+arkfile-admin list-files --username alice12345
 ```
 
-Example output:
+Example output (enhanced with storage locations):
 ```
 Files for alice12345 (3 files, 2.5 GB total):
 
-  FILE_ID         SIZE     TYPE      LOCATIONS
-  abcd1234-...    1.2 GB   account   seaweedfs-local, wasabi-us-central-1
-  efgh5678-...    800 MB   custom    seaweedfs-local, wasabi-us-central-1, backblaze-us-west
-  ijkl9012-...    500 MB   account   seaweedfs-local (not replicated)
+  FILE_ID         SIZE     CHUNKS  TYPE      UPLOADED            LOCATIONS
+  abcd1234-...    1.2 GB   75      account   2026-04-23T18:05Z   wasabi-us-central-1
+  efgh5678-...    800 MB   50      custom    2026-04-22T10:30Z   wasabi-us-central-1, backblaze-us-west
+  ijkl9012-...    500 MB   32      account   2026-04-21T14:15Z   wasabi-us-central-1 (not replicated)
 ```
+
+The LOCATIONS column shows all providers where the file has an `"active"` storage location. When multi-backend is configured and a file is not on all active providers, "(not replicated)" is appended.
 
 ### Admin Login Alerts
 
@@ -1324,7 +1327,9 @@ Verification: Run `dev-reset.sh` and `e2e-test.sh`. Verify `file_storage_locatio
 
 PROGRESS NOTE - 04/22/26 - local deploy/local update are still passing and functional with existing credentials for test wasabi cloud bucket as main (primary and only) storage in the local system
 
-### Phase 4: Stored Blob Hash (Upload Enhancement)
+PROGRESS NOTE - 04/23/26 - Phases 4, 5, 6 (partial), and 7 (partial) implemented in a single session. All code compiles cleanly. Upload/download/delete verified working with Wasabi as single primary provider via local-update.sh. stored_blob_sha256sum is populated on new uploads. file_storage_locations rows are created on upload and cleaned up on delete. Three-tier download fallback is wired up (transparent in single-provider mode). Fixed missing ALTER TABLE for stored_blob_sha256sum migration. Also: consolidated list-user-files into existing list-files command, updated TOTP apps modal.
+
+### Phase 4: Stored Blob Hash (Upload Enhancement) [COMPLETE]
 
 Add the second streaming hash for `stored_blob_sha256sum` during upload.
 
@@ -1334,7 +1339,7 @@ Files changed:
 
 Verification: Upload a file, verify `stored_blob_sha256sum` is populated and differs from `encrypted_file_sha256sum`. All existing tests pass.
 
-### Phase 5: Handler Updates -- Downloads with Fallback
+### Phase 5: Handler Updates -- Downloads with Fallback [COMPLETE]
 
 Update download handlers to use three-tier fallback.
 
@@ -1346,7 +1351,9 @@ Files changed:
 
 Verification: All existing download/share/export tests pass. In single-provider mode, fallback is never triggered.
 
-### Phase 6: Handler Updates -- Uploads with Location Recording
+### Phase 6: Handler Updates -- Uploads with Location Recording [PARTIALLY COMPLETE]
+
+Location recording on upload and provider stats update: done. CopyObjectBetweenProviders and optional replication: deferred to when second provider is configured.
 
 Update upload handlers to record locations and optionally replicate.
 
@@ -1357,7 +1364,9 @@ Files changed:
 
 Verification: Upload a file, confirm `file_storage_locations` row is created. With replication enabled, confirm the blob appears on both providers.
 
-### Phase 7: Handler Updates -- Deletes from All Providers
+### Phase 7: Handler Updates -- Deletes from All Providers [PARTIALLY COMPLETE]
+
+Multi-provider delete with location tracking and stats decrement: done (inline in DeleteFile handler). RemoveObjectAll registry method: not yet extracted (logic is in handler directly).
 
 Update delete handler to remove from all providers with failure tracking.
 
@@ -1390,13 +1399,15 @@ Files changed:
 
 Verification: Test each command against a local deployment with a Wasabi secondary. Test the full provider migration workflow end-to-end.
 
-### Phase 10: Admin Alerts and e2e Test Extensions
+### Phase 10: Admin Alerts, Enhanced list-files, and e2e Test Extensions
 
-Finalize admin login alerts and extend e2e tests.
+Finalize admin login alerts, enhance existing `list-files` with storage locations, and extend e2e tests.
 
 Files changed:
 - `handlers/admin_storage.go` -- Add `alerts/summary` endpoint.
-- `cmd/arkfile-admin/storage_commands.go` -- Add login alert display, `list-user-files` command.
+- `handlers/admin.go` -- Enhance `list-files` API response to include `file_storage_locations` data.
+- `cmd/arkfile-admin/main.go` -- Update `list-files` CLI output to show LOCATIONS column.
+- `cmd/arkfile-admin/storage_commands.go` -- Add login alert display.
 - `scripts/testing/e2e-test.sh` -- Add multi-backend test scenarios.
 
 Verification: Full e2e test suite passes in single-provider and multi-provider modes.

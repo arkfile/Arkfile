@@ -26,8 +26,9 @@ import (
 
 // Global streaming hash state management
 var (
-	streamingHashStates = make(map[string]*StreamingHashState)
-	hashStateMutex      sync.RWMutex
+	streamingHashStates  = make(map[string]*StreamingHashState) // hashes encrypted data only (pre-padding)
+	storedBlobHashStates = make(map[string]*StreamingHashState) // hashes all bytes sent to S3 (including padding)
+	hashStateMutex       sync.RWMutex
 )
 
 // CreateUploadSession initializes a new chunked upload
@@ -240,6 +241,12 @@ func CancelUpload(c echo.Context) error {
 	if err := tx.Commit(); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
 	}
+
+	// Clean up any in-progress hash states for this session
+	hashStateMutex.Lock()
+	delete(streamingHashStates, sessionID)
+	delete(storedBlobHashStates, sessionID)
+	hashStateMutex.Unlock()
 
 	logging.InfoLogger.Printf("Upload canceled: %s, file_id: %s by %s", sessionID, fileID, username)
 
@@ -525,6 +532,22 @@ func UploadChunk(c echo.Context) error {
 			chunkNumber, paddingSize, totalSize, paddedSize)
 	}
 
+	// Update stored blob hash with ALL data sent to S3 (including padding on last chunk).
+	// For non-last chunks uploadData == chunkData, so both hashes see the same bytes.
+	// For the last chunk, this hash additionally includes the padding bytes.
+	hashStateMutex.Lock()
+	blobHashState, blobExists := storedBlobHashStates[sessionID]
+	if !blobExists {
+		blobHashState = NewStreamingHashState(sessionID)
+		storedBlobHashStates[sessionID] = blobHashState
+	}
+	hashStateMutex.Unlock()
+
+	if _, err := blobHashState.WriteChunk(uploadData); err != nil {
+		logging.ErrorLogger.Printf("Failed to update stored blob hash for session %s, chunk %d: %v", sessionID, chunkNumber, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to calculate stored blob hash")
+	}
+
 	// Create a seekable reader from the upload data for S3
 	chunkReader := bytes.NewReader(uploadData)
 
@@ -713,25 +736,35 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error reading chunk data")
 	}
 
-	// Step 4: Get the streaming hash calculated during chunk uploads
+	// Step 4: Get the streaming hashes calculated during chunk uploads
 	hashStateMutex.RLock()
 	hashState, hashExists := streamingHashStates[sessionID]
+	blobHashState, blobHashExists := storedBlobHashStates[sessionID]
 	hashStateMutex.RUnlock()
 
 	var serverCalculatedHash string
 	if hashExists {
-		// Finalize the streaming hash calculation
 		serverCalculatedHash = hashState.FinalizeHash()
-		logging.InfoLogger.Printf("Streaming hash calculated for session %s: %s", sessionID, serverCalculatedHash)
-
-		// Clean up the hash state since upload is completing
-		hashStateMutex.Lock()
-		delete(streamingHashStates, sessionID)
-		hashStateMutex.Unlock()
+		logging.InfoLogger.Printf("Encrypted data hash for session %s: %s", sessionID, serverCalculatedHash)
 	} else {
-		logging.ErrorLogger.Printf("No streaming hash state found for session %s - this should not happen", sessionID)
+		logging.ErrorLogger.Printf("No streaming hash state found for session %s", sessionID)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Hash calculation failed - no streaming state found")
 	}
+
+	var storedBlobHash string
+	if blobHashExists {
+		storedBlobHash = blobHashState.FinalizeHash()
+		logging.InfoLogger.Printf("Stored blob hash for session %s: %s", sessionID, storedBlobHash)
+	} else {
+		logging.ErrorLogger.Printf("No stored blob hash state found for session %s", sessionID)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Blob hash calculation failed - no streaming state found")
+	}
+
+	// Clean up both hash states since upload is completing
+	hashStateMutex.Lock()
+	delete(streamingHashStates, sessionID)
+	delete(storedBlobHashStates, sessionID)
+	hashStateMutex.Unlock()
 
 	// Step 5: Complete the multipart upload in storage.
 	// Padding was already appended to the last chunk during UploadChunk,
@@ -797,16 +830,30 @@ func CompleteUpload(c echo.Context) error {
 	// Create the final file metadata record with chunk info for resumable downloads.
 	// size_bytes = declaredSize (the encrypted ciphertext size, used for chunk byte-range calculations on download).
 	// padded_size = paddedSize (the actual S3 object size, includes crypto-random padding appended to the last chunk).
+	// encrypted_file_sha256sum = hash of encrypted data only (pre-padding).
+	// stored_blob_sha256sum = hash of all bytes stored in S3 (encrypted data + padding).
 	_, err = tx.Exec(`
-		INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_file_sha256sum, encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, encryptedFek, declaredSize, paddedSize, chunkCount, chunkSizeBytes,
+		INSERT INTO file_metadata (file_id, storage_id, owner_username, password_hint, password_type, filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, encrypted_file_sha256sum, stored_blob_sha256sum, encrypted_fek, size_bytes, padded_size, chunk_count, chunk_size_bytes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, storedBlobHash, encryptedFek, declaredSize, paddedSize, chunkCount, chunkSizeBytes,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "file_id") {
 			return echo.NewHTTPError(http.StatusConflict, "File ID conflict occurred")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create file metadata")
+	}
+
+	// Record the file's storage location on the primary provider.
+	if err := models.InsertFileStorageLocation(tx, fileID.String, storage.Registry.PrimaryID(), storageID.String, "active"); err != nil {
+		logging.ErrorLogger.Printf("Failed to insert file_storage_location for file %s on provider %s: %v", fileID.String, storage.Registry.PrimaryID(), err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to record storage location")
+	}
+
+	// Update the primary provider's cached object count and total size.
+	if err := models.IncrementStorageProviderStats(tx, storage.Registry.PrimaryID(), 1, paddedSize); err != nil {
+		logging.ErrorLogger.Printf("Failed to update provider stats for %s: %v", storage.Registry.PrimaryID(), err)
+		// Non-fatal: stats can be recalculated later, don't block the upload
 	}
 
 	// Update user's storage usage with the encrypted data size (not padded).
@@ -850,7 +897,7 @@ func isHexString(s string) bool {
 	return true
 }
 
-// DeleteFile handles file deletion
+// DeleteFile handles file deletion across all storage providers
 func DeleteFile(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 	fileID := c.Param("fileId")
@@ -860,21 +907,27 @@ func DeleteFile(c echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to start transaction")
 	}
-	defer tx.Rollback() // Rollback if not committed
+	defer tx.Rollback()
 
-	// Verify file ownership and get file size and storage_id
+	// Verify file ownership and get file size, padded size, and storage_id
 	// Note: rqlite returns numbers as float64, so we scan into float64 and convert
 	var ownerUsername string
 	var storageID string
 	var fileSizeF float64
+	var paddedSizeF sql.NullFloat64
 	err = tx.QueryRow(
-		"SELECT owner_username, storage_id, size_bytes FROM file_metadata WHERE file_id = ?",
+		"SELECT owner_username, storage_id, size_bytes, padded_size FROM file_metadata WHERE file_id = ?",
 		fileID,
-	).Scan(&ownerUsername, &storageID, &fileSizeF)
+	).Scan(&ownerUsername, &storageID, &fileSizeF, &paddedSizeF)
 	fileSize := int64(fileSizeF)
 
+	// paddedSize is used for provider stats (actual S3 object size)
+	paddedSize := fileSize
+	if paddedSizeF.Valid {
+		paddedSize = int64(paddedSizeF.Float64)
+	}
+
 	if err != nil {
-		// If there is any error (including sql.ErrNoRows), treat it as 'not found'.
 		if err != sql.ErrNoRows {
 			logging.ErrorLogger.Printf("Database error checking file ownership for deletion: %v", err)
 		}
@@ -886,28 +939,59 @@ func DeleteFile(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized to delete this file")
 	}
 
-	// Remove from object storage using storage ID
-	err = storage.Registry.Primary().RemoveObject(c.Request().Context(), storageID, storage.RemoveObjectOptions{})
+	// Query all active storage locations for this file
+	locations, err := models.GetActiveFileStorageLocations(database.DB, fileID)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to remove file from storage via provider: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete file from storage")
+		logging.ErrorLogger.Printf("Failed to query storage locations for file %s: %v", fileID, err)
+		// Fall through to primary-only delete if location query fails
+		locations = nil
 	}
 
-	// Delete metadata from database
+	if len(locations) > 0 {
+		// Multi-provider delete: attempt removal from each active provider
+		for _, loc := range locations {
+			provider := storage.Registry.GetProvider(loc.ProviderID)
+			if provider == nil {
+				logging.ErrorLogger.Printf("Provider %s not found in registry for file %s, marking delete_failed", loc.ProviderID, fileID)
+				models.UpdateFileStorageLocationStatus(database.DB, fileID, loc.ProviderID, "delete_failed")
+				continue
+			}
+
+			removeErr := provider.RemoveObject(c.Request().Context(), loc.StorageID, storage.RemoveObjectOptions{})
+			if removeErr != nil {
+				logging.ErrorLogger.Printf("Failed to delete file %s from provider %s: %v", fileID, loc.ProviderID, removeErr)
+				models.UpdateFileStorageLocationStatus(database.DB, fileID, loc.ProviderID, "delete_failed")
+			} else {
+				models.UpdateFileStorageLocationStatus(database.DB, fileID, loc.ProviderID, "deleted")
+				// Decrement provider stats
+				if statsErr := models.IncrementStorageProviderStats(database.DB, loc.ProviderID, -1, -paddedSize); statsErr != nil {
+					logging.ErrorLogger.Printf("Failed to decrement provider stats for %s: %v", loc.ProviderID, statsErr)
+				}
+			}
+		}
+	} else {
+		// No location records (pre-existing file or query failed): delete from primary
+		err = storage.Registry.Primary().RemoveObject(c.Request().Context(), storageID, storage.RemoveObjectOptions{})
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to remove file from primary storage: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete file from storage")
+		}
+	}
+
+	// Delete metadata from database (cascades to file_storage_locations via FK)
 	_, err = tx.Exec("DELETE FROM file_metadata WHERE file_id = ?", fileID)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to delete file metadata: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete file metadata")
 	}
 
-	// Update user's storage usage (reduce by file size)
+	// Update user's storage usage (reduce by encrypted data size, not padded)
 	user, err := models.GetUserByUsername(tx, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get user: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage usage")
 	}
 
-	// Use negative value to reduce storage usage
 	if err := user.UpdateStorageUsage(tx, -fileSize); err != nil {
 		logging.ErrorLogger.Printf("Failed to update storage usage: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update storage usage")
@@ -925,10 +1009,8 @@ func DeleteFile(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "File deleted successfully",
 		"storage": map[string]interface{}{
-			// Use the user.TotalStorageBytes already updated in memory by UpdateStorageUsage
-			"total_bytes": user.TotalStorageBytes,
-			"limit_bytes": user.StorageLimitBytes,
-			// Calculate available based on the updated total
+			"total_bytes":     user.TotalStorageBytes,
+			"limit_bytes":     user.StorageLimitBytes,
 			"available_bytes": user.StorageLimitBytes - user.TotalStorageBytes,
 		},
 	})

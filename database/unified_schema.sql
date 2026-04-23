@@ -438,6 +438,7 @@ CREATE TABLE IF NOT EXISTS admin_tasks (
 -- rqlite/SQLite ADD COLUMN is a no-op if column already exists in the CREATE TABLE above,
 -- but this handles deployments created before stored_blob_sha256sum was in the schema.
 -- Note: This may produce a harmless "duplicate column name" error on fresh installs.
+ALTER TABLE file_metadata ADD COLUMN stored_blob_sha256sum CHAR(64);
 
 -- =====================================================
 -- PHASE 13: INDEXES FOR PERFORMANCE

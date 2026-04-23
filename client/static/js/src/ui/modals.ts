@@ -308,16 +308,18 @@ export function showTOTPAppsModal(): HTMLElement {
 
   const appsData = {
     mobile: [
-      { name: "Aegis Authenticator", platform: "Android", desc: "Encrypted backups", url: "https://github.com/beemdevelopment/Aegis" },
-      { name: "FreeOTP+", platform: "Android/iOS", desc: "Simple & reliable", url: "https://github.com/helloworld1/FreeOTP-Plus" },
-      { name: "Tofu", platform: "iOS", desc: "Native iOS experience", url: "https://github.com/iKenndac/Tofu" }
+      { name: "Aegis Authenticator", platform: "Android", desc: "Open source (GPL-3.0)", url: "https://github.com/beemdevelopment/Aegis" },
+      { name: "Ente Auth", platform: "Android/iOS", desc: "Open source (AGPL-3.0)", url: "https://github.com/ente-io/ente" },
+      { name: "Bitwarden Authenticator", platform: "Android/iOS", desc: "Open source (GPL-3.0)", url: "https://github.com/bitwarden/authenticator-android" },
+      { name: "Tofu", platform: "iOS", desc: "Open source (Apache 2.0)", url: "https://github.com/iKenndac/Tofu" },
+      { name: "FreeOTP+", platform: "Android", desc: "Open source (Apache 2.0)", url: "https://github.com/helloworld1/FreeOTP-Plus" }
     ],
     desktop: [
-      { name: "KeePassXC", desc: "Password manager with TOTP", url: "https://keepassxc.org" },
-      { name: "Authenticator", platform: "GNOME", desc: "Linux desktop app", url: "https://gitlab.gnome.org/World/Authenticator" }
+      { name: "KeePassXC", desc: "Open source (GPL-3.0)", url: "https://keepassxc.org" },
+      { name: "Authenticator", platform: "Linux", desc: "Open source (GPL-3.0)", url: "https://gitlab.gnome.org/World/Authenticator" }
     ],
     advanced: [
-      { name: "oath-toolkit", desc: "Command-line tool", url: "https://gitlab.com/oath-toolkit/oath-toolkit" }
+      { name: "oath-toolkit", desc: "Open source (GPL-3.0+)", url: "https://gitlab.com/oath-toolkit/oath-toolkit" }
     ]
   };
 
@@ -362,7 +364,7 @@ export function showTOTPAppsModal(): HTMLElement {
     <div style="margin-bottom: 20px;">
       ${createAppsList(appsData.mobile, '', 'Mobile (Recommended)')}
       ${createAppsList(appsData.desktop, '', 'Desktop')}
-      ${createAppsList(appsData.advanced, '️', 'Advanced')}
+      ${createAppsList(appsData.advanced, '', 'Advanced')}
       <div style="margin-top: 20px; padding: 15px; background: color-mix(in srgb, var(--current-2) 15%, var(--depth-3)); border-radius: 4px; font-size: 14px; color: var(--current-2);">
         <strong>Tip:</strong> All listed apps are fully open source and respect your privacy.
       </div>
