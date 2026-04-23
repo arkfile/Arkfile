@@ -35,14 +35,15 @@ type Config struct {
 	} `json:"database"`
 
 	Storage struct {
-		Provider        string `json:"provider"` // "generic-s3", "backblaze", "wasabi", "vultr", "aws-s3"
-		Endpoint        string `json:"endpoint"`
-		AccessKeyID     string `json:"access_key_id"`
-		SecretAccessKey string `json:"secret_access_key"`
-		BucketName      string `json:"bucket_name"`
-		Region          string `json:"region"`
-		UseSSL          bool   `json:"use_ssl"`
-		ForcePathStyle  bool   `json:"force_path_style"` // Required for many self-hosted S3 (SeaweedFS, Ceph, MinIO)
+		Provider                string `json:"provider"` // "generic-s3", "backblaze", "wasabi", "vultr", "aws-s3"
+		Endpoint                string `json:"endpoint"`
+		AccessKeyID             string `json:"access_key_id"`
+		SecretAccessKey         string `json:"secret_access_key"`
+		BucketName              string `json:"bucket_name"`
+		Region                  string `json:"region"`
+		UseSSL                  bool   `json:"use_ssl"`
+		ForcePathStyle          bool   `json:"force_path_style"`          // Required for many self-hosted S3 (SeaweedFS, Ceph, MinIO)
+		EnableUploadReplication bool   `json:"enable_upload_replication"` // When true and a secondary provider is configured, new uploads are auto-replicated
 	} `json:"storage"`
 
 	Security struct {
@@ -346,6 +347,14 @@ func loadEnvConfig(cfg *Config) error {
 	if requireApproval := os.Getenv("REQUIRE_APPROVAL"); requireApproval != "" {
 		if approval, err := strconv.ParseBool(requireApproval); err == nil {
 			cfg.Deployment.RequireApproval = approval
+		}
+	}
+
+	// Upload replication: when true and a secondary provider is configured,
+	// newly uploaded files are automatically replicated to the secondary provider.
+	if enableReplication := os.Getenv("ENABLE_UPLOAD_REPLICATION"); enableReplication != "" {
+		if repl, err := strconv.ParseBool(enableReplication); err == nil {
+			cfg.Storage.EnableUploadReplication = repl
 		}
 	}
 

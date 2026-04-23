@@ -54,6 +54,20 @@ NETWORK COMMANDS (Admin API - localhost only):
     security-events   View recent security events
     export-file       Export a user's encrypted file as .arkbackup bundle
 
+STORAGE MANAGEMENT COMMANDS (Admin API):
+    storage-status        Show configured providers, file counts, sync status, and costs
+    storage-sync-status   Detailed breakdown of file locations and replication gaps
+    copy-all              Copy all files from one provider to another
+    copy-user-files       Copy all files for a specific user between providers
+    copy-file             Copy a single file between providers
+    task-status           Check status of a background storage task
+    cancel-task           Cancel a running background storage task
+    set-primary           Promote a provider to primary (new uploads go here)
+    set-secondary         Promote/demote a provider to secondary (auto-replication target)
+    set-tertiary          Demote a provider to tertiary (manual-only)
+    swap-providers        Swap primary and secondary provider roles
+    set-cost              Set monthly cost per TB for a provider
+
 SYSTEM COMMANDS:
     system-status     System status overview
     health-check      System health check
@@ -305,6 +319,68 @@ func main() {
 	case "verify-storage":
 		if err := handleVerifyStorageCommand(client, config, args); err != nil {
 			logError("Storage verification failed: %v", err)
+			os.Exit(1)
+		}
+
+	// Storage management commands
+	case "storage-status":
+		if err := handleStorageStatusCommand(client, config, args); err != nil {
+			logError("Storage status failed: %v", err)
+			os.Exit(1)
+		}
+	case "storage-sync-status":
+		if err := handleStorageSyncStatusCommand(client, config, args); err != nil {
+			logError("Storage sync status failed: %v", err)
+			os.Exit(1)
+		}
+	case "copy-all":
+		if err := handleCopyAllCommand(client, config, args); err != nil {
+			logError("Copy all failed: %v", err)
+			os.Exit(1)
+		}
+	case "copy-user-files":
+		if err := handleCopyUserFilesCommand(client, config, args); err != nil {
+			logError("Copy user files failed: %v", err)
+			os.Exit(1)
+		}
+	case "copy-file":
+		if err := handleCopyFileCommand(client, config, args); err != nil {
+			logError("Copy file failed: %v", err)
+			os.Exit(1)
+		}
+	case "task-status":
+		if err := handleTaskStatusCommand(client, config, args); err != nil {
+			logError("Task status failed: %v", err)
+			os.Exit(1)
+		}
+	case "cancel-task":
+		if err := handleCancelTaskCommand(client, config, args); err != nil {
+			logError("Cancel task failed: %v", err)
+			os.Exit(1)
+		}
+	case "set-primary":
+		if err := handleSetPrimaryCommand(client, config, args); err != nil {
+			logError("Set primary failed: %v", err)
+			os.Exit(1)
+		}
+	case "set-secondary":
+		if err := handleSetSecondaryCommand(client, config, args); err != nil {
+			logError("Set secondary failed: %v", err)
+			os.Exit(1)
+		}
+	case "set-tertiary":
+		if err := handleSetTertiaryCommand(client, config, args); err != nil {
+			logError("Set tertiary failed: %v", err)
+			os.Exit(1)
+		}
+	case "swap-providers":
+		if err := handleSwapProvidersCommand(client, config, args); err != nil {
+			logError("Swap providers failed: %v", err)
+			os.Exit(1)
+		}
+	case "set-cost":
+		if err := handleSetCostCommand(client, config, args); err != nil {
+			logError("Set cost failed: %v", err)
 			os.Exit(1)
 		}
 
@@ -903,6 +979,9 @@ EXAMPLES:
 
 	fmt.Printf("Admin login successful for user: %s\n", *usernameFlag)
 	fmt.Printf("Session expires: %s\n", session.ExpiresAt.Format("2006-01-02 15:04:05"))
+
+	// Check for storage alerts and display after login
+	displayLoginAlerts(client, session.AccessToken)
 	fmt.Printf("Administrative privileges active\n")
 
 	return nil
@@ -1006,15 +1085,15 @@ EXAMPLES:
 			fmt.Println()
 		}
 	} else {
-		fmt.Printf("  %-20s %-10s %-6s %-5s %-6s %-12s %-7s %s\n",
-			"USERNAME", "STATUS", "ADMIN", "TOTP", "FILES", "STORAGE", "USAGE", "REGISTERED")
-		fmt.Printf("  %-20s %-10s %-6s %-5s %-6s %-12s %-7s %s\n",
-			strings.Repeat("-", 20), strings.Repeat("-", 10), strings.Repeat("-", 6),
-			strings.Repeat("-", 5), strings.Repeat("-", 6), strings.Repeat("-", 12),
-			strings.Repeat("-", 7), strings.Repeat("-", 10))
-
-		for _, userData := range usersData {
+		for i, userData := range usersData {
 			userMap := userData.(map[string]interface{})
+			if i > 0 {
+				fmt.Println()
+			}
+			fmt.Printf("USERNAME: %s\n", userMap["username"])
+			fmt.Printf("  %-10s %-6s %-5s %-6s %-12s %-7s %s\n",
+				"STATUS", "ADMIN", "TOTP", "FILES", "STORAGE", "USAGE", "REGISTERED")
+
 			status := statusStr(userMap)
 			adminStr := boolYesNo(safeBool(userMap, "is_admin"))
 			totpStr := boolYesNo(safeBool(userMap, "totp_enabled"))
@@ -1026,8 +1105,8 @@ EXAMPLES:
 			usagePercent := safeFloat64(userMap, "usage_percent")
 			regDate := safeString(userMap, "registration_date")
 
-			fmt.Printf("  %-20s %-10s %-6s %-5s %-6d %-12s %-7s %s\n",
-				userMap["username"], status, adminStr, totpStr,
+			fmt.Printf("  %-10s %-6s %-5s %-6d %-12s %-7s %s\n",
+				status, adminStr, totpStr,
 				fileCount, storageReadable, fmt.Sprintf("%.1f%%", usagePercent), regDate)
 		}
 	}
@@ -2079,6 +2158,21 @@ EXAMPLES:
 		sizeBytes := safeInt64(fm, "size_bytes")
 		chunkCount := safeInt64(fm, "chunk_count")
 		uploadDate := safeString(fm, "upload_date")
+		passwordType := safeString(fm, "password_type")
+
+		// Parse storage locations from API response
+		var locationStrs []string
+		if locsRaw, ok := fm["locations"].([]interface{}); ok {
+			for _, loc := range locsRaw {
+				if s, ok := loc.(string); ok && s != "" {
+					locationStrs = append(locationStrs, s)
+				}
+			}
+		}
+		locationsDisplay := "(none)"
+		if len(locationStrs) > 0 {
+			locationsDisplay = strings.Join(locationStrs, ", ")
+		}
 
 		fmt.Println(sep)
 		fmt.Printf("File %d of %d\n", i+1, len(filesRaw))
@@ -2086,7 +2180,9 @@ EXAMPLES:
 		fmt.Printf("  Storage ID:   %s\n", storageID)
 		fmt.Printf("  Size:         %s\n", formatFileSize(sizeBytes))
 		fmt.Printf("  Chunks:       %d\n", chunkCount)
+		fmt.Printf("  Type:         %s\n", passwordType)
 		fmt.Printf("  Uploaded:     %s\n", uploadDate)
+		fmt.Printf("  Locations:    %s\n", locationsDisplay)
 	}
 
 	return nil

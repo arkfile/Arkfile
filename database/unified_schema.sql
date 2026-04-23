@@ -435,10 +435,8 @@ CREATE TABLE IF NOT EXISTS admin_tasks (
 );
 
 -- Additive column for existing deployments: SHA-256 of the complete S3 object (encrypted data + padding).
--- rqlite/SQLite ADD COLUMN is a no-op if column already exists in the CREATE TABLE above,
--- but this handles deployments created before stored_blob_sha256sum was in the schema.
--- Note: This may produce a harmless "duplicate column name" error on fresh installs.
-ALTER TABLE file_metadata ADD COLUMN stored_blob_sha256sum CHAR(64);
+-- Migration for stored_blob_sha256sum is handled in Go startup code (main.go)
+-- to gracefully handle both fresh installs and existing deployments.
 
 -- =====================================================
 -- PHASE 13: INDEXES FOR PERFORMANCE

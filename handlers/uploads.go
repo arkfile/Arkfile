@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	cryptoRand "crypto/rand"
 	"database/sql"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/config"
 	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
@@ -874,6 +876,10 @@ func CompleteUpload(c echo.Context) error {
 	logging.InfoLogger.Printf("Upload completed: %s, file_id: %s by %s (size: %d bytes)", sessionID, fileID.String, username, actualStoredSize)
 	database.LogUserAction(username, "uploaded", fileID.String)
 
+	// Background replication to secondary provider (if enabled and configured).
+	// The upload response is returned immediately; replication happens asynchronously.
+	replicateToSecondary(fileID.String, storageID.String, paddedSize)
+
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message":               "File uploaded successfully",
 		"file_id":               fileID.String,
@@ -1014,4 +1020,62 @@ func DeleteFile(c echo.Context) error {
 			"available_bytes": user.StorageLimitBytes - user.TotalStorageBytes,
 		},
 	})
+}
+
+// replicateToSecondary kicks off a background goroutine to copy a newly uploaded
+// file from the primary provider to the secondary provider. This is a no-op when
+// ENABLE_UPLOAD_REPLICATION is false or no secondary provider is configured.
+// The function returns immediately; replication status is tracked in
+// file_storage_locations (pending -> active or failed).
+func replicateToSecondary(fileID, storageID string, paddedSize int64) {
+	cfg, err := config.LoadConfig()
+	if err != nil || !cfg.Storage.EnableUploadReplication {
+		return
+	}
+	if !storage.Registry.HasSecondary() {
+		return
+	}
+
+	secondaryID := storage.Registry.SecondaryID()
+
+	// Insert a "pending" location row for the secondary provider
+	if err := models.InsertFileStorageLocation(database.DB, fileID, secondaryID, storageID, "pending"); err != nil {
+		logging.ErrorLogger.Printf("Replication: failed to insert pending location for file %s on %s: %v", fileID, secondaryID, err)
+		return
+	}
+
+	go func() {
+		ctx := context.Background()
+
+		copyHash, copyErr := storage.Registry.CopyObjectBetweenProviders(
+			ctx,
+			storageID,
+			storage.Registry.Primary(),
+			storage.Registry.Secondary(),
+			paddedSize,
+		)
+
+		if copyErr != nil {
+			logging.ErrorLogger.Printf("Replication: failed to copy file %s to %s: %v", fileID, secondaryID, copyErr)
+			models.UpdateFileStorageLocationStatus(database.DB, fileID, secondaryID, "failed")
+			return
+		}
+
+		// Verify hash if stored_blob_sha256sum is available
+		var expectedHash sql.NullString
+		database.DB.QueryRow("SELECT stored_blob_sha256sum FROM file_metadata WHERE file_id = ?", fileID).Scan(&expectedHash)
+		if expectedHash.Valid && expectedHash.String != "" && copyHash != expectedHash.String {
+			logging.ErrorLogger.Printf("Replication: hash mismatch for file %s on %s (expected %s, got %s)", fileID, secondaryID, expectedHash.String, copyHash)
+			models.UpdateFileStorageLocationStatus(database.DB, fileID, secondaryID, "failed")
+			return
+		}
+
+		// Mark as active and update provider stats
+		models.UpdateFileStorageLocationStatus(database.DB, fileID, secondaryID, "active")
+		if err := models.IncrementStorageProviderStats(database.DB, secondaryID, 1, paddedSize); err != nil {
+			logging.ErrorLogger.Printf("Replication: failed to update stats for %s: %v", secondaryID, err)
+		}
+
+		logging.InfoLogger.Printf("Replication: file %s copied to %s (hash: %s)", fileID, secondaryID, copyHash)
+	}()
 }

@@ -189,6 +189,22 @@ func RegisterRoutes() {
 	adminGroup.POST("/system/verify-storage", AdminVerifyStorage)
 	adminGroup.GET("/security/events", AdminSecurityEvents)
 
+	// Storage management - admin endpoints (multi-backend)
+	adminGroup.GET("/storage/status", AdminStorageStatus)
+	adminGroup.GET("/storage/sync-status", AdminSyncStatus)
+	adminGroup.POST("/storage/copy-all", AdminCopyAll)
+	adminGroup.POST("/storage/copy-user-files", AdminCopyUserFiles)
+	adminGroup.POST("/storage/copy-file", AdminCopyFile)
+	adminGroup.GET("/storage/task/:taskId", AdminTaskStatus)
+	adminGroup.POST("/storage/cancel-task/:taskId", AdminCancelTask)
+	adminGroup.POST("/storage/set-primary", AdminSetPrimary)
+	adminGroup.POST("/storage/set-secondary", AdminSetSecondary)
+	adminGroup.POST("/storage/set-tertiary", AdminSetTertiary)
+	adminGroup.POST("/storage/swap-providers", AdminSwapProviders)
+	adminGroup.POST("/storage/verify-storage", AdminVerifyStorage)
+	adminGroup.POST("/storage/set-cost", AdminSetCost)
+	adminGroup.GET("/alerts/summary", AdminAlertsSummary)
+
 	// Development/Testing admin endpoints (gated by ADMIN_DEV_TEST_API_ENABLED)
 	// SECURITY: These endpoints are ONLY for development and testing
 	if isDevTestAdminAPIEnabled() {

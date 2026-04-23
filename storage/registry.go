@@ -2,10 +2,26 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
 )
+
+// CopyMultipartPartSize is the part size used for multipart uploads during
+// cross-provider copy operations. This is independent of the client-side
+// encryption chunk size (which is optimized for encrypt/decrypt streaming).
+// Copy operations move raw S3 data, so larger parts reduce API calls and
+// improve throughput. Adjust this value if copy performance needs tuning.
+// Current value: 64 MB.
+const CopyMultipartPartSize = 64 * 1024 * 1024
+
+// CopyMultipartThreshold is the object size above which cross-provider copies
+// use multipart upload on the destination instead of a single PutObject call.
+// Objects at or below this size use a single PUT. Adjust alongside
+// CopyMultipartPartSize if copy behavior needs tuning. Current value: 100 MB.
+const CopyMultipartThreshold = 100 * 1024 * 1024
 
 // ProviderRegistry holds references to the primary and optional secondary/tertiary
 // ObjectStorageProvider instances. It replaces the single global Provider as the
@@ -132,6 +148,90 @@ func (r *ProviderRegistry) GetObjectWithFallback(ctx context.Context, objectName
 
 	// Single provider mode, just return the primary error
 	return nil, "", primaryErr
+}
+
+// CopyObjectBetweenProviders streams data from source to destination S3 without
+// writing to disk. A SHA-256 hash is computed during the stream via TeeReader for
+// integrity verification against stored_blob_sha256sum. Returns the computed
+// SHA-256 hex string and any error.
+//
+// For objects <= CopyMultipartThreshold (100 MB), a single PutObject call is used.
+// For larger objects, multipart upload is used with CopyMultipartPartSize (64 MB) parts.
+func (r *ProviderRegistry) CopyObjectBetweenProviders(
+	ctx context.Context,
+	objectName string,
+	source ObjectStorageProvider,
+	destination ObjectStorageProvider,
+	objectSize int64,
+) (string, error) {
+	// Get the full object from source
+	obj, err := source.GetObject(ctx, objectName, GetObjectOptions{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get object from source: %w", err)
+	}
+	defer obj.Close()
+
+	// Wrap source reader with SHA-256 TeeReader for single-pass hash verification
+	hasher := sha256.New()
+	hashingReader := io.TeeReader(obj, hasher)
+
+	if objectSize <= CopyMultipartThreshold {
+		// Small object: single PUT
+		_, err = destination.PutObject(ctx, objectName, hashingReader, objectSize, PutObjectOptions{
+			ContentType: "application/octet-stream",
+		})
+		if err != nil {
+			return "", fmt.Errorf("failed to put object to destination: %w", err)
+		}
+	} else {
+		// Large object: multipart upload on destination
+		uploadID, err := destination.InitiateMultipartUpload(ctx, objectName, map[string]string{
+			"copy-source": "cross-provider-copy",
+		})
+		if err != nil {
+			return "", fmt.Errorf("failed to initiate multipart upload on destination: %w", err)
+		}
+
+		var parts []CompletePart
+		partNumber := 1
+		remaining := objectSize
+
+		for remaining > 0 {
+			// Check for cancellation between parts
+			if ctx.Err() != nil {
+				destination.AbortMultipartUpload(ctx, objectName, uploadID)
+				return "", ctx.Err()
+			}
+
+			partSize := int64(CopyMultipartPartSize)
+			if remaining < partSize {
+				partSize = remaining
+			}
+
+			// Read exactly partSize bytes via LimitReader so UploadPart gets
+			// the correct Content-Length. The TeeReader feeds bytes to the hasher
+			// as they flow through.
+			partReader := io.LimitReader(hashingReader, partSize)
+
+			part, err := destination.UploadPart(ctx, objectName, uploadID, partNumber, partReader, partSize)
+			if err != nil {
+				destination.AbortMultipartUpload(ctx, objectName, uploadID)
+				return "", fmt.Errorf("failed to upload part %d to destination: %w", partNumber, err)
+			}
+
+			parts = append(parts, part)
+			partNumber++
+			remaining -= partSize
+		}
+
+		if err := destination.CompleteMultipartUpload(ctx, objectName, uploadID, parts); err != nil {
+			return "", fmt.Errorf("failed to complete multipart upload on destination: %w", err)
+		}
+	}
+
+	// Finalize hash
+	hashHex := hex.EncodeToString(hasher.Sum(nil))
+	return hashHex, nil
 }
 
 // GetObjectChunkWithFallback attempts chunked GET from primary, then secondary,

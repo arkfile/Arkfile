@@ -203,8 +203,16 @@ func main() {
 		log.Fatalf("Failed to initialize storage: %v", err)
 	}
 
+	// Safe migration: add stored_blob_sha256sum column if missing (for existing deployments).
+	// Handles databases created before the column was added to the CREATE TABLE definition.
+	// Silently ignored if the column already exists (fresh installs).
+	runSchemaMigrations()
+
 	// Register storage providers in the database and backfill location records
 	registerAndBackfillStorageProviders()
+
+	// Initialize background task runner for admin copy operations
+	handlers.InitTaskRunner(2)
 
 	// Run storage verification in the background (logs result, does not block startup)
 	storageProvider := os.Getenv("STORAGE_PROVIDER")
@@ -344,6 +352,37 @@ func main() {
 	log.Printf("Starting HTTP server on port %s", port)
 	if err := e.Start(":" + port); err != nil {
 		logging.ErrorLogger.Printf("Failed to start HTTP server: %v", err)
+	}
+}
+
+// runSchemaMigrations applies additive column migrations that cannot be safely included
+// in the unified_schema.sql file (because ALTER TABLE ADD COLUMN fails if the column
+// already exists, and rqlite treats that as a fatal error when executing the schema as
+// a single operation). Each migration is attempted individually and errors for
+// already-existing columns are silently ignored.
+func runSchemaMigrations() {
+	migrations := []struct {
+		description string
+		sql         string
+	}{
+		{
+			description: "Add stored_blob_sha256sum to file_metadata",
+			sql:         "ALTER TABLE file_metadata ADD COLUMN stored_blob_sha256sum CHAR(64)",
+		},
+	}
+
+	for _, m := range migrations {
+		_, err := database.DB.Exec(m.sql)
+		if err != nil {
+			errStr := err.Error()
+			if strings.Contains(errStr, "duplicate column") {
+				log.Printf("Migration: %s (already applied)", m.description)
+			} else {
+				log.Printf("Migration: %s failed: %v", m.description, err)
+			}
+		} else {
+			log.Printf("Migration: %s applied successfully", m.description)
+		}
 	}
 }
 

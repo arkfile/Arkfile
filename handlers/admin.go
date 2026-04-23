@@ -1134,11 +1134,18 @@ func AdminListUserFiles(c echo.Context) error {
 		return JSONError(c, http.StatusNotFound, "User not found")
 	}
 
+	// LEFT JOIN with file_storage_locations to include provider IDs per file.
+	// GROUP_CONCAT aggregates all active provider IDs into a comma-separated string.
 	rows, err := database.DB.Query(`
-		SELECT file_id, storage_id, size_bytes, chunk_count, upload_date
-		FROM file_metadata
-		WHERE owner_username = ?
-		ORDER BY upload_date DESC`, targetUsername)
+		SELECT fm.file_id, fm.storage_id, fm.size_bytes, fm.chunk_count, fm.upload_date,
+		       fm.password_type,
+		       COALESCE(GROUP_CONCAT(fsl.provider_id), '') AS locations
+		FROM file_metadata fm
+		LEFT JOIN file_storage_locations fsl
+			ON fm.file_id = fsl.file_id AND fsl.status = 'active'
+		WHERE fm.owner_username = ?
+		GROUP BY fm.file_id
+		ORDER BY fm.upload_date DESC`, targetUsername)
 	if err != nil {
 		logging.ErrorLogger.Printf("Admin %s failed to list files for %s: %v", adminUsername, targetUsername, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to list user files")
@@ -1147,18 +1154,27 @@ func AdminListUserFiles(c echo.Context) error {
 
 	var files []map[string]interface{}
 	for rows.Next() {
-		var fileID, storageID, uploadDate string
+		var fileID, storageID, uploadDate, passwordType, locationsStr string
 		var sizeBytesRaw, chunkCountRaw interface{}
-		if err := rows.Scan(&fileID, &storageID, &sizeBytesRaw, &chunkCountRaw, &uploadDate); err != nil {
+		if err := rows.Scan(&fileID, &storageID, &sizeBytesRaw, &chunkCountRaw, &uploadDate, &passwordType, &locationsStr); err != nil {
 			logging.ErrorLogger.Printf("Admin %s: scan error listing files for %s: %v", adminUsername, targetUsername, err)
 			continue
 		}
+
+		// Parse comma-separated provider IDs into a string slice
+		var locations []string
+		if locationsStr != "" {
+			locations = strings.Split(locationsStr, ",")
+		}
+
 		files = append(files, map[string]interface{}{
-			"file_id":     fileID,
-			"storage_id":  storageID,
-			"size_bytes":  toInt64(sizeBytesRaw),
-			"chunk_count": toInt64(chunkCountRaw),
-			"upload_date": uploadDate,
+			"file_id":       fileID,
+			"storage_id":    storageID,
+			"size_bytes":    toInt64(sizeBytesRaw),
+			"chunk_count":   toInt64(chunkCountRaw),
+			"upload_date":   uploadDate,
+			"password_type": passwordType,
+			"locations":     locations,
 		})
 	}
 
