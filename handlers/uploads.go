@@ -1053,6 +1053,7 @@ func replicateToSecondary(fileID, storageID string, paddedSize int64) {
 			storage.Registry.Primary(),
 			storage.Registry.Secondary(),
 			paddedSize,
+			nil,
 		)
 
 		if copyErr != nil {

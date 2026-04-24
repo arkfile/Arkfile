@@ -412,6 +412,14 @@ FLAGS:
 		if bytesCopied > 0 {
 			fmt.Printf("  Bytes copied: %s\n", formatFileSize(bytesCopied))
 		}
+		// Show current file transfer progress for large files
+		curFileBytes := safeInt64(details, "current_file_bytes")
+		curFileSize := safeInt64(details, "current_file_size")
+		if status == "running" && curFileSize > 0 && curFileBytes < curFileSize {
+			pctFile := float64(curFileBytes) / float64(curFileSize) * 100
+			fmt.Printf("  Current file: %s / %s (%.1f%%)\n",
+				formatFileSize(curFileBytes), formatFileSize(curFileSize), pctFile)
+		}
 	}
 
 	if errMsg := safeString(resp.Data, "error_message"); errMsg != "" {

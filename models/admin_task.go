@@ -2,7 +2,6 @@ package models
 
 import (
 	"database/sql"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -20,8 +19,8 @@ type AdminTask struct {
 	CompletedAt     sql.NullString `json:"completed_at"`
 	ErrorMessage    sql.NullString `json:"error_message"`
 	Details         sql.NullString `json:"details"` // JSON text for task-specific metadata
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
+	CreatedAt       sql.NullString `json:"created_at"`
+	UpdatedAt       sql.NullString `json:"updated_at"`
 }
 
 // CreateAdminTask inserts a new admin task record and returns the generated task ID.
@@ -77,6 +76,17 @@ func UpdateAdminTaskProgress(db interface {
 	_, err := db.Exec(`
 		UPDATE admin_tasks SET progress_current = ?, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?`,
 		progressCurrent, taskID,
+	)
+	return err
+}
+
+// UpdateAdminTaskDetails updates the details JSON field of a task (used for live progress).
+func UpdateAdminTaskDetails(db interface {
+	Exec(string, ...interface{}) (sql.Result, error)
+}, taskID string, details string) error {
+	_, err := db.Exec(`
+		UPDATE admin_tasks SET details = ?, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?`,
+		details, taskID,
 	)
 	return err
 }

@@ -653,16 +653,16 @@ func AdminAlertsSummary(c echo.Context) error {
 	if hasAlerts {
 		parts := []string{}
 		if replicationFailures > 0 {
-			parts = append(parts, formatAlertCount(replicationFailures, "replication failure"))
+			parts = append(parts, formatAlertCount(replicationFailures, "replication failure", "replication failures"))
 		}
 		if syncGaps > 0 {
-			parts = append(parts, formatAlertCount(syncGaps, "file not fully replicated"))
+			parts = append(parts, formatAlertCount(syncGaps, "file not fully replicated", "files not fully replicated"))
 		}
 		if orphanedBlobs > 0 {
-			parts = append(parts, formatAlertCount(orphanedBlobs, "orphaned blob"))
+			parts = append(parts, formatAlertCount(orphanedBlobs, "orphaned blob", "orphaned blobs"))
 		}
 		if staleTasks > 0 {
-			parts = append(parts, formatAlertCount(staleTasks, "stale task"))
+			parts = append(parts, formatAlertCount(staleTasks, "stale task", "stale tasks"))
 		}
 		message = joinAlertParts(parts) + ". Run 'storage-sync-status' for details."
 	}
@@ -679,11 +679,11 @@ func AdminAlertsSummary(c echo.Context) error {
 	})
 }
 
-func formatAlertCount(count int64, label string) string {
+func formatAlertCount(count int64, singular, plural string) string {
 	if count == 1 {
-		return "1 " + label
+		return "1 " + singular
 	}
-	return fmt.Sprintf("%d %ss", count, label)
+	return fmt.Sprintf("%d %s", count, plural)
 }
 
 func joinAlertParts(parts []string) string {

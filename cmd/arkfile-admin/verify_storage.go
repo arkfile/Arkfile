@@ -11,11 +11,15 @@ import (
 //
 // The server performs: upload 1 MB test object -> download -> SHA-256 verify -> delete
 // using its already-initialized S3 connection. No local file access needed.
+// If --provider-id is specified, verifies that specific provider; otherwise defaults
+// to the primary provider.
 func handleVerifyStorageCommand(client *HTTPClient, config *AdminConfig, args []string) error {
 	fs := flag.NewFlagSet("verify-storage", flag.ExitOnError)
 
+	providerID := fs.String("provider-id", "", "Provider ID to verify (defaults to primary)")
+
 	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin verify-storage
+		fmt.Printf(`Usage: arkfile-admin verify-storage [--provider-id PROVIDER_ID]
 
 Verify S3 storage connectivity via the Arkfile server admin API.
 The server performs a full round-trip test:
@@ -27,10 +31,12 @@ The server performs a full round-trip test:
 Requires an active admin session (run 'arkfile-admin login' first).
 
 FLAGS:
+    --provider-id ID    Provider ID to verify (defaults to primary if omitted)
     --help              Show this help message
 
 EXAMPLES:
     arkfile-admin verify-storage
+    arkfile-admin verify-storage --provider-id wasabi-us-central-1
 `)
 	}
 
@@ -44,9 +50,19 @@ EXAMPLES:
 		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login' first): %w", err)
 	}
 
-	fmt.Println("Requesting storage verification from server...")
+	if *providerID != "" {
+		fmt.Printf("Requesting storage verification for provider: %s\n", *providerID)
+	} else {
+		fmt.Println("Requesting storage verification from server...")
+	}
 
-	resp, err := client.makeRequest("POST", "/api/admin/system/verify-storage", nil, session.AccessToken)
+	// Build request payload
+	var payload interface{}
+	if *providerID != "" {
+		payload = map[string]string{"provider_id": *providerID}
+	}
+
+	resp, err := client.makeRequest("POST", "/api/admin/storage/verify-storage", payload, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("storage verification request failed: %w", err)
 	}

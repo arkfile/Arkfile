@@ -64,6 +64,8 @@ type CopyTaskDetails struct {
 	FilesSkipped     int    `json:"files_skipped"`
 	FilesFailed      int    `json:"files_failed"`
 	BytesCopied      int64  `json:"bytes_copied"`
+	CurrentFileBytes int64  `json:"current_file_bytes"` // bytes copied for file in progress
+	CurrentFileSize  int64  `json:"current_file_size"`  // total size of file in progress
 }
 
 // CopyTaskRequest describes a copy operation submitted by an admin API handler.
@@ -224,6 +226,13 @@ func (tr *TaskRunner) runCopyTask(
 		Username:         req.Username,
 	}
 
+	// persistDetails writes the current details snapshot to the DB so task-status
+	// always reflects the latest state (skipped/copied/failed counts, byte progress).
+	persistDetails := func() {
+		detailsSnap, _ := json.Marshal(details)
+		models.UpdateAdminTaskDetails(database.DB, taskID, string(detailsSnap))
+	}
+
 	for i, file := range files {
 		// Check for cancellation between files
 		if ctx.Err() != nil {
@@ -244,6 +253,7 @@ func (tr *TaskRunner) runCopyTask(
 			}
 			if alreadyExists {
 				details.FilesSkipped++
+				persistDetails()
 				models.UpdateAdminTaskProgress(database.DB, taskID, i+1)
 				continue
 			}
@@ -252,15 +262,29 @@ func (tr *TaskRunner) runCopyTask(
 		// Insert pending location
 		models.InsertFileStorageLocation(database.DB, file.FileID, req.DestID, file.StorageID, "pending")
 
+		// Track current file progress for large file visibility
+		details.CurrentFileBytes = 0
+		details.CurrentFileSize = file.PaddedSize
+		persistDetails()
+
+		// Progress callback updates task details in DB after each multipart part
+		onProgress := func(bytesCopied int64) {
+			details.CurrentFileBytes = bytesCopied
+			persistDetails()
+		}
+
 		// Perform the copy
 		copyHash, copyErr := storage.Registry.CopyObjectBetweenProviders(
-			ctx, file.StorageID, source, dest, file.PaddedSize,
+			ctx, file.StorageID, source, dest, file.PaddedSize, onProgress,
 		)
 
 		if copyErr != nil {
 			logging.ErrorLogger.Printf("Task %s: copy failed for file %s: %v", taskID, file.FileID, copyErr)
 			models.UpdateFileStorageLocationStatus(database.DB, file.FileID, req.DestID, "failed")
 			details.FilesFailed++
+			details.CurrentFileBytes = 0
+			details.CurrentFileSize = 0
+			persistDetails()
 			models.UpdateAdminTaskProgress(database.DB, taskID, i+1)
 			continue
 		}
@@ -277,6 +301,9 @@ func (tr *TaskRunner) runCopyTask(
 					taskID, file.FileID, expectedHash.String, copyHash)
 				models.UpdateFileStorageLocationStatus(database.DB, file.FileID, req.DestID, "failed")
 				details.FilesFailed++
+				details.CurrentFileBytes = 0
+				details.CurrentFileSize = 0
+				persistDetails()
 				models.UpdateAdminTaskProgress(database.DB, taskID, i+1)
 				continue
 			}
@@ -287,6 +314,9 @@ func (tr *TaskRunner) runCopyTask(
 		models.IncrementStorageProviderStats(database.DB, req.DestID, 1, file.PaddedSize)
 		details.FilesCopied++
 		details.BytesCopied += file.PaddedSize
+		details.CurrentFileBytes = 0
+		details.CurrentFileSize = 0
+		persistDetails()
 		models.UpdateAdminTaskProgress(database.DB, taskID, i+1)
 	}
 

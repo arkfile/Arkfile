@@ -23,6 +23,10 @@ const CopyMultipartPartSize = 64 * 1024 * 1024
 // CopyMultipartPartSize if copy behavior needs tuning. Current value: 100 MB.
 const CopyMultipartThreshold = 100 * 1024 * 1024
 
+// CopyProgressFunc is called during cross-provider copy operations to report
+// bytes transferred so far. Used by the task runner to update progress in the DB.
+type CopyProgressFunc func(bytesCopied int64)
+
 // ProviderRegistry holds references to the primary and optional secondary/tertiary
 // ObjectStorageProvider instances. It replaces the single global Provider as the
 // primary interface for handler code.
@@ -163,6 +167,7 @@ func (r *ProviderRegistry) CopyObjectBetweenProviders(
 	source ObjectStorageProvider,
 	destination ObjectStorageProvider,
 	objectSize int64,
+	onProgress CopyProgressFunc,
 ) (string, error) {
 	// Get the full object from source
 	obj, err := source.GetObject(ctx, objectName, GetObjectOptions{})
@@ -182,6 +187,9 @@ func (r *ProviderRegistry) CopyObjectBetweenProviders(
 		})
 		if err != nil {
 			return "", fmt.Errorf("failed to put object to destination: %w", err)
+		}
+		if onProgress != nil {
+			onProgress(objectSize)
 		}
 	} else {
 		// Large object: multipart upload on destination
@@ -222,6 +230,9 @@ func (r *ProviderRegistry) CopyObjectBetweenProviders(
 			parts = append(parts, part)
 			partNumber++
 			remaining -= partSize
+			if onProgress != nil {
+				onProgress(objectSize - remaining)
+			}
 		}
 
 		if err := destination.CompleteMultipartUpload(ctx, objectName, uploadID, parts); err != nil {

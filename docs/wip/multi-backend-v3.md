@@ -1331,6 +1331,14 @@ PROGRESS NOTE - 04/23/26 - Phases 4, 5, 6 (partial), and 7 (partial) implemented
 
 PROGRESS NOTE - 04/23/26 (session 2) - Completed Phases 6, 8, 9, 10 (partial). Full implementation of: CopyObjectBetweenProviders with TeeReader SHA-256 verification (64MB multipart parts, 100MB threshold), ENABLE_UPLOAD_REPLICATION config + replicateToSecondary() background goroutine, TaskRunner with semaphore concurrency (2 workers) and cancellation, all 14 admin API endpoints (storage-status, sync-status, copy-all, copy-user-files, copy-file, task-status, cancel-task, set-primary, set-secondary, set-tertiary, swap-providers, verify-storage, set-cost, alerts/summary), all routes registered, all 12 CLI commands in storage_commands.go, enhanced list-files with LOCATIONS column and password_type, displayLoginAlerts() wired into login flow, AdminVerifyStorage provider name fix for non-primary providers. Schema migration fix: moved stored_blob_sha256sum ALTER TABLE from unified_schema.sql to Go startup code (runSchemaMigrations() in main.go) to handle both fresh installs and existing deployments without fatal rqlite errors. Deployed and verified working via local-update.sh with Wasabi single-provider mode.
 
+PROGRESS NOTE - 04/24/26 - First live multi-backend testing session. Added Wasabi cloud bucket as secondary provider to a local SeaweedFS deployment via secrets.env + systemctl restart. Tested and verified: storage-status (both providers detected with correct roles), copy-file (single file copied to Wasabi, confirmed via Wasabi web console by storage_id match), copy-user-files (4 files for a test user, all copied successfully), copy-all with --skip-existing (4 small files skipped, 1 large 1.95 GB file streamed via 64 MB multipart parts to Wasabi). list-files shows dual locations for all copied files. Bugs found and fixed during testing:
+- (1) task-status HTTP 500: AdminTask.CreatedAt/UpdatedAt were time.Time but rqlite returns timestamps as strings. Fixed to sql.NullString in models/admin_task.go.
+- (2) verify-storage CLI: Missing --provider-id flag, was hardcoded to primary only. Added flag and switched to /api/admin/storage/verify-storage endpoint in cmd/arkfile-admin/verify_storage.go.
+- (3) Login alerts pluralization: formatAlertCount naively appended "s" producing "3 file not fully replicateds". Changed to accept singular/plural label pairs in handlers/admin_storage.go.
+- (4) skip-existing not working: FileStorageLocation.CreatedAt was time.Time (same rqlite timestamp issue). GetActiveFileStorageLocations silently failed, returning empty results, so skip-existing always re-copied. Fixed to sql.NullString in models/file_storage_location.go.
+- (5) No per-file byte progress for large copies: Added CopyProgressFunc callback to CopyObjectBetweenProviders (storage/registry.go), progress callback in task runner (handlers/admin_task_runner.go), UpdateAdminTaskDetails model function (models/admin_task.go), and "Current file: X / Y (Z%)" display in CLI task-status (cmd/arkfile-admin/storage_commands.go).
+- (6) Task details not persisted after skip/fail: Details JSON was only written by the copy progress callback. Added persistDetails() helper called after every file operation (skip, copy start, copy progress, copy success, copy fail) so task-status always shows current state.
+
 ### Phase 4: Stored Blob Hash (Upload Enhancement) [COMPLETE]
 
 Add the second streaming hash for `stored_blob_sha256sum` during upload.
@@ -1415,6 +1423,94 @@ Files changed:
 - `scripts/testing/e2e-test.sh` -- Add multi-backend test scenarios.
 
 Verification: Full e2e test suite passes in single-provider and multi-provider modes.
+
+### Phase 11: Bulk Integrity Verification (verify-all) [NOT STARTED]
+
+A `verify-all` command that performs HEAD requests against every `file_storage_locations` row with `status = "active"` to confirm the S3 object actually exists and its size matches `padded_size`. This catches out-of-band deletions, provider-side data loss, and DB/reality drift without downloading any file data.
+
+#### New Status: `"missing"`
+
+Add `"missing"` to the valid `file_storage_locations.status` values alongside "active", "pending", "failed", "deleted", "delete_failed". A `"missing"` status means the DB thought the blob was there but verification confirmed it is not. `copy-all --skip-existing` skips `"active"` but NOT `"missing"`, so a subsequent copy-all naturally re-copies the gaps.
+
+#### New Interface Method: `HeadObject`
+
+Add `HeadObject(ctx, objectName) (int64, error)` to the `ObjectStorageProvider` interface. Returns the object size in bytes (from S3 HEAD response Content-Length), or an error if the object does not exist. Implementation is a single `s3Client.HeadObject` call.
+
+#### CLI Command
+
+```
+arkfile-admin verify-all [FLAGS]
+
+FLAGS:
+    --provider-id ID    Only verify files on this provider (default: all providers)
+    --fix               Mark missing files as "missing" in DB (default: dry-run)
+    --concurrency N     Parallel HEAD requests (default: 10)
+    --json              Output as JSON
+```
+
+#### Admin UX Example (5000 files, 2 providers)
+
+```
+$ arkfile-admin verify-all
+
+Verifying all file locations across 2 providers...
+
+  Provider: generic-s3:arkfile-local
+  Checking 5000 files... [5000/5000] (100.0%)
+  Result: 5000 OK, 0 missing, 0 size mismatch
+
+  Provider: wasabi-us-central-1
+  Checking 5000 files... [5000/5000] (100.0%)
+  Result: 4998 OK, 2 missing, 0 size mismatch
+
+Summary:
+  Total locations verified: 10000
+  OK: 9998
+  Missing: 2
+  Size mismatch: 0
+
+  Missing files (not updated, use --fix to mark):
+    file: abc123-...  provider: wasabi-us-central-1  owner: user42
+    file: def456-...  provider: wasabi-us-central-1  owner: user87
+```
+
+With `--fix`:
+```
+$ arkfile-admin verify-all --fix
+
+  ...same output...
+
+  2 locations updated: status changed from "active" to "missing"
+  Run 'copy-all --skip-existing' to re-copy missing files.
+```
+
+#### Performance Estimates (5000 files, 2 providers)
+
+- 5000 files x 2 providers = 10,000 HEAD requests
+- HEAD requests are tiny (no data transfer, just metadata)
+- At 10 concurrent requests: ~50-100ms per HEAD on cloud providers
+- SeaweedFS (local): ~5000 HEADs at 10 concurrency = ~25-50 seconds
+- Wasabi (cloud): ~5000 HEADs at 10 concurrency = ~2-5 minutes (network latency)
+- Total: roughly 3-6 minutes for a full verification pass
+- Wasabi does not charge for HEAD requests (included in API call allowance)
+
+#### Implementation
+
+Uses the existing TaskRunner infrastructure (background task with progress tracking):
+
+Files to change:
+- `storage/types.go` -- Add `HeadObject(ctx, objectName) (int64, error)` to `ObjectStorageProvider` interface
+- `storage/s3.go` -- Implement `HeadObject` using `s3Client.HeadObject`
+- `storage/mock_storage.go` -- Add mock `HeadObject`
+- `handlers/admin_storage.go` -- Add `AdminVerifyAll` handler for `POST /api/admin/storage/verify-all`
+- `handlers/admin_task_runner.go` -- Add `runVerifyTask` goroutine with concurrent HEAD workers
+- `handlers/route_config.go` -- Register new route
+- `cmd/arkfile-admin/storage_commands.go` -- Add `verify-all` CLI command
+- `cmd/arkfile-admin/main.go` -- Add command routing
+
+#### Task Type
+
+New `admin_tasks.task_type` value: `"verify-all"`. Uses the same progress tracking (progress_current/progress_total) and details JSON (verified_ok, missing, size_mismatch counts).
 
 ---
 

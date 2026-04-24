@@ -2,7 +2,6 @@ package models
 
 import (
 	"database/sql"
-	"time"
 )
 
 // FileStorageLocation represents a row in the file_storage_locations table.
@@ -13,7 +12,7 @@ type FileStorageLocation struct {
 	ProviderID string         `json:"provider_id"`
 	StorageID  string         `json:"storage_id"`
 	Status     string         `json:"status"` // "active", "pending", "failed", "deleted", "delete_failed"
-	CreatedAt  time.Time      `json:"created_at"`
+	CreatedAt  sql.NullString `json:"created_at"`
 	VerifiedAt sql.NullString `json:"verified_at"`
 }
 
