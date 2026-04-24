@@ -186,7 +186,7 @@ h1, h2, h3 {
     border: 1px solid var(--depth-4);
 }
 
-input, .totp-input, .password-modal-input, .contact-value, .contact-label, .contact-type {
+input, textarea, .totp-input, .password-modal-input, .contact-value, .contact-label, .contact-type {
     width: 100%;
     padding: 0.75rem;
     margin-bottom: 1rem;
@@ -893,34 +893,40 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 
 .contact-method-row {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
-    margin-bottom: 6px;
+    margin-bottom: 8px;
+}
+
+.contact-method-row select.contact-type,
+.contact-method-row input.contact-value,
+.contact-method-row input.contact-label {
+    margin-bottom: 0;
 }
 
 .contact-method-row select.contact-type {
     flex-shrink: 0;
     width: 110px;
-    padding: 0.4rem;
-    font-size: 0.85rem;
+    padding: 0.5rem;
+    font-size: 0.9rem;
     box-sizing: border-box;
 }
 
 .contact-method-row input.contact-value {
     flex: 1;
-    min-width: 0;
+    min-width: 120px;
     width: auto;
-    padding: 0.4rem;
-    font-size: 0.85rem;
+    padding: 0.5rem;
+    font-size: 0.9rem;
     box-sizing: border-box;
 }
 
 .contact-method-row input.contact-label {
     flex-shrink: 0;
-    width: 90px;
+    width: 100px;
     min-width: 0;
-    padding: 0.4rem;
-    font-size: 0.85rem;
+    padding: 0.5rem;
+    font-size: 0.9rem;
     box-sizing: border-box;
 }
 
@@ -931,9 +937,11 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     cursor: pointer;
     width: auto;
     flex: 0 0 auto;
+    align-self: center;
     margin: 0;
-    padding: 0.3rem 0.5rem;
-    font-size: 0.8rem;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.85rem;
+    line-height: 1;
     border-radius: 4px;
 }
 
