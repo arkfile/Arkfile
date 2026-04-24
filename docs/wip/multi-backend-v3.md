@@ -1338,6 +1338,19 @@ PROGRESS NOTE - 04/24/26 - First live multi-backend testing session. Added Wasab
 - (4) skip-existing not working: FileStorageLocation.CreatedAt was time.Time (same rqlite timestamp issue). GetActiveFileStorageLocations silently failed, returning empty results, so skip-existing always re-copied. Fixed to sql.NullString in models/file_storage_location.go.
 - (5) No per-file byte progress for large copies: Added CopyProgressFunc callback to CopyObjectBetweenProviders (storage/registry.go), progress callback in task runner (handlers/admin_task_runner.go), UpdateAdminTaskDetails model function (models/admin_task.go), and "Current file: X / Y (Z%)" display in CLI task-status (cmd/arkfile-admin/storage_commands.go).
 - (6) Task details not persisted after skip/fail: Details JSON was only written by the copy progress callback. Added persistDetails() helper called after every file operation (skip, copy start, copy progress, copy success, copy fail) so task-status always shows current state.
+- (7) swap-providers not persisting across restart: InitS3() always built registry from env var ordering, ignoring DB roles. Added SwapPrimarySecondary() method to ProviderRegistry (storage/registry.go) and DB role reconciliation in registerAndBackfillStorageProviders() (main.go) that reads DB roles after upsert and swaps the in-memory registry if needed.
+- (8) verify-storage and startup verification using env var provider name: Both AdminVerifyStorage handler and RunStartupVerification used os.Getenv("STORAGE_PROVIDER") for the display name, always showing "generic-s3" even after swap. Fixed both to use Registry.PrimaryID() and DB lookup.
+- (9) Replication to non-TLS SeaweedFS failing: AWS SDK v2 requires seekable streams for SigV4 payload signing on HTTP connections. CopyObjectBetweenProviders used TeeReader (not seekable). Fixed by buffering data into bytes.Reader before PutObject/UploadPart. Memory bounded: max 100 MB for small files, 64 MB per part for multipart. Also added RequestChecksumCalculationWhenRequired for non-TLS S3 clients in NewS3Provider (storage/s3.go).
+
+Additional tests verified in this session:
+- [OK] swap-providers persists across restart (DB-authoritative roles applied on startup)
+- [OK] Download fallback: stopped SeaweedFS, files served from Wasabi, sha256sum matches original
+- [OK] verify-storage --provider-id for both providers
+- [OK] Multi-provider delete: file removed from both Wasabi and SeaweedFS
+- [OK] copy-all with --skip-existing: 4 files skipped, 1 large 1.95 GB file copied with hash verification
+- [OK] ENABLE_UPLOAD_REPLICATION: Wasabi primary -> SeaweedFS secondary, blobs byte-identical (confirmed via sha256sum of raw objects from both provider consoles)
+- [OK] Task status with per-file byte progress for large multipart copies
+- [OK] Login alerts with correct singular/plural grammar
 
 ### Phase 4: Stored Blob Hash (Upload Enhancement) [COMPLETE]
 

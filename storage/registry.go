@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -103,6 +104,14 @@ func (r *ProviderRegistry) TertiaryID() string {
 	return r.tertiaryID
 }
 
+// SwapPrimarySecondary swaps the primary and secondary providers in the in-memory
+// registry. Used on startup when the DB role assignments (from a previous
+// swap-providers or set-primary command) differ from the env-var ordering.
+func (r *ProviderRegistry) SwapPrimarySecondary() {
+	r.primary, r.secondary = r.secondary, r.primary
+	r.primaryID, r.secondaryID = r.secondaryID, r.primaryID
+}
+
 // GetProvider returns the provider instance matching the given ID, or nil if not found.
 func (r *ProviderRegistry) GetProvider(providerID string) ObjectStorageProvider {
 	switch providerID {
@@ -181,8 +190,15 @@ func (r *ProviderRegistry) CopyObjectBetweenProviders(
 	hashingReader := io.TeeReader(obj, hasher)
 
 	if objectSize <= CopyMultipartThreshold {
-		// Small object: single PUT
-		_, err = destination.PutObject(ctx, objectName, hashingReader, objectSize, PutObjectOptions{
+		// Small object: buffer into seekable reader then single PUT.
+		// Buffering is required because AWS SDK v2 needs a seekable body for
+		// SigV4 payload signing on non-TLS (HTTP) destinations like local SeaweedFS.
+		// Max buffer size is CopyMultipartThreshold (100 MB).
+		buf, readErr := io.ReadAll(hashingReader)
+		if readErr != nil {
+			return "", fmt.Errorf("failed to read object from source: %w", readErr)
+		}
+		_, err = destination.PutObject(ctx, objectName, bytes.NewReader(buf), objectSize, PutObjectOptions{
 			ContentType: "application/octet-stream",
 		})
 		if err != nil {
@@ -216,12 +232,18 @@ func (r *ProviderRegistry) CopyObjectBetweenProviders(
 				partSize = remaining
 			}
 
-			// Read exactly partSize bytes via LimitReader so UploadPart gets
-			// the correct Content-Length. The TeeReader feeds bytes to the hasher
-			// as they flow through.
-			partReader := io.LimitReader(hashingReader, partSize)
+			// Read part data into a seekable buffer. AWS SDK v2 needs seekable
+			// readers for SigV4 payload signing on non-TLS (HTTP) destinations.
+			// Memory bounded: max 64 MB per part, released after upload.
+			partData := make([]byte, partSize)
+			n, readErr := io.ReadFull(hashingReader, partData)
+			if readErr != nil && readErr != io.ErrUnexpectedEOF {
+				destination.AbortMultipartUpload(ctx, objectName, uploadID)
+				return "", fmt.Errorf("failed to read part %d from source: %w", partNumber, readErr)
+			}
+			partData = partData[:n]
 
-			part, err := destination.UploadPart(ctx, objectName, uploadID, partNumber, partReader, partSize)
+			part, err := destination.UploadPart(ctx, objectName, uploadID, partNumber, bytes.NewReader(partData), int64(n))
 			if err != nil {
 				destination.AbortMultipartUpload(ctx, objectName, uploadID)
 				return "", fmt.Errorf("failed to upload part %d to destination: %w", partNumber, err)

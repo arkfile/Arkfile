@@ -215,11 +215,9 @@ func main() {
 	handlers.InitTaskRunner(2)
 
 	// Run storage verification in the background (logs result, does not block startup)
-	storageProvider := os.Getenv("STORAGE_PROVIDER")
-	if storageProvider == "" {
-		storageProvider = "generic-s3"
-	}
-	storage.RunStartupVerification(storageProvider)
+	// Use the registry's primary provider ID (which reflects DB role reconciliation
+	// from swap-providers/set-primary, not just env var ordering).
+	storage.RunStartupVerification(storage.Registry.PrimaryID())
 
 	// Check for bootstrap condition (Zero Users)
 	if err := auth.CheckAndGenerateBootstrapToken(database.DB); err != nil {
@@ -453,6 +451,17 @@ func registerAndBackfillStorageProviders() {
 			terRegion = "us-east-1"
 		}
 		upsertProvider(reg.TertiaryID(), terType, terBucket, terEndpoint, terRegion, "tertiary", "STORAGE_3")
+	}
+
+	// Reconcile in-memory registry roles with DB-authoritative roles.
+	// The DB preserves role changes from swap-providers/set-primary commands.
+	// InitS3() always assigns roles from env var ordering, so we may need to swap.
+	if reg.HasSecondary() {
+		primaryDBRole, _ := models.GetStorageProviderRole(database.DB, reg.PrimaryID())
+		if primaryDBRole == "secondary" {
+			log.Printf("Storage: DB role for %s is 'secondary' (env says primary), swapping in-memory registry to match DB", reg.PrimaryID())
+			reg.SwapPrimarySecondary()
+		}
 	}
 
 	// Backfill file_storage_locations for existing files without location records

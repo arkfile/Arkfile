@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 
 	"github.com/labstack/echo/v4"
 
@@ -47,9 +46,15 @@ func AdminVerifyStorage(c echo.Context) error {
 		}
 	} else {
 		provider = storage.Registry.Primary()
-		providerName = os.Getenv("STORAGE_PROVIDER")
-		if providerName == "" {
-			providerName = "generic-s3"
+		primaryID := storage.Registry.PrimaryID()
+		var dbProviderType string
+		database.DB.QueryRow(
+			"SELECT provider_type FROM storage_providers WHERE provider_id = ?", primaryID,
+		).Scan(&dbProviderType)
+		if dbProviderType != "" {
+			providerName = dbProviderType
+		} else {
+			providerName = primaryID
 		}
 	}
 

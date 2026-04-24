@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -83,6 +84,12 @@ func NewS3Provider(cfg S3ProviderConfig) (*S3AWSStorage, error) {
 		o.UsePathStyle = cfg.ForcePathStyle
 		if cfg.Endpoint != "" {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
+		}
+		// Disable automatic request checksum for non-TLS endpoints (e.g. local SeaweedFS).
+		// AWS SDK v2 requires seekable streams for checksum computation on HTTP connections,
+		// which is incompatible with streaming TeeReader used in cross-provider copies.
+		if cfg.Endpoint != "" && !strings.HasPrefix(cfg.Endpoint, "https://") {
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 		}
 	})
 
