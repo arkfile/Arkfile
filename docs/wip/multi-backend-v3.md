@@ -1387,9 +1387,9 @@ Files changed:
 
 Verification: Upload a file, confirm `file_storage_locations` row is created. With replication enabled, confirm the blob appears on both providers.
 
-### Phase 7: Handler Updates -- Deletes from All Providers [PARTIALLY COMPLETE]
+### Phase 7: Handler Updates -- Deletes from All Providers [COMPLETE]
 
-Multi-provider delete with location tracking and stats decrement: done (inline in DeleteFile handler). RemoveObjectAll registry method: not yet extracted (logic is in handler directly).
+Multi-provider delete with location tracking and stats decrement: done. RemoveObjectAll registry method extracted from inline handler logic into storage/registry.go. DeleteFile handler now calls Registry.RemoveObjectAll() and processes results for DB status updates.
 
 Update delete handler to remove from all providers with failure tracking.
 
@@ -1424,7 +1424,7 @@ Verification: Test each command against a local deployment with a Wasabi seconda
 
 ### Phase 10: Admin Alerts, Enhanced list-files, and e2e Test Extensions [PARTIALLY COMPLETE]
 
-Alerts summary endpoint, enhanced list-files with LOCATIONS column, and displayLoginAlerts() wired into login: all done. Sync-status response simplified vs spec (only on_primary_only/on_secondary_only, not full combination matrix). e2e test extensions not yet added.
+Alerts summary endpoint, enhanced list-files with LOCATIONS column, and displayLoginAlerts() wired into login: all done. Sync-status response expanded to full combination matrix (on_all_configured, on_primary_only, on_secondary_only, on_tertiary_only, on_primary_and_secondary, on_primary_and_tertiary, on_secondary_and_tertiary) supporting both two-provider and three-provider configurations. e2e test extensions not yet added.
 
 Finalize admin login alerts, enhance existing `list-files` with storage locations, and extend e2e tests.
 
@@ -1437,7 +1437,15 @@ Files changed:
 
 Verification: Full e2e test suite passes in single-provider and multi-provider modes.
 
-### Phase 11: Bulk Integrity Verification (verify-all) [NOT STARTED]
+### Phase 11: Bulk Integrity Verification (verify-all) [COMPLETE]
+
+PROGRESS NOTE - 04/24/26 (session 2) - Implemented Phase 11 in full. Added HeadObject to ObjectStorageProvider interface (storage/storage.go), S3 implementation (storage/s3.go), and mock (storage/mock_storage.go). Added AdminVerifyAll handler (handlers/admin_storage.go), SubmitVerifyTask and runVerifyTask with concurrent HEAD workers (handlers/admin_task_runner.go), POST /api/admin/storage/verify-all route (handlers/route_config.go), verify-all CLI command with --provider-id, --fix, --concurrency, --watch, --json flags (cmd/arkfile-admin/storage_commands.go + main.go). Also: extracted RemoveObjectAll from inline DeleteFile handler into storage/registry.go (Phase 7 completion), expanded sync-status to full combination matrix for two and three provider configs (Phase 10 improvement), created storage/registry_test.go with 24 unit tests covering GetProvider, HasSecondary/HasTertiary, SwapPrimarySecondary, GetObjectWithFallback (5 tests), GetObjectChunkWithFallback (4 tests), RemoveObjectAll (4 tests), CopyObjectBetweenProviders (5 tests), and ID accessors. All tests pass, go vet clean. Live-tested verify-all on local deploy with Wasabi primary + SeaweedFS secondary: 20/20 locations verified OK, 0 missing, 0 size mismatch. Added auto-recalculation of cached provider stats (total_objects/total_size_bytes) at end of verify-all using RecalculateProviderStats(). Fixed rqlite float64 scan bug in RecalculateProviderStats (COUNT/SUM results returned as float64, was scanning into int64 causing silent failures -- changed to interface{} scan with toInt64Raw() conversion). After fix, storage-status shows accurate file counts matching ground truth. Also fixed pre-existing go vet warning (redundant newline in fmt.Println in storage_commands.go).
+
+Live test results after all fixes:
+- [OK] verify-all --watch: 20/20 locations verified, 0 missing, 0 size mismatch, 0 errors
+- [OK] storage-status: Both providers show Files: 10, Size: 2.0 GB (accurate after RecalculateProviderStats fix)
+- [OK] Fully replicated: 10/10, Gaps: 0
+- [OK] copy-all --from primary --to secondary --verify: fills gaps, skip-existing works correctly
 
 A `verify-all` command that performs HEAD requests against every `file_storage_locations` row with `status = "active"` to confirm the S3 object actually exists and its size matches `padded_size`. This catches out-of-band deletions, provider-side data loss, and DB/reality drift without downloading any file data.
 

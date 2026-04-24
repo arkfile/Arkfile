@@ -505,3 +505,20 @@ func (s *S3AWSStorage) GetObjectChunk(ctx context.Context, objectName string, of
 	opts.SetRange(offset, offset+length-1)
 	return s.GetObject(ctx, objectName, opts)
 }
+
+// HeadObject returns the size of an object in bytes without downloading it.
+// Uses the S3 HeadObject API. Returns an error if the object does not exist.
+func (s *S3AWSStorage) HeadObject(ctx context.Context, objectName string) (int64, error) {
+	output, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(objectName),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("HeadObject failed for %s: %w", objectName, err)
+	}
+	size := int64(0)
+	if output.ContentLength != nil {
+		size = *output.ContentLength
+	}
+	return size, nil
+}

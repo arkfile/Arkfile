@@ -203,6 +203,7 @@ func RegisterRoutes() {
 	adminGroup.POST("/storage/swap-providers", AdminSwapProviders)
 	adminGroup.POST("/storage/verify-storage", AdminVerifyStorage)
 	adminGroup.POST("/storage/set-cost", AdminSetCost)
+	adminGroup.POST("/storage/verify-all", AdminVerifyAll)
 	adminGroup.GET("/alerts/summary", AdminAlertsSummary)
 
 	// Development/Testing admin endpoints (gated by ADMIN_DEV_TEST_API_ENABLED)

@@ -189,32 +189,52 @@ func AdminSyncStatus(c echo.Context) error {
 	var totalFiles int64
 	database.DB.QueryRow("SELECT COUNT(*) FROM file_metadata").Scan(&totalFiles)
 
-	// Count files by provider combination
-	type locationCount struct {
-		Label string
-		Count int64
+	primaryID := storage.Registry.PrimaryID()
+	secondaryID := storage.Registry.SecondaryID()
+	tertiaryID := storage.Registry.TertiaryID()
+	hasSecondary := storage.Registry.HasSecondary()
+	hasTertiary := storage.Registry.HasTertiary()
+
+	// Helper: check if a file is active on a given provider
+	// Uses a subquery pattern: EXISTS (SELECT 1 FROM fsl WHERE file_id=? AND provider_id=? AND status='active')
+	activeOn := func(providerID string) string {
+		return fmt.Sprintf("EXISTS (SELECT 1 FROM file_storage_locations fsl WHERE fsl.file_id = fm.file_id AND fsl.provider_id = '%s' AND fsl.status = 'active')", providerID)
+	}
+	notActiveOn := func(providerID string) string {
+		return fmt.Sprintf("NOT EXISTS (SELECT 1 FROM file_storage_locations fsl WHERE fsl.file_id = fm.file_id AND fsl.provider_id = '%s' AND fsl.status = 'active')", providerID)
 	}
 
-	// Count files only on primary
-	var onPrimaryOnly int64
-	if storage.Registry.HasSecondary() {
-		database.DB.QueryRow(`
-			SELECT COUNT(*) FROM file_metadata fm
-			WHERE EXISTS (SELECT 1 FROM file_storage_locations fsl WHERE fsl.file_id = fm.file_id AND fsl.provider_id = ? AND fsl.status = 'active')
-			AND NOT EXISTS (SELECT 1 FROM file_storage_locations fsl WHERE fsl.file_id = fm.file_id AND fsl.provider_id = ? AND fsl.status = 'active')`,
-			storage.Registry.PrimaryID(), storage.Registry.SecondaryID(),
-		).Scan(&onPrimaryOnly)
-	}
+	var onPrimaryOnly, onSecondaryOnly, onTertiaryOnly int64
+	var onAllConfigured, onPrimaryAndSecondary, onPrimaryAndTertiary, onSecondaryAndTertiary int64
 
-	var onSecondaryOnly int64
-	if storage.Registry.HasSecondary() {
-		database.DB.QueryRow(`
-			SELECT COUNT(*) FROM file_metadata fm
-			WHERE NOT EXISTS (SELECT 1 FROM file_storage_locations fsl WHERE fsl.file_id = fm.file_id AND fsl.provider_id = ? AND fsl.status = 'active')
-			AND EXISTS (SELECT 1 FROM file_storage_locations fsl WHERE fsl.file_id = fm.file_id AND fsl.provider_id = ? AND fsl.status = 'active')`,
-			storage.Registry.PrimaryID(), storage.Registry.SecondaryID(),
-		).Scan(&onSecondaryOnly)
+	if hasSecondary && hasTertiary {
+		// Three providers configured: compute full combination matrix
+		q := func(p, s, t string) int64 {
+			var count int64
+			database.DB.QueryRow("SELECT COUNT(*) FROM file_metadata fm WHERE " + p + " AND " + s + " AND " + t).Scan(&count)
+			return count
+		}
+		onAllConfigured = q(activeOn(primaryID), activeOn(secondaryID), activeOn(tertiaryID))
+		onPrimaryAndSecondary = q(activeOn(primaryID), activeOn(secondaryID), notActiveOn(tertiaryID))
+		onPrimaryAndTertiary = q(activeOn(primaryID), notActiveOn(secondaryID), activeOn(tertiaryID))
+		onSecondaryAndTertiary = q(notActiveOn(primaryID), activeOn(secondaryID), activeOn(tertiaryID))
+		onPrimaryOnly = q(activeOn(primaryID), notActiveOn(secondaryID), notActiveOn(tertiaryID))
+		onSecondaryOnly = q(notActiveOn(primaryID), activeOn(secondaryID), notActiveOn(tertiaryID))
+		onTertiaryOnly = q(notActiveOn(primaryID), notActiveOn(secondaryID), activeOn(tertiaryID))
+	} else if hasSecondary {
+		// Two providers configured
+		q := func(p, s string) int64 {
+			var count int64
+			database.DB.QueryRow("SELECT COUNT(*) FROM file_metadata fm WHERE " + p + " AND " + s).Scan(&count)
+			return count
+		}
+		onAllConfigured = q(activeOn(primaryID), activeOn(secondaryID))
+		onPrimaryOnly = q(activeOn(primaryID), notActiveOn(secondaryID))
+		onSecondaryOnly = q(notActiveOn(primaryID), activeOn(secondaryID))
+		// onPrimaryAndSecondary is the same as onAllConfigured in two-provider mode
+		onPrimaryAndSecondary = onAllConfigured
 	}
+	// Single provider: all counts stay 0; total_files is the only relevant number
 
 	// Failed locations
 	failedRows, err := database.DB.Query(`
@@ -261,11 +281,16 @@ func AdminSyncStatus(c echo.Context) error {
 	}
 
 	return JSONResponse(c, http.StatusOK, "Sync status retrieved", map[string]interface{}{
-		"total_files":       totalFiles,
-		"on_primary_only":   onPrimaryOnly,
-		"on_secondary_only": onSecondaryOnly,
-		"failed_locations":  failedLocations,
-		"orphaned_blobs":    orphanedBlobs,
+		"total_files":               totalFiles,
+		"on_all_configured":         onAllConfigured,
+		"on_primary_only":           onPrimaryOnly,
+		"on_secondary_only":         onSecondaryOnly,
+		"on_tertiary_only":          onTertiaryOnly,
+		"on_primary_and_secondary":  onPrimaryAndSecondary,
+		"on_primary_and_tertiary":   onPrimaryAndTertiary,
+		"on_secondary_and_tertiary": onSecondaryAndTertiary,
+		"failed_locations":          failedLocations,
+		"orphaned_blobs":            orphanedBlobs,
 	})
 }
 
@@ -700,4 +725,41 @@ func joinAlertParts(parts []string) string {
 		result += ", " + parts[i]
 	}
 	return result
+}
+
+// AdminVerifyAll handles POST /api/admin/storage/verify-all
+// Initiates a background task that performs HEAD requests against all active
+// file_storage_locations to confirm S3 objects exist and sizes match.
+func AdminVerifyAll(c echo.Context) error {
+	adminUsername := auth.GetUsernameFromToken(c)
+
+	var req struct {
+		ProviderID  string `json:"provider_id"`
+		Fix         bool   `json:"fix"`
+		Concurrency int    `json:"concurrency"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return JSONError(c, http.StatusBadRequest, "Invalid request")
+	}
+
+	tr := GetTaskRunner()
+	if tr == nil {
+		return JSONError(c, http.StatusInternalServerError, "Task runner not initialized")
+	}
+
+	taskID, err := tr.SubmitVerifyTask(VerifyTaskRequest{
+		AdminUsername: adminUsername,
+		ProviderID:    req.ProviderID,
+		Fix:           req.Fix,
+		Concurrency:   req.Concurrency,
+	})
+	if err != nil {
+		return JSONError(c, http.StatusBadRequest, err.Error())
+	}
+
+	return JSONResponse(c, http.StatusOK, "Verify task queued", map[string]interface{}{
+		"task_id":   taskID,
+		"task_type": "verify-all",
+		"status":    "pending",
+	})
 }

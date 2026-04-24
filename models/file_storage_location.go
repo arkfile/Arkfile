@@ -128,8 +128,8 @@ func RecalculateProviderStats(db interface {
 	QueryRow(string, ...interface{}) *sql.Row
 	Exec(string, ...interface{}) (sql.Result, error)
 }, providerID string) error {
-	var totalObjects int64
-	var totalSizeBytes int64
+	// Scan as interface{} because rqlite returns COUNT/SUM as float64
+	var totalObjectsRaw, totalSizeBytesRaw interface{}
 
 	err := db.QueryRow(`
 		SELECT COUNT(*), COALESCE(SUM(fm.padded_size), 0)
@@ -137,10 +137,27 @@ func RecalculateProviderStats(db interface {
 		JOIN file_metadata fm ON fsl.file_id = fm.file_id
 		WHERE fsl.provider_id = ? AND fsl.status = 'active'`,
 		providerID,
-	).Scan(&totalObjects, &totalSizeBytes)
+	).Scan(&totalObjectsRaw, &totalSizeBytesRaw)
 	if err != nil {
 		return err
 	}
 
+	totalObjects := toInt64Raw(totalObjectsRaw)
+	totalSizeBytes := toInt64Raw(totalSizeBytesRaw)
+
 	return UpdateStorageProviderStats(db, providerID, totalObjects, totalSizeBytes)
+}
+
+// toInt64Raw converts rqlite numeric types (float64, int64) to int64.
+func toInt64Raw(v interface{}) int64 {
+	switch val := v.(type) {
+	case int64:
+		return val
+	case float64:
+		return int64(val)
+	case nil:
+		return 0
+	default:
+		return 0
+	}
 }

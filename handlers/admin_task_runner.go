@@ -329,3 +329,258 @@ func (tr *TaskRunner) runCopyTask(
 	logging.InfoLogger.Printf("Task %s: completed (copied: %d, skipped: %d, failed: %d, bytes: %d)",
 		taskID, details.FilesCopied, details.FilesSkipped, details.FilesFailed, details.BytesCopied)
 }
+
+// VerifyTaskRequest describes a verify-all operation submitted by an admin API handler.
+type VerifyTaskRequest struct {
+	AdminUsername string
+	ProviderID    string // empty means all providers
+	Fix           bool   // if true, mark missing files as "missing" in DB
+	Concurrency   int    // parallel HEAD requests (default 10)
+}
+
+// VerifyTaskDetails holds the JSON-serializable details stored in admin_tasks.details.
+type VerifyTaskDetails struct {
+	ProviderID   string `json:"provider_id,omitempty"` // empty means all providers
+	Fix          bool   `json:"fix"`
+	Concurrency  int    `json:"concurrency"`
+	VerifiedOK   int    `json:"verified_ok"`
+	Missing      int    `json:"missing"`
+	SizeMismatch int    `json:"size_mismatch"`
+	Errors       int    `json:"errors"`
+}
+
+// fileVerifyItem is a file location to verify.
+type fileVerifyItem struct {
+	FileID     string
+	ProviderID string
+	StorageID  string
+	PaddedSize int64
+}
+
+// SubmitVerifyTask creates an admin_tasks row and runs the verification in background.
+func (tr *TaskRunner) SubmitVerifyTask(req VerifyTaskRequest) (string, error) {
+	if req.Concurrency <= 0 {
+		req.Concurrency = 10
+	}
+
+	// Build list of file locations to verify
+	var items []fileVerifyItem
+	var err error
+
+	if req.ProviderID != "" {
+		// Verify only files on a specific provider
+		provider := storage.Registry.GetProvider(req.ProviderID)
+		if provider == nil {
+			return "", fmt.Errorf("provider %s not found", req.ProviderID)
+		}
+		items, err = buildVerifyList(req.ProviderID)
+	} else {
+		// Verify all providers
+		items, err = buildVerifyListAll()
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to build verify list: %w", err)
+	}
+
+	taskID, err := models.CreateAdminTask(database.DB, "verify-all", req.AdminUsername, len(items))
+	if err != nil {
+		return "", fmt.Errorf("failed to create task record: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tr.mu.Lock()
+	tr.activeTasks[taskID] = cancel
+	tr.mu.Unlock()
+
+	go tr.runVerifyTask(ctx, taskID, req, items)
+
+	return taskID, nil
+}
+
+func buildVerifyList(providerID string) ([]fileVerifyItem, error) {
+	rows, err := database.DB.Query(`
+		SELECT fsl.file_id, fsl.provider_id, fsl.storage_id, COALESCE(fm.padded_size, fm.size_bytes)
+		FROM file_storage_locations fsl
+		JOIN file_metadata fm ON fsl.file_id = fm.file_id
+		WHERE fsl.provider_id = ? AND fsl.status = 'active'`, providerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanVerifyItems(rows)
+}
+
+func buildVerifyListAll() ([]fileVerifyItem, error) {
+	rows, err := database.DB.Query(`
+		SELECT fsl.file_id, fsl.provider_id, fsl.storage_id, COALESCE(fm.padded_size, fm.size_bytes)
+		FROM file_storage_locations fsl
+		JOIN file_metadata fm ON fsl.file_id = fm.file_id
+		WHERE fsl.status = 'active'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanVerifyItems(rows)
+}
+
+func scanVerifyItems(rows *sql.Rows) ([]fileVerifyItem, error) {
+	var items []fileVerifyItem
+	for rows.Next() {
+		var item fileVerifyItem
+		var paddedSizeRaw interface{}
+		if err := rows.Scan(&item.FileID, &item.ProviderID, &item.StorageID, &paddedSizeRaw); err != nil {
+			return nil, err
+		}
+		item.PaddedSize = toInt64FromInterface(paddedSizeRaw)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// runVerifyTask is the background goroutine that performs HEAD-based verification.
+func (tr *TaskRunner) runVerifyTask(
+	ctx context.Context,
+	taskID string,
+	req VerifyTaskRequest,
+	items []fileVerifyItem,
+) {
+	// Acquire semaphore slot
+	tr.semaphore <- struct{}{}
+	defer func() { <-tr.semaphore }()
+
+	// Clean up active task tracking when done
+	defer func() {
+		tr.mu.Lock()
+		delete(tr.activeTasks, taskID)
+		tr.mu.Unlock()
+	}()
+
+	// Mark task as running
+	if err := models.StartAdminTask(database.DB, taskID); err != nil {
+		logging.ErrorLogger.Printf("Task %s: failed to mark as running: %v", taskID, err)
+		return
+	}
+
+	details := VerifyTaskDetails{
+		ProviderID:  req.ProviderID,
+		Fix:         req.Fix,
+		Concurrency: req.Concurrency,
+	}
+
+	persistDetails := func() {
+		detailsSnap, _ := json.Marshal(details)
+		models.UpdateAdminTaskDetails(database.DB, taskID, string(detailsSnap))
+	}
+
+	// Use a semaphore for concurrency control
+	sem := make(chan struct{}, req.Concurrency)
+	var mu sync.Mutex
+	processed := 0
+
+	type verifyResult struct {
+		index        int
+		ok           bool
+		missing      bool
+		sizeMismatch bool
+		err          error
+	}
+
+	resultsCh := make(chan verifyResult, len(items))
+
+	for i, item := range items {
+		// Check for cancellation
+		if ctx.Err() != nil {
+			break
+		}
+
+		sem <- struct{}{}
+		go func(idx int, itm fileVerifyItem) {
+			defer func() { <-sem }()
+
+			provider := storage.Registry.GetProvider(itm.ProviderID)
+			if provider == nil {
+				resultsCh <- verifyResult{index: idx, err: fmt.Errorf("provider %s not found", itm.ProviderID)}
+				return
+			}
+
+			size, err := provider.HeadObject(ctx, itm.StorageID)
+			if err != nil {
+				// Object is missing or unreachable
+				resultsCh <- verifyResult{index: idx, missing: true}
+				return
+			}
+
+			// Check size against padded_size
+			if itm.PaddedSize > 0 && size != itm.PaddedSize {
+				resultsCh <- verifyResult{index: idx, sizeMismatch: true}
+				return
+			}
+
+			resultsCh <- verifyResult{index: idx, ok: true}
+		}(i, item)
+	}
+
+	// Collect results
+	for range items {
+		if ctx.Err() != nil {
+			break
+		}
+
+		r := <-resultsCh
+		mu.Lock()
+		processed++
+
+		if r.ok {
+			details.VerifiedOK++
+		} else if r.missing {
+			details.Missing++
+			if req.Fix {
+				models.UpdateFileStorageLocationStatus(database.DB, items[r.index].FileID, items[r.index].ProviderID, "missing")
+			}
+		} else if r.sizeMismatch {
+			details.SizeMismatch++
+			if req.Fix {
+				models.UpdateFileStorageLocationStatus(database.DB, items[r.index].FileID, items[r.index].ProviderID, "missing")
+			}
+		} else if r.err != nil {
+			details.Errors++
+		}
+
+		// Update progress periodically (every 50 items or when done)
+		if processed%50 == 0 || processed == len(items) {
+			persistDetails()
+			models.UpdateAdminTaskProgress(database.DB, taskID, processed)
+		}
+		mu.Unlock()
+	}
+
+	if ctx.Err() != nil {
+		models.UpdateAdminTaskStatus(database.DB, taskID, "canceled")
+		logging.InfoLogger.Printf("Task %s: canceled at %d/%d", taskID, processed, len(items))
+		return
+	}
+
+	// Final persist
+	persistDetails()
+	models.UpdateAdminTaskProgress(database.DB, taskID, len(items))
+
+	detailsJSON, _ := json.Marshal(details)
+	if err := models.CompleteAdminTask(database.DB, taskID, string(detailsJSON)); err != nil {
+		logging.ErrorLogger.Printf("Task %s: failed to mark complete: %v", taskID, err)
+	}
+
+	// Recalculate cached provider stats from ground truth after verification.
+	// This corrects any drift in total_objects/total_size_bytes on storage_providers.
+	verifiedProviders := make(map[string]bool)
+	for _, item := range items {
+		verifiedProviders[item.ProviderID] = true
+	}
+	for provID := range verifiedProviders {
+		if err := models.RecalculateProviderStats(database.DB, provID); err != nil {
+			logging.ErrorLogger.Printf("Task %s: failed to recalculate stats for provider %s: %v", taskID, provID, err)
+		}
+	}
+
+	logging.InfoLogger.Printf("Task %s: verify-all completed (ok: %d, missing: %d, size_mismatch: %d, errors: %d)",
+		taskID, details.VerifiedOK, details.Missing, details.SizeMismatch, details.Errors)
+}

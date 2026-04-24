@@ -67,6 +67,7 @@ STORAGE MANAGEMENT COMMANDS (Admin API):
     set-tertiary          Demote a provider to tertiary (manual-only)
     swap-providers        Swap primary and secondary provider roles
     set-cost              Set monthly cost per TB for a provider
+    verify-all            Verify all file locations via HEAD requests (detect missing/corrupt blobs)
 
 SYSTEM COMMANDS:
     system-status     System status overview
@@ -381,6 +382,11 @@ func main() {
 	case "set-cost":
 		if err := handleSetCostCommand(client, config, args); err != nil {
 			logError("Set cost failed: %v", err)
+			os.Exit(1)
+		}
+	case "verify-all":
+		if err := handleVerifyAllCommand(client, config, args); err != nil {
+			logError("Verify all failed: %v", err)
 			os.Exit(1)
 		}
 

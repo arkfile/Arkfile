@@ -28,4 +28,7 @@ type ObjectStorageProvider interface {
 	CompleteMultipartUpload(ctx context.Context, objectName, uploadID string, parts []CompletePart) error
 	AbortMultipartUpload(ctx context.Context, objectName, uploadID string) error
 	GetObjectChunk(ctx context.Context, objectName string, offset, length int64) (io.ReadCloser, error)
+	// HeadObject returns the size of an object in bytes without downloading it.
+	// Returns an error if the object does not exist.
+	HeadObject(ctx context.Context, objectName string) (int64, error)
 }

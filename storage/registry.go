@@ -267,6 +267,54 @@ func (r *ProviderRegistry) CopyObjectBetweenProviders(
 	return hashHex, nil
 }
 
+// RemoveLocation describes a provider-specific location to delete an object from.
+type RemoveLocation struct {
+	ProviderID string
+	StorageID  string
+}
+
+// RemoveResult describes the outcome of removing an object from one provider.
+type RemoveResult struct {
+	ProviderID string
+	Success    bool
+	Error      error
+}
+
+// RemoveObjectAll removes the object from all specified provider locations.
+// Returns a result for each location attempted. Failures are logged but do not
+// prevent attempts on remaining providers.
+func (r *ProviderRegistry) RemoveObjectAll(ctx context.Context, locations []RemoveLocation) []RemoveResult {
+	results := make([]RemoveResult, 0, len(locations))
+	for _, loc := range locations {
+		provider := r.GetProvider(loc.ProviderID)
+		if provider == nil {
+			log.Printf("RemoveObjectAll: provider %s not found in registry for object %s", loc.ProviderID, loc.StorageID)
+			results = append(results, RemoveResult{
+				ProviderID: loc.ProviderID,
+				Success:    false,
+				Error:      fmt.Errorf("provider %s not found in registry", loc.ProviderID),
+			})
+			continue
+		}
+
+		err := provider.RemoveObject(ctx, loc.StorageID, RemoveObjectOptions{})
+		if err != nil {
+			log.Printf("RemoveObjectAll: failed to remove object %s from provider %s: %v", loc.StorageID, loc.ProviderID, err)
+			results = append(results, RemoveResult{
+				ProviderID: loc.ProviderID,
+				Success:    false,
+				Error:      err,
+			})
+		} else {
+			results = append(results, RemoveResult{
+				ProviderID: loc.ProviderID,
+				Success:    true,
+			})
+		}
+	}
+	return results
+}
+
 // GetObjectChunkWithFallback attempts chunked GET from primary, then secondary,
 // then tertiary. Returns the chunk reader, the provider ID that served it, and any error.
 func (r *ProviderRegistry) GetObjectChunkWithFallback(ctx context.Context, objectName string, offset, length int64) (io.ReadCloser, string, error) {

@@ -148,7 +148,8 @@ FLAGS:
 		return enc.Encode(resp.Data)
 	}
 
-	fmt.Println("Storage Sync Status\n")
+	fmt.Println("Storage Sync Status")
+	fmt.Println()
 	fmt.Printf("  Total files:        %d\n", safeInt64(resp.Data, "total_files"))
 	fmt.Printf("  On primary only:    %d\n", safeInt64(resp.Data, "on_primary_only"))
 	fmt.Printf("  On secondary only:  %d\n", safeInt64(resp.Data, "on_secondary_only"))
@@ -686,6 +687,138 @@ func displayLoginAlerts(client *HTTPClient, accessToken string) {
 			if part != "" {
 				fmt.Printf("  - %s\n", part)
 			}
+		}
+	}
+}
+
+// handleVerifyAllCommand performs HEAD-based verification of all file locations.
+func handleVerifyAllCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("verify-all", flag.ExitOnError)
+	providerID := fs.String("provider-id", "", "Only verify files on this provider (default: all providers)")
+	fix := fs.Bool("fix", false, "Mark missing files as 'missing' in DB (default: dry-run)")
+	concurrency := fs.Int("concurrency", 10, "Parallel HEAD requests")
+	watch := fs.Bool("watch", false, "Poll task status until complete")
+	jsonOutput := fs.Bool("json", false, "Output as JSON")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin verify-all [FLAGS]
+
+Verify all file locations via HEAD requests against S3 providers.
+Detects missing or size-mismatched blobs without downloading any data.
+
+FLAGS:
+    --provider-id ID    Only verify files on this provider (default: all providers)
+    --fix               Mark missing files as "missing" in DB (default: dry-run)
+    --concurrency N     Parallel HEAD requests (default: 10)
+    --watch             Poll task status until complete
+    --json              Output as JSON
+    --help              Show this help message
+
+EXAMPLES:
+    arkfile-admin verify-all
+    arkfile-admin verify-all --provider-id wasabi-us-central-1 --fix
+    arkfile-admin verify-all --concurrency 20 --watch
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	// Submit verify-all task
+	payload := map[string]interface{}{
+		"fix":         *fix,
+		"concurrency": *concurrency,
+	}
+	if *providerID != "" {
+		payload["provider_id"] = *providerID
+	}
+
+	resp, err := client.makeRequest("POST", "/api/admin/storage/verify-all", payload, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to start verify-all task: %w", err)
+	}
+
+	taskID := safeString(resp.Data, "task_id")
+	if taskID == "" {
+		return fmt.Errorf("no task_id in response")
+	}
+
+	fmt.Printf("Verify-all task started: %s\n", taskID)
+
+	if !*watch {
+		fmt.Printf("Use 'arkfile-admin task-status --task-id %s --watch' to monitor progress.\n", taskID)
+		return nil
+	}
+
+	// Watch mode: poll until complete
+	for {
+		time.Sleep(3 * time.Second)
+
+		taskResp, err := client.makeRequest("GET", "/api/admin/storage/task/"+taskID, nil, session.AccessToken)
+		if err != nil {
+			fmt.Printf("  (poll error: %v)\n", err)
+			continue
+		}
+
+		status := safeString(taskResp.Data, "status")
+		current := safeInt64(taskResp.Data, "progress_current")
+		total := safeInt64(taskResp.Data, "progress_total")
+
+		if *jsonOutput && (status == "completed" || status == "failed" || status == "canceled") {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(taskResp.Data)
+		}
+
+		pct := float64(0)
+		if total > 0 {
+			pct = float64(current) / float64(total) * 100
+		}
+
+		// Extract details for progress display
+		verifiedOK := int64(0)
+		missing := int64(0)
+		sizeMismatch := int64(0)
+		errors := int64(0)
+		if detailsRaw, ok := taskResp.Data["details"].(map[string]interface{}); ok {
+			verifiedOK = safeInt64(detailsRaw, "verified_ok")
+			missing = safeInt64(detailsRaw, "missing")
+			sizeMismatch = safeInt64(detailsRaw, "size_mismatch")
+			errors = safeInt64(detailsRaw, "errors")
+		}
+
+		fmt.Printf("\r  Status: %s | Progress: %d/%d (%.1f%%) | OK: %d | Missing: %d | Size mismatch: %d | Errors: %d",
+			status, current, total, pct, verifiedOK, missing, sizeMismatch, errors)
+
+		if status == "completed" || status == "failed" || status == "canceled" {
+			fmt.Println()
+			if status == "completed" {
+				fmt.Printf("\nVerification complete.\n")
+				fmt.Printf("  OK: %d\n", verifiedOK)
+				fmt.Printf("  Missing: %d\n", missing)
+				fmt.Printf("  Size mismatch: %d\n", sizeMismatch)
+				fmt.Printf("  Errors: %d\n", errors)
+				if missing > 0 || sizeMismatch > 0 {
+					if *fix {
+						fmt.Printf("\n  %d locations updated to status 'missing'.\n", missing+sizeMismatch)
+						fmt.Printf("  Run 'copy-all --skip-existing' to re-copy missing files.\n")
+					} else {
+						fmt.Printf("\n  [!] %d issues found. Run with --fix to mark missing files.\n", missing+sizeMismatch)
+					}
+				}
+			} else {
+				fmt.Printf("\nTask %s: %s\n", taskID, status)
+			}
+			return nil
 		}
 	}
 }

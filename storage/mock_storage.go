@@ -86,6 +86,12 @@ func (m *MockObjectStorageProvider) GetObjectChunk(ctx context.Context, objectNa
 	return reader, args.Error(1)
 }
 
+// HeadObject mocks the HeadObject method
+func (m *MockObjectStorageProvider) HeadObject(ctx context.Context, objectName string) (int64, error) {
+	args := m.Called(ctx, objectName)
+	return args.Get(0).(int64), args.Error(1)
+}
+
 // Mock Stored Object
 // MockStoredObject mocks the object returned by GetObject
 type MockStoredObject struct {

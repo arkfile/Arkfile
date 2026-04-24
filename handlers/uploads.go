@@ -954,25 +954,24 @@ func DeleteFile(c echo.Context) error {
 	}
 
 	if len(locations) > 0 {
-		// Multi-provider delete: attempt removal from each active provider
-		for _, loc := range locations {
-			provider := storage.Registry.GetProvider(loc.ProviderID)
-			if provider == nil {
-				logging.ErrorLogger.Printf("Provider %s not found in registry for file %s, marking delete_failed", loc.ProviderID, fileID)
-				models.UpdateFileStorageLocationStatus(database.DB, fileID, loc.ProviderID, "delete_failed")
-				continue
+		// Multi-provider delete via registry
+		removeLocations := make([]storage.RemoveLocation, len(locations))
+		for i, loc := range locations {
+			removeLocations[i] = storage.RemoveLocation{
+				ProviderID: loc.ProviderID,
+				StorageID:  loc.StorageID,
 			}
-
-			removeErr := provider.RemoveObject(c.Request().Context(), loc.StorageID, storage.RemoveObjectOptions{})
-			if removeErr != nil {
-				logging.ErrorLogger.Printf("Failed to delete file %s from provider %s: %v", fileID, loc.ProviderID, removeErr)
-				models.UpdateFileStorageLocationStatus(database.DB, fileID, loc.ProviderID, "delete_failed")
-			} else {
-				models.UpdateFileStorageLocationStatus(database.DB, fileID, loc.ProviderID, "deleted")
-				// Decrement provider stats
-				if statsErr := models.IncrementStorageProviderStats(database.DB, loc.ProviderID, -1, -paddedSize); statsErr != nil {
-					logging.ErrorLogger.Printf("Failed to decrement provider stats for %s: %v", loc.ProviderID, statsErr)
+		}
+		results := storage.Registry.RemoveObjectAll(c.Request().Context(), removeLocations)
+		for _, result := range results {
+			if result.Success {
+				models.UpdateFileStorageLocationStatus(database.DB, fileID, result.ProviderID, "deleted")
+				if statsErr := models.IncrementStorageProviderStats(database.DB, result.ProviderID, -1, -paddedSize); statsErr != nil {
+					logging.ErrorLogger.Printf("Failed to decrement provider stats for %s: %v", result.ProviderID, statsErr)
 				}
+			} else {
+				logging.ErrorLogger.Printf("Failed to delete file %s from provider %s: %v", fileID, result.ProviderID, result.Error)
+				models.UpdateFileStorageLocationStatus(database.DB, fileID, result.ProviderID, "delete_failed")
 			}
 		}
 	} else {
