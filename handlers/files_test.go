@@ -18,12 +18,21 @@ import (
 
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/models"
+	"github.com/84adam/Arkfile/storage"
 )
 
 // Test DeleteFile
+//
+// The DeleteFile handler (handlers/uploads.go) queries 4 columns from file_metadata:
+//   owner_username, storage_id, size_bytes, padded_size
+// Then queries file_storage_locations for active location records.
+// If locations exist: calls Registry.RemoveObjectAll() for multi-provider delete.
+// If no locations: falls back to Registry.Primary().RemoveObject() for pre-existing files.
 
-// TestDeleteFile_Success tests successful file deletion
-func TestDeleteFile_Success(t *testing.T) {
+// TestDeleteFile_Success_FallbackToPrimary tests successful file deletion
+// when no file_storage_locations records exist (pre-existing file or location query returns empty).
+// This exercises the fallback path: Primary().RemoveObject().
+func TestDeleteFile_Success_FallbackToPrimary(t *testing.T) {
 	username := "user-delete"
 	fileID := "file-to-delete-123"
 	fileSize := int64(1024)
@@ -37,13 +46,20 @@ func TestDeleteFile_Success(t *testing.T) {
 	c.Set("user", token)
 
 	mockDB.ExpectBegin()
-	// Query matches the direct SQL in DeleteFile handler
-	ownerCheckSQL := `SELECT owner_username, storage_id, size_bytes FROM file_metadata WHERE file_id = \?`
+	// Handler now queries 4 columns: owner_username, storage_id, size_bytes, padded_size
+	ownerCheckSQL := `SELECT owner_username, storage_id, size_bytes, padded_size FROM file_metadata WHERE file_id = \?`
 	storageID := "test-storage-id-456"
-	ownerRows := sqlmock.NewRows([]string{"owner_username", "storage_id", "size_bytes"}).AddRow(username, storageID, fileSize)
+	ownerRows := sqlmock.NewRows([]string{"owner_username", "storage_id", "size_bytes", "padded_size"}).
+		AddRow(username, storageID, float64(fileSize), nil)
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(fileID).WillReturnRows(ownerRows)
 
-	// DeleteFile removes from storage first, then deletes metadata
+	// GetActiveFileStorageLocations query returns empty (no location records)
+	locationSQL := `SELECT id, file_id, provider_id, storage_id, status, created_at, verified_at FROM file_storage_locations WHERE file_id = \? AND status = 'active'`
+	mockDB.ExpectQuery(locationSQL).WithArgs(fileID).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "file_id", "provider_id", "storage_id", "status", "created_at", "verified_at"}),
+	)
+
+	// Fallback: delete from primary only
 	mockStorage.On("RemoveObject", mock.Anything, storageID, mock.AnythingOfType("storage.RemoveObjectOptions")).Return(nil).Once()
 
 	deleteMetaSQL := `DELETE FROM file_metadata WHERE file_id = \?`
@@ -96,8 +112,8 @@ func TestDeleteFile_NotFound(t *testing.T) {
 	c.Set("user", token)
 
 	mockDB.ExpectBegin()
-	ownerCheckSQL := `SELECT owner_username, storage_id, size_bytes FROM file_metadata WHERE file_id = \?`
-	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(fileID).WillReturnError(fmt.Errorf("sql: no rows in result set")) // Simulate sql.ErrNoRows
+	ownerCheckSQL := `SELECT owner_username, storage_id, size_bytes, padded_size FROM file_metadata WHERE file_id = \?`
+	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(fileID).WillReturnError(fmt.Errorf("sql: no rows in result set"))
 
 	mockDB.ExpectRollback()
 
@@ -126,9 +142,10 @@ func TestDeleteFile_NotOwner(t *testing.T) {
 	c.Set("user", token)
 
 	mockDB.ExpectBegin()
-	ownerCheckSQL := `SELECT owner_username, storage_id, size_bytes FROM file_metadata WHERE file_id = \?`
+	ownerCheckSQL := `SELECT owner_username, storage_id, size_bytes, padded_size FROM file_metadata WHERE file_id = \?`
 	storageID := "test-storage-id-789"
-	ownerRows := sqlmock.NewRows([]string{"owner_username", "storage_id", "size_bytes"}).AddRow(ownerUsername, storageID, fileSize)
+	ownerRows := sqlmock.NewRows([]string{"owner_username", "storage_id", "size_bytes", "padded_size"}).
+		AddRow(ownerUsername, storageID, float64(fileSize), nil)
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(fileID).WillReturnRows(ownerRows)
 	mockDB.ExpectRollback()
 
@@ -142,7 +159,7 @@ func TestDeleteFile_NotOwner(t *testing.T) {
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
-// TestDeleteFile_StorageError tests failure during storage object removal
+// TestDeleteFile_StorageError tests failure during storage object removal (fallback path).
 func TestDeleteFile_StorageError(t *testing.T) {
 	username := "user-delete"
 	fileID := "file-stor-err-789"
@@ -156,10 +173,17 @@ func TestDeleteFile_StorageError(t *testing.T) {
 	c.Set("user", token)
 
 	mockDB.ExpectBegin()
-	ownerCheckSQL := `SELECT owner_username, storage_id, size_bytes FROM file_metadata WHERE file_id = \?`
+	ownerCheckSQL := `SELECT owner_username, storage_id, size_bytes, padded_size FROM file_metadata WHERE file_id = \?`
 	storageID := "test-storage-id-999"
-	ownerRows := sqlmock.NewRows([]string{"owner_username", "storage_id", "size_bytes"}).AddRow(username, storageID, fileSize)
+	ownerRows := sqlmock.NewRows([]string{"owner_username", "storage_id", "size_bytes", "padded_size"}).
+		AddRow(username, storageID, float64(fileSize), nil)
 	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(fileID).WillReturnRows(ownerRows)
+
+	// GetActiveFileStorageLocations returns empty (fallback path)
+	locationSQL := `SELECT id, file_id, provider_id, storage_id, status, created_at, verified_at FROM file_storage_locations WHERE file_id = \? AND status = 'active'`
+	mockDB.ExpectQuery(locationSQL).WithArgs(fileID).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "file_id", "provider_id", "storage_id", "status", "created_at", "verified_at"}),
+	)
 
 	storageError := fmt.Errorf("simulated storage layer error")
 	mockStorage.On("RemoveObject", mock.Anything, storageID, mock.AnythingOfType("storage.RemoveObjectOptions")).Return(storageError).Once()
@@ -546,3 +570,210 @@ func TestGetFileMeta_UnapprovedUser(t *testing.T) {
 //   (Existing tests cover Success, NotFound, NotOwner, StorageError)
 // - TestDeleteFile_TransactionBeginError: Simulate failure in database.DB.Begin().
 // - TestDeleteFile_DBOwnerCheckError_Generic: Simulate a generic DB error (not sql.ErrNoRows) during the
+//     owner_username query in DeleteFile. Should also result in HTTP 404 (handler treats all query errors as not found).
+
+// TestDeleteFile_WithMultiProviderLocations tests the multi-provider delete path
+// where file_storage_locations has active records for both primary and secondary providers.
+// Verifies that RemoveObjectAll is called (both providers get RemoveObject),
+// UpdateFileStorageLocationStatus and IncrementStorageProviderStats DB calls are made,
+// and the file metadata is deleted successfully.
+func TestDeleteFile_WithMultiProviderLocations(t *testing.T) {
+	username := "user-multi-delete"
+	fileID := "file-multi-prov-123"
+	storageID := "stor-multi-abc"
+	fileSize := int64(2048)
+	paddedSize := int64(2560)
+	initialStorage := int64(10000)
+
+	c, rec, mockDB, mockPrimary := setupTestEnv(t, http.MethodDelete, "/files/:fileId", nil)
+	c.SetParamNames("fileId")
+	c.SetParamValues(fileID)
+	claims := &auth.Claims{Username: username}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// Set up secondary provider on the registry
+	mockSecondary := &storage.MockObjectStorageProvider{}
+	storage.Registry.SetSecondary(mockSecondary, "mock-secondary")
+	t.Cleanup(func() {
+		// Reset secondary after test
+		storage.Registry.SetSecondary(nil, "")
+	})
+
+	mockDB.ExpectBegin()
+
+	// Mock 4-column file_metadata query
+	ownerCheckSQL := `SELECT owner_username, storage_id, size_bytes, padded_size FROM file_metadata WHERE file_id = \?`
+	ownerRows := sqlmock.NewRows([]string{"owner_username", "storage_id", "size_bytes", "padded_size"}).
+		AddRow(username, storageID, float64(fileSize), float64(paddedSize))
+	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(fileID).WillReturnRows(ownerRows)
+
+	// Mock GetActiveFileStorageLocations returning 2 active locations
+	locationSQL := `SELECT id, file_id, provider_id, storage_id, status, created_at, verified_at FROM file_storage_locations WHERE file_id = \? AND status = 'active'`
+	locationRows := sqlmock.NewRows([]string{"id", "file_id", "provider_id", "storage_id", "status", "created_at", "verified_at"}).
+		AddRow(int64(1), fileID, "mock-test", storageID, "active", "2026-01-01 00:00:00", nil).
+		AddRow(int64(2), fileID, "mock-secondary", storageID, "active", "2026-01-01 00:00:00", nil)
+	mockDB.ExpectQuery(locationSQL).WithArgs(fileID).WillReturnRows(locationRows)
+
+	// Mock RemoveObject on both providers (called by RemoveObjectAll)
+	mockPrimary.On("RemoveObject", mock.Anything, storageID, storage.RemoveObjectOptions{}).Return(nil).Once()
+	mockSecondary.On("RemoveObject", mock.Anything, storageID, storage.RemoveObjectOptions{}).Return(nil).Once()
+
+	// Mock UpdateFileStorageLocationStatus for primary (status = "deleted")
+	updateLocStatusSQL := `UPDATE file_storage_locations`
+	mockDB.ExpectExec(updateLocStatusSQL).
+		WithArgs("deleted", fileID, "mock-test").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock IncrementStorageProviderStats for primary (decrement)
+	incrementStatsSQL := `UPDATE storage_providers`
+	mockDB.ExpectExec(incrementStatsSQL).
+		WithArgs(int64(-1), -paddedSize, "mock-test").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock UpdateFileStorageLocationStatus for secondary (status = "deleted")
+	mockDB.ExpectExec(updateLocStatusSQL).
+		WithArgs("deleted", fileID, "mock-secondary").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock IncrementStorageProviderStats for secondary (decrement)
+	mockDB.ExpectExec(incrementStatsSQL).
+		WithArgs(int64(-1), -paddedSize, "mock-secondary").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock DELETE file_metadata
+	deleteMetaSQL := `DELETE FROM file_metadata WHERE file_id = \?`
+	mockDB.ExpectExec(deleteMetaSQL).WithArgs(fileID).WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock GetUserByUsername
+	getUserSQL := `SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
+	userID := int64(1)
+	userRows := sqlmock.NewRows([]string{
+		"id", "username", "created_at",
+		"total_storage_bytes", "storage_limit_bytes",
+		"is_approved", "approved_by", "approved_at", "is_admin",
+	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
+
+	// Mock UpdateStorageUsage
+	updateStorageSQL := `UPDATE users SET total_storage_bytes = \? WHERE id = \?`
+	expectedStorage := initialStorage - fileSize
+	mockDB.ExpectExec(updateStorageSQL).WithArgs(expectedStorage, userID).WillReturnResult(sqlmock.NewResult(0, 1))
+	mockDB.ExpectCommit()
+
+	// Mock LogUserAction
+	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
+	mockDB.ExpectExec(logActionSQL).WithArgs(username, "deleted", fileID).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := DeleteFile(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	err = json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "File deleted successfully", resp["message"])
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+	mockPrimary.AssertExpectations(t)
+	mockSecondary.AssertExpectations(t)
+}
+
+// TestDeleteFile_PartialDeleteFailure tests multi-provider delete where one provider
+// succeeds and one fails. Verifies the file metadata still gets deleted (current handler
+// behavior: partial failure does not block metadata cleanup) and the failed provider
+// gets "delete_failed" status.
+func TestDeleteFile_PartialDeleteFailure(t *testing.T) {
+	username := "user-partial-del"
+	fileID := "file-partial-fail-456"
+	storageID := "stor-partial-xyz"
+	fileSize := int64(4096)
+	paddedSize := int64(5000)
+	initialStorage := int64(20000)
+
+	c, rec, mockDB, mockPrimary := setupTestEnv(t, http.MethodDelete, "/files/:fileId", nil)
+	c.SetParamNames("fileId")
+	c.SetParamValues(fileID)
+	claims := &auth.Claims{Username: username}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// Set up secondary provider on the registry
+	mockSecondary := &storage.MockObjectStorageProvider{}
+	storage.Registry.SetSecondary(mockSecondary, "mock-secondary")
+	t.Cleanup(func() {
+		storage.Registry.SetSecondary(nil, "")
+	})
+
+	mockDB.ExpectBegin()
+
+	// Mock 4-column file_metadata query
+	ownerCheckSQL := `SELECT owner_username, storage_id, size_bytes, padded_size FROM file_metadata WHERE file_id = \?`
+	ownerRows := sqlmock.NewRows([]string{"owner_username", "storage_id", "size_bytes", "padded_size"}).
+		AddRow(username, storageID, float64(fileSize), float64(paddedSize))
+	mockDB.ExpectQuery(ownerCheckSQL).WithArgs(fileID).WillReturnRows(ownerRows)
+
+	// Mock GetActiveFileStorageLocations returning 2 active locations
+	locationSQL := `SELECT id, file_id, provider_id, storage_id, status, created_at, verified_at FROM file_storage_locations WHERE file_id = \? AND status = 'active'`
+	locationRows := sqlmock.NewRows([]string{"id", "file_id", "provider_id", "storage_id", "status", "created_at", "verified_at"}).
+		AddRow(int64(1), fileID, "mock-test", storageID, "active", "2026-01-01 00:00:00", nil).
+		AddRow(int64(2), fileID, "mock-secondary", storageID, "active", "2026-01-01 00:00:00", nil)
+	mockDB.ExpectQuery(locationSQL).WithArgs(fileID).WillReturnRows(locationRows)
+
+	// Primary succeeds, secondary fails
+	mockPrimary.On("RemoveObject", mock.Anything, storageID, storage.RemoveObjectOptions{}).Return(nil).Once()
+	mockSecondary.On("RemoveObject", mock.Anything, storageID, storage.RemoveObjectOptions{}).Return(fmt.Errorf("secondary storage unavailable")).Once()
+
+	// Primary: status = "deleted" + stats decrement
+	updateLocStatusSQL := `UPDATE file_storage_locations`
+	mockDB.ExpectExec(updateLocStatusSQL).
+		WithArgs("deleted", fileID, "mock-test").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	incrementStatsSQL := `UPDATE storage_providers`
+	mockDB.ExpectExec(incrementStatsSQL).
+		WithArgs(int64(-1), -paddedSize, "mock-test").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Secondary: status = "delete_failed" (no stats decrement for failed delete)
+	mockDB.ExpectExec(updateLocStatusSQL).
+		WithArgs("delete_failed", fileID, "mock-secondary").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// File metadata still gets deleted despite partial failure
+	deleteMetaSQL := `DELETE FROM file_metadata WHERE file_id = \?`
+	mockDB.ExpectExec(deleteMetaSQL).WithArgs(fileID).WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock GetUserByUsername
+	getUserSQL := `SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes, is_approved, approved_by, approved_at, is_admin FROM users WHERE username = \?`
+	userID := int64(1)
+	userRows := sqlmock.NewRows([]string{
+		"id", "username", "created_at",
+		"total_storage_bytes", "storage_limit_bytes",
+		"is_approved", "approved_by", "approved_at", "is_admin",
+	}).AddRow(userID, username, time.Now(), initialStorage, models.DefaultStorageLimit, true, nil, nil, false)
+	mockDB.ExpectQuery(getUserSQL).WithArgs(username).WillReturnRows(userRows)
+
+	// Mock UpdateStorageUsage
+	updateStorageSQL := `UPDATE users SET total_storage_bytes = \? WHERE id = \?`
+	expectedStorage := initialStorage - fileSize
+	mockDB.ExpectExec(updateStorageSQL).WithArgs(expectedStorage, userID).WillReturnResult(sqlmock.NewResult(0, 1))
+	mockDB.ExpectCommit()
+
+	// Mock LogUserAction
+	logActionSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
+	mockDB.ExpectExec(logActionSQL).WithArgs(username, "deleted", fileID).WillReturnResult(sqlmock.NewResult(1, 1))
+
+	err := DeleteFile(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]interface{}
+	err = json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "File deleted successfully", resp["message"])
+
+	assert.NoError(t, mockDB.ExpectationsWereMet())
+	mockPrimary.AssertExpectations(t)
+	mockSecondary.AssertExpectations(t)
+}

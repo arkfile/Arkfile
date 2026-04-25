@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"testing"
@@ -18,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/84adam/Arkfile/auth"
-	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/models"
 )
 
@@ -1151,56 +1149,6 @@ func TestUpdateUser_RevokeAccess_RevokeDBError(t *testing.T) {
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
 
-// TestUpdateUser_RevokeAccess_SimulateTokenDeleteError - This test is more for a RevokeUserAccess handler that includes token deletion.
-func TestUpdateUser_RevokeAccess_SimulateTokenDeleteError(t *testing.T) {
-	adminUsername := "admin-user"
-	targetUsername := "target-user"
-	var logBuf bytes.Buffer
-	originalErrorLogger := logging.ErrorLogger
-	logging.ErrorLogger = log.New(&logBuf, "ERROR: ", 0)
-	defer func() { logging.ErrorLogger = originalErrorLogger }()
-
-	isApprovedFalse := false
-	reqBodyMap := map[string]interface{}{"is_approved": &isApprovedFalse} // Update body for UpdateUser
-	jsonBody, _ := json.Marshal(reqBodyMap)
-
-	c, rec, mockDB, _ := setupTestEnv(t, http.MethodPut, "/admin/users/:username/update", bytes.NewReader(jsonBody)) // Use UpdateUser endpoint
-	c.SetParamNames("username")
-	c.SetParamValues(targetUsername)
-
-	adminClaims := &auth.Claims{Username: adminUsername}
-	adminToken := jwt.NewWithClaims(jwt.SigningMethodHS256, adminClaims)
-	c.Set("user", adminToken)
-
-	mockDB.ExpectQuery(`
-		SELECT id, username, created_at,
-		       total_storage_bytes, storage_limit_bytes,
-		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE username = ?`).WithArgs(adminUsername).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
-			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
-
-	mockDB.ExpectBegin()
-	mockDB.ExpectQuery("SELECT 1 FROM users WHERE username = ?").WithArgs(targetUsername).WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
-
-	// UpdateUser sets is_approved - simulate this failing
-	updateSQL := `UPDATE users SET is_approved = \? WHERE username = \?`
-	mockDB.ExpectExec(updateSQL).
-		WithArgs(false, targetUsername).
-		WillReturnError(fmt.Errorf("DB error updating approval status"))
-
-	mockDB.ExpectRollback()
-
-	err := UpdateUser(c)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	var resp map[string]interface{}
-	json.Unmarshal(rec.Body.Bytes(), &resp)
-	assert.Equal(t, "Failed to update approval status", resp["message"])
-
-	assert.NoError(t, mockDB.ExpectationsWereMet())
-}
-
 // TestListUsers_Success_Admin tests successful retrieval of all users by an admin.
 func TestListUsers_Success_Admin(t *testing.T) {
 	adminUsername := "admin-user"
@@ -2257,11 +2205,11 @@ func TestAdminListUserFiles_Success(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(2, targetUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, false))
 
-	// Mock file listing query (use float64 values to simulate rqlite behavior)
-	fileRows := sqlmock.NewRows([]string{"file_id", "storage_id", "size_bytes", "chunk_count", "upload_date"}).
-		AddRow("file-id-1", "storage-1", float64(1048576), float64(1), "2026-04-17 10:00:00").
-		AddRow("file-id-2", "storage-2", float64(52428800), float64(4), "2026-04-17 11:00:00")
-	mockDB.ExpectQuery("SELECT file_id, storage_id, size_bytes, chunk_count, upload_date FROM file_metadata WHERE owner_username = ?").
+	// Mock file listing query with LEFT JOIN (7 columns including password_type and locations)
+	fileRows := sqlmock.NewRows([]string{"file_id", "storage_id", "size_bytes", "chunk_count", "upload_date", "password_type", "locations"}).
+		AddRow("file-id-1", "storage-1", float64(1048576), float64(1), "2026-04-17 10:00:00", "account", "mock-test").
+		AddRow("file-id-2", "storage-2", float64(52428800), float64(4), "2026-04-17 11:00:00", "custom", "mock-test")
+	mockDB.ExpectQuery(`SELECT fm.file_id, fm.storage_id, fm.size_bytes, fm.chunk_count, fm.upload_date`).
 		WithArgs(targetUsername).WillReturnRows(fileRows)
 
 	err := AdminListUserFiles(c)
@@ -2275,6 +2223,11 @@ func TestAdminListUserFiles_Success(t *testing.T) {
 
 	files := data["files"].([]interface{})
 	assert.Len(t, files, 2)
+
+	// Verify password_type and locations are present
+	file0 := files[0].(map[string]interface{})
+	assert.Equal(t, "file-id-1", file0["file_id"])
+	assert.Equal(t, "account", file0["password_type"])
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 }
@@ -2300,9 +2253,10 @@ func TestAdminListUserFiles_NoFiles(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(2, targetUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, false))
 
-	// Empty file list
-	mockDB.ExpectQuery("SELECT file_id, storage_id, size_bytes, chunk_count, upload_date FROM file_metadata WHERE owner_username = ?").
-		WithArgs(targetUsername).WillReturnRows(sqlmock.NewRows([]string{"file_id", "storage_id", "size_bytes", "chunk_count", "upload_date"}))
+	// Empty file list (7 columns matching the LEFT JOIN query)
+	mockDB.ExpectQuery(`SELECT fm.file_id, fm.storage_id, fm.size_bytes, fm.chunk_count, fm.upload_date`).
+		WithArgs(targetUsername).WillReturnRows(
+		sqlmock.NewRows([]string{"file_id", "storage_id", "size_bytes", "chunk_count", "upload_date", "password_type", "locations"}))
 
 	err := AdminListUserFiles(c)
 	require.NoError(t, err)

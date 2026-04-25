@@ -453,6 +453,187 @@ func TestCopyObjectBetweenProviders_ConsistentHash(t *testing.T) {
 	assert.Equal(t, hash1, hash2)
 }
 
+// --- HeadObject tests (used by verify-all) ---
+
+func TestHeadObject_Success(t *testing.T) {
+	primary := new(MockObjectStorageProvider)
+	primary.On("HeadObject", mock.Anything, "test-obj").Return(int64(12345), nil)
+
+	reg := newTestRegistry(primary, "primary-1")
+	provider := reg.GetProvider("primary-1")
+	size, err := provider.HeadObject(context.Background(), "test-obj")
+
+	assert.NoError(t, err)
+	assert.Equal(t, int64(12345), size)
+	primary.AssertExpectations(t)
+}
+
+func TestHeadObject_NotFound(t *testing.T) {
+	primary := new(MockObjectStorageProvider)
+	primary.On("HeadObject", mock.Anything, "missing-obj").Return(int64(0), errors.New("object not found"))
+
+	reg := newTestRegistry(primary, "primary-1")
+	provider := reg.GetProvider("primary-1")
+	size, err := provider.HeadObject(context.Background(), "missing-obj")
+
+	assert.Error(t, err)
+	assert.Equal(t, int64(0), size)
+	assert.Contains(t, err.Error(), "not found")
+	primary.AssertExpectations(t)
+}
+
+// --- CopyObjectBetweenProviders large object (multipart) tests ---
+
+func TestCopyObjectBetweenProviders_LargeObject_Multipart(t *testing.T) {
+	source := new(MockObjectStorageProvider)
+	dest := new(MockObjectStorageProvider)
+
+	// Create content larger than CopyMultipartThreshold (100 MB).
+	// We use a real buffer here to exercise the multipart read path.
+	// 150 MB = 2 full 64MB parts + 1 partial 22MB part = 3 parts total.
+	objectSize := int64(150 * 1024 * 1024)
+	content := make([]byte, objectSize)
+	// Fill with a pattern so hashing is deterministic
+	for i := range content {
+		content[i] = byte(i % 251)
+	}
+
+	obj := &MockStoredObject{}
+	obj.Content = bytes.NewReader(content)
+	obj.On("Close").Return(nil)
+	source.On("GetObject", mock.Anything, "large-obj", GetObjectOptions{}).Return(obj, nil)
+
+	// Destination multipart sequence
+	uploadID := "test-upload-id-123"
+	dest.On("InitiateMultipartUpload", mock.Anything, "large-obj", mock.Anything).Return(uploadID, nil)
+
+	// Expect 3 UploadPart calls: part 1 (64MB), part 2 (64MB), part 3 (22MB)
+	part1Size := int64(CopyMultipartPartSize)       // 64 MB
+	part2Size := int64(CopyMultipartPartSize)       // 64 MB
+	part3Size := objectSize - part1Size - part2Size // 22 MB
+
+	dest.On("UploadPart", mock.Anything, "large-obj", uploadID, 1, mock.Anything, part1Size).
+		Return(CompletePart{PartNumber: 1, ETag: "etag-1"}, nil)
+	dest.On("UploadPart", mock.Anything, "large-obj", uploadID, 2, mock.Anything, part2Size).
+		Return(CompletePart{PartNumber: 2, ETag: "etag-2"}, nil)
+	dest.On("UploadPart", mock.Anything, "large-obj", uploadID, 3, mock.Anything, part3Size).
+		Return(CompletePart{PartNumber: 3, ETag: "etag-3"}, nil)
+
+	expectedParts := []CompletePart{
+		{PartNumber: 1, ETag: "etag-1"},
+		{PartNumber: 2, ETag: "etag-2"},
+		{PartNumber: 3, ETag: "etag-3"},
+	}
+	dest.On("CompleteMultipartUpload", mock.Anything, "large-obj", uploadID, expectedParts).Return(nil)
+
+	reg := newTestRegistry(source, "source-1")
+
+	var progressCalls []int64
+	onProgress := func(bytesCopied int64) {
+		progressCalls = append(progressCalls, bytesCopied)
+	}
+
+	hash, err := reg.CopyObjectBetweenProviders(
+		context.Background(), "large-obj", source, dest, objectSize, onProgress,
+	)
+
+	assert.NoError(t, err)
+	assert.NotEmpty(t, hash)
+	assert.Len(t, hash, 64) // SHA-256 hex = 64 chars
+
+	// Progress should be called once per part (3 parts)
+	assert.Len(t, progressCalls, 3)
+	assert.Equal(t, part1Size, progressCalls[0])
+	assert.Equal(t, part1Size+part2Size, progressCalls[1])
+	assert.Equal(t, objectSize, progressCalls[2])
+
+	source.AssertExpectations(t)
+	dest.AssertExpectations(t)
+}
+
+func TestCopyObjectBetweenProviders_LargeObject_PartUploadFails(t *testing.T) {
+	source := new(MockObjectStorageProvider)
+	dest := new(MockObjectStorageProvider)
+
+	objectSize := int64(150 * 1024 * 1024)
+	content := make([]byte, objectSize)
+	for i := range content {
+		content[i] = byte(i % 251)
+	}
+
+	obj := &MockStoredObject{}
+	obj.Content = bytes.NewReader(content)
+	obj.On("Close").Return(nil)
+	source.On("GetObject", mock.Anything, "large-fail-obj", GetObjectOptions{}).Return(obj, nil)
+
+	uploadID := "fail-upload-id"
+	dest.On("InitiateMultipartUpload", mock.Anything, "large-fail-obj", mock.Anything).Return(uploadID, nil)
+
+	// First part succeeds, second part fails
+	dest.On("UploadPart", mock.Anything, "large-fail-obj", uploadID, 1, mock.Anything, int64(CopyMultipartPartSize)).
+		Return(CompletePart{PartNumber: 1, ETag: "etag-1"}, nil)
+	dest.On("UploadPart", mock.Anything, "large-fail-obj", uploadID, 2, mock.Anything, int64(CopyMultipartPartSize)).
+		Return(CompletePart{}, errors.New("upload part 2 failed"))
+	dest.On("AbortMultipartUpload", mock.Anything, "large-fail-obj", uploadID).Return(nil)
+
+	reg := newTestRegistry(source, "source-1")
+
+	hash, err := reg.CopyObjectBetweenProviders(
+		context.Background(), "large-fail-obj", source, dest, objectSize, nil,
+	)
+
+	assert.Error(t, err)
+	assert.Empty(t, hash)
+	assert.Contains(t, err.Error(), "failed to upload part 2")
+
+	source.AssertExpectations(t)
+	dest.AssertExpectations(t)
+}
+
+func TestCopyObjectBetweenProviders_LargeObject_Cancellation(t *testing.T) {
+	source := new(MockObjectStorageProvider)
+	dest := new(MockObjectStorageProvider)
+
+	objectSize := int64(200 * 1024 * 1024)
+	content := make([]byte, objectSize)
+
+	obj := &MockStoredObject{}
+	obj.Content = bytes.NewReader(content)
+	obj.On("Close").Return(nil)
+	source.On("GetObject", mock.Anything, "cancel-obj", GetObjectOptions{}).Return(obj, nil)
+
+	uploadID := "cancel-upload-id"
+	dest.On("InitiateMultipartUpload", mock.Anything, "cancel-obj", mock.Anything).Return(uploadID, nil)
+
+	// First part succeeds
+	dest.On("UploadPart", mock.Anything, "cancel-obj", uploadID, 1, mock.Anything, int64(CopyMultipartPartSize)).
+		Return(CompletePart{PartNumber: 1, ETag: "etag-1"}, nil)
+	dest.On("AbortMultipartUpload", mock.Anything, "cancel-obj", uploadID).Return(nil)
+
+	reg := newTestRegistry(source, "source-1")
+
+	// Create a context that we cancel after part 1
+	ctx, cancel := context.WithCancel(context.Background())
+	onProgress := func(bytesCopied int64) {
+		// Cancel after first part is uploaded
+		if bytesCopied >= int64(CopyMultipartPartSize) {
+			cancel()
+		}
+	}
+
+	hash, err := reg.CopyObjectBetweenProviders(
+		ctx, "cancel-obj", source, dest, objectSize, onProgress,
+	)
+
+	assert.Error(t, err)
+	assert.Empty(t, hash)
+	assert.ErrorIs(t, err, context.Canceled)
+
+	source.AssertExpectations(t)
+	// AbortMultipartUpload should have been called
+	dest.AssertCalled(t, "AbortMultipartUpload", mock.Anything, "cancel-obj", uploadID)
+}
+
 // --- ID accessor tests ---
 
 func TestIDAccessors(t *testing.T) {
