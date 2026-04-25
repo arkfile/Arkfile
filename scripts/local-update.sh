@@ -134,10 +134,39 @@ if [ -n "$TLS_PORT_VALUE" ]; then
     TLS_PORT="$TLS_PORT_VALUE"
 fi
 
-# Detect storage backend from existing secrets.env
+# Detect storage backends from existing secrets.env
 STORAGE_PROVIDER=$(read_secrets_env_value "STORAGE_PROVIDER")
 if [ -z "$STORAGE_PROVIDER" ]; then
     STORAGE_PROVIDER="generic-s3"
+fi
+STORAGE_PROVIDER_ID=$(read_secrets_env_value "STORAGE_PROVIDER_ID")
+STORAGE_PROVIDER_2=$(read_secrets_env_value "STORAGE_PROVIDER_2")
+STORAGE_PROVIDER_2_ID=$(read_secrets_env_value "STORAGE_PROVIDER_2_ID")
+STORAGE_PROVIDER_3=$(read_secrets_env_value "STORAGE_PROVIDER_3")
+STORAGE_PROVIDER_3_ID=$(read_secrets_env_value "STORAGE_PROVIDER_3_ID")
+
+# Build a display string for all configured providers
+STORAGE_DISPLAY="$STORAGE_PROVIDER"
+if [ -n "$STORAGE_PROVIDER_ID" ]; then
+    STORAGE_DISPLAY="${STORAGE_PROVIDER_ID} (${STORAGE_PROVIDER})"
+fi
+if [ -n "$STORAGE_PROVIDER_2" ]; then
+    SECONDARY_LABEL="$STORAGE_PROVIDER_2"
+    if [ -n "$STORAGE_PROVIDER_2_ID" ]; then
+        SECONDARY_LABEL="${STORAGE_PROVIDER_2_ID} (${STORAGE_PROVIDER_2})"
+    fi
+    STORAGE_DISPLAY="${STORAGE_DISPLAY} + ${SECONDARY_LABEL}"
+fi
+if [ -n "$STORAGE_PROVIDER_3" ]; then
+    TERTIARY_LABEL="$STORAGE_PROVIDER_3"
+    if [ -n "$STORAGE_PROVIDER_3_ID" ]; then
+        TERTIARY_LABEL="${STORAGE_PROVIDER_3_ID} (${STORAGE_PROVIDER_3})"
+    fi
+    STORAGE_DISPLAY="${STORAGE_DISPLAY} + ${TERTIARY_LABEL}"
+fi
+MULTI_BACKEND=false
+if [ -n "$STORAGE_PROVIDER_2" ]; then
+    MULTI_BACKEND=true
 fi
 
 # Determine if storage is local SeaweedFS or external.
@@ -150,7 +179,10 @@ if [ "$STORAGE_PROVIDER" = "generic-s3" ]; then
         IS_LOCAL_SEAWEEDFS=true
     fi
 fi
-print_status "INFO" "Existing deployment detected (storage: $STORAGE_PROVIDER, TLS port: $TLS_PORT)"
+print_status "INFO" "Existing deployment detected (storage: $STORAGE_DISPLAY, TLS port: $TLS_PORT)"
+if [ "$MULTI_BACKEND" = "true" ]; then
+    print_status "INFO" "Primary role is DB-authoritative (use arkfile-admin storage-status after restart)"
+fi
 
 if ! GO_BINARY=$(find_go_binary); then
     print_status "ERROR" "Go compiler not found"
@@ -164,7 +196,10 @@ echo -e "${BLUE}ARKFILE LOCAL UPDATE${NC}"
 echo
 echo -e "${BLUE}Configuration:${NC}"
 echo "  TLS port:           $TLS_PORT"
-echo "  Storage provider:   $STORAGE_PROVIDER"
+echo "  Storage providers:  $STORAGE_DISPLAY"
+if [ "$MULTI_BACKEND" = "true" ]; then
+echo "  Primary role:       DB-authoritative (check with arkfile-admin storage-status)"
+fi
 echo "  Force rebuild C:    $FORCE_REBUILD_ALL"
 echo "  Data:               PRESERVED (not touched)"
 echo "  Config/keys:        PRESERVED (not touched)"
@@ -320,9 +355,8 @@ echo "    arkfile:   $(systemctl is-active arkfile 2>/dev/null || echo 'failed')
 echo "    rqlite:    $(systemctl is-active rqlite 2>/dev/null || echo 'unknown')"
 if [ "$IS_LOCAL_SEAWEEDFS" = "true" ]; then
     echo "    seaweedfs: $(systemctl is-active seaweedfs 2>/dev/null || echo 'unknown')"
-else
-    echo "    storage:   ${STORAGE_PROVIDER} (external)"
 fi
+echo "    storage:   ${STORAGE_DISPLAY}"
 
 echo
 echo -e "${GREEN}UPDATE COMPLETE${NC}"

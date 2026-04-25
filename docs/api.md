@@ -274,6 +274,92 @@ The admin can export any user's file as an `.arkbackup` bundle for disaster reco
 | GET | `/api/admin/system/health` | Get system health status | Admin |
 | GET | `/api/admin/security/events` | Get security event logs | Admin |
 
+#### Storage Management (Multi-Backend)
+
+These endpoints manage multi-provider storage redundancy. All operations are admin-only. In single-provider mode (no secondary configured), status endpoints still work and report the single provider. See `docs/wip/multi-backend-v3.md` for the full design document.
+
+**Provider Status and Sync**
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| GET | `/api/admin/storage/status` | Get configured providers, file counts, sync status, costs | Admin |
+| GET | `/api/admin/storage/sync-status` | Detailed breakdown of file locations and replication gaps | Admin |
+
+`GET /api/admin/storage/status` returns an array of providers with role, stats (total_objects, total_size_bytes), cost info, and per-provider file location counts (active, pending, failed, delete_failed). Also returns aggregate replication status (total_files, fully_replicated, partially_replicated).
+
+`GET /api/admin/storage/sync-status` returns a combination matrix showing how many files exist on each provider combination (on_primary_only, on_secondary_only, on_all_configured, etc.), plus lists of failed and orphaned blob locations.
+
+**Copy Operations (Background Tasks)**
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/admin/storage/copy-all` | Copy all files from one provider to another | Admin |
+| POST | `/api/admin/storage/copy-user-files` | Copy all files for a specific user between providers | Admin |
+| POST | `/api/admin/storage/copy-file` | Copy a single file between providers | Admin |
+
+All copy endpoints return a `task_id` immediately. The copy operation runs in a background goroutine. Use `task-status` to poll progress.
+
+**Request body for `copy-all`:**
+```json
+{
+    "source_provider_id": "seaweedfs-local",
+    "destination_provider_id": "wasabi-us-central-1",
+    "verify": true,
+    "skip_existing": true
+}
+```
+
+`copy-user-files` adds a `"username"` field. `copy-file` uses `"file_id"` instead of username and does not accept `skip_existing`.
+
+When `verify` is true, the SHA-256 hash computed during the streaming copy is compared against `stored_blob_sha256sum`. Files with NULL hash (uploaded before multi-backend) are copied but not hash-verified.
+
+**Task Management**
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| GET | `/api/admin/storage/task/:taskId` | Get status and progress of a background task | Admin |
+| POST | `/api/admin/storage/cancel-task/:taskId` | Request cancellation of a running task | Admin |
+
+Task status response includes `progress_current`, `progress_total`, `status` (pending/running/completed/failed/canceled), and a `details` JSON object with per-file counts (copied, skipped, failed) and bytes transferred.
+
+**Provider Role Management**
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/admin/storage/set-primary` | Promote a secondary provider to primary | Admin |
+| POST | `/api/admin/storage/set-secondary` | Promote tertiary or demote primary to secondary | Admin |
+| POST | `/api/admin/storage/set-tertiary` | Demote secondary to tertiary | Admin |
+| POST | `/api/admin/storage/swap-providers` | Swap primary and secondary roles | Admin |
+
+All role change endpoints accept `{"provider_id": "..."}` (except `swap-providers` which takes an empty body). Both affected providers undergo connectivity verification (1 MB upload, verify, delete) before the change is applied. Role changes persist across server restarts (DB-authoritative).
+
+**Storage Verification**
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/admin/storage/verify-storage` | Round-trip connectivity test (upload, verify hash, delete) | Admin |
+| POST | `/api/admin/storage/verify-all` | HEAD-check all active file locations across providers | Admin |
+
+`verify-storage` accepts `{"provider_id": "..."}` (defaults to primary if omitted). Updates `last_verified_at` on success.
+
+`verify-all` accepts `{"provider_id": "...", "fix": false, "concurrency": 10}`. Returns a task_id. The background task performs HEAD requests against every active `file_storage_locations` row to confirm S3 objects exist and sizes match. With `fix: true`, missing files are marked with status `"missing"` in the DB.
+
+**Cost Tracking**
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/admin/storage/set-cost` | Set monthly cost per TB for a provider | Admin |
+
+Request: `{"provider_id": "wasabi-us-central-1", "cost_per_tb_cents": 799}` (799 = $7.99/TB/month).
+
+#### Alerts
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| GET | `/api/admin/alerts/summary` | Get storage health warnings and alert counts | Admin |
+
+Returns counts for unreachable providers, replication failures, sync gaps, orphaned blobs, and stale tasks. Called automatically by `arkfile-admin` after login to surface issues immediately.
+
 #### Development/Testing Endpoints
 
 These endpoints are only available when `ADMIN_DEV_TEST_API_ENABLED=true`:

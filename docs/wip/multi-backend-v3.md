@@ -1462,7 +1462,7 @@ Files changed:
 
 Verification: Test each command against a local deployment with a Wasabi secondary. Test the full provider migration workflow end-to-end.
 
-### Phase 10: Admin Alerts, Enhanced list-files, and e2e Test Extensions [PARTIALLY COMPLETE]
+### Phase 10: Admin Alerts, Enhanced list-files, and e2e Test Extensions [COMPLETE except e2e-test.sh]
 
 Alerts summary endpoint, enhanced list-files with LOCATIONS column, and displayLoginAlerts() wired into login: all done. Sync-status response expanded to full combination matrix (on_all_configured, on_primary_only, on_secondary_only, on_tertiary_only, on_primary_and_secondary, on_primary_and_tertiary, on_secondary_and_tertiary) supporting both two-provider and three-provider configurations. e2e test extensions not yet added.
 
@@ -1487,6 +1487,11 @@ Live test results after all fixes:
 - [OK] Fully replicated: 10/10, Gaps: 0
 - [OK] copy-all --from primary --to secondary --verify: fills gaps, skip-existing works correctly
 
+PROGRESS NOTE - 04/25/26 - Code review and hardening session. Verified all phases 0-11 against actual codebase; all [COMPLETE] claims confirmed. Changes made:
+- (1) Removed duplicate AdminVerifyStorage route at legacy /api/admin/system/verify-storage from route_config.go. Canonical path is /api/admin/storage/verify-storage only. Updated stale comment in handler.
+- (2) Updated docs/api.md with all 16 new admin storage/alerts endpoints including request body examples and behavioral notes.
+- (3) Hardened all 4 role-change handlers (AdminSetPrimary, AdminSetSecondary, AdminSetTertiary, AdminSwapProviders) in handlers/admin_storage.go: added connectivity verification (1 MB round-trip via storage.RunVerification) before all role changes per design doc spec; added DB error checking on all Exec() calls (were silently ignoring errors); added rollback logic when second DB update fails; added immediate in-memory registry swap via Registry.SwapPrimarySecondary() for primary/secondary changes (no restart needed); added guard in AdminSetSecondary against demoting primary when no secondary exists. Secondary/tertiary swaps still require restart (no in-memory method for that pair).
+- Remaining: e2e-test.sh multi-backend scenarios (deferred to end of project).
 A `verify-all` command that performs HEAD requests against every `file_storage_locations` row with `status = "active"` to confirm the S3 object actually exists and its size matches `padded_size`. This catches out-of-band deletions, provider-side data loss, and DB/reality drift without downloading any file data.
 
 #### New Status: `"missing"`

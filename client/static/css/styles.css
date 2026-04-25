@@ -437,6 +437,14 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     align-items: center;
     gap: 1rem;
     flex-grow: 1;
+    min-width: 0;
+    flex-shrink: 1;
+}
+
+.file-info strong {
+    word-break: break-all;
+    overflow-wrap: break-word;
+    min-width: 0;
 }
 
 .file-size {
@@ -508,6 +516,22 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     color: var(--salt);
     text-transform: uppercase;
     letter-spacing: 0.04em;
+}
+
+/* Share list filename wrapping */
+.share-title h3 {
+    word-break: break-all;
+    overflow-wrap: break-word;
+    min-width: 0;
+}
+
+.share-header {
+    min-width: 0;
+}
+
+.share-title {
+    min-width: 0;
+    overflow: hidden;
 }
 
 /* Refresh button override - biolum background */

@@ -183,10 +183,9 @@ func RegisterRoutes() {
 	// File export - admin endpoints (for disaster recovery)
 	adminGroup.GET("/files/:fileId/export", AdminExportFile)
 
-	// System monitoring - admin endpoints (Phase 2: Bridge existing monitoring infrastructure)
+	// System monitoring - admin endpoints
 	adminGroup.GET("/system/status", AdminSystemStatus)
 	adminGroup.GET("/system/health", AdminSystemHealth)
-	adminGroup.POST("/system/verify-storage", AdminVerifyStorage)
 	adminGroup.GET("/security/events", AdminSecurityEvents)
 
 	// Storage management - admin endpoints (multi-backend)

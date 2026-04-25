@@ -4,23 +4,28 @@
  * Handles chunked file uploads with client-side encryption.
  * Matches the Go CLI implementation for cross-platform compatibility.
  * 
- * Upload Flow:
+ * Upload Flow (streaming, constant memory):
  * 1. Resolve account key (from cache, provided key, or password derivation)
  * 2. Generate random FEK (File Encryption Key)
- * 3. Encrypt metadata (filename, SHA256) with account key
- * 4. Encrypt FEK with appropriate KEK (account or custom derived)
- * 5. Encrypt file chunks with FEK using AES-256-GCM
- * 6. Upload chunks to server via chunked upload API
+ * 3. Compute SHA-256 of plaintext file via streaming (one chunk at a time)
+ * 4. Encrypt metadata (filename, SHA256) with account key
+ * 5. Calculate total encrypted size mathematically (no file read needed)
+ * 6. Init upload session with server
+ * 7. For each chunk: read from disk, encrypt with FEK, upload, release
+ * 8. Complete upload
+ * 
+ * Peak memory: ~32 MB (one plaintext chunk + one encrypted chunk),
+ * constant regardless of file size. Mirrors the Go CLI pattern exactly.
  * 
  * Key design: Metadata is ALWAYS encrypted with the account-derived key,
  * regardless of password type. The password type only governs FEK encryption.
  * This keeps file lists readable without requiring custom passwords.
  */
 
+import { sha256 } from '@noble/hashes/sha2.js';
 import {
   randomBytes,
   encryptAESGCM,
-  generateIV,
   hash256,
   toBase64,
   toHex,
@@ -34,14 +39,13 @@ import {
   isAccountKeyCached,
   isAccountKeyLocked,
   type PasswordContext,
-  type CacheDurationHours,
 } from '../crypto/file-encryption.js';
 import { promptForAccountKeyPassword } from '../ui/password-modal.js';
 import {
   KEY_SIZES,
   getChunkingParams,
 } from '../crypto/constants.js';
-import { showError, showSuccess, showInfo } from '../ui/messages.js';
+import { showError, showSuccess } from '../ui/messages.js';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
 import { checkDuplicate, addDigest } from '../utils/digest-cache.js';
 import { getToken, getUsernameFromToken } from '../utils/auth.js';
@@ -54,13 +58,13 @@ import { loadFiles } from './list.js';
 export interface UploadOptions {
   /** Pre-derived account key for metadata encryption (skips derivation if provided) */
   accountKey?: Uint8Array;
-  /** Account password — used to derive account key if not provided or cached */
+  /** Account password -- used to derive account key if not provided or cached */
   accountPassword?: string;
   /** Username for salt derivation and API context */
   username: string;
-  /** 'account' or 'custom' — governs FEK encryption key */
+  /** 'account' or 'custom' -- governs FEK encryption key */
   passwordType: PasswordContext;
-  /** Custom password — required when passwordType === 'custom' (derives custom KEK) */
+  /** Custom password -- required when passwordType === 'custom' (derives custom KEK) */
   customPassword?: string;
   /** Optional hint for custom passwords (stored unencrypted) */
   passwordHint?: string;
@@ -70,7 +74,7 @@ export interface UploadOptions {
 
 export interface UploadProgress {
   /** Current phase of upload */
-  phase: 'deriving-key' | 'encrypting' | 'uploading' | 'completing';
+  phase: 'deriving-key' | 'hashing' | 'encrypting' | 'uploading' | 'completing';
   /** Percentage complete (0-100) */
   percent: number;
   /** Current chunk being processed */
@@ -231,15 +235,82 @@ async function resolveAccountKey(
   throw new Error('Account key required: provide accountKey, ensure key is cached, or provide accountPassword');
 }
 
+/**
+ * Computes SHA-256 of a File using streaming reads.
+ * Reads one chunk at a time via file.slice(), never loading the whole file.
+ * Mirrors Go CLI's computeStreamingSHA256(). Peak memory: ~chunkSize bytes.
+ */
+async function computeStreamingSHA256(
+  file: File,
+  chunkSize: number,
+  onProgress?: (bytesHashed: number, totalBytes: number) => void
+): Promise<string> {
+  const hasher = sha256.create();
+  let offset = 0;
+
+  while (offset < file.size) {
+    const end = Math.min(offset + chunkSize, file.size);
+    const slice = file.slice(offset, end);
+    const buffer = await slice.arrayBuffer();
+    hasher.update(new Uint8Array(buffer));
+    offset = end;
+
+    if (onProgress) {
+      onProgress(offset, file.size);
+    }
+  }
+
+  // Handle empty files (0-byte)
+  if (file.size === 0) {
+    hasher.update(new Uint8Array(0));
+  }
+
+  return toHex(hasher.digest());
+}
+
+/**
+ * Calculates total encrypted size deterministically from plaintext file size.
+ * Pure math -- no file reading needed. Mirrors Go CLI's calculateTotalEncryptedSize().
+ * 
+ * Each chunk gets: nonce (12) + ciphertext (same as plaintext) + tag (16) = +28 bytes overhead
+ * Chunk 0 also gets a 2-byte envelope header prepended.
+ */
+function calculateTotalEncryptedSize(
+  plaintextSize: number,
+  chunkSize: number,
+  overhead: number,
+  headerSize: number
+): number {
+  if (plaintextSize === 0) {
+    // Even empty files get one chunk with overhead + header
+    return headerSize + overhead;
+  }
+
+  const numFullChunks = Math.floor(plaintextSize / chunkSize);
+  const lastChunkPlaintext = plaintextSize % chunkSize;
+
+  if (lastChunkPlaintext === 0) {
+    // All chunks are full
+    return numFullChunks * (chunkSize + overhead) + headerSize;
+  }
+
+  // Full chunks + partial last chunk
+  return numFullChunks * (chunkSize + overhead) + (lastChunkPlaintext + overhead) + headerSize;
+}
+
 // ============================================================================
 // Main Upload Function
 // ============================================================================
 
 /**
- * Uploads a file with client-side encryption
+ * Uploads a file with client-side encryption using streaming.
  * 
  * Single entry point for all file uploads. Handles both account and custom
  * password types. Metadata is always encrypted with the account key.
+ * 
+ * Mirrors the Go CLI upload pattern: streaming SHA-256 hash, then
+ * one-chunk-at-a-time encrypt+upload loop. Peak memory ~32 MB regardless
+ * of file size.
  * 
  * @param file - The file to upload
  * @param options - Upload options
@@ -277,7 +348,9 @@ export async function uploadFile(
     const CHUNK_SIZE = chunkCfg.plaintextChunkSizeBytes;
     const nonceSize = chunkCfg.aesGcm.nonceSizeBytes;
     const tagSize = chunkCfg.aesGcm.tagSizeBytes;
+    const aesGcmOverhead = nonceSize + tagSize; // 12 + 16 = 28
     const envelopeVersion = chunkCfg.envelope.version;
+    const envelopeHeaderSize = chunkCfg.envelope.headerSizeBytes;
     const keyTypeVal = passwordType === 'account'
       ? chunkCfg.envelope.keyTypes.account
       : chunkCfg.envelope.keyTypes.custom;
@@ -287,10 +360,10 @@ export async function uploadFile(
     // ================================================================
     reportProgress({ phase: 'deriving-key', percent: 0 });
 
-    // Account key — always needed for metadata encryption
+    // Account key -- always needed for metadata encryption
     const accountKey = await resolveAccountKey(options);
 
-    // FEK encryption key — depends on password type
+    // FEK encryption key -- depends on password type
     let fekEncryptionKey: Uint8Array;
     if (passwordType === 'account') {
       fekEncryptionKey = accountKey;
@@ -300,22 +373,29 @@ export async function uploadFile(
     }
 
     // ================================================================
-    // Step 2: Generate FEK and prepare encryption
+    // Step 2: Generate FEK
     // ================================================================
-    reportProgress({ phase: 'encrypting', percent: 5 });
+    reportProgress({ phase: 'deriving-key', percent: 3 });
 
     // Generate random FEK (File Encryption Key)
     const fek = randomBytes(KEY_SIZES.FILE_ENCRYPTION_KEY);
 
-    // Calculate SHA256 of plaintext file
-    const fileBuffer = await file.arrayBuffer();
-    const fileBytes = new Uint8Array(fileBuffer);
-    const plaintextHash = hash256(fileBytes);
-    const plaintextHashHex = toHex(plaintextHash);
+    // ================================================================
+    // Step 3: Streaming SHA-256 of plaintext file
+    // Reads file one chunk at a time -- never loads whole file into memory.
+    // Mirrors Go CLI's computeStreamingSHA256().
+    // ================================================================
+    reportProgress({ phase: 'hashing', percent: 5 });
 
-    // ----------------------------------------------------------------
-    // Deduplication check: abort early if file already exists
-    // ----------------------------------------------------------------
+    const plaintextHashHex = await computeStreamingSHA256(file, CHUNK_SIZE, (bytesHashed, totalBytes) => {
+      // Hash phase: 5% to 15%
+      const hashPercent = 5 + Math.floor((bytesHashed / totalBytes) * 10);
+      reportProgress({ phase: 'hashing', percent: hashPercent });
+    });
+
+    // ================================================================
+    // Step 4: Deduplication check
+    // ================================================================
     const existingFileId = checkDuplicate(plaintextHashHex);
     if (existingFileId) {
       secureWipe(fek);
@@ -325,7 +405,11 @@ export async function uploadFile(
       );
     }
 
-    // Encrypt metadata with ACCOUNT key (always, regardless of password type)
+    // ================================================================
+    // Step 5: Encrypt metadata with ACCOUNT key (always, regardless of password type)
+    // ================================================================
+    reportProgress({ phase: 'encrypting', percent: 16 });
+
     const encryptedFilename = await encryptMetadata(file.name, accountKey);
     const encryptedSha256 = await encryptMetadata(plaintextHashHex, accountKey);
 
@@ -347,54 +431,19 @@ export async function uploadFile(
       encryptedFekResult.tag
     );
 
-    reportProgress({ phase: 'encrypting', percent: 10 });
+    // ================================================================
+    // Step 6: Calculate total encrypted size mathematically
+    // No need to encrypt all chunks first -- mirrors Go CLI's calculateTotalEncryptedSize()
+    // ================================================================
+    const totalEncryptedSize = calculateTotalEncryptedSize(
+      file.size, CHUNK_SIZE, aesGcmOverhead, envelopeHeaderSize
+    );
+    const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
 
     // ================================================================
-    // Step 3: Encrypt file chunks
+    // Step 7: Create upload session
     // ================================================================
-    const totalChunks = Math.ceil(fileBytes.length / CHUNK_SIZE);
-    const encryptedChunks: Uint8Array[] = [];
-
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, fileBytes.length);
-      const chunk = fileBytes.slice(start, end);
-
-      // Encrypt chunk with FEK
-      const encryptedChunk = await encryptChunk(chunk, fek);
-
-      // For chunk 0, prepend the envelope header
-      if (i === 0) {
-        const chunkEnvelope = createEnvelopeHeader(envelopeVersion, keyTypeVal);
-        encryptedChunks.push(concatBytes(chunkEnvelope, encryptedChunk));
-      } else {
-        encryptedChunks.push(encryptedChunk);
-      }
-
-      const encryptPercent = 10 + Math.floor((i + 1) / totalChunks * 40);
-      reportProgress({
-        phase: 'encrypting',
-        percent: encryptPercent,
-        currentChunk: i + 1,
-        totalChunks,
-      });
-    }
-
-    // Calculate total encrypted size
-    const totalEncryptedSize = encryptedChunks.reduce((sum, chunk) => sum + chunk.length, 0);
-
-    // Clean up sensitive key material
-    secureWipe(fek);
-    if (passwordType === 'custom') {
-      secureWipe(fekEncryptionKey);
-    }
-
-    reportProgress({ phase: 'encrypting', percent: 50 });
-
-    // ================================================================
-    // Step 4: Create upload session
-    // ================================================================
-    reportProgress({ phase: 'uploading', percent: 50 });
+    reportProgress({ phase: 'uploading', percent: 18 });
 
     const session = await apiRequest<UploadSession>('/api/uploads/init', {
       method: 'POST',
@@ -412,47 +461,78 @@ export async function uploadFile(
     });
 
     // ================================================================
-    // Step 5: Upload chunks
+    // Step 8: Streaming encrypt-and-upload loop
+    // For each chunk: read from disk, encrypt, upload, release.
+    // Only one plaintext chunk + one encrypted chunk in memory at a time.
+    // Mirrors Go CLI's doChunkedUpload().
     // ================================================================
     let bytesUploaded = 0;
 
-    for (let i = 0; i < encryptedChunks.length; i++) {
-      const chunk = encryptedChunks[i];
-      
-      // Calculate chunk hash for verification
-      const chunkHash = toHex(hash256(chunk));
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, file.size);
+
+      // Read ONE chunk from disk via File.slice() -- no full-file load
+      const sliceBlob = file.slice(start, end);
+      const chunkBuffer = await sliceBlob.arrayBuffer();
+      const plaintext = new Uint8Array(chunkBuffer);
+
+      // Encrypt chunk with FEK
+      const encryptedChunk = await encryptChunk(plaintext, fek);
+
+      // For chunk 0, prepend the envelope header
+      let chunkToUpload: Uint8Array;
+      if (i === 0) {
+        const chunkEnvelope = createEnvelopeHeader(envelopeVersion, keyTypeVal);
+        chunkToUpload = concatBytes(chunkEnvelope, encryptedChunk);
+      } else {
+        chunkToUpload = encryptedChunk;
+      }
+
+      // Calculate chunk hash for server verification
+      const chunkHash = toHex(hash256(chunkToUpload));
 
       // Upload chunk as raw binary with hash header
-      const chunkBuffer = chunk.buffer.slice(
-        chunk.byteOffset,
-        chunk.byteOffset + chunk.byteLength
+      const uploadBuffer = chunkToUpload.buffer.slice(
+        chunkToUpload.byteOffset,
+        chunkToUpload.byteOffset + chunkToUpload.byteLength
       ) as ArrayBuffer;
-      
+
       await apiRequest(`/api/uploads/${session.session_id}/chunks/${i}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/octet-stream',
           'X-Chunk-Hash': chunkHash,
         },
-        body: new Blob([chunkBuffer]),
+        body: new Blob([uploadBuffer]),
       });
 
-      bytesUploaded += chunk.length;
-      const uploadPercent = 50 + Math.floor((i + 1) / encryptedChunks.length * 40);
+      // plaintext, encryptedChunk, chunkToUpload all go out of scope here
+      // and become eligible for GC
+
+      bytesUploaded += chunkToUpload.length;
+      // Upload phase: 20% to 95%
+      const uploadPercent = 20 + Math.floor((i + 1) / totalChunks * 75);
       reportProgress({
         phase: 'uploading',
         percent: uploadPercent,
         currentChunk: i + 1,
-        totalChunks: encryptedChunks.length,
+        totalChunks,
         bytesUploaded,
         totalBytes: totalEncryptedSize,
       });
     }
 
+    // Clean up sensitive key material
+    secureWipe(fek);
+    if (passwordType === 'custom') {
+      secureWipe(fekEncryptionKey);
+    }
+
     // ================================================================
-    // Step 6: Complete upload
+    // Step 9: Complete upload
     // ================================================================
-    reportProgress({ phase: 'completing', percent: 90 });
+    reportProgress({ phase: 'completing', percent: 96 });
 
     const result = await apiRequest<{
       message: string;
@@ -509,7 +589,7 @@ export async function uploadFile(
  * - Also needs the account key (from cache or prompt) for metadata encryption
  */
 export async function handleFileUpload(): Promise<void> {
-  // Get file input — HTML uses id="fileInput"
+  // Get file input -- HTML uses id="fileInput"
   const fileInput = document.getElementById('fileInput') as HTMLInputElement | null;
   if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
     showError('Please select a file to upload');
@@ -525,18 +605,18 @@ export async function handleFileUpload(): Promise<void> {
     return;
   }
 
-  // Get password type — HTML uses radio buttons named "passwordType"
+  // Get password type -- HTML uses radio buttons named "passwordType"
   const passwordTypeRadio = document.querySelector<HTMLInputElement>('input[name="passwordType"]:checked');
   const passwordType = (passwordTypeRadio?.value || 'account') as PasswordContext;
 
-  // Get password hint — HTML uses id="passwordHint"
+  // Get password hint -- HTML uses id="passwordHint"
   const hintInput = document.getElementById('passwordHint') as HTMLInputElement | null;
   const passwordHint = hintInput?.value || '';
 
   // Get progress elements
   const progressBar = document.getElementById('upload-progress') as HTMLProgressElement | null;
   const progressText = document.getElementById('upload-progress-text') as HTMLElement | null;
-  // Upload button — HTML uses id="upload-file-btn"
+  // Upload button -- HTML uses id="upload-file-btn"
   const uploadButton = document.getElementById('upload-file-btn') as HTMLButtonElement | null;
 
   // Build upload options
@@ -548,7 +628,7 @@ export async function handleFileUpload(): Promise<void> {
 
   // Resolve account key / password (always needed for metadata)
   if (isAccountKeyCached(username) && !isAccountKeyLocked()) {
-    // Account key is cached — use it directly
+    // Account key is cached -- use it directly
     const cachedKey = await getCachedAccountKey(username, getToken() ?? undefined);
     if (cachedKey) {
       uploadOptions.accountKey = cachedKey;
@@ -590,7 +670,7 @@ export async function handleFileUpload(): Promise<void> {
     }
   }
 
-  // For custom password type, get the custom password — HTML uses id="filePassword"
+  // For custom password type, get the custom password -- HTML uses id="filePassword"
   if (passwordType === 'custom') {
     const customPasswordInput = document.getElementById('filePassword') as HTMLInputElement | null;
     const customPassword = customPasswordInput?.value;
@@ -617,10 +697,11 @@ export async function handleFileUpload(): Promise<void> {
     uploadOptions.onProgress = (progress) => {
       // Update ProgressManager overlay
       const phaseLabels: Record<string, string> = {
-        'deriving-key': 'Deriving encryption key…',
-        'encrypting': 'Encrypting file…',
-        'uploading': 'Uploading…',
-        'completing': 'Finalizing…',
+        'deriving-key': 'Deriving encryption key...',
+        'hashing': 'Computing file hash...',
+        'encrypting': 'Encrypting metadata...',
+        'uploading': 'Uploading...',
+        'completing': 'Finalizing...',
       };
       const phaseMessage = phaseLabels[progress.phase] || progress.phase;
       let message = phaseMessage;

@@ -16,7 +16,7 @@ import (
 	"github.com/84adam/Arkfile/storage"
 )
 
-// AdminVerifyStorage handles POST /api/admin/system/verify-storage
+// AdminVerifyStorage handles POST /api/admin/storage/verify-storage
 // Runs a full S3 round-trip test (upload, download, hash verify, delete).
 // If provider_id is specified in the JSON body, verifies that provider;
 // otherwise defaults to the primary provider.
@@ -506,23 +506,46 @@ func AdminSetPrimary(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Provider must be secondary to promote to primary")
 	}
 
+	// Verify connectivity for both providers before changing roles
+	targetProvider := storage.Registry.GetProvider(req.ProviderID)
+	if targetProvider == nil {
+		return JSONError(c, http.StatusBadRequest, "Provider not found in registry: "+req.ProviderID)
+	}
+	targetResult := storage.RunVerification(req.ProviderID, targetProvider)
+	if !targetResult.Verified {
+		return JSONError(c, http.StatusBadRequest, "Connectivity verification failed for "+req.ProviderID+": "+targetResult.Error)
+	}
+
 	oldPrimaryID := storage.Registry.PrimaryID()
+	primaryProvider := storage.Registry.Primary()
+	primaryResult := storage.RunVerification(oldPrimaryID, primaryProvider)
+	if !primaryResult.Verified {
+		return JSONError(c, http.StatusBadRequest, "Connectivity verification failed for "+oldPrimaryID+": "+primaryResult.Error)
+	}
 
 	// Swap roles in DB
-	database.DB.Exec("UPDATE storage_providers SET role = 'primary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
-	database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", oldPrimaryID)
+	_, err = database.DB.Exec("UPDATE storage_providers SET role = 'primary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to set %s as primary: %v", req.ProviderID, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to update provider role")
+	}
+	_, err = database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", oldPrimaryID)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to set %s as secondary: %v", oldPrimaryID, err)
+		// Attempt to roll back the first update
+		database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
+		return JSONError(c, http.StatusInternalServerError, "Failed to update provider role (rolled back)")
+	}
 
-	// DB role change is persisted. In-memory registry will be updated on next server
-	// restart when roles are read from the database. For immediate effect without
-	// restart, a SwapPrimarySecondary method on the registry would be needed.
-	_ = oldPrimaryID
+	// Apply swap to in-memory registry immediately
+	storage.Registry.SwapPrimarySecondary()
 
 	return JSONResponse(c, http.StatusOK, "Primary provider updated", map[string]interface{}{
 		"previous_primary":   oldPrimaryID,
 		"new_primary":        req.ProviderID,
 		"previous_secondary": req.ProviderID,
 		"new_secondary":      oldPrimaryID,
-		"message":            "Primary provider updated. New uploads will use " + req.ProviderID + ". Restart server to fully apply in-memory registry changes.",
+		"message":            "Primary provider updated. New uploads will use " + req.ProviderID + ".",
 	})
 }
 
@@ -544,23 +567,74 @@ func AdminSetSecondary(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Provider is already secondary")
 	}
 
+	// Verify connectivity for the target provider
+	targetProvider := storage.Registry.GetProvider(req.ProviderID)
+	if targetProvider == nil {
+		return JSONError(c, http.StatusBadRequest, "Provider not found in registry: "+req.ProviderID)
+	}
+	targetResult := storage.RunVerification(req.ProviderID, targetProvider)
+	if !targetResult.Verified {
+		return JSONError(c, http.StatusBadRequest, "Connectivity verification failed for "+req.ProviderID+": "+targetResult.Error)
+	}
+
 	if currentRole == "primary" {
 		// Demoting primary to secondary: old secondary becomes primary
+		if !storage.Registry.HasSecondary() {
+			return JSONError(c, http.StatusBadRequest, "Cannot demote primary when no secondary provider exists")
+		}
 		oldSecID := storage.Registry.SecondaryID()
-		database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
-		database.DB.Exec("UPDATE storage_providers SET role = 'primary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", oldSecID)
+
+		// Verify old secondary before promoting it
+		secResult := storage.RunVerification(oldSecID, storage.Registry.Secondary())
+		if !secResult.Verified {
+			return JSONError(c, http.StatusBadRequest, "Connectivity verification failed for "+oldSecID+": "+secResult.Error)
+		}
+
+		_, err = database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to set %s as secondary: %v", req.ProviderID, err)
+			return JSONError(c, http.StatusInternalServerError, "Failed to update provider role")
+		}
+		_, err = database.DB.Exec("UPDATE storage_providers SET role = 'primary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", oldSecID)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to set %s as primary: %v", oldSecID, err)
+			database.DB.Exec("UPDATE storage_providers SET role = 'primary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
+			return JSONError(c, http.StatusInternalServerError, "Failed to update provider role (rolled back)")
+		}
+
+		// Apply swap to in-memory registry immediately
+		storage.Registry.SwapPrimarySecondary()
+
 		return JSONResponse(c, http.StatusOK, "Roles updated", map[string]interface{}{
-			"message": "Roles swapped. Restart server to fully apply in-memory registry changes.",
+			"previous_primary":   req.ProviderID,
+			"new_primary":        oldSecID,
+			"previous_secondary": oldSecID,
+			"new_secondary":      req.ProviderID,
+			"message":            "Roles swapped. New uploads will use " + oldSecID + ".",
 		})
 	}
 
 	if currentRole == "tertiary" {
 		// Promoting tertiary to secondary: old secondary becomes tertiary
+		if !storage.Registry.HasSecondary() {
+			return JSONError(c, http.StatusBadRequest, "No existing secondary provider to demote to tertiary")
+		}
 		oldSecID := storage.Registry.SecondaryID()
-		database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
-		database.DB.Exec("UPDATE storage_providers SET role = 'tertiary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", oldSecID)
+
+		_, err = database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to set %s as secondary: %v", req.ProviderID, err)
+			return JSONError(c, http.StatusInternalServerError, "Failed to update provider role")
+		}
+		_, err = database.DB.Exec("UPDATE storage_providers SET role = 'tertiary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", oldSecID)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to set %s as tertiary: %v", oldSecID, err)
+			database.DB.Exec("UPDATE storage_providers SET role = 'tertiary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
+			return JSONError(c, http.StatusInternalServerError, "Failed to update provider role (rolled back)")
+		}
+
 		return JSONResponse(c, http.StatusOK, "Roles updated", map[string]interface{}{
-			"message": "Tertiary promoted to secondary. Restart server to fully apply in-memory registry changes.",
+			"message": "Tertiary promoted to secondary. Restart server to fully apply in-memory registry changes for secondary/tertiary swap.",
 		})
 	}
 
@@ -587,11 +661,41 @@ func AdminSetTertiary(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Provider must be secondary to demote to tertiary")
 	}
 
+	// Verify connectivity for the target provider
+	targetProvider := storage.Registry.GetProvider(req.ProviderID)
+	if targetProvider == nil {
+		return JSONError(c, http.StatusBadRequest, "Provider not found in registry: "+req.ProviderID)
+	}
+	targetResult := storage.RunVerification(req.ProviderID, targetProvider)
+	if !targetResult.Verified {
+		return JSONError(c, http.StatusBadRequest, "Connectivity verification failed for "+req.ProviderID+": "+targetResult.Error)
+	}
+
 	oldTertiaryID := storage.Registry.TertiaryID()
 
-	database.DB.Exec("UPDATE storage_providers SET role = 'tertiary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
+	// If there's an old tertiary, verify it before promoting
 	if oldTertiaryID != "" {
-		database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", oldTertiaryID)
+		oldTertiaryProvider := storage.Registry.GetProvider(oldTertiaryID)
+		if oldTertiaryProvider != nil {
+			tertiaryResult := storage.RunVerification(oldTertiaryID, oldTertiaryProvider)
+			if !tertiaryResult.Verified {
+				return JSONError(c, http.StatusBadRequest, "Connectivity verification failed for "+oldTertiaryID+": "+tertiaryResult.Error)
+			}
+		}
+	}
+
+	_, err = database.DB.Exec("UPDATE storage_providers SET role = 'tertiary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to set %s as tertiary: %v", req.ProviderID, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to update provider role")
+	}
+	if oldTertiaryID != "" {
+		_, err = database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", oldTertiaryID)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to set %s as secondary: %v", oldTertiaryID, err)
+			database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
+			return JSONError(c, http.StatusInternalServerError, "Failed to update provider role (rolled back)")
+		}
 	}
 
 	return JSONResponse(c, http.StatusOK, "Roles updated", map[string]interface{}{
@@ -608,15 +712,37 @@ func AdminSwapProviders(c echo.Context) error {
 	primaryID := storage.Registry.PrimaryID()
 	secondaryID := storage.Registry.SecondaryID()
 
-	database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", primaryID)
-	database.DB.Exec("UPDATE storage_providers SET role = 'primary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", secondaryID)
+	// Verify connectivity for both providers before swapping
+	primaryResult := storage.RunVerification(primaryID, storage.Registry.Primary())
+	if !primaryResult.Verified {
+		return JSONError(c, http.StatusBadRequest, "Connectivity verification failed for "+primaryID+": "+primaryResult.Error)
+	}
+	secondaryResult := storage.RunVerification(secondaryID, storage.Registry.Secondary())
+	if !secondaryResult.Verified {
+		return JSONError(c, http.StatusBadRequest, "Connectivity verification failed for "+secondaryID+": "+secondaryResult.Error)
+	}
+
+	_, err := database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", primaryID)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to set %s as secondary during swap: %v", primaryID, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to update provider role")
+	}
+	_, err = database.DB.Exec("UPDATE storage_providers SET role = 'primary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", secondaryID)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to set %s as primary during swap: %v", secondaryID, err)
+		database.DB.Exec("UPDATE storage_providers SET role = 'primary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", primaryID)
+		return JSONError(c, http.StatusInternalServerError, "Failed to update provider role (rolled back)")
+	}
+
+	// Apply swap to in-memory registry immediately
+	storage.Registry.SwapPrimarySecondary()
 
 	return JSONResponse(c, http.StatusOK, "Providers swapped", map[string]interface{}{
 		"previous_primary":   primaryID,
 		"new_primary":        secondaryID,
 		"previous_secondary": secondaryID,
 		"new_secondary":      primaryID,
-		"message":            "Providers swapped in database. Restart server to fully apply in-memory registry changes.",
+		"message":            "Providers swapped. New uploads will use " + secondaryID + ".",
 	})
 }
 
