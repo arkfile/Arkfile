@@ -1311,6 +1311,84 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
         padding: 1rem 1.5rem;
         font-size: 0.9rem;
     }
+
+    /* Mobile file list: stack vertically */
+    .file-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.75rem;
+    }
+
+    .file-item button {
+        margin-left: 0;
+    }
+
+    .file-info {
+        flex-wrap: wrap;
+        width: 100%;
+        gap: 0.5rem;
+    }
+
+    .file-info strong {
+        width: 100%;
+        font-size: 0.95rem;
+    }
+
+    .file-actions {
+        flex-wrap: wrap;
+        width: 100%;
+        gap: 0.4rem;
+    }
+
+    .file-actions button {
+        padding: 0.4rem 0.7rem;
+        font-size: 0.82rem;
+    }
+
+    /* Mobile share list */
+    .share-item {
+        padding: 0.75rem;
+    }
+
+    .share-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+
+    .share-title h3 {
+        font-size: 0.95rem;
+        line-height: 1.4;
+    }
+
+    .share-url-section {
+        overflow: hidden;
+    }
+
+    .share-url-input {
+        font-size: 0.75rem;
+        width: 100%;
+        min-width: 0;
+    }
+
+    .share-stats {
+        flex-direction: column;
+        gap: 0.3rem;
+    }
+
+    .stat-item {
+        font-size: 0.82rem;
+    }
+
+    .share-actions {
+        flex-wrap: wrap;
+        gap: 0.4rem;
+    }
+
+    .share-actions button {
+        padding: 0.4rem 0.7rem;
+        font-size: 0.82rem;
+    }
 }
 
 /* TOTP Setup Styling */
