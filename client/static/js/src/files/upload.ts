@@ -74,7 +74,7 @@ export interface UploadOptions {
 
 export interface UploadProgress {
   /** Current phase of upload */
-  phase: 'deriving-key' | 'hashing' | 'encrypting' | 'uploading' | 'completing';
+  phase: 'deriving-key' | 'hashing' | 'encrypting' | 'init-session' | 'uploading' | 'completing';
   /** Percentage complete (0-100) */
   percent: number;
   /** Current chunk being processed */
@@ -343,7 +343,25 @@ export async function uploadFile(
   };
 
   try {
+    const uploadStart = performance.now();
+    const logTiming = (step: string, startTime: number) => {
+      const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+      const total = ((performance.now() - uploadStart) / 1000).toFixed(2);
+      console.log(`[upload] ${step} (${elapsed}s, total: ${total}s)`);
+    };
+
+    // Privacy-safe filename for logging: first char + extension only
+    const safeFileName = (name: string): string => {
+      const dot = name.lastIndexOf('.');
+      if (dot > 0) {
+        return name[0] + '[...]' + name.substring(dot);
+      }
+      return name[0] + '[...]';
+    };
+    const logName = safeFileName(file.name);
+
     // Load chunking config from single source of truth
+    let stepStart = performance.now();
     const chunkCfg = await getChunkingParams();
     const CHUNK_SIZE = chunkCfg.plaintextChunkSizeBytes;
     const nonceSize = chunkCfg.aesGcm.nonceSizeBytes;
@@ -354,22 +372,29 @@ export async function uploadFile(
     const keyTypeVal = passwordType === 'account'
       ? chunkCfg.envelope.keyTypes.account
       : chunkCfg.envelope.keyTypes.custom;
+    logTiming('Config loaded', stepStart);
+
+    console.log(`[upload] File: ${logName}, size: ${(file.size / 1024 / 1024).toFixed(1)} MB, chunk size: ${(CHUNK_SIZE / 1024 / 1024).toFixed(0)} MB`);
 
     // ================================================================
     // Step 1: Resolve keys
     // ================================================================
     reportProgress({ phase: 'deriving-key', percent: 0 });
+    stepStart = performance.now();
 
     // Account key -- always needed for metadata encryption
     const accountKey = await resolveAccountKey(options);
+    logTiming('Step 1: Account key resolved', stepStart);
 
     // FEK encryption key -- depends on password type
     let fekEncryptionKey: Uint8Array;
     if (passwordType === 'account') {
       fekEncryptionKey = accountKey;
     } else {
+      stepStart = performance.now();
       // Custom: derive separate key from custom password
       fekEncryptionKey = await deriveFileEncryptionKey(customPassword!, username, 'custom');
+      logTiming('Step 1b: Custom key derived', stepStart);
     }
 
     // ================================================================
@@ -386,12 +411,15 @@ export async function uploadFile(
     // Mirrors Go CLI's computeStreamingSHA256().
     // ================================================================
     reportProgress({ phase: 'hashing', percent: 5 });
+    stepStart = performance.now();
+    console.log(`[upload] Step 3: Starting streaming SHA-256 hash of ${(file.size / 1024 / 1024).toFixed(1)} MB...`);
 
     const plaintextHashHex = await computeStreamingSHA256(file, CHUNK_SIZE, (bytesHashed, totalBytes) => {
       // Hash phase: 5% to 15%
       const hashPercent = 5 + Math.floor((bytesHashed / totalBytes) * 10);
       reportProgress({ phase: 'hashing', percent: hashPercent });
     });
+    logTiming(`Step 3: SHA-256 hash complete (${plaintextHashHex.substring(0, 8)}...)`, stepStart);
 
     // ================================================================
     // Step 4: Deduplication check
@@ -409,6 +437,7 @@ export async function uploadFile(
     // Step 5: Encrypt metadata with ACCOUNT key (always, regardless of password type)
     // ================================================================
     reportProgress({ phase: 'encrypting', percent: 16 });
+    stepStart = performance.now();
 
     const encryptedFilename = await encryptMetadata(file.name, accountKey);
     const encryptedSha256 = await encryptMetadata(plaintextHashHex, accountKey);
@@ -430,6 +459,7 @@ export async function uploadFile(
       encryptedFekResult.ciphertext,
       encryptedFekResult.tag
     );
+    logTiming('Step 5: Metadata encrypted', stepStart);
 
     // ================================================================
     // Step 6: Calculate total encrypted size mathematically
@@ -439,11 +469,14 @@ export async function uploadFile(
       file.size, CHUNK_SIZE, aesGcmOverhead, envelopeHeaderSize
     );
     const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+    console.log(`[upload] Step 6: Total encrypted size: ${(totalEncryptedSize / 1024 / 1024).toFixed(1)} MB, chunks: ${totalChunks}`);
 
     // ================================================================
     // Step 7: Create upload session
     // ================================================================
-    reportProgress({ phase: 'uploading', percent: 18 });
+    reportProgress({ phase: 'init-session', percent: 18 });
+    stepStart = performance.now();
+    console.log('[upload] Step 7: Initializing upload session...');
 
     const session = await apiRequest<UploadSession>('/api/uploads/init', {
       method: 'POST',
@@ -459,6 +492,7 @@ export async function uploadFile(
         password_type: passwordType,
       }),
     });
+    logTiming(`Step 7: Upload session created (${session.session_id})`, stepStart);
 
     // ================================================================
     // Step 8: Streaming encrypt-and-upload loop
@@ -469,16 +503,32 @@ export async function uploadFile(
     let bytesUploaded = 0;
 
     for (let i = 0; i < totalChunks; i++) {
+      const chunkStart = performance.now();
       const start = i * CHUNK_SIZE;
       const end = Math.min(start + CHUNK_SIZE, file.size);
+      const chunkSizeMB = ((end - start) / 1024 / 1024).toFixed(1);
+
+      // Report progress at the START of each chunk (before read/encrypt/upload)
+      reportProgress({
+        phase: 'uploading',
+        percent: 20 + Math.floor(i / totalChunks * 75),
+        currentChunk: i + 1,
+        totalChunks,
+        bytesUploaded,
+        totalBytes: totalEncryptedSize,
+      });
 
       // Read ONE chunk from disk via File.slice() -- no full-file load
+      let subStart = performance.now();
       const sliceBlob = file.slice(start, end);
       const chunkBuffer = await sliceBlob.arrayBuffer();
       const plaintext = new Uint8Array(chunkBuffer);
+      const readTime = ((performance.now() - subStart) / 1000).toFixed(2);
 
       // Encrypt chunk with FEK
+      subStart = performance.now();
       const encryptedChunk = await encryptChunk(plaintext, fek);
+      const encryptTime = ((performance.now() - subStart) / 1000).toFixed(2);
 
       // For chunk 0, prepend the envelope header
       let chunkToUpload: Uint8Array;
@@ -490,7 +540,9 @@ export async function uploadFile(
       }
 
       // Calculate chunk hash for server verification
+      subStart = performance.now();
       const chunkHash = toHex(hash256(chunkToUpload));
+      const hashTime = ((performance.now() - subStart) / 1000).toFixed(2);
 
       // Upload chunk as raw binary with hash header
       const uploadBuffer = chunkToUpload.buffer.slice(
@@ -498,6 +550,7 @@ export async function uploadFile(
         chunkToUpload.byteOffset + chunkToUpload.byteLength
       ) as ArrayBuffer;
 
+      subStart = performance.now();
       await apiRequest(`/api/uploads/${session.session_id}/chunks/${i}`, {
         method: 'POST',
         headers: {
@@ -506,11 +559,15 @@ export async function uploadFile(
         },
         body: new Blob([uploadBuffer]),
       });
+      const uploadTime = ((performance.now() - subStart) / 1000).toFixed(2);
 
       // plaintext, encryptedChunk, chunkToUpload all go out of scope here
       // and become eligible for GC
 
       bytesUploaded += chunkToUpload.length;
+      const chunkTotal = ((performance.now() - chunkStart) / 1000).toFixed(2);
+      console.log(`[upload] Chunk ${i + 1}/${totalChunks} (${chunkSizeMB} MB): read=${readTime}s encrypt=${encryptTime}s hash=${hashTime}s upload=${uploadTime}s total=${chunkTotal}s`);
+
       // Upload phase: 20% to 95%
       const uploadPercent = 20 + Math.floor((i + 1) / totalChunks * 75);
       reportProgress({
@@ -533,6 +590,7 @@ export async function uploadFile(
     // Step 9: Complete upload
     // ================================================================
     reportProgress({ phase: 'completing', percent: 96 });
+    stepStart = performance.now();
 
     const result = await apiRequest<{
       message: string;
@@ -548,12 +606,14 @@ export async function uploadFile(
       method: 'POST',
     });
 
+    logTiming(`Step 9: Upload finalized (file_id: ${result.file_id})`, stepStart);
     reportProgress({ phase: 'completing', percent: 100 });
 
     // Update digest cache so subsequent uploads in this session are deduped
     addDigest(result.file_id, plaintextHashHex);
 
-    console.log(`[upload] File uploaded successfully: file_id=${result.file_id}, session_id=${session.session_id}`);
+    const totalTime = ((performance.now() - uploadStart) / 1000).toFixed(2);
+    console.log(`[upload] SUCCESS: ${logName} (${(file.size / 1024 / 1024).toFixed(1)} MB) uploaded in ${totalTime}s, file_id=${result.file_id}`);
 
     return {
       fileId: result.file_id,
@@ -700,6 +760,7 @@ export async function handleFileUpload(): Promise<void> {
         'deriving-key': 'Deriving encryption key...',
         'hashing': 'Computing file hash...',
         'encrypting': 'Encrypting metadata...',
+        'init-session': 'Initializing upload session...',
         'uploading': 'Uploading...',
         'completing': 'Finalizing...',
       };
