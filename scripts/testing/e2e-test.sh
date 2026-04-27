@@ -661,6 +661,14 @@ CUSTOM_FILE_SHA256=""
 # Share D ID - share created from custom-password file (populated by phase_10)
 SHARE_D_ID=""
 
+# Extra file IDs for multi-backend storage testing (populated by phase_8)
+EXTRA_FILE_A_ID=""
+EXTRA_FILE_A_SHA256=""
+EXTRA_FILE_B_ID=""
+EXTRA_FILE_B_SHA256=""
+EXTRA_FILE_C_ID=""
+EXTRA_FILE_C_SHA256=""
+
 # Phase 9: Custom-Password File Operations
 phase_9_custom_password_file_operations() {
     phase "9: CUSTOM-PASSWORD FILE OPERATIONS (account-key wrapped FEK)"
@@ -1031,6 +1039,121 @@ phase_8_file_operations() {
     fi
 
     rm -f "$test_file"
+
+    # 8.13-8.15: Additional test files for multi-backend storage testing
+    # These files persist through the test run and are available for
+    # copy/verify operations between storage providers.
+
+    # 8.13: 3MB random file
+    section "8.13: Extra file A (3MB, random)"
+    local extra_file_a="$TEST_DATA_DIR/extra_test_a.bin"
+    local extra_a_gen_output extra_a_gen_code
+    safe_exec extra_a_gen_output extra_a_gen_code \
+        $CLIENT generate-test-file \
+        --filename "$extra_file_a" \
+        --size 3145728 \
+        --pattern random
+
+    if [ $extra_a_gen_code -eq 0 ]; then
+        EXTRA_FILE_A_SHA256=$(sha256sum "$extra_file_a" | awk '{print $1}')
+        info "Extra file A SHA-256: $EXTRA_FILE_A_SHA256"
+    else
+        error "Failed to generate extra file A:"; echo "$extra_a_gen_output"
+        record_test "Extra file A creation" "FAIL"
+    fi
+
+    local extra_a_upload_output extra_a_upload_code
+    safe_exec extra_a_upload_output extra_a_upload_code \
+        $CLIENT \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        upload \
+        --file "$extra_file_a" \
+        --password-type account
+
+    if [ $extra_a_upload_code -eq 0 ]; then
+        EXTRA_FILE_A_ID=$(echo "$extra_a_upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+        info "Extra file A ID: $EXTRA_FILE_A_ID"
+        record_test "Extra file A upload (3MB)" "PASS"
+    else
+        error "Extra file A upload failed:"; echo "$extra_a_upload_output"
+        record_test "Extra file A upload (3MB)" "FAIL"
+    fi
+    rm -f "$extra_file_a"
+
+    # 8.14: 7MB sequential file
+    section "8.14: Extra file B (7MB, sequential)"
+    local extra_file_b="$TEST_DATA_DIR/extra_test_b.bin"
+    local extra_b_gen_output extra_b_gen_code
+    safe_exec extra_b_gen_output extra_b_gen_code \
+        $CLIENT generate-test-file \
+        --filename "$extra_file_b" \
+        --size 7340032 \
+        --pattern sequential
+
+    if [ $extra_b_gen_code -eq 0 ]; then
+        EXTRA_FILE_B_SHA256=$(sha256sum "$extra_file_b" | awk '{print $1}')
+        info "Extra file B SHA-256: $EXTRA_FILE_B_SHA256"
+    else
+        error "Failed to generate extra file B:"; echo "$extra_b_gen_output"
+        record_test "Extra file B creation" "FAIL"
+    fi
+
+    local extra_b_upload_output extra_b_upload_code
+    safe_exec extra_b_upload_output extra_b_upload_code \
+        $CLIENT \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        upload \
+        --file "$extra_file_b" \
+        --password-type account
+
+    if [ $extra_b_upload_code -eq 0 ]; then
+        EXTRA_FILE_B_ID=$(echo "$extra_b_upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+        info "Extra file B ID: $EXTRA_FILE_B_ID"
+        record_test "Extra file B upload (7MB)" "PASS"
+    else
+        error "Extra file B upload failed:"; echo "$extra_b_upload_output"
+        record_test "Extra file B upload (7MB)" "FAIL"
+    fi
+    rm -f "$extra_file_b"
+
+    # 8.15: 1MB random file (small, quick copy target)
+    section "8.15: Extra file C (1MB, random)"
+    local extra_file_c="$TEST_DATA_DIR/extra_test_c.bin"
+    local extra_c_gen_output extra_c_gen_code
+    safe_exec extra_c_gen_output extra_c_gen_code \
+        $CLIENT generate-test-file \
+        --filename "$extra_file_c" \
+        --size 1048576 \
+        --pattern random
+
+    if [ $extra_c_gen_code -eq 0 ]; then
+        EXTRA_FILE_C_SHA256=$(sha256sum "$extra_file_c" | awk '{print $1}')
+        info "Extra file C SHA-256: $EXTRA_FILE_C_SHA256"
+    else
+        error "Failed to generate extra file C:"; echo "$extra_c_gen_output"
+        record_test "Extra file C creation" "FAIL"
+    fi
+
+    local extra_c_upload_output extra_c_upload_code
+    safe_exec extra_c_upload_output extra_c_upload_code \
+        $CLIENT \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        upload \
+        --file "$extra_file_c" \
+        --password-type account
+
+    if [ $extra_c_upload_code -eq 0 ]; then
+        EXTRA_FILE_C_ID=$(echo "$extra_c_upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+        info "Extra file C ID: $EXTRA_FILE_C_ID"
+        record_test "Extra file C upload (1MB)" "PASS"
+    else
+        error "Extra file C upload failed:"; echo "$extra_c_upload_output"
+        record_test "Extra file C upload (1MB)" "FAIL"
+    fi
+    rm -f "$extra_file_c"
 
     success "File operations phase complete"
 }
@@ -1626,11 +1749,13 @@ phase_11_admin_system_status() {
         record_test "Admin system-status" "FAIL"
     fi
 
-    # Verify storage stats reflect uploaded files (2 files: account + custom)
-    if echo "$system_status_output" | grep -q "Total Files: 2"; then
+    # Verify storage stats reflect uploaded files
+    # 5 files: test_file.bin (8.2) + custom (9.2) + extra A/B/C (8.13-8.15)
+    # (delete_test.bin from 8.11 was already deleted)
+    if echo "$system_status_output" | grep -q "Total Files: 5"; then
         record_test "Admin system-status file count" "PASS"
     else
-        error "Storage stats: expected Total Files: 2"
+        error "Storage stats: expected Total Files: 5"
         record_test "Admin system-status file count" "FAIL"
     fi
 

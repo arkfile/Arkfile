@@ -484,6 +484,7 @@ TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.key
 
 # Storage Configuration - Generic S3 (using local SeaweedFS as S3-compatible backend)
 STORAGE_PROVIDER=generic-s3
+STORAGE_PROVIDER_ID=seaweedfs-primary
 S3_ENDPOINT=http://localhost:9332
 S3_ACCESS_KEY=arkfile-dev
 S3_SECRET_KEY=${S3_PASSWORD}
@@ -491,6 +492,17 @@ S3_BUCKET=arkfile-dev
 S3_REGION=us-east-1
 S3_FORCE_PATH_STYLE=true
 S3_USE_SSL=false
+
+# Secondary Storage - Second SeaweedFS bucket (same instance, different bucket)
+# Enables multi-backend e2e testing without external cloud providers
+STORAGE_PROVIDER_2=generic-s3
+STORAGE_PROVIDER_2_ID=seaweedfs-secondary
+STORAGE_2_ENDPOINT=http://localhost:9332
+STORAGE_2_ACCESS_KEY=arkfile-dev
+STORAGE_2_SECRET_KEY=${S3_PASSWORD}
+STORAGE_2_BUCKET=arkfile-dev-secondary
+STORAGE_2_REGION=us-east-1
+STORAGE_2_FORCE_PATH_STYLE=true
 
 # Admin Configuration - DEV ONLY
 ADMIN_USERNAMES=arkfile-dev-admin

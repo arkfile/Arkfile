@@ -488,7 +488,7 @@ func TestCopyObjectBetweenProviders_LargeObject_Multipart(t *testing.T) {
 	source := new(MockObjectStorageProvider)
 	dest := new(MockObjectStorageProvider)
 
-	// Create content larger than CopyMultipartThreshold (100 MB).
+	// Create content larger than CopyMultipartThreshold (5 MB).
 	// We use a real buffer here to exercise the multipart read path.
 	// 150 MB = 2 full 64MB parts + 1 partial 22MB part = 3 parts total.
 	objectSize := int64(150 * 1024 * 1024)

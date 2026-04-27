@@ -20,9 +20,10 @@ const CopyMultipartPartSize = 64 * 1024 * 1024
 
 // CopyMultipartThreshold is the object size above which cross-provider copies
 // use multipart upload on the destination instead of a single PutObject call.
-// Objects at or below this size use a single PUT. Adjust alongside
-// CopyMultipartPartSize if copy behavior needs tuning. Current value: 100 MB.
-const CopyMultipartThreshold = 100 * 1024 * 1024
+// Objects at or below this size use a single buffered PUT. Kept low (5 MB) to
+// bound memory usage -- files above this threshold use 64 MB chunked multipart
+// which streams part-by-part without holding the full object in RAM.
+const CopyMultipartThreshold = 5 * 1024 * 1024
 
 // CopyProgressFunc is called during cross-provider copy operations to report
 // bytes transferred so far. Used by the task runner to update progress in the DB.
@@ -168,8 +169,9 @@ func (r *ProviderRegistry) GetObjectWithFallback(ctx context.Context, objectName
 // integrity verification against stored_blob_sha256sum. Returns the computed
 // SHA-256 hex string and any error.
 //
-// For objects <= CopyMultipartThreshold (100 MB), a single PutObject call is used.
-// For larger objects, multipart upload is used with CopyMultipartPartSize (64 MB) parts.
+// For objects <= CopyMultipartThreshold (5 MB), a single buffered PutObject call
+// is used (max 5 MB in memory). For larger objects, multipart upload is used with
+// CopyMultipartPartSize (64 MB) parts, bounding memory at 64 MB per copy.
 func (r *ProviderRegistry) CopyObjectBetweenProviders(
 	ctx context.Context,
 	objectName string,
@@ -190,15 +192,18 @@ func (r *ProviderRegistry) CopyObjectBetweenProviders(
 	hashingReader := io.TeeReader(obj, hasher)
 
 	if objectSize <= CopyMultipartThreshold {
-		// Small object: buffer into seekable reader then single PUT.
+		// Small object (<= 5 MB): buffer into seekable reader then single PUT.
 		// Buffering is required because AWS SDK v2 needs a seekable body for
 		// SigV4 payload signing on non-TLS (HTTP) destinations like local SeaweedFS.
-		// Max buffer size is CopyMultipartThreshold (100 MB).
+		// Max buffer size is CopyMultipartThreshold (5 MB).
 		buf, readErr := io.ReadAll(hashingReader)
 		if readErr != nil {
 			return "", fmt.Errorf("failed to read object from source: %w", readErr)
 		}
-		_, err = destination.PutObject(ctx, objectName, bytes.NewReader(buf), objectSize, PutObjectOptions{
+		// Close source connection before PUT to avoid concurrent GET+PUT on
+		// same-instance S3 backends (e.g. two SeaweedFS buckets on one server)
+		obj.Close()
+		_, err = destination.PutObject(ctx, objectName, bytes.NewReader(buf), int64(len(buf)), PutObjectOptions{
 			ContentType: "application/octet-stream",
 		})
 		if err != nil {
