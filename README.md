@@ -62,4 +62,14 @@ Please avoid posting sensitive information in public issues.
 
 ---
 
+## Donate
+
+If you wish to contribute to development efforts, please consider making a donation:
+
+- Bitcoin (On-chain): < contact via email for a one-time donation address >
+- Bitcoin (Lightning): arkfile@coinos.io
+- Monero (XMR): 8AhcDfG55P5N1pacyB9QoNTYrVGEUsgYnSrvXyHoxc2iWi6M7s4cdWHHXNu6rSjf5jYQ5hGAoR5eo75pRqPAK6hjL4jNMX6
+
+---
+
 *make yourself an ark of cypress wood*

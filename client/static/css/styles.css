@@ -1371,6 +1371,22 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
         min-width: 0;
     }
 
+    /* Mobile: Share list URL input group - stack vertically */
+    .url-input-group {
+        flex-direction: column;
+    }
+
+    .url-input-group .btn-copy {
+        width: 100%;
+    }
+
+    /* Mobile: Decrypt banner - stack vertically */
+    .decrypt-banner {
+        flex-direction: column;
+        text-align: center;
+        gap: 0.5rem;
+    }
+
     .share-stats {
         flex-direction: column;
         gap: 0.3rem;
@@ -1388,6 +1404,154 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     .share-actions button {
         padding: 0.4rem 0.7rem;
         font-size: 0.82rem;
+    }
+
+    /* Mobile: Contact info panel - full width overlay instead of absolute dropdown */
+    .security-panel {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100%;
+        max-width: 100%;
+        z-index: 100;
+        border-radius: 0;
+        overflow-y: auto;
+        padding: 1.25rem;
+        box-sizing: border-box;
+    }
+
+    /* Mobile: Stack contact method rows vertically */
+    .contact-method-row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 6px;
+    }
+
+    .contact-method-row select.contact-type {
+        width: 100%;
+    }
+
+    .contact-method-row input.contact-value {
+        width: 100%;
+        min-width: 0;
+    }
+
+    .contact-method-row input.contact-label {
+        width: 100%;
+    }
+
+    .contact-method-row .remove-contact-btn {
+        align-self: flex-end;
+    }
+
+    /* Mobile: Pending contact info section */
+    .pending-contact-info-section {
+        padding: 1rem;
+    }
+
+    .pending-contact-info-section .setting-item[style*="flex"] {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .pending-contact-info-section .setting-item[style*="flex"] button {
+        width: 100%;
+        min-width: 0;
+    }
+
+    /* Mobile: Contact info panel button row */
+    #contact-info-panel .setting-item[style*="flex"] {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    #contact-info-panel .setting-item[style*="flex"] button {
+        width: 100%;
+    }
+
+    /* Mobile: Pending approval section constrain width */
+    .pending-approval-section {
+        max-width: 100%;
+        padding: 1rem;
+    }
+
+    .pending-approval-content {
+        padding: 1rem;
+    }
+
+    /* Mobile: User navigation controls - wrap when needed */
+    .user-controls {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
+    .user-controls .nav-link {
+        font-size: 0.82rem;
+        padding: 6px 10px;
+        margin: 2px;
+    }
+
+    /* Mobile: Reduce container padding */
+    .container {
+        padding: 1rem;
+    }
+
+    /* Mobile: TOTP setup form */
+    .totp-setup-form {
+        padding: 1rem;
+        max-width: 100%;
+    }
+
+    .totp-step {
+        padding: 1rem;
+    }
+
+    /* Mobile: Generic modals - wider on small screens */
+    .modal-content {
+        max-width: 95%;
+        width: 95%;
+    }
+
+    /* Mobile: Password modal - ensure it fits */
+    .password-modal {
+        width: 95%;
+        max-width: 95%;
+    }
+
+    /* Mobile: Metadata modal */
+    .metadata-modal {
+        width: 95%;
+        padding: 1rem;
+    }
+
+    .metadata-row {
+        flex-direction: column;
+        gap: 0.25rem;
+    }
+
+    .metadata-label {
+        min-width: 0;
+    }
+
+    /* Mobile: Share form inline card */
+    .share-form-container .card {
+        margin-left: 0;
+        padding: 1rem;
+    }
+
+    /* Mobile: Upload section */
+    .upload-section {
+        padding: 1rem;
+    }
+
+    /* Mobile: Progress modal */
+    .progress-modal {
+        min-width: 0;
+        width: calc(100vw - 2rem);
+        max-width: 400px;
+        padding: 20px;
     }
 }
 

@@ -31,12 +31,11 @@ export class ModalManager {
       border: 1px solid var(--depth-4);
       padding: 30px;
       border-radius: 8px;
-      max-width: 80%;
+      max-width: 500px;
       width: 90%;
       max-height: 85vh;
       overflow-y: auto;
       box-shadow: 0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent);
-      ${options.className ? `additional-class: ${options.className};` : ''}
     `;
 
     // Add TOTP-specific styles for backup codes grid

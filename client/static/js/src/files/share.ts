@@ -86,7 +86,7 @@ function promptForSharePassword(): Promise<{ password: string; expiresMinutes: n
             </div>
             <div class="password-modal-duration">
               <label for="share-expiry-value">Expires after</label>
-              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: nowrap;">
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                 <input type="number" id="share-expiry-value" class="password-modal-input"
                        min="0" max="99999" value="24"
                        style="width: 80px; margin-bottom: 0; padding-top: 8px; padding-bottom: 8px;" />
