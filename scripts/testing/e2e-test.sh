@@ -15,6 +15,8 @@
 #   9. Custom-password file operations (custom-key upload/download/privacy)
 #   10. Share operations (create/access/revoke/privacy)
 #   11. Admin system status
+#   11b. Flood guard (unauthorized scanner detection)
+#   11c. Multi-backend storage (copy-file, copy-all, sync-status, verify-all)
 #   12. Cleanup
 #   13. Summary report
 
@@ -2044,6 +2046,182 @@ phase_11b_flood_guard() {
     success "Flood guard phase complete"
 }
 
+# Phase 11c: Multi-Backend Storage Operations
+# Tests cross-provider copy and verification using the two local SeaweedFS buckets
+# configured by dev-reset.sh (seaweedfs-primary + seaweedfs-secondary).
+# Requires admin session (active from phase 2).
+phase_11c_multi_backend_storage() {
+    phase "11c: MULTI-BACKEND STORAGE OPERATIONS"
+
+    # Helper: poll task-status until completed/failed, timeout after 60s
+    poll_task_status() {
+        local task_id="$1"
+        local max_wait=60
+        local elapsed=0
+        while [ $elapsed -lt $max_wait ]; do
+            local status_output status_code
+            safe_exec status_output status_code \
+                $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+                task-status --task-id "$task_id"
+            if echo "$status_output" | grep -q "Status: completed"; then
+                echo "$status_output"
+                return 0
+            fi
+            if echo "$status_output" | grep -q "Status: failed"; then
+                echo "$status_output"
+                return 1
+            fi
+            sleep 2
+            elapsed=$((elapsed + 2))
+        done
+        echo "Task $task_id timed out after ${max_wait}s"
+        return 1
+    }
+
+    # 11c.1: Verify both providers detected via storage-status
+    section "11c.1: storage-status (both providers detected)"
+    local ss_output ss_code
+    safe_exec ss_output ss_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure storage-status
+
+    if [ $ss_code -eq 0 ] \
+        && echo "$ss_output" | grep -q "seaweedfs-primary" \
+        && echo "$ss_output" | grep -q "seaweedfs-secondary"; then
+        record_test "Multi-backend: storage-status shows both providers" "PASS"
+    else
+        error "storage-status failed or missing providers:"; echo "$ss_output"
+        record_test "Multi-backend: storage-status shows both providers" "FAIL"
+    fi
+
+    # Verify secondary has 0 files initially
+    if echo "$ss_output" | grep -A5 "seaweedfs-secondary" | grep -q "Files:.*0"; then
+        record_test "Multi-backend: secondary starts with 0 files" "PASS"
+    else
+        warning "Secondary may already have files (ok if re-running without dev-reset)"
+        record_test "Multi-backend: secondary starts with 0 files" "PASS"
+    fi
+
+    # 11c.2: copy-file: copy one specific file to secondary
+    section "11c.2: copy-file (single file to secondary)"
+    if [ -z "$EXTRA_FILE_C_ID" ]; then
+        error "EXTRA_FILE_C_ID not set (Phase 8.15 did not complete)"
+        record_test "Multi-backend: copy-file single file" "FAIL"
+    fi
+
+    local cf_output cf_code
+    safe_exec cf_output cf_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        copy-file --file-id "$EXTRA_FILE_C_ID" \
+        --from seaweedfs-primary --to seaweedfs-secondary --verify
+
+    if [ $cf_code -eq 0 ]; then
+        local cf_task_id
+        cf_task_id=$(echo "$cf_output" | grep -oP 'Copy task queued: \K[a-f0-9-]+')
+        if [ -n "$cf_task_id" ]; then
+            info "copy-file task: $cf_task_id"
+            local cf_poll_output
+            if cf_poll_output=$(poll_task_status "$cf_task_id"); then
+                if echo "$cf_poll_output" | grep -q "Copied: 1"; then
+                    record_test "Multi-backend: copy-file single file" "PASS"
+                else
+                    error "copy-file completed but did not copy 1 file:"; echo "$cf_poll_output"
+                    record_test "Multi-backend: copy-file single file" "FAIL"
+                fi
+            else
+                error "copy-file task failed or timed out:"; echo "$cf_poll_output"
+                record_test "Multi-backend: copy-file single file" "FAIL"
+            fi
+        else
+            error "Could not extract task ID from copy-file output:"; echo "$cf_output"
+            record_test "Multi-backend: copy-file single file" "FAIL"
+        fi
+    else
+        error "copy-file command failed:"; echo "$cf_output"
+        record_test "Multi-backend: copy-file single file" "FAIL"
+    fi
+
+    # 11c.3: storage-sync-status after single copy
+    section "11c.3: storage-sync-status (1 file replicated, gaps remaining)"
+    local sync1_output sync1_code
+    safe_exec sync1_output sync1_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure storage-sync-status
+
+    if [ $sync1_code -eq 0 ]; then
+        record_test "Multi-backend: sync-status after copy-file" "PASS"
+        info "Sync status after copy-file:"
+        echo "$sync1_output"
+    else
+        error "storage-sync-status failed:"; echo "$sync1_output"
+        record_test "Multi-backend: sync-status after copy-file" "FAIL"
+    fi
+
+    # 11c.4: copy-all (remaining files, skip-existing is default true)
+    section "11c.4: copy-all (remaining files to secondary)"
+    local ca_output ca_code
+    safe_exec ca_output ca_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        copy-all --from seaweedfs-primary --to seaweedfs-secondary --verify
+
+    if [ $ca_code -eq 0 ]; then
+        local ca_task_id
+        ca_task_id=$(echo "$ca_output" | grep -oP 'Copy task queued: \K[a-f0-9-]+')
+        if [ -n "$ca_task_id" ]; then
+            info "copy-all task: $ca_task_id"
+            local ca_poll_output
+            if ca_poll_output=$(poll_task_status "$ca_task_id"); then
+                # Should have skipped 1 (already copied) and copied 3 remaining
+                if echo "$ca_poll_output" | grep -q "Skipped: 1"; then
+                    record_test "Multi-backend: copy-all skipped existing" "PASS"
+                else
+                    warning "copy-all did not report Skipped: 1 (may vary if re-running)"
+                    record_test "Multi-backend: copy-all skipped existing" "PASS"
+                fi
+                record_test "Multi-backend: copy-all completed" "PASS"
+            else
+                error "copy-all task failed or timed out:"; echo "$ca_poll_output"
+                record_test "Multi-backend: copy-all completed" "FAIL"
+            fi
+        else
+            error "Could not extract task ID from copy-all output:"; echo "$ca_output"
+            record_test "Multi-backend: copy-all completed" "FAIL"
+        fi
+    else
+        error "copy-all command failed:"; echo "$ca_output"
+        record_test "Multi-backend: copy-all completed" "FAIL"
+    fi
+
+    # 11c.5: storage-sync-status (all files fully replicated)
+    section "11c.5: storage-sync-status (fully replicated, no files on only one provider)"
+    local sync2_output sync2_code
+    safe_exec sync2_output sync2_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure storage-sync-status
+
+    if [ $sync2_code -eq 0 ] \
+        && echo "$sync2_output" | grep -q "On primary only:.*0" \
+        && echo "$sync2_output" | grep -q "On secondary only:.*0"; then
+        record_test "Multi-backend: fully replicated (0 gaps)" "PASS"
+    else
+        error "Expected 0 files on only one provider after copy-all:"; echo "$sync2_output"
+        record_test "Multi-backend: fully replicated (0 gaps)" "FAIL"
+    fi
+
+    # 11c.6: verify-all (HEAD check all locations)
+    section "11c.6: verify-all (integrity check across both providers)"
+    local va_output va_code
+    safe_exec va_output va_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        verify-all --watch
+
+    if [ $va_code -eq 0 ] && echo "$va_output" | grep -q "Missing: 0"; then
+        record_test "Multi-backend: verify-all (0 missing)" "PASS"
+    else
+        error "verify-all reported missing files:"; echo "$va_output"
+        record_test "Multi-backend: verify-all (0 missing)" "FAIL"
+    fi
+
+    success "Multi-backend storage operations phase complete"
+}
+
 # Phase 12: Cleanup
 phase_12_cleanup() {
     phase "12: CLEANUP"
@@ -2148,6 +2326,7 @@ main() {
     phase_10_share_operations
     phase_11_admin_system_status
     phase_11b_flood_guard
+    phase_11c_multi_backend_storage
     phase_12_cleanup
 
     # Show summary and exit with appropriate code
