@@ -9,8 +9,8 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Configuration
-VERSION="9.4.1"  # Latest stable version of rqlite
-EXPECTED_COMMIT="df349344430a990f2acfda0c64b99a8e37f4837c"  # Git commit for v9.4.1
+VERSION="10.0.0"  # Latest stable version of rqlite
+EXPECTED_COMMIT="462a7da2490131e597b33fdce72c4cdc52fe5142"  # Git commit for v10.0.0
 BASE_DIR="/opt/arkfile"
 CACHE_DIR="/opt/arkfile/var/cache/downloads"
 SOURCE_DIR="${CACHE_DIR}/rqlite-source"
