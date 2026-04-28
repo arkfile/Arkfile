@@ -1296,29 +1296,30 @@ Run: `go test ./storage/ ./handlers/ ./models/ -count=1`
 **`handlers/admin_test.go`** (1 test removed):
 - Removed `TestUpdateUser_RevokeAccess_SimulateTokenDeleteError` — was identical in behavior to `TestUpdateUser_RevokeAccess_RevokeDBError` (same mock setup, same assertion, misleading name).
 
-### e2e Test Extensions
+### e2e Test Extensions [COMPLETE]
 
-Add multi-backend test scenarios to `scripts/testing/e2e-test.sh`:
+Multi-backend test scenarios in `scripts/testing/e2e-test.sh` (phase 11c), plus manual verification during live multi-backend testing sessions:
 
-1. **Single-provider mode (existing tests)**: All existing e2e tests continue to pass with no secondary provider configured. This validates backward compatibility.
+1. **Single-provider mode (existing tests)**: All existing e2e tests continue to pass with no secondary provider configured. This validates backward compatibility. [automated in e2e-test.sh -- phases 1-12 run in single-provider mode by default]
 
 2. **Multi-provider upload + download**: With `ENABLE_UPLOAD_REPLICATION=true`, upload a file, wait for replication, then verify:
    - `arkfile-admin storage-status` shows the file on both providers.
    - Download succeeds (from primary).
    - Simulate primary failure (stop SeaweedFS), download still succeeds (from secondary fallback).
    - Restart SeaweedFS, verify everything is back to normal.
+   - [manually verified 04/24/26 -- see Phase 3 progress notes]
 
-3. **Copy operations**: Upload several files with replication disabled. Run `arkfile-admin copy-all`. Verify all files appear on secondary via `storage-sync-status`.
+3. **Copy operations**: Upload several files with replication disabled. Run `arkfile-admin copy-all`. Verify all files appear on secondary via `storage-sync-status`. [automated in e2e-test.sh -- 11c.2 copy-file, 11c.3 sync-status, 11c.4 copy-all, 11c.5 fully-replicated check]
 
-4. **Provider swap**: After copy-all, run `arkfile-admin swap-providers`. Upload a new file. Verify it goes to the new primary. Download an old file. Verify fallback works.
+4. **Provider swap**: After copy-all, run `arkfile-admin swap-providers`. Upload a new file. Verify it goes to the new primary. Download an old file. Verify fallback works. [manually verified 04/24/26 -- see Phase 3 progress notes]
 
-5. **Delete**: Delete a file. Verify it is removed from all providers via `storage-sync-status`.
+5. **Delete**: Delete a file. Verify it is removed from all providers via `storage-sync-status`. [manually verified 04/24/26 -- see Phase 3 progress notes]
 
-6. **Tertiary provider**: Add a tertiary provider via env config. Copy files to it. Verify three-tier fallback by stopping primary and secondary, confirming download from tertiary.
+6. **Tertiary provider**: Add a tertiary provider via env config. Copy files to it. Verify three-tier fallback by stopping primary and secondary, confirming download from tertiary. [not tested -- requires three real providers; deferred to production deployment]
 
-7. **Role promotion**: Test `set-secondary` to promote tertiary to secondary. Verify auto-replication targets the new secondary.
+7. **Role promotion**: Test `set-secondary` to promote tertiary to secondary. Verify auto-replication targets the new secondary. [not tested -- requires three real providers; deferred to production deployment]
 
-8. **Stored blob hash verification**: Upload a file, verify `stored_blob_sha256sum` is populated. Copy with `--verify`, confirm hash match is logged.
+8. **Stored blob hash verification**: Upload a file, verify `stored_blob_sha256sum` is populated. Copy with `--verify`, confirm hash match is logged. [automated in e2e-test.sh -- 11c.2 and 11c.4 use --verify flag; manually verified 04/24/26]
 
 ---
 
@@ -1462,9 +1463,9 @@ Files changed:
 
 Verification: Test each command against a local deployment with a Wasabi secondary. Test the full provider migration workflow end-to-end.
 
-### Phase 10: Admin Alerts, Enhanced list-files, and e2e Test Extensions [COMPLETE except e2e-test.sh]
+### Phase 10: Admin Alerts, Enhanced list-files, and e2e Test Extensions [COMPLETE]
 
-Alerts summary endpoint, enhanced list-files with LOCATIONS column, and displayLoginAlerts() wired into login: all done. Sync-status response expanded to full combination matrix (on_all_configured, on_primary_only, on_secondary_only, on_tertiary_only, on_primary_and_secondary, on_primary_and_tertiary, on_secondary_and_tertiary) supporting both two-provider and three-provider configurations. e2e test extensions not yet added.
+Alerts summary endpoint, enhanced list-files with LOCATIONS column, and displayLoginAlerts() wired into login: all done. Sync-status response expanded to full combination matrix (on_all_configured, on_primary_only, on_secondary_only, on_tertiary_only, on_primary_and_secondary, on_primary_and_tertiary, on_secondary_and_tertiary) supporting both two-provider and three-provider configurations. Automated e2e test extensions added as phase 11c in e2e-test.sh (storage-status, copy-file, sync-status, copy-all, fully-replicated check, verify-all).
 
 Finalize admin login alerts, enhance existing `list-files` with storage locations, and extend e2e tests.
 
@@ -1491,7 +1492,7 @@ PROGRESS NOTE - 04/25/26 - Code review and hardening session. Verified all phase
 - (1) Removed duplicate AdminVerifyStorage route at legacy /api/admin/system/verify-storage from route_config.go. Canonical path is /api/admin/storage/verify-storage only. Updated stale comment in handler.
 - (2) Updated docs/api.md with all 16 new admin storage/alerts endpoints including request body examples and behavioral notes.
 - (3) Hardened all 4 role-change handlers (AdminSetPrimary, AdminSetSecondary, AdminSetTertiary, AdminSwapProviders) in handlers/admin_storage.go: added connectivity verification (1 MB round-trip via storage.RunVerification) before all role changes per design doc spec; added DB error checking on all Exec() calls (were silently ignoring errors); added rollback logic when second DB update fails; added immediate in-memory registry swap via Registry.SwapPrimarySecondary() for primary/secondary changes (no restart needed); added guard in AdminSetSecondary against demoting primary when no secondary exists. Secondary/tertiary swaps still require restart (no in-memory method for that pair).
-- Remaining: e2e-test.sh multi-backend scenarios (deferred to end of project).
+- e2e-test.sh multi-backend scenarios added as phase 11c (storage-status, copy-file, sync-status, copy-all, fully-replicated check, verify-all).
 A `verify-all` command that performs HEAD requests against every `file_storage_locations` row with `status = "active"` to confirm the S3 object actually exists and its size matches `padded_size`. This catches out-of-band deletions, provider-side data loss, and DB/reality drift without downloading any file data.
 
 #### New Status: `"missing"`
