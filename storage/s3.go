@@ -162,6 +162,9 @@ func readPrimaryEnvVars() S3ProviderConfig {
 		usePathStyle = true
 	case ProviderVultr:
 		endpointURL = fmt.Sprintf("https://%s.vultrobjects.com", region)
+	case ProviderHetzner:
+		endpointURL = fmt.Sprintf("https://%s.your-objectstorage.com", region)
+		usePathStyle = true
 	case ProviderCloudflareR2:
 		endpointURL = os.Getenv("CLOUDFLARE_ENDPOINT")
 		accessKey = os.Getenv("CLOUDFLARE_ACCESS_KEY_ID")
@@ -228,6 +231,9 @@ func readSecondaryEnvVars() *S3ProviderConfig {
 			endpointURL = fmt.Sprintf("https://s3.%s.wasabisys.com", region)
 		case ProviderVultr:
 			endpointURL = fmt.Sprintf("https://%s.vultrobjects.com", region)
+		case ProviderHetzner:
+			endpointURL = fmt.Sprintf("https://%s.your-objectstorage.com", region)
+			usePathStyle = true
 		}
 	}
 
@@ -274,6 +280,9 @@ func readTertiaryEnvVars() *S3ProviderConfig {
 			endpointURL = fmt.Sprintf("https://s3.%s.wasabisys.com", region)
 		case ProviderVultr:
 			endpointURL = fmt.Sprintf("https://%s.vultrobjects.com", region)
+		case ProviderHetzner:
+			endpointURL = fmt.Sprintf("https://%s.your-objectstorage.com", region)
+			usePathStyle = true
 		}
 	}
 

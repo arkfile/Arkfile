@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Arkfile Test Update Script
+# Arkfile Production Update Script
 # Rebuilds and redeploys app binaries and static assets WITHOUT touching data, keys, or config.
-# Use this to apply code changes to an existing test deployment (test.arkfile.net or similar).
+# Use this to apply code changes to an existing production deployment.
 # Does NOT wipe data, does NOT require re-bootstrapping the admin account.
-# Requires: an existing deployment written by test-deploy.sh
+# Requires: an existing deployment written by prod-deploy.sh
 
 set -e
 
@@ -21,8 +21,8 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 ARKFILE_DIR="/opt/arkfile"
-USER="arkfile"
-GROUP="arkfile"
+ARKFILE_USER="arkfile"
+ARKFILE_GROUP="arkfile"
 SECRETS_ENV="$ARKFILE_DIR/etc/secrets.env"
 
 FORCE_REBUILD_ALL=false
@@ -40,13 +40,13 @@ print_status() {
 
 show_help() {
     cat << EOF2
-Arkfile Test Update Script
+Arkfile Production Update Script
 
 Rebuilds Go binaries, TypeScript frontend, and static assets, then redeploys them
-to an existing test deployment without touching data, keys, or configuration.
+to an existing production deployment without touching data, keys, or configuration.
 
 Usage:
-  sudo bash scripts/test-update.sh [OPTIONS]
+  sudo bash scripts/prod-update.sh [OPTIONS]
 
 Options:
   --force-rebuild-all    Force rebuild of C libraries (libopaque/liboprf) and WASM.
@@ -55,7 +55,7 @@ Options:
   -h, --help             Show this help message
 
 Requirements:
-  - An existing deployment written by test-deploy.sh
+  - An existing deployment written by prod-deploy.sh
   - /opt/arkfile/etc/secrets.env must exist and contain BASE_URL=https://<domain>
   - The repo must be checked out on the VPS at the current working directory
 EOF2
@@ -117,13 +117,13 @@ echo -e "${CYAN}Pre-flight checks${NC}"
 
 if [ ! -f "$SECRETS_ENV" ]; then
     print_status "ERROR" "No existing deployment found: $SECRETS_ENV does not exist"
-    print_status "ERROR" "Run scripts/test-deploy.sh first to create a deployment"
+    print_status "ERROR" "Run scripts/prod-deploy.sh first to create a deployment"
     exit 1
 fi
 
 if ! systemctl list-unit-files arkfile.service >/dev/null 2>&1; then
     print_status "ERROR" "arkfile.service not found in systemd"
-    print_status "ERROR" "Run scripts/test-deploy.sh first to create a deployment"
+    print_status "ERROR" "Run scripts/prod-deploy.sh first to create a deployment"
     exit 1
 fi
 
@@ -204,7 +204,7 @@ print_status "SUCCESS" "Found Go at: $GO_BINARY"
 export GO_BINARY="$GO_BINARY"
 
 echo
-echo -e "${BLUE}ARKFILE TEST UPDATE${NC}"
+echo -e "${BLUE}ARKFILE PRODUCTION UPDATE${NC}"
 echo
 echo -e "${BLUE}Configuration:${NC}"
 echo "  Domain:             $DOMAIN"
@@ -300,7 +300,7 @@ if [ -x "$ARKFILE_DIR/bin/arkfile" ]; then
     BACKUP_DIR="$ARKFILE_DIR/backups/bin-$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$BACKUP_DIR"
     cp "$ARKFILE_DIR/bin/arkfile" "$ARKFILE_DIR/bin/arkfile-client" "$ARKFILE_DIR/bin/arkfile-admin" "$BACKUP_DIR/" 2>/dev/null || true
-    chown -R "$USER:$GROUP" "$ARKFILE_DIR/backups"
+    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/backups"
     print_status "SUCCESS" "Current binaries backed up to $BACKUP_DIR"
 
     # Prune old backups, keep only the 3 most recent
@@ -312,16 +312,16 @@ if [ -x "$ARKFILE_DIR/bin/arkfile" ]; then
 fi
 
 print_status "INFO" "Deploying Go binaries..."
-install -m 755 -o "$USER" -g "$GROUP" "$BUILD_BIN/arkfile"        "$ARKFILE_DIR/bin/arkfile"
-install -m 755 -o "$USER" -g "$GROUP" "$BUILD_BIN/arkfile-client" "$ARKFILE_DIR/bin/arkfile-client"
-install -m 755 -o "$USER" -g "$GROUP" "$BUILD_BIN/arkfile-admin"  "$ARKFILE_DIR/bin/arkfile-admin"
+install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile"        "$ARKFILE_DIR/bin/arkfile"
+install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile-client" "$ARKFILE_DIR/bin/arkfile-client"
+install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile-admin"  "$ARKFILE_DIR/bin/arkfile-admin"
 print_status "SUCCESS" "Binaries deployed"
 
 print_status "INFO" "Deploying static assets..."
 # Sync client/static tree (HTML, CSS, JS, WASM, errors)
 # Using cp -a to preserve structure; chown after to ensure correct ownership
 cp -r "$BUILD_CLIENT/static/." "$ARKFILE_DIR/client/static/"
-chown -R "$USER:$GROUP" "$ARKFILE_DIR/client"
+chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/client"
 print_status "SUCCESS" "Static assets deployed"
 
 print_status "INFO" "Deploying updated systemd service files..."
@@ -339,11 +339,15 @@ fi
 print_status "INFO" "Deploying updated database schema..."
 if [ -d "$BUILD_ROOT/database" ]; then
     cp -r "$BUILD_ROOT/database/." "$ARKFILE_DIR/database/"
-    chown -R "$USER:$GROUP" "$ARKFILE_DIR/database"
+    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/database"
 fi
 
-print_status "INFO" "Regenerating Caddyfile from Caddyfile.test template..."
-DESEC_TOKEN_VALUE=$(read_secrets_env_value "DESEC_TOKEN" 2>/dev/null || true)
+print_status "INFO" "Regenerating Caddyfile from Caddyfile.prod template..."
+# Read DESEC_TOKEN from caddy-env (where prod-deploy.sh stores it), not secrets.env
+DESEC_TOKEN_VALUE=""
+if [ -f /var/lib/caddy/caddy-env ]; then
+    DESEC_TOKEN_VALUE=$(grep "^DESEC_TOKEN=" /var/lib/caddy/caddy-env 2>/dev/null | head -1 | cut -d'=' -f2- || true)
+fi
 ACME_EMAIL_VALUE=$(read_secrets_env_value "CADDY_EMAIL" 2>/dev/null || true)
 
 repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -378,7 +382,7 @@ awk -v gfile="$tmp_global" '
         next
     }
     { print }
-' "$repo_root/Caddyfile.test" | sed "s|{DOMAIN}|${DOMAIN}|g" > /etc/caddy/Caddyfile
+' "$repo_root/Caddyfile.prod" | sed "s|{DOMAIN}|${DOMAIN}|g" > /etc/caddy/Caddyfile
 
 rm -f "$tmp_global"
 
@@ -461,14 +465,14 @@ echo "    storage:   ${STORAGE_DISPLAY}"
 
 # Record deployed version
 echo "$VERSION" > "$ARKFILE_DIR/etc/deployed-version"
-chown "$USER:$GROUP" "$ARKFILE_DIR/etc/deployed-version"
+chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/deployed-version"
 chmod 644 "$ARKFILE_DIR/etc/deployed-version"
 print_status "SUCCESS" "Deployed version: $VERSION"
 
 echo
-echo -e "${GREEN}UPDATE COMPLETE${NC}"
+echo -e "${GREEN}PRODUCTION UPDATE COMPLETE${NC}"
 echo
-echo -e "${BLUE}Your Arkfile instance at https://${DOMAIN} has been updated.${NC}"
+echo -e "${BLUE}Your Arkfile production instance at https://${DOMAIN} has been updated.${NC}"
 echo "Data, keys, and configuration were not modified."
 echo
 

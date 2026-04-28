@@ -15,6 +15,8 @@ For new users, start with these main entry points:
 scripts/
 ├── complete-setup-test.sh            # Complete setup with testing
 ├── dev-reset.sh                      # Development environment reset
+├── prod-deploy.sh                    # Production VPS first-time deployment
+├── prod-update.sh                    # Production VPS code update (preserves data)
 ├── setup/                            # Setup and deployment scripts
 │   ├── 00-setup-foundation.sh        # Foundation setup (users, dirs, keys)
 │   ├── 01-setup-users.sh             # Create arkfile system user
@@ -141,6 +143,36 @@ The setup scripts are numbered to show their logical dependency order:
 - Clears temporary files and logs
 - Rebuilds application if needed
 - Restarts services for fresh development session
+
+### Production Deployment Scripts
+
+#### `prod-deploy.sh`
+**Purpose**: First-time production VPS deployment for a real domain  
+**Usage**: `sudo bash scripts/prod-deploy.sh --domain <domain> --desec-token <token> --admin-username <name> [OPTIONS]`  
+**Required flags**: `--domain`, `--desec-token`, `--admin-username`  
+**Optional flags**: `--admin-contact`, `--storage-backend`, `--acme-email`, `--force-rebuild-all`, `--force-rebuild-rqlite`  
+**What it does**:
+- Pre-flight checks (DNS resolution, IP matching, port availability, dependencies)
+- Configures firewall (ufw or firewalld)
+- Creates system user/directories, builds application
+- Generates crypto material (master key, internal TLS certs)
+- Writes production configuration (rqlite, SeaweedFS/external S3, secrets.env)
+- Builds Caddy from source with deSEC DNS-01 module
+- Starts and health-checks all services (SeaweedFS, rqlite, Arkfile, Caddy)
+- Supports storage backends: local-seaweedfs, wasabi, backblaze, vultr, hetzner, cloudflare-r2, aws-s3, generic-s3
+- Detects existing deployments and offers REINSTALL option
+
+#### `prod-update.sh`
+**Purpose**: Update an existing production deployment with new code  
+**Usage**: `sudo bash scripts/prod-update.sh [--force-rebuild-all]`  
+**What it does**:
+- Reads domain and storage config from existing secrets.env (no re-entry needed)
+- Rebuilds Go binaries and TypeScript frontend
+- Stops only arkfile + caddy (rqlite and SeaweedFS stay running)
+- Deploys new binaries, static assets, systemd services, and database schema
+- Regenerates Caddyfile from Caddyfile.prod template
+- Restarts services with health verification
+- Preserves all data, keys, and configuration
 
 ### Testing Scripts
 

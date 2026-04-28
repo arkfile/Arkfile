@@ -3,7 +3,6 @@ package auth
 import (
 	"database/sql"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -13,15 +12,9 @@ import (
 
 // setupTOTPTestEnvironment sets up the test environment for TOTP tests
 func setupTOTPTestEnvironment(t *testing.T) {
-	// Create temporary directory for test keys
-	tempDir := t.TempDir()
-	keyPath := filepath.Join(tempDir, "totp_master.key")
-
-	// Set environment variable to use test key path
-	os.Setenv("TOTP_MASTER_KEY_PATH", keyPath)
 	os.Setenv("DEBUG_MODE", "true") // Enable debug mode for testing
 
-	// Initialize TOTP master key for testing
+	// Initialize TOTP master key for testing (uses KeyManager, not file-based keys)
 	if err := crypto.InitializeTOTPMasterKey(); err != nil {
 		t.Fatalf("Failed to initialize TOTP master key: %v", err)
 	}

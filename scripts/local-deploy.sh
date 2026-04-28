@@ -86,7 +86,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --http-port <port>            HTTP port (default: 8080)"
             echo "  --add-ip <ip>                 Additional IP for TLS cert SANs (repeatable, e.g. VPS public IP, LAN IP)"
             echo "  --storage-backend <type>      Storage backend (default: local-seaweedfs)"
-            echo "                                Options: local-seaweedfs, wasabi, backblaze, vultr,"
+            echo "                                Options: local-seaweedfs, wasabi, backblaze, vultr, hetzner,"
             echo "                                         cloudflare-r2, aws-s3, generic-s3"
             echo "  -h, --help                    Show this help message"
             exit 0
@@ -275,7 +275,7 @@ detect_lan_ip() {
 # Storage backend validation
 validate_storage_backend() {
     case "$1" in
-        local-seaweedfs|wasabi|backblaze|vultr|cloudflare-r2|aws-s3|generic-s3)
+        local-seaweedfs|wasabi|backblaze|vultr|hetzner|cloudflare-r2|aws-s3|generic-s3)
             return 0
             ;;
         *)
@@ -342,6 +342,14 @@ prompt_storage_backend_config() {
             S3_SECRET_KEY=$(prompt_secret_nonempty "Vultr secret key: ")
             S3_BUCKET=$(prompt_nonempty "Vultr bucket name: ")
             ;;
+        hetzner)
+            echo "  (Endpoint will be constructed as: https://<region>.your-objectstorage.com)"
+            echo "  (Available regions: fsn1, nbg1, hel1)"
+            S3_REGION=$(prompt_nonempty "Hetzner region: ")
+            S3_ACCESS_KEY=$(prompt_nonempty "Hetzner access key: ")
+            S3_SECRET_KEY=$(prompt_secret_nonempty "Hetzner secret key: ")
+            S3_BUCKET=$(prompt_nonempty "Hetzner bucket name: ")
+            ;;
         cloudflare-r2)
             echo ""
             echo -e "${BLUE}Cloudflare R2 Storage Configuration${NC}"
@@ -382,7 +390,7 @@ prompt_storage_backend_config() {
 # Validate storage backend
 if ! validate_storage_backend "$STORAGE_BACKEND"; then
     print_status "ERROR" "Unsupported storage backend: $STORAGE_BACKEND"
-    echo "Supported backends: local-seaweedfs, wasabi, backblaze, vultr, cloudflare-r2, aws-s3, generic-s3"
+    echo "Supported backends: local-seaweedfs, wasabi, backblaze, vultr, hetzner, cloudflare-r2, aws-s3, generic-s3"
     exit 1
 fi
 
@@ -500,7 +508,6 @@ if [ "$EXISTING_DEPLOYMENT" = "true" ]; then
         rm -f "$ARKFILE_DIR/etc/seaweedfs-s3.json" 2>/dev/null || true
         rm -rf "$ARKFILE_DIR/etc/keys/jwt"* 2>/dev/null || true
         rm -rf "$ARKFILE_DIR/etc/keys/opaque"* 2>/dev/null || true
-        rm -f "$ARKFILE_DIR/etc/keys/totp_master.key" 2>/dev/null || true
         rm -rf "$ARKFILE_DIR/etc/keys/tls"* 2>/dev/null || true
         rm -rf "$ARKFILE_DIR/client/static/js/dist"* 2>/dev/null || true
     fi
@@ -767,7 +774,7 @@ EOF
         chmod 640 "$ARKFILE_DIR/etc/seaweedfs-s3.json"
         print_status "SUCCESS" "SeaweedFS S3 auth configuration created"
         ;;
-    wasabi|vultr|aws-s3)
+    wasabi|vultr|hetzner|aws-s3)
         cat >> "$ARKFILE_DIR/etc/secrets.env" << EOF
 # Storage Configuration - ${STORAGE_BACKEND}
 STORAGE_PROVIDER=${STORAGE_BACKEND}

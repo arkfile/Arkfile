@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Arkfile Test Deployment Script
-# First-time VPS deployment for a real domain using Caddy + Let's Encrypt + deSEC
+# Arkfile Production Deployment Script
+# First-time VPS deployment for a production domain using Caddy + Let's Encrypt + deSEC
 
 set -e
 
@@ -22,8 +22,8 @@ NC='\033[0m'
 
 # Configuration defaults
 ARKFILE_DIR="/opt/arkfile"
-USER="arkfile"
-GROUP="arkfile"
+ARKFILE_USER="arkfile"
+ARKFILE_GROUP="arkfile"
 
 DOMAIN=""
 DESEC_TOKEN=""
@@ -68,13 +68,13 @@ print_status() {
 
 show_help() {
     cat << EOF2
-Arkfile Test Deployment Script
+Arkfile Production Deployment Script
 
 Usage:
-  sudo bash scripts/test-deploy.sh --domain <domain> --desec-token <token> --admin-username <name> [OPTIONS]
+  sudo bash scripts/prod-deploy.sh --domain <domain> --desec-token <token> --admin-username <name> [OPTIONS]
 
 Required:
-  --domain <domain>             Real domain name, e.g. test.arkfile.net
+  --domain <domain>             Real domain name, e.g. arkfile.example.com
   --desec-token <token>         deSEC API token for DNS-01 challenge
   --admin-username <name>       Admin username for bootstrap
 
@@ -222,7 +222,7 @@ build_application() {
     fi
 
     unset LIBOPAQUE_DEFINES
-    print_status "INFO" "WASM trace logging disabled for test deployment"
+    print_status "INFO" "WASM trace logging disabled for production deployment"
 
     rm -f client/static/js/.buildcache
     rm -rf client/static/js/dist/*
@@ -236,7 +236,7 @@ build_application() {
         fi
     fi
 
-    export VERSION="test-$(date +%Y%m%d-%H%M%S)"
+    export VERSION="prod-$(date +%Y%m%d-%H%M%S)"
     export SKIP_C_LIBS="$SKIP_C_LIBS"
 
     fix_go_ownership
@@ -264,21 +264,21 @@ deploy_build_artifacts() {
     print_status "SUCCESS" "Build artifacts deployed and verified"
 }
 
-write_test_configuration() {
+write_configuration() {
     local rqlite_password="$1"
     local s3_password="$2"
 
     print_status "INFO" "Writing deployment configuration..."
 
     cat > "$ARKFILE_DIR/etc/secrets.env" <<EOF2
-# Test Deployment Configuration
+# Production Deployment Configuration
 # Generated: $(date)
 # Domain: ${DOMAIN}
 
 # Database Configuration
 DATABASE_TYPE=rqlite
 RQLITE_ADDRESS=http://localhost:4001
-RQLITE_USERNAME=test-user
+RQLITE_USERNAME=arkfile-db
 RQLITE_PASSWORD=${rqlite_password}
 
 # Arkfile Application Configuration
@@ -300,9 +300,9 @@ EOF2
 # Storage Configuration
 STORAGE_PROVIDER=generic-s3
 S3_ENDPOINT=http://localhost:9332
-S3_ACCESS_KEY=arkfile-test
+S3_ACCESS_KEY=arkfile
 S3_SECRET_KEY=${s3_password}
-S3_BUCKET=arkfile-test
+S3_BUCKET=arkfile
 S3_REGION=us-east-1
 S3_FORCE_PATH_STYLE=true
 
@@ -315,7 +315,7 @@ EOF2
       "name": "arkfile",
       "credentials": [
         {
-          "accessKey": "arkfile-test",
+          "accessKey": "arkfile",
           "secretKey": "${s3_password}"
         }
       ],
@@ -324,7 +324,7 @@ EOF2
   ]
 }
 EOF2
-            chown "$USER:$GROUP" "$ARKFILE_DIR/etc/seaweedfs-s3.json"
+            chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/seaweedfs-s3.json"
             chmod 640 "$ARKFILE_DIR/etc/seaweedfs-s3.json"
             ;;
         wasabi|vultr|hetzner|aws-s3)
@@ -391,19 +391,19 @@ DEBUG_MODE=false
 LOG_LEVEL=info
 EOF2
 
-    chown "$USER:$GROUP" "$ARKFILE_DIR/etc/secrets.env"
+    chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/secrets.env"
     chmod 640 "$ARKFILE_DIR/etc/secrets.env"
 
     cat > "$ARKFILE_DIR/etc/rqlite-auth.json" <<EOF2
 [
   {
-    "username": "test-user",
+    "username": "arkfile-db",
     "password": "${rqlite_password}",
     "perms": ["all"]
   }
 ]
 EOF2
-    chown "$USER:$GROUP" "$ARKFILE_DIR/etc/rqlite-auth.json"
+    chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/rqlite-auth.json"
     chmod 640 "$ARKFILE_DIR/etc/rqlite-auth.json"
 
     print_status "SUCCESS" "Configuration files written"
@@ -414,7 +414,7 @@ generate_crypto_material() {
     ./scripts/setup/03-setup-master-key.sh
     print_status "INFO" "Generating internal TLS certificates..."
     ./scripts/setup/04-setup-tls-certs.sh
-    chown -R "$USER:$GROUP" "$ARKFILE_DIR"
+    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR"
     chmod 700 "$ARKFILE_DIR/etc/keys"
     [ -d "$ARKFILE_DIR/etc/keys/tls" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls"
     verify_ownership "$ARKFILE_DIR"
@@ -462,7 +462,7 @@ GLOBALEOF
             next
         }
         { print }
-    ' "$repo_root/Caddyfile.test" | sed "s|{DOMAIN}|${DOMAIN}|g" > /etc/caddy/Caddyfile
+    ' "$repo_root/Caddyfile.prod" | sed "s|{DOMAIN}|${DOMAIN}|g" > /etc/caddy/Caddyfile
 
     rm -f "$tmp_global"
 }
@@ -616,7 +616,7 @@ start_and_verify_services() {
     systemctl start rqlite
     local rqlite_ready=false
     for _ in $(seq 1 30); do
-        if curl -u "test-user:${RQLITE_PASSWORD}" http://localhost:4001/status 2>/dev/null | grep -q '"ready":true'; then
+        if curl -u "arkfile-db:${RQLITE_PASSWORD}" http://localhost:4001/status 2>/dev/null | grep -q '"ready":true'; then
             rqlite_ready=true
             break
         fi
@@ -956,7 +956,7 @@ if [ "$EXISTING_DEPLOYMENT" = "true" ]; then
     echo -e "${YELLOW}WARNING: An existing Arkfile deployment was detected.${NC}"
     echo -e "${YELLOW}This script is intended for first-time deployment.${NC}"
     echo
-    echo "  To update an existing deployment, use a future test-update.sh"
+    echo "  To update an existing deployment, use a future prod-update.sh"
     echo "  To restart services: sudo systemctl restart arkfile"
     echo
     echo -e "${RED}To wipe and reinstall, type REINSTALL:${NC}"
@@ -1008,7 +1008,7 @@ echo "====================================="
 prompt_storage_backend_config
 
 echo
-echo -e "${BLUE}ARKFILE TEST DEPLOYMENT${NC}"
+echo -e "${BLUE}ARKFILE PRODUCTION DEPLOYMENT${NC}"
 echo
 echo -e "${BLUE}Configuration:${NC}"
 echo "  Domain:           $DOMAIN"
@@ -1054,7 +1054,7 @@ echo -e "${CYAN}Step 4: Deploy build artifacts and set ownership${NC}"
 echo "================================================="
 deploy_build_artifacts
 
-chown -R "$USER:$GROUP" "$ARKFILE_DIR"
+chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR"
 chmod 700 "$ARKFILE_DIR/etc/keys"
 [ -d "$ARKFILE_DIR/etc/keys/jwt" ] && chmod 700 "$ARKFILE_DIR/etc/keys/jwt"
 [ -d "$ARKFILE_DIR/etc/keys/jwt/current" ] && chmod 700 "$ARKFILE_DIR/etc/keys/jwt/current"
@@ -1069,7 +1069,7 @@ chmod 700 "$ARKFILE_DIR/etc/keys"
 [ -d "$ARKFILE_DIR/etc/keys/totp" ] && chmod 700 "$ARKFILE_DIR/etc/keys/totp"
 
 mkdir -p "$ARKFILE_DIR/var/log"
-chown "$USER:$GROUP" "$ARKFILE_DIR/var/log"
+chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/var/log"
 chmod 775 "$ARKFILE_DIR/var/log"
 print_status "SUCCESS" "Ownership and permissions set"
 
@@ -1082,7 +1082,7 @@ if [ "$STORAGE_BACKEND" = "local-seaweedfs" ]; then
 else
     S3_PASSWORD=""
 fi
-write_test_configuration "$RQLITE_PASSWORD" "$S3_PASSWORD"
+write_configuration "$RQLITE_PASSWORD" "$S3_PASSWORD"
 
 echo
 echo -e "${CYAN}Step 6: Generate cryptographic material${NC}"
@@ -1149,14 +1149,14 @@ fi
 
 # Record deployed version
 echo "$VERSION" > "$ARKFILE_DIR/etc/deployed-version"
-chown "$USER:$GROUP" "$ARKFILE_DIR/etc/deployed-version"
+chown "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/etc/deployed-version"
 chmod 644 "$ARKFILE_DIR/etc/deployed-version"
 print_status "SUCCESS" "Deployed version: $VERSION"
 
 echo
-echo -e "${GREEN}TEST DEPLOYMENT COMPLETE${NC}"
+echo -e "${GREEN}DEPLOYMENT COMPLETE${NC}"
 echo
-echo -e "${BLUE}Your Arkfile test instance is running at:${NC}"
+echo -e "${BLUE}Your Arkfile instance is running at:${NC}"
 echo -e "${GREEN}  HTTPS: https://${DOMAIN}${NC}"
 echo
 echo -e "${YELLOW}NEXT: Bootstrap your admin account${NC}"

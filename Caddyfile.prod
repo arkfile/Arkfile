@@ -1,0 +1,47 @@
+# Arkfile Caddyfile - Production Deployment Template
+# Used by scripts/prod-deploy.sh
+# {DOMAIN} is replaced by prod-deploy.sh via sed
+# {$DESEC_TOKEN} is a Caddy env var reference loaded from EnvironmentFile in caddy.service
+# The global block is conditionally written by render_caddyfile() when --acme-email is set
+
+{GLOBAL_BLOCK}
+
+{DOMAIN} {
+	tls {
+		dns desec {
+			token "{$DESEC_TOKEN}"
+		}
+		protocols tls1.3
+		key_type p384
+	}
+
+	header {
+		# HSTS: Caddy owns TLS termination so it is the right place for this header.
+		# All other security headers (CSP, X-Frame-Options, etc.) are set by the
+		# Go application's middleware and must NOT be duplicated here.
+		# Duplicate CSP headers cause browsers to enforce the intersection of both,
+		# breaking features like TOTP QR codes (data: URI images).
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+	}
+
+	reverse_proxy localhost:8443 {
+		transport http {
+			tls
+			tls_insecure_skip_verify
+		}
+		health_uri /readyz
+		health_interval 30s
+		health_timeout 10s
+		health_status 200
+	}
+
+	encode gzip
+
+	# Access logs disabled: the Go application handles all request logging
+	# with privacy-preserving entity IDs (no raw IP addresses).
+	# Caddy error-level issues still go to stderr/journalctl by default.
+
+	handle_errors {
+		respond "{http.error.status_code} {http.error.status_text}"
+	}
+}

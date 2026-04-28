@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/84adam/Arkfile/auth"
@@ -53,17 +52,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	// Setup TOTP master key
-	tempDir, err := os.MkdirTemp("", "handlers-test-totp-*")
-	if err != nil {
-		fmt.Printf("FATAL: handlers TestMain: Failed to create temp dir: %v\n", err)
-		os.Exit(1)
-	}
-	defer os.RemoveAll(tempDir)
-
-	keyPath := filepath.Join(tempDir, "totp_master.key")
-	os.Setenv("TOTP_MASTER_KEY_PATH", keyPath)
-
+	// Initialize TOTP master key (uses KeyManager, not file-based keys)
 	if err := crypto.InitializeTOTPMasterKey(); err != nil {
 		fmt.Printf("FATAL: handlers TestMain: Failed to initialize TOTP master key: %v\n", err)
 		os.Exit(1)
@@ -101,7 +90,6 @@ func TestMain(m *testing.M) {
 
 	// Cleanup
 	os.Unsetenv("ARKFILE_MASTER_KEY")
-	os.Unsetenv("TOTP_MASTER_KEY_PATH")
 	for key, originalValue := range originalEnv {
 		if originalValue == "" {
 			os.Unsetenv(key)

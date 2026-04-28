@@ -116,6 +116,7 @@ Arkfile supports multiple storage backends through a generic S3 interface (`STOR
 - **Backblaze B2** - S3-compatible cloud storage
 - **Wasabi** - S3-compatible cloud storage
 - **Vultr Object Storage** - S3-compatible cloud storage
+- **Hetzner Object Storage** - S3-compatible cloud storage (EU-only)
 - **Cloudflare R2** - S3-compatible cloud storage
 - **Any S3-compatible provider** - Works with any backend that implements the S3 API
 

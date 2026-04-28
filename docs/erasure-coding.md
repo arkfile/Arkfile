@@ -157,3 +157,47 @@ For systems that handle sensitive or long-lived data, combining both layers -- t
 
 - klauspost/reedsolomon: High-performance Reed-Solomon erasure coding in Go, with SIMD-accelerated operations
   https://github.com/klauspost/reedsolomon
+
+---
+
+## Popular Object Storage Providers
+
+The following providers offer S3-compatible APIs suitable for use as multi-backend storage targets. All prices are approximate, based on publicly listed rates as of May 2026, and may vary by region or contract terms.
+
+### Providers with Free Egress
+
+These three providers offer S3-compatible APIs with effectively zero egress charges, making them particularly attractive for applications that need to retrieve stored data without unpredictable bandwidth costs.
+
+| Provider | Storage (per TB/mo) | Egress | Notes |
+|---|---|---|---|
+| Backblaze B2 | $6.00 | $0 (up to 3x stored volume) | 17+3 RS erasure coding; most established budget option |
+| Wasabi | $6.99 | $0 (up to 1x stored volume) | 90-day minimum retention; minimum 1 TB billing |
+| Cloudflare R2 | $15.00 | $0 (unlimited, unconditional) | No egress caps or ratio limits; data distributed globally |
+
+**Backblaze B2**: Free egress as long as monthly downloads do not exceed three times the average stored data volume. Beyond that threshold, excess egress is $0.01/GB.
+
+**Wasabi**: Free egress as long as monthly downloads do not exceed the active storage volume (1:1 ratio). Wasabi enforces a 90-day minimum retention policy -- deleting data before 90 days still incurs 90 days of storage charges. Minimum billing is 1 TB regardless of actual usage.
+
+**Cloudflare R2**: The only provider with truly unconditional free egress -- no ratio limits, no caps. Higher storage cost than Backblaze or Wasabi, but eliminates all egress cost uncertainty. Operations are charged separately (Class A: $4.50/million, Class B: $0.36/million).
+
+### Other S3-Compatible Providers
+
+These providers charge for egress but offer competitive storage pricing or other advantages. Listed in ascending order by storage cost per TB.
+
+| Provider | Storage (per TB/mo) | Egress (per TB) | Notes |
+|---|---|---|---|
+| Vultr Object Storage | $6.00 | $10.00 (1 TB included per block) | Sold in 1 TB blocks; 5 GB object size cap |
+| Hetzner Object Storage | ~$6.49 (EUR) | ~$1.00/TB (EUR) | EU-only (NBG1, FSN1, HEL1); 1 TB egress included in base |
+| DigitalOcean Spaces | $20.00 (additional) | $10.00 (1 TiB included in base) | Base plan $5/mo for 250 GiB; 5 GB object size cap |
+| Google Cloud Storage | $20.00 | $85-120 (tiered) | S3 interop via XML API; complex tiered egress pricing |
+| AWS S3 Standard | $23.00 | $90.00 (first 10 TB) | Reference S3 implementation; most extensive feature set |
+
+**Vultr**: Pricing is structured as fixed 1 TB blocks at $6/block, each including 1 TB of egress. Excess egress is $0.01/GB. The 5 GB maximum object size is a constraint for applications handling very large files.
+
+**Hetzner**: EU-only provider with three datacenter locations in Germany and Finland. Base plan of EUR 6.49/month includes 1 TB storage and 1 TB outgoing traffic. Additional storage is EUR 8.70/TB. S3-compatible API, GDPR-compliant.
+
+**DigitalOcean Spaces**: Base plan of $5/month includes 250 GiB storage and 1 TiB outbound transfer. Additional storage is $0.02/GiB (~$20/TB). Additional transfer is $0.01/GiB (~$10/TB). The 5 GB object size limit applies.
+
+**Google Cloud Storage**: Offers an XML API interoperability mode that allows use of standard S3 client libraries. Storage at $0.02/GiB for Standard class in US regions. Egress pricing is complex: Premium Tier charges $0.12/GB for the first 1 TB, dropping to $0.11/GB for 1-10 TB. Standard Tier is cheaper ($0.085/GB) but provides lower network quality of service. Not natively S3 -- the interop mode covers basic operations but may not support all S3 features.
+
+**AWS S3**: The original and reference implementation of the S3 API. All other "S3-compatible" providers are emulating this API. Storage at $0.023/GB for Standard tier (first 50 TB). Egress at $0.09/GB for the first 10 TB/month ($90/TB), with 100 GB/month free. The most feature-complete option but also among the most expensive for both storage and egress.

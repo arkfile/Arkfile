@@ -71,6 +71,7 @@ const (
 	ProviderWasabi       StorageProvider = "wasabi"
 	ProviderVultr        StorageProvider = "vultr"
 	ProviderCloudflareR2 StorageProvider = "cloudflare-r2"
+	ProviderHetzner      StorageProvider = "hetzner"
 	ProviderAmazonS3     StorageProvider = "aws-s3"
 	ProviderGenericS3    StorageProvider = "generic-s3"
 )
