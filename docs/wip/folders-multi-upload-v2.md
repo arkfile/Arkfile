@@ -28,7 +28,7 @@ The following were confirmed by reading the code before finalizing this revision
 - **`/api/uploads/*` is not rate-limited for authed users.** The upload init/chunk/complete endpoints sit in `totpProtectedGroup` with no per-endpoint throttle in `handlers/rate_limiting.go` or `handlers/route_config.go`. Batch upload of hundreds of files will not trip any limit at this layer.
 - **`FloodGuardMiddleware` only escalates on 401/404 from unauthenticated requests.** Authenticated, approved users doing sequential batch upload cannot trip it.
 - **`handlers/export.go` export struct has a clean extension point.** Adding `encrypted_folder_path` and `folder_path_nonce` (and any other new fields) to the export bundle is additive.
-- **Current AAD coverage in the code is narrow.** Only share envelopes use AAD (`share_id || file_id`, no separator). Per-file metadata fields (`encrypted_filename`, `encrypted_sha256sum`, `encrypted_file_sha256sum`, `encrypted_fek`) do **not** currently use AAD. All per-file metadata fields get AAD under this plan (see "Design Decisions § 3").
+- **Current AAD coverage in the code is narrow.** Only share envelopes use AAD (`share_id || file_id`, no separator). Per-file ciphertext metadata fields (`encrypted_filename`, `encrypted_sha256sum`, `encrypted_fek`) do **not** currently use AAD. All client-encrypted per-file metadata fields get AAD under this plan (see "Design Decisions § 3"). The column `encrypted_file_sha256sum` is **not** in AAD scope despite its name — see the note in § 3 and the comment on `models.File.EncryptedFileSha256sum`.
 - **`upload_sessions` has three hand-written SQL call sites in `handlers/uploads.go` that must be updated for new columns.** The `INSERT INTO upload_sessions (...)` in `CreateUploadSession`, the `SELECT ... FROM upload_sessions WHERE id = ?` in `GetUploadStatus`, and the multi-line `SELECT ... FROM upload_sessions WHERE id = ?` used in the `CompleteUpload` preamble. The `UploadChunk` path does not need the new columns (it only validates ownership and chunk number).
 - **`CreateUploadSession` does not currently limit concurrent in-progress sessions per user.** Multiple sessions can be created in parallel. A server-side cap is added in Work Item F-1.
 - **`padded_size` is computed deterministically at session-init time** from `request.TotalSize` via `utils.NewPaddingCalculator().CalculatePaddedSize(...)`, before any chunk arrives. It is persisted on `upload_sessions` and carried to `file_metadata` at `CompleteUpload` time. This means quota accounting can include in-flight sessions exactly, without estimation.
@@ -115,21 +115,31 @@ AAD = file_id_bytes || 0x00 || field_name_bytes || 0x00 || username_bytes
 ```
 
 - `file_id_bytes`: UTF-8 bytes of the `file_id` string.
-- `field_name_bytes`: UTF-8 bytes of a short ASCII field tag — one of: `"folder_path"`, `"filename"`, `"sha256sum"`, `"file_sha256sum"`, `"fek"`.
+- `field_name_bytes`: UTF-8 bytes of a short ASCII field tag — one of: `"folder_path"`, `"filename"`, `"sha256sum"`, `"fek"`.
 - `username_bytes`: UTF-8 bytes of the owner username (immutable, per Verification Findings).
 - `0x00`: NUL separator between fields (NUL is forbidden inside all three values, so the encoding is unambiguous).
 
 **Field tags are defined in `crypto/aad-params.json`** and consumed by both TS and Go via the same shared-params loading pattern as `chunking-params.json`, `argon2id-params.json`, `password-requirements.json`. This prevents string drift between the two clients — if either side ever diverges by one character, every decryption fails and the shared test vectors catch it immediately.
 
-The five tags map to per-file metadata fields as follows:
+The four tags map to per-file ciphertext metadata fields as follows:
 
 | Tag | Field | Meaning |
 | --- | --- | --- |
 | `folder_path` | `encrypted_folder_path` | Directory portion of the path (new in this plan) |
 | `filename` | `encrypted_filename` | Base filename |
-| `sha256sum` | `encrypted_sha256sum` | SHA-256 of the plaintext file |
-| `file_sha256sum` | `encrypted_file_sha256sum` | SHA-256 of the encrypted/stored blob |
+| `sha256sum` | `encrypted_sha256sum` | SHA-256 of the plaintext file (client-computed, client-encrypted) |
 | `fek` | `encrypted_fek` | Wrapped File Encryption Key |
+
+**Not in AAD scope:** the column `file_metadata.encrypted_file_sha256sum` is excluded. Despite the `encrypted_` prefix, its stored value is a **plaintext** SHA-256 computed on the server over the already-client-side-encrypted data stream (pre-padding) as chunks arrive. The server holds it in plaintext by construction, so there is nothing there to protect with AAD. The column keeps its historical name; a clarifying block comment is added to `models.File.EncryptedFileSha256sum` in `models/file.go` so the name does not keep misleading future readers. The related server-side field `stored_blob_sha256sum` (hash of all bytes written to S3 including padding) is likewise plaintext and not in AAD scope.
+
+**Per-field protection rationale.** Each of the four in-scope fields gains a distinct defense from AAD, not just uniformity:
+
+- `folder_path`: cross-row swap would mis-render the tree and, more importantly, cause `download --preserve-folders` in the CLI to write decrypted bytes into an attacker-chosen filesystem location under `output_dir`. AAD plus the explicit re-validation + containment check in Work Item N is belt-and-suspenders.
+- `filename`: cross-row swap would cause decrypted bytes of file A to be saved under file B's user-visible name — a confusion-of-identity attack on download. Also underpins the dedup key `(filename, canonical_folder_path)` in Work Item I-a.
+- `sha256sum` (plaintext-file hash): the underlying value is privacy-sensitive (file-fingerprinting risk). Cross-row swap breaks the client-side integrity check that confirms decrypted plaintext matches what was uploaded. AAD binds the integrity record to `(file_id, field, username)`.
+- `fek`: the wrapped FEK is the root of the per-file encryption chain. Cross-file FEK substitution without AAD is only caught downstream at per-chunk AEAD tag failure; AAD on the FEK surfaces the fault at the wrapper layer and prevents silent reliance on chunk-level detection. Note that the FEK is wrapped by either the Account Key or the per-file Custom Key depending on `password_type` (envelope `key_type = 0x01` or `0x02`); AAD binding applies uniformly in both cases — the KEK choice is orthogonal to the AAD-verified context (`file_id`, field, username). The other three fields above (`folder_path`, `filename`, `sha256sum`) are always wrapped with the Account Key regardless of the file's `password_type`, per AGENTS.md "File metadata encryption and decryption always uses the Account Key."
+
+
 
 **Helper (shared between TS and Go):**
 
@@ -167,9 +177,11 @@ What this prevents:
 Does not prevent (accepted):
 - Rollback to a previous ciphertext for the **same** (file_id, field, username) tuple. Would require a monotonic version counter in AAD; overkill.
 
-**Scope: all five per-file metadata fields above get AAD in this round of work.** Existing rows on local dev and `test.arkfile.net` become undecryptable after the cutover; accounts and auth are preserved (see Verification Findings). Chunk ciphertext is intentionally left without AAD — unique per-file random FEKs prevent cross-file chunk substitution at the AES-GCM level, and the server's order-dependent streaming SHA-256 (stored in `encrypted_file_sha256sum`) prevents within-file chunk reordering, so chunk-level AAD would add nothing.
+**Scope: all four client-encrypted per-file metadata fields above get AAD in this round of work.** Existing rows on local dev and `test.arkfile.net` become undecryptable after the cutover; accounts and auth are preserved (see Verification Findings). Chunk ciphertext is intentionally left without AAD — unique per-file random FEKs prevent cross-file chunk substitution at the AES-GCM level, and the server's order-dependent streaming SHA-256 (stored in plaintext as `encrypted_file_sha256sum`) prevents within-file chunk reordering, so chunk-level AAD would add nothing.
 
-**All five fields use the same construction:** key = account key (the Argon2id-derived Account Key used as KEK), nonce = random 12 bytes per blob, AAD = `BuildFileMetadataAAD(field_tag, file_id, username)`, ciphertext-and-tag = `AES-GCM-Encrypt(key, nonce, plaintext, aad)`. Wire format per field: `nonce` + `ct||tag`, each base64-encoded, sent and stored as separate columns (e.g. `filename_nonce` + `encrypted_filename`). The `encrypt`/`decrypt` pseudocode above uses `"folder_path"` as a concrete example; substitute any of the five field tags and the corresponding plaintext for the other fields.
+**All four fields use the same construction:** nonce = random 12 bytes per blob, AAD = `BuildFileMetadataAAD(field_tag, file_id, username)`, ciphertext-and-tag = `AES-GCM-Encrypt(key, nonce, plaintext, aad)`. The wrapping key depends on the field: `folder_path`, `filename`, and `sha256sum` always use the Account Key (per AGENTS.md "File metadata encryption and decryption always uses the Account Key"); `fek` uses the Account Key or the per-file Custom Key depending on the file's `password_type`. Wire format per field: `nonce` + `ct||tag`, each base64-encoded, sent and stored as separate columns (e.g. `filename_nonce` + `encrypted_filename`). For `encrypted_fek` specifically, the base64'd `ct||tag` payload sits inside the existing envelope: `[0x01][key_type][nonce][ct][tag]` — the envelope header bytes are outside the AAD-protected region; only the wrapped FEK ciphertext carries the AAD binding. The `encrypt`/`decrypt` pseudocode above uses `"folder_path"` as a concrete example; substitute any of the four field tags and the corresponding plaintext for the other fields.
+
+
 
 The existing share-envelope AAD (`share_id || file_id`, no separator) is **not** touched — changing it would break all existing shares. New helpers are NUL-separated; old share AAD is left alone.
 
@@ -272,8 +284,9 @@ Ordered by dependency, not by ceremony. Each item lists prerequisites. No "phase
 - Generic helper `BuildFileMetadataAAD(field, file_id, username)`.
 - TS file location: `client/static/js/src/crypto/aad.ts` (new file).
 - Go file location: `crypto/aad.go` (pure helper, shareable with server-side verification tooling in future).
-- Field tags (`folder_path`, `filename`, `sha256sum`, `file_sha256sum`, `fek`) and the AAD separator byte are defined in `crypto/aad-params.json`, consumed by both TS and Go via the same shared-params pattern as `chunking-params.json` / `argon2id-params.json` / `password-requirements.json`. Never hard-code tag strings in either client.
-- All five per-file metadata fields are AAD-wrapped at encrypt and AAD-verified at decrypt in this round.
+- Field tags (`folder_path`, `filename`, `sha256sum`, `fek`) and the AAD separator byte are defined in `crypto/aad-params.json`, consumed by both TS and Go via the same shared-params pattern as `chunking-params.json` / `argon2id-params.json` / `password-requirements.json`. Never hard-code tag strings in either client.
+- All four client-encrypted per-file metadata fields are AAD-wrapped at encrypt and AAD-verified at decrypt in this round. `encrypted_file_sha256sum` is excluded; see § 3.
+
 
 ### F. `GET /api/user/storage` endpoint
 **Prereq:** none.
@@ -409,11 +422,14 @@ Ordered by dependency, not by ceremony. Each item lists prerequisites. No "phase
 
 ## Open Decisions (all resolved, kept for record)
 
-### A — AAD scope: RESOLVED as full coverage
+### A — AAD scope: RESOLVED as all client-encrypted per-file metadata fields
 
-All five per-file metadata fields get AAD in this round: `folder_path`, `filename`, `sha256sum`, `file_sha256sum`, `fek`. Existing encrypted metadata on local dev and `test.arkfile.net` becomes undecryptable after the AAD cutover; `test-update.sh` preserves accounts and auth records. No migration tooling is planned.
+All four client-encrypted per-file metadata fields get AAD in this round: `folder_path`, `filename`, `sha256sum`, `fek`. Each has a distinct per-field threat motivation (see § 3 "Per-field protection rationale"), not just uniformity-for-uniformity's-sake. Existing encrypted metadata on local dev and `test.arkfile.net` becomes undecryptable after the AAD cutover; `test-update.sh` preserves accounts and auth records. No migration tooling is planned.
+
+The column `file_metadata.encrypted_file_sha256sum` is excluded from AAD scope. Despite the `encrypted_` prefix, its stored value is a plaintext server-computed SHA-256 of the already-client-encrypted data stream — there is nothing there to protect with AAD. The column keeps its historical name; a clarifying block comment is added to `models.File.EncryptedFileSha256sum` in `models/file.go`.
 
 The rejected options ("folder_path only" and "versioned-per-row `aad_version` column") are not pursued. The latter is the kind of legacy/dual-decrypt tech debt AGENTS.md tells us to avoid.
+
 
 ### B — Go AAD helper placement: RESOLVED as `crypto/aad.go`
 
@@ -425,7 +441,8 @@ Short header comment noting that username is a permanent, immutable identifier u
 
 ### D — Field-tag naming in shared JSON: RESOLVED as `crypto/aad-params.json`
 
-Field tags (`folder_path`, `filename`, `sha256sum`, `file_sha256sum`, `fek`) and the AAD separator byte live in `crypto/aad-params.json`, consumed by both TS and Go. Same pattern as `chunking-params.json` / `argon2id-params.json` / `password-requirements.json`. Prevents tag-string drift between the two clients.
+Field tags (`folder_path`, `filename`, `sha256sum`, `fek`) and the AAD separator byte live in `crypto/aad-params.json`, consumed by both TS and Go. Same pattern as `chunking-params.json` / `argon2id-params.json` / `password-requirements.json`. Prevents tag-string drift between the two clients.
+
 
 ### E — Concurrent-upload cap + quota accounting: RESOLVED
 
@@ -501,7 +518,8 @@ Each item below is explicitly **out of scope for this round of work**. One-line 
 
 ### Config / shared spec
 - `crypto/folder-path-params.json` — new file: max depth / segment length / total length / forbidden char ranges / Unicode normalization form (NFC) flag.
-- `crypto/aad-params.json` — new file: per-field AAD tag strings (`folder_path`, `filename`, `sha256sum`, `file_sha256sum`, `fek`) and the AAD separator byte (`0x00`). Consumed by both TS and Go via the shared-params loading pattern.
+- `crypto/aad-params.json` — new file: per-field AAD tag strings (`folder_path`, `filename`, `sha256sum`, `fek`) and the AAD separator byte (`0x00`). Consumed by both TS and Go via the shared-params loading pattern.
+
 
 ### Docs
 - `docs/wip/arkbackup-export.md` — add the two new optional folder-path fields and their AAD binding to the bundle-format spec.

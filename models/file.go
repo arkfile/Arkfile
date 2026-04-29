@@ -11,6 +11,32 @@ import (
 	"github.com/google/uuid"
 )
 
+// SHA-256 fields on File / file_metadata:
+//
+//	Sha256sumNonce + EncryptedSha256sum
+//	  SHA-256 of the user's original PLAINTEXT file. Computed client-side,
+//	  encrypted client-side under the account key, and stored as ciphertext
+//	  (nonce + ct||tag, base64). The server never sees this value in
+//	  plaintext. AAD-bound to (file_id, "sha256sum", owner_username) per
+//	  docs/wip/folders-multi-upload-v2.md §3 so cross-row / cross-field
+//	  tampering fails at client decrypt time.
+//
+//	EncryptedFileSha256sum
+//	  Despite the "Encrypted" prefix in the column/field name, this value
+//	  is NOT ciphertext. It is a plaintext SHA-256 computed on the server
+//	  as a running hash over the already-client-side-encrypted data stream
+//	  (pre-padding) as chunks arrive during upload. The server holds it
+//	  in plaintext by construction. Used by the client as an
+//	  anti-equivocation record: at upload completion the server reports
+//	  this value; the client can later re-download, re-hash the
+//	  ciphertext it receives, and confirm the server is still reporting
+//	  the same value. NOT in AAD scope because it is not encrypted. The
+//	  name is kept for historical reasons; see the plan doc for details.
+//
+//	(See also stored_blob_sha256sum on file_metadata — SHA-256 of all
+//	 bytes written to S3 including crypto-random padding, used for
+//	 server-side at-rest integrity checks during download. Plaintext,
+//	 server-computed, not surfaced on this struct.)
 type File struct {
 	ID                     int64          `json:"id"`
 	FileID                 string         `json:"file_id"`    // UUID v4 for file identification
@@ -20,15 +46,16 @@ type File struct {
 	PasswordType           string         `json:"password_type"`
 	FilenameNonce          string         // Now stored as base64 strings directly
 	EncryptedFilename      string         // Now stored as base64 strings directly
-	Sha256sumNonce         string         // Now stored as base64 strings directly
-	EncryptedSha256sum     string         // Now stored as base64 strings directly
-	EncryptedFileSha256sum sql.NullString `json:"-"` // Hidden from JSON - server-side hash (nullable)
+	Sha256sumNonce         string         // base64 nonce for EncryptedSha256sum (plaintext-file hash)
+	EncryptedSha256sum     string         // base64 ciphertext of SHA-256 of plaintext file; client-encrypted, AAD-bound
+	EncryptedFileSha256sum sql.NullString `json:"-"` // PLAINTEXT server-computed hash of encrypted stream; name is historical, not ciphertext
 	EncryptedFEK           string         // Now stored as base64 strings directly
-	SizeBytes              int64          `json:"size_bytes"`       // Original file size
-	PaddedSize             sql.NullInt64  `json:"padded_size"`      // Size with padding for privacy/security
-	ChunkCount             int64          `json:"chunk_count"`      // Number of 16MB chunks for chunked downloads
-	ChunkSizeBytes         int64          `json:"chunk_size_bytes"` // Size of each chunk (16MB default)
-	UploadDate             time.Time      `json:"upload_date"`
+
+	SizeBytes      int64         `json:"size_bytes"`       // Original file size
+	PaddedSize     sql.NullInt64 `json:"padded_size"`      // Size with padding for privacy/security
+	ChunkCount     int64         `json:"chunk_count"`      // Number of 16MB chunks for chunked downloads
+	ChunkSizeBytes int64         `json:"chunk_size_bytes"` // Size of each chunk (16MB default)
+	UploadDate     time.Time     `json:"upload_date"`
 }
 
 // FileMetadataListItem is a lightweight owner-only metadata shape for listing
