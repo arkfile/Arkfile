@@ -186,13 +186,13 @@ These providers charge for egress but offer competitive storage pricing or other
 
 | Provider | Storage (per TB/mo) | Egress (per TB) | Notes |
 |---|---|---|---|
-| Vultr Object Storage | $6.00 | $10.00 (1 TB included per block) | Sold in 1 TB blocks; 5 GB object size cap |
 | Hetzner Object Storage | ~$6.49 (EUR) | ~$1.00/TB (EUR) | EU-only (NBG1, FSN1, HEL1); 1 TB egress included in base |
+| Vultr Object Storage | $18.00 | $10.00 (1 TB included per block) | Sold in 1 TB blocks; 5 GB object size cap |
 | DigitalOcean Spaces | $20.00 (additional) | $10.00 (1 TiB included in base) | Base plan $5/mo for 250 GiB; 5 GB object size cap |
 | Google Cloud Storage | $20.00 | $85-120 (tiered) | S3 interop via XML API; complex tiered egress pricing |
 | AWS S3 Standard | $23.00 | $90.00 (first 10 TB) | Reference S3 implementation; most extensive feature set |
 
-**Vultr**: Pricing is structured as fixed 1 TB blocks at $6/block, each including 1 TB of egress. Excess egress is $0.01/GB. The 5 GB maximum object size is a constraint for applications handling very large files.
+**Vultr**: Pricing is structured as $18/block for the first 1 TB, including 1 TB of egress. Additional storage is $20/TB after that. Excess egress is $0.01/GB. The 5 GB maximum object size is a constraint for applications handling very large files.
 
 **Hetzner**: EU-only provider with three datacenter locations in Germany and Finland. Base plan of EUR 6.49/month includes 1 TB storage and 1 TB outgoing traffic. Additional storage is EUR 8.70/TB. S3-compatible API, GDPR-compliant.
 
