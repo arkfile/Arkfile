@@ -152,25 +152,77 @@ func formatRateHuman(price string) string {
 	return fmt.Sprintf("$%s/TiB/month", price)
 }
 
-// Default seams. Section D overrides these via init() in the billing package.
+// Default seams. Section D overrides these via the Set* functions below,
+// which main.go calls during startup.
 
 var (
 	// billingFreeBaselineBytes returns the configured free baseline bytes.
-	// Default during Section B+C: matches the in-DB default storage limit.
+	// Default before main.go wires it: matches the in-DB default storage limit.
 	billingFreeBaselineBytes = func() int64 {
 		return defaultFreeBaselineBytes
 	}
 
 	// billingResolveRate returns the live rate from billing_settings.
-	// Default during Section B+C: rate not yet available.
+	// Default before main.go wires it: rate not yet available.
 	billingResolveRate = func(db *sql.DB) (int64, string, bool) {
 		return 0, "", false
 	}
+
+	// billingGiftFn calls billing.GiftCredits. Wired by main.go to avoid an
+	// import cycle (handlers must not import billing directly because billing
+	// imports models which... etc; the seam keeps the dependency arrow correct).
+	billingGiftFn func(db *sql.DB, username string, amountUSDMicrocents int64, reason, adminUsername string) (*models.CreditTransaction, error)
+
+	// billingSetPriceFn calls billing.SetCustomerPrice and returns the new
+	// (microcents/GiB/hour, customer-price-string, error).
+	billingSetPriceFn func(db *sql.DB, priceStr, updatedBy string) (int64, string, error)
+
+	// billingTickNowFn forces an immediate tick of all active users
+	// (dev/test API).
+	billingTickNowFn func(db *sql.DB) error
+
+	// billingSweepNowFn forces an immediate sweep of all accumulator rows
+	// (dev/test API).
+	billingSweepNowFn func(db *sql.DB) error
 )
 
 // defaultFreeBaselineBytes mirrors models.DefaultStorageLimit so the seam
-// resolves to a sensible value before Section D loads BillingConfig.
+// resolves to a sensible value before main.go wires BillingConfig.
 const defaultFreeBaselineBytes int64 = 1181116006
+
+// SetBillingProjectionSeams wires the projection helpers to the live billing
+// package. Called once from main.go during startup.
+func SetBillingProjectionSeams(
+	freeBaseline func() int64,
+	resolveRate func(db *sql.DB) (int64, string, bool),
+) {
+	if freeBaseline != nil {
+		billingFreeBaselineBytes = freeBaseline
+	}
+	if resolveRate != nil {
+		billingResolveRate = resolveRate
+	}
+}
+
+// SetBillingGiftFunc wires the billing.GiftCredits call.
+func SetBillingGiftFunc(fn func(db *sql.DB, username string, amountUSDMicrocents int64, reason, adminUsername string) (*models.CreditTransaction, error)) {
+	billingGiftFn = fn
+}
+
+// SetBillingSetPriceFunc wires the billing.SetCustomerPrice call.
+func SetBillingSetPriceFunc(fn func(db *sql.DB, priceStr, updatedBy string) (int64, string, error)) {
+	billingSetPriceFn = fn
+}
+
+// SetBillingTickNowFunc wires the dev/test "tick now" call.
+func SetBillingTickNowFunc(fn func(db *sql.DB) error) {
+	billingTickNowFn = fn
+}
+
+// SetBillingSweepNowFunc wires the dev/test "sweep now" call.
+func SetBillingSweepNowFunc(fn func(db *sql.DB) error) {
+	billingSweepNowFn = fn
+}
 
 // silence the unused-import linter when database isn't yet used (it is
 // referenced through the *sql.DB parameter; this assertion documents intent).

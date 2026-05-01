@@ -83,6 +83,42 @@ type Config struct {
 		MaintenanceWindow string   `json:"maintenance_window"`
 		BackupRetention   int      `json:"backup_retention_days"`
 	} `json:"deployment"`
+
+	Billing BillingConfig `json:"billing"`
+}
+
+// BillingConfig is the storage credits / usage metering configuration.
+// See docs/wip/storage-credits-v2.md §9 for details.
+type BillingConfig struct {
+	// Enabled is the master switch. When false, the billing scheduler is not
+	// started; the API endpoints continue to return current/zero state.
+	Enabled bool `json:"enabled"`
+
+	// FreeBaselineBytes is the per-instance free baseline in bytes. Storage
+	// usage above this threshold is billable.
+	FreeBaselineBytes int64 `json:"free_baseline_bytes"`
+
+	// CustomerPriceUSDPerTBPerMonth is the dollars-and-cents price string
+	// (e.g. "10.00", "19.99") used to seed billing_settings on first startup.
+	// Runtime updates go through the admin set-price endpoint and persist
+	// in billing_settings; this value is only the seed.
+	CustomerPriceUSDPerTBPerMonth string `json:"customer_price_usd_per_tb_per_month"`
+
+	// GiftedCreditsUSD is the per-user-on-approval gift amount as a
+	// dollars-and-cents string. Default "0.00" means no automatic gift.
+	// Admins can manually gift credit at any time via `arkfile-admin billing gift`.
+	GiftedCreditsUSD string `json:"gifted_credits_usd"`
+
+	// TickInterval is the meter tick cadence. Production should leave at 1h;
+	// the e2e billing test overrides to 1m for fast verification.
+	TickInterval time.Duration `json:"tick_interval"`
+
+	// SweepAtUTC is the daily settlement time as "HH:MM" UTC.
+	SweepAtUTC string `json:"sweep_at_utc"`
+
+	// IncludeAdmins controls whether admin accounts are billed. Default false
+	// keeps operator self-usage out of beta usage data.
+	IncludeAdmins bool `json:"include_admins"`
 }
 
 // LoadConfig loads the configuration from environment variables and optional JSON file
@@ -159,6 +195,15 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Deployment.DataDirectory = "/opt/arkfile/var/lib"
 	cfg.Deployment.LogDirectory = "/opt/arkfile/var/log"
 	cfg.Deployment.BackupRetention = 30
+
+	// Billing defaults (storage credits / usage metering).
+	cfg.Billing.Enabled = false
+	cfg.Billing.FreeBaselineBytes = 1181116006 // 1.1 GiB, matches models.DefaultStorageLimit
+	cfg.Billing.CustomerPriceUSDPerTBPerMonth = "10.00"
+	cfg.Billing.GiftedCreditsUSD = "0.00" // no auto-gift; admins gift manually if desired
+	cfg.Billing.TickInterval = time.Hour
+	cfg.Billing.SweepAtUTC = "00:15"
+	cfg.Billing.IncludeAdmins = false
 
 	return nil
 }
@@ -355,6 +400,37 @@ func loadEnvConfig(cfg *Config) error {
 	if enableReplication := os.Getenv("ENABLE_UPLOAD_REPLICATION"); enableReplication != "" {
 		if repl, err := strconv.ParseBool(enableReplication); err == nil {
 			cfg.Storage.EnableUploadReplication = repl
+		}
+	}
+
+	// Billing / usage metering envs (see docs/wip/storage-credits-v2.md §9).
+	if v := os.Getenv("ARKFILE_BILLING_ENABLED"); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			cfg.Billing.Enabled = parsed
+		}
+	}
+	if v := os.Getenv("ARKFILE_FREE_STORAGE_BYTES"); v != "" {
+		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed >= 0 {
+			cfg.Billing.FreeBaselineBytes = parsed
+		}
+	}
+	if v := os.Getenv("ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH"); v != "" {
+		cfg.Billing.CustomerPriceUSDPerTBPerMonth = v
+	}
+	if v := os.Getenv("ARKFILE_BILLING_GIFTED_CREDITS_USD"); v != "" {
+		cfg.Billing.GiftedCreditsUSD = v
+	}
+	if v := os.Getenv("ARKFILE_BILLING_TICK_INTERVAL"); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil && parsed > 0 {
+			cfg.Billing.TickInterval = parsed
+		}
+	}
+	if v := os.Getenv("ARKFILE_BILLING_SWEEP_AT_UTC"); v != "" {
+		cfg.Billing.SweepAtUTC = v
+	}
+	if v := os.Getenv("ARKFILE_BILLING_INCLUDE_ADMINS"); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			cfg.Billing.IncludeAdmins = parsed
 		}
 	}
 

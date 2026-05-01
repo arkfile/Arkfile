@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"database/sql"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/billing"
 	"github.com/84adam/Arkfile/config"
 	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
@@ -231,6 +233,14 @@ func main() {
 		// Don't crash the app - admin user can be set up manually later
 	}
 
+	// Start the billing scheduler (storage credits / usage metering).
+	// When cfg.Billing.Enabled=false, the scheduler exits cleanly without
+	// touching the meter -- handy for dev-reset.sh which avoids time-dependent
+	// test flakiness by disabling billing by default.
+	billingCtx, cancelBilling := context.WithCancel(context.Background())
+	defer cancelBilling()
+	startBillingScheduler(billingCtx, cfg)
+
 	// Create Echo instance
 	e := echo.New()
 
@@ -351,6 +361,81 @@ func main() {
 	if err := e.Start(":" + port); err != nil {
 		logging.ErrorLogger.Printf("Failed to start HTTP server: %v", err)
 	}
+}
+
+// startBillingScheduler launches the storage credits / usage metering scheduler
+// in a background goroutine. When cfg.Billing.Enabled=false the scheduler exits
+// cleanly without touching the meter (handy for dev-reset.sh which avoids
+// time-dependent test flakiness by disabling billing by default).
+//
+// Wires the handler-side projection seam (handlers.SetBillingProjectionSeams)
+// so /api/credits and admin endpoints can render rate-aware fields. The seam
+// is wired even when billing is disabled, so the response shape stays stable
+// (just with rate-unavailable fallback values).
+func startBillingScheduler(ctx context.Context, cfg *config.Config) {
+	// Wire the handler projection seam regardless of billing enabled state.
+	// When disabled, the resolved rate is the fallback "rate not available"
+	// path -- responses still include the structurally-identical block.
+	handlers.SetBillingProjectionSeams(
+		func() int64 { return cfg.Billing.FreeBaselineBytes },
+		func(db *sql.DB) (int64, string, bool) {
+			if cached := billing.CachedRate(); cached != nil {
+				return cached.MicrocentsPerGiBPerHour, cached.CustomerPriceUSDPerTBPerMonth, true
+			}
+			rate, err := billing.ResolveRate(db, cfg.Billing)
+			if err != nil || rate == nil {
+				return 0, "", false
+			}
+			return rate.MicrocentsPerGiBPerHour, rate.CustomerPriceUSDPerTBPerMonth, true
+		},
+	)
+	// Expose the gift function to handlers without an import cycle.
+	handlers.SetBillingGiftFunc(billing.GiftCredits)
+	// Expose the set-customer-price function to handlers.
+	handlers.SetBillingSetPriceFunc(func(db *sql.DB, priceStr, updatedBy string) (int64, string, error) {
+		rate, err := billing.SetCustomerPrice(db, priceStr, updatedBy)
+		if err != nil {
+			return 0, "", err
+		}
+		return rate.MicrocentsPerGiBPerHour, rate.CustomerPriceUSDPerTBPerMonth, nil
+	})
+	// Expose tick-now and sweep-now for the dev-test endpoint.
+	handlers.SetBillingTickNowFunc(func(db *sql.DB) error {
+		rate := billing.CachedRate()
+		if rate == nil {
+			r, err := billing.ResolveRate(db, cfg.Billing)
+			if err != nil {
+				return err
+			}
+			rate = r
+		}
+		_, _, err := billing.TickAllActiveUsers(db, rate, time.Now().UTC(), cfg.Billing)
+		return err
+	})
+	handlers.SetBillingSweepNowFunc(func(db *sql.DB) error {
+		rate := billing.CachedRate()
+		if rate == nil {
+			r, err := billing.ResolveRate(db, cfg.Billing)
+			if err != nil {
+				return err
+			}
+			rate = r
+		}
+		_, err := billing.SweepAllUsers(db, rate, time.Now().UTC())
+		return err
+	})
+
+	if !cfg.Billing.Enabled {
+		logging.InfoLogger.Print("billing scheduler disabled (ARKFILE_BILLING_ENABLED=false)")
+		return
+	}
+
+	scheduler := billing.NewScheduler(database.DB, cfg.Billing)
+	go func() {
+		if err := scheduler.Run(ctx); err != nil && err != context.Canceled {
+			logging.ErrorLogger.Printf("billing scheduler exited: %v", err)
+		}
+	}()
 }
 
 // runSchemaMigrations applies one-shot schema migrations that cannot be expressed in
