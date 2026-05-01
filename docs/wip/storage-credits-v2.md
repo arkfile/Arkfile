@@ -362,7 +362,6 @@ Adds two blocks. Canonical above-baseline shape:
     "estimated_runs_out_at_approx": "2084-06-01T00:00:00Z",
     "computed_at": "2026-04-30T20:15:00Z"
   },
-  "beta_disclaimer": "Beta tester credit: balances reflect what you would owe in a paid deployment. No real charges occur during the beta.",
   "transactions": [...],
   "pagination": {...}
 }
@@ -370,7 +369,7 @@ Adds two blocks. Canonical above-baseline shape:
 
 Below-baseline: `billable_bytes = 0`, `current_cost_per_month_microcents = 0`, `credits_runway` becomes `{"estimated_hours_remaining": null, "note": "You are within the free baseline. No usage charges apply.", ...}`.
 
-**Negative balance**: `balance_usd_microcents` is signed and may be negative (e.g., `-12345678`); `formatted_balance` then renders as `"-$0.1234"`. `credits_runway.estimated_hours_remaining` is `0` and `note` becomes `"Balance is negative; charges continue to accumulate."` The `beta_disclaimer` field is **always present** regardless of balance sign so beta testers see the disclaimer continuously, not only on overdraw.
+**Negative balance**: `balance_usd_microcents` is signed and may be negative (e.g., `-12345678`); `formatted_balance` then renders as `"-$0.1234"`. `credits_runway.estimated_hours_remaining` is `0` and `note` becomes `"Balance is negative; charges continue to accumulate."`
 
 ### 6.3 Extended Admin Endpoints
 
@@ -401,15 +400,11 @@ One new page linked from the user menu. Three sections plus a persistent disclai
 2. **Current storage and cost**. `Storage used`, `Free baseline`, `Billable usage`, `Current rate ($10.00/TiB/month)`, `Your cost (~$0.0098/month at this usage)`, and the contrastive `Free baseline savings (~$0.0108/month — what you'd be paying without the free baseline)`. Below-baseline state replaces the cost lines with *"You are within the free baseline. No charges apply."* The cost lines render the same regardless of balance sign so beta testers always see what their actual usage would cost in a paid deployment.
 3. **Transaction history**. Chronological list paginated by existing `limit`/`offset`. Each row shows date, type, signed microcent amount in four-decimal USD, and post-balance (also signed). Gift and adjustment rows show `by <admin-name>`; usage rows show no attribution.
 
-**Always-on beta disclaimer footer** on the `/billing` page (and on the optional banner above the file list when rendered):
-
-> *Beta tester credit: balances reflect what you would owe in a paid deployment. No real charges occur during the beta.*
-
-Initial-gift framing surfaces the same idea on first sight: *"You have been gifted $5.00 in beta-tester credit. When this runs out, your balance will go negative and continue to track what your usage would cost in a real deployment."*
-
 No payment buttons. No Stripe.js. No external network requests from this page in v1. (Stripe-gating concerns — including the "click to confirm credit-card payment" pattern that loads Stripe.js only on explicit user opt-in — are deferred to `payments.md`.)
 
-A compact one-line banner above the file list (`Balance: $5.0000  |  Storage: 2.1/50 GiB  |  ~$0.0098/month  |  Manage billing`) is optional; only render when the user has billable bytes or a non-default balance. The disclaimer footer applies to it as well.
+A compact one-line banner above the file list (`Balance: $5.0000  |  Storage: 2.1/50 GiB  |  ~$0.0098/month  |  Manage billing`) is optional; only render when the user has billable bytes or a non-default balance.
+
+**No always-on disclaimer.** An earlier draft of this design specified a persistent "Beta tester credit: balances reflect what you would owe in a paid deployment" footer on every credits view. That copy was deliberately removed during Section G implementation: the panel presents the meter's facts (balance, billable bytes, projected cost) without commentary, and operator guidance about what the numbers mean is documented in `docs/billing.md` rather than embedded in the UI. Negative balances render in red as a factual UI signal; that's the only beta-relevant affordance that survives.
 
 ## 8. CLI Surface (`arkfile-admin billing`)
 
@@ -507,11 +502,11 @@ If the operator enables a second storage backend with replication sync, raise th
 ### 10.3 Handler Tests
 
 **`handlers/credits_test.go` (extended)**
-- `GET /api/credits` shape includes `current_usage`, `credits_runway`, and the always-present `beta_disclaimer` field.
+- `GET /api/credits` shape includes `current_usage` and `credits_runway`.
 - Below-baseline state returns `billable_bytes = 0` and the documented note.
 - Above-baseline returns expected `current_cost_per_month_microcents` (fixed test rate for determinism).
 - `formatted_balance` is four-decimal and signed.
-- Negative-balance state: response includes negative `balance_usd_microcents`, `formatted_balance` rendered with leading `-`, runway note is `"Balance is negative; charges continue to accumulate."`, `beta_disclaimer` still present.
+- Negative-balance state: response includes negative `balance_usd_microcents`, `formatted_balance` rendered with leading `-`, runway note is `"Balance is negative; charges continue to accumulate."`.
 
 **`handlers/billing_test.go` (new)**
 - Each `/api/admin/billing/*` endpoint: shape, admin-auth-required (non-admin → 403), correct `LogAdminAction` call.
@@ -531,18 +526,17 @@ New section at end, gated by `ARKFILE_BILLING_ENABLED=true`:
 5. Assert balance decreased by the computed expected amount (`90 MiB × rate × 1h`, with the right-shift truncation accounted for); assert one `usage` row in `credit_transactions` with the §3.5 metadata shape (and assert `avg_billable_bytes` field is absent).
 6. `arkfile-admin billing gift --user <test-user> --amount 5.00 --reason "e2e test gift"`. Assert balance increased and a `gift` row exists.
 7. `arkfile-admin billing set-price 19.99`. Assert response shows old (1356) and new (2711) derived rates. `tick-now` again and assert subsequent usage row reflects the new rate.
-8. Repeat `tick-now --sweep` enough times to drive balance below zero. Assert `balance_usd_microcents < 0`, the user appears in `arkfile-admin billing list-overdrawn`, and the `GET /api/credits` response for that user includes the `beta_disclaimer` field and the negative-balance runway note.
+8. Repeat `tick-now --sweep` enough times to drive balance below zero. Assert `balance_usd_microcents < 0`, the user appears in `arkfile-admin billing list-overdrawn`, and the `GET /api/credits` response for that user includes the negative-balance runway note.
 9. Cleanup: delete test files, cancel sessions.
 
 ### 10.5 Playwright Section in `scripts/testing/e2e-playwright.ts`
 
 Minimal functional checks only:
 
-1. Navigate to `/billing`.
+1. Open the Billing panel via the in-app nav link.
 2. Assert balance display matches the value returned by `GET /api/credits` (including correct sign and four-decimal formatting).
 3. Assert `current_usage` numeric fields (storage used, free baseline, billable bytes, current cost per month) match the API response for the known test user.
 4. Assert at least one `gift` row and one `usage` row appear in the transaction-history list with correct signed amounts.
-5. Assert the persistent beta-disclaimer footer text is present.
 
 Not asserted in v1: anything Stripe-related, anything CSP-related, anything about absence of third-party scripts. Those concerns belong to `payments.md`.
 
@@ -560,24 +554,54 @@ Ten PR-sized steps for one engineer (~2-3 weeks total). This is a recommended la
 |---|---|---:|---|
 | 1 | Reconcile `users.storage_limit_bytes` default to `1181116006`. | ~10 | [DONE] |
 | 2 | Rename `_cents` → `_microcents` end-to-end (schema, models, handlers, CLI, helpers, tests). **In-place ALTER-style migration** preserves any existing `user_credits` / `credit_transactions` rows; widens columns to `BIGINT`; removes any `CHECK (balance >= 0)` so balances may go negative. Drops `usage_deficit_microcents` from the design (never shipped). Single PR with destructive-vs-in-place migration warning in commit message. **Per Q3 (operator decision): default gift to new users is now `0.00` USD; users start at zero balance and only manual admin gifts add credit.** Cleanup also removes the deprecated `models.AddCredits`, `models.DebitCredits`, `models.SetCredits` functions and the `POST /api/admin/credits/:username` and `PUT /api/admin/credits/:username` admin endpoints, replaced by typed `gift` transactions via `/api/admin/billing/gift`. | ~500 | [DONE] |
-| 3 | Add `storage_usage_accumulator` and `billing_settings` tables + indexes; document `usage` / `gift` transaction-type values; seed `billing_settings.customer_price_usd_per_tb_per_month` from env on first startup (deferred to Section D wiring). | ~80 | [DONE for schema; seed in Section D] |
-| 4 | New `billing/` package (six files + tests), including `set-price` cache invalidation. Compiles standalone, dead code at this step. | ~600 | [TODO] |
-| 5 | Wire scheduler into `main.go`; add `ARKFILE_BILLING_*` and `ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH` to config loader; update deploy scripts to write defaults into generated `secrets.env`. Meter starts running on production-flavored deploys; no API exposure yet. | ~60 | [TODO] |
-| 6 | Extend handlers: `current_usage` / `credits_runway` / `beta_disclaimer` blocks; new `/api/admin/billing/*` endpoints (`price`, `set-price`, `sweep-summary`, `overdrawn`, `gift`, `tick-now`); handler tests. | ~320 | [PARTIAL: GET extensions done in Section B+C; new admin endpoints in Section E] |
-| 7 | New frontend `/billing` page with three sections + always-on beta-disclaimer footer + optional banner; minimal Playwright tests per §10.5. | ~380 | [TODO] |
-| 8 | `arkfile-admin billing` subcommand group (`show`, `set-price`, `gift`, `list-overdrawn`, `tick-now`). | ~380 | [TODO] |
-| 9 | E2E billing section in `scripts/testing/e2e-test.sh`. | ~120 | [TODO] |
-| 10 | New `docs/billing.md` (operator-facing summary). When this design lands, this file (`docs/wip/storage-credits-v2.md`) can be moved to `docs/wip/archive/` at the operator's discretion. | ~200 | [TODO] |
+| 3 | Add `storage_usage_accumulator` and `billing_settings` tables + indexes; document `usage` / `gift` transaction-type values; seed `billing_settings.customer_price_usd_per_tb_per_month` from env on first startup. | ~80 | [DONE] |
+| 4 | New `billing/` package (six files + tests), including `set-price` cache invalidation. Compiles standalone, dead code at this step. | ~600 | [DONE] |
+| 5 | Wire scheduler into `main.go`; add `ARKFILE_BILLING_*` and `ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH` to config loader; update deploy scripts to write defaults into generated `secrets.env`. Meter starts running on production-flavored deploys; no API exposure yet. | ~60 | [DONE: scheduler wiring + config loader completed in Section D; all four deploy scripts (dev-reset.sh, local-deploy.sh, prod-deploy.sh, test-deploy.sh) now write ARKFILE_BILLING_* defaults to their secrets.env heredoc. dev-reset.sh uses fast-test cadence (TICK_INTERVAL=1m, FREE_STORAGE_BYTES=10485760, GIFTED_CREDITS_USD=1.00) so the e2e billing phase can observe a full tick→sweep→negative-balance cycle quickly; the three production deploy scripts use TICK_INTERVAL=1h, FREE_STORAGE_BYTES=1181116006, GIFTED_CREDITS_USD=0.00.] |
+| 6 | Extend handlers: `current_usage` / `credits_runway` blocks; new `/api/admin/billing/*` endpoints (`price`, `set-price`, `sweep-summary`, `overdrawn`, `gift`, `tick-now`); handler tests. | ~320 | [DONE: GET extensions in Section B+C; new admin endpoints in Section E. `tick-now` is registered under `/api/admin/dev-test/billing/tick-now` (gated by `ADMIN_DEV_TEST_API_ENABLED`); the route is physically not registered in production-flavored deployments. Handler unit tests are deferred to Section H's e2e billing test, matching the pattern used for other DB-heavy admin endpoints in the codebase.] |
+| 7 | New frontend `/billing` page with three sections + optional banner; minimal Playwright tests per §10.5. | ~380 | [DONE: implemented as an inline panel toggled from the file-section nav (matching the existing security-settings + contact-info pattern) rather than as a standalone `/billing` route, since the SPA has no router and the inline-panel idiom is the only navigation primitive in the app. The Section G-polish pass (a) deleted the always-on beta disclaimer entirely from the response and the panel (see §7's "No always-on disclaimer" paragraph for the rationale), (b) added the `.billing-panel-section` CSS block in `client/static/css/styles.css` so the `<dl>` renders as a tight two-column grid with section eyebrows + tabular numerics + red negative-balance highlighting, (c) tightened copy by deleting the "Free baseline savings" and "Current rate" lines from the user view (the rate is admin-facing; users see only their own projected cost), and (d) moved the runway display from its own line under the balance to a row in the storage grid, directly under "Your projected cost", so the rate→cost→runway relationship is visually adjacent. The optional one-line banner above the file list is also omitted in this implementation; the always-visible Billing nav link makes the same data one click away. Playwright tests deferred to Section H.] |
+| 8 | `arkfile-admin billing` subcommand group (`show`, `set-price`, `gift`, `list-overdrawn`, `tick-now`). | ~380 | [DONE] |
+| 9 | E2E billing tests: (a) `dev-reset.sh` writes billing env vars to `secrets.env` so the meter actually runs in dev; (b) new `phase_11d_billing` in `scripts/testing/e2e-test.sh` exercises the full meter lifecycle (gift → tick → sweep → set-price → drive negative); (c) Playwright test verifying the Billing panel renders correctly with real meter data. | ~150 | [DONE: phase_11d_billing added before phase_12_cleanup — six subsections: initial-gift balance, tick accumulation, tick+sweep usage-transaction with privacy regression guard (avg_billable_bytes absent), gift, set-price round-trip, drive-negative + list-overdrawn; zero new login/logout cycles. Playwright test appended to e2e-playwright.ts asserting balance format, usage grid labels, gift+usage rows, negative-amount red highlight, and zero .billing-beta-disclaimer elements.] |
 
-Total ≈ 2,650 lines, ~60% non-test.
+Total ≈ 2,450 lines, ~60% non-test. (Earlier drafts of this doc included a row 10 for `docs/billing.md`; that operator-facing markdown was deleted from scope -- the user-facing documentation surface is the code comments, `arkfile-admin billing --help`, and the Billing panel UI itself, not a separate operator page.)
 
 **Beta-tester file safety reminder for step 2** (and any subsequent migration step): the migration must be in-place ALTER-style, not drop-and-recreate. Use `test-update.sh` (not `test-deploy.sh`) when applying to `test.arkfile.net`. See §4.3.
+
+### 11.1 Implementation Status (live)
+
+**DONE through Section G-polish (current session):**
+
+- A — schema foundation (`storage_limit_bytes` reconcile, microcent rename, `storage_usage_accumulator` + `billing_settings` tables, in-place migration).
+- B+C — `models/credits.go` rename to microcents; deleted deprecated `AddCredits`/`DebitCredits`/`SetCredits` and the `POST/PUT /api/admin/credits/:username` endpoints; extended `GET /api/credits` and `GET /api/admin/credits[/:username]` with `current_usage` and `credits_runway` blocks.
+- D — `billing/` package (types, rates, meter, sweep, scheduler, gift) with full test coverage; `main.go` wires the scheduler when `cfg.Billing.Enabled=true`; config loader reads all `ARKFILE_BILLING_*` and `ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH` env vars.
+- E — `/api/admin/billing/*` endpoints in `handlers/admin_billing.go`: `GET price`, `POST set-price`, `GET sweep-summary`, `GET overdrawn`, `POST gift`. The dev/test-only `tick-now` is registered under `/api/admin/dev-test/billing/tick-now` (gated by `ADMIN_DEV_TEST_API_ENABLED`); the route is physically not registered in production-flavored deployments.
+- F — `arkfile-admin billing` subcommand group (`show [--user NAME]`, `set-price`, `gift`, `list-overdrawn`, `tick-now [--sweep]`); all subcommands have `--json` output and full `--help` text; the `tick-now` subcommand emits a friendly local pre-flight warning when `ADMIN_DEV_TEST_API_ENABLED` is unset.
+- G — Frontend Billing panel (`client/static/js/src/ui/billing.ts`) implemented as an inline panel toggled from the file-section nav, matching the existing security-settings + contact-info pattern. Three sections: Balance, Current Storage and Cost (grid layout), Transaction History (collapsed when empty).
+- G-polish — disclaimer footer entirely deleted from both server (`handlers/credits.go`) and panel; `.billing-panel-section` CSS block in `client/static/css/styles.css` produces a tight two-column grid with section eyebrows, tabular numerics, and red negative-balance highlighting; "Estimated runway" moved into the Current Storage and Cost grid directly under "Your projected cost".
+
+- H+J — all four deploy scripts write `ARKFILE_BILLING_*` defaults (see §11 row 5); `phase_11d_billing` added to `scripts/testing/e2e-test.sh`; Playwright billing-panel test added to `scripts/testing/e2e-playwright.ts` (see §11 row 9 for detail).
+
+All sections complete.
+
+**Architectural note** (carried forward from §11.2): when the meter is enabled at runtime, the scheduler reads its config at startup; env vars must therefore be present **before** `dev-reset.sh` / `*-deploy.sh` runs. The handler/billing import seam (function-pointer indirection through `handlers/billing_projection.go`) means `/api/credits` always returns the same JSON shape regardless of whether the meter is enabled, so the frontend and tests can rely on the response structure being stable.
+
+### 11.2 Architectural Note: handler / billing import seam
+
+To keep the dependency arrow `billing → models`, `handlers → models`, `main → billing + handlers` clean (and avoid an import cycle through models), `handlers/` does **not** import the `billing/` package directly. Instead, `main.go` wires function-pointer seams during startup:
+
+- `handlers.SetBillingProjectionSeams(freeBaselineFn, resolveRateFn)` — the projection helper used by `GET /api/credits` and the admin per-user endpoints.
+- `handlers.SetBillingGiftFunc(billing.GiftCredits)` — used by `POST /api/admin/billing/gift`.
+- `handlers.SetBillingSetPriceFunc(...)` — wraps `billing.SetCustomerPrice`; used by `POST /api/admin/billing/set-price`.
+- `handlers.SetBillingTickNowFunc(...)` and `SetBillingSweepNowFunc(...)` — used by `POST /api/admin/billing/tick-now` (gated to dev/test).
+
+The seams are wired even when `cfg.Billing.Enabled=false`, so `/api/credits` always returns the same JSON shape; rate-dependent fields fall back to zero / `"Billing rate not yet resolved."` rather than disappearing from the response. Frontend and tests can therefore rely on the response structure being stable across enabled/disabled state.
+
+Future contributors adding new endpoints that need to call into `billing/` should follow the same pattern: define a function-pointer seam in `handlers/billing_projection.go`, expose it via a `Set*Func` setter, and wire it from `main.go` alongside the others.
 
 ## 12. Honest Trade-offs
 
 | # | Trade-off | Mitigation |
 |---|---|---|
-| 1 | Beta testers see a balance that can go negative even though no money changes hands; some may misread it as being charged. | Always-on `beta_disclaimer` field on `/billing` and on the optional banner: *"Beta tester credit: balances reflect what you would owe in a paid deployment. No real charges occur during the beta."* The negative balance is itself the most useful signal — beta testers can see what their actual usage would cost in a paid deployment. |
+| 1 | Beta testers see a balance that can go negative even though no money changes hands; some may misread it as being charged. | An earlier draft of this design specified an always-on disclaimer footer to mitigate this. That copy was deliberately removed during Section G implementation (see §7's "No always-on disclaimer" paragraph). Operator guidance about what the numbers mean lives in this design doc and the `arkfile-admin billing --help` text rather than the UI. The negative balance is itself the useful signal — beta testers can see what their actual usage would cost in a paid deployment. |
 | 2 | Single price knob means the operator must know what to set; no auto-derivation from provider costs. | Suggested defaults documented (`10.00` for one backend, `20.00` for two with replication). `arkfile-admin billing set-price` is a single command. `storage_providers.cost_per_tb_cents` is retained in schema for operator reference even though the meter does not read it. |
 | 3 | Skipped-sweep day produces one larger transaction row spanning >24h. | Scheduler logs WARN on detection (`> 25h since last sweep`); `period_start`/`period_end` accurately reflect the actual span so reconciliation works. |
 | 4 | Unbounded accumulator if sweeps fail repeatedly and unmonitored. | Real impact small (1 row/user, 2 int columns); operator alert on `last_billed_at < now - 48h`. |
@@ -610,7 +634,6 @@ Scaffolding only. Not designed here.
 - Free-baseline-above-which-billable model.
 - Single `customer_price_usd_per_tb_per_month` knob owned by the operator.
 - `users.storage_limit_bytes` hard cap is independent of credit balance; payments work is free to couple them or not.
-- Always-on beta disclaimer is removed only when the deployment transitions out of beta and real payments are accepted.
 
 **Open for the future document**:
 

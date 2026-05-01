@@ -224,6 +224,17 @@ class ArkFileApp {
       });
     }
 
+    // Billing panel toggle (storage credits / usage metering).
+    // See docs/wip/storage-credits-v2.md §7 for the design.
+    const billingToggle = document.getElementById('billing-toggle');
+    if (billingToggle) {
+      billingToggle.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const { toggleBillingPanel } = await import('./ui/billing');
+        await toggleBillingPanel();
+      });
+    }
+
     // Security settings toggle
     const securityToggle = document.getElementById('security-settings-toggle');
     if (securityToggle) {
@@ -236,6 +247,11 @@ class ArkFileApp {
         if (contactPanel && !contactPanel.classList.contains('hidden')) {
           contactPanel.classList.add('hidden');
         }
+        // Close billing panel if open
+        const billingPanel = document.getElementById('billing-panel');
+        if (billingPanel && !billingPanel.classList.contains('hidden')) {
+          billingPanel.classList.add('hidden');
+        }
       });
     }
 
@@ -246,6 +262,11 @@ class ArkFileApp {
         e.preventDefault();
         const { toggleContactInfoPanel } = await import('./ui/contact-info');
         await toggleContactInfoPanel();
+        // Close billing panel if open (mutual exclusion with the other inline panels).
+        const billingPanel = document.getElementById('billing-panel');
+        if (billingPanel && !billingPanel.classList.contains('hidden')) {
+          billingPanel.classList.add('hidden');
+        }
       });
     }
 

@@ -13,16 +13,9 @@ import (
 	"github.com/84adam/Arkfile/models"
 )
 
-// betaDisclaimer is the always-present disclaimer surfaced on every credits
-// response and on the /billing page. Its presence is asserted by tests as a
-// regression guard so it is never silently removed before the deployment
-// transitions out of beta.
-const betaDisclaimer = "Beta tester credit: balances reflect what you would owe in a paid deployment. No real charges occur during the beta."
-
 // GetUserCredits returns the current user's signed microcent balance, the
 // transaction history, and -- once the billing meter is wired in (Section D)
-// -- the current_usage and credits_runway blocks. The beta_disclaimer field
-// is always present.
+// -- the current_usage and credits_runway blocks.
 func GetUserCredits(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 	if username == "" {
@@ -52,7 +45,6 @@ func GetUserCredits(c echo.Context) error {
 		"formatted_balance":      summary.FormattedBalance,
 		"current_usage":          currentUsage,
 		"credits_runway":         creditsRunway,
-		"beta_disclaimer":        betaDisclaimer,
 		"transactions":           transactions,
 		"pagination": map[string]interface{}{
 			"limit":  limit,
@@ -66,7 +58,7 @@ func GetUserCredits(c echo.Context) error {
 
 // AdminGetUserCredits returns the credit information for a specific user.
 // Requires admin privileges. Includes the current_usage and credits_runway
-// blocks plus the always-present beta_disclaimer.
+// blocks.
 func AdminGetUserCredits(c echo.Context) error {
 	adminUsername := auth.GetUsernameFromToken(c)
 	if adminUsername == "" {
@@ -127,7 +119,6 @@ func AdminGetUserCredits(c echo.Context) error {
 		"formatted_balance":      summary.FormattedBalance,
 		"current_usage":          currentUsage,
 		"credits_runway":         creditsRunway,
-		"beta_disclaimer":        betaDisclaimer,
 		"transactions":           transactions,
 		"pagination": map[string]interface{}{
 			"limit":  limit,
@@ -209,7 +200,6 @@ func AdminGetAllCredits(c echo.Context) error {
 			"total_balance_formatted":      models.FormatCreditsUSD(totalBalance),
 			"users_currently_overdrawn":    overdrawnCount,
 		},
-		"beta_disclaimer": betaDisclaimer,
 		"admin_info": map[string]interface{}{
 			"viewed_by": adminUsername,
 		},

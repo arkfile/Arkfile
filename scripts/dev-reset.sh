@@ -512,6 +512,18 @@ ARKFILE_FORCE_ADMIN_BOOTSTRAP=false
 # Dev/Test Admin API Configuration (CRITICAL: Must be false in production)
 ADMIN_DEV_TEST_API_ENABLED=true
 
+# Billing / storage credits
+# dev-reset uses fast cadence (1m tick, 10 MiB baseline) so the e2e billing
+# test can observe a full tick→sweep→negative-balance cycle in seconds.
+# See docs/wip/storage-credits-v2.md §11.1 (H.1) for the rationale.
+ARKFILE_BILLING_ENABLED=true
+ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH=10.00
+ARKFILE_BILLING_GIFTED_CREDITS_USD=1.00
+ARKFILE_FREE_STORAGE_BYTES=10485760
+ARKFILE_BILLING_TICK_INTERVAL=1m
+ARKFILE_BILLING_SWEEP_AT_UTC=00:15
+ARKFILE_BILLING_INCLUDE_ADMINS=false
+
 # Development Settings
 REQUIRE_APPROVAL=true
 ENABLE_REGISTRATION=true

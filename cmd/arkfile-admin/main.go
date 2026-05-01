@@ -69,6 +69,16 @@ STORAGE MANAGEMENT COMMANDS (Admin API):
     set-cost              Set monthly cost per TB for a provider
     verify-all            Verify all file locations via HEAD requests (detect missing/corrupt blobs)
 
+BILLING COMMANDS (storage credits / usage metering):
+    billing show                          Show current price + last 30 days of sweep activity
+    billing show --user NAME              Show one user's balance, usage, and runway
+    billing set-price USD-per-TB-month    Update the customer price (atomic, no restart)
+    billing gift                          Add positive credit to a user's balance
+    billing list-overdrawn                List users with negative balance
+    billing tick-now [--sweep]            Force an immediate tick (dev/test only)
+
+    See 'arkfile-admin billing --help' for full subcommand documentation.
+
 SYSTEM COMMANDS:
     system-status     System status overview
     health-check      System health check
@@ -387,6 +397,14 @@ func main() {
 	case "verify-all":
 		if err := handleVerifyAllCommand(client, config, args); err != nil {
 			logError("Verify all failed: %v", err)
+			os.Exit(1)
+		}
+
+	// Billing - storage credits / usage metering subcommand group.
+	// All subcommands live in cmd/arkfile-admin/billing_commands.go.
+	case "billing":
+		if err := handleBillingCommand(client, config, args); err != nil {
+			logError("Billing command failed: %v", err)
 			os.Exit(1)
 		}
 

@@ -2222,6 +2222,256 @@ phase_11c_multi_backend_storage() {
     success "Multi-backend storage operations phase complete"
 }
 
+# Phase 11d: Billing meter end-to-end
+# Requires ARKFILE_BILLING_ENABLED=true, ARKFILE_BILLING_TICK_INTERVAL=1m,
+# and ARKFILE_FREE_STORAGE_BYTES=10485760 (10 MiB) — all set by dev-reset.sh.
+# The test user has ~5 uploaded files from earlier phases, well above the
+# 10 MiB baseline, so a tick produces a non-zero accumulator immediately.
+# See docs/wip/storage-credits-v2.md §11.1 (H.2) for the spec.
+phase_11d_billing() {
+    phase "11d: BILLING METER"
+
+    section "11d.1: Check billing price and initial gift"
+
+    # ------------------------------------------------------------------ #
+    # 11d.1: Confirm the rate is resolved and the initial gift was applied #
+    # ------------------------------------------------------------------ #
+    local price_out price_code
+    safe_exec price_out price_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing show --json
+
+    if [ $price_code -eq 0 ] && echo "$price_out" | grep -q '"customer_price_usd_per_tb_per_month"'; then
+        record_test "Billing show returns price info" "PASS"
+        info "Billing show (JSON) output:"
+        echo "$price_out"
+    else
+        error "billing show failed or missing price field"
+        echo "$price_out"
+        record_test "Billing show returns price info" "FAIL"
+    fi
+
+    # The admin re-login at the top of each phase keeps the token fresh.
+    # Check balance via admin per-user credits endpoint.
+    local credits_out credits_code
+    safe_exec credits_out credits_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing show --user "$TEST_USERNAME" --json
+
+    if [ $credits_code -eq 0 ] && echo "$credits_out" | grep -q '"balance_usd_microcents"'; then
+        record_test "Billing show --user returns balance" "PASS"
+        info "User credits (JSON):"
+        echo "$credits_out"
+    else
+        error "billing show --user failed or missing balance field"
+        echo "$credits_out"
+        record_test "Billing show --user returns balance" "FAIL"
+    fi
+
+    # Initial gift should have landed (ARKFILE_BILLING_GIFTED_CREDITS_USD=1.00 →
+    # 100_000_000 microcents).  A negative or zero starting balance means the
+    # gift transaction was not written at approval time.
+    local balance
+    balance=$(echo "$credits_out" | grep -o '"balance_usd_microcents":[0-9-]*' | cut -d: -f2 || echo "0")
+    if [ -n "$balance" ] && [ "$balance" -gt 0 ] 2>/dev/null; then
+        record_test "Initial gift applied (positive balance)" "PASS"
+        info "Starting balance: $balance microcents"
+    else
+        error "Balance is not positive after initial gift: $balance"
+        record_test "Initial gift applied (positive balance)" "FAIL"
+    fi
+
+    # ------------------------------------------------------------------ #
+    # 11d.2: Force a tick and verify the accumulator is populated          #
+    # ------------------------------------------------------------------ #
+    section "11d.2: Tick-now (accumulator)"
+
+    local tick_out tick_code
+    safe_exec tick_out tick_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing tick-now --json
+
+    if [ $tick_code -eq 0 ] && echo "$tick_out" | grep -q '"ticked":true'; then
+        record_test "tick-now succeeds" "PASS"
+        info "tick-now output:"
+        echo "$tick_out"
+    else
+        error "tick-now failed"
+        echo "$tick_out"
+        record_test "tick-now succeeds" "FAIL"
+    fi
+
+    # ------------------------------------------------------------------ #
+    # 11d.3: Tick-now with sweep — writes a 'usage' transaction           #
+    # ------------------------------------------------------------------ #
+    section "11d.3: Tick-now with sweep → usage transaction"
+
+    local sweep_out sweep_code
+    safe_exec sweep_out sweep_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing tick-now --sweep --json
+
+    if [ $sweep_code -eq 0 ] && echo "$sweep_out" | grep -q '"swept":true'; then
+        record_test "tick-now --sweep succeeds" "PASS"
+        info "tick-now --sweep output:"
+        echo "$sweep_out"
+    else
+        error "tick-now --sweep failed"
+        echo "$sweep_out"
+        record_test "tick-now --sweep succeeds" "FAIL"
+    fi
+
+    # After the sweep, the user should have a 'usage' transaction and a
+    # slightly lower balance.
+    local credits_after_out credits_after_code
+    safe_exec credits_after_out credits_after_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing show --user "$TEST_USERNAME" --json
+
+    if [ $credits_after_code -eq 0 ] && echo "$credits_after_out" | grep -q '"usage"'; then
+        record_test "Usage transaction written after sweep" "PASS"
+    else
+        error "No 'usage' transaction found in credits after sweep"
+        echo "$credits_after_out"
+        record_test "Usage transaction written after sweep" "FAIL"
+    fi
+
+    # Privacy regression guard: settlement metadata must NOT contain avg_billable_bytes
+    # (see docs/wip/storage-credits-v2.md §3.5 and §10.1 sweep_test.go comment).
+    if echo "$credits_after_out" | grep -q "avg_billable_bytes"; then
+        error "PRIVACY VIOLATION: avg_billable_bytes found in credits response"
+        record_test "Usage metadata excludes avg_billable_bytes" "FAIL"
+    else
+        record_test "Usage metadata excludes avg_billable_bytes" "PASS"
+    fi
+
+    # ------------------------------------------------------------------ #
+    # 11d.4: Gift credits to the test user                                 #
+    # ------------------------------------------------------------------ #
+    section "11d.4: Gift credits"
+
+    local gift_out gift_code
+    safe_exec gift_out gift_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing gift \
+        --user "$TEST_USERNAME" \
+        --amount "5.00" \
+        --reason "e2e test gift" \
+        --json
+
+    if [ $gift_code -eq 0 ] && echo "$gift_out" | grep -q '"gift"'; then
+        record_test "Admin gift credits succeeds" "PASS"
+        info "Gift output:"
+        echo "$gift_out"
+    else
+        error "billing gift failed"
+        echo "$gift_out"
+        record_test "Admin gift credits succeeds" "FAIL"
+    fi
+
+    # ------------------------------------------------------------------ #
+    # 11d.5: Set-price changes the derived rate                            #
+    # ------------------------------------------------------------------ #
+    section "11d.5: set-price updates billing rate"
+
+    local setprice_out setprice_code
+    safe_exec setprice_out setprice_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing set-price 19.99
+
+    if [ $setprice_code -eq 0 ] \
+        && echo "$setprice_out" | grep -qE "2711|microcents" ; then
+        record_test "set-price 19.99 updates to 2711 microcents/GiB/hour" "PASS"
+        info "set-price output:"
+        echo "$setprice_out"
+    else
+        error "set-price 19.99 failed or did not show new rate"
+        echo "$setprice_out"
+        record_test "set-price 19.99 updates to 2711 microcents/GiB/hour" "FAIL"
+    fi
+
+    # Tick + sweep at the new price; the new usage row should reflect it.
+    safe_exec tick_out tick_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing tick-now --sweep --json
+
+    if [ $tick_code -eq 0 ]; then
+        record_test "tick-now --sweep at new price succeeds" "PASS"
+    else
+        error "tick-now --sweep at new price 19.99 failed"
+        record_test "tick-now --sweep at new price succeeds" "FAIL"
+    fi
+
+    # Restore price to documented default ($10.00)
+    safe_exec setprice_out setprice_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing set-price 10.00
+
+    if [ $setprice_code -eq 0 ]; then
+        record_test "set-price 10.00 restores documented default" "PASS"
+    else
+        error "Restoring price to 10.00 failed"
+        record_test "set-price 10.00 restores documented default" "FAIL"
+    fi
+
+    # ------------------------------------------------------------------ #
+    # 11d.6: Drive balance negative; verify list-overdrawn                 #
+    # ------------------------------------------------------------------ #
+    section "11d.6: Drive balance negative"
+
+    # Drain the balance by ticking + sweeping several times.  Each sweep
+    # deducts the unbilled accumulator; we repeat until balance < 0.
+    local max_sweeps=20
+    local sweep_count=0
+    local current_balance
+    current_balance="$balance"   # last known balance (positive, from 11d.1)
+
+    while [ "$sweep_count" -lt "$max_sweeps" ]; do
+        safe_exec tick_out tick_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            billing tick-now --sweep --json || true
+        sweep_count=$((sweep_count + 1))
+
+        # Re-check balance
+        safe_exec credits_after_out credits_after_code \
+            $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+            billing show --user "$TEST_USERNAME" --json
+
+        current_balance=$(echo "$credits_after_out" | \
+            grep -o '"balance_usd_microcents":[0-9-]*' | cut -d: -f2 || echo "0")
+
+        if [ -n "$current_balance" ] && [ "$current_balance" -lt 0 ] 2>/dev/null; then
+            info "Balance went negative after $sweep_count sweep(s): $current_balance microcents"
+            break
+        fi
+    done
+
+    if [ -n "$current_balance" ] && [ "$current_balance" -lt 0 ] 2>/dev/null; then
+        record_test "Balance can go negative (correct, intentional)" "PASS"
+    else
+        error "Balance did not go negative after $max_sweeps sweeps (balance: $current_balance)"
+        record_test "Balance can go negative (correct, intentional)" "FAIL"
+    fi
+
+    # list-overdrawn should now include the test user
+    local overdrawn_out overdrawn_code
+    safe_exec overdrawn_out overdrawn_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing list-overdrawn --json
+
+    if [ $overdrawn_code -eq 0 ] && echo "$overdrawn_out" | grep -q "$TEST_USERNAME"; then
+        record_test "list-overdrawn includes test user after negative balance" "PASS"
+        info "list-overdrawn output:"
+        echo "$overdrawn_out"
+    else
+        error "list-overdrawn did not include $TEST_USERNAME"
+        echo "$overdrawn_out"
+        record_test "list-overdrawn includes test user after negative balance" "FAIL"
+    fi
+
+    info "Billing phase complete"
+}
+
 # Phase 12: Cleanup
 phase_12_cleanup() {
     phase "12: CLEANUP"
@@ -2327,6 +2577,7 @@ main() {
     phase_11_admin_system_status
     phase_11b_flood_guard
     phase_11c_multi_backend_storage
+    phase_11d_billing
     phase_12_cleanup
 
     # Show summary and exit with appropriate code

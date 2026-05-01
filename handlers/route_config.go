@@ -206,6 +206,15 @@ func RegisterRoutes() {
 	adminGroup.POST("/storage/verify-all", AdminVerifyAll)
 	adminGroup.GET("/alerts/summary", AdminAlertsSummary)
 
+	// Billing - admin endpoints (storage credits / usage metering).
+	// See docs/wip/storage-credits-v2.md §6.4 for the API contract and
+	// handlers/admin_billing.go for the handler implementations.
+	adminGroup.GET("/billing/price", AdminGetBillingPrice)
+	adminGroup.POST("/billing/set-price", AdminSetBillingPrice)
+	adminGroup.GET("/billing/sweep-summary", AdminGetBillingSweepSummary)
+	adminGroup.GET("/billing/overdrawn", AdminGetBillingOverdrawn)
+	adminGroup.POST("/billing/gift", AdminBillingGift)
+
 	// Development/Testing admin endpoints (gated by ADMIN_DEV_TEST_API_ENABLED)
 	// SECURITY: These endpoints are ONLY for development and testing
 	if isDevTestAdminAPIEnabled() {
@@ -214,6 +223,12 @@ func RegisterRoutes() {
 		devTestAdminGroup.Use(AdminMiddleware)      // Then admin middleware
 		devTestAdminGroup.POST("/users/cleanup", AdminCleanupTestUser)
 		devTestAdminGroup.GET("/totp/decrypt-check/:username", AdminTOTPDecryptCheck) // TOTP diagnostic endpoint
+
+		// Billing tick-now: forces an immediate tick (and optional sweep).
+		// Lives under /dev-test so it is physically not registered as a
+		// route in production-flavored deployments. Used by the e2e billing
+		// test in scripts/testing/e2e-test.sh.
+		devTestAdminGroup.POST("/billing/tick-now", AdminBillingTickNow)
 	}
 }
 

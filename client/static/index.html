@@ -232,9 +232,18 @@
             <!-- User navigation bar -->
             <div class="user-nav">
                 <div class="user-controls">
+                    <a href="#" id="billing-toggle" class="nav-link">Billing</a>
                     <a href="#" id="security-settings-toggle" class="nav-link">Security Settings</a>
                     <a href="#" id="contact-info-toggle" class="nav-link">Contact Info</a>
                     <a href="#" id="logout-link" class="nav-link logout-link">Logout</a>
+                </div>
+
+                <!-- Billing panel (hidden by default).
+                     Content is rendered into #billing-panel-content by ui/billing.ts
+                     when the user opens the panel. See docs/wip/storage-credits-v2.md §7. -->
+                <div id="billing-panel" class="security-panel hidden">
+                    <h3>Billing</h3>
+                    <div id="billing-panel-content"></div>
                 </div>
 
                 <!-- Security settings panel (hidden by default) -->

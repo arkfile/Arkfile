@@ -906,6 +906,90 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     background-color: color-mix(in srgb, var(--coral) 80%, var(--depth-1));
 }
 
+/* Billing panel (storage credits / usage metering).
+   Renders inside a .security-panel container; this block adds the
+   billing-specific layout on top of the panel's chrome.
+   See client/static/js/src/ui/billing.ts for the matching DOM structure
+   and docs/wip/storage-credits-v2.md §7 for the design rationale. */
+.billing-panel-section {
+    margin-bottom: 1.25rem;
+}
+.billing-panel-section:last-child {
+    margin-bottom: 0;
+}
+.billing-panel-section h4 {
+    margin: 0 0 0.4rem 0;
+    font-size: 0.78rem;
+    color: var(--foam-2);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+}
+
+.billing-balance-amount {
+    font-size: 1.6rem;
+    font-weight: 600;
+    margin: 0;
+    color: var(--salt);
+    font-variant-numeric: tabular-nums;
+}
+.billing-balance-amount.negative {
+    color: var(--coral);
+}
+
+.billing-runway,
+.billing-below-baseline {
+    margin: 0.25rem 0 0 0;
+    font-size: 0.85rem;
+    color: var(--foam-2);
+}
+
+.billing-usage-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: 1rem;
+    row-gap: 0.3rem;
+    margin: 0;
+    font-size: 0.9rem;
+}
+.billing-usage-grid dt {
+    color: var(--foam-2);
+    font-weight: normal;
+}
+.billing-usage-grid dd {
+    margin: 0;
+    color: var(--salt);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.billing-tx-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+.billing-tx-table th,
+.billing-tx-table td {
+    padding: 0.3rem 0.5rem 0.3rem 0;
+    text-align: left;
+    vertical-align: top;
+}
+.billing-tx-table th {
+    color: var(--foam-2);
+    font-weight: 600;
+    border-bottom: 1px solid var(--depth-4);
+}
+.billing-tx-amount,
+.billing-tx-balance {
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+.billing-tx-amount.negative,
+.billing-tx-balance.negative {
+    color: var(--coral);
+}
+
 /* Contact Info Panel */
 
 .contact-info-notice {
