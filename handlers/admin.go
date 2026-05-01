@@ -57,6 +57,7 @@ type AdminUserStatusResponse struct {
 	TOTP     *AdminTOTPStatus       `json:"totp,omitempty"`
 	OPAQUE   *AdminOPAQUEStatus     `json:"opaque,omitempty"`
 	Tokens   *AdminTokenStatus      `json:"tokens,omitempty"`
+	Billing  *AdminBillingStatus    `json:"billing,omitempty"`
 	Details  map[string]interface{} `json:"details,omitempty"`
 }
 
@@ -87,6 +88,16 @@ type AdminOPAQUEStatus struct {
 type AdminTokenStatus struct {
 	ActiveRefreshTokens int `json:"active_refresh_tokens"`
 	RevokedTokens       int `json:"revoked_tokens"`
+}
+
+// AdminBillingStatus is the per-user billing snapshot surfaced in
+// /api/admin/users/:username/status. Balances are signed microcents.
+type AdminBillingStatus struct {
+	BalanceUSDMicrocents         int64      `json:"balance_usd_microcents"`
+	FormattedBalance             string     `json:"formatted_balance"`
+	BillableBytes                int64      `json:"billable_bytes"`
+	CurrentCostPerMonthUSDApprox string     `json:"current_cost_per_month_usd_approx"`
+	LastBilledAt                 *time.Time `json:"last_billed_at,omitempty"`
 }
 
 // AdminCleanupTestUser performs comprehensive cleanup of test user data
@@ -430,6 +441,11 @@ func AdminGetUserStatus(c echo.Context) error {
 		RevokedTokens:       revokedTokens,
 	}
 
+	// Billing snapshot: signed microcent balance, billable bytes against the
+	// per-instance free baseline, and the current monthly cost projection.
+	// Falls back to safe zeros when the user has no credits row.
+	response.Billing = buildAdminBillingStatus(database.DB, targetUsername)
+
 	// Log admin action for audit trail
 	logging.LogSecurityEvent(
 		logging.EventAdminAccess,
@@ -443,6 +459,44 @@ func AdminGetUserStatus(c echo.Context) error {
 	)
 
 	return JSONResponse(c, http.StatusOK, "User status retrieved", response)
+}
+
+// buildAdminBillingStatus is the per-user billing snapshot used by
+// AdminGetUserStatus. It reuses the same projection pipeline as
+// /api/credits so admin views and user views never disagree.
+func buildAdminBillingStatus(db *sql.DB, username string) *AdminBillingStatus {
+	credit, err := models.GetUserCredits(db, username)
+	var balance int64
+	if err == nil && credit != nil {
+		balance = credit.BalanceUSDMicrocents
+	}
+
+	currentUsage, _ := buildBillingProjection(db, username, balance)
+
+	billable, _ := currentUsage["billable_bytes"].(int64)
+	costStr, _ := currentUsage["current_cost_per_month_usd_approx"].(string)
+
+	status := &AdminBillingStatus{
+		BalanceUSDMicrocents:         balance,
+		FormattedBalance:             models.FormatCreditsUSD(balance),
+		BillableBytes:                billable,
+		CurrentCostPerMonthUSDApprox: costStr,
+	}
+
+	// last_billed_at is read from storage_usage_accumulator if present.
+	var lastBilledStr sql.NullString
+	if err := db.QueryRow(
+		`SELECT last_billed_at FROM storage_usage_accumulator WHERE username = ?`,
+		username,
+	).Scan(&lastBilledStr); err == nil && lastBilledStr.Valid {
+		if t, err := time.Parse("2006-01-02 15:04:05", lastBilledStr.String); err == nil {
+			status.LastBilledAt = &t
+		} else if t, err := time.Parse(time.RFC3339, lastBilledStr.String); err == nil {
+			status.LastBilledAt = &t
+		}
+	}
+
+	return status
 }
 
 // GetPendingUsers returns a list of users pending approval

@@ -353,11 +353,16 @@ func main() {
 	}
 }
 
-// runSchemaMigrations applies additive column migrations that cannot be safely included
-// in the unified_schema.sql file (because ALTER TABLE ADD COLUMN fails if the column
-// already exists, and rqlite treats that as a fatal error when executing the schema as
-// a single operation). Each migration is attempted individually and errors for
-// already-existing columns are silently ignored.
+// runSchemaMigrations applies one-shot schema migrations that cannot be expressed in
+// the unified_schema.sql file (because ALTER TABLE statements fail if the column
+// already exists or is already renamed, and rqlite treats that as a fatal error
+// when executing the schema as a single operation). Each migration is attempted
+// individually and idempotent-when-already-applied error messages are silently ignored.
+//
+// Two classes of migrations live here:
+//   - Additive (ADD COLUMN): tolerated error is "duplicate column".
+//   - Renames (RENAME COLUMN): tolerated errors are "no such column" (old column already
+//     renamed away) or "duplicate column"/"already exists" (target name already present).
 func runSchemaMigrations() {
 	migrations := []struct {
 		description string
@@ -367,15 +372,37 @@ func runSchemaMigrations() {
 			description: "Add stored_blob_sha256sum to file_metadata",
 			sql:         "ALTER TABLE file_metadata ADD COLUMN stored_blob_sha256sum CHAR(64)",
 		},
+		// Storage credits / billing meter (v2): rename _cents columns to _microcents.
+		// These run once on first startup after upgrading; safe no-op on subsequent runs
+		// and on fresh installs (where the unified schema already declares _microcents).
+		{
+			description: "Rename user_credits.balance_usd_cents to balance_usd_microcents",
+			sql:         "ALTER TABLE user_credits RENAME COLUMN balance_usd_cents TO balance_usd_microcents",
+		},
+		{
+			description: "Rename credit_transactions.amount_usd_cents to amount_usd_microcents",
+			sql:         "ALTER TABLE credit_transactions RENAME COLUMN amount_usd_cents TO amount_usd_microcents",
+		},
+		{
+			description: "Rename credit_transactions.balance_after_usd_cents to balance_after_usd_microcents",
+			sql:         "ALTER TABLE credit_transactions RENAME COLUMN balance_after_usd_cents TO balance_after_usd_microcents",
+		},
 	}
 
 	for _, m := range migrations {
 		_, err := database.DB.Exec(m.sql)
 		if err != nil {
-			errStr := err.Error()
-			if strings.Contains(errStr, "duplicate column") {
+			errStr := strings.ToLower(err.Error())
+			switch {
+			case strings.Contains(errStr, "duplicate column"),
+				strings.Contains(errStr, "already exists"):
 				log.Printf("Migration: %s (already applied)", m.description)
-			} else {
+			case strings.Contains(errStr, "no such column"):
+				// Old column name not present - either the rename has already been
+				// applied previously or this is a fresh install where the unified
+				// schema declared the new column name from the start.
+				log.Printf("Migration: %s (already applied or fresh install)", m.description)
+			default:
 				log.Printf("Migration: %s failed: %v", m.description, err)
 			}
 		} else {

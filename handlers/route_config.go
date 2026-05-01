@@ -153,11 +153,12 @@ func RegisterRoutes() {
 	adminGroup.Use(auth.JWTMiddleware()) // Add JWT middleware first
 	adminGroup.Use(AdminMiddleware)      // Then admin middleware
 
-	// Credits system - admin endpoints (require admin privileges)
+	// Credits system - admin endpoints (require admin privileges).
+	// Read-only views; positive admin-initiated balance changes go through the
+	// /api/admin/billing/gift endpoint (typed transaction = 'gift'), and negative
+	// changes are produced exclusively by the daily storage settlement sweep.
 	adminGroup.GET("/credits", AdminGetAllCredits)
 	adminGroup.GET("/credits/:username", AdminGetUserCredits)
-	adminGroup.POST("/credits/:username", AdminAdjustCredits)
-	adminGroup.PUT("/credits/:username", AdminSetCredits)
 
 	// User management - admin endpoints
 	adminGroup.GET("/users", ListUsers)

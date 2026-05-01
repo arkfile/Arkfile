@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT UNIQUE NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     total_storage_bytes BIGINT NOT NULL DEFAULT 0,
-    storage_limit_bytes BIGINT NOT NULL DEFAULT 10737418240,
+    storage_limit_bytes BIGINT NOT NULL DEFAULT 1181116006,
     is_approved BOOLEAN NOT NULL DEFAULT false,
     approved_by TEXT,
     approved_at TIMESTAMP,
@@ -339,30 +339,52 @@ CREATE TABLE IF NOT EXISTS admin_logs (
 -- PHASE 11: CREDITS AND BILLING SYSTEM
 -- =====================================================
 
--- User credits balance table
+-- User credit balances. Denominated in microcents (1 USD = 100 cents = 100,000,000 microcents).
+-- Signed: balances may go negative when storage usage exceeds the user's credit balance.
+-- See docs/wip/storage-credits-v2.md for the full design.
 CREATE TABLE IF NOT EXISTS user_credits (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL,
-    balance_usd_cents INTEGER NOT NULL DEFAULT 0,  -- Store as cents to avoid floating point issues
+    balance_usd_microcents BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE,
     UNIQUE(username)
 );
 
--- Credit transactions log with full audit trail
+-- Credit transactions audit log. Amounts denominated in microcents; both fields signed.
+-- transaction_type values: 'usage' (daily storage sweep), 'gift' (admin gift), 'adjustment' (admin set).
 CREATE TABLE IF NOT EXISTS credit_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    transaction_id TEXT,                        -- External transaction ID (Bitcoin, PayPal, etc.)
+    transaction_id TEXT,                              -- External transaction ID, reserved for future payments work
     username TEXT NOT NULL,
-    amount_usd_cents INTEGER NOT NULL,          -- Positive for credits, negative for debits
-    balance_after_usd_cents INTEGER NOT NULL,   -- Balance after this transaction
-    transaction_type TEXT NOT NULL,             -- 'credit', 'debit', 'adjustment', 'refund'
-    reason TEXT,                                -- Human-readable reason for transaction
-    admin_username TEXT,                        -- NULL for user transactions, filled for admin adjustments
-    metadata TEXT,                              -- JSON for additional details
+    amount_usd_microcents BIGINT NOT NULL,            -- Positive for credits, negative for debits
+    balance_after_usd_microcents BIGINT NOT NULL,     -- Balance after this transaction (signed)
+    transaction_type TEXT NOT NULL,
+    reason TEXT,                                      -- Human-readable reason
+    admin_username TEXT,                              -- NULL for system-generated rows (e.g. usage sweeps)
+    metadata TEXT,                                    -- JSON for additional details (see §3.5)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+-- Hourly storage usage accumulator. One row per billable user.
+-- Ticks (hourly) write here; the daily settlement sweep drains into user_credits and credit_transactions.
+CREATE TABLE IF NOT EXISTS storage_usage_accumulator (
+    username TEXT PRIMARY KEY,
+    unbilled_microcents BIGINT NOT NULL DEFAULT 0,
+    last_tick_at DATETIME,
+    last_billed_at DATETIME,
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+-- Single-row key/value store for billing settings (currently just the customer price knob).
+-- Seeded at first startup from ARKFILE_CUSTOMER_PRICE_USD_PER_TB_PER_MONTH; updates persist here.
+CREATE TABLE IF NOT EXISTS billing_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by TEXT
 );
 
 -- =====================================================
@@ -525,6 +547,12 @@ CREATE INDEX IF NOT EXISTS idx_credit_transactions_transaction_id ON credit_tran
 CREATE INDEX IF NOT EXISTS idx_credit_transactions_type ON credit_transactions(transaction_type);
 CREATE INDEX IF NOT EXISTS idx_credit_transactions_created_at ON credit_transactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_credit_transactions_admin ON credit_transactions(admin_username);
+
+-- Billing meter indexes
+CREATE INDEX IF NOT EXISTS idx_storage_usage_accumulator_last_tick_at
+    ON storage_usage_accumulator(last_tick_at);
+CREATE INDEX IF NOT EXISTS idx_storage_usage_accumulator_last_billed_at
+    ON storage_usage_accumulator(last_billed_at);
 
 -- Multi-backend storage indexes
 CREATE INDEX IF NOT EXISTS idx_storage_providers_role ON storage_providers(role);
