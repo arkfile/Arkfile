@@ -615,6 +615,24 @@ Future contributors adding new endpoints that need to call into `billing/` shoul
 | 12 | 30-day month convention introduces ~3% per-month variance. | Standard cloud-billing convention; UI uses approximate framing (`~$0.0098/month`) for projections; precise four-decimal display is reserved for actual balances and transaction amounts. |
 | 13 | Test coverage of a meter that ticks hourly requires injectable time. | `Scheduler.nowFn` interface + `tickEvery` configuration make all timing testable without `time.Sleep`. |
 
+## 12.1 Post-implementation errata (important for payments work)
+
+Three issues discovered during e2e testing of the meter that payments code must not repeat:
+
+**rqlite float64 scanning.** rqlite returns `BIGINT` columns as JSON `float64`, sometimes in scientific notation (e.g., `"6.5011946e+07"`), when values are large. Scanning directly into `int64` fails at runtime with `"converting driver.Value type float64 ... to a int64: invalid syntax"`. The fix — and the required pattern for all future DB reads of `balance_usd_microcents`, `amount_usd_microcents`, and similar columns — is to scan into `float64` first, then cast:
+
+```go
+var f float64
+db.QueryRow(`SELECT balance_usd_microcents FROM user_credits WHERE username = ?`, username).Scan(&f)
+balance := int64(f)
+```
+
+Payment top-ups will involve amounts like 5,000,000,000 microcents ($50.00) — well above the threshold where rqlite emits scientific notation. Any bare `int64` scan of a credits column will silently fail for real payment amounts.
+
+**Admin API response envelope.** All admin endpoints consumed by `cmd/arkfile-admin/` via `makeRequest` must return `{"success": true, "data": {...}}`. The CLI `Response` struct reads its content from `json:"data"`; a flat response produces `resp.Data = nil` and `--json` output silently prints `null`. Every new payments admin endpoint (refund, invoice, list-transactions) must use the standard wrapper: `c.JSON(http.StatusOK, map[string]interface{}{"success": true, "data": response})`.
+
+**Auto-gift timing.** The approval-time gift (`cfg.Billing.GiftedCreditsUSD`) fires exactly once, at approval. Users approved before billing was configured receive no auto-gift. Any "welcome credit on first payment" must be applied at payment-processing time — not at approval time — to avoid the same missed-gift window.
+
 ## 13. Forward-Looking: Future `docs/wip/payments.md`
 
 Scaffolding only. Not designed here.

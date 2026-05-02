@@ -47,11 +47,13 @@ func GiftCredits(db *sql.DB, username string, amountUSDMicrocents int64, reason,
 	defer tx.Rollback()
 
 	// Ensure user_credits row exists (create with zero balance if not).
-	var currentBalance int64
+	// rqlite float64 scan for BIGINT balance column.
+	var currentBalanceF float64
 	err = tx.QueryRow(
 		`SELECT balance_usd_microcents FROM user_credits WHERE username = ?`,
 		username,
-	).Scan(&currentBalance)
+	).Scan(&currentBalanceF)
+	currentBalance := int64(currentBalanceF)
 	if err == sql.ErrNoRows {
 		_, insErr := tx.Exec(
 			`INSERT INTO user_credits (username, balance_usd_microcents, created_at, updated_at)

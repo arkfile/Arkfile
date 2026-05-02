@@ -132,9 +132,12 @@ func AdminGetBillingSweepSummary(c echo.Context) error {
 	out := []daySummary{}
 	for rows.Next() {
 		var d daySummary
-		if scanErr := rows.Scan(&d.Day, &d.UsersSettled, &d.TotalDrainedMicrocents); scanErr != nil {
+		// rqlite float64 scan for TotalDrainedMicrocents BIGINT.
+		var drainedF float64
+		if scanErr := rows.Scan(&d.Day, &d.UsersSettled, &drainedF); scanErr != nil {
 			return JSONError(c, http.StatusInternalServerError, fmt.Sprintf("Failed to scan sweep summary: %v", scanErr))
 		}
+		d.TotalDrainedMicrocents = int64(drainedF)
 		d.TotalDrainedUSD = models.FormatCreditsUSD(d.TotalDrainedMicrocents)
 		out = append(out, d)
 	}

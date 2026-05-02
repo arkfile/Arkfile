@@ -73,10 +73,13 @@ func GetUserCredits(db *sql.DB, username string) (*UserCredit, error) {
 	query := `SELECT id, username, balance_usd_microcents, created_at, updated_at
 	          FROM user_credits WHERE username = ?`
 
+	// rqlite returns BIGINT as float64 when large; scan via float64 then cast.
+	var balanceF float64
 	err := db.QueryRow(query, username).Scan(
-		&credits.ID, &credits.Username, &credits.BalanceUSDMicrocents,
+		&credits.ID, &credits.Username, &balanceF,
 		&createdAtStr, &updatedAtStr,
 	)
+	credits.BalanceUSDMicrocents = int64(balanceF)
 	if err != nil {
 		return nil, err
 	}
@@ -141,12 +144,16 @@ func GetUserTransactions(db *sql.DB, username string, limit int, offset int) ([]
 		var transactionID, reason, adminUsername, metadata sql.NullString
 		var createdAtStr string
 
+		// rqlite float64 scan for BIGINT columns.
+		var amtF, balAfterF float64
 		err := rows.Scan(
 			&t.ID, &transactionID, &t.Username,
-			&t.AmountUSDMicrocents, &t.BalanceAfterUSDMicrocents,
+			&amtF, &balAfterF,
 			&t.TransactionType, &reason, &adminUsername,
 			&metadata, &createdAtStr,
 		)
+		t.AmountUSDMicrocents = int64(amtF)
+		t.BalanceAfterUSDMicrocents = int64(balAfterF)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan transaction row: %w", err)
 		}
@@ -191,13 +198,16 @@ func GetAllUserCredits(db *sql.DB) ([]*UserCredit, error) {
 		c := &UserCredit{}
 		var createdAtStr, updatedAtStr string
 
+		// rqlite float64 scan for BIGINT columns.
+		var balF float64
 		err := rows.Scan(
-			&c.ID, &c.Username, &c.BalanceUSDMicrocents,
+			&c.ID, &c.Username, &balF,
 			&createdAtStr, &updatedAtStr,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan credit row: %w", err)
 		}
+		c.BalanceUSDMicrocents = int64(balF)
 
 		c.CreatedAt = parseDBTimestamp(createdAtStr)
 		c.UpdatedAt = parseDBTimestamp(updatedAtStr)
@@ -230,13 +240,16 @@ func GetOverdrawnUsers(db *sql.DB) ([]*UserCredit, error) {
 		c := &UserCredit{}
 		var createdAtStr, updatedAtStr string
 
+		// rqlite float64 scan for BIGINT columns.
+		var balF float64
 		err := rows.Scan(
-			&c.ID, &c.Username, &c.BalanceUSDMicrocents,
+			&c.ID, &c.Username, &balF,
 			&createdAtStr, &updatedAtStr,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan credit row: %w", err)
 		}
+		c.BalanceUSDMicrocents = int64(balF)
 		c.CreatedAt = parseDBTimestamp(createdAtStr)
 		c.UpdatedAt = parseDBTimestamp(updatedAtStr)
 		credits = append(credits, c)
