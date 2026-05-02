@@ -130,7 +130,7 @@ func AdminGetUserCredits(c echo.Context) error {
 		},
 	}
 
-	return c.JSON(http.StatusOK, response)
+	return c.JSON(http.StatusOK, map[string]interface{}{"success": true, "data": response})
 }
 
 // AdminGetAllCredits returns the credit balances for every user, plus a

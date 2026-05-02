@@ -38,11 +38,17 @@ func TickUser(db *sql.DB, username string, rate *Rate, now time.Time, freeBaseli
 	// Read total_storage_bytes outside the transaction; only the upsert needs
 	// transactional guarantees, and a stale read is acceptable (a user uploads
 	// at 12:30 and gets ticked at 13:00 for what is stored at 13:00).
-	var totalStorageBytes int64
+	//
+	// NOTE: rqlite returns BIGINT columns as JSON float64 (sometimes in
+	// scientific notation) when values are large. Scan into float64 first,
+	// then cast to int64 — the same pattern used elsewhere in this codebase
+	// for rqlite float64 scanning.
+	var totalStorageBytesF float64
 	err := db.QueryRow(
 		`SELECT total_storage_bytes FROM users WHERE username = ?`,
 		username,
-	).Scan(&totalStorageBytes)
+	).Scan(&totalStorageBytesF)
+	totalStorageBytes := int64(totalStorageBytesF)
 	if err != nil {
 		return fmt.Errorf("billing.TickUser: read total_storage_bytes for %s: %w", username, err)
 	}

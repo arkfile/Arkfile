@@ -2268,9 +2268,36 @@ phase_11d_billing() {
         record_test "Billing show --user returns balance" "FAIL"
     fi
 
-    # Initial gift should have landed (ARKFILE_BILLING_GIFTED_CREDITS_USD=1.00 →
-    # 100_000_000 microcents).  A negative or zero starting balance means the
-    # gift transaction was not written at approval time.
+
+    # Ensure the test user has a positive balance before proceeding.
+    # We gift explicitly here so the test is self-contained regardless
+    # of whether the user was approved before or after billing was enabled.
+    # (The approval-time auto-gift fires only for freshly-approved users;
+    # pre-existing users from a previous run start at zero balance.)
+    local setup_gift_out setup_gift_code
+    safe_exec setup_gift_out setup_gift_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing gift \
+        --user "$TEST_USERNAME" \
+        --amount "1.00" \
+        --reason "e2e test setup gift" \
+        --json
+    if [ $setup_gift_code -eq 0 ]; then
+        record_test "Setup gift to ensure positive starting balance" "PASS"
+    else
+        error "Setup gift failed"
+        echo "$setup_gift_out"
+        record_test "Setup gift to ensure positive starting balance" "FAIL"
+    fi
+
+    # Re-fetch balance after the setup gift.
+    safe_exec credits_out credits_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing show --user "$TEST_USERNAME" --json
+
+    # Balance should be positive after the explicit setup gift above.
+    # (If it is still zero the gift call failed, which would already have
+    # been caught by the record_test above.)
     local balance
     balance=$(echo "$credits_out" | grep -o '"balance_usd_microcents":[0-9-]*' | cut -d: -f2 || echo "0")
     if [ -n "$balance" ] && [ "$balance" -gt 0 ] 2>/dev/null; then

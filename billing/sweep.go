@@ -36,6 +36,8 @@ func SweepAllUsers(db *sql.DB, rate *Rate, now time.Time) (SweepSummary, error) 
 		return SweepSummary{}, fmt.Errorf("billing.SweepAllUsers: list accumulator: %w", err)
 	}
 
+	// NOTE: rqlite returns BIGINT columns as JSON float64. Use intermediate
+	// float64 scan then cast to int64 (same pattern as billing/meter.go).
 	type pending struct {
 		username           string
 		unbilledMicrocents int64
@@ -46,10 +48,12 @@ func SweepAllUsers(db *sql.DB, rate *Rate, now time.Time) (SweepSummary, error) 
 	var queue []pending
 	for rows.Next() {
 		var p pending
-		if scanErr := rows.Scan(&p.username, &p.unbilledMicrocents, &p.lastTickAt, &p.lastBilledAt); scanErr != nil {
+		var unbilledF float64
+		if scanErr := rows.Scan(&p.username, &unbilledF, &p.lastTickAt, &p.lastBilledAt); scanErr != nil {
 			rows.Close()
 			return SweepSummary{}, fmt.Errorf("billing.SweepAllUsers: scan: %w", scanErr)
 		}
+		p.unbilledMicrocents = int64(unbilledF)
 		queue = append(queue, p)
 	}
 	if rerr := rows.Err(); rerr != nil {
@@ -92,11 +96,13 @@ func settleOneUser(db *sql.DB, rate *Rate, now time.Time, username string, drain
 	defer tx.Rollback()
 
 	// Step 1: ensure a user_credits row exists (create at zero balance if not).
-	var currentBalance int64
-	err = tx.QueryRow(
+	// rqlite float64 scan — same pattern as meter.go.
+	var currentBalanceF float64
+	err = db.QueryRow(
 		`SELECT balance_usd_microcents FROM user_credits WHERE username = ?`,
 		username,
-	).Scan(&currentBalance)
+	).Scan(&currentBalanceF)
+	currentBalance := int64(currentBalanceF)
 	if err == sql.ErrNoRows {
 		_, insErr := tx.Exec(
 			`INSERT INTO user_credits (username, balance_usd_microcents, created_at, updated_at)
