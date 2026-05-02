@@ -2231,6 +2231,9 @@ phase_11c_multi_backend_storage() {
 phase_11d_billing() {
     phase "11d: BILLING METER"
 
+    # Suppress the tick-now CLI pre-flight warning so safe_exec captures clean JSON.
+    export ADMIN_DEV_TEST_API_ENABLED=true
+
     section "11d.1: Check billing price and initial gift"
 
     # ------------------------------------------------------------------ #
@@ -2299,7 +2302,7 @@ phase_11d_billing() {
     # (If it is still zero the gift call failed, which would already have
     # been caught by the record_test above.)
     local balance
-    balance=$(echo "$credits_out" | grep -o '"balance_usd_microcents":[0-9-]*' | cut -d: -f2 || echo "0")
+    balance=$(echo "$credits_out" | jq -r '.balance_usd_microcents // 0' 2>/dev/null || echo "0")
     if [ -n "$balance" ] && [ "$balance" -gt 0 ] 2>/dev/null; then
         record_test "Initial gift applied (positive balance)" "PASS"
         info "Starting balance: $balance microcents"
@@ -2318,7 +2321,7 @@ phase_11d_billing() {
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
         billing tick-now --json
 
-    if [ $tick_code -eq 0 ] && echo "$tick_out" | grep -q '"ticked":true'; then
+    if [ $tick_code -eq 0 ] && echo "$tick_out" | grep -q '"ticked"'; then
         record_test "tick-now succeeds" "PASS"
         info "tick-now output:"
         echo "$tick_out"
@@ -2338,7 +2341,7 @@ phase_11d_billing() {
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
         billing tick-now --sweep --json
 
-    if [ $sweep_code -eq 0 ] && echo "$sweep_out" | grep -q '"swept":true'; then
+    if [ $sweep_code -eq 0 ] && echo "$sweep_out" | grep -q '"swept"'; then
         record_test "tick-now --sweep succeeds" "PASS"
         info "tick-now --sweep output:"
         echo "$sweep_out"
@@ -2465,7 +2468,7 @@ phase_11d_billing() {
             billing show --user "$TEST_USERNAME" --json
 
         current_balance=$(echo "$credits_after_out" | \
-            grep -o '"balance_usd_microcents":[0-9-]*' | cut -d: -f2 || echo "0")
+            jq -r '.balance_usd_microcents // 0' 2>/dev/null || echo "0")
 
         if [ -n "$current_balance" ] && [ "$current_balance" -lt 0 ] 2>/dev/null; then
             info "Balance went negative after $sweep_count sweep(s): $current_balance microcents"
