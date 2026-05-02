@@ -568,7 +568,7 @@ Total ≈ 2,450 lines, ~60% non-test. (Earlier drafts of this doc included a row
 
 ### 11.1 Implementation Status (live)
 
-**DONE through Section G-polish (current session):**
+**DONE — all sections complete, 127/127 e2e tests verified (2026-05-02):**
 
 - A — schema foundation (`storage_limit_bytes` reconcile, microcent rename, `storage_usage_accumulator` + `billing_settings` tables, in-place migration).
 - B+C — `models/credits.go` rename to microcents; deleted deprecated `AddCredits`/`DebitCredits`/`SetCredits` and the `POST/PUT /api/admin/credits/:username` endpoints; extended `GET /api/credits` and `GET /api/admin/credits[/:username]` with `current_usage` and `credits_runway` blocks.
@@ -632,6 +632,10 @@ Payment top-ups will involve amounts like 5,000,000,000 microcents ($50.00) — 
 **Admin API response envelope.** All admin endpoints consumed by `cmd/arkfile-admin/` via `makeRequest` must return `{"success": true, "data": {...}}`. The CLI `Response` struct reads its content from `json:"data"`; a flat response produces `resp.Data = nil` and `--json` output silently prints `null`. Every new payments admin endpoint (refund, invoice, list-transactions) must use the standard wrapper: `c.JSON(http.StatusOK, map[string]interface{}{"success": true, "data": response})`.
 
 **Auto-gift timing.** The approval-time gift (`cfg.Billing.GiftedCreditsUSD`) fires exactly once, at approval. Users approved before billing was configured receive no auto-gift. Any "welcome credit on first payment" must be applied at payment-processing time — not at approval time — to avoid the same missed-gift window.
+
+**Go CLI JSON re-encoding (float64 → scientific notation).** When `makeRequest` decodes a server response into `map[string]interface{}`, Go's JSON decoder converts all numbers to `float64`. When `printJSON` re-encodes that map for `--json` output, `float64(1e8)` is emitted as `1e+08` rather than `100000000`. Shell scripts asserting on CLI `--json` output must use `jq` to parse numeric fields — `grep '"field":[0-9]*'` will silently fail to match. This applies to any future payments CLI testing that reads microcent values from the `--json` output.
+
+**e2e drain-to-negative test design.** Organic tick+sweep at `$10/TiB/month` drains only ~75 microcents per iteration against a typical test file set (~57 MiB billable). A test balance of `$0.001` (100,000 microcents) drains in ~3 sweeps only when `billing set-price 9999.99` is applied immediately before the drain loop (raising the per-tick charge ~1,000×), then restored to `10.00` after the loop exits. Future payment e2e tests that need to verify negative-balance behavior should reuse this pattern: set an extreme price, keep test gift amounts at `$0.001` or less, then restore the default price at the end of the phase.
 
 ## 13. Forward-Looking: Future `docs/wip/payments.md`
 

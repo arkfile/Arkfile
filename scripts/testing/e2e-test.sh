@@ -2282,7 +2282,7 @@ phase_11d_billing() {
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
         billing gift \
         --user "$TEST_USERNAME" \
-        --amount "1.00" \
+        --amount "0.001" \
         --reason "e2e test setup gift" \
         --json
     if [ $setup_gift_code -eq 0 ]; then
@@ -2385,7 +2385,7 @@ phase_11d_billing() {
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
         billing gift \
         --user "$TEST_USERNAME" \
-        --amount "5.00" \
+        --amount "0.001" \
         --reason "e2e test gift" \
         --json
 
@@ -2451,6 +2451,14 @@ phase_11d_billing() {
 
     # Drain the balance by ticking + sweeping several times.  Each sweep
     # deducts the unbilled accumulator; we repeat until balance < 0.
+    #
+    # Set an extreme price first so each tick drains the full balance in
+    # 1-2 sweeps, regardless of the user's actual file size.  Restored
+    # to the documented default after the loop exits.
+    safe_exec _drain_sp_out _drain_sp_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing set-price 9999.99 || true
+
     local max_sweeps=20
     local sweep_count=0
     local current_balance
@@ -2498,6 +2506,11 @@ phase_11d_billing() {
         echo "$overdrawn_out"
         record_test "list-overdrawn includes test user after negative balance" "FAIL"
     fi
+
+    # Restore price to documented default after the drain test.
+    safe_exec _restore_sp_out _restore_sp_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing set-price 10.00 || true
 
     info "Billing phase complete"
 }
