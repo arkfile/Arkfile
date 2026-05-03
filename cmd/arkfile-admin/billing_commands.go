@@ -551,10 +551,6 @@ func printUserCredits(username string, d map[string]interface{}) {
 		}
 	}
 
-	if disclaimer := safeString(d, "beta_disclaimer"); disclaimer != "" {
-		fmt.Printf("\n%s\n", disclaimer)
-	}
-
 	if txs, ok := d["transactions"].([]interface{}); ok && len(txs) > 0 {
 		fmt.Printf("\nRecent transactions (latest %d):\n", min(len(txs), 10))
 		for i, t := range txs {

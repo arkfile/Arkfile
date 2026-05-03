@@ -1022,13 +1022,115 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     console.log('[OK] Phase 12: Revoked share correctly denied access');
   });
 
+  // ── Billing Panel ──────────────────────────────────────────────────────────
+  // Requires:
+  //   - The shared page has been logged in earlier in the describe block.
+  //   - The e2e-test.sh phase_11d_billing has already run at least one
+  //     tick-now --sweep, so the test user has >=1 'gift' row and >=1 'usage'
+  //     row in their credit_transactions table, and their balance is negative.
+  //
+  // This test opens the Billing panel, verifies the DOM layout produced by
+  // client/static/js/src/ui/billing.ts.
+  //
+  // See docs/wip/storage-credits-v2.md §10.5 for the test plan spec.
+  // --------------------------------------------------------------------------
+  test('Billing panel renders balance, usage grid, and transaction history', async () => {
+    // Phase 12 always ends with a logout (to verify share revocation).
+    // Re-login here so we have a valid session for the billing panel test.
+    // Phase 13 (logout test) detects this session is live and skips its own
+    // re-login, so no extra login/logout cycles are added to the total.
+    logStep('billing', 'Re-logging in for billing panel test (Phase 12 ended with logout)...');
+    await performLogin(sharedPage, 'billing');
+
+    // Open the Billing panel by clicking the nav link.
+    await sharedPage.click('#billing-toggle');
+
+    // Wait for the panel to become visible.
+    await sharedPage.waitForSelector('#billing-panel:not(.hidden)', { timeout: 5000 });
+
+    // Wait for the loading placeholder to be replaced by real content.
+    // (billing.ts replaces innerHTML='<p>Loading...</p>' with sections once the
+    // /api/credits response arrives.)
+    await sharedPage.waitForSelector('.billing-panel-section', { timeout: 10000 });
+
+    // ── Section 1: Balance ──────────────────────────────────────────────
+    const balanceEl = await sharedPage.$('.billing-balance-amount');
+    expect(balanceEl).not.toBeNull();
+
+    const balanceText = await balanceEl!.innerText();
+    // Must match $X.XXXX or -$X.XXXX (four decimal places, signed USD).
+    // The test user was drained to a negative balance by phase_11d_billing.
+    expect(balanceText).toMatch(/^-?\$\d+\.\d{4}$/);
+
+    console.log(`[OK] Billing balance displays: ${balanceText}`);
+
+    // ── Section 2: Current Storage and Cost grid ────────────────────────
+    const usageGrid = await sharedPage.$('.billing-usage-grid');
+    expect(usageGrid).not.toBeNull();
+
+    // These three labels are always present regardless of whether the user is
+    // above or below the free baseline. 'Your projected cost' and 'Estimated
+    // runway' are conditional (only rendered when billable_bytes > 0), and by
+    // the time the Playwright suite runs, phase_12_cleanup has deleted the test
+    // files, so the user is back below baseline.
+    const labels = await sharedPage.$$eval(
+      '.billing-usage-grid dt',
+      (els: Element[]) => els.map((el: Element) => el.textContent?.trim() ?? '')
+    );
+    expect(labels).toContain('Storage used');
+    expect(labels).toContain('Free baseline');
+    expect(labels).toContain('Billable usage');
+
+    console.log('[OK] Billing usage grid labels:', labels);
+
+    // ── Section 3: Transaction History ─────────────────────────────────
+    // Phase_11d_billing wrote >=1 'gift' row and >=1 'usage' row, so the
+    // table must be present and contain both transaction types.
+    const txTable = await sharedPage.$('.billing-tx-table');
+    expect(txTable).not.toBeNull();
+
+    const txTypes = await sharedPage.$$eval(
+      '.billing-tx-table tbody tr td:nth-child(2)',
+      (cells: Element[]) => cells.map((c: Element) => c.textContent?.trim() ?? '')
+    );
+    expect(txTypes).toContain('gift');
+    expect(txTypes).toContain('usage');
+
+    console.log('[OK] Transaction types in table:', txTypes);
+
+    // ── Negative-balance red highlighting ───────────────────────────────
+    // At least one amount cell should carry the .negative CSS class (usage rows
+    // debit from the balance, so amount_usd_microcents < 0).
+    const negCount = await sharedPage.$$eval(
+      '.billing-tx-amount.negative',
+      (els: Element[]) => els.length
+    );
+    expect(negCount).toBeGreaterThan(0);
+
+    console.log(`[OK] ${negCount} negative-amount cell(s) rendered in red`);
+
+    // Close the panel (click the Billing toggle again).
+    await sharedPage.click('#billing-toggle');
+
+    console.log('[OK] Billing panel test complete');
+  });
+
   // --------------------------------------------------------------------------
   // Phase 13: Logout + Post-Logout Checks
   // --------------------------------------------------------------------------
   test('Phase 13: Logout and post-logout security checks', async () => {
-    // Re-login one final time to test logout
-    logStep('13', 'Re-logging in for logout test...');
-    await performLogin(sharedPage, '13');
+    // The billing panel test (immediately above) leaves the page logged in.
+    // Skip the re-login if the session is still valid so we don't add an
+    // extra login/logout cycle.
+    const alreadyLoggedIn = await sharedPage.evaluate(() =>
+      localStorage.getItem('token') !== null
+    );
+    if (!alreadyLoggedIn) {
+      logStep('13', 'Re-logging in for logout test...');
+      await performLogin(sharedPage, '13');
+    } else {
+      logStep('13', 'Session still live from billing test -- skipping re-login');
+    }
 
     logStep('13', 'Clicking logout...');
     await sharedPage.click('#logout-link');
@@ -1074,121 +1176,6 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     expect(apiStatus).toBe(401);
 
     console.log('[OK] Phase 13: Logout verified -- session cleared, API returns 401');
-  });
-
-  // ── Billing Panel ──────────────────────────────────────────────────────────
-  // Requires:
-  //   - The shared page has been logged in earlier in the describe block.
-  //   - The e2e-test.sh phase_11d_billing has already run at least one
-  //     tick-now --sweep, so the test user has ≥1 'gift' row and ≥1 'usage'
-  //     row in their credit_transactions table, and their balance is negative.
-  //
-  // This test opens the Billing panel, verifies the DOM layout produced by
-  // client/static/js/src/ui/billing.ts, and confirms that the deleted
-  // beta-disclaimer element is absent.
-  //
-  // See docs/wip/storage-credits-v2.md §10.5 for the test plan spec.
-  // --------------------------------------------------------------------------
-  test('Billing panel renders balance, usage grid, and transaction history', async () => {
-    // Re-use the shared page (the user session may have expired during phase 13;
-    // if so, restore it by logging back in via the API directly so we don't
-    // depend on the Playwright login flow running in a specific order).
-    //
-    // In practice the serial describe runs this test BEFORE phase 13's logout,
-    // so the session token is still valid. But we guard defensively.
-    const isLoggedIn = await sharedPage.evaluate(() => {
-      return !!localStorage.getItem('arkfile_token');
-    });
-    if (!isLoggedIn) {
-      console.log('[SKIP] Billing panel test: user session not available (post-logout)');
-      return;
-    }
-
-    // Open the Billing panel by clicking the nav link.
-    await sharedPage.click('#billing-toggle');
-
-    // Wait for the panel to become visible.
-    await sharedPage.waitForSelector('#billing-panel:not(.hidden)', { timeout: 5000 });
-
-    // Wait for the loading placeholder to be replaced by real content.
-    // (billing.ts replaces innerHTML='<p>Loading…</p>' with sections once the
-    // /api/credits response arrives.)
-    await sharedPage.waitForSelector('.billing-panel-section', { timeout: 10000 });
-
-    // ── Section 1: Balance ──────────────────────────────────────────────
-    const balanceEl = await sharedPage.$('.billing-balance-amount');
-    expect(balanceEl).not.toBeNull();
-
-    const balanceText = await balanceEl!.innerText();
-    // Must match $X.XXXX or -$X.XXXX (four decimal places, signed USD).
-    // The test user was drained to a negative balance by phase_11d_billing.
-    expect(balanceText).toMatch(/^-?\$\d+\.\d{4}$/);
-
-    console.log(`[OK] Billing balance displays: ${balanceText}`);
-
-    // ── Section 2: Current Storage and Cost grid ────────────────────────
-    const usageGrid = await sharedPage.$('.billing-usage-grid');
-    expect(usageGrid).not.toBeNull();
-
-    // All three mandatory labels must be present.
-    const labels = await sharedPage.$$eval(
-      '.billing-usage-grid dt',
-      (els: Element[]) => els.map((el: Element) => el.textContent?.trim() ?? '')
-    );
-    expect(labels).toContain('Storage used');
-    expect(labels).toContain('Free baseline');
-    expect(labels).toContain('Billable usage');
-
-    // The test user has uploaded files above the 10 MiB baseline
-    // (ARKFILE_FREE_STORAGE_BYTES=10485760), so 'Your projected cost' and
-    // 'Estimated runway' should also appear.
-    expect(labels).toContain('Your projected cost');
-    expect(labels).toContain('Estimated runway');
-
-    console.log('[OK] Billing usage grid labels:', labels);
-
-    // ── Section 3: Transaction History ─────────────────────────────────
-    // Phase_11d_billing wrote ≥1 'gift' row and ≥1 'usage' row, so the
-    // table must be present and contain both transaction types.
-    const txTable = await sharedPage.$('.billing-tx-table');
-    expect(txTable).not.toBeNull();
-
-    const txTypes = await sharedPage.$$eval(
-      '.billing-tx-table tbody tr td:nth-child(2)',
-      (cells: Element[]) => cells.map((c: Element) => c.textContent?.trim() ?? '')
-    );
-    expect(txTypes).toContain('gift');
-    expect(txTypes).toContain('usage');
-
-    console.log('[OK] Transaction types in table:', txTypes);
-
-    // ── Negative-balance red highlighting ───────────────────────────────
-    // At least one amount cell should carry the .negative CSS class (usage rows
-    // debit from the balance, so amount_usd_microcents < 0).
-    const negCount = await sharedPage.$$eval(
-      '.billing-tx-amount.negative',
-      (els: Element[]) => els.length
-    );
-    expect(negCount).toBeGreaterThan(0);
-
-    console.log(`[OK] ${negCount} negative-amount cell(s) rendered in red`);
-
-    // ── Disclaimer footer is gone ───────────────────────────────────────
-    // The beta-disclaimer element was deleted server-side (handlers/credits.go
-    // no longer emits beta_disclaimer) and frontend-side (billing.ts no longer
-    // renders it). The element must not exist in the DOM.
-    const disclaimerCount = await sharedPage.$$eval(
-      '.billing-beta-disclaimer',
-      (els: Element[]) => els.length
-    );
-    expect(disclaimerCount).toBe(0);
-
-    console.log('[OK] .billing-beta-disclaimer is absent from DOM (correctly deleted)');
-
-    // Close the panel (click the Billing toggle again).
-    await sharedPage.click('#billing-toggle');
-
-    console.log('[OK] Billing panel test complete');
   });
 
 });
