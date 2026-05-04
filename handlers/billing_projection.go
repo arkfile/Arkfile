@@ -13,12 +13,12 @@ import (
 // blocks returned by /api/credits and /api/admin/credits/:username. The
 // projection is computed at request time from the user's current
 // total_storage_bytes, the per-instance free baseline, and the live customer
-// price (resolved by the billing package once Section D wires it in).
+// price (resolved by the billing package).
 //
 // Returns two map[string]interface{} blocks ready for JSON serialization.
 //
 // When the billing meter is disabled or the rate is not resolvable yet (for
-// example, during the brief startup window before Section D's scheduler
+// example, during the brief startup window before the scheduler
 // populates billing_settings), the rate-dependent fields fall back to safe
 // defaults (zero cost, nil runway) and the response remains structurally
 // identical so frontend/tests do not branch on enabled/disabled.
@@ -115,15 +115,12 @@ func buildCreditsRunway(balanceMicrocents, billableBytes, rateMicrocentsPerGiBPe
 // 0 on any error (including "user not found"); callers display the response
 // gracefully rather than failing.
 func getUserTotalStorageBytes(db *sql.DB, username string) int64 {
-	var n int64
-	err := db.QueryRow(
-		`SELECT total_storage_bytes FROM users WHERE username = ?`,
-		username,
-	).Scan(&n)
+	var f float64
+	err := db.QueryRow(`SELECT total_storage_bytes FROM users WHERE username = ?`, username).Scan(&f)
 	if err != nil {
 		return 0
 	}
-	return n
+	return int64(f)
 }
 
 // freeBaselineBytes returns the per-instance ARKFILE_FREE_STORAGE_BYTES.

@@ -28,7 +28,9 @@ type CreditTransaction struct {
 	TransactionID             *string   `json:"transaction_id,omitempty"`
 	Username                  string    `json:"username"`
 	AmountUSDMicrocents       int64     `json:"amount_usd_microcents"`
+	FormattedAmount           *string   `json:"formatted_amount,omitempty"`
 	BalanceAfterUSDMicrocents int64     `json:"balance_after_usd_microcents"`
+	FormattedBalanceAfter     *string   `json:"formatted_balance_after,omitempty"`
 	TransactionType           string    `json:"transaction_type"`
 	Reason                    *string   `json:"reason,omitempty"`
 	AdminUsername             *string   `json:"admin_username,omitempty"`
@@ -157,6 +159,13 @@ func GetUserTransactions(db *sql.DB, username string, limit int, offset int) ([]
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan transaction row: %w", err)
 		}
+
+		// Populate human-readable amounts so callers always receive
+		// four-decimal USD strings regardless of caller context.
+		fa := FormatCreditsUSD(t.AmountUSDMicrocents)
+		fb := FormatCreditsUSD(t.BalanceAfterUSDMicrocents)
+		t.FormattedAmount = &fa
+		t.FormattedBalanceAfter = &fb
 
 		if transactionID.Valid {
 			t.TransactionID = &transactionID.String
