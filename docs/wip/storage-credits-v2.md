@@ -568,7 +568,7 @@ Total ≈ 2,450 lines, ~60% non-test. (Earlier drafts of this doc included a row
 
 ### 11.1 Implementation Status (live)
 
-**DONE — all sections complete, 127/127 e2e tests verified (2026-05-02):**
+**DONE — all sections complete, 127/127 e2e-test.sh tests verified (2026-05-02); 15/15 Playwright tests verified (2026-05-03):**
 
 - A — schema foundation (`storage_limit_bytes` reconcile, microcent rename, `storage_usage_accumulator` + `billing_settings` tables, in-place migration).
 - B+C — `models/credits.go` rename to microcents; deleted deprecated `AddCredits`/`DebitCredits`/`SetCredits` and the `POST/PUT /api/admin/credits/:username` endpoints; extended `GET /api/credits` and `GET /api/admin/credits[/:username]` with `current_usage` and `credits_runway` blocks.
