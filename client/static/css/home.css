@@ -264,7 +264,8 @@ body {
     border-radius: 12px;
     border: 1px solid var(--depth-4);
     box-shadow: 0 2px 8px color-mix(in srgb, var(--depth-1) 80%, transparent);
-    overflow: hidden;
+    max-height: 640px;
+    overflow-y: auto;
 }
 
 .share-item {

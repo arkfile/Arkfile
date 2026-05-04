@@ -388,6 +388,11 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     margin-top: 2rem;
 }
 
+#filesList {
+    max-height: 640px;
+    overflow-y: auto;
+}
+
 .decrypt-banner {
     display: flex;
     align-items: center;
