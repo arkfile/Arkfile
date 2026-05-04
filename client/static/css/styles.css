@@ -963,6 +963,11 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     font-variant-numeric: tabular-nums;
 }
 
+.billing-tx-scroll {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
 .billing-tx-table {
     width: 100%;
     border-collapse: collapse;

@@ -265,7 +265,11 @@ function renderTransactionsSection(txs: Transaction[]): HTMLElement {
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
-  wrap.appendChild(table);
+
+  const scroll = document.createElement('div');
+  scroll.className = 'billing-tx-scroll';
+  scroll.appendChild(table);
+  wrap.appendChild(scroll);
 
   return wrap;
 }
