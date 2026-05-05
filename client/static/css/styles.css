@@ -472,6 +472,8 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     gap: 0.3rem;
     cursor: default;
     user-select: none;
+    flex-shrink: 0;
+    width: fit-content;
 }
 
 .encryption-type-account {
@@ -1741,13 +1743,21 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     border: 1px solid var(--depth-4);
 }
 
+.manual-entry-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: nowrap;
+}
+
 .manual-entry code {
     font-family: monospace;
     background-color: var(--depth-4);
     padding: 0.2rem 0.4rem;
     border-radius: 3px;
     font-size: 0.9rem;
-    word-break: break-all;
+    white-space: nowrap;
+    overflow-x: auto;
 }
 
 .totp-input {

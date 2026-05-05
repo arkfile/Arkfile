@@ -144,7 +144,7 @@ export class AuthExpiredError extends Error {
  * every subsequent file in the batch will hit the same wall.
  */
 export class QuotaExceededError extends Error {
-  constructor(message = 'Storage limit would be exceeded.') {
+  constructor(message = 'Storage full — upload limit reached.') {
     super(message);
     this.name = 'QuotaExceededError';
   }

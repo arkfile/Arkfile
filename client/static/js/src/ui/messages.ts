@@ -208,11 +208,11 @@ export class MessageManager {
 export function showError(message: string, duration?: number): HTMLElement {
   const options: ToastOptions = {
     message,
-    type: 'error'
+    type: 'error',
+    // Errors must be dismissed by the user (duration 0 = no auto-remove).
+    // A caller can pass an explicit duration to override this.
+    duration: duration !== undefined ? duration : 0,
   };
-  if (duration !== undefined) {
-    options.duration = duration;
-  }
   return MessageManager.showToast(options);
 }
 

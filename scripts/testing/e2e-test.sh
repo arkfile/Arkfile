@@ -708,7 +708,7 @@ phase_9_custom_password_file_operations() {
         --password-type custom"
 
     if [ $custom_upload_exit_code -eq 0 ]; then
-        CUSTOM_FILE_ID=$(echo "$custom_upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+        CUSTOM_FILE_ID=$(echo "$custom_upload_output" | grep '^\[OK\]' | grep -o 'file_id=[^ )]*' | cut -d= -f2)
         info "Custom-password File ID: $CUSTOM_FILE_ID"
         if [ -z "$CUSTOM_FILE_ID" ]; then
             warning "Could not extract File ID from custom upload output"
@@ -838,7 +838,7 @@ phase_8_file_operations() {
         --password-type account
 
     if [ $upload_exit_code -eq 0 ]; then
-        UPLOADED_FILE_ID=$(echo "$upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+        UPLOADED_FILE_ID=$(echo "$upload_output" | grep '^\[OK\]' | grep -o 'file_id=[^ )]*' | cut -d= -f2)
         info "Uploaded File ID: $UPLOADED_FILE_ID"
         if [ -z "$UPLOADED_FILE_ID" ]; then
             warning "Could not extract File ID from upload output"
@@ -987,7 +987,7 @@ phase_8_file_operations() {
         error "Failed to upload file for deletion test"
         record_test "File deletion (upload)" "FAIL"
     else
-        local delete_file_id=$(echo "$del_upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+        local delete_file_id=$(echo "$del_upload_output" | grep '^\[OK\]' | grep -o 'file_id=[^ )]*' | cut -d= -f2)
         info "Uploaded delete-test file: $delete_file_id"
 
         local del_output del_exit_code
@@ -1074,7 +1074,7 @@ phase_8_file_operations() {
         --password-type account
 
     if [ $extra_a_upload_code -eq 0 ]; then
-        EXTRA_FILE_A_ID=$(echo "$extra_a_upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+        EXTRA_FILE_A_ID=$(echo "$extra_a_upload_output" | grep '^\[OK\]' | grep -o 'file_id=[^ )]*' | cut -d= -f2)
         info "Extra file A ID: $EXTRA_FILE_A_ID"
         record_test "Extra file A upload (3MB)" "PASS"
     else
@@ -1111,7 +1111,7 @@ phase_8_file_operations() {
         --password-type account
 
     if [ $extra_b_upload_code -eq 0 ]; then
-        EXTRA_FILE_B_ID=$(echo "$extra_b_upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+        EXTRA_FILE_B_ID=$(echo "$extra_b_upload_output" | grep '^\[OK\]' | grep -o 'file_id=[^ )]*' | cut -d= -f2)
         info "Extra file B ID: $EXTRA_FILE_B_ID"
         record_test "Extra file B upload (7MB)" "PASS"
     else
@@ -1148,7 +1148,7 @@ phase_8_file_operations() {
         --password-type account
 
     if [ $extra_c_upload_code -eq 0 ]; then
-        EXTRA_FILE_C_ID=$(echo "$extra_c_upload_output" | grep "File ID:" | awk '{print $3}' | tr -d ' ')
+        EXTRA_FILE_C_ID=$(echo "$extra_c_upload_output" | grep '^\[OK\]' | grep -o 'file_id=[^ )]*' | cut -d= -f2)
         info "Extra file C ID: $EXTRA_FILE_C_ID"
         record_test "Extra file C upload (1MB)" "PASS"
     else
@@ -1156,6 +1156,97 @@ phase_8_file_operations() {
         record_test "Extra file C upload (1MB)" "FAIL"
     fi
     rm -f "$extra_file_c"
+
+    # 8.16: Multi-file batch upload (3 files, 16-18 MB each)
+    # Exercises the new sequential multi-file upload path introduced in
+    # docs/wip/general-enhancements.md item 10. File sizes span the
+    # 16 MB PlaintextChunkSize boundary to exercise both full-chunk and
+    # partial-last-chunk paths.
+    section "8.16: Multi-file batch upload (3 x 16-18 MB)"
+    local batch_file_a="$TEST_DATA_DIR/batch_a.bin"
+    local batch_file_b="$TEST_DATA_DIR/batch_b.bin"
+    local batch_file_c="$TEST_DATA_DIR/batch_c.bin"
+
+    $CLIENT generate-test-file --filename "$batch_file_a" --size 16777216 --pattern random >/dev/null 2>&1
+    $CLIENT generate-test-file --filename "$batch_file_b" --size 17825792 --pattern random >/dev/null 2>&1
+    $CLIENT generate-test-file --filename "$batch_file_c" --size 18874368 --pattern random >/dev/null 2>&1
+
+    local batch_upload_output batch_upload_exit_code
+    safe_exec batch_upload_output batch_upload_exit_code \
+        $CLIENT \
+        --server-url "$SERVER_URL" \
+        --tls-insecure \
+        upload \
+        --file "$batch_file_a" \
+        --file "$batch_file_b" \
+        --file "$batch_file_c" \
+        --password-type account
+
+    if [ $batch_upload_exit_code -eq 0 ]; then
+        record_test "Multi-file batch upload (3 files)" "PASS"
+
+        # Count the [OK] lines -- expect exactly 3
+        local ok_count
+        ok_count=$(echo "$batch_upload_output" | grep -c '^\[OK\]')
+        if [ "$ok_count" -eq 3 ]; then
+            record_test "Multi-file batch: 3 OK lines in output" "PASS"
+            info "Batch upload: $ok_count files confirmed uploaded"
+        else
+            warning "Expected 3 [OK] lines, got $ok_count"
+            record_test "Multi-file batch: 3 OK lines in output" "FAIL"
+        fi
+
+        # Verify summary line
+        if echo "$batch_upload_output" | grep -q "Uploaded: 3. Failed: 0. Skipped: 0."; then
+            record_test "Multi-file batch: summary line correct" "PASS"
+        else
+            warning "Batch summary line not found or unexpected format"
+            record_test "Multi-file batch: summary line correct" "FAIL"
+        fi
+
+        # Extract all 3 file IDs and verify each appears in the file list
+        local batch_ids
+        batch_ids=$(echo "$batch_upload_output" | grep '^\[OK\]' | grep -o 'file_id=[^ )]*' | cut -d= -f2)
+        info "Batch file IDs: $(echo "$batch_ids" | tr '\n' ' ')"
+
+        local batch_list_output batch_list_code
+        safe_exec batch_list_output batch_list_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --json
+
+        local all_found=true
+        while IFS= read -r batch_id; do
+            [ -z "$batch_id" ] && continue
+            if echo "$batch_list_output" | grep -q "$batch_id"; then
+                info "Batch file $batch_id verified in list"
+            else
+                warning "Batch file $batch_id NOT found in list"
+                all_found=false
+            fi
+        done <<< "$batch_ids"
+
+        if [ "$all_found" = true ]; then
+            record_test "Multi-file batch: all 3 files in list" "PASS"
+        else
+            record_test "Multi-file batch: all 3 files in list" "FAIL"
+        fi
+
+        # Clean up: delete all 3 uploaded batch files to keep quota clean
+        while IFS= read -r batch_id; do
+            [ -z "$batch_id" ] && continue
+            $CLIENT \
+                --server-url "$SERVER_URL" \
+                --tls-insecure \
+                delete-file \
+                --file-id "$batch_id" \
+                --confirm >/dev/null 2>&1
+        done <<< "$batch_ids"
+        info "Batch test files deleted"
+    else
+        error "Multi-file batch upload failed:"
+        echo "$batch_upload_output"
+        record_test "Multi-file batch upload (3 files)" "FAIL"
+    fi
+    rm -f "$batch_file_a" "$batch_file_b" "$batch_file_c"
 
     success "File operations phase complete"
 }

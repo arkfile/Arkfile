@@ -399,6 +399,25 @@ class ArkFileApp {
       });
     }
 
+    // Copy TOTP secret button
+    const copyTotpSecretBtn = document.getElementById('copy-totp-secret-btn') as HTMLButtonElement | null;
+    if (copyTotpSecretBtn) {
+      copyTotpSecretBtn.addEventListener('click', () => {
+        const secretEl = document.getElementById('manual-entry-code');
+        const secret = secretEl?.textContent?.trim() ?? '';
+        if (!secret) return;
+        navigator.clipboard.writeText(secret).then(() => {
+          const original = copyTotpSecretBtn.textContent;
+          copyTotpSecretBtn.textContent = 'copied!';
+          setTimeout(() => {
+            copyTotpSecretBtn.textContent = original;
+          }, 2000);
+        }).catch(() => {
+          // Clipboard API unavailable -- silently ignore; user can still select manually
+        });
+      });
+    }
+
     // TOTP verify code input: enable button when 6 digits entered
     const totpVerifyCode = document.getElementById('totp-verify-code') as HTMLInputElement | null;
     const verifyTotpBtn = document.getElementById('verify-totp-btn') as HTMLButtonElement | null;
