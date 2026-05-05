@@ -135,6 +135,10 @@ async function initiateTOTPSetupForRegistration(tempToken: string): Promise<TOTP
  * Display TOTP setup UI with QR code and backup codes
  */
 function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowData: TOTPSetupFlowData): void {
+  // Widen the modal to comfortably fit the 32-char TOTP secret + copy button
+  (modalContent as HTMLElement).style.maxWidth = '620px';
+  (modalContent as HTMLElement).style.width = '92%';
+
   modalContent.innerHTML = `
     <h3 class="totp-setup-title">Setup Two-Factor Authentication</h3>
     <p style="margin-bottom: 1.5rem; color: var(--foam-2);">
@@ -158,7 +162,8 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
     <div class="totp-step">
       <h3>Step 2: Manual Entry (Alternative)</h3>
       <div class="manual-entry">
-        <code>${setupData.manual_entry}</code>
+        <code id="totp-reg-secret" style="white-space: nowrap; overflow-x: auto; display: block;">${setupData.manual_entry}</code>
+        <button type="button" id="copy-totp-reg-btn" class="btn-copy-hash" style="margin-top: 0.5rem; display: block;">copy</button>
       </div>
       <p style="font-size: 0.9rem; color: var(--foam-2);">
         If you cannot scan the QR code, enter this code manually in your authenticator app.
@@ -239,6 +244,22 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
   if (downloadButton) {
     downloadButton.addEventListener('click', () => {
       downloadBackupCodes(setupData.backup_codes);
+    });
+  }
+
+  // Wire the copy button for the manual-entry secret.
+  // IDs use "reg" prefix to avoid colliding with the static index.html form IDs.
+  const copySecretBtn = document.getElementById('copy-totp-reg-btn') as HTMLButtonElement | null;
+  const secretCodeEl = document.getElementById('totp-reg-secret');
+  if (copySecretBtn && secretCodeEl) {
+    copySecretBtn.addEventListener('click', () => {
+      const secret = secretCodeEl.textContent?.trim() ?? '';
+      if (!secret) return;
+      navigator.clipboard.writeText(secret).then(() => {
+        const orig = copySecretBtn.textContent;
+        copySecretBtn.textContent = 'copied!';
+        setTimeout(() => { copySecretBtn.textContent = orig; }, 2000);
+      }).catch(() => {});
     });
   }
 

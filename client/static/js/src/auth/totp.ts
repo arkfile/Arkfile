@@ -542,7 +542,10 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData): voi
     <div style="margin-bottom: 20px;">
       <h4>Step 2: Manual Entry (Alternative)</h4>
       <div style="background: var(--depth-2); padding: 10px; border-radius: 4px; margin: 10px 0;">
-        <code style="font-family: monospace; word-break: break-all;">${setupData.manual_entry}</code>
+        <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:nowrap;">
+          <code id="totp-modal-secret" style="font-family: monospace; white-space: nowrap; overflow-x: auto;">${setupData.manual_entry}</code>
+          <button type="button" id="totp-modal-copy-btn" class="btn-copy-hash">copy</button>
+        </div>
       </div>
       <p style="font-size: 14px; color: var(--foam-2);">
         If you can't scan the QR code, enter this code manually in your authenticator app.
@@ -627,6 +630,21 @@ function showTOTPSetupData(modalContent: Element, setupData: TOTPSetupData): voi
     
     // Focus the input
     setTimeout(() => setupCodeInput.focus(), 100);
+  }
+
+  // Wire the copy button for the manual-entry secret
+  const copyBtn = document.getElementById('totp-modal-copy-btn') as HTMLButtonElement | null;
+  const secretEl = document.getElementById('totp-modal-secret');
+  if (copyBtn && secretEl) {
+    copyBtn.addEventListener('click', () => {
+      const secret = secretEl.textContent?.trim() ?? '';
+      if (!secret) return;
+      navigator.clipboard.writeText(secret).then(() => {
+        const orig = copyBtn.textContent;
+        copyBtn.textContent = 'copied!';
+        setTimeout(() => { copyBtn.textContent = orig; }, 2000);
+      }).catch(() => {});
+    });
   }
 }
 

@@ -384,6 +384,9 @@ func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfi
 		return "", fmt.Errorf("failed to stat file: %w", err)
 	}
 	fileSizeBytes := fileInfo.Size()
+	if fileSizeBytes == 0 {
+		return "", fmt.Errorf("cannot upload empty file (0 bytes): %s", filepath.Base(filePath))
+	}
 	totalEncSize := calculateTotalEncryptedSize(fileSizeBytes)
 	chunkSizeBytes := int64(crypto.PlaintextChunkSize())
 	chunkCount := (fileSizeBytes + chunkSizeBytes - 1) / chunkSizeBytes

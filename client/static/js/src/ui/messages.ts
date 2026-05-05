@@ -82,6 +82,10 @@ export class MessageManager {
     const messageText = document.createElement('div');
     messageText.textContent = options.message;
     messageText.style.flex = '1';
+    messageText.style.overflow = 'hidden';
+    messageText.style.wordBreak = 'break-word';
+    messageText.style.overflowWrap = 'break-word';
+    messageText.style.minWidth = '0';
 
     messageContent.appendChild(messageText);
 
@@ -230,11 +234,10 @@ export function showSuccess(message: string, duration?: number): HTMLElement {
 export function showWarning(message: string, duration?: number): HTMLElement {
   const options: ToastOptions = {
     message,
-    type: 'warning'
+    type: 'warning',
+    // Warnings must also be dismissed by the user (duration 0 = no auto-remove).
+    duration: duration !== undefined ? duration : 0,
   };
-  if (duration !== undefined) {
-    options.duration = duration;
-  }
   return MessageManager.showToast(options);
 }
 

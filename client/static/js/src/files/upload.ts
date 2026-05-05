@@ -45,7 +45,7 @@ import {
   KEY_SIZES,
   getChunkingParams,
 } from '../crypto/constants.js';
-import { showError, showSuccess } from '../ui/messages.js';
+import { showError, showSuccess, showWarning } from '../ui/messages.js';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
 import { checkDuplicate, addDigest } from '../utils/digest-cache.js';
 import {
@@ -473,6 +473,9 @@ export async function uploadFile(
   // Validate inputs
   if (!file) {
     throw new Error('No file provided');
+  }
+  if (file.size === 0) {
+    throw new Error(`Cannot upload empty file (0 bytes): ${file.name}`);
   }
   if (!username) {
     throw new Error('Username is required');
@@ -1124,22 +1127,46 @@ export async function handleFileUpload(): Promise<void> {
       const skipped = batchResult.skipped.length;
       let summary = `${ok} of ${fileCount} files uploaded.`;
       if (failed > 0) {
-        const samples = batchResult.failed
-          .slice(0, 3)
-          .map((f) => `${f.name}: ${f.reason}`)
-          .join('; ');
-        summary += ` ${failed} failed (${samples}${batchResult.failed.length > 3 ? '; ...' : ''}).`;
+        if (batchResult.fatal) {
+          // Fatal abort: just say how many failed, no verbose filename+reason samples
+          // (the abort line below already explains why)
+          summary += ` ${failed} failed.`;
+        } else {
+          // Non-fatal failures: show up to 3 filenames only (no reason text)
+          const samples = batchResult.failed
+            .slice(0, 3)
+            .map((f) => f.name)
+            .join(', ');
+          summary += ` ${failed} failed (${samples}${batchResult.failed.length > 3 ? ', ...' : ''}).`;
+        }
       }
       if (skipped > 0) {
         summary += ` ${skipped} skipped.`;
       }
       if (batchResult.fatal) {
-        summary += ` Aborted: ${batchResult.fatal.reason}`;
+        // Use a short human-readable reason instead of the raw server error message
+        const reason = batchResult.fatal.reason.toLowerCase();
+        let shortReason: string;
+        if (reason.includes('storage') || reason.includes('quota') || reason.includes('limit')) {
+          shortReason = 'Storage full';
+        } else if (reason.includes('session') || reason.includes('expired') || reason.includes('auth')) {
+          shortReason = 'Session expired';
+        } else if (reason.includes('too many') || reason.includes('in progress')) {
+          shortReason = 'Too many uploads in progress';
+        } else {
+          shortReason = batchResult.fatal.reason.slice(0, 40);
+        }
+        summary += ` Aborted: ${shortReason}.`;
       }
       if (failed === 0 && skipped === 0 && !batchResult.fatal) {
+        // All files succeeded with no abort.
         showSuccess(summary);
+      } else if (batchResult.fatal) {
+        // Batch was aborted (quota, auth, etc.) -- amber warning regardless of how
+        // many files succeeded before the abort. Never use green for an abort.
+        showWarning(summary);
       } else if (ok > 0) {
-        // Partial success -- show as success-with-warning.
+        // Some files failed non-fatally but no abort -- partial success in green.
         showSuccess(summary);
       } else {
         showError(summary);

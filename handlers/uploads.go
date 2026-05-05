@@ -105,7 +105,32 @@ func CreateUploadSession(c echo.Context) error {
 		request.ChunkSize = int(crypto.PlaintextChunkSize())
 	}
 
-	totalChunks := (request.TotalSize + int64(request.ChunkSize) - 1) / int64(request.ChunkSize)
+	// Compute the expected number of chunks from the *encrypted* total size.
+	//
+	// The client sends request.TotalSize as the total encrypted byte count, which
+	// is larger than the plaintext file size. Each encrypted chunk carries
+	// AES-GCM overhead: nonce (12 bytes) + tag (16 bytes) = 28 bytes.
+	// The first chunk additionally has a 2-byte envelope header prepended.
+	//
+	// Dividing the encrypted total by the *plaintext* chunk size (as was done
+	// previously) overcounts by 1 for files whose plaintext size is exactly
+	// N × PlaintextChunkSize, because the header+overhead bytes push the
+	// encrypted size just over the next multiple of ChunkSize.
+	//
+	// The correct derivation:
+	//   encryptedChunkSize = ChunkSize + 28  (plaintext + GCM overhead)
+	//   effectiveSize      = TotalSize - 2   (strip the one-time 2-byte header)
+	//   totalChunks        = ceil(effectiveSize / encryptedChunkSize)
+	//
+	// This matches the number of uploadChunk requests the client will actually make.
+	const aesGcmOverheadBytes = 28 // nonce(12) + tag(16)
+	const envelopeHeaderBytes = 2  // version(1) + keyType(1), prepended to chunk 0 only
+	encryptedChunkSize := int64(request.ChunkSize) + aesGcmOverheadBytes
+	effectiveEncryptedSize := request.TotalSize - envelopeHeaderBytes
+	if effectiveEncryptedSize <= 0 {
+		effectiveEncryptedSize = encryptedChunkSize // empty file: at least 1 chunk
+	}
+	totalChunks := (effectiveEncryptedSize + encryptedChunkSize - 1) / encryptedChunkSize
 
 	// Begin transaction
 	tx, err := database.DB.Begin()
