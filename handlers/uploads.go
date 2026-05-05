@@ -33,6 +33,14 @@ var (
 	hashStateMutex       sync.RWMutex
 )
 
+// Per-user cap on concurrent in-progress upload sessions. A buggy or hostile
+// client can otherwise open arbitrary numbers of init'd-but-never-completed
+// sessions, occupying storage they have not yet finalized and starving
+// themselves of the ability to upload anything new. The cap is per-user, so
+// it never affects unrelated users. See docs/wip/general-enhancements.md
+// item 4.
+const maxInProgressUploadSessionsPerUser = 4
+
 // CreateUploadSession initializes a new chunked upload
 func CreateUploadSession(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
@@ -105,6 +113,50 @@ func CreateUploadSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to start transaction")
 	}
 	defer tx.Rollback()
+
+	// Per-user concurrent in-progress upload session cap with opportunistic
+	// stale-session cleanup. Both queries are scoped to the calling user, so
+	// they cannot interfere with other users. The cleanup marks expired
+	// in-progress sessions as 'abandoned' so they no longer count toward the
+	// cap. The count is taken inside the same transaction as the subsequent
+	// INSERT, so we cannot race past the cap. See docs/wip/general-enhancements.md
+	// item 4.
+	if _, err := tx.Exec(
+		`UPDATE upload_sessions
+		    SET status = 'abandoned', updated_at = CURRENT_TIMESTAMP
+		  WHERE owner_username = ?
+		    AND status = 'in_progress'
+		    AND expires_at < CURRENT_TIMESTAMP`,
+		username,
+	); err != nil {
+		logging.ErrorLogger.Printf("Failed to mark expired upload sessions as abandoned for user %s: %v", username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to clean up stale upload sessions")
+	}
+
+	var inProgressCount int
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM upload_sessions WHERE owner_username = ? AND status = 'in_progress'`,
+		username,
+	).Scan(&inProgressCount); err != nil {
+		logging.ErrorLogger.Printf("Failed to count in-progress upload sessions for user %s: %v", username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to verify upload session capacity")
+	}
+	if inProgressCount >= maxInProgressUploadSessionsPerUser {
+		logging.InfoLogger.Printf("User %s blocked at upload session cap (%d in-progress, max %d)",
+			username, inProgressCount, maxInProgressUploadSessionsPerUser)
+		// Stable error code 'too_many_in_progress_uploads' lets clients switch
+		// on a code rather than parsing English. Aligned with the standing
+		// pattern in docs/wip/general-enhancements.md item 9.
+		return c.JSON(http.StatusTooManyRequests, map[string]interface{}{
+			"success": false,
+			"error":   "too_many_in_progress_uploads",
+			"message": fmt.Sprintf("You have %d upload(s) already in progress (max %d). Cancel one or wait for it to complete or expire.", inProgressCount, maxInProgressUploadSessionsPerUser),
+			"data": map[string]interface{}{
+				"in_progress_count": inProgressCount,
+				"max_in_progress":   maxInProgressUploadSessionsPerUser,
+			},
+		})
+	}
 
 	// Generate storage ID and calculate padded size
 	storageID := models.GenerateStorageID()

@@ -93,3 +93,71 @@ Each file may carry up to 16 user-chosen tags, each tag a UTF-8 string of 1 to 6
 Tags can be set at upload time (a single text input on the upload form, comma-separated; CLI flag `--tag` repeatable) and updated at any later time via a small endpoint that accepts a fresh ciphertext-and-nonce pair for an existing file ID and replaces the stored values atomically. Because the server never reads the plaintext, the update path requires no validation beyond ownership, ciphertext format, and the standard AAD round-trip on the next read. There is no schema for "the set of all tags" -- that set exists only client-side, computed lazily by decrypting each file's tag blob in the listing view and forming the union, and surfaced in the UI as a row of clickable filter chips above the file list. Filtering is purely a client-side operation against the in-memory decrypted metadata cache (item 6), so it imposes no new server cost and no new server-observable query patterns.
 
 This stays well within Arkfile's privacy posture: the server learns nothing about file organization beyond what it already observes (existence, size, upload time), and an attacker with access to the database sees only a small additional ciphertext blob per file with the same AAD-bound integrity guarantees as the existing per-file metadata fields. Cost is small -- one column pair on the file metadata table, one encrypt-and-decrypt path mirrored across the TS frontend and the Go CLI, one update endpoint, one filter UI, and a documented limit on tag count and length so future contributors don't drift the bounds. Strictly opt-in: a user who never adds a tag is unaffected, and the column simply stays NULL.
+
+---
+
+# MULTI FILE UPLOAD WORK
+
+## Implementation status
+
+### Item 4: Server-side cap on concurrent in-progress upload sessions, with lazy stale-session cleanup
+
+**Implemented.** `handlers/uploads.go` `CreateUploadSession` now enforces a per-user cap of 4 concurrent in-progress sessions and opportunistically marks expired in-progress sessions as `abandoned` in the same transaction. The cap and the cleanup are both per-user (no cross-user scope), the cleanup uses `expires_at < CURRENT_TIMESTAMP` so it never affects fresh sessions, and the count check is taken inside the same transaction as the subsequent `INSERT INTO upload_sessions` so the cap cannot be raced past. When the cap is reached the server returns HTTP 429 with the stable error code `too_many_in_progress_uploads`. Constant: `maxInProgressUploadSessionsPerUser = 4`. The existing single-column indexes `idx_upload_sessions_owner` and `idx_upload_sessions_status` on `upload_sessions` cover both query paths; no new indexes were added.
+
+### Item 10: Sequential multi-file upload via the existing per-file pipeline
+
+**Implemented.** Both clients now accept multiple files per upload action and walk through them sequentially using the unchanged per-file server pipeline.
+
+**Frontend** (`client/static/index.html`, `client/static/js/src/app.ts`, `client/static/js/src/files/upload.ts`):
+- `<input type="file" multiple>` added; styled label shows the single filename for one file or `<N> files selected` for many.
+- New typed error classes: `AuthExpiredError`, `QuotaExceededError`, `AccountDisabledError`, `TooManyInProgressUploadsError`.
+- `isFatalUploadError(err)` classifier distinguishes batch-aborting failures from per-file skippable failures.
+- `apiRequest()` wraps every upload-pipeline call with a 401-refresh-retry so a mid-chunk token expiry is handled automatically.
+- `ensureFreshToken()` checks JWT remaining time (5-minute threshold) before each file in the batch.
+- New `uploadFiles(files[], options)` batch wrapper: resolves account key + password once for the whole batch, loops the existing per-file `uploadFile()` pipeline sequentially, tracks `succeeded[]`/`failed[]`/`skipped[]`, and aborts on fatal errors.
+- `handleFileUpload()` rewritten to drive the batch, show per-batch progress (`File 3 of 10: foo.bin -- Uploading... (chunk 4/7)`), and render a clear summary on completion. File list refreshed once at the end of the batch.
+- Memory profile per file is unchanged: one plaintext chunk + one encrypted chunk in memory at a time (~32 MB peak), regardless of file size or batch size.
+- One password (account or custom) and one hint apply to every file in the batch.
+
+**CLI** (`cmd/arkfile-client/commands.go`, `cmd/arkfile-client/main.go`):
+- `arkfile-client upload` now accepts a repeatable `--file` flag, positional path arguments, and `--dir <path>` with `--recursive` opt-in.
+- The directory walker skips dotfiles and non-regular files, rejects symlinks that resolve outside the supplied root, deduplicates by absolute path, and sorts deterministically.
+- `refreshSessionToken()`: POST `/api/refresh`, mutate `*AuthSession` in place, atomically persist to disk (temp + `rename(2)`, mode 0600).
+- `atomicSaveAuthSession()`: safe against crash mid-write; temp file cleaned up on failure.
+- `ensureFreshSessionToken()`: preemptive 5-minute threshold between files.
+- `makeRequestWithSession()`: session-aware wrapper with 401-refresh-retry; classifies 429 `too_many_in_progress_uploads` and 403 quota/disabled into typed sentinel errors.
+- `isFatalUploadError()`: mirrors the TS classifier.
+- `handleUploadCommand()`: session, account key, KEK, and (if `--password-type custom`) custom password resolved once. Sequential per-file loop with `ensureFreshSessionToken` check before each file. SIGINT-safe: current file allowed to finish; remaining files skipped and reported.
+- Per-file output: `[OK] name (file_id=...)` or `[X] name: reason`. Final line: `Uploaded: A. Failed: B. Skipped: C.`. Non-zero exit on partial failure.
+- `doChunkedUpload` init and finalize calls routed through `makeRequestWithSession` for 401-refresh-retry coverage.
+
+### Item 11: Per-file partial-failure handling as a standing pattern
+
+**Seeded, not yet generalized.** Both clients ship `isFatalUploadError(err)` consumed by the upload batch loop. Generalizing to other batch-shaped operations (batch download, batch delete, batch share, batch export) is the next step under this item.
+
+## Long-running batch operations: JWT refresh contract
+
+To support multi-file batches whose total runtime can exceed the JWT lifetime (default 30 minutes via `JWT_TOKEN_LIFETIME_MINUTES`), both clients follow the same contract:
+
+1. **Preemptive refresh between files.** Before starting each file in a batch, check the JWT's remaining time. If below 5 minutes, refresh via `/api/refresh` before the next file. Prevents mid-chunk 401 when a cheap inter-file refresh is available.
+2. **One refresh-and-retry on mid-flight 401.** Every API call inside the upload pipeline goes through a session-aware wrapper. On HTTP 401: one refresh attempt + one retry. If still 401 after refresh, or if refresh itself fails, error is classified as fatal (`AuthExpiredError` / `errAuthExpired`) and the batch aborts.
+3. **Atomic on-disk session rotation (CLI).** `refreshSessionToken` writes new tokens to a sibling temp file and `rename(2)`s over the live session file (mode 0600). Crash mid-rotation cannot leave on-disk state inconsistent.
+4. **Refresh-token rotation policy.** The server already rotates the refresh token on every `/api/refresh` call (sliding 14-day window). Clients persist the new token immediately on receipt. Refresh failure is fatal -- no second-chance retry.
+
+**HTTP client timeout note (CLI only):** The CLI's `http.Client` per-request timeout defaults to 120 seconds (`--timeout 120`, range 10-600). This timeout applies per-request (per-chunk), not per file or per batch. Each chunk is 16 MB plaintext (from `crypto/chunking-params.json`). At localhost/LAN speeds this timeout is never a concern; at very slow WAN uplinks (<1 Mbps) a single chunk could approach the limit. Users on slow links should pass `--timeout 600`. The browser frontend uses `fetch()` with no client-side timeout and is not affected.
+
+This contract is documented here so future contributors changing auth-related code do not accidentally regress the long-running-batch case.
+
+## Testing
+
+### Unit tests (written, passing)
+
+**Go** (`cmd/arkfile-client/upload_batch_test.go`): 22 tests covering `isFatalUploadError` (sentinel + textual classification), `collectUploadInputs` (single file, dedup, sort, `--dir` non-recursive, `--dir --recursive`, dotfile skip, non-existent file error, empty input), `atomicSaveAuthSession` (correct write, mode 0600, no temp file left over, overwrite), `ensureFreshSessionToken` (no refresh when plenty of time, fires when near expiry, fires when expired, returns `errAuthExpired` on 401 from server, nil session), and `makeRequestWithSession` (200 passthrough, 401-then-refresh-then-200 with session mutation, 401-then-refresh-also-401, 429 `too_many_in_progress_uploads`, 403 quota exceeded, nil session). All 22 pass.
+
+**TypeScript** (`client/static/js/src/__tests__/upload-batch.test.ts`): 22 tests covering typed error classes (name, message, instanceof), `isFatalUploadError` (null/undefined, each typed error, generic error, textual 429 code), token expiry helpers (`getTokenExpiry` null when no token, correct Date for stored JWT, `isTokenExpired` for past/future), and the `uploadFiles` batch loop (empty list, all-succeed shape, fatal 429 aborts batch and marks remaining as skipped, classifier correctness). All 22 pass. All 311 pre-existing TypeScript tests continue to pass.
+
+### End-to-end testing
+
+No new e2e tests added to `e2e-test.sh` or `e2e-playwright.ts` in this change. The multi-file batch loop and JWT refresh contract should be exercised manually against a `sudo bash scripts/dev-reset.sh` instance before finalizing.
+
+**Scenario validation:** 10 × 100 MB files to localhost SeaweedFS backend is expected to work correctly on both clients. The default storage limit is 1.1 GB (`DefaultStorageLimit = 1181116006` in `models/user.go`), so 10 × 100 MB (~953 MiB encrypted) fits in one batch. A second identical batch on the same user will hit the quota wall and the batch will abort with a clear `QuotaExceededError` / `QuotaExceeded` message after the last file that fits.

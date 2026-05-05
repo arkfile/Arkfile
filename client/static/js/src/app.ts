@@ -344,7 +344,14 @@ class ArkFileApp {
     if (fileInput && fileInputLabel && fileInputName) {
       fileInput.addEventListener('change', () => {
         if (fileInput.files && fileInput.files.length > 0) {
-          fileInputName.textContent = fileInput.files[0].name;
+          // Show the single filename when one file is selected; show a count
+          // when multiple are selected. The actual files are read directly
+          // off fileInput.files at upload time, so we don't need to store them.
+          if (fileInput.files.length === 1) {
+            fileInputName.textContent = fileInput.files[0].name;
+          } else {
+            fileInputName.textContent = `${fileInput.files.length} files selected`;
+          }
           fileInputLabel.classList.add('has-file');
         } else {
           fileInputName.textContent = '';

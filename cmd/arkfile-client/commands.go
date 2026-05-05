@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -27,30 +28,177 @@ import (
 // UPLOAD COMMAND
 // ============================================================
 
+// multiStringFlag implements flag.Value for repeatable --file flags.
+// Each occurrence appends to the slice. This is what enables
+//
+//	arkfile-client upload --file a --file b --file c
+type multiStringFlag []string
+
+func (m *multiStringFlag) String() string {
+	return strings.Join(*m, ", ")
+}
+
+func (m *multiStringFlag) Set(v string) error {
+	*m = append(*m, v)
+	return nil
+}
+
+// collectUploadInputs builds the deduplicated, deterministically-ordered
+// list of files to upload from the various input sources:
+//   - repeatable --file flag values
+//   - positional args
+//   - --dir DIR (non-recursive by default; --recursive opts in)
+//
+// Hidden files (starting with '.') are skipped. Non-regular files are
+// skipped. Symlinks that resolve outside the supplied --dir root are
+// rejected so a malicious symlink cannot exfiltrate arbitrary files.
+//
+// Returns paths in stable sorted order so behavior is reproducible.
+func collectUploadInputs(fileFlags []string, positional []string, dir string, recursive bool) ([]string, error) {
+	seen := make(map[string]struct{})
+	results := make([]string, 0, len(fileFlags)+len(positional))
+
+	addPath := func(p string) error {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return fmt.Errorf("failed to resolve %s: %w", p, err)
+		}
+		if _, ok := seen[abs]; ok {
+			return nil
+		}
+		if err := isSeekableFile(p); err != nil {
+			return fmt.Errorf("not uploadable: %w", err)
+		}
+		seen[abs] = struct{}{}
+		results = append(results, p)
+		return nil
+	}
+
+	for _, p := range fileFlags {
+		if p == "" {
+			continue
+		}
+		if err := addPath(p); err != nil {
+			return nil, err
+		}
+	}
+	for _, p := range positional {
+		if p == "" {
+			continue
+		}
+		if err := addPath(p); err != nil {
+			return nil, err
+		}
+	}
+
+	if dir != "" {
+		dirAbs, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve --dir: %w", err)
+		}
+		walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, werr error) error {
+			if werr != nil {
+				return werr
+			}
+			// Skip dotfiles and dot-directories.
+			base := filepath.Base(path)
+			if base != "." && strings.HasPrefix(base, ".") {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if info.IsDir() {
+				if path == dir {
+					return nil
+				}
+				if !recursive {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			// Only regular files. This excludes sockets, pipes, devices, etc.
+			if info.Mode()&os.ModeType != 0 {
+				// Possibly a symlink: resolve and ensure it stays inside dirAbs.
+				if info.Mode()&os.ModeSymlink != 0 {
+					real, err := filepath.EvalSymlinks(path)
+					if err != nil {
+						logVerbose("Skipping symlink %s: %v", path, err)
+						return nil
+					}
+					realAbs, err := filepath.Abs(real)
+					if err != nil {
+						return nil
+					}
+					rel, err := filepath.Rel(dirAbs, realAbs)
+					if err != nil || strings.HasPrefix(rel, "..") {
+						logVerbose("Skipping symlink that escapes --dir root: %s -> %s", path, realAbs)
+						return nil
+					}
+					st, err := os.Stat(realAbs)
+					if err != nil || !st.Mode().IsRegular() {
+						return nil
+					}
+					// Fall through and add the resolved path.
+					path = realAbs
+				} else {
+					return nil
+				}
+			}
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				return nil
+			}
+			if _, ok := seen[abs]; ok {
+				return nil
+			}
+			seen[abs] = struct{}{}
+			results = append(results, path)
+			return nil
+		})
+		if walkErr != nil {
+			return nil, fmt.Errorf("failed to walk --dir: %w", walkErr)
+		}
+	}
+
+	sort.Strings(results)
+	return results, nil
+}
+
 func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string) error {
 	fs := flag.NewFlagSet("upload", flag.ExitOnError)
-	filePath := fs.String("file", "", "Path to file to upload")
+	var fileFlags multiStringFlag
+	fs.Var(&fileFlags, "file", "Path to a file to upload (may be repeated for multiple files)")
+	dir := fs.String("dir", "", "Directory of files to upload (non-recursive by default)")
+	recursive := fs.Bool("recursive", false, "When used with --dir, recurse into subdirectories")
 	passwordType := fs.String("password-type", "account", "Password type: account or custom")
-	hint := fs.String("hint", "", "Password hint (for custom password)")
-	force := fs.Bool("force", false, "Force upload even if file is a duplicate")
+	hint := fs.String("hint", "", "Password hint (for custom password) -- one hint applies to every file in the batch")
+	force := fs.Bool("force", false, "Force upload even if a file is a duplicate")
 
 	fs.Usage = func() {
-		fmt.Printf("Usage: arkfile-client upload --file FILE [--password-type account|custom] [--hint HINT] [--force]\n\nEncrypt and upload a file using streaming per-chunk AES-GCM.\n")
+		fmt.Printf("Usage: arkfile-client upload [--file FILE]... [PATHS...] [--dir DIR [--recursive]] [--password-type account|custom] [--hint HINT] [--force]\n\n" +
+			"Encrypt and upload one or more files sequentially using streaming per-chunk AES-GCM.\n" +
+			"Multiple files may be supplied via repeated --file flags, positional path arguments, and/or a --dir.\n" +
+			"One password (and one hint) applies to every file in the batch.\n" +
+			"Files are uploaded one at a time. Per-file failures are logged and skipped; fatal\n" +
+			"conditions (auth expired, quota exceeded, account disabled, server's per-user upload\n" +
+			"session cap reached) abort the batch and the remaining files are reported as skipped.\n" +
+			"The JWT is refreshed proactively between files when within 5 minutes of expiry.\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	if *filePath == "" {
-		return fmt.Errorf("--file is required")
-	}
-
-	// Verify it's a seekable regular file
-	if err := isSeekableFile(*filePath); err != nil {
+	files, err := collectUploadInputs([]string(fileFlags), fs.Args(), *dir, *recursive)
+	if err != nil {
 		return err
 	}
+	if len(files) == 0 {
+		return fmt.Errorf("no files supplied: provide --file, positional arguments, and/or --dir")
+	}
 
+	// Resolve session and account key once for the whole batch.
 	session, err := requireSession(config)
 	if err != nil {
 		return err
@@ -62,88 +210,178 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 	}
 	defer clearBytes(accountKey)
 
-	// Determine KEK based on password type
+	// Determine KEK once for the whole batch. Same password applies to
+	// every file -- this matches the documented UX (one prompt per
+	// multi-select). Per-file custom passwords are still trivially
+	// achievable by uploading one file at a time.
 	var kek []byte
 	var finalPasswordType string
-
 	switch *passwordType {
 	case "account":
 		kek = accountKey
 		finalPasswordType = "account"
 	case "custom":
 		customPass, err := readPasswordWithStrengthCheck(
-			fmt.Sprintf("Enter custom password for %s: ", filepath.Base(*filePath)),
+			"Enter custom password for this batch: ",
 			"custom",
 		)
 		if err != nil {
 			return fmt.Errorf("failed to read custom password: %w", err)
 		}
 		defer clearBytes(customPass)
-
-		// Derive KEK from custom password using Argon2id
-		// Uses username-based domain-separation salt so the same password+username always produces the same KEK
 		kek = crypto.DeriveCustomPasswordKey(customPass, config.Username)
 		defer clearBytes(kek)
-
 		finalPasswordType = "custom"
 	default:
 		return fmt.Errorf("invalid --password-type: must be 'account' or 'custom'")
 	}
 
-	// Compute plaintext SHA-256 for deduplication
-	logVerbose("Computing SHA-256 digest of %s...", *filePath)
-	sha256hex, err := computeStreamingSHA256(*filePath)
+	// Set up SIGINT handler so the user can interrupt cleanly between
+	// files. The current file is allowed to finish; the next iteration
+	// of the loop observes the flag and reports remaining files as skipped.
+	interrupted := false
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	defer signal.Stop(sigCh)
+	go func() {
+		if _, ok := <-sigCh; ok {
+			interrupted = true
+		}
+	}()
+
+	if len(files) > 1 {
+		fmt.Printf("Uploading %d files sequentially...\n", len(files))
+	}
+
+	succeeded := 0
+	failed := 0
+	skipped := 0
+	var fatalReason string
+
+	for i, path := range files {
+		if interrupted {
+			skipped++
+			fmt.Printf("[!] %s: skipped (interrupted)\n", filepath.Base(path))
+			continue
+		}
+
+		// Preemptively refresh the JWT if it's near expiry. This
+		// prevents mid-chunk 401s on long batches.
+		if rerr := ensureFreshSessionToken(client, session, 0); rerr != nil {
+			fatalReason = fmt.Sprintf("session refresh failed before %s: %v", filepath.Base(path), rerr)
+			fmt.Printf("[X] %s: %s\n", filepath.Base(path), fatalReason)
+			// Mark this file failed, then mark remaining as skipped.
+			failed++
+			for j := i + 1; j < len(files); j++ {
+				fmt.Printf("[!] %s: skipped (session expired earlier in batch)\n", filepath.Base(files[j]))
+				skipped++
+			}
+			break
+		}
+
+		fileID, err := uploadOneFile(client, session, config, accountKey, kek, finalPasswordType, *hint, path, *force)
+		if err == nil {
+			succeeded++
+			fmt.Printf("[OK] %s (file_id=%s)\n", filepath.Base(path), fileID)
+			continue
+		}
+
+		// Classify error.
+		if isFatalUploadError(err) {
+			fatalReason = err.Error()
+			failed++
+			fmt.Printf("[X] %s: %s\n", filepath.Base(path), err)
+			for j := i + 1; j < len(files); j++ {
+				fmt.Printf("[!] %s: skipped (aborted after fatal error)\n", filepath.Base(files[j]))
+				skipped++
+			}
+			break
+		}
+
+		// Non-fatal: record and continue.
+		failed++
+		fmt.Printf("[X] %s: %s\n", filepath.Base(path), err)
+	}
+
+	// Final summary line.
+	if len(files) > 1 || failed > 0 || skipped > 0 {
+		fmt.Printf("\nUploaded: %d. Failed: %d. Skipped: %d.\n", succeeded, failed, skipped)
+		if fatalReason != "" {
+			fmt.Printf("Aborted: %s\n", fatalReason)
+		}
+	}
+
+	if failed > 0 || skipped > 0 {
+		// Non-zero exit: scripts can detect partial failure cleanly.
+		// We still return a Go error so main()'s logError + os.Exit(1)
+		// path runs.
+		return fmt.Errorf("batch finished with %d failed and %d skipped (uploaded %d/%d)",
+			failed, skipped, succeeded, len(files))
+	}
+
+	return nil
+}
+
+// uploadOneFile performs the full per-file upload pipeline using the
+// already-resolved session, accountKey and KEK. Used by the multi-file
+// batch loop. Errors classified as fatal by isFatalUploadError() abort
+// the batch; other errors mark the file as failed and the loop moves on.
+func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfig, accountKey, kek []byte, finalPasswordType, hint, filePath string, force bool) (string, error) {
+	if err := isSeekableFile(filePath); err != nil {
+		return "", err
+	}
+
+	// Compute plaintext SHA-256 for deduplication.
+	logVerbose("Computing SHA-256 digest of %s...", filePath)
+	sha256hex, err := computeStreamingSHA256(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to compute SHA-256: %w", err)
+		return "", fmt.Errorf("failed to compute SHA-256: %w", err)
 	}
 	logVerbose("Plaintext SHA-256: %s", sha256hex)
 
-	// Deduplication check (unless --force)
-	if !*force {
+	// Deduplication check (unless --force). Duplicates are non-fatal:
+	// the file is fine, just already uploaded. Reported as a skippable
+	// failure so the rest of the batch can continue.
+	if !force {
 		agentClient, agentErr := NewAgentClient()
 		if agentErr == nil {
 			dedupResult, dedupErr := performDedupCheck(agentClient, client, session, accountKey, sha256hex)
 			if dedupErr == nil && dedupResult.IsDuplicate {
 				if dedupResult.Filename != "" {
-					return fmt.Errorf("duplicate file: '%s' already exists (file_id: %s). Use --force to upload anyway", dedupResult.Filename, dedupResult.FileID)
+					return "", fmt.Errorf("duplicate of '%s' (file_id=%s); use --force to upload anyway", dedupResult.Filename, dedupResult.FileID)
 				}
-				return fmt.Errorf("duplicate file: already uploaded (file_id: %s). Use --force to upload anyway", dedupResult.FileID)
+				return "", fmt.Errorf("duplicate (file_id=%s); use --force to upload anyway", dedupResult.FileID)
 			}
 		}
 	}
 
-	// Generate FEK
+	// Generate FEK and wrap it.
 	fek, err := generateFEK()
 	if err != nil {
-		return fmt.Errorf("failed to generate file encryption key: %w", err)
+		return "", fmt.Errorf("failed to generate file encryption key: %w", err)
 	}
 	defer clearBytes(fek)
 
-	// Determine key type byte for envelope header
-	var keyTypeByte byte
-	if finalPasswordType == "account" {
-		keyTypeByte = 0x01
-	} else {
+	keyTypeByte := byte(0x01)
+	if finalPasswordType == "custom" {
 		keyTypeByte = 0x02
 	}
 
-	// Wrap FEK
 	encryptedFEKB64, err := wrapFEK(fek, kek, finalPasswordType)
 	if err != nil {
-		return fmt.Errorf("failed to wrap FEK: %w", err)
+		return "", fmt.Errorf("failed to wrap FEK: %w", err)
 	}
 
-	// Encrypt metadata
-	filename := filepath.Base(*filePath)
+	// Encrypt metadata (always with account key).
+	filename := filepath.Base(filePath)
 	encFilenameB64, fnNonceB64, encSHA256B64, shaNonceB64, err := encryptMetadata(filename, sha256hex, accountKey)
 	if err != nil {
-		return fmt.Errorf("failed to encrypt metadata: %w", err)
+		return "", fmt.Errorf("failed to encrypt metadata: %w", err)
 	}
 
-	// Get file size for progress reporting
-	fileInfo, err := os.Stat(*filePath)
+	fileInfo, err := os.Stat(filePath)
 	if err != nil {
-		return fmt.Errorf("failed to stat file: %w", err)
+		return "", fmt.Errorf("failed to stat file: %w", err)
 	}
 	fileSizeBytes := fileInfo.Size()
 	totalEncSize := calculateTotalEncryptedSize(fileSizeBytes)
@@ -155,9 +393,8 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 
 	logVerbose("Uploading %s (%s), %d chunks", filename, formatFileSize(fileSizeBytes), chunkCount)
 
-	// Perform the streaming chunked upload
 	fileID, err := doChunkedUpload(client, session, &ChunkedUploadParams{
-		FilePath:        *filePath,
+		FilePath:        filePath,
 		FEK:             fek,
 		KeyTypeByte:     keyTypeByte,
 		EncryptedFEKB64: encryptedFEKB64,
@@ -166,22 +403,20 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 		EncSHA256B64:    encSHA256B64,
 		ShaNonceB64:     shaNonceB64,
 		PasswordType:    finalPasswordType,
-		PasswordHint:    *hint,
+		PasswordHint:    hint,
 		FileSizeBytes:   fileSizeBytes,
 		TotalEncSize:    totalEncSize,
 		ChunkCount:      chunkCount,
 		ChunkSizeBytes:  chunkSizeBytes,
 	})
 	if err != nil {
-		return fmt.Errorf("upload failed: %w", err)
+		return "", fmt.Errorf("upload failed: %w", err)
 	}
 
-	fmt.Printf("Upload complete!\n")
-	fmt.Printf("  File: %s\n", filename)
-	fmt.Printf("  Size: %s\n", formatFileSize(fileSizeBytes))
-	fmt.Printf("  File ID: %s\n", fileID)
+	logVerbose("Upload complete: file=%s size=%s file_id=%s", filename, formatFileSize(fileSizeBytes), fileID)
 
-	// Store digest in agent cache
+	// Store digest in agent cache so future uploads in the same session
+	// can short-circuit duplicate uploads quickly.
 	agentClient, agentErr := NewAgentClient()
 	if agentErr == nil {
 		if err := agentClient.AddDigest(fileID, sha256hex); err != nil {
@@ -189,7 +424,7 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 		}
 	}
 
-	return nil
+	return fileID, nil
 }
 
 // ChunkedUploadParams holds all parameters for a chunked upload
@@ -229,7 +464,7 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 		"password_hint":       params.PasswordHint,
 	}
 
-	initResp, err := client.makeRequest("POST", "/api/uploads/init", initPayload, session.AccessToken)
+	initResp, err := client.makeRequestWithSession("POST", "/api/uploads/init", initPayload, session)
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize upload: %w", err)
 	}
@@ -298,7 +533,7 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 		"total_chunks": chunkIndex,
 	}
 
-	finalizeResp, err := client.makeRequest("POST", "/api/uploads/"+uploadID+"/complete", finalizePayload, session.AccessToken)
+	finalizeResp, err := client.makeRequestWithSession("POST", "/api/uploads/"+uploadID+"/complete", finalizePayload, session)
 	if err != nil {
 		return "", fmt.Errorf("failed to finalize upload: %w", err)
 	}

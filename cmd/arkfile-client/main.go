@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -1196,6 +1197,239 @@ func loadAuthSession(filePath string) (*AuthSession, error) {
 		return nil, err
 	}
 	return &session, nil
+}
+
+// =====================================================================
+// JWT refresh + 401-refresh-retry helpers (used by long-running batch
+// operations like multi-file upload). See docs/wip/general-enhancements.md
+// items 10 and 11.
+// =====================================================================
+
+// jwtRefreshThreshold is how close to expiry the access token may be
+// before we proactively refresh it between files in a batch. Default JWT
+// lifetime is 30 minutes (utils.GetJWTTokenLifetime), so 5 minutes is a
+// safe buffer for any single in-flight chunk.
+const jwtRefreshThreshold = 5 * time.Minute
+
+// errAuthExpired is returned when refresh-on-401 fails. It is fatal for
+// a batch operation -- subsequent files cannot succeed until the user
+// logs in again. Recognized by isFatalUploadError.
+var errAuthExpired = errors.New("session expired (refresh failed)")
+
+// errTooManyInProgressUploads matches the server's stable error code
+// 'too_many_in_progress_uploads' (HTTP 429) introduced with the per-user
+// in-progress upload session cap. Fatal for the current batch loop.
+var errTooManyInProgressUploads = errors.New("too many uploads already in progress")
+
+// errQuotaExceeded indicates the user's storage limit would be exceeded.
+// Fatal for the batch -- every subsequent file would hit the same wall.
+var errQuotaExceeded = errors.New("storage limit would be exceeded")
+
+// errAccountDisabled indicates the account is not approved or has been
+// disabled. Fatal -- nothing in the batch will succeed.
+var errAccountDisabled = errors.New("account is not approved or has been disabled")
+
+// isFatalUploadError returns true for errors that should abort an entire
+// batch rather than be recorded against a single file. Mirrors the TS
+// classifier in client/static/js/src/files/upload.ts. This is the seed
+// of the standing pattern described in docs/wip/general-enhancements.md
+// item 11.
+func isFatalUploadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errAuthExpired) ||
+		errors.Is(err, errTooManyInProgressUploads) ||
+		errors.Is(err, errQuotaExceeded) ||
+		errors.Is(err, errAccountDisabled) {
+		return true
+	}
+	// Best-effort textual classification for upstream messages that did
+	// not bubble up via our typed sentinels.
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "too_many_in_progress_uploads") {
+		return true
+	}
+	if strings.Contains(msg, "storage limit") || strings.Contains(msg, "quota") {
+		// Specifically target server "Storage limit would be exceeded"
+		return true
+	}
+	if strings.Contains(msg, "pending approval") || strings.Contains(msg, "account disabled") {
+		return true
+	}
+	return false
+}
+
+// refreshSessionToken calls /api/refresh, mutates the passed *AuthSession
+// in place with the new tokens and expiry, and atomically rewrites the
+// on-disk session file (temp + rename, mode 0600) so a process crash or
+// SIGINT after rotation never leaves the on-disk state inconsistent with
+// in-memory state.
+//
+// Returns errAuthExpired when the refresh token itself is rejected.
+func refreshSessionToken(client *HTTPClient, session *AuthSession) error {
+	if session == nil {
+		return errAuthExpired
+	}
+	if session.RefreshToken == "" {
+		return errAuthExpired
+	}
+
+	// Empty token argument: the refresh endpoint authenticates via the
+	// refresh_token in the body, not the Authorization header.
+	resp, err := client.makeRequest("POST", "/api/refresh", map[string]string{
+		"refresh_token": session.RefreshToken,
+	}, "")
+	if err != nil {
+		// makeRequest returns an error for any 4xx/5xx; treat all of
+		// these as terminal for the refresh flow.
+		return fmt.Errorf("%w: %v", errAuthExpired, err)
+	}
+
+	newToken := resp.Token
+	newRefresh := resp.RefreshToken
+	newExpiry := resp.ExpiresAt
+	if newToken == "" {
+		// Defensive: server returned 200 but did not include a token.
+		return fmt.Errorf("%w: refresh response missing token", errAuthExpired)
+	}
+
+	// Mutate the in-memory session before persisting. If the persist
+	// step fails we still keep the in-memory session usable for the
+	// remainder of this process, but we surface the error.
+	session.AccessToken = newToken
+	if newRefresh != "" {
+		session.RefreshToken = newRefresh
+	}
+	if !newExpiry.IsZero() {
+		session.ExpiresAt = newExpiry
+	}
+
+	if err := atomicSaveAuthSession(session, getSessionFilePath()); err != nil {
+		// Log but do not fail the upload: the in-memory tokens are
+		// fresh and the next call will succeed. Persistence will
+		// retry on the next refresh.
+		logVerbose("Warning: failed to persist rotated session file: %v", err)
+	}
+	return nil
+}
+
+// atomicSaveAuthSession writes the session JSON to a sibling temp file
+// and renames it over the target path. Mode is 0600 on the final file.
+// rename(2) is atomic on POSIX filesystems within the same directory,
+// so a partial write or crash mid-write cannot corrupt the live file.
+func atomicSaveAuthSession(session *AuthSession, filePath string) error {
+	data, err := json.MarshalIndent(session, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(filePath)
+	tmp, err := os.CreateTemp(dir, ".arkfile-session.*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	// On any failure beyond this point, remove the temp file.
+	defer func() { _ = os.Remove(tmpPath) }()
+
+	if _, werr := tmp.Write(data); werr != nil {
+		_ = tmp.Close()
+		return werr
+	}
+	if cerr := tmp.Chmod(0600); cerr != nil {
+		_ = tmp.Close()
+		return cerr
+	}
+	if cerr := tmp.Close(); cerr != nil {
+		return cerr
+	}
+	return os.Rename(tmpPath, filePath)
+}
+
+// ensureFreshSessionToken refreshes the session if its access token has
+// fewer than `threshold` remaining before expiry. Idempotent and cheap
+// when the token has plenty of time left.
+//
+// Threshold defaults to jwtRefreshThreshold (5 minutes) when zero is
+// passed, so callers can use ensureFreshSessionToken(client, session, 0).
+func ensureFreshSessionToken(client *HTTPClient, session *AuthSession, threshold time.Duration) error {
+	if session == nil {
+		return errAuthExpired
+	}
+	if threshold <= 0 {
+		threshold = jwtRefreshThreshold
+	}
+	// If we don't know when the token expires, refresh defensively.
+	if session.ExpiresAt.IsZero() {
+		return refreshSessionToken(client, session)
+	}
+	if time.Until(session.ExpiresAt) < threshold {
+		logVerbose("Access token within %s of expiry; refreshing preemptively.", threshold)
+		return refreshSessionToken(client, session)
+	}
+	return nil
+}
+
+// makeRequestWithSession is a session-aware wrapper around makeRequest
+// that performs at most one refresh-and-retry on HTTP 401 and translates
+// 429 too_many_in_progress_uploads into the typed errTooManyInProgressUploads
+// sentinel so batch loops can classify it as fatal.
+//
+// Existing call sites that don't need refresh-on-401 can keep using
+// makeRequest directly. Long-running paths (upload init/chunks/complete)
+// should prefer this wrapper.
+func (c *HTTPClient) makeRequestWithSession(method, endpoint string, payload interface{}, session *AuthSession, headers ...string) (*Response, error) {
+	if session == nil {
+		return nil, errAuthExpired
+	}
+
+	resp, err := c.makeRequest(method, endpoint, payload, session.AccessToken, headers...)
+	if err == nil {
+		return resp, nil
+	}
+
+	// Inspect the error for HTTP status. makeRequest returns errors of
+	// the form "HTTP %d: %s", and the response body is preserved on
+	// resp when err is non-nil.
+	errMsg := err.Error()
+	is401 := strings.Contains(errMsg, "HTTP 401")
+	is429 := strings.Contains(errMsg, "HTTP 429")
+	is403 := strings.Contains(errMsg, "HTTP 403")
+
+	// Classify 429 too_many_in_progress_uploads (stable server code).
+	if is429 && resp != nil && (resp.Error == "too_many_in_progress_uploads" ||
+		strings.Contains(strings.ToLower(resp.Message), "too_many_in_progress_uploads") ||
+		strings.Contains(strings.ToLower(errMsg), "too_many_in_progress_uploads")) {
+		return resp, fmt.Errorf("%w: %s", errTooManyInProgressUploads, resp.Message)
+	}
+
+	// Classify 403 quota / disabled.
+	if is403 && resp != nil {
+		lower := strings.ToLower(resp.Message + " " + errMsg)
+		if strings.Contains(lower, "storage limit") || strings.Contains(lower, "quota") {
+			return resp, fmt.Errorf("%w: %s", errQuotaExceeded, resp.Message)
+		}
+		if strings.Contains(lower, "pending approval") || strings.Contains(lower, "account disabled") {
+			return resp, fmt.Errorf("%w: %s", errAccountDisabled, resp.Message)
+		}
+	}
+
+	if !is401 {
+		return resp, err
+	}
+
+	// One refresh-and-retry attempt.
+	if rerr := refreshSessionToken(c, session); rerr != nil {
+		return resp, fmt.Errorf("%w: %v", errAuthExpired, rerr)
+	}
+	resp2, err2 := c.makeRequest(method, endpoint, payload, session.AccessToken, headers...)
+	if err2 == nil {
+		return resp2, nil
+	}
+	if strings.Contains(err2.Error(), "HTTP 401") {
+		return resp2, fmt.Errorf("%w: still unauthorized after refresh", errAuthExpired)
+	}
+	return resp2, err2
 }
 
 func loadConfigFile(config *ClientConfig, filePath string) error {

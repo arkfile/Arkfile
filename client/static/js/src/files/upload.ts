@@ -48,7 +48,12 @@ import {
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
 import { checkDuplicate, addDigest } from '../utils/digest-cache.js';
-import { getToken, getUsernameFromToken } from '../utils/auth.js';
+import {
+  getToken,
+  getUsernameFromToken,
+  getTokenExpiry,
+  refreshToken as doRefreshToken,
+} from '../utils/auth.js';
 import { loadFiles } from './list.js';
 
 // ============================================================================
@@ -111,42 +116,185 @@ interface UploadSession {
 }
 
 // ============================================================================
+// Auth helpers (preemptive refresh + 401-refresh-retry)
+// ============================================================================
+
+/**
+ * Refresh threshold for the per-file token check. If the JWT has fewer than
+ * this many seconds remaining when we are about to upload another file, we
+ * refresh proactively. Default JWT lifetime is 30 minutes, so 5 minutes is
+ * a comfortable buffer for any single in-flight chunk.
+ */
+const TOKEN_REFRESH_THRESHOLD_SECONDS = 5 * 60;
+
+/**
+ * AuthExpiredError signals that the user's session is no longer usable
+ * (refresh failed or refresh token rejected). Always fatal: the batch loop
+ * stops immediately and the UI surfaces a "session expired" message.
+ */
+export class AuthExpiredError extends Error {
+  constructor(message = 'Session expired. Please log in again.') {
+    super(message);
+    this.name = 'AuthExpiredError';
+  }
+}
+
+/**
+ * QuotaExceededError signals the user has run out of storage. Fatal because
+ * every subsequent file in the batch will hit the same wall.
+ */
+export class QuotaExceededError extends Error {
+  constructor(message = 'Storage limit would be exceeded.') {
+    super(message);
+    this.name = 'QuotaExceededError';
+  }
+}
+
+/**
+ * AccountDisabledError signals the account is no longer approved or has
+ * been disabled. Fatal -- nothing in the batch will succeed.
+ */
+export class AccountDisabledError extends Error {
+  constructor(message = 'Account is not approved or has been disabled.') {
+    super(message);
+    this.name = 'AccountDisabledError';
+  }
+}
+
+/**
+ * TooManyInProgressUploadsError mirrors the server's stable error code
+ * 'too_many_in_progress_uploads' (HTTP 429). Fatal for the current batch
+ * loop -- the user must cancel an existing session before any of the
+ * remaining files can start.
+ */
+export class TooManyInProgressUploadsError extends Error {
+  constructor(message = 'Too many uploads already in progress. Cancel one or wait for it to complete.') {
+    super(message);
+    this.name = 'TooManyInProgressUploadsError';
+  }
+}
+
+/**
+ * Decides whether an error should abort an entire batch (fatal) or be
+ * recorded against a single file and skipped past (non-fatal).
+ *
+ * This is the seed of the standing pattern described in
+ * docs/wip/general-enhancements.md item 11.
+ */
+export function isFatalUploadError(err: unknown): boolean {
+  if (err instanceof AuthExpiredError) return true;
+  if (err instanceof QuotaExceededError) return true;
+  if (err instanceof AccountDisabledError) return true;
+  if (err instanceof TooManyInProgressUploadsError) return true;
+  return false;
+}
+
+/**
+ * Refresh the JWT preemptively if it has fewer than `thresholdSeconds`
+ * remaining. Throws AuthExpiredError if no token is present or the refresh
+ * call fails (refresh token also expired or revoked).
+ *
+ * Safe to call repeatedly between files in a batch.
+ */
+async function ensureFreshToken(thresholdSeconds = TOKEN_REFRESH_THRESHOLD_SECONDS): Promise<void> {
+  const token = getToken();
+  if (!token) {
+    throw new AuthExpiredError('Not authenticated');
+  }
+
+  const expiry = getTokenExpiry();
+  if (!expiry) {
+    // Token unparseable -- treat as expired and try to refresh
+    const ok = await doRefreshToken();
+    if (!ok) {
+      throw new AuthExpiredError();
+    }
+    return;
+  }
+
+  const remainingSeconds = (expiry.getTime() - Date.now()) / 1000;
+  if (remainingSeconds < thresholdSeconds) {
+    console.log(`[upload] JWT has ${remainingSeconds.toFixed(0)}s remaining; refreshing preemptively.`);
+    const ok = await doRefreshToken();
+    if (!ok) {
+      throw new AuthExpiredError();
+    }
+  }
+}
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 
 /**
- * Makes an authenticated API request
+ * Makes an authenticated API request. On 401, attempts a single refresh and
+ * retries the request once before giving up. On 429 with the stable error
+ * code 'too_many_in_progress_uploads', throws TooManyInProgressUploadsError
+ * so callers can classify it as a fatal batch-aborting condition.
  */
 async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const token = getToken();
-  if (!token) {
-    throw new Error('Not authenticated');
-  }
+  const performFetch = async (): Promise<Response> => {
+    const token = getToken();
+    if (!token) {
+      throw new AuthExpiredError('Not authenticated');
+    }
 
-  const headers = new Headers(options.headers);
-  headers.set('Authorization', `Bearer ${token}`);
-  
-  if (options.body && !(options.body instanceof FormData) && !(options.body instanceof Blob)) {
-    headers.set('Content-Type', 'application/json');
-  }
+    const headers = new Headers(options.headers);
+    headers.set('Authorization', `Bearer ${token}`);
 
-  const response = await fetch(endpoint, {
-    ...options,
-    headers,
-  });
+    if (options.body && !(options.body instanceof FormData) && !(options.body instanceof Blob)) {
+      headers.set('Content-Type', 'application/json');
+    }
+
+    return fetch(endpoint, {
+      ...options,
+      headers,
+    });
+  };
+
+  let response = await performFetch();
+
+  // 401: try a single refresh-and-retry. If still 401 after refresh, treat as fatal.
+  if (response.status === 401) {
+    const refreshed = await doRefreshToken();
+    if (!refreshed) {
+      throw new AuthExpiredError();
+    }
+    response = await performFetch();
+    if (response.status === 401) {
+      throw new AuthExpiredError();
+    }
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
     let errorMessage: string;
+    let errorCode: string | undefined;
     try {
       const errorJson = JSON.parse(errorText);
       errorMessage = errorJson.message || errorJson.error || errorText;
+      errorCode = typeof errorJson.error === 'string' ? errorJson.error : undefined;
     } catch {
       errorMessage = errorText;
     }
+
+    // Classify based on stable error codes / status.
+    if (response.status === 429 && errorCode === 'too_many_in_progress_uploads') {
+      throw new TooManyInProgressUploadsError(errorMessage);
+    }
+    if (response.status === 403) {
+      const lower = errorMessage.toLowerCase();
+      if (lower.includes('storage limit') || lower.includes('quota')) {
+        throw new QuotaExceededError(errorMessage);
+      }
+      if (lower.includes('pending approval') || lower.includes('disabled')) {
+        throw new AccountDisabledError(errorMessage);
+      }
+    }
+
     throw new Error(`API error (${response.status}): ${errorMessage}`);
   }
 
@@ -626,9 +774,167 @@ export async function uploadFile(
       },
     };
   } catch (error) {
+    // Preserve typed errors so the batch loop can classify them correctly.
+    // Wrapping in new Error() would erase the AuthExpiredError /
+    // TooManyInProgressUploadsError / etc. discriminator.
+    if (isFatalUploadError(error)) {
+      throw error;
+    }
     const message = error instanceof Error ? error.message : 'Upload failed';
     throw new Error(message);
   }
+}
+
+// ============================================================================
+// Batch (multi-file) upload
+// ============================================================================
+
+/**
+ * Per-file outcome in a batch upload.
+ */
+export interface BatchUploadFileOutcome {
+  /** The original filename */
+  name: string;
+  /** Server-assigned file ID, present only on success */
+  fileId?: string;
+  /** Reason this file did not succeed (skipped or failed). Empty on success. */
+  reason?: string;
+}
+
+/**
+ * Aggregate result of a batch upload.
+ */
+export interface BatchUploadResult {
+  succeeded: BatchUploadFileOutcome[];
+  failed: BatchUploadFileOutcome[];
+  skipped: BatchUploadFileOutcome[];
+  /** When set, the batch aborted early on a fatal condition. */
+  fatal?: { name: string; reason: string };
+}
+
+/**
+ * Per-file callback for the batch loop. Receives an immutable snapshot of
+ * progress against the *current* file plus an index pointer for batch-level
+ * UI updates ("Uploading file 2 of 5: foo.pdf").
+ */
+export interface BatchUploadProgress extends UploadProgress {
+  /** 1-based index of the file currently being uploaded */
+  fileIndex: number;
+  /** Total number of files in the batch */
+  totalFiles: number;
+  /** Plain filename of the current file */
+  fileName: string;
+}
+
+export interface BatchUploadOptions extends Omit<UploadOptions, 'onProgress'> {
+  /** Optional progress callback for batch + per-file updates */
+  onProgress?: (progress: BatchUploadProgress) => void;
+}
+
+/**
+ * Upload an array of files sequentially using the existing per-file
+ * pipeline. The account key (and custom password / hint) are resolved
+ * once at the top and reused for every file.
+ *
+ * Continues past per-file failures (recorded in `failed[]`) and aborts
+ * the batch on fatal conditions (auth expired, quota, account disabled,
+ * server cap exceeded). Files after a fatal abort are recorded as
+ * skipped[].
+ *
+ * Sequential by design -- never parallel. See AGENTS.md (mobile/3GB-RAM
+ * use case) and docs/wip/general-enhancements.md item 10.
+ */
+export async function uploadFiles(
+  files: File[],
+  options: BatchUploadOptions
+): Promise<BatchUploadResult> {
+  const result: BatchUploadResult = {
+    succeeded: [],
+    failed: [],
+    skipped: [],
+  };
+
+  if (files.length === 0) {
+    return result;
+  }
+
+  // Resolve the account key once for the entire batch. If this fails, the
+  // batch cannot continue at all -- no file would have a way to encrypt its
+  // metadata. Surface as a synchronous throw rather than per-file failures.
+  const accountKey = await resolveAccountKey(options);
+
+  // Capture the per-file pieces explicitly to construct UploadOptions with
+  // exactOptionalPropertyTypes-friendly typing (no `undefined` assigned to
+  // optional fields).
+  const batchOnProgress = options.onProgress;
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const fileIndex = i + 1;
+
+    // Preemptively refresh the JWT if it is about to expire. A long batch
+    // can outlive a 30-minute JWT, and we do not want to fail mid-chunk
+    // when we could have rolled the token between files cheaply.
+    try {
+      await ensureFreshToken();
+    } catch (err) {
+      // Refresh failed -- session is gone. Mark the rest of the batch as
+      // skipped and propagate the fatal reason.
+      const reason = err instanceof Error ? err.message : 'Session expired';
+      result.fatal = { name: file.name, reason };
+      result.skipped.push({ name: file.name, reason: 'Session expired before upload' });
+      for (let j = i + 1; j < files.length; j++) {
+        result.skipped.push({ name: files[j].name, reason: 'Session expired earlier in batch' });
+      }
+      return result;
+    }
+
+    // Build per-file options, attaching a wrapper progress callback that
+    // injects batch-level context (fileIndex / totalFiles / fileName).
+    const fileOptions: UploadOptions = {
+      username: options.username,
+      passwordType: options.passwordType,
+      accountKey,
+    };
+    if (options.customPassword !== undefined) {
+      fileOptions.customPassword = options.customPassword;
+    }
+    if (options.passwordHint !== undefined) {
+      fileOptions.passwordHint = options.passwordHint;
+    }
+    if (batchOnProgress) {
+      fileOptions.onProgress = (progress) => {
+        batchOnProgress({
+          ...progress,
+          fileIndex,
+          totalFiles: files.length,
+          fileName: file.name,
+        });
+      };
+    }
+
+    try {
+      const r = await uploadFile(file, fileOptions);
+      result.succeeded.push({ name: file.name, fileId: r.fileId });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+
+      if (isFatalUploadError(err)) {
+        // Stop the batch, mark current file as failed, mark remaining as skipped.
+        result.fatal = { name: file.name, reason: message };
+        result.failed.push({ name: file.name, reason: message });
+        for (let j = i + 1; j < files.length; j++) {
+          result.skipped.push({ name: files[j].name, reason: 'Aborted after fatal error' });
+        }
+        return result;
+      }
+
+      // Non-fatal: record and continue.
+      result.failed.push({ name: file.name, reason: message });
+    }
+  }
+
+  return result;
 }
 
 // ============================================================================
@@ -636,27 +942,42 @@ export async function uploadFile(
 // ============================================================================
 
 /**
- * Handles file upload from the UI
- * This is the main entry point called from the HTML page
- * 
+ * Handles file upload from the UI. Supports single-file and multi-file
+ * (sequential) batch uploads driven from the same DOM controls.
+ *
  * For 'account' password type:
  * - First checks if Account Key is cached and not locked
  * - If cached, uses it directly (no password prompt needed)
  * - If not cached or locked, prompts for password
- * 
+ *
  * For 'custom' password type:
  * - Always requires the custom password input
+ * - The same custom password is applied to every file in the batch
  * - Also needs the account key (from cache or prompt) for metadata encryption
+ *
+ * Multi-file behavior:
+ * - Files are uploaded one at a time, sequentially. Sequential by design --
+ *   keeps memory bounded for the constrained-device case (mobile/3GB-RAM
+ *   uploading several large files) and matches the per-file server pipeline.
+ * - One password prompt for the entire batch. One hint for the entire batch.
+ * - Per-file failures are recorded and the loop continues. Fatal errors
+ *   (auth expired, quota, account disabled, server cap) abort the batch
+ *   immediately; remaining files are reported as skipped.
+ * - JWT freshness is checked between files and refreshed proactively if
+ *   the access token is within 5 minutes of expiry.
  */
 export async function handleFileUpload(): Promise<void> {
   // Get file input -- HTML uses id="fileInput"
   const fileInput = document.getElementById('fileInput') as HTMLInputElement | null;
   if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
-    showError('Please select a file to upload');
+    showError('Please select one or more files to upload');
     return;
   }
 
-  const file = fileInput.files[0];
+  // Snapshot the FileList into a stable array. The DOM FileList can change
+  // out from under us if the user picks new files mid-batch.
+  const filesToUpload: File[] = Array.from(fileInput.files);
+  const fileCount = filesToUpload.length;
 
   // Get username from JWT token (shared auth module)
   const username = getUsernameFromToken();
@@ -673,35 +994,33 @@ export async function handleFileUpload(): Promise<void> {
   const hintInput = document.getElementById('passwordHint') as HTMLInputElement | null;
   const passwordHint = hintInput?.value || '';
 
-  // Get progress elements
-  const progressBar = document.getElementById('upload-progress') as HTMLProgressElement | null;
-  const progressText = document.getElementById('upload-progress-text') as HTMLElement | null;
   // Upload button -- HTML uses id="upload-file-btn"
   const uploadButton = document.getElementById('upload-file-btn') as HTMLButtonElement | null;
 
-  // Build upload options
-  const uploadOptions: UploadOptions = {
+  // Build batch options. Optional fields are added conditionally to play
+  // well with exactOptionalPropertyTypes.
+  const batchOptions: BatchUploadOptions = {
     username,
     passwordType,
-    passwordHint,
   };
+  if (passwordHint) {
+    batchOptions.passwordHint = passwordHint;
+  }
 
-  // Resolve account key / password (always needed for metadata)
+  // Resolve account key / password once for the whole batch.
   if (isAccountKeyCached(username) && !isAccountKeyLocked()) {
-    // Account key is cached -- use it directly
     const cachedKey = await getCachedAccountKey(username, getToken() ?? undefined);
     if (cachedKey) {
-      uploadOptions.accountKey = cachedKey;
+      batchOptions.accountKey = cachedKey;
     }
   }
 
-  if (!uploadOptions.accountKey) {
-    // Need to prompt for account password
+  if (!batchOptions.accountKey) {
+    // Need to prompt for the account password.
     const passwordInput = document.getElementById('upload-password') as HTMLInputElement | null;
-    let accountPassword = passwordInput?.value;
+    let accountPassword = passwordInput?.value || '';
 
     if (!accountPassword) {
-      // Show password modal
       const result = await promptForAccountKeyPassword();
       if (!result) {
         // User cancelled
@@ -709,7 +1028,6 @@ export async function handleFileUpload(): Promise<void> {
       }
       accountPassword = result.password;
 
-      // If user chose to remember, derive and cache the key
       if (result.cacheDuration) {
         showProgress({
           title: 'Deriving Account Key',
@@ -720,83 +1038,116 @@ export async function handleFileUpload(): Promise<void> {
           accountPassword, username, 'account', getToken() ?? undefined, result.cacheDuration
         );
         hideProgress();
-        uploadOptions.accountKey = derivedKey;
+        batchOptions.accountKey = derivedKey;
       }
     }
 
-    // If we still don't have a derived key, pass the password for derivation
-    if (!uploadOptions.accountKey) {
-      uploadOptions.accountPassword = accountPassword;
+    if (!batchOptions.accountKey) {
+      batchOptions.accountPassword = accountPassword;
     }
   }
 
-  // For custom password type, get the custom password -- HTML uses id="filePassword"
+  // Custom password applies to all files in the batch (single password,
+  // single hint). Confirmed UX: the user multi-selecting expects one
+  // password prompt for the lot, not N prompts.
   if (passwordType === 'custom') {
     const customPasswordInput = document.getElementById('filePassword') as HTMLInputElement | null;
-    const customPassword = customPasswordInput?.value;
+    const customPassword = customPasswordInput?.value || '';
     if (!customPassword) {
       showError('Please enter your custom password for file encryption');
       return;
     }
-    uploadOptions.customPassword = customPassword;
+    batchOptions.customPassword = customPassword;
   }
 
-  // Disable upload button during upload
+  // Disable upload button during the entire batch.
   if (uploadButton) {
     uploadButton.disabled = true;
   }
 
-  // Show ProgressManager overlay for upload
+  const phaseLabels: Record<string, string> = {
+    'deriving-key': 'Deriving encryption key...',
+    'hashing': 'Computing file hash...',
+    'encrypting': 'Encrypting metadata...',
+    'init-session': 'Initializing upload session...',
+    'uploading': 'Uploading...',
+    'completing': 'Finalizing...',
+  };
+
+  const batchTitle = fileCount === 1 ? 'Uploading File' : `Uploading ${fileCount} Files`;
   showProgress({
-    title: 'Uploading File',
-    message: file.name,
+    title: batchTitle,
+    message: filesToUpload[0].name,
     indeterminate: true,
   });
 
+  // Wire batch-aware progress callback. Composes "file 2 of 5: foo.pdf"
+  // with the per-file phase + chunk + percent that the underlying
+  // uploadFile() emits.
+  batchOptions.onProgress = (progress) => {
+    const phaseMessage = phaseLabels[progress.phase] || progress.phase;
+    let message = phaseMessage;
+    if (fileCount > 1) {
+      message = `File ${progress.fileIndex} of ${progress.totalFiles}: ${progress.fileName} -- ${phaseMessage}`;
+    } else {
+      message = `${progress.fileName}: ${phaseMessage}`;
+    }
+    if (progress.currentChunk && progress.totalChunks) {
+      message += ` (chunk ${progress.currentChunk}/${progress.totalChunks})`;
+    }
+    updateProgress({
+      title: batchTitle,
+      message,
+      percentage: progress.percent,
+      stage: progress.phase,
+    });
+  };
+
   try {
-    uploadOptions.onProgress = (progress) => {
-      // Update ProgressManager overlay
-      const phaseLabels: Record<string, string> = {
-        'deriving-key': 'Deriving encryption key...',
-        'hashing': 'Computing file hash...',
-        'encrypting': 'Encrypting metadata...',
-        'init-session': 'Initializing upload session...',
-        'uploading': 'Uploading...',
-        'completing': 'Finalizing...',
-      };
-      const phaseMessage = phaseLabels[progress.phase] || progress.phase;
-      let message = phaseMessage;
-      if (progress.currentChunk && progress.totalChunks) {
-        message += ` (chunk ${progress.currentChunk}/${progress.totalChunks})`;
-      }
-      updateProgress({
-        title: 'Uploading File',
-        message,
-        percentage: progress.percent,
-        stage: progress.phase,
-      });
-
-      // Also update legacy DOM elements if present
-      if (progressBar) {
-        progressBar.value = progress.percent;
-      }
-      if (progressText) {
-        let text = `${progress.phase}: ${progress.percent}%`;
-        if (progress.currentChunk && progress.totalChunks) {
-          text += ` (chunk ${progress.currentChunk}/${progress.totalChunks})`;
-        }
-        progressText.textContent = text;
-      }
-    };
-
-    const result = await uploadFile(file, uploadOptions);
+    const batchResult = await uploadFiles(filesToUpload, batchOptions);
 
     hideProgress();
-    showSuccess(`File uploaded successfully! File ID: ${result.fileId}`);
 
-    // Clear the form
+    // Build a clear summary message. Single-file batches keep the simple
+    // "File uploaded successfully" message that today's UX expects.
+    if (fileCount === 1) {
+      if (batchResult.succeeded.length === 1) {
+        showSuccess(`File uploaded successfully! File ID: ${batchResult.succeeded[0].fileId}`);
+      } else if (batchResult.failed.length === 1) {
+        showError(`Upload failed: ${batchResult.failed[0].reason}`);
+      } else if (batchResult.fatal) {
+        showError(`Upload failed: ${batchResult.fatal.reason}`);
+      }
+    } else {
+      const ok = batchResult.succeeded.length;
+      const failed = batchResult.failed.length;
+      const skipped = batchResult.skipped.length;
+      let summary = `${ok} of ${fileCount} files uploaded.`;
+      if (failed > 0) {
+        const samples = batchResult.failed
+          .slice(0, 3)
+          .map((f) => `${f.name}: ${f.reason}`)
+          .join('; ');
+        summary += ` ${failed} failed (${samples}${batchResult.failed.length > 3 ? '; ...' : ''}).`;
+      }
+      if (skipped > 0) {
+        summary += ` ${skipped} skipped.`;
+      }
+      if (batchResult.fatal) {
+        summary += ` Aborted: ${batchResult.fatal.reason}`;
+      }
+      if (failed === 0 && skipped === 0 && !batchResult.fatal) {
+        showSuccess(summary);
+      } else if (ok > 0) {
+        // Partial success -- show as success-with-warning.
+        showSuccess(summary);
+      } else {
+        showError(summary);
+      }
+    }
+
+    // Clear the form regardless of outcome (matches single-file behavior).
     if (fileInput) fileInput.value = '';
-    // Reset custom file input label
     const fileInputLabel = document.getElementById('fileInputLabel');
     const fileInputName = document.getElementById('fileInputName');
     if (fileInputLabel) fileInputLabel.classList.remove('has-file');
@@ -804,12 +1155,14 @@ export async function handleFileUpload(): Promise<void> {
     const customPasswordInput = document.getElementById('filePassword') as HTMLInputElement | null;
     if (customPasswordInput) customPasswordInput.value = '';
     if (hintInput) hintInput.value = '';
-    if (progressBar) progressBar.value = 0;
-    if (progressText) progressText.textContent = '';
 
-    // Refresh file list after successful upload
-    await loadFiles();
+    // Refresh file list once at the end of the batch.
+    if (batchResult.succeeded.length > 0) {
+      await loadFiles();
+    }
   } catch (error) {
+    // Errors that escape uploadFiles() (e.g. failed initial account-key
+    // resolution) are shown directly. Per-file errors are summarized above.
     const message = error instanceof Error ? error.message : 'Upload failed';
     updateProgress({ error: message });
     setTimeout(() => hideProgress(), 3000);

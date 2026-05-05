@@ -306,6 +306,7 @@ export const clearTokens = AuthManager.clearTokens.bind(AuthManager);
 export const isAuthenticated = AuthManager.isAuthenticated.bind(AuthManager);
 export const getUsernameFromToken = AuthManager.getUsernameFromToken.bind(AuthManager);
 export const isTokenExpired = AuthManager.isTokenExpired.bind(AuthManager);
+export const getTokenExpiry = AuthManager.getTokenExpiry.bind(AuthManager);
 export const refreshToken = AuthManager.refreshToken.bind(AuthManager);
 export const revokeAllSessions = AuthManager.revokeAllSessions.bind(AuthManager);
 export const logout = AuthManager.logout.bind(AuthManager);
