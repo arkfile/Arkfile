@@ -234,6 +234,8 @@ func readSecondaryEnvVars() *S3ProviderConfig {
 		case ProviderHetzner:
 			endpointURL = fmt.Sprintf("https://%s.your-objectstorage.com", region)
 			usePathStyle = true
+		case ProviderBackblaze:
+			endpointURL = fmt.Sprintf("https://s3.%s.backblazeb2.com", region)
 		}
 	}
 
@@ -283,6 +285,8 @@ func readTertiaryEnvVars() *S3ProviderConfig {
 		case ProviderHetzner:
 			endpointURL = fmt.Sprintf("https://%s.your-objectstorage.com", region)
 			usePathStyle = true
+		case ProviderBackblaze:
+			endpointURL = fmt.Sprintf("https://s3.%s.backblazeb2.com", region)
 		}
 	}
 
