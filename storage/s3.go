@@ -222,13 +222,14 @@ func readSecondaryEnvVars() *S3ProviderConfig {
 	accessKey := os.Getenv("STORAGE_2_ACCESS_KEY")
 	secretKey := os.Getenv("STORAGE_2_SECRET_KEY")
 	bucketName := os.Getenv("STORAGE_2_BUCKET")
-	usePathStyle := os.Getenv("STORAGE_2_FORCE_PATH_STYLE") != "false"
+	usePathStyle := false
 
-	// Endpoint auto-generation for known provider types
+	// Endpoint and path-style defaults for known provider types
 	if endpointURL == "" {
 		switch provider {
 		case ProviderWasabi:
 			endpointURL = fmt.Sprintf("https://s3.%s.wasabisys.com", region)
+			usePathStyle = true
 		case ProviderVultr:
 			endpointURL = fmt.Sprintf("https://%s.vultrobjects.com", region)
 		case ProviderHetzner:
@@ -237,6 +238,13 @@ func readSecondaryEnvVars() *S3ProviderConfig {
 		case ProviderBackblaze:
 			endpointURL = fmt.Sprintf("https://s3.%s.backblazeb2.com", region)
 		}
+	}
+
+	// Allow explicit env var override of path style after per-provider defaults
+	if v := os.Getenv("STORAGE_2_FORCE_PATH_STYLE"); v == "true" {
+		usePathStyle = true
+	} else if v == "false" {
+		usePathStyle = false
 	}
 
 	providerID := os.Getenv("STORAGE_PROVIDER_2_ID")
@@ -273,13 +281,14 @@ func readTertiaryEnvVars() *S3ProviderConfig {
 	accessKey := os.Getenv("STORAGE_3_ACCESS_KEY")
 	secretKey := os.Getenv("STORAGE_3_SECRET_KEY")
 	bucketName := os.Getenv("STORAGE_3_BUCKET")
-	usePathStyle := os.Getenv("STORAGE_3_FORCE_PATH_STYLE") != "false"
+	usePathStyle := false
 
-	// Endpoint auto-generation for known provider types
+	// Endpoint and path-style defaults for known provider types
 	if endpointURL == "" {
 		switch provider {
 		case ProviderWasabi:
 			endpointURL = fmt.Sprintf("https://s3.%s.wasabisys.com", region)
+			usePathStyle = true
 		case ProviderVultr:
 			endpointURL = fmt.Sprintf("https://%s.vultrobjects.com", region)
 		case ProviderHetzner:
@@ -288,6 +297,13 @@ func readTertiaryEnvVars() *S3ProviderConfig {
 		case ProviderBackblaze:
 			endpointURL = fmt.Sprintf("https://s3.%s.backblazeb2.com", region)
 		}
+	}
+
+	// Allow explicit env var override of path style after per-provider defaults
+	if v := os.Getenv("STORAGE_3_FORCE_PATH_STYLE"); v == "true" {
+		usePathStyle = true
+	} else if v == "false" {
+		usePathStyle = false
 	}
 
 	providerID := os.Getenv("STORAGE_PROVIDER_3_ID")
