@@ -170,7 +170,7 @@ These three providers offer S3-compatible APIs with effectively zero egress char
 
 | Provider | Storage (per TB/mo) | Egress | Notes |
 |---|---|---|---|
-| Backblaze B2 | $6.00 | $0 (up to 3x stored volume) | 17+3 RS erasure coding; most established budget option |
+| Backblaze B2 | $6.95 | $0 (up to 3x stored volume) | 17+3 RS erasure coding; most established budget option |
 | Wasabi | $6.99 | $0 (up to 1x stored volume) | 90-day minimum retention; minimum 1 TB billing |
 | Cloudflare R2 | $15.00 | $0 (unlimited, unconditional) | No egress caps or ratio limits; data distributed globally |
 
