@@ -2,7 +2,7 @@
  * File download functionality with chunked download support
  *
  * This module provides file download capabilities using the chunked download
- * infrastructure for efficient, resumable downloads with client-side decryption.
+ * infrastructure for efficient downloads with client-side decryption.
  *
  * SECURITY: All FEK decryption happens client-side using Argon2id-derived keys.
  * The server NEVER sees the plaintext FEK or the user's password.
@@ -21,9 +21,8 @@ import {
 import { deriveFileEncryptionKey } from '../crypto/file-encryption';
 import { getAccountKey, decryptFEK } from '../crypto/metadata-helpers';
 
-/**
- * File metadata response from the server (snake_case)
- */
+const LOG_PREFIX = '[arkfile-download]';
+
 interface FileMetaResponse {
   encrypted_filename: string;
   filename_nonce: string;
@@ -38,77 +37,83 @@ interface FileMetaResponse {
 }
 
 /**
- * Download a file using chunked download with client-side decryption
+ * Download a file using chunked download with client-side decryption.
  *
- * This function:
- * 1. Fetches file metadata including the encrypted FEK
- * 2. Gets the Account Key (from cache or by prompting for password)
- * 3. Decrypts the FEK client-side
- * 4. Uses the FEK to download and decrypt the file chunks
- *
- * @param fileId       - The file ID to download
- * @param hint         - Optional password hint to display
- * @param expectedHash - Expected SHA-256 hash for verification (already decrypted by caller)
- * @param passwordType - 'account' or 'custom' indicating encryption type
+ * Flow:
+ * 1. Fetch file metadata (encrypted FEK, encrypted filename/sha256)
+ * 2. Resolve account key (cache or password prompt)
+ * 3. For custom-password files, prompt for the file password and derive custom key
+ * 4. Decrypt FEK
+ * 5. Stream-decrypt all chunks via the streaming manager (Blob-based, OOM-safe)
+ * 6. Trigger browser download from the resulting Blob URL
  */
 export async function downloadFile(
   fileId: string,
   hint: string,
   expectedHash: string,
   passwordType: string,
-  preOpenedWritable: any = null,
 ): Promise<void> {
-  // The caller (click handler in list.ts) MUST have already opened the FSAPI
-  // writable handle via showSaveFilePicker as the FIRST await in the click
-  // event handler. Chrome's user-gesture token cannot survive multiple async
-  // function boundaries, so this function does NOT call showSaveFilePicker.
+  const t0 = Date.now();
+  console.log(`${LOG_PREFIX} downloadFile() invoked (passwordType=${passwordType})`);
+
   try {
     const authToken = getToken();
     if (!authToken) {
-      if (preOpenedWritable) { try { await preOpenedWritable.abort(); } catch { /* ignore */ } }
+      console.error(`${LOG_PREFIX} No auth token available`);
       showError('Not authenticated. Please log in again.');
       return;
     }
 
     const username = getUsernameFromToken();
     if (!username) {
-      if (preOpenedWritable) { try { await preOpenedWritable.abort(); } catch { /* ignore */ } }
+      console.error(`${LOG_PREFIX} Username could not be extracted from token`);
       showError('Username not found. Please log in again.');
       return;
     }
 
-    // Fetch file metadata including encrypted FEK
+    // Fetch file metadata
+    const tMeta = Date.now();
+    console.log(`${LOG_PREFIX} Fetching file metadata...`);
     const metaResponse = await authenticatedFetch(`/api/files/${fileId}/meta`);
     if (!metaResponse.ok) {
       const errorData = await metaResponse.json().catch(() => ({}));
+      console.error(`${LOG_PREFIX} Metadata fetch failed: HTTP ${metaResponse.status}`);
       showError(errorData.message || 'Failed to retrieve file metadata.');
       return;
     }
-
     const meta: FileMetaResponse = await metaResponse.json();
+    console.log(`${LOG_PREFIX} Metadata fetched in ${Date.now() - tMeta}ms (size_bytes=${meta.size_bytes}, total_chunks=${meta.total_chunks}, password_type=${meta.password_type})`);
 
     let fek: Uint8Array;
     let metadataDecryptionKey: Uint8Array;
 
     if (passwordType === 'account' || meta.password_type === 'account') {
       // Account-encrypted: get Account Key, decrypt FEK
+      console.log(`${LOG_PREFIX} Resolving account key for FEK decryption (passwordType=account)`);
       const accountKey = await getAccountKey(username);
-      if (!accountKey) return;
-
+      if (!accountKey) {
+        console.log(`${LOG_PREFIX} Account key resolution cancelled or failed`);
+        return;
+      }
       metadataDecryptionKey = accountKey;
 
       try {
+        const tDec = Date.now();
         fek = await decryptFEK(meta.encrypted_fek, accountKey);
+        console.log(`${LOG_PREFIX} FEK decrypted in ${Date.now() - tDec}ms`);
       } catch (error) {
-        console.error('Failed to decrypt FEK:', error);
+        console.error(`${LOG_PREFIX} Failed to decrypt FEK with account key:`, error instanceof Error ? error.message : error);
         showError('Failed to decrypt file key. Your password may be incorrect.');
         return;
       }
     } else {
       // Custom-encrypted: need account key for metadata AND custom key for FEK
+      console.log(`${LOG_PREFIX} Resolving account key for metadata decryption (passwordType=custom)`);
       const accountKey = await getAccountKey(username);
-      if (!accountKey) return;
-
+      if (!accountKey) {
+        console.log(`${LOG_PREFIX} Account key resolution cancelled or failed`);
+        return;
+      }
       metadataDecryptionKey = accountKey;
 
       const hintText = hint || meta.password_hint || '';
@@ -120,7 +125,10 @@ export async function downloadFile(
         submitLabel: 'Decrypt',
         cancelLabel: 'Cancel',
       });
-      if (!promptResult) return;
+      if (!promptResult) {
+        console.log(`${LOG_PREFIX} Custom password prompt cancelled`);
+        return;
+      }
       const password = promptResult.password;
 
       try {
@@ -130,21 +138,24 @@ export async function downloadFile(
           indeterminate: true,
         });
 
+        const tKdf = Date.now();
         const customKey = await deriveFileEncryptionKey(password, username, 'custom');
+        console.log(`${LOG_PREFIX} Custom key derived (Argon2id) in ${Date.now() - tKdf}ms`);
         hideProgress();
 
+        const tDec = Date.now();
         fek = await decryptFEK(meta.encrypted_fek, customKey);
+        console.log(`${LOG_PREFIX} FEK decrypted with custom key in ${Date.now() - tDec}ms`);
       } catch (error) {
         hideProgress();
-        console.error('Failed to decrypt FEK with custom password:', error);
+        console.error(`${LOG_PREFIX} Failed to decrypt FEK with custom password:`, error instanceof Error ? error.message : error);
         showError('Failed to decrypt file key. Check your password.');
         return;
       }
     }
 
-    // Chunked download with the decrypted FEK.
-    // preOpenedWritable is passed so the manager writes directly without
-    // calling showSaveFilePicker again (gesture is already consumed).
+    // Stream-decrypt all chunks via the streaming download manager
+    console.log(`${LOG_PREFIX} Beginning chunked streaming download...`);
     const result: StreamingDownloadResult = await downloadFileChunked(
       fileId,
       fek,
@@ -152,44 +163,41 @@ export async function downloadFile(
       {
         accountKey: metadataDecryptionKey,
         showProgressUI: true,
-        preOpenedWritable,
         onProgress: (progress) => {
           if (progress.stage === 'error') {
-            console.error('Download error:', progress.error);
+            console.error(`${LOG_PREFIX} Streaming progress error:`, progress.error);
           }
         },
       },
     );
 
     if (!result.success) {
+      console.error(`${LOG_PREFIX} Streaming download returned failure: ${result.error}`);
       showError(result.error || 'Download failed.');
       return;
     }
 
     if (!result.filename) {
+      console.error(`${LOG_PREFIX} Result missing filename`);
       showError('Download completed but filename is missing.');
       return;
     }
 
-    // Verify SHA-256 hash if available
-    if (result.sha256sum && expectedHash) {
-      if (result.sha256sum !== expectedHash) {
-        console.warn('SHA-256 hash mismatch - file may be corrupted');
-      }
+    if (result.sha256sum && expectedHash && result.sha256sum !== expectedHash) {
+      console.warn(`${LOG_PREFIX} SHA-256 hash mismatch — file may be corrupted`);
     }
 
-    if (result.savedViaFileSystemAPI) {
-      // File was streamed directly to disk via File System Access API — done.
-      showSuccess(`Downloaded: ${result.filename}`);
-    } else if (result.blobUrl) {
-      // Firefox / legacy fallback: file is in a Blob URL; trigger the download link.
-      triggerBrowserDownloadFromUrl(result.blobUrl, result.filename);
-      showSuccess(`Downloaded: ${result.filename}`);
-    } else {
+    if (!result.blobUrl) {
+      console.error(`${LOG_PREFIX} Result missing blobUrl`);
       showError('Download completed but no file data was produced.');
+      return;
     }
+
+    console.log(`${LOG_PREFIX} Triggering browser download (total elapsed ${Date.now() - t0}ms)`);
+    triggerBrowserDownloadFromUrl(result.blobUrl, result.filename);
+    showSuccess(`Downloaded: ${result.filename}`);
   } catch (error) {
-    console.error('Download error:', error);
+    console.error(`${LOG_PREFIX} Unhandled download error:`, error instanceof Error ? error.message : error);
     showError('An error occurred during file download.');
   }
 }

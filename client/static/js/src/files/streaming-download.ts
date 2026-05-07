@@ -4,31 +4,41 @@
  * Handles downloading files in chunks with:
  * - Progress tracking
  * - Retry logic with exponential backoff
- * - Resume capability
  * - Client-side decryption
+ * - Memory-efficient streaming via incremental Blob construction
  *
  * LARGE FILE SUPPORT
  * ------------------
  * Files > ~1 GB cannot be held entirely in a single JS ArrayBuffer/Uint8Array
- * because the browser's per-context heap limit is typically 2–4 GB. The naive
- * collect-all-chunks-then-save approach fails with "Array buffer allocation
- * failed" for files like a 2.1 GB Alma Linux ISO.
+ * because the browser's per-context heap limit is typically 2-4 GB. This
+ * module avoids the OOM crash by:
  *
- * This module uses the File System Access API (Chrome 86+, Edge 86+, Safari
- * 15.2+) to stream each decrypted chunk directly to disk while keeping only
- * ONE chunk in memory at a time (bounded to ~16 MiB regardless of file size).
+ *   - Yielding ONE decrypted chunk at a time from an async generator
+ *   - Appending each chunk to an incrementally-built Blob via
+ *     `new Blob([existingBlob, chunkData])`
+ *   - The browser keeps Blob parts in its internal Blob store (off the JS
+ *     heap), so memory pressure stays bounded to a single chunk (~16 MiB)
  *
- * For Firefox and other browsers without showSaveFilePicker, a fallback path
- * uses incremental Blob construction which stores data in the browser's Blob
- * store rather than the JS heap, then triggers a createObjectURL download.
- * This fallback is still heap-constrained for very large files on those
- * browsers, but is the best available without a Service Worker.
+ * After the last chunk is appended, the Blob is exposed via
+ * URL.createObjectURL and the caller triggers a normal browser download
+ * with an <a download> anchor click. The file saves to the user's
+ * default Downloads folder via the standard browser download pipeline.
+ *
+ * LOGGING
+ * -------
+ * All internal stages are logged to console.log with a prefix of
+ * `[arkfile-download]` or `[arkfile-share]`. Logs do NOT include filenames,
+ * keys, or any potentially private data — only stages, chunk counts, byte
+ * counts, durations, and status codes.
  */
 
 import { AESGCMDecryptor } from '../crypto/aes-gcm';
 import { getChunkingParams, type ChunkingConfig } from '../crypto/constants';
 import { downloadChunkWithRetry, RetryConfig } from './retry-handler';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress';
+
+const LOG_PREFIX_FILE = '[arkfile-download]';
+const LOG_PREFIX_SHARE = '[arkfile-share]';
 
 /**
  * Metadata returned from the /meta endpoint (snake_case matches JSON response)
@@ -85,49 +95,24 @@ export interface StreamingDownloadOptions {
   showProgressUI?: boolean;
   /** AbortController for cancellation */
   abortController?: AbortController;
-  /**
-   * Pre-opened FileSystemWritableFileStream obtained by the caller via
-   * showSaveFilePicker() before any async work, while the user-gesture token
-   * is still fresh. When provided, the download manager writes directly to
-   * this handle instead of calling showSaveFilePicker() internally.
-   * Pass null or omit to use the legacy Blob fallback.
-   */
-  preOpenedWritable?: any;
 }
 
 /**
  * Result of a streaming download.
  *
- * When savedViaFileSystemAPI is true, the file has been written directly to
- * disk and `data` is undefined. Callers must NOT call triggerBrowserDownload
- * in this case -- the download is already complete.
- *
- * When savedViaFileSystemAPI is false (Firefox/legacy fallback), `blobUrl` is
- * set and callers should use triggerBrowserDownloadFromUrl() or the legacy
- * triggerBrowserDownload() with the data field.
+ * On success, `blobUrl` contains the createObjectURL string that the caller
+ * uses to trigger a browser download via `triggerBrowserDownloadFromUrl()`.
+ * The caller is responsible for calling `URL.revokeObjectURL(blobUrl)` after
+ * the download has been triggered (usually in a setTimeout to give the
+ * browser time to start the download).
  */
 export interface StreamingDownloadResult {
   success: boolean;
   filename?: string | undefined;
   sha256sum?: string | undefined;
   error?: string | undefined;
-  /** True when the file was streamed directly to disk via File System Access API */
-  savedViaFileSystemAPI: boolean;
-  /**
-   * Present only when savedViaFileSystemAPI is false (Firefox/legacy fallback).
-   * Caller must call URL.revokeObjectURL(blobUrl) after triggering the download.
-   */
+  /** Object URL for the assembled Blob; trigger via triggerBrowserDownloadFromUrl. */
   blobUrl?: string | undefined;
-  /**
-   * Present only for legacy fallback path (savedViaFileSystemAPI=false).
-   * @deprecated Avoid using this for large files -- it causes OOM on files > ~1 GB.
-   */
-  data?: Uint8Array | undefined;
-}
-
-/** True if the browser supports the File System Access API save picker */
-function hasFileSystemAccessAPI(): boolean {
-  return typeof window !== 'undefined' && 'showSaveFilePicker' in window;
 }
 
 /**
@@ -167,167 +152,113 @@ export class StreamingDownloadManager {
   }
 
   /**
-   * Download a file using chunked download with decryption
-   *
-   * @param fileId - The file ID to download
-   * @param fek - The File Encryption Key (32 bytes)
-   * @param suggestedFilename - Optional filename for the FSAPI save dialog (shown before download starts)
-   * @returns Promise resolving to the download result
+   * Download a file using chunked download with decryption (owner downloads).
    */
   async downloadFile(fileId: string, fek: Uint8Array): Promise<StreamingDownloadResult> {
-    // Use the pre-opened FSAPI writable provided by the caller (opened in the
-    // direct click handler, one async frame from the user gesture).
-    const fsapiWritable: any = this.options.preOpenedWritable ?? null;
+    const t0 = Date.now();
+    console.log(`${LOG_PREFIX_FILE} Starting owner download (fileId hash=${shortHash(fileId)})`);
 
     try {
-      // Ensure chunking config is loaded from single source of truth
       await this.ensureConfig();
 
-      // Show progress UI if enabled
       if (this.options.showProgressUI) {
-        showProgress({
-          title: 'Downloading File',
-          message: 'Fetching file metadata...',
-          indeterminate: true,
-        });
+        showProgress({ title: 'Downloading File', message: 'Fetching file metadata...', indeterminate: true });
       }
 
       this.reportProgress('metadata', 0, 0, 0, 0);
 
       // 1. Fetch download metadata
+      const tMeta = Date.now();
       const metadata = await this.fetchMetadata(fileId);
+      console.log(`${LOG_PREFIX_FILE} Metadata fetched in ${Date.now() - tMeta}ms (total_chunks=${metadata.total_chunks}, size_bytes=${metadata.size_bytes}, password_type=${metadata.password_type})`);
 
       // 2. Decrypt filename and sha256sum using ACCOUNT KEY (not FEK!)
-      // Metadata (filename, sha256sum) is always encrypted with the account key
-      // (Argon2id derived from account password + username), matching Go's
-      // DecryptFileMetadata() which uses DeriveAccountPasswordKey().
       const metadataKey = this.options.accountKey;
-      if (!metadataKey) {
-        throw new Error('Account key required for metadata decryption (owner download)');
-      }
+      if (!metadataKey) throw new Error('Account key required for metadata decryption (owner download)');
 
-      const filename = await this.decryptMetadataField(
-        metadata.encrypted_filename,
-        metadata.filename_nonce,
-        metadataKey
-      );
+      const tDecMeta = Date.now();
+      const filename = await this.decryptMetadataField(metadata.encrypted_filename, metadata.filename_nonce, metadataKey);
+      const sha256sum = await this.decryptMetadataField(metadata.encrypted_sha256sum, metadata.sha256sum_nonce, metadataKey);
+      console.log(`${LOG_PREFIX_FILE} Metadata decrypted in ${Date.now() - tDecMeta}ms`);
 
-      const sha256sum = await this.decryptMetadataField(
-        metadata.encrypted_sha256sum,
-        metadata.sha256sum_nonce,
-        metadataKey
-      );
-
-      // 3. Stream-decrypt all chunks to disk (FSAPI) or Blob (fallback)
-      const saveResult = await this.streamDecryptedChunksToDisk(
+      // 3. Stream-decrypt all chunks into a Blob
+      const tStream = Date.now();
+      const blobUrl = await this.streamDecryptedChunksToBlob(
         this.makeFileChunkGenerator(fileId, metadata, fek),
-        filename,
         metadata.total_chunks,
-        metadata,
-        fsapiWritable
+        LOG_PREFIX_FILE,
       );
+      console.log(`${LOG_PREFIX_FILE} Blob assembled in ${Date.now() - tStream}ms; total elapsed ${Date.now() - t0}ms`);
 
       this.reportProgress('complete', metadata.total_chunks, metadata.total_chunks, metadata.size_bytes, metadata.size_bytes);
 
-      if (this.options.showProgressUI) {
-        hideProgress();
-      }
+      if (this.options.showProgressUI) hideProgress();
 
-      return {
-        success: true,
-        filename,
-        sha256sum,
-        savedViaFileSystemAPI: saveResult.savedViaFileSystemAPI,
-        blobUrl: saveResult.blobUrl,
-        data: saveResult.data,
-      };
+      console.log(`${LOG_PREFIX_FILE} Download complete: chunks=${metadata.total_chunks}, bytes_decrypted=${metadata.size_bytes}, total_ms=${Date.now() - t0}`);
+
+      return { success: true, filename, sha256sum, blobUrl };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Download failed';
+      console.error(`${LOG_PREFIX_FILE} Download failed at ${Date.now() - t0}ms:`, errorMessage);
 
       this.reportProgress('error', 0, 0, 0, 0, errorMessage);
 
       if (this.options.showProgressUI) {
         updateProgress({ error: errorMessage });
-        // Keep error visible for a moment
         setTimeout(() => hideProgress(), 3000);
       }
 
-      return {
-        success: false,
-        error: errorMessage,
-        savedViaFileSystemAPI: false,
-      };
+      return { success: false, error: errorMessage };
     }
   }
 
   /**
-   * Download a shared file using chunked download with decryption
+   * Download a shared file using chunked download with decryption.
    *
    * Share recipients do NOT have the owner's account key, so server-side
-   * encrypted metadata (filename, sha256sum) cannot be decrypted here.
-   * Instead, metadata comes from the ShareEnvelope (decrypted by the caller
-   * using the share password). The caller should pass filename/sha256 via
-   * the ShareEnvelope and handle display separately.
-   *
-   * @param shareId - The share ID
-   * @param fek - The File Encryption Key (32 bytes)
-   * @param shareMetadata - Optional pre-decrypted metadata from ShareEnvelope
-   * @returns Promise resolving to the download result
+   * encrypted metadata cannot be decrypted here. Filename/sha256 come from
+   * the ShareEnvelope (decrypted by the caller using the share password).
    */
   async downloadSharedFile(
     shareId: string,
     fek: Uint8Array,
-    shareMetadata?: { filename?: string | undefined; sha256?: string | undefined }
+    shareMetadata?: { filename?: string | undefined; sha256?: string | undefined },
   ): Promise<StreamingDownloadResult> {
-    // Use the pre-opened FSAPI writable provided by the caller (opened in the
-    // direct click handler, one async frame from the user gesture).
-    const fsapiWritable: any = this.options.preOpenedWritable ?? null;
+    const t0 = Date.now();
+    console.log(`${LOG_PREFIX_SHARE} Starting shared download (shareId hash=${shortHash(shareId)})`);
 
     try {
       if (this.options.showProgressUI) {
-        showProgress({
-          title: 'Downloading Shared File',
-          message: 'Fetching file metadata...',
-          indeterminate: true,
-        });
+        showProgress({ title: 'Downloading Shared File', message: 'Fetching file metadata...', indeterminate: true });
       }
 
       this.reportProgress('metadata', 0, 0, 0, 0);
 
-      // 1. Fetch share download metadata (chunk info for download)
+      const tMeta = Date.now();
       const metadata = await this.fetchShareMetadata(shareId);
+      console.log(`${LOG_PREFIX_SHARE} Metadata fetched in ${Date.now() - tMeta}ms (chunk_count=${metadata.chunk_count}, size_bytes=${metadata.size_bytes})`);
 
-      // 2. Use metadata from the decrypted ShareEnvelope (provided by caller)
-      // Share recipients cannot decrypt server-side encrypted_filename/encrypted_sha256sum
-      // because those are encrypted with the owner's account key.
       const filename = shareMetadata?.filename;
       const sha256sum = shareMetadata?.sha256;
 
-      // 3. Stream-decrypt all chunks to disk (FSAPI) or Blob (fallback)
-      const saveResult = await this.streamDecryptedChunksToDisk(
+      const tStream = Date.now();
+      const blobUrl = await this.streamDecryptedChunksToBlob(
         this.makeShareChunkGenerator(shareId, metadata, fek),
-        filename || 'shared-file',
         metadata.chunk_count,
-        metadata,
-        fsapiWritable
+        LOG_PREFIX_SHARE,
       );
+      console.log(`${LOG_PREFIX_SHARE} Blob assembled in ${Date.now() - tStream}ms; total elapsed ${Date.now() - t0}ms`);
 
       this.reportProgress('complete', metadata.chunk_count, metadata.chunk_count, metadata.size_bytes, metadata.size_bytes);
 
-      if (this.options.showProgressUI) {
-        hideProgress();
-      }
+      if (this.options.showProgressUI) hideProgress();
 
-      return {
-        success: true,
-        filename,
-        sha256sum,
-        savedViaFileSystemAPI: saveResult.savedViaFileSystemAPI,
-        blobUrl: saveResult.blobUrl,
-        data: saveResult.data,
-      };
+      console.log(`${LOG_PREFIX_SHARE} Download complete: chunks=${metadata.chunk_count}, bytes_decrypted=${metadata.size_bytes}, total_ms=${Date.now() - t0}`);
+
+      return { success: true, filename, sha256sum, blobUrl };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Download failed';
+      console.error(`${LOG_PREFIX_SHARE} Download failed at ${Date.now() - t0}ms:`, errorMessage);
 
       this.reportProgress('error', 0, 0, 0, 0, errorMessage);
 
@@ -336,60 +267,47 @@ export class StreamingDownloadManager {
         setTimeout(() => hideProgress(), 3000);
       }
 
-      return {
-        success: false,
-        error: errorMessage,
-        savedViaFileSystemAPI: false,
-      };
+      return { success: false, error: errorMessage };
     }
   }
 
   /**
    * Async generator that downloads and decrypts file chunks one at a time.
    *
-   * IMPORTANT: Chunk 0 has a 2-byte envelope header prepended during upload:
-   *   [version (1 byte)][keyType (1 byte)][nonce (12 bytes)][ciphertext][tag (16 bytes)]
-   * Chunks 1-N have no envelope header:
-   *   [nonce (12 bytes)][ciphertext][tag (16 bytes)]
-   * The envelope header must be stripped from chunk 0 before AES-GCM decryption.
-   *
-   * Yielding one chunk at a time allows callers to write each chunk to disk and
-   * free it before the next fetch begins, bounding peak RAM to ~one chunk (~16 MiB).
+   * Chunk format:
+   *   - Chunk 0: [version (1 byte)][keyType (1 byte)][nonce (12 B)][ciphertext][tag (16 B)]
+   *   - Chunks 1+:                  [nonce (12 B)][ciphertext][tag (16 B)]
+   * The 2-byte envelope header is stripped from chunk 0 before AES-GCM decrypt.
    */
   private async *makeFileChunkGenerator(
     fileId: string,
     metadata: ChunkedDownloadMetadata,
-    fek: Uint8Array
+    fek: Uint8Array,
   ): AsyncGenerator<Uint8Array> {
     const config = await this.ensureConfig();
-    const envelopeHeaderSize = config.envelope.headerSizeBytes; // 2 bytes
+    const envelopeHeaderSize = config.envelope.headerSizeBytes;
     const decryptor = await AESGCMDecryptor.fromRawKey(fek);
 
     this.startTime = Date.now();
     this.bytesDownloaded = 0;
 
     const headers: Record<string, string> = {};
-    if (this.options.authToken) {
-      headers['Authorization'] = `Bearer ${this.options.authToken}`;
-    }
+    if (this.options.authToken) headers['Authorization'] = `Bearer ${this.options.authToken}`;
 
     for (let chunkIndex = 0; chunkIndex < metadata.total_chunks; chunkIndex++) {
-      // Check for cancellation
-      if (this.options.abortController?.signal.aborted) {
-        throw new Error('Download cancelled');
-      }
+      if (this.options.abortController?.signal.aborted) throw new Error('Download cancelled');
 
-      // Download chunk with retry
+      const tFetch = Date.now();
       const encryptedChunk = await downloadChunkWithRetry(
         `${this.baseUrl}/api/files/${fileId}/chunks/${chunkIndex}`,
         headers,
         this.options.retryConfig,
         (attempt, error, delay) => {
-          console.log(`Chunk ${chunkIndex}: Retry ${attempt} after ${delay}ms - ${error.message}`);
-        }
+          console.log(`${LOG_PREFIX_FILE} Chunk ${chunkIndex} retry ${attempt} after ${delay}ms: ${error.message}`);
+        },
       );
+      const fetchMs = Date.now() - tFetch;
 
-      // Strip 2-byte envelope header from chunk 0 before decryption
       let chunkData = encryptedChunk;
       if (chunkIndex === 0) {
         if (encryptedChunk.length < envelopeHeaderSize) {
@@ -402,18 +320,21 @@ export class StreamingDownloadManager {
         chunkData = encryptedChunk.slice(envelopeHeaderSize);
       }
 
-      // Decrypt chunk (format after stripping: [nonce][ciphertext][tag])
+      const tDec = Date.now();
       const decryptedChunk = await decryptor.decryptChunk(chunkData);
+      const decMs = Date.now() - tDec;
 
-      // Update progress BEFORE yielding so the caller's write step reflects accurate progress
       this.bytesDownloaded += encryptedChunk.length;
-      this.reportProgress(
-        'downloading',
-        chunkIndex + 1,
-        metadata.total_chunks,
-        this.bytesDownloaded,
-        this.calculateTotalEncryptedSize(metadata)
-      );
+
+      // Log every chunk for the first 3, then every ~10% of total chunks
+      const logInterval = Math.max(1, Math.floor(metadata.total_chunks / 10));
+      if (chunkIndex < 3 || chunkIndex % logInterval === 0 || chunkIndex === metadata.total_chunks - 1) {
+        console.log(
+          `${LOG_PREFIX_FILE} Chunk ${chunkIndex + 1}/${metadata.total_chunks}: fetch=${fetchMs}ms, decrypt=${decMs}ms, total_bytes=${this.bytesDownloaded}`,
+        );
+      }
+
+      this.reportProgress('downloading', chunkIndex + 1, metadata.total_chunks, this.bytesDownloaded, this.calculateTotalEncryptedSize(metadata));
 
       if (this.options.showProgressUI) {
         const percentage = ((chunkIndex + 1) / metadata.total_chunks) * 100;
@@ -429,18 +350,16 @@ export class StreamingDownloadManager {
       }
 
       yield decryptedChunk;
-      // encryptedChunk and chunkData are now eligible for GC
     }
   }
 
   /**
    * Async generator that downloads and decrypts shared file chunks one at a time.
-   * See makeFileChunkGenerator for details on the chunk format.
    */
   private async *makeShareChunkGenerator(
     shareId: string,
     metadata: ChunkedDownloadMetadata,
-    fek: Uint8Array
+    fek: Uint8Array,
   ): AsyncGenerator<Uint8Array> {
     const config = await this.ensureConfig();
     const envelopeHeaderSize = config.envelope.headerSizeBytes;
@@ -450,28 +369,26 @@ export class StreamingDownloadManager {
     this.bytesDownloaded = 0;
 
     const headers: Record<string, string> = {};
-    if (this.options.downloadToken) {
-      headers['X-Download-Token'] = this.options.downloadToken;
-    }
+    if (this.options.downloadToken) headers['X-Download-Token'] = this.options.downloadToken;
 
     for (let chunkIndex = 0; chunkIndex < metadata.chunk_count; chunkIndex++) {
-      if (this.options.abortController?.signal.aborted) {
-        throw new Error('Download cancelled');
-      }
+      if (this.options.abortController?.signal.aborted) throw new Error('Download cancelled');
 
+      const tFetch = Date.now();
       const encryptedChunk = await downloadChunkWithRetry(
         `${this.baseUrl}/api/public/shares/${shareId}/chunks/${chunkIndex}`,
         headers,
         this.options.retryConfig,
         (attempt, error, delay) => {
-          console.log(`Share chunk ${chunkIndex}: Retry ${attempt} after ${delay}ms - ${error.message}`);
-        }
+          console.log(`${LOG_PREFIX_SHARE} Chunk ${chunkIndex} retry ${attempt} after ${delay}ms: ${error.message}`);
+        },
       );
+      const fetchMs = Date.now() - tFetch;
 
       let chunkData = encryptedChunk;
       if (chunkIndex === 0) {
         if (encryptedChunk.length < envelopeHeaderSize) {
-          throw new Error(`Share chunk 0 too short: expected at least ${envelopeHeaderSize} bytes for envelope, got ${encryptedChunk.length}`);
+          throw new Error(`Share chunk 0 too short: expected at least ${envelopeHeaderSize} bytes, got ${encryptedChunk.length}`);
         }
         const version = encryptedChunk[0];
         if (version !== 0x01) {
@@ -480,16 +397,20 @@ export class StreamingDownloadManager {
         chunkData = encryptedChunk.slice(envelopeHeaderSize);
       }
 
+      const tDec = Date.now();
       const decryptedChunk = await decryptor.decryptChunk(chunkData);
+      const decMs = Date.now() - tDec;
 
       this.bytesDownloaded += encryptedChunk.length;
-      this.reportProgress(
-        'downloading',
-        chunkIndex + 1,
-        metadata.chunk_count,
-        this.bytesDownloaded,
-        this.calculateTotalEncryptedSize(metadata)
-      );
+
+      const logInterval = Math.max(1, Math.floor(metadata.chunk_count / 10));
+      if (chunkIndex < 3 || chunkIndex % logInterval === 0 || chunkIndex === metadata.chunk_count - 1) {
+        console.log(
+          `${LOG_PREFIX_SHARE} Chunk ${chunkIndex + 1}/${metadata.chunk_count}: fetch=${fetchMs}ms, decrypt=${decMs}ms, total_bytes=${this.bytesDownloaded}`,
+        );
+      }
+
+      this.reportProgress('downloading', chunkIndex + 1, metadata.chunk_count, this.bytesDownloaded, this.calculateTotalEncryptedSize(metadata));
 
       if (this.options.showProgressUI) {
         const percentage = ((chunkIndex + 1) / metadata.chunk_count) * 100;
@@ -509,190 +430,101 @@ export class StreamingDownloadManager {
   }
 
   /**
-   * Stream decrypted chunks directly to disk using the File System Access API,
-   * or fall back to incremental Blob accumulation for browsers without FSAPI
-   * (primarily Firefox).
+   * Stream decrypted chunks into an incrementally-built Blob and return its URL.
    *
-   * File System Access API path: each chunk is written immediately and freed.
-   * Peak memory is bounded to ~one plaintext chunk (~16 MiB).
-   *
-   * Fallback path: uses incremental `new Blob([existingBlob, chunk])` which
-   * stores data in the browser's internal Blob store rather than the JS heap.
-   * This is significantly better than a single giant ArrayBuffer, but may still
-   * fail for very large files on memory-constrained devices in Firefox.
-   *
-   * @param chunks - Async generator producing decrypted plaintext chunks
-   * @param filename - Suggested filename for the save dialog
-   * @param totalChunks - Total expected number of chunks (for progress)
-   * @param metadata - Chunk metadata (used for total size calculation in legacy path)
+   * Uses `new Blob([existingBlob, chunk])` per chunk so the browser keeps each
+   * chunk in its internal Blob store (off the JS heap). Peak heap usage is
+   * bounded to one chunk (~16 MiB) regardless of total file size.
    */
-  /**
-   * Stream decrypted chunks directly to disk using a pre-opened FSAPI writable,
-   * or fall back to incremental Blob accumulation for browsers without FSAPI.
-   *
-   * The `preOpenedWritable` must be opened by the caller before any async work
-   * (i.e., as the first await in the download method) so it is obtained while
-   * the user-gesture token is still active. Chrome's gesture token expires
-   * after ~1 second of async work, so showSaveFilePicker CANNOT be called here.
-   *
-   * @param preOpenedWritable - Already-open FileSystemWritableFileStream, or null for fallback
-   */
-  private async streamDecryptedChunksToDisk(
+  private async streamDecryptedChunksToBlob(
     chunks: AsyncGenerator<Uint8Array>,
-    filename: string,
     totalChunks: number,
-    metadata: ChunkedDownloadMetadata,
-    preOpenedWritable: any
-  ): Promise<{ savedViaFileSystemAPI: boolean; blobUrl?: string; data?: Uint8Array }> {
-    if (preOpenedWritable !== null) {
-      // ── File System Access API path (Chrome / Edge / Safari 15.2+) ──────────
-      // Write each chunk directly to disk as it is decrypted. Peak memory is
-      // bounded to ~one plaintext chunk (~16 MiB).
-      try {
-        for await (const chunk of chunks) {
-          // Extract a concrete ArrayBuffer (slice ensures no SharedArrayBuffer backing).
-          const buf = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
-          await preOpenedWritable.write(buf);
-          // chunk and buf are now eligible for GC
-        }
-        await preOpenedWritable.close();
-      } catch (err) {
-        try { await preOpenedWritable.abort(); } catch { /* ignore */ }
-        throw err;
+    logPrefix: string,
+  ): Promise<string> {
+    let blob = new Blob([]);
+    let chunkIndex = 0;
+    for await (const chunk of chunks) {
+      // slice(0) gives a concrete ArrayBuffer-backed Uint8Array, satisfying BlobPart typing
+      blob = new Blob([blob, chunk.slice(0)]);
+      chunkIndex++;
+      // Log Blob growth at 25/50/75/100% milestones
+      const pctMilestones = [Math.floor(totalChunks * 0.25), Math.floor(totalChunks * 0.5), Math.floor(totalChunks * 0.75), totalChunks];
+      if (pctMilestones.includes(chunkIndex)) {
+        console.log(`${logPrefix} Blob accumulation milestone: ${chunkIndex}/${totalChunks} chunks appended (~${blob.size} bytes total)`);
       }
-      return { savedViaFileSystemAPI: true };
-    } else {
-      // ── Legacy Blob fallback (Firefox, older Safari) ──────────────────────
-      let blob = new Blob([]);
-      for await (const chunk of chunks) {
-        blob = new Blob([blob, chunk.slice(0)]);
-      }
-      const blobUrl = URL.createObjectURL(blob);
-      return { savedViaFileSystemAPI: false, blobUrl };
     }
+    const url = URL.createObjectURL(blob);
+    console.log(`${logPrefix} Blob URL created (${blob.size} bytes)`);
+    return url;
   }
 
-  /**
-   * Fetch download metadata for a file
-   */
+  /** Fetch download metadata for a file */
   private async fetchMetadata(fileId: string): Promise<ChunkedDownloadMetadata> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
-    if (this.options.authToken) {
-      headers['Authorization'] = `Bearer ${this.options.authToken}`;
-    }
-
-    const response = await fetch(`${this.baseUrl}/api/files/${fileId}/meta`, {
-      method: 'GET',
-      headers,
-    });
-
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.options.authToken) headers['Authorization'] = `Bearer ${this.options.authToken}`;
+    const response = await fetch(`${this.baseUrl}/api/files/${fileId}/meta`, { method: 'GET', headers });
     if (!response.ok) {
+      console.error(`${LOG_PREFIX_FILE} Metadata fetch failed: HTTP ${response.status} ${response.statusText}`);
       throw new Error(`Failed to fetch metadata: ${response.status} ${response.statusText}`);
     }
-
     return response.json();
   }
 
-  /**
-   * Fetch download metadata for a shared file
-   */
+  /** Fetch download metadata for a shared file */
   private async fetchShareMetadata(shareId: string): Promise<ChunkedDownloadMetadata> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
-    if (this.options.downloadToken) {
-      headers['X-Download-Token'] = this.options.downloadToken;
-    }
-
-    const response = await fetch(`${this.baseUrl}/api/public/shares/${shareId}/metadata`, {
-      method: 'GET',
-      headers,
-    });
-
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.options.downloadToken) headers['X-Download-Token'] = this.options.downloadToken;
+    const response = await fetch(`${this.baseUrl}/api/public/shares/${shareId}/metadata`, { method: 'GET', headers });
     if (!response.ok) {
+      console.error(`${LOG_PREFIX_SHARE} Metadata fetch failed: HTTP ${response.status} ${response.statusText}`);
       throw new Error(`Failed to fetch share metadata: ${response.status} ${response.statusText}`);
     }
-
     return response.json();
   }
 
   /**
-   * Decrypt a metadata field (filename or sha256sum)
+   * Decrypt a metadata field (filename or sha256sum).
    *
-   * Metadata is always encrypted with the account key (Argon2id derived from
-   * account password + username), NOT the FEK. The caller must pass the correct key.
-   *
-   * The server stores: [nonce (12 bytes)] separately from [ciphertext + auth_tag (16 bytes)]
-   * We reassemble into [nonce][ciphertext][tag] for AES-GCM decryption.
-   *
-   * @param encryptedBase64 - Base64-encoded encrypted data (ciphertext + auth tag)
-   * @param nonceBase64 - Base64-encoded nonce (12 bytes)
-   * @param key - The decryption key (account key for owner, NOT the FEK)
+   * Metadata is encrypted with the account key (Argon2id derived), NOT the FEK.
+   * Server stores [nonce] separately from [ciphertext + auth_tag]; we reassemble.
    */
-  private async decryptMetadataField(
-    encryptedBase64: string,
-    nonceBase64: string,
-    key: Uint8Array
-  ): Promise<string> {
+  private async decryptMetadataField(encryptedBase64: string, nonceBase64: string, key: Uint8Array): Promise<string> {
     const encrypted = this.base64ToBytes(encryptedBase64);
     const nonce = this.base64ToBytes(nonceBase64);
-
-    // Combine nonce + ciphertext for decryption
-    // Format: [nonce (12 bytes)][ciphertext][auth tag (16 bytes)]
     const combined = new Uint8Array(nonce.length + encrypted.length);
     combined.set(nonce, 0);
     combined.set(encrypted, nonce.length);
-
     const decryptor = await AESGCMDecryptor.fromRawKey(key);
     const decrypted = await decryptor.decryptChunk(combined);
-
     return new TextDecoder().decode(decrypted);
   }
 
-  /**
-   * Calculate total encrypted size from metadata
-   */
   private calculateTotalEncryptedSize(metadata: ChunkedDownloadMetadata): number {
-    // Each chunk has AES-GCM overhead (nonce + tag)
     return metadata.size_bytes + (metadata.total_chunks * this.aesGcmOverhead);
   }
 
-  /**
-   * Calculate current download speed in bytes per second
-   */
   private calculateSpeed(): number {
     const elapsedMs = Date.now() - this.startTime;
     if (elapsedMs === 0) return 0;
     return Math.round((this.bytesDownloaded / elapsedMs) * 1000);
   }
 
-  /**
-   * Calculate remaining time in seconds
-   */
   private calculateRemainingTime(remainingChunks: number, speed: number, chunkSize: number): number {
     if (speed === 0) return 0;
     const remainingBytes = remainingChunks * (chunkSize + this.aesGcmOverhead);
     return Math.round(remainingBytes / speed);
   }
 
-  /**
-   * Report progress to callback
-   */
   private reportProgress(
     stage: 'metadata' | 'downloading' | 'decrypting' | 'complete' | 'error',
     currentChunk: number,
     totalChunks: number,
     bytesDownloaded: number,
     totalBytes: number,
-    error?: string
+    error?: string,
   ): void {
     if (this.options.onProgress) {
       const percentage = totalChunks > 0 ? (currentChunk / totalChunks) * 100 : 0;
-
       this.options.onProgress({
         stage,
         currentChunk,
@@ -704,71 +536,51 @@ export class StreamingDownloadManager {
         remainingTime: stage === 'downloading' ? this.calculateRemainingTime(
           totalChunks - currentChunk,
           this.calculateSpeed(),
-          this.chunkingConfig!.plaintextChunkSizeBytes
+          this.chunkingConfig!.plaintextChunkSizeBytes,
         ) : undefined,
         error,
       });
     }
   }
 
-  /**
-   * Convert base64 string to Uint8Array
-   */
   private base64ToBytes(base64: string): Uint8Array {
     const binaryString = atob(base64);
     const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
+    for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
     return bytes;
   }
 }
 
-/**
- * Convenience function to download a file with chunked download
- */
+/** Convenience function to download a file with chunked download (owner) */
 export async function downloadFileChunked(
   fileId: string,
   fek: Uint8Array,
   authToken: string,
-  options: Partial<StreamingDownloadOptions> = {}
+  options: Partial<StreamingDownloadOptions> = {},
 ): Promise<StreamingDownloadResult> {
-  const manager = new StreamingDownloadManager('', {
-    authToken,
-    ...options,
-  });
+  const manager = new StreamingDownloadManager('', { authToken, ...options });
   return manager.downloadFile(fileId, fek);
 }
 
-/**
- * Convenience function to download a shared file with chunked download
- *
- * @param shareId - The share ID
- * @param fek - The File Encryption Key (32 bytes, from decrypted ShareEnvelope)
- * @param downloadToken - Download token (from decrypted ShareEnvelope)
- * @param shareMetadata - Pre-decrypted metadata from ShareEnvelope (filename, sha256)
- * @param options - Additional streaming download options
- */
+/** Convenience function to download a shared file with chunked download */
 export async function downloadSharedFileChunked(
   shareId: string,
   fek: Uint8Array,
   downloadToken: string,
   shareMetadata?: { filename?: string | undefined; sha256?: string | undefined },
-  options: Partial<StreamingDownloadOptions> = {}
+  options: Partial<StreamingDownloadOptions> = {},
 ): Promise<StreamingDownloadResult> {
-  const manager = new StreamingDownloadManager('', {
-    downloadToken,
-    ...options,
-  });
+  const manager = new StreamingDownloadManager('', { downloadToken, ...options });
   return manager.downloadSharedFile(shareId, fek, shareMetadata);
 }
 
 /**
- * Trigger a browser download from a pre-created blob URL (Firefox/legacy fallback).
- * Call this only when result.savedViaFileSystemAPI === false and result.blobUrl is set.
- * Remember to call URL.revokeObjectURL(blobUrl) after triggering.
+ * Trigger a browser download from a Blob URL produced by the streaming manager.
+ * Creates an <a download> anchor, clicks it, then revokes the URL after a delay.
+ * Saves to the user's default Downloads folder via the standard browser pipeline.
  */
 export function triggerBrowserDownloadFromUrl(blobUrl: string, filename: string): void {
+  console.log(`[arkfile-download] Triggering browser download anchor (filename_len=${filename.length})`);
   const a = document.createElement('a');
   a.href = blobUrl;
   a.download = filename;
@@ -777,34 +589,35 @@ export function triggerBrowserDownloadFromUrl(blobUrl: string, filename: string)
   setTimeout(() => {
     document.body.removeChild(a);
     URL.revokeObjectURL(blobUrl);
+    console.log('[arkfile-download] Blob URL revoked');
   }, 1000);
 }
 
 /**
- * Trigger browser download of decrypted data.
+ * Trigger browser download of decrypted data (legacy single-buffer path).
  *
  * @deprecated For new code, prefer the streaming path via downloadFileChunked /
- *   downloadSharedFileChunked which returns a blobUrl for the fallback path.
- *   This function creates a full in-memory copy and will OOM for files > ~1 GB.
+ *   downloadSharedFileChunked which returns a blobUrl. This function creates a
+ *   full in-memory copy and will OOM for files > ~1 GB.
  */
 export function triggerBrowserDownload(data: Uint8Array, filename: string, contentType: string = 'application/octet-stream'): void {
-  // Create a copy to ensure proper ArrayBuffer type
   const dataCopy = new Uint8Array(data);
   const blob = new Blob([dataCopy.buffer], { type: contentType });
   const url = URL.createObjectURL(blob);
-
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
   document.body.appendChild(a);
   a.click();
-
-  // Delay cleanup to give the browser time to initiate the download.
-  // Revoking the blob URL synchronously after click() can race with the
-  // download pipeline, causing 0-byte downloads or page navigation in
-  // headless browsers and some slow clients.
   setTimeout(() => {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }, 1000);
+}
+
+/** Compute a short non-cryptographic hash of an ID for log correlation (no PII) */
+function shortHash(s: string): string {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(16).padStart(8, '0').slice(0, 8);
 }

@@ -162,23 +162,9 @@ export class ShareAccessUI {
     if (sizeDisplay) sizeDisplay.textContent = this.formatBytes(size);
 
     if (downloadBtn) {
-      // showSaveFilePicker MUST be called as the very first await directly in this
-      // click handler — no nested async helpers. Chrome's user-gesture token does
-      // not survive multiple async function boundaries.
-      downloadBtn.onclick = async () => {
-        let preOpenedWritable: any = null;
-        if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
-          try {
-            const handle = await (window as any).showSaveFilePicker({
-              suggestedName: filename || 'arkfile-download',
-            });
-            preOpenedWritable = await handle.createWritable();
-          } catch (err: any) {
-            if (err?.name === 'AbortError') return; // user cancelled
-            preOpenedWritable = null; // any other error: fall back to legacy Blob path
-          }
-        }
-        this.downloadFile(filename, fek, sha256, preOpenedWritable);
+      downloadBtn.onclick = () => {
+        console.log('[arkfile-share] Download button clicked');
+        this.downloadFile(filename, fek, sha256);
       };
     }
   }
@@ -187,12 +173,7 @@ export class ShareAccessUI {
     filename: string,
     fek: Uint8Array,
     sha256?: string,
-    preOpenedWritable: any = null,
   ): Promise<void> {
-    // The caller (onclick handler in showFileDetails) MUST have already opened
-    // the FSAPI writable handle via showSaveFilePicker as the FIRST await in
-    // the click handler. We do NOT call showSaveFilePicker here — gesture is
-    // already consumed.
     const statusDiv = document.getElementById('shareStatus');
 
     if (statusDiv) {
@@ -203,13 +184,10 @@ export class ShareAccessUI {
     try {
       // Validate we have the Download Token
       if (!this.downloadToken) {
-        if (preOpenedWritable) { try { await preOpenedWritable.abort(); } catch { /* ignore */ } }
         throw new Error('Download token not available');
       }
 
       // Use chunked download with progress tracking.
-      // preOpenedWritable is passed so the manager writes directly without
-      // calling showSaveFilePicker again (gesture is already consumed).
       const result: StreamingDownloadResult = await downloadSharedFileChunked(
         this.shareId,
         fek,
@@ -217,7 +195,6 @@ export class ShareAccessUI {
         { filename, sha256 },
         {
           showProgressUI: true,
-          preOpenedWritable,
           onProgress: (progress: { stage: string; percentage: number; error?: string | undefined }) => {
             // Update status with progress info
             if (statusDiv && progress.stage === 'downloading') {
@@ -241,14 +218,12 @@ export class ShareAccessUI {
       // Use the decrypted filename from the result, or fall back to the one we already have
       const downloadFilename = result.filename || filename;
 
-      if (result.savedViaFileSystemAPI) {
-        // File was streamed directly to disk via File System Access API — nothing more to do.
-      } else if (result.blobUrl) {
-        // Firefox / legacy fallback: file is in a Blob URL, trigger the anchor click.
-        triggerBrowserDownloadFromUrl(result.blobUrl, downloadFilename);
-      } else {
+      if (!result.blobUrl) {
         throw new Error('Download completed but no file data was produced');
       }
+
+      console.log('[arkfile-share] Triggering browser download from blob URL');
+      triggerBrowserDownloadFromUrl(result.blobUrl, downloadFilename);
 
       if (statusDiv) {
         statusDiv.textContent = 'Download complete!';
