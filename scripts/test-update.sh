@@ -142,11 +142,11 @@ DOMAIN="${DOMAIN#https://}"
 DOMAIN="${DOMAIN#http://}"
 
 # Detect storage backends from existing secrets.env
-STORAGE_PROVIDER=$(read_secrets_env_value "STORAGE_PROVIDER")
+STORAGE_PROVIDER=$(read_secrets_env_value "STORAGE_PROVIDER_1")
 if [ -z "$STORAGE_PROVIDER" ]; then
     STORAGE_PROVIDER="generic-s3"
 fi
-STORAGE_PROVIDER_ID=$(read_secrets_env_value "STORAGE_PROVIDER_ID")
+STORAGE_PROVIDER_ID=$(read_secrets_env_value "STORAGE_PROVIDER_1_ID")
 STORAGE_PROVIDER_2=$(read_secrets_env_value "STORAGE_PROVIDER_2")
 STORAGE_PROVIDER_2_ID=$(read_secrets_env_value "STORAGE_PROVIDER_2_ID")
 STORAGE_PROVIDER_3=$(read_secrets_env_value "STORAGE_PROVIDER_3")
@@ -181,7 +181,7 @@ fi
 # External providers use non-localhost endpoints or non-generic-s3 provider names.
 IS_LOCAL_SEAWEEDFS=false
 if [ "$STORAGE_PROVIDER" = "generic-s3" ]; then
-    S3_ENDPOINT_VALUE=$(read_secrets_env_value "S3_ENDPOINT")
+    S3_ENDPOINT_VALUE=$(read_secrets_env_value "STORAGE_1_ENDPOINT")
     if echo "$S3_ENDPOINT_VALUE" | grep -qE '(localhost|127\.0\.0\.1)'; then
         IS_LOCAL_SEAWEEDFS=true
     fi
