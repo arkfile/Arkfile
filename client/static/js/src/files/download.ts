@@ -14,7 +14,7 @@ import { showProgress, hideProgress } from '../ui/progress';
 import { showPasswordPrompt } from '../ui/password-modal';
 import {
   downloadFileChunked,
-  triggerBrowserDownload,
+  triggerBrowserDownloadFromUrl,
   StreamingDownloadResult,
 } from './streaming-download';
 import { deriveFileEncryptionKey } from '../crypto/file-encryption';
@@ -155,8 +155,8 @@ export async function downloadFile(
       return;
     }
 
-    if (!result.data || !result.filename) {
-      showError('Download completed but data is missing.');
+    if (!result.filename) {
+      showError('Download completed but filename is missing.');
       return;
     }
 
@@ -167,8 +167,16 @@ export async function downloadFile(
       }
     }
 
-    triggerBrowserDownload(result.data, result.filename);
-    showSuccess(`Downloaded: ${result.filename}`);
+    if (result.savedViaFileSystemAPI) {
+      // File was streamed directly to disk via File System Access API — done.
+      showSuccess(`Downloaded: ${result.filename}`);
+    } else if (result.blobUrl) {
+      // Firefox / legacy fallback: file is in a Blob URL; trigger the download link.
+      triggerBrowserDownloadFromUrl(result.blobUrl, result.filename);
+      showSuccess(`Downloaded: ${result.filename}`);
+    } else {
+      showError('Download completed but no file data was produced.');
+    }
   } catch (error) {
     console.error('Download error:', error);
     showError('An error occurred during file download.');

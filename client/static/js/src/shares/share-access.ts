@@ -7,10 +7,10 @@
 
 import { shareCrypto } from './share-crypto';
 import { showError } from '../ui/messages';
-import { 
-  downloadSharedFileChunked, 
-  triggerBrowserDownload,
-  StreamingDownloadResult 
+import {
+  downloadSharedFileChunked,
+  triggerBrowserDownloadFromUrl,
+  StreamingDownloadResult
 } from '../files/streaming-download';
 
 interface ShareEnvelope {
@@ -209,16 +209,18 @@ export class ShareAccessUI {
         throw new Error(result.error || 'Download failed');
       }
 
-      if (!result.data) {
-        throw new Error('Download completed but data is missing');
-      }
-
       // Use the decrypted filename from the result, or fall back to the one we already have
       const downloadFilename = result.filename || filename;
-      
-      // Trigger browser download
-      triggerBrowserDownload(result.data, downloadFilename);
-      
+
+      if (result.savedViaFileSystemAPI) {
+        // File was streamed directly to disk via File System Access API — nothing more to do.
+      } else if (result.blobUrl) {
+        // Firefox / legacy fallback: file is in a Blob URL, trigger the anchor click.
+        triggerBrowserDownloadFromUrl(result.blobUrl, downloadFilename);
+      } else {
+        throw new Error('Download completed but no file data was produced');
+      }
+
       if (statusDiv) {
         statusDiv.textContent = 'Download complete!';
         statusDiv.className = 'success-message';
