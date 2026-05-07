@@ -61,11 +61,11 @@ func TestMain(m *testing.M) {
 	// Set env vars for config.LoadConfig()
 	originalEnv := map[string]string{}
 	testEnv := map[string]string{
-		"STORAGE_PROVIDER":           "generic-s3",
-		"S3_ENDPOINT":                "http://localhost:9332",
-		"S3_ACCESS_KEY":              "test-user-handlers",
-		"S3_SECRET_KEY":              "test-password-handlers",
-		"S3_BUCKET":                  "test-bucket-handlers",
+		"STORAGE_PROVIDER_1":         "generic-s3",
+		"STORAGE_1_ENDPOINT":         "http://localhost:9332",
+		"STORAGE_1_ACCESS_KEY":       "test-user-handlers",
+		"STORAGE_1_SECRET_KEY":       "test-password-handlers",
+		"STORAGE_1_BUCKET":           "test-bucket-handlers",
 		"LOCAL_STORAGE_PATH":         "/tmp/test-storage-handlers",
 		"JWT_TOKEN_LIFETIME_MINUTES": "1440",
 		"DEBUG_MODE":                 "true",

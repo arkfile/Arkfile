@@ -53,6 +53,12 @@ func NewProviderRegistry(primary ObjectStorageProvider, primaryID string) *Provi
 	}
 }
 
+// SetPrimary configures the primary provider.
+func (r *ProviderRegistry) SetPrimary(provider ObjectStorageProvider, id string) {
+	r.primary = provider
+	r.primaryID = id
+}
+
 // SetSecondary configures the secondary provider.
 func (r *ProviderRegistry) SetSecondary(provider ObjectStorageProvider, id string) {
 	r.secondary = provider

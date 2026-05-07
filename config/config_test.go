@@ -18,36 +18,36 @@ func TestAWSS3ConfigValidation(t *testing.T) {
 		{
 			name: "Valid AWS S3 configuration",
 			envVars: map[string]string{
-				"JWT_SECRET":       "test-jwt-secret",
-				"STORAGE_PROVIDER": "aws-s3",
-				"S3_REGION":        "us-west-2",
-				"S3_ACCESS_KEY":    "AKIAIOSFODNN7EXAMPLE",
-				"S3_SECRET_KEY":    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-				"S3_BUCKET":        "arkfile-test-bucket",
+				"JWT_SECRET":           "test-jwt-secret",
+				"STORAGE_PROVIDER_1":   "aws-s3",
+				"STORAGE_1_REGION":     "us-west-2",
+				"STORAGE_1_ACCESS_KEY": "AKIAIOSFODNN7EXAMPLE",
+				"STORAGE_1_SECRET_KEY": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+				"STORAGE_1_BUCKET":     "arkfile-test-bucket",
 			},
 			expectError: false,
 		},
 		{
 			name: "AWS S3 with default region",
 			envVars: map[string]string{
-				"JWT_SECRET":       "test-jwt-secret",
-				"STORAGE_PROVIDER": "aws-s3",
-				"S3_ACCESS_KEY":    "AKIAIOSFODNN7EXAMPLE",
-				"S3_SECRET_KEY":    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-				"S3_BUCKET":        "arkfile-test-bucket",
-				// S3_REGION not set - should default to us-east-1
+				"JWT_SECRET":           "test-jwt-secret",
+				"STORAGE_PROVIDER_1":   "aws-s3",
+				"STORAGE_1_ACCESS_KEY": "AKIAIOSFODNN7EXAMPLE",
+				"STORAGE_1_SECRET_KEY": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+				"STORAGE_1_BUCKET":     "arkfile-test-bucket",
+				// STORAGE_1_REGION not set - should default to us-east-1
 			},
 			expectError: false,
 		},
 		{
 			name: "AWS S3 missing access key",
 			envVars: map[string]string{
-				"JWT_SECRET":       "test-jwt-secret",
-				"STORAGE_PROVIDER": "aws-s3",
-				"S3_REGION":        "us-west-2",
-				"S3_SECRET_KEY":    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-				"S3_BUCKET":        "arkfile-test-bucket",
-				// S3_ACCESS_KEY missing
+				"JWT_SECRET":           "test-jwt-secret",
+				"STORAGE_PROVIDER_1":   "aws-s3",
+				"STORAGE_1_REGION":     "us-west-2",
+				"STORAGE_1_SECRET_KEY": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+				"STORAGE_1_BUCKET":     "arkfile-test-bucket",
+				// STORAGE_1_ACCESS_KEY missing
 			},
 			expectError: true,
 			errorMsg:    "AWS S3 storage requires",
@@ -55,12 +55,12 @@ func TestAWSS3ConfigValidation(t *testing.T) {
 		{
 			name: "AWS S3 missing secret key",
 			envVars: map[string]string{
-				"JWT_SECRET":       "test-jwt-secret",
-				"STORAGE_PROVIDER": "aws-s3",
-				"S3_REGION":        "us-west-2",
-				"S3_ACCESS_KEY":    "AKIAIOSFODNN7EXAMPLE",
-				"S3_BUCKET":        "arkfile-test-bucket",
-				// S3_SECRET_KEY missing
+				"JWT_SECRET":           "test-jwt-secret",
+				"STORAGE_PROVIDER_1":   "aws-s3",
+				"STORAGE_1_REGION":     "us-west-2",
+				"STORAGE_1_ACCESS_KEY": "AKIAIOSFODNN7EXAMPLE",
+				"STORAGE_1_BUCKET":     "arkfile-test-bucket",
+				// STORAGE_1_SECRET_KEY missing
 			},
 			expectError: true,
 			errorMsg:    "AWS S3 storage requires",
@@ -68,12 +68,12 @@ func TestAWSS3ConfigValidation(t *testing.T) {
 		{
 			name: "AWS S3 missing bucket name",
 			envVars: map[string]string{
-				"JWT_SECRET":       "test-jwt-secret",
-				"STORAGE_PROVIDER": "aws-s3",
-				"S3_REGION":        "us-west-2",
-				"S3_ACCESS_KEY":    "AKIAIOSFODNN7EXAMPLE",
-				"S3_SECRET_KEY":    "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-				// S3_BUCKET missing
+				"JWT_SECRET":           "test-jwt-secret",
+				"STORAGE_PROVIDER_1":   "aws-s3",
+				"STORAGE_1_REGION":     "us-west-2",
+				"STORAGE_1_ACCESS_KEY": "AKIAIOSFODNN7EXAMPLE",
+				"STORAGE_1_SECRET_KEY": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+				// STORAGE_1_BUCKET missing
 			},
 			expectError: true,
 			errorMsg:    "AWS S3 storage requires",
@@ -117,14 +117,16 @@ func TestAWSS3ConfigValidation(t *testing.T) {
 				assert.NotNil(t, cfg)
 
 				// Validate AWS S3 specific configuration
-				assert.Equal(t, "aws-s3", cfg.Storage.Provider)
-				assert.Equal(t, tc.envVars["S3_ACCESS_KEY"], cfg.Storage.AccessKeyID)
-				assert.Equal(t, tc.envVars["S3_SECRET_KEY"], cfg.Storage.SecretAccessKey)
-				assert.Equal(t, tc.envVars["S3_BUCKET"], cfg.Storage.BucketName)
-				assert.True(t, cfg.Storage.UseSSL)
+				if assert.NotNil(t, cfg) {
+					assert.Equal(t, "aws-s3", cfg.Storage.Provider)
+					assert.Equal(t, tc.envVars["STORAGE_1_ACCESS_KEY"], cfg.Storage.AccessKeyID)
+					assert.Equal(t, tc.envVars["STORAGE_1_SECRET_KEY"], cfg.Storage.SecretAccessKey)
+					assert.Equal(t, tc.envVars["STORAGE_1_BUCKET"], cfg.Storage.BucketName)
+					assert.True(t, cfg.Storage.UseSSL)
+				}
 
 				// Check region defaulting
-				expectedRegion := tc.envVars["S3_REGION"]
+				expectedRegion := tc.envVars["STORAGE_1_REGION"]
 				if expectedRegion == "" {
 					expectedRegion = "us-east-1"
 				}
@@ -146,44 +148,44 @@ func TestStorageProviderSupport(t *testing.T) {
 		{
 			name: "aws-s3",
 			envVars: map[string]string{
-				"JWT_SECRET":       "test-jwt-secret",
-				"STORAGE_PROVIDER": "aws-s3",
-				"S3_ACCESS_KEY":    "test-key",
-				"S3_SECRET_KEY":    "test-secret",
-				"S3_BUCKET":        "test-bucket",
+				"JWT_SECRET":           "test-jwt-secret",
+				"STORAGE_PROVIDER_1":   "aws-s3",
+				"STORAGE_1_ACCESS_KEY": "test-key",
+				"STORAGE_1_SECRET_KEY": "test-secret",
+				"STORAGE_1_BUCKET":     "test-bucket",
 			},
 		},
 		{
 			name: "backblaze",
 			envVars: map[string]string{
-				"JWT_SECRET":                "test-jwt-secret",
-				"STORAGE_PROVIDER":          "backblaze",
-				"BACKBLAZE_ENDPOINT":        "s3.us-west-002.backblazeb2.com",
-				"BACKBLAZE_KEY_ID":          "test-key",
-				"BACKBLAZE_APPLICATION_KEY": "test-secret",
-				"BACKBLAZE_BUCKET_NAME":     "test-bucket",
+				"JWT_SECRET":           "test-jwt-secret",
+				"STORAGE_PROVIDER_1":   "backblaze",
+				"STORAGE_1_ENDPOINT":   "https://s3.us-west-002.backblazeb2.com",
+				"STORAGE_1_ACCESS_KEY": "test-key",
+				"STORAGE_1_SECRET_KEY": "test-secret",
+				"STORAGE_1_BUCKET":     "test-bucket",
 			},
 		},
 		{
 			name: "wasabi",
 			envVars: map[string]string{
-				"JWT_SECRET":       "test-jwt-secret",
-				"STORAGE_PROVIDER": "wasabi",
-				"S3_REGION":        "us-east-1",
-				"S3_ACCESS_KEY":    "test-key",
-				"S3_SECRET_KEY":    "test-secret",
-				"S3_BUCKET":        "test-bucket",
+				"JWT_SECRET":           "test-jwt-secret",
+				"STORAGE_PROVIDER_1":   "wasabi",
+				"STORAGE_1_REGION":     "us-east-1",
+				"STORAGE_1_ACCESS_KEY": "test-key",
+				"STORAGE_1_SECRET_KEY": "test-secret",
+				"STORAGE_1_BUCKET":     "test-bucket",
 			},
 		},
 		{
 			name: "vultr",
 			envVars: map[string]string{
-				"JWT_SECRET":       "test-jwt-secret",
-				"STORAGE_PROVIDER": "vultr",
-				"S3_REGION":        "ewr",
-				"S3_ACCESS_KEY":    "test-key",
-				"S3_SECRET_KEY":    "test-secret",
-				"S3_BUCKET":        "test-bucket",
+				"JWT_SECRET":           "test-jwt-secret",
+				"STORAGE_PROVIDER_1":   "vultr",
+				"STORAGE_1_REGION":     "ewr",
+				"STORAGE_1_ACCESS_KEY": "test-key",
+				"STORAGE_1_SECRET_KEY": "test-secret",
+				"STORAGE_1_BUCKET":     "test-bucket",
 			},
 		},
 	}

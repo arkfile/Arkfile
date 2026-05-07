@@ -161,6 +161,75 @@ func LoadConfig() (*Config, error) {
 	return config, nil
 }
 
+func storageSlotKey(slot int, suffix string) string {
+	return fmt.Sprintf("STORAGE_%d_%s", slot, suffix)
+}
+
+func storageProviderKey(slot int) string {
+	return fmt.Sprintf("STORAGE_PROVIDER_%d", slot)
+}
+
+func loadPrimaryStorageConfig(cfg *Config) {
+	cfg.Storage.Provider = os.Getenv(storageProviderKey(1))
+	if cfg.Storage.Provider == "" {
+		cfg.Storage.Provider = "generic-s3"
+	}
+
+	cfg.Storage.Endpoint = os.Getenv(storageSlotKey(1, "ENDPOINT"))
+	cfg.Storage.AccessKeyID = os.Getenv(storageSlotKey(1, "ACCESS_KEY"))
+	cfg.Storage.SecretAccessKey = os.Getenv(storageSlotKey(1, "SECRET_KEY"))
+	cfg.Storage.BucketName = os.Getenv(storageSlotKey(1, "BUCKET"))
+	cfg.Storage.Region = os.Getenv(storageSlotKey(1, "REGION"))
+	if cfg.Storage.Region == "" {
+		cfg.Storage.Region = "us-east-1"
+	}
+
+	switch cfg.Storage.Provider {
+	case "generic-s3":
+		if cfg.Storage.Endpoint == "" {
+			cfg.Storage.Endpoint = "http://localhost:9332"
+		}
+		cfg.Storage.ForcePathStyle = true
+	case "wasabi":
+		if cfg.Storage.Endpoint == "" {
+			cfg.Storage.Endpoint = fmt.Sprintf("https://s3.%s.wasabisys.com", cfg.Storage.Region)
+		}
+		cfg.Storage.ForcePathStyle = true
+		cfg.Storage.UseSSL = true
+	case "vultr":
+		if cfg.Storage.Endpoint == "" {
+			cfg.Storage.Endpoint = fmt.Sprintf("https://%s.vultrobjects.com", cfg.Storage.Region)
+		}
+		cfg.Storage.UseSSL = true
+	case "hetzner":
+		if cfg.Storage.Endpoint == "" {
+			cfg.Storage.Endpoint = fmt.Sprintf("https://%s.your-objectstorage.com", cfg.Storage.Region)
+		}
+		cfg.Storage.ForcePathStyle = true
+		cfg.Storage.UseSSL = true
+	case "backblaze", "cloudflare-r2", "aws-s3":
+		cfg.Storage.UseSSL = true
+	}
+
+	if forcePathStyle := os.Getenv(storageSlotKey(1, "FORCE_PATH_STYLE")); forcePathStyle != "" {
+		if val, err := strconv.ParseBool(forcePathStyle); err == nil {
+			cfg.Storage.ForcePathStyle = val
+		}
+	}
+
+	if useSSL := os.Getenv(storageSlotKey(1, "USE_SSL")); useSSL != "" {
+		if val, err := strconv.ParseBool(useSSL); err == nil {
+			cfg.Storage.UseSSL = val
+		}
+	} else if cfg.Storage.Endpoint != "" {
+		cfg.Storage.UseSSL = strings.HasPrefix(strings.ToLower(cfg.Storage.Endpoint), "https://")
+	}
+
+	if cfg.Storage.Provider == "aws-s3" && cfg.Storage.Region == "" {
+		cfg.Storage.Region = "us-east-1"
+	}
+}
+
 func loadDefaultConfig(cfg *Config) error {
 	// Set default values
 	cfg.Server.Port = "8080"
@@ -243,91 +312,7 @@ func loadEnvConfig(cfg *Config) error {
 	}
 
 	// Storage configuration
-	cfg.Storage.Provider = os.Getenv("STORAGE_PROVIDER")
-	if cfg.Storage.Provider == "" {
-		cfg.Storage.Provider = "generic-s3" // Default to generic S3 (works for local/cluster/etc)
-	}
-
-	// Map environment variables based on provider
-	switch cfg.Storage.Provider {
-	case "generic-s3":
-		cfg.Storage.Endpoint = os.Getenv("S3_ENDPOINT")
-		cfg.Storage.AccessKeyID = os.Getenv("S3_ACCESS_KEY")
-		cfg.Storage.SecretAccessKey = os.Getenv("S3_SECRET_KEY")
-		cfg.Storage.BucketName = os.Getenv("S3_BUCKET")
-		cfg.Storage.Region = os.Getenv("S3_REGION")
-		if cfg.Storage.Region == "" {
-			cfg.Storage.Region = "us-east-1" // Default region
-		}
-
-		// Default to path style for generic S3 (safer for self-hosted)
-		cfg.Storage.ForcePathStyle = true
-		if forcePathStyle := os.Getenv("S3_FORCE_PATH_STYLE"); forcePathStyle != "" {
-			if val, err := strconv.ParseBool(forcePathStyle); err == nil {
-				cfg.Storage.ForcePathStyle = val
-			}
-		}
-
-		// SSL defaults to true, but can be disabled (e.g. for local dev)
-		cfg.Storage.UseSSL = true
-		if useSSL := os.Getenv("S3_USE_SSL"); useSSL != "" {
-			if val, err := strconv.ParseBool(useSSL); err == nil {
-				cfg.Storage.UseSSL = val
-			}
-		}
-
-	case "backblaze":
-		cfg.Storage.Endpoint = os.Getenv("BACKBLAZE_ENDPOINT")
-		cfg.Storage.AccessKeyID = os.Getenv("BACKBLAZE_KEY_ID")
-		cfg.Storage.SecretAccessKey = os.Getenv("BACKBLAZE_APPLICATION_KEY")
-		cfg.Storage.BucketName = os.Getenv("BACKBLAZE_BUCKET_NAME")
-		cfg.Storage.UseSSL = true
-	case "cloudflare-r2":
-		cfg.Storage.Endpoint = os.Getenv("CLOUDFLARE_ENDPOINT")
-		cfg.Storage.AccessKeyID = os.Getenv("CLOUDFLARE_ACCESS_KEY_ID")
-		cfg.Storage.SecretAccessKey = os.Getenv("CLOUDFLARE_SECRET_ACCESS_KEY")
-		cfg.Storage.BucketName = os.Getenv("CLOUDFLARE_BUCKET_NAME")
-		cfg.Storage.UseSSL = true
-	case "wasabi":
-		cfg.Storage.Region = os.Getenv("S3_REGION")
-		cfg.Storage.AccessKeyID = os.Getenv("S3_ACCESS_KEY")
-		cfg.Storage.SecretAccessKey = os.Getenv("S3_SECRET_KEY")
-		cfg.Storage.BucketName = os.Getenv("S3_BUCKET")
-		cfg.Storage.UseSSL = true
-	case "vultr":
-		cfg.Storage.Region = os.Getenv("S3_REGION")
-		cfg.Storage.AccessKeyID = os.Getenv("S3_ACCESS_KEY")
-		cfg.Storage.SecretAccessKey = os.Getenv("S3_SECRET_KEY")
-		cfg.Storage.BucketName = os.Getenv("S3_BUCKET")
-		cfg.Storage.UseSSL = true
-	case "aws-s3":
-		cfg.Storage.Region = os.Getenv("S3_REGION")
-		cfg.Storage.AccessKeyID = os.Getenv("S3_ACCESS_KEY")
-		cfg.Storage.SecretAccessKey = os.Getenv("S3_SECRET_KEY")
-		cfg.Storage.BucketName = os.Getenv("S3_BUCKET")
-		cfg.Storage.UseSSL = true
-		// Default to us-east-1 if no region specified
-		if cfg.Storage.Region == "" {
-			cfg.Storage.Region = "us-east-1"
-		}
-	}
-
-	// Generic overrides (still useful for quick overrides)
-	if endpoint := os.Getenv("STORAGE_ENDPOINT"); endpoint != "" {
-		cfg.Storage.Endpoint = endpoint
-	}
-	if accessKey := os.Getenv("STORAGE_ACCESS_KEY_ID"); accessKey != "" {
-		cfg.Storage.AccessKeyID = accessKey
-	}
-	if secretKey := os.Getenv("STORAGE_SECRET_ACCESS_KEY"); secretKey != "" {
-		cfg.Storage.SecretAccessKey = secretKey
-	}
-	if bucketName := os.Getenv("STORAGE_BUCKET_NAME"); bucketName != "" {
-		cfg.Storage.BucketName = bucketName
-	}
-	if region := os.Getenv("STORAGE_REGION"); region != "" {
-		cfg.Storage.Region = region
-	}
+	loadPrimaryStorageConfig(cfg)
 
 	// Security configuration - Ed25519 key paths can be overridden via environment
 	if jwtPrivateKeyPath := os.Getenv("JWT_PRIVATE_KEY_PATH"); jwtPrivateKeyPath != "" {
@@ -466,31 +451,27 @@ func validateConfig(cfg *Config) error {
 	case "generic-s3":
 		if cfg.Storage.Endpoint == "" || cfg.Storage.AccessKeyID == "" ||
 			cfg.Storage.SecretAccessKey == "" || cfg.Storage.BucketName == "" {
-			return fmt.Errorf("generic-s3 storage requires S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, and S3_BUCKET")
+			return fmt.Errorf("generic-s3 storage requires STORAGE_1_ENDPOINT, STORAGE_1_ACCESS_KEY, STORAGE_1_SECRET_KEY, and STORAGE_1_BUCKET")
 		}
 	case "backblaze":
 		if cfg.Storage.Endpoint == "" || cfg.Storage.AccessKeyID == "" ||
 			cfg.Storage.SecretAccessKey == "" || cfg.Storage.BucketName == "" {
-			return fmt.Errorf("Backblaze storage requires endpoint, access key, secret key, and bucket name")
+			return fmt.Errorf("backblaze storage requires STORAGE_1_ENDPOINT, STORAGE_1_ACCESS_KEY, STORAGE_1_SECRET_KEY, and STORAGE_1_BUCKET")
 		}
 	case "cloudflare-r2":
 		if cfg.Storage.Endpoint == "" || cfg.Storage.AccessKeyID == "" ||
 			cfg.Storage.SecretAccessKey == "" || cfg.Storage.BucketName == "" {
-			return fmt.Errorf("Cloudflare R2 storage requires endpoint, access key, secret key, and bucket name")
+			return fmt.Errorf("cloudflare-r2 storage requires STORAGE_1_ENDPOINT, STORAGE_1_ACCESS_KEY, STORAGE_1_SECRET_KEY, and STORAGE_1_BUCKET")
 		}
-	case "wasabi", "vultr":
+	case "wasabi", "vultr", "hetzner":
 		if cfg.Storage.AccessKeyID == "" || cfg.Storage.SecretAccessKey == "" ||
 			cfg.Storage.BucketName == "" || cfg.Storage.Region == "" {
-			return fmt.Errorf("%s storage requires access key, secret key, bucket name, and region", cfg.Storage.Provider)
+			return fmt.Errorf("%s storage requires STORAGE_1_ACCESS_KEY, STORAGE_1_SECRET_KEY, STORAGE_1_BUCKET, and STORAGE_1_REGION", cfg.Storage.Provider)
 		}
 	case "aws-s3":
 		if cfg.Storage.AccessKeyID == "" || cfg.Storage.SecretAccessKey == "" ||
 			cfg.Storage.BucketName == "" {
-			return fmt.Errorf("AWS S3 storage requires AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_S3_BUCKET_NAME")
-		}
-		// Region validation for AWS S3 - should have been defaulted to us-east-1 if not provided
-		if cfg.Storage.Region == "" {
-			return fmt.Errorf("AWS S3 storage requires a valid region")
+			return fmt.Errorf("AWS S3 storage requires STORAGE_1_ACCESS_KEY, STORAGE_1_SECRET_KEY, and STORAGE_1_BUCKET")
 		}
 	default:
 		return fmt.Errorf("unsupported storage provider: %s", cfg.Storage.Provider)

@@ -23,13 +23,13 @@ func TestMain(m *testing.M) {
 	// Store original env vars and set test values
 	originalEnv := map[string]string{}
 	testEnv := map[string]string{
-		"JWT_SECRET":         "test-jwt-secret-for-models", // Use a different secret to avoid potential clashes if tests run concurrently later
-		"STORAGE_PROVIDER":   "generic-s3",
-		"S3_ENDPOINT":        "http://localhost:9332",
-		"S3_ACCESS_KEY":      "test-user-models",
-		"S3_SECRET_KEY":      "test-password-models",
-		"S3_BUCKET":          "test-bucket-models",
-		"LOCAL_STORAGE_PATH": "/tmp/test-storage-models", // Required for local storage
+		"JWT_SECRET":           "test-jwt-secret-for-models", // Use a different secret to avoid potential clashes if tests run concurrently later
+		"STORAGE_PROVIDER_1":   "generic-s3",
+		"STORAGE_1_ENDPOINT":   "http://localhost:9332",
+		"STORAGE_1_ACCESS_KEY": "test-user-models",
+		"STORAGE_1_SECRET_KEY": "test-password-models",
+		"STORAGE_1_BUCKET":     "test-bucket-models",
+		"LOCAL_STORAGE_PATH":   "/tmp/test-storage-models", // Required for local storage
 	}
 
 	for key, testValue := range testEnv {

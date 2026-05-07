@@ -66,6 +66,85 @@ type S3ProviderConfig struct {
 
 // NewS3Provider creates a new S3AWSStorage instance from the given config.
 // This factory can be called multiple times with different configs for multi-backend.
+func storageProviderEnvKey(slot int) string {
+	return fmt.Sprintf("STORAGE_PROVIDER_%d", slot)
+}
+
+func storageProviderIDEnvKey(slot int) string {
+	return fmt.Sprintf("STORAGE_PROVIDER_%d_ID", slot)
+}
+
+func storageSlotEnvKey(slot int, suffix string) string {
+	return fmt.Sprintf("STORAGE_%d_%s", slot, suffix)
+}
+
+func defaultEndpointAndPathStyle(provider StorageProvider, region string) (string, bool) {
+	switch provider {
+	case ProviderWasabi:
+		return fmt.Sprintf("https://s3.%s.wasabisys.com", region), true
+	case ProviderVultr:
+		return fmt.Sprintf("https://%s.vultrobjects.com", region), false
+	case ProviderHetzner:
+		return fmt.Sprintf("https://%s.your-objectstorage.com", region), true
+	case ProviderBackblaze:
+		return fmt.Sprintf("https://s3.%s.backblazeb2.com", region), false
+	case ProviderGenericS3:
+		return "", true
+	default:
+		return "", false
+	}
+}
+
+// readStorageEnvVars reads environment variables for a configured storage slot.
+// Returns nil when the slot is not configured.
+func readStorageEnvVars(slot int) *S3ProviderConfig {
+	provider := StorageProvider(os.Getenv(storageProviderEnvKey(slot)))
+	if provider == "" {
+		return nil
+	}
+
+	region := os.Getenv(storageSlotEnvKey(slot, "REGION"))
+	if region == "" {
+		region = "us-east-1"
+	}
+
+	endpointURL := os.Getenv(storageSlotEnvKey(slot, "ENDPOINT"))
+	accessKey := os.Getenv(storageSlotEnvKey(slot, "ACCESS_KEY"))
+	secretKey := os.Getenv(storageSlotEnvKey(slot, "SECRET_KEY"))
+	bucketName := os.Getenv(storageSlotEnvKey(slot, "BUCKET"))
+	defaultEndpoint, usePathStyle := defaultEndpointAndPathStyle(provider, region)
+	if endpointURL == "" {
+		endpointURL = defaultEndpoint
+		if provider == ProviderGenericS3 && slot == 1 {
+			endpointURL = "http://localhost:9332"
+		}
+	}
+
+	if v := os.Getenv(storageSlotEnvKey(slot, "FORCE_PATH_STYLE")); v == "true" {
+		usePathStyle = true
+	} else if v == "false" {
+		usePathStyle = false
+	}
+
+	providerID := os.Getenv(storageProviderIDEnvKey(slot))
+	if providerID == "" {
+		providerID = fmt.Sprintf("%s:%s", provider, bucketName)
+	}
+
+	return &S3ProviderConfig{
+		ProviderType:   provider,
+		ProviderID:     providerID,
+		Endpoint:       endpointURL,
+		AccessKey:      accessKey,
+		SecretKey:      secretKey,
+		Bucket:         bucketName,
+		Region:         region,
+		ForcePathStyle: usePathStyle,
+	}
+}
+
+// NewS3Provider creates a new S3AWSStorage instance from the given config.
+// This factory can be called multiple times with different configs for multi-backend.
 func NewS3Provider(cfg S3ProviderConfig) (*S3AWSStorage, error) {
 	region := cfg.Region
 	if region == "" {
@@ -122,212 +201,14 @@ func ensureBucketExists(client *s3.Client, bucketName string) {
 	}
 }
 
-// readPrimaryEnvVars reads environment variables for the primary storage provider
-// and returns a fully-resolved S3ProviderConfig.
-func readPrimaryEnvVars() S3ProviderConfig {
-	provider := StorageProvider(os.Getenv("STORAGE_PROVIDER"))
-	if provider == "" {
-		provider = ProviderGenericS3
-	}
-
-	region := os.Getenv("S3_REGION")
-	if region == "" {
-		region = os.Getenv("AWS_REGION")
-	}
-	if region == "" {
-		region = "us-east-1"
-	}
-
-	accessKey := os.Getenv("S3_ACCESS_KEY")
-	if accessKey == "" {
-		accessKey = os.Getenv("AWS_ACCESS_KEY_ID")
-	}
-
-	secretKey := os.Getenv("S3_SECRET_KEY")
-	if secretKey == "" {
-		secretKey = os.Getenv("AWS_SECRET_ACCESS_KEY")
-	}
-
-	bucketName := os.Getenv("S3_BUCKET")
-	if bucketName == "" {
-		bucketName = os.Getenv("AWS_S3_BUCKET_NAME")
-	}
-
-	var endpointURL string
-	usePathStyle := false
-
-	switch provider {
-	case ProviderWasabi:
-		endpointURL = fmt.Sprintf("https://s3.%s.wasabisys.com", region)
-		usePathStyle = true
-	case ProviderVultr:
-		endpointURL = fmt.Sprintf("https://%s.vultrobjects.com", region)
-	case ProviderHetzner:
-		endpointURL = fmt.Sprintf("https://%s.your-objectstorage.com", region)
-		usePathStyle = true
-	case ProviderCloudflareR2:
-		endpointURL = os.Getenv("CLOUDFLARE_ENDPOINT")
-		accessKey = os.Getenv("CLOUDFLARE_ACCESS_KEY_ID")
-		secretKey = os.Getenv("CLOUDFLARE_SECRET_ACCESS_KEY")
-		bucketName = os.Getenv("CLOUDFLARE_BUCKET_NAME")
-	case ProviderBackblaze:
-		endpointURL = os.Getenv("BACKBLAZE_ENDPOINT")
-		accessKey = os.Getenv("BACKBLAZE_KEY_ID")
-		secretKey = os.Getenv("BACKBLAZE_APPLICATION_KEY")
-		bucketName = os.Getenv("BACKBLAZE_BUCKET_NAME")
-	case ProviderAmazonS3:
-		// AWS S3: SDK auto-resolves the endpoint from the region.
-	case ProviderGenericS3:
-		endpointURL = os.Getenv("S3_ENDPOINT")
-		if endpointURL == "" {
-			endpointURL = "http://localhost:9332"
-		}
-		usePathStyle = true
-		if forcePathStyle := os.Getenv("S3_FORCE_PATH_STYLE"); forcePathStyle == "false" {
-			usePathStyle = false
-		}
-	}
-
-	providerID := os.Getenv("STORAGE_PROVIDER_ID")
-	if providerID == "" {
-		providerID = fmt.Sprintf("%s:%s", provider, bucketName)
-	}
-
-	return S3ProviderConfig{
-		ProviderType:   provider,
-		ProviderID:     providerID,
-		Endpoint:       endpointURL,
-		AccessKey:      accessKey,
-		SecretKey:      secretKey,
-		Bucket:         bucketName,
-		Region:         region,
-		ForcePathStyle: usePathStyle,
-	}
-}
-
-// readSecondaryEnvVars reads environment variables for the secondary storage provider.
-// Returns nil config if STORAGE_PROVIDER_2 is not set.
-func readSecondaryEnvVars() *S3ProviderConfig {
-	provider := StorageProvider(os.Getenv("STORAGE_PROVIDER_2"))
-	if provider == "" {
-		return nil
-	}
-
-	region := os.Getenv("STORAGE_2_REGION")
-	if region == "" {
-		region = "us-east-1"
-	}
-
-	endpointURL := os.Getenv("STORAGE_2_ENDPOINT")
-	accessKey := os.Getenv("STORAGE_2_ACCESS_KEY")
-	secretKey := os.Getenv("STORAGE_2_SECRET_KEY")
-	bucketName := os.Getenv("STORAGE_2_BUCKET")
-	usePathStyle := false
-
-	// Endpoint and path-style defaults for known provider types
-	if endpointURL == "" {
-		switch provider {
-		case ProviderWasabi:
-			endpointURL = fmt.Sprintf("https://s3.%s.wasabisys.com", region)
-			usePathStyle = true
-		case ProviderVultr:
-			endpointURL = fmt.Sprintf("https://%s.vultrobjects.com", region)
-		case ProviderHetzner:
-			endpointURL = fmt.Sprintf("https://%s.your-objectstorage.com", region)
-			usePathStyle = true
-		case ProviderBackblaze:
-			endpointURL = fmt.Sprintf("https://s3.%s.backblazeb2.com", region)
-		}
-	}
-
-	// Allow explicit env var override of path style after per-provider defaults
-	if v := os.Getenv("STORAGE_2_FORCE_PATH_STYLE"); v == "true" {
-		usePathStyle = true
-	} else if v == "false" {
-		usePathStyle = false
-	}
-
-	providerID := os.Getenv("STORAGE_PROVIDER_2_ID")
-	if providerID == "" {
-		providerID = fmt.Sprintf("%s:%s", provider, bucketName)
-	}
-
-	return &S3ProviderConfig{
-		ProviderType:   provider,
-		ProviderID:     providerID,
-		Endpoint:       endpointURL,
-		AccessKey:      accessKey,
-		SecretKey:      secretKey,
-		Bucket:         bucketName,
-		Region:         region,
-		ForcePathStyle: usePathStyle,
-	}
-}
-
-// readTertiaryEnvVars reads environment variables for the tertiary storage provider.
-// Returns nil config if STORAGE_PROVIDER_3 is not set.
-func readTertiaryEnvVars() *S3ProviderConfig {
-	provider := StorageProvider(os.Getenv("STORAGE_PROVIDER_3"))
-	if provider == "" {
-		return nil
-	}
-
-	region := os.Getenv("STORAGE_3_REGION")
-	if region == "" {
-		region = "us-east-1"
-	}
-
-	endpointURL := os.Getenv("STORAGE_3_ENDPOINT")
-	accessKey := os.Getenv("STORAGE_3_ACCESS_KEY")
-	secretKey := os.Getenv("STORAGE_3_SECRET_KEY")
-	bucketName := os.Getenv("STORAGE_3_BUCKET")
-	usePathStyle := false
-
-	// Endpoint and path-style defaults for known provider types
-	if endpointURL == "" {
-		switch provider {
-		case ProviderWasabi:
-			endpointURL = fmt.Sprintf("https://s3.%s.wasabisys.com", region)
-			usePathStyle = true
-		case ProviderVultr:
-			endpointURL = fmt.Sprintf("https://%s.vultrobjects.com", region)
-		case ProviderHetzner:
-			endpointURL = fmt.Sprintf("https://%s.your-objectstorage.com", region)
-			usePathStyle = true
-		case ProviderBackblaze:
-			endpointURL = fmt.Sprintf("https://s3.%s.backblazeb2.com", region)
-		}
-	}
-
-	// Allow explicit env var override of path style after per-provider defaults
-	if v := os.Getenv("STORAGE_3_FORCE_PATH_STYLE"); v == "true" {
-		usePathStyle = true
-	} else if v == "false" {
-		usePathStyle = false
-	}
-
-	providerID := os.Getenv("STORAGE_PROVIDER_3_ID")
-	if providerID == "" {
-		providerID = fmt.Sprintf("%s:%s", provider, bucketName)
-	}
-
-	return &S3ProviderConfig{
-		ProviderType:   provider,
-		ProviderID:     providerID,
-		Endpoint:       endpointURL,
-		AccessKey:      accessKey,
-		SecretKey:      secretKey,
-		Bucket:         bucketName,
-		Region:         region,
-		ForcePathStyle: usePathStyle,
-	}
-}
-
 // InitS3 initializes the S3 storage provider(s) and builds the ProviderRegistry.
 func InitS3() error {
 	// Read and create primary provider
-	primaryCfg := readPrimaryEnvVars()
-	primaryProvider, err := NewS3Provider(primaryCfg)
+	primaryCfg := readStorageEnvVars(1)
+	if primaryCfg == nil {
+		return fmt.Errorf("failed to initialize primary storage provider: STORAGE_PROVIDER_1 is not set")
+	}
+	primaryProvider, err := NewS3Provider(*primaryCfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize primary storage provider: %w", err)
 	}
@@ -342,7 +223,7 @@ func InitS3() error {
 	}
 
 	// Read and create optional secondary provider
-	secondaryCfg := readSecondaryEnvVars()
+	secondaryCfg := readStorageEnvVars(2)
 	if secondaryCfg != nil {
 		secondaryProvider, err := NewS3Provider(*secondaryCfg)
 		if err != nil {
@@ -359,7 +240,7 @@ func InitS3() error {
 
 	// Read and create optional tertiary provider (requires secondary)
 	if Registry.HasSecondary() {
-		tertiaryCfg := readTertiaryEnvVars()
+		tertiaryCfg := readStorageEnvVars(3)
 		if tertiaryCfg != nil {
 			tertiaryProvider, err := NewS3Provider(*tertiaryCfg)
 			if err != nil {

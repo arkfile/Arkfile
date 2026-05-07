@@ -496,6 +496,117 @@ func runSchemaMigrations() {
 	}
 }
 
+type configuredStorageProvider struct {
+	provider     storage.ObjectStorageProvider
+	providerID   string
+	providerType string
+	bucket       string
+	endpoint     string
+	region       string
+	envPrefix    string
+	defaultRole  string
+}
+
+func configuredStorageProvidersFromEnv(reg *storage.ProviderRegistry) []configuredStorageProvider {
+	providers := []configuredStorageProvider{}
+	addProvider := func(provider storage.ObjectStorageProvider, providerID, providerType, bucket, endpoint, region, envPrefix, defaultRole string) {
+		if provider == nil || providerID == "" {
+			return
+		}
+		if region == "" {
+			region = "us-east-1"
+		}
+		providers = append(providers, configuredStorageProvider{
+			provider:     provider,
+			providerID:   providerID,
+			providerType: providerType,
+			bucket:       bucket,
+			endpoint:     endpoint,
+			region:       region,
+			envPrefix:    envPrefix,
+			defaultRole:  defaultRole,
+		})
+	}
+
+	addProvider(
+		reg.Primary(),
+		reg.PrimaryID(),
+		os.Getenv("STORAGE_PROVIDER_1"),
+		os.Getenv("STORAGE_1_BUCKET"),
+		os.Getenv("STORAGE_1_ENDPOINT"),
+		os.Getenv("STORAGE_1_REGION"),
+		"STORAGE_1",
+		"primary",
+	)
+	if reg.HasSecondary() {
+		addProvider(
+			reg.Secondary(),
+			reg.SecondaryID(),
+			os.Getenv("STORAGE_PROVIDER_2"),
+			os.Getenv("STORAGE_2_BUCKET"),
+			os.Getenv("STORAGE_2_ENDPOINT"),
+			os.Getenv("STORAGE_2_REGION"),
+			"STORAGE_2",
+			"secondary",
+		)
+	}
+	if reg.HasTertiary() {
+		addProvider(
+			reg.Tertiary(),
+			reg.TertiaryID(),
+			os.Getenv("STORAGE_PROVIDER_3"),
+			os.Getenv("STORAGE_3_BUCKET"),
+			os.Getenv("STORAGE_3_ENDPOINT"),
+			os.Getenv("STORAGE_3_REGION"),
+			"STORAGE_3",
+			"tertiary",
+		)
+	}
+
+	return providers
+}
+
+func resolveStorageRoleAssignments(configured []configuredStorageProvider, dbRoles map[string]string) map[string]*configuredStorageProvider {
+	assignments := map[string]*configuredStorageProvider{
+		"primary":   nil,
+		"secondary": nil,
+		"tertiary":  nil,
+	}
+	used := map[string]bool{}
+
+	// Pass 1: Assign explicitly mapped DB roles
+	for i := range configured {
+		provider := &configured[i]
+		role := dbRoles[provider.providerID]
+		if role != "primary" && role != "secondary" && role != "tertiary" {
+			continue // No valid DB role, will fallback in pass 2
+		}
+		if assignments[role] != nil {
+			continue // Another provider already took this DB role, fallback
+		}
+		assignments[role] = provider
+		used[provider.providerID] = true
+	}
+
+	// Pass 2: Assign remaining configured providers to open slots based on env ordering
+	for _, role := range []string{"primary", "secondary", "tertiary"} {
+		if assignments[role] != nil {
+			continue
+		}
+		for i := range configured {
+			provider := &configured[i]
+			if used[provider.providerID] {
+				continue
+			}
+			assignments[role] = provider
+			used[provider.providerID] = true
+			break
+		}
+	}
+
+	return assignments
+}
+
 // registerAndBackfillStorageProviders upserts configured storage providers into the
 // database, backfills file_storage_locations for existing files, recalculates provider
 // stats, and marks stale admin tasks as failed. Called once on server startup after
@@ -524,56 +635,47 @@ func registerAndBackfillStorageProviders() {
 		}
 	}
 
-	// Read primary provider config from env (same vars InitS3 used)
-	primaryType := os.Getenv("STORAGE_PROVIDER")
-	if primaryType == "" {
-		primaryType = "generic-s3"
-	}
-	primaryBucket := os.Getenv("S3_BUCKET")
-	if primaryBucket == "" {
-		primaryBucket = os.Getenv("AWS_S3_BUCKET_NAME")
-	}
-	primaryEndpoint := os.Getenv("S3_ENDPOINT")
-	primaryRegion := os.Getenv("S3_REGION")
-	if primaryRegion == "" {
-		primaryRegion = "us-east-1"
+	// Read and upsert all configured providers using slot ordering initially
+	configuredProviders := configuredStorageProvidersFromEnv(reg)
+	for _, provider := range configuredProviders {
+		upsertProvider(provider.providerID, provider.providerType, provider.bucket, provider.endpoint, provider.region, provider.defaultRole, provider.envPrefix)
 	}
 
-	upsertProvider(reg.PrimaryID(), primaryType, primaryBucket, primaryEndpoint, primaryRegion, "primary", "STORAGE")
-
-	// Secondary provider (if configured)
-	if reg.HasSecondary() {
-		secType := os.Getenv("STORAGE_PROVIDER_2")
-		secBucket := os.Getenv("STORAGE_2_BUCKET")
-		secEndpoint := os.Getenv("STORAGE_2_ENDPOINT")
-		secRegion := os.Getenv("STORAGE_2_REGION")
-		if secRegion == "" {
-			secRegion = "us-east-1"
+	// Retrieve authoritative DB roles to reconcile the in-memory registry
+	dbRoles := make(map[string]string, len(configuredProviders))
+	for _, provider := range configuredProviders {
+		role, err := models.GetStorageProviderRole(database.DB, provider.providerID)
+		if err == nil {
+			dbRoles[provider.providerID] = role
 		}
-		upsertProvider(reg.SecondaryID(), secType, secBucket, secEndpoint, secRegion, "secondary", "STORAGE_2")
 	}
 
-	// Tertiary provider (if configured)
-	if reg.HasTertiary() {
-		terType := os.Getenv("STORAGE_PROVIDER_3")
-		terBucket := os.Getenv("STORAGE_3_BUCKET")
-		terEndpoint := os.Getenv("STORAGE_3_ENDPOINT")
-		terRegion := os.Getenv("STORAGE_3_REGION")
-		if terRegion == "" {
-			terRegion = "us-east-1"
+	// Resolve the 3-way assignment: DB roles win, slot order is fallback
+	assignments := resolveStorageRoleAssignments(configuredProviders, dbRoles)
+
+	if primaryAssignment := assignments["primary"]; primaryAssignment != nil {
+		if reg.PrimaryID() != primaryAssignment.providerID {
+			log.Printf("Storage: startup reconciliation set primary to %s (from DB role)", primaryAssignment.providerID)
 		}
-		upsertProvider(reg.TertiaryID(), terType, terBucket, terEndpoint, terRegion, "tertiary", "STORAGE_3")
+		reg.SetPrimary(primaryAssignment.provider, primaryAssignment.providerID)
 	}
 
-	// Reconcile in-memory registry roles with DB-authoritative roles.
-	// The DB preserves role changes from swap-providers/set-primary commands.
-	// InitS3() always assigns roles from env var ordering, so we may need to swap.
-	if reg.HasSecondary() {
-		primaryDBRole, _ := models.GetStorageProviderRole(database.DB, reg.PrimaryID())
-		if primaryDBRole == "secondary" {
-			log.Printf("Storage: DB role for %s is 'secondary' (env says primary), swapping in-memory registry to match DB", reg.PrimaryID())
-			reg.SwapPrimarySecondary()
+	if secondaryAssignment := assignments["secondary"]; secondaryAssignment != nil {
+		if reg.SecondaryID() != secondaryAssignment.providerID {
+			log.Printf("Storage: startup reconciliation set secondary to %s (from DB role)", secondaryAssignment.providerID)
 		}
+		reg.SetSecondary(secondaryAssignment.provider, secondaryAssignment.providerID)
+	} else {
+		reg.SetSecondary(nil, "")
+	}
+
+	if tertiaryAssignment := assignments["tertiary"]; tertiaryAssignment != nil {
+		if reg.TertiaryID() != tertiaryAssignment.providerID {
+			log.Printf("Storage: startup reconciliation set tertiary to %s (from DB role)", tertiaryAssignment.providerID)
+		}
+		reg.SetTertiary(tertiaryAssignment.provider, tertiaryAssignment.providerID)
+	} else {
+		reg.SetTertiary(nil, "")
 	}
 
 	// Backfill file_storage_locations for existing files without location records

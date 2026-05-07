@@ -482,15 +482,15 @@ TLS_CERT_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.crt
 TLS_KEY_FILE=/opt/arkfile/etc/keys/tls/arkfile/server.key
 
 # Storage Configuration - Generic S3 (using local SeaweedFS as S3-compatible backend)
-STORAGE_PROVIDER=generic-s3
-STORAGE_PROVIDER_ID=seaweedfs-primary
-S3_ENDPOINT=http://localhost:9332
-S3_ACCESS_KEY=arkfile-dev
-S3_SECRET_KEY=${S3_PASSWORD}
-S3_BUCKET=arkfile-dev
-S3_REGION=us-east-1
-S3_FORCE_PATH_STYLE=true
-S3_USE_SSL=false
+STORAGE_PROVIDER_1=generic-s3
+STORAGE_PROVIDER_1_ID=seaweedfs-primary
+STORAGE_1_ENDPOINT=http://localhost:9332
+STORAGE_1_ACCESS_KEY=arkfile-dev
+STORAGE_1_SECRET_KEY=${S3_PASSWORD}
+STORAGE_1_BUCKET=arkfile-dev
+STORAGE_1_REGION=us-east-1
+STORAGE_1_FORCE_PATH_STYLE=true
+STORAGE_1_USE_SSL=false
 
 # Secondary Storage - Second SeaweedFS bucket (same instance, different bucket)
 # Enables multi-backend e2e testing without external cloud providers
