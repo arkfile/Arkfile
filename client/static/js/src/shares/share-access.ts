@@ -10,8 +10,20 @@ import { showError } from '../ui/messages';
 import {
   downloadSharedFileChunked,
   triggerBrowserDownloadFromUrl,
-  StreamingDownloadResult
+  StreamingDownloadResult,
 } from '../files/streaming-download';
+
+/** Open a FileSystem writable while the user gesture is still fresh */
+async function openFsapiWritable(suggestedName: string): Promise<any | null> {
+  if (typeof window === 'undefined' || !('showSaveFilePicker' in window)) return null;
+  try {
+    const handle = await (window as any).showSaveFilePicker({ suggestedName });
+    return await handle.createWritable();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return 'cancelled';
+    return null;
+  }
+}
 
 interface ShareEnvelope {
   share_id: string;
@@ -168,6 +180,19 @@ export class ShareAccessUI {
 
   private async downloadFile(filename: string, fek: Uint8Array, sha256?: string): Promise<void> {
     const statusDiv = document.getElementById('shareStatus');
+
+    // ── Call showSaveFilePicker HERE — as the very first await, one async frame
+    // from the Download button click. Chrome's user-gesture token is still fresh.
+    let preOpenedWritable: any = null;
+    if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
+      const writable = await openFsapiWritable(filename || 'arkfile-download');
+      if (writable === 'cancelled') {
+        if (statusDiv) { statusDiv.textContent = 'Download cancelled.'; statusDiv.className = ''; }
+        return;
+      }
+      preOpenedWritable = writable;
+    }
+
     if (statusDiv) {
       statusDiv.textContent = 'Downloading...';
       statusDiv.className = '';
@@ -176,12 +201,13 @@ export class ShareAccessUI {
     try {
       // Validate we have the Download Token
       if (!this.downloadToken) {
+        if (preOpenedWritable) { try { await preOpenedWritable.abort(); } catch { /* ignore */ } }
         throw new Error('Download token not available');
       }
 
-      // Use chunked download with progress tracking
-      // Pass share metadata (from decrypted envelope) so the download manager
-      // can include filename/sha256 in the result without needing the account key
+      // Use chunked download with progress tracking.
+      // preOpenedWritable is passed so the manager writes directly without
+      // calling showSaveFilePicker again (gesture is already consumed).
       const result: StreamingDownloadResult = await downloadSharedFileChunked(
         this.shareId,
         fek,
@@ -189,6 +215,7 @@ export class ShareAccessUI {
         { filename, sha256 },
         {
           showProgressUI: true,
+          preOpenedWritable,
           onProgress: (progress: { stage: string; percentage: number; error?: string | undefined }) => {
             // Update status with progress info
             if (statusDiv && progress.stage === 'downloading') {

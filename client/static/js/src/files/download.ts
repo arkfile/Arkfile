@@ -17,8 +17,21 @@ import {
   triggerBrowserDownloadFromUrl,
   StreamingDownloadResult,
 } from './streaming-download';
+
 import { deriveFileEncryptionKey } from '../crypto/file-encryption';
 import { getAccountKey, decryptFEK } from '../crypto/metadata-helpers';
+
+/** Open a FileSystem writable while the user gesture is still fresh */
+async function openFsapiWritable(suggestedName: string): Promise<any | null> {
+  if (typeof window === 'undefined' || !('showSaveFilePicker' in window)) return null;
+  try {
+    const handle = await (window as any).showSaveFilePicker({ suggestedName });
+    return await handle.createWritable();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return 'cancelled';
+    return null;
+  }
+}
 
 /**
  * File metadata response from the server (snake_case)
@@ -56,15 +69,28 @@ export async function downloadFile(
   expectedHash: string,
   passwordType: string,
 ): Promise<void> {
+  // ── Call showSaveFilePicker HERE — as the very first await, one async frame
+  // from the Download button click. Chrome's user-gesture token is still fresh.
+  let preOpenedWritable: any = null;
+  if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
+    const writable = await openFsapiWritable('arkfile-download');
+    if (writable === 'cancelled') {
+      return; // User dismissed save dialog — silent cancel
+    }
+    preOpenedWritable = writable;
+  }
+
   try {
     const authToken = getToken();
     if (!authToken) {
+      if (preOpenedWritable) { try { await preOpenedWritable.abort(); } catch { /* ignore */ } }
       showError('Not authenticated. Please log in again.');
       return;
     }
 
     const username = getUsernameFromToken();
     if (!username) {
+      if (preOpenedWritable) { try { await preOpenedWritable.abort(); } catch { /* ignore */ } }
       showError('Username not found. Please log in again.');
       return;
     }
@@ -134,7 +160,9 @@ export async function downloadFile(
       }
     }
 
-    // Chunked download with the decrypted FEK
+    // Chunked download with the decrypted FEK.
+    // preOpenedWritable is passed so the manager writes directly without
+    // calling showSaveFilePicker again (gesture is already consumed).
     const result: StreamingDownloadResult = await downloadFileChunked(
       fileId,
       fek,
@@ -142,6 +170,7 @@ export async function downloadFile(
       {
         accountKey: metadataDecryptionKey,
         showProgressUI: true,
+        preOpenedWritable,
         onProgress: (progress) => {
           if (progress.stage === 'error') {
             console.error('Download error:', progress.error);

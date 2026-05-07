@@ -85,6 +85,14 @@ export interface StreamingDownloadOptions {
   showProgressUI?: boolean;
   /** AbortController for cancellation */
   abortController?: AbortController;
+  /**
+   * Pre-opened FileSystemWritableFileStream obtained by the caller via
+   * showSaveFilePicker() before any async work, while the user-gesture token
+   * is still fresh. When provided, the download manager writes directly to
+   * this handle instead of calling showSaveFilePicker() internally.
+   * Pass null or omit to use the legacy Blob fallback.
+   */
+  preOpenedWritable?: any;
 }
 
 /**
@@ -166,26 +174,10 @@ export class StreamingDownloadManager {
    * @param suggestedFilename - Optional filename for the FSAPI save dialog (shown before download starts)
    * @returns Promise resolving to the download result
    */
-  async downloadFile(fileId: string, fek: Uint8Array, suggestedFilename?: string): Promise<StreamingDownloadResult> {
-    // ── Step 0: Open the FSAPI writable handle FIRST (while user gesture is fresh) ──
-    // Chrome's user-gesture token expires ~1 second after the click event. All
-    // subsequent awaits (metadata fetch, FEK decryption, chunk download) consume
-    // that window, so showSaveFilePicker must be the very first await in this
-    // method. The handle stays open while chunks are fetched and decrypted.
-    let fsapiWritable: any = null;
-    if (hasFileSystemAccessAPI()) {
-      try {
-        const handle = await (window as any).showSaveFilePicker({
-          suggestedName: suggestedFilename || 'arkfile-download',
-        });
-        fsapiWritable = await handle.createWritable();
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          return { success: false, error: 'Download cancelled -- save dialog was dismissed', savedViaFileSystemAPI: false };
-        }
-        return { success: false, error: err instanceof Error ? err.message : 'Failed to open save location', savedViaFileSystemAPI: false };
-      }
-    }
+  async downloadFile(fileId: string, fek: Uint8Array): Promise<StreamingDownloadResult> {
+    // Use the pre-opened FSAPI writable provided by the caller (opened in the
+    // direct click handler, one async frame from the user gesture).
+    const fsapiWritable: any = this.options.preOpenedWritable ?? null;
 
     try {
       // Ensure chunking config is loaded from single source of truth
@@ -234,7 +226,6 @@ export class StreamingDownloadManager {
         metadata,
         fsapiWritable
       );
-      fsapiWritable = null; // ownership transferred -- do not abort in finally
 
       this.reportProgress('complete', metadata.total_chunks, metadata.total_chunks, metadata.size_bytes, metadata.size_bytes);
 
@@ -252,12 +243,6 @@ export class StreamingDownloadManager {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Download failed';
-
-      // If we have an open FSAPI writable, abort it to release the file handle
-      if (fsapiWritable) {
-        try { await fsapiWritable.abort(); } catch { /* ignore */ }
-        fsapiWritable = null;
-      }
 
       this.reportProgress('error', 0, 0, 0, 0, errorMessage);
 
@@ -294,22 +279,9 @@ export class StreamingDownloadManager {
     fek: Uint8Array,
     shareMetadata?: { filename?: string | undefined; sha256?: string | undefined }
   ): Promise<StreamingDownloadResult> {
-    // ── Step 0: Open the FSAPI writable handle FIRST (while user gesture is fresh) ──
-    // Same reasoning as downloadFile: showSaveFilePicker must be the first await.
-    let fsapiWritable: any = null;
-    if (hasFileSystemAccessAPI()) {
-      try {
-        const handle = await (window as any).showSaveFilePicker({
-          suggestedName: shareMetadata?.filename || 'shared-file',
-        });
-        fsapiWritable = await handle.createWritable();
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          return { success: false, error: 'Download cancelled -- save dialog was dismissed', savedViaFileSystemAPI: false };
-        }
-        return { success: false, error: err instanceof Error ? err.message : 'Failed to open save location', savedViaFileSystemAPI: false };
-      }
-    }
+    // Use the pre-opened FSAPI writable provided by the caller (opened in the
+    // direct click handler, one async frame from the user gesture).
+    const fsapiWritable: any = this.options.preOpenedWritable ?? null;
 
     try {
       if (this.options.showProgressUI) {
@@ -339,7 +311,6 @@ export class StreamingDownloadManager {
         metadata,
         fsapiWritable
       );
-      fsapiWritable = null; // ownership transferred -- do not abort in finally
 
       this.reportProgress('complete', metadata.chunk_count, metadata.chunk_count, metadata.size_bytes, metadata.size_bytes);
 
@@ -357,12 +328,6 @@ export class StreamingDownloadManager {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Download failed';
-
-      // If we have an open FSAPI writable, abort it to release the file handle
-      if (fsapiWritable) {
-        try { await fsapiWritable.abort(); } catch { /* ignore */ }
-        fsapiWritable = null;
-      }
 
       this.reportProgress('error', 0, 0, 0, 0, errorMessage);
 
