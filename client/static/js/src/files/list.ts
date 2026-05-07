@@ -215,8 +215,21 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
     // Download button
     const downloadBtn = document.createElement('button');
     downloadBtn.textContent = 'Download';
-    downloadBtn.addEventListener('click', () => {
-      downloadFile(file.file_id, file.password_hint, file.sha256sum, file.password_type);
+    // showSaveFilePicker MUST be called as the very first await directly in this
+    // click handler — no nested async helpers. Chrome's user-gesture token does
+    // not survive multiple async function boundaries.
+    downloadBtn.addEventListener('click', async () => {
+      let preOpenedWritable: any = null;
+      if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
+        try {
+          const handle = await (window as any).showSaveFilePicker({ suggestedName: 'arkfile-download' });
+          preOpenedWritable = await handle.createWritable();
+        } catch (err: any) {
+          if (err?.name === 'AbortError') return; // user cancelled
+          preOpenedWritable = null; // any other error: fall back to legacy Blob path
+        }
+      }
+      downloadFile(file.file_id, file.password_hint, file.sha256sum, file.password_type, preOpenedWritable);
     });
 
     // Share button

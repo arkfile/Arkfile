@@ -13,18 +13,6 @@ import {
   StreamingDownloadResult,
 } from '../files/streaming-download';
 
-/** Open a FileSystem writable while the user gesture is still fresh */
-async function openFsapiWritable(suggestedName: string): Promise<any | null> {
-  if (typeof window === 'undefined' || !('showSaveFilePicker' in window)) return null;
-  try {
-    const handle = await (window as any).showSaveFilePicker({ suggestedName });
-    return await handle.createWritable();
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') return 'cancelled';
-    return null;
-  }
-}
-
 interface ShareEnvelope {
   share_id: string;
   file_id: string;
@@ -174,24 +162,38 @@ export class ShareAccessUI {
     if (sizeDisplay) sizeDisplay.textContent = this.formatBytes(size);
 
     if (downloadBtn) {
-      downloadBtn.onclick = () => this.downloadFile(filename, fek, sha256);
+      // showSaveFilePicker MUST be called as the very first await directly in this
+      // click handler — no nested async helpers. Chrome's user-gesture token does
+      // not survive multiple async function boundaries.
+      downloadBtn.onclick = async () => {
+        let preOpenedWritable: any = null;
+        if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
+          try {
+            const handle = await (window as any).showSaveFilePicker({
+              suggestedName: filename || 'arkfile-download',
+            });
+            preOpenedWritable = await handle.createWritable();
+          } catch (err: any) {
+            if (err?.name === 'AbortError') return; // user cancelled
+            preOpenedWritable = null; // any other error: fall back to legacy Blob path
+          }
+        }
+        this.downloadFile(filename, fek, sha256, preOpenedWritable);
+      };
     }
   }
 
-  private async downloadFile(filename: string, fek: Uint8Array, sha256?: string): Promise<void> {
+  private async downloadFile(
+    filename: string,
+    fek: Uint8Array,
+    sha256?: string,
+    preOpenedWritable: any = null,
+  ): Promise<void> {
+    // The caller (onclick handler in showFileDetails) MUST have already opened
+    // the FSAPI writable handle via showSaveFilePicker as the FIRST await in
+    // the click handler. We do NOT call showSaveFilePicker here — gesture is
+    // already consumed.
     const statusDiv = document.getElementById('shareStatus');
-
-    // ── Call showSaveFilePicker HERE — as the very first await, one async frame
-    // from the Download button click. Chrome's user-gesture token is still fresh.
-    let preOpenedWritable: any = null;
-    if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
-      const writable = await openFsapiWritable(filename || 'arkfile-download');
-      if (writable === 'cancelled') {
-        if (statusDiv) { statusDiv.textContent = 'Download cancelled.'; statusDiv.className = ''; }
-        return;
-      }
-      preOpenedWritable = writable;
-    }
 
     if (statusDiv) {
       statusDiv.textContent = 'Downloading...';

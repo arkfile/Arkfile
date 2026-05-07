@@ -21,18 +21,6 @@ import {
 import { deriveFileEncryptionKey } from '../crypto/file-encryption';
 import { getAccountKey, decryptFEK } from '../crypto/metadata-helpers';
 
-/** Open a FileSystem writable while the user gesture is still fresh */
-async function openFsapiWritable(suggestedName: string): Promise<any | null> {
-  if (typeof window === 'undefined' || !('showSaveFilePicker' in window)) return null;
-  try {
-    const handle = await (window as any).showSaveFilePicker({ suggestedName });
-    return await handle.createWritable();
-  } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') return 'cancelled';
-    return null;
-  }
-}
-
 /**
  * File metadata response from the server (snake_case)
  */
@@ -68,18 +56,12 @@ export async function downloadFile(
   hint: string,
   expectedHash: string,
   passwordType: string,
+  preOpenedWritable: any = null,
 ): Promise<void> {
-  // ── Call showSaveFilePicker HERE — as the very first await, one async frame
-  // from the Download button click. Chrome's user-gesture token is still fresh.
-  let preOpenedWritable: any = null;
-  if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
-    const writable = await openFsapiWritable('arkfile-download');
-    if (writable === 'cancelled') {
-      return; // User dismissed save dialog — silent cancel
-    }
-    preOpenedWritable = writable;
-  }
-
+  // The caller (click handler in list.ts) MUST have already opened the FSAPI
+  // writable handle via showSaveFilePicker as the FIRST await in the click
+  // event handler. Chrome's user-gesture token cannot survive multiple async
+  // function boundaries, so this function does NOT call showSaveFilePicker.
   try {
     const authToken = getToken();
     if (!authToken) {
