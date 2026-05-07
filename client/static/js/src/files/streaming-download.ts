@@ -92,7 +92,7 @@ export interface StreamingDownloadOptions {
  *
  * When savedViaFileSystemAPI is true, the file has been written directly to
  * disk and `data` is undefined. Callers must NOT call triggerBrowserDownload
- * in this case — the download is already complete.
+ * in this case -- the download is already complete.
  *
  * When savedViaFileSystemAPI is false (Firefox/legacy fallback), `blobUrl` is
  * set and callers should use triggerBrowserDownloadFromUrl() or the legacy
@@ -112,7 +112,7 @@ export interface StreamingDownloadResult {
   blobUrl?: string | undefined;
   /**
    * Present only for legacy fallback path (savedViaFileSystemAPI=false).
-   * @deprecated Avoid using this for large files — it causes OOM on files > ~1 GB.
+   * @deprecated Avoid using this for large files -- it causes OOM on files > ~1 GB.
    */
   data?: Uint8Array | undefined;
 }
@@ -163,9 +163,30 @@ export class StreamingDownloadManager {
    *
    * @param fileId - The file ID to download
    * @param fek - The File Encryption Key (32 bytes)
+   * @param suggestedFilename - Optional filename for the FSAPI save dialog (shown before download starts)
    * @returns Promise resolving to the download result
    */
-  async downloadFile(fileId: string, fek: Uint8Array): Promise<StreamingDownloadResult> {
+  async downloadFile(fileId: string, fek: Uint8Array, suggestedFilename?: string): Promise<StreamingDownloadResult> {
+    // ── Step 0: Open the FSAPI writable handle FIRST (while user gesture is fresh) ──
+    // Chrome's user-gesture token expires ~1 second after the click event. All
+    // subsequent awaits (metadata fetch, FEK decryption, chunk download) consume
+    // that window, so showSaveFilePicker must be the very first await in this
+    // method. The handle stays open while chunks are fetched and decrypted.
+    let fsapiWritable: any = null;
+    if (hasFileSystemAccessAPI()) {
+      try {
+        const handle = await (window as any).showSaveFilePicker({
+          suggestedName: suggestedFilename || 'arkfile-download',
+        });
+        fsapiWritable = await handle.createWritable();
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return { success: false, error: 'Download cancelled -- save dialog was dismissed', savedViaFileSystemAPI: false };
+        }
+        return { success: false, error: err instanceof Error ? err.message : 'Failed to open save location', savedViaFileSystemAPI: false };
+      }
+    }
+
     try {
       // Ensure chunking config is loaded from single source of truth
       await this.ensureConfig();
@@ -210,8 +231,10 @@ export class StreamingDownloadManager {
         this.makeFileChunkGenerator(fileId, metadata, fek),
         filename,
         metadata.total_chunks,
-        metadata
+        metadata,
+        fsapiWritable
       );
+      fsapiWritable = null; // ownership transferred -- do not abort in finally
 
       this.reportProgress('complete', metadata.total_chunks, metadata.total_chunks, metadata.size_bytes, metadata.size_bytes);
 
@@ -229,6 +252,12 @@ export class StreamingDownloadManager {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Download failed';
+
+      // If we have an open FSAPI writable, abort it to release the file handle
+      if (fsapiWritable) {
+        try { await fsapiWritable.abort(); } catch { /* ignore */ }
+        fsapiWritable = null;
+      }
 
       this.reportProgress('error', 0, 0, 0, 0, errorMessage);
 
@@ -265,6 +294,23 @@ export class StreamingDownloadManager {
     fek: Uint8Array,
     shareMetadata?: { filename?: string | undefined; sha256?: string | undefined }
   ): Promise<StreamingDownloadResult> {
+    // ── Step 0: Open the FSAPI writable handle FIRST (while user gesture is fresh) ──
+    // Same reasoning as downloadFile: showSaveFilePicker must be the first await.
+    let fsapiWritable: any = null;
+    if (hasFileSystemAccessAPI()) {
+      try {
+        const handle = await (window as any).showSaveFilePicker({
+          suggestedName: shareMetadata?.filename || 'shared-file',
+        });
+        fsapiWritable = await handle.createWritable();
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return { success: false, error: 'Download cancelled -- save dialog was dismissed', savedViaFileSystemAPI: false };
+        }
+        return { success: false, error: err instanceof Error ? err.message : 'Failed to open save location', savedViaFileSystemAPI: false };
+      }
+    }
+
     try {
       if (this.options.showProgressUI) {
         showProgress({
@@ -290,8 +336,10 @@ export class StreamingDownloadManager {
         this.makeShareChunkGenerator(shareId, metadata, fek),
         filename || 'shared-file',
         metadata.chunk_count,
-        metadata
+        metadata,
+        fsapiWritable
       );
+      fsapiWritable = null; // ownership transferred -- do not abort in finally
 
       this.reportProgress('complete', metadata.chunk_count, metadata.chunk_count, metadata.size_bytes, metadata.size_bytes);
 
@@ -309,6 +357,12 @@ export class StreamingDownloadManager {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Download failed';
+
+      // If we have an open FSAPI writable, abort it to release the file handle
+      if (fsapiWritable) {
+        try { await fsapiWritable.abort(); } catch { /* ignore */ }
+        fsapiWritable = null;
+      }
 
       this.reportProgress('error', 0, 0, 0, 0, errorMessage);
 
@@ -507,54 +561,45 @@ export class StreamingDownloadManager {
    * @param totalChunks - Total expected number of chunks (for progress)
    * @param metadata - Chunk metadata (used for total size calculation in legacy path)
    */
+  /**
+   * Stream decrypted chunks directly to disk using a pre-opened FSAPI writable,
+   * or fall back to incremental Blob accumulation for browsers without FSAPI.
+   *
+   * The `preOpenedWritable` must be opened by the caller before any async work
+   * (i.e., as the first await in the download method) so it is obtained while
+   * the user-gesture token is still active. Chrome's gesture token expires
+   * after ~1 second of async work, so showSaveFilePicker CANNOT be called here.
+   *
+   * @param preOpenedWritable - Already-open FileSystemWritableFileStream, or null for fallback
+   */
   private async streamDecryptedChunksToDisk(
     chunks: AsyncGenerator<Uint8Array>,
     filename: string,
     totalChunks: number,
-    metadata: ChunkedDownloadMetadata
+    metadata: ChunkedDownloadMetadata,
+    preOpenedWritable: any
   ): Promise<{ savedViaFileSystemAPI: boolean; blobUrl?: string; data?: Uint8Array }> {
-    if (hasFileSystemAccessAPI()) {
+    if (preOpenedWritable !== null) {
       // ── File System Access API path (Chrome / Edge / Safari 15.2+) ──────────
-      // showSaveFilePicker must be called before any async work starts because
-      // it requires a user gesture (click) to be active. Since this method is
-      // called from a button click handler, the gesture is still active here.
-      let handle: FileSystemFileHandle;
-      try {
-        handle = await (window as any).showSaveFilePicker({ suggestedName: filename });
-      } catch (err) {
-        // User cancelled the save dialog — propagate as a cancellation, not an error
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          throw new Error('Download cancelled — save dialog was dismissed');
-        }
-        throw err;
-      }
-
-      const writable = await handle.createWritable();
+      // Write each chunk directly to disk as it is decrypted. Peak memory is
+      // bounded to ~one plaintext chunk (~16 MiB).
       try {
         for await (const chunk of chunks) {
-          // slice(0) copies the Uint8Array into a concrete ArrayBuffer, which is
-          // required by FileSystemWritableFileStream.write() — it rejects
-          // Uint8Array<ArrayBufferLike> because the buffer may be a SharedArrayBuffer.
-          await writable.write(chunk.slice(0) as unknown as FileSystemWriteChunkType);
-          // chunk is now eligible for GC — the writable has consumed it
+          // Extract a concrete ArrayBuffer (slice ensures no SharedArrayBuffer backing).
+          const buf = chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) as ArrayBuffer;
+          await preOpenedWritable.write(buf);
+          // chunk and buf are now eligible for GC
         }
-        await writable.close();
+        await preOpenedWritable.close();
       } catch (err) {
-        // Attempt to close the writable to release the file handle before re-throwing
-        try { await writable.abort(); } catch { /* ignore close error */ }
+        try { await preOpenedWritable.abort(); } catch { /* ignore */ }
         throw err;
       }
-
       return { savedViaFileSystemAPI: true };
     } else {
       // ── Legacy Blob fallback (Firefox, older Safari) ──────────────────────
-      // Build the Blob incrementally: new Blob([existingBlob, newChunk])
-      // The browser keeps each Blob part in its internal Blob store (off JS heap).
-      // This is much better than a single ArrayBuffer for large files but is
-      // still memory-bounded by available system RAM on very large files.
       let blob = new Blob([]);
       for await (const chunk of chunks) {
-        // slice(0) gives a concrete ArrayBuffer-backed Uint8Array, satisfying BlobPart typing
         blob = new Blob([blob, chunk.slice(0)]);
       }
       const blobUrl = URL.createObjectURL(blob);
