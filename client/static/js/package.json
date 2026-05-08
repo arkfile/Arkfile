@@ -14,8 +14,8 @@
     "lint": "bun tsc --noEmit && bun tsc --noEmit -p ../../../tsconfig.sw.json && echo '[OK] TypeScript checks passed'",
     "test:unit": "bun test tests/unit/",
     "test:all": "bun test",
-    "build:dev": "bun build src/app.ts --outdir dist --target browser --format iife --sourcemap && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --sourcemap",
-    "build:prod": "bun build src/app.ts --outdir dist --target browser --format iife --minify --sourcemap=external && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --minify --sourcemap=external"
+    "build:dev": "bun build src/app.ts --outdir dist --target browser --format iife --sourcemap && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm",
+    "build:prod": "bun build src/app.ts --outdir dist --target browser --format iife --minify --sourcemap=external && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --minify"
   },
   "devDependencies": {
     "@types/zxcvbn": "^4.4.5",
