@@ -110,7 +110,7 @@ export class ShareAccessUI {
     // entire wait. No oversold speed promise.
     if (statusDiv) {
       statusDiv.textContent =
-        'Decrypting share password... this can take a few minutes on older devices or slow networks.';
+        'Verifying share access... This can take a few minutes on older devices or slow networks.';
       statusDiv.className = '';
     }
     console.log(
