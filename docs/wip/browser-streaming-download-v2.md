@@ -250,7 +250,7 @@ The `[arkfile-sw] fetch: …` log lines added during this round remain in
 output) and will substantially reduce the cost of diagnosing any future SW
 streaming regression. The cost is three log lines per fetch — negligible.
 
-### Slow-network UX improvement (5-second quiet period)
+### Slow-network UX improvement (always-show progress message)
 
 Tor Browser Safer testing revealed that the share-envelope decryption stage
 (Argon2id KDF + AES-GCM) can take **3–4 minutes** on devices/networks
@@ -259,22 +259,35 @@ on the literal status text "Verifying..." for the entire duration with no
 indication that work was in progress, which led to the user reasonably
 suspecting the page had hung.
 
-`share-access.ts` now uses a 5-second quiet-period pattern:
-- For the first 5 seconds, the status reads simply "Verifying..."
-  (the fast-desktop case completes in <1s, so this is what the typical
-  user sees and nothing more).
-- If the unlock has not completed by 5 seconds, the status swaps to:
-  > "Decrypting share password (Ns elapsed). This can take a few minutes
-  > on older devices or slow networks..."
-  …with the elapsed counter ticking each second.
-- A matching console log fires once at the same 5-second mark, also
-  privacy-preserving (no values, just a generic explanation of what's
-  taking so long).
+**First attempt (failed): a 5-second quiet-period pattern.** For the first
+5 s the status would read "Verifying..."; after that a `setTimeout` would
+swap in an informative message + elapsed counter. The intent was to keep
+the fast-desktop UX clean while informing slow-device users.
 
-The wording deliberately doesn't name specific browsers; "older devices or
-slow networks" describes the conditions, not the tools. Privacy posture is
-unchanged — no new fingerprinting surface, no new timing-side-channel risk,
-and the message is generic.
+This did not work. `share-crypto.decryptShareEnvelope` runs Argon2id
+**synchronously on the main thread**. While the KDF runs the JavaScript
+event loop is fully blocked, so `setTimeout` callbacks cannot fire. After
+3+ minutes the KDF returns and the page resumes; my unconditional
+`clearSlowHint()` then cancels the queued timer before it gets a chance to
+execute. Net result: users on slow devices/networks **never saw the
+message**, exactly the opposite of the goal. The timer-based UX was a
+premise mismatch, not a tunable parameter.
+
+**Current implementation: show the message immediately when unlock starts.**
+The `setTimeout` and elapsed counter are gone. On click, status is set
+once to:
+> "Decrypting share password... this can take a few minutes on older
+> devices or slow networks."
+…and a matching `console.log` fires at the same time. Fast desktops see
+this for <1 s before the unlock completes; slow devices see it for the
+entire duration. No oversold speed promise, no event-loop assumption.
+Wording deliberately doesn't name specific browsers; "older devices or
+slow networks" describes conditions, not tools. Privacy posture unchanged.
+
+The proper structural fix — **moving Argon2id into a Web Worker** so the
+event loop stays responsive during the KDF — is a separate, larger piece
+of work and is deferred. Once that lands, a smarter quiet-period UX would
+be possible.
 
 ### Lessons for future SW debugging
 

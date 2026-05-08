@@ -92,57 +92,32 @@ export class ShareAccessUI {
       return;
     }
 
+    // Show the full message immediately when unlock starts.
+    //
+    // We previously tried a 5-second quiet-period pattern (plain "Verifying..."
+    // for the first 5 s, then swap to the informative message), but the
+    // Argon2id KDF inside `decryptShareEnvelope` runs synchronously on the
+    // main thread and blocks the JavaScript event loop for its entire
+    // duration (3–4 minutes observed on Tor Browser Safer mode). With the
+    // event loop blocked, `setTimeout` callbacks cannot fire, so the
+    // 5-second timer never executed and users on slow devices/networks
+    // never saw the message — exactly the opposite of what we wanted.
+    //
+    // The correct fix would be to move Argon2id into a Web Worker so the
+    // event loop can keep running during the derivation. Until then, the
+    // simplest honest UX is: always show the message. Fast desktops see it
+    // for <1 s before the unlock completes; slow ones see it for the
+    // entire wait. No oversold speed promise.
     if (statusDiv) {
-      statusDiv.textContent = 'Verifying...';
+      statusDiv.textContent =
+        'Decrypting share password... this can take a few minutes on older devices or slow networks.';
       statusDiv.className = '';
     }
-
-    // Quiet-period progress hint:
-    // On fast desktops the share-envelope decryption (Argon2id KDF + AES-GCM)
-    // completes in <1s; the user sees just "Verifying..." -> "Download" and
-    // doesn't need to know what's happening.
-    //
-    // On older devices or slow networks (Tor Browser Safer-mode is the worst
-    // case observed: 3–4 minutes for the same operation), the page can sit
-    // on "Verifying..." long enough that the user assumes it has hung.
-    //
-    // After 5 seconds, swap the status to a more informative message and
-    // start an elapsed-time counter so the user can see it's still working.
-    const QUIET_PERIOD_MS = 5000;
-    const TICK_MS = 1000;
-    const kdfStartMs = Date.now();
-    let slowHintTimer: ReturnType<typeof setTimeout> | null = null;
-    let slowTickInterval: ReturnType<typeof setInterval> | null = null;
-    let slowHintLogged = false;
-    const clearSlowHint = () => {
-      if (slowHintTimer != null) {
-        clearTimeout(slowHintTimer);
-        slowHintTimer = null;
-      }
-      if (slowTickInterval != null) {
-        clearInterval(slowTickInterval);
-        slowTickInterval = null;
-      }
-    };
-    slowHintTimer = setTimeout(() => {
-      if (!slowHintLogged) {
-        console.log(
-          '[arkfile-share] Deriving share password key... '
-            + '(Argon2id is computationally heavy by design; can take a few '
-            + 'minutes on older devices or slow networks)',
-        );
-        slowHintLogged = true;
-      }
-      const updateLabel = () => {
-        if (!statusDiv) return;
-        const elapsedSec = Math.floor((Date.now() - kdfStartMs) / 1000);
-        statusDiv.textContent =
-          `Decrypting share password (${elapsedSec}s elapsed). `
-          + 'This can take a few minutes on older devices or slow networks...';
-      };
-      updateLabel();
-      slowTickInterval = setInterval(updateLabel, TICK_MS);
-    }, QUIET_PERIOD_MS);
+    console.log(
+      '[arkfile-share] Deriving share password key... '
+        + '(Argon2id is computationally heavy by design; can take a few '
+        + 'minutes on older devices or slow networks)',
+    );
 
     try {
       // 1. Get share envelope (public metadata + encrypted FEK)
@@ -154,7 +129,6 @@ export class ShareAccessUI {
           // Both mean the recipient cannot access this share - show a clear message
           // and do not attempt decryption (no point running the KDF)
           if (response.status === 403 || response.status === 404) {
-            clearSlowHint();
             if (statusDiv) {
               statusDiv.textContent = 'This share is no longer valid.';
               statusDiv.className = 'error-message';
@@ -199,12 +173,10 @@ export class ShareAccessUI {
       // 4. Show file details and enable download
       this.showFileDetails(filename, sizeBytes, decryptedEnvelope.fek, sha256);
 
-      clearSlowHint();
       if (statusDiv) statusDiv.className = 'hidden';
 
     } catch (error) {
       console.error('Unlock failed:', error);
-      clearSlowHint();
       if (statusDiv) {
         // At this point the envelope fetch succeeded (200) but decryption failed:
         // the password is incorrect.
