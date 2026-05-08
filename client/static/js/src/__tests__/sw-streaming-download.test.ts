@@ -24,45 +24,44 @@ import {
 
 // ── DOM-ish shims ───────────────────────────────────────────────────────────
 
-interface FakeAnchor {
-  href: string;
-  download: string;
-  rel: string;
-  style: { display: string };
-  parentNode: { removeChild: (a: FakeAnchor) => void } | null;
-  clicked: boolean;
+/**
+ * Fake iframe for testing. The page wrapper triggers the SW-intercepted
+ * download by appending a hidden iframe whose `src` is the synthetic URL —
+ * this is the StreamSaver.js pattern that works reliably across Chromium and
+ * Firefox-derived browsers (the previous `<a download>` + `a.click()` variant
+ * silently no-op'd in Brave; see streaming-download v2 §19 doc).
+ */
+interface FakeIframe {
+  tagName: 'IFRAME';
+  src: string;
+  style: { cssText: string };
+  parentNode: { removeChild: (el: FakeIframe) => void } | null;
 }
 
-let createdAnchors: FakeAnchor[] = [];
+let createdIframes: FakeIframe[] = [];
 
 function installFakeDocument(): () => void {
   const orig = (globalThis as any).document;
   const body = {
-    appendChild(a: FakeAnchor) {
-      a.parentNode = body as any;
+    appendChild(el: FakeIframe) {
+      el.parentNode = body as any;
     },
-    removeChild(_a: FakeAnchor) {
-      _a.parentNode = null;
+    removeChild(el: FakeIframe) {
+      el.parentNode = null;
     },
   };
   (globalThis as any).document = {
     body,
-    createElement(tag: string): FakeAnchor {
-      if (tag !== 'a') throw new Error('only <a> expected');
-      const a: FakeAnchor = {
-        href: '',
-        download: '',
-        rel: '',
-        style: { display: '' },
+    createElement(tag: string): FakeIframe {
+      if (tag !== 'iframe') throw new Error(`only <iframe> expected, got <${tag}>`);
+      const el: FakeIframe = {
+        tagName: 'IFRAME',
+        src: '',
+        style: { cssText: '' },
         parentNode: null,
-        clicked: false,
       };
-      // Add a click() method that flips a flag, no actual navigation.
-      (a as any).click = () => {
-        a.clicked = true;
-      };
-      createdAnchors.push(a);
-      return a;
+      createdIframes.push(el);
+      return el;
     },
   };
   return () => {
@@ -159,7 +158,7 @@ describe('sw-streaming-download - swStreamDownload', () => {
   let controller: FakeController;
 
   beforeEach(() => {
-    createdAnchors = [];
+    createdIframes = [];
     const sw = installFakeServiceWorker();
     controller = sw.controller;
     restoreNav = sw.restore;
@@ -188,7 +187,7 @@ describe('sw-streaming-download - swStreamDownload', () => {
     restore();
   });
 
-  test('happy path: posts init to SW, transfers the stream, triggers anchor click', async () => {
+  test('happy path: posts init to SW, transfers the stream, appends iframe with synthetic URL', async () => {
     const chunks = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])];
     const res = await swStreamDownload({
       contentLength: 6,
@@ -211,12 +210,18 @@ describe('sw-streaming-download - swStreamDownload', () => {
     expect(m.transfer.some((t: any) => t instanceof ReadableStream)).toBe(true);
     expect(m.transfer.some((t: any) => t instanceof MessagePort)).toBe(true);
 
-    // Anchor was created and clicked at /sw-download/<uuid>.
-    expect(createdAnchors.length).toBe(1);
-    const a = createdAnchors[0]!;
-    expect(a.href).toBe(`/sw-download/${m.data.uuid}`);
-    expect(a.download).toBe('test.bin');
-    expect(a.clicked).toBe(true);
+    // An iframe was created and appended pointing at /sw-download/<uuid>.
+    // The iframe pattern (StreamSaver.js style) replaces the previous
+    // <a download> + a.click() approach which silently no-op'd in Brave.
+    expect(createdIframes.length).toBe(1);
+    const iframe = createdIframes[0]!;
+    expect(iframe.tagName).toBe('IFRAME');
+    expect(iframe.src).toBe(`/sw-download/${m.data.uuid}`);
+    // iframe should have been appended to the document body.
+    expect(iframe.parentNode).not.toBeNull();
+    // Hidden offscreen positioning so it never visually appears.
+    expect(iframe.style.cssText).toContain('position:fixed');
+    expect(iframe.style.cssText).toContain('-9999px');
 
     // Drain the stream that was handed to the "SW" so the completion promise resolves.
     const reader = (m.data.stream as ReadableStream<Uint8Array>).getReader();

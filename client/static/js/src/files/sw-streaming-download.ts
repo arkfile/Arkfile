@@ -313,17 +313,34 @@ export async function swStreamDownload(opts: SwStreamDownloadOptions): Promise<S
     else opts.signal.addEventListener('abort', onAbort, { once: true });
   }
 
-  // Trigger the download via a hidden anchor. The SW will intercept the GET.
-  const a = document.createElement('a');
-  a.href = `/sw-download/${uuid}`;
-  a.download = opts.filename;
-  a.style.display = 'none';
-  a.rel = 'noopener';
-  document.body.appendChild(a);
-  a.click();
+  // Trigger the download via a hidden iframe pointed at the synthetic URL.
+  //
+  // We previously used `<a download>` + `a.click()`, but on Chromium-based
+  // browsers (Brave/Chrome) that variant is unreliable when the anchor has
+  // `display:none` and/or `rel="noopener"` — `a.click()` may silently no-op,
+  // the browser never issues a fetch for /sw-download/<uuid>, the SW never
+  // sees a fetch event, and after ~32 MiB are buffered into the transferred
+  // ReadableStream the page-side stream times out. The empty SW console
+  // alongside `bytes_streamed=33554432` exactly is the fingerprint of this
+  // behavior.
+  //
+  // An iframe pointed at the synthetic URL fetches reliably across browsers
+  // and is the same pattern used by StreamSaver.js. The SW intercepts the
+  // iframe's navigation, returns its Content-Disposition: attachment Response,
+  // and the browser turns that into a download — no main-frame navigation,
+  // no anchor click required.
+  const iframe = document.createElement('iframe');
+  iframe.src = `/sw-download/${uuid}`;
+  iframe.style.cssText = 'position:fixed; left:-9999px; top:-9999px; width:1px; height:1px; border:0;';
+  document.body.appendChild(iframe);
+  // Leave the iframe in the DOM long enough for the SW Response to fully
+  // drain (large downloads can take many minutes). The SW's own grace
+  // window for the entry is 30s after first match plus the stream lifetime,
+  // so removing the iframe early would not abort the download — but keeping
+  // it for a generous window avoids any chance of premature teardown.
   setTimeout(() => {
-    if (a.parentNode) a.parentNode.removeChild(a);
-  }, 1000);
+    if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+  }, 60_000);
 
   console.log(`${LOG_PREFIX} download initiated via SW (bytes_expected=${opts.contentLength})`);
 
