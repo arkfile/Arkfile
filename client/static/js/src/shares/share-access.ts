@@ -72,6 +72,7 @@ export class ShareAccessUI {
         <p id="fileSizeDisplay"></p>
         <p id="swUnavailableNote" class="warning-note" style="display:none;"></p>
         <button id="downloadBtn" class="btn primary">Download</button>
+        <a id="swDownloadAnywayLink" href="#" style="display:none; font-size:0.9em; margin-left:0.5rem;">Download anyway</a>
       </div>
     `;
 
@@ -92,7 +93,7 @@ export class ShareAccessUI {
       return;
     }
 
-    // Show the full message immediately when unlock starts.
+    // Show the progress message immediately when unlock starts.
     //
     // We previously tried a 5-second quiet-period pattern (plain "Verifying..."
     // for the first 5 s, then swap to the informative message), but the
@@ -101,23 +102,21 @@ export class ShareAccessUI {
     // duration (3–4 minutes observed on Tor Browser Safer mode). With the
     // event loop blocked, `setTimeout` callbacks cannot fire, so the
     // 5-second timer never executed and users on slow devices/networks
-    // never saw the message — exactly the opposite of what we wanted.
+    // never saw the message.
     //
     // The correct fix would be to move Argon2id into a Web Worker so the
-    // event loop can keep running during the derivation. Until then, the
+    // event loop stays responsive during the derivation. Until then, the
     // simplest honest UX is: always show the message. Fast desktops see it
     // for <1 s before the unlock completes; slow ones see it for the
-    // entire wait. No oversold speed promise.
+    // entire wait. Wording is deliberately neutral — does not reveal
+    // cryptographic internals like "decrypting password" or "Argon2id"
+    // (privacy posture) and makes no oversold speed promise.
     if (statusDiv) {
       statusDiv.textContent =
-        'Verifying share access... This can take a few minutes on older devices or slow networks.';
+        'Verifying… can take a few minutes on slow networks/old devices.';
       statusDiv.className = '';
     }
-    console.log(
-      '[arkfile-share] Deriving share password key... '
-        + '(Argon2id is computationally heavy by design; can take a few '
-        + 'minutes on older devices or slow networks)',
-    );
+    console.log('[arkfile-share] Verifying share access…');
 
     try {
       // 1. Get share envelope (public metadata + encrypted FEK)
@@ -198,20 +197,46 @@ export class ShareAccessUI {
     if (nameDisplay) nameDisplay.textContent = filename;
     if (sizeDisplay) sizeDisplay.textContent = this.formatBytes(size);
 
-    // Surface a warning when SW streaming is unavailable AND the file is
-    // larger than ~2 GiB. This is the case where Chromium-based private/
-    // incognito tabs fall through to the Blob path and hit Chromium's blob
-    // URL ceiling. The recipient cannot work around this from inside a
-    // private tab; we tell them in advance instead of letting them spend
-    // minutes downloading and then failing.
+    // Surface a warning + GATE the download action when SW streaming is
+    // unavailable AND the file is larger than ~2 GiB.
+    //
+    // Background: when the SW path is unavailable, downloads fall through to
+    // the Blob fallback path, which accumulates the full plaintext into the
+    // browser's internal Blob store before triggering the download. For files
+    // >~2 GiB this can fail in many ways depending on the user's specific
+    // browser/device combination — anywhere from a silent timeout to an
+    // OS-level memory pressure cascade that has been observed to take down
+    // the user's WiFi/VPN connection on memory-constrained mobile devices.
+    //
+    // We do not detect the user's browser/device/RAM (privacy posture +
+    // unreliable signals), so we cannot predict what will happen on any
+    // specific setup. We only know SW is unavailable AND the file is large.
+    // The honest framing is: alternatives are more reliable; user can
+    // override if they accept the risk.
+    //
+    // Behavior: download button is DISABLED, warning is shown, an
+    // "Download anyway" override link re-enables the button.
     const SW_LARGE_FILE_WARN_THRESHOLD = 2 * 1024 * 1024 * 1024; // 2 GiB
     const swNote = document.getElementById('swUnavailableNote');
-    if (swNote && !isSwAvailable() && size > SW_LARGE_FILE_WARN_THRESHOLD) {
+    const downloadAnywayLink = document.getElementById('swDownloadAnywayLink') as HTMLAnchorElement | null;
+    const swWarningTriggered = !isSwAvailable() && size > SW_LARGE_FILE_WARN_THRESHOLD;
+
+    if (swWarningTriggered && swNote) {
       swNote.textContent =
-        'This file is large. Your browser may not be able to complete the download in private/incognito mode. ' +
-        'Options: open this link in a regular (non-private) browser tab, try a different browser ' +
-        '(Firefox or Tor Browser), or use the arkfile-client CLI tool to download.';
+        'Large file. For most reliable results with files this size, use a desktop browser, or the arkfile-client CLI.';
       swNote.style.display = '';
+      if (downloadBtn) (downloadBtn as HTMLButtonElement).disabled = true;
+      if (downloadAnywayLink) {
+        downloadAnywayLink.style.display = '';
+        downloadAnywayLink.onclick = (e) => {
+          e.preventDefault();
+          // User has chosen to proceed despite the warning. Hide the warning
+          // and the override link, and re-enable the Download button.
+          if (swNote) swNote.style.display = 'none';
+          downloadAnywayLink.style.display = 'none';
+          if (downloadBtn) (downloadBtn as HTMLButtonElement).disabled = false;
+        };
+      }
     }
 
     if (downloadBtn) {

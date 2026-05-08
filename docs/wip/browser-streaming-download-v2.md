@@ -198,29 +198,75 @@ manager issues more than one fetch for the same SW URL on a single user
 click (probe + commit). It costs us almost nothing and makes the SW resilient
 to that whole class of edge cases. See `client/static/js/src/sw-download.ts`.
 
-### UI warning for SW-unavailable + large-file recipients
+### UI gate for SW-unavailable + large-file recipients
 
-The share-access page now surfaces a one-line warning when
-`isSwAvailable() === false` AND `metadata.size_bytes > 2 GiB`:
+The share-access page now **gates** the Download button with a warning
+when `isSwAvailable() === false` AND `metadata.size_bytes > 2 GiB`. The
+button is **disabled by default** in that case; a small "Download anyway"
+override link beside it re-enables it for users who choose to accept the
+risk.
+
+Initial deployment surfaced a passive warning only:
 
 > "This file is large. Your browser may not be able to complete the download
 > in private/incognito mode. Options: open this link in a regular
 > (non-private) browser tab, try a different browser (Firefox or Tor
 > Browser), or use the arkfile-client CLI tool to download."
 
-Wording is calibrated: Firefox / Tor Browser / regular tab are presented as
-**alternatives to try**, not promises. The CLI is the universal fallback.
+Two problems with that wording emerged from real-world testing:
+
+1. **It implied private/incognito Chromium was the only failure mode.** Old
+   Android Firefox in a private tab also fell back to Blob and exhibited
+   exactly the same problem (proven by the absence of the upfront save-file
+   prompt that Firefox shows on the SW path).
+2. **It named "Firefox or Tor Browser" as alternatives.** Both can fail too
+   on the exact same case — old Android Firefox + 2.1 GB + private tab
+   crashed the tab and triggered the OS low-memory killer on a real test
+   device, knocking the WiFi/VPN connection offline as collateral damage.
+   We named browsers that we could not actually guarantee would work.
+
+Replaced with deliberately neutral wording that makes no claim about the
+user's specific setup (we don't detect browser/device/RAM):
+
+> "Large file. For most reliable results with files this size, use a
+> desktop browser, or the arkfile-client CLI."
+
+Combined with the disabled-button gate, the user has to deliberately
+opt in via "Download anyway" to attempt the Blob path on a >2 GiB file.
+
+We **deliberately do not user-agent-detect** for this gate. We don't know
+which browser/device/RAM the user has, and the failure modes vary widely.
+The gate fires purely on the two facts we do know: SW could not register,
+file is >2 GiB. That is information enough.
+
+The Blob fallback path can fail in many ways depending on the user's
+specific setup — anywhere from a silent timeout to an OS-level memory
+pressure cascade that has been observed (on memory-constrained mobile
+devices) to take down the user's WiFi/VPN connection while the tab dies.
+Given that the failure mode can actively harm the user's network state,
+the disabled-button-by-default policy is justified even though it is
+slightly paternalistic.
 
 ### Cross-browser results (verified)
 
 | Browser / Tab type | Result | Path used | Hash verification |
 |---|---|---|---|
 | Brave regular tab — 2.47 GB owner download | ✓ Works | SW | match |
-| Firefox private tab — 2.47 GB shared download | ✓ Works | SW | match |
-| **Tor Browser Safer mode — 2.47 GB shared download** | **✓ Works** | **Blob fallback** (Firefox-base, no Chromium 2 GB ceiling) | (download completed end-to-end; SHA-256 not separately verified) |
-| Brave private tab — 2.47 GB shared download | Predicted to fail; warning UI surfaced | n/a | n/a |
+| Firefox private tab (desktop) — 2.47 GB shared download | ✓ Works | SW | match |
+| **Tor Browser Safer mode (desktop) — 2.47 GB shared download** | **✓ Works** | **Blob fallback** (Firefox-base, no Chromium 2 GB ceiling) | (download completed end-to-end; SHA-256 not separately verified) |
+| **Old Android Firefox private tab — 2.1 GB shared download** | **✗ Fails** (silent; OS-OOM cascade observed taking down WiFi/VPN) | Blob fallback (Firefox-base did not register SW in private tab on this old version) | n/a |
+| Brave private tab — 2.47 GB shared download | Predicted to fail; warning UI gates with override | n/a | n/a |
 | Chrome / Edge | Untested; expected same as Brave | — | — |
-| Tor Browser Standard mode | Untested; expected same or better than Safer | — | — |
+| Tor Browser Standard mode (desktop) | Untested; expected same or better than Safer | — | — |
+
+The "Old Android Firefox private tab" row was an observed real-world
+failure that motivated the disabled-button gate documented above.
+Diagnostic indicator: Firefox shows the OS save-file prompt
+**immediately** when the SW path is taken (because the SW Response
+includes `Content-Disposition: attachment` headers up front); on the
+Blob path the prompt appears only after bytes are fully accumulated.
+Absence of the upfront prompt is a reliable indicator that the SW
+path was not used.
 
 Firefox private tab using the **SW path** (not just falling back to Blob) was
 a stronger result than the v2 plan §11.2 predicted — Firefox allows ephemeral
@@ -267,22 +313,36 @@ the fast-desktop UX clean while informing slow-device users.
 This did not work. `share-crypto.decryptShareEnvelope` runs Argon2id
 **synchronously on the main thread**. While the KDF runs the JavaScript
 event loop is fully blocked, so `setTimeout` callbacks cannot fire. After
-3+ minutes the KDF returns and the page resumes; my unconditional
-`clearSlowHint()` then cancels the queued timer before it gets a chance to
-execute. Net result: users on slow devices/networks **never saw the
-message**, exactly the opposite of the goal. The timer-based UX was a
-premise mismatch, not a tunable parameter.
+3+ minutes the KDF returns and the page resumes; the unconditional cleanup
+then cancels the queued timer before it gets a chance to execute. Net
+result: users on slow devices/networks **never saw the message**, exactly
+the opposite of the goal. The timer-based UX was a premise mismatch, not
+a tunable parameter.
 
-**Current implementation: show the message immediately when unlock starts.**
-The `setTimeout` and elapsed counter are gone. On click, status is set
-once to:
-> "Decrypting share password... this can take a few minutes on older
-> devices or slow networks."
-…and a matching `console.log` fires at the same time. Fast desktops see
-this for <1 s before the unlock completes; slow devices see it for the
-entire duration. No oversold speed promise, no event-loop assumption.
-Wording deliberately doesn't name specific browsers; "older devices or
-slow networks" describes conditions, not tools. Privacy posture unchanged.
+**Second attempt (worse): swap "Verifying..." with "Decrypting share
+password... this can take a few minutes on older devices or slow networks."**
+
+Two further problems:
+- The phrasing "Decrypting share password" reveals more about the
+  cryptographic flow than the more opaque "Verifying..." did. While the
+  fact of client-side password-based decryption is not secret, surfacing
+  it in the status line is unnecessary information leakage to anyone
+  watching the user's screen.
+- It was also subtly wrong: we do not "decrypt the password"; we derive a
+  key from it via Argon2id and then decrypt an envelope.
+
+**Current implementation: show a neutral progress message immediately when
+unlock starts.** On click, status is set once to:
+> "Verifying… can take a few minutes on slow networks/old devices."
+
+…and a neutral matching `console.log` fires at the same time:
+> `[arkfile-share] Verifying share access…`
+
+Fast desktops see this for <1 s before the unlock completes; slow devices
+see it for the entire duration. No oversold speed promise, no event-loop
+assumption, no leak of crypto internals. Wording deliberately doesn't
+name specific browsers; "older devices or slow networks" describes
+conditions, not tools.
 
 The proper structural fix — **moving Argon2id into a Web Worker** so the
 event loop stays responsive during the KDF — is a separate, larger piece
