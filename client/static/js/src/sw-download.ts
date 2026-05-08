@@ -40,19 +40,35 @@ interface PendingStream {
   filename: string;
   contentLength: number | undefined;
   expiresAt: number;
+  /**
+   * Set to true after the first matching fetch consumes the stream. Subsequent
+   * fetches for the same UUID return an empty 200 response (not a 404) so
+   * Chromium-style download managers — which fire more than one fetch for
+   * the same SW URL on a single user click (probe + download commit) — do
+   * not abort the download with "File wasn't available on site."
+   */
+  consumed: boolean;
 }
 
 const pendingStreams = new Map<string, PendingStream>();
+
+// Post-consumption grace window: how long the entry stays around so a second
+// (or third) fetch from the browser's download manager for the same UUID is
+// answered with an empty 200 instead of a 404.
+const POST_CONSUMED_GRACE_MS = 30 * 1000;
 
 setInterval(() => {
   const now = Date.now();
   for (const [uuid, entry] of pendingStreams) {
     if (entry.expiresAt < now) {
-      try { entry.stream.cancel('expired'); } catch (_) { /* ignore */ }
+      if (!entry.consumed) {
+        try { entry.stream.cancel('expired'); } catch (_) { /* ignore */ }
+      }
       pendingStreams.delete(uuid);
     }
   }
 }, CLEANUP_INTERVAL_MS);
+
 
 self.addEventListener('install', (event: ExtendableEvent) => {
   event.waitUntil(self.skipWaiting());
@@ -84,6 +100,7 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
         ? contentLength
         : undefined,
       expiresAt: Date.now() + STREAM_TTL_MS,
+      consumed: false,
     });
     replyAck(event, { type: 'ack', uuid });
     return;
@@ -127,6 +144,9 @@ self.addEventListener('fetch', (event: FetchEvent) => {
   const uuid = url.pathname.substring(SW_PATH_PREFIX.length);
   const entry = pendingStreams.get(uuid);
   if (!entry) {
+    // No entry at all: either it never existed, was cancelled, or its
+    // post-consumption grace window already elapsed. 404 is appropriate here.
+    console.log('[arkfile-sw] fetch: no entry for path; returning 404');
     event.respondWith(new Response('SW: stream not found or expired', {
       status: 404,
       headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' },
@@ -134,8 +154,29 @@ self.addEventListener('fetch', (event: FetchEvent) => {
     return;
   }
 
-  // One-shot consumption: remove from map so a refresh/duplicate fetch returns 404
-  pendingStreams.delete(uuid);
+  if (entry.consumed) {
+    // Subsequent fetch for an already-consumed entry. Chromium-style
+    // download managers commonly issue more than one fetch for the same
+    // SW URL on a single user click (probe + download commit). Returning
+    // a 404 here causes the DM to abort with "File wasn't available on
+    // site." Returning an empty 200 keeps the DM happy; the actual data
+    // is being delivered through the original fetch's streaming Response.
+    console.log('[arkfile-sw] fetch: subsequent match (already consumed); returning empty 200');
+    event.respondWith(new Response(new Uint8Array(0), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Cache-Control': 'no-store',
+      },
+    }));
+    return;
+  }
+
+  // First match: deliver the streaming Response. Mark consumed and
+  // schedule cleanup for after the post-consumed grace window.
+  entry.consumed = true;
+  entry.expiresAt = Date.now() + POST_CONSUMED_GRACE_MS;
+  console.log('[arkfile-sw] fetch: first match; delivering streaming Response');
 
   const safeName = encodeFilenameForContentDisposition(entry.filename);
   const headers: Record<string, string> = {
