@@ -1,159 +1,144 @@
-# Browser Streaming Download — Large File OOM Fix
+# Browser Streaming Download — Large File Fix
 
-## Problem
+## Problem History
 
-Downloading files > ~1 GB via the browser UI fails with:
+### Phase 1: OOM on > ~1 GB files (fixed)
+
+The original `streaming-download.ts` collected all decrypted chunks into a
+`Uint8Array[]` array, then called `combineChunks()` to produce one single giant
+`Uint8Array` before any bytes were written to disk. For a 2+ GB file this caused:
 
 ```
 Array buffer allocation failed
 ```
 
-Reported on a 2.1 GB Alma Linux ISO at `test.arkfile.net` (May 2026).
+This was fixed by switching to incremental Blob construction:
+`new Blob([existingBlob, chunk])` per chunk keeps data in the browser's internal
+Blob store (off the JS heap), bounding peak heap usage to one chunk (~16 MiB).
 
-## Root Cause
+### Phase 2: Chromium blob URL ceiling on > ~2 GB files (current fix)
 
-`streaming-download.ts` collects all decrypted chunks into a `Uint8Array[]` array, then calls `combineChunks()` to produce **one single giant `Uint8Array`** before any bytes are written to disk.
-
-For a 2.1 GB file with 16 MiB chunks (~128 chunks), the JavaScript heap simultaneously holds:
-
-| Object | Size |
-|---|---|
-| `decryptedChunks[]` array (128 × ~16 MiB) | ~2.1 GB |
-| `combineChunks()` output `Uint8Array` | ~2.1 GB |
-| Pending encrypted fetch buffers | up to ~2.1 GB |
-| Blob for `triggerBrowserDownload` | ~2.1 GB |
-
-**Peak: 4–8 GB in the JS heap.** Chrome's per-context `ArrayBuffer` limit is typically 2–4 GB. Any browser tab on a 32-bit process, older mobile hardware, or a system with limited free RAM will crash with `Array buffer allocation failed`.
-
-The same pattern exists in both:
-- `downloadAndDecryptChunks()` (authenticated file downloads)
-- `downloadAndDecryptShareChunks()` (public shared file downloads)
-
-## Fix: File System Access API Streaming
-
-Replace the collect-then-save pattern with **write-while-decrypt** using the browser's File System Access API:
+Even with the Blob-based approach, Chromium-based browsers (Brave, Chrome, Edge)
+fail to serve blob URLs for Blobs above ~2 GB through the browser download pipeline:
 
 ```
-showSaveFilePicker()  →  createWritable()  →  chunk loop: decrypt, write, free  →  close()
+check internet connection
 ```
 
-Peak memory is bounded to **one chunk at a time (~16 MiB)** instead of the full file.
+The symptom is: all chunks download and decrypt successfully, the Blob is fully
+assembled, `URL.createObjectURL` succeeds, the `<a download>` anchor is clicked —
+but the browser's download manager internally fails to read the blob URL back out
+and shows a network error. The Blob data was all there; Chromium's download
+infrastructure simply cannot pipe a >2 GB blob URL through its download manager.
 
-### Browser support
+## Root Cause (Phase 2)
 
-| Browser | File System Access API | Notes |
-|---|---|---|
-| Chrome 86+ | ✅ | `showSaveFilePicker` available |
-| Edge 86+ | ✅ | Same as Chrome |
-| Firefox | ❌ | Not available as of Firefox 126 |
-| Safari 15.2+ | Partial | `showSaveFilePicker` available in macOS/iOS |
-| Mobile Chrome | ✅ | Android 10+ |
+Chromium's internal download pipeline treats blob URL serving as a network
+request. For Blobs above ~2 GB, this internal read fails silently and the download
+manager reports a generic network error. This is a Chromium architecture
+limitation, not a JavaScript heap issue.
 
-For **Firefox and other unsupported browsers**, fall back to incremental `Blob` construction (chunk-by-chunk `new Blob([existingBlob, newChunk])` approach, which stores data in the browser's internal Blob store rather than JS heap, then trigger `URL.createObjectURL`). This fallback still has the theoretical OOM problem but in practice Blob stores are less heap-constrained and browsers handle them better than giant ArrayBuffers.
+## Fix: File System Access API
 
-## Implementation Plan
+The FSAPI `showSaveFilePicker()` + `createWritable()` path writes each decrypted
+chunk directly to a `FileSystemWritableFileStream` on disk, bypassing the blob URL
+/ download pipeline entirely:
 
-### 1. `streaming-download.ts`: new `streamChunksToDisk()` function
+```
+showSaveFilePicker() -> createWritable() -> chunk loop: decrypt, write, free -> close()
+```
+
+- Peak JS heap: ~1 chunk (~16 MiB) regardless of file size
+- No Blob accumulation
+- No blob URL
+- No 2 GB ceiling
+- File appears in the OS file manager as it is being written
+
+## Critical Implementation Constraint
+
+`showSaveFilePicker()` is user-gesture-gated by the browser. It MUST be called
+synchronously within a click event handler, before any `await`. If any async
+operation (metadata fetch, KDF, network request) occurs before the call, the
+browser considers the user gesture expired and blocks the picker from appearing.
+
+The correct pattern used in this codebase:
 
 ```typescript
-private async streamChunksToDisk(
-  chunks: AsyncIterable<Uint8Array>,
-  filename: string
-): Promise<{ savedViaFileSystemAPI: boolean; blobUrl?: string }> {
+downloadBtn.onclick = () => {
+  // showSaveFilePicker() MUST be first — no await before this
+  let fsapiHandlePromise: Promise<FileSystemFileHandle> | null = null;
   if ('showSaveFilePicker' in window) {
-    const handle = await (window as any).showSaveFilePicker({ suggestedName: filename });
-    const writable = await handle.createWritable();
-    for await (const chunk of chunks) {
-      await writable.write(chunk);
-    }
-    await writable.close();
-    return { savedViaFileSystemAPI: true };
-  } else {
-    // Firefox fallback: accumulate incrementally into Blob store
-    let blob = new Blob([]);
-    for await (const chunk of chunks) {
-      blob = new Blob([blob, chunk]);
-    }
-    const url = URL.createObjectURL(blob);
-    return { savedViaFileSystemAPI: false, blobUrl: url };
+    fsapiHandlePromise = (window as any).showSaveFilePicker({
+      suggestedName: filename,
+    }) as Promise<FileSystemFileHandle>;
   }
-}
+
+  // Now call the async download function, passing the Promise
+  this.downloadFile(filename, fek, sha256, fsapiHandlePromise);
+};
 ```
 
-### 2. Refactor `downloadAndDecryptChunks()` and `downloadAndDecryptShareChunks()`
+The `fsapiHandlePromise` is passed into the async download chain where it is
+awaited at the appropriate point (after metadata fetch, KDF, etc.) inside
+`streamChunksToDisk()`. This preserves the user gesture association on the
+Promise while allowing all async setup to complete before awaiting it.
 
-Convert the chunk loop from accumulate-and-return to yield-per-chunk using an `async generator`:
+## Browser Support
 
-```typescript
-private async *decryptChunksGenerator(
-  fileId: string,
-  metadata: ChunkedDownloadMetadata,
-  fek: Uint8Array,
-  isShare: boolean
-): AsyncGenerator<Uint8Array> {
-  const decryptor = await AESGCMDecryptor.fromRawKey(fek);
-  for (let i = 0; i < metadata.total_chunks; i++) {
-    const encryptedChunk = await downloadChunkWithRetry(url, headers, ...);
-    let chunkData = encryptedChunk;
-    if (i === 0) chunkData = encryptedChunk.slice(envelopeHeaderSize);
-    const decrypted = await decryptor.decryptChunk(chunkData);
-    yield decrypted;
-    // encryptedChunk and chunkData are eligible for GC here
-  }
-}
-```
+| Browser | FSAPI | Behavior |
+|---|---|---|
+| Brave 86+ | Yes | Save dialog appears immediately on click; chunks stream to disk |
+| Chrome 86+ | Yes | Same as Brave |
+| Edge 86+ | Yes | Same as Brave |
+| Firefox | No | Falls back to incremental Blob path (see below) |
+| Safari 15.2+ | Partial | showSaveFilePicker available on macOS/iOS |
+| Mobile Chrome (Android 10+) | Yes | Same as desktop Chrome |
 
-### 3. Update `StreamingDownloadResult` interface
+## Firefox Fallback
 
-```typescript
-export interface StreamingDownloadResult {
-  filename: string;
-  sha256?: string;
-  data?: Uint8Array;           // Present only for legacy fallback path; undefined when savedViaFileSystemAPI=true
-  savedViaFileSystemAPI: boolean;
-  blobUrl?: string;            // Present only for legacy fallback (Firefox)
-}
-```
+Firefox does not support `showSaveFilePicker` (as of Firefox 126). When
+`fsapiHandlePromise` is null/undefined, the streaming manager falls back to
+incremental Blob construction: each chunk is appended via
+`new Blob([existingBlob, chunk])`.
 
-### 4. Update callers
+Firefox's blob URL download pipeline is more permissive than Chromium's and
+handles large Blobs (several GB on 64-bit systems) reasonably well. The
+theoretical ceiling for Firefox is not hard-documented but community observations
+suggest it handles Blobs up to ~4 GB on 64-bit systems with sufficient disk space
+for the browser's temporary Blob store.
 
-- `download.ts` `downloadFile()`: handle `savedViaFileSystemAPI=true` (no `triggerBrowserDownload` needed)
-- `share-access.ts` `downloadFile()`: same
-- `triggerBrowserDownload()`: check for `blobUrl` (legacy fallback) vs nothing (FSAPI path saved directly)
+Firefox users with files > ~4 GB should use the `arkfile-client` CLI tool, which
+uses `io.Reader` streaming through AES-GCM decryption with no memory accumulation.
 
-### 5. SHA-256 verification
+## UX Notes
 
-The streaming path must still verify the SHA-256 hash post-download. Two options:
-- **Option A**: Hash while decrypting (feed each plaintext chunk to a running `SubtleCrypto.digest` accumulator via a `TransformStream`). Problem: `SubtleCrypto.digest()` is not streaming — must hash the full data at once, which defeats the purpose.
-- **Option B (recommended)**: Use the Web Crypto `DigestStream` if available, or compute SHA-256 incrementally using the `@noble/hashes` `sha256.update()` API (already available via the existing crypto primitives), hashing each plaintext chunk as it is written. Final `.digest()` call after all chunks.
+- On Brave/Chrome: the "Save As" dialog appears immediately when the user clicks
+  Download, before any network activity. The user selects the destination first,
+  then chunks download and write directly to the chosen file.
+- Cancelling the save dialog throws `DOMException: AbortError`. This is caught and
+  treated as a neutral cancellation (shown as "Download cancelled." status message,
+  not an error).
+- On error mid-stream (network failure, disk full, etc.), `writable.abort()` is
+  called to release the file handle cleanly.
 
-### 6. User experience for File System Access path
-
-- The `showSaveFilePicker` dialog appears **before** download starts (user selects destination first)
-- Progress bar continues to work (progress is tracked per-chunk as before)
-- On success: no additional action needed (file is already on disk)
-- On cancel (user dismisses save dialog): throw `DOMException: AbortError` — catch this and show a non-error cancellation message
-
-## Files to Change
+## Files Changed
 
 | File | Change |
 |---|---|
-| `client/static/js/src/files/streaming-download.ts` | New generator, new stream-to-disk function, updated result type |
-| `client/static/js/src/files/download.ts` | Update to handle new result shape |
-| `client/static/js/src/shares/share-access.ts` | Update to handle new result shape |
-| `client/static/js/src/__tests__/streaming-download.test.ts` | New test file covering streaming path |
+| `client/static/js/src/files/streaming-download.ts` | Added `streamChunksToDisk()` with FSAPI path and Blob fallback; added `fsapiHandlePromise` to `StreamingDownloadOptions`; added `savedViaFileSystemAPI` to `StreamingDownloadResult` |
+| `client/static/js/src/shares/share-access.ts` | Calls `showSaveFilePicker()` synchronously on Download button onclick; passes handle Promise to download function |
+| `client/static/js/src/files/list.ts` | Same pattern for owner file downloads |
+| `client/static/js/src/files/download.ts` | Accepts and forwards `fsapiHandlePromise`; handles FSAPI and Blob result paths |
+| `client/static/js/src/__tests__/streaming-download.test.ts` | Tests for FSAPI path, cancellation, write error/abort, and Blob fallback path |
 
-## Non-Goals
+## CLI Workaround (always available)
 
-- Service Worker streaming: possible but requires significantly more infrastructure (SW registration, message passing) — out of scope for this fix.
-- Desktop Electron wrapper: out of scope.
-- The `arkfile-client` Go CLI is unaffected and already streams correctly.
+Users with files > ~4 GB (or any users who prefer not to use the browser UI for
+large downloads) should use:
 
-## Workaround (immediate)
-
-Users with files > ~1 GB should use:
 ```
 arkfile-client download --file-id <id> --output <path>
 ```
 
-The CLI uses `io.Reader` streaming through AES-GCM decryption without any memory accumulation.
+The CLI uses `io.Reader` streaming through AES-GCM decryption without any memory
+accumulation and has no browser limitations.

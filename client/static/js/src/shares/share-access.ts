@@ -1,8 +1,23 @@
 /**
  * Share Access UI with Chunked Download Support
- * 
+ *
  * Handles accessing shared files with password-based decryption
- * and chunked download for efficient, resumable downloads.
+ * and chunked download for efficient downloads.
+ *
+ * LARGE FILE DOWNLOADS (Chromium/Brave/Edge)
+ * ------------------------------------------
+ * The File System Access API (FSAPI) is used to stream decrypted chunks
+ * directly to disk, bypassing the browser's blob URL download pipeline.
+ * This avoids the ~2 GB Chromium blob URL ceiling that causes "check
+ * internet connection" errors on large file downloads.
+ *
+ * CRITICAL: showSaveFilePicker() is user-gesture-gated. It MUST be called
+ * synchronously in the onclick handler — before any await — so the browser
+ * recognizes it as part of the user gesture. The resulting Promise is passed
+ * into the download function, which awaits it at the appropriate point.
+ *
+ * For Firefox (no FSAPI support), the incremental Blob fallback is used
+ * automatically when no FSAPI handle is available.
  */
 
 import { shareCrypto } from './share-crypto';
@@ -164,7 +179,24 @@ export class ShareAccessUI {
     if (downloadBtn) {
       downloadBtn.onclick = () => {
         console.log('[arkfile-share] Download button clicked');
-        this.downloadFile(filename, fek, sha256);
+
+        // CRITICAL: showSaveFilePicker() MUST be called synchronously here,
+        // as the very first action in the onclick handler, before any await.
+        // This is required by browser security policy — the user gesture context
+        // is only valid synchronously within the event handler. Calling it inside
+        // an async function after any await will cause the browser to block the
+        // picker from appearing.
+        //
+        // We capture the Promise and pass it to downloadFile(), which awaits it
+        // at the appropriate point after all async setup is complete.
+        let fsapiHandlePromise: Promise<FileSystemFileHandle> | null = null;
+        if ('showSaveFilePicker' in window) {
+          fsapiHandlePromise = (window as any).showSaveFilePicker({
+            suggestedName: filename,
+          }) as Promise<FileSystemFileHandle>;
+        }
+
+        this.downloadFile(filename, fek, sha256, fsapiHandlePromise);
       };
     }
   }
@@ -173,6 +205,7 @@ export class ShareAccessUI {
     filename: string,
     fek: Uint8Array,
     sha256?: string,
+    fsapiHandlePromise?: Promise<FileSystemFileHandle> | null,
   ): Promise<void> {
     const statusDiv = document.getElementById('shareStatus');
 
@@ -188,6 +221,8 @@ export class ShareAccessUI {
       }
 
       // Use chunked download with progress tracking.
+      // Pass the fsapiHandlePromise so the streaming manager can write directly
+      // to the user-selected file (FSAPI path) or fall back to Blob (Firefox).
       const result: StreamingDownloadResult = await downloadSharedFileChunked(
         this.shareId,
         fek,
@@ -195,8 +230,8 @@ export class ShareAccessUI {
         { filename, sha256 },
         {
           showProgressUI: true,
+          fsapiHandlePromise: fsapiHandlePromise ?? null,
           onProgress: (progress: { stage: string; percentage: number; error?: string | undefined }) => {
-            // Update status with progress info
             if (statusDiv && progress.stage === 'downloading') {
               const percentage = Math.round(progress.percentage);
               statusDiv.textContent = `Downloading... ${percentage}%`;
@@ -209,15 +244,33 @@ export class ShareAccessUI {
       );
 
       if (!result.success) {
+        if (result.error === 'Download cancelled') {
+          if (statusDiv) {
+            statusDiv.textContent = 'Download cancelled.';
+            statusDiv.className = '';
+          }
+          return;
+        }
         if (result.error?.includes('403') || result.error?.includes('invalid')) {
           throw new Error('Download token invalid or share has been revoked');
         }
         throw new Error(result.error || 'Download failed');
       }
 
-      // Use the decrypted filename from the result, or fall back to the one we already have
+      // Use the filename from the result, or fall back to the one we already have
       const downloadFilename = result.filename || filename;
 
+      if (result.savedViaFileSystemAPI) {
+        // FSAPI path: file was written directly to disk — no browser download trigger needed
+        console.log('[arkfile-share] File saved directly to disk via FSAPI');
+        if (statusDiv) {
+          statusDiv.textContent = 'Download complete!';
+          statusDiv.className = 'success-message';
+        }
+        return;
+      }
+
+      // Blob fallback path (Firefox): trigger browser download from blob URL
       if (!result.blobUrl) {
         throw new Error('Download completed but no file data was produced');
       }

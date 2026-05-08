@@ -213,11 +213,21 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
     fileActions.className = 'file-actions';
 
     // Download button
+    // CRITICAL: showSaveFilePicker() MUST be called synchronously as the very
+    // first action in the click handler, before any await, so the browser
+    // recognizes it as part of the user gesture. The resulting Promise is passed
+    // into downloadFile(), which awaits it at the appropriate point.
     const downloadBtn = document.createElement('button');
     downloadBtn.textContent = 'Download';
     downloadBtn.addEventListener('click', () => {
       console.log('[arkfile-download] Download button clicked');
-      downloadFile(file.file_id, file.password_hint, file.sha256sum, file.password_type);
+      let fsapiHandlePromise: Promise<FileSystemFileHandle> | null = null;
+      if ('showSaveFilePicker' in window) {
+        fsapiHandlePromise = (window as any).showSaveFilePicker({
+          suggestedName: file.filename !== '[Encrypted]' ? file.filename : undefined,
+        }) as Promise<FileSystemFileHandle>;
+      }
+      downloadFile(file.file_id, file.password_hint, file.sha256sum, file.password_type, fsapiHandlePromise);
     });
 
     // Share button
