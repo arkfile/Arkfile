@@ -1,12 +1,24 @@
 # Browser Streaming Download v2 — Service Worker Streaming
 
-**Status:** Implemented (2026-05-08); awaiting cross-browser manual verification on test.arkfile.net.
+**Status:** Implemented and verified end-to-end on test.arkfile.net (2026-05-08).
+
+Verified working with cryptographic SHA-256 confirmation (SW path) or
+end-to-end completion (Blob fallback path):
+- Brave regular tab — owner download, 2.47 GB AlmaLinux ISO, **SW path**.
+- Firefox private tab — shared download, 2.47 GB, **SW path** (Firefox allows
+  ephemeral SWs in private windows; cleared on session close).
+- Tor Browser Safer mode — shared download, 2.47 GB, **Blob fallback path**
+  completed end-to-end. KDF stage was 3–4 minutes (Tor Browser disables
+  JIT at Safer level, which makes Argon2id much slower). This prompted
+  adding a 5-second-quiet-period progress indicator on the share-access
+  page; see §20.
 
 The Service Worker streaming path is now the default download path for the
 in-browser web client. The dead File System Access API (FSAPI) code has been
 removed; the Blob path is preserved as a fallback for environments where
 Service Worker registration fails. Streaming SHA-256 verification runs inline
-on the SW path. See §19 below for the as-built reference.
+on the SW path. See §19 below for the as-built reference and §20 for the
+post-implementation diagnostic story (iframe-trigger fix + UI warning).
 
 ---
 
@@ -97,11 +109,190 @@ on the SW path. See §19 below for the as-built reference.
   to silence Bun-types vs WebWorker-lib internal conflicts): clean.
 - `bun test`: 323 pass / 0 fail (up from 319; +5 new SW streaming tests, –1
   removed FSAPI test).
-- Bundle sizes: `app.js` ~0.36 MB, `sw-download.js` ~3.4 KB.
-- Awaiting manual verification on `test.arkfile.net` via `test-update.sh`
-  with the 2.3 GB AlmaLinux ISO from the original bug report, plus
-  cross-browser checks (Brave shields up, Chrome, Firefox, Tor Browser
-  Standard/Safer).
+- Bundle sizes: `app.js` ~0.36 MB, `sw-download.js` ~4.1 KB (post-§20 fix; was
+  ~3.4 KB before defensive consumed/grace logic was added).
+- Cross-browser end-to-end manual verification on test.arkfile.net with the
+  2.47 GB AlmaLinux ISO completed for **Brave regular tab** (owner download)
+  and **Firefox private tab** (shared download). Both used the SW path and
+  passed SHA-256 integrity verification end-to-end.
+
+---
+
+## 20. Post-Implementation Diagnostic Story (2026-05-08)
+
+After §19 landed, the first deploy on test.arkfile.net failed for the 2.47 GB
+file in Brave. The page log showed:
+
+```
+[arkfile-sw] download initiated via SW (bytes_expected=2477869106)
+[arkfile-share] Chunk 1/148: fetch=…, decrypt=…, total_bytes=16777246
+[arkfile-share] Chunk 2/148: fetch=…, decrypt=…, total_bytes=33554490
+[arkfile-share] SW stream completed: ok=false, bytes_streamed=33554432, hash_verification=unavailable
+[arkfile-share] Download failed at …ms: Stream cancelled
+```
+
+Brave displayed a popup error: **"File wasn't available on site."** Same
+behavior reproduced consistently.
+
+### Diagnostic technique that finally cracked it
+
+The page console alone could not say what Brave was doing with the synthetic
+`/sw-download/<uuid>` URL — SW-intercepted same-origin URLs do not appear in
+the page Network tab. The breakthrough was:
+
+1. **Open DevTools -> Application tab -> Service Workers**, click the **inspect**
+   link next to `sw-download.js` to open a separate DevTools window for the SW
+   process. The SW's own Console is the ONLY place the SW's `console.log` lines
+   appear; they DO NOT echo into the page console.
+2. With diagnostic `console.log` lines added inside the SW's fetch handler
+   (`fetch: first match`, `fetch: subsequent match (already consumed)`,
+   `fetch: no entry for path`), the SW Console was found to be **completely
+   empty** during the failing run.
+
+Empty SW Console + the page's `bytes_streamed=33554432` (exactly **2 × 16 MiB
+chunks = 32 MiB**) is the diagnostic fingerprint of:
+
+> The browser never issued a fetch the SW could intercept; the page-side
+> `pull()` filled the internal transferred-stream buffer (which Chromium caps
+> at 32 MiB when no consumer is reading from the receiving side) and then
+> stopped, eventually erroring with "Stream cancelled."
+
+In other words: our `<a download>` + `a.click()` invocation was silently
+no-op'd by Chromium when the anchor had `display: none` and `rel="noopener"`.
+This is a known Chromium quirk for SW-intercepted download URLs and is
+documented in the StreamSaver.js issue tracker.
+
+### The fix
+
+Replace the anchor click with a hidden iframe:
+
+```ts
+// Old (silently no-op'd in Brave):
+const a = document.createElement('a');
+a.href = `/sw-download/${uuid}`;
+a.download = filename;
+a.style.display = 'none';
+a.rel = 'noopener';
+document.body.appendChild(a);
+a.click();
+
+// New (StreamSaver.js pattern, works reliably):
+const iframe = document.createElement('iframe');
+iframe.src = `/sw-download/${uuid}`;
+iframe.style.cssText = 'position:fixed; left:-9999px; top:-9999px; width:1px; height:1px; border:0;';
+document.body.appendChild(iframe);
+setTimeout(() => iframe.parentNode?.removeChild(iframe), 60_000);
+```
+
+The iframe forces a real navigation request the SW reliably intercepts. After
+this change Brave delivered the download cleanly through the SW Response.
+
+### Defensive SW-side change (kept even after iframe fix)
+
+Before discovering the anchor-click bug, we added a defensive change to the
+SW's fetch handler: instead of one-shot deletion of `pendingStreams[uuid]`
+on the first match, the entry is marked `consumed=true` and kept for a 30 s
+post-consumption grace window. Any subsequent fetch for the same UUID returns
+**empty 200**, not 404. This handles the rare case where a Chromium download
+manager issues more than one fetch for the same SW URL on a single user
+click (probe + commit). It costs us almost nothing and makes the SW resilient
+to that whole class of edge cases. See `client/static/js/src/sw-download.ts`.
+
+### UI warning for SW-unavailable + large-file recipients
+
+The share-access page now surfaces a one-line warning when
+`isSwAvailable() === false` AND `metadata.size_bytes > 2 GiB`:
+
+> "This file is large. Your browser may not be able to complete the download
+> in private/incognito mode. Options: open this link in a regular
+> (non-private) browser tab, try a different browser (Firefox or Tor
+> Browser), or use the arkfile-client CLI tool to download."
+
+Wording is calibrated: Firefox / Tor Browser / regular tab are presented as
+**alternatives to try**, not promises. The CLI is the universal fallback.
+
+### Cross-browser results (verified)
+
+| Browser / Tab type | Result | Path used | Hash verification |
+|---|---|---|---|
+| Brave regular tab — 2.47 GB owner download | ✓ Works | SW | match |
+| Firefox private tab — 2.47 GB shared download | ✓ Works | SW | match |
+| **Tor Browser Safer mode — 2.47 GB shared download** | **✓ Works** | **Blob fallback** (Firefox-base, no Chromium 2 GB ceiling) | (download completed end-to-end; SHA-256 not separately verified) |
+| Brave private tab — 2.47 GB shared download | Predicted to fail; warning UI surfaced | n/a | n/a |
+| Chrome / Edge | Untested; expected same as Brave | — | — |
+| Tor Browser Standard mode | Untested; expected same or better than Safer | — | — |
+
+Firefox private tab using the **SW path** (not just falling back to Blob) was
+a stronger result than the v2 plan §11.2 predicted — Firefox allows ephemeral
+SWs in private windows that are cleared on session close. This means Firefox
+private is a fully supported large-file recipient.
+
+### Known cosmetic issue
+
+The page's two byte counters disagree by exactly **4146 bytes** on completion:
+
+```
+SW stream completed: ok=true, bytes_streamed=2477864960, hash_verification=match
+Download complete: chunks=148, bytes_decrypted=2477869106, …
+```
+
+`bytes_streamed` (counted inside `swStreamDownload`'s `pull()` after enqueue)
+is 4146 bytes less than `bytes_decrypted` (counted in the chunk generator).
+Both refer to the same plaintext stream. SHA-256 verification still matches
+the full file, so this is an off-by-one in our own logging accounting, not a
+data integrity issue. Investigation deferred — likely the last partial-chunk
+fragment is being counted on one side but not the other.
+
+### Diagnostic console.log lines retained
+
+The `[arkfile-sw] fetch: …` log lines added during this round remain in
+`sw-download.ts`. They are privacy-preserving (no UUIDs, no filenames in
+output) and will substantially reduce the cost of diagnosing any future SW
+streaming regression. The cost is three log lines per fetch — negligible.
+
+### Slow-network UX improvement (5-second quiet period)
+
+Tor Browser Safer testing revealed that the share-envelope decryption stage
+(Argon2id KDF + AES-GCM) can take **3–4 minutes** on devices/networks
+constrained by Tor Browser's no-JIT policy. The page was previously stuck
+on the literal status text "Verifying..." for the entire duration with no
+indication that work was in progress, which led to the user reasonably
+suspecting the page had hung.
+
+`share-access.ts` now uses a 5-second quiet-period pattern:
+- For the first 5 seconds, the status reads simply "Verifying..."
+  (the fast-desktop case completes in <1s, so this is what the typical
+  user sees and nothing more).
+- If the unlock has not completed by 5 seconds, the status swaps to:
+  > "Decrypting share password (Ns elapsed). This can take a few minutes
+  > on older devices or slow networks..."
+  …with the elapsed counter ticking each second.
+- A matching console log fires once at the same 5-second mark, also
+  privacy-preserving (no values, just a generic explanation of what's
+  taking so long).
+
+The wording deliberately doesn't name specific browsers; "older devices or
+slow networks" describes the conditions, not the tools. Privacy posture is
+unchanged — no new fingerprinting surface, no new timing-side-channel risk,
+and the message is generic.
+
+### Lessons for future SW debugging
+
+1. **The SW's own console is in a separate window.** Application tab ->
+   Service Workers -> `inspect` next to the SW URL. Page console will not
+   echo SW logs.
+2. **Empty SW console + page-side `bytes_streamed` matching exactly the
+   transferred-stream buffer cap (32 MiB on Chromium)** = the browser never
+   issued a fetch the SW could intercept. The trigger is broken upstream;
+   look at the page-side download trigger code, not the SW.
+3. **`<a download>` + `a.click()` is unreliable for SW-served downloads on
+   Chromium-based browsers** when the anchor has `display: none` and/or
+   `rel="noopener"`. Use a hidden iframe whose `src` is the synthetic URL
+   (StreamSaver.js pattern).
+4. **Browsers' download managers can fire more than one fetch for the same
+   SW URL on a single user click.** SWs that one-shot-delete their entry on
+   first match cause the second fetch to 404 → "File wasn't available on
+   site." Use mark-consumed + grace window instead.
 
 ---
 

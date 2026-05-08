@@ -1988,6 +1988,28 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
     margin-top: 1rem;
 }
 
+/*
+ * .warning-note — non-blocking advisory text shown in-line above an action
+ * (e.g. the share-access download button when SW streaming is unavailable
+ * AND the file is large enough to risk hitting Chromium's blob URL ceiling).
+ *
+ * Uses the same --phosphor amber the rest of the app uses for warnings
+ * (storage-bar-warning, encryption-type-custom, backup-warning,
+ * pending-approval-content, share revoke action). The element is hidden by
+ * default — JS toggles `display:none` -> `''` to reveal it. No inline
+ * style: properties beyond `display:none` should be set in markup.
+ */
+.warning-note {
+    background-color: color-mix(in srgb, var(--phosphor) 15%, var(--depth-3));
+    border: 1px solid var(--phosphor);
+    color: var(--phosphor);
+    padding: 0.75rem 1rem;
+    border-radius: 4px;
+    margin: 0.5rem 0;
+    font-size: 0.95rem;
+    line-height: 1.4;
+}
+
 .share-form-container .share-url-group {
     margin-bottom: 1rem;
 }

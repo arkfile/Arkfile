@@ -20,6 +20,7 @@
 
 import { shareCrypto } from './share-crypto';
 import { showError, showWarning } from '../ui/messages';
+import { isSwAvailable } from '../files/sw-streaming-download';
 import {
   downloadSharedFileChunked,
   triggerBrowserDownloadFromUrl,
@@ -69,6 +70,7 @@ export class ShareAccessUI {
         <h3>File Details</h3>
         <p id="fileNameDisplay"></p>
         <p id="fileSizeDisplay"></p>
+        <p id="swUnavailableNote" class="warning-note" style="display:none;"></p>
         <button id="downloadBtn" class="btn primary">Download</button>
       </div>
     `;
@@ -95,6 +97,53 @@ export class ShareAccessUI {
       statusDiv.className = '';
     }
 
+    // Quiet-period progress hint:
+    // On fast desktops the share-envelope decryption (Argon2id KDF + AES-GCM)
+    // completes in <1s; the user sees just "Verifying..." -> "Download" and
+    // doesn't need to know what's happening.
+    //
+    // On older devices or slow networks (Tor Browser Safer-mode is the worst
+    // case observed: 3–4 minutes for the same operation), the page can sit
+    // on "Verifying..." long enough that the user assumes it has hung.
+    //
+    // After 5 seconds, swap the status to a more informative message and
+    // start an elapsed-time counter so the user can see it's still working.
+    const QUIET_PERIOD_MS = 5000;
+    const TICK_MS = 1000;
+    const kdfStartMs = Date.now();
+    let slowHintTimer: ReturnType<typeof setTimeout> | null = null;
+    let slowTickInterval: ReturnType<typeof setInterval> | null = null;
+    let slowHintLogged = false;
+    const clearSlowHint = () => {
+      if (slowHintTimer != null) {
+        clearTimeout(slowHintTimer);
+        slowHintTimer = null;
+      }
+      if (slowTickInterval != null) {
+        clearInterval(slowTickInterval);
+        slowTickInterval = null;
+      }
+    };
+    slowHintTimer = setTimeout(() => {
+      if (!slowHintLogged) {
+        console.log(
+          '[arkfile-share] Deriving share password key... '
+            + '(Argon2id is computationally heavy by design; can take a few '
+            + 'minutes on older devices or slow networks)',
+        );
+        slowHintLogged = true;
+      }
+      const updateLabel = () => {
+        if (!statusDiv) return;
+        const elapsedSec = Math.floor((Date.now() - kdfStartMs) / 1000);
+        statusDiv.textContent =
+          `Decrypting share password (${elapsedSec}s elapsed). `
+          + 'This can take a few minutes on older devices or slow networks...';
+      };
+      updateLabel();
+      slowTickInterval = setInterval(updateLabel, TICK_MS);
+    }, QUIET_PERIOD_MS);
+
     try {
       // 1. Get share envelope (public metadata + encrypted FEK)
       if (!this.envelope) {
@@ -105,6 +154,7 @@ export class ShareAccessUI {
           // Both mean the recipient cannot access this share - show a clear message
           // and do not attempt decryption (no point running the KDF)
           if (response.status === 403 || response.status === 404) {
+            clearSlowHint();
             if (statusDiv) {
               statusDiv.textContent = 'This share is no longer valid.';
               statusDiv.className = 'error-message';
@@ -148,11 +198,13 @@ export class ShareAccessUI {
 
       // 4. Show file details and enable download
       this.showFileDetails(filename, sizeBytes, decryptedEnvelope.fek, sha256);
-      
+
+      clearSlowHint();
       if (statusDiv) statusDiv.className = 'hidden';
 
     } catch (error) {
       console.error('Unlock failed:', error);
+      clearSlowHint();
       if (statusDiv) {
         // At this point the envelope fetch succeeded (200) but decryption failed:
         // the password is incorrect.
@@ -173,6 +225,22 @@ export class ShareAccessUI {
     if (details) details.classList.remove('hidden');
     if (nameDisplay) nameDisplay.textContent = filename;
     if (sizeDisplay) sizeDisplay.textContent = this.formatBytes(size);
+
+    // Surface a warning when SW streaming is unavailable AND the file is
+    // larger than ~2 GiB. This is the case where Chromium-based private/
+    // incognito tabs fall through to the Blob path and hit Chromium's blob
+    // URL ceiling. The recipient cannot work around this from inside a
+    // private tab; we tell them in advance instead of letting them spend
+    // minutes downloading and then failing.
+    const SW_LARGE_FILE_WARN_THRESHOLD = 2 * 1024 * 1024 * 1024; // 2 GiB
+    const swNote = document.getElementById('swUnavailableNote');
+    if (swNote && !isSwAvailable() && size > SW_LARGE_FILE_WARN_THRESHOLD) {
+      swNote.textContent =
+        'This file is large. Your browser may not be able to complete the download in private/incognito mode. ' +
+        'Options: open this link in a regular (non-private) browser tab, try a different browser ' +
+        '(Firefox or Tor Browser), or use the arkfile-client CLI tool to download.';
+      swNote.style.display = '';
+    }
 
     if (downloadBtn) {
       downloadBtn.onclick = () => {
