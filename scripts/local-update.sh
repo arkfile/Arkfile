@@ -239,6 +239,9 @@ fi
 # Always do a fresh TypeScript build
 rm -f client/static/js/.buildcache
 rm -rf client/static/js/dist/*
+# Also remove the streaming-download SW build artifact (top-level), so it
+# is regenerated fresh from src/sw-download.ts on every run.
+rm -f client/static/js/sw-download.js client/static/js/sw-download.js.map
 
 # Clean build artifacts (binaries/static only), preserving C libraries if skipping
 if [ -d "$BUILD_ROOT" ]; then

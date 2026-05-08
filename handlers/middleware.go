@@ -351,6 +351,11 @@ func CSPMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		// CSP policy with strict security
 		// Note: 'wasm-unsafe-eval' is required for OPAQUE WebAssembly authentication
 		// data: and blob: in connect-src are required for WASM module loading
+		// worker-src 'self' allows registering /sw-download.js (the streaming
+		// download Service Worker). The SW makes no network requests of its own;
+		// it only intercepts same-origin /sw-download/<uuid> URLs and forwards
+		// already-decrypted byte streams from the page to the browser's
+		// download manager. See client/static/js/src/sw-download.ts.
 		csp := "default-src 'self'; " +
 			"script-src 'self' 'wasm-unsafe-eval'; " +
 			"style-src 'self' 'unsafe-inline'; " +
@@ -361,6 +366,7 @@ func CSPMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 			"base-uri 'self'; " +
 			"form-action 'self'; " +
 			"frame-ancestors 'none'; " +
+			"worker-src 'self'; " +
 			"upgrade-insecure-requests"
 
 		c.Response().Header().Set("Content-Security-Policy", csp)

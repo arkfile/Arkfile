@@ -307,6 +307,9 @@ export SKIP_C_LIBS="$SKIP_C_LIBS"
 print_status "INFO" "Forcing fresh TypeScript rebuild..."
 rm -f client/static/js/.buildcache
 rm -rf client/static/js/dist/*
+# Also remove the streaming-download SW build artifact (top-level), so it
+# is regenerated fresh from src/sw-download.ts on every reset.
+rm -f client/static/js/sw-download.js client/static/js/sw-download.js.map
 
 # Clean build artifacts to prevent directory conflicts
 # BUT preserve C libraries unless --force-rebuild-all was specified

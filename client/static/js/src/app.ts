@@ -11,6 +11,7 @@ import { showFileSection, showAuthSection, toggleAuthForm } from './ui/sections'
 import { loadFiles, displayFiles } from './files/list';
 import { setupLoginForm, login, logout } from './auth/login';
 import { setupRegisterForm, register } from './auth/register';
+import { registerSwDownload } from './files/sw-streaming-download';
 
 class ArkFileApp {
   private initialized = false;
@@ -42,6 +43,20 @@ class ArkFileApp {
         showError('Service is starting up. Please refresh the page in a moment.');
         return;
       }
+
+      // Register the streaming-download Service Worker (best-effort).
+      // Required for downloading files larger than ~2 GB on Chromium-based
+      // browsers without hitting the blob-URL ceiling. Falls back to the
+      // in-page Blob path automatically if registration fails.
+      registerSwDownload().then((ok) => {
+        if (ok) {
+          console.log('[arkfile] SW streaming download ready');
+        } else {
+          console.warn('[arkfile] SW streaming unavailable; large file downloads (>2 GB) may fail on Chromium');
+        }
+      }).catch((err) => {
+        console.warn('[arkfile] SW registration error:', err);
+      });
       
       // Check if we're on the home page or app page
       if (this.isHomePage()) {

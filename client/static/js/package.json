@@ -3,19 +3,19 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "bun build src/app.ts --outdir dist --target browser --format iife",
-    "build:watch": "bun build src/app.ts --outdir dist --target browser --format iife --watch",
-    "type-check": "bun tsc --noEmit",
+    "build": "bun build src/app.ts --outdir dist --target browser --format iife && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm",
+    "build:watch": "bun build src/app.ts --outdir dist --target browser --format iife --watch & bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --watch",
+    "type-check": "bun tsc --noEmit && bun tsc --noEmit -p ../../../tsconfig.sw.json",
     "test": "bun test",
     "test:watch": "bun test --watch",
     "test:integration": "bun run tests/integration/test-runner.ts",
-    "dev": "bun build src/app.ts --outdir dist --target browser --watch",
-    "clean": "rm -rf dist/*",
-    "lint": "bun tsc --noEmit && echo '[OK] TypeScript checks passed'",
+    "dev": "bun build src/app.ts --outdir dist --target browser --watch & bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --watch",
+    "clean": "rm -rf dist/* && rm -f sw-download.js sw-download.js.map",
+    "lint": "bun tsc --noEmit && bun tsc --noEmit -p ../../../tsconfig.sw.json && echo '[OK] TypeScript checks passed'",
     "test:unit": "bun test tests/unit/",
     "test:all": "bun test",
-    "build:dev": "bun build src/app.ts --outdir dist --target browser --format iife --sourcemap",
-    "build:prod": "bun build src/app.ts --outdir dist --target browser --format iife --minify --sourcemap=external"
+    "build:dev": "bun build src/app.ts --outdir dist --target browser --format iife --sourcemap && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --sourcemap",
+    "build:prod": "bun build src/app.ts --outdir dist --target browser --format iife --minify --sourcemap=external && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --minify --sourcemap=external"
   },
   "devDependencies": {
     "@types/zxcvbn": "^4.4.5",

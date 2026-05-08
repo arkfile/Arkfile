@@ -596,6 +596,9 @@ print_status "INFO" "WASM trace logging disabled (production build)"
 print_status "INFO" "Forcing fresh TypeScript rebuild..."
 rm -f client/static/js/.buildcache
 rm -rf client/static/js/dist/*
+# Also remove the streaming-download SW build artifact (top-level), so it
+# is regenerated fresh from src/sw-download.ts on every run.
+rm -f client/static/js/sw-download.js client/static/js/sw-download.js.map
 
 # Clean build artifacts (preserve C libraries)
 print_status "INFO" "Cleaning build artifacts..."

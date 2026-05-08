@@ -2,54 +2,48 @@
  * Streaming Download Manager for Chunked File Downloads
  *
  * Handles downloading files in chunks with:
- * - Progress tracking
- * - Retry logic with exponential backoff
- * - Client-side decryption
- * - Direct-to-disk streaming via the File System Access API (Chromium/Brave/Edge)
- * - Incremental Blob fallback for Firefox and other browsers without FSAPI
+ *   - Progress tracking
+ *   - Retry logic with exponential backoff
+ *   - Client-side AES-GCM decryption
+ *   - Service Worker streaming (preferred path) for unbounded file sizes
+ *   - Incremental Blob fallback for environments where the SW is unavailable
  *
- * LARGE FILE SUPPORT
- * ------------------
- * Files > ~2 GB cannot be downloaded via a `blob:` URL in Chromium-based browsers.
- * Chromium's internal download pipeline fails with a network-type error ("check
- * internet connection") when serving blob URLs for Blobs above ~2 GB, even though
- * the Blob data is fully assembled in the browser's internal Blob store.
+ * Service Worker streaming (preferred)
+ * ------------------------------------
+ * On modern browsers (Chromium, Firefox 100+, Safari 16.4+, Tor Browser 12+),
+ * the page hands the decrypted-byte stream to a same-origin Service Worker
+ * which responds to a synthetic /sw-download/<uuid> URL with a streaming
+ * Response (Content-Disposition: attachment). The browser's download manager
+ * then writes the bytes directly to disk with no Blob accumulation.
  *
- * This module avoids the problem by using the File System Access API:
+ * - Peak heap usage: ~16 MiB (one chunk at a time)
+ * - File size limit: unbounded (the browser streams to disk like any download)
+ * - SHA-256 verification: computed inline as bytes flow past
  *
- *   showSaveFilePicker() -> createWritable() -> chunk loop: decrypt, write, free -> close()
+ * Blob fallback
+ * -------------
+ * If the SW is not available (e.g. very old browsers, private-browsing modes
+ * that disable SW registration), fall back to incremental Blob construction.
  *
- * CRITICAL: showSaveFilePicker() is user-gesture-gated by the browser. It MUST be
- * called synchronously within a click event handler — before any await. The caller
- * must invoke showSaveFilePicker() synchronously on the onclick and pass the resulting
- * Promise into the download function. This module receives that Promise and awaits it
- * at the appropriate point.
+ * - Peak heap usage: ~16 MiB (one chunk; data lives in the browser's Blob store)
+ * - File size limit: ~2 GB on Chromium, several GB on Firefox/Tor.
  *
- * Peak heap usage is bounded to one chunk (~16 MiB) regardless of total file size.
- * No Blob accumulation. No blob URL. No 2 GB ceiling.
- *
- * FIREFOX FALLBACK
- * ----------------
- * Firefox does not support showSaveFilePicker (as of Firefox 126). For Firefox, the
- * incremental Blob construction fallback is used: each chunk is appended via
- * `new Blob([existingBlob, chunk])` so the browser keeps data in its internal Blob
- * store (off the JS heap). Firefox's blob URL download pipeline is more permissive
- * than Chromium's and handles large Blobs (several GB on 64-bit systems) reasonably
- * well, though very large files (> ~4 GB) on constrained devices may still fail.
- * Firefox users with files > ~4 GB should use the arkfile-client CLI tool.
- *
- * LOGGING
- * -------
- * All internal stages are logged to console.log with a prefix of
- * `[arkfile-download]` or `[arkfile-share]`. Logs do NOT include filenames,
- * keys, or any potentially private data — only stages, chunk counts, byte
- * counts, durations, and status codes.
+ * Privacy logging
+ * ---------------
+ * Logs use prefixes [arkfile-download] / [arkfile-share]. Logs do NOT include
+ * filenames, keys, hash digest values, or any potentially private data — only
+ * stages, chunk counts, byte counts, durations, and status codes.
  */
 
 import { AESGCMDecryptor } from '../crypto/aes-gcm';
 import { getChunkingParams, type ChunkingConfig } from '../crypto/constants';
 import { downloadChunkWithRetry, RetryConfig } from './retry-handler';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress';
+import {
+  isSwAvailable,
+  swStreamDownload,
+  type SwStreamDownloadCompletion,
+} from './sw-streaming-download';
 
 const LOG_PREFIX_FILE = '[arkfile-download]';
 const LOG_PREFIX_SHARE = '[arkfile-share]';
@@ -74,6 +68,9 @@ export interface ChunkedDownloadMetadata {
   encrypted_file_sha256: boolean;
 }
 
+/** Hash verification outcome (mirrors sw-streaming-download). */
+export type HashVerification = 'skipped' | 'match' | 'mismatch' | 'unavailable';
+
 /**
  * Progress callback for download operations
  */
@@ -85,8 +82,8 @@ export interface DownloadProgressCallback {
     bytesDownloaded: number;
     totalBytes: number;
     percentage: number;
-    speed?: number | undefined; // bytes per second
-    remainingTime?: number | undefined; // seconds
+    speed?: number | undefined;
+    remainingTime?: number | undefined;
     error?: string | undefined;
   }): void;
 }
@@ -109,37 +106,33 @@ export interface StreamingDownloadOptions {
   showProgressUI?: boolean;
   /** AbortController for cancellation */
   abortController?: AbortController;
-  /**
-   * Promise for a FileSystemFileHandle from showSaveFilePicker().
-   *
-   * This MUST be obtained by calling showSaveFilePicker() synchronously
-   * within the user's click event handler (before any await), then passing
-   * the resulting Promise here. If provided and the FSAPI is available, chunks
-   * are written directly to disk — no Blob accumulation, no 2 GB ceiling.
-   *
-   * If null or undefined, the Firefox incremental Blob fallback is used.
-   */
-  fsapiHandlePromise?: Promise<FileSystemFileHandle> | null;
 }
 
 /**
  * Result of a streaming download.
  *
- * On the FSAPI path (Chromium/Brave/Edge), the file is written directly to disk
- * and `savedViaFileSystemAPI` is true. No blobUrl is produced.
+ * On the SW streaming path (preferred), `streamedViaSw` is true and the
+ * browser's download manager has been handed the bytes directly. No blobUrl
+ * is produced. `hashVerification` reports the outcome of in-flight SHA-256
+ * verification.
  *
- * On the Blob fallback path (Firefox), `blobUrl` contains the createObjectURL
- * string. The caller must call triggerBrowserDownloadFromUrl(blobUrl, filename)
- * and then URL.revokeObjectURL(blobUrl) after triggering.
+ * On the Blob fallback path, `blobUrl` contains the createObjectURL string.
+ * The caller must call triggerBrowserDownloadFromUrl(blobUrl, filename) and
+ * URL.revokeObjectURL(blobUrl) after triggering. Hash verification on this
+ * path is left to the caller (it can be computed off the assembled Blob
+ * separately if desired).
  */
 export interface StreamingDownloadResult {
   success: boolean;
   filename?: string | undefined;
+  /** Expected SHA-256 (hex) sourced from envelope/metadata. */
   sha256sum?: string | undefined;
   error?: string | undefined;
-  /** True when the FSAPI path was used and the file was saved directly to disk. */
-  savedViaFileSystemAPI?: boolean | undefined;
-  /** Object URL for the assembled Blob; present only on the Firefox fallback path. */
+  /** True if the SW streaming path was used. */
+  streamedViaSw?: boolean | undefined;
+  /** SHA-256 verification outcome (SW path only). */
+  hashVerification?: HashVerification | undefined;
+  /** Object URL for the assembled Blob; present only on the Blob fallback path. */
   blobUrl?: string | undefined;
 }
 
@@ -163,9 +156,7 @@ export class StreamingDownloadManager {
     };
   }
 
-  /**
-   * Ensure chunking config is loaded from single source of truth
-   */
+  /** Ensure chunking config is loaded from single source of truth */
   private async ensureConfig(): Promise<ChunkingConfig> {
     if (!this.chunkingConfig) {
       this.chunkingConfig = await getChunkingParams();
@@ -179,9 +170,7 @@ export class StreamingDownloadManager {
     return this.chunkingConfig.aesGcm.nonceSizeBytes + this.chunkingConfig.aesGcm.tagSizeBytes;
   }
 
-  /**
-   * Download a file using chunked download with decryption (owner downloads).
-   */
+  /** Download a file using chunked download with decryption (owner downloads). */
   async downloadFile(fileId: string, fek: Uint8Array): Promise<StreamingDownloadResult> {
     const t0 = Date.now();
     console.log(`${LOG_PREFIX_FILE} Starting owner download (fileId hash=${shortHash(fileId)})`);
@@ -200,7 +189,7 @@ export class StreamingDownloadManager {
       const metadata = await this.fetchMetadata(fileId);
       console.log(`${LOG_PREFIX_FILE} Metadata fetched in ${Date.now() - tMeta}ms (total_chunks=${metadata.total_chunks}, size_bytes=${metadata.size_bytes}, password_type=${metadata.password_type})`);
 
-      // 2. Decrypt filename and sha256sum using ACCOUNT KEY (not FEK!)
+      // 2. Decrypt filename and sha256sum using ACCOUNT KEY (not FEK)
       const metadataKey = this.options.accountKey;
       if (!metadataKey) throw new Error('Account key required for metadata decryption (owner download)');
 
@@ -209,33 +198,31 @@ export class StreamingDownloadManager {
       const sha256sum = await this.decryptMetadataField(metadata.encrypted_sha256sum, metadata.sha256sum_nonce, metadataKey);
       console.log(`${LOG_PREFIX_FILE} Metadata decrypted in ${Date.now() - tDecMeta}ms`);
 
-      // 3. Stream-decrypt all chunks directly to disk (FSAPI) or to a Blob (fallback)
+      // 3. Stream-decrypt chunks via SW (preferred) or Blob fallback
       const tStream = Date.now();
-      const streamResult = await this.streamChunksToDisk(
-        this.makeFileChunkGenerator(fileId, metadata, fek),
+      const generator = this.makeFileChunkGenerator(fileId, metadata, fek);
+      const streamResult = await this.streamDecryptedChunks(
+        generator,
         metadata.total_chunks,
-        LOG_PREFIX_FILE,
+        metadata.size_bytes,
         filename,
+        sha256sum,
+        LOG_PREFIX_FILE,
       );
-
-      if (streamResult.savedViaFileSystemAPI) {
-        console.log(`${LOG_PREFIX_FILE} File streamed to disk via FSAPI in ${Date.now() - tStream}ms; total elapsed ${Date.now() - t0}ms`);
-      } else {
-        console.log(`${LOG_PREFIX_FILE} Blob assembled in ${Date.now() - tStream}ms; total elapsed ${Date.now() - t0}ms`);
-      }
 
       this.reportProgress('complete', metadata.total_chunks, metadata.total_chunks, metadata.size_bytes, metadata.size_bytes);
 
       if (this.options.showProgressUI) hideProgress();
 
-      console.log(`${LOG_PREFIX_FILE} Download complete: chunks=${metadata.total_chunks}, bytes_decrypted=${metadata.size_bytes}, total_ms=${Date.now() - t0}`);
+      console.log(`${LOG_PREFIX_FILE} Download complete: chunks=${metadata.total_chunks}, bytes_decrypted=${metadata.size_bytes}, total_ms=${Date.now() - t0}, sw_path=${streamResult.streamedViaSw === true}, hash_verification=${streamResult.hashVerification ?? 'n/a'}`);
 
       return {
         success: true,
         filename,
         sha256sum,
-        savedViaFileSystemAPI: streamResult.savedViaFileSystemAPI,
-        blobUrl: streamResult.blobUrl,
+        ...(streamResult.streamedViaSw !== undefined ? { streamedViaSw: streamResult.streamedViaSw } : {}),
+        ...(streamResult.hashVerification !== undefined ? { hashVerification: streamResult.hashVerification } : {}),
+        ...(streamResult.blobUrl !== undefined ? { blobUrl: streamResult.blobUrl } : {}),
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Download failed';
@@ -268,6 +255,8 @@ export class StreamingDownloadManager {
     console.log(`${LOG_PREFIX_SHARE} Starting shared download (shareId hash=${shortHash(shareId)})`);
 
     try {
+      await this.ensureConfig();
+
       if (this.options.showProgressUI) {
         showProgress({ title: 'Downloading Shared File', message: 'Fetching file metadata...', indeterminate: true });
       }
@@ -278,35 +267,33 @@ export class StreamingDownloadManager {
       const metadata = await this.fetchShareMetadata(shareId);
       console.log(`${LOG_PREFIX_SHARE} Metadata fetched in ${Date.now() - tMeta}ms (chunk_count=${metadata.chunk_count}, size_bytes=${metadata.size_bytes})`);
 
-      const filename = shareMetadata?.filename;
+      const filename = shareMetadata?.filename ?? 'shared-file';
       const sha256sum = shareMetadata?.sha256;
 
       const tStream = Date.now();
-      const streamResult = await this.streamChunksToDisk(
-        this.makeShareChunkGenerator(shareId, metadata, fek),
+      const generator = this.makeShareChunkGenerator(shareId, metadata, fek);
+      const streamResult = await this.streamDecryptedChunks(
+        generator,
         metadata.chunk_count,
-        LOG_PREFIX_SHARE,
+        metadata.size_bytes,
         filename,
+        sha256sum,
+        LOG_PREFIX_SHARE,
       );
-
-      if (streamResult.savedViaFileSystemAPI) {
-        console.log(`${LOG_PREFIX_SHARE} File streamed to disk via FSAPI in ${Date.now() - tStream}ms; total elapsed ${Date.now() - t0}ms`);
-      } else {
-        console.log(`${LOG_PREFIX_SHARE} Blob assembled in ${Date.now() - tStream}ms; total elapsed ${Date.now() - t0}ms`);
-      }
 
       this.reportProgress('complete', metadata.chunk_count, metadata.chunk_count, metadata.size_bytes, metadata.size_bytes);
 
       if (this.options.showProgressUI) hideProgress();
 
-      console.log(`${LOG_PREFIX_SHARE} Download complete: chunks=${metadata.chunk_count}, bytes_decrypted=${metadata.size_bytes}, total_ms=${Date.now() - t0}`);
+      console.log(`${LOG_PREFIX_SHARE} Download complete: chunks=${metadata.chunk_count}, bytes_decrypted=${metadata.size_bytes}, total_ms=${Date.now() - t0}, sw_path=${streamResult.streamedViaSw === true}, hash_verification=${streamResult.hashVerification ?? 'n/a'}`);
 
       return {
         success: true,
         filename,
-        sha256sum,
-        savedViaFileSystemAPI: streamResult.savedViaFileSystemAPI,
-        blobUrl: streamResult.blobUrl,
+        ...(sha256sum !== undefined ? { sha256sum } : {}),
+        ...(streamResult.streamedViaSw !== undefined ? { streamedViaSw: streamResult.streamedViaSw } : {}),
+        ...(streamResult.hashVerification !== undefined ? { hashVerification: streamResult.hashVerification } : {}),
+        ...(streamResult.blobUrl !== undefined ? { blobUrl: streamResult.blobUrl } : {}),
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Download failed';
@@ -327,8 +314,8 @@ export class StreamingDownloadManager {
    * Async generator that downloads and decrypts file chunks one at a time.
    *
    * Chunk format:
-   *   - Chunk 0: [version (1 byte)][keyType (1 byte)][nonce (12 B)][ciphertext][tag (16 B)]
-   *   - Chunks 1+:                  [nonce (12 B)][ciphertext][tag (16 B)]
+   *   - Chunk 0: [version (1)][keyType (1)][nonce (12)][ciphertext][tag (16)]
+   *   - Chunks 1+:                  [nonce (12)][ciphertext][tag (16)]
    * The 2-byte envelope header is stripped from chunk 0 before AES-GCM decrypt.
    */
   private async *makeFileChunkGenerator(
@@ -378,7 +365,6 @@ export class StreamingDownloadManager {
 
       this.bytesDownloaded += encryptedChunk.length;
 
-      // Log every chunk for the first 3, then every ~10% of total chunks
       const logInterval = Math.max(1, Math.floor(metadata.total_chunks / 10));
       if (chunkIndex < 3 || chunkIndex % logInterval === 0 || chunkIndex === metadata.total_chunks - 1) {
         console.log(
@@ -405,9 +391,7 @@ export class StreamingDownloadManager {
     }
   }
 
-  /**
-   * Async generator that downloads and decrypts shared file chunks one at a time.
-   */
+  /** Async generator that downloads and decrypts shared file chunks one at a time. */
   private async *makeShareChunkGenerator(
     shareId: string,
     metadata: ChunkedDownloadMetadata,
@@ -482,73 +466,57 @@ export class StreamingDownloadManager {
   }
 
   /**
-   * Stream decrypted chunks directly to disk via the File System Access API,
-   * or fall back to incremental Blob construction for browsers without FSAPI.
+   * Stream decrypted chunks to the browser's download manager (SW path) or to
+   * an in-memory Blob (fallback path).
    *
-   * FSAPI path (Chromium/Brave/Edge):
-   *   Awaits the FileSystemFileHandle Promise provided by the caller (which must
-   *   have been obtained via showSaveFilePicker() called synchronously within the
-   *   user's click event before any await). Opens a writable stream and writes
-   *   each chunk directly. No Blob accumulation. No 2 GB ceiling.
+   * SW path: hands the generator stream to the SW, which serves it as a
+   * Content-Disposition: attachment Response. Hashes plaintext as it streams
+   * past for SHA-256 verification (when an expected hash is provided).
    *
-   * Blob fallback path (Firefox and browsers without FSAPI):
-   *   Uses `new Blob([existingBlob, chunk])` per chunk. The browser keeps each
-   *   chunk in its internal Blob store (off the JS heap). Returns a blob URL
-   *   for the caller to trigger a download via triggerBrowserDownloadFromUrl().
-   *   Firefox handles Blobs up to several GB reasonably well; files > ~4 GB on
-   *   constrained devices should use the arkfile-client CLI tool.
+   * Blob fallback: incrementally builds a Blob via `new Blob([existingBlob, chunk])`
+   * to keep data in the browser's internal Blob store off the JS heap. Returns
+   * a blob URL the caller can hand to triggerBrowserDownloadFromUrl().
    */
-  private async streamChunksToDisk(
+  private async streamDecryptedChunks(
     chunks: AsyncGenerator<Uint8Array>,
     totalChunks: number,
+    contentLength: number,
+    filename: string,
+    expectedSha256Hex: string | undefined,
     logPrefix: string,
-    filename: string | undefined,
-  ): Promise<{ savedViaFileSystemAPI: boolean; blobUrl?: string }> {
-    // FSAPI path: the caller pre-obtained a FileSystemFileHandle Promise by calling
-    // showSaveFilePicker() synchronously on the click event. Await it now.
-    if (this.options.fsapiHandlePromise != null) {
-      let handle: FileSystemFileHandle;
-      try {
-        handle = await this.options.fsapiHandlePromise;
-      } catch (err) {
-        // User dismissed the save dialog — treat as cancellation, not an error
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          throw new Error('Download cancelled');
-        }
-        throw err;
-      }
+  ): Promise<{ streamedViaSw?: boolean; hashVerification?: HashVerification; blobUrl?: string }> {
+    if (isSwAvailable()) {
+      console.log(`${logPrefix} Using SW streaming download path`);
+      const swResult = await swStreamDownload({
+        contentLength,
+        filename,
+        chunks,
+        ...(this.options.abortController ? { signal: this.options.abortController.signal } : {}),
+        ...(expectedSha256Hex && expectedSha256Hex.length === 64 ? { expectedSha256Hex } : {}),
+      });
 
-      const writable = await (handle as any).createWritable();
-      let chunkIndex = 0;
-      try {
-        for await (const chunk of chunks) {
-          await writable.write(chunk);
-          chunkIndex++;
-          const logInterval = Math.max(1, Math.floor(totalChunks / 4));
-          if (chunkIndex % logInterval === 0 || chunkIndex === totalChunks) {
-            console.log(`${logPrefix} FSAPI write milestone: ${chunkIndex}/${totalChunks} chunks written to disk`);
-          }
-        }
-        await writable.close();
-      } catch (err) {
-        // Attempt to close/abort the writable on error to release the file handle
-        try { await writable.abort(); } catch (_) { /* ignore */ }
-        throw err;
+      // Wait for the actual stream to drain so we know the hash result and
+      // bytes-streamed before returning. The browser's download manager and
+      // the SW's stream consumption proceed in parallel with this wait.
+      const completion: SwStreamDownloadCompletion = await swResult.completion;
+      console.log(`${logPrefix} SW stream completed: ok=${completion.ok}, bytes_streamed=${completion.bytesStreamed}, hash_verification=${completion.hashVerification}`);
+      if (!completion.ok && completion.error) {
+        throw completion.error;
       }
-
-      console.log(`${logPrefix} FSAPI stream complete: ${chunkIndex} chunks written directly to disk`);
-      return { savedViaFileSystemAPI: true };
+      return {
+        streamedViaSw: true,
+        hashVerification: completion.hashVerification,
+      };
     }
 
-    // Blob fallback path (Firefox and other non-FSAPI browsers)
-    console.log(`${logPrefix} Using Blob fallback path (no FSAPI handle provided)`);
+    // Blob fallback path
+    console.log(`${logPrefix} Using Blob fallback path (SW unavailable)`);
     let blob = new Blob([]);
     let chunkIndex = 0;
     for await (const chunk of chunks) {
       // slice(0) gives a concrete ArrayBuffer-backed Uint8Array, satisfying BlobPart typing
       blob = new Blob([blob, chunk.slice(0)]);
       chunkIndex++;
-      // Log Blob growth at 25/50/75/100% milestones
       const pctMilestones = [Math.floor(totalChunks * 0.25), Math.floor(totalChunks * 0.5), Math.floor(totalChunks * 0.75), totalChunks];
       if (pctMilestones.includes(chunkIndex)) {
         console.log(`${logPrefix} Blob accumulation milestone: ${chunkIndex}/${totalChunks} chunks appended (~${blob.size} bytes total)`);
@@ -556,7 +524,7 @@ export class StreamingDownloadManager {
     }
     const url = URL.createObjectURL(blob);
     console.log(`${logPrefix} Blob URL created (${blob.size} bytes)`);
-    return { savedViaFileSystemAPI: false, blobUrl: url };
+    return { blobUrl: url };
   }
 
   /** Fetch download metadata for a file */
@@ -677,43 +645,20 @@ export async function downloadSharedFileChunked(
 
 /**
  * Trigger a browser download from a Blob URL produced by the streaming manager.
- * Used only on the Firefox fallback path (when FSAPI is unavailable).
+ * Used only on the Blob fallback path (when SW is unavailable).
  * Creates an <a download> anchor, clicks it, then revokes the URL after a delay.
- * Saves to the user's default Downloads folder via the standard browser pipeline.
  */
 export function triggerBrowserDownloadFromUrl(blobUrl: string, filename: string): void {
-  console.log(`[arkfile-download] Triggering browser download anchor (filename_len=${filename.length})`);
+  console.log(`[arkfile-download] Triggering browser download anchor from blob URL (filename_len=${filename.length})`);
   const a = document.createElement('a');
   a.href = blobUrl;
   a.download = filename;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => {
-    document.body.removeChild(a);
+    if (a.parentNode) document.body.removeChild(a);
     URL.revokeObjectURL(blobUrl);
     console.log('[arkfile-download] Blob URL revoked');
-  }, 1000);
-}
-
-/**
- * Trigger browser download of decrypted data (legacy single-buffer path).
- *
- * @deprecated For new code, use the streaming path via downloadFileChunked /
- *   downloadSharedFileChunked. This function creates a full in-memory copy
- *   and will OOM for files > ~1 GB.
- */
-export function triggerBrowserDownload(data: Uint8Array, filename: string, contentType: string = 'application/octet-stream'): void {
-  const dataCopy = new Uint8Array(data);
-  const blob = new Blob([dataCopy.buffer], { type: contentType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => {
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   }, 1000);
 }
 

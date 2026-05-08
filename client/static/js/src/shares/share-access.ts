@@ -4,24 +4,22 @@
  * Handles accessing shared files with password-based decryption
  * and chunked download for efficient downloads.
  *
- * LARGE FILE DOWNLOADS (Chromium/Brave/Edge)
- * ------------------------------------------
- * The File System Access API (FSAPI) is used to stream decrypted chunks
- * directly to disk, bypassing the browser's blob URL download pipeline.
- * This avoids the ~2 GB Chromium blob URL ceiling that causes "check
- * internet connection" errors on large file downloads.
+ * LARGE FILE DOWNLOADS
+ * --------------------
+ * Downloads stream through the same-origin Service Worker registered at
+ * /sw-download.js (see sw-download.ts and sw-streaming-download.ts). The SW
+ * intercepts a synthetic /sw-download/<uuid> request and responds with a
+ * streaming Response carrying Content-Disposition: attachment, so the browser's
+ * download manager writes the bytes straight to disk. This bypasses the
+ * Chromium blob-URL ~2 GB ceiling and works first-class in Tor Browser.
  *
- * CRITICAL: showSaveFilePicker() is user-gesture-gated. It MUST be called
- * synchronously in the onclick handler — before any await — so the browser
- * recognizes it as part of the user gesture. The resulting Promise is passed
- * into the download function, which awaits it at the appropriate point.
- *
- * For Firefox (no FSAPI support), the incremental Blob fallback is used
- * automatically when no FSAPI handle is available.
+ * If the SW is unavailable (rare: very old browsers, certain private-browsing
+ * modes), the streaming-download manager falls back to incremental Blob
+ * construction and we trigger the download from a blob URL here.
  */
 
 import { shareCrypto } from './share-crypto';
-import { showError } from '../ui/messages';
+import { showError, showWarning } from '../ui/messages';
 import {
   downloadSharedFileChunked,
   triggerBrowserDownloadFromUrl,
@@ -179,24 +177,10 @@ export class ShareAccessUI {
     if (downloadBtn) {
       downloadBtn.onclick = () => {
         console.log('[arkfile-share] Download button clicked');
-
-        // CRITICAL: showSaveFilePicker() MUST be called synchronously here,
-        // as the very first action in the onclick handler, before any await.
-        // This is required by browser security policy — the user gesture context
-        // is only valid synchronously within the event handler. Calling it inside
-        // an async function after any await will cause the browser to block the
-        // picker from appearing.
-        //
-        // We capture the Promise and pass it to downloadFile(), which awaits it
-        // at the appropriate point after all async setup is complete.
-        let fsapiHandlePromise: Promise<FileSystemFileHandle> | null = null;
-        if ('showSaveFilePicker' in window) {
-          fsapiHandlePromise = (window as any).showSaveFilePicker({
-            suggestedName: filename,
-          }) as Promise<FileSystemFileHandle>;
-        }
-
-        this.downloadFile(filename, fek, sha256, fsapiHandlePromise);
+        // SW path: registration happens at app init; the download function picks
+        // it up via isSwAvailable(). No synchronous user-gesture work is required
+        // here, so this can simply kick off the async download.
+        this.downloadFile(filename, fek, sha256);
       };
     }
   }
@@ -205,7 +189,6 @@ export class ShareAccessUI {
     filename: string,
     fek: Uint8Array,
     sha256?: string,
-    fsapiHandlePromise?: Promise<FileSystemFileHandle> | null,
   ): Promise<void> {
     const statusDiv = document.getElementById('shareStatus');
 
@@ -220,9 +203,8 @@ export class ShareAccessUI {
         throw new Error('Download token not available');
       }
 
-      // Use chunked download with progress tracking.
-      // Pass the fsapiHandlePromise so the streaming manager can write directly
-      // to the user-selected file (FSAPI path) or fall back to Blob (Firefox).
+      // The streaming-download manager picks the SW path when available and
+      // falls back to incremental Blob construction otherwise.
       const result: StreamingDownloadResult = await downloadSharedFileChunked(
         this.shareId,
         fek,
@@ -230,7 +212,6 @@ export class ShareAccessUI {
         { filename, sha256 },
         {
           showProgressUI: true,
-          fsapiHandlePromise: fsapiHandlePromise ?? null,
           onProgress: (progress: { stage: string; percentage: number; error?: string | undefined }) => {
             if (statusDiv && progress.stage === 'downloading') {
               const percentage = Math.round(progress.percentage);
@@ -260,22 +241,25 @@ export class ShareAccessUI {
       // Use the filename from the result, or fall back to the one we already have
       const downloadFilename = result.filename || filename;
 
-      if (result.savedViaFileSystemAPI) {
-        // FSAPI path: file was written directly to disk — no browser download trigger needed
-        console.log('[arkfile-share] File saved directly to disk via FSAPI');
+      if (result.streamedViaSw) {
+        // SW path: bytes were streamed directly to the browser's download manager.
+        console.log('[arkfile-share] File streamed via Service Worker');
         if (statusDiv) {
           statusDiv.textContent = 'Download complete!';
           statusDiv.className = 'success-message';
         }
+        if (result.hashVerification === 'mismatch') {
+          showWarning('SHA-256 verification failed. The downloaded file may be corrupted or tampered with. Consider deleting it and re-downloading.');
+        }
         return;
       }
 
-      // Blob fallback path (Firefox): trigger browser download from blob URL
+      // Blob fallback path: trigger browser download from blob URL
       if (!result.blobUrl) {
         throw new Error('Download completed but no file data was produced');
       }
 
-      console.log('[arkfile-share] Triggering browser download from blob URL');
+      console.log('[arkfile-share] Triggering browser download from blob URL (SW unavailable)');
       triggerBrowserDownloadFromUrl(result.blobUrl, downloadFilename);
 
       if (statusDiv) {

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"net/http"
 	"os"
 	"strings"
 
@@ -29,6 +30,19 @@ func RegisterRoutes() {
 
 	// Serve shared-init.js for share page initialization (CSP-compliant external script)
 	Echo.File("/js/shared-init.js", "client/static/js/shared-init.js")
+
+	// Serve the streaming-download Service Worker at top-level so its default
+	// scope covers '/'. The SW intercepts /sw-download/<uuid> requests from
+	// pages and responds with a streaming Response carrying the decrypted
+	// byte stream. See client/static/js/src/sw-download.ts.
+	Echo.File("/sw-download.js", "client/static/js/sw-download.js")
+
+	// Defense-in-depth: if the SW is not active for any reason, /sw-download/<uuid>
+	// requests fall through to the server. Return 404 immediately so the page's
+	// anchor click fails fast rather than being misinterpreted as a real route.
+	Echo.GET("/sw-download/*", func(c echo.Context) error {
+		return echo.NewHTTPError(http.StatusNotFound, "Service Worker not active")
+	})
 
 	// Individual static files needed by frontend with HEAD support
 	Echo.File("/favicon.ico", "client/static/favicon.ico")

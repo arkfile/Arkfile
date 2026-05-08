@@ -1,8 +1,110 @@
 # Browser Streaming Download v2 — Service Worker Streaming
 
-**Status:** Planning. Implementation deferred. The original `browser-streaming-download.md` (now archived) describes the failed FSAPI approach; this document is the corrected plan.
+**Status:** Implemented (2026-05-08); awaiting cross-browser manual verification on test.arkfile.net.
+
+The Service Worker streaming path is now the default download path for the
+in-browser web client. The dead File System Access API (FSAPI) code has been
+removed; the Blob path is preserved as a fallback for environments where
+Service Worker registration fails. Streaming SHA-256 verification runs inline
+on the SW path. See §19 below for the as-built reference.
 
 ---
+
+## 19. As-Built Reference (2026-05-08)
+
+### Source files added
+
+- `client/static/js/src/sw-download.ts` — Service Worker source (TypeScript,
+  `lib: ["WebWorker"]` via `tsconfig.sw.json`). Bundled by Bun to
+  `client/static/js/sw-download.js` (top-level so its default scope covers `/`).
+- `client/static/js/src/files/sw-streaming-download.ts` — page-side wrapper:
+  registration, `swStreamDownload(...)`, streaming SHA-256 hashing via
+  `@noble/hashes`, AbortSignal cancel wiring, abort-aware pull race.
+- `client/static/js/src/__tests__/sw-streaming-download.test.ts` — Bun unit
+  tests covering registration plumbing, postMessage payload + ack, generator
+  pumping, hash match/mismatch, and AbortSignal cancellation.
+- `tsconfig.sw.json` — separate type-check config for the SW source so the
+  WebWorker lib does not clash with the DOM lib used by the rest of the app.
+
+### Source files modified
+
+- `client/static/js/src/files/streaming-download.ts` — added SW path
+  (`isSwAvailable()` -> `swStreamDownload(...)`), removed all FSAPI code
+  (`streamChunksToDisk`, `fsapiHandlePromise`, `savedViaFileSystemAPI`).
+  New result fields: `streamedViaSw`, `hashVerification`. Blob path preserved
+  as fallback.
+- `client/static/js/src/files/download.ts` — dropped sync FSAPI plumbing;
+  surfaces `showWarning(...)` on hash mismatch.
+- `client/static/js/src/files/list.ts` — dropped sync `showSaveFilePicker()`
+  call from the Download click handler.
+- `client/static/js/src/shares/share-access.ts` — same treatment; surfaces
+  `showWarning(...)` on hash mismatch from share downloads.
+- `client/static/js/src/app.ts` — registers the SW (best-effort) at app init.
+- `client/static/js/package.json` — second `bun build` invocation emits the SW
+  to top-level; `type-check`/`lint` scripts now also run the SW config.
+- `tsconfig.json` — excludes `client/static/js/src/sw-download.ts` from the
+  main DOM-lib type-check (it is checked separately via `tsconfig.sw.json`).
+- `client/static/js/src/__tests__/streaming-download.test.ts` — removed FSAPI
+  tests; new "Blob fallback path (SW unavailable)" suite.
+
+### Server changes
+
+- `handlers/middleware.go` — CSP gains `worker-src 'self'` so the SW can be
+  registered.
+- `handlers/route_config.go` — `Echo.File("/sw-download.js", ...)` serves the
+  bundled SW; `GET /sw-download/*` returns 404 as defense-in-depth if the SW
+  is not active.
+
+### Build/deploy scripts updated
+
+- `scripts/dev-reset.sh`, `local-deploy.sh`, `local-update.sh`,
+  `test-deploy.sh`, `test-update.sh`, `prod-deploy.sh`, `prod-update.sh` —
+  each script now also removes `client/static/js/sw-download.js{,.map}`
+  before the TypeScript rebuild so the SW is regenerated fresh.
+  `scripts/setup/build.sh` already copies all top-level `.js` files in
+  `client/static/js/` to the build output (no change needed there).
+
+### Decisions made during implementation
+
+- **TypeScript source, top-level JS output.** The SW is authored in TypeScript
+  for consistency with the rest of the codebase; only the compiled JS lives at
+  `client/static/js/sw-download.js`. No JS source files were added to the repo.
+- **Chunked-message fallback skipped.** Per the planning discussion, the
+  cohort of users without transferable `ReadableStream` support (browsers
+  older than Chrome 92, Firefox 100, Safari 16.4, Tor Browser 12.5+) is
+  estimated at <0.5% and almost entirely unable to run Arkfile's existing
+  WebCrypto/WASM stack regardless. Adding a chunked-message fallback would
+  expand the trusted code surface without delivering meaningful coverage.
+- **Streaming SHA-256 verification — implemented.** Plaintext bytes are
+  hashed in-flight with `@noble/hashes` `sha256.create()` as they pass into
+  the SW-bound stream. Mismatches are surfaced via `showWarning(...)` after
+  the download completes (the file is on disk by then; we cannot un-write it,
+  but we can loudly tell the user). No digest values, filenames, or UUIDs are
+  ever logged to the console.
+- **Cancel UX — wired through.** `AbortController.abort()` causes both
+  (a) the page-side `pull()` to error its stream (responsive even mid-await
+  via a `Promise.race` against the abort signal), and (b) a
+  `{type:'cancel', uuid}` message to the SW so it cancels its outgoing stream
+  to the browser's download manager.
+- **Hash mismatch behavior:** warn-only after completion, with an additional
+  console warning that omits all sensitive values. The user is shown a clear
+  message recommending they delete and re-download the file.
+
+### Verification
+
+- `bun tsc --noEmit` (DOM lib): clean.
+- `bun tsc --noEmit -p tsconfig.sw.json` (WebWorker lib, `skipLibCheck: true`
+  to silence Bun-types vs WebWorker-lib internal conflicts): clean.
+- `bun test`: 323 pass / 0 fail (up from 319; +5 new SW streaming tests, –1
+  removed FSAPI test).
+- Bundle sizes: `app.js` ~0.36 MB, `sw-download.js` ~3.4 KB.
+- Awaiting manual verification on `test.arkfile.net` via `test-update.sh`
+  with the 2.3 GB AlmaLinux ISO from the original bug report, plus
+  cross-browser checks (Brave shields up, Chrome, Firefox, Tor Browser
+  Standard/Safer).
+
+---
+
 
 ## 1. Problem Statement
 

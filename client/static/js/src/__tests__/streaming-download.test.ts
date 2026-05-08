@@ -2,13 +2,17 @@
  * Tests for streaming-download.ts
  *
  * Covers:
- * - FSAPI path: showSaveFilePicker + FileSystemWritableFileStream, writes chunks to disk
- * - Blob fallback path: incremental Blob construction, returns blobUrl
- * - Error and cancellation handling
+ * - Blob fallback path (when SW is not available): chunks decrypted, Blob assembled, blobUrl returned
+ * - Owner download path: metadata decryption, error handling
+ * - StreamingDownloadResult shape on error
+ *
+ * The SW streaming path itself is exercised by sw-streaming-download.test.ts;
+ * here the SW is mocked out (navigator.serviceWorker.controller === null) so
+ * that streaming-download falls through to the Blob path.
  */
 
 import './setup';
-import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { StreamingDownloadManager } from '../files/streaming-download';
 import { randomBytes } from '../crypto/primitives';
 
@@ -60,6 +64,19 @@ function setFetchMock(fn: (url: string, ...args: any[]) => Promise<Response>): v
 }
 
 /**
+ * Force the SW to appear unavailable so that streamDecryptedChunks() takes the
+ * Blob fallback path. Must be called before constructing the manager.
+ */
+function disableServiceWorker(): void {
+  if (typeof navigator !== 'undefined') {
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      get: () => undefined,
+    });
+  }
+}
+
+/**
  * Minimal chunking config matching crypto/chunking-params.json.
  * The constants.ts module caches this at module level after the first fetch.
  * All fetch mocks that invoke the generator path must handle /api/config/chunking.
@@ -97,150 +114,21 @@ const FAKE_SHARE_ID = 'test-share-5678';
 const FAKE_AUTH_TOKEN = 'test-auth-token';
 const FAKE_DOWNLOAD_TOKEN = 'test-download-token';
 
-// ── FSAPI path tests ────────────────────────────────────────────────────────
+// ── Blob fallback path tests (SW unavailable) ──────────────────────────────
 
-describe('StreamingDownloadManager — FSAPI path (Chromium/Brave/Edge)', () => {
+describe('StreamingDownloadManager - Blob fallback path (SW unavailable)', () => {
   let origFetch: typeof globalThis.fetch;
 
   beforeEach(() => {
     origFetch = globalThis.fetch;
+    disableServiceWorker();
   });
 
   afterEach(() => {
     globalThis.fetch = origFetch;
   });
 
-  test('downloadSharedFile uses FSAPI when fsapiHandlePromise is provided', async () => {
-    const fek = randomBytes(32);
-    const plaintext = new TextEncoder().encode('hello large file streaming');
-    const encryptedChunk = await buildEncryptedChunk(plaintext, fek);
-    const withHeader = addEnvelopeHeader(encryptedChunk);
-
-    // Track what was written to the mock writable stream
-    const writtenChunks: Uint8Array[] = [];
-    let closeCalled = false;
-    let abortCalled = false;
-
-    const mockWritable = {
-      write: mock(async (chunk: Uint8Array) => { writtenChunks.push(chunk); }),
-      close: mock(async () => { closeCalled = true; }),
-      abort: mock(async () => { abortCalled = true; }),
-    };
-    const mockHandle = {
-      createWritable: mock(async () => mockWritable),
-    };
-    const fsapiHandlePromise = Promise.resolve(mockHandle as unknown as FileSystemFileHandle);
-
-    setFetchMock(withChunkingConfig(async (url: string) => {
-      if (url.includes('/metadata')) {
-        return new Response(JSON.stringify(makeShareMeta(plaintext.length, 1, plaintext.length)), { status: 200 });
-      }
-      if (url.includes('/chunks/0')) {
-        return new Response(withHeader.buffer as ArrayBuffer, { status: 200 });
-      }
-      return new Response('not found', { status: 404 });
-    }));
-
-    const manager = new StreamingDownloadManager('', {
-      downloadToken: FAKE_DOWNLOAD_TOKEN,
-      showProgressUI: false,
-      fsapiHandlePromise,
-    });
-
-    const result = await manager.downloadSharedFile(FAKE_SHARE_ID, fek, { filename: 'test.iso' });
-
-    expect(result.success).toBe(true);
-    expect(result.savedViaFileSystemAPI).toBe(true);
-    expect(result.blobUrl).toBeUndefined();
-    expect(closeCalled).toBe(true);
-    expect(abortCalled).toBe(false);
-    expect(writtenChunks.length).toBe(1);
-    // Verify the written chunk matches the original plaintext
-    expect(writtenChunks[0]).toEqual(plaintext);
-  });
-
-  test('downloadSharedFile returns cancelled error when FSAPI picker is dismissed', async () => {
-    const fek = randomBytes(32);
-
-    // Simulate user dismissing the save dialog (AbortError)
-    const abortError = new DOMException('The user aborted a request.', 'AbortError');
-    const fsapiHandlePromise = Promise.reject(abortError);
-
-    setFetchMock(withChunkingConfig(async (url: string) => {
-      if (url.includes('/metadata')) {
-        return new Response(JSON.stringify(makeShareMeta(100, 1, 100)), { status: 200 });
-      }
-      return new Response('not found', { status: 404 });
-    }));
-
-    const manager = new StreamingDownloadManager('', {
-      downloadToken: FAKE_DOWNLOAD_TOKEN,
-      showProgressUI: false,
-      fsapiHandlePromise,
-    });
-
-    const result = await manager.downloadSharedFile(FAKE_SHARE_ID, fek, { filename: 'test.iso' });
-
-    expect(result.success).toBe(false);
-    expect(result.error).toBe('Download cancelled');
-    expect(result.savedViaFileSystemAPI).toBeUndefined();
-    expect(result.blobUrl).toBeUndefined();
-  });
-
-  test('downloadSharedFile FSAPI path aborts writable on chunk write error', async () => {
-    const fek = randomBytes(32);
-    const plaintext = new TextEncoder().encode('chunk data');
-    const encryptedChunk = await buildEncryptedChunk(plaintext, fek);
-    const withHeader = addEnvelopeHeader(encryptedChunk);
-
-    let abortCalled = false;
-    const mockWritable = {
-      write: mock(async (_chunk: Uint8Array) => { throw new Error('Disk write error'); }),
-      close: mock(async () => {}),
-      abort: mock(async () => { abortCalled = true; }),
-    };
-    const mockHandle = {
-      createWritable: mock(async () => mockWritable),
-    };
-    const fsapiHandlePromise = Promise.resolve(mockHandle as unknown as FileSystemFileHandle);
-
-    setFetchMock(withChunkingConfig(async (url: string) => {
-      if (url.includes('/metadata')) {
-        return new Response(JSON.stringify(makeShareMeta(plaintext.length, 1, plaintext.length)), { status: 200 });
-      }
-      if (url.includes('/chunks/0')) {
-        return new Response(withHeader.buffer as ArrayBuffer, { status: 200 });
-      }
-      return new Response('not found', { status: 404 });
-    }));
-
-    const manager = new StreamingDownloadManager('', {
-      downloadToken: FAKE_DOWNLOAD_TOKEN,
-      showProgressUI: false,
-      fsapiHandlePromise,
-    });
-
-    const result = await manager.downloadSharedFile(FAKE_SHARE_ID, fek, { filename: 'test.iso' });
-
-    expect(result.success).toBe(false);
-    expect(abortCalled).toBe(true);
-  });
-});
-
-// ── Blob fallback path tests ────────────────────────────────────────────────
-
-describe('StreamingDownloadManager — Blob fallback path (Firefox)', () => {
-  let origFetch: typeof globalThis.fetch;
-
-  beforeEach(() => {
-    origFetch = globalThis.fetch;
-  });
-
-  afterEach(() => {
-    globalThis.fetch = origFetch;
-  });
-
-  test('returns a blobUrl when no FSAPI handle is provided', async () => {
+  test('downloadSharedFile assembles a Blob and returns a blobUrl when SW is unavailable', async () => {
     const fek = randomBytes(32);
     const plaintext = new TextEncoder().encode('hello streaming world');
     const encryptedChunk = await buildEncryptedChunk(plaintext, fek);
@@ -259,19 +147,18 @@ describe('StreamingDownloadManager — Blob fallback path (Firefox)', () => {
     const manager = new StreamingDownloadManager('', {
       downloadToken: FAKE_DOWNLOAD_TOKEN,
       showProgressUI: false,
-      // No fsapiHandlePromise — falls back to Blob path
     });
 
     const result = await manager.downloadSharedFile(FAKE_SHARE_ID, fek, { filename: 'test.bin' });
 
     expect(result.success).toBe(true);
-    expect(result.savedViaFileSystemAPI).toBeFalsy();
+    expect(result.streamedViaSw).toBeFalsy();
     expect(result.blobUrl).toBeDefined();
     expect(typeof result.blobUrl).toBe('string');
     expect(result.blobUrl!.startsWith('blob:')).toBe(true);
   });
 
-  test('returns failure with no blobUrl when metadata fetch fails', async () => {
+  test('returns failure with no blobUrl when share metadata fetch fails', async () => {
     setFetchMock(async () => new Response('server error', { status: 500 }));
 
     const fek = randomBytes(32);
@@ -285,18 +172,19 @@ describe('StreamingDownloadManager — Blob fallback path (Firefox)', () => {
 
     expect(result.success).toBe(false);
     expect(result.blobUrl).toBeUndefined();
-    expect(result.savedViaFileSystemAPI).toBeUndefined();
+    expect(result.streamedViaSw).toBeUndefined();
     expect(result.error).toBeDefined();
   });
 });
 
 // ── Owner download path tests ───────────────────────────────────────────────
 
-describe('StreamingDownloadManager — owner download path', () => {
+describe('StreamingDownloadManager - owner download path', () => {
   let origFetch: typeof globalThis.fetch;
 
   beforeEach(() => {
     origFetch = globalThis.fetch;
+    disableServiceWorker();
   });
 
   afterEach(() => {
@@ -351,7 +239,7 @@ describe('StreamingDownloadManager — owner download path', () => {
       return new Response('not found', { status: 404 });
     });
 
-    // No accountKey provided — metadata decryption will fail
+    // No accountKey provided -- metadata decryption will fail
     const manager = new StreamingDownloadManager('', {
       authToken: FAKE_AUTH_TOKEN,
       showProgressUI: false,
@@ -367,8 +255,9 @@ describe('StreamingDownloadManager — owner download path', () => {
 // ── StreamingDownloadResult shape ───────────────────────────────────────────
 
 describe('StreamingDownloadResult shape', () => {
-  test('error results have no blobUrl, no filename, and no savedViaFileSystemAPI', async () => {
+  test('error results have no blobUrl, no filename, no streamedViaSw, no hashVerification', async () => {
     const origFetch = globalThis.fetch;
+    disableServiceWorker();
     setFetchMock(async () => new Response('server error', { status: 500 }));
 
     const fek = randomBytes(32);
@@ -383,7 +272,8 @@ describe('StreamingDownloadResult shape', () => {
     expect(result.success).toBe(false);
     expect(result.blobUrl).toBeUndefined();
     expect(result.filename).toBeUndefined();
-    expect(result.savedViaFileSystemAPI).toBeUndefined();
+    expect(result.streamedViaSw).toBeUndefined();
+    expect(result.hashVerification).toBeUndefined();
 
     globalThis.fetch = origFetch;
   });

@@ -4,24 +4,24 @@
  * This module provides file download capabilities using the chunked download
  * infrastructure for efficient downloads with client-side decryption.
  *
- * LARGE FILE DOWNLOADS (Chromium/Brave/Edge)
- * ------------------------------------------
- * The File System Access API (FSAPI) is used to stream decrypted chunks
- * directly to disk, bypassing the browser's blob URL download pipeline.
- * This avoids the ~2 GB Chromium blob URL ceiling that causes "check
- * internet connection" errors on large file downloads.
+ * LARGE FILE DOWNLOADS
+ * --------------------
+ * Downloads stream through the same-origin Service Worker registered at app
+ * init (see app.ts -> registerSwDownload). The SW intercepts a synthetic
+ * /sw-download/<uuid> URL and responds with a streaming Response carrying
+ * Content-Disposition: attachment, so the browser writes the bytes directly
+ * to disk with no Blob accumulation and no 2 GB ceiling.
  *
- * CRITICAL: The caller (list.ts) MUST call showSaveFilePicker() synchronously
- * as the very first action in the click event handler, before any await, and
- * pass the resulting Promise here. This function awaits it at the appropriate
- * point after all async key setup is complete.
+ * If the SW is unavailable (very old browsers, certain private-browsing
+ * modes), the streaming-download manager falls back to incremental Blob
+ * construction and we trigger the download from a blob URL here.
  *
  * SECURITY: All FEK decryption happens client-side using Argon2id-derived keys.
  * The server NEVER sees the plaintext FEK or the user's password.
  */
 
 import { authenticatedFetch, getToken, getUsernameFromToken } from '../utils/auth';
-import { showError, showSuccess } from '../ui/messages';
+import { showError, showSuccess, showWarning } from '../ui/messages';
 import { showProgress, hideProgress } from '../ui/progress';
 import { showPasswordPrompt } from '../ui/password-modal';
 import {
@@ -57,19 +57,16 @@ interface FileMetaResponse {
  * 3. For custom-password files, prompt for the file password and derive custom key
  * 4. Decrypt FEK
  * 5. Stream-decrypt all chunks via the streaming manager:
- *    - FSAPI path (Chromium/Brave/Edge): write directly to disk via fsapiHandlePromise
- *    - Blob fallback (Firefox): accumulate incrementally, trigger download from blob URL
- * 6. Show success message
- *
- * @param fsapiHandlePromise - Promise from showSaveFilePicker() called synchronously
- *   in the click handler by the caller. If null/undefined, falls back to Blob path.
+ *    - SW path (preferred): bytes flow to the browser's download manager via
+ *      the Service Worker; SHA-256 verified inline.
+ *    - Blob fallback: accumulate incrementally, trigger download from blob URL.
+ * 6. Show success or hash-mismatch warning.
  */
 export async function downloadFile(
   fileId: string,
   hint: string,
   expectedHash: string,
   passwordType: string,
-  fsapiHandlePromise?: Promise<FileSystemFileHandle> | null,
 ): Promise<void> {
   const t0 = Date.now();
   console.log(`${LOG_PREFIX} downloadFile() invoked (passwordType=${passwordType})`);
@@ -173,8 +170,7 @@ export async function downloadFile(
     }
 
     // Stream-decrypt all chunks via the streaming download manager.
-    // Pass fsapiHandlePromise so the manager can write directly to the
-    // user-selected file (FSAPI path) or fall back to Blob (Firefox).
+    // Picks the SW path when available; falls back to Blob otherwise.
     console.log(`${LOG_PREFIX} Beginning chunked streaming download...`);
     const result: StreamingDownloadResult = await downloadFileChunked(
       fileId,
@@ -183,7 +179,6 @@ export async function downloadFile(
       {
         accountKey: metadataDecryptionKey,
         showProgressUI: true,
-        fsapiHandlePromise: fsapiHandlePromise ?? null,
         onProgress: (progress) => {
           if (progress.stage === 'error') {
             console.error(`${LOG_PREFIX} Streaming progress error:`, progress.error);
@@ -208,25 +203,32 @@ export async function downloadFile(
       return;
     }
 
+    // Sanity check: server-stored expectedHash from list.ts row should match
+    // the freshly-decrypted sha256sum from this download's metadata. They are
+    // both ciphertext over the same value with the same account key, so a
+    // mismatch here indicates metadata tampering or a code bug.
     if (result.sha256sum && expectedHash && result.sha256sum !== expectedHash) {
-      console.warn(`${LOG_PREFIX} SHA-256 hash mismatch — file may be corrupted`);
+      console.warn(`${LOG_PREFIX} SHA-256 metadata mismatch -- possible tampering or stale list view`);
     }
 
-    if (result.savedViaFileSystemAPI) {
-      // FSAPI path: file was written directly to disk
-      console.log(`${LOG_PREFIX} File saved directly to disk via FSAPI (total elapsed ${Date.now() - t0}ms)`);
+    if (result.streamedViaSw) {
+      // SW path: bytes streamed directly to the browser's download manager.
+      console.log(`${LOG_PREFIX} File streamed via Service Worker (total elapsed ${Date.now() - t0}ms, hash_verification=${result.hashVerification ?? 'n/a'})`);
       showSuccess(`Downloaded: ${result.filename}`);
+      if (result.hashVerification === 'mismatch') {
+        showWarning('SHA-256 verification failed for the downloaded file. The file may be corrupted or tampered with. Consider deleting it and re-downloading.');
+      }
       return;
     }
 
-    // Blob fallback path (Firefox): trigger browser download from blob URL
+    // Blob fallback path: trigger browser download from blob URL
     if (!result.blobUrl) {
       console.error(`${LOG_PREFIX} Result missing blobUrl on fallback path`);
       showError('Download completed but no file data was produced.');
       return;
     }
 
-    console.log(`${LOG_PREFIX} Triggering browser download (total elapsed ${Date.now() - t0}ms)`);
+    console.log(`${LOG_PREFIX} Triggering browser download from blob URL (SW unavailable, total elapsed ${Date.now() - t0}ms)`);
     triggerBrowserDownloadFromUrl(result.blobUrl, result.filename);
     showSuccess(`Downloaded: ${result.filename}`);
   } catch (error) {
