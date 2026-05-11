@@ -366,7 +366,7 @@ Items the `idsrp.md` prompt asks about that, based on initial inspection, appear
 | Slice | Output file | Status | Started | Completed | Notes |
 |---|---|---|---|---|---|
 | Plan / tracker | `00-plan.md` | Done | 2026-05-11 | 2026-05-11 | This document. |
-| A — Auth & OPAQUE | `01-auth-opaque.md` | Not started | | | |
+| A — Auth & OPAQUE | `01-auth-opaque.md` | **Done** | 2026-05-11 | 2026-05-11 | Consolidated final deliverable: 45 findings (1 Critical, 12 High, 21 Medium, 9 Low, 2 Informational) covering server OPAQUE/JWT/TOTP, both CLIs + agent daemon, browser auth flow. Single `A-NN` numbering. |
 | B — Crypto & key hierarchy | `02-crypto-keys.md` | Not started | | | |
 | C — Upload/Download/Chunking | `03-files-upload-download.md` | Not started | | | |
 | D — Sharing | `04-sharing.md` | Not started | | | |
