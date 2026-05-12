@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/84adam/Arkfile/auth"
@@ -141,8 +142,10 @@ func CreateExportToken(c echo.Context) error {
 		},
 	}
 
+	// Export-scoped tokens are signed with the full-tier key. They carry their
+	// own audience (arkfile-export) so they cannot be replayed at JWTMiddleware.
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	tokenString, err := token.SignedString(auth.GetJWTPrivateKey())
+	tokenString, err := token.SignedString(auth.GetJWTFullPrivateKey())
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to sign export token: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create export token")
@@ -165,12 +168,19 @@ func resolveExportAuth(c echo.Context, fileID string) (string, error) {
 		return resolveExportAuthFromHeader(c)
 	}
 
-	// Parse and validate export token
-	token, err := jwt.ParseWithClaims(tokenStr, &ExportTokenClaims{}, func(t *jwt.Token) (interface{}, error) {
-		if t.Method.Alg() != jwt.SigningMethodEdDSA.Alg() {
-			return nil, fmt.Errorf("unexpected signing method: %s", t.Method.Alg())
-		}
-		return auth.GetJWTPublicKey(), nil
+	// Parse and validate export token. The parser enforces:
+	//   - Ed25519 signature
+	//   - aud=arkfile-export (rejects full and temp tokens being replayed here)
+	//   - issuer=arkfile-auth
+	//   - non-expired
+	parser := jwt.NewParser(
+		jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}),
+		jwt.WithAudience(auth.AudienceExport),
+		jwt.WithIssuer(auth.Issuer),
+		jwt.WithExpirationRequired(),
+	)
+	token, err := parser.ParseWithClaims(tokenStr, &ExportTokenClaims{}, func(t *jwt.Token) (interface{}, error) {
+		return auth.GetJWTFullPublicKey(), nil
 	})
 	if err != nil {
 		return "", echo.NewHTTPError(http.StatusUnauthorized, "Invalid or expired export token")
@@ -208,12 +218,19 @@ func resolveExportAuthFromHeader(c echo.Context) (string, error) {
 	}
 	tokenStr := authHeader[len(prefix):]
 
-	// Parse and validate the standard Arkfile JWT
-	token, err := jwt.ParseWithClaims(tokenStr, &auth.Claims{}, func(t *jwt.Token) (interface{}, error) {
-		if t.Method.Alg() != jwt.SigningMethodEdDSA.Alg() {
-			return nil, fmt.Errorf("unexpected signing method: %s", t.Method.Alg())
-		}
-		return auth.GetJWTPublicKey(), nil
+	// Parse and validate the standard Arkfile JWT. The parser enforces:
+	//   - Ed25519 signature against the FULL-tier public key
+	//   - aud=arkfile-api (rejects temp post-OPAQUE tokens -- E-19 fix)
+	//   - issuer=arkfile-auth
+	//   - non-expired
+	parser := jwt.NewParser(
+		jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}),
+		jwt.WithAudience(auth.AudienceAPI),
+		jwt.WithIssuer(auth.Issuer),
+		jwt.WithExpirationRequired(),
+	)
+	token, err := parser.ParseWithClaims(tokenStr, &auth.Claims{}, func(t *jwt.Token) (interface{}, error) {
+		return auth.GetJWTFullPublicKey(), nil
 	})
 	if err != nil {
 		return "", echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
@@ -222,6 +239,16 @@ func resolveExportAuthFromHeader(c echo.Context) (string, error) {
 	claims, ok := token.Claims.(*auth.Claims)
 	if !ok || !token.Valid || claims.Username == "" {
 		return "", echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+	}
+
+	// Defense in depth: even though aud=arkfile-api enforced above implies a
+	// full-tier token, explicitly reject requires_totp=true and double-check
+	// the audience claim. This guards against any future parser-config drift.
+	if claims.RequiresTOTP {
+		return "", echo.NewHTTPError(http.StatusForbidden, "Full authentication required for export")
+	}
+	if !slices.Contains(claims.Audience, auth.AudienceAPI) {
+		return "", echo.NewHTTPError(http.StatusForbidden, "Token audience does not permit export")
 	}
 
 	return claims.Username, nil

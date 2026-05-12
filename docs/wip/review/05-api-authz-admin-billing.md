@@ -778,6 +778,17 @@ The original finding analysis (preserved below for the audit trail):
 
 ### Finding E-19: Public `ExportFile` endpoint accepts any valid Arkfile JWT for any user's own file; no TOTP claim required
 
+**Status (2026-05-12):** **RESOLVED.** Closed alongside A-01. `handlers/export.go` `resolveExportAuthFromHeader` now enforces:
+
+1. For the **JWT branch** (`Authorization: Bearer <full-tier JWT>`): the JWT must validate against the full-tier public key, must carry `aud=arkfile-api`, and must have `requires_totp=false`. The route is therefore unreachable to a post-OPAQUE temp token AND to any full-tier-signed-but-requires-TOTP-true token. This closes the original E-19 attack (a freshly-issued post-OPAQUE temp token reaching `/api/files/:fileId/export`).
+2. For the **token branch** (`?token=<export-bearer>`): the export token must carry `aud=arkfile-export` and is validated against the export key (still the full-tier key today). The previous code accepted any valid Arkfile JWT in this slot; the new code rejects audience mismatch.
+3. Both branches re-resolve the username from the (now properly tier-checked) claims and route through the existing per-file ownership query.
+
+Combined with the `RequireTOTP` middleware addition to `adminGroup` and `devTestAdminGroup` and the new `auth.RequireFullJWT` middleware (see `01-auth-opaque.md` §A-01 RESOLVED section), the post-OPAQUE → export-any-file pathway is closed at three layers (signature, audience, requires_totp). The Go test suite (`go test ./...`) is green; the new audience-rejection behaviour is covered by `auth/jwt_test.go::TestJWTMiddleware_RejectsTempAudience` and `handlers/admin_audience_test.go::TestAdminStackHead_RejectsTempToken_Before_DB`.
+
+#### Original finding (preserved for the audit trail)
+
+
 - Severity: **Medium**
 - Confidence: **High**
 - Category: authorization / TOTP-bypass-surface

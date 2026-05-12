@@ -13,9 +13,10 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// TestMain initializes JWT Ed25519 keys, TOTP master key, and config
-// so that handler tests can call auth.GenerateToken(), auth.GenerateFullAccessToken(),
-// auth.ValidateTOTPCode(), etc. This follows the same pattern as auth/jwt_test.go TestMain.
+// TestMain initializes JWT Ed25519 keys (both tiers), TOTP master key, and config
+// so that handler tests can call auth.GenerateFullAccessToken(),
+// auth.GenerateTemporaryTOTPToken(), auth.ValidateTOTPCode(), etc. This follows
+// the same pattern as auth/jwt_test.go TestMain.
 func TestMain(m *testing.M) {
 	// Reset config state
 	config.ResetConfigForTest()

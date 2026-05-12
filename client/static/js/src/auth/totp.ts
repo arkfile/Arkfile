@@ -5,7 +5,7 @@
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
 import { showModal, showTOTPAppsModal } from '../ui/modals';
-import { getToken, clearAllSessionData, AuthManager } from '../utils/auth';
+import { getToken, getTempToken, clearTempToken, clearAllSessionData, AuthManager } from '../utils/auth';
 import { showFileSection, showAuthSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { LoginManager } from './login';
@@ -300,11 +300,14 @@ export async function generateAndDisplayTOTPSetup(): Promise<void> {
 
 /**
  * Start a countdown timer for the static TOTP setup form (#totp-setup-form).
- * Reads the JWT expiry from the token in localStorage.
+ * Reads the JWT expiry from the temp token (the credential being used during
+ * the /api/totp/setup + /api/totp/verify pair, valid for 20 minutes).
+ * Falls back to the full token in the unusual case where setup is being
+ * resumed by an already-authenticated user.
  * Displays when less than 5 minutes remain; auto-logs out and reloads on expiry.
  */
 function startSetupSessionCountdown(): void {
-  const token = getToken();
+  const token = getTempToken() || getToken();
   if (!token) return;
 
   const payload = AuthManager.parseJwtToken(token);
@@ -344,17 +347,24 @@ function startSetupSessionCountdown(): void {
 }
 
 // TOTP Setup Functions
+//
+// /api/totp/setup is gated by TOTPJWTMiddleware (aud=arkfile-totp). The
+// temp token (in TEMP_TOKEN_KEY) is the credential to use here. As a
+// fallback, accept the full token for the rare "user is already logged in
+// and wants to re-run TOTP setup" path -- although in practice that path
+// is currently locked off because TOTP setup is only initiated when no
+// TOTP is enrolled.
 export async function initiateTOTPSetup(): Promise<TOTPSetupData | null> {
   try {
     showProgressMessage('Setting up TOTP...');
-    
-    const token = getToken();
+
+    const token = getTempToken() || getToken();
     if (!token) {
       hideProgress();
       showError('Authentication required');
       return null;
     }
-    
+
     const response = await fetch('/api/totp/setup', {
       method: 'POST',
       headers: {
@@ -397,14 +407,16 @@ export async function initiateTOTPSetup(): Promise<TOTPSetupData | null> {
 export async function completeTOTPSetup(code: string): Promise<Record<string, any> | null> {
   try {
     showProgressMessage('Completing TOTP setup...');
-    
-    const token = getToken();
+
+    // /api/totp/verify is also gated by TOTPJWTMiddleware; same temp-token
+    // selection logic as initiateTOTPSetup.
+    const token = getTempToken() || getToken();
     if (!token) {
       hideProgress();
       showError('Authentication required');
       return null;
     }
-    
+
     const response = await fetch('/api/totp/verify', {
       method: 'POST',
       headers: {
@@ -658,11 +670,15 @@ async function completeTOTPSetupFlow(code: string): Promise<void> {
     const newRefreshToken = verifyResult.refresh_token || '';
     const isApproved = verifyResult.user?.is_approved;
 
-    // Store the new full-access tokens
+    // Store the new full-access tokens AND drop the now-spent temp token.
+    // The temp token's only valid use was at /api/totp/{setup,verify,auth};
+    // once verify succeeds it is no longer needed and must be removed so
+    // future getTempToken() calls return null.
     if (newToken) {
       const { setTokens } = await import('../utils/auth.js');
       setTokens(newToken, newRefreshToken);
     }
+    clearTempToken();
 
     // If we got here from the login flow (incomplete TOTP setup on login),
     // window.totpLoginData holds the password and username. Use them to complete login.

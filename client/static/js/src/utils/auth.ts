@@ -29,8 +29,24 @@ export class ServiceUnavailableError extends Error {
 }
 
 export class AuthManager {
+  // Storage keys.
+  //
+  // TOKEN_KEY holds the FULL-tier access token (aud=arkfile-api). Only set
+  // after TOTP verify succeeds (or after /api/refresh on an existing full
+  // session). All authenticated API calls Authorization: Bearer this value.
+  //
+  // TEMP_TOKEN_KEY holds the TEMP-tier post-OPAQUE token (aud=arkfile-totp).
+  // Only valid at /api/totp/{setup,verify,auth}. Kept in a separate slot so
+  // the application layer cannot confuse the two (A-01 frontend mitigation:
+  // the production server enforces audience separation, but a separate
+  // storage key prevents an authenticated-fetch helper from accidentally
+  // sending the temp token to a full-protected route and getting a confusing
+  // 401 response).
+  //
+  // REFRESH_TOKEN_KEY holds the refresh token (only issued after TOTP).
   private static readonly TOKEN_KEY = 'token';
   private static readonly REFRESH_TOKEN_KEY = 'refresh_token';
+  private static readonly TEMP_TOKEN_KEY = 'temp_token';
   private static autoRefreshTimer: number | null = null;
   private static readonly AUTO_REFRESH_INTERVAL = 25 * 60 * 1000; // 25 minutes in milliseconds
 
@@ -51,6 +67,19 @@ export class AuthManager {
   public static clearTokens(): void {
     localStorage.removeItem(this.TOKEN_KEY);
     localStorage.removeItem(this.REFRESH_TOKEN_KEY);
+  }
+
+  // Temp-tier token management (only valid at /api/totp/*).
+  public static getTempToken(): string | null {
+    return localStorage.getItem(this.TEMP_TOKEN_KEY);
+  }
+
+  public static setTempToken(tempToken: string): void {
+    localStorage.setItem(this.TEMP_TOKEN_KEY, tempToken);
+  }
+
+  public static clearTempToken(): void {
+    localStorage.removeItem(this.TEMP_TOKEN_KEY);
   }
 
   public static isAuthenticated(): boolean {
@@ -280,15 +309,16 @@ export class AuthManager {
 
   // Session state management
   public static clearAllSessionData(): void {
-    // Clear tokens
+    // Clear tokens (full + refresh + temp)
     this.clearTokens();
-    
+    this.clearTempToken();
+
     // Clear cached encryption keys
     clearAllCachedAccountKeys();
-    
-    // Clear digest cache (SHA-256 digests are sensitive — content fingerprinting)
+
+    // Clear digest cache (SHA-256 digests are sensitive -- content fingerprinting)
     clearDigestCache();
-    
+
     // Clear window-level auth flow data
     if (typeof window !== 'undefined') {
       delete window.registrationData;
@@ -303,6 +333,9 @@ export const getToken = AuthManager.getToken.bind(AuthManager);
 export const getRefreshToken = AuthManager.getRefreshToken.bind(AuthManager);
 export const setTokens = AuthManager.setTokens.bind(AuthManager);
 export const clearTokens = AuthManager.clearTokens.bind(AuthManager);
+export const getTempToken = AuthManager.getTempToken.bind(AuthManager);
+export const setTempToken = AuthManager.setTempToken.bind(AuthManager);
+export const clearTempToken = AuthManager.clearTempToken.bind(AuthManager);
 export const isAuthenticated = AuthManager.isAuthenticated.bind(AuthManager);
 export const getUsernameFromToken = AuthManager.getUsernameFromToken.bind(AuthManager);
 export const isTokenExpired = AuthManager.isTokenExpired.bind(AuthManager);

@@ -10,7 +10,7 @@
 
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
-import { setTokens, clearAllSessionData, getToken } from '../utils/auth.js';
+import { setTokens, setTempToken, clearAllSessionData, getToken } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleTOTPFlow } from './totp.js';
@@ -153,9 +153,11 @@ export class LoginManager {
         // requires_totp_setup: true means TOTP was never completed during registration.
         // Route to the setup screen so the user can finish what they started.
         if (loginData.requires_totp_setup) {
-          // Store the temp token in localStorage so getToken() works during TOTP setup.
-          // The full token will replace it once TOTPVerify completes.
-          setTokens(loginData.temp_token!, '');
+          // Store the temp token in its OWN slot (separate from the full-tier
+          // 'token' key). The temp token is only valid at /api/totp/*; storing
+          // it under 'token' would be misleading and would cause any code path
+          // that called authenticatedFetch to send the wrong audience.
+          setTempToken(loginData.temp_token!);
           // Also stash the password in window so completeLogin can derive the account key
           // once TOTP setup is done (the totp.ts completeTOTPSetupFlow path returns a
           // full token and calls completeLogin via the registration flow in TOTPVerify).

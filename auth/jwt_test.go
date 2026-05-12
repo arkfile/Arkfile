@@ -102,9 +102,7 @@ func TestMain(m *testing.M) {
 	os.Exit(exitCode)
 }
 
-func TestGenerateToken(t *testing.T) {
-	// Config with JWT_SECRET is loaded in TestMain
-
+func TestGenerateFullAccessToken(t *testing.T) {
 	testCases := []struct {
 		name     string
 		username string
@@ -116,21 +114,18 @@ func TestGenerateToken(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Execute
-			tokenString, _, err := GenerateToken(tc.username)
+			tokenString, _, err := GenerateFullAccessToken(tc.username)
 
-			// Assert: Check for errors and non-empty token
 			assert.NoError(t, err)
 			assert.NotEmpty(t, tokenString)
 
-			// Assert: Verify token structure and claims
+			// Full tokens must validate against the FULL-tier public key,
+			// not the temp-tier public key.
 			token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-				// Validate the alg is what you expect:
 				if _, ok := token.Method.(*jwt.SigningMethodEd25519); !ok {
-					return nil, jwt.ErrSignatureInvalid // Use standard error
+					return nil, jwt.ErrSignatureInvalid
 				}
-				// Validate using the Ed25519 public key
-				return GetJWTPublicKey(), nil
+				return GetJWTFullPublicKey(), nil
 			})
 
 			assert.NoError(t, err)
@@ -140,17 +135,45 @@ func TestGenerateToken(t *testing.T) {
 			assert.True(t, ok, "Claims should be of type *Claims")
 			assert.Equal(t, tc.username, claims.Username, "Username claim should match")
 			assert.Equal(t, "arkfile-auth", claims.Issuer, "Issuer claim should be correct")
-			assert.Contains(t, claims.Audience, "arkfile-api", "Audience claim should contain 'arkfile-api'")
+			assert.Contains(t, claims.Audience, AudienceAPI, "Audience claim should contain 'arkfile-api'")
+			assert.NotContains(t, claims.Audience, AudienceTOTP, "Full token must NOT carry the temp audience")
+			assert.False(t, claims.RequiresTOTP, "Full token must have requires_totp=false")
 			assert.NotEmpty(t, claims.ID, "ID (jti) claim should not be empty")
 
-			// Assert: Verify expiry time is approximately correct
 			expectedExpiry := time.Now().Add(24 * time.Hour)
-			// Allow a small delta (e.g., 5 seconds) for timing differences
 			assert.WithinDuration(t, expectedExpiry, claims.ExpiresAt.Time, 5*time.Second, "Expiry time should be around 24 hours")
 			assert.True(t, claims.IssuedAt.Time.Before(time.Now().Add(time.Second)), "Issue time should be in the past")
 			assert.True(t, claims.NotBefore.Time.Before(time.Now().Add(time.Second)), "NotBefore time should be in the past")
 		})
 	}
+}
+
+// TestGenerateTemporaryTOTPToken_ClaimsAndKey verifies the temp-tier token
+// is signed with the temp-tier key and carries requires_totp=true plus the
+// arkfile-totp audience.
+func TestGenerateTemporaryTOTPToken_ClaimsAndKey(t *testing.T) {
+	tokenString, _, err := GenerateTemporaryTOTPToken("alice")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, tokenString)
+
+	// Should validate with the TEMP public key.
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		return GetJWTTempPublicKey(), nil
+	})
+	assert.NoError(t, err)
+	assert.True(t, token.Valid)
+
+	claims := token.Claims.(*Claims)
+	assert.Equal(t, "alice", claims.Username)
+	assert.Contains(t, claims.Audience, AudienceTOTP)
+	assert.NotContains(t, claims.Audience, AudienceAPI, "Temp token must NOT carry the full audience")
+	assert.True(t, claims.RequiresTOTP, "Temp token must have requires_totp=true")
+
+	// Should FAIL to validate against the FULL public key (different key).
+	_, err = jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		return GetJWTFullPublicKey(), nil
+	})
+	assert.Error(t, err, "Temp token must not validate against the full-tier public key")
 }
 
 func TestGetUsernameFromToken(t *testing.T) {
@@ -181,96 +204,100 @@ func TestGetUsernameFromToken(t *testing.T) {
 	assert.Equal(t, testUsername, extractedUsername, "Extracted username should match the one in the token")
 }
 
-func TestJWTMiddleware(t *testing.T) {
-	// Config with JWT_SECRET is loaded in TestMain
+// mintFullToken creates a valid full-tier JWT signed with the full-tier key,
+// carrying aud=arkfile-api, requires_totp=false, and the standard claims.
+func mintFullToken(t *testing.T, username string, expiry time.Duration) string {
+	t.Helper()
+	tokenString, _, err := GenerateFullAccessToken(username)
+	_ = expiry // expiry is controlled by config; helper kept for future variants
+	assert.NoError(t, err)
+	return tokenString
+}
 
-	// Setup: Create Echo instance and test handler
+// mintCustomToken creates a JWT with caller-controlled claims and signer.
+// Used by negative tests to forge audience/key combinations the production
+// code paths cannot produce.
+func mintCustomToken(t *testing.T, claims *Claims, signer ed25519.PrivateKey) string {
+	t.Helper()
+	if claims.Issuer == "" {
+		claims.Issuer = Issuer
+	}
+	if claims.IssuedAt == nil {
+		claims.IssuedAt = jwt.NewNumericDate(time.Now())
+	}
+	if claims.ExpiresAt == nil {
+		claims.ExpiresAt = jwt.NewNumericDate(time.Now().Add(time.Hour))
+	}
+	if claims.ID == "" {
+		claims.ID = "test-token-id"
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	tokenString, err := token.SignedString(signer)
+	assert.NoError(t, err)
+	return tokenString
+}
+
+func TestJWTMiddleware(t *testing.T) {
 	e := echo.New()
 	mockHandler := func(c echo.Context) error {
-		// We can verify the claims are set correctly by the middleware
 		user := c.Get("user").(*jwt.Token)
 		claims := user.Claims.(*Claims)
 		assert.Equal(t, "test.user.2024", claims.Username)
 		return c.String(http.StatusOK, "test passed")
 	}
 
-	// Setup: Get the middleware function
 	middlewareFunc := JWTMiddleware()
 	handlerWithMiddleware := middlewareFunc(mockHandler)
 
-	// Test cases
 	testCases := []struct {
 		name           string
-		tokenFunc      func() string // Function to generate token for the test
+		tokenFunc      func() string
 		expectedStatus int
-		expectBody     string
 		expectError    bool
 	}{
 		{
-			name: "Valid Token",
+			name: "Valid Full Token",
 			tokenFunc: func() string {
-				claims := &Claims{
-					Username: "test.user.2024",
-					RegisteredClaims: jwt.RegisteredClaims{
-						ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-						ID:        "valid-token-id",
-					},
-				}
-				token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-				// Sign with the Ed25519 private key
-				tokenString, _ := token.SignedString(GetJWTPrivateKey())
-				return tokenString
+				return mintFullToken(t, "test.user.2024", time.Hour)
 			},
 			expectedStatus: http.StatusOK,
-			expectBody:     "test passed",
 			expectError:    false,
 		},
 		{
-			name: "Expired Token",
+			name: "Expired Full Token",
 			tokenFunc: func() string {
-				claims := &Claims{
+				return mintCustomToken(t, &Claims{
 					Username: "test.user.expired",
 					RegisteredClaims: jwt.RegisteredClaims{
-						ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)), // Expired
-						ID:        "expired-token-id",
+						ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour)),
+						Audience:  []string{AudienceAPI},
 					},
-				}
-				token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-				// Sign with the Ed25519 private key
-				tokenString, _ := token.SignedString(GetJWTPrivateKey())
-				return tokenString
+				}, GetJWTFullPrivateKey())
 			},
 			expectedStatus: http.StatusUnauthorized,
-			expectBody:     "",
-			expectError:    true, // Middleware should return an error
+			expectError:    true,
 		},
 		{
-			name: "Invalid Signature",
+			name: "Signed with Attacker Key",
 			tokenFunc: func() string {
-				// Generate a different Ed25519 key pair for wrong signature
-				_, wrongPrivateKey, _ := ed25519.GenerateKey(nil)
-				claims := &Claims{
+				_, wrong, _ := ed25519.GenerateKey(nil)
+				return mintCustomToken(t, &Claims{
 					Username: "test.user.invalid",
 					RegisteredClaims: jwt.RegisteredClaims{
-						ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+						Audience: []string{AudienceAPI},
 					},
-				}
-				token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-				tokenString, _ := token.SignedString(wrongPrivateKey) // Sign with wrong key
-				return tokenString
+				}, wrong)
 			},
 			expectedStatus: http.StatusUnauthorized,
-			expectBody:     "",
 			expectError:    true,
 		},
 		{
 			name: "No Token",
 			tokenFunc: func() string {
-				return "" // No token provided
+				return ""
 			},
-			expectedStatus: http.StatusUnauthorized, // Assuming default behavior if no token
-			expectBody:     "",
-			expectError:    true, // Middleware should error if no token but expected
+			expectedStatus: http.StatusUnauthorized,
+			expectError:    true,
 		},
 		{
 			name: "Malformed Token",
@@ -278,14 +305,12 @@ func TestJWTMiddleware(t *testing.T) {
 				return "this.is.not.a.jwt"
 			},
 			expectedStatus: http.StatusUnauthorized,
-			expectBody:     "",
 			expectError:    true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Setup request and recorder for this test case
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			tokenString := tc.tokenFunc()
 			if tokenString != "" {
@@ -294,23 +319,216 @@ func TestJWTMiddleware(t *testing.T) {
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 
-			// Execute the handler with middleware
 			err := handlerWithMiddleware(c)
 
-			// Assert: Check error expectation
 			if tc.expectError {
-				assert.Error(t, err, "Expected an error for "+tc.name)
-				// Check if it's an HTTPError and the status code matches
+				assert.Error(t, err)
 				httpErr, ok := err.(*echo.HTTPError)
-				assert.True(t, ok, "Error should be an echo.HTTPError")
-				assert.Equal(t, tc.expectedStatus, httpErr.Code, "HTTP status code should match expected")
+				assert.True(t, ok)
+				assert.Equal(t, tc.expectedStatus, httpErr.Code)
 			} else {
-				assert.NoError(t, err, "Did not expect an error for "+tc.name)
-				assert.Equal(t, tc.expectedStatus, rec.Code, "HTTP status code should match expected")
-				if tc.expectBody != "" {
-					assert.Equal(t, tc.expectBody, rec.Body.String(), "Response body should match expected")
-				}
+				assert.NoError(t, err)
+				assert.Equal(t, tc.expectedStatus, rec.Code)
 			}
 		})
 	}
+}
+
+// TestJWTMiddleware_RejectsTempAudience verifies that JWTMiddleware (which
+// expects aud=arkfile-api) refuses a temp-tier token. This is the core
+// A-01 regression test: completing OPAQUE alone must not yield access to
+// full-protected routes.
+func TestJWTMiddleware_RejectsTempAudience(t *testing.T) {
+	e := echo.New()
+	handler := JWTMiddleware()(func(c echo.Context) error {
+		return c.String(http.StatusOK, "should not reach here")
+	})
+
+	tempToken, _, err := GenerateTemporaryTOTPToken("alice")
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+tempToken)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err = handler(c)
+	assert.Error(t, err, "temp-tier token must be rejected at full-tier validator")
+	httpErr, ok := err.(*echo.HTTPError)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+}
+
+// TestTOTPJWTMiddleware_RejectsFullAudience verifies that TOTPJWTMiddleware
+// (which expects aud=arkfile-totp) refuses a full-tier token. A full token
+// must not be replayable at /api/totp/{setup,verify,auth}.
+func TestTOTPJWTMiddleware_RejectsFullAudience(t *testing.T) {
+	e := echo.New()
+	handler := TOTPJWTMiddleware()(func(c echo.Context) error {
+		return c.String(http.StatusOK, "should not reach here")
+	})
+
+	fullToken := mintFullToken(t, "alice", time.Hour)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/totp/setup", nil)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+fullToken)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler(c)
+	assert.Error(t, err, "full-tier token must be rejected at temp-tier validator")
+	httpErr, ok := err.(*echo.HTTPError)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+}
+
+// TestJWTMiddleware_RejectsTempSignedWithFullKey verifies that even if an
+// attacker hand-crafts a token with aud=arkfile-totp and signs it with the
+// FULL-tier key (i.e., an internal-policy violation), JWTMiddleware still
+// refuses it because the audience does not match its expected value.
+func TestJWTMiddleware_RejectsTempSignedWithFullKey(t *testing.T) {
+	e := echo.New()
+	handler := JWTMiddleware()(func(c echo.Context) error {
+		return c.String(http.StatusOK, "should not reach here")
+	})
+
+	// Token signed with the full-tier private key but carrying the TEMP
+	// audience. JWTMiddleware expects AudienceAPI, so this must fail.
+	crafted := mintCustomToken(t, &Claims{
+		Username:     "mallory",
+		RequiresTOTP: true,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience: []string{AudienceTOTP},
+		},
+	}, GetJWTFullPrivateKey())
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+crafted)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler(c)
+	assert.Error(t, err, "audience check must reject even correctly-signed tokens")
+}
+
+// TestJWTMiddleware_RejectsForgedAudience verifies that signature
+// verification still does its job: an attacker-crafted token with the
+// correct audience but signed with an attacker key is rejected.
+func TestJWTMiddleware_RejectsForgedAudience(t *testing.T) {
+	e := echo.New()
+	handler := JWTMiddleware()(func(c echo.Context) error {
+		return c.String(http.StatusOK, "should not reach here")
+	})
+
+	_, attackerKey, _ := ed25519.GenerateKey(nil)
+	crafted := mintCustomToken(t, &Claims{
+		Username: "mallory",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience: []string{AudienceAPI},
+		},
+	}, attackerKey)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+crafted)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler(c)
+	assert.Error(t, err, "signature verification must reject attacker-signed tokens")
+}
+
+// TestRequireFullJWT_RejectsRequiresTOTPTrue verifies that even if a token
+// somehow makes it past JWTMiddleware (e.g., hand-crafted with the full key
+// but requires_totp=true), RequireFullJWT catches it as defense in depth.
+func TestRequireFullJWT_RejectsRequiresTOTPTrue(t *testing.T) {
+	e := echo.New()
+
+	// Compose the same stack as production protected groups:
+	// JWTMiddleware -> RequireFullJWT -> handler
+	handler := JWTMiddleware()(RequireFullJWT(func(c echo.Context) error {
+		return c.String(http.StatusOK, "should not reach here")
+	}))
+
+	// A token signed with the full key, carrying the correct audience, but
+	// with requires_totp=true. JWTMiddleware will accept this (signature OK,
+	// audience OK); RequireFullJWT must reject it.
+	crafted := mintCustomToken(t, &Claims{
+		Username:     "alice",
+		RequiresTOTP: true,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience: []string{AudienceAPI},
+		},
+	}, GetJWTFullPrivateKey())
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+crafted)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := handler(c)
+	assert.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusForbidden, httpErr.Code, "RequireFullJWT must return 403 for requires_totp=true")
+}
+
+// TestRequiresTOTPFromToken_HandlesMissingClaims verifies the A-39 hardening:
+// RequiresTOTPFromToken must return false (not panic) when the context has
+// no user, a nil user, or a non-Claims user value.
+func TestRequiresTOTPFromToken_HandlesMissingClaims(t *testing.T) {
+	e := echo.New()
+
+	t.Run("nil user", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		// Do not set "user" at all
+		assert.NotPanics(t, func() {
+			result := RequiresTOTPFromToken(c)
+			assert.False(t, result)
+		})
+	})
+
+	t.Run("user set to nil pointer", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		var nilToken *jwt.Token
+		c.Set("user", nilToken)
+		assert.NotPanics(t, func() {
+			result := RequiresTOTPFromToken(c)
+			assert.False(t, result)
+		})
+	})
+
+	t.Run("user with non-Claims claim type", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		// Standard jwt.MapClaims instead of our *Claims
+		tok := &jwt.Token{Claims: jwt.MapClaims{"username": "bob"}}
+		c.Set("user", tok)
+		assert.NotPanics(t, func() {
+			result := RequiresTOTPFromToken(c)
+			assert.False(t, result)
+		})
+	})
+
+	t.Run("user with valid *Claims requires_totp=true", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		tok := &jwt.Token{Claims: &Claims{RequiresTOTP: true}}
+		c.Set("user", tok)
+		assert.True(t, RequiresTOTPFromToken(c))
+	})
+
+	t.Run("user with valid *Claims requires_totp=false", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		tok := &jwt.Token{Claims: &Claims{RequiresTOTP: false}}
+		c.Set("user", tok)
+		assert.False(t, RequiresTOTPFromToken(c))
+	})
 }

@@ -60,8 +60,11 @@ func RefreshToken(c echo.Context) error {
 		return JSONError(c, http.StatusUnauthorized, "All tokens have been revoked for security reasons")
 	}
 
-	// Generate new JWT token
-	token, expirationTime, err := auth.GenerateToken(username)
+	// Generate new JWT token (full-tier; refresh flow always produces a full token,
+	// matching the post-TOTP login behaviour). A user who has not completed TOTP
+	// never receives a refresh token in the first place, so this path is unreachable
+	// for temp-tier sessions.
+	token, expirationTime, err := auth.GenerateFullAccessToken(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create new token")

@@ -8,65 +8,138 @@ import (
 	"github.com/84adam/Arkfile/crypto"
 )
 
+// Two-tier JWT signing keys (A-01 fix).
+//
+// The temp-tier key signs short-lived tokens issued by OPAQUE finalize that
+// carry aud=arkfile-totp and requires_totp=true. Those tokens are only valid
+// at /api/totp/{setup,verify,auth}, validated by TOTPJWTMiddleware against
+// the temp public key.
+//
+// The full-tier key signs full-access tokens issued after a successful TOTP
+// step (or via /api/refresh on an existing full session). Those tokens carry
+// aud=arkfile-api and requires_totp=false and are validated by JWTMiddleware
+// against the full public key.
+//
+// Two separate keys make audience confusion structurally impossible:
+// presenting a temp token to JWTMiddleware fails signature verification
+// before any claim is inspected, and vice versa. The audience claim is
+// enforced as defense in depth in ParseTokenFunc.
 var (
-	jwtPrivateKey ed25519.PrivateKey
-	jwtPublicKey  ed25519.PublicKey
-	keysOnce      sync.Once
-	keysError     error
+	jwtTempPrivateKey ed25519.PrivateKey
+	jwtTempPublicKey  ed25519.PublicKey
+	jwtFullPrivateKey ed25519.PrivateKey
+	jwtFullPublicKey  ed25519.PublicKey
+
+	tempKeysOnce  sync.Once
+	tempKeysError error
+
+	fullKeysOnce  sync.Once
+	fullKeysError error
 )
 
-// LoadJWTKeys loads the Ed25519 private and public keys for JWT signing
-// It uses the KeyManager to retrieve or generate the keys securely.
-func LoadJWTKeys() error {
-	keysOnce.Do(func() {
+// LoadJWTTempKeys retrieves or generates the Ed25519 keypair used to sign
+// temporary post-OPAQUE TOTP-handoff tokens (aud=arkfile-totp).
+func LoadJWTTempKeys() error {
+	tempKeysOnce.Do(func() {
 		km, err := crypto.GetKeyManager()
 		if err != nil {
-			keysError = fmt.Errorf("failed to get KeyManager: %w", err)
+			tempKeysError = fmt.Errorf("failed to get KeyManager: %w", err)
 			return
 		}
 
-		// Retrieve or generate the 32-byte seed for the Ed25519 key
-		// We use "jwt_signing_key_v1" as the ID and "jwt" as the type context
-		seed, err := km.GetOrGenerateKey("jwt_signing_key_v1", "jwt", 32)
+		seed, err := km.GetOrGenerateKey("jwt_signing_key_temp_v1", "jwt", 32)
 		if err != nil {
-			keysError = fmt.Errorf("failed to get/generate JWT key seed: %w", err)
+			tempKeysError = fmt.Errorf("failed to get/generate JWT temp key seed: %w", err)
 			return
 		}
-
 		if len(seed) != 32 {
-			keysError = fmt.Errorf("invalid JWT key seed length: expected 32 bytes, got %d", len(seed))
+			tempKeysError = fmt.Errorf("invalid JWT temp key seed length: expected 32 bytes, got %d", len(seed))
 			return
 		}
 
-		// Generate the key pair from the seed
-		jwtPrivateKey = ed25519.NewKeyFromSeed(seed)
-		jwtPublicKey = jwtPrivateKey.Public().(ed25519.PublicKey)
+		jwtTempPrivateKey = ed25519.NewKeyFromSeed(seed)
+		jwtTempPublicKey = jwtTempPrivateKey.Public().(ed25519.PublicKey)
 	})
-
-	return keysError
+	return tempKeysError
 }
 
-// GetJWTPrivateKey returns the loaded Ed25519 private key
-func GetJWTPrivateKey() ed25519.PrivateKey {
-	if err := LoadJWTKeys(); err != nil {
-		panic(fmt.Sprintf("JWT private key not available: %v", err))
+// LoadJWTFullKeys retrieves or generates the Ed25519 keypair used to sign
+// full-access tokens (aud=arkfile-api). Also used for export-scoped tokens.
+func LoadJWTFullKeys() error {
+	fullKeysOnce.Do(func() {
+		km, err := crypto.GetKeyManager()
+		if err != nil {
+			fullKeysError = fmt.Errorf("failed to get KeyManager: %w", err)
+			return
+		}
+
+		seed, err := km.GetOrGenerateKey("jwt_signing_key_full_v1", "jwt", 32)
+		if err != nil {
+			fullKeysError = fmt.Errorf("failed to get/generate JWT full key seed: %w", err)
+			return
+		}
+		if len(seed) != 32 {
+			fullKeysError = fmt.Errorf("invalid JWT full key seed length: expected 32 bytes, got %d", len(seed))
+			return
+		}
+
+		jwtFullPrivateKey = ed25519.NewKeyFromSeed(seed)
+		jwtFullPublicKey = jwtFullPrivateKey.Public().(ed25519.PublicKey)
+	})
+	return fullKeysError
+}
+
+// GetJWTTempPrivateKey returns the loaded Ed25519 private key for temp tokens.
+func GetJWTTempPrivateKey() ed25519.PrivateKey {
+	if err := LoadJWTTempKeys(); err != nil {
+		panic(fmt.Sprintf("JWT temp private key not available: %v", err))
 	}
-	return jwtPrivateKey
+	return jwtTempPrivateKey
 }
 
-// GetJWTPublicKey returns the loaded Ed25519 public key
-func GetJWTPublicKey() ed25519.PublicKey {
-	if err := LoadJWTKeys(); err != nil {
-		panic(fmt.Sprintf("JWT public key not available: %v", err))
+// GetJWTTempPublicKey returns the loaded Ed25519 public key for temp tokens.
+func GetJWTTempPublicKey() ed25519.PublicKey {
+	if err := LoadJWTTempKeys(); err != nil {
+		panic(fmt.Sprintf("JWT temp public key not available: %v", err))
 	}
-	return jwtPublicKey
+	return jwtTempPublicKey
 }
 
-// Testing helper - DO NOT USE IN PRODUCTION
-// ResetKeysForTest resets the sync.Once and key variables for testing purposes
+// GetJWTFullPrivateKey returns the loaded Ed25519 private key for full tokens.
+func GetJWTFullPrivateKey() ed25519.PrivateKey {
+	if err := LoadJWTFullKeys(); err != nil {
+		panic(fmt.Sprintf("JWT full private key not available: %v", err))
+	}
+	return jwtFullPrivateKey
+}
+
+// GetJWTFullPublicKey returns the loaded Ed25519 public key for full tokens.
+func GetJWTFullPublicKey() ed25519.PublicKey {
+	if err := LoadJWTFullKeys(); err != nil {
+		panic(fmt.Sprintf("JWT full public key not available: %v", err))
+	}
+	return jwtFullPublicKey
+}
+
+// LoadJWTKeys initializes both tiers. Kept for callers that just need to
+// ensure JWT subsystem is ready at startup.
+func LoadJWTKeys() error {
+	if err := LoadJWTTempKeys(); err != nil {
+		return err
+	}
+	return LoadJWTFullKeys()
+}
+
+// ResetKeysForTest resets the sync.Once and key variables for testing purposes.
+// DO NOT USE IN PRODUCTION.
 func ResetKeysForTest() {
-	keysOnce = sync.Once{}
-	jwtPrivateKey = nil
-	jwtPublicKey = nil
-	keysError = nil
+	tempKeysOnce = sync.Once{}
+	jwtTempPrivateKey = nil
+	jwtTempPublicKey = nil
+	tempKeysError = nil
+
+	fullKeysOnce = sync.Once{}
+	jwtFullPrivateKey = nil
+	jwtFullPublicKey = nil
+	fullKeysError = nil
 }

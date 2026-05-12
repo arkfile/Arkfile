@@ -5,6 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
+	"net/http"
+	"slices"
 	"time"
 
 	"github.com/84adam/Arkfile/utils"
@@ -14,6 +17,15 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// JWT audience constants. These are checked at the validator (ParseTokenFunc)
+// in addition to the per-tier signing-key separation.
+const (
+	AudienceTOTP   = "arkfile-totp"
+	AudienceAPI    = "arkfile-api"
+	AudienceExport = "arkfile-export"
+	Issuer         = "arkfile-auth"
+)
+
 // Echo is the Echo group with authentication middleware applied
 var Echo *echo.Group
 
@@ -21,56 +33,6 @@ type Claims struct {
 	Username     string `json:"username"`
 	RequiresTOTP bool   `json:"requires_totp,omitempty"`
 	jwt.RegisteredClaims
-}
-
-func GenerateToken(username string) (string, time.Time, error) {
-	// Generate a unique token ID
-	tokenID := uuid.New().String()
-	expirationTime := time.Now().Add(utils.GetJWTTokenLifetime())
-
-	claims := &Claims{
-		Username: username,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expirationTime), // Token expires based on environment config
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			NotBefore: jwt.NewNumericDate(time.Now()),
-			Issuer:    "arkfile-auth",          // Add issuer claim
-			Audience:  []string{"arkfile-api"}, // Add audience claim
-			ID:        tokenID,                 // Add jti claim
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	// Use Ed25519 private key for signing
-	tokenString, err := token.SignedString(GetJWTPrivateKey())
-	return tokenString, expirationTime, err
-}
-
-func JWTMiddleware() echo.MiddlewareFunc {
-	config := echojwt.Config{
-		NewClaimsFunc: func(c echo.Context) jwt.Claims {
-			return new(Claims)
-		},
-		// Use Ed25519 public key for validation
-		SigningKey:    GetJWTPublicKey(),
-		SigningMethod: jwt.SigningMethodEdDSA.Alg(),
-		ErrorHandler: func(c echo.Context, err error) error {
-			return echo.NewHTTPError(401, "Unauthorized")
-		},
-	}
-	return echojwt.WithConfig(config)
-}
-
-func GetUsernameFromToken(c echo.Context) string {
-	user, ok := c.Get("user").(*jwt.Token)
-	if !ok || user == nil {
-		return ""
-	}
-	claims, ok := user.Claims.(*Claims)
-	if !ok {
-		return ""
-	}
-	return claims.Username
 }
 
 // GenerateRefreshToken creates a cryptographically secure random string to be used as a refresh token.
@@ -95,7 +57,9 @@ func HashToken(token string) (string, error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// GenerateTemporaryTOTPToken creates a temporary JWT token that requires TOTP completion
+// GenerateTemporaryTOTPToken creates a temporary JWT token that requires TOTP completion.
+// Signed with the temp-tier key; carries aud=arkfile-totp and requires_totp=true.
+// Only valid at /api/totp/{setup,verify,auth} via TOTPJWTMiddleware.
 func GenerateTemporaryTOTPToken(username string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
 	expirationTime := time.Now().Add(20 * time.Minute)
@@ -104,21 +68,23 @@ func GenerateTemporaryTOTPToken(username string) (string, time.Time, error) {
 		Username:     username,
 		RequiresTOTP: true,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expirationTime), // 20 minute expiry for TOTP setup/auth
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
-			Issuer:    "arkfile-auth",
-			Audience:  []string{"arkfile-totp"},
+			Issuer:    Issuer,
+			Audience:  []string{AudienceTOTP},
 			ID:        tokenID,
 		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	tokenString, err := token.SignedString(GetJWTPrivateKey())
+	tokenString, err := token.SignedString(GetJWTTempPrivateKey())
 	return tokenString, expirationTime, err
 }
 
-// GenerateFullAccessToken creates a full access JWT token after TOTP validation
+// GenerateFullAccessToken creates a full access JWT token after TOTP validation.
+// Signed with the full-tier key; carries aud=arkfile-api and requires_totp=false.
+// Valid at every JWTMiddleware-protected route.
 func GenerateFullAccessToken(username string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
 	expirationTime := time.Now().Add(utils.GetJWTTokenLifetime())
@@ -127,38 +93,129 @@ func GenerateFullAccessToken(username string) (string, time.Time, error) {
 		Username:     username,
 		RequiresTOTP: false,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expirationTime), // Configurable expiry time
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
-			Issuer:    "arkfile-auth",
-			Audience:  []string{"arkfile-api"},
+			Issuer:    Issuer,
+			Audience:  []string{AudienceAPI},
 			ID:        tokenID,
 		},
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	tokenString, err := token.SignedString(GetJWTPrivateKey())
+	tokenString, err := token.SignedString(GetJWTFullPrivateKey())
 	return tokenString, expirationTime, err
 }
 
-// RequiresTOTPFromToken checks if the token requires TOTP completion
-func RequiresTOTPFromToken(c echo.Context) bool {
-	user := c.Get("user").(*jwt.Token)
-	claims := user.Claims.(*Claims)
-	return claims.RequiresTOTP
+// parseTokenWithAudience builds a ParseTokenFunc that validates Ed25519
+// signature with the given public key AND enforces the expected audience
+// claim. Either failure mode produces a generic 401; the caller cannot
+// distinguish "wrong signature" from "wrong audience" by error shape.
+func parseTokenWithAudience(pubKey interface{}, expectedAudience string) func(c echo.Context, auth string) (interface{}, error) {
+	return func(_ echo.Context, tokenString string) (interface{}, error) {
+		parser := jwt.NewParser(
+			jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}),
+			jwt.WithAudience(expectedAudience),
+			jwt.WithIssuer(Issuer),
+			jwt.WithExpirationRequired(),
+		)
+		token, err := parser.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+			return pubKey, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !token.Valid {
+			return nil, fmt.Errorf("invalid token")
+		}
+		return token, nil
+	}
 }
 
-// TOTPJWTMiddleware creates middleware that only allows TOTP-related operations
+// JWTMiddleware validates full-access tokens (aud=arkfile-api). It verifies
+// the signature against the full-tier public key and enforces audience and
+// issuer at the parser layer. A temp-tier token (signed with the temp key,
+// aud=arkfile-totp) fails here in two ways: wrong signing key AND wrong
+// audience. Either is enough; both is defense in depth.
+func JWTMiddleware() echo.MiddlewareFunc {
+	config := echojwt.Config{
+		NewClaimsFunc: func(c echo.Context) jwt.Claims {
+			return new(Claims)
+		},
+		ParseTokenFunc: parseTokenWithAudience(GetJWTFullPublicKey(), AudienceAPI),
+		ErrorHandler: func(c echo.Context, err error) error {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+		},
+	}
+	return echojwt.WithConfig(config)
+}
+
+// TOTPJWTMiddleware validates temporary TOTP-handoff tokens (aud=arkfile-totp).
+// Used only by /api/totp/{setup,verify,auth}. A full-tier token fails the
+// signing-key check AND the audience check.
 func TOTPJWTMiddleware() echo.MiddlewareFunc {
 	config := echojwt.Config{
 		NewClaimsFunc: func(c echo.Context) jwt.Claims {
 			return new(Claims)
 		},
-		SigningKey:    GetJWTPublicKey(),
-		SigningMethod: jwt.SigningMethodEdDSA.Alg(),
+		ParseTokenFunc: parseTokenWithAudience(GetJWTTempPublicKey(), AudienceTOTP),
 		ErrorHandler: func(c echo.Context, err error) error {
-			return echo.NewHTTPError(401, "Unauthorized")
+			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
 		},
 	}
 	return echojwt.WithConfig(config)
+}
+
+// RequireFullJWT is defense-in-depth: even though JWTMiddleware enforces the
+// aud=arkfile-api audience, this middleware also asserts requires_totp=false
+// and re-verifies the audience claim. Protects against a future regression
+// that loosens the validator's audience enforcement.
+//
+// Wired onto every protected group: totpProtectedGroup, pendingAllowedGroup,
+// adminGroup, and devTestAdminGroup.
+func RequireFullJWT(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		userToken, ok := c.Get("user").(*jwt.Token)
+		if !ok || userToken == nil {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+		}
+		claims, ok := userToken.Claims.(*Claims)
+		if !ok {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+		}
+		if claims.RequiresTOTP {
+			return echo.NewHTTPError(http.StatusForbidden, "Full authentication required")
+		}
+		if !slices.Contains(claims.Audience, AudienceAPI) {
+			return echo.NewHTTPError(http.StatusForbidden, "Token audience does not permit this route")
+		}
+		return next(c)
+	}
+}
+
+func GetUsernameFromToken(c echo.Context) string {
+	user, ok := c.Get("user").(*jwt.Token)
+	if !ok || user == nil {
+		return ""
+	}
+	claims, ok := user.Claims.(*Claims)
+	if !ok {
+		return ""
+	}
+	return claims.Username
+}
+
+// RequiresTOTPFromToken returns whether the token in the request context
+// carries the requires_totp=true flag. Safe against missing/malformed
+// context entries: returns false rather than panicking (A-39 fix).
+func RequiresTOTPFromToken(c echo.Context) bool {
+	user, ok := c.Get("user").(*jwt.Token)
+	if !ok || user == nil {
+		return false
+	}
+	claims, ok := user.Claims.(*Claims)
+	if !ok {
+		return false
+	}
+	return claims.RequiresTOTP
 }

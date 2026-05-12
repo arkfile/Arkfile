@@ -279,3 +279,98 @@ describe('AuthManager admin contacts', () => {
     expect(contact.length).toBeGreaterThan(0);
   });
 });
+
+// ============================================================================
+// Temp-tier token storage (A-01 frontend mitigation)
+//
+// The temp token (aud=arkfile-totp) MUST live in its own localStorage slot
+// (TEMP_TOKEN_KEY = 'temp_token') so that authenticatedFetch (which reads
+// TOKEN_KEY = 'token') never accidentally sends a temp token as a full-tier
+// credential. These tests guard against a future regression that would
+// collapse the two slots back into one.
+// ============================================================================
+
+describe('AuthManager temp-tier token storage', () => {
+  test('getTempToken returns null when no temp token stored', () => {
+    expect(AuthManager.getTempToken()).toBeNull();
+  });
+
+  test('setTempToken stores under separate key', () => {
+    AuthManager.setTempToken('temp-tok-value');
+    expect(AuthManager.getTempToken()).toBe('temp-tok-value');
+    // Crucially, the full-tier token slot is NOT polluted.
+    expect(AuthManager.getToken()).toBeNull();
+  });
+
+  test('clearTempToken removes only the temp token', () => {
+    AuthManager.setTokens('full-tok', 'refresh-tok');
+    AuthManager.setTempToken('temp-tok');
+    AuthManager.clearTempToken();
+    expect(AuthManager.getTempToken()).toBeNull();
+    // Full + refresh untouched
+    expect(AuthManager.getToken()).toBe('full-tok');
+    expect(AuthManager.getRefreshToken()).toBe('refresh-tok');
+  });
+
+  test('clearAllSessionData clears the temp token slot too', () => {
+    AuthManager.setTokens('full', 'ref');
+    AuthManager.setTempToken('temp');
+    AuthManager.clearAllSessionData();
+    expect(AuthManager.getToken()).toBeNull();
+    expect(AuthManager.getRefreshToken()).toBeNull();
+    expect(AuthManager.getTempToken()).toBeNull();
+  });
+
+  test('isAuthenticated ignores a present temp token (full slot is what counts)', () => {
+    // A user mid-TOTP-setup has a temp token but no full token. The
+    // authenticated-state check must NOT treat them as fully authenticated.
+    AuthManager.setTempToken('temp-tok-only');
+    expect(AuthManager.isAuthenticated()).toBe(false);
+  });
+});
+
+// ============================================================================
+// JWT parsing -- audience & requires_totp claim extraction (A-01)
+//
+// parseJwtToken returns the JwtPayload shape (username + exp + optional
+// fields). It is also used internally to read aud/requires_totp via custom
+// callers (e.g., the totp.ts setup countdown). These tests confirm the
+// parser does not strip or corrupt those fields when present.
+// ============================================================================
+
+describe('AuthManager.parseJwtToken extra claims', () => {
+  test('parses requires_totp=true and aud=arkfile-totp from temp tokens', () => {
+    const now = Math.floor(Date.now() / 1000);
+    const jwt = buildJwt({
+      username: 'alice',
+      exp: now + 1200,
+      iat: now,
+      requires_totp: true,
+      aud: ['arkfile-totp'],
+      iss: 'arkfile-auth',
+    });
+    const payload = AuthManager.parseJwtToken(jwt) as any;
+    expect(payload).not.toBeNull();
+    expect(payload.username).toBe('alice');
+    // The parser surface only types the strict fields, but the underlying
+    // JSON survives -- read it back via index access.
+    expect(payload.requires_totp).toBe(true);
+    expect(payload.aud).toEqual(['arkfile-totp']);
+  });
+
+  test('parses requires_totp=false and aud=arkfile-api from full tokens', () => {
+    const now = Math.floor(Date.now() / 1000);
+    const jwt = buildJwt({
+      username: 'alice',
+      exp: now + 3600,
+      iat: now,
+      requires_totp: false,
+      aud: ['arkfile-api'],
+      iss: 'arkfile-auth',
+    });
+    const payload = AuthManager.parseJwtToken(jwt) as any;
+    expect(payload).not.toBeNull();
+    expect(payload.requires_totp).toBe(false);
+    expect(payload.aud).toEqual(['arkfile-api']);
+  });
+});

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/84adam/Arkfile/config"
+	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
 )
@@ -92,9 +93,14 @@ func (khm *KeyHealthMonitor) PerformHealthCheck() {
 			Path: "/opt/arkfile/etc/keys/opaque/server.key",
 		},
 		{
-			Name: "JWT Signing Key",
+			Name: "JWT Signing Key (temp tier, aud=arkfile-totp)",
 			Type: "jwt_signing",
-			Path: "/opt/arkfile/etc/keys/jwt/signing.key",
+			Path: "jwt_signing_key_temp_v1",
+		},
+		{
+			Name: "JWT Signing Key (full tier, aud=arkfile-api)",
+			Type: "jwt_signing",
+			Path: "jwt_signing_key_full_v1",
 		},
 		{
 			Name: "Entity ID Master Secret",
@@ -198,45 +204,43 @@ func (khm *KeyHealthMonitor) checkOpaqueServerKeys(component *KeyComponent) {
 	component.AlertLevel = "INFO"
 }
 
-// checkJWTSigningKey checks JWT signing key health
+// checkJWTSigningKey checks JWT signing key health. JWT keys live in the
+// system_keys table (encrypted under ARKFILE_MASTER_KEY), not on disk.
+// component.Path holds the key ID (e.g. "jwt_signing_key_full_v1") and we
+// verify the row is present and decryptable via KeyManager.
 func (khm *KeyHealthMonitor) checkJWTSigningKey(component *KeyComponent) {
-	if !khm.fileExists(component.Path) {
-		component.Status = HealthStatusCritical
-		component.AlertLevel = "CRITICAL"
-		component.ErrorMessage = "JWT signing key file not found"
-		component.Details["issue"] = "missing_file"
-		return
-	}
+	keyID := component.Path
 
-	if !khm.checkFilePermissions(component.Path, 0600) {
-		component.Status = HealthStatusWarning
-		component.AlertLevel = "WARNING"
-		component.ErrorMessage = "JWT signing key has incorrect permissions"
-		component.Details["issue"] = "incorrect_permissions"
-		return
-	}
-
-	fileInfo, err := os.Stat(component.Path)
+	km, err := crypto.GetKeyManager()
 	if err != nil {
 		component.Status = HealthStatusCritical
 		component.AlertLevel = "CRITICAL"
-		component.ErrorMessage = fmt.Sprintf("Cannot access JWT signing key: %v", err)
-		component.Details["issue"] = "access_error"
+		component.ErrorMessage = fmt.Sprintf("KeyManager unavailable: %v", err)
+		component.Details["issue"] = "keymanager_unavailable"
 		return
 	}
 
-	component.Details["file_size"] = fileInfo.Size()
-	component.Details["file_age_days"] = int(time.Since(fileInfo.ModTime()).Hours() / 24)
-
-	// JWT keys should be rotated more frequently (weekly)
-	if time.Since(fileInfo.ModTime()) > 7*24*time.Hour {
-		component.Status = HealthStatusWarning
-		component.AlertLevel = "WARNING"
-		component.ErrorMessage = "JWT signing key should be rotated"
-		component.Details["issue"] = "rotation_recommended"
+	seed, err := km.GetKey(keyID, "jwt")
+	if err != nil {
+		component.Status = HealthStatusCritical
+		component.AlertLevel = "CRITICAL"
+		component.ErrorMessage = fmt.Sprintf("JWT signing key %s not present or undecryptable: %v", keyID, err)
+		component.Details["issue"] = "missing_or_undecryptable"
+		component.Details["key_id"] = keyID
 		return
 	}
 
+	if len(seed) != 32 {
+		component.Status = HealthStatusCritical
+		component.AlertLevel = "CRITICAL"
+		component.ErrorMessage = fmt.Sprintf("JWT signing key %s has wrong length: %d", keyID, len(seed))
+		component.Details["issue"] = "wrong_seed_length"
+		component.Details["key_id"] = keyID
+		return
+	}
+
+	component.Details["key_id"] = keyID
+	component.Details["seed_bytes"] = len(seed)
 	component.Status = HealthStatusHealthy
 	component.AlertLevel = "INFO"
 }

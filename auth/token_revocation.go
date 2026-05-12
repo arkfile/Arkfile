@@ -21,13 +21,38 @@ var (
 	cacheInitialized   = false
 )
 
-// RevokeToken adds a token to the revocation list
-func RevokeToken(db *sql.DB, tokenString, reason string) error {
-	// Parse the token to get claims
-	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		return GetJWTPublicKey(), nil
-	})
+// parseEitherTierToken parses a token string, accepting either the full-tier
+// or the temp-tier signing key. Used by RevokeToken so logout works for both
+// post-OPAQUE temp tokens and post-TOTP full tokens. Audience is NOT enforced
+// here -- revocation should accept any otherwise-valid Arkfile JWT.
+func parseEitherTierToken(tokenString string) (*jwt.Token, error) {
+	parser := jwt.NewParser(jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}))
 
+	// Try full-tier first (the common case)
+	token, err := parser.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+		return GetJWTFullPublicKey(), nil
+	})
+	if err == nil && token.Valid {
+		return token, nil
+	}
+
+	// Fall back to temp-tier
+	token, err2 := parser.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+		return GetJWTTempPublicKey(), nil
+	})
+	if err2 == nil && token.Valid {
+		return token, nil
+	}
+
+	// Both failed -- return the original full-tier error for diagnostic clarity
+	return nil, err
+}
+
+// RevokeToken adds a token to the revocation list. Accepts either temp-tier
+// or full-tier tokens so that /api/logout and /api/revoke-token work for any
+// session state.
+func RevokeToken(db *sql.DB, tokenString, reason string) error {
+	token, err := parseEitherTierToken(tokenString)
 	if err != nil {
 		return err
 	}

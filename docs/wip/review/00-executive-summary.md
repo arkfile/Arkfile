@@ -2,7 +2,23 @@
 
 Status: **Slice G complete** (2026-05-12). This is the consolidated executive synthesis for the multi-session adversarial security review of Arkfile defined in `docs/wip/review/00-plan.md` and driven by the prompt in `docs/wip/idsrp.md`. It draws **only** on the six analytical slice deliverables (`01-auth-opaque.md`, `02-crypto-keys.md`, `03-files-upload-download.md`, `04-sharing.md`, `05-api-authz-admin-billing.md`, `06-frontend-supply-ops.md`). No fresh source code was read for this document; every claim traces to a slice finding with a file:line citation already validated in that slice.
 
-**Remediation update (2026-05-12):** Finding **F-01** (the Critical `X-Forwarded-For` localhost-gate bypass) has been **RESOLVED** in a commit-pending change set. See `docs/wip/review/06-frontend-supply-ops.md` §F-01 for the full remediation record. The cross-slice escalations that F-01 contributed to A-02, A-13, A-14, A-26, and E-14 are downgraded back to their per-slice baseline severities; each of those findings still requires its own per-finding fix and is tracked separately. The "Top 10 most serious risks" list, the "Remote-admin pathway" headline narrative, and the severity table below are unchanged from the original review for the audit trail; status markers are added inline where applicable.
+**Remediation update (2026-05-12):** Finding **F-01** (the Critical `X-Forwarded-For` localhost-gate bypass) has been **RESOLVED** in a commit-pending change set. See `docs/wip/review/06-frontend-supply-ops.md` §F-01 for the full remediation record. The cross-slice escalations that F-01 contributed to A-02, A-13, A-14, A-26, and E-14 are downgraded back to their per-slice baseline severities; each of those findings still requires its own per-finding fix and is tracked separately.
+
+**Remediation update (2026-05-12, second tranche):** Finding **A-01** (the Critical "two-tier JWT model not enforced") has been **RESOLVED**, together with two ride-along findings **A-39** (Low: `RequiresTOTPFromToken` panic on missing claims) and **E-19** (High: public `ExportFile` accepts any valid Arkfile JWT without TOTP claim). See `docs/wip/review/01-auth-opaque.md` §A-01 for the full remediation record. Highlights:
+- `auth/keys.go` now mints two distinct Ed25519 keypairs at first run: `jwt_signing_key_temp_v1` and `jwt_signing_key_full_v1`. The old single-key path is removed entirely (greenfield-policy clean break).
+- `auth/jwt.go` `GenerateTemporaryTOTPToken` signs with the temp key (`aud=arkfile-totp`, `requires_totp=true`); `GenerateFullAccessToken` signs with the full key (`aud=arkfile-api`, `requires_totp=false`). The redundant `GenerateToken` function is deleted; `handlers/auth.go` `RefreshToken` calls `GenerateFullAccessToken`.
+- `JWTMiddleware` and `TOTPJWTMiddleware` now route through `ParseTokenFunc` using `jwt.WithAudience(...)` to enforce the audience claim **and** validate against the per-tier public key. A temp token presented to a full-protected route fails on signature first and on audience second; either is sufficient.
+- A new `auth.RequireFullJWT` middleware provides defense in depth: it rejects `claims.RequiresTOTP == true` and re-asserts the `arkfile-api` audience. It is wired onto `totpProtectedGroup`, `pendingAllowedGroup`, `adminGroup`, and `devTestAdminGroup` in `handlers/route_config.go`.
+- `adminGroup` and `devTestAdminGroup` now include `RequireTOTP` in their middleware chain (closes the E-01 ride-along that was always present but unwired).
+- `auth/token_revocation.go` `RevokeToken` accepts either tier (via a new `parseEitherTierToken` helper) so `/api/logout` and `/api/revoke-token` work for any session state.
+- `handlers/export.go` rebuilds both auth resolution paths to enforce audience (`arkfile-export` for the token branch, `arkfile-api` for the JWT branch) and reject `requires_totp=true` -- closes **E-19**.
+- `auth.RequiresTOTPFromToken` no longer panics on missing/malformed claims; returns `false` instead -- closes **A-39**.
+- `monitoring/key_health.go` `checkJWTSigningKey` now queries the KeyManager for both new key IDs in the `system_keys` table instead of the stale file-based path.
+- Frontend: a new `temp_token` localStorage slot keeps temp-tier credentials out of the full-tier `token` slot. `client/static/js/src/utils/auth.ts` exports `getTempToken`/`setTempToken`/`clearTempToken`; `login.ts`, `totp.ts`, `totp-setup.ts` route accordingly; `clearAllSessionData` purges all three slots. The spent temp token is cleared immediately after TOTP verify succeeds.
+- 15 new Go tests across `auth/jwt_test.go` (audience cross-rejection, key cross-rejection, RequireFullJWT defense-in-depth, RequiresTOTPFromToken null-claim handling), `auth/token_revocation_test.go` (`TestRevokeToken_BothTiers`), and `handlers/admin_audience_test.go` (admin/totpProtected chain rejection of temp tokens and requires_totp=true tokens before any DB lookup). 7 new TS tests in `client/static/js/src/__tests__/auth-manager.test.ts` covering the temp-token slot and audience/requires_totp claim parsing.
+- Full Go test suite (`go test ./...`) and full TS test suite (`bun test client/static/js/src/__tests__/`) green: 0 failures across all packages and 333 TS tests across 16 files.
+
+The "Top 10 most serious risks" list, the "Remote-admin pathway" headline narrative, and the severity table below are unchanged from the original review for the audit trail; status markers are added inline where applicable.
 
 Greenfield posture per `AGENTS.md`: Arkfile has no production deployments; `test.arkfile.net` is the only live beta. Severities in this document do not soften for "backwards compatibility"; the policy is fix-properly, not accommodate.
 
@@ -417,12 +433,12 @@ The `idsrp.md` threat model lists 13 adversary classes and ~13 security properti
 
 | Severity | Count | Resolved | Open |
 |---|---:|---:|---:|
-| Critical | 2 | 1 (F-01) | 1 |
-| High | 27 | 0 | 27 |
+| Critical | 2 | 2 (F-01, A-01) | 0 |
+| High | 27 | 1 (E-19) | 26 |
 | Medium | 61 | 0 | 61 |
-| Low | 52 | 0 | 52 |
+| Low | 52 | 1 (A-39) | 51 |
 | Informational | 37 | 0 | 37 |
-| **Total** | **179** | **1** | **178** |
+| **Total** | **179** | **4** | **175** |
 
 Sort order below is Severity → Slice → Finding number. Cross-refs in the rightmost column indicate where the same root cause shows up in another slice. Per-finding evidence (file:line, attack scenario, recommendation, suggested tests) is in the slice doc named in the second column.
 
@@ -431,7 +447,7 @@ Sort order below is Severity → Slice → Finding number. Cross-refs in the rig
 | Finding | Slice | One-line title | Category | Cross-refs |
 |---|---|---|---|---|
 | `F-01` | 06 | **RESOLVED 2026-05-12.** `X-Forwarded-For` localhost-gate bypass via `c.RealIP()` walking attacker-controlled header | authorization / operational | A-02, A-13, A-14, A-26, E-14 |
-| `A-01` | 01 | Two-tier JWT model not enforced — temp post-OPAQUE token grants access to every protected route | authorization | A-02, A-05, E-01, E-19 |
+| `A-01` | 01 | **RESOLVED 2026-05-12.** Two-tier JWT model not enforced — temp post-OPAQUE token grants access to every protected route | authorization | A-02, A-05, E-01, E-19 |
 
 ### 4.2 High (27)
 

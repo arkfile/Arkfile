@@ -156,6 +156,10 @@ client/static/js/.buildcache
 dist/
 .tsbuildinfo
 
+# Service worker build output (built from src/sw-download.ts)
+client/static/js/sw-download.js
+client/static/js/sw-download.js.map
+
 # libopaque WASM/JS files (built from vendor submodule during deployment)
 client/static/js/libopaque.js
 client/static/js/libopaque.debug.js

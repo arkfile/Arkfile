@@ -91,8 +91,11 @@ func RegisterRoutes() {
 	Echo.POST("/api/refresh", RefreshToken)
 	Echo.POST("/api/logout", Logout)
 
-	// Create TOTP-protected group for all sensitive operations
+	// Create TOTP-protected group for all sensitive operations.
+	// Stack inherited from auth.Echo: JWTMiddleware + TokenRevocationMiddleware + RequireApproved.
+	// Adds: RequireFullJWT (rejects requires_totp=true and audience drift) + RequireTOTP.
 	totpProtectedGroup := auth.Echo.Group("")
+	totpProtectedGroup.Use(auth.RequireFullJWT)
 	totpProtectedGroup.Use(RequireTOTP)
 
 	// Token revocation - require TOTP
@@ -149,10 +152,11 @@ func RegisterRoutes() {
 	// Contact information - user endpoints.
 	// These are intentionally NOT in totpProtectedGroup (which inherits RequireApproved)
 	// so that pending users can set their contact info while awaiting approval.
-	// Stack: JWT + TokenRevocation + RequireTOTP (no RequireApproved).
+	// Stack: JWT + TokenRevocation + RequireFullJWT + RequireTOTP (no RequireApproved).
 	pendingAllowedGroup := Echo.Group("")
 	pendingAllowedGroup.Use(auth.JWTMiddleware())
 	pendingAllowedGroup.Use(auth.TokenRevocationMiddleware(database.DB))
+	pendingAllowedGroup.Use(auth.RequireFullJWT)
 	pendingAllowedGroup.Use(RequireTOTP)
 	pendingAllowedGroup.GET("/api/user/contact-info", GetContactInfo)
 	pendingAllowedGroup.PUT("/api/user/contact-info", PutContactInfo)
@@ -161,11 +165,16 @@ func RegisterRoutes() {
 	// Credits system - user endpoints (require TOTP)
 	totpProtectedGroup.GET("/api/credits", GetUserCredits)
 
-	// Admin API endpoints - structured for future expansion
-	// Production admin endpoints (require JWT authentication + admin privileges)
+	// Admin API endpoints - structured for future expansion.
+	// Stack: JWTMiddleware (validates aud=arkfile-api, rejects temp tokens at signature/audience)
+	//      + RequireFullJWT (defense in depth: rejects requires_totp=true)
+	//      + RequireTOTP (asserts the user has TOTP enrolled; E-01 fix)
+	//      + AdminMiddleware (loopback gate, rate limit, admin-flag check, audit log).
 	adminGroup := Echo.Group("/api/admin")
-	adminGroup.Use(auth.JWTMiddleware()) // Add JWT middleware first
-	adminGroup.Use(AdminMiddleware)      // Then admin middleware
+	adminGroup.Use(auth.JWTMiddleware())
+	adminGroup.Use(auth.RequireFullJWT)
+	adminGroup.Use(RequireTOTP)
+	adminGroup.Use(AdminMiddleware)
 
 	// Credits system - admin endpoints (require admin privileges).
 	// Read-only views; positive admin-initiated balance changes go through the
@@ -232,9 +241,12 @@ func RegisterRoutes() {
 	// Development/Testing admin endpoints (gated by ADMIN_DEV_TEST_API_ENABLED)
 	// SECURITY: These endpoints are ONLY for development and testing
 	if isDevTestAdminAPIEnabled() {
+		// Same stack as adminGroup; dev-test endpoints must not skip any layer.
 		devTestAdminGroup := Echo.Group("/api/admin/dev-test")
-		devTestAdminGroup.Use(auth.JWTMiddleware()) // Add JWT middleware first
-		devTestAdminGroup.Use(AdminMiddleware)      // Then admin middleware
+		devTestAdminGroup.Use(auth.JWTMiddleware())
+		devTestAdminGroup.Use(auth.RequireFullJWT)
+		devTestAdminGroup.Use(RequireTOTP)
+		devTestAdminGroup.Use(AdminMiddleware)
 		devTestAdminGroup.POST("/users/cleanup", AdminCleanupTestUser)
 		devTestAdminGroup.GET("/totp/decrypt-check/:username", AdminTOTPDecryptCheck) // TOTP diagnostic endpoint
 

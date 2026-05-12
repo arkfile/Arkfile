@@ -50,20 +50,41 @@ func resetCache() {
 	cacheMutex.Unlock()
 }
 
-// createTestToken generates a JWT string for testing revocation.
-// Uses Ed25519 signing to match production (GetJWTPrivateKey/GetJWTPublicKey).
+// createTestToken generates a full-tier JWT string for testing revocation.
+// Signed with the full-tier Ed25519 private key, audience=arkfile-api.
 func createTestToken(t *testing.T, username, tokenID string, expiry time.Time) string {
+	return createTestTokenWithTier(t, username, tokenID, expiry, false /* tempTier */)
+}
+
+// createTestTokenWithTier generates a JWT for revocation tests, choosing
+// either the temp-tier or full-tier signing key. Used to exercise the
+// two-tier revocation path (parseEitherTierToken).
+func createTestTokenWithTier(t *testing.T, username, tokenID string, expiry time.Time, tempTier bool) string {
+	audience := AudienceAPI
+	requiresTOTP := false
+	if tempTier {
+		audience = AudienceTOTP
+		requiresTOTP = true
+	}
 	claims := &Claims{
-		Username: username,
+		Username:     username,
+		RequiresTOTP: requiresTOTP,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiry),
 			ID:        tokenID,
-			Issuer:    "arkfile-auth",
+			Issuer:    Issuer,
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			Audience:  []string{audience},
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
-	tokenString, err := token.SignedString(GetJWTPrivateKey())
+	var signer interface{}
+	if tempTier {
+		signer = GetJWTTempPrivateKey()
+	} else {
+		signer = GetJWTFullPrivateKey()
+	}
+	tokenString, err := token.SignedString(signer)
 	require.NoError(t, err)
 	return tokenString
 }
@@ -99,14 +120,58 @@ func TestRevokeToken(t *testing.T) {
 
 	// Test case: Token without JTI
 	claimsNoJTI := &Claims{
-		Username:         username,
-		RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(expiry)}, // No ID
+		Username: username,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expiry),
+			Audience:  []string{AudienceAPI},
+		}, // No ID
 	}
 	tokenNoJTI := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claimsNoJTI)
-	tokenStringNoJTI, _ := tokenNoJTI.SignedString(GetJWTPrivateKey())
+	tokenStringNoJTI, _ := tokenNoJTI.SignedString(GetJWTFullPrivateKey())
 	err = RevokeToken(db, tokenStringNoJTI, "test")
 	assert.Error(t, err, "Should error when token has no JTI")
 	assert.Contains(t, err.Error(), "token has no ID", "Error message should mention missing JTI")
+}
+
+// TestRevokeToken_BothTiers verifies that RevokeToken accepts both temp-tier
+// and full-tier tokens. This is required so logout / force-revoke works for
+// users at any session stage.
+func TestRevokeToken_BothTiers(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	username := "twotier_user"
+	expiry := time.Now().Add(1 * time.Hour)
+
+	tempTokenID := "temp-jti"
+	fullTokenID := "full-jti"
+
+	tempToken := createTestTokenWithTier(t, username, tempTokenID, expiry, true)
+	fullToken := createTestTokenWithTier(t, username, fullTokenID, expiry, false)
+
+	// Both must revoke successfully.
+	assert.NoError(t, RevokeToken(db, tempToken, "logout temp"))
+	assert.NoError(t, RevokeToken(db, fullToken, "logout full"))
+
+	// Both must appear independently in the revoked_tokens table.
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM revoked_tokens WHERE username = ?", username).Scan(&count)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, count, "both tiers' jti must be revoked independently")
+
+	// Cross-tier negative: revoking a temp jti must NOT affect a full jti.
+	revokedFull, err := IsRevoked(db, fullTokenID)
+	assert.NoError(t, err)
+	assert.True(t, revokedFull, "full jti is revoked")
+
+	revokedTemp, err := IsRevoked(db, tempTokenID)
+	assert.NoError(t, err)
+	assert.True(t, revokedTemp, "temp jti is revoked")
+
+	// A fresh jti not in the table must remain unrevoked.
+	revokedUnknown, err := IsRevoked(db, "fresh-jti")
+	assert.NoError(t, err)
+	assert.False(t, revokedUnknown)
 }
 
 func TestIsRevoked(t *testing.T) {
@@ -281,9 +346,12 @@ func TestTokenRevocationMiddleware(t *testing.T) {
 	validTokenString := createTestToken(t, username, validTokenID, expiry)
 	revokedTokenString := createTestToken(t, username, revokedTokenID, expiry)
 	// Token without JTI (ID claim) -- uses Ed25519 to match production
-	claimsNoJTI := &Claims{Username: username, RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(expiry)}}
+	claimsNoJTI := &Claims{Username: username, RegisteredClaims: jwt.RegisteredClaims{
+		ExpiresAt: jwt.NewNumericDate(expiry),
+		Audience:  []string{AudienceAPI},
+	}}
 	tokenNoJTI := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claimsNoJTI)
-	tokenStringNoJTI, _ := tokenNoJTI.SignedString(GetJWTPrivateKey())
+	tokenStringNoJTI, _ := tokenNoJTI.SignedString(GetJWTFullPrivateKey())
 
 	// Revoke the specific token
 	err := RevokeToken(db, revokedTokenString, "testing middleware")

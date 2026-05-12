@@ -6,7 +6,7 @@
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { showModal } from '../ui/modals.js';
-import { setTokens, clearAllSessionData, AuthManager } from '../utils/auth.js';
+import { setTokens, clearTempToken, clearAllSessionData, AuthManager } from '../utils/auth.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 
@@ -331,11 +331,12 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
       // Handle both direct response and wrapped response
       const data = responseData.data || responseData;
       
-      // Store the full access tokens
+      // Store the full access tokens AND clear the temp token (spent).
       if (data.token && data.refresh_token) {
         setTokens(data.token, data.refresh_token);
       }
-      
+      clearTempToken();
+
       // Clean up
       if (typeof window !== 'undefined') {
         delete window.totpSetupData;

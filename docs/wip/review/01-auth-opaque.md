@@ -274,6 +274,35 @@ Severity policy follows `idsrp.md` §18. Confidence is High unless noted otherwi
 
 ### Finding A-01: Two-tier JWT model not enforced — temp post-OPAQUE token grants access to every protected route
 
+**Status (2026-05-12):** **RESOLVED.** Landed as a coordinated change set. Highlights (see `docs/wip/review/00-executive-summary.md` §"Remediation update (second tranche)" for the full file list):
+
+- `auth/keys.go` mints two distinct Ed25519 keypairs: `jwt_signing_key_temp_v1` and `jwt_signing_key_full_v1`. Single-key path removed.
+- `auth/jwt.go`:
+  - `GenerateTemporaryTOTPToken` signs with the temp key (`aud=arkfile-totp`, `requires_totp=true`).
+  - `GenerateFullAccessToken` signs with the full key (`aud=arkfile-api`, `requires_totp=false`).
+  - The redundant `GenerateToken` function is deleted; `handlers/auth.go` `RefreshToken` now calls `GenerateFullAccessToken`.
+  - `JWTMiddleware` and `TOTPJWTMiddleware` route through `ParseTokenFunc` using `jwt.NewParser(jwt.WithAudience(...), jwt.WithIssuer(...), jwt.WithValidMethods(...), jwt.WithExpirationRequired())` and validate against the per-tier public key. A temp token presented to a full-protected route fails at signature verification AND at audience verification.
+  - New `auth.RequireFullJWT` defense-in-depth middleware rejects `claims.RequiresTOTP == true` and re-asserts `arkfile-api` audience.
+  - `auth.RequiresTOTPFromToken` no longer panics on missing/malformed claims (closes A-39 ride-along).
+- `handlers/route_config.go` wires `auth.RequireFullJWT` and `RequireTOTP` onto `totpProtectedGroup`, `pendingAllowedGroup`, `adminGroup`, and `devTestAdminGroup`. The latter two close the E-01 ride-along (admin group is now TOTP-gated at route level).
+- `auth/token_revocation.go` `RevokeToken` accepts either tier via the new `parseEitherTierToken` helper, so logout works at any session stage.
+- `handlers/export.go` `resolveExportAuthFromHeader` enforces `aud=arkfile-api` AND rejects `requires_totp=true` (closes E-19 ride-along); the export-token branch enforces `aud=arkfile-export` explicitly.
+- `monitoring/key_health.go` `checkJWTSigningKey` queries `crypto.KeyManager.GetKey` for both new key IDs in `system_keys` (replaces stale file-path check).
+- Frontend: a separate `temp_token` slot is added to `localStorage` (`AuthManager.{set,get,clear}TempToken`). `client/static/js/src/auth/login.ts` calls `setTempToken` instead of pre-populating the full-tier `token` slot. `totp.ts` and `totp-setup.ts` read the temp token for `/api/totp/*` calls and call `clearTempToken()` after verify succeeds. `clearAllSessionData()` purges all three slots.
+- Regression tests:
+  - `auth/jwt_test.go`: `TestGenerateFullAccessToken`, `TestGenerateTemporaryTOTPToken_ClaimsAndKey`, `TestJWTMiddleware_RejectsTempAudience`, `TestTOTPJWTMiddleware_RejectsFullAudience`, `TestJWTMiddleware_RejectsTempSignedWithFullKey`, `TestJWTMiddleware_RejectsForgedAudience`, `TestRequireFullJWT_RejectsRequiresTOTPTrue`, `TestRequiresTOTPFromToken_HandlesMissingClaims`.
+  - `auth/token_revocation_test.go`: `TestRevokeToken_BothTiers` (validates parseEitherTierToken accepts temp + full tokens for revocation).
+  - `handlers/admin_audience_test.go`: `TestAdminStackHead_RejectsTempToken_Before_DB`, `TestAdminStackHead_RejectsFullTokenWithRequiresTOTPTrue`, `TestTOTPProtectedStackHead_RejectsTempToken`, `TestAdminStackHead_AcceptsValidFullToken` (full middleware-stack tests proving the chain rejects temp tokens before reaching any DB lookup).
+  - `client/static/js/src/__tests__/auth-manager.test.ts`: temp-tier slot tests (`getTempToken`, `setTempToken`, `clearTempToken`, `clearAllSessionData` purges it, `isAuthenticated` ignores it) plus `parseJwtToken` audience/`requires_totp` claim extraction tests.
+- Test results: `go test ./...` all packages green; `bun test client/static/js/src/__tests__/` 333 tests passing across 16 files.
+
+Cross-slice items downgraded by this fix: **E-19** (High) is RESOLVED via the export.go audience+requires_totp check; **A-39** (Low) is RESOLVED via the `*jwt.Token`/`*Claims` nil-safety hardening; **E-01** (Medium) is RESOLVED via the `RequireTOTP` addition to `adminGroup`/`devTestAdminGroup`. The cross-references at **A-02** (admin endpoints reachable with a post-OPAQUE temp token) and **A-05** (JWT in localStorage) revert to their per-slice baselines; both still require their own per-finding fix (A-02 requires no further action because the same code path is the one closed here; A-05 still requires the localStorage → HttpOnly cookie migration).
+
+---
+
+#### Original finding (preserved for the audit trail)
+
+
 - **Severity:** Critical
 - **Confidence:** High
 - **Category:** authorization
@@ -1482,6 +1511,11 @@ Apply to every `C.CBytes(<sensitive>)`: password, OPRF secrets, export key copie
 ---
 
 ### Finding A-39: `RequiresTOTPFromToken` panics on missing claims
+
+**Status (2026-05-12):** **RESOLVED.** Landed with the A-01 fix. `auth/jwt.go` `RequiresTOTPFromToken` now uses `, ok :=` type assertions on both `c.Get("user")` and `userToken.Claims` and returns `false` (rather than panicking) when either is missing or the wrong type. Regression test: `TestRequiresTOTPFromToken_HandlesMissingClaims` in `auth/jwt_test.go` covers nil-user, nil-token-pointer, non-Claims claim type, and both valid `requires_totp=true`/`false` paths.
+
+#### Original finding (preserved for the audit trail)
+
 
 - **Severity:** Low
 - **Confidence:** High
