@@ -657,6 +657,10 @@ Numbering is contiguous in this slice (`E-NN`). Severity per `idsrp.md` §18 wit
 
 ### Finding E-14: `AdminMiddleware` localhost gate trusts `c.RealIP()` which trusts forwarded headers
 
+**STATUS: RESOLVED (2026-05-12)** as part of the F-01 fix. `AdminMiddleware` now calls `peerAddrIsLoopback(c)` instead of `parseIPAddress(c.RealIP())` + `isLocalhostIP(...)`; the helper reads `c.Request().RemoteAddr` and ignores `X-Forwarded-For` / `X-Real-IP` entirely. `main.go` additionally pins `e.IPExtractor = echo.ExtractIPDirect()`, and all four Caddyfile variants strip the spoofable headers and propagate the real client IP only in `X-Arkfile-Peer` (used by `publicClientIP` for EntityID/rate-limit binning, never for authz). Regression test `TestAdminMiddleware_RejectsForgedXFF` in `handlers/middleware_test.go` covers the gate. Full remediation record: `docs/wip/review/06-frontend-supply-ops.md` §F-01.
+
+The original finding analysis (preserved below for the audit trail):
+
 - Severity: **Medium**
 - Confidence: **Medium**
 - Category: authorization / deployment-dependent

@@ -9,6 +9,7 @@ import (
 	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/config"
 	"github.com/84adam/Arkfile/crypto"
+	"github.com/84adam/Arkfile/logging"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -18,6 +19,11 @@ import (
 func TestMain(m *testing.M) {
 	// Reset config state
 	config.ResetConfigForTest()
+
+	// Initialize console-only loggers so handlers that call
+	// logging.InfoLogger / logging.ErrorLogger don't panic on nil
+	// loggers under the test binary. Matches the production startup.
+	logging.InitFallbackConsoleLogging()
 
 	// Setup in-memory SQLite DB for KeyManager (JWT key storage)
 	db, err := sql.Open("sqlite3", ":memory:")

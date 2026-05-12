@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,59 @@ func parseIPAddress(ipStr string) net.IP {
 		return net.ParseIP("127.0.0.1")
 	}
 	return ip
+}
+
+// peerAddrIsLoopback returns true only if the kernel-reported transport peer
+// address is loopback. This is the ONLY correct primitive for localhost-only
+// authorization decisions (AdminMiddleware, BootstrapRegister*).
+//
+// It MUST NOT consult c.RealIP(), X-Forwarded-For, or X-Real-IP. Those values
+// are client-controllable (set by any HTTP client) and Echo's default IP
+// extractor walks them; trusting them for authz is exactly the F-01 bug.
+// See: docs/wip/review/00-executive-summary.md (F-01).
+//
+// main.go pins e.IPExtractor = echo.ExtractIPDirect() which makes c.RealIP()
+// also safe today, but this helper documents the intent at the call site so
+// a future regression to e.IPExtractor cannot silently reopen the hole.
+func peerAddrIsLoopback(c echo.Context) bool {
+	remote := c.Request().RemoteAddr
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		// RemoteAddr might be a bare address without a port in some
+		// httptest-style setups; treat the whole string as the host.
+		host = remote
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback()
+}
+
+// publicClientIP returns the public-facing client IP for non-authorization
+// purposes (EntityID HMAC binning, rate-limit keying, audit logging).
+//
+// Production topology: Caddy terminates TLS on the same host and reverse-
+// proxies over loopback. The kernel transport peer Arkfile sees is therefore
+// 127.0.0.1 from Caddy. The real public client IP is propagated by Caddy in
+// the X-Arkfile-Peer header (set via `header_up X-Arkfile-Peer
+// {http.request.remote.host}` in the Caddyfile). Caddy strips any incoming
+// X-Forwarded-For / X-Real-IP / Forwarded headers before reverse-proxying, so
+// X-Arkfile-Peer cannot be spoofed by a remote client.
+//
+// Dev-without-Caddy topology (dev-reset.sh): X-Arkfile-Peer is absent; we
+// fall back to c.RealIP() which (with e.IPExtractor = ExtractIPDirect)
+// returns the kernel peer, which is the real local client.
+//
+// This value is ALWAYS HMAC'd through logging/entity_id.go before any
+// persistence; the raw IP never enters logs or DB rows.
+func publicClientIP(c echo.Context) net.IP {
+	if header := c.Request().Header.Get("X-Arkfile-Peer"); header != "" {
+		if ip := net.ParseIP(strings.TrimSpace(header)); ip != nil {
+			return ip
+		}
+	}
+	return parseIPAddress(c.RealIP())
 }
 
 // PrivacyRequestLogger is an Echo middleware that logs HTTP requests without
@@ -299,8 +353,11 @@ func RateLimitMiddleware(endpointConfig config.EndpointConfig) echo.MiddlewareFu
 				return next(c) // Rate limiting disabled for this endpoint
 			}
 
-			// Get composite entity ID (privacy-preserving, NAT-aware)
-			clientIP := parseIPAddress(c.RealIP())
+			// Get composite entity ID (privacy-preserving, NAT-aware).
+			// publicClientIP prefers the Caddy-set X-Arkfile-Peer header so
+			// rate-limit buckets reflect the real public client rather than
+			// the loopback peer Caddy presents. Never used for authorization.
+			clientIP := publicClientIP(c)
 			entityID := logging.GetCompositeEntityIDForRequest(clientIP, c.Request())
 
 			// Check rate limit
@@ -530,10 +587,12 @@ func RequireTOTP(next echo.HandlerFunc) echo.HandlerFunc {
 		}
 
 		if !totpEnabled {
-			// Log security event for TOTP bypass attempt
+			// Log security event for TOTP bypass attempt.
+			// publicClientIP returns the real public client IP (HMAC'd through
+			// EntityID before persistence -- raw IP never reaches logs/DB).
 			logging.LogSecurityEvent(
 				logging.EventUnauthorizedAccess,
-				parseIPAddress(c.RealIP()),
+				publicClientIP(c),
 				&username,
 				nil,
 				map[string]interface{}{
@@ -550,7 +609,14 @@ func RequireTOTP(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// isLocalhostIP checks if an IP address is localhost without storing or logging it
+// isLocalhostIP checks if an IP address is localhost without storing or logging it.
+//
+// DEPRECATED for authorization decisions. Use peerAddrIsLoopback(c) instead.
+// This helper takes a net.IP that callers usually obtained from c.RealIP(),
+// which walks X-Forwarded-For under Echo's default extractor and is therefore
+// spoofable. Retained only because it is still used internally and removing
+// it would balloon the F-01 fix diff. See peerAddrIsLoopback for the correct
+// primitive for "is this request coming from loopback?" authz gates.
 func isLocalhostIP(ip net.IP) bool {
 	return ip.IsLoopback() || ip.Equal(net.ParseIP("127.0.0.1")) || ip.Equal(net.ParseIP("::1"))
 }
@@ -558,13 +624,18 @@ func isLocalhostIP(ip net.IP) bool {
 // AdminMiddleware enforces multi-layer security for admin endpoints
 func AdminMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		// 1. Localhost validation (only time we check actual IP)
-		clientIP := parseIPAddress(c.RealIP())
-		if !isLocalhostIP(clientIP) {
+		// 1. Localhost validation. We MUST use the kernel-reported transport
+		// peer here, not c.RealIP(), so a remote attacker cannot pass
+		// X-Forwarded-For: 127.0.0.1 and slip past the gate. See F-01.
+		if !peerAddrIsLoopback(c) {
 			return echo.NewHTTPError(http.StatusForbidden, "Admin endpoints only available from localhost")
 		}
 
-		// 2. For rate limiting and audit logging, use composite EntityID system
+		// 2. For rate limiting and audit logging, use composite EntityID
+		// system keyed on the real public client IP (read from the Caddy-
+		// set X-Arkfile-Peer header via publicClientIP). The raw IP never
+		// reaches logs or DB rows -- EntityID HMAC is the privacy boundary.
+		clientIP := publicClientIP(c)
 		entityID := logging.GetCompositeEntityIDForRequest(clientIP, c.Request())
 
 		// 3. Check rate limit using existing EntityID system

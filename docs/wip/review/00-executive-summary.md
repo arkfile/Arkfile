@@ -2,6 +2,8 @@
 
 Status: **Slice G complete** (2026-05-12). This is the consolidated executive synthesis for the multi-session adversarial security review of Arkfile defined in `docs/wip/review/00-plan.md` and driven by the prompt in `docs/wip/idsrp.md`. It draws **only** on the six analytical slice deliverables (`01-auth-opaque.md`, `02-crypto-keys.md`, `03-files-upload-download.md`, `04-sharing.md`, `05-api-authz-admin-billing.md`, `06-frontend-supply-ops.md`). No fresh source code was read for this document; every claim traces to a slice finding with a file:line citation already validated in that slice.
 
+**Remediation update (2026-05-12):** Finding **F-01** (the Critical `X-Forwarded-For` localhost-gate bypass) has been **RESOLVED** in a commit-pending change set. See `docs/wip/review/06-frontend-supply-ops.md` §F-01 for the full remediation record. The cross-slice escalations that F-01 contributed to A-02, A-13, A-14, A-26, and E-14 are downgraded back to their per-slice baseline severities; each of those findings still requires its own per-finding fix and is tracked separately. The "Top 10 most serious risks" list, the "Remote-admin pathway" headline narrative, and the severity table below are unchanged from the original review for the audit trail; status markers are added inline where applicable.
+
 Greenfield posture per `AGENTS.md`: Arkfile has no production deployments; `test.arkfile.net` is the only live beta. Severities in this document do not soften for "backwards compatibility"; the policy is fix-properly, not accommodate.
 
 Per-finding evidence lives in the slice docs. This document carries the cross-slice synthesis: the headline risks where one root cause is visible across multiple slices, the consolidated index, the merged tables, and explicit answers to every question in `idsrp.md` §19.
@@ -18,7 +20,7 @@ However, the **implementation does not yet meet the design's claims** in several
 
 1. **The two-tier JWT model is not enforced** (Slice A `A-01`). The post-OPAQUE temp token is intended to be valid only at `/api/totp/{setup,verify,auth}`; the validator does not check `aud` or `requires_totp`, both tokens are signed with the same Ed25519 key, and `RequireTOTP` only consults a DB flag that every TOTP-enrolled user has. The "second factor" is therefore cosmetic at the protocol level: anyone who completes OPAQUE alone reaches every protected route.
 
-2. **Localhost-only protections are bypassable from anywhere on the internet** (Slice F `F-01`, Critical). The Echo `c.RealIP()` default walks attacker-controlled `X-Forwarded-For`; `main.go` does not override `e.IPExtractor`; `Caddyfile.prod` and `Caddyfile.test` do not strip the incoming header. `AdminMiddleware`'s localhost gate and the admin-bootstrap localhost gate both trust `c.RealIP()` for authorization. This single defect escalates four Slice A findings (A-02, A-13, A-14, A-26) and one Slice E finding (E-14) into a remotely-reachable admin and bootstrap-redemption attack surface.
+2. **Localhost-only protections are bypassable from anywhere on the internet** (Slice F `F-01`, Critical) — **RESOLVED 2026-05-12**. The Echo `c.RealIP()` default walked attacker-controlled `X-Forwarded-For`; `main.go` did not override `e.IPExtractor`; `Caddyfile.prod` and `Caddyfile.test` did not strip the incoming header. `AdminMiddleware`'s localhost gate and the admin-bootstrap localhost gate both trusted `c.RealIP()` for authorization. This single defect escalated four Slice A findings (A-02, A-13, A-14, A-26) and one Slice E finding (E-14) into a remotely-reachable admin and bootstrap-redemption attack surface. Closed in commit-pending change set: `main.go` now pins `e.IPExtractor = echo.ExtractIPDirect()`, `handlers/middleware.go` introduces `peerAddrIsLoopback` and `publicClientIP` helpers used by `AdminMiddleware` / `RateLimitMiddleware` / `RequireTOTP` / `handlers/bootstrap.go`, `logging/entity_id.go` prefers a Caddy-set `X-Arkfile-Peer` header for EntityID binning, and all four Caddyfiles strip `X-Forwarded-For` / `X-Real-IP` / `Forwarded` and set `X-Arkfile-Peer`. 11 regression tests in `handlers/middleware_test.go` and `handlers/bootstrap_test.go` cover the gate; full handlers / logging / auth / crypto / billing / models / config / utils / storage test suites green. See `06-frontend-supply-ops.md` §F-01.
 
 3. **Authenticated-encryption integrity does not bind cryptographically to file identity or chunk order** (Slice B `B-02` / `B-05` / `B-08`, Slice C `C-02` / `C-03` / `C-19`). No file-chunk, FEK envelope, or metadata encryption operation uses AAD. The server (or any party with DB write access) can swap encrypted chunks between two of the same user's files, reorder chunks within a file, or substitute one user's FEK envelope for another. The end-of-file plaintext SHA-256 verification (Slice C `C-13`/`C-14`) detects content-level swap but only after the file has been written to disk; the warning is post-facto and the Blob fallback path skips verification entirely. The claimed file-identity integrity is not provided.
 
@@ -32,7 +34,7 @@ The system is **not** broken end-to-end. Content confidentiality of file payload
 
 In priority order. Each entry cites the underlying slice finding(s) and the cross-slice escalation that elevates it above the per-slice severity.
 
-1. **(Critical) `F-01` — `X-Forwarded-For` localhost-gate bypass.** Slice F. Escalates `A-02` (admin temp-token reach), `A-13` (bootstrap window), `A-14` (dev-test API in prod), `A-26` (bootstrap token in stdout), and `E-14` (admin middleware trusts header) into one cohesive remote-admin pathway. Fix: set `e.IPExtractor` to trust only `127.0.0.1/32` + `::1/128`; strip incoming XFF at Caddy; for authorization use `c.Request().RemoteAddr` not `c.RealIP()`.
+1. **(Critical) `F-01` — `X-Forwarded-For` localhost-gate bypass — RESOLVED 2026-05-12.** Slice F. Escalated `A-02` (admin temp-token reach), `A-13` (bootstrap window), `A-14` (dev-test API in prod), `A-26` (bootstrap token in stdout), and `E-14` (admin middleware trusts header) into one cohesive remote-admin pathway. Fix landed: pinned `e.IPExtractor = echo.ExtractIPDirect()` in `main.go`; introduced `peerAddrIsLoopback` (kernel transport peer, authz-only) and `publicClientIP` (Caddy-set `X-Arkfile-Peer` header, EntityID/rate-limit-only) helpers in `handlers/middleware.go`; refactored `AdminMiddleware`, `RateLimitMiddleware`, `RequireTOTP`, and both bootstrap handlers; updated `logging/entity_id.go` to prefer `X-Arkfile-Peer`; added `header_up -X-Forwarded-For` / `-X-Real-IP` / `-Forwarded` and `header_up X-Arkfile-Peer {http.request.remote.host}` to all four Caddyfile variants. 11 regression tests added. Cross-slice items A-02, A-13, A-14, A-26, E-14 revert to their per-slice baselines and are tracked individually.
 2. **(Critical) `A-01` — two-tier JWT model not enforced.** Slice A. The validator does not check `aud` or `requires_totp`; both tiers use the same Ed25519 key. Combined with `F-01`, completing OPAQUE alone yields full access to every protected route, including admin. Fix: enforce audience claim at `echojwt.ParseTokenFunc`; reject `requires_totp=true` at every protected group; use separate signing keys per tier.
 3. **(High, escalates with F-01) `F-03` — bootstrap token harvested from systemd journal.** With `F-01` allowing remote redemption and `A-13` keeping the token alive after the first registration, anyone with `journalctl` access on the host (root, ops staff, container shell) can seed a second admin remotely. Fix: stop logging the token; consume on first redemption.
 4. **(High) `A-07` + `A-17` + `A-18` — TOTP backup codes encrypted, not hashed; master key co-located with every other server secret.** A `system_keys` + DB compromise yields plaintext TOTP backup codes for every user with zero offline cost. The TOTP master key is not `mlock`'d, not `MADV_DONTDUMP`'d, and is in the same table as the JWT signing key, the OPAQUE server private key, and the bootstrap token. Fix: store backup codes as per-code Argon2id hashes; move TOTP master to a separate at-rest store with rotation.
@@ -66,7 +68,7 @@ In priority order. Each entry cites the underlying slice finding(s) and the cros
 
 This is the order in which a fix campaign would have maximum risk-reduction per developer-hour. Each fix maps to one or more slice findings.
 
-1. **Set `e.IPExtractor` to localhost-only, strip XFF at Caddy, and rebase admin/bootstrap authz on `c.Request().RemoteAddr`.** Closes `F-01` and downgrades `A-02`/`A-13`/`A-14`/`A-26`/`E-14` to their per-slice baselines. One main.go line + two Caddyfile blocks + a tiny refactor of `AdminMiddleware` and `bootstrap.go`.
+1. **Set `e.IPExtractor` to localhost-only, strip XFF at Caddy, and rebase admin/bootstrap authz on the kernel transport peer.** **DONE 2026-05-12.** Closed `F-01` and downgraded `A-02`/`A-13`/`A-14`/`A-26`/`E-14` to their per-slice baselines. Landed as `main.go` `e.IPExtractor = echo.ExtractIPDirect()` plus `peerAddrIsLoopback` / `publicClientIP` helpers in `handlers/middleware.go`, `handlers/bootstrap.go` rebase, `logging/entity_id.go` X-Arkfile-Peer support, all four Caddyfile variants updated, 11 regression tests added.
 2. **Enforce JWT audience and `requires_totp` claims at the validator.** Add `echojwt.ParseTokenFunc` rejection of wrong-aud and `requires_totp=true` on every protected group. Mint temp and full tokens with distinct Ed25519 keys (`jwt_signing_key_temp_v1`, `jwt_signing_key_full_v1`). Closes `A-01` and structurally protects against future audience-claim oversight. Add `RequireFullJWT` as defense-in-depth on `totpProtectedGroup`, `adminGroup`, and `pendingAllowedGroup`.
 3. **Move auth tokens out of `localStorage` into `__Host-` `HttpOnly` `SameSite=Strict` cookies; add CSRF double-submit.** Stop storing the plaintext password on `window.totpLoginData`. Closes `A-04`/`A-05`/`F-07`/`F-08` and reduces the blast radius of any frontend compromise.
 4. **Bind AAD to every file-related AEAD operation.** Chunk encrypt/decrypt: AAD = `file_id || chunk_index || chunk_count || ciphertext_sha256`. FEK envelope: AAD = `file_id || key_type`. Metadata fields: AAD = `file_id || field_name || owner_username`. Mirror in both Go (`crypto/file_operations.go`, CLI) and TS (`crypto/upload.ts`, `streaming-download.ts`). Bump the envelope version byte to `0x02` and reject unknown versions. Closes `B-02`/`B-05`/`B-08`/`C-02`/`C-03`/`C-19`.
@@ -413,14 +415,14 @@ The `idsrp.md` threat model lists 13 adversary classes and ~13 security properti
 
 179 findings total. Severity counts (final tally):
 
-| Severity | Count |
-|---|---:|
-| Critical | 2 |
-| High | 27 |
-| Medium | 61 |
-| Low | 52 |
-| Informational | 37 |
-| **Total** | **179** |
+| Severity | Count | Resolved | Open |
+|---|---:|---:|---:|
+| Critical | 2 | 1 (F-01) | 1 |
+| High | 27 | 0 | 27 |
+| Medium | 61 | 0 | 61 |
+| Low | 52 | 0 | 52 |
+| Informational | 37 | 0 | 37 |
+| **Total** | **179** | **1** | **178** |
 
 Sort order below is Severity → Slice → Finding number. Cross-refs in the rightmost column indicate where the same root cause shows up in another slice. Per-finding evidence (file:line, attack scenario, recommendation, suggested tests) is in the slice doc named in the second column.
 
@@ -428,7 +430,7 @@ Sort order below is Severity → Slice → Finding number. Cross-refs in the rig
 
 | Finding | Slice | One-line title | Category | Cross-refs |
 |---|---|---|---|---|
-| `F-01` | 06 | `X-Forwarded-For` localhost-gate bypass via `c.RealIP()` walking attacker-controlled header | authorization / operational | A-02, A-13, A-14, A-26, E-14 |
+| `F-01` | 06 | **RESOLVED 2026-05-12.** `X-Forwarded-For` localhost-gate bypass via `c.RealIP()` walking attacker-controlled header | authorization / operational | A-02, A-13, A-14, A-26, E-14 |
 | `A-01` | 01 | Two-tier JWT model not enforced — temp post-OPAQUE token grants access to every protected route | authorization | A-02, A-05, E-01, E-19 |
 
 ### 4.2 High (27)

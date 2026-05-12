@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -272,6 +273,20 @@ func GetCompositeEntityIDForRequest(ip net.IP, r *http.Request) string {
 // context and returns a composite entity ID. For authenticated requests where
 // a username is available in the JWT claims, the username is used instead of
 // IP-based identification for more precise per-user rate limiting.
+//
+// Client IP source priority (for anonymous requests):
+//  1. X-Arkfile-Peer header, set by Caddy via `header_up X-Arkfile-Peer
+//     {http.request.remote.host}`. Caddy strips any incoming X-Forwarded-For
+//     / X-Real-IP / Forwarded headers before reverse-proxying, so this header
+//     cannot be spoofed by a remote client. This is the production path.
+//  2. c.RealIP() as fallback. With main.go pinning e.IPExtractor =
+//     ExtractIPDirect, c.RealIP() returns the kernel transport peer (which
+//     in production is 127.0.0.1 from Caddy, but in dev-without-Caddy is the
+//     real local client). Never trusts X-Forwarded-For under any topology.
+//
+// The raw IP is HMAC'd through the daily-rotating EntityID layer before any
+// persistence -- it never appears in logs, the DB, or any audit trail.
+// See: docs/wip/review/00-executive-summary.md (F-01).
 func GetOrCreateEntityID(c interface{}) string {
 	// Type assertion for Echo context
 	type ContextWithRealIP interface {
@@ -300,11 +315,24 @@ func GetOrCreateEntityID(c interface{}) string {
 		}
 	}
 
-	// Extract IP address
-	if ctx, ok := c.(ContextWithRealIP); ok {
-		clientIP := ctx.RealIP()
-		if clientIP != "" {
-			input.IP = net.ParseIP(clientIP)
+	// Extract IP address. Prefer the Caddy-controlled X-Arkfile-Peer header
+	// so EntityID buckets reflect the real public client behind the reverse
+	// proxy. Fall back to c.RealIP() for dev-without-Caddy.
+	if ctx, ok := c.(ContextWithRequest); ok {
+		if r := ctx.Request(); r != nil {
+			if peer := r.Header.Get("X-Arkfile-Peer"); peer != "" {
+				if ip := net.ParseIP(strings.TrimSpace(peer)); ip != nil {
+					input.IP = ip
+				}
+			}
+		}
+	}
+	if input.IP == nil {
+		if ctx, ok := c.(ContextWithRealIP); ok {
+			clientIP := ctx.RealIP()
+			if clientIP != "" {
+				input.IP = net.ParseIP(clientIP)
+			}
 		}
 	}
 

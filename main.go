@@ -244,6 +244,19 @@ func main() {
 	// Create Echo instance
 	e := echo.New()
 
+	// Pin IP extraction to the kernel-reported transport peer address.
+	// Echo's default c.RealIP() walks the X-Forwarded-For chain, which is
+	// client-controllable and therefore unsafe for any authorization
+	// decision (admin localhost gate, bootstrap localhost gate). Caddy
+	// terminates TLS on this same host and reverse-proxies over loopback,
+	// so the only "real" peer Arkfile sees is 127.0.0.1 from Caddy. The
+	// public client's IP is propagated by Caddy in the X-Arkfile-Peer
+	// header (set via header_up in the Caddyfile) and is read separately
+	// by handlers.publicClientIP / logging.GetOrCreateEntityID for
+	// rate-limiting and EntityID HMAC binning -- never for authz.
+	// See: docs/wip/review/00-executive-summary.md (F-01).
+	e.IPExtractor = echo.ExtractIPDirect()
+
 	// Basic security middleware first
 	e.Use(middleware.Recover())
 	e.Use(middleware.SecureWithConfig(middleware.SecureConfig{

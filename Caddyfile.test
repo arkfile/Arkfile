@@ -29,6 +29,16 @@
 			tls
 			tls_insecure_skip_verify
 		}
+		# SECURITY (F-01): strip client-controlled IP-spoofing headers
+		# before reverse-proxying. The Go process MUST NOT see any value
+		# the client picked for these. Propagate the real public peer in
+		# a dedicated header that only Caddy is allowed to set, so the
+		# Go side can read it for EntityID/rate-limit binning (NEVER for
+		# authorization). See: docs/wip/review/00-executive-summary.md.
+		header_up -X-Forwarded-For
+		header_up -X-Real-IP
+		header_up -Forwarded
+		header_up X-Arkfile-Peer {http.request.remote.host}
 		health_uri /readyz
 		health_interval 30s
 		health_timeout 10s

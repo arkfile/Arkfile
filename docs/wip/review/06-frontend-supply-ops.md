@@ -203,6 +203,22 @@ Numbering is contiguous within this slice (`F-NN`). Severity per `00-plan.md` §
 
 ### Finding F-01: `X-Forwarded-For` localhost-gate bypass via `c.RealIP()` walking attacker-controlled header
 
+**STATUS: RESOLVED (2026-05-12).** Closed in commit-pending change set.
+Code remediation:
+- `main.go`: `e.IPExtractor = echo.ExtractIPDirect()` immediately after `echo.New()`, with security comment. The Go process no longer walks `X-Forwarded-For` for any purpose.
+- `handlers/middleware.go`: added `peerAddrIsLoopback(c)` (kernel transport peer only -- never consults headers; the only correct primitive for localhost-only authz gates) and `publicClientIP(c)` (prefers Caddy-controlled `X-Arkfile-Peer` header for EntityID/rate-limit binning only -- never authz). `AdminMiddleware`, `RateLimitMiddleware`, and `RequireTOTP` updated. `isLocalhostIP` marked deprecated-for-authz.
+- `handlers/bootstrap.go`: both `BootstrapRegisterResponse` and `BootstrapRegisterFinalize` now use `peerAddrIsLoopback(c)`.
+- `logging/entity_id.go`: `GetOrCreateEntityID` now prefers `X-Arkfile-Peer` header, falls back to `c.RealIP()` for dev-without-Caddy. Raw IP still HMAC'd through the daily-rotating EntityID layer before any persistence.
+- `Caddyfile`, `Caddyfile.prod`, `Caddyfile.test`, `Caddyfile.local`: every `reverse_proxy localhost:8443` block now includes `header_up -X-Forwarded-For`, `header_up -X-Real-IP`, `header_up -Forwarded`, and `header_up X-Arkfile-Peer {http.request.remote.host}`.
+
+Cross-slice impact: A-02, A-13, A-14, A-26, and E-14 (which escalated through F-01 into remote reachability) revert to their per-slice baseline severities. Per-finding fixes for those items still pending and tracked separately.
+
+Regression tests: `handlers/middleware_test.go` and `handlers/bootstrap_test.go` add 11 tests that prove (a) `peerAddrIsLoopback` rejects forged-XFF requests from public peers, (b) `AdminMiddleware` returns 403 when a remote peer spoofs `X-Forwarded-For: 127.0.0.1`, (c) both bootstrap endpoints return 403 for the same scenario, (d) `publicClientIP` prefers `X-Arkfile-Peer` and ignores forged `X-Forwarded-For`, (e) loopback peers still pass the gate. All tests pass; full `go test ./handlers/... ./logging/... ./auth/... ./crypto/... ./billing/... ./models/... ./config/... ./utils/... ./storage/...` is green.
+
+Privacy posture: unchanged. The AGENTS.md "no IP logging / no PII" guarantee continues to hold -- the raw IP still never reaches log lines, DB rows, or audit records; the EntityID HMAC pipeline is the privacy boundary and it was not touched. The fix only changed which header the IP is *read from*, not what is *persisted*.
+
+The original finding analysis (preserved below for the audit trail):
+
 - Severity: **Critical**
 - Confidence: **High**
 - Category: authorization / operational / privacy
