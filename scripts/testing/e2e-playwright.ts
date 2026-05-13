@@ -574,6 +574,20 @@ test.describe.serial('Arkfile Playwright E2E', () => {
       { timeout: 60_000 },
     );
 
+    // Dismiss the error toast we just asserted on. Error toasts have
+    // duration: 0 (never auto-dismiss), so if we leave it on the page it
+    // sits in #message-container and intercepts pointer events on any
+    // element it overlaps -- notably #logout-link in the top-right nav,
+    // which causes Phase 10's click to time out.
+    await sharedPage.evaluate(() => {
+      document.querySelectorAll<HTMLButtonElement>('#message-container .toast button')
+        .forEach((b) => b.click());
+    });
+    await sharedPage.waitForFunction(
+      () => !document.querySelector('#message-container .toast'),
+      { timeout: 5_000 },
+    );
+
     console.log('[OK] Phase 6b: Wrong custom password correctly rejected');
   });
 
@@ -693,6 +707,21 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // Phase 10: Anonymous Share Download
   // --------------------------------------------------------------------------
   test('Phase 10: Anonymous share download (Share A)', async ({ browser }) => {
+    // Defensive cleanup: dismiss any lingering toast that an earlier phase
+    // forgot to clear. Error toasts have duration: 0 (never auto-dismiss)
+    // and #message-container is fixed-positioned in the top-right where it
+    // overlaps #logout-link, so an undismissed toast will block the click
+    // below. Each phase is supposed to clean up its own toasts, but this
+    // guard ensures Phase 10 cannot regress if a future phase forgets.
+    await sharedPage.evaluate(() => {
+      document.querySelectorAll<HTMLButtonElement>('#message-container .toast button')
+        .forEach((b) => b.click());
+    });
+    await sharedPage.waitForFunction(
+      () => !document.querySelector('#message-container .toast'),
+      { timeout: 5_000 },
+    ).catch(() => {});
+
     // Log out on sharedPage first so shares can be tested anonymously
     logStep('10', 'Logging out on shared page for anonymous test...');
     await sharedPage.click('#logout-link');
