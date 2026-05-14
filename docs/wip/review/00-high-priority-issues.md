@@ -158,7 +158,7 @@ Phase F splits these keys into trust tiers based on what compromise they enable.
 | **Tier-2: server identity** | `system_keys` DB table, wrapped under `ARKFILE_MASTER_KEY` | `opaque_server_private_key`, `opaque_server_public_key` (derived per A-27), `opaque_oprf_seed`, `entity_id_master_key_v1` | Server impersonation in future logins (OPAQUE still resists past-password recovery); EntityID correlation |
 | **Tier-3: user-secret-wrapping** | New file `/opt/arkfile/etc/keys/user-secret-master.bin` (32 B, mode 0400, owned by `arkfile` user). **Not in the DB.** | `totp_user_master`, `contact_info_master` (HKDF-derived from the Tier-3 file) | Limited to TOTP secrets + contact info; backup codes remain safe (hashed) |
 
-Bootstrap token in Phase A1 lives in `/opt/arkfile/etc/keys/bootstrap-token.bin` as a small dry-run of the Tier-3 filesystem-secret pattern, even though the bootstrap token itself is Tier-1 by trust level. (The filesystem location is independent of the tier; what matters is that the *trust anchor* for Tier-3 keys is the file, not the DB.)
+Bootstrap token in Phase A1 lives in `/opt/arkfile/etc/keys/bootstrap-token.bin`. This is a delivery-channel choice for a Tier-1 secret (forced re-issuance if leaked; not user-secret-wrapping), **not** a Tier-3 prototype. The actual Tier-3 design — long-lived 32 B master loaded once at process start, mlock'd, `MADV_DONTDUMP`'d, `PR_SET_DUMPABLE=0`, HKDF-expanded into per-purpose subkeys, and rotated via a dedicated script — lands in Phase F (cluster F1).
 
 ---
 
@@ -166,7 +166,7 @@ Bootstrap token in Phase A1 lives in `/opt/arkfile/etc/keys/bootstrap-token.bin`
 
 ### Phase A — Auth-pathway lockdown
 
-**Why this phase:** the auth surface was the focus of the recent A-01 / F-01 work. The remaining Highs in `auth/` are cheap to close while the code is fresh. Phase A also prototypes the Tier-3 filesystem-secret pattern (cluster A1) so Phase F is a routine extension rather than a novel introduction.
+**Why this phase:** the auth surface was the focus of the recent A-01 / F-01 work. The remaining Highs in `auth/` are cheap to close while the code is fresh.
 
 **Findings closed:** A-13, A-26, F-03, A-14, A-08, A-09, A-10.
 
@@ -174,7 +174,7 @@ Bootstrap token in Phase A1 lives in `/opt/arkfile/etc/keys/bootstrap-token.bin`
 
 **Greenfield notes:** the bootstrap-token row schema gets a `consumed_at` column. The refresh-token table layout changes (entropy bump + family-revoke columns); per greenfield posture, rewrite the column rather than adding a `_v2` table.
 
-#### Cluster A1 — Bootstrap-token hardening + Tier-3 prototype
+#### Cluster A1 — Bootstrap-token hardening
 
 **Findings:** A-13 (single-use), A-26 (no stdout logging), F-03 (no journal logging), A-14 (production-env fail-closed).
 
@@ -187,7 +187,7 @@ Bootstrap token in Phase A1 lives in `/opt/arkfile/etc/keys/bootstrap-token.bin`
 
 **Design decisions:**
 - Atomic single-use enforcement: add `consumed_at TIMESTAMP` to the bootstrap-token row, set inside the transaction that creates the first admin. Reject redemption if `consumed_at IS NOT NULL`.
-- Communicate the bootstrap token to the operator via a file at `/opt/arkfile/etc/keys/bootstrap-token.bin` (mode 0400, owned by `arkfile` user). Remove all stdout / journal prints.
+- Communicate the bootstrap token to the operator via a file at `/opt/arkfile/etc/keys/bootstrap-token.bin` (mode 0400, owned by `arkfile` user). Remove all stdout / journal prints. This is purely a delivery-channel choice for the bootstrap token (which is Tier-1 by trust level); it does not constitute the Tier-3 secret store. The actual Tier-3 design (long-lived master + HKDF-expand to per-purpose subkeys + mlock'd in process memory + rotation) lands in Phase F.
 - For `dev-reset.sh`, the script reads the token from the file after server startup. No piping through systemd journal.
 - A-14 fail-closed: in `config/security_config.go` `ValidateProductionConfig` (or wherever production-mode invariants are asserted), refuse to start if `ENVIRONMENT=production` AND `ADMIN_DEV_TEST_API_ENABLED=true`.
 
@@ -219,17 +219,24 @@ Bootstrap token in Phase A1 lives in `/opt/arkfile/etc/keys/bootstrap-token.bin`
 3. Confirm `user_totp` table layout in `database/unified_schema.sql`.
 
 **Design decisions:**
-- Add `consecutive_totp_failures INTEGER NOT NULL DEFAULT 0` and `last_failed_attempt_at TIMESTAMP` to `user_totp`.
-- Lockout policy: after 10 consecutive failures, reject TOTP verification with a lockout response until `last_failed_attempt_at + 15 minutes`. Successful verification resets the counter.
-- Emit a security event (via `logging/security_events.go`) on each failure and on lockout.
+- Add three columns to `user_totp`: `failed_attempts_in_window INTEGER NOT NULL DEFAULT 0`, `window_started_at TIMESTAMP`, `last_failed_attempt_at TIMESTAMP`.
+- The "window" is a rolling 24 hour bucket. On each failed verification:
+  - If `window_started_at` is NULL or older than 24 hours, reset the window: `window_started_at = now()`, `failed_attempts_in_window = 1`, `last_failed_attempt_at = now()`.
+  - Otherwise: increment `failed_attempts_in_window`, set `last_failed_attempt_at = now()`.
+- Successful verification clears all three columns to NULL / 0.
+- **Soft lockout (exponential backoff):** within the current 24 hour window, after 10 failures, refuse further attempts until `last_failed_attempt_at + backoff(failed_attempts_in_window)`. Backoff is exponential: failure 10 → 1 minute, 11 → 2 minutes, 12 → 4 minutes, …, capped at 60 minutes per attempt.
+- **Hard daily cap:** after 30 failures within the same 24 hour window, refuse all further TOTP attempts until `window_started_at + 24h`. At this point the only recovery path is via backup code through the F5 lost-device flow (which is independent of TOTP verification and has its own rate-limit via EntityID).
+- Emit a `TOTPFailureLockout` security event on each state transition (entering soft backoff, entering hard daily cap, recovering on first success after a lockout).
+- No CAPTCHA or interactive step is added; the rate envelope is purely time-based so the legitimate user can recover without operator intervention.
 
 **Implementation order:**
-1. Schema additions in `database/unified_schema.sql`.
-2. Increment / reset / check in the TOTP verification handler.
-3. Security event emission.
-4. Tests for lockout, reset on success, expiry of lockout window.
+1. Schema additions in `database/unified_schema.sql` (three new columns on `user_totp`).
+2. Helper `func computeLockoutState(row userTOTPState, now time.Time) (allowed bool, retryAfter time.Duration, reason string)` so the handler logic stays declarative.
+3. Wire the helper into the TOTP verification handler; on the failure path, increment + persist before returning.
+4. Security event emission on each state transition.
+5. Tests: soft-lockout entry at attempt 11; exponential growth of `retry_after`; hard daily cap at attempt 31; recovery on first success clears state; rolling-24h window resets after 24h of silence.
 
-**Validation pass:** `e2e-test.sh` covers TOTP flows directly.
+**Validation pass:** `e2e-test.sh` covers TOTP flows directly. Add a new test that drives 30 consecutive failures and asserts the daily-cap response.
 
 **Beta impact:** GREEN. Server-internal.
 
@@ -243,18 +250,31 @@ Bootstrap token in Phase A1 lives in `/opt/arkfile/etc/keys/bootstrap-token.bin`
 3. Identify the full-JWT TTL default (`utils.GetJWTTokenLifetime()`); plan to shorten if currently long.
 
 **Design decisions:**
-- A-09: `TokenRevocationMiddleware` adds a per-request lookup of any user-wide revocation marker (e.g., `IsUserJWTRevoked(username, jwt_iat)`). Truthy result rejects the JWT regardless of TTL.
-- A-10: refresh tokens become 32 random bytes (256-bit) instead of `uuid.NewV4()` (122-bit). Storage remains hashed.
-- A-10: family-revoke on reuse detection. A refresh-token row tracks a `family_id`; if a token from a family is presented after the family has been rotated past it, the entire family is revoked and a security event is emitted.
-- Shorten full-JWT TTL to ~5 minutes; refresh handles the rotation.
+- **A-09 (per-request user-wide revocation):** `TokenRevocationMiddleware` adds a per-request lookup against a `user_jwt_revocations` table that records the latest "revoke all JWTs for this user" event. The middleware compares `claims.IssuedAt` against `user_jwt_revocations.revoked_at`; if the JWT was issued before the revocation, it is rejected regardless of remaining TTL. Used by force-logout (admin), revoke-all (self), and the A-10 family-revoke path below.
+- **A-10 (refresh-token entropy):** refresh tokens become 32 cryptographically-random bytes (256 bits) generated via `crypto/rand`, replacing `uuid.NewV4()` (which produces only 122 bits of entropy). The raw token is returned to the client; only `SHA-256(raw)` is persisted in `refresh_tokens.token_hash`. This matches the entropy and at-rest posture of the bootstrap token and download tokens.
+- **A-10 (family-revoke on reuse detection):** every refresh-token row gains two columns:
+  - `family_id BLOB NOT NULL` — a 16-byte random value identifying the chain of refresh tokens that originated from a single login event. R0 (first refresh issued at login), R1 (issued when client used R0), R2 (issued when client used R1), etc., all share the same `family_id`.
+  - `superseded_by_hash BLOB` — the SHA-256 hash of the next token in the chain, populated when the row is rotated; NULL while the row is the active head of its family.
+- **Reuse-detection logic in the refresh handler:**
+  1. Look up the incoming token by `token_hash`. If no row exists, return 401 (unknown token).
+  2. If `superseded_by_hash IS NOT NULL`, this token has already been rotated past — this is the reuse trip. Inside a single transaction, set a `family_revoked_at` marker on every row sharing the same `family_id`, write a `user_jwt_revocations` entry for the affected user (so any outstanding full JWTs from this family are also invalidated per A-09), emit a `RefreshTokenReuseDetected` security event, and return 401.
+  3. If the row has its own `family_revoked_at` set, return 401 (family already revoked).
+  4. Otherwise this is a legitimate rotation. Generate a new 256-bit refresh token. In a single transaction: insert the new row with the same `family_id` and `superseded_by_hash IS NULL`; set `superseded_by_hash = SHA-256(new_raw)` on the consumed row. Return the new token to the client.
+- The reuse-detection pattern follows RFC 6819 §5.2.2.3 ("Refresh Token Replay Detection").
+- **Full-JWT TTL:** shorten the default to ~5 minutes (current default per `utils.GetJWTTokenLifetime()` to be confirmed in pre-work). With cookie-based transport from Phase B and frequent refresh-token rotation, a 5-minute TTL keeps the per-request revocation check (A-09) cheap and the blast radius of a stolen JWT short.
 
 **Implementation order:**
-1. Schema additions to `refresh_tokens` (family_id, rotated_at).
-2. Refactor refresh-token generation in `auth/` to use 32 random bytes via `auth.GenerateRefreshToken()`.
-3. Implement reuse-detection logic in the refresh handler.
-4. Add `IsUserJWTRevoked` lookup to `TokenRevocationMiddleware`.
-5. Shorten full-JWT TTL default.
-6. Tests for: family-revoke on reuse, per-request user-wide revocation enforcement, TTL shortening.
+1. Schema additions: `refresh_tokens.family_id BLOB NOT NULL`, `refresh_tokens.superseded_by_hash BLOB`, `refresh_tokens.family_revoked_at TIMESTAMP`. New table `user_jwt_revocations(username TEXT PRIMARY KEY, revoked_at TIMESTAMP NOT NULL)`.
+2. Refactor refresh-token generation in `auth/` to use `auth.GenerateRefreshToken()` returning 32 random bytes (raw + hash). Remove the `uuid.NewV4()` path entirely.
+3. Implement the four-step refresh handler logic above, including the family-revoke transaction.
+4. Add `IsUserJWTRevoked(username, issuedAt)` lookup to `TokenRevocationMiddleware`. Cache aggressively in-process (with TTL) to avoid a per-request DB round-trip; cache invalidation on revocation write.
+5. Shorten full-JWT TTL default in `utils.GetJWTTokenLifetime()` (and confirm the env-var override path).
+6. Tests:
+   - Family-revoke: present R0 to refresh; receive R1. Present R0 a second time; expect 401, full family revoked, security event emitted, user_jwt_revocations row written.
+   - Per-request user-wide revocation: log in (get JWT_a); admin force-logout the user; immediately replay JWT_a to a protected endpoint; expect 401 without waiting for TTL.
+   - Refresh-token entropy: assert generated tokens are exactly 32 bytes from `crypto/rand` (not UUIDs).
+   - Family-revoke also writes user_jwt_revocations so existing full JWTs from the reuse-detected family are also invalidated.
+   - TTL shortening: assert default lifetime is ≤5 minutes.
 
 **Validation pass:**
 - `e2e-test.sh` exercises refresh-token rotation in the CLI flow.
@@ -275,7 +295,7 @@ Bootstrap token in Phase A1 lives in `/opt/arkfile/etc/keys/bootstrap-token.bin`
 
 **Files most likely touched:** `client/static/js/src/utils/auth.ts`, `client/static/js/src/login.ts`, `client/static/js/src/totp.ts`, `client/static/js/src/totp-setup.ts`, `client/static/js/src/__tests__/auth-manager.test.ts`, `handlers/auth.go`, `handlers/middleware.go` (new cookie reader + CSRF middleware), `auth/jwt.go` (no change to JWT itself; transport changes).
 
-**Greenfield notes:** non-overlapping cutover. The server stops accepting the `Authorization: Bearer` header for browser-origin requests once cookies land. No transitional dual-mode. CLI clients (`arkfile-client`, `arkfile-admin`) keep using `Authorization: Bearer` because they're not browser-origin and cookies don't apply to them.
+**Greenfield notes:** non-overlapping cutover. Browser and CLI authenticate via different transport mechanisms (cookies vs. bearer header) without any UA-sniffing or Origin-inspection. CLI clients (`arkfile-client`, `arkfile-admin`) keep using `Authorization: Bearer` because they never set cookies; browser clients use cookies exclusively. No transitional dual-mode.
 
 #### Pre-work
 
@@ -296,17 +316,27 @@ Bootstrap token in Phase A1 lives in `/opt/arkfile/etc/keys/bootstrap-token.bin`
   - `__Host-arkfile-refresh` — refresh token, HttpOnly, Secure, SameSite=Strict, Path=/.
   - `__Host-arkfile-csrf` — CSRF token, NOT HttpOnly (JS needs to read it), Secure, SameSite=Strict, Path=/. The JS reads this and sends it back in an `X-CSRF-Token` header on every state-changing request. Server compares header to cookie value.
 - During the TOTP-handoff window, the temp JWT also lives in a cookie: `__Host-arkfile-temp-token`, same attributes as the full one but with a 20-minute TTL.
+- **CSRF token rotation:** the CSRF cookie value is rotated on every successful login, every successful refresh-token rotation (Phase A3), and on logout. A successful XSS therefore reads at most one CSRF value, and that value invalidates the moment the legitimate user does anything that triggers a rotation. Server-side check is constant-time-compare between the header value and the cookie value (both come up in the same request, so this is a true double-submit, not a stored-state check).
+- **Browser-vs-CLI dispatch — no header sniffing:** the dispatch is route-based, not request-inspection-based, and a single per-request rule enforces it:
+  - **If the request carries `__Host-arkfile-token` (or the temp variant) as a cookie, the request is treated as a browser request.** The cookie-reader middleware extracts the JWT; the bearer header is *ignored entirely*. The CSRF middleware enforces `X-CSRF-Token` against `__Host-arkfile-csrf`. If the CSRF check fails, return 403.
+  - **If the request carries `Authorization: Bearer ...` AND no Arkfile cookies, the request is treated as a CLI request.** The bearer header is read by the existing path; no CSRF check is applied (no cookie means no CSRF risk).
+  - **If the request carries both a cookie AND a bearer header, the cookie wins** and the bearer header is dropped silently. (An XSS that tries to mint its own bearer header in a fetch from the browser cannot bypass CSRF this way.)
+  - **If the request carries neither, treat as unauthenticated.**
+  - This dispatch is implemented once in `handlers/middleware.go` and does not depend on UA strings, Origin values, or any other forgeable signal.
 - **Password scrubbing:** remove `window.totpLoginData` entirely. The TOTP flow does not need the plaintext password; it only needs the temp token (now in a cookie). If the flow currently requires the password for some derivation, isolate that derivation to a module-private constant zeroed immediately after use.
 
 #### Implementation order
 
-1. Server-side cookie writer in `handlers/auth.go` for login finalize, TOTP verify, refresh, logout.
-2. Server-side cookie reader middleware (replaces or augments `JWTMiddleware`'s header-based read).
-3. CSRF double-submit middleware checking `X-CSRF-Token` header against `__Host-arkfile-csrf` cookie.
-4. Reject `Authorization: Bearer` for browser-origin requests (UA-based or Origin-based detection). CLI clients keep working.
-5. Frontend refactor: remove all `localStorage.getItem('token')` / `setItem('token')` / `removeItem('token')` calls. Remove `window.totpLoginData`. Update the auth-fetch wrapper to omit `Authorization` and include `X-CSRF-Token` + `credentials: 'include'`.
-6. Delete `getToken` / `setToken` / `clearToken` from `auth-manager.ts` and replace with cookie-based equivalents (or remove them entirely since cookies are server-managed).
-7. Tests: server-side cookie issuance + CSRF check; frontend tests for the new fetch wrapper; Playwright test asserting `localStorage.getItem('token')` returns null after login.
+1. Server-side cookie writer in `handlers/auth.go` for login finalize, TOTP verify, refresh, logout. Cookie writes emit a fresh `__Host-arkfile-csrf` value on each issuance.
+2. Server-side cookie reader middleware in `handlers/middleware.go` implementing the dispatch rule above (cookie-presence wins; bearer accepted only when no Arkfile cookie is present).
+3. CSRF double-submit middleware checking `X-CSRF-Token` header against `__Host-arkfile-csrf` cookie with constant-time comparison. Applied only when a cookie is present.
+4. Frontend refactor: remove all `localStorage.getItem('token')` / `setItem('token')` / `removeItem('token')` calls. Remove `window.totpLoginData`. Update the auth-fetch wrapper to omit `Authorization`, include `X-CSRF-Token` (read from `__Host-arkfile-csrf`), and set `credentials: 'include'`.
+5. Delete `getToken` / `setToken` / `clearToken` from `auth-manager.ts` and replace with cookie-based equivalents (or remove them entirely since cookies are server-managed).
+6. Tests:
+   - Server-side: cookie issuance includes all three cookies with correct attributes; CSRF mismatch returns 403; cookie-present-but-no-CSRF-header returns 403; bearer-only (no cookie) succeeds; bearer-AND-cookie uses the cookie path and applies CSRF.
+   - Frontend: auth-fetch wrapper sends `credentials: 'include'` and `X-CSRF-Token`.
+   - Playwright: assert `localStorage.getItem('token')` returns null after login, and `document.cookie` does not expose the JWT (HttpOnly invisible to JS).
+   - CSRF rotation: log in (CSRF_a); refresh; assert new CSRF (CSRF_b) is different; replay a request with CSRF_a → 403.
 
 #### Validation pass
 
@@ -473,11 +503,17 @@ Bootstrap token in Phase A1 lives in `/opt/arkfile/etc/keys/bootstrap-token.bin`
 #### Beta impact
 
 **YELLOW.**
-- Existing files unaffected (the embedded Argon2id floors are the same params currently served by `/api/config/argon2`; client encryption keeps producing identical KDF output).
-- **Existing shares stop working** because the share-envelope format changes. Shares are ephemeral by design, so this is low-coordination. Owners can re-share.
+- Existing files unaffected (the embedded Argon2id floors are the same params currently served by `/api/config/argon2`; client encryption keeps producing identical KDF output for account / custom KEK derivations).
+- **All existing shares are deleted as part of the deploy.** The operator runs a one-liner against the rqlite database immediately before `test-update.sh` runs:
+  ```
+  DELETE FROM share_envelopes;
+  DELETE FROM share_access_attempts;
+  ```
+  (confirm exact table names in pre-work — `handlers/file_shares.go` and `database/unified_schema.sql` will tell us). This is cleaner than running a one-shot migration and avoids the "UI still shows an active share that the recipient can no longer open" failure mode.
+- Owners can re-create any shares they still need after the update lands.
 
 **Heads-up message draft:**
-> "Pushed a security update that hardens how shared file links are protected. Any active share links will stop working; please re-share files if needed. Your own files and account unaffected."
+> "Heads up — pushing a security update on [date] that hardens shared-link cryptography. As part of the rollout I'm clearing all existing share links from the server. Files and accounts are untouched. If you have active share links you want preserved, re-issue them after the update lands."
 
 ---
 
@@ -495,24 +531,40 @@ See §3 for the full threat-model table and §4.3 for the tier assignment table.
 
 #### Sub-clusters
 
-##### F1 — Tier-3 user-secret-master infrastructure
+##### F1 — Tier-3 user-secret-master infrastructure (load + mlock + derive)
+
+This sub-cluster closes A-17 (mlock / MADV_DONTDUMP / PR_SET_DUMPABLE on long-lived secret material). The memory-hardening primitives must land in F1 so that F2 / F3 / F4 load the master into already-hardened memory. F6 (documentation) ends up purely about docs.
 
 **Pre-work:**
-1. Confirm the file path convention `/opt/arkfile/etc/keys/` exists and is owned by the `arkfile` user. (Phase A1 already creates `/opt/arkfile/etc/keys/bootstrap-token.bin` there.)
+1. Confirm the file path convention `/opt/arkfile/etc/keys/` exists and is owned by the `arkfile` user. (Phase A1 already wrote `/opt/arkfile/etc/keys/bootstrap-token.bin` to this directory.)
 2. Decide whether to generate the Tier-3 file at first-startup (like `KeyManager.GetOrGenerateKey`) or at install-time in the deploy script. **Recommendation: at install-time in the deploy script**, with a fail-closed check at startup that the file exists. Reduces ambiguity about who owns the file's creation.
+3. Confirm Go syscall surface for `syscall.Mlock`, `unix.Madvise(buf, unix.MADV_DONTDUMP)`, and `unix.PrctlRetInt(unix.PR_SET_DUMPABLE, 0, ...)` on the target platform (Linux).
 
 **Design decisions:**
 - Path: `/opt/arkfile/etc/keys/user-secret-master.bin`. 32 random bytes. Mode 0400. Owner `arkfile` user.
-- Loader: `crypto/user_secret_master.go` reads the file at process startup, mlocks the buffer, applies `MADV_DONTDUMP` and `PR_SET_DUMPABLE=0`. Fail-closed if the file is missing or wrong size.
-- HKDF-derive per-purpose subkeys: `totp_user_master` (for TOTP secret encryption) and `contact_info_master` (for contact-info encryption). Domain-separated info strings.
-- Rotation: a new `scripts/maintenance/rotate-user-secret-master.sh` that reads old + new keys, re-encrypts every `user_totp.secret_encrypted` and every contact-info blob, swaps the file atomically.
+- Loader (`crypto/user_secret_master.go` `LoadTier3Master()`) at process startup:
+  1. Open the file; read exactly 32 bytes; fail-closed on any size mismatch or read error.
+  2. `syscall.Mlock` the destination buffer.
+  3. `unix.Madvise(buf, unix.MADV_DONTDUMP)` so the page is excluded from core dumps and `ptrace(PTRACE_PEEKDATA)`-of-a-coredump scenarios.
+  4. Once per process, `unix.PrctlRetInt(unix.PR_SET_DUMPABLE, 0)` to disable coredumps for the entire Arkfile process. This is wider than just the Tier-3 page but the marginal cost is zero and it also protects the OPAQUE private key, JWT keys, etc. that share the address space.
+  5. Store the buffer in a package-private variable; expose only `DeriveTier3Subkey(purpose string)`.
+- `DeriveTier3Subkey(purpose)`:
+  - `key = HKDF-SHA256(salt=nil, ikm=tier3Master, info="ARKFILE_TIER3:" + purpose, dkLen=32)`
+  - Known purposes: `"totp_user"` (consumed by F2), `"contact_info"` (consumed by F4).
+- Rotation script (`scripts/maintenance/rotate-user-secret-master.sh`): reads old master + new master, iterates every `user_totp.secret_encrypted` row (decrypt under old `totp_user_master`, re-encrypt under new) and every contact-info blob (decrypt under old `contact_info_master`, re-encrypt under new), atomically renames the new file into place last. Backup codes do not need re-encryption because they are hashed (per F3), not encrypted.
 
 **Implementation order:**
-1. New `crypto/user_secret_master.go` with `LoadTier3Master()`, `DeriveTier3Subkey(purpose string)`.
-2. Update each deploy script (`dev-reset.sh`, `local-deploy.sh`, `test-deploy.sh`, `prod-deploy.sh`) to generate the file at install if missing.
-3. Tests: file-missing path fails closed; file-wrong-size fails closed; subkey derivation domain separation.
+1. New `crypto/user_secret_master.go` exporting `LoadTier3Master()` and `DeriveTier3Subkey(purpose string) [32]byte`. The mlock + madvise + PR_SET_DUMPABLE plumbing lives entirely in `LoadTier3Master()`.
+2. Call `LoadTier3Master()` once during process bootstrap (alongside `KeyManager` init). Fail-closed on missing/short file.
+3. Update each deploy script (`dev-reset.sh`, `local-deploy.sh`, `test-deploy.sh`, `prod-deploy.sh`) to generate the file at install if missing: `head -c 32 /dev/urandom > /opt/arkfile/etc/keys/user-secret-master.bin && chmod 0400 ... && chown arkfile:arkfile ...`.
+4. Write `scripts/maintenance/rotate-user-secret-master.sh` (signature only is fine in F1; the data-re-encryption loop is implemented in F2 and F4 because those clusters know the schemas).
+5. Tests:
+   - `LoadTier3Master()` fails closed on missing file, on wrong-size file, on file with wrong mode (warning-level, not fail-closed, to avoid foot-guns on systems where umask differs).
+   - `DeriveTier3Subkey("totp_user") != DeriveTier3Subkey("contact_info")` (domain separation).
+   - `mlock` succeeded (best-effort: assert process RLIMIT_MEMLOCK is sufficient; otherwise log a warning).
+   - Round-trip: random master → derive subkey twice with same purpose → byte-equal.
 
-**Beta impact:** GREEN. (The file is generated by `test-update.sh`'s redeployment step; users see nothing.)
+**Beta impact:** GREEN. The file is generated by `test-update.sh`'s redeployment step; users see nothing. (No keys are migrated yet; F2 / F3 / F4 do that.)
 
 ##### F2 — Migrate TOTP secret encryption to Tier-3
 
@@ -538,31 +590,56 @@ See §3 for the full threat-model table and §4.3 for the tier assignment table.
 **Pre-work:**
 1. Read `auth/totp.go` backup-code generation, verification, and replay-log paths.
 2. Read `auth/totp_backup_test.go` for current test coverage.
+3. Confirm the global Argon2id parameters in `crypto/argon2id-params.json` (m, t, p, dk). F3 reuses these unchanged — there is no per-feature parameter file.
 
 **Design decisions:**
-- New table `user_totp_backup_codes`:
-  ```
+- **Reuse the global Argon2id parameters.** No new parameter file is introduced; F3 imports the same m/t/p/dk values used by Account-KEK and Custom-KEK derivation. After Phase E lands, those parameters become compile-time-embedded floors; F3 inherits that hardening automatically. There is no hardcoded `64MiB` or `t=3` in `auth/totp.go`.
+- **Per-code salt is derived deterministically per (username, code_index).** No salt material is stored in the DB. The schema therefore omits the `code_salt` column entirely. Salt derivation:
+  - `salt = SHA-256("arkfile-backup-code-salt:" || username || ":" || code_index)` where `code_index` is the integer position in `0..9`.
+  - Equivalent for an attacker to a random 32-byte salt for offline cracking purposes: each (username, code_index) yields a unique 32-byte pseudorandom value, and Argon2id's memory-hardness dominates the per-attempt cost. Salt unguessability is not a security goal when the rate limit is per-username.
+- **Schema:**
+  ```sql
   CREATE TABLE user_totp_backup_codes (
     username TEXT NOT NULL,
-    code_hash BLOB NOT NULL,
-    code_salt BLOB NOT NULL,
+    code_index INTEGER NOT NULL,          -- 0..9
+    code_hash BLOB NOT NULL,              -- 32 bytes from Argon2id
     used_at TIMESTAMP,
-    UNIQUE(username, code_hash)
+    PRIMARY KEY (username, code_index),
+    UNIQUE (username, code_hash)
   );
   ```
-- Backup-code generation: 10 codes of ~10 alphanumeric chars each. Use rejection sampling (not modulo) to fix A-42 bias. Each code gets its own random 16-byte salt; stored as `argon2id(code, salt, m=64MiB, t=3, p=1)`.
-- Verification: iterate user's rows, compute `argon2id(submitted_code, row.salt)`, constant-time compare with `row.code_hash`. On match, set `used_at = now()` in a transaction; reject if already set. (UNIQUE on `(username, code_hash)` plus tx-scoped used-at check closes the A-16 race.)
-- The user only sees the codes once, at enrollment. The UI displays them and asks the user to save them; server never re-shows.
-- Drop `backup_codes_encrypted` column from `user_totp`.
+- **Backup-code generation (10 codes per user):** each code is 10 characters drawn from a 62-character alphanumeric alphabet (`[A-Za-z0-9]`). Generation uses rejection sampling — draw a random byte, accept only if it lands in a clean multiple of 62, otherwise re-draw — eliminating the A-42 modulo bias. ~59.5 bits per code, well above the offline-attack threshold once Argon2id is layered on top.
+- **Storage at enrollment:** for each `code_index ∈ 0..9`, derive `salt = SHA-256("arkfile-backup-code-salt:" || username || ":" || code_index)`, compute `code_hash = argon2id(code, salt, <global params>)`, insert `(username, code_index, code_hash)`. The user sees the 10 codes once on the enrollment screen and is told to save them; the server never re-shows them.
+- **Verification (O(1) average per attempt):** the user submits a backup code; the server doesn't know which `code_index` they're claiming, but the search is bounded to 10 candidates and is structured for early-exit:
+  ```
+  for code_index in 0..9 (or random permutation to defeat timing-based index inference):
+      salt = SHA-256("arkfile-backup-code-salt:" || username || ":" || code_index)
+      candidate_hash = argon2id(submitted_code, salt, <global params>)
+      row = SELECT * FROM user_totp_backup_codes WHERE username = ? AND code_index = ? AND code_hash = candidate_hash
+      if row exists and row.used_at IS NULL:
+          inside transaction: UPDATE ... SET used_at = now() WHERE username = ? AND code_index = ? AND used_at IS NULL
+          if UPDATE returns 0 rows: another caller used the code; reject (closes A-16 race)
+          else: succeed, return
+  reject (no match)
+  ```
+  Average case: ~5 Argon2id derivations per attempt (uniform distribution of which code the user submits). Worst case: 10. Better than a random-salt design that always requires 10. UNIQUE on `(username, code_hash)` plus the transactional `used_at` write closes the A-16 race; the optimistic UPDATE pattern ensures concurrent submissions of the same code result in exactly one success.
+- **Index permutation for verification:** iterating `0..9` in a fixed order leaks (via timing) which `code_index` the user actually submitted, since matching at index 3 returns ~3× faster than matching at index 9. To prevent this, iterate in a per-request random permutation (e.g., `rand.Perm(10)`). The cost is unchanged; the only difference is which Argon2id derivations complete before the match. (Optional but cheap; recommend including.)
+- **Drop `backup_codes_encrypted` column from `user_totp`** as part of the F2 schema migration that drops all existing TOTP enrollments.
 
 **Implementation order:**
-1. Schema additions in `database/unified_schema.sql`.
-2. Refactor backup-code generation in `auth/totp.go`.
-3. Refactor backup-code verification.
-4. Drop old column.
-5. Tests: race test on concurrent submission of the same code; rejection-sampling statistical test; "can't show codes after enrollment" assertion.
+1. Schema additions in `database/unified_schema.sql` (new `user_totp_backup_codes` table, drop `user_totp.backup_codes_encrypted`).
+2. Helper `func deriveBackupCodeSalt(username string, codeIndex int) [32]byte` in `auth/totp.go`.
+3. Refactor backup-code generation: 10 codes via rejection-sampled `[A-Za-z0-9]{10}`; for each, compute `(salt, hash)` and insert the row.
+4. Refactor backup-code verification: random-permuted index iteration with the optimistic-UPDATE pattern above.
+5. Tests:
+   - Concurrent-submission race: two goroutines submit the same valid code; exactly one returns success.
+   - Modulo-bias smoke test: 10^6 generated characters; distribution across the 62-symbol alphabet within 1% of uniform.
+   - Worst-case verification cost: submitting an unknown code exercises 10 Argon2id derivations (assert bounded; do not assert wall-clock).
+   - Index-timing: submitting code at index 0 vs. index 9 produces statistically indistinguishable wall-clock times (permutation defense check; large variance tolerance is fine — this is a smoke test, not a true side-channel test).
+   - Codes-after-enrollment: assert the codes-display endpoint refuses to re-show codes after the enrollment session ends.
+   - Cross-language conformance: a fixed `(username, code_index, code)` tuple produces the same `code_hash` in Go and TS (TS only matters for client-side test code; production verification is server-side).
 
-**Beta impact:** rolls into the YELLOW from F2 (same re-enrollment).
+**Beta impact:** rolls into the YELLOW from F2 (same forced re-enrollment).
 
 ##### F4 — Migrate contact-info encryption to Tier-3
 
@@ -643,6 +720,7 @@ See §3 for the full threat-model table and §4.3 for the tier assignment table.
 3. `grep -rn 'fmt.Sprintf' --include='*.go' | grep -iE '(SELECT|INSERT|UPDATE|DELETE)'` to find SQL-injection candidates (E-02 starts here).
 4. Read `billing/scheduler.go` `settleOneUser` to identify the read-of-balance outside the transaction.
 5. Read `billing/sweep.go` for the process-local `lastSweepDate`.
+6. **Block-the-phase data check (run against the dev DB first, then the beta DB once locally green):** the new `UNIQUE(transaction_id)` constraint will reject the migration if any duplicate values already exist. Run `SELECT transaction_id, count(*) FROM credit_transactions GROUP BY transaction_id HAVING count(*) > 1;` against both `dev-reset.sh`'s seeded DB and the beta `test.arkfile.net` DB. If any rows come back, the schema change cannot land — pause and ask the developer to dedupe (likely by collapsing duplicate rows into a single canonical row and adjusting `user_credits.balance` if needed). Do not start the implementation order until both DBs return zero rows.
 
 #### Design decisions
 
@@ -674,7 +752,7 @@ See §3 for the full threat-model table and §4.3 for the tier assignment table.
 
 #### Beta impact
 
-**GREEN** assuming `credit_transactions` is empty/small on beta. A duplicate-`transaction_id` row in the existing beta DB would block the `UNIQUE(transaction_id)` migration; check first with `SELECT transaction_id, count(*) FROM credit_transactions GROUP BY transaction_id HAVING count(*) > 1;` and dedupe if necessary.
+**GREEN.** The duplicate-`transaction_id` data-readiness check is enforced in Pre-work (step 6); if it passes there, the beta deploy is invisible to users. Soft-delete is additive (no row removal); all existing user lookups land in the same data path after the `AND deleted_at IS NULL` audit.
 
 ---
 
@@ -724,19 +802,19 @@ Updated as work lands. The "first not-started cluster" is where work resumes.
 
 | Phase | Cluster | Findings | Status | Notes |
 |---|---|---|---|---|
-| A | A1 | A-13, A-26, F-03, A-14 | Not started | Bootstrap-token hardening + Tier-3 filesystem prototype |
+| A | A1 | A-13, A-26, F-03, A-14 | Not started | Bootstrap-token hardening (single-use + file delivery + fail-closed prod env) |
 | A | A2 | A-08 | Not started | Per-user TOTP failure lockout |
 | A | A3 | A-09, A-10 | Not started | JWT + refresh-token hardening; YELLOW beta (forced re-login) |
 | B | — | A-04, F-08, A-05, F-07 | Not started | `__Host-` cookies + CSRF; YELLOW beta (forced re-login) |
 | C | — | B-02, C-02, C-03, C-19, B-08, B-05 | Not started | AAD on every file-related AEAD; **RED beta** (re-upload required) |
 | D | — | F-04, F-05, F-06, F-13 | Not started | Supply-chain hardening; GREEN beta |
 | E | — | B-01, B-03, B-19, D-10, D-12, C-01 | Not started | Parameter floors; YELLOW beta (existing shares broken) |
-| F | F1 | (infra) | Not started | Tier-3 user-secret-master infrastructure |
+| F | F1 | A-17 (mlock/madvise/PR_SET_DUMPABLE), infra | Not started | Tier-3 user-secret-master infrastructure; mlock plumbing lives here |
 | F | F2 | A-18 | Not started | TOTP secret encryption migrates to Tier-3 |
-| F | F3 | A-07, A-16 | Not started | Hashed backup codes |
+| F | F3 | A-07, A-16 | Not started | Hashed backup codes (deterministic per-index salt, reuses global Argon2id params) |
 | F | F4 | (infra) | Not started | Contact-info encryption migrates to Tier-3 |
 | F | F5 | A-15 | Not started | Reachable TOTP recovery via backup code |
-| F | F6 | A-17 (mlock/madvise) + docs entry | Not started | Tier-3 file is mlocked at process start |
+| F | F6 | (documentation) | Not started | docs entry for Tier-3 design + rotation procedure |
 | G | — | E-21, E-03, E-04, E-05, E-02, A-12 | Not started | Financial-audit schema; GREEN beta |
 | H | — | (documentation) | Not started | Add plain-language threat-model section to `docs/security.md` |
 
@@ -751,12 +829,12 @@ auth  cookies  AAD   supply  params  TOTP   billing  docs
 
 **Why this order:**
 
-1. **A first** — code is fresh from the A-01 / F-01 work; auth-surface Highs share files and concepts with what was just touched. Marginal cost is lowest now. A1 also prototypes the Tier-3 filesystem-secret pattern that Phase F will use.
+1. **A first** — code is fresh from the A-01 / F-01 work; auth-surface Highs share files and concepts with what was just touched. Marginal cost is lowest now.
 2. **B second** — XSS + token-in-localStorage is the single largest blast-radius gap; the frontend refactor must land before any other frontend changes (otherwise Phase C's TS crypto changes would need re-review against the new auth flow).
 3. **C third** — largest crypto-correctness fix and a coordinated Go + TS + CLI change. Benefits from Phase B having stabilized the frontend. Greenfield "redefine, don't increment" applies to the envelope format. RED beta-impact event.
 4. **D fourth** — interleaved here because the codebase is in a known-good state right after C (natural context-switch point) and the SRI / build-flag / frozen-lockfile work catches supply-chain regressions during the remaining E / F / G work.
 5. **E fifth** — embeds JSON parameters into the shipped binaries / TS bundle that Phase D just hardened. The compile-time-floor work is most valuable once the build pipeline is reproducible.
-6. **F sixth** — Tier-3 redesign is internal-only (no frontend impact post-B) and includes a schema migration that should not coincide with another. F also depends on the Tier-3 filesystem-secret pattern that Phase A1 prototyped.
+6. **F sixth** — Tier-3 redesign (a fresh, self-contained design — A1's filesystem delivery of the bootstrap token is a Tier-1 convenience, not a Tier-3 prototype) is internal-only (no frontend impact post-B) and includes a schema migration that should not coincide with another.
 7. **G seventh** — largest schema change (soft-delete users); the user-deletion model is touched by every other system, so doing it last lets the migration happen once with full knowledge of what references `users`.
 8. **H last** — the threat-model documentation should describe the system as it actually is after Phases A–G land, not the system as it was before.
 
