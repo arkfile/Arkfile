@@ -13,7 +13,7 @@
  * share password. The server never sees the plaintext FEK.
  */
 
-import { authenticatedFetch, getToken, getUsernameFromToken } from '../utils/auth';
+import { authenticatedFetch, isAuthenticated, getUsernameFromToken } from '../utils/auth';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgress, hideProgress } from '../ui/progress';
 import { showPasswordPrompt } from '../ui/password-modal';
@@ -300,8 +300,7 @@ function escapeAttr(s: string): string {
  */
 export async function shareFile(fileId: string, passwordType: string): Promise<void> {
   try {
-    const authToken = getToken();
-    if (!authToken) { showError('Not authenticated. Please log in again.'); return; }
+    if (!isAuthenticated()) { showError('Not authenticated. Please log in again.'); return; }
 
     const username = getUsernameFromToken();
     if (!username) { showError('Username not found. Please log in again.'); return; }

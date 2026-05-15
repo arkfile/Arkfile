@@ -10,7 +10,7 @@
 
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
-import { setTokens, setTempToken, clearAllSessionData, getToken } from '../utils/auth.js';
+import { setTokens, setTempToken, clearAllSessionData, authenticatedFetch } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleTOTPFlow } from './totp.js';
@@ -153,21 +153,15 @@ export class LoginManager {
         // requires_totp_setup: true means TOTP was never completed during registration.
         // Route to the setup screen so the user can finish what they started.
         if (loginData.requires_totp_setup) {
-          // Store the temp token in its OWN slot (separate from the full-tier
-          // 'token' key). The temp token is only valid at /api/totp/*; storing
-          // it under 'token' would be misleading and would cause any code path
-          // that called authenticatedFetch to send the wrong audience.
+          // Temp token is in the __Host-arkfile-temp cookie (set by server).
           setTempToken(loginData.temp_token!);
-          // Also stash the password in window so completeLogin can derive the account key
-          // once TOTP setup is done (the totp.ts completeTOTPSetupFlow path returns a
-          // full token and calls completeLogin via the registration flow in TOTPVerify).
-          if (typeof window !== 'undefined') {
-            window.totpLoginData = {
-              tempToken: loginData.temp_token!,
-              username: credentials.username,
-              password: credentials.password,
-            };
-          }
+          // Carry the password through the TOTP setup flow so the account key
+          // can be derived after TOTP completes, without storing it on window.
+          handleTOTPFlow({
+            tempToken: loginData.temp_token!,
+            username: credentials.username,
+            password: credentials.password,
+          });
           const { showTOTPSetupSection } = await import('../ui/sections.js');
           showTOTPSetupSection();
           showSuccess('Please complete two-factor authentication setup to finish logging in.');
@@ -258,16 +252,11 @@ export class LoginManager {
       // Post-auth: Populate digest cache for deduplication
       if (cachedAccountKey) {
         try {
-          const token = getToken() || data.token;
-          if (token) {
-            const filesResp = await fetch('/api/files', {
-              headers: { 'Authorization': `Bearer ${token}` },
-            });
-            if (filesResp.ok) {
-              const filesData = await filesResp.json();
-              const files: RawFileEntry[] = (filesData.files || []);
-              await populateDigestCache(cachedAccountKey, files);
-            }
+          const filesResp = await authenticatedFetch('/api/files');
+          if (filesResp.ok) {
+            const filesData = await filesResp.json();
+            const files: RawFileEntry[] = (filesData.files || []);
+            await populateDigestCache(cachedAccountKey, files);
           }
         } catch (err) {
           console.warn('Failed to populate digest cache:', err);

@@ -20,7 +20,7 @@
  * The server NEVER sees the plaintext FEK or the user's password.
  */
 
-import { authenticatedFetch, getToken, getUsernameFromToken } from '../utils/auth';
+import { authenticatedFetch, isAuthenticated, getUsernameFromToken } from '../utils/auth';
 import { showError, showSuccess, showWarning } from '../ui/messages';
 import { showProgress, hideProgress } from '../ui/progress';
 import { showPasswordPrompt } from '../ui/password-modal';
@@ -72,8 +72,7 @@ export async function downloadFile(
   console.log(`${LOG_PREFIX} downloadFile() invoked (passwordType=${passwordType})`);
 
   try {
-    const authToken = getToken();
-    if (!authToken) {
+    if (!isAuthenticated()) {
       console.error(`${LOG_PREFIX} No auth token available`);
       showError('Not authenticated. Please log in again.');
       return;
@@ -175,7 +174,7 @@ export async function downloadFile(
     const result: StreamingDownloadResult = await downloadFileChunked(
       fileId,
       fek,
-      authToken,
+      null,
       {
         accountKey: metadataDecryptionKey,
         showProgressUI: true,

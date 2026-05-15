@@ -6,7 +6,7 @@
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { showModal } from '../ui/modals.js';
-import { setTokens, clearTempToken, clearAllSessionData, AuthManager } from '../utils/auth.js';
+import { clearTempToken, clearAllSessionData } from '../utils/auth.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 
@@ -98,14 +98,13 @@ export function handleTOTPSetupFlow(data: TOTPSetupFlowData): void {
 /**
  * Fetch TOTP setup data from server using temp token
  */
-async function initiateTOTPSetupForRegistration(tempToken: string): Promise<TOTPSetupData | null> {
+async function initiateTOTPSetupForRegistration(_tempToken: string): Promise<TOTPSetupData | null> {
   try {
+    // Temp token is in __Host-arkfile-temp cookie; credentials:'include' sends it automatically.
     const response = await fetch('/api/totp/setup', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${tempToken}`
-      },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     });
     
@@ -269,13 +268,12 @@ function showTOTPSetupUI(modalContent: Element, setupData: TOTPSetupData, flowDa
 
 /**
  * Start a countdown timer that shows remaining session time.
+ * The temp token is valid for 20 minutes. Since it is HttpOnly and JS cannot
+ * read it, we start a local 20-minute countdown from now.
  * Displays when less than 5 minutes remain; auto-logs out and reloads on expiry.
  */
-function startSessionCountdown(tempToken: string): void {
-  const payload = AuthManager.parseJwtToken(tempToken);
-  if (!payload?.exp) return;
-
-  const expiryMs = payload.exp * 1000;
+function startSessionCountdown(_tempToken: string): void {
+  const expiryMs = Date.now() + 20 * 60 * 1000; // 20-minute temp-token TTL
   const SHOW_THRESHOLD = 5 * 60 * 1000; // Show countdown in last 5 minutes
 
   const timerEl = document.getElementById('totp-session-timer');
@@ -315,15 +313,12 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
   try {
     showProgressMessage('Completing registration...');
     
+    // Temp token is in __Host-arkfile-temp cookie; credentials:'include' sends it automatically.
     const response = await fetch('/api/totp/verify', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${flowData.tempToken}`
-      },
-      body: JSON.stringify({
-        code: code
-      }),
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
     });
     
     if (response.ok) {
@@ -331,10 +326,8 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
       // Handle both direct response and wrapped response
       const data = responseData.data || responseData;
       
-      // Store the full access tokens AND clear the temp token (spent).
-      if (data.token && data.refresh_token) {
-        setTokens(data.token, data.refresh_token);
-      }
+      // Full-access cookies are issued by the server on /api/totp/verify.
+      // clearTempToken clears the local temp-token tracking state.
       clearTempToken();
 
       // Clean up

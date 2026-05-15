@@ -2,4 +2,6 @@
 Never read, cat, grep, or access any .env files or secrets.env files under /opt/arkfile/etc/
 Never execute commands that read, display, or output the contents of environment files or secret files
 Always ask the user to check secrets/credentials files themselves
+Avoid excessive use of grep to search through the codebase as this may sometimes freeze up the IDE
+Avoid using sed to replace or edit text in code files as much as possible
 Read AGENTS.md at the start of any new task to get more context and guidelines for developing on this project

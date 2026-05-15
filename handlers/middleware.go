@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"crypto/subtle"
 	"crypto/tls"
 	"database/sql"
 	"fmt"
@@ -433,6 +434,88 @@ func CSPMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		c.Response().Header().Set("X-Frame-Options", "DENY")
 		c.Response().Header().Set("X-XSS-Protection", "1; mode=block")
 		c.Response().Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		return next(c)
+	}
+}
+
+// CookieTokenMiddleware extracts the JWT from an Arkfile session cookie when
+// one is present, and injects it as an Authorization header so the downstream
+// JWT validators (JWTMiddleware, TOTPJWTMiddleware) work without modification.
+//
+// Priority rules (no UA sniffing):
+//  1. Full-tier cookie present: inject as bearer; ignore any existing header.
+//  2. Temp-tier cookie present: inject as bearer; ignore any existing header.
+//  3. Bearer header only (no cookie): pass through unchanged.
+//  4. Neither: pass through; downstream middleware handles unauthenticated.
+func CookieTokenMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		req := c.Request()
+
+		// Check for full-tier cookie first, then temp-tier.
+		var cookieJWT string
+		if ck, err := req.Cookie(CookieFullToken); err == nil && ck.Value != "" {
+			cookieJWT = ck.Value
+		} else if ck, err := req.Cookie(CookieTempToken); err == nil && ck.Value != "" {
+			cookieJWT = ck.Value
+		}
+
+		if cookieJWT != "" {
+			// Browser path: inject token into Authorization header so existing
+			// JWTMiddleware/TOTPJWTMiddleware validate it without any changes.
+			req.Header.Set("Authorization", "Bearer "+cookieJWT)
+		}
+		// CLI path (no cookie): Authorization header already set by client — nothing to do.
+
+		return next(c)
+	}
+}
+
+// CSRFMiddleware enforces the double-submit CSRF pattern for browser requests.
+// Applied only when a full-tier Arkfile cookie is present on the request.
+// Safe (GET/HEAD/OPTIONS) methods are exempt.
+// CLI requests (no Arkfile cookie) bypass this middleware entirely.
+func CSRFMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		// Only enforce CSRF for browser sessions (full-tier cookie present).
+		// Temp-tier-only sessions are during TOTP handoff; POST to /api/totp/*
+		// is safe here because TOTP endpoints are protected by TOTPJWTMiddleware
+		// (audience=arkfile-totp) and are not state-changing in a sensitive way
+		// that an attacker can exploit — the temp token itself is the credential.
+		ck, err := c.Request().Cookie(CookieFullToken)
+		if err != nil || ck.Value == "" {
+			// No full-tier cookie: CLI path or unauthenticated — no CSRF check.
+			return next(c)
+		}
+
+		// Exempt safe methods.
+		method := c.Request().Method
+		if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions {
+			return next(c)
+		}
+
+		// Compare X-CSRF-Token header to __Host-arkfile-csrf cookie value.
+		csrfHeader := c.Request().Header.Get("X-CSRF-Token")
+		csrfCookie, cookieErr := c.Request().Cookie(CookieCSRF)
+		if cookieErr != nil || csrfCookie.Value == "" || csrfHeader == "" {
+			return echo.NewHTTPError(http.StatusForbidden, "CSRF token missing")
+		}
+
+		// Constant-time comparison to prevent timing attacks.
+		if subtle.ConstantTimeCompare([]byte(csrfHeader), []byte(csrfCookie.Value)) != 1 {
+			logging.LogSecurityEvent(
+				logging.EventUnauthorizedAccess,
+				publicClientIP(c),
+				nil,
+				nil,
+				map[string]interface{}{
+					"reason":   "CSRF token mismatch",
+					"endpoint": c.Request().URL.Path,
+					"method":   method,
+				},
+			)
+			return echo.NewHTTPError(http.StatusForbidden, "CSRF token invalid")
+		}
 
 		return next(c)
 	}

@@ -5,7 +5,7 @@
  * Provides UI for viewing share status, copying URLs, and revoking shares.
  */
 
-import { getToken, getUsernameFromToken } from '../utils/auth.js';
+import { authenticatedFetch, getUsernameFromToken } from '../utils/auth.js';
 import { showError, showSuccess } from '../ui/messages.js';
 import { getCachedAccountKey } from '../crypto/file-encryption.js';
 import { decryptMetadataField } from '../crypto/metadata-helpers.js';
@@ -74,12 +74,7 @@ export class ShareListUI {
    */
   async loadShares(): Promise<void> {
     try {
-      const response = await fetch('/api/shares', {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${getToken()}`,
-        },
-      });
+      const response = await authenticatedFetch('/api/shares', { method: 'GET' });
 
       if (!response.ok) {
         if (response.status === 401) {
@@ -114,13 +109,8 @@ export class ShareListUI {
 
     try {
       // Fetch batch metadata
-      const token = getToken();
-      const response = await fetch('/api/files/metadata/batch', {
+      const response = await authenticatedFetch('/api/files/metadata/batch', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
         body: JSON.stringify({ file_ids: fileIds }),
       });
 
@@ -135,8 +125,8 @@ export class ShareListUI {
       // Get account key for local decryption
       const username = getUsernameFromToken();
       let accountKey: Uint8Array | null = null;
-      if (username && token) {
-        accountKey = await getCachedAccountKey(username, token);
+      if (username) {
+        accountKey = await getCachedAccountKey(username, undefined);
       }
 
       // Merge and decrypt
@@ -385,12 +375,7 @@ export class ShareListUI {
     }
 
     try {
-      const response = await fetch(`/api/shares/${shareId}/revoke`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${getToken()}`,
-        },
-      });
+      const response = await authenticatedFetch(`/api/shares/${shareId}/revoke`, { method: 'POST' });
 
       if (!response.ok) {
         if (response.status === 401) {

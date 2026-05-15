@@ -12,6 +12,15 @@ import (
 
 // RegisterRoutes initializes all routes for the application
 func RegisterRoutes() {
+	// CookieTokenMiddleware extracts the JWT from the session cookie (if present)
+	// and injects it as an Authorization header so the JWT validators see it
+	// regardless of whether the client is a browser or a non-browser caller.
+	Echo.Use(CookieTokenMiddleware)
+
+	// CSRFMiddleware enforces the double-submit cookie pattern for browser sessions.
+	// Requests without an Arkfile session cookie are not affected.
+	Echo.Use(CSRFMiddleware)
+
 	// Explicitly serve index.html at root with HEAD support
 	Echo.GET("/", func(c echo.Context) error {
 		return c.File("client/static/index.html")
@@ -161,6 +170,10 @@ func RegisterRoutes() {
 	pendingAllowedGroup.GET("/api/user/contact-info", GetContactInfo)
 	pendingAllowedGroup.PUT("/api/user/contact-info", PutContactInfo)
 	pendingAllowedGroup.DELETE("/api/user/contact-info", DeleteContactInfo)
+
+	// Current user identity - used by browser clients to get username/role
+	// since the full JWT is HttpOnly and not readable by JavaScript.
+	totpProtectedGroup.GET("/api/auth/me", GetCurrentUser)
 
 	// Credits system - user endpoints (require TOTP)
 	totpProtectedGroup.GET("/api/credits", GetUserCredits)

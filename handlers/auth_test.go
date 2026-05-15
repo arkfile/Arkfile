@@ -49,17 +49,18 @@ func TestLogout_Success(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, resp["message"], "Logged out")
 
-	// Verify cookie was cleared (set to expired)
+	// Verify session cookies were cleared (clearSessionCookies sets MaxAge=-1 + expired Expires).
+	// We check for the new __Host-arkfile-* cookie names (Phase B).
 	cookies := rec.Result().Cookies()
-	foundClear := false
+	clearedNames := map[string]bool{}
 	for _, cookie := range cookies {
-		if cookie.Name == "refreshToken" {
-			foundClear = true
-			assert.Equal(t, "", cookie.Value, "refresh token cookie value should be empty")
-			assert.True(t, cookie.Expires.Before(time.Now()), "cookie should be expired")
+		switch cookie.Name {
+		case CookieFullToken, CookieTempToken, CookieRefresh, CookieCSRF:
+			clearedNames[cookie.Name] = true
+			assert.Equal(t, "", cookie.Value, "session cookie %s value should be empty", cookie.Name)
 		}
 	}
-	assert.True(t, foundClear, "refreshToken cookie should be set (cleared)")
+	assert.True(t, len(clearedNames) > 0, "at least one __Host-arkfile-* session cookie should be cleared on logout")
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

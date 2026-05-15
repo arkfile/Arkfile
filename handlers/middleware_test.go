@@ -215,3 +215,202 @@ func TestPublicClientIP_IgnoresMalformedHeader(t *testing.T) {
 		t.Fatalf("publicClientIP = %v; want fallback to 10.0.0.5 when X-Arkfile-Peer is malformed", got)
 	}
 }
+
+// CookieTokenMiddleware tests
+
+// TestCookieTokenMiddleware_NoCookie verifies that when no Arkfile cookie is
+// present the Authorization header is left untouched (CLI path passthrough).
+func TestCookieTokenMiddleware_NoCookie(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	req.Header.Set("Authorization", "Bearer cli-token-abc")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	capturedAuth := ""
+	handler := CookieTokenMiddleware(func(c echo.Context) error {
+		capturedAuth = c.Request().Header.Get("Authorization")
+		return c.String(http.StatusOK, "ok")
+	})
+	if err := handler(c); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedAuth != "Bearer cli-token-abc" {
+		t.Errorf("Authorization header modified when no cookie present; got %q want %q",
+			capturedAuth, "Bearer cli-token-abc")
+	}
+}
+
+// TestCookieTokenMiddleware_FullTokenCookie verifies that the full-tier cookie
+// JWT is injected as the Authorization header and replaces any existing bearer.
+func TestCookieTokenMiddleware_FullTokenCookie(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	req.AddCookie(&http.Cookie{Name: CookieFullToken, Value: "full-jwt-xyz"})
+	req.Header.Set("Authorization", "Bearer should-be-replaced")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	capturedAuth := ""
+	handler := CookieTokenMiddleware(func(c echo.Context) error {
+		capturedAuth = c.Request().Header.Get("Authorization")
+		return c.String(http.StatusOK, "ok")
+	})
+	if err := handler(c); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedAuth != "Bearer full-jwt-xyz" {
+		t.Errorf("Authorization header = %q; want %q", capturedAuth, "Bearer full-jwt-xyz")
+	}
+}
+
+// TestCookieTokenMiddleware_TempTokenCookie verifies that the temp-tier cookie
+// JWT is injected when only the temp cookie is present.
+func TestCookieTokenMiddleware_TempTokenCookie(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/totp/auth", nil)
+	req.AddCookie(&http.Cookie{Name: CookieTempToken, Value: "temp-jwt-abc"})
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	capturedAuth := ""
+	handler := CookieTokenMiddleware(func(c echo.Context) error {
+		capturedAuth = c.Request().Header.Get("Authorization")
+		return c.String(http.StatusOK, "ok")
+	})
+	if err := handler(c); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if capturedAuth != "Bearer temp-jwt-abc" {
+		t.Errorf("Authorization header = %q; want %q", capturedAuth, "Bearer temp-jwt-abc")
+	}
+}
+
+// CSRFMiddleware tests
+
+// TestCSRFMiddleware_NoCookie_PassesThrough verifies that when no full-tier
+// cookie is present (CLI path) the middleware is a no-op.
+func TestCSRFMiddleware_NoCookie_PassesThrough(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/files", nil)
+	req.Header.Set("Authorization", "Bearer cli-token")
+	// No X-CSRF-Token, no cookie — CLI path.
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	called := false
+	handler := CSRFMiddleware(func(c echo.Context) error {
+		called = true
+		return c.String(http.StatusOK, "ok")
+	})
+	if err := handler(c); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("next handler was not called")
+	}
+}
+
+// TestCSRFMiddleware_SafeMethod_PassesThrough verifies that GET requests with
+// a full-tier cookie are NOT subject to the CSRF header check.
+func TestCSRFMiddleware_SafeMethod_PassesThrough(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	req.AddCookie(&http.Cookie{Name: CookieFullToken, Value: "full-jwt"})
+	// No X-CSRF-Token — GET is exempt.
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	called := false
+	handler := CSRFMiddleware(func(c echo.Context) error {
+		called = true
+		return c.String(http.StatusOK, "ok")
+	})
+	if err := handler(c); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("next handler was not called on GET")
+	}
+}
+
+// TestCSRFMiddleware_MissingHeader_Returns403 verifies that a POST with a
+// full-tier cookie but no X-CSRF-Token header returns 403.
+func TestCSRFMiddleware_MissingHeader_Returns403(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/uploads/init", nil)
+	req.AddCookie(&http.Cookie{Name: CookieFullToken, Value: "full-jwt"})
+	req.AddCookie(&http.Cookie{Name: CookieCSRF, Value: "csrf-token-value"})
+	// No X-CSRF-Token header.
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	handler := CSRFMiddleware(func(c echo.Context) error {
+		return c.String(http.StatusOK, "should not reach")
+	})
+	err := handler(c)
+	if err == nil {
+		t.Fatal("expected error but got nil")
+	}
+	he, ok := err.(*echo.HTTPError)
+	if !ok {
+		t.Fatalf("expected HTTPError, got %T: %v", err, err)
+	}
+	if he.Code != http.StatusForbidden {
+		t.Errorf("status = %d; want %d", he.Code, http.StatusForbidden)
+	}
+}
+
+// TestCSRFMiddleware_MismatchedTokens_Returns403 verifies that a POST with a
+// full-tier cookie and a mismatched X-CSRF-Token header returns 403.
+func TestCSRFMiddleware_MismatchedTokens_Returns403(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/files/delete", nil)
+	req.AddCookie(&http.Cookie{Name: CookieFullToken, Value: "full-jwt"})
+	req.AddCookie(&http.Cookie{Name: CookieCSRF, Value: "correct-csrf"})
+	req.Header.Set("X-CSRF-Token", "wrong-csrf")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	handler := CSRFMiddleware(func(c echo.Context) error {
+		return c.String(http.StatusOK, "should not reach")
+	})
+	err := handler(c)
+	if err == nil {
+		t.Fatal("expected error but got nil")
+	}
+	he, ok := err.(*echo.HTTPError)
+	if !ok {
+		t.Fatalf("expected HTTPError, got %T: %v", err, err)
+	}
+	if he.Code != http.StatusForbidden {
+		t.Errorf("status = %d; want %d", he.Code, http.StatusForbidden)
+	}
+}
+
+// TestCSRFMiddleware_ValidTokens_Passes verifies that a POST with matching
+// X-CSRF-Token header and __Host-arkfile-csrf cookie is allowed through.
+func TestCSRFMiddleware_ValidTokens_Passes(t *testing.T) {
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodPost, "/api/shares", nil)
+	req.AddCookie(&http.Cookie{Name: CookieFullToken, Value: "full-jwt"})
+	req.AddCookie(&http.Cookie{Name: CookieCSRF, Value: "matching-csrf-value"})
+	req.Header.Set("X-CSRF-Token", "matching-csrf-value")
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	called := false
+	handler := CSRFMiddleware(func(c echo.Context) error {
+		called = true
+		return c.String(http.StatusOK, "ok")
+	})
+	if err := handler(c); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Error("next handler was not called")
+	}
+}

@@ -160,34 +160,37 @@ function storeToken(exp: number): void {
 // For the direct helper tests, we test the exported helpers via fetch mocking.
 
 describe('Token expiry helpers via getTokenExpiry', () => {
-  test('getTokenExpiry returns null when no token stored', async () => {
+  // Tokens are now in HttpOnly cookies; getTokenExpiry() always returns null
+  // and isTokenExpired() reflects the CSRF-cookie session state (always false
+  // in the test environment where no document.cookie is set).
+
+  test('getTokenExpiry returns null (JWT is HttpOnly, not readable by JS)', async () => {
     const { getTokenExpiry } = await import('../utils/auth.js');
     localStorage.removeItem('token');
     expect(getTokenExpiry()).toBeNull();
   });
 
-  test('getTokenExpiry returns correct Date for stored JWT', async () => {
+  test('getTokenExpiry returns null even when localStorage has a JWT (no longer used)', async () => {
     const { getTokenExpiry } = await import('../utils/auth.js');
-    const futureExp = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+    const futureExp = Math.floor(Date.now() / 1000) + 3600;
     storeToken(futureExp);
-    const expiry = getTokenExpiry();
-    expect(expiry).not.toBeNull();
-    // Allow 2-second tolerance for test execution time
-    expect(Math.abs(expiry!.getTime() - futureExp * 1000)).toBeLessThan(2000);
+    // getTokenExpiry() always returns null; token is in an HttpOnly cookie
+    expect(getTokenExpiry()).toBeNull();
   });
 
-  test('isTokenExpired returns true for past expiry', async () => {
+  test('isTokenExpired returns true when no CSRF cookie (no active session)', async () => {
     const { isTokenExpired } = await import('../utils/auth.js');
     const pastExp = Math.floor(Date.now() / 1000) - 60;
     storeToken(pastExp);
     expect(isTokenExpired()).toBe(true);
   });
 
-  test('isTokenExpired returns false for future expiry', async () => {
+  test('isTokenExpired returns true when no CSRF cookie (test environment has no document.cookie)', async () => {
     const { isTokenExpired } = await import('../utils/auth.js');
     const futureExp = Math.floor(Date.now() / 1000) + 3600;
     storeToken(futureExp);
-    expect(isTokenExpired()).toBe(false);
+    // Without a CSRF cookie, isAuthenticated() returns false, so isTokenExpired() returns true
+    expect(isTokenExpired()).toBe(true);
   });
 });
 

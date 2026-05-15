@@ -49,9 +49,9 @@ import { showError, showSuccess, showWarning } from '../ui/messages.js';
 import { showProgress, updateProgress, hideProgress } from '../ui/progress.js';
 import { checkDuplicate, addDigest } from '../utils/digest-cache.js';
 import {
-  getToken,
+  isAuthenticated,
+  authenticatedFetch,
   getUsernameFromToken,
-  getTokenExpiry,
   refreshToken as doRefreshToken,
 } from '../utils/auth.js';
 import { loadFiles } from './list.js';
@@ -196,29 +196,16 @@ export function isFatalUploadError(err: unknown): boolean {
  *
  * Safe to call repeatedly between files in a batch.
  */
-async function ensureFreshToken(thresholdSeconds = TOKEN_REFRESH_THRESHOLD_SECONDS): Promise<void> {
-  const token = getToken();
-  if (!token) {
+async function ensureFreshToken(_thresholdSeconds = TOKEN_REFRESH_THRESHOLD_SECONDS): Promise<void> {
+  if (!isAuthenticated()) {
     throw new AuthExpiredError('Not authenticated');
   }
-
-  const expiry = getTokenExpiry();
-  if (!expiry) {
-    // Token unparseable -- treat as expired and try to refresh
-    const ok = await doRefreshToken();
-    if (!ok) {
-      throw new AuthExpiredError();
-    }
-    return;
-  }
-
-  const remainingSeconds = (expiry.getTime() - Date.now()) / 1000;
-  if (remainingSeconds < thresholdSeconds) {
-    console.log(`[upload] JWT has ${remainingSeconds.toFixed(0)}s remaining; refreshing preemptively.`);
-    const ok = await doRefreshToken();
-    if (!ok) {
-      throw new AuthExpiredError();
-    }
+  // JWT expiry is not readable client-side (HttpOnly cookie).
+  // The auto-refresh timer fires every 25 minutes; between files we do a
+  // proactive refresh so long multi-file batches never hit a mid-chunk 401.
+  const ok = await doRefreshToken();
+  if (!ok) {
+    throw new AuthExpiredError();
   }
 }
 
@@ -237,22 +224,17 @@ async function apiRequest<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const performFetch = async (): Promise<Response> => {
-    const token = getToken();
-    if (!token) {
+    if (!isAuthenticated()) {
       throw new AuthExpiredError('Not authenticated');
     }
-
-    const headers = new Headers(options.headers);
-    headers.set('Authorization', `Bearer ${token}`);
-
+    // authenticatedFetch adds X-CSRF-Token + credentials:'include';
+    // it also removes any stale Authorization header.
     if (options.body && !(options.body instanceof FormData) && !(options.body instanceof Blob)) {
+      const headers = new Headers(options.headers);
       headers.set('Content-Type', 'application/json');
+      return authenticatedFetch(endpoint, { ...options, headers });
     }
-
-    return fetch(endpoint, {
-      ...options,
-      headers,
-    });
+    return authenticatedFetch(endpoint, options);
   };
 
   let response = await performFetch();
@@ -367,9 +349,9 @@ async function resolveAccountKey(
     return accountKey;
   }
 
-  // 2. Check cache
+  // 2. Check cache (token no longer needed as param; cache lookup is by username)
   if (isAccountKeyCached(username) && !isAccountKeyLocked()) {
-    const cached = await getCachedAccountKey(username, getToken() ?? undefined);
+    const cached = await getCachedAccountKey(username, undefined);
     if (cached) {
       return cached;
     }
@@ -1017,7 +999,7 @@ export async function handleFileUpload(): Promise<void> {
 
   // Resolve account key / password once for the whole batch.
   if (isAccountKeyCached(username) && !isAccountKeyLocked()) {
-    const cachedKey = await getCachedAccountKey(username, getToken() ?? undefined);
+    const cachedKey = await getCachedAccountKey(username, undefined);
     if (cachedKey) {
       batchOptions.accountKey = cachedKey;
     }
@@ -1043,7 +1025,7 @@ export async function handleFileUpload(): Promise<void> {
           indeterminate: true,
         });
         const derivedKey = await deriveFileEncryptionKeyWithCache(
-          accountPassword, username, 'account', getToken() ?? undefined, result.cacheDuration
+          accountPassword, username, 'account', undefined, result.cacheDuration
         );
         hideProgress();
         batchOptions.accountKey = derivedKey;

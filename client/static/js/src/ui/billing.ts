@@ -24,7 +24,7 @@
  *   .billing-tx-table, .billing-tx-amount[.negative], .billing-tx-balance[.negative]
  */
 
-import { getToken } from '../utils/auth';
+import { authenticatedFetch } from '../utils/auth';
 
 /** Toggle the billing panel visibility, loading data on open. */
 export async function toggleBillingPanel(): Promise<void> {
@@ -93,18 +93,12 @@ interface CreditsResponse {
 
 /** Fetch /api/credits and render the panel. */
 export async function loadBilling(): Promise<void> {
-  const token = getToken();
-  if (!token) return;
-
   const content = document.getElementById('billing-panel-content');
   if (!content) return;
   content.innerHTML = '<p>Loading…</p>';
 
   try {
-    const response = await fetch('/api/credits', {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}` },
-    });
+    const response = await authenticatedFetch('/api/credits', { method: 'GET' });
     if (!response.ok) {
       if (response.status === 401) {
         content.innerHTML = '<p>Session expired. Please log in again.</p>';

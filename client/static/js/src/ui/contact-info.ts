@@ -4,7 +4,7 @@
  * Contact info is encrypted server-side and readable only by the admin.
  */
 
-import { getToken } from '../utils/auth';
+import { authenticatedFetch } from '../utils/auth';
 import { showError, showSuccess } from './messages';
 
 const VALID_CONTACT_TYPES = [
@@ -45,14 +45,8 @@ export async function toggleContactInfoPanel(): Promise<void> {
 
 /** Load the user's current contact info from the server */
 export async function loadContactInfo(): Promise<void> {
-  const token = getToken();
-  if (!token) return;
-
   try {
-    const response = await fetch('/api/user/contact-info', {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
+    const response = await authenticatedFetch('/api/user/contact-info', { method: 'GET' });
 
     if (!response.ok) {
       if (response.status === 401) return;
@@ -72,23 +66,13 @@ export async function loadContactInfo(): Promise<void> {
 
 /** Save the contact info form to the server */
 export async function saveContactInfo(): Promise<void> {
-  const token = getToken();
-  if (!token) {
-    showError('Not authenticated. Please log in.');
-    return;
-  }
-
   const info = collectFormData();
   if (!info) return; // Validation failed
 
   try {
-    const response = await fetch('/api/user/contact-info', {
+    const response = await authenticatedFetch('/api/user/contact-info', {
       method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(info)
+      body: JSON.stringify(info),
     });
 
     if (!response.ok) {
@@ -104,16 +88,10 @@ export async function saveContactInfo(): Promise<void> {
 
 /** Delete the user's contact info */
 export async function deleteContactInfo(): Promise<void> {
-  const token = getToken();
-  if (!token) return;
-
   if (!confirm('Delete your contact information? This cannot be undone.')) return;
 
   try {
-    const response = await fetch('/api/user/contact-info', {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
+    const response = await authenticatedFetch('/api/user/contact-info', { method: 'DELETE' });
 
     if (!response.ok) {
       const result = await response.json().catch(() => ({}));
@@ -129,14 +107,8 @@ export async function deleteContactInfo(): Promise<void> {
 
 /** Load contact info into the pending-approval section form */
 export async function loadPendingContactInfo(): Promise<void> {
-  const token = getToken();
-  if (!token) return;
-
   try {
-    const response = await fetch('/api/user/contact-info', {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
+    const response = await authenticatedFetch('/api/user/contact-info', { method: 'GET' });
 
     if (!response.ok) {
       if (response.status === 401 || response.status === 403) return;
@@ -156,23 +128,13 @@ export async function loadPendingContactInfo(): Promise<void> {
 
 /** Save the pending-section contact info form to the server */
 export async function savePendingContactInfo(): Promise<void> {
-  const token = getToken();
-  if (!token) {
-    showError('Not authenticated. Please log in.');
-    return;
-  }
-
   const info = collectPendingFormData();
   if (!info) return;
 
   try {
-    const response = await fetch('/api/user/contact-info', {
+    const response = await authenticatedFetch('/api/user/contact-info', {
       method: 'PUT',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(info)
+      body: JSON.stringify(info),
     });
 
     if (!response.ok) {
@@ -188,16 +150,10 @@ export async function savePendingContactInfo(): Promise<void> {
 
 /** Delete contact info from the pending-section context */
 export async function deletePendingContactInfo(): Promise<void> {
-  const token = getToken();
-  if (!token) return;
-
   if (!confirm('Delete your contact information? This cannot be undone.')) return;
 
   try {
-    const response = await fetch('/api/user/contact-info', {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${token}` }
-    });
+    const response = await authenticatedFetch('/api/user/contact-info', { method: 'DELETE' });
 
     if (!response.ok) {
       const result = await response.json().catch(() => ({}));
@@ -344,7 +300,6 @@ function collectFormData(): ContactInfo | null {
   }
 
   const contacts: ContactMethod[] = [];
-  // Scope to the main panel list only, not the pending section
   const panel = document.getElementById('contact-methods-list');
   const rows = panel ? panel.querySelectorAll('.contact-method-row') : [];
   for (const row of rows) {
@@ -356,7 +311,7 @@ function collectFormData(): ContactInfo | null {
     const value = valueInput?.value.trim() || '';
     const label = labelInput?.value.trim() || '';
 
-    if (!value) continue; // Skip empty rows
+    if (!value) continue;
 
     const contact: ContactMethod = { type, value };
     if (type === 'other' && label) {
@@ -384,7 +339,6 @@ function populateForm(info: ContactInfo): void {
   if (nameInput) nameInput.value = info.display_name || '';
   if (notesInput) notesInput.value = info.notes || '';
 
-  // Clear existing rows and add from data
   const list = document.getElementById('contact-methods-list');
   if (list) list.innerHTML = '';
 

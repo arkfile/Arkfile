@@ -76,8 +76,7 @@ describe('exportBackup', () => {
       ok: true, status: 200,
       body: { success: true, data: { token: 'test-export-token-abc123' } },
     };
-    // Set a valid JWT token so authenticatedFetch includes Authorization header
-    localStorage.setItem('token', 'fake-jwt-token');
+    // Tokens are now in HttpOnly cookies; localStorage token is no longer used.
   });
 
   test('requests export token then navigates to export URL', async () => {
@@ -151,12 +150,14 @@ describe('exportBackup', () => {
     (globalThis as any).fetch = originalFetch;
   });
 
-  test('includes Authorization header via authenticatedFetch', async () => {
+  test('uses authenticatedFetch (credentials:include, no Authorization header)', async () => {
     await exportBackup('file-auth-test');
 
     expect(fetchCalls.length).toBe(1);
+    // Tokens are in HttpOnly cookies; authenticatedFetch removes any Authorization header
+    // and sets credentials:'include' so the browser sends cookies automatically.
     const headers = fetchCalls[0].options.headers;
-    // authenticatedFetch adds Authorization header from localStorage token
-    expect(headers?.['Authorization']).toBe('Bearer fake-jwt-token');
+    expect(headers?.['Authorization']).toBeUndefined();
+    expect(fetchCalls[0].options.credentials).toBe('include');
   });
 });

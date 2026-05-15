@@ -1,13 +1,49 @@
 /**
  * Authentication utilities
+ *
+ * Session tokens are stored in HttpOnly __Host-* cookies set by the server.
+ * JavaScript cannot read those cookies. This module provides:
+ *
+ *  - getCsrfToken()       reads the NON-HttpOnly __Host-arkfile-csrf cookie
+ *  - isAuthenticated()    infers session presence from the CSRF cookie
+ *  - authenticatedFetch() adds X-CSRF-Token + credentials:'include'
+ *  - getCurrentUser()     calls GET /api/auth/me to retrieve username/role
+ *  - logout()             calls POST /api/logout (cookies cleared server-side)
+ *  - revokeAllSessions()  calls POST /api/auth/revoke-all
+ *  - refreshToken()       calls POST /api/refresh
  */
 
 import { clearAllCachedAccountKeys } from '../crypto/file-encryption.js';
 import { clearDigestCache } from './digest-cache.js';
 
+// Cookie names (must match handlers/cookies.go constants)
+const CSRF_COOKIE_NAME = '__Host-arkfile-csrf';
+
 /**
- * JWT payload structure from Arkfile server tokens
+ * Read the CSRF token from the non-HttpOnly cookie set by the server.
+ * Returns empty string when no browser session is active.
  */
+function getCsrfToken(): string {
+  if (typeof document === 'undefined') return '';
+  const cookies = document.cookie.split(';');
+  for (const cookie of cookies) {
+    const [name, ...valueParts] = cookie.trim().split('=');
+    if (name === CSRF_COOKIE_NAME) {
+      return decodeURIComponent(valueParts.join('='));
+    }
+  }
+  return '';
+}
+
+/**
+ * Infer whether a full browser session is active by checking for the CSRF
+ * cookie. The full JWT itself is HttpOnly and not readable here; the CSRF
+ * cookie co-exists with it and has the same Max-Age.
+ */
+function checkAuthenticated(): boolean {
+  return getCsrfToken() !== '';
+}
+
 export interface JwtPayload {
   username: string;
   exp: number;
@@ -17,9 +53,17 @@ export interface JwtPayload {
   is_admin?: boolean;
 }
 
+export interface CurrentUserInfo {
+  username: string;
+  is_approved: boolean;
+  is_admin: boolean;
+  total_storage: number;
+  storage_limit: number;
+  storage_used_pc: number;
+}
+
 /**
  * Custom error for 503 Service Unavailable responses.
- * Thrown when the backend readiness probe (/readyz) fails or API returns 503.
  */
 export class ServiceUnavailableError extends Error {
   constructor(message = 'Service is temporarily unavailable. Please try again in a moment.') {
@@ -28,87 +72,53 @@ export class ServiceUnavailableError extends Error {
   }
 }
 
+// Module-private cache for the current user info loaded after login.
+// Populated by getCurrentUser(); cleared on logout.
+let _cachedUser: CurrentUserInfo | null = null;
+
 export class AuthManager {
-  // Storage keys.
-  //
-  // TOKEN_KEY holds the FULL-tier access token (aud=arkfile-api). Only set
-  // after TOTP verify succeeds (or after /api/refresh on an existing full
-  // session). All authenticated API calls Authorization: Bearer this value.
-  //
-  // TEMP_TOKEN_KEY holds the TEMP-tier post-OPAQUE token (aud=arkfile-totp).
-  // Only valid at /api/totp/{setup,verify,auth}. Kept in a separate slot so
-  // the application layer cannot confuse the two (A-01 frontend mitigation:
-  // the production server enforces audience separation, but a separate
-  // storage key prevents an authenticated-fetch helper from accidentally
-  // sending the temp token to a full-protected route and getting a confusing
-  // 401 response).
-  //
-  // REFRESH_TOKEN_KEY holds the refresh token (only issued after TOTP).
-  private static readonly TOKEN_KEY = 'token';
-  private static readonly REFRESH_TOKEN_KEY = 'refresh_token';
-  private static readonly TEMP_TOKEN_KEY = 'temp_token';
+  // Auto-refresh timer: fires slightly before the 30-minute JWT TTL.
   private static autoRefreshTimer: number | null = null;
-  private static readonly AUTO_REFRESH_INTERVAL = 25 * 60 * 1000; // 25 minutes in milliseconds
+  // 25 minutes — fires with 5 minutes to spare before the 30-minute JWT TTL.
+  private static readonly AUTO_REFRESH_INTERVAL = 25 * 60 * 1000;
 
-  // Token management
-  public static getToken(): string | null {
-    return localStorage.getItem(this.TOKEN_KEY);
-  }
-
-  public static getRefreshToken(): string | null {
-    return localStorage.getItem(this.REFRESH_TOKEN_KEY);
-  }
-
-  public static setTokens(token: string, refreshToken: string): void {
-    localStorage.setItem(this.TOKEN_KEY, token);
-    localStorage.setItem(this.REFRESH_TOKEN_KEY, refreshToken);
-  }
-
-  public static clearTokens(): void {
-    localStorage.removeItem(this.TOKEN_KEY);
-    localStorage.removeItem(this.REFRESH_TOKEN_KEY);
-  }
-
-  // Temp-tier token management (only valid at /api/totp/*).
-  public static getTempToken(): string | null {
-    return localStorage.getItem(this.TEMP_TOKEN_KEY);
-  }
-
-  public static setTempToken(tempToken: string): void {
-    localStorage.setItem(this.TEMP_TOKEN_KEY, tempToken);
-  }
-
-  public static clearTempToken(): void {
-    localStorage.removeItem(this.TEMP_TOKEN_KEY);
-  }
+  // Token management: no-op stubs retained for build compatibility.
+  // All tokens are now HttpOnly cookies managed by the server.
+  // These methods are intentionally empty; remove call sites in future cleanup.
+  public static getToken(): string | null { return null; }
+  public static getRefreshToken(): string | null { return null; }
+  public static setTokens(_token: string, _refreshToken: string): void { /* no-op: cookies */ }
+  public static clearTokens(): void { /* no-op: cookies cleared server-side */ }
+  public static getTempToken(): string | null { return null; }
+  public static setTempToken(_tempToken: string): void { /* no-op: cookies */ }
+  public static clearTempToken(): void { /* no-op: cookies cleared server-side */ }
 
   public static isAuthenticated(): boolean {
-    return this.getToken() !== null;
+    return checkAuthenticated();
   }
 
-  // Token refresh functionality
+  public static getCsrfToken(): string {
+    return getCsrfToken();
+  }
+
+  // Token refresh: sends cookie automatically; no body needed for browser clients.
   public static async refreshToken(): Promise<boolean> {
     try {
-      const refreshToken = this.getRefreshToken();
-      if (!refreshToken) {
-        this.clearTokens();
-        return false;
-      }
-
       const response = await fetch('/api/refresh', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
+          'X-CSRF-Token': getCsrfToken(),
         },
-        body: JSON.stringify({ refresh_token: refreshToken }),
+        // Body empty: browser sends __Host-arkfile-refresh cookie automatically.
+        body: JSON.stringify({}),
       });
 
       if (response.ok) {
-        const data = await response.json();
-        this.setTokens(data.token, data.refresh_token);
+        // New cookies issued by server automatically replace old ones.
         return true;
       } else {
-        this.clearTokens();
         return false;
       }
     } catch (error) {
@@ -120,19 +130,17 @@ export class AuthManager {
   // Session revocation
   public static async revokeAllSessions(): Promise<boolean> {
     try {
-      const token = this.getToken();
-      if (!token) return false;
-
       const response = await fetch('/api/auth/revoke-all', {
         method: 'POST',
+        credentials: 'include',
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
-        }
+          'X-CSRF-Token': getCsrfToken(),
+        },
       });
 
       if (response.ok) {
-        this.clearTokens();
+        _cachedUser = null;
         return true;
       } else {
         return false;
@@ -143,83 +151,56 @@ export class AuthManager {
     }
   }
 
-  // Logout functionality
+  // Logout: server expires all cookies.
   public static async logout(): Promise<boolean> {
     try {
-      const refreshToken = this.getRefreshToken();
-      
-      if (refreshToken) {
-        // Call the logout API to revoke the refresh token
-        await fetch('/api/logout', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ refresh_token: refreshToken }),
-        });
-      }
-      
-      this.clearTokens();
-      return true;
+      await fetch('/api/logout', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          // Logout sends CSRF to prove it's intentional (not a CSRF attack).
+          'X-CSRF-Token': getCsrfToken(),
+        },
+        body: JSON.stringify({}),
+      });
     } catch (error) {
       console.error('Logout error:', error);
-      // Still clear tokens even on error
-      this.clearTokens();
-      return false;
     }
+    // Always clear local caches regardless of network outcome.
+    _cachedUser = null;
+    return true;
   }
 
-  // JWT token parsing
-  public static parseJwtToken(token: string): JwtPayload | null {
+  // Fetch user identity from the server (JWT is HttpOnly; JS cannot decode it).
+  public static async getCurrentUser(force = false): Promise<CurrentUserInfo | null> {
+    if (_cachedUser && !force) return _cachedUser;
     try {
-      const parts = token.split('.');
-      if (parts.length !== 3) return null;
-      
-      const payload: unknown = JSON.parse(atob(parts[1]));
-      
-      // Validate the payload has the expected shape
-      if (
-        typeof payload === 'object' &&
-        payload !== null &&
-        'username' in payload &&
-        typeof (payload as JwtPayload).username === 'string' &&
-        'exp' in payload &&
-        typeof (payload as JwtPayload).exp === 'number'
-      ) {
-        return payload as JwtPayload;
+      const response = await this.authenticatedFetch('/api/auth/me');
+      if (response.ok) {
+        const data = await response.json();
+        _cachedUser = data.data as CurrentUserInfo;
+        return _cachedUser;
       }
-      
-      return null;
     } catch (error) {
-      console.error('Error parsing JWT token:', error);
-      return null;
+      console.error('getCurrentUser error:', error);
     }
+    return null;
   }
 
+  public static getCachedUser(): CurrentUserInfo | null {
+    return _cachedUser;
+  }
+
+  // Username from cache (populated after login via getCurrentUser).
   public static getUsernameFromToken(): string | null {
-    const token = this.getToken();
-    if (!token) return null;
-    
-    const payload = this.parseJwtToken(token);
-    return payload?.username || null;
+    return _cachedUser?.username ?? null;
   }
 
-  public static getTokenExpiry(): Date | null {
-    const token = this.getToken();
-    if (!token) return null;
-    
-    const payload = this.parseJwtToken(token);
-    if (!payload?.exp) return null;
-    
-    return new Date(payload.exp * 1000);
-  }
-
-  public static isTokenExpired(): boolean {
-    const expiry = this.getTokenExpiry();
-    if (!expiry) return true;
-    
-    return Date.now() >= expiry.getTime();
-  }
+  // Token expiry: not available client-side (JWT is HttpOnly).
+  // Auto-refresh timer provides the functional equivalent.
+  public static getTokenExpiry(): Date | null { return null; }
+  public static isTokenExpired(): boolean { return !checkAuthenticated(); }
 
   // Admin contact management
   private static adminUsernames: string[] = ['default-admin'];
@@ -251,7 +232,7 @@ export class AuthManager {
   public static startAutoRefresh(): void {
     this.stopAutoRefresh();
     this.autoRefreshTimer = window.setInterval(async () => {
-      if (this.isAuthenticated() && !this.isTokenExpired()) {
+      if (this.isAuthenticated()) {
         const success = await this.refreshToken();
         if (!success) {
           console.warn('Auto-refresh failed, session may expire soon');
@@ -267,28 +248,35 @@ export class AuthManager {
     }
   }
 
-  // API helpers with authentication
+  // Authenticated fetch for browser clients.
+  // Sends cookies automatically (credentials:'include') and adds the CSRF header.
+  // Safe methods (GET/HEAD) also include the header for simplicity; server only
+  // enforces it on state-changing methods.
   public static async authenticatedFetch(
-    url: string, 
+    url: string,
     options: RequestInit = {}
   ): Promise<Response> {
-    const token = this.getToken();
-    
+    const csrfToken = getCsrfToken();
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string> || {}),
     };
 
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) {
+      headers['X-CSRF-Token'] = csrfToken;
     }
+
+    // Remove any Authorization header that might have been set by old code;
+    // browser auth is entirely cookie-based.
+    delete headers['Authorization'];
 
     const response = await fetch(url, {
       ...options,
       headers,
+      credentials: 'include',
     });
 
-    // Handle 503 Service Unavailable globally
     if (response.status === 503) {
       throw new ServiceUnavailableError();
     }
@@ -296,10 +284,10 @@ export class AuthManager {
     return response;
   }
 
-  // Token validation by making API call
+  // Validate session by calling the /api/auth/me endpoint.
   public static async validateToken(): Promise<boolean> {
     try {
-      const response = await this.authenticatedFetch('/api/files');
+      const response = await this.authenticatedFetch('/api/auth/me');
       return response.ok;
     } catch (error) {
       console.error('Token validation error:', error);
@@ -309,17 +297,14 @@ export class AuthManager {
 
   // Session state management
   public static clearAllSessionData(): void {
-    // Clear tokens (full + refresh + temp)
-    this.clearTokens();
-    this.clearTempToken();
+    _cachedUser = null;
+    this.stopAutoRefresh();
 
-    // Clear cached encryption keys
+    // Clear cached encryption keys and digest cache.
     clearAllCachedAccountKeys();
-
-    // Clear digest cache (SHA-256 digests are sensitive -- content fingerprinting)
     clearDigestCache();
 
-    // Clear window-level auth flow data
+    // Clear any window-level auth flow data that may still be present.
     if (typeof window !== 'undefined') {
       delete window.registrationData;
       delete window.totpLoginData;
@@ -328,7 +313,11 @@ export class AuthManager {
   }
 }
 
-// Optimized utility function exports - direct references to reduce bundle size
+// Utility function exports
+export const getCsrfTokenExport = getCsrfToken;
+export const isAuthenticated = AuthManager.isAuthenticated.bind(AuthManager);
+// Legacy token accessors — return null; retained so existing call sites compile
+// without changes. They will be removed when call sites are cleaned up.
 export const getToken = AuthManager.getToken.bind(AuthManager);
 export const getRefreshToken = AuthManager.getRefreshToken.bind(AuthManager);
 export const setTokens = AuthManager.setTokens.bind(AuthManager);
@@ -336,7 +325,6 @@ export const clearTokens = AuthManager.clearTokens.bind(AuthManager);
 export const getTempToken = AuthManager.getTempToken.bind(AuthManager);
 export const setTempToken = AuthManager.setTempToken.bind(AuthManager);
 export const clearTempToken = AuthManager.clearTempToken.bind(AuthManager);
-export const isAuthenticated = AuthManager.isAuthenticated.bind(AuthManager);
 export const getUsernameFromToken = AuthManager.getUsernameFromToken.bind(AuthManager);
 export const isTokenExpired = AuthManager.isTokenExpired.bind(AuthManager);
 export const getTokenExpiry = AuthManager.getTokenExpiry.bind(AuthManager);
@@ -351,3 +339,5 @@ export const getAdminUsernames = AuthManager.getAdminUsernames.bind(AuthManager)
 export const getAdminContact = AuthManager.getAdminContact.bind(AuthManager);
 export const startAutoRefresh = AuthManager.startAutoRefresh.bind(AuthManager);
 export const stopAutoRefresh = AuthManager.stopAutoRefresh.bind(AuthManager);
+export const getCurrentUser = AuthManager.getCurrentUser.bind(AuthManager);
+export const getCachedUser = AuthManager.getCachedUser.bind(AuthManager);

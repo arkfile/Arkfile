@@ -25,10 +25,18 @@ type RefreshTokenRequest struct {
 
 // RefreshToken handles refresh token requests.
 // ValidateRefreshToken performs atomic rotation internally (family-revoke on reuse).
+// Tokens are delivered via cookies for browser clients; the JSON body also carries
+// them so non-browser clients using bearer auth can update their session.
 func RefreshToken(c echo.Context) error {
 	var request RefreshTokenRequest
 	if err := c.Bind(&request); err != nil {
 		return JSONError(c, http.StatusBadRequest, "Invalid request: malformed body")
+	}
+
+	// Browser clients send the refresh token via the __Host-arkfile-refresh cookie;
+	// CLI clients send it in the JSON body. Accept either, prefer cookie.
+	if cookieVal, err := c.Cookie(CookieRefresh); err == nil && cookieVal.Value != "" {
+		request.RefreshToken = cookieVal.Value
 	}
 
 	if request.RefreshToken == "" {
@@ -57,6 +65,14 @@ func RefreshToken(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Failed to create new token")
 	}
 
+	// Issue updated cookies for browser clients; CLI clients use the JSON body.
+	csrfToken, err := GenerateCSRFToken()
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to create new token")
+	}
+	issueSessionCookies(c, token, newRefreshToken, csrfToken)
+
 	database.LogUserAction(username, "refreshed token", "")
 	logging.InfoLogger.Printf("Token refreshed for user: %s", username)
 
@@ -82,6 +98,14 @@ func Logout(c echo.Context) error {
 	// Get username from token (if authenticated)
 	username := auth.GetUsernameFromToken(c)
 
+	// Browser clients send the refresh token via cookie; CLI clients send it in the JSON body.
+	// Accept either so the token is revoked regardless of client type.
+	if cookieVal, err := c.Cookie(CookieRefresh); err == nil && cookieVal.Value != "" {
+		if request.RefreshToken == "" {
+			request.RefreshToken = cookieVal.Value
+		}
+	}
+
 	// Revoke the refresh token if provided
 	if request.RefreshToken != "" {
 		err := models.RevokeRefreshToken(database.DB, request.RefreshToken)
@@ -94,16 +118,8 @@ func Logout(c echo.Context) error {
 		}
 	}
 
-	// Clear the refresh token cookie
-	cookie := &http.Cookie{
-		Name:     "refreshToken",
-		Value:    "",
-		Expires:  time.Unix(0, 0),
-		HttpOnly: true,
-		Path:     "/",
-		SameSite: http.SameSiteStrictMode,
-	}
-	c.SetCookie(cookie)
+	// Expire all Arkfile session cookies.
+	clearSessionCookies(c)
 
 	// Log the logout
 	if username != "" {
@@ -111,7 +127,7 @@ func Logout(c echo.Context) error {
 		logging.InfoLogger.Printf("User logged out: %s", username)
 	}
 
-	return JSONResponse(c, http.StatusOK, "Logged out successfully. Your access token will expire automatically within 30 minutes.", nil)
+	return JSONResponse(c, http.StatusOK, "Logged out successfully.", nil)
 }
 
 // RevokeToken revokes a specific JWT token
@@ -375,13 +391,16 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup token creation failed")
 	}
 
+	// Issue temp cookie for browser clients.
+	issueTempCookie(c, tempToken)
+
 	// Log successful registration
 	database.LogUserAction(request.Username, "registered with OPAQUE (multi-step), TOTP setup required", "")
 	logging.InfoLogger.Printf("OPAQUE user registered (multi-step), TOTP setup required: %s", request.Username)
 
 	return JSONResponse(c, http.StatusCreated, "Account created successfully. Two-factor authentication setup is required to complete registration.", map[string]interface{}{
 		"requires_totp_setup": true,
-		"requires_totp":       true, // Added for client compatibility
+		"requires_totp":       true,
 		"temp_token":          tempToken,
 		"auth_method":         "OPAQUE",
 		"username":            request.Username,
@@ -549,6 +568,7 @@ func OpaqueAuthFinalize(c echo.Context) error {
 			logging.ErrorLogger.Printf("Failed to generate TOTP setup token for %s: %v", request.Username, err)
 			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 		}
+		issueTempCookie(c, tempToken)
 		return JSONResponse(c, http.StatusOK, "Two-factor authentication setup is required to complete login.", map[string]interface{}{
 			"requires_totp":       true,
 			"requires_totp_setup": true,
@@ -562,6 +582,9 @@ func OpaqueAuthFinalize(c echo.Context) error {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
+
+	// Issue temp cookie for browser clients.
+	issueTempCookie(c, tempToken)
 
 	// Log partial authentication
 	database.LogUserAction(request.Username, "OPAQUE auth completed (multi-step), awaiting TOTP", "")
@@ -754,11 +777,23 @@ func TOTPVerify(c echo.Context) error {
 			return JSONError(c, http.StatusInternalServerError, "Failed to get user details")
 		}
 
+		// Issue session cookies and clear temp cookie.
+		csrfToken, err := GenerateCSRFToken()
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", username, err)
+			return JSONError(c, http.StatusInternalServerError, "Failed to create session")
+		}
+		issueSessionCookies(c, token, refreshToken, csrfToken)
+		c.SetCookie(&http.Cookie{
+			Name: CookieTempToken, Value: "", Path: "/", MaxAge: -1,
+			Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
+		})
+
 		logging.InfoLogger.Printf("Registration completed with TOTP setup for user: %s", username)
 
 		return JSONResponse(c, http.StatusOK, "TOTP setup and registration completed successfully", map[string]interface{}{
 			"enabled":       true,
-			"token":         token, // Changed from access_token to token for consistency
+			"token":         token,
 			"refresh_token": refreshToken,
 			"expires_at":    expirationTime,
 			"auth_method":   "OPAQUE+TOTP",
@@ -911,6 +946,20 @@ func TOTPAuth(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
 	}
 
+	// Issue session cookies for browser clients.
+	// CLI clients ignore cookies and use the JSON body tokens via bearer auth.
+	csrfToken, err := GenerateCSRFToken()
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to generate CSRF token for %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to create session")
+	}
+	issueSessionCookies(c, token, refreshToken, csrfToken)
+	// Clear temp cookie now that full auth is complete.
+	c.SetCookie(&http.Cookie{
+		Name: CookieTempToken, Value: "", Path: "/", MaxAge: -1,
+		Secure: true, HttpOnly: true, SameSite: http.SameSiteStrictMode,
+	})
+
 	// Log successful authentication
 	database.LogUserAction(username, "completed TOTP authentication", "")
 	logging.InfoLogger.Printf("TOTP authentication completed for user: %s", username)
@@ -1028,4 +1077,27 @@ func TOTPStatus(c echo.Context) error {
 	}
 
 	return JSONResponse(c, http.StatusOK, "TOTP status retrieved", response)
+}
+
+// GetCurrentUser returns the authenticated user's identity.
+// Used by browser clients to discover username/is_admin/is_approved since
+// the JWT is HttpOnly and not readable by JavaScript.
+// Wired onto totpProtectedGroup so it requires a full-tier JWT.
+func GetCurrentUser(c echo.Context) error {
+	username := auth.GetUsernameFromToken(c)
+
+	user, err := models.GetUserByUsername(database.DB, username)
+	if err != nil {
+		logging.ErrorLogger.Printf("GetCurrentUser: failed to load user %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to get user details")
+	}
+
+	return JSONResponse(c, http.StatusOK, "User details retrieved", map[string]interface{}{
+		"username":        user.Username,
+		"is_approved":     user.IsApproved,
+		"is_admin":        user.IsAdmin,
+		"total_storage":   user.TotalStorageBytes,
+		"storage_limit":   user.StorageLimitBytes,
+		"storage_used_pc": user.GetStorageUsagePercent(),
+	})
 }

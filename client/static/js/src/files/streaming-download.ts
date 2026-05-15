@@ -531,7 +531,11 @@ export class StreamingDownloadManager {
   private async fetchMetadata(fileId: string): Promise<ChunkedDownloadMetadata> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.options.authToken) headers['Authorization'] = `Bearer ${this.options.authToken}`;
-    const response = await fetch(`${this.baseUrl}/api/files/${fileId}/meta`, { method: 'GET', headers });
+    const response = await fetch(`${this.baseUrl}/api/files/${fileId}/meta`, {
+      method: 'GET',
+      headers,
+      credentials: 'include',
+    });
     if (!response.ok) {
       console.error(`${LOG_PREFIX_FILE} Metadata fetch failed: HTTP ${response.status} ${response.statusText}`);
       throw new Error(`Failed to fetch metadata: ${response.status} ${response.statusText}`);
@@ -624,10 +628,12 @@ export class StreamingDownloadManager {
 export async function downloadFileChunked(
   fileId: string,
   fek: Uint8Array,
-  authToken: string,
+  authToken: string | null,
   options: Partial<StreamingDownloadOptions> = {},
 ): Promise<StreamingDownloadResult> {
-  const manager = new StreamingDownloadManager('', { authToken, ...options });
+  const managerOpts: Partial<StreamingDownloadOptions> = { ...options };
+  if (authToken) managerOpts.authToken = authToken;
+  const manager = new StreamingDownloadManager('', managerOpts);
   return manager.downloadFile(fileId, fek);
 }
 

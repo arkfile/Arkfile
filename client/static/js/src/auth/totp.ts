@@ -43,11 +43,14 @@ export interface TOTPSetupResponse {
   manual_entry: string;
 }
 
+// Module-private TOTP flow state set by handleTOTPFlow() and consumed by verifyTOTPLogin().
+// Stored here rather than on window so the account password never appears on a
+// globally-accessible object during the TOTP entry window.
+let _pendingTOTPFlowData: TOTPFlowData | null = null;
+
 export function handleTOTPFlow(data: TOTPFlowData): void {
-  // Store the partial login data temporarily
-  if (typeof window !== 'undefined') {
-    window.totpLoginData = data;
-  }
+  // Store flow data in module-private scope (NOT on window).
+  _pendingTOTPFlowData = data;
   
   // Show TOTP input modal
   const totpModal = showModal({
@@ -57,10 +60,8 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
       {
         text: 'Cancel',
         action: () => {
-          // Clean up temporary data
-          if (typeof window !== 'undefined') {
-            delete window.totpLoginData;
-          }
+          // Clear module-private flow data on cancel.
+          _pendingTOTPFlowData = null;
         },
         variant: 'secondary'
       }
@@ -104,7 +105,7 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
       font-size: 16px;
       margin-bottom: 10px;
     ">Verify</button>
-    <button onclick="this.closest('.modal-overlay').remove(); delete window.totpLoginData;" style="
+    <button onclick="this.closest('.modal-overlay').remove();" style="
       width: 100%;
       padding: 10px;
       background-color: var(--depth-4);
@@ -178,21 +179,24 @@ async function verifyTOTPLogin(): Promise<void> {
     return;
   }
   
-  // Get stored login data
-  const totpLoginData = typeof window !== 'undefined' ? window.totpLoginData : null;
-  if (!totpLoginData) {
-    showError('Login session expired (30 minutes). Please try again.');
+  // Get stored login data from module-private scope (no window exposure).
+  const pendingData = _pendingTOTPFlowData;
+  if (!pendingData) {
+    showError('Login session expired. Please try again.');
     return;
   }
   
   try {
     showProgressMessage('Verifying TOTP...');
     
+    // The temp token is in the __Host-arkfile-temp cookie; send credentials:include
+    // so the browser attaches it automatically. The CookieTokenMiddleware on the
+    // server extracts it and injects it as the Authorization header for TOTPJWTMiddleware.
     const response = await fetch('/api/totp/auth', {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${totpLoginData.tempToken}`
       },
       body: JSON.stringify({
         code: code,
@@ -205,27 +209,23 @@ async function verifyTOTPLogin(): Promise<void> {
       // Handle standard API response structure: { data: { ... } }
       const data: TOTPLoginResponse = responseData.data || responseData;
       
-      // Extract password before cleanup (for post-auth key derivation)
-      const carriedPassword = totpLoginData.password;
-
-      // Wipe password from the flow data object immediately
-      if (totpLoginData.password) {
-        totpLoginData.password = '';
+      // Extract and immediately zero the carried password.
+      const carriedPassword = pendingData.password;
+      if (pendingData.password) {
+        pendingData.password = '';
       }
-      delete (totpLoginData as any).password;
+      // Clear module-private state.
+      _pendingTOTPFlowData = null;
 
-      // Complete authentication using LoginManager (with password for key derivation)
+      // Complete authentication using LoginManager (with password for key derivation).
+      // Tokens are now in HttpOnly cookies; completeLogin no longer needs to store them.
       await LoginManager.completeLogin({
-        token: data.token,
-        refresh_token: data.refresh_token,
+        token: data.token || '',
+        refresh_token: data.refresh_token || '',
         auth_method: 'OPAQUE',
         is_approved: data.user?.is_approved
-      }, totpLoginData.username, carriedPassword);
+      }, pendingData.username, carriedPassword);
 
-      // Clean up the entire flow data object from window
-      if (typeof window !== 'undefined') {
-        delete window.totpLoginData;
-      }
       document.querySelector('.modal-overlay')?.remove();
       
       showSuccess('Authentication successful!');
@@ -234,9 +234,7 @@ async function verifyTOTPLogin(): Promise<void> {
       hideProgress();
       // Session expired: clear state and redirect to login
       if (response.status === 401) {
-        if (typeof window !== 'undefined') {
-          delete window.totpLoginData;
-        }
+        _pendingTOTPFlowData = null;
         document.querySelector('.modal-overlay')?.remove();
         clearAllSessionData();
         showAuthSection();
@@ -300,20 +298,12 @@ export async function generateAndDisplayTOTPSetup(): Promise<void> {
 
 /**
  * Start a countdown timer for the static TOTP setup form (#totp-setup-form).
- * Reads the JWT expiry from the temp token (the credential being used during
- * the /api/totp/setup + /api/totp/verify pair, valid for 20 minutes).
- * Falls back to the full token in the unusual case where setup is being
- * resumed by an already-authenticated user.
+ * The temp token is valid for 20 minutes. Since it is now HttpOnly and JS
+ * cannot read it, we start a local 20-minute countdown from now.
  * Displays when less than 5 minutes remain; auto-logs out and reloads on expiry.
  */
 function startSetupSessionCountdown(): void {
-  const token = getTempToken() || getToken();
-  if (!token) return;
-
-  const payload = AuthManager.parseJwtToken(token);
-  if (!payload?.exp) return;
-
-  const expiryMs = payload.exp * 1000;
+  const expiryMs = Date.now() + 20 * 60 * 1000; // 20-minute temp-token TTL
   const SHOW_THRESHOLD = 5 * 60 * 1000; // Show countdown in last 5 minutes
 
   const timerEl = document.getElementById('totp-setup-session-timer');
@@ -358,19 +348,12 @@ export async function initiateTOTPSetup(): Promise<TOTPSetupData | null> {
   try {
     showProgressMessage('Setting up TOTP...');
 
-    const token = getTempToken() || getToken();
-    if (!token) {
-      hideProgress();
-      showError('Authentication required');
-      return null;
-    }
-
+    // The temp token is in the __Host-arkfile-temp cookie; credentials:'include'
+    // sends it automatically.
     const response = await fetch('/api/totp/setup', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
     });
     
@@ -408,24 +391,12 @@ export async function completeTOTPSetup(code: string): Promise<Record<string, an
   try {
     showProgressMessage('Completing TOTP setup...');
 
-    // /api/totp/verify is also gated by TOTPJWTMiddleware; same temp-token
-    // selection logic as initiateTOTPSetup.
-    const token = getTempToken() || getToken();
-    if (!token) {
-      hideProgress();
-      showError('Authentication required');
-      return null;
-    }
-
+    // Temp token is in __Host-arkfile-temp cookie; credentials:'include' sends it automatically.
     const response = await fetch('/api/totp/verify', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
-        code: code
-      }),
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code }),
     });
     
     hideProgress();
@@ -463,18 +434,10 @@ export async function completeTOTPSetup(code: string): Promise<Record<string, an
 
 export async function getTOTPStatus(): Promise<{enabled: boolean, setupRequired: boolean} | null> {
   try {
-    const token = getToken();
-    if (!token) {
-      console.error('No authentication token available');
-      return null;
-    }
-    
     const response = await fetch('/api/totp/status', {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
     });
     
     if (response.ok) {
@@ -665,34 +628,23 @@ async function completeTOTPSetupFlow(code: string): Promise<void> {
   if (verifyResult) {
     document.querySelector('.modal-overlay')?.remove();
 
-    // Extract tokens and approval status from the server response
-    const newToken = verifyResult.token;
-    const newRefreshToken = verifyResult.refresh_token || '';
-    const isApproved = verifyResult.user?.is_approved;
-
-    // Store the new full-access tokens AND drop the now-spent temp token.
-    // The temp token's only valid use was at /api/totp/{setup,verify,auth};
-    // once verify succeeds it is no longer needed and must be removed so
-    // future getTempToken() calls return null.
-    if (newToken) {
-      const { setTokens } = await import('../utils/auth.js');
-      setTokens(newToken, newRefreshToken);
-    }
+    // Tokens are in HttpOnly cookies (set by the server on /api/totp/verify).
+    // clearTempToken is a no-op now but ensures the local temp-token state is cleared.
     clearTempToken();
 
-    // If we got here from the login flow (incomplete TOTP setup on login),
-    // window.totpLoginData holds the password and username. Use them to complete login.
-    const flowData = typeof window !== 'undefined' ? window.totpLoginData : null;
+    // If we got here from the registration flow (incomplete TOTP setup),
+    // _pendingTOTPFlowData holds the password and username.
+    const flowData = _pendingTOTPFlowData;
     if (flowData) {
-      const { LoginManager } = await import('./login.js');
       const carriedPassword = flowData.password;
-      if (flowData.password) { (flowData as any).password = ''; }
-      delete (window as any).totpLoginData;
+      if (flowData.password) { flowData.password = ''; }
+      _pendingTOTPFlowData = null;
+      const { LoginManager } = await import('./login.js');
       await LoginManager.completeLogin({
-        token: newToken || '',
-        refresh_token: newRefreshToken,
+        token: verifyResult.token || '',
+        refresh_token: verifyResult.refresh_token || '',
         auth_method: 'OPAQUE',
-        is_approved: isApproved,
+        is_approved: verifyResult.user?.is_approved,
       }, flowData.username, carriedPassword);
     }
   }
