@@ -6,7 +6,7 @@
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { showModal } from '../ui/modals.js';
-import { clearTempToken, clearAllSessionData } from '../utils/auth.js';
+import { clearAllSessionData } from '../utils/auth.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 
@@ -327,9 +327,6 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
       const data = responseData.data || responseData;
       
       // Full-access cookies are issued by the server on /api/totp/verify.
-      // clearTempToken clears the local temp-token tracking state.
-      clearTempToken();
-
       // Clean up
       if (typeof window !== 'undefined') {
         delete window.totpSetupData;

@@ -244,7 +244,7 @@ function computeIntegrityHMAC(data: Uint8Array, key: Uint8Array): string {
 export async function cacheAccountKey(
   username: string,
   key: Uint8Array,
-  accessToken: string,
+  accessToken?: string,
   durationHours?: CacheDurationHours
 ): Promise<void> {
   try {
@@ -281,7 +281,10 @@ export async function cacheAccountKey(
       wrapping_iv: toBase64(encrypted.iv),
       wrapping_tag: toBase64(encrypted.tag),
       integrity_hmac: integrityHMAC,
-      token_hash: hashToken(accessToken),
+      // When no token is available (cookie-based auth), store empty string.
+      // getCachedAccountKey skips the token-binding check when accessToken is
+      // undefined/empty, so the cache still works correctly without a token.
+      token_hash: accessToken ? hashToken(accessToken) : '',
       username: username.trim(),
       context: 'account',
       stored_at: now.toISOString(),

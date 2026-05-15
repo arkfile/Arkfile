@@ -5,7 +5,6 @@
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
-import { setTokens } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleTOTPSetupFlow } from './totp-setup.js';
@@ -195,11 +194,9 @@ export class RegistrationManager {
   /**
    * Complete registration after successful OPAQUE protocol
    */
-  private static async completeRegistration(data: RegistrationResponse, username: string): Promise<void> {
+  private static async completeRegistration(data: RegistrationResponse, _username: string): Promise<void> {
     try {
-      // Store authentication tokens
-      setTokens(data.token, data.refresh_token);
-
+      // Tokens are in HttpOnly cookies set by the server on /api/opaque/register/finalize.
       hideProgress();
       showSuccess('Registration successful! Welcome to Arkfile.');
 

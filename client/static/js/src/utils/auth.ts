@@ -82,17 +82,6 @@ export class AuthManager {
   // 25 minutes — fires with 5 minutes to spare before the 30-minute JWT TTL.
   private static readonly AUTO_REFRESH_INTERVAL = 25 * 60 * 1000;
 
-  // Token management: no-op stubs retained for build compatibility.
-  // All tokens are now HttpOnly cookies managed by the server.
-  // These methods are intentionally empty; remove call sites in future cleanup.
-  public static getToken(): string | null { return null; }
-  public static getRefreshToken(): string | null { return null; }
-  public static setTokens(_token: string, _refreshToken: string): void { /* no-op: cookies */ }
-  public static clearTokens(): void { /* no-op: cookies cleared server-side */ }
-  public static getTempToken(): string | null { return null; }
-  public static setTempToken(_tempToken: string): void { /* no-op: cookies */ }
-  public static clearTempToken(): void { /* no-op: cookies cleared server-side */ }
-
   public static isAuthenticated(): boolean {
     return checkAuthenticated();
   }
@@ -316,15 +305,6 @@ export class AuthManager {
 // Utility function exports
 export const getCsrfTokenExport = getCsrfToken;
 export const isAuthenticated = AuthManager.isAuthenticated.bind(AuthManager);
-// Legacy token accessors — return null; retained so existing call sites compile
-// without changes. They will be removed when call sites are cleaned up.
-export const getToken = AuthManager.getToken.bind(AuthManager);
-export const getRefreshToken = AuthManager.getRefreshToken.bind(AuthManager);
-export const setTokens = AuthManager.setTokens.bind(AuthManager);
-export const clearTokens = AuthManager.clearTokens.bind(AuthManager);
-export const getTempToken = AuthManager.getTempToken.bind(AuthManager);
-export const setTempToken = AuthManager.setTempToken.bind(AuthManager);
-export const clearTempToken = AuthManager.clearTempToken.bind(AuthManager);
 export const getUsernameFromToken = AuthManager.getUsernameFromToken.bind(AuthManager);
 export const isTokenExpired = AuthManager.isTokenExpired.bind(AuthManager);
 export const getTokenExpiry = AuthManager.getTokenExpiry.bind(AuthManager);

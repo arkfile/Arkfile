@@ -5,7 +5,7 @@
 import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
 import { showModal, showTOTPAppsModal } from '../ui/modals';
-import { getToken, getTempToken, clearTempToken, clearAllSessionData, AuthManager } from '../utils/auth';
+import { clearAllSessionData, AuthManager } from '../utils/auth';
 import { showFileSection, showAuthSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { LoginManager } from './login';
@@ -629,9 +629,6 @@ async function completeTOTPSetupFlow(code: string): Promise<void> {
     document.querySelector('.modal-overlay')?.remove();
 
     // Tokens are in HttpOnly cookies (set by the server on /api/totp/verify).
-    // clearTempToken is a no-op now but ensures the local temp-token state is cleared.
-    clearTempToken();
-
     // If we got here from the registration flow (incomplete TOTP setup),
     // _pendingTOTPFlowData holds the password and username.
     const flowData = _pendingTOTPFlowData;

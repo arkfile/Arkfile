@@ -200,8 +200,10 @@ export async function deriveFileEncryptionKeyWithCache(
     // Derive new key
     const key = await deriveFileEncryptionKey(password, username, context);
     
-    // Cache it with specified duration (requires accessToken for session binding)
-    if (accessToken) {
+    // Cache it with the specified duration whenever the user opted in.
+    // accessToken is optional (undefined in cookie-based auth); cacheAccountKey
+    // handles that by storing an empty token_hash and skipping session binding.
+    if (cacheDuration !== undefined) {
       await cacheAccountKey(username, key, accessToken, cacheDuration);
     }
     

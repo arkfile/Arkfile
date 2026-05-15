@@ -10,7 +10,7 @@
 
 import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
-import { setTokens, setTempToken, clearAllSessionData, authenticatedFetch } from '../utils/auth.js';
+import { clearAllSessionData, authenticatedFetch } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { handleTOTPFlow } from './totp.js';
@@ -154,7 +154,6 @@ export class LoginManager {
         // Route to the setup screen so the user can finish what they started.
         if (loginData.requires_totp_setup) {
           // Temp token is in the __Host-arkfile-temp cookie (set by server).
-          setTempToken(loginData.temp_token!);
           // Carry the password through the TOTP setup flow so the account key
           // can be derived after TOTP completes, without storing it on window.
           handleTOTPFlow({
@@ -218,9 +217,6 @@ export class LoginManager {
     password?: string,
   ): Promise<void> {
     try {
-      // Store authentication tokens (no-op; tokens are in HttpOnly cookies)
-      setTokens(data.token, data.refresh_token);
-
       // Populate the username/role cache so getUsernameFromToken() works for
       // the rest of this session (upload, share creation, etc.).
       const { getCurrentUser } = await import('../utils/auth.js');
@@ -244,7 +240,7 @@ export class LoginManager {
             showProgressMessage('Deriving Account Key (Argon2id) -- this may take a few seconds...');
             cachedAccountKey = await deriveFileEncryptionKeyWithCache(
               password, username, 'account',
-              data.token, cacheChoice.cacheDuration,
+              undefined, cacheChoice.cacheDuration,
             );
             hideProgress();
           } catch (error) {

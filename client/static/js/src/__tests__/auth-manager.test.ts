@@ -38,43 +38,11 @@ beforeEach(() => {
 });
 
 // ============================================================================
-// Legacy no-op stubs (getToken, setTokens, clearTokens, etc.)
-// These must return null/undefined and not throw.
+// Token expiry (getTokenExpiry always returns null — JWT is HttpOnly)
 // ============================================================================
 
-describe('AuthManager legacy token stubs (no-op)', () => {
-  test('getToken returns null', () => {
-    expect(AuthManager.getToken()).toBeNull();
-  });
-
-  test('getRefreshToken returns null', () => {
-    expect(AuthManager.getRefreshToken()).toBeNull();
-  });
-
-  test('setTokens does not throw and getToken still returns null', () => {
-    expect(() => AuthManager.setTokens('access-tok', 'refresh-tok')).not.toThrow();
-    expect(AuthManager.getToken()).toBeNull();
-    expect(AuthManager.getRefreshToken()).toBeNull();
-  });
-
-  test('clearTokens does not throw', () => {
-    expect(() => AuthManager.clearTokens()).not.toThrow();
-  });
-
-  test('getTempToken returns null', () => {
-    expect(AuthManager.getTempToken()).toBeNull();
-  });
-
-  test('setTempToken does not throw and getTempToken still returns null', () => {
-    expect(() => AuthManager.setTempToken('temp-tok-value')).not.toThrow();
-    expect(AuthManager.getTempToken()).toBeNull();
-  });
-
-  test('clearTempToken does not throw', () => {
-    expect(() => AuthManager.clearTempToken()).not.toThrow();
-  });
-
-  test('getTokenExpiry returns null', () => {
+describe('AuthManager.getTokenExpiry', () => {
+  test('returns null (JWT is HttpOnly, not readable by JS)', () => {
     expect(AuthManager.getTokenExpiry()).toBeNull();
   });
 });
@@ -140,14 +108,14 @@ describe('AuthManager.clearAllSessionData', () => {
     expect(() => AuthManager.clearAllSessionData()).not.toThrow();
   });
 
-  test('leaves getToken returning null', () => {
-    AuthManager.clearAllSessionData();
-    expect(AuthManager.getToken()).toBeNull();
-  });
-
   test('leaves getUsernameFromToken returning null', () => {
     AuthManager.clearAllSessionData();
     expect(AuthManager.getUsernameFromToken()).toBeNull();
+  });
+
+  test('leaves getCachedUser returning null', () => {
+    AuthManager.clearAllSessionData();
+    expect(AuthManager.getCachedUser()).toBeNull();
   });
 });
 

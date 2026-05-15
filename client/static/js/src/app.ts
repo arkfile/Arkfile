@@ -488,12 +488,7 @@ class ArkFileApp {
       const newRefreshToken = verifyResult.refresh_token || '';
       const isApproved = verifyResult.user?.is_approved;
 
-      // Store the new full-access tokens (replacing the temp TOTP token)
-      if (newToken) {
-        const { setTokens } = await import('./utils/auth');
-        setTokens(newToken, newRefreshToken);
-      }
-
+      // Full-access tokens are in HttpOnly cookies set by the server.
       // Clear progress modal before proceeding to login completion
       const { hideProgress } = await import('./ui/progress');
       hideProgress();
