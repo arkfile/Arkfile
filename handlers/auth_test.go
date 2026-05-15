@@ -406,12 +406,11 @@ func TestRefreshToken_ExpiredToken(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"refresh_token": refreshTokenValue})
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/auth/refresh", bytes.NewReader(body))
 
-	// Mock: ValidateRefreshToken - returns expired
-	// Actual SQL: SELECT id, username, expires_at, revoked, last_used FROM refresh_tokens WHERE token_hash = ?
-	validateSQL := `SELECT id, username, expires_at, revoked, last_used FROM refresh_tokens WHERE token_hash = \?`
+	// Mock: ValidateRefreshToken new SELECT (8 columns including family fields)
+	validateSQL := `SELECT id, username, expires_at, revoked, last_used, family_id, superseded_by_hash, family_revoked_at FROM refresh_tokens WHERE token_hash = \?`
 	expiredTime := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
-	rows := sqlmock.NewRows([]string{"id", "username", "expires_at", "revoked", "last_used"}).
-		AddRow("token-id", "testuser", expiredTime, false, nil)
+	rows := sqlmock.NewRows([]string{"id", "username", "expires_at", "revoked", "last_used", "family_id", "superseded_by_hash", "family_revoked_at"}).
+		AddRow("token-id", "testuser", expiredTime, false, nil, "family-1", nil, nil)
 	mock.ExpectQuery(validateSQL).WithArgs(sqlmock.AnyArg()).WillReturnRows(rows)
 
 	err := RefreshToken(c)
@@ -430,10 +429,10 @@ func TestRefreshToken_RevokedToken(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"refresh_token": refreshTokenValue})
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/auth/refresh", bytes.NewReader(body))
 
-	// Mock: ValidateRefreshToken - token not found (no rows returned)
-	validateSQL := `SELECT id, username, expires_at, revoked, last_used FROM refresh_tokens WHERE token_hash = \?`
+	// Mock: ValidateRefreshToken new SELECT - token not found (no rows)
+	validateSQL := `SELECT id, username, expires_at, revoked, last_used, family_id, superseded_by_hash, family_revoked_at FROM refresh_tokens WHERE token_hash = \?`
 	mock.ExpectQuery(validateSQL).WithArgs(sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{
-		"id", "username", "expires_at", "revoked", "last_used",
+		"id", "username", "expires_at", "revoked", "last_used", "family_id", "superseded_by_hash", "family_revoked_at",
 	}))
 
 	err := RefreshToken(c)
@@ -574,7 +573,8 @@ func TestAdminForceLogout_TokenRevocationError(t *testing.T) {
 
 // -- Success-path tests (require TestMain for JWT Ed25519 keys) --
 
-// TestRefreshToken_Success verifies valid refresh token issues new JWT + new refresh token
+// TestRefreshToken_Success verifies valid refresh token issues new JWT + new refresh token.
+// ValidateRefreshToken now handles rotation atomically: SELECT (8 cols) + INSERT new + UPDATE superseded.
 func TestRefreshToken_Success(t *testing.T) {
 	refreshTokenValue := "valid-refresh-token-uuid-for-success-test"
 	username := "refresh-success-user"
@@ -582,29 +582,27 @@ func TestRefreshToken_Success(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"refresh_token": refreshTokenValue})
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/auth/refresh", bytes.NewReader(body))
 
-	// Mock: ValidateRefreshToken - valid, non-expired, non-revoked
-	validateSQL := `SELECT id, username, expires_at, revoked, last_used FROM refresh_tokens WHERE token_hash = \?`
+	// Mock: ValidateRefreshToken SELECT (8-column family-aware query)
+	validateSQL := `SELECT id, username, expires_at, revoked, last_used, family_id, superseded_by_hash, family_revoked_at FROM refresh_tokens WHERE token_hash = \?`
 	futureExpiry := time.Now().Add(14 * 24 * time.Hour).Format(time.RFC3339)
-	rows := sqlmock.NewRows([]string{"id", "username", "expires_at", "revoked", "last_used"}).
-		AddRow("token-id-1", username, futureExpiry, false, nil)
+	rows := sqlmock.NewRows([]string{
+		"id", "username", "expires_at", "revoked", "last_used",
+		"family_id", "superseded_by_hash", "family_revoked_at",
+	}).AddRow("token-id-1", username, futureExpiry, false, nil, "fam-abc", nil, nil)
 	mock.ExpectQuery(validateSQL).WithArgs(sqlmock.AnyArg()).WillReturnRows(rows)
 
-	// Mock: ValidateRefreshToken sliding window UPDATE
-	updateExpirySQL := `UPDATE refresh_tokens SET expires_at = \?, last_used = \? WHERE id = \?`
-	mock.ExpectExec(updateExpirySQL).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "token-id-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	// Mock: ValidateRefreshToken INSERT new token (10-column insert with family fields)
+	insertNewSQL := `INSERT INTO refresh_tokens`
+	mock.ExpectExec(insertNewSQL).WithArgs(
+		sqlmock.AnyArg(), username, sqlmock.AnyArg(), sqlmock.AnyArg(),
+		sqlmock.AnyArg(), false, nil, "fam-abc", nil, nil,
+	).WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Note: IsUserJWTRevoked checks in-memory cache first. For a fresh username,
-	// the cache returns "not revoked" without hitting the DB, so no mock needed.
+	// Mock: ValidateRefreshToken UPDATE superseded_by_hash on consumed row
+	updateSupersededSQL := `UPDATE refresh_tokens SET superseded_by_hash = \?, last_used = \? WHERE id = \?`
+	mock.ExpectExec(updateSupersededSQL).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "token-id-1").WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// auth.GenerateToken() works thanks to TestMain (Ed25519 keys initialized)
-
-	// Mock: RevokeRefreshToken (old token rotation)
-	revokeOldSQL := `UPDATE refresh_tokens SET revoked = true WHERE token_hash = \?`
-	mock.ExpectExec(revokeOldSQL).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// Mock: CreateRefreshToken (new token) - actual INSERT has 7 columns
-	insertNewSQL := `INSERT INTO refresh_tokens \(id, username, token_hash, expires_at, created_at, revoked, last_used\) VALUES \(\?, \?, \?, \?, \?, \?, \?\)`
-	mock.ExpectExec(insertNewSQL).WithArgs(sqlmock.AnyArg(), username, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), false, nil).WillReturnResult(sqlmock.NewResult(1, 1))
+	// auth.GenerateFullAccessToken works thanks to TestMain (Ed25519 keys initialized)
 
 	// Mock: LogUserAction
 	logSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`

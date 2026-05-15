@@ -36,7 +36,10 @@ func setupTOTPTestDB(t *testing.T) *sql.DB {
 			enabled BOOLEAN DEFAULT FALSE,
 			setup_completed BOOLEAN DEFAULT FALSE,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			last_used DATETIME
+			last_used DATETIME,
+			failed_attempts_in_window INTEGER NOT NULL DEFAULT 0,
+			window_started_at DATETIME,
+			last_failed_attempt_at DATETIME
 		);
 
 		CREATE TABLE totp_usage_log (
@@ -426,5 +429,333 @@ func TestTOTPReset(t *testing.T) {
 	// Try to reset with invalid backup code
 	if _, err := ResetTOTP(db, "testuser2", "INVALIDCODE"); err == nil {
 		t.Fatal("TOTP reset should fail with invalid backup code")
+	}
+}
+
+// setupFullTOTP is a helper that creates a fully enrolled TOTP user in the given db.
+func setupFullTOTP(t *testing.T, db *sql.DB, username string) *TOTPSetup {
+	t.Helper()
+	setup, err := GenerateTOTPSetup(username)
+	if err != nil {
+		t.Fatalf("GenerateTOTPSetup: %v", err)
+	}
+	if err := StoreTOTPSetup(db, username, setup); err != nil {
+		t.Fatalf("StoreTOTPSetup: %v", err)
+	}
+	code, err := totp.GenerateCode(setup.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("GenerateCode: %v", err)
+	}
+	if err := CompleteTOTPSetup(db, username, code); err != nil {
+		t.Fatalf("CompleteTOTPSetup: %v", err)
+	}
+	return setup
+}
+
+// driveFailures submits n invalid TOTP codes for username and returns the last error.
+// It sets last_failed_attempt_at to pastTime so backoff windows are not blocking
+// unless the caller explicitly wants them to be.
+func driveFailures(t *testing.T, db *sql.DB, username string, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		err := ValidateTOTPCode(db, username, "000000")
+		if err == nil {
+			t.Fatalf("attempt %d: expected failure but got nil", i+1)
+		}
+		// After each failure, back-date last_failed_attempt_at so the soft backoff
+		// does not block subsequent attempts in this loop.
+		_, dbErr := db.Exec(
+			`UPDATE user_totp SET last_failed_attempt_at = ? WHERE username = ?`,
+			time.Now().Add(-2*time.Hour), username,
+		)
+		if dbErr != nil {
+			t.Fatalf("failed to back-date last_failed_at: %v", dbErr)
+		}
+	}
+}
+
+// TestComputeLockoutState_NoWindow verifies that a fresh state (no window) is always allowed.
+func TestComputeLockoutState_NoWindow(t *testing.T) {
+	s := totpLockoutState{}
+	allowed, retryAfter, _ := computeLockoutState(s, time.Now())
+	if !allowed {
+		t.Fatal("expected allowed with no window")
+	}
+	if retryAfter != 0 {
+		t.Fatalf("expected zero retryAfter, got %v", retryAfter)
+	}
+}
+
+// TestComputeLockoutState_ExpiredWindow verifies that an expired window resets to allowed.
+func TestComputeLockoutState_ExpiredWindow(t *testing.T) {
+	now := time.Now()
+	windowStart := now.Add(-25 * time.Hour) // 25h ago, beyond the 24h window
+	attempts := 50
+	s := totpLockoutState{
+		failedAttempts: attempts,
+		windowStarted:  &windowStart,
+		lastFailed:     &windowStart,
+	}
+	allowed, _, _ := computeLockoutState(s, now)
+	if !allowed {
+		t.Fatal("expected allowed for expired window regardless of attempt count")
+	}
+}
+
+// TestComputeLockoutState_SoftBackoff verifies exponential backoff triggers at threshold+1.
+func TestComputeLockoutState_SoftBackoff(t *testing.T) {
+	now := time.Now()
+	windowStart := now.Add(-1 * time.Hour)
+	lastFailed := now.Add(-30 * time.Second) // failed 30s ago
+
+	// At exactly totpSoftLockoutThreshold failures, next attempt is still allowed
+	// (backoff starts at threshold+1 in the record path, but computeLockoutState
+	// checks >= threshold with the recorded count).
+	// At threshold failures + 30s backoff window of 2^0=1 minute, not yet expired.
+	s := totpLockoutState{
+		failedAttempts: totpSoftLockoutThreshold,
+		windowStarted:  &windowStart,
+		lastFailed:     &lastFailed,
+	}
+	allowed, retryAfter, _ := computeLockoutState(s, now)
+	if allowed {
+		t.Fatal("expected blocked at soft lockout threshold with recent failure")
+	}
+	if retryAfter <= 0 {
+		t.Fatalf("expected positive retryAfter, got %v", retryAfter)
+	}
+}
+
+// TestComputeLockoutState_BackoffDoubles verifies that retryAfter doubles between consecutive attempts.
+func TestComputeLockoutState_BackoffDoubles(t *testing.T) {
+	now := time.Now()
+	windowStart := now.Add(-1 * time.Hour)
+	lastFailed := now.Add(-5 * time.Second) // very recent failure
+
+	var prevRetry time.Duration
+	for attempts := totpSoftLockoutThreshold; attempts < totpSoftLockoutThreshold+5; attempts++ {
+		s := totpLockoutState{
+			failedAttempts: attempts,
+			windowStarted:  &windowStart,
+			lastFailed:     &lastFailed,
+		}
+		_, retryAfter, _ := computeLockoutState(s, now)
+		if attempts > totpSoftLockoutThreshold && retryAfter <= prevRetry {
+			t.Fatalf("at attempt %d retryAfter=%v did not increase from previous %v",
+				attempts, retryAfter, prevRetry)
+		}
+		prevRetry = retryAfter
+	}
+}
+
+// TestComputeLockoutState_HardCap verifies the hard daily cap blocks all attempts.
+func TestComputeLockoutState_HardCap(t *testing.T) {
+	now := time.Now()
+	windowStart := now.Add(-1 * time.Hour)
+	lastFailed := now.Add(-1 * time.Second)
+
+	s := totpLockoutState{
+		failedAttempts: totpHardCapThreshold,
+		windowStarted:  &windowStart,
+		lastFailed:     &lastFailed,
+	}
+	allowed, retryAfter, _ := computeLockoutState(s, now)
+	if allowed {
+		t.Fatal("expected blocked at hard cap threshold")
+	}
+	// retryAfter should be approximately 23h (window expires in ~23h)
+	if retryAfter < 22*time.Hour || retryAfter > 24*time.Hour {
+		t.Fatalf("expected retryAfter near 23h, got %v", retryAfter)
+	}
+}
+
+// TestComputeLockoutState_BackoffCap verifies that backoff is capped at totpBackoffCapMinutes.
+func TestComputeLockoutState_BackoffCap(t *testing.T) {
+	now := time.Now()
+	windowStart := now.Add(-1 * time.Hour)
+	lastFailed := now.Add(-1 * time.Second)
+
+	// At 20 failures (10 above soft threshold), backoff would be 2^10=1024min uncapped.
+	s := totpLockoutState{
+		failedAttempts: totpSoftLockoutThreshold + 10,
+		windowStarted:  &windowStart,
+		lastFailed:     &lastFailed,
+	}
+	_, retryAfter, _ := computeLockoutState(s, now)
+	maxExpected := time.Duration(totpBackoffCapMinutes)*time.Minute + 5*time.Second
+	if retryAfter > maxExpected {
+		t.Fatalf("retryAfter %v exceeds cap of %d minutes", retryAfter, totpBackoffCapMinutes)
+	}
+}
+
+// TestTOTPLockout_SoftBackoffEntry verifies that after threshold failures the next
+// ValidateTOTPCode call returns a TOTPLockoutError.
+// Strategy: drive (threshold - 1) back-dated failures so they don't self-block, then
+// drive 1 recent failure (no back-dating) so the recorded last_failed_at is NOW.
+// The very next attempt sees failed_attempts == threshold with a recent last_failed_at
+// and must be blocked by computeLockoutState before any crypto.
+func TestTOTPLockout_SoftBackoffEntry(t *testing.T) {
+	setupTOTPTestEnvironment(t)
+	db := setupTOTPTestDB(t)
+	defer db.Close()
+
+	username := "lockout-soft-user"
+	setupFullTOTP(t, db, username)
+
+	// Drive (threshold - 1) back-dated failures.
+	driveFailures(t, db, username, totpSoftLockoutThreshold-1)
+
+	// Drive exactly 1 more failure WITHOUT back-dating, so last_failed_at = now.
+	err := ValidateTOTPCode(db, username, "000000")
+	if err == nil {
+		t.Fatal("expected error for invalid code on final failure")
+	}
+	// This attempt is invalid code, not lockout-blocked yet.
+	if _, ok := err.(*TOTPLockoutError); ok {
+		t.Fatalf("should not be locked out yet at attempt %d, got %T", totpSoftLockoutThreshold, err)
+	}
+
+	// Now the next attempt: failed_attempts == threshold, last_failed_at == recent.
+	// computeLockoutState must block it before the crypto check.
+	err = ValidateTOTPCode(db, username, "000000")
+	if err == nil {
+		t.Fatal("expected lockout error after exceeding soft threshold")
+	}
+	lockoutErr, ok := err.(*TOTPLockoutError)
+	if !ok {
+		t.Fatalf("expected *TOTPLockoutError, got %T: %v", err, err)
+	}
+	if lockoutErr.RetryAfter <= 0 {
+		t.Fatalf("expected positive RetryAfter, got %v", lockoutErr.RetryAfter)
+	}
+}
+
+// TestTOTPLockout_HardDailyCapEntry verifies that at totpHardCapThreshold failures
+// the account is fully locked until the window expires.
+func TestTOTPLockout_HardDailyCapEntry(t *testing.T) {
+	setupTOTPTestEnvironment(t)
+	db := setupTOTPTestDB(t)
+	defer db.Close()
+
+	username := "lockout-hard-user"
+	setupFullTOTP(t, db, username)
+
+	// Drive totpHardCapThreshold failures (back-dating between each).
+	driveFailures(t, db, username, totpHardCapThreshold)
+
+	// One more attempt: must return TOTPLockoutError with retryAfter near window end.
+	err := ValidateTOTPCode(db, username, "000000")
+	if err == nil {
+		t.Fatal("expected lockout error after hard cap")
+	}
+	lockoutErr, ok := err.(*TOTPLockoutError)
+	if !ok {
+		t.Fatalf("expected *TOTPLockoutError, got %T: %v", err, err)
+	}
+	if lockoutErr.RetryAfter <= 0 {
+		t.Fatalf("expected positive RetryAfter for hard cap, got %v", lockoutErr.RetryAfter)
+	}
+}
+
+// TestTOTPLockout_ClearOnSuccess verifies that a successful TOTP code clears all lockout state.
+func TestTOTPLockout_ClearOnSuccess(t *testing.T) {
+	setupTOTPTestEnvironment(t)
+	db := setupTOTPTestDB(t)
+	defer db.Close()
+
+	username := "lockout-clear-user"
+	setup := setupFullTOTP(t, db, username)
+
+	// Drive some failures.
+	driveFailures(t, db, username, totpSoftLockoutThreshold-1)
+
+	// Submit a valid code (back-date last_failed first so backoff doesn't block).
+	_, dbErr := db.Exec(
+		`UPDATE user_totp SET last_failed_attempt_at = ? WHERE username = ?`,
+		time.Now().Add(-2*time.Hour), username,
+	)
+	if dbErr != nil {
+		t.Fatalf("failed to back-date: %v", dbErr)
+	}
+
+	validCode, err := totp.GenerateCode(setup.Secret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("GenerateCode: %v", err)
+	}
+	if err := ValidateTOTPCode(db, username, validCode); err != nil {
+		t.Fatalf("valid code should succeed: %v", err)
+	}
+
+	// Verify columns are cleared.
+	var failedAttempts int
+	var windowStarted, lastFailed sql.NullString
+	err = db.QueryRow(
+		`SELECT failed_attempts_in_window, window_started_at, last_failed_attempt_at
+		 FROM user_totp WHERE username = ?`, username,
+	).Scan(&failedAttempts, &windowStarted, &lastFailed)
+	if err != nil {
+		t.Fatalf("query lockout state: %v", err)
+	}
+	if failedAttempts != 0 {
+		t.Fatalf("expected failed_attempts=0 after success, got %d", failedAttempts)
+	}
+	if windowStarted.Valid && windowStarted.String != "" {
+		t.Fatalf("expected window_started_at=NULL after success, got %q", windowStarted.String)
+	}
+	if lastFailed.Valid && lastFailed.String != "" {
+		t.Fatalf("expected last_failed_attempt_at=NULL after success, got %q", lastFailed.String)
+	}
+}
+
+// TestTOTPLockout_WindowResetAfter24h verifies that failures older than 24h do not block.
+func TestTOTPLockout_WindowResetAfter24h(t *testing.T) {
+	setupTOTPTestEnvironment(t)
+	db := setupTOTPTestDB(t)
+	defer db.Close()
+
+	username := "lockout-expired-user"
+	setupFullTOTP(t, db, username)
+
+	// Manually set a window that started 25 hours ago with hard-cap failures.
+	staleWindow := time.Now().Add(-25 * time.Hour)
+	_, err := db.Exec(
+		`UPDATE user_totp
+		 SET failed_attempts_in_window = ?, window_started_at = ?, last_failed_attempt_at = ?
+		 WHERE username = ?`,
+		totpHardCapThreshold+5, staleWindow, staleWindow, username,
+	)
+	if err != nil {
+		t.Fatalf("setup stale window: %v", err)
+	}
+
+	// A new failure should reset the window (not be blocked).
+	err = ValidateTOTPCode(db, username, "000000")
+	if err == nil {
+		t.Fatal("expected error for invalid code (but not a lockout error)")
+	}
+	if _, ok := err.(*TOTPLockoutError); ok {
+		t.Fatal("stale window should not produce lockout error; window should have been reset")
+	}
+}
+
+// TestTOTPSkew_AcceptsPreviousWindow verifies that a code from the previous 30s window
+// is accepted (A-37 fix: TOTPSkew=1).
+func TestTOTPSkew_AcceptsPreviousWindow(t *testing.T) {
+	setupTOTPTestEnvironment(t)
+	db := setupTOTPTestDB(t)
+	defer db.Close()
+
+	username := "skew-user"
+	setup := setupFullTOTP(t, db, username)
+
+	// Generate a code for 35 seconds ago (previous 30s window).
+	prevWindow := time.Now().UTC().Add(-35 * time.Second)
+	prevCode, err := totp.GenerateCode(setup.Secret, prevWindow)
+	if err != nil {
+		t.Fatalf("GenerateCode for previous window: %v", err)
+	}
+
+	if err := ValidateTOTPCode(db, username, prevCode); err != nil {
+		t.Fatalf("code from previous window should be accepted with Skew=1: %v", err)
 	}
 }

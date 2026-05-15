@@ -10,16 +10,66 @@ import (
 	"sync"
 	"time"
 
+	"github.com/84adam/Arkfile/models"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 )
 
-// In-memory cache for faster revocation checks
+// In-memory cache for faster per-JTI revocation checks
 var (
 	revokedTokensCache = make(map[string]bool)
 	cacheMutex         = &sync.RWMutex{}
 	cacheInitialized   = false
 )
+
+// userRevocationCache caches the latest user-wide JWT revocation timestamp so
+// TokenRevocationMiddleware does not hit the DB on every single request.
+// Entries expire after userRevocationCacheTTL; invalidated on each revocation write.
+const userRevocationCacheTTL = 30 * time.Second
+
+type userRevocationEntry struct {
+	revokedAt time.Time // zero value = no revocation
+	cachedAt  time.Time
+}
+
+var (
+	userRevocationCache      = make(map[string]userRevocationEntry)
+	userRevocationCacheMutex sync.RWMutex
+)
+
+// invalidateUserRevocationCache removes a user's cached entry so the next
+// request re-reads from the DB. Called when a new revocation is written.
+func invalidateUserRevocationCache(username string) {
+	userRevocationCacheMutex.Lock()
+	delete(userRevocationCache, username)
+	userRevocationCacheMutex.Unlock()
+}
+
+// getUserRevocationTimeCached returns the user's JWT revocation timestamp,
+// using the in-process cache to avoid a DB round-trip on every request.
+func getUserRevocationTimeCached(db *sql.DB, username string) (time.Time, error) {
+	now := time.Now()
+
+	userRevocationCacheMutex.RLock()
+	entry, ok := userRevocationCache[username]
+	userRevocationCacheMutex.RUnlock()
+
+	if ok && now.Sub(entry.cachedAt) < userRevocationCacheTTL {
+		return entry.revokedAt, nil
+	}
+
+	// Cache miss or stale: read from DB.
+	revokedAt, err := models.GetUserJWTRevocationTime(db, username)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	userRevocationCacheMutex.Lock()
+	userRevocationCache[username] = userRevocationEntry{revokedAt: revokedAt, cachedAt: now}
+	userRevocationCacheMutex.Unlock()
+
+	return revokedAt, nil
+}
 
 // parseEitherTierToken parses a token string, accepting either the full-tier
 // or the temp-tier signing key. Used by RevokeToken so logout works for both
@@ -263,49 +313,50 @@ func DeleteAllRefreshTokensForUser(db *sql.DB, username string) error {
 	return err
 }
 
-// TokenRevocationMiddleware creates a middleware that checks tokens against the revocation list
+// TokenRevocationMiddleware checks tokens against both the per-JTI revocation list
+// and the user-wide JWT revocation table (A-09). The user-wide check uses a
+// 30-second in-process cache to avoid a DB round-trip on every request.
 func TokenRevocationMiddleware(db *sql.DB) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			// Get the JWT token from the context
 			user := c.Get("user")
 			if user == nil {
-				// No token to check, proceed
 				return next(c)
 			}
 
 			token, ok := user.(*jwt.Token)
 			if !ok {
-				// Invalid token type, proceed
 				return next(c)
 			}
 
 			claims, ok := token.Claims.(*Claims)
 			if !ok {
-				// Invalid claims type, proceed
 				return next(c)
 			}
 
-			// Get the token ID
 			tokenID := claims.ID
 			if tokenID == "" {
-				// No token ID, proceed
 				return next(c)
 			}
 
-			// Check if token is revoked
+			// Per-JTI revocation check.
 			isRevoked, err := IsRevoked(db, tokenID)
 			if err != nil {
-				// Error checking revocation, log and proceed
 				return echo.NewHTTPError(http.StatusInternalServerError, "Error validating token")
 			}
-
 			if isRevoked {
-				// Token is revoked, deny access
 				return echo.NewHTTPError(http.StatusUnauthorized, "Token has been revoked")
 			}
 
-			// Token is not revoked, proceed
+			// Per-user user-wide JWT revocation check (A-09).
+			// Uses a cached lookup; cache TTL is 30 seconds.
+			if claims.Username != "" && claims.IssuedAt != nil {
+				revokedAt, err := getUserRevocationTimeCached(db, claims.Username)
+				if err == nil && !revokedAt.IsZero() && revokedAt.After(claims.IssuedAt.Time) {
+					return echo.NewHTTPError(http.StatusUnauthorized, "Token has been revoked")
+				}
+			}
+
 			return next(c)
 		}
 	}

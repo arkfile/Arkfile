@@ -23,7 +23,8 @@ type RefreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-// RefreshToken handles refresh token requests
+// RefreshToken handles refresh token requests.
+// ValidateRefreshToken performs atomic rotation internally (family-revoke on reuse).
 func RefreshToken(c echo.Context) error {
 	var request RefreshTokenRequest
 	if err := c.Bind(&request); err != nil {
@@ -34,62 +35,34 @@ func RefreshToken(c echo.Context) error {
 		return JSONError(c, http.StatusUnauthorized, "Refresh token not found")
 	}
 
-	// Validate the refresh token
-	username, err := models.ValidateRefreshToken(database.DB, request.RefreshToken)
+	// Validate and rotate the refresh token atomically.
+	// On reuse detection, ValidateRefreshToken revokes the family and all user JWTs internally.
+	username, newRefreshToken, err := models.ValidateRefreshToken(database.DB, request.RefreshToken)
 	if err != nil {
 		if err == models.ErrRefreshTokenExpired {
 			return JSONError(c, http.StatusUnauthorized, "Refresh token expired")
 		}
-		if err == models.ErrUserNotFound {
-			return JSONError(c, http.StatusUnauthorized, "User not found for token")
+		if err == models.ErrRefreshTokenReuse {
+			logging.InfoLogger.Printf("SECURITY: Refresh token reuse detected for a session; all sessions revoked")
+			return JSONError(c, http.StatusUnauthorized, "All tokens have been revoked for security reasons")
 		}
 		return JSONError(c, http.StatusUnauthorized, "Invalid or expired refresh token")
 	}
 
-	// LAZY REVOCATION CHECK: Check for user-wide JWT revocations during refresh token operation
-	// This implements the Netflix/Spotify model where we only check revocations during refresh,
-	// not on every API request. This catches edge cases like credential re-registration and admin force-logout.
-	currentTime := time.Now()
-	isUserRevoked, err := auth.IsUserJWTRevoked(database.DB, username, currentTime)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to check user JWT revocation for %s: %v", username, err)
-		// Continue with refresh - don't fail on revocation check errors
-	} else if isUserRevoked {
-		// User has been force-revoked - deny refresh and log security event
-		logging.InfoLogger.Printf("SECURITY: Refresh denied for force-revoked user: %s", username)
-		return JSONError(c, http.StatusUnauthorized, "All tokens have been revoked for security reasons")
-	}
-
-	// Generate new JWT token (full-tier; refresh flow always produces a full token,
-	// matching the post-TOTP login behaviour). A user who has not completed TOTP
-	// never receives a refresh token in the first place, so this path is unreachable
-	// for temp-tier sessions.
+	// Generate new full-tier JWT. Refresh flow always produces a full token; a user
+	// who has not completed TOTP never receives a refresh token in the first place.
 	token, expirationTime, err := auth.GenerateFullAccessToken(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate token for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to create new token")
 	}
 
-	// Revoke the old refresh token for security (token rotation)
-	if err := models.RevokeRefreshToken(database.DB, request.RefreshToken); err != nil {
-		// Log but don't fail - the old token will expire naturally
-		logging.ErrorLogger.Printf("Warning: Failed to revoke old refresh token for %s: %v", username, err)
-	}
-
-	// Generate new refresh token
-	refreshToken, err := models.CreateRefreshToken(database.DB, username)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to generate refresh token for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Could not create new refresh token")
-	}
-
-	// Log the token refresh
 	database.LogUserAction(username, "refreshed token", "")
 	logging.InfoLogger.Printf("Token refreshed for user: %s", username)
 
 	return JSONResponse(c, http.StatusOK, "Token refreshed successfully", map[string]interface{}{
 		"token":         token,
-		"refresh_token": refreshToken,
+		"refresh_token": newRefreshToken,
 		"expires_at":    expirationTime,
 	})
 }

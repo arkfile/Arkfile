@@ -27,9 +27,15 @@ const (
 	TOTPIssuer       = "Arkfile"
 	TOTPDigits       = 6
 	TOTPPeriod       = 30
-	TOTPSkew         = 0 // Allow ±0 window (60 seconds total: current + prev/next 30s windows = ±25s tolerance)
+	TOTPSkew         = 1 // Allow ±1 window (A-37 fix: accepts current, previous, and next 30s windows)
 	BackupCodeLength = 10
 	BackupCodeCount  = 10
+
+	// Lockout policy constants (A-08)
+	totpSoftLockoutThreshold = 10 // failures before exponential backoff begins
+	totpHardCapThreshold     = 30 // failures before hard 24h cap
+	totpWindowDuration       = 24 * time.Hour
+	totpBackoffCapMinutes    = 60
 )
 
 // Human-friendly backup code character set (excludes B/8, O/0, I/1, S/5, Z/2)
@@ -249,8 +255,171 @@ func CompleteTOTPSetup(db *sql.DB, username, testCode string) error {
 	return nil
 }
 
-// ValidateTOTPCode validates a TOTP code with replay protection
+// TOTPLockoutError is returned when a TOTP attempt is rejected due to failure-rate lockout.
+// RetryAfter is the duration the caller must wait before retrying (zero for hard-cap).
+type TOTPLockoutError struct {
+	Reason     string
+	RetryAfter time.Duration
+}
+
+func (e *TOTPLockoutError) Error() string {
+	return e.Reason
+}
+
+// totpLockoutState holds the three columns read from user_totp for lockout computation.
+type totpLockoutState struct {
+	failedAttempts int
+	windowStarted  *time.Time
+	lastFailed     *time.Time
+}
+
+// computeLockoutState is a pure function that decides whether another TOTP attempt is
+// allowed given the current failure state and the current time. It has no side effects.
+// Returns (allowed=true, zero duration, "") when the attempt is permitted.
+// Returns (allowed=false, retryAfter, reason) when it is blocked.
+func computeLockoutState(s totpLockoutState, now time.Time) (allowed bool, retryAfter time.Duration, reason string) {
+	// No window open yet, or window has expired: always allowed.
+	if s.windowStarted == nil || now.Sub(*s.windowStarted) >= totpWindowDuration {
+		return true, 0, ""
+	}
+
+	// Hard daily cap: 30 or more failures in the current window.
+	if s.failedAttempts >= totpHardCapThreshold {
+		windowEnds := s.windowStarted.Add(totpWindowDuration)
+		wait := windowEnds.Sub(now)
+		if wait < 0 {
+			wait = 0
+		}
+		return false, wait, "too many failed attempts; try again later"
+	}
+
+	// Soft exponential backoff: 10 or more failures.
+	if s.failedAttempts >= totpSoftLockoutThreshold && s.lastFailed != nil {
+		backoffExp := s.failedAttempts - totpSoftLockoutThreshold
+		backoffMinutes := 1 << backoffExp // 2^(attempts-10) minutes
+		if backoffMinutes > totpBackoffCapMinutes {
+			backoffMinutes = totpBackoffCapMinutes
+		}
+		backoff := time.Duration(backoffMinutes) * time.Minute
+		retryAt := s.lastFailed.Add(backoff)
+		if now.Before(retryAt) {
+			return false, retryAt.Sub(now), "too many failed attempts; try again later"
+		}
+	}
+
+	return true, 0, ""
+}
+
+// getTOTPLockoutState reads the three lockout columns from user_totp for the given user.
+func getTOTPLockoutState(db *sql.DB, username string) (totpLockoutState, error) {
+	var s totpLockoutState
+	var failedAttempts int
+	var windowStartedStr sql.NullString
+	var lastFailedStr sql.NullString
+
+	err := db.QueryRow(`
+		SELECT failed_attempts_in_window, window_started_at, last_failed_attempt_at
+		FROM user_totp
+		WHERE username = ?`, username,
+	).Scan(&failedAttempts, &windowStartedStr, &lastFailedStr)
+
+	if err != nil {
+		return s, err
+	}
+
+	s.failedAttempts = failedAttempts
+
+	parseTS := func(raw sql.NullString) *time.Time {
+		if !raw.Valid || raw.String == "" {
+			return nil
+		}
+		for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05"} {
+			if t, err := time.Parse(layout, raw.String); err == nil {
+				return &t
+			}
+		}
+		return nil
+	}
+
+	s.windowStarted = parseTS(windowStartedStr)
+	s.lastFailed = parseTS(lastFailedStr)
+	return s, nil
+}
+
+// recordTOTPFailure increments the failure counter for a user and persists it.
+// It returns the updated lockout state so the caller can emit events on transitions.
+func recordTOTPFailure(db *sql.DB, username string, now time.Time) (totpLockoutState, error) {
+	cur, err := getTOTPLockoutState(db, username)
+	if err != nil {
+		return cur, err
+	}
+
+	var newAttempts int
+	var newWindowStart time.Time
+
+	// Reset window if it has expired or hasn't started.
+	if cur.windowStarted == nil || now.Sub(*cur.windowStarted) >= totpWindowDuration {
+		newAttempts = 1
+		newWindowStart = now
+	} else {
+		newAttempts = cur.failedAttempts + 1
+		newWindowStart = *cur.windowStarted
+	}
+
+	_, err = db.Exec(`
+		UPDATE user_totp
+		SET failed_attempts_in_window = ?,
+		    window_started_at = ?,
+		    last_failed_attempt_at = ?
+		WHERE username = ?`,
+		newAttempts, newWindowStart, now, username,
+	)
+	if err != nil {
+		return cur, err
+	}
+
+	updated := totpLockoutState{
+		failedAttempts: newAttempts,
+		windowStarted:  &newWindowStart,
+		lastFailed:     &now,
+	}
+	return updated, nil
+}
+
+// clearTOTPFailures resets all lockout state on a successful verification.
+func clearTOTPFailures(db *sql.DB, username string) error {
+	_, err := db.Exec(`
+		UPDATE user_totp
+		SET failed_attempts_in_window = 0,
+		    window_started_at = NULL,
+		    last_failed_attempt_at = NULL
+		WHERE username = ?`, username,
+	)
+	return err
+}
+
+// emitTOTPLockoutEvent logs a TOTP lockout state transition. IP is not available
+// at this layer; the handler layer may emit a richer security event if desired.
+func emitTOTPLockoutEvent(_ *sql.DB, username, eventType, detail string) {
+	if logging.InfoLogger != nil {
+		logging.InfoLogger.Printf("SECURITY: %s for user: %s (%s)", eventType, username, detail)
+	}
+}
+
+// ValidateTOTPCode validates a TOTP code with replay protection and failure-rate lockout.
 func ValidateTOTPCode(db *sql.DB, username, code string) error {
+	// Check lockout state before doing any crypto work.
+	lockState, err := getTOTPLockoutState(db, username)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("failed to check TOTP lockout state: %w", err)
+	}
+
+	now := time.Now().UTC()
+	allowed, retryAfter, reason := computeLockoutState(lockState, now)
+	if !allowed {
+		return &TOTPLockoutError{Reason: reason, RetryAfter: retryAfter}
+	}
+
 	// Get user's TOTP data
 	totpData, err := getTOTPData(db, username)
 	if err != nil {
@@ -264,7 +433,6 @@ func ValidateTOTPCode(db *sql.DB, username, code string) error {
 	// Decrypt TOTP secret using server-side key management
 	secret, err := decryptTOTPSecret(totpData.SecretEncrypted, username)
 	if err != nil {
-		// Debug logging for decrypt failures (no secret exposure)
 		if isDebugMode() && logging.ErrorLogger != nil {
 			logging.ErrorLogger.Printf("TOTP decrypt failed for user: %s", username)
 		}
@@ -287,44 +455,77 @@ func ValidateTOTPCode(db *sql.DB, username, code string) error {
 	}
 
 	if !valid {
-		// Debug logging for code mismatch (with window metadata)
 		if isDebugMode() && logging.ErrorLogger != nil {
 			logging.ErrorLogger.Printf("TOTP code mismatch for user: %s, window_start: %d, skew: %d",
 				username, windowStart, TOTPSkew)
+		}
+		// Record the failure and check for lockout transitions.
+		updated, recErr := recordTOTPFailure(db, username, now)
+		if recErr != nil && logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("Failed to record TOTP failure for user %s: %v", username, recErr)
+		}
+		// Emit security events on lockout threshold crossings.
+		if updated.failedAttempts == totpSoftLockoutThreshold+1 {
+			emitTOTPLockoutEvent(db, username, "TOTPSoftLockout",
+				fmt.Sprintf("failure count reached %d", updated.failedAttempts))
+		} else if updated.failedAttempts == totpHardCapThreshold+1 {
+			emitTOTPLockoutEvent(db, username, "TOTPHardCap",
+				fmt.Sprintf("failure count reached %d; locked for 24h", updated.failedAttempts))
 		}
 		return fmt.Errorf("invalid TOTP code")
 	}
 
 	// Check for replay attack
 	if err := checkTOTPReplay(db, username, code, currentTime); err != nil {
-		// Debug logging for replay detection
 		if isDebugMode() && logging.ErrorLogger != nil {
 			logging.ErrorLogger.Printf("TOTP replay detected for user: %s", username)
 		}
 		return fmt.Errorf("replay attack detected: %w", err)
 	}
 
+	// Success: clear lockout state and emit recovery event if recovering from lockout.
+	wasLocked := lockState.failedAttempts >= totpSoftLockoutThreshold
+	if clearErr := clearTOTPFailures(db, username); clearErr != nil && logging.ErrorLogger != nil {
+		logging.ErrorLogger.Printf("Failed to clear TOTP failures for user %s: %v", username, clearErr)
+	}
+	if wasLocked {
+		emitTOTPLockoutEvent(db, username, "TOTPLockoutCleared", "successful verification after lockout")
+	}
+
 	// Log TOTP usage
 	if err := logTOTPUsage(db, username, code, currentTime); err != nil {
-		// Log but don't fail
-		logging.ErrorLogger.Printf("Failed to log TOTP usage: %v", err)
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("Failed to log TOTP usage: %v", err)
+		}
 	}
 
 	// Update last used timestamp
 	_, err = db.Exec("UPDATE user_totp SET last_used = ? WHERE username = ?",
 		time.Now(), username)
 	if err != nil {
-		// Log but don't fail
 		if logging.ErrorLogger != nil {
 			logging.ErrorLogger.Printf("Failed to update TOTP last_used: %v", err)
 		}
 	}
 
-	return nil // Valid code
+	return nil
 }
 
-// ValidateBackupCode validates and consumes a backup code
+// ValidateBackupCode validates and consumes a backup code.
+// Backup-code attempts share the same per-user lockout state as TOTP codes.
 func ValidateBackupCode(db *sql.DB, username, code string) error {
+	// Check lockout state before doing any crypto work.
+	lockState, err := getTOTPLockoutState(db, username)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("failed to check TOTP lockout state: %w", err)
+	}
+
+	now := time.Now().UTC()
+	allowed, retryAfter, reason := computeLockoutState(lockState, now)
+	if !allowed {
+		return &TOTPLockoutError{Reason: reason, RetryAfter: retryAfter}
+	}
+
 	// Get user's TOTP data
 	totpData, err := getTOTPData(db, username)
 	if err != nil {
@@ -357,6 +558,17 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 	}
 
 	if !codeFound {
+		updated, recErr := recordTOTPFailure(db, username, now)
+		if recErr != nil && logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("Failed to record TOTP failure for user %s: %v", username, recErr)
+		}
+		if updated.failedAttempts == totpSoftLockoutThreshold+1 {
+			emitTOTPLockoutEvent(db, username, "TOTPSoftLockout",
+				fmt.Sprintf("failure count reached %d", updated.failedAttempts))
+		} else if updated.failedAttempts == totpHardCapThreshold+1 {
+			emitTOTPLockoutEvent(db, username, "TOTPHardCap",
+				fmt.Sprintf("failure count reached %d; locked for 24h", updated.failedAttempts))
+		}
 		return fmt.Errorf("invalid backup code")
 	}
 
@@ -365,11 +577,19 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 		return fmt.Errorf("failed to log backup code usage: %w", err)
 	}
 
+	// Success: clear lockout state and emit recovery event if recovering from lockout.
+	wasLocked := lockState.failedAttempts >= totpSoftLockoutThreshold
+	if clearErr := clearTOTPFailures(db, username); clearErr != nil && logging.ErrorLogger != nil {
+		logging.ErrorLogger.Printf("Failed to clear TOTP failures for user %s: %v", username, clearErr)
+	}
+	if wasLocked {
+		emitTOTPLockoutEvent(db, username, "TOTPLockoutCleared", "successful backup code after lockout")
+	}
+
 	// Update last used timestamp
 	_, err = db.Exec("UPDATE user_totp SET last_used = ? WHERE username = ?",
 		time.Now(), username)
 	if err != nil {
-		// Log but don't fail
 		if logging.ErrorLogger != nil {
 			logging.ErrorLogger.Printf("Failed to update TOTP last_used after backup code: %v", err)
 		}

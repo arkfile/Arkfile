@@ -7,16 +7,16 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3" // SQLite driver for tests
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // setupTestDB_RefreshToken creates an in-memory SQLite DB for refresh token tests.
-// Using a different name to avoid conflicts if run in the same package scope during broader tests.
 func setupTestDB_RefreshToken(t *testing.T) *sql.DB {
+	t.Helper()
 	db, err := sql.Open("sqlite3", ":memory:")
-	require.NoError(t, err, "Failed to open in-memory SQLite DB for refresh token tests")
+	require.NoError(t, err)
 
 	schema := `
 	CREATE TABLE refresh_tokens (
@@ -26,13 +26,27 @@ func setupTestDB_RefreshToken(t *testing.T) *sql.DB {
 		expires_at TIMESTAMP NOT NULL,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		revoked BOOLEAN DEFAULT FALSE,
-		last_used TIMESTAMP
+		last_used TIMESTAMP,
+		family_id TEXT NOT NULL,
+		superseded_by_hash TEXT,
+		family_revoked_at TIMESTAMP
+	);
+	CREATE TABLE user_jwt_revocations (
+		username TEXT PRIMARY KEY,
+		revoked_at TIMESTAMP NOT NULL,
+		reason TEXT
 	);
 	`
 	_, err = db.Exec(schema)
-	require.NoError(t, err, "Failed to create refresh_tokens table")
+	require.NoError(t, err)
 
 	return db
+}
+
+// hashStr is a local convenience that matches how the model hashes tokens.
+func hashStr(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }
 
 func TestCreateRefreshToken(t *testing.T) {
@@ -40,124 +54,174 @@ func TestCreateRefreshToken(t *testing.T) {
 	defer db.Close()
 
 	username := "test_username"
+	raw, err := CreateRefreshToken(db, username)
 
-	// Execute CreateRefreshToken
-	tokenString, err := CreateRefreshToken(db, username)
+	require.NoError(t, err)
+	assert.NotEmpty(t, raw, "raw token should not be empty")
+	// Token must be 44 chars: base64url of 32 random bytes.
+	assert.Equal(t, 44, len(raw), "expected 44-char base64url token")
 
-	// Assert: No error and token string is generated
-	assert.NoError(t, err)
-	assert.NotEmpty(t, tokenString, "Generated token string should not be empty")
-
-	// Assert: Database state
-	hash := sha256.Sum256([]byte(tokenString))
-	tokenHash := hex.EncodeToString(hash[:])
-
+	// Verify row was inserted with the expected hash.
 	var dbUsername string
-	var dbExpiresAt time.Time
-	err = db.QueryRow("SELECT username, expires_at FROM refresh_tokens WHERE token_hash = ?", tokenHash).Scan(&dbUsername, &dbExpiresAt)
-	assert.NoError(t, err, "Token hash should exist in DB")
-	assert.Equal(t, username, dbUsername, "Username in DB should match")
+	var familyID string
+	var expiresAtStr string
+	err = db.QueryRow(
+		"SELECT username, family_id, expires_at FROM refresh_tokens WHERE token_hash = ?",
+		hashStr(raw),
+	).Scan(&dbUsername, &familyID, &expiresAtStr)
+	require.NoError(t, err)
+	assert.Equal(t, username, dbUsername)
+	assert.NotEmpty(t, familyID, "family_id must be populated")
 
-	// Assert: Expiry time is approximately 30 days in the future
-	expectedExpiry := time.Now().Add(30 * 24 * time.Hour)
-	assert.WithinDuration(t, expectedExpiry, dbExpiresAt, 5*time.Second, "Expiry time should be around 30 days")
+	// Expiry must be around 30 days from now.
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05"} {
+		if expiresAt, parseErr := time.Parse(layout, expiresAtStr); parseErr == nil {
+			expected := time.Now().Add(30 * 24 * time.Hour)
+			assert.WithinDuration(t, expected, expiresAt, 10*time.Second)
+			break
+		}
+	}
 }
 
-func TestValidateRefreshToken(t *testing.T) {
+func TestValidateRefreshToken_ValidRotation(t *testing.T) {
 	db := setupTestDB_RefreshToken(t)
 	defer db.Close()
 
-	username := "validate_username"
-	validTokenString, _ := CreateRefreshToken(db, username) // Valid token
-	expiredTokenString, _ := CreateRefreshToken(db, username)
-	usedTokenString, _ := CreateRefreshToken(db, username)
-	revokedTokenString, _ := CreateRefreshToken(db, username)
-
-	// Modify tokens in DB for test cases
-	hashExpired := sha256.Sum256([]byte(expiredTokenString))
-	hashUsed := sha256.Sum256([]byte(usedTokenString))
-	hashRevoked := sha256.Sum256([]byte(revokedTokenString))
-
-	_, err := db.Exec("UPDATE refresh_tokens SET expires_at = ? WHERE token_hash = ?",
-		time.Now().Add(-1*time.Hour), hex.EncodeToString(hashExpired[:]))
+	username := "rotate_user"
+	raw0, err := CreateRefreshToken(db, username)
 	require.NoError(t, err)
 
-	_, err = db.Exec("UPDATE refresh_tokens SET last_used = ? WHERE token_hash = ?",
-		time.Now(), hex.EncodeToString(hashUsed[:]))
+	// Validate (rotates): returns username + new raw token.
+	gotUser, newRaw, err := ValidateRefreshToken(db, raw0)
+	require.NoError(t, err)
+	assert.Equal(t, username, gotUser)
+	assert.NotEmpty(t, newRaw)
+	assert.NotEqual(t, raw0, newRaw, "rotated token must differ from old")
+
+	// Old token must now have superseded_by_hash set.
+	var superseded sql.NullString
+	err = db.QueryRow(
+		"SELECT superseded_by_hash FROM refresh_tokens WHERE token_hash = ?",
+		hashStr(raw0),
+	).Scan(&superseded)
+	require.NoError(t, err)
+	assert.True(t, superseded.Valid && superseded.String != "", "old row must have superseded_by_hash")
+
+	// New token row must exist with same family_id, superseded_by_hash NULL.
+	var oldFamilyID, newFamilyID string
+	var newSuperseded sql.NullString
+	require.NoError(t, db.QueryRow(
+		"SELECT family_id FROM refresh_tokens WHERE token_hash = ?", hashStr(raw0),
+	).Scan(&oldFamilyID))
+	require.NoError(t, db.QueryRow(
+		"SELECT family_id, superseded_by_hash FROM refresh_tokens WHERE token_hash = ?", hashStr(newRaw),
+	).Scan(&newFamilyID, &newSuperseded))
+
+	assert.Equal(t, oldFamilyID, newFamilyID, "both tokens must share family_id")
+	assert.False(t, newSuperseded.Valid, "new token must have NULL superseded_by_hash")
+}
+
+func TestValidateRefreshToken_ExpiredToken(t *testing.T) {
+	db := setupTestDB_RefreshToken(t)
+	defer db.Close()
+
+	raw, err := CreateRefreshToken(db, "expired_user")
 	require.NoError(t, err)
 
-	_, err = db.Exec("UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = ?",
-		hex.EncodeToString(hashRevoked[:]))
+	// Force-expire the token.
+	_, err = db.Exec(
+		"UPDATE refresh_tokens SET expires_at = ? WHERE token_hash = ?",
+		time.Now().Add(-1*time.Hour), hashStr(raw),
+	)
 	require.NoError(t, err)
 
-	testCases := []struct {
-		name           string
-		token          string
-		expectUsername string
-		expectErrText  string // Substring of the expected error message
-		expectUsed     bool   // Whether the token should be marked as used after validation
-	}{
-		{
-			name:           "Valid token",
-			token:          validTokenString,
-			expectUsername: username,
-			expectUsed:     true,
-		},
-		{
-			name:          "Expired token",
-			token:         expiredTokenString,
-			expectErrText: "refresh token has expired",
-			expectUsed:    false, // Should not be marked used if invalid
-		},
-		{
-			name:           "Already used token",
-			token:          usedTokenString,
-			expectUsername: username, // Should succeed as tokens are reusable
-			expectUsed:     true,     // Remains used
-		},
-		{
-			name:          "Revoked token",
-			token:         revokedTokenString,
-			expectErrText: "refresh token not found", // Revoked tokens are treated as not found
-			expectUsed:    false,                     // Should not be marked used if invalid
-		},
-		{
-			name:          "Invalid/Non-existent token",
-			token:         "non-existent-token",
-			expectErrText: "refresh token not found",
-			expectUsed:    false,
-		},
-	}
+	_, _, err = ValidateRefreshToken(db, raw)
+	assert.ErrorIs(t, err, ErrRefreshTokenExpired)
+}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Execute ValidateRefreshToken
-			validatedUsername, err := ValidateRefreshToken(db, tc.token)
+func TestValidateRefreshToken_RevokedToken(t *testing.T) {
+	db := setupTestDB_RefreshToken(t)
+	defer db.Close()
 
-			// Assert: Error expectation
-			if tc.expectErrText != "" {
-				require.Error(t, err, "Expected an error")
-				assert.Contains(t, err.Error(), tc.expectErrText, "Error message mismatch")
-				assert.Empty(t, validatedUsername, "Username should be empty on error")
-			} else {
-				assert.NoError(t, err, "Did not expect an error")
-				assert.Equal(t, tc.expectUsername, validatedUsername, "Validated username mismatch")
-			}
+	raw, err := CreateRefreshToken(db, "revoked_user")
+	require.NoError(t, err)
 
-			// Assert: Check 'last_used' status in DB
-			hash := sha256.Sum256([]byte(tc.token))
-			tokenHash := hex.EncodeToString(hash[:])
-			var lastUsed sql.NullTime // Use NullTime to handle non-existent tokens gracefully
-			dbErr := db.QueryRow("SELECT last_used FROM refresh_tokens WHERE token_hash = ?", tokenHash).Scan(&lastUsed)
+	require.NoError(t, RevokeRefreshToken(db, raw))
 
-			if dbErr == sql.ErrNoRows {
-				assert.False(t, tc.expectUsed, "Token should not be marked used if it doesn't exist")
-			} else {
-				assert.NoError(t, dbErr, "DB query for last_used failed")
-				assert.Equal(t, tc.expectUsed, lastUsed.Valid, "'last_used' status mismatch in DB")
-			}
-		})
-	}
+	_, _, err = ValidateRefreshToken(db, raw)
+	assert.ErrorIs(t, err, ErrRefreshTokenNotFound)
+}
+
+func TestValidateRefreshToken_NonExistentToken(t *testing.T) {
+	db := setupTestDB_RefreshToken(t)
+	defer db.Close()
+
+	_, _, err := ValidateRefreshToken(db, "non-existent-token")
+	assert.ErrorIs(t, err, ErrRefreshTokenNotFound)
+}
+
+// TestValidateRefreshToken_ReuseDetection verifies the family-revoke path (A-10).
+// Presenting a superseded token must: revoke all family rows, write a
+// user_jwt_revocations row, and return ErrRefreshTokenReuse.
+func TestValidateRefreshToken_ReuseDetection(t *testing.T) {
+	db := setupTestDB_RefreshToken(t)
+	defer db.Close()
+
+	username := "reuse_user"
+	raw0, err := CreateRefreshToken(db, username)
+	require.NoError(t, err)
+
+	// First use: rotate raw0 → raw1.
+	_, raw1, err := ValidateRefreshToken(db, raw0)
+	require.NoError(t, err)
+	assert.NotEmpty(t, raw1)
+
+	// Second use of the same raw0 (reuse): must be rejected.
+	_, _, err = ValidateRefreshToken(db, raw0)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRefreshTokenReuse)
+
+	// All rows in the family must have family_revoked_at set.
+	var count int
+	err = db.QueryRow(
+		"SELECT COUNT(*) FROM refresh_tokens WHERE family_revoked_at IS NULL AND username = ?",
+		username,
+	).Scan(&count)
+	require.NoError(t, err)
+	assert.Equal(t, 0, count, "all family rows must be revoked after reuse")
+
+	// user_jwt_revocations row must exist.
+	var revokedAt string
+	err = db.QueryRow(
+		"SELECT revoked_at FROM user_jwt_revocations WHERE username = ?", username,
+	).Scan(&revokedAt)
+	require.NoError(t, err)
+	assert.NotEmpty(t, revokedAt, "user_jwt_revocations row must be written on reuse")
+}
+
+// TestValidateRefreshToken_FamilyRevokedRow verifies that a token whose
+// family was already revoked (by a prior reuse) is immediately rejected.
+func TestValidateRefreshToken_FamilyRevokedRow(t *testing.T) {
+	db := setupTestDB_RefreshToken(t)
+	defer db.Close()
+
+	username := "family_revoked_user"
+	raw0, err := CreateRefreshToken(db, username)
+	require.NoError(t, err)
+
+	// Rotate once to get raw1.
+	_, raw1, err := ValidateRefreshToken(db, raw0)
+	require.NoError(t, err)
+
+	// Trigger reuse on raw0 to revoke the family.
+	_, _, err = ValidateRefreshToken(db, raw0)
+	require.ErrorIs(t, err, ErrRefreshTokenReuse)
+
+	// Now try to use raw1 (part of the same revoked family).
+	_, _, err = ValidateRefreshToken(db, raw1)
+	// raw1 has superseded_by_hash=NULL but family_revoked_at IS NOT NULL → rejected.
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrRefreshTokenReuse, "should be ErrRefreshTokenNotFound not reuse")
 }
 
 func TestRevokeRefreshToken(t *testing.T) {
@@ -165,100 +229,147 @@ func TestRevokeRefreshToken(t *testing.T) {
 	defer db.Close()
 
 	username := "revoke_username"
-	tokenToRevoke, _ := CreateRefreshToken(db, username)
-	tokenToKeep, _ := CreateRefreshToken(db, username) // Another token for the same user
+	tokenToRevoke, err := CreateRefreshToken(db, username)
+	require.NoError(t, err)
+	tokenToKeep, err := CreateRefreshToken(db, username)
+	require.NoError(t, err)
 
-	// Execute RevokeRefreshToken
-	err := RevokeRefreshToken(db, tokenToRevoke)
+	require.NoError(t, RevokeRefreshToken(db, tokenToRevoke))
 
-	// Assert: No error
-	assert.NoError(t, err)
-
-	// Assert: Check revoked status in DB for the revoked token
-	hashRevoked := sha256.Sum256([]byte(tokenToRevoke))
 	var isRevoked bool
-	err = db.QueryRow("SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hashRevoked[:])).Scan(&isRevoked)
-	assert.NoError(t, err)
-	assert.True(t, isRevoked, "Token should be marked as revoked in DB")
+	require.NoError(t, db.QueryRow(
+		"SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hashStr(tokenToRevoke),
+	).Scan(&isRevoked))
+	assert.True(t, isRevoked)
 
-	// Assert: Check revoked status for the token that should NOT be revoked
-	hashKeep := sha256.Sum256([]byte(tokenToKeep))
-	err = db.QueryRow("SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hashKeep[:])).Scan(&isRevoked)
-	assert.NoError(t, err)
-	assert.False(t, isRevoked, "Other token for the same user should not be revoked")
+	require.NoError(t, db.QueryRow(
+		"SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hashStr(tokenToKeep),
+	).Scan(&isRevoked))
+	assert.False(t, isRevoked)
 
-	// Test revoking a non-existent token
+	// Revoking a non-existent token returns ErrRefreshTokenNotFound.
 	err = RevokeRefreshToken(db, "non-existent-token")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "token not found")
+	assert.ErrorIs(t, err, ErrRefreshTokenNotFound)
 }
 
 func TestRevokeAllUserTokens(t *testing.T) {
 	db := setupTestDB_RefreshToken(t)
 	defer db.Close()
 
-	user1Username := "user1_username"
-	user2Username := "user2_username"
+	t1, err := CreateRefreshToken(db, "user1")
+	require.NoError(t, err)
+	t2, err := CreateRefreshToken(db, "user1")
+	require.NoError(t, err)
+	t3, err := CreateRefreshToken(db, "user2")
+	require.NoError(t, err)
 
-	// Create tokens for both users
-	token1User1, _ := CreateRefreshToken(db, user1Username)
-	token2User1, _ := CreateRefreshToken(db, user1Username)
-	token1User2, _ := CreateRefreshToken(db, user2Username)
+	require.NoError(t, RevokeAllUserTokens(db, "user1"))
 
-	// Execute RevokeAllUserTokens for user1
-	err := RevokeAllUserTokens(db, user1Username)
+	for _, raw := range []string{t1, t2} {
+		var rev bool
+		require.NoError(t, db.QueryRow(
+			"SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hashStr(raw),
+		).Scan(&rev))
+		assert.True(t, rev, "user1 token should be revoked")
+	}
 
-	// Assert: No error
-	assert.NoError(t, err)
-
-	// Assert: Check status for user1's tokens (should be revoked)
-	hash1User1 := sha256.Sum256([]byte(token1User1))
-	hash2User1 := sha256.Sum256([]byte(token2User1))
-	var isRevoked1, isRevoked2 bool
-	err = db.QueryRow("SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hash1User1[:])).Scan(&isRevoked1)
-	assert.NoError(t, err)
-	assert.True(t, isRevoked1, "First token for user1 should be revoked")
-	err = db.QueryRow("SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hash2User1[:])).Scan(&isRevoked2)
-	assert.NoError(t, err)
-	assert.True(t, isRevoked2, "Second token for user1 should be revoked")
-
-	// Assert: Check status for user2's token (should NOT be revoked)
-	hash1User2 := sha256.Sum256([]byte(token1User2))
-	var isRevokedUser2 bool
-	err = db.QueryRow("SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hash1User2[:])).Scan(&isRevokedUser2)
-	assert.NoError(t, err)
-	assert.False(t, isRevokedUser2, "Token for user2 should not be revoked")
+	var rev bool
+	require.NoError(t, db.QueryRow(
+		"SELECT revoked FROM refresh_tokens WHERE token_hash = ?", hashStr(t3),
+	).Scan(&rev))
+	assert.False(t, rev, "user2 token should not be revoked")
 }
 
-func TestCleanupExpiredTokens_RefreshToken(t *testing.T) { // Renamed to avoid conflict
+func TestRevokeFamilyByFamilyID(t *testing.T) {
 	db := setupTestDB_RefreshToken(t)
 	defer db.Close()
 
-	// Add expired and active tokens
-	expiredTokenString, _ := CreateRefreshToken(db, "cleanup_username")
-	activeTokenString, _ := CreateRefreshToken(db, "cleanup_username")
-
-	// Manually expire one token
-	hashExpired := sha256.Sum256([]byte(expiredTokenString))
-	_, err := db.Exec("UPDATE refresh_tokens SET expires_at = ? WHERE token_hash = ?",
-		time.Now().Add(-1*time.Hour), hex.EncodeToString(hashExpired[:]))
+	raw, err := CreateRefreshToken(db, "family_user")
 	require.NoError(t, err)
 
-	// Execute CleanupExpiredTokens
-	// Note: Assuming CleanupExpiredTokens function exists in the models package (as per your code review)
-	// If it's in auth package, adjust the call. Using models.CleanupExpiredTokens based on file name.
-	err = CleanupExpiredTokens(db)
-	assert.NoError(t, err)
+	var familyID string
+	require.NoError(t, db.QueryRow(
+		"SELECT family_id FROM refresh_tokens WHERE token_hash = ?", hashStr(raw),
+	).Scan(&familyID))
 
-	// Assert: Check DB state
+	require.NoError(t, RevokeFamilyByFamilyID(db, familyID))
+
+	var familyRevokedAt sql.NullString
+	require.NoError(t, db.QueryRow(
+		"SELECT family_revoked_at FROM refresh_tokens WHERE token_hash = ?", hashStr(raw),
+	).Scan(&familyRevokedAt))
+	assert.True(t, familyRevokedAt.Valid, "family_revoked_at must be set")
+}
+
+func TestRevokeAllUserJWTsByUsername(t *testing.T) {
+	db := setupTestDB_RefreshToken(t)
+	defer db.Close()
+
+	username := "jwt_revoke_user"
+	require.NoError(t, RevokeAllUserJWTsByUsername(db, username, "test reason"))
+
+	revokedAt, err := GetUserJWTRevocationTime(db, username)
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now(), revokedAt, 5*time.Second)
+
+	// Second call updates the row (upsert).
+	time.Sleep(2 * time.Millisecond)
+	require.NoError(t, RevokeAllUserJWTsByUsername(db, username, "updated"))
+	revokedAt2, err := GetUserJWTRevocationTime(db, username)
+	require.NoError(t, err)
+	assert.True(t, !revokedAt2.Before(revokedAt), "second revocation time must be >= first")
+}
+
+func TestGetUserJWTRevocationTime_NoRow(t *testing.T) {
+	db := setupTestDB_RefreshToken(t)
+	defer db.Close()
+
+	zeroTime, err := GetUserJWTRevocationTime(db, "never_revoked")
+	require.NoError(t, err)
+	assert.True(t, zeroTime.IsZero(), "should return zero time when no row exists")
+}
+
+func TestRefreshTokenEntropy(t *testing.T) {
+	db := setupTestDB_RefreshToken(t)
+	defer db.Close()
+
+	raw, err := CreateRefreshToken(db, "entropy_user")
+	require.NoError(t, err)
+
+	// 32 bytes base64url-encoded = exactly 44 characters (no padding stripped).
+	assert.Equal(t, 44, len(raw), "token must be 44-char base64url (256 bits)")
+
+	// Generate a second token; they must not be equal.
+	raw2, err := CreateRefreshToken(db, "entropy_user")
+	require.NoError(t, err)
+	assert.NotEqual(t, raw, raw2, "two tokens must not collide")
+}
+
+func TestCleanupExpiredTokens_RefreshToken(t *testing.T) {
+	db := setupTestDB_RefreshToken(t)
+	defer db.Close()
+
+	expiredRaw, err := CreateRefreshToken(db, "cleanup_username")
+	require.NoError(t, err)
+	activeRaw, err := CreateRefreshToken(db, "cleanup_username")
+	require.NoError(t, err)
+
+	_, err = db.Exec(
+		"UPDATE refresh_tokens SET expires_at = ? WHERE token_hash = ?",
+		time.Now().Add(-1*time.Hour), hashStr(expiredRaw),
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, CleanupExpiredTokens(db))
+
 	var countExpired, countActive int
-	hashActive := sha256.Sum256([]byte(activeTokenString))
+	require.NoError(t, db.QueryRow(
+		"SELECT COUNT(*) FROM refresh_tokens WHERE token_hash = ?", hashStr(expiredRaw),
+	).Scan(&countExpired))
+	assert.Equal(t, 0, countExpired)
 
-	err = db.QueryRow("SELECT COUNT(*) FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hashExpired[:])).Scan(&countExpired)
-	assert.NoError(t, err)
-	assert.Equal(t, 0, countExpired, "Expired refresh token should be deleted")
-
-	err = db.QueryRow("SELECT COUNT(*) FROM refresh_tokens WHERE token_hash = ?", hex.EncodeToString(hashActive[:])).Scan(&countActive)
-	assert.NoError(t, err)
-	assert.Equal(t, 1, countActive, "Active refresh token should remain")
+	require.NoError(t, db.QueryRow(
+		"SELECT COUNT(*) FROM refresh_tokens WHERE token_hash = ?", hashStr(activeRaw),
+	).Scan(&countActive))
+	assert.Equal(t, 1, countActive)
 }

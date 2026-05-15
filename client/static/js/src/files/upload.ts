@@ -659,6 +659,11 @@ export async function uploadFile(
       const end = Math.min(start + CHUNK_SIZE, file.size);
       const chunkSizeMB = ((end - start) / 1024 / 1024).toFixed(1);
 
+      // Refresh the JWT proactively if it is near expiry before uploading
+      // the chunk. This ensures long uploads on slow connections (e.g. 6 GB
+      // at 1 MB/s) never hit a mid-chunk 401.
+      await ensureFreshToken();
+
       // Report progress at the START of each chunk (before read/encrypt/upload)
       reportProgress({
         phase: 'uploading',

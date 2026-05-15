@@ -348,8 +348,8 @@ func ValidateDevAdminAuthentication(db *sql.DB, username, password, totpSecret s
 		return fmt.Errorf("failed to create test refresh token: %w", err)
 	}
 
-	// 2. Validate Token
-	valUser, err := models.ValidateRefreshToken(db, token)
+	// 2. Validate Token (returns username, newRotatedToken, error)
+	valUser, _, err := models.ValidateRefreshToken(db, token)
 	if err != nil {
 		return fmt.Errorf("failed to validate test refresh token: %w", err)
 	}
@@ -363,7 +363,7 @@ func ValidateDevAdminAuthentication(db *sql.DB, username, password, totpSecret s
 	}
 
 	// 4. Verify Revocation
-	_, err = models.ValidateRefreshToken(db, token)
+	_, _, err = models.ValidateRefreshToken(db, token)
 	if err != models.ErrRefreshTokenNotFound {
 		return fmt.Errorf("revoked token should be invalid, got error: %v", err)
 	}

@@ -106,7 +106,19 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     revoked BOOLEAN DEFAULT FALSE,
     last_used TIMESTAMP,
+    family_id TEXT NOT NULL,               -- A-10: random hex per login; shared across rotation chain
+    superseded_by_hash TEXT,               -- A-10: SHA-256 hex of the next token; NULL while current head
+    family_revoked_at TIMESTAMP,           -- A-10: set on all family rows when reuse is detected
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+-- User-wide JWT revocation table (A-09).
+-- A row here causes TokenRevocationMiddleware to reject any full JWT for the user
+-- whose iat claim is before revoked_at.
+CREATE TABLE IF NOT EXISTS user_jwt_revocations (
+    username TEXT PRIMARY KEY,
+    revoked_at TIMESTAMP NOT NULL,
+    reason TEXT
 );
 
 CREATE TABLE IF NOT EXISTS revoked_tokens (
@@ -131,6 +143,9 @@ CREATE TABLE IF NOT EXISTS user_totp (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_used TIMESTAMP,
     setup_completed BOOLEAN DEFAULT FALSE,      -- Two-phase setup
+    failed_attempts_in_window INTEGER NOT NULL DEFAULT 0,  -- A-08: rolling-window failure counter
+    window_started_at TIMESTAMP,               -- A-08: start of current 24h failure window
+    last_failed_attempt_at TIMESTAMP,          -- A-08: timestamp of most recent failure
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 

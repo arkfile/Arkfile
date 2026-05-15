@@ -16,14 +16,13 @@ import (
 
 // setupTestDB creates an in-memory SQLite database for revocation tests
 func setupTestDB(t *testing.T) *sql.DB {
+	t.Helper()
 	db, err := sql.Open("sqlite3", ":memory:")
 	require.NoError(t, err, "Failed to open in-memory SQLite DB")
 
-	// Enable foreign key support if needed by your schema, though not strictly required for this table
 	_, err = db.Exec("PRAGMA foreign_keys = ON;")
 	require.NoError(t, err)
 
-	// Create revoked_tokens table
 	schema := `
 	CREATE TABLE revoked_tokens (
 		token_id TEXT PRIMARY KEY,
@@ -32,14 +31,27 @@ func setupTestDB(t *testing.T) *sql.DB {
 		reason TEXT,
 		revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
+	CREATE TABLE user_jwt_revocations (
+		username TEXT PRIMARY KEY,
+		revoked_at TIMESTAMP NOT NULL,
+		reason TEXT
+	);
 	`
 	_, err = db.Exec(schema)
-	require.NoError(t, err, "Failed to create revoked_tokens table")
+	require.NoError(t, err, "Failed to create tables")
 
-	// Reset cache for each test setup
+	// Reset both caches for each test setup
 	resetCache()
+	resetUserRevocationCache()
 
 	return db
+}
+
+// resetUserRevocationCache clears the user-wide revocation cache.
+func resetUserRevocationCache() {
+	userRevocationCacheMutex.Lock()
+	userRevocationCache = make(map[string]userRevocationEntry)
+	userRevocationCacheMutex.Unlock()
 }
 
 // resetCache clears the global revocation cache and resets its state.
@@ -427,4 +439,112 @@ func TestTokenRevocationMiddleware(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTokenRevocationMiddleware_UserWideRevocation verifies that A-09 is enforced:
+// after RevokeAllUserJWTs is written, a subsequent request with a JWT issued
+// before the revocation is rejected without waiting for the JWT TTL to expire.
+func TestTokenRevocationMiddleware_UserWideRevocation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	username := "user_wide_revoke_test"
+	expiry := time.Now().Add(10 * time.Minute)
+	issuedAt := time.Now()
+
+	// Create a valid full-tier JWT.
+	claims := &Claims{
+		Username:     username,
+		RequiresTOTP: false,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expiry),
+			IssuedAt:  jwt.NewNumericDate(issuedAt),
+			ID:        "user-wide-jti-1",
+			Issuer:    Issuer,
+			Audience:  []string{AudienceAPI},
+		},
+	}
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	tokenString, err := jwtToken.SignedString(GetJWTFullPrivateKey())
+	require.NoError(t, err)
+
+	// Insert a user_jwt_revocations row for a time AFTER the JWT was issued.
+	revokedAt := issuedAt.Add(1 * time.Second)
+	_, err = db.Exec(
+		`INSERT INTO user_jwt_revocations (username, revoked_at, reason) VALUES (?, ?, ?)`,
+		username, revokedAt.Format(time.RFC3339), "test force-logout",
+	)
+	require.NoError(t, err)
+
+	// Invalidate cache so the middleware reads fresh from DB.
+	invalidateUserRevocationCache(username)
+
+	// Set up middleware.
+	e := echo.New()
+	mockHandler := func(c echo.Context) error { return c.String(http.StatusOK, "ok") }
+	middleware := TokenRevocationMiddleware(db)
+	handlerWithMiddleware := middleware(mockHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	// Inject the parsed (unverified for context-injection) token.
+	parsedToken, _, _ := new(jwt.Parser).ParseUnverified(tokenString, &Claims{})
+	c.Set("user", parsedToken)
+
+	err = handlerWithMiddleware(c)
+	require.Error(t, err, "user-wide revocation should reject the JWT immediately")
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+}
+
+// TestTokenRevocationMiddleware_JWTIssuedAfterRevocation verifies that a JWT
+// issued AFTER a user-wide revocation is NOT blocked by it.
+func TestTokenRevocationMiddleware_JWTIssuedAfterRevocation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	username := "after_revoke_user"
+	expiry := time.Now().Add(10 * time.Minute)
+
+	// Write a revocation that happened 5 seconds ago.
+	revokedAt := time.Now().Add(-5 * time.Second)
+	_, err := db.Exec(
+		`INSERT INTO user_jwt_revocations (username, revoked_at, reason) VALUES (?, ?, ?)`,
+		username, revokedAt.Format(time.RFC3339), "old revocation",
+	)
+	require.NoError(t, err)
+	invalidateUserRevocationCache(username)
+
+	// Issue a JWT with issuedAt = now (after the revocation).
+	claims := &Claims{
+		Username:     username,
+		RequiresTOTP: false,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expiry),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ID:        "post-revoke-jti",
+			Issuer:    Issuer,
+			Audience:  []string{AudienceAPI},
+		},
+	}
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	tokenString, err := jwtToken.SignedString(GetJWTFullPrivateKey())
+	require.NoError(t, err)
+
+	e := echo.New()
+	mockHandler := func(c echo.Context) error { return c.String(http.StatusOK, "ok") }
+	handlerWithMiddleware := TokenRevocationMiddleware(db)(mockHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	parsedToken, _, _ := new(jwt.Parser).ParseUnverified(tokenString, &Claims{})
+	c.Set("user", parsedToken)
+
+	err = handlerWithMiddleware(c)
+	assert.NoError(t, err, "JWT issued after revocation should not be blocked")
+	assert.Equal(t, http.StatusOK, rec.Code)
 }

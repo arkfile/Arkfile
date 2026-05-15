@@ -513,6 +513,13 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 			return "", fmt.Errorf("failed to encrypt chunk %d: %w", chunkIndex, err)
 		}
 
+		// Refresh the JWT proactively if it is near expiry before uploading
+		// the chunk. This ensures long uploads on slow connections (e.g. 6 GB
+		// at 1 MB/s) never hit a mid-chunk 401.
+		if rerr := ensureFreshSessionToken(client, session, 0); rerr != nil {
+			return "", fmt.Errorf("%w: session refresh failed before chunk %d", rerr, chunkIndex)
+		}
+
 		// Upload the chunk
 		if err := uploadChunk(client, session, uploadID, chunkIndex, encryptedChunk); err != nil {
 			return "", fmt.Errorf("failed to upload chunk %d: %w", chunkIndex, err)
