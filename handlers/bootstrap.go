@@ -163,6 +163,31 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
+	// A-13: Atomically mark the bootstrap token as consumed BEFORE any
+	// user-creation side effects. If consumed_at is already set, another
+	// caller raced us; abort with 401 and the rollback will undo nothing.
+	// The UPDATE+WHERE-consumed_at-IS-NULL pattern means at most one
+	// transaction in the database can ever observe RowsAffected==1 for a
+	// given token row.
+	consumeResult, err := tx.Exec(
+		`UPDATE system_keys
+		 SET consumed_at = CURRENT_TIMESTAMP
+		 WHERE key_id = 'bootstrap_token' AND consumed_at IS NULL`,
+	)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to consume bootstrap token for %s: %v", request.Username, err)
+		return JSONError(c, http.StatusInternalServerError, "Bootstrap token consume failed")
+	}
+	consumed, err := consumeResult.RowsAffected()
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to read consume RowsAffected for %s: %v", request.Username, err)
+		return JSONError(c, http.StatusInternalServerError, "Bootstrap token consume failed")
+	}
+	if consumed != 1 {
+		logging.ErrorLogger.Printf("SECURITY: Bootstrap token already consumed; rejecting finalize for %s", request.Username)
+		return JSONError(c, http.StatusUnauthorized, "Bootstrap token already consumed")
+	}
+
 	// Create user
 	user, err := models.CreateUser(tx, request.Username)
 	if err != nil {
@@ -188,7 +213,9 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Failed to store OPAQUE record")
 	}
 
-	// Commit transaction
+	// Commit transaction (atomically: token-consumed + admin-user-created
+	// + opaque-record-stored, all-or-nothing). After commit the token is
+	// permanently unusable for any second admin redemption (A-13).
 	if err := tx.Commit(); err != nil {
 		return JSONError(c, http.StatusInternalServerError, "Commit failed")
 	}
@@ -196,7 +223,10 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	// 7. Cleanup Session
 	auth.DeleteAuthSession(database.DB, request.SessionID)
 
-	// 8. DO NOT delete bootstrap token yet - it will be deleted after first admin login (proof-of-life)
+	// 8. Bootstrap token is now consumed (consumed_at set inside the
+	// finalize transaction). The encrypted row stays in system_keys for
+	// audit purposes; ValidateBootstrapToken rejects any future redemption
+	// because of the non-NULL consumed_at.
 
 	// 9. Generate temporary token for TOTP setup
 	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)

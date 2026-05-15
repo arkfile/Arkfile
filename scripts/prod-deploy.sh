@@ -1182,13 +1182,13 @@ echo -e "${GREEN}  HTTPS: https://${DOMAIN}${NC}"
 echo
 echo -e "${YELLOW}NEXT: Bootstrap your admin account${NC}"
 echo
-echo "  1. Check Arkfile logs for the bootstrap token:"
-echo "     sudo journalctl -u arkfile --no-pager -n 250 | grep BOOTSTRAP"
+echo "  1. Read the bootstrap token (the file is mode 0400 owned by arkfile):"
+echo "     sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin"
 echo
 echo "  2. Bootstrap the admin account:"
 echo "     /opt/arkfile/bin/arkfile-admin \\
        --server-url https://localhost:8443 --tls-insecure \\
-       bootstrap --token <BOOTSTRAP_TOKEN> --username ${ADMIN_USERNAME}"
+       bootstrap --token \$(sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin) --username ${ADMIN_USERNAME}"
 echo
 echo "  3. Setup TOTP:"
 echo "     /opt/arkfile/bin/arkfile-admin \\

@@ -221,3 +221,116 @@ func TestStorageProviderSupport(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateProductionConfig_RejectsDevTestAPIInProduction proves A-14:
+// the server must refuse to start when ENVIRONMENT=production AND
+// ADMIN_DEV_TEST_API_ENABLED is truthy. ValidateProductionConfig is called
+// from main.go BEFORE any handler registration, so the dev/test route group
+// in handlers/route_config.go can never be wired under this combination.
+func TestValidateProductionConfig_RejectsDevTestAPIInProduction(t *testing.T) {
+	// Save and restore the env vars we touch so this test doesn't bleed
+	// into the rest of the package.
+	envKeys := []string{
+		"ENVIRONMENT",
+		"NODE_ENV",
+		"GO_ENV",
+		"ENV",
+		"ADMIN_DEV_TEST_API_ENABLED",
+		"ADMIN_USERNAMES",
+		// Storage envs that LoadConfig requires:
+		"STORAGE_PROVIDER_1",
+		"STORAGE_1_ENDPOINT",
+		"STORAGE_1_ACCESS_KEY",
+		"STORAGE_1_SECRET_KEY",
+		"STORAGE_1_BUCKET",
+	}
+	originalEnv := map[string]string{}
+	for _, k := range envKeys {
+		originalEnv[k] = os.Getenv(k)
+	}
+	defer func() {
+		for _, k := range envKeys {
+			if originalEnv[k] == "" {
+				os.Unsetenv(k)
+			} else {
+				os.Setenv(k, originalEnv[k])
+			}
+		}
+		ResetConfigForTest()
+	}()
+
+	// Seed minimum-viable storage so LoadConfig() doesn't fail first.
+	os.Setenv("STORAGE_PROVIDER_1", "generic-s3")
+	os.Setenv("STORAGE_1_ENDPOINT", "http://localhost:9332")
+	os.Setenv("STORAGE_1_ACCESS_KEY", "test")
+	os.Setenv("STORAGE_1_SECRET_KEY", "test")
+	os.Setenv("STORAGE_1_BUCKET", "test")
+	// Use a non-dev admin username so the dev-admin check doesn't fire first.
+	os.Setenv("ADMIN_USERNAMES", "real-admin")
+
+	cases := []struct {
+		name         string
+		environment  string
+		devTestValue string
+		wantErrSub   string
+	}{
+		{
+			name:         "production + dev-test API true => blocked",
+			environment:  "production",
+			devTestValue: "true",
+			wantErrSub:   "ADMIN_DEV_TEST_API_ENABLED",
+		},
+		{
+			name:         "production + dev-test API 1 => blocked",
+			environment:  "production",
+			devTestValue: "1",
+			wantErrSub:   "ADMIN_DEV_TEST_API_ENABLED",
+		},
+		{
+			name:         "production + dev-test API yes => blocked",
+			environment:  "production",
+			devTestValue: "yes",
+			wantErrSub:   "ADMIN_DEV_TEST_API_ENABLED",
+		},
+		{
+			name:         "production + dev-test API false => allowed",
+			environment:  "production",
+			devTestValue: "false",
+			wantErrSub:   "", // no error expected from the A-14 path
+		},
+		{
+			name:         "production + dev-test API unset => allowed",
+			environment:  "production",
+			devTestValue: "",
+			wantErrSub:   "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Reset config singleton so LoadConfig sees fresh env each time.
+			ResetConfigForTest()
+
+			os.Setenv("ENVIRONMENT", tc.environment)
+			if tc.devTestValue == "" {
+				os.Unsetenv("ADMIN_DEV_TEST_API_ENABLED")
+			} else {
+				os.Setenv("ADMIN_DEV_TEST_API_ENABLED", tc.devTestValue)
+			}
+
+			err := ValidateProductionConfig()
+
+			if tc.wantErrSub == "" {
+				assert.NoError(t, err, "ValidateProductionConfig should accept env=%q devTest=%q",
+					tc.environment, tc.devTestValue)
+			} else {
+				if err == nil {
+					t.Fatalf("A-14 REGRESSION: ValidateProductionConfig accepted env=%q devTest=%q; want error containing %q",
+						tc.environment, tc.devTestValue, tc.wantErrSub)
+				}
+				assert.Contains(t, err.Error(), tc.wantErrSub,
+					"error should mention the offending env var")
+			}
+		})
+	}
+}

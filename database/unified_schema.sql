@@ -49,12 +49,13 @@ CREATE TABLE IF NOT EXISTS file_metadata (
 -- Encrypted system keys (JWT, TOTP, OPAQUE, Bootstrap)
 -- Encrypted using Envelope Encryption with ARKFILE_MASTER_KEY
 CREATE TABLE IF NOT EXISTS system_keys (
-    key_id TEXT PRIMARY KEY,      -- e.g., "jwt_signing_key_v1", "bootstrap_token"
+    key_id TEXT PRIMARY KEY,      -- e.g., "jwt_signing_key_temp_v1", "bootstrap_token"
     key_type TEXT NOT NULL,       -- e.g., "jwt", "totp", "opaque", "bootstrap"
     encrypted_data BLOB NOT NULL, -- The encrypted secret
     nonce BLOB NOT NULL,          -- The nonce used for encryption (AES-GCM)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    expires_at TIMESTAMP          -- Optional (for Bootstrap Token)
+    expires_at TIMESTAMP,         -- Optional (for Bootstrap Token)
+    consumed_at TIMESTAMP         -- Single-use enforcement for bootstrap_token (A-13)
 );
 
 -- =====================================================

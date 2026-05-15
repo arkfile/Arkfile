@@ -73,6 +73,13 @@ func GetKeyManager() (*KeyManager, error) {
 	return globalKeyManager, nil
 }
 
+// DB returns the underlying database handle. Used by callers that need to
+// query system_keys metadata columns (e.g. bootstrap_token.consumed_at) that
+// are not exposed via the GetKey / StoreKey wrapper.
+func (km *KeyManager) DB() *sql.DB {
+	return km.db
+}
+
 // deriveWrappingKey derives a specific wrapping key from the Master Key using HKDF.
 func (km *KeyManager) deriveWrappingKey(keyType string) ([]byte, error) {
 	info := []byte(fmt.Sprintf("ARKFILE_%s_KEY_ENCRYPTION", keyType))

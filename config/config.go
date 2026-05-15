@@ -483,6 +483,18 @@ func validateConfig(cfg *Config) error {
 // ValidateProductionConfig validates that the configuration is safe for production
 func ValidateProductionConfig() error {
 	if utils.IsProductionEnvironment() {
+		// A-14: ADMIN_DEV_TEST_API_ENABLED grants /api/admin/dev-test/**
+		// which exposes destructive endpoints (user-cleanup, TOTP
+		// decrypt-check, billing tick-now). The route group itself is
+		// gated by this env var in handlers/route_config.go, so a
+		// production deployment with the flag set silently exposes the
+		// surface. Fail-closed at startup so the server refuses to run
+		// in that combination at all.
+		enabled := strings.ToLower(os.Getenv("ADMIN_DEV_TEST_API_ENABLED"))
+		if enabled == "true" || enabled == "1" || enabled == "yes" {
+			return fmt.Errorf("FATAL: ADMIN_DEV_TEST_API_ENABLED=%q is incompatible with production environment - deployment blocked", enabled)
+		}
+
 		// Get admin usernames from configuration
 		cfg, err := LoadConfig()
 		if err != nil {

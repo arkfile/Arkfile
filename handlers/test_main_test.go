@@ -34,14 +34,19 @@ func TestMain(m *testing.M) {
 	}
 	defer db.Close()
 
-	// Create system_keys table (required by crypto.InitKeyManager)
+	// Create system_keys table (required by crypto.InitKeyManager).
+	// Mirrors the production schema in database/unified_schema.sql so that
+	// tests exercising bootstrap-token consumption (A-13) see the same
+	// consumed_at column the production code writes to.
 	_, err = db.Exec(`
 		CREATE TABLE system_keys (
 			key_id TEXT PRIMARY KEY,
 			key_type TEXT NOT NULL,
 			encrypted_data BLOB NOT NULL,
 			nonce BLOB NOT NULL,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			expires_at TIMESTAMP,
+			consumed_at TIMESTAMP
 		);
 	`)
 	if err != nil {
