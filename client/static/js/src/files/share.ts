@@ -13,7 +13,7 @@
  * share password. The server never sees the plaintext FEK.
  */
 
-import { authenticatedFetch, isAuthenticated, getUsernameFromToken } from '../utils/auth';
+import { authenticatedFetch, isAuthenticated, getUsernameFromToken, getCurrentUser } from '../utils/auth';
 import { showError, showSuccess } from '../ui/messages';
 import { showProgress, hideProgress } from '../ui/progress';
 import { showPasswordPrompt } from '../ui/password-modal';
@@ -302,7 +302,11 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
   try {
     if (!isAuthenticated()) { showError('Not authenticated. Please log in again.'); return; }
 
-    const username = getUsernameFromToken();
+    let username = getUsernameFromToken();
+    if (!username) {
+      const userInfo = await getCurrentUser(true);
+      username = userInfo?.username ?? null;
+    }
     if (!username) { showError('Username not found. Please log in again.'); return; }
 
     // 1. Fetch file metadata

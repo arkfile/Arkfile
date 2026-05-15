@@ -12,7 +12,6 @@
 import { decryptChunk } from './aes-gcm.js';
 import { showError } from '../ui/messages.js';
 import { showProgress, hideProgress } from '../ui/progress.js';
-import { getToken, getUsernameFromToken } from '../utils/auth.js';
 import {
   getCachedAccountKey,
   isAccountKeyLocked,
@@ -62,7 +61,7 @@ export async function getAccountKey(username: string): Promise<Uint8Array | null
     unlockAccountKey();
   }
 
-  const cached = await getCachedAccountKey(username, getToken() ?? undefined);
+  const cached = await getCachedAccountKey(username, undefined);
   if (cached) return cached;
 
   const result = await promptForAccountKeyPassword();
@@ -79,7 +78,7 @@ export async function getAccountKey(username: string): Promise<Uint8Array | null
       result.password,
       username,
       'account',
-      getToken() ?? undefined,
+      undefined,
       result.cacheDuration as CacheDurationHours | undefined,
     );
 

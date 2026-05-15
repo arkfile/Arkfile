@@ -18,7 +18,7 @@
  * }
  */
 
-import { authenticatedFetch, getUsernameFromToken, getToken } from '../utils/auth';
+import { authenticatedFetch, getUsernameFromToken, getCurrentUser } from '../utils/auth';
 import { showError, showSuccess } from '../ui/messages';
 import { downloadFile } from './download';
 import { shareFile } from './share';
@@ -110,10 +110,15 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
   // Try to get the Account Key for metadata decryption.
   // If cached, use it silently. If not cached (e.g. after page refresh),
   // show a banner prompting the user to enter their password.
-  const username = getUsernameFromToken();
+  let username = getUsernameFromToken();
+  if (!username) {
+    // Cache miss (e.g. page reload): fetch from server to populate.
+    const userInfo = await getCurrentUser(true);
+    username = userInfo?.username ?? null;
+  }
   let accountKey: Uint8Array | null = null;
   if (username) {
-    accountKey = await getCachedAccountKey(username, getToken() ?? undefined);
+    accountKey = await getCachedAccountKey(username, undefined);
   }
 
   // If account key is not available, show a banner to let the user unlock

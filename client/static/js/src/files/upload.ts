@@ -52,6 +52,7 @@ import {
   isAuthenticated,
   authenticatedFetch,
   getUsernameFromToken,
+  getCurrentUser,
   refreshToken as doRefreshToken,
 } from '../utils/auth.js';
 import { loadFiles } from './list.js';
@@ -200,13 +201,10 @@ async function ensureFreshToken(_thresholdSeconds = TOKEN_REFRESH_THRESHOLD_SECO
   if (!isAuthenticated()) {
     throw new AuthExpiredError('Not authenticated');
   }
-  // JWT expiry is not readable client-side (HttpOnly cookie).
-  // The auto-refresh timer fires every 25 minutes; between files we do a
-  // proactive refresh so long multi-file batches never hit a mid-chunk 401.
-  const ok = await doRefreshToken();
-  if (!ok) {
-    throw new AuthExpiredError();
-  }
+  // JWT expiry is not readable client-side (HttpOnly cookie). The 25-minute
+  // auto-refresh timer handles proactive rotation. Mid-batch 401s are caught
+  // by apiRequest's 401-retry path. This check only gates on session existence
+  // so that an explicit logout in another tab aborts the batch gracefully.
 }
 
 // ============================================================================
@@ -969,8 +967,12 @@ export async function handleFileUpload(): Promise<void> {
   const filesToUpload: File[] = Array.from(fileInput.files);
   const fileCount = filesToUpload.length;
 
-  // Get username from JWT token (shared auth module)
-  const username = getUsernameFromToken();
+  // Get username from cache; if missing (e.g. page reload), fetch from server.
+  let username = getUsernameFromToken();
+  if (!username) {
+    const userInfo = await getCurrentUser(true);
+    username = userInfo?.username ?? null;
+  }
   if (!username) {
     showError('Not logged in. Please log in first.');
     return;

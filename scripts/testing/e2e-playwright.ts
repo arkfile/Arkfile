@@ -598,12 +598,14 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     logStep('7', 'Fetching /api/files raw JSON...');
 
     const apiResponse = await sharedPage.evaluate(async () => {
-      // AuthManager stores JWT in localStorage under 'token'
-      const token = localStorage.getItem('token');
-      if (!token) return { error: 'no token' };
+      // Tokens are now in HttpOnly cookies; use credentials:'include' to send them.
+      // Also send the CSRF token from the non-HttpOnly cookie.
+      const csrfCookie = document.cookie.split(';').find(c => c.trim().startsWith('__Host-arkfile-csrf='));
+      const csrfToken = csrfCookie ? decodeURIComponent(csrfCookie.trim().split('=').slice(1).join('=')) : '';
 
       const resp = await fetch('/api/files', {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {},
       });
       if (!resp.ok) return { error: `HTTP ${resp.status}` };
       return resp.json();
@@ -946,9 +948,11 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     // Verify via API
     const ciData1 = await sharedPage.evaluate(async () => {
-      const token = localStorage.getItem('token');
+      const csrfCookie = document.cookie.split(';').find(c => c.trim().startsWith('__Host-arkfile-csrf='));
+      const csrfToken = csrfCookie ? decodeURIComponent(csrfCookie.trim().split('=').slice(1).join('=')) : '';
       const resp = await fetch('/api/user/contact-info', {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {},
       });
       return resp.json();
     });
@@ -969,9 +973,11 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     // Verify update via API
     const ciData2 = await sharedPage.evaluate(async () => {
-      const token = localStorage.getItem('token');
+      const csrfCookie = document.cookie.split(';').find(c => c.trim().startsWith('__Host-arkfile-csrf='));
+      const csrfToken = csrfCookie ? decodeURIComponent(csrfCookie.trim().split('=').slice(1).join('=')) : '';
       const resp = await fetch('/api/user/contact-info', {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {},
       });
       return resp.json();
     });
@@ -990,9 +996,11 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     // Verify deletion via API
     const ciData3 = await sharedPage.evaluate(async () => {
-      const token = localStorage.getItem('token');
+      const csrfCookie = document.cookie.split(';').find(c => c.trim().startsWith('__Host-arkfile-csrf='));
+      const csrfToken = csrfCookie ? decodeURIComponent(csrfCookie.trim().split('=').slice(1).join('=')) : '';
       const resp = await fetch('/api/user/contact-info', {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {},
       });
       return resp.json();
     });
@@ -1012,9 +1020,11 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     // Verify final state via API
     const ciData4 = await sharedPage.evaluate(async () => {
-      const token = localStorage.getItem('token');
+      const csrfCookie = document.cookie.split(';').find(c => c.trim().startsWith('__Host-arkfile-csrf='));
+      const csrfToken = csrfCookie ? decodeURIComponent(csrfCookie.trim().split('=').slice(1).join('=')) : '';
       const resp = await fetch('/api/user/contact-info', {
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : {},
       });
       return resp.json();
     });
@@ -1150,9 +1160,10 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   test('Phase 13: Logout and post-logout security checks', async () => {
     // The billing panel test (immediately above) leaves the page logged in.
     // Skip the re-login if the session is still valid so we don't add an
-    // extra login/logout cycle.
+    // extra login/logout cycle. Tokens are in HttpOnly cookies; check the
+    // non-HttpOnly CSRF cookie to detect an active session.
     const alreadyLoggedIn = await sharedPage.evaluate(() =>
-      localStorage.getItem('token') !== null
+      document.cookie.split(';').some(c => c.trim().startsWith('__Host-arkfile-csrf='))
     );
     if (!alreadyLoggedIn) {
       logStep('13', 'Re-logging in for logout test...');
@@ -1169,7 +1180,16 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     logStep('13', 'Verifying session and cache cleanup...');
 
-    // AuthManager stores JWT as 'token' and refresh as 'refresh_token' in localStorage
+    // After logout, the CSRF cookie (non-HttpOnly, visible to JS) must be gone.
+    // The full JWT and refresh cookies are HttpOnly so JS cannot read them, but
+    // the server clears them via Set-Cookie: ...; Max-Age=0 on logout.
+    const hasCsrfCookie = await sharedPage.evaluate(() =>
+      document.cookie.split(';').some(c => c.trim().startsWith('__Host-arkfile-csrf='))
+    );
+    expect(hasCsrfCookie).toBe(false);
+
+    // Legacy localStorage checks (always false after our migration; kept as
+    // regression guards to catch any accidental re-introduction of token storage).
     const hasToken = await sharedPage.evaluate(() =>
       localStorage.getItem('token') !== null
     );
@@ -1192,6 +1212,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     });
     expect(hasCacheData).toBe(false);
 
+    // A request with an invalid bearer header (no cookie) must return 401.
     const apiStatus = await sharedPage.evaluate(async () => {
       try {
         const resp = await fetch('/api/files', {
@@ -1204,7 +1225,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     });
     expect(apiStatus).toBe(401);
 
-    console.log('[OK] Phase 13: Logout verified -- session cleared, API returns 401');
+    console.log('[OK] Phase 13: Logout verified -- CSRF cookie cleared, localStorage clean, API returns 401');
   });
 
 });

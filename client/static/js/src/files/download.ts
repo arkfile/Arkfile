@@ -20,7 +20,7 @@
  * The server NEVER sees the plaintext FEK or the user's password.
  */
 
-import { authenticatedFetch, isAuthenticated, getUsernameFromToken } from '../utils/auth';
+import { authenticatedFetch, isAuthenticated, getUsernameFromToken, getCurrentUser } from '../utils/auth';
 import { showError, showSuccess, showWarning } from '../ui/messages';
 import { showProgress, hideProgress } from '../ui/progress';
 import { showPasswordPrompt } from '../ui/password-modal';
@@ -78,9 +78,14 @@ export async function downloadFile(
       return;
     }
 
-    const username = getUsernameFromToken();
+    let username = getUsernameFromToken();
     if (!username) {
-      console.error(`${LOG_PREFIX} Username could not be extracted from token`);
+      // Cache miss (e.g. page reload): fetch from /api/auth/me to repopulate.
+      const userInfo = await getCurrentUser(true);
+      username = userInfo?.username ?? null;
+    }
+    if (!username) {
+      console.error(`${LOG_PREFIX} Username could not be determined`);
       showError('Username not found. Please log in again.');
       return;
     }

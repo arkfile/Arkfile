@@ -218,8 +218,13 @@ export class LoginManager {
     password?: string,
   ): Promise<void> {
     try {
-      // Store authentication tokens
+      // Store authentication tokens (no-op; tokens are in HttpOnly cookies)
       setTokens(data.token, data.refresh_token);
+
+      // Populate the username/role cache so getUsernameFromToken() works for
+      // the rest of this session (upload, share creation, etc.).
+      const { getCurrentUser } = await import('../utils/auth.js');
+      await getCurrentUser();
 
       // Check if user is approved
       if (data.is_approved === false) {
