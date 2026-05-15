@@ -82,7 +82,7 @@ Arkfile uses the OPAQUE PAKE (Password-Authenticated Key Exchange) protocol for 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
 | POST | `/api/revoke-token` | Revoke a specific token | TOTP |
-| POST | `/api/revoke-all` | Revoke all tokens for the user | TOTP |
+| POST | `/api/auth/revoke-all` | Revoke all tokens for the user (refresh tokens + active JWTs, immediately) | TOTP |
 
 ---
 

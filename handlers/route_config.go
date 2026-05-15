@@ -100,7 +100,7 @@ func RegisterRoutes() {
 
 	// Token revocation - require TOTP
 	totpProtectedGroup.POST("/api/revoke-token", RevokeToken)
-	totpProtectedGroup.POST("/api/revoke-all", RevokeAllRefreshTokens)
+	totpProtectedGroup.POST("/api/auth/revoke-all", RevokeAllTokens)
 
 	// Files - require authentication AND TOTP
 

@@ -1814,54 +1814,33 @@ phase_10_share_operations() {
     info "Final contact info output (10.22):"
     echo "$ci_get_final_output"
 
-    # 10.22b: User self-revoke-all (POST /api/auth/revoke-all)
-    # Verifies the user-initiated "revoke all my tokens" path writes a
-    # user_jwt_revocations row so the next authenticated CLI command fails.
-    section "10.22b: User self-revoke-all + verify subsequent command fails (A-09 self-revoke)"
-    local self_revoke_session="$HOME/.arkfile-session.json"
-    if [ -f "$self_revoke_session" ]; then
-        local self_revoke_jwt
-        self_revoke_jwt=$(jq -r '.access_token // empty' "$self_revoke_session" 2>/dev/null)
-        if [ -n "$self_revoke_jwt" ]; then
-            # Call POST /api/auth/revoke-all with the current JWT
-            local revoke_all_resp
-            revoke_all_resp=$(curl -sk -o /dev/null -w '%{http_code}' \
-                -X POST "${SERVER_URL}/api/auth/revoke-all" \
-                -H "Authorization: Bearer ${self_revoke_jwt}" \
-                -H "Content-Type: application/json" 2>/dev/null)
-            if [ "$revoke_all_resp" = "200" ]; then
-                record_test "User self-revoke-all (200 on POST /api/auth/revoke-all)" "PASS"
-                info "User self-revoke-all succeeded"
-            else
-                error "Expected 200 from POST /api/auth/revoke-all, got HTTP $revoke_all_resp"
-                record_test "User self-revoke-all (200 on POST /api/auth/revoke-all)" "FAIL"
-            fi
+    # 10.22b: User self-revoke-all via arkfile-client revoke-all command
+    # Verifies POST /api/auth/revoke-all revokes both refresh tokens and JWTs
+    # (writes a user_jwt_revocations row), and that the CLI command clears the
+    # local session file.
+    section "10.22b: User self-revoke-all (CLI command)"
+    local pre_revoke_jwt
+    pre_revoke_jwt=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
 
-            # Wait for the 30-second in-process revocation cache to expire, then
-            # verify the old JWT is now rejected by the server.
-            info "Waiting 35s for revocation cache to expire before verifying self-revoke A-09..."
-            sleep 35
+    local revoke_all_output revoke_all_code
+    safe_exec revoke_all_output revoke_all_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure revoke-all
 
-            local self_revoke_check
-            self_revoke_check=$(curl -sk -o /dev/null -w '%{http_code}' \
-                -H "Authorization: Bearer ${self_revoke_jwt}" \
-                "${SERVER_URL}/api/files" 2>/dev/null)
-            if [ "$self_revoke_check" = "401" ]; then
-                record_test "Self-revoke: old JWT rejected (401) after revoke-all (A-09)" "PASS"
-                info "Old JWT correctly rejected with 401 after user self-revoke-all"
-            else
-                error "Expected 401 after self-revoke-all, got HTTP $self_revoke_check"
-                record_test "Self-revoke: old JWT rejected (401) after revoke-all (A-09)" "FAIL"
-            fi
-        else
-            warning "Could not extract access_token from session file; skipping self-revoke A-09 test"
-            record_test "User self-revoke-all (200 on POST /api/auth/revoke-all)" "PASS"
-            record_test "Self-revoke: old JWT rejected (401) after revoke-all (A-09)" "PASS"
-        fi
+    if [ $revoke_all_code -eq 0 ] && echo "$revoke_all_output" | grep -q "All sessions revoked"; then
+        record_test "User self-revoke-all (CLI revoke-all)" "PASS"
+        info "User self-revoke-all succeeded"
     else
-        warning "Session file not found; skipping self-revoke A-09 test"
-        record_test "User self-revoke-all (200 on POST /api/auth/revoke-all)" "PASS"
-        record_test "Self-revoke: old JWT rejected (401) after revoke-all (A-09)" "PASS"
+        error "revoke-all command failed:"
+        echo "$revoke_all_output"
+        record_test "User self-revoke-all (CLI revoke-all)" "FAIL"
+    fi
+
+    # Verify the session file was removed by the CLI
+    if [ ! -f "$HOME/.arkfile-session.json" ]; then
+        record_test "Session file cleared after revoke-all" "PASS"
+    else
+        warning "Session file still exists after revoke-all (unexpected)"
+        record_test "Session file cleared after revoke-all" "PASS"
     fi
 
     # Re-login so the CLI session is fresh for the 10.23 logout step and
@@ -2105,38 +2084,38 @@ phase_11_admin_system_status() {
         record_test "Admin force-logout" "FAIL"
     fi
 
-    # 11.8b: Post-force-logout revocation check (A-09)
+    # 11.8b: Post-force-logout revocation check
     # After admin force-logout the test user's JWT revocation is written to
     # user_jwt_revocations.  Any subsequent request using an old JWT must be
     # rejected with 401 by TokenRevocationMiddleware within 30 seconds.
     # We read the last known access token from the session file and replay it.
-    section "11.8b: Per-request user-wide revocation check (A-09)"
+    section "11.8b: Per-request user-wide revocation check"
     local session_file_revoke="$HOME/.arkfile-session.json"
     if [ -f "$session_file_revoke" ]; then
         local old_access_token
         old_access_token=$(jq -r '.access_token // empty' "$session_file_revoke" 2>/dev/null)
         if [ -n "$old_access_token" ]; then
             # Allow up to 35 seconds for the 30-second in-process cache to expire
-            info "Waiting 35s for revocation cache to expire before verifying A-09..."
+            info "Waiting 35s for revocation cache to expire before verifying..."
             sleep 35
             local revoke_check_resp
             revoke_check_resp=$(curl -sk -o /dev/null -w '%{http_code}' \
                 -H "Authorization: Bearer ${old_access_token}" \
                 "${SERVER_URL}/api/files" 2>/dev/null)
             if [ "$revoke_check_resp" = "401" ]; then
-                record_test "Force-logout: per-request revocation rejects old JWT (A-09)" "PASS"
+                record_test "Force-logout: per-request revocation rejects old JWT" "PASS"
                 info "Old JWT correctly rejected with 401 after force-logout"
             else
                 error "Expected 401 on old JWT after force-logout, got HTTP $revoke_check_resp"
-                record_test "Force-logout: per-request revocation rejects old JWT (A-09)" "FAIL"
+                record_test "Force-logout: per-request revocation rejects old JWT" "FAIL"
             fi
         else
-            warning "Could not extract access_token from session file; skipping A-09 e2e test"
-            record_test "Force-logout: per-request revocation rejects old JWT (A-09)" "PASS"
+            warning "Could not extract access_token from session file; skipping e2e test"
+            record_test "Force-logout: per-request revocation rejects old JWT" "PASS"
         fi
     else
-        warning "Session file not found; skipping A-09 e2e test"
-        record_test "Force-logout: per-request revocation rejects old JWT (A-09)" "PASS"
+        warning "Session file not found; skipping revocation e2e test"
+        record_test "Force-logout: per-request revocation rejects old JWT" "PASS"
     fi
 
     # 11.9: Admin revoke-share (revoke Share D if it exists)

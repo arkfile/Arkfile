@@ -342,10 +342,10 @@ func TestRevokeToken_InvalidRequestFormat(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-// -- RevokeAllRefreshTokens handler tests --
+// -- RevokeAllTokens handler tests --
 
-// TestRevokeAllRefreshTokens_Success verifies all refresh tokens are revoked
-func TestRevokeAllRefreshTokens_Success(t *testing.T) {
+// TestRevokeAllTokens_DefaultReason verifies RevokeAllTokens revokes refresh tokens AND JWTs immediately.
+func TestRevokeAllTokens_DefaultReason(t *testing.T) {
 	username := "revoke-all-user"
 
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/auth/revoke-all", nil)
@@ -354,15 +354,19 @@ func TestRevokeAllRefreshTokens_Success(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Mock: RevokeAllUserTokens (models.RevokeAllUserTokens)
-	revokeSQL := `UPDATE refresh_tokens SET revoked = true WHERE username = \?`
-	mock.ExpectExec(revokeSQL).WithArgs(username).WillReturnResult(sqlmock.NewResult(0, 3))
+	// Mock: RevokeAllUserTokens (refresh tokens)
+	revokeRefreshSQL := `UPDATE refresh_tokens SET revoked = true WHERE username = \?`
+	mock.ExpectExec(revokeRefreshSQL).WithArgs(username).WillReturnResult(sqlmock.NewResult(0, 1))
+
+	// Mock: RevokeAllUserJWTTokens - inserts into revoked_tokens
+	revokeJWTSQL := `INSERT INTO revoked_tokens \(token_id, username, expires_at, reason\) VALUES \(\?, \?, \?, \?\)`
+	mock.ExpectExec(revokeJWTSQL).WithArgs(sqlmock.AnyArg(), username, sqlmock.AnyArg(), "user revoke-all").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock: LogUserAction
 	logSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
-	mock.ExpectExec(logSQL).WithArgs(username, "revoked all refresh tokens", "").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(logSQL).WithArgs(username, "revoked all tokens", "").WillReturnResult(sqlmock.NewResult(1, 1))
 
-	err := RevokeAllRefreshTokens(c)
+	err := RevokeAllTokens(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
@@ -438,43 +442,6 @@ func TestRefreshToken_RevokedToken(t *testing.T) {
 	err := RefreshToken(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-}
-
-// -- ForceRevokeAllTokens handler tests --
-
-// TestForceRevokeAllTokens_EmptyReason verifies default reason is used when none provided
-func TestForceRevokeAllTokens_EmptyReason(t *testing.T) {
-	username := "force-revoke-user"
-
-	body, _ := json.Marshal(map[string]string{"reason": ""})
-	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/auth/force-revoke", bytes.NewReader(body))
-
-	claims := &auth.Claims{Username: username}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	c.Set("user", token)
-
-	// Mock: RevokeAllUserTokens
-	revokeRefreshSQL := `UPDATE refresh_tokens SET revoked = true WHERE username = \?`
-	mock.ExpectExec(revokeRefreshSQL).WithArgs(username).WillReturnResult(sqlmock.NewResult(0, 1))
-
-	// Mock: RevokeAllUserJWTTokens - inserts into revoked_tokens
-	revokeJWTSQL := `INSERT INTO revoked_tokens \(token_id, username, expires_at, reason\) VALUES \(\?, \?, \?, \?\)`
-	mock.ExpectExec(revokeJWTSQL).WithArgs(sqlmock.AnyArg(), username, sqlmock.AnyArg(), "security-critical revocation").WillReturnResult(sqlmock.NewResult(1, 1))
-
-	// Mock: LogUserAction
-	logSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
-	mock.ExpectExec(logSQL).WithArgs(username, "force revoked all tokens", "security-critical revocation").WillReturnResult(sqlmock.NewResult(1, 1))
-
-	err := ForceRevokeAllTokens(c)
-	require.NoError(t, err)
-	assert.Equal(t, http.StatusOK, rec.Code)
-
-	var resp map[string]interface{}
-	err = json.Unmarshal(rec.Body.Bytes(), &resp)
-	require.NoError(t, err)
-	assert.Contains(t, resp["message"], "revoked")
-
-	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
 // -- AdminForceLogout handler tests --

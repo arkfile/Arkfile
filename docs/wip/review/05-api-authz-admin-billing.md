@@ -83,7 +83,7 @@ auth.Echo = Echo.Group("")
      ├── /api/files/:fileId/envelope          : Slice D adjacent
      ├── /api/files/:fileId/export-token      : minted here, used on public ExportFile
      ├── /api/credits                         : THIS SLICE
-     └── /api/revoke-token, /api/revoke-all   : THIS SLICE
+     └── /api/revoke-token, /api/auth/revoke-all   : THIS SLICE
 
 pendingAllowedGroup = Echo.Group("")          : intentionally OMITS RequireApproved
  + JWTMiddleware
@@ -1017,7 +1017,7 @@ Columns: `Method | Endpoint | Auth | Authz rule | TOTP-gated? | Rate-limited? | 
 | POST | `/api/totp/verify` | TOTP-temp JWT | self | (entry point) | Yes (TOTP) | TOTP code | full JWT | Slice A |
 | POST | `/api/totp/auth` | TOTP-temp JWT | self | (entry point) | Yes (TOTP) | TOTP code | full JWT | Slice A |
 | POST | `/api/revoke-token` | JWT+TOTP | self | **Yes** | No | jti | — | OK |
-| POST | `/api/revoke-all` | JWT+TOTP | self | **Yes** | No | — | — | OK |
+| POST | `/api/auth/revoke-all` | JWT+TOTP | self | **Yes** | No | — | — | OK |
 | GET | `/api/credits` | JWT+TOTP | self | **Yes** | No | pagination | balance, transactions, runway | OK |
 | GET | `/api/user/contact-info` | JWT (no Approved) +TOTP | self | **Yes** | No | — | contact info (decrypted) | OK |
 | PUT | `/api/user/contact-info` | JWT (no Approved) +TOTP | self | **Yes** | No | contact info JSON | — | size-limit OK |

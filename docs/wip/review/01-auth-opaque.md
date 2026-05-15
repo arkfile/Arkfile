@@ -1656,7 +1656,7 @@ Reject passwords longer than the maximum.
 | `POST /api/refresh` | Refresh token | Validate refresh token; check user-wide revoke | refresh_token | token, refresh_token | N/A | 122-bit entropy + no reuse detection (A-10). |
 | `POST /api/logout` | **None** | None | refresh_token | — | N/A | **A-33** unauth DoS. |
 | `POST /api/revoke-token` | Full JWT | User revokes own JTI | token, reason | — | Yes | OK. |
-| `POST /api/revoke-all` | Full JWT | User revokes own refresh tokens | — | — | Yes | Does NOT revoke active JWTs (A-09). |
+| `POST /api/auth/revoke-all` | Full JWT | User revokes all sessions (refresh tokens + active JWTs immediately) | — | — | Yes | OK. |
 | `GET /api/totp/status` | Full JWT (`auth.Echo`) | Self only | — | enabled bool | Implicit (full JWT) | OK. |
 | `POST /api/totp/reset` | Full JWT (`auth.Echo`) | Self + valid backup code | backup_code | new secret + new backup codes | Implicit | **A-15** unreachable from lost-device state; A-16 race during reset. |
 | `POST /api/totp/setup` | Temp TOTP JWT | Self | — | secret, QR, 10 backup codes | (setup endpoint) | A-01 audience not enforced. A-42 backup-code entropy. |

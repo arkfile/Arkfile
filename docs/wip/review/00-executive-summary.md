@@ -135,7 +135,7 @@ Arkfile Go process (Echo, :8443 internal TLS, :8080 plaintext)
               │             ├─ /api/files/:fileId/envelope
               │             ├─ /api/files/:fileId/export-token
               │             ├─ /api/credits
-              │             └─ /api/revoke-token, /api/revoke-all
+              │             └─ /api/revoke-token, /api/auth/revoke-all
               │
               ├─ pendingAllowedGroup  (JWTMiddleware + RequireTOTP; intentionally omits Approved)
               │      └─ /api/user/contact-info  (GET/PUT/DELETE)
@@ -724,7 +724,7 @@ Columns: `Endpoint | Auth | Authz | TOTP-gated? | Notable issues`. Sensitive inp
 | Endpoint | Issues |
 |---|---|
 | `POST /api/revoke-token` | OK |
-| `POST /api/revoke-all` | Does NOT revoke active JWTs (A-09) |
+| `POST /api/auth/revoke-all` | Revokes refresh tokens AND active JWTs immediately (A-09 fixed) |
 | `GET /api/credits` | OK |
 | `POST /api/uploads/init` | C-09 (S3 owner-username), C-15, C-16 |
 | `POST /api/uploads/:sessionId/chunks/:chunkNumber` | **C-01 padding alloc**, C-04, C-10, C-27 |

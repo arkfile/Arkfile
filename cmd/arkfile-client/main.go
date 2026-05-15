@@ -292,6 +292,11 @@ func main() {
 			logError("Contact info failed: %v", err)
 			os.Exit(1)
 		}
+	case "revoke-all":
+		if err := handleRevokeAllCommand(config, args); err != nil {
+			logError("Revoke-all failed: %v", err)
+			os.Exit(1)
+		}
 	case "logout":
 		if err := handleLogoutCommand(config, args); err != nil {
 			logError("Logout failed: %v", err)

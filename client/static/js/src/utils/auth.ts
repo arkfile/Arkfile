@@ -123,7 +123,7 @@ export class AuthManager {
       const token = this.getToken();
       if (!token) return false;
 
-      const response = await fetch('/api/revoke-all', {
+      const response = await fetch('/api/auth/revoke-all', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,

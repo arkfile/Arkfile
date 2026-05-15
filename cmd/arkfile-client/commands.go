@@ -2130,3 +2130,40 @@ func handleContactInfoDelete(client *HTTPClient, config *ClientConfig) error {
 	fmt.Println("Contact information deleted.")
 	return nil
 }
+
+// ============================================================
+// REVOKE ALL COMMAND
+// ============================================================
+
+// handleRevokeAllCommand calls POST /api/auth/revoke-all, which immediately
+// revokes all refresh tokens AND invalidates all active JWTs for the current
+// user by writing a user_jwt_revocations row. Use this when a session may be
+// compromised or to force all devices to log out simultaneously.
+func handleRevokeAllCommand(config *ClientConfig, args []string) error {
+	session, err := requireSession(config)
+	if err != nil {
+		return fmt.Errorf("not logged in: %w", err)
+	}
+
+	client := newHTTPClient(config.ServerURL, config.TLSInsecure, config.TimeoutSecs, verbose)
+
+	_, err = client.makeRequest("POST", "/api/auth/revoke-all", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("revoke-all request failed: %w", err)
+	}
+
+	// Clear local session file and agent key cache.
+	agentClient, agentErr := NewAgentClient()
+	if agentErr == nil {
+		if clearErr := agentClient.Clear(); clearErr != nil {
+			logVerbose("Warning: failed to clear agent: %v", clearErr)
+		}
+	}
+
+	if removeErr := os.Remove(config.TokenFile); removeErr != nil && !os.IsNotExist(removeErr) {
+		logVerbose("Warning: failed to remove session file: %v", removeErr)
+	}
+
+	fmt.Println("All sessions revoked. You are now logged out of all devices.")
+	return nil
+}

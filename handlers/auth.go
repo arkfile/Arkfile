@@ -144,63 +144,31 @@ func RevokeToken(c echo.Context) error {
 	return JSONResponse(c, http.StatusOK, "Token revoked successfully", nil)
 }
 
-// RevokeAllRefreshTokens revokes all refresh tokens for the current user
-// Note: This does NOT revoke active JWT tokens - they will expire automatically within 30 minutes
-func RevokeAllRefreshTokens(c echo.Context) error {
+// RevokeAllTokens revokes all refresh tokens AND immediately invalidates all active JWTs
+// for the current authenticated user. Use this when a session may be compromised or when
+// logging out all devices simultaneously.
+func RevokeAllTokens(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
-
-	err := models.RevokeAllUserTokens(database.DB, username)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to revoke all refresh tokens for %s: %v", username, err)
-		return JSONError(c, http.StatusInternalServerError, "Failed to revoke refresh tokens")
-	}
-
-	database.LogUserAction(username, "revoked all refresh tokens", "")
-	logging.InfoLogger.Printf("All refresh tokens revoked for user: %s", username)
-
-	return JSONResponse(c, http.StatusOK, "All refresh tokens revoked successfully. Active access tokens will expire automatically within 30 minutes.", nil)
-}
-
-// ForceRevokeAllTokens implements security-critical revocation for edge cases
-// This function revokes BOTH refresh tokens AND active JWT tokens immediately
-// Used for: OPAQUE credential re-registration, admin force-logout, security breaches
-func ForceRevokeAllTokens(c echo.Context) error {
-	username := auth.GetUsernameFromToken(c)
-
-	var request struct {
-		Reason string `json:"reason"`
-	}
-
-	if err := c.Bind(&request); err != nil {
-		return JSONError(c, http.StatusBadRequest, "Invalid request")
-	}
-
-	if request.Reason == "" {
-		request.Reason = "security-critical revocation"
-	}
 
 	// Step 1: Revoke all refresh tokens
 	err := models.RevokeAllUserTokens(database.DB, username)
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to revoke all refresh tokens for %s during force revocation: %v", username, err)
+		logging.ErrorLogger.Printf("Failed to revoke all refresh tokens for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to revoke tokens")
 	}
 
-	// Step 2: Add user-specific JWT revocation entry
-	// This creates a timestamp-based revocation that invalidates all JWTs issued before now
-	err = auth.RevokeAllUserJWTTokens(database.DB, username, request.Reason)
+	// Step 2: Write user_jwt_revocations row so TokenRevocationMiddleware rejects
+	// all JWTs issued before now on the very next request (within cache TTL).
+	err = auth.RevokeAllUserJWTTokens(database.DB, username, "user revoke-all")
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to revoke all JWT tokens for %s during force revocation: %v", username, err)
+		logging.ErrorLogger.Printf("Failed to revoke all JWT tokens for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to revoke active tokens")
 	}
 
-	// Step 3: Log security event
-	database.LogUserAction(username, "force revoked all tokens", request.Reason)
-	logging.InfoLogger.Printf("SECURITY: All tokens force-revoked for user %s, reason: %s", username, request.Reason)
+	database.LogUserAction(username, "revoked all tokens", "")
+	logging.InfoLogger.Printf("SECURITY: All tokens revoked for user %s", username)
 
-	return JSONResponse(c, http.StatusOK, "All tokens (including active access tokens) have been immediately revoked for security reasons.", map[string]string{
-		"reason": request.Reason,
-	})
+	return JSONResponse(c, http.StatusOK, "All sessions have been revoked. You are now logged out of all devices.", nil)
 }
 
 // AdminForceLogout allows admin to force-logout a specific user (admin-only endpoint)
