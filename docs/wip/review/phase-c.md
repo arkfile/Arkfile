@@ -474,3 +474,84 @@ A few points worth flagging for anyone reviewing this plan before implementation
 **On dead code removal timing:** some reviewers may question why dead code from findings B-17, B-18, C-23, and C-24 is being removed in Phase C rather than in a dedicated cleanup phase. The reason is that Phase C already requires opening `crypto/file_operations.go` and `models/file.go` for substantive changes. Leaving dead functions alongside newly AAD-aware functions in the same files creates ambiguity and potential for future confusion. The greenfield principle from `AGENTS.md` is clear: clean breaks now, not incremental deprecation. Removing dead code while those files are open is the right time to do it.
 
 **On `crypto/session.go` and `crypto/opaque_validation.go`:** these are also dead code (findings B-10, B-11, A-45) but are not in files that Phase C needs to touch. They are called out here for awareness and should be removed in a near-term cleanup session, but are out of scope for Phase C.
+
+
+---
+
+# ADDITIONAL NOTES & DISCUSSION BEFORE WE BEGIN
+
+- ^ above plan reviewed and updated with the help of ChatGPT 5.5.
+
+- Below notes from Opus 4.7 when prompted: "please read AGENTS.md and 00-executive-summary.md and 00-high-priority-issues.md and finally the plan doc phase-c.md -- let me know if you have any questions for me about phase-c.md before we begin"
+
+"""
+I've read AGENTS.md, 00-executive-summary.md, 00-high-priority-issues.md, and phase-c.md. The Phase C plan is thorough and the design decisions are largely well-justified. Before we start, here are my questions / clarifications grouped by risk to the implementation. Many have a "I'd suggest X if you don't have a preference" answer included.
+
+---
+
+### A. Range-math audit / uniform-chunk decision (§4.2.1)
+
+This is the single biggest "fork in the road" inside Phase C. The plan calls for an audit and then either (a) remove the chunk-0 `[version][keyType]` two-byte header for uniform chunks, or (b) keep the header and authenticate it via chunk-0 AAD.
+
+1. **Do you want me to perform the audit as the first substantive step of Phase C and commit to one path before writing code?** Or treat it as "open question, default to keeping the chunk-0 header + authenticating it" so we can land Phase C without depending on the audit's outcome?
+2. If we go uniform-chunk, the `keyType` is already in the FEK envelope, so removing the chunk-0 header is clean — but it changes wire format for *every* file, not just AAD semantics. That's fine under greenfield, just want to confirm you're OK with that scope.
+
+My recommendation: do the audit first; if cleanly removable, remove. If even one path is fragile, retain header + authenticate it. I'd want roughly half a day for the audit before committing.
+
+---
+
+### B. `file_id` trust-boundary shift (§3)
+
+The plan moves `file_id` generation client-side, validated against strict UUID v4 syntax + global uniqueness server-side. Questions:
+
+3. **Should `file_id` uniqueness be enforced globally (across all users) or scoped per-user?** Plan says global. Global is fine and matches the spec, just confirming — per-user would slightly weaken the cross-file substitution defense at the AAD layer because a malicious user could attempt to claim someone else's `file_id`. Global is correct; I just want to make sure that's the call.
+4. **For the `upload_sessions` reservation:** currently the schema reserves `file_id` only for active sessions. Should expired/abandoned sessions also block reuse until cleanup runs (plan says yes), and what's the cleanup interval — same as the existing session sweep? I'd default to: yes, abandoned reserves, swept by the existing upload-session sweep job.
+
+---
+
+### C. Metadata AAD field labels (§4.4)
+
+5. The plan uses `"encrypted_filename"` and `"encrypted_sha256sum"` as literal AAD labels. **Are these the exact strings (lowercase, with underscores) you want bound into AAD forever?** Once shipped, changing them would invalidate every existing file. I'd recommend writing them as exported constants in `crypto/aad.go` (`AADFieldFilename = "encrypted_filename"`, etc.) so callers cannot typo them, and so a future reader sees the canonical strings in one place.
+
+---
+
+### D. Cross-language conformance vector (§10, §11)
+
+6. The plan calls for one hardcoded input + expected-hex-bytes vector shared between Go and TS tests. **Do you want me to compute that vector by running the Go implementation first, hand-copy the hex into both test files, or would you prefer a small generator script (`crypto/aad_vector_gen.go`) that emits the vector and both tests import a constant?** A generator avoids the "I edited one and forgot the other" failure mode. I'd recommend the generator approach, kept in the repo under `scripts/testing/` or similar.
+
+---
+
+### E. CLI offline `.arkbackup` decrypt (§6)
+
+7. The plan says newly exported `.arkbackup` bundles include `owner_username`, `file_id`, etc. **Is the existing `.arkbackup` bundle format JSON-based, or a binary container?** I haven't looked at `handlers/export.go` yet; this affects whether we're adding JSON fields or extending a binary header. Default: I'll inspect during implementation and adapt. Flagging only because if you have a strong opinion (e.g., "I'd like the export format to be re-designed in Phase C as well"), now is the time to say so. The plan implies a minimal additive change.
+
+8. **Do old `.arkbackup` files become unreadable after Phase C, same as old uploaded files?** The plan strongly implies yes (greenfield clean break, no fallback). Confirming because some beta users might have downloaded backup bundles locally and could be confused.
+
+---
+
+### F. Test scope for retry-on-conflict
+
+9. The plan calls for up to 3 retries on `file_id_conflict` from both clients. **Should I add a unit-test for the retry behavior on the CLI side (mocking the server response)?** It's not in the test list explicitly. I'd recommend yes — UUID v4 collisions are vanishingly rare in practice, so without a test that path is effectively never exercised.
+
+---
+
+### G. Out-of-scope confirmation
+
+10. The plan removes B-17, B-18, C-23, C-24, B-27 opportunistically. It explicitly defers B-10, B-11, A-45 (other dead-code in `crypto/session.go`, `crypto/opaque_validation.go`) to a "near-term cleanup session". **Is there any chance you want B-10/B-11/A-45 folded in here too?** They're trivially small. I'd default to honoring the plan and leaving them for a cleanup pass. Just confirming.
+
+11. **`/api/files/:fileId/chunks/:chunkIndex` byte-range math (C-03):** the plan addresses this implicitly via the range-math audit. **Is there anything else you'd like done about `chunk_size_bytes` / `chunk_count` being server-DB-trusted but not crypto-bound?** With AAD on `totalChunks`, truncation is detected; with AAD on `chunkIndex`, reorder is detected; but the per-byte `chunk_size_bytes` is still server-trusted (a malicious server could fragment a chunk across two range requests). My read: the AEAD layer will fail to authenticate the resulting bytes anyway because the tag won't match the truncated ciphertext, so this is sufficient. Just want to confirm we're aligned on "AAD on chunkIndex + totalChunks is sufficient; we do not need to bind chunk_size_bytes."
+
+---
+
+### H. Process / workflow
+
+12. **Local validation cadence:** I'd plan to run `go test ./...` after step 12 (CLI checkpoint), `bun test` after step 22, and the full `dev-reset.sh + e2e-test.sh + e2e-playwright.sh` triplet only at the end. That matches §2.4 / §9 of the plans. Confirming you don't want me running the full triplet between every numbered sub-step.
+
+13. **Commits:** I'll continue the established pattern of writing code + running tests + asking you to commit, never committing myself. Confirming you'd like the same shape (frequent commit-checkpoints at each "green" gate) for Phase C.
+
+---
+
+If most of these have a default answer ("yes, your suggestion is fine"), feel free to just say "defaults all" and I'll proceed accordingly once switched to Act mode. The two I'd most like an explicit answer on are **A (audit timing)** and **C (literal field label strings)** because both are wire-format commitments that are hard to change once shipped.
+"""
+
+---
