@@ -1493,6 +1493,53 @@ phase_10_share_operations() {
         record_test "Raw Shares API Privacy" "PASS"
     fi
 
+    # 10.6b: unapprove-user: blocks active user, then restore approval
+    section "10.6b: unapprove-user blocks active session, approve-user restores access"
+
+    local unapprove_out unapprove_code
+    safe_exec unapprove_out unapprove_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        unapprove-user --username "$TEST_USERNAME" --confirm
+
+    if [ $unapprove_code -eq 0 ] \
+        && echo "$unapprove_out" | grep -q "approval revoked" \
+        && echo "$unapprove_out" | grep -q "sessions terminated"; then
+        record_test "unapprove-user output correct" "PASS"
+        info "unapprove-user output: $unapprove_out"
+    else
+        error "unapprove-user failed or unexpected output:"
+        echo "$unapprove_out"
+        record_test "unapprove-user output correct" "FAIL"
+    fi
+
+    # User's tokens are now revoked; list-files must fail.
+    local unapprove_list_out unapprove_list_code
+    safe_exec unapprove_list_out unapprove_list_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files
+
+    if [ $unapprove_list_code -ne 0 ]; then
+        record_test "unapprove-user: list-files blocked after unapproval" "PASS"
+    else
+        error "Security failure: list-files succeeded after unapprove-user!"
+        echo "$unapprove_list_out"
+        record_test "unapprove-user: list-files blocked after unapproval" "FAIL"
+    fi
+
+    # Restore approval so the rest of the test suite (visitor tests, phase 10.14 re-login, etc.) works.
+    local reapprove_out reapprove_code
+    safe_exec reapprove_out reapprove_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        approve-user --username "$TEST_USERNAME" --storage "5GB"
+
+    if [ $reapprove_code -eq 0 ]; then
+        record_test "unapprove-user: approve-user restores access" "PASS"
+        info "Test user re-approved"
+    else
+        error "approve-user failed after unapprove-user test:"
+        echo "$reapprove_out"
+        record_test "unapprove-user: approve-user restores access" "FAIL"
+    fi
+
     # 10.7: Logout for anonymous visitor tests
     section "10.7: Logging out for anonymous visitor tests"
     logout_user_session "Logout for visitor tests"

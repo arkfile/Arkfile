@@ -40,10 +40,11 @@ NETWORK COMMANDS (Admin API - localhost only):
     logout            Clear admin session
     list-users        List all users
     approve-user      Approve user account
+    unapprove-user    Revoke approval and force-logout a user (terminates all active sessions)
     user-status       Get status of a specific user
     user-contact-info View a user's contact information
     set-storage       Set user storage limit
-    revoke-user       Revoke user access and disable account
+    revoke-user       Revoke user access and disable account (also terminates all active sessions)
     update-user       Update user properties (admin, approved, storage)
     delete-user       Delete a user and all associated data
     force-logout      Force-logout a user (revoke all tokens)
@@ -246,6 +247,11 @@ func main() {
 	case "approve-user":
 		if err := handleApproveUserCommand(client, config, args); err != nil {
 			logError("Approve user failed: %v", err)
+			os.Exit(1)
+		}
+	case "unapprove-user":
+		if err := handleUnapproveUserCommand(client, config, args); err != nil {
+			logError("Unapprove user failed: %v", err)
 			os.Exit(1)
 		}
 	case "set-storage":
@@ -1213,7 +1219,83 @@ EXAMPLES:
 	return nil
 }
 
-// handleRevokeUserCommand revokes user access
+// handleUnapproveUserCommand revokes a user's approval and immediately terminates all active sessions.
+// This is the correct way to prevent a previously-approved user from continuing to use the site:
+// setting is_approved=false alone does not invalidate JWTs that are already in flight.
+func handleUnapproveUserCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("unapprove-user", flag.ExitOnError)
+	usernameFlag := fs.String("username", "", "Username to unapprove (required)")
+	confirm := fs.Bool("confirm", false, "Confirm without interactive prompt")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin unapprove-user --username USER [--confirm]
+
+Revoke a user's approval status and force-logout all active sessions.
+The user will be unable to perform any authenticated actions immediately.
+Use 'approve-user' to re-approve the account later if needed.
+
+FLAGS:
+    --username USER     Username to unapprove (required)
+    --confirm           Confirm without interactive prompt
+    --help              Show this help message
+
+EXAMPLES:
+    arkfile-admin unapprove-user --username alice12345
+    arkfile-admin unapprove-user --username alice12345 --confirm
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	if *usernameFlag == "" {
+		return fmt.Errorf("--username is required")
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	if !*confirm {
+		fmt.Printf("Unapprove user '%s' and terminate all active sessions? (yes/no): ", *usernameFlag)
+		reader := bufio.NewReader(os.Stdin)
+		response, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read confirmation: %w", err)
+		}
+		if r := strings.TrimSpace(strings.ToLower(response)); r != "yes" && r != "y" {
+			fmt.Println("Unapprove cancelled")
+			return nil
+		}
+	}
+
+	// Step 1: Set is_approved = false via the generic update endpoint.
+	payload := map[string]interface{}{"is_approved": false}
+	_, err = client.makeRequest("PUT", "/api/admin/users/"+*usernameFlag, payload, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to unapprove user: %w", err)
+	}
+	fmt.Printf("User %s approval revoked\n", *usernameFlag)
+
+	// Step 2: Revoke all active tokens so the change takes effect immediately.
+	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/force-logout", nil, session.AccessToken)
+	if err != nil {
+		// Non-fatal: approval is already revoked. Log the warning and continue.
+		fmt.Printf("[!] Warning: approval revoked but token revocation failed: %v\n", err)
+		fmt.Printf("    Run 'arkfile-admin force-logout --username %s' to complete session termination.\n", *usernameFlag)
+		return nil
+	}
+
+	fmt.Printf("User %s sessions terminated (all tokens revoked)\n", *usernameFlag)
+	return nil
+}
+
+// handleRevokeUserCommand revokes user access and terminates all active sessions.
 func handleRevokeUserCommand(client *HTTPClient, config *AdminConfig, args []string) error {
 	fs := flag.NewFlagSet("revoke-user", flag.ExitOnError)
 	var (
@@ -1224,7 +1306,7 @@ func handleRevokeUserCommand(client *HTTPClient, config *AdminConfig, args []str
 	fs.Usage = func() {
 		fmt.Printf(`Usage: arkfile-admin revoke-user [FLAGS]
 
-Revoke user access and disable account.
+Revoke user access and disable account. All active sessions are terminated immediately.
 
 FLAGS:
     --username USER     Username to revoke (required)
@@ -1272,14 +1354,23 @@ EXAMPLES:
 		}
 	}
 
-	// Revoke user
+	// Revoke user (sets is_approved = false via dedicated revoke endpoint)
 	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/revoke", nil, session.AccessToken)
 	if err != nil {
 		return fmt.Errorf("user revocation failed: %w", err)
 	}
-
 	fmt.Printf("User %s access revoked successfully\n", *usernameFlag)
 
+	// Terminate all active sessions so the revocation takes effect immediately.
+	_, err = client.makeRequest("POST", "/api/admin/users/"+*usernameFlag+"/force-logout", nil, session.AccessToken)
+	if err != nil {
+		// Non-fatal: access is already revoked. Warn and let the operator follow up.
+		fmt.Printf("[!] Warning: access revoked but token revocation failed: %v\n", err)
+		fmt.Printf("    Run 'arkfile-admin force-logout --username %s' to complete session termination.\n", *usernameFlag)
+		return nil
+	}
+
+	fmt.Printf("User %s sessions terminated (all tokens revoked)\n", *usernameFlag)
 	return nil
 }
 
