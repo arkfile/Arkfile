@@ -46,9 +46,23 @@ Server-side contract:
 
 This approach eliminates the flow-reorder problem entirely. It is consistent with the existing pattern for `share_id`, which is also client-generated today. It is identical between both clients — one rule with no per-client variation. The server's `models.GenerateFileID()` call inside `CreateUploadSession` is removed; the server-side `GenerateFileID` function itself is kept because it is used in other contexts.
 
+### 3.1 File ID generation rules (normative)
+
+The following rules are normative for Phase C and must be enforced by both clients and the server. They are pulled into a single subsection so that a future reader or fresh agent session can find them in one place.
+
+- **Client generates `file_id`.** Browser uses `crypto.randomUUID()`; CLI uses `uuid.New().String()`. Both must produce a UUID v4.
+- **Client sends `file_id` in the body of `POST /api/uploads/init`.** No header, no query parameter.
+- **Server validates strict UUID v4.** Both the textual syntax (8-4-4-4-12 hex with dashes, lowercase) and the version-bit field (`xxxxxxxx-xxxx-4xxx-Nxxx-xxxxxxxxxxxx` with `N ∈ {8,9,a,b}`) must be enforced. Any non-conforming value is rejected with HTTP 400.
+- **Server enforces global uniqueness across all users.** `file_id` must not collide with any existing `file_metadata.file_id` or any non-cleaned-up `upload_sessions.file_id`, regardless of which user owns the existing row.
+- **Abandoned and expired upload sessions continue to reserve their `file_id` until the existing upload-session sweep removes them.** No special-case "reclaim-on-init" logic. If implementation reveals the existing sweep is insufficient (e.g., sweep interval too long for realistic conflict rates), flag it to the developer rather than silently shortening the interval.
+- **Uniqueness check and the `upload_sessions` insert happen inside the same transaction.** Database uniqueness constraints remain the final authority against races.
+- **On collision, server returns HTTP 409 with the stable error code `file_id_conflict`.** Clients consume the error code programmatically and do not parse English.
+- **Clients retry with a freshly generated UUID v4 up to 3 times.** After the third `file_id_conflict`, the client surfaces a hard upload error to the user. Unit tests cover this retry behavior in both CLI and TS suites.
+
 ---
 
 ## 4. AAD Construction
+
 
 ### 4.1 Encoding convention
 
@@ -149,15 +163,36 @@ Arkfile has multiple SHA-256 values with different trust and privacy meanings. P
 This table is the Phase C implementation checklist. Every encrypt and decrypt call on the file path must be checked against it.
 
 | Operation | Stored / wire object | AAD fields | Source of AAD inputs | Encrypt callers | Decrypt callers |
+
 |---|---|---|---|---|---|
 | File chunk | Object-storage byte stream chunk `[nonce][ciphertext][tag]` after uniform-chunk audit, or chunk 0 with authenticated header if retained | `file_id`, `chunk_index`, `chunk_count` | `file_id` from client-generated upload session / file metadata / share metadata; `chunk_index` from loop or route param; `chunk_count` from upload session or file metadata | Browser upload, CLI upload | Browser owner download, CLI owner download, anonymous share download, offline `.arkbackup` decrypt |
 | FEK envelope | `encrypted_fek` field `[0x01][keyType][nonce][ciphertext][tag]` | `file_id`, `key_type` | `file_id` from file metadata / upload context; `key_type` from envelope byte and expected password type | Browser upload, CLI upload | Browser owner download/list/share creation, CLI owner download/list/share creation, offline `.arkbackup` decrypt |
 | Metadata: filename | `encrypted_filename` + `filename_nonce` | `file_id`, `"encrypted_filename"`, `owner_username` | `file_id` from upload/file metadata/export bundle; label is literal stored field name; `owner_username` from authenticated username or export bundle | Browser upload, CLI upload | Browser list/download/share-list, CLI list/download/dedup/offline decrypt |
 | Metadata: original plaintext digest | `encrypted_sha256sum` + `sha256sum_nonce` | `file_id`, `"encrypted_sha256sum"`, `owner_username` | `file_id` from upload/file metadata/export bundle; label is literal stored field name; `owner_username` from authenticated username or export bundle | Browser upload, CLI upload | Browser digest-cache/download verification, CLI dedup/download/offline decrypt |
 
+### 4.6 Canonical AAD field label constants (normative)
+
+The two AAD field labels `"encrypted_filename"` and `"encrypted_sha256sum"` are permanent wire-format commitments. Once Phase C ships, changing either string would invalidate every existing file's metadata AAD. To eliminate the risk of typos at call sites and to give a future reader a single canonical reference, both implementations must define these as exported constants in their respective AAD modules.
+
+- **Go (`crypto/aad.go`):**
+  ```
+  const (
+      AADFieldFilename = "encrypted_filename"
+      AADFieldSha256   = "encrypted_sha256sum"
+  )
+  ```
+- **TypeScript (`client/static/js/src/crypto/aad.ts`):**
+  ```
+  export const AAD_FIELD_FILENAME = "encrypted_filename";
+  export const AAD_FIELD_SHA256   = "encrypted_sha256sum";
+  ```
+
+Every caller of `BuildMetadataFieldAAD` / `buildMetadataFieldAAD` must reference these constants. Raw string literals at call sites are forbidden. The constants are AAD labels only; they are not DB column or API field renames. The existing schema and API field names remain `encrypted_filename` and `encrypted_sha256sum` (which is also why these are the chosen label strings — the AAD label tracks the stored field's name verbatim).
+
 ---
 
 ## 5. Impact on the Share Download Path
+
 
 Share recipients download chunks from `/api/public/shares/:id/chunks/:chunkIndex`. These are the same encrypted chunks the owner uploaded; they are stored once and served to both owner and recipients. The chunk AAD must therefore use the underlying `file_id`, not the `share_id`.
 
@@ -191,9 +226,20 @@ The export bundle metadata must include every non-secret AAD input needed by the
 
 The offline decrypt command should keep the same user-facing shape where possible: bundle path, optional output path, and the same account/custom password inputs already required for key derivation. It reads `file_id`, `owner_username`, and chunk metadata from the bundle. Old no-AAD exports are not supported by shipped code after Phase C.
 
+### 6.1 `.arkbackup` self-describing bundle (normative)
+
+The following rules are normative for the Phase C `.arkbackup` format and the offline-decrypt path.
+
+- **Newly exported bundles are self-describing.** A user with the bundle file and the appropriate password(s) — and no other state — must be able to decrypt offline.
+- **The bundle must include every non-secret AAD input required by the offline client:** `file_id`, `owner_username` (canonical name; if a `username` field is used in the bundle JSON, it must carry the same value), `chunk_count`, `chunk_size_bytes`, `size_bytes`, `password_type`, `encrypted_fek`, `encrypted_filename`, `filename_nonce`, `encrypted_sha256sum`, `sha256sum_nonce`, and the encrypted chunk stream.
+- **The exact bundle layout (JSON header, framed binary, or otherwise) is decided during implementation** based on inspection of the current `handlers/export.go`. The Phase C update is the minimum clean greenfield change required to make the bundle self-describing — not a redesign of the format unless inspection reveals the existing format cannot carry the new fields without one.
+- **Old (pre-Phase-C) `.arkbackup` files become unreadable after Phase C.** Shipped code MUST NOT include any fallback path that attempts to decrypt the old no-AAD format. There is no migration tool in shipped binaries.
+- **Offline decrypt's user-facing CLI shape stays the same where possible:** bundle path, optional output path, and the same account/custom password inputs already required for key derivation. The new AAD inputs are read from the bundle itself, not from CLI flags.
+
 ---
 
 ## 7. Dead Code Removed in This Phase
+
 
 Several functions in `crypto/file_operations.go` and `models/file.go` are confirmed dead (no callers in any live pipeline) and have been flagged as such in earlier review slices. Phase C touches both of these files extensively, making it the natural time to remove this code. Leaving dead functions alongside newly AAD-aware functions creates confusion: a future reader sees `EncryptFile` and `EncryptFEK` side by side and has no way to know without deep analysis that one is live and one is not.
 
@@ -205,7 +251,30 @@ Several functions in `crypto/file_operations.go` and `models/file.go` are confir
 
 ---
 
+## 7.5 Pinned Decisions Summary
+
+This subsection consolidates every developer-confirmed decision that affects Phase C's wire format, server contract, validation strategy, or workflow. A fresh agent session must read this section to understand the constraints under which Phase C is implemented; the rest of the document explains why each decision was made.
+
+- **A. Range-math audit and chunk-0 header.** The audit is the **first substantive Phase C step** before any broad implementation. Preferred outcome is uniform chunks with no chunk-0 `[version][keyType]` header — adopted only if the audit proves every upload/download/share/export/offline-decrypt range calculation is clean. If any path is fragile, the chunk-0 header is retained and authenticated/validated via chunk-0 AAD. **Invariant**: padding exists only after the encrypted stream and must never be included in any decrypted chunk range. (See §4.2.1 and §9 Step 0.)
+
+- **B. `file_id` generation and uniqueness.** Client-generated UUID v4. Strict server validation. Global uniqueness across all users, across both `file_metadata.file_id` and `upload_sessions.file_id`. Abandoned/expired upload sessions continue to reserve `file_id` until the existing upload-session sweep cleans them up; no special "reclaim-on-init" logic. Stable `file_id_conflict` 409 error code; clients retry up to 3 times, then hard error. If implementation reveals the existing sweep is insufficient, flag it to the developer rather than silently shortening the interval. (See §3 and §3.1.)
+
+- **C. Metadata AAD field labels.** The exact, permanent AAD strings are `encrypted_filename` and `encrypted_sha256sum` — lowercase with underscores, matching the existing schema and API field names. These are AAD labels only, not DB column or API key renames. Both Go and TS define them as exported constants (`AADFieldFilename` / `AADFieldSha256` and `AAD_FIELD_FILENAME` / `AAD_FIELD_SHA256` respectively); raw string literals at call sites are forbidden. (See §4.4 and §4.6.)
+
+- **D. Cross-language conformance vector.** One hardcoded input + expected-hex-bytes vector, present in both Go and TS test suites. The vector is generated once from the Go implementation and the hex literal is hand-copied into both test files. No persistent generator script; the tests are independent of each other and of any helper module. (See §10 `TestBuildChunkAAD_CrossLanguageVector` and §11.)
+
+- **E. `.arkbackup` export format.** Inspect the current `handlers/export.go` during implementation and make the minimum clean greenfield change required to make newly exported bundles self-describing for AAD-aware offline decrypt. Bundles must carry `file_id`, `owner_username`, `chunk_count`, `chunk_size_bytes`, `size_bytes`, `password_type`, `encrypted_fek`, encrypted metadata fields and nonces, and the encrypted chunk stream. **Old `.arkbackup` files become unreadable after Phase C; no fallback in shipped code, no migration tool in shipped binaries.** (See §6 and §6.1.)
+
+- **F. Retry tests for `file_id_conflict`.** Unit tests for the retry-up-to-3-then-hard-error behavior live in both the CLI Go suite (`handlers/uploads_test.go` covers the server's stable error contract; CLI tests cover client retry behavior with mocked responses) and the TS suite (mocked init responses). The behavior is not exercised in e2e — UUID v4 collisions are vanishingly rare in practice and would otherwise leave the retry path effectively untested. (See §10 / §11 / §12.)
+
+- **G. Out-of-scope clarifications.** Phase C closes B-02, B-05, B-08, C-02, C-03, and C-19 (the core High findings) and opportunistically removes B-17, B-18, C-23, C-24, and B-27 because the affected files are open. B-10, B-11, and A-45 (dead code in `crypto/session.go` and `crypto/opaque_validation.go`) are **explicitly out of scope** and remain for a separate cleanup pass. For C-03, AAD binding of `file_id`, `chunkIndex`, and `totalChunks` is sufficient; `chunk_size_bytes` is **not** bound into chunk AAD unless the range-math audit (decision A) reveals a concrete need.
+
+- **H. Workflow and validation cadence.** `go test ./...` runs at the Go/CLI/server checkpoint (after Step 11 in §9). `bun test client/static/js/src/__tests__/` runs at the TS checkpoint (after Step 20). The full `sudo bash scripts/dev-reset.sh` + `bash scripts/testing/e2e-test.sh` + `sudo bash scripts/testing/e2e-playwright.sh` triplet runs only at the end. **Assistants do not commit or push;** the developer commits at each green checkpoint after reviewing the diff.
+
+---
+
 ## 8. Files Touched
+
 
 ### New files
 
@@ -265,35 +334,109 @@ Plain `EncryptGCM` / `DecryptGCM` can remain as general-purpose primitives for n
 
 ## 9. Implementation Order
 
-Phase C is implemented CLI-first. The Go unit tests, CLI changes, and server-side `CreateUploadSession` change are implemented and validated first via `go test ./...` and `e2e-test.sh`. Only once the CLI path is green is the TypeScript client updated, followed by the TS unit tests and `e2e-playwright.sh`. This ordering means we can prove the full upload/download/share roundtrip using `arkfile-client` before touching the browser code at all, giving high confidence that the AAD design is correct before the TS implementation begins.
+Phase C is implemented audit-first, then CLI-first, then TS. The audit (Step 0) settles the chunk-0 header / uniform-chunks question before any other code lands, so all subsequent steps can use the agreed-upon chunk layout. The Go unit tests, CLI changes, and server-side `CreateUploadSession` change land next, validated via `go test ./...` at the first checkpoint. Only once the Go/CLI path is green is the TypeScript client updated, followed by the TS unit tests at the second checkpoint. Full local validation (`dev-reset.sh` + `e2e-test.sh` + `e2e-playwright.sh`) runs only at the final gate. This ordering means we can prove the full upload/download/share roundtrip using `arkfile-client` before touching the browser code at all, giving high confidence that the AAD design is correct before the TS implementation begins.
 
-1. `crypto/aad.go` (new) — helpers only, no callers yet
-2. `crypto/aad_test.go` (new) — all tests written, most fail until callers are wired
-3. `crypto/file_operations.go` — update `EncryptFEK`, `DecryptFEK`, `DecryptFileMetadata`, `DecryptMetadataWithDerivedKey`; delete dead functions; delete `crypto/envelope.go`
-4. `crypto/file_operations_test.go` — remove dead-function tests, add AAD negative tests
-5. `cmd/arkfile-client/crypto_utils.go` — update all six functions
-6. `cmd/arkfile-client/commands.go` — propagate `fileID` through upload, download, owner share creation, and anonymous share-download flows
-7. `cmd/arkfile-client/offline_decrypt.go` and `dedup.go` — update bundle decrypt and digest decrypt for AAD context
-8. Range-math audit for uniform chunks. If green, remove chunk-0 header and update all formulas; otherwise authenticate/validate chunk-0 header.
-9. `handlers/uploads.go` — accept client-supplied `file_id`, strict UUID v4 validation, stable `file_id_conflict`
-10. `handlers/downloads.go`, `handlers/file_shares.go`, `handlers/export.go` — update range math / share chunk metadata / export bundle AAD context
-11. `models/file.go` — delete `CreateFile` and `UpdatePasswordHint`, update doc comment
-12. **Checkpoint: `go test ./...` green across all packages**
-13. `client/static/js/src/crypto/constants.ts` — remove `MAX_FILE_SIZE` / `LIMITS`
-14. `client/static/js/src/crypto/aad.ts` (new)
-15. `client/static/js/src/crypto/aes-gcm.ts` — add optional `aad` param to `decryptChunk`
-16. `client/static/js/src/crypto/metadata-helpers.ts` — FEK and metadata decrypt helpers require AAD context
-17. `client/static/js/src/files/upload.ts` — generate `fileID`, retry `file_id_conflict` up to 3 times, wire all three AAD helpers
-18. `client/static/js/src/files/streaming-download.ts`, `download.ts`, `share.ts`, `list.ts`, `shares/share-list.ts`, `utils/digest-cache.ts` — wire AAD on all decrypt paths
-19. `client/static/js/src/__tests__/aad.test.ts` (new)
-20. Update `__tests__/aes-gcm.test.ts`, metadata-helper tests, digest-cache tests, streaming-download tests, and `__tests__/upload-batch.test.ts`
-21. Run the no-stale-call-site checklist above
-22. **Checkpoint: `bun test client/static/js/src/__tests__/` green**
-23. **Full validation: `sudo bash scripts/dev-reset.sh` + `bash scripts/testing/e2e-test.sh` + `sudo bash scripts/testing/e2e-playwright.sh`**
+The "ask developer to commit" markers (`COMMIT-GATE`) correspond to the green checkpoints. Per §2.1 of `00-high-priority-issues.md` and the H pinned decision in §7.5, the assistant never commits; the developer reviews the diff and commits at each gate.
+
+### Step 0 — Range-math audit (first substantive step)
+
+The audit produces a short written summary (committed alongside Step 1 of the implementation) covering:
+
+- Server upload init math in `handlers/uploads.go` (`total_size`, `chunk_count`, `chunk_size_bytes`, `padded_size`).
+- Server owner download range math in `handlers/downloads.go`.
+- Server anonymous share chunk range math in `handlers/file_shares.go`.
+- Browser upload and download math in `client/static/js/src/files/upload.ts` and streaming download modules.
+- CLI upload, download, share download, and offline decrypt math in `cmd/arkfile-client/`.
+- Export bundle layout in `handlers/export.go` and offline `.arkbackup` decrypt.
+
+Decision criterion: can the chunk-0 `[version][keyType]` two-byte header be removed cleanly while every range calculation respects the invariant "padding exists only after the encrypted stream and is never included in a decrypted chunk range"?
+
+- **Outcome A (uniform chunks):** remove the chunk-0 header. All paths use the uniform `[nonce][ciphertext][tag]` layout. Final-chunk range is bounded by `total_size`, never `padded_size`.
+- **Outcome B (retain header):** keep the chunk-0 `[version][keyType]` prefix on the first chunk. Chunk-0 AAD additionally includes the header bytes; every decrypt path verifies the header matches the expected format before returning plaintext.
+
+If the answer is non-obvious, surface the trade-offs to the developer before committing. The audit summary becomes part of the Step 1 commit (e.g., as a short note in `crypto/aad.go` package doc or a markdown note under `docs/wip/review/`).
+
+### Step 1 — Go AAD foundation
+
+- New `crypto/aad.go` exporting:
+  - Canonical constants `AADFieldFilename = "encrypted_filename"`, `AADFieldSha256 = "encrypted_sha256sum"` (per §4.6).
+  - `BuildChunkAAD(fileID, chunkIndex, totalChunks)`, `BuildFEKEnvelopeAAD(fileID, keyTypeByte)`, `BuildMetadataFieldAAD(fileID, fieldName, ownerUsername)`.
+- New `crypto/aad_test.go` with the determinism / uniqueness / cross-language conformance vector tests (per §10). Tamper-detection negative tests for chunk swap, reorder, cross-file substitution, and truncation (B-02 / B-05 / C-02 / C-03) belong here.
+- The cross-language conformance vector is generated once from this Go implementation and the resulting hex is hardcoded into both the Go test and (later in Step 14) the TS test. No persistent generator script (per D in §7.5).
+
+### Step 2 — Wire AAD into Go crypto primitives
+
+- `crypto/file_operations.go`: `EncryptFEK` / `DecryptFEK` gain `fileID`; `DecryptFileMetadata` / `DecryptMetadataWithDerivedKey` gain `fileID`, `fieldName`, `ownerUsername`; all call `*WithAAD` variants.
+- Delete `EncryptFile` / `DecryptFile` (B-17). Delete `crypto/envelope.go` (B-18).
+- Update `crypto/file_operations_test.go`: remove tests for deleted functions; add the FEK / metadata negative tests from §10.
+
+### Step 3 — CLI updates
+
+- `cmd/arkfile-client/crypto_utils.go`: all six functions gain AAD parameters and use `*WithAAD` variants.
+- `cmd/arkfile-client/commands.go`: `uploadOneFile` generates `fileID = uuid.New().String()` before encryption; propagates through `ChunkedUploadParams` and `doChunkedUpload`. Adds retry-on-`file_id_conflict` (up to 3 times, then hard error). `doChunkedDownload` passes `fileID` and `totalChunks` to `decryptChunk`. Owner share-creation passes `fileID` into FEK unwrap. Anonymous share-download passes `chunkMeta.FileID` into chunk decryption.
+- `cmd/arkfile-client/offline_decrypt.go`: reads AAD context from bundle metadata; passes into decrypts.
+- `cmd/arkfile-client/dedup.go`: digest-cache metadata decrypt uses metadata AAD.
+- `cmd/arkfile-client/crypto_utils_test.go` and `offline_decrypt_test.go`: roundtrip + negative tests + retry-behavior tests per §10 / F in §7.5.
+
+### Step 4 — Server handlers + models
+
+- `handlers/uploads.go` `CreateUploadSession`: accept client-supplied `file_id` from request body; strict UUID v4 validation; global uniqueness across `file_metadata.file_id` and `upload_sessions.file_id` enforced inside the session-insert transaction; HTTP 409 with stable `file_id_conflict`. Remove the `models.GenerateFileID()` call from this path.
+- `handlers/uploads_test.go`: add `TestCreateUploadSession_RejectsNonUUIDv4FileID` and `TestCreateUploadSession_FileIDConflictStableError`.
+- `handlers/downloads.go` and `handlers/file_shares.go`: range math updates per Step 0 outcome. Share metadata continues exposing underlying `file_id` for recipient chunk AAD.
+- `handlers/export.go`: `.arkbackup` bundle becomes self-describing per §6.1 (minimum clean greenfield update to current format).
+- `models/file.go`: delete `CreateFile` (C-23) and `UpdatePasswordHint` (C-24); update the `EncryptedSha256sum` doc comment to reflect that AAD is now actually applied.
+
+### Checkpoint 1 — `go test ./...` green across all packages
+
+Run the full Go suite (including `handlers/`, `crypto/`, `cmd/arkfile-client/`, `models/`). All packages must pass. **COMMIT-GATE 1**: present the diff and the test summary to the developer; the developer commits.
+
+### Step 5 — TS foundation
+
+- `client/static/js/src/crypto/constants.ts`: delete `MAX_FILE_SIZE` (B-27); remove `LIMITS` if empty after.
+- New `client/static/js/src/crypto/aad.ts` exporting canonical constants (`AAD_FIELD_FILENAME`, `AAD_FIELD_SHA256`) and the three helpers, byte-identical encoding to Go.
+- New `client/static/js/src/__tests__/aad.test.ts` with the same hardcoded cross-language vector as the Go test plus uniqueness/distinction tests.
+
+### Step 6 — Wire AAD into TS crypto
+
+- `client/static/js/src/crypto/aes-gcm.ts`: `AESGCMDecryptor.decryptChunk` gains optional `aad?: Uint8Array` parameter.
+- `client/static/js/src/crypto/metadata-helpers.ts`: `decryptFEK` gains fileID + keyType AAD; `decryptMetadataField` gains fileID + field label + ownerUsername.
+- Tests in `aes-gcm.test.ts` and `metadata-helpers.test.ts` per §11.
+
+### Step 7 — TS file flows
+
+- `client/static/js/src/files/upload.ts`: generate `fileID = crypto.randomUUID()` before encryption; include in init payload; retry `file_id_conflict` up to 3 times then hard-error; wire all three AAD helpers.
+- `client/static/js/src/files/streaming-download.ts`: `makeFileChunkGenerator` / `makeShareChunkGenerator` pass `buildChunkAAD` into each `decryptChunk`.
+- `client/static/js/src/files/download.ts`, `share.ts`, `list.ts`, `shares/share-list.ts`, `utils/digest-cache.ts`: wire AAD on all decrypt paths.
+- `__tests__/upload-batch.test.ts`: update mocks to include `file_id` in init payload.
+
+### Step 8 — No-stale-call-site sweep
+
+Search for: `decryptMetadataField(`, `decryptFEK(`, `unwrapFEK(`, `decryptChunk(`, `EncryptGCM(` / `DecryptGCM(`, `encryptAESGCM(` without `additionalData`, `decryptAESGCM` without AAD. Account for every result; ensure all file-path call sites supply AAD. Per the §8 "No stale file-path call-site checklist" subsection above.
+
+### Checkpoint 2 — `bun test client/static/js/src/__tests__/` green
+
+Run the full TS test suite. All tests must pass. **COMMIT-GATE 2**: present the diff and the test summary to the developer; the developer commits.
+
+### Step 9 — Full local validation
+
+Run the triplet in order:
+
+1. `sudo bash scripts/dev-reset.sh`
+2. `bash scripts/testing/e2e-test.sh`
+3. `sudo bash scripts/testing/e2e-playwright.sh`
+
+All three must be green.
+
+### Final gate
+
+- Update the Status Tracker in `00-high-priority-issues.md` (§6) from "Not started" to "Done <date>" with a cluster summary matching the format used for A1 / A2 / A3 / B (Go test results, TS test results, beta impact reminder).
+- Draft the RED beta heads-up message per the template in §5's "Phase C beta impact" subsection of `00-high-priority-issues.md`.
+- **COMMIT-GATE 3**: present the documentation update, the heads-up draft, and the final-validation summary to the developer; the developer commits.
 
 ---
 
 ## 10. Go Unit Tests
+
 
 ### `crypto/aad_test.go`
 
@@ -455,6 +598,9 @@ The cross-client conformance tests that already exist in `e2e-test.sh` (CLI uplo
 
 No new shell e2e step is required specifically for `.arkbackup` export/decrypt in Phase C. Unit and CLI tests cover the export bundle's AAD-aware offline decrypt behavior for now.
 
+Likewise, `file_id_conflict` retry behavior is exercised only at the unit-test level: the CLI Go suite mocks the server's 409 response and asserts the client retries up to 3 times before hard-erroring, and the TS suite does the same with a mocked `init` response. UUID v4 collisions are vanishingly rare in practice, so the retry path would otherwise go unexercised in any reasonable e2e run (per F in §7.5).
+
+
 ---
 
 ## 13. Object Storage and File Size
@@ -474,84 +620,5 @@ A few points worth flagging for anyone reviewing this plan before implementation
 **On dead code removal timing:** some reviewers may question why dead code from findings B-17, B-18, C-23, and C-24 is being removed in Phase C rather than in a dedicated cleanup phase. The reason is that Phase C already requires opening `crypto/file_operations.go` and `models/file.go` for substantive changes. Leaving dead functions alongside newly AAD-aware functions in the same files creates ambiguity and potential for future confusion. The greenfield principle from `AGENTS.md` is clear: clean breaks now, not incremental deprecation. Removing dead code while those files are open is the right time to do it.
 
 **On `crypto/session.go` and `crypto/opaque_validation.go`:** these are also dead code (findings B-10, B-11, A-45) but are not in files that Phase C needs to touch. They are called out here for awareness and should be removed in a near-term cleanup session, but are out of scope for Phase C.
-
-
----
-
-# ADDITIONAL NOTES & DISCUSSION BEFORE WE BEGIN
-
-- ^ above plan reviewed and updated with the help of ChatGPT 5.5.
-
-- Below notes from Opus 4.7 when prompted: "please read AGENTS.md and 00-executive-summary.md and 00-high-priority-issues.md and finally the plan doc phase-c.md -- let me know if you have any questions for me about phase-c.md before we begin"
-
-"""
-I've read AGENTS.md, 00-executive-summary.md, 00-high-priority-issues.md, and phase-c.md. The Phase C plan is thorough and the design decisions are largely well-justified. Before we start, here are my questions / clarifications grouped by risk to the implementation. Many have a "I'd suggest X if you don't have a preference" answer included.
-
----
-
-### A. Range-math audit / uniform-chunk decision (§4.2.1)
-
-This is the single biggest "fork in the road" inside Phase C. The plan calls for an audit and then either (a) remove the chunk-0 `[version][keyType]` two-byte header for uniform chunks, or (b) keep the header and authenticate it via chunk-0 AAD.
-
-1. **Do you want me to perform the audit as the first substantive step of Phase C and commit to one path before writing code?** Or treat it as "open question, default to keeping the chunk-0 header + authenticating it" so we can land Phase C without depending on the audit's outcome?
-2. If we go uniform-chunk, the `keyType` is already in the FEK envelope, so removing the chunk-0 header is clean — but it changes wire format for *every* file, not just AAD semantics. That's fine under greenfield, just want to confirm you're OK with that scope.
-
-My recommendation: do the audit first; if cleanly removable, remove. If even one path is fragile, retain header + authenticate it. I'd want roughly half a day for the audit before committing.
-
----
-
-### B. `file_id` trust-boundary shift (§3)
-
-The plan moves `file_id` generation client-side, validated against strict UUID v4 syntax + global uniqueness server-side. Questions:
-
-3. **Should `file_id` uniqueness be enforced globally (across all users) or scoped per-user?** Plan says global. Global is fine and matches the spec, just confirming — per-user would slightly weaken the cross-file substitution defense at the AAD layer because a malicious user could attempt to claim someone else's `file_id`. Global is correct; I just want to make sure that's the call.
-4. **For the `upload_sessions` reservation:** currently the schema reserves `file_id` only for active sessions. Should expired/abandoned sessions also block reuse until cleanup runs (plan says yes), and what's the cleanup interval — same as the existing session sweep? I'd default to: yes, abandoned reserves, swept by the existing upload-session sweep job.
-
----
-
-### C. Metadata AAD field labels (§4.4)
-
-5. The plan uses `"encrypted_filename"` and `"encrypted_sha256sum"` as literal AAD labels. **Are these the exact strings (lowercase, with underscores) you want bound into AAD forever?** Once shipped, changing them would invalidate every existing file. I'd recommend writing them as exported constants in `crypto/aad.go` (`AADFieldFilename = "encrypted_filename"`, etc.) so callers cannot typo them, and so a future reader sees the canonical strings in one place.
-
----
-
-### D. Cross-language conformance vector (§10, §11)
-
-6. The plan calls for one hardcoded input + expected-hex-bytes vector shared between Go and TS tests. **Do you want me to compute that vector by running the Go implementation first, hand-copy the hex into both test files, or would you prefer a small generator script (`crypto/aad_vector_gen.go`) that emits the vector and both tests import a constant?** A generator avoids the "I edited one and forgot the other" failure mode. I'd recommend the generator approach, kept in the repo under `scripts/testing/` or similar.
-
----
-
-### E. CLI offline `.arkbackup` decrypt (§6)
-
-7. The plan says newly exported `.arkbackup` bundles include `owner_username`, `file_id`, etc. **Is the existing `.arkbackup` bundle format JSON-based, or a binary container?** I haven't looked at `handlers/export.go` yet; this affects whether we're adding JSON fields or extending a binary header. Default: I'll inspect during implementation and adapt. Flagging only because if you have a strong opinion (e.g., "I'd like the export format to be re-designed in Phase C as well"), now is the time to say so. The plan implies a minimal additive change.
-
-8. **Do old `.arkbackup` files become unreadable after Phase C, same as old uploaded files?** The plan strongly implies yes (greenfield clean break, no fallback). Confirming because some beta users might have downloaded backup bundles locally and could be confused.
-
----
-
-### F. Test scope for retry-on-conflict
-
-9. The plan calls for up to 3 retries on `file_id_conflict` from both clients. **Should I add a unit-test for the retry behavior on the CLI side (mocking the server response)?** It's not in the test list explicitly. I'd recommend yes — UUID v4 collisions are vanishingly rare in practice, so without a test that path is effectively never exercised.
-
----
-
-### G. Out-of-scope confirmation
-
-10. The plan removes B-17, B-18, C-23, C-24, B-27 opportunistically. It explicitly defers B-10, B-11, A-45 (other dead-code in `crypto/session.go`, `crypto/opaque_validation.go`) to a "near-term cleanup session". **Is there any chance you want B-10/B-11/A-45 folded in here too?** They're trivially small. I'd default to honoring the plan and leaving them for a cleanup pass. Just confirming.
-
-11. **`/api/files/:fileId/chunks/:chunkIndex` byte-range math (C-03):** the plan addresses this implicitly via the range-math audit. **Is there anything else you'd like done about `chunk_size_bytes` / `chunk_count` being server-DB-trusted but not crypto-bound?** With AAD on `totalChunks`, truncation is detected; with AAD on `chunkIndex`, reorder is detected; but the per-byte `chunk_size_bytes` is still server-trusted (a malicious server could fragment a chunk across two range requests). My read: the AEAD layer will fail to authenticate the resulting bytes anyway because the tag won't match the truncated ciphertext, so this is sufficient. Just want to confirm we're aligned on "AAD on chunkIndex + totalChunks is sufficient; we do not need to bind chunk_size_bytes."
-
----
-
-### H. Process / workflow
-
-12. **Local validation cadence:** I'd plan to run `go test ./...` after step 12 (CLI checkpoint), `bun test` after step 22, and the full `dev-reset.sh + e2e-test.sh + e2e-playwright.sh` triplet only at the end. That matches §2.4 / §9 of the plans. Confirming you don't want me running the full triplet between every numbered sub-step.
-
-13. **Commits:** I'll continue the established pattern of writing code + running tests + asking you to commit, never committing myself. Confirming you'd like the same shape (frequent commit-checkpoints at each "green" gate) for Phase C.
-
----
-
-If most of these have a default answer ("yes, your suggestion is fine"), feel free to just say "defaults all" and I'll proceed accordingly once switched to Act mode. The two I'd most like an explicit answer on are **A (audit timing)** and **C (literal field label strings)** because both are wire-format commitments that are hard to change once shipped.
-"""
 
 ---
