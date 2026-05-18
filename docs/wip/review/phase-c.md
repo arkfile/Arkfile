@@ -334,6 +334,23 @@ Plain `EncryptGCM` / `DecryptGCM` can remain as general-purpose primitives for n
 
 ## 9. Implementation Order
 
+> **Progress (in-flight Phase C implementation):**
+>
+> - [x] **Step 0 — Range-math audit.** Audit committed at `docs/wip/review/phase-c-step0-audit.md`. **Decision: Outcome A (uniform chunks, no per-chunk envelope header).** Adopted in all subsequent code.
+> - [x] **Step 1 — Go AAD foundation.** `crypto/aad.go` and `crypto/aad_test.go` landed. 23 tests passing, including the hardcoded 56-byte cross-language conformance vector (`expectedChunkAADHex` for `BuildChunkAAD("a1b2c3d4-e5f6-7890-abcd-ef1234567890", 3, 10)`) — the TS port in Step 5 must reproduce this byte-for-byte.
+> - [x] **Step 2 — Go crypto primitives wired.** `EncryptFEK` / `DecryptFEK` now take `fileID` and use `*WithAAD`. `DecryptFileMetadata` / `DecryptMetadataWithDerivedKey` take `(fileID, fieldName, ownerUsername)` with field labels `AADFieldFilename = "encrypted_filename"` and `AADFieldSha256 = "encrypted_sha256sum"`. Old `CreateEnvelope`/`ParseEnvelope` renamed to `CreateFEKEnvelopeHeader`/`ParseFEKEnvelopeHeader`. **Dead code deletions opportunistically completed:** B-17 (`EncryptFile`/`DecryptFile`), B-18 (`crypto/envelope.go` stub), C-23 (`models.CreateFile`), C-24 (`models.UpdatePasswordHint`). `models/file.go` `EncryptedSha256sum` doc comment AAD label corrected. `go test ./crypto` and `go vet ./...` green.
+> - [ ] **Step 3 — CLI updates.** `cmd/arkfile-client/crypto_utils.go` fully rewritten to the new signatures (chunk-0 special case removed; AAD-bound chunk/FEK/metadata helpers; updated `calculateTotalEncryptedSize` for uniform chunks). **Still to do:** thread `fileID` / `ownerUsername` / `totalChunks` through ~45 call sites in `commands.go`, `dedup.go`, `main.go`, `offline_decrypt.go` and their test files; have `uploadOneFile` mint the client-side `file_id` (UUIDv4), pass it in the upload-init payload, and implement single-retry on HTTP 409 (file_id collision) per §4.4.
+> - [ ] **Step 4 — Server handlers + models.** Accept client-supplied `file_id` in `handlers/uploads.go` `CreateUploadSession`; validate UUIDv4; return the stable 409 error code on collision. Surface `owner_username` in metadata responses where the client needs it for AAD reconstruction. `.arkbackup` becomes self-describing per §6.1.
+> - [ ] **Internal gate:** `go test ./...` green.
+> - [ ] **Step 5 — TS AAD foundation.** `client/static/js/src/crypto/aad.ts` + `__tests__/aad.test.ts` mirroring the Go module byte-for-byte (same conformance vector). Delete B-27 (`MAX_FILE_SIZE`).
+> - [ ] **Steps 6–8 — TS wiring + sweep.** Wire AAD into `aes-gcm.ts` and `metadata-helpers.ts`; thread `fileID`/`ownerUsername` through upload / download / share / list / share-list / digest-cache flows; drop the chunk-0-header strip in `streaming-download.ts`; no-stale-call-site grep.
+> - [ ] **Internal gate:** `bun test client/static/js/src/__tests__/` green.
+> - [ ] **Step 9 — Full local validation.** `sudo bash scripts/dev-reset.sh && bash scripts/testing/e2e-test.sh && sudo bash scripts/testing/e2e-playwright.sh`.
+> - [ ] **Final delivery.** Diff + all test results + Status Tracker update in `00-high-priority-issues.md` + RED beta heads-up draft.
+>
+> This Progress block is updated in-place after each Step lands green; the body of §9 below remains the authoritative plan.
+
+
 Phase C is implemented audit-first, then CLI-first, then TS. The audit (Step 0) settles the chunk-0 header / uniform-chunks question before any other code lands, so all subsequent steps can use the agreed-upon chunk layout. The Go unit tests, CLI changes, and server-side `CreateUploadSession` change land next, validated via `go test ./...` at the first checkpoint. Only once the Go/CLI path is green is the TypeScript client updated, followed by the TS unit tests at the second checkpoint. Full local validation (`dev-reset.sh` + `e2e-test.sh` + `e2e-playwright.sh`) runs only at the final gate. This ordering means we can prove the full upload/download/share roundtrip using `arkfile-client` before touching the browser code at all, giving high confidence that the AAD design is correct before the TS implementation begins.
 
 The "ask developer to commit" markers (`COMMIT-GATE`) correspond to the green checkpoints. Per §2.1 of `00-high-priority-issues.md` and the H pinned decision in §7.5, the assistant never commits; the developer reviews the diff and commits at each gate.

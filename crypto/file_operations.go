@@ -237,31 +237,37 @@ func VerifyFileIntegrity(filePath string, expectedHash string, expectedSize int6
 }
 
 // =============================================================================
-// ENVELOPE FORMAT (Version 0x01 - Unified FEK-based encryption)
+// FEK ENVELOPE FORMAT
 // =============================================================================
 //
-// All encrypted data uses the same envelope format:
-// [0x01][key_type][nonce (12 bytes)][ciphertext][auth_tag (16 bytes)]
+// The FEK (File Encryption Key) is wrapped in a 2-byte-prefixed envelope when
+// stored in the file_metadata.encrypted_fek column:
 //
-// Where key_type indicates what password was used to encrypt the FEK:
-//   0x01 = account password
-//   0x02 = custom password
+//   [0x01][key_type][nonce (12 bytes)][ciphertext][auth_tag (16 bytes)]
 //
-// Key type values are sourced from crypto/chunking-params.json via
-// chunking_constants.go (KeyTypeForContext).
+// Where:
+//   - 0x01 is the envelope version byte.
+//   - key_type is 0x01 (account password) or 0x02 (custom password). Values
+//     are sourced from crypto/chunking-params.json via chunking_constants.go.
+//   - The AEAD authentication tag is computed with AAD =
+//     BuildFEKEnvelopeAAD(file_id, key_type) (see crypto/aad.go). This binds
+//     the FEK envelope to the specific file_id and key type, so an attacker
+//     with DB-write access cannot substitute one user's FEK envelope into
+//     another file's metadata row (Phase C, finding B-08).
 //
-// Files are ALWAYS encrypted with a random FEK, then the FEK is encrypted
-// with the user's password. This enables file sharing without re-encryption.
+// File data chunks themselves use a uniform layout with NO envelope prefix:
+//   [nonce (12 bytes)][ciphertext][auth_tag (16 bytes)]
+// Chunk AAD = BuildChunkAAD(file_id, chunk_index, total_chunks).
 //
-// Share operations use a separate mechanism with random salts and AES-GCM-AAD
-// (see crypto/share_kdf.go). They do NOT use the envelope key type system.
+// Share envelopes use a separate mechanism with random salts and their own
+// AAD construction (see crypto/share_kdf.go).
 // =============================================================================
 
-// CreateEnvelope creates an envelope header for FEK-based encryption
+// CreateFEKEnvelopeHeader creates the 2-byte FEK envelope header.
 // keyType: "account" or "custom"
-func CreateEnvelope(keyType string) []byte {
+func CreateFEKEnvelopeHeader(keyType string) []byte {
 	envelope := make([]byte, 2)
-	envelope[0] = 0x01 // Version 1 - Unified FEK-based encryption
+	envelope[0] = 0x01 // Version 1
 
 	switch keyType {
 	case "account":
@@ -275,15 +281,17 @@ func CreateEnvelope(keyType string) []byte {
 	return envelope
 }
 
-// ParseEnvelope parses an envelope header and returns the key type
-func ParseEnvelope(envelope []byte) (version byte, keyType string, err error) {
+// ParseFEKEnvelopeHeader parses a 2-byte FEK envelope header and returns the
+// key type ("account" or "custom"). Returns an error for unknown version
+// bytes or short input.
+func ParseFEKEnvelopeHeader(envelope []byte) (version byte, keyType string, err error) {
 	if len(envelope) < 2 {
-		return 0, "", fmt.Errorf("envelope too short: need at least 2 bytes, got %d", len(envelope))
+		return 0, "", fmt.Errorf("FEK envelope too short: need at least 2 bytes, got %d", len(envelope))
 	}
 
 	version = envelope[0]
 	if version != 0x01 {
-		return 0, "", fmt.Errorf("unsupported envelope version: 0x%02x (expected 0x01)", version)
+		return 0, "", fmt.Errorf("unsupported FEK envelope version: 0x%02x (expected 0x01)", version)
 	}
 
 	switch envelope[1] {
@@ -302,7 +310,7 @@ func ParseEnvelope(envelope []byte) (version byte, keyType string, err error) {
 // FEK (File Encryption Key) OPERATIONS
 // =============================================================================
 
-// GenerateFEK generates a cryptographically secure 32-byte File Encryption Key
+// GenerateFEK generates a cryptographically secure 32-byte File Encryption Key.
 func GenerateFEK() ([]byte, error) {
 	fek := make([]byte, 32)
 	if _, err := rand.Read(fek); err != nil {
@@ -312,8 +320,16 @@ func GenerateFEK() ([]byte, error) {
 }
 
 // EncryptFEK encrypts a File Encryption Key (FEK) using a key derived from
-// the user's password via Argon2ID. This creates the "Owner Envelope".
-func EncryptFEK(fek []byte, password []byte, username, keyType string) ([]byte, error) {
+// the user's password via Argon2id, with AAD binding to the specific file.
+// This creates the "Owner Envelope" stored in file_metadata.encrypted_fek.
+//
+// The AAD is constructed via BuildFEKEnvelopeAAD(fileID, keyTypeByte), so
+// any attempt to substitute this envelope into a different file's row
+// (B-08) or flip the key-type byte will fail authentication on decrypt.
+//
+// fileID MUST be the canonical file_id the metadata row will use. keyType
+// MUST be "account" or "custom".
+func EncryptFEK(fek []byte, password []byte, username, fileID, keyType string) ([]byte, error) {
 	if len(fek) != 32 {
 		return nil, fmt.Errorf("FEK must be 32 bytes, got %d", len(fek))
 	}
@@ -323,38 +339,48 @@ func EncryptFEK(fek []byte, password []byte, username, keyType string) ([]byte, 
 	if username == "" {
 		return nil, fmt.Errorf("username cannot be empty")
 	}
+	if fileID == "" {
+		return nil, fmt.Errorf("fileID cannot be empty")
+	}
 
-	// Derive key based on key type
-	var derivedKey []byte
+	// Derive KEK based on key type
+	var kek []byte
 	switch keyType {
 	case "account":
-		derivedKey = DeriveAccountPasswordKey(password, username)
+		kek = DeriveAccountPasswordKey(password, username)
 	case "custom":
-		derivedKey = DeriveCustomPasswordKey(password, username)
+		kek = DeriveCustomPasswordKey(password, username)
 	default:
 		return nil, fmt.Errorf("unsupported key type: %s (supported: account, custom)", keyType)
 	}
 
-	// Create envelope header
-	envelope := CreateEnvelope(keyType)
+	// Build envelope header [version][key_type] and the matching AAD.
+	envelope := CreateFEKEnvelopeHeader(keyType)
+	keyTypeByte := envelope[1]
+	aad := BuildFEKEnvelopeAAD(fileID, keyTypeByte)
 
-	// Encrypt the FEK
-	encryptedFEK, err := EncryptGCM(fek, derivedKey)
+	// Encrypt the FEK with AAD binding.
+	wrapped, err := EncryptGCMWithAAD(fek, kek, aad)
 	if err != nil {
 		return nil, fmt.Errorf("FEK encryption failed: %w", err)
 	}
 
-	// Prepend envelope to encrypted FEK
-	result := make([]byte, len(envelope)+len(encryptedFEK))
-	copy(result, envelope)
-	copy(result[len(envelope):], encryptedFEK)
-
+	// Output: [envelope (2)][nonce][ct][tag]
+	result := make([]byte, 0, len(envelope)+len(wrapped))
+	result = append(result, envelope...)
+	result = append(result, wrapped...)
 	return result, nil
 }
 
 // DecryptFEK decrypts a File Encryption Key (FEK) using a key derived from
-// the user's password via Argon2ID. Returns the decrypted FEK and the key type.
-func DecryptFEK(encryptedFEK []byte, password []byte, username string) ([]byte, string, error) {
+// the user's password via Argon2id, verifying AAD binding to the specific
+// file. Returns the decrypted FEK and the key type used during encryption.
+//
+// Any mismatch in fileID or in the envelope's key-type byte vs. the AAD
+// causes AES-GCM authentication failure (B-08).
+//
+// fileID MUST be the canonical file_id from the metadata row.
+func DecryptFEK(encryptedFEK []byte, password []byte, username, fileID string) ([]byte, string, error) {
 	if len(encryptedFEK) < 2 {
 		return nil, "", fmt.Errorf("encrypted FEK too short: need at least 2 bytes for envelope, got %d", len(encryptedFEK))
 	}
@@ -364,29 +390,36 @@ func DecryptFEK(encryptedFEK []byte, password []byte, username string) ([]byte, 
 	if username == "" {
 		return nil, "", fmt.Errorf("username cannot be empty")
 	}
+	if fileID == "" {
+		return nil, "", fmt.Errorf("fileID cannot be empty")
+	}
 
-	// Parse envelope
+	// Parse envelope header.
 	envelope := encryptedFEK[:2]
 	ciphertext := encryptedFEK[2:]
 
-	_, keyType, err := ParseEnvelope(envelope)
+	_, keyType, err := ParseFEKEnvelopeHeader(envelope)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to parse FEK envelope: %w", err)
 	}
 
-	// Derive key based on key type from envelope
-	var derivedKey []byte
+	// Derive the matching KEK.
+	var kek []byte
 	switch keyType {
 	case "account":
-		derivedKey = DeriveAccountPasswordKey(password, username)
+		kek = DeriveAccountPasswordKey(password, username)
 	case "custom":
-		derivedKey = DeriveCustomPasswordKey(password, username)
+		kek = DeriveCustomPasswordKey(password, username)
 	default:
 		return nil, "", fmt.Errorf("unsupported key type: %s", keyType)
 	}
 
-	// Decrypt the FEK
-	fek, err := DecryptGCM(ciphertext, derivedKey)
+	// Reconstruct the AAD that was used at encrypt time.
+	keyTypeByte := envelope[1]
+	aad := BuildFEKEnvelopeAAD(fileID, keyTypeByte)
+
+	// Decrypt and verify AAD.
+	fek, err := DecryptGCMWithAAD(ciphertext, kek, aad)
 	if err != nil {
 		return nil, "", fmt.Errorf("FEK decryption failed: %w", err)
 	}
@@ -395,70 +428,10 @@ func DecryptFEK(encryptedFEK []byte, password []byte, username string) ([]byte, 
 }
 
 // =============================================================================
-// FILE ENCRYPTION/DECRYPTION (FEK-based only)
-// =============================================================================
-
-// EncryptFile encrypts file data using a FEK (File Encryption Key)
-// The keyType parameter indicates what password type will be used to encrypt the FEK
-func EncryptFile(data []byte, fek []byte, keyType string) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, fmt.Errorf("cannot encrypt empty data")
-	}
-
-	if len(fek) != 32 {
-		return nil, fmt.Errorf("FEK must be 32 bytes for AES-256, got %d", len(fek))
-	}
-
-	// Create envelope header
-	envelope := CreateEnvelope(keyType)
-
-	// Encrypt the data with FEK
-	encryptedData, err := EncryptGCM(data, fek)
-	if err != nil {
-		return nil, fmt.Errorf("encryption failed: %w", err)
-	}
-
-	// Prepend envelope to encrypted data
-	result := make([]byte, len(envelope)+len(encryptedData))
-	copy(result, envelope)
-	copy(result[len(envelope):], encryptedData)
-
-	return result, nil
-}
-
-// DecryptFile decrypts file data using a FEK (File Encryption Key)
-func DecryptFile(encryptedData []byte, fek []byte) ([]byte, error) {
-	if len(encryptedData) < 2 {
-		return nil, fmt.Errorf("encrypted data too short: need at least 2 bytes for envelope, got %d", len(encryptedData))
-	}
-
-	if len(fek) != 32 {
-		return nil, fmt.Errorf("FEK must be 32 bytes, got %d", len(fek))
-	}
-
-	// Parse envelope (validate format)
-	envelope := encryptedData[:2]
-	ciphertext := encryptedData[2:]
-
-	_, _, err := ParseEnvelope(envelope)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse envelope: %w", err)
-	}
-
-	// Decrypt the data using the FEK
-	plaintext, err := DecryptGCM(ciphertext, fek)
-	if err != nil {
-		return nil, fmt.Errorf("decryption failed: %w", err)
-	}
-
-	return plaintext, nil
-}
-
-// =============================================================================
 // METADATA OPERATIONS
 // =============================================================================
 
-// DecryptedFileMetadata represents decrypted file metadata
+// DecryptedFileMetadata represents decrypted file metadata.
 type DecryptedFileMetadata struct {
 	FileID       string `json:"file_id"`
 	StorageID    string `json:"storage_id"`
@@ -471,34 +444,49 @@ type DecryptedFileMetadata struct {
 	UploadDate   string `json:"upload_date"`
 }
 
-// DecryptFileMetadata decrypts encrypted filename and SHA256 metadata using stored password
-// This function works with separate nonce and encrypted data fields as stored in the database
-// The server stores nonces and encrypted data separately, so we need to combine them for DecryptGCM
-func DecryptFileMetadata(filenameNonce, encryptedFilename, sha256Nonce, encryptedSHA256 []byte, password string, username string) (string, string, error) {
+// DecryptFileMetadata decrypts the encrypted_filename and encrypted_sha256sum
+// metadata fields for a file using the account-derived key (Argon2id). The
+// AAD on each field binds it to (fileID, field_label, ownerUsername), so
+// substituting metadata between files or fields or users is rejected by the
+// AEAD layer (C-19).
+//
+// fileID and ownerUsername must be the canonical values from the metadata
+// row.
+func DecryptFileMetadata(filenameNonce, encryptedFilename, sha256Nonce, encryptedSHA256 []byte, password string, username, fileID, ownerUsername string) (string, string, error) {
 	if len(password) == 0 {
 		return "", "", fmt.Errorf("password cannot be empty")
 	}
 	if username == "" {
 		return "", "", fmt.Errorf("username cannot be empty")
 	}
+	if fileID == "" {
+		return "", "", fmt.Errorf("fileID cannot be empty")
+	}
+	if ownerUsername == "" {
+		return "", "", fmt.Errorf("ownerUsername cannot be empty")
+	}
 
-	// Use account password derivation (default for file metadata)
+	// Metadata is always encrypted under the account key.
 	derivedKey := DeriveAccountPasswordKey([]byte(password), username)
 
-	// Decrypt filename
 	var filename string
 	if len(encryptedFilename) > 0 && len(filenameNonce) > 0 {
-		decryptedFilename, err := DecryptMetadataWithDerivedKey(derivedKey, filenameNonce, encryptedFilename)
+		decryptedFilename, err := DecryptMetadataWithDerivedKey(
+			derivedKey, filenameNonce, encryptedFilename,
+			fileID, AADFieldFilename, ownerUsername,
+		)
 		if err != nil {
 			return "", "", fmt.Errorf("failed to decrypt filename: %w", err)
 		}
 		filename = string(decryptedFilename)
 	}
 
-	// Decrypt SHA256
 	var sha256sum string
 	if len(encryptedSHA256) > 0 && len(sha256Nonce) > 0 {
-		decryptedSHA256, err := DecryptMetadataWithDerivedKey(derivedKey, sha256Nonce, encryptedSHA256)
+		decryptedSHA256, err := DecryptMetadataWithDerivedKey(
+			derivedKey, sha256Nonce, encryptedSHA256,
+			fileID, AADFieldSha256, ownerUsername,
+		)
 		if err != nil {
 			return "", "", fmt.Errorf("failed to decrypt SHA256: %w", err)
 		}
@@ -508,34 +496,38 @@ func DecryptFileMetadata(filenameNonce, encryptedFilename, sha256Nonce, encrypte
 	return filename, sha256sum, nil
 }
 
-// DecryptMetadataWithDerivedKey decrypts file metadata using a pre-derived key
-// Expects separate nonce and encrypted data parameters (split from GCM output).
-func DecryptMetadataWithDerivedKey(derivedKey []byte, nonce, encryptedData []byte) ([]byte, error) {
-	// Validate input lengths
+// DecryptMetadataWithDerivedKey decrypts a single metadata field using a
+// pre-derived key. Expects separate nonce and encrypted data (the server
+// stores them in separate columns). AAD is constructed via
+// BuildMetadataFieldAAD(fileID, fieldName, ownerUsername) to bind the
+// ciphertext to its file, field label, and owner.
+//
+// fieldName MUST be AADFieldFilename or AADFieldSha256.
+func DecryptMetadataWithDerivedKey(derivedKey []byte, nonce, encryptedData []byte, fileID, fieldName, ownerUsername string) ([]byte, error) {
+	// Validate input lengths.
 	if len(nonce) != 12 {
 		return nil, fmt.Errorf("invalid nonce length: expected 12 bytes, got %d", len(nonce))
 	}
 	if len(encryptedData) < 16 {
 		return nil, fmt.Errorf("invalid encrypted data length: expected at least 16 bytes for auth tag, got %d", len(encryptedData))
 	}
-
-	// The encrypted data from the database contains: [ciphertext][16-byte auth tag]
-	// We need to reconstruct the format expected by DecryptGCM: [nonce][ciphertext][auth tag]
-	ciphertextLen := len(encryptedData) - 16
-	if ciphertextLen < 0 {
-		return nil, fmt.Errorf("encrypted data too short to contain auth tag")
+	if fileID == "" {
+		return nil, fmt.Errorf("fileID cannot be empty")
+	}
+	if fieldName == "" {
+		return nil, fmt.Errorf("fieldName cannot be empty")
+	}
+	if ownerUsername == "" {
+		return nil, fmt.Errorf("ownerUsername cannot be empty")
 	}
 
-	// Split the encrypted data
-	ciphertext := encryptedData[:ciphertextLen]
-	authTag := encryptedData[ciphertextLen:]
+	// Server stores [ciphertext][16-byte tag] and the [nonce] separately.
+	// Reassemble the GCM layout [nonce][ciphertext][tag] expected by
+	// DecryptGCMWithAAD.
+	gcmData := make([]byte, 0, len(nonce)+len(encryptedData))
+	gcmData = append(gcmData, nonce...)
+	gcmData = append(gcmData, encryptedData...)
 
-	// Reconstruct the proper GCM format: [nonce][ciphertext][auth_tag]
-	gcmData := make([]byte, len(nonce)+len(ciphertext)+len(authTag))
-	copy(gcmData, nonce)
-	copy(gcmData[len(nonce):], ciphertext)
-	copy(gcmData[len(nonce)+len(ciphertext):], authTag)
-
-	// Now decrypt using the reconstructed data
-	return DecryptGCM(gcmData, derivedKey)
+	aad := BuildMetadataFieldAAD(fileID, fieldName, ownerUsername)
+	return DecryptGCMWithAAD(gcmData, derivedKey, aad)
 }

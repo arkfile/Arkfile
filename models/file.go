@@ -17,9 +17,10 @@ import (
 //	  SHA-256 of the user's original PLAINTEXT file. Computed client-side,
 //	  encrypted client-side under the account key, and stored as ciphertext
 //	  (nonce + ct||tag, base64). The server never sees this value in
-//	  plaintext. AAD-bound to (file_id, "sha256sum", owner_username) per
-//	  docs/wip/folders-multi-upload-v2.md §3 so cross-row / cross-field
-//	  tampering fails at client decrypt time.
+//	  plaintext. AAD-bound to (file_id, "encrypted_sha256sum",
+//	  owner_username) per Phase C, finding C-19 (see crypto/aad.go:
+//	  BuildMetadataFieldAAD with AADFieldSha256), so substituting metadata
+//	  between files, fields, or users fails at client decrypt time.
 //
 //	EncryptedFileSha256sum
 //	  Despite the "Encrypted" prefix in the column/field name, this value
@@ -97,50 +98,6 @@ func CalculateChunkCount(sizeBytes int64, chunkSizeBytes int64) int64 {
 		count = 1
 	}
 	return count
-}
-
-// CreateFile creates a new file record in the database with encrypted metadata (base64 strings)
-func CreateFile(db *sql.DB, fileID, storageID, ownerUsername, passwordHint, passwordType string,
-	filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum string, sizeBytes int64) (*File, error) {
-
-	chunkSizeBytes := crypto.PlaintextChunkSize()
-	chunkCount := CalculateChunkCount(sizeBytes, chunkSizeBytes)
-
-	result, err := db.Exec(`
-		INSERT INTO file_metadata (
-			file_id, storage_id, owner_username, password_hint, password_type,
-			filename_nonce, encrypted_filename, sha256sum_nonce, encrypted_sha256sum, 
-			size_bytes, chunk_count, chunk_size_bytes
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		fileID, storageID, ownerUsername, passwordHint, passwordType,
-		filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum,
-		sizeBytes, chunkCount, chunkSizeBytes,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, err
-	}
-
-	return &File{
-		ID:                 id,
-		FileID:             fileID,
-		StorageID:          storageID,
-		OwnerUsername:      ownerUsername,
-		PasswordHint:       passwordHint,
-		PasswordType:       passwordType,
-		FilenameNonce:      filenameNonce,      // Already base64 strings
-		EncryptedFilename:  encryptedFilename,  // Already base64 strings
-		Sha256sumNonce:     sha256sumNonce,     // Already base64 strings
-		EncryptedSha256sum: encryptedSha256sum, // Already base64 strings
-		SizeBytes:          sizeBytes,
-		ChunkCount:         chunkCount,
-		ChunkSizeBytes:     chunkSizeBytes,
-		UploadDate:         time.Now(),
-	}, nil
 }
 
 // GetFileByFileID retrieves a file record by file_id
@@ -620,20 +577,6 @@ func DeleteFile(db *sql.DB, fileID string, ownerUsername string) error {
 		return errors.New("file not found or unauthorized")
 	}
 
-	return nil
-}
-
-// UpdatePasswordHint updates the password hint for a file
-func (f *File) UpdatePasswordHint(db *sql.DB, newHint string) error {
-	_, err := db.Exec(
-		"UPDATE file_metadata SET password_hint = ? WHERE id = ?",
-		newHint, f.ID,
-	)
-	if err != nil {
-		return err
-	}
-
-	f.PasswordHint = newHint
 	return nil
 }
 

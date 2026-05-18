@@ -144,64 +144,11 @@ func TestGenerateFEK(t *testing.T) {
 	}
 }
 
-// TestFEKFileEncryption tests FEK-based file encryption/decryption
-func TestFEKFileEncryption(t *testing.T) {
-	testData := []byte("This is test data for FEK-based encryption validation")
-
-	tests := []struct {
-		name    string
-		keyType string
-	}{
-		{"Account key", "account"},
-		{"Custom key", "custom"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Generate FEK
-			fek, err := GenerateFEK()
-			if err != nil {
-				t.Fatalf("FEK generation failed: %v", err)
-			}
-
-			// Encrypt data using FEK
-			encryptedData, err := EncryptFile(testData, fek, tt.keyType)
-			if err != nil {
-				t.Fatalf("Encryption failed: %v", err)
-			}
-
-			// Verify encrypted data has envelope + ciphertext
-			if len(encryptedData) <= 2 {
-				t.Fatalf("Encrypted data too short: %d bytes", len(encryptedData))
-			}
-
-			// Parse envelope
-			_, keyType, err := ParseEnvelope(encryptedData[:2])
-			if err != nil {
-				t.Fatalf("Envelope parsing failed: %v", err)
-			}
-
-			if keyType != tt.keyType {
-				t.Errorf("Expected key type %s, got %s", tt.keyType, keyType)
-			}
-
-			// Decrypt data using FEK
-			decryptedData, err := DecryptFile(encryptedData, fek)
-			if err != nil {
-				t.Fatalf("Decryption failed: %v", err)
-			}
-
-			// Verify data integrity
-			if string(decryptedData) != string(testData) {
-				t.Errorf("Decrypted data mismatch: expected %q, got %q", string(testData), string(decryptedData))
-			}
-		})
-	}
-}
-
 // TestFEKEncryptDecrypt tests FEK encryption/decryption with password
+// and AAD binding to the file_id (Phase C, finding B-08).
 func TestFEKEncryptDecrypt(t *testing.T) {
 	username := "test-user"
+	fileID := "11111111-2222-4333-8444-555555555555"
 	password := []byte("test-password-123")
 
 	tests := []struct {
@@ -214,32 +161,32 @@ func TestFEKEncryptDecrypt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Generate FEK
 			fek, err := GenerateFEK()
 			if err != nil {
 				t.Fatalf("FEK generation failed: %v", err)
 			}
 
-			// Encrypt FEK with password
-			encryptedFEK, err := EncryptFEK(fek, password, username, tt.keyType)
+			encryptedFEK, err := EncryptFEK(fek, password, username, fileID, tt.keyType)
 			if err != nil {
 				t.Fatalf("FEK encryption failed: %v", err)
 			}
 
-			// Decrypt FEK with password
-			decryptedFEK, returnedKeyType, err := DecryptFEK(encryptedFEK, password, username)
+			decryptedFEK, returnedKeyType, err := DecryptFEK(encryptedFEK, password, username, fileID)
 			if err != nil {
 				t.Fatalf("FEK decryption failed: %v", err)
 			}
 
-			// Verify key type matches
 			if returnedKeyType != tt.keyType {
 				t.Errorf("Returned key type mismatch: expected %s, got %s", tt.keyType, returnedKeyType)
 			}
-
-			// Verify FEK integrity
 			if !bytes.Equal(fek, decryptedFEK) {
 				t.Errorf("Decrypted FEK mismatch")
+			}
+
+			// Negative: same FEK envelope under a different file_id must fail.
+			otherFileID := "99999999-2222-4333-8444-555555555555"
+			if _, _, err := DecryptFEK(encryptedFEK, password, username, otherFileID); err == nil {
+				t.Errorf("expected DecryptFEK to fail under different file_id (cross-file FEK swap)")
 			}
 		})
 	}
@@ -588,13 +535,13 @@ func TestCreateAndParsePasswordEnvelope(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.keyType, func(t *testing.T) {
 			// Test envelope creation
-			envelope := CreateEnvelope(tt.keyType)
+			envelope := CreateFEKEnvelopeHeader(tt.keyType)
 			if len(envelope) != 2 {
 				t.Errorf("envelope should be 2 bytes, got %d", len(envelope))
 			}
 
 			// Test envelope parsing
-			version, keyType, err := ParseEnvelope(envelope)
+			version, keyType, err := ParseFEKEnvelopeHeader(envelope)
 			if err != nil {
 				t.Errorf("unexpected error parsing envelope: %v", err)
 				return
@@ -641,7 +588,7 @@ func TestParsePasswordEnvelopeErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := ParseEnvelope(tt.envelope)
+			_, _, err := ParseFEKEnvelopeHeader(tt.envelope)
 
 			if tt.expectError {
 				if err == nil {

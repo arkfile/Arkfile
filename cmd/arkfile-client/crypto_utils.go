@@ -1,12 +1,23 @@
 // crypto_utils.go - Crypto helper functions for arkfile-client
-// Wraps the crypto package functions for upload/download/share operations.
-// All crypto parameters are sourced from centralized JSON configs via crypto package accessors.
+//
+// Wraps the crypto package functions for upload / download / share operations.
+// Every AES-GCM call on the file path is AAD-bound (Phase C) so that an
+// attacker with DB-write access cannot swap, reorder, or substitute chunks /
+// FEK envelopes / metadata between or within a user's files without the
+// AEAD tag failing on decrypt. See crypto/aad.go and
+// docs/wip/review/phase-c.md.
+//
+// Post-Phase-C chunk layout (Outcome A, uniform chunks):
+//   Every chunk: [nonce (12)][ciphertext][tag (16)]
+//   No per-chunk envelope header. The FEK envelope keeps its 2-byte
+//   [0x01][key_type] prefix; only the redundant per-chunk header is gone.
+//
+// All crypto parameters are sourced from centralized JSON configs via the
+// crypto package accessors.
 
 package main
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -20,106 +31,72 @@ import (
 	"github.com/pquerna/otp/totp"
 )
 
-// encryptChunk encrypts a single plaintext chunk with FEK using AES-GCM.
-// For chunkIndex 0, prepends the 2-byte envelope header [version][keyType].
-// Returns the encrypted chunk (nonce + ciphertext + tag, with optional header).
-func encryptChunk(plaintext, fek []byte, chunkIndex int, keyType byte) ([]byte, error) {
+// encryptChunk encrypts a single plaintext chunk with the FEK using
+// AES-256-GCM, binding the AAD to (fileID, chunkIndex, totalChunks).
+// Returns [nonce(12)][ciphertext][tag(16)]. No per-chunk envelope header.
+func encryptChunk(plaintext, fek []byte, fileID string, chunkIndex, totalChunks int64) ([]byte, error) {
 	if len(fek) != 32 {
 		return nil, fmt.Errorf("FEK must be 32 bytes for AES-256")
 	}
+	if fileID == "" {
+		return nil, fmt.Errorf("fileID cannot be empty")
+	}
 
-	block, err := aes.NewCipher(fek)
+	aad := crypto.BuildChunkAAD(fileID, chunkIndex, totalChunks)
+	encrypted, err := crypto.EncryptGCMWithAAD(plaintext, fek, aad)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cipher: %w", err)
+		return nil, fmt.Errorf("chunk %d encryption failed: %w", chunkIndex, err)
 	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GCM: %w", err)
-	}
-
-	// Generate random nonce
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("failed to generate nonce: %w", err)
-	}
-
-	// Encrypt: result is nonce + ciphertext + tag
-	encrypted := gcm.Seal(nonce, nonce, plaintext, nil)
-
-	// Chunk 0 gets the envelope header prepended
-	if chunkIndex == 0 {
-		header := []byte{0x01, keyType} // version 1 + key type
-		result := make([]byte, 0, len(header)+len(encrypted))
-		result = append(result, header...)
-		result = append(result, encrypted...)
-		return result, nil
-	}
-
 	return encrypted, nil
 }
 
-// decryptChunk decrypts a single encrypted chunk with FEK using AES-GCM.
-// For chunkIndex 0, strips the 2-byte envelope header first.
-// Returns the plaintext.
-func decryptChunk(ciphertext, fek []byte, chunkIndex int) ([]byte, error) {
+// decryptChunk decrypts a single encrypted chunk with the FEK using
+// AES-256-GCM, verifying the AAD bound at encrypt time. Any mismatch in
+// fileID, chunkIndex, or totalChunks causes AEAD authentication failure
+// (B-02, B-05, C-02, C-03).
+func decryptChunk(ciphertext, fek []byte, fileID string, chunkIndex, totalChunks int64) ([]byte, error) {
 	if len(fek) != 32 {
 		return nil, fmt.Errorf("FEK must be 32 bytes for AES-256")
 	}
-
-	data := ciphertext
-
-	// Chunk 0: strip 2-byte envelope header
-	if chunkIndex == 0 {
-		headerSize := crypto.EnvelopeHeaderSize()
-		if len(data) < headerSize {
-			return nil, fmt.Errorf("chunk 0 too short for envelope header: got %d bytes", len(data))
-		}
-		data = data[headerSize:]
+	if fileID == "" {
+		return nil, fmt.Errorf("fileID cannot be empty")
 	}
 
-	block, err := aes.NewCipher(fek)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create cipher: %w", err)
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GCM: %w", err)
-	}
-
-	nonceSize := gcm.NonceSize()
-	if len(data) < nonceSize+crypto.AesGcmTagSize() {
-		return nil, fmt.Errorf("chunk too short: got %d bytes, need at least %d", len(data), nonceSize+crypto.AesGcmTagSize())
-	}
-
-	nonce := data[:nonceSize]
-	encData := data[nonceSize:]
-
-	plaintext, err := gcm.Open(nil, nonce, encData, nil)
+	aad := crypto.BuildChunkAAD(fileID, chunkIndex, totalChunks)
+	plaintext, err := crypto.DecryptGCMWithAAD(ciphertext, fek, aad)
 	if err != nil {
 		return nil, fmt.Errorf("chunk %d decryption failed: %w", chunkIndex, err)
 	}
-
 	return plaintext, nil
 }
 
-// encryptMetadata encrypts filename and SHA-256 hex digest with accountKey.
-// Returns base64-encoded values suitable for server API calls.
-func encryptMetadata(filename, sha256hex string, accountKey []byte) (encFilenameB64, fnNonceB64, encSHA256B64, shaNonceB64 string, err error) {
-	// Encrypt filename
-	encFilenameRaw, err := crypto.EncryptGCM([]byte(filename), accountKey)
+// encryptMetadata encrypts filename and SHA-256 hex digest with the
+// account key. AAD binds each ciphertext to (fileID, field_label,
+// ownerUsername) so substituting metadata between files / fields / users
+// is rejected by the AEAD layer (C-19).
+//
+// Returns base64-encoded values suitable for the server API.
+func encryptMetadata(filename, sha256hex string, accountKey []byte, fileID, ownerUsername string) (encFilenameB64, fnNonceB64, encSHA256B64, shaNonceB64 string, err error) {
+	if fileID == "" {
+		return "", "", "", "", fmt.Errorf("fileID cannot be empty")
+	}
+	if ownerUsername == "" {
+		return "", "", "", "", fmt.Errorf("ownerUsername cannot be empty")
+	}
+
+	aadFilename := crypto.BuildMetadataFieldAAD(fileID, crypto.AADFieldFilename, ownerUsername)
+	encFilenameRaw, err := crypto.EncryptGCMWithAAD([]byte(filename), accountKey, aadFilename)
 	if err != nil {
 		return "", "", "", "", fmt.Errorf("failed to encrypt filename: %w", err)
 	}
 
-	// Encrypt SHA-256 digest
-	encSHA256Raw, err := crypto.EncryptGCM([]byte(sha256hex), accountKey)
+	aadSha := crypto.BuildMetadataFieldAAD(fileID, crypto.AADFieldSha256, ownerUsername)
+	encSHA256Raw, err := crypto.EncryptGCMWithAAD([]byte(sha256hex), accountKey, aadSha)
 	if err != nil {
 		return "", "", "", "", fmt.Errorf("failed to encrypt SHA-256: %w", err)
 	}
 
-	// Extract nonces (first 12 bytes of each encrypted blob)
+	// Extract nonces (first 12 bytes of each encrypted blob).
 	nonceSize := crypto.AesGcmNonceSize()
 
 	fnNonce := encFilenameRaw[:nonceSize]
@@ -128,7 +105,6 @@ func encryptMetadata(filename, sha256hex string, accountKey []byte) (encFilename
 	shaNonce := encSHA256Raw[:nonceSize]
 	encSHA256 := encSHA256Raw[nonceSize:]
 
-	// Base64 encode for API transmission
 	encFilenameB64 = base64.StdEncoding.EncodeToString(encFilename)
 	fnNonceB64 = base64.StdEncoding.EncodeToString(fnNonce)
 	encSHA256B64 = base64.StdEncoding.EncodeToString(encSHA256)
@@ -137,47 +113,65 @@ func encryptMetadata(filename, sha256hex string, accountKey []byte) (encFilename
 	return encFilenameB64, fnNonceB64, encSHA256B64, shaNonceB64, nil
 }
 
-// decryptMetadataField decrypts a single metadata field given base64-encoded nonce and ciphertext.
-func decryptMetadataField(encDataB64, nonceB64 string, accountKey []byte) (string, error) {
+// decryptMetadataField decrypts a single metadata field (filename or
+// SHA-256 digest), verifying the AAD bound to (fileID, fieldLabel,
+// ownerUsername). fieldLabel must be one of crypto.AADFieldFilename or
+// crypto.AADFieldSha256.
+func decryptMetadataField(encDataB64, nonceB64 string, accountKey []byte, fileID, fieldLabel, ownerUsername string) (string, error) {
+	if fileID == "" {
+		return "", fmt.Errorf("fileID cannot be empty")
+	}
+	if fieldLabel == "" {
+		return "", fmt.Errorf("fieldLabel cannot be empty")
+	}
+	if ownerUsername == "" {
+		return "", fmt.Errorf("ownerUsername cannot be empty")
+	}
+
 	nonce, err := base64.StdEncoding.DecodeString(nonceB64)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode nonce: %w", err)
 	}
-
 	encData, err := base64.StdEncoding.DecodeString(encDataB64)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode encrypted data: %w", err)
 	}
 
-	// Reconstruct nonce+ciphertext format expected by DecryptGCM
 	combined := make([]byte, 0, len(nonce)+len(encData))
 	combined = append(combined, nonce...)
 	combined = append(combined, encData...)
 
-	plaintext, err := crypto.DecryptGCM(combined, accountKey)
+	aad := crypto.BuildMetadataFieldAAD(fileID, fieldLabel, ownerUsername)
+	plaintext, err := crypto.DecryptGCMWithAAD(combined, accountKey, aad)
 	if err != nil {
 		return "", fmt.Errorf("decryption failed: %w", err)
 	}
-
 	return string(plaintext), nil
 }
 
-// wrapFEK encrypts the FEK with a KEK (account key or custom key) and prepends
-// the 2-byte envelope header [0x01][keyType].
-// Returns base64-encoded encrypted FEK suitable for server API.
-func wrapFEK(fek, kek []byte, keyType string) (string, error) {
+// wrapFEK encrypts the FEK with a KEK (account key or custom key) under
+// AAD = BuildFEKEnvelopeAAD(fileID, keyTypeByte), then prepends the
+// 2-byte envelope header [0x01][keyTypeByte]. Returns the base64-encoded
+// result suitable for the server API.
+//
+// Cross-file FEK substitution (B-08) fails at unwrap time because the AAD
+// was bound to a different fileID.
+func wrapFEK(fek, kek []byte, keyType, fileID string) (string, error) {
+	if fileID == "" {
+		return "", fmt.Errorf("fileID cannot be empty")
+	}
+
 	keyTypeByte, err := crypto.KeyTypeForContext(keyType)
 	if err != nil {
 		return "", fmt.Errorf("invalid key type: %w", err)
 	}
 
-	// Encrypt FEK with KEK using AES-GCM
-	encryptedFEK, err := crypto.EncryptGCM(fek, kek)
+	aad := crypto.BuildFEKEnvelopeAAD(fileID, keyTypeByte)
+	encryptedFEK, err := crypto.EncryptGCMWithAAD(fek, kek, aad)
 	if err != nil {
 		return "", fmt.Errorf("failed to encrypt FEK: %w", err)
 	}
 
-	// Prepend envelope header
 	header := []byte{0x01, keyTypeByte}
 	result := make([]byte, 0, len(header)+len(encryptedFEK))
 	result = append(result, header...)
@@ -187,9 +181,14 @@ func wrapFEK(fek, kek []byte, keyType string) (string, error) {
 }
 
 // unwrapFEK decrypts an encrypted FEK. Strips the 2-byte envelope header,
-// determines key type, and decrypts with the provided KEK.
-// Returns the plaintext FEK and the key type string ("account" or "custom").
-func unwrapFEK(encryptedFEKB64 string, kek []byte) ([]byte, string, error) {
+// determines the key type, reconstructs the AAD that was used at encrypt
+// time, and decrypts with the provided KEK. Returns the plaintext FEK and
+// the key type string ("account" or "custom").
+func unwrapFEK(encryptedFEKB64 string, kek []byte, fileID string) ([]byte, string, error) {
+	if fileID == "" {
+		return nil, "", fmt.Errorf("fileID cannot be empty")
+	}
+
 	encryptedFEK, err := base64.StdEncoding.DecodeString(encryptedFEKB64)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to decode encrypted FEK: %w", err)
@@ -200,7 +199,6 @@ func unwrapFEK(encryptedFEKB64 string, kek []byte) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("encrypted FEK too short for envelope header")
 	}
 
-	// Parse envelope header
 	version := encryptedFEK[0]
 	keyTypeByte := encryptedFEK[1]
 
@@ -218,8 +216,8 @@ func unwrapFEK(encryptedFEKB64 string, kek []byte) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("unsupported key type: 0x%02x", keyTypeByte)
 	}
 
-	// Decrypt FEK (strip header)
-	fek, err := crypto.DecryptGCM(encryptedFEK[headerSize:], kek)
+	aad := crypto.BuildFEKEnvelopeAAD(fileID, keyTypeByte)
+	fek, err := crypto.DecryptGCMWithAAD(encryptedFEK[headerSize:], kek, aad)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to decrypt FEK: %w", err)
 	}
@@ -255,31 +253,28 @@ func computeStreamingSHA256(filePath string) (string, error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// calculateTotalEncryptedSize computes the total encrypted size deterministically
-// from the plaintext file size using chunking parameters.
+// calculateTotalEncryptedSize computes the total encrypted size
+// deterministically from the plaintext file size, using uniform chunk
+// layout (no per-chunk envelope header). Each chunk adds AES-GCM
+// overhead (nonce + tag).
 func calculateTotalEncryptedSize(plaintextSize int64) int64 {
 	chunkSize := crypto.PlaintextChunkSize()
 	overhead := int64(crypto.AesGcmOverhead())
-	headerSize := int64(crypto.EnvelopeHeaderSize())
 
 	if plaintextSize == 0 {
-		// Even empty files get one chunk with overhead + header
-		return headerSize + overhead
+		// Even empty files get one chunk with overhead.
+		return overhead
 	}
 
 	numFullChunks := plaintextSize / chunkSize
 	lastChunkPlaintext := plaintextSize % chunkSize
 
-	var totalEncrypted int64
 	if lastChunkPlaintext == 0 {
-		// All chunks are full
-		totalEncrypted = numFullChunks*(chunkSize+overhead) + headerSize
-	} else {
-		// Full chunks + partial last chunk
-		totalEncrypted = numFullChunks*(chunkSize+overhead) + (lastChunkPlaintext + overhead) + headerSize
+		// All chunks are full.
+		return numFullChunks * (chunkSize + overhead)
 	}
-
-	return totalEncrypted
+	// Full chunks + partial last chunk.
+	return numFullChunks*(chunkSize+overhead) + (lastChunkPlaintext + overhead)
 }
 
 // base64URLEncode encodes bytes to URL-safe base64 without padding (43 chars for 32 bytes)
