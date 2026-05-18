@@ -391,11 +391,18 @@ func RateLimitMiddleware(endpointConfig config.EndpointConfig) echo.MiddlewareFu
 					},
 				)
 
-				return echo.NewHTTPError(http.StatusTooManyRequests, map[string]interface{}{
-					"error":       "Rate limit exceeded",
-					"message":     fmt.Sprintf("Too many requests to %s. Please try again later.", endpointConfig.Path),
-					"retry_after": "Please wait before making another request",
-				})
+				// Unified rate-limit response shape: stable machine-readable
+				// code "rate_limited" in the top-level error field; per-endpoint
+				// path is exposed via data.endpoint. The Retry-After HTTP
+				// header would be the authoritative retry signal but this
+				// site does not have a real next-allowed timestamp available,
+				// so we omit retry_after_seconds rather than emit a misleading
+				// value. Callers should fall back to general backoff guidance.
+				return JSONErrorCodeData(c, http.StatusTooManyRequests, "rate_limited",
+					fmt.Sprintf("Too many requests to %s. Please try again later.", endpointConfig.Path),
+					map[string]interface{}{
+						"endpoint": endpointConfig.Path,
+					})
 			}
 
 			return next(c)

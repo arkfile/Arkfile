@@ -828,31 +828,20 @@ func DownloadShareChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid chunk index: must be between 0 and %d", chunkCount-1))
 	}
 
-	// Calculate byte range for this chunk
-	// IMPORTANT: chunk_size_bytes in the DB is the PLAINTEXT chunk size, but the
-	// stored object contains ENCRYPTED chunks. Each encrypted chunk is larger due to:
-	//   - Chunk 0: envelope header (2 bytes) + AES-GCM nonce (12 bytes) + plaintext + GCM tag (16 bytes)
-	//   - Chunk 1+: AES-GCM nonce (12 bytes) + plaintext + GCM tag (16 bytes)
-	// We must use encrypted chunk sizes for byte-range calculations in storage.
-	gcmOverhead := int64(arkcrypto.AesGcmOverhead())        // nonce (12) + tag (16) = 28
-	envelopeHeader := int64(arkcrypto.EnvelopeHeaderSize()) // 2 bytes (chunk 0 only)
+	// Calculate byte range for this chunk.
+	// Phase C / Step 0 audit (Outcome A): chunks are uniform
+	// [nonce (12)][ciphertext][tag (16)] = chunk_size_bytes + 28. There is
+	// no chunk-0 envelope-header prefix in the chunk stream; the FEK
+	// envelope lives in file_metadata.encrypted_fek separately. Final
+	// chunk range is bounded by sizeBytes (encrypted-stream length), not
+	// padded_size, so padding is never returned as decryptable chunk data.
+	gcmOverhead := int64(arkcrypto.AesGcmOverhead()) // nonce (12) + tag (16) = 28
+	encChunkSize := gcmOverhead + chunkSizeBytes
 
-	// Encrypted chunk sizes
-	chunk0EncSize := envelopeHeader + gcmOverhead + chunkSizeBytes
-	regularEncSize := gcmOverhead + chunkSizeBytes
-
-	var startByte, encChunkSize int64
-	if chunkIndex == 0 {
-		startByte = 0
-		encChunkSize = chunk0EncSize
-	} else {
-		startByte = chunk0EncSize + (chunkIndex-1)*regularEncSize
-		encChunkSize = regularEncSize
-	}
-
+	startByte := chunkIndex * encChunkSize
 	endByte := startByte + encChunkSize - 1
 
-	// Adjust for last chunk
+	// Bound the final chunk by the encrypted-stream length.
 	if endByte >= sizeBytes {
 		endByte = sizeBytes - 1
 	}

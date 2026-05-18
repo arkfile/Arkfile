@@ -211,8 +211,10 @@ func TestListRecentFileMetadata(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Setup mock DB response for models.GetRecentFileMetadataByOwner
-	query := `SELECT file_id, password_type, filename_nonce, encrypted_filename,
+	// Setup mock DB response for models.GetRecentFileMetadataByOwner.
+	// Phase C: owner_username is included so the client can rebuild
+	// metadata AAD without a second round-trip.
+	query := `SELECT file_id, owner_username, password_type, filename_nonce, encrypted_filename,
 		       sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date
 		FROM file_metadata
 		WHERE owner_username = \?
@@ -220,10 +222,10 @@ func TestListRecentFileMetadata(t *testing.T) {
 		LIMIT \? OFFSET \?`
 
 	rows := sqlmock.NewRows([]string{
-		"file_id", "password_type", "filename_nonce", "encrypted_filename",
+		"file_id", "owner_username", "password_type", "filename_nonce", "encrypted_filename",
 		"sha256sum_nonce", "encrypted_sha256sum", "size_bytes", "upload_date",
 	}).AddRow(
-		"file-1", "account", "nonce1", "encName1", "shaNonce1", "encSha1", 1024, "2024-01-01 12:00:00",
+		"file-1", username, "account", "nonce1", "encName1", "shaNonce1", "encSha1", 1024, "2024-01-01 12:00:00",
 	)
 
 	mockDB.ExpectQuery(query).WithArgs(username, 100, 0).WillReturnRows(rows)
@@ -261,19 +263,20 @@ func TestGetFileMetadataBatch(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Setup mock DB response for models.GetFileMetadataBatchByOwner
-	query := `SELECT file_id, password_type, filename_nonce, encrypted_filename,
+	// Setup mock DB response for models.GetFileMetadataBatchByOwner.
+	// Phase C: owner_username is included in the SELECT list.
+	query := `SELECT file_id, owner_username, password_type, filename_nonce, encrypted_filename,
 		       sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date
 		FROM file_metadata
 		WHERE owner_username = \? AND file_id IN \(\?,\?,\?\)`
 
 	rows := sqlmock.NewRows([]string{
-		"file_id", "password_type", "filename_nonce", "encrypted_filename",
+		"file_id", "owner_username", "password_type", "filename_nonce", "encrypted_filename",
 		"sha256sum_nonce", "encrypted_sha256sum", "size_bytes", "upload_date",
 	}).AddRow(
-		"file-1", "account", "nonce1", "encName1", "shaNonce1", "encSha1", 1024, "2024-01-01 12:00:00",
+		"file-1", username, "account", "nonce1", "encName1", "shaNonce1", "encSha1", 1024, "2024-01-01 12:00:00",
 	).AddRow(
-		"file-2", "custom", "nonce2", "encName2", "shaNonce2", "encSha2", 2048, "2024-01-02 12:00:00",
+		"file-2", username, "custom", "nonce2", "encName2", "shaNonce2", "encSha2", 2048, "2024-01-02 12:00:00",
 	)
 	// Specifically omitting file-999 to test missing logic
 

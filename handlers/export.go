@@ -36,10 +36,17 @@ type ExportTokenClaims struct {
 	jwt.RegisteredClaims
 }
 
-// bundleMetadata is the JSON metadata embedded in the .arkbackup bundle header
+// bundleMetadata is the JSON metadata embedded in the .arkbackup bundle header.
+//
+// Phase C (§6.1): bundles are self-describing. OwnerUsername is required so
+// the offline decrypter can rebuild metadata-field AAD (filename, sha256)
+// without any external state. file_id is required for FEK-envelope AAD and
+// chunk AAD. The schema matches `bundleMeta` in
+// cmd/arkfile-client/offline_decrypt.go byte-for-byte.
 type bundleMetadata struct {
 	Version            int    `json:"version"`
 	FileID             string `json:"file_id"`
+	OwnerUsername      string `json:"owner_username"`
 	EncryptedFEK       string `json:"encrypted_fek"`
 	PasswordType       string `json:"password_type"`
 	SizeBytes          int64  `json:"size_bytes"`
@@ -342,6 +349,7 @@ func buildBundleMetadata(file *models.File) *bundleMetadata {
 	return &bundleMetadata{
 		Version:            1,
 		FileID:             file.FileID,
+		OwnerUsername:      file.OwnerUsername,
 		EncryptedFEK:       file.EncryptedFEK,
 		PasswordType:       file.PasswordType,
 		SizeBytes:          file.SizeBytes,

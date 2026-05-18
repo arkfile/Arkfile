@@ -41,11 +41,23 @@ var (
 // item 4.
 const maxInProgressUploadSessionsPerUser = 4
 
-// CreateUploadSession initializes a new chunked upload
+// CreateUploadSession initializes a new chunked upload.
+//
+// Phase C: the client mints the file_id as a UUID v4 before encrypting any
+// metadata, since file_id is bound into AAD on every per-file AES-GCM
+// operation. The server validates strict UUIDv4 syntax and enforces global
+// uniqueness across both completed files (file_metadata.file_id) and
+// in-progress / abandoned sessions (upload_sessions.file_id). On collision
+// the server returns HTTP 409 with stable error code "file_id_conflict";
+// clients retry up to 3 times with a freshly minted UUID. See
+// phase-c.md §3.1 and §7.5 B.
 func CreateUploadSession(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 
 	var request struct {
+		// Client-supplied UUIDv4 (Phase C; see phase-c.md §3.1).
+		FileID string `json:"file_id"`
+
 		// Client sends encrypted metadata
 		EncryptedFilename  string `json:"encrypted_filename"`
 		FilenameNonce      string `json:"filename_nonce"`
@@ -61,23 +73,45 @@ func CreateUploadSession(c echo.Context) error {
 
 	// Bind the JSON request body to the struct
 	if err := c.Bind(&request); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid JSON request: "+err.Error())
+		return JSONErrorCode(c, http.StatusBadRequest, "invalid_request", "Invalid JSON request: "+err.Error())
 	}
+
+	// Strict UUIDv4 validation for the client-supplied file_id.
+	// uuid.Parse accepts permissive forms (uppercase hex, URN prefix, brace
+	// wrappers); we additionally require the canonical lowercase 8-4-4-4-12
+	// rendering by checking parsed.String() == request.FileID. Variant must
+	// be RFC4122 (variant nibble N in {8,9,a,b}) and version must be 4.
+	parsedFileID, parseErr := uuid.Parse(request.FileID)
+	if parseErr != nil ||
+		parsedFileID.Version() != 4 ||
+		parsedFileID.Variant() != uuid.RFC4122 ||
+		parsedFileID.String() != request.FileID {
+		return JSONErrorCode(c, http.StatusBadRequest, "invalid_file_id",
+			"file_id must be a canonical lowercase UUID v4 (RFC 4122)")
+	}
+	fileID := request.FileID
 
 	// Validate encrypted metadata format
 	if request.EncryptedFilename == "" || request.FilenameNonce == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Missing encrypted filename or nonce")
+		return JSONErrorCode(c, http.StatusBadRequest, "missing_encrypted_filename",
+			"Missing encrypted filename or nonce")
 	}
 	if request.EncryptedSha256sum == "" || request.Sha256sumNonce == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Missing encrypted SHA256 or nonce")
+		return JSONErrorCode(c, http.StatusBadRequest, "missing_encrypted_sha256sum",
+			"Missing encrypted SHA256 or nonce")
 	}
-
-	// Basic validation - ensure required fields are not empty (base64 format validation removed for Phase 1A)
-	// Client is responsible for providing properly formatted base64 strings
+	if request.EncryptedFek == "" {
+		// Phase C: the FEK envelope is AAD-bound to file_id + key_type and
+		// is mandatory for every upload. An empty value indicates a broken
+		// client; reject before allocating any storage state.
+		return JSONErrorCode(c, http.StatusBadRequest, "missing_encrypted_fek",
+			"Missing encrypted FEK envelope")
+	}
 
 	// Validate password type
 	if request.PasswordType != "account" && request.PasswordType != "custom" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid password type")
+		return JSONErrorCode(c, http.StatusBadRequest, "invalid_password_type",
+			"Invalid password type")
 	}
 
 	// Check user's storage limit and approval status
@@ -95,9 +129,11 @@ func CreateUploadSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Storage limit would be exceeded")
 	}
 
-	// Create upload session - with safe chunk size validation
+	// Create upload session - with safe chunk size validation.
+	// fileID is the client-supplied UUIDv4 validated above; sessionID is
+	// the server-side identifier for this specific upload attempt.
 	sessionID := uuid.New().String()
-	fileID := models.GenerateFileID() // Generate file_id for the new encrypted metadata system
+	_ = parsedFileID // parsedFileID was used purely for validation above
 
 	// Validate and set default chunk size to prevent divide by zero
 	if request.ChunkSize <= 0 {
@@ -107,30 +143,24 @@ func CreateUploadSession(c echo.Context) error {
 
 	// Compute the expected number of chunks from the *encrypted* total size.
 	//
-	// The client sends request.TotalSize as the total encrypted byte count, which
-	// is larger than the plaintext file size. Each encrypted chunk carries
-	// AES-GCM overhead: nonce (12 bytes) + tag (16 bytes) = 28 bytes.
-	// The first chunk additionally has a 2-byte envelope header prepended.
+	// Phase C / Step 0 audit (Outcome A): chunks are uniform
+	// [nonce (12)][ciphertext][tag (16)] with no per-chunk envelope header.
+	// The FEK envelope still carries [version][key_type] but it lives in
+	// file_metadata.encrypted_fek, not in the chunk stream. So every
+	// encrypted chunk is exactly `ChunkSize + 28` bytes (last chunk may be
+	// smaller).
 	//
-	// Dividing the encrypted total by the *plaintext* chunk size (as was done
-	// previously) overcounts by 1 for files whose plaintext size is exactly
-	// N × PlaintextChunkSize, because the header+overhead bytes push the
-	// encrypted size just over the next multiple of ChunkSize.
-	//
-	// The correct derivation:
 	//   encryptedChunkSize = ChunkSize + 28  (plaintext + GCM overhead)
-	//   effectiveSize      = TotalSize - 2   (strip the one-time 2-byte header)
-	//   totalChunks        = ceil(effectiveSize / encryptedChunkSize)
-	//
-	// This matches the number of uploadChunk requests the client will actually make.
+	//   totalChunks        = ceil(TotalSize / encryptedChunkSize)
 	const aesGcmOverheadBytes = 28 // nonce(12) + tag(16)
-	const envelopeHeaderBytes = 2  // version(1) + keyType(1), prepended to chunk 0 only
 	encryptedChunkSize := int64(request.ChunkSize) + aesGcmOverheadBytes
-	effectiveEncryptedSize := request.TotalSize - envelopeHeaderBytes
-	if effectiveEncryptedSize <= 0 {
-		effectiveEncryptedSize = encryptedChunkSize // empty file: at least 1 chunk
+	var totalChunks int64
+	if request.TotalSize <= 0 {
+		// Empty file: still record one (empty) chunk for accounting.
+		totalChunks = 1
+	} else {
+		totalChunks = (request.TotalSize + encryptedChunkSize - 1) / encryptedChunkSize
 	}
-	totalChunks := (effectiveEncryptedSize + encryptedChunkSize - 1) / encryptedChunkSize
 
 	// Begin transaction
 	tx, err := database.DB.Begin()
@@ -172,15 +202,43 @@ func CreateUploadSession(c echo.Context) error {
 		// Stable error code 'too_many_in_progress_uploads' lets clients switch
 		// on a code rather than parsing English. Aligned with the standing
 		// pattern in docs/wip/general-enhancements.md item 9.
-		return c.JSON(http.StatusTooManyRequests, map[string]interface{}{
-			"success": false,
-			"error":   "too_many_in_progress_uploads",
-			"message": fmt.Sprintf("You have %d upload(s) already in progress (max %d). Cancel one or wait for it to complete or expire.", inProgressCount, maxInProgressUploadSessionsPerUser),
-			"data": map[string]interface{}{
+		return JSONErrorCodeData(c, http.StatusTooManyRequests,
+			"too_many_in_progress_uploads",
+			fmt.Sprintf("You have %d upload(s) already in progress (max %d). Cancel one or wait for it to complete or expire.", inProgressCount, maxInProgressUploadSessionsPerUser),
+			map[string]interface{}{
 				"in_progress_count": inProgressCount,
 				"max_in_progress":   maxInProgressUploadSessionsPerUser,
-			},
-		})
+			})
+	}
+
+	// Phase C global file_id uniqueness pre-check, inside the same
+	// transaction as the upload_sessions INSERT below. The database UNIQUE
+	// indexes on file_metadata.file_id (column-level) and
+	// upload_sessions.file_id (named idx) are the race-safe authority; this
+	// pre-check exists so that the common non-racing case returns a clean
+	// HTTP 409 with stable code "file_id_conflict" rather than relying on
+	// the driver's error-message text. See phase-c.md §3.1 and §7.5 B.
+	var existsInMeta int
+	if err := tx.QueryRow(
+		`SELECT 1 FROM file_metadata WHERE file_id = ? LIMIT 1`,
+		fileID,
+	).Scan(&existsInMeta); err == nil {
+		return JSONErrorCode(c, http.StatusConflict, "file_id_conflict",
+			"file_id already in use; retry with a freshly minted UUIDv4")
+	} else if err != sql.ErrNoRows {
+		logging.ErrorLogger.Printf("Failed to check file_metadata uniqueness for file_id %s: %v", fileID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file_id uniqueness")
+	}
+	var existsInSessions int
+	if err := tx.QueryRow(
+		`SELECT 1 FROM upload_sessions WHERE file_id = ? LIMIT 1`,
+		fileID,
+	).Scan(&existsInSessions); err == nil {
+		return JSONErrorCode(c, http.StatusConflict, "file_id_conflict",
+			"file_id already in use; retry with a freshly minted UUIDv4")
+	} else if err != sql.ErrNoRows {
+		logging.ErrorLogger.Printf("Failed to check upload_sessions uniqueness for file_id %s: %v", fileID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to check file_id uniqueness")
 	}
 
 	// Generate storage ID and calculate padded size
@@ -204,12 +262,20 @@ func CreateUploadSession(c echo.Context) error {
 	// Note: Encrypted metadata values arrive from client already base64-encoded.
 	// Do NOT re-encode them — store as-is to prevent double-encoding.
 
-	// Create upload session record with encrypted metadata
+	// Create upload session record with encrypted metadata. If the
+	// UNIQUE index on upload_sessions.file_id catches a race between the
+	// pre-check above and this INSERT, surface the same stable
+	// file_id_conflict code so the client can retry uniformly.
 	_, err = tx.Exec(
 		"INSERT INTO upload_sessions (id, file_id, encrypted_filename, filename_nonce, encrypted_sha256sum, sha256sum_nonce, encrypted_fek, owner_username, total_size, chunk_size, total_chunks, password_hint, password_type, storage_id, padded_size, status, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		sessionID, fileID, encryptedFilename, filenameNonce, encryptedSha256sum, sha256sumNonce, encryptedFek, username, request.TotalSize, request.ChunkSize, totalChunks, request.PasswordHint, request.PasswordType, storageID, paddedSize, "in_progress", time.Now().Add(24*time.Hour),
 	)
 	if err != nil {
+		if isUniqueConstraintFileID(err) {
+			return JSONErrorCode(c, http.StatusConflict, "file_id_conflict",
+				"file_id already in use; retry with a freshly minted UUIDv4")
+		}
+		logging.ErrorLogger.Printf("Failed to insert upload_sessions row for file_id %s: %v", fileID, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create upload session")
 	}
 
@@ -531,38 +597,22 @@ func UploadChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk hash format")
 	}
 
-	// Phase 2: Validate chunk format based on chunk number
-	// Chunk 0: [envelope][nonce][encrypted_data][tag] = envelope + nonce + 1 + tag bytes minimum
-	// Chunks 1-N: [nonce][encrypted_data][tag] = nonce + 1 + tag bytes minimum
+	// Validate chunk size. Phase C / Step 0 audit (Outcome A): every
+	// chunk is uniform [nonce (12)][ciphertext][tag (16)]; the FEK
+	// envelope's version/key-type bytes are not part of the chunk
+	// stream. So the same min/max applies to every chunk index.
 	contentLength := c.Request().ContentLength
 	gcmOverhead := int64(crypto.AesGcmOverhead()) // nonce + tag
-	envelopeSize := int64(crypto.EnvelopeHeaderSize())
 	if contentLength != -1 {
-		var minChunkSize int64
-		var description string
-
-		if chunkNumber == 0 {
-			// Chunk 0 includes envelope header + nonce + at least 1 byte data + tag
-			minChunkSize = envelopeSize + gcmOverhead + 1
-			description = fmt.Sprintf("minimum %d bytes required (includes envelope)", minChunkSize)
-		} else {
-			// Regular chunks: nonce + at least 1 byte data + tag
-			minChunkSize = gcmOverhead + 1
-			description = fmt.Sprintf("minimum %d bytes required", minChunkSize)
-		}
-
+		minChunkSize := gcmOverhead + 1 // nonce + at least 1 byte ciphertext + tag
 		if contentLength < minChunkSize {
-			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Chunk %d too small: %s", chunkNumber, description))
+			return echo.NewHTTPError(http.StatusBadRequest,
+				fmt.Sprintf("Chunk %d too small: minimum %d bytes required", chunkNumber, minChunkSize))
 		}
-
-		// Maximum chunk size: plaintext chunk size + envelope overhead (chunk 0 only) + crypto overhead
-		maxEnvelopeOverhead := envelopeSize // Only for chunk 0
-		if chunkNumber != 0 {
-			maxEnvelopeOverhead = 0
-		}
-		maxChunkSize := crypto.PlaintextChunkSize() + maxEnvelopeOverhead + gcmOverhead
+		maxChunkSize := crypto.PlaintextChunkSize() + gcmOverhead
 		if contentLength > maxChunkSize {
-			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Chunk %d too large: maximum %d bytes allowed", chunkNumber, maxChunkSize))
+			return echo.NewHTTPError(http.StatusBadRequest,
+				fmt.Sprintf("Chunk %d too large: maximum %d bytes allowed", chunkNumber, maxChunkSize))
 		}
 	}
 
@@ -917,8 +967,12 @@ func CompleteUpload(c echo.Context) error {
 		fileID.String, storageID.String, username, passwordHint.String, passwordType.String, filenameNonce, encryptedFilename, sha256sumNonce, encryptedSha256sum, serverCalculatedHash, storedBlobHash, encryptedFek, declaredSize, paddedSize, chunkCount, chunkSizeBytes,
 	)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") || strings.Contains(err.Error(), "file_id") {
-			return echo.NewHTTPError(http.StatusConflict, "File ID conflict occurred")
+		if isUniqueConstraintFileID(err) {
+			// Should not happen: file_id was already reserved by the
+			// upload_sessions row at init time. If we see it here, the
+			// session row's file_id got out of sync with reality.
+			return JSONErrorCode(c, http.StatusConflict, "file_id_conflict",
+				"file_id already in use")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create file metadata")
 	}
@@ -978,6 +1032,19 @@ func isHexString(s string) bool {
 		}
 	}
 	return true
+}
+
+// isUniqueConstraintFileID reports whether the given SQL error came from a
+// UNIQUE constraint violation on a file_id column. rqlite / SQLite returns
+// errors of the form "UNIQUE constraint failed: file_metadata.file_id" or
+// "UNIQUE constraint failed: upload_sessions.file_id". We match on both
+// halves to avoid catching unrelated UNIQUE violations on other columns.
+func isUniqueConstraintFileID(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique") && strings.Contains(msg, "file_id")
 }
 
 // DeleteFile handles file deletion across all storage providers

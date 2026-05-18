@@ -95,11 +95,12 @@ func GetFileMeta(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"file_id":               file.FileID,
-		"encrypted_filename":    file.EncryptedFilename,  // Already base64 strings
-		"filename_nonce":        file.FilenameNonce,      // Already base64 strings
-		"encrypted_sha256sum":   file.EncryptedSha256sum, // Already base64 strings
-		"sha256sum_nonce":       file.Sha256sumNonce,     // Already base64 strings
-		"encrypted_fek":         file.EncryptedFEK,       // Already base64 strings
+		"owner_username":        file.OwnerUsername, // Phase C: needed for metadata AAD reconstruction
+		"encrypted_filename":    file.EncryptedFilename,
+		"filename_nonce":        file.FilenameNonce,
+		"encrypted_sha256sum":   file.EncryptedSha256sum,
+		"sha256sum_nonce":       file.Sha256sumNonce,
+		"encrypted_fek":         file.EncryptedFEK,
 		"password_hint":         file.PasswordHint,
 		"password_type":         file.PasswordType,
 		"size_bytes":            file.SizeBytes,

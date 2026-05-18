@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS file_metadata (
     encrypted_sha256sum TEXT NOT NULL,          -- base64-encoded AES-GCM encrypted sha256 hash
     encrypted_file_sha256sum CHAR(64),          -- sha256sum of the final encrypted file in storage (pre-padding)
     stored_blob_sha256sum CHAR(64),             -- sha256sum of the complete S3 object (encrypted data + padding)
-    encrypted_fek TEXT,                         -- base64-encoded AES-GCM encrypted File Encryption Key
+    encrypted_fek TEXT NOT NULL,                -- base64-encoded AES-GCM encrypted FEK envelope (Phase C: AAD-bound to file_id + key_type)
     size_bytes BIGINT NOT NULL DEFAULT 0,
     padded_size BIGINT,                         -- Size with padding for privacy/security
     chunk_count INTEGER NOT NULL DEFAULT 1,     -- Number of 16MB chunks for chunked downloads
@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     padded_size BIGINT,
     status TEXT NOT NULL DEFAULT 'in_progress',
     encrypted_hash CHAR(64),
-    encrypted_fek TEXT,
+    encrypted_fek TEXT NOT NULL,                -- Phase C: AAD-bound FEK envelope; never optional
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,
@@ -485,8 +485,10 @@ CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 CREATE INDEX IF NOT EXISTS idx_users_is_approved ON users(is_approved);
 CREATE INDEX IF NOT EXISTS idx_users_is_admin ON users(is_admin);
 
-CREATE INDEX IF NOT EXISTS idx_file_metadata_file_id ON file_metadata(file_id);
-CREATE INDEX IF NOT EXISTS idx_file_metadata_storage_id ON file_metadata(storage_id);
+-- file_metadata.file_id and file_metadata.storage_id are already UNIQUE at the
+-- column level (see PHASE 1). No additional non-unique indexes on file_id /
+-- storage_id are needed; the implicit unique indexes from the column-level
+-- UNIQUE constraints already serve point lookups.
 CREATE INDEX IF NOT EXISTS idx_file_metadata_owner ON file_metadata(owner_username);
 CREATE INDEX IF NOT EXISTS idx_file_metadata_upload_date ON file_metadata(upload_date);
 
@@ -521,6 +523,10 @@ CREATE INDEX IF NOT EXISTS idx_file_share_keys_revoked ON file_share_keys(revoke
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_token_hash ON file_share_keys(download_token_hash);
 
 -- Upload session indexes
+-- Phase C: file_id must be globally unique across both file_metadata and
+-- upload_sessions, so abandoned/in-progress sessions reserve their file_id
+-- against new collisions. See phase-c.md §3.1 / §7.5 B.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_upload_sessions_file_id_unique ON upload_sessions(file_id);
 CREATE INDEX IF NOT EXISTS idx_upload_sessions_owner ON upload_sessions(owner_username);
 CREATE INDEX IF NOT EXISTS idx_upload_sessions_status ON upload_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_upload_sessions_expires ON upload_sessions(expires_at);

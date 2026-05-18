@@ -60,9 +60,13 @@ type File struct {
 }
 
 // FileMetadataListItem is a lightweight owner-only metadata shape for listing
-// and local client-side decryption workflows.
+// and local client-side decryption workflows. Phase C: OwnerUsername is
+// included so the client can reconstruct the metadata AAD without an
+// additional round-trip; for owner endpoints this always matches the
+// authenticated user.
 type FileMetadataListItem struct {
 	FileID             string    `json:"file_id"`
+	OwnerUsername      string    `json:"owner_username"`
 	PasswordType       string    `json:"password_type"`
 	FilenameNonce      string    `json:"filename_nonce"`
 	EncryptedFilename  string    `json:"encrypted_filename"`
@@ -442,7 +446,7 @@ func GetRecentFileMetadataByOwner(db *sql.DB, ownerUsername string, limit, offse
 	}
 
 	query := `
-		SELECT file_id, password_type, filename_nonce, encrypted_filename,
+		SELECT file_id, owner_username, password_type, filename_nonce, encrypted_filename,
 		       sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date
 		FROM file_metadata
 		WHERE owner_username = ?
@@ -484,7 +488,7 @@ func GetFileMetadataBatchByOwner(db *sql.DB, ownerUsername string, fileIDs []str
 
 	placeholders := strings.TrimRight(strings.Repeat("?,", len(fileIDs)), ",")
 	query := fmt.Sprintf(`
-		SELECT file_id, password_type, filename_nonce, encrypted_filename,
+		SELECT file_id, owner_username, password_type, filename_nonce, encrypted_filename,
 		       sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date
 		FROM file_metadata
 		WHERE owner_username = ? AND file_id IN (%s)`, placeholders)
@@ -526,6 +530,7 @@ func scanFileMetadataListItem(scanner interface {
 
 	err := scanner.Scan(
 		&item.FileID,
+		&item.OwnerUsername,
 		&item.PasswordType,
 		&item.FilenameNonce,
 		&item.EncryptedFilename,
@@ -580,11 +585,14 @@ func DeleteFile(db *sql.DB, fileID string, ownerUsername string) error {
 	return nil
 }
 
-// FileMetadataForClient represents the encrypted metadata that gets sent to the client.
-// All binary data is Base64-encoded as strings for robust JSON transport.
+// FileMetadataForClient represents the encrypted metadata that gets sent to
+// the client. All binary data is Base64-encoded as strings for robust JSON
+// transport. Phase C: OwnerUsername is included so the client can rebuild the
+// metadata AAD (encrypted_filename and encrypted_sha256sum decrypt require it).
 type FileMetadataForClient struct {
 	FileID             string    `json:"file_id"`
 	StorageID          string    `json:"storage_id"`
+	OwnerUsername      string    `json:"owner_username"`
 	PasswordHint       string    `json:"password_hint,omitempty"`
 	PasswordType       string    `json:"password_type"`
 	FilenameNonce      string    `json:"filename_nonce"`
@@ -596,12 +604,14 @@ type FileMetadataForClient struct {
 	UploadDate         time.Time `json:"upload_date"`
 }
 
-// ToClientMetadata converts a File to FileMetadataForClient for sending to the client.
-// All data is now stored as base64 strings directly, so we return them as-is.
+// ToClientMetadata converts a File to FileMetadataForClient for sending to
+// the client. All data is stored as base64 strings directly, so we return
+// them as-is.
 func (f *File) ToClientMetadata() *FileMetadataForClient {
 	return &FileMetadataForClient{
 		FileID:             f.FileID,
 		StorageID:          f.StorageID,
+		OwnerUsername:      f.OwnerUsername,
 		PasswordHint:       f.PasswordHint,
 		PasswordType:       f.PasswordType,
 		FilenameNonce:      f.FilenameNonce,

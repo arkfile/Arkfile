@@ -66,16 +66,20 @@ func isBrowserRequest(c echo.Context) bool {
 }
 
 // ServeRateLimitPage returns the 429 error page with appropriate format
-// (HTML for browsers, JSON for API clients)
+// (HTML for browsers, JSON for API clients).
+//
+// JSON shape is the canonical rate-limit contract: stable machine-readable
+// code "rate_limited" in the top-level "error" field; the retry duration is
+// expressed authoritatively via the Retry-After HTTP header (RFC 7231 §7.1.3)
+// and additionally surfaced as data.retry_after_seconds for programmatic
+// clients that prefer to read it from the JSON body.
 func ServeRateLimitPage(c echo.Context, retryAfter int, message string) error {
 	c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
 	if isBrowserRequest(c) {
 		return c.HTML(http.StatusTooManyRequests, read429Page())
 	}
-	return c.JSON(http.StatusTooManyRequests, map[string]interface{}{
-		"success":    false,
-		"error":      "rate_limited",
-		"retryAfter": retryAfter,
-		"message":    message,
-	})
+	return JSONErrorCodeData(c, http.StatusTooManyRequests, "rate_limited", message,
+		map[string]interface{}{
+			"retry_after_seconds": retryAfter,
+		})
 }

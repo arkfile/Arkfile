@@ -58,47 +58,31 @@ func DownloadFileChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("Invalid chunk index: must be between 0 and %d", file.ChunkCount-1))
 	}
 
-	// Calculate byte range for this chunk
-	// IMPORTANT: chunk_size_bytes in the DB is the PLAINTEXT chunk size, but the
-	// stored object contains ENCRYPTED chunks. Each encrypted chunk is larger due to:
-	//   - Chunk 0: envelope header (2 bytes) + AES-GCM nonce (12 bytes) + plaintext + GCM tag (16 bytes)
-	//   - Chunk 1+: AES-GCM nonce (12 bytes) + plaintext + GCM tag (16 bytes)
-	// We must use encrypted chunk sizes for byte-range calculations in storage.
+	// Calculate byte range for this chunk.
+	// Phase C / Step 0 audit (Outcome A): every encrypted chunk is uniform
+	// [nonce (12)][ciphertext][tag (16)] = plaintext_chunk_size + 28. There
+	// is no chunk-0 envelope-header prefix in the chunk stream; the FEK
+	// envelope lives in file_metadata.encrypted_fek separately.
+	//
+	// chunk_size_bytes in the DB is the PLAINTEXT chunk size; the stored
+	// object contains the encrypted-chunk stream. Range requests are
+	// always bounded by file.SizeBytes (the encrypted-stream length), never
+	// by file.PaddedSize: padding lives at byte offsets [size_bytes,
+	// padded_size) and must never be returned as decryptable chunk data.
 	plaintextChunkSize := file.ChunkSizeBytes
 	if plaintextChunkSize <= 0 {
 		plaintextChunkSize = crypto.PlaintextChunkSize()
 	}
 
-	gcmOverhead := int64(crypto.AesGcmOverhead())        // nonce (12) + tag (16) = 28
-	envelopeHeader := int64(crypto.EnvelopeHeaderSize()) // 2 bytes (chunk 0 only)
+	gcmOverhead := int64(crypto.AesGcmOverhead()) // nonce (12) + tag (16) = 28
+	encChunkSize := gcmOverhead + plaintextChunkSize
 
-	// Encrypted chunk sizes
-	chunk0EncSize := envelopeHeader + gcmOverhead + plaintextChunkSize
-	regularEncSize := gcmOverhead + plaintextChunkSize
-
-	var startByte, encChunkSize int64
-	if chunkIndex == 0 {
-		startByte = 0
-		encChunkSize = chunk0EncSize
-	} else {
-		startByte = chunk0EncSize + (chunkIndex-1)*regularEncSize
-		encChunkSize = regularEncSize
-	}
-
+	startByte := chunkIndex * encChunkSize
 	endByte := startByte + encChunkSize - 1
 
-	// Adjust for padded files or last chunk - use actual stored size
-	actualFileSize := file.SizeBytes
-	if file.PaddedSize.Valid && file.PaddedSize.Int64 > file.SizeBytes {
-		// File is padded, we need to ensure we don't read past the original size
-		if endByte >= actualFileSize {
-			endByte = actualFileSize - 1
-		}
-	} else {
-		// No padding, use size_bytes directly
-		if endByte >= actualFileSize {
-			endByte = actualFileSize - 1
-		}
+	// Bound the final chunk by the encrypted-stream length, not padded_size.
+	if endByte >= file.SizeBytes {
+		endByte = file.SizeBytes - 1
 	}
 
 	// Calculate actual chunk size for this chunk

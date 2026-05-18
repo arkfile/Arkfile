@@ -248,23 +248,23 @@ func ShareRateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 				logging.ErrorLogger.Printf("Failed to record rate limited attempt: %v", err)
 			}
 
-			// Store rate limit response in context so timing protection can still apply
-			c.Set("rate_limited_response", map[string]interface{}{
-				"success":    false,
-				"error":      "rate_limited",
-				"retryAfter": retryAfter,
-				"message":    fmt.Sprintf("Too many failed attempts. Try again in %d seconds.", retryAfter),
-			})
+			message := fmt.Sprintf("Too many failed attempts. Try again in %d seconds.", retryAfter)
+			body := APIResponse{
+				Success: false,
+				Error:   "rate_limited",
+				Message: message,
+				Data: map[string]interface{}{
+					"retry_after_seconds": retryAfter,
+				},
+			}
+
+			// Store rate limit response in context so timing protection can
+			// still apply its delay before the body is written.
+			c.Set("rate_limited_response", body)
 			c.Set("rate_limited", true)
 
-			// Return rate limited response with 429 status
-			// TimingProtectionMiddleware will still apply its delay
-			return c.JSON(http.StatusTooManyRequests, map[string]interface{}{
-				"success":    false,
-				"error":      "rate_limited",
-				"retryAfter": retryAfter,
-				"message":    fmt.Sprintf("Too many failed attempts. Try again in %d seconds.", retryAfter),
-			})
+			c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+			return c.JSON(http.StatusTooManyRequests, body)
 		}
 
 		return next(c)
@@ -298,11 +298,13 @@ func RateLimitShareAccess(shareID string, c echo.Context, accessFunc func() erro
 		logging.ErrorLogger.Printf("Rate limit check failed: %v", err)
 		// Continue on error to avoid blocking legitimate users
 	} else if !allowed {
-		return c.JSON(http.StatusTooManyRequests, map[string]interface{}{
-			"error":      "rate_limited",
-			"message":    "Too many failed attempts. Please try again later.",
-			"retryAfter": int(delay.Seconds()),
-		})
+		retryAfter := int(delay.Seconds())
+		c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+		return JSONErrorCodeData(c, http.StatusTooManyRequests, "rate_limited",
+			"Too many failed attempts. Please try again later.",
+			map[string]interface{}{
+				"retry_after_seconds": retryAfter,
+			})
 	}
 
 	// Attempt the access function
@@ -415,8 +417,12 @@ func LoginRateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		if !allowed {
 			retryAfter := int(delay.Seconds())
 			c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
-			return echo.NewHTTPError(http.StatusTooManyRequests,
-				fmt.Sprintf("Too many login attempts. Try again in %d seconds.", retryAfter))
+			return JSONErrorCodeData(c, http.StatusTooManyRequests, "rate_limited",
+				fmt.Sprintf("Too many login attempts. Try again in %d seconds.", retryAfter),
+				map[string]interface{}{
+					"retry_after_seconds": retryAfter,
+					"endpoint":            "login",
+				})
 		}
 
 		return next(c)
@@ -437,8 +443,12 @@ func RegisterRateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		if !allowed {
 			retryAfter := int(delay.Seconds())
 			c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
-			return echo.NewHTTPError(http.StatusTooManyRequests,
-				fmt.Sprintf("Too many registration attempts. Try again in %d seconds.", retryAfter))
+			return JSONErrorCodeData(c, http.StatusTooManyRequests, "rate_limited",
+				fmt.Sprintf("Too many registration attempts. Try again in %d seconds.", retryAfter),
+				map[string]interface{}{
+					"retry_after_seconds": retryAfter,
+					"endpoint":            "register",
+				})
 		}
 
 		return next(c)
@@ -460,8 +470,12 @@ func TOTPRateLimitMiddleware(endpointType string) echo.MiddlewareFunc {
 			if !allowed {
 				retryAfter := int(delay.Seconds())
 				c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
-				return echo.NewHTTPError(http.StatusTooManyRequests,
-					fmt.Sprintf("Too many TOTP attempts. Try again in %d seconds.", retryAfter))
+				return JSONErrorCodeData(c, http.StatusTooManyRequests, "rate_limited",
+					fmt.Sprintf("Too many TOTP attempts. Try again in %d seconds.", retryAfter),
+					map[string]interface{}{
+						"retry_after_seconds": retryAfter,
+						"endpoint":            endpointType,
+					})
 			}
 
 			return next(c)
