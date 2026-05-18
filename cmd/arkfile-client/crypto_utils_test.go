@@ -1,3 +1,22 @@
+// crypto_utils_test.go - Unit tests for arkfile-client crypto helpers.
+//
+// Phase C wired AAD into every chunk / FEK envelope / metadata field, so
+// these tests exercise both the positive round-trip path and the negative
+// tamper-detection path required by phase-c.md §10:
+//
+//   - TestEncryptDecryptChunk_WithAAD_RoundTrip
+//   - TestDecryptChunk_WrongChunkIndex_Fails
+//   - TestDecryptChunk_WrongFileID_Fails
+//   - TestDecryptChunk_WrongTotalChunks_Fails       (truncation, C-03)
+//   - TestEncryptDecryptMetadata_WithAAD_RoundTrip
+//   - TestDecryptMetadata_WrongFieldName_Fails
+//   - TestDecryptMetadata_WrongOwnerUsername_Fails
+//   - TestDecryptMetadata_WrongFileID_Fails
+//   - TestWrapUnwrapFEK_AccountKey_RoundTrip
+//   - TestWrapUnwrapFEK_CustomKey_RoundTrip
+//   - TestUnwrapFEK_WrongFileID_Fails               (cross-file FEK swap, B-08)
+//   - TestUnwrapFEK_WrongKEK_Fails
+
 package main
 
 import (
@@ -11,383 +30,385 @@ import (
 	"github.com/84adam/Arkfile/crypto"
 )
 
-// -- encryptChunk / decryptChunk tests --
+const (
+	testFileID      = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+	testFileID2     = "11111111-2222-3333-4444-555555555555"
+	testOwner       = "alice"
+	testOwner2      = "bob"
+	testTotalChunks = int64(3)
+)
 
-// TestEncryptDecryptChunk_RoundTrip verifies chunk encrypt-then-decrypt produces original plaintext
-func TestEncryptDecryptChunk_RoundTrip(t *testing.T) {
+// -- encryptChunk / decryptChunk: positive and negative AAD tests --
+
+// TestEncryptDecryptChunk_WithAAD_RoundTrip verifies chunk encrypt-then-decrypt
+// produces original plaintext when AAD inputs match.
+func TestEncryptDecryptChunk_WithAAD_RoundTrip(t *testing.T) {
 	fek, err := generateFEK()
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
+	plaintext := []byte("Phase C chunk round-trip plaintext with reasonable length content")
 
-	plaintext := []byte("chunk data for round-trip test with reasonable length content")
-
-	// Test chunk 0 (has envelope header)
-	encrypted0, err := encryptChunk(plaintext, fek, 0, 0x01)
-	if err != nil {
-		t.Fatalf("encryptChunk(index=0) failed: %v", err)
-	}
-
-	decrypted0, err := decryptChunk(encrypted0, fek, 0)
-	if err != nil {
-		t.Fatalf("decryptChunk(index=0) failed: %v", err)
-	}
-
-	if !bytes.Equal(plaintext, decrypted0) {
-		t.Error("chunk 0 round-trip: decrypted does not match original")
-	}
-
-	// Test chunk 1 (no envelope header)
-	encrypted1, err := encryptChunk(plaintext, fek, 1, 0x01)
-	if err != nil {
-		t.Fatalf("encryptChunk(index=1) failed: %v", err)
-	}
-
-	decrypted1, err := decryptChunk(encrypted1, fek, 1)
-	if err != nil {
-		t.Fatalf("decryptChunk(index=1) failed: %v", err)
-	}
-
-	if !bytes.Equal(plaintext, decrypted1) {
-		t.Error("chunk 1 round-trip: decrypted does not match original")
+	for _, idx := range []int64{0, 1, 2} {
+		enc, err := encryptChunk(plaintext, fek, testFileID, idx, testTotalChunks)
+		if err != nil {
+			t.Fatalf("encryptChunk(idx=%d) failed: %v", idx, err)
+		}
+		dec, err := decryptChunk(enc, fek, testFileID, idx, testTotalChunks)
+		if err != nil {
+			t.Fatalf("decryptChunk(idx=%d) failed: %v", idx, err)
+		}
+		if !bytes.Equal(plaintext, dec) {
+			t.Errorf("chunk %d round-trip mismatch", idx)
+		}
 	}
 }
 
-// TestEncryptDecryptChunk_WrongFEKFails verifies decryption with wrong FEK fails
-func TestEncryptDecryptChunk_WrongFEKFails(t *testing.T) {
-	fek1, err := generateFEK()
+// TestDecryptChunk_WrongChunkIndex_Fails proves chunk reorder is detected at
+// the AEAD layer (Phase C, B-05 / C-02).
+func TestDecryptChunk_WrongChunkIndex_Fails(t *testing.T) {
+	fek, err := generateFEK()
 	if err != nil {
-		t.Fatalf("generateFEK 1 failed: %v", err)
+		t.Fatalf("generateFEK failed: %v", err)
 	}
-	fek2, err := generateFEK()
-	if err != nil {
-		t.Fatalf("generateFEK 2 failed: %v", err)
-	}
+	plaintext := []byte("chunk reorder negative test")
 
-	plaintext := []byte("secret chunk data")
-
-	// Encrypt with fek1
-	encrypted, err := encryptChunk(plaintext, fek1, 1, 0x01)
+	// Encrypt as chunk 0; attempt to decrypt as chunk 1.
+	enc, err := encryptChunk(plaintext, fek, testFileID, 0, testTotalChunks)
 	if err != nil {
 		t.Fatalf("encryptChunk failed: %v", err)
 	}
-
-	// Decrypt with fek2 must fail
-	_, err = decryptChunk(encrypted, fek2, 1)
-	if err == nil {
-		t.Fatal("decryptChunk with wrong FEK should fail")
+	if _, err := decryptChunk(enc, fek, testFileID, 1, testTotalChunks); err == nil {
+		t.Fatal("decryptChunk with wrong chunk_index must fail (reorder detection)")
 	}
 }
 
-// TestEncryptChunk_AccountKeyType verifies chunk 0 has the account key type byte in the envelope header
-func TestEncryptChunk_AccountKeyType(t *testing.T) {
+// TestDecryptChunk_WrongFileID_Fails proves cross-file chunk substitution is
+// detected at the AEAD layer (Phase C, B-02 / C-02).
+func TestDecryptChunk_WrongFileID_Fails(t *testing.T) {
 	fek, err := generateFEK()
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
+	plaintext := []byte("cross-file substitution negative test")
 
-	encrypted, err := encryptChunk([]byte("test data"), fek, 0, 0x01)
+	enc, err := encryptChunk(plaintext, fek, testFileID, 0, testTotalChunks)
 	if err != nil {
 		t.Fatalf("encryptChunk failed: %v", err)
 	}
-
-	// First 2 bytes should be envelope header: [version=0x01][keyType=0x01]
-	if len(encrypted) < 2 {
-		t.Fatal("encrypted chunk 0 too short for header")
-	}
-	if encrypted[0] != 0x01 {
-		t.Errorf("envelope version should be 0x01, got 0x%02x", encrypted[0])
-	}
-	if encrypted[1] != 0x01 {
-		t.Errorf("envelope key type should be 0x01 (account), got 0x%02x", encrypted[1])
+	if _, err := decryptChunk(enc, fek, testFileID2, 0, testTotalChunks); err == nil {
+		t.Fatal("decryptChunk with wrong file_id must fail (substitution detection)")
 	}
 }
 
-// TestEncryptChunk_CustomKeyType verifies chunk 0 has the custom key type byte in the envelope header
-func TestEncryptChunk_CustomKeyType(t *testing.T) {
+// TestDecryptChunk_WrongTotalChunks_Fails proves that the server cannot
+// reduce chunk_count to truncate the file without remaining chunks failing
+// decryption (Phase C, C-03).
+func TestDecryptChunk_WrongTotalChunks_Fails(t *testing.T) {
 	fek, err := generateFEK()
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
+	plaintext := []byte("truncation negative test")
 
-	encrypted, err := encryptChunk([]byte("test data"), fek, 0, 0x02)
+	// Encrypt with total_chunks=3; attempt to decrypt with total_chunks=2.
+	enc, err := encryptChunk(plaintext, fek, testFileID, 2, 3)
 	if err != nil {
 		t.Fatalf("encryptChunk failed: %v", err)
 	}
-
-	if len(encrypted) < 2 {
-		t.Fatal("encrypted chunk 0 too short for header")
-	}
-	if encrypted[1] != 0x02 {
-		t.Errorf("envelope key type should be 0x02 (custom), got 0x%02x", encrypted[1])
+	if _, err := decryptChunk(enc, fek, testFileID, 2, 2); err == nil {
+		t.Fatal("decryptChunk with wrong total_chunks must fail (truncation detection)")
 	}
 }
 
-// TestEncryptChunk_NonZeroIndexNoHeader verifies non-zero chunks do not have envelope header
-func TestEncryptChunk_NonZeroIndexNoHeader(t *testing.T) {
-	fek, err := generateFEK()
-	if err != nil {
-		t.Fatalf("generateFEK failed: %v", err)
-	}
-
-	plaintext := []byte("chunk without header")
-
-	encrypted0, err := encryptChunk(plaintext, fek, 0, 0x01)
-	if err != nil {
-		t.Fatalf("encryptChunk(0) failed: %v", err)
-	}
-
-	encrypted1, err := encryptChunk(plaintext, fek, 1, 0x01)
-	if err != nil {
-		t.Fatalf("encryptChunk(1) failed: %v", err)
-	}
-
-	headerSize := crypto.EnvelopeHeaderSize()
-	// Chunk 0 should be headerSize bytes longer than chunk 1 (both encrypt same plaintext)
-	expectedDiff := headerSize
-	actualDiff := len(encrypted0) - len(encrypted1)
-	if actualDiff != expectedDiff {
-		t.Errorf("chunk 0 should be %d bytes longer than chunk 1 (header), got difference of %d", expectedDiff, actualDiff)
-	}
-}
-
-// TestEncryptChunk_InvalidFEKSize verifies non-32-byte FEK is rejected
+// TestEncryptChunk_InvalidFEKSize verifies non-32-byte FEK is rejected.
 func TestEncryptChunk_InvalidFEKSize(t *testing.T) {
-	_, err := encryptChunk([]byte("test"), make([]byte, 16), 0, 0x01)
-	if err == nil {
+	if _, err := encryptChunk([]byte("x"), make([]byte, 16), testFileID, 0, 1); err == nil {
 		t.Error("encryptChunk should reject 16-byte FEK")
 	}
-
-	_, err = decryptChunk(make([]byte, 100), make([]byte, 16), 1)
-	if err == nil {
+	if _, err := decryptChunk(make([]byte, 100), make([]byte, 16), testFileID, 0, 1); err == nil {
 		t.Error("decryptChunk should reject 16-byte FEK")
 	}
 }
 
-// -- encryptMetadata / decryptMetadataField tests --
+// TestEncryptChunk_EmptyFileID verifies empty fileID is rejected.
+func TestEncryptChunk_EmptyFileID(t *testing.T) {
+	fek, _ := generateFEK()
+	if _, err := encryptChunk([]byte("x"), fek, "", 0, 1); err == nil {
+		t.Error("encryptChunk should reject empty fileID")
+	}
+}
 
-// TestEncryptDecryptMetadata_RoundTrip verifies metadata encrypt/decrypt round-trip
-func TestEncryptDecryptMetadata_RoundTrip(t *testing.T) {
+// -- encryptMetadata / decryptMetadataField: positive and negative AAD tests --
+
+// TestEncryptDecryptMetadata_WithAAD_RoundTrip verifies metadata
+// encrypt/decrypt round-trip when AAD inputs match.
+func TestEncryptDecryptMetadata_WithAAD_RoundTrip(t *testing.T) {
 	accountKey, err := crypto.GenerateAESKey()
 	if err != nil {
 		t.Fatalf("GenerateAESKey failed: %v", err)
 	}
 
-	filename := "my-important-document.pdf"
+	filename := "secret-document.pdf"
 	sha256hex := "a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718a1b2c3d4e5f60718"
 
-	encFilenameB64, fnNonceB64, encSHA256B64, shaNonceB64, err := encryptMetadata(filename, sha256hex, accountKey)
+	encFn, fnNonce, encSha, shaNonce, err := encryptMetadata(filename, sha256hex, accountKey, testFileID, testOwner)
 	if err != nil {
 		t.Fatalf("encryptMetadata failed: %v", err)
 	}
 
-	// Verify all outputs are non-empty
-	if encFilenameB64 == "" || fnNonceB64 == "" || encSHA256B64 == "" || shaNonceB64 == "" {
-		t.Error("all encrypted metadata fields should be non-empty")
+	if encFn == "" || fnNonce == "" || encSha == "" || shaNonce == "" {
+		t.Fatal("all encrypted metadata fields should be non-empty")
 	}
 
-	// Decrypt filename
-	decryptedFilename, err := decryptMetadataField(encFilenameB64, fnNonceB64, accountKey)
+	decFn, err := decryptMetadataField(encFn, fnNonce, accountKey, testFileID, crypto.AADFieldFilename, testOwner)
 	if err != nil {
 		t.Fatalf("decryptMetadataField (filename) failed: %v", err)
 	}
-
-	if decryptedFilename != filename {
-		t.Errorf("filename mismatch: got %q, expected %q", decryptedFilename, filename)
+	if decFn != filename {
+		t.Errorf("filename mismatch: got %q, expected %q", decFn, filename)
 	}
 
-	// Decrypt SHA-256
-	decryptedSHA256, err := decryptMetadataField(encSHA256B64, shaNonceB64, accountKey)
+	decSha, err := decryptMetadataField(encSha, shaNonce, accountKey, testFileID, crypto.AADFieldSha256, testOwner)
 	if err != nil {
 		t.Fatalf("decryptMetadataField (sha256) failed: %v", err)
 	}
-
-	if decryptedSHA256 != sha256hex {
-		t.Errorf("sha256 mismatch: got %q, expected %q", decryptedSHA256, sha256hex)
+	if decSha != sha256hex {
+		t.Errorf("sha256 mismatch: got %q, expected %q", decSha, sha256hex)
 	}
 }
 
-// TestDecryptMetadataField_WrongKey verifies decryption with wrong key fails
-func TestDecryptMetadataField_WrongKey(t *testing.T) {
-	key1, err := crypto.GenerateAESKey()
+// TestDecryptMetadata_WrongFieldName_Fails proves that the encrypted
+// filename ciphertext cannot be substituted into the sha256 slot or vice
+// versa (Phase C §4.4).
+func TestDecryptMetadata_WrongFieldName_Fails(t *testing.T) {
+	accountKey, err := crypto.GenerateAESKey()
 	if err != nil {
-		t.Fatalf("GenerateAESKey 1 failed: %v", err)
-	}
-	key2, err := crypto.GenerateAESKey()
-	if err != nil {
-		t.Fatalf("GenerateAESKey 2 failed: %v", err)
+		t.Fatalf("GenerateAESKey failed: %v", err)
 	}
 
-	encFilenameB64, fnNonceB64, _, _, err := encryptMetadata("secret-file.txt", "abcd1234", key1)
+	encFn, fnNonce, _, _, err := encryptMetadata("foo.bin", "abcd1234", accountKey, testFileID, testOwner)
 	if err != nil {
 		t.Fatalf("encryptMetadata failed: %v", err)
 	}
 
-	// Decrypt with wrong key must fail
-	_, err = decryptMetadataField(encFilenameB64, fnNonceB64, key2)
-	if err == nil {
-		t.Fatal("decryptMetadataField with wrong key should fail")
+	// Decrypt filename ciphertext under the sha256 field label: must fail.
+	if _, err := decryptMetadataField(encFn, fnNonce, accountKey, testFileID, crypto.AADFieldSha256, testOwner); err == nil {
+		t.Fatal("decryptMetadataField with wrong field name must fail")
 	}
 }
 
-// -- wrapFEK / unwrapFEK tests --
+// TestDecryptMetadata_WrongOwnerUsername_Fails proves cross-user metadata
+// row substitution is detected (Phase C §4.4).
+func TestDecryptMetadata_WrongOwnerUsername_Fails(t *testing.T) {
+	accountKey, err := crypto.GenerateAESKey()
+	if err != nil {
+		t.Fatalf("GenerateAESKey failed: %v", err)
+	}
 
-// TestWrapUnwrapFEK_AccountKey_RoundTrip verifies FEK wrapping with account key
+	encFn, fnNonce, _, _, err := encryptMetadata("foo.bin", "abcd1234", accountKey, testFileID, testOwner)
+	if err != nil {
+		t.Fatalf("encryptMetadata failed: %v", err)
+	}
+
+	if _, err := decryptMetadataField(encFn, fnNonce, accountKey, testFileID, crypto.AADFieldFilename, testOwner2); err == nil {
+		t.Fatal("decryptMetadataField with wrong owner_username must fail")
+	}
+}
+
+// TestDecryptMetadata_WrongFileID_Fails proves that moving a metadata row
+// to a different file is detected (Phase C, C-19).
+func TestDecryptMetadata_WrongFileID_Fails(t *testing.T) {
+	accountKey, err := crypto.GenerateAESKey()
+	if err != nil {
+		t.Fatalf("GenerateAESKey failed: %v", err)
+	}
+
+	encFn, fnNonce, _, _, err := encryptMetadata("foo.bin", "abcd1234", accountKey, testFileID, testOwner)
+	if err != nil {
+		t.Fatalf("encryptMetadata failed: %v", err)
+	}
+
+	if _, err := decryptMetadataField(encFn, fnNonce, accountKey, testFileID2, crypto.AADFieldFilename, testOwner); err == nil {
+		t.Fatal("decryptMetadataField with wrong file_id must fail")
+	}
+}
+
+// TestDecryptMetadata_WrongKey verifies plain wrong-key path also fails.
+func TestDecryptMetadata_WrongKey(t *testing.T) {
+	key1, _ := crypto.GenerateAESKey()
+	key2, _ := crypto.GenerateAESKey()
+
+	encFn, fnNonce, _, _, err := encryptMetadata("foo.bin", "abcd1234", key1, testFileID, testOwner)
+	if err != nil {
+		t.Fatalf("encryptMetadata failed: %v", err)
+	}
+	if _, err := decryptMetadataField(encFn, fnNonce, key2, testFileID, crypto.AADFieldFilename, testOwner); err == nil {
+		t.Fatal("decryptMetadataField with wrong key must fail")
+	}
+}
+
+// -- wrapFEK / unwrapFEK: positive and negative AAD tests --
+
+// TestWrapUnwrapFEK_AccountKey_RoundTrip verifies FEK wrap+unwrap with
+// account-key derived KEK and matching file_id.
 func TestWrapUnwrapFEK_AccountKey_RoundTrip(t *testing.T) {
 	fek, err := generateFEK()
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
-
 	kek := crypto.DeriveAccountPasswordKey([]byte("TestAccountPassword2025!"), "testuser")
 
-	wrappedB64, err := wrapFEK(fek, kek, "account")
+	wrappedB64, err := wrapFEK(fek, kek, "account", testFileID)
 	if err != nil {
 		t.Fatalf("wrapFEK failed: %v", err)
 	}
-
 	if wrappedB64 == "" {
 		t.Fatal("wrapped FEK should not be empty")
 	}
 
-	unwrappedFEK, keyType, err := unwrapFEK(wrappedB64, kek)
+	unwrapped, keyType, err := unwrapFEK(wrappedB64, kek, testFileID)
 	if err != nil {
 		t.Fatalf("unwrapFEK failed: %v", err)
 	}
-
 	if keyType != "account" {
 		t.Errorf("key type should be 'account', got %q", keyType)
 	}
-
-	if !bytes.Equal(fek, unwrappedFEK) {
+	if !bytes.Equal(fek, unwrapped) {
 		t.Error("unwrapped FEK does not match original")
 	}
 }
 
-// TestWrapUnwrapFEK_CustomKey_RoundTrip verifies FEK wrapping with custom key
+// TestWrapUnwrapFEK_CustomKey_RoundTrip verifies FEK wrap+unwrap with a
+// custom-password derived KEK.
 func TestWrapUnwrapFEK_CustomKey_RoundTrip(t *testing.T) {
 	fek, err := generateFEK()
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
-
 	kek := crypto.DeriveCustomPasswordKey([]byte("TestCustomPassword2025!"), "testuser")
 
-	wrappedB64, err := wrapFEK(fek, kek, "custom")
+	wrappedB64, err := wrapFEK(fek, kek, "custom", testFileID)
 	if err != nil {
 		t.Fatalf("wrapFEK failed: %v", err)
 	}
-
-	unwrappedFEK, keyType, err := unwrapFEK(wrappedB64, kek)
+	unwrapped, keyType, err := unwrapFEK(wrappedB64, kek, testFileID)
 	if err != nil {
 		t.Fatalf("unwrapFEK failed: %v", err)
 	}
-
 	if keyType != "custom" {
 		t.Errorf("key type should be 'custom', got %q", keyType)
 	}
-
-	if !bytes.Equal(fek, unwrappedFEK) {
+	if !bytes.Equal(fek, unwrapped) {
 		t.Error("unwrapped FEK does not match original")
 	}
 }
 
-// TestUnwrapFEK_WrongKEKFails verifies unwrapping with wrong KEK fails
-func TestUnwrapFEK_WrongKEKFails(t *testing.T) {
+// TestUnwrapFEK_WrongFileID_Fails proves that substituting one file's FEK
+// envelope into another file's metadata row is detected at the AEAD layer
+// (Phase C, B-08).
+func TestUnwrapFEK_WrongFileID_Fails(t *testing.T) {
 	fek, err := generateFEK()
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
+	kek := crypto.DeriveAccountPasswordKey([]byte("WrongFileIDPassword2025"), "testuser")
 
-	correctKEK := crypto.DeriveAccountPasswordKey([]byte("CorrectPassword2025!Key"), "testuser")
-	wrongKEK := crypto.DeriveAccountPasswordKey([]byte("WrongPassword2025!Key!!"), "testuser")
-
-	wrappedB64, err := wrapFEK(fek, correctKEK, "account")
+	wrappedB64, err := wrapFEK(fek, kek, "account", testFileID)
 	if err != nil {
 		t.Fatalf("wrapFEK failed: %v", err)
 	}
-
-	_, _, err = unwrapFEK(wrappedB64, wrongKEK)
-	if err == nil {
-		t.Fatal("unwrapFEK with wrong KEK should fail")
+	if _, _, err := unwrapFEK(wrappedB64, kek, testFileID2); err == nil {
+		t.Fatal("unwrapFEK with wrong file_id must fail (cross-file FEK swap detection)")
 	}
 }
 
-// TestWrapFEK_InvalidKeyType verifies invalid key type is rejected
+// TestUnwrapFEK_WrongKEK_Fails verifies plain wrong-KEK path fails.
+func TestUnwrapFEK_WrongKEK_Fails(t *testing.T) {
+	fek, err := generateFEK()
+	if err != nil {
+		t.Fatalf("generateFEK failed: %v", err)
+	}
+	correctKEK := crypto.DeriveAccountPasswordKey([]byte("CorrectPassword2025!Key"), "testuser")
+	wrongKEK := crypto.DeriveAccountPasswordKey([]byte("WrongPassword2025!Key!!"), "testuser")
+
+	wrappedB64, err := wrapFEK(fek, correctKEK, "account", testFileID)
+	if err != nil {
+		t.Fatalf("wrapFEK failed: %v", err)
+	}
+	if _, _, err := unwrapFEK(wrappedB64, wrongKEK, testFileID); err == nil {
+		t.Fatal("unwrapFEK with wrong KEK must fail")
+	}
+}
+
+// TestWrapFEK_InvalidKeyType verifies invalid key type is rejected.
 func TestWrapFEK_InvalidKeyType(t *testing.T) {
 	fek, _ := generateFEK()
 	kek, _ := crypto.GenerateAESKey()
-
-	_, err := wrapFEK(fek, kek, "invalid")
-	if err == nil {
+	if _, err := wrapFEK(fek, kek, "invalid", testFileID); err == nil {
 		t.Error("wrapFEK should reject invalid key type")
 	}
 }
 
-// -- computeStreamingSHA256 tests --
+// TestWrapFEK_EmptyFileID verifies empty fileID is rejected.
+func TestWrapFEK_EmptyFileID(t *testing.T) {
+	fek, _ := generateFEK()
+	kek, _ := crypto.GenerateAESKey()
+	if _, err := wrapFEK(fek, kek, "account", ""); err == nil {
+		t.Error("wrapFEK should reject empty fileID")
+	}
+}
 
-// TestComputeStreamingSHA256 verifies streaming hash matches known SHA-256
+// -- computeStreamingSHA256 --
+
 func TestComputeStreamingSHA256(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "hash_test.dat")
-
 	content := []byte("Known content for SHA-256 verification in arkfile-client")
-
 	if err := os.WriteFile(filePath, content, 0644); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}
+	expected := sha256.Sum256(content)
+	expectedHex := hex.EncodeToString(expected[:])
 
-	// Compute expected hash
-	expectedHash := sha256.Sum256(content)
-	expectedHex := hex.EncodeToString(expectedHash[:])
-
-	// Compute streaming hash
-	actualHex, err := computeStreamingSHA256(filePath)
+	actual, err := computeStreamingSHA256(filePath)
 	if err != nil {
 		t.Fatalf("computeStreamingSHA256 failed: %v", err)
 	}
-
-	if actualHex != expectedHex {
-		t.Errorf("hash mismatch: got %s, expected %s", actualHex, expectedHex)
+	if actual != expectedHex {
+		t.Errorf("hash mismatch: got %s, expected %s", actual, expectedHex)
 	}
 }
 
-// TestComputeStreamingSHA256_EmptyFile verifies hash of empty file
 func TestComputeStreamingSHA256_EmptyFile(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "empty.dat")
-
 	if err := os.WriteFile(filePath, []byte{}, 0644); err != nil {
 		t.Fatalf("failed to write empty file: %v", err)
 	}
-
-	actualHex, err := computeStreamingSHA256(filePath)
+	actual, err := computeStreamingSHA256(filePath)
 	if err != nil {
 		t.Fatalf("computeStreamingSHA256 failed: %v", err)
 	}
-
-	// SHA-256 of empty input
-	expectedHex := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-	if actualHex != expectedHex {
-		t.Errorf("empty file hash mismatch: got %s, expected %s", actualHex, expectedHex)
+	expected := "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	if actual != expected {
+		t.Errorf("empty file hash mismatch: got %s, expected %s", actual, expected)
 	}
 }
 
-// TestComputeStreamingSHA256_NonexistentFile verifies error for missing file
 func TestComputeStreamingSHA256_NonexistentFile(t *testing.T) {
-	_, err := computeStreamingSHA256("/tmp/nonexistent-file-for-arkfile-test-12345.dat")
-	if err == nil {
+	if _, err := computeStreamingSHA256("/tmp/nonexistent-arkfile-test-12345.dat"); err == nil {
 		t.Error("computeStreamingSHA256 should fail for nonexistent file")
 	}
 }
 
-// -- calculateTotalEncryptedSize tests --
-
-// TestCalculateTotalEncryptedSize verifies size calculation for various plaintext sizes
+// -- calculateTotalEncryptedSize --
+//
+// Phase C Outcome A: uniform chunk layout, no per-chunk envelope header.
+// Every chunk = plaintext + GCM overhead (nonce + tag).
 func TestCalculateTotalEncryptedSize(t *testing.T) {
-	chunkSize := crypto.PlaintextChunkSize()
+	chunkSize := int64(crypto.PlaintextChunkSize())
 	overhead := int64(crypto.AesGcmOverhead())
-	headerSize := int64(crypto.EnvelopeHeaderSize())
 
 	tests := []struct {
 		name          string
@@ -395,29 +416,29 @@ func TestCalculateTotalEncryptedSize(t *testing.T) {
 		expected      int64
 	}{
 		{
-			name:          "zero bytes (empty file)",
+			name:          "zero bytes (empty file): single overhead-only chunk",
 			plaintextSize: 0,
-			expected:      headerSize + overhead,
+			expected:      overhead,
 		},
 		{
 			name:          "one byte",
 			plaintextSize: 1,
-			expected:      headerSize + (1 + overhead),
+			expected:      1 + overhead,
 		},
 		{
 			name:          "exactly one chunk",
 			plaintextSize: chunkSize,
-			expected:      headerSize + (chunkSize + overhead),
+			expected:      chunkSize + overhead,
 		},
 		{
 			name:          "one chunk + 1 byte",
 			plaintextSize: chunkSize + 1,
-			expected:      headerSize + (chunkSize + overhead) + (1 + overhead),
+			expected:      (chunkSize + overhead) + (1 + overhead),
 		},
 		{
 			name:          "two full chunks",
 			plaintextSize: chunkSize * 2,
-			expected:      headerSize + 2*(chunkSize+overhead),
+			expected:      2 * (chunkSize + overhead),
 		},
 	}
 
@@ -425,72 +446,63 @@ func TestCalculateTotalEncryptedSize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			actual := calculateTotalEncryptedSize(tt.plaintextSize)
 			if actual != tt.expected {
-				t.Errorf("plaintextSize=%d: got %d, expected %d (chunkSize=%d, overhead=%d, header=%d)",
-					tt.plaintextSize, actual, tt.expected, chunkSize, overhead, headerSize)
+				t.Errorf("plaintextSize=%d: got %d, expected %d (chunkSize=%d, overhead=%d)",
+					tt.plaintextSize, actual, tt.expected, chunkSize, overhead)
 			}
 		})
 	}
 }
 
-// -- generateFEK tests --
+// -- generateFEK --
 
-// TestGenerateFEK_LengthAndRandomness verifies FEK generation
 func TestGenerateFEK_LengthAndRandomness(t *testing.T) {
 	fek1, err := generateFEK()
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
-
 	if len(fek1) != 32 {
 		t.Errorf("FEK should be 32 bytes, got %d", len(fek1))
 	}
-
 	fek2, err := generateFEK()
 	if err != nil {
 		t.Fatalf("second generateFEK failed: %v", err)
 	}
-
 	if bytes.Equal(fek1, fek2) {
 		t.Error("two generated FEKs should be different (random)")
 	}
 }
 
-// -- isSeekableFile tests --
+// -- isSeekableFile --
 
-// TestIsSeekableFile_RegularFile verifies regular file is accepted
 func TestIsSeekableFile_RegularFile(t *testing.T) {
 	tempDir := t.TempDir()
 	filePath := filepath.Join(tempDir, "seekable.dat")
-
 	if err := os.WriteFile(filePath, []byte("test content"), 0644); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}
-
 	if err := isSeekableFile(filePath); err != nil {
 		t.Errorf("regular file should be seekable: %v", err)
 	}
 }
 
-// TestIsSeekableFile_NonexistentFile verifies error for missing file
 func TestIsSeekableFile_NonexistentFile(t *testing.T) {
-	if err := isSeekableFile("/tmp/nonexistent-arkfile-test-seekable-12345.dat"); err == nil {
+	if err := isSeekableFile("/tmp/nonexistent-arkfile-seek-12345.dat"); err == nil {
 		t.Error("nonexistent file should return error")
 	}
 }
 
-// TestIsSeekableFile_Directory verifies directory is rejected
 func TestIsSeekableFile_Directory(t *testing.T) {
 	tempDir := t.TempDir()
-
 	if err := isSeekableFile(tempDir); err == nil {
 		t.Error("directory should not be considered a seekable file")
 	}
 }
 
-// -- Multi-chunk encrypt/decrypt integration --
+// -- Multi-chunk end-to-end --
 
-// TestMultiChunkEncryptDecrypt verifies encrypting and decrypting multiple chunks in sequence
-// mirrors the actual upload/download flow
+// TestMultiChunkEncryptDecrypt mirrors the upload/download flow: encrypt
+// three chunks then decrypt them in order. AAD is bound to the same
+// (fileID, totalChunks) for every chunk.
 func TestMultiChunkEncryptDecrypt(t *testing.T) {
 	fek, err := generateFEK()
 	if err != nil {
@@ -502,108 +514,131 @@ func TestMultiChunkEncryptDecrypt(t *testing.T) {
 		[]byte("Second chunk of data that continues the file content stream"),
 		[]byte("Final partial chunk"),
 	}
+	total := int64(len(chunks))
 
-	var encryptedChunks [][]byte
-	for i, chunk := range chunks {
-		encrypted, err := encryptChunk(chunk, fek, i, 0x01)
+	var encChunks [][]byte
+	for i, ch := range chunks {
+		enc, err := encryptChunk(ch, fek, testFileID, int64(i), total)
 		if err != nil {
 			t.Fatalf("encryptChunk(%d) failed: %v", i, err)
 		}
-		encryptedChunks = append(encryptedChunks, encrypted)
+		encChunks = append(encChunks, enc)
 	}
 
-	// Decrypt all chunks and verify
-	for i, encrypted := range encryptedChunks {
-		decrypted, err := decryptChunk(encrypted, fek, i)
+	for i, enc := range encChunks {
+		dec, err := decryptChunk(enc, fek, testFileID, int64(i), total)
 		if err != nil {
 			t.Fatalf("decryptChunk(%d) failed: %v", i, err)
 		}
-
-		if !bytes.Equal(chunks[i], decrypted) {
-			t.Errorf("chunk %d mismatch: got %q, expected %q", i, string(decrypted), string(chunks[i]))
+		if !bytes.Equal(chunks[i], dec) {
+			t.Errorf("chunk %d mismatch", i)
 		}
 	}
 }
 
 // -- Full upload/download simulation --
 
-// TestFullEncryptDecryptCycle simulates the complete client-side crypto flow:
-// generate FEK -> wrap FEK -> encrypt chunks -> unwrap FEK -> decrypt chunks
+// TestFullEncryptDecryptCycle simulates: derive KEK -> wrap FEK -> encrypt
+// chunk -> encrypt metadata -> unwrap FEK -> decrypt chunk -> decrypt
+// metadata. All AAD-bound, all round-trips correctly.
 func TestFullEncryptDecryptCycle(t *testing.T) {
 	username := "cycle-test-user"
 	password := []byte("CycleTestPassword2025!Secure")
-
-	// Derive account KEK
 	kek := crypto.DeriveAccountPasswordKey(password, username)
 
-	// Generate FEK
 	fek, err := generateFEK()
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
 
-	// Wrap FEK with account KEK
-	wrappedFEKB64, err := wrapFEK(fek, kek, "account")
+	wrapped, err := wrapFEK(fek, kek, "account", testFileID)
 	if err != nil {
 		t.Fatalf("wrapFEK failed: %v", err)
 	}
 
-	// Encrypt some file data in chunks
-	originalData := []byte("Complete file data that would be split across chunks in a real upload scenario")
-
-	encrypted, err := encryptChunk(originalData, fek, 0, 0x01)
+	original := []byte("Complete file data that would be split across chunks in a real upload scenario")
+	enc, err := encryptChunk(original, fek, testFileID, 0, 1)
 	if err != nil {
 		t.Fatalf("encryptChunk failed: %v", err)
 	}
 
-	// Encrypt metadata
 	filename := "test-cycle-file.dat"
 	sha256hex := "deadbeefcafebabe1234567890abcdef1234567890abcdef1234567890abcdef"
-
-	encFnB64, fnNonceB64, encShaB64, shaNonceB64, err := encryptMetadata(filename, sha256hex, kek)
+	encFn, fnNonce, encSha, shaNonce, err := encryptMetadata(filename, sha256hex, kek, testFileID, username)
 	if err != nil {
 		t.Fatalf("encryptMetadata failed: %v", err)
 	}
 
-	// --- Simulate download side ---
+	// -- Simulated download side: re-derive everything from scratch. --
 
-	// Re-derive KEK from same password + username
 	kek2 := crypto.DeriveAccountPasswordKey(password, username)
-
-	// Unwrap FEK
-	unwrappedFEK, keyType, err := unwrapFEK(wrappedFEKB64, kek2)
+	unwrapped, keyType, err := unwrapFEK(wrapped, kek2, testFileID)
 	if err != nil {
 		t.Fatalf("unwrapFEK failed: %v", err)
 	}
-
 	if keyType != "account" {
 		t.Errorf("expected key type 'account', got %q", keyType)
 	}
 
-	// Decrypt file data
-	decrypted, err := decryptChunk(encrypted, unwrappedFEK, 0)
+	dec, err := decryptChunk(enc, unwrapped, testFileID, 0, 1)
 	if err != nil {
 		t.Fatalf("decryptChunk failed: %v", err)
 	}
-
-	if !bytes.Equal(originalData, decrypted) {
+	if !bytes.Equal(original, dec) {
 		t.Error("decrypted file data does not match original")
 	}
 
-	// Decrypt metadata
-	decryptedFilename, err := decryptMetadataField(encFnB64, fnNonceB64, kek2)
+	decFn, err := decryptMetadataField(encFn, fnNonce, kek2, testFileID, crypto.AADFieldFilename, username)
 	if err != nil {
 		t.Fatalf("decryptMetadataField (filename) failed: %v", err)
 	}
-	if decryptedFilename != filename {
-		t.Errorf("filename mismatch: got %q, expected %q", decryptedFilename, filename)
+	if decFn != filename {
+		t.Errorf("filename mismatch: got %q, expected %q", decFn, filename)
 	}
 
-	decryptedSHA256, err := decryptMetadataField(encShaB64, shaNonceB64, kek2)
+	decSha, err := decryptMetadataField(encSha, shaNonce, kek2, testFileID, crypto.AADFieldSha256, username)
 	if err != nil {
 		t.Fatalf("decryptMetadataField (sha256) failed: %v", err)
 	}
-	if decryptedSHA256 != sha256hex {
-		t.Errorf("sha256 mismatch: got %q, expected %q", decryptedSHA256, sha256hex)
+	if decSha != sha256hex {
+		t.Errorf("sha256 mismatch: got %q, expected %q", decSha, sha256hex)
 	}
 }
+
+// -- isFileIDConflict --
+//
+// Tests the heuristic used by the upload retry loop. The server returns
+// "HTTP 409: file_id_conflict" via the Response.Error code; the CLI's
+// makeRequest wrapper bubbles that up as an error string of roughly that
+// form. isFileIDConflict scans the error string case-insensitively for
+// the stable code "file_id_conflict" alongside "HTTP 409".
+func TestIsFileIDConflict(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"HTTP 409 file_id_conflict", testErr("HTTP 409: file_id_conflict"), true},
+		{"HTTP 409 different code", testErr("HTTP 409: some_other_error"), false},
+		{"HTTP 500 not 409", testErr("HTTP 500: file_id_conflict"), false},
+		{"different status code", testErr("HTTP 400: bad_request"), false},
+		{"case variation accepted", testErr("HTTP 409: FILE_ID_CONFLICT"), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := isFileIDConflict(c.err)
+			if got != c.want {
+				t.Errorf("isFileIDConflict(%v) = %v, want %v", c.err, got, c.want)
+			}
+		})
+	}
+}
+
+// testErr is a tiny helper so the test cases above can declare errors
+// inline without an extra import.
+type testErrString string
+
+func (e testErrString) Error() string { return string(e) }
+
+func testErr(s string) error { return testErrString(s) }

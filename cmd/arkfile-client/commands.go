@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/84adam/Arkfile/crypto"
+	"github.com/google/uuid"
 )
 
 // ============================================================
@@ -326,6 +327,13 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 // already-resolved session, accountKey and KEK. Used by the multi-file
 // batch loop. Errors classified as fatal by isFatalUploadError() abort
 // the batch; other errors mark the file as failed and the loop moves on.
+//
+// Phase C: the file_id is generated client-side as a UUIDv4 before any
+// encryption, because it is an input to the AAD bound to chunks, the FEK
+// envelope, and the metadata fields. On HTTP 409 / file_id_conflict from
+// the server (vanishingly rare in practice), the client retries with a
+// freshly minted UUID up to 3 times, then surfaces a hard error per
+// phase-c.md §3.1.
 func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfig, accountKey, kek []byte, finalPasswordType, hint, filePath string, force bool) (string, error) {
 	if err := isSeekableFile(filePath); err != nil {
 		return "", err
@@ -355,29 +363,12 @@ func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfi
 		}
 	}
 
-	// Generate FEK and wrap it.
-	fek, err := generateFEK()
-	if err != nil {
-		return "", fmt.Errorf("failed to generate file encryption key: %w", err)
-	}
-	defer clearBytes(fek)
+	// Owner of any newly uploaded file is the authenticated user. This
+	// is bound into metadata AAD and must match what the server stores
+	// in file_metadata.owner_username.
+	ownerUsername := session.Username
 
-	keyTypeByte := byte(0x01)
-	if finalPasswordType == "custom" {
-		keyTypeByte = 0x02
-	}
-
-	encryptedFEKB64, err := wrapFEK(fek, kek, finalPasswordType)
-	if err != nil {
-		return "", fmt.Errorf("failed to wrap FEK: %w", err)
-	}
-
-	// Encrypt metadata (always with account key).
 	filename := filepath.Base(filePath)
-	encFilenameB64, fnNonceB64, encSHA256B64, shaNonceB64, err := encryptMetadata(filename, sha256hex, accountKey)
-	if err != nil {
-		return "", fmt.Errorf("failed to encrypt metadata: %w", err)
-	}
 
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
@@ -387,52 +378,120 @@ func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfi
 	if fileSizeBytes == 0 {
 		return "", fmt.Errorf("cannot upload empty file (0 bytes): %s", filepath.Base(filePath))
 	}
-	totalEncSize := calculateTotalEncryptedSize(fileSizeBytes)
 	chunkSizeBytes := int64(crypto.PlaintextChunkSize())
 	chunkCount := (fileSizeBytes + chunkSizeBytes - 1) / chunkSizeBytes
 	if chunkCount == 0 {
 		chunkCount = 1
 	}
+	totalEncSize := calculateTotalEncryptedSize(fileSizeBytes)
+
+	keyTypeByte := byte(0x01)
+	if finalPasswordType == "custom" {
+		keyTypeByte = 0x02
+	}
 
 	logVerbose("Uploading %s (%s), %d chunks", filename, formatFileSize(fileSizeBytes), chunkCount)
 
-	fileID, err := doChunkedUpload(client, session, &ChunkedUploadParams{
-		FilePath:        filePath,
-		FEK:             fek,
-		KeyTypeByte:     keyTypeByte,
-		EncryptedFEKB64: encryptedFEKB64,
-		EncFilenameB64:  encFilenameB64,
-		FnNonceB64:      fnNonceB64,
-		EncSHA256B64:    encSHA256B64,
-		ShaNonceB64:     shaNonceB64,
-		PasswordType:    finalPasswordType,
-		PasswordHint:    hint,
-		FileSizeBytes:   fileSizeBytes,
-		TotalEncSize:    totalEncSize,
-		ChunkCount:      chunkCount,
-		ChunkSizeBytes:  chunkSizeBytes,
-	})
-	if err != nil {
-		return "", fmt.Errorf("upload failed: %w", err)
-	}
+	// Retry loop for file_id collisions. Per phase-c.md §3.1 the client
+	// retries up to 3 times with a fresh UUIDv4 each time. Each attempt
+	// re-runs the full encrypt-and-init sequence because every AAD-bound
+	// ciphertext (FEK envelope, metadata fields) depends on file_id.
+	const maxFileIDAttempts = 3
+	var lastErr error
+	for attempt := 1; attempt <= maxFileIDAttempts; attempt++ {
+		fileID := uuid.New().String()
+		logVerbose("Attempt %d/%d: minting file_id=%s", attempt, maxFileIDAttempts, fileID)
 
-	logVerbose("Upload complete: file=%s size=%s file_id=%s", filename, formatFileSize(fileSizeBytes), fileID)
-
-	// Store digest in agent cache so future uploads in the same session
-	// can short-circuit duplicate uploads quickly.
-	agentClient, agentErr := NewAgentClient()
-	if agentErr == nil {
-		if err := agentClient.AddDigest(fileID, sha256hex); err != nil {
-			logVerbose("Warning: failed to store digest in cache: %v", err)
+		// Generate FEK once per attempt (a colliding file_id implies a
+		// fresh upload context end-to-end).
+		fek, ferr := generateFEK()
+		if ferr != nil {
+			return "", fmt.Errorf("failed to generate file encryption key: %w", ferr)
 		}
+
+		encryptedFEKB64, werr := wrapFEK(fek, kek, finalPasswordType, fileID)
+		if werr != nil {
+			clearBytes(fek)
+			return "", fmt.Errorf("failed to wrap FEK: %w", werr)
+		}
+
+		encFilenameB64, fnNonceB64, encSHA256B64, shaNonceB64, merr :=
+			encryptMetadata(filename, sha256hex, accountKey, fileID, ownerUsername)
+		if merr != nil {
+			clearBytes(fek)
+			return "", fmt.Errorf("failed to encrypt metadata: %w", merr)
+		}
+
+		returnedFileID, derr := doChunkedUpload(client, session, &ChunkedUploadParams{
+			FilePath:        filePath,
+			FileID:          fileID,
+			OwnerUsername:   ownerUsername,
+			FEK:             fek,
+			KeyTypeByte:     keyTypeByte,
+			EncryptedFEKB64: encryptedFEKB64,
+			EncFilenameB64:  encFilenameB64,
+			FnNonceB64:      fnNonceB64,
+			EncSHA256B64:    encSHA256B64,
+			ShaNonceB64:     shaNonceB64,
+			PasswordType:    finalPasswordType,
+			PasswordHint:    hint,
+			FileSizeBytes:   fileSizeBytes,
+			TotalEncSize:    totalEncSize,
+			ChunkCount:      chunkCount,
+			ChunkSizeBytes:  chunkSizeBytes,
+		})
+		// Clear FEK as soon as the upload returns (success or failure).
+		clearBytes(fek)
+
+		if derr == nil {
+			fileID = returnedFileID
+			logVerbose("Upload complete: file=%s size=%s file_id=%s", filename, formatFileSize(fileSizeBytes), fileID)
+			// Store digest in agent cache for fast dedup on future uploads.
+			agentClient, agentErr := NewAgentClient()
+			if agentErr == nil {
+				if err := agentClient.AddDigest(fileID, sha256hex); err != nil {
+					logVerbose("Warning: failed to store digest in cache: %v", err)
+				}
+			}
+			return fileID, nil
+		}
+
+		// Detect file_id_conflict (stable server error code).
+		if isFileIDConflict(derr) {
+			lastErr = derr
+			logVerbose("Attempt %d/%d: file_id_conflict — regenerating", attempt, maxFileIDAttempts)
+			continue
+		}
+
+		// Any other failure aborts immediately.
+		return "", fmt.Errorf("upload failed: %w", derr)
 	}
 
-	return fileID, nil
+	return "", fmt.Errorf("%w (last server response: %v)", errFileIDConflictExhausted, lastErr)
 }
 
-// ChunkedUploadParams holds all parameters for a chunked upload
+// isFileIDConflict returns true when the error came from an HTTP 409
+// with the stable server code "file_id_conflict" (Phase C, §3.1 / §4.4).
+// We accept either an exact Response.Error match or a textual substring
+// match for robustness against minor server framing differences.
+func isFileIDConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "http 409") && strings.Contains(msg, "file_id_conflict")
+}
+
+// ChunkedUploadParams holds all parameters for a chunked upload.
+//
+// FileID is the client-generated UUIDv4 that the server validates and
+// stores in `file_metadata.file_id`. It is also bound into the AAD of
+// every chunk and the FEK envelope. OwnerUsername is bound into the
+// AAD of the metadata fields (filename and SHA-256 digest).
 type ChunkedUploadParams struct {
 	FilePath        string
+	FileID          string
+	OwnerUsername   string
 	FEK             []byte
 	KeyTypeByte     byte
 	EncryptedFEKB64 string
@@ -454,8 +513,12 @@ type ChunkedUploadParams struct {
 func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUploadParams) (string, error) {
 	chunkSize := crypto.PlaintextChunkSize()
 
-	// Step 1: Initialize upload session - send exactly what the server expects
+	// Step 1: Initialize upload session - send exactly what the server expects.
+	// Phase C: client supplies file_id (UUIDv4); server validates and
+	// returns HTTP 409 with stable error code "file_id_conflict" on
+	// collision, per phase-c.md §3.1.
 	initPayload := map[string]interface{}{
+		"file_id":             params.FileID,
 		"encrypted_filename":  params.EncFilenameB64,
 		"filename_nonce":      params.FnNonceB64,
 		"encrypted_sha256sum": params.EncSHA256B64,
@@ -507,8 +570,10 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 
 		plaintext := buf[:n]
 
-		// Encrypt the chunk
-		encryptedChunk, err := encryptChunk(plaintext, params.FEK, int(chunkIndex), params.KeyTypeByte)
+		// Encrypt the chunk. AAD binds (file_id, chunk_index,
+		// total_chunks) so that the server cannot swap/reorder/truncate
+		// chunks at decrypt time (B-02, B-05, C-02, C-03).
+		encryptedChunk, err := encryptChunk(plaintext, params.FEK, params.FileID, chunkIndex, params.ChunkCount)
 		if err != nil {
 			return "", fmt.Errorf("failed to encrypt chunk %d: %w", chunkIndex, err)
 		}
@@ -647,9 +712,21 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		return fmt.Errorf("failed to decode file metadata: %w", err)
 	}
 
+	// Owner of the file is needed to reconstruct metadata AAD. Owner
+	// endpoint should populate `owner_username`; fall back to the
+	// authenticated user (which must equal the owner for /api/files
+	// access to succeed).
+	ownerUsername := fileMeta.OwnerUsername
+	if ownerUsername == "" {
+		ownerUsername = session.Username
+	}
+
 	// Decrypt filename for output path
 	if *outputPath == "" && fileMeta.EncryptedFilename != "" && fileMeta.FilenameNonce != "" {
-		decryptedName, err := decryptMetadataField(fileMeta.EncryptedFilename, fileMeta.FilenameNonce, accountKey)
+		decryptedName, err := decryptMetadataField(
+			fileMeta.EncryptedFilename, fileMeta.FilenameNonce, accountKey,
+			*fileID, crypto.AADFieldFilename, ownerUsername,
+		)
 		if err != nil {
 			logVerbose("Warning: failed to decrypt filename: %v", err)
 			*outputPath = *fileID + ".bin"
@@ -683,7 +760,7 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 		return fmt.Errorf("file metadata missing encrypted FEK")
 	}
 
-	fek, _, err := unwrapFEK(fileMeta.EncryptedFEK, kek)
+	fek, _, err := unwrapFEK(fileMeta.EncryptedFEK, kek, *fileID)
 	if err != nil {
 		return fmt.Errorf("failed to unwrap FEK (wrong password?): %w", err)
 	}
@@ -715,7 +792,10 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 
 	// Verify SHA-256 integrity
 	if fileMeta.EncryptedSHA256 != "" && fileMeta.SHA256Nonce != "" {
-		expectedSHA256, err := decryptMetadataField(fileMeta.EncryptedSHA256, fileMeta.SHA256Nonce, accountKey)
+		expectedSHA256, err := decryptMetadataField(
+			fileMeta.EncryptedSHA256, fileMeta.SHA256Nonce, accountKey,
+			*fileID, crypto.AADFieldSha256, ownerUsername,
+		)
 		if err != nil {
 			fmt.Printf("  [!] WARNING: Could not decrypt expected SHA-256: %v\n", err)
 		} else {
@@ -733,7 +813,10 @@ func handleDownloadCommand(client *HTTPClient, config *ClientConfig, args []stri
 	return nil
 }
 
-// doChunkedDownload streams chunks from the server and decrypts each one
+// doChunkedDownload streams chunks from the server and decrypts each one.
+// fileID and meta.ChunkCount are bound into the per-chunk AAD so chunk
+// swap / reorder / cross-file substitution / truncation all fail at the
+// AEAD layer (B-02, B-05, C-02, C-03).
 func doChunkedDownload(client *HTTPClient, session *AuthSession, fileID string, fek []byte, meta ServerFileInfo, outFile *os.File) error {
 	chunkCount := meta.ChunkCount
 	if chunkCount == 0 {
@@ -765,8 +848,8 @@ func doChunkedDownload(client *HTTPClient, session *AuthSession, fileID string, 
 			return fmt.Errorf("failed to read chunk %d body: %w", i, err)
 		}
 
-		// Decrypt the chunk
-		plaintext, err := decryptChunk(encryptedChunk, fek, int(i))
+		// Decrypt the chunk with AAD = (file_id, chunk_index, total_chunks).
+		plaintext, err := decryptChunk(encryptedChunk, fek, fileID, i, chunkCount)
 		if err != nil {
 			return fmt.Errorf("failed to decrypt chunk %d: %w", i, err)
 		}
@@ -867,8 +950,15 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 				PasswordType: f.PasswordType,
 				ChunkCount:   f.ChunkCount,
 			}
+			owner := f.OwnerUsername
+			if owner == "" {
+				owner = session.Username
+			}
 			if accountKey != nil && f.EncryptedFilename != "" && f.FilenameNonce != "" {
-				if name, err := decryptMetadataField(f.EncryptedFilename, f.FilenameNonce, accountKey); err == nil {
+				if name, err := decryptMetadataField(
+					f.EncryptedFilename, f.FilenameNonce, accountKey,
+					f.FileID, crypto.AADFieldFilename, owner,
+				); err == nil {
 					df.Filename = name
 				} else {
 					df.Filename = "[encrypted]"
@@ -900,8 +990,15 @@ func handleListFilesCommand(client *HTTPClient, config *ClientConfig, args []str
 	sep := strings.Repeat("-", 80)
 	for i, f := range fileList.Files {
 		filename := "[encrypted]"
+		owner := f.OwnerUsername
+		if owner == "" {
+			owner = session.Username
+		}
 		if accountKey != nil && f.EncryptedFilename != "" && f.FilenameNonce != "" {
-			if name, err := decryptMetadataField(f.EncryptedFilename, f.FilenameNonce, accountKey); err == nil {
+			if name, err := decryptMetadataField(
+				f.EncryptedFilename, f.FilenameNonce, accountKey,
+				f.FileID, crypto.AADFieldFilename, owner,
+			); err == nil {
 				filename = name
 			}
 		}
@@ -1103,17 +1200,27 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 		defer clearBytes(sourceKEK)
 	}
 
-	// Unwrap FEK
-	fek, _, err := unwrapFEK(fileMeta.EncryptedFEK, sourceKEK)
+	// Unwrap FEK. fileID is bound into the FEK envelope AAD (B-08).
+	fek, _, err := unwrapFEK(fileMeta.EncryptedFEK, sourceKEK, *fileID)
 	if err != nil {
 		return fmt.Errorf("failed to unwrap FEK: %w", err)
 	}
 	defer clearBytes(fek)
 
-	// Decrypt plaintext filename and SHA-256 (always encrypted with account key)
+	// Decrypt plaintext filename and SHA-256 (always encrypted with account key).
+	// Owner endpoint: owner_username == authenticated user. Fall back to
+	// session.Username if the server response omits it.
+	ownerUsername := fileMeta.OwnerUsername
+	if ownerUsername == "" {
+		ownerUsername = session.Username
+	}
+
 	filename := "[unknown]"
 	if fileMeta.EncryptedFilename != "" && fileMeta.FilenameNonce != "" {
-		if name, err := decryptMetadataField(fileMeta.EncryptedFilename, fileMeta.FilenameNonce, accountKey); err == nil {
+		if name, err := decryptMetadataField(
+			fileMeta.EncryptedFilename, fileMeta.FilenameNonce, accountKey,
+			*fileID, crypto.AADFieldFilename, ownerUsername,
+		); err == nil {
 			filename = name
 		} else {
 			logVerbose("Warning: could not decrypt filename: %v", err)
@@ -1122,7 +1229,10 @@ func handleShareCreate(client *HTTPClient, config *ClientConfig, args []string) 
 
 	sha256hex := ""
 	if fileMeta.EncryptedSHA256 != "" && fileMeta.SHA256Nonce != "" {
-		if hash, err := decryptMetadataField(fileMeta.EncryptedSHA256, fileMeta.SHA256Nonce, accountKey); err == nil {
+		if hash, err := decryptMetadataField(
+			fileMeta.EncryptedSHA256, fileMeta.SHA256Nonce, accountKey,
+			*fileID, crypto.AADFieldSha256, ownerUsername,
+		); err == nil {
 			sha256hex = hash
 		} else {
 			logVerbose("Warning: could not decrypt SHA-256: %v", err)
@@ -1411,8 +1521,19 @@ func enrichShareList(client *HTTPClient, session *AuthSession, shares []ShareInf
 			}
 
 			if accountKey != nil {
-				filename, filenameErr := decryptMetadataField(meta.EncryptedFilename, meta.FilenameNonce, accountKey)
-				sha256sum, shaErr := decryptMetadataField(meta.EncryptedSHA256, meta.SHA256Nonce, accountKey)
+				owner := meta.OwnerUsername
+				if owner == "" {
+					// Share list is owner-side: caller owns the file.
+					owner = session.Username
+				}
+				filename, filenameErr := decryptMetadataField(
+					meta.EncryptedFilename, meta.FilenameNonce, accountKey,
+					share.FileID, crypto.AADFieldFilename, owner,
+				)
+				sha256sum, shaErr := decryptMetadataField(
+					meta.EncryptedSHA256, meta.SHA256Nonce, accountKey,
+					share.FileID, crypto.AADFieldSha256, owner,
+				)
 
 				if filenameErr == nil {
 					item.FilenameLocal = filename
@@ -1729,7 +1850,11 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 			break
 		}
 
-		plaintext, decErr := decryptChunk(encChunk, fek, int(i))
+		// Anonymous share recipient: chunk AAD uses the underlying
+		// file_id from the share metadata (NOT the share_id). Chunks
+		// are the same physical objects stored once for both owner and
+		// recipient paths -- per phase-c.md §5.
+		plaintext, decErr := decryptChunk(encChunk, fek, chunkMeta.FileID, i, chunkCount)
 		if decErr != nil {
 			downloadFailed = true
 			err = fmt.Errorf("failed to decrypt chunk %d: %w", i, decErr)

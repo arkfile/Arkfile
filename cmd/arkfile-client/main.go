@@ -133,10 +133,17 @@ type Response struct {
 	EncryptedFileSHA256 string                 `json:"encrypted_file_sha256"`
 }
 
-// ServerFileInfo represents file metadata from server response
+// ServerFileInfo represents file metadata from server response.
+//
+// OwnerUsername is required to reconstruct the metadata AAD when
+// decrypting `encrypted_filename` and `encrypted_sha256sum`
+// (Phase C, §4.4). For owner-only endpoints it equals the
+// authenticated user, but the server is the authority on this
+// value so it is taken from the response.
 type ServerFileInfo struct {
 	FileID            string `json:"file_id"`
 	StorageID         string `json:"storage_id"`
+	OwnerUsername     string `json:"owner_username"`
 	PasswordHint      string `json:"password_hint"`
 	PasswordType      string `json:"password_type"`
 	FilenameNonce     string `json:"filename_nonce"`
@@ -933,7 +940,18 @@ func populateDigestCache(client *HTTPClient, session *AuthSession, accountKey []
 		if f.EncryptedSHA256 == "" || f.SHA256Nonce == "" {
 			continue
 		}
-		sha256hex, err := decryptMetadataField(f.EncryptedSHA256, f.SHA256Nonce, accountKey)
+		// Owner endpoint: owner_username should match the authenticated
+		// user. Fall back to session.Username if the server response
+		// omits it. AAD reconstruction must match what the upload path
+		// used.
+		owner := f.OwnerUsername
+		if owner == "" {
+			owner = session.Username
+		}
+		sha256hex, err := decryptMetadataField(
+			f.EncryptedSHA256, f.SHA256Nonce, accountKey,
+			f.FileID, crypto.AADFieldSha256, owner,
+		)
 		if err != nil {
 			logVerbose("Warning: failed to decrypt sha256 for file %s: %v", f.FileID, err)
 			continue
@@ -1233,6 +1251,14 @@ var errQuotaExceeded = errors.New("storage limit would be exceeded")
 // errAccountDisabled indicates the account is not approved or has been
 // disabled. Fatal -- nothing in the batch will succeed.
 var errAccountDisabled = errors.New("account is not approved or has been disabled")
+
+// errFileIDConflictExhausted indicates the client minted 3 successive
+// UUIDv4 file_ids and each was rejected with HTTP 409 / file_id_conflict.
+// This is vanishingly improbable in practice (per phase-c.md §3.1 / F)
+// and indicates either a serious RNG fault on the client or a server
+// state-leak issue worth flagging. Fatal for this single file upload but
+// NOT for the batch -- the next file gets a fresh attempt.
+var errFileIDConflictExhausted = errors.New("file_id conflict retry budget exhausted (3 attempts)")
 
 // isFatalUploadError returns true for errors that should abort an entire
 // batch rather than be recorded against a single file. Mirrors the TS

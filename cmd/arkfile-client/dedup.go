@@ -7,6 +7,8 @@ package main
 import (
 	"fmt"
 	"net/http"
+
+	"github.com/84adam/Arkfile/crypto"
 )
 
 // DedupResult represents the result of a deduplication check
@@ -143,7 +145,18 @@ func tryDecryptFilename(client *HTTPClient, session *AuthSession, accountKey []b
 		return ""
 	}
 
-	filename, err := decryptMetadataField(fileMeta.EncryptedFilename, fileMeta.FilenameNonce, accountKey)
+	// Owner endpoint: owner_username == authenticated user. Fall back to
+	// session.Username if the server response omits it. Metadata AAD
+	// must match what the upload path used (Phase C §4.4).
+	owner := fileMeta.OwnerUsername
+	if owner == "" {
+		owner = session.Username
+	}
+
+	filename, err := decryptMetadataField(
+		fileMeta.EncryptedFilename, fileMeta.FilenameNonce, accountKey,
+		fileID, crypto.AADFieldFilename, owner,
+	)
 	if err != nil {
 		return ""
 	}

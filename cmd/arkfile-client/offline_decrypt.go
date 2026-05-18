@@ -16,10 +16,17 @@ import (
 	"github.com/84adam/Arkfile/crypto"
 )
 
-// bundleMeta matches the JSON metadata schema in the .arkbackup bundle
+// bundleMeta matches the JSON metadata schema in the .arkbackup bundle.
+//
+// Phase C: bundles are self-describing (§6.1). OwnerUsername is required
+// to reconstruct the metadata AAD when decrypting `encrypted_filename`
+// and `encrypted_sha256sum`. The exporter writes the file owner here so
+// the offline decrypter can decrypt without any external state. Bundles
+// produced before Phase C are unreadable (no fallback path).
 type bundleMeta struct {
 	Version            int    `json:"version"`
 	FileID             string `json:"file_id"`
+	OwnerUsername      string `json:"owner_username"`
 	EncryptedFEK       string `json:"encrypted_fek"`
 	PasswordType       string `json:"password_type"`
 	SizeBytes          int64  `json:"size_bytes"`
@@ -108,7 +115,16 @@ func handleDecryptBlobCommand(args []string) error {
 		return fmt.Errorf("unsupported password type: %s", meta.PasswordType)
 	}
 
-	fek, _, err := unwrapFEK(meta.EncryptedFEK, kek)
+	// Phase C: bundle is self-describing. file_id is required for FEK
+	// envelope AAD; owner_username is required for metadata-field AAD.
+	if meta.FileID == "" {
+		return fmt.Errorf("bundle metadata missing file_id (required by Phase C self-describing bundles)")
+	}
+	if meta.OwnerUsername == "" {
+		return fmt.Errorf("bundle metadata missing owner_username (required by Phase C self-describing bundles)")
+	}
+
+	fek, _, err := unwrapFEK(meta.EncryptedFEK, kek, meta.FileID)
 	if err != nil {
 		return fmt.Errorf("failed to unwrap FEK (wrong password?): %w", err)
 	}
@@ -124,7 +140,10 @@ func handleDecryptBlobCommand(args []string) error {
 	// Decrypt filename
 	filename := "[unknown]"
 	if meta.EncryptedFilename != "" && meta.FilenameNonce != "" {
-		if name, decErr := decryptMetadataField(meta.EncryptedFilename, meta.FilenameNonce, accountKey); decErr == nil {
+		if name, decErr := decryptMetadataField(
+			meta.EncryptedFilename, meta.FilenameNonce, accountKey,
+			meta.FileID, crypto.AADFieldFilename, meta.OwnerUsername,
+		); decErr == nil {
 			filename = name
 		} else {
 			logVerbose("Warning: could not decrypt filename: %v", decErr)
@@ -143,7 +162,10 @@ func handleDecryptBlobCommand(args []string) error {
 
 	// Decrypt expected SHA-256 from metadata
 	if meta.EncryptedSHA256Sum != "" && meta.SHA256SumNonce != "" {
-		expectedSHA256, decErr := decryptMetadataField(meta.EncryptedSHA256Sum, meta.SHA256SumNonce, accountKey)
+		expectedSHA256, decErr := decryptMetadataField(
+			meta.EncryptedSHA256Sum, meta.SHA256SumNonce, accountKey,
+			meta.FileID, crypto.AADFieldSha256, meta.OwnerUsername,
+		)
 		if decErr != nil {
 			fmt.Printf("[!] WARNING: Could not decrypt expected SHA-256: %v\n", decErr)
 		} else if actualSHA256 == expectedSHA256 {
@@ -281,8 +303,19 @@ func readAccountKeyFromFile(path string) ([]byte, error) {
 	return key, nil
 }
 
-// decryptBundleBlob reads the encrypted blob from the bundle, splits it into
-// chunks, decrypts each chunk, and writes plaintext to the output file.
+// decryptBundleBlob reads the encrypted blob from the bundle, splits it
+// into uniform chunks, decrypts each chunk, and writes plaintext to the
+// output file.
+//
+// Phase C (Outcome A): every chunk uses the uniform layout
+// [nonce (12)][ciphertext][tag (16)] with NO per-chunk envelope header.
+// Each chunk decrypts with AAD = (file_id, chunk_index, total_chunks)
+// so swap / reorder / truncation across the bundle is detected at the
+// AEAD layer (B-02, B-05, C-02, C-03).
+//
+// Bundles produced before Phase C had a 2-byte [version][keyType] header
+// glued to chunk 0; those bundles are unreadable by this code and there
+// is no fallback path (greenfield policy, phase-c.md §2).
 func decryptBundleBlob(bundlePath string, blobOffset int64, meta *bundleMeta, fek []byte, outputPath string) error {
 	f, err := os.Open(bundlePath)
 	if err != nil {
@@ -302,26 +335,25 @@ func decryptBundleBlob(bundlePath string, blobOffset int64, meta *bundleMeta, fe
 	}
 	defer outFile.Close()
 
-	// Split and decrypt chunks
+	// Uniform chunk math: every chunk adds GCM overhead (nonce + tag).
 	plaintextChunkSize := meta.ChunkSizeBytes
 	if plaintextChunkSize <= 0 {
 		plaintextChunkSize = crypto.PlaintextChunkSize()
 	}
+	gcmOverhead := int64(crypto.AesGcmOverhead())
 
-	gcmOverhead := int64(crypto.AesGcmOverhead())        // nonce (12) + tag (16) = 28
-	envelopeHeader := int64(crypto.EnvelopeHeaderSize()) // 2 bytes
+	totalChunks := meta.ChunkCount
+	if totalChunks <= 0 {
+		return fmt.Errorf("bundle metadata missing chunk_count (required by Phase C self-describing bundles)")
+	}
 
 	remaining := meta.SizeBytes
-	chunkIndex := 0
-
-	for remaining > 0 {
-		// Calculate this chunk's encrypted size
-		overhead := gcmOverhead
-		if chunkIndex == 0 {
-			overhead += envelopeHeader
-		}
-		maxChunk := plaintextChunkSize + overhead
-		actualChunk := maxChunk
+	for chunkIndex := int64(0); chunkIndex < totalChunks; chunkIndex++ {
+		// Calculate this chunk's encrypted size. Every chunk is the
+		// uniform plaintext chunk size + GCM overhead, except possibly
+		// the last chunk which carries whatever plaintext is left.
+		fullChunkEnc := plaintextChunkSize + gcmOverhead
+		actualChunk := fullChunkEnc
 		if remaining < actualChunk {
 			actualChunk = remaining
 		}
@@ -334,8 +366,8 @@ func decryptBundleBlob(bundlePath string, blobOffset int64, meta *bundleMeta, fe
 		}
 		chunkData = chunkData[:n]
 
-		// Decrypt chunk
-		plaintext, err := decryptChunk(chunkData, fek, chunkIndex)
+		// Decrypt chunk with AAD = (file_id, chunk_index, total_chunks).
+		plaintext, err := decryptChunk(chunkData, fek, meta.FileID, chunkIndex, totalChunks)
 		if err != nil {
 			return fmt.Errorf("failed to decrypt chunk %d: %w", chunkIndex, err)
 		}
@@ -346,13 +378,11 @@ func decryptBundleBlob(bundlePath string, blobOffset int64, meta *bundleMeta, fe
 		}
 
 		remaining -= int64(n)
-		chunkIndex++
-
 		if verbose {
-			logVerbose("  Chunk %d decrypted (%d bytes remaining)", chunkIndex, remaining)
+			logVerbose("  Chunk %d decrypted (%d bytes remaining)", chunkIndex+1, remaining)
 		}
 	}
 
-	logVerbose("Decrypted %d chunks", chunkIndex)
+	logVerbose("Decrypted %d chunks", totalChunks)
 	return nil
 }
