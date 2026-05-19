@@ -549,7 +549,7 @@ export async function uploadFile(
     const nonceSize = chunkCfg.aesGcm.nonceSizeBytes;
     const tagSize = chunkCfg.aesGcm.tagSizeBytes;
     const aesGcmOverhead = nonceSize + tagSize; // 12 + 16 = 28
-    const envelopeVersion = chunkCfg.envelope.version;
+    const envelopeVersion = 1; // Immutable protocol FEK envelope version (finding E1c)
     const keyTypeVal = passwordType === 'account'
       ? chunkCfg.envelope.keyTypes.account
       : chunkCfg.envelope.keyTypes.custom;

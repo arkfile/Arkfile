@@ -26,6 +26,8 @@ import {
   type ChunkingConfig,
 } from './floors.js';
 
+export type { ChunkingConfig };
+
 let cachedArgon2Config: Argon2Config | null = null;
 
 /**
