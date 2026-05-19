@@ -533,3 +533,81 @@ func TestShareEnvelopeEncryptDecrypt_WrongAAD(t *testing.T) {
 		t.Fatalf("decryption with correct AAD should succeed: %v", err)
 	}
 }
+
+// TestValidateShareKDFParams verifies compile-time KDF parameter floor checks
+func TestValidateShareKDFParams(t *testing.T) {
+	validParams := &ShareKDFParamsEmbedded{
+		Algorithm: "argon2id",
+		MemoryKiB: ShareKDFParams.Memory,
+		Time:      ShareKDFParams.Iterations,
+		Parallel:  ShareKDFParams.Parallelism,
+		KeyLen:    ShareKDFParams.KeyLength,
+	}
+
+	t.Run("valid parameters", func(t *testing.T) {
+		err := ValidateShareKDFParams(validParams)
+		if err != nil {
+			t.Errorf("ValidateShareKDFParams failed on valid params: %v", err)
+		}
+	})
+
+	t.Run("missing parameters block", func(t *testing.T) {
+		err := ValidateShareKDFParams(nil)
+		if err == nil {
+			t.Error("ValidateShareKDFParams should fail on nil block")
+		}
+	})
+
+	t.Run("unsupported KDF algorithm", func(t *testing.T) {
+		p := *validParams
+		p.Algorithm = "bcrypt"
+		err := ValidateShareKDFParams(&p)
+		if err == nil {
+			t.Error("ValidateShareKDFParams should fail on unsupported algorithm")
+		}
+	})
+
+	t.Run("memory cost below system floor", func(t *testing.T) {
+		p := *validParams
+		if p.MemoryKiB > 1024 {
+			p.MemoryKiB = UnifiedArgonSecure.Memory - 1
+			err := ValidateShareKDFParams(&p)
+			if err == nil {
+				t.Error("ValidateShareKDFParams should fail on memory below floor")
+			}
+		}
+	})
+
+	t.Run("time cost below system floor", func(t *testing.T) {
+		p := *validParams
+		if p.Time > 1 {
+			p.Time = UnifiedArgonSecure.Time - 1
+			err := ValidateShareKDFParams(&p)
+			if err == nil {
+				t.Error("ValidateShareKDFParams should fail on time below floor")
+			}
+		}
+	})
+
+	t.Run("parallelism below system floor", func(t *testing.T) {
+		p := *validParams
+		if p.Parallel > 1 {
+			p.Parallel = UnifiedArgonSecure.Threads - 1
+			err := ValidateShareKDFParams(&p)
+			if err == nil {
+				t.Error("ValidateShareKDFParams should fail on parallel below floor")
+			}
+		}
+	})
+
+	t.Run("key length below system floor", func(t *testing.T) {
+		p := *validParams
+		if p.KeyLen > 16 {
+			p.KeyLen = UnifiedArgonSecure.KeyLen - 1
+			err := ValidateShareKDFParams(&p)
+			if err == nil {
+				t.Error("ValidateShareKDFParams should fail on key length below floor")
+			}
+		}
+	})
+}

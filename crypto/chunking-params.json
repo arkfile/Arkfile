@@ -1,8 +1,6 @@
 {
   "plaintextChunkSizeBytes": 16777216,
   "envelope": {
-    "version": 1,
-    "headerSizeBytes": 2,
     "keyTypes": {
       "account": 1,
       "custom": 2

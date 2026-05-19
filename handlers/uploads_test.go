@@ -210,3 +210,46 @@ func TestCreateUploadSession_FileIDConflictStableError(t *testing.T) {
 		assert.Contains(t, wireErr, "file_id_conflict")
 	})
 }
+
+// TestUploadChunk_EnforcesPaddingCeiling verifies that UploadChunk rejects a request
+// early when the database indicates a synthesized padded_size - total_size exceeding
+// the maxPaddingPerChunk (16 MiB) cap. This prevents DoS vectors where arbitrary allocations
+// are triggered by tampered DB values or malformed session properties (closes finding C-01).
+func TestUploadChunk_EnforcesPaddingCeiling(t *testing.T) {
+	username := "padding-test-user"
+	sessionID := "session-with-large-padding"
+
+	t.Run("padding exceeds maxPaddingPerChunk", func(t *testing.T) {
+		// Minimum chunk size check needs X-Chunk-Hash header, valid hash format, and some data
+		c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/uploads/"+sessionID+"/chunks/0", bytes.NewReader([]byte("chunk-payload")))
+		c.SetParamNames("sessionId", "chunkNumber")
+		c.SetParamValues(sessionID, "0")
+		c.Request().Header.Set("X-Chunk-Hash", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+		claims := &auth.Claims{Username: username}
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		c.Set("user", token)
+
+		// Mock session query return with massive padding: total_size = 100, padded_size = 20 * 1024 * 1024 (20 MiB of padding)
+		rows := sqlmock.NewRows([]string{
+			"owner_username", "file_id", "storage_id", "storage_upload_id", "status", "total_chunks", "total_size", "padded_size",
+		}).AddRow(
+			username, "file-id", "storage-id", "upload-id", "in_progress", 1, int64(100), int64(20*1024*1024),
+		)
+
+		mock.ExpectQuery(`SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks, total_size, padded_size FROM upload_sessions WHERE id = \?`).
+			WithArgs(sessionID).
+			WillReturnRows(rows)
+
+		err := UploadChunk(c)
+		require.NoError(t, err, "handler should write the 400 response itself")
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+		var resp APIResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		assert.False(t, resp.Success)
+		assert.Equal(t, "padding_too_large", resp.Error)
+
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}

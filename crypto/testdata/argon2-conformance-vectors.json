@@ -1,0 +1,9 @@
+{
+  "password": "arkfile-conformance-password-v1",
+  "salt_hex": "61726b66696c652d636f6e666f726d616e63652d73616c742d766563746f722d",
+  "m_kib": 65536,
+  "t": 3,
+  "p": 1,
+  "dk": 32,
+  "expected_hex": "fb81ad889abf9ad1057ba58e334aac3f773877ea704f438f704f993523f365e4"
+}

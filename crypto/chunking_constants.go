@@ -19,9 +19,7 @@ type ChunkingParams struct {
 
 // EnvelopeParams represents envelope header configuration
 type EnvelopeParams struct {
-	Version         int            `json:"version"`
-	HeaderSizeBytes int            `json:"headerSizeBytes"`
-	KeyTypes        KeyTypeMapping `json:"keyTypes"`
+	KeyTypes KeyTypeMapping `json:"keyTypes"`
 }
 
 // KeyTypeMapping maps password context names to envelope key type bytes
@@ -80,11 +78,6 @@ func PlaintextChunkSize() int64 {
 func AesGcmOverhead() int {
 	p := MustGetChunkingParams()
 	return p.AesGcm.NonceSizeBytes + p.AesGcm.TagSizeBytes
-}
-
-// EnvelopeHeaderSize returns the envelope header size in bytes (chunk 0 only)
-func EnvelopeHeaderSize() int {
-	return MustGetChunkingParams().Envelope.HeaderSizeBytes
 }
 
 // AesGcmTagSize returns the AES-GCM authentication tag size in bytes

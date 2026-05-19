@@ -97,6 +97,15 @@ func VerifyDownloadToken(downloadTokenBase64 string, expectedHashBase64 string) 
 	return hash == expectedHashBase64, nil
 }
 
+// ShareKDFParamsEmbedded defines the parameters used for recipient key derivation (finding D-12)
+type ShareKDFParamsEmbedded struct {
+	Algorithm string `json:"algorithm"` // "argon2id"
+	MemoryKiB uint32 `json:"m_kib"`
+	Time      uint32 `json:"t"`
+	Parallel  uint8  `json:"p"`
+	KeyLen    uint32 `json:"dk"`
+}
+
 // ShareEnvelope represents the decrypted content of a Share Envelope
 // This is a JSON structure containing the FEK, Download Token, and file metadata.
 // File metadata (filename, size, sha256) is included so share recipients can:
@@ -106,11 +115,35 @@ func VerifyDownloadToken(downloadTokenBase64 string, expectedHashBase64 string) 
 // The metadata is protected by the same AES-GCM-AAD encryption as the FEK,
 // so only someone with the share password can access it.
 type ShareEnvelope struct {
-	FEK           string `json:"fek"`                  // base64-encoded FEK
-	DownloadToken string `json:"download_token"`       // base64-encoded Download Token
-	Filename      string `json:"filename,omitempty"`   // plaintext filename (for share recipient preview)
-	SizeBytes     int64  `json:"size_bytes,omitempty"` // file size in bytes (for share recipient preview)
-	SHA256        string `json:"sha256,omitempty"`     // plaintext SHA256 hex digest (for share recipient integrity verification)
+	FEK           string                  `json:"fek"`                  // base64-encoded FEK
+	DownloadToken string                  `json:"download_token"`       // base64-encoded Download Token
+	Filename      string                  `json:"filename,omitempty"`   // plaintext filename (for share recipient preview)
+	SizeBytes     int64                   `json:"size_bytes,omitempty"` // file size in bytes (for share recipient preview)
+	SHA256        string                  `json:"sha256,omitempty"`     // plaintext SHA256 hex digest (for share recipient integrity verification)
+	KDFParams     *ShareKDFParamsEmbedded `json:"kdf_params,omitempty"` // embedded KDF params for verification (finding D-12)
+}
+
+// ValidateShareKDFParams enforces compile-time KDF parameter floors (finding D-12)
+func ValidateShareKDFParams(p *ShareKDFParamsEmbedded) error {
+	if p == nil {
+		return fmt.Errorf("missing KDF parameters block in share envelope")
+	}
+	if p.Algorithm != "argon2id" {
+		return fmt.Errorf("unsupported KDF algorithm: %s (expected argon2id)", p.Algorithm)
+	}
+	if p.MemoryKiB < UnifiedArgonSecure.Memory {
+		return fmt.Errorf("KDF memory parameter below system floor: %d < %d", p.MemoryKiB, UnifiedArgonSecure.Memory)
+	}
+	if p.Time < UnifiedArgonSecure.Time {
+		return fmt.Errorf("KDF iterations parameter below system floor: %d < %d", p.Time, UnifiedArgonSecure.Time)
+	}
+	if p.Parallel < UnifiedArgonSecure.Threads {
+		return fmt.Errorf("KDF parallelism parameter below system floor: %d < %d", p.Parallel, UnifiedArgonSecure.Threads)
+	}
+	if p.KeyLen < UnifiedArgonSecure.KeyLen {
+		return fmt.Errorf("KDF derived key length below system floor: %d < %d", p.KeyLen, UnifiedArgonSecure.KeyLen)
+	}
+	return nil
 }
 
 // GenerateDownloadToken generates a cryptographically secure 32-byte Download Token
@@ -132,6 +165,13 @@ func CreateShareEnvelope(fek, downloadToken []byte, filename string, sizeBytes i
 		Filename:      filename,
 		SizeBytes:     sizeBytes,
 		SHA256:        sha256hex,
+		KDFParams: &ShareKDFParamsEmbedded{
+			Algorithm: "argon2id",
+			MemoryKiB: ShareKDFParams.Memory,
+			Time:      ShareKDFParams.Iterations,
+			Parallel:  ShareKDFParams.Parallelism,
+			KeyLen:    ShareKDFParams.KeyLength,
+		},
 	}
 
 	envelopeJSON, err := json.Marshal(envelope)
@@ -152,6 +192,11 @@ func ParseShareEnvelope(envelopeJSON []byte) (*ShareEnvelope, error) {
 	// Validate required fields
 	if envelope.FEK == "" || envelope.DownloadToken == "" {
 		return nil, fmt.Errorf("invalid envelope: missing required fields")
+	}
+
+	// Validate KDF parameters (finding D-12)
+	if err := ValidateShareKDFParams(envelope.KDFParams); err != nil {
+		return nil, fmt.Errorf("invalid KDF parameters in envelope: %w", err)
 	}
 
 	return &envelope, nil

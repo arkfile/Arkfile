@@ -41,6 +41,11 @@ var (
 // item 4.
 const maxInProgressUploadSessionsPerUser = 4
 
+// Max allocation defense-in-depth ceiling for appended padding chunk-obscuring bytes.
+// Prevents active database/session tampering from triggering an enormous memory allocation
+// on completing the last chunk upload. Closes finding C-01 (remediation threat-model cap).
+const maxPaddingPerChunk = 16 * 1024 * 1024 // 16 MiB
+
 // CreateUploadSession initializes a new chunked upload.
 //
 // Phase C: the client mints the file_id as a UUID v4 before encrypting any
@@ -570,6 +575,13 @@ func UploadChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read session padded_size")
 	}
 
+	// Reject early if padding size exceeds maxPaddingPerChunk (finding C-01)
+	if paddedSize > totalSize {
+		if paddedSize-totalSize > maxPaddingPerChunk {
+			return JSONErrorCode(c, http.StatusBadRequest, "padding_too_large", "Padding size exceeds maximum allowed limit (16 MiB)")
+		}
+	}
+
 	// Verify ownership
 	if ownerUsername != username {
 		return echo.NewHTTPError(http.StatusForbidden, "Not authorized for this upload session")
@@ -651,6 +663,9 @@ func UploadChunk(c echo.Context) error {
 	uploadData := chunkData
 	if chunkNumber == totalChunks-1 && paddedSize > totalSize {
 		paddingSize := paddedSize - totalSize
+		if paddingSize > maxPaddingPerChunk {
+			return JSONErrorCode(c, http.StatusBadRequest, "padding_too_large", "Padding size exceeds maximum allowed limit (16 MiB)")
+		}
 		paddingBytes := make([]byte, paddingSize)
 		if _, randErr := cryptoRand.Read(paddingBytes); randErr != nil {
 			logging.ErrorLogger.Printf("Failed to generate padding bytes for session %s: %v", sessionID, randErr)

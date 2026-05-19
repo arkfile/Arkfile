@@ -277,3 +277,90 @@ describe('decryptShareEnvelope failure cases', () => {
     ).rejects.toThrow(DecryptionError);
   });
 });
+
+// ============================================================================
+// KDF parameter floor checks (finding D-12)
+// ============================================================================
+
+describe('KDF floor and envelope validation', () => {
+  beforeAll(() => installFetchMock());
+  afterAll(() => removeFetchMock());
+
+  test('validateAgainstFloor passes on valid params', async () => {
+    const { validateAgainstFloor } = await import('../crypto/floors');
+    expect(() =>
+      validateAgainstFloor({
+        algorithm: 'argon2id',
+        m_kib: 65536,
+        t: 3,
+        p: 1,
+        dk: 32,
+      })
+    ).not.toThrow();
+  });
+
+  test('validateAgainstFloor rejects unsupported algorithm', async () => {
+    const { validateAgainstFloor } = await import('../crypto/floors');
+    expect(() =>
+      validateAgainstFloor({
+        algorithm: 'scrypt',
+        m_kib: 65536,
+        t: 3,
+        p: 1,
+        dk: 32,
+      })
+    ).toThrow(DecryptionError);
+  });
+
+  test('validateAgainstFloor rejects sub-floor memoryCost', async () => {
+    const { validateAgainstFloor } = await import('../crypto/floors');
+    expect(() =>
+      validateAgainstFloor({
+        algorithm: 'argon2id',
+        m_kib: 1024, // below 65536 floor
+        t: 3,
+        p: 1,
+        dk: 32,
+      })
+    ).toThrow(/KDF memory parameter/);
+  });
+
+  test('validateAgainstFloor rejects sub-floor iterations (timeCost)', async () => {
+    const { validateAgainstFloor } = await import('../crypto/floors');
+    expect(() =>
+      validateAgainstFloor({
+        algorithm: 'argon2id',
+        m_kib: 65536,
+        t: 1, // below 3 floor
+        p: 1,
+        dk: 32,
+      })
+    ).toThrow(/KDF iterations/);
+  });
+
+  test('validateAgainstFloor rejects sub-floor parallelism', async () => {
+    const { validateAgainstFloor } = await import('../crypto/floors');
+    expect(() =>
+      validateAgainstFloor({
+        algorithm: 'argon2id',
+        m_kib: 65536,
+        t: 3,
+        p: 0, // below 1 floor
+        dk: 32,
+      })
+    ).toThrow(/KDF parallelism/);
+  });
+
+  test('validateAgainstFloor rejects sub-floor keyLength', async () => {
+    const { validateAgainstFloor } = await import('../crypto/floors');
+    expect(() =>
+      validateAgainstFloor({
+        algorithm: 'argon2id',
+        m_kib: 65536,
+        t: 3,
+        p: 1,
+        dk: 16, // below 32 floor
+      })
+    ).toThrow(/derived key length/);
+  });
+});

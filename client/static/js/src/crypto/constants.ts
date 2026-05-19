@@ -19,35 +19,35 @@
  * Changing them will make existing encrypted files unreadable.
  */
 
-interface Argon2Config {
-  memoryCostKiB: number;
-  timeCost: number;
-  parallelism: number;
-  keyLength: number;
-}
+import {
+  resolveArgon2Params,
+  resolveChunkingParams,
+  type Argon2Params as Argon2Config,
+  type ChunkingConfig,
+} from './floors.js';
 
 let cachedArgon2Config: Argon2Config | null = null;
 
 /**
- * Load Argon2id parameters from API endpoint
- * This ensures client and server always use the same embedded configuration
+ * Load Argon2id parameters (fetch with compile-time floor fallback, finding B-01 / E1)
  */
 async function loadArgon2Config(): Promise<Argon2Config> {
   if (cachedArgon2Config !== null) {
     return cachedArgon2Config;
   }
 
+  let config: Partial<Argon2Config> = {};
   try {
     const response = await fetch('/api/config/argon2');
-    if (!response.ok) {
-      throw new Error(`Failed to load Argon2 config: ${response.statusText}`);
+    if (response.ok) {
+      config = await response.json();
     }
-    const config: Argon2Config = await response.json();
-    cachedArgon2Config = config;
-    return config;
   } catch (error) {
-    throw new Error(`Failed to load Argon2id parameters from API: ${error}`);
+    console.warn(`Advisory fetch of /api/config/argon2 failed (falling back to floor): ${error}`);
   }
+
+  cachedArgon2Config = resolveArgon2Params(config);
+  return cachedArgon2Config;
 }
 
 /**
@@ -159,45 +159,28 @@ export const AES_GCM_CONFIG = {
  * the entire application (Go server, Go CLI, and TypeScript client).
  */
 
-export interface ChunkingConfig {
-  plaintextChunkSizeBytes: number;
-  envelope: {
-    version: number;
-    headerSizeBytes: number;
-    keyTypes: {
-      account: number;
-      custom: number;
-    };
-  };
-  aesGcm: {
-    nonceSizeBytes: number;
-    tagSizeBytes: number;
-    keySizeBytes: number;
-  };
-}
-
 let cachedChunkingConfig: ChunkingConfig | null = null;
 
 /**
- * Load chunking parameters from API endpoint
- * This ensures client and server always use the same embedded configuration
+ * Load chunking parameters (fetch with compile-time floor fallback, finding B-03 / E1)
  */
 async function loadChunkingConfig(): Promise<ChunkingConfig> {
   if (cachedChunkingConfig !== null) {
     return cachedChunkingConfig;
   }
 
+  let config: Partial<ChunkingConfig> = {};
   try {
     const response = await fetch('/api/config/chunking');
-    if (!response.ok) {
-      throw new Error(`Failed to load chunking config: ${response.statusText}`);
+    if (response.ok) {
+      config = await response.json();
     }
-    const config: ChunkingConfig = await response.json();
-    cachedChunkingConfig = config;
-    return config;
   } catch (error) {
-    throw new Error(`Failed to load chunking parameters from API: ${error}`);
+    console.warn(`Advisory fetch of /api/config/chunking failed (falling back to floor): ${error}`);
   }
+
+  cachedChunkingConfig = resolveChunkingParams(config);
+  return cachedChunkingConfig;
 }
 
 /**

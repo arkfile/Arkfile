@@ -8,41 +8,31 @@
  * No zxcvbn, no entropy, no strength scores — pass/fail only.
  */
 
-/**
- * Password requirements configuration (matches Go PasswordRequirements)
- */
-interface PasswordConfig {
-  minAccountPasswordLength: number;
-  minCustomPasswordLength: number;
-  minSharePasswordLength: number;
-  maxPasswordLength: number;
-  minCharacterClassesRequired: number;
-  specialCharacters: string;
-}
+import { resolvePasswordConfig, type PasswordConfig } from './floors.js';
 
 // Password requirements - loaded from config file
 let PASSWORD_CONFIG: PasswordConfig | null = null;
 
 /**
- * Load password requirements from API endpoint.
- * Ensures client and server always use the same embedded configuration.
+ * Load password requirements (fetch with compile-time floor fallback, finding B-19 / E1)
  */
 async function loadPasswordConfig(): Promise<PasswordConfig> {
   if (PASSWORD_CONFIG !== null) {
     return PASSWORD_CONFIG;
   }
 
+  let config: Partial<PasswordConfig> = {};
   try {
     const response = await fetch('/api/config/password-requirements');
-    if (!response.ok) {
-      throw new Error(`Failed to load password config: ${response.statusText}`);
+    if (response.ok) {
+      config = await response.json();
     }
-    const config: PasswordConfig = await response.json();
-    PASSWORD_CONFIG = config;
-    return config;
   } catch (error) {
-    throw new Error(`Failed to load password requirements from API: ${error}`);
+    console.warn(`Advisory fetch of /api/config/password-requirements failed (falling back to floor): ${error}`);
   }
+
+  PASSWORD_CONFIG = resolvePasswordConfig(config);
+  return PASSWORD_CONFIG;
 }
 
 /**

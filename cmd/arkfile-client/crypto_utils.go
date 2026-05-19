@@ -194,7 +194,7 @@ func unwrapFEK(encryptedFEKB64 string, kek []byte, fileID string) ([]byte, strin
 		return nil, "", fmt.Errorf("failed to decode encrypted FEK: %w", err)
 	}
 
-	headerSize := crypto.EnvelopeHeaderSize()
+	const headerSize = 2
 	if len(encryptedFEK) < headerSize {
 		return nil, "", fmt.Errorf("encrypted FEK too short for envelope header")
 	}

@@ -31,6 +31,7 @@ import {
   wrapError,
 } from '../crypto/errors.js';
 import { validateSharePassword, type PasswordValidationResult } from '../crypto/password-validation.js';
+import { validateAgainstFloor, type ShareKDFParamsEmbedded } from '../crypto/floors.js';
 
 // ============================================================================
 // Types
@@ -94,6 +95,7 @@ interface ShareEnvelopeJSON {
   filename?: string;      // plaintext filename (for preview before download)
   size_bytes?: number;    // file size in bytes (for preview before download)
   sha256?: string;        // plaintext SHA256 hex digest (for post-download verification)
+  kdf_params?: ShareKDFParamsEmbedded; // embedded KDF params for verification (finding D-12)
 }
 
 /**
@@ -156,10 +158,20 @@ export async function encryptFEKForShare(
     // Generate a random Download Token (32 bytes)
     const downloadToken = randomBytes(32);
     
+    // Get Argon2id parameters from config
+    const argon2Params = await getArgon2Params();
+    
     // Build JSON envelope matching Go's crypto.ShareEnvelope format
     const envelopeJSON: ShareEnvelopeJSON = {
       fek: toBase64(fek),
       download_token: toBase64(downloadToken),
+      kdf_params: {
+        algorithm: 'argon2id',
+        m_kib: argon2Params.memoryCost,
+        t: argon2Params.timeCost,
+        p: argon2Params.parallelism,
+        dk: argon2Params.keyLength,
+      },
     };
     
     // Include file metadata if provided
@@ -171,9 +183,6 @@ export async function encryptFEKForShare(
     
     // Serialize to JSON bytes (matches Go's json.Marshal)
     const payload = new TextEncoder().encode(JSON.stringify(envelopeJSON));
-    
-    // Get Argon2id parameters from config
-    const argon2Params = await getArgon2Params();
     
     // Derive encryption key from share password using Argon2id
     const keyDerivation = await deriveKeyArgon2id({
@@ -337,6 +346,12 @@ export async function decryptShareEnvelope(
     if (!envelope.fek || !envelope.download_token) {
       throw new DecryptionError('Invalid share envelope: missing fek or download_token');
     }
+
+    // Validate KDF parameters (finding D-12)
+    if (!envelope.kdf_params) {
+      throw new DecryptionError('Invalid share envelope: missing KDF parameters');
+    }
+    await validateAgainstFloor(envelope.kdf_params);
     
     // Decode FEK from base64
     const fek = fromBase64(envelope.fek);
