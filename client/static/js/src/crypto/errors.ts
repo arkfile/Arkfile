@@ -124,19 +124,6 @@ export class CorruptedDataError extends DecryptionError {
   }
 }
 
-/**
- * Error when file is too large for encryption
- */
-export class FileTooLargeError extends EncryptionError {
-  constructor(size: number, maxSize: number) {
-    super(
-      `File size ${size} bytes exceeds maximum ${maxSize} bytes`,
-      { size, maxSize }
-    );
-    this.name = 'FileTooLargeError';
-  }
-}
-
 // ============================================================================
 // OPAQUE Protocol Errors
 // ============================================================================
@@ -472,10 +459,6 @@ export function getUserFriendlyMessage(error: unknown): string {
   
   if (error instanceof ExpiredKeyError) {
     return 'Your session has expired. Please log in again.';
-  }
-  
-  if (error instanceof FileTooLargeError) {
-    return 'The file is too large to encrypt. Maximum size is 5GB.';
   }
   
   if (error instanceof InvalidPasswordError) {

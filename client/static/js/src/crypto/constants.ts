@@ -257,9 +257,6 @@ export const FILE_ENCRYPTION_VERSION = 1;
 export const LIMITS = {
   /** Maximum time to wait for key derivation (ms) */
   KEY_DERIVATION_TIMEOUT: 30000,
-  
-  /** Maximum file size for client-side encryption (bytes) - 5GB */
-  MAX_FILE_SIZE: 5 * 1024 * 1024 * 1024,
 } as const;
 
 // ============================================================================

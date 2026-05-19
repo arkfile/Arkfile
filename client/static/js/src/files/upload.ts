@@ -33,6 +33,13 @@ import {
   concatBytes,
 } from '../crypto/primitives.js';
 import {
+  buildChunkAAD,
+  buildFEKEnvelopeAAD,
+  buildMetadataFieldAAD,
+  AAD_FIELD_FILENAME,
+  AAD_FIELD_SHA256,
+} from '../crypto/aad.js';
+import {
   deriveFileEncryptionKey,
   deriveFileEncryptionKeyWithCache,
   getCachedAccountKey,
@@ -129,6 +136,17 @@ interface UploadSession {
 const TOKEN_REFRESH_THRESHOLD_SECONDS = 5 * 60;
 
 /**
+ * Maximum number of times uploadFile() will retry init with a freshly minted
+ * UUID v4 after the server returns HTTP 409 with the stable error code
+ * `file_id_conflict`. Matches the CLI's identical retry budget.
+ *
+ * UUID v4 collisions are vanishingly rare in practice, so this should never
+ * exhaust under normal conditions. If it does, surface a hard error so the
+ * developer / operator notices.
+ */
+const FILE_ID_CONFLICT_MAX_RETRIES = 3;
+
+/**
  * AuthExpiredError signals that the user's session is no longer usable
  * (refresh failed or refresh token rejected). Always fatal: the batch loop
  * stops immediately and the UI surfaces a "session expired" message.
@@ -172,6 +190,22 @@ export class TooManyInProgressUploadsError extends Error {
   constructor(message = 'Too many uploads already in progress. Cancel one or wait for it to complete.') {
     super(message);
     this.name = 'TooManyInProgressUploadsError';
+  }
+}
+
+/**
+ * FileIDConflictError carries the server's stable error code
+ * `file_id_conflict` (HTTP 409). This is thrown by apiRequest() to let
+ * uploadFile() catch it and retry init with a freshly-minted UUID v4.
+ * After the retry budget is exhausted, it bubbles up as a hard error.
+ *
+ * Not fatal in the batch-abort sense -- the next file in the batch can
+ * still proceed normally.
+ */
+export class FileIDConflictError extends Error {
+  constructor(message = 'file_id conflict') {
+    super(message);
+    this.name = 'FileIDConflictError';
   }
 }
 
@@ -265,6 +299,9 @@ async function apiRequest<T>(
     if (response.status === 429 && errorCode === 'too_many_in_progress_uploads') {
       throw new TooManyInProgressUploadsError(errorMessage);
     }
+    if (response.status === 409 && errorCode === 'file_id_conflict') {
+      throw new FileIDConflictError(errorMessage);
+    }
     if (response.status === 403) {
       const lower = errorMessage.toLowerCase();
       if (lower.includes('storage limit') || lower.includes('quota')) {
@@ -282,42 +319,51 @@ async function apiRequest<T>(
 }
 
 /**
- * Encrypts data with AES-256-GCM (no AAD for file data)
- * Returns: [nonce (12)][ciphertext][tag (16)]
+ * Encrypts a file-content chunk with AES-256-GCM, AAD-bound to its position
+ * in this specific file (Phase C). Output layout: [nonce(12)][ciphertext][tag(16)].
+ *
+ * AAD = BuildChunkAAD(fileID, chunkIndex, totalChunks). This makes every
+ * chunk authenticated against (this file, this index, this total) so the
+ * server cannot reorder, substitute across files, or truncate.
  */
-async function encryptChunk(data: Uint8Array, key: Uint8Array): Promise<Uint8Array> {
-  const result = await encryptAESGCM({
-    data,
-    key,
-    // No AAD for file chunks - matches Go implementation
-  });
-  
+async function encryptChunk(
+  data: Uint8Array,
+  key: Uint8Array,
+  fileID: string,
+  chunkIndex: number,
+  totalChunks: number,
+): Promise<Uint8Array> {
+  const aad = buildChunkAAD(fileID, BigInt(chunkIndex), BigInt(totalChunks));
+  const result = await encryptAESGCM({ data, key, aad });
+
   // Combine: [nonce][ciphertext][tag]
   return concatBytes(result.iv, result.ciphertext, result.tag);
 }
 
 /**
- * Encrypts metadata (filename or SHA256) with AES-256-GCM
- * Returns separate nonce and ciphertext+tag for API format
- * 
- * NOTE: Metadata is always encrypted with the account-derived key,
- * not the FEK. This matches the Go CLI implementation.
+ * Encrypts a metadata field (filename or SHA-256) with AES-256-GCM, AAD-bound
+ * to (file_id, field-label, owner_username) so the server cannot move metadata
+ * between files / fields / users.
+ *
+ * Returns separate nonce and ciphertext+tag for the existing API shape.
+ * Metadata is always encrypted with the account-derived key (mirrors the Go
+ * CLI implementation).
  */
 async function encryptMetadata(
   data: string,
-  key: Uint8Array
+  key: Uint8Array,
+  fileID: string,
+  fieldName: string,
+  ownerUsername: string,
 ): Promise<{ encrypted: string; nonce: string }> {
   const dataBytes = new TextEncoder().encode(data);
-  
-  const result = await encryptAESGCM({
-    data: dataBytes,
-    key,
-    // No AAD for metadata - matches Go implementation
-  });
-  
+  const aad = buildMetadataFieldAAD(fileID, fieldName, ownerUsername);
+
+  const result = await encryptAESGCM({ data: dataBytes, key, aad });
+
   // Combine ciphertext and tag
   const encryptedWithTag = concatBytes(result.ciphertext, result.tag);
-  
+
   return {
     encrypted: toBase64(encryptedWithTag),
     nonce: toBase64(result.iv),
@@ -325,9 +371,12 @@ async function encryptMetadata(
 }
 
 /**
- * Creates the 2-byte envelope header
+ * Creates the 2-byte FEK envelope header.
  * Format: [version (1 byte)][keyType (1 byte)]
- * Values loaded from chunking config (single source of truth)
+ *
+ * Phase C: this header is used ONLY on the FEK envelope (stored in
+ * file_metadata.encrypted_fek). File-data chunks no longer carry a
+ * per-chunk envelope header (Step 0 audit Outcome A -- uniform chunks).
  */
 function createEnvelopeHeader(envelopeVersion: number, keyType: number): Uint8Array {
   return new Uint8Array([envelopeVersion, keyType]);
@@ -398,20 +447,22 @@ async function computeStreamingSHA256(
 
 /**
  * Calculates total encrypted size deterministically from plaintext file size.
- * Pure math -- no file reading needed. Mirrors Go CLI's calculateTotalEncryptedSize().
- * 
- * Each chunk gets: nonce (12) + ciphertext (same as plaintext) + tag (16) = +28 bytes overhead
- * Chunk 0 also gets a 2-byte envelope header prepended.
+ * Pure math -- no file reading needed. Mirrors Go CLI's
+ * calculateTotalEncryptedSize() under Phase C uniform-chunk layout.
+ *
+ * Phase C (Step 0 audit Outcome A): every chunk has the uniform shape
+ * [nonce(12)][ciphertext][tag(16)] -- 28 bytes overhead per chunk and
+ * NO chunk-0 envelope header. The FEK envelope's header lives in the
+ * `encrypted_fek` metadata column, not in the chunk stream.
  */
 function calculateTotalEncryptedSize(
   plaintextSize: number,
   chunkSize: number,
   overhead: number,
-  headerSize: number
 ): number {
   if (plaintextSize === 0) {
-    // Even empty files get one chunk with overhead + header
-    return headerSize + overhead;
+    // Even empty files get one (empty-plaintext) chunk with GCM overhead.
+    return overhead;
   }
 
   const numFullChunks = Math.floor(plaintextSize / chunkSize);
@@ -419,11 +470,11 @@ function calculateTotalEncryptedSize(
 
   if (lastChunkPlaintext === 0) {
     // All chunks are full
-    return numFullChunks * (chunkSize + overhead) + headerSize;
+    return numFullChunks * (chunkSize + overhead);
   }
 
   // Full chunks + partial last chunk
-  return numFullChunks * (chunkSize + overhead) + (lastChunkPlaintext + overhead) + headerSize;
+  return numFullChunks * (chunkSize + overhead) + (lastChunkPlaintext + overhead);
 }
 
 // ============================================================================
@@ -499,7 +550,6 @@ export async function uploadFile(
     const tagSize = chunkCfg.aesGcm.tagSizeBytes;
     const aesGcmOverhead = nonceSize + tagSize; // 12 + 16 = 28
     const envelopeVersion = chunkCfg.envelope.version;
-    const envelopeHeaderSize = chunkCfg.envelope.headerSizeBytes;
     const keyTypeVal = passwordType === 'account'
       ? chunkCfg.envelope.keyTypes.account
       : chunkCfg.envelope.keyTypes.custom;
@@ -565,65 +615,111 @@ export async function uploadFile(
     }
 
     // ================================================================
-    // Step 5: Encrypt metadata with ACCOUNT key (always, regardless of password type)
+    // Step 5: Generate client-side file_id (Phase C) and encrypt metadata
+    // with ACCOUNT key (always, regardless of password type).
+    //
+    // The file_id is needed up front because it is bound into AAD for the
+    // metadata fields, the FEK envelope, and every chunk. The server
+    // validates strict UUID v4 + global uniqueness; on a 409
+    // `file_id_conflict` the surrounding init+retry loop mints a fresh UUID
+    // and retries up to FILE_ID_CONFLICT_MAX_RETRIES times.
     // ================================================================
     reportProgress({ phase: 'encrypting', percent: 16 });
     stepStart = performance.now();
 
-    const encryptedFilename = await encryptMetadata(file.name, accountKey);
-    const encryptedSha256 = await encryptMetadata(plaintextHashHex, accountKey);
-
-    // Encrypt FEK with the appropriate KEK
-    const encryptedFekResult = await encryptAESGCM({
-      data: fek,
-      key: fekEncryptionKey,
-      // No AAD for FEK encryption - matches Go implementation
-    });
-
-    // Prepend 2-byte envelope header to encrypted FEK
-    // Format: [version(1)][keyType(1)][nonce(12)][ciphertext][tag(16)]
-    // This matches crypto.EncryptFEK() in Go
-    const envelopeHeader = createEnvelopeHeader(envelopeVersion, keyTypeVal);
-    const encryptedFek = concatBytes(
-      envelopeHeader,
-      encryptedFekResult.iv,
-      encryptedFekResult.ciphertext,
-      encryptedFekResult.tag
-    );
-    logTiming('Step 5: Metadata encrypted', stepStart);
-
-    // ================================================================
-    // Step 6: Calculate total encrypted size mathematically
-    // No need to encrypt all chunks first -- mirrors Go CLI's calculateTotalEncryptedSize()
-    // ================================================================
-    const totalEncryptedSize = calculateTotalEncryptedSize(
-      file.size, CHUNK_SIZE, aesGcmOverhead, envelopeHeaderSize
-    );
     const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
-    console.log(`[upload] Step 6: Total encrypted size: ${(totalEncryptedSize / 1024 / 1024).toFixed(1)} MB, chunks: ${totalChunks}`);
+    const totalEncryptedSize = calculateTotalEncryptedSize(
+      file.size, CHUNK_SIZE, aesGcmOverhead,
+    );
+    console.log(`[upload] Step 5/6: Total encrypted size: ${(totalEncryptedSize / 1024 / 1024).toFixed(1)} MB, chunks: ${totalChunks}`);
 
     // ================================================================
-    // Step 7: Create upload session
+    // Step 7: Init upload session with retry on file_id_conflict.
+    // Encrypts metadata + FEK under AAD bound to the candidate fileID.
     // ================================================================
     reportProgress({ phase: 'init-session', percent: 18 });
     stepStart = performance.now();
     console.log('[upload] Step 7: Initializing upload session...');
 
-    const session = await apiRequest<UploadSession>('/api/uploads/init', {
-      method: 'POST',
-      body: JSON.stringify({
-        encrypted_filename: encryptedFilename.encrypted,
-        filename_nonce: encryptedFilename.nonce,
-        encrypted_sha256sum: encryptedSha256.encrypted,
-        sha256sum_nonce: encryptedSha256.nonce,
-        encrypted_fek: toBase64(encryptedFek),
-        total_size: totalEncryptedSize,
-        chunk_size: CHUNK_SIZE,
-        password_hint: passwordHint || '',
-        password_type: passwordType,
-      }),
-    });
-    logTiming(`Step 7: Upload session created (${session.session_id})`, stepStart);
+    let session: UploadSession | undefined;
+    let chosenFileID = '';
+    let attempt = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      attempt += 1;
+      const candidateFileID = crypto.randomUUID();
+
+      // Encrypt metadata + FEK under AAD bound to this candidate fileID.
+      // If init returns file_id_conflict we throw away these ciphertexts
+      // and re-encrypt under the next candidate; this is cheap relative
+      // to chunk uploads, and metadata is small.
+      const encryptedFilename = await encryptMetadata(
+        file.name, accountKey, candidateFileID, AAD_FIELD_FILENAME, username,
+      );
+      const encryptedSha256 = await encryptMetadata(
+        plaintextHashHex, accountKey, candidateFileID, AAD_FIELD_SHA256, username,
+      );
+
+      // Encrypt FEK with the appropriate KEK + FEK-envelope AAD.
+      // Wire layout: [version(1)][keyType(1)][nonce(12)][ciphertext][tag(16)]
+      // (matches crypto.EncryptFEK() in Go).
+      const fekEnvelopeHeader = createEnvelopeHeader(envelopeVersion, keyTypeVal);
+      const fekKeyTypeByte = fekEnvelopeHeader[1];
+      const fekAad = buildFEKEnvelopeAAD(candidateFileID, fekKeyTypeByte);
+      const encryptedFekResult = await encryptAESGCM({
+        data: fek,
+        key: fekEncryptionKey,
+        aad: fekAad,
+      });
+      const encryptedFek = concatBytes(
+        fekEnvelopeHeader,
+        encryptedFekResult.iv,
+        encryptedFekResult.ciphertext,
+        encryptedFekResult.tag,
+      );
+
+      try {
+        session = await apiRequest<UploadSession>('/api/uploads/init', {
+          method: 'POST',
+          body: JSON.stringify({
+            file_id: candidateFileID,
+            encrypted_filename: encryptedFilename.encrypted,
+            filename_nonce: encryptedFilename.nonce,
+            encrypted_sha256sum: encryptedSha256.encrypted,
+            sha256sum_nonce: encryptedSha256.nonce,
+            encrypted_fek: toBase64(encryptedFek),
+            total_size: totalEncryptedSize,
+            chunk_size: CHUNK_SIZE,
+            password_hint: passwordHint || '',
+            password_type: passwordType,
+          }),
+        });
+        chosenFileID = candidateFileID;
+        // Server echoes the file_id back in the response; sanity-check.
+        if (session.file_id !== chosenFileID) {
+          throw new Error(
+            `Server echoed mismatched file_id: sent ${chosenFileID}, got ${session.file_id}`,
+          );
+        }
+        break;
+      } catch (err) {
+        if (err instanceof FileIDConflictError) {
+          if (attempt >= FILE_ID_CONFLICT_MAX_RETRIES) {
+            throw new Error(
+              `Upload init failed after ${attempt} file_id_conflict attempts. Try again later.`,
+            );
+          }
+          console.warn(`[upload] file_id_conflict on attempt ${attempt}, retrying with a fresh UUID`);
+          continue;
+        }
+        throw err;
+      }
+    }
+    if (!session) {
+      // Defensive: the loop exits only via successful break or throw.
+      throw new Error('Upload init failed: no session returned');
+    }
+    logTiming(`Step 7: Upload session created (${session.session_id}, file_id=${chosenFileID}, attempts=${attempt})`, stepStart);
 
     // ================================================================
     // Step 8: Streaming encrypt-and-upload loop
@@ -661,19 +757,11 @@ export async function uploadFile(
       const plaintext = new Uint8Array(chunkBuffer);
       const readTime = ((performance.now() - subStart) / 1000).toFixed(2);
 
-      // Encrypt chunk with FEK
+      // Encrypt chunk with FEK under per-chunk AAD bound to (fileID, i, totalChunks).
+      // Phase C Outcome A: uniform chunk layout [nonce][ct][tag], no chunk-0 header.
       subStart = performance.now();
-      const encryptedChunk = await encryptChunk(plaintext, fek);
+      const chunkToUpload = await encryptChunk(plaintext, fek, chosenFileID, i, totalChunks);
       const encryptTime = ((performance.now() - subStart) / 1000).toFixed(2);
-
-      // For chunk 0, prepend the envelope header
-      let chunkToUpload: Uint8Array;
-      if (i === 0) {
-        const chunkEnvelope = createEnvelopeHeader(envelopeVersion, keyTypeVal);
-        chunkToUpload = concatBytes(chunkEnvelope, encryptedChunk);
-      } else {
-        chunkToUpload = encryptedChunk;
-      }
 
       // Calculate chunk hash for server verification
       subStart = performance.now();

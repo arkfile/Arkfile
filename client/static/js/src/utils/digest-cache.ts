@@ -15,7 +15,8 @@
  *   Logout -> clearDigestCache
  */
 
-import { decryptAESGCM, fromBase64 } from '../crypto/primitives.js';
+import { decryptMetadataField } from '../crypto/metadata-helpers.js';
+import { AAD_FIELD_SHA256 } from '../crypto/aad.js';
 
 // ============================================================================
 // Storage key
@@ -46,46 +47,23 @@ function writeCache(cache: Record<string, string>): void {
   }
 }
 
-/**
- * Decrypts a single encrypted metadata field (filename or sha256sum).
- *
- * The server stores metadata split as:
- *   encrypted_sha256sum  — base64(ciphertext || tag)
- *   sha256sum_nonce      — base64(nonce)
- *
- * This matches how upload.ts encrypts with encryptMetadata():
- *   encrypted = base64(ciphertext || tag)
- *   nonce     = base64(iv)
- */
-async function decryptMetadataField(
-  encryptedBase64: string,
-  nonceBase64: string,
-  accountKey: Uint8Array
-): Promise<string> {
-  const encryptedWithTag = fromBase64(encryptedBase64);
-  const iv = fromBase64(nonceBase64);
-
-  // Split ciphertext and tag (last 16 bytes are the GCM auth tag)
-  if (encryptedWithTag.length < 16) {
-    throw new Error('Encrypted metadata too short');
-  }
-  const tagOffset = encryptedWithTag.length - 16;
-  const ciphertext = encryptedWithTag.slice(0, tagOffset);
-  const tag = encryptedWithTag.slice(tagOffset);
-
-  const result = await decryptAESGCM({ ciphertext, iv, tag, key: accountKey });
-  return new TextDecoder().decode(result.plaintext);
-}
-
 // ============================================================================
 // Public API
 // ============================================================================
 
 /**
  * Raw file entry as returned by GET /api/files
+ *
+ * Phase C: owner_username is required for metadata-field AAD
+ * reconstruction. The digest cache populates from the authenticated user's
+ * own files only, so in practice owner_username always equals the
+ * authenticated username; we still pull it from the server response rather
+ * than passing the auth-derived username separately, so the AAD is built
+ * from exactly the same value the server stored.
  */
 export interface RawFileEntry {
   file_id: string;
+  owner_username: string;
   encrypted_sha256sum: string;
   sha256sum_nonce: string;
 }
@@ -109,7 +87,10 @@ export async function populateDigestCache(
         const plaintext = await decryptMetadataField(
           file.encrypted_sha256sum,
           file.sha256sum_nonce,
-          accountKey
+          accountKey,
+          file.file_id,
+          AAD_FIELD_SHA256,
+          file.owner_username,
         );
         cache[file.file_id] = plaintext;
       }

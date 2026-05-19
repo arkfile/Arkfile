@@ -16,7 +16,6 @@ import {
   DecryptionError,
   AuthenticationError,
   CorruptedDataError,
-  FileTooLargeError,
   OpaqueError,
   OpaqueRegistrationError,
   OpaqueAuthenticationError,
@@ -113,12 +112,6 @@ describe('Error hierarchy', () => {
     const err = new CorruptedDataError('bad header');
     expect(err instanceof DecryptionError).toBe(true);
     expect(err.message).toContain('bad header');
-  });
-
-  test('FileTooLargeError extends EncryptionError', () => {
-    const err = new FileTooLargeError(10, 5);
-    expect(err instanceof EncryptionError).toBe(true);
-    expect(err.name).toBe('FileTooLargeError');
   });
 
   test('OpaqueRegistrationError extends OpaqueError', () => {
@@ -259,11 +252,6 @@ describe('getUserFriendlyMessage', () => {
   test('ExpiredKeyError → session expired', () => {
     const msg = getUserFriendlyMessage(new ExpiredKeyError('session', Date.now()));
     expect(msg).toContain('expired');
-  });
-
-  test('FileTooLargeError → max size message', () => {
-    const msg = getUserFriendlyMessage(new FileTooLargeError(10, 5));
-    expect(msg).toContain('too large');
   });
 
   test('InvalidPasswordError → check password', () => {

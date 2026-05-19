@@ -162,37 +162,44 @@ describe('clearDigestCache', () => {
 // ============================================================================
 
 describe('populateDigestCache', () => {
+  const OWNER = 'aliceusername'; // canonical owner_username for the test entries
+
+  // Encrypt plaintext digests under the Phase C metadata-field AAD =
+  // BuildMetadataFieldAAD(file_id, AAD_FIELD_SHA256, owner_username).
+  async function encryptShaField(
+    plaintext: string, key: Uint8Array, fileID: string, owner: string,
+  ) {
+    const { buildMetadataFieldAAD, AAD_FIELD_SHA256 } = await import('../crypto/aad');
+    const data = new TextEncoder().encode(plaintext);
+    const aad = buildMetadataFieldAAD(fileID, AAD_FIELD_SHA256, owner);
+    const result = await encryptAESGCM({ key, data, aad });
+    const combined = new Uint8Array(result.ciphertext.length + result.tag.length);
+    combined.set(result.ciphertext, 0);
+    combined.set(result.tag, result.ciphertext.length);
+    return {
+      encrypted: toBase64(combined),
+      nonce: toBase64(result.iv),
+    };
+  }
+
   test('decrypts and populates from encrypted file entries', async () => {
     const accountKey = randomBytes(32);
     const plaintext1 = 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890';
     const plaintext2 = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
 
-    // Encrypt the plaintext digests the same way upload.ts does:
-    // encrypted = base64(ciphertext || tag), nonce = base64(iv)
-    async function encryptField(plaintext: string, key: Uint8Array) {
-      const data = new TextEncoder().encode(plaintext);
-      const result = await encryptAESGCM({ key, data });
-      // Concatenate ciphertext + tag (matches upload.ts encryptMetadata format)
-      const combined = new Uint8Array(result.ciphertext.length + result.tag.length);
-      combined.set(result.ciphertext, 0);
-      combined.set(result.tag, result.ciphertext.length);
-      return {
-        encrypted: toBase64(combined),
-        nonce: toBase64(result.iv),
-      };
-    }
-
-    const enc1 = await encryptField(plaintext1, accountKey);
-    const enc2 = await encryptField(plaintext2, accountKey);
+    const enc1 = await encryptShaField(plaintext1, accountKey, 'file-aaa', OWNER);
+    const enc2 = await encryptShaField(plaintext2, accountKey, 'file-bbb', OWNER);
 
     const files = [
       {
         file_id: 'file-aaa',
+        owner_username: OWNER,
         encrypted_sha256sum: enc1.encrypted,
         sha256sum_nonce: enc1.nonce,
       },
       {
         file_id: 'file-bbb',
+        owner_username: OWNER,
         encrypted_sha256sum: enc2.encrypted,
         sha256sum_nonce: enc2.nonce,
       },
@@ -210,6 +217,7 @@ describe('populateDigestCache', () => {
     const files = [
       {
         file_id: 'file-aaa',
+        owner_username: OWNER,
         encrypted_sha256sum: '',
         sha256sum_nonce: '',
       },
@@ -226,17 +234,16 @@ describe('populateDigestCache', () => {
     const accountKey = randomBytes(32);
     const wrongKey = randomBytes(32);
 
-    const data = new TextEncoder().encode('somedigest');
-    const result = await encryptAESGCM({ key: wrongKey, data });
-    const combined = new Uint8Array(result.ciphertext.length + result.tag.length);
-    combined.set(result.ciphertext, 0);
-    combined.set(result.tag, result.ciphertext.length);
+    // Encrypt under wrongKey but tag with the correct AAD shape, so that
+    // populateDigestCache hits a key-mismatch failure (not an AAD failure).
+    const enc = await encryptShaField('somedigest', wrongKey, 'file-bad', OWNER);
 
     const files = [
       {
         file_id: 'file-bad',
-        encrypted_sha256sum: toBase64(combined),
-        sha256sum_nonce: toBase64(result.iv),
+        owner_username: OWNER,
+        encrypted_sha256sum: enc.encrypted,
+        sha256sum_nonce: enc.nonce,
       },
     ];
 

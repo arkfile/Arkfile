@@ -61,7 +61,11 @@ import { AESGCMDecryptor, verifyChunk } from '../crypto/aes-gcm';
 // Output: [nonce(12)][ciphertext][tag(16)]
 // ============================================================================
 
-async function encryptChunk(plaintext: Uint8Array, rawKey: Uint8Array): Promise<Uint8Array> {
+async function encryptChunk(
+  plaintext: Uint8Array,
+  rawKey: Uint8Array,
+  aad?: Uint8Array,
+): Promise<Uint8Array> {
   // Copy into fresh ArrayBuffer to satisfy Web Crypto BufferSource types
   const keyBuf = new Uint8Array(rawKey).buffer as ArrayBuffer;
   const key = await crypto.subtle.importKey(
@@ -73,11 +77,11 @@ async function encryptChunk(plaintext: Uint8Array, rawKey: Uint8Array): Promise<
   );
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const ptBuf = new Uint8Array(plaintext).buffer as ArrayBuffer;
-  const encrypted = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: nonce, tagLength: 128 },
-    key,
-    ptBuf
-  );
+  const params: AesGcmParams = { name: 'AES-GCM', iv: nonce, tagLength: 128 };
+  if (aad !== undefined) {
+    params.additionalData = new Uint8Array(aad).buffer as ArrayBuffer;
+  }
+  const encrypted = await crypto.subtle.encrypt(params, key, ptBuf);
   // Web Crypto returns ciphertext + tag concatenated
   const ciphertextWithTag = new Uint8Array(encrypted);
   // Output format: [nonce][ciphertext+tag]
@@ -216,5 +220,57 @@ describe('verifyChunk', () => {
 
     const valid = await verifyChunk(encrypted, key);
     expect(valid).toBe(false);
+  });
+});
+
+// ============================================================================
+// AAD binding (Phase C)
+// ============================================================================
+
+describe('decryptChunk AAD round-trip and mismatch detection', () => {
+  test('encrypt with AAD; decrypt with same AAD recovers plaintext', async () => {
+    const key = randomBytes(32);
+    const plaintext = new TextEncoder().encode('Hello AAD-bound chunk');
+    const aad = new TextEncoder().encode('phase-c|chunk-aad|same');
+
+    const encrypted = await encryptChunk(plaintext, key, aad);
+    const decryptor = await AESGCMDecryptor.fromRawKey(key);
+    const decrypted = await decryptor.decryptChunk(encrypted, aad);
+
+    expect(decrypted).toEqual(plaintext);
+  });
+
+  test('encrypt with AAD_A; decrypt with AAD_B throws', async () => {
+    const key = randomBytes(32);
+    const plaintext = new TextEncoder().encode('secret data');
+    const aadA = new TextEncoder().encode('phase-c|aad|A');
+    const aadB = new TextEncoder().encode('phase-c|aad|B');
+
+    const encrypted = await encryptChunk(plaintext, key, aadA);
+    const decryptor = await AESGCMDecryptor.fromRawKey(key);
+
+    await expect(decryptor.decryptChunk(encrypted, aadB)).rejects.toThrow('Decryption failed');
+  });
+
+  test('encrypt with AAD; decrypt with no AAD throws', async () => {
+    const key = randomBytes(32);
+    const plaintext = new TextEncoder().encode('AAD-bound but stripped on decrypt');
+    const aad = new TextEncoder().encode('phase-c|aad|present');
+
+    const encrypted = await encryptChunk(plaintext, key, aad);
+    const decryptor = await AESGCMDecryptor.fromRawKey(key);
+
+    await expect(decryptor.decryptChunk(encrypted)).rejects.toThrow('Decryption failed');
+  });
+
+  test('encrypt without AAD; decrypt with AAD throws', async () => {
+    const key = randomBytes(32);
+    const plaintext = new TextEncoder().encode('encrypted without AAD');
+    const aad = new TextEncoder().encode('phase-c|aad|unexpected');
+
+    const encrypted = await encryptChunk(plaintext, key);
+    const decryptor = await AESGCMDecryptor.fromRawKey(key);
+
+    await expect(decryptor.decryptChunk(encrypted, aad)).rejects.toThrow('Decryption failed');
   });
 });

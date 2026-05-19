@@ -15,33 +15,50 @@ import './setup';
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { StreamingDownloadManager } from '../files/streaming-download';
 import { randomBytes } from '../crypto/primitives';
+import { buildChunkAAD } from '../crypto/aad';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-async function buildEncryptedChunk(plaintext: Uint8Array, rawKey: Uint8Array): Promise<Uint8Array> {
+/**
+ * Build a Phase C chunk: AES-GCM([nonce(12)][ciphertext][tag(16)]) under
+ * AAD = BuildChunkAAD(fileID, chunkIndex, totalChunks). No chunk-0 envelope
+ * header (Step 0 audit Outcome A -- uniform chunks).
+ */
+async function buildEncryptedChunk(
+  plaintext: Uint8Array,
+  rawKey: Uint8Array,
+  fileID: string,
+  chunkIndex: number,
+  totalChunks: number,
+): Promise<Uint8Array> {
   const keyBuf = rawKey.buffer.slice(rawKey.byteOffset, rawKey.byteOffset + rawKey.byteLength) as ArrayBuffer;
   const key = await crypto.subtle.importKey('raw', keyBuf, { name: 'AES-GCM' }, false, ['encrypt']);
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const ptBuf = plaintext.buffer.slice(plaintext.byteOffset, plaintext.byteOffset + plaintext.byteLength) as ArrayBuffer;
-  const ciphertextWithTag = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, key, ptBuf));
+  const aad = buildChunkAAD(fileID, BigInt(chunkIndex), BigInt(totalChunks));
+  const aadBuf = new Uint8Array(aad).buffer as ArrayBuffer;
+  const ciphertextWithTag = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: nonce, additionalData: aadBuf },
+      key,
+      ptBuf,
+    ),
+  );
   const result = new Uint8Array(12 + ciphertextWithTag.length);
   result.set(nonce, 0);
   result.set(ciphertextWithTag, 12);
   return result;
 }
 
-function addEnvelopeHeader(chunk: Uint8Array): Uint8Array {
-  const result = new Uint8Array(2 + chunk.length);
-  result[0] = 0x01;
-  result[1] = 0x00;
-  result.set(chunk, 2);
-  return result;
-}
-
-/** Build a minimal valid share metadata response */
-function makeShareMeta(totalBytes: number, chunkCount: number, chunkSizeBytes: number) {
+/** Build a minimal valid share metadata response (Phase C: file_id required for chunk AAD). */
+function makeShareMeta(
+  totalBytes: number,
+  chunkCount: number,
+  chunkSizeBytes: number,
+  fileID = 'test-share-file',
+) {
   return {
-    file_id: 'test-share-file',
+    file_id: fileID,
     encrypted_filename: '',
     filename_nonce: '',
     encrypted_sha256sum: '',
@@ -131,15 +148,15 @@ describe('StreamingDownloadManager - Blob fallback path (SW unavailable)', () =>
   test('downloadSharedFile assembles a Blob and returns a blobUrl when SW is unavailable', async () => {
     const fek = randomBytes(32);
     const plaintext = new TextEncoder().encode('hello streaming world');
-    const encryptedChunk = await buildEncryptedChunk(plaintext, fek);
-    const withHeader = addEnvelopeHeader(encryptedChunk);
+    const FILE_ID = 'test-share-file';
+    const encryptedChunk = await buildEncryptedChunk(plaintext, fek, FILE_ID, 0, 1);
 
     setFetchMock(withChunkingConfig(async (url: string) => {
       if (url.includes('/metadata')) {
-        return new Response(JSON.stringify(makeShareMeta(plaintext.length, 1, plaintext.length)), { status: 200 });
+        return new Response(JSON.stringify(makeShareMeta(plaintext.length, 1, plaintext.length, FILE_ID)), { status: 200 });
       }
       if (url.includes('/chunks/0')) {
-        return new Response(withHeader.buffer as ArrayBuffer, { status: 200 });
+        return new Response(encryptedChunk.buffer as ArrayBuffer, { status: 200 });
       }
       return new Response('not found', { status: 404 });
     }));
@@ -211,13 +228,13 @@ describe('StreamingDownloadManager - owner download path', () => {
   test('returns failure when account key is missing', async () => {
     const fek = randomBytes(32);
     const plaintext = new TextEncoder().encode('test data');
-    const encryptedChunk = await buildEncryptedChunk(plaintext, fek);
-    const withHeader = addEnvelopeHeader(encryptedChunk);
+    const encryptedChunk = await buildEncryptedChunk(plaintext, fek, FAKE_FILE_ID, 0, 1);
 
     setFetchMock(async (url: string) => {
       if (url.includes('/meta')) {
         return new Response(JSON.stringify({
           file_id: FAKE_FILE_ID,
+          owner_username: 'someowner',
           encrypted_filename: 'AAAAAAAAAAAAAAAA',
           filename_nonce: btoa(String.fromCharCode(...new Uint8Array(12))),
           encrypted_sha256sum: 'AAAAAAAAAAAAAAAA',
@@ -234,7 +251,7 @@ describe('StreamingDownloadManager - owner download path', () => {
         }), { status: 200 });
       }
       if (url.includes('/chunks/0')) {
-        return new Response(withHeader.buffer as ArrayBuffer, { status: 200 });
+        return new Response(encryptedChunk.buffer as ArrayBuffer, { status: 200 });
       }
       return new Response('not found', { status: 404 });
     });

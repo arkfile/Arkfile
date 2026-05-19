@@ -27,6 +27,7 @@ import {
   getAccountKey,
   decryptMetadataField,
 } from '../crypto/metadata-helpers';
+import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256 } from '../crypto/aad';
 import { getCachedAccountKey } from '../crypto/file-encryption';
 
 // ============================================================================
@@ -36,6 +37,8 @@ import { getCachedAccountKey } from '../crypto/file-encryption';
 /** Single file entry as returned by GET /api/files */
 export interface ServerFileEntry {
   file_id: string;
+  /** Canonical owner_username (Phase C: required for metadata-field AAD). */
+  owner_username: string;
   storage_id: string;
   password_type: 'account' | 'custom';
   password_hint?: string;
@@ -164,6 +167,9 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
           file.encrypted_filename,
           file.filename_nonce,
           accountKey,
+          file.file_id,
+          AAD_FIELD_FILENAME,
+          file.owner_username,
         );
         entry.metadata_decrypted = true;
       } catch (err) {
@@ -175,6 +181,9 @@ export async function displayFiles(data: FilesResponse): Promise<void> {
           file.encrypted_sha256sum,
           file.sha256sum_nonce,
           accountKey,
+          file.file_id,
+          AAD_FIELD_SHA256,
+          file.owner_username,
         );
       } catch (err) {
         console.warn(`Failed to decrypt sha256 for ${file.file_id}:`, err);

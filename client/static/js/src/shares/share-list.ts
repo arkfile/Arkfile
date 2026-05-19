@@ -9,6 +9,7 @@ import { authenticatedFetch, getUsernameFromToken } from '../utils/auth.js';
 import { showError, showSuccess } from '../ui/messages.js';
 import { getCachedAccountKey } from '../crypto/file-encryption.js';
 import { decryptMetadataField } from '../crypto/metadata-helpers.js';
+import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256 } from '../crypto/aad.js';
 
 // ============================================================================
 // Types
@@ -41,6 +42,8 @@ interface ShareListResponse {
 interface MetadataBatchResponse {
   files: Record<string, {
     file_id: string;
+    /** Phase C: required for metadata-field AAD reconstruction. */
+    owner_username: string;
     password_type: string;
     filename_nonce: string;
     encrypted_filename: string;
@@ -140,8 +143,14 @@ export class ShareListUI {
 
           if (accountKey) {
             try {
-              enrichedShare.filename_local = await decryptMetadataField(meta.encrypted_filename, meta.filename_nonce, accountKey);
-              enrichedShare.sha256_local = await decryptMetadataField(meta.encrypted_sha256sum, meta.sha256sum_nonce, accountKey);
+              enrichedShare.filename_local = await decryptMetadataField(
+                meta.encrypted_filename, meta.filename_nonce, accountKey,
+                meta.file_id, AAD_FIELD_FILENAME, meta.owner_username,
+              );
+              enrichedShare.sha256_local = await decryptMetadataField(
+                meta.encrypted_sha256sum, meta.sha256sum_nonce, accountKey,
+                meta.file_id, AAD_FIELD_SHA256, meta.owner_username,
+              );
               enrichedShare.metadata_decrypted = true;
             } catch (err) {
               console.warn(`Failed to decrypt metadata for file ${share.file_id}`, err);

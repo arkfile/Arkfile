@@ -36,6 +36,10 @@ import { getAccountKey, decryptFEK } from '../crypto/metadata-helpers';
 const LOG_PREFIX = '[arkfile-download]';
 
 interface FileMetaResponse {
+  /** Canonical file_id (Phase C: required to reconstruct FEK / metadata AAD). */
+  file_id: string;
+  /** Canonical owner_username (Phase C: required for metadata-field AAD). */
+  owner_username: string;
   encrypted_filename: string;
   filename_nonce: string;
   encrypted_sha256sum: string;
@@ -118,7 +122,7 @@ export async function downloadFile(
 
       try {
         const tDec = Date.now();
-        fek = await decryptFEK(meta.encrypted_fek, accountKey);
+        fek = await decryptFEK(meta.encrypted_fek, accountKey, meta.file_id);
         console.log(`${LOG_PREFIX} FEK decrypted in ${Date.now() - tDec}ms`);
       } catch (error) {
         console.error(`${LOG_PREFIX} Failed to decrypt FEK with account key:`, error instanceof Error ? error.message : error);
@@ -163,7 +167,7 @@ export async function downloadFile(
         hideProgress();
 
         const tDec = Date.now();
-        fek = await decryptFEK(meta.encrypted_fek, customKey);
+        fek = await decryptFEK(meta.encrypted_fek, customKey, meta.file_id);
         console.log(`${LOG_PREFIX} FEK decrypted with custom key in ${Date.now() - tDec}ms`);
       } catch (error) {
         hideProgress();

@@ -251,11 +251,29 @@ function makeCompleteResponse(fileId: string): string {
 type FetchMockEntry = { status: number; body: string };
 
 function installFetchMock(routes: Record<string, FetchMockEntry>): void {
-  (globalThis as any).fetch = async (url: string, _opts?: RequestInit): Promise<Response> => {
+  (globalThis as any).fetch = async (url: string, opts?: RequestInit): Promise<Response> => {
     const path = new URL(url, 'http://localhost').pathname;
 
     for (const [pattern, entry] of Object.entries(routes)) {
       if (path.includes(pattern)) {
+        // Phase C: uploads/init must echo back the client-supplied file_id
+        // so uploadFile()'s sanity-check (session.file_id === chosenFileID)
+        // passes. Patch the canned body if needed.
+        if (pattern === 'uploads/init' && entry.status === 200 && opts?.body) {
+          try {
+            const reqBody = typeof opts.body === 'string' ? JSON.parse(opts.body) : null;
+            if (reqBody && typeof reqBody.file_id === 'string') {
+              const parsed = JSON.parse(entry.body);
+              parsed.file_id = reqBody.file_id;
+              return new Response(JSON.stringify(parsed), {
+                status: entry.status,
+                headers: { 'Content-Type': 'application/json' },
+              });
+            }
+          } catch {
+            // Fall through to canned response below
+          }
+        }
         return new Response(entry.body, {
           status: entry.status,
           headers: { 'Content-Type': 'application/json' },

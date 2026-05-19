@@ -23,6 +23,7 @@ import {
   decryptFEK,
   decryptMetadataField,
 } from '../crypto/metadata-helpers';
+import { AAD_FIELD_FILENAME, AAD_FIELD_SHA256 } from '../crypto/aad';
 import { ShareCreator, type FileInfo } from '../shares/share-creation';
 import { validateSharePassword } from '../crypto/password-validation';
 
@@ -30,8 +31,12 @@ import { validateSharePassword } from '../crypto/password-validation';
 // Types
 // ============================================================================
 
-/** Mirrors the /api/files/:id/meta response (snake_case) */
+/** Mirrors the /api/files/:id/meta response (snake_case). */
 interface FileMetaResponse {
+  /** Canonical file_id (Phase C: required for FEK / metadata AAD). */
+  file_id: string;
+  /** Canonical owner_username (Phase C: required for metadata-field AAD). */
+  owner_username: string;
   encrypted_filename: string;
   filename_nonce: string;
   encrypted_sha256sum: string;
@@ -326,7 +331,7 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
     let fek: Uint8Array;
     if (passwordType === 'account' || meta.password_type === 'account') {
       try {
-        fek = await decryptFEK(meta.encrypted_fek, accountKey);
+        fek = await decryptFEK(meta.encrypted_fek, accountKey, meta.file_id);
       } catch (err) {
         console.error('Failed to decrypt FEK:', err);
         showError('Failed to decrypt file key. Your password may be incorrect.');
@@ -352,7 +357,7 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
         });
         const customKey = await deriveFileEncryptionKey(customPw, username, 'custom');
         hideProgress();
-        fek = await decryptFEK(meta.encrypted_fek, customKey);
+        fek = await decryptFEK(meta.encrypted_fek, customKey, meta.file_id);
       } catch (err) {
         hideProgress();
         console.error('Failed to decrypt FEK with custom password:', err);
@@ -368,6 +373,9 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
         meta.encrypted_filename,
         meta.filename_nonce,
         accountKey,
+        meta.file_id,
+        AAD_FIELD_FILENAME,
+        meta.owner_username,
       );
     } catch {
       console.warn('Could not decrypt filename for share metadata');
@@ -380,6 +388,9 @@ export async function shareFile(fileId: string, passwordType: string): Promise<v
         meta.encrypted_sha256sum,
         meta.sha256sum_nonce,
         accountKey,
+        meta.file_id,
+        AAD_FIELD_SHA256,
+        meta.owner_username,
       );
     } catch {
       console.warn('Could not decrypt sha256 for share metadata');

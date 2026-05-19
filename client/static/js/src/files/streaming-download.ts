@@ -44,15 +44,28 @@ import {
   swStreamDownload,
   type SwStreamDownloadCompletion,
 } from './sw-streaming-download';
+import {
+  buildChunkAAD,
+  AAD_FIELD_FILENAME,
+  AAD_FIELD_SHA256,
+} from '../crypto/aad';
+import { decryptMetadataField } from '../crypto/metadata-helpers';
 
 const LOG_PREFIX_FILE = '[arkfile-download]';
 const LOG_PREFIX_SHARE = '[arkfile-share]';
 
 /**
- * Metadata returned from the /meta endpoint (snake_case matches JSON response)
+ * Metadata returned from the /meta endpoint (snake_case matches JSON response).
+ *
+ * Phase C: `owner_username` is required for owner-side metadata decryption
+ * because the metadata-field AAD binds (file_id, field_label, owner_username).
+ * Anonymous share recipients do not decrypt the server-side metadata fields
+ * (filename/sha256 come from the ShareEnvelope), so for share metadata the
+ * field may be omitted by the server.
  */
 export interface ChunkedDownloadMetadata {
   file_id: string;
+  owner_username?: string;
   encrypted_filename: string;
   filename_nonce: string;
   encrypted_sha256sum: string;
@@ -189,13 +202,23 @@ export class StreamingDownloadManager {
       const metadata = await this.fetchMetadata(fileId);
       console.log(`${LOG_PREFIX_FILE} Metadata fetched in ${Date.now() - tMeta}ms (total_chunks=${metadata.total_chunks}, size_bytes=${metadata.size_bytes}, password_type=${metadata.password_type})`);
 
-      // 2. Decrypt filename and sha256sum using ACCOUNT KEY (not FEK)
+      // 2. Decrypt filename and sha256sum using ACCOUNT KEY (not FEK).
+      // Phase C: metadata-field AAD requires (file_id, field_label, owner_username).
       const metadataKey = this.options.accountKey;
       if (!metadataKey) throw new Error('Account key required for metadata decryption (owner download)');
+      if (!metadata.owner_username) {
+        throw new Error('Server metadata missing owner_username (required for Phase C AAD)');
+      }
 
       const tDecMeta = Date.now();
-      const filename = await this.decryptMetadataField(metadata.encrypted_filename, metadata.filename_nonce, metadataKey);
-      const sha256sum = await this.decryptMetadataField(metadata.encrypted_sha256sum, metadata.sha256sum_nonce, metadataKey);
+      const filename = await decryptMetadataField(
+        metadata.encrypted_filename, metadata.filename_nonce, metadataKey,
+        metadata.file_id, AAD_FIELD_FILENAME, metadata.owner_username,
+      );
+      const sha256sum = await decryptMetadataField(
+        metadata.encrypted_sha256sum, metadata.sha256sum_nonce, metadataKey,
+        metadata.file_id, AAD_FIELD_SHA256, metadata.owner_username,
+      );
       console.log(`${LOG_PREFIX_FILE} Metadata decrypted in ${Date.now() - tDecMeta}ms`);
 
       // 3. Stream-decrypt chunks via SW (preferred) or Blob fallback
@@ -313,18 +336,16 @@ export class StreamingDownloadManager {
   /**
    * Async generator that downloads and decrypts file chunks one at a time.
    *
-   * Chunk format:
-   *   - Chunk 0: [version (1)][keyType (1)][nonce (12)][ciphertext][tag (16)]
-   *   - Chunks 1+:                  [nonce (12)][ciphertext][tag (16)]
-   * The 2-byte envelope header is stripped from chunk 0 before AES-GCM decrypt.
+   * Phase C (Step 0 Outcome A): uniform chunk layout, no chunk-0 envelope
+   * header. Each chunk is [nonce(12)][ciphertext][tag(16)] and decrypts
+   * under per-chunk AAD = BuildChunkAAD(file_id, chunkIndex, totalChunks).
    */
   private async *makeFileChunkGenerator(
     fileId: string,
     metadata: ChunkedDownloadMetadata,
     fek: Uint8Array,
   ): AsyncGenerator<Uint8Array> {
-    const config = await this.ensureConfig();
-    const envelopeHeaderSize = config.envelope.headerSizeBytes;
+    await this.ensureConfig();
     const decryptor = await AESGCMDecryptor.fromRawKey(fek);
 
     this.startTime = Date.now();
@@ -333,7 +354,9 @@ export class StreamingDownloadManager {
     const headers: Record<string, string> = {};
     if (this.options.authToken) headers['Authorization'] = `Bearer ${this.options.authToken}`;
 
-    for (let chunkIndex = 0; chunkIndex < metadata.total_chunks; chunkIndex++) {
+    const totalChunks = metadata.total_chunks;
+
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
       if (this.options.abortController?.signal.aborted) throw new Error('Download cancelled');
 
       const tFetch = Date.now();
@@ -347,20 +370,12 @@ export class StreamingDownloadManager {
       );
       const fetchMs = Date.now() - tFetch;
 
-      let chunkData = encryptedChunk;
-      if (chunkIndex === 0) {
-        if (encryptedChunk.length < envelopeHeaderSize) {
-          throw new Error(`Chunk 0 too short: expected at least ${envelopeHeaderSize} bytes for envelope, got ${encryptedChunk.length}`);
-        }
-        const version = encryptedChunk[0];
-        if (version !== 0x01) {
-          throw new Error(`Unsupported envelope version on chunk 0: 0x${version.toString(16).padStart(2, '0')} (expected 0x01)`);
-        }
-        chunkData = encryptedChunk.slice(envelopeHeaderSize);
-      }
+      const aad = buildChunkAAD(
+        metadata.file_id, BigInt(chunkIndex), BigInt(totalChunks),
+      );
 
       const tDec = Date.now();
-      const decryptedChunk = await decryptor.decryptChunk(chunkData);
+      const decryptedChunk = await decryptor.decryptChunk(encryptedChunk, aad);
       const decMs = Date.now() - tDec;
 
       this.bytesDownloaded += encryptedChunk.length;
@@ -391,14 +406,19 @@ export class StreamingDownloadManager {
     }
   }
 
-  /** Async generator that downloads and decrypts shared file chunks one at a time. */
+  /**
+   * Async generator that downloads and decrypts shared file chunks one at a time.
+   *
+   * Phase C: chunk AAD is built from the underlying file_id (which the
+   * server returns in share metadata), NOT the share_id. Owner uploads
+   * and recipient downloads thus produce/consume the same AAD bytes.
+   */
   private async *makeShareChunkGenerator(
     shareId: string,
     metadata: ChunkedDownloadMetadata,
     fek: Uint8Array,
   ): AsyncGenerator<Uint8Array> {
-    const config = await this.ensureConfig();
-    const envelopeHeaderSize = config.envelope.headerSizeBytes;
+    await this.ensureConfig();
     const decryptor = await AESGCMDecryptor.fromRawKey(fek);
 
     this.startTime = Date.now();
@@ -407,7 +427,9 @@ export class StreamingDownloadManager {
     const headers: Record<string, string> = {};
     if (this.options.downloadToken) headers['X-Download-Token'] = this.options.downloadToken;
 
-    for (let chunkIndex = 0; chunkIndex < metadata.chunk_count; chunkIndex++) {
+    const totalChunks = metadata.chunk_count;
+
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
       if (this.options.abortController?.signal.aborted) throw new Error('Download cancelled');
 
       const tFetch = Date.now();
@@ -421,20 +443,12 @@ export class StreamingDownloadManager {
       );
       const fetchMs = Date.now() - tFetch;
 
-      let chunkData = encryptedChunk;
-      if (chunkIndex === 0) {
-        if (encryptedChunk.length < envelopeHeaderSize) {
-          throw new Error(`Share chunk 0 too short: expected at least ${envelopeHeaderSize} bytes, got ${encryptedChunk.length}`);
-        }
-        const version = encryptedChunk[0];
-        if (version !== 0x01) {
-          throw new Error(`Unsupported envelope version on share chunk 0: 0x${version.toString(16).padStart(2, '0')} (expected 0x01)`);
-        }
-        chunkData = encryptedChunk.slice(envelopeHeaderSize);
-      }
+      const aad = buildChunkAAD(
+        metadata.file_id, BigInt(chunkIndex), BigInt(totalChunks),
+      );
 
       const tDec = Date.now();
-      const decryptedChunk = await decryptor.decryptChunk(chunkData);
+      const decryptedChunk = await decryptor.decryptChunk(encryptedChunk, aad);
       const decMs = Date.now() - tDec;
 
       this.bytesDownloaded += encryptedChunk.length;
@@ -555,23 +569,6 @@ export class StreamingDownloadManager {
     return response.json();
   }
 
-  /**
-   * Decrypt a metadata field (filename or sha256sum).
-   *
-   * Metadata is encrypted with the account key (Argon2id derived), NOT the FEK.
-   * Server stores [nonce] separately from [ciphertext + auth_tag]; we reassemble.
-   */
-  private async decryptMetadataField(encryptedBase64: string, nonceBase64: string, key: Uint8Array): Promise<string> {
-    const encrypted = this.base64ToBytes(encryptedBase64);
-    const nonce = this.base64ToBytes(nonceBase64);
-    const combined = new Uint8Array(nonce.length + encrypted.length);
-    combined.set(nonce, 0);
-    combined.set(encrypted, nonce.length);
-    const decryptor = await AESGCMDecryptor.fromRawKey(key);
-    const decrypted = await decryptor.decryptChunk(combined);
-    return new TextDecoder().decode(decrypted);
-  }
-
   private calculateTotalEncryptedSize(metadata: ChunkedDownloadMetadata): number {
     return metadata.size_bytes + (metadata.total_chunks * this.aesGcmOverhead);
   }
@@ -616,12 +613,6 @@ export class StreamingDownloadManager {
     }
   }
 
-  private base64ToBytes(base64: string): Uint8Array {
-    const binaryString = atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-    return bytes;
-  }
 }
 
 /** Convenience function to download a file with chunked download (owner) */

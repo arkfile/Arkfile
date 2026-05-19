@@ -10,6 +10,10 @@
  */
 
 import { decryptChunk } from './aes-gcm.js';
+import {
+  buildFEKEnvelopeAAD,
+  buildMetadataFieldAAD,
+} from './aad.js';
 import { showError } from '../ui/messages.js';
 import { showProgress, hideProgress } from '../ui/progress.js';
 import {
@@ -103,15 +107,25 @@ export async function getAccountKey(username: string): Promise<Uint8Array | null
  *   [version (1 byte)][keyType (1 byte)][nonce (12)][ciphertext][tag (16)]
  *
  * The 2-byte envelope header is stripped before AES-GCM decryption.
+ * AAD = BuildFEKEnvelopeAAD(fileID, keyTypeByte) binds the envelope to this
+ * specific file_id and to the declared key type, so a server with DB-write
+ * access cannot move FEK envelopes between files (B-08) or flip the key-type
+ * byte to mis-route the client.
  *
  * @param encrypted_fek_base64 - Base64-encoded encrypted FEK with envelope header
  * @param kek                  - The Key Encryption Key (account or custom derived, 32 bytes)
+ * @param fileID               - Canonical file_id from the metadata row
  * @returns The decrypted FEK (32 bytes)
  */
 export async function decryptFEK(
   encrypted_fek_base64: string,
   kek: Uint8Array,
+  fileID: string,
 ): Promise<Uint8Array> {
+  if (!fileID) {
+    throw new Error('decryptFEK: fileID is required for AAD binding');
+  }
+
   const raw = base64ToBytes(encrypted_fek_base64);
 
   // Minimum: 2 (envelope) + 12 (nonce) + 16 (tag) + 1 (min ciphertext) = 31
@@ -126,9 +140,12 @@ export async function decryptFEK(
     );
   }
 
-  // Strip 2-byte envelope header, then decrypt
-  // Remaining: [nonce (12)][ciphertext][tag (16)]
-  const fek = await decryptChunk(raw.slice(2), kek);
+  const keyTypeByte = raw[1];
+  const aad = buildFEKEnvelopeAAD(fileID, keyTypeByte);
+
+  // Strip 2-byte envelope header, then decrypt under the matching AAD.
+  // Remaining payload: [nonce (12)][ciphertext][tag (16)]
+  const fek = await decryptChunk(raw.slice(2), kek, aad);
 
   if (fek.length !== 32) {
     throw new Error(`Invalid FEK length: expected 32 bytes, got ${fek.length}`);
@@ -150,18 +167,38 @@ export async function decryptFEK(
  *
  * Metadata is always encrypted with the Account Key (Argon2id derived from
  * account password + username), regardless of whether the file uses account
- * or custom password for FEK encryption.
+ * or custom password for FEK encryption. AAD =
+ * BuildMetadataFieldAAD(fileID, fieldName, ownerUsername) binds each field
+ * to (file, field-label, owner) so the server cannot move metadata between
+ * files, swap filename and sha256 ciphertexts, or remap a row to a different
+ * user (C-19).
  *
  * @param ciphertext_base64 - Base64-encoded ciphertext + auth tag
  * @param nonce_base64      - Base64-encoded nonce (12 bytes)
  * @param account_key       - The Account Key (32 bytes)
+ * @param fileID            - Canonical file_id from the metadata row
+ * @param fieldName         - Must be AAD_FIELD_FILENAME or AAD_FIELD_SHA256 from ./aad
+ * @param ownerUsername     - Canonical owner_username from the metadata row
  * @returns The decrypted plaintext string (e.g. filename or hex SHA-256)
  */
 export async function decryptMetadataField(
   ciphertext_base64: string,
   nonce_base64: string,
   account_key: Uint8Array,
+  fileID: string,
+  fieldName: string,
+  ownerUsername: string,
 ): Promise<string> {
+  if (!fileID) {
+    throw new Error('decryptMetadataField: fileID is required for AAD binding');
+  }
+  if (!fieldName) {
+    throw new Error('decryptMetadataField: fieldName is required for AAD binding');
+  }
+  if (!ownerUsername) {
+    throw new Error('decryptMetadataField: ownerUsername is required for AAD binding');
+  }
+
   const nonce = base64ToBytes(nonce_base64);
   const ciphertext = base64ToBytes(ciphertext_base64);
 
@@ -170,6 +207,7 @@ export async function decryptMetadataField(
   combined.set(nonce, 0);
   combined.set(ciphertext, nonce.length);
 
-  const plainBytes = await decryptChunk(combined, account_key);
+  const aad = buildMetadataFieldAAD(fileID, fieldName, ownerUsername);
+  const plainBytes = await decryptChunk(combined, account_key, aad);
   return new TextDecoder().decode(plainBytes);
 }

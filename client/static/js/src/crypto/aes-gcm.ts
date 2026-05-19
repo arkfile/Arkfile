@@ -62,36 +62,49 @@ export class AESGCMDecryptor {
   }
 
   /**
-   * Decrypt a single encrypted chunk
-   * 
+   * Decrypt a single encrypted chunk.
+   *
    * Input format: [nonce (12 bytes)][ciphertext][auth tag (16 bytes)]
    * The Web Crypto API expects the tag to be appended to the ciphertext.
-   * 
+   *
+   * If `aad` is provided, it is passed to AES-GCM as additionalData; the tag
+   * is then verified against AAD as well as ciphertext. This is how Phase C
+   * binds file chunks / FEK envelope / metadata fields to their context
+   * (see crypto/aad.ts).
+   *
    * @param encryptedChunk - The encrypted chunk data
+   * @param aad            - Optional additional authenticated data
    * @returns Promise resolving to the decrypted plaintext
    * @throws Error if chunk is too small or decryption fails
    */
-  async decryptChunk(encryptedChunk: Uint8Array): Promise<Uint8Array> {
+  async decryptChunk(encryptedChunk: Uint8Array, aad?: Uint8Array): Promise<Uint8Array> {
     if (encryptedChunk.length < this.overhead) {
       throw new Error(`Encrypted chunk too small: expected at least ${this.overhead} bytes, got ${encryptedChunk.length}`);
     }
 
     // Extract nonce (first nonceSize bytes)
     const nonce = encryptedChunk.slice(0, this.nonceSize);
-    
+
     // Extract ciphertext + tag (remaining bytes)
     // Web Crypto expects ciphertext with tag appended
     const ciphertextWithTag = encryptedChunk.slice(this.nonceSize);
 
     try {
+      const params: AesGcmParams = {
+        name: 'AES-GCM',
+        iv: nonce,
+        tagLength: this.tagSize * 8, // in bits
+      };
+      if (aad !== undefined) {
+        // Type assertion: BufferSource here is always ArrayBuffer-backed in
+        // practice. The structural TS lib types require this narrowing to
+        // reject SharedArrayBuffer-backed views, which Phase C never produces.
+        params.additionalData = aad as unknown as Uint8Array<ArrayBuffer>;
+      }
       const decrypted = await crypto.subtle.decrypt(
-        {
-          name: 'AES-GCM',
-          iv: nonce,
-          tagLength: this.tagSize * 8, // in bits
-        },
+        params,
         this.key,
-        ciphertextWithTag
+        ciphertextWithTag,
       );
 
       return new Uint8Array(decrypted);
@@ -101,53 +114,67 @@ export class AESGCMDecryptor {
   }
 
   /**
-   * Decrypt multiple chunks in sequence
-   * 
+   * Decrypt multiple chunks in sequence.
+   *
+   * All chunks share the same key. If AAD must vary per chunk (the Phase C
+   * file-chunk case), call decryptChunk() in a loop with the appropriate
+   * BuildChunkAAD output instead of using this helper.
+   *
    * @param chunks - Array of encrypted chunks
    * @param onProgress - Optional callback for progress updates
    * @returns Promise resolving to array of decrypted chunks
    */
   async decryptChunks(
     chunks: Uint8Array[],
-    onProgress?: (completed: number, total: number) => void
+    onProgress?: (completed: number, total: number) => void,
   ): Promise<Uint8Array[]> {
     const decryptedChunks: Uint8Array[] = [];
-    
+
     for (let i = 0; i < chunks.length; i++) {
       const decrypted = await this.decryptChunk(chunks[i]);
       decryptedChunks.push(decrypted);
-      
+
       if (onProgress) {
         onProgress(i + 1, chunks.length);
       }
     }
-    
+
     return decryptedChunks;
   }
 }
 
 /**
- * Decrypt a single chunk using a raw key (convenience function)
- * 
+ * Decrypt a single chunk using a raw key (convenience function).
+ *
  * @param encryptedChunk - The encrypted chunk data
- * @param key - 32-byte AES-256 key
+ * @param key            - 32-byte AES-256 key
+ * @param aad            - Optional additional authenticated data
  * @returns Promise resolving to the decrypted plaintext
  */
-export async function decryptChunk(encryptedChunk: Uint8Array, key: Uint8Array): Promise<Uint8Array> {
+export async function decryptChunk(
+  encryptedChunk: Uint8Array,
+  key: Uint8Array,
+  aad?: Uint8Array,
+): Promise<Uint8Array> {
   const decryptor = await AESGCMDecryptor.fromRawKey(key);
-  return decryptor.decryptChunk(encryptedChunk);
+  return decryptor.decryptChunk(encryptedChunk, aad);
 }
 
 /**
- * Verify that a chunk can be decrypted (authentication check)
- * 
+ * Verify that a chunk can be decrypted (authentication check).
+ *
  * @param encryptedChunk - The encrypted chunk data
- * @param key - 32-byte AES-256 key
+ * @param key            - 32-byte AES-256 key
+ * @param aad            - Optional additional authenticated data
  * @returns Promise resolving to true if chunk is valid, false otherwise
  */
-export async function verifyChunk(encryptedChunk: Uint8Array, key: Uint8Array): Promise<boolean> {
+export async function verifyChunk(
+  encryptedChunk: Uint8Array,
+  key: Uint8Array,
+  aad?: Uint8Array,
+): Promise<boolean> {
   try {
-    await decryptChunk(encryptedChunk, key);
+    await decryptChunk(encryptedChunk, key, aad);
     return true;
   } catch {
     return false;
