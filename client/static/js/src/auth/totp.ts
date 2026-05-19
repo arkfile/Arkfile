@@ -6,7 +6,7 @@ import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
 import { showModal, showTOTPAppsModal } from '../ui/modals';
 import { clearAllSessionData, AuthManager } from '../utils/auth';
-import { showFileSection, showAuthSection } from '../ui/sections';
+import { showFileSection, showAuthSection, showTOTPSetupSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { LoginManager } from './login';
 

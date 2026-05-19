@@ -2,7 +2,6 @@ package auth
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -141,32 +140,46 @@ func SetupDevAdminTOTP(db *sql.DB, user *models.User, totpSecret string) error {
 		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
 	}
 
-	// Encrypt backup codes
-	backupCodesJSON, err := json.Marshal(backupCodes)
-	if err != nil {
-		return fmt.Errorf("failed to marshal backup codes: %w", err)
-	}
-
-	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
-	if err != nil {
-		return fmt.Errorf("failed to encrypt backup codes: %w", err)
-	}
-
-	// Store TOTP data in database
+	// Store TOTP data in database (schema has no backup_codes_encrypted column)
 	_, err = db.Exec(`
 		INSERT OR REPLACE INTO user_totp (
-			username, secret_encrypted, backup_codes_encrypted, 
+			username, secret_encrypted, 
 			enabled, setup_completed, created_at, last_used
-		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		user.Username, secretEncrypted, backupCodesEncrypted,
-		true, true, time.Now(), nil,
+		) VALUES (?, ?, ?, ?, ?, ?)`,
+		user.Username, secretEncrypted,
+		true, true, time.Now().UTC(), nil,
 	)
 
 	if err != nil {
-		return fmt.Errorf("failed to store TOTP setup: %w", err)
+		return fmt.Errorf("failed to store dev admin TOTP setup: %w", err)
 	}
 
-	log.Printf("TOTP setup completed for dev admin '%s'", user.Username)
+	// Store hashed backup codes on user_totp_backup_codes table (reuses global Argon2id floor parameters)
+	_, _ = db.Exec("DELETE FROM user_totp_backup_codes WHERE username = ?", user.Username)
+	for i, code := range backupCodes {
+		salt := deriveBackupCodeSalt(user.Username, i)
+		hash, err := crypto.DeriveArgon2IDKey(
+			[]byte(code),
+			salt,
+			crypto.UnifiedArgonSecure.KeyLen,
+			crypto.UnifiedArgonSecure.Memory,
+			crypto.UnifiedArgonSecure.Time,
+			crypto.UnifiedArgonSecure.Threads,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to hash dev admin backup code: %w", err)
+		}
+
+		_, err = db.Exec(`
+			INSERT OR REPLACE INTO user_totp_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
+			user.Username, i, hash,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to store dev admin backup code: %w", err)
+		}
+	}
+
+	log.Printf("TOTP setup completed for dev admin '%s' and backup codes generated", user.Username)
 	log.Printf("SECURITY: TOTP configured with fixed secret for development/testing only!")
 
 	return nil
