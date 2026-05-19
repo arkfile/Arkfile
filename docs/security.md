@@ -320,9 +320,25 @@ Root Security
 # Emergency rotation (immediate)
 ./scripts/maintenance/rotate-jwt-keys.sh --force
 
+# Tier-3 User Secret Master key rotation (on-demand / emergency)
+sudo ./scripts/maintenance/rotate-user-secret-master.sh
+
 # OPAQUE key backup (monthly)
 ./scripts/maintenance/backup-keys.sh
 ```
+
+### Tiered Security model and user recovery
+Arkfile partitions system secrets into three separate trust tiers (Tier-1, Tier-2, and Tier-3). Of these, Tier-3 holds user-secret-wrapping master keys (`totp_user` and `contact_info` purpose keys derived via HKDF-SHA256 from `/opt/arkfile/etc/keys/user-secret-master.bin` file with 0400 owner-only permissions).
+
+**In-Memory Hardening:**
+- System loader pins the Tier-3 master key using POSIX `mlock` to disable memory swapping of keys to disk storage.
+- Key pages are marked on initialization using `madvise(..., MADV_DONTDUMP)` to ensure they won't leak into core logs.
+- Disables process-wide core dumps entirely using `prctl(PR_SET_DUMPABLE, 0)`.
+
+**Lost-Device User Recovery Model:**
+- Lost password = lost files. Lost authenticator + lost backup codes = lost account. This model is intentionally non-custodial.
+- If a user loses their authenticator (TOTP), but holds one of their 10 alphanumeric backup codes (~59.5 bits of secure entropy sampled using rejection sampling), they can start a reachable recovery flow.
+- A-15 Reachable TOTP recovery enables verified backup codes to produce a short-lived temporary `"arkfile-totp-reset"` JWT claim. Users use this reset-authorized context to flush, reset, and re-setup their TOTP keys immediately without requiring administrative or world-readable override features.
 
 ### Authentication Security
 

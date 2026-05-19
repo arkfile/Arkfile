@@ -14,10 +14,8 @@ import (
 func setupTOTPTestEnvironment(t *testing.T) {
 	os.Setenv("DEBUG_MODE", "true") // Enable debug mode for testing
 
-	// Initialize TOTP master key for testing (uses KeyManager, not file-based keys)
-	if err := crypto.InitializeTOTPMasterKey(); err != nil {
-		t.Fatalf("Failed to initialize TOTP master key: %v", err)
-	}
+	// Write / load temporary Tier-3 master key for testing
+	crypto.SetTier3MasterForTest(make([]byte, 32))
 }
 
 func setupTOTPTestDB(t *testing.T) *sql.DB {
@@ -32,7 +30,6 @@ func setupTOTPTestDB(t *testing.T) *sql.DB {
 		CREATE TABLE user_totp (
 			username TEXT PRIMARY KEY,
 			secret_encrypted BLOB NOT NULL,
-			backup_codes_encrypted BLOB NOT NULL,
 			enabled BOOLEAN DEFAULT FALSE,
 			setup_completed BOOLEAN DEFAULT FALSE,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -40,6 +37,15 @@ func setupTOTPTestDB(t *testing.T) *sql.DB {
 			failed_attempts_in_window INTEGER NOT NULL DEFAULT 0,
 			window_started_at DATETIME,
 			last_failed_attempt_at DATETIME
+		);
+
+		CREATE TABLE user_totp_backup_codes (
+			username TEXT NOT NULL,
+			code_index INTEGER NOT NULL,
+			code_hash BLOB NOT NULL,
+			used_at TIMESTAMP,
+			PRIMARY KEY (username, code_index),
+			UNIQUE (username, code_hash)
 		);
 
 		CREATE TABLE totp_usage_log (

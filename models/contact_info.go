@@ -102,15 +102,11 @@ func (ci *ContactInfo) Validate() error {
 	return nil
 }
 
-// getContactInfoKey retrieves or generates the contact info encryption key
+// getContactInfoKey retrieves the contact info encryption key derived from Tier-3 master
 func getContactInfoKey() ([]byte, error) {
-	km, err := crypto.GetKeyManager()
+	key, err := crypto.DeriveTier3Subkey([]byte("contact_info"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get KeyManager: %w", err)
-	}
-	key, err := km.GetOrGenerateKey(contactInfoKeyID, contactInfoKeyType, contactInfoKeySize)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get contact info encryption key: %w", err)
+		return nil, fmt.Errorf("failed to get Tier-3 contact info encryption key: %w", err)
 	}
 	return key, nil
 }

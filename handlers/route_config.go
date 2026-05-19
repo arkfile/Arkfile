@@ -88,10 +88,10 @@ func RegisterRoutes() {
 
 	// TOTP Setup/Verify/Auth - requires temporary TOTP token (arkfile-totp audience)
 	totpGroup := Echo.Group("/api/totp")
-	totpGroup.Use(auth.TOTPJWTMiddleware())
-	totpGroup.POST("/setup", TOTPSetup)
-	totpGroup.POST("/verify", TOTPRateLimitMiddleware("totp_verify")(TOTPVerify))
-	totpGroup.POST("/auth", TOTPRateLimitMiddleware("totp_auth")(TOTPAuth))
+	totpGroup.POST("/recover-with-backup-code", RecoverWithBackupCode) // public recovery trigger
+	totpGroup.POST("/setup", TOTPSetup, auth.TOTPJWTMiddleware())
+	totpGroup.POST("/verify", TOTPRateLimitMiddleware("totp_verify")(TOTPVerify), auth.TOTPJWTMiddleware())
+	totpGroup.POST("/auth", TOTPRateLimitMiddleware("totp_auth")(TOTPAuth), auth.TOTPJWTMiddleware())
 
 	// Admin contacts (public - no auth required)
 	Echo.GET("/api/admin-contacts", AdminContactsHandler)

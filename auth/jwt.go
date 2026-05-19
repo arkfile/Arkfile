@@ -23,6 +23,7 @@ const (
 	AudienceTOTP   = "arkfile-totp"
 	AudienceAPI    = "arkfile-api"
 	AudienceExport = "arkfile-export"
+	AudienceReset  = "arkfile-totp-reset"
 	Issuer         = "arkfile-auth"
 )
 
@@ -73,6 +74,30 @@ func GenerateTemporaryTOTPToken(username string) (string, time.Time, error) {
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    Issuer,
 			Audience:  []string{AudienceTOTP},
+			ID:        tokenID,
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	tokenString, err := token.SignedString(GetJWTTempPrivateKey())
+	return tokenString, expirationTime, err
+}
+
+// GenerateTemporaryResetToken creates a short-lived reset-authorized temporary JWT token.
+// Signed with the temp-tier key; carries aud=arkfile-totp-reset.
+func GenerateTemporaryResetToken(username string) (string, time.Time, error) {
+	tokenID := uuid.New().String()
+	expirationTime := time.Now().Add(15 * time.Minute)
+
+	claims := &Claims{
+		Username:     username,
+		RequiresTOTP: true,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+			Issuer:    Issuer,
+			Audience:  []string{AudienceReset},
 			ID:        tokenID,
 		},
 	}
@@ -218,4 +243,14 @@ func RequiresTOTPFromToken(c echo.Context) bool {
 		return false
 	}
 	return claims.RequiresTOTP
+}
+
+// GetClaimsFromContext returns parsed claims from context or nil
+func GetClaimsFromContext(c echo.Context) (*Claims, bool) {
+	user, ok := c.Get("user").(*jwt.Token)
+	if !ok || user == nil {
+		return nil, false
+	}
+	claims, ok := user.Claims.(*Claims)
+	return claims, ok
 }

@@ -131,6 +131,11 @@ func main() {
 		log.Fatalf("Failed to initialize KeyManager: %v", err)
 	}
 
+	// Initialize Tier-3 user secret master
+	if err := crypto.LoadTier3Master(); err != nil {
+		log.Fatalf("Failed to load Tier-3 master key: %v", err)
+	}
+
 	// Rate limiting schema is now included in unified_schema.sql
 	// No separate application needed
 

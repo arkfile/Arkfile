@@ -91,7 +91,7 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
     <div style="margin-bottom: 15px;">
       <label style="display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--foam-2); cursor: pointer;">
         <input type="checkbox" id="use-backup-code" style="margin: 0 8px 0 0; cursor: pointer; width: auto;">
-        Use backup code instead
+        Use backup code instead (Lost Authenticator)
       </label>
     </div>
     <button id="verify-totp-login" disabled style="
@@ -187,11 +187,63 @@ async function verifyTOTPLogin(): Promise<void> {
   }
   
   try {
-    showProgressMessage('Verifying TOTP...');
+    showProgressMessage('Verifying...');
     
-    // The temp token is in the __Host-arkfile-temp cookie; send credentials:include
-    // so the browser attaches it automatically. The CookieTokenMiddleware on the
-    // server extracts it and injects it as the Authorization header for TOTPJWTMiddleware.
+    if (isBackup) {
+      // Step A-15: Lost-Device Recovery Flow
+      // Validate backup code and receive temporary reset-tier JWT token context
+      const recoveryResponse = await fetch('/api/totp/recover-with-backup-code', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          backup_code: code
+        }),
+      });
+
+      if (recoveryResponse.ok) {
+        // Backup code consumed successfully! Clear modal and start TOTP setup screen immediately.
+        document.querySelector('.modal-overlay')?.remove();
+        showProgressMessage('Re-setting up TOTP authenticator...');
+        
+        // Let's call /api/totp/reset using our newly generated reset-tier token context
+        const resetResponse = await fetch('/api/totp/reset', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({}),
+        });
+
+        hideProgress();
+        if (resetResponse.ok) {
+          const resetData = await resetResponse.json();
+          const data = resetData.data || resetData;
+          showSuccess('TOTP Reset Complete!');
+          
+          // Show the fresh setup setupData so user immediately visualizes the brand new QR secret, Base32 manual entries, and 10 fresh codes
+          showTOTPSetupSection({
+            secret: data.secret,
+            qr_code_url: data.qr_code_image || data.qr_code_url,
+            backup_codes: data.backup_codes,
+            manual_entry: data.manual_entry,
+          });
+        } else {
+          const errBody = await resetResponse.json().catch(() => ({}));
+          showError(errBody.message || 'TOTP Reset Failed');
+        }
+      } else {
+        hideProgress();
+        const errBody = await recoveryResponse.json().catch(() => ({}));
+        showError(errBody.message || 'Invalid backup code');
+      }
+      return;
+    }
+    
+    // Normal TOTP entry validation
     const response = await fetch('/api/totp/auth', {
       method: 'POST',
       credentials: 'include',
@@ -200,7 +252,7 @@ async function verifyTOTPLogin(): Promise<void> {
       },
       body: JSON.stringify({
         code: code,
-        is_backup: isBackup
+        is_backup: false
       }),
     });
     

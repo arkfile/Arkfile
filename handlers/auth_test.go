@@ -262,6 +262,7 @@ func TestTOTPReset_EmptyBackupCode(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"backup_code": ""})
 	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/auth/totp/reset", bytes.NewReader(body))
 
+	// Ensure claims do NOT have reset audience so empty backup code is rejected
 	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)

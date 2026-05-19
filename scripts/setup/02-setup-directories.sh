@@ -20,6 +20,16 @@ sudo install -d -m 755 -o ${USER} -g ${GROUP} ${BASE_DIR}
 sudo install -d -m 755 -o ${USER} -g ${GROUP} "${BASE_DIR}/bin"
 sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc"
 sudo install -d -m 700 -o ${USER} -g ${GROUP} "${BASE_DIR}/etc/keys"
+
+# Generate Tier-3 user-secret-master.bin if missing (F-01 / F-02)
+MASTER_KEY_FILE="${BASE_DIR}/etc/keys/user-secret-master.bin"
+if [ ! -f "$MASTER_KEY_FILE" ]; then
+    echo "Generating Tier-3 user-secret-master.bin..."
+    sudo dd if=/dev/urandom of="$MASTER_KEY_FILE" bs=32 count=1 status=none
+    sudo chmod 400 "$MASTER_KEY_FILE"
+    sudo chown ${USER}:${GROUP} "$MASTER_KEY_FILE"
+fi
+
 sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var"
 sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/lib"
 sudo install -d -m 750 -o ${USER} -g ${GROUP} "${BASE_DIR}/var/log"

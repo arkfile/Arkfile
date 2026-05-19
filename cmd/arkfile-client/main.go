@@ -244,6 +244,11 @@ func main() {
 			logError("TOTP setup failed: %v", err)
 			os.Exit(1)
 		}
+	case "recover-totp":
+		if err := handleRecoverTOTPCommand(client, config, args); err != nil {
+			logError("TOTP recovery failed: %v", err)
+			os.Exit(1)
+		}
 	case "login":
 		if err := handleLoginCommand(client, config, args); err != nil {
 			logError("Login failed: %v", err)
@@ -701,6 +706,100 @@ func verifyTOTP(client *HTTPClient, config *ClientConfig, session *AuthSession, 
 		fmt.Println("--------------------")
 	}
 
+	return nil
+}
+
+func handleRecoverTOTPCommand(client *HTTPClient, config *ClientConfig, args []string) error {
+	fs := flag.NewFlagSet("recover-totp", flag.ExitOnError)
+	codeFlag := fs.String("code", "", "Alphanumeric 10-char backup code")
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	session, err := loadAuthSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in. Please run OPAQUE auth (register/login) first: %w", err)
+	}
+
+	token := session.TempToken
+	if token == "" {
+		token = session.AccessToken
+	}
+	if token == "" {
+		return fmt.Errorf("no valid session found. Please register or login first")
+	}
+
+	var backupCode string
+	if *codeFlag != "" {
+		backupCode = *codeFlag
+	} else {
+		fmt.Print("Enter your 10-character backup code: ")
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read backup code: %w", err)
+		}
+		backupCode = strings.TrimSpace(input)
+	}
+
+	if len(backupCode) != 10 {
+		return fmt.Errorf("backup code must be exactly 10 characters")
+	}
+
+	fmt.Println("Verifying backup code and starting TOTP reset...")
+
+	// Step 1: Recover via API endpoint
+	recoverResp, err := client.makeRequest("POST", "/api/totp/recover-with-backup-code", map[string]string{
+		"backup_code": backupCode,
+	}, token)
+	if err != nil {
+		return fmt.Errorf("backup code recovery failed: %w", err)
+	}
+
+	resetToken := recoverResp.TempToken
+	if resetToken == "" {
+		if t, ok := recoverResp.Data["reset_token"].(string); ok {
+			resetToken = t
+		}
+	}
+	if resetToken == "" {
+		return fmt.Errorf("server didn't return a reset token")
+	}
+
+	// Update temporary token in active session
+	session.TempToken = resetToken
+	_ = saveAuthSession(session, config.TokenFile)
+
+	// Step 2: Trigger reset immediately
+	resetResp, err := client.makeRequest("POST", "/api/totp/reset", map[string]string{}, resetToken)
+	if err != nil {
+		return fmt.Errorf("failed to reset TOTP: %w", err)
+	}
+
+	secret, ok := resetResp.Data["secret"].(string)
+	if !ok {
+		return fmt.Errorf("invalid server reset response: missing secret")
+	}
+
+	fmt.Println("\n=== TOTP Reset Complete! ===")
+	fmt.Println("Two-Factor Authentication has been reset.")
+	fmt.Println("1. Open your authenticator app")
+	fmt.Println("2. Add a new manual account with this secret:")
+	fmt.Printf("   Secret: %s\n", secret)
+	fmt.Println("=============================")
+
+	if backupCodes, ok := resetResp.Data["backup_codes"].([]interface{}); ok {
+		fmt.Println("\n=== FRESH BACKUP CODES ===")
+		fmt.Println("SAVE THESE FRESH CODES IN A SAFE PLACE!")
+		fmt.Println("--------------------")
+		for _, c := range backupCodes {
+			fmt.Println(c)
+		}
+		fmt.Println("--------------------")
+	}
+
+	fmt.Println("\nPlease verify setup with: arkfile-client setup-totp")
 	return nil
 }
 

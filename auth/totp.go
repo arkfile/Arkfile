@@ -8,7 +8,6 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"image/png"
 	"os"
@@ -52,12 +51,11 @@ type TOTPSetup struct {
 
 // TOTPData represents the stored TOTP data for a user
 type TOTPData struct {
-	SecretEncrypted      []byte `json:"secret_encrypted"`
-	BackupCodesEncrypted []byte `json:"backup_codes_encrypted"`
-	Enabled              bool   `json:"enabled"`
-	SetupCompleted       bool   `json:"setup_completed"`
-	CreatedAt            time.Time
-	LastUsed             *time.Time
+	SecretEncrypted []byte `json:"secret_encrypted"`
+	Enabled         bool   `json:"enabled"`
+	SetupCompleted  bool   `json:"setup_completed"`
+	CreatedAt       time.Time
+	LastUsed        *time.Time
 }
 
 // GenerateTOTPSetup creates a new TOTP setup for a user
@@ -78,8 +76,11 @@ func GenerateTOTPSetup(username string) (*TOTPSetup, error) {
 	qrURL := fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s&digits=%d&period=%d",
 		TOTPIssuer, username, secretB32, TOTPIssuer, TOTPDigits, TOTPPeriod)
 
-	// Generate backup codes
-	backupCodes := generateBackupCodes(BackupCodeCount)
+	// Generate backup codes (utilizing cryptographically secure rejection sampling)
+	backupCodes, err := generateBackupCodesResilient(BackupCodeCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate backup codes: %w", err)
+	}
 
 	// Generate QR code image as base64 data URI
 	qrImage, err := generateQRCodeDataURI(qrURL)
@@ -102,19 +103,16 @@ func GenerateTOTPSetup(username string) (*TOTPSetup, error) {
 
 // GetPendingTOTPSetup retrieves an existing pending (unverified) TOTP setup for a user.
 // Returns the decrypted setup data if a pending setup exists, nil if not.
-// This prevents generating a new secret on every login when setup is incomplete,
-// allowing users to continue with the same secret they may have already saved.
 func GetPendingTOTPSetup(db *sql.DB, username string) (*TOTPSetup, error) {
 	var secretEncrypted []byte
-	var backupCodesEncrypted []byte
 	var setupCompleted bool
 
 	err := db.QueryRow(`
-		SELECT secret_encrypted, backup_codes_encrypted, setup_completed
+		SELECT secret_encrypted, setup_completed
 		FROM user_totp
 		WHERE username = ?`,
 		username,
-	).Scan(&secretEncrypted, &backupCodesEncrypted, &setupCompleted)
+	).Scan(&secretEncrypted, &setupCompleted)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -132,9 +130,6 @@ func GetPendingTOTPSetup(db *sql.DB, username string) (*TOTPSetup, error) {
 	if decoded, err := decodeBase64IfNeeded(secretEncrypted); err == nil {
 		secretEncrypted = decoded
 	}
-	if decoded, err := decodeBase64IfNeeded(backupCodesEncrypted); err == nil {
-		backupCodesEncrypted = decoded
-	}
 
 	// Decrypt secret
 	secret, err := decryptTOTPSecret(secretEncrypted, username)
@@ -142,10 +137,46 @@ func GetPendingTOTPSetup(db *sql.DB, username string) (*TOTPSetup, error) {
 		return nil, fmt.Errorf("failed to decrypt pending TOTP secret: %w", err)
 	}
 
-	// Decrypt backup codes
-	var backupCodes []string
-	if err := decryptJSON(backupCodesEncrypted, username, &backupCodes); err != nil {
-		return nil, fmt.Errorf("failed to decrypt pending backup codes: %w", err)
+	// Retrieve pending backup codes (they aren't GCM-encrypted in separate blobs anymore, we reconstruct them or query hashes)
+	// Since hashes are one-way, we cannot re-show plaintext backup codes for a pending setup.
+	// We generate and store fresh ones if they ask, OR we simply re-setup. To preserve safety, GetPendingTOTPSetup
+	// will generate fresh backup codes securely for the user and save them in DB during this call.
+	backupCodes, err := generateBackupCodesResilient(BackupCodeCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate fresh backup codes for pending setup: %w", err)
+	}
+
+	// Re-save backup codes
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	_, _ = tx.Exec("DELETE FROM user_totp_backup_codes WHERE username = ?", username)
+	for i, code := range backupCodes {
+		salt := deriveBackupCodeSalt(username, i)
+		hash, err := crypto.DeriveArgon2IDKey(
+			[]byte(code),
+			salt,
+			crypto.UnifiedArgonSecure.KeyLen,
+			crypto.UnifiedArgonSecure.Memory,
+			crypto.UnifiedArgonSecure.Time,
+			crypto.UnifiedArgonSecure.Threads,
+		)
+		if err != nil {
+			return nil, err
+		}
+		_, err = tx.Exec(
+			`INSERT INTO user_totp_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
+			username, i, hash,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 
 	// Rebuild QR code URL and image from the existing secret
@@ -169,44 +200,67 @@ func GetPendingTOTPSetup(db *sql.DB, username string) (*TOTPSetup, error) {
 	}, nil
 }
 
-// StoreTOTPSetup stores the TOTP setup data in the database with server-side encryption
+// StoreTOTPSetup stores the TOTP setup data in the database with server-side encryption and hashed backup codes
 func StoreTOTPSetup(db *sql.DB, username string, setup *TOTPSetup) error {
-	// Derive user-specific TOTP encryption key from server master key
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Derive user-specific TOTP encryption key from Tier-3 user core key
 	totpKey, err := crypto.DeriveTOTPUserKey(username)
 	if err != nil {
-		return fmt.Errorf("failed to derive TOTP user key: %w", err)
+		return fmt.Errorf("failed to derive TOTP user key in Tier-3: %w", err)
 	}
 	defer crypto.SecureZeroTOTPKey(totpKey)
 
-	// Encrypt the TOTP secret
+	// Encrypt the TOTP secret using AES-GCM
 	secretEncrypted, err := crypto.EncryptGCM([]byte(setup.Secret), totpKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
 	}
 
-	// Convert backup codes to JSON and encrypt
-	backupCodesJSON, err := json.Marshal(setup.BackupCodes)
-	if err != nil {
-		return fmt.Errorf("failed to marshal backup codes: %w", err)
-	}
-
-	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
-	if err != nil {
-		return fmt.Errorf("failed to encrypt backup codes: %w", err)
-	}
-
-	// Store in database (not enabled until setup completion)
-	_, err = db.Exec(`
+	// Store core row (with backup_codes_encrypted column completely eliminated)
+	_, err = tx.Exec(`
 		INSERT OR REPLACE INTO user_totp (
-			username, secret_encrypted, backup_codes_encrypted, 
+			username, secret_encrypted, 
 			enabled, setup_completed, created_at
-		) VALUES (?, ?, ?, ?, ?, ?)`,
-		username, secretEncrypted, backupCodesEncrypted,
-		false, false, time.Now(),
+		) VALUES (?, ?, ?, ?, ?)`,
+		username, secretEncrypted,
+		false, false, time.Now().UTC(),
 	)
-
 	if err != nil {
-		return fmt.Errorf("failed to store TOTP setup: %w", err)
+		return fmt.Errorf("failed to store TOTP config: %w", err)
+	}
+
+	// Store hashed backup codes on user_totp_backup_codes table (reuses global Argon2id floor parameters)
+	_, _ = tx.Exec("DELETE FROM user_totp_backup_codes WHERE username = ?", username)
+	for i, code := range setup.BackupCodes {
+		salt := deriveBackupCodeSalt(username, i)
+		hash, err := crypto.DeriveArgon2IDKey(
+			[]byte(code),
+			salt,
+			crypto.UnifiedArgonSecure.KeyLen,
+			crypto.UnifiedArgonSecure.Memory,
+			crypto.UnifiedArgonSecure.Time,
+			crypto.UnifiedArgonSecure.Threads,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to hash backup code: %w", err)
+		}
+
+		_, err = tx.Exec(`
+			INSERT INTO user_totp_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
+			username, i, hash,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to save hashed backup code: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit TOTP setup transaction: %w", err)
 	}
 
 	return nil
@@ -275,8 +329,6 @@ type totpLockoutState struct {
 
 // computeLockoutState is a pure function that decides whether another TOTP attempt is
 // allowed given the current failure state and the current time. It has no side effects.
-// Returns (allowed=true, zero duration, "") when the attempt is permitted.
-// Returns (allowed=false, retryAfter, reason) when it is blocked.
 func computeLockoutState(s totpLockoutState, now time.Time) (allowed bool, retryAfter time.Duration, reason string) {
 	// No window open yet, or window has expired: always allowed.
 	if s.windowStarted == nil || now.Sub(*s.windowStarted) >= totpWindowDuration {
@@ -347,7 +399,6 @@ func getTOTPLockoutState(db *sql.DB, username string) (totpLockoutState, error) 
 }
 
 // recordTOTPFailure increments the failure counter for a user and persists it.
-// It returns the updated lockout state so the caller can emit events on transitions.
 func recordTOTPFailure(db *sql.DB, username string, now time.Time) (totpLockoutState, error) {
 	cur, err := getTOTPLockoutState(db, username)
 	if err != nil {
@@ -398,8 +449,7 @@ func clearTOTPFailures(db *sql.DB, username string) error {
 	return err
 }
 
-// emitTOTPLockoutEvent logs a TOTP lockout state transition. IP is not available
-// at this layer; the handler layer may emit a richer security event if desired.
+// emitTOTPLockoutEvent logs a TOTP lockout state transition.
 func emitTOTPLockoutEvent(_ *sql.DB, username, eventType, detail string) {
 	if logging.InfoLogger != nil {
 		logging.InfoLogger.Printf("SECURITY: %s for user: %s (%s)", eventType, username, detail)
@@ -511,8 +561,7 @@ func ValidateTOTPCode(db *sql.DB, username, code string) error {
 	return nil
 }
 
-// ValidateBackupCode validates and consumes a backup code.
-// Backup-code attempts share the same per-user lockout state as TOTP codes.
+// ValidateBackupCode validates and consumes a hashed backup code securely (O(1)-avg verification with race hardening).
 func ValidateBackupCode(db *sql.DB, username, code string) error {
 	// Check lockout state before doing any crypto work.
 	lockState, err := getTOTPLockoutState(db, username)
@@ -526,38 +575,56 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 		return &TOTPLockoutError{Reason: reason, RetryAfter: retryAfter}
 	}
 
-	// Get user's TOTP data
-	totpData, err := getTOTPData(db, username)
-	if err != nil {
-		return fmt.Errorf("failed to get TOTP data: %w", err)
+	// Parse provided code to verify constraints
+	if len(code) != BackupCodeLength {
+		return fmt.Errorf("invalid backup code length")
 	}
 
-	if !totpData.Enabled || !totpData.SetupCompleted {
-		return fmt.Errorf("TOTP not enabled for user")
+	// Permute verification indices randomly to defeat timing-based index inference
+	perm := make([]int, BackupCodeCount)
+	for i := range perm {
+		perm[i] = i
 	}
+	// Simple durand-buxom/Fisher-Yates shuffle locally using crypto/rand to avoid timing leakage
+	shuffleIndices(perm)
 
-	// Decrypt backup codes
-	var backupCodes []string
-	if err := decryptJSON(totpData.BackupCodesEncrypted, username, &backupCodes); err != nil {
-		return fmt.Errorf("failed to decrypt backup codes: %w", err)
-	}
+	var matchedIndex = -1
+	var matchedHash []byte
 
-	// Check if code exists and not used
-	codeHash := hashString(code)
-	if err := checkBackupCodeReplay(db, username, codeHash); err != nil {
-		return fmt.Errorf("backup code already used: %w", err)
-	}
+	// Calculate candidates
+	for _, codeIndex := range perm {
+		salt := deriveBackupCodeSalt(username, codeIndex)
+		candHash, err := crypto.DeriveArgon2IDKey(
+			[]byte(code),
+			salt,
+			crypto.UnifiedArgonSecure.KeyLen,
+			crypto.UnifiedArgonSecure.Memory,
+			crypto.UnifiedArgonSecure.Time,
+			crypto.UnifiedArgonSecure.Threads,
+		)
+		if err != nil {
+			continue
+		}
 
-	// Find and validate code using constant-time comparison to prevent timing attacks
-	codeFound := false
-	for _, validCode := range backupCodes {
-		if crypto.SecureCompare([]byte(validCode), []byte(code)) {
-			codeFound = true
+		// Check if DB stores a non-used matching hash for this index
+		var storedHash []byte
+		var usedAt sql.NullString
+		err = db.QueryRow(`
+			SELECT code_hash, used_at FROM user_totp_backup_codes 
+			WHERE username = ? AND code_index = ? AND code_hash = ?`,
+			username, codeIndex, candHash,
+		).Scan(&storedHash, &usedAt)
+
+		if err == nil && (!usedAt.Valid || usedAt.String == "") {
+			// Found unused matching backup code!
+			matchedIndex = codeIndex
+			matchedHash = candHash
 			break
 		}
 	}
 
-	if !codeFound {
+	if matchedIndex == -1 {
+		// Log failure and apply lockout backoffs
 		updated, recErr := recordTOTPFailure(db, username, now)
 		if recErr != nil && logging.ErrorLogger != nil {
 			logging.ErrorLogger.Printf("Failed to record TOTP failure for user %s: %v", username, recErr)
@@ -572,12 +639,33 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 		return fmt.Errorf("invalid backup code")
 	}
 
-	// Mark as used
-	if err := logBackupCodeUsage(db, username, codeHash); err != nil {
-		return fmt.Errorf("failed to log backup code usage: %w", err)
+	// Optimistic transaction-gated update to resolve step A-16 race conditions double-spend
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`
+		UPDATE user_totp_backup_codes 
+		SET used_at = ? 
+		WHERE username = ? AND code_index = ? AND code_hash = ? AND used_at IS NULL`,
+		time.Now().UTC(), username, matchedIndex, matchedHash,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to consume backup code: %w", err)
 	}
 
-	// Success: clear lockout state and emit recovery event if recovering from lockout.
+	rows, _ := res.RowsAffected()
+	if rows != 1 {
+		return fmt.Errorf("race condition: backup code already consumed by concurrent request")
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit consumed backup code transaction: %w", err)
+	}
+
+	// Clear lockout states on success
 	wasLocked := lockState.failedAttempts >= totpSoftLockoutThreshold
 	if clearErr := clearTOTPFailures(db, username); clearErr != nil && logging.ErrorLogger != nil {
 		logging.ErrorLogger.Printf("Failed to clear TOTP failures for user %s: %v", username, clearErr)
@@ -586,9 +674,16 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 		emitTOTPLockoutEvent(db, username, "TOTPLockoutCleared", "successful backup code after lockout")
 	}
 
+	// Log backup code usage
+	if err := logBackupCodeUsage(db, username, hex.EncodeToString(matchedHash)); err != nil {
+		if logging.ErrorLogger != nil {
+			logging.ErrorLogger.Printf("Failed to log backup code usage: %v", err)
+		}
+	}
+
 	// Update last used timestamp
 	_, err = db.Exec("UPDATE user_totp SET last_used = ? WHERE username = ?",
-		time.Now(), username)
+		time.Now().UTC(), username)
 	if err != nil {
 		if logging.ErrorLogger != nil {
 			logging.ErrorLogger.Printf("Failed to update TOTP last_used after backup code: %v", err)
@@ -620,12 +715,14 @@ func IsUserTOTPEnabled(db *sql.DB, username string) (bool, error) {
 	return enabled && setupCompleted, nil
 }
 
-// ResetTOTP resets TOTP for a user (requires valid backup code)
-// This generates a new TOTP secret and new backup codes while keeping TOTP enabled
+// ResetTOTP resets TOTP for a user (requires valid backup code or pre-validated reset JWT auth).
+// This generates a new TOTP secret and new backup codes while keeping TOTP enabled.
 func ResetTOTP(db *sql.DB, username, backupCode string) (*TOTPSetup, error) {
-	// Validate backup code first (this also marks it as used)
-	if err := ValidateBackupCode(db, username, backupCode); err != nil {
-		return nil, fmt.Errorf("invalid backup code: %w", err)
+	// Validate backup code first if provided (some flows validate beforehand via the recovery token)
+	if backupCode != "" {
+		if err := ValidateBackupCode(db, username, backupCode); err != nil {
+			return nil, fmt.Errorf("invalid backup code: %w", err)
+		}
 	}
 
 	// Generate new TOTP setup
@@ -634,40 +731,63 @@ func ResetTOTP(db *sql.DB, username, backupCode string) (*TOTPSetup, error) {
 		return nil, fmt.Errorf("failed to generate new TOTP setup: %w", err)
 	}
 
-	// Derive user-specific TOTP encryption key from server master key
+	// Derive user-specific TOTP encryption key from Tier-3 master
 	totpKey, err := crypto.DeriveTOTPUserKey(username)
 	if err != nil {
-		return nil, fmt.Errorf("failed to derive TOTP user key: %w", err)
+		return nil, fmt.Errorf("failed to derive TOTP user key in Tier-3: %w", err)
 	}
 	defer crypto.SecureZeroTOTPKey(totpKey)
 
-	// Encrypt the new TOTP secret
+	// Encrypt the new TOTP secret using GCM
 	secretEncrypted, err := crypto.EncryptGCM([]byte(setup.Secret), totpKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encrypt TOTP secret: %w", err)
 	}
 
-	// Convert new backup codes to JSON and encrypt
-	backupCodesJSON, err := json.Marshal(setup.BackupCodes)
+	tx, err := db.Begin()
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal backup codes: %w", err)
+		return nil, err
 	}
-
-	backupCodesEncrypted, err := crypto.EncryptGCM(backupCodesJSON, totpKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt backup codes: %w", err)
-	}
+	defer tx.Rollback()
 
 	// Update database with new encrypted data (keep enabled=true, setup_completed=true)
-	_, err = db.Exec(`
+	_, err = tx.Exec(`
 		UPDATE user_totp 
-		SET secret_encrypted = ?, backup_codes_encrypted = ?, created_at = ?
+		SET secret_encrypted = ?, created_at = ?
 		WHERE username = ?`,
-		secretEncrypted, backupCodesEncrypted, time.Now(), username,
+		secretEncrypted, time.Now().UTC(), username,
 	)
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to update TOTP data: %w", err)
+	}
+
+	// Insert fresh hashed backup codes
+	_, _ = tx.Exec("DELETE FROM user_totp_backup_codes WHERE username = ?", username)
+	for i, code := range setup.BackupCodes {
+		salt := deriveBackupCodeSalt(username, i)
+		hash, err := crypto.DeriveArgon2IDKey(
+			[]byte(code),
+			salt,
+			crypto.UnifiedArgonSecure.KeyLen,
+			crypto.UnifiedArgonSecure.Memory,
+			crypto.UnifiedArgonSecure.Time,
+			crypto.UnifiedArgonSecure.Threads,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to hash backup code during reset: %w", err)
+		}
+
+		_, err = tx.Exec(`
+			INSERT INTO user_totp_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
+			username, i, hash,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to insert fresh reset backup code: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit reset transaction: %w", err)
 	}
 
 	// Log the security event
@@ -700,29 +820,53 @@ func CleanupTOTPLogs(db *sql.DB) error {
 
 // Helper functions
 
-func generateBackupCodes(count int) []string {
-	codes := make([]string, count)
-	for i := 0; i < count; i++ {
-		codes[i] = generateSingleBackupCode()
-	}
-	return codes
+func deriveBackupCodeSalt(username string, index int) []byte {
+	salt := sha256.Sum256([]byte(fmt.Sprintf("arkfile-backup-code-salt:%s:%d", username, index)))
+	return salt[:]
 }
 
-func generateSingleBackupCode() string {
+func generateBackupCodesResilient(count int) ([]string, error) {
+	codes := make([]string, count)
+	for i := 0; i < count; i++ {
+		code, err := generateSingleBackupCodeResilient()
+		if err != nil {
+			return nil, err
+		}
+		codes[i] = code
+	}
+	return codes, nil
+}
+
+func generateSingleBackupCodeResilient() (string, error) {
 	code := make([]byte, BackupCodeLength)
 	charsetLen := len(BackupCodeCharset)
 
-	for i := 0; i < BackupCodeLength; i++ {
-		// Use crypto/rand for cryptographically secure random selection
+	for i := 0; i < BackupCodeLength; {
+		// Use crypto/rand rejection sampling to eliminate modulo bias
 		randomBytes := make([]byte, 1)
 		if _, err := rand.Read(randomBytes); err != nil {
-			panic(fmt.Sprintf("Failed to generate random bytes: %v", err))
+			return "", fmt.Errorf("secure random failed: %w", err)
 		}
 
-		// Use modulo to select character from charset
-		code[i] = BackupCodeCharset[int(randomBytes[0])%charsetLen]
+		// Rejection pool: 256 - (256 % charsetLen)
+		limit := 256 - (256 % charsetLen)
+		val := int(randomBytes[0])
+		if val < limit {
+			code[i] = BackupCodeCharset[val%charsetLen]
+			i++
+		}
 	}
-	return string(code)
+	return string(code), nil
+}
+
+func shuffleIndices(slice []int) {
+	n := len(slice)
+	for i := n - 1; i > 0; i-- {
+		b := make([]byte, 1)
+		_, _ = rand.Read(b)
+		j := int(b[0]) % (i + 1)
+		slice[i], slice[j] = slice[j], slice[i]
+	}
 }
 
 // generateQRCodeDataURI creates a QR code PNG and returns it as a base64 data URI
@@ -851,11 +995,11 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 	var lastUsedStr sql.NullString
 
 	err := db.QueryRow(`
-		SELECT secret_encrypted, backup_codes_encrypted, enabled, setup_completed, created_at, last_used
+		SELECT secret_encrypted, enabled, setup_completed, created_at, last_used
 		FROM user_totp 
 		WHERE username = ?`,
 		username,
-	).Scan(&data.SecretEncrypted, &data.BackupCodesEncrypted, &data.Enabled, &data.SetupCompleted, &createdAtStr, &lastUsedStr)
+	).Scan(&data.SecretEncrypted, &data.Enabled, &data.SetupCompleted, &createdAtStr, &lastUsedStr)
 
 	if err != nil {
 		return nil, err
@@ -866,10 +1010,6 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 	// Detect and decode base64-encoded data
 	if decodedSecret, err := decodeBase64IfNeeded(data.SecretEncrypted); err == nil {
 		data.SecretEncrypted = decodedSecret
-	}
-
-	if decodedBackup, err := decodeBase64IfNeeded(data.BackupCodesEncrypted); err == nil {
-		data.BackupCodesEncrypted = decodedBackup
 	}
 
 	// Parse timestamps
@@ -910,36 +1050,6 @@ func decryptTOTPSecret(encrypted []byte, username string) (string, error) {
 	}
 
 	return string(decrypted), nil
-}
-
-func decryptJSON(encrypted []byte, username string, target interface{}) error {
-	totpKey, err := crypto.DeriveTOTPUserKey(username)
-	if err != nil {
-		return err
-	}
-	defer crypto.SecureZeroTOTPKey(totpKey)
-
-	decrypted, err := crypto.DecryptGCM(encrypted, totpKey)
-	if err != nil {
-		return err
-	}
-
-	return json.Unmarshal(decrypted, target)
-}
-
-// Helper functions for safe array slicing
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // isDebugMode checks if debug mode is enabled

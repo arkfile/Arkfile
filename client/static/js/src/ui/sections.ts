@@ -63,24 +63,58 @@ export function toggleAuthForm(): void {
   }
 }
 
-export function showTOTPSetupSection(): void {
+export function showTOTPSetupSection(predefinedData?: any): void {
   const registerForm = document.getElementById('register-form');
+  const loginForm = document.getElementById('login-form');
   const totpSetupForm = document.getElementById('totp-setup-form');
 
   if (registerForm) {
     registerForm.classList.add('hidden');
   }
 
+  if (loginForm) {
+    loginForm.classList.add('hidden');
+  }
+
   if (totpSetupForm) {
     totpSetupForm.classList.remove('hidden');
   }
 
-  // Auto-trigger TOTP setup so the QR code appears immediately.
-  // Directly calls generateAndDisplayTOTPSetup() rather than simulating a button click,
-  // because the button's event listener in app.ts may not be attached yet at this point.
-  import('../auth/totp.js').then(({ generateAndDisplayTOTPSetup }) => {
-    generateAndDisplayTOTPSetup().catch(() => {});
-  }).catch(() => {});
+  if (predefinedData) {
+    // Populate QR code display using predefined reset data directly
+    const qrDisplay = document.getElementById('qr-code-display');
+    const qrSection = document.getElementById('qr-code-section');
+    const manualCode = document.getElementById('manual-entry-code');
+    const verifyBtn = document.getElementById('verify-totp-btn') as HTMLButtonElement | null;
+    const backupSection = document.getElementById('backup-codes-section');
+    const backupList = document.getElementById('backup-codes-list');
+
+    if (qrDisplay) {
+      qrDisplay.innerHTML = `<img src="${predefinedData.qr_code_url}" alt="TOTP QR Code" style="max-width:200px;height:auto;border:1px solid var(--depth-4);border-radius:4px;">`;
+    }
+    if (manualCode) {
+      manualCode.textContent = predefinedData.manual_entry;
+    }
+    if (qrSection) {
+      qrSection.classList.remove('hidden');
+    }
+    if (verifyBtn) {
+      verifyBtn.disabled = false;
+    }
+    if (backupList && predefinedData.backup_codes?.length) {
+      backupList.innerHTML = predefinedData.backup_codes.map((c: string) => `<li>${c}</li>`).join('');
+    }
+    if (backupSection) {
+      backupSection.classList.remove('hidden');
+    }
+  } else {
+    // Auto-trigger TOTP setup so the QR code appears immediately.
+    // Directly calls generateAndDisplayTOTPSetup() rather than simulating a button click,
+    // because the button's event listener in app.ts may not be attached yet at this point.
+    import('../auth/totp.js').then(({ generateAndDisplayTOTPSetup }) => {
+      generateAndDisplayTOTPSetup().catch(() => {});
+    }).catch(() => {});
+  }
 }
 
 export function hideTOTPSetupSection(): void {

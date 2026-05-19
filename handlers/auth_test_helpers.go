@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/storage"
@@ -37,6 +38,9 @@ func setupTestEnv(t *testing.T, method, path string, body io.Reader) (echo.Conte
 		database.DB = originalDB
 		db.Close()
 	})
+
+	// Make sure Tier-3 master is simulated as loaded for handlers tests
+	crypto.SetTier3MasterForTest(make([]byte, 32))
 
 	// Create mock storage and registry
 	mockStorage := &storage.MockObjectStorageProvider{}

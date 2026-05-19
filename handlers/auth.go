@@ -1006,25 +1006,110 @@ type TOTPResetResponse struct {
 }
 
 // TOTPReset resets TOTP for a user (requires valid backup code)
+// RecoverWithBackupCodeRequest represents the request for the lost-device recover flow
+type RecoverWithBackupCodeRequest struct {
+	BackupCode string `json:"backup_code"`
+}
+
+// RecoverWithBackupCodeResponse represents the successful recovery response
+type RecoverWithBackupCodeResponse struct {
+	ResetToken string    `json:"reset_token"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+// RecoverWithBackupCode receives a backup code and returns a short-lived reset-tier JWT token (temporary arkfile-totp-reset audience).
+// Safe to call with a temp-JWT tier authentication.
+func RecoverWithBackupCode(c echo.Context) error {
+	var request RecoverWithBackupCodeRequest
+	if err := c.Bind(&request); err != nil {
+		return JSONError(c, http.StatusBadRequest, "Invalid request format")
+	}
+
+	username := auth.GetUsernameFromToken(c)
+	if username == "" {
+		return JSONError(c, http.StatusUnauthorized, "User context not found in token")
+	}
+
+	if request.BackupCode == "" || len(request.BackupCode) != 10 {
+		return JSONError(c, http.StatusBadRequest, "Backup code is required (10 characters)")
+	}
+
+	// High security: Validate & burn the backup code.
+	if err := auth.ValidateBackupCode(database.DB, username, request.BackupCode); err != nil {
+		logging.ErrorLogger.Printf("Failed backup code recovery for %s: %v", username, err)
+		entityID := logging.GetOrCreateEntityID(c)
+		if recordErr := recordAuthFailedAttempt("totp_reset", entityID); recordErr != nil {
+			logging.ErrorLogger.Printf("Failed to record failed backup-code recovery attempt: %v", recordErr)
+		}
+		return JSONError(c, http.StatusUnauthorized, "Invalid backup code")
+	}
+
+	// Success: Issue a short-lived Reset token with "arkfile-totp-reset" audience.
+	resetToken, expiresAt, err := auth.GenerateTemporaryResetToken(username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to generate reset token for %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "Failed to create reset session")
+	}
+
+	// Browser client support: Write temporary cookie.
+	c.SetCookie(&http.Cookie{
+		Name:     CookieTempToken,
+		Value:    resetToken,
+		Path:     "/",
+		Expires:  expiresAt,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+	})
+
+	database.LogUserAction(username, "initiated recovery with backup code", "")
+	logging.InfoLogger.Printf("SECURITY: Backup code recovery session generated for user: %s", username)
+
+	return JSONResponse(c, http.StatusOK, "Backup code verified successfully. Reset token generated.", RecoverWithBackupCodeResponse{
+		ResetToken: resetToken,
+		ExpiresAt:  expiresAt,
+	})
+}
+
+// TOTPReset resets TOTP for a user (requires a valid full token OR reset-tier token).
 func TOTPReset(c echo.Context) error {
 	var request TOTPResetRequest
 	if err := c.Bind(&request); err != nil {
 		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
 
-	// Get username from JWT token
+	// Get username from JWT token (supports both standard full-JWT and reset-temporary JWT tokens)
 	username := auth.GetUsernameFromToken(c)
 
-	// Validate input
-	if request.BackupCode == "" || len(request.BackupCode) != 10 {
+	// Enforce reset authorization claims
+	claims, _ := c.Get("user").(*auth.Claims)
+	if claims == nil {
+		claimsFromContext, ok := auth.GetClaimsFromContext(c)
+		if ok {
+			claims = claimsFromContext
+		}
+	}
+
+	hasResetAud := false
+	if claims != nil {
+		for _, aud := range claims.Audience {
+			if aud == "arkfile-totp-reset" {
+				hasResetAud = true
+				break
+			}
+		}
+	}
+
+	// If they are not authenticating via the temporary reset token path (lost-device),
+	// they must provide a valid 10-char backup code.
+	if !hasResetAud && (request.BackupCode == "" || len(request.BackupCode) != 10) {
 		return JSONError(c, http.StatusBadRequest, "Valid backup code is required (10 characters)")
 	}
 
-	// Reset TOTP (this validates the backup code and generates new setup)
+	// Reset TOTP (this generates new setup and saves hashed backup codes)
 	setup, err := auth.ResetTOTP(database.DB, username, request.BackupCode)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to reset TOTP for %s: %v", username, err)
-		// Record failed TOTP reset attempt
 		entityID := logging.GetOrCreateEntityID(c)
 		if recordErr := recordAuthFailedAttempt("totp_reset", entityID); recordErr != nil {
 			logging.ErrorLogger.Printf("Failed to record TOTP reset failure: %v", recordErr)
@@ -1033,8 +1118,8 @@ func TOTPReset(c echo.Context) error {
 	}
 
 	// Log TOTP reset
-	database.LogUserAction(username, "reset TOTP with backup code", "")
-	logging.InfoLogger.Printf("SECURITY: TOTP reset for user: %s", username)
+	database.LogUserAction(username, "reset TOTP", "")
+	logging.InfoLogger.Printf("SECURITY: TOTP reset complete for user: %s", username)
 
 	return JSONResponse(c, http.StatusOK, "TOTP has been reset successfully. Please update your authenticator app immediately with the new secret.", TOTPResetResponse{
 		Secret:      setup.Secret,

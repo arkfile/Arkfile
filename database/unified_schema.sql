@@ -138,7 +138,6 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
 CREATE TABLE IF NOT EXISTS user_totp (
     username TEXT PRIMARY KEY,
     secret_encrypted BLOB NOT NULL,             -- AES-GCM encrypted with user-specific TOTP key
-    backup_codes_encrypted BLOB,                -- JSON array of codes, encrypted
     enabled BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_used TIMESTAMP,
@@ -146,6 +145,17 @@ CREATE TABLE IF NOT EXISTS user_totp (
     failed_attempts_in_window INTEGER NOT NULL DEFAULT 0,  -- A-08: rolling-window failure counter
     window_started_at TIMESTAMP,               -- A-08: start of current 24h failure window
     last_failed_attempt_at TIMESTAMP,          -- A-08: timestamp of most recent failure
+    FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+-- User TOTP Backup Codes (Hashed, RFC/Adversarial resilient - F-03)
+CREATE TABLE IF NOT EXISTS user_totp_backup_codes (
+    username TEXT NOT NULL,
+    code_index INTEGER NOT NULL,          -- 0..9 index
+    code_hash BLOB NOT NULL,              -- 32-byte Argon2id hash of the backup code
+    used_at TIMESTAMP,                    -- Timestamp when this specific code was used
+    PRIMARY KEY (username, code_index),
+    UNIQUE (username, code_hash),
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 

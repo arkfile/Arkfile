@@ -20,56 +20,31 @@ var (
 	totpError     error
 )
 
-// InitializeTOTPMasterKey loads or generates the TOTP master key using KeyManager
+// InitializeTOTPMasterKey loads or generates the TOTP master key using KeyManager (no-op in Tier-3, but kept for signature compatibility)
 func InitializeTOTPMasterKey() error {
-	totpOnce.Do(func() {
-		km, err := GetKeyManager()
-		if err != nil {
-			totpError = fmt.Errorf("failed to get KeyManager: %w", err)
-			return
-		}
-
-		// Retrieve or generate the 32-byte master key
-		// We use "totp_master_key_v1" as the ID and "totp" as the type context
-		key, err := km.GetOrGenerateKey("totp_master_key_v1", "totp", 32)
-		if err != nil {
-			totpError = fmt.Errorf("failed to get/generate TOTP master key: %w", err)
-			return
-		}
-
-		if len(key) != 32 {
-			totpError = fmt.Errorf("invalid TOTP master key length: expected 32 bytes, got %d", len(key))
-			return
-		}
-
-		totpMasterKey = key
-	})
-
-	return totpError
+	return nil
 }
 
-// DeriveTOTPUserKey derives a user-specific TOTP encryption key from the master key
-// This key remains consistent for the user across all sessions
+// DeriveTOTPUserKey derives a user-specific TOTP encryption key from the Tier-3 master key.
+// This key remains consistent for the user across all sessions.
 func DeriveTOTPUserKey(username string) ([]byte, error) {
-	if err := InitializeTOTPMasterKey(); err != nil {
-		return nil, err
-	}
-
-	if len(totpMasterKey) == 0 {
-		return nil, fmt.Errorf("TOTP master key not initialized")
-	}
-
 	if username == "" {
 		return nil, fmt.Errorf("username cannot be empty")
+	}
+
+	// Use Derived Tier-3 Master '"totp_user"' purpose key
+	baseSubkey, err := DeriveTier3Subkey([]byte("totp_user"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive Tier-3 user core subkey: %w", err)
 	}
 
 	// Use HKDF to derive user-specific key with domain separation
 	context := fmt.Sprintf("%s:%s", TOTPUserKeyContext, username)
 
-	hkdf := hkdf.New(sha256.New, totpMasterKey, nil, []byte(context))
+	hk := hkdf.New(sha256.New, baseSubkey, nil, []byte(context))
 
 	userKey := make([]byte, 32)
-	if _, err := hkdf.Read(userKey); err != nil {
+	if _, err := hk.Read(userKey); err != nil {
 		return nil, fmt.Errorf("failed to derive TOTP user key: %w", err)
 	}
 

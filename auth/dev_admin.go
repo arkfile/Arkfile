@@ -252,7 +252,11 @@ func ValidateDevAdminTOTPWorkflow(db *sql.DB, user *models.User, totpSecret stri
 func generateDevAdminBackupCodes(count int) []string {
 	// Use the same secure random generation as production
 	// This ensures dev environment matches production behavior
-	return generateBackupCodes(count)
+	codes, err := generateBackupCodesResilient(count)
+	if err != nil {
+		panic(err)
+	}
+	return codes
 }
 
 // waitForNextTOTPWindow calculates minimum time to wait for next TOTP window

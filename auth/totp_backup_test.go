@@ -12,7 +12,10 @@ func TestBackupCodeRandomness(t *testing.T) {
 	allCodes := make(map[string]bool)
 
 	for set := 0; set < numSets; set++ {
-		codes := generateBackupCodes(codesPerSet)
+		codes, err := generateBackupCodesResilient(codesPerSet)
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		// Check that we got the right number of codes
 		if len(codes) != codesPerSet {
@@ -65,7 +68,11 @@ func TestSingleBackupCodeRandomness(t *testing.T) {
 	codes := make([]string, numCodes)
 
 	for i := 0; i < numCodes; i++ {
-		codes[i] = generateSingleBackupCode()
+		code, err := generateSingleBackupCodeResilient()
+		if err != nil {
+			t.Fatal(err)
+		}
+		codes[i] = code
 		t.Logf("Code %d: %s", i, codes[i])
 	}
 

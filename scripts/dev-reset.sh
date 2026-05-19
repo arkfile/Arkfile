@@ -256,6 +256,8 @@ if [ -d "$ARKFILE_DIR" ]; then
     rm -rf "$ARKFILE_DIR/etc/keys/jwt"* 2>/dev/null || true
     rm -rf "$ARKFILE_DIR/etc/keys/opaque"* 2>/dev/null || true
     rm -rf "$ARKFILE_DIR/etc/keys/tls"* 2>/dev/null || true
+    rm -f "$ARKFILE_DIR/etc/keys/user-secret-master.bin" 2>/dev/null || true
+    rm -f "$ARKFILE_DIR/etc/keys/bootstrap-token.bin" 2>/dev/null || true
     
     # Delete old client static files (including stale TypeScript builds)
     print_status "INFO" "Nuking old client static files..."
