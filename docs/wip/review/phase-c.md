@@ -443,12 +443,12 @@ Run the triplet in order:
 2. `bash scripts/testing/e2e-test.sh`
 3. `sudo bash scripts/testing/e2e-playwright.sh`
 
-All three must be green.
+All three must be green. **ALL GREEN AS OF 05/19/26.**
 
 ### Final gate
 
 - Update the Status Tracker in `00-high-priority-issues.md` (§6) from "Not started" to "Done <date>" with a cluster summary matching the format used for A1 / A2 / A3 / B (Go test results, TS test results, beta impact reminder).
-- Draft the RED beta heads-up message per the template in §5's "Phase C beta impact" subsection of `00-high-priority-issues.md`.
+- SKIP: Draft the RED beta heads-up message per the template in §5's "Phase C beta impact" subsection of `00-high-priority-issues.md`. (SKIP THIS STEP; DEV WILL DO THIS.)
 - **COMMIT-GATE 3**: present the documentation update, the heads-up draft, and the final-validation summary to the developer; the developer commits.
 
 ---
@@ -638,126 +638,5 @@ A few points worth flagging for anyone reviewing this plan before implementation
 **On dead code removal timing:** some reviewers may question why dead code from findings B-17, B-18, C-23, and C-24 is being removed in Phase C rather than in a dedicated cleanup phase. The reason is that Phase C already requires opening `crypto/file_operations.go` and `models/file.go` for substantive changes. Leaving dead functions alongside newly AAD-aware functions in the same files creates ambiguity and potential for future confusion. The greenfield principle from `AGENTS.md` is clear: clean breaks now, not incremental deprecation. Removing dead code while those files are open is the right time to do it.
 
 **On `crypto/session.go` and `crypto/opaque_validation.go`:** these are also dead code (findings B-10, B-11, A-45) but are not in files that Phase C needs to touch. They are called out here for awareness and should be removed in a near-term cleanup session, but are out of scope for Phase C.
-
----
-
-# STATUS NOTE/NEXT TASK - 05/18/26
-
-# Task: Phase C, Step 5 — TypeScript AAD foundation
-
-Phase C is in flight. Steps 0/1/2/3/4 are landed and green; Step 4 was just completed in the previous session (server-side handlers + models + tests + cross-cutting rate-limit response cleanup). The Go-side Phase C work is done. This session begins the TypeScript port.
-
-## Read these first (in this order)
-
-1. __`docs/AGENTS.md`__ — project guidelines and constraints. Note especially the greenfield policy, the "no emojis / no formatting characters" rule, the "no git commits or pushes" rule, the "no `npm`/`pnpm`/`npx` — use `bun`/`bunx`" rule, and the deployment-script guidance.
-
-2. __`docs/wip/review/phase-c.md`__ — the full Phase C plan. Read in order:
-
-   - __§9 "Progress" block at the top__ — Steps 0/1/2/3/4 are `[x]`; Step 5 is the next `[ ]`. Step 4's body in the Progress block also lists the schema + rate-limit cleanup work that landed alongside Step 4 so you have full context for what the server now expects.
-   - __§4.1, §4.2, §4.3, §4.4, §4.6__ — AAD encoding convention, the three byte layouts, and the canonical field-label constants.
-   - __§7 and §7.5 G__ — confirms `MAX_FILE_SIZE` deletion (B-27) is in Step 5's scope; also defines what's explicitly out of scope.
-   - __§9 "Step 5" body__ — authoritative plan for what to change.
-   - __§11 "`client/static/js/src/__tests__/aad.test.ts` (new)"__ — exact required tests for this step.
-
-3. __`crypto/aad.go` and `crypto/aad_test.go`__ — the canonical Go implementation. The TypeScript port must produce byte-for-byte identical output. The hardcoded conformance vector (`expectedChunkAADHex` for `BuildChunkAAD("a1b2c3d4-e5f6-7890-abcd-ef1234567890", 3, 10)`) is the single shared test vector across both languages.
-
-4. __`docs/wip/review/00-high-priority-issues.md` §1–§3__ only for cross-cutting context. Phase C details are in `phase-c.md`; this file is the umbrella tracker.
-
-## Repo state at the start of the session
-
-Verify before starting:
-
-```bash
-go test ./... 2>&1 | grep -E "^(ok|FAIL)"
-go vet ./...
-```
-
-Both should be green across all packages. The diff for Step 4 is either committed at this point or still in the working tree — either is fine; just confirm green.
-
-The TS test suite (`bun test client/static/js/src/__tests__/`) is __expected to still pass at this point__ because no TS code references AAD yet. Step 5 will add new files but not touch existing AAD-naive code; the existing tests should remain green.
-
-## What you must do in Step 5
-
-Two new files and one targeted deletion. No wiring into existing TS code yet — that's Steps 6–8.
-
-### 1. New file: `client/static/js/src/crypto/aad.ts`
-
-Mirror `crypto/aad.go` byte-for-byte:
-
-- Export canonical AAD label constants:
-  ```ts
-  export const AAD_FIELD_FILENAME = "encrypted_filename";
-  export const AAD_FIELD_SHA256   = "encrypted_sha256sum";
-  ```
-- Export three builder functions:
-  ```ts
-  export function buildChunkAAD(fileID: string, chunkIndex: bigint, totalChunks: bigint): Uint8Array;
-  export function buildFEKEnvelopeAAD(fileID: string, keyTypeByte: number): Uint8Array;
-  export function buildMetadataFieldAAD(fileID: string, fieldName: string, ownerUsername: string): Uint8Array;
-  ```
-
-  Use `bigint` for `chunkIndex` and `totalChunks` because the byte layout uses 8-byte big-endian unsigned 64-bit integers (per §4.2). A JS `number` is float64 and loses precision above 2^53; `bigint` is the correct primitive here. The Go side uses `int64`, but Step 5 is implementing a __byte-format-compatible__ port, not a name-compatible one, so the TypeScript types should match what Web Crypto's `AES-GCM` consumes (a `Uint8Array`) and what the JS runtime cleanly represents.
-
-- Encoding rules (per §4.1):
-  - Variable-length string field → `[4-byte BE uint32 length][UTF-8 bytes]`.
-  - Fixed-width 64-bit integer field → `[8-byte BE uint64]` directly, no length prefix.
-  - Single-byte field → `[1 byte]` directly.
-
-- Use the WHATWG `TextEncoder` for UTF-8 encoding (`new TextEncoder().encode(s)`). Do not use `Buffer` — the codebase targets browser TS first.
-
-- No emojis, no `===`/`---` formatting characters in comments. Keep doc comments short and focused.
-
-### 2. New file: `client/static/js/src/__tests__/aad.test.ts`
-
-Required tests (per §11):
-
-- `TestBuildChunkAAD_CrossLanguageVector` — __the most important test in this file__. Hardcode the same input vector and expected hex bytes as `crypto/aad_test.go` (`fileID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"`, `chunkIndex = 3n`, `totalChunks = 10n`). Look in `crypto/aad_test.go` for the literal hex value (`expectedChunkAADHex`) and hand-copy it. Assert byte-for-byte `Uint8Array` equality.
-- `TestBuildChunkAAD_UniqueByChunkIndex` — `buildChunkAAD(fid, 0n, 5n) !== buildChunkAAD(fid, 1n, 5n)`.
-- `TestBuildChunkAAD_UniqueByFileID` — different `fileID` → different bytes.
-- `TestBuildFEKEnvelopeAAD_KeyTypeDistinction` — `0x01` (account) vs `0x02` (custom) produce different AADs.
-- `TestBuildMetadataFieldAAD_FieldNameDistinction` — `AAD_FIELD_FILENAME` vs `AAD_FIELD_SHA256` produce different AADs.
-- `TestBuildMetadataFieldAAD_UsernameDistinction` — `"alice"` vs `"bob"` produce different AADs.
-
-Use the project's existing test framework (look at `client/static/js/src/__tests__/` for the convention — most likely `bun:test` or `vitest`). Whatever the existing tests use, match it.
-
-### 3. Delete `MAX_FILE_SIZE` from `client/static/js/src/crypto/constants.ts` (finding B-27)
-
-- Delete the `MAX_FILE_SIZE` constant.
-- If `MAX_FILE_SIZE` was the only key in the `LIMITS` object, delete the entire `LIMITS` object too.
-- Search the workspace for any consumer of `MAX_FILE_SIZE` or `LIMITS.MAX_FILE_SIZE` and confirm none exist. If a consumer is found, raise it to the developer rather than silently bypassing it (see §7).
-
-## Things NOT in your scope this session
-
-- Wiring AAD into `aes-gcm.ts`, `metadata-helpers.ts`, `upload.ts`, `streaming-download.ts`, `download.ts`, `share.ts`, `list.ts`, `shares/share-list.ts`, or `utils/digest-cache.ts`. That's Steps 6–8.
-- Running `dev-reset.sh` / `e2e-test.sh` / `e2e-playwright.sh` — that's the Step 9 final gate.
-- Closing out the Status Tracker in `00-high-priority-issues.md` — that's the final-gate work.
-- Committing or pushing. __Assistants never commit or push.__ Stop at the green gate and present the diff. The developer commits.
-
-## Validation gate for this session
-
-Before declaring Step 5 done, you must run:
-
-```bash
-bun test client/static/js/src/__tests__/
-```
-
-All tests must pass, including the new `aad.test.ts` and all pre-existing tests (no regressions from the `MAX_FILE_SIZE` deletion). This is the green checkpoint for Step 5. There is no COMMIT-GATE for Step 5 on its own; the next commit-gate is COMMIT-GATE 2 after Step 8.
-
-## Where things live for orientation
-
-- `crypto/aad.go` — Go canonical implementation with the conformance vector hex literal.
-- `crypto/aad_test.go` — Go test suite; mirror its test names (in the camelCase TS form) for grep parity.
-- `client/static/js/src/crypto/constants.ts` — site of the `MAX_FILE_SIZE` deletion; check whether `LIMITS` becomes empty.
-- `client/static/js/src/crypto/` — directory where `aad.ts` lives.
-- `client/static/js/src/__tests__/` — directory where `aad.test.ts` lives; mimic the import style of an existing test file there.
-- `package.json` — confirm `bun test` is the expected runner before invoking it; check the `scripts` block.
-
-## Style reminders
-
-- No emojis, no `===` / `---` formatting characters in code, comments, log/print statements.
-- Keep doc comments short and focused on what the function does in its ideal form. Flag (don't write) any "kept for backwards compatibility" text.
-- No `npm`, `pnpm`, `npx`, `yarn` — always `bun` / `bunx`.
-- Honesty / transparency: if Step 5 surfaces something off in the existing TS structure, the type system, the test framework, or any cross-cutting concern, raise it to the developer rather than papering over it.
-- If the conformance vector hex from `crypto/aad_test.go` is not literally present (search for `expectedChunkAADHex`), regenerate it by running the Go test and capturing the value the Go side produces — never invent a new vector. The whole point of the cross-language vector is that one side is canonical and the other side validates against it.
 
 ---
