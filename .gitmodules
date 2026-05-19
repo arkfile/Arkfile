@@ -4,3 +4,11 @@
 [submodule "vendor/stef/liboprf"]
 	path = vendor/stef/liboprf
 	url = https://github.com/stef/liboprf.git
+[submodule "vendor/jedisct1/libsodium"]
+	path = vendor/jedisct1/libsodium
+	url = https://github.com/jedisct1/libsodium.git
+	# Phase D, finding F-06: native Go path uses this vendored libsodium
+	# rather than a host package manager. Pin to a stable tag via
+	#   git -C vendor/jedisct1/libsodium checkout 1.0.20
+	# The WASM path uses an independent libsodium pin under
+	# vendor/stef/libopaque/js/libsodium.js (see build-libopaque-wasm.sh).

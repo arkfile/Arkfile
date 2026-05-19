@@ -42,6 +42,14 @@ export LIBOPAQUE_A="$BUILD_CLIBS/libopaque.a"
 export LIBOPRF_A="$BUILD_CLIBS/liboprf.a"
 export NOISE_XK_A="$BUILD_CLIBS/liboprf-noiseXK.a"
 
+# Phase D, finding F-06: native libsodium is now vendored and built from source.
+# The static archive lives in-tree under the submodule's autotools build layout.
+# Tracked separately from BUILD_CLIBS because libsodium has its own build
+# system and the artifact is not copied into $BUILD_CLIBS.
+export LIBSODIUM_DIR="vendor/jedisct1/libsodium"
+export LIBSODIUM_INCLUDE="$LIBSODIUM_DIR/src/libsodium/include"
+export LIBSODIUM_A="$LIBSODIUM_DIR/src/libsodium/.libs/libsodium.a"
+
 # =============================================================================
 # GO TOOLCHAIN FUNCTIONS
 # =============================================================================
@@ -127,12 +135,14 @@ clean_build_dir() {
     fi
 }
 
-# Check if C libraries exist and are valid
+# Check if C libraries exist and are valid.
+# Phase D, finding F-06: also verifies vendored libsodium static archive.
 c_libs_exist() {
-    if [ -f "$LIBOPAQUE_A" ] && [ -f "$LIBOPRF_A" ]; then
+    if [ -f "$LIBOPAQUE_A" ] && [ -f "$LIBOPRF_A" ] && [ -f "$LIBSODIUM_A" ]; then
         # Verify they're actual archive files
         if file "$LIBOPAQUE_A" | grep -q "archive" && \
-           file "$LIBOPRF_A" | grep -q "archive"; then
+           file "$LIBOPRF_A" | grep -q "archive" && \
+           file "$LIBSODIUM_A" | grep -q "archive"; then
             return 0
         fi
     fi

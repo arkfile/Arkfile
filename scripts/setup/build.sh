@@ -344,10 +344,16 @@ export PATH="${BUN_DIR}:${PATH}"
 
 pushd client/static/js > /dev/null
 
-# Always ensure dependencies are up to date
-echo "Ensuring Bun dependencies are installed..."
-${BUN_CMD} install || {
-    echo -e "${RED}[X] Failed to install dependencies${NC}"
+# Always ensure dependencies are up to date.
+# --frozen-lockfile (Phase D, finding F-13) refuses to install if package.json
+# and bun.lock disagree. This prevents supply-chain drift on every deploy and
+# enforces that any dependency-version change must be a deliberate, reviewed
+# update to both files.
+echo "Ensuring Bun dependencies are installed (frozen lockfile)..."
+${BUN_CMD} install --frozen-lockfile || {
+    echo -e "${RED}[X] Failed to install dependencies (frozen lockfile)${NC}"
+    echo -e "${YELLOW}If package.json was changed, regenerate bun.lock with:${NC}"
+    echo -e "${YELLOW}  cd client/static/js && bun install${NC}"
     exit 1
 }
 
@@ -403,33 +409,49 @@ echo -e "${GREEN}[OK] TypeScript frontend built successfully${NC}"
 build_go_binaries_static() {
     echo -e "${YELLOW}Building Go binaries with static linking...${NC}"
     
-    # Set CGO flags once for all CGO-linked builds
+    # Set CGO flags once for all CGO-linked builds.
+    # Phase D, finding F-06: libsodium is now linked against the vendored
+    # static archive at vendor/jedisct1/libsodium/src/libsodium/.libs/libsodium.a
+    # rather than the host system's pkg-config / package-manager installation.
+    if [ ! -f "$LIBSODIUM_A" ]; then
+        echo -e "${RED}[X] Vendored libsodium archive not found: $LIBSODIUM_A${NC}"
+        echo -e "${YELLOW}    The build-libopaque.sh step should have produced this.${NC}"
+        exit 1
+    fi
     export CGO_ENABLED=1
-    export CGO_CFLAGS="-I./vendor/stef/libopaque/src -I./vendor/stef/liboprf/src"
-    export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf $(pkg-config --libs --static libsodium)"
+    export CGO_CFLAGS="-I./vendor/stef/libopaque/src -I./vendor/stef/liboprf/src -I./$LIBSODIUM_INCLUDE"
+    export CGO_LDFLAGS="-L./vendor/stef/libopaque/src -L./vendor/stef/liboprf/src -lopaque -loprf $(pwd)/$LIBSODIUM_A"
     
-    # All binaries use the same static linking flags
-    # NOTE: Version uses const in Go source, so -X ldflags has no effect currently.
-    # To enable build-time version injection, change Go source to use var instead of const.
-    local STATIC_LDFLAGS='-extldflags "-static"'
+    # Reproducible-build flags (Phase D, finding F-05).
+    #   -s -w           strip symbol table and DWARF; smaller binary, fewer host-path leaks.
+    #   -buildid=       empty Go build-id so two clean rebuilds at the same commit produce
+    #                   byte-identical binaries.
+    #   -extldflags     '-static' forces fully static linking against CGO archives.
+    local STATIC_LDFLAGS='-s -w -buildid= -extldflags "-static"'
+    
+    # -trimpath          strip absolute filesystem paths from compiled stack frames
+    #                    (no /home/<user>/... leaks into the binary).
+    # -buildvcs=false    omit VCS info from the binary; supports reproducible builds
+    #                    even when building from a working tree with uncommitted state.
+    local REPRO_FLAGS='-trimpath -buildvcs=false'
     
     echo "Building arkfile server..."
-    "$GO_BINARY" build -a -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/${APP_NAME} .
+    "$GO_BINARY" build -a $REPRO_FLAGS -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/${APP_NAME} .
     echo -e "${GREEN}[OK] arkfile server built${NC}"
     
     echo "Building arkfile-client..."
-    "$GO_BINARY" build -a -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/arkfile-client ./cmd/arkfile-client
+    "$GO_BINARY" build -a $REPRO_FLAGS -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/arkfile-client ./cmd/arkfile-client
     echo -e "${GREEN}[OK] arkfile-client built${NC}"
     
     echo "Building arkfile-admin..."
-    "$GO_BINARY" build -a -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
+    "$GO_BINARY" build -a $REPRO_FLAGS -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
     echo -e "${GREEN}[OK] arkfile-admin built${NC}"
     
     # Reset CGO state
     export CGO_ENABLED=0
     unset CGO_CFLAGS CGO_LDFLAGS
     
-    echo -e "${GREEN}[OK] All Go binaries built with static linking${NC}"
+    echo -e "${GREEN}[OK] All Go binaries built with static linking (reproducible flags applied)${NC}"
 }
 
 # Verify static binaries
@@ -506,6 +528,96 @@ else
     ls -la client/static/js/dist/ 2>/dev/null || echo "dist directory does not exist"
     exit 1
 fi
+
+# Inject Subresource Integrity (SRI) attributes (Phase D, finding F-04).
+#
+# We compute sha384 of every shipped client-side script in the build tree and
+# rewrite the deployed HTML copies under ${BUILD_CLIENT}/static/ to add
+# `integrity="sha384-..." crossorigin="anonymous"` attributes on the matching
+# <script> tags. Source HTML files in client/static/ are NOT modified; only the
+# deployed copies under ${BUILD_CLIENT}/static/ carry the SRI attributes.
+#
+# Three shipped scripts cover both HTML files:
+#   /js/libopaque.js     -- WASM OPAQUE library (index.html)
+#   /js/dist/app.js      -- Compiled TypeScript bundle (index.html and shared.html)
+#   /js/shared-init.js   -- Inline init for the share page (shared.html)
+inject_sri_attributes() {
+    echo -e "${YELLOW}Injecting SRI attributes into shipped HTML...${NC}"
+
+    local libopaque_js="${BUILD_CLIENT_JS}/libopaque.js"
+    local app_js="${BUILD_CLIENT_JS_DIST}/app.js"
+    local shared_init_js="${BUILD_CLIENT_JS}/shared-init.js"
+
+    for f in "$libopaque_js" "$app_js" "$shared_init_js"; do
+        if [ ! -f "$f" ]; then
+            echo -e "${RED}[X] SRI source missing: $f${NC}"
+            exit 1
+        fi
+    done
+
+    # `openssl dgst -sha384 -binary | openssl base64 -A` is the canonical SRI
+    # hash format (sha384, base64-encoded, single-line). Fall back to printing
+    # an error if openssl is absent.
+    if ! command -v openssl >/dev/null 2>&1; then
+        echo -e "${RED}[X] openssl is required for SRI injection${NC}"
+        exit 1
+    fi
+
+    local libopaque_sri
+    local app_sri
+    local shared_init_sri
+    libopaque_sri="sha384-$(openssl dgst -sha384 -binary "$libopaque_js" | openssl base64 -A)"
+    app_sri="sha384-$(openssl dgst -sha384 -binary "$app_js" | openssl base64 -A)"
+    shared_init_sri="sha384-$(openssl dgst -sha384 -binary "$shared_init_js" | openssl base64 -A)"
+
+    echo "  libopaque.js     -> $libopaque_sri"
+    echo "  dist/app.js      -> $app_sri"
+    echo "  shared-init.js   -> $shared_init_sri"
+
+    local index_html="${BUILD_CLIENT}/static/index.html"
+    local shared_html="${BUILD_CLIENT}/static/shared.html"
+
+    if [ ! -f "$index_html" ] || [ ! -f "$shared_html" ]; then
+        echo -e "${RED}[X] Expected HTML files missing in build directory${NC}"
+        exit 1
+    fi
+
+    # index.html: /js/libopaque.js, /js/dist/app.js
+    sed -i \
+        -e "s|<script src=\"/js/libopaque.js\"></script>|<script src=\"/js/libopaque.js\" integrity=\"${libopaque_sri}\" crossorigin=\"anonymous\"></script>|" \
+        -e "s|<script src=\"/js/dist/app.js\"></script>|<script src=\"/js/dist/app.js\" integrity=\"${app_sri}\" crossorigin=\"anonymous\"></script>|" \
+        "$index_html"
+
+    # shared.html: /js/dist/app.js, /js/shared-init.js
+    sed -i \
+        -e "s|<script src=\"/js/dist/app.js\"></script>|<script src=\"/js/dist/app.js\" integrity=\"${app_sri}\" crossorigin=\"anonymous\"></script>|" \
+        -e "s|<script src=\"/js/shared-init.js\"></script>|<script src=\"/js/shared-init.js\" integrity=\"${shared_init_sri}\" crossorigin=\"anonymous\"></script>|" \
+        "$shared_html"
+
+    # Verify each injection actually landed -- if any pattern failed to match,
+    # the HTML still references the script without SRI and we want a hard fail
+    # rather than a silently-unprotected deploy.
+    if ! grep -q "integrity=\"${libopaque_sri}\"" "$index_html"; then
+        echo -e "${RED}[X] SRI injection FAILED for libopaque.js in index.html${NC}"
+        exit 1
+    fi
+    if ! grep -q "integrity=\"${app_sri}\"" "$index_html"; then
+        echo -e "${RED}[X] SRI injection FAILED for dist/app.js in index.html${NC}"
+        exit 1
+    fi
+    if ! grep -q "integrity=\"${app_sri}\"" "$shared_html"; then
+        echo -e "${RED}[X] SRI injection FAILED for dist/app.js in shared.html${NC}"
+        exit 1
+    fi
+    if ! grep -q "integrity=\"${shared_init_sri}\"" "$shared_html"; then
+        echo -e "${RED}[X] SRI injection FAILED for shared-init.js in shared.html${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}[OK] SRI attributes injected into index.html and shared.html${NC}"
+}
+
+inject_sri_attributes
 
 # Setup error pages in webroot
 echo "Setting up error pages..."

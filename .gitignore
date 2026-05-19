@@ -17,6 +17,8 @@ vendor/*
 !vendor/stef/
 !vendor/stef/libopaque/
 !vendor/stef/liboprf/
+!vendor/jedisct1/
+!vendor/jedisct1/libsodium/
 
 # But ignore compiled artifacts in vendor libraries
 vendor/stef/libopaque/src/*.so
@@ -28,6 +30,19 @@ vendor/stef/liboprf/src/*.a
 vendor/stef/liboprf/src/noise_xk/*.so
 vendor/stef/liboprf/src/noise_xk/*.o
 vendor/stef/liboprf/src/noise_xk/*.a
+
+# Vendored libsodium build outputs (Phase D, finding F-06).
+# Source files in the submodule are tracked by the submodule itself; we ignore
+# only its in-tree build artifacts so a fresh clone + submodule init is clean.
+vendor/jedisct1/libsodium/src/libsodium/.libs/
+vendor/jedisct1/libsodium/**/*.lo
+vendor/jedisct1/libsodium/**/Makefile
+vendor/jedisct1/libsodium/**/config.h
+vendor/jedisct1/libsodium/**/config.log
+vendor/jedisct1/libsodium/**/config.status
+vendor/jedisct1/libsodium/**/libtool
+vendor/jedisct1/libsodium/**/stamp-h1
+vendor/jedisct1/libsodium/autom4te.cache/
 *.tmp
 *.swp
 .vscode/
