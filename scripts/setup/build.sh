@@ -224,7 +224,7 @@ if [ "${SKIP_C_LIBS}" != "true" ]; then
         echo "Missing files: $OPAQUE_SOURCE or $OPRF_SOURCE"
         
         # Initialize git submodules with proper ownership preservation
-        if ! git submodule update --init --recursive; then
+        if ! git submodule update --init --recursive --force; then
             echo -e "${RED}[X] Failed to initialize git submodules${NC}"
             exit 1
         fi
