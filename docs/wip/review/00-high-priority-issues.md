@@ -813,7 +813,7 @@ Updated as work lands. The "first not-started cluster" is where work resumes.
 | F | F4 | (infra) | **Done 2026-05-19** | Contact-info encryption migrated to Tier-3 key derived via `DeriveTier3Subkey([]byte("contact_info"))`. |
 | F | F5 | A-15 | **Done 2026-05-19** | Reachable TOTP recovery via backup code setup under temporary JWT eligibility gate. User can use backup code to clean enrollment and register new device. |
 | F | F6 | (documentation) | **Done 2026-05-19** | Tier-3 design, memory-hardening specifications, and file rotation instructions documented. |
-| G | — | E-21, E-03, E-04, E-05, E-02, A-12 | Not started | Financial-audit schema; GREEN beta |
+| G | — | E-21, E-03, E-04, E-05, E-02, A-12 | **Done 2026-05-20** | Pre-payment financial-audit integrity. Added `deleted_at` soft-delete Users attribute; moved balance lookups transactionally inside `tx` context in `SweepAllUsers`; enforced `UNIQUE(transaction_id)` to block double-spent credits; added persistent `billing_sweeps` table; parameterized/sanitized queries in `AdminSyncStatus`. |
 | H | — | (documentation) | Not started | Add plain-language threat-model section to `docs/security.md` |
 
 ---
@@ -855,3 +855,21 @@ Items intentionally deferred:
 - **Post-quantum readiness** (`docs/wip/post-quantum.md`): out of scope for this campaign.
 
 End of plan.
+
+---
+
+# MANUAL VERIFICATION OF FIXES PLAN, 05/20/26
+
+To systematically and meaningfully verify the high-priority security and privacy remediations in Arkfile without spending too much time, we want to target the absolute most critical threat vectors: credential protection, cryptographic tampering detection, and user account isolation. Your proposed testing flow (using `local-deploy.sh`, creating a user, approving them, uploading/downloading, and testing shares in Brave/Firefox private tabs) is an excellent baseline that exercises the happy path. To verify that our security mitigations are actually holding, you can perform up to five targeted manual checks alongside that flow.
+
+First, check **HttpOnly Cookie Isolation** to verify that credentials cannot be exfiltrated. Once you log in as your regular user or the admin, open your browser’s Developer Tools (F12) in Brave or Firefox and go to the Console tab. Run `console.log(document.cookie)`. You should confirm that your session tokens (`__Host-arkfile-token` and `__Host-arkfile-refresh`) are completely invisible to JavaScript execution and do not print, meaning they are fully protected against XSS-based session hijacking. Only the non-HttpOnly CSRF token (`__Host-arkfile-csrf`) should be visible.
+
+Second, check the **WASM Subresource Integrity (SRI) Protection** which blocks served script tampering. Open Firefox or Brave, right-click on the webpage background and select "View Page Source". Find the `<script>` tag referencing `/js/libopaque.js`. Confirm that it lists an explicit, cryptographically unique `integrity="sha384-..."` hash. To see SRI actively block tampered files, you can manually open `/opt/arkfile/client/static/js/libopaque.js`, add a single whitespace or comment line at the end, and reload the browser page. The browser console will immediately refuse to load the WASM authentication module and print an integrity mismatch error, proving that active supply-chain modifications are blocked.
+
+Third, check **Active Cryptographic Tampering Rejection at the AEAD Layer**. To verify that files are cryptographically bound to their File ID and chunk indices (Phase C's core fix), you can alter a chunk in transit. Locate an active upload session's chunk inside your temporary upload directories, or directly modify a chunk's data in the database/S3 backend if simulating server-compromise. When attempting to download that file as the client, your browser or CLI download client should immediately fail to decrypt the chunk and abort at the AEAD decryption stage, rather than blindly writing corrupted chunks to disk and waiting for a trailing SHA-256 validator to run.
+
+Fourth, check **User Account Isolation and Soft-Delete Enforcement** (Phase G). Register your regular test user, upload a test file, and log out. Then, use the admin tool to soft-delete that user. Verify that any active browser sessions are instantly terminated (JWT validation failed). Try to log back in as that user, and verify OPAQUE immediately rejects the login block (since the user is hidden with `deleted_at IS NOT NULL`). To verify audit retention, query the database directly and ensure that the deleted user's ledger rows in `credit_transactions` and `user_credits` remain completely intact, proving that billing records are preserved for compliance whereas access is fully severed.
+
+Fifth, check **TOTP Lockout Resistance against Brute-Force Attacks** (Phase A2). Navigate to your approved user login screen, enter the correct OPAQUE password prompt, and then intentionally submit an invalid TOTP code 11 times in a row. Verify that on the 11th attempt, the system immediately locks out further tries and displays a rate-limited retry duration. Submit another code and confirm that the cryptographic verification is skipped entirely (bypassing expensive CPU calculations) while the lockout window remains active. This verifies that your daily lockout cap is aggressively defending the VM from persistent authentication attacks.
+
+---

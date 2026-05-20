@@ -600,9 +600,10 @@ func DeleteUser(c echo.Context) error {
 		return JSONError(c, http.StatusInternalServerError, "Failed to delete user's file shares")
 	}
 
-	// Delete user record
-	if _, err := tx.Exec("DELETE FROM users WHERE username = ?", targetUsername); err != nil {
-		return JSONError(c, http.StatusInternalServerError, "Failed to delete user record")
+	// E-21 & A-12: Soft-delete user record. Set deleted_at timestamp instead of hard-deleting the row.
+	// This preserves audit records and structural integrity while immediately locking out the user.
+	if _, err := tx.Exec("UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE username = ?", targetUsername); err != nil {
+		return JSONError(c, http.StatusInternalServerError, "Failed to soft-delete user record")
 	}
 
 	// Log admin action
@@ -748,6 +749,7 @@ func ListUsers(c echo.Context) error {
 		FROM users u
 		LEFT JOIN user_totp ut ON u.username = ut.username
 		LEFT JOIN (SELECT owner_username, COUNT(*) AS file_count FROM file_metadata GROUP BY owner_username) fm ON u.username = fm.owner_username
+		WHERE u.deleted_at IS NULL
 		ORDER BY u.registration_date DESC`)
 
 	if err == sql.ErrNoRows {
@@ -966,15 +968,15 @@ func AdminSystemStatus(c echo.Context) error {
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to count total users: %v", err)
 	}
-	err = database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE is_approved = 1").Scan(&activeUsers)
+	err = database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE is_approved = 1 AND deleted_at IS NULL").Scan(&activeUsers)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to count active users: %v", err)
 	}
-	err = database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE is_admin = 1").Scan(&adminUsers)
+	err = database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE is_admin = 1 AND deleted_at IS NULL").Scan(&adminUsers)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to count admin users: %v", err)
 	}
-	err = database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE is_approved = 0").Scan(&pendingUsers)
+	err = database.DB.QueryRow("SELECT COUNT(*) FROM users WHERE is_approved = 0 AND deleted_at IS NULL").Scan(&pendingUsers)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to count pending users: %v", err)
 	}

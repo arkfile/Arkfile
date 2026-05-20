@@ -78,7 +78,8 @@ func setupTestDB_User(t *testing.T) *sql.DB {
 		is_approved BOOLEAN DEFAULT FALSE,
 		approved_by TEXT,
 		approved_at TIMESTAMP,
-		is_admin BOOLEAN DEFAULT FALSE
+		is_admin BOOLEAN DEFAULT FALSE,
+		deleted_at TIMESTAMP DEFAULT NULL
 	);`
 	_, err = db.Exec(schema)
 	require.NoError(t, err, "Failed to create users table")

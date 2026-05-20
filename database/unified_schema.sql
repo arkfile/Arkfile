@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS users (
     approved_at TIMESTAMP,
     is_admin BOOLEAN NOT NULL DEFAULT false,
     last_login TIMESTAMP,
-    registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    registration_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP DEFAULT NULL          -- E-21: Soft-deletion indicator. NULL means active.
 );
 
 -- File metadata table (core file information with encrypted metadata)
@@ -382,7 +383,7 @@ CREATE TABLE IF NOT EXISTS user_credits (
 -- transaction_type values: 'usage' (daily storage sweep), 'gift' (admin gift), 'adjustment' (admin set).
 CREATE TABLE IF NOT EXISTS credit_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    transaction_id TEXT,                              -- External transaction ID, reserved for future payments work
+    transaction_id TEXT UNIQUE DEFAULT NULL,          -- E-04: External transaction ID MUST be unique to prevent double-spend gifts / duplicate charges
     username TEXT NOT NULL,
     amount_usd_microcents BIGINT NOT NULL,            -- Positive for credits, negative for debits
     balance_after_usd_microcents BIGINT NOT NULL,     -- Balance after this transaction (signed)
@@ -411,6 +412,16 @@ CREATE TABLE IF NOT EXISTS billing_settings (
     value TEXT NOT NULL,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by TEXT
+);
+
+-- E-05: Persistent system-wide sweep tracking. Prevents duplicated processing
+-- and tracks daily run records.
+CREATE TABLE IF NOT EXISTS billing_sweeps (
+    sweep_date TEXT PRIMARY KEY,                       -- Format: "YYYY-MM-DD"
+    swept_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    users_settled INTEGER NOT NULL,
+    total_unbilled_microcents BIGINT NOT NULL,
+    negative_balance_users INTEGER NOT NULL
 );
 
 -- =====================================================

@@ -197,11 +197,24 @@ func AdminSyncStatus(c echo.Context) error {
 
 	// Helper: check if a file is active on a given provider
 	// Uses a subquery pattern: EXISTS (SELECT 1 FROM fsl WHERE file_id=? AND provider_id=? AND status='active')
+	// E-02: To completely guard against any active SQL injection scenarios or dirty injections, we strip inputs down to strictly alphanumeric/hyphens/dashes characters.
+	sanitizeProviderID := func(providerID string) string {
+		var clean []rune
+		for _, r := range providerID {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+				clean = append(clean, r)
+			}
+		}
+		return string(clean)
+	}
+
 	activeOn := func(providerID string) string {
-		return fmt.Sprintf("EXISTS (SELECT 1 FROM file_storage_locations fsl WHERE fsl.file_id = fm.file_id AND fsl.provider_id = '%s' AND fsl.status = 'active')", providerID)
+		cleanID := sanitizeProviderID(providerID)
+		return fmt.Sprintf("EXISTS (SELECT 1 FROM file_storage_locations fsl WHERE fsl.file_id = fm.file_id AND fsl.provider_id = '%s' AND fsl.status = 'active')", cleanID)
 	}
 	notActiveOn := func(providerID string) string {
-		return fmt.Sprintf("NOT EXISTS (SELECT 1 FROM file_storage_locations fsl WHERE fsl.file_id = fm.file_id AND fsl.provider_id = '%s' AND fsl.status = 'active')", providerID)
+		cleanID := sanitizeProviderID(providerID)
+		return fmt.Sprintf("NOT EXISTS (SELECT 1 FROM file_storage_locations fsl WHERE fsl.file_id = fm.file_id AND fsl.provider_id = '%s' AND fsl.status = 'active')", cleanID)
 	}
 
 	var onPrimaryOnly, onSecondaryOnly, onTertiaryOnly int64

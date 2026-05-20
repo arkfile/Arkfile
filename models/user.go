@@ -107,7 +107,7 @@ func GetUserByUsername(dbtx DBTX, username string) (*User, error) {
 	query := `SELECT id, username, created_at,
 		       total_storage_bytes, storage_limit_bytes,
 		       is_approved, approved_by, approved_at, is_admin
-		FROM users WHERE username = ?`
+		FROM users WHERE username = ? AND deleted_at IS NULL`
 
 	err := dbtx.QueryRow(query, username).Scan(
 		&user.ID, &user.Username, &createdAtStr,
@@ -171,7 +171,7 @@ func GetUserByUsername(dbtx DBTX, username string) (*User, error) {
 // UserExists checks if a user exists by username
 func UserExists(dbtx DBTX, username string) (bool, error) {
 	var count int
-	err := dbtx.QueryRow("SELECT COUNT(*) FROM users WHERE username = ?", username).Scan(&count)
+	err := dbtx.QueryRow("SELECT COUNT(*) FROM users WHERE username = ? AND deleted_at IS NULL", username).Scan(&count)
 	if err != nil {
 		return false, err
 	}
@@ -249,7 +249,7 @@ func GetPendingUsers(dbtx DBTX) ([]*User, error) {
 	rows, err := dbtx.Query(`
 		SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes
 		FROM users
-		WHERE is_approved = false
+		WHERE is_approved = false AND deleted_at IS NULL
 		ORDER BY created_at ASC`,
 	)
 	if err != nil {
