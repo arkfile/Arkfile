@@ -295,3 +295,66 @@ describe('StreamingDownloadResult shape', () => {
     globalThis.fetch = origFetch;
   });
 });
+
+// ── SW DataCloneError Fallback Path Tests ───────────────────────────────────
+
+describe('StreamingDownloadManager - SW DataCloneError Fallback', () => {
+  let origFetch: typeof globalThis.fetch;
+  let origNavigator: any;
+
+  beforeEach(() => {
+    origFetch = globalThis.fetch;
+    origNavigator = (globalThis as any).navigator;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    (globalThis as any).navigator = origNavigator;
+  });
+
+  test('falls back to Blob download when swStreamDownload throws a DataCloneError', async () => {
+    // 1. Mock the Service Worker to report as available/active
+    const controller = {
+      postMessage: () => {
+        // Old browser environment: throwing a synchronous DataCloneError simulated via DOMException
+        throw new DOMException('The object cannot be cloned.', 'DataCloneError');
+      }
+    };
+    (globalThis as any).navigator = {
+      serviceWorker: {
+        controller,
+        register: async () => ({ active: { state: 'activated' } }),
+      }
+    };
+
+    // 2. Prepare test data and mocks
+    const fek = randomBytes(32);
+    const plaintext = new TextEncoder().encode('safari clone fallback test');
+    const FILE_ID = 'test-safari-fallback';
+    const encryptedChunk = await buildEncryptedChunk(plaintext, fek, FILE_ID, 0, 1);
+
+    setFetchMock(withChunkingConfig(async (url: string) => {
+      if (url.includes('/metadata')) {
+        return new Response(JSON.stringify(makeShareMeta(plaintext.length, 1, plaintext.length, FILE_ID)), { status: 200 });
+      }
+      if (url.includes('/chunks/0')) {
+        return new Response(encryptedChunk.buffer as ArrayBuffer, { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    }));
+
+    // 3. Trigger download
+    const manager = new StreamingDownloadManager('', {
+      downloadToken: FAKE_DOWNLOAD_TOKEN,
+      showProgressUI: false,
+    });
+
+    const result = await manager.downloadSharedFile(FAKE_SHARE_ID, fek, { filename: 'safari-test.bin' });
+
+    // 4. Verify fallback occurred successfully
+    expect(result.success).toBe(true);
+    expect(result.streamedViaSw).toBeFalsy(); // should not have streamed via SW
+    expect(result.blobUrl).toBeDefined(); // should have generated a Blob url instead!
+    expect(result.blobUrl!.startsWith('blob:')).toBe(true);
+  });
+});

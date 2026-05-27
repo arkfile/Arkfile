@@ -501,26 +501,47 @@ export class StreamingDownloadManager {
   ): Promise<{ streamedViaSw?: boolean; hashVerification?: HashVerification; blobUrl?: string }> {
     if (isSwAvailable()) {
       console.log(`${logPrefix} Using SW streaming download path`);
-      const swResult = await swStreamDownload({
-        contentLength,
-        filename,
-        chunks,
-        ...(this.options.abortController ? { signal: this.options.abortController.signal } : {}),
-        ...(expectedSha256Hex && expectedSha256Hex.length === 64 ? { expectedSha256Hex } : {}),
-      });
+      try {
+        const swResult = await swStreamDownload({
+          contentLength,
+          filename,
+          chunks,
+          ...(this.options.abortController ? { signal: this.options.abortController.signal } : {}),
+          ...(expectedSha256Hex && expectedSha256Hex.length === 64 ? { expectedSha256Hex } : {}),
+        });
 
-      // Wait for the actual stream to drain so we know the hash result and
-      // bytes-streamed before returning. The browser's download manager and
-      // the SW's stream consumption proceed in parallel with this wait.
-      const completion: SwStreamDownloadCompletion = await swResult.completion;
-      console.log(`${logPrefix} SW stream completed: ok=${completion.ok}, bytes_streamed=${completion.bytesStreamed}, hash_verification=${completion.hashVerification}`);
-      if (!completion.ok && completion.error) {
-        throw completion.error;
+        // Wait for the actual stream to drain so we know the hash result and
+        // bytes-streamed before returning. The browser's download manager and
+        // the SW's stream consumption proceed in parallel with this wait.
+        const completion: SwStreamDownloadCompletion = await swResult.completion;
+        console.log(`${logPrefix} SW stream completed: ok=${completion.ok}, bytes_streamed=${completion.bytesStreamed}, hash_verification=${completion.hashVerification}`);
+        if (!completion.ok && completion.error) {
+          throw completion.error;
+        }
+        return {
+          streamedViaSw: true,
+          hashVerification: completion.hashVerification,
+        };
+      } catch (err: any) {
+        const errName = String(err?.name || '');
+        const errMsg = String(err?.message || '');
+
+        // Detect if the error is a stream transfer or capability issue (e.g. DataCloneError in WebKit/Safari)
+        const isDataCloneError = errName === 'DataCloneError' ||
+          errMsg.includes('clone') ||
+          errMsg.includes('duplicate') ||
+          errMsg.includes('transfer') ||
+          errMsg.includes('Service Worker') ||
+          errMsg.includes('ack timeout');
+
+        if (isDataCloneError) {
+          console.warn(`${logPrefix} SW stream transfer failed; gracefully falling back to Blob path. Error: ${errName} - ${errMsg}`);
+          // Proceed to Blob fallback below
+        } else {
+          // Rethrow any operational error that occurs during active streaming
+          throw err;
+        }
       }
-      return {
-        streamedViaSw: true,
-        hashVerification: completion.hashVerification,
-      };
     }
 
     // Blob fallback path
