@@ -814,7 +814,7 @@ Updated as work lands. The "first not-started cluster" is where work resumes.
 | F | F5 | A-15 | **Done 2026-05-19** | Reachable TOTP recovery via backup code setup under temporary JWT eligibility gate. User can use backup code to clean enrollment and register new device. |
 | F | F6 | (documentation) | **Done 2026-05-19** | Tier-3 design, memory-hardening specifications, and file rotation instructions documented. |
 | G | — | E-21, E-03, E-04, E-05, E-02, A-12 | **Done 2026-05-20** | Pre-payment financial-audit integrity. Added `deleted_at` soft-delete Users attribute; moved balance lookups transactionally inside `tx` context in `SweepAllUsers`; enforced `UNIQUE(transaction_id)` to block double-spent credits; added persistent `billing_sweeps` table; parameterized/sanitized queries in `AdminSyncStatus`. |
-| H | — | (documentation) | Not started | Add plain-language threat-model section to `docs/security.md` |
+| H | — | (documentation) | **Done 2026-05-27** | Add plain-language threat-model section to `docs/security.md` summarizing what Arkfile guarantees to protect and how three distinct levels of system compromise impact threat containment boundaries, referencing the technical synthesis in `docs/wip/review/00-executive-summary.md`. |
 
 ---
 

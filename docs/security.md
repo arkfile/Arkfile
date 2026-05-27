@@ -5,6 +5,10 @@ This document provides a comprehensive overview of Arkfile's security architectu
 ## Table of Contents
 
 1. [Architecture Overview](#architecture-overview)
+   - [Security Model](#security-model)
+   - [Defense in Depth](#defense-in-depth)
+   - [Cryptographic Domain Separation](#cryptographic-domain-separation)
+   - [Plain-Language Threat Model](#plain-language-threat-model)
 2. [File Encryption System](#file-encryption-system)
 3. [Authentication System](#authentication-system)
 4. [Session Management](#session-management)
@@ -19,6 +23,34 @@ This document provides a comprehensive overview of Arkfile's security architectu
 ### Security Model
 
 Arkfile's security model uses client-side encryption to ensure that user data remains protected from unauthorized access, including by service administrators. The system maintains strict cryptographic separation between two primary security domains: user authentication and file encryption.
+
+### Plain-Language Threat Model
+
+This section summarizes what Arkfile guarantees to protect and what can be recovered by adversaries across different system compromise levels.
+
+#### Invariant Protection: What Arkfile Never Discloses
+
+The following assets are bound by strict client-side cryptography. They are never transmitted or stored in a form that is readable to the server, and they cannot be recovered by any level of server-side compromise:
+
+- **User Password**: Standard credentials never reach the server, protected by OPAQUE, a Password-Authenticated Key Exchange (PAKE) protocol that allows a client to prove password ownership and authenticate without transmitting the password itself.
+- **File Payloads**: Encrypted entirely client-side under a cryptographically random, per-file File Encryption Key (FEK) using AES-256-GCM.
+- **File Metadata**: Original filenames and plaintext SHA-256 hashes are encrypted client-side under an Account Key derived solely on the client-side using the user's password.
+- **Share Envelopes**: File details (e.g. key, filename, size) are wrapped inside an encrypted payload client-side that is only decryptable by a recipient who inputs the correct share password.
+
+#### Compromise Scenarios and Impact Bounds
+
+1. **Database-Only Leak**
+   - **What is compromised**: The attacker gains the database tables (user metadata, encrypted share envelopes, rate-limiting audit logs, and encrypted user OPAQUE data).
+   - **What remains secure**: All user passwords, file payloads, file metadata, and TOTP seeds remain completely confidential. Attacker cannot log in as any user or read any files.
+
+2. **Database + Server Configuration Secret Leak**
+   - **What is compromised**: Attacker gains the database plus the server's environment configuration (including `ARKFILE_MASTER_KEY`). They can forge session JSON Web Tokens (JWT) or read server identity keys.
+   - **What remains secure**: File payloads, user passwords, file metadata, and TOTP configurations remain fully secure. All user-secret material (TOTP keys and contact info) remains encrypted and secure because the wrapping keys are derived from a filesystem-isolated master key file (`user-secret-master.bin`) protected by strict operating system user permissions. An attacker who steals a database backup and the server configuration secrets still cannot decrypt TOTP seeds or contact info because they lack access to this specific filesystem key file.
+
+3. **Full Host and Root Compromise**
+   - **What is compromised**: Attacker has live root access to the running machine. They can read variables in active memory, monitor server-side activity, observe user-secret material (such as TOTP keys and contact details), or actively attempt to inject malicious client code or manipulate future file encryption parameters.
+   - **What remains secure**: User passwords can never be retrieved because OPAQUE authenticates without password transmission. Already uploaded file payloads remain completely undecryptable because the decryption keys are generated and held exclusively in client-side process or browser memory (RAM) during cryptographic operations, and are never transmitted. Authenticator backup codes cannot be reversed in bulk or recovered in cleartext because they are processed as one-way Argon2id hashes; since each backup code is generated using high-entropy rejection sampling (~59.5 bits of entropy), they resist offline brute-force attacks even under host compromise.
+   - **Note on active attacks**: While a live root attacker can observe padded file sizes, upload timestamps, and active username handles, they cannot swap or substitute file segments without triggering an immediate authenticated-encryption verification failure on the client.
 
 This separation ensures that compromise of one system does not affect the security of the other, providing defense in depth through independent cryptographic operations.
 
