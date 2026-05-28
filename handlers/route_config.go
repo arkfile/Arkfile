@@ -98,7 +98,9 @@ func RegisterRoutes() {
 
 	// Session management (OPAQUE sessions)
 	Echo.POST("/api/refresh", RefreshToken)
-	Echo.POST("/api/logout", Logout)
+	// Logout requires authentication (A-33) to prevent remote DoS or session manipulation.
+	// It is registered under auth.Echo which applies JWTMiddleware + TokenRevocationMiddleware.
+	auth.Echo.POST("/api/logout", Logout)
 
 	// Create TOTP-protected group for all sensitive operations.
 	// Stack inherited from auth.Echo: JWTMiddleware + TokenRevocationMiddleware + RequireApproved.
@@ -127,7 +129,7 @@ func RegisterRoutes() {
 	totpProtectedGroup.POST("/api/uploads/:sessionId/chunks/:chunkNumber", UploadChunk)
 	totpProtectedGroup.POST("/api/uploads/:sessionId/complete", CompleteUpload)
 	totpProtectedGroup.GET("/api/uploads/:sessionId/status", GetUploadStatus)
-	totpProtectedGroup.DELETE("/api/uploads/:fileId", CancelUpload)
+	totpProtectedGroup.DELETE("/api/uploads/:sessionId", CancelUpload)
 
 	// File sharing - authenticated endpoints (require TOTP)
 	totpProtectedGroup.GET("/api/files/:fileId/envelope", GetFileEnvelope) // Get file envelope for share creation

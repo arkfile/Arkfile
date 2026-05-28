@@ -204,6 +204,16 @@ func GetFileEnvelope(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Access denied")
 	}
 
+	// Check if user is approved for file operations (C-12)
+	user, err := models.GetUserByUsername(database.DB, username)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to get user details")
+	}
+
+	if !user.IsApproved {
+		return echo.NewHTTPError(http.StatusForbidden, "Account pending approval. File downloads are restricted until your account is approved by an administrator. You can still access other features of your account.")
+	}
+
 	// Return the envelope data needed for client-side re-encryption
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"file_id":       file.FileID,

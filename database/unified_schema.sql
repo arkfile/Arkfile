@@ -387,7 +387,7 @@ CREATE TABLE IF NOT EXISTS credit_transactions (
     username TEXT NOT NULL,
     amount_usd_microcents BIGINT NOT NULL,            -- Positive for credits, negative for debits
     balance_after_usd_microcents BIGINT NOT NULL,     -- Balance after this transaction (signed)
-    transaction_type TEXT NOT NULL,
+    transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment')), -- E-22: Constrain transaction_type via CHECK constraint
     reason TEXT,                                      -- Human-readable reason
     admin_username TEXT,                              -- NULL for system-generated rows (e.g. usage sweeps)
     metadata TEXT,                                    -- JSON for additional details (see §3.5)

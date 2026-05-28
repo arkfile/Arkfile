@@ -137,7 +137,6 @@ func AdminCleanupTestUser(c echo.Context) error {
 	}{
 		{"users", "DELETE FROM users WHERE username = ?"},
 		{"opaque_user_data", "DELETE FROM opaque_user_data WHERE username = ?"},
-		{"opaque_user_data", "DELETE FROM opaque_user_data WHERE username = ?"},
 		{"user_totp", "DELETE FROM user_totp WHERE username = ?"},
 		{"refresh_tokens", "DELETE FROM refresh_tokens WHERE username = ?"},
 		{"totp_usage_log", "DELETE FROM totp_usage_log WHERE username = ?"},

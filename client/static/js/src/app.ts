@@ -548,10 +548,18 @@ class ArkFileApp {
         const tokenValid = await validateToken();
         
         if (tokenValid) {
-          // Token is valid, show file section and load files
-          showFileSection();
-          startAutoRefresh();
-          await this.loadUserFiles();
+          // Check if user is approved
+          const { getCurrentUser } = await import('./utils/auth.js');
+          const currentUser = await getCurrentUser();
+          if (currentUser && !currentUser.is_approved) {
+            const { showPendingApprovalSection } = await import('./ui/sections.js');
+            showPendingApprovalSection();
+          } else {
+            // Token is valid and approved, show file section and load files
+            showFileSection();
+            startAutoRefresh();
+            await this.loadUserFiles();
+          }
         } else {
           // Token is invalid, clear storage and show auth
           console.warn('Stored token is invalid, clearing and showing auth');

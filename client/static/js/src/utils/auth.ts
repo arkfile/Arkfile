@@ -156,6 +156,10 @@ export class AuthManager {
     } catch (error) {
       console.error('Logout error:', error);
     }
+    // Clear the non-HttpOnly CSRF cookie directly from JavaScript. This ensures checkAuthenticated()
+    // instantly fails on the next reload, preventing unauthenticated page auto-rendering.
+    document.cookie = `${CSRF_COOKIE_NAME}=; Path=/; Max-Age=0; Secure; SameSite=Strict`;
+    
     // Always clear local caches regardless of network outcome.
     _cachedUser = null;
     return true;
