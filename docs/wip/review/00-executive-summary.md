@@ -506,7 +506,7 @@ Sort order below is Severity → Slice → Finding number. Cross-refs in the rig
 | `A-30` | 01 | Refresh-token rotation revokes old token best-effort; failure does not abort new-token issuance | A-10 |
 | `A-31` | 01 | `TokenRevocationMiddleware` fails open when claims are missing or malformed | A-39 |
 | `A-32` | 01 | `RateLimitMiddleware` fails open on backend errors | A-08, E-09 |
-| `A-33` | 01 | `/api/logout` requires no auth; refresh-token DoS via known-token revocation | — |
+| `A-33` | 01 | **RESOLVED 2026-05-28.** `/api/logout` requires no auth; refresh-token DoS via known-token revocation | — |
 | `A-34` | 01 | `ApproveUser` trusts caller-supplied `adminUsername` parameter | E-13 |
 | `A-35` | 01 | `--password-stdin` and `--account-key-file` CLI flags do not exist; pipe-stdin asymmetric | — |
 | `A-36` | 01 | CGO double-buffer pattern in `StoreUserRecord` is internally inconsistent | A-38 |
@@ -518,7 +518,7 @@ Sort order below is Severity → Slice → Finding number. Cross-refs in the rig
 | `B-08` | 02 | FEK envelope has no AAD | B-02, C-02 |
 | `B-19` | 02 | Password requirements also fetched from server unauthenticated — same downgrade pattern as B-01/B-03 | B-01, D-10, D-12 |
 | `C-04` | 03 | `X-Chunk-Hash` header accepted/stored but never verified server-side | — |
-| `C-05` | 03 | `CancelUpload` route uses `:fileId` param; handler reads `c.Param("sessionId")` — dead-on-arrival | — |
+| `C-05` | 03 | **RESOLVED 2026-05-28.** `CancelUpload` route uses `:fileId` param; handler reads `c.Param("sessionId")` — dead-on-arrival | — |
 | `C-06` | 03 | Upload-session sweep marks DB rows abandoned but doesn't abort underlying S3 multipart — storage cost leak | — |
 | `C-07` | 03 | `CompleteUpload` two-phase (storage → DB) — failure window orphans S3 objects | C-06 |
 | `C-08` | 03 | Multi-provider download fallback does NOT verify served blob against `stored_blob_sha256sum` | C-11 |
@@ -575,7 +575,7 @@ Sort order below is Severity → Slice → Finding number. Cross-refs in the rig
 | `B-17` | 02 | `EncryptFile`/`DecryptFile`/`EncryptFEK`/`DecryptFEK` are unused outside tests |
 | `B-20` | 02 | `password.length` (JS) vs `len(password)` (Go) — Unicode length mismatch in password validation |
 | `C-09` | 03 | (also above) S3 object metadata includes `owner-username` — listed in Medium |
-| `C-12` | 03 | `GetFileEnvelope` lacks the `IsApproved` check |
+| `C-12` | 03 | **RESOLVED 2026-05-28.** `GetFileEnvelope` lacks the `IsApproved` check |
 | `C-16` | 03 | Per-user concurrent-upload-session cap TOCTOU under rqlite default isolation |
 | `C-17` | 03 | `storage.GetPresignedURL` interface method implemented but never called — dead-code footgun |
 | `C-19` | 03 | `models/file.go` doc claims AAD for `EncryptedSha256sum` but upload pipeline uses no AAD |
@@ -631,13 +631,13 @@ Sort order below is Severity → Slice → Finding number. Cross-refs in the rig
 | `D-25` | 04 | Owner JWT username appears in plaintext in InfoLogger on share creation |
 | `D-26` | 04 | Share envelope plaintext metadata can be used as a tracking channel by the owner |
 | `D-27` | 04 | Anonymous share GET endpoints lack explicit CSRF / Origin-check guard |
-| `E-11` | 05 | `AdminCleanupTestUser` deletes the same `opaque_user_data` row twice via a typo'd cleanup list |
+| `E-11` | 05 | **RESOLVED 2026-05-28.** `AdminCleanupTestUser` deletes the same `opaque_user_data` row twice via a typo'd cleanup list |
 | `E-13` | 05 | Admin handlers inconsistently re-check `user.IsAdmin` after `AdminMiddleware` |
 | `E-16` | 05 | `/readyz` reveals internal dependency health to unauthenticated callers |
 | `E-17` | 05 | `AdminMiddleware` audit log lacks operation outcome (success/failure of wrapped handler) |
 | `E-18` | 05 | `AdminGetContactInfo` decrypts and returns user contact info to admin without warning |
 | `E-20` | 05 | `AdminExportFile` lets any admin download any user's encrypted blob; design-level disclosure |
-| `E-22` | 05 | `credit_transactions.transaction_type` is not constrained to a CHECK list |
+| `E-22` | 05 | **RESOLVED 2026-05-28.** `credit_transactions.transaction_type` is not constrained to a CHECK list |
 | `E-26` | 05 | Public config endpoints (`/api/config/argon2`, etc.) are unrate-limited |
 | `E-27` | 05 | `AdminSecurityEvents` limit clamp uses `fmt.Sscanf` rather than strconv, silently coerces malformed input |
 | `F-20` | 06 | `/healthz` and `/readyz` publicly reachable via Caddy |
