@@ -296,7 +296,7 @@ func RateLimitShareAccess(shareID string, c echo.Context, accessFunc func() erro
 	allowed, delay, err := checkRateLimit(shareID, entityID)
 	if err != nil {
 		logging.ErrorLogger.Printf("Rate limit check failed: %v", err)
-		// Continue on error to avoid blocking legitimate users
+		return JSONError(c, http.StatusServiceUnavailable, "Rate limiter unavailable")
 	} else if !allowed {
 		retryAfter := int(delay.Seconds())
 		c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
@@ -411,7 +411,7 @@ func LoginRateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		allowed, delay, err := checkAuthRateLimit("login", entityID)
 		if err != nil {
 			logging.ErrorLogger.Printf("Login rate limit check failed: %v", err)
-			return next(c) // Continue on error
+			return JSONError(c, http.StatusServiceUnavailable, "Rate limiter unavailable")
 		}
 
 		if !allowed {
@@ -437,7 +437,7 @@ func RegisterRateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		allowed, delay, err := checkAuthRateLimit("register", entityID)
 		if err != nil {
 			logging.ErrorLogger.Printf("Register rate limit check failed: %v", err)
-			return next(c) // Continue on error
+			return JSONError(c, http.StatusServiceUnavailable, "Rate limiter unavailable")
 		}
 
 		if !allowed {
@@ -464,7 +464,7 @@ func TOTPRateLimitMiddleware(endpointType string) echo.MiddlewareFunc {
 			allowed, delay, err := checkAuthRateLimit(endpointType, entityID)
 			if err != nil {
 				logging.ErrorLogger.Printf("TOTP rate limit check failed: %v", err)
-				return next(c) // Continue on error
+				return JSONError(c, http.StatusServiceUnavailable, "Rate limiter unavailable")
 			}
 
 			if !allowed {

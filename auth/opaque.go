@@ -1,15 +1,36 @@
 package auth
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/hkdf"
 
 	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/logging"
 )
+
+// DeriveFakeUserRecord deterministically generates a fake 256-byte OPAQUE user record for a non-existent username
+func DeriveFakeUserRecord(username string) ([]byte, error) {
+	if serverKeys == nil || len(serverKeys.OPRFSeed) == 0 {
+		return nil, fmt.Errorf("opaque server keys not loaded")
+	}
+
+	info := []byte("arkfile-fake-user-record:" + username)
+	reader := hkdf.Expand(sha256.New, serverKeys.OPRFSeed, info)
+
+	fakeRecord := make([]byte, OPAQUE_USER_RECORD_LEN)
+	if _, err := io.ReadFull(reader, fakeRecord); err != nil {
+		return nil, fmt.Errorf("failed to expand fake user record: %w", err)
+	}
+
+	return fakeRecord, nil
+}
 
 // GetServerKeys returns the server's public and private keys for OPAQUE operations.
 func GetServerKeys() ([]byte, []byte, error) {

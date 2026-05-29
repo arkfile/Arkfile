@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"net/http"
@@ -32,51 +33,59 @@ func AdminOpaqueAuthResponse(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Username is required")
 	}
 
-	// Verify user exists and is an admin BEFORE processing OPAQUE
+	// Try to get user and check if they are admin
 	user, err := models.GetUserByUsername(database.DB, request.Username)
-	if err != nil {
-		logging.ErrorLogger.Printf("Admin auth attempt for non-existent user: %s", request.Username)
-		// Record failed login attempt
-		entityID := logging.GetOrCreateEntityID(c)
-		if recordErr := recordAuthFailedAttempt("admin_login", entityID); recordErr != nil {
-			logging.ErrorLogger.Printf("Failed to record admin login failure: %v", recordErr)
-		}
-		return JSONError(c, http.StatusUnauthorized, "Invalid credentials")
-	}
 
-	// Verify admin privileges
-	if !user.IsAdmin {
-		logging.ErrorLogger.Printf("Non-admin user attempted admin login: %s", request.Username)
-		// Record failed login attempt
-		entityID := logging.GetOrCreateEntityID(c)
-		if recordErr := recordAuthFailedAttempt("admin_login", entityID); recordErr != nil {
-			logging.ErrorLogger.Printf("Failed to record admin login failure: %v", recordErr)
-		}
-		return JSONError(c, http.StatusForbidden, "Administrative privileges required")
-	}
-
-	// Get user record from RFC-compliant opaque_user_data table
-	// Note: opaque_user_record is stored as hex-encoded string in database
+	var userRecord []byte
 	var userRecordHex string
-	err = database.DB.QueryRow(`
-		SELECT opaque_user_record FROM opaque_user_data
-		WHERE username = ?`,
-		request.Username).Scan(&userRecordHex)
+
+	useFake := false
 	if err != nil {
-		logging.ErrorLogger.Printf("Admin user OPAQUE record not found: %s", request.Username)
-		// Record failed login attempt
-		entityID := logging.GetOrCreateEntityID(c)
-		if recordErr := recordAuthFailedAttempt("admin_login", entityID); recordErr != nil {
-			logging.ErrorLogger.Printf("Failed to record admin login failure: %v", recordErr)
+		if err == sql.ErrNoRows {
+			useFake = true
+		} else {
+			logging.ErrorLogger.Printf("Database check for admin %s failed: %v", request.Username, err)
+			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 		}
-		return JSONError(c, http.StatusUnauthorized, "Invalid credentials")
+	} else if !user.IsAdmin {
+		useFake = true
 	}
 
-	// Decode hex-encoded user record from database
-	userRecord, err := hex.DecodeString(userRecordHex)
-	if err != nil {
-		logging.ErrorLogger.Printf("Failed to decode OPAQUE user record for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+	if useFake {
+		// Derive fake user record to prevent account / privilege enumeration (A-24)
+		var fakeErr error
+		userRecord, fakeErr = auth.DeriveFakeUserRecord(request.Username)
+		if fakeErr != nil {
+			logging.ErrorLogger.Printf("Failed to derive fake user record for admin %s: %v", request.Username, fakeErr)
+			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+		}
+	} else {
+		// User exists and is admin, query their real OPAQUE record
+		dbErr := database.DB.QueryRow(`
+			SELECT opaque_user_record FROM opaque_user_data
+			WHERE username = ?`,
+			request.Username).Scan(&userRecordHex)
+		if dbErr != nil {
+			if dbErr == sql.ErrNoRows {
+				// If opaque record is missing, fall back to fake record gracefully
+				var fakeErr error
+				userRecord, fakeErr = auth.DeriveFakeUserRecord(request.Username)
+				if fakeErr != nil {
+					logging.ErrorLogger.Printf("Failed to derive fake user record for admin %s: %v", request.Username, fakeErr)
+					return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+				}
+			} else {
+				logging.ErrorLogger.Printf("Database query for admin OPAQUE record %s failed: %v", request.Username, dbErr)
+				return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+			}
+		} else {
+			var decodeErr error
+			userRecord, decodeErr = hex.DecodeString(userRecordHex)
+			if decodeErr != nil {
+				logging.ErrorLogger.Printf("Failed to decode OPAQUE user record for admin %s: %v", request.Username, decodeErr)
+				return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+			}
+		}
 	}
 
 	// Debug: Log the size of the decoded record
@@ -151,7 +160,7 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 		logging.ErrorLogger.Printf("User lost admin privileges during authentication: %s", request.Username)
 		// Clean up session
 		auth.DeleteAuthSession(database.DB, request.SessionID)
-		return JSONError(c, http.StatusForbidden, "Administrative privileges required")
+		return JSONError(c, http.StatusUnauthorized, "Invalid credentials")
 	}
 
 	// Decode authU from client

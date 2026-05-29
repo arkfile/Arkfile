@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"net/http"
@@ -266,6 +267,12 @@ func OpaqueRegisterResponse(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Invalid username: "+err.Error())
 	}
 
+	// Check if user already exists (A-25)
+	_, err := models.GetUserByUsername(database.DB, request.Username)
+	if err == nil {
+		return JSONError(c, http.StatusConflict, "Username already registered")
+	}
+
 	// Decode registration request from client
 	registrationRequest, err := base64.StdEncoding.DecodeString(request.RegistrationRequest)
 	if err != nil {
@@ -446,21 +453,29 @@ func OpaqueAuthResponse(c echo.Context) error {
 		SELECT opaque_user_record FROM opaque_user_data
 		WHERE username = ?`,
 		request.Username).Scan(&userRecordHex)
-	if err != nil {
-		logging.ErrorLogger.Printf("User not found for auth: %s", request.Username)
-		// Record failed login attempt
-		entityID := logging.GetOrCreateEntityID(c)
-		if recordErr := recordAuthFailedAttempt("login", entityID); recordErr != nil {
-			logging.ErrorLogger.Printf("Failed to record login failure: %v", recordErr)
-		}
-		return JSONError(c, http.StatusUnauthorized, "Invalid credentials")
-	}
 
-	// Decode hex-encoded user record from database
-	userRecord, err := hex.DecodeString(userRecordHex)
+	var userRecord []byte
 	if err != nil {
-		logging.ErrorLogger.Printf("Failed to decode OPAQUE user record for %s: %v", request.Username, err)
-		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+		if err == sql.ErrNoRows {
+			// Derive fake user record to prevent account enumeration (A-24)
+			var fakeErr error
+			userRecord, fakeErr = auth.DeriveFakeUserRecord(request.Username)
+			if fakeErr != nil {
+				logging.ErrorLogger.Printf("Failed to derive fake user record for %s: %v", request.Username, fakeErr)
+				return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+			}
+		} else {
+			logging.ErrorLogger.Printf("Database check for %s failed: %v", request.Username, err)
+			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+		}
+	} else {
+		// Decode hex-encoded user record from database
+		var decodeErr error
+		userRecord, decodeErr = hex.DecodeString(userRecordHex)
+		if decodeErr != nil {
+			logging.ErrorLogger.Printf("Failed to decode OPAQUE user record for %s: %v", request.Username, decodeErr)
+			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+		}
 	}
 
 	// Decode credential request from client

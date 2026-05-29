@@ -405,8 +405,8 @@ func TestTokenRevocationMiddleware(t *testing.T) {
 				token, _, _ := new(jwt.Parser).ParseUnverified(tokenStringNoJTI, &Claims{})
 				return token
 			}(),
-			expectedStatus: http.StatusOK, // Should proceed if no JTI
-			expectError:    false,
+			expectedStatus: http.StatusUnauthorized, // Should fail closed if no JTI (A-31)
+			expectError:    true,
 		},
 	}
 

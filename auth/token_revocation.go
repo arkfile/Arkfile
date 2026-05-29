@@ -326,17 +326,17 @@ func TokenRevocationMiddleware(db *sql.DB) echo.MiddlewareFunc {
 
 			token, ok := user.(*jwt.Token)
 			if !ok {
-				return next(c)
+				return echo.NewHTTPError(http.StatusUnauthorized, "Invalid token format")
 			}
 
 			claims, ok := token.Claims.(*Claims)
 			if !ok {
-				return next(c)
+				return echo.NewHTTPError(http.StatusUnauthorized, "Invalid claims format")
 			}
 
 			tokenID := claims.ID
 			if tokenID == "" {
-				return next(c)
+				return echo.NewHTTPError(http.StatusUnauthorized, "Missing token ID")
 			}
 
 			// Per-JTI revocation check.

@@ -67,7 +67,7 @@ func TestGetPendingUsers_Success_Admin(t *testing.T) {
 	mockDB.ExpectQuery(`
 		SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes
 		FROM users
-		WHERE is_approved = false
+		WHERE is_approved = false AND deleted_at IS NULL
 		ORDER BY created_at ASC`).WillReturnRows(pendingRows)
 
 	err := GetPendingUsers(c)
@@ -201,8 +201,8 @@ func TestDeleteUser_Success_Admin(t *testing.T) {
 		WithArgs(targetUsername).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// Mock deletion of user record
-	mockDB.ExpectExec("DELETE FROM users WHERE username = ?").
+	// Mock soft deletion of user record
+	mockDB.ExpectExec("UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE username = ?").
 		WithArgs(targetUsername).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -560,7 +560,7 @@ func TestDeleteUser_Error_DeleteUserRecordError(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	dbErr := fmt.Errorf("simulated DB error deleting user record")
-	mockDB.ExpectExec("DELETE FROM users WHERE username = ?").
+	mockDB.ExpectExec("UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE username = ?").
 		WithArgs(targetUsername).
 		WillReturnError(dbErr)
 
@@ -571,7 +571,7 @@ func TestDeleteUser_Error_DeleteUserRecordError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	var resp map[string]interface{}
 	json.Unmarshal(rec.Body.Bytes(), &resp)
-	assert.Equal(t, "Failed to delete user record", resp["message"])
+	assert.Equal(t, "Failed to soft-delete user record", resp["message"])
 
 	mockStorage.AssertExpectations(t)
 	assert.NoError(t, mockDB.ExpectationsWereMet())
@@ -600,7 +600,7 @@ func TestDeleteUser_Error_LogAdminActionFailure(t *testing.T) {
 	mockDB.ExpectBegin()
 	mockDB.ExpectQuery("SELECT file_id, storage_id FROM file_metadata WHERE owner_username = ?").WithArgs(targetUsername).WillReturnRows(sqlmock.NewRows([]string{"file_id", "storage_id"}))
 	mockDB.ExpectExec("DELETE FROM file_share_keys WHERE owner_username = ?").WithArgs(targetUsername).WillReturnResult(sqlmock.NewResult(0, 0))
-	mockDB.ExpectExec("DELETE FROM users WHERE username = ?").WithArgs(targetUsername).WillReturnResult(sqlmock.NewResult(0, 1))
+	mockDB.ExpectExec("UPDATE users SET deleted_at = CURRENT_TIMESTAMP WHERE username = ?").WithArgs(targetUsername).WillReturnResult(sqlmock.NewResult(0, 1))
 
 	// Mock the logging action to fail.
 	mockDB.ExpectExec("INSERT INTO admin_logs \\(admin_username, action, target_username, details\\) VALUES \\(\\?, \\?, \\?, \\?\\)").
@@ -1441,7 +1441,7 @@ func TestGetPendingUsers_GetPendingError(t *testing.T) {
 	mockDB.ExpectQuery(`
 		SELECT id, username, created_at, total_storage_bytes, storage_limit_bytes
 		FROM users
-		WHERE is_approved = false
+		WHERE is_approved = false AND deleted_at IS NULL
 		ORDER BY created_at ASC`).
 		WillReturnError(fmt.Errorf("DB error fetching pending"))
 

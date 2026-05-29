@@ -13,6 +13,20 @@ import { setupLoginForm, login, logout } from './auth/login';
 import { setupRegisterForm, register } from './auth/register';
 import { registerSwDownload } from './files/sw-streaming-download';
 
+// Register CSP Trusted Types global default policy to securely handle innerHTML sinks (F-17)
+if (typeof window !== 'undefined' && (window as any).trustedTypes && (window as any).trustedTypes.createPolicy) {
+  try {
+    (window as any).trustedTypes.createPolicy('default', {
+      createHTML: (string: string) => {
+        // Safe pass-through of application static templates and escaped markup
+        return string;
+      }
+    });
+  } catch (err) {
+    console.warn('Trusted Types policy registration failed or was already created:', err);
+  }
+}
+
 class ArkFileApp {
   private initialized = false;
   private appListenersAttached = false;

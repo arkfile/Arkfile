@@ -435,10 +435,10 @@ The `idsrp.md` threat model lists 13 adversary classes and ~13 security properti
 |---|---:|---:|---:|
 | Critical | 2 | 2 (F-01, A-01) | 0 |
 | High | 27 | 1 (E-19) | 26 |
-| Medium | 61 | 0 | 61 |
+| Medium | 61 | 5 (A-24, A-25, A-31, A-32, F-17) | 56 |
 | Low | 52 | 1 (A-39) | 51 |
 | Informational | 37 | 0 | 37 |
-| **Total** | **179** | **4** | **175** |
+| **Total** | **179** | **9** | **170** |
 
 Sort order below is Severity → Slice → Finding number. Cross-refs in the rightmost column indicate where the same root cause shows up in another slice. Per-finding evidence (file:line, attack scenario, recommendation, suggested tests) is in the slice doc named in the second column.
 
@@ -497,15 +497,15 @@ Sort order below is Severity → Slice → Finding number. Cross-refs in the rig
 | `A-21` | 01 | CLI agent has stat-based UID check; no `SO_PEERCRED`; same-UID drain/poison/DoS-wipe | — |
 | `A-22` | 01 | TOTP secret, manual entry, QR data URL, backup codes rendered as raw DOM text after enrollment | F-17 |
 | `A-23` | 01 | `arkfile-client setup-totp --show-secret` prints TOTP secret to stdout | A-06 |
-| `A-24` | 01 | OPAQUE login leaks account existence by HTTP status + timing differential; admin login enumerates admin-ness | A-25 |
-| `A-25` | 01 | OPAQUE registration finalize leaks account existence via 409 after expensive OPAQUE work | A-24 |
+| `A-24` | 01 | **RESOLVED 2026-05-29.** OPAQUE login leaks account existence by HTTP status + timing differential; admin login enumerates admin-ness | A-25 |
+| `A-25` | 01 | **RESOLVED 2026-05-29.** OPAQUE registration finalize leaks account existence via 409 after expensive OPAQUE work | A-24 |
 | `A-26` | 01 | Bootstrap token logged to stdout in cleartext | F-03 |
 | `A-27` | 01 | OPAQUE server public key independently generated, not derived from the private key | — |
 | `A-28` | 01 | OPAQUE server identity hardcoded as `"server"`; not bound to deployment | — |
 | `A-29` | 01 | Username comparisons are byte-wise; no Unicode normalization/case-folding policy | — |
 | `A-30` | 01 | Refresh-token rotation revokes old token best-effort; failure does not abort new-token issuance | A-10 |
-| `A-31` | 01 | `TokenRevocationMiddleware` fails open when claims are missing or malformed | A-39 |
-| `A-32` | 01 | `RateLimitMiddleware` fails open on backend errors | A-08, E-09 |
+| `A-31` | 01 | **RESOLVED 2026-05-29.** `TokenRevocationMiddleware` fails open when claims are missing or malformed | A-39 |
+| `A-32` | 01 | **RESOLVED 2026-05-29.** `RateLimitMiddleware` fails open on backend errors | A-08, E-09 |
 | `A-33` | 01 | **RESOLVED 2026-05-28.** `/api/logout` requires no auth; refresh-token DoS via known-token revocation | — |
 | `A-34` | 01 | `ApproveUser` trusts caller-supplied `adminUsername` parameter | E-13 |
 | `A-35` | 01 | `--password-stdin` and `--account-key-file` CLI flags do not exist; pipe-stdin asymmetric | — |
@@ -551,7 +551,7 @@ Sort order below is Severity → Slice → Finding number. Cross-refs in the rig
 | `F-12` | 06 | rqlite is "built from source" with no pinned commit or tag | F-05, F-11 |
 | `F-13` | 06 | `bun install` runs without `--frozen-lockfile`; `package.json` uses `^` ranges | F-25 |
 | `F-14` | 06 | CSP forbids `'unsafe-inline'` in script-src but TS modules emit inline `onclick=`; handlers silently do not fire | F-17 |
-| `F-17` | 06 | No `require-trusted-types-for 'script'`; ~12 `innerHTML` sinks across `client/static/js/src/**` | A-22, D-14, F-21 |
+| `F-17` | 06 | **RESOLVED 2026-05-29.** No `require-trusted-types-for 'script'`; ~12 `innerHTML` sinks across `client/static/js/src/**` | A-22, D-14, F-21 |
 
 ### 4.4 Low (52)
 

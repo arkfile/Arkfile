@@ -371,8 +371,7 @@ func RateLimitMiddleware(endpointConfig config.EndpointConfig) echo.MiddlewareFu
 
 			if err != nil {
 				logging.ErrorLogger.Printf("Rate limit check failed: %v", err)
-				// Continue on error to avoid blocking legitimate requests
-				return next(c)
+				return JSONError(c, http.StatusServiceUnavailable, "Rate limiter unavailable")
 			}
 
 			if rateLimited {
@@ -432,6 +431,8 @@ func CSPMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 			"form-action 'self'; " +
 			"frame-ancestors 'none'; " +
 			"worker-src 'self'; " +
+			"require-trusted-types-for 'script'; " +
+			"trusted-types default; " +
 			"upgrade-insecure-requests"
 
 		c.Response().Header().Set("Content-Security-Policy", csp)
