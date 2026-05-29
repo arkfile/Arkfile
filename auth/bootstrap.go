@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bufio"
 	"crypto/rand"
 	"crypto/subtle"
 	"database/sql"
@@ -8,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -222,23 +222,52 @@ func writeBootstrapTokenFile(tokenHex string) error {
 // and group, if present. Returns ok=false when running in test environments
 // where these accounts don't exist; callers should treat that as "skip chown".
 func lookupArkfileUIDGID() (int, int, bool) {
-	u, err := user.Lookup("arkfile")
-	if err != nil {
-		return 0, 0, false
+	uid := -1
+	gid := -1
+
+	// Parse /etc/passwd directly in pure Go to avoid CGO glibc NSS lookup segfaults on static builds
+	passwdFile, err := os.Open("/etc/passwd")
+	if err == nil {
+		defer passwdFile.Close()
+		scanner := bufio.NewScanner(passwdFile)
+		for scanner.Scan() {
+			line := scanner.Text()
+			parts := strings.Split(line, ":")
+			if len(parts) >= 4 && parts[0] == "arkfile" {
+				if parsedUID, err := strconv.Atoi(parts[2]); err == nil {
+					uid = parsedUID
+				}
+				if parsedGID, err := strconv.Atoi(parts[3]); err == nil {
+					gid = parsedGID
+				}
+				break
+			}
+		}
 	}
-	uid, err := strconv.Atoi(u.Uid)
-	if err != nil {
-		return 0, 0, false
+
+	// Falls back to /etc/group for GID if passwd lookup failed or group has different GID
+	if gid == -1 {
+		groupFile, err := os.Open("/etc/group")
+		if err == nil {
+			defer groupFile.Close()
+			scanner := bufio.NewScanner(groupFile)
+			for scanner.Scan() {
+				line := scanner.Text()
+				parts := strings.Split(line, ":")
+				if len(parts) >= 3 && parts[0] == "arkfile" {
+					if parsedGID, err := strconv.Atoi(parts[2]); err == nil {
+						gid = parsedGID
+					}
+					break
+				}
+			}
+		}
 	}
-	g, err := user.LookupGroup("arkfile")
-	if err != nil {
-		return 0, 0, false
+
+	if uid != -1 && gid != -1 {
+		return uid, gid, true
 	}
-	gid, err := strconv.Atoi(g.Gid)
-	if err != nil {
-		return 0, 0, false
-	}
-	return uid, gid, true
+	return 0, 0, false
 }
 
 // ValidateBootstrapToken checks if the provided token matches the stored
