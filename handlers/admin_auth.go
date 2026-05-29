@@ -197,8 +197,19 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 
 	// MANDATORY TOTP: All admin users must have TOTP enabled to login
 	if !totpEnabled {
-		logging.ErrorLogger.Printf("Admin user %s attempted login without TOTP setup", request.Username)
-		return JSONError(c, http.StatusForbidden, "Two-factor authentication setup is required for admin access")
+		logging.InfoLogger.Printf("Admin user %s authenticated via OPAQUE but TOTP setup is incomplete; allowing setup", request.Username)
+		tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
+		if err != nil {
+			logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for admin %s: %v", request.Username, err)
+			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
+		}
+		return JSONResponse(c, http.StatusOK, "Two-factor authentication setup is required for admin access.", map[string]interface{}{
+			"requires_totp":       true,
+			"requires_totp_setup": true,
+			"temp_token":          tempToken,
+			"auth_method":         "OPAQUE",
+			"is_admin":            true,
+		})
 	}
 
 	// Generate temporary token that requires TOTP completion
