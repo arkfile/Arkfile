@@ -924,6 +924,29 @@ EXAMPLES:
 
 	// Check if TOTP is required
 	requiresTOTP, _ := loginResp.Data["requires_totp"].(bool)
+	requiresTOTPSetup, _ := loginResp.Data["requires_totp_setup"].(bool)
+
+	if requiresTOTPSetup {
+		tempToken, _ := loginResp.Data["temp_token"].(string)
+		if tempToken == "" {
+			return fmt.Errorf("missing temporary TOTP token in response")
+		}
+		// Save session for setup-totp
+		session := &AdminSession{
+			Username:       *usernameFlag,
+			TempToken:      tempToken,
+			ServerURL:      config.ServerURL,
+			SessionCreated: time.Now(),
+			ExpiresAt:      time.Now().Add(15 * time.Minute),
+			IsAdmin:        true,
+		}
+		if err := saveAdminSession(session, config.TokenFile); err != nil {
+			return fmt.Errorf("failed to save admin session for TOTP setup: %w", err)
+		}
+		fmt.Printf("\nTOTP setup required. Session saved.\n")
+		fmt.Printf("Please run 'arkfile-admin setup-totp' to complete account setup.\n")
+		return nil
+	}
 
 	if requiresTOTP {
 		sessionKey, _ := loginResp.Data["session_key"].(string)
