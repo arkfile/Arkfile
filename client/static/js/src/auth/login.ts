@@ -13,7 +13,7 @@ import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { clearAllSessionData, authenticatedFetch } from '../utils/auth.js';
 import { showFileSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
-import { handleTOTPFlow } from './totp.js';
+import { handleTOTPFlow, showTOTPSetupModal } from './totp.js';
 import { getOpaqueClient, storeClientSecret, retrieveClientSecret, clearClientSecret } from '../crypto/opaque.js';
 import {
   deriveFileEncryptionKeyWithCache,
@@ -161,8 +161,10 @@ export class LoginManager {
             username: credentials.username,
             password: credentials.password,
           });
-          const { showTOTPSetupSection } = await import('../ui/sections.js');
-          showTOTPSetupSection();
+          // Close the generic code verification modal shown by handleTOTPFlow
+          document.querySelector('.modal-overlay')?.remove();
+          // Launch the comprehensive all-step setup modal instead
+          showTOTPSetupModal();
           showSuccess('Please complete two-factor authentication setup to finish logging in.');
           return;
         }
