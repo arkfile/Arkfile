@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -196,7 +195,7 @@ func (a *Agent) wipeAllSensitiveDataLocked() {
 	// Wipe account key
 	if a.keyEntry != nil {
 		if a.keyEntry.mlocked && len(a.keyEntry.key) > 0 {
-			_ = syscall.Munlock(a.keyEntry.key)
+			_ = munlock(a.keyEntry.key)
 		}
 		for i := range a.keyEntry.key {
 			a.keyEntry.key[i] = 0
@@ -253,6 +252,16 @@ func (a *Agent) serve() {
 // handleConnection processes a single request
 func (a *Agent) handleConnection(conn net.Conn) {
 	defer conn.Close()
+
+	// Enforce peer verification on Unix socket connection (A-21)
+	if authorized, err := isPeerAuthorized(conn); !authorized || err != nil {
+		if err != nil {
+			logVerbose("Warning: unauthorized connection attempt rejected: %v", err)
+		} else {
+			logVerbose("Warning: unauthorized connection attempt rejected (not owner)")
+		}
+		return
+	}
 
 	var req AgentRequest
 	decoder := json.NewDecoder(conn)
@@ -365,7 +374,7 @@ func (a *Agent) handleStoreAccountKey(conn net.Conn, params map[string]interface
 	// Attempt to mlock the key to prevent swapping to disk (POSIX mlock(2))
 	// This is best-effort: on some BSDs or unprivileged environments it may fail.
 	if len(accountKey) > 0 {
-		if err := syscall.Mlock(accountKey); err == nil {
+		if err := mlock(accountKey); err == nil {
 			entry.mlocked = true
 			logVerbose("Account key memory locked (mlock)")
 		} else {
@@ -626,31 +635,6 @@ func NewAgentClient() (*AgentClient, error) {
 	return &AgentClient{
 		socketPath: socketPath,
 	}, nil
-}
-
-// validateSocketSecurity ensures socket is owned by current user with correct permissions
-func validateSocketSecurity(socketPath string, expectedUID int) error {
-	info, err := os.Stat(socketPath)
-	if err != nil {
-		return fmt.Errorf("failed to stat socket: %w", err)
-	}
-
-	// Check ownership (POSIX: works on Linux, FreeBSD, OpenBSD, Alpine)
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return fmt.Errorf("failed to get socket stat info")
-	}
-
-	if int(stat.Uid) != expectedUID {
-		return fmt.Errorf("socket owner mismatch: expected UID %d, got %d", expectedUID, stat.Uid)
-	}
-
-	// Check permissions (must be exactly 0600)
-	if info.Mode().Perm() != 0600 {
-		return fmt.Errorf("insecure socket permissions: %o (expected 0600)", info.Mode().Perm())
-	}
-
-	return nil
 }
 
 // connect establishes a connection to the agent with security validation

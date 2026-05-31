@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"syscall"
 
 	"golang.org/x/crypto/hkdf"
-	"golang.org/x/sys/unix"
 )
 
 var (
@@ -39,14 +37,13 @@ func LoadTier3Master() error {
 
 	// Disable core dumps for the entire process (defense-in-depth / MADV_DONTDUMP / PR_SET_DUMPABLE)
 	// prctl(PR_SET_DUMPABLE, 0)
-	_, _, sysErr := syscall.Syscall(syscall.SYS_PRCTL, syscall.PR_SET_DUMPABLE, 0, 0)
-	if sysErr != 0 {
+	if err := prctlDisableCoredump(); err != nil {
 		// Log warning but do not fail-closed in pure dev/unprivileged environments
-		fmt.Fprintf(os.Stderr, "Warning: failed to set PR_SET_DUMPABLE=0: %v\n", sysErr)
+		fmt.Fprintf(os.Stderr, "Warning: failed to set PR_SET_DUMPABLE=0: %v\n", err)
 	}
 
 	// Try to mlock the key to prevent swapping to disk
-	if err := unix.Mlock(key); err == nil {
+	if err := mLockMemory(key); err == nil {
 		tier3Mlocked = true
 	} else {
 		fmt.Fprintf(os.Stderr, "Warning: failed to mlock Tier-3 master key: %v\n", err)
@@ -57,7 +54,7 @@ func LoadTier3Master() error {
 	if len(key) > 0 {
 		// Madvise requires slice page alignment but since key is small, madvising key slice is best-effort.
 		// On Linux we can pass the slice directly.
-		err := unix.Madvise(key, unix.MADV_DONTDUMP)
+		err := mAdviseDontDump(key)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to madvise MADV_DONTDUMP on Tier-3 master key: %v\n", err)
 		}
@@ -90,7 +87,7 @@ func DeriveTier3Subkey(purpose []byte) ([]byte, error) {
 func SecureZeroTier3() {
 	if len(tier3MasterKey) > 0 {
 		if tier3Mlocked {
-			_ = unix.Munlock(tier3MasterKey)
+			_ = mUnlockMemory(tier3MasterKey)
 			tier3Mlocked = false
 		}
 		// Zero memory

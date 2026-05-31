@@ -1745,7 +1745,7 @@ func ensureAgentRunning() error {
 	}
 
 	cmd := exec.Command(exe, "__agent-daemon")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detach from parent session
+	cmd.SysProcAttr = daemonSysProcAttr() // detach from parent session
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil

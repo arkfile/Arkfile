@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -493,5 +494,54 @@ func TestHashToken(t *testing.T) {
 	// Hash should be 64 hex characters (SHA-256 = 32 bytes = 64 hex chars)
 	if len(hash1) != 64 {
 		t.Errorf("hash should be 64 hex chars, got %d", len(hash1))
+	}
+}
+
+// TestIsPeerAuthorized_Success verifies that standard local unix connections
+// pass the kernel credential check (isPeerAuthorized returns true without errors).
+func TestIsPeerAuthorized_Success(t *testing.T) {
+	tempDir := t.TempDir()
+	socketPath := filepath.Join(tempDir, "test-peer-auth.sock")
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+	defer listener.Close()
+
+	ch := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			ch <- err
+			return
+		}
+		defer conn.Close()
+
+		authorized, err := isPeerAuthorized(conn)
+		if err != nil {
+			ch <- err
+			return
+		}
+		if !authorized {
+			ch <- fmt.Errorf("expected peer to be authorized")
+			return
+		}
+		ch <- nil
+	}()
+
+	clientConn, err := net.Dial("unix", socketPath)
+	if err != nil {
+		t.Fatalf("failed to connect: %v", err)
+	}
+	clientConn.Close()
+
+	select {
+	case err := <-ch:
+		if err != nil {
+			t.Errorf("peer authorization check failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("test timed out waiting for peer authorization check")
 	}
 }
