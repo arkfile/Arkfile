@@ -9,7 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// F-01 regression tests for the bootstrap endpoints.
+// Regression tests for the bootstrap endpoints.
 //
 // BootstrapRegisterResponse and BootstrapRegisterFinalize are the two
 // privileged endpoints that allow the first admin to be seeded against a
@@ -20,14 +20,12 @@ import (
 // Layer (2) MUST consult the kernel-reported transport peer, NOT c.RealIP()
 // / X-Forwarded-For. The tests below prove that a remote attacker who sends
 // X-Forwarded-For: 127.0.0.1 cannot reach the bootstrap logic.
-//
-// See: docs/wip/review/00-executive-summary.md (F-01).
 
 // makeBootstrapRequest constructs an Echo context with a JSON body that
 // would normally drive the bootstrap handler. The token / username values
 // do not matter because the localhost gate runs BEFORE token validation;
 // if the test reaches a 401 (invalid token) instead of 403 (non-local
-// peer), the F-01 gate has already failed.
+// peer), the gate has already failed.
 func makeBootstrapRequest(e *echo.Echo, remoteAddr, xff string, body []byte) echo.Context {
 	req := httptest.NewRequest(http.MethodPost, "/api/bootstrap/register/response", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -58,7 +56,7 @@ func TestBootstrapRegisterResponse_RejectsForgedXFF(t *testing.T) {
 	// so the HTTP status appears on the response recorder, and err is nil.
 	rec := c.Response().Writer.(*httptest.ResponseRecorder)
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("F-01 REGRESSION: BootstrapRegisterResponse returned status %d for a remote "+
+		t.Fatalf("REGRESSION: BootstrapRegisterResponse returned status %d for a remote "+
 			"request that spoofed X-Forwarded-For: 127.0.0.1. Expected %d (Forbidden). err=%v body=%s",
 			rec.Code, http.StatusForbidden, err, rec.Body.String())
 	}
@@ -83,7 +81,7 @@ func TestBootstrapRegisterFinalize_RejectsForgedXFF(t *testing.T) {
 	err := BootstrapRegisterFinalize(c)
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("F-01 REGRESSION: BootstrapRegisterFinalize returned status %d for a remote "+
+		t.Fatalf("REGRESSION: BootstrapRegisterFinalize returned status %d for a remote "+
 			"request that spoofed X-Forwarded-For: 127.0.0.1. Expected %d (Forbidden). err=%v body=%s",
 			rec.Code, http.StatusForbidden, err, rec.Body.String())
 	}

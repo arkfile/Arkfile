@@ -259,7 +259,6 @@ func main() {
 	// header (set via header_up in the Caddyfile) and is read separately
 	// by handlers.publicClientIP / logging.GetOrCreateEntityID for
 	// rate-limiting and EntityID HMAC binning -- never for authz.
-	// See: docs/wip/review/00-executive-summary.md (F-01).
 	e.IPExtractor = echo.ExtractIPDirect()
 
 	// Basic security middleware first
@@ -277,7 +276,7 @@ func main() {
 	e.Pre(middleware.HTTPSRedirect())
 	e.Use(handlers.TLSVersionCheck)
 
-	// Phase 5F: Enhanced security middleware
+	// Enhanced security middleware
 	e.Use(handlers.CSPMiddleware)
 	// Note: ShareRateLimitMiddleware and TimingProtectionMiddleware are applied
 	// specifically to share endpoints in route_config.go, not globally

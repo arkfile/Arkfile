@@ -14,7 +14,7 @@ import (
 )
 
 // hexRegex matches any run of exactly 64 hex characters -- the wire form of
-// a 32-byte bootstrap token. Used by the A-26 / F-03 regression tests to
+// a 32-byte bootstrap token. Used by the regression tests to
 // assert no token-shaped substring appears in log output.
 var hexRegex = regexp.MustCompile(`[0-9a-fA-F]{64}`)
 
@@ -81,7 +81,7 @@ func installTempBootstrapDB(t *testing.T) func() {
 	}
 }
 
-// TestCheckAndGenerateBootstrapToken_WritesFileNotStdout proves A-26 / F-03:
+// TestCheckAndGenerateBootstrapToken_WritesFileNotStdout verifies that
 // the bootstrap token is delivered via a 0400 file at BootstrapTokenPath, and
 // the 64-hex-character token value NEVER appears in any log output that
 // systemd / journalctl would capture.
@@ -110,9 +110,9 @@ func TestCheckAndGenerateBootstrapToken_WritesFileNotStdout(t *testing.T) {
 		}
 	})
 
-	// A-26 / F-03: no 64-hex-char substring may appear in the log.
+	// No 64-hex-char substring may appear in the log.
 	if matches := hexRegex.FindAllString(logged, -1); len(matches) > 0 {
-		t.Fatalf("A-26/F-03 REGRESSION: bootstrap token appears in log output. Found 64-hex match(es): %v.\nFull log:\n%s",
+		t.Fatalf("REGRESSION: bootstrap token appears in log output. Found 64-hex match(es): %v.\nFull log:\n%s",
 			matches, logged)
 	}
 
@@ -179,7 +179,7 @@ func TestCheckAndGenerateBootstrapToken_WritesFileNotStdout(t *testing.T) {
 	}
 }
 
-// TestValidateBootstrapToken_RejectsConsumedToken proves A-13:
+// TestValidateBootstrapToken_RejectsConsumedToken verifies that
 // once the consumed_at column is set on the bootstrap_token row,
 // ValidateBootstrapToken returns (false, nil) regardless of token bytes.
 func TestValidateBootstrapToken_RejectsConsumedToken(t *testing.T) {
@@ -248,7 +248,7 @@ func TestValidateBootstrapToken_RejectsConsumedToken(t *testing.T) {
 		t.Fatalf("ValidateBootstrapToken errored after consume: %v", err)
 	}
 	if ok {
-		t.Fatalf("A-13 REGRESSION: ValidateBootstrapToken accepted a consumed token; expected false")
+		t.Fatalf("REGRESSION: ValidateBootstrapToken accepted a consumed token; expected false")
 	}
 
 	// And a SECOND consume attempt affects zero rows -- this is the
@@ -265,7 +265,7 @@ func TestValidateBootstrapToken_RejectsConsumedToken(t *testing.T) {
 		t.Fatalf("RowsAffected error: %v", err)
 	}
 	if affected != 0 {
-		t.Fatalf("A-13 REGRESSION: second consume affected %d rows, want 0", affected)
+		t.Fatalf("REGRESSION: second consume affected %d rows, want 0", affected)
 	}
 }
 

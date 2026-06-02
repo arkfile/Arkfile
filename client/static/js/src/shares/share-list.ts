@@ -42,7 +42,7 @@ interface ShareListResponse {
 interface MetadataBatchResponse {
   files: Record<string, {
     file_id: string;
-    /** Phase C: required for metadata-field AAD reconstruction. */
+    /** Required for metadata-field AAD reconstruction. */
     owner_username: string;
     password_type: string;
     filename_nonce: string;

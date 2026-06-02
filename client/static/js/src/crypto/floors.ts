@@ -1,5 +1,5 @@
 /**
- * Compile-time Cryptographic Floor Settings and clamping helpers (finding D-12 / E1)
+ * Compile-time Cryptographic Floor Settings and clamping helpers
  *
  * All security-critical KDF, chunking, and password parameters are validated on the client side
  * against these immutable, statically embedded values. If the server is compromised or returns
@@ -88,7 +88,7 @@ export const FLOOR_PASSWORD: PasswordConfig = {
 
 /**
  * Resolve KDF params: if server values are missing, invalid, or weaker than our compilation flooring,
- * we clamp field-by-field or fall back to floors. This prevents any server-side downgrade attack (finding B-01).
+ * we clamp field-by-field or fall back to floors. This prevents any server-side downgrade attack.
  */
 export function resolveArgon2Params(server: Partial<Argon2Params> | null | undefined): Argon2Params {
   if (!server) {
@@ -104,7 +104,7 @@ export function resolveArgon2Params(server: Partial<Argon2Params> | null | undef
 
 /**
  * Resolve Chunking params. Since chunk sizes govern stream buffer sizes, we must clamp them
- * to system settings (finding B-03).
+ * to system settings.
  */
 export function resolveChunkingParams(server: Partial<ChunkingConfig> | null | undefined): ChunkingConfig {
   if (!server) {
@@ -128,7 +128,7 @@ export function resolveChunkingParams(server: Partial<ChunkingConfig> | null | u
 
 /**
  * Resolve Password Requirements params. Any attempt by the server to relax password security
- * is ignored; we clamp to compile-time floors (finding B-19).
+ * is ignored; we clamp to compile-time floors.
  */
 export function resolvePasswordConfig(server: Partial<PasswordConfig> | null | undefined): PasswordConfig {
   if (!server) {
@@ -146,7 +146,7 @@ export function resolvePasswordConfig(server: Partial<PasswordConfig> | null | u
 
 /**
  * Verifies that the KDF parameters of a decrypted share envelope are not weaker
- * than the client-side system flooring (finding D-12).
+ * than the client-side system flooring.
  */
 export function validateAgainstFloor(p: ShareKDFParamsEmbedded): void {
   if (!p) {

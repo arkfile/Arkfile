@@ -96,7 +96,7 @@ func CreateRefreshToken(db *sql.DB, username string) (string, error) {
 }
 
 // ValidateRefreshToken checks if a refresh token is valid and returns the username.
-// It implements four-step family-revoke logic (A-10):
+// It implements four-step family-revoke logic:
 //  1. Unknown token → 401.
 //  2. superseded_by_hash IS NOT NULL → reuse detected → revoke family + user JWTs → 401.
 //  3. family_revoked_at IS NOT NULL → family already revoked → 401.

@@ -109,7 +109,7 @@ export async function getAccountKey(username: string): Promise<Uint8Array | null
  * The 2-byte envelope header is stripped before AES-GCM decryption.
  * AAD = BuildFEKEnvelopeAAD(fileID, keyTypeByte) binds the envelope to this
  * specific file_id and to the declared key type, so a server with DB-write
- * access cannot move FEK envelopes between files (B-08) or flip the key-type
+ * access cannot move FEK envelopes between files or flip the key-type
  * byte to mis-route the client.
  *
  * @param encrypted_fek_base64 - Base64-encoded encrypted FEK with envelope header
@@ -171,7 +171,7 @@ export async function decryptFEK(
  * BuildMetadataFieldAAD(fileID, fieldName, ownerUsername) binds each field
  * to (file, field-label, owner) so the server cannot move metadata between
  * files, swap filename and sha256 ciphertexts, or remap a row to a different
- * user (C-19).
+ * user.
  *
  * @param ciphertext_base64 - Base64-encoded ciphertext + auth tag
  * @param nonce_base64      - Base64-encoded nonce (12 bytes)

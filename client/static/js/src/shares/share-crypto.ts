@@ -95,7 +95,7 @@ interface ShareEnvelopeJSON {
   filename?: string;      // plaintext filename (for preview before download)
   size_bytes?: number;    // file size in bytes (for preview before download)
   sha256?: string;        // plaintext SHA256 hex digest (for post-download verification)
-  kdf_params?: ShareKDFParamsEmbedded; // embedded KDF params for verification (finding D-12)
+  kdf_params?: ShareKDFParamsEmbedded; // embedded KDF params for verification
 }
 
 /**

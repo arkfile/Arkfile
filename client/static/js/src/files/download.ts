@@ -36,9 +36,9 @@ import { getAccountKey, decryptFEK } from '../crypto/metadata-helpers';
 const LOG_PREFIX = '[arkfile-download]';
 
 interface FileMetaResponse {
-  /** Canonical file_id (Phase C: required to reconstruct FEK / metadata AAD). */
+  /** Canonical file_id (required to reconstruct FEK / metadata AAD). */
   file_id: string;
-  /** Canonical owner_username (Phase C: required for metadata-field AAD). */
+  /** Canonical owner_username (required for metadata-field AAD). */
   owner_username: string;
   encrypted_filename: string;
   filename_nonce: string;

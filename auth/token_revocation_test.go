@@ -405,7 +405,7 @@ func TestTokenRevocationMiddleware(t *testing.T) {
 				token, _, _ := new(jwt.Parser).ParseUnverified(tokenStringNoJTI, &Claims{})
 				return token
 			}(),
-			expectedStatus: http.StatusUnauthorized, // Should fail closed if no JTI (A-31)
+			expectedStatus: http.StatusUnauthorized, // Should fail closed if no JTI
 			expectError:    true,
 		},
 	}
@@ -441,7 +441,7 @@ func TestTokenRevocationMiddleware(t *testing.T) {
 	}
 }
 
-// TestTokenRevocationMiddleware_UserWideRevocation verifies that A-09 is enforced:
+// TestTokenRevocationMiddleware_UserWideRevocation verifies that user-wide revocation is enforced:
 // after RevokeAllUserJWTs is written, a subsequent request with a JWT issued
 // before the revocation is rejected without waiting for the JWT TTL to expire.
 func TestTokenRevocationMiddleware_UserWideRevocation(t *testing.T) {

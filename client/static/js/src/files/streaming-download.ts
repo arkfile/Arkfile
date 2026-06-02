@@ -203,11 +203,11 @@ export class StreamingDownloadManager {
       console.log(`${LOG_PREFIX_FILE} Metadata fetched in ${Date.now() - tMeta}ms (total_chunks=${metadata.total_chunks}, size_bytes=${metadata.size_bytes}, password_type=${metadata.password_type})`);
 
       // 2. Decrypt filename and sha256sum using ACCOUNT KEY (not FEK).
-      // Phase C: metadata-field AAD requires (file_id, field_label, owner_username).
+      // metadata-field AAD requires (file_id, field_label, owner_username).
       const metadataKey = this.options.accountKey;
       if (!metadataKey) throw new Error('Account key required for metadata decryption (owner download)');
       if (!metadata.owner_username) {
-        throw new Error('Server metadata missing owner_username (required for Phase C AAD)');
+        throw new Error('Server metadata missing owner_username (required for metadata AAD)');
       }
 
       const tDecMeta = Date.now();

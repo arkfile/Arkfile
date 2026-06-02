@@ -35,7 +35,6 @@ func BootstrapRegisterResponse(c echo.Context) error {
 	// transport peer address. MUST NOT use c.RealIP(), which walks the
 	// client-controllable X-Forwarded-For chain under Echo's default
 	// extractor and is therefore spoofable from any internet host.
-	// See: docs/wip/review/00-executive-summary.md (F-01).
 	if !peerAddrIsLoopback(c) {
 		logging.ErrorLogger.Printf("SECURITY ALERT: Bootstrap attempt from non-local peer")
 		return JSONError(c, http.StatusForbidden, "Bootstrap endpoints only accessible from localhost")
@@ -109,7 +108,6 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	// transport peer address. MUST NOT use c.RealIP(), which walks the
 	// client-controllable X-Forwarded-For chain under Echo's default
 	// extractor and is therefore spoofable from any internet host.
-	// See: docs/wip/review/00-executive-summary.md (F-01).
 	if !peerAddrIsLoopback(c) {
 		logging.ErrorLogger.Printf("SECURITY ALERT: Bootstrap attempt from non-local peer")
 		return JSONError(c, http.StatusForbidden, "Bootstrap endpoints only accessible from localhost")
@@ -163,7 +161,7 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	}
 	defer tx.Rollback()
 
-	// A-13: Atomically mark the bootstrap token as consumed BEFORE any
+	// Atomically mark the bootstrap token as consumed BEFORE any
 	// user-creation side effects. If consumed_at is already set, another
 	// caller raced us; abort with 401 and the rollback will undo nothing.
 	// The UPDATE+WHERE-consumed_at-IS-NULL pattern means at most one
@@ -215,7 +213,7 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 
 	// Commit transaction (atomically: token-consumed + admin-user-created
 	// + opaque-record-stored, all-or-nothing). After commit the token is
-	// permanently unusable for any second admin redemption (A-13).
+	// permanently unusable for any second admin redemption.
 	if err := tx.Commit(); err != nil {
 		return JSONError(c, http.StatusInternalServerError, "Commit failed")
 	}

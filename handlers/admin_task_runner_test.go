@@ -114,8 +114,8 @@ func TestTaskRunner_ActiveTasksMapInitialized(t *testing.T) {
 	assert.Empty(t, tr.activeTasks)
 }
 
-// TestRunC06Cleanup_Success verifies that stale multipart uploads are aborted and cleared.
-func TestRunC06Cleanup_Success(t *testing.T) {
+// TestAbortStaleMultipartUploads_Success verifies that stale multipart uploads are aborted and cleared.
+func TestAbortStaleMultipartUploads_Success(t *testing.T) {
 	db, mockDB, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -143,15 +143,15 @@ func TestRunC06Cleanup_Success(t *testing.T) {
 		WithArgs("session-123").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	// Manually run runC06Cleanup
-	runC06Cleanup(context.Background())
+	// Manually run abortAbandonedMultipartUploads
+	abortAbandonedMultipartUploads(context.Background())
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 	mockPrimary.AssertExpectations(t)
 }
 
-// TestRunC07Cleanup_Success verifies that unreferenced storage objects are garbage collected.
-func TestRunC07Cleanup_Success(t *testing.T) {
+// TestGarbageCollectOrphanedStorageObjects_Success verifies that unreferenced storage objects are garbage collected.
+func TestGarbageCollectOrphanedStorageObjects_Success(t *testing.T) {
 	db, mockDB, err := sqlmock.New()
 	require.NoError(t, err)
 	defer db.Close()
@@ -193,8 +193,8 @@ func TestRunC07Cleanup_Success(t *testing.T) {
 	// Orphaned key should be removed
 	mockPrimary.On("RemoveObject", mock.Anything, "orphaned-999", mock.Anything).Return(nil)
 
-	// Run C-07 Cleanup
-	runC07Cleanup(context.Background())
+	// Run cleanup
+	removeOrphanedStorageObjects(context.Background())
 
 	assert.NoError(t, mockDB.ExpectationsWereMet())
 	mockPrimary.AssertExpectations(t)

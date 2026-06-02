@@ -11,7 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// A-01 + E-01 regression tests at the handler-package level.
+// Regression tests at the handler-package level.
 //
 // These tests prove that the middleware chain protecting the admin group
 // (and totp/pending groups) rejects:
@@ -19,14 +19,11 @@ import (
 //   2. full-tier tokens with requires_totp=true (hand-crafted) at RequireFullJWT
 // These rejections happen BEFORE any DB lookup in AdminMiddleware /
 // RequireTOTP, so the tests do not need a populated users table.
-//
-// See: docs/wip/review/00-executive-summary.md (A-01, E-01).
 
 // adminStackHeadOfChain mimics the production middleware composition for
 // /api/admin/*: JWTMiddleware first, then RequireFullJWT. The downstream
 // layers (RequireTOTP, AdminMiddleware) execute only if these two pass.
-// For an A-01 regression check, "the request never reaches RequireTOTP"
-// is the assertion we care about.
+// "the request never reaches RequireTOTP" is the assertion we care about.
 func adminStackHeadOfChain(h echo.HandlerFunc) echo.HandlerFunc {
 	return auth.JWTMiddleware()(auth.RequireFullJWT(h))
 }
@@ -39,7 +36,7 @@ func totpProtectedStackHead(h echo.HandlerFunc) echo.HandlerFunc {
 	return auth.JWTMiddleware()(auth.RequireFullJWT(h))
 }
 
-// TestAdminStackHead_RejectsTempToken_Before_DB verifies A-01: a temp
+// TestAdminStackHead_RejectsTempToken_Before_DB verifies that a temp
 // post-OPAQUE token (aud=arkfile-totp) MUST be rejected by JWTMiddleware
 // before the request gets anywhere near AdminMiddleware. Without the fix,
 // the same Ed25519 key signed both tiers and this token would have reached
@@ -65,7 +62,7 @@ func TestAdminStackHead_RejectsTempToken_Before_DB(t *testing.T) {
 
 	err = stack(c)
 	if innerCalled {
-		t.Fatalf("A-01 REGRESSION: admin middleware chain invoked the inner handler " +
+		t.Fatalf("REGRESSION: admin middleware chain invoked the inner handler " +
 			"for a temp-tier token. JWTMiddleware must reject aud=arkfile-totp before " +
 			"AdminMiddleware/RequireTOTP can run.")
 	}
@@ -130,7 +127,7 @@ func TestAdminStackHead_RejectsFullTokenWithRequiresTOTPTrue(t *testing.T) {
 	}
 }
 
-// TestTOTPProtectedStackHead_RejectsTempToken verifies the same A-01
+// TestTOTPProtectedStackHead_RejectsTempToken verifies the same
 // rejection at the totpProtectedGroup head: a temp token never reaches
 // any of the /api/files, /api/uploads, /api/shares handlers.
 func TestTOTPProtectedStackHead_RejectsTempToken(t *testing.T) {
@@ -154,7 +151,7 @@ func TestTOTPProtectedStackHead_RejectsTempToken(t *testing.T) {
 
 	err = stack(c)
 	if innerCalled {
-		t.Fatalf("A-01 REGRESSION: totpProtectedGroup chain invoked inner handler " +
+		t.Fatalf("REGRESSION: totpProtectedGroup chain invoked inner handler " +
 			"for a temp token.")
 	}
 	httpErr, ok := err.(*echo.HTTPError)

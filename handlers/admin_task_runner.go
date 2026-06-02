@@ -37,7 +37,7 @@ func InitTaskRunner(maxWorkers int) {
 	}
 	log.Printf("Task runner initialized (max workers: %d)", maxWorkers)
 
-	// Start periodic sweeps in the background (C-06 and C-07 remediations)
+	// Start periodic sweeps in the background (cleanup of abandoned uploads and orphans)
 	StartPeriodicCleanupJobs(context.Background())
 }
 
@@ -591,8 +591,7 @@ func (tr *TaskRunner) runVerifyTask(
 }
 
 // StartPeriodicCleanupJobs runs background sweep tasks periodically.
-// This implements remediations for C-06 (Multipart Upload Aborter) and
-// C-07 (Storage Orphan-Prevention Background Task).
+// This implements multipart upload aborter and the storage orphan reconciler.
 func StartPeriodicCleanupJobs(ctx context.Context) {
 	// Skip periodic background sweeps in Go unit tests to avoid interfering with sqlmock expectations
 	if flag.Lookup("test.v") != nil {
@@ -605,25 +604,25 @@ func StartPeriodicCleanupJobs(ctx context.Context) {
 		defer ticker.Stop()
 
 		// Run immediately on startup (safely wrapped in recovery)
-		runC06Cleanup(ctx)
-		runC07Cleanup(ctx)
+		abortAbandonedMultipartUploads(ctx)
+		removeOrphanedStorageObjects(ctx)
 
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				runC06Cleanup(ctx)
-				runC07Cleanup(ctx)
+				abortAbandonedMultipartUploads(ctx)
+				removeOrphanedStorageObjects(ctx)
 			}
 		}
 	}()
 }
 
-func runC06Cleanup(ctx context.Context) {
+func abortAbandonedMultipartUploads(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			logging.ErrorLogger.Printf("Panic recovered in C-06 cleanup: %v", r)
+			logging.ErrorLogger.Printf("Panic recovered in abortAbandonedMultipartUploads cleanup: %v", r)
 		}
 	}()
 
@@ -640,7 +639,7 @@ func runC06Cleanup(ctx context.Context) {
 		  AND storage_upload_id != ''
 	`)
 	if err != nil {
-		logging.ErrorLogger.Printf("C-06 Cleanup: failed to query abandoned upload sessions: %v", err)
+		logging.ErrorLogger.Printf("stale multipart cleanup: failed to query abandoned upload sessions: %v", err)
 		return
 	}
 	defer rows.Close()
@@ -665,26 +664,26 @@ func runC06Cleanup(ctx context.Context) {
 
 	primary := storage.Registry.Primary()
 	for _, item := range items {
-		logging.InfoLogger.Printf("C-06 Cleanup: aborting stale multipart upload for session %s (storage_id: %s, upload_id: %s)",
+		logging.InfoLogger.Printf("stale multipart cleanup: aborting stale multipart upload for session %s (storage_id: %s, upload_id: %s)",
 			item.id, item.storageID, item.storageUploadID)
 
 		err := primary.AbortMultipartUpload(ctx, item.storageID, item.storageUploadID)
 		if err != nil {
-			logging.ErrorLogger.Printf("C-06 Cleanup: failed to abort multipart upload for session %s: %v", item.id, err)
+			logging.ErrorLogger.Printf("stale multipart cleanup: failed to abort multipart upload for session %s: %v", item.id, err)
 		}
 
 		// Set storage_upload_id = NULL so we never try to abort it again.
 		_, dbErr := database.DB.Exec("UPDATE upload_sessions SET storage_upload_id = NULL WHERE id = ?", item.id)
 		if dbErr != nil {
-			logging.ErrorLogger.Printf("C-06 Cleanup: failed to set storage_upload_id to NULL for session %s: %v", item.id, dbErr)
+			logging.ErrorLogger.Printf("stale multipart cleanup: failed to set storage_upload_id to NULL for session %s: %v", item.id, dbErr)
 		}
 	}
 }
 
-func runC07Cleanup(ctx context.Context) {
+func removeOrphanedStorageObjects(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			logging.ErrorLogger.Printf("Panic recovered in C-07 cleanup: %v", r)
+			logging.ErrorLogger.Printf("Panic recovered in removeOrphanedStorageObjects cleanup: %v", r)
 		}
 	}()
 
@@ -695,7 +694,7 @@ func runC07Cleanup(ctx context.Context) {
 	// 1. Query all referenced storage_ids in file_metadata
 	rowsMeta, err := database.DB.Query(`SELECT DISTINCT storage_id FROM file_metadata WHERE storage_id IS NOT NULL AND storage_id != ''`)
 	if err != nil {
-		logging.ErrorLogger.Printf("C-07 Cleanup: failed to query file_metadata storage_ids: %v", err)
+		logging.ErrorLogger.Printf("orphan reconciler cleanup: failed to query file_metadata storage_ids: %v", err)
 		return
 	}
 	defer rowsMeta.Close()
@@ -711,7 +710,7 @@ func runC07Cleanup(ctx context.Context) {
 	// 2. Query all referenced storage_ids in upload_sessions (regardless of status - we must protect any active, canceled or recently added sessions)
 	rowsSess, err := database.DB.Query(`SELECT DISTINCT storage_id FROM upload_sessions WHERE storage_id IS NOT NULL AND storage_id != ''`)
 	if err != nil {
-		logging.ErrorLogger.Printf("C-07 Cleanup: failed to query upload_sessions storage_ids: %v", err)
+		logging.ErrorLogger.Printf("orphan reconciler cleanup: failed to query upload_sessions storage_ids: %v", err)
 		return
 	}
 	defer rowsSess.Close()
@@ -727,7 +726,7 @@ func runC07Cleanup(ctx context.Context) {
 	primary := storage.Registry.Primary()
 	objects, err := primary.ListObjects(ctx)
 	if err != nil {
-		logging.ErrorLogger.Printf("C-07 Cleanup: failed to list storage objects: %v", err)
+		logging.ErrorLogger.Printf("orphan reconciler cleanup: failed to list storage objects: %v", err)
 		return
 	}
 
@@ -742,23 +741,23 @@ func runC07Cleanup(ctx context.Context) {
 		opts.SetRange(0, 0)
 		obj, err := primary.GetObject(ctx, objKey, opts)
 		if err != nil {
-			logging.ErrorLogger.Printf("C-07 Cleanup: failed to GetObject for %s: %v", objKey, err)
+			logging.ErrorLogger.Printf("orphan reconciler cleanup: failed to GetObject for %s: %v", objKey, err)
 			continue
 		}
 
 		info, err := obj.Stat()
 		obj.Close()
 		if err != nil {
-			logging.ErrorLogger.Printf("C-07 Cleanup: failed to stat %s: %v", objKey, err)
+			logging.ErrorLogger.Printf("orphan reconciler cleanup: failed to stat %s: %v", objKey, err)
 			continue
 		}
 
 		// Only delete if older than 1 hour
 		if time.Since(info.LastModified) > 1*time.Hour {
-			logging.InfoLogger.Printf("C-07 Cleanup: removing orphaned storage object: %s (age: %v)", objKey, time.Since(info.LastModified))
+			logging.InfoLogger.Printf("orphan reconciler cleanup: removing orphaned storage object: %s (age: %v)", objKey, time.Since(info.LastModified))
 			err := primary.RemoveObject(ctx, objKey, storage.RemoveObjectOptions{})
 			if err != nil {
-				logging.ErrorLogger.Printf("C-07 Cleanup: failed to remove orphaned object %s: %v", objKey, err)
+				logging.ErrorLogger.Printf("orphan reconciler cleanup: failed to remove orphaned object %s: %v", objKey, err)
 			}
 		}
 	}

@@ -98,7 +98,7 @@ func TestGenerateTestFileContent(t *testing.T) {
 
 			case PatternRepeated:
 				// Content should start with seed pattern
-				seed := []byte("Arkfile Test File Content Pattern - PHASE 1A Implementation")
+				seed := []byte("Arkfile Test File Content Pattern - Implementation")
 				if len(data) >= len(seed) {
 					if !bytes.Equal(data[:len(seed)], seed) {
 						t.Errorf("repeated pattern not correct: got %s, expected %s", string(data[:len(seed)]), string(seed))
@@ -145,7 +145,7 @@ func TestGenerateFEK(t *testing.T) {
 }
 
 // TestFEKEncryptDecrypt tests FEK encryption/decryption with password
-// and AAD binding to the file_id (Phase C, finding B-08).
+// and AAD binding to the file_id.
 func TestFEKEncryptDecrypt(t *testing.T) {
 	username := "test-user"
 	fileID := "11111111-2222-4333-8444-555555555555"

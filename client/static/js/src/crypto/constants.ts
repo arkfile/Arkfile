@@ -31,7 +31,7 @@ export type { ChunkingConfig };
 let cachedArgon2Config: Argon2Config | null = null;
 
 /**
- * Load Argon2id parameters (fetch with compile-time floor fallback, finding B-01 / E1)
+ * Load Argon2id parameters (fetch with compile-time floor fallback)
  */
 async function loadArgon2Config(): Promise<Argon2Config> {
   if (cachedArgon2Config !== null) {
@@ -164,7 +164,7 @@ export const AES_GCM_CONFIG = {
 let cachedChunkingConfig: ChunkingConfig | null = null;
 
 /**
- * Load chunking parameters (fetch with compile-time floor fallback, finding B-03 / E1)
+ * Load chunking parameters (fetch with compile-time floor fallback)
  */
 async function loadChunkingConfig(): Promise<ChunkingConfig> {
   if (cachedChunkingConfig !== null) {

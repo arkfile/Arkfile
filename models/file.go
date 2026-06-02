@@ -18,7 +18,7 @@ import (
 //	  encrypted client-side under the account key, and stored as ciphertext
 //	  (nonce + ct||tag, base64). The server never sees this value in
 //	  plaintext. AAD-bound to (file_id, "encrypted_sha256sum",
-//	  owner_username) per Phase C, finding C-19 (see crypto/aad.go:
+//	  owner_username) (see crypto/aad.go:
 //	  BuildMetadataFieldAAD with AADFieldSha256), so substituting metadata
 //	  between files, fields, or users fails at client decrypt time.
 //
@@ -60,7 +60,7 @@ type File struct {
 }
 
 // FileMetadataListItem is a lightweight owner-only metadata shape for listing
-// and local client-side decryption workflows. Phase C: OwnerUsername is
+// and local client-side decryption workflows. OwnerUsername is
 // included so the client can reconstruct the metadata AAD without an
 // additional round-trip; for owner endpoints this always matches the
 // authenticated user.
@@ -587,7 +587,7 @@ func DeleteFile(db *sql.DB, fileID string, ownerUsername string) error {
 
 // FileMetadataForClient represents the encrypted metadata that gets sent to
 // the client. All binary data is Base64-encoded as strings for robust JSON
-// transport. Phase C: OwnerUsername is included so the client can rebuild the
+// transport. OwnerUsername is included so the client can rebuild the
 // metadata AAD (encrypted_filename and encrypted_sha256sum decrypt require it).
 type FileMetadataForClient struct {
 	FileID             string    `json:"file_id"`

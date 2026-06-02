@@ -37,7 +37,7 @@ import { getCachedAccountKey } from '../crypto/file-encryption';
 /** Single file entry as returned by GET /api/files */
 export interface ServerFileEntry {
   file_id: string;
-  /** Canonical owner_username (Phase C: required for metadata-field AAD). */
+  /** Canonical owner_username (required for metadata-field AAD). */
   owner_username: string;
   storage_id: string;
   password_type: 'account' | 'custom';

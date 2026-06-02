@@ -160,7 +160,7 @@ func TestValidateRefreshToken_NonExistentToken(t *testing.T) {
 	assert.ErrorIs(t, err, ErrRefreshTokenNotFound)
 }
 
-// TestValidateRefreshToken_ReuseDetection verifies the family-revoke path (A-10).
+// TestValidateRefreshToken_ReuseDetection verifies the family-revoke path.
 // Presenting a superseded token must: revoke all family rows, write a
 // user_jwt_revocations row, and return ErrRefreshTokenReuse.
 func TestValidateRefreshToken_ReuseDetection(t *testing.T) {

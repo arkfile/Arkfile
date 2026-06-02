@@ -374,9 +374,9 @@ async function encryptMetadata(
  * Creates the 2-byte FEK envelope header.
  * Format: [version (1 byte)][keyType (1 byte)]
  *
- * Phase C: this header is used ONLY on the FEK envelope (stored in
+ * This header is used ONLY on the FEK envelope (stored in
  * file_metadata.encrypted_fek). File-data chunks no longer carry a
- * per-chunk envelope header (Step 0 audit Outcome A -- uniform chunks).
+ * per-chunk envelope header (uniform chunks).
  */
 function createEnvelopeHeader(envelopeVersion: number, keyType: number): Uint8Array {
   return new Uint8Array([envelopeVersion, keyType]);

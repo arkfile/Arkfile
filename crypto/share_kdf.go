@@ -97,7 +97,7 @@ func VerifyDownloadToken(downloadTokenBase64 string, expectedHashBase64 string) 
 	return hash == expectedHashBase64, nil
 }
 
-// ShareKDFParamsEmbedded defines the parameters used for recipient key derivation (finding D-12)
+// ShareKDFParamsEmbedded defines the parameters used for recipient key derivation
 type ShareKDFParamsEmbedded struct {
 	Algorithm string `json:"algorithm"` // "argon2id"
 	MemoryKiB uint32 `json:"m_kib"`
@@ -120,10 +120,10 @@ type ShareEnvelope struct {
 	Filename      string                  `json:"filename,omitempty"`   // plaintext filename (for share recipient preview)
 	SizeBytes     int64                   `json:"size_bytes,omitempty"` // file size in bytes (for share recipient preview)
 	SHA256        string                  `json:"sha256,omitempty"`     // plaintext SHA256 hex digest (for share recipient integrity verification)
-	KDFParams     *ShareKDFParamsEmbedded `json:"kdf_params,omitempty"` // embedded KDF params for verification (finding D-12)
+	KDFParams     *ShareKDFParamsEmbedded `json:"kdf_params,omitempty"` // embedded KDF params for verification
 }
 
-// ValidateShareKDFParams enforces compile-time KDF parameter floors (finding D-12)
+// ValidateShareKDFParams enforces compile-time KDF parameter floors
 func ValidateShareKDFParams(p *ShareKDFParamsEmbedded) error {
 	if p == nil {
 		return fmt.Errorf("missing KDF parameters block in share envelope")
@@ -194,7 +194,7 @@ func ParseShareEnvelope(envelopeJSON []byte) (*ShareEnvelope, error) {
 		return nil, fmt.Errorf("invalid envelope: missing required fields")
 	}
 
-	// Validate KDF parameters (finding D-12)
+	// Validate KDF parameters
 	if err := ValidateShareKDFParams(envelope.KDFParams); err != nil {
 		return nil, fmt.Errorf("invalid KDF parameters in envelope: %w", err)
 	}

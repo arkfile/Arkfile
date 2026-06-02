@@ -1,5 +1,5 @@
 /**
- * AAD (Additional Authenticated Data) construction helpers for Phase C.
+ * AAD (Additional Authenticated Data) construction helpers.
  *
  * Every AES-GCM operation on the file path -- chunks, FEK envelope, and
  * metadata fields -- is bound by AAD so that the AEAD authentication tag
@@ -22,7 +22,7 @@
  * __tests__/aad.test.ts; if either side drifts, both test suites fail
  * immediately on that vector.
  *
- * AAD shapes (Phase C, Outcome A -- uniform chunks, no chunk-0 header):
+ * AAD shapes (uniform chunks, no chunk-0 header):
  *
  *   buildChunkAAD(fileID, chunkIndex, totalChunks)
  *     [4B len(fileID)][fileID bytes]
@@ -39,7 +39,7 @@
 
 // Canonical AAD field-label constants for metadata encryption.
 //
-// These strings are permanent wire-format commitments: once Phase C ships,
+// These strings are permanent wire-format commitments:
 // changing either value would invalidate every existing file's metadata
 // AAD. They are AAD labels only -- they are NOT renames of any DB column
 // or API field. The existing schema and API field names remain
@@ -48,7 +48,6 @@
 // name verbatim).
 //
 // Callers of buildMetadataFieldAAD MUST reference these constants.
-// Raw string literals at call sites are forbidden per phase-c.md §4.6.
 export const AAD_FIELD_FILENAME = 'encrypted_filename';
 export const AAD_FIELD_SHA256 = 'encrypted_sha256sum';
 
@@ -62,9 +61,9 @@ const MAX_U32 = 0xffffffff;
 /**
  * Constructs the AAD for a file-content chunk.
  *
- * Binding fileID prevents inter-file chunk substitution (B-02, C-02).
- * Binding chunkIndex prevents intra-file chunk reordering (B-05).
- * Binding totalChunks prevents server-side truncation (C-03): if the
+ * Binding fileID prevents inter-file chunk substitution.
+ * Binding chunkIndex prevents intra-file chunk reordering.
+ * Binding totalChunks prevents server-side truncation: if the
  * server reduces chunk_count, the client downloads fewer chunks but
  * constructs AAD with the now-smaller totalChunks, and every remaining
  * chunk's tag (computed under the original totalChunks) fails.
@@ -95,7 +94,7 @@ export function buildChunkAAD(
 /**
  * Constructs the AAD for the FEK envelope ciphertext.
  *
- * Binding fileID prevents cross-file FEK swap (B-08): an attacker that
+ * Binding fileID prevents cross-file FEK swap: an attacker that
  * substitutes file A's encrypted_fek into file B's metadata row cannot
  * trick the client into decrypting file B's chunks with file A's FEK.
  * Binding keyTypeByte prevents an attacker from flipping the 0x01/0x02
@@ -130,7 +129,7 @@ export function buildFEKEnvelopeAAD(
  * Constructs the AAD for an encrypted metadata field (filename or
  * original-plaintext SHA-256 digest).
  *
- * Binding fileID prevents moving a metadata row to a different file (C-19).
+ * Binding fileID prevents moving a metadata row to a different file.
  * Binding fieldName prevents substituting encrypted_filename ciphertext
  * into the encrypted_sha256sum slot or vice versa.
  * Binding ownerUsername prevents moving a metadata row to a different

@@ -14,7 +14,7 @@ import { resolvePasswordConfig, type PasswordConfig } from './floors.js';
 let PASSWORD_CONFIG: PasswordConfig | null = null;
 
 /**
- * Load password requirements (fetch with compile-time floor fallback, finding B-19 / E1)
+ * Load password requirements (fetch with compile-time floor fallback)
  */
 async function loadPasswordConfig(): Promise<PasswordConfig> {
   if (PASSWORD_CONFIG !== null) {

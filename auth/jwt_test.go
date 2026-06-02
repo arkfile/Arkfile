@@ -123,7 +123,7 @@ func TestGenerateFullAccessToken(t *testing.T) {
 			assert.NoError(t, err)
 			assert.NotEmpty(t, tokenString)
 
-			// Full tokens must validate against the FULL-tier public key,
+			// Full tokens must validate against the full-tier public key,
 			// not the temp-tier public key.
 			token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 				if _, ok := token.Method.(*jwt.SigningMethodEd25519); !ok {
@@ -339,9 +339,8 @@ func TestJWTMiddleware(t *testing.T) {
 }
 
 // TestJWTMiddleware_RejectsTempAudience verifies that JWTMiddleware (which
-// expects aud=arkfile-api) refuses a temp-tier token. This is the core
-// A-01 regression test: completing OPAQUE alone must not yield access to
-// full-protected routes.
+// expects aud=arkfile-api) refuses a temp-tier token. This verifies that
+// completing OPAQUE alone must not yield access to full-protected routes.
 func TestJWTMiddleware_RejectsTempAudience(t *testing.T) {
 	e := echo.New()
 	handler := JWTMiddleware()(func(c echo.Context) error {
@@ -476,7 +475,7 @@ func TestRequireFullJWT_RejectsRequiresTOTPTrue(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, httpErr.Code, "RequireFullJWT must return 403 for requires_totp=true")
 }
 
-// TestRequiresTOTPFromToken_HandlesMissingClaims verifies the A-39 hardening:
+// TestRequiresTOTPFromToken_HandlesMissingClaims verifies that
 // RequiresTOTPFromToken must return false (not panic) when the context has
 // no user, a nil user, or a non-Claims user value.
 func TestRequiresTOTPFromToken_HandlesMissingClaims(t *testing.T) {

@@ -18,11 +18,10 @@ import (
 
 // BootstrapTokenPath is the on-disk delivery channel for the bootstrap token.
 //
-// Per A-26 / F-03, the token MUST NOT be logged to stdout or journald, because
-// any operator or attacker with `journalctl` access on the host would otherwise
-// be able to harvest it. Instead, CheckAndGenerateBootstrapToken writes the
-// hex-encoded token to this file (mode 0400, owned by the arkfile process
-// user) and the operator reads it back with `sudo cat`.
+// The token MUST NOT be logged to stdout or journald, because any operator or attacker
+// with `journalctl` access on the host would otherwise be able to harvest it.
+// Instead, CheckAndGenerateBootstrapToken writes the hex-encoded token to this file
+// (mode 0400, owned by the arkfile process user) and the operator reads it back with `sudo cat`.
 //
 // Tests override this via a package-private setter to point at a temp file.
 var BootstrapTokenPath = "/opt/arkfile/etc/keys/bootstrap-token.bin"
@@ -46,7 +45,7 @@ func setBootstrapTokenPathForTest(path string) func() {
 //
 // The token is delivered to the operator via the on-disk file at
 // BootstrapTokenPath (mode 0400). The token is NEVER logged to stdout or the
-// systemd journal. See A-26 / F-03 in docs/wip/review/00-executive-summary.md.
+// systemd journal.
 func CheckAndGenerateBootstrapToken(db *sql.DB) error {
 	// Check for force bootstrap override
 	forceBootstrap := strings.ToLower(os.Getenv("ARKFILE_FORCE_ADMIN_BOOTSTRAP")) == "true"
@@ -108,7 +107,7 @@ func CheckAndGenerateBootstrapToken(db *sql.DB) error {
 	// Store in system_keys (REPLACE INTO ensures database-level atomicity).
 	// consumed_at defaults to NULL on a fresh row; the redeem path in
 	// handlers/bootstrap.go sets it atomically inside the first-admin
-	// transaction (A-13 single-use enforcement).
+	// transaction (single-use enforcement).
 	if err := km.StoreKey("bootstrap_token", "bootstrap", token); err != nil {
 		return fmt.Errorf("failed to store bootstrap token: %w", err)
 	}
@@ -278,7 +277,7 @@ func lookupArkfileUIDGID() (int, int, bool) {
 // check is performed via a separate, cheap DB query that runs only after the
 // constant-time compare succeeds.
 //
-// Per A-13: the token is single-use. Once handlers/bootstrap.go atomically
+// The token is single-use. Once handlers/bootstrap.go atomically
 // sets consumed_at inside the admin-creation transaction, every subsequent
 // validation returns (false, nil).
 func ValidateBootstrapToken(tokenHex string) (bool, error) {

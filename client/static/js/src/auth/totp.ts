@@ -190,8 +190,7 @@ async function verifyTOTPLogin(): Promise<void> {
     showProgressMessage('Verifying...');
     
     if (isBackup) {
-      // Step A-15: Lost-Device Recovery Flow
-      // Validate backup code and receive temporary reset-tier JWT token context
+      // Lost-Device Recovery Flow: validate backup code and receive temporary reset-tier JWT token context
       const recoveryResponse = await fetch('/api/totp/recover-with-backup-code', {
         method: 'POST',
         credentials: 'include',

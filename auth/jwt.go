@@ -232,7 +232,7 @@ func GetUsernameFromToken(c echo.Context) string {
 
 // RequiresTOTPFromToken returns whether the token in the request context
 // carries the requires_totp=true flag. Safe against missing/malformed
-// context entries: returns false rather than panicking (A-39 fix).
+// context entries: returns false rather than panicking.
 func RequiresTOTPFromToken(c echo.Context) bool {
 	user, ok := c.Get("user").(*jwt.Token)
 	if !ok || user == nil {

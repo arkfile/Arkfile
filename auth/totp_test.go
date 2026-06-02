@@ -745,7 +745,7 @@ func TestTOTPLockout_WindowResetAfter24h(t *testing.T) {
 }
 
 // TestTOTPSkew_AcceptsPreviousWindow verifies that a code from the previous 30s window
-// is accepted (A-37 fix: TOTPSkew=1).
+// is accepted.
 func TestTOTPSkew_AcceptsPreviousWindow(t *testing.T) {
 	setupTOTPTestEnvironment(t)
 	db := setupTOTPTestDB(t)
@@ -762,6 +762,6 @@ func TestTOTPSkew_AcceptsPreviousWindow(t *testing.T) {
 	}
 
 	if err := ValidateTOTPCode(db, username, prevCode); err != nil {
-		t.Fatalf("code from previous window should be accepted with Skew=1: %v", err)
+		t.Fatalf("code from previous window should be accepted: %v", err)
 	}
 }

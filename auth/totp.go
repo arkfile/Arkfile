@@ -26,11 +26,11 @@ const (
 	TOTPIssuer       = "Arkfile"
 	TOTPDigits       = 6
 	TOTPPeriod       = 30
-	TOTPSkew         = 1 // Allow ±1 window (A-37 fix: accepts current, previous, and next 30s windows)
+	TOTPSkew         = 1 // Allow ±1 window (accepts current, previous, and next 30s windows)
 	BackupCodeLength = 10
 	BackupCodeCount  = 10
 
-	// Lockout policy constants (A-08)
+	// Lockout policy constants
 	totpSoftLockoutThreshold = 10 // failures before exponential backoff begins
 	totpHardCapThreshold     = 30 // failures before hard 24h cap
 	totpWindowDuration       = 24 * time.Hour
@@ -639,7 +639,7 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 		return fmt.Errorf("invalid backup code")
 	}
 
-	// Optimistic transaction-gated update to resolve step A-16 race conditions double-spend
+	// Optimistic transaction-gated update to resolve race conditions double-spend
 	tx, err := db.Begin()
 	if err != nil {
 		return err

@@ -13,7 +13,7 @@ import { setupLoginForm, login, logout } from './auth/login';
 import { setupRegisterForm, register } from './auth/register';
 import { registerSwDownload } from './files/sw-streaming-download';
 
-// Register CSP Trusted Types global default policy to securely handle innerHTML sinks (F-17)
+// Register CSP Trusted Types global default policy to securely handle innerHTML sinks
 if (typeof window !== 'undefined' && (window as any).trustedTypes && (window as any).trustedTypes.createPolicy) {
   try {
     (window as any).trustedTypes.createPolicy('default', {

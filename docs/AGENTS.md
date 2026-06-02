@@ -91,6 +91,10 @@ No "===" or "---" characters for formatting in log/print statements or comments 
 
 Aim for honesty and transparency in all your work, share your full thinking including criticisms with the developers. Do not attempt to hide or sweep anything under the rug, especially if it concerns potential privacy and security gaps that exist or may be introduced by current work or during refactors. 
 
+## Function/Variable Names and Comment Contents
+
+Do not name functions or variables or include in comments references to temporary or ephemeral WIP planning document "IDs" or "Phases" or "Sections" or "Tiers". Use concise but descriptive terminology that does not require a lookup in other planning documents or glossaries or archive or WIP markdown files of any kind. If you find any names for variables or functions that are inexplicable in-situ, such as "runC06Cleanup", immediately flag to the dev, remediate and rename these. Same goes for code comments. 
+
 ## REPEAT: Greenfield App
 
 There are no production deployments of this app anywhere at present. For the most part, "backwards compatibility" is not needed at this stage when refactoring. The focus for now is on fixing and proving the correct implementation of the system as it is designed and intended. Be wary and flag it to the developers anytime you come across deprecated/disabled/stub/bad/backwards-compatibility functions or comments, or any technical debt that could make it harder to work with this codebase in the future. There is a test/demo server currently at `test.arkfile.net` with early beta testers using it.

@@ -54,8 +54,8 @@ function writeCache(cache: Record<string, string>): void {
 /**
  * Raw file entry as returned by GET /api/files
  *
- * Phase C: owner_username is required for metadata-field AAD
- * reconstruction. The digest cache populates from the authenticated user's
+ * owner_username is required for metadata-field AAD reconstruction.
+ * The digest cache populates from the authenticated user's
  * own files only, so in practice owner_username always equals the
  * authenticated username; we still pull it from the server response rather
  * than passing the auth-derived username separately, so the AAD is built

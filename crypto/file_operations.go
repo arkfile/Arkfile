@@ -37,7 +37,7 @@ func GenerateTestFileContent(size int64, pattern FilePattern) ([]byte, error) {
 			data[i] = byte(i % 256)
 		}
 	case PatternRepeated:
-		seed := []byte("Arkfile Test File Content Pattern - PHASE 1A Implementation")
+		seed := []byte("Arkfile Test File Content Pattern - Implementation")
 		for i := 0; i < len(data); i += len(seed) {
 			remaining := len(data) - i
 			if remaining < len(seed) {
@@ -253,7 +253,7 @@ func VerifyFileIntegrity(filePath string, expectedHash string, expectedSize int6
 //     BuildFEKEnvelopeAAD(file_id, key_type) (see crypto/aad.go). This binds
 //     the FEK envelope to the specific file_id and key type, so an attacker
 //     with DB-write access cannot substitute one user's FEK envelope into
-//     another file's metadata row (Phase C, finding B-08).
+//     another file's metadata row.
 //
 // File data chunks themselves use a uniform layout with NO envelope prefix:
 //   [nonce (12 bytes)][ciphertext][auth_tag (16 bytes)]
@@ -325,7 +325,7 @@ func GenerateFEK() ([]byte, error) {
 //
 // The AAD is constructed via BuildFEKEnvelopeAAD(fileID, keyTypeByte), so
 // any attempt to substitute this envelope into a different file's row
-// (B-08) or flip the key-type byte will fail authentication on decrypt.
+// or flip the key-type byte will fail authentication on decrypt.
 //
 // fileID MUST be the canonical file_id the metadata row will use. keyType
 // MUST be "account" or "custom".
@@ -377,7 +377,7 @@ func EncryptFEK(fek []byte, password []byte, username, fileID, keyType string) (
 // file. Returns the decrypted FEK and the key type used during encryption.
 //
 // Any mismatch in fileID or in the envelope's key-type byte vs. the AAD
-// causes AES-GCM authentication failure (B-08).
+// causes AES-GCM authentication failure.
 //
 // fileID MUST be the canonical file_id from the metadata row.
 func DecryptFEK(encryptedFEK []byte, password []byte, username, fileID string) ([]byte, string, error) {
@@ -448,7 +448,7 @@ type DecryptedFileMetadata struct {
 // metadata fields for a file using the account-derived key (Argon2id). The
 // AAD on each field binds it to (fileID, field_label, ownerUsername), so
 // substituting metadata between files or fields or users is rejected by the
-// AEAD layer (C-19).
+// AEAD layer.
 //
 // fileID and ownerUsername must be the canonical values from the metadata
 // row.

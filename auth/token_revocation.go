@@ -314,7 +314,7 @@ func DeleteAllRefreshTokensForUser(db *sql.DB, username string) error {
 }
 
 // TokenRevocationMiddleware checks tokens against both the per-JTI revocation list
-// and the user-wide JWT revocation table (A-09). The user-wide check uses a
+// and the user-wide JWT revocation table. The user-wide check uses a
 // 30-second in-process cache to avoid a DB round-trip on every request.
 func TokenRevocationMiddleware(db *sql.DB) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -348,7 +348,7 @@ func TokenRevocationMiddleware(db *sql.DB) echo.MiddlewareFunc {
 				return echo.NewHTTPError(http.StatusUnauthorized, "Token has been revoked")
 			}
 
-			// Per-user user-wide JWT revocation check (A-09).
+			// Per-user user-wide JWT revocation check.
 			// Uses a cached lookup; cache TTL is 30 seconds.
 			if claims.Username != "" && claims.IssuedAt != nil {
 				revokedAt, err := getUserRevocationTimeCached(db, claims.Username)
