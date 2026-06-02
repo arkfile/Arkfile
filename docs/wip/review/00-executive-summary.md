@@ -435,10 +435,10 @@ The `idsrp.md` threat model lists 13 adversary classes and ~13 security properti
 |---|---:|---:|---:|
 | Critical | 2 | 2 (F-01, A-01) | 0 |
 | High | 27 | 1 (E-19) | 26 |
-| Medium | 61 | 5 (A-24, A-25, A-31, A-32, F-17) | 56 |
+| Medium | 61 | 6 (A-24, A-25, A-31, A-32, F-17, A-21) | 55 |
 | Low | 52 | 1 (A-39) | 51 |
 | Informational | 37 | 0 | 37 |
-| **Total** | **179** | **9** | **170** |
+| **Total** | **179** | **10** | **169** |
 
 Sort order below is Severity → Slice → Finding number. Cross-refs in the rightmost column indicate where the same root cause shows up in another slice. Per-finding evidence (file:line, attack scenario, recommendation, suggested tests) is in the slice doc named in the second column.
 
@@ -494,7 +494,7 @@ Sort order below is Severity → Slice → Finding number. Cross-refs in the rig
 | `A-18` | 01 | TOTP master key co-located with OPAQUE / JWT / bootstrap keys in `system_keys` | A-07, A-17, B-16 |
 | `A-19` | 01 | `decodeBase64IfNeeded` is an rqlite driver-quirk workaround — greenfield-policy violation | — |
 | `A-20` | 01 | `CompleteTOTPSetup` does not write to replay log — first-window code replayable at `/api/totp/auth` | A-16 |
-| `A-21` | 01 | CLI agent has stat-based UID check; no `SO_PEERCRED`; same-UID drain/poison/DoS-wipe | — |
+| `A-21` | 01 | **RESOLVED 2026-05-31.** CLI agent has stat-based UID check; now uses platform-native `SO_PEERCRED`/`LOCAL_PEERCRED`/`Getpeereid` credential checks | — |
 | `A-22` | 01 | TOTP secret, manual entry, QR data URL, backup codes rendered as raw DOM text after enrollment | F-17 |
 | `A-23` | 01 | `arkfile-client setup-totp --show-secret` prints TOTP secret to stdout | A-06 |
 | `A-24` | 01 | **RESOLVED 2026-05-29.** OPAQUE login leaks account existence by HTTP status + timing differential; admin login enumerates admin-ness | A-25 |
