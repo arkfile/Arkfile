@@ -416,3 +416,87 @@ func TestRevokeShare_Success(t *testing.T) {
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestRevokeShare_InvalidReasonRejected(t *testing.T) {
+	c, _, mock, _ := setupTestEnv(t, http.MethodPost, "/api/shares/test-share-id/revoke", bytes.NewReader([]byte(`{"reason":"extremely_unvetted_custom_reason_or_pii"}`)))
+
+	username := "testuser"
+	c.SetParamNames("id")
+	c.SetParamValues("test-share-id")
+
+	claims := &auth.Claims{Username: username}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	err := RevokeShare(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "Invalid revocation reason")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDownloadShareChunk_AtomicDoubleSpendBlocked(t *testing.T) {
+	tokenStr := "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI="
+	expectedHash, _ := hashDownloadToken(tokenStr)
+
+	// Create an exhausted share attempt
+	c, _, mock, _ := setupTestEnv(t, http.MethodGet, "/api/public/shares/test-share-id/chunks/0", nil)
+	c.SetParamNames("id", "chunkIndex")
+	c.SetParamValues("test-share-id", "0")
+	c.Request().Header.Set("X-Download-Token", tokenStr)
+
+	// 1. Mock share SELECT lookup
+	shareSQL := `SELECT file_id, owner_username, expires_at, revoked_at, revoked_reason, \s*download_token_hash, access_count, max_accesses`
+	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "expires_at", "revoked_at", "revoked_reason", "download_token_hash", "access_count", "max_accesses"}).
+		AddRow("test-file-123", "owneruser", nil, nil, nil, expectedHash, float64(2), float64(2)) // access_count == max_accesses
+	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
+
+	// Since access_count >= max_accesses, the token-verification and atomic UPDATE are never reached because chunkIndex == 0 check blocks early.
+	err := DownloadShareChunk(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusForbidden, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "Download limit reached")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDownloadShareChunk_AtomicConditionalFailure(t *testing.T) {
+	tokenStr := "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI="
+	expectedHash, _ := hashDownloadToken(tokenStr)
+
+	// Simulate an active atomic UPDATE returning RowsAffected == 0 because limit was synchronously hit
+	c, _, mock, _ := setupTestEnv(t, http.MethodGet, "/api/public/shares/test-share-id/chunks/0", nil)
+	c.SetParamNames("id", "chunkIndex")
+	c.SetParamValues("test-share-id", "0")
+	c.Request().Header.Set("X-Download-Token", tokenStr)
+
+	// 1. Mock share SELECT lookup
+	shareSQL := `SELECT file_id, owner_username, expires_at, revoked_at, revoked_reason, \s*download_token_hash, access_count, max_accesses`
+	shareRows := sqlmock.NewRows([]string{"file_id", "owner_username", "expires_at", "revoked_at", "revoked_reason", "download_token_hash", "access_count", "max_accesses"}).
+		AddRow("test-file-123", "owneruser", nil, nil, nil, expectedHash, float64(1), float64(2)) // currently 1 of 2
+	mock.ExpectQuery(shareSQL).WithArgs("test-share-id").WillReturnRows(shareRows)
+
+	// 2. Mock file metadata lookup
+	fileMetadataSQL := `SELECT storage_id, size_bytes, chunk_count, chunk_size_bytes`
+	fileMetadataRows := sqlmock.NewRows([]string{"storage_id", "size_bytes", "chunk_count", "chunk_size_bytes"}).
+		AddRow("test-storage-key", float64(1048576), float64(1), float64(1048576))
+	mock.ExpectQuery(fileMetadataSQL).WithArgs("test-file-123").WillReturnRows(fileMetadataRows)
+
+	// 3. Mock atomic UPDATE increment returning 0 rows affected (because another concurrent request grabbed the last spot)
+	updateSQL := `UPDATE file_share_keys`
+	mock.ExpectExec(updateSQL).WithArgs("test-share-id").WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
+
+	err := DownloadShareChunk(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusForbidden, httpErr.Code)
+	assert.Contains(t, httpErr.Message, "Download limit reached")
+
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

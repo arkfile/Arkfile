@@ -243,10 +243,13 @@ func GetShareEnvelope(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
 	}
 
-	// Check if share has been revoked
+	// Check if share has been revoked.
+	// To prevent sensitive owner-supplied comments from leaking to anonymous clients (D-04),
+	// we only leak standard machine-parsable system-wide categories if they are 'time' or 'exhausted'.
+	// Any other reason gets redacted to a generic "Share has been revoked" message.
 	if share.RevokedAt != nil {
 		reason := "Share has been revoked"
-		if share.RevokedReason.Valid && share.RevokedReason.String != "" {
+		if share.RevokedReason.Valid && (share.RevokedReason.String == "time" || share.RevokedReason.String == "exhausted") {
 			reason += ": " + share.RevokedReason.String
 		}
 		return echo.NewHTTPError(http.StatusForbidden, reason)
@@ -305,6 +308,9 @@ func RevokeShare(c echo.Context) error {
 
 	if request.Reason == "" {
 		request.Reason = "manual"
+	} else if request.Reason != "manual" && request.Reason != "owner_request" && request.Reason != "abuse" {
+		// Restrict revoked_reason block to preset list of enums to prevent arbitrary string/PII injections (D-04)
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid revocation reason")
 	}
 
 	// Check if share exists and belongs to user
@@ -634,10 +640,13 @@ func GetShareDownloadMetadata(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, "Share link has expired")
 	}
 
-	// Check if share has been revoked
+	// Check if share has been revoked.
+	// To prevent sensitive owner-supplied comments from leaking to anonymous clients (D-04),
+	// we only leak standard machine-parsable system-wide categories if they are 'time' or 'exhausted'.
+	// Any other reason gets redacted to a generic "Share has been revoked" message.
 	if share.RevokedAt != nil {
 		reason := "Share has been revoked"
-		if share.RevokedReason.Valid && share.RevokedReason.String != "" {
+		if share.RevokedReason.Valid && (share.RevokedReason.String == "time" || share.RevokedReason.String == "exhausted") {
 			reason += ": " + share.RevokedReason.String
 		}
 		return echo.NewHTTPError(http.StatusForbidden, reason)
@@ -742,10 +751,13 @@ func DownloadShareChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
 	}
 
-	// Check if share has been revoked
+	// Check if share has been revoked.
+	// To prevent sensitive owner-supplied comments from leaking to anonymous clients (D-04),
+	// we only leak standard machine-parsable system-wide categories if they are 'time' or 'exhausted'.
+	// Any other reason gets redacted to a generic "Share has been revoked" message.
 	if share.RevokedAt != nil {
 		reason := "Share has been revoked"
-		if share.RevokedReason.Valid && share.RevokedReason.String != "" {
+		if share.RevokedReason.Valid && (share.RevokedReason.String == "time" || share.RevokedReason.String == "exhausted") {
 			reason += ": " + share.RevokedReason.String
 		}
 		logging.WarningLogger.Printf("Chunk download attempt on revoked share: share_id=%s", shareID[:8])
@@ -785,8 +797,7 @@ func DownloadShareChunk(c echo.Context) error {
 	}
 
 	// Check if max accesses limit has been reached (only block NEW downloads on chunk 0)
-	// For chunks 1+, allow the download to continue even if limit was just reached
-	// This ensures in-progress downloads can complete all chunks
+	// This check is a second-layer defense; the primary increment and check happen atomically below.
 	if chunkIndex == 0 && share.MaxAccesses.Valid && int64(share.AccessCount) >= int64(share.MaxAccesses.Float64) {
 		logging.WarningLogger.Printf("Chunk download attempt on exhausted share: share_id=%s", shareID[:8])
 		return echo.NewHTTPError(http.StatusForbidden, "Download limit reached")
@@ -852,20 +863,32 @@ func DownloadShareChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk range")
 	}
 
-	// Increment access count only on first chunk download
-	// NOTE: We do NOT auto-revoke here because that would block subsequent chunks
-	// for the user who just started downloading. The access_count check above
-	// (only applied to chunk 0) is sufficient to prevent new downloads.
+	// Increment access count atomically on first chunk download.
+	// To prevent concurrent double-spend race conditions (TOCTOU), we execute an UPDATE
+	// statement with a conditional WHERE clause ensuring that the access_count is strictly less
+	// than max_accesses (if configured). We check RowsAffected to confirm the atomic update succeeded.
 	if chunkIndex == 0 {
-		_, err = database.DB.Exec(`
+		result, err := database.DB.Exec(`
 			UPDATE file_share_keys 
 			SET access_count = access_count + 1 
 			WHERE share_id = ?
+			  AND (max_accesses IS NULL OR access_count < max_accesses)
 		`, shareID)
 
 		if err != nil {
-			logging.ErrorLogger.Printf("Failed to increment access count: %v", err)
+			logging.ErrorLogger.Printf("Database error in atomic increment of access count: %v", err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+		}
+
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			logging.ErrorLogger.Printf("Error checking RowsAffected for atomic increment: %v", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process request")
+		}
+
+		if rowsAffected == 0 {
+			logging.WarningLogger.Printf("Atomic access increment rejected (limit reached or concurrently exhausted): share_id=%s", shareID[:8])
+			return echo.NewHTTPError(http.StatusForbidden, "Download limit reached")
 		}
 
 		// Log if this was the last allowed download

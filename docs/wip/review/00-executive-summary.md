@@ -529,10 +529,10 @@ Sort order below is Severity → Slice → Finding number. Cross-refs in the rig
 | `C-14` | 03 | Blob-fallback download path performs no SHA-256 verification at all | C-13 |
 | `C-15` | 03 | Per-upload/download InfoLogger lines log username + file_id together — reconstructs per-user file activity | A-11, D-15, D-25 |
 | `C-18` | 03 | Both build-tagged `mock` chunked-upload integration tests are not run under default `go test ./...` | — |
-| `D-02` | 04 | Race on `access_count` increment allows double-spend on `max_accesses` | D-01 |
+| `D-02` | 04 | **RESOLVED 2026-06-02.** Race on `access_count` increment allows double-spend on `max_accesses` | D-01 |
 | `D-03` | 04 | `ListShares` GET handler performs side-effecting writes (auto-revoke) | — |
-| `D-04` | 04 | Owner-supplied `revoked_reason` leaks back to anonymous recipient | E-15 |
-| `D-05` | 04 | `/shared/:id` route missing per-share rate-limit and timing-protection middleware | D-06 |
+| `D-04` | 04 | **RESOLVED 2026-06-02.** Owner-supplied `revoked_reason` leaks back to anonymous recipient | E-15 |
+| `D-05` | 04 | **RESOLVED 2026-06-02.** `/shared/:id` route missing per-share rate-limit and timing-protection middleware | D-06 |
 | `D-06` | 04 | **RESOLVED 2026-06-02.** Race + read-then-write on per-share rate-limit failed_count | D-05 |
 | `D-09` | 04 | Origin-header trust in share URL construction — owner-side phishing / self-XSS amplification | D-14 |
 | `D-11` | 04 | Anonymous EntityID rotates daily; rate-limit budget effectively resets daily; trivially multipliable | D-19 |

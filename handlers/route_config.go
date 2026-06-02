@@ -137,17 +137,18 @@ func RegisterRoutes() {
 	totpProtectedGroup.GET("/api/shares", ListShares)                      // List user's shares
 	totpProtectedGroup.POST("/api/shares/:id/revoke", RevokeShare)         // Revoke a share
 
-	// Share page (serves shared.html for /shared/:id URLs - no authentication required)
-	// Protected by entity-global share enumeration detection
-	Echo.GET("/shared/:id", ShareEnumerationMiddleware(GetSharedFile))
-
 	// Anonymous share access (no authentication required) - separate namespace with rate limiting
 	// Using /api/public/shares to avoid conflicts with authenticated /api/shares routes
 	publicShareGroup := Echo.Group("/api/public/shares")
-	publicShareGroup.Use(ShareEnumerationMiddleware)                    // Entity-global enumeration protection FIRST
-	publicShareGroup.Use(ShareRateLimitMiddleware)                      // Then per-share-ID rate limiting (fail fast for abusers)
-	publicShareGroup.Use(TimingProtectionMiddleware)                    // Then timing protection (for valid requests)
-	publicShareGroup.GET("/:id", GetSharedFile)                         // Share access page
+	publicShareGroup.Use(ShareEnumerationMiddleware) // Entity-global enumeration protection FIRST
+	publicShareGroup.Use(ShareRateLimitMiddleware)   // Then per-share-ID rate limiting (fail fast for abusers)
+	publicShareGroup.Use(TimingProtectionMiddleware) // Then timing protection (for valid requests)
+	publicShareGroup.GET("/:id", GetSharedFile)      // Share access page
+
+	// Share page (serves shared.html for /shared/:id URLs - no authentication required).
+	// To prevent URL enumeration sweeps and timing-attack mapping on this legacy path,
+	// we protect it with the exact same middleware group (D-05).
+	Echo.GET("/shared/:id", ShareEnumerationMiddleware(ShareRateLimitMiddleware(TimingProtectionMiddleware(GetSharedFile))))
 	publicShareGroup.GET("/:id/envelope", GetShareEnvelope)             // Get share envelope for client-side decryption
 	publicShareGroup.GET("/:id/metadata", GetShareDownloadMetadata)     // Get metadata for shared file download
 	publicShareGroup.GET("/:id/chunks/:chunkIndex", DownloadShareChunk) // Download chunk of shared file
