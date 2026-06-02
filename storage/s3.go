@@ -432,3 +432,24 @@ func (s *S3AWSStorage) HeadObject(ctx context.Context, objectName string) (int64
 	}
 	return size, nil
 }
+
+// ListObjects returns names of all objects in the bucket, using pagination to get all keys reliably.
+func (s *S3AWSStorage) ListObjects(ctx context.Context) ([]string, error) {
+	var objects []string
+	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucketName),
+	})
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list objects page: %w", err)
+		}
+		for _, obj := range page.Contents {
+			if obj.Key != nil {
+				objects = append(objects, *obj.Key)
+			}
+		}
+	}
+	return objects, nil
+}

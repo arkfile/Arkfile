@@ -204,11 +204,12 @@ func TestGetShareEnvelope_Expired(t *testing.T) {
 	c.SetParamNames("id")
 	c.SetParamValues("expired-share")
 
-	// Mock rate limiting check - no prior entry
+	// Mock rate limiting check - INSERT OR IGNORE run first, then query check
+	rateLimitIgnoreInsertSQL := `INSERT OR IGNORE INTO share_access_attempts`
+	mock.ExpectExec(rateLimitIgnoreInsertSQL).WithArgs("expired-share", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+
 	rateLimitSQL := `SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt FROM share_access_attempts WHERE share_id = \? AND entity_id = \?`
 	mock.ExpectQuery(rateLimitSQL).WithArgs("expired-share", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
-	rateLimitInsertSQL := `INSERT INTO share_access_attempts \(share_id, entity_id, failed_count, created_at\) VALUES \(\?, \?, 0, CURRENT_TIMESTAMP\)`
-	mock.ExpectExec(rateLimitInsertSQL).WithArgs("expired-share", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock share lookup - returns expired share (expires_at in the past)
 	expiredTime := time.Now().Add(-24 * time.Hour)
@@ -232,11 +233,12 @@ func TestGetShareEnvelope_Revoked(t *testing.T) {
 	c.SetParamNames("id")
 	c.SetParamValues("revoked-share")
 
-	// Mock rate limiting
+	// Mock rate limiting - INSERT OR IGNORE run first, then query check
+	rateLimitIgnoreInsertSQL := `INSERT OR IGNORE INTO share_access_attempts`
+	mock.ExpectExec(rateLimitIgnoreInsertSQL).WithArgs("revoked-share", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+
 	rateLimitSQL := `SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt FROM share_access_attempts WHERE share_id = \? AND entity_id = \?`
 	mock.ExpectQuery(rateLimitSQL).WithArgs("revoked-share", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
-	rateLimitInsertSQL := `INSERT INTO share_access_attempts \(share_id, entity_id, failed_count, created_at\) VALUES \(\?, \?, 0, CURRENT_TIMESTAMP\)`
-	mock.ExpectExec(rateLimitInsertSQL).WithArgs("revoked-share", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock share lookup - returns revoked share (revoked_at set)
 	revokedTime := time.Now().Add(-1 * time.Hour)
@@ -260,11 +262,12 @@ func TestGetShareEnvelope_MaxAccessesExceeded(t *testing.T) {
 	c.SetParamNames("id")
 	c.SetParamValues("exhausted-share")
 
-	// Mock rate limiting
+	// Mock rate limiting - INSERT OR IGNORE run first, then query check
+	rateLimitIgnoreInsertSQL := `INSERT OR IGNORE INTO share_access_attempts`
+	mock.ExpectExec(rateLimitIgnoreInsertSQL).WithArgs("exhausted-share", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
+
 	rateLimitSQL := `SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt FROM share_access_attempts WHERE share_id = \? AND entity_id = \?`
 	mock.ExpectQuery(rateLimitSQL).WithArgs("exhausted-share", sqlmock.AnyArg()).WillReturnError(sql.ErrNoRows)
-	rateLimitInsertSQL := `INSERT INTO share_access_attempts \(share_id, entity_id, failed_count, created_at\) VALUES \(\?, \?, 0, CURRENT_TIMESTAMP\)`
-	mock.ExpectExec(rateLimitInsertSQL).WithArgs("exhausted-share", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock share lookup - access_count has reached max_accesses (3 of 3)
 	shareSQL := `SELECT file_id, owner_username, salt, encrypted_fek, expires_at, revoked_at, revoked_reason, access_count, max_accesses FROM file_share_keys WHERE share_id = \?`
@@ -286,6 +289,10 @@ func TestGetShareEnvelope_RateLimited(t *testing.T) {
 	}`)))
 	c.SetParamNames("id")
 	c.SetParamValues("ratelimit-share")
+
+	// Mock rate limiting - INSERT OR IGNORE is always run first
+	rateLimitIgnoreInsertSQL := `INSERT OR IGNORE INTO share_access_attempts`
+	mock.ExpectExec(rateLimitIgnoreInsertSQL).WithArgs("ratelimit-share", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock rate limiting - entity is rate-limited (next_allowed_attempt in the future)
 	futureTime := time.Now().Add(5 * time.Minute)

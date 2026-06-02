@@ -92,6 +92,16 @@ func (m *MockObjectStorageProvider) HeadObject(ctx context.Context, objectName s
 	return args.Get(0).(int64), args.Error(1)
 }
 
+// ListObjects mocks the ListObjects method
+func (m *MockObjectStorageProvider) ListObjects(ctx context.Context) ([]string, error) {
+	args := m.Called(ctx)
+	var list []string
+	if args.Get(0) != nil {
+		list = args.Get(0).([]string)
+	}
+	return list, args.Error(1)
+}
+
 // Mock Stored Object
 // MockStoredObject mocks the object returned by GetObject
 type MockStoredObject struct {

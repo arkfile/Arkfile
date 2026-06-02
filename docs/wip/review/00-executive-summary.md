@@ -435,10 +435,10 @@ The `idsrp.md` threat model lists 13 adversary classes and ~13 security properti
 |---|---:|---:|---:|
 | Critical | 2 | 2 (F-01, A-01) | 0 |
 | High | 27 | 1 (E-19) | 26 |
-| Medium | 61 | 6 (A-24, A-25, A-31, A-32, F-17, A-21) | 55 |
+| Medium | 61 | 9 (A-24, A-25, A-31, A-32, F-17, A-21, C-06, C-07, D-06) | 52 |
 | Low | 52 | 1 (A-39) | 51 |
 | Informational | 37 | 0 | 37 |
-| **Total** | **179** | **10** | **169** |
+| **Total** | **179** | **13** | **166** |
 
 Sort order below is Severity → Slice → Finding number. Cross-refs in the rightmost column indicate where the same root cause shows up in another slice. Per-finding evidence (file:line, attack scenario, recommendation, suggested tests) is in the slice doc named in the second column.
 
@@ -519,8 +519,8 @@ Sort order below is Severity → Slice → Finding number. Cross-refs in the rig
 | `B-19` | 02 | Password requirements also fetched from server unauthenticated — same downgrade pattern as B-01/B-03 | B-01, D-10, D-12 |
 | `C-04` | 03 | `X-Chunk-Hash` header accepted/stored but never verified server-side | — |
 | `C-05` | 03 | **RESOLVED 2026-05-28.** `CancelUpload` route uses `:fileId` param; handler reads `c.Param("sessionId")` — dead-on-arrival | — |
-| `C-06` | 03 | Upload-session sweep marks DB rows abandoned but doesn't abort underlying S3 multipart — storage cost leak | — |
-| `C-07` | 03 | `CompleteUpload` two-phase (storage → DB) — failure window orphans S3 objects | C-06 |
+| `C-06` | 03 | **RESOLVED 2026-06-02.** Upload-session sweep marks DB rows abandoned but doesn't abort underlying S3 multipart — storage cost leak | — |
+| `C-07` | 03 | **RESOLVED 2026-06-02.** `CompleteUpload` two-phase (storage → DB) — failure window orphans S3 objects | C-06 |
 | `C-08` | 03 | Multi-provider download fallback does NOT verify served blob against `stored_blob_sha256sum` | C-11 |
 | `C-09` | 03 | S3 object metadata includes `owner-username` — plaintext to every storage backend | C-15 |
 | `C-10` | 03 | Per-session SHA-256 hasher state in-process only; server restart corrupts in-flight uploads | — |
@@ -533,7 +533,7 @@ Sort order below is Severity → Slice → Finding number. Cross-refs in the rig
 | `D-03` | 04 | `ListShares` GET handler performs side-effecting writes (auto-revoke) | — |
 | `D-04` | 04 | Owner-supplied `revoked_reason` leaks back to anonymous recipient | E-15 |
 | `D-05` | 04 | `/shared/:id` route missing per-share rate-limit and timing-protection middleware | D-06 |
-| `D-06` | 04 | Race + read-then-write on per-share rate-limit failed_count | D-05 |
+| `D-06` | 04 | **RESOLVED 2026-06-02.** Race + read-then-write on per-share rate-limit failed_count | D-05 |
 | `D-09` | 04 | Origin-header trust in share URL construction — owner-side phishing / self-XSS amplification | D-14 |
 | `D-11` | 04 | Anonymous EntityID rotates daily; rate-limit budget effectively resets daily; trivially multipliable | D-19 |
 | `D-12` | 04 | Share envelope has no per-envelope versioning or KDF parameter binding | B-19, D-10 |

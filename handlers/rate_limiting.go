@@ -44,10 +44,19 @@ func calculateSharePenalty(failureCount int) time.Duration {
 
 // getOrCreateRateLimitEntry retrieves or creates a rate limiting entry
 func getOrCreateRateLimitEntry(shareID, entityID string) (*ShareRateLimitEntry, error) {
+	// First, ignore duplicates and ensure the row exists.
+	_, err := database.DB.Exec(`
+		INSERT OR IGNORE INTO share_access_attempts (share_id, entity_id, failed_count, created_at)
+		VALUES (?, ?, 0, CURRENT_TIMESTAMP)
+	`, shareID, entityID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure rate limit entry: %w", err)
+	}
+
 	var entry ShareRateLimitEntry
 	var lastFailedAttempt, nextAllowedAttempt sql.NullTime
 
-	err := database.DB.QueryRow(`
+	err = database.DB.QueryRow(`
 		SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt
 		FROM share_access_attempts 
 		WHERE share_id = ? AND entity_id = ?
@@ -58,24 +67,7 @@ func getOrCreateRateLimitEntry(shareID, entityID string) (*ShareRateLimitEntry, 
 		&lastFailedAttempt,
 		&nextAllowedAttempt,
 	)
-
-	if err == sql.ErrNoRows {
-		// Create new entry
-		entry = ShareRateLimitEntry{
-			ShareID:     shareID,
-			EntityID:    entityID,
-			FailedCount: 0,
-		}
-
-		_, err = database.DB.Exec(`
-			INSERT INTO share_access_attempts (share_id, entity_id, failed_count, created_at)
-			VALUES (?, ?, 0, CURRENT_TIMESTAMP)
-		`, shareID, entityID)
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to create rate limit entry: %w", err)
-		}
-	} else if err != nil {
+	if err != nil {
 		return nil, fmt.Errorf("failed to query rate limit entry: %w", err)
 	}
 
@@ -92,51 +84,47 @@ func getOrCreateRateLimitEntry(shareID, entityID string) (*ShareRateLimitEntry, 
 
 // recordFailedAttempt records a failed share access attempt
 func recordFailedAttempt(shareID, entityID string) error {
-	// Get current failure count from database
+	// Ensure the row exists to avoid race/TOCTOU on checking first
+	_, err := database.DB.Exec(`
+		INSERT OR IGNORE INTO share_access_attempts (share_id, entity_id, failed_count, created_at)
+		VALUES (?, ?, 0, CURRENT_TIMESTAMP)
+	`, shareID, entityID)
+	if err != nil {
+		return fmt.Errorf("failed to ensure rate limit entry for record: %w", err)
+	}
+
+	// Put inside a transaction to prevent read-then-write race
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start transaction for record: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 2. Select the current failed_count
 	var currentFailureCount int
-	err := database.DB.QueryRow(`
+	err = tx.QueryRow(`
 		SELECT failed_count FROM share_access_attempts 
 		WHERE share_id = ? AND entity_id = ?
 	`, shareID, entityID).Scan(&currentFailureCount)
-
 	if err != nil {
-		// If entry doesn't exist, create it with failure count 1
-		if err == sql.ErrNoRows {
-			penalty := calculateSharePenalty(1)
-			nextAllowed := time.Now().Add(penalty)
-
-			_, err = database.DB.Exec(`
-				INSERT INTO share_access_attempts (share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt, created_at)
-				VALUES (?, ?, 1, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP)
-			`, shareID, entityID, nextAllowed)
-
-			if err != nil {
-				return fmt.Errorf("failed to create rate limit entry with failure: %w", err)
-			}
-
-			logging.InfoLogger.Printf("Rate limit created for share %s, entity %s: 1 failure, next allowed: %v",
-				shareID, entityID, nextAllowed)
-			return nil
-		}
 		return fmt.Errorf("failed to query current failure count: %w", err)
 	}
 
-	// Increment failure count
 	newFailureCount := currentFailureCount + 1
-
-	// Calculate next allowed attempt time
 	penalty := calculateSharePenalty(newFailureCount)
 	nextAllowed := time.Now().Add(penalty)
 
-	// Update database
-	_, err = database.DB.Exec(`
+	_, err = tx.Exec(`
 		UPDATE share_access_attempts 
 		SET failed_count = ?, last_failed_attempt = CURRENT_TIMESTAMP, next_allowed_attempt = ?
 		WHERE share_id = ? AND entity_id = ?
 	`, newFailureCount, nextAllowed, shareID, entityID)
-
 	if err != nil {
 		return fmt.Errorf("failed to update rate limit entry: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	logging.InfoLogger.Printf("Rate limit updated for share %s, entity %s: %d failures, next allowed: %v",
@@ -513,7 +501,15 @@ func getOrCreateAuthRateLimitEntry(endpointType, entityID string) (*AuthRateLimi
 	// Use a different table/approach - we'll reuse share_access_attempts with endpoint_type as share_id
 	shareID := "auth_" + endpointType + "_" + entityID
 
-	err := database.DB.QueryRow(`
+	_, err := database.DB.Exec(`
+		INSERT OR IGNORE INTO share_access_attempts (share_id, entity_id, failed_count, created_at)
+		VALUES (?, ?, 0, CURRENT_TIMESTAMP)
+	`, shareID, entityID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure auth rate limit entry: %w", err)
+	}
+
+	err = database.DB.QueryRow(`
 		SELECT share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt
 		FROM share_access_attempts 
 		WHERE share_id = ? AND entity_id = ?
@@ -524,26 +520,11 @@ func getOrCreateAuthRateLimitEntry(endpointType, entityID string) (*AuthRateLimi
 		&lastFailedAttempt,
 		&nextAllowedAttempt,
 	)
-
-	if err == sql.ErrNoRows {
-		// Create new entry
-		entry = AuthRateLimitEntry{
-			EndpointType: endpointType,
-			EntityID:     entityID,
-			FailedCount:  0,
-		}
-
-		_, err = database.DB.Exec(`
-			INSERT INTO share_access_attempts (share_id, entity_id, failed_count, created_at)
-			VALUES (?, ?, 0, CURRENT_TIMESTAMP)
-		`, shareID, entityID)
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to create auth rate limit entry: %w", err)
-		}
-	} else if err != nil {
+	if err != nil {
 		return nil, fmt.Errorf("failed to query auth rate limit entry: %w", err)
 	}
+
+	entry.EndpointType = endpointType
 
 	// Convert nullable times
 	if lastFailedAttempt.Valid {
@@ -560,32 +541,27 @@ func getOrCreateAuthRateLimitEntry(endpointType, entityID string) (*AuthRateLimi
 func recordAuthFailedAttempt(endpointType, entityID string) error {
 	shareID := "auth_" + endpointType + "_" + entityID
 
-	// Get current failure count from database
+	_, err := database.DB.Exec(`
+		INSERT OR IGNORE INTO share_access_attempts (share_id, entity_id, failed_count, created_at)
+		VALUES (?, ?, 0, CURRENT_TIMESTAMP)
+	`, shareID, entityID)
+	if err != nil {
+		return fmt.Errorf("failed to ensure auth rate limit entry for record: %w", err)
+	}
+
+	// Put inside a transaction to prevent read-then-write race
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start transaction for auth record: %w", err)
+	}
+	defer tx.Rollback()
+
 	var currentFailureCount int
-	err := database.DB.QueryRow(`
+	err = tx.QueryRow(`
 		SELECT failed_count FROM share_access_attempts 
 		WHERE share_id = ? AND entity_id = ?
 	`, shareID, entityID).Scan(&currentFailureCount)
-
 	if err != nil {
-		// If entry doesn't exist, create it with failure count 1
-		if err == sql.ErrNoRows {
-			penalty := calculateAuthPenalty(1, endpointType)
-			nextAllowed := time.Now().Add(penalty)
-
-			_, err = database.DB.Exec(`
-				INSERT INTO share_access_attempts (share_id, entity_id, failed_count, last_failed_attempt, next_allowed_attempt, created_at)
-				VALUES (?, ?, 1, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP)
-			`, shareID, entityID, nextAllowed)
-
-			if err != nil {
-				return fmt.Errorf("failed to create auth rate limit entry with failure: %w", err)
-			}
-
-			logging.InfoLogger.Printf("Auth rate limit created for %s, entity %s: 1 failure, next allowed: %v",
-				endpointType, entityID, nextAllowed)
-			return nil
-		}
 		return fmt.Errorf("failed to query current auth failure count: %w", err)
 	}
 
@@ -597,7 +573,7 @@ func recordAuthFailedAttempt(endpointType, entityID string) error {
 	nextAllowed := time.Now().Add(penalty)
 
 	// Update database
-	_, err = database.DB.Exec(`
+	_, err = tx.Exec(`
 		UPDATE share_access_attempts 
 		SET failed_count = ?, last_failed_attempt = CURRENT_TIMESTAMP, next_allowed_attempt = ?
 		WHERE share_id = ? AND entity_id = ?
@@ -605,6 +581,10 @@ func recordAuthFailedAttempt(endpointType, entityID string) error {
 
 	if err != nil {
 		return fmt.Errorf("failed to update auth rate limit entry: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit auth record transaction: %w", err)
 	}
 
 	logging.InfoLogger.Printf("Auth rate limit updated for %s, entity %s: %d failures, next allowed: %v",

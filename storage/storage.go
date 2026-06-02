@@ -31,4 +31,6 @@ type ObjectStorageProvider interface {
 	// HeadObject returns the size of an object in bytes without downloading it.
 	// Returns an error if the object does not exist.
 	HeadObject(ctx context.Context, objectName string) (int64, error)
+	// ListObjects returns names of all objects in the bucket
+	ListObjects(ctx context.Context) ([]string, error)
 }
