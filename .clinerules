@@ -6,4 +6,5 @@ Avoid excessive use of grep to search through the codebase as this may sometimes
 Avoid using sed to replace or edit text in code files as much as possible
 Do not run `git add` or `git commit` or `git push` at any time
 Never attempt to run fdre2e.sh or dev-reset.sh yourself
+Do not use or invoke docker commands yourself at any time
 Read AGENTS.md at the start of any new task to get more context and guidelines for developing on this project

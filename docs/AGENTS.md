@@ -81,6 +81,10 @@ At all times consider an essential example of a user on a mobile device with 3 G
 
 Do not add files to commit, nor create any commits yourself at any time. This is up to the developers. Encourage saving progress during large projects, but DO NOT COMMIT or PUSH code to git at any time by yourself.
 
+## Using Containers
+
+Do not use docker or invoke docker commands at any time. Use only podman (without sudo; rootless), and only with the express consent of the developer for every potential invocation.
+
 ## No Emojis
 
 No emojis in any code, documentation, or responses please. If needed, instead of '❌' you can use use '[X]'. Instead of '✅' use '[OK]'. Instead of '⚠️' use '[!]'. Instead of '🎉'/'🚀'/other celebratory emojis, use 'SUCCESS!' or something to that effect. 
