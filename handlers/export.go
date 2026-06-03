@@ -38,7 +38,7 @@ type ExportTokenClaims struct {
 
 // bundleMetadata is the JSON metadata embedded in the .arkbackup bundle header.
 //
-// Phase C (§6.1): bundles are self-describing. OwnerUsername is required so
+// bundles are self-describing. OwnerUsername is required so
 // the offline decrypter can rebuild metadata-field AAD (filename, sha256)
 // without any external state. file_id is required for FEK-envelope AAD and
 // chunk AAD. The schema matches `bundleMeta` in

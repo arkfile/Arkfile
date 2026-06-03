@@ -246,8 +246,7 @@ func RegisterRoutes() {
 	adminGroup.GET("/alerts/summary", AdminAlertsSummary)
 
 	// Billing - admin endpoints (storage credits / usage metering).
-	// See docs/wip/storage-credits-v2.md §6.4 for the API contract and
-	// handlers/admin_billing.go for the handler implementations.
+	// See handlers/admin_billing.go for the handler implementations.
 	adminGroup.GET("/billing/price", AdminGetBillingPrice)
 	adminGroup.POST("/billing/set-price", AdminSetBillingPrice)
 	adminGroup.GET("/billing/sweep-summary", AdminGetBillingSweepSummary)

@@ -916,8 +916,8 @@ button:hover, .btn-primary:hover, .hero-btn:hover, .share-action-btn:hover, .sha
 /* Billing panel (storage credits / usage metering).
    Renders inside a .security-panel container; this block adds the
    billing-specific layout on top of the panel's chrome.
-   See client/static/js/src/ui/billing.ts for the matching DOM structure
-   and docs/wip/storage-credits-v2.md §7 for the design rationale. */
+   See client/static/js/src/ui/billing.ts for the matching DOM structure.
+*/
 .billing-panel-section {
     margin-bottom: 1.25rem;
 }

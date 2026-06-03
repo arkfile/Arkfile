@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	cryptoRand "crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+
 	"sync"
 	"time"
 
@@ -48,19 +51,18 @@ const maxPaddingPerChunk = 16 * 1024 * 1024 // 16 MiB
 
 // CreateUploadSession initializes a new chunked upload.
 //
-// Phase C: the client mints the file_id as a UUID v4 before encrypting any
+// The client mints the file_id as a UUID v4 before encrypting any
 // metadata, since file_id is bound into AAD on every per-file AES-GCM
 // operation. The server validates strict UUIDv4 syntax and enforces global
 // uniqueness across both completed files (file_metadata.file_id) and
 // in-progress / abandoned sessions (upload_sessions.file_id). On collision
 // the server returns HTTP 409 with stable error code "file_id_conflict";
-// clients retry up to 3 times with a freshly minted UUID. See
-// phase-c.md §3.1 and §7.5 B.
+// clients retry up to 3 times with a freshly minted UUID.
 func CreateUploadSession(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 
 	var request struct {
-		// Client-supplied UUIDv4 (Phase C; see phase-c.md §3.1).
+		// Client-supplied UUIDv4
 		FileID string `json:"file_id"`
 
 		// Client sends encrypted metadata
@@ -106,7 +108,7 @@ func CreateUploadSession(c echo.Context) error {
 			"Missing encrypted SHA256 or nonce")
 	}
 	if request.EncryptedFek == "" {
-		// Phase C: the FEK envelope is AAD-bound to file_id + key_type and
+		// The FEK envelope is AAD-bound to file_id + key_type and
 		// is mandatory for every upload. An empty value indicates a broken
 		// client; reject before allocating any storage state.
 		return JSONErrorCode(c, http.StatusBadRequest, "missing_encrypted_fek",
@@ -148,12 +150,11 @@ func CreateUploadSession(c echo.Context) error {
 
 	// Compute the expected number of chunks from the *encrypted* total size.
 	//
-	// Phase C / Step 0 audit (Outcome A): chunks are uniform
-	// [nonce (12)][ciphertext][tag (16)] with no per-chunk envelope header.
-	// The FEK envelope still carries [version][key_type] but it lives in
-	// file_metadata.encrypted_fek, not in the chunk stream. So every
-	// encrypted chunk is exactly `ChunkSize + 28` bytes (last chunk may be
-	// smaller).
+	// chunks are uniform [nonce (12)][ciphertext][tag (16)] with no
+	// per-chunk envelope header. The FEK envelope still carries
+	// [version][key_type] but it lives in file_metadata.encrypted_fek,
+	// not in the chunk stream. So every encrypted chunk is exactly
+	// `ChunkSize + 28` bytes (last chunk may be smaller).
 	//
 	//   encryptedChunkSize = ChunkSize + 28  (plaintext + GCM overhead)
 	//   totalChunks        = ceil(TotalSize / encryptedChunkSize)
@@ -216,13 +217,13 @@ func CreateUploadSession(c echo.Context) error {
 			})
 	}
 
-	// Phase C global file_id uniqueness pre-check, inside the same
+	// global file_id uniqueness pre-check, inside the same
 	// transaction as the upload_sessions INSERT below. The database UNIQUE
 	// indexes on file_metadata.file_id (column-level) and
 	// upload_sessions.file_id (named idx) are the race-safe authority; this
 	// pre-check exists so that the common non-racing case returns a clean
 	// HTTP 409 with stable code "file_id_conflict" rather than relying on
-	// the driver's error-message text. See phase-c.md §3.1 and §7.5 B.
+	// the driver's error-message text.
 	var existsInMeta int
 	if err := tx.QueryRow(
 		`SELECT 1 FROM file_metadata WHERE file_id = ? LIMIT 1`,
@@ -606,8 +607,8 @@ func UploadChunk(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid chunk hash format")
 	}
 
-	// Validate chunk size. Phase C / Step 0 audit (Outcome A): every
-	// chunk is uniform [nonce (12)][ciphertext][tag (16)]; the FEK
+	// Validate chunk size. every chunk is uniform
+	// [nonce (12)][ciphertext][tag (16)]; the FEK
 	// envelope's version/key-type bytes are not part of the chunk
 	// stream. So the same min/max applies to every chunk index.
 	contentLength := c.Request().ContentLength
@@ -633,6 +634,18 @@ func UploadChunk(c echo.Context) error {
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to read chunk data for hash calculation: %v", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to read chunk data")
+	}
+
+	// Verify the client-supplied X-Chunk-Hash against the SHA-256 of the
+	// received encrypted chunk bytes. This catches in-transit corruption or
+	// truncation at the chunk boundary and fails fast before the part is
+	// stored. Per-chunk AEAD still provides the authoritative tamper
+	// protection on download; this is a transport-integrity check.
+	computedChunkHash := sha256.Sum256(chunkData)
+	if !strings.EqualFold(hex.EncodeToString(computedChunkHash[:]), chunkHash) {
+		logging.ErrorLogger.Printf("Chunk hash mismatch for session %s, chunk %d", sessionID, chunkNumber)
+		return JSONErrorCode(c, http.StatusBadRequest, "chunk_hash_mismatch",
+			"Chunk hash does not match uploaded chunk bytes")
 	}
 
 	// Get or create streaming hash state for this session

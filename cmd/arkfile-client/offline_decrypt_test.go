@@ -1,10 +1,9 @@
 // offline_decrypt_test.go - Tests for .arkbackup bundle parser and offline decryption.
 //
-// Phase C: bundles are self-describing (§6.1). Every bundle must carry
+// Bundles are self-describing. Every bundle must carry
 // file_id, owner_username, encrypted_fek, encrypted_filename + nonce,
 // encrypted_sha256sum + nonce, password_type, size_bytes, chunk_count,
-// chunk_size_bytes. Bundles produced before Phase C are unreadable;
-// there is no fallback path in shipped code.
+// chunk_size_bytes.
 
 package main
 
@@ -65,7 +64,7 @@ func createTestBundle(t *testing.T, meta bundleMeta, blobData []byte) string {
 }
 
 // TestParseBundle_ValidBundle exercises the basic parse path with all the
-// Phase C self-describing fields populated.
+// self-describing fields populated.
 func TestParseBundle_ValidBundle(t *testing.T) {
 	meta := bundleMeta{
 		Version:            1,
@@ -212,7 +211,7 @@ func TestParseBundle_HeaderTooLarge(t *testing.T) {
 
 // -- End-to-end bundle decrypt --
 //
-// Build a real encrypted .arkbackup with all the Phase C AAD-bound
+// Build a real encrypted .arkbackup with all AAD-bound
 // ciphertext, then decrypt it back end-to-end. This is the disaster
 // recovery path: a user with the bundle and their account password
 // must be able to recover plaintext offline.
@@ -235,7 +234,7 @@ func TestOfflineArkbackupDecrypt_WithAAD_RoundTrip(t *testing.T) {
 		t.Fatalf("wrapFEK failed: %v", err)
 	}
 
-	originalPlaintext := []byte("Phase C self-describing bundle disaster-recovery test plaintext")
+	originalPlaintext := []byte("Self-describing bundle disaster-recovery test plaintext")
 
 	encryptedChunk, err := encryptChunk(originalPlaintext, fek, fileID, 0, 1)
 	if err != nil {
@@ -297,9 +296,8 @@ func TestOfflineArkbackupDecrypt_WithAAD_RoundTrip(t *testing.T) {
 
 // TestOfflineArkbackupDecrypt_WrongFileID_Fails proves that a bundle
 // whose JSON metadata claims a different file_id than the one the FEK /
-// chunks were encrypted under cannot be decrypted (Phase C, B-02, B-05,
-// B-08, C-02). This catches an attacker who edits the bundle JSON header
-// in transit.
+// chunks were encrypted under cannot be decrypted.
+// This catches an attacker who edits the bundle JSON header in transit.
 func TestOfflineArkbackupDecrypt_WrongFileID_Fails(t *testing.T) {
 	username := "bundle-wrong-fileid-user"
 	password := []byte("BundleWrongFileIDPassword2025")
@@ -352,7 +350,7 @@ func TestOfflineArkbackupDecrypt_WrongPassword_Fails(t *testing.T) {
 
 // TestDecryptBlobCommand_RejectsBundleMissingOwnerUsername verifies that
 // the offline decrypt CLI refuses to operate on a bundle that lacks the
-// required Phase C self-describing fields. Without this guard the
+// required self-describing fields. Without this guard the
 // decrypter would silently call BuildMetadataFieldAAD with an empty
 // ownerUsername and produce confusing AEAD failures rather than a clean
 // "bundle is too old" error.

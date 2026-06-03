@@ -18,11 +18,10 @@ import (
 
 // bundleMeta matches the JSON metadata schema in the .arkbackup bundle.
 //
-// Phase C: bundles are self-describing (§6.1). OwnerUsername is required
+// bundles are self-describing. OwnerUsername is required
 // to reconstruct the metadata AAD when decrypting `encrypted_filename`
 // and `encrypted_sha256sum`. The exporter writes the file owner here so
-// the offline decrypter can decrypt without any external state. Bundles
-// produced before Phase C are unreadable (no fallback path).
+// the offline decrypter can decrypt without any external state.
 type bundleMeta struct {
 	Version            int    `json:"version"`
 	FileID             string `json:"file_id"`
@@ -115,13 +114,13 @@ func handleDecryptBlobCommand(args []string) error {
 		return fmt.Errorf("unsupported password type: %s", meta.PasswordType)
 	}
 
-	// Phase C: bundle is self-describing. file_id is required for FEK
+	// bundle is self-describing. file_id is required for FEK
 	// envelope AAD; owner_username is required for metadata-field AAD.
 	if meta.FileID == "" {
-		return fmt.Errorf("bundle metadata missing file_id (required by Phase C self-describing bundles)")
+		return fmt.Errorf("bundle metadata missing file_id (required by self-describing bundles)")
 	}
 	if meta.OwnerUsername == "" {
-		return fmt.Errorf("bundle metadata missing owner_username (required by Phase C self-describing bundles)")
+		return fmt.Errorf("bundle metadata missing owner_username (required by self-describing bundles)")
 	}
 
 	fek, _, err := unwrapFEK(meta.EncryptedFEK, kek, meta.FileID)
@@ -307,15 +306,11 @@ func readAccountKeyFromFile(path string) ([]byte, error) {
 // into uniform chunks, decrypts each chunk, and writes plaintext to the
 // output file.
 //
-// Phase C (Outcome A): every chunk uses the uniform layout
+// every chunk uses the uniform layout
 // [nonce (12)][ciphertext][tag (16)] with NO per-chunk envelope header.
 // Each chunk decrypts with AAD = (file_id, chunk_index, total_chunks)
 // so swap / reorder / truncation across the bundle is detected at the
-// AEAD layer (B-02, B-05, C-02, C-03).
-//
-// Bundles produced before Phase C had a 2-byte [version][keyType] header
-// glued to chunk 0; those bundles are unreadable by this code and there
-// is no fallback path (greenfield policy, phase-c.md §2).
+// AEAD layer.
 func decryptBundleBlob(bundlePath string, blobOffset int64, meta *bundleMeta, fek []byte, outputPath string) error {
 	f, err := os.Open(bundlePath)
 	if err != nil {
@@ -344,7 +339,7 @@ func decryptBundleBlob(bundlePath string, blobOffset int64, meta *bundleMeta, fe
 
 	totalChunks := meta.ChunkCount
 	if totalChunks <= 0 {
-		return fmt.Errorf("bundle metadata missing chunk_count (required by Phase C self-describing bundles)")
+		return fmt.Errorf("bundle metadata missing chunk_count (required by self-describing bundles)")
 	}
 
 	remaining := meta.SizeBytes

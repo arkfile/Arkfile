@@ -254,7 +254,6 @@ class ArkFileApp {
     }
 
     // Billing panel toggle (storage credits / usage metering).
-    // See docs/wip/storage-credits-v2.md §7 for the design.
     const billingToggle = document.getElementById('billing-toggle');
     if (billingToggle) {
       billingToggle.addEventListener('click', async (e) => {

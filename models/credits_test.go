@@ -120,7 +120,7 @@ func TestMicrocentsPerUSD(t *testing.T) {
 }
 
 func TestTransactionTypeConstants(t *testing.T) {
-	// Spec §3.2 + §3.5: the daily storage sweep writes 'usage'; admin gifts
+	// The daily storage sweep writes 'usage'; admin gifts
 	// write 'gift'. These string values are observed by the audit log and
 	// e2e test assertions, so they must remain stable.
 	if TransactionTypeUsage != "usage" {

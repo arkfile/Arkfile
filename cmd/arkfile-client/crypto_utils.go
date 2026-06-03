@@ -1,13 +1,12 @@
 // crypto_utils.go - Crypto helper functions for arkfile-client
 //
 // Wraps the crypto package functions for upload / download / share operations.
-// Every AES-GCM call on the file path is AAD-bound (Phase C) so that an
+// Every AES-GCM call on the file path is AAD-bound so that an
 // attacker with DB-write access cannot swap, reorder, or substitute chunks /
 // FEK envelopes / metadata between or within a user's files without the
-// AEAD tag failing on decrypt. See crypto/aad.go and
-// docs/wip/review/phase-c.md.
+// AEAD tag failing on decrypt. See crypto/aad.go
 //
-// Post-Phase-C chunk layout (Outcome A, uniform chunks):
+// Chunk layout (uniform chunks):
 //   Every chunk: [nonce (12)][ciphertext][tag (16)]
 //   No per-chunk envelope header. The FEK envelope keeps its 2-byte
 //   [0x01][key_type] prefix; only the redundant per-chunk header is gone.

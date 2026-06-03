@@ -1,20 +1,20 @@
 // crypto_utils_test.go - Unit tests for arkfile-client crypto helpers.
 //
-// Phase C wired AAD into every chunk / FEK envelope / metadata field, so
+// AAD wired into every chunk / FEK envelope / metadata field, so
 // these tests exercise both the positive round-trip path and the negative
-// tamper-detection path required by phase-c.md §10:
+// tamper-detection path
 //
 //   - TestEncryptDecryptChunk_WithAAD_RoundTrip
 //   - TestDecryptChunk_WrongChunkIndex_Fails
 //   - TestDecryptChunk_WrongFileID_Fails
-//   - TestDecryptChunk_WrongTotalChunks_Fails       (truncation, C-03)
+//   - TestDecryptChunk_WrongTotalChunks_Fails       (truncation)
 //   - TestEncryptDecryptMetadata_WithAAD_RoundTrip
 //   - TestDecryptMetadata_WrongFieldName_Fails
 //   - TestDecryptMetadata_WrongOwnerUsername_Fails
 //   - TestDecryptMetadata_WrongFileID_Fails
 //   - TestWrapUnwrapFEK_AccountKey_RoundTrip
 //   - TestWrapUnwrapFEK_CustomKey_RoundTrip
-//   - TestUnwrapFEK_WrongFileID_Fails               (cross-file FEK swap, B-08)
+//   - TestUnwrapFEK_WrongFileID_Fails               (cross-file FEK swap)
 //   - TestUnwrapFEK_WrongKEK_Fails
 
 package main
@@ -47,7 +47,7 @@ func TestEncryptDecryptChunk_WithAAD_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateFEK failed: %v", err)
 	}
-	plaintext := []byte("Phase C chunk round-trip plaintext with reasonable length content")
+	plaintext := []byte("Chunk round-trip plaintext with reasonable length content")
 
 	for _, idx := range []int64{0, 1, 2} {
 		enc, err := encryptChunk(plaintext, fek, testFileID, idx, testTotalChunks)
@@ -65,7 +65,7 @@ func TestEncryptDecryptChunk_WithAAD_RoundTrip(t *testing.T) {
 }
 
 // TestDecryptChunk_WrongChunkIndex_Fails proves chunk reorder is detected at
-// the AEAD layer (Phase C, B-05 / C-02).
+// the AEAD layer.
 func TestDecryptChunk_WrongChunkIndex_Fails(t *testing.T) {
 	fek, err := generateFEK()
 	if err != nil {
@@ -84,7 +84,7 @@ func TestDecryptChunk_WrongChunkIndex_Fails(t *testing.T) {
 }
 
 // TestDecryptChunk_WrongFileID_Fails proves cross-file chunk substitution is
-// detected at the AEAD layer (Phase C, B-02 / C-02).
+// detected at the AEAD layer.
 func TestDecryptChunk_WrongFileID_Fails(t *testing.T) {
 	fek, err := generateFEK()
 	if err != nil {
@@ -103,7 +103,7 @@ func TestDecryptChunk_WrongFileID_Fails(t *testing.T) {
 
 // TestDecryptChunk_WrongTotalChunks_Fails proves that the server cannot
 // reduce chunk_count to truncate the file without remaining chunks failing
-// decryption (Phase C, C-03).
+// decryption.
 func TestDecryptChunk_WrongTotalChunks_Fails(t *testing.T) {
 	fek, err := generateFEK()
 	if err != nil {
@@ -179,8 +179,7 @@ func TestEncryptDecryptMetadata_WithAAD_RoundTrip(t *testing.T) {
 }
 
 // TestDecryptMetadata_WrongFieldName_Fails proves that the encrypted
-// filename ciphertext cannot be substituted into the sha256 slot or vice
-// versa (Phase C §4.4).
+// filename ciphertext cannot be substituted into the sha256 slot or vice versa
 func TestDecryptMetadata_WrongFieldName_Fails(t *testing.T) {
 	accountKey, err := crypto.GenerateAESKey()
 	if err != nil {
@@ -199,7 +198,7 @@ func TestDecryptMetadata_WrongFieldName_Fails(t *testing.T) {
 }
 
 // TestDecryptMetadata_WrongOwnerUsername_Fails proves cross-user metadata
-// row substitution is detected (Phase C §4.4).
+// row substitution is detected
 func TestDecryptMetadata_WrongOwnerUsername_Fails(t *testing.T) {
 	accountKey, err := crypto.GenerateAESKey()
 	if err != nil {
@@ -217,7 +216,7 @@ func TestDecryptMetadata_WrongOwnerUsername_Fails(t *testing.T) {
 }
 
 // TestDecryptMetadata_WrongFileID_Fails proves that moving a metadata row
-// to a different file is detected (Phase C, C-19).
+// to a different file is detected.
 func TestDecryptMetadata_WrongFileID_Fails(t *testing.T) {
 	accountKey, err := crypto.GenerateAESKey()
 	if err != nil {
@@ -306,7 +305,6 @@ func TestWrapUnwrapFEK_CustomKey_RoundTrip(t *testing.T) {
 
 // TestUnwrapFEK_WrongFileID_Fails proves that substituting one file's FEK
 // envelope into another file's metadata row is detected at the AEAD layer
-// (Phase C, B-08).
 func TestUnwrapFEK_WrongFileID_Fails(t *testing.T) {
 	fek, err := generateFEK()
 	if err != nil {
@@ -404,7 +402,7 @@ func TestComputeStreamingSHA256_NonexistentFile(t *testing.T) {
 
 // -- calculateTotalEncryptedSize --
 //
-// Phase C Outcome A: uniform chunk layout, no per-chunk envelope header.
+// uniform chunk layout, no per-chunk envelope header.
 // Every chunk = plaintext + GCM overhead (nonce + tag).
 func TestCalculateTotalEncryptedSize(t *testing.T) {
 	chunkSize := int64(crypto.PlaintextChunkSize())

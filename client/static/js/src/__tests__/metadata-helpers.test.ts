@@ -1,5 +1,5 @@
 /**
- * Unit Tests -- metadata-helpers.ts (Phase C AAD wiring)
+ * Unit Tests -- metadata-helpers.ts (AAD wiring)
  *
  * Covers:
  *   - decryptFEK round-trip with FEK-envelope AAD

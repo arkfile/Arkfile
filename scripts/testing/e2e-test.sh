@@ -2486,7 +2486,6 @@ phase_11c_multi_backend_storage() {
 # and ARKFILE_FREE_STORAGE_BYTES=10485760 (10 MiB) — all set by dev-reset.sh.
 # The test user has ~5 uploaded files from earlier phases, well above the
 # 10 MiB baseline, so a tick produces a non-zero accumulator immediately.
-# See docs/wip/storage-credits-v2.md §11.1 (H.2) for the spec.
 phase_11d_billing() {
     phase "11d: BILLING METER"
 
@@ -2626,7 +2625,6 @@ phase_11d_billing() {
     fi
 
     # Privacy regression guard: settlement metadata must NOT contain avg_billable_bytes
-    # (see docs/wip/storage-credits-v2.md §3.5 and §10.1 sweep_test.go comment).
     if echo "$credits_after_out" | grep -q "avg_billable_bytes"; then
         error "PRIVACY VIOLATION: avg_billable_bytes found in credits response"
         record_test "Usage metadata excludes avg_billable_bytes" "FAIL"

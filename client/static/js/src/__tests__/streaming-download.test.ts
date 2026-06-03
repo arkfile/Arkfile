@@ -20,9 +20,9 @@ import { buildChunkAAD } from '../crypto/aad';
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /**
- * Build a Phase C chunk: AES-GCM([nonce(12)][ciphertext][tag(16)]) under
+ * Build a chunk: AES-GCM([nonce(12)][ciphertext][tag(16)]) under
  * AAD = BuildChunkAAD(fileID, chunkIndex, totalChunks). No chunk-0 envelope
- * header (Step 0 audit Outcome A -- uniform chunks).
+ * header (uniform chunks).
  */
 async function buildEncryptedChunk(
   plaintext: Uint8Array,
@@ -50,7 +50,7 @@ async function buildEncryptedChunk(
   return result;
 }
 
-/** Build a minimal valid share metadata response (Phase C: file_id required for chunk AAD). */
+/** Build a minimal valid share metadata response (file_id required for chunk AAD). */
 function makeShareMeta(
   totalBytes: number,
   chunkCount: number,

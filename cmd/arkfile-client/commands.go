@@ -328,12 +328,11 @@ func handleUploadCommand(client *HTTPClient, config *ClientConfig, args []string
 // batch loop. Errors classified as fatal by isFatalUploadError() abort
 // the batch; other errors mark the file as failed and the loop moves on.
 //
-// Phase C: the file_id is generated client-side as a UUIDv4 before any
+// The file_id is generated client-side as a UUIDv4 before any
 // encryption, because it is an input to the AAD bound to chunks, the FEK
 // envelope, and the metadata fields. On HTTP 409 / file_id_conflict from
 // the server (vanishingly rare in practice), the client retries with a
-// freshly minted UUID up to 3 times, then surfaces a hard error per
-// phase-c.md §3.1.
+// freshly minted UUID up to 3 times, then surfaces a hard error.
 func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfig, accountKey, kek []byte, finalPasswordType, hint, filePath string, force bool) (string, error) {
 	if err := isSeekableFile(filePath); err != nil {
 		return "", err
@@ -392,7 +391,7 @@ func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfi
 
 	logVerbose("Uploading %s (%s), %d chunks", filename, formatFileSize(fileSizeBytes), chunkCount)
 
-	// Retry loop for file_id collisions. Per phase-c.md §3.1 the client
+	// Retry loop for file_id collisions. The client
 	// retries up to 3 times with a fresh UUIDv4 each time. Each attempt
 	// re-runs the full encrypt-and-init sequence because every AAD-bound
 	// ciphertext (FEK envelope, metadata fields) depends on file_id.
@@ -471,7 +470,7 @@ func uploadOneFile(client *HTTPClient, session *AuthSession, config *ClientConfi
 }
 
 // isFileIDConflict returns true when the error came from an HTTP 409
-// with the stable server code "file_id_conflict" (Phase C, §3.1 / §4.4).
+// with the stable server code "file_id_conflict".
 // We accept either an exact Response.Error match or a textual substring
 // match for robustness against minor server framing differences.
 func isFileIDConflict(err error) bool {
@@ -514,9 +513,9 @@ func doChunkedUpload(client *HTTPClient, session *AuthSession, params *ChunkedUp
 	chunkSize := crypto.PlaintextChunkSize()
 
 	// Step 1: Initialize upload session - send exactly what the server expects.
-	// Phase C: client supplies file_id (UUIDv4); server validates and
+	// Client supplies file_id (UUIDv4); server validates and
 	// returns HTTP 409 with stable error code "file_id_conflict" on
-	// collision, per phase-c.md §3.1.
+	// collision.
 	initPayload := map[string]interface{}{
 		"file_id":             params.FileID,
 		"encrypted_filename":  params.EncFilenameB64,
@@ -1853,7 +1852,7 @@ func handleShareDownload(client *HTTPClient, config *ClientConfig, args []string
 		// Anonymous share recipient: chunk AAD uses the underlying
 		// file_id from the share metadata (NOT the share_id). Chunks
 		// are the same physical objects stored once for both owner and
-		// recipient paths -- per phase-c.md §5.
+		// recipient paths
 		plaintext, decErr := decryptChunk(encChunk, fek, chunkMeta.FileID, i, chunkCount)
 		if decErr != nil {
 			downloadFailed = true

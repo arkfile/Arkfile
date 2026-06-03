@@ -88,7 +88,6 @@ type Config struct {
 }
 
 // BillingConfig is the storage credits / usage metering configuration.
-// See docs/wip/storage-credits-v2.md §9 for details.
 type BillingConfig struct {
 	// Enabled is the master switch. When false, the billing scheduler is not
 	// started; the API endpoints continue to return current/zero state.
@@ -388,7 +387,7 @@ func loadEnvConfig(cfg *Config) error {
 		}
 	}
 
-	// Billing / usage metering envs (see docs/wip/storage-credits-v2.md §9).
+	// Billing / usage metering envs
 	if v := os.Getenv("ARKFILE_BILLING_ENABLED"); v != "" {
 		if parsed, err := strconv.ParseBool(v); err == nil {
 			cfg.Billing.Enabled = parsed

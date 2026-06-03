@@ -95,7 +95,7 @@ func GetFileMeta(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"file_id":               file.FileID,
-		"owner_username":        file.OwnerUsername, // Phase C: needed for metadata AAD reconstruction
+		"owner_username":        file.OwnerUsername, // needed for metadata AAD reconstruction
 		"encrypted_filename":    file.EncryptedFilename,
 		"filename_nonce":        file.FilenameNonce,
 		"encrypted_sha256sum":   file.EncryptedSha256sum,

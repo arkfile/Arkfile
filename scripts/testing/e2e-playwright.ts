@@ -1070,8 +1070,6 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   //
   // This test opens the Billing panel, verifies the DOM layout produced by
   // client/static/js/src/ui/billing.ts.
-  //
-  // See docs/wip/storage-credits-v2.md §10.5 for the test plan spec.
   // --------------------------------------------------------------------------
   test('Billing panel renders balance, usage grid, and transaction history', async () => {
     // Phase 12 always ends with a logout (to verify share revocation).

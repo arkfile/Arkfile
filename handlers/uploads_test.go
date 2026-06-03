@@ -17,11 +17,11 @@ import (
 )
 
 // validTestFileID is a canonical lowercase UUIDv4 with RFC4122 variant
-// (variant nibble '8'). Used wherever a Phase C test needs a known-good
+// (variant nibble '8'). Used wherever a test needs a known-good
 // file_id value.
 const validTestFileID = "f1f1f1f1-2222-4333-8444-555555555555"
 
-// buildValidInitPayload returns a request body with all required Phase C
+// buildValidInitPayload returns a request body with all required
 // fields populated, parameterized only by the file_id. Tests override
 // individual fields before marshaling.
 func buildValidInitPayload(fileID string) map[string]interface{} {
@@ -43,7 +43,7 @@ func buildValidInitPayload(fileID string) map[string]interface{} {
 // canonical lowercase RFC 4122 UUID v4. Rejection happens before any DB
 // query, so the test does not need to wire mock expectations.
 //
-// Phase C, phase-c.md §3.1 / §10 (TestCreateUploadSession_RejectsNonUUIDv4FileID).
+// (TestCreateUploadSession_RejectsNonUUIDv4FileID).
 func TestCreateUploadSession_RejectsNonUUIDv4FileID(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -95,7 +95,7 @@ func TestCreateUploadSession_RejectsNonUUIDv4FileID(t *testing.T) {
 // scans for both "HTTP 409" and "file_id_conflict" case-insensitively, so
 // the response shape is a wire-format commitment.
 //
-// Phase C, phase-c.md §3.1 / §10 (TestCreateUploadSession_FileIDConflictStableError).
+// (TestCreateUploadSession_FileIDConflictStableError).
 func TestCreateUploadSession_FileIDConflictStableError(t *testing.T) {
 	username := "phase-c-step4-conflict-user"
 
@@ -252,4 +252,52 @@ func TestUploadChunk_EnforcesPaddingCeiling(t *testing.T) {
 
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
+}
+
+// TestUploadChunk_RejectsChunkHashMismatch verifies that UploadChunk compares
+// the client-supplied X-Chunk-Hash against the SHA-256 of the received
+// encrypted chunk bytes and rejects a mismatch with HTTP 400 and stable error
+// code "chunk_hash_mismatch" before storing the part. This guards against
+// in-transit corruption or truncation at the chunk boundary.
+func TestUploadChunk_RejectsChunkHashMismatch(t *testing.T) {
+	username := "chunk-hash-test-user"
+	sessionID := "session-chunk-hash-mismatch"
+
+	// Body is large enough to pass the minimum chunk-size content-length
+	// check (gcm overhead + 1 byte). The X-Chunk-Hash header below is a
+	// well-formed 64-hex value that deliberately does NOT match the body.
+	chunkBody := []byte("this-is-a-sixty-four-byte-or-so-encrypted-chunk-body-payload-data")
+	wrongHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/uploads/"+sessionID+"/chunks/0", bytes.NewReader(chunkBody))
+	c.SetParamNames("sessionId", "chunkNumber")
+	c.SetParamValues(sessionID, "0")
+	c.Request().Header.Set("X-Chunk-Hash", wrongHash)
+
+	claims := &auth.Claims{Username: username}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	c.Set("user", token)
+
+	// Session row with no padding (total_size == padded_size), in_progress,
+	// owned by the calling user, and a valid chunk index range.
+	rows := sqlmock.NewRows([]string{
+		"owner_username", "file_id", "storage_id", "storage_upload_id", "status", "total_chunks", "total_size", "padded_size",
+	}).AddRow(
+		username, "file-id", "storage-id", "upload-id", "in_progress", 1, int64(len(chunkBody)), int64(len(chunkBody)),
+	)
+
+	mock.ExpectQuery(`SELECT owner_username, file_id, storage_id, storage_upload_id, status, total_chunks, total_size, padded_size FROM upload_sessions WHERE id = \?`).
+		WithArgs(sessionID).
+		WillReturnRows(rows)
+
+	err := UploadChunk(c)
+	require.NoError(t, err, "handler should write the 400 response itself")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	var resp APIResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.False(t, resp.Success)
+	assert.Equal(t, "chunk_hash_mismatch", resp.Error)
+
+	require.NoError(t, mock.ExpectationsWereMet())
 }

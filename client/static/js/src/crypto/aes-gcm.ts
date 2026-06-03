@@ -68,8 +68,8 @@ export class AESGCMDecryptor {
    * The Web Crypto API expects the tag to be appended to the ciphertext.
    *
    * If `aad` is provided, it is passed to AES-GCM as additionalData; the tag
-   * is then verified against AAD as well as ciphertext. This is how Phase C
-   * binds file chunks / FEK envelope / metadata fields to their context
+   * is then verified against AAD as well as ciphertext. This is how we
+   * bind file chunks / FEK envelope / metadata fields to their context
    * (see crypto/aad.ts).
    *
    * @param encryptedChunk - The encrypted chunk data
@@ -98,7 +98,7 @@ export class AESGCMDecryptor {
       if (aad !== undefined) {
         // Type assertion: BufferSource here is always ArrayBuffer-backed in
         // practice. The structural TS lib types require this narrowing to
-        // reject SharedArrayBuffer-backed views, which Phase C never produces.
+        // reject SharedArrayBuffer-backed views, which updated functions never produce.
         params.additionalData = aad as unknown as Uint8Array<ArrayBuffer>;
       }
       const decrypted = await crypto.subtle.decrypt(
@@ -116,8 +116,8 @@ export class AESGCMDecryptor {
   /**
    * Decrypt multiple chunks in sequence.
    *
-   * All chunks share the same key. If AAD must vary per chunk (the Phase C
-   * file-chunk case), call decryptChunk() in a loop with the appropriate
+   * All chunks share the same key. If AAD must vary per chunk,
+   * call decryptChunk() in a loop with the appropriate
    * BuildChunkAAD output instead of using this helper.
    *
    * @param chunks - Array of encrypted chunks

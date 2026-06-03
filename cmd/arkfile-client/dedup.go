@@ -147,7 +147,7 @@ func tryDecryptFilename(client *HTTPClient, session *AuthSession, accountKey []b
 
 	// Owner endpoint: owner_username == authenticated user. Fall back to
 	// session.Username if the server response omits it. Metadata AAD
-	// must match what the upload path used (Phase C §4.4).
+	// must match what the upload path used.
 	owner := fileMeta.OwnerUsername
 	if owner == "" {
 		owner = session.Username

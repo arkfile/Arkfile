@@ -256,7 +256,7 @@ function installFetchMock(routes: Record<string, FetchMockEntry>): void {
 
     for (const [pattern, entry] of Object.entries(routes)) {
       if (path.includes(pattern)) {
-        // Phase C: uploads/init must echo back the client-supplied file_id
+        // Uploads/init must echo back the client-supplied file_id
         // so uploadFile()'s sanity-check (session.file_id === chosenFileID)
         // passes. Patch the canned body if needed.
         if (pattern === 'uploads/init' && entry.status === 200 && opts?.body) {

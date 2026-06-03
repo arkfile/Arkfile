@@ -164,7 +164,7 @@ describe('clearDigestCache', () => {
 describe('populateDigestCache', () => {
   const OWNER = 'aliceusername'; // canonical owner_username for the test entries
 
-  // Encrypt plaintext digests under the Phase C metadata-field AAD =
+  // Encrypt plaintext digests, metadata-field AAD =
   // BuildMetadataFieldAAD(file_id, AAD_FIELD_SHA256, owner_username).
   async function encryptShaField(
     plaintext: string, key: Uint8Array, fileID: string, owner: string,

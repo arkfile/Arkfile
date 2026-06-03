@@ -8,8 +8,8 @@ import (
 )
 
 // TestSettlementMetadata_PrivacyInvariant is a regression guard: the JSON shape
-// of SettlementMetadata must contain ONLY the five fields specified in §3.5
-// of the design doc. Adding `avg_billable_bytes` (or any field that lets an
+// of SettlementMetadata must contain ONLY the five fields specified.
+// Adding `avg_billable_bytes` (or any field that lets an
 // observer reconstruct per-day storage history) would be a privacy disclosure.
 //
 // This test fails if a future change adds extra fields to SettlementMetadata.
@@ -44,7 +44,7 @@ func TestSettlementMetadata_PrivacyInvariant(t *testing.T) {
 		}
 	}
 	if len(decoded) != len(allowedKeys) {
-		t.Errorf("SettlementMetadata has %d keys, expected exactly %d (the §3.5-allowed set). Got: %v",
+		t.Errorf("SettlementMetadata has %d keys, expected exactly %d. Got: %v",
 			len(decoded), len(allowedKeys), keysOf(decoded))
 	}
 
@@ -52,7 +52,7 @@ func TestSettlementMetadata_PrivacyInvariant(t *testing.T) {
 	// hard-coded assertion is the one that future engineers most need to see
 	// in a failing test name.
 	if _, present := decoded["avg_billable_bytes"]; present {
-		t.Error("SettlementMetadata contains avg_billable_bytes -- privacy regression. See spec §3.5.")
+		t.Error("SettlementMetadata contains avg_billable_bytes -- privacy regression.")
 	}
 }
 

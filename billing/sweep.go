@@ -19,7 +19,7 @@ import (
 //
 // The metadata field on each transaction row contains exactly the five fields
 // in SettlementMetadata. It deliberately omits any per-day storage time-series
-// to preserve the privacy invariant in §3.5 of the design doc.
+// to preserve privacy.
 //
 // Returns the aggregate summary. UsersWithNegativeBalance is the point-in-time
 // count of users whose balance ended up below zero after this sweep run.

@@ -1,5 +1,5 @@
 /**
- * Unit Tests -- AAD construction helpers (Phase C)
+ * Unit Tests -- AAD construction helpers
  *
  * The cross-language conformance vector is the most important test in
  * this file. It hardcodes the same input vector and expected hex output
@@ -24,7 +24,7 @@ import { fromHex, toHex } from '../crypto/primitives';
 // ============================================================================
 //
 // MUST stay byte-identical with crypto/aad_test.go expectedChunkAADHex
-// for the same input. See phase-c.md §10 / §11.
+// for the same input.
 //
 // Layout for buildChunkAAD("a1b2c3d4-e5f6-7890-abcd-ef1234567890", 3n, 10n):
 //   [4B BE u32 len=36]            = 00 00 00 24
@@ -174,8 +174,8 @@ describe('buildMetadataFieldAAD -- determinism and distinction', () => {
 // AAD field-label tripwires
 // ============================================================================
 //
-// These constants are permanent wire-format commitments per phase-c.md
-// §4.6. Silently changing either literal would break every previously
+// These constants are permanent wire-format commitments.
+// Silently changing either literal would break every previously
 // encrypted file's metadata. Pin them in a test so a stray edit fails CI.
 
 describe('AAD field-label constants', () => {

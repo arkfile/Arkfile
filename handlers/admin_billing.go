@@ -3,8 +3,7 @@ package handlers
 // Admin billing endpoints. The actual billing math (rate computation, tick,
 // sweep, gift) lives in the billing/ package. These handlers are thin
 // adapters that call into the function-pointer seams wired from main.go
-// (see handlers/billing_projection.go for the seam definitions and §11.2 of
-// docs/wip/storage-credits-v2.md for the architectural rationale).
+// (see handlers/billing_projection.go for the seam definitions).
 
 import (
 	"database/sql"

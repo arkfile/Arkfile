@@ -173,8 +173,7 @@ func TestBuildMetadataFieldAAD_FileIDDistinction(t *testing.T) {
 
 // TestAADFieldLabels_AreCanonicalStrings is a tripwire: changing either
 // label literal silently would break every previously-encrypted file's
-// metadata. The constants are permanent wire-format commitments per
-// phase-c.md §4.6.
+// metadata. The constants are permanent wire-format commitments.
 func TestAADFieldLabels_AreCanonicalStrings(t *testing.T) {
 	if AADFieldFilename != "encrypted_filename" {
 		t.Errorf("AADFieldFilename drifted: got %q, expected exactly %q",

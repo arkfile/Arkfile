@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS file_metadata (
     encrypted_sha256sum TEXT NOT NULL,          -- base64-encoded AES-GCM encrypted sha256 hash
     encrypted_file_sha256sum CHAR(64),          -- sha256sum of the final encrypted file in storage (pre-padding)
     stored_blob_sha256sum CHAR(64),             -- sha256sum of the complete S3 object (encrypted data + padding)
-    encrypted_fek TEXT NOT NULL,                -- base64-encoded AES-GCM encrypted FEK envelope (Phase C: AAD-bound to file_id + key_type)
+    encrypted_fek TEXT NOT NULL,                -- base64-encoded AES-GCM encrypted FEK envelope (AAD-bound to file_id + key_type)
     size_bytes BIGINT NOT NULL DEFAULT 0,
     padded_size BIGINT,                         -- Size with padding for privacy/security
     chunk_count INTEGER NOT NULL DEFAULT 1,     -- Number of 16MB chunks for chunked downloads
@@ -229,7 +229,7 @@ CREATE TABLE IF NOT EXISTS upload_sessions (
     padded_size BIGINT,
     status TEXT NOT NULL DEFAULT 'in_progress',
     encrypted_hash CHAR(64),
-    encrypted_fek TEXT NOT NULL,                -- Phase C: AAD-bound FEK envelope; never optional
+    encrypted_fek TEXT NOT NULL,                -- AAD-bound FEK envelope; never optional
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP,
@@ -383,14 +383,14 @@ CREATE TABLE IF NOT EXISTS user_credits (
 -- transaction_type values: 'usage' (daily storage sweep), 'gift' (admin gift), 'adjustment' (admin set).
 CREATE TABLE IF NOT EXISTS credit_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    transaction_id TEXT UNIQUE DEFAULT NULL,          -- E-04: External transaction ID MUST be unique to prevent double-spend gifts / duplicate charges
+    transaction_id TEXT UNIQUE DEFAULT NULL,          -- External transaction ID MUST be unique to prevent double-spend gifts / duplicate charges
     username TEXT NOT NULL,
     amount_usd_microcents BIGINT NOT NULL,            -- Positive for credits, negative for debits
     balance_after_usd_microcents BIGINT NOT NULL,     -- Balance after this transaction (signed)
-    transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment')), -- E-22: Constrain transaction_type via CHECK constraint
+    transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment')), -- Constrain transaction_type via CHECK constraint
     reason TEXT,                                      -- Human-readable reason
     admin_username TEXT,                              -- NULL for system-generated rows (e.g. usage sweeps)
-    metadata TEXT,                                    -- JSON for additional details (see §3.5)
+    metadata TEXT,                                    -- JSON for additional details
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
@@ -544,9 +544,9 @@ CREATE INDEX IF NOT EXISTS idx_file_share_keys_revoked ON file_share_keys(revoke
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_token_hash ON file_share_keys(download_token_hash);
 
 -- Upload session indexes
--- Phase C: file_id must be globally unique across both file_metadata and
+-- file_id must be globally unique across both file_metadata and
 -- upload_sessions, so abandoned/in-progress sessions reserve their file_id
--- against new collisions. See phase-c.md §3.1 / §7.5 B.
+-- against new collisions.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_upload_sessions_file_id_unique ON upload_sessions(file_id);
 CREATE INDEX IF NOT EXISTS idx_upload_sessions_owner ON upload_sessions(owner_username);
 CREATE INDEX IF NOT EXISTS idx_upload_sessions_status ON upload_sessions(status);

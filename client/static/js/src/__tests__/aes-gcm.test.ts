@@ -224,7 +224,7 @@ describe('verifyChunk', () => {
 });
 
 // ============================================================================
-// AAD binding (Phase C)
+// AAD binding
 // ============================================================================
 
 describe('decryptChunk AAD round-trip and mismatch detection', () => {

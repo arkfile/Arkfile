@@ -57,7 +57,7 @@ const LOG_PREFIX_SHARE = '[arkfile-share]';
 /**
  * Metadata returned from the /meta endpoint (snake_case matches JSON response).
  *
- * Phase C: `owner_username` is required for owner-side metadata decryption
+ * `owner_username` is required for owner-side metadata decryption
  * because the metadata-field AAD binds (file_id, field_label, owner_username).
  * Anonymous share recipients do not decrypt the server-side metadata fields
  * (filename/sha256 come from the ShareEnvelope), so for share metadata the
@@ -336,7 +336,7 @@ export class StreamingDownloadManager {
   /**
    * Async generator that downloads and decrypts file chunks one at a time.
    *
-   * Phase C (Step 0 Outcome A): uniform chunk layout, no chunk-0 envelope
+   * Uniform chunk layout, no chunk-0 envelope
    * header. Each chunk is [nonce(12)][ciphertext][tag(16)] and decrypts
    * under per-chunk AAD = BuildChunkAAD(file_id, chunkIndex, totalChunks).
    */
@@ -409,7 +409,7 @@ export class StreamingDownloadManager {
   /**
    * Async generator that downloads and decrypts shared file chunks one at a time.
    *
-   * Phase C: chunk AAD is built from the underlying file_id (which the
+   * Chunk AAD is built from the underlying file_id (which the
    * server returns in share metadata), NOT the share_id. Owner uploads
    * and recipient downloads thus produce/consume the same AAD bytes.
    */

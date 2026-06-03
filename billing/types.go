@@ -21,7 +21,7 @@
 //
 // Privacy posture: the meter never logs per-tick activity; only the daily
 // sweep writes audit rows. Settlement metadata deliberately excludes
-// per-day storage time-series fields (see §3.5 of the design doc).
+// per-day storage time-series fields.
 package billing
 
 import (
@@ -38,7 +38,7 @@ type SweepSummary struct {
 // SettlementMetadata is the JSON structure stored in
 // credit_transactions.metadata for a 'usage' row. It must contain ONLY these
 // fields. Adding `avg_billable_bytes` or any per-day storage time-series
-// field would be a privacy regression (§3.5 of the design doc).
+// field would be a privacy regression.
 type SettlementMetadata struct {
 	DrainedMicrocents           int64     `json:"drained_microcents"`
 	RateMicrocentsPerGiBPerHour int64     `json:"rate_microcents_per_gib_per_hour"`

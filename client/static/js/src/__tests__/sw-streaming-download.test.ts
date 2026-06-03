@@ -29,7 +29,7 @@ import {
  * download by appending a hidden iframe whose `src` is the synthetic URL —
  * this is the StreamSaver.js pattern that works reliably across Chromium and
  * Firefox-derived browsers (the previous `<a download>` + `a.click()` variant
- * silently no-op'd in Brave; see streaming-download v2 §19 doc).
+ * silently no-op'd in Brave).
  */
 interface FakeIframe {
   tagName: 'IFRAME';

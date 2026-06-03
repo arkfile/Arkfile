@@ -212,7 +212,7 @@ func TestListRecentFileMetadata(t *testing.T) {
 	c.Set("user", token)
 
 	// Setup mock DB response for models.GetRecentFileMetadataByOwner.
-	// Phase C: owner_username is included so the client can rebuild
+	// owner_username is included so the client can rebuild
 	// metadata AAD without a second round-trip.
 	query := `SELECT file_id, owner_username, password_type, filename_nonce, encrypted_filename,
 		       sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date
@@ -264,7 +264,7 @@ func TestGetFileMetadataBatch(t *testing.T) {
 	c.Set("user", token)
 
 	// Setup mock DB response for models.GetFileMetadataBatchByOwner.
-	// Phase C: owner_username is included in the SELECT list.
+	// owner_username is included in the SELECT list.
 	query := `SELECT file_id, owner_username, password_type, filename_nonce, encrypted_filename,
 		       sha256sum_nonce, encrypted_sha256sum, size_bytes, upload_date
 		FROM file_metadata

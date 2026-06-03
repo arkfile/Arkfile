@@ -137,7 +137,7 @@ type Response struct {
 //
 // OwnerUsername is required to reconstruct the metadata AAD when
 // decrypting `encrypted_filename` and `encrypted_sha256sum`
-// (Phase C, §4.4). For owner-only endpoints it equals the
+// For owner-only endpoints it equals the
 // authenticated user, but the server is the authority on this
 // value so it is taken from the response.
 type ServerFileInfo struct {
@@ -1353,7 +1353,7 @@ var errAccountDisabled = errors.New("account is not approved or has been disable
 
 // errFileIDConflictExhausted indicates the client minted 3 successive
 // UUIDv4 file_ids and each was rejected with HTTP 409 / file_id_conflict.
-// This is vanishingly improbable in practice (per phase-c.md §3.1 / F)
+// This is vanishingly improbable in practice
 // and indicates either a serious RNG fault on the client or a server
 // state-leak issue worth flagging. Fatal for this single file upload but
 // NOT for the batch -- the next file gets a fresh attempt.

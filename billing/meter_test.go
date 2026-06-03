@@ -8,7 +8,7 @@ import (
 // TickUser also touches the DB; this test pulls the math out so it can be
 // exercised without database setup.
 //
-// Formula (spec §3.2):
+// Formula:
 //
 //	billable_bytes        = max(0, total_storage_bytes - free_baseline_bytes)
 //	tick_charge_microcents = (billable_bytes * rate_microcents_per_gib_per_hour) >> 30

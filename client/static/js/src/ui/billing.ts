@@ -13,7 +13,6 @@
  *
  * Privacy posture: this module makes a single GET to /api/credits and
  * renders the response directly. No analytics, no third-party scripts.
- * See docs/wip/storage-credits-v2.md §7 for the design.
  *
  * CSS hooks (defined in client/static/css/styles.css under the
  * "Billing panel" comment block):

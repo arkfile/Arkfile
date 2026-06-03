@@ -320,7 +320,7 @@ async function apiRequest<T>(
 
 /**
  * Encrypts a file-content chunk with AES-256-GCM, AAD-bound to its position
- * in this specific file (Phase C). Output layout: [nonce(12)][ciphertext][tag(16)].
+ * in this specific file. Output layout: [nonce(12)][ciphertext][tag(16)].
  *
  * AAD = BuildChunkAAD(fileID, chunkIndex, totalChunks). This makes every
  * chunk authenticated against (this file, this index, this total) so the
@@ -448,9 +448,9 @@ async function computeStreamingSHA256(
 /**
  * Calculates total encrypted size deterministically from plaintext file size.
  * Pure math -- no file reading needed. Mirrors Go CLI's
- * calculateTotalEncryptedSize() under Phase C uniform-chunk layout.
+ * calculateTotalEncryptedSize() under uniform-chunk layout.
  *
- * Phase C (Step 0 audit Outcome A): every chunk has the uniform shape
+ * Every chunk has the uniform shape
  * [nonce(12)][ciphertext][tag(16)] -- 28 bytes overhead per chunk and
  * NO chunk-0 envelope header. The FEK envelope's header lives in the
  * `encrypted_fek` metadata column, not in the chunk stream.
@@ -615,7 +615,7 @@ export async function uploadFile(
     }
 
     // ================================================================
-    // Step 5: Generate client-side file_id (Phase C) and encrypt metadata
+    // Step 5: Generate client-side file_id and encrypt metadata
     // with ACCOUNT key (always, regardless of password type).
     //
     // The file_id is needed up front because it is bound into AAD for the
@@ -758,7 +758,7 @@ export async function uploadFile(
       const readTime = ((performance.now() - subStart) / 1000).toFixed(2);
 
       // Encrypt chunk with FEK under per-chunk AAD bound to (fileID, i, totalChunks).
-      // Phase C Outcome A: uniform chunk layout [nonce][ct][tag], no chunk-0 header.
+      // Uniform chunk layout [nonce][ct][tag], no chunk-0 header.
       subStart = performance.now();
       const chunkToUpload = await encryptChunk(plaintext, fek, chosenFileID, i, totalChunks);
       const encryptTime = ((performance.now() - subStart) / 1000).toFixed(2);

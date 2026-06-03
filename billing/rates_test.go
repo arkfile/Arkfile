@@ -10,7 +10,7 @@ import (
 // (USD per TiB per month, 30-day month) to the internal rate
 // (microcents per GiB per hour, binary GiB = 2^30).
 //
-// Spec §3.3: the derived rate must NEVER exceed the operator's stated price.
+// The derived rate must NEVER exceed the operator's stated price.
 // All values therefore floor-round.
 func TestComputeRate(t *testing.T) {
 	cases := []struct {

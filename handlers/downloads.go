@@ -59,7 +59,7 @@ func DownloadFileChunk(c echo.Context) error {
 	}
 
 	// Calculate byte range for this chunk.
-	// Phase C / Step 0 audit (Outcome A): every encrypted chunk is uniform
+	// every encrypted chunk is uniform
 	// [nonce (12)][ciphertext][tag (16)] = plaintext_chunk_size + 28. There
 	// is no chunk-0 envelope-header prefix in the chunk stream; the FEK
 	// envelope lives in file_metadata.encrypted_fek separately.
