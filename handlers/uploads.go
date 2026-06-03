@@ -284,11 +284,8 @@ func CreateUploadSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create upload session")
 	}
 
-	// Initialize multipart upload in storage with sessionID metadata
-	metadata := map[string]string{
-		"session-id":     sessionID,
-		"owner-username": username,
-	}
+	// Initialize multipart upload in storage with no identifying metadata
+	metadata := map[string]string{}
 
 	uploadID, err := storage.Registry.Primary().InitiateMultipartUpload(c.Request().Context(), storageID, metadata)
 	if err != nil {
