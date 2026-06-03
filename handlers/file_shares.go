@@ -156,7 +156,7 @@ func CreateFileShare(c echo.Context) error {
 	shareURL := baseURL + "/shared/" + request.ShareID
 
 	createdAt := time.Now()
-	logging.InfoLogger.Printf("Anonymous share created: file=%s, share_id=%s..., owner=%s", request.FileID, request.ShareID[:8], username)
+	logging.InfoLogger.Printf("Anonymous share created: file=%s, share_id=%s...", request.FileID, request.ShareID[:8])
 	database.LogUserAction(username, "created_share", fmt.Sprintf("file:%s, share:%s...", request.FileID, request.ShareID[:8]))
 
 	return c.JSON(http.StatusOK, ShareResponse{
@@ -344,7 +344,7 @@ func RevokeShare(c echo.Context) error {
 	}
 
 	database.LogUserAction(username, "revoked_share", shareID)
-	logging.InfoLogger.Printf("Share revoked: %s by %s", shareID, username)
+	logging.InfoLogger.Printf("Share revoked: %s", shareID)
 
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "Share revoked successfully",

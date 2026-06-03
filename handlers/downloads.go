@@ -110,7 +110,7 @@ func DownloadFileChunk(c echo.Context) error {
 
 	// Log the chunk download (only log first and last chunk to reduce noise)
 	if chunkIndex == 0 || chunkIndex == file.ChunkCount-1 {
-		logging.InfoLogger.Printf("Chunk download: file_id=%s chunk=%d/%d by %s (bytes %d-%d)", fileID, chunkIndex, file.ChunkCount, username, startByte, endByte)
+		logging.InfoLogger.Printf("Chunk download: file_id=%s chunk=%d/%d (bytes %d-%d)", fileID, chunkIndex, file.ChunkCount, startByte, endByte)
 	}
 
 	// Stream the chunk to the client

@@ -12,10 +12,8 @@ Arkfile's central promise (per `docs/AGENTS.md`) is that the server, and especia
 
 | Issue | Location | What and why it matters | Effort |
 |---|---|---|---|
-| Owner username written to S3 object metadata | `handlers/uploads.go` (`"owner-username": username` in the object user-metadata map) | Every storage backend, including third-party providers (Wasabi, Backblaze, etc.), sees the plaintext account username attached to each stored object. The DB already holds the file-to-owner mapping, so the storage-layer copy is unnecessary. This is the clearest current violation of the "storage knows nothing" thesis. | Low |
 | File size leaks to the server before padding | `handlers/uploads.go` (server applies random padding to the last chunk) | Padding is applied server-side, so the server observes the true unpadded ciphertext size before padding. A client-side padding strategy would prevent the server from ever seeing the unpadded size. | Medium |
 | Account key reused as the metadata encryption key | `crypto/file_operations.go` / metadata encrypt-decrypt paths | The same Account-KEK that wraps per-file FEKs also directly encrypts filename and SHA-256 metadata. There is no key domain separation (e.g. an HKDF-derived metadata subkey). A dedicated subkey would isolate the metadata-encryption role from the FEK-wrapping role. | Low-Medium |
-| Username and file identifier co-logged at INFO | `handlers/uploads.go`, `handlers/downloads.go`, `handlers/file_shares.go` (InfoLogger lines) | Several INFO log lines pair the plaintext username with the file identifier (and share creation logs the owner username). Taken together these reconstruct per-user file activity inside the logs, which is at odds with the no-PII logging posture that EntityID HMAC otherwise enforces. | Low |
 
 ---
 
@@ -75,8 +73,6 @@ Host- and build-level hardening items. These were intentionally deferred from ea
 
 | Issue | Location | What and why it matters | Effort |
 |---|---|---|---|
-| Missing process core-dump and related systemd hardening | `systemd/arkfile.service` (and the other unit files) | The unit has good hardening directives but is missing `LimitCORE=0` (and could add `MemoryDenyWriteExecute`, `LockPersonality`, `RestrictAddressFamilies`, etc.). `LimitCORE=0` is a one-line change that prevents the freshly memory-hardened user-secret master key from ever landing in a core dump. | Low |
-| rqlite binds all interfaces | `systemd/rqlite.service` (`-http-addr :4001`, `-raft-addr :4002`) | rqlite's HTTP and Raft ports bind to all interfaces rather than loopback. It is mitigated by `-auth`, but a host firewall misconfiguration would expose the database and Raft layer directly. Binding to loopback (the app is co-located) removes the exposure entirely. | Low |
 | Weak or unpinned dependency acquisition | `scripts/setup/` and deploy scripts | SeaweedFS integrity is verified with MD5; rqlite is built/pulled without a pinned commit or tag. Both should use SHA-256 and a pinned version respectively. | Low-Medium |
 | No vulnerability scanning or SBOM in the build | `scripts/setup/build.sh` and deploy scripts | The build does not run `govulncheck` or `bun audit`, and emits no SBOM. Adding these (failing on high-severity findings) closes a supply-chain visibility gap. | Low-Medium |
 
@@ -126,6 +122,13 @@ To prevent re-doing finished work, the following items are confirmed RESOLVED in
 - Soft-delete preserves the financial audit trail: `users.deleted_at` exists and user deletion is a soft-delete; `credit_transactions.transaction_id` has a UNIQUE constraint; a persistent `billing_sweeps` table prevents duplicate daily sweeps.
 - TOTP verification accepts an adjacent time window (skew of one) rather than zero.
 - Anonymous-share access-count race, per-share rate limiting and timing protection, and revoked-reason leakage are all resolved.
+
+### Resolved 2026-06-03
+The following security and privacy gaps are confirmed RESOLVED in the live code as of 2026-06-03:
+- **Owner username written to S3 object metadata**: Plaintext `"owner-username"` and `"session-id"` meta map keys removed from all multipart S3 upload calls.
+- **Username and file identifier co-logged at INFO**: Replaced co-logging of plaintext usernames and file IDs in all handlers (e.g. upload, chunk download, and anonymous share creation/revocation handlers) with standalone IDs or EntityID-based markers where applicable.
+- **rqlite binds all interfaces**: Restricted rqlite database's HTTP and Raft interfaces strictly to loopback binding (`127.0.0.1:4001` and `127.0.0.1:4002`) in systemd unit configs.
+- **Missing process core-dump and related systemd hardening**: Applied systemd-level core-dump suppression via `LimitCORE=0` inline hardening to all primary service unit files (`arkfile.service`, `rqlite.service`, `caddy.service`, and `seaweedfs.service`) to fully harden memory-stored keys against physical inspection core leaks.
 
 If a future check finds any of the above regressed, treat that as a high-priority regression rather than a planned item.
 

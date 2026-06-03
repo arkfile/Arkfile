@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=caddy
 Group=caddy
+LimitCORE=0
 ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile
 ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile
 

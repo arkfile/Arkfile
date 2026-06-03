@@ -6,12 +6,13 @@ After=network.target
 [Service]
 Type=simple
 User=arkfile
+LimitCORE=0
 Group=arkfile
 EnvironmentFile=/opt/arkfile/etc/secrets.env
 WorkingDirectory=/opt/arkfile/var/lib/database
 ExecStart=/usr/local/bin/rqlited \
-    -http-addr :4001 \
-    -raft-addr :4002 \
+    -http-addr 127.0.0.1:4001 \
+    -raft-addr 127.0.0.1:4002 \
     -node-id arkfile \
     -bootstrap-expect 1 \
     -auth /opt/arkfile/etc/rqlite-auth.json \

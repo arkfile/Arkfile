@@ -91,7 +91,7 @@ func GetFileMeta(c echo.Context) error {
 	chunkSize := crypto.PlaintextChunkSize()
 	totalChunks := (file.SizeBytes + chunkSize - 1) / chunkSize
 
-	logging.InfoLogger.Printf("File metadata requested: file_id %s by %s (size: %d bytes, chunks: %d)", fileID, username, file.SizeBytes, totalChunks)
+	logging.InfoLogger.Printf("File metadata requested: file_id %s (size: %d bytes, chunks: %d)", fileID, file.SizeBytes, totalChunks)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"file_id":               file.FileID,

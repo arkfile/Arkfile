@@ -312,8 +312,8 @@ func CreateUploadSession(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
 	}
 
-	logging.InfoLogger.Printf("Upload session created: %s by %s (file_id: %s, size: %d bytes)",
-		sessionID, username, fileID, request.TotalSize)
+	logging.InfoLogger.Printf("Upload session created: %s (file_id: %s, size: %d bytes)",
+		sessionID, fileID, request.TotalSize)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"session_id":   sessionID,
@@ -395,7 +395,7 @@ func CancelUpload(c echo.Context) error {
 	delete(storedBlobHashStates, sessionID)
 	hashStateMutex.Unlock()
 
-	logging.InfoLogger.Printf("Upload canceled: %s, file_id: %s by %s", sessionID, fileID, username)
+	logging.InfoLogger.Printf("Upload canceled: %s, file_id: %s", sessionID, fileID)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "Upload canceled successfully",
@@ -739,7 +739,7 @@ func CompleteUpload(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 	sessionID := c.Param("sessionId")
 
-	logging.InfoLogger.Printf("Attempting to complete upload for sessionID: '%s' by user: '%s'", sessionID, username)
+	logging.InfoLogger.Printf("Attempting to complete upload for sessionID: '%s'", sessionID)
 
 	// Step 1: Get session details without a transaction first.
 	// Numeric columns are scanned as interface{} to handle rqlite returning
@@ -1016,7 +1016,7 @@ func CompleteUpload(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to commit transaction")
 	}
 
-	logging.InfoLogger.Printf("Upload completed: %s, file_id: %s by %s (size: %d bytes)", sessionID, fileID.String, username, actualStoredSize)
+	logging.InfoLogger.Printf("Upload completed: %s, file_id: %s (size: %d bytes)", sessionID, fileID.String, actualStoredSize)
 	database.LogUserAction(username, "uploaded", fileID.String)
 
 	// Background replication to secondary provider (if enabled and configured).
@@ -1165,7 +1165,7 @@ func DeleteFile(c echo.Context) error {
 	}
 
 	database.LogUserAction(username, "deleted", fileID)
-	logging.InfoLogger.Printf("File deleted: file_id=%s by %s", fileID, username)
+	logging.InfoLogger.Printf("File deleted: file_id=%s", fileID)
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"message": "File deleted successfully",
