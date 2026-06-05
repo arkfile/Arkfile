@@ -6,14 +6,37 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/crypto/hkdf"
 
+	"github.com/84adam/Arkfile/config"
 	"github.com/84adam/Arkfile/crypto"
 	"github.com/84adam/Arkfile/logging"
 )
+
+// DefaultOpaqueServerID is the OPAQUE server identity (idS) used when no
+// deployment domain is resolved. Config normally always sets Server.Domain
+// (ARKFILE_DOMAIN, else BASE_URL host, else "localhost"), so this is a
+// defensive fallback that matches the config-level "localhost" default to keep
+// local and dev deployments authenticating deterministically.
+const DefaultOpaqueServerID = "localhost"
+
+// OpaqueServerID returns the OPAQUE server identity (idS) bound into the
+// protocol transcript. It is the deployment domain when configured, otherwise
+// DefaultOpaqueServerID. All OPAQUE participants (server, browser, CLI) must
+// use the exact same value, so the browser and CLI fetch it from the server
+// via GET /api/config/opaque rather than hardcoding it.
+func OpaqueServerID() string {
+	if cfg, err := config.LoadConfig(); err == nil {
+		if d := strings.TrimSpace(cfg.Server.Domain); d != "" {
+			return d
+		}
+	}
+	return DefaultOpaqueServerID
+}
 
 // DeriveFakeUserRecord deterministically generates a fake 256-byte OPAQUE user record for a non-existent username
 func DeriveFakeUserRecord(username string) ([]byte, error) {
@@ -32,12 +55,14 @@ func DeriveFakeUserRecord(username string) ([]byte, error) {
 	return fakeRecord, nil
 }
 
-// GetServerKeys returns the server's public and private keys for OPAQUE operations.
-func GetServerKeys() ([]byte, []byte, error) {
+// GetServerPrivateKey returns the server's OPAQUE private key. libopaque derives
+// the matching public key from this private key during the protocol, so there is
+// no separate stored public key.
+func GetServerPrivateKey() ([]byte, error) {
 	if serverKeys == nil {
-		return nil, nil, fmt.Errorf("server keys not loaded")
+		return nil, fmt.Errorf("server keys not loaded")
 	}
-	return serverKeys.ServerPublicKey, serverKeys.ServerPrivateKey, nil
+	return serverKeys.ServerPrivateKey, nil
 }
 
 // IsOPAQUEAvailable checks if OPAQUE operations are available
@@ -56,7 +81,6 @@ type OPAQUEUserData struct {
 // OPAQUEServerKeys represents the server's long-term key material for libopaque
 type OPAQUEServerKeys struct {
 	ServerPrivateKey []byte // 32-byte server private key (crypto_scalarmult_SCALARBYTES)
-	ServerPublicKey  []byte // 32-byte server public key (crypto_scalarmult_BYTES)
 	OPRFSeed         []byte // 32-byte OPRF seed (crypto_core_ristretto255_SCALARBYTES)
 	CreatedAt        time.Time
 }
@@ -83,23 +107,15 @@ func SetupServerKeys(db *sql.DB) error {
 		// libsodium constants (32 bytes each)
 		const (
 			serverPrivateKeySize = 32 // crypto_scalarmult_SCALARBYTES
-			serverPublicKeySize  = 32 // crypto_scalarmult_BYTES
 			oprfSeedSize         = 32 // crypto_core_ristretto255_SCALARBYTES
 		)
 
-		// Get or generate keys using KeyManager
-		// Note: In a real OPAQUE implementation, public key should be derived from private key.
-		// However, preserving existing behavior of independent generation for now.
-
+		// Only the private key and OPRF seed are persisted. libopaque derives
+		// the server public key from the private key during the protocol, so
+		// there is no separate public key to generate or store.
 		serverPrivateKey, err := km.GetOrGenerateKey("opaque_server_private_key", "opaque", serverPrivateKeySize)
 		if err != nil {
 			opaqueKeysErr = fmt.Errorf("failed to get/generate opaque server private key: %w", err)
-			return
-		}
-
-		serverPublicKey, err := km.GetOrGenerateKey("opaque_server_public_key", "opaque", serverPublicKeySize)
-		if err != nil {
-			opaqueKeysErr = fmt.Errorf("failed to get/generate opaque server public key: %w", err)
 			return
 		}
 
@@ -111,7 +127,6 @@ func SetupServerKeys(db *sql.DB) error {
 
 		serverKeys = &OPAQUEServerKeys{
 			ServerPrivateKey: serverPrivateKey,
-			ServerPublicKey:  serverPublicKey,
 			OPRFSeed:         oprfSeed,
 			CreatedAt:        time.Now(),
 		}

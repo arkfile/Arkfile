@@ -57,8 +57,9 @@ func CreateDevAdminWithOPAQUE(db *sql.DB, username, password string) (*models.Us
 		return nil, fmt.Errorf("failed to create registration response: %w", err)
 	}
 
-	// Step 3: Client finalizes registration
-	rrec, exportKey, err := ClientFinalizeRegistration(usrCtx, rpub, username)
+	// Step 3: Client finalizes registration. Runs in-process, so it reads the
+	// server identity directly from config (same value /api/config/opaque serves).
+	rrec, exportKey, err := ClientFinalizeRegistration(usrCtx, rpub, username, OpaqueServerID())
 	if err != nil {
 		return nil, fmt.Errorf("failed to finalize registration: %w", err)
 	}
@@ -326,8 +327,8 @@ func ValidateDevAdminAuthentication(db *sql.DB, username, password, totpSecret s
 		log.Printf("Warning: failed to cleanup validation session: %v", err)
 	}
 
-	// Client recovers credentials
-	_, authUClient, _, err := ClientRecoverCredentials(sec, credentialResponse, username)
+	// Client recovers credentials (in-process; idS from config)
+	_, authUClient, _, err := ClientRecoverCredentials(sec, credentialResponse, username, OpaqueServerID())
 	if err != nil {
 		return fmt.Errorf("client credential recovery failed: %w", err)
 	}

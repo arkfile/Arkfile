@@ -147,7 +147,11 @@ export class OpaqueClient {
   private module: LibOpaqueModule | null = null;
   private config: OpaqueConfig;
   private readonly context = 'arkfile_auth'; // Must match server-side context
-  private readonly serverId = 'server';
+  // OPAQUE server identity (idS). Fetched from /api/config/opaque during
+  // initialize() so the browser binds the exact same idS the server uses;
+  // a mismatch breaks authentication. Defaults to 'localhost' until fetched,
+  // matching the server's own config-level default when no domain is set.
+  private serverId = 'localhost';
   
   constructor() {
     // Configuration matching server setup
@@ -190,7 +194,24 @@ export class OpaqueClient {
         this.config.idS = this.module.NotPackaged;
         this.config.idU = this.module.NotPackaged;
       }
-      
+
+      // Fetch the OPAQUE server identity (idS) so the browser binds the same
+      // value the server uses. All OPAQUE participants must agree on idS or
+      // authentication fails. Fall back to the 'localhost' default only if the
+      // endpoint is unreachable (matches the server's own default).
+      try {
+        const resp = await fetch('/api/config/opaque');
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data && typeof data.server_id === 'string' && data.server_id !== '') {
+            this.serverId = data.server_id;
+          }
+        }
+      } catch {
+        // Keep the default 'localhost' identity; the server uses the same
+        // default when no domain is configured.
+      }
+
     } catch (error) {
       throw new CryptoError(
         `Failed to initialize OPAQUE: ${error instanceof Error ? error.message : String(error)}`,
@@ -199,6 +220,15 @@ export class OpaqueClient {
     }
   }
   
+  /**
+   * Returns the OPAQUE server identity (idS) currently in use. Exposed mainly
+   * so tests can assert the value adopted from /api/config/opaque; callers
+   * should not need this for normal operation.
+   */
+  getServerId(): string {
+    return this.serverId;
+  }
+
   /**
    * Start registration flow (step 1)
    * Client creates registration request

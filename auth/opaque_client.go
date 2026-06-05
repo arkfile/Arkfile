@@ -53,9 +53,11 @@ func ClientCreateRegistrationRequest(password []byte) ([]byte, []byte, error) {
 
 // ClientFinalizeRegistration finalizes the registration process
 // This is Step 3 of the registration flow (client-side)
-// Input: usrCtx (client context from step 1), serverResponse (rpub from server), username
+// Input: usrCtx (client context from step 1), serverResponse (rpub from server),
+// username, and serverID (idS, fetched from the server's /api/config/opaque so
+// it matches the server's OPAQUE transcript exactly).
 // Output: rrec (registration record to send to server), exportKey (client export key)
-func ClientFinalizeRegistration(usrCtx []byte, serverResponse []byte, username string) ([]byte, []byte, error) {
+func ClientFinalizeRegistration(usrCtx []byte, serverResponse []byte, username string, serverID string) ([]byte, []byte, error) {
 	// usrCtx length should be at least OPAQUE_REGISTER_USER_SEC_LEN (may be larger due to password)
 	if len(usrCtx) < OPAQUE_REGISTER_USER_SEC_LEN {
 		return nil, nil, fmt.Errorf("invalid user context length: expected at least %d, got %d",
@@ -67,6 +69,10 @@ func ClientFinalizeRegistration(usrCtx []byte, serverResponse []byte, username s
 			OPAQUE_REGISTER_PUBLIC_LEN, len(serverResponse))
 	}
 
+	if serverID == "" {
+		return nil, nil, fmt.Errorf("server identity (idS) is required")
+	}
+
 	// Allocate buffers
 	rrec := make([]byte, OPAQUE_REGISTRATION_RECORD_LEN)
 	exportKey := make([]byte, 32) // crypto_hash_sha256_BYTES
@@ -75,8 +81,9 @@ func ClientFinalizeRegistration(usrCtx []byte, serverResponse []byte, username s
 	idU := []byte(username)
 	idULen := uint16(len(idU))
 
-	// Use default server ID "server" for now
-	idS := []byte("server")
+	// Server identity (idS) bound into the OPAQUE transcript; must match the
+	// server's configured value.
+	idS := []byte(serverID)
 	idSLen := uint16(len(idS))
 
 	// Convert Go slices to C pointers
@@ -147,9 +154,11 @@ func ClientCreateCredentialRequest(password []byte) ([]byte, []byte, error) {
 
 // ClientRecoverCredentials recovers credentials from server response
 // This is Step 3 of the authentication flow (client-side)
-// Input: sec (client secret from step 1), serverResponse (credential response from server), username
+// Input: sec (client secret from step 1), serverResponse (credential response from
+// server), username, and serverID (idS, fetched from /api/config/opaque so it
+// matches the server's OPAQUE transcript exactly).
 // Output: sk (session key), authU (authentication token to send to server), exportKey (client export key)
-func ClientRecoverCredentials(sec []byte, serverResponse []byte, username string) ([]byte, []byte, []byte, error) {
+func ClientRecoverCredentials(sec []byte, serverResponse []byte, username string, serverID string) ([]byte, []byte, []byte, error) {
 	// sec length should be at least OPAQUE_USER_SESSION_SECRET_LEN (may be larger due to password)
 	if len(sec) < OPAQUE_USER_SESSION_SECRET_LEN {
 		return nil, nil, nil, fmt.Errorf("invalid client secret length: expected at least %d, got %d",
@@ -161,6 +170,10 @@ func ClientRecoverCredentials(sec []byte, serverResponse []byte, username string
 			OPAQUE_SERVER_SESSION_LEN, len(serverResponse))
 	}
 
+	if serverID == "" {
+		return nil, nil, nil, fmt.Errorf("server identity (idS) is required")
+	}
+
 	// Allocate buffers
 	sk := make([]byte, OPAQUE_SHARED_SECRETBYTES)
 	authU := make([]byte, 64)     // crypto_auth_hmacsha512_BYTES
@@ -170,8 +183,9 @@ func ClientRecoverCredentials(sec []byte, serverResponse []byte, username string
 	idU := []byte(username)
 	idULen := uint16(len(idU))
 
-	// Use default server ID "server" for now
-	idS := []byte("server")
+	// Server identity (idS) bound into the OPAQUE transcript; must match the
+	// server's configured value.
+	idS := []byte(serverID)
 	idSLen := uint16(len(idS))
 
 	// Prepare context

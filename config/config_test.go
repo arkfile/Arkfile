@@ -136,6 +136,78 @@ func TestAWSS3ConfigValidation(t *testing.T) {
 	}
 }
 
+// TestServerDomainConfig verifies the resolution precedence for the OPAQUE
+// server identity (idS) domain: ARKFILE_DOMAIN wins; else the BASE_URL host
+// (scheme/path/port stripped); else "localhost". All OPAQUE participants must
+// agree on this value, so it must be deterministic.
+func TestServerDomainConfig(t *testing.T) {
+	// Minimal storage env so LoadConfig() passes validation.
+	baseEnv := map[string]string{
+		"STORAGE_PROVIDER_1":   "generic-s3",
+		"STORAGE_1_ENDPOINT":   "http://localhost:9332",
+		"STORAGE_1_ACCESS_KEY": "test",
+		"STORAGE_1_SECRET_KEY": "test",
+		"STORAGE_1_BUCKET":     "test",
+	}
+
+	cases := []struct {
+		name        string
+		domainValue string // "" means unset
+		baseURL     string // "" means unset
+		wantDomain  string
+	}{
+		{name: "both unset falls back to localhost", domainValue: "", baseURL: "", wantDomain: "localhost"},
+		{name: "ARKFILE_DOMAIN wins over BASE_URL", domainValue: "id.arkfile.net", baseURL: "https://other.example.com", wantDomain: "id.arkfile.net"},
+		{name: "derives host from BASE_URL when domain unset", domainValue: "", baseURL: "https://test.arkfile.net", wantDomain: "test.arkfile.net"},
+		{name: "strips port from BASE_URL host", domainValue: "", baseURL: "https://test.arkfile.net:8443", wantDomain: "test.arkfile.net"},
+		{name: "configured FQDN is used verbatim", domainValue: "test.arkfile.net", baseURL: "", wantDomain: "test.arkfile.net"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ResetConfigForTest()
+
+			keys := []string{"ARKFILE_DOMAIN", "BASE_URL"}
+			for k := range baseEnv {
+				keys = append(keys, k)
+			}
+			originalEnv := make(map[string]string)
+			for _, k := range keys {
+				originalEnv[k] = os.Getenv(k)
+			}
+			defer func() {
+				for _, k := range keys {
+					if originalEnv[k] == "" {
+						os.Unsetenv(k)
+					} else {
+						os.Setenv(k, originalEnv[k])
+					}
+				}
+				ResetConfigForTest()
+			}()
+
+			for k, v := range baseEnv {
+				os.Setenv(k, v)
+			}
+			if tc.domainValue == "" {
+				os.Unsetenv("ARKFILE_DOMAIN")
+			} else {
+				os.Setenv("ARKFILE_DOMAIN", tc.domainValue)
+			}
+			if tc.baseURL == "" {
+				os.Unsetenv("BASE_URL")
+			} else {
+				os.Setenv("BASE_URL", tc.baseURL)
+			}
+
+			cfg, err := LoadConfig()
+			assert.NoError(t, err)
+			assert.NotNil(t, cfg)
+			assert.Equal(t, tc.wantDomain, cfg.Server.Domain)
+		})
+	}
+}
+
 // TestStorageProviderSupport tests that aws-s3 is recognized as a supported provider
 func TestStorageProviderSupport(t *testing.T) {
 	ResetConfigForTest()
@@ -237,6 +309,7 @@ func TestValidateProductionConfig_RejectsDevTestAPIInProduction(t *testing.T) {
 		"ENV",
 		"ADMIN_DEV_TEST_API_ENABLED",
 		"ADMIN_USERNAMES",
+		"ARKFILE_DOMAIN",
 		// Storage envs that LoadConfig requires:
 		"STORAGE_PROVIDER_1",
 		"STORAGE_1_ENDPOINT",
@@ -267,6 +340,10 @@ func TestValidateProductionConfig_RejectsDevTestAPIInProduction(t *testing.T) {
 	os.Setenv("STORAGE_1_BUCKET", "test")
 	// Use a non-dev admin username so the dev-admin check doesn't fire first.
 	os.Setenv("ADMIN_USERNAMES", "real-admin")
+	// Provide a real FQDN so the production domain guard passes for the
+	// "allowed" cases; the dedicated domain-guard test below exercises the
+	// missing/localhost paths separately.
+	os.Setenv("ARKFILE_DOMAIN", "prod.arkfile.net")
 
 	cases := []struct {
 		name         string
@@ -330,6 +407,86 @@ func TestValidateProductionConfig_RejectsDevTestAPIInProduction(t *testing.T) {
 				}
 				assert.Contains(t, err.Error(), tc.wantErrSub,
 					"error should mention the offending env var")
+			}
+		})
+	}
+}
+
+// TestValidateProductionConfig_RequiresDomain proves the OPAQUE idS guard:
+// production must refuse to start when the resolved domain is empty or
+// "localhost" (i.e. neither ARKFILE_DOMAIN nor BASE_URL was set to a real
+// FQDN), and must accept a real FQDN.
+func TestValidateProductionConfig_RequiresDomain(t *testing.T) {
+	envKeys := []string{
+		"ENVIRONMENT",
+		"ADMIN_DEV_TEST_API_ENABLED",
+		"ADMIN_USERNAMES",
+		"ARKFILE_DOMAIN",
+		"BASE_URL",
+		"STORAGE_PROVIDER_1",
+		"STORAGE_1_ENDPOINT",
+		"STORAGE_1_ACCESS_KEY",
+		"STORAGE_1_SECRET_KEY",
+		"STORAGE_1_BUCKET",
+	}
+	originalEnv := map[string]string{}
+	for _, k := range envKeys {
+		originalEnv[k] = os.Getenv(k)
+	}
+	defer func() {
+		for _, k := range envKeys {
+			if originalEnv[k] == "" {
+				os.Unsetenv(k)
+			} else {
+				os.Setenv(k, originalEnv[k])
+			}
+		}
+		ResetConfigForTest()
+	}()
+
+	os.Setenv("ENVIRONMENT", "production")
+	os.Setenv("ADMIN_DEV_TEST_API_ENABLED", "false")
+	os.Setenv("ADMIN_USERNAMES", "real-admin")
+	os.Setenv("STORAGE_PROVIDER_1", "generic-s3")
+	os.Setenv("STORAGE_1_ENDPOINT", "http://localhost:9332")
+	os.Setenv("STORAGE_1_ACCESS_KEY", "test")
+	os.Setenv("STORAGE_1_SECRET_KEY", "test")
+	os.Setenv("STORAGE_1_BUCKET", "test")
+
+	cases := []struct {
+		name      string
+		domain    string // "" means unset
+		baseURL   string // "" means unset
+		wantBlock bool
+	}{
+		{name: "no domain or base url => blocked (localhost fallback)", domain: "", baseURL: "", wantBlock: true},
+		{name: "explicit localhost => blocked", domain: "localhost", baseURL: "", wantBlock: true},
+		{name: "real ARKFILE_DOMAIN => allowed", domain: "prod.arkfile.net", baseURL: "", wantBlock: false},
+		{name: "real BASE_URL host => allowed", domain: "", baseURL: "https://prod.arkfile.net", wantBlock: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ResetConfigForTest()
+			if tc.domain == "" {
+				os.Unsetenv("ARKFILE_DOMAIN")
+			} else {
+				os.Setenv("ARKFILE_DOMAIN", tc.domain)
+			}
+			if tc.baseURL == "" {
+				os.Unsetenv("BASE_URL")
+			} else {
+				os.Setenv("BASE_URL", tc.baseURL)
+			}
+
+			err := ValidateProductionConfig()
+			if tc.wantBlock {
+				if err == nil {
+					t.Fatalf("expected production to be blocked for domain=%q baseURL=%q", tc.domain, tc.baseURL)
+				}
+				assert.Contains(t, err.Error(), "ARKFILE_DOMAIN")
+			} else {
+				assert.NoError(t, err, "production should be allowed for domain=%q baseURL=%q", tc.domain, tc.baseURL)
 			}
 		})
 	}

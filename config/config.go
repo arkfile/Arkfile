@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -14,6 +15,29 @@ import (
 	"github.com/84adam/Arkfile/utils"
 )
 
+// hostFromBaseURL extracts the bare hostname from a BASE_URL value, stripping
+// the scheme, any path, and any :port. Returns "" if no host can be parsed.
+// Examples:
+//
+//	"https://test.arkfile.net"      -> "test.arkfile.net"
+//	"https://test.arkfile.net:8443" -> "test.arkfile.net"
+//	"test.arkfile.net"              -> "test.arkfile.net"
+func hostFromBaseURL(baseURL string) string {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return ""
+	}
+	// url.Parse only populates Host when a scheme is present; add one if needed.
+	if !strings.Contains(baseURL, "://") {
+		baseURL = "https://" + baseURL
+	}
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
 var (
 	config     *Config
 	configOnce sync.Once
@@ -21,10 +45,18 @@ var (
 
 type Config struct {
 	Server struct {
-		Port           string   `json:"port"`
-		TLSPort        string   `json:"tls_port"`
-		Host           string   `json:"host"`
-		BaseURL        string   `json:"base_url"`
+		Port    string `json:"port"`
+		TLSPort string `json:"tls_port"`
+		Host    string `json:"host"`
+		BaseURL string `json:"base_url"`
+		// Domain is the deployment FQDN bound into the OPAQUE server identity
+		// (idS). All OPAQUE clients (browser, CLI) must use the exact same value
+		// or authentication fails, so it is sourced from this single server
+		// config and served to clients via /api/config/opaque. Resolved from
+		// ARKFILE_DOMAIN, else the BASE_URL host, else "localhost" (see
+		// loadEnvConfig). Production deployments must resolve to a real FQDN;
+		// ValidateProductionConfig fails closed otherwise.
+		Domain         string   `json:"domain"`
 		LogLevel       string   `json:"log_level"`
 		TLSEnabled     bool     `json:"tls_enabled"`
 		AllowedOrigins []string `json:"allowed_origins"`
@@ -290,6 +322,19 @@ func loadEnvConfig(cfg *Config) error {
 	if baseURL := os.Getenv("BASE_URL"); baseURL != "" {
 		cfg.Server.BaseURL = baseURL
 	}
+	// Resolve the OPAQUE server identity (idS) domain with this precedence:
+	//   1. ARKFILE_DOMAIN env (explicit; written by deploy scripts)
+	//   2. host parsed from BASE_URL (scheme/path/port stripped)
+	//   3. "localhost" default (local/LAN deployments have no single FQDN)
+	// All OPAQUE participants must agree on this value, so it is the single
+	// source of truth served to clients via /api/config/opaque.
+	if domain := strings.TrimSpace(os.Getenv("ARKFILE_DOMAIN")); domain != "" {
+		cfg.Server.Domain = domain
+	} else if host := hostFromBaseURL(cfg.Server.BaseURL); host != "" {
+		cfg.Server.Domain = host
+	} else {
+		cfg.Server.Domain = "localhost"
+	}
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" {
 		cfg.Server.LogLevel = logLevel
 	}
@@ -498,6 +543,15 @@ func ValidateProductionConfig() error {
 		cfg, err := LoadConfig()
 		if err != nil {
 			return fmt.Errorf("failed to load config for production validation: %w", err)
+		}
+
+		// The OPAQUE server identity (idS) must be bound to a real deployment
+		// FQDN in production. A missing/"localhost" domain means ARKFILE_DOMAIN
+		// and BASE_URL were both unset, so idS would silently fall back to the
+		// local default - defeating the purpose of binding it. Fail closed.
+		domain := strings.TrimSpace(cfg.Server.Domain)
+		if domain == "" || domain == "localhost" {
+			return fmt.Errorf("FATAL: ARKFILE_DOMAIN (or BASE_URL) must be set to the deployment FQDN in production; got %q - deployment blocked", domain)
 		}
 
 		// Check for dev admin accounts in configuration

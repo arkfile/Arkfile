@@ -288,6 +288,9 @@ RQLITE_PASSWORD=${rqlite_password}
 PORT=8080
 BASE_URL=https://${DOMAIN}
 CORS_ALLOWED_ORIGINS=https://${DOMAIN}
+# OPAQUE server identity (idS) bound into the auth protocol. REQUIRED.
+# Must match the public FQDN; all OPAQUE clients fetch it via /api/config/opaque.
+ARKFILE_DOMAIN=${DOMAIN}
 
 # TLS Configuration
 TLS_ENABLED=true

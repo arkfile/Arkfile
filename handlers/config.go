@@ -3,10 +3,20 @@ package handlers
 import (
 	"net/http"
 
+	"github.com/84adam/Arkfile/auth"
 	"github.com/84adam/Arkfile/config"
 	"github.com/84adam/Arkfile/crypto"
 	"github.com/labstack/echo/v4"
 )
+
+// GetOpaqueConfig returns the OPAQUE server identity (idS) bound into the
+// protocol transcript. The browser and CLI clients fetch this so all OPAQUE
+// participants use the exact same idS bytes; a mismatch breaks authentication.
+func GetOpaqueConfig(c echo.Context) error {
+	return c.JSON(http.StatusOK, map[string]string{
+		"server_id": auth.OpaqueServerID(),
+	})
+}
 
 // GetArgon2Config returns the Argon2id parameters configuration from embedded data
 // This ensures TypeScript and Go use the same parameters

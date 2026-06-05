@@ -459,6 +459,37 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 	return &apiResp, nil
 }
 
+// fetchOpaqueServerID retrieves the OPAQUE server identity (idS) from the
+// server's public /api/config/opaque endpoint. All OPAQUE participants must
+// bind the exact same idS into the protocol transcript, so the CLI fetches it
+// from the server rather than hardcoding it.
+func (c *HTTPClient) fetchOpaqueServerID() (string, error) {
+	req, err := http.NewRequest("GET", c.baseURL+"/api/config/opaque", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status %d fetching OPAQUE server identity", resp.StatusCode)
+	}
+
+	var parsed struct {
+		ServerID string `json:"server_id"`
+	}
+	if err := decodeJSONResponse(resp, &parsed); err != nil {
+		return "", fmt.Errorf("failed to parse OPAQUE config: %w", err)
+	}
+	if parsed.ServerID == "" {
+		return "", fmt.Errorf("server returned empty OPAQUE server identity")
+	}
+	return parsed.ServerID, nil
+}
+
 // decodeJSONResponse decodes a raw http.Response body into a target struct
 func decodeJSONResponse(resp *http.Response, target interface{}) error {
 	data, err := io.ReadAll(resp.Body)
@@ -584,7 +615,12 @@ func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []stri
 		return fmt.Errorf("failed to decode registration response: %w", err)
 	}
 
-	registrationRecord, _, err := auth.ClientFinalizeRegistration(clientSecret, registrationResponse, *usernameFlag)
+	serverID, err := client.fetchOpaqueServerID()
+	if err != nil {
+		return fmt.Errorf("failed to fetch OPAQUE server identity: %w", err)
+	}
+
+	registrationRecord, _, err := auth.ClientFinalizeRegistration(clientSecret, registrationResponse, *usernameFlag, serverID)
 	if err != nil {
 		return fmt.Errorf("failed to finalize registration: %w", err)
 	}
@@ -867,9 +903,15 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		return fmt.Errorf("failed to decode credential response: %w", err)
 	}
 
+	serverID, err := client.fetchOpaqueServerID()
+	if err != nil {
+		clearBytes(password)
+		return fmt.Errorf("failed to fetch OPAQUE server identity: %w", err)
+	}
+
 	// sk is the OPAQUE session key -- used only to prove authentication to the server.
 	// It has no role in file encryption and is discarded after login finalize.
-	sk, authU, _, err := auth.ClientRecoverCredentials(clientSecret, credentialResponse, *usernameFlag)
+	sk, authU, _, err := auth.ClientRecoverCredentials(clientSecret, credentialResponse, *usernameFlag, serverID)
 	if err != nil {
 		clearBytes(password)
 		return fmt.Errorf("incorrect password or account not found")

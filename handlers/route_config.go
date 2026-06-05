@@ -63,6 +63,9 @@ func RegisterRoutes() {
 	Echo.GET("/api/config/argon2", GetArgon2Config)
 	Echo.GET("/api/config/password-requirements", GetPasswordRequirements)
 	Echo.GET("/api/config/chunking", GetChunkingConfig)
+	// OPAQUE server identity (idS); browser + CLI fetch this so all OPAQUE
+	// participants bind the same server identity into the protocol transcript.
+	Echo.GET("/api/config/opaque", GetOpaqueConfig)
 
 	// Version endpoint (public)
 	Echo.GET("/api/version", GetVersion)

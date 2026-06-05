@@ -34,15 +34,10 @@ File content confidentiality is solid, and per-chunk tamper detection is now enf
 
 ## 3. OPAQUE Protocol Correctness
 
-The OPAQUE primitives are sound and the CGO boundary was previously audited. These are the remaining correctness and hygiene items on the OPAQUE path.
-
-| Issue | Location | What and why it matters | Effort |
-|---|---|---|---|
-| Server public key generated independently rather than derived | `auth/opaque.go` (`opaque_server_public_key` obtained via `GetOrGenerateKey`) | The OPAQUE server public key is stored as its own independently generated key instead of being derived from the server private key. Deriving it would remove a class of "the stored public key does not match the private key" failure modes. | Low-Medium |
-| Server identity hardcoded as "server" | `auth/opaque_multi_step.go`, `auth/opaque_client.go` (`idS := []byte("server")`, with a "could be configurable later" comment) | The OPAQUE server identity is a fixed literal rather than being bound to the deployment FQDN. Binding it to the deployment identity strengthens the protocol's domain separation between deployments. Note the greenfield "for now" comment here is exactly the kind of placeholder `docs/AGENTS.md` asks us to flag. | Low-Medium |
-| CGO password-buffer hygiene | `auth/opaque_wrapper.c`, `auth/opaque_multi_step.go` (`StoreUserRecord` double-buffer pattern) | The password buffer is not zeroed in the C heap after use, and the double-buffer pattern in the record-store path is internally inconsistent. Tightening this reduces the window in which password material lingers in process memory. | Medium |
+**All items in this section are RESOLVED as of 2026-06-05** (see "Resolved 2026-06-05" below). The OPAQUE primitives were already sound; this session completed the remaining correctness and hygiene items: the server public key is no longer stored independently (libopaque derives it from the private key), the server identity (idS) is now bound to the deployment FQDN instead of a hardcoded "server" literal, and the CGO key-material buffers are scrubbed after use. No OPAQUE-path items remain open.
 
 ---
+
 
 ## 4. Account and Identity Hygiene
 
@@ -94,7 +89,7 @@ Lower-stakes cleanups that reduce future friction, in line with the `docs/AGENTS
 | Build-tagged integration tests excluded from default test runs | `handlers/chunked_upload_integration_test.go` (and the 100MB variant) | The chunked-upload integration tests carry a build tag that excludes them from `go test ./...`, so the only end-to-end upload coverage is silently skipped by default. They should run in the standard suite or in CI. | Low |
 | Driver-quirk workaround retained | rqlite base64 decode workaround in the data layer | A base64 "decode if needed" workaround papers over an rqlite driver quirk. Per greenfield policy this should be understood and removed rather than retained indefinitely. | Low-Medium |
 | Minor dedup and constraint gaps | `handlers/files.go` (batch metadata does not dedup file IDs), upload-chunk uniqueness | Small data-hygiene items: the batch metadata request does not deduplicate its input IDs, and per-chunk uniqueness constraints are looser than they could be. | Low |
-| Residual "for now" / placeholder comments | OPAQUE server identity (see section 3) and similar | Any comment indicating a temporary or placeholder implementation should be flagged and resolved, per `docs/AGENTS.md`. | Low |
+| Residual "for now" / placeholder comments | (OPAQUE server-identity placeholder resolved 2026-06-05) and similar | Any comment indicating a temporary or placeholder implementation should be flagged and resolved, per `docs/AGENTS.md`. The previously flagged OPAQUE idS "for now" comment is gone; this row remains as a standing reminder to flag any new placeholders. | Low |
 
 ---
 
@@ -132,6 +127,14 @@ The following security and privacy gaps are confirmed RESOLVED in the live code 
 - **Client-supplied chunk hash never verified**: `UploadChunk` in `handlers/uploads.go` now compares the client `X-Chunk-Hash` header against the SHA-256 of the received encrypted chunk bytes and rejects a mismatch with HTTP 400 and stable error code `chunk_hash_mismatch` before the part is stored. This closes the former misleading no-op (the header was format-checked but never compared) and adds an early transport-integrity / corruption-detection check; per-chunk AEAD remains the authoritative tamper protection on download. Covered by `TestUploadChunk_RejectsChunkHashMismatch`.
 
 
+### Resolved 2026-06-05
+The entire OPAQUE-hardening area (former section 3) was completed and verified end-to-end (dev-reset + e2e + Playwright all passed). Confirmed RESOLVED in the live code as of 2026-06-05:
+- **OPAQUE server public key generated independently**: Removed the independently generated `opaque_server_public_key`. libopaque derives the server public key from the private key during the protocol, so only the private key and OPRF seed are persisted. `auth/opaque.go` now exposes `GetServerPrivateKey()` (replacing `GetServerKeys()`), and the vestigial `opaque_server_keys.server_public_key` column is documented as such in `database/unified_schema.sql`.
+- **OPAQUE server identity hardcoded as "server"**: idS is now bound to the deployment identity. `config.Server.Domain` resolves `ARKFILE_DOMAIN` -> the `BASE_URL` host (scheme/path/port stripped) -> `"localhost"`; `auth.OpaqueServerID()` is the single source of truth, served to clients via the new public `GET /api/config/opaque` endpoint. The browser WASM client (`opaque.ts`) and the Go CLIs (`arkfile-client`, `arkfile-admin`) fetch it and pass it into the parameterized `ClientFinalizeRegistration` / `ClientRecoverCredentials`. The "for now" placeholder comment is gone. `ValidateProductionConfig` now fails closed when a production deployment resolves to an empty/`localhost` domain.
+  - **Operational requirement (breaking auth change):** `ARKFILE_DOMAIN` is now REQUIRED. `test-deploy.sh` / `prod-deploy.sh` write `ARKFILE_DOMAIN=${DOMAIN}` into `secrets.env`; `local-deploy.sh` writes `ARKFILE_DOMAIN=localhost`; `test-update.sh` / `prod-update.sh` hard-fail if it is missing (no backfill). Because idS is baked into each OPAQUE registration record, this required a greenfield reset (completed 2026-06-05).
+- **CGO key-material buffer hygiene**: `auth/opaque_multi_step.go` now scrubs the sensitive C-heap copies (server secret, client record, user record) before they are freed in `StoreUserRecord`, and zeroes the unused server-side session key in `CreateCredentialResponse`, via `zeroCBytes`/`zeroBytes` helpers.
+- Coverage added: `config` precedence + production domain-guard tests, `auth.OpaqueServerID` test, `handlers.GetOpaqueConfig` endpoint test, and `opaque-server-id.test.ts` (fetch/fallback). Go build, `go test ./config ./handlers ./auth`, `tsc --noEmit`, and the full `bun test` suite (365/0) all pass.
+
 If a future check finds any of the above regressed, treat that as a high-priority regression rather than a planned item.
 
 ---
@@ -142,9 +145,9 @@ Note (2026-06-03): the original top recommendations in this section have already
 
 The most valuable remaining work is file-transfer robustness. With per-chunk AAD now enforced, the active-tampering risk these items once carried is largely mitigated, but several are plain correctness and availability bugs that bite exactly the use case the project cares most about: a user on a constrained device moving a very large file. The two highest-value items are persisting upload hash state across restarts (so a mid-upload server restart does not force the client to re-upload the whole file) and verifying the served blob against `stored_blob_sha256sum` on the multi-provider download fallback path (so a divergent or corrupted secondary copy is never served undetected). The two browser-side download items (plaintext-to-disk before end-of-file hash, and the missing end-of-file check on the Blob fallback path) and making background replication cancellable round out this group.
 
-The second area is a focused OPAQUE-hardening session, bundling the OPAQUE items together rather than doing them piecemeal: derive the server public key from the server private key, bind the server identity to the deployment FQDN instead of the hardcoded "server" literal (which also clears a flagged "for now" placeholder), and tighten CGO password-buffer hygiene.
+Update (2026-06-05): the focused OPAQUE-hardening session that was previously the second-priority area is now DONE (see "Resolved 2026-06-05"): the server public key is derived rather than stored, the server identity is bound to the deployment FQDN, and the CGO key-material buffers are scrubbed. It is no longer a remaining focus area.
 
-The third area is the remaining privacy-leakage item that is not deferred: client-side padding so the server never observes the true unpadded ciphertext size. This is a Medium-effort change touching the upload pipeline and clients, so it is worth scheduling deliberately rather than squeezing in.
+The second area is the remaining privacy-leakage item that is not deferred: client-side padding so the server never observes the true unpadded ciphertext size. This is a Medium-effort change touching the upload pipeline and clients, so it is worth scheduling deliberately rather than squeezing in.
 
 Everything else, including host/build supply-chain hardening (pinned dependencies, SHA-256 integrity, govulncheck/SBOM), the username normalization policy, the sharing residuals (Origin-header trust, EntityID rotation tradeoff, unbounded access-attempts table), and the code-hygiene cleanups, is genuinely useful but lower-leverage and can be slotted into later sessions once the areas above are in good shape.
 

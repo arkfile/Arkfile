@@ -141,6 +141,17 @@ DOMAIN="${BASE_URL_VALUE%/}"
 DOMAIN="${DOMAIN#https://}"
 DOMAIN="${DOMAIN#http://}"
 
+# ARKFILE_DOMAIN binds the OPAQUE server identity (idS); it is REQUIRED.
+# Update scripts assume a complete secrets.env and hard-fail if it is missing
+# rather than silently backfilling (which could change idS out from under
+# existing user records).
+ARKFILE_DOMAIN_VALUE=$(read_secrets_env_value "ARKFILE_DOMAIN")
+if [ -z "$ARKFILE_DOMAIN_VALUE" ]; then
+    print_status "ERROR" "ARKFILE_DOMAIN is not set in $SECRETS_ENV"
+    print_status "ERROR" "It is required (OPAQUE server identity). Add 'ARKFILE_DOMAIN=${DOMAIN}' and retry."
+    exit 1
+fi
+
 # Detect storage backends from existing secrets.env
 STORAGE_PROVIDER=$(read_secrets_env_value "STORAGE_PROVIDER_1")
 if [ -z "$STORAGE_PROVIDER" ]; then

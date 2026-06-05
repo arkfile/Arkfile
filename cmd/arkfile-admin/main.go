@@ -494,6 +494,41 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 	return &apiResp, nil
 }
 
+// fetchOpaqueServerID retrieves the OPAQUE server identity (idS) from the
+// server's public /api/config/opaque endpoint. All OPAQUE participants must
+// bind the exact same idS into the protocol transcript, so the CLI fetches it
+// from the server rather than hardcoding it.
+func (c *HTTPClient) fetchOpaqueServerID() (string, error) {
+	req, err := http.NewRequest("GET", c.baseURL+"/api/config/opaque", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status %d fetching OPAQUE server identity", resp.StatusCode)
+	}
+
+	var parsed struct {
+		ServerID string `json:"server_id"`
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read OPAQUE config: %w", err)
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return "", fmt.Errorf("failed to parse OPAQUE config: %w", err)
+	}
+	if parsed.ServerID == "" {
+		return "", fmt.Errorf("server returned empty OPAQUE server identity")
+	}
+	return parsed.ServerID, nil
+}
+
 // handleBootstrapCommand processes the bootstrap command
 func handleBootstrapCommand(client *HTTPClient, config *AdminConfig, args []string) error {
 	fs := flag.NewFlagSet("bootstrap", flag.ExitOnError)
@@ -616,8 +651,13 @@ EXAMPLES:
 		return fmt.Errorf("failed to decode registration response: %w", err)
 	}
 
-	// Step 4: Finalize registration (client-side)
-	registrationRecord, _, err := auth.ClientFinalizeRegistration(clientSecret, registrationResponse, *usernameFlag)
+	// Step 4: Finalize registration (client-side). idS is fetched from the
+	// server so all OPAQUE participants bind the same server identity.
+	serverID, err := client.fetchOpaqueServerID()
+	if err != nil {
+		return fmt.Errorf("failed to fetch OPAQUE server identity: %w", err)
+	}
+	registrationRecord, _, err := auth.ClientFinalizeRegistration(clientSecret, registrationResponse, *usernameFlag, serverID)
 	if err != nil {
 		return fmt.Errorf("failed to finalize registration: %w", err)
 	}
@@ -900,8 +940,13 @@ EXAMPLES:
 		return fmt.Errorf("failed to decode credential response: %w", err)
 	}
 
-	// Step 3: Recover credentials and create auth token
-	_, authU, exportKey, err := auth.ClientRecoverCredentials(clientState, credentialResponse, *usernameFlag)
+	// Step 3: Recover credentials and create auth token. idS is fetched from
+	// the server so all OPAQUE participants bind the same server identity.
+	serverID, err := client.fetchOpaqueServerID()
+	if err != nil {
+		return fmt.Errorf("failed to fetch OPAQUE server identity: %w", err)
+	}
+	_, authU, exportKey, err := auth.ClientRecoverCredentials(clientState, credentialResponse, *usernameFlag, serverID)
 	if err != nil {
 		return fmt.Errorf("incorrect password or account not found")
 	}

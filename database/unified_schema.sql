@@ -64,10 +64,14 @@ CREATE TABLE IF NOT EXISTS system_keys (
 -- =====================================================
 
 -- OPAQUE server keys (single row table for server-wide keys)
+-- NOTE: server_public_key is vestigial. libopaque derives the server public
+-- key from the private key during the protocol, so Arkfile does not store or
+-- use a separate public key (the live key material lives in system_keys via
+-- the KeyManager). The column is retained only for backward compatibility.
 CREATE TABLE IF NOT EXISTS opaque_server_keys (
     id INTEGER PRIMARY KEY CHECK (id = 1),      -- Enforce single row
     server_secret_key BLOB NOT NULL,
-    server_public_key BLOB NOT NULL,
+    server_public_key BLOB NOT NULL,            -- vestigial; see note above
     oprf_seed BLOB NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP

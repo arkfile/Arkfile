@@ -731,6 +731,9 @@ RQLITE_PASSWORD=${RQLITE_PASSWORD}
 # Arkfile Application Configuration
 PORT=${HTTP_PORT}
 CORS_ALLOWED_ORIGINS=https://localhost:${TLS_PORT},https://${LAN_IP}:${TLS_PORT}
+# OPAQUE server identity (idS). Local/LAN deployments have no single public FQDN,
+# so this is pinned to "localhost"; all OPAQUE clients fetch it via /api/config/opaque.
+ARKFILE_DOMAIN=localhost
 
 # TLS Configuration (Arkfile serves its own TLS directly)
 TLS_ENABLED=true

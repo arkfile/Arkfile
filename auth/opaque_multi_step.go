@@ -18,6 +18,27 @@ import (
 	"github.com/google/uuid"
 )
 
+// zeroCBytes overwrites a C-heap buffer of the given length with zeros before
+// it is freed, so sensitive material (server secrets, user records) does not
+// linger in process memory after use.
+func zeroCBytes(p unsafe.Pointer, n int) {
+	if p == nil || n <= 0 {
+		return
+	}
+	b := (*[1 << 30]byte)(p)[:n:n]
+	for i := range b {
+		b[i] = 0
+	}
+}
+
+// zeroBytes overwrites a Go byte slice with zeros. Used to scrub sensitive
+// OPAQUE session material that is not returned to the caller.
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
 // Multi-step OPAQUE registration flow
 
 // CreateRegistrationResponse handles server-side step of registration
@@ -28,8 +49,9 @@ func CreateRegistrationResponse(requestData []byte) ([]byte, []byte, error) {
 			OPAQUE_REGISTER_REQUEST_LEN, len(requestData))
 	}
 
-	// Get server private key
-	_, serverPrivateKey, err := GetServerKeys()
+	// Get server private key. libopaque derives the matching public key
+	// internally, so no separate public key is needed here.
+	serverPrivateKey, err := GetServerPrivateKey()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get server keys: %w", err)
 	}
@@ -77,15 +99,19 @@ func StoreUserRecord(rsec []byte, rrec []byte) ([]byte, error) {
 	// Allocate buffer for final user record
 	userRecord := make([]byte, OPAQUE_USER_RECORD_LEN)
 
-	// Convert Go slices to C pointers
+	// Convert Go slices to C pointers. The server secret (rsec) and client
+	// record (rrec) are sensitive; scrub their C-heap copies before freeing.
 	cServerSecret := C.CBytes(rsec)
 	defer C.free(cServerSecret)
+	defer zeroCBytes(cServerSecret, len(rsec))
 
 	cClientRecord := C.CBytes(rrec)
 	defer C.free(cClientRecord)
+	defer zeroCBytes(cClientRecord, len(rrec))
 
 	cUserRecord := C.CBytes(userRecord)
 	defer C.free(cUserRecord)
+	defer zeroCBytes(cUserRecord, OPAQUE_USER_RECORD_LEN)
 
 	// Call libopaque's StoreUserRecord function
 	ret := C.wrap_opaque_store_user_record(
@@ -119,9 +145,12 @@ func CreateCredentialResponse(credentialRequest []byte, userRecord []byte, usern
 			OPAQUE_USER_RECORD_LEN, len(userRecord))
 	}
 
-	// Allocate buffers for server response
+	// Allocate buffers for server response. The server-side session key (sk)
+	// is never used by Arkfile, so scrub it on return rather than leaving it
+	// in memory.
 	resp := make([]byte, OPAQUE_SERVER_SESSION_LEN)
 	sk := make([]byte, OPAQUE_SHARED_SECRETBYTES)
+	defer zeroBytes(sk)
 	authU := make([]byte, 64) // crypto_auth_hmacsha512_BYTES
 
 	// Prepare context
@@ -132,8 +161,10 @@ func CreateCredentialResponse(credentialRequest []byte, userRecord []byte, usern
 	idU := []byte(username)
 	idULen := uint16(len(idU))
 
-	// Use default server ID "server" for now, could be configurable later
-	idS := []byte("server")
+	// Server identity (idS) bound into the OPAQUE transcript. Sourced from a
+	// single server-side config so the browser and CLI (which fetch it via
+	// /api/config/opaque) stay in lockstep.
+	idS := []byte(OpaqueServerID())
 	idSLen := uint16(len(idS))
 
 	// Convert Go slices to C pointers
