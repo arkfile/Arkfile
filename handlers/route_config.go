@@ -237,6 +237,8 @@ func RegisterRoutes() {
 	adminGroup.POST("/storage/copy-all", AdminCopyAll)
 	adminGroup.POST("/storage/copy-user-files", AdminCopyUserFiles)
 	adminGroup.POST("/storage/copy-file", AdminCopyFile)
+	adminGroup.GET("/storage/tasks", AdminListTasks)
+	adminGroup.POST("/storage/cancel-all-tasks", AdminCancelAllTasks)
 	adminGroup.GET("/storage/task/:taskId", AdminTaskStatus)
 	adminGroup.POST("/storage/cancel-task/:taskId", AdminCancelTask)
 	adminGroup.POST("/storage/set-primary", AdminSetPrimary)

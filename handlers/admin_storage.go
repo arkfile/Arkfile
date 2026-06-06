@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
 
@@ -164,6 +165,8 @@ func AdminStorageStatus(c echo.Context) error {
 			       WHERE fsl.file_id = fm.file_id AND fsl.status = 'active') >= ?`,
 			configuredProviders,
 		).Scan(&fullyReplicated)
+
+		partiallyReplicated = totalFiles - fullyReplicated
 
 		partiallyReplicated = totalFiles - fullyReplicated
 	}
@@ -705,7 +708,7 @@ func AdminSetTertiary(c echo.Context) error {
 	if oldTertiaryID != "" {
 		_, err = database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", oldTertiaryID)
 		if err != nil {
-			logging.ErrorLogger.Printf("Failed to set %s as secondary: %v", oldTertiaryID, err)
+			logging.ErrorLogger.Printf("Failed to set %s as secondary during swap: %v", oldTertiaryID, err)
 			database.DB.Exec("UPDATE storage_providers SET role = 'secondary', updated_at = CURRENT_TIMESTAMP WHERE provider_id = ?", req.ProviderID)
 			return JSONError(c, http.StatusInternalServerError, "Failed to update provider role (rolled back)")
 		}
@@ -900,5 +903,98 @@ func AdminVerifyAll(c echo.Context) error {
 		"task_id":   taskID,
 		"task_type": "verify-all",
 		"status":    "pending",
+	})
+}
+
+// AdminListTasks handles GET /api/admin/storage/tasks
+// Lists admin tasks, optionally filtered by status.
+func AdminListTasks(c echo.Context) error {
+	status := c.QueryParam("status")
+	limitStr := c.QueryParam("limit")
+	limit := 50
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	tasks, err := models.ListAdminTasks(database.DB, status, limit)
+	if err != nil {
+		return JSONError(c, http.StatusInternalServerError, "Failed to query tasks: "+err.Error())
+	}
+
+	type taskRespItem struct {
+		TaskID          string      `json:"task_id"`
+		TaskType        string      `json:"task_type"`
+		Status          string      `json:"status"`
+		AdminUsername   string      `json:"admin_username"`
+		ProgressCurrent int         `json:"progress_current"`
+		ProgressTotal   int         `json:"progress_total"`
+		StartedAt       *string     `json:"started_at"`
+		CompletedAt     *string     `json:"completed_at"`
+		ErrorMessage    *string     `json:"error_message"`
+		Details         interface{} `json:"details,omitempty"`
+	}
+
+	respItems := make([]taskRespItem, len(tasks))
+	for i, t := range tasks {
+		item := taskRespItem{
+			TaskID:          t.TaskID,
+			TaskType:        t.TaskType,
+			Status:          t.Status,
+			AdminUsername:   t.AdminUsername,
+			ProgressCurrent: t.ProgressCurrent,
+			ProgressTotal:   t.ProgressTotal,
+		}
+		if t.StartedAt.Valid {
+			v := t.StartedAt.String
+			item.StartedAt = &v
+		}
+		if t.CompletedAt.Valid {
+			v := t.CompletedAt.String
+			item.CompletedAt = &v
+		}
+		if t.ErrorMessage.Valid {
+			v := t.ErrorMessage.String
+			item.ErrorMessage = &v
+		}
+		if t.Details.Valid && t.Details.String != "" {
+			var details interface{}
+			if json.Unmarshal([]byte(t.Details.String), &details) == nil {
+				item.Details = details
+			} else {
+				item.Details = t.Details.String
+			}
+		}
+		respItems[i] = item
+	}
+
+	return JSONResponse(c, http.StatusOK, "Admin tasks retrieved", map[string]interface{}{
+		"tasks": respItems,
+	})
+}
+
+// AdminCancelAllTasks handles POST /api/admin/storage/cancel-all-tasks
+func AdminCancelAllTasks(c echo.Context) error {
+	var req struct {
+		Type string `json:"type"` // "copy", "verify", "all"
+	}
+	if err := c.Bind(&req); err != nil || req.Type == "" {
+		return JSONError(c, http.StatusBadRequest, "type (copy, verify, all) is required")
+	}
+
+	tr := GetTaskRunner()
+	if tr == nil {
+		return JSONError(c, http.StatusInternalServerError, "Task runner not initialized")
+	}
+
+	cancelledCount, err := tr.CancelTasksByCategory(req.Type)
+	if err != nil {
+		return JSONError(c, http.StatusBadRequest, err.Error())
+	}
+
+	return JSONResponse(c, http.StatusOK, "Tasks cancellation requested", map[string]interface{}{
+		"category":        req.Type,
+		"cancelled_count": cancelledCount,
 	})
 }

@@ -58,6 +58,47 @@ func (tr *TaskRunner) CancelTask(taskID string) bool {
 	return false
 }
 
+// CancelTasksByCategory cancels active tasks of a specific category ("copy", "verify", "all").
+// Returns the count of active tasks that were successfully cancelled.
+func (tr *TaskRunner) CancelTasksByCategory(category string) (int, error) {
+	var query string
+	var args []interface{}
+
+	switch category {
+	case "copy":
+		query = "SELECT task_id FROM admin_tasks WHERE status = 'running' AND task_type LIKE 'copy-%'"
+	case "verify":
+		query = "SELECT task_id FROM admin_tasks WHERE status = 'running' AND task_type LIKE 'verify-%'"
+	case "all":
+		query = "SELECT task_id FROM admin_tasks WHERE status = 'running'"
+	default:
+		return 0, fmt.Errorf("invalid cancel category: %s", category)
+	}
+
+	rows, err := database.DB.Query(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+
+	cancelledCount := 0
+	for _, id := range ids {
+		if tr.CancelTask(id) {
+			cancelledCount++
+		}
+	}
+
+	return cancelledCount, nil
+}
+
 // CopyTaskDetails holds the JSON-serializable details stored in admin_tasks.details.
 type CopyTaskDetails struct {
 	SourceProviderID string `json:"source_provider_id"`

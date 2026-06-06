@@ -13,11 +13,20 @@
 
 import './setup';
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { sha256 } from '@noble/hashes/sha2.js';
 import { StreamingDownloadManager } from '../files/streaming-download';
 import { randomBytes } from '../crypto/primitives';
 import { buildChunkAAD } from '../crypto/aad';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/** Lowercase hex of a SHA-256 digest (mirrors the Blob-fallback bytesToHex helper). */
+function hexDigest(data: Uint8Array): string {
+  const bytes = sha256(data);
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) out += bytes[i]!.toString(16).padStart(2, '0');
+  return out;
+}
 
 /**
  * Build a chunk: AES-GCM([nonce(12)][ciphertext][tag(16)]) under
@@ -191,6 +200,92 @@ describe('StreamingDownloadManager - Blob fallback path (SW unavailable)', () =>
     expect(result.blobUrl).toBeUndefined();
     expect(result.streamedViaSw).toBeUndefined();
     expect(result.error).toBeDefined();
+  });
+
+  test('Blob fallback returns hashVerification match when expected hash is correct', async () => {
+    const fek = randomBytes(32);
+    const plaintext = new TextEncoder().encode('hash verification match test');
+    const FILE_ID = 'test-hash-match-file';
+    const encryptedChunk = await buildEncryptedChunk(plaintext, fek, FILE_ID, 0, 1);
+    const expectedHash = hexDigest(plaintext);
+
+    setFetchMock(withChunkingConfig(async (url: string) => {
+      if (url.includes('/metadata')) {
+        return new Response(JSON.stringify(makeShareMeta(plaintext.length, 1, plaintext.length, FILE_ID)), { status: 200 });
+      }
+      if (url.includes('/chunks/0')) {
+        return new Response(encryptedChunk.buffer as ArrayBuffer, { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    }));
+
+    const manager = new StreamingDownloadManager('', {
+      downloadToken: FAKE_DOWNLOAD_TOKEN,
+      showProgressUI: false,
+    });
+
+    const result = await manager.downloadSharedFile(FAKE_SHARE_ID, fek, { filename: 'test.bin', sha256: expectedHash });
+
+    expect(result.success).toBe(true);
+    expect(result.blobUrl).toBeDefined();
+    expect(result.hashVerification).toBe('match');
+  });
+
+  test('Blob fallback returns hashVerification mismatch when expected hash is wrong', async () => {
+    const fek = randomBytes(32);
+    const plaintext = new TextEncoder().encode('hash verification mismatch test');
+    const FILE_ID = 'test-hash-mismatch-file';
+    const encryptedChunk = await buildEncryptedChunk(plaintext, fek, FILE_ID, 0, 1);
+    const wrongHash = '0'.repeat(64);
+
+    setFetchMock(withChunkingConfig(async (url: string) => {
+      if (url.includes('/metadata')) {
+        return new Response(JSON.stringify(makeShareMeta(plaintext.length, 1, plaintext.length, FILE_ID)), { status: 200 });
+      }
+      if (url.includes('/chunks/0')) {
+        return new Response(encryptedChunk.buffer as ArrayBuffer, { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    }));
+
+    const manager = new StreamingDownloadManager('', {
+      downloadToken: FAKE_DOWNLOAD_TOKEN,
+      showProgressUI: false,
+    });
+
+    const result = await manager.downloadSharedFile(FAKE_SHARE_ID, fek, { filename: 'test.bin', sha256: wrongHash });
+
+    expect(result.success).toBe(true);
+    expect(result.blobUrl).toBeDefined();
+    expect(result.hashVerification).toBe('mismatch');
+  });
+
+  test('Blob fallback returns hashVerification skipped when no expected hash is provided', async () => {
+    const fek = randomBytes(32);
+    const plaintext = new TextEncoder().encode('no hash provided');
+    const FILE_ID = 'test-hash-skipped-file';
+    const encryptedChunk = await buildEncryptedChunk(plaintext, fek, FILE_ID, 0, 1);
+
+    setFetchMock(withChunkingConfig(async (url: string) => {
+      if (url.includes('/metadata')) {
+        return new Response(JSON.stringify(makeShareMeta(plaintext.length, 1, plaintext.length, FILE_ID)), { status: 200 });
+      }
+      if (url.includes('/chunks/0')) {
+        return new Response(encryptedChunk.buffer as ArrayBuffer, { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    }));
+
+    const manager = new StreamingDownloadManager('', {
+      downloadToken: FAKE_DOWNLOAD_TOKEN,
+      showProgressUI: false,
+    });
+
+    const result = await manager.downloadSharedFile(FAKE_SHARE_ID, fek, { filename: 'test.bin' });
+
+    expect(result.success).toBe(true);
+    expect(result.blobUrl).toBeDefined();
+    expect(result.hashVerification).toBe('skipped');
   });
 });
 

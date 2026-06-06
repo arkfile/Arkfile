@@ -139,3 +139,52 @@ func MarkStaleTasksAsFailed(db interface {
 	}
 	return result.RowsAffected()
 }
+
+// ListAdminTasks retrieves a list of admin tasks, optionally filtered by status and limited.
+func ListAdminTasks(db interface {
+	Query(string, ...interface{}) (*sql.Rows, error)
+}, statusFilter string, limit int) ([]*AdminTask, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	var rows *sql.Rows
+	var err error
+
+	if statusFilter != "" {
+		rows, err = db.Query(`
+			SELECT task_id, task_type, status, admin_username, progress_current, progress_total,
+			       started_at, completed_at, error_message, details, created_at, updated_at
+			FROM admin_tasks WHERE status = ?
+			ORDER BY created_at DESC LIMIT ?`, statusFilter, limit)
+	} else {
+		rows, err = db.Query(`
+			SELECT task_id, task_type, status, admin_username, progress_current, progress_total,
+			       started_at, completed_at, error_message, details, created_at, updated_at
+			FROM admin_tasks
+			ORDER BY created_at DESC LIMIT ?`, limit)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []*AdminTask
+	for rows.Next() {
+		t := &AdminTask{}
+		err := rows.Scan(
+			&t.TaskID, &t.TaskType, &t.Status, &t.AdminUsername, &t.ProgressCurrent, &t.ProgressTotal,
+			&t.StartedAt, &t.CompletedAt, &t.ErrorMessage, &t.Details, &t.CreatedAt, &t.UpdatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, t)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return tasks, nil
+}

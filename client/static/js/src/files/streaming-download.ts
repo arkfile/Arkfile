@@ -24,6 +24,8 @@
  * -------------
  * If the SW is not available (e.g. very old browsers, private-browsing modes
  * that disable SW registration), fall back to incremental Blob construction.
+ * The decrypted plaintext is hashed incrementally so the whole-file SHA-256 is
+ * verified at end-of-file, just like the SW path.
  *
  * - Peak heap usage: ~16 MiB (one chunk; data lives in the browser's Blob store)
  * - File size limit: ~2 GB on Chromium, several GB on Firefox/Tor.
@@ -35,6 +37,7 @@
  * stages, chunk counts, byte counts, durations, and status codes.
  */
 
+import { sha256 } from '@noble/hashes/sha2.js';
 import { AESGCMDecryptor } from '../crypto/aes-gcm';
 import { getChunkingParams, type ChunkingConfig } from '../crypto/constants';
 import { downloadChunkWithRetry, RetryConfig } from './retry-handler';
@@ -131,9 +134,8 @@ export interface StreamingDownloadOptions {
  *
  * On the Blob fallback path, `blobUrl` contains the createObjectURL string.
  * The caller must call triggerBrowserDownloadFromUrl(blobUrl, filename) and
- * URL.revokeObjectURL(blobUrl) after triggering. Hash verification on this
- * path is left to the caller (it can be computed off the assembled Blob
- * separately if desired).
+ * URL.revokeObjectURL(blobUrl) after triggering. `hashVerification` reports
+ * the outcome of the incremental end-of-file SHA-256 check on this path too.
  */
 export interface StreamingDownloadResult {
   success: boolean;
@@ -143,7 +145,7 @@ export interface StreamingDownloadResult {
   error?: string | undefined;
   /** True if the SW streaming path was used. */
   streamedViaSw?: boolean | undefined;
-  /** SHA-256 verification outcome (SW path only). */
+  /** SHA-256 verification outcome (both SW and Blob fallback paths). */
   hashVerification?: HashVerification | undefined;
   /** Object URL for the assembled Blob; present only on the Blob fallback path. */
   blobUrl?: string | undefined;
@@ -488,8 +490,10 @@ export class StreamingDownloadManager {
    * past for SHA-256 verification (when an expected hash is provided).
    *
    * Blob fallback: incrementally builds a Blob via `new Blob([existingBlob, chunk])`
-   * to keep data in the browser's internal Blob store off the JS heap. Returns
-   * a blob URL the caller can hand to triggerBrowserDownloadFromUrl().
+   * to keep data in the browser's internal Blob store off the JS heap, while
+   * hashing each plaintext chunk so the whole-file SHA-256 can be verified at
+   * end-of-file. Returns a blob URL the caller can hand to
+   * triggerBrowserDownloadFromUrl() and a hashVerification outcome.
    */
   private async streamDecryptedChunks(
     chunks: AsyncGenerator<Uint8Array>,
@@ -545,10 +549,20 @@ export class StreamingDownloadManager {
     }
 
     // Blob fallback path
+    //
+    // Hash the decrypted plaintext incrementally as each chunk arrives so the
+    // whole-file SHA-256 can be verified at end-of-file, mirroring the SW path.
+    // Hashing one chunk at a time adds no extra peak memory (the chunk is already
+    // resident before being appended to the Blob). A mismatch is reported via the
+    // returned hashVerification field, never thrown -- by the time hashing finishes
+    // the bytes are already in the Blob the caller hands to the download manager.
     console.log(`${logPrefix} Using Blob fallback path (SW unavailable)`);
+    const wantHash = typeof expectedSha256Hex === 'string' && expectedSha256Hex.length === 64;
+    const hasher = wantHash ? sha256.create() : null;
     let blob = new Blob([]);
     let chunkIndex = 0;
     for await (const chunk of chunks) {
+      if (hasher) hasher.update(chunk);
       // slice(0) gives a concrete ArrayBuffer-backed Uint8Array, satisfying BlobPart typing
       blob = new Blob([blob, chunk.slice(0)]);
       chunkIndex++;
@@ -559,7 +573,17 @@ export class StreamingDownloadManager {
     }
     const url = URL.createObjectURL(blob);
     console.log(`${logPrefix} Blob URL created (${blob.size} bytes)`);
-    return { blobUrl: url };
+
+    let hashVerification: HashVerification = 'skipped';
+    if (hasher && expectedSha256Hex) {
+      const computed = bytesToHex(hasher.digest());
+      hashVerification = constantTimeHexEqual(computed, expectedSha256Hex) ? 'match' : 'mismatch';
+      if (hashVerification === 'mismatch') {
+        // No digest values, no filename in the log (privacy), matching the SW path.
+        console.warn(`${logPrefix} SHA-256 verification FAILED for downloaded file (computed digest does not match expected)`);
+      }
+    }
+    return { blobUrl: url, hashVerification };
   }
 
   /** Fetch download metadata for a file */
@@ -685,4 +709,31 @@ function shortHash(s: string): string {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
   return (h >>> 0).toString(16).padStart(8, '0').slice(0, 8);
+}
+
+/** Lowercase hex encoding of a byte array. */
+function bytesToHex(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) {
+    out += bytes[i]!.toString(16).padStart(2, '0');
+  }
+  return out;
+}
+
+/**
+ * Constant-time hex string comparison (mirrors sw-streaming-download). Both
+ * inputs are lowercased; unequal lengths are immediately not-equal but still
+ * fully scanned to avoid timing leaks.
+ */
+function constantTimeHexEqual(a: string, b: string): boolean {
+  const aLow = a.toLowerCase();
+  const bLow = b.toLowerCase();
+  const len = Math.max(aLow.length, bLow.length);
+  let diff = aLow.length ^ bLow.length;
+  for (let i = 0; i < len; i++) {
+    const ac = i < aLow.length ? aLow.charCodeAt(i) : 0;
+    const bc = i < bLow.length ? bLow.charCodeAt(i) : 0;
+    diff |= ac ^ bc;
+  }
+  return diff === 0;
 }

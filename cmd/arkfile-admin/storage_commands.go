@@ -822,3 +822,145 @@ EXAMPLES:
 		}
 	}
 }
+
+// handleListTasksCommand lists background storage tasks
+func handleListTasksCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("list-tasks", flag.ExitOnError)
+	status := fs.String("status", "", "Filter tasks by status (running, completed, failed, canceled, pending)")
+	limit := fs.Int("limit", 50, "Limit the number of results")
+	jsonOutput := fs.Bool("json", false, "Output as JSON")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin list-tasks [FLAGS]
+
+List running or recent background storage tasks.
+
+FLAGS:
+    --status STATUS Filter by status (running, completed, failed, canceled, pending)
+    --limit N       Limit results count (default: 50)
+    --json          Output as JSON
+    --help          Show this help message
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	url := fmt.Sprintf("/api/admin/storage/tasks?limit=%d", *limit)
+	if *status != "" {
+		url += "&status=" + *status
+	}
+
+	resp, err := client.makeRequest("GET", url, nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("failed to list tasks: %w", err)
+	}
+
+	if *jsonOutput {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(resp.Data)
+	}
+
+	tasksRaw, ok := resp.Data["tasks"].([]interface{})
+	if !ok || len(tasksRaw) == 0 {
+		fmt.Println("No tasks found.")
+		return nil
+	}
+
+	fmt.Printf("%-8s  %-15s  %-10s  %-19s  %-10s  %-19s\n", "TASK ID", "TYPE", "STATUS", "BY USER", "PROGRESS", "CREATED AT")
+	fmt.Println(strings.Repeat("-", 100))
+
+	for _, tRaw := range tasksRaw {
+		t := tRaw.(map[string]interface{})
+		id := safeString(t, "task_id")
+		tType := safeString(t, "task_type")
+		st := safeString(t, "status")
+		user := safeString(t, "admin_username")
+		cur := safeInt64(t, "progress_current")
+		tot := safeInt64(t, "progress_total")
+
+		// Retrieve CreatedAt or started_at if not available
+		created := safeString(t, "created_at")
+		if created == "" {
+			created = safeString(t, "started_at")
+		}
+		if len(created) > 19 {
+			created = created[:19]
+		}
+
+		progress := "n/a"
+		if tot > 0 {
+			progress = fmt.Sprintf("%d/%d", cur, tot)
+		}
+
+		// Surgical truncate for compact display
+		shortID := id
+		if len(id) > 8 {
+			shortID = id[:8]
+		}
+
+		fmt.Printf("%-8s  %-15s  %-10s  %-19s  %-10s  %-19s\n",
+			shortID, tType, st, user, progress, created)
+	}
+
+	return nil
+}
+
+// handleCancelAllTasksCommand requests cancellation of many active tasks
+func handleCancelAllTasksCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("cancel-all-tasks", flag.ExitOnError)
+	cancelType := fs.String("type", "", "Category of tasks to cancel (copy, verify, all) (required)")
+
+	fs.Usage = func() {
+		fmt.Printf(`Usage: arkfile-admin cancel-all-tasks --type copy|verify|all
+
+Cancel all running tasks in a category.
+"copy" cancels file copies and automatic replication.
+"verify" cancels head integrity checks.
+"all" cancels everything.
+
+FLAGS:
+    --type CATEGORY    Category of tasks to cancel (copy, verify, all) (required)
+    --help             Show this help message
+`)
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *cancelType == "" {
+		return fmt.Errorf("--type is required")
+	}
+
+	if *cancelType != "copy" && *cancelType != "verify" && *cancelType != "all" {
+		return fmt.Errorf("invalid type: %s (must be copy, verify, or all)", *cancelType)
+	}
+
+	session, err := loadAdminSession(config.TokenFile)
+	if err != nil {
+		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
+	}
+	if time.Now().After(session.ExpiresAt) {
+		return fmt.Errorf("admin session expired, please login again")
+	}
+
+	payload := map[string]interface{}{"type": *cancelType}
+	resp, err := client.makeRequest("POST", "/api/admin/storage/cancel-all-tasks", payload, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("cancel-all-tasks failed: %w", err)
+	}
+
+	count := safeInt64(resp.Data, "cancelled_count")
+	fmt.Printf("Bulk cancellation requested. Category: %s. Active tasks cancelled: %d.\n", *cancelType, count)
+	return nil
+}

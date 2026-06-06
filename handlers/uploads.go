@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	cryptoRand "crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -1190,11 +1189,10 @@ func DeleteFile(c echo.Context) error {
 	})
 }
 
-// replicateToSecondary kicks off a background goroutine to copy a newly uploaded
-// file from the primary provider to the secondary provider. This is a no-op when
-// ENABLE_UPLOAD_REPLICATION is false or no secondary provider is configured.
-// The function returns immediately; replication status is tracked in
-// file_storage_locations (pending -> active or failed).
+// replicateToSecondary submits an automatic file copy task to the admin TaskRunner
+// to copy a newly uploaded file from the primary provider to the secondary provider.
+// This is a no-op when ENABLE_UPLOAD_REPLICATION is false or no secondary provider is configured.
+// It returns immediately, running asynchronously in the task runner's concurrency-controlled queue.
 func replicateToSecondary(fileID, storageID string, paddedSize int64) {
 	cfg, err := config.LoadConfig()
 	if err != nil || !cfg.Storage.EnableUploadReplication {
@@ -1204,47 +1202,31 @@ func replicateToSecondary(fileID, storageID string, paddedSize int64) {
 		return
 	}
 
-	secondaryID := storage.Registry.SecondaryID()
-
-	// Insert a "pending" location row for the secondary provider
-	if err := models.InsertFileStorageLocation(database.DB, fileID, secondaryID, storageID, "pending"); err != nil {
-		logging.ErrorLogger.Printf("Replication: failed to insert pending location for file %s on %s: %v", fileID, secondaryID, err)
+	tr := GetTaskRunner()
+	if tr == nil {
+		logging.ErrorLogger.Printf("Replication: task runner not initialized, skipping replication for file %s", fileID)
 		return
 	}
 
-	go func() {
-		ctx := context.Background()
+	secondaryID := storage.Registry.SecondaryID()
+	primaryID := storage.Registry.PrimaryID()
 
-		copyHash, copyErr := storage.Registry.CopyObjectBetweenProviders(
-			ctx,
-			storageID,
-			storage.Registry.Primary(),
-			storage.Registry.Secondary(),
-			paddedSize,
-			nil,
-		)
+	// Submit copy task to the existing TaskRunner. This registers a tracked 'copy-file'
+	// task, handles pending storage location insert, copy-streaming inside the pool,
+	// hash verification against stored_blob_sha256sum, active storage location marking, and statistics updates.
+	// AdminUsername "system-replication" marks it as initiated automatically by the system.
+	_, submitErr := tr.SubmitCopyTask(CopyTaskRequest{
+		TaskType:      "copy-file",
+		AdminUsername: "system-replication",
+		SourceID:      primaryID,
+		DestID:        secondaryID,
+		Verify:        true,
+		FileID:        fileID,
+	})
+	if submitErr != nil {
+		logging.ErrorLogger.Printf("Replication: failed to queue copy task for file %s to secondary: %v", fileID, submitErr)
+		return
+	}
 
-		if copyErr != nil {
-			logging.ErrorLogger.Printf("Replication: failed to copy file %s to %s: %v", fileID, secondaryID, copyErr)
-			models.UpdateFileStorageLocationStatus(database.DB, fileID, secondaryID, "failed")
-			return
-		}
-
-		// Verify hash if stored_blob_sha256sum is available
-		var expectedHash sql.NullString
-		database.DB.QueryRow("SELECT stored_blob_sha256sum FROM file_metadata WHERE file_id = ?", fileID).Scan(&expectedHash)
-		if expectedHash.Valid && expectedHash.String != "" && copyHash != expectedHash.String {
-			logging.ErrorLogger.Printf("Replication: hash mismatch for file %s on %s (expected %s, got %s)", fileID, secondaryID, expectedHash.String, copyHash)
-			models.UpdateFileStorageLocationStatus(database.DB, fileID, secondaryID, "failed")
-			return
-		}
-
-		// Mark as active and update provider stats
-		models.UpdateFileStorageLocationStatus(database.DB, fileID, secondaryID, "active")
-		if err := models.IncrementStorageProviderStats(database.DB, secondaryID, 1, paddedSize); err != nil {
-			logging.ErrorLogger.Printf("Replication: failed to update stats for %s: %v", secondaryID, err)
-		}
-
-		logging.InfoLogger.Printf("Replication: file %s copied to %s (hash: %s)", fileID, secondaryID, copyHash)
-	}()
+	logging.InfoLogger.Printf("Replication task queued for file %s to secondary %s", fileID, secondaryID)
 }
