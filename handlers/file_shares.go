@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -18,6 +19,7 @@ import (
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/storage"
+	"github.com/84adam/Arkfile/utils"
 )
 
 // ShareRequest represents a file sharing request (Argon2id-based anonymous shares)
@@ -37,6 +39,28 @@ type ShareResponse struct {
 	ShareURL  string     `json:"share_url"`
 	CreatedAt time.Time  `json:"created_at"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+}
+
+func publicShareBaseURL(c echo.Context) (string, error) {
+	cfg := config.GetConfig()
+	if baseURL := strings.TrimSpace(cfg.Server.BaseURL); baseURL != "" {
+		return strings.TrimRight(baseURL, "/"), nil
+	}
+
+	if utils.IsProductionEnvironment() {
+		return "", fmt.Errorf("BASE_URL is required for share URL construction in production")
+	}
+
+	host := strings.TrimSpace(c.Request().Host)
+	if host == "" {
+		return "", fmt.Errorf("request host is unavailable for share URL construction")
+	}
+
+	scheme := "https"
+	if c.Echo().Debug && c.Request().TLS == nil {
+		scheme = "http"
+	}
+	return scheme + "://" + host, nil
 }
 
 // CreateFileShare creates a new Argon2id-based anonymous file share
@@ -88,6 +112,12 @@ func CreateFileShare(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "Max accesses must be at least 1")
 	}
 
+	baseURL, err := publicShareBaseURL(c)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to construct share URL for file %s: %v", request.FileID, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Share URL configuration error")
+	}
+
 	// Validate that the user owns the file using the new encrypted schema
 	var ownerUsername string
 	var passwordType string
@@ -132,27 +162,6 @@ func CreateFileShare(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create file share")
 	}
 
-	// Construct share URL using configured BASE_URL when available.
-	// BASE_URL is the authoritative public-facing base URL set by the operator in secrets.env.
-	// Without it, c.Request().Host reflects the internal proxy address (e.g. localhost:8443)
-	// rather than the public domain, producing broken share URLs behind a reverse proxy.
-	cfg := config.GetConfig()
-	var baseURL string
-	if cfg.Server.BaseURL != "" {
-		baseURL = cfg.Server.BaseURL
-	} else {
-		// Fallback for local/dev deployments where BASE_URL is not configured
-		origin := c.Request().Header.Get("Origin")
-		if origin != "" {
-			baseURL = origin
-		} else {
-			scheme := "https"
-			if c.Echo().Debug && c.Request().TLS == nil {
-				scheme = "http"
-			}
-			baseURL = scheme + "://" + c.Request().Host
-		}
-	}
 	shareURL := baseURL + "/shared/" + request.ShareID
 
 	createdAt := time.Now()
@@ -445,6 +454,12 @@ func ListShares(c echo.Context) error {
 	}
 	defer rows.Close()
 
+	baseURL, err := publicShareBaseURL(c)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to construct share URLs for user %s: %v", username, err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Share URL configuration error")
+	}
+
 	var shares []map[string]interface{}
 	for rows.Next() {
 		var share struct {
@@ -472,18 +487,6 @@ func ListShares(c echo.Context) error {
 		); err != nil {
 			logging.ErrorLogger.Printf("Error scanning share row: %v", err)
 			continue
-		}
-
-		// Build share URL using configured BASE_URL when available (same logic as CreateFileShare)
-		cfg := config.GetConfig()
-		var baseURL string
-		if cfg.Server.BaseURL != "" {
-			baseURL = cfg.Server.BaseURL
-		} else {
-			baseURL = c.Request().Header.Get("Origin")
-			if baseURL == "" {
-				baseURL = "https://" + c.Request().Host
-			}
 		}
 
 		shareURL := baseURL + "/shared/" + share.ShareID

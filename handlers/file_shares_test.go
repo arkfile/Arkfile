@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/config"
 	"github.com/DATA-DOG/go-sqlmock"
 	jwt "github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
@@ -34,6 +35,7 @@ func TestCreateFileShare_Success(t *testing.T) {
 	jsonBody, _ := json.Marshal(reqBody)
 
 	c, rec, mock, _ := setupTestEnv(t, http.MethodPost, "/api/share/create", bytes.NewReader(jsonBody))
+	c.Request().Header.Set("Origin", "https://evil.example")
 
 	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -72,8 +74,38 @@ func TestCreateFileShare_Success(t *testing.T) {
 	assert.Equal(t, testShareID, response["share_id"])
 	assert.NotEmpty(t, response["share_url"])
 	assert.Contains(t, response["share_url"], "/shared/"+testShareID)
+	assert.NotContains(t, response["share_url"], "evil.example")
 
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPublicShareBaseURL_UsesConfiguredBaseURLAndIgnoresOrigin(t *testing.T) {
+	cfg := config.GetConfig()
+	originalBaseURL := cfg.Server.BaseURL
+	cfg.Server.BaseURL = "https://arkfile.example/"
+	t.Cleanup(func() { cfg.Server.BaseURL = originalBaseURL })
+
+	c, _, _, _ := setupTestEnv(t, http.MethodGet, "/api/share/create", nil)
+	c.Request().Header.Set("Origin", "https://evil.example")
+
+	baseURL, err := publicShareBaseURL(c)
+	require.NoError(t, err)
+	assert.Equal(t, "https://arkfile.example", baseURL)
+}
+
+func TestPublicShareBaseURL_DevelopmentFallbackIgnoresOrigin(t *testing.T) {
+	cfg := config.GetConfig()
+	originalBaseURL := cfg.Server.BaseURL
+	cfg.Server.BaseURL = ""
+	t.Cleanup(func() { cfg.Server.BaseURL = originalBaseURL })
+
+	c, _, _, _ := setupTestEnv(t, http.MethodGet, "/api/share/create", nil)
+	c.Request().Host = "local.arkfile.test:8443"
+	c.Request().Header.Set("Origin", "https://evil.example")
+
+	baseURL, err := publicShareBaseURL(c)
+	require.NoError(t, err)
+	assert.Equal(t, "https://local.arkfile.test:8443", baseURL)
 }
 
 func TestCreateFileShare_FileNotOwned(t *testing.T) {
@@ -313,6 +345,7 @@ func TestGetShareEnvelope_RateLimited(t *testing.T) {
 
 func TestListShares_Success(t *testing.T) {
 	c, rec, mock, _ := setupTestEnv(t, http.MethodGet, "/api/shares", nil)
+	c.Request().Header.Set("Origin", "https://evil.example")
 
 	username := "testuser"
 	claims := &auth.Claims{Username: username}
@@ -344,6 +377,7 @@ func TestListShares_Success(t *testing.T) {
 	assert.Equal(t, "file-123", share["file_id"])
 	assert.Equal(t, true, share["is_active"])
 	assert.Equal(t, float64(2), share["access_count"])
+	assert.NotContains(t, share["share_url"], "evil.example")
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

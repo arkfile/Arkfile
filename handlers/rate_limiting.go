@@ -4,12 +4,23 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
 
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
+)
+
+const (
+	shareAccessAttemptRetention       = 30 * 24 * time.Hour
+	shareAccessAttemptCleanupInterval = time.Hour
+)
+
+var (
+	shareAccessAttemptCleanupMu     sync.Mutex
+	lastShareAccessAttemptCleanupAt = time.Now()
 )
 
 // ShareRateLimitEntry represents a rate limiting entry for share access
@@ -19,6 +30,41 @@ type ShareRateLimitEntry struct {
 	FailedCount        int
 	LastFailedAttempt  *time.Time
 	NextAllowedAttempt *time.Time
+}
+
+func pruneShareAccessAttempts(cutoff time.Time) (int64, error) {
+	result, err := database.DB.Exec(`
+		DELETE FROM share_access_attempts
+		WHERE COALESCE(updated_at, created_at) < ?
+	`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("failed to prune share access attempts: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, nil
+	}
+	return rowsAffected, nil
+}
+
+func maybePruneShareAccessAttempts(now time.Time) {
+	shareAccessAttemptCleanupMu.Lock()
+	defer shareAccessAttemptCleanupMu.Unlock()
+
+	if now.Sub(lastShareAccessAttemptCleanupAt) < shareAccessAttemptCleanupInterval {
+		return
+	}
+
+	rows, err := pruneShareAccessAttempts(now.Add(-shareAccessAttemptRetention))
+	if err != nil {
+		logging.ErrorLogger.Printf("Share access attempt cleanup failed: %v", err)
+		return
+	}
+	lastShareAccessAttemptCleanupAt = now
+	if rows > 0 {
+		logging.InfoLogger.Printf("Pruned %d expired share access attempt rows", rows)
+	}
 }
 
 // calculateSharePenalty calculates the delay penalty based on failure count
@@ -44,6 +90,8 @@ func calculateSharePenalty(failureCount int) time.Duration {
 
 // getOrCreateRateLimitEntry retrieves or creates a rate limiting entry
 func getOrCreateRateLimitEntry(shareID, entityID string) (*ShareRateLimitEntry, error) {
+	maybePruneShareAccessAttempts(time.Now())
+
 	// First, ignore duplicates and ensure the row exists.
 	_, err := database.DB.Exec(`
 		INSERT OR IGNORE INTO share_access_attempts (share_id, entity_id, failed_count, created_at)
@@ -155,22 +203,6 @@ func checkRateLimit(shareID, entityID string) (bool, time.Duration, error) {
 	return true, 0, nil
 }
 
-// resetRateLimit resets the rate limit for successful authentication
-func resetRateLimit(shareID, entityID string) error {
-	_, err := database.DB.Exec(`
-		UPDATE share_access_attempts 
-		SET failed_count = 0, last_failed_attempt = NULL, next_allowed_attempt = NULL
-		WHERE share_id = ? AND entity_id = ?
-	`, shareID, entityID)
-
-	if err != nil {
-		return fmt.Errorf("failed to reset rate limit: %w", err)
-	}
-
-	logging.InfoLogger.Printf("Rate limit reset for share %s, entity %s", shareID, entityID)
-	return nil
-}
-
 // isEntityRateLimited checks if an entity is currently rate limited for a share
 func isEntityRateLimited(shareID, entityID string) (bool, time.Time, error) {
 	var nextAllowedAttempt sql.NullTime
@@ -257,68 +289,6 @@ func ShareRateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 		return next(c)
 	}
-}
-
-// isShareEndpoint checks if the path is a share-related endpoint
-func isShareEndpoint(path string) bool {
-	shareEndpoints := []string{
-		"/api/share/",
-		"/shared/",
-		"/api/files/share",
-	}
-
-	for _, endpoint := range shareEndpoints {
-		if len(path) >= len(endpoint) && path[:len(endpoint)] == endpoint {
-			return true
-		}
-	}
-
-	return false
-}
-
-// RateLimitShareAccess wraps share access functions with rate limiting logic
-func RateLimitShareAccess(shareID string, c echo.Context, accessFunc func() error) error {
-	entityID := logging.GetOrCreateEntityID(c)
-
-	// Check rate limit before attempting access
-	allowed, delay, err := checkRateLimit(shareID, entityID)
-	if err != nil {
-		logging.ErrorLogger.Printf("Rate limit check failed: %v", err)
-		return JSONError(c, http.StatusServiceUnavailable, "Rate limiter unavailable")
-	} else if !allowed {
-		retryAfter := int(delay.Seconds())
-		c.Response().Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
-		return JSONErrorCodeData(c, http.StatusTooManyRequests, "rate_limited",
-			"Too many failed attempts. Please try again later.",
-			map[string]interface{}{
-				"retry_after_seconds": retryAfter,
-			})
-	}
-
-	// Attempt the access function
-	err = accessFunc()
-
-	// Handle the result
-	if err != nil {
-		// Check if this is an authentication failure
-		if httpErr, ok := err.(*echo.HTTPError); ok {
-			if httpErr.Code == http.StatusUnauthorized || httpErr.Code == http.StatusNotFound {
-				// Record failed attempt for rate limiting
-				if recordErr := recordFailedAttempt(shareID, entityID); recordErr != nil {
-					logging.ErrorLogger.Printf("Failed to record failed attempt: %v", recordErr)
-				}
-			}
-		}
-		return err
-	}
-
-	// Success - reset rate limit
-	if resetErr := resetRateLimit(shareID, entityID); resetErr != nil {
-		logging.ErrorLogger.Printf("Failed to reset rate limit: %v", resetErr)
-		// Don't fail the request for this
-	}
-
-	return nil
 }
 
 // General rate limiting for authentication endpoints
@@ -495,6 +465,8 @@ func checkAuthRateLimit(endpointType, entityID string) (bool, time.Duration, err
 
 // getOrCreateAuthRateLimitEntry retrieves or creates an auth rate limiting entry
 func getOrCreateAuthRateLimitEntry(endpointType, entityID string) (*AuthRateLimitEntry, error) {
+	maybePruneShareAccessAttempts(time.Now())
+
 	var entry AuthRateLimitEntry
 	var lastFailedAttempt, nextAllowedAttempt sql.NullTime
 

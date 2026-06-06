@@ -109,7 +109,6 @@ func main() {
 
 	log.Printf("Arkfile %s starting", config.Version)
 	log.Printf("Configuration loaded successfully")
-	_ = cfg // Use the config variable to prevent unused variable warning
 
 	// Initialize console-only logging for systemd compatibility
 	// This ensures all logs go to stderr and are captured by systemd/journalctl
@@ -295,26 +294,6 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           300, // 5 minutes
 	}))
-
-	// Host-based routing using a custom middleware
-	// Currently unused but available for future environment-specific features
-	// Environment differences are primarily handled through .env configuration
-	// This middleware allows for runtime environment checks if needed later
-	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			host := c.Request().Host
-			testDomain := os.Getenv("TEST_DOMAIN")
-			if host == testDomain {
-				// Set a context value to indicate test environment
-				// Access this in handlers with: c.Get("environment").(string)
-				c.Set("environment", "test")
-			} else {
-				// Set a context value to indicate production environment
-				c.Set("environment", "prod")
-			}
-			return next(c)
-		}
-	})
 
 	// Common routes setup
 	setupRoutes(e)
