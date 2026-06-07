@@ -201,3 +201,15 @@ There are also a few lower-stakes cleanup issues: `prod-deploy.sh` still tells u
 The recommended first remediation batch is: bind Arkfile to loopback in production, fail closed when firewall posture is unknown, set `umask 077` before writing secrets, remove argv-based secret handling for deSEC/rqlite/bootstrap paths, and make `prod-update.sh` fail/rollback safely. The second batch is to pin Caddy/xcaddy/deSEC module versions, replace SeaweedFS MD5 with SHA-256, add a production build mode that refuses dependency mutation, remove Caddy backend `tls_insecure_skip_verify` or replace it with trusted internal CA validation, and revisit the broad `/opt/arkfile` ownership model.
 
 ---
+
+# DEV NOTE: OTHER THINGS TO ASPIRE TO
+
+Allowing users to use yubikeys and nitrokeys and the like as their 2FA device, including labelling of these privately for the user to be able to distinguish between their own devices.
+
+Allowing users to set up 2+ 2FA methods. Initially this should be capped at 3 total I think. E.g. TOTP via a 2FA app like ente auth, or bitwarden authenticator, etc. And hardware security keys.
+
+The prod deployment system should allow for and encourage other types of setups. Including running in a redundant fashion with 2 app server backends that talk to each other (rqlite raft consensus) behind a load balancer, where the TLS configuration may vary to support this, and may entail things other than what we currently specify in terms of any caddy configs, desec.io configs, or self-signed certifications (where applicable). Basically we want to encourage "2+ node cluster mode" out the gate behind a load balancer for prod deployments. And we may need to make a number of adjustments to the overall deployment system/scripts to support this. As a side-effect, if we end up granting theoretical ability for the test or local deploy systems to also use this sort of "2+ node cluster mode" then that would be a win as well, although it is not as critical for them.
+
+This may be a good time to review our old plan around podman containers/podman compose. And perhaps consider kubernetes, to the extent that it would make the "2+ node cluster mode" easier to approach.
+
+We also need to prepare for BTCPayServer integration and potentially further fleshing out of the payments system before we go live fully. Ideal target is to launch with support for Bitcoin and Monero and Credit Card payments.
