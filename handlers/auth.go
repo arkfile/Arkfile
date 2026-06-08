@@ -267,9 +267,10 @@ func OpaqueRegisterResponse(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Invalid username: "+err.Error())
 	}
 
-	// Check if user already exists (A-25)
-	_, err := models.GetUserByUsername(database.DB, request.Username)
-	if err == nil {
+	// Check if user already exists (A-25) (using folded username search to prevent homograph / collision attacks)
+	folded := utils.FoldUsername(request.Username)
+	exists, err := models.UserFoldedExists(database.DB, folded)
+	if err == nil && exists {
 		return JSONError(c, http.StatusConflict, "Username already registered")
 	}
 
@@ -332,9 +333,10 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 		return JSONError(c, http.StatusBadRequest, "Invalid username: "+err.Error())
 	}
 
-	// Check if user already exists
-	_, err = models.GetUserByUsername(database.DB, request.Username)
-	if err == nil {
+	// Check if user already exists (using folded username search to prevent homograph / collision attacks)
+	folded := utils.FoldUsername(request.Username)
+	exists, err := models.UserFoldedExists(database.DB, folded)
+	if err == nil && exists {
 		// Clean up session
 		auth.DeleteAuthSession(database.DB, request.SessionID)
 		return JSONError(c, http.StatusConflict, "Username already registered")

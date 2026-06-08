@@ -92,10 +92,11 @@ func CreateDevAdminWithOPAQUE(db *sql.DB, username, password string) (*models.Us
 	}
 
 	// Insert user into database
+	folded := utils.FoldUsername(user.Username)
 	result, err := db.Exec(`
-		INSERT INTO users (username, is_approved, is_admin, created_at)
-		VALUES (?, ?, ?, ?)`,
-		user.Username, user.IsApproved, user.IsAdmin, user.CreatedAt,
+		INSERT INTO users (username, username_folded, is_approved, is_admin, created_at)
+		VALUES (?, ?, ?, ?, ?)`,
+		user.Username, folded, user.IsApproved, user.IsAdmin, user.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user record: %w", err)

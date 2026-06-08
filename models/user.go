@@ -69,11 +69,12 @@ func CreateUser(dbtx DBTX, username string) (*User, error) {
 	}
 
 	isAdmin := isAdminUsername(username)
+	folded := utils.FoldUsername(username)
 	result, err := dbtx.Exec(
 		`INSERT INTO users (
-			username, storage_limit_bytes, is_admin, is_approved
-		) VALUES (?, ?, ?, ?)`,
-		username, DefaultStorageLimit, isAdmin, isAdmin, // Auto-approve admin usernames
+			username, username_folded, storage_limit_bytes, is_admin, is_approved
+		) VALUES (?, ?, ?, ?, ?)`,
+		username, folded, DefaultStorageLimit, isAdmin, isAdmin, // Auto-approve admin usernames
 	)
 	if err != nil {
 		return nil, err
@@ -92,6 +93,16 @@ func CreateUser(dbtx DBTX, username string) (*User, error) {
 		IsApproved:        isAdmin,
 		IsAdmin:           isAdmin,
 	}, nil
+}
+
+// UserFoldedExists checks if any user has a conflicting folded username representation
+func UserFoldedExists(dbtx DBTX, foldedUsername string) (bool, error) {
+	var count int
+	err := dbtx.QueryRow("SELECT COUNT(*) FROM users WHERE username_folded = ? AND deleted_at IS NULL", foldedUsername).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // GetUserByUsername retrieves a user by username

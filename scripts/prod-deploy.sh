@@ -277,6 +277,7 @@ write_configuration() {
 # Production Deployment Configuration
 # Generated: $(date)
 # Domain: ${DOMAIN}
+HOST=127.0.0.1
 
 # Database Configuration
 DATABASE_TYPE=rqlite

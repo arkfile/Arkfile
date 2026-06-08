@@ -341,8 +341,9 @@ func main() {
 
 			// Start HTTPS server in goroutine
 			go func() {
-				log.Printf("Starting HTTPS server on port %s (TLS 1.3 only)", tlsPort)
-				if err := e.StartTLS(":"+tlsPort, certFile, keyFile); err != nil {
+				bindAddr := cfg.Server.Host + ":" + tlsPort
+				log.Printf("Starting HTTPS server on %s (TLS 1.3 only)", bindAddr)
+				if err := e.StartTLS(bindAddr, certFile, keyFile); err != nil {
 					logging.ErrorLogger.Printf("Failed to start HTTPS server: %v", err)
 				}
 			}()
@@ -353,8 +354,9 @@ func main() {
 	}
 
 	// Start HTTP server
-	log.Printf("Starting HTTP server on port %s", port)
-	if err := e.Start(":" + port); err != nil {
+	bindAddr := cfg.Server.Host + ":" + port
+	log.Printf("Starting HTTP server on %s", bindAddr)
+	if err := e.Start(bindAddr); err != nil {
 		logging.ErrorLogger.Printf("Failed to start HTTP server: %v", err)
 	}
 }

@@ -204,7 +204,7 @@ func main() {
 
 	config := &ClientConfig{
 		ServerURL:   *serverURL,
-		Username:    *username,
+		Username:    strings.ToLower(strings.TrimSpace(*username)),
 		TLSInsecure: *tlsInsecure,
 		ConfigFile:  *configFile,
 		TokenFile:   getSessionFilePath(),

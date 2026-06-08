@@ -55,6 +55,10 @@ func TestValidateUsernameInvalid(t *testing.T) {
 		{"user,,name", "consecutive commas"},
 		{"user__name", "consecutive underscores"},
 		{"user--name", "consecutive hyphens"},
+		{"user._name", "consecutive period and underscore"},
+		{"user-,name", "consecutive hyphen and comma"},
+		{"USER_NAME_123", "contains uppercase letters (not allowed)"},
+		{"john.Doe.2024", "contains single uppercase letter (not allowed)"},
 		{"user$.name", "contains $ (not allowed)"},
 		{"user%name", "contains % (not allowed)"},
 		{"user!name", "contains ! (not allowed)"},
@@ -171,7 +175,7 @@ func TestUsernameConstants(t *testing.T) {
 		t.Errorf("Expected MaxUsernameLength to be 50, got %d", MaxUsernameLength)
 	}
 
-	expectedPattern := `^[a-zA-Z0-9_\-.,]{10,50}$`
+	expectedPattern := `^[a-z0-9_\-.,]{10,50}$`
 	if UsernamePattern != expectedPattern {
 		t.Errorf("Expected UsernamePattern to be '%s', got '%s'", expectedPattern, UsernamePattern)
 	}

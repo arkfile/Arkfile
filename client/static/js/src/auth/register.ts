@@ -18,7 +18,7 @@ export interface RegisterCredentials {
 // Username validation constants (mirrors Go utils/username_validator.go)
 const MIN_USERNAME_LENGTH = 10;
 const MAX_USERNAME_LENGTH = 50;
-const USERNAME_PATTERN = /^[a-zA-Z0-9_\-.,]{10,50}$/;
+const USERNAME_PATTERN = /^[a-z0-9_\-.,]{10,50}$/;
 
 /**
  * Client-side username validation. Mirrors Go utils.ValidateUsername() exactly.
@@ -35,13 +35,17 @@ function validateUsernameClientSide(username: string): string | null {
     return `Username must be at most ${MAX_USERNAME_LENGTH} characters.`;
   }
   if (!USERNAME_PATTERN.test(username)) {
-    return 'Username can only contain: letters (a-z, A-Z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)';
+    return 'Username can only contain: lowercase letters (a-z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)';
   }
   if (/^[._,\-]/.test(username) || /[._,\-]$/.test(username)) {
     return 'Username cannot start or end with special characters (_, -, ., ,).';
   }
-  if (/\.\.|\,\,|__|--/.test(username)) {
-    return 'Username cannot contain consecutive special characters.';
+  // Block any consecutive punctuation symbols from the set . _ - ,
+  const symbols = "._-,";
+  for (let i = 0; i < username.length - 1; i++) {
+    if (symbols.includes(username[i]) && symbols.includes(username[i + 1])) {
+      return 'Username cannot contain consecutive special characters.';
+    }
   }
   return null;
 }

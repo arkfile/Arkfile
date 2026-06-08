@@ -192,7 +192,7 @@ func main() {
 	// Load configuration
 	config := &AdminConfig{
 		ServerURL:   *serverURL,
-		Username:    *username,
+		Username:    strings.ToLower(strings.TrimSpace(*username)),
 		TLSInsecure: *tlsInsecure,
 		ConfigFile:  *configFile,
 		TokenFile:   getAdminSessionFilePath(),
@@ -2945,14 +2945,23 @@ func validateAdminUsername(username string) error {
 		return fmt.Errorf("username is required")
 	}
 	if len(username) < 10 {
-		return fmt.Errorf("invalid username: must be at least 10 characters (currently %d)\n\nUsername requirements: 10-50 characters, allowed: a-z A-Z 0-9 _ - . ,", len(username))
+		return fmt.Errorf("invalid username: must be at least 10 characters (currently %d)\n\nUsername requirements: 10-50 characters, allowed: a-z 0-9 _ - . ,", len(username))
 	}
 	if len(username) > 50 {
-		return fmt.Errorf("invalid username: must be at most 50 characters\n\nUsername requirements: 10-50 characters, allowed: a-z A-Z 0-9 _ - . ,")
+		return fmt.Errorf("invalid username: must be at most 50 characters\n\nUsername requirements: 10-50 characters, allowed: a-z 0-9 _ - . ,")
 	}
 	for _, r := range username {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' || r == ',') {
-			return fmt.Errorf("invalid username: can only contain letters (a-z, A-Z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)")
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' || r == ',') {
+			return fmt.Errorf("invalid username: can only contain lowercase letters (a-z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)")
+		}
+	}
+	// Check for any consecutive special characters from the set [._-,]
+	symbols := "._-,"
+	for i := 0; i < len(username)-1; i++ {
+		charCurrent := username[i]
+		charNext := username[i+1]
+		if strings.ContainsRune(symbols, rune(charCurrent)) && strings.ContainsRune(symbols, rune(charNext)) {
+			return fmt.Errorf("username cannot contain consecutive special characters")
 		}
 	}
 	return nil

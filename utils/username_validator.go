@@ -10,7 +10,7 @@ import (
 const (
 	MinUsernameLength = 10
 	MaxUsernameLength = 50
-	UsernamePattern   = `^[a-zA-Z0-9_\-.,]{10,50}$`
+	UsernamePattern   = `^[a-z0-9_\-.,]{10,50}$`
 )
 
 var (
@@ -33,14 +33,13 @@ func ValidateUsername(username string) error {
 
 	// Defensive character validation (runs before regex as CGO safety measure)
 	for _, r := range username {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' || r == ',') {
-			return fmt.Errorf("username can only contain: letters (a-z, A-Z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)")
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' || r == ',') {
+			return fmt.Errorf("username can only contain: lowercase letters (a-z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)")
 		}
 	}
 
 	if !usernameRegex.MatchString(username) {
-		return fmt.Errorf("username can only contain: letters (a-z, A-Z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)")
+		return fmt.Errorf("username can only contain: lowercase letters (a-z), digits (0-9), underscore (_), hyphen (-), period (.), comma (,)")
 	}
 
 	// Additional checks for reasonable usernames
@@ -60,10 +59,14 @@ func ValidateUsername(username string) error {
 		return fmt.Errorf("username cannot start or end with an underscore (_)")
 	}
 
-	// Check for consecutive special characters
-	if strings.Contains(username, "..") || strings.Contains(username, ",,") ||
-		strings.Contains(username, "__") || strings.Contains(username, "--") {
-		return fmt.Errorf("username cannot contain consecutive special characters (.., ,,, __, --)")
+	// Check for any consecutive special characters from the set [._-,]
+	symbols := "._-,"
+	for i := 0; i < len(username)-1; i++ {
+		charCurrent := username[i]
+		charNext := username[i+1]
+		if strings.ContainsRune(symbols, rune(charCurrent)) && strings.ContainsRune(symbols, rune(charNext)) {
+			return fmt.Errorf("username cannot contain consecutive special characters")
+		}
 	}
 
 	return nil
@@ -74,6 +77,19 @@ func IsValidUsername(username string) bool {
 	return ValidateUsername(username) == nil
 }
 
+// FoldUsername lowercases the username and completely strips symbols: [._-,]
+func FoldUsername(username string) string {
+	folded := strings.ToLower(strings.TrimSpace(username))
+	symbols := "._-,"
+	var sb strings.Builder
+	for _, r := range folded {
+		if !strings.ContainsRune(symbols, r) {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
 // SanitizeUsername performs basic sanitization on a username
 // Note: This is for display purposes only, not for bypassing validation
 func SanitizeUsername(username string) string {
@@ -82,17 +98,17 @@ func SanitizeUsername(username string) string {
 
 	// Convert to lowercase for case-insensitive operations if needed
 	// Note: We keep original case for the actual username storage
-	return username
+	return strings.ToLower(username)
 }
 
 // GetUsernameValidationRules returns a human-readable description of username rules
 func GetUsernameValidationRules() string {
 	return fmt.Sprintf(`Username Requirements:
 - Length: %d-%d characters
-- Allowed characters: letters (a-z, A-Z), numbers (0-9), underscore (_), hyphen (-), period (.), comma (,)
+- Allowed characters: lowercase letters (a-z), numbers (0-9), underscore (_), hyphen (-), period (.), comma (,)
 - Cannot start or end with special characters (_, -, ., ,)
 - Cannot contain consecutive special characters
-- Case-sensitive (usernames are stored exactly as entered)
+- Case-sensitive (usernames are lowercase-only and stored exactly as entered)
 - Must be unique across the system
 
 Valid examples:
