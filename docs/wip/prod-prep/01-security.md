@@ -1,5 +1,7 @@
 # Arkfile Live Security and Privacy Gaps
 
+STATUS: DONE (JUNE 8, 2026)
+
 This document is the in-codebase security and privacy work that genuinely remains open as of 2026-06-08. It was derived from a code-verified review: every item below was checked against the live source tree on this date, and each item states whether it is a genuinely exploitable gap or defense-in-depth hygiene, so prioritization does not have to be re-litigated. This is intentionally separate from the deployment/operational hardening checklist (see `02-prod-hardening.md`) and the post-launch feature roadmap (see `03-roadmap.md`). The older mixed-scope inventory at `docs/wip/archive/review/remaining-issues.md` is left in place as the historical baseline; this document supersedes its in-codebase-security portion.
 
 ## The one genuinely exploitable gap: the app binds all interfaces
@@ -19,3 +21,5 @@ Second, the codebase contains a silent data-loss hazard: client-side file-key de
 Third, symbol collisions (impersonation vectors) remain an active concern (e.g. registering `john_doe` or `john-doe` when `john.doe` is already registered). To enforce security while retaining a wide range of alphanumeric layouts, we recommend a robust dual-layer strategy:
 1. **Tightening Punctuation Adjacency:** In `utils/username_validator.go`, the code blocks identical consecutive symbols (e.g., `..`, `--`, `__`, `,,`) but permits mixtures like `john-.doe` or `john._doe`. We should update the validator to block any consecutive punctuation characters, even if they are different (no character in `[._-,]` can be immediately adjacent to another character in that set). This enforces visual and typographical hygiene and protects username parsing routines.
 2. **Case and Symbol Folding uniqueness at registration:** To block registration-time collision impersonators, the server should map each prospective username to a fully folded lowercase, symbol-stripped representation (e.g., `John.Doe` or `john-doe` both fold to the alphanumeric search index input `johndoe`). When a user attempts registration: the server folds the name, checks the table for an existing row carrying that folded index (which maps to `john.doe`), and rejects the collision if present. This allows the genuine user to utilize original punctuation and spacing while guaranteeing that visual homographs and symbol-scrambled duplicates are locked out. Standard lookups and key derivations proceed with the original stored username.
+
+FINAL NOTE ON USERNAMES: set to only allow lowercase everywhere as well now.

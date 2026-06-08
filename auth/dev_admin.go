@@ -187,47 +187,6 @@ func SetupDevAdminTOTP(db *sql.DB, user *models.User, totpSecret string) error {
 	return nil
 }
 
-// validateTOTPMasterKeyIntegrity performs an end-to-end test of TOTP master key
-func validateTOTPMasterKeyIntegrity() error {
-	testUsername := "totp-integrity-test-user"
-	testData := []byte("TOTP_INTEGRITY_TEST_DATA_2025")
-
-	// Test 1: Derive a user key
-	userKey, err := crypto.DeriveTOTPUserKey(testUsername)
-	if err != nil {
-		return fmt.Errorf("failed to derive test user key: %w", err)
-	}
-	defer crypto.SecureZeroTOTPKey(userKey)
-
-	if len(userKey) != 32 {
-		return fmt.Errorf("derived key has wrong length: expected 32, got %d", len(userKey))
-	}
-
-	// Test 2: Encrypt test data
-	encrypted, err := crypto.EncryptGCM(testData, userKey)
-	if err != nil {
-		return fmt.Errorf("failed to encrypt test data: %w", err)
-	}
-
-	if len(encrypted) == 0 {
-		return fmt.Errorf("encrypted data is empty")
-	}
-
-	// Test 3: Decrypt test data
-	decrypted, err := crypto.DecryptGCM(encrypted, userKey)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt test data: %w", err)
-	}
-
-	// Test 4: Verify data integrity
-	if string(decrypted) != string(testData) {
-		return fmt.Errorf("data integrity check failed: decrypted data doesn't match original")
-	}
-
-	log.Printf("TOTP master key integrity test passed")
-	return nil
-}
-
 // ValidateDevAdminTOTPWorkflow performs end-to-end TOTP validation for dev admin bootstrap.
 // It verifies that the TOTP secret was stored correctly and can be decrypted, but does NOT
 // generate or validate an actual TOTP code. This avoids "burning" a TOTP window during
