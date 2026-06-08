@@ -35,10 +35,10 @@ your.domain.example {
 	}
 
 	reverse_proxy localhost:8443 {
-		transport http {
-			tls
-			tls_insecure_skip_verify
-		}
+			transport http {
+				tls
+				tls_trusted_ca_certs /opt/arkfile/etc/keys/tls/ca/ca.crt
+			}
 		# SECURITY (F-01): strip client-controlled IP-spoofing headers
 		# before reverse-proxying. The Go process MUST NOT see any value
 		# the client picked for these. Propagate the real public peer in

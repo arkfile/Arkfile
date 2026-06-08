@@ -282,7 +282,7 @@ export VERSION="update-$(date +%Y%m%d-%H%M%S)"
 export SKIP_C_LIBS="$SKIP_C_LIBS"
 
 fix_go_ownership
-if ! run_as_user ./scripts/setup/build.sh --build-only; then
+if ! run_as_user ./scripts/setup/build.sh --build-only --production; then
     print_status "ERROR" "Build failed"
     exit 1
 fi
@@ -309,13 +309,50 @@ sleep 2
 echo
 echo -e "${CYAN}Step 3: Backup and deploy binaries and static assets${NC}"
 
-# Backup current binaries before overwriting (keep max 3 backups)
+# Backup current binaries and database before overwriting (keep max 3 backups)
 if [ -x "$ARKFILE_DIR/bin/arkfile" ]; then
     BACKUP_DIR="$ARKFILE_DIR/backups/bin-$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$BACKUP_DIR"
     cp "$ARKFILE_DIR/bin/arkfile" "$ARKFILE_DIR/bin/arkfile-client" "$ARKFILE_DIR/bin/arkfile-admin" "$BACKUP_DIR/" 2>/dev/null || true
+    
+    # Back up rqlite physical database safely by stopping the service briefly
+    if systemctl is-active --quiet rqlite 2>/dev/null; then
+        print_status "INFO" "Backing up rqlite physical database..."
+        systemctl stop rqlite || { print_status "WARNING" "Failed to stop rqlite for backup; continuing anyway"; }
+        if [ -d "$ARKFILE_DIR/var/lib/rqlite" ]; then
+            cp -r "$ARKFILE_DIR/var/lib/rqlite" "$BACKUP_DIR/"
+        fi
+        systemctl start rqlite || { print_status "ERROR" "Failed to restart rqlite after backup"; exit 1; }
+        print_status "SUCCESS" "rqlite physical database backed up"
+    fi
+
     chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/backups"
-    print_status "SUCCESS" "Current binaries backed up to $BACKUP_DIR"
+    print_status "SUCCESS" "Current version backed up to $BACKUP_DIR"
+
+    # Setup automatic rollback trap on failure
+    rollback_on_failure() {
+        local exit_code=$?
+        if [ $exit_code -ne 0 ]; then
+            print_status "ERROR" "Update failed with exit code $exit_code! Triggering automatic rollback to previous version..."
+            systemctl stop caddy arkfile 2>/dev/null || true
+            if [ -d "$BACKUP_DIR" ]; then
+                cp "$BACKUP_DIR"/arkfile* "$ARKFILE_DIR/bin/" 2>/dev/null || true
+                chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/bin"
+                # Restore database files if backed up
+                if [ -d "$BACKUP_DIR/rqlite" ]; then
+                    systemctl stop rqlite 2>/dev/null || true
+                    rm -rf "$ARKFILE_DIR/var/lib/rqlite" 2>/dev/null || true
+                    cp -r "$BACKUP_DIR/rqlite" "$ARKFILE_DIR/var/lib/rqlite"
+                    chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/var/lib/rqlite"
+                    systemctl start rqlite 2>/dev/null || true
+                fi
+            fi
+            systemctl start arkfile caddy 2>/dev/null || true
+            print_status "SUCCESS" "Rollback complete"
+            exit "$exit_code"
+        fi
+    }
+    trap 'rollback_on_failure' EXIT
 
     # Prune old backups, keep only the 3 most recent
     BACKUP_COUNT=$(ls -1d "$ARKFILE_DIR/backups/bin-"* 2>/dev/null | wc -l)
@@ -331,23 +368,26 @@ install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile-client
 install -m 755 -o "$ARKFILE_USER" -g "$ARKFILE_GROUP" "$BUILD_BIN/arkfile-admin"  "$ARKFILE_DIR/bin/arkfile-admin"
 print_status "SUCCESS" "Binaries deployed"
 
-print_status "INFO" "Deploying static assets..."
+print_status "INFO" "Deploying static assets (with directory cleanup for stale assets)..."
+# Clear out stale JS dist directory to prevent reachability of obsolete assets (e.g. bundle mapping)
+rm -rf "$ARKFILE_DIR/client/static/js/dist" 2>/dev/null || true
 # Sync client/static tree (HTML, CSS, JS, WASM, errors)
-# Using cp -a to preserve structure; chown after to ensure correct ownership
+# Using cp -r to preserve structure; chown after to ensure correct ownership
 cp -r "$BUILD_CLIENT/static/." "$ARKFILE_DIR/client/static/"
 chown -R "$ARKFILE_USER:$ARKFILE_GROUP" "$ARKFILE_DIR/client"
 print_status "SUCCESS" "Static assets deployed"
 
-print_status "INFO" "Deploying updated systemd service files..."
+print_status "INFO" "Deploying updated systemd service files (fail closed on copy failure)..."
 if [ -d "$BUILD_ROOT/systemd" ]; then
-    cp "$BUILD_ROOT/systemd/arkfile.service"   /etc/systemd/system/ 2>/dev/null || true
-    cp "$BUILD_ROOT/systemd/caddy.service"     /etc/systemd/system/ 2>/dev/null || true
-    cp "$BUILD_ROOT/systemd/rqlite.service"    /etc/systemd/system/ 2>/dev/null || true
-    cp "$BUILD_ROOT/systemd/seaweedfs.service" /etc/systemd/system/ 2>/dev/null || true
+    cp "$BUILD_ROOT/systemd/arkfile.service"   /etc/systemd/system/
+    cp "$BUILD_ROOT/systemd/caddy.service"     /etc/systemd/system/
+    cp "$BUILD_ROOT/systemd/rqlite.service"    /etc/systemd/system/
+    cp "$BUILD_ROOT/systemd/seaweedfs.service" /etc/systemd/system/
     systemctl daemon-reload
     print_status "SUCCESS" "Systemd services updated"
 else
-    print_status "WARNING" "No systemd directory in build, skipping service file update"
+    print_status "ERROR" "No systemd directory in build, systemd service file update failed"
+    exit 1
 fi
 
 print_status "INFO" "Deploying updated database schema..."
@@ -401,15 +441,15 @@ awk -v gfile="$tmp_global" '
 rm -f "$tmp_global"
 
 if [ -f /etc/caddy/Caddyfile ]; then
-    if [ -n "$DESEC_TOKEN_VALUE" ]; then
-        DESEC_TOKEN="$DESEC_TOKEN_VALUE" /usr/local/bin/caddy validate --config /etc/caddy/Caddyfile 2>/dev/null && \
-            print_status "SUCCESS" "Caddyfile updated and validated" || \
-            print_status "WARNING" "Caddyfile updated but validation had warnings (check manually)"
-    else
-        print_status "SUCCESS" "Caddyfile updated (DESEC_TOKEN not in secrets.env, skipping validate)"
+    print_status "INFO" "Validating Caddyfile configurations..."
+    if ! DESEC_TOKEN="$DESEC_TOKEN_VALUE" /usr/local/bin/caddy validate --config /etc/caddy/Caddyfile; then
+        print_status "ERROR" "Caddyfile updated but validation failed"
+        exit 1
     fi
+    print_status "SUCCESS" "Caddyfile successfully updated and validated"
 else
-    print_status "WARNING" "Could not write /etc/caddy/Caddyfile"
+    print_status "ERROR" "Could not write /etc/caddy/Caddyfile"
+    exit 1
 fi
 
 echo

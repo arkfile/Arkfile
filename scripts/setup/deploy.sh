@@ -22,8 +22,8 @@ verify_ownership() {
     local check_dir="$1"
     echo -e "${BLUE}[VERIFY] Checking directory ownership for $check_dir...${NC}"
     
-    # Find any root-owned files/directories
-    local root_owned=$(find "$check_dir" -user root 2>/dev/null | grep -v "^$" || true)
+    # Find any root-owned files/directories, ignoring the bin directory (which is root-owned for security)
+    local root_owned=$(find "$check_dir" -path "$check_dir/bin" -prune -o -user root -print 2>/dev/null | grep -v "^$" || true)
     
     if [ -n "$root_owned" ]; then
         echo -e "${RED}[X] Found root-owned files/directories:${NC}"
@@ -33,7 +33,7 @@ verify_ownership() {
         return 1
     fi
     
-    echo -e "${GREEN}[OK] All files in $check_dir owned by arkfile user${NC}"
+    echo -e "${GREEN}[OK] All non-binary assets in $check_dir owned by arkfile user${NC}"
     return 0
 }
 
@@ -79,8 +79,9 @@ echo -e "${GREEN}[OK] libopaque.js found in build directory${NC}"
 echo -e "${YELLOW}Copying build artifacts to ${BASE_DIR}...${NC}"
 sudo cp -r ${BUILD_DIR}/* ${BASE_DIR}/
 # Set proper ownership after copy
-echo -e "${YELLOW}[KEY] Setting permissions...${NC}"
+echo -e "${YELLOW}[KEY] Setting permissions (least-privilege secured: bin directory remains root-owned)...${NC}"
 sudo chown -R arkfile:arkfile ${BASE_DIR}
+sudo chown -R root:root ${BASE_DIR}/bin
 
 # Ensure executable permissions on binaries
 sudo find ${BASE_DIR} -type f -executable -exec chmod 755 {} \;

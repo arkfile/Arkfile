@@ -533,7 +533,8 @@ func (c *HTTPClient) fetchOpaqueServerID() (string, error) {
 func handleBootstrapCommand(client *HTTPClient, config *AdminConfig, args []string) error {
 	fs := flag.NewFlagSet("bootstrap", flag.ExitOnError)
 	var (
-		tokenFlag    = fs.String("token", "", "Bootstrap token (required)")
+		tokenFlag    = fs.String("token", "", "Bootstrap token (argv exposure possible)")
+		tokenStdin   = fs.Bool("token-stdin", false, "Read bootstrap token from standard input (secure)")
 		usernameFlag = fs.String("username", "admin", "Username for admin account")
 	)
 
@@ -543,12 +544,14 @@ func handleBootstrapCommand(client *HTTPClient, config *AdminConfig, args []stri
 Bootstrap the first admin user using the token provided by the server logs.
 
 FLAGS:
-    --token TOKEN      Bootstrap token from server logs (required)
+    --token TOKEN      Bootstrap token from server logs (argv exposure possible)
+    --token-stdin      Read bootstrap token from standard input (secure)
     --username USER    Username for admin account (default: admin)
     --help            Show this help message
 
 EXAMPLES:
-    arkfile-admin bootstrap --token <TOKEN>
+    arkfile-admin bootstrap --token-stdin < /opt/arkfile/etc/keys/bootstrap-token.bin
+    sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin | arkfile-admin bootstrap --token-stdin
 `)
 	}
 
@@ -556,8 +559,21 @@ EXAMPLES:
 		return err
 	}
 
-	if *tokenFlag == "" {
-		return fmt.Errorf("bootstrap token is required")
+	var finalToken string
+	if *tokenStdin {
+		// Read token from standard input (stdin) to prevent argv exposure.
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("failed to read token from stdin: %w", err)
+		}
+		finalToken = strings.TrimSpace(input)
+	} else {
+		finalToken = *tokenFlag
+	}
+
+	if finalToken == "" {
+		return fmt.Errorf("bootstrap token is required (provide via --token or --token-stdin)")
 	}
 
 	// Validate username before prompting for password
@@ -611,7 +627,7 @@ EXAMPLES:
 
 	// Step 2: Send registration request to server
 	regReq := map[string]string{
-		"bootstrap_token":      *tokenFlag,
+		"bootstrap_token":      finalToken,
 		"username":             *usernameFlag,
 		"registration_request": registrationRequestB64,
 	}
@@ -667,7 +683,7 @@ EXAMPLES:
 
 	// Step 5: Send registration record to server to complete registration
 	finalizeReq := map[string]string{
-		"bootstrap_token":     *tokenFlag,
+		"bootstrap_token":     finalToken,
 		"session_id":          sessionID,
 		"username":            *usernameFlag,
 		"registration_record": registrationRecordB64,

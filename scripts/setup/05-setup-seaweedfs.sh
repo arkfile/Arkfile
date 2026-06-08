@@ -42,7 +42,6 @@ fi
 
 if [ "${NEEDS_INSTALL}" = "true" ]; then
     TARBALL="${CACHE_DIR}/linux_amd64-${SEAWEEDFS_VERSION}.tar.gz"
-    MD5FILE="${CACHE_DIR}/linux_amd64-${SEAWEEDFS_VERSION}.tar.gz.md5"
 
     # Download tarball if not cached
     if [ ! -f "${TARBALL}" ]; then
@@ -52,24 +51,20 @@ if [ "${NEEDS_INSTALL}" = "true" ]; then
         echo "Using cached tarball: ${TARBALL}"
     fi
 
-    # Always download fresh checksum for verification
-    echo "Downloading MD5 checksum..."
-    curl -fSL "${SEAWEEDFS_MD5_URL}" -o "${MD5FILE}"
+    # Verify repo-pinned SHA-256 checksum
+    echo "Verifying SHA-256 checksum against repo-pinned digest..."
+    EXPECTED_SHA256="abe924a3b5a16af889675005b7ee3ffcc424bc78c7f0be1126a8c8681667c22c"
+    ACTUAL_SHA256=$(sha256sum "${TARBALL}" | awk '{print $1}')
 
-    # Verify MD5 checksum
-    echo "Verifying MD5 checksum..."
-    EXPECTED_MD5=$(awk '{print $1}' "${MD5FILE}")
-    ACTUAL_MD5=$(md5sum "${TARBALL}" | awk '{print $1}')
-
-    if [ "${EXPECTED_MD5}" != "${ACTUAL_MD5}" ]; then
-        echo -e "${RED}[X] MD5 checksum verification FAILED${NC}"
-        echo "  Expected: ${EXPECTED_MD5}"
-        echo "  Got:      ${ACTUAL_MD5}"
+    if [ "${EXPECTED_SHA256}" != "${ACTUAL_SHA256}" ]; then
+        echo -e "${RED}[X] SHA-256 checksum verification FAILED${NC}"
+        echo "  Expected: ${EXPECTED_SHA256}"
+        echo "  Got:      ${ACTUAL_SHA256}"
         echo "Removing corrupt download..."
         rm -f "${TARBALL}"
         exit 1
     fi
-    echo -e "${GREEN}[OK] MD5 checksum verified${NC}"
+    echo -e "${GREEN}[OK] SHA-256 checksum verified securely${NC}"
 
     # Extract and install
     echo "Extracting SeaweedFS binary..."

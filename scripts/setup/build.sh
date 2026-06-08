@@ -7,10 +7,15 @@ source "$SCRIPT_DIR/build-config.sh"
 
 # Parse arguments
 BUILD_ONLY=false
+PRODUCTION_BUILD=false
 for arg in "$@"; do
     case $arg in
         --build-only)
             BUILD_ONLY=true
+            shift
+            ;;
+        --production)
+            PRODUCTION_BUILD=true
             shift
             ;;
     esac
@@ -108,71 +113,89 @@ check_go_version() {
 check_go_version
 
 # Ensure Go dependencies are properly resolved
-echo -e "${YELLOW}Checking Go module dependencies...${NC}"
-fix_vendor_ownership
-if ! run_go_as_user mod download; then
-    echo -e "${YELLOW}Dependencies need updating, running go mod tidy...${NC}"
-    run_go_as_user mod tidy
-    fix_vendor_ownership
-    if ! run_go_as_user mod download; then
-        echo -e "${RED}Failed to resolve Go dependencies${NC}" >&2
+if [ "$PRODUCTION_BUILD" = "true" ]; then
+    echo -e "${YELLOW}Production mode: Verifying checked-in vendor directory and lockfile state...${NC}"
+    # Verify vendor directory exists and hash matches
+    VENDOR_CACHE=".vendor_cache"
+    CURRENT_HASH=""
+    CACHED_HASH=""
+    if [ -f "go.sum" ]; then
+        CURRENT_HASH=$(sha256sum go.sum | cut -d' ' -f1)
+        CACHED_HASH=$(cat "$VENDOR_CACHE" 2>/dev/null || echo "")
+    fi
+    if [ ! -d "vendor" ] || [ "$CURRENT_HASH" != "$CACHED_HASH" ]; then
+        echo -e "${RED}[X] Production build fail: Checked-in vendor/ dependencies are missing or out of sync with go.sum!${NC}" >&2
+        echo -e "${RED}[X] Please run a development/test deploy or updates first to securely sync vendor/ directory under version control.${NC}" >&2
         exit 1
     fi
-fi
-fix_vendor_ownership
-
-# Smart vendor directory sync - only when dependencies actually change
-echo -e "${YELLOW}Checking vendor directory consistency...${NC}"
-VENDOR_CACHE=".vendor_cache"
-CURRENT_HASH=""
-CACHED_HASH=""
-
-if [ -f "go.sum" ]; then
-    CURRENT_HASH=$(sha256sum go.sum | cut -d' ' -f1)
-    CACHED_HASH=$(cat "$VENDOR_CACHE" 2>/dev/null || echo "")
-fi
-
-if [ "$CURRENT_HASH" = "$CACHED_HASH" ] && [ -d "vendor" ]; then
-    echo -e "${GREEN}[OK] Vendor directory matches go.sum, skipping sync (preserves compiled libraries)${NC}"
+    echo -e "${GREEN}[OK] Checked-in vendor directory matches dependencies (no mutation allowed)${NC}"
 else
-    echo -e "${YELLOW}Dependencies changed or vendor missing, syncing vendor directory...${NC}"
-    
-    # CRITICAL: Backup C library submodules before Go vendor sync
-    C_LIBS_BACKUP=""
-    if [ -d "vendor/stef" ]; then
-        C_LIBS_BACKUP=$(mktemp -d)
-        # Ensure temp backup is cleaned up on exit
-        trap 'rm -rf "$C_LIBS_BACKUP" 2>/dev/null || true' EXIT
-        echo -e "${YELLOW}Backing up C libraries to: $C_LIBS_BACKUP${NC}"
-        cp -r vendor/stef "$C_LIBS_BACKUP/" 2>/dev/null || true
-    fi
-    
-    if ! run_go_as_user mod vendor; then
-        echo -e "${YELLOW}Vendor sync failed, attempting to fix with go mod tidy...${NC}"
+    echo -e "${YELLOW}Checking Go module dependencies...${NC}"
+    fix_vendor_ownership
+    if ! run_go_as_user mod download; then
+        echo -e "${YELLOW}Dependencies need updating, running go mod tidy...${NC}"
         run_go_as_user mod tidy
         fix_vendor_ownership
-        if ! run_go_as_user mod vendor; then
-            echo -e "${RED}Failed to sync vendor directory${NC}" >&2
+        if ! run_go_as_user mod download; then
+            echo -e "${RED}Failed to resolve Go dependencies${NC}" >&2
             exit 1
         fi
     fi
     fix_vendor_ownership
-    
-    # CRITICAL: Restore C library submodules after Go vendor sync
-    if [ -n "$C_LIBS_BACKUP" ] && [ -d "$C_LIBS_BACKUP/stef" ]; then
-        echo -e "${YELLOW}Restoring C libraries from backup...${NC}"
-        mkdir -p vendor/stef
-        cp -r "$C_LIBS_BACKUP/stef/"* vendor/stef/ 2>/dev/null || true
-        rm -rf "$C_LIBS_BACKUP"
-        echo -e "${GREEN}[OK] C libraries restored after vendor sync${NC}"
-    else
-        echo -e "${YELLOW}No C libraries to restore - will initialize via submodules${NC}"
+
+    # Smart vendor directory sync - only when dependencies actually change
+    echo -e "${YELLOW}Checking vendor directory consistency...${NC}"
+    VENDOR_CACHE=".vendor_cache"
+    CURRENT_HASH=""
+    CACHED_HASH=""
+
+    if [ -f "go.sum" ]; then
+        CURRENT_HASH=$(sha256sum go.sum | cut -d' ' -f1)
+        CACHED_HASH=$(cat "$VENDOR_CACHE" 2>/dev/null || echo "")
     fi
-    
-    # Cache the successful sync (recompute hash since go mod tidy may have changed go.sum)
-    CURRENT_HASH=$(sha256sum go.sum | cut -d' ' -f1)
-    echo "$CURRENT_HASH" > "$VENDOR_CACHE"
-    echo -e "${GREEN}[OK] Vendor directory synced with dependencies${NC}"
+
+    if [ "$CURRENT_HASH" = "$CACHED_HASH" ] && [ -d "vendor" ]; then
+        echo -e "${GREEN}[OK] Vendor directory matches go.sum, skipping sync (preserves compiled libraries)${NC}"
+    else
+        echo -e "${YELLOW}Dependencies changed or vendor missing, syncing vendor directory...${NC}"
+        
+        # CRITICAL: Backup C library submodules before Go vendor sync
+        C_LIBS_BACKUP=""
+        if [ -d "vendor/stef" ]; then
+            C_LIBS_BACKUP=$(mktemp -d)
+            # Ensure temp backup is cleaned up on exit
+            trap 'rm -rf "$C_LIBS_BACKUP" 2>/dev/null || true' EXIT
+            echo -e "${YELLOW}Backing up C libraries to: $C_LIBS_BACKUP${NC}"
+            cp -r vendor/stef "$C_LIBS_BACKUP/" 2>/dev/null || true
+        fi
+        
+        if ! run_go_as_user mod vendor; then
+            echo -e "${YELLOW}Vendor sync failed, attempting to fix with go mod tidy...${NC}"
+            run_go_as_user mod tidy
+            fix_vendor_ownership
+            if ! run_go_as_user mod vendor; then
+                echo -e "${RED}Failed to sync vendor directory${NC}" >&2
+                exit 1
+            fi
+        fi
+        fix_vendor_ownership
+        
+        # CRITICAL: Restore C library submodules after Go vendor sync
+        if [ -n "$C_LIBS_BACKUP" ] && [ -d "$C_LIBS_BACKUP/stef" ]; then
+            echo -e "${YELLOW}Restoring C libraries from backup...${NC}"
+            mkdir -p vendor/stef
+            cp -r "$C_LIBS_BACKUP/stef/"* vendor/stef/ 2>/dev/null || true
+            rm -rf "$C_LIBS_BACKUP"
+            echo -e "${GREEN}[OK] C libraries restored after vendor sync${NC}"
+        else
+            echo -e "${YELLOW}No C libraries to restore - will initialize via submodules${NC}"
+        fi
+        
+        # Cache the successful sync (recompute hash since go mod tidy may have changed go.sum)
+        CURRENT_HASH=$(sha256sum go.sum | cut -d' ' -f1)
+        echo "$CURRENT_HASH" > "$VENDOR_CACHE"
+        echo -e "${GREEN}[OK] Vendor directory synced with dependencies${NC}"
+    fi
 fi
 
 # Build static dependencies first
@@ -435,16 +458,21 @@ build_go_binaries_static() {
     #                    even when building from a working tree with uncommitted state.
     local REPRO_FLAGS='-trimpath -buildvcs=false'
     
+    local PROD_BUILD_FLAGS=""
+    if [ "$PRODUCTION_BUILD" = "true" ]; then
+        PROD_BUILD_FLAGS="-mod=vendor"
+    fi
+
     echo "Building arkfile server..."
-    "$GO_BINARY" build -a $REPRO_FLAGS -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/${APP_NAME} .
+    "$GO_BINARY" build -a $PROD_BUILD_FLAGS $REPRO_FLAGS -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/${APP_NAME} .
     echo -e "${GREEN}[OK] arkfile server built${NC}"
     
     echo "Building arkfile-client..."
-    "$GO_BINARY" build -a $REPRO_FLAGS -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/arkfile-client ./cmd/arkfile-client
+    "$GO_BINARY" build -a $PROD_BUILD_FLAGS $REPRO_FLAGS -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/arkfile-client ./cmd/arkfile-client
     echo -e "${GREEN}[OK] arkfile-client built${NC}"
     
     echo "Building arkfile-admin..."
-    "$GO_BINARY" build -a $REPRO_FLAGS -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
+    "$GO_BINARY" build -a $PROD_BUILD_FLAGS $REPRO_FLAGS -ldflags "$STATIC_LDFLAGS" -o ${BUILD_DIR}/arkfile-admin ./cmd/arkfile-admin
     echo -e "${GREEN}[OK] arkfile-admin built${NC}"
     
     # Reset CGO state
@@ -494,6 +522,70 @@ build_go_binaries_static
 
 # Verify static linking
 verify_static_binaries
+
+# Run Go vulnerability check and generate SBOM
+run_security_audits_and_sbom() {
+    echo -e "${YELLOW}Running security audits and generating SBOM...${NC}"
+    
+    # 1. Check and run govulncheck
+    local has_govulncheck=true
+    if ! command -v govulncheck >/dev/null 2>&1; then
+        echo -e "${YELLOW}govulncheck not found. Attempting to install golang.org/x/vuln/cmd/govulncheck...${NC}"
+        if ! "$GO_BINARY" install golang.org/x/vuln/cmd/govulncheck@latest >/dev/null 2>&1; then
+            echo -e "${YELLOW}[WARNING] Failed to install govulncheck. Skipping Go vulnerability check.${NC}"
+            has_govulncheck=false
+        fi
+    fi
+
+    if [ "$has_govulncheck" = "true" ]; then
+        local govulncheck_bin="govulncheck"
+        if [ -n "$SUDO_USER" ] && [ -x "/home/$SUDO_USER/go/bin/govulncheck" ]; then
+            govulncheck_bin="/home/$SUDO_USER/go/bin/govulncheck"
+        elif [ -x "/root/go/bin/govulncheck" ]; then
+            govulncheck_bin="/root/go/bin/govulncheck"
+        fi
+
+        echo "Running govulncheck..."
+        if ! "$govulncheck_bin" ./...; then
+            echo -e "${RED}[X] govulncheck found known vulnerabilities in Go dependencies!${NC}"
+            if [ "$PRODUCTION_BUILD" = "true" ]; then
+                echo -e "${RED}[X] Failing production build due to Go dependency vulnerabilities.${NC}" >&2
+                exit 1
+            fi
+        else
+            echo -e "${GREEN}[OK] govulncheck passed successfully${NC}"
+        fi
+    fi
+
+    # 2. Generate and save Software Bill of Materials (SBOM)
+    echo "Generating SBOM..."
+    local sbom_file="${BUILD_DIR}/sbom-dependencies.json"
+    
+    # Generate list of Go dependencies
+    local go_deps
+    go_deps=$("$GO_BINARY" list -m -json all 2>/dev/null | jq -s '.' 2>/dev/null || echo "[]")
+    
+    # Generate list of Bun dependencies
+    local bun_deps="{}"
+    if [ -f "client/static/js/package.json" ]; then
+        bun_deps=$(cat client/static/js/package.json | jq '.dependencies + .devDependencies' 2>/dev/null || echo "{}")
+    fi
+
+    # Write unified SBOM json
+    cat > "$sbom_file" <<EOF
+{
+  "sbom_version": "1.0",
+  "build_time": "${BUILD_TIME}",
+  "arkfile_version": "${VERSION}",
+  "go_version": "$("$GO_BINARY" version)",
+  "go_dependencies": ${go_deps},
+  "bun_dependencies": ${bun_deps}
+}
+EOF
+    echo -e "${GREEN}[OK] SBOM generated at: ${sbom_file}${NC}"
+}
+
+run_security_audits_and_sbom
 
 # Copy static files directly to final client location (using BUILD_CLIENT from build-config.sh)
 echo "Copying static files..."
@@ -678,9 +770,9 @@ else
 
     # Deploy binaries to production location for key setup scripts
     echo "Deploying binaries to ${BASE_DIR}/bin/..."
-    sudo install -d -m 755 -o arkfile -g arkfile "${BASE_DIR}/bin"
+    sudo install -d -m 755 -o root -g root "${BASE_DIR}/bin"
     for file in "${BUILD_DIR}/bin/"*; do
-        sudo install -m 755 -o arkfile -g arkfile "$file" "${BASE_DIR}/bin/"
+        sudo install -m 755 -o root -g root "$file" "${BASE_DIR}/bin/"
     done
 fi
 

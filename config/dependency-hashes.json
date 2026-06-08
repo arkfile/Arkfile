@@ -7,10 +7,10 @@
       "4.18": {
         "linux-amd64": {
           "url": "https://github.com/seaweedfs/seaweedfs/releases/download/4.18/linux_amd64.tar.gz",
-          "md5_url": "https://github.com/seaweedfs/seaweedfs/releases/download/4.18/linux_amd64.tar.gz.md5",
-          "verified_date": "2026-04-07",
-          "verification_method": "official_md5",
-          "notes": "SeaweedFS provides official MD5 checksums for each release on GitHub"
+          "sha256": "abe924a3b5a16af889675005b7ee3ffcc424bc78c7f0be1126a8c8681667c22c",
+          "verified_date": "2026-06-08",
+          "verification_method": "pinned_sha256",
+          "notes": "SeaweedFS pinned to official release SHA-256 for maximum supply-chain security"
         }
       }
     }

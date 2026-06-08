@@ -33,6 +33,7 @@ STORAGE_BACKEND="local-seaweedfs"
 ACME_EMAIL=""
 FORCE_REBUILD_ALL=false
 FORCE_REBUILD_RQLITE=false
+EXTERNAL_FIREWALL_CONFIRMED=false
 
 S3_ENDPOINT=""
 S3_REGION=""
@@ -84,6 +85,7 @@ Optional:
   --acme-email <email>          ACME email for Let's Encrypt notices
   --force-rebuild-all           Force rebuild of all C libraries and rqlite
   --force-rebuild-rqlite        Force rebuild of rqlite
+  --external-firewall-confirmed Confirm that an external firewall is configured (suppresses halt if local firewalls are absent)
   -h, --help                    Show this help message
 EOF2
 }
@@ -191,7 +193,14 @@ configure_firewall() {
         return 0
     fi
 
-    print_status "WARNING" "No supported firewall tool detected; continuing without firewall changes"
+    if [ "$EXTERNAL_FIREWALL_CONFIRMED" = "true" ]; then
+        print_status "WARNING" "No local firewall detected, but --external-firewall-confirmed is set. Continuing."
+        return 0
+    fi
+
+    print_status "ERROR" "No supported firewall (firewalld/ufw) detected. External access might be exposed!"
+    print_status "ERROR" "If an external/VPS cloud firewall is configured, re-run with --external-firewall-confirmed."
+    exit 1
 }
 
 ensure_caddy_user_and_dirs() {
@@ -272,6 +281,13 @@ write_test_configuration() {
     local s3_password="$2"
 
     print_status "INFO" "Writing deployment configuration..."
+
+    # Set highly restrictive umask before writing any secrets
+    # Since umask is process-wide, this guarantees that redirected output files are
+    # created with 0600 (owner-only read/write) or 0700 permissions.
+    local old_umask
+    old_umask=$(umask)
+    umask 077
 
     cat > "$ARKFILE_DIR/etc/secrets.env" <<EOF2
 # Test Deployment Configuration
@@ -432,6 +448,9 @@ EOF2
     chmod 640 "$ARKFILE_DIR/etc/rqlite-auth.json"
 
     print_status "SUCCESS" "Configuration files written"
+
+    # Restore prior umask
+    umask "$old_umask"
 }
 
 generate_crypto_material() {
@@ -493,8 +512,8 @@ GLOBALEOF
 }
 
 build_and_install_caddy() {
-    print_status "INFO" "Installing xcaddy build tool..."
-    if ! run_as_user "$GO_BINARY" install github.com/caddyserver/xcaddy/cmd/xcaddy@latest; then
+    print_status "INFO" "Installing xcaddy build tool (pinned to v0.4.4)..."
+    if ! run_as_user "$GO_BINARY" install github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.4; then
         print_status "ERROR" "Failed to install xcaddy"
         exit 1
     fi
@@ -511,9 +530,9 @@ build_and_install_caddy() {
         exit 1
     fi
 
-    print_status "INFO" "Building Caddy with deSEC module..."
+    print_status "INFO" "Building Caddy (pinned to v2.9.1) with deSEC module (pinned to v0.2.2)..."
     rm -f caddy 2>/dev/null || true
-    if ! run_as_user env PATH="$PATH" "$xcaddy_bin" build --with github.com/caddy-dns/desec; then
+    if ! run_as_user env PATH="$PATH" "$xcaddy_bin" build v2.9.1 --with github.com/caddy-dns/desec@v0.2.2; then
         print_status "ERROR" "Failed to build Caddy"
         exit 1
     fi
@@ -640,13 +659,18 @@ start_and_verify_services() {
     systemctl enable rqlite
     systemctl start rqlite
     local rqlite_ready=false
+    local tmp_curl_config
+    tmp_curl_config=$(mktemp)
+    chmod 600 "$tmp_curl_config"
+    echo "user = \"test-user:${RQLITE_PASSWORD}\"" > "$tmp_curl_config"
     for _ in $(seq 1 30); do
-        if curl -u "test-user:${RQLITE_PASSWORD}" http://localhost:4001/status 2>/dev/null | grep -q '"ready":true'; then
+        if curl --config "$tmp_curl_config" http://localhost:4001/status 2>/dev/null | grep -q '"ready":true'; then
             rqlite_ready=true
             break
         fi
         sleep 2
     done
+    rm -f "$tmp_curl_config"
     if [ "$rqlite_ready" != "true" ]; then
         print_status "ERROR" "rqlite failed to become ready within timeout"
         print_status "ERROR" "Check logs: sudo journalctl -u rqlite -f"
@@ -848,6 +872,10 @@ while [[ $# -gt 0 ]]; do
         --acme-email)
             ACME_EMAIL="$2"
             shift 2
+            ;;
+        --external-firewall-confirmed)
+            EXTERNAL_FIREWALL_CONFIRMED=true
+            shift
             ;;
         --force-rebuild-all)
             FORCE_REBUILD_ALL=true
@@ -1186,13 +1214,10 @@ echo -e "${GREEN}  HTTPS: https://${DOMAIN}${NC}"
 echo
 echo -e "${YELLOW}NEXT: Bootstrap your admin account${NC}"
 echo
-echo "  1. Read the bootstrap token (the file is mode 0400 owned by arkfile):"
-echo "     sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin"
-echo
-echo "  2. Bootstrap the admin account:"
-echo "     /opt/arkfile/bin/arkfile-admin \\
+echo "  1. Bootstrap the admin account (using --token-stdin to prevent argv credential exposure):"
+echo "     sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin | /opt/arkfile/bin/arkfile-admin \\
        --server-url https://localhost:8443 --tls-insecure \\
-       bootstrap --token \$(sudo cat /opt/arkfile/etc/keys/bootstrap-token.bin) --username ${ADMIN_USERNAME}"
+       bootstrap --token-stdin --username ${ADMIN_USERNAME}"
 echo
 echo "  3. Setup TOTP:"
 echo "     /opt/arkfile/bin/arkfile-admin \\
