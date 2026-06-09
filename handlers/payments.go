@@ -248,7 +248,10 @@ func AdminListInvoicesHandler(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success": true,
-		"data":    invoices,
+		"data": map[string]interface{}{
+			"invoices": invoices,
+			"count":    len(invoices),
+		},
 	})
 }
 

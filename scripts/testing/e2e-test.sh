@@ -2952,7 +2952,7 @@ phase_11e_payments() {
     local show_out show_code
     safe_exec show_out show_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        payments show "$invoice_id" --json
+        payments show --json "$invoice_id"
 
     local status
     status=$(echo "$show_out" | jq -r '.status' 2>/dev/null)

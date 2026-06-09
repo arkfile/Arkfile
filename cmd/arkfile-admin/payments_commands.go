@@ -137,8 +137,12 @@ List payment invoices recorded in the system.
 		return printJSON(resp.Data)
 	}
 
-	invoices, _ := resp.Data["data"].([]interface{})
-	fmt.Printf("Payment Invoices Count: %d\n\n", len(invoices))
+	invoices, _ := resp.Data["invoices"].([]interface{})
+	count := int(safeFloat64(resp.Data, "count"))
+	if count == 0 && len(invoices) > 0 {
+		count = len(invoices)
+	}
+	fmt.Printf("Payment Invoices Count: %d\n\n", count)
 	if len(invoices) == 0 {
 		return nil
 	}

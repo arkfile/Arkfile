@@ -528,24 +528,27 @@ run_security_audits_and_sbom() {
     echo -e "${YELLOW}Running security audits and generating SBOM...${NC}"
     
     # 1. Check and run govulncheck
-    local has_govulncheck=true
-    if ! command -v govulncheck >/dev/null 2>&1; then
+    local govulncheck_bin=""
+    local gopath
+    gopath=$(run_go_as_user env GOPATH 2>/dev/null | tr -d '\r')
+
+    if command -v govulncheck >/dev/null 2>&1; then
+        govulncheck_bin="$(command -v govulncheck)"
+    elif [ -n "$gopath" ] && [ -x "$gopath/bin/govulncheck" ]; then
+        govulncheck_bin="$gopath/bin/govulncheck"
+    else
         echo -e "${YELLOW}govulncheck not found. Attempting to install golang.org/x/vuln/cmd/govulncheck...${NC}"
-        if ! "$GO_BINARY" install golang.org/x/vuln/cmd/govulncheck@latest >/dev/null 2>&1; then
-            echo -e "${YELLOW}[WARNING] Failed to install govulncheck. Skipping Go vulnerability check.${NC}"
-            has_govulncheck=false
+        run_go_as_user install golang.org/x/vuln/cmd/govulncheck@latest || true
+        gopath=$(run_go_as_user env GOPATH 2>/dev/null | tr -d '\r')
+        if [ -n "$gopath" ] && [ -x "$gopath/bin/govulncheck" ]; then
+            govulncheck_bin="$gopath/bin/govulncheck"
         fi
     fi
 
-    if [ "$has_govulncheck" = "true" ]; then
-        local govulncheck_bin="govulncheck"
-        if [ -n "$SUDO_USER" ] && [ -x "/home/$SUDO_USER/go/bin/govulncheck" ]; then
-            govulncheck_bin="/home/$SUDO_USER/go/bin/govulncheck"
-        elif [ -x "/root/go/bin/govulncheck" ]; then
-            govulncheck_bin="/root/go/bin/govulncheck"
-        fi
-
-        echo "Running govulncheck..."
+    if [ -z "$govulncheck_bin" ] || [ ! -x "$govulncheck_bin" ]; then
+        echo -e "${YELLOW}[WARNING] govulncheck binary not available. Skipping Go vulnerability check.${NC}"
+    else
+        echo "Running govulncheck ($govulncheck_bin)..."
         if ! "$govulncheck_bin" ./...; then
             echo -e "${RED}[X] govulncheck found known vulnerabilities in Go dependencies!${NC}"
             if [ "$PRODUCTION_BUILD" = "true" ]; then
