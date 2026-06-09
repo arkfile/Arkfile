@@ -1,5 +1,7 @@
 # Arkfile Production Deployment Hardening Checklist
 
+STATUS: DONE 06/09/26
+
 This document is the deployment- and operational-hardening work needed to take Arkfile from a working test/demo deployment to something trustworthy for a real-world production launch. It was derived from a code-verified review on 2026-06-08 of `scripts/prod-deploy.sh`, `scripts/prod-update.sh`, `scripts/setup/build.sh`, `scripts/setup/05-setup-seaweedfs.sh`, and the related config/templates, plus the earlier reviews in `docs/wip/archive/review/remaining-issues.md`. Each item below states its verification status. Items marked "verified" were read directly in the live source on this date with the cited file/line; items marked "from the June 6 review, re-verify before acting" come from the earlier review of files this pass did not re-read (notably the rqlite build script), and should be re-confirmed before code changes. The crypto core is in good shape (OPAQUE hardening, AEAD path-binding, and most sharing residuals are done), so the dominant pre-launch risk now lives in this deployment and operational tooling rather than in the application's cryptography.
 
 Note on one overlap with `01-security.md`: the highest-priority deployment item, binding Arkfile to loopback, is also the one genuinely exploitable in-codebase gap, so it appears in both documents. It is restated here only because the deploy script half of that fix (writing `HOST=127.0.0.1`) lives in this tooling.

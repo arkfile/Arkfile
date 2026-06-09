@@ -20,4 +20,4 @@ Before a full public launch, the payments system needs further development, incl
 
 ## Sequencing note
 
-The rough intended order is: ship a hardened single-node production deployment first (gated by `01-security.md` and the first batch of `02-prod-hardening.md`); then build out payments to the point needed for a real public launch; then layer in stronger multi-factor authentication; and finally take on multi-node cluster mode and the associated container/orchestration decisions, since those are the largest architectural lift and benefit most from a stable single-node baseline to build on.
+The rough intended order is: build out payments so that at the very least bitcoin can be accepted through btcpayserver (ideally also monero and credit card payments through the stripe extension); then layer in stronger multi-factor authentication; and finally take on multi-node cluster mode and the associated container/orchestration decisions, since those are the largest architectural lift and benefit most from a stable single-node baseline to build on.
