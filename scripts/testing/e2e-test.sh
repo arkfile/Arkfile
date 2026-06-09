@@ -2776,6 +2776,14 @@ phase_11d_billing() {
 phase_11e_payments() {
     phase "11e: PAYMENTS INTEGRATION"
 
+    # Start the BTCPay Mock Server in the background
+    info "Starting mock BTCPay server..."
+    go run scripts/testing/btcpay-mock.go > /tmp/btcpay-mock.log 2>&1 &
+    local mock_pid=$!
+    
+    # Wait for mock server port to become active
+    sleep 1
+
     # Temporarily enable payments configuration in process environment for testing
     export ARKFILE_PAYMENTS_ENABLED=true
     export ARKFILE_BTCPAY_SERVER_URL="http://localhost:3000"
@@ -2787,19 +2795,12 @@ phase_11e_payments() {
 
     section "11e.1: Retrieve user token and check payments status"
 
-    # Get test user session token
+    # Log in as the regular test user to ensure a fresh session and token
+    user_login_with_totp "User login for payments test"
+
+    # Extract the token directly from the user's active session file
     local user_token
-    user_token=$(cat "$USER_TOKEN_FILE" 2>/dev/null || echo "")
-    if [ -z "$user_token" ]; then
-        # Log in again if needed
-        local login_out login_code
-        safe_exec login_out login_code \
-            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
-            login --username "$TEST_USERNAME" <<EOF
-$TEST_PASSWORD
-EOF
-        user_token=$(echo "$login_out" | jq -r '.access_token' 2>/dev/null)
-    fi
+    user_token=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
 
     # Check credits endpoint includes payments config
     local credits_out credits_code
@@ -2900,6 +2901,10 @@ EOF
         error "Credits transactions missing payment record: $credits_after_out"
         record_test "User ledger includes payment transaction row" "FAIL"
     fi
+
+    # Clean up mock server
+    info "Stopping mock BTCPay server..."
+    kill "$mock_pid" 2>/dev/null || true
 
     info "Payments phase complete"
 }
