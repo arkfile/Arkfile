@@ -181,6 +181,9 @@ var (
 	// billingSweepNowFn forces an immediate sweep of all accumulator rows
 	// (dev/test API).
 	billingSweepNowFn func(db *sql.DB) error
+
+	// ProcessPaymentFunc handles actual balance credit operations securely within a strict SQLite transaction bracket.
+	ProcessPaymentFunc func(db *sql.DB, username string, amountUSDMicrocents int64, providerTxID string, paymentType string) (*models.CreditTransaction, error)
 )
 
 // defaultFreeBaselineBytes mirrors models.DefaultStorageLimit so the seam
@@ -219,6 +222,11 @@ func SetBillingTickNowFunc(fn func(db *sql.DB) error) {
 // SetBillingSweepNowFunc wires the dev/test "sweep now" call.
 func SetBillingSweepNowFunc(fn func(db *sql.DB) error) {
 	billingSweepNowFn = fn
+}
+
+// SetProcessPaymentFunc wires the billing.ProcessPayment call.
+func SetProcessPaymentFunc(fn func(db *sql.DB, username string, amountUSDMicrocents int64, providerTxID string, paymentType string) (*models.CreditTransaction, error)) {
+	ProcessPaymentFunc = fn
 }
 
 // silence the unused-import linter when database isn't yet used (it is

@@ -414,6 +414,14 @@ func main() {
 			os.Exit(1)
 		}
 
+	// Payments - BTCPay Server / invoice payments subcommand group.
+	// All subcommands live in cmd/arkfile-admin/payments_commands.go.
+	case "payments":
+		if err := handlePaymentsCommand(client, config, args); err != nil {
+			logError("Payments command failed: %v", err)
+			os.Exit(1)
+		}
+
 	case "version":
 		printVersion()
 	default:

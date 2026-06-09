@@ -2772,6 +2772,138 @@ phase_11d_billing() {
     info "Billing phase complete"
 }
 
+# Phase 11e: Payments integration end-to-end
+phase_11e_payments() {
+    phase "11e: PAYMENTS INTEGRATION"
+
+    # Temporarily enable payments configuration in process environment for testing
+    export ARKFILE_PAYMENTS_ENABLED=true
+    export ARKFILE_BTCPAY_SERVER_URL="http://localhost:3000"
+    export ARKFILE_BTCPAY_STORE_ID="test_store_id"
+    export ARKFILE_BTCPAY_API_KEY="test_api_key"
+    export ARKFILE_BTCPAY_WEBHOOK_SECRET="test_webhook_secret"
+    export ARKFILE_MIN_TOP_UP_USD="0.50"
+    export ARKFILE_MAX_TOP_UP_USD="1000.00"
+
+    section "11e.1: Retrieve user token and check payments status"
+
+    # Get test user session token
+    local user_token
+    user_token=$(cat "$USER_TOKEN_FILE" 2>/dev/null || echo "")
+    if [ -z "$user_token" ]; then
+        # Log in again if needed
+        local login_out login_code
+        safe_exec login_out login_code \
+            $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+            login --username "$TEST_USERNAME" <<EOF
+$TEST_PASSWORD
+EOF
+        user_token=$(echo "$login_out" | jq -r '.access_token' 2>/dev/null)
+    fi
+
+    # Check credits endpoint includes payments config
+    local credits_out credits_code
+    safe_exec credits_out credits_code \
+        curl -s -k -H "Authorization: Bearer $user_token" "$SERVER_URL/api/credits"
+
+    if [ $credits_code -eq 0 ] && echo "$credits_out" | grep -q '"payments"'; then
+        record_test "User credits endpoint includes payments config" "PASS"
+        info "Credits response: $credits_out"
+    else
+        error "Credits response missing payments block: $credits_out"
+        record_test "User credits endpoint includes payments config" "FAIL"
+    fi
+
+    section "11e.2: Create invoice and check admin list"
+
+    # Create invoice via API
+    local invoice_out invoice_code
+    safe_exec invoice_out invoice_code \
+        curl -s -k -X POST -H "Authorization: Bearer $user_token" \
+        -H "Content-Type: application/json" \
+        -d '{"amount_usd":"10.00"}' \
+        "$SERVER_URL/api/billing/invoice"
+
+    local invoice_id provider_invoice_id
+    invoice_id=$(echo "$invoice_out" | jq -r '.data.invoice_id' 2>/dev/null)
+    if [ $invoice_code -eq 0 ] && [ -n "$invoice_id" ] && [ "$invoice_id" != "null" ]; then
+        record_test "Create payment invoice API succeeds" "PASS"
+        info "Created Invoice ID: $invoice_id"
+    else
+        error "Failed to create invoice: $invoice_out"
+        record_test "Create payment invoice API succeeds" "FAIL"
+    fi
+
+    # Verify that the invoice is listed in the admin CLI
+    local list_out list_code
+    safe_exec list_out list_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        payments list --status pending --json
+
+    if [ $list_code -eq 0 ] && echo "$list_out" | grep -q "$invoice_id"; then
+        record_test "Admin CLI payments list includes pending invoice" "PASS"
+    else
+        error "Pending invoice not found in admin payments list: $list_out"
+        record_test "Admin CLI payments list includes pending invoice" "FAIL"
+    fi
+
+    section "11e.3: Simulate BTCPay webhook and verify credit balance"
+
+    # Settle the invoice by sending a signed webhook payload to /api/webhooks/btcpay
+    # Payload format
+    local webhook_payload
+    webhook_payload='{"type":"InvoiceSettled","invoiceId":"test_provider_id","metadata":{"invoice_id":"'"$invoice_id"'"}}'
+    
+    # Compute signature: hmac sha256 of payload with secret "test_webhook_secret"
+    local signature
+    signature=$(echo -n "$webhook_payload" | openssl dgst -sha256 -hmac "test_webhook_secret" | sed 's/^.* //')
+    
+    local webhook_out webhook_code
+    safe_exec webhook_out webhook_code \
+        curl -s -k -X POST -H "BTCPay-Sig: sha256=$signature" \
+        -H "Content-Type: application/json" \
+        -d "$webhook_payload" \
+        "$SERVER_URL/api/webhooks/btcpay"
+
+    if [ $webhook_code -eq 0 ] && echo "$webhook_out" | grep -q '"success"'; then
+        record_test "Settle invoice via signed BTCPay webhook" "PASS"
+        info "Webhook response: $webhook_out"
+    else
+        error "Settle webhook failed: $webhook_out"
+        record_test "Settle invoice via signed BTCPay webhook" "FAIL"
+    fi
+
+    # Verify that the invoice status changed to paid and credit was applied
+    local show_out show_code
+    safe_exec show_out show_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        payments show "$invoice_id" --json
+
+    local status
+    status=$(echo "$show_out" | jq -r '.status' 2>/dev/null)
+    if [ $show_code -eq 0 ] && [ "$status" = "paid" ]; then
+        record_test "Payment invoice transitions to paid status" "PASS"
+    else
+        error "Invoice status is not paid: $show_out"
+        record_test "Payment invoice transitions to paid status" "FAIL"
+    fi
+
+    # Verify that user balance is updated in the credits summary
+    local credits_after_out credits_after_code
+    safe_exec credits_after_out credits_after_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing show --user "$TEST_USERNAME" --json
+
+    if [ $credits_after_code -eq 0 ] && echo "$credits_after_out" | grep -q "Payment top-up via btcpay"; then
+        record_test "User ledger includes payment transaction row" "PASS"
+    else
+        error "Credits transactions missing payment record: $credits_after_out"
+        record_test "User ledger includes payment transaction row" "FAIL"
+    fi
+
+    info "Payments phase complete"
+}
+
 # Phase 12: Cleanup
 phase_12_cleanup() {
     phase "12: CLEANUP"
@@ -2878,6 +3010,7 @@ main() {
     phase_11b_flood_guard
     phase_11c_multi_backend_storage
     phase_11d_billing
+    phase_11e_payments
     phase_12_cleanup
 
     # Show summary and exit with appropriate code

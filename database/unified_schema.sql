@@ -429,6 +429,21 @@ CREATE TABLE IF NOT EXISTS billing_sweeps (
     negative_balance_users INTEGER NOT NULL
 );
 
+-- Payment invoices tracking. Integrates with self-hosted BTCPay Server.
+CREATE TABLE IF NOT EXISTS payment_invoices (
+    invoice_id TEXT PRIMARY KEY,
+    username TEXT NOT NULL,
+    amount_usd_microcents BIGINT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    provider TEXT NOT NULL,
+    provider_invoice_id TEXT UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(username) REFERENCES users(username) ON DELETE RESTRICT,
+    CHECK(status IN ('pending', 'paid', 'expired', 'failed')),
+    CHECK(provider IN ('btcpay'))
+);
+
 -- =====================================================
 -- PHASE 12: USER CONTACT INFORMATION
 -- =====================================================
@@ -601,6 +616,10 @@ CREATE INDEX IF NOT EXISTS idx_storage_usage_accumulator_last_tick_at
     ON storage_usage_accumulator(last_tick_at);
 CREATE INDEX IF NOT EXISTS idx_storage_usage_accumulator_last_billed_at
     ON storage_usage_accumulator(last_billed_at);
+
+-- Payment invoices indexes
+CREATE INDEX IF NOT EXISTS idx_payment_invoices_username ON payment_invoices(username);
+CREATE INDEX IF NOT EXISTS idx_payment_invoices_provider_invoice_id ON payment_invoices(provider_invoice_id);
 
 -- Multi-backend storage indexes
 CREATE INDEX IF NOT EXISTS idx_storage_providers_role ON storage_providers(role);

@@ -117,6 +117,7 @@ type Config struct {
 	} `json:"deployment"`
 
 	Billing BillingConfig `json:"billing"`
+	Payments PaymentsConfig `json:"payments"`
 }
 
 // BillingConfig is the storage credits / usage metering configuration.
@@ -150,6 +151,17 @@ type BillingConfig struct {
 	// IncludeAdmins controls whether admin accounts are billed. Default false
 	// keeps operator self-usage out of beta usage data.
 	IncludeAdmins bool `json:"include_admins"`
+}
+
+// PaymentsConfig is the BTCPay Server / Stripe extension payments configuration.
+type PaymentsConfig struct {
+	Enabled             bool   `json:"enabled"`
+	BTCPayServerURL     string `json:"btcpay_server_url"`
+	BTCPayStoreID       string `json:"btcpay_store_id"`
+	BTCPayAPIKey        string `json:"btcpay_api_key"`
+	BTCPayWebhookSecret string `json:"btcpay_webhook_secret"`
+	MinTopUpUSD         string `json:"min_top_up_usd"`
+	MaxTopUpUSD         string `json:"max_top_up_usd"`
 }
 
 // LoadConfig loads the configuration from environment variables and optional JSON file
@@ -304,6 +316,11 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Billing.TickInterval = time.Hour
 	cfg.Billing.SweepAtUTC = "00:15"
 	cfg.Billing.IncludeAdmins = false
+
+	// Payments defaults (BTCPay Server integration)
+	cfg.Payments.Enabled = false
+	cfg.Payments.MinTopUpUSD = "0.50"
+	cfg.Payments.MaxTopUpUSD = "1000.00"
 
 	return nil
 }
@@ -461,6 +478,31 @@ func loadEnvConfig(cfg *Config) error {
 		if parsed, err := strconv.ParseBool(v); err == nil {
 			cfg.Billing.IncludeAdmins = parsed
 		}
+	}
+
+	// Payments (BTCPay Server integration) envs
+	if v := os.Getenv("ARKFILE_PAYMENTS_ENABLED"); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			cfg.Payments.Enabled = parsed
+		}
+	}
+	if v := os.Getenv("ARKFILE_BTCPAY_SERVER_URL"); v != "" {
+		cfg.Payments.BTCPayServerURL = v
+	}
+	if v := os.Getenv("ARKFILE_BTCPAY_STORE_ID"); v != "" {
+		cfg.Payments.BTCPayStoreID = v
+	}
+	if v := os.Getenv("ARKFILE_BTCPAY_API_KEY"); v != "" {
+		cfg.Payments.BTCPayAPIKey = v
+	}
+	if v := os.Getenv("ARKFILE_BTCPAY_WEBHOOK_SECRET"); v != "" {
+		cfg.Payments.BTCPayWebhookSecret = v
+	}
+	if v := os.Getenv("ARKFILE_MIN_TOP_UP_USD"); v != "" {
+		cfg.Payments.MinTopUpUSD = v
+	}
+	if v := os.Getenv("ARKFILE_MAX_TOP_UP_USD"); v != "" {
+		cfg.Payments.MaxTopUpUSD = v
 	}
 
 	return nil

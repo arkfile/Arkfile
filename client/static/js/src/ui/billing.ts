@@ -81,6 +81,12 @@ interface Transaction {
   created_at: string;
 }
 
+interface PaymentsConfig {
+  enabled: boolean;
+  min_top_up: string;
+  max_top_up: string;
+}
+
 interface CreditsResponse {
   username: string;
   balance_usd_microcents: number;
@@ -88,6 +94,7 @@ interface CreditsResponse {
   current_usage?: CurrentUsage;
   credits_runway?: CreditsRunway;
   transactions?: Transaction[];
+  payments?: PaymentsConfig;
 }
 
 /** Fetch /api/credits and render the panel. */
@@ -154,6 +161,29 @@ function renderBalanceSection(d: CreditsResponse): HTMLElement {
     note.className = 'billing-below-baseline';
     note.textContent = d.credits_runway.note;
     wrap.appendChild(note);
+  }
+
+  // Top Up Balance Button
+  if (d.payments?.enabled) {
+    const btnContainer = document.createElement('div');
+    btnContainer.style.marginTop = '1rem';
+
+    const topUpBtn = document.createElement('button');
+    topUpBtn.type = 'button';
+    topUpBtn.className = 'btn';
+    topUpBtn.style.backgroundColor = 'var(--biolum)';
+    topUpBtn.style.color = 'var(--depth-1)';
+    topUpBtn.style.border = 'none';
+    topUpBtn.style.padding = '0.5rem 1rem';
+    topUpBtn.style.borderRadius = '4px';
+    topUpBtn.style.cursor = 'pointer';
+    topUpBtn.style.fontFamily = 'monospace';
+    topUpBtn.style.fontWeight = 'bold';
+    topUpBtn.textContent = 'Top Up Balance';
+    
+    topUpBtn.onclick = () => showTopUpModal(d.payments!);
+    btnContainer.appendChild(topUpBtn);
+    wrap.appendChild(btnContainer);
   }
 
   return wrap;
@@ -312,4 +342,206 @@ function escapeHtml(s: string): string {
   const div = document.createElement('div');
   div.textContent = s;
   return div.innerHTML;
+}
+
+/** Show the Top Up payment modal and handle invoice generation + iframe embedding. */
+function showTopUpModal(cfg: PaymentsConfig): void {
+  const overlayId = 'arkfile-topup-modal-overlay';
+  
+  // Remove any existing topup modals
+  const existing = document.getElementById(overlayId);
+  if (existing) {
+    existing.remove();
+  }
+
+  const overlay = document.createElement('div');
+  overlay.id = overlayId;
+  overlay.className = 'password-modal-overlay';
+  overlay.style.position = 'fixed';
+  overlay.style.top = '0';
+  overlay.style.left = '0';
+  overlay.style.width = '100%';
+  overlay.style.height = '100%';
+  overlay.style.backgroundColor = 'color-mix(in srgb, var(--depth-1) 80%, transparent)';
+  overlay.style.display = 'flex';
+  overlay.style.justifyContent = 'center';
+  overlay.style.alignItems = 'center';
+  overlay.style.zIndex = '2000';
+
+  const modal = document.createElement('div');
+  modal.className = 'password-modal';
+  modal.style.backgroundColor = 'var(--depth-3)';
+  modal.style.border = '1px solid var(--current-2)';
+  modal.style.borderRadius = '8px';
+  modal.style.padding = '24px';
+  modal.style.maxWidth = '550px';
+  modal.style.width = '92%';
+  modal.style.boxShadow = '0 4px 20px color-mix(in srgb, var(--depth-1) 80%, transparent)';
+
+  const header = document.createElement('div');
+  header.className = 'password-modal-header';
+  header.style.display = 'flex';
+  header.style.justifyContent = 'space-between';
+  header.style.alignItems = 'center';
+  header.style.marginBottom = '1.5rem';
+
+  const title = document.createElement('h2');
+  title.style.margin = '0';
+  title.style.color = 'var(--salt)';
+  title.style.fontFamily = 'monospace';
+  title.style.fontSize = '1.5rem';
+  title.textContent = 'Top Up Balance';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'password-modal-close';
+  closeBtn.innerHTML = '&times;';
+  closeBtn.style.background = 'none';
+  closeBtn.style.border = 'none';
+  closeBtn.style.color = 'var(--foam-2)';
+  closeBtn.style.fontSize = '1.5rem';
+  closeBtn.style.cursor = 'pointer';
+  closeBtn.onclick = () => {
+    overlay.remove();
+    loadBilling().catch(err => console.error(err));
+  };
+
+  header.appendChild(title);
+  header.appendChild(closeBtn);
+  modal.appendChild(header);
+
+  const body = document.createElement('div');
+  body.className = 'password-modal-body';
+
+  const desc = document.createElement('p');
+  desc.style.color = 'var(--foam-1)';
+  desc.style.marginBottom = '1rem';
+  desc.textContent = `Enter an amount in USD to generate a BTCPay Server invoice. Payments can be made with Bitcoin, Lightning, Monero, or credit cards if enabled.`;
+  body.appendChild(desc);
+
+  const form = document.createElement('form');
+  form.id = 'topup-form';
+
+  const field = document.createElement('div');
+  field.className = 'password-modal-field';
+  field.style.marginBottom = '1rem';
+
+  const label = document.createElement('label');
+  label.htmlFor = 'topup-amount-input';
+  label.style.display = 'block';
+  label.style.color = 'var(--foam-2)';
+  label.style.marginBottom = '0.5rem';
+  label.textContent = `Amount (USD): Min $${cfg.min_top_up}, Max $${cfg.max_top_up}`;
+  field.appendChild(label);
+
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.id = 'topup-amount-input';
+  input.className = 'password-modal-input';
+  input.step = '0.01';
+  input.min = cfg.min_top_up;
+  input.max = cfg.max_top_up;
+  input.value = '10.00';
+  input.required = true;
+  input.style.width = '100%';
+  input.style.backgroundColor = 'var(--depth-2)';
+  input.style.border = '1px solid var(--current-1)';
+  input.style.color = 'var(--salt)';
+  input.style.padding = '0.5rem';
+  input.style.borderRadius = '4px';
+  input.style.fontFamily = 'monospace';
+  field.appendChild(input);
+
+  form.appendChild(field);
+
+  const errorEl = document.createElement('p');
+  errorEl.id = 'topup-error';
+  errorEl.style.color = 'var(--coral)';
+  errorEl.style.marginTop = '0.5rem';
+  errorEl.style.display = 'none';
+  form.appendChild(errorEl);
+
+  const footer = document.createElement('div');
+  footer.className = 'password-modal-footer';
+  footer.style.display = 'flex';
+  footer.style.justifyContent = 'flex-end';
+  footer.style.gap = '10px';
+  footer.style.marginTop = '1.5rem';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.className = 'password-modal-btn password-modal-btn-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.style.padding = '0.5rem 1rem';
+  cancelBtn.style.cursor = 'pointer';
+  cancelBtn.onclick = () => {
+    overlay.remove();
+  };
+
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'submit';
+  submitBtn.className = 'password-modal-btn password-modal-btn-submit';
+  submitBtn.textContent = 'Generate Invoice';
+  submitBtn.style.padding = '0.5rem 1rem';
+  submitBtn.style.cursor = 'pointer';
+
+  footer.appendChild(cancelBtn);
+  footer.appendChild(submitBtn);
+  form.appendChild(footer);
+  body.appendChild(form);
+  modal.appendChild(body);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    errorEl.style.display = 'none';
+    submitBtn.disabled = true;
+    cancelBtn.disabled = true;
+    submitBtn.textContent = 'Creating Invoice...';
+
+    const amountStr = input.value;
+
+    try {
+      const response = await authenticatedFetch('/api/billing/invoice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount_usd: amountStr }),
+      });
+
+      if (!response.ok) {
+        const errJson = await response.json().catch(() => ({}));
+        throw new Error(errJson.message || `Server returned status ${response.status}`);
+      }
+
+      const res = await response.json();
+      const invoiceData = res.data;
+
+      // Replace form/body content with an iframe
+      body.innerHTML = '';
+      
+      const iframeContainer = document.createElement('div');
+      iframeContainer.style.width = '100%';
+      iframeContainer.style.height = '460px';
+      iframeContainer.style.position = 'relative';
+
+      const iframe = document.createElement('iframe');
+      iframe.src = invoiceData.checkout_url;
+      iframe.style.width = '100%';
+      iframe.style.height = '100%';
+      iframe.style.border = 'none';
+      iframe.style.borderRadius = '8px';
+      iframe.style.backgroundColor = 'var(--depth-4)';
+
+      iframeContainer.appendChild(iframe);
+      body.appendChild(iframeContainer);
+    } catch (err) {
+      console.error('Invoice creation failed:', err);
+      errorEl.textContent = `Invoice generation failed: ${escapeHtml(String(err))}`;
+      errorEl.style.display = 'block';
+      submitBtn.disabled = false;
+      cancelBtn.disabled = false;
+      submitBtn.textContent = 'Generate Invoice';
+    }
+  };
 }

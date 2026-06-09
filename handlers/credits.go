@@ -8,6 +8,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/84adam/Arkfile/auth"
+	"github.com/84adam/Arkfile/config"
 	"github.com/84adam/Arkfile/database"
 	"github.com/84adam/Arkfile/logging"
 	"github.com/84adam/Arkfile/models"
@@ -51,6 +52,15 @@ func GetUserCredits(c echo.Context) error {
 			"offset": offset,
 			"count":  len(transactions),
 		},
+	}
+
+	cfg, err := config.LoadConfig()
+	if err == nil && cfg.Payments.Enabled {
+		response["payments"] = map[string]interface{}{
+			"enabled":    true,
+			"min_top_up": cfg.Payments.MinTopUpUSD,
+			"max_top_up": cfg.Payments.MaxTopUpUSD,
+		}
 	}
 
 	return c.JSON(http.StatusOK, response)

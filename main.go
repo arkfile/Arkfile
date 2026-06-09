@@ -422,6 +422,7 @@ func startBillingScheduler(ctx context.Context, cfg *config.Config) {
 		_, err := billing.SweepAllUsers(db, rate, time.Now().UTC())
 		return err
 	})
+	handlers.SetProcessPaymentFunc(billing.ProcessPayment)
 
 	if !cfg.Billing.Enabled {
 		logging.InfoLogger.Print("billing scheduler disabled (ARKFILE_BILLING_ENABLED=false)")

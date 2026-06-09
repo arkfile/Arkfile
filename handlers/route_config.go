@@ -184,6 +184,13 @@ func RegisterRoutes() {
 	// Credits system - user endpoints (require TOTP)
 	totpProtectedGroup.GET("/api/credits", GetUserCredits)
 
+	// Payments integration - user endpoints
+	totpProtectedGroup.POST("/api/billing/invoice", CreateInvoiceHandler)
+	totpProtectedGroup.GET("/api/billing/invoice/:invoice_id", GetInvoiceStatusHandler)
+
+	// Webhook endpoint (public, unauthenticated)
+	Echo.POST("/api/webhooks/btcpay", BTCPayWebhookHandler)
+
 	// Admin API endpoints - structured for future expansion.
 	// Stack: JWTMiddleware (validates aud=arkfile-api, rejects temp tokens at signature/audience)
 	//      + RequireFullJWT (defense in depth: rejects requires_totp=true)
@@ -257,6 +264,11 @@ func RegisterRoutes() {
 	adminGroup.GET("/billing/sweep-summary", AdminGetBillingSweepSummary)
 	adminGroup.GET("/billing/overdrawn", AdminGetBillingOverdrawn)
 	adminGroup.POST("/billing/gift", AdminBillingGift)
+
+	// Payments integration - admin endpoints
+	adminGroup.GET("/payments/invoice/:invoice_id", AdminGetInvoiceHandler)
+	adminGroup.GET("/payments/invoices", AdminListInvoicesHandler)
+	adminGroup.POST("/payments/invoice/:invoice_id/sync", AdminSyncInvoiceHandler)
 
 	// Development/Testing admin endpoints (gated by ADMIN_DEV_TEST_API_ENABLED)
 	// SECURITY: These endpoints are ONLY for development and testing
