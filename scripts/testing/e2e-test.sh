@@ -373,6 +373,68 @@ stop_agent() {
     warning "Agent may still be running after stop attempt"
 }
 
+# MOCK BTCPAY SERVER (phase 11e)
+
+stop_mock_btcpay_server() {
+    local mock_pid="${1:-}"
+    if [ -n "$mock_pid" ]; then
+        kill "$mock_pid" 2>/dev/null || true
+        wait "$mock_pid" 2>/dev/null || true
+    fi
+}
+
+wait_for_mock_btcpay_port() {
+    local mock_pid="$1"
+    local mock_log="$2"
+    local i
+
+    for i in $(seq 1 60); do
+        if curl -s --connect-timeout 1 http://127.0.0.1:3000/ >/dev/null 2>&1; then
+            info "Mock BTCPay server is listening on :3000"
+            return 0
+        fi
+        if [ -n "$mock_pid" ] && ! kill -0 "$mock_pid" 2>/dev/null; then
+            error "Mock BTCPay process exited before becoming ready"
+            [ -f "$mock_log" ] && cat "$mock_log"
+            return 1
+        fi
+        sleep 1
+    done
+
+    error "Mock BTCPay did not become ready within 60s"
+    [ -f "$mock_log" ] && cat "$mock_log"
+    return 1
+}
+
+start_mock_btcpay_server() {
+    local e2e_script_dir="$1"
+    local go_bin="$2"
+    local mock_bin="$TEST_DATA_DIR/btcpay-mock"
+    local mock_log="/tmp/btcpay-mock.log"
+    local mock_src="$e2e_script_dir/btcpay-mock.go"
+    local mock_pid
+
+    : > "$mock_log"
+
+    info "Building mock BTCPay server..."
+    if ! "$go_bin" build -o "$mock_bin" "$mock_src" >>"$mock_log" 2>&1; then
+        error "Failed to build mock BTCPay server"
+        cat "$mock_log"
+        return 1
+    fi
+
+    info "Starting mock BTCPay server..."
+    "$mock_bin" >>"$mock_log" 2>&1 &
+    mock_pid=$!
+
+    if ! wait_for_mock_btcpay_port "$mock_pid" "$mock_log"; then
+        stop_mock_btcpay_server "$mock_pid"
+        return 1
+    fi
+
+    echo "$mock_pid"
+}
+
 # TEST PHASES
 
 # Phase 1: Environment Verification
@@ -2776,13 +2838,25 @@ phase_11d_billing() {
 phase_11e_payments() {
     phase "11e: PAYMENTS INTEGRATION"
 
-    # Start the BTCPay Mock Server in the background
-    info "Starting mock BTCPay server..."
-    go run scripts/testing/btcpay-mock.go > /tmp/btcpay-mock.log 2>&1 &
-    local mock_pid=$!
-    
-    # Wait for mock server port to become active
-    sleep 1
+    local e2e_script_dir mock_pid go_bin
+
+    e2e_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+    go_bin="go"
+    if ! command -v go >/dev/null 2>&1; then
+        for path in "/usr/local/go/bin/go" "/usr/local/bin/go" "/usr/bin/go"; do
+            if [ -x "$path" ]; then
+                go_bin="$path"
+                break
+            fi
+        done
+    fi
+
+    info "Using Go binary: $go_bin"
+    mock_pid=$(start_mock_btcpay_server "$e2e_script_dir" "$go_bin") || {
+        record_test "Start mock BTCPay server" "FAIL"
+    }
+    record_test "Start mock BTCPay server" "PASS"
 
     # Temporarily enable payments configuration in process environment for testing
     export ARKFILE_PAYMENTS_ENABLED=true
@@ -2904,7 +2978,7 @@ phase_11e_payments() {
 
     # Clean up mock server
     info "Stopping mock BTCPay server..."
-    kill "$mock_pid" 2>/dev/null || true
+    stop_mock_btcpay_server "$mock_pid"
 
     info "Payments phase complete"
 }
