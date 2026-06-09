@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +59,21 @@ func TestBTCPayClient_CreateInvoice(t *testing.T) {
 	}
 	if provInv.CheckoutURL != "https://btcpayserver.example.com/checkout/abc123" {
 		t.Errorf("expected checkout URL https://btcpayserver.example.com/checkout/abc123, got: %s", provInv.CheckoutURL)
+	}
+}
+
+func TestBTCPayClient_CreateInvoice_BadStatus(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer mockServer.Close()
+
+	client := NewBTCPayClient(mockServer.URL, "test_store_id", "test_api_key")
+	_, err := client.CreateInvoice(context.Background(), "inv_bad", 100_000_000, "https://redirect.example.com")
+	if err == nil {
+		t.Fatal("expected error for non-201 response")
+	}
+	if !strings.Contains(err.Error(), "bad status") {
+		t.Errorf("error = %q, want bad status mention", err)
 	}
 }

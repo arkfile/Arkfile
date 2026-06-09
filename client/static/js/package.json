@@ -6,7 +6,7 @@
     "build": "bun build src/app.ts --outdir dist --target browser --format iife && bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm",
     "build:watch": "bun build src/app.ts --outdir dist --target browser --format iife --watch & bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --watch",
     "type-check": "bun tsc --noEmit && bun tsc --noEmit -p ../../../tsconfig.sw.json",
-    "test": "bun test",
+    "test": "bun test src/__tests__/",
     "test:watch": "bun test --watch",
     "test:integration": "bun run tests/integration/test-runner.ts",
     "dev": "bun build src/app.ts --outdir dist --target browser --watch & bun build src/sw-download.ts --outfile sw-download.js --target browser --format esm --watch",

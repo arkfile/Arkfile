@@ -74,11 +74,12 @@ describe('deriveSaltFromUsername', () => {
     expect(toHex(a)).toBe(toHex(b));
   });
 
-  test('does NOT lowercase (matches Go behavior)', () => {
-    const upper = deriveSaltFromUsername('TestUser01');
+  test('lowercases username before salt derivation (security canonicalization)', () => {
+    const mixed = deriveSaltFromUsername('TestUser01');
     const lower = deriveSaltFromUsername('testuser01');
-    // Go does NOT normalize to lowercase, so these should differ
-    expect(toHex(upper)).not.toBe(toHex(lower));
+    // Usernames are lowercase-only at registration; salt derivation lowercases
+    // defensively so key material stays stable across client edge cases.
+    expect(toHex(mixed)).toBe(toHex(lower));
   });
 
   // --- Validation errors ---

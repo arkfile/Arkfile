@@ -491,3 +491,50 @@ func TestValidateProductionConfig_RequiresDomain(t *testing.T) {
 		})
 	}
 }
+
+func TestPaymentsConfigFromEnv(t *testing.T) {
+	baseEnv := map[string]string{
+		"JWT_SECRET":           "test-jwt-secret",
+		"STORAGE_PROVIDER_1":   "generic-s3",
+		"STORAGE_1_ENDPOINT":   "http://localhost:9332",
+		"STORAGE_1_ACCESS_KEY": "test",
+		"STORAGE_1_SECRET_KEY": "test",
+		"STORAGE_1_BUCKET":     "test-bucket",
+		"ARKFILE_PAYMENTS_ENABLED":       "true",
+		"ARKFILE_BTCPAY_SERVER_URL":      "https://btcpay.example.com",
+		"ARKFILE_BTCPAY_STORE_ID":        "store-abc",
+		"ARKFILE_BTCPAY_API_KEY":         "key-xyz",
+		"ARKFILE_BTCPAY_WEBHOOK_SECRET":  "whsec-test",
+		"ARKFILE_MIN_TOP_UP_USD":         "1.25",
+		"ARKFILE_MAX_TOP_UP_USD":         "500.00",
+	}
+	originalEnv := map[string]string{}
+	for key := range baseEnv {
+		originalEnv[key] = os.Getenv(key)
+	}
+	defer func() {
+		for key, val := range originalEnv {
+			if val == "" {
+				os.Unsetenv(key)
+			} else {
+				os.Setenv(key, val)
+			}
+		}
+		ResetConfigForTest()
+	}()
+
+	ResetConfigForTest()
+	for key, val := range baseEnv {
+		os.Setenv(key, val)
+	}
+
+	cfg, err := LoadConfig()
+	assert.NoError(t, err)
+	assert.True(t, cfg.Payments.Enabled)
+	assert.Equal(t, "https://btcpay.example.com", cfg.Payments.BTCPayServerURL)
+	assert.Equal(t, "store-abc", cfg.Payments.BTCPayStoreID)
+	assert.Equal(t, "key-xyz", cfg.Payments.BTCPayAPIKey)
+	assert.Equal(t, "whsec-test", cfg.Payments.BTCPayWebhookSecret)
+	assert.Equal(t, "1.25", cfg.Payments.MinTopUpUSD)
+	assert.Equal(t, "500.00", cfg.Payments.MaxTopUpUSD)
+}

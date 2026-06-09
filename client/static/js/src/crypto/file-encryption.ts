@@ -57,8 +57,9 @@ export function deriveSaltFromUsername(username: string, context: PasswordContex
     throw new InvalidUsernameError('Username cannot be empty');
   }
   
-  // Normalize username (lowercase, trim whitespace)
-  // Enforce lowercase strictly
+  // Canonicalize: trim whitespace, then lowercase (see docs/wip/prod-prep/01-security.md).
+  // Valid usernames are already lowercase-only; this keeps salts stable if mixed
+  // case is ever passed programmatically.
   const normalizedUsername = username.trim().toLowerCase();
   
   if (normalizedUsername.length < 10) {

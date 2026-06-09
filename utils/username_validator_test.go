@@ -98,6 +98,26 @@ func TestValidateUsernameInvalid(t *testing.T) {
 	}
 }
 
+func TestFoldUsername(t *testing.T) {
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"john.doe", "johndoe"},
+		{"john-doe", "johndoe"},
+		{"John.Doe", "johndoe"},
+		{"user_name_123", "username123"},
+		{"alice,bob,charlie", "alicebobcharlie"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			if got := FoldUsername(tc.input); got != tc.expected {
+				t.Errorf("FoldUsername(%q) = %q, want %q", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
 func TestSanitizeUsername(t *testing.T) {
 	testCases := []struct {
 		input    string
@@ -107,6 +127,7 @@ func TestSanitizeUsername(t *testing.T) {
 		{"\tusername\t", "username"},
 		{"\nusername\n", "username"},
 		{"username", "username"},
+		{"TestUser", "testuser"},
 		{"", ""},
 		{"  ", ""},
 	}
