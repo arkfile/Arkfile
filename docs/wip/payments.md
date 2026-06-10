@@ -1,36 +1,46 @@
-# Payments Integration and BTCPay Server Integration Plan
+# Payments Integration (BTCPay Server)
 
-This document details the definitive design and implementation plan for adding payment-provider rails on top of Arkfile's microcent-denominated storage-credits and usage-metering foundation. It focuses on a unified integration with a self-hosted BTCPay Server instance to facilitate Bitcoin, Lightning, and Monero payments, while also supporting credit cards via the BTCPay Server Stripe Payments plugin. This approach keeps Arkfile's core codebase clean, secure, and privacy-preserving.
+This document describes how Arkfile adds self-service balance top-ups on top of the microcent-denominated storage-credits and usage-metering foundation. Payment processing is delegated to a self-hosted BTCPay Server instance, which handles Bitcoin (on-chain and Lightning), Monero, and optionally credit cards through the BTCPay Server Stripe Payments plugin. Arkfile never loads Stripe scripts in the browser and never parses Stripe webhooks directly; every paid top-up is represented locally as a BTCPay invoice and a corresponding ledger credit. The design keeps the core application privacy-preserving: no user emails or real names are sent to BTCPay, and checkout happens either in an embedded iframe or via a checkout URL the user opens separately.
 
-## Scope and Architectural Alignment
+Most of this integration is implemented and covered by Go unit tests, shell-based e2e tests (`phase_11d_billing` and `phase_11e_payments` in `scripts/testing/e2e-test.sh`), and a Playwright billing-panel test. A focused remediation pass remains before live financial traffic; that work is summarized at the end of this document.
 
-The goal of this design is to introduce automated, self-service payment flows that allow users to top up their microcent balances. Instead of integrating multiple independent payment gateways directly into Arkfile, we delegate all payment processing to a self-hosted BTCPay Server instance. This includes decentralized cryptocurrencies like Bitcoin (on-chain and Lightning) and Monero, as well as conventional credit cards via the BTCPay Server Stripe Payments extension.
+## Purpose and Architectural Alignment
 
-This design assumes and builds upon the completed ledger schema and meter architecture specified in the storage credits design. In particular, it leverages the unique database constraints, soft-deletion structures, and the decoupled relationship between credit balance and storage hard caps.
+The payments layer exists to let users top up their microcent balance without operator intervention. Rather than wiring multiple payment gateways into Arkfile, all provider complexity lives in BTCPay Server: address derivation, exchange rates, payment method selection, and settlement tracking. Arkfile's backend creates USD-denominated invoices through BTCPay's Greenfield API, records a local `payment_invoices` row, and credits the user's balance when BTCPay confirms settlement via a signed webhook.
+
+This design builds on the storage-credits ledger and hourly billing meter described in the storage-credits design documents. Credit balance and hard storage caps remain decoupled: paying does not automatically raise a user's storage limit unless an operator configures that separately. The `payment_invoices` table provides an auditable record of initiated and completed top-ups distinct from the `credit_transactions` usage and gift rows written by the billing meter and admin tools.
 
 ## Core Assumptions and Decisions
 
-We assume that the operator will deploy and maintain a self-hosted BTCPay Server instance. Arkfile's server backend will interact with this instance using BTCPay Server's Greenfield API to generate invoices denominated in USD, which are then settled in the user's chosen payment method. This delegates address derivation, exchange rate calculations, and payment tracking entirely to BTCPay Server, insulating Arkfile's backend from the operational complexity of managing blockchain nodes.
+The operator deploys and maintains a BTCPay Server instance. Arkfile communicates with it using the Greenfield API (`payments/btcpay.go`), creating invoices in USD that settle in whatever payment methods the store supports. Credit card payments, when offered, are rendered entirely on BTCPay's invoice page via the Stripe Payments plugin, which preserves Arkfile's Content Security Policy and avoids third-party payment scripts in our frontend.
 
-We have decided to use the Stripe Payments plugin for BTCPay Server to handle credit card payments. This plugin renders credit card payment options directly within the BTCPay Server invoice page. This decision eliminates the need for Arkfile's web frontend to load Stripe's proprietary scripts, preserving our strict Content Security Policy and shielding our users from direct third-party telemetry. It also means our backend database does not need custom Stripe webhook parsing logic or a separate invoice ledger; every payment is represented in Arkfile's system as a standard BTCPay Server invoice.
+Settlement is webhook-driven. BTCPay signs payloads with SHA256 HMAC using a shared secret; Arkfile verifies the `BTCPay-Sig` header (`payments/webhooks.go`), matches the event to a local invoice, and credits the user through `billing.ProcessPayment`. The provider invoice ID is stored as the `credit_transactions.transaction_id`, giving idempotent protection against duplicate credits on replay. Webhook handlers accept `InvoiceSettled` and `InvoiceCompleted` events.
 
-We have decided that a webhook-driven push model will serve as the primary settlement path. When a payment is settled, BTCPay Server will notify Arkfile via a cryptographic webhook. BTCPay Server signs these webhooks using a SHA256 HMAC of the payload, keyed by a secret shared with Arkfile during setup. When Arkfile receives this webhook, we verify the signature, locate the local invoice record, and perform a transactional update to credit the user's microcent balance while recording the BTCPay Server invoice ID in our unique transaction ledger.
-
-For Go CLI users, the server will update their balance when the webhook resolves. When a CLI user requests a balance top-up, the server will return the raw BTCPay Server checkout web address in the terminal. The user can then open this link in their preferred browser to complete the payment. The CLI client does not need to perform active polling; the server automatically applies the credit to their account once the webhook is received and verified.
+For CLI users, the server returns a checkout URL when an invoice is created; the user completes payment in a browser. No client-side polling is required because the webhook applies the credit server-side once settlement is confirmed.
 
 ## Quota Gating and Overdrawn Policy
 
-While the billing meter allows users to run negative balances during the beta, a production payment deployment enforces a soft-block on negative balances.
+When payments are enabled, upload handlers soft-block users with a negative credit balance by returning HTTP 402 Payment Required. Downloads and other read operations are unaffected; the account is not suspended. This gating is implemented in `handlers/uploads.go` and covered by unit tests.
 
-Upload Gating: The API upload handlers (including chunked upload endpoints) must check the user's credit balance. If the balance is negative, the server must return a 402 Payment Required HTTP status code and reject the upload. This is a soft-block; the account is not suspended, and download operations remain fully functional.
+Hard storage limits remain independent of credit balance. The billing meter may allow negative balances during beta operation; production deployments with payments enabled are expected to enforce the upload soft-block so users cannot accumulate further storage charges without topping up.
 
-Hard Quota Decoupling: The hard limit on user storage is maintained independently of the credit balance. Paying does not dynamically increase the hard limit unless the operator configures specific tiers or the user explicitly buys a larger hard cap.
+A configurable grace period after which an operator may flag an overdrawn account for storage purge is described here as policy only. Automated deletion is not implemented; any purge must be an explicit administrative action logged in the admin audit trail.
 
-Active Grace and Cleanup: If an account remains in a negative-balance state for longer than a configurable grace period, the operator may choose to flag the account for storage purge. Automated deletion is strictly prohibited; the cleanup must be triggered by an administrative action logged in the admin logs table.
+## What Is Implemented
 
-## Database Schema Changes
+The `payment_invoices` table is defined in `database/unified_schema.sql` and managed through `models/payments.go`. The `payments` package provides `BTCPayClient` for invoice creation, `VerifyBTCPaySignature` for webhook authentication, and a `PaymentProvider` interface in `types.go` that `BTCPayClient` satisfies structurally but that handlers do not yet consume uniformly.
 
-We introduce a single new table, `payment_invoices`, to manage the local state of payment requests before they are completed by the external payment processors. This ensures that we have a solid, auditable ledger of all initiated transactions.
+HTTP handlers in `handlers/payments.go` expose user-facing invoice creation and status, the public BTCPay webhook receiver, and admin invoice inspection and sync. Routes are registered in `handlers/route_config.go`: `POST /api/billing/invoice` and `GET /api/billing/invoice/:invoice_id` (authenticated, TOTP-protected), `POST /api/webhooks/btcpay` (public, signature-verified), and admin routes `GET /api/admin/payments/invoice/:invoice_id`, `GET /api/admin/payments/invoices`, and `POST /api/admin/payments/invoice/:invoice_id/sync`. Settlement is wired through a `ProcessPaymentFunc` seam in `handlers/billing_projection.go`, connected to `billing.ProcessPayment` at startup in `main.go`.
+
+The billing panel in `client/static/js/src/ui/billing.ts` renders balance, usage projection, and transaction history from `GET /api/credits`. When payments are enabled, a "Top Up Balance" button opens a modal that posts to `/api/billing/invoice` and embeds the returned BTCPay checkout URL in an iframe. No Stripe or other third-party payment scripts are loaded in the Arkfile frontend.
+
+Administration is available through `arkfile-admin payments show`, `payments list`, and `payments sync-invoice` (`cmd/arkfile-admin/payments_commands.go`). The sync command polls BTCPay for an invoice's remote state and settles locally when BTCPay reports `Settled`.
+
+Configuration is driven by environment variables in `config/config.go`, seeded in `scripts/dev-reset.sh` for development. Payments default to disabled; when enabled, BTCPay URL, store ID, API key, webhook secret, and min/max top-up amounts are read from env.
+
+## Database Schema
+
+Local payment state lives in `payment_invoices`:
 
 ```sql
 CREATE TABLE IF NOT EXISTS payment_invoices (
@@ -46,291 +56,45 @@ CREATE TABLE IF NOT EXISTS payment_invoices (
     CHECK(status IN ('pending', 'paid', 'expired', 'failed')),
     CHECK(provider IN ('btcpay'))
 );
-
-CREATE INDEX IF NOT EXISTS idx_payment_invoices_username ON payment_invoices(username);
-CREATE INDEX IF NOT EXISTS idx_payment_invoices_provider_invoice_id ON payment_invoices(provider_invoice_id);
 ```
 
-The RESTRICT foreign key constraint guarantees that even if a user is soft-deleted, their invoice logs are retained in the database for financial compliance.
+The RESTRICT foreign key ensures invoice records survive user soft-deletion for financial audit purposes. Indexes on `username` and `provider_invoice_id` support user lookups and webhook matching.
 
-## The Go `payments` Package Architecture
+Paid top-ups are intended to write `credit_transactions` rows with `transaction_type = 'payment'`. The schema CHECK constraint currently allows only `usage`, `gift`, and `adjustment`; the running code incorrectly inserts `gift` for payment settlements. Adding `payment` to the constraint and fixing the insert are part of the remaining remediation work described below.
 
-We will add a new top-level Go package named `payments` to encapsulate all external provider interactions and keep handlers decoupled from third-party client details.
+## Backend Settlement Flow
 
-```
-payments/
-    types.go            // PaymentProvider interface, Invoice struct, Event struct
-    btcpay.go           // BTCPay Server Greenfield client implementation
-    webhooks.go         // Unified webhook validation and routing
-```
+The intended settlement sequence is: verify the webhook signature, locate the local `payment_invoices` row (by metadata `invoice_id` or BTCPay `invoiceId`), credit the user's balance atomically via `billing.ProcessPayment`, then mark the invoice `paid`. `ProcessPayment` runs inside a SQLite transaction: it reads or creates the `user_credits` row, updates the balance, and inserts a `credit_transactions` row keyed by the provider invoice ID as `transaction_id`. A duplicate `transaction_id` causes the insert to fail, preventing double-credit on replay.
 
-### The `PaymentProvider` Interface
+**Current deviation:** both the webhook handler and `AdminSyncInvoiceHandler` mark the invoice `paid` before calling `ProcessPayment`. If the credit step fails, the invoice is already `paid` and webhook retries return "Invoice already paid" without ever crediting the user. This must be corrected before production use, ideally by crediting first and marking paid only on success, or by wrapping both steps in a single transactional function such as `billing.SettlePaymentInvoice`.
 
-BTCPay Server will implement a common interface, allowing handlers to remain provider-agnostic:
+**Current deviation:** `AdminSyncInvoiceHandler` performs raw BTCPay Greenfield HTTP and interprets BTCPay-specific status strings (`Settled`, `Expired`, `Invalid`) directly in the handler rather than through the `payments` package. The `PaymentProvider` interface covers `CreateInvoice` only; sync logic should move onto `BTCPayClient` (with a `GetInvoiceStatus` method or equivalent), and handlers should obtain the provider through a small factory such as `payments.NewProvider(cfg)` rather than calling `NewBTCPayClient` directly.
 
-```go
-package payments
+## HTTP API
 
-import (
-	"context"
-)
+`POST /api/billing/invoice` accepts `{"amount_usd": "20.00"}` (the `provider` field is not required; BTCPay is the only supported provider and is implied). The handler validates the amount against `ARKFILE_MIN_TOP_UP_USD` and `ARKFILE_MAX_TOP_UP_USD`, generates a local invoice ID (`inv_` prefix plus UUID), calls BTCPay to create the remote invoice with metadata linking back to the local ID, persists a `pending` row, and returns `invoice_id`, `checkout_url`, and `provider: "btcpay"`. A redirect URL of `/billing?success=true&invoice=...` is passed to BTCPay for external-tab checkout flows.
 
-type ProviderInvoice struct {
-	ProviderInvoiceID string
-	CheckoutURL       string
-}
+`GET /api/billing/invoice/:invoice_id` returns the local invoice record for the authenticated owner. `POST /api/webhooks/btcpay` is unauthenticated; it requires a valid `BTCPay-Sig` header and processes settlement events as described above.
 
-type PaymentProvider interface {
-	CreateInvoice(ctx context.Context, invoiceID string, amountMicrocents int64, redirectURL string) (*ProviderInvoice, error)
-}
-```
+Admin endpoints support invoice inspection, filtered listing (`?username=`, `?status=`), and manual sync against BTCPay for recovery when a webhook was missed.
 
-### BTCPay Greenfield Client (`btcpay.go`)
+## Frontend Integration
 
-BTCPay Server Greenfield API is used directly via raw HTTP calls using Go's standard `net/http` package to avoid bloated third-party SDK dependencies.
+The billing panel follows the same inline-panel pattern as security settings and contact info. When payments are enabled, the top-up modal collects a USD amount, creates an invoice via the API, and replaces the form with a full-width iframe pointing at BTCPay's checkout page. BTCPay's invoice UI supports iframe embedding, so users can complete payment without leaving Arkfile in the common case.
 
-Creating an invoice is done by sending a POST request to the store's invoices endpoint:
+The redirect URL passed to BTCPay for users who open checkout in a separate tab is not yet handled by the SPA: there is no `/billing` route or logic to read `?success=true&invoice=...` on load, open the billing panel, and confirm settlement. This is remaining work for the external-tab flow.
 
-```go
-package payments
+## Administration
 
-import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
-)
+`arkfile-admin payments show <invoice_id>` displays a single invoice. `payments list [--user NAME] [--status STATUS]` lists invoices with optional filters. `payments sync-invoice <invoice_id>` queries BTCPay and reconciles local state, settling when the remote invoice is `Settled` or updating to `expired`/`failed` as appropriate.
 
-type BTCPayClient struct {
-	BaseURL    string
-	StoreID    string
-	APIKey     string
-	HTTPClient *http.Client
-}
+`payments reconcile`, which would scan for `paid` invoices lacking a matching `credit_transactions` row and repair them, is not yet implemented. This command is needed both for missed webhooks and as a recovery path for the settlement-order bug described above.
 
-func (c *BTCPayClient) CreateInvoice(ctx context.Context, invoiceID string, amountMicrocents int64, redirectURL string) (*ProviderInvoice, error) {
-	amountUSD := float64(amountMicrocents) / 100000000.0
-	payload := map[string]interface{}{
-		"amount":   fmt.Sprintf("%.2f", amountUSD),
-		"currency": "USD",
-		"metadata": map[string]string{
-			"invoice_id": invoiceID,
-		},
-		"checkout": map[string]interface{}{
-			"speedPolicy":    "HighSpeed",
-			"redirectURL":    redirectURL,
-		},
-	}
-	bodyBytes, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	url := fmt.Sprintf("%s/api/v1/stores/%s/invoices", c.BaseURL, c.StoreID)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "token "+c.APIKey)
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("btcpay returned bad status: %d", resp.StatusCode)
-	}
-	var respData struct {
-		ID          string `json:"id"`
-		CheckoutLink string `json:"checkoutLink"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		return nil, err
-	}
-	return &ProviderInvoice{
-		ProviderInvoiceID: respData.ID,
-		CheckoutURL:       respData.CheckoutLink,
-	}, nil
-}
-```
+Manual refunds are deliberately not automated. Operators process refunds using `arkfile-admin billing gift` with a negative amount, keeping the financial API surface minimal.
 
-## Signature Verification and Webhook Routing
+## Configuration
 
-Webhook endpoint security is a critical risk area. We implement native cryptographic signature verification for all incoming payloads to eliminate replay attacks and tampering.
-
-### BTCPay Webhook Signature Math
-
-BTCPay Server signs webhooks using SHA256 HMAC of the raw request payload, using the webhook secret as the key. The value is sent as a hex-encoded string in the `BTCPay-Sig` header, prefixed with `sha256=`.
-
-```go
-package payments
-
-import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
-	"strings"
-)
-
-func VerifyBTCPaySignature(body []byte, sigHeader string, secret string) bool {
-	if !strings.HasPrefix(sigHeader, "sha256=") {
-		return false
-	}
-	hexSig := sigHeader[7:]
-	expectedSig, err := hex.DecodeString(hexSig)
-	if err != nil {
-		return false
-	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(body)
-	computedSig := mac.Sum(nil)
-	return hmac.Equal(computedSig, expectedSig)
-}
-```
-
-## Webhook Handler Event Processing and Payment Settlement
-
-Webhook handlers must route verified payloads to settle local invoices. To preserve dependency boundaries, `main.go` will wire a settlement function seam to handlers during startup:
-
-```go
-var ProcessPaymentFunc func(db *sql.DB, username string, amountMicrocents int64, providerTxID string, paymentType string) (*models.CreditTransaction, error)
-
-func SetProcessPaymentFunc(fn func(*sql.DB, string, int64, string, string) (*models.CreditTransaction, error)) {
-	ProcessPaymentFunc = fn
-}
-```
-
-### Transactional Credit Settlement Logic
-
-The settlement routine in the `billing` package handles actual balance credit operations securely within a strict SQLite transaction bracket. It locks the `user_credits` record, inserts the transaction row ensuring uniqueness of the `transaction_id`, and adds the balance.
-
-```go
-package billing
-
-import (
-	"database/sql"
-	"fmt"
-	"time"
-
-	"github.com/84adam/Arkfile/models"
-)
-
-func ProcessPayment(db *sql.DB, username string, amountMicrocents int64, providerTxID string, paymentType string) (*models.CreditTransaction, error) {
-	tx, err := db.Begin()
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	var currentBalance float64
-	err = tx.QueryRow(`SELECT balance_usd_microcents FROM user_credits WHERE username = ?`, username).Scan(&currentBalance)
-	if err == sql.ErrNoRows {
-		_, err = tx.Exec(`INSERT INTO user_credits (username, balance_usd_microcents) VALUES (?, 0)`, username)
-		if err != nil {
-			return nil, err
-		}
-		currentBalance = 0
-	} else if err != nil {
-		return nil, err
-	}
-	newBalance := int64(currentBalance) + amountMicrocents
-	_, err = tx.Exec(`UPDATE user_credits SET balance_usd_microcents = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?`, newBalance, username)
-	if err != nil {
-		return nil, err
-	}
-	reason := fmt.Sprintf("Payment top-up via %s", paymentType)
-	_, err = tx.Exec(`
-		INSERT INTO credit_transactions (transaction_id, username, amount_usd_microcents, balance_after_usd_microcents, transaction_type, reason, created_at)
-		VALUES (?, ?, ?, ?, 'payment', ?, CURRENT_TIMESTAMP)
-	`, providerTxID, username, amountMicrocents, newBalance, reason)
-	if err != nil {
-		return nil, fmt.Errorf("failed to insert audit ledger (likely duplicate transaction): %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &models.CreditTransaction{
-		Username:                  username,
-		AmountUSDMicrocents:       amountMicrocents,
-		BalanceAfterUSDMicrocents: newBalance,
-		TransactionType:           "payment",
-	}, nil
-}
-```
-
-## HTTP API Surface
-
-The API endpoints will be registered under the authenticated user route group, except for the public webhook receivers which must bypass OPAQUE authorization middleware.
-
-### Create Invoice Endpoint
-
-`POST /api/billing/invoice` (Authenticated)
-Request Body:
-```json
-{
-  "amount_usd": "20.00",
-  "provider": "btcpay"
-}
-```
-
-The handler will:
-1. Validate that `amount_usd` parses to a decimal and fits within `ARKFILE_MIN_TOP_UP_USD` and `ARKFILE_MAX_TOP_UP_USD`.
-2. Generate a cryptographically secure UUID as the local `invoice_id`.
-3. Query the configured payment provider (`BTCPayClient`).
-4. On provider success, write a `pending` row to `payment_invoices` recording the returned `provider_invoice_id`.
-5. Return JSON:
-```json
-{
-  "success": true,
-  "data": {
-    "invoice_id": "inv_8e4f16b2",
-    "checkout_url": "https://btcpay.example.com/invoice?id=XyZ123",
-    "provider": "btcpay"
-  }
-}
-```
-
-### Get Invoice Status Endpoint
-
-`GET /api/billing/invoice/:invoice_id` (Authenticated)
-Returns the local state of the invoice:
-```json
-{
-  "success": true,
-  "data": {
-    "invoice_id": "inv_8e4f16b2",
-    "status": "pending",
-    "provider": "btcpay",
-    "created_at": "2026-06-09T08:00:00Z"
-  }
-}
-```
-
-### Public Webhook Receiver
-
-`POST /api/webhooks/btcpay` (Unauthenticated, public)
-Checks the `BTCPay-Sig` header, reads the raw body, and calls `VerifyBTCPaySignature`. It decodes the JSON payload, checks for the `InvoiceSettled` event type, matches the metadata `invoice_id` against the local database, updates `payment_invoices.status = 'paid'`, and invokes `ProcessPayment`.
-
-## Frontend Integration and BTCPay Modal Iframe
-
-When a user selects "Top Up Balance" and clicks "Generate Invoice", the API returns the BTCPay `checkout_url`. The UI will load this URL inside an iframe directly within a modal. BTCPay Server's invoice UI is specifically optimized for iframe embed formats, offering a seamless payment flow without redirecting the user away from Arkfile.
-
-For Go CLI users, the server will output the raw BTCPay Server checkout web address in the terminal. The user can then open this link in their preferred browser to complete the payment. No polling is required; the server automatically applies the credit to their account once the webhook is received and verified.
-
-## CLI Surface (`arkfile-admin payments`)
-
-A set of administration subcommands is added to assist operators with auditing and resolving out-of-sync events:
-
-| Command | Action | Description |
-|---|---|---|
-| `payments show <invoice_id>` | `GET /api/admin/payments/:id` | Displays detailed database information for the specific invoice. |
-| `payments list [--user NAME] [--status STATUS]` | `GET /api/admin/payments` | Lists local records with option to filter by user or invoice state. |
-| `payments sync-invoice <invoice_id>` | `POST /api/admin/payments/:id/sync` | Actively polls BTCPay API for the invoice's true state and reconciles it. |
-| `payments reconcile` | internal script | Scans the database for paid `payment_invoices` without corresponding `credit_transactions` and repairs them. |
-
-## Configuration (`secrets.env`)
-
-The operator configures the payment rails using these environment variables, which must be added to the production template:
+Payments are controlled by these environment variables (also documented in `.env.example`):
 
 ```
 ARKFILE_PAYMENTS_ENABLED=true
@@ -338,35 +102,45 @@ ARKFILE_BTCPAY_SERVER_URL=https://btcpay.example.com
 ARKFILE_BTCPAY_STORE_ID=YourStoreIDHere
 ARKFILE_BTCPAY_API_KEY=YourGreenfieldAPIKeyHere
 ARKFILE_BTCPAY_WEBHOOK_SECRET=YourBTCPayWebhookSecretHere
-ARKFILE_MIN_TOP_UP_USD=1.00
-ARKFILE_MAX_TOP_UP_USD=500.00
+ARKFILE_MIN_TOP_UP_USD=0.50
+ARKFILE_MAX_TOP_UP_USD=1000.00
 ```
 
-## Test Plan
+Defaults are `0.50` minimum and `1000.00` maximum top-up in code and `dev-reset.sh`. When `ARKFILE_PAYMENTS_ENABLED=true`, startup does not yet validate that BTCPay credentials are present; misconfiguration surfaces only when a user attempts to create an invoice.
 
-We require robust end-to-end and unit test coverage before allowing live financial traffic to process.
+## Test Coverage
 
-### Unit Tests
+Go unit tests cover the BTCPay client (`payments/btcpay_test.go`), webhook signature verification (`payments/webhooks_test.go`), payment invoice model CRUD (`models/payments_test.go`), `billing.ProcessPayment` ledger behavior (`billing/payments_test.go`), and handler-level flows including invoice creation, webhook settlement, signature rejection, idempotency on already-paid invoices, invoice status ownership, admin sync, payments config in `/api/credits`, and upload soft-blocking on negative balance (`handlers/payments_test.go`). Payments config loading is tested in `config/config_test.go`.
 
-1. `btcpay_test.go`: Uses a local mock server mimicking the Greenfield API to assert that correct JSON payloads are generated and the returned `checkout_url` is parsed cleanly.
-2. `webhooks_test.go`: Feeds mock payloads to the signature verification function, testing valid signatures, corrupted signatures, and tampered payloads.
+End-to-end tests run as `phase_11e_payments` in `scripts/testing/e2e-test.sh`, after `phase_11d_billing`. The payments phase starts a mock BTCPay server (`scripts/testing/btcpay-mock.go`), creates an invoice via the API, verifies admin CLI listing, sends a signed webhook to settle the invoice, and asserts the invoice becomes `paid` and the user ledger contains a row with reason `Payment top-up via btcpay`. Duplicate webhook replay is covered in Go unit tests but not yet in the e2e harness.
 
-### Integration and E2E Tests (`scripts/testing/e2e-test.sh`)
-
-We add `phase_13_payments` to the testing harness (only when `ARKFILE_PAYMENTS_ENABLED=true`):
-1. Spawn mock payment gateways inside the test server environment.
-2. Create a test invoice via `POST /api/billing/invoice` and assert that a `pending` local record is written.
-3. Emit a simulated, signed webhook payload to `/api/webhooks/btcpay` indicating the invoice was settled.
-4. Assert that the local invoice transitions to `paid`, the user's microcent balance increases correspondingly, and exactly one `payment` type transaction is added to `credit_transactions`.
-5. Submit a duplicate webhook payload and assert that the database UNIQUE constraint correctly triggers a rollback, preventing duplicate balance credits.
-
-### Playwright Tests (`scripts/testing/e2e-playwright.ts`)
-
-1. Open the Billing Panel and click the "Top Up Balance" button.
-2. Enter an amount, click submit, and verify that the BTCPay iframe loads within the modal.
+Playwright (`scripts/testing/e2e-playwright.ts`) verifies the billing panel renders balance, usage grid, and transaction history. The top-up modal and BTCPay iframe are not yet covered in Playwright. There are no TypeScript unit tests for `billing.ts`.
 
 ## Honest Trade-offs
 
-1. Manual Refund Processing: We deliberately do not implement an automated refund/pull API. Refunds are processed manually by administrators using the `arkfile-admin billing gift` tool with negative values. This design choice minimizes complex financial attack vectors on our API backend.
-2. Complete PII Scrubbing on BTCPay: Since we do not send user emails or real names to BTCPay Server's servers to safeguard privacy, BTCPay Server cannot automatically send payment receipt emails to customers unless configured on the BTCPay Server side directly. Users must rely on the transaction records shown in their local Arkfile Billing panel, which acts as their invoice proof.
-3. Webhook Dependency: By relying on a webhook-driven push model as our primary settlement path, we assume that webhook delivery is reliable. If a webhook is missed, the user's balance will not be credited until the administrator manually runs the `payments sync-invoice` command or the automated reconciliation script runs.
+Refunds are manual by design. An automated refund or chargeback API would expand the attack surface on a privacy-focused file vault; operators handle exceptions through existing admin billing tools.
+
+Because Arkfile does not send PII to BTCPay, BTCPay cannot send payment receipt emails on Arkfile's behalf unless configured independently on the BTCPay side. Users rely on transaction records in the Arkfile billing panel as their proof of payment.
+
+Webhook delivery is the primary settlement path. If a webhook is missed, the user's balance is not credited until an operator runs `payments sync-invoice` for that invoice or the not-yet-implemented `payments reconcile` command repairs orphaned records. The sync and reconcile tooling is therefore part of the operational model, not an optional extra.
+
+## Remaining Work
+
+The following items should be completed before enabling live payment traffic. They are ordered by severity.
+
+Settlement order is the most urgent defect. The webhook handler and admin sync handler both mark invoices `paid` before `ProcessPayment` succeeds. A failed credit insert leaves the invoice in a state where retries are ignored. The fix is to credit first and mark paid only on success, or to combine both steps in a single transactional settlement function. The same change applies to both code paths. New tests should assert that a failed credit leaves the invoice `pending`, and that a recovery path works when the credit row already exists but the invoice is still `pending`.
+
+The audit log must distinguish paid top-ups from admin gifts. `billing.ProcessPayment` currently inserts `transaction_type = 'gift'` because the schema CHECK constraint does not yet include `payment`. The constraint in `database/unified_schema.sql` must be extended, existing databases may need a table-rebuild migration in `runSchemaMigrations()`, test fixture schemas must be updated, and the insert and return value in `billing/payments.go` must use `payment`. Frontend display in `billing.ts` should treat `payment` as a top-up (not an admin gift). E2e and unit tests should assert the `payment` type explicitly.
+
+The `PaymentProvider` interface must be wired through handlers rather than left as dead architecture. `BTCPayClient` already implements `CreateInvoice`; add invoice status polling to the client (moving the raw HTTP currently in `AdminSyncInvoiceHandler`), add `var _ PaymentProvider = (*BTCPayClient)(nil)` for compile-time enforcement, introduce `payments.NewProvider(cfg)` for construction, and have handlers depend on the interface. This is a small change that honors the decoupling goal of the `payments` package and keeps BTCPay-specific details out of handler code.
+
+`payments reconcile` should be implemented as described in the Administration section: scan for `paid` invoices without a matching `credit_transactions.transaction_id`, call `ProcessPayment` for each orphan, and expose the operation as `POST /api/admin/payments/reconcile` and `arkfile-admin payments reconcile`. This is the safety net for missed webhooks and for any records affected by the settlement-order bug on test deployments.
+
+Startup validation should reject `ARKFILE_PAYMENTS_ENABLED=true` when BTCPay URL, store ID, API key, or webhook secret are missing, and should verify that min and max top-up amounts parse as positive decimals with min less than max.
+
+Post-checkout redirect handling should detect `?success=true&invoice=...` on page load, open the billing panel, show confirmation, and strip the query string. Optionally poll invoice status for users who completed payment in an external tab.
+
+Test gaps to close: add duplicate webhook replay to `phase_11e_payments` in `e2e-test.sh`, add a Playwright test for the top-up modal and checkout iframe, and add settlement-order failure and recovery cases to `handlers/payments_test.go`.
+
+After these remediations, run `dev-reset.sh` followed by `e2e-test.sh` and `e2e-playwright.sh` to verify the full billing and payments path.
+
