@@ -107,6 +107,9 @@ check_go_version() {
     
     # Store the Go binary path for later use
     export GO_BINARY="$go_binary"
+
+    # Pin the module toolchain so go install/run (e.g. govulncheck) matches go.mod.
+    export GOTOOLCHAIN="go${required_version}+auto"
 }
 
 # Ensure required tools are installed and get Go binary path
@@ -548,8 +551,20 @@ run_security_audits_and_sbom() {
     if [ -z "$govulncheck_bin" ] || [ ! -x "$govulncheck_bin" ]; then
         echo -e "${YELLOW}[WARNING] govulncheck binary not available. Skipping Go vulnerability check.${NC}"
     else
-        echo "Running govulncheck ($govulncheck_bin)..."
-        if ! "$govulncheck_bin" ./...; then
+        local govulncheck_failed=false
+        local binary
+        for binary in "${BUILD_DIR}/${APP_NAME}" "${BUILD_DIR}/arkfile-client" "${BUILD_DIR}/arkfile-admin"; do
+            if [ ! -x "$binary" ]; then
+                echo -e "${YELLOW}[WARNING] Skipping govulncheck; binary not found: $binary${NC}"
+                continue
+            fi
+            echo "Running govulncheck ($govulncheck_bin) on $(basename "$binary")..."
+            if ! GOTOOLCHAIN="${GOTOOLCHAIN:-local}" "$govulncheck_bin" -mode=binary "$binary"; then
+                govulncheck_failed=true
+            fi
+        done
+
+        if [ "$govulncheck_failed" = "true" ]; then
             echo -e "${RED}[X] govulncheck found known vulnerabilities in Go dependencies!${NC}"
             if [ "$PRODUCTION_BUILD" = "true" ]; then
                 echo -e "${RED}[X] Failing production build due to Go dependency vulnerabilities.${NC}" >&2

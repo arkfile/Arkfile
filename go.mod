@@ -1,11 +1,11 @@
 module github.com/84adam/Arkfile
 
-go 1.26.1
+go 1.26.4
 
 require (
 	github.com/joho/godotenv v1.5.1
 	github.com/labstack/echo/v4 v4.15.1
-	golang.org/x/crypto v0.49.0
+	golang.org/x/crypto v0.52.0
 )
 
 require (
@@ -21,10 +21,13 @@ require (
 	github.com/pquerna/otp v1.5.0
 	github.com/rqlite/gorqlite v0.0.0-20250609141355-ac86a4a1c9a8
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/term v0.41.0
+	golang.org/x/term v0.43.0
 )
 
-require github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc
+require (
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc
+	golang.org/x/sys v0.45.0
+)
 
 require (
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8 // indirect
@@ -50,9 +53,8 @@ require (
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
-	golang.org/x/net v0.52.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.35.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

@@ -2976,7 +2976,7 @@ phase_11e_payments() {
         record_test "User ledger includes payment transaction row" "FAIL"
     fi
 
-    if [ $credits_after_code -eq 0 ] && echo "$credits_after_out" | grep -q '"transaction_type":"payment"'; then
+    if [ $credits_after_code -eq 0 ] && echo "$credits_after_out" | jq -e '.transactions[] | select(.transaction_type == "payment")' >/dev/null 2>&1; then
         record_test "User ledger payment row uses transaction_type payment" "PASS"
     else
         error "Credits transactions missing payment transaction_type: $credits_after_out"
