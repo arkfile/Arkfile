@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/84adam/Arkfile/billing"
 	"github.com/84adam/Arkfile/models"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
@@ -128,11 +131,12 @@ func TestBTCPayWebhookHandler_SettlesInvoiceAndCreditsUser(t *testing.T) {
 	).Scan(&balance))
 	assert.Equal(t, int64(1_000_000_000), balance)
 
-	var reason string
+	var reason, txType string
 	require.NoError(t, db.QueryRow(
-		`SELECT reason FROM credit_transactions WHERE transaction_id = 'prov_webhook1'`,
-	).Scan(&reason))
+		`SELECT reason, transaction_type FROM credit_transactions WHERE transaction_id = 'prov_webhook1'`,
+	).Scan(&reason, &txType))
 	assert.Equal(t, "Payment top-up via btcpay", reason)
+	assert.Equal(t, "payment", txType)
 }
 
 func TestBTCPayWebhookHandler_RejectsInvalidSignature(t *testing.T) {
@@ -180,15 +184,73 @@ func TestBTCPayWebhookHandler_IdempotentWhenAlreadyPaid(t *testing.T) {
 
 	seedPendingInvoice(t, db, "inv_paid1", paymentsTestUser, "prov_paid1", 500_000_000)
 	require.NoError(t, models.UpdatePaymentInvoiceStatus(db, "inv_paid1", "paid"))
+	_, err := billing.ProcessPayment(db, paymentsTestUser, 500_000_000, "prov_paid1", "btcpay")
+	require.NoError(t, err)
 
 	payload := `{"type":"InvoiceSettled","invoiceId":"prov_paid1","metadata":{"invoice_id":"inv_paid1"}}`
+	c, rec := signedWebhookRequest(t, payload)
+
+	err = BTCPayWebhookHandler(c)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	resp := parseJSONResponse(t, rec)
+	assert.Equal(t, "Invoice already paid", resp["message"])
+}
+
+func TestBTCPayWebhookHandler_SettlementFailureLeavesInvoicePending(t *testing.T) {
+	mock := startMockBTCPayServer(t, nil)
+	defer mock.Close()
+	db, cleanup := withPaymentsTestEnv(t, mock.URL, true)
+	defer cleanup()
+
+	origSettle := SettlePaymentInvoiceFunc
+	SetSettlePaymentInvoiceFunc(func(db *sql.DB, invoice *models.PaymentInvoice, paymentType string) (*models.CreditTransaction, error) {
+		return nil, fmt.Errorf("simulated credit failure")
+	})
+	defer SetSettlePaymentInvoiceFunc(origSettle)
+
+	seedPendingInvoice(t, db, "inv_fail1", paymentsTestUser, "prov_fail1", 100_000_000)
+
+	payload := `{"type":"InvoiceSettled","invoiceId":"prov_fail1","metadata":{"invoice_id":"inv_fail1"}}`
+	c, rec := signedWebhookRequest(t, payload)
+
+	err := BTCPayWebhookHandler(c)
+	require.Error(t, err)
+	he, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusInternalServerError, he.Code)
+	_ = rec
+
+	inv, err := models.GetPaymentInvoice(db, "inv_fail1")
+	require.NoError(t, err)
+	assert.Equal(t, "pending", inv.Status)
+
+	var creditCount int
+	require.NoError(t, db.QueryRow(`SELECT COUNT(1) FROM credit_transactions WHERE transaction_id = 'prov_fail1'`).Scan(&creditCount))
+	assert.Equal(t, 0, creditCount)
+}
+
+func TestBTCPayWebhookHandler_RecoversPaidInvoiceMissingCredit(t *testing.T) {
+	mock := startMockBTCPayServer(t, nil)
+	defer mock.Close()
+	db, cleanup := withPaymentsTestEnv(t, mock.URL, true)
+	defer cleanup()
+
+	seedPendingInvoice(t, db, "inv_recover1", paymentsTestUser, "prov_recover1", 300_000_000)
+	require.NoError(t, models.UpdatePaymentInvoiceStatus(db, "inv_recover1", "paid"))
+
+	payload := `{"type":"InvoiceSettled","invoiceId":"prov_recover1","metadata":{"invoice_id":"inv_recover1"}}`
 	c, rec := signedWebhookRequest(t, payload)
 
 	err := BTCPayWebhookHandler(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
-	resp := parseJSONResponse(t, rec)
-	assert.Equal(t, "Invoice already paid", resp["message"])
+
+	var balance int64
+	require.NoError(t, db.QueryRow(
+		`SELECT balance_usd_microcents FROM user_credits WHERE username = ?`, paymentsTestUser,
+	).Scan(&balance))
+	assert.Equal(t, int64(300_000_000), balance)
 }
 
 func TestGetInvoiceStatusHandler_EnforcesOwnership(t *testing.T) {

@@ -62,6 +62,29 @@ func TestBTCPayClient_CreateInvoice(t *testing.T) {
 	}
 }
 
+func TestBTCPayClient_GetInvoiceStatus(t *testing.T) {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
+		}
+		if r.Header.Get("Authorization") != "token test_api_key" {
+			t.Errorf("expected Authorization header")
+		}
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "Settled"})
+	}))
+	defer mockServer.Close()
+
+	client := NewBTCPayClient(mockServer.URL, "test_store_id", "test_api_key")
+	status, err := client.GetInvoiceStatus(context.Background(), "btcpay_invoice_abc123")
+	if err != nil {
+		t.Fatalf("GetInvoiceStatus: %v", err)
+	}
+	if status != "Settled" {
+		t.Errorf("status = %q, want Settled", status)
+	}
+}
+
 func TestBTCPayClient_CreateInvoice_BadStatus(t *testing.T) {
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)

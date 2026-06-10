@@ -262,7 +262,7 @@ function renderTransactionsSection(txs: Transaction[]): HTMLElement {
     tr.appendChild(date);
 
     const type = document.createElement('td');
-    type.textContent = t.transaction_type;
+    type.textContent = formatTransactionType(t.transaction_type);
     tr.appendChild(type);
 
     const amount = document.createElement('td');
@@ -342,6 +342,66 @@ function escapeHtml(s: string): string {
   const div = document.createElement('div');
   div.textContent = s;
   return div.innerHTML;
+}
+
+function formatTransactionType(type: string): string {
+  if (type === 'payment') return 'Top-up';
+  return type;
+}
+
+/**
+ * Handle return from an external BTCPay checkout tab (/billing?success=true&invoice=...).
+ * Opens the billing panel, polls invoice status, and strips checkout query parameters.
+ */
+export async function handleBillingCheckoutReturn(): Promise<boolean> {
+  const url = new URL(window.location.href);
+  const success = url.searchParams.get('success') === 'true';
+  const invoiceID = url.searchParams.get('invoice');
+  if (!success || !invoiceID) {
+    return false;
+  }
+
+  const cleanPath = url.pathname === '/billing' ? '/' : url.pathname;
+  window.history.replaceState({}, '', cleanPath + url.hash);
+
+  const panel = document.getElementById('billing-panel');
+  if (panel) {
+    panel.classList.remove('hidden');
+    closeOtherPanels('billing-panel');
+  }
+
+  const content = document.getElementById('billing-panel-content');
+  if (content) {
+    content.innerHTML = '<p>Confirming payment…</p>';
+  }
+
+  await pollInvoiceStatus(invoiceID, 30, 2000);
+  await loadBilling();
+
+  const { showSuccess } = await import('./messages');
+  showSuccess('Payment received. Your balance has been updated.');
+  return true;
+}
+
+async function pollInvoiceStatus(invoiceID: string, maxAttempts: number, intervalMs: number): Promise<void> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const response = await authenticatedFetch(
+        `/api/billing/invoice/${encodeURIComponent(invoiceID)}`,
+        { method: 'GET' },
+      );
+      if (response.ok) {
+        const result = await response.json();
+        const data = (result.data || result) as { status?: string };
+        if (data.status === 'paid') {
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('Invoice status poll failed:', err);
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
 }
 
 /** Show the Top Up payment modal and handle invoice generation + iframe embedding. */

@@ -2976,6 +2976,42 @@ phase_11e_payments() {
         record_test "User ledger includes payment transaction row" "FAIL"
     fi
 
+    if [ $credits_after_code -eq 0 ] && echo "$credits_after_out" | grep -q '"transaction_type":"payment"'; then
+        record_test "User ledger payment row uses transaction_type payment" "PASS"
+    else
+        error "Credits transactions missing payment transaction_type: $credits_after_out"
+        record_test "User ledger payment row uses transaction_type payment" "FAIL"
+    fi
+
+    section "11e.4: Duplicate webhook replay is idempotent"
+
+    local balance_before_dup balance_after_dup
+    balance_before_dup=$(echo "$credits_after_out" | jq -r '.balance_usd_microcents // 0' 2>/dev/null)
+
+    safe_exec webhook_out webhook_code \
+        curl -s -k -X POST -H "BTCPay-Sig: sha256=$signature" \
+        -H "Content-Type: application/json" \
+        -d "$webhook_payload" \
+        "$SERVER_URL/api/webhooks/btcpay"
+
+    if [ $webhook_code -eq 0 ] && echo "$webhook_out" | grep -q "Invoice already paid"; then
+        record_test "Duplicate BTCPay webhook replay is idempotent" "PASS"
+    else
+        error "Duplicate webhook response unexpected: $webhook_out"
+        record_test "Duplicate BTCPay webhook replay is idempotent" "FAIL"
+    fi
+
+    safe_exec credits_after_out credits_after_code \
+        $ADMIN --server-url "$SERVER_URL" --tls-insecure \
+        billing show --user "$TEST_USERNAME" --json
+    balance_after_dup=$(echo "$credits_after_out" | jq -r '.balance_usd_microcents // 0' 2>/dev/null)
+    if [ "$balance_before_dup" = "$balance_after_dup" ]; then
+        record_test "Duplicate webhook does not double-credit balance" "PASS"
+    else
+        error "Balance changed after duplicate webhook: before=$balance_before_dup after=$balance_after_dup"
+        record_test "Duplicate webhook does not double-credit balance" "FAIL"
+    fi
+
     # Clean up mock server
     info "Stopping mock BTCPay server..."
     stop_mock_btcpay_server "$mock_pid"

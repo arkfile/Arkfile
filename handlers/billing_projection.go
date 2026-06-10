@@ -184,6 +184,9 @@ var (
 
 	// ProcessPaymentFunc handles actual balance credit operations securely within a strict SQLite transaction bracket.
 	ProcessPaymentFunc func(db *sql.DB, username string, amountUSDMicrocents int64, providerTxID string, paymentType string) (*models.CreditTransaction, error)
+
+	// SettlePaymentInvoiceFunc credits the user and marks a payment invoice paid atomically.
+	SettlePaymentInvoiceFunc func(db *sql.DB, invoice *models.PaymentInvoice, paymentType string) (*models.CreditTransaction, error)
 )
 
 // defaultFreeBaselineBytes mirrors models.DefaultStorageLimit so the seam
@@ -227,6 +230,11 @@ func SetBillingSweepNowFunc(fn func(db *sql.DB) error) {
 // SetProcessPaymentFunc wires the billing.ProcessPayment call.
 func SetProcessPaymentFunc(fn func(db *sql.DB, username string, amountUSDMicrocents int64, providerTxID string, paymentType string) (*models.CreditTransaction, error)) {
 	ProcessPaymentFunc = fn
+}
+
+// SetSettlePaymentInvoiceFunc wires the billing.SettlePaymentInvoice call.
+func SetSettlePaymentInvoiceFunc(fn func(db *sql.DB, invoice *models.PaymentInvoice, paymentType string) (*models.CreditTransaction, error)) {
+	SettlePaymentInvoiceFunc = fn
 }
 
 // silence the unused-import linter when database isn't yet used (it is

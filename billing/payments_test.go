@@ -41,7 +41,7 @@ func openPaymentsTestDB(t *testing.T) *sql.DB {
 			username TEXT NOT NULL,
 			amount_usd_microcents BIGINT NOT NULL,
 			balance_after_usd_microcents BIGINT NOT NULL,
-			transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment')),
+			transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment', 'payment')),
 			reason TEXT,
 			admin_username TEXT,
 			metadata TEXT,
@@ -79,8 +79,16 @@ func TestProcessPayment_CreditsBalanceAndLedger(t *testing.T) {
 	if tx.Reason == nil || *tx.Reason != "Payment top-up via btcpay" {
 		t.Errorf("reason = %v, want Payment top-up via btcpay", tx.Reason)
 	}
-	if tx.TransactionType != "gift" {
-		t.Errorf("transaction_type = %q, want gift", tx.TransactionType)
+	if tx.TransactionType != "payment" {
+		t.Errorf("transaction_type = %q, want payment", tx.TransactionType)
+	}
+
+	var txType string
+	if err := db.QueryRow(`SELECT transaction_type FROM credit_transactions WHERE transaction_id = 'btcpay_prov_abc'`).Scan(&txType); err != nil {
+		t.Fatalf("read transaction type: %v", err)
+	}
+	if txType != "payment" {
+		t.Errorf("stored transaction_type = %q, want payment", txType)
 	}
 
 	var balance int64

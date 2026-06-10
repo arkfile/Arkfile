@@ -1152,6 +1152,51 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     console.log('[OK] Billing panel test complete');
   });
 
+  test('Billing top-up modal creates invoice and embeds checkout iframe', async () => {
+    await sharedPage.route('**/api/billing/invoice', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          success: true,
+          data: {
+            invoice_id: 'inv_playwright_test',
+            checkout_url: 'http://localhost:3000/checkout/inv_playwright_test',
+            provider: 'btcpay',
+          },
+        }),
+      });
+    });
+
+    await sharedPage.click('#billing-toggle');
+    await sharedPage.waitForSelector('#billing-panel:not(.hidden)', { timeout: 5000 });
+    await sharedPage.waitForSelector('.billing-panel-section', { timeout: 10000 });
+
+    const topUpBtn = await sharedPage.$('button:has-text("Top Up Balance")');
+    if (!topUpBtn) {
+      console.log('[SKIP] Top Up Balance button not rendered (payments may be disabled)');
+      await sharedPage.unroute('**/api/billing/invoice');
+      return;
+    }
+
+    await topUpBtn.click();
+    await sharedPage.waitForSelector('#topup-form', { timeout: 5000 });
+    await sharedPage.fill('#topup-amount-input', '10.00');
+    await sharedPage.click('button:has-text("Generate Invoice")');
+
+    await sharedPage.waitForSelector('#arkfile-topup-modal-overlay iframe', { timeout: 10000 });
+    const iframeSrc = await sharedPage.getAttribute('#arkfile-topup-modal-overlay iframe', 'src');
+    expect(iframeSrc).toContain('checkout/inv_playwright_test');
+
+    await sharedPage.click('#arkfile-topup-modal-overlay .password-modal-close');
+    await sharedPage.unroute('**/api/billing/invoice');
+    console.log('[OK] Billing top-up modal and checkout iframe test complete');
+  });
+
   // --------------------------------------------------------------------------
   // Phase 13: Logout + Post-Logout Checks
   // --------------------------------------------------------------------------

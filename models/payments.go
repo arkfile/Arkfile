@@ -151,3 +151,73 @@ func ListPaymentInvoices(db DBTX, username string, status string) ([]*PaymentInv
 
 	return invoices, nil
 }
+
+// CreditTransactionExistsForProviderID reports whether a credit_transactions row
+// exists for the given provider invoice ID (stored as transaction_id).
+func CreditTransactionExistsForProviderID(db DBTX, providerInvoiceID string) (bool, error) {
+	if providerInvoiceID == "" {
+		return false, nil
+	}
+	var count int
+	err := db.QueryRow(
+		`SELECT COUNT(1) FROM credit_transactions WHERE transaction_id = ?`,
+		providerInvoiceID,
+	).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// CreditTransactionExistsForProviderIDTx is the transactional variant.
+func CreditTransactionExistsForProviderIDTx(tx *sql.Tx, providerInvoiceID string) (bool, error) {
+	return CreditTransactionExistsForProviderID(tx, providerInvoiceID)
+}
+
+// ListPaidInvoicesWithoutCredit returns paid invoices that have no matching ledger credit row.
+func ListPaidInvoicesWithoutCredit(db *sql.DB) ([]*PaymentInvoice, error) {
+	rows, err := db.Query(`
+		SELECT pi.invoice_id, pi.username, pi.amount_usd_microcents, pi.status, pi.provider,
+		       COALESCE(pi.provider_invoice_id, ''), pi.created_at, pi.updated_at
+		FROM payment_invoices pi
+		LEFT JOIN credit_transactions ct ON ct.transaction_id = pi.provider_invoice_id
+		WHERE pi.status = 'paid'
+		  AND pi.provider_invoice_id IS NOT NULL
+		  AND pi.provider_invoice_id != ''
+		  AND ct.id IS NULL
+		ORDER BY pi.created_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var invoices []*PaymentInvoice
+	for rows.Next() {
+		invoice := &PaymentInvoice{}
+		var createdAtStr, updatedAtStr string
+		var amountF float64
+
+		if err := rows.Scan(
+			&invoice.InvoiceID, &invoice.Username, &amountF, &invoice.Status, &invoice.Provider,
+			&invoice.ProviderInvoiceID, &createdAtStr, &updatedAtStr,
+		); err != nil {
+			return nil, err
+		}
+		invoice.AmountUSDMicrocents = int64(amountF)
+
+		if t, err := time.Parse(time.RFC3339, createdAtStr); err == nil {
+			invoice.CreatedAt = t
+		} else if t, err := time.Parse("2006-01-02 15:04:05", createdAtStr); err == nil {
+			invoice.CreatedAt = t
+		}
+		if t, err := time.Parse(time.RFC3339, updatedAtStr); err == nil {
+			invoice.UpdatedAt = t
+		} else if t, err := time.Parse("2006-01-02 15:04:05", updatedAtStr); err == nil {
+			invoice.UpdatedAt = t
+		}
+
+		invoices = append(invoices, invoice)
+	}
+	return invoices, rows.Err()
+}

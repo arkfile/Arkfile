@@ -75,3 +75,33 @@ func (c *BTCPayClient) CreateInvoice(ctx context.Context, invoiceID string, amou
 		CheckoutURL:       respData.CheckoutLink,
 	}, nil
 }
+
+func (c *BTCPayClient) GetInvoiceStatus(ctx context.Context, providerInvoiceID string) (string, error) {
+	if providerInvoiceID == "" {
+		return "", fmt.Errorf("provider invoice ID is required")
+	}
+	url := fmt.Sprintf("%s/api/v1/stores/%s/invoices/%s", c.BaseURL, c.StoreID, providerInvoiceID)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "token "+c.APIKey)
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("btcpay returned status %d", resp.StatusCode)
+	}
+
+	var respData struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return "", err
+	}
+	return respData.Status, nil
+}

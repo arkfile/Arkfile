@@ -9,4 +9,7 @@ type ProviderInvoice struct {
 
 type PaymentProvider interface {
 	CreateInvoice(ctx context.Context, invoiceID string, amountMicrocents int64, redirectURL string) (*ProviderInvoice, error)
+	GetInvoiceStatus(ctx context.Context, providerInvoiceID string) (string, error)
 }
+
+var _ PaymentProvider = (*BTCPayClient)(nil)

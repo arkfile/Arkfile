@@ -423,6 +423,7 @@ func startBillingScheduler(ctx context.Context, cfg *config.Config) {
 		return err
 	})
 	handlers.SetProcessPaymentFunc(billing.ProcessPayment)
+	handlers.SetSettlePaymentInvoiceFunc(billing.SettlePaymentInvoice)
 
 	if !cfg.Billing.Enabled {
 		logging.InfoLogger.Print("billing scheduler disabled (ARKFILE_BILLING_ENABLED=false)")
@@ -493,6 +494,61 @@ func runSchemaMigrations() {
 			log.Printf("Migration: %s applied successfully", m.description)
 		}
 	}
+
+	migrateCreditTransactionsPaymentType()
+}
+
+// migrateCreditTransactionsPaymentType rebuilds credit_transactions when the CHECK
+// constraint does not yet allow transaction_type = 'payment'.
+func migrateCreditTransactionsPaymentType() {
+	const desc = "Add payment to credit_transactions.transaction_type CHECK constraint"
+	var createSQL string
+	err := database.DB.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'credit_transactions'`,
+	).Scan(&createSQL)
+	if err != nil {
+		log.Printf("Migration: %s skipped (table missing): %v", desc, err)
+		return
+	}
+	if strings.Contains(createSQL, "'payment'") {
+		log.Printf("Migration: %s (already applied)", desc)
+		return
+	}
+
+	rebuildSQL := `
+		CREATE TABLE credit_transactions_new (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			transaction_id TEXT UNIQUE DEFAULT NULL,
+			username TEXT NOT NULL,
+			amount_usd_microcents BIGINT NOT NULL,
+			balance_after_usd_microcents BIGINT NOT NULL,
+			transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment', 'payment')),
+			reason TEXT,
+			admin_username TEXT,
+			metadata TEXT,
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+		);
+		INSERT INTO credit_transactions_new
+			(id, transaction_id, username, amount_usd_microcents, balance_after_usd_microcents,
+			 transaction_type, reason, admin_username, metadata, created_at)
+		SELECT id, transaction_id, username, amount_usd_microcents, balance_after_usd_microcents,
+		       transaction_type, reason, admin_username, metadata, created_at
+		FROM credit_transactions;
+		DROP TABLE credit_transactions;
+		ALTER TABLE credit_transactions_new RENAME TO credit_transactions;
+		CREATE INDEX IF NOT EXISTS idx_credit_transactions_username ON credit_transactions(username);
+		CREATE INDEX IF NOT EXISTS idx_credit_transactions_transaction_id ON credit_transactions(transaction_id);
+		CREATE INDEX IF NOT EXISTS idx_credit_transactions_type ON credit_transactions(transaction_type);
+		CREATE INDEX IF NOT EXISTS idx_credit_transactions_created_at ON credit_transactions(created_at);
+		CREATE INDEX IF NOT EXISTS idx_credit_transactions_admin ON credit_transactions(admin_username);
+	`
+
+	if _, err := database.DB.Exec(rebuildSQL); err != nil {
+		log.Printf("Migration: %s failed: %v", desc, err)
+		return
+	}
+	log.Printf("Migration: %s applied successfully", desc)
 }
 
 type configuredStorageProvider struct {

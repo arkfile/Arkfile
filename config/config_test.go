@@ -538,3 +538,79 @@ func TestPaymentsConfigFromEnv(t *testing.T) {
 	assert.Equal(t, "1.25", cfg.Payments.MinTopUpUSD)
 	assert.Equal(t, "500.00", cfg.Payments.MaxTopUpUSD)
 }
+
+func TestPaymentsConfigValidationRequiresCredentials(t *testing.T) {
+	baseEnv := map[string]string{
+		"JWT_SECRET":           "test-jwt-secret",
+		"STORAGE_PROVIDER_1":   "generic-s3",
+		"STORAGE_1_ENDPOINT":   "http://localhost:9332",
+		"STORAGE_1_ACCESS_KEY": "test",
+		"STORAGE_1_SECRET_KEY": "test",
+		"STORAGE_1_BUCKET":     "test-bucket",
+		"ARKFILE_PAYMENTS_ENABLED": "true",
+	}
+	originalEnv := map[string]string{}
+	for key := range baseEnv {
+		originalEnv[key] = os.Getenv(key)
+	}
+	defer func() {
+		for key, val := range originalEnv {
+			if val == "" {
+				os.Unsetenv(key)
+			} else {
+				os.Setenv(key, val)
+			}
+		}
+		ResetConfigForTest()
+	}()
+
+	ResetConfigForTest()
+	for key, val := range baseEnv {
+		os.Setenv(key, val)
+	}
+
+	_, err := LoadConfig()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ARKFILE_BTCPAY_SERVER_URL")
+}
+
+func TestPaymentsConfigValidationRejectsInvalidTopUpRange(t *testing.T) {
+	baseEnv := map[string]string{
+		"JWT_SECRET":                    "test-jwt-secret",
+		"STORAGE_PROVIDER_1":            "generic-s3",
+		"STORAGE_1_ENDPOINT":            "http://localhost:9332",
+		"STORAGE_1_ACCESS_KEY":          "test",
+		"STORAGE_1_SECRET_KEY":          "test",
+		"STORAGE_1_BUCKET":              "test-bucket",
+		"ARKFILE_PAYMENTS_ENABLED":      "true",
+		"ARKFILE_BTCPAY_SERVER_URL":     "https://btcpay.example.com",
+		"ARKFILE_BTCPAY_STORE_ID":       "store-abc",
+		"ARKFILE_BTCPAY_API_KEY":        "key-xyz",
+		"ARKFILE_BTCPAY_WEBHOOK_SECRET": "whsec-test",
+		"ARKFILE_MIN_TOP_UP_USD":        "100.00",
+		"ARKFILE_MAX_TOP_UP_USD":        "10.00",
+	}
+	originalEnv := map[string]string{}
+	for key := range baseEnv {
+		originalEnv[key] = os.Getenv(key)
+	}
+	defer func() {
+		for key, val := range originalEnv {
+			if val == "" {
+				os.Unsetenv(key)
+			} else {
+				os.Setenv(key, val)
+			}
+		}
+		ResetConfigForTest()
+	}()
+
+	ResetConfigForTest()
+	for key, val := range baseEnv {
+		os.Setenv(key, val)
+	}
+
+	_, err := LoadConfig()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ARKFILE_MIN_TOP_UP_USD must be less than ARKFILE_MAX_TOP_UP_USD")
+}

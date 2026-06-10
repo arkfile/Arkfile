@@ -64,7 +64,7 @@ func setupPaymentsSQLiteDB(t *testing.T) *sql.DB {
 			username TEXT NOT NULL,
 			amount_usd_microcents BIGINT NOT NULL,
 			balance_after_usd_microcents BIGINT NOT NULL,
-			transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment')),
+			transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment', 'payment')),
 			reason TEXT,
 			admin_username TEXT,
 			metadata TEXT,
@@ -114,6 +114,8 @@ func withPaymentsTestEnv(t *testing.T, btcpayURL string, paymentsEnabled bool) (
 
 	origProcessPayment := ProcessPaymentFunc
 	SetProcessPaymentFunc(billing.ProcessPayment)
+	origSettle := SettlePaymentInvoiceFunc
+	SetSettlePaymentInvoiceFunc(billing.SettlePaymentInvoice)
 
 	config.ResetConfigForTest()
 	t.Setenv("ARKFILE_PAYMENTS_ENABLED", "false")
@@ -135,6 +137,7 @@ func withPaymentsTestEnv(t *testing.T, btcpayURL string, paymentsEnabled bool) (
 	cleanup := func() {
 		database.DB = origDB
 		SetProcessPaymentFunc(origProcessPayment)
+		SetSettlePaymentInvoiceFunc(origSettle)
 		config.ResetConfigForTest()
 		db.Close()
 	}

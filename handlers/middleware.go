@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -409,31 +410,53 @@ func RateLimitMiddleware(endpointConfig config.EndpointConfig) echo.MiddlewareFu
 	}
 }
 
+// paymentProviderFrameOrigin returns scheme://host for BTCPay checkout iframe embedding.
+func paymentProviderFrameOrigin(serverURL string) string {
+	serverURL = strings.TrimSpace(serverURL)
+	if serverURL == "" {
+		return ""
+	}
+	u, err := url.Parse(strings.TrimSuffix(serverURL, "/"))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// buildContentSecurityPolicy assembles the CSP header, optionally allowing the
+// configured BTCPay Server origin for checkout iframe embedding.
+func buildContentSecurityPolicy() string {
+	frameSrc := "'self'"
+	if cfg := config.GetConfig(); cfg.Payments.Enabled {
+		if origin := paymentProviderFrameOrigin(cfg.Payments.BTCPayServerURL); origin != "" {
+			frameSrc += " " + origin
+		}
+	}
+
+	// Note: 'wasm-unsafe-eval' is required for OPAQUE WebAssembly authentication.
+	// frame-src includes the BTCPay Server origin when payments are enabled so
+	// the billing top-up modal can embed the provider checkout page.
+	return "default-src 'self'; " +
+		"script-src 'self' 'wasm-unsafe-eval'; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data:; " +
+		"connect-src 'self' data: blob:; " +
+		"font-src 'self'; " +
+		"object-src 'none'; " +
+		"base-uri 'self'; " +
+		"form-action 'self'; " +
+		"frame-src " + frameSrc + "; " +
+		"frame-ancestors 'none'; " +
+		"worker-src 'self'; " +
+		"require-trusted-types-for 'script'; " +
+		"trusted-types default; " +
+		"upgrade-insecure-requests"
+}
+
 // CSPMiddleware adds Content Security Policy headers with strict security
 func CSPMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		// CSP policy with strict security
-		// Note: 'wasm-unsafe-eval' is required for OPAQUE WebAssembly authentication
-		// data: and blob: in connect-src are required for WASM module loading
-		// worker-src 'self' allows registering /sw-download.js (the streaming
-		// download Service Worker). The SW makes no network requests of its own;
-		// it only intercepts same-origin /sw-download/<uuid> URLs and forwards
-		// already-decrypted byte streams from the page to the browser's
-		// download manager. See client/static/js/src/sw-download.ts.
-		csp := "default-src 'self'; " +
-			"script-src 'self' 'wasm-unsafe-eval'; " +
-			"style-src 'self' 'unsafe-inline'; " +
-			"img-src 'self' data:; " +
-			"connect-src 'self' data: blob:; " +
-			"font-src 'self'; " +
-			"object-src 'none'; " +
-			"base-uri 'self'; " +
-			"form-action 'self'; " +
-			"frame-ancestors 'none'; " +
-			"worker-src 'self'; " +
-			"require-trusted-types-for 'script'; " +
-			"trusted-types default; " +
-			"upgrade-insecure-requests"
+		csp := buildContentSecurityPolicy()
 
 		c.Response().Header().Set("Content-Security-Policy", csp)
 

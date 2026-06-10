@@ -22,6 +22,8 @@ func handlePaymentsCommand(client *HTTPClient, config *AdminConfig, args []strin
 		return handlePaymentsListCommand(client, config, rest)
 	case "sync-invoice":
 		return handlePaymentsSyncInvoiceCommand(client, config, rest)
+	case "reconcile":
+		return handlePaymentsReconcileCommand(client, config, rest)
 	case "help", "--help", "-h":
 		printPaymentsUsage()
 		return nil
@@ -40,6 +42,7 @@ SUBCOMMANDS:
     show <invoice_id>                     Show details for a specific payment invoice.
     list [--user NAME] [--status STATUS]  List payment invoices with optional filters.
     sync-invoice <invoice_id>             Sync local invoice state with BTCPay Server.
+    reconcile                             Credit paid invoices missing ledger rows.
 
 GLOBAL FLAGS:
     --json                                Emit machine-readable JSON instead of formatted text.
@@ -213,5 +216,41 @@ Query BTCPay Server to synchronize the state of a pending invoice.
 	fmt.Printf("Current Local Invoice State:\n")
 	fmt.Printf("  Invoice ID: %s\n", safeString(invoice, "invoice_id"))
 	fmt.Printf("  Status:     %s\n", safeString(invoice, "status"))
+	return nil
+}
+
+func handlePaymentsReconcileCommand(client *HTTPClient, config *AdminConfig, args []string) error {
+	fs := flag.NewFlagSet("payments reconcile", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "Emit JSON instead of formatted text")
+	fs.Usage = func() {
+		fmt.Print(`Usage: arkfile-admin payments reconcile [--json]
+
+Scan paid invoices missing matching credit_transactions rows and apply ledger credits.
+`)
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	session, err := requireBillingSession(config)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.makeRequest("POST", "/api/admin/payments/reconcile", nil, session.AccessToken)
+	if err != nil {
+		return fmt.Errorf("reconcile failed: %w", err)
+	}
+
+	if *jsonOut {
+		return printJSON(resp.Data)
+	}
+
+	repaired := int(safeFloat64(resp.Data, "repaired_count"))
+	msg := resp.Message
+	if msg == "" {
+		msg = fmt.Sprintf("Reconciled %d paid invoice(s) missing ledger credits", repaired)
+	}
+	fmt.Println(msg)
 	return nil
 }

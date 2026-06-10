@@ -563,7 +563,93 @@ func validateConfig(cfg *Config) error {
 		return fmt.Errorf("unsupported storage provider: %s", cfg.Storage.Provider)
 	}
 
+	if err := validatePaymentsConfig(cfg); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func validatePaymentsConfig(cfg *Config) error {
+	if !cfg.Payments.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(cfg.Payments.BTCPayServerURL) == "" {
+		return fmt.Errorf("ARKFILE_BTCPAY_SERVER_URL is required when ARKFILE_PAYMENTS_ENABLED=true")
+	}
+	if strings.TrimSpace(cfg.Payments.BTCPayStoreID) == "" {
+		return fmt.Errorf("ARKFILE_BTCPAY_STORE_ID is required when ARKFILE_PAYMENTS_ENABLED=true")
+	}
+	if strings.TrimSpace(cfg.Payments.BTCPayAPIKey) == "" {
+		return fmt.Errorf("ARKFILE_BTCPAY_API_KEY is required when ARKFILE_PAYMENTS_ENABLED=true")
+	}
+	if strings.TrimSpace(cfg.Payments.BTCPayWebhookSecret) == "" {
+		return fmt.Errorf("ARKFILE_BTCPAY_WEBHOOK_SECRET is required when ARKFILE_PAYMENTS_ENABLED=true")
+	}
+
+	minMicrocents, err := parsePositiveTopUpUSD(cfg.Payments.MinTopUpUSD, "ARKFILE_MIN_TOP_UP_USD")
+	if err != nil {
+		return err
+	}
+	maxMicrocents, err := parsePositiveTopUpUSD(cfg.Payments.MaxTopUpUSD, "ARKFILE_MAX_TOP_UP_USD")
+	if err != nil {
+		return err
+	}
+	if minMicrocents >= maxMicrocents {
+		return fmt.Errorf("ARKFILE_MIN_TOP_UP_USD must be less than ARKFILE_MAX_TOP_UP_USD")
+	}
+	return nil
+}
+
+func parsePositiveTopUpUSD(value, name string) (int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, fmt.Errorf("%s must be a positive USD amount when payments are enabled", name)
+	}
+	negative := false
+	if strings.HasPrefix(value, "-") {
+		negative = true
+		value = strings.TrimPrefix(value, "-")
+	}
+	if strings.HasPrefix(value, "+") {
+		value = strings.TrimPrefix(value, "+")
+	}
+	if strings.HasPrefix(value, "$") {
+		value = strings.TrimPrefix(value, "$")
+	}
+	parts := strings.SplitN(value, ".", 2)
+	dollarsPart := parts[0]
+	if dollarsPart == "" || negative {
+		return 0, fmt.Errorf("%s must be a positive USD amount", name)
+	}
+	for _, ch := range dollarsPart {
+		if ch < '0' || ch > '9' {
+			return 0, fmt.Errorf("%s must be a valid USD decimal amount", name)
+		}
+	}
+	centsPart := "00"
+	if len(parts) == 2 {
+		centsPart = parts[1]
+		if len(centsPart) > 2 {
+			return 0, fmt.Errorf("%s must have at most two decimal places", name)
+		}
+		for len(centsPart) < 2 {
+			centsPart += "0"
+		}
+		for _, ch := range centsPart {
+			if ch < '0' || ch > '9' {
+				return 0, fmt.Errorf("%s must be a valid USD decimal amount", name)
+			}
+		}
+	}
+	var dollars, cents int64
+	fmt.Sscanf(dollarsPart, "%d", &dollars)
+	fmt.Sscanf(centsPart, "%d", &cents)
+	total := dollars*100000000 + cents*1000000
+	if total <= 0 {
+		return 0, fmt.Errorf("%s must be a positive USD amount", name)
+	}
+	return total, nil
 }
 
 // ValidateProductionConfig validates that the configuration is safe for production

@@ -85,6 +85,8 @@ class ArkFileApp {
             showFileSection();
             startAutoRefresh();
             await this.loadUserFiles();
+            const { handleBillingCheckoutReturn } = await import('./ui/billing');
+            await handleBillingCheckoutReturn();
           }
         }
       } else {
@@ -572,6 +574,8 @@ class ArkFileApp {
             showFileSection();
             startAutoRefresh();
             await this.loadUserFiles();
+            const { handleBillingCheckoutReturn } = await import('./ui/billing');
+            await handleBillingCheckoutReturn();
           }
         } else {
           // Token is invalid, clear storage and show auth

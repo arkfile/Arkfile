@@ -269,6 +269,7 @@ func RegisterRoutes() {
 	adminGroup.GET("/payments/invoice/:invoice_id", AdminGetInvoiceHandler)
 	adminGroup.GET("/payments/invoices", AdminListInvoicesHandler)
 	adminGroup.POST("/payments/invoice/:invoice_id/sync", AdminSyncInvoiceHandler)
+	adminGroup.POST("/payments/reconcile", AdminReconcilePaymentsHandler)
 
 	// Development/Testing admin endpoints (gated by ADMIN_DEV_TEST_API_ENABLED)
 	// SECURITY: These endpoints are ONLY for development and testing

@@ -385,14 +385,14 @@ CREATE TABLE IF NOT EXISTS user_credits (
 );
 
 -- Credit transactions audit log. Amounts denominated in microcents; both fields signed.
--- transaction_type values: 'usage' (daily storage sweep), 'gift' (admin gift), 'adjustment' (admin set).
+-- transaction_type values: 'usage' (daily storage sweep), 'gift' (admin gift), 'adjustment' (admin set), 'payment' (BTCPay top-up).
 CREATE TABLE IF NOT EXISTS credit_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     transaction_id TEXT UNIQUE DEFAULT NULL,          -- External transaction ID MUST be unique to prevent double-spend gifts / duplicate charges
     username TEXT NOT NULL,
     amount_usd_microcents BIGINT NOT NULL,            -- Positive for credits, negative for debits
     balance_after_usd_microcents BIGINT NOT NULL,     -- Balance after this transaction (signed)
-    transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment')), -- Constrain transaction_type via CHECK constraint
+    transaction_type TEXT NOT NULL CHECK (transaction_type IN ('usage', 'gift', 'adjustment', 'payment')), -- Constrain transaction_type via CHECK constraint
     reason TEXT,                                      -- Human-readable reason
     admin_username TEXT,                              -- NULL for system-generated rows (e.g. usage sweeps)
     metadata TEXT,                                    -- JSON for additional details
