@@ -24,7 +24,7 @@ Gaps and issues identified before implementation begins:
 
 **Dead/stub crypto from Tier-3 migration.** `crypto.InitializeTOTPMasterKey` is a no-op; `GetTOTPMasterKeyStatus` always reports empty; `totpMasterKey` in `crypto/totp_keys.go` is never populated. Still called from `main.go`. Delete during cleanup per AGENTS.md greenfield rules.
 
-**Admin MFA reset absent.** No `POST /api/admin/users/:username/reset-mfa` and no `arkfile-admin reset-user-mfa`. TOTP rows are deleted only via dev-test cleanup or full user deletion in `handlers/admin.go`. Admin reset must DELETE credential rows (not `UPDATE` like `ResetTOTP`) and force-logout.
+**Admin MFA reset absent.** No `POST /api/admin/users/:username/reset-mfa` and no `arkfile-admin reset-user-mfa`. TOTP rows are deleted only via dev-test cleanup or full user deletion in `handlers/admin.go`. Admin reset must DELETE credential rows (not `UPDATE` like `ResetTOTP`) and force-logout. v1 ships full reset only; API/CLI shape should accept an optional credential selector later for multi-method accounts (see arkfile-admin section).
 
 **Admin contacts API shape mismatch.** `AdminContactsHandler` in `handlers/files.go` returns flat `{ adminUsernames, adminContact }`. `client/static/js/src/files/list.ts` expects nested `data.admins[].contacts`, so the storage-section contact note always falls back to generic text.
 
@@ -60,7 +60,7 @@ Second, if the user has lost their second factor or wants to replace it, use pat
 
 Third, if backup codes are also lost, contact the instance admin using the admin contact details shown on the site. The admin verifies the requester's identity out-of-band. The recommended verification method is matching the request against contact methods the user previously saved under Contact Info (encrypted, admin-readable). Contact Info remains optional for normal usage but is strongly recommended before anyone relies on admin-assisted MFA reset.
 
-Fourth, the admin runs `arkfile-admin reset-user-mfa --username USER --confirm`. This clears MFA credentials and backup codes, force-logouts all sessions, and leaves the account in `requires_mfa_setup` state. The user logs in with their password and completes MFA enrollment again.
+Fourth, the admin runs a **full** MFA reset: `arkfile-admin reset-user-mfa --username USER --confirm`. This clears all MFA credentials and backup codes, force-logouts all sessions, and leaves the account in `requires_mfa_setup` state. The user logs in with their password and completes MFA enrollment again. Admin reset is for **total lockout** (all factors and backup codes gone). It is not the normal path when the user still has another enrolled factor or usable backup codes — those cases are steps one and two above.
 
 Lost password means lost files. Lost second factor and lost backup codes means the account cannot be recovered without admin intervention, and admin intervention is only appropriate when identity (that the person requesting reset actually owns the account) can be established out-of-band.
 
@@ -118,7 +118,7 @@ WebAuthn registration and authentication use the standard two-step begin/finish 
 
 Backup code generation, hashing (Argon2id per code), validation, and both backup-code login paths are method-agnostic. Rename endpoints: `POST /api/mfa/auth` (includes `is_backup: true` for path A), `POST /api/mfa/recover-with-backup-code`, and `POST /api/mfa/reset` (path B).
 
-Admin reset (`POST /api/admin/users/:username/reset-mfa`) must DELETE all MFA rows for the user (credentials, backup codes, usage logs), call existing force-logout / token revocation, and log a security event. Do not use `ResetTOTP` (which UPDATEs an existing row and re-issues TOTP secrets).
+Admin reset (`POST /api/admin/users/:username/reset-mfa`) must call existing force-logout / token revocation and log a security event. Do not use `ResetTOTP` (which UPDATEs an existing row and re-issues TOTP secrets). See **Full vs credential-scoped reset** below — v1 implements full reset only; shape the handler and request body so an optional `credential_id` (or label) can be added in Phase 9 without a breaking API change.
 
 ## Browser client (TypeScript)
 
@@ -140,13 +140,23 @@ Commands: `setup-mfa` (interactive, choose `totp` or `security key`), `login` (e
 
 New command: `arkfile-admin reset-user-mfa --username USER --confirm`.
 
-Calls `POST /api/admin/users/:username/reset-mfa`. Clears `user_mfa_credentials`, backup codes, usage logs; force-logouts user; logs security event.
-
-Before reset, display user contact info if present (reuse `user-contact-info` API). If no contact info on file, require `--acknowledge-no-contact-info` flag.
+Calls `POST /api/admin/users/:username/reset-mfa`. Before reset, display user contact info if present (reuse `user-contact-info` API). If no contact info on file, require `--acknowledge-no-contact-info` flag.
 
 Operator runbook: verify requester identity against saved contact methods when possible; only then run reset; instruct user to log in and re-enroll.
 
 Admin MFA reset must not clear user contact info.
+
+### Full vs credential-scoped reset
+
+Two distinct operations; v1 (one method per user) implements **full reset** only.
+
+**Full reset (default, Phase 5).** For total lockout: user has lost all enrolled factors and all backup codes. DELETE all rows in `user_mfa_credentials`, `user_mfa_backup_codes`, and MFA usage logs for the user; force-logout all sessions; account enters `requires_mfa_setup`. In v1 this is the only credential row anyway.
+
+**Credential-scoped reset (Phase 9, multi-method).** For removing one stale enrollment while others remain — e.g. retire a lost YubiKey when the user still has TOTP or another key, but cannot log in to remove it themselves. DELETE one credential row (and any usage data tied to that credential). **Keep** account-level backup codes if at least one completed credential remains. Still force-logout (MFA configuration changed). If the delete leaves zero credentials, escalate to full-reset semantics (clear backup codes, `requires_mfa_setup`).
+
+**Identifying the credential.** Full reset needs no method detail. Credential-scoped reset requires agreement on **which enrollment** — not `method_type` alone (a user may have two security keys). Use `credential_id` (UUID once schema allows multiple rows per user) or the user's private **label** ("Travel Nitrokey"). Admin CLI should list non-secret metadata first (`method_type`, label, enrolled date); user and admin confirm the same label out-of-band.
+
+**Self-service first.** Users with multiple factors who lose one should use another factor or backup codes (paths A/B); admin reset remains the last resort for total lockout or exceptional credential removal.
 
 ## Tier-3 user-secret-master rotation (full implementation)
 
@@ -272,7 +282,7 @@ Use whole phase numbers only. Each phase should leave tests green before startin
 
 **Phase 4:** Tier-3 master rotation — full re-encrypt with admin auth preserved. Add `arkfile-admin rotate-user-secret-master prepare` (network; requires logged-in admin with 2FA; issues single-use signed mandate) and `rotate-user-secret-master apply` (local; mandate-gated; service must be stopped). Implement `POST /api/admin/system/prepare-user-secret-master-rotation` for mandate issuance. `apply` links server `crypto`/DB packages: backup key + DB, re-encrypt all `user_mfa_credentials` and `user_contact_info` rows, atomic key swap, verification pass. No unauthenticated local rotator. Optional shell wrapper documents login → prepare → stop → apply → start. Unit tests for re-encrypt round-trip and mandate validation. Document operator procedure in `docs/security.md`.
 
-**Phase 5:** Admin MFA reset. `POST /api/admin/users/:username/reset-mfa` and `arkfile-admin reset-user-mfa --username USER --confirm` with contact-info display, `--acknowledge-no-contact-info` when empty, force-logout, audit log. Admin handler tests and e2e coverage.
+**Phase 5:** Admin MFA reset — **full reset only** (v1 has one credential per user). `POST /api/admin/users/:username/reset-mfa` and `arkfile-admin reset-user-mfa --username USER --confirm`: delete all credentials, backup codes, usage logs; force-logout; audit log; contact-info display and `--acknowledge-no-contact-info` when empty. Design API/CLI with optional future `credential_id` / `--credential-id` / `--label` for Phase 9 credential-scoped reset without breaking changes. Admin handler tests and e2e coverage.
 
 **Phase 6:** WebAuthn server and browser client. `go-webauthn/webauthn` registration/auth begin/finish endpoints; enrollment UI method picker (TOTP or security key, one method only); backup codes on both paths; Tor warning in UI; `@simplewebauthn/browser` integration.
 
@@ -280,7 +290,7 @@ Use whole phase numbers only. Each phase should leave tests green before startin
 
 **Phase 8:** Sitewide Contact Admin + FAQ footer; fix admin-contacts API consumption in `list.ts`; MFA login recovery hint; publish FAQ page from `docs/user-faq.md`; update homepage feature card.
 
-**Phase 9 (future):** Multi-method enrollment up to three credentials per account with private device labels.
+**Phase 9 (future):** Multi-method enrollment up to three credentials per account with private device labels. Schema: `credential_id` primary key, multiple rows per username. Add credential-scoped admin reset (`--credential-id` or `--label`), admin credential listing endpoint, and logged-in user self-service remove for own credentials. Backup codes remain account-level.
 
 ## Other notes
 
