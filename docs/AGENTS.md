@@ -30,6 +30,7 @@ As you are implementing, updating or reviewing existing functions, go through th
 - Is it implemented in a standard and secure way?
 - Is it merely a stub function or otherwise incomplete?
 - Is it well placed, in the right file or area of the app?
+- Is it reachable and currently in use, or could it be deleted?
 - Does it require additional review, updates, moving or potentially deletion?
 - Does it align with the vision and intended design of the app as being privacy-preserving for users end-to-end?
 
@@ -103,4 +104,8 @@ Do not name functions or variables or include in comments references to temporar
 
 ## Document Formatting
 
-Do not add unnecessary hard line breaks within paragraphs. Allow continuous lines of arbitrary length and allow IDEs and text editors to do the line-wrapping as desired by the end-user, reader or developer. 
+Do not add unnecessary hard line breaks within paragraphs. Allow continuous lines of arbitrary length and allow IDEs and text editors to do the line-wrapping as desired by the end-user, reader or developer.
+
+## User FAQ (docs/user-faq.md)
+
+The file docs/user-faq.md is end-user documentation. It may be published on the website or referenced from the arkfile-client manual. When adding or editing entries, keep the entire file in Q&A form only. Each answer must be one or more plain paragraphs. Do not use bullet lists, numbered lists, bold, italics, code spans, code blocks, tables, links as the primary structure of an answer, or emojis inside answers. Section headings may introduce a question topic; the answer text beneath each question must still be prose paragraphs only. If implementation details belong in developer docs, put them in docs/security.md, docs/api.md, or a WIP planning doc instead.
