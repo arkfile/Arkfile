@@ -12,11 +12,15 @@ Every Arkfile account must complete two-factor authentication before gaining ful
 
 ## What are backup codes and why do they matter?
 
-When you set up two-factor authentication, Arkfile gives you ten single-use backup codes. Each code is a ten-character alphanumeric secret. You should save these codes in a secure place separate from your authenticator app or security key. Backup codes are account-level recovery credentials. They work whether your normal second factor is a TOTP app or a hardware key. If you lose your phone or security key, a backup code is the fastest way to regain access without contacting an administrator.
+When you set up two-factor authentication, Arkfile gives you ten single-use backup codes. Each code is a ten-character alphanumeric secret. You should save these codes in a secure place separate from your authenticator app or security key. Backup codes are account-level recovery credentials. They work whether your normal second factor is a TOTP app or a hardware key. You can use a backup code in two ways: to sign in once without changing your enrolled second factor, or to set up a new second factor when your old one is lost. Each code works only once, so use them deliberately and save any new codes issued after re-enrollment.
 
-## I lost my authenticator app or security key. What should I do first?
+## I lost my authenticator app or security key. How do I set up a new second factor?
 
-Log in with your username and password as usual. On the second-factor screen, choose the option to use a backup code instead of your normal code. Enter one of the ten backup codes you saved during setup. If the code is valid, Arkfile will guide you through setting up a new second factor immediately and will issue a fresh set of backup codes. Each backup code works only once, so after you recover you should save the new codes and remove the old list from wherever you stored it.
+Log in with your username and password as usual. On the second-factor screen, choose the option to set up a new second factor using a backup code. Enter one of the ten backup codes you saved during setup. If the code is valid, Arkfile will guide you through enrolling a new second factor immediately and will issue a fresh set of backup codes. Your old second factor will no longer work. Each backup code works only once, so after you recover you should save the new codes and remove the old list from wherever you stored it.
+
+## Can I use a backup code to sign in once without changing my second factor?
+
+Yes. After you enter your username and password, on the second-factor screen choose the option to sign in once with a backup code. Enter one of your ten backup codes. If the code is valid, you receive full access for this session. Your enrolled second factor is not changed. You will need your normal TOTP code or security key on your next login, or you can use another backup code. This is useful when you need temporary access and still have your second factor available elsewhere, or when you are not ready to re-enroll yet. Each backup code still works only once.
 
 ## I lost my backup codes too. Can I still recover my account?
 
@@ -36,7 +40,7 @@ Yes. Tor Browser is a supported browser for Arkfile. TOTP-based two-factor authe
 
 ## What is the difference between the web app and arkfile-client?
 
-The web app runs in your browser and handles encryption, upload, download, and account management through the Arkfile website. The arkfile-client tool is a command-line program for the same operations: encrypting and uploading files, downloading and decrypting files, and logging into your account. Both use the same OPAQUE authentication and the same two-factor requirements. A planned update will give arkfile-client the same hardware security key support as the browser, using a direct USB connection to your key rather than browser WebAuthn. Choose whichever client fits your workflow; the security model is the same.
+The web app runs in your browser and handles encryption, upload, download, and account management through the Arkfile website. The arkfile-client tool is a command-line program for the same operations: encrypting and uploading files, downloading and decrypting files, and logging into your account. Both use the same OPAQUE authentication and the same two-factor requirements. Both support signing in once with a backup code and re-enrolling a new second factor with a backup code. A planned update will give arkfile-client the same hardware security key support as the browser, using a direct USB connection to your key rather than browser WebAuthn. Choose whichever client fits your workflow; the security model is the same.
 
 ## How do I contact the administrator?
 

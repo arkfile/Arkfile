@@ -1,24 +1,66 @@
 # Better MFA: Hardware Security Keys, Unified Credentials, and Recovery
 
-This document plans the Multi-Factor Authentication enhancement for Arkfile: hardware security key support (YubiKey, Nitrokey 3), a greenfield migration from the TOTP-specific tables to a unified MFA credential model, admin-assisted recovery, CLI parity with the browser, Tor Browser considerations, and supporting user documentation.
+This document plans the Multi-Factor Authentication enhancement for Arkfile: hardware security key support (YubiKey, Nitrokey 3), a greenfield migration from the TOTP-specific tables to a unified MFA credential model, admin-assisted recovery, CLI parity with the browser, Tor Browser considerations, Tier-3 key rotation hardening, and supporting user documentation.
 
 ## Goals
 
-Arkfile currently requires TOTP as the sole second factor. This project adds FIDO2/WebAuthn hardware security keys as an alternative second factor (user picks one at enrollment in the first release), preserves backup codes as the primary self-service recovery path for all MFA types, adds an admin CLI command to reset a user's MFA, improves sitewide visibility of contact/admin-contact affordances, and achieves functional equivalence between the TypeScript browser client and the `arkfile-client` Go CLI for MFA enrollment and login.
+Arkfile currently requires TOTP as the sole second factor. This project adds FIDO2/WebAuthn hardware security keys as an alternative second factor (user picks one at enrollment in the first release), preserves backup codes as the primary self-service recovery path for all MFA types, adds an admin CLI command to reset a user's MFA, improves sitewide visibility of contact/admin-contact affordances, completes the Tier-3 user-secret-master rotation script so it re-encrypts all dependent database rows, and achieves functional equivalence between the TypeScript browser client and the `arkfile-client` Go CLI for MFA enrollment and login.
 
 ## Non-goals (first release)
 
 Multi-method enrollment (more than one second factor per account) is deferred. The long-term cap of three total methods remains the target architecture, but the first release enforces exactly one method per user: either TOTP or a hardware security key. Passkey/platform authenticators (Touch ID, Windows Hello as primary factor) are out of scope. Email-based recovery remains out of scope. Password reset remains out of scope.
 
+## Current codebase assessment (pre-implementation sanity check)
+
+The core TOTP implementation in `auth/totp.go` (~1,100 lines) is sound and should be migrated rather than rewritten. It includes two-phase enrollment (`StoreTOTPSetup` / `CompleteTOTPSetup`), RFC 6238 validation with skew and replay protection, Argon2id-hashed single-use backup codes with race-safe consumption, per-user failure lockout, and Tier-3 encryption of TOTP secrets via `crypto.DeriveTOTPUserKey` (HKDF purpose `totp_user` today).
+
+The two-tier JWT model in `auth/jwt.go` and route wiring in `handlers/route_config.go` are coherent: temp tier (`arkfile-totp`) for post-OPAQUE handoff, full tier (`arkfile-api`) for normal access, reset tier (`arkfile-totp-reset`) intended for re-enrollment after backup-code recovery. Browser cookie injection via `CookieTokenMiddleware` and CSRF rules are in place.
+
+Gaps and issues identified before implementation begins:
+
+**Reset-tier JWT routing bug.** `POST /api/totp/reset` is registered on `auth.Echo`, which applies `JWTMiddleware` expecting full-tier `arkfile-api` tokens. The lost-device recovery flow issues a reset-tier token (`AudienceReset` = `arkfile-totp-reset`, temp signing key) from `RecoverWithBackupCode`, and both the browser (`client/static/js/src/auth/totp.ts`) and `arkfile-client` then call `/api/totp/reset` with that token. The `TOTPReset` handler checks for `arkfile-totp-reset` audience, but `JWTMiddleware` rejects the token before the handler runs. Fix: add `ResetJWTMiddleware` (temp key + `arkfile-totp-reset` audience) and register reset on a route group that uses it, or extend temp-tier middleware to accept reset audience for that path only.
+
+**Browser backup-code UI gap.** The server supports two backup-code paths (see next section). The browser lost-device UI today only exposes re-enrollment (path B). Emergency one-shot login (path A) must be added to the MFA login UI during implementation; do not defer this.
+
+**Dead/stub crypto from Tier-3 migration.** `crypto.InitializeTOTPMasterKey` is a no-op; `GetTOTPMasterKeyStatus` always reports empty; `totpMasterKey` in `crypto/totp_keys.go` is never populated. Still called from `main.go`. Delete during cleanup per AGENTS.md greenfield rules.
+
+**Admin MFA reset absent.** No `POST /api/admin/users/:username/reset-mfa` and no `arkfile-admin reset-user-mfa`. TOTP rows are deleted only via dev-test cleanup or full user deletion in `handlers/admin.go`. Admin reset must DELETE credential rows (not `UPDATE` like `ResetTOTP`) and force-logout.
+
+**Admin contacts API shape mismatch.** `AdminContactsHandler` in `handlers/files.go` returns flat `{ adminUsernames, adminContact }`. `client/static/js/src/files/list.ts` expects nested `data.admins[].contacts`, so the storage-section contact note always falls back to generic text.
+
+**Schema view not in original plan.** `user_auth_status` SQL view in `unified_schema.sql` joins `user_totp` and must be updated when tables rename.
+
+**Fourth usage table.** Plan must include `totp_backup_usage` (backup code replay log), actively used in `auth/totp.go`; rename to e.g. `mfa_backup_usage`.
+
+**Tier-3 rotation script incomplete.** `scripts/maintenance/rotate-user-secret-master.sh` backs up and replaces `user-secret-master.bin` but does not re-encrypt database rows. After rotation, all MFA secrets and contact info encrypted under the old master become undecryptable. Replacement is a two-phase `arkfile-admin` flow (`prepare` while server is up with full admin + 2FA auth, `apply` offline with server stopped and a signed mandate). See dedicated section below.
+
+**Test gaps.** Unit tests for TOTP crypto/lockout are good (`auth/totp_test.go`). JWT audience tests are good. Missing: HTTP integration tests for both backup-code paths (path A and path B); e2e coverage for both paths in `e2e-test.sh`; e2e admin MFA reset (feature absent).
+
+**Monolith file.** Split `auth/totp.go` during migration into focused files (e.g. `auth/mfa_totp.go`, `auth/mfa_backup_codes.go`, shared lockout helpers) rather than carrying a 1,100-line file forward.
+
+## Backup code login paths (decided)
+
+Arkfile supports two self-service backup-code flows. Both remain in the product after the MFA rename. Each consumes one single-use backup code. Both work regardless of whether the enrolled second factor is TOTP or a hardware security key. Document both in `docs/user-faq.md` and expose both clearly in the MFA login UI and in `arkfile-client`.
+
+**Path A — Emergency one-shot login.** After OPAQUE password login, the user enters a backup code on the second-factor screen and chooses sign-in only (no re-enrollment). API: `POST /api/mfa/auth` with `is_backup: true` (today `TOTPAuth`). The server validates and consumes the backup code, then issues a full access token. The enrolled second factor is unchanged. The user can access their account once but will need their normal second factor (or another backup code, or path B) on the next login. Use when the user still has their authenticator or security key elsewhere and merely needs temporary access, or when they are not ready to re-enroll yet.
+
+**Path B — Re-enroll with a backup code.** After OPAQUE password login, the user chooses to set up a new second factor using a backup code (lost authenticator or security key). API: `POST /api/mfa/recover-with-backup-code` (consumes the code, issues a short-lived reset-tier JWT), then `POST /api/mfa/reset` (issues new enrollment material and a fresh set of ten backup codes). The user completes enrollment before gaining full access. Use when the normal second factor is lost or must be replaced.
+
+**UI requirements.** The MFA login modal (and equivalent CLI prompts) must present both options with distinct labels so users do not confuse them. Suggested framing: sign in once with a backup code versus set up a new second factor with a backup code. Do not merge into a single undifferentiated backup-code field.
+
+**Implementation notes.** Keep `MFAAuth` `is_backup` handling through the rename. Keep `RecoverWithBackupCode` + reset flow. Add browser UI for path A (path B exists today). Ensure `arkfile-client login` can use path A via `--backup-code` or an interactive prompt, and path B via existing recover/reset commands. Each path needs unit, integration, and e2e coverage.
+
 ## Recovery model (ordered)
 
-Users should attempt recovery in this order. Document this in `docs/user-faq.md` and surface it in the MFA login UI.
+Users should attempt self-service recovery before involving an admin. Document this in `docs/user-faq.md` and surface it in the MFA login UI.
 
-First, use a backup code. After OPAQUE password login, choose the backup-code path on the second-factor screen. A valid backup code issues a short-lived reset session and immediately re-enrolls MFA with a new secret or key and fresh backup codes. This works identically whether the user's normal second factor is TOTP or a hardware security key. Backup codes are account-level recovery credentials, not tied to TOTP.
+First, if the user still intends to keep their current second factor but needs access now, use path A (emergency one-shot login with a backup code). They sign in once; their enrolled MFA is unchanged; they will need their normal second factor on the next login.
 
-Second, if backup codes are lost, contact the instance admin using the admin contact details shown on the site. The admin verifies the requester's identity out-of-band. The recommended verification method is matching the request against contact methods the user previously saved under Contact Info (encrypted, admin-readable). Contact Info remains optional for normal usage but is strongly recommended before anyone relies on admin-assisted MFA reset.
+Second, if the user has lost their second factor or wants to replace it, use path B (re-enroll with a backup code). After OPAQUE login, they consume a backup code through the recover-and-reset flow, set up a new second factor immediately, and receive fresh backup codes.
 
-Third, the admin runs `arkfile-admin reset-user-mfa --username USER --confirm`. This clears MFA credentials and backup codes, force-logouts all sessions, and leaves the account in `requires_mfa_setup` state. The user logs in with their password and completes MFA enrollment again.
+Third, if backup codes are also lost, contact the instance admin using the admin contact details shown on the site. The admin verifies the requester's identity out-of-band. The recommended verification method is matching the request against contact methods the user previously saved under Contact Info (encrypted, admin-readable). Contact Info remains optional for normal usage but is strongly recommended before anyone relies on admin-assisted MFA reset.
+
+Fourth, the admin runs `arkfile-admin reset-user-mfa --username USER --confirm`. This clears MFA credentials and backup codes, force-logouts all sessions, and leaves the account in `requires_mfa_setup` state. The user logs in with their password and completes MFA enrollment again.
 
 Lost password means lost files. Lost second factor and lost backup codes means the account cannot be recovered without admin intervention, and admin intervention is only appropriate when identity (that the person requesting reset actually owns the account) can be established out-of-band.
 
@@ -37,38 +79,62 @@ Replace `user_totp`, `user_totp_backup_codes`, `totp_usage_log`, and `totp_backu
 ```
 user_mfa_credentials: one row per user in v1 (username PRIMARY KEY). Columns include method_type (totp or webauthn), optional label, credential_data (method-specific encrypted payload), enabled, setup_completed, timestamps, and lockout counters migrated from user_totp.
 
-user_mfa_backup_codes: unchanged semantics, hashed single-use codes.
+user_mfa_backup_codes: unchanged semantics, hashed single-use codes (rename from user_totp_backup_codes).
 
-mfa_usage_log: replay protection for TOTP windows (and any shared rate-limit state as needed).
+mfa_usage_log: replay protection for TOTP windows (rename from totp_usage_log).
+
+mfa_backup_usage: backup code usage / replay log (rename from totp_backup_usage).
 ```
 
-Drop old tables entirely. No compatibility views. Update all Go packages (`auth`, `handlers`, crypto key purposes if renamed), TypeScript frontend, `arkfile-client`, `arkfile-admin`, `unified_schema.sql`, dev-reset path, `e2e-test.sh`, `e2e-playwright`, `docs/api.md`, `docs/security.md`.
+Also update the `user_auth_status` view to join `user_mfa_credentials` instead of `user_totp` (columns e.g. `has_mfa`, `mfa_enabled`, `mfa_setup_completed`).
 
-Rename JWT/API concepts: `requires_totp` becomes `requires_mfa`, `requires_totp_setup` becomes `requires_mfa_setup`, `RequireTOTP` middleware becomes `RequireMFA`, route group `/api/totp` becomes `/api/mfa`.
+Drop old tables entirely. No compatibility views. Update all Go packages (`auth`, `handlers`, crypto key purposes), TypeScript frontend, `arkfile-client`, `arkfile-admin`, `unified_schema.sql`, dev-reset path, `e2e-test.sh`, `e2e-playwright`, `docs/api.md`, `docs/security.md`, `scripts/maintenance/rotate-user-secret-master.sh`, `monitoring/key_health.go` if it references TOTP key types.
+
+Rename JWT/API concepts: `requires_totp` becomes `requires_mfa`, `requires_totp_setup` becomes `requires_mfa_setup`, `RequireTOTP` middleware becomes `RequireMFA`, route group `/api/totp` becomes `/api/mfa`. JWT audiences may become `arkfile-mfa`, `arkfile-mfa-reset` (rename from `arkfile-totp` / `arkfile-totp-reset`) for consistency — update all validators, cookies flow, and clients together.
+
+Rename Tier-3 HKDF purpose from `totp_user` to `mfa_user` in `crypto/totp_keys.go` (rename file to e.g. `crypto/mfa_keys.go`, function `DeriveMFAUserKey`). Greenfield redeploy of test.arkfile.net; no in-place ciphertext migration needed for purpose rename if DB is wiped on redeploy.
+
+## File touch inventory (approximate)
+
+| Area | Primary files |
+|------|----------------|
+| Schema | `database/unified_schema.sql` |
+| Core MFA logic | `auth/totp.go` → split into `auth/mfa_*.go`, `auth/totp_test.go`, `auth/totp_backup_test.go` |
+| JWT / middleware | `auth/jwt.go`, `auth/jwt_test.go`, `auth/keys.go`, `auth/token_revocation*.go`, `handlers/middleware.go`, `handlers/route_config.go` |
+| HTTP handlers | `handlers/auth.go`, `handlers/auth_test.go`, `handlers/admin.go`, `handlers/bootstrap.go`, `handlers/admin_auth.go`, `handlers/export.go`, `handlers/rate_limiting.go`, `handlers/files.go` |
+| Crypto | `crypto/totp_keys.go` → `crypto/mfa_keys.go`, `crypto/user_secret_master.go` |
+| CLI | `cmd/arkfile-client/main.go`, `cmd/arkfile-client/commands.go`, `cmd/arkfile-admin/main.go` |
+| Browser | `client/static/js/src/auth/{totp,totp-setup,login,register}.ts`, `app.ts`, `utils/auth.ts`, `ui/sections.ts`, `files/list.ts`, `types/api.d.ts`, `index.html` |
+| Ops | `scripts/maintenance/rotate-user-secret-master.sh`, `scripts/testing/e2e-test.sh`, `scripts/testing/e2e-playwright.ts`, `scripts/testing/totp-generator.go` |
+| Startup | `main.go`, `auth/dev_admin.go` |
+| Docs | `docs/api.md`, `docs/security.md`, `docs/user-faq.md` |
+| New (later) | `auth/mfa_webauthn.go`, browser WebAuthn module, FIDO2 code in `arkfile-client` |
 
 ## Server implementation
 
-Use `github.com/go-webauthn/webauthn` for server-side WebAuthn ceremony handling and credential verification. TOTP logic moves into `auth/mfa_totp.go` (or similar) operating on `user_mfa_credentials` rows where `method_type` is `totp`.
+Use `github.com/go-webauthn/webauthn` for server-side WebAuthn ceremony handling and credential verification. TOTP logic moves into `auth/mfa_totp.go` operating on `user_mfa_credentials` rows where `method_type` is `totp`.
 
 WebAuthn registration and authentication use the standard two-step begin/finish pattern. Relying party ID is the site domain. Use non-discoverable credentials (no resident passkeys required). `authenticatorAttachment` `cross-platform` for USB/NFC keys. `userVerification` `preferred` (touch-first; PIN only when the key policy requires it).
 
-Backup code generation, hashing (Argon2id per code), validation, and recover-with-backup-code flow are method-agnostic. Rename endpoints to `/api/mfa/recover-with-backup-code` and `/api/mfa/reset`.
+Backup code generation, hashing (Argon2id per code), validation, and both backup-code login paths are method-agnostic. Rename endpoints: `POST /api/mfa/auth` (includes `is_backup: true` for path A), `POST /api/mfa/recover-with-backup-code`, and `POST /api/mfa/reset` (path B).
+
+Admin reset (`POST /api/admin/users/:username/reset-mfa`) must DELETE all MFA rows for the user (credentials, backup codes, usage logs), call existing force-logout / token revocation, and log a security event. Do not use `ResetTOTP` (which UPDATEs an existing row and re-issues TOTP secrets).
 
 ## Browser client (TypeScript)
 
 Use `@simplewebauthn/browser` (or equivalent) for WebAuthn ceremonies. Enrollment: after registration OPAQUE, user chooses TOTP or Security Key. Security key path calls begin/finish registration endpoints. Login: after OPAQUE, begin/finish authentication with the key.
 
-Preserve existing backup-code recovery UI; update labels from TOTP-specific wording to generic MFA wording.
+MFA login UI must expose both backup-code paths (path A one-shot sign-in and path B re-enroll). Path B UI exists today; add path A during Phase 2. Update all labels from TOTP-specific wording to generic MFA wording.
 
 Add persistent Contact / Contact Admin affordance on homepage and all logged-in pages (see UI section below).
 
-Use only stricly typed TypeScript in new/modified code and dependencies as much as possible.
+Use only strictly typed TypeScript in new/modified code and dependencies as much as possible.
 
 ## arkfile-client (Go CLI) parity
 
 Hardware key support in `arkfile-client` is equal priority to the browser. The CLI must support the same enrollment and login ceremonies via the same API endpoints. Implement a FIDO2 client using direct USB HID CTAP2. Candidate library: `github.com/mohammadv184/go-fido2` (CGO-free, aligns with static builds); evaluate in depth before landing on this library (is it secure, trusted, used in at least 3 other significant open source projects, etc.). Evaluate `keys-pub/go-libfido2` if system `libfido2` is acceptable on target platforms.
 
-Commands: `setup-mfa` (interactive, choose `totp` or `security key`), `login` (existing flow extended with security key auth step). Mirror `arkfile-admin setup-totp` patterns for MFA setup.
+Commands: `setup-mfa` (interactive, choose `totp` or `security key`), `login` (existing flow extended with security key auth step and path A backup login via `is_backup: true`). Path B remains `recover-mfa` (rename from `recover-totp`). Add path A to `login` if not present today (interactive or `--backup-code` flag at MFA step). Mirror `arkfile-admin setup-totp` patterns for MFA setup until admin CLI is also renamed.
 
 ## arkfile-admin: reset-user-mfa
 
@@ -80,23 +146,91 @@ Before reset, display user contact info if present (reuse `user-contact-info` AP
 
 Operator runbook: verify requester identity against saved contact methods when possible; only then run reset; instruct user to log in and re-enroll.
 
+Admin MFA reset must not clear user contact info.
+
+## Tier-3 user-secret-master rotation (full implementation)
+
+Today `scripts/maintenance/rotate-user-secret-master.sh` only:
+
+1. Backs up `/opt/arkfile/etc/keys/user-secret-master.bin`
+2. Generates a new 32-byte master
+3. Atomically replaces the file
+4. Prints a reminder to restart the server
+
+It does not touch the database. MFA credential blobs (`user_mfa_credentials.credential_data` for TOTP and WebAuthn) and contact info (`user_contact_info.encrypted_data`) are encrypted with keys derived from the master via HKDF purposes (`mfa_user`, `contact_info`). Rotating the master file without re-encrypting rows leaves all such data permanently undecryptable.
+
+### Admin auth model (must not break)
+
+Every privileged `arkfile-admin` operation today requires an authenticated admin session: OPAQUE login plus completed 2FA, then a full-tier JWT on each network API call (same pattern as `key-rotation`). Tier-3 rotation must follow that model. Do not add an unauthenticated local rotator that only needs root on the host — that would bypass the admin auth stack.
+
+The tension: re-encryption must run with the main Arkfile service **stopped** (no concurrent DB writes, no in-memory old master in the server), but with the service stopped the HTTP admin API is unavailable. Resolve this with a **two-phase command** on `arkfile-admin` only (no separate maintenance binary). Phase 1 authenticates while the server is up; phase 2 applies offline using a server-issued mandate that proves an admin with full MFA already authorized the run.
+
+### Two-phase operator flow
+
+**Step 1 — `prepare` (server running, normal admin auth)**
+
+1. Admin runs `arkfile-admin login` (OPAQUE + 2FA) if session is missing or expired — same as any other admin command.
+2. Admin runs `arkfile-admin rotate-user-secret-master prepare --confirm`.
+3. This is a **network command** to a new admin API route (e.g. `POST /api/admin/system/prepare-user-secret-master-rotation`). Server validates full-tier admin JWT and completed MFA, same middleware stack as other admin routes.
+4. Server returns a **single-use rotation mandate**: a signed blob bound to admin username, short TTL (e.g. 5–15 minutes), explicit purpose `user-secret-master-rotation`, and a nonce or server-side single-use flag so it cannot be replayed after `apply`. No DB or key-file changes in `prepare` — authorization only.
+5. CLI writes the mandate to a path the operator chooses (stdout or `--mandate-file`).
+
+**Step 2 — stop service**
+
+6. Operator stops Arkfile (`systemctl stop arkfile` or equivalent). Confirm no concurrent writes.
+
+**Step 3 — `apply` (server stopped, mandate-gated local work)**
+
+7. Admin runs `arkfile-admin rotate-user-secret-master apply --mandate-file PATH --confirm`.
+8. This command **does not use HTTP**. It verifies the mandate cryptographically offline (verify key from install layout — same trust boundary as `/opt/arkfile` today). Without a valid, unexpired, unused mandate, `apply` refuses to run.
+9. `apply` performs pre-flight checks (DB path, master key file exist), backs up master key and DB, then:
+   - Loads old master into memory for derivation only.
+   - Generates new master (32 random bytes, `0400` permissions) to a temp path — do not install until re-encrypt succeeds.
+   - Re-encrypts all Tier-3-wrapped rows (see below).
+   - Atomically swaps `user-secret-master.bin`.
+   - Runs verification pass.
+10. Operator starts Arkfile.
+
+`apply` is not an auth bypass: it is gated by a credential issued only after admin + 2FA on `prepare`. Re-prompting OPAQUE/TOTP at `apply` time is impractical while the server is down; the mandate is the correct proof-of-authorization for the offline phase.
+
+Do **not** expose full rotation as a generic admin REST endpoint that mutates the DB while the server is running — that conflicts with both the stop-service requirement and clean locking.
+
+`scripts/maintenance/rotate-user-secret-master.sh` may remain as an optional thin wrapper that prints the runbook steps (login → prepare → stop → apply → start) but the Go logic lives in `arkfile-admin` subcommands linked to the same `crypto` and DB packages as the server.
+
+### Re-encryption scope
+
+1. **MFA credentials:** For each row in `user_mfa_credentials` (TOTP and WebAuthn from day one): decrypt `credential_data` with `DeriveMFAUserKey(username)` under old master; re-encrypt with new master; UPDATE row in a per-user transaction.
+
+2. **Contact info:** For each row in `user_contact_info`: decrypt `encrypted_data` with `contact_info` purpose subkey under old master; re-encrypt with new master; UPDATE row.
+
+3. **Do not re-hash backup codes:** `user_mfa_backup_codes` stores Argon2id hashes of backup codes, not Tier-3-encrypted plaintext. Rotation does not affect them.
+
+### Failure handling, verification, and tests
+
+- If re-encryption fails mid-run, do not install the new master file; restore from backup and abort. Per-user transactions with clear rollback semantics.
+- After rotation, spot-check decrypt of at least one MFA row and one contact row (or run existing decrypt diagnostic) before declaring success.
+- Unit tests with two known master keys and fixture rows proving round-trip decrypt/re-encrypt. Test mandate issue/verify and reject expired, replayed, or tampered mandates. Optional integration test tagged `rotation` on dev instances.
+- Update `docs/security.md` with operator steps, downtime expectation, prepare/apply auth model, and affected tables.
+
+Note: Purpose rename (`totp_user` → `mfa_user`) is a separate one-time migration handled by greenfield redeploy; the rotation tool assumes current purpose strings and must work for all Tier-3-wrapped columns going forward.
+
 ## Contact UI (sitewide)
 
 Homepage: add persistent footer link Contact Admin showing `ARKFILE_ADMIN_CONTACT` from `GET /api/admin-contacts`.
 
 Logged-in pages: keep Contact Info nav entry for user's encrypted contact details; ensure admin contact is also reachable without hunting (footer or nav).
 
-Fix `/api/admin-contacts` response shape inconsistency between `handlers/files.go` and `client/static/js/src/files/list.ts`.
+Fix `/api/admin-contacts` response shape inconsistency between `handlers/files.go` and `client/static/js/src/files/list.ts` — pick one canonical JSON shape (recommend keeping flat `adminUsernames` + `adminContact` and fixing `list.ts`, or document a nested format if multiple admins with multiple contacts is needed later).
 
 Pending-approval page already shows admin contact; keep that behavior.
 
-MFA login modal: add short recovery hint (backup code first; then contact admin at ...).
+MFA login modal: distinct controls for path A (sign in once) and path B (set up new second factor); short hint that admin contact is available if backup codes are exhausted.
 
 ## User FAQ (sitewide)
 
-Homepage: add a persistent footer link 'FAQ' that includes all the Q&A in the user-faq.md document in a format that matches our existing theme/styling/conventions/colors.
+Homepage: add a persistent footer link 'FAQ' that includes all the Q&A in the `docs/user-faq.md` document in a format that matches our existing theme/styling/conventions/colors.
 
-Logged-in pages: keep FAQ link available (footer is fine)
+Logged-in pages: keep FAQ link available (footer is fine).
 
 ## Contact info and admin reset policy
 
@@ -106,43 +240,59 @@ For admin-assisted MFA reset, treat saved contact info as a soft prerequisite: d
 
 ## Testing plan
 
-Unit tests: MFA credential CRUD, WebAuthn verify (mock), TOTP unchanged behavior on new tables, backup code recovery, lockout policy, admin reset. Where relevant add unit tests in Go and TypeScript.
+Unit tests: MFA credential CRUD, WebAuthn verify (mock), TOTP unchanged behavior on new tables, backup code recovery, lockout policy, admin reset, Tier-3 re-encrypt round-trip. Where relevant add unit tests in Go and TypeScript.
 
-`e2e-test.sh`: TOTP path on renamed endpoints; backup code recovery; admin `reset-user-mfa` flow; `arkfile-client login` with TOTP.
+HTTP integration tests: path A (`/api/mfa/auth` with `is_backup: true` issues full token, MFA unchanged); path B (recover-with-backup-code → reset-tier JWT → `/api/mfa/reset` returns new setup material; covers middleware fix).
+
+`e2e-test.sh`: MFA path on renamed endpoints; path A emergency backup login; path B full backup-code re-enrollment (recover + reset + login with new second factor); admin `reset-user-mfa` flow; `arkfile-client` path A and path B.
 
 Hardware integration tests (manual or tagged integration): YubiKey 5, Nitrokey 3C, Firefox, Chromium, `arkfile-client` on Linux. Tor Browser: TOTP login e2e; confirm WebAuthn unavailable message or graceful fallback when user enrolled with HW key.
 
-Playwright: update MFA selectors and contact UI visibility on homepage and logged-in views.
+Playwright: update MFA selectors and contact UI visibility on homepage and logged-in views; FAQ footer link.
+
+Tier-3 rotation: unit test re-encrypt loop and mandate issue/verify/reject; manual runbook test (login → prepare → stop → apply → start) on dev instance before relying on procedure in production.
 
 ## Documentation deliverables
 
-`docs/user-faq.md`: Q&A only; all answers plain paragraphs; no special formatting; no emojis. Cover recovery order, backup codes, admin reset, Tor + TOTP vs HW key, optional contact info, CLI vs browser.
+`docs/user-faq.md`: Q&A only; all answers plain paragraphs; no special formatting; no emojis. Cover recovery order, both backup-code paths (one-shot login and re-enrollment), admin reset, Tor + TOTP vs HW key, optional contact info, CLI vs browser.
 
-`docs/security.md` and `docs/api.md`: update for unified MFA model and renamed endpoints.
+`docs/security.md` and `docs/api.md`: update for unified MFA model, renamed endpoints, JWT audiences, and Tier-3 rotation procedure.
 
 `client/static/index.html` feature card: update Mandatory 2FA copy to mention TOTP or security key.
 
 ## Phased implementation order
 
-Phase 1: Schema + rename (`user_mfa_credentials`, endpoint renames, middleware renames, all tests green with TOTP-only behavior preserved).
+Use whole phase numbers only. Each phase should leave tests green before starting the next.
 
-Phase 2: WebAuthn server + browser enrollment/login (one method choice). Backup codes on both paths.
+**Phase 1:** Schema migration and mechanical rename. Introduce `user_mfa_credentials`, `user_mfa_backup_codes`, `mfa_usage_log`, `mfa_backup_usage`; drop old TOTP tables; update `user_auth_status` view. Rename routes `/api/totp` → `/api/mfa`, middleware `RequireTOTP` → `RequireMFA`, JWT claims `requires_mfa` / `requires_mfa_setup`, audiences as chosen. Update Go handlers, both CLIs, TypeScript clients, e2e scripts, and docs references. TOTP-only behavior preserved; all existing unit tests adapted and passing.
 
-Phase 3: `arkfile-client` FIDO2 parity + `setup-mfa` command.
+**Phase 2:** Fix reset-tier JWT routing. Add `ResetJWTMiddleware` (or equivalent) so `/api/mfa/reset` accepts `arkfile-mfa-reset` tokens. Add browser UI for path A (emergency one-shot backup login) alongside existing path B re-enroll UI. HTTP integration tests and e2e for both path A and path B. Verify `arkfile-client` supports both paths end-to-end.
 
-Phase 4: `arkfile-admin reset-user-mfa` + contact UI sitewide + `user-faq.md`.
+**Phase 3:** Codebase cleanup and crypto rename. Remove `InitializeTOTPMasterKey`, `GetTOTPMasterKeyStatus`, and unused `totpMasterKey` state. Rename `totp_user` → `mfa_user`, `DeriveTOTPUserKey` → `DeriveMFAUserKey`, `crypto/totp_keys.go` → `crypto/mfa_keys.go`. Split `auth/totp.go` into focused `auth/mfa_*.go` files. Retain `MFAAuth` `is_backup` for path A through the rename. Update `docs/security.md` for `mfa_user` purpose and both backup-code paths.
 
-Phase 5 (future): multi-method up to three credentials, private labels per device.
+**Phase 4:** Tier-3 master rotation — full re-encrypt with admin auth preserved. Add `arkfile-admin rotate-user-secret-master prepare` (network; requires logged-in admin with 2FA; issues single-use signed mandate) and `rotate-user-secret-master apply` (local; mandate-gated; service must be stopped). Implement `POST /api/admin/system/prepare-user-secret-master-rotation` for mandate issuance. `apply` links server `crypto`/DB packages: backup key + DB, re-encrypt all `user_mfa_credentials` and `user_contact_info` rows, atomic key swap, verification pass. No unauthenticated local rotator. Optional shell wrapper documents login → prepare → stop → apply → start. Unit tests for re-encrypt round-trip and mandate validation. Document operator procedure in `docs/security.md`.
 
-## Other Notes
+**Phase 5:** Admin MFA reset. `POST /api/admin/users/:username/reset-mfa` and `arkfile-admin reset-user-mfa --username USER --confirm` with contact-info display, `--acknowledge-no-contact-info` when empty, force-logout, audit log. Admin handler tests and e2e coverage.
 
-- Admin MFA reset should not clear user contact info.
-- Aim to support NFC as well as USB for HW Keys where applicable.
-- Rename Tier-3 crypto purpose key from `totp_user` to `mfa_user` and update docs/security.md accordingly. Greenfield upgrade.
+**Phase 6:** WebAuthn server and browser client. `go-webauthn/webauthn` registration/auth begin/finish endpoints; enrollment UI method picker (TOTP or security key, one method only); backup codes on both paths; Tor warning in UI; `@simplewebauthn/browser` integration.
 
-# IMPORTANT: GREENFIELD & CLEAN CODEBASE CONCERNS
+**Phase 7:** `arkfile-client` FIDO2 parity. Library evaluation (`go-fido2` vs `go-libfido2`); `setup-mfa` command; extend `login` for security key auth step; same API endpoints as browser.
 
-Throughout this project please keep in mind the greenfield nature of this app. We will completely redeploy the 1 test/beta instance we have atm at test.arkfile.net after this project. Codebase should end up cleaner and more coherent than when we started. Remember the instructions from AGENTS.md about function review sanity checks and naming:
+**Phase 8:** Sitewide Contact Admin + FAQ footer; fix admin-contacts API consumption in `list.ts`; MFA login recovery hint; publish FAQ page from `docs/user-faq.md`; update homepage feature card.
 
-- Do not name functions or variables or include in comments references to temporary or ephemeral WIP planning document "IDs" or "Phases" or "Sections" or "Tiers". Use concise but descriptive terminology that does not require a lookup in other planning documents or glossaries or archive or WIP markdown files of any kind. If you find any names for variables or functions that are inexplicable in-situ, such as "runC06Cleanup" or "phase-b" or the like, immediately flag to the dev, remediate and rename these. Same goes for code comments. 
-- As you are implementing, updating or reviewing existing functions, go through the following mental checklist: Is this function required? Is it implemented in a standard and secure way? Is it merely a stub function or otherwise incomplete? Is it well placed, in the right file or area of the app? - Is it reachable and currently in use, or could it be deleted? Does it require additional review, updates, moving or potentially deletion? Does it align with the vision and intended design of the app as being privacy-preserving for users end-to-end?
+**Phase 9 (future):** Multi-method enrollment up to three credentials per account with private device labels.
+
+## Other notes
+
+- Aim to support NFC as well as USB for HW keys where applicable.
+- `auth/dev_admin.go` fixed dev TOTP secret remains dev-only; keep working through renames.
+- Review `monitoring/key_health.go` for stale TOTP key type references during Phase 1.
+- CSP in `handlers/middleware.go` — verify no change needed for WebAuthn (`navigator.credentials`); recheck if adding inline scripts for FAQ page.
+- `pendingAllowedGroup` requires completed MFA before contact-info APIs; consistent with registration flow (MFA before approval).
+
+## Greenfield and clean codebase concerns
+
+Throughout this project please keep in mind the greenfield nature of this app. We will completely redeploy the one test/beta instance at test.arkfile.net after this project. Codebase should end up cleaner and more coherent than when we started. Remember the instructions from `docs/AGENTS.md` about function review sanity checks and naming:
+
+- Do not name functions or variables or include in comments references to temporary or ephemeral WIP planning document "IDs" or "Phases" or "Sections" or "Tiers". Use concise but descriptive terminology that does not require a lookup in other planning documents or glossaries or archive or WIP markdown files of any kind. If you find any names for variables or functions that are inexplicable in-situ, such as "runC06Cleanup" or "phase-b" or the like, immediately flag to the dev, remediate and rename these. Same goes for code comments.
+- As you are implementing, updating or reviewing existing functions, go through the following mental checklist: Is this function required? Is it implemented in a standard and secure way? Is it merely a stub function or otherwise incomplete? Is it well placed, in the right file or area of the app? Is it reachable and currently in use, or could it be deleted? Does it require additional review, updates, moving or potentially deletion? Does it align with the vision and intended design of the app as being privacy-preserving for users end-to-end?
