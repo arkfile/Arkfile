@@ -141,6 +141,8 @@ func postMFAWithToken(t *testing.T, path string, body interface{}, token string,
 			return RecoverWithBackupCode(c)
 		case "/api/mfa/reset":
 			return MFAReset(c)
+		case "/api/mfa/verify":
+			return MFAVerify(c)
 		default:
 			return echo.NewHTTPError(http.StatusNotFound)
 		}
@@ -211,4 +213,24 @@ func TestMFARecoverAndReset_PathB_ResetTierWorks(t *testing.T) {
 	require.True(t, ok)
 	assert.NotEmpty(t, newSecret)
 	assert.NotEqual(t, oldSecret, newSecret)
+
+	verifyToken, ok := resetData["temp_token"].(string)
+	require.True(t, ok)
+	assert.NotEmpty(t, verifyToken)
+
+	enabled, err := auth.IsUserMFAEnabled(database.DB, username)
+	require.NoError(t, err)
+	assert.False(t, enabled, "MFA must stay inactive until verify after reset")
+
+	verifyCode, err := totp.GenerateCode(newSecret, time.Now().UTC())
+	require.NoError(t, err)
+
+	verifyRec := postMFAWithToken(t, "/api/mfa/verify", map[string]string{
+		"code": verifyCode,
+	}, verifyToken, auth.MFAJWTMiddleware())
+	assert.Equal(t, http.StatusOK, verifyRec.Code)
+
+	enabled, err = auth.IsUserMFAEnabled(database.DB, username)
+	require.NoError(t, err)
+	assert.True(t, enabled, "verify must re-enable MFA after reset")
 }

@@ -1020,6 +1020,7 @@ type MFAResetResponse struct {
 	BackupCodes []string `json:"backup_codes"`
 	ManualEntry string   `json:"manual_entry"`
 	Message     string   `json:"message"`
+	TempToken   string   `json:"temp_token"`
 }
 
 // TOTPReset resets TOTP for a user (requires valid backup code)
@@ -1138,12 +1139,21 @@ func MFAReset(c echo.Context) error {
 	database.LogUserAction(username, "reset TOTP", "")
 	logging.InfoLogger.Printf("SECURITY: TOTP reset complete for user: %s", username)
 
+	// Issue MFA-tier temp token so /api/mfa/verify can complete re-enrollment.
+	mfaToken, _, err := auth.GenerateTemporaryMFAToken(username)
+	if err != nil {
+		logging.ErrorLogger.Printf("Failed to generate MFA verify token after reset for %s: %v", username, err)
+		return JSONError(c, http.StatusInternalServerError, "TOTP reset succeeded but verify session could not be created")
+	}
+	issueTempCookie(c, mfaToken)
+
 	return JSONResponse(c, http.StatusOK, "TOTP has been reset successfully. Please update your authenticator app immediately with the new secret.", MFAResetResponse{
 		Secret:      setup.Secret,
 		QRCodeURL:   setup.QRCodeURL,
 		BackupCodes: setup.BackupCodes,
 		ManualEntry: setup.ManualEntry,
 		Message:     "TOTP has been reset successfully. Please update your authenticator app immediately with the new secret.",
+		TempToken:   mfaToken,
 	})
 }
 

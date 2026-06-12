@@ -7,9 +7,9 @@
 #
 # Prerequisites:
 #   - Server deployed via scripts/dev-reset.sh
-#   - scripts/testing/e2e-test.sh has run (test user exists, approved, TOTP configured)
+#   - scripts/testing/e2e-test.sh has run (test user exists, approved, MFA configured)
 #   - bun available as runtime
-#   - TOTP secret at /tmp/arkfile-e2e-test-data/totp-secret
+#   - MFA secret at /tmp/arkfile-e2e-test-data/mfa-secret (written by e2e-test.sh)
 
 set -eo pipefail
 
@@ -33,7 +33,7 @@ phase()   { echo -e "\n${CYAN}# $1${NC}\n"; }
 
 SERVER_URL="${SERVER_URL:-https://localhost:8443}"
 TEST_DATA_DIR="/tmp/arkfile-e2e-test-data"
-TOTP_SECRET_FILE="$TEST_DATA_DIR/totp-secret"
+MFA_SECRET_FILE="$TEST_DATA_DIR/mfa-secret"
 PLAYWRIGHT_TEMP_DIR="$TEST_DATA_DIR/playwright"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
@@ -62,17 +62,17 @@ else
     exit 1
 fi
 
-# Check TOTP secret
-section "Checking TOTP secret"
-if [ -f "$TOTP_SECRET_FILE" ]; then
-    TOTP_SECRET=$(cat "$TOTP_SECRET_FILE")
-    if [ -z "$TOTP_SECRET" ]; then
-        error "TOTP secret file is empty: $TOTP_SECRET_FILE"
+# Check MFA secret (post–re-enrollment secret when shell e2e completed auth group)
+section "Checking MFA secret"
+if [ -f "$MFA_SECRET_FILE" ]; then
+    MFA_SECRET=$(cat "$MFA_SECRET_FILE")
+    if [ -z "$MFA_SECRET" ]; then
+        error "MFA secret file is empty: $MFA_SECRET_FILE"
         exit 1
     fi
-    success "TOTP secret loaded from $TOTP_SECRET_FILE"
+    success "MFA secret loaded from $MFA_SECRET_FILE"
 else
-    error "TOTP secret file not found: $TOTP_SECRET_FILE"
+    error "MFA secret file not found: $MFA_SECRET_FILE"
     error "Run 'sudo bash scripts/testing/e2e-test.sh' first."
     exit 1
 fi
@@ -212,7 +212,7 @@ info "Custom File: $CUSTOM_FILE_NAME ($CUSTOM_FILE_SHA256)"
 echo ""
 
 export SERVER_URL
-export TOTP_SECRET
+export MFA_SECRET
 export TEST_FILE_PATH
 export TEST_FILE_SHA256
 export TEST_FILE_NAME

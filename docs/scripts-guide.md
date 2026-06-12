@@ -268,6 +268,17 @@ bun run test          # bun test src/__tests__/
 
 **Prerequisites**: Bun runtime installed for client-side testing
 
+#### `e2e-playwright.sh`
+**Purpose**: Browser frontend integration tests via Playwright (runs after `e2e-test.sh`)  
+**Usage**: `./scripts/testing/e2e-playwright.sh`  
+**Prerequisites**:
+- Server running (`dev-reset.sh`)
+- `e2e-test.sh` completed successfully
+- Test user MFA secret at `/tmp/arkfile-e2e-test-data/mfa-secret` (written by shell e2e)
+- `bun` and Playwright Chromium installed
+
+Exports `MFA_SECRET` and test file paths to `scripts/testing/e2e-playwright.ts`.
+
 
 ### Maintenance Scripts
 

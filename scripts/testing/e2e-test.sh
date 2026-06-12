@@ -276,6 +276,17 @@ user_mfa_reenroll_via_backup() {
     export TEST_USER_TOTP_SECRET="$new_secret"
     echo "$new_secret" > "$MFA_SECRET_FILE"
 
+    local new_backup_code
+    new_backup_code=$(echo "$out" | grep '^BACKUP_CODE_0:' | head -1 | cut -d':' -f2 | tr -d ' ')
+    if [ -z "$new_backup_code" ]; then
+        error "Failed to extract primary backup code after MFA re-enrollment reset"
+        record_test "Backup code capture after re-enrollment" "FAIL"
+        return 1
+    fi
+    echo "$new_backup_code" > "$BACKUP_CODE_PRIMARY_FILE"
+    export TEST_USER_BACKUP_CODE="$new_backup_code"
+    record_test "Backup code capture after re-enrollment" "PASS"
+
     record_test "$test_name" "PASS"
     echo "$out"
 }
@@ -309,17 +320,6 @@ user_mfa_verify_after_reset() {
         return 1
     fi
 
-    local backup_code
-    backup_code=$(echo "$out" | grep '^BACKUP_CODE_0:' | head -1 | cut -d':' -f2 | tr -d ' ')
-    if [ -z "$backup_code" ]; then
-        error "Failed to extract primary backup code after MFA re-enrollment verify"
-        record_test "Backup code capture after re-enrollment" "FAIL"
-        return 1
-    fi
-
-    echo "$backup_code" > "$BACKUP_CODE_PRIMARY_FILE"
-    export TEST_USER_BACKUP_CODE="$backup_code"
-    record_test "Backup code capture after re-enrollment" "PASS"
     record_test "$test_name" "PASS"
     echo "$out"
 }

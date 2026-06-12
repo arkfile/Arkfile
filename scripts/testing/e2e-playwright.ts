@@ -18,7 +18,7 @@
  *
  * Prerequisites:
  *   - Server deployed via scripts/dev-reset.sh
- *   - scripts/testing/e2e-test.sh has run (test user exists, approved, TOTP configured)
+ *   - scripts/testing/e2e-test.sh has run (test user exists, approved, MFA configured)
  *   - Environment variables set by scripts/testing/e2e-playwright.sh
  *
  * Run via: sudo bash scripts/testing/e2e-playwright.sh
@@ -35,7 +35,7 @@ import { join } from 'path';
 // ============================================================================
 
 const SERVER_URL = process.env.SERVER_URL || 'https://localhost:8443';
-const TOTP_SECRET = process.env.TOTP_SECRET!;
+const MFA_SECRET = process.env.MFA_SECRET!;
 const TEST_FILE_PATH = process.env.TEST_FILE_PATH!;
 const TEST_FILE_SHA256 = process.env.TEST_FILE_SHA256!;
 const TEST_FILE_NAME = process.env.TEST_FILE_NAME!;
@@ -85,10 +85,10 @@ function attachConsoleListener(page: Page, label: string) {
 }
 
 /**
- * Wait for the next TOTP window to avoid replay rejection.
- * Same logic as e2e-test.sh: sleep until (30 - seconds_into_window + 1).
+ * Wait for the next TOTP time window to avoid replay rejection.
+ * Same logic as e2e-test.sh wait_for_totp_window: sleep until (30 - seconds_into_window + 1).
  */
-async function waitForTotpWindow(phase: string): Promise<void> {
+async function waitForMfaWindow(phase: string): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const secondsIntoWindow = now % 30;
   const secondsToWait = 30 - secondsIntoWindow + 1;
@@ -98,10 +98,10 @@ async function waitForTotpWindow(phase: string): Promise<void> {
 
 /**
  * Generate a TOTP code using arkfile-client CLI.
- * Must be called AFTER waitForTotpWindow().
+ * Must be called AFTER waitForMfaWindow().
  */
-function generateTotpCode(phase: string): string {
-  const output = execSync(`${CLIENT_BIN} generate-totp --secret ${TOTP_SECRET}`, {
+function generateMfaCode(phase: string): string {
+  const output = execSync(`${CLIENT_BIN} generate-totp --secret ${MFA_SECRET}`, {
     encoding: 'utf-8',
     timeout: 10_000,
   }).trim();
@@ -118,7 +118,7 @@ function computeSha256(filePath: string): string {
 }
 
 /**
- * Perform the full login flow on the given page: OPAQUE auth + TOTP + cache opt-in.
+ * Perform the full login flow on the given page: OPAQUE auth + MFA (TOTP) + cache opt-in.
  * After this returns, the Account Key wrapping key is live in the page's JS heap.
  */
 async function performLogin(page: Page, phase: string): Promise<void> {
@@ -137,8 +137,8 @@ async function performLogin(page: Page, phase: string): Promise<void> {
 
   await page.waitForSelector('#totp-login-code', { state: 'visible', timeout: 60_000 });
 
-  await waitForTotpWindow(phase);
-  const totpCode = generateTotpCode(phase);
+  await waitForMfaWindow(phase);
+  const totpCode = generateMfaCode(phase);
 
   await page.fill('#totp-login-code', totpCode);
 
@@ -208,7 +208,7 @@ async function clickFileAction(page: Page, filename: string, buttonText: string)
 
 test.beforeAll(() => {
   const required = [
-    'TOTP_SECRET', 'TEST_FILE_PATH', 'TEST_FILE_SHA256', 'TEST_FILE_NAME',
+    'MFA_SECRET', 'TEST_FILE_PATH', 'TEST_FILE_SHA256', 'TEST_FILE_NAME',
     'CUSTOM_FILE_PATH', 'CUSTOM_FILE_SHA256', 'CUSTOM_FILE_NAME',
     'TEST_USERNAME', 'TEST_PASSWORD', 'CUSTOM_FILE_PASSWORD',
     'SHARE_A_PASSWORD', 'SHARE_B_PASSWORD', 'SHARE_C_PASSWORD',
@@ -263,7 +263,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // --------------------------------------------------------------------------
   // Phase 1: Login
   // --------------------------------------------------------------------------
-  test('Phase 1: Login (OPAQUE + TOTP + cache opt-in)', async () => {
+  test('Phase 1: Login (OPAQUE + MFA + cache opt-in)', async () => {
     await performLogin(sharedPage, '1');
 
     await expect(sharedPage.locator('#filesList')).toBeVisible({ timeout: 15_000 });
@@ -1064,9 +1064,8 @@ test.describe.serial('Arkfile Playwright E2E', () => {
   // ── Billing Panel ──────────────────────────────────────────────────────────
   // Requires:
   //   - The shared page has been logged in earlier in the describe block.
-  //   - The e2e-test.sh phase_11d_billing has already run at least one
-  //     tick-now --sweep, so the test user has >=1 'gift' row and >=1 'usage'
-  //     row in their credit_transactions table, and their balance is negative.
+  //   - e2e-test.sh run_billing (and run_payments) have already run, so the
+  //     test user has gift, usage, and possibly payment rows in credit_transactions.
   //
   // This test opens the Billing panel, verifies the DOM layout produced by
   // client/static/js/src/ui/billing.ts.
@@ -1096,7 +1095,6 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     const balanceText = await balanceEl!.innerText();
     // Must match $X.XXXX or -$X.XXXX (four decimal places, signed USD).
-    // The test user was drained to a negative balance by phase_11d_billing.
     expect(balanceText).toMatch(/^-?\$\d+\.\d{4}$/);
 
     console.log(`[OK] Billing balance displays: ${balanceText}`);
@@ -1107,9 +1105,7 @@ test.describe.serial('Arkfile Playwright E2E', () => {
 
     // These three labels are always present regardless of whether the user is
     // above or below the free baseline. 'Your projected cost' and 'Estimated
-    // runway' are conditional (only rendered when billable_bytes > 0), and by
-    // the time the Playwright suite runs, phase_12_cleanup has deleted the test
-    // files, so the user is back below baseline.
+    // runway' are conditional (only rendered when billable_bytes > 0).
     const labels = await sharedPage.$$eval(
       '.billing-usage-grid dt',
       (els: Element[]) => els.map((el: Element) => el.textContent?.trim() ?? '')
@@ -1121,8 +1117,8 @@ test.describe.serial('Arkfile Playwright E2E', () => {
     console.log('[OK] Billing usage grid labels:', labels);
 
     // ── Section 3: Transaction History ─────────────────────────────────
-    // Phase_11d_billing wrote >=1 'gift' row and >=1 'usage' row, so the
-    // table must be present and contain both transaction types.
+    // run_billing wrote >=1 gift row and >=1 usage row, so the table must
+    // contain both transaction types.
     const txTable = await sharedPage.$('.billing-tx-table');
     expect(txTable).not.toBeNull();
 

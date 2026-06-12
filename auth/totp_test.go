@@ -388,13 +388,13 @@ func TestMFAReset(t *testing.T) {
 		t.Fatal("New TOTP secret should be different from old secret")
 	}
 
-	// Verify TOTP is still enabled but with new secret
+	// Reset stages a new secret; MFA is inactive until verify completes.
 	enabled, err = IsUserMFAEnabled(db, username)
 	if err != nil {
 		t.Fatalf("Failed to check TOTP status after reset: %v", err)
 	}
-	if !enabled {
-		t.Fatal("TOTP should still be enabled after reset")
+	if enabled {
+		t.Fatal("TOTP should not be enabled until verify completes after reset")
 	}
 
 	// Verify old TOTP code no longer works
@@ -406,13 +406,23 @@ func TestMFAReset(t *testing.T) {
 		t.Fatal("Old TOTP code should not work after reset")
 	}
 
-	// Verify new TOTP code works
 	newCode, err := totp.GenerateCode(newSetup.Secret, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("Failed to generate new TOTP code: %v", err)
 	}
+	if err := CompleteMFASetup(db, username, newCode); err != nil {
+		t.Fatalf("Failed to complete TOTP setup after reset: %v", err)
+	}
+
+	enabled, err = IsUserMFAEnabled(db, username)
+	if err != nil {
+		t.Fatalf("Failed to check TOTP status after reset verify: %v", err)
+	}
+	if !enabled {
+		t.Fatal("TOTP should be enabled after reset verify")
+	}
 	if err := ValidateTOTPCode(db, username, newCode); err != nil {
-		t.Fatalf("New TOTP code should work after reset: %v", err)
+		t.Fatalf("New TOTP code should work after reset verify: %v", err)
 	}
 
 	// Test invalid backup code for reset

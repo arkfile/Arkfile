@@ -852,18 +852,28 @@ func handleRecoverTOTPCommand(client *HTTPClient, config *ClientConfig, args []s
 		fmt.Println("\n=== FRESH BACKUP CODES ===")
 		fmt.Println("SAVE THESE FRESH CODES IN A SAFE PLACE!")
 		fmt.Println("--------------------")
-		for i, c := range backupCodes {
-			if i == 0 {
-				if codeStr, ok := c.(string); ok {
-					fmt.Printf("BACKUP_CODE_0:%s\n", codeStr)
-				}
-			}
+		printAutomationBackupCodes(backupCodes)
+		for _, c := range backupCodes {
 			fmt.Println(c)
 		}
 		fmt.Println("--------------------")
 	}
 
-	fmt.Println("\nPlease verify setup with: arkfile-client setup-mfa")
+	mfaToken := resetResp.TempToken
+	if mfaToken == "" {
+		if t, ok := resetResp.Data["temp_token"].(string); ok {
+			mfaToken = t
+		}
+	}
+	if mfaToken == "" {
+		return fmt.Errorf("server didn't return an MFA verify token after reset")
+	}
+	session.TempToken = mfaToken
+	if err := saveAuthSession(session, config.TokenFile); err != nil {
+		logError("Warning: Failed to save session after MFA reset: %v", err)
+	}
+
+	fmt.Println("\nPlease verify setup with: arkfile-client setup-mfa --verify CODE")
 	return nil
 }
 

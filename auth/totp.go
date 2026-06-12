@@ -716,7 +716,7 @@ func IsUserMFAEnabled(db *sql.DB, username string) (bool, error) {
 }
 
 // ResetTOTP resets TOTP for a user (requires valid backup code or pre-validated reset JWT auth).
-// This generates a new TOTP secret and new backup codes while keeping TOTP enabled.
+// This generates a new TOTP secret and fresh backup codes; MFA stays inactive until verify completes.
 func ResetTOTP(db *sql.DB, username, backupCode string) (*TOTPSetup, error) {
 	// Validate backup code first if provided (some flows validate beforehand via the recovery token)
 	if backupCode != "" {
@@ -750,10 +750,10 @@ func ResetTOTP(db *sql.DB, username, backupCode string) (*TOTPSetup, error) {
 	}
 	defer tx.Rollback()
 
-	// Update database with new encrypted data (keep enabled=true, setup_completed=true)
+	// New secret is staged; user must verify before MFA is active again (path B).
 	_, err = tx.Exec(`
 		UPDATE user_mfa_credentials 
-		SET credential_data = ?, created_at = ?
+		SET credential_data = ?, created_at = ?, enabled = false, setup_completed = false
 		WHERE username = ?`,
 		secretEncrypted, time.Now().UTC(), username,
 	)
