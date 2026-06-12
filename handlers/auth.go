@@ -1125,7 +1125,7 @@ func MFAReset(c echo.Context) error {
 	}
 
 	// Reset TOTP (this generates new setup and saves hashed backup codes)
-	setup, err := auth.ResetTOTP(database.DB, username, request.BackupCode)
+	setup, err := auth.ResetMFA(database.DB, username, request.BackupCode)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to reset TOTP for %s: %v", username, err)
 		entityID := logging.GetOrCreateEntityID(c)

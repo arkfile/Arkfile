@@ -143,11 +143,6 @@ func main() {
 		log.Fatalf("Failed to setup OPAQUE server keys: %v", err)
 	}
 
-	// Initialize TOTP master key
-	if err := crypto.InitializeTOTPMasterKey(); err != nil {
-		log.Fatalf("Failed to initialize TOTP master key: %v", err)
-	}
-
 	// Verify OPAQUE is available
 	if !auth.IsOPAQUEAvailable() {
 		log.Fatalf("OPAQUE not available")
@@ -171,14 +166,14 @@ func main() {
 		}
 	}()
 
-	// Start TOTP cleanup routine
+	// Start MFA usage-log cleanup routine
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 
 		for range ticker.C {
-			if err := auth.CleanupTOTPLogs(database.DB); err != nil {
-				logging.ErrorLogger.Printf("Failed to cleanup TOTP logs: %v", err)
+			if err := auth.CleanupMFALogs(database.DB); err != nil {
+				logging.ErrorLogger.Printf("Failed to cleanup MFA logs: %v", err)
 			}
 		}
 	}()

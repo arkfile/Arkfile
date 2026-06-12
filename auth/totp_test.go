@@ -79,17 +79,17 @@ func TestServerSideTOTPKeyManagement(t *testing.T) {
 	username := "testuser"
 
 	// Test key derivation consistency
-	key1, err := crypto.DeriveTOTPUserKey(username)
+	key1, err := crypto.DeriveMFAUserKey(username)
 	if err != nil {
 		t.Fatalf("Failed to derive TOTP key 1: %v", err)
 	}
-	defer crypto.SecureZeroTOTPKey(key1)
+	defer crypto.SecureZeroMFAKey(key1)
 
-	key2, err := crypto.DeriveTOTPUserKey(username)
+	key2, err := crypto.DeriveMFAUserKey(username)
 	if err != nil {
 		t.Fatalf("Failed to derive TOTP key 2: %v", err)
 	}
-	defer crypto.SecureZeroTOTPKey(key2)
+	defer crypto.SecureZeroMFAKey(key2)
 
 	// Keys should be identical for the same user
 	if len(key1) != len(key2) {
@@ -103,11 +103,11 @@ func TestServerSideTOTPKeyManagement(t *testing.T) {
 	}
 
 	// Test that different users get different keys
-	key3, err := crypto.DeriveTOTPUserKey("different_user")
+	key3, err := crypto.DeriveMFAUserKey("different_user")
 	if err != nil {
 		t.Fatalf("Failed to derive TOTP key 3: %v", err)
 	}
-	defer crypto.SecureZeroTOTPKey(key3)
+	defer crypto.SecureZeroMFAKey(key3)
 
 	// Keys should be different for different users
 	identical := true
@@ -156,7 +156,7 @@ func TestMFASetup(t *testing.T) {
 	}
 
 	// Verify setup was stored correctly
-	totpData, err := getTOTPData(db, username)
+	totpData, err := getMFAData(db, username)
 	if err != nil {
 		t.Fatalf("Failed to retrieve TOTP data: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestTOTPCleanup(t *testing.T) {
 	defer db.Close()
 
 	// Test cleanup function doesn't error
-	if err := CleanupTOTPLogs(db); err != nil {
+	if err := CleanupMFALogs(db); err != nil {
 		t.Fatalf("TOTP cleanup failed: %v", err)
 	}
 }
@@ -378,7 +378,7 @@ func TestMFAReset(t *testing.T) {
 	backupCode := setup.BackupCodes[0]
 
 	// Reset TOTP with backup code
-	newSetup, err := ResetTOTP(db, username, backupCode)
+	newSetup, err := ResetMFA(db, username, backupCode)
 	if err != nil {
 		t.Fatalf("Failed to reset TOTP: %v", err)
 	}
@@ -445,13 +445,13 @@ func TestMFAReset(t *testing.T) {
 	}
 
 	// Try to reset with invalid backup code
-	if _, err := ResetTOTP(db, "testuser2", "INVALIDCODE"); err == nil {
+	if _, err := ResetMFA(db, "testuser2", "INVALIDCODE"); err == nil {
 		t.Fatal("TOTP reset should fail with invalid backup code")
 	}
 }
 
 // setupFullTOTP is a helper that creates a fully enrolled TOTP user in the given db.
-func setupFullTOTP(t *testing.T, db *sql.DB, username string) *TOTPSetup {
+func setupFullTOTP(t *testing.T, db *sql.DB, username string) *MFASetup {
 	t.Helper()
 	setup, err := GenerateMFASetup(username)
 	if err != nil {
@@ -494,7 +494,7 @@ func driveFailures(t *testing.T, db *sql.DB, username string, n int) {
 
 // TestComputeLockoutState_NoWindow verifies that a fresh state (no window) is always allowed.
 func TestComputeLockoutState_NoWindow(t *testing.T) {
-	s := totpLockoutState{}
+	s := mfaLockoutState{}
 	allowed, retryAfter, _ := computeLockoutState(s, time.Now())
 	if !allowed {
 		t.Fatal("expected allowed with no window")
@@ -509,7 +509,7 @@ func TestComputeLockoutState_ExpiredWindow(t *testing.T) {
 	now := time.Now()
 	windowStart := now.Add(-25 * time.Hour) // 25h ago, beyond the 24h window
 	attempts := 50
-	s := totpLockoutState{
+	s := mfaLockoutState{
 		failedAttempts: attempts,
 		windowStarted:  &windowStart,
 		lastFailed:     &windowStart,
@@ -526,12 +526,12 @@ func TestComputeLockoutState_SoftBackoff(t *testing.T) {
 	windowStart := now.Add(-1 * time.Hour)
 	lastFailed := now.Add(-30 * time.Second) // failed 30s ago
 
-	// At exactly totpSoftLockoutThreshold failures, next attempt is still allowed
+	// At exactly mfaSoftLockoutThreshold failures, next attempt is still allowed
 	// (backoff starts at threshold+1 in the record path, but computeLockoutState
 	// checks >= threshold with the recorded count).
 	// At threshold failures + 30s backoff window of 2^0=1 minute, not yet expired.
-	s := totpLockoutState{
-		failedAttempts: totpSoftLockoutThreshold,
+	s := mfaLockoutState{
+		failedAttempts: mfaSoftLockoutThreshold,
 		windowStarted:  &windowStart,
 		lastFailed:     &lastFailed,
 	}
@@ -551,14 +551,14 @@ func TestComputeLockoutState_BackoffDoubles(t *testing.T) {
 	lastFailed := now.Add(-5 * time.Second) // very recent failure
 
 	var prevRetry time.Duration
-	for attempts := totpSoftLockoutThreshold; attempts < totpSoftLockoutThreshold+5; attempts++ {
-		s := totpLockoutState{
+	for attempts := mfaSoftLockoutThreshold; attempts < mfaSoftLockoutThreshold+5; attempts++ {
+		s := mfaLockoutState{
 			failedAttempts: attempts,
 			windowStarted:  &windowStart,
 			lastFailed:     &lastFailed,
 		}
 		_, retryAfter, _ := computeLockoutState(s, now)
-		if attempts > totpSoftLockoutThreshold && retryAfter <= prevRetry {
+		if attempts > mfaSoftLockoutThreshold && retryAfter <= prevRetry {
 			t.Fatalf("at attempt %d retryAfter=%v did not increase from previous %v",
 				attempts, retryAfter, prevRetry)
 		}
@@ -572,8 +572,8 @@ func TestComputeLockoutState_HardCap(t *testing.T) {
 	windowStart := now.Add(-1 * time.Hour)
 	lastFailed := now.Add(-1 * time.Second)
 
-	s := totpLockoutState{
-		failedAttempts: totpHardCapThreshold,
+	s := mfaLockoutState{
+		failedAttempts: mfaHardCapThreshold,
 		windowStarted:  &windowStart,
 		lastFailed:     &lastFailed,
 	}
@@ -587,27 +587,27 @@ func TestComputeLockoutState_HardCap(t *testing.T) {
 	}
 }
 
-// TestComputeLockoutState_BackoffCap verifies that backoff is capped at totpBackoffCapMinutes.
+// TestComputeLockoutState_BackoffCap verifies that backoff is capped at mfaBackoffCapMinutes.
 func TestComputeLockoutState_BackoffCap(t *testing.T) {
 	now := time.Now()
 	windowStart := now.Add(-1 * time.Hour)
 	lastFailed := now.Add(-1 * time.Second)
 
 	// At 20 failures (10 above soft threshold), backoff would be 2^10=1024min uncapped.
-	s := totpLockoutState{
-		failedAttempts: totpSoftLockoutThreshold + 10,
+	s := mfaLockoutState{
+		failedAttempts: mfaSoftLockoutThreshold + 10,
 		windowStarted:  &windowStart,
 		lastFailed:     &lastFailed,
 	}
 	_, retryAfter, _ := computeLockoutState(s, now)
-	maxExpected := time.Duration(totpBackoffCapMinutes)*time.Minute + 5*time.Second
+	maxExpected := time.Duration(mfaBackoffCapMinutes)*time.Minute + 5*time.Second
 	if retryAfter > maxExpected {
-		t.Fatalf("retryAfter %v exceeds cap of %d minutes", retryAfter, totpBackoffCapMinutes)
+		t.Fatalf("retryAfter %v exceeds cap of %d minutes", retryAfter, mfaBackoffCapMinutes)
 	}
 }
 
 // TestTOTPLockout_SoftBackoffEntry verifies that after threshold failures the next
-// ValidateTOTPCode call returns a TOTPLockoutError.
+// ValidateTOTPCode call returns a MFALockoutError.
 // Strategy: drive (threshold - 1) back-dated failures so they don't self-block, then
 // drive 1 recent failure (no back-dating) so the recorded last_failed_at is NOW.
 // The very next attempt sees failed_attempts == threshold with a recent last_failed_at
@@ -621,7 +621,7 @@ func TestTOTPLockout_SoftBackoffEntry(t *testing.T) {
 	setupFullTOTP(t, db, username)
 
 	// Drive (threshold - 1) back-dated failures.
-	driveFailures(t, db, username, totpSoftLockoutThreshold-1)
+	driveFailures(t, db, username, mfaSoftLockoutThreshold-1)
 
 	// Drive exactly 1 more failure WITHOUT back-dating, so last_failed_at = now.
 	err := ValidateTOTPCode(db, username, "000000")
@@ -629,8 +629,8 @@ func TestTOTPLockout_SoftBackoffEntry(t *testing.T) {
 		t.Fatal("expected error for invalid code on final failure")
 	}
 	// This attempt is invalid code, not lockout-blocked yet.
-	if _, ok := err.(*TOTPLockoutError); ok {
-		t.Fatalf("should not be locked out yet at attempt %d, got %T", totpSoftLockoutThreshold, err)
+	if _, ok := err.(*MFALockoutError); ok {
+		t.Fatalf("should not be locked out yet at attempt %d, got %T", mfaSoftLockoutThreshold, err)
 	}
 
 	// Now the next attempt: failed_attempts == threshold, last_failed_at == recent.
@@ -639,16 +639,16 @@ func TestTOTPLockout_SoftBackoffEntry(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected lockout error after exceeding soft threshold")
 	}
-	lockoutErr, ok := err.(*TOTPLockoutError)
+	lockoutErr, ok := err.(*MFALockoutError)
 	if !ok {
-		t.Fatalf("expected *TOTPLockoutError, got %T: %v", err, err)
+		t.Fatalf("expected *MFALockoutError, got %T: %v", err, err)
 	}
 	if lockoutErr.RetryAfter <= 0 {
 		t.Fatalf("expected positive RetryAfter, got %v", lockoutErr.RetryAfter)
 	}
 }
 
-// TestTOTPLockout_HardDailyCapEntry verifies that at totpHardCapThreshold failures
+// TestTOTPLockout_HardDailyCapEntry verifies that at mfaHardCapThreshold failures
 // the account is fully locked until the window expires.
 func TestTOTPLockout_HardDailyCapEntry(t *testing.T) {
 	setupTOTPTestEnvironment(t)
@@ -658,17 +658,17 @@ func TestTOTPLockout_HardDailyCapEntry(t *testing.T) {
 	username := "lockout-hard-user"
 	setupFullTOTP(t, db, username)
 
-	// Drive totpHardCapThreshold failures (back-dating between each).
-	driveFailures(t, db, username, totpHardCapThreshold)
+	// Drive mfaHardCapThreshold failures (back-dating between each).
+	driveFailures(t, db, username, mfaHardCapThreshold)
 
-	// One more attempt: must return TOTPLockoutError with retryAfter near window end.
+	// One more attempt: must return MFALockoutError with retryAfter near window end.
 	err := ValidateTOTPCode(db, username, "000000")
 	if err == nil {
 		t.Fatal("expected lockout error after hard cap")
 	}
-	lockoutErr, ok := err.(*TOTPLockoutError)
+	lockoutErr, ok := err.(*MFALockoutError)
 	if !ok {
-		t.Fatalf("expected *TOTPLockoutError, got %T: %v", err, err)
+		t.Fatalf("expected *MFALockoutError, got %T: %v", err, err)
 	}
 	if lockoutErr.RetryAfter <= 0 {
 		t.Fatalf("expected positive RetryAfter for hard cap, got %v", lockoutErr.RetryAfter)
@@ -685,7 +685,7 @@ func TestTOTPLockout_ClearOnSuccess(t *testing.T) {
 	setup := setupFullTOTP(t, db, username)
 
 	// Drive some failures.
-	driveFailures(t, db, username, totpSoftLockoutThreshold-1)
+	driveFailures(t, db, username, mfaSoftLockoutThreshold-1)
 
 	// Submit a valid code (back-date last_failed first so backoff doesn't block).
 	_, dbErr := db.Exec(
@@ -740,7 +740,7 @@ func TestTOTPLockout_WindowResetAfter24h(t *testing.T) {
 		`UPDATE user_mfa_credentials
 		 SET failed_attempts_in_window = ?, window_started_at = ?, last_failed_attempt_at = ?
 		 WHERE username = ?`,
-		totpHardCapThreshold+5, staleWindow, staleWindow, username,
+		mfaHardCapThreshold+5, staleWindow, staleWindow, username,
 	)
 	if err != nil {
 		t.Fatalf("setup stale window: %v", err)
@@ -751,7 +751,7 @@ func TestTOTPLockout_WindowResetAfter24h(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid code (but not a lockout error)")
 	}
-	if _, ok := err.(*TOTPLockoutError); ok {
+	if _, ok := err.(*MFALockoutError); ok {
 		t.Fatal("stale window should not produce lockout error; window should have been reset")
 	}
 }

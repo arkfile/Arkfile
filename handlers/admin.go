@@ -222,8 +222,8 @@ func AdminMFADecryptCheck(c echo.Context) error {
 	// Get admin username for audit logging
 	adminUsername := auth.GetUsernameFromToken(c)
 
-	// Use the diagnostic helper we added to auth/totp.go
-	present, decryptable, enabled, setupCompleted, err := auth.CanDecryptTOTPSecret(database.DB, targetUsername)
+	// Use the diagnostic helper in auth/mfa_totp.go
+	present, decryptable, enabled, setupCompleted, err := auth.CanDecryptMFASecret(database.DB, targetUsername)
 	if err != nil {
 		logging.ErrorLogger.Printf("TOTP decrypt check failed for %s: %v", targetUsername, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to check TOTP decrypt status")
@@ -386,7 +386,7 @@ func AdminGetUserStatus(c echo.Context) error {
 	}
 
 	// Get comprehensive TOTP status using diagnostic helper
-	present, decryptable, enabled, setupCompleted, err := auth.CanDecryptTOTPSecret(database.DB, targetUsername)
+	present, decryptable, enabled, setupCompleted, err := auth.CanDecryptMFASecret(database.DB, targetUsername)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to get TOTP diagnostic status for %s: %v", targetUsername, err)
 		response.Details = map[string]interface{}{

@@ -130,14 +130,14 @@ func SetupDevAdminTOTP(db *sql.DB, user *models.User, totpSecret string) error {
 	backupCodes := generateDevAdminBackupCodes(10)
 
 	// Derive user-specific TOTP key from server master key
-	totpKey, err := crypto.DeriveTOTPUserKey(user.Username)
+	mfaKey, err := crypto.DeriveMFAUserKey(user.Username)
 	if err != nil {
-		return fmt.Errorf("failed to derive TOTP user key: %w", err)
+		return fmt.Errorf("failed to derive MFA user key: %w", err)
 	}
-	defer crypto.SecureZeroTOTPKey(totpKey)
+	defer crypto.SecureZeroMFAKey(mfaKey)
 
 	// Encrypt TOTP secret
-	secretEncrypted, err := crypto.EncryptGCM([]byte(totpSecret), totpKey)
+	secretEncrypted, err := crypto.EncryptGCM([]byte(totpSecret), mfaKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt TOTP secret: %w", err)
 	}
@@ -206,7 +206,7 @@ func ValidateDevAdminTOTPWorkflow(db *sql.DB, user *models.User, totpSecret stri
 	// Test TOTP decryption workflow — this proves the master key derivation,
 	// encryption, and database storage are all working correctly without
 	// consuming a TOTP code window in the replay log.
-	present, decryptable, totpEnabled, setupCompleted, err := CanDecryptTOTPSecret(db, user.Username)
+	present, decryptable, totpEnabled, setupCompleted, err := CanDecryptMFASecret(db, user.Username)
 	if err != nil {
 		return fmt.Errorf("TOTP decryption test failed: %w", err)
 	}

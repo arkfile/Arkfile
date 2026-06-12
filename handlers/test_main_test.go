@@ -64,12 +64,6 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	// Initialize TOTP master key (uses KeyManager, not file-based keys)
-	if err := crypto.InitializeTOTPMasterKey(); err != nil {
-		fmt.Printf("FATAL: handlers TestMain: Failed to initialize TOTP master key: %v\n", err)
-		os.Exit(1)
-	}
-
 	// Set env vars for config.LoadConfig()
 	originalEnv := map[string]string{}
 	testEnv := map[string]string{

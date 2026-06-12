@@ -183,25 +183,28 @@ Arkfile implements OPAQUE (Oblivious Pseudorandom Functions for Key Exchange), a
 - Pre-computation attack immunity
 - Side-channel attack mitigation
 
-### Time-Based One-Time Password (TOTP) Multi-Factor Authentication
+### Multi-Factor Authentication (TOTP)
 
-Arkfile provides optional TOTP-based multi-factor authentication as an additional security layer beyond OPAQUE. When enabled, users must complete both OPAQUE authentication and provide a valid TOTP code to access their accounts.
+Arkfile provides TOTP-based multi-factor authentication as an additional security layer beyond OPAQUE. When enabled, users must complete both OPAQUE authentication and provide a valid TOTP code to access their accounts.
 
 **TOTP Security Features:**
 - RFC 6238 compliant implementation using HMAC-SHA1
 - 30-second time windows with one-step tolerance for clock skew
-- Cryptographically secure secret generation (32 bytes entropy)
-- Backup codes for account recovery (10 codes, single use)
-- Session key integration for enhanced security
+- Cryptographically secure secret generation (160 bits entropy)
+- Backup codes for account recovery (10 codes, single use, 10-character alphanumeric)
+- Shared per-user failure lockout across TOTP and backup-code verification
 
 **Authentication Flow Enhancement:**
-When TOTP is enabled, the OPAQUE login process returns a temporary token instead of full access credentials. This temporary token permits only TOTP verification operations and expires after 10 minutes if unused. Upon successful TOTP verification, the system issues full access and refresh tokens for normal operation.
+When MFA is enabled, the OPAQUE login process returns a temporary token instead of full access credentials. This temporary token permits only MFA verification operations and expires after 10 minutes if unused. Upon successful MFA verification, the system issues full access and refresh tokens for normal operation.
 
-**Recovery Mechanisms:**
-The system generates cryptographically secure backup codes during TOTP setup. Each backup code is a 12-character alphanumeric string that can be used once in place of a TOTP code. Used backup codes are immediately invalidated and logged as security events. Backup codes provide essential account recovery when the primary TOTP device is unavailable.
+**Backup Code Recovery (two paths):**
+The system generates cryptographically secure backup codes during MFA setup. Each backup code is a 10-character alphanumeric string (~59.5 bits of entropy) hashed with Argon2id and stored single-use. Used backup codes are immediately invalidated and logged.
 
-**Integration Security:**
-TOTP secrets are encrypted using the user's OPAQUE-derived session key, ensuring that TOTP data remains cryptographically bound to the user's password. This approach prevents TOTP bypass attacks even in scenarios where database access is compromised but user passwords remain secure.
+- **Path A — Emergency one-shot login:** After OPAQUE login, the user submits a backup code at `POST /api/mfa/auth` with `is_backup: true`. The server validates and consumes the code, then issues a full access token. The enrolled second factor is unchanged; the user will need their normal TOTP code (or another backup code) on the next login.
+- **Path B — Re-enroll with a backup code:** After OPAQUE login, the user consumes a backup code via `POST /api/mfa/recover-with-backup-code`, receives a short-lived `arkfile-mfa-reset` JWT, then calls `POST /api/mfa/reset` to stage new enrollment material and fresh backup codes. The user must complete MFA setup (`/api/mfa/verify`) before gaining full access.
+
+**Credential Storage:**
+TOTP secrets are encrypted with AES-256-GCM under a per-user key derived via HKDF-SHA256 from the Tier-3 user-secret master (`mfa_user` purpose). Backup codes are never stored in cleartext; only Argon2id hashes are persisted.
 
 ### Password Validation and Security Requirements
 
@@ -360,7 +363,7 @@ sudo ./scripts/maintenance/rotate-user-secret-master.sh
 ```
 
 ### Tiered Security model and user recovery
-Arkfile partitions system secrets into three separate trust tiers (Tier-1, Tier-2, and Tier-3). Of these, Tier-3 holds user-secret-wrapping master keys (`totp_user` and `contact_info` purpose keys derived via HKDF-SHA256 from `/opt/arkfile/etc/keys/user-secret-master.bin` file with 0400 owner-only permissions).
+Arkfile partitions system secrets into three separate trust tiers (Tier-1, Tier-2, and Tier-3). Of these, Tier-3 holds user-secret-wrapping master keys (`mfa_user` and `contact_info` purpose keys derived via HKDF-SHA256 from `/opt/arkfile/etc/keys/user-secret-master.bin` file with 0400 owner-only permissions).
 
 **In-Memory Hardening:**
 - System loader pins the Tier-3 master key using POSIX `mlock` to disable memory swapping of keys to disk storage.
@@ -369,8 +372,8 @@ Arkfile partitions system secrets into three separate trust tiers (Tier-1, Tier-
 
 **Lost-Device User Recovery Model:**
 - Lost password = lost files. Lost authenticator + lost backup codes = lost account. This model is intentionally non-custodial.
-- If a user loses their authenticator (TOTP), but holds one of their 10 alphanumeric backup codes (~59.5 bits of secure entropy sampled using rejection sampling), they can start a reachable recovery flow.
-- A-15 Reachable TOTP recovery enables verified backup codes to produce a short-lived temporary `"arkfile-mfa-reset"` JWT claim. Users use this reset-authorized context to flush, reset, and re-setup their TOTP keys immediately without requiring administrative or world-readable override features.
+- If a user loses their authenticator (TOTP), but holds one of their 10 alphanumeric backup codes (~59.5 bits of secure entropy sampled using rejection sampling), they can use path A (emergency one-shot login) or path B (re-enroll with a backup code). See the MFA section above.
+- Path B recovery issues a short-lived temporary `"arkfile-mfa-reset"` JWT claim. Users use this reset-authorized context to flush, reset, and re-setup their MFA keys immediately without requiring administrative intervention.
 
 ### Authentication Security
 
