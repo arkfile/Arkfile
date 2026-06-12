@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/84adam/Arkfile/utils"
@@ -175,9 +176,81 @@ func JWTMiddleware() echo.MiddlewareFunc {
 	return echojwt.WithConfig(config)
 }
 
+// stripBearerPrefix returns the JWT string from an Authorization header value.
+func stripBearerPrefix(auth string) string {
+	auth = strings.TrimSpace(auth)
+	if len(auth) > 7 && strings.EqualFold(auth[:7], "Bearer ") {
+		return strings.TrimSpace(auth[7:])
+	}
+	return auth
+}
+
+// ResetJWTMiddleware validates reset-authorized temporary tokens (aud=arkfile-mfa-reset).
+// Used by /api/mfa/reset after backup-code recovery (path B).
+func ResetJWTMiddleware() echo.MiddlewareFunc {
+	config := echojwt.Config{
+		NewClaimsFunc: func(c echo.Context) jwt.Claims {
+			return new(Claims)
+		},
+		ParseTokenFunc: parseTokenWithAudience(GetJWTTempPublicKey(), AudienceReset),
+		ErrorHandler: func(c echo.Context, err error) error {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+		},
+	}
+	return echojwt.WithConfig(config)
+}
+
+// MFAResetJWTMiddleware accepts either a full-tier token (aud=arkfile-api,
+// requires_mfa=false) for self-service reset with a backup code, or a
+// reset-tier token (aud=arkfile-mfa-reset) issued by recover-with-backup-code.
+func MFAResetJWTMiddleware() echo.MiddlewareFunc {
+	config := echojwt.Config{
+		NewClaimsFunc: func(c echo.Context) jwt.Claims {
+			return new(Claims)
+		},
+		ParseTokenFunc: func(_ echo.Context, auth string) (interface{}, error) {
+			tokenString := stripBearerPrefix(auth)
+			parser := jwt.NewParser(
+				jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}),
+				jwt.WithIssuer(Issuer),
+				jwt.WithExpirationRequired(),
+			)
+
+			fullToken, err := parser.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+				return GetJWTFullPublicKey(), nil
+			})
+			if err == nil && fullToken.Valid {
+				claims, ok := fullToken.Claims.(*Claims)
+				if ok && !claims.RequiresMFA && slices.Contains(claims.Audience, AudienceAPI) {
+					return fullToken, nil
+				}
+			}
+
+			resetParser := jwt.NewParser(
+				jwt.WithValidMethods([]string{jwt.SigningMethodEdDSA.Alg()}),
+				jwt.WithAudience(AudienceReset),
+				jwt.WithIssuer(Issuer),
+				jwt.WithExpirationRequired(),
+			)
+			resetToken, err := resetParser.ParseWithClaims(tokenString, &Claims{}, func(t *jwt.Token) (interface{}, error) {
+				return GetJWTTempPublicKey(), nil
+			})
+			if err == nil && resetToken.Valid {
+				return resetToken, nil
+			}
+
+			return nil, fmt.Errorf("invalid token")
+		},
+		ErrorHandler: func(c echo.Context, err error) error {
+			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
+		},
+	}
+	return echojwt.WithConfig(config)
+}
+
 // MFAJWTMiddleware validates temporary MFA-handoff tokens (aud=arkfile-mfa).
-// Used only by /api/mfa/{setup,verify,auth}. A full-tier token fails the
-// signing-key check AND the audience check.
+// Used only by /api/mfa/{setup,verify,auth,recover-with-backup-code}. A full-tier
+// token fails the signing-key check AND the audience check.
 func MFAJWTMiddleware() echo.MiddlewareFunc {
 	config := echojwt.Config{
 		NewClaimsFunc: func(c echo.Context) jwt.Claims {

@@ -2,7 +2,7 @@
 
 This document describes how Arkfile adds self-service balance top-ups on top of the microcent-denominated storage-credits and usage-metering foundation. Payment processing is delegated to a self-hosted BTCPay Server instance, which handles Bitcoin (on-chain and Lightning), Monero, and optionally credit cards through the BTCPay Server Stripe Payments plugin. Arkfile never loads Stripe scripts in the browser and never parses Stripe webhooks directly; every paid top-up is represented locally as a BTCPay invoice and a corresponding ledger credit. The design keeps the core application privacy-preserving: no user emails or real names are sent to BTCPay, and checkout happens either in an embedded iframe or via a checkout URL the user opens separately.
 
-The integration is implemented end-to-end with Go unit tests, shell-based e2e tests (`phase_11d_billing` and `phase_11e_payments` in `scripts/testing/e2e-test.sh`), and Playwright billing-panel tests including the top-up modal.
+The integration is implemented end-to-end with Go unit tests, shell-based e2e tests (`run_billing` and `run_payments` in `scripts/testing/e2e-test.sh`), and Playwright billing-panel tests including the top-up modal.
 
 ## Status
 

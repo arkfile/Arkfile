@@ -43,12 +43,12 @@ run_type_check() {
     fi
 }
 
-# Function to run Bun tests
+# Function to run Bun unit tests (src/__tests__/)
 run_bun_tests() {
     echo -e "\n${BLUE} Running Bun Test Suite...${NC}"
     cd client/static/js
     
-    if bun test; then
+    if bun run test; then
         echo -e "${GREEN}[OK] Bun tests passed${NC}"
         cd ../../..
         return 0
@@ -58,23 +58,6 @@ run_bun_tests() {
         return 1
     fi
 }
-
-# Function to run integration tests
-run_integration_tests() {
-    echo -e "\n${BLUE}Running Integration Tests...${NC}"
-    cd client/static/js
-    
-    if bun test tests/integration/test-runner.test.ts; then
-        echo -e "${GREEN}[OK] Integration tests passed${NC}"
-        cd ../../..
-        return 0
-    else
-        echo -e "${YELLOW}[WARNING]  Integration tests had issues (may be expected if WASM not built)${NC}"
-        cd ../../..
-        return 0  # Don't fail the entire suite for integration test issues
-    fi
-}
-
 
 # Function to run build tests
 run_build_tests() {
@@ -134,12 +117,6 @@ main() {
         exit 1
     fi
     
-    # Install dependencies
-    echo -e "\n${BLUE}Skipping dependency installation...${NC}"
-    # cd client/static/js
-    # bun install
-    # cd ../../..
-    
     # Run TypeScript type checking
     tests_run=$((tests_run + 1))
     if run_type_check; then
@@ -156,18 +133,12 @@ main() {
         exit_code=1
     fi
     
-    # Run Bun tests
+    # Run Bun unit tests
     tests_run=$((tests_run + 1))
     if run_bun_tests; then
         tests_passed=$((tests_passed + 1))
     else
         exit_code=1
-    fi
-    
-    # Run integration tests (don't fail on issues)
-    tests_run=$((tests_run + 1))
-    if run_integration_tests; then
-        tests_passed=$((tests_passed + 1))
     fi
     
     # Final summary
@@ -195,11 +166,8 @@ case "${1:-}" in
     "build")
         check_bun && run_build_tests
         ;;
-    "unit")
+    "unit"|"test")
         check_bun && run_bun_tests
-        ;;
-    "integration")
-        check_bun && run_integration_tests
         ;;
     "help"|"-h"|"--help")
         echo "Usage: $0 [option]"
@@ -207,11 +175,11 @@ case "${1:-}" in
         echo "Options:"
         echo "  type-check   Run TypeScript type checking only"
         echo "  build        Run build tests only"
-        echo "  unit         Run unit tests only"
-        echo "  integration  Run integration tests only"
+        echo "  unit, test   Run unit tests only (src/__tests__/)"
         echo "  help         Show this help message"
         echo ""
-        echo "If no option is provided, all tests will be run."
+        echo "If no option is provided, type-check, build, and unit tests will run."
+        echo "Browser/server integration: scripts/testing/e2e-test.sh and e2e-playwright.sh"
         ;;
     *)
         main

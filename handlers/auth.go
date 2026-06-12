@@ -1055,7 +1055,7 @@ func RecoverWithBackupCode(c echo.Context) error {
 	if err := auth.ValidateBackupCode(database.DB, username, request.BackupCode); err != nil {
 		logging.ErrorLogger.Printf("Failed backup code recovery for %s: %v", username, err)
 		entityID := logging.GetOrCreateEntityID(c)
-		if recordErr := recordAuthFailedAttempt("totp_reset", entityID); recordErr != nil {
+		if recordErr := recordAuthFailedAttempt("mfa_reset", entityID); recordErr != nil {
 			logging.ErrorLogger.Printf("Failed to record failed backup-code recovery attempt: %v", recordErr)
 		}
 		return JSONError(c, http.StatusUnauthorized, "Invalid backup code")
@@ -1110,7 +1110,7 @@ func MFAReset(c echo.Context) error {
 	hasResetAud := false
 	if claims != nil {
 		for _, aud := range claims.Audience {
-			if aud == "arkfile-mfa-reset" {
+			if aud == auth.AudienceReset {
 				hasResetAud = true
 				break
 			}
@@ -1128,8 +1128,8 @@ func MFAReset(c echo.Context) error {
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to reset TOTP for %s: %v", username, err)
 		entityID := logging.GetOrCreateEntityID(c)
-		if recordErr := recordAuthFailedAttempt("totp_reset", entityID); recordErr != nil {
-			logging.ErrorLogger.Printf("Failed to record TOTP reset failure: %v", recordErr)
+		if recordErr := recordAuthFailedAttempt("mfa_reset", entityID); recordErr != nil {
+			logging.ErrorLogger.Printf("Failed to record MFA reset failure: %v", recordErr)
 		}
 		return JSONError(c, http.StatusUnauthorized, "Invalid backup code or TOTP reset failed")
 	}

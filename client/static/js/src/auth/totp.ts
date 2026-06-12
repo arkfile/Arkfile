@@ -78,33 +78,87 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
   
   const totpForm = document.createElement('div');
   totpForm.innerHTML = `
-    <input type="text" id="totp-login-code" maxlength="6" placeholder="000000" style="
-      width: 100%;
-      padding: 10px;
-      font-size: 18px;
-      text-align: center;
-      border: 1px solid var(--depth-4);
-      border-radius: 4px;
-      margin-bottom: 15px;
-      letter-spacing: 0.2em;
-    ">
-    <div style="margin-bottom: 15px;">
-      <label style="display: flex; align-items: center; justify-content: center; font-size: 14px; color: var(--foam-2); cursor: pointer;">
-        <input type="checkbox" id="use-backup-code" style="margin: 0 8px 0 0; cursor: pointer; width: auto;">
-        Use backup code instead (Lost Authenticator)
-      </label>
+    <div id="totp-code-section">
+      <input type="text" id="totp-login-code" maxlength="6" placeholder="000000" style="
+        width: 100%;
+        padding: 10px;
+        font-size: 18px;
+        text-align: center;
+        border: 1px solid var(--depth-4);
+        border-radius: 4px;
+        margin-bottom: 15px;
+        letter-spacing: 0.2em;
+      ">
+      <button id="verify-totp-login" disabled style="
+        width: 100%;
+        padding: 10px;
+        background-color: var(--current-2);
+        color: var(--salt);
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 16px;
+        margin-bottom: 10px;
+      ">Verify</button>
     </div>
-    <button id="verify-totp-login" disabled style="
-      width: 100%;
-      padding: 10px;
-      background-color: var(--current-2);
-      color: var(--salt);
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 16px;
-      margin-bottom: 10px;
-    ">Verify</button>
+    <div id="backup-code-section" class="hidden">
+      <p id="backup-mode-hint" style="font-size: 13px; color: var(--foam-2); margin: 0 0 10px 0; text-align: center;"></p>
+      <input type="text" id="backup-login-code" maxlength="10" placeholder="10-character backup code" style="
+        width: 100%;
+        padding: 10px;
+        font-size: 16px;
+        text-align: center;
+        border: 1px solid var(--depth-4);
+        border-radius: 4px;
+        margin-bottom: 15px;
+        letter-spacing: 0.1em;
+      ">
+      <button id="verify-backup-login" disabled style="
+        width: 100%;
+        padding: 10px;
+        background-color: var(--current-2);
+        color: var(--salt);
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 16px;
+        margin-bottom: 10px;
+      ">Continue</button>
+      <button id="backup-back-to-totp" type="button" style="
+        width: 100%;
+        padding: 8px;
+        background: transparent;
+        color: var(--foam-2);
+        border: none;
+        cursor: pointer;
+        font-size: 14px;
+        margin-bottom: 10px;
+      ">Back to authenticator code</button>
+    </div>
+    <div id="backup-trouble-section" style="margin-bottom: 10px; padding-top: 8px; border-top: 1px solid var(--depth-4);">
+      <p style="font-size: 13px; color: var(--foam-2); margin: 0 0 8px 0; text-align: center;">Having trouble?</p>
+      <button id="backup-signin-once" type="button" style="
+        width: 100%;
+        padding: 8px;
+        margin-bottom: 6px;
+        background-color: var(--depth-3);
+        color: var(--salt);
+        border: 1px solid var(--depth-4);
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+      ">Sign in once with a backup code</button>
+      <button id="backup-reenroll" type="button" style="
+        width: 100%;
+        padding: 8px;
+        background-color: var(--depth-3);
+        color: var(--salt);
+        border: 1px solid var(--depth-4);
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+      ">Set up a new second factor with a backup code</button>
+    </div>
     <button onclick="this.closest('.modal-overlay').remove();" style="
       width: 100%;
       padding: 10px;
@@ -119,130 +173,122 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
   
   modalContent.appendChild(totpForm);
   
-  // Add event listeners
-  const totpInput = document.getElementById('totp-login-code') as HTMLInputElement;
-  const verifyButton = document.getElementById('verify-totp-login') as HTMLButtonElement;
-  const backupCheckbox = document.getElementById('use-backup-code') as HTMLInputElement;
-  
-  if (totpInput && verifyButton && backupCheckbox) {
-    // Handle backup code toggle
-    backupCheckbox.addEventListener('change', function() {
-      if (this.checked) {
-        totpInput.placeholder = 'Enter backup code';
-        totpInput.maxLength = 16;
-        verifyButton.disabled = totpInput.value.length < 8;
-      } else {
-        totpInput.placeholder = '000000';
-        totpInput.maxLength = 6;
-        totpInput.value = totpInput.value.replace(/[^0-9]/g, '');
-        verifyButton.disabled = totpInput.value.length !== 6;
-      }
-      totpInput.focus();
-    });
+  let backupMode: 'signin' | 'reenroll' | null = null;
 
+  const totpSection = document.getElementById('totp-code-section');
+  const backupSection = document.getElementById('backup-code-section');
+  const troubleSection = document.getElementById('backup-trouble-section');
+  const totpInput = document.getElementById('totp-login-code') as HTMLInputElement;
+  const backupInput = document.getElementById('backup-login-code') as HTMLInputElement;
+  const verifyTotpButton = document.getElementById('verify-totp-login') as HTMLButtonElement;
+  const verifyBackupButton = document.getElementById('verify-backup-login') as HTMLButtonElement;
+  const backupHint = document.getElementById('backup-mode-hint');
+  const signinOnceBtn = document.getElementById('backup-signin-once');
+  const reenrollBtn = document.getElementById('backup-reenroll');
+  const backToTotpBtn = document.getElementById('backup-back-to-totp');
+
+  const showTotpMode = (): void => {
+    backupMode = null;
+    totpSection?.classList.remove('hidden');
+    backupSection?.classList.add('hidden');
+    troubleSection?.classList.remove('hidden');
+    setTimeout(() => totpInput?.focus(), 50);
+  };
+
+  const showBackupMode = (mode: 'signin' | 'reenroll'): void => {
+    backupMode = mode;
+    totpSection?.classList.add('hidden');
+    backupSection?.classList.remove('hidden');
+    troubleSection?.classList.add('hidden');
+    if (backupHint) {
+      backupHint.textContent = mode === 'signin'
+        ? 'One-time sign-in. Your enrolled second factor stays unchanged; you will need it again on the next login.'
+        : 'Replaces your second factor. You will set up a new authenticator and receive fresh backup codes.';
+    }
+    if (verifyBackupButton) {
+      verifyBackupButton.textContent = mode === 'signin' ? 'Sign in once' : 'Set up new second factor';
+    }
+    if (backupInput) {
+      backupInput.value = '';
+      verifyBackupButton.disabled = true;
+      setTimeout(() => backupInput.focus(), 50);
+    }
+  };
+
+  if (totpInput && verifyTotpButton) {
     totpInput.addEventListener('input', function() {
-      if (backupCheckbox.checked) {
-        // Allow alphanumeric for backup codes
-        this.value = this.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-        verifyButton.disabled = this.value.length < 8;
-      } else {
-        // Only digits for TOTP codes
-        this.value = this.value.replace(/[^0-9]/g, '');
-        verifyButton.disabled = this.value.length !== 6;
-      }
+      this.value = this.value.replace(/[^0-9]/g, '');
+      verifyTotpButton.disabled = this.value.length !== 6;
     });
-    
     totpInput.addEventListener('keypress', function(e) {
-      if (e.key === 'Enter' && !verifyButton.disabled) {
+      if (e.key === 'Enter' && !verifyTotpButton.disabled) {
         verifyTOTPLogin();
       }
     });
-    
-    verifyButton.addEventListener('click', verifyTOTPLogin);
-    
-    // Focus the input
-    setTimeout(() => totpInput.focus(), 100);
+    verifyTotpButton.addEventListener('click', verifyTOTPLogin);
   }
+
+  if (backupInput && verifyBackupButton) {
+    backupInput.addEventListener('input', function() {
+      this.value = this.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+      verifyBackupButton.disabled = this.value.length !== 10;
+    });
+    backupInput.addEventListener('keypress', function(e) {
+      if (e.key === 'Enter' && !verifyBackupButton.disabled) {
+        verifyBackupLogin(backupMode);
+      }
+    });
+    verifyBackupButton.addEventListener('click', () => verifyBackupLogin(backupMode));
+  }
+
+  signinOnceBtn?.addEventListener('click', () => showBackupMode('signin'));
+  reenrollBtn?.addEventListener('click', () => showBackupMode('reenroll'));
+  backToTotpBtn?.addEventListener('click', showTotpMode);
+
+  setTimeout(() => totpInput?.focus(), 100);
 }
 
 async function verifyTOTPLogin(): Promise<void> {
   const codeInput = document.getElementById('totp-login-code') as HTMLInputElement;
-  const backupCheckbox = document.getElementById('use-backup-code') as HTMLInputElement;
-  
   if (!codeInput) return;
 
   const code = codeInput.value;
-  const isBackup = backupCheckbox?.checked || false;
-  
-  if (!code || (isBackup ? code.length < 8 : code.length !== 6)) {
-    showError(isBackup ? 'Please enter a valid backup code.' : 'Please enter a 6-digit code.');
+  if (!code || code.length !== 6) {
+    showError('Please enter a 6-digit code.');
     return;
   }
-  
-  // Get stored login data from module-private scope (no window exposure).
+
+  await submitMFAAuth(code, false);
+}
+
+async function verifyBackupLogin(mode: 'signin' | 'reenroll' | null): Promise<void> {
+  const codeInput = document.getElementById('backup-login-code') as HTMLInputElement;
+  if (!codeInput || !mode) return;
+
+  const code = codeInput.value;
+  if (code.length !== 10) {
+    showError('Please enter a valid 10-character backup code.');
+    return;
+  }
+
+  if (mode === 'signin') {
+    await submitMFAAuth(code, true);
+    return;
+  }
+
+  await submitBackupReenroll(code);
+}
+
+async function submitMFAAuth(code: string, isBackup: boolean): Promise<void> {
   const pendingData = _pendingTOTPFlowData;
   if (!pendingData) {
     showError('Login session expired. Please try again.');
     return;
   }
-  
+
   try {
     showProgressMessage('Verifying...');
-    
-    if (isBackup) {
-      // Lost-Device Recovery Flow: validate backup code and receive temporary reset-tier JWT token context
-      const recoveryResponse = await fetch('/api/mfa/recover-with-backup-code', {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          backup_code: code
-        }),
-      });
 
-      if (recoveryResponse.ok) {
-        // Backup code consumed successfully! Clear modal and start TOTP setup screen immediately.
-        document.querySelector('.modal-overlay')?.remove();
-        showProgressMessage('Re-setting up TOTP authenticator...');
-        
-        // Let's call /api/mfa/reset using our newly generated reset-tier token context
-        const resetResponse = await fetch('/api/mfa/reset', {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({}),
-        });
-
-        hideProgress();
-        if (resetResponse.ok) {
-          const resetData = await resetResponse.json();
-          const data = resetData.data || resetData;
-          showSuccess('TOTP Reset Complete!');
-          
-          // Show the fresh setup setupData so user immediately visualizes the brand new QR secret, Base32 manual entries, and 10 fresh codes
-          showTOTPSetupSection({
-            secret: data.secret,
-            qr_code_url: data.qr_code_image || data.qr_code_url,
-            backup_codes: data.backup_codes,
-            manual_entry: data.manual_entry,
-          });
-        } else {
-          const errBody = await resetResponse.json().catch(() => ({}));
-          showError(errBody.message || 'TOTP Reset Failed');
-        }
-      } else {
-        hideProgress();
-        const errBody = await recoveryResponse.json().catch(() => ({}));
-        showError(errBody.message || 'Invalid backup code');
-      }
-      return;
-    }
-    
-    // Normal TOTP entry validation
     const response = await fetch('/api/mfa/auth', {
       method: 'POST',
       credentials: 'include',
@@ -251,10 +297,10 @@ async function verifyTOTPLogin(): Promise<void> {
       },
       body: JSON.stringify({
         code: code,
-        is_backup: false
+        is_backup: isBackup
       }),
     });
-    
+
     if (response.ok) {
       const responseData = await response.json();
       // Handle standard API response structure: { data: { ... } }
@@ -297,8 +343,58 @@ async function verifyTOTPLogin(): Promise<void> {
     }
   } catch (error) {
     hideProgress();
-    console.error('TOTP verification error:', error);
-    showError('TOTP verification failed');
+    console.error('MFA verification error:', error);
+    showError('Authentication failed');
+  }
+}
+
+async function submitBackupReenroll(code: string): Promise<void> {
+  try {
+    showProgressMessage('Verifying backup code...');
+
+    const recoveryResponse = await fetch('/api/mfa/recover-with-backup-code', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ backup_code: code }),
+    });
+
+    if (!recoveryResponse.ok) {
+      hideProgress();
+      const errBody = await recoveryResponse.json().catch(() => ({}));
+      showError(errBody.message || 'Invalid backup code');
+      return;
+    }
+
+    document.querySelector('.modal-overlay')?.remove();
+    showProgressMessage('Setting up new second factor...');
+
+    const resetResponse = await fetch('/api/mfa/reset', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+
+    hideProgress();
+    if (resetResponse.ok) {
+      const resetData = await resetResponse.json();
+      const data = resetData.data || resetData;
+      showSuccess('Second factor reset complete');
+      showTOTPSetupSection({
+        secret: data.secret,
+        qr_code_url: data.qr_code_image || data.qr_code_url,
+        backup_codes: data.backup_codes,
+        manual_entry: data.manual_entry,
+      });
+    } else {
+      const errBody = await resetResponse.json().catch(() => ({}));
+      showError(errBody.message || 'Second factor reset failed');
+    }
+  } catch (error) {
+    hideProgress();
+    console.error('Backup re-enrollment error:', error);
+    showError('Second factor reset failed');
   }
 }
 

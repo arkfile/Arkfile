@@ -33,9 +33,10 @@ scripts/
 │   └── uninstall.sh                  # Remove system installation
 ├── testing/                          # Testing and validation scripts
 │   ├── alpine-build-test.sh          # Alpine Linux compatibility testing
-│   ├── e2e-test.sh                   # End-to-end testing
+│   ├── e2e-test.sh                   # End-to-end CLI integration testing
+│   ├── e2e-playwright.sh             # End-to-end browser integration testing
 │   ├── security-test-suite.sh        # Consolidated security testing
-│   ├── test-typescript.sh            # TypeScript testing suite
+│   ├── test-typescript.sh            # TypeScript unit tests (type-check, build, bun)
 │   └── totp-generator.go             # Helper utility for TOTP (2FA) testing
 ├── maintenance/                      # Maintenance and operational scripts
 │   ├── admin-validation-guide.sh     # Interactive admin validation
@@ -247,15 +248,24 @@ go build -o totp-generator totp-generator.go
 ```
 
 #### `test-typescript.sh`
-**Purpose**: Comprehensive TypeScript testing suite  
+**Purpose**: TypeScript client unit-test suite (type-check, production/dev builds, Bun tests)  
 **Usage**: `./scripts/testing/test-typescript.sh [option]`  
 **Options**:
 - `type-check` - Run TypeScript type checking only
 - `build` - Run build tests only
-- `unit` - Run unit tests only
-- `integration` - Run integration tests only
+- `unit` or `test` - Run Bun unit tests only (`client/static/js/src/__tests__/`)
 - `help` - Show help message
-**Tests**: TypeScript compilation, Bun testing, build validation
+
+With no option, runs type-check, build validation, and unit tests in sequence.
+
+**Direct equivalent** (from `client/static/js/`):
+```bash
+bun run type-check
+bun run test          # bun test src/__tests__/
+```
+
+**Browser/server integration** is not part of this script. Use `e2e-test.sh` and `e2e-playwright.sh` instead.
+
 **Prerequisites**: Bun runtime installed for client-side testing
 
 
@@ -366,8 +376,12 @@ sudo systemctl start arkfile
 # Alpine Linux compatibility
 ./scripts/testing/alpine-build-test.sh
 
-# TypeScript testing
+# TypeScript unit tests (type-check + build + bun)
 ./scripts/testing/test-typescript.sh
+
+# End-to-end integration (CLI + server; run after dev-reset.sh)
+./scripts/testing/e2e-test.sh
+./scripts/testing/e2e-playwright.sh
 ```
 
 ### Maintenance

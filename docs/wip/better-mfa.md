@@ -1,10 +1,10 @@
 # Better MFA: Hardware Security Keys, Unified Credentials, and Recovery
 
-This document plans the Multi-Factor Authentication enhancement for Arkfile: hardware security key support (YubiKey, Nitrokey 3), a greenfield migration from the TOTP-specific tables to a unified MFA credential model, admin-assisted recovery, CLI parity with the browser, Tor Browser considerations, Tier-3 key rotation hardening, and supporting user documentation.
+This document plans the Multi-Factor Authentication enhancement for Arkfile: hardware security key support (YubiKey, Nitrokey 3), a greenfield migration from the TOTP-specific tables to a unified MFA credential model, admin bootstrap MFA setup via `arkfile-admin` on the server host (including security keys on local deploy), admin-assisted recovery, end-user CLI/browser parity, Tor Browser considerations, Tier-3 key rotation hardening, and supporting user documentation.
 
 ## Goals
 
-Arkfile currently requires TOTP as the sole second factor. This project adds FIDO2/WebAuthn hardware security keys as an alternative second factor (user picks one at enrollment in the first release), preserves backup codes as the primary self-service recovery path for all MFA types, adds an admin CLI command to reset a user's MFA, improves sitewide visibility of contact/admin-contact affordances, completes the Tier-3 user-secret-master rotation script so it re-encrypts all dependent database rows, and achieves functional equivalence between the TypeScript browser client and the `arkfile-client` Go CLI for MFA enrollment and login.
+Arkfile currently requires TOTP as the sole second factor. This project adds FIDO2/WebAuthn hardware security keys as an alternative second factor (user picks one at enrollment in the first release), preserves backup codes as the primary self-service recovery path for all MFA types, adds an admin CLI command to reset a user's MFA, improves sitewide visibility of contact/admin-contact affordances, completes the Tier-3 user-secret-master rotation script so it re-encrypts all dependent database rows, and achieves functional equivalence between the TypeScript browser client and the `arkfile-client` Go CLI for MFA enrollment and login. Admin bootstrap is equally in scope: after `arkfile-admin bootstrap` on a new instance, the operator must be able to complete initial MFA setup with either TOTP or a hardware security key via `arkfile-admin` on the server host — not through the website. Administrators do not perform admin functions in the web app; all privileged operations, including bootstrap, MFA enrollment, and ongoing administration, run through `arkfile-admin` on the instance itself.
 
 ## Non-goals (first release)
 
@@ -34,7 +34,9 @@ Gaps and issues identified before implementation begins:
 
 **Tier-3 rotation script incomplete.** `scripts/maintenance/rotate-user-secret-master.sh` backs up and replaces `user-secret-master.bin` but does not re-encrypt database rows. After rotation, all MFA secrets and contact info encrypted under the old master become undecryptable. Replacement is a two-phase `arkfile-admin` flow (`prepare` while server is up with full admin + 2FA auth, `apply` offline with server stopped and a signed mandate). See dedicated section below.
 
-**Test gaps.** Unit tests for TOTP crypto/lockout are good (`auth/totp_test.go`). JWT audience tests are good. Missing: HTTP integration tests for both backup-code paths (path A and path B); e2e coverage for both paths in `e2e-test.sh`; e2e admin MFA reset (feature absent).
+**Admin bootstrap MFA is TOTP-only today.** `arkfile-admin setup-mfa` calls only `/api/mfa/setup` and `/api/mfa/verify` (TOTP). Deploy runbooks in `local-deploy.sh`, `test-deploy.sh`, and `prod-deploy.sh` echo that TOTP-only flow. There is no method picker, no WebAuthn/FIDO2 path, and no documented alternative for operators who want a security key at first boot. Admin MFA must remain `arkfile-admin`-only (not the website). This must change before WebAuthn ships; see the arkfile-admin bootstrap section below.
+
+**Test gaps.** Unit tests for TOTP crypto/lockout are good (`auth/totp_test.go`). JWT audience tests are good. Missing: HTTP integration tests for both backup-code paths (path A and path B); e2e coverage for both paths in `e2e-test.sh`; e2e admin MFA reset (feature absent); admin bootstrap MFA with a security key (feature absent).
 
 **Monolith file.** Split `auth/totp.go` during migration into focused files (e.g. `auth/mfa_totp.go`, `auth/mfa_backup_codes.go`, shared lockout helpers) rather than carrying a 1,100-line file forward.
 
@@ -106,11 +108,12 @@ Rename Tier-3 HKDF purpose from `totp_user` to `mfa_user` in `crypto/totp_keys.g
 | HTTP handlers | `handlers/auth.go`, `handlers/auth_test.go`, `handlers/admin.go`, `handlers/bootstrap.go`, `handlers/admin_auth.go`, `handlers/export.go`, `handlers/rate_limiting.go`, `handlers/files.go` |
 | Crypto | `crypto/totp_keys.go` → `crypto/mfa_keys.go`, `crypto/user_secret_master.go` |
 | CLI | `cmd/arkfile-client/main.go`, `cmd/arkfile-client/commands.go`, `cmd/arkfile-admin/main.go` |
+| Deploy runbooks | `scripts/local-deploy.sh`, `scripts/test-deploy.sh`, `scripts/prod-deploy.sh` (post-bootstrap MFA echoes) |
 | Browser | `client/static/js/src/auth/{totp,totp-setup,login,register}.ts`, `app.ts`, `utils/auth.ts`, `ui/sections.ts`, `files/list.ts`, `types/api.d.ts`, `index.html` |
 | Ops | `scripts/maintenance/rotate-user-secret-master.sh`, `scripts/testing/e2e-test.sh`, `scripts/testing/e2e-playwright.ts`, `scripts/testing/totp-generator.go` |
 | Startup | `main.go`, `auth/dev_admin.go` |
 | Docs | `docs/api.md`, `docs/security.md`, `docs/user-faq.md` |
-| New (later) | `auth/mfa_webauthn.go`, browser WebAuthn module, FIDO2 code in `arkfile-client` |
+| New (later) | `auth/mfa_webauthn.go`, browser WebAuthn module, shared FIDO2/CTAP2 code used by `arkfile-client` and `arkfile-admin` |
 
 ## Server implementation
 
@@ -128,7 +131,7 @@ Admin reset (`POST /api/admin/users/:username/reset-mfa`) must call existing for
 
 ## Browser client (TypeScript)
 
-Use `@simplewebauthn/browser` (or equivalent) for WebAuthn ceremonies. Enrollment: after registration OPAQUE, user chooses TOTP or Security Key. Security key path calls begin/finish registration endpoints. Login: after OPAQUE, begin/finish authentication with the key.
+Use `@simplewebauthn/browser` (or equivalent) for WebAuthn ceremonies. Enrollment: after registration OPAQUE, end users choose TOTP or Security Key. Security key path calls begin/finish registration endpoints. Login: after OPAQUE, begin/finish authentication with the key. The browser MFA UI is for ordinary user accounts only; admin bootstrap and admin MFA setup are out of scope for the web client (see arkfile-admin bootstrap section).
 
 MFA login UI must expose both backup-code paths (path A one-shot sign-in and path B re-enroll). Path B UI exists today; add path A during Phase 2. Update all labels from TOTP-specific wording to generic MFA wording.
 
@@ -140,7 +143,17 @@ Use only strictly typed TypeScript in new/modified code and dependencies as much
 
 Hardware key support in `arkfile-client` is equal priority to the browser. The CLI must support the same enrollment and login ceremonies via the same API endpoints. Implement a FIDO2 client using direct USB HID CTAP2. Candidate library: `github.com/mohammadv184/go-fido2` (CGO-free, aligns with static builds); evaluate in depth before landing on this library (is it secure, trusted, used in at least 3 other significant open source projects, etc.). Evaluate `keys-pub/go-libfido2` if system `libfido2` is acceptable on target platforms.
 
-Commands: `setup-mfa` (interactive, choose `totp` or `security key`), `login` (existing flow extended with security key auth step and path A backup login via `is_backup: true`). Path B remains `recover-mfa` (rename from `recover-totp`). Add path A to `login` if not present today (interactive or `--backup-code` flag at MFA step). Mirror `arkfile-admin setup-totp` patterns for MFA setup until admin CLI is also renamed.
+Commands: `setup-mfa` (interactive, choose `totp` or `security key`), `login` (existing flow extended with security key auth step and path A backup login via `is_backup: true`). Path B remains `recover-mfa` (rename from `recover-totp`). Add path A to `login` if not present today (interactive or `--backup-code` flag at MFA step). Share the evaluated FIDO2 library and ceremony helpers with `arkfile-admin` so both CLIs use the same CTAP2 stack.
+
+## arkfile-admin: bootstrap MFA setup
+
+The entire admin lifecycle is server-side CLI only. Account creation (`arkfile-admin bootstrap` with the bootstrap token), MFA enrollment (`setup-mfa` after bootstrap), authentication (`login`), and every privileged command thereafter run through `arkfile-admin` on the instance host. The website is not an admin console and must not be documented or implemented as a fallback for bootstrap MFA. This is a hard acceptance criterion for shipping WebAuthn, not an optional parity stretch goal.
+
+`arkfile-admin setup-mfa` must grow an interactive method picker and a security-key branch that drives the same begin/finish registration API as the browser uses for end users. `arkfile-admin login` must complete the matching authentication ceremony when the enrolled method is `webauthn`, including path A backup login where applicable. Reuse the FIDO2 library chosen for `arkfile-client` (direct USB HID CTAP2; no browser WebAuthn dependency) in a small shared package or internal module so static builds and security review happen once. Emit backup codes from the setup response the same way as `arkfile-client` automation (`BACKUP_CODE_*` when `--show-secret` or equivalent is inappropriate for WebAuthn-only flows). Because CTAP2 runs on the machine where `arkfile-admin` executes, the security key must be reachable from that host — typically plugged into the server or forwarded to it, not into the operator's desktop browser.
+
+Deploy runbooks must stop implying TOTP-only admin setup. Replace "Setup TOTP" echoes with generic MFA wording and document both methods. Fix stale identifiers while touching these files (`verify-login` in `local-deploy.sh` should be `login`; `etc/keys/totp` chmod lines are legacy path names). Hardware-key bootstrap is most practical on **`local-deploy.sh`**: the operator typically runs deploy and `arkfile-admin` on the same machine that has the USB port, so `setup-mfa` with a plugged-in key is the primary documented path for local instances.
+
+**Remote VPS deploys (`test-deploy.sh`, `prod-deploy.sh`).** Operators usually SSH into a headless VPS. USB security keys are attached to the operator's workstation, not the remote host, so `arkfile-admin setup-mfa` on the VPS cannot see the key unless the operator deliberately forwards USB to the server (USB/IP, `usbip`, serial console with local KVM, etc.). Whether that works is environment-specific and should not be assumed in the default runbook. For test/prod, treat **TOTP via `arkfile-admin setup-mfa` on the VPS** as the default practical path. When a security-key-first admin is required on a remote instance, document only CLI-viable options: deploy on hardware the operator physically controls (`local-deploy.sh` or equivalent, key on that host), attach the key directly to the VPS if it has a USB port and the operator has physical or out-of-band console access, or use advanced USB forwarding to the VPS with an explicit warning that this is operator-managed and untested as a universal procedure. Do not document browser-based admin MFA setup as an alternative — it violates the admin model. Shipping WebAuthn does not require solving universal SSH USB passthrough; it does require that `arkfile-admin` supports both methods wherever the key is reachable from the server host.
 
 ## arkfile-admin: reset-user-mfa
 
@@ -264,7 +277,7 @@ HTTP integration tests: path A (`/api/mfa/auth` with `is_backup: true` issues fu
 
 `e2e-test.sh`: MFA path on renamed endpoints; path A emergency backup login; path B full backup-code re-enrollment (recover + reset + login with new second factor); admin `reset-user-mfa` flow; `arkfile-client` path A and path B.
 
-Hardware integration tests (manual or tagged integration): YubiKey 5, Nitrokey 3C, Firefox, Chromium, `arkfile-client` on Linux. Tor Browser: TOTP login e2e; confirm WebAuthn unavailable message or graceful fallback when user enrolled with HW key.
+Hardware integration tests (manual or tagged integration): YubiKey 5, Nitrokey 3C, Firefox, Chromium, `arkfile-client` and `arkfile-admin` on Linux. Include at least one manual or tagged run of the post-bootstrap admin flow: `bootstrap` → `setup-mfa` with a security key → `login`, mirroring `local-deploy.sh` step 3. Tor Browser: TOTP login e2e; confirm WebAuthn unavailable message or graceful fallback when user enrolled with HW key.
 
 Playwright: update MFA selectors and contact UI visibility on homepage and logged-in views; FAQ footer link.
 
@@ -274,7 +287,9 @@ Tier-3 rotation: unit test re-encrypt loop and mandate issue/verify/reject; manu
 
 `docs/user-faq.md`: Q&A only; all answers plain paragraphs; no special formatting; no emojis. Cover recovery order, both backup-code paths (one-shot login and re-enrollment), admin reset, Tor + TOTP vs HW key, optional contact info, CLI vs browser.
 
-`docs/security.md` and `docs/api.md`: update for unified MFA model, renamed endpoints, JWT audiences, and Tier-3 rotation procedure.
+`docs/security.md` and `docs/api.md`: update for unified MFA model, renamed endpoints, JWT audiences, Tier-3 rotation procedure, and admin bootstrap MFA via `arkfile-admin` only (local vs remote VPS, TOTP default on headless VPS).
+
+Deploy runbook echoes in `scripts/local-deploy.sh`, `scripts/test-deploy.sh`, and `scripts/prod-deploy.sh`: MFA method choice at bootstrap, backup-code reminder, and remote-VPS notes per the arkfile-admin bootstrap section.
 
 `client/static/index.html` feature card: update Mandatory 2FA copy to mention TOTP or security key.
 
@@ -292,9 +307,9 @@ Use whole phase numbers only. Each phase should leave tests green before startin
 
 **Phase 5:** Admin MFA reset — **full reset only** (v1 has one credential per user). `POST /api/admin/users/:username/reset-mfa` and `arkfile-admin reset-user-mfa --username USER --confirm`: delete all credentials, backup codes, usage logs; force-logout; audit log; contact-info display and `--acknowledge-no-contact-info` when empty. Design API/CLI with optional future `credential_id` / `--credential-id` / `--label` for Phase 9 credential-scoped reset without breaking changes. Admin handler tests and e2e coverage.
 
-**Phase 6:** WebAuthn server and browser client. `go-webauthn/webauthn` registration/auth begin/finish endpoints; implement WebAuthn `credential_data` read-modify-write and signCount verification; enrollment UI method picker (TOTP or security key, one method only); backup codes on both paths; Tor warning in UI; `@simplewebauthn/browser` integration.
+**Phase 6:** WebAuthn server and browser client (end users only). `go-webauthn/webauthn` registration/auth begin/finish endpoints; implement WebAuthn `credential_data` read-modify-write and signCount verification; enrollment UI method picker (TOTP or security key, one method only); backup codes on both paths; Tor warning in UI; `@simplewebauthn/browser` integration.
 
-**Phase 7:** `arkfile-client` FIDO2 parity. Library evaluation (`go-fido2` vs `go-libfido2`); `setup-mfa` command; extend `login` for security key auth step; same API endpoints as browser.
+**Phase 7:** CLI FIDO2 parity for `arkfile-client` and `arkfile-admin`. Library evaluation (`go-fido2` vs `go-libfido2`); shared CTAP2 helpers; `setup-mfa` method picker and security-key enrollment; extend `login` for security-key auth and path A backup login; same API endpoints as browser. Update deploy runbook echoes — primarily `local-deploy.sh` for hardware-key bootstrap on the deploy host; `test-deploy.sh` and `prod-deploy.sh` document TOTP-on-VPS as the default remote path and note USB-to-server constraints for security keys. Do not ship Phase 6 without Phase 7 admin `setup-mfa`/`login` parity, or operators on local deploys would still be forced to TOTP at bootstrap.
 
 **Phase 8:** Sitewide Contact Admin + FAQ footer; fix admin-contacts API consumption in `list.ts`; MFA login recovery hint; publish FAQ page from `docs/user-faq.md`; update homepage feature card.
 

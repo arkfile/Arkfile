@@ -694,6 +694,9 @@ func handleSetupTOTPCommand(client *HTTPClient, config *ClientConfig, args []str
 
 	if *showSecret {
 		fmt.Printf("TOTP_SECRET:%s\n", secret)
+		if backupCodes, ok := setupResp.Data["backup_codes"].([]interface{}); ok {
+			printAutomationBackupCodes(backupCodes)
+		}
 		return nil
 	}
 
@@ -711,6 +714,22 @@ func handleSetupTOTPCommand(client *HTTPClient, config *ClientConfig, args []str
 	}
 
 	return verifyTOTP(client, config, session, token, strings.TrimSpace(code))
+}
+
+// printAutomationBackupCodes emits machine-readable backup code lines for e2e/scripts.
+func printAutomationBackupCodes(backupCodes []interface{}) {
+	for i, c := range backupCodes {
+		codeStr, ok := c.(string)
+		if !ok {
+			continue
+		}
+		switch i {
+		case 0:
+			fmt.Printf("BACKUP_CODE_0:%s\n", codeStr)
+		case 1:
+			fmt.Printf("BACKUP_CODE_1:%s\n", codeStr)
+		}
+	}
 }
 
 func verifyTOTP(client *HTTPClient, config *ClientConfig, session *AuthSession, token, code string) error {
@@ -736,8 +755,11 @@ func verifyTOTP(client *HTTPClient, config *ClientConfig, session *AuthSession, 
 		fmt.Println("\n=== BACKUP CODES ===")
 		fmt.Println("SAVE THESE CODES IN A SAFE PLACE!")
 		fmt.Println("--------------------")
+		printAutomationBackupCodes(backupCodes)
 		for _, c := range backupCodes {
-			fmt.Println(c)
+			if codeStr, ok := c.(string); ok {
+				fmt.Println(codeStr)
+			}
 		}
 		fmt.Println("--------------------")
 	}
@@ -820,6 +842,7 @@ func handleRecoverTOTPCommand(client *HTTPClient, config *ClientConfig, args []s
 
 	fmt.Println("\n=== TOTP Reset Complete! ===")
 	fmt.Println("Two-Factor Authentication has been reset.")
+	fmt.Printf("TOTP_SECRET:%s\n", secret)
 	fmt.Println("1. Open your authenticator app")
 	fmt.Println("2. Add a new manual account with this secret:")
 	fmt.Printf("   Secret: %s\n", secret)
@@ -829,7 +852,12 @@ func handleRecoverTOTPCommand(client *HTTPClient, config *ClientConfig, args []s
 		fmt.Println("\n=== FRESH BACKUP CODES ===")
 		fmt.Println("SAVE THESE FRESH CODES IN A SAFE PLACE!")
 		fmt.Println("--------------------")
-		for _, c := range backupCodes {
+		for i, c := range backupCodes {
+			if i == 0 {
+				if codeStr, ok := c.(string); ok {
+					fmt.Printf("BACKUP_CODE_0:%s\n", codeStr)
+				}
+			}
 			fmt.Println(c)
 		}
 		fmt.Println("--------------------")
@@ -846,6 +874,8 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 	keyTTL := fs.Int("key-ttl", DefaultKeyTTLHours, "Account key TTL in hours (1-4, default 1)")
 	totpCode := fs.String("totp-code", "", "TOTP code for non-interactive login")
 	totpSecret := fs.String("totp-secret", "", "TOTP secret — CLI generates the code internally (for scripted/test use)")
+	backupCode := fs.String("backup-code", "", "10-character backup code for one-shot emergency login")
+	deferMFA := fs.Bool("defer-mfa", false, "Stop after OPAQUE login with MFA challenge pending (save temp_token only)")
 	nonInteractive := fs.Bool("non-interactive", false, "Don't prompt for input")
 	cacheKey := fs.Bool("cache-key", false, "Cache account key in agent (skips prompt)")
 	noCacheKey := fs.Bool("no-cache-key", false, "Do not cache account key in agent (skips prompt)")
@@ -928,39 +958,63 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 		return fmt.Errorf("OPAQUE authentication finalization failed: %w", err)
 	}
 
-	// Handle TOTP
+	// Handle MFA second factor
 	if loginResp.RequiresMFA {
-		var userTotpCode string
-		if *totpCode != "" {
-			// Explicit code provided
-			userTotpCode = *totpCode
+		if *deferMFA {
+			session := &AuthSession{
+				Username:       *usernameFlag,
+				TempToken:      loginResp.TempToken,
+				ServerURL:      config.ServerURL,
+				SessionCreated: time.Now(),
+				ExpiresAt:      time.Now().Add(15 * time.Minute),
+			}
+			clearBytes(password)
+			if *saveSession {
+				if err := saveAuthSession(session, config.TokenFile); err != nil {
+					return fmt.Errorf("failed to save MFA-pending session: %w", err)
+				}
+			}
+			fmt.Println("MFA challenge pending; session saved with temp token.")
+			return nil
+		}
+
+		var mfaCode string
+		useBackup := false
+
+		if *backupCode != "" {
+			if len(*backupCode) != 10 {
+				clearBytes(password)
+				return fmt.Errorf("backup code must be exactly 10 characters")
+			}
+			mfaCode = *backupCode
+			useBackup = true
+		} else if *totpCode != "" {
+			mfaCode = *totpCode
 		} else if *totpSecret != "" {
-			// Secret provided — generate code internally (waits for clean TOTP window)
 			code, err := generateTOTPCode(*totpSecret)
 			if err != nil {
 				clearBytes(password)
 				return fmt.Errorf("failed to generate TOTP code from secret: %w", err)
 			}
-			userTotpCode = code
+			mfaCode = code
 			logVerbose("Generated TOTP code from secret")
 		} else if *nonInteractive {
 			clearBytes(password)
-			return fmt.Errorf("non-interactive mode: --totp-code or --totp-secret required")
+			return fmt.Errorf("non-interactive mode: --totp-code, --totp-secret, or --backup-code required")
 		} else {
-			fmt.Print("Enter TOTP code: ")
+			fmt.Print("Enter TOTP code (or backup code with --backup-code): ")
 			reader := bufio.NewReader(os.Stdin)
 			totpInput, err := reader.ReadString('\n')
 			if err != nil {
 				clearBytes(password)
 				return fmt.Errorf("failed to read TOTP code: %w", err)
 			}
-			userTotpCode = strings.TrimSpace(totpInput)
+			mfaCode = strings.TrimSpace(totpInput)
 		}
 
 		totpResp, err := client.makeRequest("POST", "/api/mfa/auth", map[string]interface{}{
-			"code":       userTotpCode,
-			"sessionKey": loginResp.SessionKey,
-			"isBackup":   false,
+			"code":      mfaCode,
+			"is_backup": useBackup,
 		}, loginResp.TempToken)
 		if err != nil {
 			clearBytes(password)

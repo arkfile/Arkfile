@@ -535,3 +535,89 @@ func TestRequiresMFAFromToken_HandlesMissingClaims(t *testing.T) {
 		assert.False(t, RequiresMFAFromToken(c))
 	})
 }
+
+func TestResetJWTMiddleware_AcceptsResetAudience(t *testing.T) {
+	e := echo.New()
+	handler := ResetJWTMiddleware()(func(c echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	})
+
+	resetToken, _, err := GenerateTemporaryResetToken("alice")
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/mfa/reset", nil)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+resetToken)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err = handler(c)
+	assert.NoError(t, err)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestResetJWTMiddleware_RejectsMFAAudience(t *testing.T) {
+	e := echo.New()
+	handler := ResetJWTMiddleware()(func(c echo.Context) error {
+		return c.String(http.StatusOK, "should not reach")
+	})
+
+	mfaToken, _, err := GenerateTemporaryMFAToken("alice")
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/mfa/reset", nil)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+mfaToken)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err = handler(c)
+	assert.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
+}
+
+func TestMFAResetJWTMiddleware_AcceptsResetAndFullTokens(t *testing.T) {
+	e := echo.New()
+	handler := MFAResetJWTMiddleware()(func(c echo.Context) error {
+		return c.String(http.StatusOK, "ok")
+	})
+
+	t.Run("reset-tier", func(t *testing.T) {
+		resetToken, _, err := GenerateTemporaryResetToken("alice")
+		assert.NoError(t, err)
+		req := httptest.NewRequest(http.MethodPost, "/api/mfa/reset", nil)
+		req.Header.Set(echo.HeaderAuthorization, "Bearer "+resetToken)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		assert.NoError(t, handler(c))
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+
+	t.Run("full-tier", func(t *testing.T) {
+		fullToken := mintFullToken(t, "alice", time.Hour)
+		req := httptest.NewRequest(http.MethodPost, "/api/mfa/reset", nil)
+		req.Header.Set(echo.HeaderAuthorization, "Bearer "+fullToken)
+		rec := httptest.NewRecorder()
+		c := e.NewContext(req, rec)
+		assert.NoError(t, handler(c))
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+}
+
+func TestMFAResetJWTMiddleware_RejectsTempMFAAudience(t *testing.T) {
+	e := echo.New()
+	handler := MFAResetJWTMiddleware()(func(c echo.Context) error {
+		return c.String(http.StatusOK, "should not reach")
+	})
+
+	mfaToken, _, err := GenerateTemporaryMFAToken("alice")
+	assert.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/mfa/reset", nil)
+	req.Header.Set(echo.HeaderAuthorization, "Bearer "+mfaToken)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err = handler(c)
+	assert.Error(t, err)
+}

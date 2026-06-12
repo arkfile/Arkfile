@@ -97,21 +97,26 @@ Arkfile requires a second factor for all accounts. The first release supports Ti
 | POST | `/api/mfa/setup` | Initialize TOTP setup for user account | Access |
 | POST | `/api/mfa/verify` | Complete TOTP setup by verifying a test code | Access |
 | GET | `/api/mfa/status` | Check TOTP enablement status for user | Access |
-| POST | `/api/mfa/reset` | Reset TOTP configuration | Access |
+| POST | `/api/mfa/reset` | Reset second factor after backup-code recovery | Full Access or Reset Token |
+| POST | `/api/mfa/recover-with-backup-code` | Consume backup code and issue reset token (path B step 1) | MFA Token |
 
 #### MFA Authentication (Require MFA Token)
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| POST | `/api/mfa/auth` | Complete TOTP authentication flow | MFA Token |
+| POST | `/api/mfa/auth` | Complete MFA with TOTP code or emergency backup code (`is_backup: true`) | MFA Token |
 
 #### MFA Authentication Flow
 
-When TOTP is enabled for a user account, the authentication process involves two steps:
+When MFA is enabled for a user account, the authentication process involves two steps:
 
 1. **OPAQUE Authentication**: User performs OPAQUE login via `/api/opaque/login/*`. If MFA is required, this returns a temporary MFA token and `requires_mfa: true`.
 
 2. **MFA Verification**: User provides a TOTP code via `/api/mfa/auth` using the temporary token. Upon success, this returns the full access token and refresh token.
+
+**Emergency backup code (path A):** POST `/api/mfa/auth` with `is_backup: true` and a 10-character backup code. Issues a full access token without changing the enrolled second factor.
+
+**Re-enroll with backup code (path B):** POST `/api/mfa/recover-with-backup-code` (consumes the code, returns a reset-tier token), then POST `/api/mfa/reset` with that token to receive new enrollment material and fresh backup codes.
 
 ---
 

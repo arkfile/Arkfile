@@ -3,22 +3,10 @@
 # e2e-test.sh - End-to-End Testing
 # Uses arkfile-client and arkfile-admin CLI tools
 #
-# Flow:
-#   1. Environment verification (server, CLI tools)
-#   2. Admin authentication (login with TOTP)
-#   3. Bootstrap protection (verify 2nd admin creation fails)
-#   4. Regular user registration (using arkfile-client)
-#   5. TOTP setup for regular user
-#   6. Admin user management (list-users, user-status, approve-user)
-#   7. Regular user login with TOTP
-#   8. File operations (account-password, upload/download/integrity/privacy)
-#   9. Custom-password file operations (custom-key upload/download/privacy)
-#   10. Share operations (create/access/revoke/privacy)
-#   11. Admin system status
-#   11b. Flood guard (unauthorized scanner detection)
-#   11c. Multi-backend storage (copy-file, copy-all, sync-status, verify-all)
-#   12. Cleanup
-#   13. Summary report
+# Groups (execution order is defined in main()):
+#   preflight, platform_bootstrap, user_onboarding, user_authentication,
+#   files_standard, files_custom_password, shares, admin_operations,
+#   security_rate_limits, storage_replication, billing, payments, teardown, report
 
 set -eo pipefail
 
@@ -87,8 +75,14 @@ ADMIN="$BUILD_DIR/arkfile-admin"
 # MUST be in /tmp
 TEST_DATA_DIR="/tmp/arkfile-e2e-test-data"
 mkdir -p "$TEST_DATA_DIR"
-TOTP_SECRET_FILE="$TEST_DATA_DIR/totp-secret"
+MFA_SECRET_FILE="$TEST_DATA_DIR/mfa-secret"
+BACKUP_CODE_PRIMARY_FILE="$TEST_DATA_DIR/backup-code-primary"
+BACKUP_CODE_REENROLL_FILE="$TEST_DATA_DIR/backup-code-reenroll"
+MFA_REENROLL_DONE_FILE="$TEST_DATA_DIR/mfa-reenroll-done"
 LOG_FILE="$TEST_DATA_DIR/e2e-test.log"
+# Legacy aliases (same files)
+TOTP_SECRET_FILE="$MFA_SECRET_FILE"
+BACKUP_CODE_FILE="$BACKUP_CODE_PRIMARY_FILE"
 
 # Initialize log file
 echo "=== ARKFILE E2E TEST LOG - $(date) ===" > "$LOG_FILE"
@@ -106,8 +100,8 @@ success() { echo -e "${GREEN}[OK] $1${NC}"; echo "[OK] $1" >> "$LOG_FILE"; }
 error()   { echo -e "${RED}[X] $1${NC}"; echo "[ERROR] $1" >> "$LOG_FILE"; }
 warning() { echo -e "${YELLOW}[!] $1${NC}"; echo "[WARN] $1" >> "$LOG_FILE"; }
 info()    { echo -e "${CYAN}[i] $1${NC}"; echo "[INFO] $1" >> "$LOG_FILE"; }
-section() { echo -e "\n${BLUE}$1${NC}"; echo -e "\n=== $1 ===" >> "$LOG_FILE"; }
-phase()   { echo -e "\n${CYAN}# $1${NC}\n"; echo -e "\n# $1" >> "$LOG_FILE"; }
+scenario() { echo -e "\n${BLUE}$1${NC}"; echo -e "\n=== $1 ===" >> "$LOG_FILE"; }
+group()    { echo -e "\n${CYAN}# $1${NC}\n"; echo -e "\n# $1" >> "$LOG_FILE"; }
 
 # TEST RESULT TRACKING
 
@@ -166,7 +160,7 @@ user_login_with_totp() {
     wait_for_totp_window
     
     if [ -z "$TEST_USER_TOTP_SECRET" ]; then
-        error "Missing TOTP secret from setup phase"
+        error "Missing TOTP secret from MFA enrollment"
         record_test "$test_name" "FAIL"
         return
     fi
@@ -189,6 +183,145 @@ user_login_with_totp() {
         echo "$out"
         record_test "$test_name" "FAIL"
     fi
+}
+
+user_login_with_backup_code() {
+    local test_name="$1"
+
+    if [ -z "$TEST_USER_BACKUP_CODE" ]; then
+        error "Missing backup code from MFA enrollment"
+        record_test "$test_name" "FAIL"
+        return
+    fi
+
+    local out code
+    safe_exec out code bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        --username '$TEST_USERNAME' \
+        login \
+        --backup-code '$TEST_USER_BACKUP_CODE' \
+        --save-session \
+        --cache-key"
+
+    if [ $code -eq 0 ] && echo "$out" | grep -q "Login successful"; then
+        record_test "$test_name" "PASS"
+        echo "$out"
+    else
+        error "$test_name failed with output:"
+        echo "$out"
+        record_test "$test_name" "FAIL"
+    fi
+}
+
+user_login_defer_mfa() {
+    local test_name="$1"
+    local out code
+    safe_exec out code bash -c "printf '%s\n' '$TEST_PASSWORD' | $CLIENT \
+        --server-url '$SERVER_URL' \
+        --tls-insecure \
+        --username '$TEST_USERNAME' \
+        login \
+        --defer-mfa \
+        --non-interactive \
+        --save-session"
+
+    if [ $code -eq 0 ] && echo "$out" | grep -q "MFA challenge pending"; then
+        record_test "$test_name" "PASS"
+        echo "$out"
+    else
+        error "$test_name failed with output:"
+        echo "$out"
+        record_test "$test_name" "FAIL"
+    fi
+}
+
+user_mfa_reenroll_via_backup() {
+    local test_name="$1"
+    local reenroll_code="$2"
+    local old_secret="$3"
+
+    if [ -z "$reenroll_code" ]; then
+        error "Missing re-enrollment backup code"
+        record_test "$test_name" "FAIL"
+        return 1
+    fi
+
+    local out code
+    safe_exec out code $CLIENT --server-url "$SERVER_URL" --tls-insecure \
+        recover-mfa --code "$reenroll_code"
+
+    if [ $code -ne 0 ] || ! echo "$out" | grep -q "TOTP Reset Complete"; then
+        error "$test_name failed with output:"
+        echo "$out"
+        record_test "$test_name" "FAIL"
+        return 1
+    fi
+
+    local new_secret
+    new_secret=$(echo "$out" | grep '^TOTP_SECRET:' | head -1 | cut -d':' -f2 | tr -d ' ')
+    if [ -z "$new_secret" ]; then
+        error "Failed to extract new MFA secret from recover-mfa output"
+        record_test "$test_name" "FAIL"
+        return 1
+    fi
+
+    if [ -n "$old_secret" ] && [ "$new_secret" = "$old_secret" ]; then
+        error "MFA re-enrollment did not issue a new secret"
+        record_test "MFA re-enrollment issues new secret" "FAIL"
+        return 1
+    fi
+    record_test "MFA re-enrollment issues new secret" "PASS"
+
+    export TEST_USER_TOTP_SECRET="$new_secret"
+    echo "$new_secret" > "$MFA_SECRET_FILE"
+
+    record_test "$test_name" "PASS"
+    echo "$out"
+}
+
+user_mfa_verify_after_reset() {
+    local test_name="$1"
+
+    if [ -z "$TEST_USER_TOTP_SECRET" ]; then
+        error "Missing MFA secret after reset"
+        record_test "$test_name" "FAIL"
+        return 1
+    fi
+
+    wait_for_totp_window
+    local code
+    code=$("$CLIENT" generate-totp --secret "$TEST_USER_TOTP_SECRET" 2>/dev/null)
+    if [ -z "$code" ]; then
+        error "Could not generate verification code for post-reset MFA"
+        record_test "$test_name" "FAIL"
+        return 1
+    fi
+
+    local out code_rc
+    safe_exec out code_rc \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --verify "$code"
+
+    if [ $code_rc -ne 0 ] || ! echo "$out" | grep -q "TOTP Setup Complete"; then
+        error "$test_name failed with output:"
+        echo "$out"
+        record_test "$test_name" "FAIL"
+        return 1
+    fi
+
+    local backup_code
+    backup_code=$(echo "$out" | grep '^BACKUP_CODE_0:' | head -1 | cut -d':' -f2 | tr -d ' ')
+    if [ -z "$backup_code" ]; then
+        error "Failed to extract primary backup code after MFA re-enrollment verify"
+        record_test "Backup code capture after re-enrollment" "FAIL"
+        return 1
+    fi
+
+    echo "$backup_code" > "$BACKUP_CODE_PRIMARY_FILE"
+    export TEST_USER_BACKUP_CODE="$backup_code"
+    record_test "Backup code capture after re-enrollment" "PASS"
+    record_test "$test_name" "PASS"
+    echo "$out"
 }
 
 logout_user_session() {
@@ -373,7 +506,7 @@ stop_agent() {
     warning "Agent may still be running after stop attempt"
 }
 
-# MOCK BTCPAY SERVER (phase 11e)
+# Mock BTCPay server for payments group
 
 stop_mock_btcpay_server() {
     local mock_pid="${1:-}"
@@ -437,18 +570,17 @@ start_mock_btcpay_server() {
 
 # TEST PHASES
 
-# Phase 1: Environment Verification
-phase_1_environment_verification() {
-    phase "1: ENVIRONMENT VERIFICATION"
+run_preflight() {
+    group "Preflight"
 
-    section "Checking server connectivity"
+    scenario "Checking server connectivity"
     if curl -sk --connect-timeout 5 "$SERVER_URL/health" >/dev/null 2>&1; then
         record_test "Server connectivity" "PASS"
     else
         record_test "Server connectivity" "FAIL"
     fi
 
-    section "Checking CLI tools"
+    scenario "Checking CLI tools"
 
     if [ -x "$CLIENT" ]; then
         record_test "arkfile-client available" "PASS"
@@ -467,19 +599,17 @@ phase_1_environment_verification() {
     success "Environment verification complete"
 }
 
-# Phase 2: Admin Authentication
-phase_2_admin_authentication() {
-    phase "2: ADMIN AUTHENTICATION"
+run_platform_bootstrap_admin_login() {
+    group "Platform bootstrap — admin login"
 
-    section "Authenticating admin user: $ADMIN_USERNAME"
+    scenario "Authenticating admin user: $ADMIN_USERNAME"
     admin_login_with_totp "Admin login"
 
     success "Admin authentication complete"
 }
 
-# Phase 3: Bootstrap Protection
-phase_3_bootstrap_protection() {
-    phase "3: BOOTSTRAP PROTECTION"
+run_platform_bootstrap_protection() {
+    group "Platform bootstrap — bootstrap protection"
 
     if [ -z "$BOOTSTRAP_TOKEN" ]; then
         warning "Skipping Bootstrap Protection test (no token provided)"
@@ -487,7 +617,7 @@ phase_3_bootstrap_protection() {
         return 0
     fi
 
-    section "Attempting to create second admin with bootstrap token"
+    scenario "Attempting to create second admin with bootstrap token"
 
     local boot_output
     local boot_exit_code
@@ -509,11 +639,10 @@ phase_3_bootstrap_protection() {
     fi
 }
 
-# Phase 4: Regular User Registration
-phase_4_user_registration() {
-    phase "4: REGULAR USER REGISTRATION"
+run_user_onboarding_registration() {
+    group "User onboarding — registration"
 
-    section "Registering user: $TEST_USERNAME"
+    scenario "Registering user: $TEST_USERNAME"
 
     local reg_output
     local reg_exit_code
@@ -548,27 +677,31 @@ phase_4_user_registration() {
     success "User registration complete"
 }
 
-# Phase 5: TOTP Setup for Regular User
-phase_5_totp_setup() {
-    phase "5: TOTP SETUP FOR REGULAR USER"
+run_user_onboarding_mfa_enrollment() {
+    group "User onboarding — MFA enrollment"
 
-    section "Setting up TOTP for user: $TEST_USERNAME"
+    scenario "Setting up TOTP for user: $TEST_USERNAME"
 
-    # Idempotency: check for existing saved secret
-    if [ -f "$TOTP_SECRET_FILE" ]; then
-        local secret
-        secret=$(cat "$TOTP_SECRET_FILE")
-        if [ -n "$secret" ]; then
+    # Idempotency: check for existing saved secret and backup codes
+    if [ -f "$MFA_SECRET_FILE" ] && [ -f "$BACKUP_CODE_PRIMARY_FILE" ] && [ -f "$BACKUP_CODE_REENROLL_FILE" ]; then
+        local secret backup_code reenroll_code
+        secret=$(cat "$MFA_SECRET_FILE")
+        backup_code=$(cat "$BACKUP_CODE_PRIMARY_FILE")
+        reenroll_code=$(cat "$BACKUP_CODE_REENROLL_FILE")
+        if [ -n "$secret" ] && [ -n "$backup_code" ] && [ -n "$reenroll_code" ]; then
             export TEST_USER_TOTP_SECRET="$secret"
+            export TEST_USER_BACKUP_CODE="$backup_code"
+            export TEST_USER_BACKUP_CODE_REENROLL="$reenroll_code"
             record_test "TOTP setup initiation" "PASS"
-            info "Using existing TOTP secret: $secret"
-            success "TOTP setup phase complete (skipped - using existing secret)"
+            info "Using existing MFA secret and backup codes"
+            success "MFA enrollment complete (skipped - using existing secret)"
             return 0
         fi
     fi
 
-    # Step 1: Get the secret
-    info "Initiating TOTP setup..."
+    rm -f "$MFA_REENROLL_DONE_FILE"
+
+    info "Initiating MFA setup..."
     local setup_output
     local setup_exit_code
 
@@ -591,12 +724,34 @@ phase_5_totp_setup() {
         record_test "TOTP setup initiation" "FAIL"
     fi
 
-    echo "$secret" > "$TOTP_SECRET_FILE"
+    echo "$secret" > "$MFA_SECRET_FILE"
     export TEST_USER_TOTP_SECRET="$secret"
     record_test "TOTP setup initiation" "PASS"
     info "Got TOTP secret: $secret"
 
-    # Step 2: Verify with a code (CLI generates it internally)
+    # Backup codes are returned on setup (verify only stores hashes server-side).
+    local backup_code reenroll_code
+    backup_code=$(echo "$setup_output" | grep '^BACKUP_CODE_0:' | head -1 | cut -d':' -f2 | tr -d ' ')
+    reenroll_code=$(echo "$setup_output" | grep '^BACKUP_CODE_1:' | head -1 | cut -d':' -f2 | tr -d ' ')
+    if [ -z "$backup_code" ]; then
+        error "Failed to extract primary backup code from setup output"
+        record_test "Backup code capture" "FAIL"
+    else
+        echo "$backup_code" > "$BACKUP_CODE_PRIMARY_FILE"
+        export TEST_USER_BACKUP_CODE="$backup_code"
+        record_test "Backup code capture" "PASS"
+        info "Saved primary backup code for one-shot login test"
+    fi
+    if [ -z "$reenroll_code" ]; then
+        error "Failed to extract re-enrollment backup code from setup output"
+        record_test "Re-enrollment backup code capture" "FAIL"
+    else
+        echo "$reenroll_code" > "$BACKUP_CODE_REENROLL_FILE"
+        export TEST_USER_BACKUP_CODE_REENROLL="$reenroll_code"
+        record_test "Re-enrollment backup code capture" "PASS"
+    fi
+
+    # Verify enrollment with a TOTP code (CLI generates it internally)
     local verify_output
     local verify_exit_code
 
@@ -624,15 +779,12 @@ phase_5_totp_setup() {
         record_test "TOTP verification" "FAIL"
     fi
 
-    success "TOTP setup phase complete"
+    success "MFA enrollment complete"
 }
 
-# Phase 6: Admin User Management
-phase_6_admin_approval() {
-    phase "6: ADMIN USER MANAGEMENT"
-
-    # 6.1: List all users
-    section "Listing all users (admin)"
+run_user_onboarding_admin_approval() {
+    group "User onboarding — admin approval"
+    scenario "Listing all users (admin)"
 
     local list_users_output
     local list_users_exit_code
@@ -648,9 +800,7 @@ phase_6_admin_approval() {
         echo "$list_users_output"
         record_test "Admin list-users" "FAIL"
     fi
-
-    # 6.2: Get user status
-    section "Getting user status for: $TEST_USERNAME"
+    scenario "Getting user status for: $TEST_USERNAME"
 
     local user_status_output
     local user_status_exit_code
@@ -667,9 +817,7 @@ phase_6_admin_approval() {
         echo "$user_status_output"
         record_test "Admin user-status" "FAIL"
     fi
-
-    # 6.3: Approve user
-    section "Approving user via admin: $TEST_USERNAME"
+    scenario "Approving user via admin: $TEST_USERNAME"
 
     local approve_output
     local approve_exit_code
@@ -701,21 +849,42 @@ phase_6_admin_approval() {
     success "User approval complete"
 }
 
-# Phase 7: Regular User Login with TOTP
-phase_7_user_login() {
-    phase "7: REGULAR USER LOGIN WITH TOTP"
+run_user_authentication() {
+    group "User authentication"
 
-    section "Logging in as user: $TEST_USERNAME"
-    user_login_with_totp "User login"
-    
-    # Verify agent started automatically in the background
+    if [ -f "$MFA_REENROLL_DONE_FILE" ]; then
+        info "MFA re-enrollment already completed; loading saved credentials"
+        if [ -f "$MFA_SECRET_FILE" ]; then
+            export TEST_USER_TOTP_SECRET="$(cat "$MFA_SECRET_FILE")"
+        fi
+        if [ -f "$BACKUP_CODE_PRIMARY_FILE" ]; then
+            export TEST_USER_BACKUP_CODE="$(cat "$BACKUP_CODE_PRIMARY_FILE")"
+        fi
+        record_test "MFA re-enrollment via backup code" "PASS"
+    else
+        scenario "MFA re-enrollment via backup code"
+        local old_secret="${TEST_USER_TOTP_SECRET:-}"
+        local reenroll_code="${TEST_USER_BACKUP_CODE_REENROLL:-}"
+        if [ -z "$reenroll_code" ] && [ -f "$BACKUP_CODE_REENROLL_FILE" ]; then
+            reenroll_code=$(cat "$BACKUP_CODE_REENROLL_FILE")
+        fi
+
+        logout_user_session "Logout before MFA re-enrollment"
+        user_login_defer_mfa "OPAQUE login with MFA challenge pending"
+        user_mfa_reenroll_via_backup "MFA re-enrollment via backup code" "$reenroll_code" "$old_secret"
+        user_mfa_verify_after_reset "MFA verify after re-enrollment"
+        touch "$MFA_REENROLL_DONE_FILE"
+        user_login_with_totp "Login with new MFA secret after re-enrollment"
+    fi
+
+    scenario "One-shot backup code login as $TEST_USERNAME"
+    user_login_with_backup_code "One-shot backup code login"
+
     assert_agent_running "Agent auto-start verification"
-
-    # 7b: Refresh token rotation + reuse detection (A-10)
     # Extracts the current refresh token from the session file, calls /api/refresh
     # to verify rotation works (new JWT returned), then replays the now-superseded
     # refresh token and verifies the server rejects it with 401.
-    section "7b: Refresh token rotation and reuse detection (A-10)"
+    scenario "Refresh token rotation and reuse detection"
     local session_file="$HOME/.arkfile-session.json"
     if [ -f "$session_file" ]; then
         local old_refresh_token
@@ -749,12 +918,12 @@ phase_7_user_login() {
                 record_test "Refresh token reuse rejected (401 on replay)" "FAIL"
             fi
         else
-            warning "Could not extract refresh_token from session file; skipping A-10 reuse test"
+            warning "Could not extract refresh_token from session file; skipping reuse test"
             record_test "Refresh token rotation (200 on first use)" "PASS"
             record_test "Refresh token reuse rejected (401 on replay)" "PASS"
         fi
     else
-        warning "Session file not found; skipping A-10 reuse test"
+        warning "Session file not found; skipping reuse test"
         record_test "Refresh token rotation (200 on first use)" "PASS"
         record_test "Refresh token reuse rejected (401 on replay)" "PASS"
     fi
@@ -765,21 +934,21 @@ phase_7_user_login() {
     # the test suite starts from a known-good authenticated state.
     user_login_with_totp "User re-login after rotation test"
 
-    success "User login phase complete"
+    success "User authentication complete"
 }
 
-# Global variables for file reuse between phases
+# Global variables for file reuse between groups
 UPLOADED_FILE_ID=""
 UPLOADED_FILE_SHA256=""
 
-# Custom-password file global variables (populated by phase_9)
+# Custom-password file global variables (populated by files_custom_password group)
 CUSTOM_FILE_ID=""
 CUSTOM_FILE_SHA256=""
 
-# Share D ID - share created from custom-password file (populated by phase_10)
+# Share D ID - share created from custom-password file (populated by shares group)
 SHARE_D_ID=""
 
-# Extra file IDs for multi-backend storage testing (populated by phase_8)
+# Extra file IDs for multi-backend storage testing (populated by files_standard group)
 EXTRA_FILE_A_ID=""
 EXTRA_FILE_A_SHA256=""
 EXTRA_FILE_B_ID=""
@@ -787,14 +956,11 @@ EXTRA_FILE_B_SHA256=""
 EXTRA_FILE_C_ID=""
 EXTRA_FILE_C_SHA256=""
 
-# Phase 9: Custom-Password File Operations
-phase_9_custom_password_file_operations() {
-    phase "9: CUSTOM-PASSWORD FILE OPERATIONS (account-key wrapped FEK)"
+run_files_custom_password() {
+    group "Files (custom password)"
 
     local custom_test_file="$TEST_DATA_DIR/custom_test_file.bin"
-
-    # 9.1: Generate a small test file
-    section "Generating custom-password test file (1MB, random)"
+    scenario "Generating custom-password test file (1MB, random)"
     local gen_output gen_exit_code
     safe_exec gen_output gen_exit_code \
         $CLIENT generate-test-file \
@@ -810,10 +976,8 @@ phase_9_custom_password_file_operations() {
         error "Failed to generate custom test file:"; echo "$gen_output"
         record_test "Custom test file creation" "FAIL"
     fi
-
-    # 9.2: Upload with custom password
     # CLI prompts for: custom password (once) + confirmation (once)
-    section "Uploading file with custom password"
+    scenario "Uploading file with custom password"
     local custom_upload_output custom_upload_exit_code
     safe_exec custom_upload_output custom_upload_exit_code \
         bash -c "printf '%s\n%s\n' '$CUSTOM_FILE_PASSWORD' '$CUSTOM_FILE_PASSWORD' | $CLIENT \
@@ -834,9 +998,7 @@ phase_9_custom_password_file_operations() {
         error "Custom file upload failed:"; echo "$custom_upload_output"
         record_test "Custom file upload" "FAIL"
     fi
-
-    # 9.3: Verify raw API privacy - plaintext filename must not appear in raw list output
-    section "Verifying raw API privacy for custom-password file"
+    scenario "Verifying raw API privacy for custom-password file"
     local list_raw_output list_raw_exit_code
     safe_exec list_raw_output list_raw_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --raw
@@ -847,10 +1009,8 @@ phase_9_custom_password_file_operations() {
     else
         record_test "Raw List API Privacy (custom file)" "PASS"
     fi
-
-    # 9.4: Verify custom file is accessible via normal list-files (account-key metadata context works)
     # This proves the server-side metadata record is reachable through the CLI's own decryption flow.
-    section "Verifying custom-password file is accessible via list-files"
+    scenario "Verifying custom-password file is accessible via list-files"
     local custom_list_output custom_list_exit_code
     safe_exec custom_list_output custom_list_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files
@@ -863,9 +1023,7 @@ phase_9_custom_password_file_operations() {
         echo "$custom_list_output"
         record_test "Custom file accessible via list-files" "FAIL"
     fi
-
-    # 9.5: Download with correct custom password - owner round-trip
-    section "Downloading custom-password file (correct password)"
+    scenario "Downloading custom-password file (correct password)"
     local custom_dl_file="$TEST_DATA_DIR/custom_downloaded.bin"
     local custom_dl_output custom_dl_exit_code
     safe_exec custom_dl_output custom_dl_exit_code \
@@ -882,13 +1040,9 @@ phase_9_custom_password_file_operations() {
         error "Custom file download failed:"; echo "$custom_dl_output"
         record_test "Custom file download (correct password)" "FAIL"
     fi
-
-    # 9.6: SHA-256 round-trip integrity
     assert_sha256_matches "$custom_dl_file" "$CUSTOM_FILE_SHA256" "Custom file SHA256 integrity"
     rm -f "$custom_dl_file"
-
-    # 9.7: Download with wrong custom password - must fail
-    section "Downloading custom-password file (wrong password - must fail)"
+    scenario "Downloading custom-password file (wrong password - must fail)"
     local custom_dl_bad_file="$TEST_DATA_DIR/custom_bad_dl.bin"
     local custom_dl_bad_output custom_dl_bad_exit_code
     safe_exec custom_dl_bad_output custom_dl_bad_exit_code \
@@ -909,17 +1063,14 @@ phase_9_custom_password_file_operations() {
 
     rm -f "$custom_test_file"
 
-    success "Custom-password file operations phase complete"
+    success "Custom-password file operations complete"
 }
 
-# Phase 8: File Operations
-phase_8_file_operations() {
-    phase "8: FILE OPERATIONS"
+run_files_standard() {
+    group "Files (account password)"
 
     local test_file="$TEST_DATA_DIR/test_file.bin"
-
-    # 8.1: Generate test file using arkfile-client
-    section "Generating test file (50MB, sequential pattern)"
+    scenario "Generating test file (50MB, sequential pattern)"
     local gen_output
     local gen_exit_code
 
@@ -939,9 +1090,7 @@ phase_8_file_operations() {
         echo "$gen_output"
         record_test "Test file creation" "FAIL"
     fi
-
-    # 8.2: Upload file
-    section "Uploading file (encryption handled by arkfile-client)"
+    scenario "Uploading file (encryption handled by arkfile-client)"
     local upload_output
     local upload_exit_code
 
@@ -965,9 +1114,7 @@ phase_8_file_operations() {
         echo "$upload_output"
         record_test "File upload" "FAIL"
     fi
-
-    # 8.3: List files to verify upload
-    section "Listing files to verify upload"
+    scenario "Listing files to verify upload"
     local list_output
     local list_exit_code
 
@@ -982,9 +1129,7 @@ phase_8_file_operations() {
         echo "$list_output"
         record_test "File listing verification" "FAIL"
     fi
-    
-    # 8.4: Verify raw API privacy
-    section "Verifying list-files --raw API privacy"
+    scenario "Verifying list-files --raw API privacy"
     local list_raw_output list_raw_exit_code
     safe_exec list_raw_output list_raw_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files --raw
@@ -995,9 +1140,7 @@ phase_8_file_operations() {
     else
         record_test "Raw List API Privacy" "PASS"
     fi
-
-    # 8.5: Download file
-    section "Downloading file (decryption handled by arkfile-client)"
+    scenario "Downloading file (decryption handled by arkfile-client)"
     local downloaded_file="$TEST_DATA_DIR/downloaded.bin"
     local download_output
     local download_exit_code
@@ -1017,14 +1160,10 @@ phase_8_file_operations() {
         echo "$download_output"
         record_test "File download" "FAIL"
     fi
-
-    # 8.6: Verify content integrity (SHA256 round-trip)
     assert_sha256_matches "$downloaded_file" "$UPLOADED_FILE_SHA256" "Content integrity (SHA256 round-trip)"
 
     rm -f "$downloaded_file"
-
-    # 8.7: Export as .arkbackup bundle
-    section "Exporting file as .arkbackup bundle"
+    scenario "Exporting file as .arkbackup bundle"
     local export_bundle="$TEST_DATA_DIR/e2e-export-$$.arkbackup"
     local export_result export_exit_code
     safe_exec export_result export_exit_code \
@@ -1037,8 +1176,6 @@ phase_8_file_operations() {
         error "File export failed:"; echo "$export_result"
         record_test "File export (.arkbackup)" "FAIL"
     fi
-
-    # 8.8: Verify bundle size is reasonable
     local bundle_size
     bundle_size=$(stat -c%s "$export_bundle" 2>/dev/null || echo 0)
     if [ "$bundle_size" -gt 1000 ]; then
@@ -1048,9 +1185,7 @@ phase_8_file_operations() {
         error "Bundle file too small: $bundle_size bytes"
         record_test "Bundle size check" "FAIL"
     fi
-
-    # 8.9: Offline decrypt the bundle (no network needed for decryption)
-    section "Decrypting bundle offline"
+    scenario "Decrypting bundle offline"
     local decrypt_output="$TEST_DATA_DIR/e2e-decrypt-$$.dat"
     local decrypt_result decrypt_exit_code
     safe_exec decrypt_result decrypt_exit_code \
@@ -1067,8 +1202,6 @@ phase_8_file_operations() {
         error "Offline decrypt failed:"; echo "$decrypt_result"
         record_test "Offline decrypt (.arkbackup)" "FAIL"
     fi
-
-    # 8.10: Verify decrypted file matches original plaintext
     assert_sha256_matches "$decrypt_output" "$UPLOADED_FILE_SHA256" "Offline decrypt SHA-256 integrity"
 
     local decrypted_size
@@ -1082,11 +1215,9 @@ phase_8_file_operations() {
     fi
 
     rm -f "$export_bundle" "$decrypt_output"
-
-    # 8.11: File deletion (upload a file, delete it, verify gone)
     # Uses 2MB to exercise rqlite float64 scanning (numbers > ~1M come back
     # in scientific notation; a 1024-byte file would not catch that bug).
-    section "8.11: File deletion test"
+    scenario "Delete uploaded file and verify removal"
     local delete_test_file="$TEST_DATA_DIR/delete_test.bin"
     $CLIENT generate-test-file --filename "$delete_test_file" --size 2097152 --pattern random >/dev/null 2>&1
 
@@ -1134,11 +1265,9 @@ phase_8_file_operations() {
         fi
     fi
     rm -f "$delete_test_file"
-
-    # 8.12: Duplicate upload rejection (dedup via digest cache)
     # The test file was uploaded in 8.2 and its SHA-256 is in the agent's digest cache.
     # Re-uploading the same file without --force must fail.
-    section "Re-uploading same file (dedup rejection expected)"
+    scenario "Re-uploading same file (dedup rejection expected)"
     local dedup_upload_output dedup_upload_exit_code
     safe_exec dedup_upload_output dedup_upload_exit_code \
         $CLIENT \
@@ -1161,9 +1290,7 @@ phase_8_file_operations() {
     # 8.13-8.15: Additional test files for multi-backend storage testing
     # These files persist through the test run and are available for
     # copy/verify operations between storage providers.
-
-    # 8.13: 3MB random file
-    section "8.13: Extra file A (3MB, random)"
+    scenario "Upload extra file A (3MB, random)"
     local extra_file_a="$TEST_DATA_DIR/extra_test_a.bin"
     local extra_a_gen_output extra_a_gen_code
     safe_exec extra_a_gen_output extra_a_gen_code \
@@ -1198,9 +1325,7 @@ phase_8_file_operations() {
         record_test "Extra file A upload (3MB)" "FAIL"
     fi
     rm -f "$extra_file_a"
-
-    # 8.14: 7MB sequential file
-    section "8.14: Extra file B (7MB, sequential)"
+    scenario "Upload extra file B (7MB, sequential)"
     local extra_file_b="$TEST_DATA_DIR/extra_test_b.bin"
     local extra_b_gen_output extra_b_gen_code
     safe_exec extra_b_gen_output extra_b_gen_code \
@@ -1235,9 +1360,7 @@ phase_8_file_operations() {
         record_test "Extra file B upload (7MB)" "FAIL"
     fi
     rm -f "$extra_file_b"
-
-    # 8.15: 1MB random file (small, quick copy target)
-    section "8.15: Extra file C (1MB, random)"
+    scenario "Upload extra file C (1MB, random)"
     local extra_file_c="$TEST_DATA_DIR/extra_test_c.bin"
     local extra_c_gen_output extra_c_gen_code
     safe_exec extra_c_gen_output extra_c_gen_code \
@@ -1272,13 +1395,11 @@ phase_8_file_operations() {
         record_test "Extra file C upload (1MB)" "FAIL"
     fi
     rm -f "$extra_file_c"
-
-    # 8.16: Multi-file batch upload (3 files, 16-18 MB each)
     # Exercises the new sequential multi-file upload path introduced in
     # docs/wip/general-enhancements.md item 10. File sizes span the
-    # 16 MB PlaintextChunkSize boundary to exercise both full-chunk and
+# MB PlaintextChunkSize boundary to exercise both full-chunk and
     # partial-last-chunk paths.
-    section "8.16: Multi-file batch upload (3 x 16-18 MB)"
+    scenario "Multi-file batch upload (3 x 16-18 MB)"
     local batch_file_a="$TEST_DATA_DIR/batch_a.bin"
     local batch_file_b="$TEST_DATA_DIR/batch_b.bin"
     local batch_file_c="$TEST_DATA_DIR/batch_c.bin"
@@ -1364,10 +1485,9 @@ phase_8_file_operations() {
     fi
     rm -f "$batch_file_a" "$batch_file_b" "$batch_file_c"
 
-    success "File operations phase complete"
+    success "File operations complete"
 }
 
-# Phase 10: Share Operations
 #
 # Share A: No limits (unlimited access, no expiry)
 # Share B: max_accesses=2
@@ -1375,8 +1495,8 @@ phase_8_file_operations() {
 # Share D: from custom-password-encrypted file (no expiry)
 #
 # Each share uses a unique password meeting share password requirements.
-phase_10_share_operations() {
-    phase "10: SHARE OPERATIONS"
+run_shares() {
+    group "Shares"
 
     local SHARE_A_ID=""
     local SHARE_B_ID=""
@@ -1388,9 +1508,7 @@ phase_10_share_operations() {
     fi
     record_test "Phase 8 file data available" "PASS"
     info "Using file from Phase 8: File ID=$UPLOADED_FILE_ID"
-
-    # 10.1: Create Share A - no limits (--expires 0 = no expiry)
-    section "10.1: Creating Share A (no limits)"
+    scenario "Create share without limits"
 
     local create_a_output create_a_exit_code
     safe_exec create_a_output create_a_exit_code \
@@ -1409,9 +1527,7 @@ phase_10_share_operations() {
         error "Share A creation failed:"; echo "$create_a_output"
         record_test "Share A creation (no limits)" "FAIL"
     fi
-
-    # 10.2: Create Share B - max_accesses=2
-    section "10.2: Creating Share B (max_accesses=2)"
+    scenario "Create share with max_accesses=2"
 
     local create_b_output create_b_exit_code
     safe_exec create_b_output create_b_exit_code \
@@ -1431,9 +1547,7 @@ phase_10_share_operations() {
         error "Share B creation failed:"; echo "$create_b_output"
         record_test "Share B creation (max_accesses=2)" "FAIL"
     fi
-    
-    # 10.3: Create Share C - expires_after=1m
-    section "10.3: Creating Share C (expires_after=1m)"
+    scenario "Create share with expires_after=1m"
 
     local SHARE_C_CREATED_AT
     SHARE_C_CREATED_AT=$(date +%s)
@@ -1455,10 +1569,8 @@ phase_10_share_operations() {
         error "Share C creation failed:"; echo "$create_c_output"
         record_test "Share C creation (expires_after=1m)" "FAIL"
     fi
-
-    # 10.4: Create Share D - from custom-password-encrypted file (no expiry)
     # CLI stdin order for a custom-file share: custom password first, share password second
-    section "10.4: Creating Share D (custom-password file, no expiry)"
+    scenario "Create share from custom-password file"
 
     local create_d_output create_d_exit_code
     safe_exec create_d_output create_d_exit_code \
@@ -1477,9 +1589,7 @@ phase_10_share_operations() {
         error "Share D creation failed:"; echo "$create_d_output"
         record_test "Share D creation (custom-password file)" "FAIL"
     fi
-
-    # 10.5: List shares - verify all 4 appear
-    section "10.5: Listing shares"
+    scenario "List shares"
 
     local list_shares_output list_shares_exit_code
     safe_exec list_shares_output list_shares_exit_code \
@@ -1539,9 +1649,7 @@ phase_10_share_operations() {
     # Print share list for manual inspection
     info "Share list output (10.5):"
     echo "$list_shares_output"
-
-    # 10.6: Share List Privacy Checks
-    section "10.6: Verifying share list --raw API privacy"
+    scenario "Verify share list raw API privacy"
     
     local list_shares_raw_output list_shares_raw_exit_code
     safe_exec list_shares_raw_output list_shares_raw_exit_code \
@@ -1554,9 +1662,7 @@ phase_10_share_operations() {
     else
         record_test "Raw Shares API Privacy" "PASS"
     fi
-
-    # 10.6b: unapprove-user: blocks active user, then restore approval
-    section "10.6b: unapprove-user blocks active session, approve-user restores access"
+    scenario "Unapprove user blocks session; re-approve restores access"
 
     local unapprove_out unapprove_code
     safe_exec unapprove_out unapprove_code \
@@ -1587,7 +1693,7 @@ phase_10_share_operations() {
         record_test "unapprove-user: list-files blocked after unapproval" "FAIL"
     fi
 
-    # Restore approval so the rest of the test suite (visitor tests, phase 10.14 re-login, etc.) works.
+    # Restore approval so visitor tests and later share steps work.
     local reapprove_out reapprove_code
     safe_exec reapprove_out reapprove_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -1601,13 +1707,9 @@ phase_10_share_operations() {
         echo "$reapprove_out"
         record_test "unapprove-user: approve-user restores access" "FAIL"
     fi
-
-    # 10.7: Logout for anonymous visitor tests
-    section "10.7: Logging out for anonymous visitor tests"
+    scenario "Logout for anonymous visitor tests"
     logout_user_session "Logout for visitor tests"
-
-    # 10.8: Visitor - Share A (unlimited) - should succeed
-    section "10.8: Visitor downloads Share A (unlimited)"
+    scenario "Visitor downloads unlimited share"
 
     local dl_a_file="$TEST_DATA_DIR/share_a_download.bin"
     share_download_with_password "$SHARE_A_PASSWORD" "$SHARE_A_ID" "$dl_a_file" "Visitor download Share A" "false"
@@ -1615,9 +1717,7 @@ phase_10_share_operations() {
     # Verify SHA256
     assert_sha256_matches "$dl_a_file" "$UPLOADED_FILE_SHA256" "Share A SHA256 integrity"
     rm -f "$dl_a_file"
-
-    # 10.9: Visitor - Share D (from custom-password file) - correct share password
-    section "10.9: Visitor downloads Share D (custom-password file, correct share password)"
+    scenario "Visitor downloads custom-password share"
 
     sleep 2 # Rate limit buffer
 
@@ -1627,18 +1727,14 @@ phase_10_share_operations() {
     # Verify the downloaded file matches the original custom-password file
     assert_sha256_matches "$dl_d_file" "$CUSTOM_FILE_SHA256" "Share D SHA256 integrity"
     rm -f "$dl_d_file"
-
-    # 10.10: Visitor - Share A - intentionally wrong weak password
-    section "10.10: Visitor attempts Share A with wrong weak password"
+    scenario "Visitor share download with wrong password"
     
     sleep 2 # Rate limit buffer
     
     local dl_a_bad_file="$TEST_DATA_DIR/share_a_bad.bin"
     share_download_with_password "weakpassword123" "$SHARE_A_ID" "$dl_a_bad_file" "Visitor rejected with wrong bad password" "true"
     assert_output_file_absent_or_empty "$dl_a_bad_file" "Share A bad password file hygiene"
-
-    # 10.11: Visitor - Share B (max_accesses=2) - download twice OK, 3rd fails
-    section "10.11: Visitor tests Share B (max_accesses=2)"
+    scenario "Visitor share max_accesses enforcement"
 
     # Download 1 of 2
     local dl_b1_file="$TEST_DATA_DIR/share_b_dl1.bin"
@@ -1658,9 +1754,7 @@ phase_10_share_operations() {
     local dl_b3_file="$TEST_DATA_DIR/share_b_dl3.bin"
     share_download_with_password "$SHARE_B_PASSWORD" "$SHARE_B_ID" "$dl_b3_file" "Share B download 3 rejected (max_accesses)" "true"
     assert_output_file_absent_or_empty "$dl_b3_file" "Share B rejected file hygiene"
-
-    # 10.12: Visitor - Share C (expires_after=1m) - download before expiry OK
-    section "10.12: Visitor tests Share C (expires_after=1m)"
+    scenario "Visitor share expiry enforcement"
 
     # Download before expiry - should succeed
     local dl_c1_file="$TEST_DATA_DIR/share_c_dl1.bin"
@@ -1682,20 +1776,16 @@ phase_10_share_operations() {
     local dl_c2_file="$TEST_DATA_DIR/share_c_dl2.bin"
     share_download_with_password "$SHARE_C_PASSWORD" "$SHARE_C_ID" "$dl_c2_file" "Share C download after expiry rejected" "true"
     assert_output_file_absent_or_empty "$dl_c2_file" "Share C rejected file hygiene"
-
-    # 10.13: Negative test - non-existent share
-    section "10.13: Negative test - non-existent share"
+    scenario "Non-existent share download fails"
 
     sleep 2  # Rate limit buffer
 
     share_download_with_password "$DUMMY_SHARE_PASSWORD" "$NONEXISTENT_SHARE_ID" "$TEST_DATA_DIR/nonexistent.bin" "Non-existent share rejection" "true"
     assert_output_file_absent_or_empty "$TEST_DATA_DIR/nonexistent.bin" "Non-existent share file hygiene"
-
-    # 10.13b: Share enumeration rate limiting test
     # Hit 4 unique fake share IDs via curl to trigger the 5-second delay threshold.
     # The enumeration guard tracks unique 404s per entity in a 10-minute window.
     # After 4 unique 404s, subsequent requests should be delayed (HTTP 429).
-    section "10.13b: Share enumeration rate limiting"
+    scenario "Share enumeration rate limiting"
 
     # Generate 4 unique fake 43-char base64url share IDs (matching expected format)
     local FAKE_IDS=()
@@ -1739,11 +1829,9 @@ phase_10_share_operations() {
         record_test "Share enumeration rate limiting (HTTP 429 after threshold)" "FAIL"
         error "Expected 429 on 5th probe after enumeration penalty, got HTTP $enum_code_5"
     fi
-
-    # 10.13c: Invalid download token rate limiting test
     # Use a valid share ID (Share B) with a deliberately bad download token.
     # The per-share-ID rate limiter should record failures and eventually return 429.
-    section "10.13c: Invalid download token rate limiting"
+    scenario "Invalid download token rate limiting"
 
     if [ -n "$SHARE_B_ID" ]; then
         local BAD_TOKEN
@@ -1780,9 +1868,7 @@ phase_10_share_operations() {
         warning "Share B ID not available, skipping invalid download token test"
         record_test "Invalid download token rate limiting" "SKIP"
     fi
-
-    # 10.14: Re-login, revoke Share A, verify revoked share fails
-    section "10.14: Re-authenticating to revoke Share A"
+    scenario "Re-authenticate to revoke share"
     user_login_with_totp "Re-authentication for revoke"
 
     # Revoke Share A
@@ -1805,9 +1891,7 @@ phase_10_share_operations() {
     local revoked_dl_output revoked_dl_exit_code
     share_download_with_password "$SHARE_A_PASSWORD" "$SHARE_A_ID" "$TEST_DATA_DIR/revoked.bin" "Revoked Share A download rejected" "true"
     assert_output_file_absent_or_empty "$TEST_DATA_DIR/revoked.bin" "Revoked Share A file hygiene"
-
-    # 10.15: Verify share list reflects revoked status for Share A
-    section "10.15: Verifying revoked share state in share list"
+    scenario "Verify revoked share in share list"
     local share_list_post_revoke_output share_list_post_revoke_exit_code
     safe_exec share_list_post_revoke_output share_list_post_revoke_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure share list
@@ -1828,9 +1912,7 @@ phase_10_share_operations() {
     # Print post-revoke share list for manual inspection
     info "Post-revoke share list output (10.15):"
     echo "$share_list_post_revoke_output"
-
-    # 10.16: Contact info lifecycle tests (within active user session)
-    section "10.16: Contact info - verify empty initially"
+    scenario "Contact info empty initially"
     local ci_get_empty_output ci_get_empty_code
     safe_exec ci_get_empty_output ci_get_empty_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure contact-info get
@@ -1841,7 +1923,7 @@ phase_10_share_operations() {
         record_test "contact-info get (empty)" "FAIL"
     fi
 
-    section "10.17: Contact info - set with 2 contacts (email + signal)"
+    scenario "Contact info set with two contacts"
     local CI_JSON_2='{"display_name":"Test User","contacts":[{"type":"email","value":"test@example.com"},{"type":"signal","value":"+1234567890"}],"notes":"Test notes for admin"}'
     local ci_set2_output ci_set2_code
     safe_exec ci_set2_output ci_set2_code \
@@ -1853,7 +1935,7 @@ phase_10_share_operations() {
         record_test "contact-info set (2 contacts)" "FAIL"
     fi
 
-    section "10.18: Contact info - verify 2 contacts"
+    scenario "Contact info verify two contacts"
     local ci_get2_output ci_get2_code
     safe_exec ci_get2_output ci_get2_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure contact-info get
@@ -1869,7 +1951,7 @@ phase_10_share_operations() {
     info "Contact info output (10.18):"
     echo "$ci_get2_output"
 
-    section "10.19: Contact info - update to 3 contacts (add telegram)"
+    scenario "Contact info add third contact"
     local CI_JSON_3='{"display_name":"Test User","contacts":[{"type":"email","value":"test@example.com"},{"type":"signal","value":"+1234567890"},{"type":"telegram","value":"@testuser"}],"notes":"Updated notes"}'
     local ci_set3_output ci_set3_code
     safe_exec ci_set3_output ci_set3_code \
@@ -1881,7 +1963,7 @@ phase_10_share_operations() {
         record_test "contact-info set (3 contacts)" "FAIL"
     fi
 
-    section "10.20: Contact info - verify 3 contacts"
+    scenario "Contact info verify three contacts"
     local ci_get3_output ci_get3_code
     safe_exec ci_get3_output ci_get3_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure contact-info get
@@ -1895,7 +1977,7 @@ phase_10_share_operations() {
         record_test "contact-info get (3 contacts)" "FAIL"
     fi
 
-    section "10.21: Contact info - update to 2 contacts (remove signal, keep email + telegram)"
+    scenario "Contact info remove one contact"
     local CI_JSON_FINAL='{"display_name":"Test User","contacts":[{"type":"email","value":"test@example.com"},{"type":"telegram","value":"@testuser"}],"notes":"Final notes for admin"}'
     local ci_set_final_output ci_set_final_code
     safe_exec ci_set_final_output ci_set_final_code \
@@ -1907,7 +1989,7 @@ phase_10_share_operations() {
         record_test "contact-info set (final 2 contacts)" "FAIL"
     fi
 
-    section "10.22: Contact info - verify final state (2 contacts, no signal)"
+    scenario "Contact info verify final state"
     local ci_get_final_output ci_get_final_code
     safe_exec ci_get_final_output ci_get_final_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure contact-info get
@@ -1922,12 +2004,10 @@ phase_10_share_operations() {
     fi
     info "Final contact info output (10.22):"
     echo "$ci_get_final_output"
-
-    # 10.22b: User self-revoke-all via arkfile-client revoke-all command
     # Verifies POST /api/auth/revoke-all revokes both refresh tokens and JWTs
     # (writes a user_jwt_revocations row), and that the CLI command clears the
     # local session file.
-    section "10.22b: User self-revoke-all (CLI command)"
+    scenario "User self-revoke-all via CLI"
     local pre_revoke_jwt
     pre_revoke_jwt=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
 
@@ -1955,9 +2035,7 @@ phase_10_share_operations() {
     # Re-login so the CLI session is fresh for the 10.23 logout step and
     # the post-logout rejection checks that follow.
     user_login_with_totp "User re-login after self-revoke test"
-
-    # 10.23: Explicit user logout, then verify authenticated commands fail
-    section "10.23: User logout and post-logout unauthorized-command checks"
+    scenario "User logout and post-logout command rejection"
     logout_user_session "User logout (post-revoke)"
 
     # 10.16.1: list-files must fail after logout
@@ -2013,14 +2091,13 @@ phase_10_share_operations() {
         record_test "share revoke rejected after logout" "FAIL"
     fi
 
-    success "Share operations phase complete"
+    success "Share operations complete"
 }
 
-# Phase 11: Admin System Status and Negative-Access Tests
-phase_11_admin_system_status() {
-    phase "11: ADMIN SYSTEM STATUS"
+run_admin_operations() {
+    group "Admin operations"
 
-    section "Retrieving system status via admin CLI"
+    scenario "Retrieving system status via admin CLI"
 
     local system_status_output
     local system_status_exit_code
@@ -2039,7 +2116,7 @@ phase_11_admin_system_status() {
     fi
 
     # Verify storage stats reflect uploaded files
-    # 5 files: test_file.bin (8.2) + custom (9.2) + extra A/B/C (8.13-8.15)
+# files: test_file.bin (8.2) + custom (9.2) + extra A/B/C (8.13-8.15)
     # (delete_test.bin from 8.11 was already deleted)
     if echo "$system_status_output" | grep -q "Total Files: 5"; then
         record_test "Admin system-status file count" "PASS"
@@ -2055,9 +2132,7 @@ phase_11_admin_system_status() {
     else
         record_test "Admin system-status storage size non-zero" "PASS"
     fi
-
-    # 11.1: Admin reads test user's contact info (should see final 2 contacts from phase 10)
-    section "11.1: Admin reads user contact info"
+    scenario "Admin reads user contact info"
     local admin_ci_output admin_ci_code
     safe_exec admin_ci_output admin_ci_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -2074,11 +2149,9 @@ phase_11_admin_system_status() {
     fi
     info "Admin contact info output (11.1):"
     echo "$admin_ci_output"
-
-    # 11.2: Admin cannot access user file list via user-facing client CLI
     # The admin binary has its own saved session but $CLIENT uses the user session context,
-    # which was logged out in phase 10.16. These commands must fail.
-    section "11.1: Admin cannot access user files via user client"
+    # User client was logged out earlier; these commands must fail.
+    scenario "Admin cannot access user files via user client"
     local admin_list_files_output admin_list_files_exit_code
     safe_exec admin_list_files_output admin_list_files_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure list-files
@@ -2089,9 +2162,7 @@ phase_11_admin_system_status() {
         error "Security failure: user file list accessible without valid user session!"
         record_test "Admin cannot list user files via user client" "FAIL"
     fi
-
-    # 11.2: Admin cannot download user file via user-facing client CLI
-    section "11.2: Admin cannot download user file via user client"
+    scenario "Admin cannot download user file via user client"
     local admin_download_output admin_download_exit_code
     safe_exec admin_download_output admin_download_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure \
@@ -2105,9 +2176,7 @@ phase_11_admin_system_status() {
         record_test "Admin cannot download user file via user client" "FAIL"
     fi
     rm -f "$TEST_DATA_DIR/admin_dl_attempt.bin"
-
-    # 11.3: Admin cannot access user share list via user-facing client CLI
-    section "11.3: Admin cannot access user share list via user client"
+    scenario "Admin cannot access user share list via user client"
     local admin_share_list_output admin_share_list_exit_code
     safe_exec admin_share_list_output admin_share_list_exit_code \
         $CLIENT --server-url "$SERVER_URL" --tls-insecure share list
@@ -2118,9 +2187,7 @@ phase_11_admin_system_status() {
         error "Security failure: user share list accessible without valid user session!"
         record_test "Admin cannot list user shares via user client" "FAIL"
     fi
-
-    # 11.4: Admin security-events
-    section "11.4: Admin security-events"
+    scenario "Admin security-events"
     local sec_events_output sec_events_code
     safe_exec sec_events_output sec_events_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure security-events
@@ -2132,9 +2199,7 @@ phase_11_admin_system_status() {
         echo "$sec_events_output"
         record_test "Admin security-events" "FAIL"
     fi
-
-    # 11.5: Admin list-files for test user
-    section "11.5: Admin list-files for test user"
+    scenario "Admin list-files for test user"
     local list_files_output list_files_code
     safe_exec list_files_output list_files_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -2147,9 +2212,7 @@ phase_11_admin_system_status() {
         echo "$list_files_output"
         record_test "Admin list-files (test user)" "FAIL"
     fi
-
-    # 11.6: Admin list-shares for test user
-    section "11.6: Admin list-shares for test user"
+    scenario "Admin list-shares for test user"
     local list_shares_output list_shares_code
     safe_exec list_shares_output list_shares_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -2162,9 +2225,7 @@ phase_11_admin_system_status() {
         echo "$list_shares_output"
         record_test "Admin list-shares (test user)" "FAIL"
     fi
-
-    # 11.7: Admin update-user (set is_admin=false explicitly, no-op for non-admin test user)
-    section "11.7: Admin update-user"
+    scenario "Admin update-user"
     local update_user_output update_user_code
     safe_exec update_user_output update_user_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -2177,9 +2238,7 @@ phase_11_admin_system_status() {
         echo "$update_user_output"
         record_test "Admin update-user" "FAIL"
     fi
-
-    # 11.8: Admin force-logout (test user already logged out, but tokens may still exist)
-    section "11.8: Admin force-logout"
+    scenario "Admin force-logout"
     local force_logout_output force_logout_code
     safe_exec force_logout_output force_logout_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -2192,13 +2251,11 @@ phase_11_admin_system_status() {
         echo "$force_logout_output"
         record_test "Admin force-logout" "FAIL"
     fi
-
-    # 11.8b: Post-force-logout revocation check
     # After admin force-logout the test user's JWT revocation is written to
     # user_jwt_revocations.  Any subsequent request using an old JWT must be
     # rejected with 401 by TokenRevocationMiddleware within 30 seconds.
     # We read the last known access token from the session file and replay it.
-    section "11.8b: Per-request user-wide revocation check"
+    scenario "Per-request user-wide revocation check"
     local session_file_revoke="$HOME/.arkfile-session.json"
     if [ -f "$session_file_revoke" ]; then
         local old_access_token
@@ -2226,9 +2283,7 @@ phase_11_admin_system_status() {
         warning "Session file not found; skipping revocation e2e test"
         record_test "Force-logout: per-request revocation rejects old JWT" "PASS"
     fi
-
-    # 11.9: Admin revoke-share (revoke Share D if it exists)
-    section "11.9: Admin revoke-share"
+    scenario "Admin revoke-share"
     if [ -n "$SHARE_D_ID" ]; then
         local revoke_share_output revoke_share_code
         safe_exec revoke_share_output revoke_share_code \
@@ -2246,9 +2301,7 @@ phase_11_admin_system_status() {
         info "Skipping revoke-share test (SHARE_D_ID not set)"
         record_test "Admin revoke-share" "SKIP"
     fi
-
-    # 11.10: Admin delete-file (delete custom-password file)
-    section "11.10: Admin delete-file"
+    scenario "Admin delete-file"
     if [ -n "$CUSTOM_FILE_ID" ]; then
         local delete_file_output delete_file_code
         safe_exec delete_file_output delete_file_code \
@@ -2271,19 +2324,16 @@ phase_11_admin_system_status() {
     # depends on the test user still existing after this script completes.
     # Test delete-user separately or via Go unit tests (handlers/admin_test.go).
 
-    success "Admin system status phase complete"
+    success "Admin operations complete"
 }
 
-# Phase 11b: Flood Guard (Unauthorized Request Rate Limiting)
 # Tests that entities generating excessive 401/404 responses get progressively blocked.
 # Uses a distinct User-Agent to isolate this test's entity ID from other curl calls.
-phase_11b_flood_guard() {
-    phase "11b: FLOOD GUARD (UNAUTHORIZED SCANNER DETECTION)"
+run_security_rate_limits() {
+    group "Security rate limits"
 
     local FLOOD_UA="arkfile-flood-test-scanner"
-
-    # 11b.1: Send 9 unauthenticated requests to nonexistent paths (under threshold)
-    section "11b.1: Unauthenticated probes under threshold (9 requests)"
+    scenario "Unauthenticated probes under threshold"
     local all_under_threshold=true
     for i in $(seq 1 9); do
         local probe_code
@@ -2300,9 +2350,7 @@ phase_11b_flood_guard() {
     else
         record_test "Flood guard: 9 probes under threshold (no 429)" "FAIL"
     fi
-
-    # 11b.2: Send request 10 (crosses tier 1 threshold)
-    section "11b.2: 10th probe triggers flood guard"
+    scenario "Tenth probe triggers flood guard"
     local probe_10_code
     probe_10_code=$(curl -sk -o /dev/null -w '%{http_code}' \
         -H "User-Agent: $FLOOD_UA" \
@@ -2310,9 +2358,7 @@ phase_11b_flood_guard() {
     info "Probe 10: HTTP $probe_10_code"
     # The 10th request itself may or may not get 429 (depends on whether the middleware
     # counts the response and blocks in the same request or the next). Record it.
-
-    # 11b.3: Send request 11 -- should definitely get 429 (entity is now blocked)
-    section "11b.3: 11th probe gets 429 (entity blocked)"
+    scenario "Eleventh probe gets 429 when blocked"
     local probe_11_code probe_11_headers
     probe_11_headers=$(curl -sk -D - -o /dev/null \
         -H "User-Agent: $FLOOD_UA" \
@@ -2326,9 +2372,7 @@ phase_11b_flood_guard() {
         error "Expected 429 on 11th probe, got HTTP $probe_11_code"
         record_test "Flood guard: 429 returned after threshold" "FAIL"
     fi
-
-    # 11b.4: Verify Retry-After header is present in 429 response
-    section "11b.4: Verify Retry-After header"
+    scenario "Verify Retry-After header on flood guard response"
     if echo "$probe_11_headers" | grep -qi "Retry-After"; then
         record_test "Flood guard: Retry-After header present" "PASS"
         local retry_val
@@ -2338,9 +2382,7 @@ phase_11b_flood_guard() {
         error "429 response missing Retry-After header"
         record_test "Flood guard: Retry-After header present" "FAIL"
     fi
-
-    # 11b.5: Admin verifies flood guard security event was recorded
-    section "11b.5: Admin checks security events for flood guard detection"
+    scenario "Admin verifies flood guard security event"
     local sec_flood_output sec_flood_code
     safe_exec sec_flood_output sec_flood_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -2364,15 +2406,14 @@ phase_11b_flood_guard() {
         fi
     fi
 
-    success "Flood guard phase complete"
+    success "Security rate limits complete"
 }
 
-# Phase 11c: Multi-Backend Storage Operations
 # Tests cross-provider copy and verification using the two local SeaweedFS buckets
 # configured by dev-reset.sh (seaweedfs-primary + seaweedfs-secondary).
-# Requires admin session (active from phase 2).
-phase_11c_multi_backend_storage() {
-    phase "11c: MULTI-BACKEND STORAGE OPERATIONS"
+# Requires active admin session.
+run_storage_replication() {
+    group "Storage replication"
 
     # Helper: poll task-status until completed/failed, timeout after 60s
     poll_task_status() {
@@ -2398,9 +2439,7 @@ phase_11c_multi_backend_storage() {
         echo "Task $task_id timed out after ${max_wait}s"
         return 1
     }
-
-    # 11c.1: Verify both providers detected via storage-status
-    section "11c.1: storage-status (both providers detected)"
+    scenario "Storage status shows both providers"
     local ss_output ss_code
     safe_exec ss_output ss_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure storage-status
@@ -2421,9 +2460,7 @@ phase_11c_multi_backend_storage() {
         warning "Secondary may already have files (ok if re-running without dev-reset)"
         record_test "Multi-backend: secondary starts with 0 files" "PASS"
     fi
-
-    # 11c.2: copy-file: copy one specific file to secondary
-    section "11c.2: copy-file (single file to secondary)"
+    scenario "Copy single file to secondary storage"
     if [ -z "$EXTRA_FILE_C_ID" ]; then
         error "EXTRA_FILE_C_ID not set (Phase 8.15 did not complete)"
         record_test "Multi-backend: copy-file single file" "FAIL"
@@ -2460,9 +2497,7 @@ phase_11c_multi_backend_storage() {
         error "copy-file command failed:"; echo "$cf_output"
         record_test "Multi-backend: copy-file single file" "FAIL"
     fi
-
-    # 11c.3: storage-sync-status after single copy
-    section "11c.3: storage-sync-status (1 file replicated, gaps remaining)"
+    scenario "Storage sync status after single file copy"
     local sync1_output sync1_code
     safe_exec sync1_output sync1_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure storage-sync-status
@@ -2475,9 +2510,7 @@ phase_11c_multi_backend_storage() {
         error "storage-sync-status failed:"; echo "$sync1_output"
         record_test "Multi-backend: sync-status after copy-file" "FAIL"
     fi
-
-    # 11c.4: copy-all (remaining files, skip-existing is default true)
-    section "11c.4: copy-all (remaining files to secondary)"
+    scenario "Copy all remaining files to secondary"
     local ca_output ca_code
     safe_exec ca_output ca_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -2510,9 +2543,7 @@ phase_11c_multi_backend_storage() {
         error "copy-all command failed:"; echo "$ca_output"
         record_test "Multi-backend: copy-all completed" "FAIL"
     fi
-
-    # 11c.5: storage-sync-status (all files fully replicated)
-    section "11c.5: storage-sync-status (fully replicated, no files on only one provider)"
+    scenario "Storage sync status fully replicated"
     local sync2_output sync2_code
     safe_exec sync2_output sync2_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure storage-sync-status
@@ -2525,9 +2556,7 @@ phase_11c_multi_backend_storage() {
         error "Expected 0 files on only one provider after copy-all:"; echo "$sync2_output"
         record_test "Multi-backend: fully replicated (0 gaps)" "FAIL"
     fi
-
-    # 11c.6: verify-all (HEAD check all locations)
-    section "11c.6: verify-all (integrity check across both providers)"
+    scenario "Verify-all integrity across providers"
     local va_output va_code
     safe_exec va_output va_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
@@ -2540,24 +2569,22 @@ phase_11c_multi_backend_storage() {
         record_test "Multi-backend: verify-all (0 missing)" "FAIL"
     fi
 
-    success "Multi-backend storage operations phase complete"
+    success "Storage replication complete"
 }
 
-# Phase 11d: Billing meter end-to-end
 # Requires ARKFILE_BILLING_ENABLED=true, ARKFILE_BILLING_TICK_INTERVAL=1m,
 # and ARKFILE_FREE_STORAGE_BYTES=10485760 (10 MiB) — all set by dev-reset.sh.
-# The test user has ~5 uploaded files from earlier phases, well above the
-# 10 MiB baseline, so a tick produces a non-zero accumulator immediately.
-phase_11d_billing() {
-    phase "11d: BILLING METER"
+# The test user has ~5 uploaded files from earlier groups, well above the
+# MiB baseline, so a tick produces a non-zero accumulator immediately.
+run_billing() {
+    group "Billing"
 
     # Suppress the tick-now CLI pre-flight warning so safe_exec captures clean JSON.
     export ADMIN_DEV_TEST_API_ENABLED=true
 
-    section "11d.1: Check billing price and initial gift"
+    scenario "Billing price and initial gift"
 
     # ------------------------------------------------------------------ #
-    # 11d.1: Confirm the rate is resolved and the initial gift was applied #
     # ------------------------------------------------------------------ #
     local price_out price_code
     safe_exec price_out price_code \
@@ -2574,7 +2601,7 @@ phase_11d_billing() {
         record_test "Billing show returns price info" "FAIL"
     fi
 
-    # The admin re-login at the top of each phase keeps the token fresh.
+    # Admin re-login at the top of each group keeps the token fresh.
     # Check balance via admin per-user credits endpoint.
     local credits_out credits_code
     safe_exec credits_out credits_code \
@@ -2632,9 +2659,8 @@ phase_11d_billing() {
     fi
 
     # ------------------------------------------------------------------ #
-    # 11d.2: Force a tick and verify the accumulator is populated          #
     # ------------------------------------------------------------------ #
-    section "11d.2: Tick-now (accumulator)"
+    scenario "Billing tick-now accumulator"
 
     local tick_out tick_code
     safe_exec tick_out tick_code \
@@ -2652,9 +2678,8 @@ phase_11d_billing() {
     fi
 
     # ------------------------------------------------------------------ #
-    # 11d.3: Tick-now with sweep — writes a 'usage' transaction           #
     # ------------------------------------------------------------------ #
-    section "11d.3: Tick-now with sweep → usage transaction"
+    scenario "Billing tick-now with sweep creates usage transaction"
 
     local sweep_out sweep_code
     safe_exec sweep_out sweep_code \
@@ -2695,9 +2720,8 @@ phase_11d_billing() {
     fi
 
     # ------------------------------------------------------------------ #
-    # 11d.4: Gift credits to the test user                                 #
     # ------------------------------------------------------------------ #
-    section "11d.4: Gift credits"
+    scenario "Gift credits to test user"
 
     local gift_out gift_code
     safe_exec gift_out gift_code \
@@ -2719,9 +2743,8 @@ phase_11d_billing() {
     fi
 
     # ------------------------------------------------------------------ #
-    # 11d.5: Set-price changes the derived rate                            #
     # ------------------------------------------------------------------ #
-    section "11d.5: set-price updates billing rate"
+    scenario "Set-price updates billing rate"
 
     local setprice_out setprice_code
     safe_exec setprice_out setprice_code \
@@ -2764,9 +2787,8 @@ phase_11d_billing() {
     fi
 
     # ------------------------------------------------------------------ #
-    # 11d.6: Drive balance negative; verify list-overdrawn                 #
     # ------------------------------------------------------------------ #
-    section "11d.6: Drive balance negative"
+    scenario "Drive user balance negative"
 
     # Drain the balance by ticking + sweeping several times.  Each sweep
     # deducts the unbilled accumulator; we repeat until balance < 0.
@@ -2781,7 +2803,7 @@ phase_11d_billing() {
     local max_sweeps=20
     local sweep_count=0
     local current_balance
-    current_balance="$balance"   # last known balance (positive, from 11d.1)
+    current_balance="$balance"   # last known balance (positive, from billing gift step)
 
     while [ "$sweep_count" -lt "$max_sweeps" ]; do
         safe_exec tick_out tick_code \
@@ -2831,12 +2853,11 @@ phase_11d_billing() {
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
         billing set-price 10.00 || true
 
-    info "Billing phase complete"
+    info "Billing complete"
 }
 
-# Phase 11e: Payments integration end-to-end
-phase_11e_payments() {
-    phase "11e: PAYMENTS INTEGRATION"
+run_payments() {
+    group "Payments"
 
     local e2e_script_dir mock_pid go_bin
 
@@ -2867,7 +2888,7 @@ phase_11e_payments() {
     export ARKFILE_MIN_TOP_UP_USD="0.50"
     export ARKFILE_MAX_TOP_UP_USD="1000.00"
 
-    section "11e.1: Retrieve user token and check payments status"
+    scenario "Retrieve user token and payments status"
 
     # Log in as the regular test user to ensure a fresh session and token
     user_login_with_totp "User login for payments test"
@@ -2889,7 +2910,7 @@ phase_11e_payments() {
         record_test "User credits endpoint includes payments config" "FAIL"
     fi
 
-    section "11e.2: Create invoice and check admin list"
+    scenario "Create payment invoice and admin list"
 
     # Create invoice via API
     local invoice_out invoice_code
@@ -2922,7 +2943,7 @@ phase_11e_payments() {
         record_test "Admin CLI payments list includes pending invoice" "FAIL"
     fi
 
-    section "11e.3: Simulate BTCPay webhook and verify credit balance"
+    scenario "Simulate BTCPay webhook and verify credit"
 
     # Settle the invoice by sending a signed webhook payload to /api/webhooks/btcpay
     # Payload format
@@ -2983,7 +3004,7 @@ phase_11e_payments() {
         record_test "User ledger payment row uses transaction_type payment" "FAIL"
     fi
 
-    section "11e.4: Duplicate webhook replay is idempotent"
+    scenario "Duplicate BTCPay webhook replay is idempotent"
 
     local balance_before_dup balance_after_dup
     balance_before_dup=$(echo "$credits_after_out" | jq -r '.balance_usd_microcents // 0' 2>/dev/null)
@@ -3016,16 +3037,15 @@ phase_11e_payments() {
     info "Stopping mock BTCPay server..."
     stop_mock_btcpay_server "$mock_pid"
 
-    info "Payments phase complete"
+    info "Payments complete"
 }
 
-# Phase 12: Cleanup
-phase_12_cleanup() {
-    phase "12: CLEANUP"
+run_teardown() {
+    group "Teardown"
 
-    section "Cleaning up test data"
+    scenario "Cleaning up test data"
 
-    # User was already logged out at the end of phase 10 (section 10.16).
+    # User was already logged out at the end of the shares group.
     # Attempt logout again; ignore failure since session may already be gone.
     local out code
     safe_exec out code $CLIENT --server-url "$SERVER_URL" --tls-insecure logout || true
@@ -3037,8 +3057,8 @@ phase_12_cleanup() {
 
     assert_agent_not_running "Agent graceful shutdown via CLI"
 
-    # Print detailed agent status for manual audit
-    section "Post-shutdown agent status"
+    # Print detailed agent status for debugging
+    scenario "Post-shutdown agent status"
     local final_status
     final_status=$("$CLIENT" agent status 2>&1) || true
     echo "$final_status"
@@ -3047,9 +3067,8 @@ phase_12_cleanup() {
     success "Cleanup complete"
 }
 
-# Phase 13: Summary Report
-phase_13_summary() {
-    phase "13: TEST SUMMARY"
+run_report() {
+    group "Report"
 
     echo ""
     echo -e "${BLUE}========================================${NC}"
@@ -3110,26 +3129,31 @@ main() {
     # Start the persistent agent before any CLI commands
     # (Agent auto-starts on login now per improved behavior)
 
-    # Execute test phases
-    phase_1_environment_verification
-    phase_2_admin_authentication
-    phase_3_bootstrap_protection
-    phase_4_user_registration
-    phase_5_totp_setup
-    phase_6_admin_approval
-    phase_7_user_login
-    phase_8_file_operations
-    phase_9_custom_password_file_operations
-    phase_10_share_operations
-    phase_11_admin_system_status
-    phase_11b_flood_guard
-    phase_11c_multi_backend_storage
-    phase_11d_billing
-    phase_11e_payments
-    phase_12_cleanup
+    readonly E2E_GROUPS=(
+        run_preflight
+        run_platform_bootstrap_admin_login
+        run_platform_bootstrap_protection
+        run_user_onboarding_registration
+        run_user_onboarding_mfa_enrollment
+        run_user_onboarding_admin_approval
+        run_user_authentication
+        run_files_standard
+        run_files_custom_password
+        run_shares
+        run_admin_operations
+        run_security_rate_limits
+        run_storage_replication
+        run_billing
+        run_payments
+        run_teardown
+    )
 
-    # Show summary and exit with appropriate code
-    if phase_13_summary; then
+    local fn
+    for fn in "${E2E_GROUPS[@]}"; do
+        "$fn" || exit 1
+    done
+
+    if run_report; then
         exit 0
     else
         exit 1

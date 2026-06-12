@@ -85,13 +85,13 @@ func RegisterRoutes() {
 	Echo.POST("/api/bootstrap/register/response", RegisterRateLimitMiddleware(BootstrapRegisterResponse))
 	Echo.POST("/api/bootstrap/register/finalize", RegisterRateLimitMiddleware(BootstrapRegisterFinalize))
 
-	// MFA Status and Reset - requires full authentication (standard JWT)
+	// MFA Status - requires full authentication (standard JWT)
 	auth.Echo.GET("/api/mfa/status", MFAStatus)
-	auth.Echo.POST("/api/mfa/reset", MFAReset)
 
-	// MFA Setup/Verify/Auth - requires temporary MFA token (arkfile-mfa audience)
+	// MFA Setup/Verify/Auth/Recovery/Reset - temp or dual-tier JWT depending on route
 	mfaGroup := Echo.Group("/api/mfa")
-	mfaGroup.POST("/recover-with-backup-code", RecoverWithBackupCode) // public recovery trigger
+	mfaGroup.POST("/recover-with-backup-code", RecoverWithBackupCode, auth.MFAJWTMiddleware())
+	mfaGroup.POST("/reset", MFAReset, auth.MFAResetJWTMiddleware())
 	mfaGroup.POST("/setup", MFASetup, auth.MFAJWTMiddleware())
 	mfaGroup.POST("/verify", MFARateLimitMiddleware("mfa_verify")(MFAVerify), auth.MFAJWTMiddleware())
 	mfaGroup.POST("/auth", MFARateLimitMiddleware("mfa_auth")(MFAAuth), auth.MFAJWTMiddleware())
