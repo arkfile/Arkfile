@@ -54,7 +54,7 @@ type AdminUserStatusResponse struct {
 	Exists   bool                   `json:"exists"`
 	Username string                 `json:"username,omitempty"`
 	User     *AdminUserInfo         `json:"user,omitempty"`
-	TOTP     *AdminTOTPStatus       `json:"totp,omitempty"`
+	MFA      *AdminMFAStatus       `json:"mfa,omitempty"`
 	OPAQUE   *AdminOPAQUEStatus     `json:"opaque,omitempty"`
 	Tokens   *AdminTokenStatus      `json:"tokens,omitempty"`
 	Billing  *AdminBillingStatus    `json:"billing,omitempty"`
@@ -70,8 +70,8 @@ type AdminUserInfo struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-// AdminTOTPStatus represents TOTP status information
-type AdminTOTPStatus struct {
+// AdminMFAStatus represents TOTP status information
+type AdminMFAStatus struct {
 	Present        bool `json:"present"`
 	Decryptable    bool `json:"decryptable"`
 	Enabled        bool `json:"enabled"`
@@ -137,10 +137,11 @@ func AdminCleanupTestUser(c echo.Context) error {
 	}{
 		{"users", "DELETE FROM users WHERE username = ?"},
 		{"opaque_user_data", "DELETE FROM opaque_user_data WHERE username = ?"},
-		{"user_totp", "DELETE FROM user_totp WHERE username = ?"},
+		{"user_mfa_credentials", "DELETE FROM user_mfa_credentials WHERE username = ?"},
+		{"user_mfa_backup_codes", "DELETE FROM user_mfa_backup_codes WHERE username = ?"},
 		{"refresh_tokens", "DELETE FROM refresh_tokens WHERE username = ?"},
-		{"totp_usage_log", "DELETE FROM totp_usage_log WHERE username = ?"},
-		{"totp_backup_usage", "DELETE FROM totp_backup_usage WHERE username = ?"},
+		{"mfa_usage_log", "DELETE FROM mfa_usage_log WHERE username = ?"},
+		{"mfa_backup_usage", "DELETE FROM mfa_backup_usage WHERE username = ?"},
 		{"revoked_tokens", "DELETE FROM revoked_tokens WHERE username = ?"},
 		{"user_activity", "DELETE FROM user_activity WHERE username = ?"},
 	}
@@ -201,8 +202,8 @@ func AdminCleanupTestUser(c echo.Context) error {
 	return JSONResponse(c, http.StatusOK, "Test user cleanup completed", response)
 }
 
-// AdminTOTPDecryptCheck provides TOTP diagnostic information for development
-func AdminTOTPDecryptCheck(c echo.Context) error {
+// AdminMFADecryptCheck provides TOTP diagnostic information for development
+func AdminMFADecryptCheck(c echo.Context) error {
 	// Only available in debug mode
 	debugMode := strings.ToLower(os.Getenv("DEBUG_MODE"))
 	if debugMode != "true" && debugMode != "1" {
@@ -232,7 +233,7 @@ func AdminTOTPDecryptCheck(c echo.Context) error {
 	var createdAt, lastUsed interface{}
 	err = database.DB.QueryRow(`
 		SELECT created_at, last_used 
-		FROM user_totp 
+		FROM user_mfa_credentials 
 		WHERE username = ?`,
 		targetUsername,
 	).Scan(&createdAt, &lastUsed)
@@ -392,7 +393,7 @@ func AdminGetUserStatus(c echo.Context) error {
 			"totp_status_error": "Failed to retrieve TOTP diagnostic status",
 		}
 	} else {
-		response.TOTP = &AdminTOTPStatus{
+		response.MFA = &AdminMFAStatus{
 			Present:        present,
 			Decryptable:    decryptable,
 			Enabled:        enabled,
@@ -743,10 +744,10 @@ func ListUsers(c echo.Context) error {
 	rows, err := database.DB.Query(`
 		SELECT u.username, u.is_approved, u.is_admin, u.storage_limit_bytes, u.total_storage_bytes,
 		       u.registration_date, u.last_login,
-		       CASE WHEN ut.setup_completed = 1 THEN 1 ELSE 0 END AS totp_enabled,
+		       CASE WHEN mc.setup_completed = 1 THEN 1 ELSE 0 END AS mfa_enabled,
 		       COALESCE(fm.file_count, 0) AS file_count
 		FROM users u
-		LEFT JOIN user_totp ut ON u.username = ut.username
+		LEFT JOIN user_mfa_credentials mc ON u.username = mc.username
 		LEFT JOIN (SELECT owner_username, COUNT(*) AS file_count FROM file_metadata GROUP BY owner_username) fm ON u.username = fm.owner_username
 		WHERE u.deleted_at IS NULL
 		ORDER BY u.registration_date DESC`)
@@ -763,13 +764,13 @@ func ListUsers(c echo.Context) error {
 	users := make([]map[string]interface{}, 0)
 	for rows.Next() {
 		var username sql.NullString
-		var isApprovedRaw, isAdminRaw, totpEnabledRaw, fileCountRaw interface{}
+		var isApprovedRaw, isAdminRaw, mfaEnabledRaw, fileCountRaw interface{}
 		var storageLimitBytes, totalStorageBytes sql.NullFloat64
 		var registrationDate sql.NullString
 		var lastLogin sql.NullString
 
 		err := rows.Scan(&username, &isApprovedRaw, &isAdminRaw, &storageLimitBytes, &totalStorageBytes,
-			&registrationDate, &lastLogin, &totpEnabledRaw, &fileCountRaw)
+			&registrationDate, &lastLogin, &mfaEnabledRaw, &fileCountRaw)
 		if err != nil {
 			logging.ErrorLogger.Printf("ListUsers scan error: %v", err)
 			return JSONError(c, http.StatusInternalServerError, "Error processing user data")
@@ -778,7 +779,7 @@ func ListUsers(c echo.Context) error {
 		// Convert boolean values from rqlite driver (may come as bool, int64, or string)
 		isApproved := toBool(isApprovedRaw)
 		isAdmin := toBool(isAdminRaw)
-		totpEnabled := toBool(totpEnabledRaw)
+		mfaEnabled := toBool(mfaEnabledRaw)
 
 		// Extract values with safe defaults for NULL columns
 		storageLimit := int64(0)
@@ -830,7 +831,7 @@ func ListUsers(c echo.Context) error {
 			"username":               username.String,
 			"is_approved":            isApproved,
 			"is_admin":               isAdmin,
-			"totp_enabled":           totpEnabled,
+			"mfa_enabled":            mfaEnabled,
 			"file_count":             fileCount,
 			"storage_limit_bytes":    storageLimit,
 			"total_storage_bytes":    totalStorage,
@@ -992,8 +993,8 @@ func AdminSystemStatus(c echo.Context) error {
 	avgFileSizeBytes := toInt64(avgFileSizeBytesRaw)
 
 	// Gather TOTP statistics
-	var totpEnabledUsers int
-	err = database.DB.QueryRow("SELECT COUNT(*) FROM user_totp WHERE setup_completed = 1").Scan(&totpEnabledUsers)
+	var mfaEnabledUsers int
+	err = database.DB.QueryRow("SELECT COUNT(*) FROM user_mfa_credentials WHERE setup_completed = 1").Scan(&mfaEnabledUsers)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to count TOTP users: %v", err)
 	}
@@ -1013,7 +1014,7 @@ func AdminSystemStatus(c echo.Context) error {
 			"average_file_size_bytes": avgFileSizeBytes,
 		},
 		"security": map[string]interface{}{
-			"totp_enabled_users": totpEnabledUsers,
+			"mfa_enabled_users": mfaEnabledUsers,
 		},
 	}
 

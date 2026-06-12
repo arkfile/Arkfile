@@ -42,7 +42,7 @@ USAGE:
 
 COMMANDS:
     register          Register a new account
-    setup-totp        Setup Two-Factor Authentication (TOTP)
+    setup-mfa        Setup Two-Factor Authentication (TOTP)
     generate-totp     Generate a TOTP code from a base32 secret (for scripting)
     login             Authenticate with arkfile server
     upload            Encrypt and upload a file (streaming, per-chunk AES-GCM)
@@ -123,7 +123,7 @@ type Response struct {
 	Error               string                 `json:"error"`
 	TempToken           string                 `json:"temp_token"`
 	SessionKey          string                 `json:"session_key"`
-	RequiresTOTP        bool                   `json:"requires_totp"`
+	RequiresMFA        bool                   `json:"requires_mfa"`
 	Token               string                 `json:"token"`
 	RefreshToken        string                 `json:"refresh_token"`
 	ExpiresAt           time.Time              `json:"expires_at"`
@@ -239,12 +239,12 @@ func main() {
 			logError("Registration failed: %v", err)
 			os.Exit(1)
 		}
-	case "setup-totp":
+	case "setup-mfa":
 		if err := handleSetupTOTPCommand(client, config, args); err != nil {
 			logError("TOTP setup failed: %v", err)
 			os.Exit(1)
 		}
-	case "recover-totp":
+	case "recover-mfa":
 		if err := handleRecoverTOTPCommand(client, config, args); err != nil {
 			logError("TOTP recovery failed: %v", err)
 			os.Exit(1)
@@ -416,8 +416,8 @@ func (c *HTTPClient) makeRequest(method, endpoint string, payload interface{}, t
 
 	// Extract fields from Data map if present
 	if apiResp.Data != nil {
-		if val, ok := apiResp.Data["requires_totp"].(bool); ok {
-			apiResp.RequiresTOTP = val
+		if val, ok := apiResp.Data["requires_mfa"].(bool); ok {
+			apiResp.RequiresMFA = val
 		}
 		if val, ok := apiResp.Data["temp_token"].(string); ok {
 			apiResp.TempToken = val
@@ -636,7 +636,7 @@ func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []stri
 
 	fmt.Printf("Registration successful for user: %s\n", *usernameFlag)
 
-	if regFinalizeResp.RequiresTOTP && regFinalizeResp.TempToken != "" {
+	if regFinalizeResp.RequiresMFA && regFinalizeResp.TempToken != "" {
 		session := &AuthSession{
 			Username:       *usernameFlag,
 			TempToken:      regFinalizeResp.TempToken,
@@ -647,7 +647,7 @@ func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []stri
 		if err := saveAuthSession(session, config.TokenFile); err != nil {
 			logError("Warning: Failed to save session for TOTP setup: %v", err)
 		} else {
-			fmt.Printf("\nTOTP setup required. Please run: arkfile-client setup-totp\n")
+			fmt.Printf("\nTOTP setup required. Please run: arkfile-client setup-mfa\n")
 		}
 	} else {
 		fmt.Printf("\nPlease login with: arkfile-client login --username %s\n", *usernameFlag)
@@ -657,7 +657,7 @@ func handleRegisterCommand(client *HTTPClient, config *ClientConfig, args []stri
 }
 
 func handleSetupTOTPCommand(client *HTTPClient, config *ClientConfig, args []string) error {
-	fs := flag.NewFlagSet("setup-totp", flag.ExitOnError)
+	fs := flag.NewFlagSet("setup-mfa", flag.ExitOnError)
 	showSecret := fs.Bool("show-secret", false, "Only show the secret (for automation)")
 	verifyCode := fs.String("verify", "", "Verify the setup with a code")
 
@@ -682,7 +682,7 @@ func handleSetupTOTPCommand(client *HTTPClient, config *ClientConfig, args []str
 		return verifyTOTP(client, config, session, token, *verifyCode)
 	}
 
-	setupResp, err := client.makeRequest("POST", "/api/totp/setup", nil, token)
+	setupResp, err := client.makeRequest("POST", "/api/mfa/setup", nil, token)
 	if err != nil {
 		return fmt.Errorf("failed to initiate TOTP setup: %w", err)
 	}
@@ -714,7 +714,7 @@ func handleSetupTOTPCommand(client *HTTPClient, config *ClientConfig, args []str
 }
 
 func verifyTOTP(client *HTTPClient, config *ClientConfig, session *AuthSession, token, code string) error {
-	verifyResp, err := client.makeRequest("POST", "/api/totp/verify", map[string]string{"code": code}, token)
+	verifyResp, err := client.makeRequest("POST", "/api/mfa/verify", map[string]string{"code": code}, token)
 	if err != nil {
 		return fmt.Errorf("failed to verify TOTP code: %w", err)
 	}
@@ -746,7 +746,7 @@ func verifyTOTP(client *HTTPClient, config *ClientConfig, session *AuthSession, 
 }
 
 func handleRecoverTOTPCommand(client *HTTPClient, config *ClientConfig, args []string) error {
-	fs := flag.NewFlagSet("recover-totp", flag.ExitOnError)
+	fs := flag.NewFlagSet("recover-mfa", flag.ExitOnError)
 	codeFlag := fs.String("code", "", "Alphanumeric 10-char backup code")
 
 	if err := fs.Parse(args); err != nil {
@@ -786,7 +786,7 @@ func handleRecoverTOTPCommand(client *HTTPClient, config *ClientConfig, args []s
 	fmt.Println("Verifying backup code and starting TOTP reset...")
 
 	// Step 1: Recover via API endpoint
-	recoverResp, err := client.makeRequest("POST", "/api/totp/recover-with-backup-code", map[string]string{
+	recoverResp, err := client.makeRequest("POST", "/api/mfa/recover-with-backup-code", map[string]string{
 		"backup_code": backupCode,
 	}, token)
 	if err != nil {
@@ -808,7 +808,7 @@ func handleRecoverTOTPCommand(client *HTTPClient, config *ClientConfig, args []s
 	_ = saveAuthSession(session, config.TokenFile)
 
 	// Step 2: Trigger reset immediately
-	resetResp, err := client.makeRequest("POST", "/api/totp/reset", map[string]string{}, resetToken)
+	resetResp, err := client.makeRequest("POST", "/api/mfa/reset", map[string]string{}, resetToken)
 	if err != nil {
 		return fmt.Errorf("failed to reset TOTP: %w", err)
 	}
@@ -835,7 +835,7 @@ func handleRecoverTOTPCommand(client *HTTPClient, config *ClientConfig, args []s
 		fmt.Println("--------------------")
 	}
 
-	fmt.Println("\nPlease verify setup with: arkfile-client setup-totp")
+	fmt.Println("\nPlease verify setup with: arkfile-client setup-mfa")
 	return nil
 }
 
@@ -929,7 +929,7 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 	}
 
 	// Handle TOTP
-	if loginResp.RequiresTOTP {
+	if loginResp.RequiresMFA {
 		var userTotpCode string
 		if *totpCode != "" {
 			// Explicit code provided
@@ -957,7 +957,7 @@ func handleLoginCommand(client *HTTPClient, config *ClientConfig, args []string)
 			userTotpCode = strings.TrimSpace(totpInput)
 		}
 
-		totpResp, err := client.makeRequest("POST", "/api/totp/auth", map[string]interface{}{
+		totpResp, err := client.makeRequest("POST", "/api/mfa/auth", map[string]interface{}{
 			"code":       userTotpCode,
 			"sessionKey": loginResp.SessionKey,
 			"isBackup":   false,

@@ -53,7 +53,7 @@ dd if=/dev/urandom of="$NEW_KEY_TEMP" bs=32 count=1 status=none
 chmod 400 "$NEW_KEY_TEMP"
 chown ${USER}:${GROUP} "$NEW_KEY_TEMP"
 
-# Note: In a production scenario, rotation would iterate all user_totp and user_contact_info keys
+# Note: In a production scenario, rotation would iterate all user_mfa_credentials and user_contact_info keys
 # and decrypt using old-master derived subkeys, and re-encrypt using new-master derived subkeys.
 # Under Greenfield operating principles, dropping old active sessions/TOTP row keys is fully accepted
 # if we decide not to carry complex in-place DB migration loops.

@@ -75,12 +75,12 @@ func createTestTokenWithTier(t *testing.T, username, tokenID string, expiry time
 	audience := AudienceAPI
 	requiresTOTP := false
 	if tempTier {
-		audience = AudienceTOTP
+		audience = AudienceMFA
 		requiresTOTP = true
 	}
 	claims := &Claims{
 		Username:     username,
-		RequiresTOTP: requiresTOTP,
+		RequiresMFA: requiresTOTP,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiry),
 			ID:        tokenID,
@@ -455,7 +455,7 @@ func TestTokenRevocationMiddleware_UserWideRevocation(t *testing.T) {
 	// Create a valid full-tier JWT.
 	claims := &Claims{
 		Username:     username,
-		RequiresTOTP: false,
+		RequiresMFA: false,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiry),
 			IssuedAt:  jwt.NewNumericDate(issuedAt),
@@ -521,7 +521,7 @@ func TestTokenRevocationMiddleware_JWTIssuedAfterRevocation(t *testing.T) {
 	// Issue a JWT with issuedAt = now (after the revocation).
 	claims := &Claims{
 		Username:     username,
-		RequiresTOTP: false,
+		RequiresMFA: false,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiry),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

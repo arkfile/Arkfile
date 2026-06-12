@@ -227,7 +227,7 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	// because of the non-NULL consumed_at.
 
 	// 9. Generate temporary token for TOTP setup
-	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
+	tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup token creation failed")
@@ -236,8 +236,8 @@ func BootstrapRegisterFinalize(c echo.Context) error {
 	logging.InfoLogger.Printf("BOOTSTRAP: Admin user %s created successfully via OPAQUE.", request.Username)
 
 	return JSONResponse(c, http.StatusCreated, "Admin account created successfully. Two-factor authentication setup is required.", map[string]interface{}{
-		"requires_totp_setup": true,
-		"requires_totp":       true,
+		"requires_mfa_setup": true,
+		"requires_mfa":       true,
 		"temp_token":          tempToken,
 		"auth_method":         "OPAQUE",
 		"username":            request.Username,

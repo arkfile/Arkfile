@@ -27,9 +27,11 @@ func setupTOTPTestDB(t *testing.T) *sql.DB {
 
 	// Create the required tables for TOTP testing
 	schema := `
-		CREATE TABLE user_totp (
+		CREATE TABLE user_mfa_credentials (
 			username TEXT PRIMARY KEY,
-			secret_encrypted BLOB NOT NULL,
+			method_type TEXT NOT NULL DEFAULT 'totp',
+			label TEXT,
+			credential_data BLOB NOT NULL,
 			enabled BOOLEAN DEFAULT FALSE,
 			setup_completed BOOLEAN DEFAULT FALSE,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -39,7 +41,7 @@ func setupTOTPTestDB(t *testing.T) *sql.DB {
 			last_failed_attempt_at DATETIME
 		);
 
-		CREATE TABLE user_totp_backup_codes (
+		CREATE TABLE user_mfa_backup_codes (
 			username TEXT NOT NULL,
 			code_index INTEGER NOT NULL,
 			code_hash BLOB NOT NULL,
@@ -48,7 +50,7 @@ func setupTOTPTestDB(t *testing.T) *sql.DB {
 			UNIQUE (username, code_hash)
 		);
 
-		CREATE TABLE totp_usage_log (
+		CREATE TABLE mfa_usage_log (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT NOT NULL,
 			code_hash TEXT NOT NULL,
@@ -56,7 +58,7 @@ func setupTOTPTestDB(t *testing.T) *sql.DB {
 			used_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
 
-		CREATE TABLE totp_backup_usage (
+		CREATE TABLE mfa_backup_usage (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT NOT NULL,
 			code_hash TEXT NOT NULL,
@@ -120,7 +122,7 @@ func TestServerSideTOTPKeyManagement(t *testing.T) {
 	}
 }
 
-func TestTOTPSetup(t *testing.T) {
+func TestMFASetup(t *testing.T) {
 	setupTOTPTestEnvironment(t)
 
 	db := setupTOTPTestDB(t)
@@ -129,7 +131,7 @@ func TestTOTPSetup(t *testing.T) {
 	username := "testuser"
 
 	// Test TOTP setup generation
-	setup, err := GenerateTOTPSetup(username)
+	setup, err := GenerateMFASetup(username)
 	if err != nil {
 		t.Fatalf("Failed to generate TOTP setup: %v", err)
 	}
@@ -149,7 +151,7 @@ func TestTOTPSetup(t *testing.T) {
 	}
 
 	// Store the TOTP setup
-	if err := StoreTOTPSetup(db, username, setup); err != nil {
+	if err := StoreMFASetup(db, username, setup); err != nil {
 		t.Fatalf("Failed to store TOTP setup: %v", err)
 	}
 
@@ -186,12 +188,12 @@ func TestTOTPCompletion(t *testing.T) {
 	username := "testuser"
 
 	// Generate and store TOTP setup
-	setup, err := GenerateTOTPSetup(username)
+	setup, err := GenerateMFASetup(username)
 	if err != nil {
 		t.Fatalf("Failed to generate TOTP setup: %v", err)
 	}
 
-	if err := StoreTOTPSetup(db, username, setup); err != nil {
+	if err := StoreMFASetup(db, username, setup); err != nil {
 		t.Fatalf("Failed to store TOTP setup: %v", err)
 	}
 
@@ -202,12 +204,12 @@ func TestTOTPCompletion(t *testing.T) {
 	}
 
 	// Complete TOTP setup
-	if err := CompleteTOTPSetup(db, username, currentCode); err != nil {
+	if err := CompleteMFASetup(db, username, currentCode); err != nil {
 		t.Fatalf("Failed to complete TOTP setup: %v", err)
 	}
 
 	// Verify TOTP is now enabled
-	enabled, err := IsUserTOTPEnabled(db, username)
+	enabled, err := IsUserMFAEnabled(db, username)
 	if err != nil {
 		t.Fatalf("Failed to check TOTP status: %v", err)
 	}
@@ -216,17 +218,17 @@ func TestTOTPCompletion(t *testing.T) {
 	}
 
 	// Test invalid code during setup completion
-	setup2, err := GenerateTOTPSetup("testuser2")
+	setup2, err := GenerateMFASetup("testuser2")
 	if err != nil {
 		t.Fatalf("Failed to generate second TOTP setup: %v", err)
 	}
 
-	if err := StoreTOTPSetup(db, "testuser2", setup2); err != nil {
+	if err := StoreMFASetup(db, "testuser2", setup2); err != nil {
 		t.Fatalf("Failed to store second TOTP setup: %v", err)
 	}
 
 	// Try to complete with invalid code
-	if err := CompleteTOTPSetup(db, "testuser2", "000000"); err == nil {
+	if err := CompleteMFASetup(db, "testuser2", "000000"); err == nil {
 		t.Fatal("TOTP setup completion should fail with invalid code")
 	}
 }
@@ -240,12 +242,12 @@ func TestTOTPValidation(t *testing.T) {
 	username := "testuser"
 
 	// Set up and complete TOTP
-	setup, err := GenerateTOTPSetup(username)
+	setup, err := GenerateMFASetup(username)
 	if err != nil {
 		t.Fatalf("Failed to generate TOTP setup: %v", err)
 	}
 
-	if err := StoreTOTPSetup(db, username, setup); err != nil {
+	if err := StoreMFASetup(db, username, setup); err != nil {
 		t.Fatalf("Failed to store TOTP setup: %v", err)
 	}
 
@@ -254,7 +256,7 @@ func TestTOTPValidation(t *testing.T) {
 		t.Fatalf("Failed to generate TOTP code: %v", err)
 	}
 
-	if err := CompleteTOTPSetup(db, username, currentCode); err != nil {
+	if err := CompleteMFASetup(db, username, currentCode); err != nil {
 		t.Fatalf("Failed to complete TOTP setup: %v", err)
 	}
 
@@ -289,12 +291,12 @@ func TestBackupCodeValidation(t *testing.T) {
 	username := "testuser"
 
 	// Set up and complete TOTP
-	setup, err := GenerateTOTPSetup(username)
+	setup, err := GenerateMFASetup(username)
 	if err != nil {
 		t.Fatalf("Failed to generate TOTP setup: %v", err)
 	}
 
-	if err := StoreTOTPSetup(db, username, setup); err != nil {
+	if err := StoreMFASetup(db, username, setup); err != nil {
 		t.Fatalf("Failed to store TOTP setup: %v", err)
 	}
 
@@ -303,7 +305,7 @@ func TestBackupCodeValidation(t *testing.T) {
 		t.Fatalf("Failed to generate TOTP code: %v", err)
 	}
 
-	if err := CompleteTOTPSetup(db, username, currentCode); err != nil {
+	if err := CompleteMFASetup(db, username, currentCode); err != nil {
 		t.Fatalf("Failed to complete TOTP setup: %v", err)
 	}
 
@@ -336,7 +338,7 @@ func TestTOTPCleanup(t *testing.T) {
 	}
 }
 
-func TestTOTPReset(t *testing.T) {
+func TestMFAReset(t *testing.T) {
 	setupTOTPTestEnvironment(t)
 
 	db := setupTOTPTestDB(t)
@@ -345,12 +347,12 @@ func TestTOTPReset(t *testing.T) {
 	username := "testuser"
 
 	// Set up and complete TOTP
-	setup, err := GenerateTOTPSetup(username)
+	setup, err := GenerateMFASetup(username)
 	if err != nil {
 		t.Fatalf("Failed to generate TOTP setup: %v", err)
 	}
 
-	if err := StoreTOTPSetup(db, username, setup); err != nil {
+	if err := StoreMFASetup(db, username, setup); err != nil {
 		t.Fatalf("Failed to store TOTP setup: %v", err)
 	}
 
@@ -359,12 +361,12 @@ func TestTOTPReset(t *testing.T) {
 		t.Fatalf("Failed to generate TOTP code: %v", err)
 	}
 
-	if err := CompleteTOTPSetup(db, username, currentCode); err != nil {
+	if err := CompleteMFASetup(db, username, currentCode); err != nil {
 		t.Fatalf("Failed to complete TOTP setup: %v", err)
 	}
 
 	// Verify TOTP is enabled
-	enabled, err := IsUserTOTPEnabled(db, username)
+	enabled, err := IsUserMFAEnabled(db, username)
 	if err != nil {
 		t.Fatalf("Failed to check TOTP status: %v", err)
 	}
@@ -387,7 +389,7 @@ func TestTOTPReset(t *testing.T) {
 	}
 
 	// Verify TOTP is still enabled but with new secret
-	enabled, err = IsUserTOTPEnabled(db, username)
+	enabled, err = IsUserMFAEnabled(db, username)
 	if err != nil {
 		t.Fatalf("Failed to check TOTP status after reset: %v", err)
 	}
@@ -414,12 +416,12 @@ func TestTOTPReset(t *testing.T) {
 	}
 
 	// Test invalid backup code for reset
-	setup2, err := GenerateTOTPSetup("testuser2")
+	setup2, err := GenerateMFASetup("testuser2")
 	if err != nil {
 		t.Fatalf("Failed to generate second TOTP setup: %v", err)
 	}
 
-	if err := StoreTOTPSetup(db, "testuser2", setup2); err != nil {
+	if err := StoreMFASetup(db, "testuser2", setup2); err != nil {
 		t.Fatalf("Failed to store second TOTP setup: %v", err)
 	}
 
@@ -428,7 +430,7 @@ func TestTOTPReset(t *testing.T) {
 		t.Fatalf("Failed to generate TOTP code: %v", err)
 	}
 
-	if err := CompleteTOTPSetup(db, "testuser2", currentCode2); err != nil {
+	if err := CompleteMFASetup(db, "testuser2", currentCode2); err != nil {
 		t.Fatalf("Failed to complete TOTP setup: %v", err)
 	}
 
@@ -441,18 +443,18 @@ func TestTOTPReset(t *testing.T) {
 // setupFullTOTP is a helper that creates a fully enrolled TOTP user in the given db.
 func setupFullTOTP(t *testing.T, db *sql.DB, username string) *TOTPSetup {
 	t.Helper()
-	setup, err := GenerateTOTPSetup(username)
+	setup, err := GenerateMFASetup(username)
 	if err != nil {
 		t.Fatalf("GenerateTOTPSetup: %v", err)
 	}
-	if err := StoreTOTPSetup(db, username, setup); err != nil {
+	if err := StoreMFASetup(db, username, setup); err != nil {
 		t.Fatalf("StoreTOTPSetup: %v", err)
 	}
 	code, err := totp.GenerateCode(setup.Secret, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("GenerateCode: %v", err)
 	}
-	if err := CompleteTOTPSetup(db, username, code); err != nil {
+	if err := CompleteMFASetup(db, username, code); err != nil {
 		t.Fatalf("CompleteTOTPSetup: %v", err)
 	}
 	return setup
@@ -471,7 +473,7 @@ func driveFailures(t *testing.T, db *sql.DB, username string, n int) {
 		// After each failure, back-date last_failed_attempt_at so the soft backoff
 		// does not block subsequent attempts in this loop.
 		_, dbErr := db.Exec(
-			`UPDATE user_totp SET last_failed_attempt_at = ? WHERE username = ?`,
+			`UPDATE user_mfa_credentials SET last_failed_attempt_at = ? WHERE username = ?`,
 			time.Now().Add(-2*time.Hour), username,
 		)
 		if dbErr != nil {
@@ -677,7 +679,7 @@ func TestTOTPLockout_ClearOnSuccess(t *testing.T) {
 
 	// Submit a valid code (back-date last_failed first so backoff doesn't block).
 	_, dbErr := db.Exec(
-		`UPDATE user_totp SET last_failed_attempt_at = ? WHERE username = ?`,
+		`UPDATE user_mfa_credentials SET last_failed_attempt_at = ? WHERE username = ?`,
 		time.Now().Add(-2*time.Hour), username,
 	)
 	if dbErr != nil {
@@ -697,7 +699,7 @@ func TestTOTPLockout_ClearOnSuccess(t *testing.T) {
 	var windowStarted, lastFailed sql.NullString
 	err = db.QueryRow(
 		`SELECT failed_attempts_in_window, window_started_at, last_failed_attempt_at
-		 FROM user_totp WHERE username = ?`, username,
+		 FROM user_mfa_credentials WHERE username = ?`, username,
 	).Scan(&failedAttempts, &windowStarted, &lastFailed)
 	if err != nil {
 		t.Fatalf("query lockout state: %v", err)
@@ -725,7 +727,7 @@ func TestTOTPLockout_WindowResetAfter24h(t *testing.T) {
 	// Manually set a window that started 25 hours ago with hard-cap failures.
 	staleWindow := time.Now().Add(-25 * time.Hour)
 	_, err := db.Exec(
-		`UPDATE user_totp
+		`UPDATE user_mfa_credentials
 		 SET failed_attempts_in_window = ?, window_started_at = ?, last_failed_attempt_at = ?
 		 WHERE username = ?`,
 		totpHardCapThreshold+5, staleWindow, staleWindow, username,

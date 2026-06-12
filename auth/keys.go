@@ -11,13 +11,13 @@ import (
 // Two-tier JWT signing keys (A-01 fix).
 //
 // The temp-tier key signs short-lived tokens issued by OPAQUE finalize that
-// carry aud=arkfile-totp and requires_totp=true. Those tokens are only valid
-// at /api/totp/{setup,verify,auth}, validated by TOTPJWTMiddleware against
+// carry aud=arkfile-mfa and requires_mfa=true. Those tokens are only valid
+// at /api/mfa/{setup,verify,auth}, validated by MFAJWTMiddleware against
 // the temp public key.
 //
-// The full-tier key signs full-access tokens issued after a successful TOTP
+// The full-tier key signs full-access tokens issued after a successful MFA
 // step (or via /api/refresh on an existing full session). Those tokens carry
-// aud=arkfile-api and requires_totp=false and are validated by JWTMiddleware
+// aud=arkfile-api and requires_mfa=false and are validated by JWTMiddleware
 // against the full public key.
 //
 // Two separate keys make audience confusion structurally impossible:
@@ -38,7 +38,7 @@ var (
 )
 
 // LoadJWTTempKeys retrieves or generates the Ed25519 keypair used to sign
-// temporary post-OPAQUE TOTP-handoff tokens (aud=arkfile-totp).
+// temporary post-OPAQUE MFA-handoff tokens (aud=arkfile-mfa).
 func LoadJWTTempKeys() error {
 	tempKeysOnce.Do(func() {
 		km, err := crypto.GetKeyManager()

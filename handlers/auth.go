@@ -394,7 +394,7 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	}
 
 	// Generate temporary token for TOTP setup
-	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
+	tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Registration succeeded but setup token creation failed")
@@ -408,8 +408,8 @@ func OpaqueRegisterFinalize(c echo.Context) error {
 	logging.InfoLogger.Printf("OPAQUE user registered (multi-step), TOTP setup required: %s", request.Username)
 
 	return JSONResponse(c, http.StatusCreated, "Account created successfully. Two-factor authentication setup is required to complete registration.", map[string]interface{}{
-		"requires_totp_setup": true,
-		"requires_totp":       true,
+		"requires_mfa_setup": true,
+		"requires_mfa":       true,
 		"temp_token":          tempToken,
 		"auth_method":         "OPAQUE",
 		"username":            request.Username,
@@ -569,32 +569,32 @@ func OpaqueAuthFinalize(c echo.Context) error {
 	}
 
 	// Check if user has TOTP enabled
-	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, request.Username)
+	totpEnabled, err := auth.IsUserMFAEnabled(database.DB, request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 	}
 
 	// MANDATORY TOTP: All users must complete TOTP setup to access the app.
-	// If TOTP is not yet set up, issue a temp token and return requires_totp_setup: true
+	// If TOTP is not yet set up, issue a temp token and return requires_mfa_setup: true
 	// so the client can redirect the user to finish TOTP setup rather than showing a hard error.
 	if !totpEnabled {
 		logging.InfoLogger.Printf("User %s authenticated via OPAQUE but TOTP setup is incomplete; redirecting to setup", request.Username)
-		tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
+		tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to generate TOTP setup token for %s: %v", request.Username, err)
 			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 		}
 		issueTempCookie(c, tempToken)
 		return JSONResponse(c, http.StatusOK, "Two-factor authentication setup is required to complete login.", map[string]interface{}{
-			"requires_totp":       true,
-			"requires_totp_setup": true,
+			"requires_mfa":       true,
+			"requires_mfa_setup": true,
 			"temp_token":          tempToken,
 		})
 	}
 
 	// Generate temporary token that requires TOTP completion
-	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
+	tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
@@ -608,7 +608,7 @@ func OpaqueAuthFinalize(c echo.Context) error {
 	logging.InfoLogger.Printf("OPAQUE user authenticated (multi-step), TOTP required: %s", request.Username)
 
 	return JSONResponse(c, http.StatusOK, "OPAQUE authentication successful. TOTP code required.", map[string]interface{}{
-		"requires_totp": true,
+		"requires_mfa": true,
 		"temp_token":    tempToken,
 		"auth_method":   "OPAQUE",
 	})
@@ -648,13 +648,13 @@ func OpaqueHealthCheck(c echo.Context) error {
 
 // TOTP Authentication Endpoints
 
-// TOTPSetupRequest represents the request for TOTP setup
-type TOTPSetupRequest struct {
+// MFASetupRequest represents the request for TOTP setup
+type MFASetupRequest struct {
 	// No session key needed - JWT token provides authentication
 }
 
-// TOTPSetupResponse represents the response for TOTP setup
-type TOTPSetupResponse struct {
+// MFASetupResponse represents the response for TOTP setup
+type MFASetupResponse struct {
 	Secret      string   `json:"secret"`
 	QRCodeURL   string   `json:"qr_code_url"`
 	QRCodeImage string   `json:"qr_code_image"` // Base64 data URI for QR code PNG
@@ -663,12 +663,12 @@ type TOTPSetupResponse struct {
 }
 
 // TOTPSetup initializes TOTP setup for a user
-func TOTPSetup(c echo.Context) error {
+func MFASetup(c echo.Context) error {
 	// Get username from JWT token
 	username := auth.GetUsernameFromToken(c)
 
 	// Check if user already has TOTP enabled
-	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, username)
+	totpEnabled, err := auth.IsUserMFAEnabled(database.DB, username)
 	if err != nil && err.Error() != "sql: no rows in result set" {
 		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to check TOTP status")
@@ -681,7 +681,7 @@ func TOTPSetup(c echo.Context) error {
 	// Check for an existing pending (unverified) setup to avoid regenerating the secret.
 	// This ensures users who saved the QR code / manual entry on their first attempt
 	// can continue using the same secret after session expiry and re-login.
-	pendingSetup, err := auth.GetPendingTOTPSetup(database.DB, username)
+	pendingSetup, err := auth.GetPendingMFASetup(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to check pending TOTP setup for %s: %v", username, err)
 		// Fall through to generate new setup
@@ -689,7 +689,7 @@ func TOTPSetup(c echo.Context) error {
 
 	if pendingSetup != nil {
 		logging.InfoLogger.Printf("Returning existing pending TOTP setup for user: %s", username)
-		return JSONResponse(c, http.StatusOK, "TOTP setup resumed", TOTPSetupResponse{
+		return JSONResponse(c, http.StatusOK, "TOTP setup resumed", MFASetupResponse{
 			Secret:      pendingSetup.Secret,
 			QRCodeURL:   pendingSetup.QRCodeURL,
 			QRCodeImage: pendingSetup.QRCodeImage,
@@ -699,14 +699,14 @@ func TOTPSetup(c echo.Context) error {
 	}
 
 	// No pending setup exists, generate a new one
-	setup, err := auth.GenerateTOTPSetup(username)
+	setup, err := auth.GenerateMFASetup(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate TOTP setup for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to generate TOTP setup")
 	}
 
 	// Store TOTP setup in database
-	if err := auth.StoreTOTPSetup(database.DB, username, setup); err != nil {
+	if err := auth.StoreMFASetup(database.DB, username, setup); err != nil {
 		logging.ErrorLogger.Printf("Failed to store TOTP setup for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to store TOTP setup")
 	}
@@ -715,7 +715,7 @@ func TOTPSetup(c echo.Context) error {
 	database.LogUserAction(username, "initiated TOTP setup", "")
 	logging.InfoLogger.Printf("TOTP setup initiated for user: %s", username)
 
-	return JSONResponse(c, http.StatusOK, "TOTP setup initiated", TOTPSetupResponse{
+	return JSONResponse(c, http.StatusOK, "TOTP setup initiated", MFASetupResponse{
 		Secret:      setup.Secret,
 		QRCodeURL:   setup.QRCodeURL,
 		QRCodeImage: setup.QRCodeImage,
@@ -724,15 +724,15 @@ func TOTPSetup(c echo.Context) error {
 	})
 }
 
-// TOTPVerifyRequest represents the request for TOTP verification
-type TOTPVerifyRequest struct {
+// MFAVerifyRequest represents the request for TOTP verification
+type MFAVerifyRequest struct {
 	Code     string `json:"code"`
 	IsBackup bool   `json:"is_backup,omitempty"`
 }
 
 // TOTPVerify completes TOTP setup by verifying a test code
-func TOTPVerify(c echo.Context) error {
-	var request TOTPVerifyRequest
+func MFAVerify(c echo.Context) error {
+	var request MFAVerifyRequest
 	if err := c.Bind(&request); err != nil {
 		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
@@ -754,18 +754,18 @@ func TOTPVerify(c echo.Context) error {
 	}
 
 	// Complete TOTP setup
-	if err := auth.CompleteTOTPSetup(database.DB, username, request.Code); err != nil {
+	if err := auth.CompleteMFASetup(database.DB, username, request.Code); err != nil {
 		logging.ErrorLogger.Printf("Failed to complete TOTP setup for %s: %v", username, err)
 		// Record failed TOTP verification attempt
 		entityID := logging.GetOrCreateEntityID(c)
-		if recordErr := recordAuthFailedAttempt("totp_verify", entityID); recordErr != nil {
+		if recordErr := recordAuthFailedAttempt("mfa_verify", entityID); recordErr != nil {
 			logging.ErrorLogger.Printf("Failed to record TOTP verify failure: %v", recordErr)
 		}
 		return JSONError(c, http.StatusBadRequest, "Invalid TOTP code")
 	}
 
 	// Check if this is a temporary TOTP token (registration flow)
-	isTemporaryToken := auth.RequiresTOTPFromToken(c)
+	isTemporaryToken := auth.RequiresMFAFromToken(c)
 
 	// Log successful TOTP setup
 	database.LogUserAction(username, "completed TOTP setup", "")
@@ -831,15 +831,15 @@ func TOTPVerify(c echo.Context) error {
 	})
 }
 
-// TOTPAuthRequest represents the request for TOTP authentication
-type TOTPAuthRequest struct {
+// MFAAuthRequest represents the request for TOTP authentication
+type MFAAuthRequest struct {
 	Code     string `json:"code"`
 	IsBackup bool   `json:"is_backup,omitempty"`
 }
 
 // TOTPAuth validates a TOTP code and completes authentication
-func TOTPAuth(c echo.Context) error {
-	var request TOTPAuthRequest
+func MFAAuth(c echo.Context) error {
+	var request MFAAuthRequest
 	if err := c.Bind(&request); err != nil {
 		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
@@ -848,7 +848,7 @@ func TOTPAuth(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 
 	// Check if token requires TOTP
-	if !auth.RequiresTOTPFromToken(c) {
+	if !auth.RequiresMFAFromToken(c) {
 		return JSONError(c, http.StatusBadRequest, "Token does not require TOTP")
 	}
 
@@ -882,7 +882,7 @@ func TOTPAuth(c echo.Context) error {
 			}
 			// Record failed TOTP auth attempt
 			entityID := logging.GetOrCreateEntityID(c)
-			if recordErr := recordAuthFailedAttempt("totp_auth", entityID); recordErr != nil {
+			if recordErr := recordAuthFailedAttempt("mfa_auth", entityID); recordErr != nil {
 				logging.ErrorLogger.Printf("Failed to record TOTP auth failure: %v", recordErr)
 			}
 			return JSONError(c, http.StatusUnauthorized, "Invalid backup code")
@@ -906,7 +906,7 @@ func TOTPAuth(c echo.Context) error {
 			}
 			// Record failed TOTP auth attempt
 			entityID := logging.GetOrCreateEntityID(c)
-			if recordErr := recordAuthFailedAttempt("totp_auth", entityID); recordErr != nil {
+			if recordErr := recordAuthFailedAttempt("mfa_auth", entityID); recordErr != nil {
 				logging.ErrorLogger.Printf("Failed to record TOTP auth failure: %v", recordErr)
 			}
 			return JSONError(c, http.StatusUnauthorized, "Invalid TOTP code")
@@ -1008,13 +1008,13 @@ func TOTPAuth(c echo.Context) error {
 	})
 }
 
-// TOTPResetRequest represents the request for TOTP reset
-type TOTPResetRequest struct {
+// MFAResetRequest represents the request for TOTP reset
+type MFAResetRequest struct {
 	BackupCode string `json:"backup_code"`
 }
 
-// TOTPResetResponse represents the response for TOTP reset
-type TOTPResetResponse struct {
+// MFAResetResponse represents the response for TOTP reset
+type MFAResetResponse struct {
 	Secret      string   `json:"secret"`
 	QRCodeURL   string   `json:"qr_code_url"`
 	BackupCodes []string `json:"backup_codes"`
@@ -1034,7 +1034,7 @@ type RecoverWithBackupCodeResponse struct {
 	ExpiresAt  time.Time `json:"expires_at"`
 }
 
-// RecoverWithBackupCode receives a backup code and returns a short-lived reset-tier JWT token (temporary arkfile-totp-reset audience).
+// RecoverWithBackupCode receives a backup code and returns a short-lived reset-tier JWT token (temporary arkfile-mfa-reset audience).
 // Safe to call with a temp-JWT tier authentication.
 func RecoverWithBackupCode(c echo.Context) error {
 	var request RecoverWithBackupCodeRequest
@@ -1061,7 +1061,7 @@ func RecoverWithBackupCode(c echo.Context) error {
 		return JSONError(c, http.StatusUnauthorized, "Invalid backup code")
 	}
 
-	// Success: Issue a short-lived Reset token with "arkfile-totp-reset" audience.
+	// Success: Issue a short-lived Reset token with "arkfile-mfa-reset" audience.
 	resetToken, expiresAt, err := auth.GenerateTemporaryResetToken(username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate reset token for %s: %v", username, err)
@@ -1089,8 +1089,8 @@ func RecoverWithBackupCode(c echo.Context) error {
 }
 
 // TOTPReset resets TOTP for a user (requires a valid full token OR reset-tier token).
-func TOTPReset(c echo.Context) error {
-	var request TOTPResetRequest
+func MFAReset(c echo.Context) error {
+	var request MFAResetRequest
 	if err := c.Bind(&request); err != nil {
 		return JSONError(c, http.StatusBadRequest, "Invalid request format")
 	}
@@ -1110,7 +1110,7 @@ func TOTPReset(c echo.Context) error {
 	hasResetAud := false
 	if claims != nil {
 		for _, aud := range claims.Audience {
-			if aud == "arkfile-totp-reset" {
+			if aud == "arkfile-mfa-reset" {
 				hasResetAud = true
 				break
 			}
@@ -1138,7 +1138,7 @@ func TOTPReset(c echo.Context) error {
 	database.LogUserAction(username, "reset TOTP", "")
 	logging.InfoLogger.Printf("SECURITY: TOTP reset complete for user: %s", username)
 
-	return JSONResponse(c, http.StatusOK, "TOTP has been reset successfully. Please update your authenticator app immediately with the new secret.", TOTPResetResponse{
+	return JSONResponse(c, http.StatusOK, "TOTP has been reset successfully. Please update your authenticator app immediately with the new secret.", MFAResetResponse{
 		Secret:      setup.Secret,
 		QRCodeURL:   setup.QRCodeURL,
 		BackupCodes: setup.BackupCodes,
@@ -1147,8 +1147,8 @@ func TOTPReset(c echo.Context) error {
 	})
 }
 
-// TOTPStatusResponse represents the TOTP status response
-type TOTPStatusResponse struct {
+// MFAStatusResponse represents the TOTP status response
+type MFAStatusResponse struct {
 	Enabled       bool       `json:"enabled"`
 	SetupRequired bool       `json:"setup_required"`
 	LastUsed      *time.Time `json:"last_used,omitempty"`
@@ -1156,18 +1156,18 @@ type TOTPStatusResponse struct {
 }
 
 // TOTPStatus returns the TOTP status for a user
-func TOTPStatus(c echo.Context) error {
+func MFAStatus(c echo.Context) error {
 	// Get username from JWT token
 	username := auth.GetUsernameFromToken(c)
 
 	// Check TOTP status
-	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, username)
+	totpEnabled, err := auth.IsUserMFAEnabled(database.DB, username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", username, err)
 		return JSONError(c, http.StatusInternalServerError, "Failed to check TOTP status")
 	}
 
-	response := TOTPStatusResponse{
+	response := MFAStatusResponse{
 		Enabled:       totpEnabled,
 		SetupRequired: !totpEnabled,
 	}
@@ -1184,7 +1184,7 @@ func TOTPStatus(c echo.Context) error {
 // GetCurrentUser returns the authenticated user's identity.
 // Used by browser clients to discover username/is_admin/is_approved since
 // the JWT is HttpOnly and not readable by JavaScript.
-// Wired onto totpProtectedGroup so it requires a full-tier JWT.
+// Wired onto mfaProtectedGroup so it requires a full-tier JWT.
 func GetCurrentUser(c echo.Context) error {
 	username := auth.GetUsernameFromToken(c)
 

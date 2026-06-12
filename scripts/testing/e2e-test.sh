@@ -573,7 +573,7 @@ phase_5_totp_setup() {
     local setup_exit_code
 
     safe_exec setup_output setup_exit_code \
-        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-totp --show-secret
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --show-secret
 
     if [ $setup_exit_code -ne 0 ]; then
         error "Failed to initiate TOTP setup (exit code: $setup_exit_code):"
@@ -613,7 +613,7 @@ phase_5_totp_setup() {
     info "Generated verification code: $code"
 
     safe_exec verify_output verify_exit_code \
-        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-totp --verify "$code"
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --verify "$code"
 
     if [ $verify_exit_code -eq 0 ] && echo "$verify_output" | grep -q "TOTP Setup Complete"; then
         record_test "TOTP verification" "PASS"

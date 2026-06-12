@@ -22,7 +22,7 @@ Normal API requests do not check token revocation status for maximum speed. Revo
 ## Endpoints
 
 The tables below list every current HTTP endpoint exposed by Arkfile v1.  
-`AUTH` column shows whether the request needs an **Access Token**, **TOTP Token**, **Admin Token** or is **Public**.
+`AUTH` column shows whether the request needs an **Access Token**, **MFA Token**, **Admin Token** or is **Public**.
 
 ---
 
@@ -77,41 +77,41 @@ Arkfile uses the OPAQUE PAKE (Password-Authenticated Key Exchange) protocol for 
 | POST | `/api/refresh` | Exchange refresh token for new access token | Refresh Cookie |
 | POST | `/api/logout` | Invalidate session and revoke tokens | Access |
 
-#### Token Revocation (Require TOTP)
+#### Token Revocation (Require MFA)
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| POST | `/api/revoke-token` | Revoke a specific token | TOTP |
-| POST | `/api/auth/revoke-all` | Revoke all tokens for the user (refresh tokens + active JWTs, immediately) | TOTP |
+| POST | `/api/revoke-token` | Revoke a specific token | MFA |
+| POST | `/api/auth/revoke-all` | Revoke all tokens for the user (refresh tokens + active JWTs, immediately) | MFA |
 
 ---
 
-### 3 - Multi-Factor Authentication (TOTP)
+### 3 - Multi-Factor Authentication (MFA)
 
-Arkfile supports Time-based One-Time Password (TOTP) as a second factor of authentication. When TOTP is enabled, users must complete both OPAQUE authentication and provide a valid TOTP code to access their account.
+Arkfile requires a second factor for all accounts. The first release supports Time-based One-Time Password (TOTP) via an authenticator app. When MFA is enabled, users must complete both OPAQUE authentication and provide a valid second-factor code to access their account.
 
-#### TOTP Setup & Management (Require Access Token)
-
-| Method | Path | Purpose | Auth |
-|--------|------|---------|------|
-| POST | `/api/totp/setup` | Initialize TOTP setup for user account | Access |
-| POST | `/api/totp/verify` | Complete TOTP setup by verifying a test code | Access |
-| GET | `/api/totp/status` | Check TOTP enablement status for user | Access |
-| POST | `/api/totp/reset` | Reset TOTP configuration | Access |
-
-#### TOTP Authentication (Require TOTP Token)
+#### MFA Setup and Management (Require Access Token)
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| POST | `/api/totp/auth` | Complete TOTP authentication flow | TOTP Token |
+| POST | `/api/mfa/setup` | Initialize TOTP setup for user account | Access |
+| POST | `/api/mfa/verify` | Complete TOTP setup by verifying a test code | Access |
+| GET | `/api/mfa/status` | Check TOTP enablement status for user | Access |
+| POST | `/api/mfa/reset` | Reset TOTP configuration | Access |
 
-#### TOTP Authentication Flow
+#### MFA Authentication (Require MFA Token)
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| POST | `/api/mfa/auth` | Complete TOTP authentication flow | MFA Token |
+
+#### MFA Authentication Flow
 
 When TOTP is enabled for a user account, the authentication process involves two steps:
 
-1. **OPAQUE Authentication**: User performs OPAQUE login via `/api/opaque/login/*`. If TOTP is enabled, this returns a temporary TOTP token and `requiresTOTP: true`.
+1. **OPAQUE Authentication**: User performs OPAQUE login via `/api/opaque/login/*`. If MFA is required, this returns a temporary MFA token and `requires_mfa: true`.
 
-2. **TOTP Verification**: User provides a TOTP code via `/api/totp/auth` using the temporary token. Upon success, this returns the full access token and refresh token.
+2. **MFA Verification**: User provides a TOTP code via `/api/mfa/auth` using the temporary token. Upon success, this returns the full access token and refresh token.
 
 ---
 
@@ -123,21 +123,21 @@ All file operations require TOTP authentication unless otherwise noted.
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET | `/api/files` | List files owned by the user | TOTP |
-| GET | `/api/files/metadata` | List recent file metadata | TOTP |
-| POST | `/api/files/metadata/batch` | Get metadata for multiple files | TOTP |
-| GET | `/api/files/:fileId/meta` | Get metadata for a single file | TOTP |
-| DELETE | `/api/files/:fileId` | Delete a file | TOTP |
+| GET | `/api/files` | List files owned by the user | MFA |
+| GET | `/api/files/metadata` | List recent file metadata | MFA |
+| POST | `/api/files/metadata/batch` | Get metadata for multiple files | MFA |
+| GET | `/api/files/:fileId/meta` | Get metadata for a single file | MFA |
+| DELETE | `/api/files/:fileId` | Delete a file | MFA |
 
 #### Chunked Uploads
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| POST | `/api/uploads/init` | Begin a multi-part upload, returns `sessionId` | TOTP |
-| POST | `/api/uploads/:sessionId/chunks/:chunkNumber` | Upload numbered chunk | TOTP |
-| POST | `/api/uploads/:sessionId/complete` | Finish the upload and assemble the file | TOTP |
-| GET | `/api/uploads/:sessionId/status` | Check upload progress | TOTP |
-| DELETE | `/api/uploads/:fileId` | Cancel and discard the upload session | TOTP |
+| POST | `/api/uploads/init` | Begin a multi-part upload, returns `sessionId` | MFA |
+| POST | `/api/uploads/:sessionId/chunks/:chunkNumber` | Upload numbered chunk | MFA |
+| POST | `/api/uploads/:sessionId/complete` | Finish the upload and assemble the file | MFA |
+| GET | `/api/uploads/:sessionId/status` | Check upload progress | MFA |
+| DELETE | `/api/uploads/:fileId` | Cancel and discard the upload session | MFA |
 
 #### Chunked Downloads
 
@@ -145,7 +145,7 @@ All file downloads use the chunked download API. Files are stored and downloaded
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET | `/api/files/:fileId/chunks/:chunkIndex` | Download a specific encrypted chunk | TOTP |
+| GET | `/api/files/:fileId/chunks/:chunkIndex` | Download a specific encrypted chunk | MFA |
 
 **Download Flow:**
 1. Fetch file metadata via `GET /api/files/:fileId/meta`
@@ -161,7 +161,7 @@ Export files as self-contained `.arkbackup` bundles for offline decryption. See 
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| POST | `/api/files/:fileId/export-token` | Get short-lived token for export download | TOTP |
+| POST | `/api/files/:fileId/export-token` | Get short-lived token for export download | MFA |
 | GET | `/api/files/:fileId/export` | Download `.arkbackup` bundle | TOTP or Export Token |
 
 **Browser export flow:** The browser requests a short-lived export token via POST, then navigates to the GET URL with `?token=<token>` so the browser handles the download natively (no memory buffering).
@@ -178,14 +178,14 @@ File sharing is split into two namespaces:
 - **Authenticated endpoints** (`/api/shares`) - for share owners to manage shares
 - **Public endpoints** (`/api/public/shares`) - for recipients to access shared files
 
-#### Authenticated Share Management (Require TOTP)
+#### Authenticated Share Management (Require MFA)
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET | `/api/files/:fileId/envelope` | Get file envelope for share creation | TOTP |
-| POST | `/api/shares` | Create a new share (file_id in body) | TOTP |
-| GET | `/api/shares` | List shares owned by user | TOTP |
-| POST | `/api/shares/:id/revoke` | Revoke a share (soft delete) | TOTP |
+| GET | `/api/files/:fileId/envelope` | Get file envelope for share creation | MFA |
+| POST | `/api/shares` | Create a new share (file_id in body) | MFA |
+| GET | `/api/shares` | List shares owned by user | MFA |
+| POST | `/api/shares/:id/revoke` | Revoke a share (soft delete) | MFA |
 
 #### Public Share Access (Rate-Limited, No Auth)
 
@@ -209,11 +209,11 @@ The Download Token is cryptographically bound to the share via AAD (Additional A
 
 ### 6 - Credits System
 
-#### User Endpoints (Require TOTP)
+#### User Endpoints (Require MFA)
 
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
-| GET | `/api/credits` | Get current user's credit balance | TOTP |
+| GET | `/api/credits` | Get current user's credit balance | MFA |
 
 #### Admin Endpoints (Require Admin Token)
 
@@ -367,7 +367,7 @@ These endpoints are only available when `ADMIN_DEV_TEST_API_ENABLED=true`:
 | Method | Path | Purpose | Auth |
 |--------|------|---------|------|
 | POST | `/api/admin/dev-test/users/cleanup` | Clean up test user data | Admin |
-| GET | `/api/admin/dev-test/totp/decrypt-check/:username` | TOTP diagnostic endpoint | Admin |
+| GET | `/api/admin/dev-test/mfa/decrypt-check/:username` | TOTP diagnostic endpoint | Admin |
 
 ---
 

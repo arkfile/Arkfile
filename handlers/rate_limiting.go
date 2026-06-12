@@ -295,7 +295,7 @@ func ShareRateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 // AuthRateLimitEntry represents a rate limiting entry for authentication endpoints
 type AuthRateLimitEntry struct {
-	EndpointType       string // "login", "register", "totp_verify", "totp_auth"
+	EndpointType       string // "login", "register", "mfa_verify", "mfa_auth"
 	EntityID           string
 	FailedCount        int
 	LastFailedAttempt  *time.Time
@@ -332,7 +332,7 @@ func calculateAuthPenalty(failureCount int, endpointType string) time.Duration {
 			10 * time.Minute, // 8th attempt
 			15 * time.Minute, // 9th attempt
 		}
-	case "totp_verify", "totp_auth":
+	case "mfa_verify", "mfa_auth":
 		// TOTP brute force protection
 		basePenalties = []time.Duration{
 			30 * time.Second, // 4th attempt
@@ -413,8 +413,8 @@ func RegisterRateLimitMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// TOTPRateLimitMiddleware provides rate limiting for TOTP endpoints
-func TOTPRateLimitMiddleware(endpointType string) echo.MiddlewareFunc {
+// MFARateLimitMiddleware provides rate limiting for TOTP endpoints
+func MFARateLimitMiddleware(endpointType string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			entityID := logging.GetOrCreateEntityID(c)

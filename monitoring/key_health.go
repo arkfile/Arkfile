@@ -93,7 +93,7 @@ func (khm *KeyHealthMonitor) PerformHealthCheck() {
 			Path: "/opt/arkfile/etc/keys/opaque/server.key",
 		},
 		{
-			Name: "JWT Signing Key (temp tier, aud=arkfile-totp)",
+			Name: "JWT Signing Key (temp tier, aud=arkfile-mfa)",
 			Type: "jwt_signing",
 			Path: "jwt_signing_key_temp_v1",
 		},

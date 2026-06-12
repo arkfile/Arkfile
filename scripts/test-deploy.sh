@@ -1231,7 +1231,7 @@ echo
 echo "  3. Setup TOTP:"
 echo "     /opt/arkfile/bin/arkfile-admin \\
        --server-url https://localhost:8443 --tls-insecure \\
-       setup-totp"
+       setup-mfa"
 echo
 echo "  4. Verify admin login:"
 echo "     /opt/arkfile/bin/arkfile-admin \\"

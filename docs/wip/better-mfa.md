@@ -280,9 +280,9 @@ Tier-3 rotation: unit test re-encrypt loop and mandate issue/verify/reject; manu
 
 ## Phased implementation order
 
-Use whole phase numbers only. Each phase should leave tests green before starting the next.
+Use whole phase numbers only. Each phase should leave tests green before starting the next. Developer will run dev-reset.sh and e2e test suites at his discretion during or between phases.
 
-**Phase 1:** Schema migration and mechanical rename. Introduce `user_mfa_credentials`, `user_mfa_backup_codes`, `mfa_usage_log`, `mfa_backup_usage`; drop old TOTP tables; update `user_auth_status` view. Rename routes `/api/totp` → `/api/mfa`, middleware `RequireTOTP` → `RequireMFA`, JWT claims `requires_mfa` / `requires_mfa_setup`, audiences as chosen. Update Go handlers, both CLIs, TypeScript clients, e2e scripts, and docs references, including exhaustive TOTP identifier sweep per Schema migration. TOTP-only behavior preserved; all existing unit tests adapted and passing.
+**Phase 1: COMPLETE** Schema migration and mechanical rename. Introduce `user_mfa_credentials`, `user_mfa_backup_codes`, `mfa_usage_log`, `mfa_backup_usage`; drop old TOTP tables; update `user_auth_status` view. Rename routes `/api/totp` → `/api/mfa`, middleware `RequireTOTP` → `RequireMFA`, JWT claims `requires_mfa` / `requires_mfa_setup`, audiences as chosen. Update Go handlers, both CLIs, TypeScript clients, e2e scripts, and docs references, including exhaustive TOTP identifier sweep per Schema migration. TOTP-only behavior preserved; all existing unit tests adapted and passing.
 
 **Phase 2:** Fix reset-tier JWT routing. Add `ResetJWTMiddleware` (or equivalent) so `/api/mfa/reset` accepts `arkfile-mfa-reset` tokens. Add browser UI for path A (emergency one-shot backup login) alongside existing path B re-enroll UI. HTTP integration tests and e2e for both path A and path B. Verify `arkfile-client` supports both paths end-to-end.
 

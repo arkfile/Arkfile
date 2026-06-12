@@ -21,7 +21,7 @@ interface LoginResponse {
   refresh_token: string;
   session_key: string;
   auth_method: 'OPAQUE';
-  requires_totp?: boolean;
+  requires_mfa?: boolean;
 }
 
 interface RegisterRequest {

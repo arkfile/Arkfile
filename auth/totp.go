@@ -51,7 +51,7 @@ type TOTPSetup struct {
 
 // TOTPData represents the stored TOTP data for a user
 type TOTPData struct {
-	SecretEncrypted []byte `json:"secret_encrypted"`
+	SecretEncrypted []byte `json:"credential_data"`
 	Enabled         bool   `json:"enabled"`
 	SetupCompleted  bool   `json:"setup_completed"`
 	CreatedAt       time.Time
@@ -59,7 +59,7 @@ type TOTPData struct {
 }
 
 // GenerateTOTPSetup creates a new TOTP setup for a user
-func GenerateTOTPSetup(username string) (*TOTPSetup, error) {
+func GenerateMFASetup(username string) (*TOTPSetup, error) {
 	// Generate 20-byte secret (160 bits) for standard 32-character Base32 output
 	secret := make([]byte, 20)
 	if _, err := rand.Read(secret); err != nil {
@@ -103,13 +103,13 @@ func GenerateTOTPSetup(username string) (*TOTPSetup, error) {
 
 // GetPendingTOTPSetup retrieves an existing pending (unverified) TOTP setup for a user.
 // Returns the decrypted setup data if a pending setup exists, nil if not.
-func GetPendingTOTPSetup(db *sql.DB, username string) (*TOTPSetup, error) {
+func GetPendingMFASetup(db *sql.DB, username string) (*TOTPSetup, error) {
 	var secretEncrypted []byte
 	var setupCompleted bool
 
 	err := db.QueryRow(`
-		SELECT secret_encrypted, setup_completed
-		FROM user_totp
+		SELECT credential_data, setup_completed
+		FROM user_mfa_credentials
 		WHERE username = ?`,
 		username,
 	).Scan(&secretEncrypted, &setupCompleted)
@@ -153,7 +153,7 @@ func GetPendingTOTPSetup(db *sql.DB, username string) (*TOTPSetup, error) {
 	}
 	defer tx.Rollback()
 
-	_, _ = tx.Exec("DELETE FROM user_totp_backup_codes WHERE username = ?", username)
+	_, _ = tx.Exec("DELETE FROM user_mfa_backup_codes WHERE username = ?", username)
 	for i, code := range backupCodes {
 		salt := deriveBackupCodeSalt(username, i)
 		hash, err := crypto.DeriveArgon2IDKey(
@@ -168,7 +168,7 @@ func GetPendingTOTPSetup(db *sql.DB, username string) (*TOTPSetup, error) {
 			return nil, err
 		}
 		_, err = tx.Exec(
-			`INSERT INTO user_totp_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
+			`INSERT INTO user_mfa_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
 			username, i, hash,
 		)
 		if err != nil {
@@ -201,7 +201,7 @@ func GetPendingTOTPSetup(db *sql.DB, username string) (*TOTPSetup, error) {
 }
 
 // StoreTOTPSetup stores the TOTP setup data in the database with server-side encryption and hashed backup codes
-func StoreTOTPSetup(db *sql.DB, username string, setup *TOTPSetup) error {
+func StoreMFASetup(db *sql.DB, username string, setup *TOTPSetup) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
@@ -223,10 +223,10 @@ func StoreTOTPSetup(db *sql.DB, username string, setup *TOTPSetup) error {
 
 	// Store core row (with backup_codes_encrypted column completely eliminated)
 	_, err = tx.Exec(`
-		INSERT OR REPLACE INTO user_totp (
-			username, secret_encrypted, 
+		INSERT OR REPLACE INTO user_mfa_credentials (
+			username, method_type, credential_data,
 			enabled, setup_completed, created_at
-		) VALUES (?, ?, ?, ?, ?)`,
+		) VALUES (?, 'totp', ?, ?, ?, ?)`,
 		username, secretEncrypted,
 		false, false, time.Now().UTC(),
 	)
@@ -234,8 +234,8 @@ func StoreTOTPSetup(db *sql.DB, username string, setup *TOTPSetup) error {
 		return fmt.Errorf("failed to store TOTP config: %w", err)
 	}
 
-	// Store hashed backup codes on user_totp_backup_codes table (reuses global Argon2id floor parameters)
-	_, _ = tx.Exec("DELETE FROM user_totp_backup_codes WHERE username = ?", username)
+	// Store hashed backup codes on user_mfa_backup_codes table (reuses global Argon2id floor parameters)
+	_, _ = tx.Exec("DELETE FROM user_mfa_backup_codes WHERE username = ?", username)
 	for i, code := range setup.BackupCodes {
 		salt := deriveBackupCodeSalt(username, i)
 		hash, err := crypto.DeriveArgon2IDKey(
@@ -251,7 +251,7 @@ func StoreTOTPSetup(db *sql.DB, username string, setup *TOTPSetup) error {
 		}
 
 		_, err = tx.Exec(`
-			INSERT INTO user_totp_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
+			INSERT INTO user_mfa_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
 			username, i, hash,
 		)
 		if err != nil {
@@ -267,7 +267,7 @@ func StoreTOTPSetup(db *sql.DB, username string, setup *TOTPSetup) error {
 }
 
 // CompleteTOTPSetup validates a test code and enables TOTP for the user
-func CompleteTOTPSetup(db *sql.DB, username, testCode string) error {
+func CompleteMFASetup(db *sql.DB, username, testCode string) error {
 	// Get stored TOTP data
 	totpData, err := getTOTPData(db, username)
 	if err != nil {
@@ -291,7 +291,7 @@ func CompleteTOTPSetup(db *sql.DB, username, testCode string) error {
 
 	// Enable TOTP
 	_, err = db.Exec(`
-		UPDATE user_totp 
+		UPDATE user_mfa_credentials 
 		SET enabled = true, setup_completed = true 
 		WHERE username = ?`,
 		username,
@@ -320,7 +320,7 @@ func (e *TOTPLockoutError) Error() string {
 	return e.Reason
 }
 
-// totpLockoutState holds the three columns read from user_totp for lockout computation.
+// totpLockoutState holds the three columns read from user_mfa_credentials for lockout computation.
 type totpLockoutState struct {
 	failedAttempts int
 	windowStarted  *time.Time
@@ -362,7 +362,7 @@ func computeLockoutState(s totpLockoutState, now time.Time) (allowed bool, retry
 	return true, 0, ""
 }
 
-// getTOTPLockoutState reads the three lockout columns from user_totp for the given user.
+// getTOTPLockoutState reads the three lockout columns from user_mfa_credentials for the given user.
 func getTOTPLockoutState(db *sql.DB, username string) (totpLockoutState, error) {
 	var s totpLockoutState
 	var failedAttempts int
@@ -371,7 +371,7 @@ func getTOTPLockoutState(db *sql.DB, username string) (totpLockoutState, error) 
 
 	err := db.QueryRow(`
 		SELECT failed_attempts_in_window, window_started_at, last_failed_attempt_at
-		FROM user_totp
+		FROM user_mfa_credentials
 		WHERE username = ?`, username,
 	).Scan(&failedAttempts, &windowStartedStr, &lastFailedStr)
 
@@ -418,7 +418,7 @@ func recordTOTPFailure(db *sql.DB, username string, now time.Time) (totpLockoutS
 	}
 
 	_, err = db.Exec(`
-		UPDATE user_totp
+		UPDATE user_mfa_credentials
 		SET failed_attempts_in_window = ?,
 		    window_started_at = ?,
 		    last_failed_attempt_at = ?
@@ -440,7 +440,7 @@ func recordTOTPFailure(db *sql.DB, username string, now time.Time) (totpLockoutS
 // clearTOTPFailures resets all lockout state on a successful verification.
 func clearTOTPFailures(db *sql.DB, username string) error {
 	_, err := db.Exec(`
-		UPDATE user_totp
+		UPDATE user_mfa_credentials
 		SET failed_attempts_in_window = 0,
 		    window_started_at = NULL,
 		    last_failed_attempt_at = NULL
@@ -550,7 +550,7 @@ func ValidateTOTPCode(db *sql.DB, username, code string) error {
 	}
 
 	// Update last used timestamp
-	_, err = db.Exec("UPDATE user_totp SET last_used = ? WHERE username = ?",
+	_, err = db.Exec("UPDATE user_mfa_credentials SET last_used = ? WHERE username = ?",
 		time.Now(), username)
 	if err != nil {
 		if logging.ErrorLogger != nil {
@@ -610,7 +610,7 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 		var storedHash []byte
 		var usedAt sql.NullString
 		err = db.QueryRow(`
-			SELECT code_hash, used_at FROM user_totp_backup_codes 
+			SELECT code_hash, used_at FROM user_mfa_backup_codes 
 			WHERE username = ? AND code_index = ? AND code_hash = ?`,
 			username, codeIndex, candHash,
 		).Scan(&storedHash, &usedAt)
@@ -647,7 +647,7 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 	defer tx.Rollback()
 
 	res, err := tx.Exec(`
-		UPDATE user_totp_backup_codes 
+		UPDATE user_mfa_backup_codes 
 		SET used_at = ? 
 		WHERE username = ? AND code_index = ? AND code_hash = ? AND used_at IS NULL`,
 		time.Now().UTC(), username, matchedIndex, matchedHash,
@@ -682,7 +682,7 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 	}
 
 	// Update last used timestamp
-	_, err = db.Exec("UPDATE user_totp SET last_used = ? WHERE username = ?",
+	_, err = db.Exec("UPDATE user_mfa_credentials SET last_used = ? WHERE username = ?",
 		time.Now().UTC(), username)
 	if err != nil {
 		if logging.ErrorLogger != nil {
@@ -693,14 +693,14 @@ func ValidateBackupCode(db *sql.DB, username, code string) error {
 	return nil
 }
 
-// IsUserTOTPEnabled checks if TOTP is enabled for a user
-func IsUserTOTPEnabled(db *sql.DB, username string) (bool, error) {
+// IsUserMFAEnabled checks if TOTP is enabled for a user
+func IsUserMFAEnabled(db *sql.DB, username string) (bool, error) {
 	var enabled bool
 	var setupCompleted bool
 
 	err := db.QueryRow(`
 		SELECT enabled, setup_completed 
-		FROM user_totp 
+		FROM user_mfa_credentials 
 		WHERE username = ?`,
 		username,
 	).Scan(&enabled, &setupCompleted)
@@ -726,7 +726,7 @@ func ResetTOTP(db *sql.DB, username, backupCode string) (*TOTPSetup, error) {
 	}
 
 	// Generate new TOTP setup
-	setup, err := GenerateTOTPSetup(username)
+	setup, err := GenerateMFASetup(username)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate new TOTP setup: %w", err)
 	}
@@ -752,8 +752,8 @@ func ResetTOTP(db *sql.DB, username, backupCode string) (*TOTPSetup, error) {
 
 	// Update database with new encrypted data (keep enabled=true, setup_completed=true)
 	_, err = tx.Exec(`
-		UPDATE user_totp 
-		SET secret_encrypted = ?, created_at = ?
+		UPDATE user_mfa_credentials 
+		SET credential_data = ?, created_at = ?
 		WHERE username = ?`,
 		secretEncrypted, time.Now().UTC(), username,
 	)
@@ -762,7 +762,7 @@ func ResetTOTP(db *sql.DB, username, backupCode string) (*TOTPSetup, error) {
 	}
 
 	// Insert fresh hashed backup codes
-	_, _ = tx.Exec("DELETE FROM user_totp_backup_codes WHERE username = ?", username)
+	_, _ = tx.Exec("DELETE FROM user_mfa_backup_codes WHERE username = ?", username)
 	for i, code := range setup.BackupCodes {
 		salt := deriveBackupCodeSalt(username, i)
 		hash, err := crypto.DeriveArgon2IDKey(
@@ -778,7 +778,7 @@ func ResetTOTP(db *sql.DB, username, backupCode string) (*TOTPSetup, error) {
 		}
 
 		_, err = tx.Exec(`
-			INSERT INTO user_totp_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
+			INSERT INTO user_mfa_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
 			username, i, hash,
 		)
 		if err != nil {
@@ -803,14 +803,14 @@ func CleanupTOTPLogs(db *sql.DB) error {
 	cutoff := time.Now().Add(-2 * time.Minute) // Clean logs older than 2 minutes
 
 	// Clean TOTP usage logs
-	_, err := db.Exec("DELETE FROM totp_usage_log WHERE used_at < ?", cutoff)
+	_, err := db.Exec("DELETE FROM mfa_usage_log WHERE used_at < ?", cutoff)
 	if err != nil {
 		return fmt.Errorf("failed to clean TOTP usage logs: %w", err)
 	}
 
 	// Clean backup code usage logs (keep for longer - 30 days)
 	backupCutoff := time.Now().Add(-30 * 24 * time.Hour)
-	_, err = db.Exec("DELETE FROM totp_backup_usage WHERE used_at < ?", backupCutoff)
+	_, err = db.Exec("DELETE FROM mfa_backup_usage WHERE used_at < ?", backupCutoff)
 	if err != nil {
 		return fmt.Errorf("failed to clean backup code usage logs: %w", err)
 	}
@@ -931,7 +931,7 @@ func checkTOTPReplay(db *sql.DB, username, code string, testTime time.Time) erro
 	var count int
 	err := db.QueryRow(`
 		SELECT COUNT(*) 
-		FROM totp_usage_log 
+		FROM mfa_usage_log 
 		WHERE username = ? AND code_hash = ? AND window_start = ?`,
 		username, codeHash, windowStart,
 	).Scan(&count)
@@ -952,7 +952,7 @@ func logTOTPUsage(db *sql.DB, username, code string, testTime time.Time) error {
 	windowStart := testTime.Truncate(time.Duration(TOTPPeriod) * time.Second).Unix()
 
 	_, err := db.Exec(`
-		INSERT INTO totp_usage_log (username, code_hash, window_start) 
+		INSERT INTO mfa_usage_log (username, code_hash, window_start) 
 		VALUES (?, ?, ?)`,
 		username, codeHash, windowStart,
 	)
@@ -964,7 +964,7 @@ func checkBackupCodeReplay(db *sql.DB, username, codeHash string) error {
 	var count int
 	err := db.QueryRow(`
 		SELECT COUNT(*) 
-		FROM totp_backup_usage 
+		FROM mfa_backup_usage 
 		WHERE username = ? AND code_hash = ?`,
 		username, codeHash,
 	).Scan(&count)
@@ -982,7 +982,7 @@ func checkBackupCodeReplay(db *sql.DB, username, codeHash string) error {
 
 func logBackupCodeUsage(db *sql.DB, username, codeHash string) error {
 	_, err := db.Exec(`
-		INSERT INTO totp_backup_usage (username, code_hash) 
+		INSERT INTO mfa_backup_usage (username, code_hash) 
 		VALUES (?, ?)`,
 		username, codeHash,
 	)
@@ -995,8 +995,8 @@ func getTOTPData(db *sql.DB, username string) (*TOTPData, error) {
 	var lastUsedStr sql.NullString
 
 	err := db.QueryRow(`
-		SELECT secret_encrypted, enabled, setup_completed, created_at, last_used
-		FROM user_totp 
+		SELECT credential_data, enabled, setup_completed, created_at, last_used
+		FROM user_mfa_credentials 
 		WHERE username = ?`,
 		username,
 	).Scan(&data.SecretEncrypted, &data.Enabled, &data.SetupCompleted, &createdAtStr, &lastUsedStr)

@@ -189,7 +189,7 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 	}
 
 	// Check if user has TOTP enabled
-	totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, request.Username)
+	totpEnabled, err := auth.IsUserMFAEnabled(database.DB, request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to check TOTP status for admin %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
@@ -198,14 +198,14 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 	// MANDATORY TOTP: All admin users must have TOTP enabled to login
 	if !totpEnabled {
 		logging.InfoLogger.Printf("Admin user %s authenticated via OPAQUE but TOTP setup is incomplete; allowing setup", request.Username)
-		tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
+		tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for admin %s: %v", request.Username, err)
 			return JSONError(c, http.StatusInternalServerError, "Authentication failed")
 		}
 		return JSONResponse(c, http.StatusOK, "Two-factor authentication setup is required for admin access.", map[string]interface{}{
-			"requires_totp":       true,
-			"requires_totp_setup": true,
+			"requires_mfa":       true,
+			"requires_mfa_setup": true,
 			"temp_token":          tempToken,
 			"auth_method":         "OPAQUE",
 			"is_admin":            true,
@@ -213,7 +213,7 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 	}
 
 	// Generate temporary token that requires TOTP completion
-	tempToken, _, err := auth.GenerateTemporaryTOTPToken(request.Username)
+	tempToken, _, err := auth.GenerateTemporaryMFAToken(request.Username)
 	if err != nil {
 		logging.ErrorLogger.Printf("Failed to generate temporary TOTP token for admin %s: %v", request.Username, err)
 		return JSONError(c, http.StatusInternalServerError, "Authentication failed")
@@ -224,7 +224,7 @@ func AdminOpaqueAuthFinalize(c echo.Context) error {
 	logging.InfoLogger.Printf("Admin OPAQUE user authenticated (multi-step), TOTP required: %s", request.Username)
 
 	return JSONResponse(c, http.StatusOK, "Admin OPAQUE authentication successful. TOTP code required.", map[string]interface{}{
-		"requires_totp": true,
+		"requires_mfa": true,
 		"temp_token":    tempToken,
 		"auth_method":   "OPAQUE",
 		"is_admin":      true,

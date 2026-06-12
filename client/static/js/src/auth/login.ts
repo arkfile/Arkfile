@@ -31,7 +31,8 @@ export interface LoginResponse {
   token: string;
   refresh_token: string;
   auth_method: 'OPAQUE';
-  requires_totp?: boolean;
+  requires_mfa?: boolean;
+  requires_mfa_setup?: boolean;
   temp_token?: string;
   is_approved?: boolean;
 }
@@ -149,10 +150,10 @@ export class LoginManager {
       hideProgress();
 
       // Check TOTP FIRST, before any cache/digest operations
-      if (loginData.requires_totp) {
-        // requires_totp_setup: true means TOTP was never completed during registration.
+      if (loginData.requires_mfa) {
+        // requires_mfa_setup: true means TOTP was never completed during registration.
         // Route to the setup screen so the user can finish what they started.
-        if (loginData.requires_totp_setup) {
+        if (loginData.requires_mfa_setup) {
           // Temp token is in the __Host-arkfile-temp cookie (set by server).
           // Carry the password through the TOTP setup flow so the account key
           // can be derived after TOTP completes, without storing it on window.
@@ -168,7 +169,7 @@ export class LoginManager {
           showSuccess('Please complete two-factor authentication setup to finish logging in.');
           return;
         }
-        // requires_totp (without requires_totp_setup): TOTP is set up, user needs to enter code.
+        // requires_mfa (without requires_mfa_setup): TOTP is set up, user needs to enter code.
         handleTOTPFlow({
           tempToken: loginData.temp_token!,
           username: credentials.username,

@@ -138,48 +138,47 @@ CREATE TABLE IF NOT EXISTS revoked_tokens (
 );
 
 -- =====================================================
--- PHASE 5: TOTP TWO-FACTOR AUTHENTICATION
+-- MULTI-FACTOR AUTHENTICATION (MFA)
 -- =====================================================
 
-CREATE TABLE IF NOT EXISTS user_totp (
+CREATE TABLE IF NOT EXISTS user_mfa_credentials (
     username TEXT PRIMARY KEY,
-    secret_encrypted BLOB NOT NULL,             -- AES-GCM encrypted with user-specific TOTP key
+    method_type TEXT NOT NULL DEFAULT 'totp',
+    label TEXT,
+    credential_data BLOB NOT NULL,
     enabled BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_used TIMESTAMP,
-    setup_completed BOOLEAN DEFAULT FALSE,      -- Two-phase setup
-    failed_attempts_in_window INTEGER NOT NULL DEFAULT 0,  -- A-08: rolling-window failure counter
-    window_started_at TIMESTAMP,               -- A-08: start of current 24h failure window
-    last_failed_attempt_at TIMESTAMP,          -- A-08: timestamp of most recent failure
+    setup_completed BOOLEAN DEFAULT FALSE,
+    failed_attempts_in_window INTEGER NOT NULL DEFAULT 0,
+    window_started_at TIMESTAMP,
+    last_failed_attempt_at TIMESTAMP,
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
--- User TOTP Backup Codes (Hashed, RFC/Adversarial resilient - F-03)
-CREATE TABLE IF NOT EXISTS user_totp_backup_codes (
+CREATE TABLE IF NOT EXISTS user_mfa_backup_codes (
     username TEXT NOT NULL,
-    code_index INTEGER NOT NULL,          -- 0..9 index
-    code_hash BLOB NOT NULL,              -- 32-byte Argon2id hash of the backup code
-    used_at TIMESTAMP,                    -- Timestamp when this specific code was used
+    code_index INTEGER NOT NULL,
+    code_hash BLOB NOT NULL,
+    used_at TIMESTAMP,
     PRIMARY KEY (username, code_index),
     UNIQUE (username, code_hash),
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
--- TOTP Usage Log for Replay Protection (90-second window)
-CREATE TABLE IF NOT EXISTS totp_usage_log (
+CREATE TABLE IF NOT EXISTS mfa_usage_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL,
-    code_hash TEXT NOT NULL,                    -- SHA-256 hash of used code
+    code_hash TEXT NOT NULL,
     used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    window_start INTEGER NOT NULL,              -- Unix timestamp of 30s window
+    window_start INTEGER NOT NULL,
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
--- Backup Code Usage Log
-CREATE TABLE IF NOT EXISTS totp_backup_usage (
+CREATE TABLE IF NOT EXISTS mfa_backup_usage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL,
-    code_hash TEXT NOT NULL,                    -- SHA-256 hash of used backup code
+    code_hash TEXT NOT NULL,
     used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
@@ -547,13 +546,13 @@ CREATE INDEX IF NOT EXISTS idx_revoked_tokens_jti ON revoked_tokens(token_id);
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_user ON revoked_tokens(username);
 CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires ON revoked_tokens(expires_at);
 
--- TOTP indexes
-CREATE INDEX IF NOT EXISTS idx_user_totp_username ON user_totp(username);
-CREATE INDEX IF NOT EXISTS idx_user_totp_enabled ON user_totp(enabled);
-CREATE INDEX IF NOT EXISTS idx_totp_usage_cleanup ON totp_usage_log(used_at);
-CREATE INDEX IF NOT EXISTS idx_totp_usage_user_window ON totp_usage_log(username, window_start);
-CREATE INDEX IF NOT EXISTS idx_totp_backup_user ON totp_backup_usage(username);
-CREATE INDEX IF NOT EXISTS idx_totp_backup_cleanup ON totp_backup_usage(used_at);
+-- MFA indexes
+CREATE INDEX IF NOT EXISTS idx_user_mfa_credentials_username ON user_mfa_credentials(username);
+CREATE INDEX IF NOT EXISTS idx_user_mfa_credentials_enabled ON user_mfa_credentials(enabled);
+CREATE INDEX IF NOT EXISTS idx_mfa_usage_cleanup ON mfa_usage_log(used_at);
+CREATE INDEX IF NOT EXISTS idx_mfa_usage_user_window ON mfa_usage_log(username, window_start);
+CREATE INDEX IF NOT EXISTS idx_mfa_backup_user ON mfa_backup_usage(username);
+CREATE INDEX IF NOT EXISTS idx_mfa_backup_cleanup ON mfa_backup_usage(used_at);
 
 -- File sharing indexes
 CREATE INDEX IF NOT EXISTS idx_file_share_keys_share_id ON file_share_keys(share_id);
@@ -739,9 +738,9 @@ SELECT
     u.created_at as user_created_at,
     u.last_login,
     CASE WHEN oud.username IS NOT NULL THEN 1 ELSE 0 END as has_opaque_account,
-    CASE WHEN ut.username IS NOT NULL THEN 1 ELSE 0 END as has_totp,
-    ut.enabled as totp_enabled,
-    ut.setup_completed as totp_setup_completed
+    CASE WHEN mc.username IS NOT NULL THEN 1 ELSE 0 END as has_mfa,
+    mc.enabled as mfa_enabled,
+    mc.setup_completed as mfa_setup_completed
 FROM users u
 LEFT JOIN opaque_user_data oud ON u.username = oud.username
-LEFT JOIN user_totp ut ON u.username = ut.username;
+LEFT JOIN user_mfa_credentials mc ON u.username = mc.username;

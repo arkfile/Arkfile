@@ -20,10 +20,10 @@ import (
 // JWT audience constants. These are checked at the validator (ParseTokenFunc)
 // in addition to the per-tier signing-key separation.
 const (
-	AudienceTOTP   = "arkfile-totp"
+	AudienceMFA    = "arkfile-mfa"
 	AudienceAPI    = "arkfile-api"
 	AudienceExport = "arkfile-export"
-	AudienceReset  = "arkfile-totp-reset"
+	AudienceReset  = "arkfile-mfa-reset"
 	Issuer         = "arkfile-auth"
 )
 
@@ -31,8 +31,8 @@ const (
 var Echo *echo.Group
 
 type Claims struct {
-	Username     string `json:"username"`
-	RequiresTOTP bool   `json:"requires_totp,omitempty"`
+	Username    string `json:"username"`
+	RequiresMFA bool   `json:"requires_mfa,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -58,22 +58,22 @@ func HashToken(token string) (string, error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// GenerateTemporaryTOTPToken creates a temporary JWT token that requires TOTP completion.
-// Signed with the temp-tier key; carries aud=arkfile-totp and requires_totp=true.
-// Only valid at /api/totp/{setup,verify,auth} via TOTPJWTMiddleware.
-func GenerateTemporaryTOTPToken(username string) (string, time.Time, error) {
+// GenerateTemporaryMFAToken creates a temporary JWT token that requires MFA completion.
+// Signed with the temp-tier key; carries aud=arkfile-mfa and requires_mfa=true.
+// Only valid at /api/mfa/{setup,verify,auth} via MFAJWTMiddleware.
+func GenerateTemporaryMFAToken(username string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
 	expirationTime := time.Now().Add(20 * time.Minute)
 
 	claims := &Claims{
-		Username:     username,
-		RequiresTOTP: true,
+		Username:    username,
+		RequiresMFA: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			NotBefore: jwt.NewNumericDate(time.Now()),
 			Issuer:    Issuer,
-			Audience:  []string{AudienceTOTP},
+			Audience:  []string{AudienceMFA},
 			ID:        tokenID,
 		},
 	}
@@ -84,14 +84,14 @@ func GenerateTemporaryTOTPToken(username string) (string, time.Time, error) {
 }
 
 // GenerateTemporaryResetToken creates a short-lived reset-authorized temporary JWT token.
-// Signed with the temp-tier key; carries aud=arkfile-totp-reset.
+// Signed with the temp-tier key; carries aud=arkfile-mfa-reset.
 func GenerateTemporaryResetToken(username string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
 	expirationTime := time.Now().Add(15 * time.Minute)
 
 	claims := &Claims{
-		Username:     username,
-		RequiresTOTP: true,
+		Username:    username,
+		RequiresMFA: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -107,16 +107,16 @@ func GenerateTemporaryResetToken(username string) (string, time.Time, error) {
 	return tokenString, expirationTime, err
 }
 
-// GenerateFullAccessToken creates a full access JWT token after TOTP validation.
-// Signed with the full-tier key; carries aud=arkfile-api and requires_totp=false.
+// GenerateFullAccessToken creates a full access JWT token after MFA validation.
+// Signed with the full-tier key; carries aud=arkfile-api and requires_mfa=false.
 // Valid at every JWTMiddleware-protected route.
 func GenerateFullAccessToken(username string) (string, time.Time, error) {
 	tokenID := uuid.New().String()
 	expirationTime := time.Now().Add(utils.GetJWTTokenLifetime())
 
 	claims := &Claims{
-		Username:     username,
-		RequiresTOTP: false,
+		Username:    username,
+		RequiresMFA: false,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -160,7 +160,7 @@ func parseTokenWithAudience(pubKey interface{}, expectedAudience string) func(c 
 // JWTMiddleware validates full-access tokens (aud=arkfile-api). It verifies
 // the signature against the full-tier public key and enforces audience and
 // issuer at the parser layer. A temp-tier token (signed with the temp key,
-// aud=arkfile-totp) fails here in two ways: wrong signing key AND wrong
+// aud=arkfile-mfa) fails here in two ways: wrong signing key AND wrong
 // audience. Either is enough; both is defense in depth.
 func JWTMiddleware() echo.MiddlewareFunc {
 	config := echojwt.Config{
@@ -175,15 +175,15 @@ func JWTMiddleware() echo.MiddlewareFunc {
 	return echojwt.WithConfig(config)
 }
 
-// TOTPJWTMiddleware validates temporary TOTP-handoff tokens (aud=arkfile-totp).
-// Used only by /api/totp/{setup,verify,auth}. A full-tier token fails the
+// MFAJWTMiddleware validates temporary MFA-handoff tokens (aud=arkfile-mfa).
+// Used only by /api/mfa/{setup,verify,auth}. A full-tier token fails the
 // signing-key check AND the audience check.
-func TOTPJWTMiddleware() echo.MiddlewareFunc {
+func MFAJWTMiddleware() echo.MiddlewareFunc {
 	config := echojwt.Config{
 		NewClaimsFunc: func(c echo.Context) jwt.Claims {
 			return new(Claims)
 		},
-		ParseTokenFunc: parseTokenWithAudience(GetJWTTempPublicKey(), AudienceTOTP),
+		ParseTokenFunc: parseTokenWithAudience(GetJWTTempPublicKey(), AudienceMFA),
 		ErrorHandler: func(c echo.Context, err error) error {
 			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
 		},
@@ -192,11 +192,11 @@ func TOTPJWTMiddleware() echo.MiddlewareFunc {
 }
 
 // RequireFullJWT is defense-in-depth: even though JWTMiddleware enforces the
-// aud=arkfile-api audience, this middleware also asserts requires_totp=false
+// aud=arkfile-api audience, this middleware also asserts requires_mfa=false
 // and re-verifies the audience claim. Protects against a future regression
 // that loosens the validator's audience enforcement.
 //
-// Wired onto every protected group: totpProtectedGroup, pendingAllowedGroup,
+// Wired onto every protected group: mfaProtectedGroup, pendingAllowedGroup,
 // adminGroup, and devTestAdminGroup.
 func RequireFullJWT(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
@@ -208,7 +208,7 @@ func RequireFullJWT(next echo.HandlerFunc) echo.HandlerFunc {
 		if !ok {
 			return echo.NewHTTPError(http.StatusUnauthorized, "Unauthorized")
 		}
-		if claims.RequiresTOTP {
+		if claims.RequiresMFA {
 			return echo.NewHTTPError(http.StatusForbidden, "Full authentication required")
 		}
 		if !slices.Contains(claims.Audience, AudienceAPI) {
@@ -230,10 +230,10 @@ func GetUsernameFromToken(c echo.Context) string {
 	return claims.Username
 }
 
-// RequiresTOTPFromToken returns whether the token in the request context
-// carries the requires_totp=true flag. Safe against missing/malformed
+// RequiresMFAFromToken returns whether the token in the request context
+// carries the requires_mfa=true flag. Safe against missing/malformed
 // context entries: returns false rather than panicking.
-func RequiresTOTPFromToken(c echo.Context) bool {
+func RequiresMFAFromToken(c echo.Context) bool {
 	user, ok := c.Get("user").(*jwt.Token)
 	if !ok || user == nil {
 		return false
@@ -242,7 +242,7 @@ func RequiresTOTPFromToken(c echo.Context) bool {
 	if !ok {
 		return false
 	}
-	return claims.RequiresTOTP
+	return claims.RequiresMFA
 }
 
 // GetClaimsFromContext returns parsed claims from context or nil

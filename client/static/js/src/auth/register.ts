@@ -168,7 +168,7 @@ export class RegistrationManager {
       }
 
       // Check if TOTP setup is required (new users need to set up 2FA)
-      if (registrationData.requires_totp_setup && registrationData.temp_token) {
+      if (registrationData.requires_mfa_setup && registrationData.temp_token) {
         hideProgress();
         handleTOTPSetupFlow({
           tempToken: registrationData.temp_token,

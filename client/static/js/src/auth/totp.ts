@@ -191,7 +191,7 @@ async function verifyTOTPLogin(): Promise<void> {
     
     if (isBackup) {
       // Lost-Device Recovery Flow: validate backup code and receive temporary reset-tier JWT token context
-      const recoveryResponse = await fetch('/api/totp/recover-with-backup-code', {
+      const recoveryResponse = await fetch('/api/mfa/recover-with-backup-code', {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -207,8 +207,8 @@ async function verifyTOTPLogin(): Promise<void> {
         document.querySelector('.modal-overlay')?.remove();
         showProgressMessage('Re-setting up TOTP authenticator...');
         
-        // Let's call /api/totp/reset using our newly generated reset-tier token context
-        const resetResponse = await fetch('/api/totp/reset', {
+        // Let's call /api/mfa/reset using our newly generated reset-tier token context
+        const resetResponse = await fetch('/api/mfa/reset', {
           method: 'POST',
           credentials: 'include',
           headers: {
@@ -243,7 +243,7 @@ async function verifyTOTPLogin(): Promise<void> {
     }
     
     // Normal TOTP entry validation
-    const response = await fetch('/api/totp/auth', {
+    const response = await fetch('/api/mfa/auth', {
       method: 'POST',
       credentials: 'include',
       headers: {
@@ -389,7 +389,7 @@ function startSetupSessionCountdown(): void {
 
 // TOTP Setup Functions
 //
-// /api/totp/setup is gated by TOTPJWTMiddleware (aud=arkfile-totp). The
+// /api/mfa/setup is gated by MFAJWTMiddleware (aud=arkfile-mfa). The
 // temp token (in TEMP_TOKEN_KEY) is the credential to use here. As a
 // fallback, accept the full token for the rare "user is already logged in
 // and wants to re-run TOTP setup" path -- although in practice that path
@@ -401,7 +401,7 @@ export async function initiateTOTPSetup(): Promise<TOTPSetupData | null> {
 
     // The temp token is in the __Host-arkfile-temp cookie; credentials:'include'
     // sends it automatically.
-    const response = await fetch('/api/totp/setup', {
+    const response = await fetch('/api/mfa/setup', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -443,7 +443,7 @@ export async function completeTOTPSetup(code: string): Promise<Record<string, an
     showProgressMessage('Completing TOTP setup...');
 
     // Temp token is in __Host-arkfile-temp cookie; credentials:'include' sends it automatically.
-    const response = await fetch('/api/totp/verify', {
+    const response = await fetch('/api/mfa/verify', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -485,7 +485,7 @@ export async function completeTOTPSetup(code: string): Promise<Record<string, an
 
 export async function getTOTPStatus(): Promise<{enabled: boolean, setupRequired: boolean} | null> {
   try {
-    const response = await fetch('/api/totp/status', {
+    const response = await fetch('/api/mfa/status', {
       method: 'GET',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -679,7 +679,7 @@ async function completeTOTPSetupFlow(code: string): Promise<void> {
   if (verifyResult) {
     document.querySelector('.modal-overlay')?.remove();
 
-    // Tokens are in HttpOnly cookies (set by the server on /api/totp/verify).
+    // Tokens are in HttpOnly cookies (set by the server on /api/mfa/verify).
     // If we got here from the registration flow (incomplete TOTP setup),
     // _pendingTOTPFlowData holds the password and username.
     const flowData = _pendingTOTPFlowData;

@@ -144,10 +144,10 @@ func SetupDevAdminTOTP(db *sql.DB, user *models.User, totpSecret string) error {
 
 	// Store TOTP data in database (schema has no backup_codes_encrypted column)
 	_, err = db.Exec(`
-		INSERT OR REPLACE INTO user_totp (
-			username, secret_encrypted, 
+		INSERT OR REPLACE INTO user_mfa_credentials (
+			username, method_type, credential_data,
 			enabled, setup_completed, created_at, last_used
-		) VALUES (?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, 'totp', ?, ?, ?, ?, ?)`,
 		user.Username, secretEncrypted,
 		true, true, time.Now().UTC(), nil,
 	)
@@ -156,8 +156,8 @@ func SetupDevAdminTOTP(db *sql.DB, user *models.User, totpSecret string) error {
 		return fmt.Errorf("failed to store dev admin TOTP setup: %w", err)
 	}
 
-	// Store hashed backup codes on user_totp_backup_codes table (reuses global Argon2id floor parameters)
-	_, _ = db.Exec("DELETE FROM user_totp_backup_codes WHERE username = ?", user.Username)
+	// Store hashed backup codes on user_mfa_backup_codes table (reuses global Argon2id floor parameters)
+	_, _ = db.Exec("DELETE FROM user_mfa_backup_codes WHERE username = ?", user.Username)
 	for i, code := range backupCodes {
 		salt := deriveBackupCodeSalt(user.Username, i)
 		hash, err := crypto.DeriveArgon2IDKey(
@@ -173,7 +173,7 @@ func SetupDevAdminTOTP(db *sql.DB, user *models.User, totpSecret string) error {
 		}
 
 		_, err = db.Exec(`
-			INSERT OR REPLACE INTO user_totp_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
+			INSERT OR REPLACE INTO user_mfa_backup_codes (username, code_index, code_hash) VALUES (?, ?, ?)`,
 			user.Username, i, hash,
 		)
 		if err != nil {
@@ -194,7 +194,7 @@ func SetupDevAdminTOTP(db *sql.DB, user *models.User, totpSecret string) error {
 // happens within the same 30-second window (e.g., during e2e testing).
 func ValidateDevAdminTOTPWorkflow(db *sql.DB, user *models.User, totpSecret string) error {
 	// Check if TOTP is enabled
-	enabled, err := IsUserTOTPEnabled(db, user.Username)
+	enabled, err := IsUserMFAEnabled(db, user.Username)
 	if err != nil {
 		return fmt.Errorf("failed to check TOTP enabled status: %w", err)
 	}

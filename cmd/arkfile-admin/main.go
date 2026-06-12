@@ -36,7 +36,7 @@ USAGE:
 NETWORK COMMANDS (Admin API - localhost only):
     bootstrap         Bootstrap the first admin user (requires token)
     login             Admin login via OPAQUE+TOTP authentication
-    setup-totp        Setup Two-Factor Authentication (TOTP)
+    setup-mfa        Setup Two-Factor Authentication (TOTP)
     logout            Clear admin session
     list-users        List all users
     approve-user      Approve user account
@@ -229,7 +229,7 @@ func main() {
 			logError("Login failed: %v", err)
 			os.Exit(1)
 		}
-	case "setup-totp":
+	case "setup-mfa":
 		if err := handleSetupTOTPCommand(client, config, args); err != nil {
 			logError("TOTP setup failed: %v", err)
 			os.Exit(1)
@@ -705,7 +705,7 @@ EXAMPLES:
 	fmt.Printf("Bootstrap successful! Admin user '%s' created.\n", *usernameFlag)
 
 	// Handle TOTP requirement
-	requiresTOTP, _ := regFinalizeResp.Data["requires_totp"].(bool)
+	requiresTOTP, _ := regFinalizeResp.Data["requires_mfa"].(bool)
 	tempToken, _ := regFinalizeResp.Data["temp_token"].(string)
 
 	if requiresTOTP && tempToken != "" {
@@ -723,7 +723,7 @@ EXAMPLES:
 			logError("Warning: Failed to save session for TOTP setup: %v", err)
 		} else {
 			fmt.Printf("\nTOTP setup required. Session saved.\n")
-			fmt.Printf("Please run 'arkfile-admin setup-totp' to complete account setup.\n")
+			fmt.Printf("Please run 'arkfile-admin setup-mfa' to complete account setup.\n")
 		}
 	}
 
@@ -732,14 +732,14 @@ EXAMPLES:
 
 // handleSetupTOTPCommand processes TOTP setup command
 func handleSetupTOTPCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("setup-totp", flag.ExitOnError)
+	fs := flag.NewFlagSet("setup-mfa", flag.ExitOnError)
 	var (
 		showSecret = fs.Bool("show-secret", false, "Only show the secret (for automation)")
 		verifyCode = fs.String("verify", "", "Verify the setup with a code")
 	)
 
 	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin setup-totp [FLAGS]
+		fmt.Printf(`Usage: arkfile-admin setup-mfa [FLAGS]
 
 Setup Two-Factor Authentication (TOTP) for the account.
 This is usually required immediately after registration.
@@ -750,9 +750,9 @@ FLAGS:
     --help            Show this help message
 
 EXAMPLES:
-    arkfile-admin setup-totp
-    arkfile-admin setup-totp --show-secret
-    arkfile-admin setup-totp --verify 123456
+    arkfile-admin setup-mfa
+    arkfile-admin setup-mfa --show-secret
+    arkfile-admin setup-mfa --verify 123456
 `)
 	}
 
@@ -784,7 +784,7 @@ EXAMPLES:
 	}
 
 	// Step 1: Call setup endpoint to get secret
-	setupResp, err := client.makeRequest("POST", "/api/totp/setup", nil, token)
+	setupResp, err := client.makeRequest("POST", "/api/mfa/setup", nil, token)
 	if err != nil {
 		return fmt.Errorf("failed to initiate TOTP setup: %w", err)
 	}
@@ -826,7 +826,7 @@ func verifyTOTP(client *HTTPClient, config *AdminConfig, session *AdminSession, 
 		"code": code,
 	}
 
-	verifyResp, err := client.makeRequest("POST", "/api/totp/verify", verifyReq, token)
+	verifyResp, err := client.makeRequest("POST", "/api/mfa/verify", verifyReq, token)
 	if err != nil {
 		return fmt.Errorf("failed to verify TOTP code: %w", err)
 	}
@@ -992,15 +992,15 @@ EXAMPLES:
 	var expiresAt time.Time
 
 	// Check if TOTP is required
-	requiresTOTP, _ := loginResp.Data["requires_totp"].(bool)
-	requiresTOTPSetup, _ := loginResp.Data["requires_totp_setup"].(bool)
+	requiresTOTP, _ := loginResp.Data["requires_mfa"].(bool)
+	requiresTOTPSetup, _ := loginResp.Data["requires_mfa_setup"].(bool)
 
 	if requiresTOTPSetup {
 		tempToken, _ := loginResp.Data["temp_token"].(string)
 		if tempToken == "" {
 			return fmt.Errorf("missing temporary TOTP token in response")
 		}
-		// Save session for setup-totp
+		// Save session for setup-mfa
 		session := &AdminSession{
 			Username:       *usernameFlag,
 			TempToken:      tempToken,
@@ -1013,7 +1013,7 @@ EXAMPLES:
 			return fmt.Errorf("failed to save admin session for TOTP setup: %w", err)
 		}
 		fmt.Printf("\nTOTP setup required. Session saved.\n")
-		fmt.Printf("Please run 'arkfile-admin setup-totp' to complete account setup.\n")
+		fmt.Printf("Please run 'arkfile-admin setup-mfa' to complete account setup.\n")
 		return nil
 	}
 
@@ -1049,7 +1049,7 @@ EXAMPLES:
 			"is_backup":   false,
 		}
 
-		totpResp, err := client.makeRequest("POST", "/api/totp/auth", totpReq, tempToken)
+		totpResp, err := client.makeRequest("POST", "/api/mfa/auth", totpReq, tempToken)
 		if err != nil {
 			return fmt.Errorf("TOTP authentication failed: %w", err)
 		}

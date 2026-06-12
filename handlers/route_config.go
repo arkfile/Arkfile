@@ -85,16 +85,16 @@ func RegisterRoutes() {
 	Echo.POST("/api/bootstrap/register/response", RegisterRateLimitMiddleware(BootstrapRegisterResponse))
 	Echo.POST("/api/bootstrap/register/finalize", RegisterRateLimitMiddleware(BootstrapRegisterFinalize))
 
-	// TOTP Status and Reset - requires full authentication (standard JWT)
-	auth.Echo.GET("/api/totp/status", TOTPStatus)
-	auth.Echo.POST("/api/totp/reset", TOTPReset)
+	// MFA Status and Reset - requires full authentication (standard JWT)
+	auth.Echo.GET("/api/mfa/status", MFAStatus)
+	auth.Echo.POST("/api/mfa/reset", MFAReset)
 
-	// TOTP Setup/Verify/Auth - requires temporary TOTP token (arkfile-totp audience)
-	totpGroup := Echo.Group("/api/totp")
-	totpGroup.POST("/recover-with-backup-code", RecoverWithBackupCode) // public recovery trigger
-	totpGroup.POST("/setup", TOTPSetup, auth.TOTPJWTMiddleware())
-	totpGroup.POST("/verify", TOTPRateLimitMiddleware("totp_verify")(TOTPVerify), auth.TOTPJWTMiddleware())
-	totpGroup.POST("/auth", TOTPRateLimitMiddleware("totp_auth")(TOTPAuth), auth.TOTPJWTMiddleware())
+	// MFA Setup/Verify/Auth - requires temporary MFA token (arkfile-mfa audience)
+	mfaGroup := Echo.Group("/api/mfa")
+	mfaGroup.POST("/recover-with-backup-code", RecoverWithBackupCode) // public recovery trigger
+	mfaGroup.POST("/setup", MFASetup, auth.MFAJWTMiddleware())
+	mfaGroup.POST("/verify", MFARateLimitMiddleware("mfa_verify")(MFAVerify), auth.MFAJWTMiddleware())
+	mfaGroup.POST("/auth", MFARateLimitMiddleware("mfa_auth")(MFAAuth), auth.MFAJWTMiddleware())
 
 	// Admin contacts (public - no auth required)
 	Echo.GET("/api/admin-contacts", AdminContactsHandler)
@@ -105,40 +105,40 @@ func RegisterRoutes() {
 	// It is registered under auth.Echo which applies JWTMiddleware + TokenRevocationMiddleware.
 	auth.Echo.POST("/api/logout", Logout)
 
-	// Create TOTP-protected group for all sensitive operations.
+	// Create MFA-protected group for all sensitive operations.
 	// Stack inherited from auth.Echo: JWTMiddleware + TokenRevocationMiddleware + RequireApproved.
-	// Adds: RequireFullJWT (rejects requires_totp=true and audience drift) + RequireTOTP.
-	totpProtectedGroup := auth.Echo.Group("")
-	totpProtectedGroup.Use(auth.RequireFullJWT)
-	totpProtectedGroup.Use(RequireTOTP)
+	// Adds: RequireFullJWT (rejects requires_mfa=true and audience drift) + RequireMFA.
+	mfaProtectedGroup := auth.Echo.Group("")
+	mfaProtectedGroup.Use(auth.RequireFullJWT)
+	mfaProtectedGroup.Use(RequireMFA)
 
-	// Token revocation - require TOTP
-	totpProtectedGroup.POST("/api/revoke-token", RevokeToken)
-	totpProtectedGroup.POST("/api/auth/revoke-all", RevokeAllTokens)
+	// Token revocation - require MFA
+	mfaProtectedGroup.POST("/api/revoke-token", RevokeToken)
+	mfaProtectedGroup.POST("/api/auth/revoke-all", RevokeAllTokens)
 
-	// Files - require authentication AND TOTP
+	// Files - require authentication and MFA
 
-	totpProtectedGroup.GET("/api/files", ListFiles)
-	totpProtectedGroup.GET("/api/files/metadata", ListRecentFileMetadata)
-	totpProtectedGroup.POST("/api/files/metadata/batch", GetFileMetadataBatch)
-	totpProtectedGroup.GET("/api/files/:fileId/meta", GetFileMeta)
-	totpProtectedGroup.DELETE("/api/files/:fileId", DeleteFile)
+	mfaProtectedGroup.GET("/api/files", ListFiles)
+	mfaProtectedGroup.GET("/api/files/metadata", ListRecentFileMetadata)
+	mfaProtectedGroup.POST("/api/files/metadata/batch", GetFileMetadataBatch)
+	mfaProtectedGroup.GET("/api/files/:fileId/meta", GetFileMeta)
+	mfaProtectedGroup.DELETE("/api/files/:fileId", DeleteFile)
 
-	// Chunked downloads - require TOTP
-	totpProtectedGroup.GET("/api/files/:fileId/chunks/:chunkIndex", DownloadFileChunk)
+	// Chunked downloads - require MFA
+	mfaProtectedGroup.GET("/api/files/:fileId/chunks/:chunkIndex", DownloadFileChunk)
 
-	// Chunked uploads - require TOTP
-	totpProtectedGroup.POST("/api/uploads/init", CreateUploadSession)
-	totpProtectedGroup.POST("/api/uploads/:sessionId/chunks/:chunkNumber", UploadChunk)
-	totpProtectedGroup.POST("/api/uploads/:sessionId/complete", CompleteUpload)
-	totpProtectedGroup.GET("/api/uploads/:sessionId/status", GetUploadStatus)
-	totpProtectedGroup.DELETE("/api/uploads/:sessionId", CancelUpload)
+	// Chunked uploads - require MFA
+	mfaProtectedGroup.POST("/api/uploads/init", CreateUploadSession)
+	mfaProtectedGroup.POST("/api/uploads/:sessionId/chunks/:chunkNumber", UploadChunk)
+	mfaProtectedGroup.POST("/api/uploads/:sessionId/complete", CompleteUpload)
+	mfaProtectedGroup.GET("/api/uploads/:sessionId/status", GetUploadStatus)
+	mfaProtectedGroup.DELETE("/api/uploads/:sessionId", CancelUpload)
 
-	// File sharing - authenticated endpoints (require TOTP)
-	totpProtectedGroup.GET("/api/files/:fileId/envelope", GetFileEnvelope) // Get file envelope for share creation
-	totpProtectedGroup.POST("/api/shares", CreateFileShare)                // Create anonymous share (file_id in body)
-	totpProtectedGroup.GET("/api/shares", ListShares)                      // List user's shares
-	totpProtectedGroup.POST("/api/shares/:id/revoke", RevokeShare)         // Revoke a share
+	// File sharing - authenticated endpoints (require MFA)
+	mfaProtectedGroup.GET("/api/files/:fileId/envelope", GetFileEnvelope) // Get file envelope for share creation
+	mfaProtectedGroup.POST("/api/shares", CreateFileShare)                // Create anonymous share (file_id in body)
+	mfaProtectedGroup.GET("/api/shares", ListShares)                      // List user's shares
+	mfaProtectedGroup.POST("/api/shares/:id/revoke", RevokeShare)         // Revoke a share
 
 	// Anonymous share access (no authentication required) - separate namespace with rate limiting
 	// Using /api/public/shares to avoid conflicts with authenticated /api/shares routes
@@ -157,7 +157,7 @@ func RegisterRoutes() {
 	publicShareGroup.GET("/:id/chunks/:chunkIndex", DownloadShareChunk) // Download chunk of shared file
 
 	// File export token - requires TOTP (creates short-lived download token)
-	totpProtectedGroup.POST("/api/files/:fileId/export-token", CreateExportToken)
+	mfaProtectedGroup.POST("/api/files/:fileId/export-token", CreateExportToken)
 
 	// File export download - registered on public router because browser downloads
 	// use ?token= query param (no Authorization header). The handler validates
@@ -165,41 +165,41 @@ func RegisterRoutes() {
 	Echo.GET("/api/files/:fileId/export", ExportFile)
 
 	// Contact information - user endpoints.
-	// These are intentionally NOT in totpProtectedGroup (which inherits RequireApproved)
+	// These are intentionally NOT in mfaProtectedGroup (which inherits RequireApproved)
 	// so that pending users can set their contact info while awaiting approval.
-	// Stack: JWT + TokenRevocation + RequireFullJWT + RequireTOTP (no RequireApproved).
+	// Stack: JWT + TokenRevocation + RequireFullJWT + RequireMFA (no RequireApproved).
 	pendingAllowedGroup := Echo.Group("")
 	pendingAllowedGroup.Use(auth.JWTMiddleware())
 	pendingAllowedGroup.Use(auth.TokenRevocationMiddleware(database.DB))
 	pendingAllowedGroup.Use(auth.RequireFullJWT)
-	pendingAllowedGroup.Use(RequireTOTP)
+	pendingAllowedGroup.Use(RequireMFA)
 	pendingAllowedGroup.GET("/api/user/contact-info", GetContactInfo)
 	pendingAllowedGroup.PUT("/api/user/contact-info", PutContactInfo)
 	pendingAllowedGroup.DELETE("/api/user/contact-info", DeleteContactInfo)
 
 	// Current user identity - used by browser clients to get username/role
 	// since the full JWT is HttpOnly and not readable by JavaScript.
-	totpProtectedGroup.GET("/api/auth/me", GetCurrentUser)
+	mfaProtectedGroup.GET("/api/auth/me", GetCurrentUser)
 
-	// Credits system - user endpoints (require TOTP)
-	totpProtectedGroup.GET("/api/credits", GetUserCredits)
+	// Credits system - user endpoints (require MFA)
+	mfaProtectedGroup.GET("/api/credits", GetUserCredits)
 
 	// Payments integration - user endpoints
-	totpProtectedGroup.POST("/api/billing/invoice", CreateInvoiceHandler)
-	totpProtectedGroup.GET("/api/billing/invoice/:invoice_id", GetInvoiceStatusHandler)
+	mfaProtectedGroup.POST("/api/billing/invoice", CreateInvoiceHandler)
+	mfaProtectedGroup.GET("/api/billing/invoice/:invoice_id", GetInvoiceStatusHandler)
 
 	// Webhook endpoint (public, unauthenticated)
 	Echo.POST("/api/webhooks/btcpay", BTCPayWebhookHandler)
 
 	// Admin API endpoints - structured for future expansion.
 	// Stack: JWTMiddleware (validates aud=arkfile-api, rejects temp tokens at signature/audience)
-	//      + RequireFullJWT (defense in depth: rejects requires_totp=true)
-	//      + RequireTOTP (asserts the user has TOTP enrolled; E-01 fix)
+	//      + RequireFullJWT (defense in depth: rejects requires_mfa=true)
+	//      + RequireMFA (asserts the user has MFA enrolled; E-01 fix)
 	//      + AdminMiddleware (loopback gate, rate limit, admin-flag check, audit log).
 	adminGroup := Echo.Group("/api/admin")
 	adminGroup.Use(auth.JWTMiddleware())
 	adminGroup.Use(auth.RequireFullJWT)
-	adminGroup.Use(RequireTOTP)
+	adminGroup.Use(RequireMFA)
 	adminGroup.Use(AdminMiddleware)
 
 	// Credits system - admin endpoints (require admin privileges).
@@ -278,10 +278,10 @@ func RegisterRoutes() {
 		devTestAdminGroup := Echo.Group("/api/admin/dev-test")
 		devTestAdminGroup.Use(auth.JWTMiddleware())
 		devTestAdminGroup.Use(auth.RequireFullJWT)
-		devTestAdminGroup.Use(RequireTOTP)
+		devTestAdminGroup.Use(RequireMFA)
 		devTestAdminGroup.Use(AdminMiddleware)
 		devTestAdminGroup.POST("/users/cleanup", AdminCleanupTestUser)
-		devTestAdminGroup.GET("/totp/decrypt-check/:username", AdminTOTPDecryptCheck) // TOTP diagnostic endpoint
+		devTestAdminGroup.GET("/mfa/decrypt-check/:username", AdminMFADecryptCheck)
 
 		// Billing tick-now: forces an immediate tick (and optional sweep).
 		// Lives under /dev-test so it is physically not registered as a

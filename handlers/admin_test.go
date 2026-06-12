@@ -1168,7 +1168,7 @@ func TestListUsers_Success_Admin(t *testing.T) {
 		sqlmock.NewRows([]string{"id", "username", "created_at", "total_storage_bytes", "storage_limit_bytes", "is_approved", "approved_by", "approved_at", "is_admin"}).
 			AddRow(1, adminUsername, time.Now(), int64(0), models.DefaultStorageLimit, true, sql.NullString{}, sql.NullTime{}, true))
 
-	// The ListUsers handler now uses a JOIN query with user_totp and file_metadata.
+	// The ListUsers handler now uses a JOIN query with user_mfa_credentials and file_metadata.
 	// Columns: username, is_approved, is_admin, storage_limit_bytes, total_storage_bytes,
 	//          registration_date, last_login, totp_enabled, file_count
 	regDateUser2 := "2026-04-17 12:00:00"

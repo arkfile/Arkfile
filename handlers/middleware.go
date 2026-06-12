@@ -472,7 +472,7 @@ func CSPMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 // CookieTokenMiddleware extracts the JWT from an Arkfile session cookie when
 // one is present, and injects it as an Authorization header so the downstream
-// JWT validators (JWTMiddleware, TOTPJWTMiddleware) work without modification.
+// JWT validators (JWTMiddleware, MFAJWTMiddleware) work without modification.
 //
 // Priority rules (no UA sniffing):
 //  1. Full-tier cookie present: inject as bearer; ignore any existing header.
@@ -493,7 +493,7 @@ func CookieTokenMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 
 		if cookieJWT != "" {
 			// Browser path: inject token into Authorization header so existing
-			// JWTMiddleware/TOTPJWTMiddleware validate it without any changes.
+			// JWTMiddleware/MFAJWTMiddleware validate it without any changes.
 			req.Header.Set("Authorization", "Bearer "+cookieJWT)
 		}
 		// CLI path (no cookie): Authorization header already set by client — nothing to do.
@@ -509,9 +509,9 @@ func CookieTokenMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 func CSRFMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		// Only enforce CSRF for browser sessions (full-tier cookie present).
-		// Temp-tier-only sessions are during TOTP handoff; POST to /api/totp/*
-		// is safe here because TOTP endpoints are protected by TOTPJWTMiddleware
-		// (audience=arkfile-totp) and are not state-changing in a sensitive way
+		// Temp-tier-only sessions are during TOTP handoff; POST to /api/mfa/*
+		// is safe here because TOTP endpoints are protected by MFAJWTMiddleware
+		// (audience=arkfile-mfa) and are not state-changing in a sensitive way
 		// that an attacker can exploit — the temp token itself is the credential.
 		ck, err := c.Request().Cookie(CookieFullToken)
 		if err != nil || ck.Value == "" {
@@ -686,15 +686,15 @@ func RequireAdmin(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-// RequireTOTP ensures the user has TOTP enabled before allowing access to protected resources.
-// Note: /api/totp/setup and /api/totp/verify are on a separate route group using TOTPJWTMiddleware
+// RequireMFA ensures the user has TOTP enabled before allowing access to protected resources.
+// Note: /api/mfa/setup and /api/mfa/verify are on a separate route group using MFAJWTMiddleware
 // and never reach this middleware, so no path-based bypass is needed here.
-func RequireTOTP(next echo.HandlerFunc) echo.HandlerFunc {
+func RequireMFA(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		username := auth.GetUsernameFromToken(c)
 
 		// Check if user has TOTP enabled
-		totpEnabled, err := auth.IsUserTOTPEnabled(database.DB, username)
+		totpEnabled, err := auth.IsUserMFAEnabled(database.DB, username)
 		if err != nil {
 			logging.ErrorLogger.Printf("Failed to check TOTP status for %s: %v", username, err)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to verify TOTP status")

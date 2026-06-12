@@ -370,7 +370,7 @@ Arkfile partitions system secrets into three separate trust tiers (Tier-1, Tier-
 **Lost-Device User Recovery Model:**
 - Lost password = lost files. Lost authenticator + lost backup codes = lost account. This model is intentionally non-custodial.
 - If a user loses their authenticator (TOTP), but holds one of their 10 alphanumeric backup codes (~59.5 bits of secure entropy sampled using rejection sampling), they can start a reachable recovery flow.
-- A-15 Reachable TOTP recovery enables verified backup codes to produce a short-lived temporary `"arkfile-totp-reset"` JWT claim. Users use this reset-authorized context to flush, reset, and re-setup their TOTP keys immediately without requiring administrative or world-readable override features.
+- A-15 Reachable TOTP recovery enables verified backup codes to produce a short-lived temporary `"arkfile-mfa-reset"` JWT claim. Users use this reset-authorized context to flush, reset, and re-setup their TOTP keys immediately without requiring administrative or world-readable override features.
 
 ### Authentication Security
 

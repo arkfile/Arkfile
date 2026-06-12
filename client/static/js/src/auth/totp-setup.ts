@@ -25,7 +25,7 @@ export interface TOTPSetupData {
 
 /**
  * Handle TOTP setup flow after registration
- * This is called when the server returns requires_totp_setup: true
+ * This is called when the server returns requires_mfa_setup: true
  */
 export function handleTOTPSetupFlow(data: TOTPSetupFlowData): void {
   // Store the registration data temporarily
@@ -101,7 +101,7 @@ export function handleTOTPSetupFlow(data: TOTPSetupFlowData): void {
 async function initiateTOTPSetupForRegistration(_tempToken: string): Promise<TOTPSetupData | null> {
   try {
     // Temp token is in __Host-arkfile-temp cookie; credentials:'include' sends it automatically.
-    const response = await fetch('/api/totp/setup', {
+    const response = await fetch('/api/mfa/setup', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -314,7 +314,7 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
     showProgressMessage('Completing registration...');
     
     // Temp token is in __Host-arkfile-temp cookie; credentials:'include' sends it automatically.
-    const response = await fetch('/api/totp/verify', {
+    const response = await fetch('/api/mfa/verify', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
@@ -326,7 +326,7 @@ async function completeTOTPSetupForRegistration(code: string, flowData: TOTPSetu
       // Handle both direct response and wrapped response
       const data = responseData.data || responseData;
       
-      // Full-access cookies are issued by the server on /api/totp/verify.
+      // Full-access cookies are issued by the server on /api/mfa/verify.
       // Clean up
       if (typeof window !== 'undefined') {
         delete window.totpSetupData;

@@ -270,7 +270,7 @@ func TestCookieTokenMiddleware_FullTokenCookie(t *testing.T) {
 // JWT is injected when only the temp cookie is present.
 func TestCookieTokenMiddleware_TempTokenCookie(t *testing.T) {
 	e := echo.New()
-	req := httptest.NewRequest(http.MethodPost, "/api/totp/auth", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/mfa/auth", nil)
 	req.AddCookie(&http.Cookie{Name: CookieTempToken, Value: "temp-jwt-abc"})
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)

@@ -63,7 +63,7 @@ type bundleMetadata struct {
 
 // ExportFile handles GET /api/files/:fileId/export
 // Streams a .arkbackup bundle for the authenticated user's own file.
-// Authentication: JWT + TOTP (via totpProtectedGroup middleware)
+// Authentication: JWT + TOTP (via mfaProtectedGroup middleware)
 // Also accepts ?token= query param for browser downloads (short-lived export token).
 func ExportFile(c echo.Context) error {
 	fileID := c.Param("fileId")
@@ -249,9 +249,9 @@ func resolveExportAuthFromHeader(c echo.Context) (string, error) {
 	}
 
 	// Defense in depth: even though aud=arkfile-api enforced above implies a
-	// full-tier token, explicitly reject requires_totp=true and double-check
+	// full-tier token, explicitly reject requires_mfa=true and double-check
 	// the audience claim. This guards against any future parser-config drift.
-	if claims.RequiresTOTP {
+	if claims.RequiresMFA {
 		return "", echo.NewHTTPError(http.StatusForbidden, "Full authentication required for export")
 	}
 	if !slices.Contains(claims.Audience, auth.AudienceAPI) {

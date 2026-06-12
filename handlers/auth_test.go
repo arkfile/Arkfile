@@ -104,19 +104,19 @@ func TestLogout_InvalidBody(t *testing.T) {
 func TestTOTPStatus_Enabled(t *testing.T) {
 	username := "totp-enabled-user"
 
-	c, rec, mock, _ := setupTestEnv(t, http.MethodGet, "/api/auth/totp/status", nil)
+	c, rec, mock, _ := setupTestEnv(t, http.MethodGet, "/api/mfa/status", nil)
 
 	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Mock: IsUserTOTPEnabled query - actual SQL is:
-	// SELECT enabled, setup_completed FROM user_totp WHERE username = ?
-	totpSQL := `SELECT enabled, setup_completed FROM user_totp WHERE username = \?`
+	// Mock: IsUserMFAEnabled query - actual SQL is:
+	// SELECT enabled, setup_completed FROM user_mfa_credentials WHERE username = ?
+	totpSQL := `SELECT enabled, setup_completed FROM user_mfa_credentials WHERE username = \?`
 	totpRows := sqlmock.NewRows([]string{"enabled", "setup_completed"}).AddRow(true, true)
 	mock.ExpectQuery(totpSQL).WithArgs(username).WillReturnRows(totpRows)
 
-	err := TOTPStatus(c)
+	err := MFAStatus(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
@@ -135,17 +135,17 @@ func TestTOTPStatus_Enabled(t *testing.T) {
 func TestTOTPStatus_NotEnabled(t *testing.T) {
 	username := "totp-disabled-user"
 
-	c, rec, mock, _ := setupTestEnv(t, http.MethodGet, "/api/auth/totp/status", nil)
+	c, rec, mock, _ := setupTestEnv(t, http.MethodGet, "/api/mfa/status", nil)
 
 	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	// Mock: IsUserTOTPEnabled - no rows = not enabled
-	totpSQL := `SELECT enabled, setup_completed FROM user_totp WHERE username = \?`
+	// Mock: IsUserMFAEnabled - no rows = not enabled
+	totpSQL := `SELECT enabled, setup_completed FROM user_mfa_credentials WHERE username = \?`
 	mock.ExpectQuery(totpSQL).WithArgs(username).WillReturnRows(sqlmock.NewRows([]string{"enabled", "setup_completed"}))
 
-	err := TOTPStatus(c)
+	err := MFAStatus(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
@@ -167,12 +167,12 @@ func TestTOTPAuth_EmptyCode(t *testing.T) {
 	username := "totp-auth-user"
 
 	body, _ := json.Marshal(map[string]string{"code": ""})
-	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/auth/totp/auth", bytes.NewReader(body))
+	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/mfa/auth", bytes.NewReader(body))
 
-	// Set up token that requires TOTP (RequiresTOTP is a claim field, not a header)
+	// Set up token that requires TOTP (RequiresMFA is a claim field, not a header)
 	claims := &auth.Claims{
 		Username:     username,
-		RequiresTOTP: true,
+		RequiresMFA: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		},
@@ -180,7 +180,7 @@ func TestTOTPAuth_EmptyCode(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	err := TOTPAuth(c)
+	err := MFAAuth(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 
@@ -194,11 +194,11 @@ func TestTOTPAuth_InvalidCodeLength(t *testing.T) {
 	username := "totp-auth-user"
 
 	body, _ := json.Marshal(map[string]string{"code": "1234"}) // 4 digits, not 6
-	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/auth/totp/auth", bytes.NewReader(body))
+	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/mfa/auth", bytes.NewReader(body))
 
 	claims := &auth.Claims{
 		Username:     username,
-		RequiresTOTP: true,
+		RequiresMFA: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		},
@@ -206,7 +206,7 @@ func TestTOTPAuth_InvalidCodeLength(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	err := TOTPAuth(c)
+	err := MFAAuth(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 
@@ -223,11 +223,11 @@ func TestTOTPAuth_InvalidBackupCodeLength(t *testing.T) {
 		"code":      "short",
 		"is_backup": true,
 	})
-	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/auth/totp/auth", bytes.NewReader(body))
+	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/mfa/auth", bytes.NewReader(body))
 
 	claims := &auth.Claims{
 		Username:     username,
-		RequiresTOTP: true,
+		RequiresMFA: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
 		},
@@ -235,7 +235,7 @@ func TestTOTPAuth_InvalidBackupCodeLength(t *testing.T) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	err := TOTPAuth(c)
+	err := MFAAuth(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 
@@ -246,9 +246,9 @@ func TestTOTPAuth_InvalidBackupCodeLength(t *testing.T) {
 
 // TestTOTPAuth_InvalidRequestFormat verifies malformed JSON is rejected
 func TestTOTPAuth_InvalidRequestFormat(t *testing.T) {
-	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/auth/totp/auth", bytes.NewReader([]byte("{bad json")))
+	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/mfa/auth", bytes.NewReader([]byte("{bad json")))
 
-	err := TOTPAuth(c)
+	err := MFAAuth(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
@@ -260,14 +260,14 @@ func TestTOTPReset_EmptyBackupCode(t *testing.T) {
 	username := "totp-reset-user"
 
 	body, _ := json.Marshal(map[string]string{"backup_code": ""})
-	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/auth/totp/reset", bytes.NewReader(body))
+	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/mfa/reset", bytes.NewReader(body))
 
 	// Ensure claims do NOT have reset audience so empty backup code is rejected
 	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	err := TOTPReset(c)
+	err := MFAReset(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 
@@ -281,13 +281,13 @@ func TestTOTPReset_InvalidBackupCodeLength(t *testing.T) {
 	username := "totp-reset-user"
 
 	body, _ := json.Marshal(map[string]string{"backup_code": "short"})
-	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/auth/totp/reset", bytes.NewReader(body))
+	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/mfa/reset", bytes.NewReader(body))
 
 	claims := &auth.Claims{Username: username}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	err := TOTPReset(c)
+	err := MFAReset(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 
@@ -298,13 +298,13 @@ func TestTOTPReset_InvalidBackupCodeLength(t *testing.T) {
 
 // TestTOTPReset_InvalidRequestFormat verifies malformed JSON is rejected
 func TestTOTPReset_InvalidRequestFormat(t *testing.T) {
-	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/auth/totp/reset", bytes.NewReader([]byte("{bad json")))
+	c, rec, _, _ := setupTestEnv(t, http.MethodPost, "/api/mfa/reset", bytes.NewReader([]byte("{bad json")))
 
 	claims := &auth.Claims{Username: "totp-reset-user"}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	c.Set("user", token)
 
-	err := TOTPReset(c)
+	err := MFAReset(c)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
