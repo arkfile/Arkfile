@@ -506,7 +506,6 @@ if [ "$EXISTING_DEPLOYMENT" = "true" ]; then
         rm -f "$ARKFILE_DIR/etc/secrets.env" 2>/dev/null || true
         rm -f "$ARKFILE_DIR/etc/rqlite-auth.json" 2>/dev/null || true
         rm -f "$ARKFILE_DIR/etc/seaweedfs-s3.json" 2>/dev/null || true
-        rm -rf "$ARKFILE_DIR/etc/keys/jwt"* 2>/dev/null || true
         rm -rf "$ARKFILE_DIR/etc/keys/opaque"* 2>/dev/null || true
         rm -rf "$ARKFILE_DIR/etc/keys/tls"* 2>/dev/null || true
         rm -rf "$ARKFILE_DIR/client/static/js/dist"* 2>/dev/null || true
@@ -683,9 +682,6 @@ echo "===================================="
 chown -R arkfile:arkfile "$ARKFILE_DIR"
 
 chmod 700 "$ARKFILE_DIR/etc/keys"
-[ -d "$ARKFILE_DIR/etc/keys/jwt" ] && chmod 700 "$ARKFILE_DIR/etc/keys/jwt"
-[ -d "$ARKFILE_DIR/etc/keys/jwt/current" ] && chmod 700 "$ARKFILE_DIR/etc/keys/jwt/current"
-[ -d "$ARKFILE_DIR/etc/keys/jwt/backup" ] && chmod 700 "$ARKFILE_DIR/etc/keys/jwt/backup"
 [ -d "$ARKFILE_DIR/etc/keys/opaque" ] && chmod 700 "$ARKFILE_DIR/etc/keys/opaque"
 [ -d "$ARKFILE_DIR/etc/keys/tls" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls"
 [ -d "$ARKFILE_DIR/etc/keys/tls/ca" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/ca"

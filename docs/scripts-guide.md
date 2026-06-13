@@ -45,7 +45,7 @@ scripts/
 │   ├── emergency-procedures.sh       # Emergency response procedures
 │   ├── health-check.sh               # System health monitoring
 │   ├── renew-certificates.sh         # Renew TLS certificates
-│   ├── rotate-jwt-keys.sh            # Rotate JWT signing keys
+│   ├── rotate-user-secret-master.sh  # Tier-3 master rotation runbook wrapper
 │   ├── rotate-opaque-keys.sh         # Rotate OPAQUE server keys
 │   ├── security-audit.sh             # Security auditing
 │   ├── security-cleanup.sh           # Security cleanup utilities
@@ -297,10 +297,10 @@ Exports `MFA_SECRET` and test file paths to `scripts/testing/e2e-playwright.ts`.
 **Usage**: `./scripts/maintenance/backup-keys.sh`  
 **Backs up**: OPAQUE keys, JWT keys, TLS certificates
 
-#### `rotate-jwt-keys.sh`
-**Purpose**: Rotate JWT signing keys  
-**Usage**: `./scripts/maintenance/rotate-jwt-keys.sh`  
-**Rotates**: JWT signing keys with graceful transition
+#### `rotate-user-secret-master.sh`
+**Purpose**: Tier-3 user-secret master rotation runbook (delegates to `arkfile-admin`)  
+**Usage**: `sudo ./scripts/maintenance/rotate-user-secret-master.sh`  
+**Requires**: Prior `arkfile-admin login`; brief `arkfile` service stop during apply
 
 #### `rotate-opaque-keys.sh` **OPAQUE KEY ROTATION** (WIP)
 **Purpose**: Rotate OPAQUE server keys with user migration support  

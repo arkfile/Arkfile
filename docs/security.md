@@ -349,18 +349,21 @@ Root Security
 
 **Key Rotation Procedures:**
 ```bash
-# JWT key rotation (weekly)
-./scripts/maintenance/rotate-jwt-keys.sh
+# Tier-3 User Secret Master key rotation (requires admin MFA + brief downtime)
+arkfile-admin login --username admin
+arkfile-admin rotate-user-secret-master prepare --mandate-file /root/tier3-mandate.txt --confirm
+sudo systemctl stop arkfile
+arkfile-admin rotate-user-secret-master apply --mandate-file /root/tier3-mandate.txt --confirm
+sudo systemctl start arkfile
 
-# Emergency rotation (immediate)
-./scripts/maintenance/rotate-jwt-keys.sh --force
-
-# Tier-3 User Secret Master key rotation (on-demand / emergency)
+# Or use the runbook wrapper (delegates to arkfile-admin only):
 sudo ./scripts/maintenance/rotate-user-secret-master.sh
 
 # OPAQUE key backup (monthly)
 ./scripts/maintenance/backup-keys.sh
 ```
+
+JWT signing keys are managed in `system_keys` via KeyManager; automated JWT rotation is not yet implemented.
 
 ### Tiered Security model and user recovery
 Arkfile partitions system secrets into three separate trust tiers (Tier-1, Tier-2, and Tier-3). Of these, Tier-3 holds user-secret-wrapping master keys (`mfa_user` and `contact_info` purpose keys derived via HKDF-SHA256 from `/opt/arkfile/etc/keys/user-secret-master.bin` file with 0400 owner-only permissions).
@@ -508,7 +511,7 @@ rqlite -H localhost:4001 \
 **Containment Actions:**
 ```bash
 # Rotate JWT keys immediately
-./scripts/maintenance/rotate-jwt-keys.sh --force
+# Tier-3 rotation only — see Key Rotation Procedures above
 
 # Revoke all active sessions
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
@@ -748,7 +751,7 @@ rqlite -H localhost:4001 \
 sudo systemctl stop arkfile
 
 # Emergency key rotation
-./scripts/maintenance/rotate-jwt-keys.sh --force
+# Tier-3 rotation only — see Key Rotation Procedures above
 
 # Security audit
 ./scripts/security-audit.sh

@@ -84,6 +84,7 @@ SYSTEM COMMANDS:
     system-status     System status overview
     health-check      System health check
     verify-storage    Verify S3 storage connectivity (upload/download/delete round-trip)
+    rotate-user-secret-master  Tier-3 user-secret master rotation (prepare|apply)
     version           Show version information
 
 GLOBAL OPTIONS:
@@ -424,6 +425,11 @@ func main() {
 
 	case "version":
 		printVersion()
+	case "rotate-user-secret-master":
+		if err := handleRotateUserSecretMasterCommand(client, config, args); err != nil {
+			logError("Tier-3 rotation failed: %v", err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", command)
 		printUsage()
@@ -1950,94 +1956,9 @@ EXAMPLES:
 	fmt.Printf("\nSecurity Status\n")
 	fmt.Printf("=================\n")
 	if security, ok := status["security"].(map[string]interface{}); ok {
-		if totpUsers, ok := security["totp_enabled_users"].(float64); ok {
-			fmt.Printf("TOTP Enabled Users: %.0f\n", totpUsers)
+		if mfaUsers, ok := security["mfa_enabled_users"].(float64); ok {
+			fmt.Printf("MFA Enabled Users: %.0f\n", mfaUsers)
 		}
-		if lastKeyRotation, ok := security["last_key_rotation"].(string); ok {
-			fmt.Printf("Last Key Rotation: %s\n", lastKeyRotation)
-		}
-	}
-
-	return nil
-}
-
-// handleKeyRotationCommand handles key rotation operations
-func handleKeyRotationCommand(client *HTTPClient, config *AdminConfig, args []string) error {
-	fs := flag.NewFlagSet("key-rotation", flag.ExitOnError)
-	var (
-		keyType = fs.String("type", "", "Key type to rotate: jwt, opaque, totp (required)")
-		force   = fs.Bool("force", false, "Force rotation without confirmation")
-	)
-
-	fs.Usage = func() {
-		fmt.Printf(`Usage: arkfile-admin key-rotation [FLAGS]
-
-Perform cryptographic key rotation operations.
-
-FLAGS:
-    --type TYPE         Key type to rotate: jwt, opaque, totp (required)
-    --force            Force rotation without confirmation prompt
-    --help             Show this help message
-
-EXAMPLES:
-    arkfile-admin key-rotation --type jwt
-    arkfile-admin key-rotation --type opaque --force
-`)
-	}
-
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *keyType == "" {
-		return fmt.Errorf("key type is required (jwt, opaque, totp)")
-	}
-
-	if *keyType != "jwt" && *keyType != "opaque" && *keyType != "totp" {
-		return fmt.Errorf("invalid key type: %s (must be jwt, opaque, or totp)", *keyType)
-	}
-
-	// Load admin session
-	session, err := loadAdminSession(config.TokenFile)
-	if err != nil {
-		return fmt.Errorf("not logged in as admin (use 'arkfile-admin login'): %w", err)
-	}
-
-	// Check if session is expired
-	if time.Now().After(session.ExpiresAt) {
-		return fmt.Errorf("admin session expired, please login again")
-	}
-
-	// Confirm rotation if not forced
-	if !*force {
-		fmt.Printf("Warning: Key rotation will invalidate existing sessions and may require user re-authentication.\n")
-		fmt.Printf("Are you sure you want to rotate %s keys? (yes/no): ", *keyType)
-		reader := bufio.NewReader(os.Stdin)
-		response, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read confirmation: %w", err)
-		}
-		response = strings.TrimSpace(strings.ToLower(response))
-
-		if response != "yes" && response != "y" {
-			fmt.Println("Key rotation cancelled")
-			return nil
-		}
-	}
-
-	// Perform key rotation
-	rotationReq := map[string]interface{}{
-		"key_type": *keyType,
-	}
-
-	resp, err := client.makeRequest("POST", "/api/admin/system/rotate-keys", rotationReq, session.AccessToken)
-	if err != nil {
-		return fmt.Errorf("key rotation failed: %w", err)
-	}
-
-	fmt.Printf("%s key rotation completed successfully\n", strings.ToUpper(*keyType))
-	if message, ok := resp.Data["message"].(string); ok {
-		fmt.Printf("Details: %s\n", message)
 	}
 
 	return nil

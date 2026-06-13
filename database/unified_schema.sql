@@ -458,6 +458,15 @@ CREATE TABLE IF NOT EXISTS user_contact_info (
     FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
 
+-- Single-use mandates authorizing offline Tier-3 user-secret-master rotation.
+CREATE TABLE IF NOT EXISTS tier3_rotation_mandates (
+    nonce TEXT PRIMARY KEY,
+    admin_username TEXT NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    consumed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- =====================================================
 -- PHASE 12B: MULTI-BACKEND STORAGE MANAGEMENT
 -- =====================================================

@@ -1,9 +1,10 @@
 #!/bin/bash
+# rotate-user-secret-master.sh - Tier-3 user-secret master rotation runbook wrapper
+#
+# All cryptographic work is performed by arkfile-admin. This script only documents
+# and invokes the safe prepare/apply flow.
 
-# rotate-user-secret-master.sh - Tier-3 master key rotation for Arkfile
-# Safely rotates user-secret-master.bin and updates dependent DB fields in-place.
-
-set -e
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -12,55 +13,72 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-BASE_DIR="/opt/arkfile"
-KEYS_DIR="${BASE_DIR}/etc/keys"
-MASTER_KEY_FILE="${KEYS_DIR}/user-secret-master.bin"
-BACKUP_DIR="${BASE_DIR}/backups/user-secret-rotation"
-USER="arkfile"
-GROUP="arkfile"
+MANDATE_FILE="${MANDATE_FILE:-/root/tier3-rotation-mandate.txt}"
+BASE_DIR="${BASE_DIR:-/opt/arkfile}"
+ADMIN_USER="${ADMIN_USER:-admin}"
 
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${RED}ERROR: This script must be run with sudo privileges${NC}"
+usage() {
+    cat <<EOF
+Usage: sudo $0 [--mandate-file PATH] [--base-dir DIR] [--admin-user USER]
+
+Tier-3 user-secret master rotation (safe path with DB re-encryption).
+
+Steps performed:
+  1. arkfile-admin rotate-user-secret-master prepare
+  2. systemctl stop arkfile
+  3. arkfile-admin rotate-user-secret-master apply
+  4. systemctl start arkfile
+
+Prerequisites:
+  - Logged-in admin session: arkfile-admin login --username USER
+  - arkfile-admin binary on PATH
+
+Environment overrides:
+  MANDATE_FILE   Path for the signed mandate (default: /root/tier3-rotation-mandate.txt)
+  BASE_DIR       Arkfile install root (default: /opt/arkfile)
+  ADMIN_USER     Admin username for reminders only (default: admin)
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --mandate-file) MANDATE_FILE="$2"; shift 2 ;;
+        --base-dir) BASE_DIR="$2"; shift 2 ;;
+        --admin-user) ADMIN_USER="$2"; shift 2 ;;
+        *) echo -e "${RED}Unknown option: $1${NC}"; usage; exit 1 ;;
+    esac
+done
+
+if ! command -v arkfile-admin >/dev/null 2>&1; then
+    echo -e "${RED}ERROR: arkfile-admin not found on PATH${NC}"
     exit 1
 fi
 
-echo -e "${BLUE}=== Arkfile Tier-3 Secret Master Key Rotation ===${NC}"
+echo -e "${BLUE}=== Tier-3 User Secret Master Rotation ===${NC}"
+echo -e "${YELLOW}Ensure you have run: arkfile-admin login --username ${ADMIN_USER}${NC}"
+echo
 
-# Check current master key status
-if [ ! -f "$MASTER_KEY_FILE" ]; then
-    echo -e "${RED}ERROR: Current master key file not found at $MASTER_KEY_FILE${NC}"
-    exit 1
-fi
+echo -e "${BLUE}[1/4] Issuing rotation mandate...${NC}"
+arkfile-admin rotate-user-secret-master prepare \
+    --mandate-file "$MANDATE_FILE" \
+    --confirm
 
-# Create backup directory
-mkdir -p "$BACKUP_DIR"
-chmod 700 "$BACKUP_DIR"
-chown ${USER}:${GROUP} "$BACKUP_DIR"
+echo -e "${BLUE}[2/4] Stopping arkfile service...${NC}"
+systemctl stop arkfile
 
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_FILE="${BACKUP_DIR}/user-secret-master-${TIMESTAMP}.bin"
+echo -e "${BLUE}[3/4] Applying rotation (offline re-encryption)...${NC}"
+arkfile-admin rotate-user-secret-master apply \
+    --mandate-file "$MANDATE_FILE" \
+    --base-dir "$BASE_DIR" \
+    --confirm
 
-echo "Creating secure backup of current master key..."
-cp "$MASTER_KEY_FILE" "$BACKUP_FILE"
-chmod 400 "$BACKUP_FILE"
-chown ${USER}:${GROUP} "$BACKUP_FILE"
-echo -e "${GREEN}[OK] Backup successfully saved to: $BACKUP_FILE${NC}"
+echo -e "${BLUE}[4/4] Starting arkfile service...${NC}"
+systemctl start arkfile
 
-# Generate new master key temp file
-NEW_KEY_TEMP="${KEYS_DIR}/.user-secret-master.new"
-echo "Generating fresh 32-byte master key..."
-dd if=/dev/urandom of="$NEW_KEY_TEMP" bs=32 count=1 status=none
-chmod 400 "$NEW_KEY_TEMP"
-chown ${USER}:${GROUP} "$NEW_KEY_TEMP"
-
-# Note: In a production scenario, rotation would iterate all user_mfa_credentials and user_contact_info keys
-# and decrypt using old-master derived subkeys, and re-encrypt using new-master derived subkeys.
-# Under Greenfield operating principles, dropping old active sessions/TOTP row keys is fully accepted
-# if we decide not to carry complex in-place DB migration loops.
-# Let's perform atomic file rename into place to ensure atomic swap.
-mv "$NEW_KEY_TEMP" "$MASTER_KEY_FILE"
-echo -e "${GREEN}[OK] Tier-3 Secret Master Key rotated successfully!${NC}"
-echo -e "${YELLOW}[i] Restarting Arkfile server is required to load the new key into mlock'd memory.${NC}"
-echo "    Run: sudo systemctl restart arkfile"
-
-exit 0
+echo -e "${GREEN}[OK] Tier-3 rotation complete.${NC}"
+echo "Verify admin login and spot-check MFA/contact info decryption."

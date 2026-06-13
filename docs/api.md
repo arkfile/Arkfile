@@ -277,6 +277,7 @@ The admin can export any user's file as an `.arkbackup` bundle for disaster reco
 |--------|------|---------|------|
 | GET | `/api/admin/system/status` | Get system status and storage stats | Admin |
 | GET | `/api/admin/system/health` | Get system health status | Admin |
+| POST | `/api/admin/system/prepare-user-secret-master-rotation` | Issue Tier-3 rotation mandate | Admin + MFA |
 | GET | `/api/admin/security/events` | Get security event logs | Admin |
 
 #### Storage Management (Multi-Backend)

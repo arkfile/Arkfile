@@ -79,8 +79,6 @@ type Config struct {
 	} `json:"storage"`
 
 	Security struct {
-		JWTPrivateKeyPath       string        `json:"jwt_private_key_path"`
-		JWTPublicKeyPath        string        `json:"jwt_public_key_path"`
 		JWTExpiryHours          int           `json:"jwt_expiry_hours"`
 		RefreshTokenDuration    time.Duration `json:"refresh_token_duration"`
 		RefreshTokenCookieName  string        `json:"refresh_token_cookie_name"`
@@ -98,7 +96,6 @@ type Config struct {
 	KeyManagement struct {
 		KeyDirectory     string `json:"key_directory"`
 		OPAQUEKeyPath    string `json:"opaque_key_path"`
-		JWTKeyPath       string `json:"jwt_key_path"`
 		TLSCertPath      string `json:"tls_cert_path"`
 		UseSystemdCreds  bool   `json:"use_systemd_creds"`
 		BackupDirectory  string `json:"backup_directory"`
@@ -280,8 +277,6 @@ func loadDefaultConfig(cfg *Config) error {
 	cfg.Server.Host = "localhost"
 	cfg.Server.AllowedOrigins = []string{"https://localhost:8443"}
 	cfg.Database.Path = "./arkfile.db"
-	cfg.Security.JWTPrivateKeyPath = "/opt/arkfile/etc/keys/jwt/current/signing.key"
-	cfg.Security.JWTPublicKeyPath = "/opt/arkfile/etc/keys/jwt/current/public.key"
 	cfg.Security.JWTExpiryHours = 72
 	cfg.Security.RefreshTokenDuration = 24 * 7 * time.Hour // Default to 7 days
 	cfg.Security.RefreshTokenCookieName = "refreshToken"
@@ -296,7 +291,6 @@ func loadDefaultConfig(cfg *Config) error {
 	// Key management defaults
 	cfg.KeyManagement.KeyDirectory = "/opt/arkfile/etc/keys"
 	cfg.KeyManagement.OPAQUEKeyPath = "opaque/server_private.key"
-	cfg.KeyManagement.JWTKeyPath = "jwt/current/signing.key"
 	cfg.KeyManagement.TLSCertPath = "tls/server.crt"
 	cfg.KeyManagement.UseSystemdCreds = true
 	cfg.KeyManagement.BackupDirectory = "/opt/arkfile/etc/keys/backups"
@@ -376,12 +370,6 @@ func loadEnvConfig(cfg *Config) error {
 	loadPrimaryStorageConfig(cfg)
 
 	// Security configuration - Ed25519 key paths can be overridden via environment
-	if jwtPrivateKeyPath := os.Getenv("JWT_PRIVATE_KEY_PATH"); jwtPrivateKeyPath != "" {
-		cfg.Security.JWTPrivateKeyPath = jwtPrivateKeyPath
-	}
-	if jwtPublicKeyPath := os.Getenv("JWT_PUBLIC_KEY_PATH"); jwtPublicKeyPath != "" {
-		cfg.Security.JWTPublicKeyPath = jwtPublicKeyPath
-	}
 	if rtExpiryStr := os.Getenv("REFRESH_TOKEN_EXPIRY_HOURS"); rtExpiryStr != "" {
 		if rtExpiryInt, err := strconv.Atoi(rtExpiryStr); err == nil {
 			cfg.Security.RefreshTokenDuration = time.Duration(rtExpiryInt) * time.Hour
@@ -524,14 +512,6 @@ func loadJSONConfig(cfg *Config, path string) error {
 }
 
 func validateConfig(cfg *Config) error {
-	// Validate JWT Ed25519 key paths
-	if cfg.Security.JWTPrivateKeyPath == "" {
-		return fmt.Errorf("JWT_PRIVATE_KEY_PATH is required")
-	}
-	if cfg.Security.JWTPublicKeyPath == "" {
-		return fmt.Errorf("JWT_PUBLIC_KEY_PATH is required")
-	}
-
 	// Validate storage configuration based on provider
 	switch cfg.Storage.Provider {
 	case "generic-s3":

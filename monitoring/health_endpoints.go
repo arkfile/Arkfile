@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -279,31 +280,20 @@ func (k *KeyHealthCheck) Check() HealthCheck {
 		check.Details["key_directory"] = "exists"
 	}
 
-	// Check JWT key
-	jwtKeyPath := fmt.Sprintf("%s/%s", keyDir, k.config.KeyManagement.JWTKeyPath)
-	if _, err := os.Stat(jwtKeyPath); os.IsNotExist(err) {
-		check.Details["jwt_key"] = "missing"
+	tier3Path := filepath.Join(keyDir, "user-secret-master.bin")
+	if _, err := os.Stat(tier3Path); os.IsNotExist(err) {
+		check.Details["tier3_master_key"] = "missing"
 		issues++
 	} else {
-		check.Details["jwt_key"] = "exists"
+		check.Details["tier3_master_key"] = "exists"
 	}
 
-	// Check OPAQUE key
-	opaqueKeyPath := fmt.Sprintf("%s/%s", keyDir, k.config.KeyManagement.OPAQUEKeyPath)
-	if _, err := os.Stat(opaqueKeyPath); os.IsNotExist(err) {
-		check.Details["opaque_key"] = "missing"
-		issues++
-	} else {
-		check.Details["opaque_key"] = "exists"
-	}
-
-	// Determine status
 	if issues == 0 {
 		check.Status = StatusHealthy
-		check.Message = "All cryptographic keys available"
-	} else if issues < 3 {
+		check.Message = "Key directory and Tier-3 master key present"
+	} else if issues == 1 {
 		check.Status = StatusDegraded
-		check.Message = fmt.Sprintf("%d key issues detected", issues)
+		check.Message = "Key health issue detected"
 	} else {
 		check.Status = StatusUnhealthy
 		check.Message = "Critical key files missing"

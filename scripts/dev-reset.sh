@@ -253,7 +253,6 @@ if [ -d "$ARKFILE_DIR" ]; then
     
     # Delete all keys (they'll be regenerated)
     print_status "INFO" "Nuking cryptographic keys..."
-    rm -rf "$ARKFILE_DIR/etc/keys/jwt"* 2>/dev/null || true
     rm -rf "$ARKFILE_DIR/etc/keys/opaque"* 2>/dev/null || true
     rm -rf "$ARKFILE_DIR/etc/keys/tls"* 2>/dev/null || true
     rm -f "$ARKFILE_DIR/etc/keys/user-secret-master.bin" 2>/dev/null || true
@@ -430,9 +429,6 @@ chown -R arkfile:arkfile "$ARKFILE_DIR"
 
 # Preserve specific permissions for sensitive directories (only if they exist)
 chmod 700 "$ARKFILE_DIR/etc/keys"
-[ -d "$ARKFILE_DIR/etc/keys/jwt" ] && chmod 700 "$ARKFILE_DIR/etc/keys/jwt"
-[ -d "$ARKFILE_DIR/etc/keys/jwt/current" ] && chmod 700 "$ARKFILE_DIR/etc/keys/jwt/current"
-[ -d "$ARKFILE_DIR/etc/keys/jwt/backup" ] && chmod 700 "$ARKFILE_DIR/etc/keys/jwt/backup"
 [ -d "$ARKFILE_DIR/etc/keys/opaque" ] && chmod 700 "$ARKFILE_DIR/etc/keys/opaque"
 [ -d "$ARKFILE_DIR/etc/keys/tls" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls"
 [ -d "$ARKFILE_DIR/etc/keys/tls/ca" ] && chmod 700 "$ARKFILE_DIR/etc/keys/tls/ca"

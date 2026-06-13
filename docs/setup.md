@@ -518,8 +518,7 @@ ls -la /opt/arkfile/var/lib/seaweedfs/data/
 # Verify OPAQUE server keys
 ls -la /opt/arkfile/etc/keys/opaque/
 
-# Check JWT keys
-ls -la /opt/arkfile/etc/keys/jwt/current/
+# JWT signing keys are stored in system_keys via KeyManager (not on-disk files)
 ```
 
 ## Maintenance and Operations
@@ -681,8 +680,7 @@ sudo systemctl start arkfile
 # Execute emergency procedures
 ./scripts/maintenance/emergency-procedures.sh
 
-# Rotate JWT keys immediately
-./scripts/maintenance/rotate-jwt-keys.sh --force
+# Tier-3 master rotation — see docs/security.md Key Rotation Procedures
 ```
 
 ### Getting Help
