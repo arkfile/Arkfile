@@ -247,6 +247,7 @@ All admin endpoints require JWT authentication with admin privileges.
 | DELETE | `/api/admin/users/:username` | Delete user and all associated data | Admin |
 | PUT | `/api/admin/users/:username` | Update user properties (`is_admin`, `is_approved`, `storage_limit_bytes`) | Admin |
 | POST | `/api/admin/users/:username/force-logout` | Revoke all JWT + refresh tokens for a user | Admin |
+| POST | `/api/admin/users/:username/reset-mfa` | Full MFA reset (delete credentials, backup codes, usage logs; force-logout) | Admin + MFA |
 
 #### User Inspection (Admin)
 

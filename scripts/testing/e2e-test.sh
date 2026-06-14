@@ -79,6 +79,7 @@ MFA_SECRET_FILE="$TEST_DATA_DIR/mfa-secret"
 BACKUP_CODE_PRIMARY_FILE="$TEST_DATA_DIR/backup-code-primary"
 BACKUP_CODE_REENROLL_FILE="$TEST_DATA_DIR/backup-code-reenroll"
 MFA_REENROLL_DONE_FILE="$TEST_DATA_DIR/mfa-reenroll-done"
+MFA_ADMIN_RESET_DONE_FILE="$TEST_DATA_DIR/mfa-admin-reset-done"
 LOG_FILE="$TEST_DATA_DIR/e2e-test.log"
 # Legacy aliases (same files)
 TOTP_SECRET_FILE="$MFA_SECRET_FILE"
@@ -322,6 +323,65 @@ user_mfa_verify_after_reset() {
 
     record_test "$test_name" "PASS"
     echo "$out"
+}
+
+user_mfa_enroll_after_deferred_login() {
+    local test_name="$1"
+
+    info "Initiating MFA setup after admin reset..."
+    local setup_output setup_exit_code
+    safe_exec setup_output setup_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --show-secret
+
+    if [ $setup_exit_code -ne 0 ]; then
+        error "Failed to initiate MFA setup after admin reset:"
+        echo "$setup_output"
+        record_test "$test_name (setup initiation)" "FAIL"
+        return 1
+    fi
+
+    local secret
+    secret=$(echo "$setup_output" | grep "TOTP_SECRET:" | cut -d':' -f2 | tr -d ' ')
+    if [ -z "$secret" ]; then
+        error "Failed to extract TOTP secret after admin reset:"
+        echo "$setup_output"
+        record_test "$test_name (setup initiation)" "FAIL"
+        return 1
+    fi
+
+    echo "$secret" > "$MFA_SECRET_FILE"
+    export TEST_USER_TOTP_SECRET="$secret"
+    record_test "$test_name (setup initiation)" "PASS"
+
+    local backup_code
+    backup_code=$(echo "$setup_output" | grep '^BACKUP_CODE_0:' | head -1 | cut -d':' -f2 | tr -d ' ')
+    if [ -n "$backup_code" ]; then
+        echo "$backup_code" > "$BACKUP_CODE_PRIMARY_FILE"
+        export TEST_USER_BACKUP_CODE="$backup_code"
+    fi
+
+    wait_for_totp_window
+    local code
+    code=$("$CLIENT" generate-totp --secret "$secret" 2>/dev/null)
+    if [ -z "$code" ]; then
+        error "Could not generate verification code after admin reset"
+        record_test "$test_name (verify)" "FAIL"
+        return 1
+    fi
+
+    local verify_output verify_exit_code
+    safe_exec verify_output verify_exit_code \
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --verify "$code"
+
+    if [ $verify_exit_code -ne 0 ] || ! echo "$verify_output" | grep -q "TOTP Setup Complete"; then
+        error "MFA verification after admin reset failed:"
+        echo "$verify_output"
+        record_test "$test_name (verify)" "FAIL"
+        return 1
+    fi
+
+    record_test "$test_name (verify)" "PASS"
+    echo "$verify_output"
 }
 
 logout_user_session() {
@@ -2035,6 +2095,10 @@ run_shares() {
     # Re-login so the CLI session is fresh for the 10.23 logout step and
     # the post-logout rejection checks that follow.
     user_login_with_totp "User re-login after self-revoke test"
+    E2E_REVOCATION_TEST_TOKEN=""
+    if [ -f "$HOME/.arkfile-session.json" ]; then
+        E2E_REVOCATION_TEST_TOKEN=$(jq -r '.access_token // empty' "$HOME/.arkfile-session.json" 2>/dev/null)
+    fi
     scenario "User logout and post-logout command rejection"
     logout_user_session "User logout (post-revoke)"
 
@@ -2238,50 +2302,43 @@ run_admin_operations() {
         echo "$update_user_output"
         record_test "Admin update-user" "FAIL"
     fi
-    scenario "Admin force-logout"
-    local force_logout_output force_logout_code
-    safe_exec force_logout_output force_logout_code \
+    scenario "Admin reset-user-mfa"
+    local reset_mfa_output reset_mfa_code
+    safe_exec reset_mfa_output reset_mfa_code \
         $ADMIN --server-url "$SERVER_URL" --tls-insecure \
-        force-logout --username "$TEST_USERNAME"
-    if [ $force_logout_code -eq 0 ] && echo "$force_logout_output" | grep -q "force-logged out"; then
-        record_test "Admin force-logout" "PASS"
-        info "Admin force-logged out test user"
+        reset-user-mfa --username "$TEST_USERNAME" --confirm
+    if [ $reset_mfa_code -eq 0 ] && echo "$reset_mfa_output" | grep -q "MFA reset completed"; then
+        record_test "Admin reset-user-mfa" "PASS"
+        info "Admin reset MFA for test user"
+        touch "$MFA_ADMIN_RESET_DONE_FILE"
     else
-        error "force-logout command failed:"
-        echo "$force_logout_output"
-        record_test "Admin force-logout" "FAIL"
+        error "reset-user-mfa command failed:"
+        echo "$reset_mfa_output"
+        record_test "Admin reset-user-mfa" "FAIL"
     fi
-    # After admin force-logout the test user's JWT revocation is written to
-    # user_jwt_revocations.  Any subsequent request using an old JWT must be
-    # rejected with 401 by TokenRevocationMiddleware within 30 seconds.
-    # We read the last known access token from the session file and replay it.
+    # After admin MFA reset the test user's JWT revocation is written to
+    # revoked_tokens. Any subsequent request using an old JWT must be
+    # rejected with 401 by TokenRevocationMiddleware.
     scenario "Per-request user-wide revocation check"
-    local session_file_revoke="$HOME/.arkfile-session.json"
-    if [ -f "$session_file_revoke" ]; then
-        local old_access_token
-        old_access_token=$(jq -r '.access_token // empty' "$session_file_revoke" 2>/dev/null)
-        if [ -n "$old_access_token" ]; then
-            # Allow up to 35 seconds for the 30-second in-process cache to expire
-            info "Waiting 35s for revocation cache to expire before verifying..."
-            sleep 35
-            local revoke_check_resp
-            revoke_check_resp=$(curl -sk -o /dev/null -w '%{http_code}' \
-                -H "Authorization: Bearer ${old_access_token}" \
-                "${SERVER_URL}/api/files" 2>/dev/null)
-            if [ "$revoke_check_resp" = "401" ]; then
-                record_test "Force-logout: per-request revocation rejects old JWT" "PASS"
-                info "Old JWT correctly rejected with 401 after force-logout"
-            else
-                error "Expected 401 on old JWT after force-logout, got HTTP $revoke_check_resp"
-                record_test "Force-logout: per-request revocation rejects old JWT" "FAIL"
-            fi
+    local old_access_token="${E2E_REVOCATION_TEST_TOKEN:-}"
+    if [ -n "$old_access_token" ]; then
+        # Allow up to 35 seconds for the 30-second in-process cache to expire
+        info "Waiting 35s for revocation cache to expire before verifying..."
+        sleep 35
+        local revoke_check_resp
+        revoke_check_resp=$(curl -sk -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${old_access_token}" \
+            "${SERVER_URL}/api/files" 2>/dev/null)
+        if [ "$revoke_check_resp" = "401" ]; then
+            record_test "MFA reset: per-request revocation rejects old JWT" "PASS"
+            info "Old JWT correctly rejected with 401 after MFA reset"
         else
-            warning "Could not extract access_token from session file; skipping e2e test"
-            record_test "Force-logout: per-request revocation rejects old JWT" "PASS"
+            error "Expected 401 on old JWT after MFA reset, got HTTP $revoke_check_resp"
+            record_test "MFA reset: per-request revocation rejects old JWT" "FAIL"
         fi
     else
-        warning "Session file not found; skipping revocation e2e test"
-        record_test "Force-logout: per-request revocation rejects old JWT" "PASS"
+        warning "No stashed access token for revocation replay; skipping e2e test"
+        record_test "MFA reset: per-request revocation rejects old JWT" "PASS"
     fi
     scenario "Admin revoke-share"
     if [ -n "$SHARE_D_ID" ]; then
@@ -2890,8 +2947,15 @@ run_payments() {
 
     scenario "Retrieve user token and payments status"
 
-    # Log in as the regular test user to ensure a fresh session and token
-    user_login_with_totp "User login for payments test"
+    if [ -f "$MFA_ADMIN_RESET_DONE_FILE" ]; then
+        user_login_defer_mfa "OPAQUE login after admin MFA reset"
+        user_mfa_enroll_after_deferred_login "MFA re-enrollment after admin reset"
+        user_login_with_totp "Login after admin MFA reset re-enrollment"
+        rm -f "$MFA_ADMIN_RESET_DONE_FILE"
+    else
+        # Log in as the regular test user to ensure a fresh session and token
+        user_login_with_totp "User login for payments test"
+    fi
 
     # Extract the token directly from the user's active session file
     local user_token

@@ -218,6 +218,7 @@ func RegisterRoutes() {
 	adminGroup.DELETE("/users/:username", DeleteUser)
 	adminGroup.PUT("/users/:username", UpdateUser)
 	adminGroup.POST("/users/:username/force-logout", AdminForceLogout)
+	adminGroup.POST("/users/:username/reset-mfa", AdminResetUserMFA)
 
 	// Admin inspection of user files and shares
 	adminGroup.GET("/users/:username/files", AdminListUserFiles)

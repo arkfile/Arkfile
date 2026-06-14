@@ -377,6 +377,7 @@ Arkfile partitions system secrets into three separate trust tiers (Tier-1, Tier-
 - Lost password = lost files. Lost authenticator + lost backup codes = lost account. This model is intentionally non-custodial.
 - If a user loses their authenticator (TOTP), but holds one of their 10 alphanumeric backup codes (~59.5 bits of secure entropy sampled using rejection sampling), they can use path A (emergency one-shot login) or path B (re-enroll with a backup code). See the MFA section above.
 - Path B recovery issues a short-lived temporary `"arkfile-mfa-reset"` JWT claim. Users use this reset-authorized context to flush, reset, and re-setup their MFA keys immediately without requiring administrative intervention.
+- **Admin-assisted full reset (total lockout):** When a user has lost both their enrolled second factor and all backup codes, an operator with admin + MFA authentication runs `arkfile-admin reset-user-mfa --username USER --confirm` (from localhost via the admin API). This deletes all MFA credential rows, backup codes, and MFA usage logs; force-logouts all sessions; and leaves the account in `requires_mfa_setup` on next password login. User contact info is **not** deleted. The CLI displays on-file contact info before reset; if none exists, `--acknowledge-no-contact-info` is required. Request body accepts optional `credential_id` / `label` for future credential-scoped reset; v1 rejects non-empty values.
 
 ### Authentication Security
 
