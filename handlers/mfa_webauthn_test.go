@@ -19,7 +19,7 @@ func TestWebAuthnAuthBegin_RejectsNonMFAToken(t *testing.T) {
 		Username:    "webauthn-user",
 		RequiresMFA: false,
 		RegisteredClaims: jwt.RegisteredClaims{
-			Audience: jwt.ClaimStrings{auth.AudienceFull},
+			Audience: jwt.ClaimStrings{auth.AudienceAPI},
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

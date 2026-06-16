@@ -168,7 +168,7 @@ func ValidateRefreshToken(db *sql.DB, tokenString string) (username string, newR
 		if revokeErr := RevokeAllUserJWTsByUsername(db, username, "refresh token reuse detected"); revokeErr != nil && debug {
 			fmt.Printf("[DEBUG] ValidateRefreshToken: RevokeAllUserJWTs error: %v\n", revokeErr)
 		}
-		return "", "", ErrRefreshTokenReuse
+		return username, "", ErrRefreshTokenReuse
 	}
 
 	// Step 3: family already revoked.

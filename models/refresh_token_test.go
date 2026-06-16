@@ -177,9 +177,10 @@ func TestValidateRefreshToken_ReuseDetection(t *testing.T) {
 	assert.NotEmpty(t, raw1)
 
 	// Second use of the same raw0 (reuse): must be rejected.
-	_, _, err = ValidateRefreshToken(db, raw0)
+	reuseUser, _, err := ValidateRefreshToken(db, raw0)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrRefreshTokenReuse)
+	assert.Equal(t, username, reuseUser)
 
 	// All rows in the family must have family_revoked_at set.
 	var count int

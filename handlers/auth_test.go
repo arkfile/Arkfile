@@ -369,9 +369,11 @@ func TestRevokeAllTokens_DefaultReason(t *testing.T) {
 	revokeRefreshSQL := `UPDATE refresh_tokens SET revoked = true WHERE username = \?`
 	mock.ExpectExec(revokeRefreshSQL).WithArgs(username).WillReturnResult(sqlmock.NewResult(0, 1))
 
-	// Mock: RevokeAllUserJWTTokens - inserts into revoked_tokens
-	revokeJWTSQL := `INSERT INTO revoked_tokens \(token_id, username, expires_at, reason\) VALUES \(\?, \?, \?, \?\)`
-	mock.ExpectExec(revokeJWTSQL).WithArgs(sqlmock.AnyArg(), username, sqlmock.AnyArg(), "user revoke-all").WillReturnResult(sqlmock.NewResult(1, 1))
+	// Mock: RevokeAllUserJWTTokens - writes user_jwt_revocations
+	revokeJWTSQL := `INSERT INTO user_jwt_revocations \(username, revoked_at, reason\)
+		 VALUES \(\?, \?, \?\)
+		 ON CONFLICT\(username\) DO UPDATE SET revoked_at = excluded.revoked_at, reason = excluded.reason`
+	mock.ExpectExec(revokeJWTSQL).WithArgs(username, sqlmock.AnyArg(), "user revoke-all").WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock: LogUserAction
 	logSQL := `INSERT INTO user_activity \(username, action, target\) VALUES \(\?, \?, \?\)`
@@ -494,9 +496,9 @@ func TestAdminForceLogout_Success(t *testing.T) {
 		WithArgs(targetUsername).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
-	// Mock RevokeAllUserJWTTokens (inserts into revoked_tokens)
-	mockDB.ExpectExec(`INSERT INTO revoked_tokens`).
-		WithArgs(sqlmock.AnyArg(), targetUsername, sqlmock.AnyArg(), sqlmock.AnyArg()).
+	// Mock RevokeAllUserJWTTokens (writes user_jwt_revocations)
+	mockDB.ExpectExec(`INSERT INTO user_jwt_revocations`).
+		WithArgs(targetUsername, sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock LogUserAction for target user

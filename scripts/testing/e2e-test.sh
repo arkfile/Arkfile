@@ -312,7 +312,7 @@ user_mfa_verify_after_reset() {
 
     local out code_rc
     safe_exec out code_rc \
-        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --verify "$code"
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --mfa-method totp --verify "$code"
 
     if [ $code_rc -ne 0 ] || ! echo "$out" | grep -q "TOTP Setup Complete"; then
         error "$test_name failed with output:"
@@ -331,7 +331,7 @@ user_mfa_enroll_after_deferred_login() {
     info "Initiating MFA setup after admin reset..."
     local setup_output setup_exit_code
     safe_exec setup_output setup_exit_code \
-        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --show-secret
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --mfa-method totp --show-secret
 
     if [ $setup_exit_code -ne 0 ]; then
         error "Failed to initiate MFA setup after admin reset:"
@@ -371,7 +371,7 @@ user_mfa_enroll_after_deferred_login() {
 
     local verify_output verify_exit_code
     safe_exec verify_output verify_exit_code \
-        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --verify "$code"
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --mfa-method totp --verify "$code"
 
     if [ $verify_exit_code -ne 0 ] || ! echo "$verify_output" | grep -q "TOTP Setup Complete"; then
         error "MFA verification after admin reset failed:"
@@ -766,7 +766,7 @@ run_user_onboarding_mfa_enrollment() {
     local setup_exit_code
 
     safe_exec setup_output setup_exit_code \
-        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --show-secret
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --mfa-method totp --show-secret
 
     if [ $setup_exit_code -ne 0 ]; then
         error "Failed to initiate TOTP setup (exit code: $setup_exit_code):"
@@ -828,7 +828,7 @@ run_user_onboarding_mfa_enrollment() {
     info "Generated verification code: $code"
 
     safe_exec verify_output verify_exit_code \
-        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --verify "$code"
+        $CLIENT --server-url "$SERVER_URL" --tls-insecure setup-mfa --mfa-method totp --verify "$code"
 
     if [ $verify_exit_code -eq 0 ] && echo "$verify_output" | grep -q "TOTP Setup Complete"; then
         record_test "TOTP verification" "PASS"

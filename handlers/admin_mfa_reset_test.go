@@ -105,6 +105,11 @@ func openAdminMFAResetTestDB(t *testing.T) *sql.DB {
 			expires_at TIMESTAMP NOT NULL,
 			reason TEXT
 		);
+		CREATE TABLE user_jwt_revocations (
+			username TEXT PRIMARY KEY,
+			revoked_at TIMESTAMP NOT NULL,
+			reason TEXT
+		);
 		CREATE TABLE user_activity (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			username TEXT NOT NULL,
@@ -340,8 +345,8 @@ func TestAdminResetUserMFA_Handler_RevokesTokens(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, revoked)
 
-	var revokeCount int
-	err = database.DB.QueryRow(`SELECT COUNT(*) FROM revoked_tokens WHERE username = ?`, targetUsername).Scan(&revokeCount)
+	var revokeReason string
+	err = database.DB.QueryRow(`SELECT reason FROM user_jwt_revocations WHERE username = ?`, targetUsername).Scan(&revokeReason)
 	require.NoError(t, err)
-	assert.Equal(t, 1, revokeCount)
+	assert.Equal(t, "admin mfa reset", revokeReason)
 }

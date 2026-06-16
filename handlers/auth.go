@@ -51,6 +51,9 @@ func RefreshToken(c echo.Context) error {
 			return JSONError(c, http.StatusUnauthorized, "Refresh token expired")
 		}
 		if err == models.ErrRefreshTokenReuse {
+			if username != "" {
+				auth.InvalidateUserRevocationCache(username)
+			}
 			logging.InfoLogger.Printf("SECURITY: Refresh token reuse detected for a session; all sessions revoked")
 			return JSONError(c, http.StatusUnauthorized, "All tokens have been revoked for security reasons")
 		}

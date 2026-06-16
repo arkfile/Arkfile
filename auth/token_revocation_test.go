@@ -477,7 +477,7 @@ func TestTokenRevocationMiddleware_UserWideRevocation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Invalidate cache so the middleware reads fresh from DB.
-	invalidateUserRevocationCache(username)
+	InvalidateUserRevocationCache(username)
 
 	// Set up middleware.
 	e := echo.New()
@@ -516,7 +516,7 @@ func TestTokenRevocationMiddleware_JWTIssuedAfterRevocation(t *testing.T) {
 		username, revokedAt.Format(time.RFC3339), "old revocation",
 	)
 	require.NoError(t, err)
-	invalidateUserRevocationCache(username)
+	InvalidateUserRevocationCache(username)
 
 	// Issue a JWT with issuedAt = now (after the revocation).
 	claims := &Claims{
@@ -547,4 +547,49 @@ func TestTokenRevocationMiddleware_JWTIssuedAfterRevocation(t *testing.T) {
 	err = handlerWithMiddleware(c)
 	assert.NoError(t, err, "JWT issued after revocation should not be blocked")
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestRevokeAllUserJWTTokens_EnforcesMiddleware verifies the public helper
+// writes user_jwt_revocations and causes TokenRevocationMiddleware to reject
+// JWTs issued before the revocation.
+func TestRevokeAllUserJWTTokens_EnforcesMiddleware(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	username := "revoke_all_helper_test"
+	issuedAt := time.Now().Add(-2 * time.Minute)
+	expiry := time.Now().Add(10 * time.Minute)
+
+	claims := &Claims{
+		Username:     username,
+		RequiresMFA: false,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expiry),
+			IssuedAt:  jwt.NewNumericDate(issuedAt),
+			ID:        "revoke-all-jti",
+			Issuer:    Issuer,
+			Audience:  []string{AudienceAPI},
+		},
+	}
+	jwtToken := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims)
+	tokenString, err := jwtToken.SignedString(GetJWTFullPrivateKey())
+	require.NoError(t, err)
+
+	require.NoError(t, RevokeAllUserJWTTokens(db, username, "test revoke-all"))
+
+	e := echo.New()
+	mockHandler := func(c echo.Context) error { return c.String(http.StatusOK, "ok") }
+	handlerWithMiddleware := TokenRevocationMiddleware(db)(mockHandler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+	parsedToken, _, _ := new(jwt.Parser).ParseUnverified(tokenString, &Claims{})
+	c.Set("user", parsedToken)
+
+	err = handlerWithMiddleware(c)
+	require.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	require.True(t, ok)
+	assert.Equal(t, http.StatusUnauthorized, httpErr.Code)
 }
