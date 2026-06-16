@@ -113,11 +113,35 @@ Rename Tier-3 HKDF purpose from `totp_user` to `mfa_user` in `crypto/totp_keys.g
 | Ops | `scripts/maintenance/rotate-user-secret-master.sh`, `scripts/testing/e2e-test.sh`, `scripts/testing/e2e-playwright.ts`, `scripts/testing/totp-generator.go` |
 | Startup | `main.go`, `auth/dev_admin.go` |
 | Docs | `docs/api.md`, `docs/security.md`, `docs/user-faq.md` |
-| New (later) | `auth/mfa_webauthn.go`, browser WebAuthn module, shared FIDO2/CTAP2 code used by `arkfile-client` and `arkfile-admin` |
+| New (later) | `auth/mfa_webauthn.go`, browser WebAuthn module, `auth/mfa_ctap.go` (shared CTAP client), `scripts/setup/build-libfido2.sh`, vendored `libfido2` tree |
+
+## WebAuthn dependency choices
+
+Explicit library choices per surface. All three clients call the same server begin/finish endpoints; only the local ceremony transport differs.
+
+| Surface | Binary / area | Package or component | Role |
+|---------|---------------|----------------------|------|
+| Server | `arkfile` | [`github.com/go-webauthn/webauthn`](https://github.com/go-webauthn/webauthn) | Relying party: registration/auth begin/finish, assertion and attestation verification, signCount checks. Pure Go — no libfido2, no OpenSSL on the server. |
+| Browser | TypeScript frontend (`client/static/js`) | [`@simplewebauthn/browser`](https://www.npmjs.com/package/@simplewebauthn/browser) | Wraps `navigator.credentials.create()` / `get()` for enroll and login. Ceremony helper only — no RP verification in the browser. |
+| Go CLI | `arkfile-client`, `arkfile-admin` | [Yubico `libfido2`](https://github.com/Yubico/libfido2) (C, vendored, statically linked) | CTAP2 client over USB HID: device discovery, `MakeCredential`, `GetAssertion`. Works with YubiKey, Nitrokey 3/3C, and other FIDO2 keys — not YubiKey-specific. |
+| Go CLI (Go binding) | same | [`github.com/keys-pub/go-libfido2`](https://github.com/keys-pub/go-libfido2) *or* a thin custom CGO wrapper (same pattern as `auth/opaque_wrapper.h`) | Go ↔ libfido2 glue in a shared internal module used by both CLIs. |
+| Go CLI (vendored C deps) | same | `libcbor`, `zlib`, minimal static **`libcrypto`** (OpenSSL 3) | Required to build `libfido2`. Vendored and linked like libsodium/libopaque today — not taken from the host OS package manager at deploy time. |
+
+**Not used:** `@simplewebauthn/server` (RP verification stays in Go); immature pure-Go CTAP stacks (`go-fido2`, `go-ctap/ctaphid`) — insufficient production track record for Arkfile.
+
+### Go CLI: static C stack notes
+
+The CLIs already static-link vendored C for OPAQUE (`libopaque`, `liboprf`, libsodium via `scripts/setup/build-libopaque.sh` and `CGO_LDFLAGS` in `scripts/setup/build.sh`). The FIDO stack follows the same model:
+
+- Add `scripts/setup/build-libfido2.sh` to vendor and build static archives for `libcbor`, `zlib`, minimal OpenSSL **`libcrypto`**, and `libfido2` (`BUILD_STATIC_LIBS=ON`).
+- Extend `build.sh` `CGO_CFLAGS` / `CGO_LDFLAGS` for `arkfile-client` and `arkfile-admin` only. The **`arkfile` server binary does not link libfido2** — it has no USB/CTAP role.
+- **OpenSSL scope:** link **`libcrypto` only** (not `libssl`). Build OpenSSL with a minimal configuration (`no-apps`, `no-ssl`, `no-engine`, and other features Arkfile does not need). The CLI uses libfido2 for CTAP transport and device I/O; assertion/attestation **verification** is done on the server by `go-webauthn`, so the OpenSSL footprint is a subset of a full OpenSSL install.
+- **Size tuning:** use `-ffunction-sections`, `-fdata-sections`, `-Wl,--gc-sections`, and LTO when building the C libraries where practical. Expect roughly **+2–4 MB per CLI binary** (plan for up to ~+8 MB worst case).
+- **Linux deploy:** USB keys still need `hidraw` access (udev/`plugdev` rules). NFC (e.g. Nitrokey 3C) may use libfido2 PC/SC paths later; USB is the primary v1 path.
 
 ## Server implementation
 
-Use `github.com/go-webauthn/webauthn` for server-side WebAuthn ceremony handling and credential verification. TOTP logic moves into `auth/mfa_totp.go` operating on `user_mfa_credentials` rows where `method_type` is `totp`.
+Use `github.com/go-webauthn/webauthn` for server-side WebAuthn ceremony handling and credential verification (see **WebAuthn dependency choices**). TOTP logic moves into `auth/mfa_totp.go` operating on `user_mfa_credentials` rows where `method_type` is `totp`.
 
 WebAuthn registration and authentication use the standard two-step begin/finish pattern. Relying party ID is the site domain. Use non-discoverable credentials (no resident passkeys required). `authenticatorAttachment` `cross-platform` for USB/NFC keys. `userVerification` `preferred` (touch-first; PIN only when the key policy requires it).
 
@@ -131,7 +155,7 @@ Admin reset (`POST /api/admin/users/:username/reset-mfa`) must call existing for
 
 ## Browser client (TypeScript)
 
-Use `@simplewebauthn/browser` (or equivalent) for WebAuthn ceremonies. Enrollment: after registration OPAQUE, end users choose TOTP or Security Key. Security key path calls begin/finish registration endpoints. Login: after OPAQUE, begin/finish authentication with the key. The browser MFA UI is for ordinary user accounts only; admin bootstrap and admin MFA setup are out of scope for the web client (see arkfile-admin bootstrap section).
+Use `@simplewebauthn/browser` for WebAuthn ceremonies (see **WebAuthn dependency choices**). Do not add `@simplewebauthn/server`. Enrollment: after registration OPAQUE, end users choose TOTP or Security Key. Security key path calls begin/finish registration endpoints. Login: after OPAQUE, begin/finish authentication with the key. The browser MFA UI is for ordinary user accounts only; admin bootstrap and admin MFA setup are out of scope for the web client (see arkfile-admin bootstrap section).
 
 MFA login UI must expose both backup-code paths (path A one-shot sign-in and path B re-enroll). Path B UI exists today; add path A during Phase 2. Update all labels from TOTP-specific wording to generic MFA wording.
 
@@ -141,15 +165,15 @@ Use only strictly typed TypeScript in new/modified code and dependencies as much
 
 ## arkfile-client (Go CLI) parity
 
-Hardware key support in `arkfile-client` is equal priority to the browser. The CLI must support the same enrollment and login ceremonies via the same API endpoints. Implement a FIDO2 client using direct USB HID CTAP2. Candidate library: `github.com/mohammadv184/go-fido2` (CGO-free, aligns with static builds); evaluate in depth before landing on this library (is it secure, trusted, used in at least 3 other significant open source projects, etc.). Evaluate `keys-pub/go-libfido2` if system `libfido2` is acceptable on target platforms.
+Hardware key support in `arkfile-client` is equal priority to the browser. The CLI must support the same enrollment and login ceremonies via the same API endpoints. Implement CTAP2 over USB HID using vendored Yubico **`libfido2`** plus `go-libfido2` or a thin CGO wrapper — see **WebAuthn dependency choices** and **Go CLI: static C stack notes**. The CLI is a CTAP transport client only; it formats WebAuthn responses for the server finish endpoints and does not perform RP-side assertion verification (that is `go-webauthn` on the server).
 
-Commands: `setup-mfa` (interactive, choose `totp` or `security key`), `login` (existing flow extended with security key auth step and path A backup login via `is_backup: true`). Path B remains `recover-mfa` (rename from `recover-totp`). Add path A to `login` if not present today (interactive or `--backup-code` flag at MFA step). Share the evaluated FIDO2 library and ceremony helpers with `arkfile-admin` so both CLIs use the same CTAP2 stack.
+Commands: `setup-mfa` (interactive, choose `totp` or `security key`), `login` (existing flow extended with security key auth step and path A backup login via `is_backup: true`). Path B remains `recover-mfa` (rename from `recover-totp`). Add path A to `login` if not present today (interactive or `--backup-code` flag at MFA step). Share the libfido2-backed CTAP module with `arkfile-admin` so both CLIs use one static-linked stack and one ceremony helper implementation.
 
 ## arkfile-admin: bootstrap MFA setup
 
 The entire admin lifecycle is server-side CLI only. Account creation (`arkfile-admin bootstrap` with the bootstrap token), MFA enrollment (`setup-mfa` after bootstrap), authentication (`login`), and every privileged command thereafter run through `arkfile-admin` on the instance host. The website is not an admin console and must not be documented or implemented as a fallback for bootstrap MFA. This is a hard acceptance criterion for shipping WebAuthn, not an optional parity stretch goal.
 
-`arkfile-admin setup-mfa` must grow an interactive method picker and a security-key branch that drives the same begin/finish registration API as the browser uses for end users. `arkfile-admin login` must complete the matching authentication ceremony when the enrolled method is `webauthn`, including path A backup login where applicable. Reuse the FIDO2 library chosen for `arkfile-client` (direct USB HID CTAP2; no browser WebAuthn dependency) in a small shared package or internal module so static builds and security review happen once. Emit backup codes from the setup response the same way as `arkfile-client` automation (`BACKUP_CODE_*` when `--show-secret` or equivalent is inappropriate for WebAuthn-only flows). Because CTAP2 runs on the machine where `arkfile-admin` executes, the security key must be reachable from that host — typically plugged into the server or forwarded to it, not into the operator's desktop browser.
+`arkfile-admin setup-mfa` must grow an interactive method picker and a security-key branch that drives the same begin/finish registration API as the browser uses for end users. `arkfile-admin login` must complete the matching authentication ceremony when the enrolled method is `webauthn`, including path A backup login where applicable. Reuse the same vendored **`libfido2`** / shared CTAP module as `arkfile-client` (direct USB HID CTAP2; no browser WebAuthn dependency) so static C builds and security review happen once. Emit backup codes from the setup response the same way as `arkfile-client` automation (`BACKUP_CODE_*` when `--show-secret` or equivalent is inappropriate for WebAuthn-only flows). Because CTAP2 runs on the machine where `arkfile-admin` executes, the security key must be reachable from that host — typically plugged into the server or forwarded to it, not into the operator's desktop browser.
 
 Deploy runbooks must stop implying TOTP-only admin setup. Replace "Setup TOTP" echoes with generic MFA wording and document both methods. Fix stale identifiers while touching these files (`verify-login` in `local-deploy.sh` should be `login`; `etc/keys/totp` chmod lines are legacy path names). Hardware-key bootstrap is most practical on **`local-deploy.sh`**: the operator typically runs deploy and `arkfile-admin` on the same machine that has the USB port, so `setup-mfa` with a plugged-in key is the primary documented path for local instances.
 
@@ -307,9 +331,9 @@ Use whole phase numbers only. Each phase should leave tests green before startin
 
 **Phase 5: COMPLETE** Admin MFA reset — **full reset only** (v1 has one credential per user). `POST /api/admin/users/:username/reset-mfa` and `arkfile-admin reset-user-mfa --username USER --confirm`: delete all credentials, backup codes, usage logs; force-logout; audit log; contact-info display and `--acknowledge-no-contact-info` when empty. API/CLI accept optional future `credential_id` / `--credential-id` / `--label` (v1 returns 400 if set). Handler, auth, and integration tests; e2e fused into admin `reset-user-mfa` + payments re-enrollment (no extra user login/logout cycles).
 
-**Phase 6:** WebAuthn server and browser client (end users only). `go-webauthn/webauthn` registration/auth begin/finish endpoints; implement WebAuthn `credential_data` read-modify-write and signCount verification; enrollment UI method picker (TOTP or security key, one method only); backup codes on both paths; Tor warning in UI; `@simplewebauthn/browser` integration.
+**Phase 6:** WebAuthn server and browser client (end users only). Server: `github.com/go-webauthn/webauthn` — registration/auth begin/finish endpoints; WebAuthn `credential_data` read-modify-write and signCount verification. Browser: `@simplewebauthn/browser` — enrollment method picker (TOTP or security key, one method only); backup codes on both paths; Tor warning in UI.
 
-**Phase 7:** CLI FIDO2 parity for `arkfile-client` and `arkfile-admin`. Library evaluation (`go-fido2` vs `go-libfido2`); shared CTAP2 helpers; `setup-mfa` method picker and security-key enrollment; extend `login` for security-key auth and path A backup login; same API endpoints as browser. Update deploy runbook echoes — primarily `local-deploy.sh` for hardware-key bootstrap on the deploy host; `test-deploy.sh` and `prod-deploy.sh` document TOTP-on-VPS as the default remote path and note USB-to-server constraints for security keys. Do not ship Phase 6 without Phase 7 admin `setup-mfa`/`login` parity, or operators on local deploys would still be forced to TOTP at bootstrap.
+**Phase 7:** CLI FIDO2 parity for `arkfile-client` and `arkfile-admin`. Vendored static **`libfido2`** (+ `libcbor`, `zlib`, minimal **`libcrypto`**) via `build-libfido2.sh`; `go-libfido2` or thin CGO wrapper; shared CTAP ceremony helpers; `setup-mfa` method picker and security-key enrollment; extend `login` for security-key auth and path A backup login; same API endpoints as browser. Update deploy runbook echoes — primarily `local-deploy.sh` for hardware-key bootstrap on the deploy host; `test-deploy.sh` and `prod-deploy.sh` document TOTP-on-VPS as the default remote path and note USB-to-server constraints for security keys. Do not ship Phase 6 without Phase 7 admin `setup-mfa`/`login` parity, or operators on local deploys would still be forced to TOTP at bootstrap.
 
 **Phase 8:** Sitewide Contact Admin + FAQ footer; fix admin-contacts API consumption in `list.ts`; MFA login recovery hint; publish FAQ page from `docs/user-faq.md`; update homepage feature card.
 
