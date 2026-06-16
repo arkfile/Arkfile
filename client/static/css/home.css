@@ -187,6 +187,105 @@ body {
     text-decoration: underline;
 }
 
+.footer-links-container {
+    max-width: 1200px;
+    margin: 0 auto 10px;
+    padding: 0 20px;
+}
+
+.footer-links {
+    font-size: 0.85rem;
+    color: var(--foam-2);
+    margin: 0;
+    line-height: 1.6;
+    word-break: break-word;
+}
+
+.footer-links a {
+    color: var(--foam-1);
+    text-decoration: underline;
+    font-weight: 500;
+}
+
+.footer-links a:hover {
+    color: var(--foam-1);
+}
+
+.footer-separator {
+    margin: 0 0.4rem;
+}
+
+.footer-admin-contact {
+    color: var(--foam-1);
+}
+
+.instance-info-container {
+    text-align: center;
+    margin-top: 8px;
+    padding: 0 20px;
+}
+
+.footer-instance-info {
+    font-size: 0.8em;
+    color: var(--foam-2);
+}
+
+.app-footer {
+    margin-top: 2rem;
+}
+
+/* FAQ page */
+.faq-container {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 2rem 20px 3rem;
+}
+
+.faq-title {
+    font-size: 2rem;
+    color: var(--salt);
+    margin: 0 0 0.5rem;
+    text-align: center;
+}
+
+.faq-intro {
+    color: var(--foam-2);
+    font-size: 0.95rem;
+    text-align: center;
+    margin: 0 0 2rem;
+    line-height: 1.5;
+}
+
+.faq-section {
+    margin-bottom: 1.75rem;
+}
+
+.faq-section h2 {
+    font-size: 1.1rem;
+    color: var(--salt);
+    margin: 0 0 0.6rem;
+    line-height: 1.35;
+}
+
+.faq-section p {
+    color: var(--foam-2);
+    font-size: 0.95rem;
+    line-height: 1.6;
+    margin: 0;
+}
+
+.faq-back-link {
+    display: block;
+    text-align: center;
+    margin-top: 2rem;
+    font-size: 0.9rem;
+}
+
+.faq-back-link a {
+    color: var(--foam-1);
+    text-decoration: underline;
+}
+
 /* Responsive design */
 @media (max-width: 768px) {
     .hero-title {

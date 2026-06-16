@@ -1,6 +1,6 @@
 # Arkfile User FAQ
 
-This document answers common questions about Arkfile accounts, security, and recovery. It is written for end users and may be published on the website or referenced from the arkfile-client manual.
+This document answers common questions about Arkfile accounts, security, and recovery. It is written for end users and may be published on the website or referenced from the arkfile-client manual. Keep in sync with `client/static/faq.html`.
 
 ## What is Arkfile?
 
@@ -24,7 +24,7 @@ Yes. After you enter your username and password, on the second-factor screen cho
 
 ## I lost my backup codes too. Can I still recover my account?
 
-If you have lost both your second factor and all backup codes, you cannot recover access on your own. Arkfile does not offer email-based password or two-factor reset because it does not require or store your email address. Contact the instance administrator using the admin contact details shown on the Arkfile site. The admin can verify your identity out-of-band and reset your two-factor authentication so you can log in with your password and enroll a new second factor. This is a last resort and is only appropriate when the admin is confident they are speaking with the real account holder.
+If you have lost both your second factor and all backup codes, you cannot recover access on your own. Arkfile does not offer email-based password or two-factor reset because it does not require or store your email address. Contact the instance administrator using the admin contact details shown on the Arkfile site (Contact Admin in the footer). The admin can verify your identity out-of-band and reset your two-factor authentication so you can log in with your password and enroll a new second factor. This is a last resort and is only appropriate when the admin is confident they are speaking with the real account holder.
 
 ## Should I save contact information in my account?
 
@@ -36,15 +36,15 @@ No. Arkfile has no password reset flow by design. Your password is never stored 
 
 ## Can I use Tor Browser with Arkfile?
 
-Yes. Tor Browser is a supported browser for Arkfile. TOTP-based two-factor authentication works normally in Tor Browser because it uses a standard six-digit code entry field. Hardware security key login through the web application does not work in stock Tor Browser because Tor Browser disables WebAuthn and FIDO2 by default to reduce browser fingerprinting. If you use Tor Browser as your primary browser, choose TOTP at enrollment, or use the arkfile-client command-line tool with a USB-connected security key for hardware-based second factor. Do not change Tor Browser security settings to enable WebAuthn unless you understand the fingerprinting tradeoff.
+Yes. Tor Browser is a supported browser for Arkfile. TOTP-based two-factor authentication works normally in Tor Browser because it uses a standard six-digit code entry field. Hardware security key login through the web application does not work in stock Tor Browser because Tor Browser disables WebAuthn and FIDO2 by default to reduce browser fingerprinting. If you use Tor Browser as your primary browser, choose TOTP at enrollment, or use the arkfile-client command-line tool with a hardware security key connected via USB. Do not change Tor Browser security settings to enable WebAuthn unless you understand the fingerprinting tradeoff.
 
 ## What is the difference between the web app and arkfile-client?
 
-The web app runs in your browser and handles encryption, upload, download, and account management through the Arkfile website. The arkfile-client tool is a command-line program for the same operations: encrypting and uploading files, downloading and decrypting files, and logging into your account. Both use the same OPAQUE authentication and the same two-factor requirements. Both support signing in once with a backup code and re-enrolling a new second factor with a backup code. A planned update will give arkfile-client the same hardware security key support as the browser, using a direct USB connection to your key rather than browser WebAuthn. Choose whichever client fits your workflow; the security model is the same.
+The web app runs in your browser and handles encryption, upload, download, and account management through the Arkfile website. The arkfile-client tool is a command-line program for the same operations: encrypting and uploading files, downloading and decrypting files, and logging into your account. Both use the same OPAQUE authentication and the same two-factor requirements. Both support TOTP and hardware security keys (e.g. YubiKey or Nitrokey), signing in once with a backup code, and re-enrolling a new second factor with a backup code. The browser uses WebAuthn for hardware keys; arkfile-client uses a direct USB connection. Choose whichever client fits your workflow; the security model is the same.
 
 ## How do I contact the administrator?
 
-The administrator contact details for your Arkfile instance are shown on the site. Look for Contact or Contact Admin on the homepage or in the navigation when you are logged in. The exact address or channel depends on how your instance operator configured the deployment. If your account is awaiting approval, admin contact information is also shown on the pending-approval screen.
+The administrator contact details for your Arkfile instance are shown on the site. Look for Contact Admin in the footer on the homepage or when you are logged in. The exact address or channel depends on how your instance operator configured the deployment. If your account is awaiting approval, admin contact information is also shown on the pending-approval screen.
 
 ## What happens when an admin resets my two-factor authentication?
 
@@ -52,8 +52,8 @@ An administrator can clear your enrolled second factor and backup codes using th
 
 ## Can I have both TOTP and a hardware security key?
 
-The first release of expanded MFA support will let you choose one second factor at enrollment: either TOTP or a hardware security key, not both. A later release plans to allow up to three second-factor methods per account, such as one TOTP app plus two labeled security keys. Backup codes remain recommended regardless of which method or methods you use.
+Each account can enroll one second factor at a time: either TOTP or a hardware security key, not both. A future release plans to allow up to three second-factor credentials per account, such as one TOTP app plus two labeled security keys. Backup codes remain recommended regardless of which method you use.
 
 ## Do I need to enter a PIN on my security key every time I log in?
 
-That depends on your key and how it is configured. Many sites, including Arkfile as planned, request user verification as preferred rather than required. That usually means a single touch on your YubiKey or Nitrokey is enough, similar to Proton Mail or Bitwarden. If your key is configured to require a PIN on every operation, you will be prompted accordingly. Your PIN never leaves the device and is not sent to Arkfile or the server.
+That depends on your key and how it is configured. Arkfile requests user verification as preferred rather than required. That usually means a single touch on your YubiKey or Nitrokey is enough, similar to Proton Mail or Bitwarden. If your key is configured to require a PIN on every operation, you will be prompted accordingly. Your PIN never leaves the device and is not sent to Arkfile or the server.

@@ -14,6 +14,7 @@ import { showError, showSuccess } from '../ui/messages.js';
 import { showProgressMessage, hideProgress } from '../ui/progress.js';
 import { showModal } from '../ui/modals.js';
 import { clearAllSessionData } from '../utils/auth.js';
+import { getAdminContactForDisplay } from '../ui/footer.js';
 import { showFileSection, showPendingApprovalSection, showAuthSection } from '../ui/sections.js';
 import { loadFiles } from '../files/list.js';
 import { LoginManager } from './login.js';
@@ -353,6 +354,7 @@ export function handleWebAuthnLoginFlow(data: WebAuthnLoginFlowData): void {
         cursor: pointer;
         font-size: 0.9rem;
       ">Sign in once with backup code</button>
+      <p id="webauthn-admin-recovery-hint" style="font-size: 0.8rem; color: var(--foam-2); text-align: center; margin: 0.5rem 0 0; line-height: 1.4;"></p>
     </div>
   `;
 
@@ -363,6 +365,22 @@ export function handleWebAuthnLoginFlow(data: WebAuthnLoginFlowData): void {
   document.getElementById('webauthn-backup-signin')?.addEventListener('click', () => {
     void runBackupSignIn(modal);
   });
+
+  void populateWebAuthnAdminRecoveryHint();
+}
+
+async function populateWebAuthnAdminRecoveryHint(): Promise<void> {
+  const hintEl = document.getElementById('webauthn-admin-recovery-hint');
+  if (!hintEl) return;
+
+  const contact = await getAdminContactForDisplay();
+  if (contact) {
+    hintEl.textContent =
+      `If you have lost your security key and all backup codes, contact the admin: ${contact} (also shown as Contact Admin in the site footer).`;
+  } else {
+    hintEl.textContent =
+      'If you have lost your security key and all backup codes, contact the instance admin (see Contact Admin in the site footer).';
+  }
 }
 
 async function runBackupSignIn(modal: Element): Promise<void> {

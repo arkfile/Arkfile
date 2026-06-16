@@ -59,6 +59,11 @@ func RegisterRoutes() {
 		return c.File("client/static/favicon.ico")
 	})
 
+	Echo.File("/faq.html", "client/static/faq.html")
+	Echo.HEAD("/faq.html", func(c echo.Context) error {
+		return c.File("client/static/faq.html")
+	})
+
 	// Configuration endpoints (public - needed for client-side crypto)
 	Echo.GET("/api/config/argon2", GetArgon2Config)
 	Echo.GET("/api/config/password-requirements", GetPasswordRequirements)

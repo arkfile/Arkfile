@@ -335,7 +335,7 @@ Use whole phase numbers only. Each phase should leave tests green before startin
 
 **Phase 7: COMPLETE** CLI FIDO2 parity for `arkfile-client` and `arkfile-admin`. Vendored static **`libfido2`** (+ `libcbor`, `zlib`, minimal **`libcrypto`**) via `scripts/setup/build-libfido2.sh`; **thin in-repo CGO wrapper** (`clictap/fido_wrapper.c`, `clictap/device.go`) — not `go-libfido2`; WebAuthn ceremony bridge (`clictap/webauthn_ceremony.go`); shared `cli/mfa` for setup/login; `setup-mfa` method picker (`totp` | `webauthn`); `login` routes on `mfa_method` with security-key auth and `--backup-code` on both CLIs. Server binary does not link libfido2. Deploy runbooks updated (`local-deploy.sh`, `test-deploy.sh`, `prod-deploy.sh`).
 
-**Phase 8:** Sitewide Contact Admin + FAQ footer; fix admin-contacts API consumption in `list.ts`; MFA login recovery hint; publish FAQ page from `docs/user-faq.md`; update homepage feature card.
+**Phase 8: COMPLETE** Sitewide Contact Admin + FAQ footer; fix admin-contacts API consumption in `list.ts`; MFA login recovery hint; publish FAQ page from `docs/user-faq.md` (`client/static/faq.html`, opens in new tab); update homepage feature card for TOTP and hardware security keys.
 
 **Phase 9 (future):** Multi-method enrollment up to three credentials per account with private device labels. Schema: `credential_id` primary key, multiple rows per username. Add credential-scoped admin reset (`--credential-id` or `--label`), admin credential listing endpoint, and logged-in user self-service remove for own credentials. Backup codes remain account-level.
 

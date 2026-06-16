@@ -18,7 +18,7 @@
  * }
  */
 
-import { authenticatedFetch, getUsernameFromToken, getCurrentUser } from '../utils/auth';
+import { authenticatedFetch, getUsernameFromToken, getCurrentUser, fetchAdminContacts } from '../utils/auth';
 import { showError, showSuccess } from '../ui/messages';
 import { downloadFile } from './download';
 import { shareFile } from './share';
@@ -319,31 +319,15 @@ export function updateStorageInfo(storage: FilesResponse['storage']): void {
   fetchAdminContactForStorage();
 }
 
-// Fetch admin contact info from the public endpoint and display it
-// in the storage section as plain text (not a link)
+// Fetch admin contact info and display it in the storage section as plain text.
 async function fetchAdminContactForStorage(): Promise<void> {
   const noteEl = document.getElementById('storageContactNote');
   if (!noteEl) return;
 
   try {
-    const resp = await fetch('/api/admin-contacts');
-    if (!resp.ok) {
-      noteEl.textContent = 'To request a storage limit increase, contact your admin.';
-      return;
-    }
-    const data = await resp.json();
-    const contacts: string[] = [];
-    if (data.data?.admins && Array.isArray(data.data.admins)) {
-      for (const admin of data.data.admins) {
-        if (admin.contacts && Array.isArray(admin.contacts)) {
-          for (const c of admin.contacts) {
-            if (c.value) contacts.push(escapeHtml(c.value));
-          }
-        }
-      }
-    }
-    if (contacts.length > 0) {
-      noteEl.textContent = `To request a storage limit increase, contact the admin: ${contacts.join(', ')}`;
+    const { contact } = await fetchAdminContacts();
+    if (contact && contact !== 'admin@example.com') {
+      noteEl.textContent = `To request a storage limit increase, contact the admin: ${contact}`;
     } else {
       noteEl.textContent = 'To request a storage limit increase, contact your admin.';
     }

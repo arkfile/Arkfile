@@ -6,6 +6,7 @@ import { showError, showSuccess } from '../ui/messages';
 import { showProgressMessage, hideProgress } from '../ui/progress';
 import { showModal, showTOTPAppsModal } from '../ui/modals';
 import { clearAllSessionData, AuthManager } from '../utils/auth';
+import { getAdminContactForDisplay } from '../ui/footer';
 import { showFileSection, showAuthSection, showTOTPSetupSection } from '../ui/sections';
 import { loadFiles } from '../files/list';
 import { LoginManager } from './login';
@@ -158,6 +159,7 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
         cursor: pointer;
         font-size: 14px;
       ">Set up a new second factor with a backup code</button>
+      <p id="mfa-admin-recovery-hint" style="font-size: 12px; color: var(--foam-2); margin: 10px 0 0; text-align: center; line-height: 1.4;"></p>
     </div>
     <button onclick="this.closest('.modal-overlay').remove();" style="
       width: 100%;
@@ -245,7 +247,23 @@ export function handleTOTPFlow(data: TOTPFlowData): void {
   reenrollBtn?.addEventListener('click', () => showBackupMode('reenroll'));
   backToTotpBtn?.addEventListener('click', showTotpMode);
 
+  void populateMfaAdminRecoveryHint();
+
   setTimeout(() => totpInput?.focus(), 100);
+}
+
+async function populateMfaAdminRecoveryHint(): Promise<void> {
+  const hintEl = document.getElementById('mfa-admin-recovery-hint');
+  if (!hintEl) return;
+
+  const contact = await getAdminContactForDisplay();
+  if (contact) {
+    hintEl.textContent =
+      `If you have lost your second factor and all backup codes, contact the admin: ${contact} (also shown as Contact Admin in the site footer).`;
+  } else {
+    hintEl.textContent =
+      'If you have lost your second factor and all backup codes, contact the instance admin (see Contact Admin in the site footer).';
+  }
 }
 
 async function verifyTOTPLogin(): Promise<void> {

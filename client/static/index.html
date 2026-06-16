@@ -42,7 +42,7 @@
                 <div class="feature-card security-highlight">
                     <h3 class="feature-title">Mandatory 2FA</h3>
                     <p class="feature-description">
-                        Time-based One-Time Passwords (TOTP) are required for all accounts, with support for Google Authenticator, Ente Auth, Aegis, and other standard 2FA apps.
+                        Two-factor authentication is required for all accounts. Choose a TOTP authenticator app (Ente Auth, Aegis, Bitwarden, and others) or enroll a hardware security key such as a YubiKey or Nitrokey. In Tor Browser, TOTP is recommended.
                     </p>
                 </div>
 
@@ -71,11 +71,18 @@
 
         <!-- Footer Section -->
         <footer class="footer-section">
-            <div class="github-link-container">
-                <p class="github-link">AGPLv3 Open Source: <a href="https://github.com/arkfile/Arkfile" target="_blank">View Code</a></p>
+            <div class="footer-links-container">
+                <p class="footer-links">
+                    <a href="/faq.html" target="_blank" rel="noopener noreferrer">FAQ</a>
+                    <span class="footer-separator" aria-hidden="true">·</span>
+                    <span>Contact Admin: <span class="footer-admin-contact">…</span></span>
+                </p>
             </div>
-            <div class="instance-info-container" style="text-align: center; margin-top: 8px;">
-                <code id="instance-info" style="font-size: 0.8em; color: var(--foam-2);"></code>
+            <div class="github-link-container">
+                <p class="github-link">AGPLv3 Open Source: <a href="https://github.com/arkfile/Arkfile" target="_blank" rel="noopener noreferrer">View Code</a></p>
+            </div>
+            <div class="instance-info-container">
+                <code class="footer-instance-info"></code>
             </div>
         </footer>
     </div>
@@ -350,6 +357,22 @@
                 </div>
             </div>
         </div>
+
+        <footer class="footer-section app-footer">
+            <div class="footer-links-container">
+                <p class="footer-links">
+                    <a href="/faq.html" target="_blank" rel="noopener noreferrer">FAQ</a>
+                    <span class="footer-separator" aria-hidden="true">·</span>
+                    <span>Contact Admin: <span class="footer-admin-contact">…</span></span>
+                </p>
+            </div>
+            <div class="github-link-container">
+                <p class="github-link">AGPLv3 Open Source: <a href="https://github.com/arkfile/Arkfile" target="_blank" rel="noopener noreferrer">View Code</a></p>
+            </div>
+            <div class="instance-info-container">
+                <code class="footer-instance-info"></code>
+            </div>
+        </footer>
     </div>
 
     <script src="/js/libopaque.js"></script>
