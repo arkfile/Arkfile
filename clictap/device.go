@@ -4,6 +4,7 @@ package clictap
 #cgo CFLAGS: -I${SRCDIR}
 #include "fido_wrapper.h"
 #include <stdlib.h>
+#include <string.h>
 */
 import "C"
 import (
@@ -22,6 +23,25 @@ func ensureInit() error {
 		}
 	})
 	return initErr
+}
+
+// cAllocBytes copies a Go byte slice into C heap memory (required for Go 1.23+ cgo).
+func cAllocBytes(data []byte) (*C.uchar, unsafe.Pointer, error) {
+	if len(data) == 0 {
+		return nil, nil, nil
+	}
+	p := C.calloc(1, C.size_t(len(data)))
+	if p == nil {
+		return nil, nil, fmt.Errorf("calloc failed")
+	}
+	C.memcpy(p, unsafe.Pointer(&data[0]), C.size_t(len(data)))
+	return (*C.uchar)(p), unsafe.Pointer(p), nil
+}
+
+func cFree(p unsafe.Pointer) {
+	if p != nil {
+		C.free(p)
+	}
 }
 
 // ListDevices returns hidraw paths for connected FIDO devices.
@@ -52,8 +72,8 @@ func ListDevices() ([]string, error) {
 
 // Attestation holds raw outputs from MakeCredential.
 type Attestation struct {
-	AuthData      []byte
-	CredentialID  []byte
+	AuthData       []byte
+	CredentialID   []byte
 	AttestationFmt string
 }
 
@@ -78,10 +98,10 @@ type MakeCredentialOptions struct {
 
 // AssertOptions configures security-key authentication.
 type AssertOptions struct {
-	ClientDataHash   []byte
-	RPID             string
+	ClientDataHash     []byte
+	RPID               string
 	AllowCredentialIDs [][]byte
-	UserVerification int
+	UserVerification   int
 }
 
 // MakeCredential runs authenticatorMakeCredential on the given device path.
@@ -94,52 +114,74 @@ func MakeCredential(devicePath string, opts MakeCredentialOptions) (*Attestation
 	}
 
 	cPath := C.CString(devicePath)
-	defer C.free(unsafe.Pointer(cPath))
+	defer cFree(unsafe.Pointer(cPath))
 
 	cRPID := C.CString(opts.RPID)
-	defer C.free(unsafe.Pointer(cRPID))
+	defer cFree(unsafe.Pointer(cRPID))
 
 	var cRPName *C.char
 	if opts.RPName != "" {
 		cRPName = C.CString(opts.RPName)
-		defer C.free(unsafe.Pointer(cRPName))
+		defer cFree(unsafe.Pointer(cRPName))
 	}
 
 	cUserName := C.CString(opts.UserName)
-	defer C.free(unsafe.Pointer(cUserName))
+	defer cFree(unsafe.Pointer(cUserName))
 
 	cDisplayName := C.CString(opts.UserDisplayName)
-	defer C.free(unsafe.Pointer(cDisplayName))
+	defer cFree(unsafe.Pointer(cDisplayName))
 
-	req := C.wrap_fido_make_cred_req{
-		client_data_hash:     (*C.uchar)(unsafe.Pointer(&opts.ClientDataHash[0])),
-		client_data_hash_len: C.size_t(len(opts.ClientDataHash)),
-		rp_id:                cRPID,
-		rp_name:              cRPName,
-		user_id:              (*C.uchar)(unsafe.Pointer(&opts.UserID[0])),
-		user_id_len:          C.size_t(len(opts.UserID)),
-		user_name:            cUserName,
-		user_display_name:    cDisplayName,
-		cred_type:            C.WRAP_FIDO_CRED_ES256,
-		resident_key:         C.int(opts.ResidentKey),
-		user_verification:    C.int(opts.UserVerification),
+	cHash, hashAlloc, err := cAllocBytes(opts.ClientDataHash)
+	if err != nil {
+		return nil, err
 	}
+	defer cFree(hashAlloc)
 
-	var out C.wrap_fido_attestation
-	defer C.wrap_fido_attestation_free(&out)
+	cUserID, userIDAlloc, err := cAllocBytes(opts.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer cFree(userIDAlloc)
 
-	if C.wrap_fido_make_credential(cPath, &req, &out) != 0 {
+	cReq := (*C.wrap_fido_make_cred_req)(C.calloc(1, C.size_t(unsafe.Sizeof(C.wrap_fido_make_cred_req{}))))
+	if cReq == nil {
+		return nil, fmt.Errorf("calloc failed")
+	}
+	defer cFree(unsafe.Pointer(cReq))
+
+	cReq.client_data_hash = cHash
+	cReq.client_data_hash_len = C.size_t(len(opts.ClientDataHash))
+	cReq.rp_id = cRPID
+	cReq.rp_name = cRPName
+	cReq.user_id = cUserID
+	cReq.user_id_len = C.size_t(len(opts.UserID))
+	cReq.user_name = cUserName
+	cReq.user_display_name = cDisplayName
+	cReq.cred_type = C.WRAP_FIDO_CRED_ES256
+	cReq.resident_key = C.int(opts.ResidentKey)
+	cReq.user_verification = C.int(opts.UserVerification)
+
+	cOut := (*C.wrap_fido_attestation)(C.calloc(1, C.size_t(unsafe.Sizeof(C.wrap_fido_attestation{}))))
+	if cOut == nil {
+		return nil, fmt.Errorf("calloc failed")
+	}
+	defer func() {
+		C.wrap_fido_attestation_free(cOut)
+		cFree(unsafe.Pointer(cOut))
+	}()
+
+	if C.wrap_fido_make_credential(cPath, cReq, cOut) != 0 {
 		return nil, fmt.Errorf("security key enrollment failed (touch the key when prompted)")
 	}
 
 	att := &Attestation{
-		AttestationFmt: C.GoString(out.attestation_fmt),
+		AttestationFmt: C.GoString(cOut.attestation_fmt),
 	}
-	if out.auth_data_len > 0 {
-		att.AuthData = C.GoBytes(unsafe.Pointer(out.auth_data), C.int(out.auth_data_len))
+	if cOut.auth_data_len > 0 {
+		att.AuthData = C.GoBytes(unsafe.Pointer(cOut.auth_data), C.int(cOut.auth_data_len))
 	}
-	if out.credential_id_len > 0 {
-		att.CredentialID = C.GoBytes(unsafe.Pointer(out.credential_id), C.int(out.credential_id_len))
+	if cOut.credential_id_len > 0 {
+		att.CredentialID = C.GoBytes(unsafe.Pointer(cOut.credential_id), C.int(cOut.credential_id_len))
 	}
 	return att, nil
 }
@@ -154,52 +196,103 @@ func GetAssertion(devicePath string, opts AssertOptions) (*Assertion, error) {
 	}
 
 	cPath := C.CString(devicePath)
-	defer C.free(unsafe.Pointer(cPath))
+	defer cFree(unsafe.Pointer(cPath))
 
 	cRPID := C.CString(opts.RPID)
-	defer C.free(unsafe.Pointer(cRPID))
+	defer cFree(unsafe.Pointer(cRPID))
 
-	idPtrs := make([]*C.uchar, len(opts.AllowCredentialIDs))
-	idLens := make([]C.size_t, len(opts.AllowCredentialIDs))
-	for i, id := range opts.AllowCredentialIDs {
-		if len(id) == 0 {
-			return nil, fmt.Errorf("empty allowed credential id")
-		}
-		idPtrs[i] = (*C.uchar)(unsafe.Pointer(&id[0]))
-		idLens[i] = C.size_t(len(id))
+	cHash, hashAlloc, err := cAllocBytes(opts.ClientDataHash)
+	if err != nil {
+		return nil, err
 	}
+	defer cFree(hashAlloc)
 
+	n := len(opts.AllowCredentialIDs)
+	var credAllocs []unsafe.Pointer
 	var cIDPtrs **C.uchar
-	if len(idPtrs) > 0 {
-		cIDPtrs = (**C.uchar)(unsafe.Pointer(&idPtrs[0]))
+	var cLens *C.size_t
+
+	if n > 0 {
+		cIDPtrs = (**C.uchar)(C.calloc(C.size_t(n), C.size_t(unsafe.Sizeof(uintptr(0)))))
+		if cIDPtrs == nil {
+			return nil, fmt.Errorf("calloc failed")
+		}
+		cLens = (*C.size_t)(C.calloc(C.size_t(n), C.size_t(unsafe.Sizeof(C.size_t(0)))))
+		if cLens == nil {
+			cFree(unsafe.Pointer(cIDPtrs))
+			return nil, fmt.Errorf("calloc failed")
+		}
+
+		ptrArr := (*[1 << 20]*C.uchar)(unsafe.Pointer(cIDPtrs))[:n:n]
+		lenArr := (*[1 << 20]C.size_t)(unsafe.Pointer(cLens))[:n:n]
+
+		for i, id := range opts.AllowCredentialIDs {
+			if len(id) == 0 {
+				for _, p := range credAllocs {
+					cFree(p)
+				}
+				cFree(unsafe.Pointer(cIDPtrs))
+				cFree(unsafe.Pointer(cLens))
+				return nil, fmt.Errorf("empty allowed credential id")
+			}
+			cid, raw, allocErr := cAllocBytes(id)
+			if allocErr != nil {
+				for _, p := range credAllocs {
+					cFree(p)
+				}
+				cFree(unsafe.Pointer(cIDPtrs))
+				cFree(unsafe.Pointer(cLens))
+				return nil, allocErr
+			}
+			credAllocs = append(credAllocs, raw)
+			ptrArr[i] = cid
+			lenArr[i] = C.size_t(len(id))
+		}
 	}
+	defer func() {
+		for _, p := range credAllocs {
+			cFree(p)
+		}
+		cFree(unsafe.Pointer(cIDPtrs))
+		cFree(unsafe.Pointer(cLens))
+	}()
 
-	req := C.wrap_fido_assert_req{
-		client_data_hash:     (*C.uchar)(unsafe.Pointer(&opts.ClientDataHash[0])),
-		client_data_hash_len: C.size_t(len(opts.ClientDataHash)),
-		rp_id:                cRPID,
-		allow_cred_ids:       cIDPtrs,
-		allow_cred_lens:      (*C.size_t)(unsafe.Pointer(&idLens[0])),
-		allow_cred_count:     C.size_t(len(idLens)),
-		user_verification:    C.int(opts.UserVerification),
+	cReq := (*C.wrap_fido_assert_req)(C.calloc(1, C.size_t(unsafe.Sizeof(C.wrap_fido_assert_req{}))))
+	if cReq == nil {
+		return nil, fmt.Errorf("calloc failed")
 	}
+	defer cFree(unsafe.Pointer(cReq))
 
-	var out C.wrap_fido_assertion
-	defer C.wrap_fido_assertion_free(&out)
+	cReq.client_data_hash = cHash
+	cReq.client_data_hash_len = C.size_t(len(opts.ClientDataHash))
+	cReq.rp_id = cRPID
+	cReq.allow_cred_ids = cIDPtrs
+	cReq.allow_cred_lens = cLens
+	cReq.allow_cred_count = C.size_t(n)
+	cReq.user_verification = C.int(opts.UserVerification)
 
-	if C.wrap_fido_get_assertion(cPath, &req, &out) != 0 {
+	cOut := (*C.wrap_fido_assertion)(C.calloc(1, C.size_t(unsafe.Sizeof(C.wrap_fido_assertion{}))))
+	if cOut == nil {
+		return nil, fmt.Errorf("calloc failed")
+	}
+	defer func() {
+		C.wrap_fido_assertion_free(cOut)
+		cFree(unsafe.Pointer(cOut))
+	}()
+
+	if C.wrap_fido_get_assertion(cPath, cReq, cOut) != 0 {
 		return nil, fmt.Errorf("security key authentication failed (touch the key when prompted)")
 	}
 
 	a := &Assertion{}
-	if out.auth_data_len > 0 {
-		a.AuthData = C.GoBytes(unsafe.Pointer(out.auth_data), C.int(out.auth_data_len))
+	if cOut.auth_data_len > 0 {
+		a.AuthData = C.GoBytes(unsafe.Pointer(cOut.auth_data), C.int(cOut.auth_data_len))
 	}
-	if out.signature_len > 0 {
-		a.Signature = C.GoBytes(unsafe.Pointer(out.signature), C.int(out.signature_len))
+	if cOut.signature_len > 0 {
+		a.Signature = C.GoBytes(unsafe.Pointer(cOut.signature), C.int(cOut.signature_len))
 	}
-	if out.credential_id_len > 0 {
-		a.CredentialID = C.GoBytes(unsafe.Pointer(out.credential_id), C.int(out.credential_id_len))
+	if cOut.credential_id_len > 0 {
+		a.CredentialID = C.GoBytes(unsafe.Pointer(cOut.credential_id), C.int(cOut.credential_id_len))
 	}
 	return a, nil
 }
